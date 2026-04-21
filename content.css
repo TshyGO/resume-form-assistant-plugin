@@ -1,0 +1,318 @@
+#resume-pro-sidebar.resume-pro {
+  position: fixed;
+  top: 96px;
+  right: 24px;
+  z-index: 2147483647;
+  width: 300px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(79, 110, 247, 0.18);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 16px 36px rgba(31, 41, 55, 0.18);
+  color: #1f2937;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+
+#resume-pro-sidebar.resume-pro.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+#resume-pro-sidebar .resume-pro__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 12px;
+  background: linear-gradient(135deg, #4f6ef7 0%, #6e7dfa 100%);
+  color: #fff;
+  cursor: grab;
+}
+
+#resume-pro-sidebar .resume-pro__title-wrap {
+  min-width: 0;
+}
+
+#resume-pro-sidebar .resume-pro__eyebrow {
+  margin: 0 0 4px;
+  opacity: 0.85;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#resume-pro-sidebar .resume-pro__title {
+  display: block;
+  font-size: 16px;
+}
+
+#resume-pro-sidebar .resume-pro__collapse {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+#resume-pro-sidebar .resume-pro__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow: auto;
+}
+
+#resume-pro-sidebar .resume-pro__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#resume-pro-sidebar .resume-pro__select,
+#resume-pro-sidebar .resume-pro__ai-button,
+#resume-pro-sidebar .resume-pro__footer-link,
+#resume-pro-sidebar .resume-pro__chip,
+#resume-pro-sidebar .resume-pro__collapse {
+  font: inherit;
+}
+
+#resume-pro-sidebar .resume-pro__select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d9def0;
+  border-radius: 12px;
+  background: #f7f9ff;
+  color: #1f2937;
+}
+
+#resume-pro-sidebar .resume-pro__ai-button {
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: #4f6ef7;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  box-shadow: 0 10px 22px rgba(79, 110, 247, 0.24);
+}
+
+#resume-pro-sidebar .resume-pro__ai-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+#resume-pro-sidebar .resume-pro__status {
+  display: none;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#resume-pro-sidebar .resume-pro__status.is-visible {
+  display: block;
+}
+
+#resume-pro-sidebar .resume-pro__status.is-success {
+  background: rgba(33, 185, 122, 0.12);
+  color: #21b97a;
+}
+
+#resume-pro-sidebar .resume-pro__status.is-error {
+  background: rgba(227, 93, 106, 0.12);
+  color: #d54f6f;
+}
+
+#resume-pro-sidebar .resume-pro__divider {
+  height: 1px;
+  background: rgba(79, 110, 247, 0.12);
+}
+
+#resume-pro-sidebar .resume-pro__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#resume-pro-sidebar .resume-pro__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e5e9f7;
+  border-radius: 14px;
+  background: #fbfcff;
+}
+
+#resume-pro-sidebar .resume-pro__group-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+#resume-pro-sidebar .resume-pro__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#resume-pro-sidebar .resume-pro__chip {
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(79, 110, 247, 0.12);
+  color: #4f6ef7;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#resume-pro-sidebar .resume-pro__chip.is-success {
+  background: rgba(33, 185, 122, 0.14);
+  color: #21b97a;
+}
+
+#resume-pro-sidebar .resume-pro__empty {
+  padding: 20px 14px;
+  border: 1px dashed rgba(79, 110, 247, 0.24);
+  border-radius: 14px;
+  background: #fbfcff;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+#resume-pro-sidebar .resume-pro__empty p {
+  margin: 0 0 12px;
+}
+
+#resume-pro-sidebar .resume-pro__setup-button {
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: #4f6ef7;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 6px 16px rgba(79, 110, 247, 0.28);
+}
+
+#resume-pro-sidebar .resume-pro__footer-tip {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f6f8ff;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+#resume-pro-sidebar .resume-pro__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#resume-pro-sidebar .resume-pro__manager-button {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: #eef2ff;
+  color: #4f6ef7;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+#resume-pro-sidebar.resume-pro.is-collapsed {
+  width: 160px;
+}
+
+#resume-pro-sidebar.resume-pro.is-collapsed .resume-pro__body {
+  display: none;
+}
+
+#resume-pro-manager {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2147483647;
+  display: none;
+}
+
+#resume-pro-manager.is-visible {
+  display: block;
+}
+
+#resume-pro-manager .resume-pro-manager__panel {
+  width: 412px;
+  max-width: calc(100vw - 32px);
+  height: min(760px, calc(100vh - 32px));
+  border: 1px solid rgba(79, 110, 247, 0.16);
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#resume-pro-manager .resume-pro-manager__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #4f6ef7 0%, #6e7dfa 100%);
+  color: #fff;
+}
+
+#resume-pro-manager .resume-pro-manager__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.88;
+}
+
+#resume-pro-manager .resume-pro-manager__title {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+#resume-pro-manager .resume-pro-manager__close {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+}
+
+#resume-pro-manager .resume-pro-manager__frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}

@@ -1,0 +1,19 @@
+.DS_Store
+Thumbs.db
+
+# Local browser/debug profiles
+.edge-icon-profile/
+
+# Build and package artifacts
+*.zip
+dist/
+release/
+
+# Logs and local env
+*.log
+.env
+.env.*
+
+# IDE files
+.vscode/
+.idea/

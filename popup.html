@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Pro</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div>
+          <p class="eyebrow">Resume Pro</p>
+          <h1>简历填表助手</h1>
+        </div>
+        <p class="header-note">Excel 维护数据，插件负责导入与填写。</p>
+      </header>
+
+      <nav class="tab-nav" aria-label="功能分区">
+        <button class="tab-button is-active" type="button" data-tab="templates">模板管理</button>
+        <button class="tab-button" type="button" data-tab="ai">AI 配置</button>
+      </nav>
+
+      <section class="tab-panel is-active" data-panel="templates">
+        <div class="panel-card">
+          <div class="panel-toolbar">
+            <div>
+              <h2>模板列表</h2>
+              <p>支持多套简历模板，填表前切换对应模板即可。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button class="secondary-button" id="parse-toggle-button" type="button">AI 解析简历</button>
+              <button class="primary-button" id="import-template-button" type="button">导入 Excel</button>
+            </div>
+          </div>
+
+          <input id="template-file-input" type="file" accept=".xlsx,.csv" hidden>
+
+          <div class="parse-section" id="parse-section">
+            <div class="parse-section__desc">上传 PDF / Word / TXT，AI 提取信息并下载 Excel，再导入上方</div>
+            <div class="parse-drop-zone" id="parse-drop-zone">
+              <span id="parse-drop-label">拖拽简历文件到此处，或点击选择</span>
+              <input type="file" id="parse-file-input" accept=".pdf,.docx,.txt" hidden>
+            </div>
+            <button class="primary-button is-full" id="parse-resume-button" type="button" disabled>
+              开始解析
+            </button>
+            <div class="status-message" id="parse-status" aria-live="polite"></div>
+          </div>
+
+          <div class="status-message" id="template-status" aria-live="polite"></div>
+
+          <div class="template-list" id="template-list"></div>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-panel="ai">
+        <div class="panel-card">
+          <div class="panel-toolbar is-stacked">
+            <div>
+              <h2>AI 配置</h2>
+              <p>支持 OpenAI 兼容接口，用于网页表单智能匹配。</p>
+            </div>
+          </div>
+
+          <form id="ai-config-form" class="config-form">
+            <label class="field-block" for="api-url-input">
+              <span>API URL</span>
+              <input
+                id="api-url-input"
+                name="apiUrl"
+                type="url"
+                placeholder="https://api.openai.com/v1/chat/completions"
+                autocomplete="off"
+              >
+            </label>
+
+            <label class="field-block" for="model-input">
+              <span>模型名称</span>
+              <input
+                id="model-input"
+                name="model"
+                type="text"
+                placeholder="gpt-4o-mini"
+                autocomplete="off"
+              >
+            </label>
+
+            <div class="field-block">
+              <span>API Key</span>
+              <div class="password-row">
+                <input
+                  id="api-key-input"
+                  name="apiKey"
+                  type="password"
+                  placeholder="请输入 API Key"
+                  autocomplete="off"
+                >
+                <button id="toggle-api-key" class="icon-button" type="button" aria-label="显示或隐藏 API Key">
+                  <span aria-hidden="true">👁</span>
+                </button>
+              </div>
+            </div>
+
+            <button class="primary-button is-full" type="submit">保存配置</button>
+            <div class="status-message" id="config-status" aria-live="polite"></div>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <script src="xlsx.full.min.js"></script>
+    <script src="mammoth.browser.min.js"></script>
+    <script src="ai-helpers.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
