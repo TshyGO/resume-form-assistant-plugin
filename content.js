@@ -758,4 +758,11 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
   }
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "TOGGLE_MANAGER") {
+      setManagerVisibility(!state.managerVisible);
+    }
+    return false;
+  });
 })();
