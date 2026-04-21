@@ -1,6 +1,8 @@
 # 简历灵填助手
 
-面向网申场景的浏览器插件。核心用法：在 Excel 里维护你的简历数据，打开招聘网站的申请页面后，点一下"AI 填写"，插件会调用大模型把字段一一对应到表单里。AI 能处理大多数基础信息，遇到它填错或填不了（比如日期选择器）的地方，手动补上就好。
+面向网申场景的浏览器插件。核心用法：在 Excel 里维护你的简历数据，打开招聘网站的申请页面后，点击浏览器右上角的插件图标，管理面板会直接嵌入当前页面，不会因为点到别处就消失，点右上角 X 才关闭。确认好模板和配置后点"AI 填写"，插件会调用大模型把字段一一对应到表单里。
+
+AI 能处理大多数基础信息，遇到它填错或填不了（比如日期选择器、级联下拉）的地方，手动补上就好。
 
 ## 主要功能
 
@@ -23,9 +25,9 @@
 ## 使用流程
 
 1. 在 Excel 里按模板格式维护简历数据（`一级分类 / 字段名 / 值` 三列）
-2. 点击插件图标，在**模板管理**里导入 `.xlsx` 文件
+2. 点击插件图标，在弹出的管理面板中导入 `.xlsx` 文件
 3. 在 **AI 配置**里填好接口地址、模型名、API Key 并保存
-4. 打开目标网站的申请表单，页面右侧会出现悬浮助手
+4. 打开目标网站的申请表单，点插件图标打开管理面板
 5. 选好模板，点 **AI 填写**，等结果出来后检查一遍，手动补全填错或漏填的字段
 
 如果手头只有 PDF/Word 格式的简历，可以用**AI 解析简历**功能先提取成 Excel，再导入使用。
@@ -34,7 +36,7 @@
 
 ```
 manifest.json          插件清单
-popup.html/css/js      弹窗界面
+popup.html/css/js      管理面板界面
 content.js/css         页面注入脚本（侧边栏、字段识别、填写）
 background.js          后台服务，负责 AI 接口调用和消息路由
 ai-helpers.js          字段匹配和数据清洗
@@ -48,11 +50,6 @@ icons/                 插件图标
 node --test tests/ai-helpers.test.js
 ```
 
-## 已知问题
-
-- `icons/icon-render.html` 是开发时生成图标用的调试页面，不应出现在生产仓库里，下个版本会清理
-- 时间选择器、级联下拉等控件暂不支持自动填写
-
 ## 隐私说明
 
 仓库里不包含任何真实简历数据，测试数据均为匿名示例。
@@ -65,7 +62,7 @@ MIT License — 见 [LICENSE](LICENSE) 文件。
 
 ## English Summary
 
-Resume Form Assistant is a Chrome extension for filling job application forms. You maintain your resume data in an Excel file, then click "AI Fill" on any job application page — the extension calls a configurable LLM to match your resume fields to the form. Standard fields (name, phone, email, etc.) usually work well; date pickers and complex controls still need manual input.
+Resume Form Assistant is a Chrome extension for filling job application forms. You maintain your resume data in an Excel file, then click the extension icon on any job application page — the management panel opens embedded in the page (not a popup that disappears on click-away; close it with the X button). Click "AI Fill" to have a configurable LLM match your resume fields to the form. Standard fields (name, phone, email, etc.) usually work well; date pickers and complex controls still need manual input.
 
 **Install (Developer Mode):** Load the unpacked folder containing `manifest.json` via `chrome://extensions`.
 
