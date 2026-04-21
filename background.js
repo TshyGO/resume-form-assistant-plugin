@@ -1,5 +1,15 @@
 importScripts("ai-helpers.js");
 
+chrome.action.onClicked.addListener(async (tab) => {
+  if (tab.id) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_MANAGER" });
+    } catch {
+      // content script not injected on this page (e.g. chrome:// pages)
+    }
+  }
+});
+
 const AI_SYSTEM_PROMPT = [
   "你是一个网页表单填写助手。根据简历字段数据，判断表单中每个输入框应该填写什么值。",
   "规则：",
