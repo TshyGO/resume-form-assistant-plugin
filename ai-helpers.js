@@ -302,7 +302,7 @@
       return false;
     }
 
-    if ((field?.inputType === "select" || field?.inputType === "radio") && Array.isArray(field?.options) && field.options.length) {
+    if ((field?.inputType === "select" || field?.inputType === "radio") && Array.isArray(field?.options) && field.options.length && field?.cascadeGroup === undefined) {
       const normalizedValue = normalizeText(text);
       const hasOption = field.options.some((option) => normalizeText(option) === normalizedValue);
 
@@ -445,6 +445,8 @@
   }
 
   function parseDateParts(raw) {
+    if (/\d{4}[\/\-.]\d{1,2}[-–]\d{4}/.test(raw)) return null;
+
     const chineseMatch = raw.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (chineseMatch) {
       return {

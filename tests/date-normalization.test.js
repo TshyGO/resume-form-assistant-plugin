@@ -66,6 +66,14 @@ test("datetime-local '1999-01-01T08:00' → type=datetime-local → '1999-01-01T
   assert.equal(helpers.normalizeDateValue("1999-01-01T08:00", "datetime-local"), "1999-01-01T08:00");
 });
 
+test("月份范围 '2023.06-2023.08' → type=month → 原值（不应被解析为单月）", () => {
+  assert.equal(helpers.normalizeDateValue("2023.06-2023.08", "month"), "2023.06-2023.08");
+});
+
+test("月份范围 '2023/06-2023/08' → type=month → 原值", () => {
+  assert.equal(helpers.normalizeDateValue("2023/06-2023/08", "month"), "2023/06-2023/08");
+});
+
 test("无效输入 '出生日期' → type=date → 原值不崩溃", () => {
   assert.equal(helpers.normalizeDateValue("出生日期", "date"), "出生日期");
 });

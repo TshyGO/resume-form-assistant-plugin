@@ -606,7 +606,7 @@
       return element.value === normalized;
     }
 
-    if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element")) {
+    if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element" || pickerType === "generic")) {
       const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, pickerInputType) ?? value;
       element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       return new Promise((resolve) => {
@@ -625,7 +625,7 @@
             resolve(false);
             return;
           }
-          resolve(true);
+          resolve(element.value === normalized);
         }, 150);
       });
     }
