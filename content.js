@@ -217,7 +217,7 @@
   async function handleFieldChipClick(button) {
     const value = button.dataset.value || "";
     const copied = await copyText(value);
-    const filled = fillLastFocusedField(value);
+    const filled = await fillLastFocusedField(value);
 
     button.classList.add("is-success");
     button.textContent = filled ? "已填写" : "已复制";
@@ -546,12 +546,12 @@
     }
   }
 
-  function fillLastFocusedField(value) {
+  async function fillLastFocusedField(value) {
     const candidates = [state.lastFocusedField, document.activeElement];
 
     for (const candidate of candidates) {
       if (candidate instanceof HTMLElement && isFillTarget(candidate) && document.contains(candidate)) {
-        if (setElementValue(candidate, value)) {
+        if (await Promise.resolve(setElementValue(candidate, value))) {
           candidate.focus?.();
           state.lastFocusedField = candidate;
           return true;
@@ -598,7 +598,7 @@
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
       element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-      return true;
+      return element.value === normalized;
     }
 
     if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element")) {

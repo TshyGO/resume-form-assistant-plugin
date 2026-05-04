@@ -53,7 +53,7 @@
 
         if (validSelectFieldsInParent.length > 1) {
           const hasLocationKeywords = validSelectFieldsInParent.some((f) =>
-            locationRegex.test(f.name) || locationRegex.test(f.idAttr) || locationRegex.test(f.ariaLabel)
+            locationRegex.test(f.name) || locationRegex.test(f.idAttr) || locationRegex.test(f.ariaLabel) || locationRegex.test(f.label)
           );
 
           let isCascade = hasLocationKeywords;
@@ -448,7 +448,7 @@
       };
     }
 
-    const separatorMatch = raw.match(/^(\d{4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2}))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
+    const separatorMatch = raw.match(/^(\d{4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2})(?!\d))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (separatorMatch) {
       return {
         year: separatorMatch[1],
