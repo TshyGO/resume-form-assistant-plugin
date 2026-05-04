@@ -217,7 +217,7 @@
   async function handleFieldChipClick(button) {
     const value = button.dataset.value || "";
     const copied = await copyText(value);
-    const filled = fillLastFocusedField(value);
+    const filled = await fillLastFocusedField(value);
 
     button.classList.add("is-success");
     button.textContent = filled ? "已填写" : "已复制";
@@ -273,13 +273,49 @@
 
       let filledCount = 0;
 
-      response.matches.forEach((match) => {
+      const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
+      const sortedMatches = [...response.matches].sort((a, b) => {
+        const ma = fieldMetaMap.get(a.fieldId);
+        const mb = fieldMetaMap.get(b.fieldId);
+        if (ma?.cascadeGroup !== undefined && ma.cascadeGroup === mb?.cascadeGroup) {
+          return (ma.cascadeLevel ?? 0) - (mb.cascadeLevel ?? 0);
+        }
+        return 0;
+      });
+
+      for (const match of sortedMatches) {
         const element = fieldMap.get(match.fieldId);
 
-        if (element && setElementValue(element, match.value)) {
+        if (!element) continue;
+
+        let filled = setElementValue(element, match.value);
+        if (filled instanceof Promise) {
+          filled = await filled;
+        }
+
+        const fieldMeta = fieldMetaMap.get(match.fieldId);
+
+        if (!filled && element.kind === "element" && element.element instanceof HTMLSelectElement && fieldMeta?.cascadeGroup !== undefined) {
+          for (let retry = 0; retry < 3; retry++) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            filled = setElementValue(element, match.value);
+            if (filled) break;
+          }
+        }
+
+        if (filled) {
           filledCount += 1;
         }
-      });
+
+        if (filled && fieldMeta?.cascadeGroup !== undefined) {
+          const groupFields = fields.filter((f) => f.cascadeGroup === fieldMeta.cascadeGroup);
+          const maxLevelInGroup = Math.max(...groupFields.map((f) => f.cascadeLevel));
+          
+          if (fieldMeta.cascadeLevel < maxLevelInGroup) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+        }
+      }
 
       showStatus(`已填写 ${filledCount} 个字段。`, "success");
     } catch (error) {
@@ -343,6 +379,61 @@
         group: findNearestGroupLabel(element)
       });
     });
+
+    const pickerSelectors = [
+      { selector: ".ant-picker", pickerType: "antd" },
+      { selector: ".el-date-editor", pickerType: "element" },
+      { selector: "[class*='date-picker']", pickerType: "generic" }
+    ];
+
+    pickerSelectors.forEach(({ selector, pickerType }) => {
+      document.querySelectorAll(selector).forEach((container) => {
+        if (container.closest(`#${SIDEBAR_ID}`)) return;
+        if (!isVisible(container)) return;
+
+        Array.from(container.querySelectorAll("input:not([type='hidden']):not([disabled])"))
+          .filter((inner) => isVisible(inner))
+          .forEach((inner) => {
+          const pickerInputType = inferPickerInputType(container, inner);
+
+          const existingEntry = Array.from(fieldMap.entries()).find(([, v]) => v.element === inner);
+          if (existingEntry) {
+            const [existingId, entryValue] = existingEntry;
+            entryValue.pickerType = pickerType;
+            entryValue.pickerInputType = pickerInputType;
+            const existingField = fields.find((f) => f.fieldId === existingId);
+            if (existingField) {
+              existingField.inputType = "date-picker";
+              existingField.pickerType = pickerType;
+              existingField.pickerInputType = pickerInputType;
+            }
+            return;
+          }
+
+          const fieldId = `field-${fields.length}`;
+          fieldMap.set(fieldId, { kind: "element", element: inner, pickerType, pickerInputType });
+          fields.push({
+            fieldId,
+            label: getFieldLabel(inner),
+            placeholder: inner.getAttribute("placeholder") || "",
+            name: inner.getAttribute("name") || "",
+            idAttr: inner.id || "",
+            ariaLabel: inner.getAttribute("aria-label") || "",
+            tagName: "input",
+            inputType: "date-picker",
+            pickerType,
+            pickerInputType,
+            options: [],
+            group: findNearestGroupLabel(inner)
+          });
+        });
+      });
+    });
+
+    // 级联判断 (Cascade Detection)
+    if (self.ResumeProAIHelpers?.detectCascadeGroups) {
+      self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
+    }
 
     return { fields, fieldMap };
   }
@@ -461,12 +552,12 @@
     }
   }
 
-  function fillLastFocusedField(value) {
+  async function fillLastFocusedField(value) {
     const candidates = [state.lastFocusedField, document.activeElement];
 
     for (const candidate of candidates) {
       if (candidate instanceof HTMLElement && isFillTarget(candidate) && document.contains(candidate)) {
-        if (setElementValue(candidate, value)) {
+        if (await Promise.resolve(setElementValue(candidate, value))) {
           candidate.focus?.();
           state.lastFocusedField = candidate;
           return true;
@@ -495,8 +586,50 @@
       return true;
     }
 
+    const pickerType = (element && typeof element === "object" && element.kind === "element") ? element.pickerType : null;
+    const pickerInputType = (element && typeof element === "object" && element.kind === "element") ? (element.pickerInputType || "date") : "date";
+
     if (element && typeof element === "object" && element.kind === "element") {
       element = element.element;
+    }
+
+    if (element instanceof HTMLInputElement && ["date", "month", "datetime-local", "time"].includes(element.type)) {
+      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, element.type) ?? value;
+      const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
+      element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      if (descriptor?.set) {
+        descriptor.set.call(element, normalized);
+      } else {
+        element.value = normalized;
+      }
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+      return element.value === normalized;
+    }
+
+    if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element" || pickerType === "generic")) {
+      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, pickerInputType) ?? value;
+      element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      return new Promise((resolve) => {
+        window.setTimeout(() => {
+          try {
+            const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
+            if (descriptor?.set) {
+              descriptor.set.call(element, normalized);
+            } else {
+              element.value = normalized;
+            }
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+            element.dispatchEvent(new Event("change", { bubbles: true }));
+            element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+          } catch (_) {
+            resolve(false);
+            return;
+          }
+          resolve(element.value === normalized);
+        }, 150);
+      });
     }
 
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
@@ -512,6 +645,13 @@
     }
 
     if (element instanceof HTMLSelectElement) {
+      if (element.options.length <= 1) {
+        const onlyOption = element.options[0];
+        if (!onlyOption || (onlyOption.value !== value && onlyOption.text.trim() !== value.trim())) {
+          return false;
+        }
+      }
+
       if (Array.from(element.options).some((option) => option.value === value)) {
         element.value = value;
       } else {
@@ -674,6 +814,15 @@
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), Math.max(min, max));
+  }
+
+  function inferPickerInputType(container, inner) {
+    const cls = container.className || "";
+    const placeholder = (inner.getAttribute("placeholder") || "").toLowerCase();
+    if (/time/i.test(cls) || /时间|hh:mm/.test(placeholder)) return "time";
+    if (/month/i.test(cls) || /年月|月份|month/.test(placeholder)) return "month";
+    if (/datetime/i.test(cls) || /日期.*时间|datetime/.test(placeholder)) return "datetime-local";
+    return "date";
   }
 
   function isVisible(element) {
