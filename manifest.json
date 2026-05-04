@@ -55,6 +55,7 @@
         "<all_urls>"
       ],
       "js": [
+        "ai-helpers.js",
         "content.js"
       ],
       "css": [

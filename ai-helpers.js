@@ -28,6 +28,61 @@
     { type: "degree", keywords: ["学历", "学位", "培养层次", "degree"] }
   ];
 
+  function detectCascadeGroups(fields, fieldMap) {
+    const selectFields = fields.filter((f) => f.tagName === "select");
+    let cascadeGroupIndex = 0;
+    const processedSelectIDs = new Set();
+    const locationRegex = /(省|市|区|county|city|province)/i;
+
+    selectFields.forEach((currentField) => {
+      if (processedSelectIDs.has(currentField.fieldId)) {
+        return;
+      }
+
+      const currentElement = fieldMap.get(currentField.fieldId)?.element;
+      if (!currentElement) return;
+
+      let parent = currentElement.parentElement;
+      let depth = 0;
+
+      while (parent && depth < 5) {
+        const validSelectFieldsInParent = selectFields.filter((f) => {
+          const el = fieldMap.get(f.fieldId)?.element;
+          return el && parent.contains(el);
+        });
+
+        if (validSelectFieldsInParent.length > 1) {
+          const hasLocationKeywords = validSelectFieldsInParent.some((f) =>
+            locationRegex.test(f.name) || locationRegex.test(f.idAttr) || locationRegex.test(f.ariaLabel)
+          );
+
+          let isCascade = hasLocationKeywords;
+
+          if (!isCascade) {
+             for (let i = 1; i < validSelectFieldsInParent.length; i++) {
+               if (validSelectFieldsInParent[i].options.length <= 1) {
+                 isCascade = true;
+                 break;
+               }
+             }
+          }
+
+          if (isCascade) {
+            validSelectFieldsInParent.forEach((f, idx) => {
+              f.cascadeGroup = `group-${cascadeGroupIndex}`;
+              f.cascadeLevel = idx;
+              processedSelectIDs.add(f.fieldId);
+            });
+            cascadeGroupIndex++;
+            break;
+          }
+        }
+        parent = parent.parentElement;
+        depth++;
+      }
+    });
+  }
+
   const helpers = {
     normalizeText,
     inferFieldSemantic,
@@ -35,7 +90,9 @@
     shouldSkipAIForField,
     filterValidMatches,
     semanticizeParsedFields,
-    normalizeParsedFields
+    normalizeParsedFields,
+    normalizeDateValue,
+    detectCascadeGroups
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -348,5 +405,75 @@
     const count = seenKeys.get(base) || 0;
     seenKeys.set(base, count + 1);
     return count ? `${base} (${count + 1})` : base;
+  }
+
+  function normalizeDateValue(rawValue, inputType) {
+    const raw = String(rawValue ?? "").trim();
+
+    const parsed = parseDateParts(raw);
+
+    if (!parsed) {
+      return raw;
+    }
+
+    const { year, month, day, hour, minute } = parsed;
+
+    switch (inputType) {
+      case "date":
+        if (!year || !month || !day) return raw;
+        return `${year}-${pad2(month)}-${pad2(day)}`;
+      case "month":
+        if (!year || !month) return raw;
+        return `${year}-${pad2(month)}`;
+      case "time":
+        if (hour === null || minute === null) return raw;
+        return `${pad2(hour)}:${pad2(minute)}`;
+      case "datetime-local":
+        if (!year || !month || !day) return raw;
+        return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour ?? 0)}:${pad2(minute ?? 0)}`;
+      default:
+        return raw;
+    }
+  }
+
+  function parseDateParts(raw) {
+    const chineseMatch = raw.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?/);
+    if (chineseMatch) {
+      return {
+        year: chineseMatch[1],
+        month: chineseMatch[2],
+        day: chineseMatch[3] || null,
+        hour: null,
+        minute: null
+      };
+    }
+
+    const separatorMatch = raw.match(/^(\d{4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2}))?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
+    if (separatorMatch) {
+      return {
+        year: separatorMatch[1],
+        month: separatorMatch[2],
+        day: separatorMatch[3] || null,
+        hour: separatorMatch[4] != null ? separatorMatch[4] : null,
+        minute: separatorMatch[5] != null ? separatorMatch[5] : null
+      };
+    }
+
+    const timeMatch = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (timeMatch) {
+      return {
+        year: null,
+        month: null,
+        day: null,
+        hour: timeMatch[1],
+        minute: timeMatch[2]
+      };
+    }
+
+    return null;
+  }
+
+  function pad2(value) {
+    return String(Number(value)).padStart(2, "0");
   }
 })(typeof self !== "undefined" ? self : globalThis);
