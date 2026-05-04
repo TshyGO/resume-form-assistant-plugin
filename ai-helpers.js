@@ -60,7 +60,7 @@
 
           if (!isCascade) {
              for (let i = 1; i < validSelectFieldsInParent.length; i++) {
-               if (validSelectFieldsInParent[i].options.length <= 1) {
+               if (validSelectFieldsInParent[i].options.length === 0) {
                  isCascade = true;
                  break;
                }
@@ -437,14 +437,14 @@
   }
 
   function parseDateParts(raw) {
-    const chineseMatch = raw.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?/);
+    const chineseMatch = raw.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (chineseMatch) {
       return {
         year: chineseMatch[1],
         month: chineseMatch[2],
         day: chineseMatch[3] || null,
-        hour: null,
-        minute: null
+        hour: chineseMatch[4] != null ? chineseMatch[4] : null,
+        minute: chineseMatch[5] != null ? chineseMatch[5] : null
       };
     }
 

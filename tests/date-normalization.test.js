@@ -54,6 +54,14 @@ test("datetime-local '1999/01/01 09:30' → type=datetime-local → '1999-01-01T
   assert.equal(helpers.normalizeDateValue("1999/01/01 09:30", "datetime-local"), "1999-01-01T09:30");
 });
 
+test("中文日期带时间 '1999年1月1日 09:30' → type=datetime-local → '1999-01-01T09:30'", () => {
+  assert.equal(helpers.normalizeDateValue("1999年1月1日 09:30", "datetime-local"), "1999-01-01T09:30");
+});
+
+test("中文日期带时间 '1999年1月1日 09:30' → type=date → '1999-01-01'（时间部分忽略）", () => {
+  assert.equal(helpers.normalizeDateValue("1999年1月1日 09:30", "date"), "1999-01-01");
+});
+
 test("datetime-local '1999-01-01T08:00' → type=datetime-local → '1999-01-01T08:00'", () => {
   assert.equal(helpers.normalizeDateValue("1999-01-01T08:00", "datetime-local"), "1999-01-01T08:00");
 });

@@ -105,20 +105,20 @@ test("非级联：没有关键词，所有选项都大于 2", () => {
 
 test("混合场景：页面上有多组级联", () => {
   const select1 = createMockElement("select", 3);
-  const select2 = createMockElement("select", 1);
+  const select2 = createMockElement("select", 0);
   const container1 = createMockContainer([select1, select2]);
 
   const select3 = createMockElement("select", 3);
-  const select4 = createMockElement("select", 1);
+  const select4 = createMockElement("select", 0);
   const container2 = createMockContainer([select3, select4]);
 
   createMockContainer([container1, container2]); // Common wrapper, but parent match handles properly
 
   const fields = [
     { fieldId: "f8", tagName: "select", name: "grp1_dropdown1", ariaLabel: "", options: [{},{},{}] },
-    { fieldId: "f9", tagName: "select", name: "grp1_dropdown2", ariaLabel: "", options: [{}] },
+    { fieldId: "f9", tagName: "select", name: "grp1_dropdown2", ariaLabel: "", options: [] },
     { fieldId: "f10", tagName: "select", name: "grp2_dropdown1", ariaLabel: "", options: [{},{},{}] },
-    { fieldId: "f11", tagName: "select", name: "grp2_dropdown2", ariaLabel: "", options: [{}] }
+    { fieldId: "f11", tagName: "select", name: "grp2_dropdown2", ariaLabel: "", options: [] }
   ];
 
   const fieldMap = new Map([
