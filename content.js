@@ -50,14 +50,17 @@
     }
 
     state.currentStore = await StorageService.ensureDefaults();
-    createSidebar();
+    const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(cssText);
+    createSidebar(sheet);
     createManagerPanel();
     renderSidebar();
     bindStorageSync();
     bindFocusTracking();
   }
 
-  function createSidebar() {
+  function createSidebar(sheet) {
     const host = document.createElement("div");
     host.id = SIDEBAR_ID;
     Object.assign(host.style, {
@@ -68,12 +71,8 @@
     });
 
     document.body.appendChild(host);
-    shadowRoot = host.attachShadow({ mode: "open" });
-
-    const styleLink = document.createElement("link");
-    styleLink.rel = "stylesheet";
-    styleLink.href = chrome.runtime.getURL("content.css");
-    shadowRoot.appendChild(styleLink);
+    shadowRoot = host.attachShadow({ mode: "closed" });
+    shadowRoot.adoptedStyleSheets = [sheet];
 
     const sidebar = document.createElement("aside");
     sidebar.className = "resume-pro";
