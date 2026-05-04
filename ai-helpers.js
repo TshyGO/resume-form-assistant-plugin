@@ -60,7 +60,7 @@
 
           if (!isCascade) {
              for (let i = 1; i < validSelectFieldsInParent.length; i++) {
-               if (validSelectFieldsInParent[i].options.length === 0) {
+               if (validSelectFieldsInParent[i].options.length <= 1) {
                  isCascade = true;
                  break;
                }
@@ -68,12 +68,20 @@
           }
 
           if (isCascade) {
-            validSelectFieldsInParent.forEach((f, idx) => {
-              f.cascadeGroup = `group-${cascadeGroupIndex}`;
-              f.cascadeLevel = idx;
-              processedSelectIDs.add(f.fieldId);
+            const cascadeSelects = validSelectFieldsInParent.filter((f, i) => {
+              if (i === 0) return true;
+              return locationRegex.test(f.name) || locationRegex.test(f.idAttr) ||
+                     locationRegex.test(f.ariaLabel) || locationRegex.test(f.label) ||
+                     f.options.length <= 1;
             });
-            cascadeGroupIndex++;
+            if (cascadeSelects.length > 1) {
+              cascadeSelects.forEach((f, idx) => {
+                f.cascadeGroup = `group-${cascadeGroupIndex}`;
+                f.cascadeLevel = idx;
+                processedSelectIDs.add(f.fieldId);
+              });
+              cascadeGroupIndex++;
+            }
             break;
           }
         }

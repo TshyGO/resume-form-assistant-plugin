@@ -391,35 +391,39 @@
         if (container.closest(`#${SIDEBAR_ID}`)) return;
         if (!isVisible(container)) return;
 
-        const inner = container.querySelector("input");
-        if (!inner) return;
+        Array.from(container.querySelectorAll("input")).forEach((inner) => {
+          const pickerInputType = inferPickerInputType(container, inner);
 
-        const existingEntry = Array.from(fieldMap.entries()).find(([, v]) => v.element === inner);
-        if (existingEntry) {
-          const [existingId, entryValue] = existingEntry;
-          entryValue.pickerType = pickerType;
-          const existingField = fields.find((f) => f.fieldId === existingId);
-          if (existingField) {
-            existingField.inputType = "date-picker";
-            existingField.pickerType = pickerType;
+          const existingEntry = Array.from(fieldMap.entries()).find(([, v]) => v.element === inner);
+          if (existingEntry) {
+            const [existingId, entryValue] = existingEntry;
+            entryValue.pickerType = pickerType;
+            entryValue.pickerInputType = pickerInputType;
+            const existingField = fields.find((f) => f.fieldId === existingId);
+            if (existingField) {
+              existingField.inputType = "date-picker";
+              existingField.pickerType = pickerType;
+              existingField.pickerInputType = pickerInputType;
+            }
+            return;
           }
-          return;
-        }
 
-        const fieldId = `field-${fields.length}`;
-        fieldMap.set(fieldId, { kind: "element", element: inner, pickerType });
-        fields.push({
-          fieldId,
-          label: getFieldLabel(inner),
-          placeholder: inner.getAttribute("placeholder") || "",
-          name: inner.getAttribute("name") || "",
-          idAttr: inner.id || "",
-          ariaLabel: inner.getAttribute("aria-label") || "",
-          tagName: "input",
-          inputType: "date-picker",
-          pickerType,
-          options: [],
-          group: findNearestGroupLabel(inner)
+          const fieldId = `field-${fields.length}`;
+          fieldMap.set(fieldId, { kind: "element", element: inner, pickerType, pickerInputType });
+          fields.push({
+            fieldId,
+            label: getFieldLabel(inner),
+            placeholder: inner.getAttribute("placeholder") || "",
+            name: inner.getAttribute("name") || "",
+            idAttr: inner.id || "",
+            ariaLabel: inner.getAttribute("aria-label") || "",
+            tagName: "input",
+            inputType: "date-picker",
+            pickerType,
+            pickerInputType,
+            options: [],
+            group: findNearestGroupLabel(inner)
+          });
         });
       });
     });
@@ -581,6 +585,7 @@
     }
 
     const pickerType = (element && typeof element === "object" && element.kind === "element") ? element.pickerType : null;
+    const pickerInputType = (element && typeof element === "object" && element.kind === "element") ? (element.pickerInputType || "date") : "date";
 
     if (element && typeof element === "object" && element.kind === "element") {
       element = element.element;
@@ -602,7 +607,7 @@
     }
 
     if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element")) {
-      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, "date") ?? value;
+      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, pickerInputType) ?? value;
       element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       return new Promise((resolve) => {
         window.setTimeout(() => {
@@ -807,6 +812,15 @@
 
   function clamp(value, min, max) {
     return Math.min(Math.max(value, min), Math.max(min, max));
+  }
+
+  function inferPickerInputType(container, inner) {
+    const cls = container.className || "";
+    const placeholder = (inner.getAttribute("placeholder") || "").toLowerCase();
+    if (/time/i.test(cls) || /时间|hh:mm/.test(placeholder)) return "time";
+    if (/month/i.test(cls) || /年月|月份|month/.test(placeholder)) return "month";
+    if (/datetime/i.test(cls) || /日期.*时间|datetime/.test(placeholder)) return "datetime-local";
+    return "date";
   }
 
   function isVisible(element) {
