@@ -1,8 +1,10 @@
 :host {
   display: block;
+  width: fit-content;
 }
 
-.resume-pro {
+:host .resume-pro {
+  width: 300px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -15,12 +17,12 @@
   overflow: hidden;
 }
 
-.resume-pro.is-dragging {
+:host .resume-pro.is-dragging {
   cursor: grabbing;
   user-select: none;
 }
 
-.resume-pro__header {
+:host .resume-pro__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -31,11 +33,11 @@
   cursor: grab;
 }
 
-.resume-pro__title-wrap {
+:host .resume-pro__title-wrap {
   min-width: 0;
 }
 
-.resume-pro__eyebrow {
+:host .resume-pro__eyebrow {
   margin: 0 0 4px;
   opacity: 0.85;
   font-size: 11px;
@@ -44,12 +46,12 @@
   text-transform: uppercase;
 }
 
-.resume-pro__title {
+:host .resume-pro__title {
   display: block;
   font-size: 16px;
 }
 
-.resume-pro__collapse {
+:host .resume-pro__collapse {
   width: 34px;
   height: 34px;
   border: 0;
@@ -60,7 +62,7 @@
   font-size: 20px;
 }
 
-.resume-pro__body {
+:host .resume-pro__body {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -68,7 +70,7 @@
   overflow: auto;
 }
 
-.resume-pro__field {
+:host .resume-pro__field {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -76,15 +78,15 @@
   font-weight: 600;
 }
 
-.resume-pro__select,
-.resume-pro__ai-button,
-.resume-pro__footer-link,
-.resume-pro__chip,
-.resume-pro__collapse {
+:host .resume-pro__select,
+:host .resume-pro__ai-button,
+:host .resume-pro__footer-link,
+:host .resume-pro__chip,
+:host .resume-pro__collapse {
   font: inherit;
 }
 
-.resume-pro__select {
+:host .resume-pro__select {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid #d9def0;
@@ -93,7 +95,7 @@
   color: #1f2937;
 }
 
-.resume-pro__ai-button {
+:host .resume-pro__ai-button {
   width: 100%;
   padding: 12px 14px;
   border: 0;
@@ -105,12 +107,12 @@
   box-shadow: 0 10px 22px rgba(79, 110, 247, 0.24);
 }
 
-.resume-pro__ai-button:disabled {
+:host .resume-pro__ai-button:disabled {
   cursor: wait;
   opacity: 0.72;
 }
 
-.resume-pro__status {
+:host .resume-pro__status {
   display: none;
   padding: 10px 12px;
   border-radius: 12px;
@@ -118,32 +120,32 @@
   line-height: 1.5;
 }
 
-.resume-pro__status.is-visible {
+:host .resume-pro__status.is-visible {
   display: block;
 }
 
-.resume-pro__status.is-success {
+:host .resume-pro__status.is-success {
   background: rgba(33, 185, 122, 0.12);
   color: #21b97a;
 }
 
-.resume-pro__status.is-error {
+:host .resume-pro__status.is-error {
   background: rgba(227, 93, 106, 0.12);
   color: #d54f6f;
 }
 
-.resume-pro__divider {
+:host .resume-pro__divider {
   height: 1px;
   background: rgba(79, 110, 247, 0.12);
 }
 
-.resume-pro__groups {
+:host .resume-pro__groups {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.resume-pro__group {
+:host .resume-pro__group {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -153,19 +155,19 @@
   background: #fbfcff;
 }
 
-.resume-pro__group-name {
+:host .resume-pro__group-name {
   font-size: 13px;
   font-weight: 700;
   color: #334155;
 }
 
-.resume-pro__chips {
+:host .resume-pro__chips {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.resume-pro__chip {
+:host .resume-pro__chip {
   max-width: 100%;
   padding: 8px 10px;
   border: 0;
@@ -177,12 +179,12 @@
   font-weight: 600;
 }
 
-.resume-pro__chip.is-success {
+:host .resume-pro__chip.is-success {
   background: rgba(33, 185, 122, 0.14);
   color: #21b97a;
 }
 
-.resume-pro__empty {
+:host .resume-pro__empty {
   padding: 20px 14px;
   border: 1px dashed rgba(79, 110, 247, 0.24);
   border-radius: 14px;
@@ -193,11 +195,11 @@
   text-align: center;
 }
 
-.resume-pro__empty p {
+:host .resume-pro__empty p {
   margin: 0 0 12px;
 }
 
-.resume-pro__setup-button {
+:host .resume-pro__setup-button {
   width: 100%;
   padding: 10px 14px;
   border: 0;
@@ -211,7 +213,7 @@
   box-shadow: 0 6px 16px rgba(79, 110, 247, 0.28);
 }
 
-.resume-pro__footer-tip {
+:host .resume-pro__footer-tip {
   margin: 0;
   padding: 10px 12px;
   border-radius: 12px;
@@ -222,13 +224,13 @@
   line-height: 1.5;
 }
 
-.resume-pro__footer {
+:host .resume-pro__footer {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.resume-pro__manager-button {
+:host .resume-pro__manager-button {
   width: 100%;
   padding: 10px 12px;
   border: 0;
@@ -240,11 +242,11 @@
   font-weight: 700;
 }
 
-.resume-pro.is-collapsed {
+:host .resume-pro.is-collapsed {
   width: 160px;
 }
 
-.resume-pro.is-collapsed .resume-pro__body {
+:host .resume-pro.is-collapsed .resume-pro__body {
   display: none;
 }
 

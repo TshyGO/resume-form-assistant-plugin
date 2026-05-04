@@ -64,8 +64,7 @@
       position: "fixed",
       top: "96px",
       right: "24px",
-      zIndex: "2147483647",
-      width: "300px"
+      zIndex: "2147483647"
     });
 
     document.body.appendChild(host);
