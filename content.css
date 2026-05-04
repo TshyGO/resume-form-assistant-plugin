@@ -1,7 +1,5 @@
 :host {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .resume-pro {
@@ -18,7 +16,7 @@
 }
 
 .resume-pro.is-dragging {
-  c‍ursor: grabbing;
+  cursor: grabbing;
   user-select: none;
 }
 
@@ -30,7 +28,7 @@
   padding: 14px 14px 12px;
   background: linear-gradient(135deg, #4f6ef7 0%, #6e7dfa 100%);
   color: #fff;
-  c‍ursor: grab;
+  cursor: grab;
 }
 
 .resume-pro__title-wrap {
@@ -58,7 +56,7 @@
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.16);
   color: #fff;
-  c‍ursor: pointer;
+  cursor: pointer;
   font-size: 20px;
 }
 
@@ -102,13 +100,13 @@
   border-radius: 14px;
   background: #4f6ef7;
   color: #fff;
-  c‍ursor: pointer;
+  cursor: pointer;
   font-weight: 700;
   box-shadow: 0 10px 22px rgba(79, 110, 247, 0.24);
 }
 
 .resume-pro__ai-button:disabled {
-  c‍ursor: wait;
+  cursor: wait;
   opacity: 0.72;
 }
 
@@ -174,7 +172,7 @@
   border-radius: 999px;
   background: rgba(79, 110, 247, 0.12);
   color: #4f6ef7;
-  c‍ursor: pointer;
+  cursor: pointer;
   font-size: 12px;
   font-weight: 600;
 }
@@ -206,7 +204,7 @@
   border-radius: 12px;
   background: #4f6ef7;
   color: #fff;
-  c‍ursor: pointer;
+  cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 700;
@@ -237,7 +235,7 @@
   border-radius: 12px;
   background: #eef2ff;
   color: #4f6ef7;
-  c‍ursor: pointer;
+  cursor: pointer;
   font: inherit;
   font-weight: 700;
 }
@@ -306,7 +304,7 @@
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
-  c‍ursor: pointer;
+  cursor: pointer;
   font-size: 24px;
   line-height: 1;
 }
