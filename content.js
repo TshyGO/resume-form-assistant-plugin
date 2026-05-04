@@ -307,7 +307,7 @@
           filledCount += 1;
         }
 
-        if (fieldMeta?.cascadeGroup !== undefined) {
+        if (filled && fieldMeta?.cascadeGroup !== undefined) {
           const groupFields = fields.filter((f) => f.cascadeGroup === fieldMeta.cascadeGroup);
           const maxLevelInGroup = Math.max(...groupFields.map((f) => f.cascadeLevel));
           
@@ -391,7 +391,9 @@
         if (container.closest(`#${SIDEBAR_ID}`)) return;
         if (!isVisible(container)) return;
 
-        Array.from(container.querySelectorAll("input")).forEach((inner) => {
+        Array.from(container.querySelectorAll("input:not([type='hidden']):not([disabled])"))
+          .filter((inner) => isVisible(inner))
+          .forEach((inner) => {
           const pickerInputType = inferPickerInputType(container, inner);
 
           const existingEntry = Array.from(fieldMap.entries()).find(([, v]) => v.element === inner);

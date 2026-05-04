@@ -68,12 +68,22 @@
           }
 
           if (isCascade) {
-            const cascadeSelects = validSelectFieldsInParent.filter((f, i) => {
-              if (i === 0) return true;
-              return locationRegex.test(f.name) || locationRegex.test(f.idAttr) ||
-                     locationRegex.test(f.ariaLabel) || locationRegex.test(f.label) ||
-                     f.options.length <= 1;
-            });
+            const isKeywordBased = hasLocationKeywords;
+            let cascadeSelects;
+            if (isKeywordBased) {
+              cascadeSelects = validSelectFieldsInParent.filter((f) =>
+                locationRegex.test(f.name) || locationRegex.test(f.idAttr) ||
+                locationRegex.test(f.ariaLabel) || locationRegex.test(f.label) ||
+                f.options.length <= 1
+              );
+            } else {
+              const firstSparseIndex = validSelectFieldsInParent.findIndex((f, i) => i > 0 && f.options.length <= 1);
+              cascadeSelects = firstSparseIndex > 0
+                ? validSelectFieldsInParent.filter((f, i) =>
+                    i === firstSparseIndex - 1 || (i >= firstSparseIndex && f.options.length <= 1)
+                  )
+                : [];
+            }
             if (cascadeSelects.length > 1) {
               cascadeSelects.forEach((f, idx) => {
                 f.cascadeGroup = `group-${cascadeGroupIndex}`;
@@ -445,7 +455,7 @@
   }
 
   function parseDateParts(raw) {
-    if (/\d{4}[\/\-.]\d{1,2}[-–]\d{4}/.test(raw)) return null;
+    if (/(19|20)\d{2}.+(19|20)\d{2}/.test(raw)) return null;
 
     const chineseMatch = raw.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?(?:[T\s](\d{1,2}):(\d{1,2}))?/);
     if (chineseMatch) {
