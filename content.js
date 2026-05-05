@@ -1,6 +1,7 @@
 (function () {
   const SIDEBAR_ID = "resume-pro-sidebar";
   const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig"];
+  let shadowRoot = null;
   const state = {
     dragOffsetX: 0,
     dragOffsetY: 0,
@@ -49,16 +50,31 @@
     }
 
     state.currentStore = await StorageService.ensureDefaults();
-    createSidebar();
+    const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(cssText);
+    createSidebar(sheet);
     createManagerPanel();
     renderSidebar();
     bindStorageSync();
     bindFocusTracking();
   }
 
-  function createSidebar() {
+  function createSidebar(sheet) {
+    const host = document.createElement("div");
+    host.id = SIDEBAR_ID;
+    Object.assign(host.style, {
+      position: "fixed",
+      top: "96px",
+      right: "24px",
+      zIndex: "2147483647"
+    });
+
+    document.body.appendChild(host);
+    shadowRoot = host.attachShadow({ mode: "closed" });
+    shadowRoot.adoptedStyleSheets = [sheet];
+
     const sidebar = document.createElement("aside");
-    sidebar.id = SIDEBAR_ID;
     sidebar.className = "resume-pro";
     sidebar.innerHTML = `
       <div class="resume-pro__header" data-drag-handle="true">
@@ -84,7 +100,7 @@
       </div>
     `;
 
-    document.body.appendChild(sidebar);
+    shadowRoot.appendChild(sidebar);
     bindSidebarEvents(sidebar);
   }
 
@@ -153,14 +169,12 @@
   }
 
   function renderSidebar() {
-    const sidebar = document.getElementById(SIDEBAR_ID);
-
-    if (!sidebar) {
+    if (!shadowRoot) {
       return;
     }
 
-    const templateSelect = sidebar.querySelector("#resume-pro-template-select");
-    const groupsContainer = sidebar.querySelector("#resume-pro-groups");
+    const templateSelect = shadowRoot.querySelector("#resume-pro-template-select");
+    const groupsContainer = shadowRoot.querySelector("#resume-pro-groups");
     const activeTemplate = getActiveTemplate(state.currentStore);
     const templates = state.currentStore?.templates || [];
 
@@ -755,7 +769,7 @@
   }
 
   function showStatus(message, variant) {
-    const statusElement = document.getElementById("resume-pro-status");
+    const statusElement = shadowRoot?.querySelector("#resume-pro-status");
 
     if (!statusElement) {
       return;
@@ -779,12 +793,12 @@
       return;
     }
 
-    const sidebar = document.getElementById(SIDEBAR_ID);
-    const rect = sidebar.getBoundingClientRect();
+    const host = document.getElementById(SIDEBAR_ID);
+    const rect = host.getBoundingClientRect();
     state.dragging = true;
     state.dragOffsetX = event.clientX - rect.left;
     state.dragOffsetY = event.clientY - rect.top;
-    sidebar.classList.add("is-dragging");
+    shadowRoot?.querySelector(".resume-pro")?.classList.add("is-dragging");
   }
 
   function onDrag(event) {
@@ -809,7 +823,7 @@
     }
 
     state.dragging = false;
-    document.getElementById(SIDEBAR_ID)?.classList.remove("is-dragging");
+    shadowRoot?.querySelector(".resume-pro")?.classList.remove("is-dragging");
   }
 
   function clamp(value, min, max) {

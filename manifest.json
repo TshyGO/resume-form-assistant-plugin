@@ -36,6 +36,7 @@
         "popup.html",
         "popup.css",
         "popup.js",
+        "content.css",
         "xlsx.full.min.js",
         "mammoth.browser.min.js",
         "ai-helpers.js",
