@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Resume Pro",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "求职网申场景的简历信息填写辅助插件。",
   "permissions": [
     "storage",
