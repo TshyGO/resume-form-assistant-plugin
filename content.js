@@ -1,6 +1,38 @@
 (function () {
   const SIDEBAR_ID = "resume-pro-sidebar";
   const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig"];
+  const FIELD_HIGHLIGHT_CLASS = "resume-pro__field-highlight";
+  const FIELD_HIGHLIGHT_STYLE_ID = "resume-pro-field-highlight-styles";
+  const FIELD_HIGHLIGHT_STYLE_TEXT = `
+.${FIELD_HIGHLIGHT_CLASS} {
+  animation: resume-pro-field-highlight 2.6s ease-out forwards !important;
+  outline: 2px solid rgba(34, 197, 94, 0.95) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14), 0 0 12px rgba(34, 197, 94, 0.5) !important;
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+@keyframes resume-pro-field-highlight {
+  0% {
+    outline-color: rgba(34, 197, 94, 0.95);
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.14), 0 0 12px rgba(34, 197, 94, 0.5);
+    background-color: rgba(34, 197, 94, 0.1);
+  }
+
+  70% {
+    outline-color: rgba(34, 197, 94, 0.8);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.09), 0 0 8px rgba(34, 197, 94, 0.28);
+    background-color: rgba(34, 197, 94, 0.06);
+  }
+
+  100% {
+    outline-color: rgba(34, 197, 94, 0);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    background-color: transparent;
+  }
+}
+`;
+  const fieldHighlightTimers = new WeakMap();
   let shadowRoot = null;
   const state = {
     dragOffsetX: 0,
@@ -53,6 +85,7 @@
     const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(cssText);
+    injectFieldHighlightStyles();
     createSidebar(sheet);
     createManagerPanel();
     renderSidebar();
@@ -319,6 +352,7 @@
 
         if (filled) {
           filledCount += 1;
+          highlightFilledField(element, match.value);
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -688,6 +722,104 @@
     return false;
   }
 
+  function highlightFilledField(fieldEntry, value) {
+    getHighlightTargets(fieldEntry, value).forEach((target) => {
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+
+      if (!isInViewport(target)) {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        queueFieldHighlightWhenVisible(target);
+        return;
+      }
+
+      applyFieldHighlight(target);
+    });
+  }
+
+  function queueFieldHighlightWhenVisible(target, attempt = 0) {
+    clearFieldHighlightTimer(target);
+    const timer = window.setTimeout(() => {
+      if (isInViewport(target) || attempt >= 18) {
+        applyFieldHighlight(target);
+        return;
+      }
+
+      queueFieldHighlightWhenVisible(target, attempt + 1);
+    }, 100);
+    fieldHighlightTimers.set(target, timer);
+  }
+
+  function applyFieldHighlight(target) {
+    clearFieldHighlightTimer(target);
+    target.classList.remove(FIELD_HIGHLIGHT_CLASS);
+    void target.offsetWidth;
+    target.classList.add(FIELD_HIGHLIGHT_CLASS);
+
+    const timer = window.setTimeout(() => {
+      target.classList.remove(FIELD_HIGHLIGHT_CLASS);
+      fieldHighlightTimers.delete(target);
+    }, 2800);
+    fieldHighlightTimers.set(target, timer);
+  }
+
+  function clearFieldHighlightTimer(target) {
+    if (!fieldHighlightTimers.has(target)) {
+      return;
+    }
+
+    window.clearTimeout(fieldHighlightTimers.get(target));
+    fieldHighlightTimers.delete(target);
+  }
+
+  function getHighlightTargets(fieldEntry, value) {
+    if (fieldEntry?.kind === "radio") {
+      const trimmedValue = String(value || "").trim();
+      const matchedRadio = fieldEntry.elements.find((radio) => {
+        const optionText = getRadioOptionLabel(radio);
+        return optionText === trimmedValue || radio.value === trimmedValue;
+      });
+
+      if (!matchedRadio) {
+        return [];
+      }
+
+      return [matchedRadio.labels?.[0] || matchedRadio.closest("label") || matchedRadio];
+    }
+
+    const element = fieldEntry?.kind === "element" ? fieldEntry.element : fieldEntry;
+
+    if (!(element instanceof HTMLElement)) {
+      return [];
+    }
+
+    if (fieldEntry?.pickerType) {
+      return [element.closest(".ant-picker, .el-date-editor, [class*='date-picker']") || element];
+    }
+
+    return [element];
+  }
+
+  function isInViewport(element) {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0
+      && rect.left >= 0
+      && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight)
+      && rect.right <= (window.innerWidth || document.documentElement.clientWidth);
+  }
+
+  function injectFieldHighlightStyles() {
+    if (document.getElementById(FIELD_HIGHLIGHT_STYLE_ID)) {
+      return;
+    }
+
+    const style = document.createElement("style");
+    style.id = FIELD_HIGHLIGHT_STYLE_ID;
+    style.textContent = FIELD_HIGHLIGHT_STYLE_TEXT;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
   function flattenTemplateFields(template) {
     return template.groups.flatMap((group) => group.fields.map((field) => ({
       group: group.name,
@@ -928,4 +1060,17 @@
     }
     return false;
   });
+
+  if (self.__RESUME_PRO_TEST__) {
+    self.ResumeProHighlightTest = {
+      getHighlightTargets,
+      handleAiFillClick,
+      highlightFilledField,
+      injectFieldHighlightStyles,
+      isInViewport,
+      setCurrentStore(store) {
+        state.currentStore = store;
+      }
+    };
+  }
 })();
