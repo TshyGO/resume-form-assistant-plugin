@@ -1,0 +1,41 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check ai-helpers.js
+          node --check background.js
+          node --check content.js
+          node --check popup.js
+          node --check resume-utils.js
+
+      - name: Verify manifest and bundled PDF assets
+        run: |
+          node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
+          test -f vendor/pdfjs/pdf.min.mjs
+          test -f vendor/pdfjs/pdf.worker.min.mjs
+          test -f vendor/pdfjs/LICENSE
+          test -f vendor/pdfjs/cmaps/LICENSE
+
+      - name: Run tests
+        run: node --test tests/*.test.js

@@ -8,6 +8,12 @@ const DEFAULT_STORE = {
   }
 };
 
+const UPDATE_API_URL = "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases/latest";
+const UPDATE_CACHE_KEY = "resumeProUpdateCache";
+const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let pdfJsPromise = null;
+
 const StorageService = {
   async ensureDefaults() {
     const current = await chrome.storage.local.get(null);
@@ -54,6 +60,7 @@ const StorageService = {
 
 const popupState = {
   activeTab: "templates",
+  availableRelease: null,
   reimportTemplateId: "",
   statusTimers: {
     template: null,
@@ -75,6 +82,9 @@ async function bootstrap() {
   bindEvents();
   await StorageService.ensureDefaults();
   await render();
+  initializeUpdateFeature().catch((error) => {
+    console.warn("Resume Pro update feature init failed:", error);
+  });
 }
 
 function cacheElements() {
@@ -92,6 +102,14 @@ function cacheElements() {
   elements.apiKeyInput = document.getElementById("api-key-input");
   elements.toggleApiKeyButton = document.getElementById("toggle-api-key");
   elements.configStatus = document.getElementById("config-status");
+  elements.currentVersion = document.getElementById("current-version");
+  elements.checkUpdateButton = document.getElementById("check-update-button");
+  elements.updateCheckStatus = document.getElementById("update-check-status");
+  elements.updateBanner = document.getElementById("update-banner");
+  elements.updateTitle = document.getElementById("update-title");
+  elements.updateSummary = document.getElementById("update-summary");
+  elements.downloadUpdateButton = document.getElementById("download-update-button");
+  elements.dismissUpdateButton = document.getElementById("dismiss-update-button");
 }
 
 function bindEvents() {
@@ -113,6 +131,11 @@ function bindEvents() {
   elements.templateList.addEventListener("click", handleTemplateListClick);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
   elements.toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
+  elements.checkUpdateButton.addEventListener("click", () => {
+    checkForUpdates({ force: true, announce: true });
+  });
+  elements.downloadUpdateButton.addEventListener("click", openAvailableRelease);
+  elements.dismissUpdateButton.addEventListener("click", dismissAvailableRelease);
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") {
@@ -499,6 +522,113 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+async function initializeUpdateFeature() {
+  const currentVersion = chrome.runtime.getManifest().version;
+  elements.currentVersion.textContent = `当前 v${currentVersion}`;
+  await checkForUpdates({ force: false, announce: false });
+}
+
+async function checkForUpdates({ force, announce }) {
+  const currentVersion = chrome.runtime.getManifest().version;
+  elements.checkUpdateButton.disabled = true;
+
+  if (announce) {
+    elements.updateCheckStatus.textContent = "检查中...";
+  }
+
+  try {
+    const stored = await chrome.storage.local.get([UPDATE_CACHE_KEY, UPDATE_DISMISSED_KEY]);
+    const cached = stored[UPDATE_CACHE_KEY];
+
+    if (!force && ResumeProUtils.shouldUseUpdateCache(cached?.checkedAt, Date.now(), UPDATE_CHECK_INTERVAL_MS)) {
+      renderUpdateBanner(cached?.release || null, stored[UPDATE_DISMISSED_KEY], currentVersion);
+      return;
+    }
+
+    const response = await fetch(UPDATE_API_URL, {
+      headers: {
+        Accept: "application/vnd.github+json"
+      }
+    });
+
+    if (response.status === 404) {
+      await chrome.storage.local.set({
+        [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release: null }
+      });
+      renderUpdateBanner(null, stored[UPDATE_DISMISSED_KEY], currentVersion);
+      if (announce) elements.updateCheckStatus.textContent = "暂无正式版本";
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(`GitHub API HTTP ${response.status}`);
+    }
+
+    const release = ResumeProUtils.normalizeRelease(await response.json());
+    if (!release) {
+      throw new Error("GitHub Release 响应无效");
+    }
+
+    await chrome.storage.local.set({
+      [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release }
+    });
+    const hasUpdate = renderUpdateBanner(release, stored[UPDATE_DISMISSED_KEY], currentVersion);
+
+    if (announce) {
+      elements.updateCheckStatus.textContent = hasUpdate ? "发现新版" : "已是最新版";
+    }
+  } catch (error) {
+    console.warn("Resume Pro update check failed:", error);
+    if (announce) {
+      elements.updateCheckStatus.textContent = "检查失败，不影响使用";
+    }
+  } finally {
+    elements.checkUpdateButton.disabled = false;
+  }
+}
+
+function renderUpdateBanner(release, dismissedVersion, currentVersion) {
+  let hasUpdate = false;
+
+  try {
+    hasUpdate = Boolean(release)
+      && ResumeProUtils.compareVersions(release.version, currentVersion) > 0
+      && release.version !== dismissedVersion;
+  } catch {
+    hasUpdate = false;
+  }
+
+  popupState.availableRelease = hasUpdate ? release : null;
+  elements.updateBanner.hidden = !hasUpdate;
+
+  if (hasUpdate) {
+    elements.updateTitle.textContent = `发现新版本 ${release.version}`;
+    elements.updateSummary.textContent = release.summary;
+  }
+
+  return hasUpdate;
+}
+
+async function openAvailableRelease() {
+  if (!popupState.availableRelease?.url) {
+    return;
+  }
+
+  await chrome.tabs.create({ url: popupState.availableRelease.url });
+}
+
+async function dismissAvailableRelease() {
+  if (!popupState.availableRelease?.version) {
+    return;
+  }
+
+  await chrome.storage.local.set({
+    [UPDATE_DISMISSED_KEY]: popupState.availableRelease.version
+  });
+  popupState.availableRelease = null;
+  elements.updateBanner.hidden = true;
+}
+
 popupState.selectedParseFile = null;
 popupState.statusTimers.parse = null;
 
@@ -605,7 +735,7 @@ async function handleParseResumeClick() {
 
   elements.parseResumeButton.disabled = true;
   elements.parseResumeButton.textContent = "解析中...";
-  showParseStatus("正在调用 AI 提取简历信息...", "success", 0);
+  showParseStatus("正在本地读取简历，然后调用 AI 提取信息...", "success", 0);
 
   try {
     const payload = await buildResumeParsePayload(file, extension);
@@ -644,7 +774,7 @@ async function buildResumeParsePayload(file, extension) {
       throw new Error("未找到 mammoth 解析库。");
     }
 
-    const arrayBuffer = await readFileAsArrayBuffer(file);
+    const arrayBuffer = await readFileAsArrayBuffer(file, "读取 Word 文件失败。");
     const result = await mammoth.convertToHtml({ arrayBuffer });
     const textContent = extractTextFromHtml(result.value);
 
@@ -659,9 +789,28 @@ async function buildResumeParsePayload(file, extension) {
   }
 
   if (extension === "pdf") {
+    let textContent;
+
+    try {
+      const pdfjsLib = await loadPdfJs();
+      const arrayBuffer = await readFileAsArrayBuffer(file, "读取 PDF 文件失败。");
+      textContent = await ResumeProUtils.extractPdfText(pdfjsLib, arrayBuffer, {
+        cMapPacked: true,
+        cMapUrl: chrome.runtime.getURL("vendor/pdfjs/cmaps/")
+      });
+    } catch (error) {
+      throw new Error(ResumeProUtils.getPdfExtractionErrorMessage(error));
+    }
+
+    if (!textContent.trim()) {
+      throw new Error(
+        "PDF 未检测到可提取文字，可能是扫描版。请改用 Word / TXT、先用 OCR，或将页面转成图片后交给视觉模型。"
+      );
+    }
+
     return {
-      fileType: "pdf",
-      content: await readFileAsDataUrl(file)
+      fileType: "text",
+      content: textContent
     };
   }
 
@@ -677,22 +826,25 @@ function readFileAsText(file) {
   });
 }
 
-function readFileAsArrayBuffer(file) {
+function readFileAsArrayBuffer(file, errorMessage) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("读取 Word 文件失败。"));
+    reader.onerror = () => reject(new Error(errorMessage));
     reader.readAsArrayBuffer(file);
   });
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("读取 PDF 文件失败。"));
-    reader.readAsDataURL(file);
-  });
+async function loadPdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import(chrome.runtime.getURL("vendor/pdfjs/pdf.min.mjs"))
+      .then((pdfjsLib) => {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("vendor/pdfjs/pdf.worker.min.mjs");
+        return pdfjsLib;
+      });
+  }
+
+  return pdfJsPromise;
 }
 
 function extractTextFromHtml(html) {

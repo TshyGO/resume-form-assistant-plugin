@@ -14,7 +14,23 @@
           <h1>简历填表助手</h1>
         </div>
         <p class="header-note">Excel 维护数据，插件负责导入与填写。</p>
+        <div class="version-row">
+          <span id="current-version">当前版本</span>
+          <button id="check-update-button" class="text-button" type="button">检查更新</button>
+          <span id="update-check-status" aria-live="polite"></span>
+        </div>
       </header>
+
+      <section id="update-banner" class="update-banner" aria-live="polite" hidden>
+        <div>
+          <strong id="update-title">发现新版本</strong>
+          <p id="update-summary"></p>
+        </div>
+        <div class="update-actions">
+          <button id="download-update-button" class="primary-button" type="button">下载更新</button>
+          <button id="dismiss-update-button" class="secondary-button" type="button">忽略此版本</button>
+        </div>
+      </section>
 
       <nav class="tab-nav" aria-label="功能分区">
         <button class="tab-button is-active" type="button" data-tab="templates">模板管理</button>
@@ -112,6 +128,7 @@
     <script src="xlsx.full.min.js"></script>
     <script src="mammoth.browser.min.js"></script>
     <script src="ai-helpers.js"></script>
+    <script src="resume-utils.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

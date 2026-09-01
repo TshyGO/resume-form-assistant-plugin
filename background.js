@@ -1,4 +1,4 @@
-importScripts("ai-helpers.js");
+importScripts("ai-helpers.js", "resume-utils.js");
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.id) {
@@ -113,23 +113,19 @@ async function handleAiFill(message) {
 }
 
 async function handleParseResume(message) {
-  const { fileType, content } = message;
+  const { content } = message;
   const aiConfig = normalizeAiConfig(message.aiConfig);
 
   if (!aiConfig.apiUrl || !aiConfig.model || !aiConfig.apiKey) {
     return { success: false, error: "请先配置 AI 接口。" };
   }
 
-  let userContent;
-
-  if (fileType === "pdf") {
-    userContent = [
-      { type: "text", text: "请提取以下 PDF 简历中的所有信息：" },
-      { type: "image_url", image_url: { url: content } }
-    ];
-  } else {
-    userContent = `请提取以下简历中的所有信息：\n\n${String(content ?? "")}`;
+  const resumeText = String(content ?? "").trim();
+  if (!resumeText) {
+    return { success: false, error: "简历中没有可发送给 AI 的文字。" };
   }
+
+  const userContent = `请提取以下简历中的所有信息：\n\n${resumeText}`;
 
   const SYSTEM_PROMPT = [
     "你是一个简历信息提取助手。请从用户提供的简历中提取所有关键信息。",
@@ -143,35 +139,33 @@ async function handleParseResume(message) {
     "7. 字段值保持原文，不要缩写"
   ].join("\n");
 
-  const response = await fetch(aiConfig.apiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${aiConfig.apiKey}`
-    },
-    body: JSON.stringify({
-      model: aiConfig.model,
-      temperature: 0,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userContent }
-      ]
-    })
-  });
+  let response;
+
+  try {
+    response = await fetch(aiConfig.apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${aiConfig.apiKey}`
+      },
+      body: JSON.stringify({
+        model: aiConfig.model,
+        temperature: 0,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userContent }
+        ]
+      })
+    });
+  } catch {
+    return { success: false, error: "无法连接 AI 接口，请检查网络和 API URL。" };
+  }
 
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const detail = data?.error?.message || `HTTP ${response.status}`;
-
-    if (fileType === "pdf" && response.status === 400) {
-      return {
-        success: false,
-        error: "当前模型不支持 PDF，请改用 Word 或 TXT，或换用支持视觉的模型（如 gpt-4o）。"
-      };
-    }
-
-    return { success: false, error: `AI 请求失败：${detail}` };
+    const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+    return { success: false, error: ResumeProUtils.formatAiError(response.status, detail) };
   }
 
   const rawContent = data?.choices?.[0]?.message?.content || "";
