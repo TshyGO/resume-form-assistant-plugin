@@ -8,6 +8,37 @@ const DEFAULT_STORE = {
   }
 };
 
+async function getCryptoKey() {
+  const stored = await chrome.storage.local.get("apiKeyCryptoKey");
+  if (stored.apiKeyCryptoKey) {
+    return crypto.subtle.importKey("raw", new Uint8Array(stored.apiKeyCryptoKey), "AES-GCM", false, ["encrypt", "decrypt"]);
+  }
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const raw = await crypto.subtle.exportKey("raw", key);
+  await chrome.storage.local.set({ apiKeyCryptoKey: Array.from(new Uint8Array(raw)) });
+  return key;
+}
+
+async function encryptApiKey(plainText) {
+  if (!plainText) return "";
+  const key = await getCryptoKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plainText));
+  return JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(cipher)) });
+}
+
+async function decryptApiKey(payload) {
+  if (!payload) return "";
+  try {
+    const { iv, data } = JSON.parse(payload);
+    const key = await getCryptoKey();
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: new Uint8Array(iv) }, key, new Uint8Array(data));
+    return new TextDecoder().decode(plain);
+  } catch {
+    return "";
+  }
+}
+
 const StorageService = {
   async ensureDefaults() {
     const current = await chrome.storage.local.get(null);
@@ -17,17 +48,22 @@ const StorageService = {
       await chrome.storage.local.set(normalized);
     }
 
+    normalized.aiConfig.apiKey = await decryptApiKey(normalized.aiConfig.apiKey);
     return normalized;
   },
 
   async getState() {
     const current = await chrome.storage.local.get(null);
-    return normalizeStore(current);
+    const normalized = normalizeStore(current);
+    normalized.aiConfig.apiKey = await decryptApiKey(normalized.aiConfig.apiKey);
+    return normalized;
   },
 
   async saveState(nextState) {
     const normalized = normalizeStore(nextState);
-    await chrome.storage.local.set(normalized);
+    const toPersist = structuredClone(normalized);
+    toPersist.aiConfig.apiKey = await encryptApiKey(normalized.aiConfig.apiKey);
+    await chrome.storage.local.set(toPersist);
     return normalized;
   },
 
