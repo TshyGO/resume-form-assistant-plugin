@@ -8,6 +8,20 @@
 
 > 插件本身完全免费并开源。AI 功能需要你自己配置一个 OpenAI 兼容接口，接口是否收费取决于你使用的模型服务商。
 
+**[📦 下载最新版](https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest)** · **[📖 小白教程](#小白直接看这里)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+
+## 💬 QQ 交流群
+
+> ### **QQ群：`1121142517`**
+>
+> 最近使用的人比较多，很多问题其实都是共性的。遇到安装、AI 接口配置、网申网站兼容性等问题，可以进群一起讨论，也可以参考其他人的使用经验。
+>
+> 🧩 **安装配置**　🤖 **AI 接口**　🌐 **网站兼容**　🚀 **版本更新**　💡 **功能建议**　🎓 **秋招交流**
+
+如果确认是插件 Bug，建议同时在 [GitHub Issues](https://github.com/TshyGO/resume-form-assistant-plugin/issues) 提交，方便后续跟踪和修复。
+
+> ⚠️ **隐私提醒：** 请不要在群里发送自己的 API Key、身份证号、手机号等敏感信息，截图前记得打码。
+
 ## 小白直接看这里
 
 不需要会代码，不需要安装 Python，也不需要安装 Node.js。
