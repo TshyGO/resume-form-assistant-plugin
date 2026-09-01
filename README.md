@@ -1,73 +1,427 @@
-# 简历灵填助手
+# 简历灵填助手 Resume Pro
 
-面向网申场景的浏览器插件。核心用法：在 Excel 里维护你的简历数据，打开招聘网站的申请页面后，点击浏览器右上角的插件图标，管理面板会直接嵌入当前页面，不会因为点到别处就消失，点右上角 X 才关闭。确认好模板和配置后点"AI 填写"，插件会调用大模型把字段一一对应到表单里。
+一个免费的网申表单填写浏览器插件。
 
-AI 能处理大多数基础信息，遇到它填错或填不了（比如日期选择器、级联下拉）的地方，手动补上就好。
+把自己的简历信息保存成 Excel，打开招聘网站的网申页面后，点击「一键 AI 填写」，插件会读取网页表单，并根据你的简历数据匹配姓名、手机号、邮箱、学校、专业、经历等字段。
+
+如果手里只有 PDF 或 Word 简历，也可以先让 AI 帮你整理成 Excel 模板。
+
+> 插件本身完全免费并开源。AI 功能需要你自己配置一个 OpenAI 兼容接口，接口是否收费取决于你使用的模型服务商。
+
+## 小白直接看这里
+
+不需要会代码，不需要安装 Python，也不需要安装 Node.js。
+
+整个流程只有四步：
+
+1. 下载并安装插件
+2. 配置 AI 接口
+3. 导入自己的简历
+4. 打开网申页面，一键填写
+
+## 1. 下载插件
+
+推荐直接下载已经打包好的版本：
+
+**[点击这里进入 Releases 下载最新版](https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest)**
+
+在 Releases 页面找到类似下面的文件：
+
+```text
+resume-pro-v0.2.0.zip
+```
+
+下载完成后，把 ZIP 文件完整解压到一个固定文件夹。
+
+例如：
+
+```text
+D:\Tools\ResumePro\
+```
+
+后面浏览器会一直读取这个文件夹，所以安装完成后不要把它删掉。
+
+## 2. 安装到 Chrome 或 Edge
+
+### Chrome
+
+在地址栏输入：
+
+```text
+chrome://extensions
+```
+
+### Edge
+
+在地址栏输入：
+
+```text
+edge://extensions
+```
+
+然后按下面操作：
+
+1. 打开右上角的「开发者模式」
+2. 点击「加载已解压的扩展程序」
+3. 选择刚刚解压出来的插件文件夹
+4. 选中的那一层文件夹里应该能直接看到 `manifest.json`
+
+安装成功后，扩展列表里会出现 **Resume Pro**。
+
+建议点击浏览器右上角的扩展按钮，把 Resume Pro 固定到工具栏。
+
+如果安装插件之前已经打开了网申页面，请刷新一次网页。
+
+## 3. 第一次使用，先配置 AI
+
+打开任意普通网页，然后点击浏览器右上角的 **Resume Pro** 图标。
+
+插件会在当前网页中打开管理面板。
+
+进入：
+
+```text
+AI 配置
+```
+
+需要填写三个项目：
+
+```text
+API URL
+模型名称
+API Key
+```
+
+插件支持 OpenAI Chat Completions 兼容接口。
+
+例如使用 OpenAI 时，可以填写：
+
+```text
+API URL
+https://api.openai.com/v1/chat/completions
+
+模型名称
+gpt-4o-mini
+
+API Key
+你自己的 API Key
+```
+
+然后点击「保存配置」。
+
+如果你使用其他兼容 OpenAI 格式的模型服务，把服务商提供的接口地址、模型名称和 API Key 填进去即可。
+
+### API 配置看不懂怎么办
+
+可以把它简单理解成：
+
+```text
+Resume Pro
+负责读取网页和填写表单
+
+AI 模型
+负责判断“这个输入框应该填什么”
+```
+
+插件不会赠送模型额度，也不会替你注册 API。
+
+## 4. 把自己的简历导入插件
+
+有两种方式。
+
+### 方法 A：直接用 PDF 或 Word 简历生成模板
+
+适合第一次使用的同学。
+
+先确保 AI 配置已经保存，然后：
+
+1. 打开插件管理面板
+2. 点击「AI 解析简历」
+3. 上传自己的 PDF、Word `.docx` 或 TXT 简历
+4. 点击「开始解析」
+5. 等待 AI 提取信息
+6. 浏览器会自动下载一个 Excel 文件
+
+生成的文件名类似：
+
+```text
+resume_parsed_20260901.xlsx
+```
+
+建议先打开这个 Excel 检查一下。
+
+AI 可能会漏掉少量信息，也可能把个别字段理解错，直接在 Excel 里修改即可。
+
+确认后回到插件：
+
+```text
+模板管理
+→ 导入 Excel
+```
+
+选择刚才生成的 Excel。
+
+导入成功后，这份简历就会成为当前模板。
+
+### PDF 解析失败
+
+PDF 会以视觉内容发送给模型，因此需要模型支持图片输入。
+
+如果提示模型不支持 PDF，可以：
+
+1. 换成 Word `.docx`
+2. 换成 TXT
+3. 换一个支持视觉输入的模型
+
+Word 和 TXT 会先在本地提取文字，再发送给 AI 整理。
+
+### 方法 B：自己制作 Excel 模板
+
+如果你愿意自己维护数据，新建一个 Excel 文件即可。
+
+第一行固定写三列：
+
+| 一级分类 | 字段名 | 值 |
+| --- | --- | --- |
+| 基本信息 | 姓名 | 张三 |
+| 基本信息 | 手机号 | 13800000000 |
+| 基本信息 | 邮箱 | example@qq.com |
+| 基本信息 | 性别 | 男 |
+| 教育背景 | 学校 | XX大学 |
+| 教育背景 | 专业 | 材料科学与工程 |
+| 教育背景 | 学历 | 硕士 |
+| 教育背景 | 入学时间 | 2023-09 |
+| 教育背景 | 毕业时间 | 2026-06 |
+| 实习经历 | 公司 | XX公司 |
+| 实习经历 | 岗位 | 研发实习生 |
+
+保存成 `.xlsx`，然后在插件里点击「导入 Excel」。
+
+目前也支持 `.csv`。
+
+第二列「字段名」不要留空。
+
+建议把信息拆细，例如：
+
+```text
+学校
+专业
+学历
+入学时间
+毕业时间
+```
+
+比把所有教育信息塞进一个单元格更容易匹配网页表单。
+
+## 5. 开始填写网申
+
+准备好模板和 AI 配置后：
+
+1. 打开公司的网申页面
+2. 如果页面之前已经打开，刷新一次
+3. 页面右侧会出现 Resume Pro 填表助手
+4. 在「当前模板」选择要使用的简历
+5. 点击「一键 AI 填写」
+6. 等待匹配完成
+7. 检查填写结果
+
+插件会扫描当前页面可以填写的字段，将网页上的字段名称、选项等信息和你的简历数据进行匹配。
+
+填写成功的字段会短暂高亮，同时插件会提示本次填写了多少个字段。
+
+**提交网申之前请自己完整检查一遍。**
+
+不同招聘网站的表单实现差异很大，AI 填写只能作为辅助。
+
+目前已经对普通输入框、文本框、下拉框、单选框，以及部分日期选择器和级联选择控件做了兼容。遇到高度定制的网页控件时，仍可能需要手动填写。
+
+## 6. AI 没填上的字段怎么办
+
+Resume Pro 还提供一个很好用的手动辅助方式。
+
+例如网页上的「学校」没有自动填上：
+
+1. 先点击网页里的「学校」输入框
+2. 再点击 Resume Pro 侧边栏里的「学校」字段
+
+插件会尝试把对应内容直接填进刚才点击的输入框。
+
+如果网页控件无法直接写入，插件会把内容复制到剪贴板，你可以直接按：
+
+```text
+Ctrl + V
+```
+
+手动粘贴。
+
+所以即使某个招聘网站的自动填写兼容性一般，也可以把 Resume Pro 当成一个随手取用简历信息的快捷面板。
+
+## 7. 多套简历怎么用
+
+插件支持同时保存多套 Excel 模板。
+
+例如你可以准备：
+
+```text
+研发岗位.xlsx
+产品岗位.xlsx
+国企岗位.xlsx
+英文简历.xlsx
+```
+
+全部导入后，在填写不同岗位之前切换「当前模板」即可。
+
+如果某份模板有更新，可以点击「重新导入 Excel」覆盖原来的内容。
+
+## 常见问题
+
+### 安装后网页右边没有 Resume Pro
+
+先检查：
+
+1. `chrome://extensions` 或 `edge://extensions` 中 Resume Pro 是否已开启
+2. 网申页面是否已经刷新
+3. 当前页面是不是浏览器内部页面
+
+例如下面这些页面无法注入普通扩展内容：
+
+```text
+chrome://extensions
+chrome://settings
+edge://extensions
+```
+
+请到普通网页测试。
+
+### 提示“请先配置 AI 接口”
+
+检查这三项是否都填写并保存：
+
+```text
+API URL
+模型名称
+API Key
+```
+
+### 提示“AI 接口请求失败”
+
+常见原因：
+
+1. API Key 错误或失效
+2. API 余额不足
+3. 模型名称写错
+4. API URL 写错
+5. 服务商接口并不兼容 OpenAI Chat Completions
+6. 当前模型没有权限使用
+
+### Excel 导入失败
+
+请确认：
+
+1. 文件是 `.xlsx` 或 `.csv`
+2. 第一行是表头
+3. 前三列依次为「一级分类 / 字段名 / 值」
+4. 每一条数据的「字段名」都有内容
+
+插件只读取第一个工作表。
+
+### AI 填错了怎么办
+
+直接手动修改即可。
+
+自动填写完成后一定要检查，尤其是：
+
+```text
+日期
+学历
+证件类型
+政治面貌
+城市和地区
+级联下拉框
+多段教育或工作经历
+```
+
+这些字段在不同招聘网站上的结构差异较大。
+
+### 某个网站完全填不了
+
+欢迎提交 Issue：
+
+**[提交问题或兼容性反馈](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+
+如果方便，建议提供：
+
+```text
+招聘网站名称
+具体页面类型
+无法填写的字段
+错误提示
+页面截图
+```
+
+请记得遮掉姓名、手机号、邮箱、身份证号等个人信息。
+
+## 隐私说明
+
+简历模板和 AI 配置保存在浏览器本地的扩展存储中。
+
+仓库里不包含任何真实用户简历数据，测试数据均为匿名示例。
+
+使用「一键 AI 填写」时，插件需要把待匹配的网页字段信息和当前简历模板中的相关字段发送到你自己配置的 AI 接口。
+
+使用「AI 解析简历」时，简历内容也需要发送到你配置的 AI 接口进行解析。
+
+因此，请自行确认所使用 AI 服务商的隐私政策和数据处理规则。
+
+API Key 请勿分享给他人，也不要提交到公开 GitHub Issue。
 
 ## 主要功能
 
-- **多套模板**：导入多份 Excel，填不同岗位前切换对应模板
-- **AI 辅助填写**：点一次按钮，让模型帮你把简历字段匹配到网页表单
-- **简历解析**：上传 PDF / Word / TXT，AI 提取结构化信息并生成 Excel 模板
-- **接口自定义**：支持 OpenAI 兼容的任意接口，自带 API URL、模型名、Key 配置
+- 多套 Excel 简历模板导入和切换
+- AI 自动匹配网页网申字段
+- PDF / Word / TXT 简历 AI 解析
+- 自动生成标准 Excel 模板
+- OpenAI 兼容接口自定义
+- 普通输入框、文本框、下拉框、单选框填写
+- 部分日期选择器和级联下拉兼容
+- 字段快捷点击填写和复制
+- AI 填写结果高亮提示
+- 页面内常驻管理面板
 
-填写准确率取决于网站 DOM 结构和模型能力，基础信息（姓名、手机、邮箱等）通常没问题。时间选择器、级联下拉等特殊控件目前无法程序化填写，需要手动操作。
+## 给开发者
 
-## 安装（开发者模式）
+### 项目结构
 
-1. 打开浏览器扩展管理页（Chrome 地址栏输入 `chrome://extensions`）
-2. 开启右上角的**开发者模式**
-3. 点击**加载已解压的扩展程序**
-4. 选择本项目文件夹（包含 `manifest.json` 的那一层）
-
-目前没有上架应用商店，分发时把整个文件夹打包成 zip 发给对方，解压后按上述步骤加载即可。
-
-## 使用流程
-
-1. 在 Excel 里按模板格式维护简历数据（`一级分类 / 字段名 / 值` 三列）
-2. 点击插件图标，在弹出的管理面板中导入 `.xlsx` 文件
-3. 在 **AI 配置**里填好接口地址、模型名、API Key 并保存
-4. 打开目标网站的申请表单，点插件图标打开管理面板
-5. 选好模板，点 **AI 填写**，等结果出来后检查一遍，手动补全填错或漏填的字段
-
-如果手头只有 PDF/Word 格式的简历，可以用**AI 解析简历**功能先提取成 Excel，再导入使用。
-
-## 目录结构
-
-```
+```text
 manifest.json          插件清单
-popup.html/css/js      管理面板界面
-content.js/css         页面注入脚本（侧边栏、字段识别、填写）
-background.js          后台服务，负责 AI 接口调用和消息路由
-ai-helpers.js          字段匹配和数据清洗
+popup.html/css/js      模板管理、AI 配置、简历解析界面
+content.js/css         页面注入、字段识别、侧边栏和填写逻辑
+background.js          AI 接口调用和消息路由
+ai-helpers.js          字段匹配、数据清洗和辅助规则
 tests/                 单元测试
 icons/                 插件图标
 ```
 
-## 本地测试
+### 本地开发安装
+
+克隆项目：
+
+```bash
+git clone https://github.com/TshyGO/resume-form-assistant-plugin.git
+```
+
+然后在 Chrome 或 Edge 的扩展管理页开启开发者模式，选择「加载已解压的扩展程序」，加载仓库根目录即可。
+
+不需要构建步骤。
+
+### 测试
 
 ```bash
 node --test tests/ai-helpers.test.js
 ```
 
-## 隐私说明
+## License
 
-仓库里不包含任何真实简历数据，测试数据均为匿名示例。
+MIT License，详见 [LICENSE](LICENSE)。
 
-## 许可证
-
-MIT License — 见 [LICENSE](LICENSE) 文件。
-
----
-
-## English Summary
-
-Resume Form Assistant is a Chrome extension for filling job application forms. You maintain your resume data in an Excel file, then click the extension icon on any job application page — the management panel opens embedded in the page (not a popup that disappears on click-away; close it with the X button). Click "AI Fill" to have a configurable LLM match your resume fields to the form. Standard fields (name, phone, email, etc.) usually work well; date pickers and complex controls still need manual input.
-
-**Install (Developer Mode):** Load the unpacked folder containing `manifest.json` via `chrome://extensions`.
-
-**Configure:** Enter your OpenAI-compatible API URL, model name, and key in the AI Settings tab.
-
-**Run tests:** `node --test tests/ai-helpers.test.js`
-
-MIT License.
+如果这个小工具对你有帮助，欢迎点一个 Star。
