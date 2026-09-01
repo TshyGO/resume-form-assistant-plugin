@@ -152,7 +152,7 @@
         </div>
         <iframe
           class="resume-pro-manager__frame"
-          src="${chrome.runtime.getURL("popup.html")}"
+          data-src="${chrome.runtime.getURL("popup.html")}"
           title="Resume Pro 管理面板"
         ></iframe>
       </div>
@@ -877,6 +877,12 @@
 
     if (!panel) {
       return;
+    }
+
+    const frame = panel.querySelector(".resume-pro-manager__frame");
+    if (visible && frame && frame.dataset.loaded !== "true") {
+      frame.src = frame.dataset.src;
+      frame.dataset.loaded = "true";
     }
 
     panel.classList.toggle("is-visible", visible);
