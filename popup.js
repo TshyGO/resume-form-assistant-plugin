@@ -532,6 +532,7 @@ async function initializeUpdateFeature() {
 async function checkForUpdates({ force, announce }) {
   const currentVersion = chrome.runtime.getManifest().version;
   let cached = null;
+  let dismissedVersion = null;
   elements.checkUpdateButton.disabled = true;
 
   if (announce) {
@@ -541,10 +542,11 @@ async function checkForUpdates({ force, announce }) {
   try {
     const stored = await chrome.storage.local.get([UPDATE_CACHE_KEY, UPDATE_DISMISSED_KEY]);
     cached = stored[UPDATE_CACHE_KEY];
+    dismissedVersion = stored[UPDATE_DISMISSED_KEY];
     const cacheInterval = cached?.failed ? UPDATE_FAILURE_RETRY_MS : UPDATE_CHECK_INTERVAL_MS;
 
     if (!force && ResumeProUtils.shouldUseUpdateCache(cached?.checkedAt, Date.now(), cacheInterval)) {
-      renderUpdateBanner(cached?.release || null, stored[UPDATE_DISMISSED_KEY], currentVersion);
+      renderUpdateBanner(cached?.release || null, dismissedVersion, currentVersion);
       return;
     }
 
@@ -558,7 +560,7 @@ async function checkForUpdates({ force, announce }) {
       await chrome.storage.local.set({
         [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release: null, failed: false }
       });
-      renderUpdateBanner(null, stored[UPDATE_DISMISSED_KEY], currentVersion);
+      renderUpdateBanner(null, dismissedVersion, currentVersion);
       if (announce) elements.updateCheckStatus.textContent = "暂无正式版本";
       return;
     }
@@ -575,7 +577,7 @@ async function checkForUpdates({ force, announce }) {
     await chrome.storage.local.set({
       [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release, failed: false }
     });
-    const hasUpdate = renderUpdateBanner(release, stored[UPDATE_DISMISSED_KEY], currentVersion);
+    const hasUpdate = renderUpdateBanner(release, dismissedVersion, currentVersion);
 
     if (announce) {
       elements.updateCheckStatus.textContent = hasUpdate ? "发现新版" : "已是最新版";
@@ -589,6 +591,7 @@ async function checkForUpdates({ force, announce }) {
         failed: true
       }
     }).catch(() => {});
+    renderUpdateBanner(cached?.release || null, dismissedVersion, currentVersion);
     if (announce) {
       elements.updateCheckStatus.textContent = "检查失败，不影响使用";
     }

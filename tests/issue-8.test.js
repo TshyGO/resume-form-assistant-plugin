@@ -186,6 +186,10 @@ test("runtime source sends extracted text and contains no PDF-as-image path", ()
   assert.match(popupSource, /vendor\/pdfjs\/cmaps\//u);
   assert.match(popupSource, /UPDATE_FAILURE_RETRY_MS/u);
   assert.match(popupSource, /failed:\s*true/u);
+  assert.match(
+    popupSource,
+    /catch \(error\) \{[\s\S]*renderUpdateBanner\(cached\?\.release \|\| null, dismissedVersion, currentVersion\);/u
+  );
   assert.match(contentSource, /data-src=.*popup\.html/u);
   assert.match(contentSource, /frame\.dataset\.loaded/u);
   assert.match(htmlSource, /check-update-button/u);
