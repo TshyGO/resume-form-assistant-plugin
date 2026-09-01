@@ -5,30 +5,45 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const utils = require("../resume-utils.js");
 
-function buildMinimalPdf(text) {
-  const escapedText = text.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
-  const stream = `BT /F1 12 Tf 72 720 Td (${escapedText}) Tj ET`;
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`
-  ];
+function buildPdf(objects) {
   let source = "%PDF-1.4\n";
   const offsets = [0];
 
   objects.forEach((object, index) => {
-    offsets.push(Buffer.byteLength(source));
+    offsets.push(Buffer.byteLength(source, "latin1"));
     source += `${index + 1} 0 obj\n${object}\nendobj\n`;
   });
 
-  const xrefOffset = Buffer.byteLength(source);
+  const xrefOffset = Buffer.byteLength(source, "latin1");
   source += `xref\n0 ${objects.length + 1}\n`;
   source += "0000000000 65535 f \n";
   source += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
   source += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
   return new Uint8Array(Buffer.from(source, "binary"));
+}
+
+function buildMinimalPdf(text) {
+  const escapedText = text.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+  const stream = `BT /F1 12 Tf 72 720 Td (${escapedText}) Tj ET`;
+  return buildPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`
+  ]);
+}
+
+function buildImageOnlyPdf() {
+  const imageData = "\x00\x00\x00";
+  const drawStream = "q 1 0 0 1 0 0 cm /Im0 Do Q";
+  return buildPdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>",
+    `<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${imageData.length} >>\nstream\n${imageData}\nendstream`,
+    `<< /Length ${Buffer.byteLength(drawStream)} >>\nstream\n${drawStream}\nendstream`
+  ]);
 }
 
 test("semantic versions compare numerically and support a leading v", () => {
@@ -82,13 +97,16 @@ test("AI status errors remain distinct instead of blaming every failure on PDF",
 test("PDF extraction reports encrypted, invalid and generic failures clearly", () => {
   assert.match(utils.getPdfExtractionErrorMessage({ name: "PasswordException" }), /已加密/u);
   assert.match(utils.getPdfExtractionErrorMessage({ name: "InvalidPDFException" }), /无效或已损坏/u);
+  assert.match(utils.getPdfExtractionErrorMessage(new Error("Setting up fake worker failed")), /组件加载失败/u);
   assert.match(utils.getPdfExtractionErrorMessage(new Error("boom")), /PDF 解析失败/u);
 });
 
 test("PDF text extraction preserves page and line boundaries with a mocked document", async () => {
   let destroyed = false;
+  let receivedOptions = null;
   const pdfjs = {
-    getDocument() {
+    getDocument(options) {
+      receivedOptions = options;
       return {
         promise: Promise.resolve({
           numPages: 2,
@@ -121,6 +139,8 @@ test("PDF text extraction preserves page and line boundaries with a mocked docum
   const result = await utils.extractPdfText(pdfjs, new Uint8Array([1, 2, 3]));
   assert.equal(result, "John Doe\nEmail\n\nSkills JavaScript");
   assert.equal(destroyed, true);
+  assert.equal("disableFontFace" in receivedOptions, false);
+  assert.equal("useSystemFonts" in receivedOptions, false);
 });
 
 test("bundled PDF.js extracts text from a real text PDF", async () => {
@@ -132,18 +152,31 @@ test("bundled PDF.js extracts text from a real text PDF", async () => {
   assert.match(result, /Resume PDF Test/u);
 });
 
-test("bundled PDF.js returns no text for an image-only equivalent PDF", async () => {
+test("bundled PDF.js returns no text for a real image-only PDF", async () => {
   const pdfjs = await import("../vendor/pdfjs/pdf.min.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(
     path.join(__dirname, "..", "vendor", "pdfjs", "pdf.worker.min.mjs")
   ).href;
-  const result = await utils.extractPdfText(pdfjs, buildMinimalPdf(""));
+  const result = await utils.extractPdfText(pdfjs, buildImageOnlyPdf());
   assert.equal(result, "");
+});
+
+test("bundled PDF.js rejects invalid PDF bytes", async () => {
+  const pdfjs = await import("../vendor/pdfjs/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(
+    path.join(__dirname, "..", "vendor", "pdfjs", "pdf.worker.min.mjs")
+  ).href;
+
+  await assert.rejects(
+    utils.extractPdfText(pdfjs, new Uint8Array([1, 2, 3, 4])),
+    (error) => error?.name === "InvalidPDFException"
+  );
 });
 
 test("runtime source sends extracted text and contains no PDF-as-image path", () => {
   const popupSource = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
   const backgroundSource = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const contentSource = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const htmlSource = fs.readFileSync(path.join(__dirname, "..", "popup.html"), "utf8");
 
   assert.doesNotMatch(popupSource, /readAsDataURL/u);
@@ -151,6 +184,10 @@ test("runtime source sends extracted text and contains no PDF-as-image path", ()
   assert.doesNotMatch(backgroundSource, /image_url|application\/pdf/u);
   assert.match(popupSource, /fileType:\s*"text"/u);
   assert.match(popupSource, /vendor\/pdfjs\/cmaps\//u);
+  assert.match(popupSource, /UPDATE_FAILURE_RETRY_MS/u);
+  assert.match(popupSource, /failed:\s*true/u);
+  assert.match(contentSource, /data-src=.*popup\.html/u);
+  assert.match(contentSource, /frame\.dataset\.loaded/u);
   assert.match(htmlSource, /check-update-button/u);
   assert.match(htmlSource, /download-update-button/u);
 });

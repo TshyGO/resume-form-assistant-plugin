@@ -103,8 +103,6 @@
 
     const data = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
     const loadingTask = pdfjsLib.getDocument({
-      disableFontFace: true,
-      useSystemFonts: true,
       ...documentOptions,
       data
     });
@@ -134,6 +132,7 @@
 
   function getPdfExtractionErrorMessage(error) {
     const name = String(error?.name ?? "");
+    const message = String(error?.message ?? "").trim();
 
     if (name === "PasswordException") {
       return "PDF 已加密，暂时无法读取。请先移除密码，或改用 Word / TXT 简历。";
@@ -141,6 +140,10 @@
 
     if (name === "InvalidPDFException" || name === "MissingPDFException") {
       return "PDF 文件无效或已损坏，请重新导出 PDF，或改用 Word / TXT 简历。";
+    }
+
+    if (/worker|dynamically imported module|module script|cmap|fetch/iu.test(message)) {
+      return "PDF 解析组件加载失败，请在扩展管理页重新加载后重试。";
     }
 
     return "PDF 解析失败，请确认文件可以正常打开，或改用 Word / TXT 简历。";

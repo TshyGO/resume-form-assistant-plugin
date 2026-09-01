@@ -12,6 +12,7 @@ const UPDATE_API_URL = "https://api.github.com/repos/TshyGO/resume-form-assistan
 const UPDATE_CACHE_KEY = "resumeProUpdateCache";
 const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_FAILURE_RETRY_MS = 60 * 60 * 1000;
 let pdfJsPromise = null;
 
 const StorageService = {
@@ -530,6 +531,7 @@ async function initializeUpdateFeature() {
 
 async function checkForUpdates({ force, announce }) {
   const currentVersion = chrome.runtime.getManifest().version;
+  let cached = null;
   elements.checkUpdateButton.disabled = true;
 
   if (announce) {
@@ -538,9 +540,10 @@ async function checkForUpdates({ force, announce }) {
 
   try {
     const stored = await chrome.storage.local.get([UPDATE_CACHE_KEY, UPDATE_DISMISSED_KEY]);
-    const cached = stored[UPDATE_CACHE_KEY];
+    cached = stored[UPDATE_CACHE_KEY];
+    const cacheInterval = cached?.failed ? UPDATE_FAILURE_RETRY_MS : UPDATE_CHECK_INTERVAL_MS;
 
-    if (!force && ResumeProUtils.shouldUseUpdateCache(cached?.checkedAt, Date.now(), UPDATE_CHECK_INTERVAL_MS)) {
+    if (!force && ResumeProUtils.shouldUseUpdateCache(cached?.checkedAt, Date.now(), cacheInterval)) {
       renderUpdateBanner(cached?.release || null, stored[UPDATE_DISMISSED_KEY], currentVersion);
       return;
     }
@@ -553,7 +556,7 @@ async function checkForUpdates({ force, announce }) {
 
     if (response.status === 404) {
       await chrome.storage.local.set({
-        [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release: null }
+        [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release: null, failed: false }
       });
       renderUpdateBanner(null, stored[UPDATE_DISMISSED_KEY], currentVersion);
       if (announce) elements.updateCheckStatus.textContent = "暂无正式版本";
@@ -570,7 +573,7 @@ async function checkForUpdates({ force, announce }) {
     }
 
     await chrome.storage.local.set({
-      [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release }
+      [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release, failed: false }
     });
     const hasUpdate = renderUpdateBanner(release, stored[UPDATE_DISMISSED_KEY], currentVersion);
 
@@ -579,6 +582,13 @@ async function checkForUpdates({ force, announce }) {
     }
   } catch (error) {
     console.warn("Resume Pro update check failed:", error);
+    await chrome.storage.local.set({
+      [UPDATE_CACHE_KEY]: {
+        checkedAt: Date.now(),
+        release: cached?.release || null,
+        failed: true
+      }
+    }).catch(() => {});
     if (announce) {
       elements.updateCheckStatus.textContent = "检查失败，不影响使用";
     }
@@ -789,11 +799,18 @@ async function buildResumeParsePayload(file, extension) {
   }
 
   if (extension === "pdf") {
+    let pdfjsLib;
     let textContent;
 
     try {
-      const pdfjsLib = await loadPdfJs();
-      const arrayBuffer = await readFileAsArrayBuffer(file, "读取 PDF 文件失败。");
+      pdfjsLib = await loadPdfJs();
+    } catch {
+      throw new Error("PDF 解析组件加载失败，请在扩展管理页重新加载后重试。");
+    }
+
+    const arrayBuffer = await readFileAsArrayBuffer(file, "读取 PDF 文件失败。");
+
+    try {
       textContent = await ResumeProUtils.extractPdfText(pdfjsLib, arrayBuffer, {
         cMapPacked: true,
         cMapUrl: chrome.runtime.getURL("vendor/pdfjs/cmaps/")
