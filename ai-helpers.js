@@ -143,9 +143,9 @@
   // cross-domain labels deliberately fall back to the full resume.
   function selectResumeCandidates(formFields, resumeFields) {
     const domains = [
-      /教育|学校|院校|专业|学历|学位|入学|毕业|education|school|university|major|degree/i,
-      /工作|实习|公司|雇主|职业|work|employment|internship|company/i,
-      /项目|科研|研究|project|research/i,
+      /教育|学校|院校|研究生|硕士|博士|专业|学历|学位|入学|毕业|education|school|university|major|degree|postgraduate/i,
+      /工作经历|实习|任职经历|工作内容|工作单位|公司|雇主|\bwork\s+(?:history|experience)\b|\bemployment\b|\binternship\b|\bcompany\b/i,
+      /项目|科研|研究经历|\bproject\b|\bresearch\b/i,
       /论文|专利|发表|publication|patent/i,
       /证书|奖励|奖项|荣誉|certificate|award/i,
       /技能|语言能力|skill|language/i,
@@ -155,6 +155,8 @@
     const selected = new Set();
     for (const field of formFields) {
       const context = [field.group, field.label, field.placeholder, field.name, field.ariaLabel].filter(Boolean).join(" ");
+      // Eligibility/location questions are not employment-history questions.
+      if (/authoriz|eligib|sponsor|visa|work\s*(?:permit|location)|career\s*plan|工作许可|工作授权|工作地点|工作计划|职业规划|求职意向|就业资格|签证/i.test(context)) return resumeFields;
       const categories = classify(context);
       if (categories.length !== 1) return resumeFields;
       const category = categories[0];
