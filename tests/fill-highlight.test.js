@@ -150,13 +150,14 @@ function loadHighlightHelpers(options = {}) {
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: {},
-    self: { __RESUME_PRO_TEST__: true },
+    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent },
     window
   };
 
   context.globalThis = context;
   context.self.window = window;
   context.window.document = document;
+  window.confirm = options.confirm || (() => false);
   window.setInterval = (callback, delay) => {
     const id = window.setTimeout(callback, delay);
     return id;
@@ -344,6 +345,53 @@ test("90-second reminder does not cancel; manual button sends matching request a
   assert.equal(hint.hidden, true);
   assert.equal(button.disabled, false);
 });
+
+test("assisted filling excludes existing and unrelated values, including user edits during API wait", async () => {
+  const formElements = [];
+  let sent;
+  const { helpers, HTMLInputElement } = loadHighlightHelpers({ formElements, sendMessage: async message => {
+    sent = message;
+    formElements[1].value = "用户在等待时输入";
+    return { success: true, matches: [{ fieldId: 'field-1', value: 'AI 不应覆盖' }] };
+  } });
+  for (let i = 0; i < 3; i++) {
+    const input = new HTMLInputElement();
+    input.isConnected = true;
+    input.value = i === 0 ? '已有内容' : '';
+    formElements.push(input);
+  }
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '论文', fields: [{ key: '论文1标题', value: '合成' }] }] }], activeTemplateId: 'one', aiConfig: { apiKey: 'key', apiUrl: 'https://example.test', model: 'test' } });
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false } }, { scopes: [{ isConnected: true, contains: el => formElements.slice(0, 2).includes(el) }] });
+  assert.equal(sent.formFields.length, 1);
+  assert.equal(sent.formFields[0].fieldId, 'field-1');
+  assert.deepEqual(formElements.map(el => el.value), ['已有内容', '用户在等待时输入', '']);
+});
+
+for (const stopped of [false, true]) {
+  test(`assisted preparation does not execute after ${stopped ? 'stop' : 'declined preview'}`, async () => {
+    let finish, executions = 0;
+    const formAgent = {
+      collect: () => ({ candidates: [{ id: 'add-0', label: '新增论文' }] }),
+      validatePlan: plan => plan,
+      execute: () => { executions++; }
+    };
+    const { helpers, timers } = loadHighlightHelpers({ formAgent, confirm: () => false,
+      sendMessage: message => message.type === 'CANCEL_AI_FILL' ? Promise.resolve({ cancelled: true }) : new Promise(resolve => { finish = resolve; }) });
+    const button = { disabled: false }, fillButton = { disabled: false }, cancel = {}, hint = {};
+    helpers.setShadowRoot({ querySelector: selector => ({ '#resume-pro-ai-fill': fillButton, '#resume-pro-cancel-fill': cancel, '#resume-pro-wait-hint': hint })[selector] });
+    helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '论文', fields: [{ key: '论文1标题', value: '合成' }] }] }], activeTemplateId: 'one', aiConfig: { apiKey: 'key', apiUrl: 'https://example.test', model: 'test' } });
+    const pending = helpers.handleRepeatFillClick({ currentTarget: button });
+    if (stopped) cancel.onclick();
+    finish({ success: true, plan: [{ id: 'add-0', count: 2 }] });
+    await pending;
+    assert.equal(executions, 0);
+    assert.equal(button.disabled, false);
+    assert.equal(fillButton.disabled, false);
+    assert.equal(cancel.hidden, true);
+    assert.equal(cancel.onclick, null);
+    assert.equal(timers.find(t => t.delay === 1000).cleared, true);
+  });
+}
 
 test("diagnostic summary only exposes allowlisted counts, durations and errors", () => {
   const { helpers } = loadHighlightHelpers();

@@ -26,6 +26,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check ai-helpers.js
+          node --check form-agent.js
           node --check background.js
           node --check content.js
           node --check popup.js

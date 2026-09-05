@@ -40,6 +40,7 @@
         "xlsx.full.min.js",
         "mammoth.browser.min.js",
         "ai-helpers.js",
+        "form-agent.js",
         "resume-utils.js",
         "vendor/pdfjs/pdf.min.mjs",
         "vendor/pdfjs/pdf.worker.min.mjs",
@@ -61,6 +62,7 @@
       ],
       "js": [
         "ai-helpers.js",
+        "form-agent.js",
         "content.js"
       ],
       "css": [

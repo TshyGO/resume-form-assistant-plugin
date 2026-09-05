@@ -23,6 +23,7 @@ function loadBackground(fetchImpl) {
   let listener;
   const context = vm.createContext({
     importScripts() {}, ResumeProAIHelpers: helpers, AbortController, TextEncoder, SyntaxError,
+    ResumeProFormAgent: require('../form-agent.js'),
     performance: { now: () => clock },
     setTimeout(callback, delay) { const id = timers.size + 1; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -178,4 +179,22 @@ test("AI cannot overwrite local matches or fill IDs outside its requested subset
   const result = await env.run();
   assert.equal(result.matches.length, 2);
   assert.equal(result.matches[0].value, "测试用户");
+});
+
+test('planner sends count-only candidates, validates response and never sends resume values', async () => {
+  const env = loadBackground(() => ok([{ id: 'add-0', count: 2 }]));
+  const result = await env.send({ ...message, type: 'AI_PLAN_REPEAT', requestId: 'planner', candidates: [{ id: 'add-0', domain: 'papers', label: '新增论文', current: 1, target: 3 }] });
+  assert.equal(result.success, true);
+  assert.equal(result.plan[0].count, 2);
+  const body = JSON.parse(env.requests[0].options.body);
+  assert.ok(!body.messages[1].content.includes('测试用户'));
+  assert.ok(!body.messages[1].content.includes('大学甲'));
+  assert.equal(env.requests.length, 1);
+});
+
+test('planner rejects model-invented execution code', async () => {
+  const env = loadBackground(() => ok([{ id: 'add-0', count: 1, code: 'submit()' }]));
+  const result = await env.send({ ...message, type: 'AI_PLAN_REPEAT', requestId: 'planner', candidates: [{ id: 'add-0', current: 1, target: 3 }] });
+  assert.equal(result.success, false);
+  assert.match(result.error, /无效/);
 });
