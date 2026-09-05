@@ -124,6 +124,10 @@
         </label>
         <button class="resume-pro__ai-button" id="resume-pro-ai-fill" type="button">一键 AI 填写</button>
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
+        <details class="resume-pro__diagnostics" id="resume-pro-diagnostics" hidden>
+          <summary>填写诊断（不含简历内容）</summary>
+          <textarea id="resume-pro-diagnostics-text" readonly aria-label="填写诊断摘要，可选择复制" rows="14"></textarea>
+        </details>
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__groups" id="resume-pro-groups"></div>
         <div class="resume-pro__footer">
@@ -283,6 +287,7 @@
 
   async function handleAiFillClick(event) {
     const button = event.currentTarget;
+    if (button.disabled) return;
     const activeTemplate = getActiveTemplate(state.currentStore);
     const aiConfig = state.currentStore?.aiConfig;
 
@@ -296,29 +301,51 @@
       return;
     }
 
-    const { fields, fieldMap } = scanFillableFields();
-
-    if (!fields.length) {
-      showStatus("当前页面没有可填写的表单字段。", "error");
-      return;
-    }
-
     button.disabled = true;
-    button.textContent = "匹配中...";
+    button.textContent = "正在扫描网页...";
+    const totalStart = performance.now();
+    const timing = { scanMs: null, roundTripMs: null, fillMs: null };
+    let phaseStart = totalStart;
+    let phase = "scanMs";
+    let timer = null;
+    let diagnostics = {};
+    let fieldCount = 0;
+    let filledCount = 0;
+    let outcome = "failed";
 
     try {
+      const { fields, fieldMap } = scanFillableFields();
+      fieldCount = fields.length;
+      timing.scanMs = performance.now() - phaseStart;
+      phase = null;
+      if (!fields.length) throw new Error("当前页面没有可填写的表单字段。");
+      const resumeFields = flattenTemplateFields(activeTemplate);
+      phase = "roundTripMs";
+      phaseStart = performance.now();
+      const updateProgress = () => {
+        button.textContent = `AI 匹配中... ${Math.floor((performance.now() - phaseStart) / 1000)}s`;
+      };
+      updateProgress();
+      timer = window.setInterval(updateProgress, 1000);
       const response = await chrome.runtime.sendMessage({
         type: "AI_FILL",
         formFields: fields,
-        resumeFields: flattenTemplateFields(activeTemplate),
+        resumeFields,
         aiConfig
       });
+      timing.roundTripMs = performance.now() - phaseStart;
+      phase = null;
+      window.clearInterval(timer);
+      timer = null;
+      diagnostics = response?.diagnostics || {};
 
       if (!response?.success) {
         throw new Error(response?.error || "AI 填写失败。");
       }
 
-      let filledCount = 0;
+      button.textContent = "正在填写网页...";
+      phase = "fillMs";
+      phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
       const sortedMatches = [...response.matches].sort((a, b) => {
@@ -365,13 +392,48 @@
         }
       }
 
-      showStatus(`已填写 ${filledCount} 个字段。`, "success");
+      outcome = response.warning ? "partial" : "success";
+      showStatus(response.warning
+        ? `本地已填写 ${filledCount} 项；AI 补充失败：${response.warning}`
+        : `已填写 ${filledCount} 个字段。`, response.warning ? "error" : "success");
     } catch (error) {
       showStatus(error.message || "AI 填写失败。", "error");
     } finally {
+      if (timer !== null) window.clearInterval(timer);
+      if (phase) timing[phase] = performance.now() - phaseStart;
+      const summary = formatFillDiagnostics({ ...timing, totalMs: performance.now() - totalStart,
+        fieldCount, filledCount, outcome, diagnostics });
+      const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+      const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
+      if (panel && text) {
+        text.value = summary;
+        panel.hidden = false;
+        panel.open = true;
+      }
       button.disabled = false;
       button.textContent = "一键 AI 填写";
     }
+  }
+
+  function formatFillDiagnostics(result) {
+    const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行 / 未取得";
+    const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
+    const d = result.diagnostics;
+    // Explicit allowlist: never copy provider messages, URL, keys or field values.
+    const code = /^(none|timeout|network|format|http_\d{3})$/.test(d.errorCode) ? d.errorCode : "unknown";
+    return [
+      `Resume Pro v${chrome.runtime.getManifest().version}`,
+      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
+      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}`,
+      `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
+      `送 AI 字段：${count(d.aiFields)}`,
+      `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
+      `用户 prompt：${count(d.promptBytes)} bytes`,
+      `扫描：${seconds(result.scanMs)}`,
+      `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
+      `API（含响应读取）：${seconds(d.apiMs)}`,
+      `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`
+    ].join("\n");
   }
 
   function scanFillableFields() {
@@ -1069,6 +1131,7 @@
 
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {
+      formatFillDiagnostics,
       getHighlightTargets,
       handleAiFillClick,
       highlightFilledField,

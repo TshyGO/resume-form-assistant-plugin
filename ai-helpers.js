@@ -105,6 +105,7 @@
     normalizeText,
     inferFieldSemantic,
     buildRuleBasedMatches,
+    selectResumeCandidates,
     shouldSkipAIForField,
     filterValidMatches,
     semanticizeParsedFields,
@@ -136,6 +137,36 @@
     ].filter(Boolean).join(" "));
 
     return FIELD_SEMANTICS.find((item) => item.keywords.some((keyword) => haystack.includes(normalizeText(keyword))))?.type || "";
+  }
+
+  // Keep complete groups (including every repeated experience). Unknown or
+  // cross-domain labels deliberately fall back to the full resume.
+  function selectResumeCandidates(formFields, resumeFields) {
+    const domains = [
+      /教育|学校|院校|专业|学历|学位|入学|毕业|education|school|university|major|degree/i,
+      /工作|实习|公司|雇主|职业|work|employment|internship|company/i,
+      /项目|科研|研究|project|research/i,
+      /论文|专利|发表|publication|patent/i,
+      /证书|奖励|奖项|荣誉|certificate|award/i,
+      /技能|语言能力|skill|language/i,
+      /基本信息|个人信息|姓名|电话|邮箱|籍贯|personal|contact/i
+    ];
+    const classify = (text) => domains.flatMap((pattern, i) => pattern.test(text) ? [i] : []);
+    const selected = new Set();
+    for (const field of formFields) {
+      const context = [field.group, field.label, field.placeholder, field.name, field.ariaLabel].filter(Boolean).join(" ");
+      const categories = classify(context);
+      if (categories.length !== 1) return resumeFields;
+      const category = categories[0];
+      const relevant = resumeFields.filter((item) => {
+        const groups = classify(String(item.group || ""));
+        // Custom groups cannot safely be ruled out.
+        return !groups.length || groups.includes(category);
+      });
+      if (!relevant.length) return resumeFields;
+      relevant.forEach((item) => selected.add(item));
+    }
+    return resumeFields.filter((item) => selected.has(item));
   }
 
   function buildRuleBasedMatches(formFields, resumeFields) {

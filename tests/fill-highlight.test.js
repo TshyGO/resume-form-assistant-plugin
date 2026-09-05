@@ -130,6 +130,7 @@ function loadHighlightHelpers(options = {}) {
 
   const context = {
     console,
+    performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
     FocusEvent: class {},
@@ -141,6 +142,7 @@ function loadHighlightHelpers(options = {}) {
     HTMLSelectElement: class HTMLSelectElement extends HTMLElement {},
     chrome: {
       runtime: {
+        getManifest: () => ({ version: "0.2.1" }),
         onMessage: { addListener() {} },
         sendMessage: options.sendMessage || (async () => ({ success: true, matches: [] }))
       }
@@ -155,12 +157,18 @@ function loadHighlightHelpers(options = {}) {
   context.globalThis = context;
   context.self.window = window;
   context.window.document = document;
+  window.setInterval = (callback, delay) => {
+    const id = window.setTimeout(callback, delay);
+    return id;
+  };
+  window.clearInterval = window.clearTimeout;
 
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   vm.runInNewContext(contentJs, context);
 
   return {
     helpers: context.self.ResumeProHighlightTest,
+    window,
     timers,
     clearedTimers,
     styleElements,
@@ -255,6 +263,54 @@ test("repeated highlights clear the previous cleanup timer", () => {
   assert.equal(field.classList.contains("resume-pro__field-highlight"), true);
   assert.equal(timers.filter((timer) => timer.delay === 2800).length, 2);
   assert.deepEqual(clearedTimers, [1]);
+});
+
+for (const outcome of ["success", "partial", "failure", "transport"]) {
+  test(`AI progress and timers clean up after ${outcome}, repeated clicks are ignored`, async () => {
+    let finish;
+    let calls = 0;
+    const formElements = [];
+    const { helpers, timers, HTMLInputElement } = loadHighlightHelpers({
+      formElements,
+      sendMessage: () => { calls++; return new Promise((resolve, reject) => { finish = outcome === "transport" ? reject : resolve; }); }
+    });
+    formElements.push(new HTMLInputElement());
+    helpers.setCurrentStore({
+      templates: [{ id: "one", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "测试" }] }] }],
+      activeTemplateId: "one", aiConfig: { apiKey: "key", apiUrl: "https://example.test", model: "test" }
+    });
+    const button = { disabled: false, textContent: "" };
+    const pending = helpers.handleAiFillClick({ currentTarget: button });
+    assert.equal(button.disabled, true);
+    assert.match(button.textContent, /AI 匹配中.*0s/);
+    await helpers.handleAiFillClick({ currentTarget: button });
+    assert.equal(calls, 1);
+    const timer = timers.find((item) => item.delay === 1000);
+    assert.ok(timer);
+    timer.callback();
+    finish(outcome === "transport" ? new Error("connection closed") : {
+      success: outcome !== "failure", warning: outcome === "partial" ? "AI 超时" : "",
+      error: "AI 请求失败", matches: []
+    });
+    await pending;
+    assert.equal(timer.cleared, true);
+    assert.equal(button.disabled, false);
+    assert.equal(button.textContent, "一键 AI 填写");
+  });
+}
+
+test("diagnostic summary only exposes allowlisted counts, durations and errors", () => {
+  const { helpers } = loadHighlightHelpers();
+  const summary = helpers.formatFillDiagnostics({
+    scanMs: 100, roundTripMs: 1000, fillMs: null, totalMs: 1100,
+    fieldCount: 2, filledCount: 0, outcome: "failed",
+    diagnostics: { errorCode: "secret-key", apiKey: "secret-key", apiMs: 900, ruleMatches: 1, resumeFields: "private-name" }
+  });
+  assert.match(summary, /0.10 s/);
+  assert.match(summary, /1.10 s/);
+  assert.match(summary, /未执行 \/ 未取得/);
+  assert.ok(!summary.includes("secret-key"));
+  assert.ok(!summary.includes("private-name"));
 });
 
 test("highlight styles are not duplicated in content.css", () => {

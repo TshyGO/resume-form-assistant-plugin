@@ -70,46 +70,82 @@ async function handleAiFill(message) {
     return !ResumeProAIHelpers.shouldSkipAIForField(field);
   });
   let aiMatches = [];
+  const candidates = ResumeProAIHelpers.selectResumeCandidates(remainingFormFields, resumeFields);
+  const diagnostics = {
+    ruleMatches: ruleMatches.length, aiFields: remainingFormFields.length,
+    candidateFields: remainingFormFields.length ? candidates.length : 0,
+    resumeFields: resumeFields.length, apiMs: 0, promptBytes: 0,
+    errorCode: "none", aiMatches: 0
+  };
+  let warning = "";
 
   if (remainingFormFields.length) {
-    const response = await fetch(aiConfig.apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${aiConfig.apiKey}`
-      },
-      body: JSON.stringify({
-        model: aiConfig.model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: AI_SYSTEM_PROMPT },
-          { role: "user", content: buildUserPrompt(remainingFormFields, resumeFields) }
-        ]
-      })
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
-      return { success: false, error: `AI 接口请求失败：${detail}` };
-    }
-
-    const content = data?.choices?.[0]?.message?.content;
-
-    if (typeof content !== "string" || !content.trim()) {
-      return { success: false, error: "AI 未返回可解析的内容。" };
-    }
-
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const apiStart = performance.now();
     try {
-      aiMatches = normalizeMatches(parseJsonContent(content));
+      const prompt = buildUserPrompt(remainingFormFields, candidates);
+      diagnostics.promptBytes = new TextEncoder().encode(prompt).length;
+      const response = await fetch(aiConfig.apiUrl, {
+        signal: controller.signal,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${aiConfig.apiKey}`
+        },
+        body: JSON.stringify({
+          model: aiConfig.model,
+          temperature: 0,
+          messages: [
+            { role: "system", content: AI_SYSTEM_PROMPT },
+            { role: "user", content: prompt }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        diagnostics.errorCode = `http_${response.status}`;
+        controller.abort();
+        throw new Error(`AI 接口请求失败：HTTP ${response.status}。请检查接口配置或稍后重试。`);
+      }
+      const data = await response.json();
+
+      const content = data?.choices?.[0]?.message?.content;
+
+      if (typeof content !== "string" || !content.trim()) {
+        diagnostics.errorCode = "format";
+        throw new Error("AI 未返回可解析的内容。");
+      }
+
+      try {
+        aiMatches = ResumeProAIHelpers.filterValidMatches(remainingFormFields, normalizeMatches(parseJsonContent(content)));
+        diagnostics.aiMatches = aiMatches.length;
+      } catch (error) {
+        diagnostics.errorCode = "format";
+        throw new Error("AI 返回格式异常，无法解析。");
+      }
     } catch (error) {
-      return { success: false, error: `AI 返回结果解析失败：${error.message}` };
+      if (diagnostics.errorCode !== "none") {
+        warning = error.message;
+      } else if (controller.signal.aborted) {
+        diagnostics.errorCode = "timeout";
+        warning = "AI 接口响应超过 90 秒，请重试或尝试更快的模型 / API。";
+      } else if (error instanceof SyntaxError) {
+        diagnostics.errorCode = "format";
+        warning = "AI 返回格式异常，无法解析。";
+      } else {
+        diagnostics.errorCode = "network";
+        warning = "AI 网络请求失败，请检查网络或接口地址。";
+      }
+    } finally {
+      clearTimeout(timeout);
+      diagnostics.apiMs = performance.now() - apiStart;
     }
   }
 
   const matches = ResumeProAIHelpers.filterValidMatches(formFields, [...ruleMatches, ...aiMatches]);
-  return { success: true, matches };
+  return { success: !warning || matches.length > 0, matches, warning,
+    error: warning, diagnostics };
 }
 
 async function handleParseResume(message) {
@@ -186,10 +222,10 @@ async function handleParseResume(message) {
 function buildUserPrompt(formFields, resumeFields) {
   return [
     "表单字段列表：",
-    JSON.stringify(formFields, null, 2),
+    JSON.stringify(formFields),
     "",
     "简历字段列表：",
-    JSON.stringify(resumeFields, null, 2),
+    JSON.stringify(resumeFields),
     "",
     "填写原则：基本信息优先匹配基本信息分组；教育背景不要填进邮箱、电话、出生日期、籍贯等基础字段；低置信度时留空。"
   ].join("\n");
