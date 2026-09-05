@@ -14,7 +14,7 @@
       for (const field of fields) {
         if (!domain.group.test(field.group || "") || !String(field.value || "").trim()) continue;
         const key = String(field.key || "");
-        const numbered = key.match(domain.prefix);
+        const numbered = key.match(domain.prefix) || key.match(/^(?:学校|院校|专业|学历|学位|入学时间|毕业时间|起止时间|公司|单位|岗位|职位|工作时间|项目名称|项目时间|职责|论文标题|标题|期刊|期刊名称|发表年份)([1-9]\d*)$/);
         if (numbered) records.add(`number:${numbered[1]}`);
         else if (key.includes("-")) records.add(`anchor:${key.slice(0, key.indexOf("-"))}`);
         else records.add("single");

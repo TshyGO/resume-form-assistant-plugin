@@ -42,7 +42,7 @@
 在 Releases 页面找到类似下面的文件：
 
 ```text
-resume-pro-v0.2.1.zip
+resume-pro-v0.3.0.zip
 ```
 
 下载完成后，把 ZIP 文件完整解压到一个固定文件夹。

@@ -349,7 +349,7 @@
       if (getActiveTemplate(state.currentStore) !== template) throw new Error("当前模板已变化，请重新预览。");
       button.textContent = "正在新增并检查网页...";
       hint.hidden = true;
-      expanded = await agent.execute(plan, snapshot, () => stopped);
+      expanded = await agent.execute(plan, snapshot, () => stopped || getActiveTemplate(state.currentStore) !== template);
     } catch (error) {
       showStatus(error.message || "辅助新增失败，请手动核对网页。", "error");
     } finally {
@@ -362,7 +362,7 @@
       fillButton.disabled = false;
       button.textContent = "AI 辅助新增条目（先预览）";
     }
-    if (expanded && !stopped) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
+    if (expanded && !stopped && getActiveTemplate(state.currentStore) === template) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
   }
 
   function isAssistedTextField(entry) {
@@ -495,6 +495,7 @@
       });
 
       for (const match of sortedMatches) {
+        if (assisted && getActiveTemplate(state.currentStore) !== activeTemplate) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
 
         if (!element) continue;
