@@ -9,6 +9,7 @@
   const visible = el => el.isConnected && el.getClientRects().length > 0;
   const text = el => (el.textContent || "").trim().replace(/\s+/g, " ");
   function targetCounts(fields) {
+    const firstRecordKeys = { papers: /^(论文标题|标题)$/, education: /^(学校|院校)$/, work: /^(公司|单位)$/, projects: /^(项目名称|名称)$/ };
     return Object.fromEntries(domains.map(domain => {
       const records = new Set();
       for (const field of fields) {
@@ -20,6 +21,7 @@
           const duplicate = key.match(/ \((\d+)\)$/);
           records.add(`anchor:${key.slice(0, key.indexOf("-"))}:${duplicate?.[1] || "1"}`);
         }
+        else if (firstRecordKeys[domain.id].test(key)) records.add("number:1");
         else records.add("single");
       }
       if (records.size > 1) records.delete("single");
