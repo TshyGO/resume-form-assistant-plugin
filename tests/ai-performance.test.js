@@ -38,7 +38,7 @@ const ok = (matches = [{ fieldId: "school", value: "大学乙" }]) => ({ ok: tru
 
 test("candidate pruning retains complete repeated education records and reduces long-resume bytes", () => {
   const selected = helpers.selectResumeCandidates([formFields[1]], resumeFields);
-  assert.deepEqual(selected, resumeFields.slice(1, 5));
+  assert.deepEqual(selected, resumeFields.slice(0, 5));
   assert.ok(Buffer.byteLength(JSON.stringify(selected)) < Buffer.byteLength(JSON.stringify(resumeFields)) * 0.1);
 });
 
@@ -71,6 +71,17 @@ test('graduate school retains education rather than selecting research only', ()
   assert.deepEqual(helpers.selectResumeCandidates([{ label: '研究生院', group: '科研经历' }], data), data);
 });
 
+test('current employer facts in basic information survive history candidate pruning', () => {
+  const data = [
+    { group: '基本信息', key: '当前工作单位', value: 'Current employer' },
+    { group: '工作经历', key: '公司', value: 'Past employer' },
+    { group: '教育背景', key: '学校', value: 'Synthetic university' }
+  ];
+  for (const label of ['当前工作单位', '现工作单位', 'Current company']) {
+    assert.deepEqual(helpers.selectResumeCandidates([{ label }], data), data.slice(0, 2));
+  }
+});
+
 for (const delay of [1000, 10000, 60000, 120000]) {
   test(`successful ${delay / 1000}s simulated API has no automatic deadline`, async () => {
     const env = loadBackground(async () => {
@@ -81,7 +92,7 @@ for (const delay of [1000, 10000, 60000, 120000]) {
     assert.equal(result.success, true);
     assert.equal(result.matches.length, 2);
     assert.equal(result.diagnostics.apiMs, delay);
-    assert.equal(result.diagnostics.candidateFields, 4);
+    assert.equal(result.diagnostics.candidateFields, 5);
     assert.equal(result.diagnostics.aiMatches, 1);
     assert.equal(env.timers.size, 0);
     const body = JSON.parse(env.requests[0].options.body);
