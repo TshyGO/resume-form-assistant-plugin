@@ -21,13 +21,33 @@ const AI_SYSTEM_PROMPT = [
   "6. 匹配考虑同义词：手机=电话=联系方式=mobile=phone"
 ].join("\n");
 
+const activeFillRequests = new Map();
+
+function fillRequestKey(message, sender) {
+  return JSON.stringify([sender.tab?.id, sender.frameId, sender.documentId, message.requestId]);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "CANCEL_AI_FILL") {
+    const controller = activeFillRequests.get(fillRequestKey(message, sender));
+    controller?.abort();
+    sendResponse({ cancelled: Boolean(controller) });
+    return false;
+  }
   if (message?.type === "AI_FILL") {
-    handleAiFill(message)
+    const key = fillRequestKey(message, sender);
+    if (activeFillRequests.has(key)) {
+      sendResponse({ success: false, error: "该填写请求仍在处理中。" });
+      return false;
+    }
+    const controller = new AbortController();
+    activeFillRequests.set(key, controller);
+    handleAiFill(message, controller)
       .then(sendResponse)
       .catch((error) => {
         sendResponse({ success: false, error: error.message || "AI 请求失败。" });
-      });
+      })
+      .finally(() => activeFillRequests.delete(key));
     return true;
   }
 
@@ -43,7 +63,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-async function handleAiFill(message) {
+async function handleAiFill(message, controller = new AbortController()) {
   const aiConfig = normalizeAiConfig(message.aiConfig);
   const formFields = Array.isArray(message.formFields) ? message.formFields : [];
   const resumeFields = Array.isArray(message.resumeFields) ? message.resumeFields : [];
@@ -80,8 +100,6 @@ async function handleAiFill(message) {
   let warning = "";
 
   if (remainingFormFields.length) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
     const apiStart = performance.now();
     try {
       const prompt = buildUserPrompt(remainingFormFields, candidates);
@@ -109,6 +127,8 @@ async function handleAiFill(message) {
         throw new Error(`AI 接口请求失败：HTTP ${response.status}。请检查接口配置或稍后重试。`);
       }
       const data = await response.json();
+      // Ignore a response if cancellation raced with its completion.
+      if (controller.signal.aborted) throw new Error("cancelled");
 
       const content = data?.choices?.[0]?.message?.content;
 
@@ -128,8 +148,8 @@ async function handleAiFill(message) {
       if (diagnostics.errorCode !== "none") {
         warning = error.message;
       } else if (controller.signal.aborted) {
-        diagnostics.errorCode = "timeout";
-        warning = "AI 接口响应超过 90 秒，请重试或尝试更快的模型 / API。";
+        diagnostics.errorCode = "cancelled";
+        warning = "已按你的操作取消 AI 等待。取消不保证上游停止计算或停止计费。";
       } else if (error instanceof SyntaxError) {
         diagnostics.errorCode = "format";
         warning = "AI 返回格式异常，无法解析。";
@@ -138,7 +158,6 @@ async function handleAiFill(message) {
         warning = "AI 网络请求失败，请检查网络或接口地址。";
       }
     } finally {
-      clearTimeout(timeout);
       diagnostics.apiMs = performance.now() - apiStart;
     }
   }

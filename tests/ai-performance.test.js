@@ -20,16 +20,19 @@ function loadBackground(fetchImpl) {
   const timers = new Map();
   const requests = [];
   let clock = 0;
+  let listener;
   const context = vm.createContext({
     importScripts() {}, ResumeProAIHelpers: helpers, AbortController, TextEncoder, SyntaxError,
     performance: { now: () => clock },
     setTimeout(callback, delay) { const id = timers.size + 1; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
-    chrome: { action: { onClicked: { addListener() {} } }, runtime: { onMessage: { addListener() {} } } },
+    chrome: { action: { onClicked: { addListener() {} } }, runtime: { onMessage: { addListener(fn) { listener = fn; } } } },
     fetch: async (url, options) => { requests.push({ url, options }); return fetchImpl(options); }
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), context);
-  return { run: (input = message) => context.handleAiFill(input), timers, requests, advance(ms) { clock += ms; } };
+  return { run: (input = message, controller) => context.handleAiFill(input, controller),
+    send: (input, sender = { tab: { id: 1 }, frameId: 0, documentId: "doc" }) => new Promise(resolve => listener(input, sender, resolve)),
+    timers, requests, advance(ms) { clock += ms; } };
 }
 const ok = (matches = [{ fieldId: "school", value: "大学乙" }]) => ({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(matches) } }] }) });
 
@@ -49,8 +52,8 @@ test("ambiguous, unknown and empty-candidate fields fall back; custom groups are
   assert.deepEqual(helpers.selectResumeCandidates([], resumeFields), []);
 });
 
-for (const delay of [1000, 10000, 60000]) {
-  test(`successful ${delay / 1000}s simulated API includes body time and cleans deadline`, async () => {
+for (const delay of [1000, 10000, 60000, 120000]) {
+  test(`successful ${delay / 1000}s simulated API has no automatic deadline`, async () => {
     const env = loadBackground(async () => {
       env.advance(delay / 2);
       return { ok: true, json: async () => { env.advance(delay / 2); return { choices: [{ message: { content: '[{"fieldId":"school","value":"大学乙"}]' } }] }; } };
@@ -93,23 +96,24 @@ for (const status of [400, 401, 429, 500, 503]) {
 }
 
 for (const stage of ["headers", "body"]) {
-  test(`timeout during ${stage} aborts request and retains local results`, async () => {
+  test(`manual cancel during ${stage} aborts request and retains local results`, async () => {
     const env = loadBackground((options) => {
       const pending = () => new Promise((resolve, reject) => {
         options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
       });
       return stage === "headers" ? pending() : { ok: true, json: pending };
     });
-    const pending = env.run();
+    const controller = new AbortController();
+    const pending = env.run(message, controller);
     await new Promise((resolve) => setImmediate(resolve));
-    const timer = [...env.timers.values()][0];
-    assert.equal(timer.delay, 90000);
-    env.advance(90000);
-    timer.callback();
+    assert.equal(env.timers.size, 0);
+    env.advance(120000);
+    assert.equal(env.requests[0].options.signal.aborted, false);
+    controller.abort();
     const result = await pending;
     assert.equal(env.requests[0].options.signal.aborted, true);
-    assert.equal(result.diagnostics.errorCode, "timeout");
-    assert.equal(result.diagnostics.apiMs, 90000);
+    assert.equal(result.diagnostics.errorCode, "cancelled");
+    assert.equal(result.diagnostics.apiMs, 120000);
     assert.equal(result.matches.length, 1);
     assert.equal(env.timers.size, 0);
   });
@@ -122,6 +126,36 @@ test("network failure without local matches returns explicit failure", async () 
   assert.equal(result.diagnostics.errorCode, "network");
   assert.ok(!result.error.includes("private-key"));
   assert.equal(env.timers.size, 0);
+});
+
+test("cancel routing is isolated by request, tab, frame and document, and cleaned after completion", async () => {
+  const env = loadBackground(options => new Promise((resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+  }));
+  const pending = env.send({ ...message, type: "AI_FILL", requestId: "one" });
+  const cancel = { type: "CANCEL_AI_FILL", requestId: "one" };
+  for (const sender of [
+    { tab: { id: 2 }, frameId: 0, documentId: "doc" },
+    { tab: { id: 1 }, frameId: 1, documentId: "doc" },
+    { tab: { id: 1 }, frameId: 0, documentId: "other" }
+  ]) assert.equal((await env.send(cancel, sender)).cancelled, false);
+  assert.equal((await env.send({ ...cancel, requestId: "other" })).cancelled, false);
+  assert.equal(env.requests[0].options.signal.aborted, false);
+  assert.equal((await env.send(cancel)).cancelled, true);
+  assert.equal((await pending).diagnostics.errorCode, "cancelled");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await env.send(cancel)).cancelled, false);
+});
+
+test("cancelled late response is discarded rather than filled", async () => {
+  const controller = new AbortController();
+  const env = loadBackground(() => ({ ok: true, json: async () => {
+    controller.abort();
+    return { choices: [{ message: { content: '[{"fieldId":"school","value":"late"}]' } }] };
+  } }));
+  const result = await env.run(message, controller);
+  assert.equal(result.diagnostics.errorCode, "cancelled");
+  assert.equal(result.matches.length, 1);
 });
 
 for (const response of [

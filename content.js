@@ -123,6 +123,8 @@
           <select class="resume-pro__select" id="resume-pro-template-select"></select>
         </label>
         <button class="resume-pro__ai-button" id="resume-pro-ai-fill" type="button">一键 AI 填写</button>
+        <button class="resume-pro__manager-button" id="resume-pro-cancel-fill" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
+        <p id="resume-pro-wait-hint" role="status" hidden></p>
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
         <details class="resume-pro__diagnostics" id="resume-pro-diagnostics" hidden>
           <summary>填写诊断（不含简历内容）</summary>
@@ -312,6 +314,10 @@
     let fieldCount = 0;
     let filledCount = 0;
     let outcome = "failed";
+    const requestId = crypto.randomUUID();
+    const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
+    const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
+    let cancelRequested = false;
 
     try {
       const { fields, fieldMap } = scanFillableFields();
@@ -322,13 +328,43 @@
       const resumeFields = flattenTemplateFields(activeTemplate);
       phase = "roundTripMs";
       phaseStart = performance.now();
+      if (cancelButton) {
+        cancelButton.hidden = false;
+        cancelButton.disabled = false;
+        cancelButton.onclick = async () => {
+          if (phase !== "roundTripMs") return;
+          cancelButton.disabled = true;
+          try {
+            const reply = await chrome.runtime.sendMessage({ type: "CANCEL_AI_FILL", requestId });
+            if (reply?.cancelled) cancelRequested = true;
+            if (waitHint && phase === "roundTripMs") {
+              waitHint.hidden = false;
+              waitHint.textContent = reply?.cancelled ? "正在取消 AI 等待，保留本地匹配结果。" : "请求已结束或无法取消，正在等待结果。";
+            }
+          } catch {
+            if (phase === "roundTripMs") {
+              cancelButton.disabled = false;
+              if (waitHint) {
+                waitHint.hidden = false;
+                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
+              }
+            }
+          }
+        };
+      }
       const updateProgress = () => {
-        button.textContent = `AI 匹配中... ${Math.floor((performance.now() - phaseStart) / 1000)}s`;
+        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
+        button.textContent = `AI 匹配中... ${seconds}s`;
+        if (seconds >= 90 && waitHint && !cancelRequested) {
+          waitHint.hidden = false;
+          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。插件不会因等待较久自动取消；你可以继续等待或手动取消。";
+        }
       };
       updateProgress();
       timer = window.setInterval(updateProgress, 1000);
       const response = await chrome.runtime.sendMessage({
         type: "AI_FILL",
+        requestId,
         formFields: fields,
         resumeFields,
         aiConfig
@@ -337,6 +373,8 @@
       phase = null;
       window.clearInterval(timer);
       timer = null;
+      if (cancelButton) cancelButton.hidden = true;
+      if (waitHint) waitHint.hidden = true;
       diagnostics = response?.diagnostics || {};
 
       if (!response?.success) {
@@ -394,11 +432,16 @@
 
       outcome = response.warning ? "partial" : "success";
       showStatus(response.warning
-        ? `本地已填写 ${filledCount} 项；AI 补充失败：${response.warning}`
+        ? `本地已填写 ${filledCount} 项；${response.warning}`
         : `已填写 ${filledCount} 个字段。`, response.warning ? "error" : "success");
     } catch (error) {
       showStatus(error.message || "AI 填写失败。", "error");
     } finally {
+      if (cancelButton) {
+        cancelButton.hidden = true;
+        cancelButton.onclick = null;
+      }
+      if (waitHint) waitHint.hidden = true;
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const summary = formatFillDiagnostics({ ...timing, totalMs: performance.now() - totalStart,
@@ -420,7 +463,7 @@
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
     const d = result.diagnostics;
     // Explicit allowlist: never copy provider messages, URL, keys or field values.
-    const code = /^(none|timeout|network|format|http_\d{3})$/.test(d.errorCode) ? d.errorCode : "unknown";
+    const code = /^(none|cancelled|network|format|http_\d{3})$/.test(d.errorCode) ? d.errorCode : "unknown";
     return [
       `Resume Pro v${chrome.runtime.getManifest().version}`,
       `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
@@ -1139,6 +1182,9 @@
       isInViewport,
       setCurrentStore(store) {
         state.currentStore = store;
+      },
+      setShadowRoot(root) {
+        shadowRoot = root;
       }
     };
   }

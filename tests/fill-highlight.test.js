@@ -130,7 +130,7 @@ function loadHighlightHelpers(options = {}) {
 
   const context = {
     console,
-    performance,
+    performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
     FocusEvent: class {},
@@ -298,6 +298,52 @@ for (const outcome of ["success", "partial", "failure", "transport"]) {
     assert.equal(button.textContent, "一键 AI 填写");
   });
 }
+
+test("90-second reminder does not cancel; manual button sends matching request and cleans up", async () => {
+  let clock = 0;
+  let finish;
+  const messages = [];
+  const formElements = [];
+  const { helpers, timers, HTMLInputElement } = loadHighlightHelpers({
+    formElements, performance: { now: () => clock },
+    sendMessage: (message) => {
+      messages.push(message);
+      if (message.type === "CANCEL_AI_FILL") {
+        finish({ success: true, warning: "已取消 AI 等待", matches: [], diagnostics: { errorCode: "cancelled" } });
+        return Promise.resolve({ cancelled: true });
+      }
+      return new Promise(resolve => { finish = resolve; });
+    }
+  });
+  const cancel = { hidden: true }, hint = { hidden: true };
+  helpers.setShadowRoot({ querySelector: (selector) => ({ "#resume-pro-cancel-fill": cancel, "#resume-pro-wait-hint": hint })[selector] });
+  formElements.push(new HTMLInputElement());
+  helpers.setCurrentStore({ templates: [{ id: "one", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "测试" }] }] }],
+    activeTemplateId: "one", aiConfig: { apiKey: "key", apiUrl: "https://example.test", model: "test" } });
+  const button = { disabled: false };
+  const pending = helpers.handleAiFillClick({ currentTarget: button });
+  assert.equal(cancel.hidden, false);
+  const timer = timers.find(item => item.delay === 1000);
+  clock = 90000;
+  timer.callback();
+  assert.equal(messages.length, 1);
+  assert.equal(hint.hidden, false);
+  assert.match(hint.textContent, /不会.*自动取消/);
+  assert.match(hint.textContent, /通常.*上游/);
+  clock = 120000;
+  timer.callback();
+  assert.equal(messages.length, 1);
+  assert.match(button.textContent, /120s/);
+  await cancel.onclick();
+  await pending;
+  assert.equal(messages[1].type, "CANCEL_AI_FILL");
+  assert.equal(messages[1].requestId, messages[0].requestId);
+  assert.equal(timer.cleared, true);
+  assert.equal(cancel.hidden, true);
+  assert.equal(cancel.onclick, null);
+  assert.equal(hint.hidden, true);
+  assert.equal(button.disabled, false);
+});
 
 test("diagnostic summary only exposes allowlisted counts, durations and errors", () => {
   const { helpers } = loadHighlightHelpers();
