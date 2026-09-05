@@ -163,7 +163,8 @@
       const relevant = resumeFields.filter((item) => {
         const groups = classify(String(item.group || ""));
         // Custom groups cannot safely be ruled out.
-        return !groups.length || groups.includes(category);
+        // Current employer/role and similar facts may live in basic info.
+        return !groups.length || groups.includes(6) || groups.includes(category);
       });
       if (!relevant.length) return resumeFields;
       relevant.forEach((item) => selected.add(item));
