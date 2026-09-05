@@ -2,7 +2,7 @@
   const domains = [
     { id: "papers", label: "论文", buttons: "论文", group: /^(论文|论文成果|学术论文)$/, prefix: /^论文(\d+)/ },
     { id: "education", label: "教育经历", buttons: "教育经历|教育背景", group: /^(教育经历|教育背景)$/, prefix: /^(?:教育经历|教育背景|教育)(\d+)/ },
-    { id: "work", label: "工作经历", buttons: "工作经历", group: /^工作经历$/, prefix: /^(?:工作经历|工作)(\d+)/ },
+    { id: "work", label: "工作经历", buttons: "工作经历", group: /^工作经历$/, prefix: /^(?:工作经历|工作|实习经历|实习)(\d+)/ },
     { id: "projects", label: "项目经历", buttons: "项目经历", group: /^项目经历$/, prefix: /^(?:项目经历|项目)(\d+)/ }
   ];
   const editable = "input:not([type=hidden]):not([type=button]):not([type=submit]):not([type=file]),textarea,select";
@@ -10,10 +10,12 @@
   const text = el => (el.textContent || "").trim().replace(/\s+/g, " ");
   function targetCounts(fields) {
     const firstRecordKeys = { papers: /^(论文标题|标题)$/, education: /^(学校|院校)$/, work: /^(公司|单位)$/, projects: /^(项目名称|名称)$/ };
+    const hasWorkRecords = fields.some(field => field.group === "工作经历" && String(field.value || "").trim());
     return Object.fromEntries(domains.map(domain => {
       const records = new Set();
       for (const field of fields) {
-        if (!domain.group.test(field.group || "") || !String(field.value || "").trim()) continue;
+        const internshipFallback = domain.id === "work" && !hasWorkRecords && field.group === "实习经历";
+        if ((!domain.group.test(field.group || "") && !internshipFallback) || !String(field.value || "").trim()) continue;
         const key = String(field.key || "");
         const numbered = key.match(domain.prefix) || key.match(/^(?:学校|院校|专业|学历|学位|入学时间|毕业时间|起止时间|公司|单位|岗位|职位|工作时间|项目名称|项目时间|职责|论文标题|标题|期刊|期刊名称|发表年份)([1-9]\d*)$/);
         if (numbered) records.add(`number:${numbered[1]}`);
