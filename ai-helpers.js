@@ -160,6 +160,7 @@
       const categories = classify(context);
       if (categories.length !== 1) return resumeFields;
       const category = categories[0];
+      if (!resumeFields.some(item => classify(String(item.group || "")).includes(category))) return resumeFields;
       const relevant = resumeFields.filter((item) => {
         const groups = classify(String(item.group || ""));
         // Custom groups cannot safely be ruled out.
