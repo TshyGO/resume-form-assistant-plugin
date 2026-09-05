@@ -53,6 +53,25 @@ test("ambiguous, unknown and empty-candidate fields fall back; custom groups are
   assert.deepEqual(helpers.selectResumeCandidates([], resumeFields), []);
 });
 
+test('work authorization and location do not discard basic-information candidates', () => {
+  const data = [
+    { group: '基本信息', key: '工作授权', value: 'Yes' },
+    { group: '工作经历', key: '公司', value: 'Synthetic employer' }
+  ];
+  for (const label of ['Are you legally authorized to work?', 'Employment eligibility', '工作地点', 'Work location']) {
+    assert.equal(helpers.selectResumeCandidates([{ label }], data), data);
+  }
+});
+
+test('graduate school retains education rather than selecting research only', () => {
+  const data = [
+    { group: '教育背景', key: '研究生院', value: 'Synthetic university' },
+    { group: '科研经历', key: '课题', value: 'Synthetic research' }
+  ];
+  assert.deepEqual(helpers.selectResumeCandidates([{ label: '研究生院' }], data), [data[0]]);
+  assert.deepEqual(helpers.selectResumeCandidates([{ label: '研究生院', group: '科研经历' }], data), data);
+});
+
 for (const delay of [1000, 10000, 60000, 120000]) {
   test(`successful ${delay / 1000}s simulated API has no automatic deadline`, async () => {
     const env = loadBackground(async () => {
