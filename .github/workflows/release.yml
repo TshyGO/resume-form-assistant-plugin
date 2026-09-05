@@ -11,12 +11,25 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Verify release version and tests
+        run: |
+          node -e "const m=require('./manifest.json'); if ('v'+m.version !== process.env.GITHUB_REF_NAME) throw Error('Tag/manifest version mismatch')"
+          node --test tests/*.test.js
 
       - name: Build extension zip
         run: |
           ZIP_NAME="resume-pro-${GITHUB_REF_NAME}.zip"
-          zip -r "$ZIP_NAME" .             --exclude ".git/*"             --exclude ".github/*"             --exclude "tests/*"             --exclude "docs/*"             --exclude ".gitignore"             --exclude "*.zip"
+          git archive --format=zip --output="$ZIP_NAME" HEAD \
+            manifest.json background.js content.js content.css ai-helpers.js form-agent.js \
+            ai-worker.js ai-host.js ai-host.html ai-client.js \
+            resume-utils.js popup.html popup.css popup.js xlsx.full.min.js \
+            mammoth.browser.min.js vendor icons README.md LICENSE
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create Release

@@ -123,7 +123,14 @@
           <select class="resume-pro__select" id="resume-pro-template-select"></select>
         </label>
         <button class="resume-pro__ai-button" id="resume-pro-ai-fill" type="button">一键 AI 填写</button>
+        <button class="resume-pro__manager-button" id="resume-pro-repeat-fill" type="button">AI 辅助新增条目（先预览）</button>
+        <button class="resume-pro__manager-button" id="resume-pro-cancel-fill" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
+        <p id="resume-pro-wait-hint" role="status" hidden></p>
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
+        <details class="resume-pro__diagnostics" id="resume-pro-diagnostics" hidden>
+          <summary>填写诊断（不含简历内容）</summary>
+          <textarea id="resume-pro-diagnostics-text" readonly aria-label="填写诊断摘要，可选择复制" rows="14"></textarea>
+        </details>
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__groups" id="resume-pro-groups"></div>
         <div class="resume-pro__footer">
@@ -185,6 +192,7 @@
     });
 
     aiFillButton.addEventListener("click", handleAiFillClick);
+    sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
     openManagerButton?.addEventListener("click", () => setManagerVisibility(true));
   }
 
@@ -281,8 +289,98 @@
     showStatus(copied ? "字段值已复制到剪贴板。" : "字段值已准备好，请手动粘贴。", "success");
   }
 
-  async function handleAiFillClick(event) {
+  function newRequestId() {
+    return crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
+  }
+
+  async function handleRepeatFillClick(event) {
     const button = event.currentTarget;
+    const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
+    if (button.disabled || fillButton.disabled) return;
+    const template = getActiveTemplate(state.currentStore);
+    const config = state.currentStore?.aiConfig;
+    if (!template || !config?.apiKey || !config?.apiUrl || !config?.model) {
+      showStatus("请先准备简历模板和 AI 接口。", "error");
+      return;
+    }
+    const agent = self.ResumeProFormAgent;
+    const snapshot = agent.collect(document, flattenTemplateFields(template));
+    if (!snapshot.candidates.length) {
+      showStatus("未识别到可安全新增的分组，请先手动新增条目，再一键填写。", "error");
+      return;
+    }
+    button.disabled = true;
+    fillButton.disabled = true;
+    const cancel = shadowRoot.querySelector("#resume-pro-cancel-fill");
+    const hint = shadowRoot.querySelector("#resume-pro-wait-hint");
+    const requestId = newRequestId();
+    let stopped = false;
+    let planning = true;
+    let expanded;
+    cancel.hidden = false;
+    cancel.disabled = false;
+    cancel.textContent = "停止辅助新增";
+    cancel.onclick = () => {
+      stopped = true;
+      cancel.disabled = true;
+      if (planning) self.ResumeProAIClient.cancel(requestId).catch(() => {});
+    };
+    const start = performance.now();
+    const progress = () => {
+      const seconds = Math.floor((performance.now() - start) / 1000);
+      button.textContent = `AI 规划中... ${seconds}s`;
+      if (seconds >= 90) {
+        hint.hidden = false;
+        hint.textContent = "正在等待 AI 规划，上游模型、中转或网络可能较慢；不会自动取消，可手动停止。";
+      }
+    };
+    progress();
+    const timer = window.setInterval(progress, 1000);
+    try {
+      const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId, aiConfig: config, candidates: snapshot.candidates });
+      planning = false;
+      window.clearInterval(timer);
+      if (stopped) throw new Error("已停止，未执行新增。");
+      if (!reply?.success) throw new Error("AI 规划失败，未执行新增。可稍后重试或手动新增。");
+      const plan = agent.validatePlan(reply.plan, snapshot.candidates);
+      if (!plan.length) throw new Error("AI 未给出可确认的新增操作，请手动处理。");
+      const preview = plan.map(action => `${snapshot.candidates.find(c => c.id === action.id).label}：${action.count} 条`).join("\n");
+      if (!window.confirm(`允许以下操作吗？\n${preview}\n\n确认后将点击网页新增按钮，再用 AI 填写这些分组的空字段。不会提交、删除或覆盖已有内容。网页自身可能保存新条目；停止后不自动删除。`)) return;
+      if (getActiveTemplate(state.currentStore) !== template) throw new Error("当前模板已变化，请重新预览。");
+      button.textContent = "正在新增并检查网页...";
+      hint.hidden = true;
+      expanded = await agent.execute(plan, snapshot, () => stopped || getActiveTemplate(state.currentStore) !== template);
+    } catch (error) {
+      showStatus(error.message || "辅助新增失败，请手动核对网页。", "error");
+    } finally {
+      window.clearInterval(timer);
+      cancel.hidden = true;
+      cancel.onclick = null;
+      cancel.textContent = "取消 AI 等待（保留本地匹配）";
+      hint.hidden = true;
+      button.disabled = false;
+      fillButton.disabled = false;
+      button.textContent = "AI 辅助新增条目（先预览）";
+    }
+    if (expanded && !stopped && getActiveTemplate(state.currentStore) === template) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
+  }
+
+  function isAssistedTextField(entry) {
+    const el = entry.element;
+    return !el.disabled && !el.readOnly && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && ["text", "email", "tel", "url", "search"].includes(el.type)));
+  }
+
+  function hasExistingValue(entry) {
+    if (entry.kind === "radio") return entry.elements.some(el => el.checked);
+    const el = entry.element;
+    if (!el?.isConnected) return true;
+    if (el.type === "checkbox" || el.type === "radio") return el.checked;
+    return Boolean(String(el.value ?? el.textContent ?? "").trim());
+  }
+
+  async function handleAiFillClick(event, assisted = null) {
+    const button = event.currentTarget;
+    if (button.disabled) return;
     const activeTemplate = getActiveTemplate(state.currentStore);
     const aiConfig = state.currentStore?.aiConfig;
 
@@ -296,29 +394,95 @@
       return;
     }
 
-    const { fields, fieldMap } = scanFillableFields();
-
-    if (!fields.length) {
-      showStatus("当前页面没有可填写的表单字段。", "error");
-      return;
-    }
-
     button.disabled = true;
-    button.textContent = "匹配中...";
+    const repeatButton = shadowRoot?.querySelector("#resume-pro-repeat-fill");
+    if (repeatButton) repeatButton.disabled = true;
+    button.textContent = "正在扫描网页...";
+    const totalStart = performance.now();
+    const timing = { scanMs: null, roundTripMs: null, fillMs: null };
+    let phaseStart = totalStart;
+    let phase = "scanMs";
+    let timer = null;
+    let diagnostics = {};
+    let fieldCount = 0;
+    let filledCount = 0;
+    let unconfirmedCount = 0;
+    let outcome = "failed";
+    const requestId = newRequestId();
+    const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
+    const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
+    let cancelRequested = false;
 
     try {
-      const response = await chrome.runtime.sendMessage({
+      const scanned = scanFillableFields();
+      const fieldMap = scanned.fieldMap;
+      const fields = assisted ? scanned.fields.filter(field => {
+        const entry = fieldMap.get(field.fieldId);
+        return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
+      }) : scanned.fields;
+      fieldCount = fields.length;
+      timing.scanMs = performance.now() - phaseStart;
+      phase = null;
+      if (!fields.length) throw new Error("当前页面没有可填写的表单字段。");
+      const resumeFields = flattenTemplateFields(activeTemplate);
+      phase = "roundTripMs";
+      phaseStart = performance.now();
+      if (cancelButton) {
+        cancelButton.hidden = false;
+        cancelButton.disabled = false;
+        cancelButton.onclick = async () => {
+          if (phase !== "roundTripMs") return;
+          cancelButton.disabled = true;
+          try {
+            const reply = await self.ResumeProAIClient.cancel(requestId);
+            if (reply?.cancelled) cancelRequested = true;
+            if (waitHint && phase === "roundTripMs") {
+              waitHint.hidden = false;
+              waitHint.textContent = reply?.cancelled ? "正在取消 AI 等待，保留本地匹配结果。" : "请求已结束或无法取消，正在等待结果。";
+            }
+          } catch {
+            if (phase === "roundTripMs") {
+              cancelButton.disabled = false;
+              if (waitHint) {
+                waitHint.hidden = false;
+                waitHint.textContent = "取消请求未送达，请重试；当前请求可能仍在等待。";
+              }
+            }
+          }
+        };
+      }
+      const updateProgress = () => {
+        const seconds = Math.floor((performance.now() - phaseStart) / 1000);
+        button.textContent = `AI 匹配中... ${seconds}s`;
+        if (seconds >= 90 && waitHint && !cancelRequested) {
+          waitHint.hidden = false;
+          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。插件不会因等待较久自动取消；你可以继续等待或手动取消。";
+        }
+      };
+      updateProgress();
+      timer = window.setInterval(updateProgress, 1000);
+      const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
+        requestId,
         formFields: fields,
-        resumeFields: flattenTemplateFields(activeTemplate),
+        resumeFields,
         aiConfig
       });
+      timing.roundTripMs = performance.now() - phaseStart;
+      phase = null;
+      window.clearInterval(timer);
+      timer = null;
+      if (cancelButton) cancelButton.hidden = true;
+      if (waitHint) waitHint.hidden = true;
+      diagnostics = response?.diagnostics || {};
 
       if (!response?.success) {
         throw new Error(response?.error || "AI 填写失败。");
       }
 
-      let filledCount = 0;
+      button.textContent = "正在填写网页...";
+      phase = "fillMs";
+      phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
       const sortedMatches = [...response.matches].sort((a, b) => {
@@ -331,13 +495,19 @@
       });
 
       for (const match of sortedMatches) {
+        if (assisted && getActiveTemplate(state.currentStore) !== activeTemplate) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
 
         if (!element) continue;
+        if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
         let filled = setElementValue(element, match.value);
         if (filled instanceof Promise) {
           filled = await filled;
+        }
+        if (assisted && filled) {
+          await new Promise(resolve => window.setTimeout(resolve, 50));
+          filled = element.element.isConnected && element.element.value === match.value;
         }
 
         const fieldMeta = fieldMetaMap.get(match.fieldId);
@@ -353,6 +523,8 @@
         if (filled) {
           filledCount += 1;
           highlightFilledField(element, match.value);
+        } else if (assisted) {
+          unconfirmedCount += 1;
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -365,13 +537,56 @@
         }
       }
 
-      showStatus(`已填写 ${filledCount} 个字段。`, "success");
+      outcome = response.warning || unconfirmedCount ? "partial" : "success";
+      if (assisted) {
+        showStatus(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
+      } else showStatus(response.warning
+        ? `本地已填写 ${filledCount} 项；${response.warning}`
+        : `已填写 ${filledCount} 个字段。`, response.warning ? "error" : "success");
     } catch (error) {
       showStatus(error.message || "AI 填写失败。", "error");
     } finally {
+      if (cancelButton) {
+        cancelButton.hidden = true;
+        cancelButton.onclick = null;
+      }
+      if (waitHint) waitHint.hidden = true;
+      if (timer !== null) window.clearInterval(timer);
+      if (phase) timing[phase] = performance.now() - phaseStart;
+      const summary = formatFillDiagnostics({ ...timing, totalMs: performance.now() - totalStart,
+        fieldCount, filledCount, outcome, diagnostics });
+      const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+      const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
+      if (panel && text) {
+        text.value = summary;
+        panel.hidden = false;
+        panel.open = true;
+      }
       button.disabled = false;
+      if (repeatButton) repeatButton.disabled = false;
       button.textContent = "一键 AI 填写";
     }
+  }
+
+  function formatFillDiagnostics(result) {
+    const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行 / 未取得";
+    const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
+    const d = result.diagnostics;
+    // Explicit allowlist: never copy provider messages, URL, keys or field values.
+    const code = /^(none|cancelled|network|format|http_\d{3})$/.test(d.errorCode) ? d.errorCode : "unknown";
+    return [
+      `Resume Pro v${chrome.runtime.getManifest().version}`,
+      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
+      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}`,
+      `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
+      `送 AI 字段：${count(d.aiFields)}`,
+      `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
+      `用户 prompt：${count(d.promptBytes)} bytes`,
+      `扫描：${seconds(result.scanMs)}`,
+      `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
+      `API（含响应读取）：${seconds(d.apiMs)}`,
+      `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`
+    ].join("\n");
   }
 
   function scanFillableFields() {
@@ -1069,6 +1284,8 @@
 
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {
+      handleRepeatFillClick,
+      formatFillDiagnostics,
       getHighlightTargets,
       handleAiFillClick,
       highlightFilledField,
@@ -1076,6 +1293,9 @@
       isInViewport,
       setCurrentStore(store) {
         state.currentStore = store;
+      },
+      setShadowRoot(root) {
+        shadowRoot = root;
       }
     };
   }

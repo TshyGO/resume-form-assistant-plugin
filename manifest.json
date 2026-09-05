@@ -1,9 +1,11 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "name": "Resume Pro",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "求职网申场景的简历信息填写辅助插件。",
   "permissions": [
+    "offscreen",
     "storage",
     "scripting",
     "activeTab",
@@ -40,6 +42,8 @@
         "xlsx.full.min.js",
         "mammoth.browser.min.js",
         "ai-helpers.js",
+        "ai-client.js",
+        "form-agent.js",
         "resume-utils.js",
         "vendor/pdfjs/pdf.min.mjs",
         "vendor/pdfjs/pdf.worker.min.mjs",
@@ -60,7 +64,9 @@
         "<all_urls>"
       ],
       "js": [
+        "ai-client.js",
         "ai-helpers.js",
+        "form-agent.js",
         "content.js"
       ],
       "css": [

@@ -317,3 +317,24 @@
   border: 0;
   background: #fff;
 }
+.resume-pro__diagnostics {
+  color: #334155;
+  font-size: 12px;
+}
+
+.resume-pro__diagnostics summary {
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.resume-pro__diagnostics textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #dfe3ff;
+  border-radius: 8px;
+  background: #f8f9ff;
+  color: #334155;
+  font: 11px/1.6 ui-monospace, monospace;
+  resize: vertical;
+}
