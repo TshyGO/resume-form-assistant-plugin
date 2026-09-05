@@ -28,6 +28,9 @@ jobs:
           node --check ai-helpers.js
           node --check form-agent.js
           node --check background.js
+          node --check ai-worker.js
+          node --check ai-host.js
+          node --check ai-client.js
           node --check content.js
           node --check popup.js
           node --check resume-utils.js

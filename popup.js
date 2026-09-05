@@ -752,7 +752,7 @@ async function handleParseResumeClick() {
 
   try {
     const payload = await buildResumeParsePayload(file, extension);
-    const result = await chrome.runtime.sendMessage({
+    const result = await self.ResumeProAIClient.send({
       type: "PARSE_RESUME",
       fileType: payload.fileType,
       content: payload.content,

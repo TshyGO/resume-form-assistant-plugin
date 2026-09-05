@@ -323,7 +323,7 @@
     cancel.onclick = () => {
       stopped = true;
       cancel.disabled = true;
-      if (planning) chrome.runtime.sendMessage({ type: "CANCEL_AI_FILL", requestId }).catch(() => {});
+      if (planning) self.ResumeProAIClient.cancel(requestId).catch(() => {});
     };
     const start = performance.now();
     const progress = () => {
@@ -337,7 +337,7 @@
     progress();
     const timer = window.setInterval(progress, 1000);
     try {
-      const reply = await chrome.runtime.sendMessage({ type: "AI_PLAN_REPEAT", requestId, aiConfig: config, candidates: snapshot.candidates });
+      const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId, aiConfig: config, candidates: snapshot.candidates });
       planning = false;
       window.clearInterval(timer);
       if (stopped) throw new Error("已停止，未执行新增。");
@@ -434,7 +434,7 @@
           if (phase !== "roundTripMs") return;
           cancelButton.disabled = true;
           try {
-            const reply = await chrome.runtime.sendMessage({ type: "CANCEL_AI_FILL", requestId });
+            const reply = await self.ResumeProAIClient.cancel(requestId);
             if (reply?.cancelled) cancelRequested = true;
             if (waitHint && phase === "roundTripMs") {
               waitHint.hidden = false;
@@ -461,7 +461,7 @@
       };
       updateProgress();
       timer = window.setInterval(updateProgress, 1000);
-      const response = await chrome.runtime.sendMessage({
+      const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
         requestId,
         formFields: fields,

@@ -30,7 +30,9 @@ function loadBackground(fetchImpl) {
     chrome: { action: { onClicked: { addListener() {} } }, runtime: { onMessage: { addListener(fn) { listener = fn; } } } },
     fetch: async (url, options) => { requests.push({ url, options }); return fetchImpl(options); }
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), context);
+  context.self = {};
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../ai-worker.js"), "utf8"), context);
+  listener = context.dispatchAiMessage;
   return { run: (input = message, controller) => context.handleAiFill(input, controller),
     send: (input, sender = { tab: { id: 1 }, frameId: 0, documentId: "doc" }) => new Promise(resolve => listener(input, sender, resolve)),
     timers, requests, advance(ms) { clock += ms; } };

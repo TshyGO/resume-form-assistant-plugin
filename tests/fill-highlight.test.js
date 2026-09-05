@@ -150,7 +150,9 @@ function loadHighlightHelpers(options = {}) {
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: {},
-    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent },
+    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+      ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
+        cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
     window
   };
 

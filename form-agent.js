@@ -16,7 +16,10 @@
         const key = String(field.key || "");
         const numbered = key.match(domain.prefix) || key.match(/^(?:学校|院校|专业|学历|学位|入学时间|毕业时间|起止时间|公司|单位|岗位|职位|工作时间|项目名称|项目时间|职责|论文标题|标题|期刊|期刊名称|发表年份)([1-9]\d*)$/);
         if (numbered) records.add(`number:${numbered[1]}`);
-        else if (key.includes("-")) records.add(`anchor:${key.slice(0, key.indexOf("-"))}`);
+        else if (key.includes("-")) {
+          const duplicate = key.match(/ \((\d+)\)$/);
+          records.add(`anchor:${key.slice(0, key.indexOf("-"))}:${duplicate?.[1] || "1"}`);
+        }
         else records.add("single");
       }
       if (records.size > 1) records.delete("single");
@@ -64,7 +67,7 @@
       const candidate = candidates.find(c => c.id === action?.id);
       if (!candidate || !Number.isInteger(candidate.current) || !Number.isInteger(candidate.target) || candidate.current < 0 ||
           used.has(action.id) || Object.keys(action).some(k => !["id", "count"].includes(k)) ||
-          !Number.isInteger(action.count) || action.count < 1 || action.count > candidate.target - candidate.current) {
+          !Number.isInteger(action.count) || action.count < 1 || action.count !== candidate.target - candidate.current) {
         throw new Error("AI 计划超出允许的新增范围。");
       }
       used.add(action.id);
