@@ -14,13 +14,16 @@ mod secrets;
 mod snapshot;
 mod time;
 mod types;
+mod urls;
 mod validate;
 
-pub use digest::{payload_body_sha256, sha256_hex};
+pub use digest::{payload_body_sha256, sha256_hex, snapshot_chunk_identity_sha256};
 pub use error::{ErrorCode, Layer, ProtocolError};
 pub use identity::{check_current_identity, handshake_response_payload, origin_allowed};
 pub use receipts::{evaluate_write, reconcile, reconcile_grants_replay, write_key};
-pub use schema_lite::{envelope_schema, payload_schema, response_schema, validate_schema};
+pub use schema_lite::{
+    envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
+};
 pub use snapshot::{
     ack_kind_for_plugin, plugin_chunk_ack_payload, plugin_snapshot_ack_payload, AssemblerOutcome,
     ChunkAssembler, Integrity, SnapshotSession,

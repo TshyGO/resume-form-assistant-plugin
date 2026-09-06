@@ -42,6 +42,23 @@ impl ErrorCode {
     pub fn retryable(self) -> bool {
         matches!(self, Self::Unavailable)
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "identity_missing" => Self::IdentityMissing,
+            "identity_not_allowed" => Self::IdentityNotAllowed,
+            "restore_epoch_mismatch" => Self::RestoreEpochMismatch,
+            "protocol_incompatible" => Self::ProtocolIncompatible,
+            "unknown_message_type" => Self::UnknownMessageType,
+            "invalid_payload" => Self::InvalidPayload,
+            "payload_too_large" => Self::PayloadTooLarge,
+            "conflict" => Self::Conflict,
+            "previously_purged" => Self::PreviouslyPurged,
+            "unavailable" => Self::Unavailable,
+            "secret_forbidden" => Self::SecretForbidden,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

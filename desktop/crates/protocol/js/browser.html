@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>D05 browser catalog</title>
+<pre id="out">running…</pre>
+<script type="module">
+  import { validateRequest, validateResponse } from "./validate.mjs";
+  import { envelopeSchema, payloadSchema, responsePayloadSchema, responseSchema, validateSchema } from "./schema-lite.mjs";
+
+  function codeOf(fn) {
+    try {
+      fn();
+      return null;
+    } catch (e) {
+      return e.code || "invalid_payload";
+    }
+  }
+
+  async function codeOfAsync(fn) {
+    try {
+      await fn();
+      return null;
+    } catch (e) {
+      return e.code || "invalid_payload";
+    }
+  }
+
+  const catalog = await (await fetch("../fixtures/catalog.json")).json();
+  const failed = [];
+  let passed = 0;
+
+  for (const entry of catalog.requests) {
+    const value = await (await fetch(`../fixtures/${entry.path}`)).json();
+    const schemaCode = codeOf(() => {
+      validateSchema(value, envelopeSchema());
+      const payload = payloadSchema(value.messageType);
+      if (payload) validateSchema(value.payload, payload);
+    });
+    const expectSchema = entry.schema === "accept" ? null : "reject";
+    if (expectSchema === null && schemaCode) failed.push(`${entry.id} schema ${schemaCode}`);
+    else if (expectSchema === "reject" && !schemaCode) failed.push(`${entry.id} schema should reject`);
+    else passed += 1;
+    const protocolCode = await codeOfAsync(() => validateRequest(value));
+    if (entry.protocol.accept && protocolCode) failed.push(`${entry.id} protocol ${protocolCode}`);
+    else if (!entry.protocol.accept && protocolCode !== entry.protocol.code) {
+      failed.push(`${entry.id} protocol ${protocolCode} != ${entry.protocol.code}`);
+    } else passed += 1;
+  }
+
+  for (const entry of catalog.responses) {
+    const value = await (await fetch(`../fixtures/${entry.path}`)).json();
+    const schemaCode = codeOf(() => {
+      validateSchema(value, responseSchema());
+      if (value.ok) {
+        const payload = responsePayloadSchema(entry.requestType);
+        if (payload) validateSchema(value.payload, payload);
+      }
+    });
+    if (entry.schema === "accept" && schemaCode) failed.push(`${entry.id} schema ${schemaCode}`);
+    else if (entry.schema === "reject" && !schemaCode) failed.push(`${entry.id} schema should reject`);
+    else passed += 1;
+    const protocolCode = codeOf(() => validateResponse(value, entry.requestType));
+    if (entry.protocol.accept && protocolCode) failed.push(`${entry.id} protocol ${protocolCode}`);
+    else if (!entry.protocol.accept && protocolCode !== entry.protocol.code) {
+      failed.push(`${entry.id} protocol ${protocolCode} != ${entry.protocol.code}`);
+    } else passed += 1;
+  }
+
+  const result = { passed, failed, ok: failed.length === 0, userAgent: navigator.userAgent };
+  window.__D05_RESULT__ = result;
+  window.__D05_DONE__ = true;
+  document.getElementById("out").textContent = JSON.stringify(result, null, 2);
+</script>

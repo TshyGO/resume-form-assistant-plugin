@@ -12,7 +12,9 @@ const MAX_ASSEMBLER_SESSIONS: usize = 16;
 pub struct ChunkRecord {
     pub message_id: String,
     pub chunk_index: u32,
+    pub application_id: String,
     pub chunk_sha256: String,
+    pub identity_sha256: String,
     pub bytes: Vec<u8>,
 }
 
@@ -21,6 +23,7 @@ pub struct SnapshotSession {
     pub snapshot_id: String,
     pub client_instance_id: String,
     pub source_restore_epoch: String,
+    pub application_id: String,
     pub chunk_count: u32,
     pub snapshot_sha256: String,
     pub byte_size: usize,
@@ -120,6 +123,7 @@ impl ChunkAssembler {
                     snapshot_id: parsed.snapshot_id.clone(),
                     client_instance_id: req.client_instance_id.clone(),
                     source_restore_epoch: parsed.source_restore_epoch.clone(),
+                    application_id: parsed.application_id.clone(),
                     chunk_count: parsed.chunk_count,
                     snapshot_sha256: parsed.snapshot_sha256.clone(),
                     byte_size: parsed.byte_size,
@@ -150,65 +154,96 @@ impl ChunkAssembler {
                 "assembler snapshot exceeds 2 MiB",
             ));
         }
-        let session = self.sessions.get_mut(&key).ok_or_else(|| {
-            ProtocolError::new(ErrorCode::Unavailable, Layer::Business, "snapshot session missing")
-        })?;
-        if session.chunk_count != parsed.chunk_count
-            || session.snapshot_sha256 != parsed.snapshot_sha256
-            || session.byte_size != parsed.byte_size
-        {
-            return Err(ProtocolError::new(
-                ErrorCode::Conflict,
-                Layer::Business,
-                "snapshot metadata does not match the existing session",
-            ));
-        }
-        if let Some(existing) = session.chunks.get(&parsed.chunk_index) {
-            if existing.message_id != req.message_id
-                || existing.chunk_sha256 != parsed.chunk_sha256
-                || existing.bytes != parsed.bytes
+        let (result, remove_empty) = {
+            let session = self.sessions.get_mut(&key).ok_or_else(|| {
+                ProtocolError::new(ErrorCode::Unavailable, Layer::Business, "snapshot session missing")
+            })?;
+            if session.chunk_count != parsed.chunk_count
+                || session.snapshot_sha256 != parsed.snapshot_sha256
+                || session.byte_size != parsed.byte_size
+                || session.application_id != parsed.application_id
+                || session.snapshot_id != parsed.snapshot_id
+                || session.source_restore_epoch != parsed.source_restore_epoch
             {
                 return Err(ProtocolError::new(
                     ErrorCode::Conflict,
                     Layer::Business,
-                    "same chunk identity with different content or messageId",
+                    "snapshot metadata does not match the existing session",
                 ));
             }
-            return Ok(outcome(session, parsed.chunk_index, true));
+            if let Some(existing) = session.chunks.get(&parsed.chunk_index) {
+                if existing.message_id != req.message_id
+                    || existing.identity_sha256 != parsed.identity_sha256
+                    || existing.chunk_sha256 != parsed.chunk_sha256
+                    || existing.application_id != parsed.application_id
+                    || existing.bytes != parsed.bytes
+                {
+                    return Err(ProtocolError::new(
+                        ErrorCode::Conflict,
+                        Layer::Business,
+                        "same chunk identity with different content or messageId",
+                    ));
+                }
+                return Ok(outcome(session, parsed.chunk_index, true));
+            }
+            if session
+                .chunks
+                .values()
+                .any(|other| other.message_id == req.message_id)
+            {
+                return Err(ProtocolError::new(
+                    ErrorCode::Conflict,
+                    Layer::Business,
+                    "chunk messageId is already bound to another chunkIndex",
+                ));
+            }
+            session.chunks.insert(
+                parsed.chunk_index,
+                ChunkRecord {
+                    message_id: req.message_id.clone(),
+                    chunk_index: parsed.chunk_index,
+                    application_id: parsed.application_id,
+                    chunk_sha256: parsed.chunk_sha256,
+                    identity_sha256: parsed.identity_sha256,
+                    bytes: parsed.bytes,
+                },
+            );
+            if session.all_indexes_present() && !session.integrity_verified() {
+                session.chunks.remove(&parsed.chunk_index);
+                (None, session.chunks.is_empty())
+            } else {
+                (Some(outcome(session, parsed.chunk_index, false)), false)
+            }
+        };
+        if remove_empty {
+            self.sessions.remove(&key);
         }
-        if session
-            .chunks
-            .values()
-            .any(|other| other.message_id == req.message_id)
-        {
-            return Err(ProtocolError::new(
-                ErrorCode::Conflict,
-                Layer::Business,
-                "chunk messageId is already bound to another chunkIndex",
-            ));
-        }
-        session.chunks.insert(
-            parsed.chunk_index,
-            ChunkRecord {
-                message_id: req.message_id.clone(),
-                chunk_index: parsed.chunk_index,
-                chunk_sha256: parsed.chunk_sha256,
-                bytes: parsed.bytes,
-            },
-        );
-        if session.all_indexes_present() && !session.integrity_verified() {
-            session.chunks.remove(&parsed.chunk_index);
-            return Err(ProtocolError::new(
+        result.ok_or_else(|| {
+            ProtocolError::new(
                 ErrorCode::InvalidPayload,
                 Layer::Business,
                 "assembled snapshot length or snapshotSha256 mismatch",
-            ));
-        }
-        Ok(outcome(session, parsed.chunk_index, false))
+            )
+        })
     }
 
     pub fn session(&self, client: &str, snapshot: &str, epoch: &str) -> Option<&SnapshotSession> {
         self.sessions.get(&Self::session_key(client, snapshot, epoch))
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Drop an in-memory session after persist, cancel, or failure. Durable replay uses receipts.
+    pub fn forget(&mut self, client: &str, snapshot: &str, epoch: &str) -> bool {
+        self.sessions
+            .remove(&Self::session_key(client, snapshot, epoch))
+            .is_some()
+    }
+
+    pub fn cancel(&mut self, client: &str, snapshot: &str, epoch: &str) -> bool {
+        self.forget(client, snapshot, epoch)
     }
 }
 
@@ -227,11 +262,13 @@ fn outcome(session: &SnapshotSession, chunk_index: u32, replay: bool) -> Assembl
 
 struct ParsedChunk {
     snapshot_id: String,
+    application_id: String,
     source_restore_epoch: String,
     chunk_index: u32,
     chunk_count: u32,
     chunk_sha256: String,
     snapshot_sha256: String,
+    identity_sha256: String,
     byte_size: usize,
     bytes: Vec<u8>,
 }
@@ -273,6 +310,7 @@ fn parse_chunk(req: &Request) -> Result<ParsedChunk, ProtocolError> {
         ));
     }
     let snapshot_id = payload_str(&req.payload, "snapshotId")?;
+    let application_id = payload_str(&req.payload, "applicationId")?;
     let source_restore_epoch = payload_str(&req.payload, "sourceRestoreEpoch")?;
     let chunk_index = payload_u32(&req.payload, "chunkIndex")?;
     let chunk_count = payload_u32(&req.payload, "chunkCount")?;
@@ -315,13 +353,16 @@ fn parse_chunk(req: &Request) -> Result<ParsedChunk, ProtocolError> {
             "chunkSha256 does not match decoded bytes",
         ));
     }
+    let identity_sha256 = crate::digest::snapshot_chunk_identity_sha256(&req.payload)?;
     Ok(ParsedChunk {
         snapshot_id,
+        application_id,
         source_restore_epoch,
         chunk_index,
         chunk_count,
         chunk_sha256,
         snapshot_sha256,
+        identity_sha256,
         byte_size,
         bytes: decoded,
     })

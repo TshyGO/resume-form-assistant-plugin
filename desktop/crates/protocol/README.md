@@ -11,7 +11,10 @@
 ```bash
 cargo test --manifest-path Cargo.toml --locked
 node --test js/catalog.test.mjs js/validate.test.mjs
+python js/run-browser-catalog.py
 ```
+
+浏览器入口是 `js/validate.mjs`（ES module，无 `node:` / `Buffer`）。SHA-256 使用 Web Crypto，因此 `validateRequest` / `validateRequestBytes` / `payloadBodySha256` 是 **async**。配套文件：`schema-data.mjs`（由 `js/embed-schemas.mjs` 从 JSON 生成）、`schema-lite.mjs`、`time.mjs`。D07 把这四个文件作为 MV3 `type=module` 加载即可，不需要打包器，也不要再 `import` Node 版加载器。
 
 仓库根目录插件回归（确认本 crate 不影响插件）：
 
@@ -28,10 +31,10 @@ node --test tests/*.test.js
 | Size | 完整 UTF-8 JSON 信封 ≤ 65536（不含 NM 4 字节前缀）。原始块大小 ≠ 信封大小 | D05 |
 | Structure | 字段、枚举、UUID、SHA-256、白名单 `messageType`、分片上下界、对账批次 ≤ 32 | D05 schema + 校验器 |
 | Identity presence | `health`/`handshake` **禁止**信封 `archiveId`/`restoreEpoch`；其余 **必须**有。禁止用 current 回填 | D05 |
-| Secrets | 拒绝 API Key/Cookie/Bearer 等键与值 | D05 |
+| Secrets | 拒绝 API Key/Cookie/Bearer 等键与值；拒绝未脱敏 URL（userinfo / token 查询参数） | D05 |
 | Business identity | 信封是否等于 **当前** `current.json`；`sourceRestoreEpoch` 是否等于当前 epoch | **D03/D06**（`check_current_identity`） |
 | Idempotency | `(clientInstanceId, messageId, sourceRestoreEpoch)` + 摘要 → 重放 / conflict / previously_purged | **D03** 回执表（`evaluate_write` 是契约算法） |
-| Snapshot integrity | 严格 Base64、块 SHA-256、按 index 组装后的总长度/`snapshotSha256`、连续 cursor、块数/大小/会话上限 | D05 `ChunkAssembler`：**内存完整性**，`VerifiedInMemory` ≠ 可发给插件的持久化 ACK |
+| Snapshot integrity | 严格 Base64、块 SHA-256、按 index 组装后的总长度/`snapshotSha256`、连续 cursor、块数/大小/会话上限 | D05 `ChunkAssembler`：**内存完整性**，`VerifiedInMemory` ≠ 可发给插件的持久化 ACK。完成后必须 `forget`/`cancel` |
 | Snapshot durability | 块 `messageId` 落盘、重启不得新铸、确认持久化后再发 `ackKind: snapshot` | **D03/D06/D08** |
 | Reconcile | 只读历史回执；`applied/purged/not_found/conflict/unverifiable`；不授予重放 | **D03** 查回执；`reconcile()` 是契约算法 |
 
@@ -53,7 +56,8 @@ match evaluate_write(&req, Some(&current), &receipts)? {
     WriteDecision::Conflict => { /* error conflict */ }
 }
 // snapshot.chunk: ChunkAssembler::apply_chunk 只证明内存完整性。
-// 仅当 outcome.ready_to_persist() 且 D03 落盘成功后，才发送 plugin_snapshot_ack_payload。
+// 仅当 outcome.ready_to_persist() 且 D03 落盘成功后，才发送 plugin_snapshot_ack_payload，
+// 然后 assembler.forget(...) 释放会话。失败或取消调用 cancel。
 // 分片过程中只发 plugin_chunk_ack_payload（ackKind=chunk）。
 ```
 
@@ -70,7 +74,7 @@ import {
   MAX_ENVELOPE_BYTES,
 } from "../desktop/crates/protocol/js/validate.mjs";
 
-const req = validateRequest(envelope);
+const req = await validateRequest(envelope);
 checkCurrentIdentity(req, lastHandshake);
 const bytes = new TextEncoder().encode(JSON.stringify(req));
 if (bytes.length > MAX_ENVELOPE_BYTES) {
@@ -90,4 +94,6 @@ if (bytes.length > MAX_ENVELOPE_BYTES) {
 
 `occurredAt` 使用 UTC RFC3339 子集：`YYYY-MM-DDTHH:MM:SSZ` 或带小数秒，必须是真实日历日期与时钟，只允许 `Z`。Schema pattern 只约束句法；`2026-13-01` 一类非法日期由校验器拒绝。
 
-`payloadSha256` 是去掉该字段后、对象键排序的 compact UTF-8 JSON 的 SHA-256。合法 fixture 必须使用真实匹配的字节、长度和摘要，不得用虚构哈希让测试通过。
+`payloadSha256` 是去掉该字段后、对象键排序的 compact UTF-8 JSON 的 SHA-256。`snapshot.chunk` 回执摘要是不可变块身份（snapshot/index/application/count/length/hashes）的同一规范化摘要，不是单独的 `chunkSha256`。合法 fixture 必须使用真实匹配的字节、长度和摘要。
+
+`sourceUrl` / `urlRedacted` 等 URL 字段默认拒绝 userinfo 与 `access_token`/`code`/`key` 等参数（含百分号编码名）。校验器不改写 payload；调用方必须先脱敏再计算摘要。`rules.json` 的 `urlAllowlist` 默认为空。

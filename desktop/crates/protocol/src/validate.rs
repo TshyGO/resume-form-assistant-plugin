@@ -1,9 +1,14 @@
 use serde_json::{Map, Value};
 
-use crate::digest::{decode_standard_base64, payload_body_sha256, sha256_hex};
+use crate::digest::{
+    decode_standard_base64, payload_body_sha256, sha256_hex, snapshot_chunk_identity_sha256,
+};
 use crate::error::{ErrorCode, Layer, ProtocolError};
-use crate::schema_lite::{envelope_schema, payload_schema, response_schema, validate_schema};
+use crate::schema_lite::{
+    envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
+};
 use crate::secrets::reject_secrets;
+use crate::urls::{allowlist_from_rules, reject_sensitive_urls};
 use crate::time::is_utc_timestamp;
 use crate::types::{
     MessageType, Request, MAX_ENVELOPE_BYTES, MAX_PROTOCOL_VERSION, MAX_RECONCILE_ITEMS,
@@ -98,6 +103,8 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
     if let Some(schema) = payload_schema(message_type.as_str()) {
         validate_schema(payload_value, &schema)?;
     }
+    let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
+    reject_sensitive_urls(payload_value, &allowlist_from_rules(&rules))?;
     validate_payload_extras(message_type, payload)?;
     if message_type == MessageType::OutboxReconcile {
         let items = payload.get("items").and_then(Value::as_array).unwrap();
@@ -174,6 +181,9 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
                     "payloadSha256 does not match the payload body",
                 ));
             }
+            if ty == MessageType::FillSubmit {
+                fill_submit_extras(payload)?;
+            }
         }
         MessageType::SnapshotChunk => {
             let index = payload.get("chunkIndex").and_then(Value::as_i64).unwrap();
@@ -210,6 +220,7 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
                     "chunkSha256 does not match decoded bytes",
                 ));
             }
+            let _ = snapshot_chunk_identity_sha256(&Value::Object(payload.clone()))?;
             if count == 1 {
                 let snap = payload.get("snapshotSha256").and_then(Value::as_str).unwrap();
                 if decoded.len() != byte_size || sha256_hex(&decoded) != snap {
@@ -236,6 +247,31 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
     Ok(())
 }
 
+fn fill_submit_extras(payload: &Map<String, Value>) -> Result<(), ProtocolError> {
+    let has_snapshot = payload.get("snapshotId").and_then(Value::as_str).is_some();
+    let has_sha = payload.get("sha256").and_then(Value::as_str).is_some();
+    if has_snapshot != has_sha {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "fill.submit snapshotId and sha256 must be supplied together",
+        ));
+    }
+    let field = payload.get("fieldCount").and_then(Value::as_i64);
+    let filled = payload.get("filledCount").and_then(Value::as_i64);
+    let unconfirmed = payload.get("unconfirmedCount").and_then(Value::as_i64);
+    if let (Some(field), Some(filled), Some(unconfirmed)) = (field, filled, unconfirmed) {
+        if filled.saturating_add(unconfirmed) > field {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "filledCount + unconfirmedCount exceeds fieldCount",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_response_value(value: &Value, request_type: MessageType) -> Result<(), ProtocolError> {
     if value.as_array().is_some() || !value.is_object() {
         return Err(ProtocolError::new(
@@ -244,8 +280,25 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
             "response must be an object",
         ));
     }
-    validate_schema(value, &response_schema())?;
     let obj = value.as_object().unwrap();
+    if let Some(version) = obj.get("protocolVersion") {
+        if !version.is_i64() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "protocolVersion must be an integer",
+            ));
+        }
+        let protocol_version = version.as_i64().unwrap();
+        if protocol_version < MIN_PROTOCOL_VERSION as i64 || protocol_version > MAX_PROTOCOL_VERSION as i64 {
+            return Err(ProtocolError::new(
+                ErrorCode::ProtocolIncompatible,
+                Layer::Structure,
+                format!("protocolVersion {protocol_version} is outside {MIN_PROTOCOL_VERSION}..{MAX_PROTOCOL_VERSION}"),
+            ));
+        }
+    }
+    validate_schema(value, &response_schema())?;
     let ok = obj.get("ok").and_then(Value::as_bool).unwrap();
     if obj.get("payload").map(Value::is_array).unwrap_or(false) {
         return Err(ProtocolError::new(
@@ -269,25 +322,99 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
                 "ok:true write response requires resultId",
             ));
         }
+        if let Some(schema) = response_payload_schema(request_type.as_str()) {
+            validate_schema(obj.get("payload").unwrap(), &schema)?;
+        }
+        if request_type == MessageType::Handshake {
+            handshake_response_extras(obj.get("payload").unwrap())?;
+        }
         if request_type == MessageType::SnapshotChunk {
-            let kind = obj
-                .get("payload")
-                .and_then(|p| p.get("ackKind"))
-                .and_then(Value::as_str);
-            if !matches!(kind, Some("chunk") | Some("snapshot")) {
+            snapshot_ack_extras(obj.get("payload").unwrap())?;
+        }
+        if request_type == MessageType::OutboxReconcile {
+            reconcile_response_extras(obj.get("payload").unwrap())?;
+        }
+        let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
+        reject_sensitive_urls(obj.get("payload").unwrap(), &allowlist_from_rules(&rules))?;
+    } else {
+        if obj.contains_key("resultId") {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "ok:false response must not include resultId",
+            ));
+        }
+        let error = obj.get("error").ok_or_else(|| {
+            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "ok:false response requires error")
+        })?;
+        let code = error.get("code").and_then(Value::as_str).unwrap_or("");
+        let retryable = error.get("retryable").and_then(Value::as_bool);
+        let expected = ErrorCode::parse(code).map(|c| c.retryable());
+        if retryable != expected {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "error.retryable does not match error.code",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn handshake_response_extras(payload: &Value) -> Result<(), ProtocolError> {
+    let min = payload.get("minProtocolVersion").and_then(Value::as_i64).unwrap_or(0);
+    let max = payload.get("maxProtocolVersion").and_then(Value::as_i64).unwrap_or(0);
+    if max < MIN_PROTOCOL_VERSION as i64 || min > MAX_PROTOCOL_VERSION as i64 || min > max {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            "handshake response protocol ranges do not overlap",
+        ));
+    }
+    Ok(())
+}
+
+fn snapshot_ack_extras(payload: &Value) -> Result<(), ProtocolError> {
+    let kind = payload.get("ackKind").and_then(Value::as_str);
+    match kind {
+        Some("chunk") => Ok(()),
+        Some("snapshot") => {
+            if payload.get("snapshotId").and_then(Value::as_str).is_none() {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
                     Layer::Structure,
-                    "snapshot.chunk ACK must set payload.ackKind to chunk or snapshot",
+                    "ackKind snapshot requires snapshotId",
                 ));
             }
+            Ok(())
         }
-    } else if obj.contains_key("resultId") {
-        return Err(ProtocolError::new(
+        _ => Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             Layer::Structure,
-            "ok:false response must not include resultId",
-        ));
+            "snapshot.chunk ACK must set payload.ackKind to chunk or snapshot",
+        )),
+    }
+}
+
+fn reconcile_response_extras(payload: &Value) -> Result<(), ProtocolError> {
+    let items = payload.get("items").and_then(Value::as_array).unwrap();
+    for item in items {
+        let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+        let has_result = item.get("resultId").is_some();
+        if status == "applied" && !has_result {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "reconcile applied item requires resultId",
+            ));
+        }
+        if status != "applied" && has_result {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "reconcile non-applied item must not include resultId",
+            ));
+        }
     }
     Ok(())
 }
@@ -300,9 +427,11 @@ pub fn source_restore_epoch(req: &Request) -> Option<String> {
 }
 
 pub fn payload_sha256(req: &Request) -> Option<String> {
+    if req.message_type == MessageType::SnapshotChunk {
+        return snapshot_chunk_identity_sha256(&req.payload).ok();
+    }
     req.payload
         .get("payloadSha256")
-        .or_else(|| req.payload.get("chunkSha256"))
         .and_then(Value::as_str)
         .map(str::to_string)
 }

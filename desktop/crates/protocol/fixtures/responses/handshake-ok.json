@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "ok": true,
+  "payload": {
+    "appVersion": "0.1.0",
+    "minProtocolVersion": 1,
+    "maxProtocolVersion": 1,
+    "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "capabilities": [
+      "health",
+      "handshake",
+      "application.queryCandidates",
+      "job.save",
+      "fill.submit",
+      "snapshot.chunk",
+      "submit.confirm",
+      "outbox.reconcile"
+    ]
+  }
+}

@@ -54,6 +54,28 @@
     "conflict",
     "unverifiable"
   ],
+  "retryableErrorCodes": ["unavailable"],
+  "urlSecretQueryKeys": [
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "session",
+    "sessionid",
+    "sid",
+    "auth",
+    "authorization",
+    "api_key",
+    "apikey",
+    "password",
+    "pwd",
+    "secret",
+    "signature",
+    "sig",
+    "code",
+    "key"
+  ],
+  "urlAllowlist": [],
   "saveIntentIsNotMessageType": true,
   "notes": {
     "size": "Limit is the UTF-8 byte length of the complete serialized business envelope, excluding the Native Messaging 4-byte length prefix.",

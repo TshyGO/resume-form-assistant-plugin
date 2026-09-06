@@ -49,6 +49,47 @@ pub fn payload_body_sha256(payload: &Value) -> Result<String, ProtocolError> {
     Ok(sha256_hex(&bytes))
 }
 
+const CHUNK_IDENTITY_KEYS: &[&str] = &[
+    "sourceRestoreEpoch",
+    "snapshotId",
+    "applicationId",
+    "chunkIndex",
+    "chunkCount",
+    "chunkSha256",
+    "snapshotSha256",
+    "byteSize",
+];
+
+/// Digest of immutable snapshot.chunk identity. Does not include bytesBase64.
+pub fn snapshot_chunk_identity_sha256(payload: &Value) -> Result<String, ProtocolError> {
+    let obj = payload.as_object().ok_or_else(|| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "payload must be an object",
+        )
+    })?;
+    let mut identity = Map::new();
+    for key in CHUNK_IDENTITY_KEYS {
+        let value = obj.get(*key).ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                format!("snapshot.chunk missing {key} for identity digest"),
+            )
+        })?;
+        identity.insert((*key).to_string(), value.clone());
+    }
+    let bytes = serde_json::to_vec(&canonical_json(&Value::Object(identity))).map_err(|e| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            format!("cannot serialize chunk identity: {e}"),
+        )
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
 pub fn decode_standard_base64(text: &str) -> Result<Vec<u8>, ProtocolError> {
     if text.as_bytes().iter().any(|b| b.is_ascii_whitespace()) {
         return Err(ProtocolError::new(
