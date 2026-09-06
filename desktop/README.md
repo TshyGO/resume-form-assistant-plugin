@@ -1,6 +1,8 @@
-# Resume Pro Desktop（D02 壳）
+# Resume Pro Desktop（D02 壳 + D04 申请管理）
 
-最小可运行桌面程序：导航、设置、用户数据目录、单实例、窗口生命周期。浏览器插件仍在仓库根目录，安装方式不变。
+最小可运行桌面程序：导航、设置、用户数据目录、单实例，以及不依赖 AI 的申请管理（列表、编辑、阶段与时间线）。浏览器插件仍在仓库根目录，安装方式不变。
+
+本分支的开发基线临时整合了未合并的 D02 `f37b9e1` 与 D03 `05843ae`。这不表示上游已验收或已合并。
 
 给 D03/D06 的宿主接口见 [HOST.md](HOST.md)。
 
@@ -25,6 +27,9 @@ npm run desktop:build    # 本地打包（不签名、不上架）
 ```bash
 # 开发二进制
 cargo run --manifest-path src-tauri/Cargo.toml -- --probe
+
+# 申请管理闭环（隔离临时目录，不写真实档案）
+cargo run --manifest-path src-tauri/Cargo.toml -- --apps-loop
 
 # 隐藏启动（同一唯一写入者，供后续 D06）
 cargo run --manifest-path src-tauri/Cargo.toml -- --hidden
@@ -83,7 +88,17 @@ Windows（本机已跑过真实 `resume-pro-desktop.exe`，不是浏览器打开
 - 把数据根指向普通文件时返回 `DIR_CREATE_FAILED` / `DIR_NOT_WRITABLE`，不改用临时目录
 - `--hidden` 后第二次启动仍只有一个进程；`--quit` 结束宿主
 - 关闭窗口后进程仍在；设置页显示版本、数据目录、日志目录、运行状态
-- 不创建 `archive.db` / `current.json`
+- 申请管理会在档案目录创建 `archive.db` 与 `current.json`（D03 数据层）。初始化失败会明确报错，不会改用临时库。
+
+## D04 可用操作
+
+- 新增/编辑申请（公司、岗位、链接、地点、备注）
+- 搜索、阶段过滤、排序、分页
+- 确认已投递、记录测评/面试/结果、纠正阶段、备注
+- 回收与恢复（无永久删除）
+- 关闭后重开，资料与时间线保留
+
+未实现：附件导入、简历快照、待办提醒、浏览器通信、AI。
 
 macOS：代码按 Application Support / Caches 分支；WKWebView 数据目录与应用缓存目录不是同一处。CI 上的 macOS 作业只做构建/单测，**不是实机 UI 验收**。尚未完成实机启动、单实例、隐藏/恢复、Application Support 与实际 WebView 位置验证。不能把 Windows 跑通或 CI 编译说成 Mac 已验收。
 

@@ -1,4 +1,5 @@
 import { createPairingController } from "./pairing-form.js";
+import { mountApplications } from "./applications-ui.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
@@ -138,9 +139,14 @@ document.getElementById("btn-diag").addEventListener("click", async () => {
   }
 });
 
+const applications = mountApplications(invoke);
+
 showRoute("applications");
 refreshStatus().catch((err) => {
   document.getElementById("runtime-pill").textContent = String(err);
+});
+applications.refreshList().catch((err) => {
+  document.getElementById("apps-msg").textContent = String(err);
 });
 setInterval(() => {
   refreshStatus().catch(() => {});

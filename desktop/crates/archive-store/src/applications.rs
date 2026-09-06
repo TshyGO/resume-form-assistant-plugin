@@ -23,6 +23,15 @@ pub struct UpdateApplicationInput {
     pub archived: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListSort {
+    #[default]
+    UpdatedAt,
+    Company,
+    Title,
+    Stage,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ApplicationFilter {
     pub stages: Vec<Stage>,
@@ -31,6 +40,9 @@ pub struct ApplicationFilter {
     pub reply_state: Option<ReplyEvidenceState>,
     /// 公司规范化前缀/包含匹配(用规范化值,不碰原始 PII 排序)。
     pub company_contains: Option<String>,
+    /// 列表搜索:公司、岗位或地点(SQL 内完成,不在内存过滤)。
+    pub query: Option<String>,
+    pub sort: ListSort,
     pub order_updated_desc: bool,
     pub limit: u32,
     pub offset: u64,
@@ -378,6 +390,23 @@ impl StoreTx<'_> {
                 where_clauses.push(format!("company_normalized LIKE ?{}", args.len()));
             }
         }
+        if let Some(q) = &filter.query {
+            let trimmed = q.trim();
+            if !trimmed.is_empty() {
+                let company_like = format!("%{}%", normalize_company(trimmed));
+                let title_like = format!("%{}%", normalize_title(trimmed));
+                let loc_like = format!("%{}%", trimmed.to_lowercase());
+                args.push(Box::new(company_like));
+                let c = args.len();
+                args.push(Box::new(title_like));
+                let t = args.len();
+                args.push(Box::new(loc_like));
+                let l = args.len();
+                where_clauses.push(format!(
+                    "(company_normalized LIKE ?{c} OR title_normalized LIKE ?{t} OR lower(IFNULL(location, '')) LIKE ?{l})"
+                ));
+            }
+        }
 
         let where_sql = if where_clauses.is_empty() {
             String::new()
@@ -394,11 +423,14 @@ impl StoreTx<'_> {
                 })? as usize
         };
 
-        let order = if filter.order_updated_desc {
-            "updated_at DESC"
-        } else {
-            "updated_at ASC"
+        let col = match filter.sort {
+            ListSort::UpdatedAt => "updated_at",
+            ListSort::Company => "company_normalized",
+            ListSort::Title => "title_normalized",
+            ListSort::Stage => "current_stage",
         };
+        let dir = if filter.order_updated_desc { "DESC" } else { "ASC" };
+        let order = format!("{col} {dir}, id ASC");
         let limit = filter.limit.clamp(1, 1000);
         let sql = format!(
             "SELECT id, company, company_normalized, title, title_normalized, source_url, \

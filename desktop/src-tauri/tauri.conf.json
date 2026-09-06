@@ -15,10 +15,10 @@
       {
         "label": "main",
         "title": "Resume Pro Desktop",
-        "width": 980,
-        "height": 680,
-        "minWidth": 760,
-        "minHeight": 520,
+        "width": 1100,
+        "height": 740,
+        "minWidth": 860,
+        "minHeight": 560,
         "visible": false
       }
     ],

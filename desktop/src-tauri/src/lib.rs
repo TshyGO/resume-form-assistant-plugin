@@ -1,6 +1,15 @@
 mod cli;
+mod commands;
 mod lifecycle;
 
+use archive_store::ArchiveStore;
+use commands::{
+    add_note, application_manager_loop, confirm_submit, correct_stage, create_application,
+    get_application, list_applications, open_store, query_candidates, record_assessment,
+    record_closed, record_interview, record_offer, record_rejected, record_withdrawn, set_recycle,
+    update_application, CommandError, CorrectStageArgs, CreateApplicationArgs, ListApplicationsArgs,
+    NoteArgs, ProgressEventArgs, SubmitArgs, UpdateApplicationArgs,
+};
 use data_service::{
     diagnostics_from, probe, write_diagnostics_file, write_log, DataHost, HostErrorDto, HostPaths,
     PairingDraft,
@@ -18,7 +27,31 @@ struct AppState {
     host: Mutex<Option<DataHost>>,
     host_error: Mutex<Option<HostErrorDto>>,
     paths: Mutex<Option<HostPaths>>,
+    store: Mutex<Option<ArchiveStore>>,
+    store_error: Mutex<Option<CommandError>>,
     hidden_launch: bool,
+}
+
+fn with_store<T>(
+    state: &AppState,
+    f: impl FnOnce(&ArchiveStore) -> Result<T, CommandError>,
+) -> Result<T, CommandError> {
+    let guard = state.store.lock().map_err(|e| CommandError {
+        code: "STORE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    match guard.as_ref() {
+        Some(store) => f(store),
+        None => Err(state
+            .store_error
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+            .unwrap_or(CommandError {
+                code: "STORE_UNAVAILABLE".into(),
+                message: "申请档案未能打开，未改用临时或内存数据库".into(),
+            })),
+    }
 }
 
 #[derive(Serialize)]
@@ -61,6 +94,15 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         .unwrap_or(false);
     let host = state.host.lock().map_err(|e| e.to_string())?;
     let error = state.host_error.lock().map_err(|e| e.to_string())?.clone();
+    let store_error = state.store_error.lock().map_err(|e| e.to_string())?.clone();
+    let error = error.or_else(|| {
+        store_error.map(|e| HostErrorDto {
+            code: e.code,
+            message: e.message,
+            path: None,
+            hint: "申请档案未能打开。不会改用临时或内存数据库。".into(),
+        })
+    });
     let paths = state.paths.lock().map_err(|e| e.to_string())?;
     let unique_writer = host.is_some();
     let pairing = host
@@ -191,6 +233,123 @@ fn save_pairing_draft(
 }
 
 #[tauri::command]
+fn list_applications_cmd(
+    state: State<AppState>,
+    args: ListApplicationsArgs,
+) -> Result<archive_store::Page<archive_store::ApplicationSummary>, CommandError> {
+    with_store(&state, |store| list_applications(store, args))
+}
+
+#[tauri::command]
+fn create_application_cmd(
+    state: State<AppState>,
+    args: CreateApplicationArgs,
+) -> Result<commands::CreateApplicationResult, CommandError> {
+    with_store(&state, |store| create_application(store, args))
+}
+
+#[tauri::command]
+fn get_application_cmd(state: State<AppState>, id: String) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| get_application(store, &id))
+}
+
+#[tauri::command]
+fn update_application_cmd(
+    state: State<AppState>,
+    args: UpdateApplicationArgs,
+) -> Result<archive_store::ApplicationDetail, CommandError> {
+    with_store(&state, |store| update_application(store, args))
+}
+
+#[tauri::command]
+fn add_note_cmd(state: State<AppState>, args: NoteArgs) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| add_note(store, args))
+}
+
+#[tauri::command]
+fn confirm_submit_cmd(
+    state: State<AppState>,
+    args: SubmitArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| confirm_submit(store, args))
+}
+
+#[tauri::command]
+fn record_assessment_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_assessment(store, args))
+}
+
+#[tauri::command]
+fn record_interview_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_interview(store, args))
+}
+
+#[tauri::command]
+fn record_offer_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_offer(store, args))
+}
+
+#[tauri::command]
+fn record_rejected_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_rejected(store, args))
+}
+
+#[tauri::command]
+fn record_withdrawn_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_withdrawn(store, args))
+}
+
+#[tauri::command]
+fn record_closed_cmd(
+    state: State<AppState>,
+    args: ProgressEventArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| record_closed(store, args))
+}
+
+#[tauri::command]
+fn correct_stage_cmd(
+    state: State<AppState>,
+    args: CorrectStageArgs,
+) -> Result<commands::ApplicationView, CommandError> {
+    with_store(&state, |store| correct_stage(store, args))
+}
+
+#[tauri::command]
+fn set_recycle_cmd(
+    state: State<AppState>,
+    id: String,
+    recycled: bool,
+) -> Result<archive_store::ApplicationDetail, CommandError> {
+    with_store(&state, |store| set_recycle(store, &id, recycled))
+}
+
+#[tauri::command]
+fn query_candidates_cmd(
+    state: State<AppState>,
+    company: String,
+    title: String,
+    source_url: Option<String>,
+) -> Result<archive_store::Candidates, CommandError> {
+    with_store(&state, |store| query_candidates(store, &company, &title, source_url.as_deref()))
+}
+
+#[tauri::command]
 fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     lifecycle::hide_main_window(&app);
     Ok(())
@@ -222,11 +381,65 @@ fn configure_webview_cache() {
     }
 }
 
+fn run_apps_loop() -> Result<serde_json::Value, CommandError> {
+    let base = std::env::var_os("RESUMEPRO_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "resumepro-d04-loop-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            ))
+        });
+    let archive = base.join("archive");
+    let pointer = base.join("current.json");
+    std::fs::create_dir_all(&archive).map_err(|e| CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: e.to_string(),
+    })?;
+    let first = {
+        let store = open_store(&archive, &pointer)?;
+        application_manager_loop(&store)?
+    };
+    let store = open_store(&archive, &pointer)?;
+    let id = first
+        .get("firstId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CommandError {
+            code: "STORE_ERROR".into(),
+            message: "loop missing firstId".into(),
+        })?;
+    let reopened = get_application(&store, id)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "isolatedDir": base.display().to_string(),
+        "loop": first,
+        "reopenedStage": reopened.application.current_stage,
+        "reopenedEvents": reopened.events.len(),
+        "reopenedTitle": reopened.application.title,
+    }))
+}
+
 pub fn run() {
     let args = cli::parse();
     if args.help {
         cli::print_help();
         return;
+    }
+    if args.apps_loop {
+        match run_apps_loop() {
+            Ok(report) => {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_else(|e| e.to_string()));
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("{}", serde_json::to_string(&err).unwrap_or_else(|_| err.message.clone()));
+                std::process::exit(2);
+            }
+        }
     }
     if args.probe {
         let mut report = probe();
@@ -280,6 +493,8 @@ pub fn run() {
             host: Mutex::new(None),
             host_error: Mutex::new(None),
             paths: Mutex::new(HostPaths::resolve().ok()),
+            store: Mutex::new(None),
+            store_error: Mutex::new(None),
             hidden_launch,
         })
         .setup(move |app| {
@@ -291,6 +506,18 @@ pub fn run() {
                 Ok(host) => {
                     if let Ok(mut paths) = app.state::<AppState>().paths.lock() {
                         *paths = Some(host.paths().clone());
+                    }
+                    match open_store(&host.paths().archive_dir, &host.paths().current_pointer) {
+                        Ok(store) => {
+                            if let Ok(mut slot) = app.state::<AppState>().store.lock() {
+                                *slot = Some(store);
+                            }
+                        }
+                        Err(err) => {
+                            if let Ok(mut slot) = app.state::<AppState>().store_error.lock() {
+                                *slot = Some(err);
+                            }
+                        }
                     }
                     if let Ok(mut slot) = app.state::<AppState>().host.lock() {
                         *slot = Some(host);
@@ -324,7 +551,22 @@ pub fn run() {
             export_diagnostics,
             save_pairing_draft,
             hide_main_window_cmd,
-            quit_app
+            quit_app,
+            list_applications_cmd,
+            create_application_cmd,
+            get_application_cmd,
+            update_application_cmd,
+            add_note_cmd,
+            confirm_submit_cmd,
+            record_assessment_cmd,
+            record_interview_cmd,
+            record_offer_cmd,
+            record_rejected_cmd,
+            record_withdrawn_cmd,
+            record_closed_cmd,
+            correct_stage_cmd,
+            set_recycle_cmd,
+            query_candidates_cmd
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {

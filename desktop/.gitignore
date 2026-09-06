@@ -3,3 +3,6 @@ dist
 src-tauri/target
 src-tauri/gen
 crates/data-service/target
+crates/archive-store/target
+.tmp-d04-ui
+.tmp-d04-cache

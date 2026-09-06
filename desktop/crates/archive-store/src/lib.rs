@@ -31,7 +31,8 @@ pub mod todos;
 pub mod tx;
 
 pub use applications::{
-    ApplicationCandidate, ApplicationFilter, Candidates, Page, PurgeReport, UpdateApplicationInput,
+    ApplicationCandidate, ApplicationFilter, Candidates, ListSort, Page, PurgeReport,
+    UpdateApplicationInput,
 };
 pub use error::StoreError;
 pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
