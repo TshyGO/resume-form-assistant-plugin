@@ -1,4 +1,9 @@
+import { createPairingController } from "./pairing-form.js";
+
 const invoke = window.__TAURI__?.core?.invoke;
+const pairing = createPairingController();
+const chromeInput = document.getElementById("chrome-id");
+const edgeInput = document.getElementById("edge-id");
 
 const views = {
   applications: document.getElementById("view-applications"),
@@ -20,6 +25,9 @@ document.querySelectorAll(".nav button[data-route]").forEach((btn) => {
   btn.addEventListener("click", () => showRoute(btn.dataset.route));
 });
 
+chromeInput.addEventListener("input", () => pairing.markChromeDirty());
+edgeInput.addEventListener("input", () => pairing.markEdgeDirty());
+
 function fact(label, value) {
   return `<dt>${label}</dt><dd><code>${escapeHtml(value ?? "—")}</code></dd>`;
 }
@@ -35,11 +43,24 @@ function yn(flag) {
   return flag ? "是" : "否";
 }
 
-async function refresh() {
+function applyPairingFields(result) {
+  if (!result.applied) {
+    return;
+  }
+  if (result.chrome !== undefined) {
+    chromeInput.value = result.chrome;
+  }
+  if (result.edge !== undefined) {
+    edgeInput.value = result.edge;
+  }
+}
+
+async function refreshStatus() {
   if (!invoke) {
     document.getElementById("runtime-pill").textContent = "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）";
     return;
   }
+  const token = pairing.beginRefresh();
   const status = await invoke("get_runtime_status");
   document.getElementById("runtime-pill").textContent = status.runtimeLabel;
   const banner = document.getElementById("banner");
@@ -58,7 +79,10 @@ async function refresh() {
     fact("档案目录", status.archiveDir),
     fact("日志目录", status.logsDir),
     fact("日志文件", status.logFile),
-    fact("缓存目录", status.cacheDir),
+    fact("应用缓存目录", status.cacheDir),
+    fact("WebView 数据目录", status.webviewDataDir || "未由本应用托管"),
+    fact("WebView 由本应用指定", yn(status.webviewDataManaged)),
+    fact("WebView 说明", status.webviewDataNote),
     fact("current.json", status.currentPointer),
     fact("目录可写", yn(status.writable)),
     fact("唯一写入者", yn(status.uniqueWriter)),
@@ -70,21 +94,30 @@ async function refresh() {
     fact("关闭窗口", status.closeWindowMeans),
     fact("退出", status.quitMeans),
   ].join("");
-  document.getElementById("chrome-id").value = status.pairing?.chromeExtensionId ?? "";
-  document.getElementById("edge-id").value = status.pairing?.edgeExtensionId ?? "";
+  applyPairingFields(pairing.applyStatus(token, status.pairing));
 }
 
 document.getElementById("pairing-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const msg = document.getElementById("pairing-msg");
+  const typed = {
+    chrome: chromeInput.value,
+    edge: edgeInput.value,
+  };
   try {
-    await invoke("save_pairing_draft", {
-      chromeExtensionId: document.getElementById("chrome-id").value,
-      edgeExtensionId: document.getElementById("edge-id").value,
+    const saved = await invoke("save_pairing_draft", {
+      chromeExtensionId: typed.chrome,
+      edgeExtensionId: typed.edge,
     });
+    const applied = pairing.onSaveSuccess(saved);
+    chromeInput.value = applied.chrome;
+    edgeInput.value = applied.edge;
     msg.textContent = "已写入本地 settings.json 草稿，未注册 Native Messaging。";
-    await refresh();
+    await refreshStatus();
   } catch (err) {
+    pairing.onSaveFailure();
+    chromeInput.value = typed.chrome;
+    edgeInput.value = typed.edge;
     msg.textContent = String(err);
   }
 });
@@ -106,9 +139,9 @@ document.getElementById("btn-diag").addEventListener("click", async () => {
 });
 
 showRoute("applications");
-refresh().catch((err) => {
+refreshStatus().catch((err) => {
   document.getElementById("runtime-pill").textContent = String(err);
 });
 setInterval(() => {
-  refresh().catch(() => {});
+  refreshStatus().catch(() => {});
 }, 4000);

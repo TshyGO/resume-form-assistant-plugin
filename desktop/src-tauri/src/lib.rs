@@ -48,6 +48,9 @@ struct RuntimeStatus {
     pairing: PairingDraft,
     error: Option<HostErrorDto>,
     runtime_label: String,
+    webview_data_dir: Option<String>,
+    webview_data_managed: bool,
+    webview_data_note: String,
 }
 
 #[tauri::command]
@@ -121,6 +124,19 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         pairing,
         error,
         runtime_label,
+        webview_data_dir: resolved.as_ref().and_then(|p| {
+            data_service::webview_storage(p)
+                .webview_data_dir
+                .map(|d| d.display().to_string())
+        }),
+        webview_data_managed: resolved
+            .as_ref()
+            .map(|p| data_service::webview_storage(p).managed_by_app)
+            .unwrap_or(false),
+        webview_data_note: resolved
+            .as_ref()
+            .map(|p| data_service::webview_storage(p).note)
+            .unwrap_or_default(),
     })
 }
 
@@ -192,11 +208,17 @@ fn quit_app(app: AppHandle, state: State<AppState>) -> Result<(), String> {
 }
 
 fn configure_webview_cache() {
-    if let Ok(paths) = HostPaths::resolve() {
-        let webview_dir = paths.cache_dir.join("webview");
-        let _ = std::fs::create_dir_all(&webview_dir);
-        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_dir);
-        std::env::set_var("RESUMEPRO_WEBVIEW_DIR", webview_dir.as_os_str());
+    let Ok(paths) = HostPaths::resolve() else {
+        return;
+    };
+    let info = data_service::webview_storage(&paths);
+    let _ = std::fs::create_dir_all(&info.app_cache_dir);
+    if info.managed_by_app {
+        if let Some(dir) = info.webview_data_dir {
+            let _ = std::fs::create_dir_all(&dir);
+            #[cfg(windows)]
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &dir);
+        }
     }
 }
 
@@ -216,11 +238,7 @@ pub fn run() {
                 std::process::exit(2);
             }
         }
-        std::process::exit(if report.ok || report.error.is_none() {
-            0
-        } else {
-            2
-        });
+        std::process::exit(if report.ok { 0 } else { 2 });
     }
 
     configure_webview_cache();

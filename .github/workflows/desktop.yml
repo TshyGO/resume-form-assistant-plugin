@@ -1,0 +1,85 @@
+name: Desktop
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+          - name: macos-arm64
+            os: macos-14
+            rust-target: aarch64-apple-darwin
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri
+            desktop/crates/data-service
+
+      - name: Install JS dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Frontend unit tests
+        working-directory: desktop
+        run: node --test src/pairing-form.test.js
+
+      - name: Frontend build
+        working-directory: desktop
+        run: npm run build
+
+      - name: Host tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/data-service/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: App tests
+        working-directory: desktop
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib --target ${{ matrix.rust-target }}
+
+      - name: Compile desktop binary
+        working-directory: desktop
+        run: cargo build --manifest-path src-tauri/Cargo.toml --locked --bins --target ${{ matrix.rust-target }}
+
+      - name: Release ZIP allowlist
+        working-directory: desktop
+        run: node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js
+
+      - name: Plugin regression
+        run: node --test tests/*.test.js
+
+      - name: Record platform scope
+        if: matrix.name == 'macos-arm64'
+        run: echo "This macOS job is compile and unit tests only. It is not real-device UI acceptance." >> "$GITHUB_STEP_SUMMARY"

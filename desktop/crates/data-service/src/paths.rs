@@ -1,7 +1,12 @@
 use crate::error::HostError;
 use serde::Serialize;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static WRITE_PROBE_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// On-disk product folder name (not the UI product name).
 pub const DATA_DIR_NAME: &str = "ResumePro";
@@ -86,8 +91,7 @@ impl HostPaths {
     }
 
     pub fn assert_writable(&self) -> Result<(), HostError> {
-        for dir in [self.data_root.as_path(), self.logs_dir.as_path(), self.archive_dir.as_path()]
-        {
+        for dir in self.layout_dirs() {
             assert_dir_writable(dir)?;
         }
         Ok(())
@@ -139,6 +143,20 @@ fn platform_data_base() -> Result<PathBuf, HostError> {
     }
 }
 
+fn write_probe_name() -> String {
+    let seq = WRITE_PROBE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!(
+        ".resumepro-write-test-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        seq
+    )
+}
+
 fn assert_dir_writable(dir: &Path) -> Result<(), HostError> {
     if dir.exists() && !dir.is_dir() {
         return Err(HostError::dir_not_writable(
@@ -146,17 +164,45 @@ fn assert_dir_writable(dir: &Path) -> Result<(), HostError> {
             "path exists and is not a directory",
         ));
     }
-    let probe = dir.join(".resumepro-write-test");
-    match fs::write(&probe, b"ok") {
-        Ok(()) => {
-            let _ = fs::remove_file(&probe);
-            Ok(())
-        }
-        Err(e) => Err(HostError::dir_not_writable(
+    if !dir.is_dir() {
+        return Err(HostError::dir_not_writable(
             dir.to_path_buf(),
-            format!("write test failed: {e}"),
-        )),
+            "directory does not exist",
+        ));
     }
+    let mut last_exists = None;
+    for _ in 0..8 {
+        let probe = dir.join(write_probe_name());
+        match OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(mut file) => {
+                let wrote = file.write_all(b"ok");
+                drop(file);
+                let _ = fs::remove_file(&probe);
+                return wrote.map_err(|e| {
+                    HostError::dir_not_writable(dir.to_path_buf(), format!("write test failed: {e}"))
+                });
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                last_exists = Some(probe);
+                continue;
+            }
+            Err(e) => {
+                return Err(HostError::dir_not_writable(
+                    dir.to_path_buf(),
+                    format!("write test failed: {e}"),
+                ));
+            }
+        }
+    }
+    Err(HostError::dir_not_writable(
+        dir.to_path_buf(),
+        format!(
+            "write test could not create an exclusive probe file (last candidate {})",
+            last_exists
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ),
+    ))
 }
 
 pub fn program_dir() -> Option<PathBuf> {
@@ -259,5 +305,78 @@ mod tests {
         let temp = std::env::temp_dir();
         assert_ne!(paths.data_root, temp);
         assert!(paths.data_root.starts_with(tmp.path()));
+    }
+
+    #[test]
+    fn write_probe_does_not_overwrite_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        paths.ensure_layout().unwrap();
+        let planted = paths.logs_dir.join(".resumepro-write-test");
+        fs::write(&planted, b"do-not-touch").unwrap();
+        paths.assert_writable().unwrap();
+        assert_eq!(fs::read_to_string(&planted).unwrap(), "do-not-touch");
+        let leftovers: Vec<_> = fs::read_dir(&paths.logs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".resumepro-write-test-"))
+            .collect();
+        assert!(leftovers.is_empty(), "probe files must be cleaned up: {leftovers:?}");
+    }
+
+    #[test]
+    fn write_probe_covers_attachments_and_snapshots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        paths.ensure_layout().unwrap();
+        fs::remove_dir_all(&paths.attachments_dir).unwrap();
+        fs::write(&paths.attachments_dir, b"not-a-dir").unwrap();
+        let err = paths.assert_writable().unwrap_err();
+        assert_eq!(err.code(), crate::error::DIR_NOT_WRITABLE);
+        assert_eq!(err.path(), Some(paths.attachments_dir.as_path()));
+    }
+
+    #[test]
+    fn concurrent_write_probes_do_not_leave_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        paths.ensure_layout().unwrap();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..8 {
+                        paths.assert_writable().unwrap();
+                    }
+                });
+            }
+        });
+        for dir in paths.layout_dirs() {
+            let leftovers: Vec<_> = fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(".resumepro-write-test-"))
+                .collect();
+            assert!(leftovers.is_empty(), "{} leftovers: {leftovers:?}", dir.display());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_failure_uses_temp_dir_not_real_home() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        paths.ensure_layout().unwrap();
+        fs::set_permissions(&paths.snapshots_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let err = paths.assert_writable().unwrap_err();
+        fs::set_permissions(&paths.snapshots_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(err.code(), crate::error::DIR_NOT_WRITABLE);
+        assert_eq!(err.path(), Some(paths.snapshots_dir.as_path()));
     }
 }

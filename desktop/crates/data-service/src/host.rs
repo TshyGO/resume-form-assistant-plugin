@@ -222,16 +222,47 @@ pub fn probe() -> ProbeReport {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ProbeLockView {
+    DetectExternal,
+    SelfOwned,
+}
+
 pub fn probe_with(paths: &HostPaths) -> ProbeReport {
-    let writable = paths.ensure_layout().is_ok() && paths.assert_writable().is_ok();
-    let another = lock_is_held(paths).unwrap_or(false);
-    let error = if writable {
-        None
-    } else {
-        paths.ensure_layout().err().map(|e| e.to_dto())
+    build_probe(paths, ProbeLockView::DetectExternal, false)
+}
+
+fn build_probe(paths: &HostPaths, lock_view: ProbeLockView, unique_writer: bool) -> ProbeReport {
+    let layout = paths.ensure_layout();
+    let writable = layout.is_ok();
+    let error = layout.err().map(|e| e.to_dto());
+    let another = match lock_view {
+        ProbeLockView::SelfOwned => false,
+        ProbeLockView::DetectExternal => match lock_is_held(paths) {
+            Ok(held) => held,
+            Err(e) => {
+                return ProbeReport {
+                    ok: false,
+                    error: Some(e.to_dto()),
+                    another_instance_running: false,
+                    unique_writer,
+                    ..probe_paths_only(paths, writable)
+                };
+            }
+        },
     };
     ProbeReport {
         ok: writable && error.is_none(),
+        another_instance_running: another,
+        unique_writer,
+        error,
+        ..probe_paths_only(paths, writable)
+    }
+}
+
+fn probe_paths_only(paths: &HostPaths, writable: bool) -> ProbeReport {
+    ProbeReport {
+        ok: false,
         app_version: APP_VERSION.to_string(),
         product_name: PRODUCT_NAME.to_string(),
         identifier: IDENTIFIER.to_string(),
@@ -244,24 +275,48 @@ pub fn probe_with(paths: &HostPaths) -> ProbeReport {
         cache_dir: paths.cache_dir.display().to_string(),
         current_pointer: paths.current_pointer.display().to_string(),
         writable,
-        another_instance_running: another,
+        another_instance_running: false,
         unique_writer: false,
         autostart_enabled: false,
         native_messaging_registered: false,
         reminders_implemented: false,
-        error,
+        error: None,
     }
 }
 
 pub fn diagnostics_from(paths: &HostPaths, unique_writer: bool, extra: &[(&str, &str)]) -> serde_json::Value {
-    let mut report = probe_with(paths);
-    report.unique_writer = unique_writer;
+    let lock_view = if unique_writer {
+        ProbeLockView::SelfOwned
+    } else {
+        ProbeLockView::DetectExternal
+    };
+    let report = redact_probe(build_probe(paths, lock_view, unique_writer), paths);
     let mut value = serde_json::to_value(&report).unwrap_or_else(|_| serde_json::json!({}));
+    let replacements = crate::redact::path_replacements(paths);
     if let Some(obj) = value.as_object_mut() {
         for (k, v) in crate::redact::sanitize_context(extra) {
-            obj.insert(k, serde_json::Value::String(v));
+            obj.insert(k, serde_json::Value::String(crate::redact::redact_path(&v, &replacements)));
         }
-        obj.insert("logFile".into(), serde_json::Value::String(logging::log_path(paths).display().to_string()));
+        obj.insert(
+            "logFile".into(),
+            serde_json::Value::String(crate::redact::redact_path(
+                &logging::log_path(paths).display().to_string(),
+                &replacements,
+            )),
+        );
+        let webview = crate::webview::webview_storage(paths);
+        obj.insert("webviewDataManaged".into(), serde_json::Value::Bool(webview.managed_by_app));
+        obj.insert(
+            "webviewDataDir".into(),
+            match webview.webview_data_dir {
+                Some(dir) => serde_json::Value::String(crate::redact::redact_path(
+                    &dir.display().to_string(),
+                    &replacements,
+                )),
+                None => serde_json::Value::Null,
+            },
+        );
+        obj.insert("webviewDataNote".into(), serde_json::Value::String(webview.note));
         obj.insert("d03Note".into(), serde_json::Value::String(
             "D03 should open SQLite under archiveDir and write current.json at currentPointer. D02 does not create archive.db.".into(),
         ));
@@ -270,6 +325,27 @@ pub fn diagnostics_from(paths: &HostPaths, unique_writer: bool, extra: &[(&str, 
         ));
     }
     value
+}
+
+fn redact_probe(mut report: ProbeReport, paths: &HostPaths) -> ProbeReport {
+    let replacements = crate::redact::path_replacements(paths);
+    report.program_dir = report
+        .program_dir
+        .map(|p| crate::redact::redact_path(&p, &replacements));
+    report.data_root = crate::redact::redact_path(&report.data_root, &replacements);
+    report.archive_dir = crate::redact::redact_path(&report.archive_dir, &replacements);
+    report.logs_dir = crate::redact::redact_path(&report.logs_dir, &replacements);
+    report.cache_dir = crate::redact::redact_path(&report.cache_dir, &replacements);
+    report.current_pointer = crate::redact::redact_path(&report.current_pointer, &replacements);
+    if let Some(error) = report.error.as_mut() {
+        error.message = crate::redact::redact_path(&error.message, &replacements);
+        error.path = error
+            .path
+            .as_ref()
+            .map(|p| crate::redact::redact_path(p, &replacements));
+        error.hint = crate::redact::redact_path(&error.hint, &replacements);
+    }
+    report
 }
 
 pub fn write_diagnostics_file(paths: &HostPaths, body: &serde_json::Value) -> Result<std::path::PathBuf, HostError> {
@@ -347,5 +423,44 @@ mod tests {
         let loaded = host.load_pairing_draft();
         assert_eq!(loaded.chrome_extension_id, "abcdefghijklmnopqrstuvwxyzabcdef");
         assert!(!loaded.native_messaging_registered);
+    }
+
+    #[test]
+    fn probe_keeps_layout_error_instead_of_null() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("blocked");
+        fs::write(&blocker, b"file").unwrap();
+        let paths = HostPaths::from_roots(blocker, tmp.path().join("cache"));
+        let probe = probe_with(&paths);
+        assert!(!probe.ok);
+        assert!(!probe.writable);
+        let error = probe.error.expect("probe must keep the layout error");
+        assert!(error.code == DIR_NOT_WRITABLE || error.code == crate::error::DIR_CREATE_FAILED);
+    }
+
+    #[test]
+    fn diagnostics_from_active_host_does_not_report_self_as_another_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = HostPaths::resolve_with(Some(tmp.path().join("data")), None).unwrap();
+        let host = DataHost::initialize_with(paths.clone()).unwrap();
+        let external = probe_with(host.paths());
+        assert!(external.another_instance_running);
+        assert!(!external.unique_writer);
+        let exported = diagnostics_from(host.paths(), true, &[("windowVisible", "true")]);
+        assert_eq!(exported["uniqueWriter"], serde_json::Value::Bool(true));
+        assert_eq!(exported["anotherInstanceRunning"], serde_json::Value::Bool(false));
+        let text = exported.to_string();
+        if let Some(home) = dirs::home_dir() {
+            if let Some(name) = home.file_name() {
+                let name = name.to_string_lossy();
+                if name.len() >= 3 {
+                    assert!(!text.contains(name.as_ref()), "diagnostics leaked user name: {text}");
+                }
+            }
+        }
+        assert!(!text.contains("sk-secret"));
+        drop(host);
+        let after = probe_with(&paths);
+        assert!(!after.another_instance_running);
     }
 }

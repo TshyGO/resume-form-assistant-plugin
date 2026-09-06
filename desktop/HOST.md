@@ -15,7 +15,8 @@ Rust crate：`desktop/crates/data-service`
 | `HostPaths::attachments_dir` / `snapshots_dir` / `tmp_dir` | 附件与快照；D02 只建空目录。 |
 | `HostPaths::archives_retired_dir` | 退役档案。D02 不删除已有数据。 |
 | `HostPaths::logs_dir` | 日志与诊断导出。不要把简历/邮件正文、Key、Cookie 写进来。 |
-| `HostPaths::cache_dir` | WebView 等缓存。Windows 在数据根下 `cache\`；macOS 为 `~/Library/Caches/ResumePro`。 |
+| `HostPaths::cache_dir` | 应用缓存根。Windows 在数据根下 `cache\`；macOS 为 `~/Library/Caches/ResumePro`。 |
+| `webview_storage()` | Windows：WebView2 用户数据实际写在 `cache_dir/webview`（`WEBVIEW2_USER_DATA_FOLDER`）。macOS：当前 Tauri/wry 的 WKWebView **没有** `data_directory`，网站数据留在 identifier `com.resumepro.desktop` 的系统默认存储（常见为 `~/Library/WebKit`），设置页不得把应用缓存目录说成 WebView 配置目录。 |
 | `DataHost::is_writable()` | 目录不可写时返回 `DIR_NOT_WRITABLE`，**不会**改用临时目录。 |
 
 测试/开发可用环境变量 `RESUMEPRO_DATA_DIR`、`RESUMEPRO_CACHE_DIR`（必须是绝对路径）。这不是生产静默回退。

@@ -47,6 +47,42 @@ pub fn sanitize_context(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+pub fn redact_path(value: &str, replacements: &[(String, &str)]) -> String {
+    let mut s = value.to_string();
+    let mut pairs = replacements.to_vec();
+    pairs.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+    for (from, to) in &pairs {
+        if !from.is_empty() && s.contains(from.as_str()) {
+            s = s.replace(from, to);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        if let Some(name) = home.file_name() {
+            let name = name.to_string_lossy();
+            if name.len() >= 3 {
+                s = s.replace(name.as_ref(), "<user>");
+            }
+        }
+    }
+    redact_value(&s)
+}
+
+pub fn path_replacements(paths: &crate::paths::HostPaths) -> Vec<(String, &'static str)> {
+    let mut out = vec![
+        (paths.data_root.display().to_string(), "<data-root>"),
+        (paths.cache_dir.display().to_string(), "<cache-dir>"),
+        (paths.logs_dir.display().to_string(), "<logs-dir>"),
+        (paths.archive_dir.display().to_string(), "<archive-dir>"),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        out.push((home.display().to_string(), "<home>"));
+    }
+    if let Some(exe) = crate::paths::program_dir() {
+        out.push((exe.display().to_string(), "<program-dir>"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,5 +107,23 @@ mod tests {
         );
         assert_eq!(redact_value("sk-abcdefghijklmnopqrstuvwxyz"), "[redacted]");
         assert_eq!(redact_value("windows"), "windows");
+    }
+
+    #[test]
+    fn path_redaction_strips_home_and_data_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let paths = crate::paths::HostPaths::resolve_with(Some(root.clone()), None).unwrap();
+        let raw = format!("{}\\archive\\file", root.display());
+        let redacted = redact_path(&raw, &path_replacements(&paths));
+        assert!(redacted.contains("<data-root>") || redacted.contains("<archive-dir>"));
+        if let Some(home) = dirs::home_dir() {
+            if let Some(name) = home.file_name() {
+                let name = name.to_string_lossy();
+                if name.len() >= 3 {
+                    assert!(!redacted.contains(name.as_ref()), "{redacted}");
+                }
+            }
+        }
     }
 }

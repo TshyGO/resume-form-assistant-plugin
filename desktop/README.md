@@ -6,8 +6,8 @@
 
 ## 依赖
 
-- Node.js 22+ 与 npm
-- Rust 1.77+（已在 Windows 用 rustc 1.94 验证）
+- Node.js 22+ 与 npm（使用已提交的 `package-lock.json`：`npm ci`）
+- Rust：crate 声明 `rust-version = 1.77.2`（Tauri 2.11 锁定依赖的最低声明）。本仓库 Windows 已用 **rustc 1.94.0** 验证。不承诺未在本仓库跑过的更低或中间版本。
 - Windows：WebView2 Runtime（Windows 11 通常已带）
 - macOS 11+：Xcode 命令行工具
 
@@ -15,7 +15,7 @@
 
 ```bash
 npm install
-npm test                 # 宿主单测 + 插件 ZIP 白名单检查
+npm test                 # 宿主/应用单测 + 前端构建 + ZIP 白名单
 npm run desktop:dev      # 开发启动真实 Tauri 窗口
 npm run desktop:build    # 本地打包（不签名、不上架）
 ```
@@ -48,10 +48,22 @@ Windows 产物大致在：
 
 目录不可写时会在设置页给出错误码，不会改用临时目录。重装或再次启动不会删除已有档案目录。
 
-开发覆盖（必须是绝对路径）：
+开发覆盖（必须是绝对路径），需导出后再启动同一进程：
+
+PowerShell：
+
+```powershell
+$env:RESUMEPRO_DATA_DIR = "D:\tmp\Resume Pro Data"
+$env:RESUMEPRO_CACHE_DIR = "D:\tmp\Resume Pro Cache"
+npm run desktop:dev
+```
+
+macOS / bash：
 
 ```bash
-RESUMEPRO_DATA_DIR=... RESUMEPRO_CACHE_DIR=...
+export RESUMEPRO_DATA_DIR="$HOME/tmp/Resume Pro Data"
+export RESUMEPRO_CACHE_DIR="$HOME/tmp/Resume Pro Cache"
+npm run desktop:dev
 ```
 
 ## 生命周期
@@ -73,7 +85,7 @@ Windows（本机已跑过真实 `resume-pro-desktop.exe`，不是浏览器打开
 - 关闭窗口后进程仍在；设置页显示版本、数据目录、日志目录、运行状态
 - 不创建 `archive.db` / `current.json`
 
-macOS：代码按 Application Support / Caches 分支，但当前 mesh 上的 Mac（`100.66.1.9`）SSH 超时，**尚未做实机启动/单实例/目录验收**。不能把 Windows 跑通或“跨平台框架能编译”说成 Mac 已验收。
+macOS：代码按 Application Support / Caches 分支；WKWebView 数据目录与应用缓存目录不是同一处。CI 上的 macOS 作业只做构建/单测，**不是实机 UI 验收**。尚未完成实机启动、单实例、隐藏/恢复、Application Support 与实际 WebView 位置验证。不能把 Windows 跑通或 CI 编译说成 Mac 已验收。
 
 ## 插件回归
 
