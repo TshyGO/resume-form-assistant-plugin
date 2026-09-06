@@ -1,0 +1,41 @@
+{
+  "$id": "https://resumepro.local/protocol/request-envelope.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resume Pro request envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "messageId",
+    "clientInstanceId",
+    "messageType",
+    "occurredAt",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": { "type": "integer", "minimum": 1 },
+    "messageId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "clientInstanceId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "messageType": {
+      "type": "string",
+      "enum": [
+        "health",
+        "handshake",
+        "application.queryCandidates",
+        "job.save",
+        "fill.submit",
+        "snapshot.chunk",
+        "submit.confirm",
+        "outbox.reconcile"
+      ]
+    },
+    "occurredAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$",
+      "description": "UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z."
+    },
+    "archiveId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "restoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "payload": { "type": "object" }
+  }
+}

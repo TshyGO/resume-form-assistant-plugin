@@ -1,0 +1,20 @@
+{
+  "protocolVersion": 1,
+  "messageId": "33333333-3333-4333-8333-333333333333",
+  "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+  "messageType": "snapshot.chunk",
+  "occurredAt": "2026-09-06T12:00:00.000Z",
+  "payload": {
+    "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "snapshotId": "66666666-6666-4666-8666-666666666666",
+    "applicationId": "77777777-7777-4777-8777-777777777777",
+    "chunkIndex": 0,
+    "chunkCount": 2,
+    "chunkSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "snapshotSha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+    "byteSize": 16,
+    "bytesBase64": "MDEyMzQ1Njc="
+  },
+  "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+}

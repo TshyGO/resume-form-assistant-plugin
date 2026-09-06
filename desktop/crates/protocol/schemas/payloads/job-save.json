@@ -1,0 +1,15 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/job-save.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sourceRestoreEpoch", "payloadSha256", "company", "title"],
+  "properties": {
+    "sourceRestoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "payloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "company": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "sourceUrl": { "type": "string", "maxLength": 2000 },
+    "location": { "type": "string" },
+    "applicationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "ok": false,
+  "error": {
+    "code": "restore_epoch_mismatch",
+    "retryable": false,
+    "message": "envelope is not the current archive identity"
+  },
+  "payload": {}
+}
