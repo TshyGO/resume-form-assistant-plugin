@@ -79,7 +79,8 @@ fn check_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError>
     if rest.contains(' ') || rest.is_empty() {
         return Err(forbidden("URL must be https without credentials"));
     }
-    let (authority, path_query_frag) = match rest.find('/') {
+    // Authority ends at the first literal path, query or fragment delimiter.
+    let (authority, path_query_frag) = match rest.find(['/', '?', '#']) {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
     };

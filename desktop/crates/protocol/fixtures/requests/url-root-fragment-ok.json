@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "messageId": "33333333-3333-4333-8333-333333333333",
+  "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+  "messageType": "job.save",
+  "occurredAt": "2026-09-06T12:00:00.000Z",
+  "payload": {
+    "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "company": "合成公司",
+    "title": "后端实习",
+    "payloadSha256": "d13441c195957075f3d38a52048be9bc383003b0958f0f421779c5acf61124d0",
+    "sourceUrl": "https://jobs.example#overview"
+  },
+  "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+}
