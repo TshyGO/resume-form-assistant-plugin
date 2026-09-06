@@ -2,9 +2,13 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
+use base64::Engine;
+
+use crate::digest::{payload_body_sha256, sha256_hex};
 use crate::identity::check_current_identity;
 use crate::receipts::{evaluate_write, reconcile, reconcile_grants_replay};
-use crate::snapshot::ChunkAssembler;
+use crate::schema_lite::{envelope_schema, payload_schema, response_schema, validate_schema};
+use crate::snapshot::{plugin_chunk_ack_payload, plugin_snapshot_ack_payload, ChunkAssembler, Integrity};
 use crate::types::{
     CurrentArchive, MessageKey, MessageType, ReceiptStore, ReconcileStatusKind, StoredOutcome,
     WriteDecision, MAX_ENVELOPE_BYTES,
@@ -50,13 +54,22 @@ fn envelope(message_type: &str, payload: Value) -> Value {
     v
 }
 
+fn stamp_digest(payload: &mut Value) {
+    let digest = payload_body_sha256(payload).unwrap();
+    payload
+        .as_object_mut()
+        .unwrap()
+        .insert("payloadSha256".into(), json!(digest));
+}
+
 fn job_save_payload() -> Value {
-    json!({
+    let mut payload = json!({
         "sourceRestoreEpoch": EPOCH,
-        "payloadSha256": HASH,
         "company": "合成公司",
         "title": "后端实习"
-    })
+    });
+    stamp_digest(&mut payload);
+    payload
 }
 
 struct MapStore(HashMap<MessageKey, StoredOutcome>);
@@ -185,12 +198,14 @@ fn padded_job_save(target: usize) -> Vec<u8> {
         .as_object_mut()
         .unwrap()
         .insert("location".into(), json!(""));
+    stamp_digest(&mut payload);
     let base = serde_json::to_vec(&envelope("job.save", payload.clone())).unwrap();
     assert!(base.len() < target, "base envelope already {0} bytes", base.len());
     payload
         .as_object_mut()
         .unwrap()
         .insert("location".into(), json!("a".repeat(target - base.len())));
+    stamp_digest(&mut payload);
     let bytes = serde_json::to_vec(&envelope("job.save", payload)).unwrap();
     assert_eq!(bytes.len(), target);
     bytes
@@ -221,6 +236,7 @@ fn write_identity_old_epoch_is_not_replay() {
         .as_object_mut()
         .unwrap()
         .insert("sourceRestoreEpoch".into(), json!(EPOCH_OLD));
+    stamp_digest(&mut payload);
     let env = envelope("job.save", payload);
     let req = validate_request_value(&env).unwrap();
     let err = check_current_identity(&req, Some(&current())).unwrap_err();
@@ -229,7 +245,9 @@ fn write_identity_old_epoch_is_not_replay() {
 
 #[test]
 fn replay_conflict_purge_and_profile_isolation() {
-    let req = validate_request_value(&envelope("job.save", job_save_payload())).unwrap();
+    let save_payload = job_save_payload();
+    let digest = save_payload["payloadSha256"].as_str().unwrap().to_string();
+    let req = validate_request_value(&envelope("job.save", save_payload.clone())).unwrap();
     let key = MessageKey {
         client_instance_id: CLIENT_A.into(),
         message_id: MSG.into(),
@@ -240,7 +258,7 @@ fn replay_conflict_purge_and_profile_isolation() {
         key.clone(),
         StoredOutcome::Applied {
             result_id: RESULT.into(),
-            payload_sha256: HASH.into(),
+            payload_sha256: digest.clone(),
         },
     );
     let store = MapStore(map.clone());
@@ -248,11 +266,13 @@ fn replay_conflict_purge_and_profile_isolation() {
         WriteDecision::Replay { result_id } => assert_eq!(result_id, RESULT),
         other => panic!("{other:?}"),
     }
-    let mut other_hash = job_save_payload();
+    let mut other_hash = save_payload.clone();
+    other_hash.as_object_mut().unwrap().insert("title".into(), json!("另一岗位"));
+    let other_digest = payload_body_sha256(&other_hash).unwrap();
     other_hash
         .as_object_mut()
         .unwrap()
-        .insert("payloadSha256".into(), json!(HASH2));
+        .insert("payloadSha256".into(), json!(other_digest));
     let req2 = validate_request_value(&envelope("job.save", other_hash)).unwrap();
     assert_eq!(
         evaluate_write(&req2, Some(&current()), &store).unwrap(),
@@ -262,7 +282,7 @@ fn replay_conflict_purge_and_profile_isolation() {
     purged.insert(
         key,
         StoredOutcome::Purged {
-            payload_sha256: HASH.into(),
+            payload_sha256: digest,
         },
     );
     assert_eq!(
@@ -281,71 +301,70 @@ fn replay_conflict_purge_and_profile_isolation() {
     );
 }
 
-fn chunk(index: u32, count: u32, message_id: &str) -> Value {
-    let mut v = envelope(
-        "snapshot.chunk",
-        json!({
-            "sourceRestoreEpoch": EPOCH,
-            "snapshotId": SNAP,
-            "applicationId": APP,
-            "chunkIndex": index,
-            "chunkCount": count,
-            "chunkSha256": HASH,
-            "snapshotSha256": HASH2,
-            "byteSize": 12,
-            "bytesBase64": "5Lit5paH"
-        }),
-    );
-    v.as_object_mut()
-        .unwrap()
-        .insert("messageId".into(), json!(message_id));
-    v
+fn load_fixture(rel: &str) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(rel);
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn chunk_fixture(rel: &str) -> Value {
+    load_fixture(rel)
 }
 
 #[test]
 fn snapshot_chunks_cursor_acks_and_conflicts() {
     let mut asm = ChunkAssembler::new();
-    let c0 = validate_request_value(&chunk(0, 2, MSG)).unwrap();
+    let c0 = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
     let a0 = asm.apply_chunk(&c0).unwrap();
-    assert_eq!(a0.ack_kind, crate::AckKind::Chunk);
+    assert_eq!(a0.integrity, Integrity::Partial);
     assert_eq!(a0.chunk_cursor, 1);
-    let c1 = validate_request_value(&chunk(1, 2, MSG2)).unwrap();
+    assert!(!a0.ready_to_persist());
+    let c1 = validate_request_value(&chunk_fixture("requests/snapshot-chunk-1-ok.json")).unwrap();
     let a1 = asm.apply_chunk(&c1).unwrap();
-    assert_eq!(a1.ack_kind, crate::AckKind::Snapshot);
+    assert_eq!(a1.integrity, Integrity::VerifiedInMemory);
     assert_eq!(a1.chunk_cursor, 2);
+    assert!(a1.ready_to_persist());
     let replay = asm.apply_chunk(&c0).unwrap();
     assert!(replay.replay);
-    assert_eq!(replay.ack_kind, crate::AckKind::Snapshot);
+    assert_eq!(replay.integrity, Integrity::VerifiedInMemory);
 
     let mut asm = ChunkAssembler::new();
-    let later = validate_request_value(&chunk(1, 2, MSG2)).unwrap();
+    let later = validate_request_value(&chunk_fixture("requests/snapshot-chunk-1-ok.json")).unwrap();
     let ack = asm.apply_chunk(&later).unwrap();
-    assert_eq!(ack.ack_kind, crate::AckKind::Chunk);
+    assert_eq!(ack.integrity, Integrity::Partial);
     assert_eq!(ack.chunk_cursor, 0, "later ACK must not advance cursor");
-    assert!(!asm.session(CLIENT_A, SNAP, EPOCH).unwrap().complete());
-
-    let mut conflict_payload = chunk(0, 2, MSG);
-    conflict_payload["payload"]["chunkSha256"] = json!(HASH2);
-    let bad = validate_request_value(&conflict_payload).unwrap();
-    let mut asm = ChunkAssembler::new();
-    asm.apply_chunk(&c0).unwrap();
-    assert_eq!(asm.apply_chunk(&bad).unwrap_err().code.as_str(), "conflict");
+    assert!(!asm.session(CLIENT_A, SNAP, EPOCH).unwrap().integrity_verified());
 }
 
 #[test]
 fn missing_chunk_and_restart_reuses_message_id() {
     let mut asm = ChunkAssembler::new();
-    let c1 = validate_request_value(&chunk(1, 2, MSG2)).unwrap();
+    let c1 = validate_request_value(&chunk_fixture("requests/snapshot-chunk-1-ok.json")).unwrap();
     asm.apply_chunk(&c1).unwrap();
     assert_eq!(asm.session(CLIENT_A, SNAP, EPOCH).unwrap().chunk_cursor(), 0);
-    let c0 = validate_request_value(&chunk(0, 2, MSG)).unwrap();
+    let c0 = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
     let ack = asm.apply_chunk(&c0).unwrap();
-    assert_eq!(ack.ack_kind, crate::AckKind::Snapshot);
+    assert_eq!(ack.integrity, Integrity::VerifiedInMemory);
     let mut restarted = ChunkAssembler::new();
     let again = restarted.apply_chunk(&c0).unwrap();
     assert!(!again.replay);
     let replay = restarted.apply_chunk(&c0).unwrap();
     assert!(replay.replay);
+}
+
+#[test]
+fn corrupt_snapshot_does_not_yield_complete_integrity() {
+    let wrong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut first = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    let mut second = chunk_fixture("requests/snapshot-chunk-1-ok.json");
+    first["payload"]["snapshotSha256"] = json!(wrong);
+    second["payload"]["snapshotSha256"] = json!(wrong);
+    let mut asm = ChunkAssembler::new();
+    let c0 = validate_request_value(&first).unwrap();
+    asm.apply_chunk(&c0).unwrap();
+    let c1 = validate_request_value(&second).unwrap();
+    assert_eq!(asm.apply_chunk(&c1).unwrap_err().code.as_str(), "invalid_payload");
+    assert!(!asm.session(CLIENT_A, SNAP, EPOCH).unwrap().integrity_verified());
+    assert_eq!(asm.session(CLIENT_A, SNAP, EPOCH).unwrap().chunks.len(), 1);
 }
 
 #[test]
@@ -400,8 +419,10 @@ fn outbox_reconcile_is_read_only_and_echoes_full_identity() {
     assert_eq!(rows[1].status, ReconcileStatusKind::Purged);
     assert!(rows[1].result_id.is_none());
     assert!(!reconcile_grants_replay(&rows[0]));
-    let mut write = envelope("job.save", job_save_payload());
-    write["payload"]["sourceRestoreEpoch"] = json!(EPOCH_OLD);
+    let mut write_payload = job_save_payload();
+    write_payload["sourceRestoreEpoch"] = json!(EPOCH_OLD);
+    stamp_digest(&mut write_payload);
+    let write = envelope("job.save", write_payload);
     let write_req = validate_request_value(&write).unwrap();
     assert_eq!(
         check_current_identity(&write_req, Some(&current()))
@@ -482,7 +503,17 @@ fn structure_ok_is_not_permission_to_write() {
 #[test]
 fn secrets_and_origins() {
     let mut payload = job_save_payload();
-    payload.as_object_mut().unwrap().insert("apiKey".into(), json!("sk-test"));
+    payload
+        .as_object_mut()
+        .unwrap()
+        .insert("title".into(), json!("Risk-Management Analyst"));
+    let digest = payload_body_sha256(&payload).unwrap();
+    payload
+        .as_object_mut()
+        .unwrap()
+        .insert("payloadSha256".into(), json!(digest));
+    validate_request_value(&envelope("job.save", payload.clone())).unwrap();
+    payload.as_object_mut().unwrap().insert("apiKey".into(), json!("sk-abcdefghijklmnopqrstuvwxyz"));
     assert_eq!(
         validate_request_value(&envelope("job.save", payload))
             .unwrap_err()
@@ -504,26 +535,60 @@ fn query_candidates_and_fill_submit_ok() {
         json!({"company": "合成公司"}),
     ))
     .unwrap();
-    validate_request_value(&envelope(
-        "fill.submit",
-        json!({
-            "sourceRestoreEpoch": EPOCH,
-            "payloadSha256": HASH,
-            "applicationId": APP,
-            "snapshotId": SNAP,
-            "sha256": HASH2
-        }),
-    ))
-    .unwrap();
-    validate_request_value(&envelope(
-        "submit.confirm",
-        json!({
-            "sourceRestoreEpoch": EPOCH,
-            "payloadSha256": HASH,
-            "applicationId": APP
-        }),
-    ))
-    .unwrap();
+    let fill = load_fixture("requests/fill-submit-ok.json");
+    assert_eq!(fill["payload"]["applicationId"].as_str(), Some(APP));
+    validate_request_value(&fill).unwrap();
+    validate_request_value(&load_fixture("requests/submit-confirm-ok.json")).unwrap();
+}
+
+#[test]
+fn shared_catalog_agrees_with_schema_and_protocol() {
+    let catalog: Value = load_fixture("catalog.json");
+    for entry in catalog["requests"].as_array().unwrap() {
+        let rel = format!("../fixtures/{}", entry["path"].as_str().unwrap());
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(entry["path"].as_str().unwrap());
+        let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let schema_ok: Result<(), ProtocolError> = (|| {
+            validate_schema(&value, &envelope_schema())?;
+            if let Some(schema) = payload_schema(value.get("messageType").and_then(Value::as_str).unwrap_or("")) {
+                validate_schema(&value["payload"], &schema)?;
+            }
+            Ok(())
+        })();
+        if entry["schema"] == "accept" {
+            assert!(schema_ok.is_ok(), "{} schema {:?}", entry["id"], schema_ok.err());
+        } else {
+            assert!(schema_ok.is_err(), "{} schema should reject", entry["id"]);
+        }
+        let protocol = validate_request_value(&value);
+        if entry["protocol"]["accept"] == true {
+            assert!(protocol.is_ok(), "{} protocol {:?}", entry["id"], protocol.err());
+        } else {
+            let err = protocol.unwrap_err();
+            assert_eq!(err.code.as_str(), entry["protocol"]["code"].as_str().unwrap(), "{}", entry["id"]);
+        }
+        let _ = rel;
+    }
+    for entry in catalog["responses"].as_array().unwrap() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(entry["path"].as_str().unwrap());
+        let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let schema_ok = validate_schema(&value, &response_schema());
+        if entry["schema"] == "accept" {
+            assert!(schema_ok.is_ok(), "{} response schema {:?}", entry["id"], schema_ok.err());
+        } else {
+            assert!(schema_ok.is_err());
+        }
+        let ty = MessageType::parse(entry["requestType"].as_str().unwrap()).unwrap();
+        let protocol = validate_response_value(&value, ty);
+        if entry["protocol"]["accept"] == true {
+            assert!(protocol.is_ok(), "{} {:?}", entry["id"], protocol.err());
+        } else {
+            assert_eq!(
+                protocol.unwrap_err().code.as_str(),
+                entry["protocol"]["code"].as_str().unwrap()
+            );
+        }
+    }
 }
 
 #[test]
@@ -567,4 +632,70 @@ fn snapshot_chunk_ack_kinds_are_distinct() {
         "payload": {"chunkIndex": 0}
     });
     assert!(validate_response_value(&missing_kind, MessageType::SnapshotChunk).is_err());
+}
+
+#[test]
+fn duplicate_chunk_conflict_does_not_pollute_valid_session() {
+    let mut asm = ChunkAssembler::new();
+    let c0 = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
+    asm.apply_chunk(&c0).unwrap();
+    let mut other = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    other["messageId"] = json!(MSG2);
+    let bytes = b"01234568";
+    other["payload"]["bytesBase64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
+    other["payload"]["chunkSha256"] = json!(sha256_hex(bytes));
+    let conflict = validate_request_value(&other).unwrap();
+    assert_eq!(asm.apply_chunk(&conflict).unwrap_err().code.as_str(), "conflict");
+    let session = asm.session(CLIENT_A, SNAP, EPOCH).unwrap();
+    assert_eq!(session.chunks.len(), 1);
+    assert_eq!(session.chunks.get(&0).unwrap().message_id, MSG);
+    assert_eq!(session.chunks.get(&0).unwrap().bytes, b"01234567");
+}
+
+#[test]
+fn invalid_chunk_does_not_create_or_pollute_session() {
+    let mut asm = ChunkAssembler::new();
+    let mut bad = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    bad["payload"]["bytesBase64"] = json!("!!!");
+    let mut req = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
+    req.payload
+        .as_object_mut()
+        .unwrap()
+        .insert("bytesBase64".into(), json!("!!!"));
+    assert_eq!(asm.apply_chunk(&req).unwrap_err().code.as_str(), "invalid_payload");
+    assert!(asm.session(CLIENT_A, SNAP, EPOCH).is_none());
+    let _ = bad;
+    let good = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
+    asm.apply_chunk(&good).unwrap();
+    let mut later = validate_request_value(&chunk_fixture("requests/snapshot-chunk-1-ok.json")).unwrap();
+    later
+        .payload
+        .as_object_mut()
+        .unwrap()
+        .insert("bytesBase64".into(), json!("!!!!"));
+    assert_eq!(asm.apply_chunk(&later).unwrap_err().code.as_str(), "invalid_payload");
+    let session = asm.session(CLIENT_A, SNAP, EPOCH).unwrap();
+    assert_eq!(session.chunks.len(), 1);
+    assert!(!session.integrity_verified());
+}
+
+#[test]
+fn assembler_session_cap_and_plugin_ack_never_snapshot() {
+    let mut asm = ChunkAssembler::new();
+    let template = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    for i in 0..16u8 {
+        let mut env = template.clone();
+        env["payload"]["snapshotId"] = json!(format!("66666666-6666-4666-8666-6666666666{i:02}"));
+        let req = validate_request_value(&env).unwrap();
+        let outcome = asm.apply_chunk(&req).unwrap();
+        assert_eq!(plugin_chunk_ack_payload(&outcome)["ackKind"], "chunk");
+        assert_eq!(crate::ack_kind_for_plugin(&outcome), crate::types::AckKind::Chunk);
+        assert!(!outcome.ready_to_persist());
+    }
+    let mut extra = template;
+    extra["payload"]["snapshotId"] = json!("66666666-6666-4666-8666-666666666699");
+    let req = validate_request_value(&extra).unwrap();
+    assert_eq!(asm.apply_chunk(&req).unwrap_err().code.as_str(), "unavailable");
+    let persisted = plugin_snapshot_ack_payload(SNAP, 1, 2);
+    assert_eq!(persisted["ackKind"], "snapshot");
 }

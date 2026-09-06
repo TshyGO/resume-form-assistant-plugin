@@ -6,6 +6,9 @@
   "suggestedRawChunkBytes": 32768,
   "maxSnapshotBytes": 2097152,
   "maxReconcileItems": 32,
+  "maxChunkCount": 128,
+  "maxAssemblerSessions": 16,
+  "occurredAtSubset": "UTC RFC3339: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ with a real calendar date and clock; Z only, no numeric offsets.",
   "identityForbidden": ["health", "handshake"],
   "identityRequired": [
     "application.queryCandidates",

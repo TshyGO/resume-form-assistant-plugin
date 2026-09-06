@@ -41,7 +41,10 @@ fn walk(value: &Value) -> Result<(), ProtocolError> {
         }
         Value::String(s) => {
             let lower = s.to_ascii_lowercase();
-            if s.contains("sk-") || lower.contains("bearer ") {
+            let api_key_like = lower
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .any(|token| token.starts_with("sk-") && token.len() >= 20);
+            if api_key_like || lower.contains("bearer ") {
                 return Err(ProtocolError::new(
                     ErrorCode::SecretForbidden,
                     Layer::Secrets,

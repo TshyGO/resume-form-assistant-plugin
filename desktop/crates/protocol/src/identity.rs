@@ -18,8 +18,20 @@ pub fn check_current_identity(
             "desktop current archive pointer is not available",
         ));
     };
-    let archive = req.archive_id.as_deref().unwrap();
-    let epoch = req.restore_epoch.as_deref().unwrap();
+    let archive = req.archive_id.as_deref().ok_or_else(|| {
+        ProtocolError::new(
+            ErrorCode::IdentityMissing,
+            Layer::IdentityPresence,
+            "archiveId is required for this messageType",
+        )
+    })?;
+    let epoch = req.restore_epoch.as_deref().ok_or_else(|| {
+        ProtocolError::new(
+            ErrorCode::IdentityMissing,
+            Layer::IdentityPresence,
+            "restoreEpoch is required for this messageType",
+        )
+    })?;
     if archive != current.archive_id || epoch != current.restore_epoch {
         return Err(ProtocolError::new(
             ErrorCode::RestoreEpochMismatch,

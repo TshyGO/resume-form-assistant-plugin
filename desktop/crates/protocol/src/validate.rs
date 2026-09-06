@@ -1,15 +1,14 @@
 use serde_json::{Map, Value};
 
+use crate::digest::{decode_standard_base64, payload_body_sha256, sha256_hex};
 use crate::error::{ErrorCode, Layer, ProtocolError};
+use crate::schema_lite::{envelope_schema, payload_schema, response_schema, validate_schema};
 use crate::secrets::reject_secrets;
+use crate::time::is_utc_timestamp;
 use crate::types::{
     MessageType, Request, MAX_ENVELOPE_BYTES, MAX_PROTOCOL_VERSION, MAX_RECONCILE_ITEMS,
     MAX_SNAPSHOT_BYTES, MIN_PROTOCOL_VERSION,
 };
-
-const UUID: &str = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
-const SHA256: &str = r"^[0-9a-f]{64}$";
-const TIME: &str = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$";
 
 pub fn utf8_json_len(value: &Value) -> usize {
     serde_json::to_vec(value).map(|b| b.len()).unwrap_or(usize::MAX)
@@ -43,47 +42,63 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
     let obj = value.as_object().ok_or_else(|| {
         ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "request must be an object")
     })?;
-    reject_unknown_keys(
-        obj,
-        &[
-            "protocolVersion",
-            "messageId",
-            "clientInstanceId",
-            "messageType",
-            "occurredAt",
-            "archiveId",
-            "restoreEpoch",
-            "payload",
-        ],
-    )?;
-    let protocol_version = int_field(obj, "protocolVersion")?;
-    if protocol_version < MIN_PROTOCOL_VERSION as i64 || protocol_version > MAX_PROTOCOL_VERSION as i64
-    {
-        return Err(ProtocolError::new(
-            ErrorCode::ProtocolIncompatible,
-            Layer::Structure,
-            format!("protocolVersion {protocol_version} is outside {MIN_PROTOCOL_VERSION}..{MAX_PROTOCOL_VERSION}"),
-        ));
+    if let Some(Value::String(message_type)) = obj.get("messageType") {
+        MessageType::parse(message_type)?;
     }
-    let message_type = MessageType::parse(&string_field(obj, "messageType")?)?;
-    let message_id = uuid_field(obj, "messageId")?;
-    let client_instance_id = uuid_field(obj, "clientInstanceId")?;
-    let occurred_at = string_field(obj, "occurredAt")?;
-    if !matches_pattern(&occurred_at, TIME) {
+    if let Some(version) = obj.get("protocolVersion") {
+        if !version.is_i64() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "protocolVersion must be an integer",
+            ));
+        }
+        let protocol_version = version.as_i64().unwrap();
+        if protocol_version < MIN_PROTOCOL_VERSION as i64 || protocol_version > MAX_PROTOCOL_VERSION as i64
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::ProtocolIncompatible,
+                Layer::Structure,
+                format!("protocolVersion {protocol_version} is outside {MIN_PROTOCOL_VERSION}..{MAX_PROTOCOL_VERSION}"),
+            ));
+        }
+    }
+    validate_schema(value, &envelope_schema())?;
+    let protocol_version = obj.get("protocolVersion").and_then(Value::as_i64).unwrap();
+    let message_type = MessageType::parse(obj.get("messageType").and_then(Value::as_str).unwrap())?;
+    let message_id = obj.get("messageId").and_then(Value::as_str).unwrap().to_string();
+    let client_instance_id = obj
+        .get("clientInstanceId")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
+    let occurred_at = obj.get("occurredAt").and_then(Value::as_str).unwrap().to_string();
+    if !is_utc_timestamp(&occurred_at) {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             Layer::Structure,
-            "occurredAt must be UTC RFC3339 (...Z)",
+            "occurredAt must be a real UTC RFC3339 timestamp (...Z)",
         ));
     }
-    let archive_id = optional_uuid(obj, "archiveId")?;
-    let restore_epoch = optional_uuid(obj, "restoreEpoch")?;
+    let archive_id = obj.get("archiveId").and_then(Value::as_str).map(str::to_string);
+    let restore_epoch = obj.get("restoreEpoch").and_then(Value::as_str).map(str::to_string);
     enforce_identity(message_type, archive_id.is_some(), restore_epoch.is_some())?;
-    let payload = obj.get("payload").and_then(Value::as_object).ok_or_else(|| {
+    let payload_value = obj.get("payload").ok_or_else(|| {
         ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "payload must be an object")
     })?;
-    reject_secrets(&Value::Object(payload.clone()))?;
-    validate_payload(message_type, payload)?;
+    if payload_value.as_array().is_some() || !payload_value.is_object() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "payload must be an object",
+        ));
+    }
+    let payload = payload_value.as_object().unwrap();
+    reject_secrets(payload_value)?;
+    if let Some(schema) = payload_schema(message_type.as_str()) {
+        validate_schema(payload_value, &schema)?;
+    }
+    validate_payload_extras(message_type, payload)?;
     if message_type == MessageType::OutboxReconcile {
         let items = payload.get("items").and_then(Value::as_array).unwrap();
         for item in items {
@@ -98,17 +113,6 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
                     "outbox.reconcile items must use the caller clientInstanceId",
                 ));
             }
-        }
-    }
-    if message_type == MessageType::Handshake {
-        let min = payload.get("minProtocolVersion").and_then(Value::as_i64).unwrap();
-        let max = payload.get("maxProtocolVersion").and_then(Value::as_i64).unwrap();
-        if max < MIN_PROTOCOL_VERSION as i64 || min > MAX_PROTOCOL_VERSION as i64 || min > max {
-            return Err(ProtocolError::new(
-                ErrorCode::ProtocolIncompatible,
-                Layer::Structure,
-                "handshake protocol ranges do not overlap",
-            ));
         }
     }
     Ok(Request {
@@ -142,180 +146,114 @@ fn enforce_identity(ty: MessageType, has_archive: bool, has_epoch: bool) -> Resu
     Ok(())
 }
 
-fn validate_payload(ty: MessageType, payload: &Map<String, Value>) -> Result<(), ProtocolError> {
+fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Result<(), ProtocolError> {
     match ty {
-        MessageType::Health => reject_unknown_keys(payload, &[])?,
         MessageType::Handshake => {
-            require_keys(payload, &["pluginVersion", "minProtocolVersion", "maxProtocolVersion"])?;
-            reject_unknown_keys(
-                payload,
-                &["pluginVersion", "minProtocolVersion", "maxProtocolVersion"],
-            )?;
-            string_min(payload, "pluginVersion", 1)?;
-            int_field(payload, "minProtocolVersion")?;
-            int_field(payload, "maxProtocolVersion")?;
+            let min = payload.get("minProtocolVersion").and_then(Value::as_i64).unwrap();
+            let max = payload.get("maxProtocolVersion").and_then(Value::as_i64).unwrap();
+            if max < MIN_PROTOCOL_VERSION as i64 || min > MAX_PROTOCOL_VERSION as i64 || min > max {
+                return Err(ProtocolError::new(
+                    ErrorCode::ProtocolIncompatible,
+                    Layer::Structure,
+                    "handshake protocol ranges do not overlap",
+                ));
+            }
         }
-        MessageType::QueryCandidates => {
-            require_keys(payload, &["company"])?;
-            reject_unknown_keys(payload, &["company", "title", "sourceUrl"])?;
-            string_min(payload, "company", 1)?;
-        }
-        MessageType::JobSave => {
-            require_keys(payload, &["sourceRestoreEpoch", "payloadSha256", "company", "title"])?;
-            reject_unknown_keys(
-                payload,
-                &[
-                    "sourceRestoreEpoch",
-                    "payloadSha256",
-                    "company",
-                    "title",
-                    "sourceUrl",
-                    "location",
-                    "applicationId",
-                ],
-            )?;
-            uuid_field(payload, "sourceRestoreEpoch")?;
-            sha_field(payload, "payloadSha256")?;
-            string_min(payload, "company", 1)?;
-            string_min(payload, "title", 1)?;
-            optional_uuid(payload, "applicationId")?;
-        }
-        MessageType::FillSubmit | MessageType::SubmitConfirm => {
-            require_keys(payload, &["sourceRestoreEpoch", "payloadSha256", "applicationId"])?;
-            let allowed = if ty == MessageType::FillSubmit {
-                &[
-                    "sourceRestoreEpoch",
-                    "payloadSha256",
-                    "applicationId",
-                    "snapshotId",
-                    "sha256",
-                ][..]
-            } else {
-                &["sourceRestoreEpoch", "payloadSha256", "applicationId"][..]
-            };
-            reject_unknown_keys(payload, allowed)?;
-            uuid_field(payload, "sourceRestoreEpoch")?;
-            sha_field(payload, "payloadSha256")?;
-            uuid_field(payload, "applicationId")?;
-            if ty == MessageType::FillSubmit {
-                optional_uuid(payload, "snapshotId")?;
-                if payload.contains_key("sha256") {
-                    sha_field(payload, "sha256")?;
-                }
+        MessageType::JobSave | MessageType::FillSubmit | MessageType::SubmitConfirm => {
+            let declared = payload
+                .get("payloadSha256")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "missing payloadSha256")
+                })?;
+            let actual = payload_body_sha256(&Value::Object(payload.clone()))?;
+            if declared != actual {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "payloadSha256 does not match the payload body",
+                ));
             }
         }
         MessageType::SnapshotChunk => {
-            require_keys(
-                payload,
-                &[
-                    "sourceRestoreEpoch",
-                    "snapshotId",
-                    "applicationId",
-                    "chunkIndex",
-                    "chunkCount",
-                    "chunkSha256",
-                    "snapshotSha256",
-                    "byteSize",
-                    "bytesBase64",
-                ],
-            )?;
-            reject_unknown_keys(
-                payload,
-                &[
-                    "sourceRestoreEpoch",
-                    "snapshotId",
-                    "applicationId",
-                    "chunkIndex",
-                    "chunkCount",
-                    "chunkSha256",
-                    "snapshotSha256",
-                    "byteSize",
-                    "bytesBase64",
-                ],
-            )?;
-            uuid_field(payload, "sourceRestoreEpoch")?;
-            uuid_field(payload, "snapshotId")?;
-            uuid_field(payload, "applicationId")?;
-            sha_field(payload, "chunkSha256")?;
-            sha_field(payload, "snapshotSha256")?;
-            string_min(payload, "bytesBase64", 1)?;
-            let index = int_field(payload, "chunkIndex")?;
-            let count = int_field(payload, "chunkCount")?;
-            let byte_size = int_field(payload, "byteSize")?;
-            if index < 0 || count < 1 || index >= count {
+            let index = payload.get("chunkIndex").and_then(Value::as_i64).unwrap();
+            let count = payload.get("chunkCount").and_then(Value::as_i64).unwrap();
+            if index >= count {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
                     Layer::Structure,
                     "chunkIndex must be in 0..chunkCount",
                 ));
             }
-            if byte_size < 1 || byte_size as usize > MAX_SNAPSHOT_BYTES {
+            let byte_size = payload.get("byteSize").and_then(Value::as_i64).unwrap() as usize;
+            if byte_size > MAX_SNAPSHOT_BYTES {
                 return Err(ProtocolError::new(
                     ErrorCode::PayloadTooLarge,
                     Layer::Size,
                     "snapshot byteSize exceeds 2 MiB",
                 ));
             }
+            let b64 = payload.get("bytesBase64").and_then(Value::as_str).unwrap();
+            let decoded = decode_standard_base64(b64)?;
+            if decoded.is_empty() || decoded.len() > byte_size {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "decoded chunk length is empty or exceeds snapshot byteSize",
+                ));
+            }
+            let declared = payload.get("chunkSha256").and_then(Value::as_str).unwrap();
+            if sha256_hex(&decoded) != declared {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "chunkSha256 does not match decoded bytes",
+                ));
+            }
+            if count == 1 {
+                let snap = payload.get("snapshotSha256").and_then(Value::as_str).unwrap();
+                if decoded.len() != byte_size || sha256_hex(&decoded) != snap {
+                    return Err(ProtocolError::new(
+                        ErrorCode::InvalidPayload,
+                        Layer::Structure,
+                        "single-chunk snapshot hash or length mismatch",
+                    ));
+                }
+            }
         }
         MessageType::OutboxReconcile => {
-            require_keys(payload, &["items"])?;
-            reject_unknown_keys(payload, &["items"])?;
-            let items = payload.get("items").and_then(Value::as_array).ok_or_else(|| {
-                ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "items must be an array")
-            })?;
-            if items.is_empty() || items.len() > MAX_RECONCILE_ITEMS {
+            let items = payload.get("items").and_then(Value::as_array).unwrap();
+            if items.len() > MAX_RECONCILE_ITEMS {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
                     Layer::Structure,
                     format!("outbox.reconcile items must be 1..{MAX_RECONCILE_ITEMS}"),
                 ));
             }
-            for item in items {
-                let obj = item.as_object().ok_or_else(|| {
-                    ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "reconcile item must be object")
-                })?;
-                require_keys(
-                    obj,
-                    &["clientInstanceId", "messageId", "sourceRestoreEpoch", "payloadSha256"],
-                )?;
-                reject_unknown_keys(
-                    obj,
-                    &[
-                        "clientInstanceId",
-                        "messageId",
-                        "sourceRestoreEpoch",
-                        "payloadSha256",
-                        "snapshotId",
-                        "chunkIndex",
-                    ],
-                )?;
-                uuid_field(obj, "clientInstanceId")?;
-                uuid_field(obj, "messageId")?;
-                uuid_field(obj, "sourceRestoreEpoch")?;
-                sha_field(obj, "payloadSha256")?;
-                optional_uuid(obj, "snapshotId")?;
-            }
         }
+        _ => {}
     }
     Ok(())
 }
 
 pub fn validate_response_value(value: &Value, request_type: MessageType) -> Result<(), ProtocolError> {
-    let obj = value.as_object().ok_or_else(|| {
-        ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "response must be an object")
-    })?;
-    reject_unknown_keys(
-        obj,
-        &["protocolVersion", "correlationId", "resultId", "ok", "error", "payload"],
-    )?;
-    int_field(obj, "protocolVersion")?;
-    uuid_field(obj, "correlationId")?;
-    let ok = obj.get("ok").and_then(Value::as_bool).ok_or_else(|| {
-        ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "ok must be boolean")
-    })?;
-    obj.get("payload").and_then(Value::as_object).ok_or_else(|| {
-        ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "payload must be an object")
-    })?;
+    if value.as_array().is_some() || !value.is_object() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "response must be an object",
+        ));
+    }
+    validate_schema(value, &response_schema())?;
+    let obj = value.as_object().unwrap();
+    let ok = obj.get("ok").and_then(Value::as_bool).unwrap();
+    if obj.get("payload").map(Value::is_array).unwrap_or(false) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "payload must be an object",
+        ));
+    }
     if ok {
         if obj.contains_key("error") {
             return Err(ProtocolError::new(
@@ -324,7 +262,7 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
                 "ok:true response must not include error",
             ));
         }
-        if request_type.is_write() && optional_uuid(obj, "resultId")?.is_none() {
+        if request_type.is_write() && obj.get("resultId").and_then(Value::as_str).is_none() {
             return Err(ProtocolError::new(
                 ErrorCode::InvalidPayload,
                 Layer::Structure,
@@ -344,137 +282,14 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
                 ));
             }
         }
-    } else {
-        if obj.contains_key("resultId") {
-            return Err(ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                Layer::Structure,
-                "ok:false response must not include resultId",
-            ));
-        }
-        let error = obj.get("error").and_then(Value::as_object).ok_or_else(|| {
-            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "ok:false requires error")
-        })?;
-        require_keys(error, &["code", "retryable"])?;
-        string_field(error, "code")?;
-        error.get("retryable").and_then(Value::as_bool).ok_or_else(|| {
-            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, "error.retryable must be boolean")
-        })?;
-    }
-    Ok(())
-}
-
-fn reject_unknown_keys(obj: &Map<String, Value>, allowed: &[&str]) -> Result<(), ProtocolError> {
-    for key in obj.keys() {
-        if !allowed.contains(&key.as_str()) {
-            return Err(ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                Layer::Structure,
-                format!("unexpected field {key}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn require_keys(obj: &Map<String, Value>, keys: &[&str]) -> Result<(), ProtocolError> {
-    for key in keys {
-        if !obj.contains_key(*key) {
-            return Err(ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                Layer::Structure,
-                format!("missing field {key}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn string_field(obj: &Map<String, Value>, key: &str) -> Result<String, ProtocolError> {
-    obj.get(key)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, format!("{key} must be a string"))
-        })
-}
-
-fn string_min(obj: &Map<String, Value>, key: &str, min: usize) -> Result<String, ProtocolError> {
-    let s = string_field(obj, key)?;
-    if s.chars().count() < min {
+    } else if obj.contains_key("resultId") {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             Layer::Structure,
-            format!("{key} is too short"),
+            "ok:false response must not include resultId",
         ));
     }
-    Ok(s)
-}
-
-fn int_field(obj: &Map<String, Value>, key: &str) -> Result<i64, ProtocolError> {
-    obj.get(key)
-        .and_then(Value::as_i64)
-        .ok_or_else(|| {
-            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, format!("{key} must be an integer"))
-        })
-}
-
-fn uuid_field(obj: &Map<String, Value>, key: &str) -> Result<String, ProtocolError> {
-    let s = string_field(obj, key)?;
-    if !matches_pattern(&s, UUID) {
-        return Err(ProtocolError::new(
-            ErrorCode::InvalidPayload,
-            Layer::Structure,
-            format!("{key} must be a UUID"),
-        ));
-    }
-    Ok(s)
-}
-
-fn optional_uuid(obj: &Map<String, Value>, key: &str) -> Result<Option<String>, ProtocolError> {
-    if !obj.contains_key(key) {
-        return Ok(None);
-    }
-    Ok(Some(uuid_field(obj, key)?))
-}
-
-fn sha_field(obj: &Map<String, Value>, key: &str) -> Result<String, ProtocolError> {
-    let s = string_field(obj, key)?;
-    if !matches_pattern(&s, SHA256) {
-        return Err(ProtocolError::new(
-            ErrorCode::InvalidPayload,
-            Layer::Structure,
-            format!("{key} must be lowercase hex SHA-256"),
-        ));
-    }
-    Ok(s)
-}
-
-fn matches_pattern(value: &str, pattern: &str) -> bool {
-    regex_lite(value, pattern)
-}
-
-fn regex_lite(value: &str, pattern: &str) -> bool {
-    match pattern {
-        p if p == UUID => {
-            let parts: Vec<&str> = value.split('-').collect();
-            parts.len() == 5
-                && parts[0].len() == 8
-                && parts[1].len() == 4
-                && parts[2].len() == 4
-                && parts[3].len() == 4
-                && parts[4].len() == 12
-                && value.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-        }
-        p if p == SHA256 => value.len() == 64 && value.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
-        p if p == TIME => {
-            value.ends_with('Z')
-                && value.len() >= 20
-                && value.as_bytes().get(4) == Some(&b'-')
-                && value.as_bytes().get(10) == Some(&b'T')
-        }
-        _ => false,
-    }
+    Ok(())
 }
 
 pub fn source_restore_epoch(req: &Request) -> Option<String> {

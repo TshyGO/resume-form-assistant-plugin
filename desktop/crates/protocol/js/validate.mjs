@@ -1,6 +1,14 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  envelopeSchema,
+  payloadSchema,
+  responseSchema,
+  validateSchema,
+} from "./schema-lite.mjs";
+import { isUtcTimestamp } from "./time.mjs";
 
 const rules = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "rules.json"), "utf8"),
@@ -8,12 +16,10 @@ const rules = JSON.parse(
 
 export const MAX_ENVELOPE_BYTES = rules.maxEnvelopeBytes;
 export const MAX_RECONCILE_ITEMS = rules.maxReconcileItems;
+export const MAX_CHUNK_COUNT = rules.maxChunkCount;
+export const MAX_SNAPSHOT_BYTES = rules.maxSnapshotBytes;
 
-const UUID =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const SHA = /^[0-9a-f]{64}$/;
-const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
-const FORBIDDEN_KEYS = ["apikey", "api_key", "api-key", "authorization", "cookie", "password", "otp", "token", "secret"];
+const FORBIDDEN_KEYS = ["apikey", "api_key", "api-key", "authorization", "cookie", "set-cookie", "password", "otp", "token", "secret"];
 
 function fail(code, message, layer = "structure") {
   const err = new Error(`${code}: ${message}`);
@@ -35,38 +41,71 @@ function walkSecrets(value) {
   if (value && typeof value === "object") {
     for (const [k, v] of Object.entries(value)) {
       const key = k.toLowerCase();
-      if (FORBIDDEN_KEYS.some((f) => key === f || key.includes(f))) {
+      if (FORBIDDEN_KEYS.some((f) => key === f || key.replaceAll("_", "-") === f)) {
         throw fail("secret_forbidden", `forbidden key ${k}`, "secrets");
       }
       walkSecrets(v);
     }
     return;
   }
-  if (typeof value === "string" && (value.includes("sk-") || value.toLowerCase().includes("bearer "))) {
-    throw fail("secret_forbidden", "payload looks like a secret", "secrets");
+  if (typeof value === "string") {
+    const lower = value.toLowerCase();
+    const apiKeyLike = lower
+      .split(/[^a-z0-9\-_]+/)
+      .some((token) => token.startsWith("sk-") && token.length >= 20);
+    if (apiKeyLike || lower.includes("bearer ")) {
+      throw fail("secret_forbidden", "payload looks like a secret", "secrets");
+    }
   }
 }
 
-function requireUuid(obj, key) {
-  const v = obj[key];
-  if (typeof v !== "string" || !UUID.test(v)) {
-    throw fail("invalid_payload", `${key} must be a UUID`);
+export function sha256Hex(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
   }
-  return v;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function payloadBodySha256(payload) {
+  const copy = { ...payload };
+  delete copy.payloadSha256;
+  return sha256Hex(Buffer.from(canonicalJson(copy), "utf8"));
+}
+
+export function decodeStandardBase64(text) {
+  if (typeof text !== "string" || /\s/.test(text)) {
+    throw fail("invalid_payload", "bytesBase64 must not contain whitespace");
+  }
+  const buf = Buffer.from(text, "base64");
+  if (buf.length === 0 && text.length > 0) {
+    throw fail("invalid_payload", "bytesBase64 is not strict standard Base64");
+  }
+  if (buf.toString("base64") !== text) {
+    throw fail("invalid_payload", "bytesBase64 is not strict standard Base64");
+  }
+  return buf;
 }
 
 export function validateRequestBytes(bytes) {
-  if (bytes.length > MAX_ENVELOPE_BYTES) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8");
+  if (buf.length > MAX_ENVELOPE_BYTES) {
     throw fail(
       "payload_too_large",
-      `envelope is ${bytes.length} UTF-8 bytes; max is ${MAX_ENVELOPE_BYTES} (complete JSON, not raw chunk)`,
+      `envelope is ${buf.length} UTF-8 bytes; max is ${MAX_ENVELOPE_BYTES} (complete JSON, not raw chunk)`,
       "size",
     );
   }
-  const text = Buffer.isBuffer(bytes) ? bytes.toString("utf8") : bytes;
   let value;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(buf.toString("utf8"));
   } catch (e) {
     throw fail("invalid_payload", `invalid JSON: ${e.message}`);
   }
@@ -81,18 +120,27 @@ export function validateRequest(value) {
   if (type === "SaveIntent" || type === "saveIntent" || type === "save.intent") {
     throw fail("unknown_message_type", "SaveIntent is a plugin-local object, not a Native Messaging messageType");
   }
-  if (!rules.messageTypes.includes(type)) {
+  if (typeof type === "string" && !rules.messageTypes.includes(type)) {
     throw fail("unknown_message_type", `unknown messageType ${type}`);
   }
-  if (value.protocolVersion < rules.minProtocolVersion || value.protocolVersion > rules.maxProtocolVersion) {
-    throw fail("protocol_incompatible", "protocolVersion outside supported range");
+  if (Object.prototype.hasOwnProperty.call(value, "protocolVersion")) {
+    if (!Number.isInteger(value.protocolVersion)) {
+      throw fail("invalid_payload", "protocolVersion must be an integer");
+    }
+    if (value.protocolVersion < rules.minProtocolVersion || value.protocolVersion > rules.maxProtocolVersion) {
+      throw fail("protocol_incompatible", "protocolVersion outside supported range");
+    }
   }
-  requireUuid(value, "messageId");
-  requireUuid(value, "clientInstanceId");
-  if (typeof value.occurredAt !== "string" || !TIME.test(value.occurredAt)) {
-    throw fail("invalid_payload", "occurredAt must be UTC RFC3339 (...Z)");
+  try {
+    validateSchema(value, envelopeSchema());
+  } catch (e) {
+    if (e.code) throw e;
+    throw fail("invalid_payload", e.message);
   }
-  if (!value.payload || typeof value.payload !== "object") {
+  if (!isUtcTimestamp(value.occurredAt)) {
+    throw fail("invalid_payload", "occurredAt must be a real UTC RFC3339 timestamp (...Z)");
+  }
+  if (Array.isArray(value.payload) || !value.payload || typeof value.payload !== "object") {
     throw fail("invalid_payload", "payload must be an object");
   }
   walkSecrets(value.payload);
@@ -104,27 +152,40 @@ export function validateRequest(value) {
   if (rules.identityRequired.includes(type) && (!hasArchive || !hasEpoch)) {
     throw fail("identity_missing", `${type} requires archiveId and restoreEpoch`, "identity");
   }
-  if (hasArchive) requireUuid(value, "archiveId");
-  if (hasEpoch) requireUuid(value, "restoreEpoch");
-  if (rules.writeTypes.includes(type)) {
-    requireUuid(value.payload, "sourceRestoreEpoch");
-    if (type === "snapshot.chunk") {
-      if (typeof value.payload.chunkSha256 !== "string" || !SHA.test(value.payload.chunkSha256)) {
-        throw fail("invalid_payload", "chunkSha256 must be lowercase hex SHA-256");
+  const schema = payloadSchema(type);
+  if (schema) {
+    try {
+      validateSchema(value.payload, schema);
+    } catch (e) {
+      if (e.code) throw e;
+      throw fail("invalid_payload", e.message);
+    }
+  }
+  if (rules.writeTypes.includes(type) && type !== "snapshot.chunk") {
+    const actual = payloadBodySha256(value.payload);
+    if (value.payload.payloadSha256 !== actual) {
+      throw fail("invalid_payload", "payloadSha256 does not match the payload body");
+    }
+  }
+  if (type === "snapshot.chunk") {
+    if (value.payload.chunkIndex >= value.payload.chunkCount) {
+      throw fail("invalid_payload", "chunkIndex must be in 0..chunkCount");
+    }
+    const decoded = decodeStandardBase64(value.payload.bytesBase64);
+    if (decoded.length === 0 || decoded.length > value.payload.byteSize) {
+      throw fail("invalid_payload", "decoded chunk length is empty or exceeds snapshot byteSize");
+    }
+    if (sha256Hex(decoded) !== value.payload.chunkSha256) {
+      throw fail("invalid_payload", "chunkSha256 does not match decoded bytes");
+    }
+    if (value.payload.chunkCount === 1) {
+      if (decoded.length !== value.payload.byteSize || sha256Hex(decoded) !== value.payload.snapshotSha256) {
+        throw fail("invalid_payload", "single-chunk snapshot hash or length mismatch");
       }
-      if (value.payload.chunkIndex < 0 || value.payload.chunkIndex >= value.payload.chunkCount) {
-        throw fail("invalid_payload", "chunkIndex must be in 0..chunkCount");
-      }
-    } else if (typeof value.payload.payloadSha256 !== "string" || !SHA.test(value.payload.payloadSha256)) {
-      throw fail("invalid_payload", "payloadSha256 must be lowercase hex SHA-256");
     }
   }
   if (type === "outbox.reconcile") {
-    const items = value.payload.items;
-    if (!Array.isArray(items) || items.length < 1 || items.length > MAX_RECONCILE_ITEMS) {
-      throw fail("invalid_payload", `outbox.reconcile items must be 1..${MAX_RECONCILE_ITEMS}`);
-    }
-    for (const item of items) {
+    for (const item of value.payload.items) {
       if (item.clientInstanceId !== value.clientInstanceId) {
         throw fail("invalid_payload", "outbox.reconcile items must use the caller clientInstanceId");
       }
@@ -133,12 +194,34 @@ export function validateRequest(value) {
   if (type === "handshake") {
     const { minProtocolVersion, maxProtocolVersion } = value.payload;
     if (
+      !Number.isInteger(minProtocolVersion) ||
+      !Number.isInteger(maxProtocolVersion) ||
       maxProtocolVersion < rules.minProtocolVersion ||
       minProtocolVersion > rules.maxProtocolVersion ||
       minProtocolVersion > maxProtocolVersion
     ) {
       throw fail("protocol_incompatible", "handshake protocol ranges do not overlap");
     }
+  }
+  return value;
+}
+
+export function validateResponse(value, requestType) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw fail("invalid_payload", "response must be an object");
+  }
+  validateSchema(value, responseSchema());
+  if (Array.isArray(value.payload)) throw fail("invalid_payload", "payload must be an object");
+  if (value.ok) {
+    if (value.error) throw fail("invalid_payload", "ok:true response must not include error");
+    if (rules.writeTypes.includes(requestType) && typeof value.resultId !== "string") {
+      throw fail("invalid_payload", "ok:true write response requires resultId");
+    }
+    if (requestType === "snapshot.chunk" && value.payload.ackKind !== "chunk" && value.payload.ackKind !== "snapshot") {
+      throw fail("invalid_payload", "snapshot.chunk ACK must set payload.ackKind to chunk or snapshot");
+    }
+  } else if (value.resultId) {
+    throw fail("invalid_payload", "ok:false response must not include resultId");
   }
   return value;
 }
