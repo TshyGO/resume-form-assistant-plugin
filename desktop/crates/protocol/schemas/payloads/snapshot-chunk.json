@@ -1,0 +1,27 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/snapshot-chunk.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sourceRestoreEpoch",
+    "snapshotId",
+    "applicationId",
+    "chunkIndex",
+    "chunkCount",
+    "chunkSha256",
+    "snapshotSha256",
+    "byteSize",
+    "bytesBase64"
+  ],
+  "properties": {
+    "sourceRestoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "snapshotId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "applicationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "chunkIndex": { "type": "integer", "minimum": 0 },
+    "chunkCount": { "type": "integer", "minimum": 1, "maximum": 128 },
+    "chunkSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "snapshotSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "byteSize": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+    "bytesBase64": { "type": "string", "minLength": 1, "maxLength": 65536 }
+  }
+}

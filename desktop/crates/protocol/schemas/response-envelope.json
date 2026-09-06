@@ -1,0 +1,40 @@
+{
+  "$id": "https://resumepro.local/protocol/response-envelope.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resume Pro response envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "correlationId", "ok", "payload"],
+  "properties": {
+    "protocolVersion": { "type": "integer", "minimum": 1 },
+    "correlationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "resultId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "ok": { "type": "boolean" },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "retryable"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "identity_missing",
+            "identity_not_allowed",
+            "restore_epoch_mismatch",
+            "protocol_incompatible",
+            "unknown_message_type",
+            "invalid_payload",
+            "payload_too_large",
+            "conflict",
+            "previously_purged",
+            "unavailable",
+            "secret_forbidden"
+          ]
+        },
+        "retryable": { "type": "boolean" },
+        "message": { "type": "string", "maxLength": 300 }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}

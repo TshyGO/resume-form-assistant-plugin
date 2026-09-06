@@ -1,0 +1,37 @@
+{
+  "$id": "https://resumepro.local/protocol/request-envelope.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resume Pro request envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "messageId",
+    "clientInstanceId",
+    "messageType",
+    "occurredAt",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": { "type": "integer", "minimum": 1 },
+    "messageId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "clientInstanceId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "messageType": {
+      "type": "string",
+      "enum": [
+        "health",
+        "handshake",
+        "application.queryCandidates",
+        "job.save",
+        "fill.submit",
+        "snapshot.chunk",
+        "submit.confirm",
+        "outbox.reconcile"
+      ]
+    },
+    "occurredAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "archiveId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "restoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "payload": { "type": "object" }
+  }
+}

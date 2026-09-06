@@ -1,0 +1,13 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/fill-submit.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sourceRestoreEpoch", "payloadSha256", "applicationId"],
+  "properties": {
+    "sourceRestoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "payloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "applicationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "snapshotId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
