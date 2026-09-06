@@ -1,27 +1,27 @@
-# ADR：Windows 桌面主程序架构与技术选型
+# ADR：桌面主程序架构与技术选型
 
 | 字段 | 值 |
 | --- | --- |
-| 标题 | ADR-001 桌面栈、进程模型与通信原则 |
+| 标题 | ADR-001 桌面栈、进程角色、跨平台适配与通信原则 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review |
+| 状态 | Draft / Ready for review（**未冻结**） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) |
 | 并列 | [product-requirements.md](product-requirements.md) · [data-privacy.md](data-privacy.md) · [downstream-decisions.md](downstream-decisions.md) |
 
-本 ADR 冻结 **用什么技术、几个进程、怎么说话**。完整 JSON Schema 归 [D05 #23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23)；可执行 host 归 [D06 #24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24)；安装注册归 [D13 #29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)。D01 不脚手架 `/desktop` 源码。
+本 ADR 建议 **用什么技术、哪些进程角色、怎么说话、平台边界在哪**。完整 JSON Schema 归 [D05 #23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23)；host 实现归 [D06 #24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24)；安装注册归 [D13 #29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)。D01 不脚手架 `/desktop` 源码。
+
+平台无关契约使用 **进程角色名**，不写 `*.exe`。
 
 ---
 
 ## 1. Overview
 
-在现有 Chrome/Edge 插件之外增加 Windows 本地主程序：唯一写入者持有 SQLite 与附件目录；浏览器经 **Native Messaging** 连接一个 **薄 host EXE**；GUI 用 Tauri 2 WebView。插件继续用 JavaScript，根目录布局与当前 ZIP 打包不变。
+在现有 Chrome/Edge 插件之外增加 **本机桌面主程序**：唯一写入者持有 SQLite 与附件目录；浏览器经 **Native Messaging** 连接 **NM host 进程**；GUI 用 WebView（Tauri 2 下 Windows 为 WebView2，macOS 为 WKWebView）。
 
-选型约束来自本项目，而不是通用「Tauri vs Electron」清单：
+**Windows 与 macOS 都是目标平台。** 实现可 Windows 优先，但 D02 起必须有 macOS 构建与 NM 原型，不能等 Windows 全做完再移植。业务模型、SQLite、事件、AI 建议、通信消息保持平台无关。Linux 仍非首版产品。浏览器首阶段仍是 Chrome/Edge，**不默认承诺 Safari**。
 
-- 需要 **唯一写入者**、事务、附件文件、备份/恢复路径控制 → 必须有原生进程，而不是纯扩展存储。
-- Native Messaging 规定 host 用 stdin/stdout 且带 4 字节长度前缀；**GUI 不得占用该 stdout** → 无论哪种 UI 工具包都要单独的薄 host。
-- 只要 Windows；安装默认 per-user、非管理员。
+插件继续用 JavaScript，根目录布局与当前 ZIP 打包不变。
 
 ---
 
@@ -34,72 +34,80 @@ Chrome 官方协议（[Native messaging](https://developer.chrome.com/docs/exten
 - 每条消息：原生字节序的 32 位长度 + UTF-8 JSON。
 - Host → 浏览器上限 **1 MB**；浏览器 → host 上限 **64 MiB**。
 - `allowed_origins` **禁止通配符**。
-- 扩展必须声明 `nativeMessaging`；`connectNative` / `sendNativeMessage` **不能在 content script 调用**，只能在扩展页或 service worker。content script 必须先打到 SW。
+- 扩展必须声明 `nativeMessaging`；`connectNative` / `sendNativeMessage` **不能在 content script 调用**，只能在扩展页或 service worker。
 - `sendNativeMessage` **每条消息拉起一个新 host 进程**；`connectNative` 保持进程直到 port 销毁。
-- Windows：在 `HKCU\Software\Google\Chrome\NativeMessagingHosts\<name>`（或 HKLM）写入 manifest 绝对路径。Windows 上 stdout 必须 `O_BINARY`，调试日志只能写 stderr。
-- Service worker 场景下 `--parent-window` 为 0。
+- **Windows：** `HKCU\Software\Google\Chrome\NativeMessagingHosts\<name>` 指向 manifest；stdout 必须 `O_BINARY`；另有 `--parent-window=`（SW 下为 0）。
+- **macOS / Linux：** manifest 在固定目录。用户级 Chrome 默认为 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/<name>.json`；系统级 `/Library/Google/Chrome/NativeMessagingHosts/`。macOS/Linux 上 `path` **必须是绝对路径**。
 
-Edge 文档（[Native messaging](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging)）同构：`stdio`、`allowed_origins`、HKCU `SOFTWARE\Microsoft\Edge\NativeMessagingHosts\<name>`。Host → Edge 上限 1 MB；Edge → host 文档写的是 4 GB。若同时上架两个商店，两个扩展 ID 都要写入 `allowed_origins`（MVP 未上架，但 unpacked Chrome 与 Edge 是 **两个 ID**）。
+Edge（[Native messaging](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging)）同构。Windows 上写 `HKCU\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\`。Edge 官方查找顺序会回退到 Chromium/Chrome 键——**禁止依赖该回退当配对通道**（见原 D01 结论，仍然成立）。macOS 用户级 Edge 目录为 `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/`（**待验证**频道变体，D13 对照 [Edge 文档](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging) 实测）。
 
-Edge 官方 **查找顺序**（不得依赖当配对通道）：先 `HKCU\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\`，再 Chromium，再 `Google\Chrome`；然后 HKLM / WOW6432Node 同类键。若只写 Chrome 键，Edge 仍可能 **找到** 名为 `com.resumepro.desktop` 的 host，但其 `allowed_origins` 只有 Chrome unpacked ID → Edge 报 **forbidden**，插件若当成「未安装」就会误导。
+Chrome/Edge 传给 host 的 **第一个参数是调用方 origin**（`chrome-extension://<id>/`）。`argv[0]` 是可执行路径，**不得**拿去比对 origin。实现扫描 argv 找 origin token。
 
-**冻结（D13）：** 始终分别写入 **Edge 与 Chrome 的 HKCU** 键。每个键指向一份 host manifest JSON；两份 JSON 可以相同路径（一份文件同时列入两个已配对 origin）或各一份。**禁止**指望 Edge 回退到 Chrome 键来「顺便」连上。Chrome 已配对而 Edge 未配对时，fallback 是脚枪：Edge 会连上 host 然后被 origin 拒绝。
-
-Chrome/Edge 传给 host 的 **第一个参数是调用方 origin**（`chrome-extension://<id>/`），不是 exe 路径。Windows 另有 `--parent-window=<handle>`；service worker 场景下该值为 `0`（ADR 下文 §4 校验顺序）。`argv[0]` 在 Win32 里是可执行文件路径，**不得**拿去比对 origin。
-
-这些事实迫使：**host 必须极瘦、stdout 纯净、按 origin 校验、业务 JSON 远小于 1 MB；注册必须双写 Chrome+Edge。**
+这些事实迫使：host 必须 stdout 纯净、按 origin 校验、业务 JSON 远小于 1 MB；Windows 双写 Chrome+Edge 注册；macOS 分别写 Chrome 与 Edge 的用户级 `NativeMessagingHosts`。
 
 ---
 
 ## 3. Decision
 
-### 3.1 桌面栈：Tauri 2 + Rust 数据服务（不用 Electron）
+### 3.1 桌面栈：推荐 Tauri 2（Electron 是可行备选，不是禁区）
 
-| 本项目约束 | Tauri 2 + Rust | Electron |
+**推荐 Tauri 2 + Rust 后端**，依据是 **本项目的团队成本、打包体积、原生集成与跨平台维护**，不是「Electron 必须管理员 / 天然不安全 / 不能做 stdio」。
+
+| 本项目需要 | Tauri 2 | Electron |
 | --- | --- | --- |
-| 唯一写入者 + SQLite 事务 + 附件路径 | `rusqlite`/`sqlx` 与文件系统在同一 Rust 进程；崩溃面小 | 需 `better-sqlite3` 等 native 模块，每次 Electron 升级要重建 |
-| NM host 必须是独立 EXE，且不能用 GUI 的 stdout | 可与 data-service **共享 crate**（协议编解码、幂等、路径） | 仍要单独 host EXE；Node 帮不上 stdio 帧，还多一个运行时 |
-| 仅 Windows | WebView2 在 Win11 预装；Win10 22H2 属官方支持范围（见 §8） | Chromium 整包，安装体大约 **100MB+** |
-| per-user、无管理员 | Tauri NSIS **默认 current user**，装到 `%LOCALAPPDATA%`（[Windows Installer](https://v2.tauri.app/distribute/windows-installer/)） | 常见安装器偏 Program Files / 管理员 |
-| 插件已是 JS | 桌面 UI 可用 web 技术；**不必**再塞一个 Node | 第二套 Node，且容易从渲染进程误暴露 fs |
+| 唯一写入者 + SQLite + 附件路径 | Rust 与文件系统在同一应用进程；可用 `rusqlite`/`sqlx` | 同样能做。常见是 `better-sqlite3` 等 native 模块，随 Electron ABI 重建（维护成本） |
+| Native Messaging stdio | 可用独立 helper，或 **同一产品二进制** 加 `--native-host` 进入无 GUI、二进制 stdout 模式 | **Node 可以**正确写 4 字节长度前缀（多款产品已这样做）。stdout 纪律是工程问题，不是运行时做不到 |
+| 安装体积 | 依赖系统 WebView2 / WKWebView，安装包通常明显小于内嵌 Chromium。**具体 MB 数待本仓库打样后填写，此处不写死** | 内嵌 Chromium，安装包通常更大。electron-builder 默认 NSIS **可以** `perMachine: false` 做 per-user、无管理员（[electron-builder NSIS](https://www.electron.build/nsis)） |
+| Windows + macOS | 同一套 Rust 后端；Windows WebView2、macOS WKWebView | 同一套 Chromium，两端行为更接近，体积与更新面也两端都大 |
+| 系统通知 / Keychain / 托盘 | 走原生 crate / 插件，适配面要自己测 | 生态示例多（含 NM）。渲染进程若打开 `nodeIntegration` 会放大 fs 暴露面——这是 **配置错误**，不是 Electron 必然不安全 |
+| 团队 | 新桌面代码；插件已是 JS。Rust 学习成本换共享 crate 与较小运行时 | 招聘前端更熟；等于再养一套 Chromium |
 
-**代价（必须承认）：** 团队要写 Rust；依赖 WebView2；NM host + named pipe + 单实例必须在 D02/D06 做原型（**待验证**）。不选 Tauri 的代价：安装包显著变大、沙箱叙事更弱、Node 侧更容易误开文件系统或 localhost HTTP。
+**独立 host 二进制不是唯一实现。** 可选：(A) 单独 helper 可执行文件（推荐，stdout 与 GUI 隔离更干净）；(B) 同一产品二进制以 CLI 标志进入 host 模式。两种都要保证 GUI 日志永不写到 host 的 stdout。D02/D06 原型二选一，失败则换另一种，**不**因此改业务协议。
 
-Sidecar（[Embedding External Binaries](https://v2.tauri.app/develop/sidecar/)）可用于把 `native-host.exe` 放进安装布局；host 也必须能被浏览器按 manifest `path` 直接拉起，不经过 Tauri 窗口。是否用 sidecar 打包 host 由 D13 决定，逻辑进程模型不变。
+**不选 Electron 的主要代价：** 两端都带 Chromium、更新与安全补丁面更大、SQLite native 模块要跟版本；本项目还要自己做 Keychain/DPAPI/NM 注册，Electron 并不能少掉这些适配。
 
-### 3.2 安装包：仅 NSIS `setup.exe`，per-user，MVP 无 MSI
+**选 Electron 的主要代价（若负责人改选）：** ADR 本节与 D02 脚手架作废，协议与产品模型仍可用。
 
-Tauri 可打 `.msi`（WiX，仅 Windows 主机）和 `-setup.exe`（NSIS）。Epic #15 / D13 把「是否补充 MSI」交给 D01。
+Sidecar（[Embedding External Binaries](https://v2.tauri.app/develop/sidecar/)）可把 host helper 放进安装布局；host 必须仍能被浏览器按 manifest `path` 直接拉起。
 
-**决定：** MVP 只发 NSIS per-user `setup.exe`。默认不要求管理员，安装目录在 `%LOCALAPPDATA%` 下的应用文件夹，**与用户档案目录分离**（档案见 [data-privacy.md](data-privacy.md#3-目录布局)）。
+### 3.2 安装形态
 
-企业若强需求 MSI，由后续版本/D13 增补，不作为首发承诺。`installMode=both` 会让安装器要管理员（官方说明），MVP 不采用。
+| 平台 | 建议交付 | 说明 |
+| --- | --- | --- |
+| Windows | NSIS per-user 安装包（`setup.exe` 是 **Windows 交付物文件名**，不是协议概念） | Tauri NSIS **默认 current user**，装到 `%LOCALAPPDATA%`（[Windows Installer](https://v2.tauri.app/distribute/windows-installer/)）。MVP 不默认 MSI；`installMode=both` 会要管理员，不采用 |
+| macOS | `.app` + `.dmg`（[macOS Application Bundle](https://v2.tauri.app/distribute/macos-application-bundle/)、[DMG](https://v2.tauri.app/distribute/)） | 默认最低系统 Tauri 写的是 **10.13**；本项目建议 **macOS 11+**。Apple Silicon 一等；Intel 用 `universal-apple-darwin` 或单独 x86_64，**待验证**。签名与公证见 §8 |
 
-未持有 EV/OV 代码签名证书前 **不宣传已签名**。发布说明必须写 SmartScreen「未识别的应用」警告及用户如何核对 SHA-256。
+未持有签名材料前 **不宣传已签名 / 已公证**。Windows 写 SmartScreen；macOS 写 Gatekeeper。
 
-卸载：删除程序文件、快捷方式、本应用的 NM 注册；**默认保留** `%LOCALAPPDATA%\ResumePro\archive\`。删数据必须单独确认（D13）。
+卸载：删除程序文件、快捷方式/应用包、本应用的 NM 注册；**默认保留**用户档案目录。删数据必须单独确认（D13）。
 
 ### 3.3 仓库布局（同仓，插件留在根目录）
-
-当前 ZIP 是把仓库根（含 `manifest.json`）解压后「加载已解压的扩展程序」。**禁止**把插件挪到子目录，否则现有发行说明与用户解压路径全部作废。
-
-规划中的树（D01 **只写文档，不创建 crate**）：
 
 ```text
 /                          现有插件（D01 零改动）
 /docs/desktop-mvp          本设计
 /docs/ai-repeat-validation.md   保持不动
-/desktop                   未来 Tauri 应用（D02+）：打出一个 GUI EXE
-/desktop/crates/data-service   库 crate，链进 Tauri 后端；不是第三个进程
-/desktop/crates/native-host    薄 host EXE（唯一额外二进制）
+/desktop                   未来桌面应用（D02+）
+/desktop/crates/data-service   库 crate，链进应用进程；不是第三个常驻写入进程
+/desktop/crates/native-host    host 角色（独立 helper 或同一二进制的 host 模式）
 /desktop/crates/protocol       （D05，库 crate）
 ```
 
-**v1 进程数冻结为 2：** Tauri GUI EXE + `native-host.exe`。`data-service` 是 **库**，不是常驻第三个 service EXE。
+插件与桌面 **版本号不必相等**；共享 `protocolVersion`。产品名建议 **Resume Pro Desktop**。NM host 名建议 `com.resumepro.desktop`（Chrome `name` 规则）。
 
-插件与桌面 **版本号不必相等**；共享的是 `protocolVersion`。桌面应用建议产品名 **Resume Pro Desktop**，NM host 名建议 `com.resumepro.desktop`（仅小写字母、数字、点、下划线，符合 Chrome `name` 规则）。
+当前插件 [`LICENSE`](../../LICENSE) 为 MIT。桌面模块许可 **未定案**。
 
-### 3.4 进程模型（冻结：两个 EXE）
+### 3.4 进程角色（平台无关契约）
+
+不要在协议或数据层写「两个 EXE」。角色如下：
+
+| 角色 | 职责 | 实例数 |
+| --- | --- | --- |
+| **应用进程（unique writer）** | 产品主二进制。持有 SQLite、附件、快照、幂等表、备份、current 指针、系统通知登记。Tauri 后端链 `data-service` 库 | **恰好一个**（单实例） |
+| **NM host 进程** | 解码 NM 帧、校验 origin/大小、按需启动或连接应用进程、白名单 RPC、**持久化提交后再回包**。不打开 SQLite | 浏览器可拉起 **多个**（`sendNativeMessage` 每条一个；Chrome 与 Edge 各一） |
+| **WebView / WKWebView 子进程** | 只渲染 UI，经应用内 IPC 调后端 | 由 WebView 自己管；**不是**写入者 |
+
+Windows 上这两个角色常常对应两个 `.exe` 文件；macOS 上常是 `.app/Contents/MacOS/` 里的主二进制 + helper。那是打包细节。
 
 ```mermaid
 flowchart LR
@@ -108,9 +116,9 @@ flowchart LR
     SW[background.js SW]
     CS -->|runtime.sendMessage| SW
   end
-  SW -->|"connectNative stdio\n4-byte length JSON"| HOST[native-host.exe]
-  HOST -->|"named pipe\ncurrent-user ACL"| APP[Tauri GUI EXE\nRust backend = UNIQUE WRITER]
-  UI[Tauri webview] -->|"in-process IPC"| APP
+  SW -->|"connectNative stdio"| HOST[NM host 进程]
+  HOST -->|"本地 IPC"| APP[应用进程 UNIQUE WRITER]
+  UI[WebView 子进程] -->|"in-process IPC"| APP
   APP --> DB[(SQLite)]
   APP --> ATT[attachments/]
   APP --> SNAP[snapshots/]
@@ -118,81 +126,67 @@ flowchart LR
 
 规则：
 
-1. **唯一写入者 = Tauri GUI EXE 的 Rust 后端**（链接 `data-service` 库）。Webview 与 `native-host` 都是该后端的客户端。v1 **不允许**第三个常驻 writer/service EXE。
-2. **native-host 是翻译器：** 解码 NM 帧、校验 origin 与大小、只转发白名单 RPC、**持久化提交后再回包**。Host **不**打开 SQLite。
-3. Host 发现唯一写入者未运行时 **按需启动同一个 Tauri GUI EXE（可无可见窗口）**，再连 named pipe。多个 host（Chrome 与 Edge、或多次 `sendNativeMessage`）必须连到 **这一个** 实例。
-4. **单实例：** 命名 mutex + 命名管道。第二次启动 UI：激活已有窗口，不第二写入者。第二 host：只连接。
-5. **关主窗口 = 隐藏到托盘（若 Q3 接受）或保持后端**，不等于退出写入者。Idle 时钟只在 **无可见窗口 ∧ 无活 NM 端口 ∧ 无进行中的备份/提醒** 时启动。默认 **15 分钟** 后退出进程。D02 可做成设置项，**不得**默认为 0 或「直到重启」。彻底退出走明确「退出」。**v1 无开机启动。**
-6. **建议托盘图标**，否则用户以为已退出却留下 GUI 子系统进程（见开放问题 Q3）。
-7. **禁止** 未鉴权的 localhost HTTP 端口（D05 非目标原文）。配对也不走 HTTP，见 §3.7。
-8. Named pipe DACL = 当前用户 SID；消息仍要校验调用方/会话，不因为「本机」就信任。
+1. 唯一写入者 = 应用进程。v1 **不允许**第三个常驻 writer。
+2. Host 发现应用进程未运行时可 **按需启动** 它（可无可见窗口），再连本地 IPC。所有 host 实例连这一个应用进程。
+3. **单实例：** 平台适配（Windows 命名 mutex + named pipe；macOS 建议 unix domain socket + 锁文件，或 Tauri 单实例插件）。第二次启动 UI：激活已有窗口。第二 host：只连接。
+4. **关主窗口 ≠ 退出。** 托盘（Windows）/ 菜单栏（macOS）提供「打开」「退出」。
+5. **空闲退出进程可以**，但 **不是提醒的可靠性基础**（§3.8）。
+6. **禁止**未鉴权 localhost HTTP。配对不走 HTTP（§3.7）。
+7. 本地 IPC 只允许当前用户（Windows pipe DACL = 当前 SID；macOS socket `0600` 且放在用户 Application Support 下）。不因为「本机」就信任。
 
-空闲行为：
+本地 IPC 选型 **待验证**（V1）：Windows named pipe 是现成的；macOS 用 unix socket。不要在 D01 把 named pipe 写进平台无关信封。
 
-```text
-有可见窗口 或 活 NM 端口 或 备份/提醒进行中  →  进程保持
-以上皆无                               →  开始 15 min idle timer
-idle 到期                              →  Tauri EXE 退出
-用户点「退出」                          →  立即停并断开
-MV3 SW 回收导致 port 断开              →  视为「无活 NM」；**不得丢 outbox**（V4）
-```
+### 3.5 为何 host 的 stdout 必须纯净
 
-保存岗位的进程内时序（产品语义与 **先探测再入队** 见 [product-requirements.md §5.2](product-requirements.md)）：
-
-```mermaid
-sequenceDiagram
-  participant SW as Extension SW
-  participant H as native-host
-  participant APP as Tauri EXE UNIQUE WRITER
-  Note over SW: 仅当已注册 host 且已配对且协议兼容才写 outbox
-  SW->>H: stdio 帧 handshake
-  H->>APP: named pipe connect / 按需启动本 EXE（可隐藏）
-  APP-->>SW: protocol range, appVer, archiveId, generation
-  SW->>H: application.queryCandidates
-  H->>APP: whitelist RPC
-  APP-->>SW: exact[] + sameCompany[] 最小元数据
-  SW->>H: job.save envelope 64KiB
-  H->>APP: 事务 + 幂等键
-  Note over APP: 提交后才允许 host 回包
-  APP-->>H: resultId, applicationId
-  H-->>SW: stdout 长度前缀 JSON
-```
-
-### 3.5 为何 GUI 不能兼 NM host
-
-Chrome 把 host 的 **stdout 整段当作协议帧**。任何 `println!`、日志、Tauri/WebView 调试输出都会破坏 4 字节前缀（官方排错：「All output in stdout must adhere to the protocol; debug on stderr」）。因此：
-
-- `native-host.exe`：CRT 设二进制模式；只写长度前缀 JSON；日志走文件/stderr。
-- Tauri GUI EXE：WINDOWS 子系统，可有自己的 stdout，但 **不要** 注册为 NM host 的 `path`。Host 按需启动的是 **这个** EXE（可无窗口），不是第三个 writer。
+Chrome 把 host 的 **stdout 整段当作协议帧**。GUI 框架日志会破坏 4 字节前缀。因此 host 模式：CRT/进程设二进制 stdout；只写长度前缀 JSON；日志走文件/stderr。这与「必须两个文件」不是同一句话。
 
 ### 3.6 插件侧连接落点（D07 实现，D01 约束）
 
-今天 [`background.js`](../../background.js) 处理两件事：`chrome.action.onClicked` → `TOGGLE_MANAGER`，以及 `ENSURE_AI_HOST`（`offscreen.createDocument`）。D07 **追加** NM，不得覆盖 `onClicked`。
+今天 [`background.js`](../../background.js) 处理 `onClicked` → `TOGGLE_MANAGER` 以及 `ENSURE_AI_HOST`。D07 **追加** NM，不得覆盖 `onClicked`。
 
-D07 将：
+D07 将：在 **service worker** 调用 `connectNative`（推荐）或受控的 `sendNativeMessage`；增加 `nativeMessaging` 权限（**D07 版本号提升，不是 0.3.0**）；`desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing`；侧边栏保存岗位与确认投递。快照字节走扩展源 IndexedDB（见产品 §8.5）。
 
-- 在 **service worker** 调用 `connectNative`（推荐）或受控的 `sendNativeMessage`；content script 不得直连。
-- 增加 `nativeMessaging` 权限——这是 **D07 的插件变更**，伴随版本号提升；**不是 D01，也不在 0.3.0 做**。
-- 持久化 outbox 使用新 key `desktopOutbox`；另存 `desktopClientInstanceId`（每扩展安装/Profile 一次生成的 UUID）。**禁止**占用已有 `templates`、`activeTemplateId`、`aiConfig`、`resumeProUpdateCache`、`resumeProDismissedVersion`。
-- 插件「确认已投递」按钮与 `submit.confirm` RPC 同属 D07（与 `job.save` 共用绑定/outbox；**不是**填写成功）。桌面手动确认仍归 D04。
-
-MV3 SW 空闲回收是否会断开 `connectNative`：**待验证**（V4）。缓解：短 RPC + 断线重连 + outbox；SW 回收看起来像「NM 断开」，**不得丢队列**。
-
-`sendNativeMessage` 每条拉起新 host 在本模型下 **可接受**（host 无状态，写入在 Tauri 后端），但冷启动更慢。D05 应规定：优先长连接，回落短连接，两者幂等语义相同。
+MV3 SW 与 `connectNative` 生命周期 **待验证**（V4）。
 
 ### 3.7 非 NM 配对引导（冻结）
 
-Chrome **不会启动** host，除非调用方 origin 已在该 host manifest 的 `allowed_origins` 里。因此插件 **不能** 把 `chrome.runtime.id` 经 NM 送给尚未认识它的 host。localhost HTTP 已禁止，所以配对必须走桌面 UI。
+Chrome **不会启动** host，除非 origin 已在 `allowed_origins`。插件不能把 `chrome.runtime.id` 经 NM 送给尚未认识它的 host。
 
-**冻结流程：**
+**冻结：** 桌面 UI 粘贴扩展 ID（Chrome / Edge 分开）→ 写入对应该浏览器的 host manifest → 提示重载扩展。第一条 NM 是 `handshake`，不是配对。
 
-1. D13 安装时向 Chrome **和** Edge 的 HKCU `NativeMessagingHosts\com.resumepro.desktop` 写入 manifest（host 已注册；`allowed_origins` 初始为空或仅含此前已配对 origin）。
-2. 用户在桌面「连接浏览器」中 **粘贴扩展 ID**（从 `chrome://extensions` / `edge://extensions` 复制）。Chrome 与 Edge **分别**粘贴、分别写入。
-3. 桌面把 `chrome-extension://<id>/` 写入对应浏览器的 host manifest（无通配符），提示 **重新加载扩展**（V3）。Chrome/Edge 是否无需重启即可重读 manifest：**待验证**（V3）；失败则文案要求重载或重启浏览器。
-4. **第一条 NM 消息不是配对消息**，而是 `handshake`。配对在 NM 能成功之前已经完成。
-5. 开发机隔离注册脚本（D06）可以预写测试 ID；生产 allowlist **不**接受任意扩展。
+- Windows：HKCU Chrome 与 Edge 键都写（不靠 Edge→Chrome fallback）。
+- macOS：写入用户级 `NativeMessagingHosts` 目录（Chrome 官方路径见 §2；Edge 路径 D13 实测）。不写系统级 `/Library/...`（要管理员）。
 
-降级：**已安装但未配对**（host 已注册，本 origin forbidden 或未列入）≠ 未安装。插件必须单独文案「请在桌面粘贴扩展 ID」，**不建长期 outbox**，**不说「未安装」**。移动 ZIP 目录导致路径哈希 ID 变化 = 需要重新粘贴，同样走未配对。
+**已安装但未配对** ≠ 未安装：不建 SaveIntent。移动 ZIP 导致 ID 变化 = 重新粘贴。
+
+### 3.8 提醒与后台（平台实现）
+
+共同语义见 [产品需求 §5.4](product-requirements.md#54-提醒与进程生命周期共同语义)。
+
+| | Windows | macOS |
+| --- | --- | --- |
+| 关窗 | 隐藏到托盘（若启用） | 隐藏到菜单栏 extra / Dock 仍在（习惯不同，D02 选一种并写进设置） |
+| 后台提醒 | 用户授权后，用 **计划应用通知** `ScheduledToastNotification` / AppNotification 日程 API（[Schedule an app notification](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/app-notifications-scheduled)）。官方：计划通知有约 **5 分钟投递窗口**，关机过久可能丢 | `UNUserNotificationCenter` + `UNCalendarNotificationTrigger`（需通知权限）。不要求 Login Item |
+| 未打包 Win32 | Toast 常需 AUMID / Compat 库，**待验证**（V9） | — |
+| 主动退出 | 默认移除未触发的计划 Toast，并告知 | 默认移除 pending UNNotification，并告知 |
+| 开机启动 | **不**注册 Run 键 / 计划任务保活 | **不**偷偷加 Login Item |
+| 进程空闲退出 | 允许；与提醒解耦 | 允许；与提醒解耦 |
+
+D10 验收：启用后台提醒并授权后，**杀掉应用进程**，到期仍应尽量弹出系统通知（受 OS 窗口限制）。未授权时待办列表与逾期汇总仍可用。
+
+### 3.9 跨平台适配边界（D02 起就要列测试）
+
+| 边界 | Windows | macOS |
+| --- | --- | --- |
+| 用户数据目录 | `FOLDERID_LocalAppData` → `%LOCALAPPDATA%\ResumePro\` | `NSApplicationSupportDirectory` → `~/Library/Application Support/ResumePro/` |
+| 应用缓存 | LocalAppData 下 `cache\` 或 WebView2 用户数据文件夹 | `NSCachesDirectory` → `~/Library/Caches/ResumePro/` |
+| 本地 IPC / 单实例 | named pipe + mutex | unix socket + 锁文件（或等价）。**待验证** |
+| 按需启动应用进程 | host 启动产品 `.exe`，无控制台窗口 | host 启动 `.app` bundle 内二进制；路径含空格。**待验证** Gatekeeper 对 helper 的影响 |
+| NM 注册 | HKCU Chrome + Edge | 用户级 NativeMessagingHosts 目录，Chrome + Edge |
+| 凭据 | Credential Manager / DPAPI | Keychain |
+| 通知 / 托盘 | Toast + 托盘图标 | UNUserNotification + 菜单栏 |
+| 安装升级卸载 | NSIS per-user；卸载留档案 | dmg 拖入 / 删 .app；卸载留 Application Support 档案 |
+| 签名 | Authenticode；无证书则 SmartScreen | Developer ID + 公证 |
 
 ---
 
@@ -206,178 +200,128 @@ D05 必须包含的信封字段（此处冻结名字与枚举，不写 JSON Sche
 
 - `correlationId` = 请求 `messageId`。
 - `ok: true` 的写入应答必须有 `resultId`。
-- `ok: false` **没有** `resultId`，除非这是对 **已完成写入** 的幂等重放（此时 `ok: true` 并返回原 `resultId`）。
-- 成功时 `error` 省略或 `null`。
+- `ok: false` **没有** `resultId`，除非这是对 **已完成写入且 restoreEpoch 相符** 的幂等重放。
+- SaveIntent **不是** NM `messageType`。
 
-逻辑形状：
-
-```json
-{
-  "protocolVersion": 1,
-  "messageId": "0193a0c2-7c1a-7d2e-b8c1-0f1e2d3c4b5a",
-  "clientInstanceId": "ext-instance-uuid",
-  "messageType": "job.save",
-  "occurredAt": "2026-09-06T12:00:00.000Z",
-  "payload": {}
-}
-```
-
-```json
-{
-  "protocolVersion": 1,
-  "correlationId": "0193a0c2-7c1a-7d2e-b8c1-0f1e2d3c4b5a",
-  "resultId": "res-uuid",
-  "ok": true,
-  "payload": { "applicationId": "app-uuid" }
-}
-```
-
-**MVP `messageType` 枚举（英文点号，冻结）：**
+**MVP `messageType` 枚举：**
 
 | `messageType` | 方向 | 说明 |
 | --- | --- | --- |
-| `health` | 双向 | 探活，无业务写入 |
-| `handshake` | 双向 | 返回协议区间、app 版本、`archiveId`、`generation`、`capabilities`。**不是配对** |
-| `application.queryCandidates` | 插件→桌面 | 两层候选，最小元数据（见产品 §7） |
-| `job.save` | 插件→桌面 | 用户确认后的岗位保存 |
+| `health` | 双向 | 探活 |
+| `handshake` | 双向 | 返回协议区间、app 版本、`archiveId`、`restoreEpoch`、`capabilities`。**不是配对** |
+| `application.queryCandidates` | 插件→桌面 | 两层候选，最小元数据 |
+| `job.save` | 插件→桌面 | 已绑定后的岗位保存 |
 | `fill.submit` | 插件→桌面 | 填写事件元数据 + 可选 `snapshotId`/`sha256`（**不含**快照字节） |
-| `snapshot.chunk` | 插件→桌面 | 快照文件分片；每帧业务 JSON ≤ 64 KiB，payload 含序号与数据块 |
+| `snapshot.chunk` | 插件→桌面 | 快照分片；每帧 ≤ 64 KiB |
 | `submit.confirm` | 插件→桌面 | 用户明确确认已投递（D07） |
-| `outbox.reconcile` | 插件→桌面 | 入参 messageId 列表，出参已存在的 `(messageId, resultId)`；供恢复后「关联」使用。**不是**通用查询 |
-
-无通用 SQL、无任意路径读写、无远程 shell、无「配对」NM 类型。
-
-`clientInstanceId`：插件在 `chrome.storage.local.desktopClientInstanceId` 生成一次 UUID（每个扩展安装 / 浏览器 Profile）。存储被清则新 ID，旧幂等键不再匹配，这是可接受的。
+| `outbox.reconcile` | 插件→桌面 | 入参 messageId 列表，出参当前 epoch 库中已存在的 `(messageId, resultId)` |
 
 原则：
 
-1. **握手成功**即返回当前 `(archiveId, generation)`。插件版本与桌面版本不必相同。仅当协议区间不兼容或桌面 kill switch 时握手失败并 **禁止业务写入**。`generation` 变化 **不是**握手失败。
-2. **至少一次传送，业务恰好一次：** 应答只在事务提交后发出。幂等键 `(clientInstanceId, messageId)`。相同载荷重放 → 原 `resultId`；同一键不同载荷 → 拒绝且可诊断（D03）。
-3. **64 KiB 是业务信封上限**（低于 Chrome host→浏览器 1 MB / 浏览器→host 64 MiB；Edge inbound 文档 4 GB 不提高产品上限）。附件与快照 **字节永不**放进 `job.save` / `fill.submit` 信封。
-4. **插件→桌面文件字节**走 `snapshot.chunk`（每块 ≤ 64 KiB）或用户可见的「改在桌面导入」。Outbox 存元数据 + `sha256` + 可选分片游标，**默认不把整份 blob 放进 `chrome.storage.local`**（配额约 10 MB，且已有更新检查 key）。单份快照 **> 2 MiB 拒绝**，明确失败，不得假成功。附件（eml/pdf）由 D09 在桌面本地拷贝，不经插件 NM。
-5. **`allowed_origins` 无通配符。** D01 不加 `key`。配对见 §3.7。
-6. 开发机注册脚本只用于隔离测试（D06）；生产注册归 D13，**双写** Chrome+Edge HKCU。
-7. 恢复：新目录、**保留 backup 的 `archiveId`、generation 必 +1**。握手 **成功** 并返回新身份；插件比对 outbox 上盖的旧 `(archiveId, generation)` 后暂停队列。用户选关联 / 丢弃 / 另存。**永不自动重放。** 关联若需知道哪些 messageId 已在库中，调用 `outbox.reconcile`。
+1. **握手成功**即返回当前 `(archiveId, restoreEpoch)`。仅协议不兼容或 kill switch 时握手失败。epoch 变化 **不是**握手失败。
+2. **至少一次传送，业务恰好一次：** 应答只在事务提交后发出。幂等键 `(clientInstanceId, messageId, restoreEpoch)`。epoch 不符 → `restore_epoch_mismatch`，不是成功重放。
+3. **64 KiB 是业务信封上限。** 快照字节走 `snapshot.chunk` 或桌面导入。插件侧字节见产品 §8.5（IndexedDB）。
+4. **`allowed_origins` 无通配符。** D01 不加 `key`。
+5. 开发机注册脚本只用于隔离测试（D06）；生产注册归 D13。
+6. 恢复：新目录、保留 backup `archiveId`、**新铸 restoreEpoch**。握手成功；插件暂停盖着旧 epoch 的绑定队列。意图重新走候选。
 
-Host 校验顺序（逻辑）：
-
-1. 在 `argv[1…]` 中解析 `chrome-extension://<id>/` token（官方：origin 是传给 host 的 **第一个参数**，不是 `argv[0]` 的 exe 路径）。忽略 `--parent-window=*`（SW 下为 0）。要求该 origin ∈ **当前** host-manifest `allowed_origins`。Windows 上 `--parent-window` 与 origin 的历史顺序（Chrome 55 前曾把 parent-window 放前面）余下差异标 **待验证**（D06），实现应用「扫描 argv 找 origin token」，不要写死 `argv[1]`。
-2. 单帧 JSON 字节 ∈ (0, 64 KiB]。
-3. JSON 可解析；`protocolVersion` 兼容。
-4. `messageType` ∈ 上表。
-5. 转发 Tauri 后端；写成功才对 stdout 回帧。
+Host 校验顺序：扫描 argv 的 origin token ∈ 当前 manifest；单帧 ∈ (0, 64 KiB]；JSON 可解析；`messageType` ∈ 上表；写成功才回帧。
 
 ---
 
 ## 5. 数据服务职责边界
 
-| 进程 | 允许 | 禁止 |
+| 角色 | 允许 | 禁止 |
 | --- | --- | --- |
-| native-host.exe | NM 编解码、origin/大小、按需启动 **Tauri GUI EXE**、转发白名单 | 打开 SQLite、写附件、弹自己的业务 GUI、写 stdout 日志 |
-| Tauri GUI EXE（Rust 后端） | SQLite、附件、快照、幂等表、备份、idle、托盘、配对写 HKCU manifest | 第三个 writer 进程、监听 127.0.0.1 给网页、执行模型返回的命令 |
-| Tauri webview | 经 in-process IPC 调后端 | 直接写 `archive.db` |
-| 插件 SW | 探测后的 outbox、握手、白名单 RPC | 把 `aiConfig.apiKey` 放进 NM；未配对就持久化队列 |
+| NM host 进程 | NM 编解码、origin/大小、按需启动应用进程、转发白名单 | 打开 SQLite、写附件、弹业务 GUI、stdout 日志 |
+| 应用进程 | SQLite、附件、快照、幂等表、备份、current 指针、系统通知登记、配对写 manifest | 第三个 writer、监听 127.0.0.1 给网页、执行模型返回的命令 |
+| WebView 子进程 | 经应用内 IPC 调后端 | 直接写 `archive.db` |
+| 插件 SW | 意图队列、绑定 outbox、握手、白名单 RPC、扩展源 IndexedDB 快照暂存 | 把 `aiConfig.apiKey` 放进 NM；从未配对就持久化意图 |
 
-SQLite 作为嵌入式库（[sqlite.org](https://sqlite.org/)）：无独立服务器、单文件、跨平台文件格式。本项目用它做 **单用户本地档案**，不是多租户服务。WAL + 唯一写入者足够；D03 再定连接模式。附件不进 blob 表，只存相对路径 + sha256，避免把备份变成无法流式校验的巨型 DB。
+SQLite 是嵌入式库（[sqlite.org](https://sqlite.org/)），单用户本地档案，文件格式跨平台。WAL + 唯一写入者。附件不进 blob 表。
 
 ---
 
 ## 6. API / Interface Changes（相对今天的插件）
 
-D01 **不改**插件。下游预期（供 D07 对照，不是现在实现）：
+D01 **不改**插件。下游预期：
 
 | 时机 | 变化 |
 | --- | --- |
-| 现在 0.3.0 | 无 NM；SW = `onClicked` + `ENSURE_AI_HOST`；存储 `templates` / `activeTemplateId` / `aiConfig` + 更新检查二 key |
-| D07 | 追加 `nativeMessaging`；SW 增加 native port（保留 `onClicked`）；`desktopOutbox` + `desktopClientInstanceId`；侧边栏「保存岗位到本地」与「确认已投递」；桌面粘贴 ID 配对 |
-| 永不（v1） | 把桌面档案镜像进 `chrome.storage`；把插件 Key 复制进桌面备份；content script 直连 native；用第一条 NM 做配对 |
-
-桌面 IPC（Tauri 命令）只暴露与 UI 同权的业务 API，不暴露 `execute_sql(string)`。
+| 现在 0.3.0 | 无 NM |
+| D07 | 追加 `nativeMessaging`；意图/绑定队列；粘贴 ID 配对；确认投递 |
+| D08 | 扩展源 IndexedDB 快照暂存；可能申请 `unlimitedStorage` |
+| 永不（v1） | 桌面档案镜像进 `chrome.storage`；插件 Key 复制进备份；content script 直连 native；用第一条 NM 做配对；content script 把快照写进 **页面** IndexedDB |
 
 ---
 
 ## 7. Alternatives Considered
 
-### 7.1 Electron + better-sqlite3 + 仍要 NM host
+### 7.1 Electron
 
-- 优点：渲染进程全是 Node/Chromium，招聘前端更熟。
-- 缺点：~100MB+ 运行时；native 模块与 Electron ABI；GUI 仍不能当 NM host；更容易从预加载脚本漏 fs。
-- **不选。**
+可行。见 §3.1。本项目仍推荐 Tauri，因为体积、WebView 复用和 Rust 后端与 host/SQLite 共享，而不是因为 Electron「不能做 NM」或「必须管理员」。
 
-### 7.2 纯插件 + `chrome.storage` / IndexedDB 当档案
+### 7.2 纯插件存储当档案
 
-- 优点：无安装器。
-- 缺点：无可靠大附件、无用户可复制的完整备份目录、卸载扩展易丢数据、无独立于浏览器的生命周期。Epic 要求桌面权威源。
-- **不选。**
+无可靠大附件、无独立于浏览器的备份目录。Epic 要求桌面权威源。**不选。**
 
-### 7.3 桌面开 localhost HTTP / WebSocket 给插件
+### 7.3 桌面开 localhost HTTP 给插件
 
-- 优点：实现快。
-- 缺点：本机任意进程可打；扩展页面 XSS 或恶意扩展可滥用；D05 明文禁止。
-- **不选。**
+D05 禁止。**不选。**
 
-### 7.4 一个 EXE 兼任 GUI 与 NM host
+### 7.4 GUI 与 host 抢同一 stdout
 
-- 优点：少一个二进制。
-- 缺点：stdout 争用；Tauri/WebView 日志会破坏帧；Windows 子系统（WINDOWS vs CONSOLE）冲突。
-- **不选。** 两个二进制，共享 crate。
+不选「未分流的同一 stdout」。可选独立 helper **或** 同一二进制的 host 模式，见 §3.1。
 
-### 7.5 MSI / per-machine 作为 MVP 默认
+### 7.5 Windows MSI 作为默认 / macOS App Store 作为默认
 
-- 优点：企业镜像友好。
-- 缺点：要管理员；与「普通求职者 per-user」冲突；WiX 只能在 Windows 上打 MSI。
-- **MVP 不选；** D13 可按需加。
+企业 MSI、Mac App Store 沙箱（对写入 Chrome NativeMessagingHosts 不友好，社区讨论常见）都不作为首版默认。**待负责人**是否补 MSI；App Store **非目标**。
 
 ---
 
-## 8. 最低运行时与 WebView2
+## 8. 最低运行时
 
-- 插件已要求 Chrome/Edge **116+**。
-- WebView2：官方支持 Windows 10 SAC 1709+ 与 Windows 11（[WebView2 简介 · 支持的 Windows](https://learn.microsoft.com/en-us/microsoft-edge/webview2/)）。Win11 预装 Evergreen Runtime；Win10 消费设备自 2022 年起大规模投放，**仍非 100%**（[Evergreen vs fixed](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/evergreen-vs-fixed-version)）。Tauri NSIS 默认可下载 bootstrapper。
-- 产品口径：**Windows 10 22H2+ x64**。ARM64 构建 **待验证**（D13）。不承诺 Windows 7（Tauri 文档虽提到 Win7 兼容开关，超出本 MVP）。
-- 用户数据用 Known Folder `FOLDERID_LocalAppData`（默认 `%LOCALAPPDATA%` = `%USERPROFILE%\AppData\Local`），经 `SHGetKnownFolderPath` 或等价 API，**禁止**硬编码 `C:\Users\某开发者\...`（[KNOWNFOLDERID](https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid)）。
+- 插件已要求 Chrome/Edge **116+**（Windows 与 macOS 相同）。
+- WebView2：Win10 22H2 / Win11（[WebView2](https://learn.microsoft.com/en-us/microsoft-edge/webview2/)）。安装器应能引导缺失 Runtime。
+- WKWebView：随 macOS。
+- 产品建议：**Windows 10 22H2+ x64**；**macOS 11+ Apple Silicon**。Windows ARM64、macOS Intel universal **待验证**。
+- 用户数据：Windows `SHGetKnownFolderPath(FOLDERID_LocalAppData)`；macOS Application Support。**禁止**硬编码开发机路径。
 
 ---
 
 ## 9. Security & Privacy（架构切面）
 
-细节见 [data-privacy.md](data-privacy.md)。架构层硬约束：
+细节见 [data-privacy.md](data-privacy.md)。
 
-- NM origin 白名单（扫描 argv origin token）；业务信封 64 KiB；无通配；无 HTTP 配对。
-- Pipe ACL = 当前用户；拒绝其他会话。
-- 不把插件 `aiConfig` 发到桌面。桌面 Key 用 DPAPI / Credential Manager（D11）。
-- Host 与 Tauri 后端崩溃不得损坏 DB（SQLite 事务 + 备份）；失败返回 D05 错误码，不假成功。
-- 威胁：恶意扩展若进入 `allowed_origins` 可写档案 → 所以禁止通配、禁止把开发 ID 写进生产 manifest。
+- NM origin 白名单；64 KiB；无通配；无 HTTP 配对。
+- IPC 仅当前用户。
+- 不把插件 `aiConfig` 发到桌面。桌面 Key：Windows DPAPI / Credential Manager；macOS Keychain（D11）。
+- 威胁：恶意扩展进入 `allowed_origins` 可写档案 → 禁止通配。
 
 ---
 
 ## 10. Observability
 
-- 日志：错误码 + 脱敏上下文（路径只留叶名、URL 已剥 token）。禁止简历正文、邮件正文、API Key、Authorization。
-- 用户可导出诊断包（D02）：日志 + 版本 + `archiveId`/`generation`/`schemaVersion` + 队列计数；不含附件与快照正文。
-- 指标（本地计数即可，不上报）：握手成功/失败、写入延迟、idle 退出次数、NM 帧拒绝原因。
-- 告警：无云端。UI 对连续失败显示错误码。
+日志：错误码 + 脱敏上下文。禁止简历/邮件正文、API Key。
 
-冷启动目标（D06 验证，非 D01 实现）：host 已在、**Tauri GUI EXE（唯一写入者）** 已在时握手 **< 200 ms**；需要按需拉起该 EXE 时 **< 2 s**（**待验证**）。
+诊断包：日志 + 版本 + `archiveId`/`restoreEpoch`/`schemaVersion` + 意图/绑定队列计数；不含附件与快照正文。
+
+冷启动目标（D06 验证）：host 已在、应用进程已在时握手 **< 200 ms**；按需拉起 **< 2 s**（**待验证**，macOS 可能更慢）。
 
 ---
 
 ## 11. Rollout Plan
 
-阶段出口对齐 Epic #15（**阶段** ≠ **执行波次**，波次见 [downstream-decisions.md §1](downstream-decisions.md#1-硬依赖图保持原样)）：
-
 | 阶段 | 内容 |
 | --- | --- |
-| P0 | 本 ADR 经负责人确认 |
-| P1 | D02 壳 + 单实例 + 数据目录；D03 数据层；D04 手动 UI。无 NM。执行上 D02/D03/D05 可先开工，D04 等 D02+D03 |
-| P2 | D05 契约 → D06 host → D07 插件连接（含配对 UX 与 `submit.confirm`）。开发机隔离注册脚本 |
-| P3 | D08 填写留档/分片快照；D09 证据收件箱 |
-| P4 | D10 待办提醒；D11 AI 建议 |
-| P5 | D12 备份恢复；D13 生产 NSIS；D14 干净账户安装验收 |
+| P0 | 本 ADR 经负责人确认（含平台与正式版范围） |
+| P1 | D02 壳（**含 macOS 原型**）+ 单实例 + 数据目录；D03 数据层；D04 手动 UI |
+| P2 | D05 契约 → D06 host（Win + Mac 注册路径）→ D07 |
+| P3 | D08 IndexedDB 暂存 + 分片；D09 |
+| P4 | D10 系统调度提醒；D11 |
+| P5 | D12；D13 Win NSIS + Mac dmg；D14 两端安装验收（覆盖范围随正式版决议） |
 
-回滚：卸载桌面保留档案；插件去掉 NM 调用后仍能填表（权限多一项 `nativeMessaging` 不破坏旧填写）。协议不兼容时拒绝写入，不自动迁移业务消息。
-
-功能开关：桌面「允许浏览器连接」默认开；关掉则 host 对业务 RPC 返回明确错误，插件显示未连接。v1 无远程 feature flag。
+回滚：卸载桌面保留档案；插件去掉 NM 后仍能填表。
 
 ---
 
@@ -385,18 +329,20 @@ D01 **不改**插件。下游预期（供 D07 对照，不是现在实现）：
 
 | 严重度 | 风险 | 缓解 |
 | --- | --- | --- |
-| 高 | GUI stdout 污染 NM | 独立 host EXE；二进制模式；契约测试乱写 stdout |
-| 高 | 多写入者损坏 SQLite | mutex + **单一 Tauri GUI EXE / unique writer**；D02 验收第二实例 |
-| 中 | 未打包 ID 变化 / 未配对当未安装 | 桌面粘贴 ID；未配对单独降级；D01 不加 key |
-| 中 | MV3 SW 杀死 native port | 队列 + 重连；D06 原型 |
-| 中 | 部分 Win10 无 WebView2 | NSIS bootstrapper；文档说明 |
-| 低 | Rust 人力 | crate 边界小；UI 仍用 web |
+| 高 | GUI stdout 污染 NM | host 模式二进制 stdout；契约测试 |
+| 高 | 多写入者损坏 SQLite | 单实例应用进程 |
+| 高 | 把 idle 退出当成次日提醒 | 系统调度；文案；D10 杀进程测试 |
+| 中 | 未打包 ID / 未配对当未安装 | 粘贴 ID；未配对不建意图 |
+| 中 | 重复恢复碰撞 generation | restoreEpoch UUID |
+| 中 | macOS NM 路径 / 公证 / 按需启动 | D02/D06/D13 原型（V10–V12） |
+| 中 | Win 计划 Toast 5 分钟窗口 | 文案 + 打开应用汇总 |
+| 低 | Rust 人力 | crate 边界小；备选 Electron 已记录真实代价 |
 
 ---
 
 ## 13. Open Questions
 
-见 [downstream-decisions.md](downstream-decisions.md#需要项目负责人选择) 第 1–4 项（栈、MSI、托盘、扩展 ID）。原型项见同文「需要后续原型验证」。
+见 [downstream-decisions.md](downstream-decisions.md#需要项目负责人选择)。
 
 ---
 
@@ -404,12 +350,14 @@ D01 **不改**插件。下游预期（供 D07 对照，不是现在实现）：
 
 - Chrome Native messaging: https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
 - Edge Native messaging: https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging
-- `chrome.runtime.sendNativeMessage` / `connectNative`（同上文档）
+- Chrome 扩展 storage / IndexedDB: https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
 - Tauri 2 Windows installer: https://v2.tauri.app/distribute/windows-installer/
+- Tauri 2 macOS bundle: https://v2.tauri.app/distribute/macos-application-bundle/
+- Tauri 2 macOS signing/notarization: https://v2.tauri.app/distribute/sign/macos/
 - Tauri 2 sidecar: https://v2.tauri.app/develop/sidecar/
-- KNOWNFOLDERID / `FOLDERID_LocalAppData`: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
-- WebView2 支持的 Windows: https://learn.microsoft.com/en-us/microsoft-edge/webview2/
-- WebView2 Evergreen vs Fixed: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/evergreen-vs-fixed-version
-- SQLite: https://sqlite.org/  · self-contained: https://www.sqlite.org/selfcontained.html
-- 本仓库 [`manifest.json`](../../manifest.json)、[`background.js`](../../background.js)
+- electron-builder NSIS `perMachine` 默认 false: https://www.electron.build/nsis
+- Windows 计划应用通知: https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/app-notifications-scheduled
+- KNOWNFOLDERID LocalAppData: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
+- WebView2: https://learn.microsoft.com/en-us/microsoft-edge/webview2/
+- SQLite: https://sqlite.org/
 - Epic #15、D02 #16、D05 #23、D06 #24、D13 #29

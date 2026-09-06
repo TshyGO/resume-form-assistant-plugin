@@ -15,7 +15,11 @@
 
 ## 1. Overview
 
-求职者已经在用 Resume Pro 插件填写网申，但填完之后不知道「哪份投了、用了哪版简历、后来邮件是哪一岗」。本 MVP 把产品扩成 **浏览器填写入口 + Windows 本地求职档案**：插件继续独立填表；桌面主程序保存申请、事件、附件、当次简历快照和待办。桌面档案是申请数据的权威源；插件通过受限 Native Messaging 写入，离线时入队。
+求职者已经在用 Resume Pro 插件填写网申，但填完之后不知道「哪份投了、用了哪版简历、后来邮件是哪一岗」。本 MVP 把产品扩成 **浏览器填写入口 + 本机求职档案**：插件继续独立填表；桌面主程序保存申请、事件、附件、当次简历快照和待办。
+
+**目标平台是 Windows 与 macOS。** 实现可以 Windows 优先，但业务模型、SQLite、事件、AI 建议和通信消息保持平台无关；D02 起必须做 macOS 原型，不能等 Windows 全做完再移植。Linux 仍非首版产品。浏览器首阶段仍是 Chrome / Edge，**不默认承诺 Safari**。
+
+桌面档案是申请数据的权威源；插件通过受限 Native Messaging 写入。离线时持久化的是 **保存意图** 或 **已绑定业务消息**（见 §5.2），二者不是同一状态，也不得把「待同步」说成「桌面已保存」。
 
 当前仓库 **没有** 申请对象、填写事件日志或桌面连接（见 [README 现状表](README.md#现状以仓库代码为准不以-readme-宣传为准)）。填写仍是用户点击触发；[`form-agent.js`](../../form-agent.js) 只在确认后点击安全「新增/添加」按钮，从不提交表单。本需求保持该安全边界，并加上「填写完成 ≠ 已投递」。
 
@@ -39,7 +43,7 @@
 
 ### 2.3 目标用户
 
-在 Windows 上使用 Chrome 或 Edge、已用 Resume Pro 填写网申的 **中文个人求职者**。不假设企业 IT、不假设多设备、不假设会写代码。能接受「先装桌面程序再从网页保存岗位」；不装桌面时原插件能力必须仍可用。
+在 **Windows 或 macOS** 上使用 Chrome 或 Edge、已用 Resume Pro 填写网申的 **中文个人求职者**。不假设企业 IT、不假设多设备同步、不假设会写代码。能接受「先装桌面程序再从网页保存岗位」；不装桌面时原插件能力必须仍可用。不把 Safari 当首阶段目标。
 
 ---
 
@@ -60,9 +64,10 @@
 
 - 邮箱 OAuth / IMAP 轮询 / 自动拉取
 - 自动提交网申、代发邮件、任意网页 Agent
-- 云账号、云同步、多设备同步、团队协作
-- Mac / Linux 成品
+- 云账号、云同步、多设备实时同步、团队协作（换电脑 = 备份恢复，不是云同步）
+- Linux 成品；Safari 扩展；默认承诺 App Store / Chrome Web Store 上架
 - 扩展商店上架与静默自动更新（检查更新仍可沿用插件现有 GitHub Release 提示）
+- 把「首个正式版必须双平台同一天交付」写成未确认承诺（见 [开放问题](downstream-decisions.md#需要项目负责人选择)）
 - `.msg` / Outlook 虚拟拖拽对象（不支持时提示导出 `.eml` 或粘贴正文）
 - 把当前开发者机器路径写进产品
 - 在 D01 修改插件权限、存储、功能或把 `manifest.json` 版本从 `0.3.0` 改掉
@@ -78,11 +83,11 @@
 3. **没有导入邮件 ≠ 没有收到回信。** UI 文案必须是「尚未导入回复证据」，禁止「对方未回复」。
 4. **同公司多岗、重复申请必须可区分。** 禁止按公司或 URL 自动合并；身份是申请 UUID。
 5. **AI 只建议。** 确认后才事务性写事件/阶段/待办；模型输出不得替换原始证据字节。
-6. **桌面档案是 source of truth。** 插件离线队列 + 幂等 + `archiveId`/`generation` 检查。
+6. **桌面档案是 source of truth。** 插件离线队列分 **意图 / 已绑定消息**；幂等与 `archiveId`/`restoreEpoch` 检查。
 7. **只记录用户主动使用插件的操作。** 禁止密码、OTP、API Key、Cookie；禁止全局键鼠采集。
 8. **升级 / 卸载 / 恢复不得静默删除申请和附件。**
 9. **AI 或网络失败时，手动管理必须仍可用。**
-10. **无邮箱连接、无自动投递、无通用 web agent、无云账号、无多设备同步、v1 无 Mac/Linux 成品。**
+10. **无邮箱连接、无自动投递、无通用 web agent、无云账号、无多设备实时同步。** Linux 与 Safari 仍非首版。Windows + macOS 是架构目标，实现顺序与「正式版是否双平台同时交付」见开放问题。
 
 ---
 
@@ -98,59 +103,94 @@
 
 此流程是 [D04 #19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) 的验收闭环，不断网、不调外部 API。
 
-### 5.2 插件辅助
+### 5.2 插件辅助：保存意图 vs 已绑定业务消息
 
-1. 用户在招聘页点「保存岗位到本地」（**D07**）。侧边栏展示提取的公司/岗位/地点/URL，缺项手补，不捏造。
-2. 桌面按 **两层候选**（§7）返回最小元数据；用户选「使用已有」或「新建」。默认阶段 `saved`。
+1. 用户在招聘页点「保存岗位到本地」（**D07**）。侧边栏展示提取的公司/岗位/地点/URL，缺项手补，不捏造。用户点确认后，插件记下一次 **保存意图**（见下）。
+2. **仅当桌面可握手** 时，才查询两层候选（§7）；用户选「使用已有」或「新建」。默认阶段 `saved`。
 3. 用户照常使用现有「一键 AI 填写」/「AI 辅助新增条目」。填写本身不依赖桌面。
-4. 可选：将本次填写事件 + 简历快照归档到已绑定申请（D08；快照字节走分片，见 ADR §4）。
+4. 可选：将本次填写事件 + 简历快照归档到已绑定申请（D08；快照字节见 §8.5）。
 5. 用户另点「确认已投递」（**插件按钮归 D07**，`submit.confirm`，与填写成功无关），或之后在桌面（D04）/证据确认（D11）推进阶段。
 
-**Outbox 顺序（冻结）：** 先探测 host 注册 / 本 origin 是否已配对 / 协议是否兼容。未安装、未配对：不建长期队列。协议不兼容：不入队，提示升级。`handshake` 与 `application.queryCandidates` 是 **读**，不写 outbox。**只在用户确认「使用已有」或「新建」之后、派发写入**（`job.save` / `fill.submit` / `snapshot.chunk` / `submit.confirm`）时才持久化 outbox 行，并盖上握手得到的 `(archiveId, generation)`。用户点「取消」：什么都不入队。已配对但 EXE 未运行或离线或拉起失败：此时才 durable 入队 +「待同步」。
+#### 5.2.1 两种队列对象（冻结）
+
+| 对象 | 用户已经确认了什么 | 是否已有申请 UUID | 是否已盖 `archiveId`/`restoreEpoch` | UI |
+| --- | --- | --- | --- | --- |
+| **保存意图** `SaveIntent` | 要保存这些字段（公司/岗位/URL/地点） | **否** | **否**（可记下「上次成功握手」作提示，不作提交凭证） | 「待同步（尚未绑定申请）」 |
+| **已绑定业务消息** Bound outbox | 已选「使用已有」或「新建」，协议可重试 | **是**（已有 id，或桌面将在 `job.save` 成功时返回新 id） | **是**（当前握手身份） | 「待同步」；**仅**桌面持久化应答后才「桌面已保存」 |
+
+**禁止：** 以「先握手成功」作为「桌面不可用时才能入队」的前提。曾经配对但此刻桌面不可用时，持久化的是 **意图**，不是 `job.save`。
+
+**禁止：** 把待同步说成已保存。
+
+#### 5.2.2 何时确定哪些 ID
+
+| ID | 何时确定 | 之后是否可变 |
+| --- | --- | --- |
+| `intentId` | 用户确认字段、产生保存意图时 | 不可变。取消则删除该意图 |
+| `clientInstanceId` | 每个扩展安装 / Profile 一次 | 清存储后新 ID |
+| `messageId`（绑定消息） | 用户完成「使用已有 / 新建」并派发 `job.save` / `fill.submit` / `submit.confirm` 时 | 不可变。重试沿用，不新铸 |
+| 申请 UUID | 选「使用已有」= 候选 id；选「新建」= **桌面提交成功后**返回的新 UUID。意图阶段 **没有** 申请 UUID | 不可变 |
+| `archiveId` / `restoreEpoch` | **成功握手**时盖到绑定消息上。意图不盖当前身份 | 绑定后不可变；恢复后旧消息因 epoch 不匹配而暂停 |
+
+#### 5.2.3 分模式行为
+
+| 模式 | 如何判断 | 用户确认保存字段之后 | 恢复后 |
+| --- | --- | --- | --- |
+| **未安装 / 从未配对** | 无 host 注册，或本 origin 从未成功写入过 pairing 记录 | **不建长期意图、不建绑定队列**。说明安装或到桌面粘贴扩展 ID。填写不受影响 | — |
+| **曾经配对，桌面暂不可用** | pairing 记录存在，但 host 拉起失败 / 握手超时 / 管道断开 | **持久化 SaveIntent**，UI「待同步（尚未绑定申请）」。不调用 `queryCandidates`，不铸申请 UUID，不盖 restoreEpoch | 桌面恢复 → 握手 → 若 epoch 与已有 **绑定** 队列冲突则先暂停那些绑定项 → 对每条意图：`queryCandidates` → 用户消歧 → 派发 `job.save`（此时才有 `messageId` + 身份盖章） |
+| **已配对且握手成功** | 握手返回兼容协议 | 可直接 `queryCandidates`；用户选绑定后再写 Bound outbox 并发送。意图可跳过或瞬间转换 | — |
+| **协议不兼容** | 握手返回区间不交 | **不把意图升级为绑定消息**，也不发送。已有意图保留并提示升级；未配对路径仍不建新意图 | 升级后再走「桌面恢复」列 |
+
+`handshake` 与 `application.queryCandidates` 始终是 **读**，不单独构成「已保存」。
+
+#### 5.2.4 取消、队列满、应答丢失、重复点击
+
+- **取消字段确认：** 不写意图。
+- **取消候选选择器：** 若此次从「桌面已可用」路径进来、尚未派发 `job.save`：不写绑定消息。若本就是离线意图在桌面恢复后弹出选择器：取消 = 意图保持 pending，不绑定、不丢字段。
+- **用户删除某条待同步意图：** 删除意图；若已有部分上传的快照暂存，按 §8.5 清理规则。
+- **队列满：** 产品上限建议 100 条意图 + 100 条绑定消息（D07 可调，须有数）。满时 **拒绝新增** 并提示处理，**不静默丢旧项**，**不阻止**原有填表。
+- **应答丢失：** 绑定消息用同一 `messageId` 重试。桌面按 `(clientInstanceId, messageId, restoreEpoch)` 幂等：相同载荷返回原 `resultId`；冲突拒绝。意图没有桌面幂等键，桌面恢复后只转换一次。
+- **重复点击「保存岗位」：** 同一页短时间内（建议 10 s）已有 pending 意图且规范化三元组相同 → 提示已有待同步意图，不第二份；用户明确「再存一次」才新 `intentId`（对应走查 10.4 的再投）。
 
 ```mermaid
 sequenceDiagram
   participant U as 用户
   participant CS as content.js
   participant SW as background.js
-  participant H as native-host.exe
-  participant APP as Tauri EXE
-  U->>CS: 保存岗位到本地（确认字段）
+  participant H as NM host
+  participant APP as 应用进程唯一写入者
+  U->>CS: 确认保存字段
   CS->>CS: 剥离 URL 秘密参数
-  CS->>SW: runtime.sendMessage
-  SW->>SW: 探测：host 注册？本 origin 已配对？
-  alt 未安装或未配对
-    SW-->>U: 安装说明 / 粘贴扩展 ID（不写 outbox）
-  else 已安装已配对
-    SW->>H: Native Messaging handshake（读，不是配对，不入队）
-    alt 协议不兼容
-      SW-->>U: 提示升级（不入队）
+  CS->>SW: 保存意图
+  SW->>SW: 探测：安装？曾经配对？
+  alt 未安装或从未配对
+    SW-->>U: 安装 / 粘贴扩展 ID（不写意图）
+  else 曾经配对
+    SW->>SW: 持久化 SaveIntent（intentId，无申请 UUID）
+    SW-->>U: 待同步（尚未绑定申请）
+    SW->>H: 尝试 handshake（失败也保留意图）
+    alt 握手失败或超时
+      Note over SW: 意图待桌面恢复；禁止显示桌面已保存
+    else 协议不兼容
+      SW-->>U: 提示升级（意图保留，不升级为 job.save）
     else 握手成功
-      SW->>SW: 比对已有 outbox 上的 archiveId/generation
-      alt 身份不匹配
-        SW-->>U: 暂停旧队列：关联 / 丢弃 / 另存
-      else 身份匹配或队列空
-        alt EXE 未运行
-          H->>APP: 按需启动 Tauri EXE（可隐藏）
-        end
-        SW->>H: application.queryCandidates（读，不入队）
-        APP-->>SW: exact[] + sameCompany[]
-        U->>CS: 使用已有 / 新建 / 取消
-        alt 取消
-          Note over SW: 不写 outbox
-        else 使用已有或新建
-          SW->>SW: 此时才写入 outbox（固定 messageId，盖上当前 archiveId/generation）
-          SW->>H: job.save
-          APP-->>SW: 提交后的 resultId
-          SW->>SW: 删除对应 outbox 项
-          SW-->>U: 桌面已保存（stage=saved，非已投递）
-        end
+      SW->>SW: 绑定队列 epoch 检查
+      SW->>H: application.queryCandidates（读）
+      APP-->>SW: exact[] + sameCompany[]
+      U->>CS: 使用已有 / 新建 / 稍后再说
+      alt 稍后再说
+        Note over SW: 意图保持 pending
+      else 使用已有或新建
+        SW->>SW: 写 Bound outbox（messageId，盖 archiveId+restoreEpoch）
+        SW->>H: job.save
+        APP-->>SW: applicationId + resultId
+        SW->>SW: 删除意图与对应绑定项
+        SW-->>U: 桌面已保存（stage=saved，非已投递）
       end
     end
   end
 ```
 
-「桌面已保存」只在持久化应答之后显示。已入队但未提交时显示「待同步」，不得假成功。取消选择器不会留下 `job.save` 队列项。
 
 ### 5.3 证据 + AI 建议
 
@@ -174,6 +214,28 @@ flowchart TD
   J -->|否| K[证据已存 阶段不变]
   J -->|是| L[同一事务: Event + stage 投影 + Todo]
 ```
+
+### 5.4 提醒与进程生命周期（共同语义）
+
+五种用户/系统状态必须分开，禁止混用文案：
+
+| 状态 | 含义 | 待办列表 | 系统通知 | 插件保存 |
+| --- | --- | --- | --- | --- |
+| **关闭窗口** | UI 不可见；应用进程可按平台习惯退到托盘/菜单栏或仅隐藏窗口 | 可用（再打开窗口） | 若已启用后台提醒：已登记的系统调度仍有效 | host 仍可按需拉起应用进程 |
+| **后台提醒已启用** | 用户在设置中打开，并 **授予** 系统通知权限 | 可用 | 到期项写入 OS 调度；**不依赖**进程一直活着 | 正常 |
+| **用户明确退出** | 托盘/菜单栏「退出」或等效 | 下次启动仍在 | **取消尚未触发的系统调度**（或按设置保留；默认取消并在退出前告知「退出后不会弹出面试提醒」） | 下次由 host 按需拉起（若仍配对） |
+| **休眠 / 重启 / 关机** | OS 生命周期 | 磁盘上仍在 | 已登记的系统调度：由 OS 决定。Windows 计划 Toast 有约 5 分钟投递窗口，关机过久可能丢（**待验证于本机**，官方如此说明）。重启后应用 **不**偷偷设开机启动去补火 | 重启后需再握手 |
+| **未授权通知** | 用户拒绝或从未授予系统通知 | **必须仍可用** | 不弹。设置页说明「待办在，提醒不会出现」 | 无关 |
+
+共同规则：
+
+1. 关窗 ≠ 退出 ≠ 关机。
+2. 不把「闲置 N 分钟后退出进程」当成日程系统。进程空闲退出 **可以**存在（省资源），但次日面试必须走系统调度。
+3. 不偷偷开机启动、不偷偷注册 Login Item / 计划任务「保活」。
+4. 未授权通知时，应用内待办、逾期标记、打开应用后的一次汇总，仍然要做（D10）。
+5. 通知正文默认不含简历/邮件正文。
+
+平台实现差异见 [ADR §3.8](adr-architecture.md#38-提醒与后台-平台实现)。
 
 ---
 
@@ -228,25 +290,40 @@ saved → filling → submitted → assessment → interview → offer
 任意阶段 --stage_corrected--> 任意阶段（需原因）
 ```
 
-### 6.3 第二维度：回复证据状态
+### 6.3 第二维度：回复证据状态（业务类型 ≠ 发送方式）
 
-与流程阶段独立。`replyEvidenceState` 只折叠 **已关联到该申请、且已确认** 的证据上的 `replyClass`（不是 `kind`，也不是未确认的 AI 建议）。证据本身不蕴含阶段。
+与流程阶段独立。证据本身不蕴含阶段。
 
-对一条申请，令 `C` 为上述 `replyClass` 的集合，并 **忽略** `unknown` 与空：
+两条正交字段：
 
-| `C` 的内容 | `replyEvidenceState` |
+| 字段 | 含义 | 取值 |
+| --- | --- | --- |
+| `replyClass` | **通知业务类型** | `auto_ack` / `assessment_invite` / `interview_invite` / `action_required` / `offer` / `reject` / `other` / `unknown` |
+| `sendMode` | **发送方式** | `human` / `automated` / `unknown` |
+
+面试邀请、测评、Offer、拒信都 **可能由 ATS 自动发出**。因此：
+
+- **禁止**仅凭 `replyClass=interview_invite`（或测评/Offer/拒信）投影成「人工回复」。
+- 发送方式无法判断时 `sendMode=unknown`，**不捏造** `human`。
+- 旧值 `human_reply` **不再**作为 `replyClass` 或 `replyEvidenceState`。
+
+`replyEvidenceState` 只折叠 **已关联到该申请、且已确认** 的证据上的 `replyClass`（不是 `kind`，不是 `sendMode`，也不是未确认的 AI 建议）。忽略 `unknown` 与空：
+
+| 已确认 `replyClass` 集合 `C` | `replyEvidenceState` |
 | --- | --- |
 | 没有非空、非 `unknown` 的 `replyClass` | `none_imported` |
 | 只有 `auto_ack` | `auto_ack` |
-| 含 `{human_reply, assessment_invite, interview_invite, action_required, offer, reject, other}` 之一，且 **没有** `auto_ack` | `human_reply` |
-| 同时有 `auto_ack` 与上一行任一人工作类 | `mixed` |
+| 含 `{assessment_invite, interview_invite, action_required, offer, reject, other}` 之一，且 **没有** `auto_ack` | `classified` |
+| 同时有 `auto_ack` 与上一行任一业务类 | `mixed` |
 
 | code | 展示 | 规则 |
 | --- | --- | --- |
 | `none_imported` | 尚未导入回复证据 | 默认。禁止写成「对方未回复」 |
 | `auto_ack` | 已导入自动回执 | 不移动到 `interview`，不暗示通过筛选 |
-| `human_reply` | 已导入人工回复 | 含面试/测评/Offer/拒信等人工类；仍需用户确认才改 **阶段** |
-| `mixed` | 回执与人工回复均有 | 列表可用摘要，详情看时间线 |
+| `classified` | 已导入分类通知 | 详情展示具体 `replyClass`（如「面试邀请」）。`sendMode` 另栏显示「人工 / 自动 / 未知」 |
+| `mixed` | 回执与其他分类通知均有 | 列表可用摘要，详情看时间线 |
+
+列表不得把 `classified` 写成「已导入人工回复」。
 
 ---
 
@@ -289,13 +366,15 @@ saved → filling → submitted → assessment → interview → offer
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
-| `archiveId` | 本档案实例 UUID。恢复 **保留 backup 的值**，不新铸 | 是 | system | immutable | public-meta |
-| `generation` | 单调递增；每次恢复 **必 +1** | 是 | system | mutable（仅系统提升） | public-meta |
+| `archiveId` | 档案内容谱系 UUID。备份 **包含** 它；恢复 **保留 backup 的值**，不新铸 | 是 | system | immutable | public-meta |
+| `restoreEpoch` | 当前指针身份。每次 **成功切换 current 指针** 新铸 UUID。**不写入备份包**，不从备份拷贝 | 是 | system | mutable（仅切换 current 时新铸） | public-meta |
 | `schemaVersion` | 逻辑/物理 schema 版本 | 是 | system | mutable（迁移） | public-meta |
 | `createdAt` | 档案创建 UTC | 是 | system | immutable | public-meta |
 | `displayName` | 用户可见档案名 | 否 | user | mutable | public-meta |
 
-同一时刻桌面只把 **一个** 档案标为 current。插件握手拿到的就是 current 的 `archiveId`+`generation`。
+同一时刻桌面只把 **一个** 档案标为 current。插件握手拿到的是 current 的 `archiveId` + `restoreEpoch`。
+
+`restoreEpoch` 存在机器本地的 current 指针文件（见 [data-privacy.md §6.5](data-privacy.md#65-恢复)），**不是** backup 内 `generation+1`。重复恢复同一备份会得到 **不同** epoch，旧队列不会因「还是 A1、generation 都变成 4」而被静默接受。不再使用 `generation` 做握手隔离（若 D03 仍保留整数计数，只作内部迁移序号，不进 NM 握手）。
 
 ### 8.2 Application
 
@@ -362,14 +441,15 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 ### 8.4 ReplyEvidence 与 AttachmentBlob
 
-附件字节在库外。`kind` 是 **获取/格式**，`replyClass` 是 **语义**（确认后才写）。`replyEvidenceState` 按 §6.3 从已关联、已确认的 `replyClass` 投影（`unknown`/空不计数）。一封面试邮件可以同时是 `kind=eml` 与 `replyClass=interview_invite`，此时该申请的 `replyEvidenceState=human_reply`。
+附件字节在库外。`kind` 是 **获取/格式**，`replyClass` 是 **通知业务类型**，`sendMode` 是 **发送方式**（确认后才写；无法判断则为 `unknown`）。`replyEvidenceState` 按 §6.3 只从已关联、已确认的 `replyClass` 投影（`unknown`/空不计数）。一封 ATS 自动发出的面试邮件可以同时是 `kind=eml`、`replyClass=interview_invite`、`sendMode=automated`；该申请的 `replyEvidenceState=classified`，**不是**「人工回复」。
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
 | `evidenceId` | UUID | 是 | system | immutable | public-meta |
 | `applicationId` | 可空（收件箱未关联） | 否 | user | mutable（改关联） | public-meta |
 | `kind` | 获取格式：`eml` / `screenshot` / `pdf` / `paste` / `unknown` | 是 | import/system | immutable | public-meta |
-| `replyClass` | 语义：`auto_ack` / `human_reply` / `assessment_invite` / `interview_invite` / `action_required` / `offer` / `reject` / `other` / `unknown`；确认前可空 | 否 | user / ai_suggest+confirm | mutable 至确认 | public-meta |
+| `replyClass` | 业务类型：`auto_ack` / `assessment_invite` / `interview_invite` / `action_required` / `offer` / `reject` / `other` / `unknown`；确认前可空 | 否 | user / ai_suggest+confirm | mutable 至确认 | public-meta |
+| `sendMode` | 发送方式：`human` / `automated` / `unknown`。无法判断时必须 `unknown`，禁止因 `replyClass` 捏造 `human` | 否 | user / ai_suggest+confirm | mutable 至确认 | public-meta |
 | `blobSha256` | 指向 AttachmentBlob | 是 | system | immutable | public-meta |
 | `originalFilename` | 导入时文件名 | 否 | import | immutable | PII |
 | `importedAt` | UTC | 是 | system | immutable | public-meta |
@@ -404,7 +484,31 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `createdAt` | UTC | 是 | system | immutable | public-meta |
 | `byteSize` | 用于超限判断 | 是 | system | immutable | public-meta |
 
-快照内容是 PII。默认填写留档 **不把逐字段值塞进 `fill.submit` 信封**；快照文件由用户在归档时确认后经 `snapshot.chunk` 传输（每块 ≤ 64 KiB），或改在桌面导入。单份快照 **> 2 MiB 拒绝**，明确失败。Outbox 只存 `snapshotId`/`sha256`/分片游标，不把整份 blob 放进 `chrome.storage.local`。
+快照内容是 PII。默认填写留档 **不把逐字段值塞进 `fill.submit` 信封**。
+
+**生成时机：** 用户确认「本次留档」时，插件从 **当时** 的活模板做一份结构化拷贝（JSON，字段与 `normalizeTemplate` 一致），计算 `sha256` 与 `byteSize`，铸 `snapshotId`。这之后活模板再改，也 **不得**用新模板重生成该 `snapshotId`。
+
+**字节放哪：**
+
+| 阶段 | 字节位置 | 元数据位置 |
+| --- | --- | --- |
+| 刚确认留档、桌面可握手 | 经 `snapshot.chunk` 写入桌面 `snapshots/` | Bound outbox：`snapshotId` / `sha256` / `byteSize` / `chunkCursor` |
+| 曾配对但桌面暂不可用 | **扩展源 IndexedDB**（SW / offscreen / 扩展页可访问；**禁止**写在 content script 的页面源 IDB） | `chrome.storage.local` 只存元数据 + `staging=idb`，**不**存整份 blob（`chrome.storage.local` 约 10 MB 配额） |
+| 桌面已 ACK 完整快照 | 仅桌面档案 | 删除 IDB 项与绑定消息 |
+
+依据：[Chrome 扩展 Storage and cookies](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies) — IndexedDB 在 SW 可用；content script 的 web storage 是 **宿主页面**源，不是扩展源。
+
+**配额与上限：** 单份 **> 2 MiB 拒绝**，明确失败，填表仍可用。暂存合计建议 ≤ 20 MiB 或 20 份（先到为准）。满：提示处理旧暂存，不覆盖、不从活模板另做一份顶掉。
+
+**过期：** 暂存超过 30 天仍未 ACK：下次打开插件时提示「有未完成的简历留档」，用户选继续发送 / 丢弃。到期 **不自动删** 未提示过的项。
+
+**部分上传：** `chunkCursor` 记录桌面已 ACK 的最后块号；重试从下一块开始，校验总 `sha256`。桌面在未收齐前不把快照标为完整。
+
+**清理：** 仅当 (1) 桌面 ACK 完整且哈希相符，或 (2) 用户明确丢弃该留档，或 (3) 用户确认过期提示中的丢弃。浏览器重启后 IDB 仍在，继续发 **原字节**。
+
+**失败降级：** IndexedDB 打开失败 → 本次留档失败并说明原因，**不**假装已暂存；填写本身成功。不把「只存了哈希」说成可以恢复文件。
+
+**权限：** D08 实现 IndexedDB 暂存时，若配额不够，可申请 `unlimitedStorage`（D08 的插件变更，不是 D01/0.3.0）。无该权限时仍须在产品上限内工作或明确失败。
 
 ### 8.6 Todo
 
@@ -422,7 +526,7 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `interviewRound` | 可选轮次 | 否 | user | mutable | public-meta |
 | `sourceEventId` | 创建来源 | 否 | system | immutable | public-meta |
 
-提醒能力依赖进程模型：窗口关闭但 Tauri EXE 后端仍在（托盘/idle 窗口期内）时可提醒；彻底退出或关机后 **v1 不保证** 提醒，且 **不得** 偷偷注册开机启动（D10 / ADR）。Idle 默认 15 分钟，见 ADR §3.4。
+提醒语义见 §5.4（关窗 / 启用后台提醒 / 主动退出 / 休眠重启关机 / 未授权通知）。**禁止**把「进程闲置 15 分钟内还活着」包装成可靠的次日面试提醒。**禁止**偷偷注册开机启动。启用后台提醒时，应把到期项登记到 **用户授权的系统调度通知**（Windows 计划 Toast / macOS `UNCalendarNotificationTrigger`）；进程可以随后退出。系统调度不是 100%：Windows 计划通知在关机超过约 5 分钟窗口时可能被丢弃（官方说明，见 ADR），产品文案必须写明，不得承诺「关机期间也一定送到」。
 
 ### 8.7 AiSuggestion
 
@@ -442,7 +546,7 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `modelLabel` | 用户配置的模型名 | 否 | system | immutable | public-meta |
 | `promptScope` | 外发范围摘要（非原文密钥） | 否 | system | immutable | public-meta |
 
-禁止字段：API Key、完整档案库、未选中申请的简历快照。D11 建议的分类写入 `ReplyEvidence.replyClass`（与 `kind` 分离），确认前不改正式阶段。
+禁止字段：API Key、完整档案库、未选中申请的简历快照。D11 建议分别给出 `replyClass` 与 `sendMode`（与 `kind` 分离）；无法判断发送方式则 `sendMode=unknown`。确认前不改正式阶段。
 
 ### 8.8 填写留档默认范围
 
@@ -483,23 +587,41 @@ erDiagram
   Todo }o--o| Event : sourced_from
 ```
 
-### 8.10 Plugin Outbox（逻辑对象，存在 `chrome.storage.local.desktopOutbox`）
+### 8.10 插件队列：SaveIntent 与 Bound outbox
 
-仅在 **host 已注册 ∧ 本 origin 已配对 ∧ 协议兼容 ∧ 用户已确认派发写入**（`job.save` / `fill.submit` / `snapshot.chunk` / `submit.confirm`）之后持久化。handshake 与候选查询不入队。每条记录盖上当时握手到的档案身份。
+存在 `chrome.storage.local` 的新 key：`desktopSaveIntents`、`desktopOutbox`、`desktopClientInstanceId`、`desktopPairing`（上次成功握手的 archiveId/restoreEpoch/时间，不作提交凭证）。**禁止**占用 `templates` / `activeTemplateId` / `aiConfig` / `resumeProUpdateCache` / `resumeProDismissedVersion`。
+
+**SaveIntent**（曾经配对且用户已确认字段；桌面不必当时可用）：
+
+| 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
+| --- | --- | --- | --- | --- | --- |
+| `intentId` | 意图 UUID | 是 | plugin | immutable | public-meta |
+| `clientInstanceId` | 见上 | 是 | plugin | immutable | public-meta |
+| `company` / `title` / `sourceUrl` / `location` | 用户确认的字段（URL 已脱敏） | 公司、岗位是 | user | immutable | PII |
+| `createdAt` | 确认时刻 UTC | 是 | plugin | immutable | public-meta |
+| `lastSeenArchiveId` | 上次成功握手的 archiveId，仅提示 | 否 | cache | mutable | public-meta |
+| `status` | `pending_desktop` / `pending_bind` / `cancelled` | 是 | plugin | mutable | public-meta |
+
+意图 **没有** `messageId`、申请 UUID、`restoreEpoch`。它 **不是** NM 消息类型。
+
+**Bound outbox**（用户已完成绑定，可按协议重试）：
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
 | `messageId` | 幂等键之一 | 是 | plugin | immutable | public-meta |
-| `clientInstanceId` | 每扩展安装/Profile 一次的 UUID（`desktopClientInstanceId`） | 是 | plugin | immutable | public-meta |
+| `intentId` | 来源意图（若有） | 否 | plugin | immutable | public-meta |
+| `clientInstanceId` | 每扩展安装/Profile 一次 | 是 | plugin | immutable | public-meta |
 | `messageType` | 与 ADR 枚举相同 | 是 | plugin | immutable | public-meta |
 | `archiveId` | 入队时握手到的档案 | 是 | handshake | immutable | public-meta |
-| `generation` | 入队时握手到的代 | 是 | handshake | immutable | public-meta |
-| `payload` | 业务载荷，**无** Key/密码 | 是 | plugin | immutable | PII |
+| `restoreEpoch` | 入队时握手到的指针身份 | 是 | handshake | immutable | public-meta |
+| `applicationId` | 「使用已有」时已有；「新建」可在 ACK 后回填 | 视类型 | plugin/desktop | 回填一次 | public-meta |
+| `payload` | 业务载荷，**无** Key/密码/快照字节 | 是 | plugin | immutable | PII |
+| `snapshotId` / `sha256` / `byteSize` | 若本次含快照 | 否 | plugin | immutable | public-meta |
+| `chunkCursor` | 已 ACK 的最后块号 | 否 | plugin | mutable | public-meta |
 | `createdAt` | 入队 UTC | 是 | plugin | immutable | public-meta |
 | `bytes` | payload 序列化字节数 | 是 | plugin | immutable | public-meta |
-| `chunkCursor` | `snapshot.chunk` 已确认的最后序号；非分片则为空 | 否 | plugin | mutable | public-meta |
 
-恢复后：握手 **成功** 并返回新 `(archiveId, generation)`；插件比较每条 outbox 上盖的身份，不匹配则暂停，用户选关联/丢弃/另存。关联通过 `outbox.reconcile` 查询哪些 `messageId` 已在恢复库中。服务端幂等是安全网，不是「静默重放许可」。
+恢复后：握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。插件比较每条 **绑定** 消息上盖的身份，不匹配则暂停，用户选关联/丢弃/另存。意图不盖 epoch，恢复后重新走候选，不自动当成已绑定。关联通过 `outbox.reconcile` 查询哪些 `messageId` 已在 **当前 epoch** 的库中。桌面幂等键是 `(clientInstanceId, messageId, restoreEpoch)`：epoch 不同则 **不是** 当前档案的重放，返回 `restore_epoch_mismatch`，不得当成成功幂等。
 
 ---
 
@@ -507,21 +629,21 @@ erDiagram
 
 | 模式 | 插件填写/模板/AI | 保存岗位 / 确认投递 | 桌面档案 | AI 建议 |
 | --- | --- | --- | --- | --- |
-| 未安装桌面 | 与今天相同 | 说明如何安装；**不建 durable outbox**；不得说已保存 | 无 | 无 |
-| 已安装但未配对 | 正常 | 说明在桌面粘贴扩展 ID；**不建 durable outbox**；**不得**说「未安装」 | 本地手动可用 | 桌面侧可用 |
-| 已安装已配对但未运行 | 正常 | host 按需启动 Tauri EXE；失败则 **durable 入队** +「待同步」 | 拉起后可用 | 拉起后可用 |
-| 离线（无互联网） | 本地匹配仍可用；上游 AI 失败 | 已配对则可入队 | 导入/待办/改阶段全部可用 | 禁用并给出原因 |
+| 未安装 / 从未配对 | 与今天相同 | 说明安装或粘贴 ID；**不建意图、不建绑定队列**；不得说已保存 | 无桌面档案 | 无 |
+| 已安装但未配对 | 正常 | 说明在桌面粘贴扩展 ID；**不建意图**；**不得**说「未安装」 | 本地手动可用 | 桌面侧可用 |
+| 曾经配对，桌面暂不可用 | 正常 | **持久化 SaveIntent** +「待同步（尚未绑定申请）」；禁止「桌面已保存」。快照字节进 IndexedDB | 拉起后可用 | 拉起后可用 |
+| 离线（无互联网） | 本地匹配仍可用；上游 AI 失败 | 同「曾经配对」：意图可入；绑定消息需桌面 | 导入/待办/改阶段全部可用 | 禁用并给出原因 |
 | AI 不可用 | 现有：保留已验证本地匹配 | 与 AI 无关 | 手动阶段/证据可用 | 建议失败开放 |
-| 协议不兼容 | 填写不受影响 | **不入队**；提示升级 | 本地手动可用 | 本地手动可用 |
-| `generation` 不匹配 | 填写不受影响 | 握手成功；**暂停旧队列**；关联/丢弃/另存 | 以桌面 current 为准 | 正常 |
+| 协议不兼容 | 填写不受影响 | 意图保留；**不升级为 job.save**；提示升级 | 本地手动可用 | 本地手动可用 |
+| `restoreEpoch` 不匹配 | 填写不受影响 | 握手成功；**暂停绑定队列**；意图重新走候选 | 以桌面 current 为准 | 正常 |
 
-队列容量满：停止新增留档并提示，不静默丢旧项，**不阻止**原有填表（D07）。
+队列容量满：停止新增意图/留档并提示，不静默丢旧项，**不阻止**原有填表（D07）。
 
 ---
 
 ## 10. 合成走查（强制）
 
-下列使用合成数据，不读取真实简历或邮箱。每个走查列出对象、阶段、事件、证据、待办和用户选择。
+下列使用合成数据，不读取真实简历或邮箱。每个走查列出对象、阶段、事件、证据、待办和用户选择。10.9–10.13 是本轮强制补测。
 
 ### 10.1 同公司两岗 + 无岗位名的面试邮件
 
@@ -535,7 +657,7 @@ erDiagram
 | 4 | 确认投递 B | `app-B` → `submitted` |
 | 5 | 导入面试邮件 | Evidence `ev-1`，`applicationId=null`，`kind=eml`，`replyClass` 空，收件箱可见 |
 | 6 | 可选 AI | 建议 `candidateApplicationIds=[UUID1,UUID2]`，`replyClass=interview_invite`，`uncertainties` 含「无岗位名」；**不自动选** |
-| 7 | 用户把 `ev-1` 关联到 `app-A` 并确认「面试 一面」 | Event `evidence_associated`、`interview_recorded`（round=1）；`replyClass=interview_invite`；`app-A` stage=`interview`（set-absolute）；**`app-A.replyEvidenceState=human_reply`**（§6.3：`interview_invite` ∈ 人工类且无 `auto_ack`）；Todo「一面」；`app-B` 的 `replyEvidenceState` 仍 `none_imported` |
+| 7 | 用户把 `ev-1` 关联到 `app-A` 并确认「面试 一面」 | Event `evidence_associated`、`interview_recorded`（round=1）；`replyClass=interview_invite`；`sendMode=unknown`（正文看不出是人还是 ATS）；`app-A` stage=`interview`；**`app-A.replyEvidenceState=classified`**（不是「人工回复」）；Todo「一面」；`app-B` 仍 `none_imported` |
 
 禁止：只因公司名相同把邮件归到最近一条申请。
 
@@ -595,28 +717,84 @@ erDiagram
 - 若纠错 **之后** 又来一条更晚的 `assessment_recorded`，折叠会把 current 设为 `assessment`——纠错 **不**永远压过未来事件。
 - 若再次纠回 `rejected`，再追加一条 `stage_corrected`，不删除前两条。
 
-### 10.7 桌面未安装 / 未运行 / 离线 / AI 宕机
+### 10.7 桌面未安装 / 从未配对 / 曾经配对但不可用 / AI 宕机
 
-| 场景 | 期望 |
+| 场景 | 用户看见 | 保存了什么 | 失败后如何恢复 |
+| --- | --- | --- | --- |
+| 未安装 / 从未配对 | 填写与今天一致。保存入口说明安装或粘贴 ID。**不是**「待同步」 | 无意图、无绑定队列 | 装好并配对后重新点保存 |
+| 已安装未配对 | 同上填写。文案「请在桌面粘贴扩展 ID」，**不得**显示「未安装」 | 无意图 | 粘贴 ID、重载扩展后再保存 |
+| 曾经配对，应用进程未运行且拉起失败 | 「待同步（尚未绑定申请）」**禁止**「桌面已保存」 | SaveIntent（字段 + intentId），无申请 UUID | 打开桌面后弹出候选，绑定后才 `job.save` |
+| 无互联网 | 桌面手动档案可用。插件 AI 走现有错误 | 同曾经配对：意图可入 | 联网后 AI 另说；意图不依赖网 |
+| AI 宕机 | 桌面建议失败开放。插件「取消 AI 等待（保留本地匹配）」 | 证据与手动阶段不受影响 | 换模型或手改 |
+
+### 10.8 恢复身份与旧队列（含重复恢复同一备份）
+
+**设定：** 绑定队列有 `messageId=M1` 的 `job.save`，盖着 `archiveId=A1, restoreEpoch=E1`。备份 B 含 A1（**不含** E1）。
+
+**第一次恢复 B：**
+
+- 预览 → 确认 → 解压到 **新目录**，旧 current 挪到 retired。
+- 新铸 `restoreEpoch=E2`（UUID），写入机器本地 current 指针。`archiveId` 仍为 A1。
+- 握手成功，返回 `(A1, E2)`。握手不因 epoch 变化失败。
+- M1 盖章 `(A1, E1)` ≠ `(A1, E2)` → **暂停**绑定队列。
+- 用户三选：关联 / 丢弃 / 另存。关联调用 `outbox.reconcile`；已在 **当前 epoch 库** 中的 messageId 不再重放。
+- 若此时桌面在用户确认前就收到 M1：返回 `restore_epoch_mismatch`，**不得**按 `(clientInstanceId, messageId)` 当成成功幂等。
+
+**再次用同一备份 B 恢复：**
+
+- 再铸 `restoreEpoch=E3`，**不是** E2，也不是「backup 里没有 generation 就当 1」。
+- 盖着 E1 或 E2 的队列都不匹配 E3。
+- **证明无碰撞：** 两次恢复同一 B 得到 E2 ≠ E3；旧 M1 永远不会因为「archiveId 还是 A1」被静默接受。
+
+**恢复到新机器：** 新机器没有 E1 指针，铸 E4。旧机器插件仍持 E1；两边互不相认。
+
+**恢复失败回滚：** 校验失败则 **不切换** current 指针，E1 仍有效，绑定队列可继续。已切换后用户选回滚：再切回 retired 目录时 **新铸 E5**（指向旧文件），不复用 E1（避免插件已按 E2 对账后又被 E1 静默收下）。
+
+**意图：** 无 epoch 盖章；恢复后重新 `queryCandidates`，不自动绑定。
+
+### 10.9 桌面不可用时保存岗位（强制走查）
+
+**设定：** 用户上周已配对。今天主程序未开，host 拉起失败。
+
+| | |
 | --- | --- |
-| 未安装 | 填写、模板、插件 AI 与今天一致。保存入口说明安装；**不写 durable outbox**；不假装已保存 |
-| 已安装未配对 | 同上填写。入口说明到桌面粘贴扩展 ID（Chrome/Edge 各一次）。**不写 durable outbox**。**不得**显示「未安装」 |
-| 已安装已配对未运行 | host 按需启动 Tauri EXE（可隐藏）。成功则保存；失败则 durable 入队 +「待同步」，**禁止**显示「桌面已保存」 |
-| 离线 | 桌面列表/详情/导入/待办/改阶段可用。插件 AI 走现有错误路径。**仅已配对**的保存请求入队 |
-| AI 宕机 | 桌面建议失败开放。证据与手动改阶段不受影响。插件「取消 AI 等待（保留本地匹配）」保持 |
+| 用户看见 | 字段确认框照常。确认后侧边栏「待同步（尚未绑定申请）」+ 待同步计数 +1。**不是**「桌面已保存」 |
+| 保存了什么 | `SaveIntent`：intentId=I1，公司/岗位/URL。无申请 UUID，无 restoreEpoch，无 `job.save` |
+| 失败后如何恢复 | 打开桌面 → 握手 → 两层候选。用户选新建 → Bound `job.save`（新 messageId=M2，盖当前 epoch）→ ACK 后「桌面已保存」，stage=`saved`。若用户取消候选：意图仍 pending |
 
-### 10.8 恢复档案后的旧插件队列
+### 10.10 离线留档后改模板（强制走查）
 
-**设定：** 插件 outbox 有 `messageId=M1` 的 `job.save`，记录上盖着 `archiveId=A1, generation=3`。用户用该档案的备份恢复。
+**设定：** 模板 v1 填写成功。用户确认留档时桌面不可用。随后把活模板改成 v2。
 
-- 恢复预览 → 确认 → **解压到新档案目录**，current 指针切换，**`archiveId` 仍为 backup 中的 A1**，`generation` **必** 从 3 增到 4；旧目录保留为回滚点。
-- 插件下次 **握手成功**，返回 `(A1, 4)`。握手不因 generation 变化失败。
-- 插件比较 M1 上盖的 `(A1, 3)` ≠ 当前 `(A1, 4)` → **暂停**旧队列（不清掉存储）。
-- UI 三选：
-  - **关联：** 采用新握手身份；调用 `outbox.reconcile([M1,…])`；已在恢复库中的 messageId 不再重放；未包含的项需用户逐条确认后作为新写入（默认不自动重放）。
-  - **丢弃：** 删除旧队列项，不写入。
-  - **另存：** 把队列项当作对新 generation 的新申请（新 `messageId` 或用户确认的强制新写），仍走两层候选。
-- **禁止** 把 generation=3 的项在用户确认前自动打进 generation=4。服务端幂等只防止确认后的重复提交。
+| | |
+| --- | --- |
+| 用户看见 | 留档确认时「待同步（快照已暂存）」；改模板不提示「历史快照会变」 |
+| 保存了什么 | 确认瞬间从 v1 拷贝的字节进扩展源 IndexedDB，key=`snapshotId=S1`，sha256=H1。storage 里只有元数据 |
+| 失败后如何恢复 | 桌面回来后按 S1 **原字节** 分片上传，ACK 后桌面打开的是 v1。禁止从 v2 重算。若 IDB 被清：明确「快照暂存丢失，请重新留档或在桌面导入」，不静默用 v2 |
+
+### 10.11 次日面试提醒（强制走查）
+
+**设定：** 今天 21:00 用户为 `app-A` 建待办「一面，明天 10:00」，并 **启用后台提醒、授予系统通知**。然后关窗，23:00 明确未点「退出」。次日 10:00 前进程可能已因空闲退出。
+
+| | |
+| --- | --- |
+| 用户看见 | 关窗后设置页曾说明「提醒由系统发送，不需要窗口开着」。次日约 10:00 系统通知（标题含公司/岗位，无简历正文）。点通知可打开应用进该申请 |
+| 保存了什么 | Todo 在 SQLite；一条 OS 计划通知登记。**不是**「15 分钟 idle 内进程还活着所以能提醒」 |
+| 失败后如何恢复 | 若未授权通知：待办仍在，打开应用有逾期汇总，文案「系统通知未授权」。若用户昨晚点了「退出」：默认已取消未触发的计划通知，设置/退出对话框已告知。若整晚关机且超过 Windows 计划 Toast 投递窗口：可能丢，打开应用后补一次汇总，**不**假装一定送到。macOS 日历触发在重启后通常仍在（**待验证**） |
+
+### 10.12 重复恢复同一备份（强制走查）
+
+见 10.8 第二次恢复。用户看见「检测到插件有盖着旧 restoreEpoch 的待同步项」，必须三选。保存了新 epoch 的 current 指针。失败（损坏包）则 current 不变。
+
+### 10.13 自动发送的面试邀请（强制走查）
+
+**设定：** 导入星河科技 ATS 发出的「面试邀请」邮件（典型自动信）。
+
+| | |
+| --- | --- |
+| 用户看见 | 收件箱预览。AI 建议 `replyClass=interview_invite`，`sendMode=automated`（或 `unknown` 若模型不确定）。详情 **禁止**写「人工回复」。用户确认后列表 `replyEvidenceState=classified`，副文案「面试邀请（自动发送）」 |
+| 保存了什么 | Evidence + 确认后的 class/mode；阶段仅在用户确认「记为面试」后才 `interview` |
+| 失败后如何恢复 | 模型失败：证据仍在，用户可手选业务类型与发送方式。不得因「这是面试邀请」自动填 `sendMode=human` |
 
 ---
 
@@ -628,8 +806,10 @@ erDiagram
 | 「已通过筛选」（仅因回执） | 「已导入自动回执」 |
 | 填写成功后自动显示「已投递」 | 「填写完成（未确认投递）」 |
 | 「本地应用 = AI 全部离线」 | 使用云端模型时展示外发范围与服务商 |
-| 未持久化应答显示「桌面已保存」 | 「待同步」/ 错误码 |
+| 未持久化应答显示「桌面已保存」 | 意图：「待同步（尚未绑定申请）」；绑定后未 ACK：「待同步」 |
 | 把未配对说成「未安装」 | 「请在桌面主程序粘贴扩展 ID」 |
+| 把面试邀请写成「人工回复」 | 「面试邀请」+ 发送方式「人工 / 自动 / 未知」 |
+| 「关窗后 15 分钟内会提醒」当日程承诺 | 「已启用系统提醒」或「未授权 / 已退出，不会弹出」 |
 
 空列表、存储失败、目录不可写必须可操作，禁止静默切到临时目录（D02）。
 
@@ -637,13 +817,14 @@ erDiagram
 
 ## 12. 最低环境与发行（产品口径）
 
-| 项 | MVP 口径 |
+| 项 | 建议口径（正式覆盖范围见开放问题） |
 | --- | --- |
-| OS | Windows 10 22H2 或更新，64 位。Windows 11 含 WebView2；Win10 大多数已有 Runtime，安装器仍应能引导安装（见 ADR） |
-| 浏览器 | Chrome / Edge **116+**（与当前 `minimum_chrome_version` 一致） |
-| 权限 | 日常使用不要求管理员；per-user 安装 |
-| 签名 | 未持有代码签名证书前 **不宣传已签名**；文档必须写明 SmartScreen 对未签名 `setup.exe` 的警告 |
-| 离线 | 档案、导入、待办、手动阶段：可用。云端 AI：不可用并说明原因 |
+| OS | **Windows 10 22H2+ x64**；**macOS 11+**（Tauri 2 默认可到 10.13，本项目建议 11 以便 Apple Silicon 主路径）。Linux 非首版 |
+| CPU | Windows：x64；ARM64 **待验证**。macOS：**Apple Silicon 一等公民**；Intel 走 universal 或单独构建，**待验证** |
+| 浏览器 | Chrome / Edge **116+**。macOS 同样。**不默认承诺 Safari** |
+| 安装 | Windows：NSIS per-user（日常不要求管理员）。macOS：`.app` / `.dmg`。是否另发 Windows MSI、正式版是否双平台同发 → 开放问题 |
+| 签名 | Windows：无证书前不宣传已签名，须写 SmartScreen。macOS：分发须代码签名与公证（[Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/)）；无公证时写明 Gatekeeper 拦截，不假装「已公证」 |
+| 离线 | 档案、导入、待办、手动阶段：可用。云端 AI：不可用并说明原因。意图队列不依赖互联网 |
 | 插件分发 | 继续独立 ZIP；不装桌面也能填表 |
 
 负载预期：单用户、一季秋招约数十至数百条申请，不是服务器 QPS。列表查询目标：数百条申请过滤/搜索在本地 **100 ms 量级**（D03/D04 验证，非 D01 实现）。
@@ -656,9 +837,11 @@ erDiagram
 | --- | --- | --- |
 | 高 | 用户把填写成功当成已投递 | 默认 `saved`；独立确认；文案冻结 |
 | 高 | 按公司自动合并导致通知串岗 | UUID 身份；候选提示；AI 强制消歧 |
-| 中 | 未打包扩展 ID 漂移 / 把未配对当成未安装 | 桌面粘贴 ID；未配对单独降级且不入队 |
-| 中 | 快照大于业务信封 | `snapshot.chunk`；> 2 MiB 拒绝；outbox 不存整 blob |
-| 低 | 托盘图标被用户视为广告 | 负责人可关托盘；见开放问题 |
+| 中 | 未打包扩展 ID 漂移 / 把未配对当成未安装 | 桌面粘贴 ID；未配对不建意图 |
+| 中 | 快照大于业务信封或桌面不可用时丢字节 | 确认时写入 IndexedDB；> 2 MiB 拒绝；重试用原字节 |
+| 中 | 把 idle 退出当成次日提醒 | 系统调度通知；文案区分退出/未授权 |
+| 中 | 重复恢复同一备份复用 generation | `restoreEpoch` 每次切换新铸 |
+| 低 | 托盘/菜单栏被当成广告 | 可关；退出能力限制必须仍能看见 |
 
 ---
 

@@ -9,7 +9,7 @@
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) |
 | 并列 | [product-requirements.md](product-requirements.md) · [adr-architecture.md](adr-architecture.md) · [downstream-decisions.md](downstream-decisions.md) |
 
-本文回答：数据在哪、谁能写、什么永远不能存、备份装了什么、恢复如何换代。物理 schema 仍归 D03；备份格式版本归 D12。
+本文回答：数据在哪、谁能写、什么永远不能存、离线快照字节放哪、备份装了什么、恢复如何隔离旧队列。物理 schema 仍归 D03；备份格式版本归 D12。目录与凭据有平台适配；档案文件格式跨平台。
 
 ---
 
@@ -28,37 +28,50 @@
 | 申请 / 事件 / 待办 / 证据 / 快照 | 用户 | Tauri 后端（`data-service` 库）管理的 archive 目录 | 用户导出的备份文件 |
 | 插件模板、`activeTemplateId` | 用户 | `chrome.storage.local` | 填写归档时生成的 **不可变快照** |
 | 插件 `aiConfig.apiKey` | 用户 | 仅扩展存储（今天明文） | **禁止**复制到桌面档案或备份 |
-| 桌面模型 Key（D11） | 用户 | OS 凭据库（DPAPI / Credential Manager） | **禁止**进 SQLite、附件、备份、日志 |
-| 离线 outbox | 用户 | 插件 `chrome.storage.local` 新 key | 不得含 Key；恢复后按 generation 暂停 |
+| 桌面模型 Key（D11） | 用户 | OS 凭据库：Windows Credential Manager / DPAPI；macOS Keychain | **禁止**进 SQLite、附件、备份、日志 |
+| 保存意图 / 绑定 outbox | 用户 | `chrome.storage.local` 新 key | 不得含 Key；绑定项恢复后按 **restoreEpoch** 暂停 |
+| 离线快照字节 | 用户 | 扩展源 **IndexedDB**（SW/offscreen/扩展页） | ACK 后删除；不得写在 content script 的页面源 |
 
-写入者：仅 Tauri GUI EXE 的 Rust 后端（`data-service` 库）。插件、webview、host 都是客户端。未安装或未配对时，插件不得把申请档案写进扩展存储冒充桌面库，也不得堆积无法消化的 durable outbox。
+写入者：仅 **应用进程**（`data-service` 库）。插件、WebView 子进程、NM host 都是客户端。从未配对时，插件不得把申请档案写进扩展存储冒充桌面库，也不得堆积意图。曾经配对但桌面不可用时，只允许 SaveIntent + IndexedDB 快照暂存，不得显示已保存。
 
 ---
 
 ## 3. 目录布局
 
-安装目录 ≠ 用户数据目录。安装器默认 per-user，程序在 `%LOCALAPPDATA%` 下的应用文件夹（Tauri NSIS 默认行为，见 ADR）。档案必须再分一层，避免升级覆盖或卸载误删。
+安装目录 ≠ 用户数据目录 ≠ 缓存目录。档案必须与程序文件分离，避免升级覆盖或卸载误删。
 
-用 Known Folder API 解析 `FOLDERID_LocalAppData`（文档默认路径 `%LOCALAPPDATA%` = `%USERPROFILE%\AppData\Local`），**禁止**把开发机绝对路径写进代码或文档示例以外的「产品默认」。示例只用环境变量：
+**禁止**把开发机绝对路径写进产品。设置页展示解析后的真实路径（中文/空格用户名）。目录不可写时失败，**禁止**静默改用临时目录。
+
+Windows（Known Folder `FOLDERID_LocalAppData`）：
 
 ```text
 %LOCALAPPDATA%\ResumePro\
-  app\                 （或安装器选定的 INSTDIR，可与此分离）
   archive\             current 档案
     archive.db
-    archive.db-wal
     attachments\
     snapshots\
     tmp\
-    meta.json          archiveId, generation, schemaVersion
-  archives-retired\    恢复前的旧档案（回滚点）
+    meta.json          archiveId, schemaVersion（不含 restoreEpoch）
+  current.json         机器本地指针：archiveDir, archiveId, restoreEpoch
+  archives-retired\
   logs\
-  backups\             用户指定位置也可；默认不强制
+  cache\               WebView2 用户数据等
 ```
 
-设置页必须展示 **解析后的真实路径**，供中文/空格用户名核对（D02 验收）。目录不可写时失败并给出可操作提示，**禁止**静默改用 `%TEMP%`。
+macOS（`NSApplicationSupportDirectory` / `NSCachesDirectory`）：
 
-WebView2 用户数据文件夹应放在 `%LOCALAPPDATA%\ResumePro\` 下可写位置，不要用安装目录旁的默认 `exe.WebView2`（安装目录升级可删）。
+```text
+~/Library/Application Support/ResumePro/
+  archive\  ... 同上结构 ...
+  current.json
+  archives-retired\
+  logs\
+~/Library/Caches/ResumePro/     缓存，卸载策略可更激进
+```
+
+`restoreEpoch` **只**在 `current.json`（或等价指针文件），**不**进备份包、**不**进 `archive/meta.json` 的「可移植身份」。备份可以记录「当时指针曾是什么」作诊断，恢复时必须忽略并新铸。
+
+WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁的默认文件夹。
 
 相对路径入库；拒绝 `..`、盘符、UNC。附件文件名冲突时加后缀，不覆盖（D09）。
 
@@ -82,7 +95,7 @@ WebView2 用户数据文件夹应放在 `%LOCALAPPDATA%\ResumePro\` 下可写位
 - Cookie、`Set-Cookie`
 - `Authorization` 头及其值
 - URL 中的令牌类查询参数（见 §7.1）
-- Native host 的机器专属绝对路径（备份排除；诊断可含「已配置/未配置」）
+- NM host 的机器专属绝对路径（备份排除；诊断可含「已配置/未配置」）
 - 网页密码框、`autocomplete=one-time-code` 的控件值
 
 插件填写路径已尽量不扫 `type=hidden|file|button|submit`；桌面留档仍要再剥一层。不确定是否为 secret 时：**丢弃该字段，不得「先存再看」。**
@@ -90,7 +103,7 @@ WebView2 用户数据文件夹应放在 `%LOCALAPPDATA%\ResumePro\` 下可写位
 ### 4.2 插件活模板 vs 桌面快照
 
 - 活模板：仅 `chrome.storage.local`，用户可随时「重新导入 Excel」覆盖。
-- 快照：填写归档时拷贝，之后 **immutable**。改活模板不影响历史申请。
+- 快照：填写归档确认时拷贝，之后 **immutable**。桌面不可用时字节进扩展源 IndexedDB；重试发原字节，禁止从活模板重生成。见 [产品需求 §8.5](product-requirements.md#85-resumesnapshot)。
 - 不得为了「方便同步」把活模板全量写入桌面，除非用户在某次归档中明确保存快照。
 
 ---
@@ -116,7 +129,7 @@ WebView2 用户数据文件夹应放在 `%LOCALAPPDATA%\ResumePro\` 下可写位
 - `attachments/`、`snapshots/`
 - 事件、待办所在表（随 DB）
 - 非秘密设置（UI 偏好、是否允许浏览器连接）
-- `manifest`：格式版本、`archiveId`、`generation`、`schemaVersion`、文件清单、每文件 sha256
+- `manifest`：格式版本、`archiveId`、`schemaVersion`、文件清单、每文件 sha256。**不含** `restoreEpoch`、机器 IPC 路径、凭据
 
 ### 6.2 明确排除
 
@@ -139,19 +152,19 @@ WebView2 用户数据文件夹应放在 `%LOCALAPPDATA%\ResumePro\` 下可写位
 sequenceDiagram
   participant U as 用户
   participant UI as Desktop UI
-  participant DS as Tauri GUI EXE
-  participant P as 插件队列
+  participant APP as 应用进程
+  participant P as 插件绑定队列
   U->>UI: 选择备份文件
-  UI->>DS: 校验大小/路径穿越/哈希/版本
-  DS-->>UI: 预览（申请数/事件数/附件数）
+  UI->>APP: 校验大小/路径穿越/哈希/版本
+  APP-->>UI: 预览（申请数/事件数/附件数）
   U->>UI: 确认恢复
-  DS->>DS: 把 current 档案移到 archives-retired
-  DS->>DS: 解压到新 archive 目录
-  DS->>DS: 切换 current 指针并提升 generation
-  DS-->>UI: 成功；旧目录可回滚
-  P->>DS: handshake
-  DS-->>P: 同一 archiveId + 已 +1 的 generation
-  Note over P: 握手成功；比较 outbox 盖章后暂停
+  APP->>APP: current 档案移到 archives-retired
+  APP->>APP: 解压到新 archive 目录
+  APP->>APP: 新铸 restoreEpoch，写入 current.json
+  APP-->>UI: 成功；旧目录可回滚
+  P->>APP: handshake
+  APP-->>P: 同一 archiveId + 新 restoreEpoch
+  Note over P: 握手成功；比较绑定队列盖章后暂停
   U->>P: 关联 / 丢弃 / 另存
 ```
 
@@ -160,9 +173,12 @@ sequenceDiagram
 1. 先预览再确认。
 2. 恢复到 **新档案目录** 再切换；**MVP 不做逐行 merge**。
 3. 旧档案保留为回滚点，直到用户显式删除。
-4. 损坏、截断、不支持版本、路径穿越：拒绝，current 不变。
-5. **保留 backup 的 `archiveId`（immutable），`generation` 必 +1。** 随后握手 **成功** 并返回新 `(archiveId, generation)`。插件比较 outbox 上盖的旧身份后暂停队列。握手失败仅用于协议不兼容 / kill switch，**不是**用来拦截旧队列。
-6. 恢复后不得瞬间重放全部待办通知（D10：休眠补报一次汇总，不轰炸）。
+4. 损坏、截断、不支持版本、路径穿越：拒绝，**current.json 不变**（旧 epoch 仍有效）。
+5. **保留 backup 的 `archiveId`。每次成功切换 current 指针新铸 `restoreEpoch`（UUID）。** 不从备份读取 epoch，不用 `generation+1`。握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。绑定队列盖章不符则暂停。意图无 epoch，恢复后重新候选。
+6. 再次恢复 **同一** 备份：再铸新 UUID，与上一次不同（走查 10.8 / 10.12）。
+7. 回滚到 retired 目录：视为一次新的指针切换，**再铸** epoch，不复用失败前的值。
+8. 桌面幂等 `(clientInstanceId, messageId, restoreEpoch)`。epoch 不符 → `restore_epoch_mismatch`，禁止当成功重放。
+9. 恢复后不得瞬间重放全部待办通知；按产品 §5.4 重新登记系统调度。
 
 存储量粗估（单用户一季）：DB 数 MB；每封 eml/PDF 数十 KB–数 MB；简历快照常见为数十–数百 KiB，产品上限 **2 MiB**（超过则拒绝，走桌面导入）。备份大小 ≈ DB + 附件 + 快照。不在 D01 承诺压缩比。
 
@@ -207,7 +223,7 @@ dedupeUrl  = https://jobs.example.com/apply?code=REQ42&utm_source=mail
 
 | | 插件填写/解析 | 桌面通知整理（D11） |
 | --- | --- | --- |
-| 配置位置 | `chrome.storage.local.aiConfig`（今天明文） | Credential Manager / DPAPI |
+| 配置位置 | `chrome.storage.local.aiConfig`（今天明文） | Windows：Credential Manager / DPAPI；macOS：Keychain |
 | 发往 | 用户填的 `apiUrl` | 用户另配的桌面接口 |
 | 内容 | 表单字段描述 + 相关简历分组（现有逻辑） | 证据正文/片段 + **最少**候选申请元数据 |
 | 确认 | 用户主动点「一键 AI 填写」即同意该次填写外发 | 发送前预览范围、服务商、模型 |
@@ -243,7 +259,8 @@ dedupeUrl  = https://jobs.example.com/apply?code=REQ42&utm_source=mail
 - 升级覆盖 INSTDIR，不碰 `archive\`；迁移前自动备份 DB（D03/D12）。
 - 卸载默认留档案；注册表 NM 项指向已删除 EXE 时必须清掉，避免「host not found」残留（D13）。
 - D13 **始终**写 Chrome **和** Edge 的 HKCU `NativeMessagingHosts` 键（见 ADR §2）。不得只写 Chrome 键再指望 Edge fallback。配对在桌面 UI 粘贴 ID，分别写入对应 manifest。
-- 无云同步：换电脑 = 备份恢复。恢复后握手成功并返回新 generation；插件暂停盖着旧 generation 的 outbox，不得静默写入。
+- 无云同步：换电脑 = 备份恢复。恢复后握手成功并返回新 `restoreEpoch`；插件暂停盖着旧 epoch 的绑定队列，不得静默写入。
+- macOS 卸载 `.app` 默认不动 `~/Library/Application Support/ResumePro/`。
 
 ---
 
@@ -265,7 +282,7 @@ dedupeUrl  = https://jobs.example.com/apply?code=REQ42&utm_source=mail
 ## 12. Observability 与合规口径
 
 - 不做云遥测。
-- MIT 开源；仓库不得提交真实简历、真实 Key、真实 eml。测试夹具必须合成或脱敏（D09/D14 已要求）。
+- 当前插件仓库以 MIT 发布（[`LICENSE`](../../LICENSE)）。测试夹具必须合成或脱敏。后续桌面模块的产品许可 **尚未定案**，本文不把 MIT 写成未来所有模块的承诺。
 - 不宣称 GDPR 认证；产品是单机工具。若未来加云，另开 Epic。
 
 ---
@@ -281,6 +298,8 @@ dedupeUrl  = https://jobs.example.com/apply?code=REQ42&utm_source=mail
 - KNOWNFOLDERID `FOLDERID_LocalAppData`: https://learn.microsoft.com/en-us/windows/win32/shell/knownfolderid
 - SQLite 单文件格式: https://www.sqlite.org/onefile.html
 - Chrome NM `allowed_origins` 无通配符: https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
-- Credential Manager / DPAPI：D11 实现时对照 Windows 官方 `CredWrite` / `CryptProtectData` 文档（本 D01 不实现）
+- Credential Manager / DPAPI：D11 对照 Windows `CredWrite` / `CryptProtectData`（本 D01 不实现）
+- macOS Keychain：D11 对照 Keychain Services；本 D01 不实现
+- 扩展 IndexedDB：https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
 - Epic #15 规则 5–8；D08 #22、D09 #21、D12 #28、D13 #29
 - [`content.js`](../../content.js) `STORAGE_KEYS`、`formatFillDiagnostics`；[`popup.js`](../../popup.js) `aiConfig`

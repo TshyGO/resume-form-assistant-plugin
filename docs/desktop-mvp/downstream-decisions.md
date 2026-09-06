@@ -5,11 +5,13 @@
 | 标题 | D02–D14 如何消费 D01；定案 / 待选 / 待验证 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review |
+| 状态 | Draft / Ready for review（**未冻结**） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) · [Epic #15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15) |
 | 并列 | [product-requirements.md](product-requirements.md) · [adr-architecture.md](adr-architecture.md) · [data-privacy.md](data-privacy.md) |
 
-本文 **不改变** Epic 硬依赖图。发现的张力只记录建议，不静默改计划。D01 的实现就是文档 PR；D02+ 是后续 issue/PR。
+本文 **不改变** Epic 硬依赖图。跨平台工作仍按相同职责拆分（D02 壳、D06 host、D13 安装），不另开「Mac 专项」阻塞边。若未来要拆 issue，只在 PR 里建议，不直接建 `blocked-by`。
+
+D01 的实现就是文档 PR；D02+ 是后续 issue/PR。确认前不得宣称架构已冻结。
 
 ---
 
@@ -49,18 +51,18 @@ flowchart TB
   D13 --> D14
 ```
 
-**阶段出口**（Epic 标签，关闭一组 issue 的门）：
+**阶段出口**（Epic 标签）：
 
 | 阶段 | 出口 |
 | --- | --- |
 | P0 | D01 决策确认 |
-| P1 | D02–D04：离线手动管理申请 |
-| P2 | D05–D07：插件能保存岗位并补传（含配对与 `submit.confirm`） |
-| P3 | D08+D09：快照与回复证据 |
-| P4 | D10+D11：待办与 AI 建议 |
-| P5 | D12–D14：备份/安装/端到端 |
+| P1 | D02–D04：离线手动管理申请（D02 含 macOS 原型） |
+| P2 | D05–D07：插件能保存岗位并补传（含意图队列与 `submit.confirm`） |
+| P3 | D08+D09：快照（含 IndexedDB 暂存）与回复证据 |
+| P4 | D10+D11：系统调度待办与 AI 建议 |
+| P5 | D12–D14：备份/安装/端到端（Win + Mac 覆盖范围随正式版决议） |
 
-**执行波次**（谁可以先开工，硬依赖不变）：第一波 D01；第二波 D02、D03、D05 可并行；第三波 D04（等 D02+D03）、D06（等 D02+D03+D05）；第四波 D07（等 D04+D05+D06），D09/D10 在 D04 后分别推进。D04 **不是**与 D02 并行的阶段出口。
+**执行波次**不变：第一波 D01；第二波 D02、D03、D05 可并行；第三波 D04、D06；第四波 D07，D09/D10 在 D04 后分别推进。
 
 「可用 mock 提前开发」≠「依赖未验收就关闭 issue」。
 
@@ -70,158 +72,155 @@ flowchart TB
 
 | 工作 | Issue | 硬依赖 | 从 D01 消费的结论 | 本 issue 仍需自己定的 |
 | --- | --- | --- | --- | --- |
-| D02 桌面壳、单实例、数据目录 | [#16](https://github.com/TshyGO/resume-form-assistant-plugin/issues/16) | D01 | **一个 Tauri GUI EXE**（后端=唯一写入者）+ 薄 host；mutex+named pipe；关窗隐藏≠退出；**idle 默认 15 min**（无窗口∧无 NM∧无备份/提醒）；无开机启动；日志脱敏；设置页展示真实路径；不可写则失败；「粘贴扩展 ID」设置入口骨架 | 窗口/托盘控件细节；15 min 是否做成设置项 |
-| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象含 AttachmentBlob 与折叠函数；无公司+URL 唯一约束；事件 append-only；`currentStage` 为 projected；恢复保留 `archiveId`、generation+1；幂等键；附件库外；`occurredAt` 在 unknown 时为 null | `CREATE TABLE`、索引、迁移、仓储 API |
-| D04 无 AI 管理 UI | [#19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) | D02、D03 | 阶段码含可过滤的 `filling`；桌面侧确认投递；文案「尚未导入回复证据」；两层候选的桌面版；走查 10.1–10.6 手动子集 | 布局、快捷键、空状态 |
-| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 冻结信封与应答 `{protocolVersion,correlationId,resultId?,ok,error?,payload}`；`messageType` 枚举含 `snapshot.chunk` 与 `outbox.reconcile`；64 KiB 业务信封；握手成功返回身份；generation 变化不失败握手 | JSON Schema、错误码表、分片帧字段、契约测试向量 |
-| D06 NM host + 唯一写入者 | [#24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24) | D02、D03、D05 | 薄 host、stdio 纯净、扫描 argv 找 origin token（忽略 `--parent-window`）、按需 **启动 Tauri EXE**、pipe ACL、提交后应答、开发隔离脚本 | 可执行实现、argv 顺序 **待验证**、冷启动超时 |
-| D07 保存岗位、配对、outbox、插件确认投递 | [#20](https://github.com/TshyGO/resume-form-assistant-plugin/issues/20) | D04、D05、D06 | 桌面粘贴 ID（非 NM 配对）；未安装/未配对 **无 durable 队列**；已配对未运行/离线才入队；两层候选；默认 `saved`；**插件 `submit.confirm` 归本 issue**；outbox 字段与 `clientInstanceId`；保留已有 storage key；SW 追加 NM 不得覆盖 `onClicked` | 退避参数、侧边栏文案打磨 |
-| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 默认仅元数据；`fill.submit` 不含字节；`snapshot.chunk`；>2 MiB 拒绝；三种「值」；失败/取消不改阶段 | 快照文件格式、字段值开关 |
-| D09 证据收件箱 | [#21](https://github.com/TshyGO/resume-form-assistant-plugin/issues/21) | D03、D04 | `kind`=格式；`replyClass` 确认后才写；哈希警告不自动拆关联；导入≠改阶段 | MIME 解析、预览组件 |
-| D10 待办与提醒 | [#26](https://github.com/TshyGO/resume-form-assistant-plugin/issues/26) | D04 | 日期精度；idle 15 min 内可提醒；无偷偷开机启动；SW 断开 ≠ 丢出盒 | 调度实现、夏令时测试 |
-| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 建议写入 `replyClass` 而非 `kind`；确认后同一事务；回执≠通过 | 提示词、OCR、支持矩阵 |
-| D12 备份恢复回收 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；**保留 archiveId、generation+1**；握手成功后暂停旧队列；回收 vs 永久删（refCount） | 归档格式、原子发布 |
-| D13 安装升级 | [#29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29) | D02、D06、D07、D12 | NSIS-only；**双写 Edge+Chrome HKCU**，不靠 fallback；配对写当前 origin；卸载留数据 | NSIS hooks、SHA-256 |
-| D14 端到端门禁 | [#27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27) | D08、D11、D13 | 含配对走查、插件确认投递、恢复+旧队列；真实 NM | 验收记录模板 |
+| D02 桌面壳、单实例、数据目录 | [#16](https://github.com/TshyGO/resume-form-assistant-plugin/issues/16) | D01 | **应用进程 = 唯一写入者**；Windows + **macOS 原型为完成条件之一**；平台目录 API；单实例；关窗 ≠ 退出；托盘/菜单栏；无开机启动；粘贴 ID 设置页骨架；不把 `*.exe` 写进协议 | 窗口细节；IPC 具体 API（pipe vs unix socket） |
+| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象跨平台；无公司+URL 唯一约束；折叠函数；`restoreEpoch` 不在备份内；幂等键含 epoch；`sendMode` 字段；`occurredAt` unknown 时为 null | `CREATE TABLE`、索引、迁移 |
+| D04 无 AI 管理 UI | [#19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) | D02、D03 | 阶段码含 `filling`；文案「尚未导入回复证据」；`classified` 不是「人工回复」；两层候选 | 布局、快捷键 |
+| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 信封；握手返回 `restoreEpoch` 而非 generation；幂等三元组；`snapshot.chunk`；`outbox.reconcile`；64 KiB；SaveIntent **不是** NM 类型 | JSON Schema、错误码（含 `restore_epoch_mismatch`）、分片帧 |
+| D06 NM host | [#24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24) | D02、D03、D05 | 薄 host 或同二进制 host 模式；stdout 纯净；扫描 argv origin；按需启动 **应用进程**；Win 注册表 + Mac 用户级目录 | 可执行实现、冷启动、Mac 路径实测 |
+| D07 保存岗位、配对、队列 | [#20](https://github.com/TshyGO/resume-form-assistant-plugin/issues/20) | D04、D05、D06 | **SaveIntent vs Bound outbox**；从未配对不建意图；曾经配对桌面不可用可建意图；禁止待同步=已保存；粘贴 ID；`submit.confirm`；storage key 清单 | 退避、侧边栏文案、10 s 去重点击 |
+| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 确认时生成不可变字节；桌面不可用 → 扩展源 IndexedDB；重试用原字节；>2 MiB 拒绝；可能申请 `unlimitedStorage` | 快照 JSON 格式、字段值开关 |
+| D09 证据收件箱 | [#21](https://github.com/TshyGO/resume-form-assistant-plugin/issues/21) | D03、D04 | `kind` 格式；`replyClass` 业务类型；`sendMode` 发送方式；导入≠改阶段 | MIME、预览 |
+| D10 待办与提醒 | [#26](https://github.com/TshyGO/resume-form-assistant-plugin/issues/26) | D04 | **系统调度通知**；杀进程后仍尽量弹；未授权则列表+汇总；退出取消未触发项并告知；无偷偷开机启动；Win 5 分钟窗口写进文案 | 具体 Toast/UNUserNotification 封装、夏令时 |
+| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 同时建议 `replyClass` 与 `sendMode`；不确定则 unknown；Keychain/DPAPI | 提示词、OCR |
+| D12 备份恢复 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；保留 archiveId；**新铸 restoreEpoch**；备份不含 epoch；回滚再铸 | 归档格式、原子发布 |
+| D13 安装升级 | [#29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29) | D02、D06、D07、D12 | Win NSIS per-user + 双写 HKCU；Mac `.app`/`.dmg` + 用户级 NativeMessagingHosts；卸载留档案；签名/公证如实写 | NSIS hooks、公证流水线、SHA-256 |
+| D14 端到端 | [#27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27) | D08、D11、D13 | 含意图队列、离线快照、杀进程提醒、重复恢复、ATS 自动面试信；Win 必测；Mac 覆盖随正式版决议，但 D02 原型不能缺 | 验收记录模板 |
 
-### 2.1 依赖图上的张力（不改图，只提示阅读顺序）
+### 2.1 依赖图上的张力（不改图）
 
-1. **D08 硬依赖是 D03+D07，但信封上限与分片在 D05。** D05 处于更早波次（P2 vs P3），时间上会先存在。建议 D08 实现者把 D01+D05 当必读；不必把 D05 加进 D08 硬依赖以免打乱图。
-2. **D12 硬依赖无 D05，但 generation 握手是协议。** D12 经 D07（依赖 D05）间接覆盖。恢复测试必须用真实握手，不能只改 DB 字段。
-3. **D10「窗口关闭但后台运行」依赖 D02 进程模型。** 图上 D10 只依赖 D04。建议 D10 阅读 ADR；若托盘被否决，D10 须写明「关窗即无提醒」。
-4. **Epic #15 与 D13 都把 MSI 交给 D01。** 本文建议 NSIS-only，与两者兼容，不是矛盾。
-5. **D13「开发 ID 不稳定时的安全注册」与「D01 不加 key」。** 兼容：桌面粘贴 ID 写入当前 origin，不是通配，也不是改插件 `key`，更不是第一条 NM。
-6. **插件「确认已投递」归 D07**（不改硬依赖）。D08 仍只做 fill/snapshot。D04 保留无插件路径的桌面确认。
+1. D08 应读 D05 分片信封；不必把 D05 加进 D08 硬依赖。
+2. D12 恢复测试必须用真实握手（经 D07→D05），不能只改 DB。
+3. D10 应读 ADR §3.8；提醒不再依赖「15 分钟 idle」。
+4. D13 同时承担 Win + Mac 交付物，工作量变大，但 **不拆新阻塞 issue**（建议：D13 内两个小 PR）。
+5. 插件确认投递仍归 D07。
 
-未发现必须改依赖边的冲突。若负责人改选 Electron 或加 `key`，必须先改本 D01 与 D05，再动 D02/D07/D13。
+未改 `blocked-by`。若负责人改选 Electron，先改 D01/D05 再动 D02/D13。
+
+**建议但本次不创建：** 若 Mac 公证把 D13 拖死，可另开「D13b macOS 公证」平行 PR，仍挂在 #29 下，不新增 DAG 节点。
 
 ---
 
 ## 3. 本次建议定案
 
-负责人确认前视为「建议冻结」。确认后下游不得自行改成互不兼容的栈。
+负责人确认前视为建议。确认后下游不得自行改成互不兼容的栈。
 
-1. 桌面权威源；插件未装桌面时填写/模板/插件 AI 仍可用。
-2. 十条产品规则（填写≠投递、回执≠通过、未导入≠未回信、UUID 身份、AI 只建议、队列幂等、不采集秘密、卸载不静默删、手动永远可用、v1 无邮箱/云/多平台）。
-3. Stage 折叠函数（§6.2）；MVP **投影 `filling`**；`stage_corrected` 是普通 set-absolute。
-4. 回复证据：`kind` 格式 vs `replyClass` 语义；`replyEvidenceState` 按 §6.3 从已关联已确认的 `replyClass` 投影（仅 auto_ack → auto_ack；任一人工作类 → human_reply；两者都有 → mixed；unknown/空不计）。
-5. **两个 EXE**：Tauri GUI（后端=唯一写入者）+ `native-host.exe`。`data-service` 是库。禁止未鉴权 HTTP。禁止第三个常驻写入进程。
-6. 同仓、插件留根目录。
-7. Idle 默认 15 分钟（无窗口 ∧ 无 NM ∧ 无备份/提醒）。关窗 ≠ 退出。
-8. 信封与 `messageType` 枚举；64 KiB 业务信封；`snapshot.chunk`；`outbox.reconcile`；握手成功返回身份。
-9. D01/0.3.0 不加 `nativeMessaging`、不加 `key`。配对 = 桌面粘贴 ID；第一条 NM 不是配对。
-10. Outbox 仅在已注册+已配对+协议 OK、**且用户已确认使用已有/新建并派发写入** 时持久化。handshake/候选查询是读，取消不入队。未安装/未配对无 durable 队列。
-11. 恢复：保留 `archiveId`，generation 必 +1。
-12. 插件 Key 留在扩展存储；桌面 Key 进 OS 凭据库。
-13. 填写留档默认元数据；快照 ≤ 2 MiB。
-14. NSIS per-user；D13 双写 Edge+Chrome HKCU。
-15. 插件 `submit.confirm` 归 D07。两层候选。URL 裸 `code`/`key` 保留作岗位号。
-16. 最低：Windows 10 22H2+ x64，Chrome/Edge 116+。
+1. Windows **与** macOS 都是目标平台；实现 Windows 优先；**D02 完成条件包含 macOS 原型**。Linux / Safari 非首版。
+2. 业务模型、SQLite、事件、建议、NM 消息平台无关。适配边界见 ADR §3.9。
+3. 应用进程 = 唯一写入者；NM host = 翻译器（可多实例）；WebView 子进程不是写入者。
+4. 桌面权威源；未装桌面时填写仍可用。
+5. 十条产品规则（填写≠投递、回执≠通过、未导入≠未回信、UUID、AI 只建议、意图/绑定队列、不采集秘密、卸载不静默删、手动永远可用、无邮箱/云同步）。
+6. Stage 折叠函数；`filling` 投影。
+7. `replyClass` ≠ `sendMode`；`replyEvidenceState` 用 `classified` 而非「人工回复」。
+8. SaveIntent vs Bound outbox；从未配对不建意图；禁止待同步=已保存。
+9. 快照确认时生成；离线字节在扩展源 IndexedDB；重试不从新模板生成。
+10. 握手返回 `restoreEpoch`；每次切换 current 新铸；幂等含 epoch。
+11. 提醒走用户授权的系统调度；不偷偷开机启动。
+12. D01/0.3.0 不加 `nativeMessaging`、不加 `key`。
+13. 插件 Key 留扩展存储；桌面 Key 进 OS 凭据库。
+14. 填写留档默认元数据；业务信封 64 KiB；快照文件 ≤ 2 MiB。
+15. 备份不加密；Windows NSIS per-user；macOS dmg。
+16. 当前插件 MIT ≠ 未来桌面模块许可已定。
 
 ---
 
 ## 4. 需要项目负责人选择
 
-只列真正要拍板的项。每项：推荐、理由、不选的代价。
+只列真正要拍板的项。
 
-### 4.1 Tauri 2 vs Electron
+### 4.1 首个对外「正式桌面 MVP」是否必须双平台同时交付
 
-- **推荐：** Tauri 2 + Rust。
-- **理由：** 唯一写入者与 NM host 本就要原生 EXE；Tauri 可共享 crate；NSIS per-user 对齐 D13；避免第二套 Node 与 `better-sqlite3` ABI。见 [ADR §3.1](adr-architecture.md#31-桌面栈tauri-2--rust-数据服务不用-electron)。
-- **不选代价：** Electron 安装包大约 100MB+ 量级、native 模块重建、误暴露 fs 的风险更高。若选 Electron，D02/D03/D13 工作量与 ADR 整页作废，P1 推迟。
-
-### 4.2 NSIS-only vs NSIS+MSI
-
-- **推荐：** 仅 NSIS `setup.exe`。
-- **理由：** 无管理员、装到 `%LOCALAPPDATA%`；求职者个人机是目标；MSI 需 WiX 且常 per-machine。
-- **不选代价：** 双安装器测试矩阵（D13/D14）明显变大；`both` 模式会要管理员。企业需求出现再加 MSI，不挡首发。
-
-### 4.3 托盘 + 后台 idle vs 关窗口即杀服务
-
-- **推荐：** 关窗口隐藏到托盘；后端=唯一写入者继续跑；无窗口∧无 NM∧无备份/提醒后 **15 min** idle 退出；托盘含「打开」「退出」。
-- **理由：** 写入者就是 GUI EXE，没有第三个 service。无托盘时用户以为已退出，任务管理器里仍有该 EXE。D06 主窗口未开仍要能保存岗位；D10 提醒依赖这段存活期。
+- **推荐：** **正式标签要求 Windows 与 macOS 都能安装、配对、保存岗位、备份恢复**（D14 两端各有一份记录）。允许 Windows 在 P1–P2 先做内部试用。 **不允许**「Windows 全部做完再移植 Mac」——D02 缺 Mac 原型即未完成。
+- **理由：** 产品已明确有 Mac 用户。公证/签名会拖时间，所以实现顺序仍 Windows 优先，但正式承诺不能把 Mac 留成口头。
 - **不选代价：**
-  - 关窗即杀：每次保存冷启动；关窗期间无提醒。
-  - 无托盘但保持进程：无名 GUI 进程引发不信任，必须把「退出」做进设置页。
+  - 若选「Windows 正式 + Mac 仅预览」：Mac 用户拿到的是无公证/无 D14 的构建，支持成本高，但 Windows 求职季能先用上。
+  - 若选「必须同一天双平台 GA」：公证失败会挡住 Windows 用户。
 
-### 4.4 未打包扩展配对 vs 加 manifest `key`
+### 4.2 Tauri 2 vs Electron
 
-- **推荐：** **不加 `key`**。桌面 UI **粘贴扩展 ID** 写入 per-user host manifest（Chrome / Edge 分开）。**第一条 NM 不是配对。** Chrome 重读时机 **待验证**。
-- **理由：** NM 在 origin 进入 `allowed_origins` 之前根本不会启动 host，无法用 NM 引导配对。现网 ZIP 路径哈希 ID 不稳定；加 `key` 会孤儿化模板和 API Key。
-- **不选代价：** 加 `key` 需 ID 迁移向导，越出 D01/D07。商店上架时再处理商店 ID。
+- **推荐：** Tauri 2。
+- **理由：** 较小运行时（系统 WebView）、Rust 后端与 host/SQLite 共享、Win+Mac 原生目录/凭据/通知适配面集中。Electron **可以** per-user 安装、**可以**做 NM stdio、**不是**天然必须管理员。见 [ADR §3.1](adr-architecture.md#31-桌面栈推荐-tauri-2electron-是可行备选不是禁区)。
+- **不选代价：** 改 Electron 则 D02 脚手架与体积预期作废，产品/协议仍能用。两端都带 Chromium，更新面更大。
 
-### 4.5 填写留档默认仅元数据 vs 默认含字段值
+### 4.3 后台提醒：系统调度 vs 常驻进程
 
-- **推荐：** 默认仅元数据（计数、耗时、脱敏 URL、模板名、snapshot id）；字段值需显式打开。
-- **理由：** 规则 7；字段值是 PII；默认关可降低备份敏感度。追溯「用了哪版简历」靠快照文件，不靠事件里的逐字段 JSON。
-- **不选代价：** 默认含值会让 64 KiB 更容易被打满、备份全是简历正文、误采密码框的后果更重。
+- **推荐：** 用户启用并授权后，把到期待办登记为 **系统调度通知**；应用进程仍可空闲退出。主动退出默认取消未触发项并告知。
+- **理由：** 闲置 15 分钟退出无法支撑次日面试。常驻进程耗电、关机后仍没了，还容易滑向偷偷开机启动。
+- **不选代价：**
+  - 常驻不退出：关窗期间能提醒，但关机/重启仍要另做调度，等于两套。
+  - 只做应用内待办、不弹系统通知：实现简单，用户会错过次日面试。
 
-### 4.6 备份不加密 vs 加密
+### 4.4 备份不加密 vs 加密
 
 - **推荐：** MVP **不加密**，警告含 PII。
-- **理由：** 加密要口令丢失策略、密钥存储、测试矩阵；宣传加密却口令写在旁边等于零。Epic 允许 D01 决定。
-- **不选代价：** 做加密则 D12 范围膨胀，D14 必须测错口令/损坏密文；不做则用户把备份丢网盘会裸奔——用警告和「不要宣传加密」管理预期。
+- **理由：** 加密要口令丢失策略；宣传加密却口令写旁边等于零。
+- **不选代价：** D12/D14 膨胀；或不加密时用户把备份丢网盘会裸奔——用警告管理预期。
 
-### 4.7 64 KiB 信封 vs 其他上限
+### 4.5 Windows 是否另发 MSI
 
-- **推荐：** 双向 64 KiB JSON。
-- **理由：** D05 原建议；远低于 Chrome host→浏览器 1 MB。业务信封只走元数据；快照字节走 `snapshot.chunk`（每块仍 ≤ 64 KiB）。
-- **不选代价：** 提到 1 MB 会诱使把附件 base64 进 JSON。再缩小可能让候选列表过紧。改数字只在 D05 做，不改「文件不进业务信封」。
+- **推荐：** 仅 NSIS per-user。macOS 仍是 dmg，不受本项影响。
+- **理由：** 求职者个人机；MSI/WiX 测试矩阵大。
+- **不选代价：** D13/D14 双安装器。企业需求可后续加。
+
+配对方式、64 KiB、填写留档默认仅元数据：作为建议定案，不占用拍板名额。
 
 ---
 
 ## 5. 需要后续原型验证
 
-不得在无原型的情况下把下列写成「已实现事实」。失败则更新 D01/D05 与受影响 issue，而不是在实现 PR 里偷偷换模型。
+失败则更新 D01/D05 与受影响 issue，禁止在实现 PR 里偷偷换模型。
 
 | ID | 项 | 谁验证 | 失败时的后退 |
 | --- | --- | --- | --- |
-| V1 | named pipe + 单实例 mutex：第二 UI 只激活窗口；第二 host 不第二写入者 | D02、D06 | 改用 Tauri 单实例插件或锁文件，仍保持唯一写入者 |
-| V2 | host 按需启动 **Tauri GUI EXE**（可隐藏、无控制台）、中文/空格路径、单实例互斥 | D06 | 禁止第三个 service；失败则文案「请先打开一次桌面」 |
-| V3 | Chrome/Edge 更新 HKCU host manifest 的 `allowed_origins` 后，是否无需重启即可 `connectNative` | D06、D13 | 配对成功后提示「重新加载扩展或重启浏览器」 |
-| V4 | MV3 service worker 与 `connectNative` 生命周期 | D07 | 以 `sendNativeMessage` 短连接 + outbox 为主路径 |
-| V5 | 64 KiB 在真实 NM 栈上的拒绝行为（截断 vs 错误） | D05、D06 | 调整错误码；不提高业务上限去「试试能不能传附件」 |
-| V6 | 部分 Windows 10 22H2 无 WebView2 时 NSIS bootstrapper | D13 | 文档改为手动安装 Runtime 链接 |
-| V7 | ARM64 | D13 | 首发仅 x64 |
-| V8 | idle 超时与仍有未完成备份/提醒的交互 | D02、D10、D12 | 有任务时推迟 idle；文档化 |
+| V1 | Win named pipe / Mac unix socket + 单实例 | D02、D06 | Tauri 单实例插件或锁文件，仍唯一写入者 |
+| V2 | host 按需启动应用进程（无控制台；Mac `.app` 路径） | D06 | 文案「请先打开一次桌面」；禁止第三个 writer |
+| V3 | 更新 host manifest 后能否不重启就 `connectNative` | D06、D13 | 提示重载扩展或重启浏览器 |
+| V4 | MV3 SW 与 `connectNative` | D07 | `sendNativeMessage` + 队列 |
+| V5 | 64 KiB 真实拒绝行为 | D05、D06 | 调错误码，不靠加大信封传附件 |
+| V6 | Win10 无 WebView2 的 bootstrapper | D13 | 文档改手动安装 Runtime |
+| V7 | Windows ARM64、macOS Intel universal | D13 | 首发 Win x64 + Mac Apple Silicon |
+| V8 | 系统调度通知：杀进程后是否仍弹；Win 5 分钟窗口；Mac 重启后 | D10 | 打开应用汇总；文案写明限制 |
+| V9 | 未打包 Win32 计划 Toast / AUMID | D10 | Compat 库或改为仅应用内提醒 |
+| V10 | macOS 用户级 Edge NativeMessagingHosts 实际路径 | D06、D13 | 对照 Edge 文档实测后改 D13 |
+| V11 | macOS 公证与 Gatekeeper 对 helper 拉起 | D13 | 预览构建写明「右键打开」 |
+| V12 | 扩展源 IndexedDB 在 SW 重启后读回快照 | D08 | 失败则离线留档明确不可用，同步改 D08/D14 验收 |
 
 ---
 
 ## 6. 本 D01 的 PR Plan
 
-**本 issue 的唯一实现 = 文档 PR**（`docs/desktop-mvp/*`）。不提交 `/desktop` 源码、不改 `manifest.json`、不注册 NM、不碰 [`docs/ai-repeat-validation.md`](../ai-repeat-validation.md)。
+**本 issue 的唯一实现 = 文档 PR**（`docs/desktop-mvp/*`）+ 同步后的相关 issue 正文。不提交 `/desktop`、不改 `manifest.json`、不注册 NM、不碰 [`docs/ai-repeat-validation.md`](../ai-repeat-validation.md)、不改 [`LICENSE`](../../LICENSE)。
 
-建议 PR 标题：`docs(d01): freeze desktop MVP product and architecture baseline`。
+关闭 #17 的条件：负责人在 PR 或 issue 中确认 §4（或写下不同选择）。未确认则下游只做可丢弃原型，**不得宣称冻结**。
 
-关闭 #17 的条件：负责人在 PR 或 issue 中确认 §4 七项（或写下与推荐不同的选择）。未确认则下游只做可丢弃原型。
+### 6.1 确认后 D02 / D03 / D05 如何开工
 
-### 6.1 后续 PR / issue（现在不实现）
+**D02（壳，可与 D03/D05 并行）：**
 
-| 后续 | 预期产物 | 依赖 D01 的哪些冻结点 |
-| --- | --- | --- |
-| D02 | `/desktop` Tauri 壳（唯一写入者）、单实例、15 min idle、粘贴 ID 设置页骨架 | 两 EXE 拓扑、目录、托盘决议 |
-| D03 | `data-service` **库**、折叠函数、AttachmentBlob、合成夹具 | 字段目录、幂等、archiveId 不变 |
-| D04 | 申请列表/详情/时间线；桌面确认投递 | 阶段折叠、filling 过滤、两层候选 |
-| D05 | `crates/protocol` Schema + 契约测试 | 信封、messageType、分片、reconcile |
-| D06 | `native-host.exe` + 开发注册脚本 | origin 扫描、按需启动 GUI EXE |
-| D07 | 插件 NM、粘贴 ID 配对、outbox、保存岗位、**确认已投递** | 未配对无队列、两层候选、storage key |
-| D08 | `fill.submit` + `snapshot.chunk` | 2 MiB 上限、失败不改阶段 |
-| D09 | 导入/预览/关联 | kind vs replyClass |
-| D10 | 待办调度 | 15 min idle 内提醒 |
-| D11 | 建议面板 + OS 凭据 | 写入 replyClass |
-| D12 | 备份包 + 恢复向导 | 保留 archiveId、generation+1 |
-| D13 | NSIS、**双写** HKCU、卸载留数据 | 不靠 Edge→Chrome fallback |
-| D14 | 安装验收记录 | 配对 + 确认投递 + 恢复队列 |
+- 用 Tauri 2 建 `/desktop`（仍是后续 PR，不在 D01）。
+- Windows：能启动、单实例、LocalAppData 目录、关窗≠退出、粘贴 ID 页骨架。
+- **同一 PR 序列里必须出现 macOS 构建：** Application Support 目录、单实例、无窗口启动至少在开发机跑通。缺 Mac 原型不能关 D02。
+- 不实现申请 UI、不注册生产 NM。
 
-每个后续 PR 必须写明「只完成 Dx 的哪一部分」，禁止一个大 PR 关闭整个 Epic。
+**D03（数据层，无 UI）：**
+
+- 按字段目录建库：Application/Event/Todo/Evidence（含 `sendMode`）/Snapshot/AttachmentBlob。
+- `current.json` 持 `restoreEpoch`；备份夹具 **不含** epoch。
+- 合成测试：同岗位两条申请；恢复两次同一备份 → 两个 epoch；幂等三元组。
+- 不写迁移到「已发布库」（还没有）。
+
+**D05（契约，无生产 host）：**
+
+- JSON Schema：握手含 `restoreEpoch`；错误码含 `restore_epoch_mismatch`。
+- 样例：意图不是消息类型；`job.save` 成功/重放/epoch 冲突/超限。
+- 契约测试两端可复用。不注册 NM、不打安装包。
 
 ---
 
 ## 7. Open Questions（汇总）
 
-仅负责人项，细节在 §4。原型项在 §5，不占用负责人带宽。
+仅 §4。原型项在 §5。
 
-若负责人否决推荐，更新顺序：本文件 + ADR 或产品需求中对应段落 → 评论 #17 → 再改下游 issue 正文。禁止只在实现里偏离。
+若负责人否决推荐：先改本文件 + 对应专文 → 评论 #17 → 再改下游 issue。禁止只在实现里偏离。
 
 ---
 
@@ -230,4 +229,4 @@ flowchart TB
 - Epic: https://github.com/TshyGO/resume-form-assistant-plugin/issues/15
 - D01: https://github.com/TshyGO/resume-form-assistant-plugin/issues/17
 - D02 #16 · D03 #18 · D04 #19 · D05 #23 · D06 #24 · D07 #20 · D08 #22 · D09 #21 · D10 #26 · D11 #25 · D12 #28 · D13 #29 · D14 #27
-- 规划对照：`output/playwright/desktop-planning/map.json`（仅内部创建记录，不是用户文档）
+- 规划对照：`output/playwright/desktop-planning/map.json`（内部创建记录，不是用户文档）
