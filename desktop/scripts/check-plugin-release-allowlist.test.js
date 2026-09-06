@@ -46,7 +46,7 @@ test("content.js.map does not satisfy content.js", () => {
 });
 
 test('unknown files and forbidden subdirectories are not allowed',()=>{
- for(const extra of ['private.key','src-tauri/src/main.rs','target/debug/app.exe']) {
+ for(const extra of ['private.key','src-tauri/src/main.rs','target/debug/app.exe','vendor','icons','vendor/private.key','icons/private.key','icons/icon16.png/private.key']) {
    assert.throws(()=>assertPluginOnlyArchive(['manifest.json','background.js','content.js','content.css','LICENSE',extra]));
  }
 });

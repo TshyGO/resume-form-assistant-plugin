@@ -21,6 +21,7 @@ jobs:
         run: |
           node -e "const m=require('./manifest.json'); if ('v'+m.version !== process.env.GITHUB_REF_NAME) throw Error('Tag/manifest version mismatch')"
           node --test tests/*.test.js
+          node desktop/scripts/check-plugin-release-allowlist.js
 
       - name: Build extension zip
         run: |

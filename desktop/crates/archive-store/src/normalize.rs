@@ -40,6 +40,7 @@ const SECRET_PARAMS: &[&str] = &[
     "auth",
     "authorization",
     "api_key",
+    "api-key",
     "apikey",
     "password",
     "pwd",
@@ -122,9 +123,15 @@ fn clean_url(raw: &str, tracking: bool) -> String {
     url.set_fragment(None);
     let pairs: Vec<(String, String)> = url
         .query_pairs()
-        .filter(|(k, _)| {
+        .filter(|(k, v)| {
             let key = k.to_ascii_lowercase();
             !SECRET_PARAMS.contains(&key.as_str())
+                // Redirect/query-valued parameters can conceal credentials.
+                // Drop uncertain nested or still-encoded values, never persist
+                // their original form. Scalar role IDs and Unicode survive.
+                && !v.contains("://")
+                && !v.starts_with("//")
+                && !v.contains(['?', '&', '%', '#'])
                 && !(tracking && TRACKING_PREFIXES.iter().any(|p| key.starts_with(p)))
         })
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
@@ -160,6 +167,23 @@ mod tests {
 
     #[test]
     fn url_secret_strip() {
+        for nested in [
+            "https%3A%2F%2Fauth.example%2Fcallback%3Faccess_token%3Dsecret",
+            "%2Fcallback%3Ftoken%3Dsecret",
+            "%252Fcallback%253Ftoken%253Dsecret",
+            "https%3A%2F%2Fuser%3Asecret%40example.test%2F",
+            "%2F%2Fuser%3Asecret%40auth.example%2F",
+        ] {
+            let raw = format!("https://jobs.example/apply?role=AbC&next={nested}&utm_source=mail&api%2Dkey=secret");
+            assert_eq!(
+                sanitize_source_url(&raw),
+                "https://jobs.example/apply?role=AbC&utm_source=mail"
+            );
+            assert_eq!(
+                normalize_dedupe_url(&raw),
+                "https://jobs.example/apply?role=AbC"
+            );
+        }
         // 隐私 §7.1 合成例(无已审核站点规则)。
         assert_eq!(
             sanitize_source_url(

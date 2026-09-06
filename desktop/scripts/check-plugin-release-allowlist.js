@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,7 +38,8 @@ export function parseGitArchiveEntries(workflowText) {
 export function assertPluginOnlyArchive(entries) {
   const allowed = new Set(["manifest.json","background.js","content.js","content.css","ai-helpers.js","form-agent.js",
     "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","popup.html","popup.css","popup.js",
-    "xlsx.full.min.js","mammoth.browser.min.js","vendor","icons","README.md","LICENSE"]);
+    "xlsx.full.min.js","mammoth.browser.min.js","README.md","LICENSE",
+    ...JSON.parse(readFileSync(new URL('./plugin-release-assets.json', import.meta.url), 'utf8'))]);
   const exact = new Set(entries);
   for (const entry of entries) {
     const normalized = entry.replace(/\\/g, "/");
@@ -65,6 +67,9 @@ if (isMain) {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8");
   const entries = parseGitArchiveEntries(workflow);
-  assertPluginOnlyArchive(entries);
+  // Expand directory operands against the exact Git tree that git archive uses.
+  // The reviewed asset manifest is static; newly tracked descendants fail.
+  const leaves = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries], {cwd:root,encoding:'utf8'}).trim().split(/\r?\n/);
+  assertPluginOnlyArchive(leaves);
   console.log("release.yml still packs plugin runtime files only");
 }

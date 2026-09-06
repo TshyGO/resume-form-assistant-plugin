@@ -202,7 +202,10 @@ fn export_diagnostics(app: AppHandle, state: State<AppState>) -> Result<serde_js
             if state.hidden_launch { "true" } else { "false" },
         ),
     ];
-    let body = diagnostics_from(&paths, unique, &extra);
+    let mut body = diagnostics_from(&paths, unique, &extra);
+    let available = state.store.lock().map_err(|e| e.to_string())?.is_some();
+    let store_error = state.store_error.lock().map_err(|e| e.to_string())?.clone();
+    add_archive_diagnostics(&mut body, &paths, available, store_error.as_ref());
     let dest = write_diagnostics_file(&paths, &body).map_err(|e| e.to_string())?;
     let _ = write_log(&paths, "info", "DIAGNOSTICS_EXPORTED", &[("ok", "true")]);
     let mut out = body;
@@ -213,6 +216,19 @@ fn export_diagnostics(app: AppHandle, state: State<AppState>) -> Result<serde_js
         );
     }
     Ok(out)
+}
+
+fn add_archive_diagnostics(
+    body: &mut serde_json::Value,
+    paths: &HostPaths,
+    available: bool,
+    error: Option<&CommandError>,
+) {
+    body["archiveAvailable"] = serde_json::json!(available);
+    body["archiveError"] = error.map(|e| serde_json::json!({
+        "code": e.code,
+        "message": data_service::redact_path(&e.message, &data_service::path_replacements(paths))
+    })).unwrap_or(serde_json::Value::Null);
 }
 
 #[tauri::command]

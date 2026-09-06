@@ -78,7 +78,7 @@ impl ArchiveStore {
             match op {
                 PluginOp::JobSave(ref input) => {
                     operation_type = "job.save";
-                    let (rid, kind) = tx.op_job_save(input, &now)?;
+                    let (rid, kind) = tx.op_job_save(input, &ctx.message_id, &now)?;
                     result_id = rid;
                     result_kind = kind;
                     snapshot_id = None;
@@ -86,7 +86,7 @@ impl ArchiveStore {
                 }
                 PluginOp::FillSubmit(ref input) => {
                     operation_type = "fill.submit";
-                    let (rid, kind) = tx.op_fill_submit(input, &now)?;
+                    let (rid, kind) = tx.op_fill_submit(input, &ctx.message_id, &now)?;
                     result_id = rid;
                     result_kind = kind;
                     snapshot_id = None;
@@ -94,7 +94,7 @@ impl ArchiveStore {
                 }
                 PluginOp::SubmitConfirm(ref input) => {
                     operation_type = "submit.confirm";
-                    let (rid, kind) = tx.op_submit_confirm(input, &now)?;
+                    let (rid, kind) = tx.op_submit_confirm(input, &ctx.message_id, &now)?;
                     result_id = rid;
                     result_kind = kind;
                     snapshot_id = None;

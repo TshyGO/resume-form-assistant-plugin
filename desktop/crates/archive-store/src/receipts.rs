@@ -247,6 +247,7 @@ impl StoreTx<'_> {
     pub(crate) fn op_job_save(
         &mut self,
         input: &JobSaveInput,
+        message_id: &str,
         recorded_at: &str,
     ) -> Result<(String, String), StoreError> {
         match &input.target_application_id {
@@ -255,7 +256,7 @@ impl StoreTx<'_> {
                 let draft = EventDraft {
                     occurred: input.occurred.clone(),
                     source: EventSource::Plugin,
-                    source_request_id: None,
+                    source_request_id: Some(message_id.into()),
                     actor: Actor::Plugin,
                     payload: EventPayload::JobSaved {
                         company: input.company.clone(),
@@ -270,19 +271,22 @@ impl StoreTx<'_> {
                 Ok((app_id.clone(), "application".into()))
             }
             None => {
-                let app = self.create_application(NewApplication {
-                    company: input.company.clone(),
-                    title: input.title.clone(),
-                    source_url: input.source_url.clone(),
-                    location: input.location.clone(),
-                    notes: None,
-                    origin: ApplicationOrigin::Plugin,
-                    occurred_at: input.occurred.clone(),
-                })?;
+                let app = self.create_application_with_request(
+                    NewApplication {
+                        company: input.company.clone(),
+                        title: input.title.clone(),
+                        source_url: input.source_url.clone(),
+                        location: input.location.clone(),
+                        notes: None,
+                        origin: ApplicationOrigin::Plugin,
+                        occurred_at: input.occurred.clone(),
+                    },
+                    Some(message_id.into()),
+                )?;
                 let draft = EventDraft {
                     occurred: input.occurred.clone(),
                     source: EventSource::Plugin,
-                    source_request_id: None,
+                    source_request_id: Some(message_id.into()),
                     actor: Actor::Plugin,
                     payload: EventPayload::JobSaved {
                         company: input.company.clone(),
@@ -302,13 +306,14 @@ impl StoreTx<'_> {
     pub(crate) fn op_fill_submit(
         &mut self,
         input: &FillSubmitInput,
+        message_id: &str,
         recorded_at: &str,
     ) -> Result<(String, String), StoreError> {
         self.ensure_application(&input.application_id)?;
         let draft = EventDraft {
             occurred: input.occurred.clone(),
             source: EventSource::Plugin,
-            source_request_id: None,
+            source_request_id: Some(message_id.into()),
             actor: Actor::Plugin,
             payload: EventPayload::FillEvent {
                 outcome: input.outcome,
@@ -332,13 +337,14 @@ impl StoreTx<'_> {
     pub(crate) fn op_submit_confirm(
         &mut self,
         input: &SubmitConfirmInput,
+        message_id: &str,
         recorded_at: &str,
     ) -> Result<(String, String), StoreError> {
         self.ensure_application(&input.application_id)?;
         let draft = EventDraft {
             occurred: input.occurred.clone(),
             source: EventSource::Plugin,
-            source_request_id: None,
+            source_request_id: Some(message_id.into()),
             actor: Actor::User,
             payload: EventPayload::SubmitConfirmed {
                 via: input.via.clone(),

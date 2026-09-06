@@ -7,6 +7,110 @@ fn config(root: &std::path::Path) -> ArchiveConfig {
 }
 
 #[test]
+fn nested_urls_plugin_trace_and_repeated_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let raw = "https://jobs.example/apply?role=AbC&next=https%3A%2F%2Fauth.example%2F%3Faccess_token%3DSYNTHETIC_SECRET&api-key=SYNTHETIC_SECRET";
+    let mut input = match job() {
+        PluginOp::JobSave(v) => v,
+        _ => unreachable!(),
+    };
+    input.source_url = Some(raw.into());
+    let op = PluginOp::JobSave(input.clone());
+    let id = result_id(
+        db.submit_plugin_message(&ctx(&db, &op, "save-new"), op)
+            .unwrap(),
+    );
+    let created = db.list_events(&id).unwrap();
+    assert_eq!(created.len(), 2);
+    assert!(created
+        .iter()
+        .all(|e| e.source_request_id.as_deref() == Some("save-new")));
+    input.target_application_id = Some(id.clone());
+    let fill = PluginOp::FillSubmit(FillSubmitInput {
+        application_id: id.clone(),
+        outcome: FillOutcome::Completed,
+        field_count: None,
+        filled_count: None,
+        unconfirmed_count: None,
+        durations_ms: None,
+        url_redacted: Some(raw.into()),
+        template_name: None,
+        template_version: None,
+        snapshot_id: None,
+        plugin_version: None,
+        occurred: Occurred::Unknown,
+    });
+    let confirm = PluginOp::SubmitConfirm(SubmitConfirmInput {
+        application_id: id.clone(),
+        via: "plugin".into(),
+        note: None,
+        occurred: Occurred::Unknown,
+    });
+    for (message, op) in [
+        ("save-existing", PluginOp::JobSave(input)),
+        ("fill", fill),
+        ("confirm", confirm),
+    ] {
+        let context = ctx(&db, &op, message);
+        let retry = match &op {
+            PluginOp::JobSave(v) => PluginOp::JobSave(v.clone()),
+            PluginOp::FillSubmit(v) => PluginOp::FillSubmit(v.clone()),
+            PluginOp::SubmitConfirm(v) => PluginOp::SubmitConfirm(v.clone()),
+            _ => unreachable!(),
+        };
+        db.submit_plugin_message(&context, retry).unwrap();
+        let events = db.list_events(&id).unwrap();
+        assert_eq!(
+            events.last().unwrap().source_request_id.as_deref(),
+            Some(message)
+        );
+        db.submit_plugin_message(&context, op).unwrap();
+        assert_eq!(db.list_events(&id).unwrap().len(), events.len());
+    }
+    db.update_application(
+        &id,
+        UpdateApplicationInput {
+            source_url: Some(Some(format!("{raw}&safe=1"))),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let row = db.get_application(&id).unwrap().unwrap();
+    assert_eq!(
+        row.source_url.as_deref(),
+        Some("https://jobs.example/apply?role=AbC&safe=1")
+    );
+    assert!(!serde_json::to_string(&row)
+        .unwrap()
+        .contains("SYNTHETIC_SECRET"));
+    assert!(!serde_json::to_string(&db.list_events(&id).unwrap())
+        .unwrap()
+        .contains("SYNTHETIC_SECRET"));
+    let archived = db
+        .update_application(
+            &id,
+            UpdateApplicationInput {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let count = db.list_events(&id).unwrap().len();
+    let again = db
+        .update_application(
+            &id,
+            UpdateApplicationInput {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(archived.archived_at, again.archived_at);
+    assert_eq!(db.list_events(&id).unwrap().len(), count);
+}
+
+#[test]
 fn review_regressions_hashes_and_missing_resources() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = config(dir.path());

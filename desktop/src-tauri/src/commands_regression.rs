@@ -3,6 +3,30 @@ use archive_store::{Occurred, Stage};
 use serde_json::json;
 
 #[test]
+fn diagnostics_include_redacted_archive_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = data_service::HostPaths::resolve_with(Some(dir.path().join("data")), None).unwrap();
+    let mut body = json!({"uniqueWriter":true});
+    crate::add_archive_diagnostics(
+        &mut body,
+        &paths,
+        false,
+        Some(&CommandError {
+            code: "STORE_ERROR".into(),
+            message: format!("failed at {}", paths.archive_dir.display()),
+        }),
+    );
+    assert_eq!(body["archiveAvailable"], false);
+    assert_eq!(body["archiveError"]["code"], "STORE_ERROR");
+    assert!(!body
+        .to_string()
+        .contains(&paths.data_root.display().to_string()));
+    crate::add_archive_diagnostics(&mut body, &paths, true, None);
+    assert_eq!(body["archiveAvailable"], true);
+    assert!(body["archiveError"].is_null());
+}
+
+#[test]
 fn wire_edit_explicit_empty_clears_and_omitted_keeps() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(

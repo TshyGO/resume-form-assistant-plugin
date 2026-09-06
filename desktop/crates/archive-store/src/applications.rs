@@ -92,6 +92,14 @@ impl StoreTx<'_> {
         &mut self,
         input: NewApplication,
     ) -> Result<ApplicationDetail, StoreError> {
+        self.create_application_with_request(input, None)
+    }
+
+    pub(crate) fn create_application_with_request(
+        &mut self,
+        input: NewApplication,
+        source_request_id: Option<String>,
+    ) -> Result<ApplicationDetail, StoreError> {
         if input.company.trim().is_empty() {
             return Err(StoreError::Validation("company is required".into()));
         }
@@ -135,7 +143,7 @@ impl StoreTx<'_> {
         let draft = EventDraft {
             occurred: input.occurred_at.clone(),
             source,
-            source_request_id: None,
+            source_request_id,
             actor: Actor::System,
             payload: EventPayload::ApplicationCreated {
                 company: input.company.trim().to_string(),
@@ -251,7 +259,11 @@ impl StoreTx<'_> {
             }
         }
         if let Some(arch) = input.archived {
-            let nv = if arch { Some(now.clone()) } else { None };
+            let nv = if arch {
+                current.archived_at.clone().or_else(|| Some(now.clone()))
+            } else {
+                None
+            };
             if nv != current.archived_at {
                 changes.push(FieldChange {
                     field: "archived".into(),
