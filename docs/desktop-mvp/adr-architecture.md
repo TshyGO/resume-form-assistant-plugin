@@ -200,7 +200,7 @@ D05 必须包含的信封字段（此处冻结名字与枚举，不写 JSON Sche
 
 - `correlationId` = 请求 `messageId`。
 - `ok: true` 的写入应答必须有 `resultId`。
-- `ok: false` **没有** `resultId`，除非这是对 **已完成写入且 restoreEpoch 相符** 的幂等重放。
+- `ok: false` **没有** `resultId`；已完成且当前身份/摘要相符的普通重放返回 `ok: true` 和原 resultId。历史对账结果在只读 payload 中，不授予旧消息写入权限。
 - SaveIntent **不是** NM `messageType`。
 
 **MVP `messageType` 枚举：**
@@ -212,15 +212,15 @@ D05 必须包含的信封字段（此处冻结名字与枚举，不写 JSON Sche
 | `application.queryCandidates` | 插件→桌面 | 两层候选，最小元数据 |
 | `job.save` | 插件→桌面 | 已绑定后的岗位保存 |
 | `fill.submit` | 插件→桌面 | 填写事件元数据 + 可选 `snapshotId`/`sha256`（**不含**快照字节） |
-| `snapshot.chunk` | 插件→桌面 | 快照分片；每帧 ≤ 64 KiB |
+| `snapshot.chunk` | 插件→桌面 | 完整 UTF-8 JSON（信封、序号、编码后的数据在内）≤ 64 KiB；发送前所有快照都已提交到扩展源 IDB |
 | `submit.confirm` | 插件→桌面 | 用户明确确认已投递（D07） |
-| `outbox.reconcile` | 插件→桌面 | 入参 messageId 列表，出参当前 epoch 库中已存在的 `(messageId, resultId)` |
+| `outbox.reconcile` | 插件→桌面 | 当前身份信封 + 有界完整旧身份/摘要列表；只读当前档案的历史回执，逐项返回身份、核实状态及可用 resultId，见产品 §8.11 |
 
 原则：
 
 1. **握手成功**即返回当前 `(archiveId, restoreEpoch)`。仅协议不兼容或 kill switch 时握手失败。epoch 变化 **不是**握手失败。
-2. **至少一次传送，业务恰好一次：** 应答只在事务提交后发出。幂等键 `(clientInstanceId, messageId, restoreEpoch)`。epoch 不符 → `restore_epoch_mismatch`，不是成功重放。
-3. **64 KiB 是业务信封上限。** 快照字节走 `snapshot.chunk` 或桌面导入。插件侧字节见产品 §8.5（IndexedDB）。
+2. **至少一次传送，业务恰好一次：** 普通写入先校验当前 `(archiveId, restoreEpoch)`，再按 `(clientInstanceId, messageId, sourceRestoreEpoch)` 和 payloadSha256 处理事务回执，其中 sourceRestoreEpoch 是提交时的 epoch。epoch 不符返回 `restore_epoch_mismatch`，不是成功重放。历史回执随业务库备份；只读对账按完整旧身份查询，不按新 epoch 过滤，也不改当前 epoch。详见 [产品 §8.11](product-requirements.md#811-已提交消息回执与恢复对账)。
+3. **64 KiB 是完整序列化业务信封的 UTF-8 字节上限**（不含 NM 的 4 字节长度前缀），不是原始块大小。D05 建议 raw chunk ≤ 32 KiB，并限制其他字段；仍须实际编码后测量整帧，超限拒绝，不能假定 base64/JSON 没有开销。所有快照在线/离线均先持久化到扩展源 IDB，完整提交 ACK 前保留字节。D05/D08 测试整帧 65536/65537 字节、分片中断与完整 ACK 丢失。
 4. **`allowed_origins` 无通配符。** D01 不加 `key`。
 5. 开发机注册脚本只用于隔离测试（D06）；生产注册归 D13。
 6. 恢复：新目录、保留 backup `archiveId`、**新铸 restoreEpoch**。握手成功；插件暂停盖着旧 epoch 的绑定队列。意图重新走候选。
@@ -342,7 +342,7 @@ D05 禁止。**不选。**
 
 ## 13. Open Questions
 
-见 [downstream-decisions.md](downstream-decisions.md#需要项目负责人选择)。
+见 [downstream-decisions.md](downstream-decisions.md#4-需要项目负责人选择)。
 
 ---
 

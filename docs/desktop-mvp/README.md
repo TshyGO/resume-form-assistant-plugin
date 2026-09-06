@@ -17,7 +17,7 @@
 
 按角色选择入口，不必按文件顺序通读：
 
-1. **产品 / 负责人**：先读本页「关键决策快照」和 [需要负责人选择的项](downstream-decisions.md#需要项目负责人选择)，再读 [产品需求](product-requirements.md) 的目标用户、产品规则、阶段模型、离线意图/绑定，以及合成走查。
+1. **产品 / 负责人**：先读本页「关键决策快照」和 [需要负责人选择的项](downstream-decisions.md#4-需要项目负责人选择)，再读 [产品需求](product-requirements.md) 的目标用户、产品规则、阶段模型、离线意图/绑定，以及合成走查。
 2. **D02 / D06 / D13（壳、进程、安装）**：读 [架构 ADR](adr-architecture.md) 的技术选型、**进程角色**（不是「两个 EXE」契约）、跨平台适配边界、安装与仓库布局。D02 起必须做 **macOS 原型**，不能等 Windows 全做完再移植。
 3. **D03 / D04 / D08 / D09 / D10（数据与界面）**：读 [产品需求](product-requirements.md) 的对象关系、字段目录、`restoreEpoch`、提醒语义和走查；物理 schema 仍归 D03。
 4. **D05 / D07（协议与插件连接）**：读 ADR 的协议原则，产品需求的 **保存意图 vs 已绑定业务消息**，以及 [数据与隐私](data-privacy.md) 的快照暂存 / 密钥规则。不要在 D01 寻找完整 JSON Schema。
@@ -70,22 +70,22 @@
 | 5 | 默认阶段 | 插件保存岗位 → `saved`（已收藏），**不是** `submitted`。插件「确认已投递」归 **D07** |
 | 6 | 身份 | 申请 UUID；两层候选（精确三元组 / 同公司提示）；**禁止**自动合并 |
 | 7 | 离线保存 | 区分 **保存意图**（已确认要存、尚未绑定申请）与 **已绑定业务消息**。曾经配对但桌面暂不可用：可持久化意图并显示「待同步」，**不得**显示「桌面已保存」。未安装/从未配对：不建长期队列 |
-| 8 | 快照 | 确认留档时立即生成不可变字节；桌面不可用时字节进 **扩展源 IndexedDB**，元数据进 `chrome.storage.local`。重试不得从最新模板重生成 |
-| 9 | 协议 | 业务信封双向 **64 KiB**；文件字节走分片 NM；幂等键 `(clientInstanceId, messageId, restoreEpoch)` |
+| 8 | 快照 | 确认留档时立即生成不可变字节；无论桌面是否在线，发送前完整字节先提交到 **扩展源 IndexedDB**，完整提交/哈希 ACK 前保留，元数据进 `chrome.storage.local`。重试不得从最新模板重生成 |
+| 9 | 协议 | 业务信封双向 **64 KiB**；文件字节走分片 NM；当前 epoch 校验与完整历史回执对账分离（见产品 §8.11） |
 | 10 | 配对 | **D01 不加 `key`**。桌面 UI **粘贴扩展 ID**；**第一条 NM 不是配对消息** |
-| 11 | 恢复隔离 | 备份保留 `archiveId`；每次成功切换 current 指针 **新铸 `restoreEpoch`（UUID）**，不从备份拷贝、不按 backup.generation+1。旧队列盖章对不上则暂停 |
+| 11 | 恢复隔离 | 备份保留 `archiveId`；每次成功切换 current 指针 **新铸 `restoreEpoch`（UUID）**，不从备份恢复当前身份；历史回执可含 sourceRestoreEpoch，不按 backup.generation+1。旧队列盖章对不上则暂停 |
 | 12 | 提醒 | 关窗 ≠ 退出。启用后台提醒时走 **用户授权的系统调度通知**，不把进程闲置包装成次日提醒。不偷偷开机启动。主动退出须展示能力限制 |
 | 13 | 通知语义 | `replyClass` = 业务类型；`sendMode` = 发送方式（`human` / `automated` / `unknown`）。面试邀请等 **不得**仅因类型投影成「人工回复」 |
 | 14 | 密钥 | 插件 Key 留在扩展存储；桌面 Key 进 OS 凭据库（Windows Credential Manager / DPAPI，macOS Keychain）；二者都不进档案/备份/日志 |
 | 15 | 备份 | MVP **不加密**；导出警告含 PII |
 | 16 | 填写留档 | 默认只存事件元数据；逐字段值默认关闭；快照 ≤ 2 MiB |
-| 17 | 交付物 | Windows：NSIS per-user 安装包。macOS：`.app` / `.dmg`。正式版是否必须双平台同时交付 → [开放问题](downstream-decisions.md#需要项目负责人选择) |
+| 17 | 交付物 | Windows：NSIS per-user 安装包。macOS：`.app` / `.dmg`。正式版是否必须双平台同时交付 → [开放问题](downstream-decisions.md#4-需要项目负责人选择) |
 
-未确认项见 [需要项目负责人选择](downstream-decisions.md#需要项目负责人选择)。原型验证项见 [需要后续原型验证](downstream-decisions.md#需要后续原型验证)。
+未确认项见 [需要项目负责人选择](downstream-decisions.md#4-需要项目负责人选择)。原型验证项见 [需要后续原型验证](downstream-decisions.md#5-需要后续原型验证)。
 
 ## 开放问题入口
 
-只把真正需要负责人拍板的问题放在 [downstream-decisions.md](downstream-decisions.md#需要项目负责人选择)。当前建议的负责人选择集：
+只把真正需要负责人拍板的问题放在 [downstream-decisions.md](downstream-decisions.md#4-需要项目负责人选择)。当前建议的负责人选择集：
 
 1. 首个对外「正式桌面 MVP」是否必须 Windows + macOS 同时交付
 2. Tauri 2 vs Electron
@@ -101,4 +101,4 @@
 
 **明确不交付：** `/desktop` 源码树、crate 脚手架、SQLite `CREATE TABLE`、协议 JSON Schema、Native Messaging 注册、安装器、Tauri/Electron 安装、真实 AI 调用、邮箱连接、插件权限/版本变更、合并、关闭 #17、宣称架构已冻结。
 
-下游任务编号与 GitHub issue 对照见 [downstream-decisions.md](downstream-decisions.md#d02d14-消费映射)。
+下游任务编号与 GitHub issue 对照见 [downstream-decisions.md](downstream-decisions.md#2-d02d14-消费映射)。

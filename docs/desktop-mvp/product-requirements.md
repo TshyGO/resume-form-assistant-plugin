@@ -67,7 +67,7 @@
 - 云账号、云同步、多设备实时同步、团队协作（换电脑 = 备份恢复，不是云同步）
 - Linux 成品；Safari 扩展；默认承诺 App Store / Chrome Web Store 上架
 - 扩展商店上架与静默自动更新（检查更新仍可沿用插件现有 GitHub Release 提示）
-- 把「首个正式版必须双平台同一天交付」写成未确认承诺（见 [开放问题](downstream-decisions.md#需要项目负责人选择)）
+- 把「首个正式版必须双平台同一天交付」写成未确认承诺（见 [开放问题](downstream-decisions.md#4-需要项目负责人选择)）
 - `.msg` / Outlook 虚拟拖拽对象（不支持时提示导出 `.eml` 或粘贴正文）
 - 把当前开发者机器路径写进产品
 - 在 D01 修改插件权限、存储、功能或把 `manifest.json` 版本从 `0.3.0` 改掉
@@ -235,7 +235,7 @@ flowchart TD
 4. 未授权通知时，应用内待办、逾期标记、打开应用后的一次汇总，仍然要做（D10）。
 5. 通知正文默认不含简历/邮件正文。
 
-平台实现差异见 [ADR §3.8](adr-architecture.md#38-提醒与后台-平台实现)。
+平台实现差异见 [ADR §3.8](adr-architecture.md#38-提醒与后台平台实现)。
 
 ---
 
@@ -335,7 +335,7 @@ saved → filling → submitted → assessment → interview → offer
 
 - 公司名：去首尾空白、全半角、常见后缀（有限词表，如「有限公司」）折叠后再比；原始字符串始终保留。
 - 岗位名：去首尾空白、压缩空白。
-- URL：去掉 fragment；剥离已知密钥查询参数（见 [data-privacy.md](data-privacy.md#71-url-脱敏)）；host 小写。
+- URL：去掉 fragment；剥离已知密钥查询参数（见 [data-privacy.md](data-privacy.md#71-url-脱敏与去重-url)）；host 小写。
 
 保存时两层查询（同一最小元数据形状：id、公司、岗位、阶段、URL、更新时间；不把整库同步给插件）：
 
@@ -385,8 +385,8 @@ saved → filling → submitted → assessment → interview → offer
 | `companyNormalized` | 去重查询用 | 是 | system | mutable（随 company） | PII |
 | `title` | 岗位名（原始）。与公司连用可识别雇主关系，按 PII 处理 | 是 | user/plugin | mutable | PII |
 | `titleNormalized` | 去重查询用 | 是 | system | mutable | PII |
-| `sourceUrl` | 展示/存储用 URL（剥秘密参数，保留 ATS `code`/`key` 岗位号，见隐私 §7.1） | 否 | user/plugin | mutable | PII |
-| `dedupeUrl` | 身份规范化 URL（更窄剥离集） | 否 | system | mutable | PII |
+| `sourceUrl` | 展示/存储用 URL（默认剥离 `code`/`key` 等秘密参数，仅已审核的 ATS 规则例外，见隐私 §7.1） | 否 | user/plugin | mutable | PII |
+| `dedupeUrl` | 候选查询规范化 URL（与 sourceUrl 相同秘密剥离，再去跟踪参数） | 否 | system | mutable | PII |
 | `location` | 地点 | 否 | user/plugin | mutable | PII |
 | `notes` | 备注 | 否 | user | mutable | PII |
 | `currentStage` | 阶段投影（§6.2 折叠） | 是 | system | projected | public-meta |
@@ -453,11 +453,12 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `blobSha256` | 指向 AttachmentBlob | 是 | system | immutable | public-meta |
 | `originalFilename` | 导入时文件名 | 否 | import | immutable | PII |
 | `importedAt` | UTC | 是 | system | immutable | public-meta |
-| `sourcePathHint` | 仅导入瞬间；**不作为长期依赖** | 否 | import | immutable | PII |
 | `subject` / `fromAddr` / `sentAt` | 邮件头（若可解析） | 否 | import | immutable | PII |
 | `bodyExtract` | 本地提取的纯文本/清洗 HTML 转文本 | 否 | import | immutable | PII |
 
 **AttachmentBlob**（ER 中的字节实体）：
+
+`sourcePathHint` 不属于 ReplyEvidence 的长期字段：仅导入任务在内存中临时使用，导入完成、失败或取消后清除。不进入 D03 schema、SQLite、事件载荷、备份或诊断导出；错误提示使用安全文件名/错误代码，而不是原始绝对路径。
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
@@ -492,9 +493,9 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 | 阶段 | 字节位置 | 元数据位置 |
 | --- | --- | --- |
-| 刚确认留档、桌面可握手 | 经 `snapshot.chunk` 写入桌面 `snapshots/` | Bound outbox：`snapshotId` / `sha256` / `byteSize` / `chunkCursor` |
+| 每次确认留档，无论桌面是否可握手 | **先**将不可变完整字节提交到扩展源 IndexedDB，成功后才能开始 `snapshot.chunk`；上传期间仍保留 IDB 副本 | 暂存记录持有 `snapshotId` / `sha256` / `byteSize` 与待建队列状态；Bound outbox 保存同一身份和游标 |
 | 曾配对但桌面暂不可用 | **扩展源 IndexedDB**（SW / offscreen / 扩展页可访问；**禁止**写在 content script 的页面源 IDB） | `chrome.storage.local` 只存元数据 + `staging=idb`，**不**存整份 blob（`chrome.storage.local` 约 10 MB 配额） |
-| 桌面已 ACK 完整快照 | 仅桌面档案 | 删除 IDB 项与绑定消息 |
+| 桌面已持久化完整快照且 ACK 总哈希相符 | 桌面档案为权威副本，此时才允许清理 IDB | ACK 状态先持久化，再清理 IDB/绑定项；中断后可幂等继续清理 |
 
 依据：[Chrome 扩展 Storage and cookies](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies) — IndexedDB 在 SW 可用；content script 的 web storage 是 **宿主页面**源，不是扩展源。
 
@@ -503,6 +504,8 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 **过期：** 暂存超过 30 天仍未 ACK：下次打开插件时提示「有未完成的简历留档」，用户选继续发送 / 丢弃。到期 **不自动删** 未提示过的项。
 
 **部分上传：** `chunkCursor` 记录桌面已 ACK 的最后块号；重试从下一块开始，校验总 `sha256`。桌面在未收齐前不把快照标为完整。
+
+**统一写前暂存：** 在线开始后断线、SW 重启和浏览器重启与初始离线使用同一 IDB 原字节。分片 ACK 不是完整提交 ACK；完整 ACK 丢失时可按快照 ID/总哈希查询或重传，不能从活模板重建。IDB 与 `chrome.storage.local` 不具备跨库事务：IDB 暂存记录必须包含足够元数据，以便重启后修复缺失的 outbox 索引；有 outbox 但找不到原字节时暂停并报告失败，不假报可恢复。
 
 **清理：** 仅当 (1) 桌面 ACK 完整且哈希相符，或 (2) 用户明确丢弃该留档，或 (3) 用户确认过期提示中的丢弃。浏览器重启后 IDB 仍在，继续发 **原字节**。
 
@@ -540,6 +543,8 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `candidateApplicationIds` | 消歧列表，可多条 | 是 | ai_suggest | immutable | public-meta |
 | `suggestedStage` | 可空 | 否 | ai_suggest | immutable | public-meta |
 | `suggestedRound` | 可空 | 否 | ai_suggest | immutable | public-meta |
+| `suggestedReplyClass` | 建议的通知业务类型；取值同 ReplyEvidence.replyClass，无法识别为 `unknown` | 是 | ai_suggest | immutable | public-meta |
+| `suggestedSendMode` | 建议发送方式：`human` / `automated` / `unknown`；不得仅凭通知类型推断人工发送 | 是 | ai_suggest | immutable | public-meta |
 | `suggestedTodos` | 结构化待办草案 | 否 | ai_suggest | immutable | PII |
 | `excerptRefs` | 证据片段引用 | 否 | ai_suggest | immutable | PII |
 | `uncertainties` | 模型自报不确定点 | 否 | ai_suggest | immutable | public-meta |
@@ -547,6 +552,8 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `promptScope` | 外发范围摘要（非原文密钥） | 否 | system | immutable | public-meta |
 
 禁止字段：API Key、完整档案库、未选中申请的简历快照。D11 建议分别给出 `replyClass` 与 `sendMode`（与 `kind` 分离）；无法判断发送方式则 `sendMode=unknown`。确认前不改正式阶段。
+
+提取结果先写入 `suggestedReplyClass` / `suggestedSendMode`；暂存、关闭窗口、重启后仍能恢复建议，不能借用 ReplyEvidence 正式字段暂存。审核时允许编辑草稿，但保留模型原建议；确认操作把用户批准的 class/mode 与正式证据、事件、阶段/待办更新放入同一事务，并记录批准值。`modified_confirmed` 必须可追溯原建议和最终批准值；重复确认幂等。
 
 ### 8.8 填写留档默认范围
 
@@ -621,7 +628,18 @@ erDiagram
 | `createdAt` | 入队 UTC | 是 | plugin | immutable | public-meta |
 | `bytes` | payload 序列化字节数 | 是 | plugin | immutable | public-meta |
 
-恢复后：握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。插件比较每条 **绑定** 消息上盖的身份，不匹配则暂停，用户选关联/丢弃/另存。意图不盖 epoch，恢复后重新走候选，不自动当成已绑定。关联通过 `outbox.reconcile` 查询哪些 `messageId` 已在 **当前 epoch** 的库中。桌面幂等键是 `(clientInstanceId, messageId, restoreEpoch)`：epoch 不同则 **不是** 当前档案的重放，返回 `restore_epoch_mismatch`，不得当成成功幂等。
+恢复后：握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。插件比较每条 **绑定** 消息上盖的身份，不匹配则暂停，用户选关联/丢弃/另存。意图不盖 epoch，恢复后重新走候选，不自动当成已绑定。旧写入请求仍返回 `restore_epoch_mismatch`；历史只读对账与写入授权分开，不能只查询新 epoch 的写入记录。
+
+#### 8.11 已提交消息回执与恢复对账
+
+D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstanceId`、`messageId`、`sourceRestoreEpoch`（该写入提交时的 epoch）、`payloadSha256`、`resultId`、操作类型和提交时间。回执属于可备份业务历史；历史 epoch 不授予当前写入权限。回执保留期至少与对应申请/事件一致；永久清理后的缺失不能解释成“以前从未执行”。
+
+`outbox.reconcile` 的外层信封使用当前握手的 `(archiveId, restoreEpoch)`，payload 每项携带完整旧身份 `{clientInstanceId, messageId, sourceRestoreEpoch, payloadSha256}`。它只读当前所选档案库中的历史回执，**不按当前 epoch 过滤历史行**；不搜索其他档案或接受任意路径。调用方只能查询自己的 clientInstanceId（最多由 D05 规定的有界批次）。响应逐项回显完整身份并返回 `applied` / `not_found` / `conflict` / `unverifiable`，`applied` 才有已核实的 resultId。
+
+- 完整旧身份与摘要命中、对应结果仍有效：`applied`，不再新增业务事件。
+- 同身份摘要不符：`conflict`，拒绝自动处理。
+- 未找到回执：`not_found`，仅说明该备份未包含证明；缺失回执表/无法核实结果：`unverifiable`。两者均不自动重放，交由用户核对已有记录或另存。
+- 用户明确决定重新写入时，创建新 messageId、盖当前 epoch，并记录旧身份关联；该转换及新 outbox 身份需先持久化，重试不能再生成另一份新消息。旧 envelope 永远不能因为对账成功被当成当前写入许可。
 
 ---
 
@@ -729,15 +747,15 @@ erDiagram
 
 ### 10.8 恢复身份与旧队列（含重复恢复同一备份）
 
-**设定：** 绑定队列有 `messageId=M1` 的 `job.save`，盖着 `archiveId=A1, restoreEpoch=E1`。备份 B 含 A1（**不含** E1）。
+**设定：** 绑定队列有 `messageId=M1` 的 `job.save`，盖着 `archiveId=A1, restoreEpoch=E1`。备份 B 含 A1 和业务历史回执（可能含 sourceRestoreEpoch=E1），但不含当前指针文件。
 
 **第一次恢复 B：**
 
-- 预览 → 确认 → 解压到 **新目录**，旧 current 挪到 retired。
+- 预览 → 确认 → 在 **新目录** 完整解压/校验/验证迁移，旧 current 保持不动；成功原子切换 current.json 后，旧目录才登记为 retired 回滚点，不在提交前搬走。
 - 新铸 `restoreEpoch=E2`（UUID），写入机器本地 current 指针。`archiveId` 仍为 A1。
 - 握手成功，返回 `(A1, E2)`。握手不因 epoch 变化失败。
 - M1 盖章 `(A1, E1)` ≠ `(A1, E2)` → **暂停**绑定队列。
-- 用户三选：关联 / 丢弃 / 另存。关联调用 `outbox.reconcile`；已在 **当前 epoch 库** 中的 messageId 不再重放。
+- 用户三选：关联 / 丢弃 / 另存。关联按 §8.11 查询备份中保留的完整历史回执（含 clientInstanceId、旧 epoch 和摘要）；已核实的结果不重写，不局限于 E2 的回执。
 - 若此时桌面在用户确认前就收到 M1：返回 `restore_epoch_mismatch`，**不得**按 `(clientInstanceId, messageId)` 当成成功幂等。
 
 **再次用同一备份 B 恢复：**
@@ -798,6 +816,28 @@ erDiagram
 
 ---
 
+### 10.14 在线开始、上传中断、模板改变
+
+确认快照 S 时桌面在线：先将原字节 B 和摘要 H 提交到扩展源 IDB，再发送分片。收到部分 ACK 后 SW 重启，用户把模板改为 B2；恢复发送的仍是 B，最终桌面总哈希必须为 H。完整 ACK 丢失时保留 IDB 并核对/幂等重传；没有完整持久化 ACK 不删除 B。IDB 提交失败时不开始可恢复上传，提示留档失败，填写不受影响。
+
+### 10.15 暂存 AI 分类建议
+
+模型返回 `interview_invite` / `automated`：只写 AiSuggestion 的 suggestedReplyClass/suggestedSendMode，证据正式分类不变。用户选择暂存、重启后两项仍在；修改发送方式为 unknown 并确认时，在同一事务登记批准值、事件/阶段/待办。原模型建议仍可查看；重复确认不重复写入。
+
+### 10.16 凭据 URL 与临时导入路径
+
+无已审核 ATS 规则的 OAuth `?code=SECRET`、重置密码 `?key=SECRET`，在写入 SaveIntent 前即剥离；档案、日志和备份均不含 SECRET。一个岗位号规则的正例不能放行同 host 的 callback/reset 路径。导入 `C:\\Users\\合成用户\\Downloads\\通知.eml` 后，只保留安全文件名与托管副本；成功/失败/取消后清除内存 sourcePathHint，长期对象、备份和诊断中不存在原路径。
+
+### 10.17 恢复后的历史回执对账
+
+E1 时 Profile A 的 M1 已提交，回执 R 与申请一起进入备份，但浏览器未收到 ACK。恢复备份后当前身份是 E2。旧 E1 的 job.save 直接发送必须被拒绝；用户选择对账，外层用 E2，查询项用 `(A, M1, E1, payloadSha256)`，在恢复库的历史回执命中 R，返回 applied，不再建一条申请。
+
+Profile B 恰好也使用 M1，不能命中 A 的回执；同旧身份但摘要不同返回 conflict。若提交发生在备份之后，备份内找不到回执：返回 not_found，要求人工核对/另存，不宣称从未执行。重复恢复生成 E3 后仍可查 R，但 E1/E2 都不能重新取得写入权限。
+
+### 10.18 恢复解压失败
+
+旧目录 A 和 current.json 指向 E1。向独立目录 B 解压时磁盘满：删除/隔离未完成的本次 staging，A 和 current.json 不变；不把旧目录先移走。只有 B 的完整校验和迁移验证成功后，暂停写入、持久化 B 并原子切换指针到 B/E2。提交点后的崩溃使用 B/E2，旧 A 仍为回滚点；人工回滚 A 时新铸 E3。
+
 ## 11. UI 文案约束（产品级）
 
 | 禁止 | 必须 |
@@ -838,7 +878,7 @@ erDiagram
 | 高 | 用户把填写成功当成已投递 | 默认 `saved`；独立确认；文案冻结 |
 | 高 | 按公司自动合并导致通知串岗 | UUID 身份；候选提示；AI 强制消歧 |
 | 中 | 未打包扩展 ID 漂移 / 把未配对当成未安装 | 桌面粘贴 ID；未配对不建意图 |
-| 中 | 快照大于业务信封或桌面不可用时丢字节 | 确认时写入 IndexedDB；> 2 MiB 拒绝；重试用原字节 |
+| 中 | 快照过大或任意上传中断时丢字节 | 确认时写入 IndexedDB；> 2 MiB 拒绝；重试用原字节 |
 | 中 | 把 idle 退出当成次日提醒 | 系统调度通知；文案区分退出/未授权 |
 | 中 | 重复恢复同一备份复用 generation | `restoreEpoch` 每次切换新铸 |
 | 低 | 托盘/菜单栏被当成广告 | 可关；退出能力限制必须仍能看见 |
@@ -847,7 +887,7 @@ erDiagram
 
 ## 14. Open Questions
 
-产品侧需负责人确认的项并入 [downstream-decisions.md](downstream-decisions.md#需要项目负责人选择)（填写留档默认范围、托盘、备份加密等）。本文不单开重复列表。
+产品侧需负责人确认的项并入 [downstream-decisions.md](downstream-decisions.md#4-需要项目负责人选择)（填写留档默认范围、托盘、备份加密等）。本文不单开重复列表。
 
 ---
 

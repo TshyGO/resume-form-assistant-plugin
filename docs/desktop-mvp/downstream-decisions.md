@@ -73,16 +73,16 @@ flowchart TB
 | 工作 | Issue | 硬依赖 | 从 D01 消费的结论 | 本 issue 仍需自己定的 |
 | --- | --- | --- | --- | --- |
 | D02 桌面壳、单实例、数据目录 | [#16](https://github.com/TshyGO/resume-form-assistant-plugin/issues/16) | D01 | **应用进程 = 唯一写入者**；Windows + **macOS 原型为完成条件之一**；平台目录 API；单实例；关窗 ≠ 退出；托盘/菜单栏；无开机启动；粘贴 ID 设置页骨架；不把 `*.exe` 写进协议 | 窗口细节；IPC 具体 API（pipe vs unix socket） |
-| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象跨平台；无公司+URL 唯一约束；折叠函数；`restoreEpoch` 不在备份内；幂等键含 epoch；`sendMode` 字段；`occurredAt` unknown 时为 null | `CREATE TABLE`、索引、迁移 |
+| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象跨平台；无公司+URL 唯一约束；折叠函数；当前 epoch 指针不备份，历史回执含 sourceRestoreEpoch；正式/建议 class 与 sendMode 分开；sourcePathHint 仅内存；`occurredAt` unknown 时为 null | `CREATE TABLE`、索引、迁移 |
 | D04 无 AI 管理 UI | [#19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) | D02、D03 | 阶段码含 `filling`；文案「尚未导入回复证据」；`classified` 不是「人工回复」；两层候选 | 布局、快捷键 |
-| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 信封；握手返回 `restoreEpoch` 而非 generation；幂等三元组；`snapshot.chunk`；`outbox.reconcile`；64 KiB；SaveIntent **不是** NM 类型 | JSON Schema、错误码（含 `restore_epoch_mismatch`）、分片帧 |
+| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 信封；握手返回 `restoreEpoch` 而非 generation；当前身份校验 + 完整旧身份/摘要的只读对账；`snapshot.chunk` 整帧预算；64 KiB；SaveIntent **不是** NM 类型 | JSON Schema、错误码（含 `restore_epoch_mismatch`）、分片帧 |
 | D06 NM host | [#24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24) | D02、D03、D05 | 薄 host 或同二进制 host 模式；stdout 纯净；扫描 argv origin；按需启动 **应用进程**；Win 注册表 + Mac 用户级目录 | 可执行实现、冷启动、Mac 路径实测 |
 | D07 保存岗位、配对、队列 | [#20](https://github.com/TshyGO/resume-form-assistant-plugin/issues/20) | D04、D05、D06 | **SaveIntent vs Bound outbox**；从未配对不建意图；曾经配对桌面不可用可建意图；禁止待同步=已保存；粘贴 ID；`submit.confirm`；storage key 清单 | 退避、侧边栏文案、10 s 去重点击 |
-| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 确认时生成不可变字节；桌面不可用 → 扩展源 IndexedDB；重试用原字节；>2 MiB 拒绝；可能申请 `unlimitedStorage` | 快照 JSON 格式、字段值开关 |
+| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 确认时生成不可变字节；无论在线/离线，发送前完整字节 → 扩展源 IndexedDB，完整 ACK 前保留；重试用原字节；>2 MiB 拒绝；可能申请 `unlimitedStorage` | 快照 JSON 格式、字段值开关 |
 | D09 证据收件箱 | [#21](https://github.com/TshyGO/resume-form-assistant-plugin/issues/21) | D03、D04 | `kind` 格式；`replyClass` 业务类型；`sendMode` 发送方式；导入≠改阶段 | MIME、预览 |
 | D10 待办与提醒 | [#26](https://github.com/TshyGO/resume-form-assistant-plugin/issues/26) | D04 | **系统调度通知**；杀进程后仍尽量弹；未授权则列表+汇总；退出取消未触发项并告知；无偷偷开机启动；Win 5 分钟窗口写进文案 | 具体 Toast/UNUserNotification 封装、夏令时 |
-| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 同时建议 `replyClass` 与 `sendMode`；不确定则 unknown；Keychain/DPAPI | 提示词、OCR |
-| D12 备份恢复 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；保留 archiveId；**新铸 restoreEpoch**；备份不含 epoch；回滚再铸 | 归档格式、原子发布 |
+| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 持久化 suggestedReplyClass/suggestedSendMode；确认前不写正式分类，不确定为 unknown；Keychain/DPAPI | 提示词、OCR |
+| D12 备份恢复 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；保留 archiveId；**新铸 restoreEpoch**；备份不含当前指针但包含历史回执；新目录验证后原子切换，回滚再铸 | 归档格式、原子发布 |
 | D13 安装升级 | [#29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29) | D02、D06、D07、D12 | Win NSIS per-user + 双写 HKCU；Mac `.app`/`.dmg` + 用户级 NativeMessagingHosts；卸载留档案；签名/公证如实写 | NSIS hooks、公证流水线、SHA-256 |
 | D14 端到端 | [#27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27) | D08、D11、D13 | 含意图队列、离线快照、杀进程提醒、重复恢复、ATS 自动面试信；Win 必测；Mac 覆盖随正式版决议，但 D02 原型不能缺 | 验收记录模板 |
 
@@ -112,8 +112,8 @@ flowchart TB
 6. Stage 折叠函数；`filling` 投影。
 7. `replyClass` ≠ `sendMode`；`replyEvidenceState` 用 `classified` 而非「人工回复」。
 8. SaveIntent vs Bound outbox；从未配对不建意图；禁止待同步=已保存。
-9. 快照确认时生成；离线字节在扩展源 IndexedDB；重试不从新模板生成。
-10. 握手返回 `restoreEpoch`；每次切换 current 新铸；幂等含 epoch。
+9. 快照确认时生成；所有字节先持久化到扩展源 IndexedDB；重试不从新模板生成。
+10. 握手返回当前 restoreEpoch；每次成功切换新铸；普通写入校验当前身份，恢复对账只读完整历史回执。
 11. 提醒走用户授权的系统调度；不偷偷开机启动。
 12. D01/0.3.0 不加 `nativeMessaging`、不加 `key`。
 13. 插件 Key 留扩展存储；桌面 Key 进 OS 凭据库。
@@ -203,9 +203,9 @@ flowchart TB
 
 **D03（数据层，无 UI）：**
 
-- 按字段目录建库：Application/Event/Todo/Evidence（含 `sendMode`）/Snapshot/AttachmentBlob。
-- `current.json` 持 `restoreEpoch`；备份夹具 **不含** epoch。
-- 合成测试：同岗位两条申请；恢复两次同一备份 → 两个 epoch；幂等三元组。
+- 按字段目录建库：Application/Event/Todo/Evidence（含 sendMode）/AiSuggestion（含独立建议分类）/Snapshot/AttachmentBlob/提交回执。
+- `current.json` 持当前 restoreEpoch 且不备份；备份夹具保留业务历史回执的 sourceRestoreEpoch。
+- 合成测试：同岗位两条申请；恢复两次同一备份 → 两个当前 epoch；历史回执不丢失、旧写入仍被拒绝、不同 Profile 同 messageId 不串结果。
 - 不写迁移到「已发布库」（还没有）。
 
 **D05（契约，无生产 host）：**
