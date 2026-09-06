@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createApplicationsController, evidenceLabel, stageLabel } from "./applications.js";
+import { createApplicationsController, evidenceLabel, stageLabel, occurredLabel } from "./applications.js";
 
 test("stale list responses do not replace a newer token", () => {
   const ctl = createApplicationsController();
@@ -32,4 +32,10 @@ test("evidence copy never claims the employer did not reply", () => {
   assert.equal(evidenceLabel("none_imported"), "尚未导入回复证据");
   assert.equal(evidenceLabel("imported_unclassified"), "已导入，待分类");
   assert.equal(stageLabel("submitted"), "已投递");
+});
+
+test('occurrence displays date or unknown without substituting recorded time',()=>{
+  assert.equal(occurredLabel({precision:'unknown'}),'发生时间未知');
+  assert.equal(occurredLabel({precision:'date',value:{date:'2026-08-21'}}),'2026-08-21');
+  assert.equal(occurredLabel({precision:'date_time',value:{rfc3339:'2026-08-21T10:00:00Z'}}),'2026-08-21T10:00:00Z');
 });

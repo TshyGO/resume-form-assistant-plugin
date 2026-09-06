@@ -11,7 +11,7 @@
 //! 永久删除在同一事务保留最小幂等墓碑(purged 标记,无正文);
 //! 重试命中墓碑返回 `previously_purged`,不得重建申请。
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::identity::ArchiveIdentity;
@@ -368,6 +368,9 @@ impl StoreTx<'_> {
                 "invalid bounded snapshot metadata".into(),
             ));
         }
+        let mut input = input.clone();
+        input.chunk_sha256.make_ascii_lowercase();
+        input.total_sha256.make_ascii_lowercase();
         if input.chunk_index < 0 || input.chunk_index >= input.chunk_count {
             return Err(StoreError::Validation(format!(
                 "chunk_index {} out of range (0..{})",
@@ -535,7 +538,8 @@ impl StoreTx<'_> {
         stored_rel_path: &str,
     ) -> Result<ResumeSnapshotMeta, StoreError> {
         validate_rel_path(stored_rel_path)?;
-        let (epoch, size): (String, i64) = self.conn().query_row("SELECT source_restore_epoch, byte_size FROM snapshot_uploads WHERE client_instance_id=?1 AND snapshot_id=?2", params![client_instance_id,snapshot_id], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        let (epoch, size): (String, i64) = self.conn().query_row("SELECT source_restore_epoch, byte_size FROM snapshot_uploads WHERE client_instance_id=?1 AND snapshot_id=?2", params![client_instance_id,snapshot_id], |r| Ok((r.get(0)?,r.get(1)?)))
+            .optional()?.ok_or_else(|| StoreError::NotFound(format!("snapshot upload {snapshot_id}")))?;
         if epoch != self.identity.restore_epoch {
             return Err(StoreError::Validation(
                 "old snapshot epoch cannot finalize".into(),

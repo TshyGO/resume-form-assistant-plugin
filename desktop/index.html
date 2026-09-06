@@ -108,6 +108,17 @@
               </div>
             </form>
           </dialog>
+          <dialog id="progress-dialog">
+            <form id="progress-form" class="stack">
+              <h2 id="progress-title">记录进度</h2>
+              <label>说明<input id="progress-description" maxlength="2000" /></label>
+              <label id="progress-round-label">面试轮次（可留空）<input id="progress-round" type="number" min="1" max="99" step="1" /></label>
+              <label>发生日期（留空表示未知，不用今天代替）<input id="progress-date" type="date" /></label>
+              <label><input id="progress-update" type="checkbox" /> 同时更新当前进度（默认只补录历史）</label>
+              <p id="progress-msg" class="muted"></p>
+              <div class="row"><button id="progress-save" type="submit">保存记录</button><button id="progress-cancel" type="button">取消</button></div>
+            </form>
+          </dialog>
         </section>
 
         <section id="view-inbox" class="view hidden">

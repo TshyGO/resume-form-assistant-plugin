@@ -34,6 +34,8 @@ impl StoreTx<'_> {
                 "blob sha256 must be 64 hex chars".into(),
             ));
         }
+        let mut input = input;
+        input.blob.sha256.make_ascii_lowercase();
         if input.blob.size_bytes < 0 {
             return Err(StoreError::Validation("blob size must be >= 0".into()));
         }
@@ -146,6 +148,9 @@ impl StoreTx<'_> {
             }
         }
 
+        if let Some(app) = &input.application_id {
+            self.recompute_reply_state(app)?;
+        }
         self.get_evidence(&id)?
             .ok_or_else(|| StoreError::Internal("evidence vanished in same transaction".into()))
     }
@@ -224,6 +229,7 @@ impl StoreTx<'_> {
             source_request_id: None,
             actor: Actor::User,
             payload: EventPayload::EvidenceClassified {
+                decision_sha256: None,
                 evidence_id: evidence_id.to_string(),
                 reply_class: reply_class.as_str().into(),
                 send_mode: send_mode.as_str().into(),

@@ -37,6 +37,12 @@ export function eventLabel(code) {
   return EVENT_LABEL[code] || code;
 }
 
+export function occurredLabel(occurred) {
+  if (occurred?.precision === "date") return occurred.value?.date || "发生日期未知";
+  if (occurred?.precision === "date_time") return occurred.value?.rfc3339 || "发生时间未知";
+  return "发生时间未知";
+}
+
 export function evidenceLabel(state) {
   if (state === "none_imported") return "尚未导入回复证据";
   if (state === "imported_unclassified") return "已导入，待分类";

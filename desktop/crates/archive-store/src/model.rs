@@ -428,6 +428,8 @@ pub enum EventPayload {
         to_application_id: String,
     },
     EvidenceClassified {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision_sha256: Option<String>,
         evidence_id: String,
         reply_class: String,
         send_mode: String,

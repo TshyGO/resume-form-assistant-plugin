@@ -3,6 +3,7 @@ import {
   evidenceLabel,
   eventLabel,
   stageLabel,
+  occurredLabel,
 } from "./applications.js";
 
 function escapeHtml(value) {
@@ -36,6 +37,59 @@ export function mountApplications(invoke) {
   const form = document.getElementById("app-form");
   const formMsg = document.getElementById("app-form-msg");
   const pageEl = document.getElementById("apps-page");
+  const progressDialog = document.getElementById("progress-dialog");
+  const progressForm = document.getElementById("progress-form");
+  let progressContext = null;
+  let progressSaving = false;
+  let actionBusy = false;
+  let detailToken = 0;
+  const progressKinds = { interview: "面试", assessment: "测评", offer: "Offer", rejected: "未通过", withdrawn: "撤回", closed: "结束申请" };
+
+  function setFormBusy(busy) {
+    form.querySelectorAll("input,textarea,button").forEach(el => { el.disabled = busy; });
+  }
+  function cancelForm(event) {
+    event?.preventDefault();
+    if (ctl.saving) return;
+    if (ctl.formDirty && !window.confirm("有未保存的修改，确定关闭？")) return;
+    dialog.close();
+    ctl.clearFormDirty();
+  }
+  function cancelProgress(event) {
+    event?.preventDefault();
+    if (progressSaving) return;
+    progressContext = null;
+    progressDialog.close();
+  }
+  document.getElementById("progress-cancel").addEventListener("click", cancelProgress);
+  progressDialog.addEventListener("cancel", cancelProgress);
+  dialog.addEventListener("cancel", cancelForm);
+
+  progressForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!progressContext || progressSaving) return;
+    const { act, id } = progressContext;
+    const description = document.getElementById("progress-description").value.trim();
+    const date = document.getElementById("progress-date").value;
+    const round = document.getElementById("progress-round").value;
+    const args = { id, updateProgress: document.getElementById("progress-update").checked,
+      occurred: date ? { precision: "date", value: { date, time_zone: null } } : { precision: "unknown" },
+      label: description || progressKinds[act], name: description || progressKinds[act], note: description || null, reason: description || null,
+      round: act === "interview" && round ? Number(round) : null };
+    progressSaving = true;
+    progressForm.querySelectorAll("input,button").forEach(el => { el.disabled = true; });
+    const status = document.getElementById("progress-msg");
+    status.textContent = "保存中…";
+    try {
+      await invoke(`record_${act}_cmd`, { args });
+      progressDialog.close();
+      progressContext = null;
+      await refreshList();
+      if (ctl.selectedId === id) await loadDetail(id);
+      msg.textContent = "已保存记录。";
+    } catch (error) { status.textContent = invokeError(error); }
+    finally { progressSaving = false; progressForm.querySelectorAll("input,button").forEach(el => { el.disabled = false; }); }
+  });
 
   function filterArgs() {
     return {
@@ -50,6 +104,7 @@ export function mountApplications(invoke) {
   }
 
   function openForm(title, values) {
+    if (ctl.saving || actionBusy || progressSaving) return;
     document.getElementById("app-form-title").textContent = title;
     document.getElementById("f-company").value = values.company || "";
     document.getElementById("f-title").value = values.title || "";
@@ -73,6 +128,8 @@ export function mountApplications(invoke) {
     try {
       const page = await invoke("list_applications_cmd", { args });
       if (!ctl.isCurrent(token)) return;
+      const lastOffset = page.total ? Math.floor((page.total - 1) / ctl.limit) * ctl.limit : 0;
+      if (ctl.offset > lastOffset) { ctl.setOffset(lastOffset); return refreshList(); }
       msg.textContent = page.total ? `共 ${page.total} 条` : "";
       const showEmpty = page.total === 0 && !args.query && args.stage === "all" && args.recycle === "active";
       empty.classList.toggle("hidden", !showEmpty);
@@ -89,11 +146,13 @@ export function mountApplications(invoke) {
           </tr>`;
         })
         .join("");
-      const maxOffset = Math.max(0, page.total - ctl.limit);
+      const maxOffset = lastOffset;
       pageEl.textContent = `${Math.floor(ctl.offset / ctl.limit) + 1} / ${Math.max(1, Math.ceil(page.total / ctl.limit))}`;
       document.getElementById("btn-prev-page").disabled = ctl.offset <= 0;
       document.getElementById("btn-next-page").disabled = ctl.offset >= maxOffset || page.total === 0;
-      if (ctl.selectedId && !page.items.some((row) => row.id === ctl.selectedId) && args.recycle === "active") {
+      if (ctl.selectedId && !page.items.some((row) => row.id === ctl.selectedId)) {
+        detailToken += 1;
+        ctl.setSelected(null);
         detail.innerHTML = `<p class="muted">当前申请不在此列表过滤中。</p>`;
       }
     } catch (err) {
@@ -103,12 +162,15 @@ export function mountApplications(invoke) {
   }
 
   async function loadDetail(id) {
+    const token = ++detailToken;
     ctl.setSelected(id);
+    detail.innerHTML = '<p class="muted">加载中…</p>';
     tbody.querySelectorAll("tr").forEach((tr) => {
       tr.classList.toggle("active", tr.dataset.id === id);
     });
     try {
       const view = await invoke("get_application_cmd", { id });
+      if (token !== detailToken || ctl.selectedId !== id) return;
       const app = view.application.summary || view.application;
       const notes = view.application.notes;
       const events = view.events || [];
@@ -129,6 +191,9 @@ export function mountApplications(invoke) {
           <button type="button" data-act="interview">记录面试</button>
           <button type="button" data-act="assessment">记录测评</button>
           <button type="button" data-act="offer">记录 Offer</button>
+          <button type="button" data-act="rejected">记录未通过</button>
+          <button type="button" data-act="withdrawn">记录撤回</button>
+          <button type="button" data-act="closed">结束申请</button>
           <button type="button" data-act="correct">纠正阶段</button>
           <button type="button" data-act="note">新增备注</button>
           <button type="button" data-act="recycle">${(app.recycleState || app.recycle_state) === "recycled" ? "恢复" : "回收"}</button>
@@ -144,7 +209,8 @@ export function mountApplications(invoke) {
               const modeText = mode === "update_progress" ? "更新当前进度" : mode === "history_only" ? "仅历史补录" : "";
               return `<li>
                 <strong>#${escapeHtml(ev.eventSequence || ev.event_sequence)} ${escapeHtml(eventLabel(ev.eventType || ev.event_type))}</strong>
-                <span class="muted">${escapeHtml(formatTime((ev.occurred && (ev.occurred.value && ev.occurred.value.rfc3339)) || ev.recordedAt || ev.recorded_at))}</span>
+                <span class="muted">发生：${escapeHtml(occurredLabel(ev.occurred))} · 记录于：${escapeHtml(formatTime(ev.recordedAt || ev.recorded_at))}</span>
+                ${payload.round ? `<div>第 ${escapeHtml(payload.round)} 轮面试</div>` : ""}
                 ${extra ? `<div class="break">${escapeHtml(extra)}</div>` : ""}
                 ${modeText ? `<div class="muted">${escapeHtml(modeText)}</div>` : ""}
               </li>`;
@@ -156,6 +222,7 @@ export function mountApplications(invoke) {
         btn.addEventListener("click", () => handleAction(btn.dataset.act, view));
       });
     } catch (err) {
+      if (token !== detailToken || ctl.selectedId !== id) return;
       detail.innerHTML = `<p class="banner">${escapeHtml(invokeError(err))}</p>`;
     }
   }
@@ -163,8 +230,23 @@ export function mountApplications(invoke) {
   async function handleAction(act, view) {
     const app = view.application.summary || view.application;
     const id = app.id;
+    if (ctl.selectedId !== id || ctl.saving || actionBusy || progressSaving) return;
+    if (progressKinds[act]) {
+      progressContext = { act, id };
+      document.getElementById("progress-title").textContent = `记录${progressKinds[act]} · ${app.company} / ${app.title}`;
+      document.getElementById("progress-description").value = "";
+      document.getElementById("progress-date").value = "";
+      document.getElementById("progress-round").value = "";
+      document.getElementById("progress-round-label").hidden = act !== "interview";
+      document.getElementById("progress-update").checked = false;
+      document.getElementById("progress-msg").textContent = "取消或 Escape 不会保存任何记录。";
+      progressDialog.showModal();
+      return;
+    }
+    actionBusy = true;
     try {
       if (act === "edit") {
+        actionBusy = false;
         ctl.setEditing(id);
         openForm("编辑申请", {
           company: app.company,
@@ -178,15 +260,6 @@ export function mountApplications(invoke) {
       if (act === "submit") {
         if (!window.confirm("确认这条申请已经投递？填写完成不会自动变成已投递。")) return;
         await invoke("confirm_submit_cmd", { args: { id } });
-      } else if (act === "interview") {
-        const update = window.confirm("确定后写入面试记录。\n确定：同时更新当前进度。\n取消：仅作为历史补录，不改变当前阶段。");
-        await invoke("record_interview_cmd", { args: { id, updateProgress: update, label: "面试" } });
-      } else if (act === "assessment") {
-        const update = window.confirm("确定后写入测评记录。\n确定：同时更新当前进度。\n取消：仅历史补录（Offer 后补录默认不倒退）。");
-        await invoke("record_assessment_cmd", { args: { id, updateProgress: update, name: "测评" } });
-      } else if (act === "offer") {
-        const update = window.confirm("记录 Offer？确定将更新当前进度；取消则只记历史。");
-        await invoke("record_offer_cmd", { args: { id, updateProgress: update } });
       } else if (act === "correct") {
         const to = window.prompt("纠正到哪个阶段？(saved/filling/submitted/assessment/interview/offer/rejected/withdrawn/closed)", app.currentStage || app.current_stage);
         if (!to) return;
@@ -213,11 +286,11 @@ export function mountApplications(invoke) {
         await invoke("set_recycle_cmd", { id, recycled });
       }
       await refreshList();
-      await loadDetail(id);
+      if (ctl.selectedId === id) await loadDetail(id);
       msg.textContent = "已保存。";
     } catch (err) {
       msg.textContent = invokeError(err);
-    }
+    } finally { actionBusy = false; }
   }
 
   form.addEventListener("input", () => ctl.markFormDirty());
@@ -232,25 +305,27 @@ export function mountApplications(invoke) {
       notes: document.getElementById("f-notes").value || null,
     };
     ctl.setSaving(true);
+    setFormBusy(true);
+    const editingId = ctl.editingId;
     document.getElementById("btn-save-app").disabled = true;
     formMsg.textContent = "保存中…";
     try {
-      if (ctl.editingId) {
+      if (editingId) {
         await invoke("update_application_cmd", {
           args: {
-            id: ctl.editingId,
+            id: editingId,
             company: payload.company,
             title: payload.title,
-            sourceUrl: payload.sourceUrl,
-            location: payload.location,
-            notes: payload.notes,
+            sourceUrl: payload.sourceUrl ?? "",
+            location: payload.location ?? "",
+            notes: payload.notes ?? "",
           },
         });
         formMsg.textContent = "已保存。";
         ctl.clearFormDirty();
         dialog.close();
         await refreshList();
-        await loadDetail(ctl.editingId);
+        if (ctl.selectedId === editingId) await loadDetail(editingId);
       } else {
         const result = await invoke("create_application_cmd", {
           args: { ...payload, confirmDuplicate: false },
@@ -292,20 +367,19 @@ export function mountApplications(invoke) {
       document.getElementById("f-notes").value = payload.notes || "";
     } finally {
       ctl.setSaving(false);
+      setFormBusy(false);
       document.getElementById("btn-save-app").disabled = false;
     }
   });
 
-  document.getElementById("btn-cancel-app").addEventListener("click", () => {
-    if (ctl.formDirty && !window.confirm("有未保存的修改，确定关闭？")) return;
-    dialog.close();
-    ctl.clearFormDirty();
-  });
+  document.getElementById("btn-cancel-app").addEventListener("click", cancelForm);
   document.getElementById("btn-new-app").addEventListener("click", () => {
+    if (ctl.saving) return;
     ctl.setEditing(null);
     openForm("新增申请", {});
   });
   document.getElementById("btn-empty-new").addEventListener("click", () => {
+    if (ctl.saving) return;
     ctl.setEditing(null);
     openForm("新增申请", {});
   });
@@ -335,7 +409,7 @@ export function mountApplications(invoke) {
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "n" && event.target === document.body) {
+    if (event.key === "n" && event.target === document.body && !ctl.saving && !progressDialog.open) {
       ctl.setEditing(null);
       openForm("新增申请", {});
     }

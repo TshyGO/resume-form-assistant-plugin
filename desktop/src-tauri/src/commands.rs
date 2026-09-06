@@ -31,7 +31,10 @@ impl From<StoreError> for CommandError {
     }
 }
 
-pub fn open_store(archive_dir: &std::path::Path, current_pointer: &std::path::Path) -> Result<ArchiveStore, CommandError> {
+pub fn open_store(
+    archive_dir: &std::path::Path,
+    current_pointer: &std::path::Path,
+) -> Result<ArchiveStore, CommandError> {
     ArchiveStore::open(ArchiveConfig::new(archive_dir, current_pointer)).map_err(CommandError::from)
 }
 
@@ -94,7 +97,8 @@ pub fn create_application(
         args.title.trim(),
         args.source_url.as_deref(),
     )?;
-    if !args.confirm_duplicate && (!candidates.exact.is_empty() || !candidates.same_company.is_empty())
+    if !args.confirm_duplicate
+        && (!candidates.exact.is_empty() || !candidates.same_company.is_empty())
     {
         return Ok(CreateApplicationResult {
             created: false,
@@ -180,14 +184,15 @@ pub struct ApplicationView {
 }
 
 pub fn get_application(store: &ArchiveStore, id: &str) -> Result<ApplicationView, CommandError> {
-    let application = store
-        .get_application(id)?
-        .ok_or_else(|| CommandError {
-            code: "NOT_FOUND".into(),
-            message: format!("申请不存在: {id}"),
-        })?;
+    let application = store.get_application(id)?.ok_or_else(|| CommandError {
+        code: "NOT_FOUND".into(),
+        message: format!("申请不存在: {id}"),
+    })?;
     let events = store.list_events(id)?;
-    Ok(ApplicationView { application, events })
+    Ok(ApplicationView {
+        application,
+        events,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +222,14 @@ pub fn update_application(
     store: &ArchiveStore,
     args: UpdateApplicationArgs,
 ) -> Result<ApplicationDetail, CommandError> {
+    if args.company.as_ref().is_some_and(|s| s.trim().is_empty())
+        || args.title.as_ref().is_some_and(|s| s.trim().is_empty())
+    {
+        return Err(CommandError {
+            code: "VALIDATION".into(),
+            message: "公司与岗位不能为空".into(),
+        });
+    }
     Ok(store.update_application(
         &args.id,
         UpdateApplicationInput {
@@ -228,6 +241,26 @@ pub fn update_application(
             archived: args.archived,
         },
     )?)
+}
+
+fn append_progress_event(
+    store: &ArchiveStore,
+    id: &str,
+    occurred: Occurred,
+    payload: EventPayload,
+) -> Result<ApplicationView, CommandError> {
+    occurred.to_columns().map_err(CommandError::from)?;
+    store.append_event(
+        Some(id),
+        EventDraft {
+            occurred,
+            source: EventSource::Manual,
+            source_request_id: None,
+            actor: Actor::User,
+            payload,
+        },
+    )?;
+    get_application(store, id)
 }
 
 fn append_user_event(
@@ -263,7 +296,11 @@ pub fn add_note(store: &ArchiveStore, args: NoteArgs) -> Result<ApplicationView,
             message: "备注不能为空".into(),
         });
     }
-    append_user_event(store, &args.id, EventPayload::NoteAdded { text: text.into() })
+    append_user_event(
+        store,
+        &args.id,
+        EventPayload::NoteAdded { text: text.into() },
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,7 +310,10 @@ pub struct SubmitArgs {
     pub note: Option<String>,
 }
 
-pub fn confirm_submit(store: &ArchiveStore, args: SubmitArgs) -> Result<ApplicationView, CommandError> {
+pub fn confirm_submit(
+    store: &ArchiveStore,
+    args: SubmitArgs,
+) -> Result<ApplicationView, CommandError> {
     append_user_event(
         store,
         &args.id,
@@ -288,6 +328,8 @@ pub fn confirm_submit(store: &ArchiveStore, args: SubmitArgs) -> Result<Applicat
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressEventArgs {
+    #[serde(default)]
+    pub occurred: Option<Occurred>,
     pub id: String,
     pub name: Option<String>,
     pub round: Option<i64>,
@@ -302,9 +344,10 @@ pub fn record_assessment(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::AssessmentRecorded {
             name: args.name.filter(|s| !s.trim().is_empty()),
             due: None,
@@ -317,9 +360,16 @@ pub fn record_interview(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    if args.round.is_some_and(|n| n < 1 || n > 99) {
+        return Err(CommandError {
+            code: "VALIDATION".into(),
+            message: "面试轮次须为 1–99".into(),
+        });
+    }
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::InterviewRecorded {
             round: args.round,
             label: args.label.or(args.name).filter(|s| !s.trim().is_empty()),
@@ -332,9 +382,10 @@ pub fn record_offer(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::OfferRecorded {
             note: args.note.filter(|s| !s.trim().is_empty()),
             stage_update_mode: stage_mode(args.update_progress),
@@ -346,9 +397,10 @@ pub fn record_rejected(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::Rejected {
             reason: args.reason.or(args.note).filter(|s| !s.trim().is_empty()),
             stage_update_mode: stage_mode(args.update_progress),
@@ -360,9 +412,10 @@ pub fn record_withdrawn(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::Withdrawn {
             reason: args.reason.or(args.note).filter(|s| !s.trim().is_empty()),
             stage_update_mode: stage_mode(args.update_progress),
@@ -374,9 +427,10 @@ pub fn record_closed(
     store: &ArchiveStore,
     args: ProgressEventArgs,
 ) -> Result<ApplicationView, CommandError> {
-    append_user_event(
+    append_progress_event(
         store,
         &args.id,
+        args.occurred.unwrap_or(Occurred::Unknown),
         EventPayload::Closed {
             note: args.note.filter(|s| !s.trim().is_empty()),
             stage_update_mode: stage_mode(args.update_progress),
@@ -473,6 +527,7 @@ pub fn application_manager_loop(store: &ArchiveStore) -> Result<serde_json::Valu
     record_interview(
         store,
         ProgressEventArgs {
+            occurred: None,
             id: first.id.clone(),
             name: None,
             round: Some(1),
@@ -492,6 +547,7 @@ pub fn application_manager_loop(store: &ArchiveStore) -> Result<serde_json::Valu
     record_offer(
         store,
         ProgressEventArgs {
+            occurred: None,
             id: first.id.clone(),
             name: None,
             round: None,
@@ -504,6 +560,7 @@ pub fn application_manager_loop(store: &ArchiveStore) -> Result<serde_json::Valu
     let after_history = record_assessment(
         store,
         ProgressEventArgs {
+            occurred: None,
             id: first.id.clone(),
             name: Some("线上测评".into()),
             round: None,
@@ -731,6 +788,7 @@ mod tests {
         record_offer(
             &store,
             ProgressEventArgs {
+                occurred: None,
                 id: created.id.clone(),
                 name: None,
                 round: None,

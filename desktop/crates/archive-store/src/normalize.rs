@@ -82,6 +82,15 @@ pub fn normalize_company(raw: &str) -> String {
         let mut hit = false;
         for suffix in COMPANY_SUFFIXES {
             if trimmed.len() > suffix.len() + 1 && trimmed.ends_with(suffix) {
+                let head = &trimmed[..trimmed.len() - suffix.len()];
+                if suffix.is_ascii()
+                    && head
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric())
+                {
+                    continue;
+                }
                 s = trimmed[..trimmed.len() - suffix.len()]
                     .trim_end()
                     .to_string();
@@ -139,6 +148,9 @@ mod tests {
 
     #[test]
     fn company_suffix_and_width() {
+        for name in ["Cisco", "Tesco", "Costco"] {
+            assert_eq!(normalize_company(name), name.to_lowercase());
+        }
         assert_eq!(normalize_company("星河科技 有限公司"), "星河科技");
         assert_eq!(normalize_company("StarRiver Tech Inc."), "starriver tech");
         assert_eq!(normalize_company("ＡＢＣ 公司"), "abc 公司");

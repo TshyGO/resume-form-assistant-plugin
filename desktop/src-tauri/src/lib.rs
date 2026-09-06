@@ -1,5 +1,7 @@
 mod cli;
 mod commands;
+#[cfg(test)]
+mod commands_regression;
 mod lifecycle;
 
 use archive_store::ArchiveStore;
@@ -7,8 +9,8 @@ use commands::{
     add_note, application_manager_loop, confirm_submit, correct_stage, create_application,
     get_application, list_applications, open_store, query_candidates, record_assessment,
     record_closed, record_interview, record_offer, record_rejected, record_withdrawn, set_recycle,
-    update_application, CommandError, CorrectStageArgs, CreateApplicationArgs, ListApplicationsArgs,
-    NoteArgs, ProgressEventArgs, SubmitArgs, UpdateApplicationArgs,
+    update_application, CommandError, CorrectStageArgs, CreateApplicationArgs,
+    ListApplicationsArgs, NoteArgs, ProgressEventArgs, SubmitArgs, UpdateApplicationArgs,
 };
 use data_service::{
     diagnostics_from, probe, write_diagnostics_file, write_log, DataHost, HostErrorDto, HostPaths,
@@ -151,10 +153,7 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
             .map(|p| p.current_pointer.display().to_string())
             .unwrap_or_default(),
         data_root,
-        writable: host
-            .as_ref()
-            .map(|h| h.is_writable().is_ok())
-            .unwrap_or(false),
+        writable: host.is_some(), // initialization result; status polling must not write probe files
         unique_writer,
         window_visible,
         hidden_launch: state.hidden_launch,
@@ -198,7 +197,10 @@ fn export_diagnostics(app: AppHandle, state: State<AppState>) -> Result<serde_js
         .unwrap_or(false);
     let extra = [
         ("windowVisible", if visible { "true" } else { "false" }),
-        ("hiddenLaunch", if state.hidden_launch { "true" } else { "false" }),
+        (
+            "hiddenLaunch",
+            if state.hidden_launch { "true" } else { "false" },
+        ),
     ];
     let body = diagnostics_from(&paths, unique, &extra);
     let dest = write_diagnostics_file(&paths, &body).map_err(|e| e.to_string())?;
@@ -249,7 +251,10 @@ fn create_application_cmd(
 }
 
 #[tauri::command]
-fn get_application_cmd(state: State<AppState>, id: String) -> Result<commands::ApplicationView, CommandError> {
+fn get_application_cmd(
+    state: State<AppState>,
+    id: String,
+) -> Result<commands::ApplicationView, CommandError> {
     with_store(&state, |store| get_application(store, &id))
 }
 
@@ -262,7 +267,10 @@ fn update_application_cmd(
 }
 
 #[tauri::command]
-fn add_note_cmd(state: State<AppState>, args: NoteArgs) -> Result<commands::ApplicationView, CommandError> {
+fn add_note_cmd(
+    state: State<AppState>,
+    args: NoteArgs,
+) -> Result<commands::ApplicationView, CommandError> {
     with_store(&state, |store| add_note(store, args))
 }
 
@@ -346,7 +354,9 @@ fn query_candidates_cmd(
     title: String,
     source_url: Option<String>,
 ) -> Result<archive_store::Candidates, CommandError> {
-    with_store(&state, |store| query_candidates(store, &company, &title, source_url.as_deref()))
+    with_store(&state, |store| {
+        query_candidates(store, &company, &title, source_url.as_deref())
+    })
 }
 
 #[tauri::command]
@@ -382,18 +392,23 @@ fn configure_webview_cache() {
 }
 
 fn run_apps_loop() -> Result<serde_json::Value, CommandError> {
-    let base = std::env::var_os("RESUMEPRO_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!(
-                "resumepro-d04-loop-{}",
+    // Diagnostic/demo data must never enter the configured user archive.
+    let base = (0..1000)
+        .find_map(|_| {
+            let candidate = std::env::temp_dir().join(format!(
+                "resumepro-d04-loop-{}-{}",
+                std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0)
-            ))
-        });
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&candidate).ok().map(|_| candidate)
+        })
+        .ok_or_else(|| CommandError {
+            code: "STORE_OPEN_FAILED".into(),
+            message: "Cannot create isolated demo directory".into(),
+        })?;
     let archive = base.join("archive");
     let pointer = base.join("current.json");
     std::fs::create_dir_all(&archive).map_err(|e| CommandError {
@@ -432,11 +447,17 @@ pub fn run() {
     if args.apps_loop {
         match run_apps_loop() {
             Ok(report) => {
-                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_else(|e| e.to_string()));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_else(|e| e.to_string())
+                );
                 std::process::exit(0);
             }
             Err(err) => {
-                eprintln!("{}", serde_json::to_string(&err).unwrap_or_else(|_| err.message.clone()));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&err).unwrap_or_else(|_| err.message.clone())
+                );
                 std::process::exit(2);
             }
         }

@@ -88,9 +88,12 @@ impl ArchiveStore {
         std::fs::create_dir_all(&cfg.archive_dir)?;
         let archive_lock = lock_file(&cfg.archive_dir.join("archive.store-lock"))?;
         if let Some(pointer) = read_pointer(&cfg.current_pointer)? {
-            if std::fs::canonicalize(&pointer.archive_dir)?
-                != std::fs::canonicalize(&cfg.archive_dir)?
-            {
+            let recorded = std::fs::canonicalize(&pointer.archive_dir).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    StoreError::Validation("current pointer targets a missing archive directory; repair the current pointer before opening".into())
+                } else { e.into() }
+            })?;
+            if recorded != std::fs::canonicalize(&cfg.archive_dir)? {
                 return Err(StoreError::Validation("current pointer targets a different directory; use a separate staging pointer for restore validation".into()));
             }
         }

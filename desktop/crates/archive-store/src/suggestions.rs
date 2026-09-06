@@ -147,12 +147,31 @@ impl StoreTx<'_> {
             .get_evidence(&suggestion.evidence_id)?
             .ok_or_else(|| StoreError::NotFound(format!("evidence {}", suggestion.evidence_id)))?;
         self.ensure_application(&input.application_id)?;
+        use sha2::{Digest, Sha256};
+        let decision = serde_json::json!({"applicationId":input.application_id,"class":input.approved_reply_class,
+            "mode":input.approved_send_mode,"todos":input.create_todos,
+            "stageEvent":input.stage_event.as_ref().map(|e| serde_json::json!({"payload":e.payload,"occurred":e.occurred}))});
+        let decision_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&decision)?));
 
         // 幂等:已确认(含 modified)不再产生任何写入。
         if matches!(
             suggestion.status,
             SuggestionStatus::Confirmed | SuggestionStatus::ModifiedConfirmed
         ) {
+            use rusqlite::OptionalExtension;
+            let recorded: Option<String> = self.conn().query_row("SELECT payload FROM events WHERE source_request_id=?1 AND event_type='evidence_classified' ORDER BY event_sequence DESC LIMIT 1", [&suggestion.id], |r| r.get(0)).optional()?;
+            let recorded =
+                recorded.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+            if recorded
+                .as_ref()
+                .and_then(|v| v.get("decision_sha256"))
+                .and_then(|v| v.as_str())
+                != Some(decision_sha256.as_str())
+            {
+                return Err(StoreError::Conflict(
+                    "confirmation decision differs or old decision cannot be verified".into(),
+                ));
+            }
             if suggestion.approved_reply_class != Some(input.approved_reply_class)
                 || suggestion.approved_send_mode != Some(input.approved_send_mode)
             {
@@ -216,6 +235,7 @@ impl StoreTx<'_> {
             source_request_id: Some(suggestion.id.clone()),
             actor: Actor::User,
             payload: EventPayload::EvidenceClassified {
+                decision_sha256: Some(decision_sha256),
                 evidence_id: suggestion.evidence_id.clone(),
                 reply_class: input.approved_reply_class.as_str().into(),
                 send_mode: input.approved_send_mode.as_str().into(),

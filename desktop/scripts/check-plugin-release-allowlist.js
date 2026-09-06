@@ -35,9 +35,13 @@ export function parseGitArchiveEntries(workflowText) {
 }
 
 export function assertPluginOnlyArchive(entries) {
+  const allowed = new Set(["manifest.json","background.js","content.js","content.css","ai-helpers.js","form-agent.js",
+    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","popup.html","popup.css","popup.js",
+    "xlsx.full.min.js","mammoth.browser.min.js","vendor","icons","README.md","LICENSE"]);
   const exact = new Set(entries);
   for (const entry of entries) {
     const normalized = entry.replace(/\\/g, "/");
+    if (!allowed.has(normalized)) throw new Error(`release archive must not include ${entry}`);
     if (
       FORBIDDEN.has(entry) ||
       FORBIDDEN.has(normalized) ||

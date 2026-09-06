@@ -139,6 +139,7 @@ impl ArchiveStore {
     ) -> Result<Vec<crate::receipts::ReconcileReply>, StoreError> {
         self.transaction(|tx| {
             let current = tx.identity.clone();
+            let envelope = envelope_identity.ok_or(StoreError::IdentityMissing)?;
             if items.len() > 100
                 || items
                     .iter()
@@ -148,7 +149,6 @@ impl ArchiveStore {
                     "invalid reconciliation scope".into(),
                 ));
             }
-            let envelope = envelope_identity.ok_or(StoreError::IdentityMissing)?;
             if envelope.archive_id != current.archive_id {
                 return Err(StoreError::RestoreEpochMismatch {
                     detail: "reconcile envelope archiveId does not match current".into(),

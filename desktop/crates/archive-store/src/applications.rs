@@ -34,6 +34,8 @@ pub enum ListSort {
 
 #[derive(Debug, Clone, Default)]
 pub struct ApplicationFilter {
+    /// None hides list-archived records; Some(true) shows archived, Some(false) shows both.
+    pub archived: Option<bool>,
     pub stages: Vec<Stage>,
     /// 默认只看 active;传 Some(state) 过滤,Some(None) = 全部。
     pub recycle_state: Option<Option<RecycleState>>,
@@ -357,6 +359,11 @@ impl StoreTx<'_> {
         let mut where_clauses: Vec<String> = Vec::new();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
+        match filter.archived {
+            None => where_clauses.push("archived_at IS NULL".into()),
+            Some(true) => where_clauses.push("archived_at IS NOT NULL".into()),
+            Some(false) => {}
+        }
         match &filter.recycle_state {
             Some(None) => {}
             Some(Some(state)) => {
@@ -429,7 +436,11 @@ impl StoreTx<'_> {
             ListSort::Title => "title_normalized",
             ListSort::Stage => "current_stage",
         };
-        let dir = if filter.order_updated_desc { "DESC" } else { "ASC" };
+        let dir = if filter.order_updated_desc {
+            "DESC"
+        } else {
+            "ASC"
+        };
         let order = format!("{col} {dir}, id ASC");
         let limit = filter.limit.clamp(1, 1000);
         let sql = format!(

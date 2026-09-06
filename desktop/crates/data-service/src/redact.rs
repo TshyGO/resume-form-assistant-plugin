@@ -33,10 +33,62 @@ pub fn redact_value(value: &str) -> String {
         || lower.contains("set-cookie")
         || lower.contains("password=")
         || value.contains("sk-")
+        || has_secret_query(value)
     {
         return "[redacted]".to_string();
     }
     value.chars().take(500).collect()
+}
+
+// Detection only: never rewrite normal log values. Decode percent-encoded
+// parameter names and delimiters, including nested encodings, before matching.
+fn has_secret_query(value: &str) -> bool {
+    let mut decoded = value.as_bytes().to_vec();
+    for depth in 0..4 {
+        let mut next = Vec::with_capacity(decoded.len());
+        let mut i = 0;
+        while i < decoded.len() {
+            if decoded[i] == b'%' && i + 2 < decoded.len() {
+                let hi = (decoded[i + 1] as char).to_digit(16);
+                let lo = (decoded[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    next.push((hi * 16 + lo) as u8);
+                    i += 3;
+                    continue;
+                }
+            }
+            next.push(decoded[i]);
+            i += 1;
+        }
+        if next.len() == decoded.len() {
+            break;
+        }
+        // Suspiciously nested encoding is not useful diagnostic text. Fail
+        // closed instead of spending unbounded time decoding a log value.
+        if depth == 3 {
+            return true;
+        }
+        decoded = next;
+    }
+    decoded.make_ascii_lowercase();
+    decoded
+        .split(|b| matches!(b, b'?' | b'&' | b'#'))
+        .skip(1)
+        .any(|part| {
+            let key = part.split(|b| *b == b'=').next().unwrap_or_default();
+            part.contains(&b'=')
+                && [
+                    b"token".as_slice(),
+                    b"access_token",
+                    b"refresh_token",
+                    b"id_token",
+                    b"api_key",
+                    b"api-key",
+                    b"apikey",
+                    b"key",
+                ]
+                .contains(&key)
+        })
 }
 
 pub fn sanitize_context(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -101,12 +153,72 @@ mod tests {
 
     #[test]
     fn redacts_embedded_secrets() {
-        assert_eq!(
-            redact_value("Authorization: Bearer abc"),
-            "[redacted]"
-        );
+        assert_eq!(redact_value("Authorization: Bearer abc"), "[redacted]");
         assert_eq!(redact_value("sk-abcdefghijklmnopqrstuvwxyz"), "[redacted]");
         assert_eq!(redact_value("windows"), "windows");
+    }
+
+    #[test]
+    fn query_secrets_and_encodings_are_redacted() {
+        for key in [
+            "token",
+            "access_token",
+            "api_key",
+            "apikey",
+            "key",
+            "ToKeN",
+            "api%5fkey",
+        ] {
+            for eq in ["=", "%3D", "%253d"] {
+                let input = format!("https://example.test/?page=1&{key}{eq}SYNTHETIC_SECRET");
+                assert_eq!(redact_value(&input), "[redacted]", "{input}");
+                assert_eq!(sanitize_context(&[("endpoint", &input)])[0].1, "[redacted]");
+            }
+        }
+        assert_eq!(
+            redact_value("https%3a%2f%2fexample.test%2f%3ftoken%3dSYNTHETIC_SECRET"),
+            "[redacted]"
+        );
+        for input in [
+            "https://example.test/?page=1&sort=asc",
+            "https://example.test/?monkey=value&tokenizer=fast",
+            "普通文字%zz",
+            "C:\\test\\file",
+        ] {
+            assert_eq!(redact_value(input), input);
+        }
+        assert_eq!(redact_value(&"x".repeat(600)).len(), 500);
+        assert_eq!(
+            redact_value(&format!("{}?token=secret", "x".repeat(600))),
+            "[redacted]"
+        );
+        assert_eq!(
+            redact_value(&format!("%{}41", "25".repeat(100_000))),
+            "[redacted]"
+        );
+    }
+
+    #[test]
+    fn query_secrets_do_not_reach_logs_or_diagnostics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths =
+            crate::paths::HostPaths::resolve_with(Some(tmp.path().join("data")), None).unwrap();
+        paths.ensure_layout().unwrap();
+        let pairs = [
+            (
+                "endpoint",
+                "https://example.test/?access%5Ftoken%3DSYNTHETIC_SECRET",
+            ),
+            ("platform", "windows"),
+        ];
+        crate::logging::write_log(&paths, "info", "TEST", &pairs).unwrap();
+        let log = std::fs::read_to_string(crate::logging::log_path(&paths)).unwrap();
+        let diagnostics = crate::host::diagnostics_from(&paths, false, &pairs).to_string();
+        for text in [log, diagnostics] {
+            assert!(!text.contains("SYNTHETIC_SECRET"));
+            assert!(text.contains("windows"));
+            assert!(text.contains("[redacted]"));
+        }
     }
 
     #[test]

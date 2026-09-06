@@ -85,7 +85,7 @@ async function refreshStatus() {
     fact("WebView 由本应用指定", yn(status.webviewDataManaged)),
     fact("WebView 说明", status.webviewDataNote),
     fact("current.json", status.currentPointer),
-    fact("目录可写", yn(status.writable)),
+    fact("启动时目录可写", yn(status.writable)),
     fact("唯一写入者", yn(status.uniqueWriter)),
     fact("窗口可见", yn(status.windowVisible)),
     fact("本次隐藏启动", yn(status.hiddenLaunch)),
@@ -98,8 +98,13 @@ async function refreshStatus() {
   applyPairingFields(pairing.applyStatus(token, status.pairing));
 }
 
+let pairingSaving = false;
 document.getElementById("pairing-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (pairingSaving) return;
+  pairingSaving = true;
+  const fields = document.getElementById("pairing-form").querySelectorAll("input,button");
+  fields.forEach(el => { el.disabled = true; });
   const msg = document.getElementById("pairing-msg");
   const typed = {
     chrome: chromeInput.value,
@@ -120,7 +125,7 @@ document.getElementById("pairing-form").addEventListener("submit", async (event)
     chromeInput.value = typed.chrome;
     edgeInput.value = typed.edge;
     msg.textContent = String(err);
-  }
+  } finally { pairingSaving = false; fields.forEach(el => { el.disabled = false; }); }
 });
 
 document.getElementById("btn-hide").addEventListener("click", () => invoke("hide_main_window_cmd"));

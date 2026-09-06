@@ -5,6 +5,49 @@ use serde_json::json;
 fn config(root: &std::path::Path) -> ArchiveConfig {
     ArchiveConfig::new(root.join("archive"), root.join("current.json"))
 }
+
+#[test]
+fn review_regressions_hashes_and_missing_resources() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let db = ArchiveStore::open(cfg.clone()).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let mut upper = evidence(Some(a.id.clone()));
+    upper.blob.sha256 = "A".repeat(64);
+    db.import_evidence(upper).unwrap();
+    db.import_evidence(evidence(Some(a.id.clone()))).unwrap();
+    let report = db.check_attachment_refs().unwrap();
+    assert_eq!(report.total_blobs, 1);
+    assert_eq!(report.total_evidence, 2);
+    assert!(report.zero_ref_blobs.is_empty());
+    assert!(matches!(
+        db.finalize_snapshot_upload("client-a", "absent", "snapshots/x.json"),
+        Err(StoreError::NotFound(_))
+    ));
+    assert!(matches!(
+        db.reconcile_lookup(None, "client-a", &[]),
+        Err(StoreError::IdentityMissing)
+    ));
+    let (context, operation) = chunk(&db, &a.id, 0, &"B".repeat(64));
+    db.submit_plugin_message(&context, operation).unwrap();
+    let (context, operation) = chunk(&db, &a.id, 1, &"b".repeat(64));
+    db.submit_plugin_message(&context, operation).unwrap();
+    assert_eq!(
+        db.snapshot_progress("client-a", "synthetic-snapshot")
+            .unwrap()
+            .total_sha256,
+        "b".repeat(64)
+    );
+    drop(db);
+    let mut pointer: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cfg.current_pointer).unwrap()).unwrap();
+    // CurrentPointer uses snake_case serde field names.
+    pointer["archive_dir"] = json!(dir.path().join("missing"));
+    std::fs::write(&cfg.current_pointer, serde_json::to_vec(&pointer).unwrap()).unwrap();
+    assert!(
+        matches!(ArchiveStore::open(cfg), Err(StoreError::Validation(s)) if s.contains("missing archive directory"))
+    );
+}
 fn app() -> NewApplication {
     NewApplication {
         company: "合成公司".into(),
@@ -701,4 +744,105 @@ fn missing_metadata_is_not_replaced_with_a_new_archive_identity() {
     std::fs::remove_file(cfg.meta_path()).unwrap();
     assert!(ArchiveStore::open(cfg.clone()).is_err());
     assert!(!cfg.meta_path().exists());
+}
+
+#[test]
+fn eventless_evidence_updates_projection_and_archive_filter_is_sql_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let mut e = evidence(Some(a.id.clone()));
+    e.append_event = false;
+    db.import_evidence(e).unwrap();
+    assert_eq!(
+        db.get_application(&a.id)
+            .unwrap()
+            .unwrap()
+            .reply_evidence_state,
+        ReplyEvidenceState::ImportedUnclassified
+    );
+    assert_eq!(db.list_events(&a.id).unwrap().len(), 1);
+    db.update_application(
+        &a.id,
+        UpdateApplicationInput {
+            archived: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        db.list_applications(&ApplicationFilter::default())
+            .unwrap()
+            .total,
+        0
+    );
+    assert_eq!(
+        db.list_applications(&ApplicationFilter {
+            archived: Some(true),
+            ..Default::default()
+        })
+        .unwrap()
+        .total,
+        1
+    );
+}
+
+#[test]
+fn confirmed_suggestion_replay_cannot_change_any_approved_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let b = db.create_application(app()).unwrap();
+    let e = db.import_evidence(evidence(Some(a.id.clone()))).unwrap();
+    let s = db
+        .create_suggestion(NewAiSuggestion {
+            evidence_id: e.id,
+            candidate_application_ids: vec![a.id.clone()],
+            suggested_stage: Some(Stage::Interview),
+            suggested_round: Some(1),
+            suggested_reply_class: ReplyClass::InterviewInvite,
+            suggested_send_mode: SendMode::Unknown,
+            suggested_todos: vec![],
+            excerpt_refs: None,
+            uncertainties: None,
+            model_label: None,
+            prompt_scope: None,
+        })
+        .unwrap();
+    let input = ConfirmSuggestionInput {
+        suggestion_id: s.id,
+        application_id: a.id.clone(),
+        approved_reply_class: ReplyClass::InterviewInvite,
+        approved_send_mode: SendMode::Unknown,
+        stage_event: Some(event(EventPayload::InterviewRecorded {
+            round: Some(1),
+            label: None,
+            stage_update_mode: StageUpdateMode::HistoryOnly,
+        })),
+        create_todos: false,
+    };
+    db.confirm_suggestion(input.clone()).unwrap();
+    assert!(
+        db.confirm_suggestion(input.clone())
+            .unwrap()
+            .already_confirmed
+    );
+    let mut changed = input.clone();
+    changed.application_id = b.id.clone();
+    assert!(matches!(
+        db.confirm_suggestion(changed),
+        Err(StoreError::Conflict(_))
+    ));
+    let mut changed = input.clone();
+    changed.stage_event = None;
+    assert!(matches!(
+        db.confirm_suggestion(changed),
+        Err(StoreError::Conflict(_))
+    ));
+    let mut changed = input;
+    changed.create_todos = true;
+    assert!(matches!(
+        db.confirm_suggestion(changed),
+        Err(StoreError::Conflict(_))
+    ));
 }

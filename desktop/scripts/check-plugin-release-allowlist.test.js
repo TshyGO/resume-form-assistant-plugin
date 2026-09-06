@@ -44,3 +44,9 @@ test("content.js.map does not satisfy content.js", () => {
     /content\.js/,
   );
 });
+
+test('unknown files and forbidden subdirectories are not allowed',()=>{
+ for(const extra of ['private.key','src-tauri/src/main.rs','target/debug/app.exe']) {
+   assert.throws(()=>assertPluginOnlyArchive(['manifest.json','background.js','content.js','content.css','LICENSE',extra]));
+ }
+});
