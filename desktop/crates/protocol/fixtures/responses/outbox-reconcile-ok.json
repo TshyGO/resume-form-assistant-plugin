@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "ok": true,
+  "payload": {
+    "items": [
+      {
+        "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+        "messageId": "33333333-3333-4333-8333-333333333333",
+        "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "payloadSha256": "1ea8fcf15e56dd83a5e7f8e9adb0c34b94bc28fd5c1b51400ecf597d1f5cc8c4",
+        "status": "applied",
+        "resultId": "55555555-5555-4555-8555-555555555555"
+      }
+    ]
+  }
+}

@@ -25,6 +25,19 @@ pub fn payload_schema(message_type: &str) -> Option<Value> {
     Some(serde_json::from_str(raw).expect("payload schema"))
 }
 
+pub fn response_payload_schema(message_type: &str) -> Option<Value> {
+    let raw = match message_type {
+        "health" => include_str!("../schemas/responses/health.json"),
+        "handshake" => include_str!("../schemas/responses/handshake.json"),
+        "application.queryCandidates" => include_str!("../schemas/responses/query-candidates.json"),
+        "job.save" | "fill.submit" | "submit.confirm" => include_str!("../schemas/responses/write.json"),
+        "snapshot.chunk" => include_str!("../schemas/responses/snapshot-chunk.json"),
+        "outbox.reconcile" => include_str!("../schemas/responses/outbox-reconcile.json"),
+        _ => return None,
+    };
+    Some(serde_json::from_str(raw).expect("response payload schema"))
+}
+
 pub fn validate_schema(instance: &Value, schema: &Value) -> Result<(), ProtocolError> {
     apply(instance, schema)
 }

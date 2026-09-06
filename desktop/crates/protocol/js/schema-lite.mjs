@@ -1,37 +1,47 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isUtcTimestamp } from "./time.mjs";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-export function loadJson(rel) {
-  return JSON.parse(readFileSync(join(root, rel), "utf8"));
-}
+import { SCHEMA_DATA } from "./schema-data.mjs";
 
 export function envelopeSchema() {
-  return loadJson("schemas/request-envelope.json");
+  return SCHEMA_DATA.envelope;
 }
 
 export function responseSchema() {
-  return loadJson("schemas/response-envelope.json");
+  return SCHEMA_DATA.response;
 }
 
-const PAYLOAD_FILES = {
-  health: "schemas/payloads/health.json",
-  handshake: "schemas/payloads/handshake.json",
-  "application.queryCandidates": "schemas/payloads/query-candidates.json",
-  "job.save": "schemas/payloads/job-save.json",
-  "fill.submit": "schemas/payloads/fill-submit.json",
-  "snapshot.chunk": "schemas/payloads/snapshot-chunk.json",
-  "submit.confirm": "schemas/payloads/submit-confirm.json",
-  "outbox.reconcile": "schemas/payloads/outbox-reconcile.json",
+const PAYLOAD_KEYS = {
+  health: "health",
+  handshake: "handshake",
+  "application.queryCandidates": "query-candidates",
+  "job.save": "job-save",
+  "fill.submit": "fill-submit",
+  "snapshot.chunk": "snapshot-chunk",
+  "submit.confirm": "submit-confirm",
+  "outbox.reconcile": "outbox-reconcile",
+};
+
+const RESPONSE_PAYLOAD_KEYS = {
+  health: "health",
+  handshake: "handshake",
+  "application.queryCandidates": "query-candidates",
+  "job.save": "write",
+  "fill.submit": "write",
+  "submit.confirm": "write",
+  "snapshot.chunk": "snapshot-chunk",
+  "outbox.reconcile": "outbox-reconcile",
 };
 
 export function payloadSchema(messageType) {
-  const file = PAYLOAD_FILES[messageType];
-  return file ? loadJson(file) : null;
+  const key = PAYLOAD_KEYS[messageType];
+  return key ? SCHEMA_DATA.payloads[key] : null;
 }
+
+export function responsePayloadSchema(messageType) {
+  const key = RESPONSE_PAYLOAD_KEYS[messageType];
+  return key ? SCHEMA_DATA.responses[key] : null;
+}
+
+export const RULES = SCHEMA_DATA.rules;
 
 function fail(message) {
   const err = new Error(`invalid_payload: ${message}`);

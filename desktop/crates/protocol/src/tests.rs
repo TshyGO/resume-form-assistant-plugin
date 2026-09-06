@@ -4,10 +4,12 @@ use serde_json::{json, Value};
 
 use base64::Engine;
 
-use crate::digest::{payload_body_sha256, sha256_hex};
+use crate::digest::{payload_body_sha256, sha256_hex, snapshot_chunk_identity_sha256};
 use crate::identity::check_current_identity;
 use crate::receipts::{evaluate_write, reconcile, reconcile_grants_replay};
-use crate::schema_lite::{envelope_schema, payload_schema, response_schema, validate_schema};
+use crate::schema_lite::{
+    envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
+};
 use crate::snapshot::{plugin_chunk_ack_payload, plugin_snapshot_ack_payload, ChunkAssembler, Integrity};
 use crate::types::{
     CurrentArchive, MessageKey, MessageType, ReceiptStore, ReconcileStatusKind, StoredOutcome,
@@ -572,11 +574,19 @@ fn shared_catalog_agrees_with_schema_and_protocol() {
     for entry in catalog["responses"].as_array().unwrap() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(entry["path"].as_str().unwrap());
         let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let schema_ok = validate_schema(&value, &response_schema());
+        let schema_ok: Result<(), ProtocolError> = (|| {
+            validate_schema(&value, &response_schema())?;
+            if value.get("ok") == Some(&json!(true)) {
+                if let Some(schema) = response_payload_schema(entry["requestType"].as_str().unwrap_or("")) {
+                    validate_schema(&value["payload"], &schema)?;
+                }
+            }
+            Ok(())
+        })();
         if entry["schema"] == "accept" {
             assert!(schema_ok.is_ok(), "{} response schema {:?}", entry["id"], schema_ok.err());
         } else {
-            assert!(schema_ok.is_err());
+            assert!(schema_ok.is_err(), "{} response schema should reject", entry["id"]);
         }
         let ty = MessageType::parse(entry["requestType"].as_str().unwrap()).unwrap();
         let protocol = validate_response_value(&value, ty);
@@ -621,7 +631,7 @@ fn snapshot_chunk_ack_kinds_are_distinct() {
         "correlationId": MSG2,
         "ok": true,
         "resultId": RESULT,
-        "payload": {"ackKind": "snapshot", "chunkIndex": 1, "chunkCursor": 2}
+        "payload": {"ackKind": "snapshot", "snapshotId": SNAP, "chunkIndex": 1, "chunkCursor": 2}
     });
     validate_response_value(&complete, MessageType::SnapshotChunk).unwrap();
     let missing_kind = json!({
@@ -696,6 +706,68 @@ fn assembler_session_cap_and_plugin_ack_never_snapshot() {
     extra["payload"]["snapshotId"] = json!("66666666-6666-4666-8666-666666666699");
     let req = validate_request_value(&extra).unwrap();
     assert_eq!(asm.apply_chunk(&req).unwrap_err().code.as_str(), "unavailable");
+    assert_eq!(asm.session_count(), 16);
+    assert!(asm.forget(CLIENT_A, "66666666-6666-4666-8666-666666666600", EPOCH));
+    assert_eq!(asm.session_count(), 15);
+    let after_release = validate_request_value(&extra).unwrap();
+    asm.apply_chunk(&after_release).unwrap();
+    assert_eq!(asm.session_count(), 16);
     let persisted = plugin_snapshot_ack_payload(SNAP, 1, 2);
     assert_eq!(persisted["ackKind"], "snapshot");
+}
+
+#[test]
+fn completed_sessions_can_be_released_and_reused() {
+    let mut asm = ChunkAssembler::new();
+    let first = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    let second = chunk_fixture("requests/snapshot-chunk-1-ok.json");
+    for i in 0..20u8 {
+        let snap = format!("66666666-6666-4666-8666-6666666667{i:02}");
+        let mut c0 = first.clone();
+        let mut c1 = second.clone();
+        c0["payload"]["snapshotId"] = json!(snap);
+        c1["payload"]["snapshotId"] = json!(snap);
+        let r0 = validate_request_value(&c0).unwrap();
+        let r1 = validate_request_value(&c1).unwrap();
+        assert_eq!(asm.apply_chunk(&r0).unwrap().integrity, Integrity::Partial);
+        assert_eq!(asm.apply_chunk(&r1).unwrap().integrity, Integrity::VerifiedInMemory);
+        assert!(asm.forget(CLIENT_A, &snap, EPOCH));
+    }
+    assert_eq!(asm.session_count(), 0);
+}
+
+#[test]
+fn same_message_id_same_bytes_different_logic_is_conflict() {
+    let mut env = chunk_fixture("requests/snapshot-chunk-0-ok.json");
+    let req = validate_request_value(&env).unwrap();
+    let digest = snapshot_chunk_identity_sha256(&req.payload).unwrap();
+    let mut store = HashMap::new();
+    store.insert(
+        MessageKey {
+            client_instance_id: CLIENT_A.into(),
+            message_id: MSG.into(),
+            source_restore_epoch: EPOCH.into(),
+        },
+        StoredOutcome::Applied {
+            result_id: RESULT.into(),
+            payload_sha256: digest,
+        },
+    );
+    assert!(matches!(
+        evaluate_write(&req, Some(&current()), &MapStore(store.clone())).unwrap(),
+        WriteDecision::Replay { .. }
+    ));
+    env["payload"]["applicationId"] = json!("88888888-8888-4888-8888-888888888888");
+    let other = validate_request_value(&env).unwrap();
+    assert_ne!(
+        snapshot_chunk_identity_sha256(&req.payload).unwrap(),
+        snapshot_chunk_identity_sha256(&other.payload).unwrap()
+    );
+    assert_eq!(
+        evaluate_write(&other, Some(&current()), &MapStore(store)).unwrap(),
+        WriteDecision::Conflict
+    );
+    let mut asm = ChunkAssembler::new();
+    asm.apply_chunk(&req).unwrap();
+    assert_eq!(asm.apply_chunk(&other).unwrap_err().code.as_str(), "conflict");
 }

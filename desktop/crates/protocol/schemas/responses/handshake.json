@@ -1,0 +1,31 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/handshake.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["appVersion", "minProtocolVersion", "maxProtocolVersion", "archiveId", "restoreEpoch", "capabilities"],
+  "properties": {
+    "appVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "minProtocolVersion": { "type": "integer", "minimum": 1 },
+    "maxProtocolVersion": { "type": "integer", "minimum": 1 },
+    "archiveId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "restoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "enum": [
+          "health",
+          "handshake",
+          "application.queryCandidates",
+          "job.save",
+          "fill.submit",
+          "snapshot.chunk",
+          "submit.confirm",
+          "outbox.reconcile"
+        ]
+      }
+    }
+  }
+}

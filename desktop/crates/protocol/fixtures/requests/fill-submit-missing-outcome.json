@@ -7,21 +7,7 @@
   "payload": {
     "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "applicationId": "77777777-7777-4777-8777-777777777777",
-    "outcome": "completed",
-    "fieldCount": 12,
-    "filledCount": 10,
-    "unconfirmedCount": 2,
-    "durationsMs": {
-      "scan": 40,
-      "match": 80,
-      "fill": 120,
-      "total": 240
-    },
-    "urlRedacted": "https://jobs.example.com/apply?utm_source=mail",
-    "templateName": "默认模板",
-    "templateVersion": "1",
-    "pluginVersion": "0.3.0",
-    "payloadSha256": "3733557e5ed84db438623316e61a094943d8c60f383eecdb4d72bfa246900c0f"
+    "payloadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
