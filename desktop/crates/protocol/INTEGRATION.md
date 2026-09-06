@@ -7,4 +7,23 @@ D05 不修改 `desktop/crates/archive-store/`。若 D03 实现时出现下列差
 3. `previously_purged` 用于普通写入命中墓碑；`outbox.reconcile` 的对应项状态是 `purged`。二者都不得返回可用 `resultId`。
 4. `not_found` 只表示当前库没有回执，不表示从未执行，禁止自动重写。
 5. 快照每块独立且持久化的 `chunkMessageId`（即该块信封 `messageId`）。D03 不应在重启后为同一 `(snapshotId, chunkIndex, sourceRestoreEpoch)` 新铸 ID。
-6. SaveIntent 不入库、不进 NM。
+6. `ChunkAssembler` 是 D05 参考实现：严格解码 Base64、核验解码长度与 `chunkSha256`、按 `chunkIndex` 组装后再核验总长度/`snapshotSha256`。`Integrity::VerifiedInMemory` 只表示内存内容完整，**不是**可发给插件的 `ackKind: snapshot`，也**不能**当作删除 IndexedDB 暂存的许可。D06 必须在 D03 确认落盘后才调用 `plugin_snapshot_ack_payload`。分片过程中只发 `plugin_chunk_ack_payload`（`ackKind: chunk`）。损坏、缺块、越界、超限或冲突块不得污染已有有效会话。
+7. 通过 D05 结构校验 ≠ 允许写入；通过写入决定 ≠ 已持久化。D05 不能凭内存模型证明 D03 已落盘。
+8. SaveIntent 不入库、不进 NM。
+9. `payloadSha256`（非快照）是去掉该字段后、对象键按字典序排序的 compact UTF-8 JSON 的 SHA-256（不做额外 `\uXXXX` 转义）。Rust 与 JS 必须得到同一摘要；D03 回执应保存同一规范化。若 D03 使用不同规范化，在集成 PR 对齐，不要改 D05 去迁就。
+10. `occurredAt` 为 UTC `Z` 子集：`YYYY-MM-DDTHH:MM:SSZ` 或带小数秒，必须是真实日历日期与时钟。JSON Schema 的 pattern 只做句法；日历合法性由 JS/Rust 校验器执行。D03 不要把非法日期存成业务时间。
+
+## 已观察到的 D03 字段差异（只记录，不改 D03）
+
+下列对照来自并行 worktree 中的 `archive-store`，供 D03/D06 集成 PR 对齐。本 PR 不修改该 crate。
+
+| D05 线上字段 | D03 当前实现 | 处理 |
+| --- | --- | --- |
+| `snapshotSha256` | `snapshot_uploads.total_sha256` / `SnapshotChunkInput.total_sha256` | D06 映射，不要改协议名 |
+| 块信封 `messageId` | `snapshot_chunks.chunk_message_id` | 同一 UUID；重启不得新铸 |
+| `job.save` 的 `applicationId` | `JobSaveInput.target_application_id` | D06 映射 |
+| `fill.submit` 载荷（`applicationId` / 可选 `snapshotId` / `sha256`） | `FillSubmitInput` 另有 `outcome`、`field_count` 等内部字段 | 内部字段不要放进 NM 信封；D05 schema `additionalProperties: false` |
+| `submit.confirm` 载荷（`applicationId`） | `SubmitConfirmInput.via` / `note` | 同上，内部字段不进信封 |
+| `payloadSha256`（去掉该字段后的排序 compact UTF-8 JSON） | `PluginOp::digest()` 哈希的是 D03 类型化枚举，不是 D05 载荷正文 | 回执必须另存 **D05 线上摘要**，否则重放会对不上 |
+| `Integrity::VerifiedInMemory` | `snapshot_uploads.full_acked` | 后者才是持久化完成；前者不能当作 `ackKind: snapshot` |
+| `previously_purged` 且 `ok:false` 不得带 `resultId` | `StoreError::PreviouslyPurged { former_result_id }` | D06 不得把 `former_result_id` 写进错误应答的 `resultId` |

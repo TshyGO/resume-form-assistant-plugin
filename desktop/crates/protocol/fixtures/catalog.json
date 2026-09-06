@@ -1,0 +1,39 @@
+{
+  "requests": [
+    {"id": "health-ok", "path": "requests/health-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "handshake-ok", "path": "requests/handshake-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "handshake-incompatible", "path": "requests/handshake-incompatible.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "job-save-ok", "path": "requests/job-save-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "fill-submit-ok", "path": "requests/fill-submit-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "submit-confirm-ok", "path": "requests/submit-confirm-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "query-candidates-ok", "path": "requests/query-candidates-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "snapshot-chunk-0-ok", "path": "requests/snapshot-chunk-0-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "snapshot-chunk-1-ok", "path": "requests/snapshot-chunk-1-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "outbox-reconcile-ok", "path": "requests/outbox-reconcile-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "missing-protocolVersion", "path": "requests/missing-protocolVersion.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "protocolVersion-string", "path": "requests/protocolVersion-string.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "protocolVersion-float", "path": "requests/protocolVersion-float.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "job-save-missing-company", "path": "requests/job-save-missing-company.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "fill-submit-missing-applicationId", "path": "requests/fill-submit-missing-applicationId.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "payload-array", "path": "requests/payload-array.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "occurredAt-letters", "path": "requests/occurredAt-letters.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "occurredAt-impossible-date", "path": "requests/occurredAt-impossible-date.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "chunk-count-129", "path": "requests/chunk-count-129.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "chunk-index-negative", "path": "requests/chunk-index-negative.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "chunk-index-float", "path": "requests/chunk-index-float.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "invalid-base64", "path": "requests/invalid-base64.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "wrong-chunk-hash", "path": "requests/wrong-chunk-hash.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "health-with-identity", "path": "requests/health-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}},
+    {"id": "job-save-missing-identity", "path": "requests/job-save-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
+    {"id": "unknown-type", "path": "requests/unknown-type.json", "schema": "reject", "protocol": {"accept": false, "code": "unknown_message_type"}},
+    {"id": "save-intent", "path": "requests/save-intent.json", "schema": "reject", "protocol": {"accept": false, "code": "unknown_message_type"}}
+  ],
+  "responses": [
+    {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "job-save-success", "path": "responses/job-save-success.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "snapshot-chunk-ack", "path": "responses/snapshot-chunk-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "write-ok-missing-resultId", "path": "responses/write-ok-missing-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "error-with-resultId", "path": "responses/error-with-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "response-payload-array", "path": "responses/payload-array.json", "requestType": "job.save", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}}
+  ]
+}

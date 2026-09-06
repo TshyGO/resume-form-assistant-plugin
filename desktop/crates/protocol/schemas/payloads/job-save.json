@@ -9,7 +9,7 @@
     "company": { "type": "string", "minLength": 1, "maxLength": 200 },
     "title": { "type": "string", "minLength": 1, "maxLength": 200 },
     "sourceUrl": { "type": "string", "maxLength": 2000 },
-    "location": { "type": "string", "maxLength": 65000 },
+    "location": { "type": "string" },
     "applicationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" }
   }
 }

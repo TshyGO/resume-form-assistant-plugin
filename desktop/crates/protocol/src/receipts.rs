@@ -20,7 +20,13 @@ pub fn evaluate_write(
         ));
     }
     let key = write_key(req)?;
-    let hash = payload_sha256(req).unwrap();
+    let hash = payload_sha256(req).ok_or_else(|| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "write payload requires payloadSha256 or chunkSha256",
+        )
+    })?;
     match store.get(&key) {
         None => Ok(WriteDecision::Accept),
         Some(StoredOutcome::Applied {
@@ -67,18 +73,63 @@ pub fn reconcile(
         ));
     }
     check_current_identity(req, current)?;
-    let items = req.payload.get("items").and_then(|v| v.as_array()).unwrap();
+    let items = req
+        .payload
+        .get("items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "outbox.reconcile requires items",
+            )
+        })?;
     let mut out = Vec::new();
     for item in items {
-        let client_instance_id = item.get("clientInstanceId").unwrap().as_str().unwrap().to_string();
-        let message_id = item.get("messageId").unwrap().as_str().unwrap().to_string();
+        let client_instance_id = item
+            .get("clientInstanceId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "reconcile item missing clientInstanceId",
+                )
+            })?
+            .to_string();
+        let message_id = item
+            .get("messageId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "reconcile item missing messageId",
+                )
+            })?
+            .to_string();
         let source_restore_epoch = item
             .get("sourceRestoreEpoch")
-            .unwrap()
-            .as_str()
-            .unwrap()
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "reconcile item missing sourceRestoreEpoch",
+                )
+            })?
             .to_string();
-        let payload_sha256 = item.get("payloadSha256").unwrap().as_str().unwrap().to_string();
+        let payload_sha256 = item
+            .get("payloadSha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "reconcile item missing payloadSha256",
+                )
+            })?
+            .to_string();
         let key = MessageKey {
             client_instance_id: client_instance_id.clone(),
             message_id: message_id.clone(),

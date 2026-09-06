@@ -1,14 +1,19 @@
 use std::collections::HashMap;
 
+use serde_json::Value;
+
+use crate::digest::{decode_standard_base64, sha256_hex};
 use crate::error::{ErrorCode, Layer, ProtocolError};
-use crate::types::{AckKind, Request};
+use crate::types::{AckKind, Request, MAX_CHUNK_COUNT, MAX_SNAPSHOT_BYTES};
+
+const MAX_ASSEMBLER_SESSIONS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkRecord {
     pub message_id: String,
     pub chunk_index: u32,
     pub chunk_sha256: String,
-    pub acked: bool,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -18,38 +23,68 @@ pub struct SnapshotSession {
     pub source_restore_epoch: String,
     pub chunk_count: u32,
     pub snapshot_sha256: String,
+    pub byte_size: usize,
     pub chunks: HashMap<u32, ChunkRecord>,
 }
 
 impl SnapshotSession {
     pub fn chunk_cursor(&self) -> u32 {
         let mut cursor = 0;
-        while self
-            .chunks
-            .get(&cursor)
-            .map(|c| c.acked)
-            .unwrap_or(false)
-        {
+        while self.chunks.contains_key(&cursor) {
             cursor += 1;
         }
         cursor
     }
 
-    pub fn complete(&self) -> bool {
-        self.chunk_cursor() == self.chunk_count
-            && (0..self.chunk_count).all(|i| self.chunks.get(&i).map(|c| c.acked).unwrap_or(false))
+    pub fn all_indexes_present(&self) -> bool {
+        (0..self.chunk_count).all(|i| self.chunks.contains_key(&i))
+    }
+
+    pub fn assembled_bytes(&self) -> Option<Vec<u8>> {
+        if !self.all_indexes_present() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(self.byte_size);
+        for i in 0..self.chunk_count {
+            out.extend_from_slice(&self.chunks.get(&i)?.bytes);
+        }
+        Some(out)
+    }
+
+    /// Content is complete and hashes match. This is not a durable snapshot ACK.
+    pub fn integrity_verified(&self) -> bool {
+        let Some(bytes) = self.assembled_bytes() else {
+            return false;
+        };
+        bytes.len() == self.byte_size && sha256_hex(&bytes) == self.snapshot_sha256
+    }
+
+    pub fn stored_bytes(&self) -> usize {
+        self.chunks.values().map(|c| c.bytes.len()).sum()
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Integrity {
+    Partial,
+    VerifiedInMemory,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChunkAck {
-    pub ack_kind: AckKind,
+pub struct AssemblerOutcome {
     pub chunk_index: u32,
     pub chunk_cursor: u32,
     pub replay: bool,
+    pub integrity: Integrity,
 }
 
-/// In-memory assembler for contract tests. Durable persistence is D03.
+impl AssemblerOutcome {
+    pub fn ready_to_persist(&self) -> bool {
+        self.integrity == Integrity::VerifiedInMemory
+    }
+}
+
+/// In-memory reference assembler. Integrity here is not a durable snapshot ACK.
 #[derive(Default)]
 pub struct ChunkAssembler {
     sessions: HashMap<String, SnapshotSession>,
@@ -64,98 +99,112 @@ impl ChunkAssembler {
         format!("{client}:{snapshot}:{epoch}")
     }
 
-    pub fn apply_chunk(&mut self, req: &Request) -> Result<ChunkAck, ProtocolError> {
-        if req.message_type != crate::types::MessageType::SnapshotChunk {
+    pub fn apply_chunk(&mut self, req: &Request) -> Result<AssemblerOutcome, ProtocolError> {
+        let parsed = parse_chunk(req)?;
+        let key = Self::session_key(
+            &req.client_instance_id,
+            &parsed.snapshot_id,
+            &parsed.source_restore_epoch,
+        );
+        if !self.sessions.contains_key(&key) && self.sessions.len() >= MAX_ASSEMBLER_SESSIONS {
             return Err(ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                Layer::Structure,
-                "apply_chunk requires snapshot.chunk",
+                ErrorCode::Unavailable,
+                Layer::Business,
+                "too many in-memory snapshot sessions",
             ));
         }
-        let snapshot_id = req.payload.get("snapshotId").unwrap().as_str().unwrap().to_string();
-        let source_restore_epoch = req
-            .payload
-            .get("sourceRestoreEpoch")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        let chunk_index = req.payload.get("chunkIndex").unwrap().as_u64().unwrap() as u32;
-        let chunk_count = req.payload.get("chunkCount").unwrap().as_u64().unwrap() as u32;
-        let chunk_sha256 = req.payload.get("chunkSha256").unwrap().as_str().unwrap().to_string();
-        let snapshot_sha256 = req
-            .payload
-            .get("snapshotSha256")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        let key = Self::session_key(&req.client_instance_id, &snapshot_id, &source_restore_epoch);
-        let session = self.sessions.entry(key).or_insert_with(|| SnapshotSession {
-            snapshot_id: snapshot_id.clone(),
-            client_instance_id: req.client_instance_id.clone(),
-            source_restore_epoch: source_restore_epoch.clone(),
-            chunk_count,
-            snapshot_sha256: snapshot_sha256.clone(),
-            chunks: HashMap::new(),
-        });
-        if session.chunk_count != chunk_count || session.snapshot_sha256 != snapshot_sha256 {
+        if !self.sessions.contains_key(&key) {
+            self.sessions.insert(
+                key.clone(),
+                SnapshotSession {
+                    snapshot_id: parsed.snapshot_id.clone(),
+                    client_instance_id: req.client_instance_id.clone(),
+                    source_restore_epoch: parsed.source_restore_epoch.clone(),
+                    chunk_count: parsed.chunk_count,
+                    snapshot_sha256: parsed.snapshot_sha256.clone(),
+                    byte_size: parsed.byte_size,
+                    chunks: HashMap::new(),
+                },
+            );
+        }
+        let stored = self.sessions.get(&key).map(|s| s.stored_bytes()).unwrap_or(0);
+        let incoming = parsed.bytes.len();
+        let replacing = self
+            .sessions
+            .get(&key)
+            .and_then(|s| s.chunks.get(&parsed.chunk_index))
+            .map(|c| c.bytes.len())
+            .unwrap_or(0);
+        if stored.saturating_sub(replacing).saturating_add(incoming) > MAX_SNAPSHOT_BYTES {
+            if self
+                .sessions
+                .get(&key)
+                .map(|s| s.chunks.is_empty())
+                .unwrap_or(false)
+            {
+                self.sessions.remove(&key);
+            }
+            return Err(ProtocolError::new(
+                ErrorCode::PayloadTooLarge,
+                Layer::Size,
+                "assembler snapshot exceeds 2 MiB",
+            ));
+        }
+        let session = self.sessions.get_mut(&key).ok_or_else(|| {
+            ProtocolError::new(ErrorCode::Unavailable, Layer::Business, "snapshot session missing")
+        })?;
+        if session.chunk_count != parsed.chunk_count
+            || session.snapshot_sha256 != parsed.snapshot_sha256
+            || session.byte_size != parsed.byte_size
+        {
             return Err(ProtocolError::new(
                 ErrorCode::Conflict,
                 Layer::Business,
                 "snapshot metadata does not match the existing session",
             ));
         }
-        if let Some(existing) = session.chunks.get(&chunk_index) {
-            if existing.message_id != req.message_id || existing.chunk_sha256 != chunk_sha256 {
+        if let Some(existing) = session.chunks.get(&parsed.chunk_index) {
+            if existing.message_id != req.message_id
+                || existing.chunk_sha256 != parsed.chunk_sha256
+                || existing.bytes != parsed.bytes
+            {
                 return Err(ProtocolError::new(
                     ErrorCode::Conflict,
                     Layer::Business,
                     "same chunk identity with different content or messageId",
                 ));
             }
-            let cursor = session.chunk_cursor();
-            return Ok(ChunkAck {
-                ack_kind: if session.complete() {
-                    AckKind::Snapshot
-                } else {
-                    AckKind::Chunk
-                },
-                chunk_index,
-                chunk_cursor: cursor,
-                replay: true,
-            });
+            return Ok(outcome(session, parsed.chunk_index, true));
         }
-        for other in session.chunks.values() {
-            if other.message_id == req.message_id {
-                return Err(ProtocolError::new(
-                    ErrorCode::Conflict,
-                    Layer::Business,
-                    "chunk messageId is already bound to another chunkIndex",
-                ));
-            }
+        if session
+            .chunks
+            .values()
+            .any(|other| other.message_id == req.message_id)
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::Conflict,
+                Layer::Business,
+                "chunk messageId is already bound to another chunkIndex",
+            ));
         }
         session.chunks.insert(
-            chunk_index,
+            parsed.chunk_index,
             ChunkRecord {
                 message_id: req.message_id.clone(),
-                chunk_index,
-                chunk_sha256,
-                acked: true,
+                chunk_index: parsed.chunk_index,
+                chunk_sha256: parsed.chunk_sha256,
+                bytes: parsed.bytes,
             },
         );
-        let cursor = session.chunk_cursor();
-        let complete = session.complete();
-        Ok(ChunkAck {
-            ack_kind: if complete {
-                AckKind::Snapshot
-            } else {
-                AckKind::Chunk
-            },
-            chunk_index,
-            chunk_cursor: cursor,
-            replay: false,
-        })
+        if session.all_indexes_present() && !session.integrity_verified() {
+            session.chunks.remove(&parsed.chunk_index);
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Business,
+                "assembled snapshot length or snapshotSha256 mismatch",
+            ));
+        }
+        Ok(outcome(session, parsed.chunk_index, false))
     }
 
     pub fn session(&self, client: &str, snapshot: &str, epoch: &str) -> Option<&SnapshotSession> {
@@ -163,20 +212,159 @@ impl ChunkAssembler {
     }
 }
 
-pub fn chunk_ack_payload(ack: &ChunkAck, snapshot_id: &str) -> serde_json::Value {
-    let mut payload = serde_json::json!({
-        "ackKind": match ack.ack_kind {
-            AckKind::Chunk => "chunk",
-            AckKind::Snapshot => "snapshot",
+fn outcome(session: &SnapshotSession, chunk_index: u32, replay: bool) -> AssemblerOutcome {
+    AssemblerOutcome {
+        chunk_index,
+        chunk_cursor: session.chunk_cursor(),
+        replay,
+        integrity: if session.integrity_verified() {
+            Integrity::VerifiedInMemory
+        } else {
+            Integrity::Partial
         },
-        "chunkIndex": ack.chunk_index,
-        "chunkCursor": ack.chunk_cursor,
-    });
-    if ack.ack_kind == AckKind::Snapshot {
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("snapshotId".into(), serde_json::Value::String(snapshot_id.into()));
     }
+}
+
+struct ParsedChunk {
+    snapshot_id: String,
+    source_restore_epoch: String,
+    chunk_index: u32,
+    chunk_count: u32,
+    chunk_sha256: String,
+    snapshot_sha256: String,
+    byte_size: usize,
+    bytes: Vec<u8>,
+}
+
+fn payload_str(payload: &Value, key: &str) -> Result<String, ProtocolError> {
     payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                format!("snapshot.chunk missing {key}"),
+            )
+        })
+}
+
+fn payload_u32(payload: &Value, key: &str) -> Result<u32, ProtocolError> {
+    payload
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                format!("snapshot.chunk missing integer {key}"),
+            )
+        })
+}
+
+fn parse_chunk(req: &Request) -> Result<ParsedChunk, ProtocolError> {
+    if req.message_type != crate::types::MessageType::SnapshotChunk {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "apply_chunk requires snapshot.chunk",
+        ));
+    }
+    let snapshot_id = payload_str(&req.payload, "snapshotId")?;
+    let source_restore_epoch = payload_str(&req.payload, "sourceRestoreEpoch")?;
+    let chunk_index = payload_u32(&req.payload, "chunkIndex")?;
+    let chunk_count = payload_u32(&req.payload, "chunkCount")?;
+    if chunk_count == 0 || chunk_count > MAX_CHUNK_COUNT {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "chunkCount must be 1..=128",
+        ));
+    }
+    if chunk_index >= chunk_count {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "chunkIndex must be in 0..chunkCount",
+        ));
+    }
+    let chunk_sha256 = payload_str(&req.payload, "chunkSha256")?;
+    let snapshot_sha256 = payload_str(&req.payload, "snapshotSha256")?;
+    let byte_size = payload_u32(&req.payload, "byteSize")? as usize;
+    if byte_size == 0 || byte_size > MAX_SNAPSHOT_BYTES {
+        return Err(ProtocolError::new(
+            ErrorCode::PayloadTooLarge,
+            Layer::Size,
+            "snapshot byteSize exceeds 2 MiB",
+        ));
+    }
+    let decoded = decode_standard_base64(&payload_str(&req.payload, "bytesBase64")?)?;
+    if decoded.is_empty() || decoded.len() > byte_size {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "decoded chunk length is empty or exceeds snapshot byteSize",
+        ));
+    }
+    if sha256_hex(&decoded) != chunk_sha256 {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "chunkSha256 does not match decoded bytes",
+        ));
+    }
+    Ok(ParsedChunk {
+        snapshot_id,
+        source_restore_epoch,
+        chunk_index,
+        chunk_count,
+        chunk_sha256,
+        snapshot_sha256,
+        byte_size,
+        bytes: decoded,
+    })
+}
+
+/// Chunk ACK that may be returned immediately after a valid chunk is accepted.
+/// Never a durable complete-snapshot ACK.
+pub fn plugin_chunk_ack_payload(outcome: &AssemblerOutcome) -> Value {
+    serde_json::json!({
+        "ackKind": "chunk",
+        "chunkIndex": outcome.chunk_index,
+        "chunkCursor": outcome.chunk_cursor,
+    })
+}
+
+/// Call only after D03 confirms the assembled snapshot is persisted.
+pub fn plugin_snapshot_ack_payload(snapshot_id: &str, chunk_index: u32, chunk_cursor: u32) -> Value {
+    serde_json::json!({
+        "ackKind": "snapshot",
+        "snapshotId": snapshot_id,
+        "chunkIndex": chunk_index,
+        "chunkCursor": chunk_cursor,
+    })
+}
+
+pub fn ack_kind_for_plugin(_outcome: &AssemblerOutcome) -> AckKind {
+    AckKind::Chunk
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ack_kind_for_plugin;
+    use crate::types::AckKind;
+
+    #[test]
+    fn assembler_never_emits_persistent_snapshot_ack() {
+        let outcome = crate::snapshot::AssemblerOutcome {
+            chunk_index: 1,
+            chunk_cursor: 2,
+            replay: false,
+            integrity: crate::snapshot::Integrity::VerifiedInMemory,
+        };
+        assert_eq!(ack_kind_for_plugin(&outcome), AckKind::Chunk);
+        assert!(outcome.ready_to_persist());
+    }
 }

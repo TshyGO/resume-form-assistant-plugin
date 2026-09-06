@@ -10,6 +10,7 @@ pub const MAX_ENVELOPE_BYTES: usize = 65536;
 pub const SUGGESTED_RAW_CHUNK_BYTES: usize = 32768;
 pub const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_RECONCILE_ITEMS: usize = 32;
+pub const MAX_CHUNK_COUNT: u32 = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageType {

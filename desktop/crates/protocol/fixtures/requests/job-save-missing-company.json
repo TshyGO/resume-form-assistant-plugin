@@ -6,9 +6,8 @@
   "occurredAt": "2026-09-06T12:00:00.000Z",
   "payload": {
     "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-    "company": "合成公司",
     "title": "后端实习",
-    "payloadSha256": "1ea8fcf15e56dd83a5e7f8e9adb0c34b94bc28fd5c1b51400ecf597d1f5cc8c4"
+    "payloadSha256": "33e3914ab665266ce3f5d6a3373ed84abe55a1b423bc4adb0811c25dd5b5a66f"
   },
   "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

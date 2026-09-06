@@ -10,7 +10,7 @@
 
 ```bash
 cargo test --manifest-path Cargo.toml --locked
-node --test js/validate.test.mjs
+node --test js/catalog.test.mjs js/validate.test.mjs
 ```
 
 仓库根目录插件回归（确认本 crate 不影响插件）：
@@ -31,7 +31,8 @@ node --test tests/*.test.js
 | Secrets | 拒绝 API Key/Cookie/Bearer 等键与值 | D05 |
 | Business identity | 信封是否等于 **当前** `current.json`；`sourceRestoreEpoch` 是否等于当前 epoch | **D03/D06**（`check_current_identity`） |
 | Idempotency | `(clientInstanceId, messageId, sourceRestoreEpoch)` + 摘要 → 重放 / conflict / previously_purged | **D03** 回执表（`evaluate_write` 是契约算法） |
-| Snapshot durability | 块 `messageId` 持久化、重启不得新铸、cursor 连续、分片 ACK ≠ 完整 ACK | **D03/D08** 持久化；`ChunkAssembler` 是语义夹具 |
+| Snapshot integrity | 严格 Base64、块 SHA-256、按 index 组装后的总长度/`snapshotSha256`、连续 cursor、块数/大小/会话上限 | D05 `ChunkAssembler`：**内存完整性**，`VerifiedInMemory` ≠ 可发给插件的持久化 ACK |
+| Snapshot durability | 块 `messageId` 落盘、重启不得新铸、确认持久化后再发 `ackKind: snapshot` | **D03/D06/D08** |
 | Reconcile | 只读历史回执；`applied/purged/not_found/conflict/unverifiable`；不授予重放 | **D03** 查回执；`reconcile()` 是契约算法 |
 
 SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`。
@@ -43,14 +44,17 @@ use resume_pro_protocol::{
     check_current_identity, evaluate_write, validate_request_bytes, CurrentArchive,
 };
 
-let req = validate_request_bytes(&frame)?;
+let req = validate_request_bytes(&frame)?; // 通过校验 ≠ 允许写入
 check_current_identity(&req, Some(&current))?;
 match evaluate_write(&req, Some(&current), &receipts)? {
-    WriteDecision::Accept => { /* persist then ACK */ }
+    WriteDecision::Accept => { /* D03 persist THEN ACK */ }
     WriteDecision::Replay { result_id } => { /* return original resultId */ }
     WriteDecision::PreviouslyPurged => { /* error previously_purged, no resultId */ }
     WriteDecision::Conflict => { /* error conflict */ }
 }
+// snapshot.chunk: ChunkAssembler::apply_chunk 只证明内存完整性。
+// 仅当 outcome.ready_to_persist() 且 D03 落盘成功后，才发送 plugin_snapshot_ack_payload。
+// 分片过程中只发 plugin_chunk_ack_payload（ackKind=chunk）。
 ```
 
 `outbox.reconcile` 走 `reconcile()`。返回 `applied` **不得**被当成可以重放旧信封。
@@ -67,9 +71,9 @@ import {
 } from "../desktop/crates/protocol/js/validate.mjs";
 
 const req = validateRequest(envelope);
-if (req.messageType === "SaveIntent") throw new Error("not a native message");
 checkCurrentIdentity(req, lastHandshake);
-if (Buffer.byteLength(JSON.stringify(req), "utf8") > MAX_ENVELOPE_BYTES) {
+const bytes = new TextEncoder().encode(JSON.stringify(req));
+if (bytes.length > MAX_ENVELOPE_BYTES) {
   throw new Error("payload_too_large");
 }
 ```
@@ -82,4 +86,8 @@ if (Buffer.byteLength(JSON.stringify(req), "utf8") > MAX_ENVELOPE_BYTES) {
 
 `ok: true` 的写入应答必须有 `resultId`。`ok: false` 不得有 `resultId`。
 
-`snapshot.chunk` 应答 `payload.ackKind`：`chunk`（块已持久化，不可清 IDB）或 `snapshot`（全部到齐且总哈希相符）。`chunkCursor` 只按从 0 起的连续 ACK 前进。
+`snapshot.chunk` 应答 `payload.ackKind`：`chunk` = 这一块已被接受（不可清 IDB）；`snapshot` = **下游已持久化**完整快照且总哈希相符。D05 组装器的 `VerifiedInMemory` 只表示可以交给 D03 落盘，不能当作删除 IndexedDB 的许可。`plugin_chunk_ack_payload` 永远是 `ackKind: chunk`。`chunkCursor` 只按从 0 起的连续已收块前进，不跳过缺块。
+
+`occurredAt` 使用 UTC RFC3339 子集：`YYYY-MM-DDTHH:MM:SSZ` 或带小数秒，必须是真实日历日期与时钟，只允许 `Z`。Schema pattern 只约束句法；`2026-13-01` 一类非法日期由校验器拒绝。
+
+`payloadSha256` 是去掉该字段后、对象键排序的 compact UTF-8 JSON 的 SHA-256。合法 fixture 必须使用真实匹配的字节、长度和摘要，不得用虚构哈希让测试通过。

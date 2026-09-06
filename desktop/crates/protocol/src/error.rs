@@ -73,10 +73,12 @@ impl ProtocolError {
     }
 
     pub fn to_error_object(&self) -> serde_json::Value {
+        const MAX_MESSAGE_CHARS: usize = 300;
+        let message: String = self.message.chars().take(MAX_MESSAGE_CHARS).collect();
         serde_json::json!({
             "code": self.code.as_str(),
             "retryable": self.retryable,
-            "message": self.message,
+            "message": message,
         })
     }
 }
