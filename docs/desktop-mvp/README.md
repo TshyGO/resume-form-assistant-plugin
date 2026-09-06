@@ -5,13 +5,13 @@
 | 标题 | 桌面求职管理 MVP 设计基线 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review（**未冻结**；负责人确认前下游只做可丢弃原型） |
+| 状态 | 可修订开工基线（PR 合并后生效） |
 | Issue | [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) |
 | Epic | [#15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15) |
 
 本文档集是 Epic #15 的 **P0 设计基线**。D01 **只产出设计决策**，不实现桌面应用、SQLite 迁移、Native Messaging host、协议 JSON Schema、安装器或插件功能变更。当前插件仍为 Manifest V3 `0.3.0`，权限与填写行为保持不变。
 
-负责人在本 PR / #17 上确认关键决策之前，**不得宣称架构已冻结**。下游只允许可丢弃原型，不得把本目录当作已批准的实现接口。
+负责人已授权本轮收尾后合并。本文作为**可修订的开工基线**：合并后 D02/D03/D05 按现有推荐方案推进，不继续以穷尽所有实现细节为 D01 门禁。安全/数据约束必须满足，具体接口与测试在对应子 issue 完成；实现发现新事实时先同步相关契约，不擅自扩产品范围。双平台正式发行覆盖、签名和备份加密等发布选择在相关交付 issue 最终确认。
 
 ## 如何阅读
 

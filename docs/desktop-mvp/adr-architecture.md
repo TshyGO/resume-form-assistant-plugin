@@ -5,7 +5,7 @@
 | 标题 | ADR-001 桌面栈、进程角色、跨平台适配与通信原则 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review（**未冻结**） |
+| 状态 | 可修订开工基线（PR 合并后生效） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) |
 | 并列 | [product-requirements.md](product-requirements.md) · [data-privacy.md](data-privacy.md) · [downstream-decisions.md](downstream-decisions.md) |
 

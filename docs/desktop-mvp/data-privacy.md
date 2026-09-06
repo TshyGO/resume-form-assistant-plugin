@@ -5,7 +5,7 @@
 | 标题 | 本地档案所有权、敏感分级与备份恢复 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review |
+| 状态 | 可修订开工基线（PR 合并后生效） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) |
 | 并列 | [product-requirements.md](product-requirements.md) · [adr-architecture.md](adr-architecture.md) · [downstream-decisions.md](downstream-decisions.md) |
 
@@ -119,6 +119,8 @@ WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁�
 
 孤立附件检查可在维护任务中列出，**不自动删除**不确定项（D12）。永久删除文案必须写清：不可从本应用撤销；若有备份可从备份恢复。
 
+永久删除正文/附件不等于清除幂等身份：同一事务保留最小消息墓碑（无正文），至少覆盖来源 epoch 的可写生命周期。旧消息重试只能得到 previously_purged，不能把用户删除的记录重新创建。墓碑允许随备份保留，具体保留/清理测试归 D03/D12。
+
 ---
 
 ## 6. 备份与恢复
@@ -126,6 +128,7 @@ WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁�
 ### 6.1 完整备份包含
 
 - SQLite **一致性快照**（备份前 checkpoint 或使用 SQLite backup API，D12 定）
+- **整个档案的一致性屏障：** MVP 备份期间暂停业务写入、导入完成提交与永久删除；在同一屏障内取得 DB 快照并复制它引用的全部附件/简历文件到独立 staging，再解除屏障。发布前核对 DB 的每个文件引用均存在且摘要相符，缺失则备份失败，不发布残包。若后续改用不可变文件 pin，须证明同等一致性，不允许只保证 DB 快照一致。实现归 D12。
 - `attachments/`、`snapshots/`
 - 事件、待办、已提交消息回执（含 sourceRestoreEpoch 等完整历史身份，随 DB；不包含当前指针）
 - 非秘密设置（UI 偏好、是否允许浏览器连接）

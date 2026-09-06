@@ -5,7 +5,7 @@
 | 标题 | D02–D14 如何消费 D01；定案 / 待选 / 待验证 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review（**未冻结**） |
+| 状态 | 可修订开工基线（PR 合并后生效） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) · [Epic #15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15) |
 | 并列 | [product-requirements.md](product-requirements.md) · [adr-architecture.md](adr-architecture.md) · [data-privacy.md](data-privacy.md) |
 
@@ -199,7 +199,9 @@ flowchart TB
 
 **本 issue 的唯一实现 = 文档 PR**（`docs/desktop-mvp/*`）+ 同步后的相关 issue 正文。不提交 `/desktop`、不改 `manifest.json`、不注册 NM、不碰 [`docs/ai-repeat-validation.md`](../ai-repeat-validation.md)、不改 [`LICENSE`](../../LICENSE)。
 
-关闭 #17 的条件：负责人在 PR 或 issue 中确认 §4（或写下不同选择）。未确认则下游只做可丢弃原型，**不得宣称冻结**。
+本轮负责人已授权收尾后合并；合并即完成 D01 开工基线交付，可关闭 #17 并推进 D02/D03/D05。现有推荐作为工作假设，不代表永久不可修改的规格；发布覆盖/签名/备份加密在对应交付 issue 确认。不得为预先穷尽实现细节而持续扩大 D01。
+
+实现约束收口：D03/D07/D12 保留防止永久删除后复活的幂等墓碑；D12 保证数据库与附件在同一备份屏障内取样并校验引用；D03/D04/D11 将历史补录与更新当前进度分离。验收样例分别是“ACK 丢失→永久删除→重试不重建”“备份中删除附件不产生残包”“Offer 后补录测评不回退”。这些归实现 issue 的测试，不继续在 D01 扩写算法。
 
 ### 6.1 确认后 D02 / D03 / D05 如何开工
 

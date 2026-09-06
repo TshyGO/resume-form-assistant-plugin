@@ -5,7 +5,7 @@
 | 标题 | MVP 产品需求与对象模型 |
 | 作者 | D01 design PR |
 | 日期 | 2026-09-06 |
-| 状态 | Draft / Ready for review |
+| 状态 | 可修订开工基线（PR 合并后生效） |
 | 上级 | [README.md](README.md) · [D01 #17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) · [Epic #15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15) |
 | 并列 | [adr-architecture.md](adr-architecture.md) · [data-privacy.md](data-privacy.md) · [downstream-decisions.md](downstream-decisions.md) |
 
@@ -287,12 +287,14 @@ Code 稳定，供存储、协议、过滤使用；展示名可本地化。MVP �
 | `fill_completed` / `fill_partial` | `advance`：仅 `saved` → `filling`；其他 current `no-op`。**绝不**→`submitted` |
 | `fill_failed` / `fill_cancelled` | `no-op`（失败/取消不标「填写中」） |
 | `submit_confirmed` | 仅当 current ∈ {`saved`,`filling`} 时 `set-absolute submitted`；否则 `no-op`（从 `interview` 等退回须用户 `stage_corrected`） |
-| `assessment_recorded` | `set-absolute assessment` |
-| `interview_recorded` | `set-absolute interview` |
+| `assessment_recorded` | 仅显式推进且 current ∈ {saved,filling,submitted,assessment} 时设 assessment；历史补录或更后/终止阶段不改变 current |
+| `interview_recorded` | 仅显式推进且 current ∈ {saved,filling,submitted,assessment,interview} 时设 interview；历史补录或更后/终止阶段不改变 current |
 | `interview_rescheduled` | 仅当 current ∈ {`saved`,`filling`,`submitted`,`assessment`} 时设 `interview`；若 current ∈ {`interview`,`offer`,`rejected`,`withdrawn`,`closed`} 则 `no-op`（从拒绝等恢复须 `stage_corrected` 或 `interview_recorded`） |
 | `offer_recorded` / `rejected` / `withdrawn` / `closed` | `set-absolute` 对应 code |
 | `stage_corrected` | `set-absolute` payload.`to` |
 | `evidence_*` / `note_*` / `todo_*` | `no-op` |
+
+**历史补录约束：** 阶段相关事件的 payload 持久化 `stageUpdateMode`（`history_only` / `update_progress`）。导入通知和手动补录默认为 history_only：仍分配 eventSequence，但所有阶段效应均为 no-op。用户明确选择更新当前进度才使用 update_progress 并应用上表；历史补录不能仅因较晚记录而覆盖当前阶段，回退/从终止阶段恢复须明确的 stage_corrected（含原因）。确认通知分类不等于确认更新当前阶段。D03/D04/D11 负责实现与测试，不继续扩展 D01。
 
 建议的正向路径（UI 可跳步，但必须写对应事件）：
 
@@ -451,8 +453,8 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `fill_failed` / `fill_cancelled` | 同上 outcome | no-op |
 | `submit_confirmed` | 确认方式（插件 D07 或桌面 D04） | 仅 saved/filling → `submitted` |
 | `stage_corrected` | from/to/reason | set-absolute `to` |
-| `assessment_recorded` | 名称、截止 | set-absolute `assessment` |
-| `interview_recorded` | round、时间 | set-absolute `interview` |
+| `assessment_recorded` | 名称、截止、stageUpdateMode | 按 §6.2 显式推进；历史补录 no-op |
+| `interview_recorded` | round、时间、stageUpdateMode | 按 §6.2 显式推进；历史补录 no-op |
 | `interview_rescheduled` | round、from/to 时间 | 仅 saved/filling/submitted/assessment → `interview`；其余 no-op |
 | `offer_recorded` / `rejected` / `withdrawn` / `closed` | 原因可选 | set-absolute 对应 code |
 | `evidence_imported` | evidenceId | no-op |
@@ -672,9 +674,9 @@ erDiagram
 
 #### 8.11 已提交消息回执与恢复对账
 
-D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstanceId`、`messageId`、`sourceRestoreEpoch`（该写入提交时的 epoch）、`payloadSha256`、`resultId`、操作类型和提交时间。回执属于可备份业务历史；历史 epoch 不授予当前写入权限。回执保留期至少与对应申请/事件一致；永久清理后的缺失不能解释成“以前从未执行”。
+D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstanceId`、`messageId`、`sourceRestoreEpoch`（该写入提交时的 epoch）、`payloadSha256`、`resultId`、操作类型和提交时间。回执属于可备份业务历史；历史 epoch 不授予当前写入权限。永久删除业务对象时必须在同一事务保留最小幂等墓碑（消息身份、摘要、purged 标记，不含已删除正文），至少保留至该来源 epoch 不再能通过普通写入校验。重试命中墓碑返回 `previously_purged`，不得重建申请或返回可用旧对象；只读对账返回 purged 状态。墓碑随备份保留，清理前验证不存在仍可接受的旧请求。D03/D07/D12 落实此约束。
 
-`outbox.reconcile` 的外层信封使用当前握手的 `(archiveId, restoreEpoch)`（缺失或不匹配则整批 `identity_missing` / `restore_epoch_mismatch`）。payload 每项携带完整旧身份 `{clientInstanceId, messageId, sourceRestoreEpoch, payloadSha256}`（快照块另带 `snapshotId`+`chunkIndex`）。它只读当前所选档案库中的历史回执，**不按当前 epoch 过滤历史行**；不搜索其他档案或接受任意路径。调用方只能查询自己的 clientInstanceId（最多由 D05 规定的有界批次）。响应逐项回显完整身份并返回 `applied` / `not_found` / `conflict` / `unverifiable`，`applied` 才有已核实的 resultId。
+`outbox.reconcile` 的外层信封使用当前握手的 `(archiveId, restoreEpoch)`（缺失或不匹配则整批 `identity_missing` / `restore_epoch_mismatch`）。payload 每项携带完整旧身份 `{clientInstanceId, messageId, sourceRestoreEpoch, payloadSha256}`（快照块另带 `snapshotId`+`chunkIndex`）。它只读当前所选档案库中的历史回执，**不按当前 epoch 过滤历史行**；不搜索其他档案或接受任意路径。调用方只能查询自己的 clientInstanceId（最多由 D05 规定的有界批次）。响应逐项回显完整身份并返回 `applied` / `purged` / `not_found` / `conflict` / `unverifiable`，`applied` 才有已核实的 resultId。
 
 **`not_found` 不代表从未执行**，只代表这份备份/当前库没有回执；不得据此自动重写。
 
@@ -774,7 +776,7 @@ D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstan
 - Event `stage_corrected` {from:`rejected`, to:`interview`, actor:`user`, reason}。
 - 折叠后 current=`interview`（`stage_corrected` 是后一条 set-absolute）。时间线：**拒绝事件与纠错事件都在**。
 - 可再补 `interview_recorded`（仍 set-absolute `interview`）与 Todo。若曾有拒绝相关 Todo，用户手动取消；系统不猜。
-- 若纠错 **之后** 又来一条更晚的 `assessment_recorded`，折叠会把 current 设为 `assessment`——纠错 **不**永远压过未来事件。
+- 若纠错后补录过去的 assessment_recorded，history_only 不改变当前面试阶段。即使显式推进，也不得从面试退回测评；需要回退时由用户另记 stage_corrected。
 - 若再次纠回 `rejected`，再追加一条 `stage_corrected`，不删除前两条。
 
 ### 10.7 桌面未安装 / 从未配对 / 曾经配对但不可用 / AI 宕机
