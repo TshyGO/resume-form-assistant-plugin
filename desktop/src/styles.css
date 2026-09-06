@@ -1,0 +1,119 @@
+:root {
+  --bg: #f4efe6;
+  --panel: #fffaf3;
+  --ink: #1c1916;
+  --muted: #6b6258;
+  --line: #d8cfc2;
+  --accent: #9a3412;
+  --danger: #9f1239;
+  --ok: #3f6212;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 15px/1.5 "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100%;
+}
+
+.nav {
+  background: #241c17;
+  color: #f4efe6;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.brand { margin: 0; font-weight: 700; letter-spacing: 0.04em; }
+.brand-sub { margin: 0 0 16px; color: #c4b5a5; font-size: 12px; }
+
+.nav button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.nav button.active,
+.nav button:hover { background: #3a2e27; }
+
+.pill {
+  margin-top: auto;
+  font-size: 12px;
+  color: #e7d5c5;
+  background: #3a2e27;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+main { padding: 28px 32px 40px; }
+h1 { margin: 0 0 16px; font-size: 28px; }
+h2 { margin: 28px 0 8px; font-size: 18px; }
+
+.hidden { display: none !important; }
+
+.empty {
+  border: 1px dashed var(--line);
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 28px;
+  max-width: 640px;
+}
+
+.muted { color: var(--muted); }
+
+.facts {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 8px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; word-break: break-all; }
+
+.stack { display: flex; flex-direction: column; gap: 10px; max-width: 520px; }
+label { display: flex; flex-direction: column; gap: 4px; }
+input {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+button {
+  font: inherit;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+}
+button.danger { color: var(--danger); border-color: #fecdd3; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.banner {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: var(--danger);
+  padding: 12px 14px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+code { font-family: Consolas, "Sarasa Mono SC", monospace; font-size: 13px; }

@@ -11,6 +11,13 @@ output/playwright/
 dist/
 release/
 
+# Desktop (Tauri 2) — keep plugin ZIP allowlist independent of these
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/crates/data-service/target/
+
 # Logs and local env
 *.log
 .env

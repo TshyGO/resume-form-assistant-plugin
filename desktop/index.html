@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Resume Pro Desktop</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="nav">
+        <p class="brand">Resume Pro</p>
+        <p class="brand-sub">Desktop · D02 壳</p>
+        <nav>
+          <button type="button" data-route="applications" class="active">申请</button>
+          <button type="button" data-route="inbox">证据收件箱</button>
+          <button type="button" data-route="todos">待办</button>
+          <button type="button" data-route="settings">设置</button>
+        </nav>
+        <p id="runtime-pill" class="pill">正在读取运行状态…</p>
+      </aside>
+      <main>
+        <div id="banner" class="banner hidden"></div>
+
+        <section id="view-applications" class="view">
+          <h1>申请</h1>
+          <div class="empty">
+            <p>还没有申请记录。</p>
+            <p class="muted">申请管理属于后续交付（D03/D04）。这里不会显示示例统计或假数据。</p>
+          </div>
+        </section>
+
+        <section id="view-inbox" class="view hidden">
+          <h1>证据收件箱</h1>
+          <div class="empty">
+            <p>证据收件箱尚未接入。</p>
+            <p class="muted">邮件导入与分类属于后续交付。当前没有可展示的证据，也没有「尚未导入」的计数。</p>
+          </div>
+        </section>
+
+        <section id="view-todos" class="view hidden">
+          <h1>待办</h1>
+          <div class="empty">
+            <p>没有待办。</p>
+            <p class="muted">提醒与系统通知尚未实现（D10）。关闭窗口不会登记通知，也不要把托盘驻留理解成提醒已可用。</p>
+          </div>
+        </section>
+
+        <section id="view-settings" class="view hidden">
+          <h1>设置</h1>
+          <dl class="facts" id="facts"></dl>
+
+          <h2>浏览器扩展 ID（配对草稿）</h2>
+          <p class="muted">
+            仅保存在本机设置文件，<strong>不会</strong>写入 Native Messaging 注册表或 macOS NativeMessagingHosts。配对与 host 属于 D06/D07/D13。
+          </p>
+          <form id="pairing-form" class="stack">
+            <label>Chrome 扩展 ID
+              <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
+            </label>
+            <label>Edge 扩展 ID
+              <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
+            </label>
+            <button type="submit">保存草稿</button>
+            <p id="pairing-msg" class="muted"></p>
+          </form>
+
+          <h2>窗口与退出</h2>
+          <p class="muted">点窗口关闭按钮会隐藏到托盘/菜单栏，进程仍是唯一写入者。只有「退出应用」才会结束宿主。</p>
+          <div class="row">
+            <button type="button" id="btn-hide">隐藏窗口</button>
+            <button type="button" id="btn-quit" class="danger">退出应用</button>
+            <button type="button" id="btn-diag">导出诊断</button>
+          </div>
+          <p id="diag-msg" class="muted"></p>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+[package]
+name = "resume-pro-desktop"
+version = "0.1.0"
+description = "Resume Pro Desktop unique-writer host (D02 shell)"
+authors = ["Resume Pro"]
+edition = "2021"
+publish = false
+
+[lib]
+name = "resume_pro_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+data-service = { path = "../crates/data-service" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
