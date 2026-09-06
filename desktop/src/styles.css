@@ -64,6 +64,7 @@ h1 { margin: 0 0 16px; font-size: 28px; }
 h2 { margin: 28px 0 8px; font-size: 18px; }
 
 .hidden { display: none !important; }
+#progress-round-label[hidden] { display: none; }
 
 .empty {
   border: 1px dashed var(--line);
