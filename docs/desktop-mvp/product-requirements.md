@@ -80,7 +80,7 @@
 
 1. **填写完成 ≠ 已投递。** `fill_completed` / `fill_partial` 不得把阶段推到 `submitted`。
 2. **自动回执 ≠ 通过筛选 / ≠ 人工回复。** `auto_ack` 证据不把阶段推到 `interview`，也不暗示「已通过」。
-3. **没有导入邮件 ≠ 没有收到回信。** UI 文案必须是「尚未导入回复证据」，禁止「对方未回复」。
+3. **没有导入邮件 ≠ 没有收到回信。** `none_imported` 才显示「尚未导入回复证据」；已导入未分类必须「已导入，待分类」。禁止「对方未回复」。
 4. **同公司多岗、重复申请必须可区分。** 禁止按公司或 URL 自动合并；身份是申请 UUID。
 5. **AI 只建议。** 确认后才事务性写事件/阶段/待办；模型输出不得替换原始证据字节。
 6. **桌面档案是 source of truth。** 插件离线队列分 **意图 / 已绑定消息**；幂等与 `archiveId`/`restoreEpoch` 检查。
@@ -130,7 +130,8 @@
 | `clientInstanceId` | 每个扩展安装 / Profile 一次 | 清存储后新 ID |
 | `messageId`（绑定消息） | 用户完成「使用已有 / 新建」并派发 `job.save` / `fill.submit` / `submit.confirm` 时 | 不可变。重试沿用，不新铸 |
 | 申请 UUID | 选「使用已有」= 候选 id；选「新建」= **桌面提交成功后**返回的新 UUID。意图阶段 **没有** 申请 UUID | 不可变 |
-| `archiveId` / `restoreEpoch` | **成功握手**时盖到绑定消息上。意图不盖当前身份 | 绑定后不可变；恢复后旧消息因 epoch 不匹配而暂停 |
+| 信封 `archiveId` / `restoreEpoch` | 每次握手后的 **当前**身份；写入与 `outbox.reconcile` 外层必须带上 | 随握手更新；不得用桌面 current 替旧消息补写 |
+| Bound `sourceRestoreEpoch` | 绑定/派发写入时盖章，等于当时 current | **不可变**。与 current 不符则暂停，禁止当普通写入重放 |
 
 #### 5.2.3 分模式行为
 
@@ -149,7 +150,7 @@
 - **取消候选选择器：** 若此次从「桌面已可用」路径进来、尚未派发 `job.save`：不写绑定消息。若本就是离线意图在桌面恢复后弹出选择器：取消 = 意图保持 pending，不绑定、不丢字段。
 - **用户删除某条待同步意图：** 删除意图；若已有部分上传的快照暂存，按 §8.5 清理规则。
 - **队列满：** 产品上限建议 100 条意图 + 100 条绑定消息（D07 可调，须有数）。满时 **拒绝新增** 并提示处理，**不静默丢旧项**，**不阻止**原有填表。
-- **应答丢失：** 绑定消息用同一 `messageId` 重试。桌面按 `(clientInstanceId, messageId, restoreEpoch)` 幂等：相同载荷返回原 `resultId`；冲突拒绝。意图没有桌面幂等键，桌面恢复后只转换一次。
+- **应答丢失：** 绑定消息用同一 `messageId` 重试，信封带 **当前** `(archiveId, restoreEpoch)`。仅当该当前身份与桌面 current 一致、且 outbox 的 `sourceRestoreEpoch` 也等于 current 时，桌面才按 `(clientInstanceId, messageId, sourceRestoreEpoch)` + 摘要返回原 `resultId`。`sourceRestoreEpoch` 与 current 不符 → `restore_epoch_mismatch`，不能当成功重放，只能 `outbox.reconcile`。意图没有桌面幂等键，桌面恢复后只转换一次。
 - **重复点击「保存岗位」：** 同一页短时间内（建议 10 s）已有 pending 意图且规范化三元组相同 → 提示已有待同步意图，不第二份；用户明确「再存一次」才新 `intentId`（对应走查 10.4 的再投）。
 
 ```mermaid
@@ -181,7 +182,7 @@ sequenceDiagram
       alt 稍后再说
         Note over SW: 意图保持 pending
       else 使用已有或新建
-        SW->>SW: 写 Bound outbox（messageId，盖 archiveId+restoreEpoch）
+        SW->>SW: 写 Bound outbox（messageId；sourceRestoreEpoch=当时 current）
         SW->>H: job.save
         APP-->>SW: applicationId + resultId
         SW->>SW: 删除意图与对应绑定项
@@ -261,9 +262,19 @@ Code 稳定，供存储、协议、过滤使用；展示名可本地化。MVP �
 
 ### 6.2 阶段折叠函数（冻结，D03 必须实现）
 
-`currentStage` 是按 `recordedAt` 升序（并列用 `id`）折叠事件得到的投影，并在写入那条事件的 **同一事务** 内更新。禁止普通编辑无声改阶段。纠错追加 `stage_corrected`（`from`/`to`/`actor`/`reason`），**不改写**历史事件。
+`currentStage` 按该申请的 **`eventSequence` 升序** 折叠，并在写入那条事件的 **同一事务** 内更新。`recordedAt` / `occurredAt` 只表示时间，**不是**事务顺序。禁止用 UUID `id` 做并列打破。禁止普通编辑无声改阶段。纠错追加 `stage_corrected`（`from`/`to`/`actor`/`reason`），**不改写**历史事件。
 
-`stage_corrected` 只是又一条 **set-absolute** 事件：它成为当前值是因为它排在后面，**不是**因为纠错永远压过未来事件。10.6 在纠错之后补 `interview_recorded` 仍然生效。
+`eventSequence`：每个 **已有 `applicationId` 的申请** 从 1 起单调递增的整数。分配、插入事件、更新 `currentStage` 与 `Application.lastEventSequence` 必须同一事务。未关联申请的收件箱事件使用档案级 `inboxEventSequence`（同样单调），不参与任何申请的阶段折叠。
+
+| 情况 | 行为 |
+| --- | --- |
+| 幂等重试命中已提交回执 | **不**分配新序号；返回原事件/原 `resultId` |
+| 同一事务写入多条事件 | 按调用方给出的批次顺序分配连续序号 |
+| 事务回滚 | 序号不提交；下一笔仍从失败前的 `lastEventSequence+1` 开始（无空洞） |
+| 备份恢复 | 事件带着原 `eventSequence`；**不**重编号。折叠结果与备份时一致 |
+| 旧库无序号（一次性迁移） | D03 用表内稳定 `rowid` 升序赋 1..n，写入迁移记录；**不用** UUID 排序 |
+
+`stage_corrected` 只是又一条 **set-absolute** 事件：它成为当前值是因为 `eventSequence` 更大，**不是**因为纠错永远压过未来事件。10.6 在纠错之后补 `interview_recorded` 仍然生效。走查 10.19 证明同时间戳下顺序稳定。
 
 每个 `eventType` 的折叠效应只有四种：`set-absolute` / `never-regress` / `advance` / `no-op`。
 
@@ -272,7 +283,8 @@ Code 稳定，供存储、协议、过滤使用；展示名可本地化。MVP �
 | `application_created` | `set-absolute saved` |
 | `application_updated` | `no-op` |
 | `job_saved` | `never-regress`：current ∈ {∅, `saved`} → `saved`；已是更后阶段 → `no-op` |
-| `fill_started` / `fill_completed` / `fill_partial` | `advance`：仅 `saved` → `filling`；其他 current `no-op`。**绝不**→`submitted` |
+| `fill_started` | **`no-op`**（开始填写不改持久化阶段） |
+| `fill_completed` / `fill_partial` | `advance`：仅 `saved` → `filling`；其他 current `no-op`。**绝不**→`submitted` |
 | `fill_failed` / `fill_cancelled` | `no-op`（失败/取消不标「填写中」） |
 | `submit_confirmed` | 仅当 current ∈ {`saved`,`filling`} 时 `set-absolute submitted`；否则 `no-op`（从 `interview` 等退回须用户 `stage_corrected`） |
 | `assessment_recorded` | `set-absolute assessment` |
@@ -307,23 +319,29 @@ saved → filling → submitted → assessment → interview → offer
 - 发送方式无法判断时 `sendMode=unknown`，**不捏造** `human`。
 - 旧值 `human_reply` **不再**作为 `replyClass` 或 `replyEvidenceState`。
 
-`replyEvidenceState` 只折叠 **已关联到该申请、且已确认** 的证据上的 `replyClass`（不是 `kind`，不是 `sendMode`，也不是未确认的 AI 建议）。忽略 `unknown` 与空：
+`replyEvidenceState` 由 **证据存在性** 与 **已确认分类** 两个维度投影，只看 **当前仍关联到该申请** 的证据（取消关联后不再计入）。未确认的 AI 建议、`kind`、`sendMode` 不进入本投影。`replyClass` 为空或 `unknown` 视为 **未分类**，不是「没有证据」。
 
-| 已确认 `replyClass` 集合 `C` | `replyEvidenceState` |
+令 `E` = 该申请当前关联证据集合；`C` = `E` 中已确认且非空、非 `unknown` 的 `replyClass` 集合。
+
+| 条件 | `replyEvidenceState` |
 | --- | --- |
-| 没有非空、非 `unknown` 的 `replyClass` | `none_imported` |
-| 只有 `auto_ack` | `auto_ack` |
-| 含 `{assessment_invite, interview_invite, action_required, offer, reject, other}` 之一，且 **没有** `auto_ack` | `classified` |
-| 同时有 `auto_ack` 与上一行任一业务类 | `mixed` |
+| `E` 为空（从未导入，或已全部取消关联） | `none_imported` |
+| `E` 非空且 `C` 为空（已导入/已关联，分类空或 unknown，或仅暂存了 AI 建议） | `imported_unclassified` |
+| `C` 只有 `auto_ack` | `auto_ack` |
+| `C` 含 `{assessment_invite, interview_invite, action_required, offer, reject, other}` 之一，且 **没有** `auto_ack` | `classified` |
+| `C` 同时有 `auto_ack` 与上一行任一业务类 | `mixed` |
+
+已分类的证据与仍未分类的证据并存时，按 `C` 走 `auto_ack` / `classified` / `mixed`（存在性已满足）；未分类项在详情里单独标「待分类」，**不得**因此退回 `none_imported`。
 
 | code | 展示 | 规则 |
 | --- | --- | --- |
-| `none_imported` | 尚未导入回复证据 | 默认。禁止写成「对方未回复」 |
+| `none_imported` | 尚未导入回复证据 | **仅** `E` 为空。禁止写成「对方未回复」 |
+| `imported_unclassified` | 已导入，待分类 | **禁止**显示「尚未导入回复证据」 |
 | `auto_ack` | 已导入自动回执 | 不移动到 `interview`，不暗示通过筛选 |
-| `classified` | 已导入分类通知 | 详情展示具体 `replyClass`（如「面试邀请」）。`sendMode` 另栏显示「人工 / 自动 / 未知」 |
+| `classified` | 已导入分类通知 | 详情展示具体 `replyClass`。`sendMode` 另栏「人工 / 自动 / 未知」 |
 | `mixed` | 回执与其他分类通知均有 | 列表可用摘要，详情看时间线 |
 
-列表不得把 `classified` 写成「已导入人工回复」。
+列表不得把 `classified` 写成「已导入人工回复」。走查 10.20。
 
 ---
 
@@ -389,8 +407,9 @@ saved → filling → submitted → assessment → interview → offer
 | `dedupeUrl` | 候选查询规范化 URL（与 sourceUrl 相同秘密剥离，再去跟踪参数） | 否 | system | mutable | PII |
 | `location` | 地点 | 否 | user/plugin | mutable | PII |
 | `notes` | 备注 | 否 | user | mutable | PII |
-| `currentStage` | 阶段投影（§6.2 折叠） | 是 | system | projected | public-meta |
-| `replyEvidenceState` | 由 `replyClass` 投影，不是文件类型 | 是 | system | projected | public-meta |
+| `currentStage` | 阶段投影（§6.2 按 `eventSequence` 折叠） | 是 | system | projected | public-meta |
+| `lastEventSequence` | 已提交的最大 `eventSequence`；与事件写入同事务递增 | 是 | system | projected | public-meta |
+| `replyEvidenceState` | 证据存在性 + 已确认分类的投影（§6.3），含 `imported_unclassified` | 是 | system | projected | public-meta |
 | `createdAt` / `updatedAt` | UTC | 是 | system | created immutable | public-meta |
 | `archivedAt` | 列表归档（非回收） | 否 | user | mutable | public-meta |
 | `recycleState` | `active` / `recycled` / `purged` | 是 | user/system | mutable | public-meta |
@@ -406,9 +425,10 @@ saved → filling → submitted → assessment → interview → offer
 | --- | --- | --- | --- | --- | --- |
 | `id` | 事件 UUID | 是 | system | immutable | public-meta |
 | `applicationId` | 所属申请；未绑定证据事件可空 | 视类型 | system | immutable | public-meta |
+| `eventSequence` | 该申请（或收件箱）内单调序号，从 1 起。折叠主键。与写入同事务分配 | 是 | system | immutable | public-meta |
 | `eventType` | 见下表 | 是 | system | immutable | public-meta |
 | `occurredAt` | 业务发生时间。`occurredPrecision=unknown` 时 **必须为 null**，禁止填午夜伪造 | 当 precision≠`unknown` | user/import/plugin | immutable | public-meta |
-| `recordedAt` | 写入时间 UTC | 是 | system | immutable | public-meta |
+| `recordedAt` | 写入墙钟 UTC，**仅时间含义**，不参与折叠并列打破 | 是 | system | immutable | public-meta |
 | `occurredPrecision` | `datetime` / `date` / `unknown` | 是 | system | immutable | public-meta |
 | `timeZone` | 有意义时区；未知则空 | 否 | user/import | immutable | public-meta |
 | `source` | `manual` / `plugin` / `import` / `ai_confirmed` | 是 | system | immutable | public-meta |
@@ -426,7 +446,8 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | `application_created` | 初始字段快照 | set-absolute `saved` |
 | `application_updated` | from/to 字段 | no-op |
 | `job_saved` | 插件提交的岗位元数据 | never-regress |
-| `fill_started` / `fill_completed` / `fill_partial` | 字段计数、耗时、URL、template、snapshotId、outcome | advance `saved`→`filling` |
+| `fill_started` | 字段计数、耗时、URL、template、snapshotId、outcome | no-op |
+| `fill_completed` / `fill_partial` | 同上 | advance `saved`→`filling` |
 | `fill_failed` / `fill_cancelled` | 同上 outcome | no-op |
 | `submit_confirmed` | 确认方式（插件 D07 或桌面 D04） | 仅 saved/filling → `submitted` |
 | `stage_corrected` | from/to/reason | set-absolute `to` |
@@ -441,7 +462,7 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 ### 8.4 ReplyEvidence 与 AttachmentBlob
 
-附件字节在库外。`kind` 是 **获取/格式**，`replyClass` 是 **通知业务类型**，`sendMode` 是 **发送方式**（确认后才写；无法判断则为 `unknown`）。`replyEvidenceState` 按 §6.3 只从已关联、已确认的 `replyClass` 投影（`unknown`/空不计数）。一封 ATS 自动发出的面试邮件可以同时是 `kind=eml`、`replyClass=interview_invite`、`sendMode=automated`；该申请的 `replyEvidenceState=classified`，**不是**「人工回复」。
+附件字节在库外。`kind` 是 **获取/格式**，`replyClass` 是 **通知业务类型**，`sendMode` 是 **发送方式**（确认后才写；无法判断则为 `unknown`）。`replyEvidenceState` 按 §6.3 由关联证据的 **存在性** 与已确认 `replyClass` 投影。已导入但分类空/`unknown` → `imported_unclassified`，**不是** `none_imported`。一封 ATS 自动发出的面试邮件可以同时是 `kind=eml`、`replyClass=interview_invite`、`sendMode=automated`；确认后该申请为 `classified`，**不是**「人工回复」。
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
@@ -493,7 +514,7 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 | 阶段 | 字节位置 | 元数据位置 |
 | --- | --- | --- |
-| 每次确认留档，无论桌面是否可握手 | **先**将不可变完整字节提交到扩展源 IndexedDB，成功后才能开始 `snapshot.chunk`；上传期间仍保留 IDB 副本 | 暂存记录持有 `snapshotId` / `sha256` / `byteSize` 与待建队列状态；Bound outbox 保存同一身份和游标 |
+| 每次确认留档，无论桌面是否可握手 | **先**将不可变完整字节提交到扩展源 IndexedDB，成功后才能开始 `snapshot.chunk`；上传期间仍保留 IDB 副本 | 暂存/outbox 持有 `snapshotId`、总哈希、`chunkCount`、每块 `chunkMessageId`、连续 `chunkCursor` |
 | 曾配对但桌面暂不可用 | **扩展源 IndexedDB**（SW / offscreen / 扩展页可访问；**禁止**写在 content script 的页面源 IDB） | `chrome.storage.local` 只存元数据 + `staging=idb`，**不**存整份 blob（`chrome.storage.local` 约 10 MB 配额） |
 | 桌面已持久化完整快照且 ACK 总哈希相符 | 桌面档案为权威副本，此时才允许清理 IDB | ACK 状态先持久化，再清理 IDB/绑定项；中断后可幂等继续清理 |
 
@@ -503,9 +524,25 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 **过期：** 暂存超过 30 天仍未 ACK：下次打开插件时提示「有未完成的简历留档」，用户选继续发送 / 丢弃。到期 **不自动删** 未提示过的项。
 
-**部分上传：** `chunkCursor` 记录桌面已 ACK 的最后块号；重试从下一块开始，校验总 `sha256`。桌面在未收齐前不把快照标为完整。
+**分片身份（冻结）：** 一次快照传输是父记录 + 多块。父记录持有 `snapshotId`、`sha256`（总摘要）、`byteSize`、`chunkCount`、`sourceRestoreEpoch`。**每一块** 在首次准备发送时铸造并 **持久化** 自己的 `chunkMessageId`（UUID），以及 `chunkIndex`（0..`chunkCount-1`）、`chunkSha256`。
 
-**统一写前暂存：** 在线开始后断线、SW 重启和浏览器重启与初始离线使用同一 IDB 原字节。分片 ACK 不是完整提交 ACK；完整 ACK 丢失时可按快照 ID/总哈希查询或重传，不能从活模板重建。IDB 与 `chrome.storage.local` 不具备跨库事务：IDB 暂存记录必须包含足够元数据，以便重启后修复缺失的 outbox 索引；有 outbox 但找不到原字节时暂停并报告失败，不假报可恢复。
+- **禁止** 多个 chunk 复用同一个 `messageId`（包括不得复用 `fill.submit` / `job.save` 的 id）。
+- **禁止** 浏览器重启后为同一 `(snapshotId, chunkIndex, sourceRestoreEpoch)` 新铸 `chunkMessageId`。
+- 块级幂等键：`(clientInstanceId, chunkMessageId, sourceRestoreEpoch)`；业务等价键：`(clientInstanceId, snapshotId, chunkIndex, sourceRestoreEpoch)`。二者必须指向同一块。同身份不同 `chunkSha256` → `conflict`。
+- 每块请求仍是完整 UTF-8 JSON 信封 ≤ 64 KiB（ADR §4）。
+
+**`chunkCursor`：** 等于「已从 0 起 **连续** 收到分片 ACK 的下一块下标」。只 ACK 了块 5 而 2–4 未 ACK 时，cursor 仍停在 2，必须重试块 2。乱序到达时桌面可以暂存该块，但 **不得** 把 cursor 跳过空洞，也 **不得** 发完整快照 ACK。
+
+**两种 ACK：**
+
+| ACK | 含义 | 可否删 IDB |
+| --- | --- | --- |
+| 分片 ACK | 这一块已按块身份持久化 | **否** |
+| 完整快照 ACK | 全部块到齐且总哈希相符，桌面快照行已提交 | **是**（先持久化 ACK 状态） |
+
+缺块、乱序、ACK 丢失：用同一 `chunkMessageId` 重试该块。`sourceRestoreEpoch` ≠ current：停止上传，走对账/用户决定；不得把旧块改写成当前 epoch 后重放。见走查 10.21。
+
+**统一写前暂存：** 在线开始后断线、SW 重启和浏览器重启与初始离线使用同一 IDB 原字节。完整 ACK 丢失时可按快照 ID/总哈希查询或按块重传，不能从活模板重建。IDB 与 `chrome.storage.local` 不具备跨库事务：IDB 暂存必须含父记录与 **每块** `chunkMessageId`；有 outbox 但找不到原字节时暂停并报告失败，不假报可恢复。
 
 **清理：** 仅当 (1) 桌面 ACK 完整且哈希相符，或 (2) 用户明确丢弃该留档，或 (3) 用户确认过期提示中的丢弃。浏览器重启后 IDB 仍在，继续发 **原字节**。
 
@@ -615,26 +652,31 @@ erDiagram
 
 | 字段 | 含义 | 必填 | 来源 | 可变性 | 敏感级 |
 | --- | --- | --- | --- | --- | --- |
-| `messageId` | 幂等键之一 | 是 | plugin | immutable | public-meta |
+| `messageId` | 该绑定消息（或该 **chunk**）的幂等 id；块与父消息不得共用 | 是 | plugin | immutable | public-meta |
 | `intentId` | 来源意图（若有） | 否 | plugin | immutable | public-meta |
 | `clientInstanceId` | 每扩展安装/Profile 一次 | 是 | plugin | immutable | public-meta |
 | `messageType` | 与 ADR 枚举相同 | 是 | plugin | immutable | public-meta |
-| `archiveId` | 入队时握手到的档案 | 是 | handshake | immutable | public-meta |
-| `restoreEpoch` | 入队时握手到的指针身份 | 是 | handshake | immutable | public-meta |
+| `archiveId` | 绑定时的档案谱系 | 是 | handshake | immutable | public-meta |
+| `sourceRestoreEpoch` | **绑定时**的来源 epoch，不可变。不是「下次发送时的 current」 | 是 | handshake | immutable | public-meta |
 | `applicationId` | 「使用已有」时已有；「新建」可在 ACK 后回填 | 视类型 | plugin/desktop | 回填一次 | public-meta |
 | `payload` | 业务载荷，**无** Key/密码/快照字节 | 是 | plugin | immutable | PII |
-| `snapshotId` / `sha256` / `byteSize` | 若本次含快照 | 否 | plugin | immutable | public-meta |
-| `chunkCursor` | 已 ACK 的最后块号 | 否 | plugin | mutable | public-meta |
+| `snapshotId` / `sha256` / `byteSize` / `chunkCount` | 若本次含快照 | 否 | plugin | immutable | public-meta |
+| `chunks[]` | 每块 `{chunkIndex, chunkMessageId, chunkSha256, acked}` | 快照必填 | plugin | acked 可变 | public-meta |
+| `chunkCursor` | 从 0 起连续 ACK 的下一块下标；不得因较后 ACK 前移 | 快照必填 | plugin | mutable | public-meta |
 | `createdAt` | 入队 UTC | 是 | plugin | immutable | public-meta |
-| `bytes` | payload 序列化字节数 | 是 | plugin | immutable | public-meta |
+| `bytes` | 父消息 payload 序列化字节数 | 是 | plugin | immutable | public-meta |
 
-恢复后：握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。插件比较每条 **绑定** 消息上盖的身份，不匹配则暂停，用户选关联/丢弃/另存。意图不盖 epoch，恢复后重新走候选，不自动当成已绑定。旧写入请求仍返回 `restore_epoch_mismatch`；历史只读对账与写入授权分开，不能只查询新 epoch 的写入记录。
+发送普通写入时，信封上的 `archiveId`/`restoreEpoch` 必须是 **最新握手的 current**。若 `sourceRestoreEpoch` ≠ current：插件 **不得**发送 `job.save`/`fill.submit`/`snapshot.chunk`/`submit.confirm`，只能 `outbox.reconcile`。桌面若仍收到旧信封，按 ADR §4 拒绝，**不得**改写成 current 后收下。
+
+恢复后：握手 **成功** 并返回新 current。插件比较每条绑定消息的 `sourceRestoreEpoch`，不匹配则暂停，用户选关联/丢弃/另存。意图不盖 epoch，恢复后重新走候选。
 
 #### 8.11 已提交消息回执与恢复对账
 
 D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstanceId`、`messageId`、`sourceRestoreEpoch`（该写入提交时的 epoch）、`payloadSha256`、`resultId`、操作类型和提交时间。回执属于可备份业务历史；历史 epoch 不授予当前写入权限。回执保留期至少与对应申请/事件一致；永久清理后的缺失不能解释成“以前从未执行”。
 
-`outbox.reconcile` 的外层信封使用当前握手的 `(archiveId, restoreEpoch)`，payload 每项携带完整旧身份 `{clientInstanceId, messageId, sourceRestoreEpoch, payloadSha256}`。它只读当前所选档案库中的历史回执，**不按当前 epoch 过滤历史行**；不搜索其他档案或接受任意路径。调用方只能查询自己的 clientInstanceId（最多由 D05 规定的有界批次）。响应逐项回显完整身份并返回 `applied` / `not_found` / `conflict` / `unverifiable`，`applied` 才有已核实的 resultId。
+`outbox.reconcile` 的外层信封使用当前握手的 `(archiveId, restoreEpoch)`（缺失或不匹配则整批 `identity_missing` / `restore_epoch_mismatch`）。payload 每项携带完整旧身份 `{clientInstanceId, messageId, sourceRestoreEpoch, payloadSha256}`（快照块另带 `snapshotId`+`chunkIndex`）。它只读当前所选档案库中的历史回执，**不按当前 epoch 过滤历史行**；不搜索其他档案或接受任意路径。调用方只能查询自己的 clientInstanceId（最多由 D05 规定的有界批次）。响应逐项回显完整身份并返回 `applied` / `not_found` / `conflict` / `unverifiable`，`applied` 才有已核实的 resultId。
+
+**`not_found` 不代表从未执行**，只代表这份备份/当前库没有回执；不得据此自动重写。
 
 - 完整旧身份与摘要命中、对应结果仍有效：`applied`，不再新增业务事件。
 - 同身份摘要不符：`conflict`，拒绝自动处理。
@@ -838,11 +880,49 @@ Profile B 恰好也使用 M1，不能命中 A 的回执；同旧身份但摘要�
 
 旧目录 A 和 current.json 指向 E1。向独立目录 B 解压时磁盘满：删除/隔离未完成的本次 staging，A 和 current.json 不变；不把旧目录先移走。只有 B 的完整校验和迁移验证成功后，暂停写入、持久化 B 并原子切换指针到 B/E2。提交点后的崩溃使用 B/E2，旧 A 仍为回滚点；人工回滚 A 时新铸 E3。
 
+### 10.19 同时间戳事件顺序（eventSequence）
+
+**正常：** 同一毫秒内事务依次写入 `application_created` → `submit_confirmed` → `stage_corrected(to=interview)`。三者 `recordedAt` 相同。`eventSequence` 为 1、2、3。折叠后 `currentStage=interview`。备份恢复后序号不变，重算仍为面试。
+
+**反例：** 若只用 UUID 排序，纠正可能排到创建之前，列表显示 `saved`。禁止。幂等重试同一 `submit.confirm` 不得插入 sequence=4。事务在纠正前崩溃：库中只有 1–2，`lastEventSequence=2`，重开后纠正得到 3。
+
+### 10.20 已导入未分类
+
+**正常：** 用户把 `ev-1` 关联到 `app-A` 后暂存 AI 建议、不确认。`E` 非空、`C` 空 → `imported_unclassified`。列表「已导入，待分类」。**不是**「尚未导入回复证据」。确认 `interview_invite` 后变为 `classified`。取消关联后 `E` 空 → `none_imported`。
+
+**反例：** 把空/`unknown` 的 `replyClass` 投影成 `none_imported`，用户以为证据丢了。禁止。已有 `auto_ack` 另附一份未分类截图时，状态仍是 `auto_ack`，截图标「待分类」。
+
+### 10.21 快照分片身份
+
+**正常：** 快照 3 块。父记录 `snapshotId=S1`，块 0/1/2 各有持久化 `chunkMessageId` C0/C1/C2。块 0、1 ACK 后 cursor=2。SW 重启后仍用 C2 发块 2，不得新铸。全部到齐且总哈希相符才完整 ACK，然后删 IDB。
+
+**反例 1：** 三块共用 `fill.submit` 的 messageId，第二块摘要冲突。禁止。
+**反例 2：** 只收到块 2 的 ACK 就把 cursor 设为 3，跳过 0–1。禁止。
+**反例 3：** 完整 ACK 前删 IDB，重启后从 v2 模板重算。禁止。
+**反例 4：** epoch 已变为 E2 仍把 C0 当普通写入重放。必须 `restore_epoch_mismatch`，只允许对账。
+
+### 10.22 信封档案身份
+
+**正常：** 握手返回 `(A1,E2)`。随后 `job.save` / `queryCandidates` / `snapshot.chunk` / `outbox.reconcile` 外层都带 `archiveId=A1, restoreEpoch=E2`。桌面比对 current 后执行。
+
+**反例：** 绑定消息只带 messageId、不带档案身份，桌面用 current 替补后执行旧 E1 写入。禁止。`health`/`handshake` 若携带身份 → `identity_not_allowed`。缺失 → `identity_missing`。E1 写入打到 E2 current → `restore_epoch_mismatch`，不是原 resultId。
+
+### 10.23 来源 epoch 与当前 epoch
+
+**正常：** Bound outbox.`sourceRestoreEpoch=E1`。恢复后 current=E2。插件不发送该 `job.save`，只对账。对账 `applied` 不授予再写。用户另存时新 `messageId` + `sourceRestoreEpoch=E2`，先持久化再发送。
+
+**反例：** 把 outbox.`restoreEpoch` 理解成「每次握手刷新的当前值」，或「相同载荷一律返回原 resultId」而不先校验 current。禁止。`not_found` 自动重写造成重复申请。禁止。
+
+### 10.24 原型失败同步（文档纪律）
+
+V8 杀进程后面试通知不弹：先改产品 §5.4 与 ADR §3.8 的能力边界，再在 #17 记决策，再改 D10/D14 验收。**不**改 D05 信封。禁止只改 issue 正文而留下旧设计。
+
 ## 11. UI 文案约束（产品级）
 
 | 禁止 | 必须 |
 | --- | --- |
-| 「对方未回复」 | 「尚未导入回复证据」 |
+| 「对方未回复」 | `none_imported`：「尚未导入回复证据」 |
+| 已导入未分类却显示「尚未导入」 | `imported_unclassified`：「已导入，待分类」 |
 | 「已通过筛选」（仅因回执） | 「已导入自动回执」 |
 | 填写成功后自动显示「已投递」 | 「填写完成（未确认投递）」 |
 | 「本地应用 = AI 全部离线」 | 使用云端模型时展示外发范围与服务商 |

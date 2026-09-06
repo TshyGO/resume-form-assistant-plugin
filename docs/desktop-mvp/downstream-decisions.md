@@ -73,18 +73,18 @@ flowchart TB
 | 工作 | Issue | 硬依赖 | 从 D01 消费的结论 | 本 issue 仍需自己定的 |
 | --- | --- | --- | --- | --- |
 | D02 桌面壳、单实例、数据目录 | [#16](https://github.com/TshyGO/resume-form-assistant-plugin/issues/16) | D01 | **应用进程 = 唯一写入者**；Windows + **macOS 原型为完成条件之一**；平台目录 API；单实例；关窗 ≠ 退出；托盘/菜单栏；无开机启动；粘贴 ID 设置页骨架；不把 `*.exe` 写进协议 | 窗口细节；IPC 具体 API（pipe vs unix socket） |
-| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象跨平台；无公司+URL 唯一约束；折叠函数；当前 epoch 指针不备份，历史回执含 sourceRestoreEpoch；正式/建议 class 与 sendMode 分开；sourcePathHint 仅内存；`occurredAt` unknown 时为 null | `CREATE TABLE`、索引、迁移 |
-| D04 无 AI 管理 UI | [#19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) | D02、D03 | 阶段码含 `filling`；文案「尚未导入回复证据」；`classified` 不是「人工回复」；两层候选 | 布局、快捷键 |
-| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 信封；握手返回 `restoreEpoch` 而非 generation；当前身份校验 + 完整旧身份/摘要的只读对账；`snapshot.chunk` 整帧预算；64 KiB；SaveIntent **不是** NM 类型 | JSON Schema、错误码（含 `restore_epoch_mismatch`）、分片帧 |
+| D03 SQLite 数据层 | [#18](https://github.com/TshyGO/resume-form-assistant-plugin/issues/18) | D01 | 逻辑对象跨平台；无公司+URL 唯一约束；**`eventSequence` 与阶段投影同事务**；`imported_unclassified`；当前 epoch 指针不备份，历史回执含 sourceRestoreEpoch；正式/建议 class 与 sendMode 分开；sourcePathHint 仅内存；`occurredAt` unknown 时为 null | `CREATE TABLE`、索引、迁移 |
+| D04 无 AI 管理 UI | [#19](https://github.com/TshyGO/resume-form-assistant-plugin/issues/19) | D02、D03 | 阶段码含 `filling`；`none_imported` vs `imported_unclassified` 文案；`classified` 不是「人工回复」；时间线按 `eventSequence` | 布局、快捷键 |
+| D05 协议契约 | [#23](https://github.com/TshyGO/resume-form-assistant-plugin/issues/23) | D01 | 信封 **含/禁** 档案身份（见 ADR §4）；握手返回当前 epoch；普通写入先校验 current 再幂等；块级 `snapshot.chunk` messageId；`outbox.reconcile` 外层当前身份；64 KiB 整帧；SaveIntent **不是** NM 类型 | JSON Schema、错误码（`identity_missing` / `identity_not_allowed` / `restore_epoch_mismatch`）、分片帧 |
 | D06 NM host | [#24](https://github.com/TshyGO/resume-form-assistant-plugin/issues/24) | D02、D03、D05 | 薄 host 或同二进制 host 模式；stdout 纯净；扫描 argv origin；按需启动 **应用进程**；Win 注册表 + Mac 用户级目录 | 可执行实现、冷启动、Mac 路径实测 |
-| D07 保存岗位、配对、队列 | [#20](https://github.com/TshyGO/resume-form-assistant-plugin/issues/20) | D04、D05、D06 | **SaveIntent vs Bound outbox**；从未配对不建意图；曾经配对桌面不可用可建意图；禁止待同步=已保存；粘贴 ID；`submit.confirm`；storage key 清单 | 退避、侧边栏文案、10 s 去重点击 |
-| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 确认时生成不可变字节；无论在线/离线，发送前完整字节 → 扩展源 IndexedDB，完整 ACK 前保留；重试用原字节；>2 MiB 拒绝；可能申请 `unlimitedStorage` | 快照 JSON 格式、字段值开关 |
-| D09 证据收件箱 | [#21](https://github.com/TshyGO/resume-form-assistant-plugin/issues/21) | D03、D04 | `kind` 格式；`replyClass` 业务类型；`sendMode` 发送方式；导入≠改阶段 | MIME、预览 |
+| D07 保存岗位、配对、队列 | [#20](https://github.com/TshyGO/resume-form-assistant-plugin/issues/20) | D04、D05、D06 | **SaveIntent vs Bound outbox**；`sourceRestoreEpoch` 不可变；信封带 **current** 身份；旧 epoch 只对账不重放；从未配对不建意图；禁止待同步=已保存；粘贴 ID；`submit.confirm` | 退避、侧边栏文案、10 s 去重点击 |
+| D08 快照与填写留档 | [#22](https://github.com/TshyGO/resume-form-assistant-plugin/issues/22) | D03、D07 | 写前 IDB；**每块持久化 `chunkMessageId`**；`chunkCursor` 只按连续 ACK 前进；分片 ACK ≠ 完整 ACK；>2 MiB 拒绝 | 快照 JSON 格式、字段值开关 |
+| D09 证据收件箱 | [#21](https://github.com/TshyGO/resume-form-assistant-plugin/issues/21) | D03、D04 | `kind` 格式；`replyClass` 业务类型；`sendMode` 发送方式；导入后未分类 → `imported_unclassified`；导入≠改阶段 | MIME、预览 |
 | D10 待办与提醒 | [#26](https://github.com/TshyGO/resume-form-assistant-plugin/issues/26) | D04 | **系统调度通知**；杀进程后仍尽量弹；未授权则列表+汇总；退出取消未触发项并告知；无偷偷开机启动；Win 5 分钟窗口写进文案 | 具体 Toast/UNUserNotification 封装、夏令时 |
-| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 持久化 suggestedReplyClass/suggestedSendMode；确认前不写正式分类，不确定为 unknown；Keychain/DPAPI | 提示词、OCR |
-| D12 备份恢复 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；保留 archiveId；**新铸 restoreEpoch**；备份不含当前指针但包含历史回执；新目录验证后原子切换，回滚再铸 | 归档格式、原子发布 |
+| D11 AI 建议 | [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25) | D09、D10 | 持久化 suggestedReplyClass/suggestedSendMode；确认前证据可为 `imported_unclassified`；不确定为 unknown；Keychain/DPAPI | 提示词、OCR |
+| D12 备份恢复 | [#28](https://github.com/TshyGO/resume-form-assistant-plugin/issues/28) | D03、D07、D09 | 不加密；新目录；保留 archiveId；**新铸 restoreEpoch**；备份含 `eventSequence` 与历史回执，不含当前指针；旧 epoch 只对账 | 归档格式、原子发布 |
 | D13 安装升级 | [#29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29) | D02、D06、D07、D12 | Win NSIS per-user + 双写 HKCU；Mac `.app`/`.dmg` + 用户级 NativeMessagingHosts；卸载留档案；签名/公证如实写 | NSIS hooks、公证流水线、SHA-256 |
-| D14 端到端 | [#27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27) | D08、D11、D13 | 含意图队列、离线快照、杀进程提醒、重复恢复、ATS 自动面试信；Win 必测；Mac 覆盖随正式版决议，但 D02 原型不能缺 | 验收记录模板 |
+| D14 端到端 | [#27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27) | D08、D11、D13 | 含意图队列、离线快照、块级重试、杀进程提醒、重复恢复、未分类证据文案、同时间戳事件顺序、ATS 自动面试信；Win 必测 | 验收记录模板 |
 
 ### 2.1 依赖图上的张力（不改图）
 
@@ -109,11 +109,11 @@ flowchart TB
 3. 应用进程 = 唯一写入者；NM host = 翻译器（可多实例）；WebView 子进程不是写入者。
 4. 桌面权威源；未装桌面时填写仍可用。
 5. 十条产品规则（填写≠投递、回执≠通过、未导入≠未回信、UUID、AI 只建议、意图/绑定队列、不采集秘密、卸载不静默删、手动永远可用、无邮箱/云同步）。
-6. Stage 折叠函数；`filling` 投影。
-7. `replyClass` ≠ `sendMode`；`replyEvidenceState` 用 `classified` 而非「人工回复」。
+6. Stage 折叠按 `eventSequence`；`fill_started` 不改阶段；`filling` 仅 completed/partial。
+7. `replyClass` ≠ `sendMode`；已导入未分类 = `imported_unclassified`，禁止「尚未导入」。
 8. SaveIntent vs Bound outbox；从未配对不建意图；禁止待同步=已保存。
 9. 快照确认时生成；所有字节先持久化到扩展源 IndexedDB；重试不从新模板生成。
-10. 握手返回当前 restoreEpoch；每次成功切换新铸；普通写入校验当前身份，恢复对账只读完整历史回执。
+10. 握手后请求必须带当前 `archiveId`/`restoreEpoch`；Bound `sourceRestoreEpoch` 不可变；普通写入先校验 current；旧 epoch 只对账。
 11. 提醒走用户授权的系统调度；不偷偷开机启动。
 12. D01/0.3.0 不加 `nativeMessaging`、不加 `key`。
 13. 插件 Key 留扩展存储；桌面 Key 进 OS 凭据库。
@@ -167,22 +167,31 @@ flowchart TB
 
 ## 5. 需要后续原型验证
 
-失败则更新 D01/D05 与受影响 issue，禁止在实现 PR 里偷偷换模型。
+禁止在实现 PR 里偷偷换模型。失败后的 **统一同步顺序**（不是每项都改 D05）：
 
-| ID | 项 | 谁验证 | 失败时的后退 |
-| --- | --- | --- | --- |
-| V1 | Win named pipe / Mac unix socket + 单实例 | D02、D06 | Tauri 单实例插件或锁文件，仍唯一写入者 |
-| V2 | host 按需启动应用进程（无控制台；Mac `.app` 路径） | D06 | 文案「请先打开一次桌面」；禁止第三个 writer |
-| V3 | 更新 host manifest 后能否不重启就 `connectNative` | D06、D13 | 提示重载扩展或重启浏览器 |
-| V4 | MV3 SW 与 `connectNative` | D07 | `sendNativeMessage` + 队列 |
-| V5 | 64 KiB 真实拒绝行为 | D05、D06 | 调错误码，不靠加大信封传附件 |
-| V6 | Win10 无 WebView2 的 bootstrapper | D13 | 文档改手动安装 Runtime |
-| V7 | Windows ARM64、macOS Intel universal | D13 | 首发 Win x64 + Mac Apple Silicon |
-| V8 | 系统调度通知：杀进程后是否仍弹；Win 5 分钟窗口；Mac 重启后 | D10 | 打开应用汇总；文案写明限制 |
-| V9 | 未打包 Win32 计划 Toast / AUMID | D10 | Compat 库或改为仅应用内提醒 |
-| V10 | macOS 用户级 Edge NativeMessagingHosts 实际路径 | D06、D13 | 对照 Edge 文档实测后改 D13 |
-| V11 | macOS 公证与 Gatekeeper 对 helper 拉起 | D13 | 预览构建写明「右键打开」 |
-| V12 | 扩展源 IndexedDB 在 SW 重启后读回快照 | D08 | 失败则离线留档明确不可用，同步改 D08/D14 验收 |
+1. 修改下表「权威文档」中的条款（产品/ADR/隐私，以实际受影响者为准）；
+2. 在 [#17](https://github.com/TshyGO/resume-form-assistant-plugin/issues/17) 记下决策（通过/降级/推迟）；
+3. 更新「受影响 issue」的验收/范围句子；
+4. 再调整实现计划或后续 PR。
+
+不得只改 issue 而留下旧设计。保持原有依赖 DAG。
+
+| ID | 项 | 权威文档 | 受影响 issue | 失败后的处理 |
+| --- | --- | --- | --- | --- |
+| V1 | Win named pipe / Mac unix socket + 单实例 | [ADR §3.4](adr-architecture.md#34-进程角色平台无关契约)、[§3.9](adr-architecture.md#39-跨平台适配边界d02-起就要列测试) | D02 #16、D06 #24 | 改用 Tauri 单实例插件或锁文件，**仍**唯一写入者。一般 **不动** D05 |
+| V2 | host 按需启动应用进程 | ADR §3.4、§3.9 | D06 #24、D07 #20 | 文案「请先打开一次桌面」；禁止第三个 writer。一般不动 D05 |
+| V3 | 更新 host manifest 后能否不重启就 connectNative | ADR §3.7 | D06 #24、D13 #29、D07 #20 | 配对成功后强制「重载扩展或重启浏览器」。不动 D05 信封 |
+| V4 | MV3 SW 与 `connectNative` | ADR §3.6；产品 §5.2 | D07 #20 | 回落到 `sendNativeMessage` + 队列。若短连接语义变化才改 D05 样例 |
+| V5 | 64 KiB 真实拒绝行为 | ADR §4 原则 3 | D05 #23、D06 #24、D08 #22 | 调错误码与 raw chunk 预算，**不**靠加大信封传附件 |
+| V6 | Win10 无 WebView2 bootstrapper | ADR §3.2、§8 | D13 #29、D02 #16 | 文档改手动安装 Runtime 链接。不动 D05 |
+| V7 | Windows ARM64、macOS Intel universal | ADR §8；产品 §12 | D13 #29、D14 #27 | 首发收缩为 Win x64 + Mac Apple Silicon。不动 D05 |
+| V8 | 系统调度通知：杀进程/关机窗口/Mac 重启 | 产品 [§5.4](product-requirements.md#54-提醒与进程生命周期共同语义)；ADR §3.8 | D10 #26、D14 #27 | 缩小承诺为「打开应用汇总」；**不**改 D05 |
+| V9 | 未打包 Win32 计划 Toast / AUMID | ADR §3.8 | D10 #26 | Compat 库或仅应用内提醒。不改 D05 |
+| V10 | macOS 用户级 Edge NativeMessagingHosts 路径 | ADR §2、§3.7、§3.9 | D06 #24、D13 #29 | 以实测路径改 ADR/D13。不改 D05 |
+| V11 | macOS 公证与 Gatekeeper 对 helper | ADR §3.2、§8 | D13 #29 | 预览构建写明「右键打开」。不改 D05 |
+| V12 | 扩展源 IndexedDB 在 SW 重启后读回快照 | 产品 [§8.5](product-requirements.md#85-resumesnapshot)；隐私快照节 | D08 #22、D07 #20、D14 #27 | 若 IDB 不可靠：离线留档明确不可用，改产品 §8.5 与 D08/D14 验收。仅当分片帧字段变化才改 D05 |
+
+走查 10.24 是本纪律的反例：V8 失败时去改 D05 是错误同步。
 
 ---
 
@@ -203,15 +212,16 @@ flowchart TB
 
 **D03（数据层，无 UI）：**
 
-- 按字段目录建库：Application/Event/Todo/Evidence（含 sendMode）/AiSuggestion（含独立建议分类）/Snapshot/AttachmentBlob/提交回执。
-- `current.json` 持当前 restoreEpoch 且不备份；备份夹具保留业务历史回执的 sourceRestoreEpoch。
-- 合成测试：同岗位两条申请；恢复两次同一备份 → 两个当前 epoch；历史回执不丢失、旧写入仍被拒绝、不同 Profile 同 messageId 不串结果。
+- 按字段目录建库：Application（含 `lastEventSequence`）/Event（含 `eventSequence`）/Todo/Evidence（含 sendMode）/AiSuggestion/Snapshot/AttachmentBlob/提交回执。
+- `current.json` 持当前 restoreEpoch 且不备份；备份夹具保留业务历史回执的 sourceRestoreEpoch 与原 eventSequence。
+- 合成测试：同岗位两条申请；同时间戳三事件折叠稳定；恢复两次同一备份 → 两个当前 epoch；旧写入拒绝、对账 not_found 不自动重写。
 - 不写迁移到「已发布库」（还没有）。
 
 **D05（契约，无生产 host）：**
 
-- JSON Schema：握手含 `restoreEpoch`；错误码含 `restore_epoch_mismatch`。
-- 样例：意图不是消息类型；`job.save` 成功/重放/epoch 冲突/超限。
+- JSON Schema：health/handshake **无**档案身份；其余握手后类型 **必须**有 `archiveId`/`restoreEpoch`。
+- 错误码：`identity_missing`、`identity_not_allowed`、`restore_epoch_mismatch`、`conflict`。
+- 样例：`job.save` 成功/当前身份下重放/旧 epoch 拒绝；`snapshot.chunk` 每块独立 messageId、cursor 连续、完整 ACK 分离；`outbox.reconcile` 外层当前身份。
 - 契约测试两端可复用。不注册 NM、不打安装包。
 
 ---

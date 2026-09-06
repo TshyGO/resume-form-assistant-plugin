@@ -29,7 +29,7 @@
 | 插件模板、`activeTemplateId` | 用户 | `chrome.storage.local` | 填写归档时生成的 **不可变快照** |
 | 插件 `aiConfig.apiKey` | 用户 | 仅扩展存储（今天明文） | **禁止**复制到桌面档案或备份 |
 | 桌面模型 Key（D11） | 用户 | OS 凭据库：Windows Credential Manager / DPAPI；macOS Keychain | **禁止**进 SQLite、附件、备份、日志 |
-| 保存意图 / 绑定 outbox | 用户 | `chrome.storage.local` 新 key | 不得含 Key；绑定项恢复后按 **restoreEpoch** 暂停 |
+| 保存意图 / 绑定 outbox | 用户 | `chrome.storage.local` 新 key | 不得含 Key；绑定项以不可变 `sourceRestoreEpoch` 盖章；恢复后与 current 不符则暂停，信封不得被桌面改写成当前身份 |
 | 所有待提交快照字节（在线/离线） | 用户 | 扩展源 **IndexedDB**（SW/offscreen/扩展页） | 完整快照持久化且总哈希 ACK 后才可删除；不得写在页面源 |
 
 写入者：仅 **应用进程**（`data-service` 库）。插件、WebView 子进程、NM host 都是客户端。从未配对时，插件不得把申请档案写进扩展存储冒充桌面库，也不得堆积意图。曾经配对但桌面不可用时，只允许 SaveIntent + IndexedDB 快照暂存，不得显示已保存。
@@ -178,7 +178,7 @@ sequenceDiagram
 5. **保留 backup 的 `archiveId`。每次成功切换 current 指针新铸 `restoreEpoch`（UUID）。** 不从备份读取 epoch，不用 `generation+1`。握手 **成功** 并返回新 `(archiveId, restoreEpoch)`。绑定队列盖章不符则暂停。意图无 epoch，恢复后重新候选。
 6. 再次恢复 **同一** 备份：再铸新 UUID，与上一次不同（走查 10.8 / 10.12）。
 7. 回滚到 retired 目录：视为一次新的指针切换，**再铸** epoch，不复用失败前的值。
-8. 普通写入先校验当前 archiveId/restoreEpoch；epoch 不符返回 `restore_epoch_mismatch`。历史回执以 `(clientInstanceId, messageId, sourceRestoreEpoch)` 加摘要对账，不按新 epoch 过滤历史行。对账只读、不授权重放；未命中不等于从未执行，须用户核对。完整契约见 [产品 §8.11](product-requirements.md#811-已提交消息回执与恢复对账)。
+8. 握手后写入与 `outbox.reconcile` 外层必须自带当前 `(archiveId, restoreEpoch)`；缺失或不匹配直接拒绝，**禁止**桌面代填。普通写入仅在当前身份校验通过、且 `sourceRestoreEpoch` 等于 current 时，才按消息身份+摘要返回原 `resultId`。旧 epoch 只走只读对账。`not_found` 不代表从未执行，不得自动重写。完整契约见 [产品 §8.10–§8.11](product-requirements.md#810-插件队列saveintent-与-bound-outbox)。
 9. 恢复后不得瞬间重放全部待办通知；按产品 §5.4 重新登记系统调度。
 
 存储量粗估（单用户一季）：DB 数 MB；每封 eml/PDF 数十 KB–数 MB；简历快照常见为数十–数百 KiB，产品上限 **2 MiB**（超过则拒绝，走桌面导入）。备份大小 ≈ DB + 附件 + 快照。不在 D01 承诺压缩比。

@@ -71,11 +71,12 @@
 | 6 | 身份 | 申请 UUID；两层候选（精确三元组 / 同公司提示）；**禁止**自动合并 |
 | 7 | 离线保存 | 区分 **保存意图**（已确认要存、尚未绑定申请）与 **已绑定业务消息**。曾经配对但桌面暂不可用：可持久化意图并显示「待同步」，**不得**显示「桌面已保存」。未安装/从未配对：不建长期队列 |
 | 8 | 快照 | 确认留档时立即生成不可变字节；无论桌面是否在线，发送前完整字节先提交到 **扩展源 IndexedDB**，完整提交/哈希 ACK 前保留，元数据进 `chrome.storage.local`。重试不得从最新模板重生成 |
-| 9 | 协议 | 业务信封双向 **64 KiB**；文件字节走分片 NM；当前 epoch 校验与完整历史回执对账分离（见产品 §8.11） |
+| 9 | 协议 | 握手后写入与 `outbox.reconcile` **必须**在信封携带当前 `archiveId`/`restoreEpoch`；health/handshake 禁止携带。分片每块独立持久化 `messageId`。64 KiB 指完整 UTF-8 JSON |
 | 10 | 配对 | **D01 不加 `key`**。桌面 UI **粘贴扩展 ID**；**第一条 NM 不是配对消息** |
 | 11 | 恢复隔离 | 备份保留 `archiveId`；每次成功切换 current 指针 **新铸 `restoreEpoch`（UUID）**，不从备份恢复当前身份；历史回执可含 sourceRestoreEpoch，不按 backup.generation+1。旧队列盖章对不上则暂停 |
 | 12 | 提醒 | 关窗 ≠ 退出。启用后台提醒时走 **用户授权的系统调度通知**，不把进程闲置包装成次日提醒。不偷偷开机启动。主动退出须展示能力限制 |
-| 13 | 通知语义 | `replyClass` = 业务类型；`sendMode` = 发送方式（`human` / `automated` / `unknown`）。面试邀请等 **不得**仅因类型投影成「人工回复」 |
+| 13 | 通知语义 | `replyClass` ≠ `sendMode`。已导入未分类 = `imported_unclassified`，禁止显示「尚未导入」。面试邀请不得写成「人工回复」 |
+| 18 | 事件顺序 | 每申请单调 `eventSequence` 与写入同事务；`recordedAt` 不做折叠键 |
 | 14 | 密钥 | 插件 Key 留在扩展存储；桌面 Key 进 OS 凭据库（Windows Credential Manager / DPAPI，macOS Keychain）；二者都不进档案/备份/日志 |
 | 15 | 备份 | MVP **不加密**；导出警告含 PII |
 | 16 | 填写留档 | 默认只存事件元数据；逐字段值默认关闭；快照 ≤ 2 MiB |

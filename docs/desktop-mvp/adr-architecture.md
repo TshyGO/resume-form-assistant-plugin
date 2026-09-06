@@ -194,38 +194,69 @@ D10 验收：启用后台提醒并授权后，**杀掉应用进程**，到期仍
 
 D05 必须包含的信封字段（此处冻结名字与枚举，不写 JSON Schema）：
 
-**请求：** `protocolVersion`、`messageId`、`clientInstanceId`、`messageType`、`occurredAt`、`payload`。
+**请求公共字段：** `protocolVersion`、`messageId`、`clientInstanceId`、`messageType`、`occurredAt`、`payload`。
+
+**档案身份字段：** `archiveId`、`restoreEpoch`。含义是调用方声称正在访问的 **当前档案身份**，桌面必须与自己的 current 指针比对。**禁止**用桌面当前身份替旧消息补上这两个字段。
+
+| `messageType` | `archiveId` / `restoreEpoch` |
+| --- | --- |
+| `health` | **禁止携带**（尚未、也不需要档案身份）。若携带 → `identity_not_allowed` |
+| `handshake` | **禁止携带**。身份只出现在应答。若携带 → `identity_not_allowed` |
+| `application.queryCandidates` | **必须携带**，且等于握手得到的当前身份 |
+| `job.save` / `fill.submit` / `snapshot.chunk` / `submit.confirm` | **必须携带**当前身份。另在 payload/outbox 保存不可变的 `sourceRestoreEpoch`（绑定时的来源 epoch） |
+| `outbox.reconcile` | **外层必须携带当前身份**；payload 每项才带旧 `sourceRestoreEpoch`。外层缺失或与 current 不符 → 整批拒绝，不得用 current 回填 |
+
+缺失必须字段 → `identity_missing`（`retryable=false` 直至客户端补上）。
+与 current 不符 → `restore_epoch_mismatch`（`retryable=false` 作为写入；不是成功重放）。
+协议区间不交 → `protocol_incompatible`。
+三种情况都 **不得**把请求改写成当前身份后再执行。
+
+握手后写入示例（字段名冻结）：
+
+```json
+{
+  "protocolVersion": 1,
+  "messageId": "0193a0c2-7c1a-7d2e-b8c1-0f1e2d3c4b5a",
+  "clientInstanceId": "ext-instance-uuid",
+  "messageType": "job.save",
+  "occurredAt": "2026-09-06T12:00:00.000Z",
+  "archiveId": "archive-uuid",
+  "restoreEpoch": "epoch-current-uuid",
+  "payload": { "sourceRestoreEpoch": "epoch-current-uuid" }
+}
+```
 
 **应答：** `{ protocolVersion, correlationId, resultId?, ok, error?: { code, retryable, message? }, payload }`。
 
-- `correlationId` = 请求 `messageId`。
+- `correlationId` = 请求 `messageId`（`snapshot.chunk` 则为 **该块** 的 `messageId`，见下）。
 - `ok: true` 的写入应答必须有 `resultId`。
-- `ok: false` **没有** `resultId`；已完成且当前身份/摘要相符的普通重放返回 `ok: true` 和原 resultId。历史对账结果在只读 payload 中，不授予旧消息写入权限。
+- `ok: false` **没有** `resultId`。仅当 **当前身份校验已通过** 且完整消息身份/摘要命中已提交回执时，普通重放才返回 `ok: true` 和原 `resultId`。
 - SaveIntent **不是** NM `messageType`。
 
 **MVP `messageType` 枚举：**
 
 | `messageType` | 方向 | 说明 |
 | --- | --- | --- |
-| `health` | 双向 | 探活 |
-| `handshake` | 双向 | 返回协议区间、app 版本、`archiveId`、`restoreEpoch`、`capabilities`。**不是配对** |
-| `application.queryCandidates` | 插件→桌面 | 两层候选，最小元数据 |
+| `health` | 双向 | 探活；无档案身份 |
+| `handshake` | 双向 | 返回协议区间、app 版本、当前 `archiveId`、`restoreEpoch`、`capabilities`。**不是配对** |
+| `application.queryCandidates` | 插件→桌面 | 两层候选；必须带当前身份 |
 | `job.save` | 插件→桌面 | 已绑定后的岗位保存 |
 | `fill.submit` | 插件→桌面 | 填写事件元数据 + 可选 `snapshotId`/`sha256`（**不含**快照字节） |
-| `snapshot.chunk` | 插件→桌面 | 完整 UTF-8 JSON（信封、序号、编码后的数据在内）≤ 64 KiB；发送前所有快照都已提交到扩展源 IDB |
+| `snapshot.chunk` | 插件→桌面 | **每块独立 `messageId`**；完整 UTF-8 JSON 信封 ≤ 64 KiB；发送前字节已在扩展源 IDB |
 | `submit.confirm` | 插件→桌面 | 用户明确确认已投递（D07） |
-| `outbox.reconcile` | 插件→桌面 | 当前身份信封 + 有界完整旧身份/摘要列表；只读当前档案的历史回执，逐项返回身份、核实状态及可用 resultId，见产品 §8.11 |
+| `outbox.reconcile` | 插件→桌面 | 当前身份在外层；payload 为有界旧身份/摘要列表；只读历史回执，见产品 §8.11 |
 
 原则：
 
 1. **握手成功**即返回当前 `(archiveId, restoreEpoch)`。仅协议不兼容或 kill switch 时握手失败。epoch 变化 **不是**握手失败。
-2. **至少一次传送，业务恰好一次：** 普通写入先校验当前 `(archiveId, restoreEpoch)`，再按 `(clientInstanceId, messageId, sourceRestoreEpoch)` 和 payloadSha256 处理事务回执，其中 sourceRestoreEpoch 是提交时的 epoch。epoch 不符返回 `restore_epoch_mismatch`，不是成功重放。历史回执随业务库备份；只读对账按完整旧身份查询，不按新 epoch 过滤，也不改当前 epoch。详见 [产品 §8.11](product-requirements.md#811-已提交消息回执与恢复对账)。
-3. **64 KiB 是完整序列化业务信封的 UTF-8 字节上限**（不含 NM 的 4 字节长度前缀），不是原始块大小。D05 建议 raw chunk ≤ 32 KiB，并限制其他字段；仍须实际编码后测量整帧，超限拒绝，不能假定 base64/JSON 没有开销。所有快照在线/离线均先持久化到扩展源 IDB，完整提交 ACK 前保留字节。D05/D08 测试整帧 65536/65537 字节、分片中断与完整 ACK 丢失。
-4. **`allowed_origins` 无通配符。** D01 不加 `key`。
-5. 开发机注册脚本只用于隔离测试（D06）；生产注册归 D13。
-6. 恢复：新目录、保留 backup `archiveId`、**新铸 restoreEpoch**。握手成功；插件暂停盖着旧 epoch 的绑定队列。意图重新走候选。
+2. **普通写入两段校验：** (a) 请求信封的 `(archiveId, restoreEpoch)` **必须等于**桌面 current；(b) 仅在 (a) 通过后，才按 `(clientInstanceId, messageId, sourceRestoreEpoch)` + `payloadSha256` 判定重放。「相同载荷返回原 resultId」**只适用于 (a) 已通过、且 sourceRestoreEpoch 也等于 current** 的普通写入。`sourceRestoreEpoch` ≠ current → `restore_epoch_mismatch`，**不得**当重放成功。旧 epoch 消息只能走 `outbox.reconcile` 只读对账。详见 [产品 §8.10–§8.11](product-requirements.md#810-插件队列saveintent-与-bound-outbox)。
+3. **64 KiB 是完整序列化业务信封的 UTF-8 字节上限**（不含 NM 的 4 字节长度前缀）。D05 建议 raw chunk ≤ 32 KiB；超限拒绝。
+4. **`snapshot.chunk` 块级身份：** 每个 chunk 有持久化的独立 `messageId`，不得与 `fill.submit`/`job.save` 或其它块共用。业务幂等键另含 `(clientInstanceId, snapshotId, chunkIndex, sourceRestoreEpoch)`。重启不得新铸块身份。`chunkCursor` = 已连续 ACK 的下一块下标；较后块的 ACK **不得**跳过中间未确认块。分片 ACK ≠ 完整快照 ACK。见产品 §8.5。
+5. **`allowed_origins` 无通配符。** D01 不加 `key`。
+6. 开发机注册脚本只用于隔离测试（D06）；生产注册归 D13。
+7. 恢复：新目录、保留 backup `archiveId`、**新铸 restoreEpoch**。握手成功；插件暂停 `sourceRestoreEpoch` ≠ current 的绑定队列。意图重新走候选。
 
-Host 校验顺序：扫描 argv 的 origin token ∈ 当前 manifest；单帧 ∈ (0, 64 KiB]；JSON 可解析；`messageType` ∈ 上表；写成功才回帧。
+Host 校验顺序：扫描 argv 的 origin token ∈ 当前 manifest；单帧 ∈ (0, 64 KiB]；JSON 可解析；`messageType` ∈ 上表；按上表检查身份字段；写成功才回帧。
 
 ---
 
