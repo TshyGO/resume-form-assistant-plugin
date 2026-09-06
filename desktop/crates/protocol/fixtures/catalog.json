@@ -28,7 +28,19 @@
     {"id": "job-save-missing-identity", "path": "requests/job-save-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
     {"id": "unknown-type", "path": "requests/unknown-type.json", "schema": "reject", "protocol": {"accept": false, "code": "unknown_message_type"}},
     {"id": "save-intent", "path": "requests/save-intent.json", "schema": "reject", "protocol": {"accept": false, "code": "unknown_message_type"}},
-    {"id": "job-save-url-token", "path": "requests/job-save-url-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "job-save-url-token", "path": "requests/job-save-url-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-query-token", "path": "requests/url-root-query-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-fragment-token", "path": "requests/url-root-fragment-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-port-token", "path": "requests/url-root-port-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-encoded-key", "path": "requests/url-root-encoded-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-code", "path": "requests/url-root-code.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-query-with-slash", "path": "requests/url-root-query-with-slash.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-fragment-with-slash", "path": "requests/url-root-fragment-with-slash.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-host-ok", "path": "requests/url-root-host-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-query-ok", "path": "requests/url-root-query-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-fragment-ok", "path": "requests/url-root-fragment-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-contact-ok", "path": "requests/url-root-contact-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-double-encoded", "path": "requests/url-root-double-encoded.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
@@ -43,6 +55,8 @@
     {"id": "conflict-retryable-true", "path": "responses/conflict-retryable-true.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "write-ok-missing-resultId", "path": "responses/write-ok-missing-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "error-with-resultId", "path": "responses/error-with-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
-    {"id": "response-payload-array", "path": "responses/payload-array.json", "requestType": "job.save", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}}
+    {"id": "response-payload-array", "path": "responses/payload-array.json", "requestType": "job.save", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "url-response-root-token", "path": "responses/url-response-root-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}, "requestType": "application.queryCandidates"},
+    {"id": "url-response-root-ok", "path": "responses/url-response-root-ok.json", "schema": "accept", "protocol": {"accept": true}, "requestType": "application.queryCandidates"}
   ]
 }

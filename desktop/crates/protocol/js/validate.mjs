@@ -132,9 +132,10 @@ export function checkUrl(raw) {
     throw fail("secret_forbidden", "URL must be https without credentials", "secrets");
   }
   const rest = raw.slice("https://".length);
-  const slash = rest.indexOf("/");
-  const authority = slash === -1 ? rest : rest.slice(0, slash);
-  const pathQueryFrag = slash === -1 ? "" : rest.slice(slash);
+  // Keep encoded delimiters in their component; split only literal boundaries.
+  const boundary = rest.search(/[/?#]/);
+  const authority = boundary === -1 ? rest : rest.slice(0, boundary);
+  const pathQueryFrag = boundary === -1 ? "" : rest.slice(boundary);
   if (authority.includes("@")) {
     throw fail("secret_forbidden", "URL userinfo is not allowed", "secrets");
   }
