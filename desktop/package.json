@@ -1,0 +1,28 @@
+{
+  "name": "resume-pro-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "test:host": "cargo test --manifest-path crates/data-service/Cargo.toml --locked",
+    "test:store": "cargo test --manifest-path crates/archive-store/Cargo.toml --locked",
+    "test:app": "cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib",
+    "test:frontend": "vite build",
+    "test:ui": "node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js",
+    "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
+    "test": "npm run test:host && npm run test:store && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:release-allowlist"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.0"
+  }
+}

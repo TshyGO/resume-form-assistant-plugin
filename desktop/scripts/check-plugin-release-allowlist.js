@@ -1,0 +1,75 @@
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REQUIRED = [
+  "manifest.json",
+  "background.js",
+  "content.js",
+  "content.css",
+  "LICENSE",
+];
+
+const FORBIDDEN = new Set([
+  "desktop",
+  "desktop/",
+  "src-tauri",
+  "src-tauri/",
+  "target",
+  "target/",
+  "node_modules",
+  "node_modules/",
+  ".cargo-cache",
+]);
+
+export function parseGitArchiveEntries(workflowText) {
+  const match = workflowText.match(/git archive[\s\S]*?\bHEAD\b([\s\S]*?)(?:\n\s*echo|\n\s*$)/);
+  if (!match) {
+    throw new Error("Could not find git archive file list");
+  }
+  return match[1]
+    .replace(/\\\s*\n/g, " ")
+    .split(/\s+/)
+    .map((token) => token.replace(/^['"]|['"]$/g, ""))
+    .filter((token) => token && !token.startsWith("--") && token !== "HEAD");
+}
+
+export function assertPluginOnlyArchive(entries) {
+  const allowed = new Set(["manifest.json","background.js","content.js","content.css","ai-helpers.js","form-agent.js",
+    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","popup.html","popup.css","popup.js",
+    "xlsx.full.min.js","mammoth.browser.min.js","README.md","LICENSE",
+    ...JSON.parse(readFileSync(new URL('./plugin-release-assets.json', import.meta.url), 'utf8'))]);
+  const exact = new Set(entries);
+  for (const entry of entries) {
+    const normalized = entry.replace(/\\/g, "/");
+    if (!allowed.has(normalized)) throw new Error(`release archive must not include ${entry}`);
+    if (
+      FORBIDDEN.has(entry) ||
+      FORBIDDEN.has(normalized) ||
+      normalized === "desktop" ||
+      normalized.startsWith("desktop/")
+    ) {
+      throw new Error(`release archive must not include ${entry}`);
+    }
+  }
+  for (const required of REQUIRED) {
+    if (!exact.has(required)) {
+      throw new Error(`release archive missing exact entry ${required}`);
+    }
+  }
+}
+
+const isMain =
+  Boolean(process.argv[1]) &&
+  resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+if (isMain) {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8");
+  const entries = parseGitArchiveEntries(workflow);
+  // Expand directory operands against the exact Git tree that git archive uses.
+  // The reviewed asset manifest is static; newly tracked descendants fail.
+  const leaves = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries], {cwd:root,encoding:'utf8'}).trim().split(/\r?\n/);
+  assertPluginOnlyArchive(leaves);
+  console.log("release.yml still packs plugin runtime files only");
+}

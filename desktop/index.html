@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Resume Pro Desktop</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="nav">
+        <p class="brand">Resume Pro</p>
+        <p class="brand-sub">Desktop · 申请管理</p>
+        <nav>
+          <button type="button" data-route="applications" class="active">申请</button>
+          <button type="button" data-route="inbox">证据收件箱</button>
+          <button type="button" data-route="todos">待办</button>
+          <button type="button" data-route="settings">设置</button>
+        </nav>
+        <p id="runtime-pill" class="pill">正在读取运行状态…</p>
+      </aside>
+      <main>
+        <div id="banner" class="banner hidden"></div>
+
+        <section id="view-applications" class="view">
+          <div class="apps-toolbar">
+            <h1>申请</h1>
+            <div class="row wrap">
+              <input id="app-search" type="search" placeholder="搜索公司、岗位或地点" aria-label="搜索申请" />
+              <select id="app-stage" aria-label="阶段过滤">
+                <option value="all">全部阶段</option>
+                <option value="saved">已保存</option>
+                <option value="filling">填写中</option>
+                <option value="submitted">已投递</option>
+                <option value="assessment">测评</option>
+                <option value="interview">面试</option>
+                <option value="offer">Offer</option>
+                <option value="rejected">未通过</option>
+                <option value="withdrawn">已撤回</option>
+                <option value="closed">已关闭</option>
+              </select>
+              <select id="app-recycle" aria-label="回收状态">
+                <option value="active">进行中</option>
+                <option value="recycled">回收站</option>
+                <option value="all">全部</option>
+              </select>
+              <select id="app-sort" aria-label="排序">
+                <option value="updatedAt">更新时间</option>
+                <option value="company">公司</option>
+                <option value="title">岗位</option>
+                <option value="stage">阶段</option>
+              </select>
+              <button type="button" id="btn-new-app">新增申请</button>
+            </div>
+          </div>
+          <p id="apps-msg" class="muted" role="status"></p>
+          <div id="apps-empty" class="empty hidden">
+            <p>还没有申请记录。</p>
+            <p class="muted">不会显示虚构统计。点击「新增申请」开始手动建档。</p>
+            <button type="button" id="btn-empty-new">新增申请</button>
+          </div>
+          <div id="apps-layout" class="apps-layout hidden">
+            <div class="apps-list-pane">
+              <table class="apps-table">
+                <thead>
+                  <tr>
+                    <th>公司</th>
+                    <th>岗位</th>
+                    <th>地点</th>
+                    <th>阶段</th>
+                    <th>更新</th>
+                  </tr>
+                </thead>
+                <tbody id="apps-tbody"></tbody>
+              </table>
+              <div class="row">
+                <button type="button" id="btn-prev-page">上一页</button>
+                <span id="apps-page" class="muted"></span>
+                <button type="button" id="btn-next-page">下一页</button>
+              </div>
+            </div>
+            <div id="app-detail" class="apps-detail-pane">
+              <p class="muted">选择一条申请查看详情与时间线。</p>
+            </div>
+          </div>
+          <dialog id="app-form-dialog">
+            <form id="app-form" class="stack" method="dialog">
+              <h2 id="app-form-title">新增申请</h2>
+              <label>公司
+                <input id="f-company" name="company" required maxlength="200" />
+              </label>
+              <label>岗位
+                <input id="f-title" name="title" required maxlength="200" />
+              </label>
+              <label>链接
+                <input id="f-url" name="sourceUrl" maxlength="2000" />
+              </label>
+              <label>地点
+                <input id="f-location" name="location" maxlength="200" />
+              </label>
+              <label>备注
+                <textarea id="f-notes" name="notes" rows="3" maxlength="4000"></textarea>
+              </label>
+              <p id="app-form-msg" class="muted"></p>
+              <div class="row">
+                <button type="submit" id="btn-save-app">保存</button>
+                <button type="button" id="btn-cancel-app">取消</button>
+              </div>
+            </form>
+          </dialog>
+          <dialog id="progress-dialog">
+            <form id="progress-form" class="stack">
+              <h2 id="progress-title">记录进度</h2>
+              <label>说明<input id="progress-description" maxlength="2000" /></label>
+              <label id="progress-round-label">面试轮次（可留空）<input id="progress-round" type="number" min="1" max="99" step="1" /></label>
+              <label>发生日期（留空表示未知，不用今天代替）<input id="progress-date" type="date" /></label>
+              <label><input id="progress-update" type="checkbox" /> 同时更新当前进度（默认只补录历史）</label>
+              <p id="progress-msg" class="muted"></p>
+              <div class="row"><button id="progress-save" type="submit">保存记录</button><button id="progress-cancel" type="button">取消</button></div>
+            </form>
+          </dialog>
+        </section>
+
+        <section id="view-inbox" class="view hidden">
+          <h1>证据收件箱</h1>
+          <div class="empty">
+            <p>证据收件箱尚未接入。</p>
+            <p class="muted">邮件导入与分类属于后续交付。当前没有可展示的证据，也没有「尚未导入」的计数。</p>
+          </div>
+        </section>
+
+        <section id="view-todos" class="view hidden">
+          <h1>待办</h1>
+          <div class="empty">
+            <p>没有待办。</p>
+            <p class="muted">提醒与系统通知尚未实现（D10）。关闭窗口不会登记通知，也不要把托盘驻留理解成提醒已可用。</p>
+          </div>
+        </section>
+
+        <section id="view-settings" class="view hidden">
+          <h1>设置</h1>
+          <dl class="facts" id="facts"></dl>
+
+          <h2>浏览器扩展 ID（配对草稿）</h2>
+          <p class="muted">
+            仅保存在本机设置文件，<strong>不会</strong>写入 Native Messaging 注册表或 macOS NativeMessagingHosts。配对与 host 属于 D06/D07/D13。
+          </p>
+          <form id="pairing-form" class="stack">
+            <label>Chrome 扩展 ID
+              <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
+            </label>
+            <label>Edge 扩展 ID
+              <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
+            </label>
+            <button type="submit">保存草稿</button>
+            <p id="pairing-msg" class="muted"></p>
+          </form>
+
+          <h2>窗口与退出</h2>
+          <p class="muted">点窗口关闭按钮会隐藏到托盘/菜单栏，进程仍是唯一写入者。只有「退出应用」才会结束宿主。</p>
+          <div class="row">
+            <button type="button" id="btn-hide">隐藏窗口</button>
+            <button type="button" id="btn-quit" class="danger">退出应用</button>
+            <button type="button" id="btn-diag">导出诊断</button>
+          </div>
+          <p id="diag-msg" class="muted"></p>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
