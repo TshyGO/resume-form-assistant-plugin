@@ -9,6 +9,7 @@
 
 pub const SCHEMA_VERSION: i64 = 1;
 
+#[derive(Clone, Copy)]
 pub struct Migration {
     pub to_version: i64,
     pub description: &'static str,
@@ -173,6 +174,7 @@ CREATE TABLE message_receipts (
   message_id TEXT NOT NULL,
   source_restore_epoch TEXT NOT NULL,
   payload_sha256 TEXT NOT NULL,
+  operation_sha256 TEXT NOT NULL,
   result_id TEXT,
   result_kind TEXT,
   operation_type TEXT NOT NULL,
@@ -200,7 +202,8 @@ CREATE TABLE snapshot_uploads (
   source_restore_epoch TEXT NOT NULL,
   created_at TEXT NOT NULL,
   full_acked INTEGER NOT NULL DEFAULT 0 CHECK (full_acked IN (0,1)),
-  PRIMARY KEY (client_instance_id, snapshot_id)
+  PRIMARY KEY (client_instance_id, snapshot_id),
+  UNIQUE (snapshot_id)
 );
 
 CREATE TABLE snapshot_chunks (

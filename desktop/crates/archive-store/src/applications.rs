@@ -5,7 +5,9 @@ use rusqlite::params;
 
 use crate::error::StoreError;
 use crate::model::*;
-use crate::normalize::{normalize_company, normalize_dedupe_url, normalize_title, sanitize_source_url};
+use crate::normalize::{
+    normalize_company, normalize_dedupe_url, normalize_title, sanitize_source_url,
+};
 use crate::timeutil::now_utc;
 use crate::tx::{new_uuid, StoreTx};
 
@@ -58,7 +60,7 @@ pub struct ApplicationCandidate {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PurgeReport {
     pub application_id: String,
     pub events_removed: usize,
@@ -72,7 +74,10 @@ pub struct PurgeReport {
 }
 
 impl StoreTx<'_> {
-    pub fn create_application(&mut self, input: NewApplication) -> Result<ApplicationDetail, StoreError> {
+    pub fn create_application(
+        &mut self,
+        input: NewApplication,
+    ) -> Result<ApplicationDetail, StoreError> {
         if input.company.trim().is_empty() {
             return Err(StoreError::Validation("company is required".into()));
         }
@@ -114,7 +119,7 @@ impl StoreTx<'_> {
             ApplicationOrigin::Manual => EventSource::Manual,
         };
         let draft = EventDraft {
-            occurred: input.occurred.clone(),
+            occurred: input.occurred_at.clone(),
             source,
             source_request_id: None,
             actor: Actor::System,
@@ -166,14 +171,22 @@ impl StoreTx<'_> {
         if let Some(c) = &input.company {
             let t = c.trim();
             if !t.is_empty() && t != current.company {
-                changes.push(FieldChange { field: "company".into(), from: Some(current.company.clone()), to: Some(t.to_string()) });
+                changes.push(FieldChange {
+                    field: "company".into(),
+                    from: Some(current.company.clone()),
+                    to: Some(t.to_string()),
+                });
                 company = t.to_string();
             }
         }
         if let Some(t) = &input.title {
             let tt = t.trim();
             if !tt.is_empty() && tt != current.title {
-                changes.push(FieldChange { field: "title".into(), from: Some(current.title.clone()), to: Some(tt.to_string()) });
+                changes.push(FieldChange {
+                    field: "title".into(),
+                    from: Some(current.title.clone()),
+                    to: Some(tt.to_string()),
+                });
                 title = tt.to_string();
             }
         }
@@ -185,28 +198,52 @@ impl StoreTx<'_> {
                 .map(sanitize_source_url)
                 .filter(|s| !s.is_empty());
             if nv != current.source_url {
-                changes.push(FieldChange { field: "source_url".into(), from: current.source_url.clone(), to: nv.clone() });
+                changes.push(FieldChange {
+                    field: "source_url".into(),
+                    from: current.source_url.clone(),
+                    to: nv.clone(),
+                });
                 source_url = nv;
             }
         }
         if let Some(loc) = &input.location {
-            let nv = loc.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+            let nv = loc
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             if nv != current.location {
-                changes.push(FieldChange { field: "location".into(), from: current.location.clone(), to: nv.clone() });
+                changes.push(FieldChange {
+                    field: "location".into(),
+                    from: current.location.clone(),
+                    to: nv.clone(),
+                });
                 location = nv;
             }
         }
         if let Some(n) = &input.notes {
-            let nv = n.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+            let nv = n
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             if nv != current.notes {
-                changes.push(FieldChange { field: "notes".into(), from: current.notes.clone(), to: nv.clone() });
+                changes.push(FieldChange {
+                    field: "notes".into(),
+                    from: current.notes.clone(),
+                    to: nv.clone(),
+                });
                 notes = nv;
             }
         }
         if let Some(arch) = input.archived {
             let nv = if arch { Some(now.clone()) } else { None };
             if nv != current.archived_at {
-                changes.push(FieldChange { field: "archived".into(), from: current.archived_at.clone(), to: nv.clone() });
+                changes.push(FieldChange {
+                    field: "archived".into(),
+                    from: current.archived_at.clone(),
+                    to: nv.clone(),
+                });
                 archived_at = nv;
             }
         }
@@ -219,17 +256,35 @@ impl StoreTx<'_> {
 
         let company_n = normalize_company(&company);
         let title_n = normalize_title(&title);
-        let dedupe_url = source_url.as_deref().map(normalize_dedupe_url).filter(|s| !s.is_empty());
+        let dedupe_url = source_url
+            .as_deref()
+            .map(normalize_dedupe_url)
+            .filter(|s| !s.is_empty());
 
         self.conn().execute(
             "UPDATE applications SET company = ?1, company_normalized = ?2, title = ?3, \
              title_normalized = ?4, source_url = ?5, location = ?6, notes = ?7, dedupe_url = ?8, \
              archived_at = ?9, updated_at = ?10 WHERE id = ?11",
-            params![company, company_n, title, title_n, source_url, location, notes, dedupe_url, archived_at, now, id],
+            params![
+                company,
+                company_n,
+                title,
+                title_n,
+                source_url,
+                location,
+                notes,
+                dedupe_url,
+                archived_at,
+                now,
+                id
+            ],
         )?;
 
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -264,7 +319,10 @@ impl StoreTx<'_> {
             _ => "application_restored",
         };
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -280,7 +338,10 @@ impl StoreTx<'_> {
     }
 
     /// 列表/过滤/分页:SQL 层完成,不依赖全量读入内存。
-    pub fn list_applications(&self, filter: &ApplicationFilter) -> Result<Page<ApplicationSummary>, StoreError> {
+    pub fn list_applications(
+        &self,
+        filter: &ApplicationFilter,
+    ) -> Result<Page<ApplicationSummary>, StoreError> {
         let mut where_clauses: Vec<String> = Vec::new();
         let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
@@ -328,10 +389,16 @@ impl StoreTx<'_> {
             let sql = format!("SELECT COUNT(*) FROM applications {where_sql}");
             let map = args.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
             self.conn()
-                .query_row(&sql, rusqlite::params_from_iter(map.iter().copied()), |r| r.get::<_, i64>(0))? as usize
+                .query_row(&sql, rusqlite::params_from_iter(map.iter().copied()), |r| {
+                    r.get::<_, i64>(0)
+                })? as usize
         };
 
-        let order = if filter.order_updated_desc { "updated_at DESC" } else { "updated_at ASC" };
+        let order = if filter.order_updated_desc {
+            "updated_at DESC"
+        } else {
+            "updated_at ASC"
+        };
         let limit = filter.limit.clamp(1, 1000);
         let sql = format!(
             "SELECT id, company, company_normalized, title, title_normalized, source_url, \
@@ -350,10 +417,17 @@ impl StoreTx<'_> {
     }
 
     /// 两层候选查询(§7)。输入是用户确认过的原始字段;规范化在这里完成。
-    pub fn query_candidates(&self, company: &str, title: &str, source_url: Option<&str>) -> Result<Candidates, StoreError> {
+    pub fn query_candidates(
+        &self,
+        company: &str,
+        title: &str,
+        source_url: Option<&str>,
+    ) -> Result<Candidates, StoreError> {
         let company_n = normalize_company(company);
         let title_n = normalize_title(title);
-        let dedupe = source_url.map(normalize_dedupe_url).filter(|s| !s.is_empty());
+        let dedupe = source_url
+            .map(normalize_dedupe_url)
+            .filter(|s| !s.is_empty());
 
         let map_candidate = |r: &rusqlite::Row<'_>| -> rusqlite::Result<ApplicationCandidate> {
             let stage_raw: String = r.get(3)?;
@@ -366,13 +440,16 @@ impl StoreTx<'_> {
                 updated_at: r.get(5)?,
             })
         };
-        let sql = "SELECT id, company, title, current_stage, source_url, updated_at FROM applications \
+        let sql =
+            "SELECT id, company, title, current_stage, source_url, updated_at FROM applications \
                    WHERE recycle_state != 'purged' AND ";
 
-        let mut exact = Vec::new();
+        let exact;
         {
             let sql_exact = if dedupe.is_some() {
-                format!("{sql} company_normalized = ?1 AND title_normalized = ?2 AND dedupe_url = ?3")
+                format!(
+                    "{sql} company_normalized = ?1 AND title_normalized = ?2 AND dedupe_url = ?3"
+                )
             } else {
                 format!("{sql} company_normalized = ?1 AND title_normalized = ?2 AND (dedupe_url IS NULL OR dedupe_url = '')")
             };
@@ -385,7 +462,7 @@ impl StoreTx<'_> {
             exact = rows.collect::<Result<Vec<_>, _>>()?;
         }
 
-        let mut same_company = Vec::new();
+        let mut same_company;
         {
             let sql_company = format!("{sql} company_normalized = ?1");
             let mut stmt = self.conn().prepare(&sql_company)?;
@@ -395,14 +472,17 @@ impl StoreTx<'_> {
         let exact_ids: Vec<String> = exact.iter().map(|c| c.id.clone()).collect();
         same_company.retain(|c| !exact_ids.contains(&c.id));
 
-        Ok(Candidates { exact, same_company })
+        Ok(Candidates {
+            exact,
+            same_company,
+        })
     }
 
     /// 永久删除(二次确认在 UI 层):删除申请及其时间线/待办/证据/快照行,
     /// 在同一事务保留最小幂等墓碑(消息身份 + 摘要 + purged 标记),
     /// 旧请求重试得到 previously_purged,不得复活数据(隐私 §5、§8.11)。
     pub fn purge_application(&mut self, id: &str) -> Result<PurgeReport, StoreError> {
-        let app = self
+        let _app = self
             .get_application(id)?
             .ok_or_else(|| StoreError::NotFound(format!("application {id}")))?;
         let mut report = PurgeReport {
@@ -411,7 +491,9 @@ impl StoreTx<'_> {
         };
 
         let event_ids: Vec<String> = {
-            let mut stmt = self.conn().prepare("SELECT id FROM events WHERE application_id = ?1")?;
+            let mut stmt = self
+                .conn()
+                .prepare("SELECT id FROM events WHERE application_id = ?1")?;
             let rows = stmt.query_map(params![id], |r| r.get(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -432,7 +514,7 @@ impl StoreTx<'_> {
         let snapshot_ids: Vec<String> = {
             let mut stmt = self
                 .conn()
-                .prepare("SELECT snapshot_id FROM resume_snapshots WHERE application_id = ?1")?;
+                .prepare("SELECT snapshot_id FROM resume_snapshots WHERE application_id = ?1 UNION SELECT snapshot_id FROM snapshot_uploads WHERE application_id = ?1")?;
             let rows = stmt.query_map(params![id], |r| r.get(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -440,7 +522,12 @@ impl StoreTx<'_> {
         // 1. 墓碑:覆盖申请 id、事件 id、快照 id,以及这些快照的 chunk 回执。
         {
             let mut tombstoned = 0usize;
-            for key in event_ids.iter().chain(snapshot_ids.iter()).chain(std::iter::once(id)) {
+            for key in event_ids
+                .iter()
+                .chain(snapshot_ids.iter())
+                .map(String::as_str)
+                .chain(std::iter::once(id))
+            {
                 tombstoned += self.conn().execute(
                     "UPDATE message_receipts SET purged = 1 WHERE result_id = ?1 AND purged = 0",
                     params![key],
@@ -457,7 +544,10 @@ impl StoreTx<'_> {
 
         // 2. AI 建议(挂在证据上)。
         for ev in &evidence_ids {
-            self.conn().execute("DELETE FROM ai_suggestions WHERE evidence_id = ?1", params![ev])?;
+            self.conn().execute(
+                "DELETE FROM ai_suggestions WHERE evidence_id = ?1",
+                params![ev],
+            )?;
         }
         report.evidence_removed = evidence_ids.len();
         // 3. 证据与 blob 引用计数。
@@ -468,17 +558,24 @@ impl StoreTx<'_> {
             )?;
         }
         for ev in &evidence_ids {
-            self.conn().execute("DELETE FROM reply_evidence WHERE id = ?1", params![ev])?;
+            self.conn()
+                .execute("DELETE FROM reply_evidence WHERE id = ?1", params![ev])?;
         }
-        // 4. ref_count=0 的 blob 行删除(文件由 D09/D12 处理)。
-        for blob in &evidence_blobs {
+        // 4. Each shared blob is checked once after all reference decrements.
+        for blob in evidence_blobs
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+        {
             let released: bool = self.conn().query_row(
                 "SELECT ref_count = 0 FROM attachment_blobs WHERE sha256 = ?1",
                 params![blob],
                 |r| r.get(0),
             )?;
             if released {
-                self.conn().execute("DELETE FROM attachment_blobs WHERE sha256 = ?1", params![blob])?;
+                self.conn().execute(
+                    "DELETE FROM attachment_blobs WHERE sha256 = ?1",
+                    params![blob],
+                )?;
                 if !report.blobs_released.contains(blob) {
                     report.blobs_released.push(blob.clone());
                 }
@@ -486,8 +583,14 @@ impl StoreTx<'_> {
         }
         // 5. 快照与分片账本(回执墓碑已保留)。
         for sid in &snapshot_ids {
-            self.conn().execute("DELETE FROM snapshot_chunks WHERE snapshot_id = ?1", params![sid])?;
-            self.conn().execute("DELETE FROM snapshot_uploads WHERE snapshot_id = ?1", params![sid])?;
+            self.conn().execute(
+                "DELETE FROM snapshot_chunks WHERE snapshot_id = ?1",
+                params![sid],
+            )?;
+            self.conn().execute(
+                "DELETE FROM snapshot_uploads WHERE snapshot_id = ?1",
+                params![sid],
+            )?;
         }
         report.snapshots_removed = snapshot_ids.len();
         self.conn().execute(
@@ -495,19 +598,22 @@ impl StoreTx<'_> {
             params![id],
         )?;
         // 6. 待办。
-        report.todos_removed = self.conn().execute("DELETE FROM todos WHERE application_id = ?1", params![id])?;
+        report.todos_removed = self
+            .conn()
+            .execute("DELETE FROM todos WHERE application_id = ?1", params![id])?;
         // 7. 事件与申请行。
-        report.events_removed = self.conn().execute("DELETE FROM events WHERE application_id = ?1", params![id])?;
-        self.conn().execute("DELETE FROM applications WHERE id = ?1", params![id])?;
+        report.events_removed = self
+            .conn()
+            .execute("DELETE FROM events WHERE application_id = ?1", params![id])?;
+        self.conn()
+            .execute("DELETE FROM applications WHERE id = ?1", params![id])?;
 
         Ok(report)
     }
 }
 
 #[allow(clippy::type_complexity)]
-pub(crate) fn map_application_row(
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<ApplicationDetail> {
+pub(crate) fn map_application_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApplicationDetail> {
     let stage_raw: String = r.get(9)?;
     let reply_raw: String = r.get(11)?;
     let recycle_raw: String = r.get(15)?;

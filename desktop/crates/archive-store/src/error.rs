@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error("internal error: {0}")]
+    Internal(String),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
@@ -91,18 +93,20 @@ pub mod anyhow_no_source {
 /// epoch 不匹配的具体诊断信息(哪个字段、期望值类别)。不含敏感正文。
 #[derive(Debug, Clone)]
 pub enum EpochMismatch {
-    EnvelopeArchiveId {
-        expected: String,
-    },
-    EnvelopeRestoreEpoch {
-        expected: String,
-    },
-    SourceRestoreEpoch {
-        expected: String,
-    },
+    EnvelopeArchiveId { expected: String },
+    EnvelopeRestoreEpoch { expected: String },
+    SourceRestoreEpoch { expected: String },
 }
 
+impl std::fmt::Display for EpochMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for EpochMismatch {}
+
 impl StoreError {
+    // Internal errors must not be retried as new writes by adapters.
     /// 供 D05/D06 适配层映射协议错误码。
     pub fn code(&self) -> &'static str {
         match self {
@@ -117,12 +121,16 @@ impl StoreError {
             StoreError::PointerMismatch { .. } => "pointer_mismatch",
             StoreError::PathInvalid(_) => "path_invalid",
             StoreError::NotWritable(_) => "dir_not_writable",
-            StoreError::Sqlite(_) | StoreError::Io(_) | StoreError::Json(_) => "internal_error",
+            StoreError::Sqlite(_)
+            | StoreError::Io(_)
+            | StoreError::Json(_)
+            | StoreError::Internal(_) => "internal_error",
         }
     }
 
     /// `restore_epoch_mismatch` 作为写入不是可重试成功;幂等重放冲突不可自动重试。
     pub fn retryable(&self) -> bool {
-        matches!(self, StoreError::IdentityMissing)
+        matches!(self, StoreError::Sqlite(rusqlite::Error::SqliteFailure(code, _))
+            if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
     }
 }

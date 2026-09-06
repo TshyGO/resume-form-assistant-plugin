@@ -17,12 +17,36 @@ pub struct TodoPatch {
     pub interview_round: Option<Option<i64>>,
 }
 
+fn normalize_reminder(value: Option<&str>) -> Result<Option<String>, StoreError> {
+    value
+        .map(|s| crate::timeutil::parse_rfc3339(s).map(crate::timeutil::format_timestamp))
+        .transpose()
+}
+fn validate_round(value: Option<i64>) -> Result<(), StoreError> {
+    if value.is_some_and(|n| n < 1) {
+        return Err(StoreError::Validation(
+            "interview round must be positive".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl StoreTx<'_> {
     pub fn create_todo(&mut self, input: NewTodo) -> Result<Todo, StoreError> {
         if input.title.trim().is_empty() {
             return Err(StoreError::Validation("todo title is required".into()));
         }
         self.ensure_application(&input.application_id)?;
+        if let Some(id) = &input.source_event_id {
+            if self.get_event(id)?.application_id.as_deref() != Some(input.application_id.as_str())
+            {
+                return Err(StoreError::Validation(
+                    "todo source event belongs to another application".into(),
+                ));
+            }
+        }
+        let remind_at = normalize_reminder(input.remind_at_utc.as_deref())?;
+        validate_round(input.interview_round)?;
         let (precision, due_at, due_date) = todo_due_columns(&input.due)?;
         let now = now_utc();
         let id = new_uuid();
@@ -38,14 +62,17 @@ impl StoreTx<'_> {
                 due_at,
                 due_date,
                 input.time_zone,
-                input.remind_at_utc,
+                remind_at,
                 input.interview_round,
                 input.source_event_id,
                 now,
             ],
         )?;
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -79,13 +106,19 @@ impl StoreTx<'_> {
             Some(due) => todo_due_columns(due)?,
             None => todo_due_columns(&current.due)?,
         };
-        let title = patch.title.as_ref().map(|t| t.trim().to_string()).unwrap_or(current.title.clone());
+        let title = patch
+            .title
+            .as_ref()
+            .map(|t| t.trim().to_string())
+            .unwrap_or(current.title.clone());
         if title.is_empty() {
             return Err(StoreError::Validation("todo title is required".into()));
         }
-        let tz = patch.time_zone.flatten().unwrap_or(current.time_zone.clone());
-        let remind = patch.remind_at_utc.flatten().unwrap_or(current.remind_at_utc.clone());
-        let round = patch.interview_round.flatten().unwrap_or(current.interview_round);
+        let tz = patch.time_zone.unwrap_or(current.time_zone.clone());
+        let remind = patch.remind_at_utc.unwrap_or(current.remind_at_utc.clone());
+        let round = patch.interview_round.unwrap_or(current.interview_round);
+        let remind = normalize_reminder(remind.as_deref())?;
+        validate_round(round)?;
         let now = now_utc();
         self.conn().execute(
             "UPDATE todos SET title = ?1, due_precision = ?2, due_at_utc = ?3, due_date = ?4, \
@@ -104,7 +137,12 @@ impl StoreTx<'_> {
         self.set_todo_status(id, TodoStatus::Cancelled, "todo_cancelled")
     }
 
-    fn set_todo_status(&mut self, id: &str, status: TodoStatus, event_type: &str) -> Result<Todo, StoreError> {
+    fn set_todo_status(
+        &mut self,
+        id: &str,
+        status: TodoStatus,
+        event_type: &str,
+    ) -> Result<Todo, StoreError> {
         let todo = self
             .get_todo(id)?
             .ok_or_else(|| StoreError::NotFound(format!("todo {id}")))?;
@@ -117,11 +155,18 @@ impl StoreTx<'_> {
             params![status.as_str(), now, id],
         )?;
         let payload = match status {
-            TodoStatus::Done => EventPayload::TodoCompleted { todo_id: id.to_string() },
-            _ => EventPayload::TodoCancelled { todo_id: id.to_string() },
+            TodoStatus::Done => EventPayload::TodoCompleted {
+                todo_id: id.to_string(),
+            },
+            _ => EventPayload::TodoCancelled {
+                todo_id: id.to_string(),
+            },
         };
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -172,17 +217,27 @@ impl StoreTx<'_> {
         );
         let map = args.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
         let mut stmt = self.conn().prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(map.iter().copied()), map_todo_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(map.iter().copied()),
+            map_todo_row,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 }
 
 /// TodoDue → (precision, due_at_utc, due_date)。
-fn todo_due_columns(due: &TodoDue) -> Result<(&'static str, Option<String>, Option<String>), StoreError> {
+fn todo_due_columns(
+    due: &TodoDue,
+) -> Result<(&'static str, Option<String>, Option<String>), StoreError> {
     match due {
         TodoDue::DateTime(rfc3339) => {
             let utc = crate::timeutil::parse_rfc3339(rfc3339)?;
-            Ok(("datetime", Some(crate::timeutil::format_timestamp(utc)), None))
+            Ok((
+                "datetime",
+                Some(crate::timeutil::format_timestamp(utc)),
+                None,
+            ))
         }
         TodoDue::Date(date) => {
             time::Date::parse(date, crate::timeutil::date_format())

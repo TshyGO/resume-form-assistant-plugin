@@ -487,17 +487,39 @@ impl EventPayload {
     /// 阶段相关事件的 stageUpdateMode(§6.2);无关事件为 None。
     pub fn stage_update_mode(&self) -> Option<StageUpdateMode> {
         match self {
-            EventPayload::JobSaved { stage_update_mode, .. }
-            | EventPayload::FillEvent { stage_update_mode, .. }
-            | EventPayload::SubmitConfirmed { stage_update_mode, .. }
-            | EventPayload::AssessmentRecorded { stage_update_mode, .. }
-            | EventPayload::InterviewRecorded { stage_update_mode, .. }
-            | EventPayload::InterviewRescheduled { stage_update_mode, .. }
-            | EventPayload::OfferRecorded { stage_update_mode, .. }
-            | EventPayload::Rejected { stage_update_mode, .. }
-            | EventPayload::Withdrawn { stage_update_mode, .. }
-            | EventPayload::Closed { stage_update_mode, .. }
-            | EventPayload::Custom { stage_update_mode, .. } => Some(*stage_update_mode),
+            EventPayload::JobSaved {
+                stage_update_mode, ..
+            }
+            | EventPayload::FillEvent {
+                stage_update_mode, ..
+            }
+            | EventPayload::SubmitConfirmed {
+                stage_update_mode, ..
+            }
+            | EventPayload::AssessmentRecorded {
+                stage_update_mode, ..
+            }
+            | EventPayload::InterviewRecorded {
+                stage_update_mode, ..
+            }
+            | EventPayload::InterviewRescheduled {
+                stage_update_mode, ..
+            }
+            | EventPayload::OfferRecorded {
+                stage_update_mode, ..
+            }
+            | EventPayload::Rejected {
+                stage_update_mode, ..
+            }
+            | EventPayload::Withdrawn {
+                stage_update_mode, ..
+            }
+            | EventPayload::Closed {
+                stage_update_mode, ..
+            }
+            | EventPayload::Custom {
+                stage_update_mode, ..
+            } => Some(*stage_update_mode),
             _ => None,
         }
     }
@@ -578,6 +600,13 @@ pub struct ApplicationDetail {
     pub last_event_sequence: i64,
 }
 
+impl std::ops::Deref for ApplicationDetail {
+    type Target = ApplicationSummary;
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
+}
+
 /// 持久化后的事件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredEvent {
@@ -607,8 +636,19 @@ pub struct EventDraft {
 }
 
 impl EventDraft {
-    pub fn new(payload: EventPayload, occurred: Occurred, source: EventSource, actor: Actor) -> Self {
-        Self { occurred, source, source_request_id: None, actor, payload }
+    pub fn new(
+        payload: EventPayload,
+        occurred: Occurred,
+        source: EventSource,
+        actor: Actor,
+    ) -> Self {
+        Self {
+            occurred,
+            source,
+            source_request_id: None,
+            actor,
+            payload,
+        }
     }
 }
 

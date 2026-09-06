@@ -19,6 +19,7 @@ pub struct AttachmentRefReport {
     pub zero_ref_blobs: Vec<String>,
     /// 证据指向缺失 blob 行的悬空引用(正常应为空;FK 防线之外的对账检查)。
     pub dangling_evidence: Vec<String>,
+    pub invalid_files: Vec<String>,
 }
 
 impl StoreTx<'_> {
@@ -26,8 +27,12 @@ impl StoreTx<'_> {
     /// 事件使用档案级 `inbox_event_sequence`。
     pub fn import_evidence(&mut self, input: NewEvidence) -> Result<ReplyEvidence, StoreError> {
         validate_rel_path(&input.blob.stored_rel_path)?;
-        if input.blob.sha256.len() != 64 || !input.blob.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(StoreError::Validation("blob sha256 must be 64 hex chars".into()));
+        if input.blob.sha256.len() != 64
+            || !input.blob.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(StoreError::Validation(
+                "blob sha256 must be 64 hex chars".into(),
+            ));
         }
         if input.blob.size_bytes < 0 {
             return Err(StoreError::Validation("blob size must be >= 0".into()));
@@ -43,9 +48,24 @@ impl StoreTx<'_> {
         self.conn().execute(
             "INSERT INTO attachment_blobs (sha256, size_bytes, stored_rel_path, ref_count, mime) \
              VALUES (?1, ?2, ?3, 0, ?4) \
-             ON CONFLICT(sha256) DO UPDATE SET size_bytes = excluded.size_bytes",
-            params![input.blob.sha256, input.blob.size_bytes, input.blob.stored_rel_path, input.blob.mime],
+             ON CONFLICT(sha256) DO NOTHING",
+            params![
+                input.blob.sha256,
+                input.blob.size_bytes,
+                input.blob.stored_rel_path,
+                input.blob.mime
+            ],
         )?;
+        let recorded: (i64, String) = self.conn().query_row(
+            "SELECT size_bytes, stored_rel_path FROM attachment_blobs WHERE sha256=?1",
+            [&input.blob.sha256],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if recorded != (input.blob.size_bytes, input.blob.stored_rel_path.clone()) {
+            return Err(StoreError::Conflict(
+                "blob metadata differs from existing immutable blob".into(),
+            ));
+        }
         let (sent_at, sent_precision, sent_tz) = input
             .sent_at
             .as_ref()
@@ -81,14 +101,22 @@ impl StoreTx<'_> {
             match input.application_id.as_deref() {
                 Some(app) => {
                     let imported = EventDraft {
-                        occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+                        occurred: Occurred::DateTime {
+                            rfc3339: now.clone(),
+                            time_zone: None,
+                        },
                         source: EventSource::Import,
                         source_request_id: None,
                         actor: Actor::User,
-                        payload: EventPayload::EvidenceImported { evidence_id: id.clone() },
+                        payload: EventPayload::EvidenceImported {
+                            evidence_id: id.clone(),
+                        },
                     };
                     let associated = EventDraft {
-                        occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+                        occurred: Occurred::DateTime {
+                            rfc3339: now.clone(),
+                            time_zone: None,
+                        },
                         source: EventSource::Import,
                         source_request_id: None,
                         actor: Actor::User,
@@ -101,11 +129,16 @@ impl StoreTx<'_> {
                 }
                 None => {
                     let imported = EventDraft {
-                        occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+                        occurred: Occurred::DateTime {
+                            rfc3339: now.clone(),
+                            time_zone: None,
+                        },
                         source: EventSource::Import,
                         source_request_id: None,
                         actor: Actor::User,
-                        payload: EventPayload::EvidenceImported { evidence_id: id.clone() },
+                        payload: EventPayload::EvidenceImported {
+                            evidence_id: id.clone(),
+                        },
                     };
                     // 收件箱事件:档案级序号,不参与阶段折叠。
                     self.append_events(None, &[imported], &now)?;
@@ -138,7 +171,10 @@ impl StoreTx<'_> {
         )?;
 
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -180,7 +216,10 @@ impl StoreTx<'_> {
             params![reply_class.as_str(), send_mode.as_str(), evidence_id],
         )?;
         let draft = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::Manual,
             source_request_id: None,
             actor: Actor::User,
@@ -216,7 +255,10 @@ impl StoreTx<'_> {
     }
 
     /// `application_id = None` 表示收件箱(未关联)证据。
-    pub fn list_evidence(&self, application_id: Option<&str>) -> Result<Vec<ReplyEvidence>, StoreError> {
+    pub fn list_evidence(
+        &self,
+        application_id: Option<&str>,
+    ) -> Result<Vec<ReplyEvidence>, StoreError> {
         let sql = "SELECT e.id, e.application_id, e.kind, e.reply_class, e.send_mode, \
                    b.sha256, b.size_bytes, b.stored_rel_path, b.ref_count, b.mime, \
                    e.original_filename, e.imported_at, e.subject, e.from_addr, e.sent_at, \
@@ -225,17 +267,22 @@ impl StoreTx<'_> {
                    WHERE e.application_id IS ?1 ORDER BY e.imported_at ASC";
         let mut stmt = self.conn().prepare(sql)?;
         let rows = stmt.query_map(params![application_id], map_evidence_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// 维护检查(不自动删除):零引用 blob 与悬空证据引用。
     pub fn check_attachment_refs(&self) -> Result<AttachmentRefReport, StoreError> {
-        let total_blobs: usize = self
-            .conn()
-            .query_row("SELECT COUNT(*) FROM attachment_blobs", [], |r| r.get::<_, i64>(0))? as usize;
-        let total_evidence: usize = self
-            .conn()
-            .query_row("SELECT COUNT(*) FROM reply_evidence", [], |r| r.get::<_, i64>(0))? as usize;
+        let total_blobs: usize =
+            self.conn()
+                .query_row("SELECT COUNT(*) FROM attachment_blobs", [], |r| {
+                    r.get::<_, i64>(0)
+                })? as usize;
+        let total_evidence: usize =
+            self.conn()
+                .query_row("SELECT COUNT(*) FROM reply_evidence", [], |r| {
+                    r.get::<_, i64>(0)
+                })? as usize;
         let mut zero_ref_blobs = Vec::new();
         {
             let mut stmt = self
@@ -257,11 +304,26 @@ impl StoreTx<'_> {
                 dangling_evidence.push(row?);
             }
         }
+        let mut invalid_files = Vec::new();
+        let mut stmt = self.conn().prepare("SELECT stored_rel_path, size_bytes, sha256 FROM attachment_blobs UNION ALL SELECT stored_rel_path, byte_size, sha256 FROM resume_snapshots")?;
+        for row in stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })? {
+            let (rel, size, sha) = row?;
+            if crate::tx::verify_file(&self.archive_dir, &rel, size, &sha).is_err() {
+                invalid_files.push(rel);
+            }
+        }
         Ok(AttachmentRefReport {
             total_blobs,
             total_evidence,
             zero_ref_blobs,
             dangling_evidence,
+            invalid_files,
         })
     }
 }
@@ -273,7 +335,8 @@ pub(crate) fn map_evidence_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReplyE
     let sent_at: Option<String> = r.get(14)?;
     let sent_precision: String = r.get(15)?;
     let sent_tz: Option<String> = r.get(16)?;
-    let sent_occurred = Occurred::from_columns(sent_at.as_deref(), &sent_precision, sent_tz.as_deref()).ok();
+    let sent_occurred =
+        Occurred::from_columns(sent_at.as_deref(), &sent_precision, sent_tz.as_deref()).ok();
     Ok(ReplyEvidence {
         id: r.get(0)?,
         application_id: r.get(1)?,

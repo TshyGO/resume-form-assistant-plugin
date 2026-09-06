@@ -49,10 +49,6 @@ impl Stage {
     pub fn parse(s: &str) -> Option<Stage> {
         ALL_STAGES.iter().copied().find(|st| st.as_str() == s)
     }
-
-    fn is_terminated(&self) -> bool {
-        matches!(self, Stage::Offer | Stage::Rejected | Stage::Withdrawn | Stage::Closed)
-    }
 }
 
 impl std::fmt::Display for Stage {
@@ -86,7 +82,12 @@ const SUBMIT_FROM: &[Stage] = &[Stage::Saved, Stage::Filling];
 /// fill_completed / fill_partial 的 advance 集合:仅 saved → filling。
 const FILL_ADVANCE_FROM: &[Stage] = &[Stage::Saved];
 /// assessment_recorded 显式推进集合。
-const ASSESS_FROM: &[Stage] = &[Stage::Saved, Stage::Filling, Stage::Submitted, Stage::Assessment];
+const ASSESS_FROM: &[Stage] = &[
+    Stage::Saved,
+    Stage::Filling,
+    Stage::Submitted,
+    Stage::Assessment,
+];
 /// interview_recorded 显式推进集合。
 const INTERVIEW_FROM: &[Stage] = &[
     Stage::Saved,
@@ -96,19 +97,38 @@ const INTERVIEW_FROM: &[Stage] = &[
     Stage::Interview,
 ];
 /// interview_rescheduled 集合(从拒绝等恢复须 stage_corrected)。
-const RESCHEDULE_FROM: &[Stage] = &[Stage::Saved, Stage::Filling, Stage::Submitted, Stage::Assessment];
+const RESCHEDULE_FROM: &[Stage] = &[
+    Stage::Saved,
+    Stage::Filling,
+    Stage::Submitted,
+    Stage::Assessment,
+];
 
 /// 单个事件的折叠效应(§6.2 表)。`mode` 只对"阶段相关事件"有意义;
 /// `history_only` 时所有阶段效应均为 no-op。
 ///
 /// 注意:`stage_corrected` 是显式纠正,**不受** `history_only` 影响——
 /// 它本身就是用户明确的阶段操作,作为 set-absolute 应用。
-pub fn fold_stage(current: Stage, event_type: &str, mode: StageUpdateMode, payload_to: Option<Stage>) -> Fold {
+pub fn fold_stage(
+    current: Stage,
+    event_type: &str,
+    mode: StageUpdateMode,
+    payload_to: Option<Stage>,
+) -> Fold {
     match event_type {
         "application_created" => Fold::To(Stage::Saved),
-        "application_updated" | "fill_started" | "fill_failed" | "fill_cancelled"
-        | "evidence_imported" | "evidence_associated" | "association_changed" | "evidence_classified"
-        | "note_added" | "todo_created" | "todo_completed" | "todo_cancelled" => Fold::NoOp,
+        "application_updated"
+        | "fill_started"
+        | "fill_failed"
+        | "fill_cancelled"
+        | "evidence_imported"
+        | "evidence_associated"
+        | "association_changed"
+        | "evidence_classified"
+        | "note_added"
+        | "todo_created"
+        | "todo_completed"
+        | "todo_cancelled" => Fold::NoOp,
         "job_saved" => {
             if matches!(current, Stage::Saved) || current_is_initially_empty(current) {
                 Fold::To(Stage::Saved)
@@ -212,60 +232,204 @@ mod tests {
 
     #[test]
     fn fill_never_reaches_submitted() {
-        assert_eq!(fold(Stage::Saved, "fill_completed", StageUpdateMode::UpdateProgress), Fold::To(Stage::Filling));
-        assert_eq!(fold(Stage::Filling, "fill_completed", StageUpdateMode::UpdateProgress), Fold::NoOp);
-        assert_eq!(fold(Stage::Saved, "fill_partial", StageUpdateMode::UpdateProgress), Fold::To(Stage::Filling));
-        assert_eq!(fold(Stage::Saved, "fill_failed", StageUpdateMode::UpdateProgress), Fold::NoOp);
+        assert_eq!(
+            fold(
+                Stage::Saved,
+                "fill_completed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Filling)
+        );
+        assert_eq!(
+            fold(
+                Stage::Filling,
+                "fill_completed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
+        assert_eq!(
+            fold(
+                Stage::Saved,
+                "fill_partial",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Filling)
+        );
+        assert_eq!(
+            fold(Stage::Saved, "fill_failed", StageUpdateMode::UpdateProgress),
+            Fold::NoOp
+        );
         // 绝不 → submitted
-        assert_ne!(fold(Stage::Saved, "fill_completed", StageUpdateMode::UpdateProgress), Fold::To(Stage::Submitted));
+        assert_ne!(
+            fold(
+                Stage::Saved,
+                "fill_completed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Submitted)
+        );
     }
 
     #[test]
     fn submit_only_from_saved_or_filling() {
-        assert_eq!(fold(Stage::Saved, "submit_confirmed", StageUpdateMode::UpdateProgress), Fold::To(Stage::Submitted));
-        assert_eq!(fold(Stage::Filling, "submit_confirmed", StageUpdateMode::UpdateProgress), Fold::To(Stage::Submitted));
-        assert_eq!(fold(Stage::Interview, "submit_confirmed", StageUpdateMode::UpdateProgress), Fold::NoOp);
-        assert_eq!(fold(Stage::Rejected, "submit_confirmed", StageUpdateMode::UpdateProgress), Fold::NoOp);
+        assert_eq!(
+            fold(
+                Stage::Saved,
+                "submit_confirmed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Submitted)
+        );
+        assert_eq!(
+            fold(
+                Stage::Filling,
+                "submit_confirmed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Submitted)
+        );
+        assert_eq!(
+            fold(
+                Stage::Interview,
+                "submit_confirmed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
+        assert_eq!(
+            fold(
+                Stage::Rejected,
+                "submit_confirmed",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
     }
 
     #[test]
     fn history_only_is_noop() {
-        for ev in ["fill_completed", "submit_confirmed", "assessment_recorded", "interview_recorded", "offer_recorded", "rejected"] {
-            assert_eq!(fold(Stage::Saved, ev, StageUpdateMode::HistoryOnly), Fold::NoOp, "{ev}");
-            assert_eq!(fold(Stage::Submitted, ev, StageUpdateMode::HistoryOnly), Fold::NoOp, "{ev}");
+        for ev in [
+            "fill_completed",
+            "submit_confirmed",
+            "assessment_recorded",
+            "interview_recorded",
+            "offer_recorded",
+            "rejected",
+        ] {
+            assert_eq!(
+                fold(Stage::Saved, ev, StageUpdateMode::HistoryOnly),
+                Fold::NoOp,
+                "{ev}"
+            );
+            assert_eq!(
+                fold(Stage::Submitted, ev, StageUpdateMode::HistoryOnly),
+                Fold::NoOp,
+                "{ev}"
+            );
         }
     }
 
     #[test]
     fn offer_later_backfill_assessment_no_regress() {
         // Offer 后补录旧测评:显式推进也不得从 offer 回到 assessment。
-        assert_eq!(fold(Stage::Offer, "assessment_recorded", StageUpdateMode::UpdateProgress), Fold::NoOp);
-        assert_eq!(fold(Stage::Offer, "interview_recorded", StageUpdateMode::UpdateProgress), Fold::NoOp);
+        assert_eq!(
+            fold(
+                Stage::Offer,
+                "assessment_recorded",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
+        assert_eq!(
+            fold(
+                Stage::Offer,
+                "interview_recorded",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
         // 从终止阶段恢复须 stage_corrected。
         assert_eq!(
-            fold_stage(Stage::Rejected, "stage_corrected", StageUpdateMode::HistoryOnly, Some(Stage::Interview)),
+            fold_stage(
+                Stage::Rejected,
+                "stage_corrected",
+                StageUpdateMode::HistoryOnly,
+                Some(Stage::Interview)
+            ),
             Fold::To(Stage::Interview)
         );
     }
 
     #[test]
     fn reschedule_rules() {
-        assert_eq!(fold(Stage::Assessment, "interview_rescheduled", StageUpdateMode::UpdateProgress), Fold::To(Stage::Interview));
-        assert_eq!(fold(Stage::Rejected, "interview_rescheduled", StageUpdateMode::UpdateProgress), Fold::NoOp);
-        assert_eq!(fold(Stage::Interview, "interview_rescheduled", StageUpdateMode::UpdateProgress), Fold::NoOp);
+        assert_eq!(
+            fold(
+                Stage::Assessment,
+                "interview_rescheduled",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Interview)
+        );
+        assert_eq!(
+            fold(
+                Stage::Rejected,
+                "interview_rescheduled",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
+        assert_eq!(
+            fold(
+                Stage::Interview,
+                "interview_rescheduled",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
     }
 
     #[test]
     fn job_saved_never_regress() {
-        assert_eq!(fold(Stage::Saved, "job_saved", StageUpdateMode::UpdateProgress), Fold::To(Stage::Saved));
-        assert_eq!(fold(Stage::Submitted, "job_saved", StageUpdateMode::UpdateProgress), Fold::NoOp);
+        assert_eq!(
+            fold(Stage::Saved, "job_saved", StageUpdateMode::UpdateProgress),
+            Fold::To(Stage::Saved)
+        );
+        assert_eq!(
+            fold(
+                Stage::Submitted,
+                "job_saved",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::NoOp
+        );
     }
 
     #[test]
     fn set_absolute_types() {
-        assert_eq!(fold(Stage::Saved, "offer_recorded", StageUpdateMode::UpdateProgress), Fold::To(Stage::Offer));
-        assert_eq!(fold(Stage::Offer, "rejected", StageUpdateMode::UpdateProgress), Fold::To(Stage::Rejected));
-        assert_eq!(fold(Stage::Rejected, "withdrawn", StageUpdateMode::UpdateProgress), Fold::To(Stage::Withdrawn));
-        assert_eq!(fold(Stage::Interview, "closed", StageUpdateMode::UpdateProgress), Fold::To(Stage::Closed));
+        assert_eq!(
+            fold(
+                Stage::Saved,
+                "offer_recorded",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Offer)
+        );
+        assert_eq!(
+            fold(Stage::Offer, "rejected", StageUpdateMode::UpdateProgress),
+            Fold::To(Stage::Rejected)
+        );
+        assert_eq!(
+            fold(
+                Stage::Rejected,
+                "withdrawn",
+                StageUpdateMode::UpdateProgress
+            ),
+            Fold::To(Stage::Withdrawn)
+        );
+        assert_eq!(
+            fold(Stage::Interview, "closed", StageUpdateMode::UpdateProgress),
+            Fold::To(Stage::Closed)
+        );
     }
 }

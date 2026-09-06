@@ -38,9 +38,20 @@ pub struct ConfirmOutcome {
 }
 
 impl StoreTx<'_> {
-    pub fn create_suggestion(&mut self, input: NewAiSuggestion) -> Result<AiSuggestion, StoreError> {
+    pub fn create_suggestion(
+        &mut self,
+        input: NewAiSuggestion,
+    ) -> Result<AiSuggestion, StoreError> {
+        for extra in [&input.excerpt_refs, &input.uncertainties] {
+            if let Some(value) = extra {
+                crate::tx::reject_secret_keys(value)?;
+            }
+        }
         if self.get_evidence(&input.evidence_id)?.is_none() {
-            return Err(StoreError::NotFound(format!("evidence {}", input.evidence_id)));
+            return Err(StoreError::NotFound(format!(
+                "evidence {}",
+                input.evidence_id
+            )));
         }
         let now = now_utc();
         let id = new_uuid();
@@ -58,8 +69,14 @@ impl StoreTx<'_> {
                 input.suggested_reply_class.as_str(),
                 input.suggested_send_mode.as_str(),
                 serde_json::to_string(&input.suggested_todos)?,
-                input.excerpt_refs.as_ref().map(serde_json::Value::to_string),
-                input.uncertainties.as_ref().map(serde_json::Value::to_string),
+                input
+                    .excerpt_refs
+                    .as_ref()
+                    .map(serde_json::Value::to_string),
+                input
+                    .uncertainties
+                    .as_ref()
+                    .map(serde_json::Value::to_string),
                 input.model_label,
                 input.prompt_scope,
                 now,
@@ -110,8 +127,12 @@ impl StoreTx<'_> {
         );
         let map = args.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
         let mut stmt = self.conn().prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(map.iter().copied()), map_suggestion_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(map.iter().copied()),
+            map_suggestion_row,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// 确认事务:分类 + (可选)阶段事件 + (可选)待办,同一事务;重复确认幂等。
@@ -132,6 +153,13 @@ impl StoreTx<'_> {
             suggestion.status,
             SuggestionStatus::Confirmed | SuggestionStatus::ModifiedConfirmed
         ) {
+            if suggestion.approved_reply_class != Some(input.approved_reply_class)
+                || suggestion.approved_send_mode != Some(input.approved_send_mode)
+            {
+                return Err(StoreError::Conflict(
+                    "confirmation differs from the recorded decision".into(),
+                ));
+            }
             return Ok(ConfirmOutcome {
                 suggestion,
                 events: Vec::new(),
@@ -180,7 +208,10 @@ impl StoreTx<'_> {
 
         // 3. 分类事件(批准值;引用证据 id)。
         let classified = EventDraft {
-            occurred: Occurred::DateTime { rfc3339: now.clone(), time_zone: None },
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
             source: EventSource::AiConfirmed,
             source_request_id: Some(suggestion.id.clone()),
             actor: Actor::User,
@@ -220,10 +251,15 @@ impl StoreTx<'_> {
         // 6. 投影刷新。
         self.recompute_reply_state(&input.application_id)?;
 
-        let suggestion = self
-            .get_suggestion(&input.suggestion_id)?
-            .ok_or_else(|| StoreError::Internal("suggestion vanished in same transaction".into()))?;
-        Ok(ConfirmOutcome { suggestion, events, todos, already_confirmed: false })
+        let suggestion = self.get_suggestion(&input.suggestion_id)?.ok_or_else(|| {
+            StoreError::Internal("suggestion vanished in same transaction".into())
+        })?;
+        Ok(ConfirmOutcome {
+            suggestion,
+            events,
+            todos,
+            already_confirmed: false,
+        })
     }
 
     /// 拒绝/暂存建议(不做任何正式写入)。
@@ -232,8 +268,23 @@ impl StoreTx<'_> {
         id: &str,
         status: SuggestionStatus,
     ) -> Result<AiSuggestion, StoreError> {
-        if !matches!(status, SuggestionStatus::Rejected | SuggestionStatus::Deferred | SuggestionStatus::Pending) {
-            return Err(StoreError::Validation("use confirm_suggestion for confirmations".into()));
+        if let Some(current) = self.get_suggestion(id)? {
+            if matches!(
+                current.status,
+                SuggestionStatus::Confirmed | SuggestionStatus::ModifiedConfirmed
+            ) {
+                return Err(StoreError::Conflict(
+                    "confirmed suggestions cannot be reopened".into(),
+                ));
+            }
+        }
+        if !matches!(
+            status,
+            SuggestionStatus::Rejected | SuggestionStatus::Deferred | SuggestionStatus::Pending
+        ) {
+            return Err(StoreError::Validation(
+                "use confirm_suggestion for confirmations".into(),
+            ));
         }
         let now = now_utc();
         let n = self.conn().execute(

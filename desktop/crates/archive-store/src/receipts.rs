@@ -13,7 +13,7 @@
 
 use rusqlite::params;
 
-use crate::error::{EpochMismatch, StoreError};
+use crate::error::StoreError;
 use crate::identity::ArchiveIdentity;
 use crate::model::*;
 use crate::timeutil::now_utc;
@@ -32,6 +32,7 @@ pub struct PluginWriteContext {
     pub payload_sha256: String,
 }
 
+#[derive(serde::Serialize)]
 pub enum PluginOp {
     /// `job.save`:绑定已有申请(追加 job_saved)或新建申请。
     JobSave(JobSaveInput),
@@ -43,7 +44,7 @@ pub enum PluginOp {
     SnapshotChunk(SnapshotChunkInput),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct JobSaveInput {
     /// None = 新建申请(桌面在 job.save 成功时返回新 UUID);
     /// Some(id) = 使用已有申请,追加 job_saved(never-regress)。
@@ -55,7 +56,7 @@ pub struct JobSaveInput {
     pub occurred: Occurred,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FillSubmitInput {
     pub application_id: String,
     pub outcome: FillOutcome,
@@ -72,7 +73,7 @@ pub struct FillSubmitInput {
     pub occurred: Occurred,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SubmitConfirmInput {
     pub application_id: String,
     /// `desktop` 或 `plugin`。
@@ -81,7 +82,7 @@ pub struct SubmitConfirmInput {
     pub occurred: Occurred,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SnapshotChunkInput {
     pub application_id: Option<String>,
     pub snapshot_id: String,
@@ -98,21 +99,36 @@ pub struct SnapshotChunkInput {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PluginWriteOutcome {
     /// 首次提交成功。
-    Committed { result_id: String, result_kind: String },
+    Committed {
+        result_id: String,
+        result_kind: String,
+    },
     /// 幂等重放命中已提交回执;返回原 resultId,不新增业务事件。
-    Replayed { result_id: String, result_kind: String },
+    Replayed {
+        result_id: String,
+        result_kind: String,
+    },
+}
+
+impl PluginOp {
+    /// Digest of the typed D03 operation, not of a D05 wire envelope.
+    pub fn digest(&self) -> Result<String, StoreError> {
+        use sha2::{Digest, Sha256};
+        Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(self)?)))
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReceiptRow {
     pub payload_sha256: String,
+    pub operation_sha256: String,
     pub result_id: Option<String>,
     pub result_kind: Option<String>,
     pub purged: bool,
     pub snapshot_id: Option<String>,
     pub chunk_index: Option<i64>,
     pub archive_id: String,
-    pub operation_type: String,
+    pub _operation_type: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -175,21 +191,25 @@ impl StoreTx<'_> {
     ) -> Result<Option<ReceiptRow>, StoreError> {
         let mut stmt = self.conn().prepare(
             "SELECT payload_sha256, result_id, result_kind, purged, snapshot_id, chunk_index, \
-             archive_id, operation_type FROM message_receipts \
+             archive_id, operation_type, operation_sha256 FROM message_receipts \
              WHERE client_instance_id = ?1 AND message_id = ?2 AND source_restore_epoch = ?3",
         )?;
-        let mut rows = stmt.query_map(params![client_instance_id, message_id, source_restore_epoch], |r| {
-            Ok(ReceiptRow {
-                payload_sha256: r.get(0)?,
-                result_id: r.get(1)?,
-                result_kind: r.get(2)?,
-                purged: r.get::<_, i64>(3)? != 0,
-                snapshot_id: r.get(4)?,
-                chunk_index: r.get(5)?,
-                archive_id: r.get(6)?,
-                operation_type: r.get(7)?,
-            })
-        })?;
+        let mut rows = stmt.query_map(
+            params![client_instance_id, message_id, source_restore_epoch],
+            |r| {
+                Ok(ReceiptRow {
+                    payload_sha256: r.get(0)?,
+                    result_id: r.get(1)?,
+                    result_kind: r.get(2)?,
+                    purged: r.get::<_, i64>(3)? != 0,
+                    snapshot_id: r.get(4)?,
+                    chunk_index: r.get(5)?,
+                    archive_id: r.get(6)?,
+                    _operation_type: r.get(7)?,
+                    operation_sha256: r.get(8)?,
+                })
+            },
+        )?;
         match rows.next() {
             Some(row) => row.map(Some).map_err(StoreError::from),
             None => Ok(None),
@@ -200,8 +220,8 @@ impl StoreTx<'_> {
         self.conn().execute(
             "INSERT INTO message_receipts (archive_id, client_instance_id, message_id, \
              source_restore_epoch, payload_sha256, result_id, result_kind, operation_type, \
-             snapshot_id, chunk_index, committed_at, purged) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
+             snapshot_id, chunk_index, committed_at, operation_sha256, purged) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0)",
             params![
                 receipt.archive_id,
                 receipt.client_instance_id,
@@ -214,6 +234,7 @@ impl StoreTx<'_> {
                 receipt.snapshot_id,
                 receipt.chunk_index,
                 receipt.committed_at,
+                receipt.operation_sha256,
             ],
         )?;
         Ok(())
@@ -223,7 +244,11 @@ impl StoreTx<'_> {
     // 插件操作实现(在两段校验通过后、与回执同事务调用)
     // ------------------------------------------------------------------
 
-    pub(crate) fn op_job_save(&mut self, input: &JobSaveInput, recorded_at: &str) -> Result<(String, String), StoreError> {
+    pub(crate) fn op_job_save(
+        &mut self,
+        input: &JobSaveInput,
+        recorded_at: &str,
+    ) -> Result<(String, String), StoreError> {
         match &input.target_application_id {
             Some(app_id) => {
                 self.ensure_application(app_id)?;
@@ -241,7 +266,7 @@ impl StoreTx<'_> {
                         stage_update_mode: StageUpdateMode::UpdateProgress,
                     },
                 };
-                self.append_events(app_id, &[draft], recorded_at)?;
+                self.append_events(Some(app_id), &[draft], recorded_at)?;
                 Ok((app_id.clone(), "application".into()))
             }
             None => {
@@ -274,7 +299,11 @@ impl StoreTx<'_> {
         }
     }
 
-    pub(crate) fn op_fill_submit(&mut self, input: &FillSubmitInput, recorded_at: &str) -> Result<(String, String), StoreError> {
+    pub(crate) fn op_fill_submit(
+        &mut self,
+        input: &FillSubmitInput,
+        recorded_at: &str,
+    ) -> Result<(String, String), StoreError> {
         self.ensure_application(&input.application_id)?;
         let draft = EventDraft {
             occurred: input.occurred.clone(),
@@ -300,7 +329,11 @@ impl StoreTx<'_> {
         Ok((events[0].id.clone(), "event".into()))
     }
 
-    pub(crate) fn op_submit_confirm(&mut self, input: &SubmitConfirmInput, recorded_at: &str) -> Result<(String, String), StoreError> {
+    pub(crate) fn op_submit_confirm(
+        &mut self,
+        input: &SubmitConfirmInput,
+        recorded_at: &str,
+    ) -> Result<(String, String), StoreError> {
         self.ensure_application(&input.application_id)?;
         let draft = EventDraft {
             occurred: input.occurred.clone(),
@@ -317,7 +350,24 @@ impl StoreTx<'_> {
         Ok((events[0].id.clone(), "event".into()))
     }
 
-    pub(crate) fn op_snapshot_chunk(&mut self, ctx: &PluginWriteContext, input: &SnapshotChunkInput, recorded_at: &str) -> Result<(String, String), StoreError> {
+    pub(crate) fn op_snapshot_chunk(
+        &mut self,
+        ctx: &PluginWriteContext,
+        input: &SnapshotChunkInput,
+        recorded_at: &str,
+    ) -> Result<(String, String), StoreError> {
+        if input.chunk_count < 1
+            || input.chunk_count > 128
+            || input.byte_size < 0
+            || input.byte_size > 2 * 1024 * 1024
+            || [&input.chunk_sha256, &input.total_sha256]
+                .iter()
+                .any(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(StoreError::Validation(
+                "invalid bounded snapshot metadata".into(),
+            ));
+        }
         if input.chunk_index < 0 || input.chunk_index >= input.chunk_count {
             return Err(StoreError::Validation(format!(
                 "chunk_index {} out of range (0..{})",
@@ -333,11 +383,19 @@ impl StoreTx<'_> {
                 params![ctx.client_instance_id, input.snapshot_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
+            .map(Some)
             .or_else(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
                 other => Err(other),
             })?;
         if let Some((count, sha)) = &existing {
+            let same: bool = self.conn().query_row("SELECT source_restore_epoch=?3 AND application_id IS ?4 AND byte_size=?5 AND template_name IS ?6 AND template_version IS ?7 FROM snapshot_uploads WHERE client_instance_id=?1 AND snapshot_id=?2",
+                params![ctx.client_instance_id,input.snapshot_id,ctx.source_restore_epoch,input.application_id,input.byte_size,input.template_name,input.template_version], |r| r.get(0))?;
+            if !same {
+                return Err(StoreError::Conflict(
+                    "snapshot parent identity/metadata changed".into(),
+                ));
+            }
             if *count != input.chunk_count || *sha != input.total_sha256 {
                 return Err(StoreError::Conflict(format!(
                     "snapshot {} already registered with chunk_count={count}, total_sha={}…",
@@ -379,6 +437,7 @@ impl StoreTx<'_> {
                 params![ctx.client_instance_id, input.snapshot_id, input.chunk_index],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
+            .map(Some)
             .or_else(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
                 other => Err(other),
@@ -418,7 +477,11 @@ impl StoreTx<'_> {
     }
 
     /// 快照进度:块 ACK 状态与连续游标(§8.5 chunkCursor 语义)。
-    pub fn snapshot_progress(&self, client_instance_id: &str, snapshot_id: &str) -> Result<SnapshotProgress, StoreError> {
+    pub fn snapshot_progress(
+        &self,
+        client_instance_id: &str,
+        snapshot_id: &str,
+    ) -> Result<SnapshotProgress, StoreError> {
         let (chunk_count, total_sha, full_acked): (i64, String, i64) = self
             .conn()
             .query_row(
@@ -428,7 +491,9 @@ impl StoreTx<'_> {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(format!("snapshot upload {snapshot_id}")),
+                rusqlite::Error::QueryReturnedNoRows => {
+                    StoreError::NotFound(format!("snapshot upload {snapshot_id}"))
+                }
                 other => other.into(),
             })?;
         let mut received = Vec::new();
@@ -470,6 +535,12 @@ impl StoreTx<'_> {
         stored_rel_path: &str,
     ) -> Result<ResumeSnapshotMeta, StoreError> {
         validate_rel_path(stored_rel_path)?;
+        let (epoch, size): (String, i64) = self.conn().query_row("SELECT source_restore_epoch, byte_size FROM snapshot_uploads WHERE client_instance_id=?1 AND snapshot_id=?2", params![client_instance_id,snapshot_id], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        if epoch != self.identity.restore_epoch {
+            return Err(StoreError::Validation(
+                "old snapshot epoch cannot finalize".into(),
+            ));
+        }
         let (app_id, total_sha, chunk_count, template_name, template_version): (
             Option<String>,
             String,
@@ -489,10 +560,16 @@ impl StoreTx<'_> {
                 other => other.into(),
             })?;
         if let Some(existing) = self.get_snapshot(snapshot_id)? {
-            if existing.sha256 == total_sha {
+            if existing.sha256 == total_sha
+                && existing.stored_rel_path == stored_rel_path
+                && existing.byte_size == size
+            {
+                crate::tx::verify_file(&self.archive_dir, stored_rel_path, size, &total_sha)?;
                 return Ok(existing);
             }
-            return Err(StoreError::Conflict("snapshot id already committed with different total sha256".into()));
+            return Err(StoreError::Conflict(
+                "snapshot id already committed with different total sha256".into(),
+            ));
         }
         let received: i64 = self.conn().query_row(
             "SELECT COUNT(*) FROM snapshot_chunks WHERE client_instance_id = ?1 AND snapshot_id = ?2",
@@ -505,7 +582,9 @@ impl StoreTx<'_> {
             )));
         }
         let app_id = app_id.ok_or_else(|| {
-            StoreError::Validation("snapshot upload has no bound application; associate before finalize".into())
+            StoreError::Validation(
+                "snapshot upload has no bound application; associate before finalize".into(),
+            )
         })?;
         let byte_size: i64 = self.conn().query_row(
             "SELECT byte_size FROM snapshot_uploads WHERE client_instance_id = ?1 AND snapshot_id = ?2",
@@ -513,6 +592,12 @@ impl StoreTx<'_> {
             |r| r.get(0),
         )?;
         let now = now_utc();
+        crate::tx::verify_file(&self.archive_dir, stored_rel_path, byte_size, &total_sha)?;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.archive_dir.join(stored_rel_path))?
+            .sync_all()?;
         self.conn().execute(
             "INSERT INTO resume_snapshots (snapshot_id, application_id, template_name, \
              template_version, sha256, stored_rel_path, created_at, byte_size) \
@@ -520,7 +605,7 @@ impl StoreTx<'_> {
             params![
                 snapshot_id,
                 app_id,
-                template_name.unwrap_or_else(|| "unknown".into()),
+                template_name.clone().unwrap_or_else(|| "unknown".into()),
                 template_version,
                 total_sha,
                 stored_rel_path,
@@ -535,7 +620,7 @@ impl StoreTx<'_> {
         Ok(ResumeSnapshotMeta {
             snapshot_id: snapshot_id.to_string(),
             application_id: app_id,
-            template_name: template_name.unwrap_or_else(|| "unknown".into()),
+            template_name: template_name.clone().unwrap_or_else(|| "unknown".into()),
             template_version,
             sha256: total_sha,
             stored_rel_path: stored_rel_path.to_string(),
@@ -544,7 +629,10 @@ impl StoreTx<'_> {
         })
     }
 
-    pub fn get_snapshot(&self, snapshot_id: &str) -> Result<Option<ResumeSnapshotMeta>, StoreError> {
+    pub fn get_snapshot(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<Option<ResumeSnapshotMeta>, StoreError> {
         let mut stmt = self.conn().prepare(
             "SELECT snapshot_id, application_id, template_name, template_version, sha256, \
              stored_rel_path, created_at, byte_size FROM resume_snapshots WHERE snapshot_id = ?1",
@@ -564,7 +652,10 @@ impl StoreTx<'_> {
         rows.next().transpose().map_err(StoreError::from)
     }
 
-    pub fn list_snapshots(&self, application_id: &str) -> Result<Vec<ResumeSnapshotMeta>, StoreError> {
+    pub fn list_snapshots(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<ResumeSnapshotMeta>, StoreError> {
         let mut stmt = self.conn().prepare(
             "SELECT snapshot_id, application_id, template_name, template_version, sha256, \
              stored_rel_path, created_at, byte_size FROM resume_snapshots \
@@ -582,7 +673,8 @@ impl StoreTx<'_> {
                 byte_size: r.get(7)?,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     // ------------------------------------------------------------------
@@ -597,13 +689,24 @@ impl StoreTx<'_> {
         let mut replies = Vec::with_capacity(items.len());
         for item in items {
             let outcome = self.reconcile_one(archive_id, item)?;
-            replies.push(ReconcileReply { item: item.clone(), outcome });
+            replies.push(ReconcileReply {
+                item: item.clone(),
+                outcome,
+            });
         }
         Ok(replies)
     }
 
-    fn reconcile_one(&mut self, archive_id: &str, item: &ReconcileQueryItem) -> Result<ReconcileOutcome, StoreError> {
-        let row = self.find_receipt(&item.client_instance_id, &item.message_id, &item.source_restore_epoch)?;
+    fn reconcile_one(
+        &mut self,
+        archive_id: &str,
+        item: &ReconcileQueryItem,
+    ) -> Result<ReconcileOutcome, StoreError> {
+        let row = self.find_receipt(
+            &item.client_instance_id,
+            &item.message_id,
+            &item.source_restore_epoch,
+        )?;
         let row = match row {
             Some(r) if r.archive_id == archive_id => r,
             // 当前库没有这份回执:仅说明该备份未包含证明。
@@ -626,9 +729,10 @@ impl StoreTx<'_> {
             }
         }
         // 结果仍有效才 applied(§8.11)。
-        let result_id = row.result_id.clone().ok_or_else(|| {
-            StoreError::Internal("non-purged receipt without result_id".into())
-        })?;
+        let result_id = row
+            .result_id
+            .clone()
+            .ok_or_else(|| StoreError::Internal("non-purged receipt without result_id".into()))?;
         let valid: bool = match row.result_kind.as_deref() {
             Some("application") => self
                 .conn()
@@ -659,6 +763,7 @@ impl StoreTx<'_> {
 }
 
 pub(crate) struct ReceiptInsert {
+    pub operation_sha256: String,
     pub archive_id: String,
     pub client_instance_id: String,
     pub message_id: String,
@@ -677,9 +782,4 @@ pub(crate) struct ReceiptInsert {
 #[allow(dead_code)]
 pub(crate) fn new_chunk_message_id() -> String {
     new_uuid()
-}
-
-/// epoch 校验诊断辅助(供入口层构造错误)。
-pub(crate) fn epoch_mismatch(kind: EpochMismatch, detail: String) -> StoreError {
-    StoreError::RestoreEpochMismatch { detail, source: Some(kind) }
 }

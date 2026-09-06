@@ -4,16 +4,50 @@
 
 /// 有限后缀词表(产品需求 §7:有限词表,折叠后再比)。
 const COMPANY_SUFFIXES: &[&str] = &[
-    "股份有限公司", "有限责任公司", "有限公司", "集团公司", "控股集团",
-    "inc", "inc.", "llc", "ltd", "ltd.", "co., ltd", "co.,ltd", "co., ltd.", "co",
-    "corporation", "corp", "corp.", "gmbh", "s.a.", "plc", "kg", "ag",
+    "股份有限公司",
+    "有限责任公司",
+    "有限公司",
+    "集团公司",
+    "控股集团",
+    "inc",
+    "inc.",
+    "llc",
+    "ltd",
+    "ltd.",
+    "co., ltd",
+    "co.,ltd",
+    "co., ltd.",
+    "co",
+    "corporation",
+    "corp",
+    "corp.",
+    "gmbh",
+    "s.a.",
+    "plc",
+    "kg",
+    "ag",
 ];
 
 /// 始终剥离的查询参数(大小写不敏感)。
 const SECRET_PARAMS: &[&str] = &[
-    "token", "access_token", "refresh_token", "id_token", "session", "sessionid",
-    "sid", "auth", "authorization", "api_key", "apikey", "password", "pwd",
-    "secret", "signature", "sig", "code", "key",
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "session",
+    "sessionid",
+    "sid",
+    "auth",
+    "authorization",
+    "api_key",
+    "apikey",
+    "password",
+    "pwd",
+    "secret",
+    "signature",
+    "sig",
+    "code",
+    "key",
 ];
 
 /// 去重 URL 额外移除的跟踪参数前缀。
@@ -48,7 +82,9 @@ pub fn normalize_company(raw: &str) -> String {
         let mut hit = false;
         for suffix in COMPANY_SUFFIXES {
             if trimmed.len() > suffix.len() + 1 && trimmed.ends_with(suffix) {
-                s = trimmed[..trimmed.len() - suffix.len()].trim_end().to_string();
+                s = trimmed[..trimmed.len() - suffix.len()]
+                    .trim_end()
+                    .to_string();
                 hit = true;
                 break;
             }
@@ -64,75 +100,37 @@ pub fn normalize_title(raw: &str) -> String {
     collapse_ws(&to_half_width(raw.trim())).to_lowercase()
 }
 
-/// 去掉 `scheme://user:pass@host/` 的 userinfo 与 fragment;host 之前的部分按
-/// authority 解析,取最后一个 `@` 之后作为 host。无 scheme 时原样(仅去 fragment)。
-fn strip_userinfo_and_fragment(raw: &str) -> String {
-    let (before_frag, _) = raw.split_once('#').unwrap_or((raw, ""));
-    match before_frag.split_once("://") {
-        Some((scheme, rest)) => {
-            let authority_end = rest.find('/').unwrap_or(rest.len());
-            let (authority, path) = rest.split_at(authority_end);
-            let authority = match authority.rsplit_once('@') {
-                Some((_userinfo, host)) => host,
-                None => authority,
-            };
-            format!("{scheme}://{authority}{path}")
-        }
-        None => before_frag.to_string(),
+/// URL parser handles encoded parameter names and preserves case-sensitive paths.
+fn clean_url(raw: &str, tracking: bool) -> String {
+    let Ok(mut url) = url::Url::parse(raw.trim()) else {
+        return String::new();
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return String::new();
     }
-}
-
-/// 保留名字不在剥离名单内的查询参数。`strip_tracking` 额外移除 utm_*。
-fn filter_query(query: &str, strip_tracking: bool) -> Vec<String> {
-    let mut kept = Vec::new();
-    for pair in query.split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let name = pair.split('=').next().unwrap_or("").to_lowercase();
-        if SECRET_PARAMS.iter().any(|p| *p == name) {
-            continue;
-        }
-        if strip_tracking && TRACKING_PREFIXES.iter().any(|p| name.starts_with(p)) {
-            continue;
-        }
-        kept.push(pair.to_string());
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+    let pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| {
+            let key = k.to_ascii_lowercase();
+            !SECRET_PARAMS.contains(&key.as_str())
+                && !(tracking && TRACKING_PREFIXES.iter().any(|p| key.starts_with(p)))
+        })
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    url.set_query(None);
+    if !pairs.is_empty() {
+        url.query_pairs_mut().extend_pairs(pairs);
     }
-    kept
+    url.to_string()
 }
-
-/// 展示/存储用 sourceUrl:与 dedupeUrl 同一秘密剥离策略,但保留跟踪参数。
-/// 清洗必须在入库前完成,不保留秘密参数的原始副本。
 pub fn sanitize_source_url(raw: &str) -> String {
-    let s = strip_userinfo_and_fragment(raw.trim());
-    match s.split_once('?') {
-        Some((base, q)) => {
-            let kept = filter_query(q, false);
-            if kept.is_empty() {
-                base.to_string()
-            } else {
-                format!("{base}?{}", kept.join("&"))
-            }
-        }
-        None => s,
-    }
+    clean_url(raw, false)
 }
-
-/// 候选查询用 dedupeUrl:同一秘密剥离,再移除 utm_* 跟踪参数并规范化。
-/// URL 只能用于提示,不成为自动合并的身份。
 pub fn normalize_dedupe_url(raw: &str) -> String {
-    let s = strip_userinfo_and_fragment(raw.trim()).to_lowercase();
-    match s.split_once('?') {
-        Some((base, q)) => {
-            let kept = filter_query(q, true);
-            if kept.is_empty() {
-                base.to_string()
-            } else {
-                format!("{base}?{}", kept.join("&"))
-            }
-        }
-        None => s,
-    }
+    clean_url(raw, true)
 }
 
 #[cfg(test)]
@@ -152,11 +150,15 @@ mod tests {
     fn url_secret_strip() {
         // 隐私 §7.1 合成例(无已审核站点规则)。
         assert_eq!(
-            sanitize_source_url("https://jobs.example.com/apply?code=REQ42&utm_source=mail&access_token=abc"),
+            sanitize_source_url(
+                "https://jobs.example.com/apply?code=REQ42&utm_source=mail&access_token=abc"
+            ),
             "https://jobs.example.com/apply?utm_source=mail"
         );
         assert_eq!(
-            normalize_dedupe_url("https://jobs.example.com/apply?code=REQ42&utm_source=mail&access_token=abc"),
+            normalize_dedupe_url(
+                "https://jobs.example.com/apply?code=REQ42&utm_source=mail&access_token=abc"
+            ),
             "https://jobs.example.com/apply"
         );
         assert_eq!(

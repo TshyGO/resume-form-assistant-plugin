@@ -39,29 +39,44 @@ impl Occurred {
                 Ok((Some(format_timestamp(utc)), "datetime", time_zone.clone()))
             }
             Occurred::Date { date, time_zone } => {
-                time::Date::parse(date, &DATE_FORMAT)
-                    .map_err(|_| StoreError::Validation(format!("invalid date `{date}`, expected YYYY-MM-DD")))?;
+                time::Date::parse(date, &DATE_FORMAT).map_err(|_| {
+                    StoreError::Validation(format!("invalid date `{date}`, expected YYYY-MM-DD"))
+                })?;
                 Ok((Some(date.clone()), "date", time_zone.clone()))
             }
             Occurred::Unknown => Ok((None, "unknown", None)),
         }
     }
 
-    pub fn from_columns(occurred_at: Option<&str>, precision: &str, tz: Option<&str>) -> Result<Self, StoreError> {
+    pub fn from_columns(
+        occurred_at: Option<&str>,
+        precision: &str,
+        tz: Option<&str>,
+    ) -> Result<Self, StoreError> {
         match precision {
             "datetime" => {
-                let raw = occurred_at
-                    .ok_or_else(|| StoreError::Validation("datetime event without occurredAt".into()))?;
+                let raw = occurred_at.ok_or_else(|| {
+                    StoreError::Validation("datetime event without occurredAt".into())
+                })?;
                 // 库内统一为 UTC 毫秒;原样读回。
-                Ok(Occurred::DateTime { rfc3339: raw.to_string(), time_zone: tz.map(str::to_string) })
+                Ok(Occurred::DateTime {
+                    rfc3339: raw.to_string(),
+                    time_zone: tz.map(str::to_string),
+                })
             }
             "date" => {
-                let raw = occurred_at
-                    .ok_or_else(|| StoreError::Validation("date event without occurredAt".into()))?;
-                Ok(Occurred::Date { date: raw.to_string(), time_zone: tz.map(str::to_string) })
+                let raw = occurred_at.ok_or_else(|| {
+                    StoreError::Validation("date event without occurredAt".into())
+                })?;
+                Ok(Occurred::Date {
+                    date: raw.to_string(),
+                    time_zone: tz.map(str::to_string),
+                })
             }
             "unknown" => Ok(Occurred::Unknown),
-            other => Err(StoreError::Validation(format!("unknown occurredPrecision `{other}`"))),
+            other => Err(StoreError::Validation(format!(
+                "unknown occurredPrecision `{other}`"
+            ))),
         }
     }
 }
@@ -71,7 +86,9 @@ pub fn now_utc() -> String {
 }
 
 pub fn format_timestamp(t: OffsetDateTime) -> String {
-    t.format(&TS_FORMAT).unwrap_or_else(|_| "1970-01-01T00:00:00.000Z".to_string())
+    t.to_offset(time::UtcOffset::UTC)
+        .format(&TS_FORMAT)
+        .expect("valid timestamp format")
 }
 
 pub fn parse_rfc3339(s: &str) -> Result<OffsetDateTime, StoreError> {
@@ -80,10 +97,13 @@ pub fn parse_rfc3339(s: &str) -> Result<OffsetDateTime, StoreError> {
 }
 
 pub fn today_utc() -> String {
-    OffsetDateTime::now_utc().date().format(&DATE_FORMAT).unwrap_or_default()
+    OffsetDateTime::now_utc()
+        .date()
+        .format(&DATE_FORMAT)
+        .unwrap_or_default()
 }
 
-pub(crate) fn date_format() -> &'static [FormatItem] {
+pub(crate) fn date_format() -> &'static [FormatItem<'static>] {
     DATE_FORMAT
 }
 
@@ -103,7 +123,12 @@ mod tests {
         assert_eq!(v.as_deref(), Some("2026-09-20T06:00:00.000Z"));
         assert_eq!(tz.as_deref(), Some("+08:00"));
 
-        let (v, p, _) = Occurred::Date { date: "2026-09-21".into(), time_zone: None }.to_columns().unwrap();
+        let (v, p, _) = Occurred::Date {
+            date: "2026-09-21".into(),
+            time_zone: None,
+        }
+        .to_columns()
+        .unwrap();
         assert_eq!(p, "date");
         assert_eq!(v.as_deref(), Some("2026-09-21"));
 
@@ -114,7 +139,17 @@ mod tests {
 
     #[test]
     fn rejects_fake_precision() {
-        assert!(Occurred::Date { date: "2026-09-21T00:00:00Z".into(), time_zone: None }.to_columns().is_err());
-        assert!(Occurred::DateTime { rfc3339: "not-a-time".into(), time_zone: None }.to_columns().is_err());
+        assert!(Occurred::Date {
+            date: "2026-09-21T00:00:00Z".into(),
+            time_zone: None
+        }
+        .to_columns()
+        .is_err());
+        assert!(Occurred::DateTime {
+            rfc3339: "not-a-time".into(),
+            time_zone: None
+        }
+        .to_columns()
+        .is_err());
     }
 }

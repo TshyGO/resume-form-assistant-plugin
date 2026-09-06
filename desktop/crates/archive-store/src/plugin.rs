@@ -3,9 +3,7 @@
 
 use crate::error::{EpochMismatch, StoreError};
 use crate::identity::ArchiveIdentity;
-use crate::receipts::{
-    PluginOp, PluginWriteContext, PluginWriteOutcome, ReceiptInsert,
-};
+use crate::receipts::{PluginOp, PluginWriteContext, PluginWriteOutcome, ReceiptInsert};
 use crate::store::ArchiveStore;
 use crate::timeutil::now_utc;
 
@@ -25,7 +23,8 @@ impl ArchiveStore {
         ctx: &PluginWriteContext,
         op: PluginOp,
     ) -> Result<PluginWriteOutcome, StoreError> {
-        let current = self.identity();
+        self.transaction(move |tx| {
+        let current = tx.identity.clone();
         let envelope = ctx.envelope_identity.as_ref().ok_or(StoreError::IdentityMissing)?;
         if envelope.archive_id != current.archive_id {
             return Err(StoreError::RestoreEpochMismatch {
@@ -54,12 +53,11 @@ impl ArchiveStore {
             });
         }
 
-        self.transaction(move |tx| {
+            let operation_sha256 = op.digest()?;
+            if ctx.payload_sha256.len() != 64 || !ctx.payload_sha256.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(StoreError::Validation("invalid wire digest".into())); }
             if let Some(row) = tx.find_receipt(&ctx.client_instance_id, &ctx.message_id, &ctx.source_restore_epoch)? {
-                if row.purged {
-                    return Err(StoreError::PreviouslyPurged { former_result_id: row.result_id });
-                }
-                if row.payload_sha256 != ctx.payload_sha256 {
+                if row.purged { return Err(StoreError::PreviouslyPurged { former_result_id: row.result_id }); }
+                if row.payload_sha256 != ctx.payload_sha256 || row.operation_sha256 != operation_sha256 {
                     return Err(StoreError::Conflict(format!(
                         "message {} committed with a different payload digest",
                         ctx.message_id
@@ -113,12 +111,13 @@ impl ArchiveStore {
             }
 
             tx.insert_receipt(ReceiptInsert {
+                operation_sha256,
                 archive_id: current.archive_id.clone(),
                 client_instance_id: ctx.client_instance_id.clone(),
                 message_id: ctx.message_id.clone(),
                 source_restore_epoch: ctx.source_restore_epoch.clone(),
                 payload_sha256: ctx.payload_sha256.clone(),
-                result_id,
+                result_id: result_id.clone(),
                 result_kind: result_kind.clone(),
                 operation_type: operation_type.into(),
                 snapshot_id,
@@ -135,25 +134,39 @@ impl ArchiveStore {
     pub fn reconcile_lookup(
         &self,
         envelope_identity: Option<&ArchiveIdentity>,
+        caller_client_id: &str,
         items: &[crate::receipts::ReconcileQueryItem],
     ) -> Result<Vec<crate::receipts::ReconcileReply>, StoreError> {
-        let current = self.identity();
-        let envelope = envelope_identity.ok_or(StoreError::IdentityMissing)?;
-        if envelope.archive_id != current.archive_id {
-            return Err(StoreError::RestoreEpochMismatch {
-                detail: "reconcile envelope archiveId does not match current".into(),
-                source: Some(EpochMismatch::EnvelopeArchiveId { expected: current.archive_id.clone() }),
-            });
-        }
-        if envelope.restore_epoch != current.restore_epoch {
-            return Err(StoreError::RestoreEpochMismatch {
-                detail: "reconcile envelope restoreEpoch does not match current".into(),
-                source: Some(EpochMismatch::EnvelopeRestoreEpoch {
-                    expected: current.restore_epoch.clone(),
-                }),
-            });
-        }
-        let archive_id = current.archive_id.clone();
-        self.transaction(|tx| tx.reconcile_lookup(&archive_id, items))
+        self.transaction(|tx| {
+            let current = tx.identity.clone();
+            if items.len() > 100
+                || items
+                    .iter()
+                    .any(|i| i.client_instance_id != caller_client_id)
+            {
+                return Err(StoreError::Validation(
+                    "invalid reconciliation scope".into(),
+                ));
+            }
+            let envelope = envelope_identity.ok_or(StoreError::IdentityMissing)?;
+            if envelope.archive_id != current.archive_id {
+                return Err(StoreError::RestoreEpochMismatch {
+                    detail: "reconcile envelope archiveId does not match current".into(),
+                    source: Some(EpochMismatch::EnvelopeArchiveId {
+                        expected: current.archive_id.clone(),
+                    }),
+                });
+            }
+            if envelope.restore_epoch != current.restore_epoch {
+                return Err(StoreError::RestoreEpochMismatch {
+                    detail: "reconcile envelope restoreEpoch does not match current".into(),
+                    source: Some(EpochMismatch::EnvelopeRestoreEpoch {
+                        expected: current.restore_epoch.clone(),
+                    }),
+                });
+            }
+            let archive_id = current.archive_id.clone();
+            tx.reconcile_lookup(&archive_id, items)
+        })
     }
 }

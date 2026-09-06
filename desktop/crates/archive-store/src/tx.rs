@@ -5,19 +5,28 @@
 use rusqlite::{params, Connection, Transaction};
 
 use crate::error::StoreError;
+pub(crate) use crate::identity::new_uuid;
 use crate::model::*;
 use crate::stage::{fold_stage, Fold, Stage, StageUpdateMode};
 use crate::timeutil::{now_utc, Occurred};
-use crate::identity::new_uuid;
 
 pub struct StoreTx<'a> {
     pub(crate) tx: Transaction<'a>,
-    pub(crate) archive_id: String,
+    pub(crate) identity: crate::identity::ArchiveIdentity,
+    pub(crate) archive_dir: std::path::PathBuf,
 }
 
 impl<'a> StoreTx<'a> {
-    pub(crate) fn new(tx: Transaction<'a>, archive_id: String) -> Self {
-        Self { tx, archive_id }
+    pub(crate) fn new(
+        tx: Transaction<'a>,
+        identity: crate::identity::ArchiveIdentity,
+        archive_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            tx,
+            identity,
+            archive_dir,
+        }
     }
 
     pub(crate) fn commit(self) -> Result<(), StoreError> {
@@ -28,8 +37,8 @@ impl<'a> StoreTx<'a> {
         self.tx.rollback().map_err(StoreError::from)
     }
 
-    pub(crate) fn conn(&mut self) -> &mut Connection {
-        &mut self.tx
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.tx
     }
 
     // ------------------------------------------------------------------
@@ -48,8 +57,62 @@ impl<'a> StoreTx<'a> {
         drafts: &[EventDraft],
         recorded_at: &str,
     ) -> Result<Vec<StoredEvent>, StoreError> {
+        let recorded_at =
+            crate::timeutil::format_timestamp(crate::timeutil::parse_rfc3339(recorded_at)?);
         let mut stored = Vec::with_capacity(drafts.len());
-        for draft in drafts {
+        for original in drafts {
+            let mut draft = original.clone();
+            match &mut draft.payload {
+                EventPayload::ApplicationCreated { source_url, .. }
+                | EventPayload::JobSaved { source_url, .. } => {
+                    *source_url = source_url
+                        .as_deref()
+                        .map(crate::normalize::sanitize_source_url)
+                        .filter(|s| !s.is_empty());
+                }
+                EventPayload::FillEvent { url_redacted, .. } => {
+                    *url_redacted = url_redacted
+                        .as_deref()
+                        .map(crate::normalize::sanitize_source_url)
+                        .filter(|s| !s.is_empty());
+                }
+                _ => {}
+            }
+            reject_secret_keys(&serde_json::to_value(&draft.payload)?)?;
+            if matches!(draft.payload, EventPayload::ApplicationCreated { .. }) {
+                let id = application_id.ok_or_else(|| {
+                    StoreError::Validation("creation requires an application".into())
+                })?;
+                if self.stage_and_sequence(id)?.1 != 0 {
+                    return Err(StoreError::Conflict(
+                        "application already has its creation event".into(),
+                    ));
+                }
+            }
+            if let EventPayload::StageCorrected { from, reason, .. } = &draft.payload {
+                let id = application_id.ok_or_else(|| {
+                    StoreError::Validation("correction requires application".into())
+                })?;
+                if reason.trim().is_empty() || self.stage_and_sequence(id)?.0 != *from {
+                    return Err(StoreError::Validation(
+                        "correction requires reason and matching prior stage".into(),
+                    ));
+                }
+            }
+            if let EventPayload::Custom { event_type, .. } = &draft.payload {
+                if !event_type.starts_with("custom.")
+                    && !matches!(
+                        event_type.as_str(),
+                        "application_recycled"
+                            | "application_restored"
+                            | "application_recycle_changed"
+                    )
+                {
+                    return Err(StoreError::Validation(
+                        "custom event must use custom. namespace".into(),
+                    ));
+                }
+            }
             let (occurred_at, precision, tz) = draft.occurred.to_columns()?;
             let event_type = draft.payload.event_type();
             let payload_json = draft.payload.to_json()?;
@@ -84,7 +147,10 @@ impl<'a> StoreTx<'a> {
                 )?;
                 if matches!(
                     event_type.as_str(),
-                    "evidence_imported" | "evidence_associated" | "association_changed" | "evidence_classified"
+                    "evidence_imported"
+                        | "evidence_associated"
+                        | "association_changed"
+                        | "evidence_classified"
                 ) {
                     self.recompute_reply_state(app_id)?;
                 }
@@ -117,7 +183,7 @@ impl<'a> StoreTx<'a> {
                 application_id: application_id.map(str::to_string),
                 event_sequence: sequence,
                 event_type,
-                occurred: draft.occurred.clone(),
+                occurred: Occurred::from_columns(occurred_at.as_deref(), precision, tz.as_deref())?,
                 recorded_at: recorded_at.to_string(),
                 source: draft.source,
                 source_request_id: draft.source_request_id.clone(),
@@ -136,11 +202,16 @@ impl<'a> StoreTx<'a> {
         draft: EventDraft,
     ) -> Result<StoredEvent, StoreError> {
         let now = now_utc();
-        Ok(self.append_events(application_id, &[draft], &now)?.remove(0))
+        Ok(self
+            .append_events(application_id, &[draft], &now)?
+            .remove(0))
     }
 
     /// 读取申请的当前阶段与已提交最大序号。
-    pub(crate) fn stage_and_sequence(&self, application_id: &str) -> Result<(Stage, i64), StoreError> {
+    pub(crate) fn stage_and_sequence(
+        &self,
+        application_id: &str,
+    ) -> Result<(Stage, i64), StoreError> {
         self.tx
             .query_row(
                 "SELECT current_stage, last_event_sequence FROM applications WHERE id = ?1",
@@ -148,9 +219,10 @@ impl<'a> StoreTx<'a> {
                 |r| {
                     let stage_raw: String = r.get(0)?;
                     let seq: i64 = r.get(1)?;
-                    Ok((Stage::parse(&stage_raw).ok_or_else(|| {
-                        StoreError::Validation(format!("corrupt stage `{stage_raw}`"))
-                    })?, seq))
+                    Ok((
+                        Stage::parse(&stage_raw).ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                        seq,
+                    ))
                 },
             )
             .map_err(|e| match e {
@@ -194,9 +266,9 @@ impl<'a> StoreTx<'a> {
         &mut self,
         application_id: &str,
     ) -> Result<ReplyEvidenceState, StoreError> {
-        let mut stmt = self.tx.prepare(
-            "SELECT reply_class FROM reply_evidence WHERE application_id = ?1",
-        )?;
+        let mut stmt = self
+            .tx
+            .prepare("SELECT reply_class FROM reply_evidence WHERE application_id = ?1")?;
         let rows = stmt.query_map(params![application_id], |r| r.get::<_, Option<String>>(0))?;
         let mut has_evidence = false;
         let mut classes: Vec<ReplyClass> = Vec::new();
@@ -246,7 +318,8 @@ impl<'a> StoreTx<'a> {
              event_type FROM events WHERE application_id = ?1 ORDER BY event_sequence ASC",
         )?;
         let rows = stmt.query_map(params![application_id], map_event_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// 收件箱事件(未关联申请),档案级序号排序。
@@ -257,7 +330,8 @@ impl<'a> StoreTx<'a> {
              event_type FROM events WHERE application_id IS NULL ORDER BY event_sequence ASC",
         )?;
         let rows = stmt.query_map([], map_event_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     pub fn get_event(&self, event_id: &str) -> Result<StoredEvent, StoreError> {
@@ -276,9 +350,7 @@ impl<'a> StoreTx<'a> {
     }
 }
 
-pub(crate) fn map_event_row(
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<StoredEvent> {
+pub(crate) fn map_event_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredEvent> {
     let application_id: Option<String> = r.get(1)?;
     let occurred_at: Option<String> = r.get(3)?;
     let precision: String = r.get(4)?;
@@ -302,7 +374,7 @@ pub(crate) fn map_event_row(
         source: EventSource::parse(&source_raw).unwrap_or(EventSource::Manual),
         source_request_id: r.get(8)?,
         payload_version: r.get(9)?,
-        payload,
+        payload: payload.clone(),
         actor: Actor::parse(&actor_raw).unwrap_or(Actor::System),
         // event_type 以 payload 为准(列值冗余仅供 SQL 检查约束/索引)。
         event_type: payload.event_type(),
@@ -312,7 +384,7 @@ pub(crate) fn map_event_row(
 /// 附件/快照受控相对路径校验(隐私 §3):拒绝绝对路径、`..`、盘符、UNC、反斜杠。
 pub(crate) fn validate_rel_path(rel: &str) -> Result<(), StoreError> {
     let invalid = |why: &str| StoreError::PathInvalid(format!("`{rel}`: {why}"));
-    if rel.is_empty() {
+    if rel.is_empty() || rel.contains('\0') {
         return Err(invalid("empty path"));
     }
     if rel.contains('\\') {
@@ -328,9 +400,71 @@ pub(crate) fn validate_rel_path(rel: &str) -> Result<(), StoreError> {
         return Err(invalid("UNC path"));
     }
     for comp in rel.split('/') {
-        if comp == ".." || comp == "." {
+        if comp == ".." || comp == "." || comp.is_empty() {
             return Err(invalid("path traversal component"));
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_secret_keys(value: &serde_json::Value) -> Result<(), StoreError> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
+                if [
+                    "password",
+                    "apikey",
+                    "authorization",
+                    "cookie",
+                    "setcookie",
+                    "token",
+                    "accesstoken",
+                    "refreshtoken",
+                    "otp",
+                    "sourcepathhint",
+                ]
+                .contains(&normalized.as_str())
+                {
+                    return Err(StoreError::Validation("forbidden secret field".into()));
+                }
+                reject_secret_keys(item)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                reject_secret_keys(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_file(
+    root: &std::path::Path,
+    rel: &str,
+    size: i64,
+    sha: &str,
+) -> Result<(), StoreError> {
+    use sha2::{Digest, Sha256};
+    validate_rel_path(rel)?;
+    let root = root.canonicalize()?;
+    let path = root.join(rel).canonicalize()?;
+    if !path.starts_with(&root) {
+        return Err(StoreError::PathInvalid(
+            "file resolves outside archive".into(),
+        ));
+    }
+    let mut file = std::fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || size < 0 || metadata.len() != size as u64 {
+        return Err(StoreError::Validation("file length mismatch".into()));
+    }
+    let mut digest = Sha256::new();
+    std::io::copy(&mut file, &mut digest)?;
+    if format!("{:x}", digest.finalize()) != sha {
+        return Err(StoreError::Validation("file digest mismatch".into()));
     }
     Ok(())
 }

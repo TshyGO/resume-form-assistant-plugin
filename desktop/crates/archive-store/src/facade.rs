@@ -1,19 +1,24 @@
 //! `&self` 便捷方法:内部各包一个事务。批量操作用
 //! [ArchiveStore::transaction] 显式组合,避免跨调用事务。
 
-use crate::applications::{ApplicationFilter, Candidates, Page, PurgeReport, UpdateApplicationInput};
-use crate::evidence::{AttachmentRefReport, NewEvidence};
+use crate::applications::{
+    ApplicationFilter, Candidates, Page, PurgeReport, UpdateApplicationInput,
+};
 use crate::error::StoreError;
+use crate::evidence::AttachmentRefReport;
 use crate::model::*;
-use crate::receipts::{ReconcileQueryItem, ReconcileReply, SnapshotProgress};
-use crate::store::{ArchiveIdentity, ArchiveStore};
+use crate::receipts::SnapshotProgress;
+use crate::store::ArchiveStore;
 use crate::suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 use crate::todos::TodoPatch;
 
 impl ArchiveStore {
     // ---- 申请 ----
 
-    pub fn create_application(&self, input: NewApplication) -> Result<ApplicationDetail, StoreError> {
+    pub fn create_application(
+        &self,
+        input: NewApplication,
+    ) -> Result<ApplicationDetail, StoreError> {
         self.transaction(|tx| tx.create_application(input))
     }
 
@@ -29,7 +34,11 @@ impl ArchiveStore {
         self.transaction(|tx| tx.update_application(id, input))
     }
 
-    pub fn set_recycle_state(&self, id: &str, state: RecycleState) -> Result<ApplicationDetail, StoreError> {
+    pub fn set_recycle_state(
+        &self,
+        id: &str,
+        state: RecycleState,
+    ) -> Result<ApplicationDetail, StoreError> {
         self.transaction(|tx| tx.set_recycle_state(id, state))
     }
 
@@ -55,7 +64,11 @@ impl ArchiveStore {
 
     // ---- 事件 ----
 
-    pub fn append_event(&self, application_id: Option<&str>, draft: EventDraft) -> Result<StoredEvent, StoreError> {
+    pub fn append_event(
+        &self,
+        application_id: Option<&str>,
+        draft: EventDraft,
+    ) -> Result<StoredEvent, StoreError> {
         self.transaction(|tx| tx.append_event(application_id, draft))
     }
 
@@ -77,7 +90,11 @@ impl ArchiveStore {
         self.transaction(|tx| tx.import_evidence(input))
     }
 
-    pub fn associate_evidence(&self, evidence_id: &str, to_application: &str) -> Result<ReplyEvidence, StoreError> {
+    pub fn associate_evidence(
+        &self,
+        evidence_id: &str,
+        to_application: &str,
+    ) -> Result<ReplyEvidence, StoreError> {
         self.transaction(|tx| tx.associate_evidence(evidence_id, to_application))
     }
 
@@ -94,7 +111,10 @@ impl ArchiveStore {
         self.transaction(|tx| tx.get_evidence(id))
     }
 
-    pub fn list_evidence(&self, application_id: Option<&str>) -> Result<Vec<ReplyEvidence>, StoreError> {
+    pub fn list_evidence(
+        &self,
+        application_id: Option<&str>,
+    ) -> Result<Vec<ReplyEvidence>, StoreError> {
         self.transaction(|tx| tx.list_evidence(application_id))
     }
 
@@ -103,6 +123,10 @@ impl ArchiveStore {
     }
 
     // ---- 待办 ----
+
+    pub fn get_todo(&self, id: &str) -> Result<Option<Todo>, StoreError> {
+        self.transaction(|tx| tx.get_todo(id))
+    }
 
     pub fn create_todo(&self, input: NewTodo) -> Result<Todo, StoreError> {
         self.transaction(|tx| tx.create_todo(input))
@@ -149,11 +173,18 @@ impl ArchiveStore {
         self.transaction(|tx| tx.list_suggestions(evidence_id, status))
     }
 
-    pub fn confirm_suggestion(&self, input: ConfirmSuggestionInput) -> Result<ConfirmOutcome, StoreError> {
+    pub fn confirm_suggestion(
+        &self,
+        input: ConfirmSuggestionInput,
+    ) -> Result<ConfirmOutcome, StoreError> {
         self.transaction(|tx| tx.confirm_suggestion(input))
     }
 
-    pub fn set_suggestion_status(&self, id: &str, status: SuggestionStatus) -> Result<AiSuggestion, StoreError> {
+    pub fn set_suggestion_status(
+        &self,
+        id: &str,
+        status: SuggestionStatus,
+    ) -> Result<AiSuggestion, StoreError> {
         self.transaction(|tx| tx.set_suggestion_status(id, status))
     }
 
@@ -165,28 +196,30 @@ impl ArchiveStore {
         snapshot_id: &str,
         stored_rel_path: &str,
     ) -> Result<ResumeSnapshotMeta, StoreError> {
-        self.transaction(|tx| tx.finalize_snapshot_upload(client_instance_id, snapshot_id, stored_rel_path))
+        self.transaction(|tx| {
+            tx.finalize_snapshot_upload(client_instance_id, snapshot_id, stored_rel_path)
+        })
     }
 
-    pub fn snapshot_progress(&self, client_instance_id: &str, snapshot_id: &str) -> Result<SnapshotProgress, StoreError> {
+    pub fn snapshot_progress(
+        &self,
+        client_instance_id: &str,
+        snapshot_id: &str,
+    ) -> Result<SnapshotProgress, StoreError> {
         self.transaction(|tx| tx.snapshot_progress(client_instance_id, snapshot_id))
     }
 
-    pub fn get_snapshot(&self, snapshot_id: &str) -> Result<Option<ResumeSnapshotMeta>, StoreError> {
+    pub fn get_snapshot(
+        &self,
+        snapshot_id: &str,
+    ) -> Result<Option<ResumeSnapshotMeta>, StoreError> {
         self.transaction(|tx| tx.get_snapshot(snapshot_id))
     }
 
-    pub fn list_snapshots(&self, application_id: &str) -> Result<Vec<ResumeSnapshotMeta>, StoreError> {
-        self.transaction(|tx| tx.list_snapshots(application_id))
-    }
-
-    // ---- 对账 ----
-
-    pub fn reconcile_lookup(
+    pub fn list_snapshots(
         &self,
-        envelope_identity: Option<&ArchiveIdentity>,
-        items: &[ReconcileQueryItem],
-    ) -> Result<Vec<ReconcileReply>, StoreError> {
-        ArchiveStore::reconcile_lookup(self, envelope_identity, items)
+        application_id: &str,
+    ) -> Result<Vec<ResumeSnapshotMeta>, StoreError> {
+        self.transaction(|tx| tx.list_snapshots(application_id))
     }
 }

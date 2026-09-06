@@ -21,7 +21,10 @@ pub struct ArchiveIdentity {
 
 impl ArchiveIdentity {
     pub fn mint(archive_id: String) -> Self {
-        Self { archive_id, restore_epoch: Uuid::new_v4().to_string() }
+        Self {
+            archive_id,
+            restore_epoch: Uuid::new_v4().to_string(),
+        }
     }
 }
 
@@ -53,15 +56,32 @@ pub(crate) fn is_uuid(s: &str) -> bool {
 
 /// 原子写 JSON:写临时文件后 rename 覆盖。
 pub(crate) fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), StoreError> {
-    let dir = path.parent().ok_or_else(|| StoreError::Validation(format!("path has no parent: {}", path.display())))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| StoreError::Validation(format!("path has no parent: {}", path.display())))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(
         ".{}.tmp-{}",
-        path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+        path.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default(),
         Uuid::new_v4()
     ));
     let json = serde_json::to_string_pretty(value)?;
-    std::fs::write(&tmp, json)?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    if let Err(e) = file
+        .write_all(json.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    drop(file);
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -76,7 +96,9 @@ pub(crate) fn read_meta_file(path: &Path) -> Result<Option<ArchiveMetaFile>, Sto
         return Ok(None);
     }
     let raw = std::fs::read(path)?;
-    serde_json::from_slice(&raw).map(Some).map_err(StoreError::from)
+    serde_json::from_slice(&raw)
+        .map(Some)
+        .map_err(StoreError::from)
 }
 
 pub(crate) fn write_meta_file(path: &Path, meta: &ArchiveMetaFile) -> Result<(), StoreError> {
@@ -88,7 +110,9 @@ pub(crate) fn read_pointer(path: &Path) -> Result<Option<CurrentPointer>, StoreE
         return Ok(None);
     }
     let raw = std::fs::read(path)?;
-    serde_json::from_slice(&raw).map(Some).map_err(StoreError::from)
+    serde_json::from_slice(&raw)
+        .map(Some)
+        .map_err(StoreError::from)
 }
 
 pub(crate) fn write_pointer(path: &Path, pointer: &CurrentPointer) -> Result<(), StoreError> {

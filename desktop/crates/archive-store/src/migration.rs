@@ -23,19 +23,30 @@ fn user_version(conn: &Connection) -> Result<i64, StoreError> {
 }
 
 fn set_user_version(conn: &Connection, v: i64) -> Result<(), StoreError> {
-    conn.pragma_update(None, "user_version", v).map_err(StoreError::from)
+    conn.pragma_update(None, "user_version", v)
+        .map_err(StoreError::from)
 }
 
 /// 迁移前备份:用 SQLite backup API 产生一致性快照。
 /// 返回备份文件路径。
-pub fn backup_database(conn: &Connection, backup_dir: &Path, db_name: &str, from_version: i64) -> Result<PathBuf, StoreError> {
+pub fn backup_database(
+    conn: &Connection,
+    backup_dir: &Path,
+    db_name: &str,
+    from_version: i64,
+) -> Result<PathBuf, StoreError> {
     std::fs::create_dir_all(backup_dir)?;
-    let ts = now_utc().replace([':', '-'], "");
+    if !db_name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(StoreError::Validation("unsafe backup name".into()));
+    }
+    let ts = uuid::Uuid::new_v4().to_string();
     let path = backup_dir.join(format!("{db_name}.pre-migration-v{from_version}-{ts}.db"));
     let mut dst = Connection::open(&path)?;
     use rusqlite::backup::Backup;
-    Backup::new(conn, &mut dst)?
-        .run_to_completion(64, Duration::from_millis(2), None)?;
+    Backup::new(conn, &mut dst)?.run_to_completion(64, Duration::from_millis(2), None)?;
     dst.close().map_err(|(_, e)| e)?;
     Ok(path)
 }
@@ -63,88 +74,50 @@ pub fn ensure_schema(
     let latest = migrations.len() as i64;
 
     let current = user_version(conn)?;
-    if current == 0 {
-        // 全新库:一次性应用全部迁移(对 v1 即初始 schema)。
-        let tx = conn.transaction()?;
-        for m in migrations {
-            tx.execute_batch(m.sql)?;
-            tx.execute(
-                "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![m.to_version, m.description, now_utc()],
-            )?;
-        }
-        tx.commit()?;
-        set_user_version(conn, latest)?;
-        return Ok((latest, None));
+    if latest == 0 || current > latest {
+        return Err(StoreError::Validation(
+            "empty migration chain or unsupported newer database".into(),
+        ));
     }
-
-    if current > latest {
-        return Err(StoreError::Validation(format!(
-            "database schema v{current} is newer than supported v{latest}; downgrade is not supported"
-        )));
-    }
-
     if current == latest {
         return Ok((latest, None));
     }
-
-    // 需要迁移:先自动备份。
-    let backup_path = backup_database(conn, backup_dir, db_name, current)?;
-
-    // 逐版本迁移;每步一个事务。失败即回滚该步,原库停在旧版本且未被破坏。
+    let tables: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        |r| r.get(0),
+    )?;
+    if current == 0 && tables != 0 {
+        return Err(StoreError::Validation(
+            "unversioned existing database requires explicit recovery".into(),
+        ));
+    }
+    let backup = if current > 0 {
+        Some(backup_database(conn, backup_dir, db_name, current)?)
+    } else {
+        None
+    };
+    // All pending steps, migration ledger and user_version share one commit.
+    let tx = conn.transaction()?;
     for m in migrations.iter().skip(current as usize) {
-        let tx = conn.transaction()?;
-        let result = tx
-            .execute_batch(m.sql)
-            .and_then(|_| {
-                tx.execute(
-                    "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![m.to_version, m.description, now_utc()],
-                )
-            });
-        match result {
-            Ok(_) => {
-                tx.commit()?;
-                set_user_version(conn, m.to_version)?;
-            }
-            Err(e) => {
-                // tx drop 即回滚;显式提交从未发生。
-                drop(tx);
-                return Err(StoreError::MigrationFailed {
-                    version: m.to_version,
-                    backup: Some(backup_path),
-                    source: Box::new(crate::error::anyhow_no_source::Wrapped(e.to_string())),
-                });
-            }
+        if let Err(e) = tx.execute_batch(m.sql).and_then(|_| {
+            tx.execute("INSERT INTO schema_migrations (version, description, applied_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![m.to_version, m.description, now_utc()])
+        }) {
+            return Err(StoreError::MigrationFailed { version: m.to_version, backup,
+                source: Box::new(crate::error::anyhow_no_source::Wrapped(e.to_string())) });
         }
     }
-
-    Ok((latest, Some(backup_path)))
+    set_user_version(&tx, latest)?;
+    tx.execute(
+        "UPDATE archive_meta SET schema_version = ?1 WHERE id = 1",
+        [latest],
+    )?;
+    tx.commit()?;
+    Ok((latest, backup))
 }
 
 /// SCHEMA_VERSION 的访问器(公开给调用方诊断)。
 pub fn current_schema_version() -> i64 {
     SCHEMA_VERSION
-}
-
-#[cfg(test)]
-pub(crate) fn test_migrations_with_v2() -> Vec<Migration> {
-    let mut v: Vec<Migration> = MIGRATIONS.to_vec();
-    v.push(Migration {
-        to_version: 2,
-        description: "test-only: add archive_meta.note column",
-        sql: "ALTER TABLE archive_meta ADD COLUMN note TEXT;",
-    });
-    v
-}
-
-#[cfg(test)]
-pub(crate) fn test_migrations_with_failing_v2() -> Vec<Migration> {
-    let mut v: Vec<Migration> = MIGRATIONS.to_vec();
-    v.push(Migration {
-        to_version: 2,
-        description: "test-only: intentionally broken migration",
-        sql: "CREATE TABLE this_is_fine (id INTEGER); THIS IS NOT SQL;",
-    });
-    v
 }

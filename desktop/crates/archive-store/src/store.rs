@@ -7,15 +7,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::identity::{
-    is_uuid, new_uuid, read_meta_file, read_pointer, write_meta_file, write_pointer, ArchiveIdentity,
-    ArchiveMetaFile, CurrentPointer,
+    is_uuid, new_uuid, read_meta_file, read_pointer, write_meta_file, write_pointer,
+    ArchiveIdentity, ArchiveMetaFile, CurrentPointer,
 };
 use crate::migration::ensure_schema;
-use crate::schema::{MIGRATIONS, SCHEMA_VERSION};
+use crate::schema::MIGRATIONS;
 use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
 
@@ -30,7 +30,10 @@ pub struct ArchiveConfig {
 
 impl ArchiveConfig {
     pub fn new(archive_dir: impl Into<PathBuf>, current_pointer: impl Into<PathBuf>) -> Self {
-        Self { archive_dir: archive_dir.into(), current_pointer: current_pointer.into() }
+        Self {
+            archive_dir: archive_dir.into(),
+            current_pointer: current_pointer.into(),
+        }
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -51,6 +54,8 @@ pub struct ArchiveStore {
     schema_version: i64,
     /// 打开时若发生迁移,记录本次迁移前的自动备份路径(供诊断/恢复入口)。
     pub migration_backup: Option<PathBuf>,
+    _pointer_lock: fslock::LockFile,
+    _archive_lock: fslock::LockFile,
 }
 
 impl ArchiveStore {
@@ -69,21 +74,49 @@ impl ArchiveStore {
         cfg: ArchiveConfig,
         migrations: &[crate::schema::Migration],
     ) -> Result<ArchiveStore, StoreError> {
+        if !cfg.archive_dir.is_absolute() || !cfg.current_pointer.is_absolute() {
+            return Err(StoreError::PathInvalid(
+                "injected paths must be absolute".into(),
+            ));
+        }
+        std::fs::create_dir_all(
+            cfg.current_pointer
+                .parent()
+                .ok_or_else(|| StoreError::PathInvalid("pointer needs a parent".into()))?,
+        )?;
+        let pointer_lock = lock_file(&cfg.current_pointer.with_extension("store-lock"))?;
         std::fs::create_dir_all(&cfg.archive_dir)?;
+        let archive_lock = lock_file(&cfg.archive_dir.join("archive.store-lock"))?;
+        if let Some(pointer) = read_pointer(&cfg.current_pointer)? {
+            if std::fs::canonicalize(&pointer.archive_dir)?
+                != std::fs::canonicalize(&cfg.archive_dir)?
+            {
+                return Err(StoreError::Validation("current pointer targets a different directory; use a separate staging pointer for restore validation".into()));
+            }
+        }
 
         let mut conn = Connection::open(cfg.db_path())?;
         conn.busy_timeout(std::time::Duration::from_millis(5_000))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
         let (schema_version, migration_backup) =
             ensure_schema(&mut conn, migrations, &cfg.backup_dir(), "archive")?;
 
         // 档案身份:meta.json 为档案目录的权威;库内 archive_meta 需一致。
-        let meta = match read_meta_file(&cfg.meta_path())? {
+        let mut meta = match read_meta_file(&cfg.meta_path())? {
             Some(meta) => meta,
             None => {
+                if conn
+                    .query_row("SELECT archive_id FROM archive_meta WHERE id=1", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()?
+                    .is_some()
+                {
+                    return Err(StoreError::Validation("existing archive is missing meta.json; restore its metadata instead of generating a new identity".into()));
+                }
                 let meta = ArchiveMetaFile {
                     archive_id: new_uuid(),
                     schema_version,
@@ -103,7 +136,11 @@ impl ArchiveStore {
 
         let tx = conn.transaction()?;
         let db_archive_id: Option<String> = tx
-            .query_row("SELECT archive_id FROM archive_meta WHERE id = 1", [], |r| r.get(0))
+            .query_row(
+                "SELECT archive_id FROM archive_meta WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
             .map(Some)
             .or_else(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
@@ -126,6 +163,11 @@ impl ArchiveStore {
                     });
                 }
             }
+        }
+
+        if meta.schema_version != schema_version {
+            meta.schema_version = schema_version;
+            write_meta_file(&cfg.meta_path(), &meta)?;
         }
 
         // current 指针:不存在则新铸 epoch(首次建库);存在则校验 archiveId 一致。
@@ -167,6 +209,8 @@ impl ArchiveStore {
             identity: Mutex::new(identity),
             schema_version,
             migration_backup,
+            _pointer_lock: pointer_lock,
+            _archive_lock: archive_lock,
         })
     }
 
@@ -195,17 +239,31 @@ impl ArchiveStore {
     /// 恢复/回滚流程(D12)在成功切换档案目录后调用:新铸 restoreEpoch
     /// 并原子更新 current.json。archiveId 不变(保留 backup 的值)。
     pub fn rotate_restore_epoch(&self) -> Result<ArchiveIdentity, StoreError> {
+        let _conn = self.conn();
         let mut guard = self.identity.lock().expect("identity lock");
-        guard.restore_epoch = new_uuid();
+        let pointer =
+            read_pointer(&self.cfg.current_pointer)?.ok_or(StoreError::IdentityMissing)?;
+        if pointer.archive_id != guard.archive_id
+            || pointer.restore_epoch != guard.restore_epoch
+            || std::fs::canonicalize(&pointer.archive_dir)?
+                != std::fs::canonicalize(&self.cfg.archive_dir)?
+        {
+            return Err(StoreError::Validation(
+                "current pointer changed; cannot rotate stale store".into(),
+            ));
+        }
+        let mut next = guard.clone();
+        next.restore_epoch = new_uuid();
         write_pointer(
             &self.cfg.current_pointer,
             &CurrentPointer {
                 archive_dir: display_dir(&self.cfg.archive_dir),
                 archive_id: guard.archive_id.clone(),
-                restore_epoch: guard.restore_epoch.clone(),
+                restore_epoch: next.restore_epoch.clone(),
             },
         )?;
-        Ok(guard.clone())
+        *guard = next.clone();
+        Ok(next)
     }
 
     /// 事务接口:闭包内通过 [StoreTx] 执行多个操作,同提交同回滚。
@@ -218,7 +276,19 @@ impl ArchiveStore {
     {
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let mut store_tx = StoreTx::new(tx, self.identity.lock().expect("identity lock").archive_id.clone());
+        let identity = self.identity();
+        let pointer =
+            read_pointer(&self.cfg.current_pointer)?.ok_or(StoreError::IdentityMissing)?;
+        if pointer.archive_id != identity.archive_id
+            || pointer.restore_epoch != identity.restore_epoch
+            || std::fs::canonicalize(&pointer.archive_dir)?
+                != std::fs::canonicalize(&self.cfg.archive_dir)?
+        {
+            return Err(StoreError::Validation(
+                "current pointer changed; close and reopen the store".into(),
+            ));
+        }
+        let mut store_tx = StoreTx::new(tx, identity, self.cfg.archive_dir.clone());
         match f(&mut store_tx) {
             Ok(value) => {
                 store_tx.commit()?;
@@ -238,12 +308,24 @@ impl ArchiveStore {
     /// 关闭:checkpoint WAL,随后随结构体析构释放连接。
     /// 重新打开读到的数据即为此刻状态(持久化闭环的验证点)。
     pub fn close(self) -> Result<(), StoreError> {
-        let mut guard = self.conn.lock().expect("archive connection lock");
-        let _ = guard.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get::<_, i64>(0));
+        let guard = self.conn.lock().expect("archive connection lock");
+        let _ = guard.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            r.get::<_, i64>(0)
+        });
         Ok(())
     }
 }
 
 fn display_dir(p: &Path) -> String {
     p.to_string_lossy().to_string()
+}
+
+fn lock_file(path: &Path) -> Result<fslock::LockFile, StoreError> {
+    let mut lock = fslock::LockFile::open(path)?;
+    if !lock.try_lock()? {
+        return Err(StoreError::Conflict(
+            "archive already open by another store".into(),
+        ));
+    }
+    Ok(lock)
 }
