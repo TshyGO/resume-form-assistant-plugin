@@ -87,6 +87,10 @@
     {"id": "snapshot-ack-index-128", "path": "responses/snapshot-ack-index-128.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"},
     {"id": "snapshot-ack-wrong-chunk", "path": "responses/snapshot-ack-wrong-chunk.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-0-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
     {"id": "snapshot-complete-ack-foreign", "path": "responses/snapshot-complete-ack-foreign.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
-    {"id": "reconcile-foreign-item", "path": "responses/reconcile-foreign-item.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}, "request": "requests/outbox-reconcile-ok.json", "strict": {"accept": false, "code": "invalid_payload"}}
+    {"id": "reconcile-foreign-item", "path": "responses/reconcile-foreign-item.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}, "request": "requests/outbox-reconcile-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
+    {"id": "query-candidates-secret-value", "path": "responses/query-candidates-secret-value.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "query-candidates-bad-updated-at", "path": "responses/query-candidates-bad-updated-at.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "query-candidates-updated-at-ok", "path": "responses/query-candidates-updated-at-ok.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "snapshot-complete-ack-cursor-short", "path": "responses/snapshot-complete-ack-cursor-short.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": false, "code": "invalid_payload"}}
   ]
 }

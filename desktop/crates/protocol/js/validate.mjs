@@ -438,6 +438,16 @@ export function validateResponseForRequest(value, request) {
       if (snapshotId !== request.payload?.snapshotId) {
         throw fail("invalid_payload", "complete ACK snapshotId is not the requested snapshot");
       }
+      // chunkCursor is the next index after every consecutively acknowledged chunk, so
+      // completion means it reached the end. A shorter cursor is an internally
+      // inconsistent completion, and completion is what lets the plugin drop its
+      // IndexedDB copy.
+      if (!Number.isInteger(chunkCursor)) {
+        throw fail("invalid_payload", "a complete ACK must carry chunkCursor");
+      }
+      if (chunkCursor !== chunkCount) {
+        throw fail("invalid_payload", "complete ACK chunkCursor must equal the request chunkCount");
+      }
     }
   }
   if (request.messageType === "outbox.reconcile") {
@@ -538,6 +548,13 @@ export function validateResponse(value, requestType) {
       }
     }
     walkUrls(value.payload);
+    // Only the URL checker ran here, so a response could carry the very content the
+    // request direction refuses. Archive data can hold credentials; the host must not
+    // hand them back to the extension.
+    walkSecrets(value.payload);
+    if (requestType === "application.queryCandidates") {
+      candidateTimestampsAreReal(value.payload);
+    }
   } else if (value.resultId) {
     throw fail("invalid_payload", "ok:false response must not include resultId");
   } else {
@@ -577,4 +594,21 @@ export function utf8JsonLen(value) {
 export function originAllowed(origin, allowed) {
   if (!origin || origin.includes("*")) return false;
   return allowed.some((item) => item === origin && !item.includes("*"));
+}
+
+// `updatedAt` on a candidate is only pattern-checked by the schema, the same way request
+// `occurredAt` is, so it needs the same calendar and clock check. Without it a value such
+// as `2026-99-99T99:99:99Z` reaches the plugin and breaks recency ordering.
+function candidateTimestampsAreReal(payload) {
+  for (const list of ["exact", "sameCompany"]) {
+    const items = payload?.[list];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      const stamp = item?.updatedAt;
+      if (typeof stamp !== "string") continue;
+      if (!isUtcTimestamp(stamp)) {
+        throw fail("invalid_payload", `candidate updatedAt is not a real UTC timestamp: ${stamp}`);
+      }
+    }
+  }
 }

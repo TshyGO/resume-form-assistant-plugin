@@ -343,6 +343,19 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             if acked != requested {
                 return Err(invalid("complete ACK snapshotId is not the requested snapshot"));
             }
+            // chunkCursor is the next index after every consecutively acknowledged
+            // chunk, so completion means it reached the end. A shorter cursor is an
+            // internally inconsistent completion, and completion is what lets the
+            // plugin drop its IndexedDB copy.
+            match payload.and_then(|p| p.get("chunkCursor")).and_then(Value::as_u64) {
+                Some(cursor) if cursor == chunk_count => {}
+                Some(_) => {
+                    return Err(invalid(
+                        "complete ACK chunkCursor must equal the request chunkCount",
+                    ))
+                }
+                None => return Err(invalid("a complete ACK must carry chunkCursor")),
+            }
         }
     }
     if req.message_type == MessageType::OutboxReconcile {
@@ -481,6 +494,13 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         }
         let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
         reject_sensitive_urls(obj.get("payload").unwrap(), &allowlist_from_rules(&rules))?;
+        // Only the URL checker ran here, so a response could carry the very content the
+        // request direction refuses. Archive data can hold credentials; the host must
+        // not hand them back to the extension.
+        reject_secrets(obj.get("payload").unwrap())?;
+        if request_type == MessageType::QueryCandidates {
+            candidate_timestamps_are_real(obj.get("payload").unwrap())?;
+        }
     } else {
         if obj.contains_key("resultId") {
             return Err(ProtocolError::new(
@@ -579,4 +599,28 @@ pub fn payload_sha256(req: &Request) -> Option<String> {
         .get("payloadSha256")
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+/// `updatedAt` on a candidate is only pattern-checked by the schema, the same way
+/// request `occurredAt` is, so it needs the same calendar and clock check. Without it a
+/// value such as `2026-99-99T99:99:99Z` reaches the plugin and breaks recency ordering.
+fn candidate_timestamps_are_real(payload: &Value) -> Result<(), ProtocolError> {
+    for list in ["exact", "sameCompany"] {
+        let Some(items) = payload.get(list).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(stamp) = item.get("updatedAt").and_then(Value::as_str) else {
+                continue;
+            };
+            if !is_utc_timestamp(stamp) {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    format!("candidate updatedAt is not a real UTC timestamp: {stamp}"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
