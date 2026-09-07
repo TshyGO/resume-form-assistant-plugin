@@ -15,6 +15,7 @@ import {
   validateRequest,
   validateRequestBytes,
   validateResponse,
+  validateResponseForRequest,
 } from "./validate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
@@ -82,6 +83,15 @@ for (const entry of catalog.responses) {
     const protocolCode = codeOf(() => validateResponse(value, entry.requestType));
     if (entry.protocol.accept) assert.equal(protocolCode, null, `${entry.id} protocol`);
     else assert.equal(protocolCode, entry.protocol.code, `${entry.id} protocol`);
+    // validateResponse never sees the request, so entries that declare one are also
+    // run through the request-aware validator. Without this the catalog cannot reach
+    // correlation, ACK identity or reconcile echo at all.
+    if (entry.strict) {
+      const request = load(entry.request);
+      const strictCode = codeOf(() => validateResponseForRequest(value, request));
+      if (entry.strict.accept) assert.equal(strictCode, null, `${entry.id} strict`);
+      else assert.equal(strictCode, entry.strict.code, `${entry.id} strict`);
+    }
   });
 }
 

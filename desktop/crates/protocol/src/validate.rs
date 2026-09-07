@@ -405,6 +405,19 @@ fn reconcile_identity(item: &Value) -> String {
 }
 
 pub fn validate_response_value(value: &Value, request_type: MessageType) -> Result<(), ProtocolError> {
+    // Requests are bounded in `validate_request_bytes`; responses had no bounded entry
+    // point at all, so a schema-valid `application.queryCandidates` result could run
+    // several times past the contract's envelope limit and still validate.
+    if utf8_json_len(value) > MAX_ENVELOPE_BYTES {
+        return Err(ProtocolError::new(
+            ErrorCode::PayloadTooLarge,
+            Layer::Structure,
+            format!(
+                "response is {} UTF-8 bytes; max is {MAX_ENVELOPE_BYTES}",
+                utf8_json_len(value)
+            ),
+        ));
+    }
     if value.as_array().is_some() || !value.is_object() {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,

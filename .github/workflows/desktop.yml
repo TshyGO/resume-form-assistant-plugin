@@ -79,6 +79,18 @@ jobs:
         working-directory: desktop
         run: node --test crates/protocol/js/*.test.mjs
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Protocol browser catalog
+        working-directory: desktop/crates/protocol
+        run: |
+          python -m pip install --disable-pip-version-check playwright==1.58.0
+          python -m playwright install chromium
+          python js/run-browser-catalog.py
+
       - name: App tests
         working-directory: desktop
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib --target ${{ matrix.rust-target }}

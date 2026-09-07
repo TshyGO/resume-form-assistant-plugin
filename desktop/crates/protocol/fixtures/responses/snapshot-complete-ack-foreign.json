@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "44444444-4444-4444-8444-444444444444",
+  "ok": true,
+  "resultId": "55555555-5555-4555-8555-555555555555",
+  "payload": {
+    "ackKind": "snapshot",
+    "snapshotId": "99999999-9999-4999-8999-999999999999",
+    "chunkIndex": 1,
+    "chunkCursor": 2
+  }
+}

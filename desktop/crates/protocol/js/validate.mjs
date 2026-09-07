@@ -44,6 +44,14 @@ export function utf8Len(text) {
   return textEncoder.encode(text).byteLength;
 }
 
+// A forbidden key naming a value inside a string, as in `Cookie: sessionid=...` or
+// `x-api-key: ...`. The key list is already refused as an object key; without this a
+// caller can smuggle the same content through an allowed free-text field. The key must
+// not continue a longer word, so `Secret Lab` and `Token Inc.` stay acceptable.
+const SECRET_NAMES_VALUE = new RegExp(
+  `(?:^|[^a-z0-9])(?:${FORBIDDEN_KEYS.join("|")}) *[:=] *[^ ]`,
+);
+
 function walkSecrets(value) {
   if (Array.isArray(value)) {
     value.forEach(walkSecrets);
@@ -64,7 +72,7 @@ function walkSecrets(value) {
     const apiKeyLike = lower
       .split(/[^a-z0-9\-_]+/)
       .some((token) => token.startsWith("sk-") && token.length >= 20);
-    if (apiKeyLike || lower.includes("bearer ")) {
+    if (apiKeyLike || lower.includes("bearer ") || SECRET_NAMES_VALUE.test(lower)) {
       throw fail("secret_forbidden", "payload looks like a secret", "secrets");
     }
   }
@@ -476,6 +484,13 @@ function reconcileIdentity(item) {
 export function validateResponse(value, requestType) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw fail("invalid_payload", "response must be an object");
+  }
+  // Requests are bounded in validateRequestBytes; responses had no bounded entry point
+  // at all, so a schema-valid application.queryCandidates result could run several
+  // times past the contract's envelope limit and still validate.
+  const responseBytes = utf8JsonLen(value);
+  if (responseBytes > MAX_ENVELOPE_BYTES) {
+    throw fail("payload_too_large", `response is ${responseBytes} UTF-8 bytes; max is ${MAX_ENVELOPE_BYTES}`);
   }
   if (Object.prototype.hasOwnProperty.call(value, "protocolVersion")) {
     if (!Number.isInteger(value.protocolVersion)) {

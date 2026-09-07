@@ -60,16 +60,21 @@
     {"id": "url-root-tab-in-key", "path": "requests/url-root-tab-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-newline-in-key", "path": "requests/url-root-newline-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-cr-in-key", "path": "requests/url-root-cr-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "url-root-tab-in-host", "path": "requests/url-root-tab-in-host.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "url-root-tab-in-host", "path": "requests/url-root-tab-in-host.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "job-save-cookie-value", "path": "requests/job-save-cookie-value.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "job-save-authorization-value", "path": "requests/job-save-authorization-value.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "job-save-apikey-value", "path": "requests/job-save-apikey-value.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "job-save-password-value", "path": "requests/job-save-password-value.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "job-save-secret-lab-ok", "path": "requests/job-save-secret-lab-ok.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
     {"id": "job-save-success", "path": "responses/job-save-success.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
     {"id": "handshake-ok", "path": "responses/handshake-ok.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}},
     {"id": "query-candidates-ok", "path": "responses/query-candidates-ok.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "snapshot-chunk-ack", "path": "responses/snapshot-chunk-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "snapshot-complete-ack", "path": "responses/snapshot-complete-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "outbox-reconcile-ok", "path": "responses/outbox-reconcile-ok.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "snapshot-chunk-ack", "path": "responses/snapshot-chunk-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-0-ok.json", "strict": {"accept": true}},
+    {"id": "snapshot-complete-ack", "path": "responses/snapshot-complete-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": true}},
+    {"id": "outbox-reconcile-ok", "path": "responses/outbox-reconcile-ok.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}, "request": "requests/outbox-reconcile-ok.json", "strict": {"accept": true}},
     {"id": "handshake-empty-payload", "path": "responses/handshake-empty-payload.json", "requestType": "handshake", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "response-protocolVersion-2", "path": "responses/protocolVersion-2.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
     {"id": "conflict-retryable-true", "path": "responses/conflict-retryable-true.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
@@ -79,6 +84,9 @@
     {"id": "url-response-root-token", "path": "responses/url-response-root-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}, "requestType": "application.queryCandidates"},
     {"id": "url-response-root-ok", "path": "responses/url-response-root-ok.json", "schema": "accept", "protocol": {"accept": true}, "requestType": "application.queryCandidates"},
     {"id": "snapshot-ack-cursor-huge", "path": "responses/snapshot-ack-cursor-huge.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"},
-    {"id": "snapshot-ack-index-128", "path": "responses/snapshot-ack-index-128.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"}
+    {"id": "snapshot-ack-index-128", "path": "responses/snapshot-ack-index-128.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"},
+    {"id": "snapshot-ack-wrong-chunk", "path": "responses/snapshot-ack-wrong-chunk.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-0-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
+    {"id": "snapshot-complete-ack-foreign", "path": "responses/snapshot-complete-ack-foreign.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
+    {"id": "reconcile-foreign-item", "path": "responses/reconcile-foreign-item.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}, "request": "requests/outbox-reconcile-ok.json", "strict": {"accept": false, "code": "invalid_payload"}}
   ]
 }

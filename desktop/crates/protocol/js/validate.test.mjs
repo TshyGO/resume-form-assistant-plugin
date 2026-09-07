@@ -203,3 +203,25 @@ test("reconcile results must echo exactly the items that were asked about", asyn
     "invalid_payload",
   );
 });
+
+test("a schema-valid response still cannot exceed the envelope limit", async () => {
+  const entry = (i) => ({
+    applicationId: "77777777-7777-4777-8777-7777777777" + String(i).padStart(2, "0"),
+    company: "公".repeat(200),
+    title: "职".repeat(200),
+    sourceUrl: "https://jobs.example/" + "a".repeat(1970),
+    stage: "saved",
+    updatedAt: "2026-09-06T12:00:00Z",
+  });
+  const big = okResponse(MSG, {
+    exact: Array.from({ length: 32 }, (_, i) => entry(i)),
+    sameCompany: Array.from({ length: 32 }, (_, i) => entry(i)),
+  });
+  delete big.resultId; // queryCandidates is not a write
+  assert.ok(new TextEncoder().encode(JSON.stringify(big)).length > MAX_ENVELOPE_BYTES);
+  assert.equal(await code(() => validateResponse(big, "application.queryCandidates")), "payload_too_large");
+
+  const small = okResponse(MSG, { exact: [entry(0)], sameCompany: [] });
+  delete small.resultId;
+  validateResponse(small, "application.queryCandidates");
+});

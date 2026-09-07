@@ -3,7 +3,7 @@
 <title>D05 browser catalog</title>
 <pre id="out">running…</pre>
 <script type="module">
-  import { validateRequest, validateResponse } from "./validate.mjs";
+  import { validateRequest, validateResponse, validateResponseForRequest } from "./validate.mjs";
   import { envelopeSchema, payloadSchema, responsePayloadSchema, responseSchema, validateSchema } from "./schema-lite.mjs";
 
   function codeOf(fn) {
@@ -63,6 +63,14 @@
     else if (!entry.protocol.accept && protocolCode !== entry.protocol.code) {
       failed.push(`${entry.id} protocol ${protocolCode} != ${entry.protocol.code}`);
     } else passed += 1;
+    if (entry.strict) {
+      const request = await (await fetch(`../fixtures/${entry.request}`)).json();
+      const strictCode = codeOf(() => validateResponseForRequest(value, request));
+      if (entry.strict.accept && strictCode) failed.push(`${entry.id} strict ${strictCode}`);
+      else if (!entry.strict.accept && strictCode !== entry.strict.code) {
+        failed.push(`${entry.id} strict ${strictCode} != ${entry.strict.code}`);
+      } else passed += 1;
+    }
   }
 
   const result = { passed, failed, ok: failed.length === 0, userAgent: navigator.userAgent };

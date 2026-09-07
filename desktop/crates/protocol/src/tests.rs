@@ -603,6 +603,24 @@ fn shared_catalog_agrees_with_schema_and_protocol() {
                 entry["protocol"]["code"].as_str().unwrap()
             );
         }
+        // validate_response_value never sees the request, so entries that declare one
+        // are also run through the request-aware validator. Without this the catalog
+        // cannot reach correlation, ACK identity or reconcile echo at all.
+        if let Some(strict) = entry.get("strict") {
+            let request =
+                validate_request_value(&load_fixture(entry["request"].as_str().unwrap())).unwrap();
+            let outcome = validate_response_for_request(&value, &request);
+            if strict["accept"] == true {
+                assert!(outcome.is_ok(), "{} strict {:?}", entry["id"], outcome.err());
+            } else {
+                assert_eq!(
+                    outcome.unwrap_err().code.as_str(),
+                    strict["code"].as_str().unwrap(),
+                    "{} strict",
+                    entry["id"]
+                );
+            }
+        }
     }
 }
 
@@ -859,4 +877,37 @@ fn durable_chunk_rejects_values_outside_the_snapshot() {
     assert!(DurableChunk::committed(SNAP, 0, 2, MSG, 3).is_err()); // cursor > count
     assert!(DurableChunk::committed(SNAP, 0, 0, MSG, 1).is_err()); // count 0
     assert!(DurableChunk::committed(SNAP, 0, 2, "", 1).is_err()); // no stored messageId
+}
+
+#[test]
+fn a_schema_valid_response_still_cannot_exceed_the_envelope_limit() {
+    let entry = |i: usize| {
+        json!({
+            "applicationId": format!("77777777-7777-4777-8777-7777777777{i:02}"),
+            "company": "公".repeat(200),
+            "title": "职".repeat(200),
+            "sourceUrl": format!("https://jobs.example/{}", "a".repeat(1970)),
+            "stage": "saved",
+            "updatedAt": "2026-09-06T12:00:00Z"
+        })
+    };
+    let many: Vec<Value> = (0..32).map(entry).collect();
+    let big = json!({
+        "protocolVersion": 1,
+        "correlationId": MSG,
+        "ok": true,
+        "payload": {"exact": many.clone(), "sameCompany": many}
+    });
+    assert!(utf8_json_len(&big) > crate::types::MAX_ENVELOPE_BYTES);
+    assert_code(
+        validate_response_value(&big, MessageType::QueryCandidates).unwrap_err(),
+        "payload_too_large",
+    );
+    let small = json!({
+        "protocolVersion": 1,
+        "correlationId": MSG,
+        "ok": true,
+        "payload": {"exact": [entry(0)], "sameCompany": []}
+    });
+    validate_response_value(&small, MessageType::QueryCandidates).unwrap();
 }
