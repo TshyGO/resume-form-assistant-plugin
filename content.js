@@ -31,8 +31,10 @@
     background-color: transparent;
   }
 }
-`;
+  `;
   const fieldHighlightTimers = new WeakMap();
+  const chipSelectionIdsByTarget = new WeakMap();
+  const chipWriteTargets = new WeakSet();
   let shadowRoot = null;
   const state = {
     dragOffsetX: 0,
@@ -41,7 +43,8 @@
     currentStore: null,
     statusTimer: null,
     lastFocusedField: null,
-    managerVisible: false
+    managerVisible: false,
+    chipAction: null
   };
 
   const StorageService = {
@@ -141,6 +144,17 @@
     `;
 
     shadowRoot.appendChild(sidebar);
+    const chipActions = document.createElement("div");
+    chipActions.id = "resume-pro-chip-actions";
+    chipActions.className = "resume-pro__chip-actions";
+    chipActions.hidden = true;
+    chipActions.setAttribute("role", "menu");
+    chipActions.setAttribute("aria-label", "字段填写方式");
+    chipActions.innerHTML = `
+      <button type="button" role="menuitem" data-chip-mode="add">添加</button>
+      <button type="button" role="menuitem" data-chip-mode="replace">替换</button>
+    `;
+    shadowRoot.appendChild(chipActions);
     bindSidebarEvents(sidebar);
   }
 
@@ -194,6 +208,21 @@
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
     openManagerButton?.addEventListener("click", () => setManagerVisibility(true));
+
+    const chipActions = shadowRoot.querySelector("#resume-pro-chip-actions");
+    chipActions?.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    chipActions?.querySelectorAll("[data-chip-mode]").forEach((actionButton) => {
+      actionButton.addEventListener("click", () => handleChipAction(actionButton.dataset.chipMode));
+    });
+    document.addEventListener("mousedown", () => closeChipActionMenu());
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeChipActionMenu();
+      }
+    });
   }
 
   function bindStorageSync() {
@@ -237,14 +266,15 @@
         </div>
       `;
     } else {
-      groupsContainer.innerHTML = activeTemplate.groups.map((group) => `
+      groupsContainer.innerHTML = activeTemplate.groups.map((group, groupIndex) => `
       <section class="resume-pro__group">
         <div class="resume-pro__group-name">${escapeHtml(group.name)}</div>
         <div class="resume-pro__chips">
-          ${group.fields.map((field) => `
+          ${group.fields.map((field, fieldIndex) => `
             <button
               class="resume-pro__chip"
               type="button"
+              data-chip-id="${escapeHtml(`${activeTemplate.id}:${groupIndex}:${fieldIndex}`)}"
               data-value="${escapeHtml(field.value)}"
               title="${escapeHtml(field.value)}"
             >
@@ -267,26 +297,325 @@
     if (setupButton) {
       setupButton.addEventListener("click", () => setManagerVisibility(true));
     }
+
+    closeChipActionMenu();
+    syncChipSelectionState();
   }
 
   async function handleFieldChipClick(button) {
     const value = button.dataset.value || "";
-    const copied = await copyText(value);
-    const filled = await fillLastFocusedField(value);
+    const target = getLastFocusedFillTarget();
 
-    button.classList.add("is-success");
-    button.textContent = filled ? "已填写" : "已复制";
-    window.setTimeout(() => {
-      button.classList.remove("is-success");
-      renderSidebar();
-    }, 1000);
-
-    if (filled) {
-      showStatus(copied ? "已复制并填入当前输入框。" : "已填入当前输入框。", "success");
+    closeChipActionMenu();
+    if (!value) {
       return;
     }
 
-    showStatus(copied ? "字段值已复制到剪贴板。" : "字段值已准备好，请手动粘贴。", "success");
+    if (!target) {
+      await copyText(value);
+      return;
+    }
+
+    if (!isComposableTextTarget(target)) {
+      await copyText(value);
+      const filled = await Promise.resolve(setElementValue(target, value));
+      if (filled) {
+        target.focus?.();
+        state.lastFocusedField = target;
+      }
+      return;
+    }
+
+    const selection = captureTextSelection(target);
+    const currentValue = getComposableTargetValue(target);
+    syncChipSelectionState();
+    if (button.classList.contains("is-in-field")) {
+      await applyChipValue(target, value, "remove", selection, button.dataset.chipId);
+      return;
+    }
+
+    if (!currentValue) {
+      await copyText(value);
+      await applyChipValue(target, value, "add", selection, button.dataset.chipId);
+      return;
+    }
+
+    showChipActionMenu(button, target, value, selection);
+  }
+
+  async function handleChipAction(mode) {
+    const action = state.chipAction;
+    closeChipActionMenu();
+    if (!action || !["add", "replace"].includes(mode)) {
+      return;
+    }
+
+    await copyText(action.value);
+    const filled = await applyChipValue(action.target, action.value, mode, action.selection, action.button.dataset.chipId);
+    if (!filled) {
+      return;
+    }
+  }
+
+  function showChipActionMenu(button, target, value, selection) {
+    const menu = shadowRoot?.querySelector("#resume-pro-chip-actions");
+    if (!menu) {
+      return;
+    }
+
+    state.chipAction = { button, target, value, selection };
+    menu.hidden = false;
+    const buttonRect = button.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(buttonRect.left, window.innerWidth - menuRect.width - 8));
+    const fitsBelow = buttonRect.bottom + menuRect.height + 8 <= window.innerHeight;
+    const top = fitsBelow ? buttonRect.bottom + 6 : Math.max(8, buttonRect.top - menuRect.height - 6);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function closeChipActionMenu() {
+    const menu = shadowRoot?.querySelector?.("#resume-pro-chip-actions");
+    if (menu) {
+      menu.hidden = true;
+    }
+    state.chipAction = null;
+  }
+
+  function captureTextSelection(target) {
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      const fallback = target.value.length;
+      return {
+        start: Number.isInteger(target.selectionStart) ? target.selectionStart : fallback,
+        end: Number.isInteger(target.selectionEnd) ? target.selectionEnd : fallback
+      };
+    }
+
+    const selection = window.getSelection?.();
+    if (!selection?.rangeCount) {
+      const fallback = target.textContent?.length || 0;
+      return { start: fallback, end: fallback };
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!target.contains(range.commonAncestorContainer)) {
+      const fallback = target.textContent?.length || 0;
+      return { start: fallback, end: fallback };
+    }
+
+    const beforeStart = range.cloneRange();
+    beforeStart.selectNodeContents(target);
+    beforeStart.setEnd(range.startContainer, range.startOffset);
+    const beforeEnd = range.cloneRange();
+    beforeEnd.selectNodeContents(target);
+    beforeEnd.setEnd(range.endContainer, range.endOffset);
+    return { start: beforeStart.toString().length, end: beforeEnd.toString().length };
+  }
+
+  function composeChipText(currentValue, chipValue, mode, selection = {}) {
+    const current = String(currentValue || "");
+    const chip = String(chipValue || "");
+    const rawStart = Number.isInteger(selection.start) ? selection.start : current.length;
+    const start = Math.min(Math.max(0, rawStart), current.length);
+
+    if (!chip) {
+      return { value: current, caret: start, changed: false };
+    }
+
+    if (mode === "replace") {
+      return { value: chip, caret: chip.length, changed: current !== chip };
+    }
+
+    if (mode === "remove") {
+      const index = findNearestChipOccurrence(current, chip, start);
+      if (index < 0) {
+        return { value: current, caret: start, changed: false };
+      }
+      return {
+        value: current.slice(0, index) + current.slice(index + chip.length),
+        caret: index,
+        changed: true
+      };
+    }
+
+    return {
+      value: current.slice(0, start) + chip + current.slice(start),
+      caret: start + chip.length,
+      changed: true
+    };
+  }
+
+  function findNearestChipOccurrence(current, chip, caret) {
+    let nearestIndex = -1;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    let index = current.indexOf(chip);
+    while (index >= 0) {
+      const distance = caret < index ? index - caret : caret > index + chip.length ? caret - (index + chip.length) : 0;
+      if (distance < nearestDistance) {
+        nearestIndex = index;
+        nearestDistance = distance;
+      }
+      index = current.indexOf(chip, index + Math.max(1, chip.length));
+    }
+    return nearestIndex;
+  }
+
+  async function applyChipValue(target, chipValue, mode, selection, chipId = "") {
+    if (!isComposableTextTarget(target) || !document.contains(target)) {
+      return false;
+    }
+
+    const composed = composeChipText(getComposableTargetValue(target), chipValue, mode, selection);
+    if (!composed.changed) {
+      if (mode === "replace" && chipId) {
+        updateTrackedChipSelection(target, chipId, mode);
+        syncChipSelectionState();
+        return true;
+      }
+      return false;
+    }
+
+    const hadTrackedSelection = chipSelectionIdsByTarget.has(target);
+    const previousSelection = new Set(chipSelectionIdsByTarget.get(target) || []);
+    updateTrackedChipSelection(target, chipId, mode);
+    chipWriteTargets.add(target);
+    let filled;
+    try {
+      filled = await Promise.resolve(setElementValue(target, composed.value));
+    } finally {
+      chipWriteTargets.delete(target);
+    }
+    if (!filled) {
+      if (chipId) {
+        if (hadTrackedSelection) {
+          chipSelectionIdsByTarget.set(target, previousSelection);
+        } else {
+          chipSelectionIdsByTarget.delete(target);
+        }
+      }
+      return false;
+    }
+
+    target.focus?.();
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      target.setSelectionRange?.(composed.caret, composed.caret);
+    } else {
+      setContentEditableCaret(target, composed.caret);
+    }
+    state.lastFocusedField = target;
+    syncChipSelectionState();
+    return true;
+  }
+
+  function getComposableTargetValue(target) {
+    return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+      ? String(target.value || "")
+      : String(target.textContent || "");
+  }
+
+  function setContentEditableCaret(target, caret) {
+    const selection = window.getSelection?.();
+    const range = document.createRange?.();
+    if (!selection || !range) {
+      return;
+    }
+    const textNode = target.firstChild || target;
+    const offset = textNode === target ? 0 : Math.min(caret, textNode.textContent?.length || 0);
+    range.setStart(textNode, offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function isComposableTextTarget(target) {
+    if (target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) {
+      return true;
+    }
+    return target instanceof HTMLInputElement && ["text", "search", "tel", "url", "email", "password"].includes(target.type || "text");
+  }
+
+  function syncChipSelectionState() {
+    if (!shadowRoot?.querySelectorAll) {
+      return;
+    }
+    const target = getLastFocusedFillTarget();
+    const currentValue = target && isComposableTextTarget(target) ? getComposableTargetValue(target) : "";
+    const buttons = Array.from(shadowRoot.querySelectorAll(".resume-pro__chip"));
+    const selectedIds = target && isComposableTextTarget(target)
+      ? resolveSelectedChipIds(target, buttons, currentValue)
+      : new Set();
+    buttons.forEach((button) => {
+      const selected = selectedIds.has(button.dataset.chipId);
+      button.classList.toggle("is-in-field", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+  }
+
+  function updateTrackedChipSelection(target, chipId, mode) {
+    if (!chipId) {
+      return;
+    }
+    const selectedIds = new Set(chipSelectionIdsByTarget.get(target) || []);
+    if (mode === "replace") {
+      selectedIds.clear();
+    }
+    if (mode === "remove") {
+      selectedIds.delete(chipId);
+    } else {
+      selectedIds.add(chipId);
+    }
+    chipSelectionIdsByTarget.set(target, selectedIds);
+  }
+
+  function resolveSelectedChipIds(target, buttons, currentValue) {
+    const hasTrackedSelection = chipSelectionIdsByTarget.has(target);
+    const previousIds = chipSelectionIdsByTarget.get(target) || new Set();
+    const nextIds = new Set();
+    const buttonsByValue = new Map();
+
+    buttons.forEach((button, index) => {
+      if (!button.dataset.chipId) {
+        button.dataset.chipId = `rendered-chip-${index}`;
+      }
+      const value = button.dataset.value || "";
+      if (!value) {
+        return;
+      }
+      if (!buttonsByValue.has(value)) {
+        buttonsByValue.set(value, []);
+      }
+      buttonsByValue.get(value).push(button);
+    });
+
+    buttonsByValue.forEach((sameValueButtons, value) => {
+      let remaining = countTextOccurrences(currentValue, value);
+      const preferred = sameValueButtons.filter((button) => previousIds.has(button.dataset.chipId));
+      const candidates = hasTrackedSelection
+        ? preferred
+        : sameValueButtons;
+      candidates.forEach((button) => {
+        if (remaining > 0) {
+          nextIds.add(button.dataset.chipId);
+          remaining -= 1;
+        }
+      });
+    });
+
+    chipSelectionIdsByTarget.set(target, nextIds);
+    return nextIds;
+  }
+
+  function countTextOccurrences(text, value) {
+    if (!value) {
+      return 0;
+    }
+    let count = 0;
+    let index = String(text || "").indexOf(value);
+    while (index >= 0) {
+      count += 1;
+      index = String(text || "").indexOf(value, index + value.length);
+    }
+    return count;
   }
 
   function newRequestId() {
@@ -793,6 +1122,17 @@
 
       if (isFillTarget(target)) {
         state.lastFocusedField = target;
+        closeChipActionMenu();
+        syncChipSelectionState();
+      }
+    }, true);
+    document.addEventListener("input", (event) => {
+      if (event.target === state.lastFocusedField) {
+        closeChipActionMenu();
+        if (!chipWriteTargets.has(event.target)) {
+          chipSelectionIdsByTarget.delete(event.target);
+        }
+        syncChipSelectionState();
       }
     }, true);
   }
@@ -815,20 +1155,16 @@
     }
   }
 
-  async function fillLastFocusedField(value) {
+  function getLastFocusedFillTarget() {
     const candidates = [state.lastFocusedField, document.activeElement];
 
     for (const candidate of candidates) {
       if (candidate instanceof HTMLElement && isFillTarget(candidate) && document.contains(candidate)) {
-        if (await Promise.resolve(setElementValue(candidate, value))) {
-          candidate.focus?.();
-          state.lastFocusedField = candidate;
-          return true;
-        }
+        return candidate;
       }
     }
 
-    return false;
+    return null;
   }
 
   function setElementValue(element, value) {
@@ -1288,11 +1624,19 @@
       formatFillDiagnostics,
       getHighlightTargets,
       handleAiFillClick,
+      handleChipAction,
+      handleFieldChipClick,
       highlightFilledField,
       injectFieldHighlightStyles,
       isInViewport,
+      applyChipValue,
+      composeChipText,
+      syncChipSelectionState,
       setCurrentStore(store) {
         state.currentStore = store;
+      },
+      setLastFocusedField(field) {
+        state.lastFocusedField = field;
       },
       setShadowRoot(root) {
         shadowRoot = root;
