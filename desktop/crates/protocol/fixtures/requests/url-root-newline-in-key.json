@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "messageId": "33333333-3333-4333-8333-333333333333",
+  "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+  "messageType": "job.save",
+  "occurredAt": "2026-09-06T12:00:00.000Z",
+  "payload": {
+    "sourceRestoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "company": "合成公司",
+    "title": "后端实习",
+    "sourceUrl": "https://jobs.example/?access_\ntoken=TOPSECRET",
+    "payloadSha256": "855ebae15b7363c7ac7c66a1e52438dfd158740933b62b4e3cce1b74368005b9"
+  },
+  "archiveId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "restoreEpoch": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+}

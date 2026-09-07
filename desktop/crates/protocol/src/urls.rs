@@ -76,8 +76,14 @@ fn check_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError>
     let Some(rest) = raw.strip_prefix("https://") else {
         return Err(forbidden("URL must be https without credentials"));
     };
-    if rest.contains(' ') || rest.is_empty() {
-        return Err(forbidden("URL must be https without credentials"));
+    // WHATWG parsing strips tab, LF and CR from anywhere in a URL, so
+    // "?access_<TAB>token=" reaches the consumer as "access_token" while a literal
+    // scan of the raw string sees a name that matches no sensitive key. Reject every
+    // C0 control, space and DEL rather than trying to mirror that normalization.
+    if rest.is_empty() || raw.chars().any(|c| c.is_ascii_control() || c == ' ') {
+        return Err(forbidden(
+            "URL must be https without control characters or credentials",
+        ));
     }
     // Authority ends at the first literal path, query or fragment delimiter.
     let (authority, path_query_frag) = match rest.find(['/', '?', '#']) {

@@ -128,8 +128,12 @@ function queryHasSecret(query, host, path) {
 
 export function checkUrl(raw) {
   if (!raw) return;
-  if (!raw.startsWith("https://") || raw.includes(" ")) {
-    throw fail("secret_forbidden", "URL must be https without credentials", "secrets");
+  // WHATWG parsing strips tab, LF and CR from anywhere in a URL, so
+  // "?access_<TAB>token=" reaches the consumer as "access_token" while a literal
+  // scan of the raw string sees a name that matches no sensitive key. Reject every
+  // C0 control, space and DEL rather than trying to mirror that normalization.
+  if (!raw.startsWith("https://") || /[\u0000-\u0020\u007f]/.test(raw)) {
+    throw fail("secret_forbidden", "URL must be https without control characters or credentials", "secrets");
   }
   const rest = raw.slice("https://".length);
   // Keep encoded delimiters in their component; split only literal boundaries.
@@ -398,18 +402,75 @@ export function validateResponseForRequest(value, request) {
   }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
+    const requestedIndex = request.payload?.chunkIndex;
     if (!Number.isInteger(chunkCount)) {
       throw fail("invalid_payload", "snapshot.chunk request has no chunkCount to bound the ACK");
     }
-    const { chunkIndex, chunkCursor } = value.payload ?? {};
-    if (Number.isInteger(chunkIndex) && chunkIndex >= chunkCount) {
-      throw fail("invalid_payload", "ACK chunkIndex is outside the request chunkCount");
+    if (!Number.isInteger(requestedIndex)) {
+      throw fail("invalid_payload", "snapshot.chunk request has no chunkIndex to match the ACK");
+    }
+    const { ackKind, chunkIndex, chunkCursor, snapshotId } = value.payload ?? {};
+    // An ACK answers one chunk request. Bounding by chunkCount alone let an ACK for a
+    // different chunk pass, which advances the wrong cursor.
+    if (!Number.isInteger(chunkIndex)) {
+      throw fail("invalid_payload", "ACK must carry the chunkIndex it answers");
+    }
+    if (chunkIndex !== requestedIndex) {
+      throw fail("invalid_payload", "ACK chunkIndex is not the chunk that was requested");
     }
     if (Number.isInteger(chunkCursor) && chunkCursor > chunkCount) {
       throw fail("invalid_payload", "ACK chunkCursor is beyond the request chunkCount");
     }
+    // A complete ACK is the plugin's permission to drop its IndexedDB copy, so it must
+    // name the snapshot it completes.
+    if (ackKind === "snapshot") {
+      if (typeof snapshotId !== "string") {
+        throw fail("invalid_payload", "a complete ACK must carry snapshotId");
+      }
+      if (snapshotId !== request.payload?.snapshotId) {
+        throw fail("invalid_payload", "complete ACK snapshotId is not the requested snapshot");
+      }
+    }
+  }
+  if (request.messageType === "outbox.reconcile") {
+    // The documented echo is item by item on full identity. Without it a response can
+    // resolve an outbox record the plugin never asked about while leaving the requested
+    // one pending.
+    const asked = request.payload?.items;
+    const answered = value.payload?.items;
+    if (!Array.isArray(asked)) {
+      throw fail("invalid_payload", "outbox.reconcile request has no items to match");
+    }
+    if (!Array.isArray(answered)) {
+      throw fail("invalid_payload", "outbox.reconcile response has no items");
+    }
+    const outstanding = asked.map(reconcileIdentity);
+    for (const item of answered) {
+      const at = outstanding.indexOf(reconcileIdentity(item));
+      if (at === -1) {
+        throw fail("invalid_payload", "reconcile result does not match any requested item, or repeats one");
+      }
+      outstanding.splice(at, 1);
+    }
+    if (outstanding.length > 0) {
+      throw fail("invalid_payload", "reconcile response omits a requested item");
+    }
   }
   return value;
+}
+
+// Full identity of one reconcile item, including optional snapshot identity.
+function reconcileIdentity(item) {
+  const field = (name) => (typeof item?.[name] === "string" ? item[name] : "");
+  const chunk = Number.isInteger(item?.chunkIndex) ? String(item.chunkIndex) : "";
+  return [
+    field("clientInstanceId"),
+    field("messageId"),
+    field("sourceRestoreEpoch"),
+    field("payloadSha256"),
+    field("snapshotId"),
+    chunk,
+  ].join("\u0001");
 }
 
 export function validateResponse(value, requestType) {

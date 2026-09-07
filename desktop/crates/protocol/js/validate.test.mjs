@@ -120,17 +120,86 @@ test("response must correlate with the request that asked for it", async () => {
   validateResponse(foreign, "job.save");
 });
 
-test("snapshot ACK index and cursor are bounded by the request chunkCount", async () => {
+test("snapshot ACK cursor is bounded by the request chunkCount", async () => {
+  // The request asks for chunk 0 of 2, so only an ACK for chunk 0 answers it; index
+  // matching is covered by its own test below.
   const req = envelope("snapshot.chunk", { chunkIndex: 0, chunkCount: 2 });
   const ack = (payload) => okResponse(req.messageId, { ackKind: "chunk", ...payload });
   validateResponseForRequest(ack({ chunkIndex: 0, chunkCursor: 1 }), req);
-  validateResponseForRequest(ack({ chunkIndex: 1, chunkCursor: 2 }), req);
+  validateResponseForRequest(ack({ chunkIndex: 0, chunkCursor: 2 }), req);
   assert.equal(
     await code(() => validateResponseForRequest(ack({ chunkIndex: 0, chunkCursor: 3 }), req)),
     "invalid_payload",
   );
   assert.equal(
     await code(() => validateResponseForRequest(ack({ chunkIndex: 2, chunkCursor: 1 }), req)),
+    "invalid_payload",
+  );
+});
+
+function reconcileReq(items) {
+  return envelope("outbox.reconcile", { items });
+}
+const RESULT_ID = "55555555-5555-4555-8555-555555555555";
+const RECON_ITEM = {
+  clientInstanceId: CLIENT,
+  messageId: MSG,
+  sourceRestoreEpoch: EPOCH,
+  payloadSha256: "1ea8fcf15e56dd83a5e7f8e9adb0c34b94bc28fd5c1b51400ecf597d1f5cc8c4",
+};
+
+test("snapshot ACK identity must match the chunk that was requested", async () => {
+  const req = envelope("snapshot.chunk", {
+    snapshotId: "66666666-6666-4666-8666-666666666666",
+    chunkIndex: 1,
+    chunkCount: 2,
+  });
+  const ack = (payload) => okResponse(req.messageId, payload);
+  validateResponseForRequest(ack({ ackKind: "chunk", chunkIndex: 1, chunkCursor: 2 }), req);
+  assert.equal(
+    await code(() => validateResponseForRequest(ack({ ackKind: "chunk", chunkIndex: 0, chunkCursor: 1 }), req)),
+    "invalid_payload",
+  );
+  // A complete ACK releases the plugin's IndexedDB copy, so its snapshot must match.
+  validateResponseForRequest(
+    ack({ ackKind: "snapshot", snapshotId: req.payload.snapshotId, chunkIndex: 1, chunkCursor: 2 }),
+    req,
+  );
+  assert.equal(
+    await code(() =>
+      validateResponseForRequest(
+        ack({ ackKind: "snapshot", snapshotId: "99999999-9999-4999-8999-999999999999", chunkIndex: 1, chunkCursor: 2 }),
+        req,
+      ),
+    ),
+    "invalid_payload",
+  );
+  assert.equal(
+    await code(() => validateResponseForRequest(ack({ ackKind: "snapshot", chunkIndex: 1, chunkCursor: 2 }), req)),
+    "invalid_payload",
+  );
+});
+
+test("reconcile results must echo exactly the items that were asked about", async () => {
+  const req = reconcileReq([RECON_ITEM]);
+  const res = (items) => okResponse(req.messageId, { items });
+  validateResponseForRequest(res([{ ...RECON_ITEM, status: "applied", resultId: RESULT_ID }]), req);
+  assert.equal(
+    await code(() =>
+      validateResponseForRequest(
+        res([{ ...RECON_ITEM, messageId: "99999999-9999-4999-8999-999999999999", status: "applied", resultId: RESULT_ID }]),
+        req,
+      ),
+    ),
+    "invalid_payload",
+  );
+  assert.equal(
+    await code(() =>
+      validateResponseForRequest(
+        res([{ ...RECON_ITEM, status: "applied", resultId: RESULT_ID }, { ...RECON_ITEM, status: "purged" }]),
+        req,
+      ),
+    ),
     "invalid_payload",
   );
 });

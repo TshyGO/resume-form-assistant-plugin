@@ -56,7 +56,11 @@
     {"id": "reconcile-chunk-index-127-ok", "path": "requests/reconcile-chunk-index-127-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "fill-submit-filled-over-field", "path": "requests/fill-submit-filled-over-field.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "fill-submit-unconfirmed-over-field", "path": "requests/fill-submit-unconfirmed-over-field.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
-    {"id": "fill-submit-partial-counts-ok", "path": "requests/fill-submit-partial-counts-ok.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "fill-submit-partial-counts-ok", "path": "requests/fill-submit-partial-counts-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-tab-in-key", "path": "requests/url-root-tab-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-newline-in-key", "path": "requests/url-root-newline-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-cr-in-key", "path": "requests/url-root-cr-in-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-tab-in-host", "path": "requests/url-root-tab-in-host.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

@@ -305,35 +305,103 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             "correlationId does not match the request messageId",
         ));
     }
+    let invalid = |message: &str| {
+        ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message.to_string())
+    };
     if req.message_type == MessageType::SnapshotChunk {
-        let chunk_count = req.payload.get("chunkCount").and_then(Value::as_u64).ok_or_else(|| {
-            ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                Layer::Structure,
-                "snapshot.chunk request has no chunkCount to bound the ACK",
-            )
-        })?;
+        let chunk_count = req
+            .payload
+            .get("chunkCount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("snapshot.chunk request has no chunkCount to bound the ACK"))?;
+        let requested_index = req
+            .payload
+            .get("chunkIndex")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("snapshot.chunk request has no chunkIndex to match the ACK"))?;
         let payload = value.get("payload");
-        if let Some(index) = payload.and_then(|p| p.get("chunkIndex")).and_then(Value::as_u64) {
-            if index >= chunk_count {
-                return Err(ProtocolError::new(
-                    ErrorCode::InvalidPayload,
-                    Layer::Structure,
-                    "ACK chunkIndex is outside the request chunkCount",
-                ));
-            }
+        // An ACK answers one chunk request. Bounding by chunkCount alone let an ACK for
+        // a different chunk pass, which advances the wrong cursor.
+        match payload.and_then(|p| p.get("chunkIndex")).and_then(Value::as_u64) {
+            Some(index) if index == requested_index => {}
+            Some(_) => return Err(invalid("ACK chunkIndex is not the chunk that was requested")),
+            None => return Err(invalid("ACK must carry the chunkIndex it answers")),
         }
         if let Some(cursor) = payload.and_then(|p| p.get("chunkCursor")).and_then(Value::as_u64) {
             if cursor > chunk_count {
-                return Err(ProtocolError::new(
-                    ErrorCode::InvalidPayload,
-                    Layer::Structure,
-                    "ACK chunkCursor is beyond the request chunkCount",
-                ));
+                return Err(invalid("ACK chunkCursor is beyond the request chunkCount"));
+            }
+        }
+        // A complete ACK is the plugin's permission to drop its IndexedDB copy, so it
+        // must name the snapshot it completes.
+        if payload.and_then(|p| p.get("ackKind")).and_then(Value::as_str) == Some("snapshot") {
+            let requested = req.payload.get("snapshotId").and_then(Value::as_str);
+            let acked = payload.and_then(|p| p.get("snapshotId")).and_then(Value::as_str);
+            if acked.is_none() {
+                return Err(invalid("a complete ACK must carry snapshotId"));
+            }
+            if acked != requested {
+                return Err(invalid("complete ACK snapshotId is not the requested snapshot"));
             }
         }
     }
+    if req.message_type == MessageType::OutboxReconcile {
+        // The documented echo is item by item on full identity. Without it a response
+        // can resolve an outbox record the plugin never asked about while leaving the
+        // requested one pending.
+        let asked = req
+            .payload
+            .get("items")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("outbox.reconcile request has no items to match"))?;
+        let answered = value
+            .get("payload")
+            .and_then(|p| p.get("items"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("outbox.reconcile response has no items"))?;
+        let mut outstanding: Vec<String> = asked.iter().map(reconcile_identity).collect();
+        for item in answered {
+            let key = reconcile_identity(item);
+            match outstanding.iter().position(|k| *k == key) {
+                Some(at) => {
+                    outstanding.remove(at);
+                }
+                None => {
+                    return Err(invalid(
+                        "reconcile result does not match any requested item, or repeats one",
+                    ))
+                }
+            }
+        }
+        if !outstanding.is_empty() {
+            return Err(invalid("reconcile response omits a requested item"));
+        }
+    }
     Ok(())
+}
+
+/// Full identity of one reconcile item, including optional snapshot identity.
+fn reconcile_identity(item: &Value) -> String {
+    let field = |name: &str| {
+        item.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let chunk = item
+        .get("chunkIndex")
+        .and_then(Value::as_u64)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+    format!(
+        "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+        field("clientInstanceId"),
+        field("messageId"),
+        field("sourceRestoreEpoch"),
+        field("payloadSha256"),
+        field("snapshotId"),
+        chunk
+    )
 }
 
 pub fn validate_response_value(value: &Value, request_type: MessageType) -> Result<(), ProtocolError> {

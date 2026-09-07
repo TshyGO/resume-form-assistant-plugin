@@ -806,7 +806,7 @@ fn response_must_correlate_with_its_request() {
 }
 
 #[test]
-fn snapshot_ack_index_and_cursor_are_bounded_by_request_chunk_count() {
+fn snapshot_ack_must_answer_the_chunk_that_was_requested() {
     let req = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
     let count = req.payload["chunkCount"].as_u64().unwrap();
     let ack = |index: u64, cursor: u64| {
@@ -818,9 +818,14 @@ fn snapshot_ack_index_and_cursor_are_bounded_by_request_chunk_count() {
             "payload": {"ackKind": "chunk", "chunkIndex": index, "chunkCursor": cursor}
         })
     };
+    // The fixture requests chunk 0 of 2, so only an ACK for chunk 0 answers it.
+    assert_eq!(req.payload["chunkIndex"].as_u64().unwrap(), 0);
     validate_response_for_request(&ack(0, 1), &req).unwrap();
-    validate_response_for_request(&ack(count - 1, count), &req).unwrap();
+    validate_response_for_request(&ack(0, count), &req).unwrap();
+    // Cursor beyond the declared chunkCount.
     assert!(validate_response_for_request(&ack(0, count + 1), &req).is_err());
+    // An ACK for some other chunk of the same snapshot is not an answer to this request.
+    assert!(validate_response_for_request(&ack(1, count), &req).is_err());
     assert!(validate_response_for_request(&ack(count, 1), &req).is_err());
 }
 
