@@ -26,6 +26,7 @@ pub use schema_lite::{
 };
 pub use snapshot::{
     ack_kind_for_plugin, plugin_chunk_ack_payload, plugin_snapshot_ack_payload, AssemblerOutcome,
+    DurableChunk,
     ChunkAssembler, Integrity, SnapshotSession,
 };
 pub use time::is_utc_timestamp;

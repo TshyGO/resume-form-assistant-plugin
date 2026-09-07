@@ -10,7 +10,9 @@ use crate::receipts::{evaluate_write, reconcile, reconcile_grants_replay};
 use crate::schema_lite::{
     envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
 };
-use crate::snapshot::{plugin_chunk_ack_payload, plugin_snapshot_ack_payload, ChunkAssembler, Integrity};
+use crate::snapshot::{
+    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, ChunkAssembler, DurableChunk, Integrity,
+};
 use crate::types::{
     CurrentArchive, MessageKey, MessageType, ReceiptStore, ReconcileStatusKind, StoredOutcome,
     WriteDecision, MAX_ENVELOPE_BYTES,
@@ -701,9 +703,14 @@ fn assembler_session_cap_and_plugin_ack_never_snapshot() {
         env["payload"]["snapshotId"] = json!(format!("66666666-6666-4666-8666-6666666666{i:02}"));
         let req = validate_request_value(&env).unwrap();
         let outcome = asm.apply_chunk(&req).unwrap();
-        assert_eq!(plugin_chunk_ack_payload(&outcome)["ackKind"], "chunk");
         assert_eq!(crate::ack_kind_for_plugin(&outcome), crate::types::AckKind::Chunk);
         assert!(!outcome.ready_to_persist());
+        // The in-memory outcome alone cannot produce a chunk ACK; only a chunk D03
+        // committed can, and chunk 0 of two leaves the durable cursor at 1.
+        let snapshot_id = req.payload["snapshotId"].as_str().unwrap();
+        let durable = DurableChunk::committed(snapshot_id, outcome.chunk_index, 2, MSG, 1).unwrap();
+        assert_eq!(plugin_chunk_ack_payload(&durable)["ackKind"], "chunk");
+        assert_eq!(plugin_chunk_ack_payload(&durable)["snapshotId"], snapshot_id);
     }
     let mut extra = template;
     extra["payload"]["snapshotId"] = json!("66666666-6666-4666-8666-666666666699");
@@ -815,4 +822,36 @@ fn snapshot_ack_index_and_cursor_are_bounded_by_request_chunk_count() {
     validate_response_for_request(&ack(count - 1, count), &req).unwrap();
     assert!(validate_response_for_request(&ack(0, count + 1), &req).is_err());
     assert!(validate_response_for_request(&ack(count, 1), &req).is_err());
+}
+
+#[test]
+fn chunk_ack_is_built_from_what_d03_committed() {
+    // A chunk ACK is a durability promise, so it is built from the store's own
+    // record, never from assembler memory.
+    let durable = DurableChunk::committed(SNAP, 0, 2, MSG, 1).unwrap();
+    let ack = plugin_chunk_ack_payload(&durable);
+    assert_eq!(ack["ackKind"], "chunk");
+    assert_eq!(ack["chunkIndex"], 0);
+    assert_eq!(ack["chunkCursor"], 1);
+    assert_eq!(ack["snapshotId"], SNAP);
+}
+
+#[test]
+fn a_cursor_that_did_not_move_past_the_chunk_is_rejected() {
+    // Committing chunk i must leave the durable cursor somewhere other than i:
+    // past it when 0..=i are all durable, short of it when a lower chunk is
+    // missing. A cursor still equal to i is the signature of an ACK issued
+    // before the write landed.
+    assert!(DurableChunk::committed(SNAP, 0, 2, MSG, 0).is_err());
+    assert!(DurableChunk::committed(SNAP, 3, 8, MSG, 3).is_err());
+    // A gap below the committed chunk is legitimate.
+    DurableChunk::committed(SNAP, 3, 8, MSG, 0).unwrap();
+}
+
+#[test]
+fn durable_chunk_rejects_values_outside_the_snapshot() {
+    assert!(DurableChunk::committed(SNAP, 2, 2, MSG, 3).is_err()); // index >= count
+    assert!(DurableChunk::committed(SNAP, 0, 2, MSG, 3).is_err()); // cursor > count
+    assert!(DurableChunk::committed(SNAP, 0, 0, MSG, 1).is_err()); // count 0
+    assert!(DurableChunk::committed(SNAP, 0, 2, "", 1).is_err()); // no stored messageId
 }

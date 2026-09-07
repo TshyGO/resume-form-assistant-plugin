@@ -56,9 +56,12 @@ match evaluate_write(&req, Some(&current), &receipts)? {
     WriteDecision::Conflict => { /* error conflict */ }
 }
 // snapshot.chunk: ChunkAssembler::apply_chunk 只证明内存完整性。
-// 仅当 outcome.ready_to_persist() 且 D03 落盘成功后，才发送 plugin_snapshot_ack_payload，
+// 每块 ACK 同样是落盘承诺：D03 提交该块并写下 chunkMessageId 之后，用它返回的
+// 记录构造 DurableChunk::committed(...)，再发 plugin_chunk_ack_payload（ackKind=chunk）。
+// 内存里的 outcome 构造不出 DurableChunk —— 插件会按分片 ACK 推进 chunkCursor，
+// 若 ACK 了只存在内存里的块，桌面重启后插件会跳过它，快照永远凑不齐。
+// 仅当 outcome.ready_to_persist() 且 D03 整份落盘成功后，才发送 plugin_snapshot_ack_payload，
 // 然后 assembler.forget(...) 释放会话。失败或取消调用 cancel。
-// 分片过程中只发 plugin_chunk_ack_payload（ackKind=chunk）。
 ```
 
 `outbox.reconcile` 走 `reconcile()`。返回 `applied` **不得**被当成可以重放旧信封。
@@ -96,7 +99,7 @@ validateResponseForRequest(response, req);
 
 `ok: true` 的写入应答必须有 `resultId`。`ok: false` 不得有 `resultId`。
 
-`snapshot.chunk` 应答 `payload.ackKind`：`chunk` = 这一块已被接受（不可清 IDB）；`snapshot` = **下游已持久化**完整快照且总哈希相符。D05 组装器的 `VerifiedInMemory` 只表示可以交给 D03 落盘，不能当作删除 IndexedDB 的许可。`plugin_chunk_ack_payload` 永远是 `ackKind: chunk`。`chunkCursor` 只按从 0 起的连续已收块前进，不跳过缺块。
+`snapshot.chunk` 应答 `payload.ackKind`：`chunk` = **这一块已落盘**（但不可清 IDB，整份未确认）；`snapshot` = **下游已持久化**完整快照且总哈希相符。D05 组装器的 `VerifiedInMemory` 只表示可以交给 D03 落盘，不能当作删除 IndexedDB 的许可。`plugin_chunk_ack_payload` 永远是 `ackKind: chunk`。`chunkCursor` 只按从 0 起的连续已收块前进，不跳过缺块。
 
 `occurredAt` 使用 UTC RFC3339 子集：`YYYY-MM-DDTHH:MM:SSZ` 或带小数秒，必须是真实日历日期与时钟，只允许 `Z`。Schema pattern 只约束句法；`2026-13-01` 一类非法日期由校验器拒绝。
 

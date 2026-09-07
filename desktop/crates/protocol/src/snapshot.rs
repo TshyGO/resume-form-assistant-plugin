@@ -368,13 +368,80 @@ fn parse_chunk(req: &Request) -> Result<ParsedChunk, ProtocolError> {
     })
 }
 
-/// Chunk ACK that may be returned immediately after a valid chunk is accepted.
-/// Never a durable complete-snapshot ACK.
-pub fn plugin_chunk_ack_payload(outcome: &AssemblerOutcome) -> Value {
+/// What D03 durably committed for one snapshot chunk.
+///
+/// A chunk ACK is a durability promise, not a receipt of arrival: D01 decision 9 and
+/// the D08 mapping both require each chunk to persist its own `chunkMessageId`, and
+/// the plugin advances `chunkCursor` on these ACKs. Acknowledging a chunk that lives
+/// only in `ChunkAssembler` memory lets a host restart strand the transfer -- the
+/// plugin resumes past chunks the host no longer has, so the snapshot can never
+/// complete even though the bytes are still in IndexedDB.
+///
+/// So this is built from the store's record and never from assembler memory, and D06
+/// constructs it only after the D03 commit returns. Construction is not proof that a
+/// write happened; it is a checked, greppable statement that one did. The cursor rule
+/// below is what actually catches the common mistake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurableChunk {
+    pub snapshot_id: String,
+    pub chunk_index: u32,
+    pub chunk_count: u32,
+    /// The chunk envelope `messageId` as stored by D03, never re-minted on restart.
+    pub chunk_message_id: String,
+    /// Consecutive-from-zero count of chunks D03 has committed for this snapshot.
+    pub durable_chunk_cursor: u32,
+}
+
+impl DurableChunk {
+    /// Record a committed chunk. Errors when the values cannot describe a store that
+    /// actually wrote this chunk.
+    pub fn committed(
+        snapshot_id: &str,
+        chunk_index: u32,
+        chunk_count: u32,
+        chunk_message_id: &str,
+        durable_chunk_cursor: u32,
+    ) -> Result<Self, ProtocolError> {
+        let invalid = |message: &str| {
+            ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message.to_string())
+        };
+        if chunk_count == 0 || chunk_count > MAX_CHUNK_COUNT {
+            return Err(invalid("chunkCount must be 1..=128"));
+        }
+        if chunk_index >= chunk_count {
+            return Err(invalid("chunkIndex must be below chunkCount"));
+        }
+        if durable_chunk_cursor > chunk_count {
+            return Err(invalid("durable chunk cursor is beyond chunkCount"));
+        }
+        if chunk_message_id.is_empty() {
+            return Err(invalid("a committed chunk must carry the stored chunkMessageId"));
+        }
+        // Committing chunk i leaves the cursor past i when 0..=i are all durable, or
+        // short of i when a lower chunk is still missing. A cursor still equal to i
+        // means the write had not landed when the ACK was built.
+        if durable_chunk_cursor == chunk_index {
+            return Err(invalid(
+                "durable chunk cursor did not move past the committed chunk; the chunk is not persisted",
+            ));
+        }
+        Ok(Self {
+            snapshot_id: snapshot_id.to_string(),
+            chunk_index,
+            chunk_count,
+            chunk_message_id: chunk_message_id.to_string(),
+            durable_chunk_cursor,
+        })
+    }
+}
+
+/// Chunk ACK. Requires a chunk D03 has committed; never a complete-snapshot ACK.
+pub fn plugin_chunk_ack_payload(chunk: &DurableChunk) -> Value {
     serde_json::json!({
         "ackKind": "chunk",
-        "chunkIndex": outcome.chunk_index,
-        "chunkCursor": outcome.chunk_cursor,
+        "chunkIndex": chunk.chunk_index,
+        "chunkCursor": chunk.durable_chunk_cursor,
+        "snapshotId": chunk.snapshot_id,
     })
 }
 
