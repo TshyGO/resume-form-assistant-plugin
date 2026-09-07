@@ -84,6 +84,12 @@ fn check_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError>
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
     };
+    // An empty authority means extra slashes shifted the userinfo into the path,
+    // where the checks below never look. WHATWG parsing still normalizes such a
+    // URL back to a credentialed one, so reject instead of inspecting the rest.
+    if authority.is_empty() {
+        return Err(forbidden("URL authority must not be empty"));
+    }
     if authority.contains('@') {
         return Err(forbidden("URL userinfo is not allowed"));
     }

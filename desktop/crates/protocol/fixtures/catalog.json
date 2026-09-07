@@ -40,7 +40,12 @@
     {"id": "url-root-query-ok", "path": "requests/url-root-query-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "url-root-fragment-ok", "path": "requests/url-root-fragment-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "url-root-contact-ok", "path": "requests/url-root-contact-ok.json", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "url-root-double-encoded", "path": "requests/url-root-double-encoded.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "url-root-double-encoded", "path": "requests/url-root-double-encoded.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-extra-slash-userinfo", "path": "requests/url-root-extra-slash-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-quad-slash-userinfo", "path": "requests/url-root-quad-slash-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-slash-backslash-userinfo", "path": "requests/url-root-slash-backslash-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-empty-authority", "path": "requests/url-root-empty-authority.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-path-at-ok", "path": "requests/url-root-path-at-ok.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

@@ -136,6 +136,12 @@ export function checkUrl(raw) {
   const boundary = rest.search(/[/?#]/);
   const authority = boundary === -1 ? rest : rest.slice(0, boundary);
   const pathQueryFrag = boundary === -1 ? "" : rest.slice(boundary);
+  // An empty authority means extra slashes shifted the userinfo into the path,
+  // where the checks below never look. WHATWG parsing still normalizes such a
+  // URL back to a credentialed one, so reject instead of inspecting the rest.
+  if (!authority) {
+    throw fail("secret_forbidden", "URL authority must not be empty", "secrets");
+  }
   if (authority.includes("@")) {
     throw fail("secret_forbidden", "URL userinfo is not allowed", "secrets");
   }
