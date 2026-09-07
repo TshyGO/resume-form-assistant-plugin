@@ -152,8 +152,20 @@ export function checkUrl(raw) {
   const q = pathQuery.indexOf("?");
   const path = q === -1 ? pathQuery : pathQuery.slice(0, q);
   const query = q === -1 ? "" : pathQuery.slice(q + 1);
-  if (fragment && queryHasSecret(fragment, host, path)) {
-    throw fail("secret_forbidden", "URL fragment contains a credential parameter", "secrets");
+  // A routed fragment such as "#/callback?access_token=..." carries its own query
+  // string. Treating the whole fragment as one query makes the first key
+  // "/callback?access_token", which matches no sensitive name, so also inspect
+  // whatever follows the first "?". Both halves are checked: a fragment may put
+  // the credential before the "?" instead.
+  if (fragment) {
+    const routeSplit = fragment.indexOf("?");
+    const routedQuery = routeSplit === -1 ? "" : fragment.slice(routeSplit + 1);
+    if (
+      queryHasSecret(fragment, host, path) ||
+      (routedQuery && queryHasSecret(routedQuery, host, path))
+    ) {
+      throw fail("secret_forbidden", "URL fragment contains a credential parameter", "secrets");
+    }
   }
   if (query && queryHasSecret(query, host, path)) {
     throw fail("secret_forbidden", "URL query contains a credential parameter", "secrets");

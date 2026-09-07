@@ -45,7 +45,12 @@
     {"id": "url-root-quad-slash-userinfo", "path": "requests/url-root-quad-slash-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-slash-backslash-userinfo", "path": "requests/url-root-slash-backslash-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-empty-authority", "path": "requests/url-root-empty-authority.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "url-root-path-at-ok", "path": "requests/url-root-path-at-ok.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "url-root-path-at-ok", "path": "requests/url-root-path-at-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-fragment-route-token", "path": "requests/url-root-fragment-route-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-fragment-route-nested", "path": "requests/url-root-fragment-route-nested.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-fragment-token-first", "path": "requests/url-root-fragment-token-first.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "url-root-fragment-route-ok", "path": "requests/url-root-fragment-route-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "url-root-fragment-path-ok", "path": "requests/url-root-fragment-path-ok.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

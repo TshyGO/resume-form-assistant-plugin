@@ -103,7 +103,16 @@ fn check_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError>
         None => (path_query_frag, None),
     };
     if let Some(frag) = fragment {
-        if query_has_secret(frag, &host, path_only(path_query), allowlist)? {
+        // A routed fragment such as "#/callback?access_token=..." carries its own
+        // query string. Treating the whole fragment as one query makes the first key
+        // "/callback?access_token", which matches no sensitive name, so also inspect
+        // whatever follows the first '?'. Both halves are checked: a fragment may put
+        // the credential before the '?' instead.
+        let routed_query = frag.split_once('?').map(|(_, q)| q).unwrap_or("");
+        if query_has_secret(frag, &host, path_only(path_query), allowlist)?
+            || (!routed_query.is_empty()
+                && query_has_secret(routed_query, &host, path_only(path_query), allowlist)?)
+        {
             return Err(forbidden("URL fragment contains a credential parameter"));
         }
     }
