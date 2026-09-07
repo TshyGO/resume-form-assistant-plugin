@@ -330,9 +330,19 @@ export async function validateRequest(value) {
       throw fail("invalid_payload", "fill.submit snapshotId and sha256 must be supplied together");
     }
     const { fieldCount, filledCount, unconfirmedCount } = value.payload;
-    if (Number.isInteger(fieldCount) && Number.isInteger(filledCount) && Number.isInteger(unconfirmedCount)) {
-      if (filledCount + unconfirmedCount > fieldCount) {
-        throw fail("invalid_payload", "filledCount + unconfirmedCount exceeds fieldCount");
+    // Each component is bounded by the total on its own. Checking only the sum let a
+    // payload such as fieldCount 1 with filledCount 100 and no unconfirmedCount record
+    // impossible fill metrics.
+    if (Number.isInteger(fieldCount)) {
+      for (const [name, count] of [["filledCount", filledCount], ["unconfirmedCount", unconfirmedCount]]) {
+        if (Number.isInteger(count) && count > fieldCount) {
+          throw fail("invalid_payload", `${name} exceeds fieldCount`);
+        }
+      }
+      if (Number.isInteger(filledCount) && Number.isInteger(unconfirmedCount)) {
+        if (filledCount + unconfirmedCount > fieldCount) {
+          throw fail("invalid_payload", "filledCount + unconfirmedCount exceeds fieldCount");
+        }
       }
     }
   }
@@ -371,6 +381,32 @@ export async function validateRequest(value) {
       minProtocolVersion > maxProtocolVersion
     ) {
       throw fail("protocol_incompatible", "handshake protocol ranges do not overlap");
+    }
+  }
+  return value;
+}
+
+// Structural response validation plus the checks that need the originating request.
+// validateResponse cannot see the request, so it can only confirm that correlationId is
+// some UUID and that a cursor is a non-negative integer. Hosts and the plugin must use
+// this entry point instead, so a response is tied to the request that asked for it and a
+// snapshot ACK cannot advance past the chunk count that the request declared.
+export function validateResponseForRequest(value, request) {
+  validateResponse(value, request?.messageType);
+  if (value.correlationId !== request?.messageId) {
+    throw fail("invalid_payload", "correlationId does not match the request messageId");
+  }
+  if (request.messageType === "snapshot.chunk") {
+    const chunkCount = request.payload?.chunkCount;
+    if (!Number.isInteger(chunkCount)) {
+      throw fail("invalid_payload", "snapshot.chunk request has no chunkCount to bound the ACK");
+    }
+    const { chunkIndex, chunkCursor } = value.payload ?? {};
+    if (Number.isInteger(chunkIndex) && chunkIndex >= chunkCount) {
+      throw fail("invalid_payload", "ACK chunkIndex is outside the request chunkCount");
+    }
+    if (Number.isInteger(chunkCursor) && chunkCursor > chunkCount) {
+      throw fail("invalid_payload", "ACK chunkCursor is beyond the request chunkCount");
     }
   }
   return value;

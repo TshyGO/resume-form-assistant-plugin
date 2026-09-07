@@ -63,6 +63,8 @@ match evaluate_write(&req, Some(&current), &receipts)? {
 
 `outbox.reconcile` 走 `reconcile()`。返回 `applied` **不得**被当成可以重放旧信封。
 
+校验**响应**时用 `validate_response_for_request(&value, &req)`，不要用 `validate_response_value`。后者看不到请求，只能确认 `correlationId` 是个 UUID、游标是非负整数；前者才会核对 `correlationId` 等于请求的 `messageId`，并把快照 ACK 的 `chunkIndex` / `chunkCursor` 限制在该请求声明的 `chunkCount` 之内。
+
 Origin：`origin_allowed(origin, &allowed)`，禁止 `*`。
 
 ## D07 最小用法（插件 JS）
@@ -70,6 +72,7 @@ Origin：`origin_allowed(origin, &allowed)`，禁止 `*`。
 ```js
 import {
   validateRequest,
+  validateResponseForRequest,
   checkCurrentIdentity,
   MAX_ENVELOPE_BYTES,
 } from "../desktop/crates/protocol/js/validate.mjs";
@@ -80,6 +83,9 @@ const bytes = new TextEncoder().encode(JSON.stringify(req));
 if (bytes.length > MAX_ENVELOPE_BYTES) {
   throw new Error("payload_too_large");
 }
+
+// 收到回复时带上原请求，`validateResponse` 看不到请求，无法把回复绑回它。
+validateResponseForRequest(response, req);
 ```
 
 发送普通写入前：若 `payload.sourceRestoreEpoch !== lastHandshake.restoreEpoch`，**不要**发 `job.save` / `fill.submit` / `snapshot.chunk` / `submit.confirm`，只发 `outbox.reconcile`。

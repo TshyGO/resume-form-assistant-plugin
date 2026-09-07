@@ -5,8 +5,8 @@
   "required": ["ackKind", "chunkIndex", "chunkCursor"],
   "properties": {
     "ackKind": { "type": "string", "enum": ["chunk", "snapshot"] },
-    "chunkIndex": { "type": "integer", "minimum": 0 },
-    "chunkCursor": { "type": "integer", "minimum": 0 },
+    "chunkIndex": { "type": "integer", "minimum": 0, "maximum": 127 },
+    "chunkCursor": { "type": "integer", "minimum": 0, "maximum": 128 },
     "snapshotId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" }
   }
 }

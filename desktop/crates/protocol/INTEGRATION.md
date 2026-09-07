@@ -14,6 +14,7 @@ D05 不修改 `desktop/crates/archive-store/`。若 D03 实现时出现下列差
 10. `occurredAt` 为 UTC `Z` 子集：`YYYY-MM-DDTHH:MM:SSZ` 或带小数秒，必须是真实日历日期与时钟。JSON Schema 的 pattern 只做句法；日历合法性由 JS/Rust 校验器执行。D03 不要把非法日期存成业务时间。
 11. URL 字段先校验、再算摘要。校验器发现凭据就拒绝，不清洗后继续用原摘要。
 12. `fill.submit` 必须带 `outcome`。桌面不得猜测成功/部分/失败/取消。
+13. 校验响应必须用 `validate_response_for_request` / `validateResponseForRequest` 并传入原请求。`validate_response_value` / `validateResponse` 只做结构校验，看不到请求：同类型的多个请求在途时，A 的回复能通过 B 的校验，`resultId` 或快照 ACK 会记到错误的 outbox 条目上。快照 ACK 的 `chunkIndex` / `chunkCursor` 也只有对照请求的 `chunkCount` 才能设上界；schema 只能给出协议级的 128 硬上界。
 
 ## fill.submit → D03 FillSubmitInput
 

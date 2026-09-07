@@ -50,7 +50,13 @@
     {"id": "url-root-fragment-route-nested", "path": "requests/url-root-fragment-route-nested.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-fragment-token-first", "path": "requests/url-root-fragment-token-first.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "url-root-fragment-route-ok", "path": "requests/url-root-fragment-route-ok.json", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "url-root-fragment-path-ok", "path": "requests/url-root-fragment-path-ok.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "url-root-fragment-path-ok", "path": "requests/url-root-fragment-path-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "reconcile-chunk-index-overflow", "path": "requests/reconcile-chunk-index-overflow.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "reconcile-chunk-index-128", "path": "requests/reconcile-chunk-index-128.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "reconcile-chunk-index-127-ok", "path": "requests/reconcile-chunk-index-127-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "fill-submit-filled-over-field", "path": "requests/fill-submit-filled-over-field.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "fill-submit-unconfirmed-over-field", "path": "requests/fill-submit-unconfirmed-over-field.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "fill-submit-partial-counts-ok", "path": "requests/fill-submit-partial-counts-ok.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
@@ -67,6 +73,8 @@
     {"id": "error-with-resultId", "path": "responses/error-with-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "response-payload-array", "path": "responses/payload-array.json", "requestType": "job.save", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "url-response-root-token", "path": "responses/url-response-root-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}, "requestType": "application.queryCandidates"},
-    {"id": "url-response-root-ok", "path": "responses/url-response-root-ok.json", "schema": "accept", "protocol": {"accept": true}, "requestType": "application.queryCandidates"}
+    {"id": "url-response-root-ok", "path": "responses/url-response-root-ok.json", "schema": "accept", "protocol": {"accept": true}, "requestType": "application.queryCandidates"},
+    {"id": "snapshot-ack-cursor-huge", "path": "responses/snapshot-ack-cursor-huge.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"},
+    {"id": "snapshot-ack-index-128", "path": "responses/snapshot-ack-index-128.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}, "requestType": "snapshot.chunk"}
   ]
 }

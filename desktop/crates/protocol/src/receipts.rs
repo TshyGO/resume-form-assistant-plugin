@@ -159,7 +159,18 @@ pub fn reconcile(
                 .get("snapshotId")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            chunk_index: item.get("chunkIndex").and_then(|v| v.as_u64()).map(|n| n as u32),
+            // Checked, not `as u32`: an out-of-range index must not silently echo back
+            // as a different chunk. The schema bounds this too; both layers are kept.
+            chunk_index: match item.get("chunkIndex").and_then(|v| v.as_u64()) {
+                None => None,
+                Some(n) => Some(u32::try_from(n).map_err(|_| {
+                    ProtocolError::new(
+                        ErrorCode::InvalidPayload,
+                        Layer::Structure,
+                        "chunkIndex is outside the representable range",
+                    )
+                })?),
+            },
         });
     }
     Ok(out)

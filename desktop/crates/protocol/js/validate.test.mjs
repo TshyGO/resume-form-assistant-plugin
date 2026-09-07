@@ -6,6 +6,8 @@ import {
   payloadBodySha256,
   validateRequest,
   validateRequestBytes,
+  validateResponse,
+  validateResponseForRequest,
 } from "./validate.mjs";
 
 const ARCHIVE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -97,4 +99,38 @@ test("Chinese company is counted as UTF-8 bytes", async () => {
   assert.equal(v.payload.company.length, 4);
   assert.equal(Buffer.byteLength(v.payload.company, "utf8"), 12);
   await validateRequest(v);
+});
+
+function okResponse(correlationId, payload = {}) {
+  return {
+    protocolVersion: 1,
+    correlationId,
+    ok: true,
+    resultId: "55555555-5555-4555-8555-555555555555",
+    payload,
+  };
+}
+
+test("response must correlate with the request that asked for it", async () => {
+  const req = envelope("job.save", await jobSavePayload());
+  validateResponseForRequest(okResponse(req.messageId), req);
+  const foreign = okResponse("99999999-9999-4999-8999-999999999999");
+  assert.equal(await code(() => validateResponseForRequest(foreign, req)), "invalid_payload");
+  // The structural entry point never sees the request, so it still accepts it.
+  validateResponse(foreign, "job.save");
+});
+
+test("snapshot ACK index and cursor are bounded by the request chunkCount", async () => {
+  const req = envelope("snapshot.chunk", { chunkIndex: 0, chunkCount: 2 });
+  const ack = (payload) => okResponse(req.messageId, { ackKind: "chunk", ...payload });
+  validateResponseForRequest(ack({ chunkIndex: 0, chunkCursor: 1 }), req);
+  validateResponseForRequest(ack({ chunkIndex: 1, chunkCursor: 2 }), req);
+  assert.equal(
+    await code(() => validateResponseForRequest(ack({ chunkIndex: 0, chunkCursor: 3 }), req)),
+    "invalid_payload",
+  );
+  assert.equal(
+    await code(() => validateResponseForRequest(ack({ chunkIndex: 2, chunkCursor: 1 }), req)),
+    "invalid_payload",
+  );
 });

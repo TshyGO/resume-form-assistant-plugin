@@ -260,13 +260,77 @@ fn fill_submit_extras(payload: &Map<String, Value>) -> Result<(), ProtocolError>
     let field = payload.get("fieldCount").and_then(Value::as_i64);
     let filled = payload.get("filledCount").and_then(Value::as_i64);
     let unconfirmed = payload.get("unconfirmedCount").and_then(Value::as_i64);
-    if let (Some(field), Some(filled), Some(unconfirmed)) = (field, filled, unconfirmed) {
-        if filled.saturating_add(unconfirmed) > field {
-            return Err(ProtocolError::new(
+    // Each component is bounded by the total on its own. Checking only the sum let a
+    // payload such as fieldCount 1 with filledCount 100 and no unconfirmedCount record
+    // impossible fill metrics.
+    if let Some(field) = field {
+        for (name, value) in [("filledCount", filled), ("unconfirmedCount", unconfirmed)] {
+            if let Some(value) = value {
+                if value > field {
+                    return Err(ProtocolError::new(
+                        ErrorCode::InvalidPayload,
+                        Layer::Structure,
+                        format!("{name} exceeds fieldCount"),
+                    ));
+                }
+            }
+        }
+        if let (Some(filled), Some(unconfirmed)) = (filled, unconfirmed) {
+            if filled.saturating_add(unconfirmed) > field {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "filledCount + unconfirmedCount exceeds fieldCount",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Structural response validation plus the checks that need the originating request.
+///
+/// `validate_response_value` cannot see the request, so it can only confirm that
+/// `correlationId` is some UUID and that a cursor is a non-negative integer. Hosts and
+/// the plugin must use this entry point instead, so a response is tied to the request
+/// that asked for it and a snapshot ACK cannot advance past the chunk count that the
+/// request declared.
+pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(), ProtocolError> {
+    validate_response_value(value, req.message_type)?;
+    let correlation = value.get("correlationId").and_then(Value::as_str);
+    if correlation != Some(req.message_id.as_str()) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            Layer::Structure,
+            "correlationId does not match the request messageId",
+        ));
+    }
+    if req.message_type == MessageType::SnapshotChunk {
+        let chunk_count = req.payload.get("chunkCount").and_then(Value::as_u64).ok_or_else(|| {
+            ProtocolError::new(
                 ErrorCode::InvalidPayload,
                 Layer::Structure,
-                "filledCount + unconfirmedCount exceeds fieldCount",
-            ));
+                "snapshot.chunk request has no chunkCount to bound the ACK",
+            )
+        })?;
+        let payload = value.get("payload");
+        if let Some(index) = payload.and_then(|p| p.get("chunkIndex")).and_then(Value::as_u64) {
+            if index >= chunk_count {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "ACK chunkIndex is outside the request chunkCount",
+                ));
+            }
+        }
+        if let Some(cursor) = payload.and_then(|p| p.get("chunkCursor")).and_then(Value::as_u64) {
+            if cursor > chunk_count {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    Layer::Structure,
+                    "ACK chunkCursor is beyond the request chunkCount",
+                ));
+            }
         }
     }
     Ok(())

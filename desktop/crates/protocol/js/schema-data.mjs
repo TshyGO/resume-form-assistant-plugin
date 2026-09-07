@@ -435,7 +435,8 @@ export const SCHEMA_DATA = {
               },
               "chunkIndex": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "maximum": 127
               }
             }
           }
@@ -495,7 +496,8 @@ export const SCHEMA_DATA = {
         },
         "chunkIndex": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 127
         },
         "chunkCount": {
           "type": "integer",
@@ -786,11 +788,13 @@ export const SCHEMA_DATA = {
         },
         "chunkIndex": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 127
         },
         "chunkCursor": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 128
         },
         "snapshotId": {
           "type": "string",

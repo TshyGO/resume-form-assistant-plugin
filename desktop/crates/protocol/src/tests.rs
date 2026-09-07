@@ -15,7 +15,10 @@ use crate::types::{
     CurrentArchive, MessageKey, MessageType, ReceiptStore, ReconcileStatusKind, StoredOutcome,
     WriteDecision, MAX_ENVELOPE_BYTES,
 };
-use crate::validate::{utf8_json_len, validate_request_bytes, validate_request_value, validate_response_value};
+use crate::validate::{
+    utf8_json_len, validate_request_bytes, validate_request_value, validate_response_for_request,
+    validate_response_value,
+};
 use crate::{origin_allowed, ProtocolError};
 
 const ARCHIVE: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -770,4 +773,46 @@ fn same_message_id_same_bytes_different_logic_is_conflict() {
     let mut asm = ChunkAssembler::new();
     asm.apply_chunk(&req).unwrap();
     assert_eq!(asm.apply_chunk(&other).unwrap_err().code.as_str(), "conflict");
+}
+
+#[test]
+fn response_must_correlate_with_its_request() {
+    let req = validate_request_value(&envelope("job.save", job_save_payload())).unwrap();
+    let ok = json!({
+        "protocolVersion": 1,
+        "correlationId": MSG,
+        "ok": true,
+        "resultId": RESULT,
+        "payload": {}
+    });
+    validate_response_for_request(&ok, &req).unwrap();
+    let foreign = json!({
+        "protocolVersion": 1,
+        "correlationId": "99999999-9999-4999-8999-999999999999",
+        "ok": true,
+        "resultId": RESULT,
+        "payload": {}
+    });
+    assert!(validate_response_for_request(&foreign, &req).is_err());
+    // The structural entry point never sees the request, so it still accepts it.
+    validate_response_value(&foreign, MessageType::JobSave).unwrap();
+}
+
+#[test]
+fn snapshot_ack_index_and_cursor_are_bounded_by_request_chunk_count() {
+    let req = validate_request_value(&chunk_fixture("requests/snapshot-chunk-0-ok.json")).unwrap();
+    let count = req.payload["chunkCount"].as_u64().unwrap();
+    let ack = |index: u64, cursor: u64| {
+        json!({
+            "protocolVersion": 1,
+            "correlationId": MSG,
+            "ok": true,
+            "resultId": RESULT,
+            "payload": {"ackKind": "chunk", "chunkIndex": index, "chunkCursor": cursor}
+        })
+    };
+    validate_response_for_request(&ack(0, 1), &req).unwrap();
+    validate_response_for_request(&ack(count - 1, count), &req).unwrap();
+    assert!(validate_response_for_request(&ack(0, count + 1), &req).is_err());
+    assert!(validate_response_for_request(&ack(count, 1), &req).is_err());
 }

@@ -18,7 +18,7 @@
           "sourceRestoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
           "payloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "snapshotId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
-          "chunkIndex": { "type": "integer", "minimum": 0 }
+          "chunkIndex": { "type": "integer", "minimum": 0, "maximum": 127 }
         }
       }
     }
