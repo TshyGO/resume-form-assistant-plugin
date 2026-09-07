@@ -4,9 +4,9 @@ Thumbs.db
 # Local browser/debug profiles
 .edge-icon-profile/
 .playwright-cli/
-output/playwright/
 
-# Build and package artifacts
+# Build, package and local run artifacts
+output/
 *.zip
 dist/
 release/
