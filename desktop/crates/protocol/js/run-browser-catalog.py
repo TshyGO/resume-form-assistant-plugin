@@ -8,7 +8,7 @@ import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,9 +43,30 @@ def main() -> int:
             print(f"browser launch failed: {last_error}", file=sys.stderr)
             return 1
         page = browser.new_page()
+        # Surface anything the page reports; a silent page error used to look like a
+        # plain timeout, which says nothing about what actually broke.
+        notes: list[str] = []
+        page.on("pageerror", lambda exc: notes.append(f"pageerror: {exc}"))
+        page.on("console", lambda msg: notes.append(f"console.{msg.type}: {msg.text}")
+                if msg.type in ("error", "warning") else None)
         page.goto(url, wait_until="networkidle")
-        page.wait_for_function("window.__D05_DONE__ === true", timeout=30000)
+        try:
+            # Generous: a cold CI runner serving ~90 fixture fetches is far slower than
+            # a developer machine, and a real failure now reports itself rather than
+            # waiting this out.
+            page.wait_for_function("window.__D05_DONE__ === true", timeout=180_000)
+        except PlaywrightTimeoutError:
+            print("timed out waiting for the catalog page", file=sys.stderr)
+            for note in notes:
+                print(f"  {note}", file=sys.stderr)
+            partial = page.evaluate("window.__D05_RESULT__ || null")
+            print(f"  partial result: {json.dumps(partial, ensure_ascii=False)}", file=sys.stderr)
+            browser.close()
+            server.shutdown()
+            return 1
         result = page.evaluate("window.__D05_RESULT__")
+        for note in notes:
+            print(f"note: {note}", file=sys.stderr)
         browser.close()
     server.shutdown()
     print(json.dumps(result, indent=2, ensure_ascii=False))
