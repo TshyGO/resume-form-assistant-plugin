@@ -431,6 +431,10 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
             ),
         ));
     }
+    // Whole response, before the ok/error split. Scanning only the success branch let a
+    // schema-valid failure carry a credential in `error.message`. Archive data can hold
+    // credentials and the host must not hand them back to the extension, on any branch.
+    reject_secrets(value)?;
     if value.as_array().is_some() || !value.is_object() {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
@@ -494,10 +498,6 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         }
         let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
         reject_sensitive_urls(obj.get("payload").unwrap(), &allowlist_from_rules(&rules))?;
-        // Only the URL checker ran here, so a response could carry the very content the
-        // request direction refuses. Archive data can hold credentials; the host must
-        // not hand them back to the extension.
-        reject_secrets(obj.get("payload").unwrap())?;
         if request_type == MessageType::QueryCandidates {
             candidate_timestamps_are_real(obj.get("payload").unwrap())?;
         }

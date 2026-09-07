@@ -498,6 +498,10 @@ export function validateResponse(value, requestType) {
   // Requests are bounded in validateRequestBytes; responses had no bounded entry point
   // at all, so a schema-valid application.queryCandidates result could run several
   // times past the contract's envelope limit and still validate.
+  // Whole response, before the ok/error split. Scanning only the success branch let a
+  // schema-valid failure carry a credential in `error.message`. Archive data can hold
+  // credentials and the host must not hand them back to the extension, on any branch.
+  walkSecrets(value);
   const responseBytes = utf8JsonLen(value);
   if (responseBytes > MAX_ENVELOPE_BYTES) {
     throw fail("payload_too_large", `response is ${responseBytes} UTF-8 bytes; max is ${MAX_ENVELOPE_BYTES}`);
@@ -548,10 +552,6 @@ export function validateResponse(value, requestType) {
       }
     }
     walkUrls(value.payload);
-    // Only the URL checker ran here, so a response could carry the very content the
-    // request direction refuses. Archive data can hold credentials; the host must not
-    // hand them back to the extension.
-    walkSecrets(value.payload);
     if (requestType === "application.queryCandidates") {
       candidateTimestampsAreReal(value.payload);
     }

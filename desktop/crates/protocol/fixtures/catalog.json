@@ -91,6 +91,8 @@
     {"id": "query-candidates-secret-value", "path": "responses/query-candidates-secret-value.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "query-candidates-bad-updated-at", "path": "responses/query-candidates-bad-updated-at.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "query-candidates-updated-at-ok", "path": "responses/query-candidates-updated-at-ok.json", "requestType": "application.queryCandidates", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "snapshot-complete-ack-cursor-short", "path": "responses/snapshot-complete-ack-cursor-short.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": false, "code": "invalid_payload"}}
+    {"id": "snapshot-complete-ack-cursor-short", "path": "responses/snapshot-complete-ack-cursor-short.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
+    {"id": "error-message-secret", "path": "responses/error-message-secret.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "error-message-ok", "path": "responses/error-message-ok.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}}
   ]
 }
