@@ -49,6 +49,7 @@ jobs:
             desktop/src-tauri
             desktop/crates/data-service
             desktop/crates/archive-store
+            desktop/crates/protocol
 
       - name: Install JS dependencies
         working-directory: desktop
@@ -69,6 +70,14 @@ jobs:
       - name: Archive store tests
         working-directory: desktop
         run: cargo test --manifest-path crates/archive-store/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: Protocol contract tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/protocol/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: Protocol JS validator tests
+        working-directory: desktop
+        run: node --test crates/protocol/js/*.test.mjs
 
       - name: App tests
         working-directory: desktop
