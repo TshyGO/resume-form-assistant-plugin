@@ -1,0 +1,11 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/handshake.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pluginVersion", "minProtocolVersion", "maxProtocolVersion"],
+  "properties": {
+    "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "minProtocolVersion": { "type": "integer", "minimum": 1 },
+    "maxProtocolVersion": { "type": "integer", "minimum": 1 }
+  }
+}

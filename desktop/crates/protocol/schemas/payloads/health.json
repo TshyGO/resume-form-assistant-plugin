@@ -1,0 +1,6 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/health.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

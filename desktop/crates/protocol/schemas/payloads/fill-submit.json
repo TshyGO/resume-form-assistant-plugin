@@ -1,0 +1,31 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/fill-submit.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sourceRestoreEpoch", "payloadSha256", "applicationId", "outcome"],
+  "properties": {
+    "sourceRestoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "payloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "applicationId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "outcome": { "type": "string", "enum": ["started", "completed", "partial", "failed", "cancelled"] },
+    "fieldCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "filledCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "unconfirmedCount": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "durationsMs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scan": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+        "match": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+        "fill": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+      }
+    },
+    "urlRedacted": { "type": "string", "maxLength": 2000 },
+    "templateName": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "templateVersion": { "type": "string", "maxLength": 64 },
+    "snapshotId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "pluginVersion": { "type": "string", "minLength": 1, "maxLength": 64 }
+  }
+}

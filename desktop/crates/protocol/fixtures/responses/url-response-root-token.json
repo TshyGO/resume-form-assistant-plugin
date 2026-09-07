@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "ok": true,
+  "payload": {
+    "exact": [
+      {
+        "applicationId": "77777777-7777-4777-8777-777777777777",
+        "company": "合成公司",
+        "title": "后端实习",
+        "stage": "saved",
+        "sourceUrl": "https://jobs.example?access_token=test"
+      }
+    ],
+    "sameCompany": []
+  }
+}

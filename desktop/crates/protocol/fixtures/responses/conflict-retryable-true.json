@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "correlationId": "33333333-3333-4333-8333-333333333333",
+  "ok": false,
+  "error": {
+    "code": "conflict",
+    "retryable": true,
+    "message": "same identity different digest"
+  },
+  "payload": {}
+}

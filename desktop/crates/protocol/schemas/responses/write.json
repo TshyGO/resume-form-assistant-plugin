@@ -1,0 +1,8 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/write.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "resultKind": { "type": "string", "maxLength": 64 }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "protocolVersion": 1,
+  "minProtocolVersion": 1,
+  "maxProtocolVersion": 1,
+  "maxEnvelopeBytes": 65536,
+  "suggestedRawChunkBytes": 32768,
+  "maxSnapshotBytes": 2097152,
+  "maxReconcileItems": 32,
+  "maxChunkCount": 128,
+  "maxAssemblerSessions": 16,
+  "occurredAtSubset": "UTC RFC3339: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ with a real calendar date and clock; Z only, no numeric offsets.",
+  "identityForbidden": ["health", "handshake"],
+  "identityRequired": [
+    "application.queryCandidates",
+    "job.save",
+    "fill.submit",
+    "snapshot.chunk",
+    "submit.confirm",
+    "outbox.reconcile"
+  ],
+  "writeTypes": [
+    "job.save",
+    "fill.submit",
+    "snapshot.chunk",
+    "submit.confirm"
+  ],
+  "messageTypes": [
+    "health",
+    "handshake",
+    "application.queryCandidates",
+    "job.save",
+    "fill.submit",
+    "snapshot.chunk",
+    "submit.confirm",
+    "outbox.reconcile"
+  ],
+  "errorCodes": [
+    "identity_missing",
+    "identity_not_allowed",
+    "restore_epoch_mismatch",
+    "protocol_incompatible",
+    "unknown_message_type",
+    "invalid_payload",
+    "payload_too_large",
+    "conflict",
+    "previously_purged",
+    "unavailable",
+    "secret_forbidden"
+  ],
+  "reconcileStatuses": [
+    "applied",
+    "purged",
+    "not_found",
+    "conflict",
+    "unverifiable"
+  ],
+  "retryableErrorCodes": ["unavailable"],
+  "urlSecretQueryKeys": [
+    "token",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "session",
+    "sessionid",
+    "sid",
+    "auth",
+    "authorization",
+    "api_key",
+    "apikey",
+    "password",
+    "pwd",
+    "secret",
+    "signature",
+    "sig",
+    "code",
+    "key"
+  ],
+  "urlAllowlist": [],
+  "saveIntentIsNotMessageType": true,
+  "notes": {
+    "size": "Limit is the UTF-8 byte length of the complete serialized business envelope, excluding the Native Messaging 4-byte length prefix.",
+    "identity": "Schema cannot prove an envelope matches the desktop current pointer. After structural validation, D03/D06 must compare archiveId/restoreEpoch to current.json.",
+    "sourceRestoreEpoch": "Bound at pairing/bind time and immutable. Never overwrite with the current epoch.",
+    "reconcile": "Read-only. A successful reconcile item does not authorize replay or rewrite of the old envelope."
+  }
+}
