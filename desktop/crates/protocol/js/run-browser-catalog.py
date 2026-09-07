@@ -14,6 +14,18 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # Do not let the OS decide. SimpleHTTPRequestHandler resolves types through
+    # `mimetypes`, which on Windows reads the registry, and a runner without ".mjs"
+    # registered serves modules as text/plain -- which browsers refuse to load under
+    # strict MIME checking, so the page never runs and only looks slow.
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".mjs": "text/javascript",
+        ".js": "text/javascript",
+        ".json": "application/json",
+        ".html": "text/html",
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
