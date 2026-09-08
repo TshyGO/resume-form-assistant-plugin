@@ -41,13 +41,20 @@ pub fn connect_or_start(data_root: &Path, program: &Path) -> Result<local_ipc::S
 }
 
 fn start_hidden(program: &Path) -> std::io::Result<()> {
-    std::process::Command::new(program)
+    let mut child = std::process::Command::new(program)
         .arg("--hidden")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_child| ())
+        .spawn()?;
+    // Dropping a Child does not reap it. On Unix the application would then sit as a
+    // zombie for as long as this host lives, and a connectNative port lives as long as
+    // the browser keeps it open. The wait happens on its own thread so the cold start
+    // stays non-blocking, which is the whole point of not waiting here.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Retry until the endpoint answers or the deadline passes.

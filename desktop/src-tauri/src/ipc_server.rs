@@ -72,6 +72,8 @@ impl Application for OpenArchive {
 pub struct IpcService {
     running: Arc<AtomicBool>,
     endpoint: String,
+    data_root: std::path::PathBuf,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl IpcService {
@@ -83,6 +85,20 @@ impl IpcService {
 impl Drop for IpcService {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
+        // Clearing the flag is not enough on its own. The loop spends nearly all its life
+        // parked inside accept and does not look at the flag again until a caller
+        // arrives, so it would hold the endpoint open indefinitely — and on Windows the
+        // next bind then reports the name as taken by a listener that is no longer
+        // serving anything.
+        let woken = Endpoint::for_data_root(&self.data_root)
+            .and_then(|endpoint| local_ipc::connect(&endpoint))
+            .is_ok();
+        if woken {
+            // Only then: waiting on a loop that was never woken would hang the caller.
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
     }
 }
 
@@ -97,13 +113,11 @@ pub fn start<A: Application>(
     let endpoint = Endpoint::for_data_root(data_root)?;
     let mut listener = Listener::bind(&endpoint)?;
     let running = Arc::new(AtomicBool::new(true));
-    let service = IpcService {
-        running: Arc::clone(&running),
-        endpoint: endpoint.display(),
-    };
+    let display = endpoint.display();
 
-    std::thread::spawn(move || {
-        while running.load(Ordering::Relaxed) {
+    let alive = Arc::clone(&running);
+    let worker = std::thread::spawn(move || {
+        while alive.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok(stream) => {
                     let application = Arc::clone(&application);
@@ -119,7 +133,12 @@ pub fn start<A: Application>(
         }
     });
 
-    Ok(service)
+    Ok(IpcService {
+        running,
+        endpoint: display,
+        data_root: data_root.to_path_buf(),
+        worker: Some(worker),
+    })
 }
 
 /// Answer frames on one connection until the peer closes it.
@@ -285,6 +304,37 @@ mod tests {
             let reply = nm_frame::read_frame(&mut client).unwrap().unwrap();
             let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
             assert_eq!(value["ok"], true);
+        }
+    }
+
+    #[test]
+    fn dropping_the_service_releases_an_endpoint_that_is_waiting_for_a_caller() {
+        // The accept loop spends nearly all its life blocked waiting for the next caller.
+        // Dropping the handle while it is parked there is the case that matters, and the
+        // sibling test below can pass without covering it: the loop may not have reached
+        // accept yet when the drop happens.
+        let dir = tempfile::tempdir().unwrap();
+        let service = start(dir.path(), open_archive()).unwrap();
+        let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
+
+        // One completed exchange proves the loop is now parked in accept, not still
+        // starting up.
+        let mut client = local_ipc::connect(&endpoint).unwrap();
+        nm_frame::write_frame(&mut client, framed(HEALTH)[4..].to_vec().as_slice()).unwrap();
+        nm_frame::read_frame(&mut client).unwrap().unwrap();
+        drop(client);
+
+        drop(service);
+        let mut attempts = 0;
+        loop {
+            match Listener::bind(&endpoint) {
+                Ok(_) => break,
+                Err(IpcError::AlreadyListening) if attempts < 40 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(err) => panic!("the endpoint was never released: {err}"),
+            }
         }
     }
 

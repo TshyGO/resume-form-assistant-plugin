@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const HOST_NAME = "com.resumepro.desktop";
 
@@ -167,15 +168,17 @@ const realIo = {
 
 /// Add the manifest and, on Windows, the key that points at it.
 ///
-/// A target that already carries someone else's registration is reported and skipped: an
-/// unregister cannot restore a file it never saw, so overwriting one would leave the
-/// developer's real setup broken with no way back.
+/// A target is only written when this script still owns it. Ownership means a receipt
+/// entry whose digest matches what is on disk now — the entry alone is not enough, since
+/// the file may have been replaced since, and overwriting it would destroy a registration
+/// no unregister can put back.
 export function register(
   { platform, home, localAppData, browsers, binaryPath, extensionIds, dryRun = false },
   io = realIo,
 ) {
   const manifest = manifestFor(binaryPath, extensionIds, platform);
   const body = `${JSON.stringify(manifest, null, 2)}\n`;
+  const sha256 = digest(body);
   const file = receiptPath({ platform, home, localAppData });
   const receipt = loadReceipt(file, io);
   const planned = [];
@@ -183,15 +186,30 @@ export function register(
 
   for (const target of targetsFor({ platform, home, localAppData, browsers })) {
     const ours = receipt.entries.find((e) => e.manifestPath === target.manifestPath);
-    if (io.exists(target.manifestPath) && !ours) {
-      skipped.push({
-        ...target,
-        reason: "a manifest is already registered here and was not written by this script",
-      });
-      continue;
+    if (io.exists(target.manifestPath)) {
+      if (!ours) {
+        skipped.push({
+          ...target,
+          reason: "a manifest is already registered here and was not written by this script",
+        });
+        continue;
+      }
+      if (digest(io.read(target.manifestPath)) !== ours.sha256) {
+        skipped.push({
+          ...target,
+          reason: "the manifest here changed after it was registered; something else owns it",
+        });
+        continue;
+      }
     }
-    const previousRegistryValue =
-      target.registryKey && !ours ? io.readRegistry(target.registryKey) : (ours?.previousRegistryValue ?? null);
+    // What the key pointed at before this script first claimed it. On a re-registration
+    // that is whatever the first run recorded: re-reading now would capture this
+    // script's own value and have unregister restore it into the key it just cleared.
+    const previousRegistryValue = ours
+      ? (ours.previousRegistryValue ?? null)
+      : target.registryKey
+        ? io.readRegistry(target.registryKey)
+        : null;
     planned.push({ ...target, previousRegistryValue });
   }
 
@@ -203,27 +221,34 @@ export function register(
     (e) => !planned.some((p) => p.manifestPath === e.manifestPath),
   );
   for (const target of planned) {
-    io.write(target.manifestPath, manifest);
-    if (target.registryKey) {
-      io.writeRegistry(target.registryKey, target.manifestPath);
-    }
     entries.push({
       browser: target.browser,
       manifestPath: target.manifestPath,
       registryKey: target.registryKey,
       previousRegistryValue: target.previousRegistryValue,
-      sha256: digest(body),
+      sha256,
     });
   }
+  // The receipt is written before anything it describes. A failure partway through then
+  // leaves a record unregister can act on, where recording afterwards would leave changes
+  // nothing knows how to undo.
   io.write(file, { entries });
+  for (const target of planned) {
+    io.write(target.manifestPath, manifest);
+    if (target.registryKey) {
+      io.writeRegistry(target.registryKey, target.manifestPath);
+    }
+  }
   return { planned, skipped, manifest, applied: true };
 }
 
 /// Remove exactly what `register` added.
 ///
-/// A manifest whose content has changed since it was written is left alone: something
-/// else now owns it, and deleting it would be destroying a file this script did not
-/// produce. A registry key that pointed somewhere before is restored rather than deleted.
+/// Each half is checked separately, because they can be taken over separately. The
+/// registry value is only restored or cleared while it still points at this script's
+/// manifest, and the file is only deleted while its content is still the one that was
+/// registered. A missing file is not a reason to abandon the key: leaving it aimed at a
+/// manifest that is gone is exactly the state that has no owner left to clean it.
 export function unregister({ platform, home, localAppData, dryRun = false }, io = realIo) {
   const file = receiptPath({ platform, home, localAppData });
   const receipt = loadReceipt(file, io);
@@ -231,17 +256,18 @@ export function unregister({ platform, home, localAppData, dryRun = false }, io 
   const left = [];
 
   for (const entry of receipt.entries) {
-    if (!io.exists(entry.manifestPath)) {
-      removed.push({ ...entry, note: "already gone" });
-      continue;
-    }
-    if (digest(io.read(entry.manifestPath)) !== entry.sha256) {
+    const present = io.exists(entry.manifestPath);
+    if (present && digest(io.read(entry.manifestPath)) !== entry.sha256) {
       left.push({ ...entry, reason: "the manifest changed after it was registered" });
       continue;
     }
+    const keyIsOurs =
+      !entry.registryKey || io.readRegistry(entry.registryKey) === entry.manifestPath;
     if (!dryRun) {
-      io.remove(entry.manifestPath);
-      if (entry.registryKey) {
+      if (present) {
+        io.remove(entry.manifestPath);
+      }
+      if (entry.registryKey && keyIsOurs) {
         if (entry.previousRegistryValue) {
           io.writeRegistry(entry.registryKey, entry.previousRegistryValue);
         } else {
@@ -249,7 +275,11 @@ export function unregister({ platform, home, localAppData, dryRun = false }, io 
         }
       }
     }
-    removed.push(entry);
+    removed.push({
+      ...entry,
+      note: present ? undefined : "the manifest was already gone",
+      registry: keyIsOurs ? undefined : "the key now points elsewhere and was left alone",
+    });
   }
 
   if (!dryRun) {
@@ -346,10 +376,10 @@ function main(argv) {
 
 function defaultBinary() {
   const name = process.platform === "win32" ? "resume-pro-desktop.exe" : "resume-pro-desktop";
-  const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+  const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..", "src-tauri", "target", "debug", name);
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1].replace(/\\/g, "/")}`).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = main(process.argv.slice(2));
 }

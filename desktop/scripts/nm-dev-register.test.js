@@ -215,3 +215,75 @@ test("a missing receipt reads as empty rather than throwing", () => {
   assert.deepEqual(readReceipt("/no/such/receipt.json"), { entries: [] });
   assert.ok(receiptFile(WINDOWS).endsWith("ResumePro\\dev-nm\\receipt.json"));
 });
+
+test("re-registering over a manifest that was edited since is skipped", () => {
+  // A receipt entry alone is not ownership. The file may have been replaced by a real
+  // installer after this script wrote it, and overwriting it would destroy a registration
+  // no unregister can put back.
+  const io = fakeIo();
+  const options = {
+    ...WINDOWS,
+    browsers: ["chrome"],
+    binaryPath: BINARY_WIN,
+    extensionIds: [ID],
+  };
+  register(options, io);
+  const [chrome] = targetsFor({ ...WINDOWS, browsers: ["chrome"] });
+  io.files.set(chrome.manifestPath, '{"name":"replaced by an installer"}\n');
+
+  const result = register(options, io);
+  assert.equal(result.planned.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.match(result.skipped[0].reason, /changed after it was registered/);
+  assert.equal(io.files.get(chrome.manifestPath), '{"name":"replaced by an installer"}\n');
+});
+
+test("a registry key repointed after registration is left alone", () => {
+  // Something else owns the key now. Restoring the older value would silently remove a
+  // registration this script never made.
+  const io = fakeIo();
+  const [chrome] = targetsFor({ ...WINDOWS, browsers: ["chrome"] });
+  register({ ...WINDOWS, browsers: ["chrome"], binaryPath: BINARY_WIN, extensionIds: [ID] }, io);
+  io.registry.set(chrome.registryKey, "C:\\Newer\\manifest.json");
+
+  const result = unregister(WINDOWS, io);
+  assert.equal(io.registry.get(chrome.registryKey), "C:\\Newer\\manifest.json");
+  assert.match(result.removed[0].registry, /points elsewhere/);
+  // The manifest half is still this script's to remove.
+  assert.equal(io.files.has(chrome.manifestPath), false);
+});
+
+test("a key is still cleared when the manifest is already gone", () => {
+  // Otherwise the browser is left pointed at a manifest that does not exist, and the
+  // receipt entry that could have explained it is dropped.
+  const io = fakeIo();
+  const [chrome] = targetsFor({ ...WINDOWS, browsers: ["chrome"] });
+  register({ ...WINDOWS, browsers: ["chrome"], binaryPath: BINARY_WIN, extensionIds: [ID] }, io);
+  io.files.delete(chrome.manifestPath);
+
+  unregister(WINDOWS, io);
+  assert.equal(io.registry.has(chrome.registryKey), false);
+});
+
+test("a write that fails partway still leaves something unregister can act on", () => {
+  // The receipt is written before the changes it describes, so a failure does not leave
+  // a registry value with no record of how to undo it.
+  const io = fakeIo();
+  const failing = {
+    ...io,
+    writeRegistry: (key, value) => {
+      if (key.includes("Edge")) {
+        throw new Error("access denied");
+      }
+      io.registry.set(key, value);
+    },
+  };
+  assert.throws(
+    () => register({ ...WINDOWS, binaryPath: BINARY_WIN, extensionIds: [ID] }, failing),
+    /access denied/,
+  );
+
+  const result = unregister(WINDOWS, io);
+  assert.equal(result.removed.length, 2, "both targets are still accounted for");
+  assert.equal(io.registry.size, 0);
+});
