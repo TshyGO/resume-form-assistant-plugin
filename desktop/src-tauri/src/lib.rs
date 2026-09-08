@@ -464,25 +464,38 @@ pub fn run() {
     // Before every branch that prints: --probe and --apps-loop both write to stdout, and
     // stdout in this mode carries protocol frames only.
     if args.nm_host {
-        // Read-only: this process is the translator, not the writer, so it must not
-        // create the layout or take the instance lock the application process owns.
-        let allowed = match data_service::HostPaths::resolve() {
-            Ok(paths) => nm::allowed_origins_from(&data_service::read_pairing_draft_at(
-                &paths.settings_file,
-            )),
-            Err(err) => {
-                eprintln!("nm-host: cannot resolve data paths, treating as unpaired: {err:?}");
-                Vec::new()
+        // Pairing is consulted only when there is an origin to authorise. Loading it
+        // unconditionally would send the --nm-host test entry point to the real settings
+        // file, which is exactly what the isolated data directories are meant to prevent.
+        let caller = match args.origin.as_deref() {
+            None => {
+                eprintln!("nm-host: no caller origin supplied");
+                nm::Caller::Unidentified
+            }
+            Some(origin) => {
+                // Read-only: this process is the translator, not the writer, so it must
+                // not create the layout or take the lock the application process owns.
+                let allowed = match data_service::HostPaths::resolve() {
+                    Ok(paths) => nm::allowed_origins_from(&data_service::read_pairing_draft_at(
+                        &paths.settings_file,
+                    )),
+                    Err(err) => {
+                        eprintln!(
+                            "nm-host: cannot resolve data paths, treating as unpaired: {err:?}"
+                        );
+                        Vec::new()
+                    }
+                };
+                let caller = nm::authorise(Some(origin), &allowed);
+                match &caller {
+                    nm::Caller::Authorised(_) => {
+                        eprintln!("nm-host: authorised caller {origin}")
+                    }
+                    _ => eprintln!("nm-host: caller {origin} is not paired with this desktop"),
+                }
+                caller
             }
         };
-        let caller = nm::authorise(args.origin.as_deref(), &allowed);
-        match &caller {
-            nm::Caller::Authorised(origin) => eprintln!("nm-host: authorised caller {origin}"),
-            nm::Caller::Rejected(origin) => {
-                eprintln!("nm-host: caller {origin} is not paired with this desktop")
-            }
-            nm::Caller::Unidentified => eprintln!("nm-host: no caller origin supplied"),
-        }
         let mut input = std::io::stdin();
         let mut output = std::io::stdout();
         std::process::exit(nm::serve(&caller, &mut input, &mut output));

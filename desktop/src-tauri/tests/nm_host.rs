@@ -207,3 +207,40 @@ fn a_paired_caller_is_served() {
 
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+#[test]
+fn the_test_entry_point_never_touches_the_real_settings() {
+    // A relative RESUMEPRO_DATA_DIR makes path resolution fail, which the host reports on
+    // stderr. With no origin there is nothing to authorise, so pairing must not be
+    // consulted at all and that message must not appear. Without this the --nm-host tests
+    // read the developer's real ResumePro settings, which is what the isolation added
+    // alongside was supposed to prevent.
+    let (code, stdout, stderr) = run_host_with_data_dir(
+        &["--nm-host"],
+        std::path::Path::new("relative-not-absolute"),
+        framed(HEALTH),
+    );
+    assert_eq!(code, 0);
+    assert_single_health_frame(&stdout);
+    assert!(
+        !stderr.contains("cannot resolve data paths"),
+        "pairing must not be read when there is no origin: {stderr}"
+    );
+}
+
+#[test]
+fn an_origin_does_make_the_host_consult_pairing() {
+    // The counterpart to the test above: with an origin, resolution is attempted, so the
+    // same broken override is reported. This is what proves the previous test observes a
+    // real difference rather than a message that never appears.
+    let (code, _stdout, stderr) = run_host_with_data_dir(
+        &[ORIGIN],
+        std::path::Path::new("relative-not-absolute"),
+        framed(HEALTH),
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stderr.contains("cannot resolve data paths"),
+        "an origin must send the host to pairing: {stderr}"
+    );
+}
