@@ -270,7 +270,7 @@ mod tests {
     fn chinese_and_spaces_override_is_accepted() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("用户 数据").join("Resume Pro Data");
-        let paths = HostPaths::resolve_with(Some(root.clone()), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root.clone()), Some(tmp.path().join("cache"))).unwrap();
         assert_eq!(paths.data_root, root);
         paths.ensure_layout().unwrap();
         assert!(paths.archive_dir.is_dir());
@@ -283,7 +283,7 @@ mod tests {
     fn ensure_layout_does_not_delete_existing_files() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
-        let paths = HostPaths::resolve_with(Some(root.clone()), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root.clone()), Some(tmp.path().join("cache"))).unwrap();
         paths.ensure_layout().unwrap();
         let marker = paths.archive_dir.join("keep-me.txt");
         fs::write(&marker, b"stay").unwrap();
@@ -296,7 +296,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let file_root = tmp.path().join("not-a-dir");
         fs::write(&file_root, b"nope").unwrap();
-        let paths = HostPaths::resolve_with(Some(file_root.clone()), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(file_root.clone()), Some(tmp.path().join("cache"))).unwrap();
         let err = paths.ensure_layout().unwrap_err();
         assert!(
             err.code() == crate::error::DIR_NOT_WRITABLE
@@ -311,7 +311,7 @@ mod tests {
     fn write_probe_does_not_overwrite_existing_file() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
-        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root), Some(tmp.path().join("cache"))).unwrap();
         paths.ensure_layout().unwrap();
         let planted = paths.logs_dir.join(".resumepro-write-test");
         fs::write(&planted, b"do-not-touch").unwrap();
@@ -330,7 +330,7 @@ mod tests {
     fn write_probe_covers_attachments_and_snapshots() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
-        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root), Some(tmp.path().join("cache"))).unwrap();
         paths.ensure_layout().unwrap();
         fs::remove_dir_all(&paths.attachments_dir).unwrap();
         fs::write(&paths.attachments_dir, b"not-a-dir").unwrap();
@@ -343,7 +343,7 @@ mod tests {
     fn concurrent_write_probes_do_not_leave_files() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
-        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root), Some(tmp.path().join("cache"))).unwrap();
         paths.ensure_layout().unwrap();
         std::thread::scope(|scope| {
             for _ in 0..4 {
@@ -371,7 +371,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("data");
-        let paths = HostPaths::resolve_with(Some(root), None).unwrap();
+        let paths = HostPaths::resolve_with(Some(root), Some(tmp.path().join("cache"))).unwrap();
         paths.ensure_layout().unwrap();
         fs::set_permissions(&paths.snapshots_dir, fs::Permissions::from_mode(0o555)).unwrap();
         let err = paths.assert_writable().unwrap_err();
