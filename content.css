@@ -177,11 +177,55 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
 
-:host .resume-pro__chip.is-success {
-  background: rgba(33, 185, 122, 0.14);
-  color: #21b97a;
+:host .resume-pro__chip:hover,
+:host .resume-pro__chip:focus-visible {
+  background: rgba(79, 110, 247, 0.2);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.15);
+}
+
+:host .resume-pro__chip.is-in-field {
+  background: #3855d9;
+  color: #fff;
+}
+
+:host .resume-pro__chip-actions {
+  position: fixed;
+  z-index: 2147483647;
+  display: flex;
+  min-width: 116px;
+  padding: 6px;
+  gap: 6px;
+  border: 1px solid rgba(79, 110, 247, 0.2);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(30, 41, 59, 0.2);
+}
+
+:host .resume-pro__chip-actions[hidden] {
+  display: none;
+}
+
+:host .resume-pro__chip-actions button {
+  flex: 1;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #3855d9;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+:host .resume-pro__chip-actions button:hover,
+:host .resume-pro__chip-actions button:focus-visible {
+  background: #4f6ef7;
+  color: #fff;
+  outline: none;
 }
 
 :host .resume-pro__empty {
