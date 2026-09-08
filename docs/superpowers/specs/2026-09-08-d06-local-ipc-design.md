@@ -33,6 +33,8 @@ pub fn connect(endpoint: &Endpoint) -> Result<Stream, IpcError>
 
 平台差异完全封在 crate 内，对外一个 API。
 
+已用编译探针核实所需的 `windows-sys` feature 与符号位置（0.59）：`ConnectNamedPipe` 因签名含 `OVERLAPPED` 而额外需要 `Win32_System_IO`；`PIPE_ACCESS_DUPLEX` 位于 `Win32::Storage::FileSystem` 而非 `Win32::System::Pipes`。两处按直觉书写都会编译失败。
+
 `local-ipc` **只提供实现了 `Read + Write` 的字节流，不依赖 `nm-frame`**，帧的收发由调用方在流之上套 `nm-frame`。这样传输与帧格式各自独立可测，`local-ipc` 的测试不需要构造任何协议帧。
 
 ## 2.1 分两个 PR 实现
@@ -60,8 +62,9 @@ ADR §3.4 第 7 条：**不因为「本机」就信任**。
 
 ### Windows
 
-端点为 `\\.\pipe\resume-pro-<当前用户 SID 的哈希>`。
+端点为 `\.\pipeesume-pro-<当前用户 SID 字符串>`，例如 `\.\pipeesume-pro-S-1-5-21-…-1001`。
 
+- 直接用 SID 字符串而非其哈希：SID 只含 `S`、数字与连字符，在管道名中合法，且无碰撞、可读、便于排障。管道名上限 256 字符，SID 约 50，余量充足
 - 名称含用户标识：同一台机器上的两个用户各自有独立管道，不会撞名
 - `CreateNamedPipe` 时附安全描述符，**DACL 只含当前用户 SID**
 - 使用 `FILE_FLAG_FIRST_PIPE_INSTANCE`：名称已被占用时**创建失败并报错**，而不是默默加入他人已建的管道
