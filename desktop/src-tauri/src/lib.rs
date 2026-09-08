@@ -3,6 +3,7 @@ mod commands;
 #[cfg(test)]
 mod commands_regression;
 mod lifecycle;
+mod nm;
 
 use archive_store::ArchiveStore;
 use commands::{
@@ -459,6 +460,18 @@ pub fn run() {
     if args.help {
         cli::print_help();
         return;
+    }
+    // Before every branch that prints: --probe and --apps-loop both write to stdout, and
+    // stdout in this mode carries protocol frames only.
+    if args.nm_host {
+        if let Some(origin) = args.origin.as_deref() {
+            // Recorded, not authorised: the allowed_origins list comes from pairing,
+            // which is a later slice. D05 exports origin_allowed for when it exists.
+            eprintln!("nm-host: caller origin {origin}");
+        }
+        let mut input = std::io::stdin();
+        let mut output = std::io::stdout();
+        std::process::exit(nm::serve(&mut input, &mut output));
     }
     if args.apps_loop {
         match run_apps_loop() {
