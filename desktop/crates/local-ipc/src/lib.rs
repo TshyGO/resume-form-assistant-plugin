@@ -89,6 +89,10 @@ impl Endpoint {
 }
 
 /// Accepts connections. Created only by the process holding `host.lock`.
+///
+/// `Debug` is derived because these appear in `Result`s that tests and callers unwrap;
+/// the platform types print only their endpoint, never a handle value.
+#[derive(Debug)]
 pub struct Listener(platform::Listener);
 
 impl Listener {
@@ -103,6 +107,7 @@ impl Listener {
 }
 
 /// One connection. Implements `Read` and `Write`; framing is the caller's business.
+#[derive(Debug)]
 pub struct Stream(platform::Stream);
 
 impl Read for Stream {

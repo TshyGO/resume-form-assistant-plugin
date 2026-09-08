@@ -40,6 +40,7 @@ impl Endpoint {
     }
 }
 
+#[derive(Debug)]
 pub struct Listener {
     inner: UnixListener,
     path: PathBuf,
@@ -102,6 +103,7 @@ impl Drop for Listener {
     }
 }
 
+#[derive(Debug)]
 pub struct Stream {
     inner: UnixStream,
 }

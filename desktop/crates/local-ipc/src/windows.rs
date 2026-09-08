@@ -148,6 +148,7 @@ fn owner_only_descriptor() -> Result<(PSECURITY_DESCRIPTOR, String), IpcError> {
     Ok((descriptor, sid))
 }
 
+#[derive(Debug)]
 pub struct Listener {
     endpoint: Endpoint,
     pending: HANDLE,
@@ -227,6 +228,7 @@ fn create_instance(endpoint: &Endpoint, first: bool) -> Result<HANDLE, IpcError>
     Ok(handle)
 }
 
+#[derive(Debug)]
 pub struct Stream {
     handle: HANDLE,
 }
