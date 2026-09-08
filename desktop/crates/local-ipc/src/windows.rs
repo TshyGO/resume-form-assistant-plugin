@@ -11,8 +11,8 @@ use std::path::Path;
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE,
-    INVALID_HANDLE_VALUE,
+    CloseHandle, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
+    ERROR_SEM_TIMEOUT, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -152,6 +152,12 @@ pub struct Listener {
     endpoint: Endpoint,
     pending: HANDLE,
 }
+
+// SAFETY: a Windows HANDLE is a process-wide kernel object reference with no thread
+// affinity, and each handle here is owned by exactly one value. The application process
+// accepts on its own thread, so these must cross thread boundaries.
+unsafe impl Send for Listener {}
+unsafe impl Send for Stream {}
 
 impl Listener {
     pub fn bind(endpoint: &Endpoint) -> Result<Self, IpcError> {
@@ -317,7 +323,15 @@ fn retry_after_wait(endpoint: &Endpoint) -> Result<HANDLE, IpcError> {
     // SAFETY: the name is NUL-terminated; the returned handle is owned by the caller.
     unsafe {
         if WaitNamedPipeW(wide(&endpoint.name).as_ptr(), WAIT_MS) == 0 {
-            return Err(IpcError::Busy);
+            // A zero return covers two different situations and they lead to opposite
+            // decisions: the listener exiting while we waited means the application must
+            // be started, whereas the wait simply elapsing means it is running and
+            // saturated. Reporting Busy for both left a stopped application unstarted.
+            return match last_error() {
+                ERROR_FILE_NOT_FOUND => Err(IpcError::NotRunning),
+                ERROR_SEM_TIMEOUT => Err(IpcError::Busy),
+                _ => Err(io_error("WaitNamedPipeW")),
+            };
         }
         let handle = CreateFileW(
             wide(&endpoint.name).as_ptr(),

@@ -4,7 +4,7 @@
 //! is narrowed to `0600` immediately after binding.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -48,12 +48,28 @@ pub struct Listener {
 impl Listener {
     pub fn bind(endpoint: &Endpoint) -> Result<Self, IpcError> {
         // A crash leaves the socket file behind. Only the holder of host.lock listens, so
-        // this process may replace a stale file — but not one someone is still serving.
+        // this process may replace a stale file — but only once it knows the file is
+        // stale. Treating every connect failure as proof of that was wrong: a permission
+        // error says nothing about whether someone is serving, and unlinking on the
+        // strength of it would put a second listener behind the same path.
         if endpoint.path.exists() {
-            match UnixStream::connect(&endpoint.path) {
-                Ok(_) => return Err(IpcError::AlreadyListening),
-                Err(_) => {
-                    std::fs::remove_file(&endpoint.path)?;
+            let is_socket = std::fs::metadata(&endpoint.path)
+                .map(|meta| meta.file_type().is_socket())
+                .unwrap_or(false);
+            if !is_socket {
+                // Not a socket at all, so nothing can be serving through it.
+                std::fs::remove_file(&endpoint.path)?;
+            } else {
+                match UnixStream::connect(&endpoint.path) {
+                    Ok(_) => return Err(IpcError::AlreadyListening),
+                    // Refused means the socket outlived its listener.
+                    Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                        std::fs::remove_file(&endpoint.path)?;
+                    }
+                    // Vanished between the check and the connect; nothing to remove.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    // Anything else leaves the question open, so the file stays.
+                    Err(e) => return Err(IpcError::Io(e)),
                 }
             }
         }

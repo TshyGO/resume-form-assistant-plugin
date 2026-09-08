@@ -296,4 +296,50 @@ mod tests {
         let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "the directory must not be traversable by others");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_that_cannot_be_probed_is_left_alone() {
+        // A permission error says nothing about whether someone is serving. Removing the
+        // file on the strength of one would put a second listener behind the same path,
+        // which is exactly what the host.lock rule exists to prevent.
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, endpoint) = endpoint();
+        let listener = Listener::bind(&endpoint).unwrap();
+        let socket = dir.path().join("host.sock");
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let err = Listener::bind(&endpoint).unwrap_err();
+        assert!(
+            !matches!(err, IpcError::NotRunning),
+            "an unprobeable socket must not read as absent: {err:?}"
+        );
+        assert!(socket.exists(), "the socket file must survive");
+        drop(listener);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_listener_that_stops_while_we_wait_reads_as_stopped_not_busy() {
+        // Callers use Busy to conclude the application is still running and skip the cold
+        // start. If it exited while we waited for a free instance, saying Busy would
+        // leave the request unserved forever.
+        let (_dir, endpoint) = endpoint();
+        let listener = Listener::bind(&endpoint).unwrap();
+        let _saturate = connect(&endpoint).expect("the only free instance is taken");
+
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            drop(listener);
+        });
+        let outcome = connect(&endpoint);
+        stopper.join().unwrap();
+
+        match outcome {
+            Err(IpcError::NotRunning) => {}
+            Err(IpcError::Busy) => panic!("a stopped listener must not read as busy"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("the listener was dropped, so no stream should be handed out"),
+        }
+    }
 }
