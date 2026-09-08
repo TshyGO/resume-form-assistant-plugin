@@ -57,6 +57,13 @@ impl Listener {
                 }
             }
         }
+        // bind() creates the socket under the process umask and only then can it be
+        // narrowed, so the pathname is briefly reachable. Closing the directory to others
+        // first means nobody can traverse to it during that window. The default data
+        // directory is already private; RESUMEPRO_DATA_DIR can point anywhere.
+        if let Some(parent) = endpoint.path.parent() {
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
         let inner = UnixListener::bind(&endpoint.path)?;
         std::fs::set_permissions(&endpoint.path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {

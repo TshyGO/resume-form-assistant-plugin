@@ -31,6 +31,10 @@ pub enum IpcError {
     AlreadyListening,
     /// Nothing is listening. The caller decides whether to start the application.
     NotRunning,
+    /// Someone is listening but every instance is taken. Distinct from `NotRunning` on
+    /// purpose: a caller that conflated them would start a second application process
+    /// because the first one was merely busy.
+    Busy,
     /// Windows only: the pipe was created by a process that is not this executable.
     UntrustedServer { reason: String },
     Io(std::io::Error),
@@ -47,6 +51,7 @@ impl std::fmt::Display for IpcError {
             ),
             IpcError::AlreadyListening => write!(f, "another process already listens here"),
             IpcError::NotRunning => write!(f, "nothing is listening"),
+            IpcError::Busy => write!(f, "the listener is running but every instance is taken"),
             IpcError::UntrustedServer { reason } => {
                 write!(f, "the listening process is not trusted: {reason}")
             }
@@ -260,5 +265,35 @@ mod tests {
             vec![sid],
             "exactly the current user must be granted, nobody else"
         );
+    }
+
+    #[test]
+    fn a_saturated_listener_is_not_mistaken_for_a_stopped_one() {
+        // A listener holds one unconnected instance at a time. Several hosts can connect
+        // before it accepts, and the extra ones must not read as "the application is not
+        // running" -- the caller would start a second application on the strength of it.
+        let (_dir, endpoint) = endpoint();
+        let _listener = Listener::bind(&endpoint).unwrap();
+        let _first = connect(&endpoint).expect("the first client connects");
+        match connect(&endpoint) {
+            Ok(_) => {}
+            Err(IpcError::Busy) => {}
+            Err(other) => panic!("a busy listener must not read as stopped: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_directory_is_closed_to_others_before_the_socket_appears() {
+        // bind() creates the socket under the process umask and only narrows it
+        // afterwards, so the pathname is briefly reachable. Keeping the directory
+        // owner-only means nobody can traverse to it during that window.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
+        let _listener = Listener::bind(&endpoint).unwrap();
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "the directory must not be traversable by others");
     }
 }

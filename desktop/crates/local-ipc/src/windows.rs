@@ -26,8 +26,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW,
+    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
@@ -212,8 +212,8 @@ fn create_instance(endpoint: &Endpoint, first: bool) -> Result<HANDLE, IpcError>
     unsafe { LocalFree(descriptor as *mut c_void) };
     if handle == INVALID_HANDLE_VALUE {
         let code = last_error();
-        // ERROR_ACCESS_DENIED (5) and ERROR_PIPE_BUSY both mean the name is taken.
-        if code == 5 || code == ERROR_PIPE_BUSY {
+        // ERROR_ACCESS_DENIED means the name already belongs to another creator.
+        if code == 5 {
             return Err(IpcError::AlreadyListening);
         }
         return Err(io_error("CreateNamedPipeW"));
@@ -294,16 +294,49 @@ pub fn connect(endpoint: &Endpoint) -> Result<Stream, IpcError> {
             ptr::null_mut(),
         )
     };
-    if handle == INVALID_HANDLE_VALUE {
-        let code = last_error();
-        if code == ERROR_FILE_NOT_FOUND || code == ERROR_PIPE_BUSY {
-            return Err(IpcError::NotRunning);
+    let handle = if handle == INVALID_HANDLE_VALUE {
+        match last_error() {
+            ERROR_FILE_NOT_FOUND => return Err(IpcError::NotRunning),
+            // Every instance is connected. The listener stands up a replacement as it
+            // accepts, so waiting briefly usually succeeds; reporting NotRunning here
+            // would tell the caller to start a second application process.
+            ERROR_PIPE_BUSY => retry_after_wait(endpoint)?,
+            _ => return Err(io_error("CreateFileW")),
         }
-        return Err(io_error("CreateFileW"));
-    }
+    } else {
+        handle
+    };
     let stream = Stream { handle };
     verify_server(&stream)?;
     Ok(stream)
+}
+
+/// Wait for a free pipe instance, then try once more.
+fn retry_after_wait(endpoint: &Endpoint) -> Result<HANDLE, IpcError> {
+    const WAIT_MS: u32 = 5_000;
+    // SAFETY: the name is NUL-terminated; the returned handle is owned by the caller.
+    unsafe {
+        if WaitNamedPipeW(wide(&endpoint.name).as_ptr(), WAIT_MS) == 0 {
+            return Err(IpcError::Busy);
+        }
+        let handle = CreateFileW(
+            wide(&endpoint.name).as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_MODE::default(),
+            ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            return match last_error() {
+                ERROR_FILE_NOT_FOUND => Err(IpcError::NotRunning),
+                ERROR_PIPE_BUSY => Err(IpcError::Busy),
+                _ => Err(io_error("CreateFileW after WaitNamedPipeW")),
+            };
+        }
+        Ok(handle)
+    }
 }
 
 /// Check the pipe was created by this same executable.
