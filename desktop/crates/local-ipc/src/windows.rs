@@ -351,11 +351,17 @@ fn verify_server(stream: &Stream) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// The pipe's DACL in SDDL form. Test support: it is what proves the grant is narrow.
-pub fn describe_security(endpoint: &Endpoint) -> Result<String, IpcError> {
-    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+/// The SIDs the pipe's DACL grants access to, in literal `S-1-…` form.
+///
+/// Test support. Walks the ACEs rather than reading the SDDL text: SDDL abbreviates
+/// well-known accounts, so a pipe owned by the local administrator reads back as `LA`
+/// rather than that account's SID, and a text comparison would fail on a correct DACL.
+#[cfg(test)]
+pub fn granted_sids(endpoint: &Endpoint) -> Result<Vec<String>, IpcError> {
+    use windows_sys::Win32::Security::{GetAce, ACCESS_ALLOWED_ACE, ACL};
 
-    // SAFETY: opens a handle to the pipe, reads its DACL, and frees both.
+    // SAFETY: opens the pipe for READ_CONTROL, reads its DACL, walks the ACEs, and frees
+    // the descriptor. Every pointer comes from the call immediately above it.
     unsafe {
         let handle = CreateFileW(
             wide(&endpoint.name).as_ptr(),
@@ -369,6 +375,7 @@ pub fn describe_security(endpoint: &Endpoint) -> Result<String, IpcError> {
         if handle == INVALID_HANDLE_VALUE {
             return Err(io_error("CreateFileW for READ_CONTROL"));
         }
+        let mut dacl: *mut ACL = ptr::null_mut();
         let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
         let status = GetSecurityInfo(
             handle,
@@ -376,7 +383,7 @@ pub fn describe_security(endpoint: &Endpoint) -> Result<String, IpcError> {
             DACL_SECURITY_INFORMATION,
             ptr::null_mut(),
             ptr::null_mut(),
-            ptr::null_mut(),
+            &mut dacl,
             ptr::null_mut(),
             &mut descriptor,
         );
@@ -384,23 +391,24 @@ pub fn describe_security(endpoint: &Endpoint) -> Result<String, IpcError> {
         if status != 0 {
             return Err(io_error("GetSecurityInfo"));
         }
-        let mut text: *mut u16 = ptr::null_mut();
-        let ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            descriptor,
-            SDDL_REVISION_1 as u32,
-            DACL_SECURITY_INFORMATION,
-            &mut text,
-            ptr::null_mut(),
-        );
-        let result = if ok == 0 {
-            Err(io_error("ConvertSecurityDescriptorToStringSecurityDescriptorW"))
-        } else {
-            Ok(from_wide(text))
-        };
-        if !text.is_null() {
-            LocalFree(text as *mut c_void);
+        let mut sids = Vec::new();
+        if !dacl.is_null() {
+            for index in 0..(*dacl).AceCount {
+                let mut ace: *mut c_void = ptr::null_mut();
+                if GetAce(dacl, index as u32, &mut ace) == 0 {
+                    LocalFree(descriptor as *mut c_void);
+                    return Err(io_error("GetAce"));
+                }
+                let allowed = ace as *const ACCESS_ALLOWED_ACE;
+                let sid = std::ptr::addr_of!((*allowed).SidStart) as *const c_void;
+                let mut raw: *mut u16 = ptr::null_mut();
+                if ConvertSidToStringSidW(sid as *mut c_void, &mut raw) != 0 {
+                    sids.push(from_wide(raw));
+                    LocalFree(raw as *mut c_void);
+                }
+            }
         }
         LocalFree(descriptor as *mut c_void);
-        result
+        Ok(sids)
     }
 }

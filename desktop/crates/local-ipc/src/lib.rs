@@ -253,14 +253,12 @@ mod tests {
     fn the_pipe_grants_access_to_the_current_user_only() {
         let (_dir, endpoint) = endpoint();
         let _listener = Listener::bind(&endpoint).unwrap();
-        let sddl = super::platform::describe_security(&endpoint.0).unwrap();
+        let granted = super::platform::granted_sids(&endpoint.0).unwrap();
         let sid = super::platform::current_user_sid().unwrap();
-        assert!(sddl.contains(&sid), "the owner must be granted: {sddl}");
-        // S-1-1-0 is Everyone and S-1-5-32-545 is Users; neither may appear.
-        assert!(!sddl.contains("S-1-1-0"), "Everyone must not be granted: {sddl}");
-        assert!(
-            !sddl.contains("S-1-5-32-545"),
-            "Users must not be granted: {sddl}"
+        assert_eq!(
+            granted,
+            vec![sid],
+            "exactly the current user must be granted, nobody else"
         );
     }
 }
