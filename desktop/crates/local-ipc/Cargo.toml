@@ -1,0 +1,23 @@
+[package]
+name = "local-ipc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Local IPC between the Resume Pro Native Messaging host and the application process. Byte streams only; it does not know the protocol."
+publish = false
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
