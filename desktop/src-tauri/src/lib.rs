@@ -464,14 +464,28 @@ pub fn run() {
     // Before every branch that prints: --probe and --apps-loop both write to stdout, and
     // stdout in this mode carries protocol frames only.
     if args.nm_host {
-        if let Some(origin) = args.origin.as_deref() {
-            // Recorded, not authorised: the allowed_origins list comes from pairing,
-            // which is a later slice. D05 exports origin_allowed for when it exists.
-            eprintln!("nm-host: caller origin {origin}");
+        // Read-only: this process is the translator, not the writer, so it must not
+        // create the layout or take the instance lock the application process owns.
+        let allowed = match data_service::HostPaths::resolve() {
+            Ok(paths) => nm::allowed_origins_from(&data_service::read_pairing_draft_at(
+                &paths.settings_file,
+            )),
+            Err(err) => {
+                eprintln!("nm-host: cannot resolve data paths, treating as unpaired: {err:?}");
+                Vec::new()
+            }
+        };
+        let caller = nm::authorise(args.origin.as_deref(), &allowed);
+        match &caller {
+            nm::Caller::Authorised(origin) => eprintln!("nm-host: authorised caller {origin}"),
+            nm::Caller::Rejected(origin) => {
+                eprintln!("nm-host: caller {origin} is not paired with this desktop")
+            }
+            nm::Caller::Unidentified => eprintln!("nm-host: no caller origin supplied"),
         }
         let mut input = std::io::stdin();
         let mut output = std::io::stdout();
-        std::process::exit(nm::serve(&mut input, &mut output));
+        std::process::exit(nm::serve(&caller, &mut input, &mut output));
     }
     if args.apps_loop {
         match run_apps_loop() {

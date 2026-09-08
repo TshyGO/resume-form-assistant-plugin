@@ -13,7 +13,10 @@ mod redact;
 mod webview;
 
 pub use error::{HostError, HostErrorDto, DIR_CREATE_FAILED, DIR_NOT_WRITABLE, INSTANCE_LOCK_FAILED, LOG_WRITE_FAILED, PATH_INVALID};
-pub use host::{diagnostics_from, probe, probe_with, write_diagnostics_file, DataHost, PairingDraft, ProbeReport};
+pub use host::{
+    diagnostics_from, probe, probe_with, read_pairing_draft_at, write_diagnostics_file, DataHost,
+    PairingDraft, ProbeReport,
+};
 pub use logging::{log_path, write_log, LOG_FILE_NAME};
 pub use paths::{program_dir, HostPaths, DATA_DIR_NAME};
 pub use redact::{is_forbidden_key, path_replacements, redact_path, redact_value, sanitize_context};

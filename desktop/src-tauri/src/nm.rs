@@ -3,22 +3,61 @@
 //! This slice does not reach the archive. Anything it cannot serve is answered
 //! `unavailable`, the one retryable code in D05, rather than a false success.
 
-use resume_pro_protocol::{validate_request_bytes, ErrorCode, MessageType, MAX_ENVELOPE_BYTES};
+use data_service::PairingDraft;
+use resume_pro_protocol::{
+    origin_allowed, validate_request_bytes, ErrorCode, MessageType, MAX_ENVELOPE_BYTES,
+};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 
 const _FRAME_LIMIT_MATCHES_ENVELOPE: () = assert!(nm_frame::MAX_FRAME_BYTES == MAX_ENVELOPE_BYTES);
 
+/// Who is on the other end of the port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Caller {
+    /// No origin was supplied. Only the `--nm-host` test entry point reaches this.
+    Unidentified,
+    /// The origin matches the desktop's pairing settings.
+    Authorised(String),
+    /// An origin was supplied but does not match pairing, or nothing is paired.
+    Rejected(String),
+}
+
+/// The origins the desktop has been paired with.
+///
+/// Edge is Chromium, so an Edge extension's origin uses the `chrome-extension` scheme
+/// too; both stored ids produce the same form. Empty ids are skipped rather than turned
+/// into an origin that could never match.
+pub fn allowed_origins_from(draft: &PairingDraft) -> Vec<String> {
+    [&draft.chrome_extension_id, &draft.edge_extension_id]
+        .into_iter()
+        .filter(|id| !id.is_empty())
+        .map(|id| format!("chrome-extension://{id}/"))
+        .collect()
+}
+
+/// Decide whether the caller may be served.
+///
+/// Wildcards are refused on both sides by D05's `origin_allowed`, which the ADR requires
+/// and which is reused here rather than reimplemented.
+pub fn authorise(origin: Option<&str>, allowed: &[String]) -> Caller {
+    match origin {
+        None => Caller::Unidentified,
+        Some(origin) if origin_allowed(origin, allowed) => Caller::Authorised(origin.to_string()),
+        Some(origin) => Caller::Rejected(origin.to_string()),
+    }
+}
+
 /// Read frames until the port closes. Returns the process exit code.
 ///
 /// Diagnostics go to stderr only. Anything on stdout other than a protocol frame breaks
 /// the channel, and the browser reports it as an unexplained disconnect.
-pub fn serve<R: Read, W: Write>(input: &mut R, output: &mut W) -> i32 {
+pub fn serve<R: Read, W: Write>(caller: &Caller, input: &mut R, output: &mut W) -> i32 {
     loop {
         match nm_frame::read_frame(input) {
             Ok(None) => return 0,
             Ok(Some(frame)) => {
-                let Some(response) = response_for(&frame) else {
+                let Some(response) = response_for(&frame, caller) else {
                     eprintln!("nm-host: frame carries no usable messageId; closing");
                     return 2;
                 };
@@ -40,10 +79,14 @@ pub fn serve<R: Read, W: Write>(input: &mut R, output: &mut W) -> i32 {
 /// `None` means no compliant response can be built, because the D05 response envelope
 /// requires a `correlationId` and this frame carries no usable `messageId`. Closing
 /// beats emitting something the extension would also reject, which would hide the cause.
-pub fn response_for(frame: &[u8]) -> Option<Vec<u8>> {
+pub fn response_for(frame: &[u8], caller: &Caller) -> Option<Vec<u8>> {
     match validate_request_bytes(frame) {
         Ok(request) => {
-            let response = if request.message_type == MessageType::Health {
+            let response = if matches!(caller, Caller::Rejected(_)) {
+                // Answered per message rather than dropped: a closed port reaches the
+                // extension as an unexplained disconnect, while this says why.
+                error_response(&request.message_id, ErrorCode::IdentityNotAllowed)
+            } else if request.message_type == MessageType::Health {
                 json!({
                     "protocolVersion": 1,
                     "correlationId": request.message_id,
@@ -57,7 +100,12 @@ pub fn response_for(frame: &[u8]) -> Option<Vec<u8>> {
         }
         Err(err) => {
             let message_id = message_id_of(frame)?;
-            serde_json::to_vec(&error_response(&message_id, err.code)).ok()
+            let code = if matches!(caller, Caller::Rejected(_)) {
+                ErrorCode::IdentityNotAllowed
+            } else {
+                err.code
+            };
+            serde_json::to_vec(&error_response(&message_id, code)).ok()
         }
     }
 }
@@ -85,6 +133,9 @@ fn fixed_message(code: ErrorCode) -> &'static str {
         ErrorCode::UnknownMessageType => "The request message type is not supported.",
         ErrorCode::PayloadTooLarge => "The request exceeds the envelope limit.",
         ErrorCode::SecretForbidden => "The request carries content that must not be stored.",
+        ErrorCode::IdentityNotAllowed => {
+            "This extension is not paired with the desktop application."
+        }
         _ => "The request was rejected by contract validation.",
     }
 }
@@ -115,7 +166,8 @@ mod tests {
     const HEALTH: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"health","occurredAt":"2026-09-06T12:00:00.000Z","payload":{}}"#;
 
     fn respond(request: &str) -> Value {
-        let raw = response_for(request.as_bytes()).expect("a response is expected");
+        let raw = response_for(request.as_bytes(), &Caller::Unidentified)
+            .expect("a response is expected");
         serde_json::from_slice(&raw).expect("the response must be JSON")
     }
 
@@ -186,11 +238,14 @@ mod tests {
 
     #[test]
     fn a_frame_without_a_usable_message_id_gets_no_response() {
-        assert!(response_for(b"not json at all").is_none());
-        assert!(response_for(br#"{"messageId":"not-a-uuid"}"#).is_none());
+        assert!(response_for(b"not json at all", &Caller::Unidentified).is_none());
+        assert!(response_for(br#"{"messageId":"not-a-uuid"}"#, &Caller::Unidentified).is_none());
         assert!(
-            response_for(br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#)
-                .is_none()
+            response_for(
+                br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#,
+                &Caller::Unidentified
+            )
+            .is_none()
         );
     }
 
@@ -198,7 +253,7 @@ mod tests {
     fn a_closed_port_ends_the_session_with_success() {
         let mut input = std::io::Cursor::new(Vec::new());
         let mut output = Vec::new();
-        assert_eq!(serve(&mut input, &mut output), 0);
+        assert_eq!(serve(&Caller::Unidentified, &mut input, &mut output), 0);
         assert!(output.is_empty());
     }
 
@@ -208,7 +263,7 @@ mod tests {
         wire.extend_from_slice(&framed(HEALTH));
         let mut input = std::io::Cursor::new(wire);
         let mut output = Vec::new();
-        assert_eq!(serve(&mut input, &mut output), 0);
+        assert_eq!(serve(&Caller::Unidentified, &mut input, &mut output), 0);
 
         let mut cursor = std::io::Cursor::new(output);
         for _ in 0..2 {
@@ -231,7 +286,112 @@ mod tests {
         wire.extend_from_slice(b"body");
         let mut input = std::io::Cursor::new(wire);
         let mut output = Vec::new();
-        assert_eq!(serve(&mut input, &mut output), 2);
+        assert_eq!(serve(&Caller::Unidentified, &mut input, &mut output), 2);
         assert!(output.is_empty());
+    }
+
+    fn draft(chrome: &str, edge: &str) -> data_service::PairingDraft {
+        data_service::PairingDraft {
+            chrome_extension_id: chrome.into(),
+            edge_extension_id: edge.into(),
+            native_messaging_registered: false,
+        }
+    }
+
+    const CHROME_ID: &str = "abcdefghijklmnopabcdefghijklmnop";
+    const EDGE_ID: &str = "qrstuvwxyzabcdefqrstuvwxyzabcdef";
+
+    #[test]
+    fn each_paired_extension_id_becomes_one_origin() {
+        // Edge is Chromium, so its extensions use the chrome-extension scheme too.
+        assert_eq!(
+            allowed_origins_from(&draft(CHROME_ID, EDGE_ID)),
+            vec![
+                format!("chrome-extension://{CHROME_ID}/"),
+                format!("chrome-extension://{EDGE_ID}/"),
+            ]
+        );
+        assert_eq!(
+            allowed_origins_from(&draft(CHROME_ID, "")),
+            vec![format!("chrome-extension://{CHROME_ID}/")]
+        );
+        assert!(allowed_origins_from(&draft("", "")).is_empty());
+    }
+
+    #[test]
+    fn a_paired_caller_is_authorised() {
+        let allowed = allowed_origins_from(&draft(CHROME_ID, EDGE_ID));
+        assert!(matches!(
+            authorise(Some(&format!("chrome-extension://{CHROME_ID}/")), &allowed),
+            Caller::Authorised(_)
+        ));
+        assert!(matches!(
+            authorise(Some(&format!("chrome-extension://{EDGE_ID}/")), &allowed),
+            Caller::Authorised(_)
+        ));
+    }
+
+    #[test]
+    fn an_unpaired_or_mismatched_caller_is_rejected() {
+        let allowed = allowed_origins_from(&draft(CHROME_ID, ""));
+        assert!(matches!(
+            authorise(Some("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"), &allowed),
+            Caller::Rejected(_)
+        ));
+        // Nothing paired at all.
+        assert!(matches!(
+            authorise(Some(&format!("chrome-extension://{CHROME_ID}/")), &[]),
+            Caller::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn a_wildcard_origin_is_never_authorised() {
+        // The ADR forbids wildcards in allowed_origins; D05's origin_allowed enforces it
+        // on both sides, and this pins that we rely on it rather than reimplementing.
+        let wild = vec!["chrome-extension://*/".to_string()];
+        assert!(matches!(
+            authorise(Some("chrome-extension://*/"), &wild),
+            Caller::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn no_origin_leaves_the_caller_unidentified() {
+        assert!(matches!(authorise(None, &[]), Caller::Unidentified));
+    }
+
+    #[test]
+    fn a_rejected_caller_gets_identity_not_allowed_for_every_request() {
+        let caller = Caller::Rejected("chrome-extension://zzzz/".into());
+        let raw = response_for(HEALTH.as_bytes(), &caller).expect("a response is expected");
+        let response: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "identity_not_allowed");
+        assert_eq!(response["error"]["retryable"], false);
+        assert_eq!(
+            response["correlationId"],
+            "33333333-3333-4333-8333-333333333333"
+        );
+    }
+
+    #[test]
+    fn a_rejected_caller_keeps_the_connection_rather_than_being_dropped() {
+        // Dropping the port shows up in the extension as an unexplained disconnect, which
+        // is the failure mode these slices keep working to avoid.
+        let mut wire = framed(HEALTH);
+        wire.extend_from_slice(&framed(HEALTH));
+        let mut input = std::io::Cursor::new(wire);
+        let mut output = Vec::new();
+        let caller = Caller::Rejected("chrome-extension://zzzz/".into());
+        assert_eq!(serve(&caller, &mut input, &mut output), 0);
+
+        let mut cursor = std::io::Cursor::new(output);
+        for _ in 0..2 {
+            let frame = nm_frame::read_frame(&mut cursor).unwrap().unwrap();
+            let value: Value = serde_json::from_slice(&frame).unwrap();
+            assert_eq!(value["error"]["code"], "identity_not_allowed");
+        }
+        assert_eq!(nm_frame::read_frame(&mut cursor).unwrap(), None);
     }
 }
