@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resume Pro 字段组合测试</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f5f7fb; color: #1e293b; }
+    main { width: min(720px, calc(100% - 40px)); margin: 56px auto; padding: 32px; border-radius: 20px; background: #fff; box-shadow: 0 18px 50px rgba(30, 41, 59, .1); }
+    h1 { margin: 0 0 10px; font-size: 26px; }
+    .lead { margin: 0 0 28px; color: #64748b; line-height: 1.7; }
+    label { display: block; margin-bottom: 8px; font-weight: 700; }
+    input { box-sizing: border-box; width: 100%; padding: 14px 16px; border: 2px solid #cbd5e1; border-radius: 12px; font-size: 18px; outline: none; }
+    input:focus { border-color: #4f6ef7; box-shadow: 0 0 0 4px rgba(79, 110, 247, .12); }
+    button { margin-top: 12px; padding: 9px 14px; border: 0; border-radius: 9px; background: #e2e8f0; color: #334155; cursor: pointer; font-weight: 700; }
+    ol { margin: 28px 0 0; padding-left: 22px; line-height: 1.9; }
+    code { padding: 2px 6px; border-radius: 6px; background: #eef2ff; color: #3855d9; }
+    #current-value { margin-top: 14px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>字段组合测试</h1>
+    <p class="lead">先点击下面的输入框，把光标放到需要的位置，再点击右侧 Resume Pro 中的字段 A、B、C。</p>
+
+    <label for="combined-field">网页表单的单个输入框</label>
+    <input id="combined-field" type="text" autocomplete="off" placeholder="在这里测试 A、B、C 的组合">
+    <button id="clear-field" type="button">清空输入框</button>
+    <div id="current-value" aria-live="polite">当前内容：（空）</div>
+
+    <ol>
+      <li>空框点 A，应直接得到 <code>A</code>。</li>
+      <li>再点 B，应出现“添加 / 替换”；选“添加”得到 <code>AB</code>。</li>
+      <li>把光标放在 A 和 B 中间，点 C 后选“添加”，应得到 <code>ACB</code>。</li>
+      <li>输入框为 <code>AB</code> 时再次点 A，应删除 A，仅保留 <code>B</code>。</li>
+      <li>输入框含 A、B、C 时，对应 chip 应变深；删除某项后，它应恢复原色。</li>
+    </ol>
+  </main>
+  <script>
+    const input = document.querySelector("#combined-field");
+    const output = document.querySelector("#current-value");
+    function showValue() {
+      output.textContent = `当前内容：${input.value || "（空）"}`;
+    }
+    input.addEventListener("input", showValue);
+    document.querySelector("#clear-field").addEventListener("click", () => {
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+  </script>
+</body>
+</html>

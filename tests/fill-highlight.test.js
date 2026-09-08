@@ -24,6 +24,16 @@ function loadHighlightHelpers(options = {}) {
     contains(value) {
       return this.values.has(value);
     }
+
+    toggle(value, force) {
+      const shouldAdd = force === undefined ? !this.values.has(value) : Boolean(force);
+      if (shouldAdd) {
+        this.values.add(value);
+      } else {
+        this.values.delete(value);
+      }
+      return shouldAdd;
+    }
   }
 
   class HTMLElement {
@@ -35,8 +45,14 @@ function loadHighlightHelpers(options = {}) {
       this.value = "";
       this.type = "text";
       this.disabled = false;
+      this.readOnly = false;
+      this.selectionStart = 0;
+      this.selectionEnd = 0;
+      this.isConnected = true;
       this.id = "";
       this.name = "";
+      this.dataset = {};
+      this.attributes = {};
       this.previousElementSibling = null;
       this.offsetWidth = 100;
       this.scrollCalls = [];
@@ -45,7 +61,11 @@ function loadHighlightHelpers(options = {}) {
     }
 
     getAttribute(name) {
-      return this[name] || null;
+      return this.attributes[name] ?? this[name] ?? null;
+    }
+
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
     }
 
     closest() {
@@ -67,6 +87,15 @@ function loadHighlightHelpers(options = {}) {
       this.dispatchedEvents.push(event);
       return true;
     }
+
+    focus() {
+      document.activeElement = this;
+    }
+
+    setSelectionRange(start, end) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+    }
   }
 
   class HTMLInputElement extends HTMLElement {
@@ -85,6 +114,7 @@ function loadHighlightHelpers(options = {}) {
   const styleElements = [];
   const document = {
     readyState: "loading",
+    activeElement: null,
     documentElement: { clientHeight: 600, clientWidth: 800 },
     head: {
       appendChild(element) {
@@ -106,6 +136,9 @@ function loadHighlightHelpers(options = {}) {
     },
     getElementById(id) {
       return styleElements.find((element) => element.id === id) || null;
+    },
+    contains(element) {
+      return element?.isConnected !== false;
     }
   };
 
@@ -149,7 +182,7 @@ function loadHighlightHelpers(options = {}) {
     },
     crypto: { randomUUID: () => "test-id" },
     document,
-    navigator: {},
+    navigator: { clipboard: { writeText: async () => {} } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -407,6 +440,219 @@ test("diagnostic summary only exposes allowlisted counts, durations and errors",
   assert.match(summary, /未执行 \/ 未取得/);
   assert.ok(!summary.includes("secret-key"));
   assert.ok(!summary.includes("private-name"));
+});
+
+test("chip text can be added at the caret, replaced, and removed", () => {
+  const { helpers } = loadHighlightHelpers();
+
+  const empty = helpers.composeChipText("", "A", "add", { start: 0, end: 0 });
+  assert.equal(empty.value, "A");
+  assert.equal(empty.caret, 1);
+
+  const appended = helpers.composeChipText("A", "B", "add", { start: 1, end: 1 });
+  assert.equal(appended.value, "AB");
+  assert.equal(appended.caret, 2);
+
+  const inserted = helpers.composeChipText("AB", "C", "add", { start: 1, end: 1 });
+  assert.equal(inserted.value, "ACB");
+  assert.equal(inserted.caret, 2);
+
+  const replaced = helpers.composeChipText("AB", "C", "replace", { start: 1, end: 1 });
+  assert.equal(replaced.value, "C");
+  assert.equal(replaced.caret, 1);
+
+  const removed = helpers.composeChipText("AB", "A", "remove", { start: 2, end: 2 });
+  assert.equal(removed.value, "B");
+  assert.equal(removed.caret, 0);
+});
+
+test("chip addition writes the combined value and restores the caret", async () => {
+  const { helpers, HTMLInputElement } = loadHighlightHelpers();
+  const input = new HTMLInputElement();
+  input.value = "AB";
+  input.selectionStart = 1;
+  input.selectionEnd = 1;
+
+  const filled = await helpers.applyChipValue(input, "C", "add", { start: 1, end: 1 });
+
+  assert.equal(filled, true);
+  assert.equal(input.value, "ACB");
+  assert.equal(input.selectionStart, 2);
+  assert.equal(input.selectionEnd, 2);
+  assert.equal(input.dispatchedEvents.length, 2);
+});
+
+test("a nonempty input waits for add or replace, while a selected chip is removed directly", async () => {
+  const { helpers, timers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const menu = new HTMLElement();
+  menu.hidden = true;
+  menu.style = {};
+  menu.rect = { top: 0, left: 0, bottom: 44, right: 116, width: 116, height: 44 };
+  const status = new HTMLElement();
+  status.className = "resume-pro__status";
+  const chipA = new HTMLElement();
+  chipA.dataset.value = "A";
+  chipA.textContent = "字段 A";
+  const chipB = new HTMLElement();
+  chipB.dataset.value = "B";
+  chipB.textContent = "字段 B";
+  helpers.setShadowRoot({
+    querySelector(selector) {
+      return ({
+        "#resume-pro-chip-actions": menu,
+        "#resume-pro-status": status
+      })[selector] || null;
+    },
+    querySelectorAll(selector) {
+      return selector === ".resume-pro__chip" ? [chipA, chipB] : [];
+    }
+  });
+
+  const input = new HTMLInputElement();
+  input.value = "A";
+  input.selectionStart = 1;
+  input.selectionEnd = 1;
+  helpers.setLastFocusedField(input);
+
+  await helpers.handleFieldChipClick(chipB);
+  assert.equal(menu.hidden, false);
+  assert.equal(input.value, "A");
+
+  await helpers.handleChipAction("add");
+  assert.equal(menu.hidden, true);
+  assert.equal(input.value, "AB");
+
+  input.value = "A";
+  input.selectionStart = 1;
+  input.selectionEnd = 1;
+  await helpers.handleFieldChipClick(chipB);
+  await helpers.handleChipAction("replace");
+  assert.equal(input.value, "B");
+
+  input.selectionStart = 0;
+  input.selectionEnd = 0;
+  await helpers.handleFieldChipClick(chipA);
+  await helpers.handleChipAction("add");
+  assert.equal(input.value, "AB");
+
+  await helpers.handleFieldChipClick(chipA);
+  assert.equal(input.value, "B");
+  assert.equal(chipA.textContent, "字段 A");
+  assert.equal(chipB.textContent, "字段 B");
+  assert.equal(status.className, "resume-pro__status");
+  assert.equal(status.textContent, "");
+  assert.equal(timers.length, 0);
+});
+
+test("chips deepen when their values occur in the focused input", () => {
+  const { helpers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const buttons = ["A", "B", "C"].map((value) => {
+    const button = new HTMLElement();
+    button.dataset.value = value;
+    return button;
+  });
+  const input = new HTMLInputElement();
+  input.value = "ABC";
+  helpers.setShadowRoot({
+    querySelector() {
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === ".resume-pro__chip" ? buttons : [];
+    }
+  });
+  helpers.setLastFocusedField(input);
+
+  helpers.syncChipSelectionState();
+  assert.deepEqual(buttons.map((button) => button.classList.contains("is-in-field")), [true, true, true]);
+
+  input.value = "BC";
+  helpers.syncChipSelectionState();
+  assert.deepEqual(buttons.map((button) => button.classList.contains("is-in-field")), [false, true, true]);
+  assert.equal(buttons[0].attributes["aria-pressed"], "false");
+});
+
+test("chips with identical values keep independent selected states", async () => {
+  const { helpers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const menu = new HTMLElement();
+  menu.hidden = true;
+  menu.style = {};
+  menu.rect = { top: 0, left: 0, bottom: 44, right: 116, width: 116, height: 44 };
+  const chipA = new HTMLElement();
+  chipA.dataset.chipId = "field-a";
+  chipA.dataset.value = "相同内容";
+  const chipC = new HTMLElement();
+  chipC.dataset.chipId = "field-c";
+  chipC.dataset.value = "相同内容";
+  helpers.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-chip-actions" ? menu : null;
+    },
+    querySelectorAll(selector) {
+      return selector === ".resume-pro__chip" ? [chipA, chipC] : [];
+    }
+  });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+
+  await helpers.handleFieldChipClick(chipA);
+  assert.equal(input.value, "相同内容");
+  assert.equal(chipA.classList.contains("is-in-field"), true);
+  assert.equal(chipC.classList.contains("is-in-field"), false);
+
+  await helpers.handleFieldChipClick(chipC);
+  assert.equal(menu.hidden, false);
+  assert.equal(input.value, "相同内容");
+
+  await helpers.handleChipAction("replace");
+  assert.equal(chipA.classList.contains("is-in-field"), false);
+  assert.equal(chipC.classList.contains("is-in-field"), true);
+
+  const secondInput = new HTMLInputElement();
+  helpers.setLastFocusedField(secondInput);
+  await helpers.handleFieldChipClick(chipC);
+  assert.equal(secondInput.value, "相同内容");
+  assert.equal(chipA.classList.contains("is-in-field"), false);
+  assert.equal(chipC.classList.contains("is-in-field"), true);
+});
+
+test("replacement clears a previously selected chip even when its value prefixes the new chip", async () => {
+  const { helpers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const menu = new HTMLElement();
+  menu.hidden = true;
+  menu.style = {};
+  menu.rect = { top: 0, left: 0, bottom: 44, right: 116, width: 116, height: 44 };
+  const chips = [
+    ["field-a", "产品"],
+    ["field-b", "经理"],
+    ["field-c", "产品设计师"]
+  ].map(([chipId, value]) => {
+    const chip = new HTMLElement();
+    chip.dataset.chipId = chipId;
+    chip.dataset.value = value;
+    return chip;
+  });
+  helpers.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-chip-actions" ? menu : null;
+    },
+    querySelectorAll(selector) {
+      return selector === ".resume-pro__chip" ? chips : [];
+    }
+  });
+  const input = new HTMLInputElement();
+  input.value = "产品经理";
+  input.selectionStart = input.value.length;
+  input.selectionEnd = input.value.length;
+  helpers.setLastFocusedField(input);
+  helpers.syncChipSelectionState();
+  assert.deepEqual(chips.map((chip) => chip.classList.contains("is-in-field")), [true, true, false]);
+
+  await helpers.handleFieldChipClick(chips[2]);
+  await helpers.handleChipAction("replace");
+
+  assert.equal(input.value, "产品设计师");
+  assert.deepEqual(chips.map((chip) => chip.classList.contains("is-in-field")), [false, false, true]);
 });
 
 test("highlight styles are not duplicated in content.css", () => {
