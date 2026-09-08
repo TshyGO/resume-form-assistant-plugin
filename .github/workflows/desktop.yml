@@ -51,6 +51,7 @@ jobs:
             desktop/crates/archive-store
             desktop/crates/protocol
             desktop/crates/nm-frame
+            desktop/crates/local-ipc
 
       - name: Install JS dependencies
         working-directory: desktop
@@ -83,6 +84,10 @@ jobs:
       - name: Frame layer tests
         working-directory: desktop
         run: cargo test --manifest-path crates/nm-frame/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: Local IPC tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/local-ipc/Cargo.toml --locked --target ${{ matrix.rust-target }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
