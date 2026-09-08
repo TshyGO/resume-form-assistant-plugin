@@ -87,10 +87,7 @@ pub fn exchange<S: Read + Write>(stream: &mut S, frame: &[u8]) -> Result<Vec<u8>
 }
 
 fn frame_error(err: nm_frame::FrameError) -> IpcError {
-    IpcError::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!("{err:?}"),
-    ))
+    IpcError::Io(std::io::Error::other(format!("{err:?}")))
 }
 
 #[cfg(test)]
@@ -132,7 +129,14 @@ mod tests {
     #[test]
     fn a_running_application_is_reached_without_starting_another() {
         let dir = tempfile::tempdir().unwrap();
-        let _service = crate::ipc_server::start(dir.path()).unwrap();
+        struct NoArchive;
+        impl crate::ipc_server::Application for NoArchive {
+            fn identity(&self) -> Option<resume_pro_protocol::CurrentArchive> {
+                None
+            }
+        }
+        let _service =
+            crate::ipc_server::start(dir.path(), std::sync::Arc::new(NoArchive)).unwrap();
         // A program path that cannot exist: if connect_or_start tried to start anything,
         // this would fail rather than reach the listener already there.
         let impossible = dir.path().join("must-not-be-started");

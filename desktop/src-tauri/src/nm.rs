@@ -112,11 +112,15 @@ pub fn serve_with<R: Read, W: Write, B: Backend>(
     }
 }
 
-/// Build the response for one received frame.
+/// Build the response for one received frame with no application behind it.
+///
+/// Test-only: the real path always has a backend, and answering without one would let
+/// the host invent a response the archive never agreed to.
 ///
 /// `None` means no compliant response can be built, because the D05 response envelope
 /// requires a `correlationId` and this frame carries no usable `messageId`. Closing
 /// beats emitting something the extension would also reject, which would hide the cause.
+#[cfg(test)]
 pub fn response_for(frame: &[u8], caller: &Caller) -> Option<Vec<u8>> {
     response_for_with(frame, caller, &mut NoBackend)
 }
@@ -172,7 +176,7 @@ pub fn response_for_with<B: Backend>(
 
 /// A fixed message per code. Validator messages quote the offending value, so forwarding
 /// one would hand rejected content back to the extension.
-fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
+pub fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
     json!({
         "protocolVersion": 1,
         "correlationId": correlation_id,
@@ -184,6 +188,12 @@ fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
             "message": fixed_message(code)
         }
     })
+}
+
+/// A complete error frame, ready to write. Shared so the host and the application build
+/// their errors the same way rather than drifting into two shapes.
+pub fn error_frame(correlation_id: &str, code: ErrorCode) -> Option<Vec<u8>> {
+    serde_json::to_vec(&error_response(correlation_id, code)).ok()
 }
 
 fn fixed_message(code: ErrorCode) -> &'static str {
@@ -202,7 +212,7 @@ fn fixed_message(code: ErrorCode) -> &'static str {
 
 /// The top-level `messageId`, only when it is a syntactically valid UUID. Anything else
 /// cannot correlate a response.
-fn message_id_of(frame: &[u8]) -> Option<String> {
+pub fn message_id_of(frame: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(frame).ok()?;
     let id = value.get("messageId")?.as_str()?;
     let mut groups = id.split('-');
@@ -300,13 +310,11 @@ mod tests {
     fn a_frame_without_a_usable_message_id_gets_no_response() {
         assert!(response_for(b"not json at all", &Caller::Unidentified).is_none());
         assert!(response_for(br#"{"messageId":"not-a-uuid"}"#, &Caller::Unidentified).is_none());
-        assert!(
-            response_for(
-                br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#,
-                &Caller::Unidentified
-            )
-            .is_none()
-        );
+        assert!(response_for(
+            br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#,
+            &Caller::Unidentified
+        )
+        .is_none());
     }
 
     #[test]
@@ -395,7 +403,10 @@ mod tests {
     fn an_unpaired_or_mismatched_caller_is_rejected() {
         let allowed = allowed_origins_from(&draft(CHROME_ID, ""));
         assert!(matches!(
-            authorise(Some("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"), &allowed),
+            authorise(
+                Some("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"),
+                &allowed
+            ),
             Caller::Rejected(_)
         ));
         // Nothing paired at all.

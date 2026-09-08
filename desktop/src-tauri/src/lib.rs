@@ -6,6 +6,7 @@ mod ipc_client;
 mod ipc_server;
 mod lifecycle;
 mod nm;
+mod plugin_bridge;
 
 use archive_store::ArchiveStore;
 use commands::{
@@ -20,7 +21,7 @@ use data_service::{
     PairingDraft,
 };
 use serde::Serialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -32,7 +33,7 @@ struct AppState {
     host: Mutex<Option<DataHost>>,
     host_error: Mutex<Option<HostErrorDto>>,
     paths: Mutex<Option<HostPaths>>,
-    store: Mutex<Option<ArchiveStore>>,
+    store: Arc<Mutex<Option<ArchiveStore>>>,
     store_error: Mutex<Option<CommandError>>,
     hidden_launch: bool,
     /// Serving the local endpoint. Held here so it lives exactly as long as the
@@ -601,7 +602,7 @@ pub fn run() {
             ipc: Mutex::new(None),
             host_error: Mutex::new(None),
             paths: Mutex::new(HostPaths::resolve().ok()),
-            store: Mutex::new(None),
+            store: Arc::new(Mutex::new(None)),
             store_error: Mutex::new(None),
             hidden_launch,
         })
@@ -629,7 +630,10 @@ pub fn run() {
                     }
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
-                    match ipc_server::start(&host.paths().data_root) {
+                    let application = Arc::new(ipc_server::OpenArchive::new(Arc::clone(
+                        &app.state::<AppState>().store,
+                    )));
+                    match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
                             eprintln!("ipc: serving on {}", service.endpoint());
                             if let Ok(mut slot) = app.state::<AppState>().ipc.lock() {

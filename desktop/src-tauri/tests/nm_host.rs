@@ -74,7 +74,10 @@ fn the_test_entry_point_behaves_identically() {
 fn the_caller_origin_is_recorded_on_stderr() {
     let tmp = isolated_data_dir("origin-recorded");
     let (_code, _stdout, stderr) = run_host_with_data_dir(&[ORIGIN], &tmp, framed(HEALTH));
-    assert!(stderr.contains(ORIGIN), "the caller must be recorded: {stderr}");
+    assert!(
+        stderr.contains(ORIGIN),
+        "the caller must be recorded: {stderr}"
+    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -159,10 +162,17 @@ fn isolated_data_dir(label: &str) -> std::path::PathBuf {
 fn error_code_of(stdout: &[u8]) -> String {
     assert!(stdout.len() > 4, "stdout is too short to be a frame");
     let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
-    assert_eq!(stdout.len(), 4 + declared, "stdout must be exactly one frame");
+    assert_eq!(
+        stdout.len(),
+        4 + declared,
+        "stdout must be exactly one frame"
+    );
     let body: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
     assert_eq!(body["ok"], false);
-    body["error"]["code"].as_str().unwrap_or_default().to_string()
+    body["error"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[test]
@@ -254,10 +264,17 @@ const JOB_SAVE: &str = r#"{"protocolVersion":1,"messageId":"44444444-4444-4444-8
 fn error_of(stdout: &[u8]) -> (String, bool) {
     assert!(stdout.len() > 4, "stdout is too short to be a frame");
     let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
-    assert_eq!(stdout.len(), 4 + declared, "stdout must be exactly one frame");
+    assert_eq!(
+        stdout.len(),
+        4 + declared,
+        "stdout must be exactly one frame"
+    );
     let body: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
     (
-        body["error"]["code"].as_str().unwrap_or_default().to_string(),
+        body["error"]["code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         body["ok"].as_bool().unwrap_or(false),
     )
 }
@@ -266,7 +283,10 @@ fn paired_dir(label: &str) -> std::path::PathBuf {
     let dir = isolated_data_dir(label);
     std::fs::write(
         dir.join("settings.json"),
-        format!(r#"{{"chromeExtensionId":"{}","edgeExtensionId":""}}"#, EXT_ID),
+        format!(
+            r#"{{"chromeExtensionId":"{}","edgeExtensionId":""}}"#,
+            EXT_ID
+        ),
     )
     .unwrap();
     dir
@@ -290,7 +310,10 @@ fn a_request_the_host_cannot_answer_alone_is_not_reported_as_success() {
     );
     assert_eq!(code, 0, "{stderr}");
     let (error, ok) = error_of(&stdout);
-    assert!(!ok, "a write with nothing behind it must not report success");
+    assert!(
+        !ok,
+        "a write with nothing behind it must not report success"
+    );
     assert_eq!(error, "unavailable", "and must be retryable: {stderr}");
 }
 
