@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 archive-store = { path = "../crates/archive-store" }
 data-service = { path = "../crates/data-service" }
+local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 resume-pro-protocol = { path = "../crates/protocol" }
 serde = { version = "1", features = ["derive"] }

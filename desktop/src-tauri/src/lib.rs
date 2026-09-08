@@ -2,6 +2,8 @@ mod cli;
 mod commands;
 #[cfg(test)]
 mod commands_regression;
+mod ipc_client;
+mod ipc_server;
 mod lifecycle;
 mod nm;
 
@@ -33,6 +35,9 @@ struct AppState {
     store: Mutex<Option<ArchiveStore>>,
     store_error: Mutex<Option<CommandError>>,
     hidden_launch: bool,
+    /// Serving the local endpoint. Held here so it lives exactly as long as the
+    /// application does, which is what ties the unique listener to the unique writer.
+    ipc: Mutex<Option<ipc_server::IpcService>>,
 }
 
 fn with_store<T>(
@@ -498,7 +503,32 @@ pub fn run() {
         };
         let mut input = std::io::stdin();
         let mut output = std::io::stdout();
-        std::process::exit(nm::serve(&caller, &mut input, &mut output));
+        // Anything the host cannot answer alone goes to the application over the local
+        // endpoint, started with --hidden if it is not there. Without a resolvable data
+        // directory there is nothing to reach, and every such request answers
+        // unavailable through the backend's own error path.
+        let exit = match (
+            data_service::HostPaths::resolve(),
+            ipc_client::own_program(),
+        ) {
+            (Ok(paths), Ok(program)) => {
+                let mut backend = nm::AppBackend {
+                    data_root: paths.data_root,
+                    program,
+                };
+                nm::serve_with(&caller, &mut input, &mut output, &mut backend)
+            }
+            (paths, program) => {
+                if let Err(err) = paths {
+                    eprintln!("nm-host: no data directory to reach the application in: {err:?}");
+                }
+                if let Err(err) = program {
+                    eprintln!("nm-host: cannot identify this executable: {err}");
+                }
+                nm::serve(&caller, &mut input, &mut output)
+            }
+        };
+        std::process::exit(exit);
     }
     if args.apps_loop {
         match run_apps_loop() {
@@ -568,6 +598,7 @@ pub fn run() {
         }))
         .manage(AppState {
             host: Mutex::new(None),
+            ipc: Mutex::new(None),
             host_error: Mutex::new(None),
             paths: Mutex::new(HostPaths::resolve().ok()),
             store: Mutex::new(None),
@@ -594,6 +625,21 @@ pub fn run() {
                             if let Ok(mut slot) = app.state::<AppState>().store_error.lock() {
                                 *slot = Some(err);
                             }
+                        }
+                    }
+                    // Only now: holding host.lock is what entitles this process to be
+                    // the one listening (D01 decision 3).
+                    match ipc_server::start(&host.paths().data_root) {
+                        Ok(service) => {
+                            eprintln!("ipc: serving on {}", service.endpoint());
+                            if let Ok(mut slot) = app.state::<AppState>().ipc.lock() {
+                                *slot = Some(service);
+                            }
+                        }
+                        Err(err) => {
+                            // The window and the archive still work; only the browser
+                            // connection is unavailable, and it says so on its own.
+                            eprintln!("ipc: not serving: {err}");
                         }
                     }
                     if let Ok(mut slot) = app.state::<AppState>().host.lock() {
