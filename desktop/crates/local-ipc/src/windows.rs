@@ -15,16 +15,15 @@ use windows_sys::Win32::Foundation::{
     INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    GetSecurityInfo, SE_KERNEL_OBJECT, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenUser, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_SHARE_MODE,
-    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, READ_CONTROL,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PIPE_READMODE_BYTE,
@@ -358,7 +357,9 @@ fn verify_server(stream: &Stream) -> Result<(), IpcError> {
 /// rather than that account's SID, and a text comparison would fail on a correct DACL.
 #[cfg(test)]
 pub fn granted_sids(endpoint: &Endpoint) -> Result<Vec<String>, IpcError> {
-    use windows_sys::Win32::Security::{GetAce, ACCESS_ALLOWED_ACE, ACL};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT};
+    use windows_sys::Win32::Security::{GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION};
+    use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 
     // SAFETY: opens the pipe for READ_CONTROL, reads its DACL, walks the ACEs, and frees
     // the descriptor. Every pointer comes from the call immediately above it.
