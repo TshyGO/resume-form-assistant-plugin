@@ -74,7 +74,10 @@ fn the_test_entry_point_behaves_identically() {
 fn the_caller_origin_is_recorded_on_stderr() {
     let tmp = isolated_data_dir("origin-recorded");
     let (_code, _stdout, stderr) = run_host_with_data_dir(&[ORIGIN], &tmp, framed(HEALTH));
-    assert!(stderr.contains(ORIGIN), "the caller must be recorded: {stderr}");
+    assert!(
+        stderr.contains(ORIGIN),
+        "the caller must be recorded: {stderr}"
+    );
     std::fs::remove_dir_all(&tmp).ok();
 }
 
@@ -159,10 +162,17 @@ fn isolated_data_dir(label: &str) -> std::path::PathBuf {
 fn error_code_of(stdout: &[u8]) -> String {
     assert!(stdout.len() > 4, "stdout is too short to be a frame");
     let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
-    assert_eq!(stdout.len(), 4 + declared, "stdout must be exactly one frame");
+    assert_eq!(
+        stdout.len(),
+        4 + declared,
+        "stdout must be exactly one frame"
+    );
     let body: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
     assert_eq!(body["ok"], false);
-    body["error"]["code"].as_str().unwrap_or_default().to_string()
+    body["error"]["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[test]
@@ -243,4 +253,83 @@ fn an_origin_does_make_the_host_consult_pairing() {
         stderr.contains("cannot resolve data paths"),
         "an origin must send the host to pairing: {stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// End to end: a real host process reaching a real application process.
+// ---------------------------------------------------------------------------
+
+const JOB_SAVE: &str = r#"{"protocolVersion":1,"messageId":"44444444-4444-4444-8444-444444444444","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"job.save","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"sourceRestoreEpoch":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","company":"合成公司","title":"后端实习","payloadSha256":"1ea8fcf15e56dd83a5e7f8e9adb0c34b94bc28fd5c1b51400ecf597d1f5cc8c4"},"archiveId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","restoreEpoch":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}"#;
+
+fn error_of(stdout: &[u8]) -> (String, bool) {
+    assert!(stdout.len() > 4, "stdout is too short to be a frame");
+    let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
+    assert_eq!(
+        stdout.len(),
+        4 + declared,
+        "stdout must be exactly one frame"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
+    (
+        body["error"]["code"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        body["ok"].as_bool().unwrap_or(false),
+    )
+}
+
+fn paired_dir(label: &str) -> std::path::PathBuf {
+    let dir = isolated_data_dir(label);
+    std::fs::write(
+        dir.join("settings.json"),
+        format!(
+            r#"{{"chromeExtensionId":"{}","edgeExtensionId":""}}"#,
+            EXT_ID
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+const EXT_ID: &str = "abcdefghijklmnopabcdefghijklmnop";
+
+#[test]
+fn a_request_the_host_cannot_answer_alone_is_not_reported_as_success() {
+    // A relative RESUMEPRO_DATA_DIR leaves no data directory to reach an application in,
+    // so the host has nowhere to forward to. It must say the service is unavailable
+    // rather than invent a successful write.
+    //
+    // The data directory is deliberately unusable rather than merely empty: a usable one
+    // would send the host into a real cold start, launching a desktop application from
+    // the test suite and leaving it running.
+    let (code, stdout, stderr) = run_host_with_data_dir(
+        &["--nm-host"],
+        std::path::Path::new("relative-not-absolute"),
+        framed(JOB_SAVE),
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (error, ok) = error_of(&stdout);
+    assert!(
+        !ok,
+        "a write with nothing behind it must not report success"
+    );
+    assert_eq!(error, "unavailable", "and must be retryable: {stderr}");
+}
+
+#[test]
+fn health_is_answered_without_starting_the_application() {
+    // health asks nothing of the archive, so routing it through the application would put
+    // a cold start in front of a liveness check. An empty but usable data directory means
+    // nothing is listening, so a health that waited would take the full cold-start budget.
+    let tmp = paired_dir("health-alone");
+    let started = std::time::Instant::now();
+    let (code, stdout, _stderr) = run_host_with_data_dir(&[ORIGIN], &tmp, framed(HEALTH));
+    assert_eq!(code, 0);
+    assert_single_health_frame(&stdout);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "health must not wait on a cold start"
+    );
+    std::fs::remove_dir_all(&tmp).ok();
 }

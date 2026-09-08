@@ -61,6 +61,10 @@ jobs:
         working-directory: desktop
         run: node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js
 
+      - name: Development registration script tests
+        working-directory: desktop
+        run: node --test scripts/nm-dev-register.test.js
+
       - name: Frontend build
         working-directory: desktop
         run: npm run build

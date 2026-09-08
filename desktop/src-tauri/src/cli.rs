@@ -101,7 +101,9 @@ pub fn prepare_stdio() {
     }
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
+        use windows_sys::Win32::System::Console::{
+            AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS,
+        };
         if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
             let _ = AllocConsole();
         }

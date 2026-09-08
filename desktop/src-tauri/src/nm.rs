@@ -53,11 +53,49 @@ pub fn authorise(origin: Option<&str>, allowed: &[String]) -> Caller {
 /// Diagnostics go to stderr only. Anything on stdout other than a protocol frame breaks
 /// the channel, and the browser reports it as an unexplained disconnect.
 pub fn serve<R: Read, W: Write>(caller: &Caller, input: &mut R, output: &mut W) -> i32 {
+    serve_with(caller, input, output, &mut NoBackend)
+}
+
+/// Where a request goes when the host cannot answer it alone.
+pub trait Backend {
+    /// Forward one validated frame and return the application's answer.
+    fn exchange(&mut self, frame: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+/// No application behind the host. Used by the tests that exercise framing alone.
+struct NoBackend;
+
+impl Backend for NoBackend {
+    fn exchange(&mut self, _frame: &[u8]) -> Result<Vec<u8>, String> {
+        Err("no application backend is configured".into())
+    }
+}
+
+/// The application process, reached over the local endpoint and cold-started if absent.
+pub struct AppBackend {
+    pub data_root: std::path::PathBuf,
+    pub program: std::path::PathBuf,
+}
+
+impl Backend for AppBackend {
+    fn exchange(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
+        let mut stream = crate::ipc_client::connect_or_start(&self.data_root, &self.program)
+            .map_err(|e| e.to_string())?;
+        crate::ipc_client::exchange(&mut stream, frame).map_err(|e| e.to_string())
+    }
+}
+
+pub fn serve_with<R: Read, W: Write, B: Backend>(
+    caller: &Caller,
+    input: &mut R,
+    output: &mut W,
+    backend: &mut B,
+) -> i32 {
     loop {
         match nm_frame::read_frame(input) {
             Ok(None) => return 0,
             Ok(Some(frame)) => {
-                let Some(response) = response_for(&frame, caller) else {
+                let Some(response) = response_for_with(&frame, caller, backend) else {
                     eprintln!("nm-host: frame carries no usable messageId; closing");
                     return 2;
                 };
@@ -74,29 +112,55 @@ pub fn serve<R: Read, W: Write>(caller: &Caller, input: &mut R, output: &mut W) 
     }
 }
 
-/// Build the response for one received frame.
+/// Build the response for one received frame with no application behind it.
+///
+/// Test-only: the real path always has a backend, and answering without one would let
+/// the host invent a response the archive never agreed to.
 ///
 /// `None` means no compliant response can be built, because the D05 response envelope
 /// requires a `correlationId` and this frame carries no usable `messageId`. Closing
 /// beats emitting something the extension would also reject, which would hide the cause.
+#[cfg(test)]
 pub fn response_for(frame: &[u8], caller: &Caller) -> Option<Vec<u8>> {
+    response_for_with(frame, caller, &mut NoBackend)
+}
+
+pub fn response_for_with<B: Backend>(
+    frame: &[u8],
+    caller: &Caller,
+    backend: &mut B,
+) -> Option<Vec<u8>> {
     match validate_request_bytes(frame) {
         Ok(request) => {
-            let response = if matches!(caller, Caller::Rejected(_)) {
+            if matches!(caller, Caller::Rejected(_)) {
                 // Answered per message rather than dropped: a closed port reaches the
                 // extension as an unexplained disconnect, while this says why.
-                error_response(&request.message_id, ErrorCode::IdentityNotAllowed)
-            } else if request.message_type == MessageType::Health {
-                json!({
+                let response = error_response(&request.message_id, ErrorCode::IdentityNotAllowed);
+                return serde_json::to_vec(&response).ok();
+            }
+            if request.message_type == MessageType::Health {
+                // The only request the host can answer alone: it asks nothing of the
+                // archive, so routing it through the application would add a cold start
+                // to a liveness check.
+                let response = json!({
                     "protocolVersion": 1,
                     "correlationId": request.message_id,
                     "ok": true,
                     "payload": {}
-                })
-            } else {
-                error_response(&request.message_id, ErrorCode::Unavailable)
-            };
-            serde_json::to_vec(&response).ok()
+                });
+                return serde_json::to_vec(&response).ok();
+            }
+            // Everything else belongs to the writer. The host relays the application's
+            // answer rather than inventing one, so "persisted before the answer" stays a
+            // property of the process that does the persisting.
+            match backend.exchange(frame) {
+                Ok(reply) => Some(reply),
+                Err(reason) => {
+                    eprintln!("nm-host: cannot reach the application: {reason}");
+                    let response = error_response(&request.message_id, ErrorCode::Unavailable);
+                    serde_json::to_vec(&response).ok()
+                }
+            }
         }
         Err(err) => {
             let message_id = message_id_of(frame)?;
@@ -112,7 +176,7 @@ pub fn response_for(frame: &[u8], caller: &Caller) -> Option<Vec<u8>> {
 
 /// A fixed message per code. Validator messages quote the offending value, so forwarding
 /// one would hand rejected content back to the extension.
-fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
+pub fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
     json!({
         "protocolVersion": 1,
         "correlationId": correlation_id,
@@ -124,6 +188,12 @@ fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
             "message": fixed_message(code)
         }
     })
+}
+
+/// A complete error frame, ready to write. Shared so the host and the application build
+/// their errors the same way rather than drifting into two shapes.
+pub fn error_frame(correlation_id: &str, code: ErrorCode) -> Option<Vec<u8>> {
+    serde_json::to_vec(&error_response(correlation_id, code)).ok()
 }
 
 fn fixed_message(code: ErrorCode) -> &'static str {
@@ -142,7 +212,7 @@ fn fixed_message(code: ErrorCode) -> &'static str {
 
 /// The top-level `messageId`, only when it is a syntactically valid UUID. Anything else
 /// cannot correlate a response.
-fn message_id_of(frame: &[u8]) -> Option<String> {
+pub fn message_id_of(frame: &[u8]) -> Option<String> {
     let value: Value = serde_json::from_slice(frame).ok()?;
     let id = value.get("messageId")?.as_str()?;
     let mut groups = id.split('-');
@@ -240,13 +310,11 @@ mod tests {
     fn a_frame_without_a_usable_message_id_gets_no_response() {
         assert!(response_for(b"not json at all", &Caller::Unidentified).is_none());
         assert!(response_for(br#"{"messageId":"not-a-uuid"}"#, &Caller::Unidentified).is_none());
-        assert!(
-            response_for(
-                br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#,
-                &Caller::Unidentified
-            )
-            .is_none()
-        );
+        assert!(response_for(
+            br#"{"messageId":"33333333-3333-4333-8333-333333333333-extra"}"#,
+            &Caller::Unidentified
+        )
+        .is_none());
     }
 
     #[test]
@@ -335,7 +403,10 @@ mod tests {
     fn an_unpaired_or_mismatched_caller_is_rejected() {
         let allowed = allowed_origins_from(&draft(CHROME_ID, ""));
         assert!(matches!(
-            authorise(Some("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"), &allowed),
+            authorise(
+                Some("chrome-extension://zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/"),
+                &allowed
+            ),
             Caller::Rejected(_)
         ));
         // Nothing paired at all.
