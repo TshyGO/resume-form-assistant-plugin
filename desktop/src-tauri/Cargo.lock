@@ -2224,6 +2224,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nm-frame"
+version = "0.1.0"
+
+[[package]]
 name = "num-conv"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2915,6 +2919,8 @@ version = "0.1.0"
 dependencies = [
  "archive-store",
  "data-service",
+ "nm-frame",
+ "resume-pro-protocol",
  "serde",
  "serde_json",
  "tauri",
@@ -2922,6 +2928,17 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tempfile",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "resume-pro-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
