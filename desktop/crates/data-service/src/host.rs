@@ -169,6 +169,17 @@ fn lock_is_held(paths: &HostPaths) -> Result<bool, HostError> {
     }
 }
 
+/// Read the pairing draft without creating anything or taking the instance lock.
+///
+/// The Native Messaging host needs the paired extension ids to authorise its caller, but
+/// it is a translator rather than the writer (D01 decision 3). Going through `DataHost`
+/// would call `ensure_layout`, creating the directory layout, and `acquire_lock`, taking
+/// the lock the application process owns. A missing or unparsable file reads as
+/// unpaired.
+pub fn read_pairing_draft_at(settings_file: &std::path::Path) -> PairingDraft {
+    read_pairing_draft(settings_file)
+}
+
 fn read_pairing_draft(path: &std::path::Path) -> PairingDraft {
     let Ok(text) = fs::read_to_string(path) else {
         return PairingDraft::default();
@@ -462,5 +473,51 @@ mod tests {
         drop(host);
         let after = probe_with(&paths);
         assert!(!after.another_instance_running);
+    }
+
+    #[test]
+    fn reading_the_pairing_draft_creates_nothing_and_takes_no_lock() {
+        // The Native Messaging host is a translator, not the writer. Going through
+        // DataHost would call ensure_layout and acquire_lock, creating the directory
+        // layout and stealing the lock the application process owns.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = HostPaths::resolve_with(Some(tmp.path().join("data")), None).unwrap();
+        assert!(!paths.data_root.exists(), "the fixture starts with nothing");
+
+        let draft = read_pairing_draft_at(&paths.settings_file);
+        assert_eq!(draft.chrome_extension_id, "");
+        assert_eq!(draft.edge_extension_id, "");
+
+        assert!(!paths.data_root.exists(), "reading must not create the layout");
+        assert!(!paths.lock_file.exists(), "reading must not take the instance lock");
+    }
+
+    #[test]
+    fn reading_the_pairing_draft_returns_what_the_application_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = HostPaths::resolve_with(Some(tmp.path().join("data")), None).unwrap();
+        let host = DataHost::initialize_with(paths.clone()).unwrap();
+        host.save_pairing_draft(&PairingDraft {
+            chrome_extension_id: "abcdefghijklmnopabcdefghijklmnop".into(),
+            edge_extension_id: "qrstuvwxyzabcdefqrstuvwxyzabcdef".into(),
+            native_messaging_registered: false,
+        })
+        .unwrap();
+        drop(host);
+
+        let draft = read_pairing_draft_at(&paths.settings_file);
+        assert_eq!(draft.chrome_extension_id, "abcdefghijklmnopabcdefghijklmnop");
+        assert_eq!(draft.edge_extension_id, "qrstuvwxyzabcdefqrstuvwxyzabcdef");
+    }
+
+    #[test]
+    fn an_unreadable_settings_file_reads_as_unpaired() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path()).unwrap();
+        let broken = tmp.path().join("settings.json");
+        fs::write(&broken, "{ this is not json").unwrap();
+        let draft = read_pairing_draft_at(&broken);
+        assert_eq!(draft.chrome_extension_id, "");
+        assert_eq!(draft.edge_extension_id, "");
     }
 }
