@@ -241,12 +241,57 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_stale_socket_file_does_not_block_the_lock_holder() {
-        // A crash leaves the file behind. Listening is gated on holding host.lock, so the
-        // holder may safely replace it.
+    fn a_stale_socket_does_not_block_the_lock_holder() {
+        // A crash leaves a real socket behind, not a regular file, so the fixture makes
+        // one and drops its listener. Listening is gated on holding host.lock, so the
+        // holder may replace it.
         let (dir, endpoint) = endpoint();
-        std::fs::write(dir.path().join("host.sock"), b"stale").unwrap();
+        {
+            let _dead =
+                std::os::unix::net::UnixListener::bind(dir.path().join("host.sock")).unwrap();
+        }
+        assert!(dir.path().join("host.sock").exists(), "the fixture leaves a socket");
         let _listener = Listener::bind(&endpoint).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_file_at_the_socket_path_is_never_deleted() {
+        // A mistyped data directory could put a real user file here. Removing it would be
+        // silent data loss, and nothing at this level can tell that case from a stale one.
+        let (dir, endpoint) = endpoint();
+        let planted = dir.path().join("host.sock");
+        std::fs::write(&planted, b"someone's file").unwrap();
+        assert!(Listener::bind(&endpoint).is_err());
+        assert_eq!(std::fs::read(&planted).unwrap(), b"someone's file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_others_can_reach_is_refused_by_the_client() {
+        // Cold start connects before anything binds, so a directory another user can
+        // write lets them serve this path first. Ownership and mode are what a client can
+        // establish on its own.
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, endpoint) = endpoint();
+        let socket = dir.path().join("host.sock");
+        let _server = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).unwrap();
+        match connect(&endpoint) {
+            Err(IpcError::UntrustedServer { .. }) => {}
+            other => panic!("a world-reachable socket must be refused, got {other:?}"),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn two_spellings_of_one_directory_give_one_pipe() {
+        // A host and an application handed equivalent paths must meet on one
+        // endpoint; otherwise the host would cold-start a second application beside
+        // the first. Windows paths are case-insensitive and take either separator.
+        let a = Endpoint::for_data_root(std::path::Path::new(r"C:\Users\Me\Data")).unwrap();
+        let b = Endpoint::for_data_root(std::path::Path::new(r"c:/users/me/data/")).unwrap();
+        assert_eq!(a.display(), b.display());
     }
 
     #[cfg(windows)]

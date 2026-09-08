@@ -27,7 +27,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW,
-    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
@@ -53,8 +54,17 @@ impl Endpoint {
     pub fn for_data_root(data_root: &Path) -> Result<Self, IpcError> {
         use std::hash::{Hash, Hasher};
         let sid = current_user_sid()?;
+        // Two spellings of one directory must produce one pipe name, or an application
+        // and a host given equivalent paths would sit on different endpoints and the host
+        // would cold-start a second application. Windows paths are case-insensitive and
+        // accept either separator.
+        let normalized = data_root
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        data_root.hash(&mut hasher);
+        normalized.hash(&mut hasher);
         let digest = hasher.finish();
         Ok(Self {
             name: format!(r"\\.\pipe\resume-pro-{sid}-{digest:016x}"),
@@ -207,7 +217,10 @@ fn create_instance(endpoint: &Endpoint, first: bool) -> Result<HANDLE, IpcError>
         CreateNamedPipeW(
             wide(&endpoint.name).as_ptr(),
             mode,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            // A DACL says who may connect, not from where. Windows file sharing can make
+            // a named pipe reachable from another machine, and a remote session as the
+            // same domain user carries the same SID, so locality must be stated.
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
             BUFFER_BYTES,
             BUFFER_BYTES,
@@ -215,15 +228,25 @@ fn create_instance(endpoint: &Endpoint, first: bool) -> Result<HANDLE, IpcError>
             &mut attributes,
         )
     };
+    // Win32 only guarantees the failure code until the next API call, so it is captured
+    // before the cleanup below. Freeing first would let LocalFree overwrite
+    // ERROR_ACCESS_DENIED and defeat the squatted-name detection.
+    let code = if handle == INVALID_HANDLE_VALUE {
+        last_error()
+    } else {
+        0
+    };
     // SAFETY: freeing the descriptor allocated by the SDDL conversion.
     unsafe { LocalFree(descriptor as *mut c_void) };
     if handle == INVALID_HANDLE_VALUE {
-        let code = last_error();
         // ERROR_ACCESS_DENIED means the name already belongs to another creator.
         if code == 5 {
             return Err(IpcError::AlreadyListening);
         }
-        return Err(io_error("CreateNamedPipeW"));
+        return Err(IpcError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("CreateNamedPipeW failed with error {code}"),
+        )));
     }
     Ok(handle)
 }

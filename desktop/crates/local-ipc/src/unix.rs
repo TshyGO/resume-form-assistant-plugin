@@ -58,8 +58,16 @@ impl Listener {
                 .map(|meta| meta.file_type().is_socket())
                 .unwrap_or(false);
             if !is_socket {
-                // Not a socket at all, so nothing can be serving through it.
-                std::fs::remove_file(&endpoint.path)?;
+                // Something that is not a socket sits where ours belongs. Deleting it
+                // would silently destroy a user file if the data directory were ever
+                // pointed somewhere wrong, and nothing here can tell those cases apart.
+                return Err(IpcError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "{} exists and is not a socket; refusing to remove it",
+                        endpoint.path.display()
+                    ),
+                )));
             } else {
                 match UnixStream::connect(&endpoint.path) {
                     Ok(_) => return Err(IpcError::AlreadyListening),
@@ -124,9 +132,43 @@ impl Write for Stream {
     }
 }
 
+/// SAFETY: `geteuid` takes no arguments, touches no memory, and cannot fail. Declared
+/// here rather than pulled from a crate to keep this transport dependency-free.
+extern "C" {
+    fn geteuid() -> u32;
+}
+
+/// Refuse a socket this user does not own or that others could reach.
+///
+/// The Windows side checks the server process; without this the Unix side checked
+/// nothing. The cold-start flow connects before anything binds, so a directory another
+/// user can write to lets them put their own `host.sock` there first and receive résumé
+/// frames. Ownership and mode are what can be established from the client side.
+fn verify_socket(path: &Path) -> Result<(), IpcError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)?;
+    // SAFETY: see the declaration above.
+    let ours = unsafe { geteuid() };
+    if meta.uid() != ours {
+        return Err(IpcError::UntrustedServer {
+            reason: format!("socket is owned by uid {}, not {ours}", meta.uid()),
+        });
+    }
+    let mode = meta.permissions().mode() & 0o077;
+    if mode != 0 {
+        return Err(IpcError::UntrustedServer {
+            reason: format!("socket is reachable by others, mode {:o}", meta.mode() & 0o777),
+        });
+    }
+    Ok(())
+}
+
 pub fn connect(endpoint: &Endpoint) -> Result<Stream, IpcError> {
     match UnixStream::connect(&endpoint.path) {
-        Ok(inner) => Ok(Stream { inner }),
+        Ok(inner) => {
+            verify_socket(&endpoint.path)?;
+            Ok(Stream { inner })
+        }
         Err(e)
             if matches!(
                 e.kind(),
