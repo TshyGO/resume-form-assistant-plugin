@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import test from "node:test";
 
 import {
@@ -47,7 +46,7 @@ function receiptFile(env) {
 }
 
 test("a manifest names only the extensions that were asked for", () => {
-  const manifest = manifestFor(BINARY_WIN, [ID]);
+  const manifest = manifestFor(BINARY_WIN, [ID], "win32");
   assert.equal(manifest.name, HOST_NAME);
   assert.equal(manifest.type, "stdio");
   assert.equal(manifest.path, BINARY_WIN);
@@ -57,14 +56,20 @@ test("a manifest names only the extensions that were asked for", () => {
 test("a wildcard or malformed origin is refused rather than written", () => {
   // A manifest is what decides who may start the host. Anything that is not an id would
   // either be rejected by the browser or, worse, widen who can reach the archive.
-  assert.throws(() => manifestFor(BINARY_WIN, ["*"]), /not an extension id/);
-  assert.throws(() => manifestFor(BINARY_WIN, ["chrome-extension://*/"]), /not an extension id/);
-  assert.throws(() => manifestFor(BINARY_WIN, []), /at least one extension id/);
+  assert.throws(() => manifestFor(BINARY_WIN, ["*"], "win32"), /not an extension id/);
+  assert.throws(
+    () => manifestFor(BINARY_WIN, ["chrome-extension://*/"], "win32"),
+    /not an extension id/,
+  );
+  assert.throws(() => manifestFor(BINARY_WIN, [], "win32"), /at least one extension id/);
 });
 
 test("the host path must be absolute", () => {
   // A relative path resolves against the browser's working directory, not the developer's.
-  assert.throws(() => manifestFor("resume-pro-desktop.exe", [ID]), /must be absolute/);
+  assert.throws(
+    () => manifestFor("resume-pro-desktop.exe", [ID], "win32"),
+    /must be absolute/,
+  );
 });
 
 test("Windows registration writes both browser keys and points them at the manifest", () => {
@@ -88,12 +93,8 @@ test("macOS registration writes the two user-level directories and no registry",
   assert.equal(result.planned.length, 2);
   assert.equal(io.registry.size, 0);
   const written = [...io.files.keys()];
-  assert.ok(
-    written.some((f) => f.includes(path.join("Google", "Chrome", "NativeMessagingHosts"))),
-  );
-  assert.ok(
-    written.some((f) => f.includes(path.join("Microsoft Edge", "NativeMessagingHosts"))),
-  );
+  assert.ok(written.some((f) => f.includes("/Google/Chrome/NativeMessagingHosts/")));
+  assert.ok(written.some((f) => f.includes("/Microsoft Edge/NativeMessagingHosts/")));
 });
 
 test("an existing registration this script did not write is skipped, not replaced", () => {
@@ -212,5 +213,5 @@ test("an unknown browser name is refused", () => {
 
 test("a missing receipt reads as empty rather than throwing", () => {
   assert.deepEqual(readReceipt("/no/such/receipt.json"), { entries: [] });
-  assert.ok(receiptFile(WINDOWS).endsWith(path.join("ResumePro", "dev-nm", "receipt.json")));
+  assert.ok(receiptFile(WINDOWS).endsWith("ResumePro\\dev-nm\\receipt.json"));
 });

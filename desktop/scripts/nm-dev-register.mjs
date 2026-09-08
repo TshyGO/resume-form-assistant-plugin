@@ -24,6 +24,19 @@ const EXTENSION_ID = /^[a-p]{32}$/;
 
 export const BROWSERS = ["chrome", "edge"];
 
+/// Path semantics of the machine being registered, not of the machine running the code.
+/// Without this a Windows layout can only be reasoned about on Windows, which is exactly
+/// where a cross-platform mistake hides until the other runner finds it.
+function pathFor(platform) {
+  if (platform === "win32") {
+    return path.win32;
+  }
+  if (platform === "darwin") {
+    return path.posix;
+  }
+  throw new Error(`unsupported platform for development registration: ${platform}`);
+}
+
 /// Where each browser looks for a user-level manifest, and — on Windows, where the
 /// manifest itself may live anywhere — the registry key that points at it.
 export function targetsFor({ platform, home, localAppData, browsers = BROWSERS }) {
@@ -31,38 +44,36 @@ export function targetsFor({ platform, home, localAppData, browsers = BROWSERS }
   if (unknown.length > 0) {
     throw new Error(`unknown browser: ${unknown.join(", ")}`);
   }
+  const p = pathFor(platform);
   if (platform === "win32") {
-    const root = path.join(localAppData, "ResumePro", "dev-nm");
+    const root = p.join(localAppData, "ResumePro", "dev-nm");
     return browsers.map((browser) => ({
       browser,
-      manifestPath: path.join(root, `${browser}-${HOST_NAME}.json`),
+      manifestPath: p.join(root, `${browser}-${HOST_NAME}.json`),
       registryKey:
         browser === "chrome"
           ? `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${HOST_NAME}`
           : `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${HOST_NAME}`,
     }));
   }
-  if (platform === "darwin") {
-    const support = path.join(home, "Library", "Application Support");
-    return browsers.map((browser) => ({
-      browser,
-      manifestPath: path.join(
-        support,
-        browser === "chrome" ? path.join("Google", "Chrome") : "Microsoft Edge",
-        "NativeMessagingHosts",
-        `${HOST_NAME}.json`,
-      ),
-      registryKey: null,
-    }));
-  }
-  throw new Error(`unsupported platform for development registration: ${platform}`);
+  const support = p.join(home, "Library", "Application Support");
+  return browsers.map((browser) => ({
+    browser,
+    manifestPath: p.join(
+      support,
+      browser === "chrome" ? p.join("Google", "Chrome") : "Microsoft Edge",
+      "NativeMessagingHosts",
+      `${HOST_NAME}.json`,
+    ),
+    registryKey: null,
+  }));
 }
 
 /// The manifest a browser reads. `allowed_origins` names the extensions that may start
 /// this host; a wildcard would let any installed extension reach the archive, so ids are
 /// checked rather than trusted.
-export function manifestFor(binaryPath, extensionIds) {
-  if (!path.isAbsolute(binaryPath)) {
+export function manifestFor(binaryPath, extensionIds, platform = process.platform) {
+  if (!pathFor(platform).isAbsolute(binaryPath)) {
     throw new Error(`the host path must be absolute, got ${binaryPath}`);
   }
   if (extensionIds.length === 0) {
@@ -83,11 +94,12 @@ export function manifestFor(binaryPath, extensionIds) {
 }
 
 export function receiptPath({ platform, home, localAppData }) {
+  const p = pathFor(platform);
   const root =
     platform === "win32"
-      ? path.join(localAppData, "ResumePro", "dev-nm")
-      : path.join(home, "Library", "Application Support", "ResumePro", "dev-nm");
-  return path.join(root, "receipt.json");
+      ? p.join(localAppData, "ResumePro", "dev-nm")
+      : p.join(home, "Library", "Application Support", "ResumePro", "dev-nm");
+  return p.join(root, "receipt.json");
 }
 
 function digest(text) {
@@ -162,7 +174,7 @@ export function register(
   { platform, home, localAppData, browsers, binaryPath, extensionIds, dryRun = false },
   io = realIo,
 ) {
-  const manifest = manifestFor(binaryPath, extensionIds);
+  const manifest = manifestFor(binaryPath, extensionIds, platform);
   const body = `${JSON.stringify(manifest, null, 2)}\n`;
   const file = receiptPath({ platform, home, localAppData });
   const receipt = loadReceipt(file, io);
