@@ -3,6 +3,7 @@ import { createStore } from './store.mjs';
 import { createSession } from './session.mjs';
 import { createIntents } from './intents.mjs';
 import { createOutbox } from './outbox.mjs';
+import { createReconcile } from './reconcile.mjs';
 import { createDrain, ALARM_NAME } from './drain.mjs';
 import { createRouter } from './router.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
@@ -30,13 +31,15 @@ export function installDesktopLink(api) {
 
   const session = createSession(deps);
   const outbox = createOutbox(deps);
-  const drain = createDrain({ session, outbox, alarms: api.alarms, now: deps.now });
+  const reconcile = createReconcile({ ...deps, outbox });
+  const drain = createDrain({ session, outbox, reconcile, alarms: api.alarms, now: deps.now });
 
   const router = createRouter({
     session,
     intents: createIntents(deps),
     outbox,
     drain,
+    reconcile,
     extensionId: api.runtime.id
   });
 

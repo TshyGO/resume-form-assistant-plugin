@@ -1899,6 +1899,11 @@
         entry.payload?.sourceUrl,
         describeOutboxState(entry)
       );
+      if (entry.status === "needs_user" || entry.status === "paused") {
+        appendReconcileChoices(row, entry);
+        list.appendChild(row);
+        continue;
+      }
       row.appendChild(rowButton("立即重试", async () => {
         const { copy } = await loadDesktopModules();
         const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RETRY", messageId: entry.messageId });
@@ -1937,9 +1942,41 @@
     return button;
   }
 
+  // After a restore the queued envelope carries an epoch the desktop has replaced. There is
+  // no "retry" here on purpose: the only ways out are the three the user chooses.
+  function appendReconcileChoices(row, entry) {
+    loadDesktopModules().then(({ copy }) => {
+      const explain = copy.describeReconcileStatus(entry.reconcileStatus);
+      const note = document.createElement("em");
+      note.textContent = explain.text;
+      row.appendChild(note);
+    });
+
+    row.appendChild(rowButton("关联到已有申请", async () => {
+      const applicationId = prompt("要关联到哪条申请？请粘贴桌面里的申请 ID：");
+      if (!applicationId) return;
+      await resolvePaused(entry.messageId, "associate", applicationId.trim());
+    }));
+    row.appendChild(rowButton("另存为新的", () => resolvePaused(entry.messageId, "resave")));
+    row.appendChild(rowButton("丢弃", () => resolvePaused(entry.messageId, "discard")));
+  }
+
+  async function resolvePaused(messageId, choice, applicationId) {
+    const { copy } = await loadDesktopModules();
+    const result = await chrome.runtime.sendMessage({
+      type: "DESKTOP_RESOLVE", messageId, choice, applicationId
+    });
+    if (choice !== "discard") {
+      setDesktopStatus(copy.describeBindResult(result ?? { status: "pending" }));
+    }
+    refreshPendingList();
+  }
+
   // The reason is the plugin's own classification, not the protocol text: the wording table
   // in link/copy.mjs is the only place that turns a code into a sentence.
   function describeOutboxState(entry) {
+    if (entry.status === "paused") return "桌面换过档案库，已暂停";
+    if (entry.status === "needs_user") return "桌面换过档案库，等你决定";
     if (entry.status === "failed") return `已停下，需要处理（${describeFailure(entry.lastError)}）`;
     if (entry.status === "stalled") return `重试多次仍未成功，等你决定（${describeFailure(entry.lastError)}）`;
     const next = entry.nextAttemptAt ? `，下次重试 ${formatClock(entry.nextAttemptAt)}` : "";

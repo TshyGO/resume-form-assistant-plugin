@@ -8,7 +8,8 @@ export const MSG = {
   listQueue: 'DESKTOP_LIST_QUEUE',
   removeIntent: 'DESKTOP_REMOVE_INTENT',
   retry: 'DESKTOP_RETRY',
-  cancel: 'DESKTOP_CANCEL'
+  cancel: 'DESKTOP_CANCEL',
+  resolve: 'DESKTOP_RESOLVE'
 };
 
 export const DESKTOP_MESSAGE_TYPES = new Set(Object.values(MSG));

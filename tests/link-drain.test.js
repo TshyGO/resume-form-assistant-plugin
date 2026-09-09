@@ -293,3 +293,110 @@ test('the scheduled alarm respects the browser minimum', async () => {
   const alarm = bench.alarms.created.at(-1);
   assert.ok(alarm.delayInMinutes * 60_000 >= MIN_ALARM_DELAY_MS, JSON.stringify(alarm));
 });
+
+test('a restored archive is noticed before anything is sent', async () => {
+  const { createReconcile } = await import('../link/reconcile.mjs');
+  const { createStore } = await import('../link/store.mjs');
+  const { createSession } = await import('../link/session.mjs');
+  const { createIntents } = await import('../link/intents.mjs');
+  const { createOutbox } = await import('../link/outbox.mjs');
+  const { createDrain } = await import('../link/drain.mjs');
+
+  const NEW_EPOCH = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const storage = fakeStorage();
+  let minted = 0;
+  const uuid = () => `00000000-0000-4000-8000-${String(++minted).padStart(12, '0')}`;
+  const clock = { value: Date.parse('2026-09-09T00:00:00.000Z') };
+  const now = () => new Date(clock.value);
+  const sent = [];
+  let epoch = EPOCH;
+  const sendNative = async (host, message) => {
+    sent.push(message);
+    if (message.messageType === 'handshake') {
+      return {
+        response: {
+          protocolVersion: 1, correlationId: message.messageId, ok: true,
+          payload: {
+            appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+            archiveId: ARCHIVE, restoreEpoch: epoch, capabilities: ['handshake', 'job.save']
+          }
+        }
+      };
+    }
+    if (message.messageType === 'outbox.reconcile') {
+      return {
+        response: {
+          protocolVersion: 1, correlationId: message.messageId, ok: true,
+          payload: { items: message.payload.items.map(item => ({ ...item, status: 'not_found' })) }
+        }
+      };
+    }
+    return unavailable(message);
+  };
+
+  const store = createStore({ storage, uuid });
+  const deps = { store, uuid, now, sleep: async () => {}, sendNative };
+  const outbox = createOutbox(deps);
+  const drain = createDrain({
+    session: createSession(deps),
+    outbox,
+    reconcile: createReconcile({ ...deps, outbox }),
+    alarms: fakeAlarms(),
+    now
+  });
+  const intents = createIntents(deps);
+
+  const { intent } = await intents.save({ fields: FIELDS, mode: 'ready' });
+  await outbox.bindAndSend({ intentId: intent.intentId, identity: IDENTITY });
+
+  epoch = NEW_EPOCH;
+  clock.value += 3_600_000;
+  await drain.run();
+
+  // The pause has to happen inside the same pass, before the drain looks for due entries.
+  assert.equal(storage.data.desktopOutbox[0].status, 'needs_user');
+  assert.equal(storage.data.desktopOutbox[0].reconcileStatus, 'not_found');
+});
+
+test('an empty queue does not wake the worker or start the desktop', async () => {
+  const bench = await harness({ desktop: () => ({ lastError: 'Error when communicating with the native messaging host.' }) });
+  await bench.store.setPairing({ archiveId: ARCHIVE, restoreEpoch: EPOCH, at: 1 });
+
+  await bench.drain.run();
+  await bench.drain.run();
+
+  // Probing spawns a native host, and per D06 the host starts the application on demand.
+  // Doing that on a timer with nothing queued restarts a desktop the user deliberately
+  // closed, over and over, for no work at all.
+  assert.equal(bench.sent.length, 0, 'nothing to send, so nothing should have been sent');
+  assert.equal(bench.alarms.created.length, 0, 'nothing to do later, so nothing to wake for');
+});
+
+test('a queued write still schedules a look even when the desktop is closed', async () => {
+  const bench = await harness({ desktop: message => (message.messageType === 'handshake' ? handshakeReply(message) : unavailable(message)) });
+  await bindOne(bench);
+  bench.alarms.created.length = 0;
+
+  await bench.drain.run();
+
+  assert.ok(bench.alarms.created.length > 0, 'work is queued, so something has to come back for it');
+});
+
+test('entries that are only waiting for the user do not keep the worker awake', async () => {
+  const bench = await harness({ desktop: message => (message.messageType === 'handshake' ? handshakeReply(message) : unavailable(message)) });
+  const { BACKOFF_STEPS_MS } = await import('../link/limits.mjs');
+  await bindOne(bench);
+  for (const step of BACKOFF_STEPS_MS) {
+    bench.clock.value += step;
+    await bench.drain.run();
+  }
+  assert.equal(bench.storage.data.desktopOutbox[0].status, 'stalled');
+
+  bench.alarms.created.length = 0;
+  bench.sent.length = 0;
+  bench.clock.value += 86_400_000;
+  await bench.drain.run();
+
+  assert.equal(bench.sent.length, 0);
+  assert.equal(bench.alarms.created.length, 0);
+});
