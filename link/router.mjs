@@ -10,7 +10,7 @@ import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, extensionId }) {
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -55,6 +55,19 @@ export function createRouter({ session, intents, outbox, extensionId }) {
 
     if (type === MSG.listQueue) {
       return { intents: await intents.list(), outbox: await outbox.list() };
+    }
+
+    if (type === MSG.retry) {
+      // The user asking again is not a new decision: the same messageId and the same stamped
+      // epoch go back out, so the desktop can still recognise it as a replay.
+      return drain.retryNow(message.messageId);
+    }
+
+    if (type === MSG.cancel) {
+      // Giving up on the bound message. The intent stays, so the user can pick a different
+      // application or delete it outright.
+      await drain.cancel(message.messageId);
+      return { ok: true };
     }
 
     if (type === MSG.removeIntent) {

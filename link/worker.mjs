@@ -3,6 +3,7 @@ import { createStore } from './store.mjs';
 import { createSession } from './session.mjs';
 import { createIntents } from './intents.mjs';
 import { createOutbox } from './outbox.mjs';
+import { createDrain, ALARM_NAME } from './drain.mjs';
 import { createRouter } from './router.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
 
@@ -27,10 +28,15 @@ export function installDesktopLink(api) {
     now: () => new Date()
   };
 
+  const session = createSession(deps);
+  const outbox = createOutbox(deps);
+  const drain = createDrain({ session, outbox, alarms: api.alarms, now: deps.now });
+
   const router = createRouter({
-    session: createSession(deps),
+    session,
     intents: createIntents(deps),
-    outbox: createOutbox(deps),
+    outbox,
+    drain,
     extensionId: api.runtime.id
   });
 
@@ -43,6 +49,15 @@ export function installDesktopLink(api) {
     });
     return true;
   });
+
+  api.alarms.onAlarm.addListener(alarm => {
+    if (alarm?.name !== ALARM_NAME) return;
+    drain.run().catch(() => {});
+  });
+
+  // A cold worker has no timers left from its previous life. Without this pass the queue
+  // waits for an alarm that nothing rescheduled, which for an offline queue means forever.
+  drain.run().catch(() => {});
 
   return router;
 }

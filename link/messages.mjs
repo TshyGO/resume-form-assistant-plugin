@@ -6,7 +6,9 @@ export const MSG = {
   candidates: 'DESKTOP_CANDIDATES',
   bind: 'DESKTOP_BIND',
   listQueue: 'DESKTOP_LIST_QUEUE',
-  removeIntent: 'DESKTOP_REMOVE_INTENT'
+  removeIntent: 'DESKTOP_REMOVE_INTENT',
+  retry: 'DESKTOP_RETRY',
+  cancel: 'DESKTOP_CANCEL'
 };
 
 export const DESKTOP_MESSAGE_TYPES = new Set(Object.values(MSG));

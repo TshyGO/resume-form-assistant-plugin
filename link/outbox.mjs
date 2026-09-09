@@ -1,6 +1,7 @@
 import { buildEnvelope } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 import { MAX_OUTBOX } from './limits.mjs';
+import { nextDelayMs } from './drain.mjs';
 
 /**
  * Bound messages: the queue that exists once the user has chosen what to bind to.
@@ -70,6 +71,8 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
       bytes: new TextEncoder().encode(JSON.stringify(payload)).length,
       status: 'pending',
       attempts: 0,
+      // Due immediately. Every later attempt gets a time from the backoff ladder.
+      nextAttemptAt: now().toISOString(),
       lastError: null
     };
 
@@ -109,6 +112,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
 
     for (const entry of await store.getOutbox()) {
       if (entry.status !== 'pending') continue;
+      if (!isDue(entry)) continue;
       const result = await deliver(entry, identity);
       if (result.status === 'saved') saved.push(result);
       else if (result.status === 'failed') failed.push(result);
@@ -158,12 +162,54 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
       return { status: 'failed', messageId: entry.messageId, code: result.code };
     }
 
+    const attempts = entry.attempts + 1;
+    const delay = nextDelayMs(attempts);
     await patch(entry.messageId, item => ({
       ...item,
-      attempts: item.attempts + 1,
+      attempts,
+      // No rung left: stop retrying and say so. The entry is not lost and not failed — it is
+      // waiting for the user to retry it or give up on it.
+      status: delay === null ? 'stalled' : 'pending',
+      nextAttemptAt: delay === null ? null : new Date(now().getTime() + delay).toISOString(),
       lastError: result.code ?? result.status
     }));
-    return { status: 'pending', messageId: entry.messageId, code: result.code ?? result.status };
+    return {
+      status: delay === null ? 'stalled' : 'pending',
+      messageId: entry.messageId,
+      code: result.code ?? result.status
+    };
+  }
+
+  function isDue(entry) {
+    if (!entry.nextAttemptAt) return false;
+    return Date.parse(entry.nextAttemptAt) <= now().getTime();
+  }
+
+  // A message that is only waiting for the retry ladder. A paused or needs_user entry is
+  // waiting for something else entirely: its stamped epoch no longer exists on the desktop,
+  // so sending it again is not a retry, it is a write the desktop has to refuse.
+  const RETRYABLE_STATES = new Set(['pending', 'stalled', 'failed']);
+
+  /**
+   * Used by a manual retry: clear the wait and un-stall the entry.
+   *
+   * The identity, the messageId and the stamped epoch are untouched — this is the same
+   * message, sent again. Refuses anything the reconcile flow owns.
+   */
+  async function markDue(messageId, at) {
+    const entry = (await store.getOutbox()).find(item => item.messageId === messageId);
+    if (!entry) return { status: 'rejected', reason: 'unknown_message' };
+    if (!RETRYABLE_STATES.has(entry.status)) {
+      return { status: 'rejected', reason: 'awaiting_reconcile' };
+    }
+    await patch(messageId, item => ({ ...item, status: 'pending', nextAttemptAt: at.toISOString() }));
+    return { status: 'ok' };
+  }
+
+  async function deliverOne(messageId, identity) {
+    const entry = (await store.getOutbox()).find(item => item.messageId === messageId);
+    if (!entry) return { status: 'rejected', reason: 'unknown_message' };
+    return deliver(entry, identity);
   }
 
   const patch = (messageId, change) => store.updateOutbox(list =>
@@ -174,6 +220,8 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     queryCandidates,
     bindAndSend,
     drainOnce,
+    deliverOne,
+    markDue,
     list: () => store.getOutbox(),
     remove: messageId => store.updateOutbox(list => list.filter(item => item.messageId !== messageId))
   };

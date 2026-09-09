@@ -28,14 +28,14 @@ function fakeStorage(initial = {}) {
   };
 }
 
-async function harness({ desktop, storage = fakeStorage() } = {}) {
+async function harness({ desktop, storage = fakeStorage(), clock = { value: Date.parse('2026-09-09T00:00:00.000Z') } } = {}) {
   const { createStore } = await import('../link/store.mjs');
   const { createIntents } = await import('../link/intents.mjs');
   const { createOutbox } = await import('../link/outbox.mjs');
 
   let minted = 0;
   const uuid = () => `00000000-0000-4000-8000-${String(++minted).padStart(12, '0')}`;
-  const now = () => new Date('2026-09-09T00:00:00.000Z');
+  const now = () => new Date(clock.value);
   const store = createStore({ storage, uuid });
   const sent = [];
   const outbox = createOutbox({
@@ -49,7 +49,7 @@ async function harness({ desktop, storage = fakeStorage() } = {}) {
     }
   });
   const intents = createIntents({ store, uuid, now });
-  return { outbox, intents, store, storage, sent };
+  return { outbox, intents, store, storage, sent, clock };
 }
 
 const savedReply = (message, resultId = APPLICATION) => ({
@@ -155,7 +155,7 @@ test('binding to an existing application sends that id and keeps it', async () =
 });
 
 test('the source epoch is stamped at bind time and never refreshed', async () => {
-  const { outbox, intents, storage, sent } = await harness({
+  const { outbox, intents, storage, sent, clock } = await harness({
     desktop: message => errorReply(message, 'unavailable', true)
   });
   const intent = await queuedIntent(intents);
@@ -163,6 +163,7 @@ test('the source epoch is stamped at bind time and never refreshed', async () =>
 
   // The desktop was restored between attempts. The envelope must follow the new identity,
   // the payload must not: rewriting it would replay this job into a different archive.
+  clock.value += 60_000;
   await outbox.drainOnce({ identity: { archiveId: ARCHIVE, restoreEpoch: LATER_EPOCH } });
 
   assert.equal(storage.data.desktopOutbox[0].sourceRestoreEpoch, EPOCH);
@@ -185,7 +186,7 @@ test('an unanswered send leaves the job pending, not saved', async () => {
 
 test('a retry reuses the message id and the replay resolves to one application', async () => {
   let calls = 0;
-  const { outbox, intents, storage, sent } = await harness({
+  const { outbox, intents, storage, sent, clock } = await harness({
     desktop: message => {
       calls += 1;
       // First attempt: the reply is lost. Second: the desktop recognises the identity and
@@ -197,6 +198,7 @@ test('a retry reuses the message id and the replay resolves to one application',
 
   await outbox.bindAndSend({ intentId: intent.intentId, identity: IDENTITY });
   const first = sent[0].message.messageId;
+  clock.value += 60_000;
   const result = await outbox.drainOnce({ identity: IDENTITY });
 
   assert.equal(sent.at(-1).message.messageId, first, 'a new id would create a second application');
