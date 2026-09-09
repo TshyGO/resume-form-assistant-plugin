@@ -9,7 +9,9 @@ export const MSG = {
   removeIntent: 'DESKTOP_REMOVE_INTENT',
   retry: 'DESKTOP_RETRY',
   cancel: 'DESKTOP_CANCEL',
-  resolve: 'DESKTOP_RESOLVE'
+  resolve: 'DESKTOP_RESOLVE',
+  confirmSubmit: 'DESKTOP_CONFIRM_SUBMIT',
+  candidatesFor: 'DESKTOP_CANDIDATES_FOR'
 };
 
 export const DESKTOP_MESSAGE_TYPES = new Set(Object.values(MSG));

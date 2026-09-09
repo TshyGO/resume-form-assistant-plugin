@@ -60,6 +60,19 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   assert.equal(source.includes('桌面已保存'), false);
 });
 
+test('the sidebar offers confirming a submission separately from saving', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  // §5.2 rule 5: this is its own button, unrelated to whether the AI fill worked.
+  assert.match(source, /resume-pro-confirm-submit/);
+  assert.match(source, /DESKTOP_CONFIRM_SUBMIT/);
+});
+
+test('the desktop link is documented where a maintainer will look', async () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  assert.match(readme, /link\/ +桌面程序连接/);
+  assert.match(readme, /sourceRestoreEpoch/);
+});
+
 test('the desktop link ships every file it imports', async () => {
   const files = [
     'link/protocol/validate.mjs',
@@ -70,7 +83,20 @@ test('the desktop link ships every file it imports', async () => {
     'link/envelope.mjs',
     'link/transport.mjs',
     'link/store.mjs',
-    'link/session.mjs'
+    'link/session.mjs',
+    'link/intents.mjs',
+    'link/outbox.mjs',
+    'link/drain.mjs',
+    'link/reconcile.mjs',
+    'link/router.mjs',
+    'link/worker.mjs',
+    'link/messages.mjs',
+    'link/limits.mjs',
+    'link/copy.mjs',
+    'link/redact.mjs',
+    'link/normalize.mjs',
+    'link/extract.mjs',
+    'link/chrome.mjs'
   ];
   for (const file of files) {
     assert.ok(fs.existsSync(path.join(root, file)), `${file} is missing from the extension root`);

@@ -70,6 +70,18 @@ export function createRouter({ session, intents, outbox, drain, reconcile, exten
       return { ok: true };
     }
 
+    if (type === MSG.candidatesFor) {
+      const probe = await session.probe();
+      if (probe.mode !== 'ready') return { status: probe.mode };
+      return outbox.queryCandidates({ identity: probe.identity, fields: message.fields });
+    }
+
+    if (type === MSG.confirmSubmit) {
+      const probe = await session.probe();
+      if (probe.mode !== 'ready') return { status: 'pending', mode: probe.mode };
+      return outbox.confirmSubmit({ applicationId: message.applicationId, identity: probe.identity });
+    }
+
     if (type === MSG.resolve) {
       // Associate, discard or save again. Only the user gets to make this call: none of the
       // four unresolved reconcile answers authorises the plugin to decide on its own.

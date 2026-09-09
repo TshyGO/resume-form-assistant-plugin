@@ -155,3 +155,15 @@ export function describeReconcileStatus(status) {
     choices: ['associate', 'discard', 'resave']
   };
 }
+
+export function describeConfirmResult(result) {
+  if (result?.status === 'saved') {
+    return { tone: 'success', text: '已投递：桌面上的阶段已经更新。' };
+  }
+  if (result?.status === 'rejected' && result.reason === 'no_application') {
+    return { tone: 'warn', text: '请先选择这次投递对应的申请。' };
+  }
+  // Everything else is still in the queue. Saying anything about the stage here would be a
+  // claim about the desktop's records that nothing has confirmed.
+  return { tone: 'pending', text: '已排进待同步队列，桌面可用之后会更新阶段。' };
+}

@@ -58,11 +58,39 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     if (intent.fields.location) payload.location = intent.fields.location;
     if (applicationId) payload.applicationId = applicationId;
 
+    return enqueue({ messageType: 'job.save', payload, applicationId, intentId, identity });
+  }
+
+  /**
+   * The user says they actually applied.
+   *
+   * §5.2 rule 5: this is unrelated to saving the posting and unrelated to whether the AI
+   * fill worked. It is its own write, and it goes through the same queue, backoff and
+   * reconciliation as everything else.
+   */
+  async function confirmSubmit({ applicationId, identity }) {
+    if (!identity) return { status: 'rejected', reason: 'no_identity' };
+    if (!applicationId) return { status: 'rejected', reason: 'no_application' };
+    if ((await store.getOutbox()).length >= MAX_OUTBOX) {
+      return { status: 'rejected', reason: 'queue_full' };
+    }
+    return enqueue({
+      messageType: 'submit.confirm',
+      payload: { applicationId },
+      applicationId,
+      intentId: null,
+      identity
+    });
+  }
+
+  // Persist, then send. Never the other way round: an entry that exists only in flight cannot
+  // be retried with the same identity after the worker dies.
+  async function enqueue({ messageType, payload, applicationId, intentId, identity }) {
     const entry = {
       messageId: uuid(),
       intentId,
       clientInstanceId: await store.clientInstanceId(),
-      messageType: 'job.save',
+      messageType,
       archiveId: identity.archiveId,
       sourceRestoreEpoch: identity.restoreEpoch,
       applicationId,
@@ -219,6 +247,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
   return {
     queryCandidates,
     bindAndSend,
+    confirmSubmit,
     drainOnce,
     deliverOne,
     markDue,

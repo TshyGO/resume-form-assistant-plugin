@@ -137,6 +137,7 @@
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__desktop">
           <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到本地</button>
+          <button class="resume-pro__manager-button" id="resume-pro-confirm-submit" type="button">确认已投递</button>
           <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
             <label class="resume-pro__field">
               <span>公司<em>*</em></span>
@@ -1677,6 +1678,7 @@
 
   function bindDesktopEvents(sidebar) {
     sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
+    sidebar.querySelector("#resume-pro-confirm-submit")?.addEventListener("click", handleConfirmSubmitClick);
     sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
     sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1708,6 +1710,58 @@
     } catch (error) {
       setDesktopStatus({ tone: "warn", text: "读取页面信息失败，请手动填写后再保存。" });
     }
+  }
+
+  // Confirming a submission is its own act: it has nothing to do with whether the AI fill
+  // worked, and nothing to do with having saved the posting a moment ago. The application is
+  // chosen from the desktop's own candidates rather than remembered here, so the plugin never
+  // holds a stale application id across a restore.
+  async function handleConfirmSubmitClick() {
+    const { extract, copy } = await loadDesktopModules();
+    const fields = extract.extractJobFields(document, location.href);
+    if (!fields.company) {
+      setDesktopStatus({ tone: 'warn', text: '这个页面看不出是哪家公司，请先在桌面里确认投递。' });
+      return;
+    }
+
+    let candidates;
+    try {
+      candidates = await chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields });
+    } catch {
+      candidates = null;
+    }
+    if (candidates?.status !== "ok") {
+      setDesktopStatus(copy.describeConfirmResult({ status: "pending" }));
+      return;
+    }
+
+    const options = [...candidates.exact, ...candidates.sameCompany];
+    if (!options.length) {
+      setDesktopStatus({ tone: 'warn', text: '桌面里还没有这家公司的申请，请先保存岗位。' });
+      return;
+    }
+
+    const box = shadowRoot?.querySelector("#resume-pro-candidates");
+    const list = shadowRoot?.querySelector("#resume-pro-candidate-list");
+    shadowRoot.querySelector("#resume-pro-candidates-note").textContent = "这次投递的是哪一条申请？";
+    list.textContent = "";
+    for (const candidate of options) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "resume-pro__candidate";
+      row.textContent = `${candidate.company} · ${candidate.title}`;
+      row.addEventListener("click", async () => {
+        box.hidden = true;
+        const result = await chrome.runtime.sendMessage({
+          type: "DESKTOP_CONFIRM_SUBMIT", applicationId: candidate.applicationId
+        });
+        setDesktopStatus(copy.describeConfirmResult(result ?? { status: "pending" }));
+        refreshPendingList();
+      });
+      list.appendChild(row);
+    }
+    shadowRoot.querySelector("#resume-pro-bind-new").hidden = true;
+    box.hidden = false;
   }
 
   function closeSaveForm() {
@@ -1775,7 +1829,9 @@
     appendCandidateGroup(list, "同公司的其他岗位（仅供参考）", result.sameCompany, intentId);
 
     box.hidden = false;
-    shadowRoot.querySelector("#resume-pro-bind-new").onclick = () => bindIntent(intentId, null);
+    const bindNew = shadowRoot.querySelector("#resume-pro-bind-new");
+    bindNew.hidden = false;
+    bindNew.onclick = () => bindIntent(intentId, null);
     shadowRoot.querySelector("#resume-pro-bind-later").onclick = () => {
       // §5.2.4: cancelling the picker keeps the intent pending. Nothing is bound and nothing
       // is discarded.

@@ -252,3 +252,30 @@ test('a stalled write can be retried and cancelled from the sidebar', async () =
   await router.handle({ type: 'DESKTOP_CANCEL', messageId });
   assert.deepEqual(storage.data.desktopOutbox, []);
 });
+
+test('confirming a submission needs an application and a live desktop', async () => {
+  const { router } = await makeRouter({ reply: desktopThatAnswers });
+
+  const result = await router.handle({ type: 'DESKTOP_CONFIRM_SUBMIT', applicationId: APPLICATION });
+
+  assert.equal(result.status, 'saved');
+});
+
+test('confirming a submission with no desktop does not claim it happened', async () => {
+  const { router } = await makeRouter();
+
+  const result = await router.handle({ type: 'DESKTOP_CONFIRM_SUBMIT', applicationId: APPLICATION });
+
+  assert.notEqual(result.status, 'saved');
+});
+
+test('candidates can be looked up for the page without an intent', async () => {
+  const { router } = await makeRouter({ reply: desktopThatAnswers });
+
+  // Confirming a submission has no intent behind it: the user is pointing at an application
+  // that already exists.
+  const result = await router.handle({ type: 'DESKTOP_CANDIDATES_FOR', fields: FIELDS });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.exact[0].applicationId, APPLICATION);
+});
