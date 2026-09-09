@@ -71,9 +71,6 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
   async function confirmSubmit({ applicationId, identity }) {
     if (!identity) return { status: 'rejected', reason: 'no_identity' };
     if (!applicationId) return { status: 'rejected', reason: 'no_application' };
-    if ((await store.getOutbox()).length >= MAX_OUTBOX) {
-      return { status: 'rejected', reason: 'queue_full' };
-    }
     return enqueue({
       messageType: 'submit.confirm',
       payload: { applicationId },
