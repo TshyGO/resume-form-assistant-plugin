@@ -382,3 +382,119 @@
   font: 11px/1.6 ui-monospace, monospace;
   resize: vertical;
 }
+
+/* Desktop link: save a job, and the pending-sync queue. */
+.resume-pro__desktop {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resume-pro__save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.resume-pro__field em {
+  color: #dc2626;
+  font-style: normal;
+  margin-left: 2px;
+}
+
+.resume-pro__save-form input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.resume-pro__save-form input[readonly] {
+  background: rgba(226, 232, 240, 0.6);
+  color: #475569;
+}
+
+.resume-pro__save-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.resume-pro__save-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.resume-pro__desktop-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.resume-pro__desktop-status:empty {
+  display: none;
+}
+
+.resume-pro__desktop-status p {
+  margin: 0;
+}
+
+.resume-pro__desktop-status.is-pending {
+  color: #b45309;
+}
+
+.resume-pro__desktop-status.is-warn {
+  color: #b91c1c;
+}
+
+.resume-pro__desktop-status.is-info {
+  color: #334155;
+}
+
+.resume-pro__desktop-status.is-success {
+  color: #15803d;
+}
+
+.resume-pro__extension-id {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.06);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.resume-pro__pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.resume-pro__pending-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.9);
+  font-size: 12px;
+}
+
+.resume-pro__pending-row em {
+  grid-column: 1 / -1;
+  font-style: normal;
+  font-size: 11px;
+  color: #b45309;
+}

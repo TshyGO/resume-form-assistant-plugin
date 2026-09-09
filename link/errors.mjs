@@ -8,8 +8,3 @@ export class LinkError extends Error {
     this.code = code;
   }
 }
-
-// `unavailable` is the only code D05 marks retryable by default. Everything else needs a
-// deliberate decision, which is why the retry policy lives in one place instead of at each
-// call site.
-export const RETRYABLE_CODES = new Set(['unavailable']);

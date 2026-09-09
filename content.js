@@ -135,6 +135,38 @@
           <textarea id="resume-pro-diagnostics-text" readonly aria-label="填写诊断摘要，可选择复制" rows="14"></textarea>
         </details>
         <div class="resume-pro__divider"></div>
+        <div class="resume-pro__desktop">
+          <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到本地</button>
+          <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
+            <label class="resume-pro__field">
+              <span>公司<em>*</em></span>
+              <input type="text" id="resume-pro-save-company" autocomplete="off" required>
+            </label>
+            <label class="resume-pro__field">
+              <span>岗位<em>*</em></span>
+              <input type="text" id="resume-pro-save-title" autocomplete="off" required>
+            </label>
+            <label class="resume-pro__field">
+              <span>地点</span>
+              <input type="text" id="resume-pro-save-location" autocomplete="off">
+            </label>
+            <label class="resume-pro__field">
+              <span>来源链接</span>
+              <input type="text" id="resume-pro-save-url" readonly>
+            </label>
+            <p class="resume-pro__save-note" id="resume-pro-save-note"></p>
+            <div class="resume-pro__save-actions">
+              <button class="resume-pro__ai-button" type="submit">确认保存</button>
+              <button class="resume-pro__manager-button" type="button" id="resume-pro-save-cancel">取消</button>
+            </div>
+          </form>
+          <div class="resume-pro__desktop-status" id="resume-pro-desktop-status" aria-live="polite"></div>
+          <details class="resume-pro__pending" id="resume-pro-pending" hidden>
+            <summary>待同步 <span id="resume-pro-pending-count">0</span> 条</summary>
+            <div class="resume-pro__pending-list" id="resume-pro-pending-list"></div>
+          </details>
+        </div>
+        <div class="resume-pro__divider"></div>
         <div class="resume-pro__groups" id="resume-pro-groups"></div>
         <div class="resume-pro__footer">
           <button class="resume-pro__manager-button" id="resume-pro-open-manager" type="button">打开管理面板</button>
@@ -208,6 +240,7 @@
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
     openManagerButton?.addEventListener("click", () => setManagerVisibility(true));
+    bindDesktopEvents(sidebar);
 
     const chipActions = shadowRoot.querySelector("#resume-pro-chip-actions");
     chipActions?.addEventListener("mousedown", (event) => {
@@ -1609,6 +1642,185 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
+  }
+
+  // --- Desktop link ---------------------------------------------------------
+  //
+  // The sidebar reads the page and shows the result; the service worker owns the native
+  // messaging port and both queues. Content scripts cannot open that port at all, so every
+  // desktop operation is a message.
+  //
+  // Extraction and URL redaction run here rather than in the worker because the worker has
+  // no DOM, and because §5.2 puts the credential stripping before anything leaves the page.
+
+  let desktopModules = null;
+  let pendingFields = null;
+
+  async function loadDesktopModules() {
+    if (!desktopModules) {
+      const [extract, copy] = await Promise.all([
+        import(chrome.runtime.getURL("link/extract.mjs")),
+        import(chrome.runtime.getURL("link/copy.mjs"))
+      ]);
+      desktopModules = { extract, copy };
+    }
+    return desktopModules;
+  }
+
+  function bindDesktopEvents(sidebar) {
+    sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
+    sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
+    sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitSaveForm({ force: false });
+    });
+    refreshPendingList();
+  }
+
+  async function handleSaveJobClick() {
+    const form = shadowRoot?.querySelector("#resume-pro-save-form");
+    if (!form) return;
+
+    try {
+      const { extract } = await loadDesktopModules();
+      const fields = extract.extractJobFields(document, location.href);
+      form.querySelector("#resume-pro-save-company").value = fields.company;
+      form.querySelector("#resume-pro-save-title").value = fields.title;
+      form.querySelector("#resume-pro-save-location").value = fields.location;
+      form.querySelector("#resume-pro-save-url").value = fields.sourceUrl;
+      pendingFields = fields;
+      const note = form.querySelector("#resume-pro-save-note");
+      // Blanks are expected: nothing is guessed. Saying so is what stops a user from
+      // assuming the extension already knows the employer.
+      note.textContent = fields.company
+        ? "请核对，缺的可以自己补。"
+        : "这个页面没有声明公司名，请手动填写；插件不会替你猜。";
+      form.hidden = false;
+      setDesktopStatus(null);
+    } catch (error) {
+      setDesktopStatus({ tone: "warn", text: "读取页面信息失败，请手动填写后再保存。" });
+    }
+  }
+
+  function closeSaveForm() {
+    const form = shadowRoot?.querySelector("#resume-pro-save-form");
+    if (form) form.hidden = true;
+    pendingFields = null;
+  }
+
+  async function submitSaveForm({ force }) {
+    const form = shadowRoot?.querySelector("#resume-pro-save-form");
+    if (!form) return;
+
+    const fields = {
+      company: form.querySelector("#resume-pro-save-company").value.trim(),
+      title: form.querySelector("#resume-pro-save-title").value.trim(),
+      location: form.querySelector("#resume-pro-save-location").value.trim(),
+      // The URL is whatever redaction produced when the form opened. It is not editable and
+      // is never re-read from the address bar here, so no un-redacted URL can reach storage.
+      sourceUrl: pendingFields?.sourceUrl || "",
+      dedupeUrl: pendingFields?.dedupeUrl || ""
+    };
+
+    const { copy } = await loadDesktopModules();
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_SAVE_JOB", fields, force });
+    } catch (error) {
+      result = { status: "error" };
+    }
+
+    setDesktopStatus(copy.describeSaveResult(result ?? { status: "error" }));
+    if (result?.status === "queued") {
+      closeSaveForm();
+    }
+    refreshPendingList();
+  }
+
+  function setDesktopStatus(copy) {
+    const box = shadowRoot?.querySelector("#resume-pro-desktop-status");
+    if (!box) return;
+    box.textContent = "";
+    box.className = "resume-pro__desktop-status";
+    if (!copy) return;
+
+    box.classList.add(`is-${copy.tone}`);
+    const line = document.createElement("p");
+    line.textContent = copy.text;
+    box.appendChild(line);
+
+    if (copy.extensionId) {
+      const id = document.createElement("code");
+      id.className = "resume-pro__extension-id";
+      id.textContent = copy.extensionId;
+      box.appendChild(id);
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "resume-pro__manager-button";
+      copyButton.textContent = "复制扩展 ID";
+      copyButton.addEventListener("click", () => copyText(copy.extensionId));
+      box.appendChild(copyButton);
+    }
+
+    if (copy.hint) {
+      const hint = document.createElement("p");
+      hint.className = "resume-pro__save-note";
+      hint.textContent = copy.hint;
+      box.appendChild(hint);
+    }
+
+    if (copy.offerForce) {
+      const again = document.createElement("button");
+      again.type = "button";
+      again.className = "resume-pro__manager-button";
+      again.textContent = "再存一次";
+      again.addEventListener("click", () => submitSaveForm({ force: true }));
+      box.appendChild(again);
+    }
+  }
+
+  async function refreshPendingList() {
+    const details = shadowRoot?.querySelector("#resume-pro-pending");
+    const list = shadowRoot?.querySelector("#resume-pro-pending-list");
+    if (!details || !list) return;
+
+    let intents = [];
+    try {
+      const reply = await chrome.runtime.sendMessage({ type: "DESKTOP_LIST_QUEUE" });
+      intents = reply?.intents || [];
+    } catch {
+      return;
+    }
+
+    details.hidden = intents.length === 0;
+    shadowRoot.querySelector("#resume-pro-pending-count").textContent = String(intents.length);
+    list.textContent = "";
+
+    for (const intent of intents) {
+      const row = document.createElement("div");
+      row.className = "resume-pro__pending-row";
+
+      const label = document.createElement("span");
+      label.textContent = `${intent.fields.company} · ${intent.fields.title}`;
+      label.title = intent.fields.sourceUrl || "";
+      row.appendChild(label);
+
+      const state = document.createElement("em");
+      state.textContent = intent.status === "pending_bind" ? "待绑定申请" : "待同步（尚未绑定申请）";
+      row.appendChild(state);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "resume-pro__manager-button";
+      remove.textContent = "删除";
+      remove.addEventListener("click", async () => {
+        await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_INTENT", intentId: intent.intentId });
+        refreshPendingList();
+      });
+      row.appendChild(remove);
+
+      list.appendChild(row);
+    }
   }
 
   chrome.runtime.onMessage.addListener((message) => {
