@@ -117,12 +117,12 @@ function isOwnedReference(specifier) {
 
 export const isDirectoryReference = (reference) => reference.endsWith("/");
 
-/**
- * Every file reachable from `entries` by import, runtime URL, HTML reference, or worker.
- * Directory references are kept with their trailing slash and checked as prefixes --
- * dropping them would silently excuse whatever lives underneath, which is how 168
- * PDF.js CMaps could go unpackaged while this check still passed.
- */
+// Icons are read as bytes by the browser, and parsing a binary as text invites a
+// stray byte sequence that happens to look like an import. Only code and markup
+// can reference anything; everything else is a leaf.
+const PARSEABLE = /\.(?:js|mjs|cjs|html|htm|css)$/i;
+
+/** Every file reachable from `entries` by import, runtime URL, HTML reference, or worker. */
 export function collectModuleGraph(entries, readFile) {
   const seen = new Set();
   const queue = [...entries];
@@ -130,7 +130,7 @@ export function collectModuleGraph(entries, readFile) {
     const current = queue.pop();
     if (seen.has(current)) continue;
     seen.add(current);
-    if (isDirectoryReference(current)) continue;
+    if (isDirectoryReference(current) || !PARSEABLE.test(current)) continue;
     const text = readFile(current);
     if (typeof text !== "string") continue;
 
@@ -157,21 +157,38 @@ export function manifestEntryPoints(manifest) {
   for (const script of manifest.content_scripts || []) {
     entries.push(...(script.js || []), ...(script.css || []));
   }
-  return entries;
+  // Chrome loads these straight from the manifest; nothing imports them, so without
+  // seeding them here a release could ship a manifest pointing at absent icons.
+  entries.push(...Object.values(manifest.icons || {}));
+  entries.push(...Object.values((manifest.action || {}).default_icon || {}));
+  return [...new Set(entries)];
 }
 
-export function assertRuntimeModulesPackaged(graph, leaves) {
+export function assertRuntimeModulesPackaged(graph, leaves, reviewedAssets = []) {
   const packaged = new Set(leaves.map((leaf) => leaf.split("\\").join("/")));
   const missing = [];
   for (const reference of graph) {
-    if (isDirectoryReference(reference)) {
-      // The runtime appends filenames to this prefix, so require it to be non-empty
-      // rather than naming files the check cannot know about.
+    if (!isDirectoryReference(reference)) {
+      if (!packaged.has(reference)) missing.push(reference);
+      continue;
+    }
+    // The runtime picks a filename under this prefix -- PDF.js chooses a CMap by the
+    // document's encoding -- so "at least one file is present" is not enough: any
+    // omitted map fails only for the documents that need it. The reviewed asset
+    // manifest already enumerates what belongs there, so require all of it.
+    const expected = reviewedAssets.filter((asset) => asset.startsWith(reference));
+    if (expected.length === 0) {
       if (![...packaged].some((leaf) => leaf.startsWith(reference))) {
         missing.push(`${reference}* (no packaged files under this directory)`);
       }
-    } else if (!packaged.has(reference)) {
-      missing.push(reference);
+      continue;
+    }
+    const absent = expected.filter((asset) => !packaged.has(asset));
+    if (absent.length) {
+      const sample = absent.slice(0, 3).join(", ");
+      missing.push(
+        `${reference}* (${absent.length} of ${expected.length} reviewed files missing: ${sample}${absent.length > 3 ? ", ..." : ""})`
+      );
     }
   }
   if (missing.length) {
@@ -201,7 +218,12 @@ if (isMain) {
       return null;
     }
   });
-  assertRuntimeModulesPackaged(graph, leaves);
+  // The same reviewed manifest the allowlist uses as an upper bound serves as the
+  // lower bound for directory references: everything reviewed under a prefix must ship.
+  const reviewedAssets = JSON.parse(
+    readFileSync(new URL("./plugin-release-assets.json", import.meta.url), "utf8")
+  );
+  assertRuntimeModulesPackaged(graph, leaves, reviewedAssets);
 
   console.log(`release.yml packs plugin runtime files only, and all ${graph.size} runtime files are present`);
 }

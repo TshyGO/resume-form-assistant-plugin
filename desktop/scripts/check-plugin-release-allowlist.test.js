@@ -206,3 +206,56 @@ test("a directory reference requires at least one packaged file beneath it", () 
     assertRuntimeModulesPackaged(graph, ["popup.js", "vendor/pdfjs/cmaps/78-EUC-H.bcmap"]),
   );
 });
+
+// Third review round: manifest-declared icons, and directory completeness.
+
+test("manifest icons and action icons are entry points", () => {
+  const entries = manifestEntryPoints({
+    background: { service_worker: "background.js" },
+    content_scripts: [{ js: ["content.js"] }],
+    icons: { 16: "icons/icon16.png", 128: "icons/icon128.png" },
+    action: { default_icon: { 16: "icons/icon16.png", 48: "icons/icon48.png" } },
+  });
+  // Nothing imports an icon, so without seeding them a release could ship a
+  // manifest pointing at absent files.
+  assert.ok(entries.includes("icons/icon16.png"));
+  assert.ok(entries.includes("icons/icon128.png"));
+  assert.ok(entries.includes("icons/icon48.png"));
+  // Declared in both places, counted once.
+  assert.equal(entries.filter((e) => e === "icons/icon16.png").length, 1);
+});
+
+test("non-parseable files are leaves, not parsed as source", () => {
+  let read = [];
+  const graph = collectModuleGraph(["icons/icon16.png", "a.js"], (f) => {
+    read.push(f);
+    return f === "a.js" ? "" : "from './ghost.mjs'";
+  });
+  assert.ok(graph.has("icons/icon16.png"));
+  assert.ok(!read.includes("icons/icon16.png"), "a binary must not be read as source");
+  assert.ok(!graph.has("ghost.mjs"));
+});
+
+test("a directory reference requires every reviewed file beneath it", () => {
+  const graph = new Set(["popup.js", "vendor/pdfjs/cmaps/"]);
+  const reviewed = [
+    "vendor/pdfjs/cmaps/78-EUC-H.bcmap",
+    "vendor/pdfjs/cmaps/78-EUC-V.bcmap",
+    "vendor/pdfjs/cmaps/LICENSE",
+  ];
+  // PDF.js picks a CMap by the document's encoding, so one present file does not
+  // make the directory usable -- any omitted map fails for the PDFs that need it.
+  assert.throws(
+    () => assertRuntimeModulesPackaged(graph, ["popup.js", "vendor/pdfjs/cmaps/78-EUC-H.bcmap"], reviewed),
+    /2 of 3 reviewed files missing/,
+  );
+  assert.doesNotThrow(() =>
+    assertRuntimeModulesPackaged(graph, ["popup.js", ...reviewed], reviewed),
+  );
+});
+
+test("without a reviewed list a directory still requires at least one file", () => {
+  const graph = new Set(["vendor/x/"]);
+  assert.throws(() => assertRuntimeModulesPackaged(graph, ["other.js"]), /no packaged files/);
+  assert.doesNotThrow(() => assertRuntimeModulesPackaged(graph, ["vendor/x/a.bin"]));
+});
