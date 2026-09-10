@@ -1,3 +1,10 @@
+import { installDesktopLink } from "./link/worker.mjs";
+
+// The desktop link owns its own message listener. It deliberately does not touch
+// chrome.action.onClicked or ENSURE_AI_HOST below: those belong to the existing plugin and
+// keep working whether or not a desktop is installed.
+installDesktopLink(chrome);
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (tab.id) {
     try { await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_MANAGER" }); } catch {}

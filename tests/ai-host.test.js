@@ -4,6 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+// background.js is an ES module since the desktop link landed, and vm.runInContext only
+// takes a classic script. The import is replaced with a stub so these tests keep exercising
+// the offscreen AI host, which is what they are about.
+const asClassicScript = text => text.replace(
+  /^import \{ installDesktopLink \} from "\.\/link\/worker\.mjs";$/m,
+  'const installDesktopLink = () => {};'
+);
 
 test('service worker only creates one concurrent offscreen worker host and never fetches AI', async () => {
   let complete, creates = 0;
@@ -12,7 +19,7 @@ test('service worker only creates one concurrent offscreen worker host and never
     runtime: { getURL: name => `chrome-extension://test/${name}`, getContexts: async () => [], onMessage: { addListener() {} } },
     offscreen: { createDocument: options => { creates++; assert.equal(options.reasons[0], 'WORKERS'); return new Promise(resolve => { complete = resolve; }); } }
   } });
-  vm.runInContext(source('background.js'), context);
+  vm.runInContext(asClassicScript(source('background.js')), context);
   const a = context.ensureAiHost(), b = context.ensureAiHost();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(creates, 1);

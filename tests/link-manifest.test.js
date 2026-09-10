@@ -36,6 +36,30 @@ test('the offscreen AI host is still created on demand', async () => {
   assert.match(source, /ai-host\.html/);
 });
 
+test('the service worker installs the desktop link', async () => {
+  const source = background();
+  assert.match(source, /import \{ installDesktopLink \} from ['"]\.\/link\/worker\.mjs['"]/);
+  assert.match(source, /installDesktopLink\(chrome\)/);
+});
+
+test('the sidebar can import the extraction and copy modules', async () => {
+  // A content script reaches them through chrome.runtime.getURL, which only resolves for
+  // web-accessible resources. Without this the save button fails with an opaque import
+  // error at the moment the user clicks it.
+  const resources = manifest().web_accessible_resources[0].resources;
+  assert.ok(resources.includes('link/*.mjs'));
+  assert.ok(resources.includes('link/protocol/*.mjs'));
+});
+
+test('the sidebar offers saving a job and never formats desktop copy itself', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  assert.match(source, /resume-pro-save-job/);
+  assert.match(source, /DESKTOP_SAVE_JOB/);
+  // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
+  assert.match(source, /describeSaveResult/);
+  assert.equal(source.includes('桌面已保存'), false);
+});
+
 test('the desktop link ships every file it imports', async () => {
   const files = [
     'link/protocol/validate.mjs',

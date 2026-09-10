@@ -38,6 +38,8 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "link/*.mjs",
+        "link/protocol/*.mjs",
         "popup.html",
         "popup.css",
         "popup.js",

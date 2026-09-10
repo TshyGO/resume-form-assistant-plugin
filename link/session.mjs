@@ -17,8 +17,6 @@ export const PLUGIN_VERSION = '0.3.0';
  *   never_paired  no successful handshake was ever recorded; no long-lived queue is created
  */
 export function createSession({ store, sendNative, sleep, uuid, now }) {
-  let identity = null;
-
   async function probe() {
     const message = await buildEnvelope({
       messageType: 'handshake',
@@ -42,7 +40,7 @@ export function createSession({ store, sendNative, sleep, uuid, now }) {
         identity = null;
         return { mode: 'incompatible', identity: null };
       }
-      identity = { archiveId: payload.archiveId, restoreEpoch: payload.restoreEpoch };
+      const identity = { archiveId: payload.archiveId, restoreEpoch: payload.restoreEpoch };
       await store.setPairing({
         archiveId: payload.archiveId,
         restoreEpoch: payload.restoreEpoch,
@@ -51,8 +49,6 @@ export function createSession({ store, sendNative, sleep, uuid, now }) {
       });
       return { mode: 'ready', identity, capabilities: payload.capabilities };
     }
-
-    identity = null;
 
     if (result.status === 'not_paired') return { mode: 'not_paired', identity: null };
     if (result.status === 'fatal' && result.code === 'protocol_incompatible') {
@@ -75,12 +71,7 @@ export function createSession({ store, sendNative, sleep, uuid, now }) {
     return { mode: 'never_paired', identity: null, code: result.code };
   }
 
-  return {
-    probe,
-    // The identity of the last successful handshake in this worker lifetime. Null until one
-    // succeeds; a stored pairing record never fills it in.
-    currentIdentity: () => identity
-  };
+  return { probe };
 }
 
 function versionsIntersect(min, max) {
