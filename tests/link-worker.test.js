@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 // listener it registered the way the browser would.
 function fakeChrome({ nativeError = 'Specified native messaging host not found.' } = {}) {
   const listeners = [];
+  listeners.alarm = null;
   return {
     listeners,
     runtime: {
@@ -16,6 +17,13 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
         callback(undefined);
         this.lastError = undefined;
       }
+    },
+    alarms: {
+      created: [],
+      fired: [],
+      async create(name, options) { this.created.push({ name, ...options }); },
+      async clear() { return true; },
+      onAlarm: { addListener(fn) { listeners.alarm = fn; } }
     },
     storage: {
       local: {
@@ -37,6 +45,23 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
     }
   };
 }
+
+const PAIRED = { archiveId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', restoreEpoch: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', at: 1 };
+// A write still waiting to go out. Without queued work the drain deliberately does nothing:
+// probing spawns a native host, and per D06 the host starts the desktop application.
+const QUEUED_WRITE = [{
+  messageId: '55555555-5555-4555-8555-555555555555',
+  intentId: null,
+  clientInstanceId: '11111111-1111-4111-8111-111111111111',
+  messageType: 'job.save',
+  archiveId: PAIRED.archiveId,
+  sourceRestoreEpoch: PAIRED.restoreEpoch,
+  payload: { company: '合成公司', title: '后端实习' },
+  status: 'pending',
+  attempts: 0,
+  nextAttemptAt: '2020-01-01T00:00:00.000Z',
+  lastError: null
+}];
 
 test('the desktop listener answers a probe', async () => {
   const { installDesktopLink } = await import('../link/worker.mjs');
@@ -80,4 +105,59 @@ test('a failure inside the desktop link answers an error instead of hanging the 
 
   assert.equal(result.error, true);
   assert.equal(typeof result.code, 'string');
+});
+
+test('the worker wakes the queue when its alarm fires', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const { ALARM_NAME } = await import('../link/drain.mjs');
+  const api = fakeChrome();
+  api.storage.local._data.desktopPairing = PAIRED;
+  api.storage.local._data.desktopOutbox = QUEUED_WRITE;
+  installDesktopLink(api);
+
+  // Without this the queue only moves when the user happens to open a page again, which is
+  // exactly the case the offline queue exists for.
+  assert.equal(typeof api.listeners.alarm, 'function');
+  api.listeners.alarm({ name: ALARM_NAME });
+  // onAlarm is fire-and-forget in the browser too, so the test waits the same way the
+  // browser does: it lets the work finish on its own.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(api.alarms.created.length > 0);
+});
+
+test('an alarm that belongs to someone else is ignored', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  installDesktopLink(api);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const before = api.alarms.created.length;
+
+  api.listeners.alarm({ name: 'someone-elses-alarm' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(api.alarms.created.length, before);
+});
+
+test('a queued write is retried when the worker starts', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  api.storage.local._data.desktopPairing = PAIRED;
+  api.storage.local._data.desktopOutbox = QUEUED_WRITE;
+  installDesktopLink(api);
+
+  // A cold worker has no timers left over from its previous life; the queue has to be picked
+  // up on startup or it waits for an alarm that was never rescheduled.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(api.alarms.created.length > 0);
+});
+
+test('a worker with nothing queued neither probes nor sets an alarm', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  api.storage.local._data.desktopPairing = PAIRED;
+  installDesktopLink(api);
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(api.alarms.created.length, 0, 'nothing to do, so nothing to wake for');
 });

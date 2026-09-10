@@ -44,6 +44,7 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
   const { createSession } = await import('../link/session.mjs');
   const { createIntents } = await import('../link/intents.mjs');
   const { createOutbox } = await import('../link/outbox.mjs');
+  const { createDrain } = await import('../link/drain.mjs');
   const { createRouter } = await import('../link/router.mjs');
 
   let minted = 0;
@@ -58,7 +59,9 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
   const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now });
   const intents = createIntents({ store, uuid, now });
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
-  const router = createRouter({ session, intents, outbox, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
+  const alarms = { created: [], async create(name, options) { this.created.push({ name, ...options }); }, async clear() { return true; } };
+  const drain = createDrain({ session, outbox, alarms, now });
+  const router = createRouter({ session, intents, outbox, drain, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
   return { router, storage, sent };
 }
 
@@ -226,4 +229,26 @@ test('the queue listing includes bound messages, not only intents', async () => 
 
   assert.equal(listed.outbox.length, 1);
   assert.equal(listed.outbox[0].messageType, 'job.save');
+});
+
+test('a stalled write can be retried and cancelled from the sidebar', async () => {
+  const { router, storage } = await makeRouter({
+    reply: message => message.messageType === 'handshake'
+      ? handshakeReply(message)
+      : {
+          response: {
+            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
+          }
+        }
+  });
+  const saved = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: FIELDS });
+  await router.handle({ type: 'DESKTOP_BIND', intentId: saved.intent.intentId });
+  const { messageId } = storage.data.desktopOutbox[0];
+
+  const retried = await router.handle({ type: 'DESKTOP_RETRY', messageId });
+  assert.equal(retried.status, 'pending');
+
+  await router.handle({ type: 'DESKTOP_CANCEL', messageId });
+  assert.deepEqual(storage.data.desktopOutbox, []);
 });

@@ -1899,6 +1899,16 @@
         entry.payload?.sourceUrl,
         describeOutboxState(entry)
       );
+      row.appendChild(rowButton("立即重试", async () => {
+        const { copy } = await loadDesktopModules();
+        const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RETRY", messageId: entry.messageId });
+        setDesktopStatus(copy.describeBindResult(result ?? { status: "pending" }));
+        refreshPendingList();
+      }));
+      row.appendChild(rowButton("取消", async () => {
+        await chrome.runtime.sendMessage({ type: "DESKTOP_CANCEL", messageId: entry.messageId });
+        refreshPendingList();
+      }));
       list.appendChild(row);
     }
   }
@@ -1927,9 +1937,29 @@
     return button;
   }
 
+  // The reason is the plugin's own classification, not the protocol text: the wording table
+  // in link/copy.mjs is the only place that turns a code into a sentence.
   function describeOutboxState(entry) {
-    if (entry.status === "failed") return "已停下，需要处理";
-    return `待同步（已尝试 ${entry.attempts || 0} 次）`;
+    if (entry.status === "failed") return `已停下，需要处理（${describeFailure(entry.lastError)}）`;
+    if (entry.status === "stalled") return `重试多次仍未成功，等你决定（${describeFailure(entry.lastError)}）`;
+    const next = entry.nextAttemptAt ? `，下次重试 ${formatClock(entry.nextAttemptAt)}` : "";
+    return `待同步（已尝试 ${entry.attempts || 0} 次${next}）`;
+  }
+
+  function describeFailure(code) {
+    if (code === "unavailable") return "桌面暂时不可用";
+    if (code === "invalid_payload") return "桌面看不懂这条内容";
+    if (code === "restore_epoch_mismatch") return "桌面换过档案库";
+    if (code === "previously_purged") return "已在桌面永久删除";
+    if (code === "conflict") return "与桌面已有记录冲突";
+    return "原因未知";
+  }
+
+  function formatClock(iso) {
+    const at = new Date(iso);
+    return Number.isNaN(at.getTime())
+      ? "稍后"
+      : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
   chrome.runtime.onMessage.addListener((message) => {
