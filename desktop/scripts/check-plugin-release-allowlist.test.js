@@ -164,7 +164,7 @@ test("HTML script and link references are followed", () => {
   assert.ok(p.has("popup.css") && p.has("popup.js"));
 });
 
-test("directory base URLs and absolute URLs are not treated as files", () => {
+test("directory references are kept as prefixes and absolute URLs are dropped", () => {
   const files = {
     "popup.js": `const base = chrome.runtime.getURL("vendor/pdfjs/cmaps/");
       const w = chrome.runtime.getURL("vendor/pdfjs/pdf.worker.min.mjs");`,
@@ -173,7 +173,36 @@ test("directory base URLs and absolute URLs are not treated as files", () => {
   };
   const graph = collectModuleGraph(["popup.js", "index.html"], (f) => files[f] ?? null);
   assert.ok(graph.has("vendor/pdfjs/pdf.worker.min.mjs"));
-  assert.ok(!graph.has("vendor/pdfjs/cmaps/"), "a trailing-slash base URL is a directory, not a file");
+  assert.ok(graph.has("vendor/pdfjs/cmaps/"), "a directory reference is kept, to be checked as a prefix");
   assert.ok(!graph.has("https://cdn.example.com/x.js"), "absolute URLs are not ours to package");
   assert.ok(!graph.has("//cdn/y.js"));
+});
+
+// Workers and directory references, both raised in review on the previous revision.
+
+test("worker constructors and their importScripts are followed", () => {
+  const files = {
+    "ai-host.html": `<script src="ai-host.js"></script>`,
+    "ai-host.js": `const worker = new Worker("ai-worker.js");`,
+    "ai-worker.js": `importScripts("ai-helpers.js", "resume-utils.js", "form-agent.js");`,
+    "ai-helpers.js": ``,
+    "resume-utils.js": ``,
+    "form-agent.js": ``,
+  };
+  const graph = collectModuleGraph(["ai-host.html"], (f) => files[f] ?? null);
+  assert.ok(graph.has("ai-worker.js"), "new Worker(...) must be followed");
+  // importScripts takes several scripts in one call; all of them count.
+  assert.ok(graph.has("ai-helpers.js") && graph.has("resume-utils.js") && graph.has("form-agent.js"));
+});
+
+test("a directory reference requires at least one packaged file beneath it", () => {
+  const graph = new Set(["popup.js", "vendor/pdfjs/cmaps/"]);
+  assert.throws(
+    () => assertRuntimeModulesPackaged(graph, ["popup.js", "vendor/pdfjs/pdf.min.mjs"]),
+    /vendor\/pdfjs\/cmaps\/\* \(no packaged files under this directory\)/,
+    "packaging pdf.js but not the CMaps must fail, not pass silently",
+  );
+  assert.doesNotThrow(() =>
+    assertRuntimeModulesPackaged(graph, ["popup.js", "vendor/pdfjs/cmaps/78-EUC-H.bcmap"]),
+  );
 });

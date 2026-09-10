@@ -65,25 +65,40 @@ export function assertPluginOnlyArchive(entries) {
 // gap shipped a real break: background.js became a module importing ./link/worker.mjs
 // while release.yml still packed a file list with no link operand. The zip stayed
 // allowlist-clean and the service worker would have failed to load.
-// A file can enter the running extension four ways, and every one of them has to be in
-// the archive. Missing any of these makes the check confidently wrong: it would report
-// a package as complete while the extension breaks on load.
+// A file can enter the running extension six ways, and every one of them has to be in
+// the archive. Missing any makes this check confidently wrong: it reports a package as
+// complete while the extension breaks on load, which is worse than not checking.
 //
 //   1. `import ... from './x.mjs'`      resolved against the importing file
 //   2. `import './x.mjs'`               side-effect only, no bindings, no `from`
-//   3. `import(chrome.runtime.getURL('link/x.mjs'))`  resolved against the extension root
-//   4. `<script src>` / `<link href>`   how popup.html and ai-host.html load their code
+//   3. `import(chrome.runtime.getURL('link/x.mjs'))`  against the extension root
+//   4. `<script src>` / `<link href>`   how popup.html and ai-host.html load code
+//   5. `new Worker('ai-worker.js')`     plus the importScripts() it pulls in
+//   6. `getURL('vendor/pdfjs/cmaps/')`  a directory the runtime appends filenames to
+//
+// (5) and (6) resolve against the extension root rather than the referring file: a
+// Worker URL resolves against its document and importScripts against the worker
+// script, and every HTML file and worker in this extension sits at the root.
 const RELATIVE_FROM = /from\s*['"](\.[^'"]+)['"]/g;
 const RELATIVE_BARE = /(?:^|[;{}\s])import\s*['"](\.[^'"]+)['"]/g;
 const RELATIVE_DYNAMIC = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
 const RUNTIME_URL = /getURL\(\s*['"]([^'"]+)['"]\s*\)/g;
 const HTML_ASSET = /<(?:script[^>]*\ssrc|link[^>]*\shref)\s*=\s*['"]([^'"]+)['"]/gi;
+const WORKER_CTOR = /new\s+(?:Shared)?Worker\s*\(\s*['"]([^'"]+)['"]/g;
+// importScripts takes any number of scripts in one call.
+const IMPORT_SCRIPTS = /importScripts\s*\(([^)]*)\)/g;
+const QUOTED = /['"]([^'"]+)['"]/g;
 
-// Relative to the importing file.
 const RELATIVE_PATTERNS = [RELATIVE_FROM, RELATIVE_BARE, RELATIVE_DYNAMIC];
-// Already relative to the extension root: getURL() takes a path from the package root,
-// and every HTML asset reference in this extension is root-level.
-const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET];
+const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET, WORKER_CTOR];
+
+function matchAll(pattern, text) {
+  pattern.lastIndex = 0;
+  const found = [];
+  let match;
+  while ((match = pattern.exec(text)) !== null) found.push(match[1]);
+  return found;
+}
 
 function resolveSpecifier(importer, specifier) {
   const parts = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")).split("/") : [];
@@ -95,14 +110,19 @@ function resolveSpecifier(importer, specifier) {
   return parts.join("/");
 }
 
-// A base URL such as getURL("vendor/pdfjs/cmaps/") names a directory the runtime appends
-// to, not a file, and an absolute URL is not ours to package.
-function isPackageableReference(specifier) {
-  if (!specifier || specifier.endsWith("/")) return false;
-  return !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier);
+/** An absolute URL is not ours to package. */
+function isOwnedReference(specifier) {
+  return Boolean(specifier) && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier);
 }
 
-/** Every file reachable from `entries` by import, runtime URL, or HTML reference. */
+export const isDirectoryReference = (reference) => reference.endsWith("/");
+
+/**
+ * Every file reachable from `entries` by import, runtime URL, HTML reference, or worker.
+ * Directory references are kept with their trailing slash and checked as prefixes --
+ * dropping them would silently excuse whatever lives underneath, which is how 168
+ * PDF.js CMaps could go unpackaged while this check still passed.
+ */
 export function collectModuleGraph(entries, readFile) {
   const seen = new Set();
   const queue = [...entries];
@@ -110,19 +130,19 @@ export function collectModuleGraph(entries, readFile) {
     const current = queue.pop();
     if (seen.has(current)) continue;
     seen.add(current);
+    if (isDirectoryReference(current)) continue;
     const text = readFile(current);
     if (typeof text !== "string") continue;
-    for (const [patterns, resolve] of [
-      [RELATIVE_PATTERNS, (specifier) => resolveSpecifier(current, specifier)],
-      [ROOT_PATTERNS, (specifier) => specifier],
-    ]) {
-      for (const pattern of patterns) {
-        pattern.lastIndex = 0;
-        let match;
-        while ((match = pattern.exec(text)) !== null) {
-          if (isPackageableReference(match[1])) queue.push(resolve(match[1]));
-        }
-      }
+
+    const rootRefs = ROOT_PATTERNS.flatMap((pattern) => matchAll(pattern, text));
+    for (const args of matchAll(IMPORT_SCRIPTS, text)) {
+      rootRefs.push(...matchAll(QUOTED, args));
+    }
+    for (const reference of rootRefs) {
+      if (isOwnedReference(reference)) queue.push(reference);
+    }
+    for (const reference of RELATIVE_PATTERNS.flatMap((pattern) => matchAll(pattern, text))) {
+      if (isOwnedReference(reference)) queue.push(resolveSpecifier(current, reference));
     }
   }
   return seen;
@@ -142,7 +162,18 @@ export function manifestEntryPoints(manifest) {
 
 export function assertRuntimeModulesPackaged(graph, leaves) {
   const packaged = new Set(leaves.map((leaf) => leaf.split("\\").join("/")));
-  const missing = [...graph].filter((file) => !packaged.has(file));
+  const missing = [];
+  for (const reference of graph) {
+    if (isDirectoryReference(reference)) {
+      // The runtime appends filenames to this prefix, so require it to be non-empty
+      // rather than naming files the check cannot know about.
+      if (![...packaged].some((leaf) => leaf.startsWith(reference))) {
+        missing.push(`${reference}* (no packaged files under this directory)`);
+      }
+    } else if (!packaged.has(reference)) {
+      missing.push(reference);
+    }
+  }
   if (missing.length) {
     throw new Error(
       `release archive is missing files the extension loads at runtime: ${missing.sort().join(", ")}`
