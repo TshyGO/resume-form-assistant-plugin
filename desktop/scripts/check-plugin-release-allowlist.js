@@ -60,6 +60,144 @@ export function assertPluginOnlyArchive(entries) {
   }
 }
 
+// The allowlist above answers "did anything forbidden get in". It cannot answer the
+// opposite question -- "is everything the extension actually loads present" -- and that
+// gap shipped a real break: background.js became a module importing ./link/worker.mjs
+// while release.yml still packed a file list with no link operand. The zip stayed
+// allowlist-clean and the service worker would have failed to load.
+// A file can enter the running extension six ways, and every one of them has to be in
+// the archive. Missing any makes this check confidently wrong: it reports a package as
+// complete while the extension breaks on load, which is worse than not checking.
+//
+//   1. `import ... from './x.mjs'`      resolved against the importing file
+//   2. `import './x.mjs'`               side-effect only, no bindings, no `from`
+//   3. `import(chrome.runtime.getURL('link/x.mjs'))`  against the extension root
+//   4. `<script src>` / `<link href>`   how popup.html and ai-host.html load code
+//   5. `new Worker('ai-worker.js')`     plus the importScripts() it pulls in
+//   6. `getURL('vendor/pdfjs/cmaps/')`  a directory the runtime appends filenames to
+//
+// (5) and (6) resolve against the extension root rather than the referring file: a
+// Worker URL resolves against its document and importScripts against the worker
+// script, and every HTML file and worker in this extension sits at the root.
+const RELATIVE_FROM = /from\s*['"](\.[^'"]+)['"]/g;
+const RELATIVE_BARE = /(?:^|[;{}\s])import\s*['"](\.[^'"]+)['"]/g;
+const RELATIVE_DYNAMIC = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+const RUNTIME_URL = /getURL\(\s*['"]([^'"]+)['"]\s*\)/g;
+const HTML_ASSET = /<(?:script[^>]*\ssrc|link[^>]*\shref)\s*=\s*['"]([^'"]+)['"]/gi;
+const WORKER_CTOR = /new\s+(?:Shared)?Worker\s*\(\s*['"]([^'"]+)['"]/g;
+// importScripts takes any number of scripts in one call.
+const IMPORT_SCRIPTS = /importScripts\s*\(([^)]*)\)/g;
+const QUOTED = /['"]([^'"]+)['"]/g;
+
+const RELATIVE_PATTERNS = [RELATIVE_FROM, RELATIVE_BARE, RELATIVE_DYNAMIC];
+const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET, WORKER_CTOR];
+
+function matchAll(pattern, text) {
+  pattern.lastIndex = 0;
+  const found = [];
+  let match;
+  while ((match = pattern.exec(text)) !== null) found.push(match[1]);
+  return found;
+}
+
+function resolveSpecifier(importer, specifier) {
+  const parts = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")).split("/") : [];
+  for (const segment of specifier.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+/** An absolute URL is not ours to package. */
+function isOwnedReference(specifier) {
+  return Boolean(specifier) && !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier);
+}
+
+export const isDirectoryReference = (reference) => reference.endsWith("/");
+
+// Icons are read as bytes by the browser, and parsing a binary as text invites a
+// stray byte sequence that happens to look like an import. Only code and markup
+// can reference anything; everything else is a leaf.
+const PARSEABLE = /\.(?:js|mjs|cjs|html|htm|css)$/i;
+
+/** Every file reachable from `entries` by import, runtime URL, HTML reference, or worker. */
+export function collectModuleGraph(entries, readFile) {
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const current = queue.pop();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    if (isDirectoryReference(current) || !PARSEABLE.test(current)) continue;
+    const text = readFile(current);
+    if (typeof text !== "string") continue;
+
+    const rootRefs = ROOT_PATTERNS.flatMap((pattern) => matchAll(pattern, text));
+    for (const args of matchAll(IMPORT_SCRIPTS, text)) {
+      rootRefs.push(...matchAll(QUOTED, args));
+    }
+    for (const reference of rootRefs) {
+      if (isOwnedReference(reference)) queue.push(reference);
+    }
+    for (const reference of RELATIVE_PATTERNS.flatMap((pattern) => matchAll(pattern, text))) {
+      if (isOwnedReference(reference)) queue.push(resolveSpecifier(current, reference));
+    }
+  }
+  return seen;
+}
+
+/** Entry points the browser loads directly, read out of the manifest. */
+export function manifestEntryPoints(manifest) {
+  const entries = [];
+  if (manifest.background && manifest.background.service_worker) {
+    entries.push(manifest.background.service_worker);
+  }
+  for (const script of manifest.content_scripts || []) {
+    entries.push(...(script.js || []), ...(script.css || []));
+  }
+  // Chrome loads these straight from the manifest; nothing imports them, so without
+  // seeding them here a release could ship a manifest pointing at absent icons.
+  entries.push(...Object.values(manifest.icons || {}));
+  entries.push(...Object.values((manifest.action || {}).default_icon || {}));
+  return [...new Set(entries)];
+}
+
+export function assertRuntimeModulesPackaged(graph, leaves, reviewedAssets = []) {
+  const packaged = new Set(leaves.map((leaf) => leaf.split("\\").join("/")));
+  const missing = [];
+  for (const reference of graph) {
+    if (!isDirectoryReference(reference)) {
+      if (!packaged.has(reference)) missing.push(reference);
+      continue;
+    }
+    // The runtime picks a filename under this prefix -- PDF.js chooses a CMap by the
+    // document's encoding -- so "at least one file is present" is not enough: any
+    // omitted map fails only for the documents that need it. The reviewed asset
+    // manifest already enumerates what belongs there, so require all of it.
+    const expected = reviewedAssets.filter((asset) => asset.startsWith(reference));
+    if (expected.length === 0) {
+      if (![...packaged].some((leaf) => leaf.startsWith(reference))) {
+        missing.push(`${reference}* (no packaged files under this directory)`);
+      }
+      continue;
+    }
+    const absent = expected.filter((asset) => !packaged.has(asset));
+    if (absent.length) {
+      const sample = absent.slice(0, 3).join(", ");
+      missing.push(
+        `${reference}* (${absent.length} of ${expected.length} reviewed files missing: ${sample}${absent.length > 3 ? ", ..." : ""})`
+      );
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      `release archive is missing files the extension loads at runtime: ${missing.sort().join(", ")}`
+    );
+  }
+}
+
 const isMain =
   Boolean(process.argv[1]) &&
   resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
@@ -71,5 +209,21 @@ if (isMain) {
   // The reviewed asset manifest is static; newly tracked descendants fail.
   const leaves = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries], {cwd:root,encoding:'utf8'}).trim().split(/\r?\n/);
   assertPluginOnlyArchive(leaves);
-  console.log("release.yml still packs plugin runtime files only");
+
+  const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
+  const graph = collectModuleGraph(manifestEntryPoints(manifest), (file) => {
+    try {
+      return readFileSync(join(root, file), "utf8");
+    } catch {
+      return null;
+    }
+  });
+  // The same reviewed manifest the allowlist uses as an upper bound serves as the
+  // lower bound for directory references: everything reviewed under a prefix must ship.
+  const reviewedAssets = JSON.parse(
+    readFileSync(new URL("./plugin-release-assets.json", import.meta.url), "utf8")
+  );
+  assertRuntimeModulesPackaged(graph, leaves, reviewedAssets);
+
+  console.log(`release.yml packs plugin runtime files only, and all ${graph.size} runtime files are present`);
 }

@@ -30,7 +30,7 @@ jobs:
             manifest.json background.js content.js content.css ai-helpers.js form-agent.js \
             ai-worker.js ai-host.js ai-host.html ai-client.js \
             resume-utils.js popup.html popup.css popup.js xlsx.full.min.js \
-            mammoth.browser.min.js vendor icons README.md LICENSE
+            mammoth.browser.min.js link vendor icons README.md LICENSE
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Create Release
