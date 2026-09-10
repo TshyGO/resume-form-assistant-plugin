@@ -118,6 +118,14 @@ export function describeBindResult(result) {
     if (reason === 'unknown_intent') {
       return { tone: 'warn', text: '这条待同步记录已经不在了，请重新保存一次。' };
     }
+    if (reason === 'awaiting_reconcile' || reason === 'not_paused') {
+      // Not "try later": this entry is waiting on a decision only the user can make, and
+      // telling them to retry sends them round a loop that cannot succeed.
+      return {
+        tone: 'warn',
+        text: '桌面换过档案库，这条不能直接重试，要先对账。请选择关联到已有申请、另存为新的，或者丢弃。'
+      };
+    }
     return { tone: 'warn', text: '这次没能绑定，请稍后再试。填表功能不受影响。' };
   }
 
@@ -126,4 +134,24 @@ export function describeBindResult(result) {
   }
 
   return { tone: 'warn', text: '这次没能保存到桌面，已经留在待同步里。' };
+}
+
+// What the four unresolved reconcile answers mean, and why none of them is a retry button.
+//
+// After a restore the queued envelope carries an epoch the desktop has replaced. Sending it
+// again is refused; sending it under the new epoch would be a different write the user never
+// asked for. So every one of these ends in a choice the user makes.
+const RECONCILE = {
+  purged: '这条在桌面上已经被永久删除了。桌面不会重建它。',
+  not_found: '当前档案库里没有找到这次写入的凭据。这不等于没有执行过——可能只是这份备份不含它。请先到桌面核对。',
+  conflict: '桌面上有一条身份相同但内容不同的记录，没有自动处理。',
+  unverifiable: '桌面无法核实这次写入是否发生过，不会自动重放。'
+};
+
+export function describeReconcileStatus(status) {
+  return {
+    tone: 'warn',
+    text: RECONCILE[status] ?? '桌面换过档案库，这条要你决定怎么处理。',
+    choices: ['associate', 'discard', 'resave']
+  };
 }

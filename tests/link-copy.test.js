@@ -170,3 +170,39 @@ test('a second bind for the same posting says it is already queued', async () =>
   assert.match(copy.text, /已经|队列/);
   assert.equal(copy.text.includes('没能'), false, 'the first click did work');
 });
+
+// --- reconciliation --------------------------------------------------------
+
+test('every reconcile verdict has its own explanation and none offers a plain retry', async () => {
+  const { describeReconcileStatus } = await load();
+
+  for (const status of ['purged', 'not_found', 'conflict', 'unverifiable']) {
+    const copy = describeReconcileStatus(status);
+    assert.equal(typeof copy.text, 'string');
+    assert.notEqual(copy.text, '');
+    // The only ways out are associate, discard and save-again. A plain "retry" would send an
+    // envelope stamped with an epoch the desktop has already replaced.
+    assert.deepEqual(copy.choices.sort(), ['associate', 'discard', 'resave']);
+  }
+});
+
+test('not_found says a receipt is missing and says that is not proof', async () => {
+  const { describeReconcileStatus } = await load();
+
+  const copy = describeReconcileStatus('not_found');
+
+  // §8.11: "not_found" means this archive holds no receipt, never "this never happened".
+  // The disclaimer has to be in the sentence the user reads, not only in the spec.
+  assert.match(copy.text, /没有找到|无法证明|凭据/);
+  assert.match(copy.text, /不等于|不代表|不能据此/);
+});
+
+test('a retry refused because the archive changed says so', async () => {
+  const { describeBindResult } = await load();
+  // Not "try later": this entry is waiting on a decision the user has to make, and telling
+  // them to retry sends them round a loop that cannot succeed.
+  const copy = describeBindResult({ status: 'rejected', reason: 'awaiting_reconcile' });
+
+  assert.match(copy.text, /档案库|对账/);
+  assert.equal(copy.text.includes('稍后再试'), false);
+});

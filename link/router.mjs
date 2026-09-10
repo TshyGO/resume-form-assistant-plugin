@@ -10,7 +10,7 @@ import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, drain, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, reconcile, extensionId }) {
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -68,6 +68,17 @@ export function createRouter({ session, intents, outbox, drain, extensionId }) {
       // application or delete it outright.
       await drain.cancel(message.messageId);
       return { ok: true };
+    }
+
+    if (type === MSG.resolve) {
+      // Associate, discard or save again. Only the user gets to make this call: none of the
+      // four unresolved reconcile answers authorises the plugin to decide on its own.
+      const probe = message.choice === 'discard' ? { identity: null } : await session.probe();
+      return reconcile.resolve(message.messageId, {
+        choice: message.choice,
+        applicationId: message.applicationId ?? null,
+        identity: probe.identity
+      });
     }
 
     if (type === MSG.removeIntent) {

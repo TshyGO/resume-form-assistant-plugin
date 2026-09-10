@@ -21,7 +21,7 @@ export function nextDelayMs(attempts) {
  * short rungs of the ladder only apply while the worker happens to still be alive; the alarm
  * catches everything else a little later. Later is fine. Never is not.
  */
-export function createDrain({ session, outbox, alarms, now }) {
+export function createDrain({ session, outbox, reconcile = null, alarms, now }) {
   async function run() {
     // Nothing queued means nothing to do, and probing is not free: it spawns a native host,
     // and per D06 the host starts the desktop application on demand. Waking every thirty
@@ -40,15 +40,19 @@ export function createDrain({ session, outbox, alarms, now }) {
       return { mode: probe.mode, saved: [], pending: [], failed: [] };
     }
 
+    // Pausing comes first, in the same pass. A stale entry that reaches drainOnce would be
+    // sent under an epoch the user never chose.
+    if (reconcile) await reconcile.pauseStale(probe.identity);
     const result = await outbox.drainOnce({ identity: probe.identity });
+    const reconciled = reconcile ? await reconcile.run(probe.identity) : null;
     await scheduleNext();
-    return { mode: probe.mode, ...result };
+    return { mode: probe.mode, ...result, reconciled };
   }
 
-  // Work the queue can make progress on by itself. Entries waiting for a person — stalled or
-  // failed — are not work.
+  // Work the queue can make progress on by itself: a pending entry to send, or a paused one
+  // waiting to be reconciled against the archive that exists now.
   async function hasWork() {
-    return (await outbox.list()).some(entry => entry.status === 'pending');
+    return (await outbox.list()).some(entry => entry.status === 'pending' || entry.status === 'paused');
   }
 
   async function retryNow(messageId) {
