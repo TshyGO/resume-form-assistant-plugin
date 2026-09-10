@@ -60,6 +60,67 @@ export function assertPluginOnlyArchive(entries) {
   }
 }
 
+// The allowlist above answers "did anything forbidden get in". It cannot answer the
+// opposite question -- "is everything the extension actually loads present" -- and that
+// gap shipped a real break: background.js became a module importing ./link/worker.mjs
+// while release.yml still packed a file list with no link operand. The zip stayed
+// allowlist-clean and the service worker would have failed to load.
+const RELATIVE_FROM = /from\s*['"](\.[^'"]+)['"]/g;
+const RELATIVE_DYNAMIC = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+
+function resolveSpecifier(importer, specifier) {
+  const parts = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")).split("/") : [];
+  for (const segment of specifier.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") parts.pop();
+    else parts.push(segment);
+  }
+  return parts.join("/");
+}
+
+/** Every file reachable from `entries` by static or dynamic relative import. */
+export function collectModuleGraph(entries, readFile) {
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const current = queue.pop();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const text = readFile(current);
+    if (typeof text !== "string") continue;
+    for (const pattern of [RELATIVE_FROM, RELATIVE_DYNAMIC]) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        queue.push(resolveSpecifier(current, match[1]));
+      }
+    }
+  }
+  return seen;
+}
+
+/** Entry points the browser loads directly, read out of the manifest. */
+export function manifestEntryPoints(manifest) {
+  const entries = [];
+  if (manifest.background && manifest.background.service_worker) {
+    entries.push(manifest.background.service_worker);
+  }
+  for (const script of manifest.content_scripts || []) {
+    entries.push(...(script.js || []), ...(script.css || []));
+  }
+  return entries;
+}
+
+export function assertRuntimeModulesPackaged(graph, leaves) {
+  const packaged = new Set(leaves.map((leaf) => leaf.split("\\").join("/")));
+  const missing = [...graph].filter((file) => !packaged.has(file));
+  if (missing.length) {
+    throw new Error(
+      `release archive is missing files the extension loads at runtime: ${missing.sort().join(", ")}`
+    );
+  }
+}
+
 const isMain =
   Boolean(process.argv[1]) &&
   resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
@@ -71,5 +132,16 @@ if (isMain) {
   // The reviewed asset manifest is static; newly tracked descendants fail.
   const leaves = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries], {cwd:root,encoding:'utf8'}).trim().split(/\r?\n/);
   assertPluginOnlyArchive(leaves);
-  console.log("release.yml still packs plugin runtime files only");
+
+  const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
+  const graph = collectModuleGraph(manifestEntryPoints(manifest), (file) => {
+    try {
+      return readFileSync(join(root, file), "utf8");
+    } catch {
+      return null;
+    }
+  });
+  assertRuntimeModulesPackaged(graph, leaves);
+
+  console.log(`release.yml packs plugin runtime files only, and all ${graph.size} runtime files are present`);
 }

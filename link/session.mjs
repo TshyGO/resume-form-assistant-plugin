@@ -1,7 +1,7 @@
 import { buildEnvelope, MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 
-export const PLUGIN_VERSION = '0.3.0';
+export const PLUGIN_VERSION = '0.4.0';
 
 /**
  * The five states §5.2.3 and §9 distinguish, plus `ready`. They are not severities: each one
