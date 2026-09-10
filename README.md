@@ -456,10 +456,28 @@ ai-client.js           请求进程准备及客户端取消顺序控制
 ai-helpers.js          字段匹配、数据清洗和辅助规则
 form-agent.js          受限新增计划、分组识别和执行检查
 resume-utils.js        PDF 文本、版本比较和错误提示辅助逻辑
+link/                  桌面程序连接：保存岗位、待同步队列、Native Messaging
+link/protocol/         D05 协议校验器的 vendored 副本（改动请改源文件后重新复制）
 vendor/pdfjs/          随扩展打包的 PDF.js 运行文件和许可证
 tests/                 单元测试
 icons/                 插件图标
 ```
+
+### 桌面程序连接（D07）
+
+装了 Resume Pro 桌面程序之后，侧边栏多出「保存岗位到本地」和「确认已投递」。**没装桌面程序时这两个按钮之外的一切照旧**：模板、AI 填写、手动取消都不依赖它。
+
+几条不能含糊的规则，改这块代码前先看一眼：
+
+- **「待同步」不等于「桌面已保存」。** 只有桌面持久化并回了 `resultId`，界面才允许说已保存。全部文案集中在 [`link/copy.mjs`](link/copy.mjs)，`tests/link-degradation.test.js` 按 §9 降级矩阵逐行核对。
+- **「未安装」和「未配对」是两件事。** 装了但没配对时要说去桌面粘贴扩展 ID，不能说没装。
+- **队列有两层。** 用户确认了字段但桌面不在 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）；选好绑定谁之后 → Bound outbox（铸 `messageId`、盖当时的 `sourceRestoreEpoch`）。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key。
+- **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联 / 丢弃 / 另存。
+- **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
+
+协议校验器不是这里写的，是 `desktop/crates/protocol/js/` 的副本，`tests/protocol-vendor.test.js` 锁死两边一致。改协议请改源文件再复制过来。
+
+开发期把桌面程序注册成 Native Messaging host 的办法见 [`desktop/DEV-NATIVE-MESSAGING.md`](desktop/DEV-NATIVE-MESSAGING.md)。配对之后要重新加载扩展或重启浏览器，否则新写的注册不生效。
 
 ### 本地开发安装
 

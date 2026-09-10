@@ -313,3 +313,50 @@ test('an intent that is already queued is not bound a second time later', async 
   assert.equal(again.status, 'duplicate');
   assert.equal(storage.data.desktopOutbox.length, 1);
 });
+
+// --- submit.confirm --------------------------------------------------------
+
+test('confirming a submission is a queued write like any other', async () => {
+  const { outbox, storage, sent } = await harness({ desktop: savedReply });
+
+  const result = await outbox.confirmSubmit({ applicationId: APPLICATION, identity: IDENTITY });
+
+  assert.equal(result.status, 'saved');
+  assert.equal(sent[0].message.messageType, 'submit.confirm');
+  assert.equal(sent[0].message.payload.applicationId, APPLICATION);
+  assert.deepEqual(storage.data.desktopOutbox, []);
+});
+
+test('a submit confirmation carries nothing but the application it names', async () => {
+  const { outbox, sent } = await harness({ desktop: savedReply });
+
+  await outbox.confirmSubmit({ applicationId: APPLICATION, identity: IDENTITY });
+
+  // D05 freezes this payload at three fields. `via` and `note` are D03's internal columns and
+  // must not appear on the wire.
+  assert.deepEqual(
+    Object.keys(sent[0].message.payload).sort(),
+    ['applicationId', 'payloadSha256', 'sourceRestoreEpoch']
+  );
+});
+
+test('a confirmation that cannot be delivered waits in the queue', async () => {
+  const { outbox, storage } = await harness({ desktop: message => errorReply(message, 'unavailable', true) });
+
+  const result = await outbox.confirmSubmit({ applicationId: APPLICATION, identity: IDENTITY });
+
+  assert.equal(result.status, 'pending');
+  assert.equal(storage.data.desktopOutbox[0].messageType, 'submit.confirm');
+  assert.equal(storage.data.desktopOutbox[0].sourceRestoreEpoch, EPOCH);
+});
+
+test('confirming a submission does not touch any intent', async () => {
+  const { outbox, intents, storage } = await harness({ desktop: savedReply });
+  await queuedIntent(intents);
+
+  await outbox.confirmSubmit({ applicationId: APPLICATION, identity: IDENTITY });
+
+  // Confirming a submission is unrelated to saving a posting, and unrelated to whether the
+  // AI fill worked. It must not consume a pending intent.
+  assert.equal(storage.data.desktopSaveIntents.length, 1);
+});
