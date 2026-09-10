@@ -13,6 +13,7 @@ const UPDATE_CACHE_KEY = "resumeProUpdateCache";
 const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_FAILURE_RETRY_MS = 60 * 60 * 1000;
+const MAX_LISTED_ROW_NUMBERS = 20;
 let pdfJsPromise = null;
 
 const StorageService = {
@@ -438,7 +439,7 @@ async function parseTemplateFile(file) {
   });
 
   if (missingKeyRows.length) {
-    throw new Error(`${formatRowNumbers(missingKeyRows)}缺少「字段名」（第二列）。`);
+    throw new Error(buildMissingKeyMessage(missingKeyRows));
   }
 
   const groups = groupOrder.map((groupName) => ({
@@ -453,12 +454,16 @@ async function parseTemplateFile(file) {
   return groups;
 }
 
-function formatRowNumbers(rowNumbers) {
-  const shown = rowNumbers.slice(0, 8);
+// A hand-edited sheet needs every offending row number, or the user fixes what is listed,
+// re-imports and fails again. Past a couple of dozen the cause is almost always a shifted
+// column rather than individual typos, and a wall of numbers helps nobody — so say that
+// instead.
+function buildMissingKeyMessage(rowNumbers) {
+  if (rowNumbers.length > MAX_LISTED_ROW_NUMBERS) {
+    return `共 ${rowNumbers.length} 行缺少「字段名」（第二列），请检查第二列是不是整列错位了。`;
+  }
 
-  return rowNumbers.length > shown.length
-    ? `第 ${shown.join("、")} 等 ${rowNumbers.length} 行`
-    : `第 ${shown.join("、")} 行`;
+  return `第 ${rowNumbers.join("、")} 行缺少「字段名」（第二列）。`;
 }
 
 function getTemplateNameFromFile(fileName) {
