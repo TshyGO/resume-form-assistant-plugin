@@ -6,6 +6,8 @@
   --success-soft: rgba(33, 185, 122, 0.12);
   --danger: #e35d6a;
   --danger-soft: rgba(227, 93, 106, 0.12);
+  --warning: #b7791f;
+  --warning-soft: rgba(214, 158, 46, 0.16);
   --text-main: #1f2937;
   --text-muted: #667085;
   --border: #d9def0;
@@ -292,6 +294,11 @@ select {
 .status-message.is-error {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.status-message.is-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .template-list {
