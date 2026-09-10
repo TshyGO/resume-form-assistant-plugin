@@ -160,6 +160,14 @@
               <button class="resume-pro__manager-button" type="button" id="resume-pro-save-cancel">取消</button>
             </div>
           </form>
+          <div class="resume-pro__candidates" id="resume-pro-candidates" hidden>
+            <p class="resume-pro__save-note" id="resume-pro-candidates-note"></p>
+            <div class="resume-pro__candidate-list" id="resume-pro-candidate-list"></div>
+            <div class="resume-pro__save-actions">
+              <button class="resume-pro__ai-button" type="button" id="resume-pro-bind-new">新建一条申请</button>
+              <button class="resume-pro__manager-button" type="button" id="resume-pro-bind-later">稍后再说</button>
+            </div>
+          </div>
           <div class="resume-pro__desktop-status" id="resume-pro-desktop-status" aria-live="polite"></div>
           <details class="resume-pro__pending" id="resume-pro-pending" hidden>
             <summary>待同步 <span id="resume-pro-pending-count">0</span> 条</summary>
@@ -1733,7 +1741,77 @@
     setDesktopStatus(copy.describeSaveResult(result ?? { status: "error" }));
     if (result?.status === "queued") {
       closeSaveForm();
+      if (result.mode === "ready") {
+        await offerCandidates(result.intent.intentId);
+      }
     }
+    refreshPendingList();
+  }
+
+  // Two layers, per §7. The exact layer is "this may be the same posting again"; the
+  // same-company layer is a hint and nothing more. Neither ever binds on its own — the
+  // default is always a new application.
+  async function offerCandidates(intentId) {
+    const box = shadowRoot?.querySelector("#resume-pro-candidates");
+    const list = shadowRoot?.querySelector("#resume-pro-candidate-list");
+    if (!box || !list) return;
+
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES", intentId });
+    } catch {
+      return;
+    }
+    if (result?.status !== "ok") return;
+
+    list.textContent = "";
+    const note = shadowRoot.querySelector("#resume-pro-candidates-note");
+    const total = result.exact.length + result.sameCompany.length;
+    note.textContent = total
+      ? "桌面里有相关的申请。要绑定到已有的哪一条，还是新建？默认新建。"
+      : "桌面里没有相关的申请，确认后会新建一条。";
+
+    appendCandidateGroup(list, "可能是同一岗位的重复投递", result.exact, intentId);
+    appendCandidateGroup(list, "同公司的其他岗位（仅供参考）", result.sameCompany, intentId);
+
+    box.hidden = false;
+    shadowRoot.querySelector("#resume-pro-bind-new").onclick = () => bindIntent(intentId, null);
+    shadowRoot.querySelector("#resume-pro-bind-later").onclick = () => {
+      // §5.2.4: cancelling the picker keeps the intent pending. Nothing is bound and nothing
+      // is discarded.
+      box.hidden = true;
+    };
+  }
+
+  function appendCandidateGroup(list, heading, candidates, intentId) {
+    if (!candidates.length) return;
+    const title = document.createElement("p");
+    title.className = "resume-pro__save-note";
+    title.textContent = heading;
+    list.appendChild(title);
+
+    for (const candidate of candidates) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "resume-pro__candidate";
+      row.textContent = `${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`;
+      row.addEventListener("click", () => bindIntent(intentId, candidate.applicationId));
+      list.appendChild(row);
+    }
+  }
+
+  async function bindIntent(intentId, applicationId) {
+    const { copy } = await loadDesktopModules();
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_BIND", intentId, applicationId });
+    } catch {
+      result = { status: "pending" };
+    }
+
+    const box = shadowRoot?.querySelector("#resume-pro-candidates");
+    if (box) box.hidden = true;
+    setDesktopStatus(copy.describeBindResult(result ?? { status: "pending" }));
     refreshPendingList();
   }
 
@@ -1785,42 +1863,73 @@
     if (!details || !list) return;
 
     let intents = [];
+    let outbox = [];
     try {
       const reply = await chrome.runtime.sendMessage({ type: "DESKTOP_LIST_QUEUE" });
       intents = reply?.intents || [];
+      outbox = reply?.outbox || [];
     } catch {
       return;
     }
 
-    details.hidden = intents.length === 0;
-    shadowRoot.querySelector("#resume-pro-pending-count").textContent = String(intents.length);
+    const total = intents.length + outbox.length;
+    details.hidden = total === 0;
+    shadowRoot.querySelector("#resume-pro-pending-count").textContent = String(total);
     list.textContent = "";
 
     for (const intent of intents) {
-      const row = document.createElement("div");
-      row.className = "resume-pro__pending-row";
-
-      const label = document.createElement("span");
-      label.textContent = `${intent.fields.company} · ${intent.fields.title}`;
-      label.title = intent.fields.sourceUrl || "";
-      row.appendChild(label);
-
-      const state = document.createElement("em");
-      state.textContent = intent.status === "pending_bind" ? "待绑定申请" : "待同步（尚未绑定申请）";
-      row.appendChild(state);
-
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "resume-pro__manager-button";
-      remove.textContent = "删除";
-      remove.addEventListener("click", async () => {
+      const row = pendingRow(
+        `${intent.fields.company} · ${intent.fields.title}`,
+        intent.fields.sourceUrl,
+        intent.status === "pending_bind" ? "待绑定申请" : "待同步（尚未绑定申请）"
+      );
+      if (intent.status === "pending_bind") {
+        row.appendChild(rowButton("选择绑定", () => offerCandidates(intent.intentId)));
+      }
+      row.appendChild(rowButton("删除", async () => {
         await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_INTENT", intentId: intent.intentId });
         refreshPendingList();
-      });
-      row.appendChild(remove);
-
+      }));
       list.appendChild(row);
     }
+
+    for (const entry of outbox) {
+      const row = pendingRow(
+        `${entry.payload?.company || ""} · ${entry.payload?.title || ""}`,
+        entry.payload?.sourceUrl,
+        describeOutboxState(entry)
+      );
+      list.appendChild(row);
+    }
+  }
+
+  function pendingRow(label, title, state) {
+    const row = document.createElement("div");
+    row.className = "resume-pro__pending-row";
+
+    const name = document.createElement("span");
+    name.textContent = label;
+    name.title = title || "";
+    row.appendChild(name);
+
+    const status = document.createElement("em");
+    status.textContent = state;
+    row.appendChild(status);
+    return row;
+  }
+
+  function rowButton(text, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "resume-pro__manager-button";
+    button.textContent = text;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function describeOutboxState(entry) {
+    if (entry.status === "failed") return "已停下，需要处理";
+    return `待同步（已尝试 ${entry.attempts || 0} 次）`;
   }
 
   chrome.runtime.onMessage.addListener((message) => {

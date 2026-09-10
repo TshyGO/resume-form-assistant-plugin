@@ -1,4 +1,4 @@
-import { MAX_INTENTS } from './limits.mjs';
+import { MAX_INTENTS, MAX_OUTBOX } from './limits.mjs';
 
 // User-facing wording for every outcome of a save, in one table.
 //
@@ -69,4 +69,61 @@ export function describeSaveResult(result) {
   }
 
   return { tone: 'warn', text: '这次没能保存，请稍后再试。填表功能不受影响。' };
+}
+
+// Why a write was refused, in words that mean something to the person who clicked. The
+// protocol code is kept out of the sentence: it is not the user's vocabulary, and several
+// of these codes mean "someone has to look at this", not "try again".
+const REFUSALS = {
+  previously_purged: '这条申请在桌面上已经被永久删除了，不会重建。如果还需要，请在桌面新建一条。',
+  conflict: '桌面上有一条同样身份但内容不同的记录，没有自动处理。请到桌面核对之后再决定。',
+  restore_epoch_mismatch: '桌面的档案库换过了，这条要先对账才能继续，已经暂停。',
+  invalid_payload: '桌面看不懂这次的内容，没有保存。请检查公司和岗位是否填对。',
+  identity_not_allowed: '桌面还没有配对这个插件，这次没有保存。',
+  protocol_incompatible: '桌面程序的版本和插件对不上，升级之后再试。'
+};
+
+export function describeBindResult(result) {
+  const { status, code, reason } = result ?? {};
+
+  if (status === 'saved') {
+    // The only sentence in the whole plugin that may claim the desktop has it, and it only
+    // runs after a persisted reply. Saving a posting is not applying to it.
+    return {
+      tone: 'success',
+      text: '桌面已保存（已收藏，不是已投递）。确认投递之后再点「确认已投递」。'
+    };
+  }
+
+  if (status === 'pending') {
+    return {
+      tone: 'pending',
+      text: '已经排进待同步队列，桌面可用之后会自动重试。现在还没有保存到桌面。'
+    };
+  }
+
+  if (status === 'duplicate') {
+    // The first click did the work. Saying "failed" here would send the user looking for a
+    // problem that does not exist.
+    return { tone: 'pending', text: '这条已经在待同步队列里了，没有重复排一份。' };
+  }
+
+  if (status === 'rejected') {
+    if (reason === 'queue_full') {
+      return {
+        tone: 'warn',
+        text: `待同步的消息已满（${MAX_OUTBOX} 条），这次没有绑定。请先处理已有的几条。填表功能不受影响。`
+      };
+    }
+    if (reason === 'unknown_intent') {
+      return { tone: 'warn', text: '这条待同步记录已经不在了，请重新保存一次。' };
+    }
+    return { tone: 'warn', text: '这次没能绑定，请稍后再试。填表功能不受影响。' };
+  }
+
+  if (status === 'failed') {
+    return { tone: 'warn', text: REFUSALS[code] ?? '桌面拒绝了这次写入，请到桌面核对。' };
+  }
+
+  return { tone: 'warn', text: '这次没能保存到桌面，已经留在待同步里。' };
 }

@@ -498,3 +498,34 @@
   font-size: 11px;
   color: #b45309;
 }
+
+.resume-pro__candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.resume-pro__candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resume-pro__candidate {
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.resume-pro__candidate:hover {
+  border-color: rgba(37, 99, 235, 0.6);
+  background: rgba(37, 99, 235, 0.06);
+}

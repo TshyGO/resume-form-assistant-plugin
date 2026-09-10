@@ -10,7 +10,7 @@ import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, extensionId }) {
+export function createRouter({ session, intents, outbox, extensionId }) {
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -32,8 +32,29 @@ export function createRouter({ session, intents, extensionId }) {
       return { ...result, mode: probe.mode, extensionId };
     }
 
+    if (type === MSG.candidates) {
+      const probe = await session.probe();
+      if (probe.mode !== 'ready') return { status: probe.mode };
+      const intent = (await intents.list()).find(item => item.intentId === message.intentId);
+      if (!intent) return { status: 'unknown_intent' };
+      return outbox.queryCandidates({ identity: probe.identity, fields: intent.fields });
+    }
+
+    if (type === MSG.bind) {
+      // The identity is taken from a handshake made now, not from whatever was current when
+      // the candidate list was drawn. The desktop may have been restored in between, and the
+      // epoch that gets stamped has to be the one the write will actually be judged against.
+      const probe = await session.probe();
+      if (probe.mode !== 'ready') return { status: 'pending', mode: probe.mode };
+      return outbox.bindAndSend({
+        intentId: message.intentId,
+        applicationId: message.applicationId ?? null,
+        identity: probe.identity
+      });
+    }
+
     if (type === MSG.listQueue) {
-      return { intents: await intents.list() };
+      return { intents: await intents.list(), outbox: await outbox.list() };
     }
 
     if (type === MSG.removeIntent) {

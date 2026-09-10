@@ -43,16 +43,23 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
   const { createStore } = await import('../link/store.mjs');
   const { createSession } = await import('../link/session.mjs');
   const { createIntents } = await import('../link/intents.mjs');
+  const { createOutbox } = await import('../link/outbox.mjs');
   const { createRouter } = await import('../link/router.mjs');
 
   let minted = 0;
   const uuid = () => `00000000-0000-4000-8000-${String(++minted).padStart(12, '0')}`;
   const now = () => new Date('2026-09-09T00:00:00.000Z');
   const store = createStore({ storage, uuid });
-  const session = createSession({ store, sendNative: async (host, message) => reply(message), sleep: async () => {}, uuid, now });
+  const sent = [];
+  const sendNative = async (host, message) => {
+    sent.push(message);
+    return reply(message);
+  };
+  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now });
   const intents = createIntents({ store, uuid, now });
-  const router = createRouter({ session, intents, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
-  return { router, storage };
+  const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
+  const router = createRouter({ session, intents, outbox, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
+  return { router, storage, sent };
 }
 
 test('an unknown message is left for the other listeners', async () => {
@@ -136,4 +143,87 @@ test('a probe reports the mode without saving anything', async () => {
 
   assert.equal(result.mode, 'ready');
   assert.equal('desktopSaveIntents' in storage.data, false);
+});
+
+// --- binding ---------------------------------------------------------------
+
+const APPLICATION = '77777777-7777-4777-8777-777777777777';
+
+function desktopThatAnswers(message) {
+  if (message.messageType === 'handshake') return handshakeReply(message);
+  if (message.messageType === 'application.queryCandidates') {
+    return {
+      response: {
+        protocolVersion: 1, correlationId: message.messageId, ok: true,
+        payload: {
+          exact: [{ applicationId: APPLICATION, company: '星河科技', title: '后端开发', stage: 'saved' }],
+          sameCompany: []
+        }
+      }
+    };
+  }
+  return {
+    response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
+  };
+}
+
+test('candidates are fetched for a queued intent', async () => {
+  const { router } = await makeRouter({ reply: desktopThatAnswers });
+  const saved = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: FIELDS });
+
+  const result = await router.handle({ type: 'DESKTOP_CANDIDATES', intentId: saved.intent.intentId });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.exact[0].applicationId, APPLICATION);
+});
+
+test('binding to a new application reports the desktop save', async () => {
+  const { router, storage } = await makeRouter({ reply: desktopThatAnswers });
+  const saved = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: FIELDS });
+
+  const result = await router.handle({ type: 'DESKTOP_BIND', intentId: saved.intent.intentId });
+
+  assert.equal(result.status, 'saved');
+  assert.equal(result.applicationId, APPLICATION);
+  assert.deepEqual(storage.data.desktopSaveIntents, []);
+});
+
+test('a bind while the desktop went away stays pending', async () => {
+  const { router, storage } = await makeRouter({
+    reply: message => message.messageType === 'handshake'
+      ? handshakeReply(message)
+      : {
+          response: {
+            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
+          }
+        }
+  });
+  const saved = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: FIELDS });
+
+  const result = await router.handle({ type: 'DESKTOP_BIND', intentId: saved.intent.intentId });
+
+  assert.equal(result.status, 'pending');
+  assert.equal(storage.data.desktopSaveIntents.length, 1);
+  assert.equal(storage.data.desktopOutbox.length, 1);
+});
+
+test('the queue listing includes bound messages, not only intents', async () => {
+  const { router } = await makeRouter({
+    reply: message => message.messageType === 'handshake'
+      ? handshakeReply(message)
+      : {
+          response: {
+            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
+          }
+        }
+  });
+  const saved = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: FIELDS });
+  await router.handle({ type: 'DESKTOP_BIND', intentId: saved.intent.intentId });
+
+  const listed = await router.handle({ type: 'DESKTOP_LIST_QUEUE' });
+
+  assert.equal(listed.outbox.length, 1);
+  assert.equal(listed.outbox[0].messageType, 'job.save');
 });

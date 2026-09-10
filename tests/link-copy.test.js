@@ -111,3 +111,62 @@ test('no copy in the whole table claims a desktop save', async () => {
     assert.equal(copy.text.includes('桌面已保存'), false, JSON.stringify(input));
   }
 });
+
+// --- binding ---------------------------------------------------------------
+
+test('a persisted write is the only thing allowed to say the desktop has it', async () => {
+  const { describeBindResult } = await load();
+
+  const copy = describeBindResult({ status: 'saved', applicationId: '77777777-7777-4777-8777-777777777777' });
+
+  assert.match(copy.text, /桌面已保存/);
+  assert.equal(copy.tone, 'success');
+});
+
+test('a desktop save says it is saved, not submitted', async () => {
+  const { describeBindResult } = await load();
+  // §5.2 rule 5 and walkthrough note: saving a posting is not applying to it. The stage is
+  // `saved` until the user says otherwise.
+  const copy = describeBindResult({ status: 'saved', applicationId: '77777777-7777-4777-8777-777777777777' });
+
+  assert.match(copy.text, /已收藏|不是已投递/);
+});
+
+test('a bind that could not reach the desktop is pending, not saved', async () => {
+  const { describeBindResult } = await load();
+
+  const copy = describeBindResult({ status: 'pending', mode: 'unavailable' });
+
+  assert.match(copy.text, /待同步/);
+  assert.equal(copy.text.includes('桌面已保存'), false);
+});
+
+test('a refused write names the reason without echoing the protocol', async () => {
+  const { describeBindResult } = await load();
+
+  const purged = describeBindResult({ status: 'failed', code: 'previously_purged' });
+  const conflict = describeBindResult({ status: 'failed', code: 'conflict' });
+
+  assert.equal(purged.tone, 'warn');
+  assert.notEqual(purged.text, conflict.text, 'different refusals need different explanations');
+  assert.equal(purged.text.includes('previously_purged'), false);
+});
+
+test('a full bound queue explains itself and promises filling still works', async () => {
+  const { describeBindResult } = await load();
+  const { MAX_OUTBOX } = await import('../link/limits.mjs');
+
+  const copy = describeBindResult({ status: 'rejected', reason: 'queue_full' });
+
+  assert.match(copy.text, new RegExp(String(MAX_OUTBOX)));
+  assert.match(copy.text, /填表/);
+});
+
+test('a second bind for the same posting says it is already queued', async () => {
+  const { describeBindResult } = await load();
+
+  const copy = describeBindResult({ status: 'duplicate', reason: 'already_queued' });
+
+  assert.match(copy.text, /已经|队列/);
+  assert.equal(copy.text.includes('没能'), false, 'the first click did work');
+});

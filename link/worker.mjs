@@ -2,6 +2,7 @@ import { nativeSender, sleep, storageAdapter } from './chrome.mjs';
 import { createStore } from './store.mjs';
 import { createSession } from './session.mjs';
 import { createIntents } from './intents.mjs';
+import { createOutbox } from './outbox.mjs';
 import { createRouter } from './router.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
 
@@ -29,6 +30,7 @@ export function installDesktopLink(api) {
   const router = createRouter({
     session: createSession(deps),
     intents: createIntents(deps),
+    outbox: createOutbox(deps),
     extensionId: api.runtime.id
   });
 
