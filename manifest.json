@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "116",
   "name": "Resume Pro",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "求职网申场景的简历信息填写辅助插件。",
   "permissions": [
     "offscreen",
