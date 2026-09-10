@@ -117,3 +117,63 @@ test("a fully packaged graph passes", () => {
     assertRuntimeModulesPackaged(graph, ["background.js", "link/worker.mjs", "manifest.json"]),
   );
 });
+
+// Three further ways a file enters the running extension, none of which the first
+// version of collectModuleGraph followed. link/extract.mjs and link/copy.mjs are
+// reached only by getURL, so the guard passed while they could have gone unpackaged.
+
+test("side-effect imports with no bindings are followed", () => {
+  const files = {
+    "a.mjs": `import './setup.mjs';\nimport { x } from './other.mjs';`,
+    "setup.mjs": ``,
+    "other.mjs": ``,
+  };
+  const graph = collectModuleGraph(["a.mjs"], (f) => files[f] ?? null);
+  assert.ok(graph.has("setup.mjs"), "bare `import './setup.mjs'` must be followed");
+  assert.ok(graph.has("other.mjs"));
+});
+
+test("chrome.runtime.getURL imports resolve against the extension root", () => {
+  const files = {
+    "content.js": `const [e, c] = await Promise.all([
+      import(chrome.runtime.getURL("link/extract.mjs")),
+      import(chrome.runtime.getURL("link/copy.mjs"))
+    ]);`,
+    "link/extract.mjs": `import { redactUrl } from './redact.mjs';`,
+    "link/copy.mjs": ``,
+    "link/redact.mjs": ``,
+  };
+  const graph = collectModuleGraph(["content.js"], (f) => files[f] ?? null);
+  // Root-relative, not resolved against content.js's directory, and transitive.
+  assert.ok(graph.has("link/extract.mjs"));
+  assert.ok(graph.has("link/copy.mjs"));
+  assert.ok(graph.has("link/redact.mjs"));
+});
+
+test("HTML script and link references are followed", () => {
+  const files = {
+    "ai-host.html": `<!doctype html><script src="ai-host.js"></script>`,
+    "ai-host.js": ``,
+    "popup.html": `<link rel="stylesheet" href="popup.css">\n<script src="popup.js"></script>`,
+    "popup.css": ``,
+    "popup.js": ``,
+  };
+  const a = collectModuleGraph(["ai-host.html"], (f) => files[f] ?? null);
+  assert.ok(a.has("ai-host.js"));
+  const p = collectModuleGraph(["popup.html"], (f) => files[f] ?? null);
+  assert.ok(p.has("popup.css") && p.has("popup.js"));
+});
+
+test("directory base URLs and absolute URLs are not treated as files", () => {
+  const files = {
+    "popup.js": `const base = chrome.runtime.getURL("vendor/pdfjs/cmaps/");
+      const w = chrome.runtime.getURL("vendor/pdfjs/pdf.worker.min.mjs");`,
+    "index.html": `<script src="https://cdn.example.com/x.js"></script><script src="//cdn/y.js"></script>`,
+    "vendor/pdfjs/pdf.worker.min.mjs": ``,
+  };
+  const graph = collectModuleGraph(["popup.js", "index.html"], (f) => files[f] ?? null);
+  assert.ok(graph.has("vendor/pdfjs/pdf.worker.min.mjs"));
+  assert.ok(!graph.has("vendor/pdfjs/cmaps/"), "a trailing-slash base URL is a directory, not a file");
+  assert.ok(!graph.has("https://cdn.example.com/x.js"), "absolute URLs are not ours to package");
+  assert.ok(!graph.has("//cdn/y.js"));
+});

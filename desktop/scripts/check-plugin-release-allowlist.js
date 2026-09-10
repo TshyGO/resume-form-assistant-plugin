@@ -65,8 +65,25 @@ export function assertPluginOnlyArchive(entries) {
 // gap shipped a real break: background.js became a module importing ./link/worker.mjs
 // while release.yml still packed a file list with no link operand. The zip stayed
 // allowlist-clean and the service worker would have failed to load.
+// A file can enter the running extension four ways, and every one of them has to be in
+// the archive. Missing any of these makes the check confidently wrong: it would report
+// a package as complete while the extension breaks on load.
+//
+//   1. `import ... from './x.mjs'`      resolved against the importing file
+//   2. `import './x.mjs'`               side-effect only, no bindings, no `from`
+//   3. `import(chrome.runtime.getURL('link/x.mjs'))`  resolved against the extension root
+//   4. `<script src>` / `<link href>`   how popup.html and ai-host.html load their code
 const RELATIVE_FROM = /from\s*['"](\.[^'"]+)['"]/g;
+const RELATIVE_BARE = /(?:^|[;{}\s])import\s*['"](\.[^'"]+)['"]/g;
 const RELATIVE_DYNAMIC = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
+const RUNTIME_URL = /getURL\(\s*['"]([^'"]+)['"]\s*\)/g;
+const HTML_ASSET = /<(?:script[^>]*\ssrc|link[^>]*\shref)\s*=\s*['"]([^'"]+)['"]/gi;
+
+// Relative to the importing file.
+const RELATIVE_PATTERNS = [RELATIVE_FROM, RELATIVE_BARE, RELATIVE_DYNAMIC];
+// Already relative to the extension root: getURL() takes a path from the package root,
+// and every HTML asset reference in this extension is root-level.
+const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET];
 
 function resolveSpecifier(importer, specifier) {
   const parts = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")).split("/") : [];
@@ -78,7 +95,14 @@ function resolveSpecifier(importer, specifier) {
   return parts.join("/");
 }
 
-/** Every file reachable from `entries` by static or dynamic relative import. */
+// A base URL such as getURL("vendor/pdfjs/cmaps/") names a directory the runtime appends
+// to, not a file, and an absolute URL is not ours to package.
+function isPackageableReference(specifier) {
+  if (!specifier || specifier.endsWith("/")) return false;
+  return !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier);
+}
+
+/** Every file reachable from `entries` by import, runtime URL, or HTML reference. */
 export function collectModuleGraph(entries, readFile) {
   const seen = new Set();
   const queue = [...entries];
@@ -88,11 +112,16 @@ export function collectModuleGraph(entries, readFile) {
     seen.add(current);
     const text = readFile(current);
     if (typeof text !== "string") continue;
-    for (const pattern of [RELATIVE_FROM, RELATIVE_DYNAMIC]) {
-      pattern.lastIndex = 0;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
-        queue.push(resolveSpecifier(current, match[1]));
+    for (const [patterns, resolve] of [
+      [RELATIVE_PATTERNS, (specifier) => resolveSpecifier(current, specifier)],
+      [ROOT_PATTERNS, (specifier) => specifier],
+    ]) {
+      for (const pattern of patterns) {
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+          if (isPackageableReference(match[1])) queue.push(resolve(match[1]));
+        }
       }
     }
   }
