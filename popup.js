@@ -13,6 +13,7 @@ const UPDATE_CACHE_KEY = "resumeProUpdateCache";
 const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_FAILURE_RETRY_MS = 60 * 60 * 1000;
+const MAX_LISTED_ROW_NUMBERS = 20;
 let pdfJsPromise = null;
 
 const StorageService = {
@@ -255,6 +256,9 @@ async function handleFileSelection(event) {
   const [file] = event.target.files || [];
   elements.templateFileInput.value = "";
 
+  const reimportTemplateId = popupState.reimportTemplateId;
+  popupState.reimportTemplateId = "";
+
   if (!file) {
     return;
   }
@@ -262,21 +266,24 @@ async function handleFileSelection(event) {
   try {
     const groups = await parseTemplateFile(file);
     const templateName = getTemplateNameFromFile(file.name);
+    const fieldCount = countTemplateFields({ groups });
+    let previousFieldCount = null;
 
     await StorageService.update((state) => {
-      if (popupState.reimportTemplateId) {
-        const target = state.templates.find((item) => item.id === popupState.reimportTemplateId);
+      if (reimportTemplateId) {
+        const target = state.templates.find((item) => item.id === reimportTemplateId);
 
         if (!target) {
           throw new Error("要重新导入的模板不存在。");
         }
 
+        previousFieldCount = countTemplateFields(target);
         target.groups = groups;
         state.activeTemplateId = target.id;
       } else {
         const nextTemplate = {
           id: crypto.randomUUID(),
-          name: templateName,
+          name: resolveTemplateName(templateName, state.templates),
           groups
         };
 
@@ -287,16 +294,49 @@ async function handleFileSelection(event) {
       return state;
     });
 
-    const successMessage = popupState.reimportTemplateId
-      ? "模板已用新的 Excel 内容覆盖。"
-      : "简历模板导入成功。";
+    const unchanged = previousFieldCount === fieldCount;
 
-    popupState.reimportTemplateId = "";
-    showStatus("template", successMessage, "success");
+    showStatus(
+      "template",
+      buildImportSuccessMessage(fieldCount, previousFieldCount),
+      unchanged ? "warning" : "success",
+      unchanged ? 0 : 6000
+    );
   } catch (error) {
-    popupState.reimportTemplateId = "";
-    showStatus("template", `导入失败：${error.message}`, "error", 0);
+    const hint = reimportTemplateId ? "本次导入未生效，原模板保持不变。" : "本次导入未生效。";
+    showStatus("template", `导入失败：${error.message}${hint}`, "error", 0);
   }
+}
+
+// The count is the only thing a user can check at a glance after editing the Excel by hand,
+// so say it out loud — and say it twice when nothing moved, because that almost always means
+// the file that got picked is not the file that got edited.
+function buildImportSuccessMessage(fieldCount, previousFieldCount) {
+  if (previousFieldCount === null) {
+    return `简历模板导入成功，共 ${fieldCount} 个字段。`;
+  }
+
+  if (previousFieldCount === fieldCount) {
+    return `模板已覆盖，仍是 ${fieldCount} 个字段，数量没有变化。如果刚在 Excel 里加过内容，请确认选中的是改完并保存后的那份文件。`;
+  }
+
+  return `模板已覆盖，字段 ${previousFieldCount} → ${fieldCount} 个。`;
+}
+
+function resolveTemplateName(templateName, templates) {
+  const usedNames = new Set(templates.map((template) => template.name));
+
+  if (!usedNames.has(templateName)) {
+    return templateName;
+  }
+
+  let index = 2;
+
+  while (usedNames.has(`${templateName} (${index})`)) {
+    index += 1;
+  }
+
+  return `${templateName} (${index})`;
 }
 
 async function handleConfigSubmit(event) {
@@ -369,6 +409,7 @@ async function parseTemplateFile(file) {
   const dataRows = rows.slice(1);
   const groupOrder = [];
   const groupMap = new Map();
+  const missingKeyRows = [];
 
   dataRows.forEach((row, index) => {
     const groupName = String(row[0] ?? "").trim();
@@ -379,8 +420,11 @@ async function parseTemplateFile(file) {
       return;
     }
 
+    // Collect every offending row instead of stopping at the first one, so a hand-edited
+    // sheet can be fixed in a single pass.
     if (!fieldKey) {
-      throw new Error(`第 ${index + 2} 行缺少字段名。`);
+      missingKeyRows.push(index + 2);
+      return;
     }
 
     if (!groupMap.has(groupName || "未分类")) {
@@ -394,6 +438,10 @@ async function parseTemplateFile(file) {
     });
   });
 
+  if (missingKeyRows.length) {
+    throw new Error(buildMissingKeyMessage(missingKeyRows));
+  }
+
   const groups = groupOrder.map((groupName) => ({
     name: groupName,
     fields: groupMap.get(groupName)
@@ -404,6 +452,18 @@ async function parseTemplateFile(file) {
   }
 
   return groups;
+}
+
+// A hand-edited sheet needs every offending row number, or the user fixes what is listed,
+// re-imports and fails again. Past a couple of dozen the cause is almost always a shifted
+// column rather than individual typos, and a wall of numbers helps nobody — so say that
+// instead.
+function buildMissingKeyMessage(rowNumbers) {
+  if (rowNumbers.length > MAX_LISTED_ROW_NUMBERS) {
+    return `共 ${rowNumbers.length} 行缺少「字段名」（第二列），请检查第二列是不是整列错位了。`;
+  }
+
+  return `第 ${rowNumbers.join("、")} 行缺少「字段名」（第二列）。`;
 }
 
 function getTemplateNameFromFile(fileName) {
@@ -933,4 +993,16 @@ function showParseStatus(message, variant, autoHideDelay = 2200) {
       elements.parseStatus.textContent = "";
     }, autoHideDelay);
   }
+}
+
+if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
+  self.ResumeProTemplateImportTest = {
+    cacheElements,
+    countTemplateFields,
+    handleFileSelection,
+    parseTemplateFile,
+    popupState,
+    resolveTemplateName,
+    StorageService
+  };
 }
