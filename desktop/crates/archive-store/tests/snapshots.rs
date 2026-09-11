@@ -136,6 +136,37 @@ fn a_complete_upload_becomes_one_snapshot_file_and_its_staging_is_cleared() {
 }
 
 #[test]
+fn a_replayed_completion_is_refused_when_the_snapshot_file_is_gone_or_altered() {
+    // The plugin deletes its only copy on a complete ACK, so a replay must not say "complete"
+    // on the strength of the database row alone.
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let db = ArchiveStore::open(cfg.clone()).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let upload = Upload::new(snapshot_v1(), 4096);
+    for index in 0..upload.count() {
+        upload.send(&db, &a.id, index).unwrap();
+    }
+    let meta = match db.complete_snapshot_upload(CLIENT, SNAPSHOT).unwrap() {
+        SnapshotCompletion::Completed(meta) => meta,
+        other => panic!("expected a completed snapshot, got {other:?}"),
+    };
+    let file = cfg.archive_dir.join(&meta.stored_rel_path);
+
+    std::fs::write(&file, b"altered").unwrap();
+    assert!(db.complete_snapshot_upload(CLIENT, SNAPSHOT).is_err());
+
+    std::fs::remove_file(&file).unwrap();
+    assert!(db.complete_snapshot_upload(CLIENT, SNAPSHOT).is_err());
+
+    std::fs::write(&file, &upload.bytes).unwrap();
+    assert!(matches!(
+        db.complete_snapshot_upload(CLIENT, SNAPSHOT).unwrap(),
+        SnapshotCompletion::AlreadyComplete(_)
+    ));
+}
+
+#[test]
 fn chunk_bytes_that_do_not_match_their_digest_are_refused_and_nothing_is_staged() {
     let dir = tempfile::tempdir().unwrap();
     let db = ArchiveStore::open(config(dir.path())).unwrap();

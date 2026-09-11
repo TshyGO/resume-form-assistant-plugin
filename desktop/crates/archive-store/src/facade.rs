@@ -219,6 +219,19 @@ impl ArchiveStore {
                 let meta = tx.get_snapshot(snapshot_id)?.ok_or_else(|| {
                     StoreError::Internal("upload marked complete without a snapshot row".into())
                 })?;
+                // A replay is answered with the complete ACK, and on that ACK the plugin deletes
+                // its only copy. Say it only while the file is really there and intact; the
+                // staged bytes are gone by now, so a missing file is an archive fault, never a
+                // fault in what the plugin sent.
+                crate::tx::verify_file(
+                    &tx.archive_dir,
+                    &meta.stored_rel_path,
+                    meta.byte_size,
+                    &meta.sha256,
+                )
+                .map_err(|err| {
+                    StoreError::Internal(format!("stored snapshot failed verification: {err}"))
+                })?;
                 return Ok(SnapshotCompletion::AlreadyComplete(meta));
             }
             let Some(bytes) = tx.assemble_staged_snapshot(client_instance_id, snapshot_id)? else {

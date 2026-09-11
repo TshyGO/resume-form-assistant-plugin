@@ -190,6 +190,10 @@ fn snapshot_chunk(request: &Request, store: &ArchiveStore) -> Result<Answer, Err
             plugin_snapshot_ack_payload(&snapshot_id, index, total)
         }
         Ok(SnapshotCompletion::Incomplete(progress)) => chunk_ack(&snapshot_id, index, total, &ctx.message_id, progress.chunk_cursor)?,
+        // Every chunk arrived and matched its own digest, yet together they are not the
+        // snapshot the envelope declares. The upload identity is immutable, so no resend can
+        // repair that; a chunk ACK here would have the plugin retry forever.
+        Err(StoreError::Validation(_)) => return Err(ErrorCode::InvalidPayload),
         // The chunk itself is durable, so its ACK is still true. Only the complete ACK is
         // withheld; the plugin keeps its copy and the next resend tries completion again.
         Err(_) => {
@@ -938,6 +942,30 @@ mod tests {
         let orphan = upload.chunk(&identity, "55555555-5555-4555-8555-555555555555", 0);
         assert!(matches!(apply(&orphan, &store), Err(ErrorCode::InvalidPayload)));
         assert!(store.snapshot_progress(CLIENT, SNAPSHOT).is_err());
+    }
+
+    #[test]
+    fn chunks_that_do_not_add_up_to_the_declared_snapshot_are_refused_not_retried_forever() {
+        // Each chunk matches its own digest, but together they are not the snapshot the
+        // envelope declares. Resending cannot fix that, so the answer is invalid_payload rather
+        // than a chunk ACK the plugin would keep retrying.
+        let (_dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let real = Upload::new(512);
+        let mut declared_bytes = real.bytes.clone();
+        *declared_bytes.last_mut().unwrap() ^= 0x01;
+        let declared = Upload { bytes: declared_bytes, size: real.size };
+
+        let last = real.count() - 1;
+        for index in 0..last {
+            let payload = ack(&declared.chunk_with(&identity, &app_id, index, real.piece(index).to_vec(), &message_for(index)), &store);
+            assert_eq!(payload["ackKind"], "chunk");
+        }
+        let final_chunk = declared.chunk_with(&identity, &app_id, last, real.piece(last).to_vec(), &message_for(last));
+        assert!(matches!(apply(&final_chunk, &store), Err(ErrorCode::InvalidPayload)));
+        assert!(matches!(apply(&final_chunk, &store), Err(ErrorCode::InvalidPayload)), "and the same on a resend");
+        assert!(store.get_snapshot(SNAPSHOT).unwrap().is_none());
     }
 
     #[test]

@@ -92,6 +92,21 @@ mod tests {
     }
 
     #[test]
+    fn a_file_left_by_an_attempt_that_never_committed_is_replaced() {
+        // A crash between the rename and the SQLite commit leaves the target behind; the next
+        // attempt has to be able to write over it on every platform, Windows included.
+        let dir = tempfile::tempdir().unwrap();
+        let rel = rel_path_for("66666666-6666-4666-8666-666666666666").unwrap();
+        write_atomically(dir.path(), &rel, b"left over from a rolled-back attempt").unwrap();
+        let partial = dir.path().join("snapshots").join(".66666666-6666-4666-8666-666666666666.json.partial");
+        std::fs::write(&partial, b"torn").unwrap();
+
+        write_atomically(dir.path(), &rel, b"the real bytes").unwrap();
+        assert_eq!(std::fs::read(dir.path().join(&rel)).unwrap(), b"the real bytes");
+        assert!(!partial.exists());
+    }
+
+    #[test]
     fn the_template_label_comes_only_from_a_v1_document() {
         let v1 = br#"{"format":"resume-pro.snapshot","formatVersion":1,"templateName":" A ","templateVersion":"abc"}"#;
         assert_eq!(template_of(v1), ("A".into(), Some("abc".into())));
