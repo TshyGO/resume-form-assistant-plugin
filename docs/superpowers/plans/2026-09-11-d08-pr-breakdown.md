@@ -142,7 +142,7 @@
 - `staging` 经注入的 `kv = { get, put, delete, list }`（真实实现在 `chrome.mjs` 包 IndexedDB，数据库 `resume-pro-desktop`、object store `snapshots`、key = `snapshotId`；测试用 Map 实现）。记录形状：`{ snapshotId, sha256, byteSize, chunkCount, bytes: ArrayBuffer, chunks: [{chunkIndex, chunkSha256, chunkMessageId: null}], templateName, templateVersion, createdAt, binding: null }`。`binding` 在 PR4 绑定时写入（`applicationId` / `archiveId` / `sourceRestoreEpoch` / `recordId`），它是修复 outbox 所需的全部信息。
 - `stage(snapshot)`：先查配额（≤ 20 份且合计 ≤ 20 MiB），满了返回 `{ status: 'full' }`，**不覆盖、不挤掉旧项**；写入后读回核对 `sha256`，不一致视为失败。
 - 任何 IDB 异常（打不开、配额、事务中止）一律返回 `{ status: 'unavailable', reason }`，不抛到填表路径。
-- `d08_idb_check.py`（仿 `nm_browser_check.py`，Playwright 驱动已发布的插件）：从 SW 暂存一份合成快照 → 用 CDP `ServiceWorker.stopWorker` 停掉 SW → 再唤醒后读回并比对 SHA-256 → 关闭并重开浏览器（同一 user data dir）→ 再读回比对。
+- `d08_idb_check.py`（仿 `nm_browser_check.py`，Playwright 驱动已发布的插件）：从扩展页用插件自己的模块暂存一份多块合成快照 → 在 SW 里用裸 IndexedDB API 读回比对 SHA-256 → 关闭并重开浏览器（同一 user data dir）→ 在新的 SW 实例里再读回、并经 `staging.readChunk` 逐块拼回比对。**不单独做「停 SW」**：IDB 数据在浏览器进程的存储后端，不在 SW 的 renderer 里，空闲回收只丢 renderer；浏览器重启丢掉全部进程、必须从磁盘读回，是更严格的情形。实测 Playwright 挂在 SW 上的调试器会阻止回收，CDP `stopAllWorkers` 不生效，关 SW target 会拖垮整个会话，`runtime.reload()` 会卸掉命令行加载的扩展。
 
 **测试：**
 

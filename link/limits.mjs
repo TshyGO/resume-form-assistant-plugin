@@ -20,3 +20,11 @@ export const BACKOFF_STEPS_MS = [1_000, 5_000, 30_000, 120_000, 600_000, 1_800_0
 // chrome.alarms will not fire faster than this, so anything shorter runs in the worker while
 // it is still alive and falls back to an alarm once it is not.
 export const MIN_ALARM_DELAY_MS = 30_000;
+
+// D01 §8.5: snapshots waiting in extension IndexedDB, whichever limit is reached first. A full
+// staging area refuses the new snapshot; it never evicts one the user was told is pending.
+export const MAX_STAGED_SNAPSHOTS = 20;
+export const MAX_STAGED_BYTES = 20 * 1024 * 1024;
+
+// An unfinished snapshot older than this is brought to the user. It is never deleted for age.
+export const STAGING_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
