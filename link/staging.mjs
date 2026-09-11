@@ -16,13 +16,28 @@ import { sha256Hex } from './snapshot.mjs';
  * worker passes an IndexedDB adapter (link/chrome.mjs); tests pass a Map.
  */
 export function createStaging({ kv, now = () => new Date(), uuid }) {
+  // Every write goes through here, one at a time. The worker is the only writer, but its
+  // message handlers overlap: two tabs confirming at once would otherwise both pass the
+  // capacity check on the same listing and both insert.
+  let tail = Promise.resolve();
+  function serial(operation) {
+    const run = tail.then(operation, operation);
+    tail = run.catch(() => {});
+    return run;
+  }
+
   /**
    * Store a built snapshot. Returns `{ status: 'staged', record }`, or `{ status: 'full',
    * reason }` when a product limit is reached, or `{ status: 'unavailable', reason }` when
    * IndexedDB fails. Never throws: this runs right after a fill, and a storage problem must
    * cost the user the snapshot, not the fill.
    */
-  async function stage(snapshot) {
+  function stage(snapshot) {
+    return serial(() => stageNow(snapshot));
+  }
+
+  async function stageNow(snapshot) {
+    let written = null;
     try {
       const staged = await kv.list();
       if (staged.length >= MAX_STAGED_SNAPSHOTS) return { status: 'full', reason: 'count' };
@@ -49,6 +64,7 @@ export function createStaging({ kv, now = () => new Date(), uuid }) {
       };
 
       await kv.put(record.snapshotId, record);
+      written = record.snapshotId;
 
       // Read it back before calling it staged. "Staged" is a promise that the upload can
       // resume from these bytes after a restart; a copy that does not hash right cannot keep it.
@@ -60,6 +76,8 @@ export function createStaging({ kv, now = () => new Date(), uuid }) {
 
       return { status: 'staged', record: stored };
     } catch (error) {
+      // A record that was written but never confirmed must not hold quota or be listed later.
+      if (written) await kv.delete(written).catch(() => {});
       return { status: 'unavailable', reason: error?.name || 'indexeddb_error' };
     }
   }
@@ -76,16 +94,18 @@ export function createStaging({ kv, now = () => new Date(), uuid }) {
     return new Uint8Array(record.bytes.slice(chunk.start, chunk.end));
   }
 
-  async function update(snapshotId, change) {
-    const record = await get(snapshotId);
-    if (!record) return null;
-    const next = change(record);
-    await kv.put(snapshotId, next);
-    return next;
+  function update(snapshotId, change) {
+    return serial(async () => {
+      const record = await get(snapshotId);
+      if (!record) return null;
+      const next = change(record);
+      await kv.put(snapshotId, next);
+      return next;
+    });
   }
 
-  async function remove(snapshotId) {
-    await kv.delete(snapshotId);
+  function remove(snapshotId) {
+    return serial(() => kv.delete(snapshotId));
   }
 
   async function list() {

@@ -159,3 +159,40 @@ test('a 2 MiB snapshot needs at most 64 chunks, well inside the protocol limit',
   const chunks = await planChunks(new Uint8Array(2097152));
   assert.equal(chunks.length, 64);
 });
+
+test('camelCase and Chinese credential names are recognised too', async () => {
+  const { isSecretFieldName } = await load();
+  for (const name of ['apiKey', 'accessToken', 'clientSecret', 'otpCode', 'userPassword', 'API 密钥', '访问令牌', '私钥']) {
+    assert.equal(isSecretFieldName(name), true, name);
+  }
+  for (const name of ['Tokyo', 'hotPot', 'tokenizer', 'photoUrl', '钥匙扣']) {
+    assert.equal(isSecretFieldName(name), false, name);
+  }
+});
+
+test('a credential pasted into an innocuous field is dropped by its value', async () => {
+  const { buildSnapshot, isSecretFieldValue } = await load();
+  const leaky = {
+    name: '导入的模板',
+    groups: [{
+      name: '其他',
+      fields: [
+        { key: '备注', value: 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123' },
+        { key: '补充', value: 'password: hunter2' },
+        { key: '链接', value: 'https://example.com/cb?access_token=abcdef123456' },
+        { key: '工具', value: 'sk-abcdefghijklmnopqrstuvwxyz012345' },
+        { key: '个人简介', value: '熟悉 token 化与 API Key 管理平台开发，会配置 Cookie 策略' },
+        { key: '邮箱', value: 'demo@example.com' }
+      ]
+    }]
+  };
+  const snapshot = await buildSnapshot(leaky, { now: at('2026-09-12T08:00:00.000Z') });
+  const text = Buffer.from(snapshot.bytes).toString('utf8');
+  for (const secret of ['abcdefghijklmnopqrstuvwxyz0123', 'hunter2', 'abcdef123456', 'sk-abcdefghijklmnopqrstuvwxyz012345']) {
+    assert.equal(text.includes(secret), false, secret);
+  }
+  assert.equal(snapshot.omittedFieldCount, 4);
+  assert.match(text, /API Key 管理平台/);
+  assert.match(text, /demo@example\.com/);
+  assert.equal(isSecretFieldValue('20k'), false);
+});

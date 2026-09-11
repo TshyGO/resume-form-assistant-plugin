@@ -68,7 +68,7 @@
   "omittedFieldCount": 0 }
 ```
 
-- 用 vendored `canonicalJson` 序列化（键排序、compact、UTF-8），同一模板永远得到同一字节。
+- 用 vendored `canonicalJson` 序列化（键排序、compact、UTF-8），同一模板在同一时刻（注入相同的 `now`）得到同一字节；`capturedAt` 是字节的一部分，跨捕获时间只有 `templateVersion` 稳定。
 - `templateVersion` = 模板内容（`groups`，不含 `capturedAt`）canonical JSON 的 SHA-256 前 12 位，满足 §8.5「无版本号则用内容哈希短码」。
 - **再剥一层 secret**（data-privacy §4.1「桌面留档仍要再剥一层」）：字段名命中 `密码|口令|password|passwd|pwd|验证码|校验码|otp|api[\s_-]?key|token|cookie|secret|授权码` 的整条字段丢弃，只记 `omittedFieldCount`。不确定就丢，不「先存再看」。
 - `byteSize > 2097152` → 本次不带快照，明确告知，填写和元数据留档照常。
@@ -80,7 +80,7 @@
 每个块请求只做「校验过的字节入库」。凑齐时用一个 **临时** assembler（或同等逻辑）从库里按下标读回全部块、核对总长度与 `snapshotSha256`，用完立即 `forget`；失败 `cancel`。这样 D05 的「必须 forget / cancel、活动会话上限 16」天然满足，应用重启也不丢进度（进度在库里，不在内存）。
 
 **6. 快照行的 `templateName` 从快照内容读，不改协议。**
-`snapshot.chunk` 没有模板名，`finalize` 缺省写 `"unknown"`。完整字节核对哈希之后，解析决策 3 的格式取 `templateName` / `templateVersion` 写进 `finalize`。格式不认识就退回 `"unknown"` 并照常入库——字节已经逐块 ACK 过，此时拒绝会让上传永远卡住。
+`snapshot.chunk` 没有模板名，`finalize` 缺省写 `"unknown"`。完整字节核对哈希之后，解析决策 3 的格式取 `templateName` / `templateVersion` 写进 `finalize`。格式不认识就退回 `"unknown"` 并照常入库——字节已经逐块 ACK 过，此时拒绝会让上传永远卡住。查看时（PR6 `get_snapshot_cmd`）只按 v1 解析 `format == "resume-pro.snapshot" && formatVersion == 1`；其他格式或更高版本返回明确的错误（「需要更新桌面程序才能查看」），界面不展示部分内容，磁盘上的原始字节不动，等新版桌面来读。
 
 **7. 绑定后先发 `fill.submit`，再发快照块。**
 事件是小消息，先落能让时间线最快出现记录；快照是可选附件，失败不应拖住事件。时间线据此要能显示「快照上传未完成」。
@@ -345,7 +345,7 @@
 
 - `d08_browser_check.py`（驱动已发布的插件本身，仿 `d07_browser_check.py`）四个阶段：
   1. **离线留档后改模板**（走查 10.10）：桌面未运行 → 用模板 v1 填写合成表单 → 留档并附快照 → 改成 v2 → 启动桌面 → 待同步里选申请 → 等上传完成 → 桌面打开的快照内容是 v1；
-  2. **上传中断**（走查 10.14）：上传到一半用 CDP 停 SW → 恢复后完成，总哈希不变；
+  2. **上传中断**（走查 10.14）：上传到一半退出桌面程序（先把可执行文件挪开，防止宿主重新拉起）→ 恢复后从持久游标续传完成，总哈希不变（CDP 停 SW 在 Playwright 下不可行，见 PR1 V12）；
   3. **拒绝留档**：填写后点「不留档」→ 桌面库里没有新事件、NM 零写入；
   4. **敏感字段**：模板里放合成的「登录密码」字段、页面 URL 带 `access_token` → 快照、事件、桌面日志、备份目录里都搜不到这两个值。
   **关闭顺序：先让应用退出，再关浏览器**（D06 的实测约束）。
