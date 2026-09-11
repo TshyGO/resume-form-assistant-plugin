@@ -196,3 +196,23 @@ test('a credential pasted into an innocuous field is dropped by its value', asyn
   assert.match(text, /demo@example\.com/);
   assert.equal(isSecretFieldValue('20k'), false);
 });
+
+test('plural credential labels and credential groups are dropped too', async () => {
+  const { buildSnapshot, isSecretFieldName } = await load();
+  for (const name of ['Passwords', 'API Keys', 'Cookies', 'Secrets', 'accessTokens', 'OTPs']) {
+    assert.equal(isSecretFieldName(name), true, name);
+  }
+  const sheet = {
+    name: '导入的表',
+    groups: [
+      { name: 'API Keys', fields: [{ key: 'OpenAI', value: 'opaque-synthetic-credential' }, { key: 'Anthropic', value: 'another-opaque-one' }] },
+      { name: '基本信息', fields: [{ key: '姓名', value: '合成' }] }
+    ]
+  };
+  const snapshot = await buildSnapshot(sheet, { now: at('2026-09-12T08:00:00.000Z') });
+  const text = Buffer.from(snapshot.bytes).toString('utf8');
+  assert.equal(text.includes('opaque-synthetic-credential'), false);
+  assert.equal(text.includes('API Keys'), false);
+  assert.equal(snapshot.omittedFieldCount, 2);
+  assert.match(text, /合成/);
+});
