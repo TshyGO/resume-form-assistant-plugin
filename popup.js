@@ -563,6 +563,12 @@ function moveModelActive(step) {
 }
 
 function handleModelKeydown(event) {
+  // While an IME is composing, arrows pick candidates and Enter commits the text: those
+  // keys belong to the input method, not to the list.
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+
   const hasSuggestions = Boolean(popupState.modelResult?.models.length);
 
   if (event.key === "ArrowDown" && hasSuggestions) {
