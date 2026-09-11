@@ -7,7 +7,7 @@ use crate::applications::{
 use crate::error::StoreError;
 use crate::evidence::AttachmentRefReport;
 use crate::model::*;
-use crate::receipts::SnapshotProgress;
+use crate::receipts::{SnapshotCompletion, SnapshotProgress};
 use crate::store::ArchiveStore;
 use crate::suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 use crate::todos::TodoPatch;
@@ -198,6 +198,42 @@ impl ArchiveStore {
     ) -> Result<ResumeSnapshotMeta, StoreError> {
         self.transaction(|tx| {
             tx.finalize_snapshot_upload(client_instance_id, snapshot_id, stored_rel_path)
+        })
+    }
+
+    /// Turn a fully staged upload into the snapshot file and its row (D08).
+    ///
+    /// One transaction: assemble the staged chunks and check them against the declared size
+    /// and digest, write `snapshots/<id>.json` atomically, commit the snapshot row and drop the
+    /// staged bytes. Any failure rolls the rows back and leaves the chunks staged, so the next
+    /// chunk the plugin sends — a resend is what it does when no complete ACK arrives — tries
+    /// again. A file left behind by a failed commit is overwritten with the same bytes.
+    pub fn complete_snapshot_upload(
+        &self,
+        client_instance_id: &str,
+        snapshot_id: &str,
+    ) -> Result<SnapshotCompletion, StoreError> {
+        self.transaction(|tx| {
+            let progress = tx.snapshot_progress(client_instance_id, snapshot_id)?;
+            if progress.full_acked {
+                let meta = tx.get_snapshot(snapshot_id)?.ok_or_else(|| {
+                    StoreError::Internal("upload marked complete without a snapshot row".into())
+                })?;
+                return Ok(SnapshotCompletion::AlreadyComplete(meta));
+            }
+            let Some(bytes) = tx.assemble_staged_snapshot(client_instance_id, snapshot_id)? else {
+                return Ok(SnapshotCompletion::Incomplete(progress));
+            };
+            let rel = crate::snapshot_file::rel_path_for(snapshot_id)?;
+            crate::snapshot_file::write_atomically(&tx.archive_dir, &rel, &bytes)?;
+            let template = crate::snapshot_file::template_of(&bytes);
+            let meta = tx.finalize_snapshot_upload_with(
+                client_instance_id,
+                snapshot_id,
+                &rel,
+                Some(template),
+            )?;
+            Ok(SnapshotCompletion::Completed(meta))
         })
     }
 

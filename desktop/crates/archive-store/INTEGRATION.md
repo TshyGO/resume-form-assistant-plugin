@@ -19,9 +19,13 @@ Host 持有一个 ArchiveStore。注入 `HostPaths::archive_dir` 与 `HostPaths:
 
 ## Snapshot boundary (important)
 
-SnapshotChunkInput 仅登记**已由调用方验证并持久化的块元数据**；不接收 bytesBase64，不实现 D05 组装器。调用方必须在登记之前检查原始块字节与摘要，并完成可靠保存。此处返回 Committed 仅证明元数据事务提交，**不能单独据此向插件发分片或完整文件 ACK、也不能删除客户端暂存**。
+**D08 起（schema v2）块字节进库。** `SnapshotChunkInput.bytes` 携带解码后的块字节（不参与 `PluginOp::digest()`，`chunk_sha256` 已钉住它们）。`op_snapshot_chunk` 先核对字节的 SHA-256 与长度，再把账本行、`snapshot_chunk_bytes` 行与回执放进 **同一个事务**。所以 `submit_plugin_message` 返回 Committed / Replayed 之后，`snapshot_progress().chunk_cursor` 就是真实落盘的连续游标——D06 桥接据此用 `DurableChunk::committed(...)` 构造分片 ACK。
 
-`finalize_snapshot_upload` 要求完整账本、当前 epoch、绑定申请和真实档案内文件存在，重新核对整文件长度/总 SHA-256 并刷新文件后才登记完整快照。D06/D08 仍负责分片传输、逐块完整性、不可变文件发布，以及正式协议 ACK。此 API 不写入/拼装附件字节；外部文件一旦登记必须保持不可变。
+`complete_snapshot_upload(client, snapshot)` 在一个事务里：按下标读回全部块 → 核对总长度与 `snapshotSha256` → 原子写 `snapshots/<snapshotId>.json`（临时名 → `sync_all` → rename）→ 从 v1 快照内容取模板名 → `finalize_snapshot_upload_with` 登记快照行、置 `full_acked`、删除该上传的暂存块字节。返回 `Incomplete` / `Completed` / `AlreadyComplete`；只有后两者之后才可发 `ackKind: snapshot`。失败整体回滚，块字节保留，下一次任一块重发会重试；上次失败留下的同名文件会被相同字节覆盖。
+
+模板名 **不回写** `snapshot_uploads`：那两列参与每块的父身份比对，回写会让完整 ACK 丢失后的重发撞上 `conflict`。
+
+`finalize_snapshot_upload(client, snapshot, rel_path)` 仍保留给「调用方自己写文件」的路径：要求完整账本、当前 epoch、绑定申请和真实档案内文件存在，重新核对整文件长度/总 SHA-256 并刷新文件后才登记完整快照，同样会清掉暂存块字节。外部文件一旦登记必须保持不可变。永久删除申请时连同暂存块字节一起删除。
 
 恢复后旧 upload 不继续写；显式恢复/另存应由 D08/D12 制定新传输身份，不原地篡改旧来源 epoch。D12 应在关闭旧 Store 后处理新目录、验证及指针切换；完整备份期间的 DB/文件一致性屏障仍由唯一宿主与 D12 提供。
 

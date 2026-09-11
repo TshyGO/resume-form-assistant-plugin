@@ -23,6 +23,7 @@ pub mod normalize;
 pub mod plugin;
 pub mod receipts;
 pub mod schema;
+mod snapshot_file;
 pub mod stage;
 pub mod store;
 pub mod suggestions;
@@ -39,7 +40,7 @@ pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
 pub use migration::current_schema_version;
 // model::* 已含 Stage / StageUpdateMode / Fold / Occurred / EventPayload 等模型类型。
 pub use model::*;
-pub use receipts::SnapshotProgress;
+pub use receipts::{SnapshotCompletion, SnapshotProgress};
 pub use receipts::{
     FillSubmitInput, JobSaveInput, PluginOp, PluginWriteContext, PluginWriteOutcome,
     ReconcileOutcome, ReconcileQueryItem, ReconcileReply, SnapshotChunkInput, SubmitConfirmInput,

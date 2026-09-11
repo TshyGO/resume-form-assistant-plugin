@@ -639,6 +639,10 @@ impl StoreTx<'_> {
         // 5. 快照与分片账本(回执墓碑已保留)。
         for sid in &snapshot_ids {
             self.conn().execute(
+                "DELETE FROM snapshot_chunk_bytes WHERE snapshot_id = ?1",
+                params![sid],
+            )?;
+            self.conn().execute(
                 "DELETE FROM snapshot_chunks WHERE snapshot_id = ?1",
                 params![sid],
             )?;

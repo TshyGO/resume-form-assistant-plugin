@@ -7,9 +7,12 @@
 use archive_store::{
     ApplicationCandidate, ArchiveIdentity, ArchiveStore, FillOutcome, FillSubmitInput,
     JobSaveInput, Occurred, PluginOp, PluginWriteContext, PluginWriteOutcome, ReconcileOutcome,
-    ReconcileQueryItem, StoreError, SubmitConfirmInput,
+    ReconcileQueryItem, SnapshotChunkInput, SnapshotCompletion, StoreError, SubmitConfirmInput,
 };
-use resume_pro_protocol::{ErrorCode, MessageType, Request};
+use resume_pro_protocol::{
+    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, DurableChunk, ErrorCode, MessageType,
+    Request,
+};
 use serde_json::{json, Map, Value};
 
 /// A successful answer: the envelope-level `resultId` and the response payload.
@@ -33,10 +36,7 @@ pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCod
             write(request, store)
         }
         MessageType::OutboxReconcile => reconcile(request, store),
-        // The wire carries chunk bytes, and nothing in the archive stores bytes yet.
-        // Acknowledging a chunk would move the plugin cursor past data that was never
-        // written, and a complete ACK is its permission to drop its own copy.
-        MessageType::SnapshotChunk => Err(ErrorCode::Unavailable),
+        MessageType::SnapshotChunk => snapshot_chunk(request, store),
         MessageType::Health | MessageType::Handshake => Err(ErrorCode::UnknownMessageType),
     }
 }
@@ -133,6 +133,90 @@ fn write(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
         result_id: Some(result_id),
         payload: json!({ "resultKind": result_kind }),
     })
+}
+
+/// One chunk of a snapshot upload (D08).
+///
+/// Both ACKs the plugin can get are statements about disk, not about memory:
+///
+/// - `ackKind: chunk` is built with [DurableChunk::committed] from the cursor the archive
+///   reports *after* the chunk's bytes and receipt committed together. The plugin advances
+///   its cursor on this, so an ACK for bytes only held in memory would strand the upload.
+/// - `ackKind: snapshot` is sent only once the snapshot file is written and its row is
+///   committed; it is the plugin's permission to delete its IndexedDB copy.
+///
+/// A resend of a chunk that already committed goes through the receipt as a replay and is
+/// answered from the archive's current state, so a lost ACK — either kind — is recovered by
+/// sending the same chunk again. That same resend retries completion if an earlier attempt
+/// to write the file failed.
+fn snapshot_chunk(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
+    let ctx = context(request)?;
+    let payload = &request.payload;
+    let snapshot_id = text(payload, "snapshotId").ok_or(ErrorCode::InvalidPayload)?;
+    let chunk_index = count(payload, "chunkIndex").ok_or(ErrorCode::InvalidPayload)?;
+    let chunk_count = count(payload, "chunkCount").ok_or(ErrorCode::InvalidPayload)?;
+    // Already decoded and checked against chunkSha256 by the validator; decoded again here
+    // because the validated request keeps the wire form.
+    let bytes = resume_pro_protocol::decode_standard_base64(
+        payload.get("bytesBase64").and_then(Value::as_str).ok_or(ErrorCode::InvalidPayload)?,
+    )
+    .map_err(|_| ErrorCode::InvalidPayload)?;
+    let op = PluginOp::SnapshotChunk(SnapshotChunkInput {
+        application_id: text(payload, "applicationId"),
+        snapshot_id: snapshot_id.clone(),
+        chunk_index,
+        chunk_count,
+        total_sha256: text(payload, "snapshotSha256").ok_or(ErrorCode::InvalidPayload)?,
+        byte_size: count(payload, "byteSize").ok_or(ErrorCode::InvalidPayload)?,
+        chunk_sha256: text(payload, "chunkSha256").ok_or(ErrorCode::InvalidPayload)?,
+        // The envelope carries no template name. The snapshot row takes it from the
+        // verified content at completion; see archive-store's complete_snapshot_upload.
+        template_name: None,
+        template_version: None,
+        bytes,
+    });
+
+    let result_id = match store.submit_plugin_message(&ctx, op).map_err(code_of)? {
+        PluginWriteOutcome::Committed { result_id, .. }
+        | PluginWriteOutcome::Replayed { result_id, .. } => result_id,
+    };
+
+    let index = u32::try_from(chunk_index).map_err(|_| ErrorCode::InvalidPayload)?;
+    let total = u32::try_from(chunk_count).map_err(|_| ErrorCode::InvalidPayload)?;
+    let client = &request.client_instance_id;
+
+    let payload = match store.complete_snapshot_upload(client, &snapshot_id) {
+        Ok(SnapshotCompletion::Completed(_)) | Ok(SnapshotCompletion::AlreadyComplete(_)) => {
+            plugin_snapshot_ack_payload(&snapshot_id, index, total)
+        }
+        Ok(SnapshotCompletion::Incomplete(progress)) => chunk_ack(&snapshot_id, index, total, &ctx.message_id, progress.chunk_cursor)?,
+        // The chunk itself is durable, so its ACK is still true. Only the complete ACK is
+        // withheld; the plugin keeps its copy and the next resend tries completion again.
+        Err(_) => {
+            let progress = store.snapshot_progress(client, &snapshot_id).map_err(code_of)?;
+            chunk_ack(&snapshot_id, index, total, &ctx.message_id, progress.chunk_cursor)?
+        }
+    };
+
+    Ok(Answer {
+        result_id: Some(result_id),
+        payload,
+    })
+}
+
+fn chunk_ack(
+    snapshot_id: &str,
+    index: u32,
+    total: u32,
+    chunk_message_id: &str,
+    durable_cursor: i64,
+) -> Result<Value, ErrorCode> {
+    let cursor = u32::try_from(durable_cursor).map_err(|_| ErrorCode::Unavailable)?;
+    // Refuses to build an ACK for a chunk the cursor says was not written. Reaching that
+    // would be a defect here, and `unavailable` keeps the plugin's copy and retries.
+    let durable = DurableChunk::committed(snapshot_id, index, total, chunk_message_id, cursor)
+        .map_err(|_| ErrorCode::Unavailable)?;
+    Ok(plugin_chunk_ack_payload(&durable))
 }
 
 fn fill_outcome(payload: &Value) -> Result<FillOutcome, ErrorCode> {
@@ -638,29 +722,245 @@ mod tests {
         assert!(items[1].get("resultId").is_none());
     }
 
+    // --- snapshot.chunk ---------------------------------------------------------------
+
+    const SNAPSHOT: &str = "77777777-7777-4777-8777-777777777777";
+
+    /// Standard padded Base64, the only form the validator accepts. Local so the test does
+    /// not lean on the code under test to build its own input.
+    fn base64(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for group in bytes.chunks(3) {
+            let n = (group[0] as u32) << 16
+                | (*group.get(1).unwrap_or(&0) as u32) << 8
+                | *group.get(2).unwrap_or(&0) as u32;
+            for (i, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+                if i <= group.len() {
+                    out.push(TABLE[((n >> shift) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// A synthetic snapshot in the plugin's v1 format, cut into `size`-byte chunks.
+    struct Upload {
+        bytes: Vec<u8>,
+        size: usize,
+    }
+
+    impl Upload {
+        fn new(size: usize) -> Self {
+            let fields: Vec<String> = (0..40)
+                .map(|i| format!(r#"{{"key":"项目{i}","value":"合成描述{i}"}}"#))
+                .collect();
+            let bytes = format!(
+                r#"{{"capturedAt":"2026-09-12T08:00:00.000Z","format":"resume-pro.snapshot","formatVersion":1,"groups":[{{"fields":[{}],"name":"经历"}}],"omittedFieldCount":0,"templateName":"合成模板","templateVersion":"0123456789ab"}}"#,
+                fields.join(",")
+            )
+            .into_bytes();
+            Self { bytes, size }
+        }
+
+        fn count(&self) -> usize {
+            self.bytes.len().div_ceil(self.size)
+        }
+
+        fn piece(&self, index: usize) -> &[u8] {
+            &self.bytes[index * self.size..((index + 1) * self.size).min(self.bytes.len())]
+        }
+
+        fn chunk(&self, identity: &ArchiveIdentity, application_id: &str, index: usize) -> Request {
+            self.chunk_with(identity, application_id, index, self.piece(index).to_vec(), &message_for(index))
+        }
+
+        fn chunk_with(
+            &self,
+            identity: &ArchiveIdentity,
+            application_id: &str,
+            index: usize,
+            bytes: Vec<u8>,
+            message_id: &str,
+        ) -> Request {
+            request(
+                "snapshot.chunk",
+                message_id,
+                Some(identity),
+                json!({
+                    "snapshotId": SNAPSHOT,
+                    "applicationId": application_id,
+                    "chunkIndex": index,
+                    "chunkCount": self.count(),
+                    "chunkSha256": sha256_hex(&bytes),
+                    "snapshotSha256": sha256_hex(&self.bytes),
+                    "byteSize": self.bytes.len(),
+                    "bytesBase64": base64(&bytes)
+                }),
+            )
+        }
+    }
+
+    fn message_for(index: usize) -> String {
+        format!("9{index:07}-9999-4999-8999-999999999999")
+    }
+
+    fn saved_application(store: &ArchiveStore) -> String {
+        apply(
+            &job("22222222-2222-4222-8222-222222222222", &store.identity(), "Engineer"),
+            store,
+        )
+        .unwrap()
+        .result_id
+        .unwrap()
+    }
+
+    /// Send one request and return the ACK payload, having checked that the whole response
+    /// is one the extension would accept for that request.
+    fn ack(request: &Request, store: &ArchiveStore) -> Value {
+        let answer = apply(request, store).expect("the chunk must be accepted");
+        let response = json!({
+            "protocolVersion": 1,
+            "correlationId": request.message_id,
+            "ok": true,
+            "resultId": answer.result_id.clone().expect("a write names its result"),
+            "payload": answer.payload.clone()
+        });
+        resume_pro_protocol::validate_response_for_request(&response, request)
+            .expect("the ACK must be a valid response to this very request");
+        answer.payload
+    }
+
     #[test]
-    fn a_snapshot_chunk_is_never_acknowledged_while_the_bytes_have_nowhere_to_go() {
-        // A chunk ACK moves the plugin cursor, and a complete ACK is its permission to
-        // drop its own copy. Neither may be sent for bytes that were not stored.
+    fn chunks_in_order_are_acknowledged_one_by_one_and_the_last_completes_the_snapshot() {
+        let (dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+        assert!(upload.count() >= 3);
+
+        for index in 0..upload.count() - 1 {
+            let payload = ack(&upload.chunk(&identity, &app_id, index), &store);
+            assert_eq!(payload["ackKind"], "chunk");
+            assert_eq!(payload["chunkIndex"], index);
+            assert_eq!(payload["chunkCursor"], index + 1);
+            assert!(store.get_snapshot(SNAPSHOT).unwrap().is_none(), "no snapshot before the last chunk");
+        }
+        let last = upload.count() - 1;
+        let payload = ack(&upload.chunk(&identity, &app_id, last), &store);
+        assert_eq!(payload["ackKind"], "snapshot");
+        assert_eq!(payload["snapshotId"], SNAPSHOT);
+        assert_eq!(payload["chunkCursor"], upload.count());
+
+        // The complete ACK exists only once the file and the row do.
+        let meta = store.get_snapshot(SNAPSHOT).unwrap().expect("the snapshot row is committed");
+        assert_eq!(meta.template_name, "合成模板");
+        let file = dir.path().join("archive").join(&meta.stored_rel_path);
+        assert_eq!(std::fs::read(file).unwrap(), upload.bytes);
+    }
+
+    #[test]
+    fn a_later_chunk_first_does_not_move_the_cursor_past_the_gap() {
         let (_dir, store) = store();
         let identity = store.identity();
-        let bytes = [0u8, 0, 0];
-        let digest = sha256_hex(&bytes);
-        let chunk = request(
-            "snapshot.chunk",
-            "22222222-2222-4222-8222-222222222222",
-            Some(&identity),
-            json!({
-                "snapshotId": "77777777-7777-4777-8777-777777777777",
-                "applicationId": "55555555-5555-4555-8555-555555555555",
-                "chunkIndex": 0,
-                "chunkCount": 1,
-                "chunkSha256": digest,
-                "snapshotSha256": digest,
-                "byteSize": bytes.len(),
-                "bytesBase64": "AAAA"
-            }),
-        );
-        assert!(matches!(apply(&chunk, &store), Err(ErrorCode::Unavailable)));
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+
+        let early = ack(&upload.chunk(&identity, &app_id, 2), &store);
+        assert_eq!(early["ackKind"], "chunk");
+        assert_eq!(early["chunkIndex"], 2);
+        assert_eq!(early["chunkCursor"], 0, "chunks 0 and 1 are still missing");
+
+        let first = ack(&upload.chunk(&identity, &app_id, 0), &store);
+        assert_eq!(first["chunkCursor"], 1);
+    }
+
+    #[test]
+    fn resending_the_last_chunk_after_completion_answers_complete_again() {
+        // What the plugin does when the complete ACK was lost on the way back.
+        let (_dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+        for index in 0..upload.count() {
+            ack(&upload.chunk(&identity, &app_id, index), &store);
+        }
+        let again = ack(&upload.chunk(&identity, &app_id, upload.count() - 1), &store);
+        assert_eq!(again["ackKind"], "snapshot");
+        assert_eq!(store.list_snapshots(&app_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_chunk_that_changes_bytes_or_identity_is_a_conflict() {
+        let (_dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+        ack(&upload.chunk(&identity, &app_id, 0), &store);
+
+        let mut altered = upload.piece(0).to_vec();
+        altered[0] ^= 0x01;
+        let different_bytes = upload.chunk_with(&identity, &app_id, 0, altered, &message_for(7));
+        assert!(matches!(apply(&different_bytes, &store), Err(ErrorCode::Conflict)));
+
+        // The same chunk re-minted under a new messageId after a restart is forbidden too.
+        let reminted = upload.chunk_with(&identity, &app_id, 0, upload.piece(0).to_vec(), &message_for(8));
+        assert!(matches!(apply(&reminted, &store), Err(ErrorCode::Conflict)));
+    }
+
+    #[test]
+    fn an_upload_survives_the_application_restarting() {
+        let (dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+        ack(&upload.chunk(&identity, &app_id, 0), &store);
+        store.close().unwrap();
+
+        let archive = dir.path().join("archive");
+        let store = crate::commands::open_store(&archive, &dir.path().join("current.json")).unwrap();
+        let mut last = Value::Null;
+        for index in 1..upload.count() {
+            last = ack(&upload.chunk(&identity, &app_id, index), &store);
+        }
+        assert_eq!(last["ackKind"], "snapshot");
+    }
+
+    #[test]
+    fn a_chunk_for_an_application_that_does_not_exist_is_refused_and_nothing_is_staged() {
+        // A chunk ACK moves the plugin cursor. It may only exist for bytes the archive holds,
+        // and a chunk bound to nothing is not something the archive can hold.
+        let (_dir, store) = store();
+        let identity = store.identity();
+        let upload = Upload::new(512);
+        let orphan = upload.chunk(&identity, "55555555-5555-4555-8555-555555555555", 0);
+        assert!(matches!(apply(&orphan, &store), Err(ErrorCode::InvalidPayload)));
+        assert!(store.snapshot_progress(CLIENT, SNAPSHOT).is_err());
+    }
+
+    #[test]
+    fn a_snapshot_file_that_cannot_be_written_withholds_only_the_complete_ack() {
+        let (dir, store) = store();
+        let identity = store.identity();
+        let app_id = saved_application(&store);
+        let upload = Upload::new(512);
+        let snapshots = dir.path().join("archive").join("snapshots");
+        let _ = std::fs::remove_dir_all(&snapshots);
+        std::fs::write(&snapshots, b"not a directory").unwrap();
+
+        let mut last = Value::Null;
+        for index in 0..upload.count() {
+            last = ack(&upload.chunk(&identity, &app_id, index), &store);
+        }
+        // Every chunk is durable, so saying so is true; the snapshot is not, so that is withheld.
+        assert_eq!(last["ackKind"], "chunk");
+        assert_eq!(last["chunkCursor"], upload.count());
+        assert!(store.get_snapshot(SNAPSHOT).unwrap().is_none());
+
+        std::fs::remove_file(&snapshots).unwrap();
+        let retried = ack(&upload.chunk(&identity, &app_id, upload.count() - 1), &store);
+        assert_eq!(retried["ackKind"], "snapshot");
     }
 }
