@@ -70,6 +70,51 @@ test("unparseable or non-http input yields null", () => {
   assert.equal(models.resolveEndpoints("ftp://example.com/v1"), null);
 });
 
+// --- describeTransportRisk --------------------------------------------------
+
+test("https and unparseable addresses carry no transport warning", () => {
+  assert.equal(models.describeTransportRisk("https://api.siliconflow.cn/v1"), null);
+  assert.equal(models.describeTransportRisk("not a url"), null);
+  assert.equal(models.describeTransportRisk(""), null);
+});
+
+test("plain http to this machine carries no transport warning", () => {
+  for (const url of [
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:8000/v1/chat/completions",
+    "http://127.8.9.10/v1",
+    "http://[::1]:8080/v1",
+    "http://ollama.localhost/v1"
+  ]) {
+    assert.equal(models.describeTransportRisk(url), null, url);
+  }
+});
+
+test("plain http to a private network address is a mild warning", () => {
+  for (const url of [
+    "http://192.168.1.20:3000/v1",
+    "http://10.0.0.5/v1",
+    "http://172.20.1.1/v1",
+    "http://100.101.102.103:3000/v1",
+    "http://nas.local:3000/v1",
+    "http://nas:3000/v1",
+    "http://[fd12:3456::1]/v1"
+  ]) {
+    const risk = models.describeTransportRisk(url);
+    assert.equal(risk?.scope, "private", url);
+    assert.match(risk.message, /局域网/u);
+  }
+});
+
+test("plain http to a public address is a strong warning that suggests https", () => {
+  for (const url of ["http://api.example-relay.com/v1", "http://8.8.8.8/v1", "http://172.32.0.1/v1"]) {
+    const risk = models.describeTransportRisk(url);
+    assert.equal(risk?.scope, "public", url);
+    assert.match(risk.message, /未加密/u);
+    assert.match(risk.message, /https:\/\//u);
+  }
+});
+
 // --- normalizeApiUrlForSave -------------------------------------------------
 
 test("an unchanged stored URL is saved verbatim even when it looks like a base", () => {

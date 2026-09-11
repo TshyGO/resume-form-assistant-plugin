@@ -80,8 +80,8 @@
           </div>
 
           <form id="ai-config-form" class="config-form">
-            <label class="field-block" for="api-url-input">
-              <span>API URL</span>
+            <div class="field-block">
+              <label for="api-url-input"><span>API URL</span></label>
               <input
                 id="api-url-input"
                 name="apiUrl"
@@ -89,7 +89,8 @@
                 placeholder="https://api.openai.com/v1"
                 autocomplete="off"
               >
-            </label>
+              <div class="status-message is-inline" id="url-status" aria-live="polite"></div>
+            </div>
 
             <div class="field-block">
               <span>API Key</span>

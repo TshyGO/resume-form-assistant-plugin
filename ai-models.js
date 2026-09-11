@@ -57,6 +57,58 @@
     return { chatUrl: text, modelsUrl: null };
   }
 
+  function isLoopbackHost(host) {
+    return host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(?:\.\d{1,3}){3}$/u.test(host);
+  }
+
+  function isPrivateHost(host) {
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/u);
+
+    if (ipv4) {
+      const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+      return a === 10
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168)
+        || (a === 169 && b === 254)
+        || (a === 100 && b >= 64 && b <= 127); // CGNAT range, also used by Tailscale
+    }
+
+    if (host.startsWith("[")) {
+      return /^\[(?:f[cd]|fe[89ab])/iu.test(host);
+    }
+
+    return !host.includes(".") || /\.(?:local|lan|internal|home\.arpa)$/iu.test(host);
+  }
+
+  // Warn, never block: plain http to a relay is how some existing users are configured
+  // today, and refusing it would silently break their form filling after an update.
+  // The same URL receives the API key and, on every fill, the user's resume fields.
+  function describeTransportRisk(input) {
+    let url;
+
+    try {
+      url = new URL(String(input ?? "").trim());
+    } catch {
+      return null;
+    }
+
+    if (url.protocol !== "http:" || isLoopbackHost(url.hostname)) {
+      return null;
+    }
+
+    if (isPrivateHost(url.hostname)) {
+      return {
+        scope: "private",
+        message: "这个地址使用 HTTP 明文传输，看起来是局域网或内网地址。请只在可信的网络中使用；服务支持的话，建议改用 https://。"
+      };
+    }
+
+    return {
+      scope: "public",
+      message: "这个地址使用 HTTP 明文传输：API Key 和发给 AI 的简历内容会未加密地经过网络，可能被截获盗用。建议改用服务商提供的 https:// 地址。"
+    };
+  }
+
   // Completion happens on save, never on read: the stored apiUrl keeps meaning "the chat
   // endpoint", so every call site that fetches it stays untouched. A value the user did
   // not edit is saved verbatim, so re-saving an old configuration can never rewrite it.
@@ -238,6 +290,7 @@
   }
 
   return {
+    describeTransportRisk,
     fetchModelList,
     filterChatModels,
     matchModels,

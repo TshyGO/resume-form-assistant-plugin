@@ -71,7 +71,8 @@ const popupState = {
   statusTimers: {
     template: null,
     config: null,
-    model: null
+    model: null,
+    url: null
   }
 };
 
@@ -113,6 +114,7 @@ function cacheElements() {
   elements.modelToggle = document.getElementById("model-toggle");
   elements.modelListbox = document.getElementById("model-listbox");
   elements.modelStatus = document.getElementById("model-status");
+  elements.urlStatus = document.getElementById("url-status");
   elements.configStatus = document.getElementById("config-status");
   elements.currentVersion = document.getElementById("current-version");
   elements.checkUpdateButton = document.getElementById("check-update-button");
@@ -147,6 +149,7 @@ function bindEvents() {
   bindModelCombo();
   // Suggestions fetched for one address and key are wrong for another.
   elements.apiUrlInput.addEventListener("input", clearModelSuggestions);
+  elements.apiUrlInput.addEventListener("input", updateUrlWarning);
   elements.apiKeyInput.addEventListener("input", clearModelSuggestions);
   elements.checkUpdateButton.addEventListener("click", () => {
     checkForUpdates({ force: true, announce: true });
@@ -231,6 +234,19 @@ function renderConfig(aiConfig) {
   elements.apiUrlInput.value = aiConfig.apiUrl || "";
   elements.modelInput.value = aiConfig.model || "";
   elements.apiKeyInput.value = aiConfig.apiKey || "";
+  updateUrlWarning();
+}
+
+// Shown whenever the settings page shows the address -- on open, while typing and after
+// save -- so users already configured with plain http see it too. Nothing is blocked.
+function updateUrlWarning() {
+  const risk = self.ResumeProModels.describeTransportRisk(elements.apiUrlInput.value);
+
+  if (risk) {
+    showStatus("url", risk.message, "warning", 0);
+  } else {
+    hideStatus("url");
+  }
 }
 
 async function handleTemplateListClick(event) {
@@ -441,8 +457,7 @@ function showModelNotice() {
 function clearModelSuggestions() {
   popupState.modelRequestId += 1;
   setModelSuggestions(null);
-  elements.modelStatus.className = "status-message is-inline";
-  elements.modelStatus.textContent = "";
+  hideStatus("model");
 }
 
 function setModelSuggestions(result) {
@@ -747,23 +762,32 @@ function countTemplateFields(template) {
   }, 0);
 }
 
+const INLINE_STATUS_TYPES = new Set(["model", "url"]);
+
+function statusBaseClass(type) {
+  return INLINE_STATUS_TYPES.has(type) ? "status-message is-inline" : "status-message";
+}
+
 function showStatus(type, message, variant, autoHideDelay = 2200) {
   const element = elements[`${type}Status`];
-  const baseClass = type === "model" ? "status-message is-inline" : "status-message";
 
   element.textContent = message;
-  element.className = `${baseClass} is-visible is-${variant}`;
+  element.className = `${statusBaseClass(type)} is-visible is-${variant}`;
 
   if (popupState.statusTimers[type]) {
     clearTimeout(popupState.statusTimers[type]);
   }
 
   if (autoHideDelay > 0) {
-    popupState.statusTimers[type] = setTimeout(() => {
-      element.className = baseClass;
-      element.textContent = "";
-    }, autoHideDelay);
+    popupState.statusTimers[type] = setTimeout(() => hideStatus(type), autoHideDelay);
   }
+}
+
+function hideStatus(type) {
+  const element = elements[`${type}Status`];
+  clearTimeout(popupState.statusTimers[type]);
+  element.className = statusBaseClass(type);
+  element.textContent = "";
 }
 
 function normalizeStore(rawState) {
