@@ -65,6 +65,9 @@ const popupState = {
   availableRelease: null,
   reimportTemplateId: "",
   modelRequestId: 0,
+  modelResult: null,
+  modelVisible: [],
+  modelActiveIndex: -1,
   statusTimers: {
     template: null,
     config: null,
@@ -106,7 +109,9 @@ function cacheElements() {
   elements.apiKeyInput = document.getElementById("api-key-input");
   elements.toggleApiKeyButton = document.getElementById("toggle-api-key");
   elements.fetchModelsButton = document.getElementById("fetch-models-button");
-  elements.modelOptions = document.getElementById("model-options");
+  elements.modelCombo = document.getElementById("model-combo");
+  elements.modelToggle = document.getElementById("model-toggle");
+  elements.modelListbox = document.getElementById("model-listbox");
   elements.modelStatus = document.getElementById("model-status");
   elements.configStatus = document.getElementById("config-status");
   elements.currentVersion = document.getElementById("current-version");
@@ -139,6 +144,7 @@ function bindEvents() {
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
   elements.toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
   elements.fetchModelsButton.addEventListener("click", handleFetchModelsClick);
+  bindModelCombo();
   // Suggestions fetched for one address and key are wrong for another.
   elements.apiUrlInput.addEventListener("input", clearModelSuggestions);
   elements.apiKeyInput.addEventListener("input", clearModelSuggestions);
@@ -370,8 +376,8 @@ async function handleConfigSubmit(event) {
   showStatus("config", "配置已保存。", "success");
 }
 
-// Fetching never touches the model input or storage: the list only feeds the datalist,
-// so a failed fetch leaves the field behaving exactly like the plain text box it was.
+// Fetching never touches the model input or storage: the list only feeds the suggestion
+// dropdown, so a failed fetch leaves the field behaving exactly like the plain text box it was.
 async function handleFetchModelsClick() {
   const button = elements.fetchModelsButton;
   const requestId = ++popupState.modelRequestId;
@@ -390,44 +396,226 @@ async function handleFetchModelsClick() {
     }
 
     if (!result.ok) {
-      elements.modelOptions.replaceChildren();
+      setModelSuggestions(null);
       showStatus("model", result.message, "error", 0);
       return;
     }
 
-    elements.modelOptions.replaceChildren(...result.models.map((id) => {
-      const option = document.createElement("option");
-      option.value = id;
-      return option;
-    }));
-    const notice = describeModelList(result, elements.modelInput.value.trim());
-    showStatus("model", notice.message, notice.variant, 0);
+    setModelSuggestions(result);
+    showModelNotice();
+
+    if (result.models.length) {
+      elements.modelInput.focus();
+      openModelList("");
+    }
   } finally {
     button.disabled = false;
     button.textContent = "获取模型";
   }
 }
 
-function describeModelList(result, currentModel) {
-  if (!result.allModels.length) {
-    return { message: "该服务返回了空的模型列表，可直接手填模型名称。", variant: "warning" };
+function showModelNotice() {
+  const result = popupState.modelResult;
+
+  if (!result) {
+    return;
   }
 
-  const hiddenNote = result.hiddenCount ? `，另隐藏 ${result.hiddenCount} 个非对话模型（向量、重排、语音、图像等）` : "";
-  const summary = `已获取 ${result.models.length} 个模型${hiddenNote}。可从下拉中选择，也可继续手动输入；输入框有内容时下拉只显示匹配项。`;
+  if (!result.allModels.length) {
+    showStatus("model", "该服务返回了空的模型列表，可直接手填模型名称。", "warning", 0);
+    return;
+  }
+
+  const hiddenNote = result.hiddenCount ? `（另隐藏 ${result.hiddenCount} 个向量、语音、图像等非对话模型）` : "";
+  const summary = `已获取 ${result.models.length} 个模型${hiddenNote}。可从列表选择，也可直接输入任意名称。`;
+  const currentModel = elements.modelInput.value.trim();
 
   if (currentModel && !result.allModels.includes(currentModel)) {
-    return { message: `${summary}当前填写的「${currentModel}」不在该服务的模型列表中，请确认拼写。`, variant: "warning" };
+    showStatus("model", `${summary}当前填写的「${currentModel}」不在列表中，请确认拼写。`, "warning", 0);
+    return;
   }
 
-  return { message: summary, variant: "success" };
+  showStatus("model", summary, "success", 0);
 }
 
 function clearModelSuggestions() {
   popupState.modelRequestId += 1;
-  elements.modelOptions.replaceChildren();
+  setModelSuggestions(null);
   elements.modelStatus.className = "status-message is-inline";
   elements.modelStatus.textContent = "";
+}
+
+function setModelSuggestions(result) {
+  popupState.modelResult = result;
+  elements.modelToggle.hidden = !result?.models.length;
+  closeModelList();
+}
+
+// The suggestion list is a hand-built combobox rather than a <datalist>: Chrome filters a
+// datalist by the text already in the box, so a filled-in field would show one option, or
+// none when the current name is misspelt -- exactly when the user wants to browse.
+function openModelList(query) {
+  const suggestions = popupState.modelResult?.models || [];
+
+  if (!suggestions.length) {
+    return;
+  }
+
+  popupState.modelVisible = self.ResumeProModels.matchModels(suggestions, query);
+  popupState.modelActiveIndex = -1;
+  renderModelList();
+  elements.modelListbox.hidden = false;
+  elements.modelInput.setAttribute("aria-expanded", "true");
+  placeModelList();
+  elements.modelListbox.querySelector(".is-current")?.scrollIntoView({ block: "nearest" });
+}
+
+function closeModelList() {
+  popupState.modelActiveIndex = -1;
+  elements.modelListbox.hidden = true;
+  elements.modelInput.setAttribute("aria-expanded", "false");
+  elements.modelInput.removeAttribute("aria-activedescendant");
+}
+
+function isModelListOpen() {
+  return !elements.modelListbox.hidden;
+}
+
+function renderModelList() {
+  const { modelVisible: visible, modelActiveIndex: active } = popupState;
+  const current = elements.modelInput.value.trim();
+
+  if (!visible.length) {
+    const empty = document.createElement("li");
+    empty.className = "model-combo__empty";
+    empty.setAttribute("role", "presentation");
+    empty.textContent = "没有匹配的模型，保存时按输入的名称使用。";
+    elements.modelListbox.replaceChildren(empty);
+    elements.modelInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+
+  elements.modelListbox.replaceChildren(...visible.map((id, index) => {
+    const option = document.createElement("li");
+    option.id = `model-option-${index}`;
+    option.className = "model-combo__option";
+    option.classList.toggle("is-active", index === active);
+    option.classList.toggle("is-current", id === current);
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(id === current));
+    option.dataset.value = id;
+    option.title = id;
+    option.textContent = id;
+    return option;
+  }));
+
+  if (active >= 0) {
+    elements.modelInput.setAttribute("aria-activedescendant", `model-option-${active}`);
+    document.getElementById(`model-option-${active}`)?.scrollIntoView({ block: "nearest" });
+  } else {
+    elements.modelInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+// The model field sits near the bottom of the panel, so open upwards when there is not
+// enough room below rather than pushing the list out of the iframe.
+function placeModelList() {
+  const rect = elements.modelCombo.getBoundingClientRect();
+  const below = window.innerHeight - rect.bottom - 16;
+  const above = rect.top - 16;
+  const openAbove = below < 200 && above > below;
+  elements.modelListbox.classList.toggle("is-above", openAbove);
+  elements.modelListbox.style.maxHeight = `${Math.max(120, Math.min(260, openAbove ? above : below))}px`;
+}
+
+function pickModel(id) {
+  elements.modelInput.value = id;
+  closeModelList();
+  elements.modelInput.focus();
+  showModelNotice();
+}
+
+function moveModelActive(step) {
+  const count = popupState.modelVisible.length;
+
+  if (!count) {
+    return;
+  }
+
+  const next = popupState.modelActiveIndex + step;
+  popupState.modelActiveIndex = next < 0 ? count - 1 : next >= count ? 0 : next;
+  renderModelList();
+}
+
+function handleModelKeydown(event) {
+  const hasSuggestions = Boolean(popupState.modelResult?.models.length);
+
+  if (event.key === "ArrowDown" && hasSuggestions) {
+    event.preventDefault();
+    if (!isModelListOpen()) {
+      openModelList("");
+    }
+    moveModelActive(1);
+    return;
+  }
+
+  if (!isModelListOpen()) {
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveModelActive(-1);
+  } else if (event.key === "Enter" && popupState.modelActiveIndex >= 0) {
+    // Only an option the user moved to is taken; otherwise Enter saves what was typed.
+    event.preventDefault();
+    pickModel(popupState.modelVisible[popupState.modelActiveIndex]);
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeModelList();
+  } else if (event.key === "Enter" || event.key === "Tab") {
+    closeModelList();
+  }
+}
+
+function bindModelCombo() {
+  elements.modelInput.addEventListener("keydown", handleModelKeydown);
+  elements.modelInput.addEventListener("input", () => openModelList(elements.modelInput.value));
+  elements.modelInput.addEventListener("click", () => {
+    if (!isModelListOpen()) {
+      openModelList("");
+    }
+  });
+  elements.modelInput.addEventListener("change", showModelNotice);
+
+  // Keep focus in the input while clicking the arrow or an option.
+  elements.modelToggle.addEventListener("mousedown", (event) => event.preventDefault());
+  elements.modelToggle.addEventListener("click", () => {
+    if (isModelListOpen()) {
+      closeModelList();
+      return;
+    }
+    elements.modelInput.focus();
+    openModelList("");
+  });
+  elements.modelListbox.addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-value]")) {
+      event.preventDefault();
+    }
+  });
+  elements.modelListbox.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-value]");
+    if (option) {
+      pickModel(option.dataset.value);
+    }
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (isModelListOpen() && !elements.modelCombo.contains(event.target)) {
+      closeModelList();
+    }
+  });
+  window.addEventListener("resize", closeModelList);
 }
 
 function toggleApiKeyVisibility() {

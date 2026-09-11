@@ -147,6 +147,34 @@ test("chat models that merely contain audio, voice or image words are not hidden
   assert.deepEqual(models.filterChatModels(ids).chat, ids);
 });
 
+// --- matchModels ------------------------------------------------------------
+
+test("an empty query matches every model in order", () => {
+  const list = ["b-model", "a-model"];
+  assert.deepEqual(models.matchModels(list, ""), list);
+  assert.deepEqual(models.matchModels(list, "   "), list);
+});
+
+test("matching is a case-insensitive substring match", () => {
+  const list = ["deepseek-ai/DeepSeek-V3", "gpt-4o", "Qwen/Qwen2.5-72B-Instruct"];
+  assert.deepEqual(models.matchModels(list, "QWEN"), ["Qwen/Qwen2.5-72B-Instruct"]);
+  assert.deepEqual(models.matchModels(list, "v3"), ["deepseek-ai/DeepSeek-V3"]);
+});
+
+test("exact, then prefix (including after the vendor slash), then substring matches", () => {
+  const list = ["chat-gpt-4o-latest", "gpt-4o-mini", "openai/gpt-4o-audio", "gpt-4o"];
+  assert.deepEqual(models.matchModels(list, "gpt-4o"), [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "openai/gpt-4o-audio",
+    "chat-gpt-4o-latest"
+  ]);
+});
+
+test("a query with no match yields an empty list", () => {
+  assert.deepEqual(models.matchModels(["gpt-4o"], "claude"), []);
+});
+
 // --- parseModelList ---------------------------------------------------------
 
 test("an OpenAI-shaped list is reduced to sorted unique ids", () => {

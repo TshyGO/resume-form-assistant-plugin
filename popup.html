@@ -109,19 +109,35 @@
 
             <div class="field-block">
               <span>模型名称</span>
-              <div class="password-row">
-                <input
-                  id="model-input"
-                  name="model"
-                  type="text"
-                  list="model-options"
-                  placeholder="gpt-4o-mini"
-                  autocomplete="off"
-                  aria-label="模型名称"
-                >
-                <button id="fetch-models-button" class="secondary-button" type="button">获取模型</button>
+              <div class="model-combo" id="model-combo">
+                <div class="password-row">
+                  <div class="model-combo__field">
+                    <input
+                      id="model-input"
+                      name="model"
+                      type="text"
+                      placeholder="gpt-4o-mini"
+                      autocomplete="off"
+                      spellcheck="false"
+                      role="combobox"
+                      aria-label="模型名称"
+                      aria-autocomplete="list"
+                      aria-expanded="false"
+                      aria-controls="model-listbox"
+                    >
+                    <button
+                      id="model-toggle"
+                      class="model-combo__toggle"
+                      type="button"
+                      tabindex="-1"
+                      aria-label="展开模型列表"
+                      hidden
+                    >▾</button>
+                  </div>
+                  <button id="fetch-models-button" class="secondary-button" type="button">获取模型</button>
+                </div>
+                <ul class="model-combo__list" id="model-listbox" role="listbox" aria-label="可选模型" hidden></ul>
               </div>
-              <datalist id="model-options"></datalist>
               <div class="status-message is-inline" id="model-status" aria-live="polite"></div>
             </div>
 

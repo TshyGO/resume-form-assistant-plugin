@@ -102,6 +102,29 @@
     return { chat, hidden };
   }
 
+  // Suggestions for what the user has typed so far. Exact hits first, then names that
+  // start with the query (also after a "vendor/" prefix), then any substring hit.
+  function matchModels(ids, query) {
+    const needle = String(query ?? "").trim().toLowerCase();
+
+    if (!needle) {
+      return [...ids];
+    }
+
+    const rank = (id) => {
+      const lower = id.toLowerCase();
+      if (lower === needle) return 0;
+      if (lower.startsWith(needle) || lower.slice(lower.lastIndexOf("/") + 1).startsWith(needle)) return 1;
+      return lower.includes(needle) ? 2 : -1;
+    };
+
+    return ids
+      .map((id, index) => ({ id, index, rank: rank(id) }))
+      .filter((entry) => entry.rank >= 0)
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.id);
+  }
+
   function parseModelList(body) {
     const entries = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : null;
 
@@ -214,6 +237,7 @@
   return {
     fetchModelList,
     filterChatModels,
+    matchModels,
     normalizeApiUrlForSave,
     parseModelList,
     resolveEndpoints
