@@ -17,9 +17,11 @@ const encoder = new TextEncoder();
 // spreadsheet the user typed, and nothing stops a row called "登录密码". Chinese labels are
 // matched anywhere in the name; the English words only as whole words, so "Photo" and
 // "Hotpot" are not mistaken for "otp". camelCase names are split first, so "apiKey" and
-// "accessToken" are words too. When in doubt the field is dropped, never kept "to see".
+// "accessToken" are words too, and plurals ("API Keys") count. A group with such a name
+// ("API Keys" holding "OpenAI": "…") loses every field in it. When in doubt the field is
+// dropped, never kept "to see".
 const SECRET_CJK = /(密码|口令|验证码|校验码|授权码|密钥|私钥|令牌)/u;
-const SECRET_LATIN = /(?:^|[^a-z])(password|passwd|pwd|otp|api[\s_-]?key|token|cookie|secret)(?:[^a-z]|$)/iu;
+const SECRET_LATIN = /(?:^|[^a-z])(password|passwd|pwd|otp|api[\s_-]?key|token|cookie|secret)s?(?:[^a-z]|$)/iu;
 
 export function isSecretFieldName(name) {
   const text = String(name ?? '').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
@@ -62,11 +64,12 @@ export async function buildSnapshot(template, { now = () => new Date() } = {}) {
 
   for (const group of Array.isArray(template?.groups) ? template.groups : []) {
     const fields = [];
+    const secretGroup = isSecretFieldName(group?.name);
     for (const field of Array.isArray(group?.fields) ? group.fields : []) {
       const key = String(field?.key ?? '').trim();
       if (!key) continue;
       const value = String(field?.value ?? '');
-      if (isSecretFieldName(key) || isSecretFieldValue(value)) {
+      if (secretGroup || isSecretFieldName(key) || isSecretFieldValue(value)) {
         omittedFieldCount += 1;
         continue;
       }
