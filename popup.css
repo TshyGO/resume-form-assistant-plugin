@@ -286,6 +286,11 @@ select {
   display: block;
 }
 
+.status-message.is-inline {
+  margin: 0;
+  font-size: 12px;
+}
+
 .status-message.is-success {
   background: var(--success-soft);
   color: var(--success);
@@ -419,6 +424,19 @@ select {
 
 .password-row input {
   flex: 1;
+  min-width: 0;
+}
+
+.password-row .secondary-button {
+  flex-shrink: 0;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.password-row .secondary-button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+  transform: none;
 }
 
 .toolbar-actions {

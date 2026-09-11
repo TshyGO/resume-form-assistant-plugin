@@ -48,6 +48,7 @@
         "mammoth.browser.min.js",
         "ai-helpers.js",
         "ai-client.js",
+        "ai-models.js",
         "form-agent.js",
         "resume-utils.js",
         "vendor/pdfjs/pdf.min.mjs",

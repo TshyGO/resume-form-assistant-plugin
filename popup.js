@@ -64,9 +64,11 @@ const popupState = {
   activeTab: "templates",
   availableRelease: null,
   reimportTemplateId: "",
+  modelRequestId: 0,
   statusTimers: {
     template: null,
-    config: null
+    config: null,
+    model: null
   }
 };
 
@@ -103,6 +105,9 @@ function cacheElements() {
   elements.modelInput = document.getElementById("model-input");
   elements.apiKeyInput = document.getElementById("api-key-input");
   elements.toggleApiKeyButton = document.getElementById("toggle-api-key");
+  elements.fetchModelsButton = document.getElementById("fetch-models-button");
+  elements.modelOptions = document.getElementById("model-options");
+  elements.modelStatus = document.getElementById("model-status");
   elements.configStatus = document.getElementById("config-status");
   elements.currentVersion = document.getElementById("current-version");
   elements.checkUpdateButton = document.getElementById("check-update-button");
@@ -133,6 +138,10 @@ function bindEvents() {
   elements.templateList.addEventListener("click", handleTemplateListClick);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
   elements.toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
+  elements.fetchModelsButton.addEventListener("click", handleFetchModelsClick);
+  // Suggestions fetched for one address and key are wrong for another.
+  elements.apiUrlInput.addEventListener("input", clearModelSuggestions);
+  elements.apiKeyInput.addEventListener("input", clearModelSuggestions);
   elements.checkUpdateButton.addEventListener("click", () => {
     checkForUpdates({ force: true, announce: true });
   });
@@ -342,14 +351,83 @@ function resolveTemplateName(templateName, templates) {
 async function handleConfigSubmit(event) {
   event.preventDefault();
 
+  const typedUrl = elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl;
+  const { aiConfig: savedConfig } = await StorageService.getState();
   const aiConfig = {
-    apiUrl: elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl,
+    apiUrl: self.ResumeProModels.normalizeApiUrlForSave(typedUrl, savedConfig.apiUrl),
     model: elements.modelInput.value.trim() || DEFAULT_STORE.aiConfig.model,
     apiKey: elements.apiKeyInput.value.trim()
   };
 
   await StorageService.saveAiConfig(aiConfig);
+
+  if (aiConfig.apiUrl !== typedUrl) {
+    elements.apiUrlInput.value = aiConfig.apiUrl;
+    showStatus("config", `配置已保存。API URL 已补全为 ${aiConfig.apiUrl}`, "success", 6000);
+    return;
+  }
+
   showStatus("config", "配置已保存。", "success");
+}
+
+// Fetching never touches the model input or storage: the list only feeds the datalist,
+// so a failed fetch leaves the field behaving exactly like the plain text box it was.
+async function handleFetchModelsClick() {
+  const button = elements.fetchModelsButton;
+  const requestId = ++popupState.modelRequestId;
+  button.disabled = true;
+  button.textContent = "获取中…";
+  showStatus("model", "正在获取模型列表…", "success", 0);
+
+  try {
+    const result = await self.ResumeProModels.fetchModelList({
+      apiUrl: elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl,
+      apiKey: elements.apiKeyInput.value
+    });
+
+    if (requestId !== popupState.modelRequestId) {
+      return;
+    }
+
+    if (!result.ok) {
+      elements.modelOptions.replaceChildren();
+      showStatus("model", result.message, "error", 0);
+      return;
+    }
+
+    elements.modelOptions.replaceChildren(...result.models.map((id) => {
+      const option = document.createElement("option");
+      option.value = id;
+      return option;
+    }));
+    const notice = describeModelList(result, elements.modelInput.value.trim());
+    showStatus("model", notice.message, notice.variant, 0);
+  } finally {
+    button.disabled = false;
+    button.textContent = "获取模型";
+  }
+}
+
+function describeModelList(result, currentModel) {
+  if (!result.allModels.length) {
+    return { message: "该服务返回了空的模型列表，可直接手填模型名称。", variant: "warning" };
+  }
+
+  const hiddenNote = result.hiddenCount ? `，另隐藏 ${result.hiddenCount} 个非对话模型（向量、重排、语音、图像等）` : "";
+  const summary = `已获取 ${result.models.length} 个模型${hiddenNote}。可从下拉中选择，也可继续手动输入；输入框有内容时下拉只显示匹配项。`;
+
+  if (currentModel && !result.allModels.includes(currentModel)) {
+    return { message: `${summary}当前填写的「${currentModel}」不在该服务的模型列表中，请确认拼写。`, variant: "warning" };
+  }
+
+  return { message: summary, variant: "success" };
+}
+
+function clearModelSuggestions() {
+  popupState.modelRequestId += 1;
+  elements.modelOptions.replaceChildren();
+  elements.modelStatus.className = "status-message is-inline";
+  elements.modelStatus.textContent = "";
 }
 
 function toggleApiKeyVisibility() {
@@ -482,19 +560,19 @@ function countTemplateFields(template) {
 }
 
 function showStatus(type, message, variant, autoHideDelay = 2200) {
-  const element = type === "config" ? elements.configStatus : elements.templateStatus;
-  const timerKey = type === "config" ? "config" : "template";
+  const element = elements[`${type}Status`];
+  const baseClass = type === "model" ? "status-message is-inline" : "status-message";
 
   element.textContent = message;
-  element.className = `status-message is-visible is-${variant}`;
+  element.className = `${baseClass} is-visible is-${variant}`;
 
-  if (popupState.statusTimers[timerKey]) {
-    clearTimeout(popupState.statusTimers[timerKey]);
+  if (popupState.statusTimers[type]) {
+    clearTimeout(popupState.statusTimers[type]);
   }
 
   if (autoHideDelay > 0) {
-    popupState.statusTimers[timerKey] = setTimeout(() => {
-      element.className = "status-message";
+    popupState.statusTimers[type] = setTimeout(() => {
+      element.className = baseClass;
       element.textContent = "";
     }, autoHideDelay);
   }

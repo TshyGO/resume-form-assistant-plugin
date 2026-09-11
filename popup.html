@@ -86,18 +86,7 @@
                 id="api-url-input"
                 name="apiUrl"
                 type="url"
-                placeholder="https://api.openai.com/v1/chat/completions"
-                autocomplete="off"
-              >
-            </label>
-
-            <label class="field-block" for="model-input">
-              <span>模型名称</span>
-              <input
-                id="model-input"
-                name="model"
-                type="text"
-                placeholder="gpt-4o-mini"
+                placeholder="https://api.openai.com/v1"
                 autocomplete="off"
               >
             </label>
@@ -118,6 +107,24 @@
               </div>
             </div>
 
+            <div class="field-block">
+              <span>模型名称</span>
+              <div class="password-row">
+                <input
+                  id="model-input"
+                  name="model"
+                  type="text"
+                  list="model-options"
+                  placeholder="gpt-4o-mini"
+                  autocomplete="off"
+                  aria-label="模型名称"
+                >
+                <button id="fetch-models-button" class="secondary-button" type="button">获取模型</button>
+              </div>
+              <datalist id="model-options"></datalist>
+              <div class="status-message is-inline" id="model-status" aria-live="polite"></div>
+            </div>
+
             <button class="primary-button is-full" type="submit">保存配置</button>
             <div class="status-message" id="config-status" aria-live="polite"></div>
           </form>
@@ -130,6 +137,7 @@
     <script src="ai-helpers.js"></script>
     <script src="resume-utils.js"></script>
     <script src="ai-client.js"></script>
+    <script src="ai-models.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
