@@ -501,6 +501,20 @@ impl StoreTx<'_> {
             return Ok((ctx.message_id.clone(), "snapshot_chunk".into()));
         }
 
+        // Together the staged chunks may not exceed the declared size either. Otherwise a
+        // client could stage bytes that no completion will ever use, and nothing removes them.
+        let staged: i64 = self.conn().query_row(
+            "SELECT COALESCE(SUM(LENGTH(bytes)), 0) FROM snapshot_chunk_bytes \
+             WHERE client_instance_id = ?1 AND snapshot_id = ?2",
+            params![ctx.client_instance_id, input.snapshot_id],
+            |r| r.get(0),
+        )?;
+        if staged + input.bytes.len() as i64 > input.byte_size {
+            return Err(StoreError::Validation(
+                "staged chunks would exceed the declared byteSize".into(),
+            ));
+        }
+
         self.conn().execute(
             "INSERT INTO snapshot_chunks (client_instance_id, snapshot_id, chunk_index, \
              chunk_message_id, chunk_sha256, source_restore_epoch, received_at) \

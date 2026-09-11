@@ -57,7 +57,10 @@ pub(crate) fn template_of(bytes: &[u8]) -> (String, Option<String>) {
     let Ok(doc) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return unknown();
     };
-    if doc.get("format").and_then(|v| v.as_str()) != Some(SNAPSHOT_FORMAT) {
+    // Only a v1 document's fields mean what v1 says they mean.
+    if doc.get("format").and_then(|v| v.as_str()) != Some(SNAPSHOT_FORMAT)
+        || doc.get("formatVersion").and_then(|v| v.as_i64()) != Some(1)
+    {
         return unknown();
     }
     let Some(name) = doc
@@ -112,7 +115,11 @@ mod tests {
         assert_eq!(template_of(v1), ("A".into(), Some("abc".into())));
         assert_eq!(template_of(b"{\"templateName\":\"A\"}"), ("unknown".into(), None));
         assert_eq!(template_of(b"not json"), ("unknown".into(), None));
-        let blank = br#"{"format":"resume-pro.snapshot","templateName":"  "}"#;
+        let blank = br#"{"format":"resume-pro.snapshot","formatVersion":1,"templateName":"  "}"#;
         assert_eq!(template_of(blank), ("unknown".into(), None));
+        let later = br#"{"format":"resume-pro.snapshot","formatVersion":2,"templateName":"A"}"#;
+        assert_eq!(template_of(later), ("unknown".into(), None));
+        let unversioned = br#"{"format":"resume-pro.snapshot","templateName":"A"}"#;
+        assert_eq!(template_of(unversioned), ("unknown".into(), None));
     }
 }

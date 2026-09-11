@@ -328,3 +328,32 @@ fn a_version_one_archive_is_upgraded_with_a_backup() {
         .unwrap();
     assert_eq!(tables, 1);
 }
+
+#[test]
+fn chunks_that_add_up_to_more_than_the_declared_size_are_refused() {
+    // Each chunk fits the declared byteSize on its own; together they may not. Otherwise a
+    // client could stage bytes that no completion will ever use, and nothing cleans them up.
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let upload = Upload::new(snapshot_v1(), 4096);
+    assert!(upload.count() >= 3);
+    let declared = 4096 * 2;
+    let send = |index: i64| {
+        let PluginOp::SnapshotChunk(mut input) = upload.op(&a.id, index) else { unreachable!() };
+        input.byte_size = declared;
+        let op = PluginOp::SnapshotChunk(input);
+        let ctx = PluginWriteContext {
+            envelope_identity: Some(db.identity()),
+            client_instance_id: CLIENT.into(),
+            message_id: format!("chunk-message-{index}"),
+            source_restore_epoch: db.identity().restore_epoch,
+            payload_sha256: op.digest().unwrap(),
+        };
+        db.submit_plugin_message(&ctx, op)
+    };
+    send(0).unwrap();
+    send(1).unwrap();
+    assert!(matches!(send(2), Err(StoreError::Validation(_))));
+    assert_eq!(db.snapshot_progress(CLIENT, SNAPSHOT).unwrap().staged_bytes, declared);
+}
