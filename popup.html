@@ -80,27 +80,17 @@
           </div>
 
           <form id="ai-config-form" class="config-form">
-            <label class="field-block" for="api-url-input">
-              <span>API URL</span>
+            <div class="field-block">
+              <label for="api-url-input"><span>API URL</span></label>
               <input
                 id="api-url-input"
                 name="apiUrl"
                 type="url"
-                placeholder="https://api.openai.com/v1/chat/completions"
+                placeholder="https://api.openai.com/v1"
                 autocomplete="off"
               >
-            </label>
-
-            <label class="field-block" for="model-input">
-              <span>模型名称</span>
-              <input
-                id="model-input"
-                name="model"
-                type="text"
-                placeholder="gpt-4o-mini"
-                autocomplete="off"
-              >
-            </label>
+              <div class="status-message is-inline" id="url-status" aria-live="polite"></div>
+            </div>
 
             <div class="field-block">
               <span>API Key</span>
@@ -118,6 +108,40 @@
               </div>
             </div>
 
+            <div class="field-block">
+              <span>模型名称</span>
+              <div class="model-combo" id="model-combo">
+                <div class="password-row">
+                  <div class="model-combo__field">
+                    <input
+                      id="model-input"
+                      name="model"
+                      type="text"
+                      placeholder="gpt-4o-mini"
+                      autocomplete="off"
+                      spellcheck="false"
+                      role="combobox"
+                      aria-label="模型名称"
+                      aria-autocomplete="list"
+                      aria-expanded="false"
+                      aria-controls="model-listbox"
+                    >
+                    <button
+                      id="model-toggle"
+                      class="model-combo__toggle"
+                      type="button"
+                      tabindex="-1"
+                      aria-label="展开模型列表"
+                      hidden
+                    >▾</button>
+                  </div>
+                  <button id="fetch-models-button" class="secondary-button" type="button">获取模型</button>
+                </div>
+                <ul class="model-combo__list" id="model-listbox" role="listbox" aria-label="可选模型" hidden></ul>
+              </div>
+              <div class="status-message is-inline" id="model-status" aria-live="polite"></div>
+            </div>
+
             <button class="primary-button is-full" type="submit">保存配置</button>
             <div class="status-message" id="config-status" aria-live="polite"></div>
           </form>
@@ -130,6 +154,7 @@
     <script src="ai-helpers.js"></script>
     <script src="resume-utils.js"></script>
     <script src="ai-client.js"></script>
+    <script src="ai-models.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

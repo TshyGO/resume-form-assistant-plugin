@@ -116,8 +116,8 @@ AI 配置
 
 ```text
 API URL
-模型名称
 API Key
+模型名称
 ```
 
 插件支持 OpenAI Chat Completions 兼容接口。
@@ -126,18 +126,24 @@ API Key
 
 ```text
 API URL
-https://api.openai.com/v1/chat/completions
-
-模型名称
-gpt-4o-mini
+https://api.openai.com/v1
 
 API Key
 你自己的 API Key
+
+模型名称
+点「获取模型」后从下拉里选，例如 gpt-4o-mini
 ```
 
 然后点击「保存配置」。
 
-如果你使用其他兼容 OpenAI 格式的模型服务，把服务商提供的接口地址、模型名称和 API Key 填进去即可。
+API URL 填服务商给的 base 地址（如 `https://api.openai.com/v1`）或完整的 `.../chat/completions` 地址都可以。填 base 地址时，保存时会自动补全为完整地址并显示出来。
+
+请尽量使用 `https://` 开头的地址。API Key 和发给 AI 的简历内容都会发往这个地址；`http://` 是明文传输，经过公共 WiFi 或不可信网络时可能被截获。填了 `http://` 远程地址时设置页会给出提醒，但不会阻止使用；本机地址（`localhost`、`127.0.0.1`）不会提醒。
+
+填好地址和 Key 后点「获取模型」，插件会从该服务的 `/models` 接口拉取模型列表作为下拉候选，向量、重排、语音、图像这类不能用来对话的模型会被隐藏。拉不到列表（比如服务商不提供这个接口）也不影响使用，直接手动输入模型名称即可。
+
+如果你使用其他兼容 OpenAI 格式的模型服务，把服务商提供的接口地址、API Key 和模型名称填进去即可。
 
 ### API 配置看不懂怎么办
 

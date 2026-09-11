@@ -286,6 +286,11 @@ select {
   display: block;
 }
 
+.status-message.is-inline {
+  margin: 0;
+  font-size: 12px;
+}
+
 .status-message.is-success {
   background: var(--success-soft);
   color: var(--success);
@@ -419,6 +424,117 @@ select {
 
 .password-row input {
   flex: 1;
+  min-width: 0;
+}
+
+.password-row .secondary-button {
+  flex-shrink: 0;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.password-row .secondary-button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+  transform: none;
+}
+
+.model-combo {
+  position: relative;
+}
+
+.model-combo [hidden] {
+  display: none;
+}
+
+.model-combo__field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.model-combo__field input {
+  padding-right: 40px;
+}
+
+.model-combo__toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.model-combo__toggle:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.model-combo__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 260px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.model-combo__list.is-above {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.model-combo__option {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.model-combo__option:hover {
+  background: var(--surface-alt);
+}
+
+.model-combo__option.is-active {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.model-combo__option.is-current {
+  font-weight: 600;
+}
+
+.model-combo__option.is-current::after {
+  content: "✓";
+  flex-shrink: 0;
+  color: var(--primary);
+}
+
+.model-combo__empty {
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .toolbar-actions {
