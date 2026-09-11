@@ -16,7 +16,7 @@ export const PLUGIN_VERSION = '0.4.0';
  *                 this is the only failure that may persist a SaveIntent
  *   never_paired  no successful handshake was ever recorded; no long-lived queue is created
  */
-export function createSession({ store, sendNative, sleep, uuid, now }) {
+export function createSession({ store, sendNative, sleep, uuid, now, send = sendOnce }) {
   async function probe() {
     const message = await buildEnvelope({
       messageType: 'handshake',
@@ -30,14 +30,13 @@ export function createSession({ store, sendNative, sleep, uuid, now }) {
       now
     });
 
-    const result = await sendOnce(message, { sendNative, sleep });
+    const result = await send(message, { sendNative, sleep });
 
     if (result.status === 'ok') {
       const payload = result.response.payload;
       if (!versionsIntersect(payload.minProtocolVersion, payload.maxProtocolVersion)) {
         // Deliberately not recorded as pairing: an incompatible desktop must not make the
         // queue believe writes are possible.
-        identity = null;
         return { mode: 'incompatible', identity: null };
       }
       const identity = { archiveId: payload.archiveId, restoreEpoch: payload.restoreEpoch };

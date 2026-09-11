@@ -88,6 +88,28 @@ test('a desktop speaking only a future protocol is incompatible and is not remem
   assert.equal('desktopPairing' in storage.data, false);
 });
 
+test('a handshake that gets past transport validation with no shared version is still incompatible', async () => {
+  // The D05 validator rejects a non-overlapping range before probe() sees it, so this branch
+  // is only reachable if the validator and session.mjs ever disagree. It must still answer
+  // `incompatible` rather than throw.
+  const { createStore } = await import('../link/store.mjs');
+  const { createSession } = await import('../link/session.mjs');
+  const storage = fakeStorage();
+  const session = createSession({
+    store: createStore({ storage, uuid: () => '11111111-1111-4111-8111-111111111111' }),
+    send: async message => ({
+      status: 'ok',
+      response: handshakeReply({ minProtocolVersion: 2, maxProtocolVersion: 3 })(message).response,
+      resultId: null
+    }),
+    uuid: () => '33333333-3333-4333-8333-333333333333',
+    now: () => new Date('2026-09-09T00:00:00.000Z')
+  });
+
+  assert.deepEqual(await session.probe(), { mode: 'incompatible', identity: null });
+  assert.equal('desktopPairing' in storage.data, false);
+});
+
 test('a desktop that rejects the handshake outright is incompatible', async () => {
   const { session } = await makeSession({
     reply: message => ({
