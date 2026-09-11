@@ -140,3 +140,22 @@ test('a snapshot is expired after thirty days, never before', async () => {
   assert.equal(staging.isExpired(record), true);
   assert.ok(await staging.get(record.snapshotId), 'expiry never deletes on its own');
 });
+
+test('two snapshots confirmed at once near the cap cannot both be staged', async () => {
+  const { staging, kv } = await makeStaging();
+  for (let i = 0; i < 19; i += 1) await staging.stage(await snapshotOf(10, i));
+  const first = await snapshotOf(10, 200);
+  const second = await snapshotOf(10, 201);
+  const [a, b] = await Promise.all([staging.stage(first), staging.stage(second)]);
+  assert.deepEqual([a.status, b.status].sort(), ['full', 'staged']);
+  assert.equal(kv.map.size, 20);
+});
+
+test('a write that cannot be read back is removed again, even when the read throws', async () => {
+  const kv = fakeKv();
+  kv.get = async () => { throw new Error('UnknownError'); };
+  const { staging } = await makeStaging(kv);
+  const result = await staging.stage(await snapshotOf(10));
+  assert.equal(result.status, 'unavailable');
+  assert.equal(kv.map.size, 0, 'an unconfirmed record must not hold quota or show up later');
+});
