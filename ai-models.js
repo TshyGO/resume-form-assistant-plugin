@@ -68,19 +68,22 @@
     return resolveEndpoints(typed)?.chatUrl ?? typed;
   }
 
-  // Narrow fragments only. Bare "audio", "voice" or "image" would hide chat models such as
-  // gpt-4o-audio-preview. Hiding is advisory anyway: the input accepts any typed name.
+  // Narrow fragments only. Bare "audio" or "voice" would hide chat models such as
+  // gpt-4o-audio-preview. "image" is matched only as a whole name segment (Qwen-Image,
+  // Z-Image-Turbo, gpt-image-1): vision chat models are named VL/V instead. Hiding is
+  // advisory anyway: the input accepts any typed name.
   const SEP = "(?:^|[\\/_.:\\s-])";
   const END = "(?:$|[\\/_.:\\s-])";
   const NON_CHAT_PATTERNS = [
     /embed/iu,
     /rerank/iu,
     new RegExp(`${SEP}bge${END}`, "iu"),
-    new RegExp(`${SEP}tts${END}`, "iu"),
+    new RegExp(`${SEP}ttsd?${END}`, "iu"),
+    new RegExp(`asr${END}`, "iu"),
     /whisper/iu,
     /transcribe/iu,
     /dall-e/iu,
-    /gpt-image/iu,
+    new RegExp(`${SEP}image${END}`, "iu"),
     /moderation/iu,
     new RegExp(`${SEP}flux${END}`, "iu"),
     /stable-diffusion|sdxl/iu,

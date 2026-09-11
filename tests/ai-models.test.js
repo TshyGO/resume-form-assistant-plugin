@@ -142,9 +142,32 @@ test("non-chat models are hidden and chat models are kept", () => {
   assert.equal(hidden.length, ids.length - chat.length);
 });
 
-test("chat models that merely contain audio, voice or image words are not hidden", () => {
-  const ids = ["gpt-4o-audio-preview", "qwen-omni-voice-chat", "image-understanding-pro"];
+test("chat models that merely contain audio, voice or vision words are not hidden", () => {
+  const ids = [
+    "gpt-4o-audio-preview",
+    "qwen-omni-voice-chat",
+    "Qwen/Qwen3-VL-8B-Instruct",
+    "zai-org/GLM-4.5V",
+    "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+    "tencent/Hunyuan-MT-7B",
+    "deepseek-ai/DeepSeek-V4-Flash"
+  ];
   assert.deepEqual(models.filterChatModels(ids).chat, ids);
+});
+
+// Taken from a live SiliconFlow /v1/models response: these slipped past the first filter.
+test("image, speech-recognition and dialogue-TTS models from SiliconFlow are hidden", () => {
+  const ids = [
+    "Qwen/Qwen-Image",
+    "Qwen/Qwen-Image-Edit-2509",
+    "Tongyi-MAI/Z-Image-Turbo",
+    "baidu/ERNIE-Image-Turbo",
+    "Qwen/Qwen3-ASR-1.7B",
+    "XingChenAGI/XingChenASR-V3.2-Ultra",
+    "XingChenAGI/XingChenASR-Diarize-V3.0",
+    "fnlp/MOSS-TTSD-v0.5"
+  ];
+  assert.deepEqual(models.filterChatModels(ids).chat, []);
 });
 
 // --- matchModels ------------------------------------------------------------
