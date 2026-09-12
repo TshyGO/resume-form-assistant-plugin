@@ -15,7 +15,7 @@ import {
   replyClassLabel,
   sendModeLabel,
   sizeLabel,
-} from './inbox.js';
+} from './inbox.ts';
 
 test('an import is reported per outcome, and a duplicate is not an error', () => {
   const ok = describeImport({ imported: [{ id: 'a' }], duplicates: [], failed: [] });

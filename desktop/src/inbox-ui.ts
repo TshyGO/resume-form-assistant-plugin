@@ -3,6 +3,16 @@
 // 这里不解析任何东西，也不碰路径：拿到的就是命令层已经清洗过的文本、`data:` 图片和说明。
 // 正文一律经 escapeHtml 写入，邮件里的标签只会以字面文本出现。
 
+import type {
+  ApplicationSummary,
+  EvidencePreview,
+  EvidenceSummary,
+  ImportReport,
+  Invoke,
+  Page,
+} from "./api.ts";
+import { maybe, must, select as selectEl, textarea } from "./dom.ts";
+import type { Message } from "./inbox.ts";
 import {
   CHOOSE_APPLICATION_HINT,
   EMPTY_INBOX,
@@ -18,9 +28,9 @@ import {
   kindLabel,
   replyClassLabel,
   sendModeLabel,
-} from "./inbox.js";
+} from "./inbox.ts";
 
-function escapeHtml(value) {
+function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -28,33 +38,40 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function invokeError(error) {
-  return error?.message || error?.code || "未知错误";
+function invokeError(error: unknown) {
+  const detail = error as { message?: string; code?: string } | null;
+  return detail?.message || detail?.code || "未知错误";
 }
 
 /**
  * 挂载收件箱。`pickFiles` 与 `listenDrop` 由宿主注入（真实实现是 Tauri 的文件对话框与
  * 拖放事件），测试里可以换成假的。
  */
-export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {}) {
-  const list = document.getElementById("inbox-list");
-  const preview = document.getElementById("inbox-preview");
-  const status = document.getElementById("inbox-status");
-  const pasteBox = document.getElementById("inbox-paste");
+/** 宿主注入的两件事：打开文件对话框、监听窗口拖放。测试里换成假的。 */
+export interface InboxHost {
+  pickFiles?: (() => Promise<string[]>) | null;
+  listenDrop?: ((handle: (paths: string[]) => void) => void) | null;
+}
 
-  let items = [];
-  let selectedId = null;
+export function mountInbox(invoke: Invoke, { pickFiles = null, listenDrop = null }: InboxHost = {}) {
+  const list = must("inbox-list");
+  const preview = must("inbox-preview");
+  const status = must("inbox-status");
+  const pasteBox = textarea("inbox-paste");
+
+  let items: EvidenceSummary[] = [];
+  let selectedId: string | null = null;
   let previewToken = 0;
-  let applications = [];
+  let applications: ApplicationSummary[] = [];
 
-  function say(message) {
+  function say(message: Message | null) {
     status.textContent = message?.text ?? "";
     status.dataset.tone = message?.tone ?? "info";
   }
 
   async function refresh() {
     try {
-      items = await invoke("list_inbox_cmd");
+      items = await invoke<EvidenceSummary[]>("list_inbox_cmd");
     } catch (error) {
       items = [];
       say({ tone: "warn", text: `读不到收件箱：${invokeError(error)}` });
@@ -83,19 +100,22 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
         </li>`;
       })
       .join("")}</ul>`;
-    list.querySelectorAll("button[data-evidence]").forEach((button) => {
-      button.addEventListener("click", () => select(button.dataset.evidence));
+    list.querySelectorAll<HTMLElement>("button[data-evidence]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const id = button.dataset.evidence;
+        if (id) void select(id);
+      });
     });
   }
 
-  async function select(evidenceId) {
+  async function select(evidenceId: string) {
     selectedId = evidenceId;
     const token = ++previewToken;
     preview.innerHTML = '<p class="muted">加载中…</p>';
     renderList();
-    let data;
+    let data: EvidencePreview;
     try {
-      data = await invoke("get_evidence_preview_cmd", { evidenceId });
+      data = await invoke<EvidencePreview>("get_evidence_preview_cmd", { evidenceId });
     } catch (error) {
       if (token !== previewToken) return;
       preview.innerHTML = `<p class="banner">${escapeHtml(`读不出这条证据：${invokeError(error)}`)}</p>`;
@@ -109,7 +129,7 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
 
   async function loadApplications() {
     try {
-      const page = await invoke("list_applications_cmd", {
+      const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", {
         args: { stage: "all", recycle: "active", desc: true, limit: 100, offset: 0 },
       });
       applications = page?.items ?? [];
@@ -118,7 +138,7 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
     }
   }
 
-  function renderPreview(data) {
+  function renderPreview(data: EvidencePreview) {
     const item = data;
     const duplicate = duplicateNote(item);
     // 正文经过转义写入：邮件里的 <script> 只会作为字面文本出现。
@@ -176,12 +196,15 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
       </div>
       <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
     `;
-    preview.querySelectorAll("button[data-act]").forEach((button) => {
-      button.addEventListener("click", () => act(button.dataset.act, item));
+    preview.querySelectorAll<HTMLElement>("button[data-act]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.act;
+        if (action) void act(action, item);
+      });
     });
   }
 
-  async function act(action, item) {
+  async function act(action: string, item: EvidencePreview) {
     try {
       if (action === "open") {
         await invoke("open_evidence_cmd", { evidenceId: item.id });
@@ -189,7 +212,7 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
         return;
       }
       if (action === "associate") {
-        const applicationId = document.getElementById("inbox-application").value;
+        const applicationId = selectEl("inbox-application").value;
         if (!applicationId) {
           say({ tone: "warn", text: "请先选中一条申请。" });
           return;
@@ -207,14 +230,14 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
         return;
       }
       if (action === "classify") {
-        const replyClass = document.getElementById("inbox-reply-class").value || "unknown";
-        const sendMode = document.getElementById("inbox-send-mode").value || "unknown";
-        const updated = await invoke("classify_evidence_cmd", {
+        const replyClass = selectEl("inbox-reply-class").value || "unknown";
+        const sendMode = selectEl("inbox-send-mode").value || "unknown";
+        const updated = await invoke<EvidenceSummary>("classify_evidence_cmd", {
           evidenceId: item.id,
           replyClass,
           sendMode,
         });
-        say(describeClassification(updated ?? { replyClass, sendMode }));
+        say(describeClassification(updated ?? ({ replyClass, sendMode } as Partial<EvidenceSummary>)));
         await select(item.id);
       }
     } catch (error) {
@@ -222,14 +245,14 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
     }
   }
 
-  async function importPaths(paths) {
+  async function importPaths(paths: string[] | null | undefined) {
     if (!paths?.length) return;
     await runImport({ paths });
   }
 
-  async function runImport(args) {
+  async function runImport(args: { paths?: string[]; text?: string }) {
     try {
-      const report = await invoke("import_evidence_cmd", { args });
+      const report = await invoke<ImportReport>("import_evidence_cmd", { args });
       say(describeImport(report));
       await refresh();
     } catch (error) {
@@ -237,7 +260,7 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
     }
   }
 
-  document.getElementById("inbox-pick")?.addEventListener("click", async () => {
+  maybe("inbox-pick")?.addEventListener("click", async () => {
     if (!pickFiles) {
       say({ tone: "warn", text: "这个环境里打不开文件选择框，可以把文件拖进窗口。" });
       return;
@@ -246,16 +269,16 @@ export function mountInbox(invoke, { pickFiles = null, listenDrop = null } = {})
     await importPaths(paths);
   });
 
-  document.getElementById("inbox-refresh")?.addEventListener("click", () => refresh());
+  maybe("inbox-refresh")?.addEventListener("click", () => void refresh());
 
-  document.getElementById("inbox-paste-save")?.addEventListener("click", async () => {
-    const text = pasteBox?.value ?? "";
+  maybe("inbox-paste-save")?.addEventListener("click", async () => {
+    const text = pasteBox.value ?? "";
     if (!text.trim()) {
       say({ tone: "warn", text: "先粘贴一段文本再导入。" });
       return;
     }
     await runImport({ text });
-    if (pasteBox) pasteBox.value = "";
+    pasteBox.value = "";
   });
 
   if (listenDrop) listenDrop((paths) => importPaths(paths));

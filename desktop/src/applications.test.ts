@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createApplicationsController, evidenceLabel, stageLabel, occurredLabel } from "./applications.js";
+import { createApplicationsController, evidenceLabel, stageLabel, occurredLabel } from "./applications.ts";
 
 test("stale list responses do not replace a newer token", () => {
   const ctl = createApplicationsController();
@@ -41,7 +41,7 @@ test('occurrence displays date or unknown without substituting recorded time',()
 });
 
 test('a fill event says what was written into the page, never that it was submitted', async () => {
-  const { fillSummary } = await import('./applications.js');
+  const { fillSummary } = await import('./applications.ts');
   const text = fillSummary({ kind: 'fill_event', outcome: 'partial', field_count: 12, filled_count: 9, unconfirmed_count: 3, template_name: '合成模板', template_version: '0123456789ab' });
   assert.match(text, /部分完成/);
   assert.match(text, /已写入网页 9\/12 项/);
@@ -52,17 +52,17 @@ test('a fill event says what was written into the page, never that it was submit
 });
 
 test('a snapshot that is not stored is never offered as if it were', async () => {
-  const { snapshotStateLabel, SNAPSHOT_DISCLAIMER } = await import('./applications.js');
+  const { snapshotStateLabel, SNAPSHOT_DISCLAIMER } = await import('./applications.ts');
   assert.equal(snapshotStateLabel('stored'), null);
-  assert.match(snapshotStateLabel('uploading'), /上传中/);
-  assert.match(snapshotStateLabel('missing'), /不可用/);
-  assert.match(snapshotStateLabel(undefined), /不可用/);
+  assert.match(snapshotStateLabel('uploading') ?? "", /上传中/);
+  assert.match(snapshotStateLabel('missing') ?? "", /不可用/);
+  assert.match(snapshotStateLabel(undefined) ?? "", /不可用/);
   assert.match(SNAPSHOT_DISCLAIMER, /不能/);
   assert.match(SNAPSHOT_DISCLAIMER, /网站/);
 });
 
 test('a fill line shows how long it took and which revision of the template it used', async () => {
-  const { fillSummary } = await import('./applications.js');
+  const { fillSummary } = await import('./applications.ts');
   const text = fillSummary({ kind: 'fill_event', outcome: 'completed', field_count: 5, filled_count: 5,
     durations_ms: { scan: 40, match: 900, fill: 1480, total: 2420 }, template_name: '合成模板', template_version: '0123456789ab' });
   assert.match(text, /用时 2\.4 秒/);
@@ -73,19 +73,19 @@ test('a fill line shows how long it took and which revision of the template it u
 });
 
 test('a missing snapshot points at the list where a re-uploaded copy would be', async () => {
-  const { snapshotStateLabel } = await import('./applications.js');
-  assert.match(snapshotStateLabel('missing'), /快照列表/);
+  const { snapshotStateLabel } = await import('./applications.ts');
+  assert.match(snapshotStateLabel('missing') ?? "", /快照列表/);
 });
 
 test('a fill line does not invent a count the plugin did not send', async () => {
-  const { fillSummary } = await import('./applications.js');
+  const { fillSummary } = await import('./applications.ts');
   const text = fillSummary({ kind: 'fill_event', outcome: 'completed', field_count: 12 });
   assert.doesNotMatch(text, /0\/12/);
   assert.match(text, /共 12 项/);
 });
 
 test('an application with no evidence never implies nobody replied', async () => {
-  const { evidenceLabel, evidenceNote } = await import('./applications.js');
+  const { evidenceLabel, evidenceNote } = await import('./applications.ts');
   assert.equal(evidenceLabel('none_imported'), '尚未导入回复证据');
   assert.match(evidenceNote('none_imported'), /不代表对方没有回复/);
   assert.match(evidenceNote('imported_unclassified'), /还没有确认/);
@@ -93,7 +93,7 @@ test('an application with no evidence never implies nobody replied', async () =>
 });
 
 test('an evidence line keeps class and send mode apart', async () => {
-  const { evidenceLine } = await import('./applications.js');
+  const { evidenceLine } = await import('./applications.ts');
   const line = evidenceLine({ kind: 'eml', fromAddr: 'hr@example.test', sentAt: '2026-09-12T08:00:00.000Z', replyClass: 'interview_invite', sendMode: 'automated' });
   assert.match(line, /邮件/);
   assert.match(line, /面试邀请/);

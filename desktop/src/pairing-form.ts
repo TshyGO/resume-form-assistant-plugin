@@ -1,3 +1,9 @@
+/** 桌面设置页里记录的两个浏览器扩展 ID。 */
+export interface PairingIds {
+  chromeExtensionId?: string | null;
+  edgeExtensionId?: string | null;
+}
+
 export function createPairingController() {
   let generation = 0;
   let chromeDirty = false;
@@ -14,7 +20,7 @@ export function createPairingController() {
     markEdgeDirty() {
       edgeDirty = true;
     },
-    applyStatus(token, pairing) {
+    applyStatus(token: number, pairing: PairingIds | null | undefined) {
       if (token !== generation) {
         return { applied: false, reason: "stale" };
       }
@@ -26,7 +32,7 @@ export function createPairingController() {
         edge: edgeDirty ? undefined : nextEdge,
       };
     },
-    onSaveSuccess(saved) {
+    onSaveSuccess(saved: PairingIds | null | undefined) {
       chromeDirty = false;
       edgeDirty = false;
       generation += 1;

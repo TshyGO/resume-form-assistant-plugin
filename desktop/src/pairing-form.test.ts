@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPairingController } from "./pairing-form.js";
+import { createPairingController } from "./pairing-form.ts";
 
 test("typed values survive multiple status refreshes", () => {
   const form = createPairingController();

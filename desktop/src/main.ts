@@ -1,51 +1,53 @@
-import { createPairingController } from "./pairing-form.js";
-import { mountApplications } from "./applications-ui.js";
-import { mountInbox } from "./inbox-ui.js";
+import type { Invoke, RuntimeStatus } from "./api.ts";
+import { input, must } from "./dom.ts";
+import { createPairingController } from "./pairing-form.ts";
+import { mountApplications } from "./applications-ui.ts";
+import { mountInbox } from "./inbox-ui.ts";
 
-const invoke = window.__TAURI__?.core?.invoke;
+const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
-const chromeInput = document.getElementById("chrome-id");
-const edgeInput = document.getElementById("edge-id");
+const chromeInput = input("chrome-id");
+const edgeInput = input("edge-id");
 
-const views = {
-  applications: document.getElementById("view-applications"),
-  inbox: document.getElementById("view-inbox"),
-  todos: document.getElementById("view-todos"),
-  settings: document.getElementById("view-settings"),
+const views: Record<string, HTMLElement> = {
+  applications: must("view-applications"),
+  inbox: must("view-inbox"),
+  todos: must("view-todos"),
+  settings: must("view-settings"),
 };
 
-function showRoute(name) {
+function showRoute(name: string | undefined) {
   Object.entries(views).forEach(([key, el]) => {
     el.classList.toggle("hidden", key !== name);
   });
-  document.querySelectorAll(".nav button[data-route]").forEach((btn) => {
+  document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.route === name);
   });
 }
 
-document.querySelectorAll(".nav button[data-route]").forEach((btn) => {
+document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
   btn.addEventListener("click", () => showRoute(btn.dataset.route));
 });
 
 chromeInput.addEventListener("input", () => pairing.markChromeDirty());
 edgeInput.addEventListener("input", () => pairing.markEdgeDirty());
 
-function fact(label, value) {
+function fact(label: string, value: unknown) {
   return `<dt>${label}</dt><dd><code>${escapeHtml(value ?? "—")}</code></dd>`;
 }
 
-function escapeHtml(value) {
+function escapeHtml(value: unknown) {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
 
-function yn(flag) {
+function yn(flag: unknown) {
   return flag ? "是" : "否";
 }
 
-function applyPairingFields(result) {
+function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: string }) {
   if (!result.applied) {
     return;
   }
@@ -59,20 +61,20 @@ function applyPairingFields(result) {
 
 async function refreshStatus() {
   if (!invoke) {
-    document.getElementById("runtime-pill").textContent = "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）";
+    must("runtime-pill").textContent = "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）";
     return;
   }
   const token = pairing.beginRefresh();
-  const status = await invoke("get_runtime_status");
-  document.getElementById("runtime-pill").textContent = status.runtimeLabel;
-  const banner = document.getElementById("banner");
+  const status = await invoke<RuntimeStatus>("get_runtime_status");
+  must("runtime-pill").textContent = status.runtimeLabel;
+  const banner = must("banner");
   if (status.error) {
     banner.classList.remove("hidden");
     banner.textContent = `${status.error.code}: ${status.error.message}。${status.error.hint}`;
   } else {
     banner.classList.add("hidden");
   }
-  document.getElementById("facts").innerHTML = [
+  must("facts").innerHTML = [
     fact("应用版本", status.appVersion),
     fact("标识符", status.identifier),
     fact("运行状态", status.runtimeLabel),
@@ -100,19 +102,25 @@ async function refreshStatus() {
 }
 
 let pairingSaving = false;
-document.getElementById("pairing-form").addEventListener("submit", async (event) => {
+must("pairing-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (pairingSaving) return;
   pairingSaving = true;
-  const fields = document.getElementById("pairing-form").querySelectorAll("input,button");
-  fields.forEach(el => { el.disabled = true; });
-  const msg = document.getElementById("pairing-msg");
+  const fields = must("pairing-form").querySelectorAll<HTMLInputElement | HTMLButtonElement>("input,button");
+  fields.forEach((field) => { field.disabled = true; });
+  const msg = must("pairing-msg");
+  if (!invoke) {
+    msg.textContent = "未连接到桌面宿主，草稿没有保存。";
+    pairingSaving = false;
+    fields.forEach((field) => { field.disabled = false; });
+    return;
+  }
   const typed = {
     chrome: chromeInput.value,
     edge: edgeInput.value,
   };
   try {
-    const saved = await invoke("save_pairing_draft", {
+    const saved = await invoke<{ chromeExtensionId?: string | null; edgeExtensionId?: string | null }>("save_pairing_draft", {
       chromeExtensionId: typed.chrome,
       edgeExtensionId: typed.edge,
     });
@@ -121,29 +129,35 @@ document.getElementById("pairing-form").addEventListener("submit", async (event)
     edgeInput.value = applied.edge;
     msg.textContent = "已写入本地 settings.json 草稿，未注册 Native Messaging。";
     await refreshStatus();
-  } catch (err) {
+  } catch (err: unknown) {
     pairing.onSaveFailure();
     chromeInput.value = typed.chrome;
     edgeInput.value = typed.edge;
     msg.textContent = String(err);
-  } finally { pairingSaving = false; fields.forEach(el => { el.disabled = false; }); }
+  } finally { pairingSaving = false; fields.forEach((field) => { field.disabled = false; }); }
 });
 
-document.getElementById("btn-hide").addEventListener("click", () => invoke("hide_main_window_cmd"));
-document.getElementById("btn-quit").addEventListener("click", () => {
+must("btn-hide").addEventListener("click", () => invoke?.("hide_main_window_cmd"));
+must("btn-quit").addEventListener("click", () => {
   if (window.confirm("退出后唯一写入者进程会结束。提醒尚未实现，退出不会保留系统通知。确定退出？")) {
-    invoke("quit_app");
+    invoke?.("quit_app");
   }
 });
-document.getElementById("btn-diag").addEventListener("click", async () => {
-  const msg = document.getElementById("diag-msg");
+must("btn-diag").addEventListener("click", async () => {
+  const msg = must("diag-msg");
+  if (!invoke) {
+    msg.textContent = "未连接到桌面宿主，没有导出。";
+    return;
+  }
   try {
-    const result = await invoke("export_diagnostics");
+    const result = await invoke<{ exportPath: string }>("export_diagnostics");
     msg.textContent = `已导出到 ${result.exportPath}`;
-  } catch (err) {
+  } catch (err: unknown) {
     msg.textContent = String(err);
   }
 });
+
+if (!invoke) throw new Error("桌面宿主没有注入 __TAURI__.core.invoke");
 
 const applications = mountApplications(invoke);
 
@@ -154,7 +168,7 @@ const events = window.__TAURI__?.event;
 const inbox = mountInbox(invoke, {
   pickFiles: dialog?.open
     ? async () => {
-        const chosen = await dialog.open({
+        const chosen = await dialog.open?.({
           multiple: true,
           filters: [{ name: "回复证据", extensions: ["eml", "txt", "png", "jpg", "jpeg", "pdf"] }],
         });
@@ -163,18 +177,18 @@ const inbox = mountInbox(invoke, {
       }
     : null,
   listenDrop: events?.listen
-    ? (handle) => {
-        events.listen("tauri://drag-drop", (event) => handle(event?.payload?.paths ?? []));
+    ? (handle: (paths: string[]) => void) => {
+        void events.listen?.("tauri://drag-drop", (event) => handle(event?.payload?.paths ?? []));
       }
     : null,
 });
 
 showRoute("applications");
-refreshStatus().catch((err) => {
-  document.getElementById("runtime-pill").textContent = String(err);
+refreshStatus().catch((err: unknown) => {
+  must("runtime-pill").textContent = String(err);
 });
-applications.refreshList().catch((err) => {
-  document.getElementById("apps-msg").textContent = String(err);
+applications.refreshList().catch((err: unknown) => {
+  must("apps-msg").textContent = String(err);
 });
 inbox.refresh().catch(() => {});
 setInterval(() => {
