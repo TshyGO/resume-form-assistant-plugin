@@ -32,3 +32,12 @@ export const MAX_STAGED_BYTES = 20 * 1024 * 1024;
 
 // An unfinished snapshot older than this is brought to the user. It is never deleted for age.
 export const STAGING_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
+
+// A staged snapshot no record refers to was left by a worker that died between staging and
+// writing the record. Only cleaned up after this long, so one still on its way is not touched.
+export const ORPHAN_STAGING_GRACE_MS = 60 * 60 * 1000;
+
+// A snapshot binding whose fill.submit never reached the queue is treated as an interrupted
+// bind once it is this old. The two writes are milliseconds apart; this only has to be longer
+// than any bind still in progress when a worker starts.
+export const BIND_INTERRUPTED_GRACE_MS = 2 * 60 * 1000;

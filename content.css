@@ -517,6 +517,21 @@
   background: rgba(248, 250, 252, 0.9);
 }
 
+.resume-pro__fill-record-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+  cursor: pointer;
+}
+
+.resume-pro__fill-record-option input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
 .resume-pro__candidate-list {
   display: flex;
   flex-direction: column;

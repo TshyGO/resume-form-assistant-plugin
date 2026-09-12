@@ -133,6 +133,17 @@ test('a hidden sidebar panel stays hidden even when its class sets a display', a
   assert.match(css, /\.resume-pro \[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/);
 });
 
+test('the fill-record card offers the snapshot, ticked by default, and sends the template it used', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  // Owner decision Q3: attached unless the user unticks it, and visible before "留档".
+  assert.match(source, /<input type="checkbox" id="resume-pro-fill-record-snapshot" checked>/);
+  assert.match(source, /snapshotTemplate/);
+  // The snapshot is of the template the fill used, frozen when the fill started.
+  assert.match(source, /structuredClone\(template\)/);
+  assert.match(source, /DESKTOP_DROP_SNAPSHOT/);
+  assert.match(source, /describeSnapshotUpload/);
+});
+
 test('a finished fill is filed under the page it ran on, not the one the user moved to', async () => {
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   const body = source.slice(source.indexOf('async function offerFillRecord'), source.indexOf('function closeFillRecord'));
@@ -145,7 +156,7 @@ test('queue rows describe a retried or resolved entry in the words of its own ki
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   const describe = source.slice(source.indexOf('function describeQueueResult'));
   assert.match(describe, /fill\.submit[\s\S]*describeFillRecordResult/);
-  const retry = source.slice(source.indexOf('"立即重试"'), source.indexOf('"立即重试"') + 400);
+  const retry = source.slice(source.lastIndexOf('"立即重试"'), source.lastIndexOf('"立即重试"') + 400);
   assert.match(retry, /describeQueueResult\(/);
   const resolve = source.slice(source.indexOf('async function resolvePaused'), source.indexOf('function describeOutboxState'));
   assert.match(resolve, /describeQueueResult\(/);

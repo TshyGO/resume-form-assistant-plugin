@@ -1,4 +1,4 @@
-import { MAX_FILL_RECORDS, MAX_INTENTS, MAX_OUTBOX } from './limits.mjs';
+import { MAX_FILL_RECORDS, MAX_INTENTS, MAX_OUTBOX, MAX_STAGED_SNAPSHOTS } from './limits.mjs';
 
 // User-facing wording for every outcome of a save, in one table.
 //
@@ -191,10 +191,33 @@ export function describeFillSummary(fill) {
 
 /** The card shown after a fill: what happened, and the question. */
 export function describeFillOffer(fill) {
-  return `${describeFillSummary(fill)}要把这次填写留档到桌面吗？只记结果和计数，不记填写的内容。`;
+  return `${describeFillSummary(fill)}要把这次填写留档到桌面吗？留档记的是结果和计数，不记网页上填了什么。`;
 }
 
+// Why a fill was archived without its snapshot. The fill record itself is unaffected: a
+// snapshot is an attachment, and losing it never costs the user the record or the fill.
+const SNAPSHOT_ISSUES = {
+  too_large: '简历快照超过 2 MiB，这次没有附上；填写记录照常留档。',
+  empty: '模板里没有可以保存的字段，这次没有附上简历快照。',
+  staging_full: `暂存的简历快照已满（${MAX_STAGED_SNAPSHOTS} 份 / 20 MiB），这次没有附上。请先处理待同步里的旧留档。`,
+  staging_unavailable: '浏览器存储暂时不可用，这次没有附上简历快照；填写记录照常留档。',
+  bytes_lost: '暂存的简历快照已经丢失，这次只留档填写记录。',
+  queue_full: `待同步的消息已满（${MAX_OUTBOX} 条），简历快照这次没有排上。`
+};
+
 export function describeFillRecordResult(result) {
+  const copy = describeFillRecordStatus(result);
+  const extra = [];
+  if (result?.status === 'saved' && result.uploadQueued) {
+    extra.push('简历快照正在后台上传，传完之前本机会保留一份。');
+  }
+  if (result?.snapshotIssue && SNAPSHOT_ISSUES[result.snapshotIssue]) {
+    extra.push(SNAPSHOT_ISSUES[result.snapshotIssue]);
+  }
+  return extra.length ? { ...copy, text: `${copy.text}${extra.join('')}` } : copy;
+}
+
+function describeFillRecordStatus(result) {
   const { status, mode, reason, code } = result ?? {};
 
   if (status === 'saved') {
@@ -256,3 +279,24 @@ export function describeFillRecordResult(result) {
 const FILL_REFUSALS = {
   invalid_payload: '桌面上找不到所选的申请，这次没有留档。请在「待同步」里重新选择申请。'
 };
+
+/**
+ * One queued snapshot upload in the pending list. A lost copy is never offered as "retry":
+ * there is nothing left to send, and rebuilding it from today's template would upload a
+ * different resume under the old name (walkthrough 10.10).
+ */
+export function describeSnapshotUpload(entry, { expired = false } = {}) {
+  const acked = (entry?.chunks ?? []).filter(chunk => chunk.acked).length;
+  const total = entry?.chunkCount ?? 0;
+  const byStatus = {
+    bytes_lost: { text: '简历快照暂存丢失，请重新留档或在桌面导入。', retry: false },
+    failed: { text: `简历快照被桌面拒绝，已停下（${REFUSALS[entry?.lastError] ?? '原因未知'}）`, retry: true },
+    stalled: { text: '简历快照重试多次仍未传完，等你决定继续还是丢弃。', retry: true },
+    paused: { text: '桌面换过档案库，简历快照已暂停。', retry: false },
+    needs_user: { text: '桌面换过档案库，简历快照等你决定。', retry: false },
+    completed: { text: '简历快照已传完，正在清理本机的暂存副本。', retry: false },
+    discarding: { text: '已放弃这份简历快照，本机副本暂时删不掉，下次启动时再删；它不会再发送。', retry: false }
+  };
+  const copy = byStatus[entry?.status] ?? { text: `简历快照上传中（已传 ${acked}/${total} 块）`, retry: true };
+  return expired ? { ...copy, text: `${copy.text}已暂存超过 30 天，要继续发送还是丢弃？` } : copy;
+}

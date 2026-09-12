@@ -16,7 +16,8 @@ export const MSG = {
   linkState: 'DESKTOP_LINK_STATE',
   recordFill: 'DESKTOP_RECORD_FILL',
   bindFill: 'DESKTOP_BIND_FILL',
-  removeFill: 'DESKTOP_REMOVE_FILL'
+  removeFill: 'DESKTOP_REMOVE_FILL',
+  dropSnapshot: 'DESKTOP_DROP_SNAPSHOT'
 };
 
 export const DESKTOP_MESSAGE_TYPES = new Set(Object.values(MSG));
