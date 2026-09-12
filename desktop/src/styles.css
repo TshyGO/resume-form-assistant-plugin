@@ -190,3 +190,61 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-
   max-height: 80vh;
   overflow: auto;
 }
+
+.inbox-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.inbox-paste {
+  margin: 8px 0;
+}
+
+.inbox-paste textarea {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+}
+
+ul.inbox-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+ul.inbox-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+ul.inbox-list li.active button {
+  font-weight: 600;
+}
+
+ul.inbox-list button {
+  flex: 1;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evidence-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--surface, #f6f6f6);
+  padding: 8px;
+}
+
+.evidence-image {
+  max-width: 100%;
+  max-height: 40vh;
+}

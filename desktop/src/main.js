@@ -1,5 +1,6 @@
 import { createPairingController } from "./pairing-form.js";
 import { mountApplications } from "./applications-ui.js";
+import { mountInbox } from "./inbox-ui.js";
 
 const invoke = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
@@ -146,6 +147,28 @@ document.getElementById("btn-diag").addEventListener("click", async () => {
 
 const applications = mountApplications(invoke);
 
+// 文件选择与拖放是宿主能力：这里注入真实实现，测试里注入假的。拖放事件带来的是用户
+// 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
+const dialog = window.__TAURI__?.dialog;
+const events = window.__TAURI__?.event;
+const inbox = mountInbox(invoke, {
+  pickFiles: dialog?.open
+    ? async () => {
+        const chosen = await dialog.open({
+          multiple: true,
+          filters: [{ name: "回复证据", extensions: ["eml", "txt", "png", "jpg", "jpeg", "pdf"] }],
+        });
+        if (!chosen) return [];
+        return Array.isArray(chosen) ? chosen : [chosen];
+      }
+    : null,
+  listenDrop: events?.listen
+    ? (handle) => {
+        events.listen("tauri://drag-drop", (event) => handle(event?.payload?.paths ?? []));
+      }
+    : null,
+});
+
 showRoute("applications");
 refreshStatus().catch((err) => {
   document.getElementById("runtime-pill").textContent = String(err);
@@ -153,6 +176,7 @@ refreshStatus().catch((err) => {
 applications.refreshList().catch((err) => {
   document.getElementById("apps-msg").textContent = String(err);
 });
+inbox.refresh().catch(() => {});
 setInterval(() => {
   refreshStatus().catch(() => {});
 }, 4000);

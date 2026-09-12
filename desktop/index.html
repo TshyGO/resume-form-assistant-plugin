@@ -132,9 +132,20 @@
 
         <section id="view-inbox" class="view hidden">
           <h1>证据收件箱</h1>
-          <div class="empty">
-            <p>证据收件箱尚未接入。</p>
-            <p class="muted">邮件导入与分类属于后续交付。当前没有可展示的证据，也没有「尚未导入」的计数。</p>
+          <p class="muted">把回复邮件（.eml）、截图或 PDF 拖进窗口，或者粘贴一段文本。导入只是把原件存进档案，不代表对方回复了什么，也不会改变申请阶段。</p>
+          <div class="row">
+            <button type="button" id="inbox-pick">选择文件…</button>
+            <button type="button" id="inbox-refresh">刷新</button>
+          </div>
+          <details class="inbox-paste">
+            <summary>粘贴一段文本</summary>
+            <textarea id="inbox-paste" rows="4" placeholder="把邮件正文或一段说明粘贴到这里"></textarea>
+            <button type="button" id="inbox-paste-save">导入这段文本</button>
+          </details>
+          <p id="inbox-status" class="muted"></p>
+          <div class="inbox-split">
+            <div id="inbox-list"></div>
+            <div id="inbox-preview"></div>
           </div>
         </section>
 
