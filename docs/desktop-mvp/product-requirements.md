@@ -493,6 +493,16 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 同一字节被多条申请引用时不复制文件。`refCount=0` 才允许永久删除。HTML 邮件：清洗展示，不执行脚本、不加载远程图片/跟踪像素、不自动打开链接（D09）。
 
+**D09 实现（可核对）：**
+
+- **落盘顺序固定**：`evidence-import` 先把字节写进 `attachments/<yyyy>/<mm>/<sha256 前 16 位>-<安全文件名>`（临时名 → `sync_all` → rename），成功之后 archive-store 才登记证据行。反过来的孤儿文件由 `check_attachment_refs` 报告，**不会出现「库里有记录、文件不在」**。
+- **安全文件名**：只保留字母/数字/CJK/`.`/`-`/`_`/空格，其余替换；去掉首尾空白与点；主干 80 字符封顶；Windows 保留名加前缀；冲突加 `-2`、`-3`，**不覆盖**。任何形式的路径分隔与盘符都在进入拼接之前就被切掉。
+- **同字节只存一份**：导入前按 sha256 查 `attachment_blobs`，命中就复用既有 `storedRelPath` 并把这次记为「重复」；`refCount` 自增。重复只是提示，**不撤销用户有意的第二次关联**。
+- **MVP 输入**：`.eml`、纯文本、PNG、JPEG、PDF；按内容判定，扩展名只作佐证。`.msg` 与其他二进制明确拒绝，提示另存为 `.eml` 或粘贴正文。单份上限 **25 MiB**，一次最多 20 个文件。`.txt` 文件记为 `kind = unknown`（`paste` 专指粘贴进来的文本）。
+- **正文提取在 Rust 侧完成**：`text/plain` 优先，只有 HTML 时压平成文本（脚本与样式整块丢弃，链接变成 `文字 <URL>`），上限 64 KiB。因此 WebView 拿到的正文已经是纯文本，界面用转义写入即可。
+- **`sourcePathHint` 只在导入函数的参数里**：不进结构体、不进错误信息、不进日志（走查 10.16）。给界面的每个结构都不含 `storedRelPath`；要用系统程序打开时，路径在 Rust 侧解析并核对在档案目录之内。
+- **取消关联**：`unassociate_evidence` 把 `applicationId` 置空并写 `association_changed{from, to: null}`，原申请按 §6.3 重算——这是回到 `none_imported` 的唯一路径。
+
 ### 8.5 ResumeSnapshot
 
 插件实时模板继续只活在 `chrome.storage.local`。桌面快照是填写归档时的 **拷贝**，之后不可变。改插件模板不得改写历史快照。
