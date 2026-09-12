@@ -218,3 +218,16 @@ test('an upload in progress is described by chunks, and a lost copy is never "re
     assert.doesNotMatch(describeSnapshotUpload({ status, chunkCount: 4, chunks }).text, /投递/, status);
   }
 });
+
+test('a snapshot paused by a restore explains the answer and offers only upload-again or discard', async () => {
+  const { describeSnapshotReconcile } = await load();
+  for (const status of ['applied', 'not_found', 'conflict', 'unverifiable', 'purged', undefined]) {
+    const copy = describeSnapshotReconcile(status);
+    assert.deepEqual(copy.choices, ['resave', 'discard'], String(status));
+    assert.doesNotMatch(copy.text, /投递/, String(status));
+    assert.doesNotMatch(copy.text, /已上传|已保存到桌面/, String(status));
+  }
+  // `applied` for every chunk proves history, not a finished snapshot, so it is not "done".
+  assert.match(describeSnapshotReconcile('applied').text, /无法确认/);
+  assert.match(describeSnapshotReconcile('not_found').text, /不等于没有/);
+});

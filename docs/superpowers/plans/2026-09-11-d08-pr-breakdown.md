@@ -290,8 +290,8 @@
 - 对账：每块一项 `{clientInstanceId, messageId: chunkMessageId, sourceRestoreEpoch, payloadSha256: <块身份摘要>, snapshotId, chunkIndex}`，按 32 分批（64 块 = 2 批）。结果按块回填，汇总成快照级状态给用户看：全部 `applied`、部分 `applied`、存在 `conflict` / `not_found` / `unverifiable` / `purged`。
 - 用户出口：
   - **丢弃**：删 IDB + 删条目；
-  - **另存**：为 **所有块** 新铸 `chunkMessageId`、盖当前 epoch、记录旧身份（`previousIdentity`，每块一份），**先写 IDB 与 outbox 再发送**，重试不得生成第三套身份；`applicationId` 改由用户重新选（恢复后旧申请可能已不存在）；
-  - **关联**：对快照而言等于「另存到指定申请」（`applicationId` 是块身份的一部分，换申请就是新块身份），UI 上合并成同一个入口，避免让用户理解两种说法。
+  - **另存**：**换一个新的 `snapshotId`**，并为所有块新铸 `chunkMessageId`、盖当前 epoch、记录旧身份（`previousIdentity`：旧 snapshotId、旧 epoch、旧块 id 列表），**先写 IDB 再换 outbox 条目、然后才发送**，重试不得生成第三套身份。必须换 snapshotId：桌面 `snapshot_uploads` 以 `snapshot_id` 唯一，每块都核对父记录的 epoch，同一个 snapshotId 在新 epoch 下只会被判 `conflict`（实现时核实，原计划只写了换块 id）。同一条留档还在队列里暂停的 `fill.submit` 会改指向新的 snapshotId；如果恢复后的档案里那条 `fill.submit` 已经是 `applied`（备份含事件、不含快照块），事件不可改写，它仍指向旧 snapshotId——另存的快照照常登记在同一申请下（桌面快照列表可见），只是不再从那条事件跳转。要从事件链接过去需要协议加字段，记为 D12 / 后续 issue。另存用排队的一步先把条目占成 `resaving`，双击只会产生一份新快照；
+  - **关联**：对快照而言等于「另存到指定申请」（`applicationId` 是块身份的一部分）。`reconcile.resolve` 已支持 `associate` 带 `applicationId`；侧边栏本期只给「重新上传到当前档案」（原申请）与「丢弃快照」两个出口——原申请在恢复后的档案里不存在时，块会被桌面以 `invalid_payload` 拒绝，用户再丢弃即可。
 - `applied` 不授予重写许可；`not_found` 不代表从未执行，不自动重写（§8.11）。
 - 另存时仍用 IDB 里的 **原字节**，不从当前模板重建。
 

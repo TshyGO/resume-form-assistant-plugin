@@ -36,7 +36,7 @@ export function installDesktopLink(api) {
   const uploads = createUploads({ ...deps, staging });
   const session = createSession(deps);
   const outbox = createOutbox({ ...deps, uploads });
-  const reconcile = createReconcile({ ...deps, outbox });
+  const reconcile = createReconcile({ ...deps, outbox, uploads });
   const drain = createDrain({ session, outbox, reconcile, alarms: api.alarms, now: deps.now });
 
   const router = createRouter({

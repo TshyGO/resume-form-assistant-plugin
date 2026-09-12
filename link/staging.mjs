@@ -94,6 +94,22 @@ export function createStaging({ kv, now = () => new Date(), uuid }) {
     return new Uint8Array(record.bytes.slice(chunk.start, chunk.end));
   }
 
+  /**
+   * Store a whole record under its own id, verified by reading it back. Used to move staged
+   * bytes to a new snapshot identity; no quota check, since it replaces a record already counted.
+   */
+  function put(record) {
+    return serial(async () => {
+      await kv.put(record.snapshotId, record);
+      const stored = await kv.get(record.snapshotId);
+      if (!stored?.bytes || (await sha256Hex(new Uint8Array(stored.bytes))) !== record.sha256) {
+        await kv.delete(record.snapshotId).catch(() => {});
+        throw new Error('readback_mismatch');
+      }
+      return stored;
+    });
+  }
+
   function update(snapshotId, change) {
     return serial(async () => {
       const record = await get(snapshotId);
@@ -123,5 +139,5 @@ export function createStaging({ kv, now = () => new Date(), uuid }) {
     return now().getTime() - Date.parse(record.createdAt) > STAGING_EXPIRY_MS;
   }
 
-  return { stage, get, readChunk, update, remove, list, usage, isExpired };
+  return { stage, get, put, readChunk, update, remove, list, usage, isExpired };
 }

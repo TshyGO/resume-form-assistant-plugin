@@ -2182,6 +2182,15 @@
     for (const entry of outbox.filter(item => item.messageType === "snapshot.upload")) {
       const state = copy.describeSnapshotUpload(entry, { expired: expired.has(entry.snapshotId) });
       const row = pendingRow(`简历快照 · ${entry.payload?.templateName || ""}`, "", state.text);
+      if (entry.status === "paused" || entry.status === "needs_user") {
+        // After a restore the only ways out are the user's: upload the kept original again
+        // under a new identity, or let it go. Never a plain retry of the old chunks.
+        appendNote(row, copy.describeSnapshotReconcile(entry.reconcileStatus).text);
+        row.appendChild(rowButton("重新上传到当前档案", () => resolvePaused(entry, "resave")));
+        row.appendChild(rowButton("丢弃快照", () => resolvePaused(entry, "discard")));
+        list.appendChild(row);
+        continue;
+      }
       if (state.retry) {
         row.appendChild(rowButton("立即重试", async () => {
           await chrome.runtime.sendMessage({ type: "DESKTOP_RETRY", messageId: entry.messageId });
@@ -2229,6 +2238,7 @@
   // job was saved, nor a refused one ask the user to check a company name.
   function describeQueueResult(copy, entry, result) {
     if (entry.messageType === "fill.submit") return copy.describeFillRecordResult(result);
+    if (entry.messageType === "snapshot.upload") return copy.describeSnapshotResolveResult(result);
     if (entry.messageType === "submit.confirm") return copy.describeConfirmResult(result);
     return copy.describeBindResult(result);
   }
@@ -2288,7 +2298,9 @@
       type: "DESKTOP_RESOLVE", messageId: entry.messageId, choice, applicationId
     });
     if (choice !== "discard") {
-      setDesktopStatus(describeQueueResult(copy, entry, result ?? { status: "pending" }));
+      // A resaved snapshot is queued, not yet on the desktop: described as pending.
+      const shown = result?.status === "queued" ? { status: "pending" } : (result ?? { status: "pending" });
+      setDesktopStatus(describeQueueResult(copy, entry, shown));
     }
     refreshPendingList();
   }

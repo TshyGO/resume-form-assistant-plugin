@@ -248,6 +248,66 @@ export function createUploads({ store, staging, sendNative, sleep, uuid, now }) 
   }
 
   /**
+   * The user chose to upload a paused snapshot again after a restore (§8.11, walkthrough
+   * 10.23). Same bytes, new identity throughout: a new snapshotId — the desktop keys an upload
+   * by it and checks its epoch on every chunk — and a new id for every chunk, stamped with the
+   * current epoch. The old identity is kept as a record, never as a credential.
+   *
+   * The new record is staged first; the caller then swaps the queue entry and abandons the
+   * old copy. A crash leaves at worst a staged record repair() turns back into its entry.
+   */
+  async function resave(entry, { identity, applicationId = null }) {
+    let staged;
+    try {
+      staged = await staging.get(entry.snapshotId);
+    } catch {
+      staged = null;
+    }
+    if (!staged) return { issue: 'bytes_lost' };
+
+    const snapshotId = uuid();
+    const binding = {
+      recordId: entry.recordId,
+      applicationId: applicationId ?? entry.applicationId,
+      archiveId: identity.archiveId,
+      sourceRestoreEpoch: identity.restoreEpoch,
+      clientInstanceId: entry.clientInstanceId,
+      templateName: staged.templateName
+    };
+    const chunks = staged.chunks.map(chunk => ({
+      chunkIndex: chunk.chunkIndex,
+      chunkSha256: chunk.chunkSha256,
+      chunkMessageId: uuid()
+    }));
+    const moved = {
+      ...staged,
+      snapshotId,
+      binding,
+      chunks: staged.chunks.map(chunk => ({ ...chunk, chunkMessageId: chunks[chunk.chunkIndex].chunkMessageId }))
+    };
+
+    try {
+      await staging.put(moved);
+    } catch {
+      return { issue: 'staging_unavailable' };
+    }
+    // The old copy is deleted by the caller once the queue names the replacement
+    // (reconcile.resolveUpload → abandon), so a failed delete leaves a tombstone, not an upload.
+
+    return {
+      entry: {
+        ...entryFor(moved, chunks, binding),
+        previousIdentity: {
+          clientInstanceId: entry.clientInstanceId,
+          snapshotId: entry.snapshotId,
+          sourceRestoreEpoch: entry.sourceRestoreEpoch,
+          chunkMessageIds: entry.chunks.map(chunk => chunk.chunkMessageId)
+        }
+      }
+    };
+  }
+
+  /**
    * Delete a staged copy. Safe to call for one already gone. Returns false when IndexedDB
    * refused; callers that must not let the copy come back use abandon() instead.
    */
@@ -316,6 +376,12 @@ export function createUploads({ store, staging, sendNative, sleep, uuid, now }) 
     const records = await store.getFillRecords();
 
     for (const entry of outbox.filter(item => item.messageType === SNAPSHOT_UPLOAD)) {
+      if (entry.status === 'resaving') {
+        // The worker stopped in the middle of a resave. The user's decision is asked again;
+        // a replacement that was already staged is rebuilt below from its own binding.
+        await patch(entry.messageId, item => ({ ...item, status: item.resumeStatus ?? 'needs_user', resumeStatus: undefined }));
+        continue;
+      }
       if (entry.status === 'discarding') {
         if (await discard(entry.snapshotId)) {
           await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
@@ -387,5 +453,5 @@ export function createUploads({ store, staging, sendNative, sleep, uuid, now }) 
     list.map(item => (item.messageId === messageId ? change(item) : item))
   );
 
-  return { stage, prepare, deliver, discard, abandon, release, repair, expired };
+  return { stage, prepare, deliver, resave, discard, abandon, release, repair, expired };
 }
