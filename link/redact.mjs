@@ -81,6 +81,45 @@ function isAllowlisted(host, path, param, value) {
   );
 }
 
+/**
+ * Strip credentials from a URL the user typed, keeping everything else.
+ *
+ * `redactUrl` above is for page addresses and refuses anything but https; an AI endpoint
+ * is often `http://localhost:1234/v1`, and dropping it would break the config it is meant
+ * to protect. This one keeps the scheme and only removes what authenticates: userinfo and
+ * the D05 secret query parameters. `changed` lets the caller say so out loud.
+ *
+ * @param {unknown} raw
+ * @returns {{ url: string, changed: boolean }}
+ */
+export function redactUrlCredentials(raw) {
+  const text = typeof raw === 'string' ? raw : '';
+
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    // Not a URL, so it never authenticated anything either. Hand it back untouched.
+    return { url: text, changed: false };
+  }
+
+  let changed = Boolean(url.username || url.password);
+  url.username = '';
+  url.password = '';
+
+  /** @type {Array<[string, string]>} */
+  const kept = [];
+  for (const [name, value] of url.searchParams) {
+    if (SECRET_QUERY_KEYS.has(name.toLowerCase().replaceAll('-', '_'))) {
+      changed = true;
+      continue;
+    }
+    kept.push([name, value]);
+  }
+
+  return { url: withParams(url, kept), changed };
+}
+
 /** @param {string} name */
 function isTracking(name) {
   const lowered = name.toLowerCase();

@@ -1,6 +1,12 @@
 // @ts-check
-// 密码 / 验证码 / 密钥这类字段的判定与剔除。快照要用，弹窗导出备份也要用，
-// 规则只能有一份，所以单独放一个没有依赖的模块。
+// 密码 / 验证码 / 密钥这类字段的判定与剔除，外加地址里的凭据参数。快照要用，
+// 弹窗导出备份也要用，规则只能有一份，所以集中放在这里。
+//
+// popup.js 是普通脚本，import 不进来；popup.html 把本文件当 module 加载，靠文件末尾
+// 那一句把函数交给它。其他地方照常 import。
+import { redactUrlCredentials } from './redact.mjs';
+
+export { redactUrlCredentials };
 
 // data-privacy §4.1 lists what may never reach a snapshot, and says the desktop copy has to
 // strip once more even though the fill path already skips password inputs: a template is a
@@ -13,9 +19,16 @@
 const SECRET_CJK = /(密码|口令|验证码|校验码|授权码|密钥|私钥|令牌)/u;
 const SECRET_LATIN = /(?:^|[^a-z])(password|passwd|pwd|otp|api[\s_-]?key|token|cookie|secret)s?(?:[^a-z]|$)/iu;
 
+// A field whose whole name is "Authorization" is an HTTP header someone pasted into a
+// spreadsheet, and data-privacy §4.1 excludes the header and its value. Matching it as a
+// substring would eat "Work Authorization", a real question on US applications whose
+// answer is "Yes" — so only the exact name counts.
+const SECRET_EXACT = new Set(['authorization', 'auth', 'proxy authorization', '认证头', '授权头']);
+
 /** @param {unknown} name */
 export function isSecretFieldName(name) {
   const text = String(name ?? '').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  if (SECRET_EXACT.has(text.trim().toLowerCase())) return true;
   return SECRET_CJK.test(text) || SECRET_LATIN.test(text);
 }
 
@@ -65,12 +78,11 @@ export function stripSecretFields(template) {
   return { groups, omittedFieldCount };
 }
 
-// popup.js 是普通脚本，import 不进来；popup.html 把本文件当 module 加载，
-// 靠这一句把函数交给它。其他地方照常 import。
 if (typeof self !== 'undefined') {
   /** @type {any} */ (self).ResumeProSecretFields = {
     isSecretFieldName,
     isSecretFieldValue,
+    redactUrlCredentials,
     stripSecretFields
   };
 }

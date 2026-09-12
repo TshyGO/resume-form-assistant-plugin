@@ -737,16 +737,22 @@ async function exportBackup(includeApiKey) {
 
   try {
     const state = await StorageService.getState();
-    const { backup, omittedFieldCount } = buildBackup(state, { includeApiKey });
+    const report = buildBackup(state, { includeApiKey });
 
-    BackupIO.saveJson(backupFileName(), backup);
+    BackupIO.saveJson(backupFileName(), report.backup);
+
+    const notes = [];
+    if (report.omittedFieldCount) notes.push(`跳过 ${report.omittedFieldCount} 个密码 / 验证码类字段`);
+    if (report.droppedTemplateCount) notes.push(`${report.droppedTemplateCount} 个模板因此没有内容，未写入`);
+    if (report.endpointRedacted) notes.push("接口地址里的凭据参数已去掉");
+
     showStatus(
       "backup",
-      omittedFieldCount
-        ? `已导出 ${backup.templates.length} 个模板，跳过 ${omittedFieldCount} 个密码 / 验证码类字段。`
-        : `已导出 ${backup.templates.length} 个模板。`,
+      notes.length
+        ? `已导出 ${report.backup.templates.length} 个模板，${notes.join("，")}。`
+        : `已导出 ${report.backup.templates.length} 个模板。`,
       "success",
-      omittedFieldCount ? 6000 : 2200
+      notes.length ? 6000 : 2200
     );
   } catch (error) {
     showStatus("backup", `导出失败：${error.message}`, "error", 0);
@@ -821,14 +827,35 @@ function hideBackupConfirm() {
 }
 
 function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
-  const { stripSecretFields } = self.ResumeProSecretFields;
+  const { redactUrlCredentials, stripSecretFields } = self.ResumeProSecretFields;
   let omittedFieldCount = 0;
 
-  const templates = state.templates.map((template) => {
+  const templates = [];
+  let droppedTemplateCount = 0;
+
+  for (const template of state.templates) {
     const stripped = stripSecretFields(template);
     omittedFieldCount += stripped.omittedFieldCount;
-    return { id: template.id, name: template.name, groups: stripped.groups };
-  });
+
+    // 一个字段都不剩的模板不写进文件：导入侧会把它丢掉，整份备份还会因此变成
+    // 「备份里没有模板」，导出成功却恢复不了。
+    if (!stripped.groups.length) {
+      droppedTemplateCount += 1;
+      continue;
+    }
+
+    templates.push({ id: template.id, name: template.name, groups: stripped.groups });
+  }
+
+  if (!templates.length) {
+    throw new Error("模板里的字段都是密码 / 验证码这类，没有可以写进备份的内容。");
+  }
+
+  // 有些 OpenAI 兼容接口把凭据放在地址里（?key=…）。不勾「包含 API Key」就一起去掉，
+  // 否则说着不含 Key 却把它藏在 apiUrl 里。
+  const endpoint = includeApiKey
+    ? { url: state.aiConfig.apiUrl, changed: false }
+    : redactUrlCredentials(state.aiConfig.apiUrl);
 
   return {
     backup: {
@@ -839,10 +866,12 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
       templates,
       activeTemplateId: state.activeTemplateId,
       aiConfig: includeApiKey && state.aiConfig.apiKey
-        ? { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
-        : { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model }
+        ? { apiUrl: endpoint.url, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
+        : { apiUrl: endpoint.url, model: state.aiConfig.model }
     },
-    omittedFieldCount
+    omittedFieldCount,
+    droppedTemplateCount,
+    endpointRedacted: endpoint.changed
   };
 }
 

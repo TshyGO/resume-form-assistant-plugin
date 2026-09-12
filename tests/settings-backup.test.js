@@ -164,6 +164,84 @@ test("密码、验证码这类字段不进备份，并且告诉用户跳过了�
   assert.match(popup.lastStatusFrom("backup-status"), /跳过 3 个/);
 });
 
+// 有些 OpenAI 兼容接口把凭据放在地址里，说着「不含 API Key」却把它藏在 apiUrl 里不算数。
+test("不勾选时接口地址里的凭据参数也一起去掉", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  const state = await seed(popup);
+  state.aiConfig.apiUrl = "https://generativelanguage.example/v1beta?key=AIzaSecret123";
+  await popup.writeState(state);
+
+  await backupApi(popup).handleExportBackup();
+
+  assert.equal(saved[0].data.aiConfig.apiUrl, "https://generativelanguage.example/v1beta");
+  assert.doesNotMatch(JSON.stringify(saved[0].data), /AIzaSecret123/);
+  assert.match(popup.lastStatusFrom("backup-status"), /接口地址里的凭据参数已去掉/);
+});
+
+test("确认导出 Key 时接口地址原样保留", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  const state = await seed(popup);
+  state.aiConfig.apiUrl = "https://generativelanguage.example/v1beta?key=AIzaSecret123";
+  await popup.writeState(state);
+  popup.element("backup-include-key").checked = true;
+
+  const api = backupApi(popup);
+  await api.handleExportBackup();
+  await api.exportBackup(true);
+
+  assert.equal(
+    saved[0].data.aiConfig.apiUrl,
+    "https://generativelanguage.example/v1beta?key=AIzaSecret123"
+  );
+});
+
+test("名字就叫 Authorization 的字段被剔掉，Work Authorization 留着", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await popup.importFile(
+    makeFile("我的简历.xlsx", [
+      HEADER,
+      ["基本信息", "姓名", "张三"],
+      ["基本信息", "Work Authorization", "Yes"],
+      ["接口", "Authorization", "Basic dXNlcjpwYXNz"]
+    ])
+  );
+
+  await backupApi(popup).handleExportBackup();
+
+  const dumped = JSON.stringify(saved[0].data);
+  assert.doesNotMatch(dumped, /dXNlcjpwYXNz/);
+  assert.match(dumped, /Work Authorization/, "美国申请里的工作许可是正经字段，不能误剔");
+});
+
+// 全被剔空的模板写进去也恢复不了：导入侧会丢掉没有分组的模板，整份文件反而报
+// 「备份里没有模板」。
+test("模板被剔空之后不写进备份，只导出剩下的", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await popup.importFile(makeFile("正常简历.xlsx", [HEADER, ["基本信息", "姓名", "张三"]]));
+  await popup.importFile(makeFile("全是密码.xlsx", [HEADER, ["账号", "登录密码", "hunter2"]]));
+
+  await backupApi(popup).handleExportBackup();
+
+  assert.equal(saved[0].data.templates.length, 1);
+  assert.equal(saved[0].data.templates[0].name, "正常简历");
+  assert.match(popup.lastStatusFrom("backup-status"), /1 个模板因此没有内容，未写入/);
+});
+
+test("模板里全是密码类字段时直接导出失败，不留一个导不回去的文件", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await popup.importFile(makeFile("全是密码.xlsx", [HEADER, ["账号", "登录密码", "hunter2"]]));
+
+  await backupApi(popup).handleExportBackup();
+
+  assert.equal(saved.length, 0);
+  assert.match(popup.lastStatusFrom("backup-status"), /导出失败/);
+});
+
 test("没有模板时不导出空备份", async () => {
   const popup = loadPopup();
   const saved = captureDownloads(popup);
