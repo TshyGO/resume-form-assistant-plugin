@@ -127,7 +127,7 @@ export function mountApplications(invoke: Invoke) {
     must("app-form-title").textContent = title;
     input("f-company").value = values.company || "";
     input("f-title").value = values.title || "";
-    input("f-url").value = values.sourceUrl || values.source_url || "";
+    input("f-url").value = values.source_url || "";
     input("f-location").value = values.location || "";
     input("f-notes").value = values.notes || "";
     formMsg.textContent = "";
@@ -160,8 +160,8 @@ export function mountApplications(invoke: Invoke) {
             <td title="${escapeHtml(row.company)}">${escapeHtml(row.company)}</td>
             <td title="${escapeHtml(row.title)}">${escapeHtml(row.title)}</td>
             <td>${escapeHtml(row.location || "—")}</td>
-            <td>${escapeHtml(stageLabel(row.currentStage || row.current_stage))}</td>
-            <td>${escapeHtml(formatTime(row.updatedAt || row.updated_at))}</td>
+            <td>${escapeHtml(stageLabel(row.current_stage))}</td>
+            <td>${escapeHtml(formatTime(row.updated_at))}</td>
           </tr>`;
         })
         .join("");
@@ -199,13 +199,13 @@ export function mountApplications(invoke: Invoke) {
       detail.innerHTML = `
         <div class="detail-head">
           <h2 title="${escapeHtml(app.company)} · ${escapeHtml(app.title)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</h2>
-          <p class="muted">${escapeHtml(stageLabel(app.currentStage || app.current_stage))} · ${escapeHtml(evidenceLabel(app.replyEvidenceState || app.reply_evidence_state))}</p>
+          <p class="muted">${escapeHtml(stageLabel(app.current_stage))} · ${escapeHtml(evidenceLabel(app.reply_evidence_state))}</p>
         </div>
         <dl class="facts compact">
           <dt>地点</dt><dd>${escapeHtml(app.location || "—")}</dd>
-          <dt>链接</dt><dd class="break">${escapeHtml(app.sourceUrl || app.source_url || "—")}</dd>
+          <dt>链接</dt><dd class="break">${escapeHtml(app.source_url || "—")}</dd>
           <dt>备注</dt><dd class="break">${escapeHtml(notes || "—")}</dd>
-          <dt>更新</dt><dd>${escapeHtml(formatTime(app.updatedAt || app.updated_at))}</dd>
+          <dt>更新</dt><dd>${escapeHtml(formatTime(app.updated_at))}</dd>
         </dl>
         <div class="row wrap">
           <button type="button" data-act="edit">编辑资料</button>
@@ -218,12 +218,12 @@ export function mountApplications(invoke: Invoke) {
           <button type="button" data-act="closed">结束申请</button>
           <button type="button" data-act="correct">纠正阶段</button>
           <button type="button" data-act="note">新增备注</button>
-          <button type="button" data-act="recycle">${(app.recycleState || app.recycle_state) === "recycled" ? "恢复" : "回收"}</button>
+          <button type="button" data-act="recycle">${app.recycle_state === "recycled" ? "恢复" : "回收"}</button>
         </div>
         <p class="muted">待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
         <h3>回复证据（${evidence.length}）</h3>
-        ${evidenceNote(app.replyEvidenceState || app.reply_evidence_state)
-          ? `<p class="muted">${escapeHtml(evidenceNote(app.replyEvidenceState || app.reply_evidence_state))}</p>`
+        ${evidenceNote(app.reply_evidence_state)
+          ? `<p class="muted">${escapeHtml(evidenceNote(app.reply_evidence_state))}</p>`
           : ""}
         ${evidence.length ? `
         <ul class="snapshot-list">
@@ -381,7 +381,7 @@ export function mountApplications(invoke: Invoke) {
         openForm("编辑申请", {
           company: app.company,
           title: app.title,
-          sourceUrl: app.sourceUrl || app.source_url,
+          source_url: app.source_url,
           location: app.location,
           notes: view.application.notes,
         });
@@ -391,7 +391,7 @@ export function mountApplications(invoke: Invoke) {
         if (!window.confirm("确认这条申请已经投递？填写完成不会自动变成已投递。")) return;
         await invoke("confirm_submit_cmd", { args: { id } });
       } else if (act === "correct") {
-        const to = window.prompt("纠正到哪个阶段？(saved/filling/submitted/assessment/interview/offer/rejected/withdrawn/closed)", app.currentStage || app.current_stage);
+        const to = window.prompt("纠正到哪个阶段？(saved/filling/submitted/assessment/interview/offer/rejected/withdrawn/closed)", app.current_stage ?? "");
         if (!to) return;
         const reason = window.prompt("纠正原因（必填）", "");
         if (!reason || !reason.trim()) {
@@ -399,14 +399,14 @@ export function mountApplications(invoke: Invoke) {
           return;
         }
         await invoke("correct_stage_cmd", {
-          args: { id, from: app.currentStage || app.current_stage, to: to.trim(), reason: reason.trim() },
+          args: { id, from: app.current_stage, to: to.trim(), reason: reason.trim() },
         });
       } else if (act === "note") {
         const text = window.prompt("备注", "");
         if (!text || !text.trim()) return;
         await invoke("add_note_cmd", { args: { id, text } });
       } else if (act === "recycle") {
-        const recycled = (app.recycleState || app.recycle_state) !== "recycled";
+        const recycled = app.recycle_state !== "recycled";
         const ok = window.confirm(
           recycled
             ? "回收后申请离开进行中列表，历史事件仍保留，可以恢复。本次不提供永久删除。"
