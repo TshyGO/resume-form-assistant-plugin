@@ -1,7 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { HEADER, loadPopup, makeFile, makeTextFile } = require("./helpers/popup-harness.js");
+const { HEADER, loadPopup: loadPopupRaw, makeFile, makeTextFile } = require("./helpers/popup-harness.js");
+
+// popup.html 用 <script type="module"> 加载它，暴露成 self.ResumeProSecretFields；
+// 这里照同样的方式注进假 DOM，用的是真规则，不是重写一份。
+let secretFields;
+
+test.before(async () => {
+  secretFields = await import("../link/secret-fields.mjs");
+});
+
+function loadPopup() {
+  return loadPopupRaw({ globals: { ResumeProSecretFields: secretFields } });
+}
 
 function backupApi(popup) {
   const api = popup.api.backup;
@@ -54,17 +66,39 @@ test("导出的备份带上模板、当前模板和 AI 配置", async () => {
   assert.equal(backup.aiConfig.model, "gpt-4o-mini");
 });
 
-test("API Key 默认不进备份，勾选之后才写进去", async () => {
+// data-privacy §4.1：API Key 不得出现在备份里，没有开关。
+test("API Key 不进备份", async () => {
   const popup = loadPopup();
   const saved = captureDownloads(popup);
   await seed(popup);
 
   await backupApi(popup).handleExportBackup();
-  assert.equal("apiKey" in saved[0].data.aiConfig, false, "默认导出不应该带上 API Key");
 
-  popup.element("backup-include-key").checked = true;
+  assert.equal("apiKey" in saved[0].data.aiConfig, false);
+  assert.doesNotMatch(JSON.stringify(saved[0].data), /sk-old/);
+});
+
+test("密码、验证码这类字段不进备份，并且告诉用户跳过了几个", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await popup.importFile(
+    makeFile("我的简历.xlsx", [
+      HEADER,
+      ["基本信息", "姓名", "张三"],
+      ["账号", "登录密码", "hunter2"],
+      ["账号", "短信验证码", "123456"],
+      ["其他", "备注", "token: abcdefghijklmnop"]
+    ])
+  );
+
   await backupApi(popup).handleExportBackup();
-  assert.equal(saved[1].data.aiConfig.apiKey, "sk-old");
+
+  const dumped = JSON.stringify(saved[0].data);
+  assert.doesNotMatch(dumped, /hunter2/);
+  assert.doesNotMatch(dumped, /123456/);
+  assert.doesNotMatch(dumped, /abcdefghijklmnop/);
+  assert.match(dumped, /张三/, "普通字段要留着");
+  assert.match(popup.lastStatusFrom("backup-status"), /跳过 3 个/);
 });
 
 test("没有模板时不导出空备份", async () => {
@@ -106,7 +140,6 @@ test("空插件导入备份就是直接恢复，不用再问", async () => {
   const source = loadPopup();
   const saved = captureDownloads(source);
   const sourceState = await seed(source, { templateCount: 2 });
-  source.element("backup-include-key").checked = true;
   await backupApi(source).handleExportBackup();
   const text = JSON.stringify(saved[0].data);
 
@@ -122,8 +155,9 @@ test("空插件导入备份就是直接恢复，不用再问", async () => {
     sourceState.templates.map((template) => template.name)
   );
   assert.equal(restored.aiConfig.apiUrl, "https://api.example.com/v1");
-  assert.equal(restored.aiConfig.apiKey, "sk-old");
+  assert.equal(restored.aiConfig.apiKey, "", "备份不带 Key，这台机器上也没有");
   assert.equal(fresh.element("backup-confirm").hidden, true, "没有旧模板就不该弹出选择");
+  assert.match(fresh.lastStatusFrom("backup-status"), /已恢复 2 个模板/);
 });
 
 test("已经有模板时先问追加还是替换", async () => {
@@ -180,7 +214,7 @@ test("替换会清掉现有模板", async () => {
   assert.equal(state.templates[0].name, "简历1");
 });
 
-test("备份里没有 API Key 时不会把现有的 Key 清掉", async () => {
+test("接口地址没变时保留本机的 API Key", async () => {
   const popup = loadPopup();
   const saved = captureDownloads(popup);
   await seed(popup, { templateCount: 1, apiKey: "sk-keep" });
@@ -192,6 +226,28 @@ test("备份里没有 API Key 时不会把现有的 Key 清掉", async () => {
   await api.commitPendingBackup("replace");
 
   assert.equal((await popup.readState()).aiConfig.apiKey, "sk-keep");
+});
+
+// 备份不带 Key，本机的 Key 是给原来那个地址的；地址换了再留着，下一次请求就把它
+// 发到别人备份里的地址上了。
+test("接口地址被备份改掉时清空本机的 API Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await seed(popup, { templateCount: 1, apiKey: "sk-keep" });
+  await backupApi(popup).handleExportBackup();
+
+  const foreign = saved[0].data;
+  foreign.aiConfig.apiUrl = "https://api.attacker.example/v1";
+
+  const api = backupApi(popup);
+  await api.handleBackupFileSelection({
+    target: { files: [makeTextFile("backup.json", JSON.stringify(foreign))] }
+  });
+  await api.commitPendingBackup("replace");
+
+  const state = await popup.readState();
+  assert.equal(state.aiConfig.apiUrl, "https://api.attacker.example/v1");
+  assert.equal(state.aiConfig.apiKey, "");
 });
 
 test("导出的 Excel 能被导入原样解析回来", async () => {

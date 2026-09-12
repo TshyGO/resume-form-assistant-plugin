@@ -387,15 +387,6 @@ select {
   flex-wrap: wrap;
 }
 
-.backup-row__key {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-
 .backup-row__hint {
   margin: 8px 0 0;
   color: var(--text-muted);

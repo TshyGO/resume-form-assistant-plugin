@@ -30,7 +30,7 @@ function makeTextFile(name, text) {
   return { name, text: async () => text };
 }
 
-function loadPopup() {
+function loadPopup({ globals = {} } = {}) {
   const store = {};
   const statusMessages = [];
   let uuidCounter = 0;
@@ -74,6 +74,11 @@ function loadPopup() {
     console,
     document,
     XLSX,
+    // popup.html 里由 ai-models.js 提供，renderConfig 每次都会调到。
+    ResumeProModels: {
+      describeTransportRisk: () => null,
+      normalizeApiUrlForSave: (typed) => typed
+    },
     __RESUME_PRO_TEST__: true,
     crypto: { randomUUID: () => `template-${++uuidCounter}` },
     setTimeout,
@@ -106,6 +111,8 @@ function loadPopup() {
       }
     }
   };
+
+  Object.assign(context, globals);
 
   context.self = context;
   context.window = context;

@@ -112,7 +112,6 @@ function cacheElements() {
   elements.backupStatus = document.getElementById("backup-status");
   elements.exportBackupButton = document.getElementById("export-backup-button");
   elements.importBackupButton = document.getElementById("import-backup-button");
-  elements.backupIncludeKey = document.getElementById("backup-include-key");
   elements.backupFileInput = document.getElementById("backup-file-input");
   elements.backupConfirm = document.getElementById("backup-confirm");
   elements.backupConfirmText = document.getElementById("backup-confirm-text");
@@ -702,6 +701,10 @@ async function deleteTemplate(templateId) {
 // Excel 只装得下一个模板的字段，而模板列表、当前用哪一个、AI 配置都只活在
 // chrome.storage.local 里。换电脑或者换扩展 ID 之后这些东西没有出口，所以这里
 // 补一个 JSON 备份。配对信息和待同步队列不进备份，那些换个环境本来就要重来。
+//
+// data-privacy §4.1：API Key、密码、验证码这类东西不得出现在备份里，没有
+// 「用户勾了就行」的例外。模板是用户自己填的表格，拦不住一行叫「登录密码」，
+// 所以写文件前再过一道快照那套剔除规则。
 
 async function handleExportBackup() {
   try {
@@ -712,12 +715,17 @@ async function handleExportBackup() {
       return;
     }
 
-    const backup = buildBackup(state, {
-      includeApiKey: Boolean(elements.backupIncludeKey?.checked)
-    });
+    const { backup, omittedFieldCount } = buildBackup(state);
 
     BackupIO.saveJson(backupFileName(), backup);
-    showStatus("backup", `已导出 ${backup.templates.length} 个模板。`, "success");
+    showStatus(
+      "backup",
+      omittedFieldCount
+        ? `已导出 ${backup.templates.length} 个模板，跳过 ${omittedFieldCount} 个密码 / 验证码类字段。`
+        : `已导出 ${backup.templates.length} 个模板。`,
+      "success",
+      omittedFieldCount ? 6000 : 2200
+    );
   } catch (error) {
     showStatus("backup", `导出失败：${error.message}`, "error", 0);
   }
@@ -786,25 +794,28 @@ function hideBackupConfirm() {
   elements.backupConfirm.hidden = true;
 }
 
-function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
-  const aiConfig = {
-    apiUrl: state.aiConfig.apiUrl,
-    model: state.aiConfig.model
-  };
+function buildBackup(state, { now = new Date() } = {}) {
+  const { stripSecretFields } = self.ResumeProSecretFields;
+  let omittedFieldCount = 0;
 
-  // 备份文件用户会随手发出去，Key 默认留在本机。
-  if (includeApiKey && state.aiConfig.apiKey) {
-    aiConfig.apiKey = state.aiConfig.apiKey;
-  }
+  const templates = state.templates.map((template) => {
+    const stripped = stripSecretFields(template);
+    omittedFieldCount += stripped.omittedFieldCount;
+    return { id: template.id, name: template.name, groups: stripped.groups };
+  });
 
   return {
-    format: BACKUP_FORMAT,
-    formatVersion: BACKUP_FORMAT_VERSION,
-    exportedAt: now.toISOString(),
-    pluginVersion: chrome.runtime.getManifest().version,
-    templates: structuredClone(state.templates),
-    activeTemplateId: state.activeTemplateId,
-    aiConfig
+    backup: {
+      format: BACKUP_FORMAT,
+      formatVersion: BACKUP_FORMAT_VERSION,
+      exportedAt: now.toISOString(),
+      pluginVersion: chrome.runtime.getManifest().version,
+      templates,
+      activeTemplateId: state.activeTemplateId,
+      // API Key 不进备份，换了机器重新填一次。
+      aiConfig: { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model }
+    },
+    omittedFieldCount
   };
 }
 
@@ -871,13 +882,14 @@ function applyBackup(state, backup, mode) {
   next.activeTemplateId = activeTemplateId || next.templates[0]?.id || "";
 
   if (backup.aiConfig) {
+    const apiUrl = String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl);
+
     next.aiConfig = {
-      apiUrl: String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl),
+      apiUrl,
       model: String(backup.aiConfig.model ?? next.aiConfig.model),
-      // 没带 Key 的备份不该把本机能用的 Key 洗掉。
-      apiKey: typeof backup.aiConfig.apiKey === "string" && backup.aiConfig.apiKey
-        ? backup.aiConfig.apiKey
-        : next.aiConfig.apiKey
+      // 备份里不会有 Key。地址没变就接着用本机这个；地址变了必须清掉，
+      // 否则下一次请求会把用户的 Key 发到别人备份里的地址上。
+      apiKey: apiUrl === next.aiConfig.apiUrl ? next.aiConfig.apiKey : ""
     };
   }
 
@@ -902,6 +914,7 @@ async function exportTemplateToExcel(templateId) {
 }
 
 // 表头和列序跟 parseTemplateFile 读的是同一套，导出的文件能原样再导回来。
+// 这里不剔密码类字段：它是用户自己那份 Excel 的往返，剔了就导不回去了。
 function templateToSheetRows(template) {
   const rows = [[...TEMPLATE_SHEET_HEADER]];
 
