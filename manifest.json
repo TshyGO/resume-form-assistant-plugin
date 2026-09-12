@@ -4,6 +4,7 @@
   "name": "Resume Pro",
   "version": "0.4.0",
   "description": "求职网申场景的简历信息填写辅助插件。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvw54FDt3uRc5KJ5wD9aLAI/xL39E7uw65DNNbXy5oiTl/PBj/t7j169cgosKpGS0IIshxA4yV4cB31TnIMXjh1WR+irtMh8qvLwvHH5ULsML/037bwOL0QxDiVp5qMk5yZvWfi27S2pk01/wbajTa43EqIcX+6egE7BeTik77DAmazBTzBj7xbLclCW+RoKmdWR0okQB0nBJMCoI8G+hkTjL8AtnrR53qiNpojOdgawhJNWgYxhGQKP4kmnJV5n+b0vyUKeCeo42lAdWwYB2Yphx/uGkg2dpCtNE0MllD3PTYY7Z48X2MQVLyU+wfuZr29q7MU2o6UcBGXWu6EP69QIDAQAB",
   "permissions": [
     "offscreen",
     "storage",
