@@ -132,6 +132,10 @@
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
         <div class="resume-pro__fill-record" id="resume-pro-fill-record" hidden>
           <p class="resume-pro__save-note" id="resume-pro-fill-record-summary"></p>
+          <label class="resume-pro__fill-record-option">
+            <input type="checkbox" id="resume-pro-fill-record-snapshot" checked>
+            <span>附上这次用的简历模板拷贝（先存在本机，传到桌面后可在申请里查看）</span>
+          </label>
           <div class="resume-pro__save-actions">
             <button class="resume-pro__ai-button" type="button" id="resume-pro-fill-record-save">留档到桌面</button>
             <button class="resume-pro__manager-button" type="button" id="resume-pro-fill-record-skip">不留档</button>
@@ -1684,8 +1688,10 @@
 
   let desktopModules = null;
   let pendingFields = null;
-  // The finished fill the card is offering to archive. Held only until the user answers.
+  // The finished fill the card is offering to archive, and a copy of the template it used.
+  // Held only until the user answers; the template copy leaves only if the box is ticked.
   let pendingFill = null;
+  let pendingFillTemplate = null;
 
   async function loadDesktopModules() {
     if (!desktopModules) {
@@ -1809,6 +1815,9 @@
     const job = extract.extractJobFields(document, pageUrl);
     const link = await chrome.runtime.sendMessage({ type: "DESKTOP_LINK_STATE" });
     if (!link?.everPaired) return;
+    // The template the fill actually used, frozen now: editing the template before answering
+    // must not change what the snapshot says was used (D08 decision 2).
+    pendingFillTemplate = template ? structuredClone(template) : null;
     pendingFill = {
       ...raw,
       urlRedacted: job.sourceUrl,
@@ -1819,6 +1828,11 @@
     // The summary is built from exactly what would be sent, so the card cannot promise more.
     card.querySelector("#resume-pro-fill-record-summary").textContent =
       copy.describeFillOffer(fillrecords.buildFillPayload(pendingFill));
+    const option = card.querySelector("#resume-pro-fill-record-snapshot");
+    if (option) {
+      option.checked = true;
+      option.disabled = !pendingFillTemplate;
+    }
     card.hidden = false;
   }
 
@@ -1826,11 +1840,14 @@
     const card = shadowRoot?.querySelector("#resume-pro-fill-record");
     if (card) card.hidden = true;
     pendingFill = null;
+    pendingFillTemplate = null;
   }
 
   async function handleRecordFillClick() {
     const raw = pendingFill;
     if (!raw) return;
+    const withSnapshot = shadowRoot?.querySelector("#resume-pro-fill-record-snapshot")?.checked;
+    const snapshotTemplate = withSnapshot ? pendingFillTemplate : null;
     closeFillRecord();
 
     let candidates = null;
@@ -1844,7 +1861,7 @@
     if (candidates?.status !== "ok") {
       // The desktop is not answering, or the page does not say which company this is. The
       // fill waits, and the application is picked from the pending list later.
-      await recordFill(raw, null);
+      await recordFill(raw, null, snapshotTemplate);
       return;
     }
 
@@ -1853,16 +1870,16 @@
       note: options.length
         ? "这次填写属于哪条申请？"
         : "桌面里还没有这家公司的申请。可以先「保存岗位到本地」，或者稍后在待同步里选择。",
-      onPick: applicationId => recordFill(raw, applicationId),
-      onLater: () => recordFill(raw, null)
+      onPick: applicationId => recordFill(raw, applicationId, snapshotTemplate),
+      onLater: () => recordFill(raw, null, snapshotTemplate)
     });
   }
 
-  async function recordFill(raw, applicationId) {
+  async function recordFill(raw, applicationId, snapshotTemplate) {
     const { copy } = await loadDesktopModules();
     let result;
     try {
-      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RECORD_FILL", raw, applicationId });
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RECORD_FILL", raw, applicationId, snapshotTemplate });
     } catch {
       result = { status: "rejected" };
     }
@@ -2110,11 +2127,15 @@
     let intents = [];
     let outbox = [];
     let fillRecords = [];
+    let expired = new Set();
+    let copy;
     try {
       const reply = await chrome.runtime.sendMessage({ type: "DESKTOP_LIST_QUEUE" });
       intents = reply?.intents || [];
       outbox = reply?.outbox || [];
       fillRecords = reply?.fillRecords || [];
+      expired = new Set(reply?.expiredSnapshots || []);
+      ({ copy } = await loadDesktopModules());
     } catch {
       return;
     }
@@ -2146,6 +2167,10 @@
         [record.job?.company, record.job?.title].filter(Boolean).join(" · "),
         "待同步（尚未选择申请）"
       );
+      if (record.snapshot && expired.has(record.snapshot.snapshotId)) {
+        appendNote(row, "附带的简历快照已暂存超过 30 天，要继续还是丢弃？");
+        row.appendChild(rowButton("丢弃快照", () => dropSnapshot(record.snapshot.snapshotId)));
+      }
       row.appendChild(rowButton("选择申请", () => chooseFillApplication(record)));
       row.appendChild(rowButton("删除", async () => {
         await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_FILL", recordId: record.recordId });
@@ -2154,7 +2179,20 @@
       list.appendChild(row);
     }
 
-    for (const entry of outbox) {
+    for (const entry of outbox.filter(item => item.messageType === "snapshot.upload")) {
+      const state = copy.describeSnapshotUpload(entry, { expired: expired.has(entry.snapshotId) });
+      const row = pendingRow(`简历快照 · ${entry.payload?.templateName || ""}`, "", state.text);
+      if (state.retry) {
+        row.appendChild(rowButton("立即重试", async () => {
+          await chrome.runtime.sendMessage({ type: "DESKTOP_RETRY", messageId: entry.messageId });
+          refreshPendingList();
+        }));
+      }
+      row.appendChild(rowButton(entry.status === "bytes_lost" ? "移除" : "丢弃快照", () => dropSnapshot(entry.snapshotId)));
+      list.appendChild(row);
+    }
+
+    for (const entry of outbox.filter(item => item.messageType !== "snapshot.upload")) {
       const row = pendingRow(queueLabel(entry), entry.payload?.sourceUrl, describeOutboxState(entry));
       if (entry.status === "needs_user" || entry.status === "paused") {
         appendReconcileChoices(row, entry);
@@ -2173,6 +2211,18 @@
       }));
       list.appendChild(row);
     }
+  }
+
+  function appendNote(row, text) {
+    const note = document.createElement("em");
+    note.textContent = text;
+    row.appendChild(note);
+  }
+
+  // The fill record stays; only the snapshot copy and its upload go.
+  async function dropSnapshot(snapshotId) {
+    await chrome.runtime.sendMessage({ type: "DESKTOP_DROP_SNAPSHOT", snapshotId });
+    refreshPendingList();
   }
 
   // Each kind of queued message has its own wording: a retried fill must not report that a

@@ -5,6 +5,10 @@ import { redactUrl } from './redact.mjs';
 // anything. A profile that never did would be told its fill is "pending" forever.
 const MAY_RECORD = new Set(['ready', 'unavailable', 'incompatible']);
 
+export function mayRecord(mode) {
+  return MAY_RECORD.has(mode);
+}
+
 const MAX_COUNT = 10000;
 const MAX_DURATION_MS = 3600000;
 
@@ -107,7 +111,7 @@ function jobHint(job) {
  * application, against a desktop that answered.
  */
 export function createFillRecords({ store, uuid, now }) {
-  async function create({ raw, mode }) {
+  async function create({ raw, mode, snapshot = null }) {
     if (!MAY_RECORD.has(mode)) return { status: 'not_recorded', reason: mode };
 
     const record = {
@@ -115,6 +119,8 @@ export function createFillRecords({ store, uuid, now }) {
       clientInstanceId: await store.clientInstanceId(),
       fill: buildFillPayload(raw),
       job: jobHint(raw?.job),
+      // Metadata of the staged snapshot (D08 §8.5): the bytes are in IndexedDB, never here.
+      snapshot,
       applicationId: null,
       createdAt: now().toISOString(),
       // When the fill ended, sent as the event's occurredAt however late the record is bound.
@@ -154,10 +160,21 @@ export function createFillRecords({ store, uuid, now }) {
   }
 
   // The bound message was given up on. The record goes back to waiting, so the user can
-  // choose another application or delete it.
-  function unbind(recordId) {
+  // choose another application or delete it. A snapshot that was bound with it is dropped:
+  // its chunks carry the old application in their identity and cannot be sent elsewhere.
+  function unbind(recordId, { dropSnapshot = false } = {}) {
+    return store.updateFillRecords(list => list.map(record => {
+      if (record.recordId !== recordId) return record;
+      const next = { ...record, status: 'pending_bind', applicationId: null };
+      if (dropSnapshot) next.snapshot = null;
+      return next;
+    }));
+  }
+
+  // The user gave up on a snapshot; the fill itself is kept.
+  function dropSnapshot(snapshotId) {
     return store.updateFillRecords(list => list.map(record => (
-      record.recordId === recordId ? { ...record, status: 'pending_bind', applicationId: null } : record
+      record.snapshot?.snapshotId === snapshotId ? { ...record, snapshot: null } : record
     )));
   }
 
@@ -165,6 +182,7 @@ export function createFillRecords({ store, uuid, now }) {
     create,
     claim,
     unbind,
+    dropSnapshot,
     list: () => store.getFillRecords(),
     remove: recordId => store.updateFillRecords(list => list.filter(record => record.recordId !== recordId)),
     removeWaiting

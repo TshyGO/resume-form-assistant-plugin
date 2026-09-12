@@ -14,6 +14,18 @@ export function nextDelayMs(attempts) {
 }
 
 /**
+ * A snapshot upload waits while the fill event it belongs to is still in the queue (D08
+ * decision 7). Queue order alone does not hold: an event backing off is not due, the upload
+ * behind it would be, and an event that failed may never go at all. Until the event is
+ * accepted the upload is not work — neither for a pass nor for an alarm or a host start.
+ */
+export function waitsForFill(entry, queue) {
+  return entry.messageType === 'snapshot.upload'
+    && Boolean(entry.recordId)
+    && queue.some(item => item.messageType === 'fill.submit' && item.recordId === entry.recordId);
+}
+
+/**
  * Drives the outbox on a schedule the service worker can survive.
  *
  * MV3 evicts the worker while entries are still queued, so the wake-up is a chrome alarm
@@ -52,7 +64,8 @@ export function createDrain({ session, outbox, reconcile = null, alarms, now }) 
   // Work the queue can make progress on by itself: a pending entry to send, or a paused one
   // waiting to be reconciled against the archive that exists now.
   async function hasWork() {
-    return (await outbox.list()).some(entry => entry.status === 'pending' || entry.status === 'paused');
+    const queue = await outbox.list();
+    return queue.some(entry => (entry.status === 'pending' && !waitsForFill(entry, queue)) || entry.status === 'paused');
   }
 
   async function retryNow(messageId) {
@@ -73,8 +86,9 @@ export function createDrain({ session, outbox, reconcile = null, alarms, now }) 
   // The next alarm is set for the earliest entry that still has a rung left. A stalled entry
   // is deliberately not counted: nothing about waiting longer will change it.
   async function scheduleNext() {
-    const due = (await outbox.list())
-      .filter(entry => entry.status === 'pending' && entry.nextAttemptAt)
+    const queue = await outbox.list();
+    const due = queue
+      .filter(entry => entry.status === 'pending' && entry.nextAttemptAt && !waitsForFill(entry, queue))
       .map(entry => Date.parse(entry.nextAttemptAt))
       .filter(Number.isFinite);
 

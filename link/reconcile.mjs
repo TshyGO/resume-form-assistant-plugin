@@ -1,6 +1,7 @@
 import { buildEnvelope } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 import { forgetSource } from './outbox.mjs';
+import { SNAPSHOT_UPLOAD } from './uploads.mjs';
 import {
   MAX_RECONCILE_ITEMS,
   payloadBodySha256,
@@ -29,7 +30,9 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
 
   /** Ask the desktop what it knows about each paused message. */
   async function run(identity) {
-    const paused = (await store.getOutbox()).filter(entry => entry.status === 'paused');
+    // A snapshot upload stays paused here: its identity is one per chunk, and asking about
+    // it is a separate batch (see reconcileSnapshots).
+    const paused = (await store.getOutbox()).filter(entry => entry.status === 'paused' && entry.messageType !== SNAPSHOT_UPLOAD);
     const report = { applied: [], needsUser: [], unreachable: [] };
 
     for (let at = 0; at < paused.length; at += MAX_RECONCILE_ITEMS) {

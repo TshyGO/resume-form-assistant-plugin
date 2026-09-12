@@ -176,3 +176,45 @@ test('a refused fill names the likely cause: the application is gone', async () 
   assert.match(copy.text, /找不到所选的申请/);
   assert.doesNotMatch(copy.text, /公司和岗位/);
 });
+
+test('a fill archived without its snapshot says why, and still counts as archived', async () => {
+  const { describeFillRecordResult } = await load();
+  const reasons = {
+    too_large: /2 MiB/,
+    empty: /没有可以保存的字段/,
+    staging_full: /已满/,
+    staging_unavailable: /浏览器存储/,
+    bytes_lost: /丢失/,
+    queue_full: /已满/
+  };
+  for (const [issue, pattern] of Object.entries(reasons)) {
+    const saved = describeFillRecordResult({ status: 'saved', snapshotIssue: issue });
+    assert.match(saved.text, /已留档到桌面/, issue);
+    assert.match(saved.text, pattern, issue);
+    const waiting = describeFillRecordResult({ status: 'recorded', mode: 'unavailable', snapshotIssue: issue });
+    assert.match(waiting.text, pattern, issue);
+  }
+  assert.match(describeFillRecordResult({ status: 'saved', uploadQueued: true }).text, /后台上传/);
+});
+
+test('the offer does not claim nothing is kept when a snapshot may be attached', async () => {
+  const { describeFillOffer } = await load();
+  const text = describeFillOffer({ outcome: 'completed', fieldCount: 3, filledCount: 3, unconfirmedCount: 0 });
+  assert.doesNotMatch(text, /不记填写的内容/);
+  assert.match(text, /不记网页上填了什么/);
+});
+
+test('an upload in progress is described by chunks, and a lost copy is never "retry"', async () => {
+  const { describeSnapshotUpload } = await load();
+  const chunks = [true, true, false, false].map((acked, chunkIndex) => ({ chunkIndex, acked }));
+  assert.match(describeSnapshotUpload({ status: 'pending', chunkCount: 4, chunks }).text, /2\/4/);
+  const lost = describeSnapshotUpload({ status: 'bytes_lost', chunkCount: 4, chunks });
+  assert.match(lost.text, /暂存丢失/);
+  assert.match(lost.text, /重新留档|桌面导入/);
+  assert.equal(lost.retry, false);
+  assert.match(describeSnapshotUpload({ status: 'paused', chunkCount: 4, chunks }).text, /换过档案库/);
+  assert.match(describeSnapshotUpload({ status: 'pending', chunkCount: 4, chunks }, { expired: true }).text, /30 天/);
+  for (const status of ['pending', 'stalled', 'failed', 'bytes_lost', 'paused', 'needs_user', 'completed']) {
+    assert.doesNotMatch(describeSnapshotUpload({ status, chunkCount: 4, chunks }).text, /投递/, status);
+  }
+});

@@ -1,7 +1,8 @@
 import { buildEnvelope } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 import { MAX_OUTBOX } from './limits.mjs';
-import { nextDelayMs } from './drain.mjs';
+import { nextDelayMs, waitsForFill } from './drain.mjs';
+import { SNAPSHOT_UPLOAD } from './uploads.mjs';
 
 /**
  * Bound messages: the queue that exists once the user has chosen what to bind to.
@@ -15,7 +16,7 @@ import { nextDelayMs } from './drain.mjs';
  *    the current handshake, the payload remembers what the user actually chose. Refreshing
  *    the payload would silently replay the job into an archive the user never saw.
  */
-export function createOutbox({ store, uuid, now, sendNative, sleep }) {
+export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = null }) {
   const wire = { sendNative, sleep };
 
   async function queryCandidates({ identity, fields }) {
@@ -87,12 +88,19 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
    * is what stops two clicks from sending it twice. The payload is the allowlisted fill body
    * plus the application; field values never get this far.
    */
-  async function sendFill({ record, applicationId, identity }) {
+  async function sendFill({ record, applicationId, identity, snapshot = null }) {
     if (!identity) return { status: 'rejected', reason: 'no_identity' };
     if (!applicationId) return { status: 'rejected', reason: 'no_application' };
+    const payload = { applicationId, ...record.fill };
+    // The event names its snapshot by id and content digest, never by bytes (§8.5). The
+    // protocol requires the two together or neither.
+    if (snapshot?.snapshotId && snapshot?.sha256) {
+      payload.snapshotId = snapshot.snapshotId;
+      payload.sha256 = snapshot.sha256;
+    }
     return enqueue({
       messageType: 'fill.submit',
-      payload: { applicationId, ...record.fill },
+      payload,
       applicationId,
       intentId: null,
       recordId: record.recordId,
@@ -166,6 +174,8 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     for (const entry of await store.getOutbox()) {
       if (entry.status !== 'pending') continue;
       if (!isDue(entry)) continue;
+      // Read again: the event this upload waits for may have been accepted earlier in this pass.
+      if (waitsForFill(entry, await store.getOutbox())) continue;
       const result = await deliver(entry, identity);
       if (result.status === 'saved') saved.push(result);
       else if (result.status === 'failed') failed.push(result);
@@ -175,7 +185,31 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     return { saved, pending, failed };
   }
 
+  /**
+   * Queue an entry built elsewhere — a snapshot upload (link/uploads.mjs). Same guards as a
+   * bound message: no second entry under the same id, and a full queue refuses rather than
+   * dropping the oldest. Not sent here; the drain picks it up.
+   */
+  async function add(entry) {
+    let outcome = { status: 'queued' };
+    await store.updateOutbox(list => {
+      if (list.some(item => item.messageId === entry.messageId)) {
+        outcome = { status: 'duplicate', reason: 'already_queued' };
+        return list;
+      }
+      if (list.length >= MAX_OUTBOX) {
+        outcome = { status: 'rejected', reason: 'queue_full' };
+        return list;
+      }
+      return [...list, entry];
+    });
+    return outcome;
+  }
+
   async function deliver(entry, identity) {
+    if (entry.messageType === SNAPSHOT_UPLOAD) {
+      return uploads ? uploads.deliver(entry, identity) : { status: 'pending', messageId: entry.messageId };
+    }
     if (!identity) return { status: 'pending', entry };
 
     const message = await buildEnvelope({
@@ -259,8 +293,10 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
   }
 
   async function deliverOne(messageId, identity) {
-    const entry = (await store.getOutbox()).find(item => item.messageId === messageId);
+    const queue = await store.getOutbox();
+    const entry = queue.find(item => item.messageId === messageId);
     if (!entry) return { status: 'rejected', reason: 'unknown_message' };
+    if (waitsForFill(entry, queue)) return { status: 'pending', messageId };
     return deliver(entry, identity);
   }
 
@@ -273,6 +309,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     bindAndSend,
     confirmSubmit,
     sendFill,
+    add,
     drainOnce,
     deliverOne,
     markDue,

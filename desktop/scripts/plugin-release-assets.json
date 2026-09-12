@@ -28,6 +28,7 @@
   "link/staging.mjs",
   "link/store.mjs",
   "link/transport.mjs",
+  "link/uploads.mjs",
   "link/worker.mjs",
   "vendor/pdfjs/LICENSE",
   "vendor/pdfjs/cmaps/78-EUC-H.bcmap",
