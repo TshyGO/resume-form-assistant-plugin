@@ -96,16 +96,21 @@ pub fn stage_file(
     bucket: &str,
     existing: ExistingBlob<'_>,
 ) -> Result<StagedBlob, ImportError> {
-    let meta = std::fs::metadata(source).map_err(|_| ImportError::SourceUnreadable)?;
-    if !meta.is_file() {
+    // 一个句柄读到底：先 metadata 再 read 会给别人换文件的机会，也挡不住一个还在
+    // 增长的文件。`take(上限 + 1)` 让超限在读满之前就能判定，不会先吃下几百 MB。
+    use std::io::Read;
+    let file = std::fs::File::open(source).map_err(|_| ImportError::SourceUnreadable)?;
+    if !file
+        .metadata()
+        .map_err(|_| ImportError::SourceUnreadable)?
+        .is_file()
+    {
         return Err(ImportError::SourceUnreadable);
     }
-    if meta.len() > MAX_ATTACHMENT_BYTES {
-        return Err(ImportError::TooLarge {
-            size_bytes: meta.len(),
-        });
-    }
-    let bytes = std::fs::read(source).map_err(|_| ImportError::SourceUnreadable)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_ATTACHMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ImportError::SourceUnreadable)?;
     if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
         return Err(ImportError::TooLarge {
             size_bytes: bytes.len() as u64,
@@ -194,6 +199,12 @@ fn write_blob(
     if std::fs::rename(&temporary, &target).is_err() {
         let _ = std::fs::remove_file(&temporary);
         return Err(ImportError::Storage { code: "rename" });
+    }
+    // 让 rename 本身也持久（与 D08 的快照文件同一处理）：POSIX 上要 fsync 父目录，
+    // Windows 没有可 fsync 的目录句柄，NTFS/ReFS 用日志提交这条目录项。
+    #[cfg(unix)]
+    {
+        let _ = std::fs::File::open(&dir).and_then(|handle| handle.sync_all());
     }
 
     let final_name = target

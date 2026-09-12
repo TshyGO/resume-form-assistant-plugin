@@ -45,8 +45,15 @@ pub fn sniff(bytes: &[u8], original_filename: Option<&str>) -> Result<Sniffed, I
         };
     }
 
-    // 剩下的只可能是文本。不是合法 UTF-8 就不收：本期不猜二进制。
+    // 剩下的只可能是文本。合法 UTF-8 还不够：全是 NUL 的文件也是合法 UTF-8，二进制
+    // 内容不该以 text/plain 的名义落进档案。除换行、回车、制表符外的控制字符一律拒绝。
     let text = std::str::from_utf8(bytes).map_err(|_| ImportError::Unsupported { mime: None })?;
+    if text
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err(ImportError::Unsupported { mime: None });
+    }
     if looks_like_email(text) {
         return Ok(Sniffed {
             kind: EvidenceKind::Eml,
@@ -139,5 +146,26 @@ mod tests {
             sniff(&noise, Some("x.bin")),
             Err(ImportError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn valid_utf8_full_of_control_bytes_is_not_plain_text() {
+        // 全 NUL 是合法 UTF-8。它不是文本，不该以 text/plain 落进档案。
+        assert!(matches!(
+            sniff(&[0u8; 64], Some("notes.txt")),
+            Err(ImportError::Unsupported { .. })
+        ));
+        assert!(matches!(
+            sniff(b"a\x07b\x1bc", Some("notes.txt")),
+            Err(ImportError::Unsupported { .. })
+        ));
+        // 换行、回车、制表符是文本的一部分，照常收。
+        assert_eq!(
+            sniff(b"line one\r\n\tline two\n", Some("notes.txt"))
+                .unwrap()
+                .mime
+                .as_deref(),
+            Some("text/plain")
+        );
     }
 }
