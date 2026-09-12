@@ -168,3 +168,25 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-
 @media (max-width: 900px) {
   .apps-layout { grid-template-columns: 1fr; }
 }
+
+.snapshot-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.snapshot-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+#snapshot-dialog {
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+}

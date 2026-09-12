@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mountApplications } from './applications-ui.js';
 
 function harness(handler) {
-  const nodes = new Map(), actions = new Map(), calls = [];
+  const nodes = new Map(), actions = new Map(), actionList = [], calls = [];
   const tick = () => new Promise(resolve => setImmediate(resolve));
   class Node {
     constructor(id) { this.id=id;this.value='';this.checked=false;this.open=false;this.disabled=false;this.innerHTML='';this.listeners={};this.classList={toggle(){},add(){},remove(){}}; }
@@ -11,7 +11,7 @@ function harness(handler) {
     emit(type,event={}){return this.listeners[type]?.({preventDefault(){},...event});}
     showModal(){this.open=true;} close(){this.open=false;} focus(){}
     querySelectorAll(selector){
-      if(selector==='button[data-act]')return [...this.innerHTML.matchAll(/data-act="([^"]+)"/g)].map(m=>{const n=new Node(m[1]);n.dataset={act:m[1]};actions.set(m[1],n);return n;});
+      if(selector==='button[data-act]')return [...this.innerHTML.matchAll(/data-act="([^"]+)"(?:\s+data-snapshot="([^"]+)")?/g)].map(m=>{const n=new Node(m[1]);n.dataset={act:m[1],...(m[2]?{snapshot:m[2]}:{})};actions.set(m[1],n);actionList.push(n);return n;});
       if(selector==='tr')return [];
       const ids=this.id==='app-form'?['f-company','f-title','f-url','f-location','f-notes','btn-save-app','btn-cancel-app']:['progress-description','progress-date','progress-round','progress-update','progress-save','progress-cancel'];
       return ids.map(el);
@@ -29,7 +29,7 @@ function harness(handler) {
   };
   const api=mountApplications(invoke);
   const select=async id=>{el('apps-tbody').emit('click',{target:{closest:()=>({dataset:{id}})}});await tick();};
-  return {el,actions,calls,api,select,tick,view};
+  return {el,actions,actionList,calls,api,select,tick,view};
 }
 
 test('progress cancel and Escape never dispatch writes for any outcome',async()=>{
@@ -79,3 +79,88 @@ test('new selection survives completion of an earlier action',async()=>{
  await h.select('A');const pending=h.actions.get('submit').emit('click');await h.select('B');complete({});await pending;
  assert.equal(h.api.ctl.selectedId,'B');assert.match(h.el('app-detail').innerHTML,/Company-B/);
 });
+
+const fillEvent = (snapshot) => ({ id: 'e1', event_sequence: 2, event_type: 'fill_partial', occurred: { precision: 'unknown' }, recorded_at: '2026-09-12T08:00:00Z',
+  payload: { kind: 'fill_event', outcome: 'partial', field_count: 12, filled_count: 9, unconfirmed_count: 3, template_name: '合成模板', snapshot_id: snapshot } });
+
+test('a fill event with a stored snapshot opens it, with the disclaimer, escaped', async () => {
+  const S = '66666666-6666-4666-8666-666666666666';
+  const h = harness((name, args) => {
+    if (name === 'get_application_cmd') return { ...h.view(args.id), events: [fillEvent(S)], snapshotStates: { [S]: 'stored' },
+      snapshots: [{ snapshot_id: S, template_name: '合成模板', created_at: '2026-09-12T08:00:00Z', byte_size: 344 }] };
+    if (name === 'get_snapshot_cmd') return { snapshotId: S, templateName: '合成模板', capturedAt: '2026-09-12T08:00:00.000Z', omittedFieldCount: 2,
+      groups: [{ name: '基本信息', fields: [{ key: '姓名', value: '合成' }, { key: '备注', value: '<img src=x onerror=alert(1)>' }] }] };
+    return undefined;
+  });
+  await h.select('A');
+  const html = h.el('app-detail').innerHTML;
+  assert.match(html, /已写入网页 9\/12 项/);
+  assert.match(html, /data-act="snapshot" data-snapshot="66666666-6666-4666-8666-666666666666"/);
+  assert.doesNotMatch(html, /简历快照尚未接入|简历快照和待办尚未接入/);
+  await h.actions.get('snapshot').emit('click');
+  await h.tick();
+  const call = h.calls.find(c => c.name === 'get_snapshot_cmd');
+  assert.deepEqual(call.args, { snapshotId: S });
+  assert.equal(h.el('snapshot-dialog').open, true);
+  const body = h.el('snapshot-body').innerHTML;
+  assert.match(body, /不能/);
+  assert.match(body, /姓名/);
+  assert.match(body, /2 个疑似密码/);
+  assert.doesNotMatch(body, /<img/);
+  assert.match(body, /&lt;img/);
+});
+
+test('a snapshot still uploading or missing is described, not offered', async () => {
+  for (const [state, pattern] of [['uploading', /上传中/], ['missing', /不可用/]]) {
+    const S = '77777777-7777-4777-8777-777777777777';
+    const h = harness((name, args) => name === 'get_application_cmd'
+      ? { ...h.view(args.id), events: [fillEvent(S)], snapshotStates: { [S]: state }, snapshots: [] } : undefined);
+    await h.select('A');
+    const html = h.el('app-detail').innerHTML;
+    assert.match(html, pattern, state);
+    assert.doesNotMatch(html, /data-act="snapshot"/, state);
+  }
+});
+
+test('a snapshot that cannot be read says so instead of showing part of it', async () => {
+  const S = '66666666-6666-4666-8666-666666666666';
+  const h = harness((name, args) => {
+    if (name === 'get_application_cmd') return { ...h.view(args.id), events: [fillEvent(S)], snapshotStates: { [S]: 'stored' }, snapshots: [] };
+    if (name === 'get_snapshot_cmd') return Promise.reject({ code: 'VALIDATION', message: 'file digest mismatch' });
+    return undefined;
+  });
+  await h.select('A');
+  await h.actions.get('snapshot').emit('click');
+  await h.tick();
+  assert.match(h.el('snapshot-body').innerHTML, /无法读取/);
+  assert.doesNotMatch(h.el('snapshot-body').innerHTML, /姓名/);
+});
+
+test('a snapshot opened after another one is not overwritten when the first answers late', async () => {
+  const A = '66666666-6666-4666-8666-666666666666';
+  const B = '99999999-9999-4999-8999-999999999999';
+  let releaseA;
+  const h = harness((name, args) => {
+    if (name === 'get_application_cmd') return { ...h.view(args.id), events: [], snapshotStates: {},
+      snapshots: [{ snapshot_id: A, template_name: '旧模板', created_at: '2026-09-12T08:00:00Z' }, { snapshot_id: B, template_name: '新模板', created_at: '2026-09-12T09:00:00Z' }] };
+    if (name === 'get_snapshot_cmd' && args.snapshotId === A) return new Promise(resolve => { releaseA = () => resolve(snapshotDoc('旧的内容')); });
+    if (name === 'get_snapshot_cmd' && args.snapshotId === B) return snapshotDoc('新的内容');
+    return undefined;
+  });
+  await h.select('A');
+  const button = id => h.actionList.filter(node => node.dataset.snapshot === id).at(-1);
+  button(A).emit('click');
+  await h.tick();
+  await button(B).emit('click');
+  await h.tick();
+  assert.match(h.el('snapshot-body').innerHTML, /新的内容/);
+  releaseA();
+  await h.tick();
+  assert.match(h.el('snapshot-body').innerHTML, /新的内容/);
+  assert.doesNotMatch(h.el('snapshot-body').innerHTML, /旧的内容/);
+});
+
+function snapshotDoc(value) {
+  return { templateName: '合成模板', capturedAt: '2026-09-12T08:00:00.000Z', omittedFieldCount: 0,
+    groups: [{ name: '经历', fields: [{ key: '描述', value }] }] };
+}

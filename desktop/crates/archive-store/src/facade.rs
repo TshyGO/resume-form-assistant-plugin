@@ -7,7 +7,7 @@ use crate::applications::{
 use crate::error::StoreError;
 use crate::evidence::AttachmentRefReport;
 use crate::model::*;
-use crate::receipts::{SnapshotCompletion, SnapshotProgress};
+use crate::receipts::{SnapshotCompletion, SnapshotProgress, SnapshotState};
 use crate::store::ArchiveStore;
 use crate::suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 use crate::todos::TodoPatch;
@@ -263,6 +263,18 @@ impl ArchiveStore {
         snapshot_id: &str,
     ) -> Result<Option<ResumeSnapshotMeta>, StoreError> {
         self.transaction(|tx| tx.get_snapshot(snapshot_id))
+    }
+
+    pub fn snapshot_state(
+        &self,
+        application_id: &str,
+        snapshot_id: &str,
+    ) -> Result<SnapshotState, StoreError> {
+        self.transaction(|tx| tx.snapshot_state(application_id, snapshot_id))
+    }
+
+    pub fn read_snapshot(&self, snapshot_id: &str) -> Result<(ResumeSnapshotMeta, Vec<u8>), StoreError> {
+        self.transaction(|tx| tx.read_snapshot(snapshot_id))
     }
 
     pub fn list_snapshots(
