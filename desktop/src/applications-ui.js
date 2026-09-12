@@ -1,6 +1,8 @@
 import {
   createApplicationsController,
   evidenceLabel,
+  evidenceLine,
+  evidenceNote,
   eventLabel,
   fillSummary,
   stageLabel,
@@ -179,6 +181,7 @@ export function mountApplications(invoke) {
       const events = view.events || [];
       const snapshotStates = view.snapshotStates || {};
       const snapshots = view.snapshots || [];
+      const evidence = view.evidence || [];
       detail.innerHTML = `
         <div class="detail-head">
           <h2 title="${escapeHtml(app.company)} · ${escapeHtml(app.title)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</h2>
@@ -203,7 +206,19 @@ export function mountApplications(invoke) {
           <button type="button" data-act="note">新增备注</button>
           <button type="button" data-act="recycle">${(app.recycleState || app.recycle_state) === "recycled" ? "恢复" : "回收"}</button>
         </div>
-        <p class="muted">附件和待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
+        <p class="muted">待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
+        <h3>回复证据（${evidence.length}）</h3>
+        ${evidenceNote(app.replyEvidenceState || app.reply_evidence_state)
+          ? `<p class="muted">${escapeHtml(evidenceNote(app.replyEvidenceState || app.reply_evidence_state))}</p>`
+          : ""}
+        ${evidence.length ? `
+        <ul class="snapshot-list">
+          ${evidence.map((item) => `<li>
+            <span>${escapeHtml(item.subject || item.originalFilename || "导入的证据")} — ${escapeHtml(evidenceLine(item))}</span>
+            <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
+            <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
+          </li>`).join("")}
+        </ul>` : `<p class="muted">收件箱里导入的证据关联到这条申请之后会出现在这里。</p>`}
         ${snapshots.length ? `
         <h3>简历快照（${snapshots.length}）</h3>
         <ul class="snapshot-list">
@@ -238,9 +253,12 @@ export function mountApplications(invoke) {
         </ol>
       `;
       detail.querySelectorAll("button[data-act]").forEach((btn) => {
-        btn.addEventListener("click", () =>
-          btn.dataset.act === "snapshot" ? openSnapshot(btn.dataset.snapshot) : handleAction(btn.dataset.act, view),
-        );
+        btn.addEventListener("click", () => {
+          if (btn.dataset.act === "snapshot") return openSnapshot(btn.dataset.snapshot);
+          if (btn.dataset.act === "evidence") return openEvidence(btn.dataset.evidence);
+          if (btn.dataset.act === "unassociate") return unassociateEvidence(btn.dataset.evidence, id);
+          return handleAction(btn.dataset.act, view);
+        });
       });
     } catch (err) {
       if (token !== detailToken || ctl.selectedId !== id) return;
@@ -283,6 +301,44 @@ export function mountApplications(invoke) {
   document.getElementById("snapshot-close")?.addEventListener("click", () => {
     document.getElementById("snapshot-dialog").close();
   });
+
+  // 只读预览，和收件箱看到的是同一份已经清洗过的数据（正文转义、图片 data: URL、
+  // PDF 不内嵌）。这里不做分类，分类在收件箱里做。
+  let evidenceToken = 0;
+  async function openEvidence(evidenceId) {
+    const token = ++evidenceToken;
+    const dialogEl = document.getElementById("evidence-dialog");
+    const body = document.getElementById("evidence-body");
+    body.innerHTML = '<p class="muted">加载中…</p>';
+    if (!dialogEl.open) dialogEl.showModal();
+    try {
+      const item = await invoke("get_evidence_preview_cmd", { evidenceId });
+      if (token !== evidenceToken) return;
+      body.innerHTML = `
+        <p class="muted">${escapeHtml(evidenceLine(item))}</p>
+        ${item.note ? `<p class="banner">${escapeHtml(item.note)}</p>` : ""}
+        ${item.imageDataUrl ? `<img class="evidence-image" alt="导入的截图" src="${escapeHtml(item.imageDataUrl)}">` : ""}
+        ${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}
+      `;
+    } catch (err) {
+      if (token !== evidenceToken) return;
+      body.innerHTML = `<p class="banner">${escapeHtml(`读不出这条证据（${invokeError(err)}）。`)}</p>`;
+    }
+  }
+
+  document.getElementById("evidence-close")?.addEventListener("click", () => {
+    document.getElementById("evidence-dialog").close();
+  });
+
+  async function unassociateEvidence(evidenceId, applicationId) {
+    try {
+      await invoke("unassociate_evidence_cmd", { evidenceId });
+      msg.textContent = "已取出到收件箱。这条申请的证据状态按剩下的证据重算。";
+      if (ctl.selectedId === applicationId) await loadDetail(applicationId);
+    } catch (err) {
+      msg.textContent = invokeError(err);
+    }
+  }
 
   async function handleAction(act, view) {
     const app = view.application.summary || view.application;

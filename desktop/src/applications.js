@@ -108,6 +108,56 @@ export function evidenceLabel(state) {
   return state || "尚未导入回复证据";
 }
 
+/**
+ * 「尚未导入回复证据」旁边永远跟着这句：没有证据只说明没人导入过东西，不说明对方
+ * 没有回复（§6.3 与 §11 的措辞约束）。
+ */
+export function evidenceNote(state) {
+  if (state === "none_imported" || !state) {
+    return "这只表示还没有导入任何回复证据，不代表对方没有回复。";
+  }
+  if (state === "imported_unclassified") {
+    return "已经导入了证据，还没有确认它属于哪一类。";
+  }
+  return "";
+}
+
+/** 详情里一条证据的摘要行：类型、来源、分类与发送方式，各说各的。 */
+export function evidenceLine(item) {
+  const parts = [];
+  parts.push(EVIDENCE_KIND[item?.kind] || "文件");
+  if (item?.fromAddr) parts.push(item.fromAddr);
+  if (item?.sentAt) parts.push(item.sentAt);
+  parts.push(item?.replyClass ? EVIDENCE_CLASS[item.replyClass] || item.replyClass : "待分类");
+  parts.push(`发送方式：${EVIDENCE_SEND_MODE[item?.sendMode || "unknown"]}`);
+  return parts.join(" · ");
+}
+
+const EVIDENCE_KIND = {
+  eml: "邮件",
+  screenshot: "截图",
+  pdf: "PDF",
+  paste: "粘贴文本",
+  unknown: "文本",
+};
+
+const EVIDENCE_CLASS = {
+  auto_ack: "自动回执",
+  assessment_invite: "测评邀请",
+  interview_invite: "面试邀请",
+  action_required: "需要处理",
+  offer: "Offer",
+  reject: "未通过",
+  other: "其他",
+  unknown: "看不出来",
+};
+
+const EVIDENCE_SEND_MODE = {
+  human: "人工发送",
+  automated: "系统自动发送",
+  unknown: "未知",
+};
+
 export function createApplicationsController() {
   let listToken = 0;
   let selectedId = null;

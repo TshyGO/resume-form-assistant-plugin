@@ -188,6 +188,8 @@ pub struct ApplicationView {
     /// The state of each snapshot a fill event names, so the timeline can say "uploading" or
     /// "not available" instead of offering a snapshot that is not there.
     pub snapshot_states: BTreeMap<String, SnapshotState>,
+    /// 当前关联到这条申请的回复证据（D09）。和别处一样，不含任何存储路径。
+    pub evidence: Vec<crate::evidence_commands::EvidenceSummary>,
 }
 
 /// What the WebView may know about a snapshot: never its path in the archive.
@@ -227,11 +229,13 @@ pub fn get_application(store: &ArchiveStore, id: &str) -> Result<ApplicationView
         }
     }
     let snapshots = store.list_snapshots(id)?.into_iter().map(SnapshotSummary::from).collect();
+    let evidence = crate::evidence_commands::list_for_application(store, id)?;
     Ok(ApplicationView {
         application,
         events,
         snapshots,
         snapshot_states,
+        evidence,
     })
 }
 
