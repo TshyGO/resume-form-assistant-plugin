@@ -236,6 +236,16 @@ D08 实现（可核对）：
 
 ---
 
+### 7.3 回复证据导入（D09）
+
+用户主动交进来的邮件、截图、PDF 与粘贴文本，全程在本机：
+
+- **不联网。** 导入、解析、预览没有任何网络调用；WebView 的 CSP（`default-src 'self'; img-src 'self' data:`）本身就挡掉远程脚本、远程图片与跟踪像素。HTML 邮件在 Rust 侧被压平成纯文本，远程地址连引用都不会留下，`javascript:` 链接只作为文本出现。
+- **原件留在档案目录。** `attachments/<yyyy>/<mm>/`，安全文件名、冲突加后缀不覆盖、同字节只存一份（`refCount`）。导入后用户把原文件移走或删掉都不影响查看。
+- **来源路径不留痕。** `sourcePathHint` 只活在一次导入的参数里；错误提示只有安全文件名与错误码。给界面的结构里没有任何档案路径。
+- **导入不是判断。** 导入只写 `evidence_imported` / `evidence_associated` / `association_changed` / `evidence_classified`，从不改申请阶段；`replyClass` 与 `sendMode` 由用户分别确认，界面不因为类型是面试邀请就把发送方式写成人工。
+- **可核对**：`desktop/crates/evidence-import/tests/hostile.rs` 集中放敌意输入（路径形状、伪装 MIME、可执行文件、损坏邮件、脚本与跟踪像素、病态标签），断言字节只会落在 `attachments/` 之内、正文里没有任何可执行片段或远程地址。
+
 ## 8. AI 外发
 
 两条互不相通的 Key：
