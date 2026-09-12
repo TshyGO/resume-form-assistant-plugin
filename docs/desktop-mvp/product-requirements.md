@@ -510,7 +510,9 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 
 快照内容是 PII。默认填写留档 **不把逐字段值塞进 `fill.submit` 信封**。
 
-**生成时机：** 用户确认「本次留档」时，插件从 **当时** 的活模板做一份结构化拷贝（JSON，字段与 `normalizeTemplate` 一致），计算 `sha256` 与 `byteSize`，铸 `snapshotId`。这之后活模板再改，也 **不得**用新模板重生成该 `snapshotId`。
+**生成时机：** 用户确认「本次留档」时，插件从 **这次填写实际使用的模板** 做一份结构化拷贝（JSON，字段与 `normalizeTemplate` 一致），计算 `sha256` 与 `byteSize`，铸 `snapshotId`。D08 实现：模板在填写 **开始** 时冻结在内存里（不落盘、不外发），用户确认时序列化这份拷贝——填写与确认之间改了模板，快照仍是填写时用的那份。这之后活模板再改，也 **不得**用新模板重生成该 `snapshotId`。
+
+**快照格式 v1（D08 定义）：** canonical JSON（键排序、compact、UTF-8），`{ format: "resume-pro.snapshot", formatVersion: 1, templateName, templateVersion, capturedAt, groups: [{ name, fields: [{ key, value }] }], omittedFieldCount }`。`templateVersion` = 保留下来的 `groups` 的 canonical JSON 的 SHA-256 前 12 位（插件无版本号时的内容哈希短码，填写事件与快照共用同一算法）。字段名命中密码 / 口令 / 验证码 / 校验码 / 授权码 / password / passwd / pwd / otp / api key / token / cookie / secret 的整条字段丢弃；字段值长得像凭据的（`password: …` 这类带标签的口令、`Bearer` 头、带 `token` / `code` 等参数的 URL、`sk-` / `ghp_` / `AKIA` / JWT 这类已知密钥格式）也整条丢弃，只记 `omittedFieldCount`（data-privacy §4.1「桌面留档再剥一层」）。桌面查看快照时按同一套规则再剥一次，只按 `formatVersion == 1` 解析，更高版本提示更新桌面程序、原字节不动。分片 32 KiB（D05 `suggestedRawChunkBytes`），2 MiB 最多 64 块。桌面以快照内容里的 `templateName` 登记快照行，`snapshot.chunk` 不因此加字段。
 
 **字节放哪：**
 
@@ -542,7 +544,9 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 | 分片 ACK | 这一块已按块身份持久化 | **否** |
 | 完整快照 ACK | 全部块到齐且总哈希相符，桌面快照行已提交 | **是**（先持久化 ACK 状态） |
 
-缺块、乱序、ACK 丢失：用同一 `chunkMessageId` 重试该块。`sourceRestoreEpoch` ≠ current：停止上传，走对账/用户决定；不得把旧块改写成当前 epoch 后重放。见走查 10.21。
+缺块、乱序、ACK 丢失：用同一 `chunkMessageId` 重试该块。`sourceRestoreEpoch` ≠ current：停止上传，走对账/用户决定；不得把旧块改写成当前 epoch 后重放。见走查 10.21。用户选择另存时，同一份暂存字节以 **新的 `snapshotId`** 与新的全部块 id 重新上传（桌面按 `snapshot_id` 唯一登记上传，且每块核对父记录的 epoch，同一 `snapshotId` 在新 epoch 下只会 `conflict`），旧身份作为记录保留。另存用一步排队操作先占住条目，双击只产生一份新快照。若恢复后的档案里对应的 `fill.submit` 已经是 `applied`（备份含事件、不含快照块），事件不可改写、仍指向旧 `snapshotId`；另存的快照照常登记在同一申请下，桌面在快照列表里可见，只是不再从那条事件跳转——要链接过去需要协议加字段，留给后续。
+
+**先事件后快照（D08 实现）：** 同一条留档的快照上传在它的 `fill.submit` 被桌面接受（离开队列）之前不发送、不算待办、不设闹钟；事件在退避或失败时快照一起等，用户取消事件时快照一起放弃。
 
 **统一写前暂存：** 在线开始后断线、SW 重启和浏览器重启与初始离线使用同一 IDB 原字节。完整 ACK 丢失时可按快照 ID/总哈希查询或按块重传，不能从活模板重建。IDB 与 `chrome.storage.local` 不具备跨库事务：IDB 暂存必须含父记录与 **每块** `chunkMessageId`；有 outbox 但找不到原字节时暂停并报告失败，不假报可恢复。
 
@@ -605,7 +609,9 @@ MVP 事件类型（可在 D03 增补，但下列语义冻结）：
 - `templateName` / `templateVersion` / `snapshotId`（若用户同意保存快照）
 - 插件版本、`messageId`
 
-**逐字段值默认 OFF**，需用户在当次或设置里明确打开。打开后仍禁止密码/OTP/支付框。
+**逐字段值默认 OFF**，需用户在当次或设置里明确打开。打开后仍禁止密码/OTP/支付框。D08 未实现该开关（`fill.submit` 协议没有放字段值的位置；负责人决定 Q2，另开 issue）。
+
+**D08 不发 `started`：** 留档要用户在填写 **结束后** 确认，确认前不外发任何东西，所以插件只发最终 outcome（`completed` / `partial` / `failed` / `cancelled`）。中途关掉标签页的填写没有记录——那次填写用户从未同意留档。协议枚举保留 `started`。映射：用户取消且没写入任何字段 → `cancelled`；取消或失败但已写入部分字段 → `partial`（不把已写进网页的抹掉）。
 
 必须区分三种「值」（D08 验收）：
 

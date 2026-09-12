@@ -16,6 +16,10 @@ D05 不修改 `desktop/crates/archive-store/`。若 D03 实现时出现下列差
 12. `fill.submit` 必须带 `outcome`。桌面不得猜测成功/部分/失败/取消。
 13. 校验响应必须用 `validate_response_for_request` / `validateResponseForRequest` 并传入原请求。`validate_response_value` / `validateResponse` 只做结构校验，看不到请求：同类型的多个请求在途时，A 的回复能通过 B 的校验，`resultId` 或快照 ACK 会记到错误的 outbox 条目上。快照 ACK 的 `chunkIndex` / `chunkCursor` 也只有对照请求的 `chunkCount` 才能设上界；schema 只能给出协议级的 128 硬上界。
 
+## D08 如何满足第 6 条（快照持久性）
+
+D08 没有保留长期的 `ChunkAssembler` 会话：块字节与块回执在 archive-store 的 **同一事务** 里提交（schema v2 `snapshot_chunk_bytes`），提交后读 `snapshot_progress` 得到持久游标，才用 `DurableChunk::committed(...)` 构造分片 ACK。全部块到齐时从库里读回、核对总长度与 `snapshotSha256`、原子写快照文件、登记快照行并清空暂存字节，提交之后才发 `plugin_snapshot_ack_payload`。进度在库里，应用重启不丢；没有活动会话，也就没有 `forget` / `cancel` 可漏。重发的块走回执重放，按库里当下的状态回答（可能已是完整 ACK），这一次也会重试失败的组装。见 `desktop/crates/archive-store/INTEGRATION.md` 与 `desktop/src-tauri/src/plugin_bridge.rs`。
+
 ## fill.submit → D03 FillSubmitInput
 
 | D05 线上 | D03 | 说明 |
