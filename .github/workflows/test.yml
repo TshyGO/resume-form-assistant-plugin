@@ -22,6 +22,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dev dependencies
+        run: npm ci
 
       - name: Check JavaScript syntax
         run: |
@@ -45,6 +50,16 @@ jobs:
           test -f vendor/pdfjs/cmaps/LICENSE
           test -f vendor/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap
           test "$(find vendor/pdfjs/cmaps -maxdepth 1 -type f -name '*.bcmap' | wc -l)" -eq 168
+
+      - name: Type check
+        run: |
+          # types/ 里那个探针自己证明不了自己在项目里：一旦从 tsconfig 的 include 掉出去，
+          # tsc 不检查它也照样退出 0。先断言项目确实包含它和生成的类型，再信这次通过。
+          npx tsc --noEmit --listFiles > tsc-files.txt
+          grep -q 'types/protocol-contract.check.mjs' tsc-files.txt || { echo 'types/protocol-contract.check.mjs is not in the tsc project'; exit 1; }
+          grep -q 'desktop/crates/protocol/js/protocol.d.ts' tsc-files.txt || { echo 'protocol.d.ts is not in the tsc project'; exit 1; }
+          rm tsc-files.txt
+          npx tsc --noEmit
 
       - name: Run tests
         run: node --test tests/*.test.js

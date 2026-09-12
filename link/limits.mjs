@@ -1,3 +1,4 @@
+// @ts-check
 // Product limits, in one place so the UI copy and the queue agree on the numbers.
 
 // D01 §5.2.4 suggests 100 of each and requires the number to be stated rather than implied.

@@ -1,9 +1,11 @@
+// @ts-check
 import { RULES } from './protocol/schema-lite.mjs';
 
 // The credential parameter names and the reviewed allowlist both come from the vendored D05
 // rules. Keeping a second copy here would let the plugin believe a URL is clean while the
 // desktop refuses it — the failure mode is a queue that can never drain.
 export const SECRET_QUERY_KEYS = new Set(RULES.urlSecretQueryKeys || []);
+/** @type {Array<{ host?: string, pathPrefix: string, param?: string, valuePattern: string }>} */
 export const URL_ALLOWLIST = RULES.urlAllowlist || [];
 
 // Removed from dedupeUrl only. They are not credentials, so they stay in sourceUrl where
@@ -19,6 +21,7 @@ const TRACKING_NAMES = new Set(['gclid', 'fbclid', 'msclkid', 'mc_cid', 'mc_eid'
  * happens here, before the intent is queued, so no copy of the original ever reaches
  * storage, a log or the wire.
  */
+/** @param {unknown} raw */
 export function redactUrl(raw) {
   if (typeof raw !== 'string' || !raw) return null;
 
@@ -37,6 +40,7 @@ export function redactUrl(raw) {
   url.password = '';
   url.hash = '';
 
+  /** @type {Array<[string, string]>} */
   const kept = [];
   for (const [name, value] of url.searchParams) {
     if (isSecretParam(url.hostname, url.pathname, name, value)) continue;
@@ -48,6 +52,12 @@ export function redactUrl(raw) {
   return { sourceUrl, dedupeUrl };
 }
 
+/**
+ * @param {string} host
+ * @param {string} path
+ * @param {string} name
+ * @param {string} value
+ */
 function isSecretParam(host, path, name, value) {
   const normalised = name.toLowerCase().replaceAll('-', '_');
   if (!SECRET_QUERY_KEYS.has(normalised)) return false;
@@ -56,6 +66,12 @@ function isSecretParam(host, path, name, value) {
   return !isAllowlisted(host, path, normalised, value);
 }
 
+/**
+ * @param {string} host
+ * @param {string} path
+ * @param {string} param
+ * @param {string} value
+ */
 function isAllowlisted(host, path, param, value) {
   return URL_ALLOWLIST.some(rule =>
     rule.host?.toLowerCase() === host.toLowerCase() &&
@@ -65,11 +81,16 @@ function isAllowlisted(host, path, param, value) {
   );
 }
 
+/** @param {string} name */
 function isTracking(name) {
   const lowered = name.toLowerCase();
   return TRACKING_NAMES.has(lowered) || TRACKING_PREFIXES.some(prefix => lowered.startsWith(prefix));
 }
 
+/**
+ * @param {URL} url
+ * @param {Array<[string, string]>} pairs
+ */
 function withParams(url, pairs) {
   const out = new URL(url.toString());
   out.search = '';
