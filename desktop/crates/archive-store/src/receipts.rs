@@ -151,6 +151,18 @@ pub struct SnapshotProgress {
     pub staged_bytes: i64,
 }
 
+/// Where a snapshot named by a fill event stands, for the desktop UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotState {
+    /// The snapshot file and row are committed.
+    Stored,
+    /// Chunks have arrived but the snapshot is not complete.
+    Uploading,
+    /// Nothing under this id in this archive.
+    Missing,
+}
+
 /// What [crate::ArchiveStore::complete_snapshot_upload] found.
 #[derive(Debug, Clone)]
 pub enum SnapshotCompletion {
@@ -767,6 +779,44 @@ impl StoreTx<'_> {
             created_at: now,
             byte_size,
         })
+    }
+
+    /// The state of `snapshot_id` as a snapshot of `application_id`. An event can name any
+    /// id; one committed or uploading under another application is not this one's.
+    pub fn snapshot_state(
+        &self,
+        application_id: &str,
+        snapshot_id: &str,
+    ) -> Result<SnapshotState, StoreError> {
+        if let Some(meta) = self.get_snapshot(snapshot_id)? {
+            return Ok(if meta.application_id == application_id {
+                SnapshotState::Stored
+            } else {
+                SnapshotState::Missing
+            });
+        }
+        let uploads: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM snapshot_uploads WHERE snapshot_id = ?1 AND application_id = ?2",
+            params![snapshot_id, application_id],
+            |r| r.get(0),
+        )?;
+        Ok(if uploads > 0 { SnapshotState::Uploading } else { SnapshotState::Missing })
+    }
+
+    /// A committed snapshot's metadata and bytes. The file is checked against the recorded
+    /// length and digest before, and the bytes read are checked again after: a file changed
+    /// in between is still refused, and nothing partial is ever returned.
+    pub fn read_snapshot(&self, snapshot_id: &str) -> Result<(ResumeSnapshotMeta, Vec<u8>), StoreError> {
+        use sha2::{Digest, Sha256};
+        let meta = self
+            .get_snapshot(snapshot_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("snapshot {snapshot_id}")))?;
+        crate::tx::verify_file(&self.archive_dir, &meta.stored_rel_path, meta.byte_size, &meta.sha256)?;
+        let bytes = std::fs::read(self.archive_dir.join(&meta.stored_rel_path))?;
+        if bytes.len() as i64 != meta.byte_size || format!("{:x}", Sha256::digest(&bytes)) != meta.sha256 {
+            return Err(StoreError::Validation("snapshot file changed while reading".into()));
+        }
+        Ok((meta, bytes))
     }
 
     pub fn get_snapshot(

@@ -29,6 +29,62 @@ const EVENT_LABEL = {
   fill_cancelled: "填写取消",
 };
 
+const FILL_OUTCOME = {
+  started: "开始",
+  completed: "完成",
+  partial: "部分完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
+
+// Shown with every snapshot the desktop displays (D08 acceptance): a snapshot is what the
+// plugin copied from the template when the fill was archived, not a record of what the
+// website received.
+export const SNAPSHOT_DISCLAIMER =
+  "这是插件在留档时从简历模板拷贝的内容，用来追溯当时用了哪份资料；它不能证明网站最终收到或保存了这些内容。";
+
+/**
+ * One line for a fill event: its outcome and how many fields were written into the page.
+ * "Written into the page" is all the plugin can know; nothing here says the site accepted
+ * anything, and a fill is never a submission.
+ */
+export function fillSummary(payload) {
+  if (payload?.kind !== "fill_event") return "";
+  const parts = [FILL_OUTCOME[payload.outcome] || "结束"];
+  // Only what was sent: an absent filled count is unknown, not zero.
+  if (Number.isInteger(payload.field_count) && Number.isInteger(payload.filled_count)) {
+    parts.push(`已写入网页 ${payload.filled_count}/${payload.field_count} 项`);
+  } else if (Number.isInteger(payload.field_count)) {
+    parts.push(`共 ${payload.field_count} 项`);
+  } else if (Number.isInteger(payload.filled_count)) {
+    parts.push(`已写入网页 ${payload.filled_count} 项`);
+  }
+  if (payload.unconfirmed_count) parts.push(`${payload.unconfirmed_count} 项未确认`);
+  const took = durationLabel(payload.durations_ms?.total);
+  if (took) parts.push(`用时 ${took}`);
+  // The version tells two revisions of a template with the same name apart.
+  if (payload.template_name) {
+    parts.push(`模板：${payload.template_name}${payload.template_version ? `（${payload.template_version}）` : ""}`);
+  }
+  return parts.join(" · ");
+}
+
+function durationLabel(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} 秒`;
+  const seconds = Math.round(ms / 1000);
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+/** Null when the snapshot can be opened; otherwise the sentence to show in its place. */
+export function snapshotStateLabel(state) {
+  if (state === "stored") return null;
+  if (state === "uploading") return "简历快照上传中，还没有传完。";
+  // After a restore the plugin can upload the same bytes again, but only under a new id; the
+  // fill event cannot be rewritten to point at it, so the copy shows up in the list instead.
+  return "简历快照不可用：桌面没有收到这份快照。恢复备份后重新上传的快照会单独出现在上方的快照列表里。";
+}
+
 export function stageLabel(code) {
   return STAGE_LABEL[code] || code;
 }

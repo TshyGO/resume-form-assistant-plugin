@@ -2928,6 +2928,7 @@ dependencies = [
  "data-service",
  "local-ipc",
  "nm-frame",
+ "regex",
  "resume-pro-protocol",
  "serde",
  "serde_json",

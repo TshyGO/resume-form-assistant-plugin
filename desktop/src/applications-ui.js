@@ -2,8 +2,11 @@ import {
   createApplicationsController,
   evidenceLabel,
   eventLabel,
+  fillSummary,
   stageLabel,
   occurredLabel,
+  snapshotStateLabel,
+  SNAPSHOT_DISCLAIMER,
 } from "./applications.js";
 
 function escapeHtml(value) {
@@ -174,6 +177,8 @@ export function mountApplications(invoke) {
       const app = view.application.summary || view.application;
       const notes = view.application.notes;
       const events = view.events || [];
+      const snapshotStates = view.snapshotStates || {};
+      const snapshots = view.snapshots || [];
       detail.innerHTML = `
         <div class="detail-head">
           <h2 title="${escapeHtml(app.company)} · ${escapeHtml(app.title)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</h2>
@@ -198,7 +203,15 @@ export function mountApplications(invoke) {
           <button type="button" data-act="note">新增备注</button>
           <button type="button" data-act="recycle">${(app.recycleState || app.recycle_state) === "recycled" ? "恢复" : "回收"}</button>
         </div>
-        <p class="muted">附件、简历快照和待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
+        <p class="muted">附件和待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
+        ${snapshots.length ? `
+        <h3>简历快照（${snapshots.length}）</h3>
+        <ul class="snapshot-list">
+          ${snapshots.map((snap) => `<li>
+            <span>${escapeHtml(snap.template_name)} · ${escapeHtml(formatTime(snap.created_at))}</span>
+            <button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snap.snapshot_id)}">查看</button>
+          </li>`).join("")}
+        </ul>` : ""}
         <h3>时间线</h3>
         <ol class="timeline">
           ${events
@@ -207,25 +220,69 @@ export function mountApplications(invoke) {
               const extra = payload.text || payload.note || payload.reason || payload.label || payload.name || "";
               const mode = payload.stage_update_mode || payload.stageUpdateMode;
               const modeText = mode === "update_progress" ? "更新当前进度" : mode === "history_only" ? "仅历史补录" : "";
+              const fill = fillSummary(payload);
+              const snapshotId = payload.snapshot_id;
+              const snapshotNote = snapshotId ? snapshotStateLabel(snapshotStates[snapshotId]) : null;
               return `<li>
                 <strong>#${escapeHtml(ev.eventSequence || ev.event_sequence)} ${escapeHtml(eventLabel(ev.eventType || ev.event_type))}</strong>
                 <span class="muted">发生：${escapeHtml(occurredLabel(ev.occurred))} · 记录于：${escapeHtml(formatTime(ev.recordedAt || ev.recorded_at))}</span>
                 ${payload.round ? `<div>第 ${escapeHtml(payload.round)} 轮面试</div>` : ""}
                 ${extra ? `<div class="break">${escapeHtml(extra)}</div>` : ""}
-                ${modeText ? `<div class="muted">${escapeHtml(modeText)}</div>` : ""}
+                ${fill ? `<div>${escapeHtml(fill)}</div>` : ""}
+                ${snapshotId && !snapshotNote ? `<div><button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snapshotId)}">查看简历快照</button></div>` : ""}
+                ${snapshotNote ? `<div class="muted">${escapeHtml(snapshotNote)}</div>` : ""}
+                ${modeText && !fill ? `<div class="muted">${escapeHtml(modeText)}</div>` : ""}
               </li>`;
             })
             .join("")}
         </ol>
       `;
       detail.querySelectorAll("button[data-act]").forEach((btn) => {
-        btn.addEventListener("click", () => handleAction(btn.dataset.act, view));
+        btn.addEventListener("click", () =>
+          btn.dataset.act === "snapshot" ? openSnapshot(btn.dataset.snapshot) : handleAction(btn.dataset.act, view),
+        );
       });
     } catch (err) {
       if (token !== detailToken || ctl.selectedId !== id) return;
       detail.innerHTML = `<p class="banner">${escapeHtml(invokeError(err))}</p>`;
     }
   }
+
+  // Read-only. The disclaimer is always shown first, and a snapshot that fails its digest
+  // check is reported as unreadable rather than shown in part.
+  let snapshotToken = 0;
+  async function openSnapshot(snapshotId) {
+    // Only the snapshot opened last may fill the dialog; an earlier one answering late is dropped.
+    const token = ++snapshotToken;
+    const dialogEl = document.getElementById("snapshot-dialog");
+    const body = document.getElementById("snapshot-body");
+    body.innerHTML = `<p class="banner">${escapeHtml(SNAPSHOT_DISCLAIMER)}</p><p class="muted">加载中…</p>`;
+    if (!dialogEl.open) dialogEl.showModal();
+    try {
+      const snap = await invoke("get_snapshot_cmd", { snapshotId });
+      if (token !== snapshotToken) return;
+      const omitted = snap.omittedFieldCount
+        ? `<p class="muted">${escapeHtml(snap.omittedFieldCount)} 个疑似密码、验证码类的字段没有保存。</p>`
+        : "";
+      body.innerHTML = `
+        <p class="banner">${escapeHtml(SNAPSHOT_DISCLAIMER)}</p>
+        <p class="muted">模板：${escapeHtml(snap.templateName)}${snap.templateVersion ? `（${escapeHtml(snap.templateVersion)}）` : ""} · 拷贝于 ${escapeHtml(formatTime(snap.capturedAt || snap.createdAt))}</p>
+        ${omitted}
+        ${(snap.groups || []).map((group) => `
+          <h4>${escapeHtml(group.name)}</h4>
+          <dl class="facts compact">
+            ${(group.fields || []).map((field) => `<dt>${escapeHtml(field.key)}</dt><dd class="break">${escapeHtml(field.value)}</dd>`).join("")}
+          </dl>`).join("")}
+      `;
+    } catch (err) {
+      if (token !== snapshotToken) return;
+      body.innerHTML = `<p class="banner">${escapeHtml(SNAPSHOT_DISCLAIMER)}</p><p class="banner">无法读取这份快照（${escapeHtml(invokeError(err))}）。桌面不会展示部分内容。</p>`;
+    }
+  }
+
+  document.getElementById("snapshot-close")?.addEventListener("click", () => {
+    document.getElementById("snapshot-dialog").close();
+  });
 
   async function handleAction(act, view) {
     const app = view.application.summary || view.application;

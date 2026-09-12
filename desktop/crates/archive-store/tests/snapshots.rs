@@ -329,6 +329,57 @@ fn a_version_one_archive_is_upgraded_with_a_backup() {
     assert_eq!(tables, 1);
 }
 
+// --- PR 6: what the desktop UI reads ------------------------------------------------------
+
+#[test]
+fn a_snapshot_is_stored_uploading_or_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let upload = Upload::new(snapshot_v1(), 4096);
+
+    assert_eq!(db.snapshot_state(&a.id, SNAPSHOT).unwrap(), SnapshotState::Missing);
+    upload.send(&db, &a.id, 0).unwrap();
+    assert_eq!(db.snapshot_state(&a.id, SNAPSHOT).unwrap(), SnapshotState::Uploading);
+    for index in 1..upload.count() {
+        upload.send(&db, &a.id, index).unwrap();
+    }
+    db.complete_snapshot_upload(CLIENT, SNAPSHOT).unwrap();
+    assert_eq!(db.snapshot_state(&a.id, SNAPSHOT).unwrap(), SnapshotState::Stored);
+
+    // Asked from another application, the same id is not this application's snapshot.
+    let other = db.create_application(app()).unwrap();
+    assert_eq!(db.snapshot_state(&other.id, SNAPSHOT).unwrap(), SnapshotState::Missing);
+}
+
+#[test]
+fn reading_a_snapshot_checks_the_file_before_returning_a_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let db = ArchiveStore::open(cfg.clone()).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let upload = Upload::new(snapshot_v1(), 4096);
+    for index in 0..upload.count() {
+        upload.send(&db, &a.id, index).unwrap();
+    }
+    db.complete_snapshot_upload(CLIENT, SNAPSHOT).unwrap();
+
+    let (meta, bytes) = db.read_snapshot(SNAPSHOT).unwrap();
+    assert_eq!(meta.snapshot_id, SNAPSHOT);
+    assert_eq!(bytes, upload.bytes);
+
+    // Tampered: same length, different content. Nothing partial comes back.
+    let path = cfg.archive_dir.join(&meta.stored_rel_path);
+    let mut changed = upload.bytes.clone();
+    changed[10] ^= 0x01;
+    std::fs::write(&path, &changed).unwrap();
+    assert!(db.read_snapshot(SNAPSHOT).is_err());
+
+    std::fs::remove_file(&path).unwrap();
+    assert!(db.read_snapshot(SNAPSHOT).is_err());
+    assert!(matches!(db.read_snapshot("no-such-snapshot"), Err(StoreError::NotFound(_))));
+}
+
 #[test]
 fn chunks_that_add_up_to_more_than_the_declared_size_are_refused() {
     // Each chunk fits the declared byteSize on its own; together they may not. Otherwise a

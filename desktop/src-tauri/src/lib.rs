@@ -282,6 +282,14 @@ fn get_application_cmd(
 }
 
 #[tauri::command]
+fn get_snapshot_cmd(
+    state: State<AppState>,
+    snapshot_id: String,
+) -> Result<commands::SnapshotView, CommandError> {
+    with_store(&state, |store| commands::get_snapshot(store, &snapshot_id))
+}
+
+#[tauri::command]
 fn update_application_cmd(
     state: State<AppState>,
     args: UpdateApplicationArgs,
@@ -682,6 +690,7 @@ pub fn run() {
             list_applications_cmd,
             create_application_cmd,
             get_application_cmd,
+            get_snapshot_cmd,
             update_application_cmd,
             add_note_cmd,
             confirm_submit_cmd,
