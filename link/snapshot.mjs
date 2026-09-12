@@ -1,3 +1,4 @@
+// @ts-check
 import { MAX_SNAPSHOT_BYTES, canonicalJson, sha256Hex } from './protocol/validate.mjs';
 import { RULES } from './protocol/schema-lite.mjs';
 
@@ -23,6 +24,7 @@ const encoder = new TextEncoder();
 const SECRET_CJK = /(密码|口令|验证码|校验码|授权码|密钥|私钥|令牌)/u;
 const SECRET_LATIN = /(?:^|[^a-z])(password|passwd|pwd|otp|api[\s_-]?key|token|cookie|secret)s?(?:[^a-z]|$)/iu;
 
+/** @param {unknown} name */
 export function isSecretFieldName(name) {
   const text = String(name ?? '').replace(/([a-z0-9])([A-Z])/g, '$1 $2');
   return SECRET_CJK.test(text) || SECRET_LATIN.test(text);
@@ -43,6 +45,7 @@ const SECRET_VALUES = [
   /\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}/iu
 ];
 
+/** @param {unknown} value */
 export function isSecretFieldValue(value) {
   const text = String(value ?? '');
   return SECRET_VALUES.some(pattern => pattern.test(text));
@@ -57,6 +60,10 @@ export function isSecretFieldValue(value) {
  * only `templateVersion` is stable across captures). Returns `{ error }` instead of bytes when there is nothing
  * worth keeping or the result would exceed the 2 MiB product limit; the caller then records
  * the fill without a snapshot rather than failing the fill.
+ */
+/**
+ * @param {{ name?: unknown, groups?: unknown } | null | undefined} template `normalizeTemplate` 的形状
+ * @param {{ now?: () => Date }} [options]
  */
 export async function buildSnapshot(template, { now = () => new Date() } = {}) {
   const { groups, omittedFieldCount } = keptGroups(template);
@@ -91,12 +98,14 @@ export async function buildSnapshot(template, { now = () => new Date() } = {}) {
  * The version a snapshot of this template would carry, without building one. A fill record
  * reports it even when the user keeps the snapshot to themselves, so both must agree.
  */
+/** @param {{ name?: unknown, groups?: unknown } | null | undefined} template */
 export async function templateVersionOf(template) {
   const { groups } = keptGroups(template);
   return groups.length ? versionOf(groups) : null;
 }
 
 // The groups and fields a snapshot keeps: blank keys and secret-looking fields are dropped.
+/** @param {{ name?: unknown, groups?: unknown } | null | undefined} template */
 function keptGroups(template) {
   let omittedFieldCount = 0;
   const groups = [];
@@ -122,11 +131,13 @@ function keptGroups(template) {
 
 // The content short code D01 §8.5 asks for when the plugin has no revision counter. It covers
 // the kept groups only, so two captures of an unchanged template share a version.
+/** @param {Array<{ name: string, fields: Array<{ key: string, value: string }> }>} groups */
 async function versionOf(groups) {
   return (await sha256Hex(encoder.encode(canonicalJson(groups)))).slice(0, 12);
 }
 
 /** Split snapshot bytes into protocol chunks, each with its own digest. */
+/** @param {Uint8Array} bytes */
 export async function planChunks(bytes) {
   const chunks = [];
   for (let start = 0, chunkIndex = 0; start < bytes.length; start += CHUNK_BYTES, chunkIndex += 1) {
@@ -137,6 +148,7 @@ export async function planChunks(bytes) {
 }
 
 /** Standard, padded Base64 — the only form D05's strict decoder accepts. */
+/** @param {Uint8Array} bytes */
 export function encodeBase64(bytes) {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) {

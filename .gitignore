@@ -34,3 +34,7 @@ __pycache__/
 # IDE files
 .vscode/
 .idea/
+
+# 根目录的类型检查工具链（扩展本身仍然零构建、零依赖）
+/node_modules/
+tsc-files.txt

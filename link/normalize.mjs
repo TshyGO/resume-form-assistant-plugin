@@ -1,3 +1,4 @@
+// @ts-check
 // Normalisation for comparison only. §7 is explicit that the strings the user confirmed are
 // always kept as they were; these keys never replace them.
 //
@@ -26,6 +27,7 @@ const LATIN_SUFFIXES = [
   'corp'
 ];
 
+/** @param {unknown} raw */
 export function normalizeCompany(raw) {
   let value = foldWidth(String(raw ?? '')).toLowerCase();
   // Punctuation and spacing carry no identity for a company name, and they are exactly what
@@ -46,6 +48,7 @@ export function normalizeCompany(raw) {
   return value;
 }
 
+/** @param {unknown} raw */
 export function normalizeTitle(raw) {
   return foldWidth(String(raw ?? '')).trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -56,6 +59,7 @@ export function normalizeTitle(raw) {
  * URL is part of it but never alone: §7 says a URL is a hint, not an identity, because
  * stripping parameters can make two postings collide.
  */
+/** @param {{ company?: unknown, title?: unknown, dedupeUrl?: unknown }} fields */
 export function normalizeTriple({ company, title, dedupeUrl }) {
   return [
     normalizeCompany(company),
@@ -69,6 +73,7 @@ export function normalizeTriple({ company, title, dedupeUrl }) {
 
 // Full-width ASCII and the ideographic space are the same characters as their half-width
 // forms for identity purposes; an IME decides which one a user types.
+/** @param {string} text */
 function foldWidth(text) {
   return text
     .replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))

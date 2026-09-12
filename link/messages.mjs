@@ -1,3 +1,4 @@
+// @ts-check
 // The names the sidebar and the service worker use to talk to each other. Content scripts
 // cannot open a native messaging port, so every desktop operation crosses this boundary.
 export const MSG = {

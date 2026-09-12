@@ -1,0 +1,40 @@
+{
+  "//": [
+    "Type checking only. The extension has no build step and ships no compiled output:",
+    "noEmit is not an optimisation here, it is the whole point.",
+    "",
+    "checkJs is deliberately FALSE. Files opt in one at a time with a `// @ts-check`",
+    "pragma on line 1, so this config can land while D07 is still in flight without",
+    "turning every in-progress module red.",
+    "",
+    "link/protocol/ is included so imports resolve, but must never be checked or edited:",
+    "it is a byte-identical vendored copy of desktop/crates/protocol/js/, locked by",
+    "tests/protocol-vendor.test.js. Adding a pragma there would fail that lock."
+  ],
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["chrome"],
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    "link/**/*.mjs",
+    "types/**/*.mjs",
+    "desktop/crates/protocol/js/protocol.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "vendor",
+    "output",
+    "xlsx.full.min.js",
+    "mammoth.browser.min.js"
+  ]
+}
