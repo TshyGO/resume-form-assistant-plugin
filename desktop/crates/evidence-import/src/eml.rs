@@ -250,7 +250,7 @@ fn decode_entities(text: &str) -> String {
 }
 
 /// UTC 秒 → `YYYY-MM-DDTHH:MM:SSZ`（Howard Hinnant 的 civil_from_days，不引第三方时间库）。
-fn rfc3339_utc(timestamp: i64) -> String {
+pub(crate) fn rfc3339_utc(timestamp: i64) -> String {
     let days = timestamp.div_euclid(86_400);
     let secs = timestamp.rem_euclid(86_400);
     let z = days + 719_468;

@@ -959,3 +959,56 @@ fn confirmed_suggestion_replay_cannot_change_any_approved_decision() {
         Err(StoreError::Conflict(_))
     ));
 }
+
+#[test]
+fn evidence_can_be_taken_back_out_of_an_application() {
+    // D09：取消关联之后这条申请才回到 none_imported（走查 10.20 的反面）。
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let e = db.import_evidence(evidence(Some(a.id.clone()))).unwrap();
+    assert_eq!(
+        db.get_application(&a.id).unwrap().unwrap().reply_evidence_state,
+        ReplyEvidenceState::ImportedUnclassified
+    );
+
+    let back = db.unassociate_evidence(&e.id).unwrap();
+    assert_eq!(back.application_id, None);
+    assert_eq!(
+        db.get_application(&a.id).unwrap().unwrap().reply_evidence_state,
+        ReplyEvidenceState::NoneImported
+    );
+    assert_eq!(db.list_evidence(None).unwrap().len(), 1, "it is back in the inbox");
+
+    // 事件留痕：申请的时间线上看得到它被取走。
+    let kinds: Vec<String> = db
+        .list_events(&a.id)
+        .unwrap()
+        .iter()
+        .map(|event| event.event_type.clone())
+        .collect();
+    assert!(kinds.iter().any(|kind| kind == "association_changed"), "{kinds:?}");
+
+    // 已经在收件箱里的证据再取消一次是 no-op，不写第二条事件。
+    let before = db.list_events(&a.id).unwrap().len();
+    db.unassociate_evidence(&e.id).unwrap();
+    assert_eq!(db.list_events(&a.id).unwrap().len(), before);
+}
+
+#[test]
+fn the_same_bytes_are_found_by_their_digest() {
+    // 导入管线用它回答「这份字节已经在档案里了吗」，界面用它提示重复导入。
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    assert!(db.find_blob(&"a".repeat(64)).unwrap().is_none());
+
+    db.import_evidence(evidence(Some(a.id.clone()))).unwrap();
+    let blob = db.find_blob(&"a".repeat(64)).unwrap().expect("the blob is registered");
+    assert_eq!(blob.meta.stored_rel_path, "attachments/example.eml");
+    assert_eq!(blob.ref_count, 1);
+
+    db.import_evidence(evidence(None)).unwrap();
+    assert_eq!(db.find_blob(&"a".repeat(64)).unwrap().unwrap().ref_count, 2);
+    assert_eq!(db.evidence_for_blob(&"a".repeat(64)).unwrap().len(), 2);
+}

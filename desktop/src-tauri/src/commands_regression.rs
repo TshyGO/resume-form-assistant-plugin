@@ -337,3 +337,245 @@ mod snapshots {
         assert_eq!(get_snapshot(&store, MISSING).unwrap_err().code, "NOT_FOUND");
     }
 }
+
+// --- D09 PR 3: importing evidence, the inbox, previews, association and classification ---
+
+mod evidence {
+    use crate::commands::*;
+    use crate::evidence_commands::{self, ImportArgs};
+    use archive_store::ArchiveStore;
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    const BUCKET: &str = "2026/09";
+
+    fn archive() -> (tempfile::TempDir, ArchiveStore, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            open_store(&dir.path().join("archive"), &dir.path().join("current.json")).unwrap();
+        let app = create_application(
+            &store,
+            serde_json::from_value(json!({ "company": "Synthetic", "title": "Job" })).unwrap(),
+        )
+        .unwrap()
+        .application
+        .unwrap()
+        .id
+        .clone();
+        (dir, store, app)
+    }
+
+    fn write(dir: &Path, name: &str, bytes: &[u8]) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn eml(subject: &str) -> Vec<u8> {
+        format!("From: hr@example.test\r\nSubject: {subject}\r\nDate: Fri, 12 Sep 2026 08:00:00 +0000\r\n\r\n下周二上午十点面试。\r\n")
+            .into_bytes()
+    }
+
+    /// 一个合成 PNG：魔数对得上、能读回来就够了。
+    fn png() -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&[0, 0, 0, 13, b'I', b'H', b'D', b'R']);
+        bytes.extend_from_slice(&[0u8; 32]);
+        bytes
+    }
+
+    fn import(
+        store: &ArchiveStore,
+        paths: Vec<String>,
+        text: Option<String>,
+        app: Option<&str>,
+    ) -> evidence_commands::ImportReport {
+        evidence_commands::import_evidence(
+            store,
+            ImportArgs {
+                paths,
+                text,
+                application_id: app.map(str::to_string),
+            },
+            BUCKET,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn one_bad_file_does_not_take_the_good_ones_with_it() {
+        let (dir, store, _app) = archive();
+        let good = write(dir.path(), "面试邀请.eml", &eml("面试邀请"));
+        let bad = write(
+            dir.path(),
+            "invite.msg",
+            b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 padding",
+        );
+
+        let report = import(&store, vec![good, bad], None, None);
+
+        assert_eq!(report.imported.len(), 1);
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].code, "unsupported");
+        assert_eq!(report.failed[0].name, "invite.msg");
+        let one = &report.imported[0];
+        assert_eq!(one.kind, "eml");
+        assert_eq!(one.subject.as_deref(), Some("面试邀请"));
+        assert_eq!(one.from_addr.as_deref(), Some("hr@example.test"));
+        assert_eq!(
+            one.sent_at.as_deref(),
+            Some("2026-09-12T08:00:00.000Z"),
+            "档案层把时间规范成毫秒精度"
+        );
+        assert_eq!(
+            one.application_id, None,
+            "还没有选申请：它待在收件箱里"
+        );
+        assert_eq!(store.list_evidence(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_same_bytes_are_reported_as_a_duplicate_and_stored_once() {
+        let (dir, store, _app) = archive();
+        let path = write(dir.path(), "reply.eml", &eml("同一封"));
+
+        let first = import(&store, vec![path.clone()], None, None);
+        assert_eq!(first.imported.len(), 1);
+        assert!(first.duplicates.is_empty());
+
+        let again = import(&store, vec![path], None, None);
+        assert!(again.imported.is_empty());
+        assert_eq!(again.duplicates.len(), 1);
+        assert_eq!(
+            again.duplicates[0].same_bytes_as.len(),
+            1,
+            "提示指向先导入的那条"
+        );
+
+        let blob_dir = store
+            .archive_dir()
+            .join("attachments")
+            .join("2026")
+            .join("09");
+        assert_eq!(
+            std::fs::read_dir(blob_dir).unwrap().count(),
+            1,
+            "字节只存一份"
+        );
+    }
+
+    #[test]
+    fn evidence_moves_in_and_out_of_an_application_with_the_state_following() {
+        let (dir, store, app) = archive();
+        let path = write(dir.path(), "reply.eml", &eml("回复"));
+        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        let state = |store: &ArchiveStore| {
+            store
+                .get_application(&app)
+                .unwrap()
+                .unwrap()
+                .reply_evidence_state
+                .as_str()
+                .to_string()
+        };
+        assert_eq!(state(&store), "none_imported");
+
+        evidence_commands::associate(&store, &id, &app).unwrap();
+        assert_eq!(
+            state(&store),
+            "imported_unclassified",
+            "关联后未分类，不能说尚未导入"
+        );
+
+        evidence_commands::unassociate(&store, &id).unwrap();
+        assert_eq!(state(&store), "none_imported");
+        assert_eq!(evidence_commands::list_inbox(&store).unwrap().len(), 1);
+
+        evidence_commands::associate(&store, &id, &app).unwrap();
+        let classified =
+            evidence_commands::classify(&store, &id, "interview_invite", "automated").unwrap();
+        assert_eq!(classified.reply_class.as_deref(), Some("interview_invite"));
+        assert_eq!(
+            classified.send_mode.as_deref(),
+            Some("automated"),
+            "不因为是面试邀请就写成人工"
+        );
+        assert_eq!(state(&store), "classified");
+        assert_eq!(
+            store
+                .get_application(&app)
+                .unwrap()
+                .unwrap()
+                .current_stage
+                .as_str(),
+            "saved",
+            "导入与分类都不改阶段"
+        );
+        assert!(evidence_commands::classify(&store, &id, "made_up", "human").is_err());
+    }
+
+    #[test]
+    fn a_preview_is_text_or_a_data_url_and_never_a_path() {
+        let (dir, store, _app) = archive();
+        let mail = write(dir.path(), "reply.eml", &eml("面试邀请"));
+        let shot = write(dir.path(), "screenshot.png", &png());
+        let pdf = write(dir.path(), "offer.pdf", b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n");
+        let report = import(
+            &store,
+            vec![mail, shot, pdf],
+            Some("他们说下周二面试。".into()),
+            None,
+        );
+        assert_eq!(report.imported.len(), 4, "{:?}", report.failed);
+
+        let by_kind = |kind: &str| {
+            report
+                .imported
+                .iter()
+                .find(|item| item.kind == kind)
+                .unwrap()
+                .id
+                .clone()
+        };
+
+        let mail = evidence_commands::get_preview(&store, &by_kind("eml")).unwrap();
+        assert!(mail.body_extract.unwrap().contains("下周二上午十点"));
+        assert!(mail.image_data_url.is_none());
+
+        let shot = evidence_commands::get_preview(&store, &by_kind("screenshot")).unwrap();
+        assert!(shot
+            .image_data_url
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+
+        let pdf = evidence_commands::get_preview(&store, &by_kind("pdf")).unwrap();
+        assert!(pdf.image_data_url.is_none());
+        assert!(pdf.note.unwrap().contains("系统程序"));
+
+        let pasted = evidence_commands::get_preview(&store, &by_kind("paste")).unwrap();
+        assert_eq!(pasted.body_extract.as_deref(), Some("他们说下周二面试。"));
+
+        // 给 WebView 的任何一条里都没有存储路径。
+        for id in report.imported.iter().map(|item| item.id.clone()) {
+            let json =
+                serde_json::to_string(&evidence_commands::get_preview(&store, &id).unwrap())
+                    .unwrap();
+            assert!(!json.contains("attachments/"), "{json}");
+            assert!(!json.contains(&store.archive_dir().to_string_lossy().to_string()));
+        }
+    }
+
+    #[test]
+    fn a_copy_that_is_gone_says_so_instead_of_pretending() {
+        let (dir, store, _app) = archive();
+        let path = write(dir.path(), "reply.eml", &eml("回复"));
+        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        let stored: PathBuf = evidence_commands::stored_path(&store, &id).unwrap();
+        assert!(stored.starts_with(store.archive_dir().canonicalize().unwrap()));
+
+        std::fs::remove_file(&stored).unwrap();
+        let preview = evidence_commands::get_preview(&store, &id).unwrap();
+        assert!(preview.note.unwrap().contains("不在了"));
+        assert!(evidence_commands::stored_path(&store, &id).is_err());
+    }
+}

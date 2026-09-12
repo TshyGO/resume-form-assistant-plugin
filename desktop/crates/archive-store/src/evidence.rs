@@ -191,7 +191,7 @@ impl StoreTx<'_> {
                 Some(from) => EventPayload::AssociationChanged {
                     evidence_id: evidence_id.to_string(),
                     from_application_id: Some(from),
-                    to_application_id: to_application.to_string(),
+                    to_application_id: Some(to_application.to_string()),
                 },
             },
         };
@@ -202,6 +202,70 @@ impl StoreTx<'_> {
         }
         self.get_evidence(evidence_id)?
             .ok_or_else(|| StoreError::Internal("evidence vanished in same transaction".into()))
+    }
+
+    /// 取消关联:证据回到收件箱,原申请的投影按 §6.3 重算(可能回到 none_imported)。
+    /// 原始 blob 与分类保持不变——用户只是说「这封信不属于那条申请」。
+    pub fn unassociate_evidence(&mut self, evidence_id: &str) -> Result<ReplyEvidence, StoreError> {
+        let ev = self
+            .get_evidence(evidence_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("evidence {evidence_id}")))?;
+        let Some(from) = ev.application_id.clone() else {
+            return Ok(ev);
+        };
+        let now = now_utc();
+        self.conn().execute(
+            "UPDATE reply_evidence SET application_id = NULL WHERE id = ?1",
+            params![evidence_id],
+        )?;
+        let draft = EventDraft {
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
+            source: EventSource::Manual,
+            source_request_id: None,
+            actor: Actor::User,
+            payload: EventPayload::AssociationChanged {
+                evidence_id: evidence_id.to_string(),
+                from_application_id: Some(from.clone()),
+                to_application_id: None,
+            },
+        };
+        // 事件留在原申请的时间线上:那条申请确实发生过「证据被取走」。
+        self.append_events(Some(&from), &[draft], &now)?;
+        self.recompute_reply_state(&from)?;
+        self.get_evidence(evidence_id)?
+            .ok_or_else(|| StoreError::Internal("evidence vanished in same transaction".into()))
+    }
+
+    /// 按 sha256 找已经登记的字节。导入管线用它去重,界面用它提示重复导入。
+    pub fn find_blob(&self, sha256: &str) -> Result<Option<AttachmentBlob>, StoreError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT sha256, size_bytes, stored_rel_path, ref_count, mime FROM attachment_blobs \
+             WHERE sha256 = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![sha256.to_lowercase()], |r| {
+            Ok(AttachmentBlob {
+                meta: AttachmentBlobMeta {
+                    sha256: r.get(0)?,
+                    size_bytes: r.get(1)?,
+                    stored_rel_path: r.get(2)?,
+                    mime: r.get(4)?,
+                },
+                ref_count: r.get(3)?,
+            })
+        })?;
+        rows.next().transpose().map_err(StoreError::from)
+    }
+
+    /// 引用同一份字节的证据 id。同哈希不等于同一次导入,也不撤销用户有意的不同关联。
+    pub fn evidence_for_blob(&self, sha256: &str) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT id FROM reply_evidence WHERE blob_sha256 = ?1 ORDER BY imported_at ASC")?;
+        let rows = stmt.query_map(params![sha256.to_lowercase()], |r| r.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
     }
 
     /// 手动/确认后分类(确认前的建议走 AiSuggestion)。

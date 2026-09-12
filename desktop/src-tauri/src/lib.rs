@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod evidence_commands;
 #[cfg(test)]
 mod commands_regression;
 mod ipc_client;
@@ -290,6 +291,83 @@ fn get_snapshot_cmd(
 }
 
 #[tauri::command]
+fn import_evidence_cmd(
+    state: State<AppState>,
+    args: evidence_commands::ImportArgs,
+) -> Result<evidence_commands::ImportReport, CommandError> {
+    let bucket = evidence_commands::bucket_now();
+    with_store(&state, |store| {
+        evidence_commands::import_evidence(store, args.clone(), &bucket)
+    })
+}
+
+#[tauri::command]
+fn list_inbox_cmd(state: State<AppState>) -> Result<Vec<evidence_commands::EvidenceSummary>, CommandError> {
+    with_store(&state, evidence_commands::list_inbox)
+}
+
+#[tauri::command]
+fn get_evidence_preview_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+) -> Result<evidence_commands::EvidencePreview, CommandError> {
+    with_store(&state, |store| {
+        evidence_commands::get_preview(store, &evidence_id)
+    })
+}
+
+#[tauri::command]
+fn associate_evidence_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+    application_id: String,
+) -> Result<evidence_commands::EvidenceSummary, CommandError> {
+    with_store(&state, |store| {
+        evidence_commands::associate(store, &evidence_id, &application_id)
+    })
+}
+
+#[tauri::command]
+fn unassociate_evidence_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+) -> Result<evidence_commands::EvidenceSummary, CommandError> {
+    with_store(&state, |store| {
+        evidence_commands::unassociate(store, &evidence_id)
+    })
+}
+
+#[tauri::command]
+fn classify_evidence_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+    reply_class: String,
+    send_mode: String,
+) -> Result<evidence_commands::EvidenceSummary, CommandError> {
+    with_store(&state, |store| {
+        evidence_commands::classify(store, &evidence_id, &reply_class, &send_mode)
+    })
+}
+
+/// 用系统默认程序打开本机副本。路径在这里解析并核对在档案目录之内，**不经过 WebView**。
+#[tauri::command]
+fn open_evidence_cmd(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    evidence_id: String,
+) -> Result<(), CommandError> {
+    let path = with_store(&state, |store| {
+        evidence_commands::stored_path(store, &evidence_id)
+    })?;
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|err| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: err.to_string(),
+        })
+}
+
+#[tauri::command]
 fn update_application_cmd(
     state: State<AppState>,
     args: UpdateApplicationArgs,
@@ -575,6 +653,8 @@ pub fn run() {
     let hidden_launch = args.hidden;
     let quit_launch = args.quit;
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let wants_hidden = argv.iter().any(|a| a == "--hidden");
             let wants_probe = argv.iter().any(|a| a == "--probe");
@@ -691,6 +771,13 @@ pub fn run() {
             create_application_cmd,
             get_application_cmd,
             get_snapshot_cmd,
+            import_evidence_cmd,
+            list_inbox_cmd,
+            get_evidence_preview_cmd,
+            associate_evidence_cmd,
+            unassociate_evidence_cmd,
+            classify_evidence_cmd,
+            open_evidence_cmd,
             update_application_cmd,
             add_note_cmd,
             confirm_submit_cmd,

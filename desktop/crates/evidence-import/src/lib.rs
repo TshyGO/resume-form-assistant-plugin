@@ -239,6 +239,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// 导入时间决定文件落在哪个月份的桶里：`YYYY/MM`。
+pub fn bucket_from_unix(seconds: i64) -> String {
+    eml::rfc3339_utc(seconds)[..7].replace('-', "/")
+}
+
 /// `attachments/<bucket>` 的绝对路径。
 pub fn bucket_dir(archive_dir: &Path, bucket: &str) -> PathBuf {
     archive_dir.join("attachments").join(bucket)
