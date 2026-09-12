@@ -641,6 +641,23 @@ mod evidence {
         }
     }
 
+    // D09 验收：导入之后原文件挪走或删掉，主程序还看得到自己那份副本。
+    #[test]
+    fn deleting_the_original_does_not_take_the_imported_copy_with_it() {
+        let (dir, store, _app) = archive();
+        let source = write(dir.path(), "reply.eml", &eml("回复"));
+        let id = import(&store, vec![source.clone()], None, None).imported[0]
+            .id
+            .clone();
+
+        std::fs::remove_file(&source).unwrap();
+        assert!(!std::path::Path::new(&source).exists());
+
+        let preview = evidence_commands::get_preview(&store, &id).unwrap();
+        assert!(preview.body_extract.unwrap().contains("下周二上午十点"));
+        assert!(preview.note.is_none(), "副本还在，不该有「不在了」的提示");
+    }
+
     #[test]
     fn a_copy_that_is_gone_says_so_instead_of_pretending() {
         let (dir, store, _app) = archive();
