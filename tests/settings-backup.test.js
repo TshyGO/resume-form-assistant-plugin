@@ -66,8 +66,7 @@ test("导出的备份带上模板、当前模板和 AI 配置", async () => {
   assert.equal(backup.aiConfig.model, "gpt-4o-mini");
 });
 
-// data-privacy §4.1：API Key 不得出现在备份里，没有开关。
-test("API Key 不进备份", async () => {
+test("默认不导出 API Key", async () => {
   const popup = loadPopup();
   const saved = captureDownloads(popup);
   await seed(popup);
@@ -76,6 +75,70 @@ test("API Key 不进备份", async () => {
 
   assert.equal("apiKey" in saved[0].data.aiConfig, false);
   assert.doesNotMatch(JSON.stringify(saved[0].data), /sk-old/);
+});
+
+// data-privacy §4.1.1：勾选之后还要再确认一次才写进文件。
+test("勾了包含 API Key 之后先出提醒，没确认不下载", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await seed(popup);
+  popup.element("backup-include-key").checked = true;
+
+  await backupApi(popup).handleExportBackup();
+
+  assert.equal(saved.length, 0, "没确认之前不能落文件");
+  assert.equal(popup.element("backup-key-confirm").hidden, false);
+});
+
+test("确认之后文件里才有 API Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await seed(popup);
+  popup.element("backup-include-key").checked = true;
+
+  const api = backupApi(popup);
+  await api.handleExportBackup();
+  await api.exportBackup(true);
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].data.aiConfig.apiKey, "sk-old");
+  assert.equal(popup.element("backup-key-confirm").hidden, true);
+});
+
+test("还没配 Key 的时候勾了也不用确认", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await seed(popup, { apiKey: "" });
+  popup.element("backup-include-key").checked = true;
+
+  await backupApi(popup).handleExportBackup();
+
+  assert.equal(saved.length, 1);
+  assert.equal("apiKey" in saved[0].data.aiConfig, false);
+  assert.equal(popup.element("backup-key-confirm").hidden, true);
+});
+
+test("带 Key 的备份导进来，Key 和它自己的地址一起生效", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await seed(popup, { apiKey: "sk-old" });
+  popup.element("backup-include-key").checked = true;
+
+  const api = backupApi(popup);
+  await api.handleExportBackup();
+  await api.exportBackup(true);
+
+  const moved = saved[0].data;
+  moved.aiConfig.apiUrl = "https://api.another.example/v1";
+
+  await api.handleBackupFileSelection({
+    target: { files: [makeTextFile("backup.json", JSON.stringify(moved))] }
+  });
+  await api.commitPendingBackup("replace");
+
+  const state = await popup.readState();
+  assert.equal(state.aiConfig.apiUrl, "https://api.another.example/v1");
+  assert.equal(state.aiConfig.apiKey, "sk-old");
 });
 
 test("密码、验证码这类字段不进备份，并且告诉用户跳过了几个", async () => {

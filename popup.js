@@ -113,6 +113,10 @@ function cacheElements() {
   elements.exportBackupButton = document.getElementById("export-backup-button");
   elements.importBackupButton = document.getElementById("import-backup-button");
   elements.backupFileInput = document.getElementById("backup-file-input");
+  elements.backupIncludeKey = document.getElementById("backup-include-key");
+  elements.backupKeyConfirm = document.getElementById("backup-key-confirm");
+  elements.backupKeyConfirmButton = document.getElementById("backup-key-confirm-button");
+  elements.backupKeyCancelButton = document.getElementById("backup-key-cancel-button");
   elements.backupConfirm = document.getElementById("backup-confirm");
   elements.backupConfirmText = document.getElementById("backup-confirm-text");
   elements.backupAppendButton = document.getElementById("backup-append-button");
@@ -157,8 +161,12 @@ function bindEvents() {
 
   elements.templateFileInput.addEventListener("change", handleFileSelection);
   elements.exportBackupButton.addEventListener("click", handleExportBackup);
+  elements.backupKeyConfirmButton.addEventListener("click", () => exportBackup(true));
+  elements.backupKeyCancelButton.addEventListener("click", hideKeyConfirm);
+  elements.backupIncludeKey.addEventListener("change", hideKeyConfirm);
   elements.importBackupButton.addEventListener("click", () => {
     hideBackupConfirm();
+    hideKeyConfirm();
     elements.backupFileInput.click();
   });
   elements.backupFileInput.addEventListener("change", handleBackupFileSelection);
@@ -702,20 +710,34 @@ async function deleteTemplate(templateId) {
 // chrome.storage.local 里。换电脑或者换扩展 ID 之后这些东西没有出口，所以这里
 // 补一个 JSON 备份。配对信息和待同步队列不进备份，那些换个环境本来就要重来。
 //
-// data-privacy §4.1：API Key、密码、验证码这类东西不得出现在备份里，没有
-// 「用户勾了就行」的例外。模板是用户自己填的表格，拦不住一行叫「登录密码」，
-// 所以写文件前再过一道快照那套剔除规则。
+// data-privacy §4.1：密码、验证码这类东西不得出现在备份里。模板是用户自己填的
+// 表格，拦不住一行叫「登录密码」，所以写文件前再过一道快照那套剔除规则。
+// API Key 走 §4.1.1 的例外：默认不含，用户勾选并再确认一次才写进去。
 
 async function handleExportBackup() {
+  const state = await StorageService.getState();
+
+  if (!state.templates.length) {
+    showStatus("backup", "还没有模板可以导出。", "warning");
+    return;
+  }
+
+  // 勾选框太容易顺手点上，真要写 Key 进文件之前再拦一次（data-privacy §4.1.1）。
+  if (elements.backupIncludeKey.checked && state.aiConfig.apiKey) {
+    elements.backupKeyConfirm.hidden = false;
+    hideStatus("backup");
+    return;
+  }
+
+  await exportBackup(false);
+}
+
+async function exportBackup(includeApiKey) {
+  hideKeyConfirm();
+
   try {
     const state = await StorageService.getState();
-
-    if (!state.templates.length) {
-      showStatus("backup", "还没有模板可以导出。", "warning");
-      return;
-    }
-
-    const { backup, omittedFieldCount } = buildBackup(state);
+    const { backup, omittedFieldCount } = buildBackup(state, { includeApiKey });
 
     BackupIO.saveJson(backupFileName(), backup);
     showStatus(
@@ -789,12 +811,16 @@ async function applyAndSave(backup, mode) {
   );
 }
 
+function hideKeyConfirm() {
+  elements.backupKeyConfirm.hidden = true;
+}
+
 function hideBackupConfirm() {
   popupState.pendingBackup = null;
   elements.backupConfirm.hidden = true;
 }
 
-function buildBackup(state, { now = new Date() } = {}) {
+function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
   const { stripSecretFields } = self.ResumeProSecretFields;
   let omittedFieldCount = 0;
 
@@ -812,8 +838,9 @@ function buildBackup(state, { now = new Date() } = {}) {
       pluginVersion: chrome.runtime.getManifest().version,
       templates,
       activeTemplateId: state.activeTemplateId,
-      // API Key 不进备份，换了机器重新填一次。
-      aiConfig: { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model }
+      aiConfig: includeApiKey && state.aiConfig.apiKey
+        ? { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
+        : { apiUrl: state.aiConfig.apiUrl, model: state.aiConfig.model }
     },
     omittedFieldCount
   };
@@ -884,12 +911,15 @@ function applyBackup(state, backup, mode) {
   if (backup.aiConfig) {
     const apiUrl = String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl);
 
+    // 备份自己带 Key 的话，Key 和地址是一起导出的，配在一起是对的。备份没带 Key
+    // 就只在地址没变时接着用本机这个；地址变了必须清掉，否则下一次请求会把用户的
+    // Key 发到别人备份里的地址上。
+    const backupKey = typeof backup.aiConfig.apiKey === "string" ? backup.aiConfig.apiKey : "";
+
     next.aiConfig = {
       apiUrl,
       model: String(backup.aiConfig.model ?? next.aiConfig.model),
-      // 备份里不会有 Key。地址没变就接着用本机这个；地址变了必须清掉，
-      // 否则下一次请求会把用户的 Key 发到别人备份里的地址上。
-      apiKey: apiUrl === next.aiConfig.apiUrl ? next.aiConfig.apiKey : ""
+      apiKey: backupKey || (apiUrl === next.aiConfig.apiUrl ? next.aiConfig.apiKey : "")
     };
   }
 
@@ -1611,6 +1641,7 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
       BackupIO,
       buildBackup,
       commitPendingBackup,
+      exportBackup,
       handleBackupFileSelection,
       handleExportBackup,
       parseBackup,

@@ -387,6 +387,15 @@ select {
   flex-wrap: wrap;
 }
 
+.backup-row__key {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .backup-row__hint {
   margin: 8px 0 0;
   color: var(--text-muted);
@@ -408,6 +417,17 @@ select {
 
 .backup-confirm[hidden] {
   display: none;
+}
+
+.backup-confirm.is-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.backup-confirm__text {
+  margin: 0;
+  flex: 1 1 100%;
+  line-height: 1.5;
 }
 
 .backup-confirm__actions {

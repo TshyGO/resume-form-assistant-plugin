@@ -72,10 +72,25 @@
             <div class="backup-row__actions">
               <button class="text-button" id="export-backup-button" type="button">导出备份</button>
               <button class="text-button" id="import-backup-button" type="button">导入备份</button>
+              <label class="backup-row__key">
+                <input id="backup-include-key" type="checkbox">
+                <span>包含 API Key</span>
+              </label>
             </div>
-            <p class="backup-row__hint">备份包含全部模板和 AI 配置（不含 API Key），换电脑或重装后导入即可。<br>文件是明文的，里面有简历内容，请存在自己控制的位置。</p>
+            <p class="backup-row__hint">备份包含全部模板和 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历内容，请存在自己控制的位置。</p>
 
             <input id="backup-file-input" type="file" accept=".json,application/json" hidden>
+
+            <div class="backup-confirm is-warning" id="backup-key-confirm" hidden>
+              <p class="backup-confirm__text">
+                导出的文件会包含 API Key，明文保存。不要分享，也不要传网盘。<br>
+                插件不收集、不上传任何数据，文件只在你自己的电脑上。
+              </p>
+              <div class="backup-confirm__actions">
+                <button class="secondary-button" id="backup-key-confirm-button" type="button">确认导出</button>
+                <button class="text-button" id="backup-key-cancel-button" type="button">取消</button>
+              </div>
+            </div>
 
             <div class="backup-confirm" id="backup-confirm" hidden>
               <span id="backup-confirm-text"></span>
