@@ -578,4 +578,20 @@ mod evidence {
         assert!(preview.note.unwrap().contains("不在了"));
         assert!(evidence_commands::stored_path(&store, &id).is_err());
     }
+    #[test]
+    fn an_applications_detail_carries_its_evidence_without_any_path() {
+        let (dir, store, app) = archive();
+        let path = write(dir.path(), "面试邀请.eml", &eml("面试邀请"));
+        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        evidence_commands::associate(&store, &id, &app).unwrap();
+        evidence_commands::classify(&store, &id, "interview_invite", "automated").unwrap();
+
+        let view = get_application(&store, &app).unwrap();
+        assert_eq!(view.evidence.len(), 1);
+        assert_eq!(view.evidence[0].subject.as_deref(), Some("面试邀请"));
+        assert_eq!(view.evidence[0].reply_class.as_deref(), Some("interview_invite"));
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(!json.contains("attachments/"), "{json}");
+        assert!(!json.contains(&store.archive_dir().to_string_lossy().to_string()));
+    }
 }

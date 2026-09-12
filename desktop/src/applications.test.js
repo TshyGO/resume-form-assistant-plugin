@@ -83,3 +83,21 @@ test('a fill line does not invent a count the plugin did not send', async () => 
   assert.doesNotMatch(text, /0\/12/);
   assert.match(text, /共 12 项/);
 });
+
+test('an application with no evidence never implies nobody replied', async () => {
+  const { evidenceLabel, evidenceNote } = await import('./applications.js');
+  assert.equal(evidenceLabel('none_imported'), '尚未导入回复证据');
+  assert.match(evidenceNote('none_imported'), /不代表对方没有回复/);
+  assert.match(evidenceNote('imported_unclassified'), /还没有确认/);
+  assert.equal(evidenceNote('classified'), '');
+});
+
+test('an evidence line keeps class and send mode apart', async () => {
+  const { evidenceLine } = await import('./applications.js');
+  const line = evidenceLine({ kind: 'eml', fromAddr: 'hr@example.test', sentAt: '2026-09-12T08:00:00.000Z', replyClass: 'interview_invite', sendMode: 'automated' });
+  assert.match(line, /邮件/);
+  assert.match(line, /面试邀请/);
+  assert.match(line, /发送方式：系统自动发送/);
+  assert.doesNotMatch(line, /人工/);
+  assert.match(evidenceLine({ kind: 'paste' }), /待分类 · 发送方式：未知/);
+});

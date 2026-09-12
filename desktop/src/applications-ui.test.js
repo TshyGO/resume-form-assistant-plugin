@@ -11,7 +11,7 @@ function harness(handler) {
     emit(type,event={}){return this.listeners[type]?.({preventDefault(){},...event});}
     showModal(){this.open=true;} close(){this.open=false;} focus(){}
     querySelectorAll(selector){
-      if(selector==='button[data-act]')return [...this.innerHTML.matchAll(/data-act="([^"]+)"(?:\s+data-snapshot="([^"]+)")?/g)].map(m=>{const n=new Node(m[1]);n.dataset={act:m[1],...(m[2]?{snapshot:m[2]}:{})};actions.set(m[1],n);actionList.push(n);return n;});
+      if(selector==='button[data-act]')return [...this.innerHTML.matchAll(/data-act="([^"]+)"(?:\s+data-(snapshot|evidence)="([^"]+)")?/g)].map(m=>{const n=new Node(m[1]);n.dataset={act:m[1],...(m[2]?{[m[2]]:m[3]}:{})};actions.set(m[1],n);actionList.push(n);return n;});
       if(selector==='tr')return [];
       const ids=this.id==='app-form'?['f-company','f-title','f-url','f-location','f-notes','btn-save-app','btn-cancel-app']:['progress-description','progress-date','progress-round','progress-update','progress-save','progress-cancel'];
       return ids.map(el);
@@ -164,3 +164,50 @@ function snapshotDoc(value) {
   return { templateName: '合成模板', capturedAt: '2026-09-12T08:00:00.000Z', omittedFieldCount: 0,
     groups: [{ name: '经历', fields: [{ key: '描述', value }] }] };
 }
+
+test('the detail lists its evidence, opens it read-only and can take it back out', async () => {
+  const E = 'ev-1';
+  const h = harness((name, args) => {
+    if (name === 'get_application_cmd') {
+      return {
+        ...h.view(args.id),
+        events: [],
+        snapshots: [],
+        snapshotStates: {},
+        evidence: [{ id: E, kind: 'eml', subject: '面试邀请', fromAddr: 'hr@example.test', replyClass: null, sendMode: null }],
+      };
+    }
+    if (name === 'get_evidence_preview_cmd') {
+      return { id: E, kind: 'eml', replyClass: null, sendMode: null, bodyExtract: '<script>alert(1)</script> 正文', imageDataUrl: null, note: null };
+    }
+    return undefined;
+  });
+  await h.select('A');
+  const html = h.el('app-detail').innerHTML;
+  assert.match(html, /回复证据（1）/);
+  assert.match(html, /面试邀请/);
+  assert.match(html, /待分类/);
+  assert.doesNotMatch(html, /附件和待办尚未接入/);
+
+  await h.actions.get('evidence').emit('click');
+  await h.tick();
+  assert.equal(h.el('evidence-dialog').open, true);
+  const body = h.el('evidence-body').innerHTML;
+  assert.match(body, /&lt;script&gt;/);
+  assert.doesNotMatch(body, /<script/);
+
+  await h.actions.get('unassociate').emit('click');
+  await h.tick();
+  const call = h.calls.find((entry) => entry.name === 'unassociate_evidence_cmd');
+  assert.deepEqual(call.args, { evidenceId: E });
+});
+
+test('an application with no evidence says so without claiming silence from the other side', async () => {
+  const h = harness((name, args) => (name === 'get_application_cmd'
+    ? { ...h.view(args.id), events: [], snapshots: [], snapshotStates: {}, evidence: [] }
+    : undefined));
+  await h.select('A');
+  const html = h.el('app-detail').innerHTML;
+  assert.match(html, /回复证据（0）/);
+  assert.match(html, /不代表对方没有回复/);
+});
