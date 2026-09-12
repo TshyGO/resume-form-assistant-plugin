@@ -1,5 +1,6 @@
 import { buildEnvelope } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
+import { forgetSource } from './outbox.mjs';
 import {
   MAX_RECONCILE_ITEMS,
   payloadBodySha256,
@@ -58,9 +59,7 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
           // The desktop already executed it. Drop the queue entry and the intent behind it,
           // and add nothing: `applied` confirms history, it does not license a rewrite.
           await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
-          if (entry.intentId) {
-            await store.updateIntents(list => list.filter(item => item.intentId !== entry.intentId));
-          }
+          await forgetSource(store, entry);
           report.applied.push({ messageId: entry.messageId, resultId: answer.resultId });
           continue;
         }
@@ -99,9 +98,7 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
 
     if (choice === 'discard') {
       await store.updateOutbox(list => list.filter(item => item.messageId !== messageId));
-      if (entry.intentId) {
-        await store.updateIntents(list => list.filter(item => item.intentId !== entry.intentId));
-      }
+      await forgetSource(store, entry);
       return { status: 'discarded' };
     }
 

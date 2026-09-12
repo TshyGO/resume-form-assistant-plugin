@@ -130,6 +130,13 @@
         <button class="resume-pro__manager-button" id="resume-pro-cancel-fill" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
         <p id="resume-pro-wait-hint" role="status" hidden></p>
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
+        <div class="resume-pro__fill-record" id="resume-pro-fill-record" hidden>
+          <p class="resume-pro__save-note" id="resume-pro-fill-record-summary"></p>
+          <div class="resume-pro__save-actions">
+            <button class="resume-pro__ai-button" type="button" id="resume-pro-fill-record-save">留档到桌面</button>
+            <button class="resume-pro__manager-button" type="button" id="resume-pro-fill-record-skip">不留档</button>
+          </div>
+        </div>
         <details class="resume-pro__diagnostics" id="resume-pro-diagnostics" hidden>
           <summary>填写诊断（不含简历内容）</summary>
           <textarea id="resume-pro-diagnostics-text" readonly aria-label="填写诊断摘要，可选择复制" rows="14"></textarea>
@@ -766,6 +773,9 @@
     }
 
     button.disabled = true;
+    // Warm the desktop modules while the fill runs, so that when it ends the page can be read
+    // for the archive offer without waiting on anything (see offerFillRecord).
+    loadDesktopModules().catch(() => {});
     const repeatButton = shadowRoot?.querySelector("#resume-pro-repeat-fill");
     if (repeatButton) repeatButton.disabled = true;
     button.textContent = "正在扫描网页...";
@@ -924,7 +934,8 @@
       if (waitHint) waitHint.hidden = true;
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
-      const summary = formatFillDiagnostics({ ...timing, totalMs: performance.now() - totalStart,
+      const totalMs = performance.now() - totalStart;
+      const summary = formatFillDiagnostics({ ...timing, totalMs,
         fieldCount, filledCount, outcome, diagnostics });
       const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
@@ -936,6 +947,15 @@
       button.disabled = false;
       if (repeatButton) repeatButton.disabled = false;
       button.textContent = "一键 AI 填写";
+      // A page with nothing to fill produced nothing worth archiving.
+      if (fieldCount > 0) {
+        offerFillRecord({
+          outcome, cancelled: cancelRequested, fieldCount, filledCount, unconfirmedCount,
+          timing: { scanMs: timing.scanMs, roundTripMs: timing.roundTripMs, fillMs: timing.fillMs, totalMs },
+          templateName: activeTemplate?.name,
+          endedAt: new Date().toISOString()
+        }, activeTemplate).catch(() => {});
+      }
     }
   }
 
@@ -1664,14 +1684,18 @@
 
   let desktopModules = null;
   let pendingFields = null;
+  // The finished fill the card is offering to archive. Held only until the user answers.
+  let pendingFill = null;
 
   async function loadDesktopModules() {
     if (!desktopModules) {
-      const [extract, copy] = await Promise.all([
+      const [extract, copy, fillrecords, snapshot] = await Promise.all([
         import(chrome.runtime.getURL("link/extract.mjs")),
-        import(chrome.runtime.getURL("link/copy.mjs"))
+        import(chrome.runtime.getURL("link/copy.mjs")),
+        import(chrome.runtime.getURL("link/fillrecords.mjs")),
+        import(chrome.runtime.getURL("link/snapshot.mjs"))
       ]);
-      desktopModules = { extract, copy };
+      desktopModules = { extract, copy, fillrecords, snapshot };
     }
     return desktopModules;
   }
@@ -1680,6 +1704,8 @@
     sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
     sidebar.querySelector("#resume-pro-confirm-submit")?.addEventListener("click", handleConfirmSubmitClick);
     sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
+    sidebar.querySelector("#resume-pro-fill-record-save")?.addEventListener("click", handleRecordFillClick);
+    sidebar.querySelector("#resume-pro-fill-record-skip")?.addEventListener("click", closeFillRecord);
     sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
       event.preventDefault();
       submitSaveForm({ force: false });
@@ -1762,6 +1788,169 @@
     }
     shadowRoot.querySelector("#resume-pro-bind-new").hidden = true;
     box.hidden = false;
+  }
+
+  // --- D08: archiving a finished fill ----------------------------------------------------
+  //
+  // After every fill the sidebar may offer to archive it. It never blocks the fill and never
+  // throws into it, and a profile that has never paired a desktop is not asked at all: those
+  // users keep nothing. What is offered is counts and timings; the field values stay here.
+
+  async function offerFillRecord(raw, template) {
+    const card = shadowRoot?.querySelector("#resume-pro-fill-record");
+    if (!card) return;
+    // Read the page before waiting on the worker: on a single-page site the user can move on
+    // to the next posting meanwhile, and this fill must not be filed under that one. The
+    // modules were warmed when the fill started; if they were not, and the page changed while
+    // they loaded, there is no posting to offer this fill under.
+    const pageUrl = location.href;
+    const { extract, copy, fillrecords, snapshot } = await loadDesktopModules();
+    if (location.href !== pageUrl) return;
+    const job = extract.extractJobFields(document, pageUrl);
+    const link = await chrome.runtime.sendMessage({ type: "DESKTOP_LINK_STATE" });
+    if (!link?.everPaired) return;
+    pendingFill = {
+      ...raw,
+      urlRedacted: job.sourceUrl,
+      templateVersion: (await snapshot.templateVersionOf(template)) || "",
+      pluginVersion: chrome.runtime.getManifest().version,
+      job: { company: job.company, title: job.title, sourceUrl: job.sourceUrl }
+    };
+    // The summary is built from exactly what would be sent, so the card cannot promise more.
+    card.querySelector("#resume-pro-fill-record-summary").textContent =
+      copy.describeFillOffer(fillrecords.buildFillPayload(pendingFill));
+    card.hidden = false;
+  }
+
+  function closeFillRecord() {
+    const card = shadowRoot?.querySelector("#resume-pro-fill-record");
+    if (card) card.hidden = true;
+    pendingFill = null;
+  }
+
+  async function handleRecordFillClick() {
+    const raw = pendingFill;
+    if (!raw) return;
+    closeFillRecord();
+
+    let candidates = null;
+    if (raw.job?.company) {
+      try {
+        candidates = await chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: raw.job });
+      } catch {
+        candidates = null;
+      }
+    }
+    if (candidates?.status !== "ok") {
+      // The desktop is not answering, or the page does not say which company this is. The
+      // fill waits, and the application is picked from the pending list later.
+      await recordFill(raw, null);
+      return;
+    }
+
+    const options = [...candidates.exact, ...candidates.sameCompany];
+    showFillCandidates(options, {
+      note: options.length
+        ? "这次填写属于哪条申请？"
+        : "桌面里还没有这家公司的申请。可以先「保存岗位到本地」，或者稍后在待同步里选择。",
+      onPick: applicationId => recordFill(raw, applicationId),
+      onLater: () => recordFill(raw, null)
+    });
+  }
+
+  async function recordFill(raw, applicationId) {
+    const { copy } = await loadDesktopModules();
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RECORD_FILL", raw, applicationId });
+    } catch {
+      result = { status: "rejected" };
+    }
+    setDesktopStatus(copy.describeFillRecordResult(result ?? { status: "rejected" }));
+    revealDesktopStatus();
+    refreshPendingList();
+  }
+
+  // The card sits under the fill result; the answer lands in the desktop section further
+  // down. Bring it into view so the click does not look like it did nothing.
+  function revealDesktopStatus() {
+    shadowRoot?.querySelector("#resume-pro-desktop-status")?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }
+
+  // The same candidate box saving a job uses. There is no "new application" here: a fill
+  // belongs to an application that exists, and nothing is ever bound on the user's behalf.
+  function showFillCandidates(options, { note, onPick, onLater }) {
+    const box = shadowRoot?.querySelector("#resume-pro-candidates");
+    const list = shadowRoot?.querySelector("#resume-pro-candidate-list");
+    if (!box || !list) return;
+    shadowRoot.querySelector("#resume-pro-candidates-note").textContent = note;
+    list.textContent = "";
+    for (const candidate of options) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "resume-pro__candidate";
+      row.textContent = `${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`;
+      row.addEventListener("click", () => {
+        box.hidden = true;
+        onPick(candidate.applicationId);
+      });
+      list.appendChild(row);
+    }
+    shadowRoot.querySelector("#resume-pro-bind-new").hidden = true;
+    shadowRoot.querySelector("#resume-pro-bind-later").onclick = () => {
+      box.hidden = true;
+      onLater();
+    };
+    box.hidden = false;
+    box.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }
+
+  // What the desktop shows as an application's id. Checked before binding: a mistyped id would
+  // otherwise be queued and then refused on every attempt.
+  const APPLICATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  // A waiting record, bound from the pending list.
+  async function chooseFillApplication(record) {
+    const { copy } = await loadDesktopModules();
+    if (!record.job?.company) {
+      const typed = prompt("这条留档要记到哪条申请？请粘贴桌面里的申请 ID：")?.trim();
+      if (!typed) return;
+      if (!APPLICATION_ID_PATTERN.test(typed)) {
+        setDesktopStatus(copy.describeFillRecordResult({ status: "rejected", reason: "invalid_application_id" }));
+        return;
+      }
+      await bindFillRecord(record.recordId, typed);
+      return;
+    }
+    let candidates;
+    try {
+      candidates = await chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: record.job });
+    } catch {
+      candidates = null;
+    }
+    if (candidates?.status !== "ok") {
+      setDesktopStatus(copy.describeFillRecordResult({ status: "recorded", mode: "unavailable" }));
+      return;
+    }
+    const options = [...candidates.exact, ...candidates.sameCompany];
+    showFillCandidates(options, {
+      note: options.length ? "这次填写属于哪条申请？" : "桌面里还没有这家公司的申请，请先保存岗位。",
+      onPick: applicationId => bindFillRecord(record.recordId, applicationId),
+      onLater: () => {}
+    });
+  }
+
+  async function bindFillRecord(recordId, applicationId) {
+    const { copy } = await loadDesktopModules();
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_BIND_FILL", recordId, applicationId });
+    } catch {
+      result = { status: "pending" };
+    }
+    setDesktopStatus(copy.describeFillRecordResult(result ?? { status: "pending" }));
+    revealDesktopStatus();
+    refreshPendingList();
   }
 
   function closeSaveForm() {
@@ -1920,15 +2109,17 @@
 
     let intents = [];
     let outbox = [];
+    let fillRecords = [];
     try {
       const reply = await chrome.runtime.sendMessage({ type: "DESKTOP_LIST_QUEUE" });
       intents = reply?.intents || [];
       outbox = reply?.outbox || [];
+      fillRecords = reply?.fillRecords || [];
     } catch {
       return;
     }
 
-    const total = intents.length + outbox.length;
+    const total = intents.length + outbox.length + fillRecords.length;
     details.hidden = total === 0;
     shadowRoot.querySelector("#resume-pro-pending-count").textContent = String(total);
     list.textContent = "";
@@ -1949,12 +2140,22 @@
       list.appendChild(row);
     }
 
-    for (const entry of outbox) {
+    for (const record of fillRecords) {
       const row = pendingRow(
-        `${entry.payload?.company || ""} · ${entry.payload?.title || ""}`,
-        entry.payload?.sourceUrl,
-        describeOutboxState(entry)
+        `填写留档 · ${record.fill?.templateName || ""}`,
+        [record.job?.company, record.job?.title].filter(Boolean).join(" · "),
+        "待同步（尚未选择申请）"
       );
+      row.appendChild(rowButton("选择申请", () => chooseFillApplication(record)));
+      row.appendChild(rowButton("删除", async () => {
+        await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_FILL", recordId: record.recordId });
+        refreshPendingList();
+      }));
+      list.appendChild(row);
+    }
+
+    for (const entry of outbox) {
+      const row = pendingRow(queueLabel(entry), entry.payload?.sourceUrl, describeOutboxState(entry));
       if (entry.status === "needs_user" || entry.status === "paused") {
         appendReconcileChoices(row, entry);
         list.appendChild(row);
@@ -1963,7 +2164,7 @@
       row.appendChild(rowButton("立即重试", async () => {
         const { copy } = await loadDesktopModules();
         const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RETRY", messageId: entry.messageId });
-        setDesktopStatus(copy.describeBindResult(result ?? { status: "pending" }));
+        setDesktopStatus(describeQueueResult(copy, entry, result ?? { status: "pending" }));
         refreshPendingList();
       }));
       row.appendChild(rowButton("取消", async () => {
@@ -1972,6 +2173,20 @@
       }));
       list.appendChild(row);
     }
+  }
+
+  // Each kind of queued message has its own wording: a retried fill must not report that a
+  // job was saved, nor a refused one ask the user to check a company name.
+  function describeQueueResult(copy, entry, result) {
+    if (entry.messageType === "fill.submit") return copy.describeFillRecordResult(result);
+    if (entry.messageType === "submit.confirm") return copy.describeConfirmResult(result);
+    return copy.describeBindResult(result);
+  }
+
+  function queueLabel(entry) {
+    if (entry.messageType === "fill.submit") return `填写留档 · ${entry.payload?.templateName || ""}`;
+    if (entry.messageType === "submit.confirm") return "确认已投递";
+    return `${entry.payload?.company || ""} · ${entry.payload?.title || ""}`;
   }
 
   function pendingRow(label, title, state) {
@@ -2011,19 +2226,19 @@
     row.appendChild(rowButton("关联到已有申请", async () => {
       const applicationId = prompt("要关联到哪条申请？请粘贴桌面里的申请 ID：");
       if (!applicationId) return;
-      await resolvePaused(entry.messageId, "associate", applicationId.trim());
+      await resolvePaused(entry, "associate", applicationId.trim());
     }));
-    row.appendChild(rowButton("另存为新的", () => resolvePaused(entry.messageId, "resave")));
-    row.appendChild(rowButton("丢弃", () => resolvePaused(entry.messageId, "discard")));
+    row.appendChild(rowButton("另存为新的", () => resolvePaused(entry, "resave")));
+    row.appendChild(rowButton("丢弃", () => resolvePaused(entry, "discard")));
   }
 
-  async function resolvePaused(messageId, choice, applicationId) {
+  async function resolvePaused(entry, choice, applicationId) {
     const { copy } = await loadDesktopModules();
     const result = await chrome.runtime.sendMessage({
-      type: "DESKTOP_RESOLVE", messageId, choice, applicationId
+      type: "DESKTOP_RESOLVE", messageId: entry.messageId, choice, applicationId
     });
     if (choice !== "discard") {
-      setDesktopStatus(copy.describeBindResult(result ?? { status: "pending" }));
+      setDesktopStatus(describeQueueResult(copy, entry, result ?? { status: "pending" }));
     }
     refreshPendingList();
   }

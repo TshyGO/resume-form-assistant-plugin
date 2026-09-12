@@ -80,12 +80,36 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     });
   }
 
+  /**
+   * Send one archived fill (D08) to the application the user picked.
+   *
+   * The record has already been claimed for that application (link/fillrecords.mjs), which
+   * is what stops two clicks from sending it twice. The payload is the allowlisted fill body
+   * plus the application; field values never get this far.
+   */
+  async function sendFill({ record, applicationId, identity }) {
+    if (!identity) return { status: 'rejected', reason: 'no_identity' };
+    if (!applicationId) return { status: 'rejected', reason: 'no_application' };
+    return enqueue({
+      messageType: 'fill.submit',
+      payload: { applicationId, ...record.fill },
+      applicationId,
+      intentId: null,
+      recordId: record.recordId,
+      occurredAt: record.occurredAt ?? null,
+      identity
+    });
+  }
+
   // Persist, then send. Never the other way round: an entry that exists only in flight cannot
   // be retried with the same identity after the worker dies.
-  async function enqueue({ messageType, payload, applicationId, intentId, identity }) {
+  async function enqueue({ messageType, payload, applicationId, intentId, recordId = null, occurredAt = null, identity }) {
     const entry = {
       messageId: uuid(),
       intentId,
+      recordId,
+      // When it happened, if that is not "now" (a fill recorded offline): every attempt says so.
+      ...(occurredAt ? { occurredAt } : {}),
       clientInstanceId: await store.clientInstanceId(),
       messageType,
       archiveId: identity.archiveId,
@@ -110,6 +134,10 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     let outcome = null;
     await store.updateOutbox(list => {
       if (intentId && list.some(item => item.intentId === intentId)) {
+        outcome = { status: 'duplicate', reason: 'already_queued' };
+        return list;
+      }
+      if (recordId && list.some(item => item.recordId === recordId)) {
         outcome = { status: 'duplicate', reason: 'already_queued' };
         return list;
       }
@@ -157,6 +185,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
       payload: entry.payload,
       identity,
       sourceRestoreEpoch: entry.sourceRestoreEpoch,
+      occurredAt: entry.occurredAt,
       now
     });
 
@@ -166,9 +195,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
       // The desktop has committed. Only now may the intent and the queue entry go, and only
       // now may the sidebar say the desktop has it.
       await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
-      if (entry.intentId) {
-        await store.updateIntents(list => list.filter(item => item.intentId !== entry.intentId));
-      }
+      await forgetSource(store, entry);
       return {
         status: 'saved',
         messageId: entry.messageId,
@@ -245,10 +272,24 @@ export function createOutbox({ store, uuid, now, sendNative, sleep }) {
     queryCandidates,
     bindAndSend,
     confirmSubmit,
+    sendFill,
     drainOnce,
     deliverOne,
     markDue,
     list: () => store.getOutbox(),
     remove: messageId => store.updateOutbox(list => list.filter(item => item.messageId !== messageId))
   };
+}
+
+/**
+ * The intent or fill record a finished entry came from. Called once the desktop holds the
+ * write (or the user discarded it): the source has nothing left to wait for.
+ */
+export async function forgetSource(store, entry) {
+  if (entry.intentId) {
+    await store.updateIntents(list => list.filter(item => item.intentId !== entry.intentId));
+  }
+  if (entry.recordId) {
+    await store.updateFillRecords(list => list.filter(item => item.recordId !== entry.recordId));
+  }
 }

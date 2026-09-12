@@ -160,6 +160,17 @@ test('a 2 MiB snapshot needs at most 64 chunks, well inside the protocol limit',
   assert.equal(chunks.length, 64);
 });
 
+test('the template version a fill record carries is the one its snapshot would carry', async () => {
+  const { buildSnapshot, templateVersionOf } = await load();
+  const snapshot = await buildSnapshot(TEMPLATE, { now: at('2026-09-12T08:00:00.000Z') });
+  assert.equal(await templateVersionOf(TEMPLATE), snapshot.templateVersion);
+  const withSecret = structuredClone(TEMPLATE);
+  withSecret.groups[0].fields.push({ key: '登录密码', value: 'x' });
+  // Secret fields never enter the snapshot, so they do not change its version either.
+  assert.equal(await templateVersionOf(withSecret), snapshot.templateVersion);
+  assert.equal(await templateVersionOf({ name: 'empty', groups: [] }), null);
+});
+
 test('camelCase and Chinese credential names are recognised too', async () => {
   const { isSecretFieldName } = await load();
   for (const name of ['apiKey', 'accessToken', 'clientSecret', 'otpCode', 'userPassword', 'API 密钥', '访问令牌', '私钥']) {
