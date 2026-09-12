@@ -9,9 +9,11 @@
 
 use std::path::{Path, PathBuf};
 
+mod eml;
 mod names;
 mod sniff;
 
+pub use eml::{html_to_text, parse_eml, ParsedMail, MAX_BODY_EXTRACT};
 pub use names::safe_file_name;
 pub use sniff::{sniff, Sniffed};
 

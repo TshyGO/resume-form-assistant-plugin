@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 infer = "0.19"
+mail-parser = { version = "0.11", features = ["full_encoding"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 
