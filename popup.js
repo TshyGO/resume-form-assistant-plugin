@@ -14,6 +14,9 @@ const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_FAILURE_RETRY_MS = 60 * 60 * 1000;
 const MAX_LISTED_ROW_NUMBERS = 20;
+const TEMPLATE_SHEET_HEADER = ["一级分类", "字段名", "值"];
+const BACKUP_FORMAT = "resume-pro.backup";
+const BACKUP_FORMAT_VERSION = 1;
 let pdfJsPromise = null;
 
 const StorageService = {
@@ -64,12 +67,14 @@ const popupState = {
   activeTab: "templates",
   availableRelease: null,
   reimportTemplateId: "",
+  pendingBackup: null,
   modelRequestId: 0,
   modelResult: null,
   modelVisible: [],
   modelActiveIndex: -1,
   statusTimers: {
     template: null,
+    backup: null,
     config: null,
     model: null,
     url: null
@@ -104,6 +109,16 @@ function cacheElements() {
   elements.parseToggleButton = document.getElementById("parse-toggle-button");
   elements.parseSection = document.getElementById("parse-section");
   elements.templateStatus = document.getElementById("template-status");
+  elements.backupStatus = document.getElementById("backup-status");
+  elements.exportBackupButton = document.getElementById("export-backup-button");
+  elements.importBackupButton = document.getElementById("import-backup-button");
+  elements.backupIncludeKey = document.getElementById("backup-include-key");
+  elements.backupFileInput = document.getElementById("backup-file-input");
+  elements.backupConfirm = document.getElementById("backup-confirm");
+  elements.backupConfirmText = document.getElementById("backup-confirm-text");
+  elements.backupAppendButton = document.getElementById("backup-append-button");
+  elements.backupReplaceButton = document.getElementById("backup-replace-button");
+  elements.backupCancelButton = document.getElementById("backup-cancel-button");
   elements.aiConfigForm = document.getElementById("ai-config-form");
   elements.apiUrlInput = document.getElementById("api-url-input");
   elements.modelInput = document.getElementById("model-input");
@@ -142,6 +157,18 @@ function bindEvents() {
   });
 
   elements.templateFileInput.addEventListener("change", handleFileSelection);
+  elements.exportBackupButton.addEventListener("click", handleExportBackup);
+  elements.importBackupButton.addEventListener("click", () => {
+    hideBackupConfirm();
+    elements.backupFileInput.click();
+  });
+  elements.backupFileInput.addEventListener("change", handleBackupFileSelection);
+  elements.backupAppendButton.addEventListener("click", () => commitPendingBackup("append"));
+  elements.backupReplaceButton.addEventListener("click", () => commitPendingBackup("replace"));
+  elements.backupCancelButton.addEventListener("click", () => {
+    hideBackupConfirm();
+    hideStatus("backup");
+  });
   elements.templateList.addEventListener("click", handleTemplateListClick);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
   elements.toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
@@ -223,6 +250,7 @@ function renderTemplates(state) {
               : '<button class="secondary-button" type="button" data-action="activate">设为当前</button>'
           }
           <button class="secondary-button" type="button" data-action="reimport">重新导入 Excel</button>
+          <button class="secondary-button" type="button" data-action="export">导出 Excel</button>
           <button class="danger-button" type="button" data-action="delete">删除</button>
         </div>
       </article>
@@ -275,6 +303,11 @@ async function handleTemplateListClick(event) {
   if (action === "reimport") {
     popupState.reimportTemplateId = templateId;
     elements.templateFileInput.click();
+    return;
+  }
+
+  if (action === "export") {
+    await exportTemplateToExcel(templateId);
     return;
   }
 
@@ -661,6 +694,265 @@ async function deleteTemplate(templateId) {
     : "模板已删除，当前没有可用模板。";
 
   showStatus("template", message, "success");
+}
+
+// ---------------------------------------------------------------------------
+// 备份 / 导出
+//
+// Excel 只装得下一个模板的字段，而模板列表、当前用哪一个、AI 配置都只活在
+// chrome.storage.local 里。换电脑或者换扩展 ID 之后这些东西没有出口，所以这里
+// 补一个 JSON 备份。配对信息和待同步队列不进备份，那些换个环境本来就要重来。
+
+async function handleExportBackup() {
+  try {
+    const state = await StorageService.getState();
+
+    if (!state.templates.length) {
+      showStatus("backup", "还没有模板可以导出。", "warning");
+      return;
+    }
+
+    const backup = buildBackup(state, {
+      includeApiKey: Boolean(elements.backupIncludeKey?.checked)
+    });
+
+    BackupIO.saveJson(backupFileName(), backup);
+    showStatus("backup", `已导出 ${backup.templates.length} 个模板。`, "success");
+  } catch (error) {
+    showStatus("backup", `导出失败：${error.message}`, "error", 0);
+  }
+}
+
+async function handleBackupFileSelection(event) {
+  const [file] = event.target.files || [];
+  elements.backupFileInput.value = "";
+  hideBackupConfirm();
+
+  if (!file) {
+    return;
+  }
+
+  try {
+    const backup = parseBackup(await file.text());
+    const state = await StorageService.getState();
+
+    // 刚装完、或者换了扩展 ID，没有东西可覆盖，直接恢复。
+    if (!state.templates.length) {
+      await applyAndSave(backup, "replace");
+      return;
+    }
+
+    popupState.pendingBackup = backup;
+    elements.backupConfirmText.textContent = `备份里有 ${backup.templates.length} 个模板。`;
+    elements.backupConfirm.hidden = false;
+    hideStatus("backup");
+  } catch (error) {
+    showStatus("backup", `导入失败：${error.message}`, "error", 0);
+  }
+}
+
+async function commitPendingBackup(mode) {
+  const backup = popupState.pendingBackup;
+
+  if (!backup) {
+    return;
+  }
+
+  hideBackupConfirm();
+
+  try {
+    await applyAndSave(backup, mode);
+  } catch (error) {
+    showStatus("backup", `导入失败：${error.message}`, "error", 0);
+  }
+}
+
+async function applyAndSave(backup, mode) {
+  const state = await StorageService.getState();
+  await StorageService.saveState(applyBackup(state, backup, mode));
+  await render();
+
+  showStatus(
+    "backup",
+    mode === "replace"
+      ? `已恢复 ${backup.templates.length} 个模板。`
+      : `已追加 ${backup.templates.length} 个模板。`,
+    "success"
+  );
+}
+
+function hideBackupConfirm() {
+  popupState.pendingBackup = null;
+  elements.backupConfirm.hidden = true;
+}
+
+function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
+  const aiConfig = {
+    apiUrl: state.aiConfig.apiUrl,
+    model: state.aiConfig.model
+  };
+
+  // 备份文件用户会随手发出去，Key 默认留在本机。
+  if (includeApiKey && state.aiConfig.apiKey) {
+    aiConfig.apiKey = state.aiConfig.apiKey;
+  }
+
+  return {
+    format: BACKUP_FORMAT,
+    formatVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: now.toISOString(),
+    pluginVersion: chrome.runtime.getManifest().version,
+    templates: structuredClone(state.templates),
+    activeTemplateId: state.activeTemplateId,
+    aiConfig
+  };
+}
+
+function parseBackup(text) {
+  let raw;
+
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error("文件不是有效的 JSON。");
+  }
+
+  if (!raw || typeof raw !== "object" || raw.format !== BACKUP_FORMAT) {
+    throw new Error("这不是 Resume Pro 的备份文件。");
+  }
+
+  const version = Number(raw.formatVersion);
+
+  if (!Number.isInteger(version) || version < 1) {
+    throw new Error("备份文件已损坏。");
+  }
+
+  if (version > BACKUP_FORMAT_VERSION) {
+    throw new Error("备份来自更新版本的插件，请先更新插件。");
+  }
+
+  const templates = Array.isArray(raw.templates)
+    ? raw.templates.map(normalizeTemplate).filter((template) => template && template.groups.length)
+    : [];
+
+  if (!templates.length) {
+    throw new Error("备份里没有模板。");
+  }
+
+  return {
+    templates,
+    activeTemplateId: typeof raw.activeTemplateId === "string" ? raw.activeTemplateId : "",
+    aiConfig: raw.aiConfig && typeof raw.aiConfig === "object" ? raw.aiConfig : null
+  };
+}
+
+function applyBackup(state, backup, mode) {
+  const next = structuredClone(state);
+  const templates = mode === "replace" ? [] : next.templates;
+  let activeTemplateId = "";
+
+  backup.templates.forEach((template) => {
+    const copy = structuredClone(template);
+
+    // 追加时备份里的 id 可能已经在用，撞上就换一个，否则两张卡片指向同一个模板。
+    if (templates.some((item) => item.id === copy.id)) {
+      copy.id = crypto.randomUUID();
+    }
+
+    copy.name = resolveTemplateName(copy.name, templates);
+    templates.push(copy);
+
+    if (!activeTemplateId || template.id === backup.activeTemplateId) {
+      activeTemplateId = copy.id;
+    }
+  });
+
+  next.templates = templates;
+  next.activeTemplateId = activeTemplateId || next.templates[0]?.id || "";
+
+  if (backup.aiConfig) {
+    next.aiConfig = {
+      apiUrl: String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl),
+      model: String(backup.aiConfig.model ?? next.aiConfig.model),
+      // 没带 Key 的备份不该把本机能用的 Key 洗掉。
+      apiKey: typeof backup.aiConfig.apiKey === "string" && backup.aiConfig.apiKey
+        ? backup.aiConfig.apiKey
+        : next.aiConfig.apiKey
+    };
+  }
+
+  return next;
+}
+
+async function exportTemplateToExcel(templateId) {
+  const state = await StorageService.getState();
+  const template = state.templates.find((item) => item.id === templateId);
+
+  if (!template) {
+    showStatus("template", "模板不存在。", "error", 0);
+    return;
+  }
+
+  try {
+    BackupIO.saveWorkbook(templateToSheetRows(template), templateExportFileName(template.name));
+    showStatus("template", `已导出 ${countTemplateFields(template)} 个字段。`, "success");
+  } catch (error) {
+    showStatus("template", `导出失败：${error.message}`, "error", 0);
+  }
+}
+
+// 表头和列序跟 parseTemplateFile 读的是同一套，导出的文件能原样再导回来。
+function templateToSheetRows(template) {
+  const rows = [[...TEMPLATE_SHEET_HEADER]];
+
+  (Array.isArray(template.groups) ? template.groups : []).forEach((group) => {
+    (Array.isArray(group.fields) ? group.fields : []).forEach((field) => {
+      rows.push([group.name, field.key, field.value]);
+    });
+  });
+
+  return rows;
+}
+
+function backupFileName(now = new Date()) {
+  return `resume-pro-backup-${formatDate(now)}.json`;
+}
+
+// 导入时模板名取自文件名，所以这里保留原名，只去掉文件系统不收的字符。
+function templateExportFileName(templateName) {
+  const safe = String(templateName ?? "")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+    .trim();
+
+  return `${safe || "简历模板"}.xlsx`;
+}
+
+const BackupIO = {
+  saveJson(fileName, data) {
+    downloadBlob(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }), fileName);
+  },
+
+  saveWorkbook(rows, fileName) {
+    if (typeof XLSX === "undefined") {
+      throw new Error("未找到 Excel 生成库。");
+    }
+
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "简历模板");
+    XLSX.writeFile(workbook, fileName);
+  }
+};
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  // 立刻回收会让下载来不及读到数据，放到下一轮任务里。
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 async function parseTemplateFile(file) {
@@ -1253,21 +1545,21 @@ function generateAndDownloadExcel(fields) {
   }
 
   const rows = [
-    ["一级分类", "字段名", "值"],
+    [...TEMPLATE_SHEET_HEADER],
     ...normalizedFields.map((field) => [field.group, field.key, field.value])
   ];
 
-  const worksheet = XLSX.utils.aoa_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "简历模板");
-  XLSX.writeFile(workbook, `resume_parsed_${formatCurrentDate()}.xlsx`);
+  BackupIO.saveWorkbook(rows, `resume_parsed_${formatCurrentDate()}.xlsx`);
 }
 
 function formatCurrentDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
+  return formatDate(new Date());
+}
+
+function formatDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
   return `${year}${month}${day}`;
 }
 
@@ -1296,9 +1588,21 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     cacheElements,
     countTemplateFields,
     handleFileSelection,
+    handleTemplateListClick,
     parseTemplateFile,
     popupState,
     resolveTemplateName,
-    StorageService
+    StorageService,
+    backup: {
+      applyBackup,
+      BackupIO,
+      buildBackup,
+      commitPendingBackup,
+      handleBackupFileSelection,
+      handleExportBackup,
+      parseBackup,
+      templateExportFileName,
+      templateToSheetRows
+    }
   };
 }
