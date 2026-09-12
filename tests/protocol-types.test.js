@@ -8,11 +8,15 @@ const fs = require('node:fs');
 //   node desktop/crates/protocol/js/gen-types.mjs
 const load = () => import('../desktop/crates/protocol/js/gen-types.mjs');
 
+// Windows checkouts may turn the committed LF into CRLF (git's autocrlf), so compare the
+// content, not the line endings — the drift we care about is a schema that moved.
+const withUnixNewlines = text => text.split('\r\n').join('\n');
+
 test('protocol.d.ts is in sync with the D05 schemas', async () => {
   const { renderTypes, OUTPUT_PATH } = await load();
-  const committed = fs.readFileSync(OUTPUT_PATH, 'utf8');
+  const committed = withUnixNewlines(fs.readFileSync(OUTPUT_PATH, 'utf8'));
   assert.equal(
-    renderTypes(),
+    withUnixNewlines(renderTypes()),
     committed,
     'protocol.d.ts is stale; run: node desktop/crates/protocol/js/gen-types.mjs'
   );
