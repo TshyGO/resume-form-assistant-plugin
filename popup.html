@@ -67,6 +67,42 @@
           <div class="status-message" id="template-status" aria-live="polite"></div>
 
           <div class="template-list" id="template-list"></div>
+
+          <div class="backup-row">
+            <div class="backup-row__actions">
+              <button class="text-button" id="export-backup-button" type="button">导出备份</button>
+              <button class="text-button" id="import-backup-button" type="button">导入备份</button>
+              <label class="backup-row__key">
+                <input id="backup-include-key" type="checkbox">
+                <span>包含 API Key</span>
+              </label>
+            </div>
+            <p class="backup-row__hint">备份包含全部模板和 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历内容，请存在自己控制的位置。</p>
+
+            <input id="backup-file-input" type="file" accept=".json,application/json" hidden>
+
+            <div class="backup-confirm is-warning" id="backup-key-confirm" hidden>
+              <p class="backup-confirm__text">
+                导出的文件会包含 API Key，明文保存。不要分享，也不要传网盘。<br>
+                插件不收集、不上传任何数据，文件只在你自己的电脑上。
+              </p>
+              <div class="backup-confirm__actions">
+                <button class="secondary-button" id="backup-key-confirm-button" type="button">确认导出</button>
+                <button class="text-button" id="backup-key-cancel-button" type="button">取消</button>
+              </div>
+            </div>
+
+            <div class="backup-confirm" id="backup-confirm" hidden>
+              <span id="backup-confirm-text"></span>
+              <div class="backup-confirm__actions">
+                <button class="secondary-button" id="backup-append-button" type="button">追加</button>
+                <button class="secondary-button" id="backup-replace-button" type="button">替换现有模板</button>
+                <button class="text-button" id="backup-cancel-button" type="button">取消</button>
+              </div>
+            </div>
+
+            <div class="status-message" id="backup-status" aria-live="polite"></div>
+          </div>
         </div>
       </section>
 
@@ -149,6 +185,7 @@
       </section>
     </main>
 
+    <script type="module" src="link/secret-fields.mjs"></script>
     <script src="xlsx.full.min.js"></script>
     <script src="mammoth.browser.min.js"></script>
     <script src="ai-helpers.js"></script>

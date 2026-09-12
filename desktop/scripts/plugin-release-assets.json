@@ -23,6 +23,7 @@
   "link/reconcile.mjs",
   "link/redact.mjs",
   "link/router.mjs",
+  "link/secret-fields.mjs",
   "link/session.mjs",
   "link/snapshot.mjs",
   "link/staging.mjs",

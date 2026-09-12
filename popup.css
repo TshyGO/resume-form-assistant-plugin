@@ -374,6 +374,73 @@ select {
   margin-top: 14px;
 }
 
+.backup-row {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.backup-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.backup-row__key {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.backup-row__hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.backup-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  font-size: 13px;
+}
+
+.backup-confirm[hidden] {
+  display: none;
+}
+
+.backup-confirm.is-warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.backup-confirm__text {
+  margin: 0;
+  flex: 1 1 100%;
+  line-height: 1.5;
+}
+
+.backup-confirm__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.backup-row .status-message {
+  margin: 12px 0 0;
+}
+
 .empty-state {
   padding: 24px 16px;
   border: 1px dashed rgba(79, 110, 247, 0.25);
