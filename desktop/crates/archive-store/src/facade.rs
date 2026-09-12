@@ -107,6 +107,18 @@ impl ArchiveStore {
         self.transaction(|tx| tx.classify_evidence(evidence_id, reply_class, send_mode))
     }
 
+    pub fn unassociate_evidence(&self, evidence_id: &str) -> Result<ReplyEvidence, StoreError> {
+        self.transaction(|tx| tx.unassociate_evidence(evidence_id))
+    }
+
+    pub fn find_blob(&self, sha256: &str) -> Result<Option<AttachmentBlob>, StoreError> {
+        self.transaction(|tx| tx.find_blob(sha256))
+    }
+
+    pub fn evidence_for_blob(&self, sha256: &str) -> Result<Vec<String>, StoreError> {
+        self.transaction(|tx| tx.evidence_for_blob(sha256))
+    }
+
     pub fn get_evidence(&self, id: &str) -> Result<Option<ReplyEvidence>, StoreError> {
         self.transaction(|tx| tx.get_evidence(id))
     }

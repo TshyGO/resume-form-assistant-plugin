@@ -425,7 +425,9 @@ pub enum EventPayload {
     AssociationChanged {
         evidence_id: String,
         from_application_id: Option<String>,
-        to_application_id: String,
+        /// 取消关联时为空：证据回到收件箱，没有新的申请接手。
+        #[serde(default)]
+        to_application_id: Option<String>,
     },
     EvidenceClassified {
         #[serde(default, skip_serializing_if = "Option::is_none")]

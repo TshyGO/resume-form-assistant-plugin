@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 archive-store = { path = "../crates/archive-store" }
 data-service = { path = "../crates/data-service" }
+evidence-import = { path = "../crates/evidence-import" }
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"
@@ -24,6 +25,8 @@ resume-pro-protocol = { path = "../crates/protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 
 [dev-dependencies]
