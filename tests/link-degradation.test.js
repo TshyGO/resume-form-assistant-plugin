@@ -109,3 +109,70 @@ test('a confirmed submission says so and nothing more', async () => {
   assert.match(pending.text, /待同步/);
   assert.equal(pending.text.includes('已投递'), false);
 });
+
+// --- D08: archiving a fill -----------------------------------------------------------
+
+test('only a persisted fill.submit is described as archived on the desktop', async () => {
+  const { describeFillRecordResult } = await load();
+  const saved = describeFillRecordResult({ status: 'saved' });
+  assert.match(saved.text, /已留档到桌面/);
+
+  for (const result of [
+    { status: 'recorded', mode: 'unavailable' },
+    { status: 'recorded', mode: 'incompatible' },
+    { status: 'pending' },
+    { status: 'duplicate' },
+    { status: 'rejected', reason: 'queue_full' },
+    { status: 'rejected', reason: 'unknown_record' },
+    { status: 'not_recorded', reason: 'never_paired' },
+    { status: 'failed', code: 'invalid_payload' },
+    { status: 'something_new' }
+  ]) {
+    const copy = describeFillRecordResult(result);
+    assert.equal(typeof copy.text, 'string');
+    assert.equal(copy.text.includes('已留档到桌面'), false, JSON.stringify(result));
+  }
+});
+
+test('no fill wording ever says the application was submitted', async () => {
+  // Rule 1: a completed fill is not a submission. Not even "not yet submitted" is said here,
+  // so the word cannot drift into a claim.
+  const { describeFillRecordResult, describeFillSummary, describeFillOffer } = await load();
+  const texts = [
+    describeFillOffer({ outcome: 'completed', fieldCount: 3, filledCount: 3, unconfirmedCount: 0 }),
+    describeFillRecordResult({ status: 'saved' }).text,
+    describeFillRecordResult({ status: 'recorded', mode: 'unavailable' }).text,
+    describeFillRecordResult({ status: 'pending' }).text
+  ];
+  for (const outcome of ['completed', 'partial', 'failed', 'cancelled']) {
+    texts.push(describeFillSummary({ outcome, fieldCount: 12, filledCount: 9, unconfirmedCount: 3 }));
+  }
+  for (const text of texts) {
+    assert.equal(/投递|提交/.test(text), false, text);
+  }
+});
+
+test('the fill summary counts what was written into the page, not what the site accepted', async () => {
+  const { describeFillSummary } = await load();
+  const text = describeFillSummary({ outcome: 'partial', fieldCount: 12, filledCount: 9, unconfirmedCount: 3 });
+  assert.match(text, /部分完成/);
+  assert.match(text, /已写入网页 9\/12 项/);
+  assert.match(text, /3 项未确认/);
+  assert.equal(/已保存|已接受/.test(text), false);
+  assert.doesNotMatch(describeFillSummary({ outcome: 'completed', fieldCount: 5, filledCount: 5, unconfirmedCount: 0 }), /未确认/);
+});
+
+test('a full fill-record queue is refused in words, with filling unaffected', async () => {
+  const { describeFillRecordResult } = await load();
+  const copy = describeFillRecordResult({ status: 'rejected', reason: 'queue_full' });
+  assert.match(copy.text, /已满/);
+  assert.match(copy.text, /100/);
+  assert.match(copy.text, /填表/);
+});
+
+test('a refused fill names the likely cause: the application is gone', async () => {
+  const { describeFillRecordResult } = await load();
+  const copy = describeFillRecordResult({ status: 'failed', code: 'invalid_payload' });
+  assert.match(copy.text, /找不到所选的申请/);
+  assert.doesNotMatch(copy.text, /公司和岗位/);
+});

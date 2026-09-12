@@ -6,6 +6,10 @@
 export const MAX_INTENTS = 100;
 export const MAX_OUTBOX = 100;
 
+// Fills the user chose to archive but has not bound to an application yet (D08). Same rule:
+// full means refuse and say so, never drop the oldest.
+export const MAX_FILL_RECORDS = 100;
+
 // A same-posting save inside this window is a double click rather than a decision, so the
 // wording says "just saved" instead of "already pending". Either way it is refused as a
 // duplicate: a pending intent for the same posting always requires an explicit "save again",

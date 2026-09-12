@@ -114,3 +114,48 @@ test('the handshake reports the same version the manifest declares', async () =>
     'link/session.mjs PLUGIN_VERSION must match manifest.json version'
   );
 });
+
+test('the sidebar offers archiving a fill and leaves the wording to link/copy.mjs', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  assert.match(source, /resume-pro-fill-record/);
+  assert.match(source, /DESKTOP_RECORD_FILL/);
+  assert.match(source, /DESKTOP_LINK_STATE/);
+  assert.match(source, /describeFillRecordResult/);
+  // Claiming the desktop has the record is copy.mjs's call alone, after a persisted reply.
+  assert.equal(source.includes('已留档到桌面'), false);
+});
+
+test('a hidden sidebar panel stays hidden even when its class sets a display', async () => {
+  // The save form, the candidate box and the fill-record card are flex boxes toggled with
+  // the `hidden` attribute. An author `display` rule beats the browser's [hidden] rule, so
+  // without this override every one of them shows, empty, on every page.
+  const css = fs.readFileSync(path.join(root, 'content.css'), 'utf8');
+  assert.match(css, /\.resume-pro \[hidden\]\s*\{\s*display:\s*none\s*!important;?\s*\}/);
+});
+
+test('a finished fill is filed under the page it ran on, not the one the user moved to', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  const body = source.slice(source.indexOf('async function offerFillRecord'), source.indexOf('function closeFillRecord'));
+  assert.ok(body.indexOf('extractJobFields(') > 0);
+  assert.ok(body.indexOf('extractJobFields(') < body.indexOf('DESKTOP_LINK_STATE'), 'read the page before waiting on the worker');
+  assert.match(body, /location\.href !== pageUrl/);
+});
+
+test('queue rows describe a retried or resolved entry in the words of its own kind', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  const describe = source.slice(source.indexOf('function describeQueueResult'));
+  assert.match(describe, /fill\.submit[\s\S]*describeFillRecordResult/);
+  const retry = source.slice(source.indexOf('"立即重试"'), source.indexOf('"立即重试"') + 400);
+  assert.match(retry, /describeQueueResult\(/);
+  const resolve = source.slice(source.indexOf('async function resolvePaused'), source.indexOf('function describeOutboxState'));
+  assert.match(resolve, /describeQueueResult\(/);
+  assert.equal(resolve.includes('describeBindResult('), false);
+});
+
+test('an application id typed by hand is checked before anything is bound', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  const body = source.slice(source.indexOf('async function chooseFillApplication'), source.indexOf('async function chooseFillApplication') + 900);
+  assert.match(body, /APPLICATION_ID_PATTERN\.test\(/);
+  const { describeFillRecordResult } = await import('../link/copy.mjs');
+  assert.match(describeFillRecordResult({ status: 'rejected', reason: 'invalid_application_id' }).text, /申请 ID/);
+});

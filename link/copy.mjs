@@ -1,4 +1,4 @@
-import { MAX_INTENTS, MAX_OUTBOX } from './limits.mjs';
+import { MAX_FILL_RECORDS, MAX_INTENTS, MAX_OUTBOX } from './limits.mjs';
 
 // User-facing wording for every outcome of a save, in one table.
 //
@@ -167,3 +167,92 @@ export function describeConfirmResult(result) {
   // claim about the desktop's records that nothing has confirmed.
   return { tone: 'pending', text: '已排进待同步队列，桌面可用之后会更新阶段。' };
 }
+
+// --- D08: archiving a fill ------------------------------------------------------------
+//
+// Two things these sentences must never do: say the desktop has the record before a
+// persisted reply, and say anything about submitting. A completed fill is not a submission
+// (rule 1), and not even "not submitted" is said here, so the word cannot drift into a claim.
+
+const FILL_OUTCOMES = {
+  completed: '完成',
+  partial: '部分完成',
+  failed: '失败',
+  cancelled: '已取消'
+};
+
+/** One line describing a finished fill: counts of fields written into the page. */
+export function describeFillSummary(fill) {
+  const outcome = FILL_OUTCOMES[fill?.outcome] ?? '结束';
+  const written = `已写入网页 ${fill?.filledCount ?? 0}/${fill?.fieldCount ?? 0} 项`;
+  const unconfirmed = fill?.unconfirmedCount ? `，${fill.unconfirmedCount} 项未确认` : '';
+  return `这次填写${outcome}：${written}${unconfirmed}。`;
+}
+
+/** The card shown after a fill: what happened, and the question. */
+export function describeFillOffer(fill) {
+  return `${describeFillSummary(fill)}要把这次填写留档到桌面吗？只记结果和计数，不记填写的内容。`;
+}
+
+export function describeFillRecordResult(result) {
+  const { status, mode, reason, code } = result ?? {};
+
+  if (status === 'saved') {
+    // The only sentence that may say the desktop holds the record, and it runs only after a
+    // persisted reply.
+    return { tone: 'success', text: '已留档到桌面：这次填写的结果记在所选申请下。' };
+  }
+
+  if (status === 'recorded') {
+    if (mode === 'incompatible') {
+      return {
+        tone: 'pending',
+        text: '已记为待同步（尚未选择申请）。桌面程序的协议版本和插件对不上，升级之后才能留档。'
+      };
+    }
+    return {
+      tone: 'pending',
+      text: '已记为待同步（尚未选择申请）。桌面程序可用之后，在「待同步」里选择这次填写属于哪条申请。'
+    };
+  }
+
+  if (status === 'pending') {
+    return { tone: 'pending', text: '已排进待同步队列，桌面可用之后会自动发送。现在还没有留档到桌面。' };
+  }
+
+  if (status === 'duplicate') {
+    return { tone: 'pending', text: '这次填写已经在待同步队列里了，没有重复排一份。' };
+  }
+
+  if (status === 'rejected') {
+    if (reason === 'queue_full') {
+      return {
+        tone: 'warn',
+        text: `待同步的留档已满（${MAX_FILL_RECORDS} 条），这次没有留档。请先处理已有的几条。填表功能不受影响。`
+      };
+    }
+    if (reason === 'invalid_application_id') {
+      return { tone: 'warn', text: '这不是桌面里的申请 ID（形如 1a2b3c4d-…-…），这次没有绑定。请在桌面申请详情里复制 ID 再试。' };
+    }
+    if (reason === 'unknown_record') {
+      return { tone: 'warn', text: '这条留档已经不在待同步里了，可能已经发送过。' };
+    }
+    return { tone: 'warn', text: '这次没能留档，请稍后再试。填表功能不受影响。' };
+  }
+
+  if (status === 'not_recorded') {
+    return { tone: 'info', text: '还没有和桌面程序配对，这次没有留档。填表功能不受影响。' };
+  }
+
+  if (status === 'failed') {
+    return { tone: 'warn', text: FILL_REFUSALS[code] ?? REFUSALS[code] ?? '桌面拒绝了这次留档，请到桌面核对。' };
+  }
+
+  return { tone: 'warn', text: '这次没能留档到桌面，已经留在待同步里。' };
+}
+
+// A fill names an application that already exists, so the desktop's usual reason for
+// refusing one is that the application is gone — not that a company name is wrong.
+const FILL_REFUSALS = {
+  invalid_payload: '桌面上找不到所选的申请，这次没有留档。请在「待同步」里重新选择申请。'
+};

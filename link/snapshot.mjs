@@ -59,31 +59,11 @@ export function isSecretFieldValue(value) {
  * the fill without a snapshot rather than failing the fill.
  */
 export async function buildSnapshot(template, { now = () => new Date() } = {}) {
-  let omittedFieldCount = 0;
-  const groups = [];
-
-  for (const group of Array.isArray(template?.groups) ? template.groups : []) {
-    const fields = [];
-    const secretGroup = isSecretFieldName(group?.name);
-    for (const field of Array.isArray(group?.fields) ? group.fields : []) {
-      const key = String(field?.key ?? '').trim();
-      if (!key) continue;
-      const value = String(field?.value ?? '');
-      if (secretGroup || isSecretFieldName(key) || isSecretFieldValue(value)) {
-        omittedFieldCount += 1;
-        continue;
-      }
-      fields.push({ key, value });
-    }
-    if (fields.length) groups.push({ name: String(group?.name ?? '').trim() || '未分类', fields });
-  }
-
+  const { groups, omittedFieldCount } = keptGroups(template);
   if (!groups.length) return { error: 'empty' };
 
   const templateName = String(template?.name ?? '').trim() || '未命名模板';
-  // The content short code D01 §8.5 asks for when the plugin has no revision counter. It
-  // covers the groups only, so two captures of an unchanged template share a version.
-  const templateVersion = (await sha256Hex(encoder.encode(canonicalJson(groups)))).slice(0, 12);
+  const templateVersion = await versionOf(groups);
 
   const bytes = encoder.encode(canonicalJson({
     format: SNAPSHOT_FORMAT,
@@ -105,6 +85,45 @@ export async function buildSnapshot(template, { now = () => new Date() } = {}) {
     templateVersion,
     omittedFieldCount
   };
+}
+
+/**
+ * The version a snapshot of this template would carry, without building one. A fill record
+ * reports it even when the user keeps the snapshot to themselves, so both must agree.
+ */
+export async function templateVersionOf(template) {
+  const { groups } = keptGroups(template);
+  return groups.length ? versionOf(groups) : null;
+}
+
+// The groups and fields a snapshot keeps: blank keys and secret-looking fields are dropped.
+function keptGroups(template) {
+  let omittedFieldCount = 0;
+  const groups = [];
+
+  for (const group of Array.isArray(template?.groups) ? template.groups : []) {
+    const fields = [];
+    const secretGroup = isSecretFieldName(group?.name);
+    for (const field of Array.isArray(group?.fields) ? group.fields : []) {
+      const key = String(field?.key ?? '').trim();
+      if (!key) continue;
+      const value = String(field?.value ?? '');
+      if (secretGroup || isSecretFieldName(key) || isSecretFieldValue(value)) {
+        omittedFieldCount += 1;
+        continue;
+      }
+      fields.push({ key, value });
+    }
+    if (fields.length) groups.push({ name: String(group?.name ?? '').trim() || '未分类', fields });
+  }
+
+  return { groups, omittedFieldCount };
+}
+
+// The content short code D01 §8.5 asks for when the plugin has no revision counter. It covers
+// the kept groups only, so two captures of an unchanged template share a version.
+async function versionOf(groups) {
+  return (await sha256Hex(encoder.encode(canonicalJson(groups)))).slice(0, 12);
 }
 
 /** Split snapshot bytes into protocol chunks, each with its own digest. */

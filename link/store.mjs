@@ -1,10 +1,11 @@
-// The four keys D01 allocated to the desktop link. Nothing else in chrome.storage.local
-// belongs to it.
+// The keys allocated to the desktop link: D01's four, plus D08's fill records (the §8.10
+// list was extended for it). Nothing else in chrome.storage.local belongs to it.
 export const KEYS = {
   intents: 'desktopSaveIntents',
   outbox: 'desktopOutbox',
   clientInstanceId: 'desktopClientInstanceId',
-  pairing: 'desktopPairing'
+  pairing: 'desktopPairing',
+  fillRecords: 'desktopFillRecords'
 };
 
 // Keys the existing plugin owns. Listed so the boundary is testable, not just documented.
@@ -62,6 +63,9 @@ export function createStore({ storage, uuid }) {
 
     getOutbox: () => readList(KEYS.outbox),
     updateOutbox: change => updateList(KEYS.outbox, change),
+
+    getFillRecords: () => readList(KEYS.fillRecords),
+    updateFillRecords: change => updateList(KEYS.fillRecords, change),
 
     async getPairing() {
       const stored = await storage.get([KEYS.pairing]);

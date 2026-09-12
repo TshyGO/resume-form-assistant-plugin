@@ -34,6 +34,8 @@ export async function buildEnvelope({
   payload,
   identity = null,
   sourceRestoreEpoch = null,
+  // When the thing happened, if not now (a fill archived later). Envelope-level only.
+  occurredAt = null,
   now = () => new Date()
 }) {
   const body = { ...payload };
@@ -55,7 +57,7 @@ export async function buildEnvelope({
     messageId,
     clientInstanceId,
     messageType,
-    occurredAt: toUtcSubset(now()),
+    occurredAt: toUtcSubset(occurredAt ? new Date(occurredAt) : now()),
     payload: body
   };
 

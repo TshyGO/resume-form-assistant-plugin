@@ -11,7 +11,12 @@ export const MSG = {
   cancel: 'DESKTOP_CANCEL',
   resolve: 'DESKTOP_RESOLVE',
   confirmSubmit: 'DESKTOP_CONFIRM_SUBMIT',
-  candidatesFor: 'DESKTOP_CANDIDATES_FOR'
+  candidatesFor: 'DESKTOP_CANDIDATES_FOR',
+  // D08: archiving a finished fill.
+  linkState: 'DESKTOP_LINK_STATE',
+  recordFill: 'DESKTOP_RECORD_FILL',
+  bindFill: 'DESKTOP_BIND_FILL',
+  removeFill: 'DESKTOP_REMOVE_FILL'
 };
 
 export const DESKTOP_MESSAGE_TYPES = new Set(Object.values(MSG));

@@ -6,6 +6,7 @@ import { createOutbox } from './outbox.mjs';
 import { createReconcile } from './reconcile.mjs';
 import { createDrain, ALARM_NAME } from './drain.mjs';
 import { createRouter } from './router.mjs';
+import { createFillRecords } from './fillrecords.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
 
 /**
@@ -40,6 +41,8 @@ export function installDesktopLink(api) {
     outbox,
     drain,
     reconcile,
+    fillRecords: createFillRecords(deps),
+    store,
     extensionId: api.runtime.id
   });
 

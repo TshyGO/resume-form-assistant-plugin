@@ -10,7 +10,7 @@ import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, drain, reconcile, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, reconcile, fillRecords = null, store = null, extensionId }) {
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -54,7 +54,41 @@ export function createRouter({ session, intents, outbox, drain, reconcile, exten
     }
 
     if (type === MSG.listQueue) {
-      return { intents: await intents.list(), outbox: await outbox.list() };
+      // Bound records are shown through their outbox entry; only the waiting ones are listed.
+      const waiting = fillRecords
+        ? (await fillRecords.list()).filter(record => record.status === 'pending_bind')
+        : [];
+      return { intents: await intents.list(), outbox: await outbox.list(), fillRecords: waiting };
+    }
+
+    if (type === MSG.linkState) {
+      // Answered from storage alone. Probing here would start the native host — and with it
+      // the desktop application — after every single fill, for a card most users dismiss.
+      return { everPaired: Boolean(await store?.hasEverPaired()) };
+    }
+
+    if (type === MSG.recordFill) {
+      const probe = await session.probe();
+      const created = await fillRecords.create({ raw: message.raw, mode: probe.mode });
+      if (created.status !== 'recorded') return { ...created, mode: probe.mode };
+      if (!message.applicationId || probe.mode !== 'ready') return { ...created, mode: probe.mode };
+      const sent = await bindFill(created.record.recordId, message.applicationId, probe.identity);
+      return { ...sent, record: created.record, mode: probe.mode };
+    }
+
+    if (type === MSG.bindFill) {
+      // A fresh handshake, for the same reason as MSG.bind: the stamped epoch has to be the
+      // one the write will be judged against, not whatever was current when the list was drawn.
+      const probe = await session.probe();
+      // Nothing is queued without a desktop to stamp the epoch: the record keeps waiting for a
+      // choice, and saying "pending" would promise an automatic send that will not happen.
+      if (probe.mode !== 'ready') return { status: 'recorded', mode: probe.mode };
+      return bindFill(message.recordId, message.applicationId, probe.identity);
+    }
+
+    if (type === MSG.removeFill) {
+      const removed = await fillRecords.removeWaiting(message.recordId);
+      return removed ? { ok: true } : { ok: false, reason: 'not_waiting' };
     }
 
     if (type === MSG.retry) {
@@ -64,9 +98,11 @@ export function createRouter({ session, intents, outbox, drain, reconcile, exten
     }
 
     if (type === MSG.cancel) {
-      // Giving up on the bound message. The intent stays, so the user can pick a different
-      // application or delete it outright.
+      // Giving up on the bound message. The intent or fill record stays, so the user can
+      // pick a different application or delete it outright.
+      const entry = (await outbox.list()).find(item => item.messageId === message.messageId);
       await drain.cancel(message.messageId);
+      if (entry?.recordId && fillRecords) await fillRecords.unbind(entry.recordId);
       return { ok: true };
     }
 
@@ -99,6 +135,18 @@ export function createRouter({ session, intents, outbox, drain, reconcile, exten
     }
 
     return null;
+  }
+
+  // Claim first, then queue. The claim is what makes a second click a duplicate; a queue
+  // that refuses the entry hands the record back so it is not stuck as "bound" to nothing.
+  async function bindFill(recordId, applicationId, identity) {
+    if (!applicationId) return { status: 'rejected', reason: 'no_application' };
+    const claim = await fillRecords.claim(recordId, applicationId);
+    if (claim.status === 'unknown') return { status: 'rejected', reason: 'unknown_record' };
+    if (claim.status === 'duplicate') return { status: 'duplicate' };
+    const result = await outbox.sendFill({ record: claim.record, applicationId, identity });
+    if (result.status === 'rejected') await fillRecords.unbind(recordId);
+    return result;
   }
 
   return { handle };

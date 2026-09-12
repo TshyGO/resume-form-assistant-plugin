@@ -499,7 +499,15 @@
   color: #b45309;
 }
 
-.resume-pro__candidates {
+/* The hidden attribute has to win inside the sidebar. Several panels (the save form, the
+   candidate box, the fill-record card) are flex boxes toggled with `hidden`, and an author
+   `display` rule beats the browser's own [hidden] rule — they would all show, empty. */
+.resume-pro [hidden] {
+  display: none !important;
+}
+
+.resume-pro__candidates,
+.resume-pro__fill-record {
   display: flex;
   flex-direction: column;
   gap: 8px;
