@@ -1,0 +1,15 @@
+[package]
+name = "evidence-import"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Resume Pro D09 evidence import: safe file names, content sniffing, hashing and atomic staging into the archive's attachments directory. It writes files; it does not touch the database."
+publish = false
+
+[dependencies]
+infer = "0.19"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
