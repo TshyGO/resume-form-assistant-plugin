@@ -19,6 +19,7 @@ desktop/src-tauri/gen/
 desktop/crates/data-service/target/
 desktop/crates/archive-store/target/
 desktop/crates/local-ipc/target/
+desktop/crates/evidence-import/target/
 desktop/crates/nm-frame/target/
 desktop/crates/protocol/target/
 __pycache__/
