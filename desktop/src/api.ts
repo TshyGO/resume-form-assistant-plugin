@@ -1,8 +1,11 @@
 // 桌面前端与 Rust 命令层之间的形状。
 //
-// 这些接口现在是手写的，**下一步会由 Rust 的结构体生成**（ts-rs），这样字段改名时前端
-// 立刻红，而不是像以前那样在界面里写 `app.replyEvidenceState || app.reply_evidence_state`
-// 两种命名都试一遍。在那之前，这个文件是唯一一处描述边界的地方。
+// 这些接口是手写的，但**不是没人看着**：`desktop/src-tauri/src/commands_regression.rs` 里的
+// `the_json_keys_the_desktop_frontend_reads_are_pinned` 会把前端真正读的那些键逐个断言，
+// 谁改了字段名或 `rename_all`，那条 Rust 测试先红。
+//
+// 更彻底的做法是用 ts-rs 从 Rust 结构体生成这个文件（archive-store 的模型也要跟着加 derive，
+// 包括 `#[serde(flatten)]` 与那个大 EventPayload 枚举）——留作后续。
 
 export type Invoke = <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -43,22 +46,23 @@ export type SendMode = "human" | "automated" | "unknown";
 
 export type EvidenceKind = "eml" | "screenshot" | "pdf" | "paste" | "unknown";
 
-/** 列表里的一行。命令层给的是 snake_case，两种命名都在这里声明，界面只读其中一种。 */
+/**
+ * 列表与详情里的一条申请。
+ *
+ * **键名就是命令层真正发出来的那些**：archive-store 的模型走 snake_case，D08/D09 的命令层
+ * 结构体标了 `rename_all = "camelCase"`。两边都由 `commands_regression.rs` 的
+ * `the_json_keys_the_desktop_frontend_reads_are_pinned` 钉死——改名会先让那条 Rust 测试红。
+ */
 export interface ApplicationSummary {
   id: string;
   company: string;
   title: string;
   location?: string | null;
   current_stage?: Stage;
-  currentStage?: Stage;
   reply_evidence_state?: ReplyEvidenceState;
-  replyEvidenceState?: ReplyEvidenceState;
   recycle_state?: string;
-  recycleState?: string;
   updated_at?: string;
-  updatedAt?: string;
   source_url?: string | null;
-  sourceUrl?: string | null;
   notes?: string | null;
 }
 

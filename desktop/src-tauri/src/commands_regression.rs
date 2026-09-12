@@ -130,35 +130,52 @@ mod snapshots {
     }
 
     fn fill(store: &ArchiveStore, message_id: &str, app: &str, snapshot: &str) {
-        submit(store, message_id, PluginOp::FillSubmit(FillSubmitInput {
-            application_id: app.into(),
-            outcome: FillOutcome::Partial,
-            field_count: Some(12),
-            filled_count: Some(9),
-            unconfirmed_count: Some(3),
-            durations_ms: None,
-            url_redacted: None,
-            template_name: Some("合成模板".into()),
-            template_version: Some("0123456789ab".into()),
-            snapshot_id: Some(snapshot.into()),
-            plugin_version: Some("0.4.0".into()),
-            occurred: Occurred::Unknown,
-        }));
+        submit(
+            store,
+            message_id,
+            PluginOp::FillSubmit(FillSubmitInput {
+                application_id: app.into(),
+                outcome: FillOutcome::Partial,
+                field_count: Some(12),
+                filled_count: Some(9),
+                unconfirmed_count: Some(3),
+                durations_ms: None,
+                url_redacted: None,
+                template_name: Some("合成模板".into()),
+                template_version: Some("0123456789ab".into()),
+                snapshot_id: Some(snapshot.into()),
+                plugin_version: Some("0.4.0".into()),
+                occurred: Occurred::Unknown,
+            }),
+        );
     }
 
-    fn chunk(store: &ArchiveStore, message_id: &str, app: &str, snapshot: &str, bytes: &[u8], index: i64, count: i64, piece: Vec<u8>) {
-        submit(store, message_id, PluginOp::SnapshotChunk(SnapshotChunkInput {
-            application_id: Some(app.into()),
-            snapshot_id: snapshot.into(),
-            chunk_index: index,
-            chunk_count: count,
-            total_sha256: sha(bytes),
-            byte_size: bytes.len() as i64,
-            chunk_sha256: sha(&piece),
-            template_name: None,
-            template_version: None,
-            bytes: piece,
-        }));
+    fn chunk(
+        store: &ArchiveStore,
+        message_id: &str,
+        app: &str,
+        snapshot: &str,
+        bytes: &[u8],
+        index: i64,
+        count: i64,
+        piece: Vec<u8>,
+    ) {
+        submit(
+            store,
+            message_id,
+            PluginOp::SnapshotChunk(SnapshotChunkInput {
+                application_id: Some(app.into()),
+                snapshot_id: snapshot.into(),
+                chunk_index: index,
+                chunk_count: count,
+                total_sha256: sha(bytes),
+                byte_size: bytes.len() as i64,
+                chunk_sha256: sha(&piece),
+                template_name: None,
+                template_version: None,
+                bytes: piece,
+            }),
+        );
     }
 
     fn document() -> Vec<u8> {
@@ -177,7 +194,11 @@ mod snapshots {
 
     fn archive() -> (tempfile::TempDir, ArchiveStore, String) {
         let dir = tempfile::tempdir().unwrap();
-        let store = open_store(&dir.path().join("archive"), &dir.path().join("current.json")).unwrap();
+        let store = open_store(
+            &dir.path().join("archive"),
+            &dir.path().join("current.json"),
+        )
+        .unwrap();
         let app = create_application(
             &store,
             serde_json::from_value(json!({ "company": "Synthetic", "title": "Job" })).unwrap(),
@@ -189,12 +210,40 @@ mod snapshots {
         .clone();
         let bytes = document();
         fill(&store, "aaaaaaaa-0000-4000-8000-000000000001", &app, STORED);
-        chunk(&store, "aaaaaaaa-0000-4000-8000-000000000002", &app, STORED, &bytes, 0, 1, bytes.clone());
+        chunk(
+            &store,
+            "aaaaaaaa-0000-4000-8000-000000000002",
+            &app,
+            STORED,
+            &bytes,
+            0,
+            1,
+            bytes.clone(),
+        );
         store.complete_snapshot_upload(CLIENT, STORED).unwrap();
-        fill(&store, "aaaaaaaa-0000-4000-8000-000000000003", &app, UPLOADING);
+        fill(
+            &store,
+            "aaaaaaaa-0000-4000-8000-000000000003",
+            &app,
+            UPLOADING,
+        );
         let half = bytes[..bytes.len() / 2].to_vec();
-        chunk(&store, "aaaaaaaa-0000-4000-8000-000000000004", &app, UPLOADING, &bytes, 0, 2, half);
-        fill(&store, "aaaaaaaa-0000-4000-8000-000000000005", &app, MISSING);
+        chunk(
+            &store,
+            "aaaaaaaa-0000-4000-8000-000000000004",
+            &app,
+            UPLOADING,
+            &bytes,
+            0,
+            2,
+            half,
+        );
+        fill(
+            &store,
+            "aaaaaaaa-0000-4000-8000-000000000005",
+            &app,
+            MISSING,
+        );
         (dir, store, app)
     }
 
@@ -213,8 +262,22 @@ mod snapshots {
 
     /// Store `bytes` as a complete snapshot `id` under the application.
     fn stored(store: &ArchiveStore, app: &str, id: &str, prefix: &str, bytes: Vec<u8>) {
-        fill(store, &format!("{prefix}-0000-4000-8000-000000000001"), app, id);
-        chunk(store, &format!("{prefix}-0000-4000-8000-000000000002"), app, id, &bytes, 0, 1, bytes.clone());
+        fill(
+            store,
+            &format!("{prefix}-0000-4000-8000-000000000001"),
+            app,
+            id,
+        );
+        chunk(
+            store,
+            &format!("{prefix}-0000-4000-8000-000000000002"),
+            app,
+            id,
+            &bytes,
+            0,
+            1,
+            bytes.clone(),
+        );
         store.complete_snapshot_upload(CLIENT, id).unwrap();
     }
 
@@ -249,10 +312,18 @@ mod snapshots {
 
         let view = serde_json::to_value(get_snapshot(&store, LEAKY).unwrap()).unwrap();
         let text = view.to_string();
-        for secret in ["hunter2-synthetic", "tok-synthetic", "sk-synthetic", "abcdefghijklmnopqrstuvwxyz"] {
+        for secret in [
+            "hunter2-synthetic",
+            "tok-synthetic",
+            "sk-synthetic",
+            "abcdefghijklmnopqrstuvwxyz",
+        ] {
             assert!(!text.contains(secret), "{secret} reached the viewer");
         }
-        assert_eq!(view["omittedFieldCount"], 5, "the one the plugin dropped plus four more");
+        assert_eq!(
+            view["omittedFieldCount"], 5,
+            "the one the plugin dropped plus four more"
+        );
         let groups = view["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 1, "a group with nothing left is not shown");
         assert_eq!(groups[0]["fields"][0]["key"], "个人简介");
@@ -351,8 +422,11 @@ mod evidence {
 
     fn archive() -> (tempfile::TempDir, ArchiveStore, String) {
         let dir = tempfile::tempdir().unwrap();
-        let store =
-            open_store(&dir.path().join("archive"), &dir.path().join("current.json")).unwrap();
+        let store = open_store(
+            &dir.path().join("archive"),
+            &dir.path().join("current.json"),
+        )
+        .unwrap();
         let app = create_application(
             &store,
             serde_json::from_value(json!({ "company": "Synthetic", "title": "Job" })).unwrap(),
@@ -427,10 +501,7 @@ mod evidence {
             Some("2026-09-12T08:00:00.000Z"),
             "档案层把时间规范成毫秒精度"
         );
-        assert_eq!(
-            one.application_id, None,
-            "还没有选申请：它待在收件箱里"
-        );
+        assert_eq!(one.application_id, None, "还没有选申请：它待在收件箱里");
         assert_eq!(store.list_evidence(None).unwrap().len(), 1);
     }
 
@@ -468,7 +539,9 @@ mod evidence {
     fn evidence_moves_in_and_out_of_an_application_with_the_state_following() {
         let (dir, store, app) = archive();
         let path = write(dir.path(), "reply.eml", &eml("回复"));
-        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        let id = import(&store, vec![path], None, None).imported[0]
+            .id
+            .clone();
         let state = |store: &ArchiveStore| {
             store
                 .get_application(&app)
@@ -519,7 +592,11 @@ mod evidence {
         let (dir, store, _app) = archive();
         let mail = write(dir.path(), "reply.eml", &eml("面试邀请"));
         let shot = write(dir.path(), "screenshot.png", &png());
-        let pdf = write(dir.path(), "offer.pdf", b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n");
+        let pdf = write(
+            dir.path(),
+            "offer.pdf",
+            b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n",
+        );
         let report = import(
             &store,
             vec![mail, shot, pdf],
@@ -557,9 +634,8 @@ mod evidence {
 
         // 给 WebView 的任何一条里都没有存储路径。
         for id in report.imported.iter().map(|item| item.id.clone()) {
-            let json =
-                serde_json::to_string(&evidence_commands::get_preview(&store, &id).unwrap())
-                    .unwrap();
+            let json = serde_json::to_string(&evidence_commands::get_preview(&store, &id).unwrap())
+                .unwrap();
             assert!(!json.contains("attachments/"), "{json}");
             assert!(!json.contains(&store.archive_dir().to_string_lossy().to_string()));
         }
@@ -569,7 +645,9 @@ mod evidence {
     fn a_copy_that_is_gone_says_so_instead_of_pretending() {
         let (dir, store, _app) = archive();
         let path = write(dir.path(), "reply.eml", &eml("回复"));
-        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        let id = import(&store, vec![path], None, None).imported[0]
+            .id
+            .clone();
         let stored: PathBuf = evidence_commands::stored_path(&store, &id).unwrap();
         assert!(stored.starts_with(store.archive_dir().canonicalize().unwrap()));
 
@@ -582,16 +660,81 @@ mod evidence {
     fn an_applications_detail_carries_its_evidence_without_any_path() {
         let (dir, store, app) = archive();
         let path = write(dir.path(), "面试邀请.eml", &eml("面试邀请"));
-        let id = import(&store, vec![path], None, None).imported[0].id.clone();
+        let id = import(&store, vec![path], None, None).imported[0]
+            .id
+            .clone();
         evidence_commands::associate(&store, &id, &app).unwrap();
         evidence_commands::classify(&store, &id, "interview_invite", "automated").unwrap();
 
         let view = get_application(&store, &app).unwrap();
         assert_eq!(view.evidence.len(), 1);
         assert_eq!(view.evidence[0].subject.as_deref(), Some("面试邀请"));
-        assert_eq!(view.evidence[0].reply_class.as_deref(), Some("interview_invite"));
+        assert_eq!(
+            view.evidence[0].reply_class.as_deref(),
+            Some("interview_invite")
+        );
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("attachments/"), "{json}");
         assert!(!json.contains(&store.archive_dir().to_string_lossy().to_string()));
+    }
+}
+
+// --- The wire shape the frontend reads ------------------------------------------------
+
+mod boundary {
+    use crate::commands::*;
+    use serde_json::json;
+
+    /// 前端读哪些键，这里就钉哪些键。改名或换 `rename_all` 都会让这条测试先红，
+    /// 而不是让界面安静地显示空白（那正是以前要写 `a.updatedAt || a.updated_at` 的原因）。
+    #[test]
+    fn the_json_keys_the_desktop_frontend_reads_are_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = open_store(
+            &dir.path().join("archive"),
+            &dir.path().join("current.json"),
+        )
+        .unwrap();
+        let created = create_application(
+            &store,
+            serde_json::from_value(json!({ "company": "Synthetic", "title": "Job", "sourceUrl": "https://jobs.example.test/1" })).unwrap(),
+        )
+        .unwrap();
+        let id = created.application.unwrap().id.clone();
+
+        let page = serde_json::to_value(
+            list_applications(&store, serde_json::from_value(json!({})).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let row = &page["items"][0];
+        for key in [
+            "id",
+            "company",
+            "title",
+            "location",
+            "current_stage",
+            "reply_evidence_state",
+            "recycle_state",
+            "updated_at",
+            "source_url",
+        ] {
+            assert!(row.get(key).is_some(), "列表少了前端要读的键：{key}\n{row}");
+        }
+        assert!(page.get("total").is_some());
+
+        let view = serde_json::to_value(get_application(&store, &id).unwrap()).unwrap();
+        for key in [
+            "application",
+            "events",
+            "snapshots",
+            "snapshotStates",
+            "evidence",
+        ] {
+            assert!(view.get(key).is_some(), "详情少了前端要读的键：{key}");
+        }
+        let app = &view["application"];
+        for key in ["notes", "company", "title", "current_stage", "updated_at"] {
+            assert!(app.get(key).is_some(), "详情里的申请少了：{key}");
+        }
     }
 }
