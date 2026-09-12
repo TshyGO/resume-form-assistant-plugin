@@ -23,6 +23,8 @@
   "link/redact.mjs",
   "link/router.mjs",
   "link/session.mjs",
+  "link/snapshot.mjs",
+  "link/staging.mjs",
   "link/store.mjs",
   "link/transport.mjs",
   "link/worker.mjs",
