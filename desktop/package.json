@@ -14,15 +14,18 @@
     "test:store": "cargo test --manifest-path crates/archive-store/Cargo.toml --locked",
     "test:app": "cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib",
     "test:frontend": "vite build",
-    "test:ui": "node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js",
+    "test:ui": "node --test --experimental-strip-types src/pairing-form.test.ts src/applications.test.ts src/applications-ui.test.ts src/inbox.test.ts src/inbox-ui.test.ts",
     "test:nm-register": "node --test scripts/nm-dev-register.test.js",
     "nm:register": "node scripts/nm-dev-register.mjs register",
     "nm:unregister": "node scripts/nm-dev-register.mjs unregister",
     "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
-    "test": "npm run test:host && npm run test:store && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:nm-register && npm run test:release-allowlist"
+    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:nm-register && npm run test:release-allowlist",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^22.20.2",
+    "typescript": "^5.9.3",
     "vite": "^6.3.5"
   },
   "dependencies": {

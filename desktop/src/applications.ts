@@ -1,4 +1,27 @@
-const STAGE_LABEL = {
+import type {
+  ApplicationSummary,
+  EvidenceSummary,
+  Occurred,
+  ReplyEvidenceState,
+  Stage,
+} from "./api.ts";
+
+/** 一次填写事件的载荷（事件表里的 JSON）。 */
+export interface FillEventPayload {
+  /** 事件载荷是库里的一段 JSON：这里只声明填写事件用到的字段，其余原样带着。 */
+  [key: string]: unknown;
+  kind?: string;
+  outcome?: string;
+  field_count?: number;
+  filled_count?: number;
+  unconfirmed_count?: number;
+  durations_ms?: { scan?: number; match?: number; fill?: number; total?: number };
+  template_name?: string;
+  template_version?: string;
+  snapshot_id?: string;
+}
+
+const STAGE_LABEL: Record<string, string> = {
   saved: "已保存",
   filling: "填写中",
   submitted: "已投递",
@@ -10,7 +33,7 @@ const STAGE_LABEL = {
   closed: "已关闭",
 };
 
-const EVENT_LABEL = {
+const EVENT_LABEL: Record<string, string> = {
   application_created: "创建申请",
   application_updated: "更新资料",
   submit_confirmed: "确认已投递",
@@ -29,7 +52,7 @@ const EVENT_LABEL = {
   fill_cancelled: "填写取消",
 };
 
-const FILL_OUTCOME = {
+const FILL_OUTCOME: Record<string, string> = {
   started: "开始",
   completed: "完成",
   partial: "部分完成",
@@ -48,9 +71,9 @@ export const SNAPSHOT_DISCLAIMER =
  * "Written into the page" is all the plugin can know; nothing here says the site accepted
  * anything, and a fill is never a submission.
  */
-export function fillSummary(payload) {
+export function fillSummary(payload: FillEventPayload | null | undefined): string {
   if (payload?.kind !== "fill_event") return "";
-  const parts = [FILL_OUTCOME[payload.outcome] || "结束"];
+  const parts = [(payload.outcome && FILL_OUTCOME[payload.outcome]) || "结束"];
   // Only what was sent: an absent filled count is unknown, not zero.
   if (Number.isInteger(payload.field_count) && Number.isInteger(payload.filled_count)) {
     parts.push(`已写入网页 ${payload.filled_count}/${payload.field_count} 项`);
@@ -69,15 +92,15 @@ export function fillSummary(payload) {
   return parts.join(" · ");
 }
 
-function durationLabel(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return "";
+function durationLabel(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} 秒`;
   const seconds = Math.round(ms / 1000);
   return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
 
 /** Null when the snapshot can be opened; otherwise the sentence to show in its place. */
-export function snapshotStateLabel(state) {
+export function snapshotStateLabel(state: string | undefined): string | null {
   if (state === "stored") return null;
   if (state === "uploading") return "简历快照上传中，还没有传完。";
   // After a restore the plugin can upload the same bytes again, but only under a new id; the
@@ -85,21 +108,21 @@ export function snapshotStateLabel(state) {
   return "简历快照不可用：桌面没有收到这份快照。恢复备份后重新上传的快照会单独出现在上方的快照列表里。";
 }
 
-export function stageLabel(code) {
-  return STAGE_LABEL[code] || code;
+export function stageLabel(code: Stage | string | undefined): string {
+  return (code && STAGE_LABEL[code]) || String(code ?? "");
 }
 
-export function eventLabel(code) {
+export function eventLabel(code: string): string {
   return EVENT_LABEL[code] || code;
 }
 
-export function occurredLabel(occurred) {
+export function occurredLabel(occurred: Occurred | null | undefined): string {
   if (occurred?.precision === "date") return occurred.value?.date || "发生日期未知";
   if (occurred?.precision === "date_time") return occurred.value?.rfc3339 || "发生时间未知";
   return "发生时间未知";
 }
 
-export function evidenceLabel(state) {
+export function evidenceLabel(state: ReplyEvidenceState | string | undefined): string {
   if (state === "none_imported") return "尚未导入回复证据";
   if (state === "imported_unclassified") return "已导入，待分类";
   if (state === "auto_ack") return "已有自动回执类证据";
@@ -112,7 +135,7 @@ export function evidenceLabel(state) {
  * 「尚未导入回复证据」旁边永远跟着这句：没有证据只说明没人导入过东西，不说明对方
  * 没有回复（§6.3 与 §11 的措辞约束）。
  */
-export function evidenceNote(state) {
+export function evidenceNote(state: ReplyEvidenceState | string | undefined): string {
   if (state === "none_imported" || !state) {
     return "这只表示还没有导入任何回复证据，不代表对方没有回复。";
   }
@@ -123,9 +146,9 @@ export function evidenceNote(state) {
 }
 
 /** 详情里一条证据的摘要行：类型、来源、分类与发送方式，各说各的。 */
-export function evidenceLine(item) {
+export function evidenceLine(item: Partial<EvidenceSummary> | null | undefined): string {
   const parts = [];
-  parts.push(EVIDENCE_KIND[item?.kind] || "文件");
+  parts.push((item?.kind && EVIDENCE_KIND[item.kind]) || "文件");
   if (item?.fromAddr) parts.push(item.fromAddr);
   if (item?.sentAt) parts.push(item.sentAt);
   parts.push(item?.replyClass ? EVIDENCE_CLASS[item.replyClass] || item.replyClass : "待分类");
@@ -133,7 +156,7 @@ export function evidenceLine(item) {
   return parts.join(" · ");
 }
 
-const EVIDENCE_KIND = {
+const EVIDENCE_KIND: Record<string, string> = {
   eml: "邮件",
   screenshot: "截图",
   pdf: "PDF",
@@ -141,7 +164,7 @@ const EVIDENCE_KIND = {
   unknown: "文本",
 };
 
-const EVIDENCE_CLASS = {
+const EVIDENCE_CLASS: Record<string, string> = {
   auto_ack: "自动回执",
   assessment_invite: "测评邀请",
   interview_invite: "面试邀请",
@@ -152,7 +175,7 @@ const EVIDENCE_CLASS = {
   unknown: "看不出来",
 };
 
-const EVIDENCE_SEND_MODE = {
+const EVIDENCE_SEND_MODE: Record<string, string> = {
   human: "人工发送",
   automated: "系统自动发送",
   unknown: "未知",
@@ -160,10 +183,10 @@ const EVIDENCE_SEND_MODE = {
 
 export function createApplicationsController() {
   let listToken = 0;
-  let selectedId = null;
+  let selectedId: string | null = null;
   let formDirty = false;
   let saving = false;
-  let editingId = null;
+  let editingId: string | null = null;
   let offset = 0;
   const limit = 20;
   let lastFilter = {};
@@ -173,7 +196,7 @@ export function createApplicationsController() {
     return listToken;
   }
 
-  function isCurrent(token) {
+  function isCurrent(token: number) {
     return token === listToken;
   }
 
@@ -195,19 +218,19 @@ export function createApplicationsController() {
     markFormDirty,
     clearFormDirty,
     snapshot,
-    setSaving(value) {
+    setSaving(value: boolean) {
       saving = value;
     },
-    setSelected(id) {
+    setSelected(id: string | null) {
       selectedId = id;
     },
-    setEditing(id) {
+    setEditing(id: string | null) {
       editingId = id;
     },
-    setOffset(value) {
+    setOffset(value: number) {
       offset = value;
     },
-    setFilter(filter) {
+    setFilter(filter: Record<string, unknown>) {
       lastFilter = filter;
     },
     get offset() {

@@ -57,9 +57,13 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Frontend type check
+        working-directory: desktop
+        run: npm run typecheck
+
       - name: Frontend unit tests
         working-directory: desktop
-        run: node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js src/inbox.test.js src/inbox-ui.test.js
+        run: npm run test:ui
 
       - name: Development registration script tests
         working-directory: desktop

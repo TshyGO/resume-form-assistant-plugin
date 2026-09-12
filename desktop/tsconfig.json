@@ -1,0 +1,27 @@
+{
+  "// 说明": [
+    "桌面前端的类型检查。Vite 只剥类型不检查，真正的检查器是 `npm run typecheck`（tsc --noEmit）。",
+    "erasableSyntaxOnly：只允许能被直接抹掉的语法，这样 `node --test` 的类型剥离能原样跑测试，",
+    "不需要额外的编译步骤或运行时依赖。",
+    "allowImportingTsExtensions：源码里显式写 `./inbox.ts`，Vite 与 Node 都按同一个路径解析。"
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src-tauri", "crates"]
+}

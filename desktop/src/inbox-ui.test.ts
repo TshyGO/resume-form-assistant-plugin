@@ -1,59 +1,81 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mountInbox } from './inbox-ui.js';
+import { mountInbox } from './inbox-ui.ts';
 
-/** 与 applications-ui.test.js 同一套假 DOM：只有 id 查询、innerHTML 与监听器。 */
-function harness(handler, options = {}) {
-  const nodes = new Map();
-  const calls = [];
+/** 与 applications-ui.test.ts 同一套假 DOM：只有 id 查询、innerHTML 与监听器。 */
+type InvokeHandler = (name: string, args?: Record<string, unknown>) => unknown;
+
+class FakeNode {
+  id: string;
+  value = "";
+  innerHTML = "";
+  textContent = "";
+  dataset: Record<string, string> = {};
+  listeners: Record<string, (event: unknown) => unknown> = {};
+  private readonly buttons: Map<string, FakeNode>;
+
+  constructor(id: string, buttons: Map<string, FakeNode>) {
+    this.id = id;
+    this.buttons = buttons;
+  }
+
+  addEventListener(type: string, fn: (event: unknown) => unknown) {
+    this.listeners[type] = fn;
+  }
+
+  emit(type: string, event: Record<string, unknown> = {}) {
+    return this.listeners[type]?.({ preventDefault() {}, ...event });
+  }
+
+  querySelectorAll(selector: string): FakeNode[] {
+    const attribute = selector.includes("data-evidence") ? "data-evidence" : "data-act";
+    const pattern = new RegExp(`${attribute}="([^"]+)"`, "g");
+    return [...this.innerHTML.matchAll(pattern)].map((match) => {
+      const node = new FakeNode(match[1], this.buttons);
+      node.dataset = attribute === "data-evidence" ? { evidence: match[1] } : { act: match[1] };
+      this.buttons.set(`${attribute}:${match[1]}`, node);
+      return node;
+    });
+  }
+}
+
+function harness(handler?: InvokeHandler, options: Parameters<typeof mountInbox>[1] = {}) {
+  const nodes = new Map<string, FakeNode>();
+  const buttons = new Map<string, FakeNode>();
+  const calls: Array<{ name: string; args?: Record<string, unknown> }> = [];
   const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-  class Node {
-    constructor(id) {
-      this.id = id;
-      this.value = '';
-      this.innerHTML = '';
-      this.dataset = {};
-      this.textContent = '';
-      this.listeners = {};
-    }
-    addEventListener(type, fn) {
-      this.listeners[type] = fn;
-    }
-    emit(type, event = {}) {
-      return this.listeners[type]?.({ preventDefault() {}, ...event });
-    }
-    querySelectorAll(selector) {
-      const attribute = selector.includes('data-evidence') ? 'data-evidence' : 'data-act';
-      const pattern = new RegExp(`${attribute}="([^"]+)"`, 'g');
-      return [...this.innerHTML.matchAll(pattern)].map((match) => {
-        const node = new Node(match[1]);
-        node.dataset =
-          attribute === 'data-evidence' ? { evidence: match[1] } : { act: match[1] };
-        buttons.set(`${attribute}:${match[1]}`, node);
-        return node;
-      });
-    }
+  function el(id: string): FakeNode {
+    if (!nodes.has(id)) nodes.set(id, new FakeNode(id, buttons));
+    return nodes.get(id) as FakeNode;
   }
+  globalThis.document = { getElementById: el, addEventListener() {} } as unknown as Document;
 
-  const buttons = new Map();
-  function el(id) {
-    if (!nodes.has(id)) nodes.set(id, new Node(id));
-    return nodes.get(id);
-  }
-  globalThis.document = { getElementById: el, addEventListener() {} };
-
-  const invoke = async (name, args) => {
+  const invoke = async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
     calls.push({ name, args });
     const custom = handler?.(name, args);
-    if (custom !== undefined) return custom;
-    if (name === 'list_inbox_cmd') return [];
-    if (name === 'list_applications_cmd') return { total: 0, items: [] };
-    return {};
+    if (custom !== undefined) return custom as T;
+    if (name === "list_inbox_cmd") return [] as T;
+    if (name === "list_applications_cmd") return { total: 0, items: [] } as T;
+    return {} as T;
   };
 
+  /** 渲染出来的某个按钮；不存在就直接失败，测试信息比空指针清楚。 */
+  function button(key: string): FakeNode {
+    const node = buttons.get(key);
+    if (!node) throw new Error(`界面上没有这个按钮：${key}`);
+    return node;
+  }
+
+  /** 某个命令第一次被调用时收到的参数。 */
+  function callArgs(name: string): Record<string, unknown> {
+    const call = calls.find((entry) => entry.name === name);
+    if (!call) throw new Error(`没有调用过命令：${name}`);
+    return call.args ?? {};
+  }
+
   const api = mountInbox(invoke, options);
-  return { el, buttons, calls, api, tick };
+  return { el, buttons, button, callArgs, calls, api, tick };
 }
 
 const MAIL = {
@@ -80,7 +102,8 @@ test('an empty inbox explains itself without claiming nobody replied', async () 
 });
 
 test('dropped files are imported by path and the result is reported', async () => {
-  let dropped = null;
+  // 放在对象里：TS 的控制流分析看不到回调何时执行，直接用局部变量会被收窄成 never。
+  const drop: { handle: ((paths: string[]) => void) | null } = { handle: null };
   const h = harness(
     (name) => {
       if (name === 'import_evidence_cmd') {
@@ -89,14 +112,15 @@ test('dropped files are imported by path and the result is reported', async () =
       if (name === 'list_inbox_cmd') return [MAIL];
       return undefined;
     },
-    { listenDrop: (fn) => { dropped = fn; } },
+    { listenDrop: (fn: (paths: string[]) => void) => { drop.handle = fn; } },
   );
 
-  await dropped(['C:/Users/me/面试邀请.eml', 'C:/Users/me/invite.msg']);
+  drop.handle?.(['C:/Users/me/面试邀请.eml', 'C:/Users/me/invite.msg']);
+  await h.tick();
   await h.tick();
 
-  const call = h.calls.find((entry) => entry.name === 'import_evidence_cmd');
-  assert.deepEqual(call.args.args.paths, ['C:/Users/me/面试邀请.eml', 'C:/Users/me/invite.msg']);
+  const args = h.callArgs('import_evidence_cmd').args as { paths: string[] };
+  assert.deepEqual(args.paths, ['C:/Users/me/面试邀请.eml', 'C:/Users/me/invite.msg']);
   assert.match(h.el('inbox-status').textContent, /已导入 1 条，待分类/);
   assert.match(h.el('inbox-status').textContent, /invite\.msg/);
   assert.match(h.el('inbox-list').innerHTML, /面试邀请/);
@@ -116,7 +140,7 @@ test('a mail body is shown escaped, and nothing remote can be referenced', async
     return undefined;
   });
   await h.api.refresh();
-  h.buttons.get('data-evidence:e1').emit('click');
+  h.button('data-evidence:e1').emit('click');
   await h.tick();
 
   const html = h.el('inbox-preview').innerHTML;
@@ -130,29 +154,29 @@ test('a screenshot is shown from a data URL, a PDF offers the system viewer inst
   const shot = { ...MAIL, id: 'e2', kind: 'screenshot', subject: null, originalFilename: 'shot.png' };
   const h = harness((name, args) => {
     if (name === 'list_inbox_cmd') return [shot];
-    if (name === 'get_evidence_preview_cmd' && args.evidenceId === 'e2') {
+    if (name === 'get_evidence_preview_cmd' && args?.evidenceId === 'e2') {
       return { ...shot, bodyExtract: null, imageDataUrl: 'data:image/png;base64,AAAA', note: null };
     }
     return undefined;
   });
   await h.api.refresh();
-  h.buttons.get('data-evidence:e2').emit('click');
+  h.button('data-evidence:e2').emit('click');
   await h.tick();
   assert.match(h.el('inbox-preview').innerHTML, /src="data:image\/png;base64,AAAA"/);
 
   const pdf = { ...MAIL, id: 'e3', kind: 'pdf', subject: null, originalFilename: 'offer.pdf' };
   const g = harness((name, args) => {
     if (name === 'list_inbox_cmd') return [pdf];
-    if (name === 'get_evidence_preview_cmd' && args.evidenceId === 'e3') {
+    if (name === 'get_evidence_preview_cmd' && args?.evidenceId === 'e3') {
       return { ...pdf, bodyExtract: null, imageDataUrl: null, note: 'PDF 不在应用内渲染。' };
     }
     return undefined;
   });
   await g.api.refresh();
-  g.buttons.get('data-evidence:e3').emit('click');
+  g.button('data-evidence:e3').emit('click');
   await g.tick();
   assert.match(g.el('inbox-preview').innerHTML, /PDF 不在应用内渲染/);
-  await g.buttons.get('data-act:open').emit('click');
+  await g.button('data-act:open').emit('click');
   await g.tick();
   assert.ok(g.calls.some((call) => call.name === 'open_evidence_cmd'));
 });
@@ -173,7 +197,7 @@ test('two applications at the same company are both offered and neither is prese
     return undefined;
   });
   await h.api.refresh();
-  h.buttons.get('data-evidence:e1').emit('click');
+  h.button('data-evidence:e1').emit('click');
   await h.tick();
 
   const html = h.el('inbox-preview').innerHTML;
@@ -184,16 +208,16 @@ test('two applications at the same company are both offered and neither is prese
 
   // 没选就点关联：不发命令，只提醒。
   h.el('inbox-application').value = '';
-  await h.buttons.get('data-act:associate').emit('click');
+  await h.button('data-act:associate').emit('click');
   await h.tick();
   assert.equal(h.calls.some((call) => call.name === 'associate_evidence_cmd'), false);
   assert.match(h.el('inbox-status').textContent, /请先选中一条申请/);
 
   h.el('inbox-application').value = 'app-2';
-  await h.buttons.get('data-act:associate').emit('click');
+  await h.button('data-act:associate').emit('click');
   await h.tick();
-  const call = h.calls.find((entry) => entry.name === 'associate_evidence_cmd');
-  assert.deepEqual(call.args, { evidenceId: 'e1', applicationId: 'app-2' });
+  const args = h.callArgs('associate_evidence_cmd');
+  assert.deepEqual(args, { evidenceId: 'e1', applicationId: 'app-2' });
   assert.match(h.el('inbox-status').textContent, /已导入，待分类/);
 });
 
@@ -205,16 +229,16 @@ test('classification sends both fields and never turns an invite into a human', 
     return undefined;
   });
   await h.api.refresh();
-  h.buttons.get('data-evidence:e1').emit('click');
+  h.button('data-evidence:e1').emit('click');
   await h.tick();
 
   h.el('inbox-reply-class').value = 'interview_invite';
   h.el('inbox-send-mode').value = 'unknown';
-  await h.buttons.get('data-act:classify').emit('click');
+  await h.button('data-act:classify').emit('click');
   await h.tick();
 
-  const call = h.calls.find((entry) => entry.name === 'classify_evidence_cmd');
-  assert.deepEqual(call.args, { evidenceId: 'e1', replyClass: 'interview_invite', sendMode: 'unknown' });
+  const args = h.callArgs('classify_evidence_cmd');
+  assert.deepEqual(args, { evidenceId: 'e1', replyClass: 'interview_invite', sendMode: 'unknown' });
   assert.match(h.el('inbox-status').textContent, /面试邀请/);
   assert.match(h.el('inbox-status').textContent, /未知/);
   assert.doesNotMatch(h.el('inbox-status').textContent, /人工/);
@@ -227,31 +251,30 @@ test('pasted text is imported as text and the box is cleared', async () => {
   h.el('inbox-paste').value = '他们说下周二面试。';
   await h.el('inbox-paste-save').emit('click');
   await h.tick();
-  const call = h.calls.find((entry) => entry.name === 'import_evidence_cmd');
-  assert.deepEqual(call.args.args, { text: '他们说下周二面试。' });
+  assert.deepEqual(h.callArgs('import_evidence_cmd').args, { text: '他们说下周二面试。' });
   assert.equal(h.el('inbox-paste').value, '');
 });
 
 test('a preview that answers late cannot replace the one selected after it', async () => {
-  let releaseFirst;
+  let releaseFirst: (() => void) | undefined;
   const h = harness((name, args) => {
     if (name === 'list_inbox_cmd') return [MAIL, { ...MAIL, id: 'e9', subject: '第二封' }];
-    if (name === 'get_evidence_preview_cmd' && args.evidenceId === 'e1') {
+    if (name === 'get_evidence_preview_cmd' && args?.evidenceId === 'e1') {
       return new Promise((resolve) => {
         releaseFirst = () => resolve({ ...MAIL, bodyExtract: '第一封的正文', imageDataUrl: null, note: null });
       });
     }
-    if (name === 'get_evidence_preview_cmd' && args.evidenceId === 'e9') {
+    if (name === 'get_evidence_preview_cmd' && args?.evidenceId === 'e9') {
       return { ...MAIL, id: 'e9', subject: '第二封', bodyExtract: '第二封的正文', imageDataUrl: null, note: null };
     }
     return undefined;
   });
   await h.api.refresh();
-  h.buttons.get('data-evidence:e1').emit('click');
+  h.button('data-evidence:e1').emit('click');
   await h.tick();
-  h.buttons.get('data-evidence:e9').emit('click');
+  h.button('data-evidence:e9').emit('click');
   await h.tick();
-  releaseFirst();
+  releaseFirst?.();
   await h.tick();
   assert.match(h.el('inbox-preview').innerHTML, /第二封的正文/);
   assert.doesNotMatch(h.el('inbox-preview').innerHTML, /第一封的正文/);
