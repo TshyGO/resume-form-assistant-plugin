@@ -501,6 +501,16 @@ icons/                 插件图标
 - **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联 / 丢弃 / 另存。
 - **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
 
+### 填写留档与简历快照（D08）
+
+配对过桌面程序的用户，每次「一键 AI 填写」或「AI 辅助新增条目」结束后，侧边栏会问一句要不要把这次填写留档到桌面。留档记的是结果和计数（写进网页几项、几项未确认、耗时、用的哪个模板），**不记网页上填了什么**；默认附上一份这次用的简历模板拷贝（快照），可以取消勾选。
+
+- **快照在填写开始时冻结。** 之后改模板不改它；桌面没开时先存在扩展自己的 IndexedDB，桌面可用后按块上传，传完才删本机副本。桌面里能从时间线打开它，并注明快照不能证明网站收到了什么。
+- **留档不等于投递。** 任何留档文案都不说投递；投递之后仍然要点「确认已投递」。
+- **从未配对的用户看不到这张卡片**，也不会在本机存任何东西。
+
+改这块代码前看 [`docs/superpowers/plans/2026-09-11-d08-pr-breakdown.md`](docs/superpowers/plans/2026-09-11-d08-pr-breakdown.md)。模块：`link/fillrecords.mjs`（留档意图与 allowlist）、`link/snapshot.mjs`（快照格式）、`link/staging.mjs`（IndexedDB 暂存）、`link/uploads.mjs`（分片上传、游标、修复）。真实浏览器端到端：`python desktop/scripts/d08_browser_check.py`。
+
 协议校验器不是这里写的，是 `desktop/crates/protocol/js/` 的副本，`tests/protocol-vendor.test.js` 锁死两边一致。改协议请改源文件再复制过来。
 
 开发期把桌面程序注册成 Native Messaging host 的办法见 [`desktop/DEV-NATIVE-MESSAGING.md`](desktop/DEV-NATIVE-MESSAGING.md)。配对之后要重新加载扩展或重启浏览器，否则新写的注册不生效。
