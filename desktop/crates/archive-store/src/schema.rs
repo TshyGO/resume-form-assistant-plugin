@@ -1,13 +1,16 @@
-//! 物理 schema(v1)与迁移注册表。
+//! 物理 schema(v1 + v2)与迁移注册表。
 //!
 //! 设计要点(均为冻结契约,见 docs/desktop-mvp/):
 //! - applications 无 (company,url)/(company,title) 唯一约束:同公司多岗、同岗重复申请并存。
 //! - events 按 (application_id, event_sequence) 唯一;收件箱事件(NULL 申请)用档案级序号的局部唯一索引。
 //! - 附件字节不进库:attachment_blobs 只存 sha256、大小、受控相对路径、引用计数。
+//!   例外只有上传中的快照块(v2 `snapshot_chunk_bytes`):它们与块回执同事务落库,分片 ACK
+//!   才是落盘承诺;完整快照写成 `snapshots/` 下的文件并提交快照行的同一事务里即删除。
+//!   最终的快照字节与附件一样在库外。
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -224,8 +227,28 @@ CREATE TABLE schema_migrations (
 );
 "#;
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    to_version: 1,
-    description: "initial schema: applications, events, evidence metadata, snapshots, todos, ai suggestions, receipts, snapshot chunk ledger",
-    sql: V1_SCHEMA,
-}];
+/// D08: bytes of snapshot chunks still being uploaded. Written in the same transaction as the
+/// chunk ledger row and its receipt, so a chunk ACK means the bytes are on disk; deleted in
+/// the same transaction that commits the finished snapshot file's row.
+pub const V2_SNAPSHOT_CHUNK_BYTES: &str = r#"
+CREATE TABLE snapshot_chunk_bytes (
+  client_instance_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  bytes BLOB NOT NULL,
+  PRIMARY KEY (client_instance_id, snapshot_id, chunk_index)
+);
+"#;
+
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        to_version: 1,
+        description: "initial schema: applications, events, evidence metadata, snapshots, todos, ai suggestions, receipts, snapshot chunk ledger",
+        sql: V1_SCHEMA,
+    },
+    Migration {
+        to_version: 2,
+        description: "snapshot chunk bytes staged with their receipts until the snapshot file is committed",
+        sql: V2_SNAPSHOT_CHUNK_BYTES,
+    },
+];

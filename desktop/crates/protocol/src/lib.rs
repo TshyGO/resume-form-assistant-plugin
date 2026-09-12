@@ -17,7 +17,9 @@ mod types;
 mod urls;
 mod validate;
 
-pub use digest::{payload_body_sha256, sha256_hex, snapshot_chunk_identity_sha256};
+pub use digest::{
+    decode_standard_base64, payload_body_sha256, sha256_hex, snapshot_chunk_identity_sha256,
+};
 pub use error::{ErrorCode, Layer, ProtocolError};
 pub use identity::{check_current_identity, handshake_response_payload, origin_allowed};
 pub use receipts::{evaluate_write, reconcile, reconcile_grants_replay, write_key};

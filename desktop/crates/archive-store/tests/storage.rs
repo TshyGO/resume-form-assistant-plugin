@@ -455,14 +455,17 @@ fn migration_atomicity_and_recovery_backup() {
     let db = ArchiveStore::open(cfg.clone()).unwrap();
     let id = db.create_application(app()).unwrap().id.clone();
     db.close().unwrap();
+    // Built on top of whatever the real chain ends at, so a new real migration does not
+    // silently turn this into a test of a broken chain.
+    let latest = MIGRATIONS.last().unwrap().to_version;
     let mut chain = MIGRATIONS.to_vec();
     chain.push(Migration {
-        to_version: 2,
+        to_version: latest + 1,
         description: "valid",
         sql: "CREATE TABLE v2 (id INTEGER);",
     });
     chain.push(Migration {
-        to_version: 3,
+        to_version: latest + 2,
         description: "bad",
         sql: "CREATE TABLE temp_v3 (id INTEGER); BROKEN SQL;",
     });
@@ -478,7 +481,7 @@ fn migration_atomicity_and_recovery_backup() {
     assert_eq!(
         raw.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        1
+        latest
     );
     assert_eq!(
         raw.query_row(
@@ -595,14 +598,15 @@ fn migration_success_survives_reopen_and_metadata_agrees() {
     let db = ArchiveStore::open(cfg.clone()).unwrap();
     let id = db.create_application(app()).unwrap().id.clone();
     db.close().unwrap();
+    let latest = MIGRATIONS.last().unwrap().to_version;
     let mut chain = MIGRATIONS.to_vec();
     chain.push(Migration {
-        to_version: 2,
+        to_version: latest + 1,
         description: "add test field",
         sql: "ALTER TABLE archive_meta ADD COLUMN extra TEXT;",
     });
     let db = ArchiveStore::open_with_migrations(cfg.clone(), &chain).unwrap();
-    assert_eq!(db.schema_version(), 2);
+    assert_eq!(db.schema_version(), latest + 1);
     assert!(db.migration_backup.as_ref().unwrap().exists());
     db.close().unwrap();
     let db = ArchiveStore::open_with_migrations(cfg.clone(), &chain).unwrap();
@@ -610,7 +614,7 @@ fn migration_success_survives_reopen_and_metadata_agrees() {
     assert!(db.get_application(&id).unwrap().is_some());
     let meta: serde_json::Value =
         serde_json::from_slice(&std::fs::read(cfg.meta_path()).unwrap()).unwrap();
-    assert_eq!(meta["schema_version"], 2);
+    assert_eq!(meta["schema_version"], latest + 1);
 }
 
 #[test]
@@ -642,6 +646,10 @@ fn chunk(
     index: i64,
     total_sha: &str,
 ) -> (PluginWriteContext, PluginOp) {
+    use sha2::{Digest, Sha256};
+    // The two halves of the synthetic "abcdef" snapshot. A chunk now carries its bytes, and
+    // the store refuses bytes that do not match the chunk digest.
+    let bytes = if index == 0 { b"abc".to_vec() } else { b"def".to_vec() };
     let op = PluginOp::SnapshotChunk(SnapshotChunkInput {
         application_id: Some(app_id.into()),
         snapshot_id: "synthetic-snapshot".into(),
@@ -649,9 +657,10 @@ fn chunk(
         chunk_count: 2,
         total_sha256: total_sha.into(),
         byte_size: 6,
-        chunk_sha256: "a".repeat(64),
+        chunk_sha256: format!("{:x}", Sha256::digest(&bytes)),
         template_name: Some("synthetic".into()),
         template_version: None,
+        bytes,
     });
     (ctx(store, &op, &format!("chunk-{index}")), op)
 }

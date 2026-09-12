@@ -93,6 +93,11 @@ pub struct SnapshotChunkInput {
     pub chunk_sha256: String,
     pub template_name: Option<String>,
     pub template_version: Option<String>,
+    /// The chunk's decoded bytes. Staged with the receipt in one transaction so a chunk ACK is
+    /// a promise that they are on disk. Left out of the operation digest: `chunk_sha256`
+    /// already pins them, and the store checks the two agree before anything is written.
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -141,6 +146,20 @@ pub struct SnapshotProgress {
     /// 从 0 起连续 ACK 的下一块下标;不得因较后块 ACK 前移(§8.5)。
     pub chunk_cursor: i64,
     pub received_chunks: Vec<i64>,
+    /// Bytes of this upload still staged in `snapshot_chunk_bytes`; zero once the snapshot file
+    /// has been committed.
+    pub staged_bytes: i64,
+}
+
+/// What [crate::ArchiveStore::complete_snapshot_upload] found.
+#[derive(Debug, Clone)]
+pub enum SnapshotCompletion {
+    /// Some chunk is still missing; nothing was written.
+    Incomplete(SnapshotProgress),
+    /// This call assembled the chunks, wrote the file and committed the snapshot row.
+    Completed(crate::model::ResumeSnapshotMeta),
+    /// An earlier call already did; nothing was written again.
+    AlreadyComplete(crate::model::ResumeSnapshotMeta),
 }
 
 /// 对账查询单项:完整旧身份 + 摘要;快照块另带 snapshotId/chunkIndex。
@@ -377,6 +396,20 @@ impl StoreTx<'_> {
         let mut input = input.clone();
         input.chunk_sha256.make_ascii_lowercase();
         input.total_sha256.make_ascii_lowercase();
+        // The bytes must be the ones the chunk digest names, and must fit the declared size.
+        // Checked before anything is written: an ACK for bytes that are not these would let
+        // the plugin drop a chunk the archive does not actually hold.
+        {
+            use sha2::{Digest, Sha256};
+            if input.bytes.is_empty()
+                || input.bytes.len() as i64 > input.byte_size
+                || format!("{:x}", Sha256::digest(&input.bytes)) != input.chunk_sha256
+            {
+                return Err(StoreError::Validation(
+                    "chunk bytes do not match chunkSha256".into(),
+                ));
+            }
+        }
         if input.chunk_index < 0 || input.chunk_index >= input.chunk_count {
             return Err(StoreError::Validation(format!(
                 "chunk_index {} out of range (0..{})",
@@ -468,6 +501,20 @@ impl StoreTx<'_> {
             return Ok((ctx.message_id.clone(), "snapshot_chunk".into()));
         }
 
+        // Together the staged chunks may not exceed the declared size either. Otherwise a
+        // client could stage bytes that no completion will ever use, and nothing removes them.
+        let staged: i64 = self.conn().query_row(
+            "SELECT COALESCE(SUM(LENGTH(bytes)), 0) FROM snapshot_chunk_bytes \
+             WHERE client_instance_id = ?1 AND snapshot_id = ?2",
+            params![ctx.client_instance_id, input.snapshot_id],
+            |r| r.get(0),
+        )?;
+        if staged + input.bytes.len() as i64 > input.byte_size {
+            return Err(StoreError::Validation(
+                "staged chunks would exceed the declared byteSize".into(),
+            ));
+        }
+
         self.conn().execute(
             "INSERT INTO snapshot_chunks (client_instance_id, snapshot_id, chunk_index, \
              chunk_message_id, chunk_sha256, source_restore_epoch, received_at) \
@@ -482,7 +529,58 @@ impl StoreTx<'_> {
                 recorded_at,
             ],
         )?;
+        self.conn().execute(
+            "INSERT INTO snapshot_chunk_bytes (client_instance_id, snapshot_id, chunk_index, bytes) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![ctx.client_instance_id, input.snapshot_id, input.chunk_index, input.bytes],
+        )?;
         Ok((ctx.message_id.clone(), "snapshot_chunk".into()))
+    }
+
+    /// The staged bytes of a snapshot whose chunks have all arrived, in order, checked against
+    /// the declared total size and digest. `None` while any chunk is still missing.
+    pub(crate) fn assemble_staged_snapshot(
+        &self,
+        client_instance_id: &str,
+        snapshot_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        use sha2::{Digest, Sha256};
+        let (chunk_count, total_sha, byte_size): (i64, String, i64) = self
+            .conn()
+            .query_row(
+                "SELECT chunk_count, total_sha256, byte_size FROM snapshot_uploads \
+                 WHERE client_instance_id = ?1 AND snapshot_id = ?2",
+                params![client_instance_id, snapshot_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound(format!("snapshot upload {snapshot_id}")))?;
+        let mut stmt = self.conn().prepare(
+            "SELECT chunk_index, bytes FROM snapshot_chunk_bytes \
+             WHERE client_instance_id = ?1 AND snapshot_id = ?2 ORDER BY chunk_index ASC",
+        )?;
+        let rows = stmt.query_map(params![client_instance_id, snapshot_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut assembled = Vec::with_capacity(byte_size.max(0) as usize);
+        let mut expected = 0i64;
+        for row in rows {
+            let (index, bytes) = row?;
+            if index != expected {
+                return Ok(None);
+            }
+            assembled.extend_from_slice(&bytes);
+            expected += 1;
+        }
+        if expected != chunk_count {
+            return Ok(None);
+        }
+        if assembled.len() as i64 != byte_size || format!("{:x}", Sha256::digest(&assembled)) != total_sha {
+            return Err(StoreError::Validation(
+                "assembled snapshot does not match its declared size and digest".into(),
+            ));
+        }
+        Ok(Some(assembled))
     }
 
     /// 快照进度:块 ACK 状态与连续游标(§8.5 chunkCursor 语义)。
@@ -523,6 +621,12 @@ impl StoreTx<'_> {
                 break;
             }
         }
+        let staged_bytes: i64 = self.conn().query_row(
+            "SELECT COALESCE(SUM(length(bytes)), 0) FROM snapshot_chunk_bytes \
+             WHERE client_instance_id = ?1 AND snapshot_id = ?2",
+            params![client_instance_id, snapshot_id],
+            |r| r.get(0),
+        )?;
         Ok(SnapshotProgress {
             client_instance_id: client_instance_id.to_string(),
             snapshot_id: snapshot_id.to_string(),
@@ -531,6 +635,7 @@ impl StoreTx<'_> {
             full_acked: full_acked != 0,
             chunk_cursor: cursor,
             received_chunks: received,
+            staged_bytes,
         })
     }
 
@@ -542,6 +647,22 @@ impl StoreTx<'_> {
         client_instance_id: &str,
         snapshot_id: &str,
         stored_rel_path: &str,
+    ) -> Result<ResumeSnapshotMeta, StoreError> {
+        self.finalize_snapshot_upload_with(client_instance_id, snapshot_id, stored_rel_path, None)
+    }
+
+    /// As [Self::finalize_snapshot_upload], with the template name taken from the snapshot
+    /// content instead of the upload row.
+    ///
+    /// The upload row's template columns are deliberately not rewritten: they take part in
+    /// the parent-identity check `op_snapshot_chunk` runs on every chunk, and a chunk resent
+    /// after a lost complete ACK would then be refused as a conflict.
+    pub(crate) fn finalize_snapshot_upload_with(
+        &mut self,
+        client_instance_id: &str,
+        snapshot_id: &str,
+        stored_rel_path: &str,
+        template: Option<(String, Option<String>)>,
     ) -> Result<ResumeSnapshotMeta, StoreError> {
         validate_rel_path(stored_rel_path)?;
         let (epoch, size): (String, i64) = self.conn().query_row("SELECT source_restore_epoch, byte_size FROM snapshot_uploads WHERE client_instance_id=?1 AND snapshot_id=?2", params![client_instance_id,snapshot_id], |r| Ok((r.get(0)?,r.get(1)?)))
@@ -601,6 +722,10 @@ impl StoreTx<'_> {
             params![client_instance_id, snapshot_id],
             |r| r.get(0),
         )?;
+        let (template_name, template_version) = match template {
+            Some((name, version)) => (Some(name), version),
+            None => (template_name, template_version),
+        };
         let now = now_utc();
         crate::tx::verify_file(&self.archive_dir, stored_rel_path, byte_size, &total_sha)?;
         std::fs::OpenOptions::new()
@@ -608,6 +733,11 @@ impl StoreTx<'_> {
             .write(true)
             .open(self.archive_dir.join(stored_rel_path))?
             .sync_all()?;
+        // The file is now the copy. Staged chunk bytes go in the same commit that says so.
+        self.conn().execute(
+            "DELETE FROM snapshot_chunk_bytes WHERE client_instance_id = ?1 AND snapshot_id = ?2",
+            params![client_instance_id, snapshot_id],
+        )?;
         self.conn().execute(
             "INSERT INTO resume_snapshots (snapshot_id, application_id, template_name, \
              template_version, sha256, stored_rel_path, created_at, byte_size) \
