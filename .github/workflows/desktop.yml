@@ -59,7 +59,7 @@ jobs:
 
       - name: Frontend unit tests
         working-directory: desktop
-        run: node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js
+        run: node --test src/pairing-form.test.js src/applications.test.js src/applications-ui.test.js src/inbox.test.js src/inbox-ui.test.js
 
       - name: Development registration script tests
         working-directory: desktop
