@@ -157,15 +157,20 @@ must("btn-diag").addEventListener("click", async () => {
   }
 });
 
-if (!invoke) throw new Error("桌面宿主没有注入 __TAURI__.core.invoke");
+// 在普通浏览器里打开（`npm run dev` / `preview`）时没有宿主。界面照常挂载，只是每个命令
+// 都会用同一句话失败——比整页停在半初始化状态强，也让上面那些「未连接」提示真的看得到。
+const notConnected: Invoke = async () => {
+  throw { code: "NO_HOST", message: "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）" };
+};
+const command: Invoke = invoke ?? notConnected;
 
-const applications = mountApplications(invoke);
+const applications = mountApplications(command);
 
 // 文件选择与拖放是宿主能力：这里注入真实实现，测试里注入假的。拖放事件带来的是用户
 // 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
-const inbox = mountInbox(invoke, {
+const inbox = mountInbox(command, {
   pickFiles: dialog?.open
     ? async () => {
         const chosen = await dialog.open?.({
