@@ -58,6 +58,9 @@ export function createDrain({ session, outbox, reconcile = null, alarms, now }) 
     const result = await outbox.drainOnce({ identity: probe.identity });
     const reconciled = reconcile ? await reconcile.run(probe.identity) : null;
     await scheduleNext();
+    // A paused entry the desktop could not answer about stays paused, and only pending
+    // entries set alarms: without this the "next pass" it waits for might never come.
+    if (reconciled?.unreachable?.length) await schedule(MIN_ALARM_DELAY_MS);
     return { mode: probe.mode, ...result, reconciled };
   }
 

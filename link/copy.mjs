@@ -300,3 +300,32 @@ export function describeSnapshotUpload(entry, { expired = false } = {}) {
   const copy = byStatus[entry?.status] ?? { text: `简历快照上传中（已传 ${acked}/${total} 块）`, retry: true };
   return expired ? { ...copy, text: `${copy.text}已暂存超过 30 天，要继续发送还是丢弃？` } : copy;
 }
+
+// A snapshot upload paused by a restore. Neither answer below lets the plugin act alone, and
+// uploading again always means a new snapshot identity in the archive that exists now.
+const SNAPSHOT_RECONCILE = {
+  applied: '恢复后的档案库里有这份快照全部分片的记录，但无法确认它是否已完整入库。',
+  not_found: '恢复后的档案库里没有这份快照的上传记录。这不等于没有传过——可能只是这份备份不含它。',
+  conflict: '恢复后的档案库里有身份相同但内容不同的分片，没有自动处理。',
+  unverifiable: '桌面无法核实这份快照传到了哪一步，不会自动重传。',
+  purged: '这份快照所属的记录在桌面上已被永久删除。'
+};
+
+/** What the sidebar says after the user resolved a paused snapshot. */
+export function describeSnapshotResolveResult(result) {
+  const { status, reason } = result ?? {};
+  if (status === 'queued' || status === 'pending') {
+    return { tone: 'pending', text: '会用当前档案库的新身份重新上传同一份简历快照，等这次填写的留档发出之后开始。' };
+  }
+  if (status === 'discarded') return { tone: 'info', text: '已丢弃这份简历快照，填写记录不受影响。' };
+  if (status === 'rejected' && SNAPSHOT_ISSUES[reason]) return { tone: 'warn', text: SNAPSHOT_ISSUES[reason] };
+  return { tone: 'warn', text: '没能重新上传这份简历快照，它还留在待同步里。' };
+}
+
+export function describeSnapshotReconcile(status) {
+  return {
+    tone: 'warn',
+    text: `${SNAPSHOT_RECONCILE[status] ?? '桌面换过档案库，这份简历快照等你决定。'}可以把本机保留的原始快照重新上传到当前档案库，或者丢弃它。`,
+    choices: ['resave', 'discard']
+  };
+}

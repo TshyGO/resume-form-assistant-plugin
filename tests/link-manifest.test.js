@@ -170,3 +170,10 @@ test('an application id typed by hand is checked before anything is bound', asyn
   const { describeFillRecordResult } = await import('../link/copy.mjs');
   assert.match(describeFillRecordResult({ status: 'rejected', reason: 'invalid_application_id' }).text, /申请 ID/);
 });
+
+test('every reconcile button hands resolvePaused the entry itself', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  assert.equal(/resolvePaused\(entry\.messageId/.test(source), false);
+  const { describeSnapshotResolveResult } = await import('../link/copy.mjs');
+  assert.match(describeSnapshotResolveResult({ status: 'pending' }).text, /重新上传/);
+});

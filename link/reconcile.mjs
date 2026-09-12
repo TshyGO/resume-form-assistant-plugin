@@ -16,7 +16,7 @@ import {
  * an archive the user never chose. Paused messages may only ask a read-only question —
  * `outbox.reconcile` — and the answer never authorises a replay.
  */
-export function createReconcile({ store, outbox, uuid, now, sendNative, sleep }) {
+export function createReconcile({ store, outbox, uuid, now, sendNative, sleep, uploads = null }) {
   const wire = { sendNative, sleep };
 
   /** Freeze everything whose bound epoch is not the current one. */
@@ -79,7 +79,80 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
       }
     }
 
+    await reconcileUploads(identity, report);
     return report;
+  }
+
+  /**
+   * Paused snapshot uploads: every chunk is asked about by its full old identity, in batches
+   * the protocol allows. No answer settles a snapshot on its own — not even `applied` for every
+   * chunk, which proves the chunks are in this archive's history, not that the snapshot was
+   * ever completed there. The entry waits for the user with the answer that most needs them.
+   */
+  async function reconcileUploads(identity, report) {
+    const paused = (await store.getOutbox()).filter(entry => entry.status === 'paused' && entry.messageType === SNAPSHOT_UPLOAD);
+    if (!paused.length) return;
+
+    const items = [];
+    for (const entry of paused) {
+      for (const chunk of entry.chunks) items.push(await chunkIdentityOf(entry, chunk));
+    }
+
+    const answers = new Map();
+    for (let at = 0; at < items.length; at += MAX_RECONCILE_ITEMS) {
+      const batch = items.slice(at, at + MAX_RECONCILE_ITEMS);
+      const message = await buildEnvelope({
+        messageType: 'outbox.reconcile',
+        messageId: uuid(),
+        clientInstanceId: await store.clientInstanceId(),
+        payload: { items: batch },
+        identity,
+        now
+      });
+      const result = await sendOnce(message, wire);
+      if (result.status !== 'ok') continue;
+      for (const answer of result.response.payload.items) {
+        answers.set(`${answer.snapshotId}:${answer.chunkIndex}`, answer.status);
+      }
+    }
+
+    for (const entry of paused) {
+      const statuses = entry.chunks.map(chunk => answers.get(`${entry.snapshotId}:${chunk.chunkIndex}`));
+      if (statuses.some(status => status === undefined)) {
+        // Part of it went unanswered: stay paused and ask again on the next pass.
+        report.unreachable.push(entry.messageId);
+        continue;
+      }
+      const summary = summarise(statuses);
+      await patch(entry.messageId, item => ({
+        ...item,
+        status: 'needs_user',
+        reconcileStatus: summary,
+        chunkReconcile: statuses,
+        nextAttemptAt: null
+      }));
+      report.needsUser.push({ messageId: entry.messageId, status: summary });
+    }
+  }
+
+  async function chunkIdentityOf(entry, chunk) {
+    return {
+      clientInstanceId: entry.clientInstanceId,
+      messageId: chunk.chunkMessageId,
+      sourceRestoreEpoch: entry.sourceRestoreEpoch,
+      payloadSha256: await snapshotChunkIdentitySha256({
+        sourceRestoreEpoch: entry.sourceRestoreEpoch,
+        snapshotId: entry.snapshotId,
+        applicationId: entry.applicationId,
+        chunkIndex: chunk.chunkIndex,
+        chunkCount: entry.chunkCount,
+        chunkSha256: chunk.chunkSha256,
+        snapshotSha256: entry.sha256,
+        byteSize: entry.byteSize
+      }),
+      snapshotId: entry.snapshotId,
+      chunkIndex: chunk.chunkIndex
+    };
   }
 
   /**
@@ -98,6 +171,8 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
       // message that may already be in flight is how one decision becomes two applications.
       return { status: 'rejected', reason: 'not_paused' };
     }
+
+    if (entry.messageType === SNAPSHOT_UPLOAD) return resolveUpload(entry, { choice, applicationId, identity });
 
     if (choice === 'discard') {
       await store.updateOutbox(list => list.filter(item => item.messageId !== messageId));
@@ -144,6 +219,56 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
     return outbox.deliverOne(replacement.messageId, identity);
   }
 
+  /**
+   * A paused snapshot upload: discard it, or upload the same bytes again under a new identity
+   * against the archive that exists now. "Associate" is the same act aimed at a chosen
+   * application — the application is part of every chunk's identity, so there is no way to
+   * re-point the old chunks.
+   */
+  async function resolveUpload(entry, { choice, applicationId, identity }) {
+    if (choice === 'discard') {
+      // abandon() keeps a tombstone if IndexedDB will not delete the copy yet.
+      if (uploads) await uploads.abandon(entry.snapshotId);
+      else await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
+      return { status: 'discarded' };
+    }
+    if (!identity) return { status: 'rejected', reason: 'no_identity' };
+    if (!uploads) return { status: 'rejected', reason: 'unsupported' };
+
+    // Claimed in one queued step before anything is minted. Two clicks would otherwise both
+    // read the same paused entry and stage the same bytes under two new snapshot ids.
+    let claimed = false;
+    await store.updateOutbox(list => list.map(item => {
+      if (item.messageId !== entry.messageId) return item;
+      if (item.status !== 'paused' && item.status !== 'needs_user') return item;
+      claimed = true;
+      return { ...item, status: 'resaving', resumeStatus: item.status };
+    }));
+    if (!claimed) return { status: 'rejected', reason: 'not_paused' };
+
+    const moved = await uploads.resave(entry, { identity, applicationId: choice === 'associate' ? applicationId : null });
+    if (!moved.entry) {
+      await patch(entry.messageId, item => ({ ...item, status: item.resumeStatus ?? 'needs_user', resumeStatus: undefined }));
+      return { status: 'rejected', reason: moved.issue };
+    }
+    const replacement = moved.entry;
+
+    await store.updateOutbox(list => list
+      .filter(item => item.messageId !== entry.messageId)
+      .map(item => (
+        // A fill still waiting on the same decision should name the snapshot that will exist.
+        item.recordId && item.recordId === entry.recordId && item.messageType === 'fill.submit'
+          && (item.status === 'paused' || item.status === 'needs_user')
+          ? { ...item, payload: { ...item.payload, snapshotId: replacement.snapshotId } }
+          : item
+      ))
+      .concat(replacement));
+    // Only now that nothing refers to it: delete the old copy, or leave a tombstone that stops
+    // repair() from reading its binding as an interrupted upload.
+    await uploads.abandon(entry.snapshotId);
+    return { status: 'queued', messageId: replacement.messageId, uploadQueued: true };
+  }
+
   // Full prior identity, exactly as §8.11 specifies. The digest is recomputed from the stored
   // payload the same way it was computed when the message was first built.
   async function identityOf(entry) {
@@ -169,4 +294,18 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep })
   );
 
   return { pauseStale, run, resolve };
+}
+
+// The answer that most needs a person, when the chunks of one snapshot disagree.
+const URGENCY = ['conflict', 'purged', 'unverifiable', 'not_found', 'applied'];
+
+function summarise(statuses) {
+  for (const status of URGENCY) {
+    if (status === 'applied') {
+      if (statuses.every(item => item === 'applied')) return 'applied';
+      continue;
+    }
+    if (statuses.includes(status)) return status;
+  }
+  return 'unverifiable';
 }
