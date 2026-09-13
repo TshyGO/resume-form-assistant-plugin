@@ -1,0 +1,80 @@
+name: AI PR Review
+
+# Thin caller: review policy and provider routing live in TshyGO/ci-central.
+# Keep the reusable workflow and central_workflow_sha pinned to the same commit.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ai-pr-review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: ${{ github.event_name != 'issue_comment' }}
+
+jobs:
+  review-guard:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.sender.type != 'Bot' &&
+      github.event.issue.pull_request != null &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      startsWith(github.event.comment.body, '/review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      pull-requests: write
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+    steps:
+      - name: Avoid starting a duplicate manual review
+        id: decide
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            core.setOutput('proceed', 'true');
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.issue.number;
+            const pull = (await github.rest.pulls.get({ owner, repo, pull_number: pullNumber })).data;
+            const runs = (await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'pr-agent.yml', head_sha: pull.head.sha, per_page: 100,
+            })).data.workflow_runs;
+            const active = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+            const running = runs
+              .filter((run) => run.id < context.runId && active.has(run.status) && run.head_sha === pull.head.sha)
+              .sort((left, right) => left.id - right.id)[0];
+            if (!running) return;
+            const marker = '<!-- ai-pr-review-guard -->';
+            const body = `${marker}\n已有一轮 AI 评审在运行（[run ${running.id}](${running.html_url})）。本次 /review 已忽略。`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pullNumber, per_page: 100,
+            });
+            const existing = comments.find((comment) => (comment.body || '').startsWith(marker));
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number: pullNumber, body });
+            core.setOutput('proceed', 'false');
+
+  ai-pr-review:
+    needs: review-guard
+    if: >-
+      !cancelled() && needs.review-guard.outputs.proceed != 'false' && github.event.sender.type != 'Bot' &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.author_association == 'OWNER' && !github.event.pull_request.draft) ||
+       (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+        startsWith(github.event.comment.body, '/review')))
+    uses: TshyGO/ci-central/.github/workflows/pr-review.yml@23b55c5e0cdf96b5a6e5a2be22cef889acfcfa06
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    with:
+      central_workflow_sha: 23b55c5e0cdf96b5a6e5a2be22cef889acfcfa06
+    secrets:
+      PR_AGENT_LANE_A_KEY: ${{ secrets.PR_AGENT_LANE_A_KEY }}
+      PR_AGENT_LANE_A_API_BASE: ${{ secrets.PR_AGENT_LANE_A_API_BASE }}
+      PR_AGENT_LANE_B_KEY: ${{ secrets.PR_AGENT_LANE_B_KEY }}
+      PR_AGENT_LANE_B_API_BASE: ${{ secrets.PR_AGENT_LANE_B_API_BASE }}
+      PR_AGENT_LANE_C_KEY: ${{ secrets.PR_AGENT_LANE_C_KEY }}
+      PR_AGENT_LANE_C_API_BASE: ${{ secrets.PR_AGENT_LANE_C_API_BASE }}
