@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod evidence_commands;
+mod backup_commands;
 mod restore;
 mod todo_commands;
 #[cfg(test)]
@@ -370,6 +371,80 @@ fn open_evidence_cmd(
             code: "OPEN_FAILED".into(),
             message: err.to_string(),
         })
+}
+
+/// D12 要用到的那几个路径。从 HostPaths 里取，取不到就说清楚而不是猜一个。
+fn restore_paths(state: &AppState) -> Result<restore::RestorePaths, CommandError> {
+    let guard = state.paths.lock().map_err(|e| CommandError {
+        code: "STORE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    let paths = guard.as_ref().ok_or_else(|| CommandError {
+        code: "NO_DATA_DIR".into(),
+        message: "还没有定位到用户数据目录。".into(),
+    })?;
+    Ok(restore::RestorePaths {
+        data_root: paths.data_root.clone(),
+        archive_dir: paths.archive_dir.clone(),
+        current_pointer: paths.current_pointer.clone(),
+        archives_retired_dir: paths.archives_retired_dir.clone(),
+        settings_file: paths.settings_file.clone(),
+    })
+}
+
+#[tauri::command]
+fn export_archive_cmd(
+    state: State<AppState>,
+    destination: String,
+) -> Result<backup_commands::ExportReport, CommandError> {
+    let paths = restore_paths(&state)?;
+    let now = time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+    with_store(&state, |store| {
+        backup_commands::export(store, &paths, std::path::Path::new(&destination), &now)
+    })
+}
+
+#[tauri::command]
+fn preview_restore_cmd(
+    state: State<AppState>,
+    package: String,
+) -> Result<backup_commands::RestorePreview, CommandError> {
+    let paths = restore_paths(&state)?;
+    with_store(&state, |store| {
+        backup_commands::preview(store, &paths, std::path::Path::new(&package))
+    })
+}
+
+#[tauri::command]
+fn restore_archive_cmd(
+    state: State<AppState>,
+    package: String,
+) -> Result<restore::RestoreReport, CommandError> {
+    let paths = restore_paths(&state)?;
+    let slot = backup_commands::StoreSlot { slot: &state.store };
+    backup_commands::restore(
+        &slot,
+        &paths,
+        std::path::Path::new(&package),
+        &time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+fn list_rollback_points_cmd(
+    state: State<AppState>,
+) -> Result<Vec<restore::RollbackPoint>, CommandError> {
+    backup_commands::rollback_points(&restore_paths(&state)?)
+}
+
+#[tauri::command]
+fn rollback_to_cmd(
+    state: State<AppState>,
+    id: String,
+) -> Result<restore::RestoreReport, CommandError> {
+    let paths = restore_paths(&state)?;
+    let slot = backup_commands::StoreSlot { slot: &state.store };
+    backup_commands::rollback(&slot, &paths, &id, &time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -864,6 +939,11 @@ pub fn run() {
             list_todos_cmd,
             overdue_digest_cmd,
             reminder_capability_cmd,
+            export_archive_cmd,
+            preview_restore_cmd,
+            restore_archive_cmd,
+            list_rollback_points_cmd,
+            rollback_to_cmd,
             update_application_cmd,
             add_note_cmd,
             confirm_submit_cmd,
