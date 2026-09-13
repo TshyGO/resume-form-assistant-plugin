@@ -8,6 +8,7 @@
 //    有一句自己的话，不能用一句「已设置提醒」糊过去。
 
 import type { ReminderCapability, TodoStatus, TodoView } from "./api.ts";
+import { formatInZone } from "./zoned.ts";
 
 export interface Message {
   tone: "info" | "success" | "warn" | "pending";
@@ -99,16 +100,10 @@ export function groupTodos(todos: TodoView[], now: Date): Array<{ bucket: Bucket
  */
 export function describeDue(todo: TodoView): string {
   if (todo.duePrecision === "datetime" && todo.dueAtUtc) {
-    const at = new Date(todo.dueAtUtc);
-    if (Number.isNaN(at.getTime())) return "到期时间读不出来";
-    const shown = at.toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
+    // 按**待办自己的**时区显示。拿本机时区格式化再把时区名拼在后面，机器在纽约、
+    // 待办标着上海时显示的是纽约的钟点却写着 Asia/Shanghai——那不是不准，是说谎。
+    const shown = formatInZone(todo.dueAtUtc, todo.timeZone);
+    if (!shown) return "到期时间读不出来";
     return todo.timeZone ? `${shown}（${todo.timeZone}）` : shown;
   }
   if (todo.duePrecision === "date" && todo.dueDate) {
@@ -129,16 +124,8 @@ export function describeReminder(todo: TodoView, capability: ReminderCapability)
     return { tone: "info", text: "已结束，不会再提醒" };
   }
   if (todo.reminderState === "scheduled" && todo.reminderScheduledForUtc) {
-    const at = new Date(todo.reminderScheduledForUtc);
-    const shown = Number.isNaN(at.getTime())
-      ? todo.reminderScheduledForUtc
-      : at.toLocaleString("zh-CN", {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        });
+    const shown =
+      formatInZone(todo.reminderScheduledForUtc, todo.timeZone) ?? todo.reminderScheduledForUtc;
     return { tone: "success", text: `将在 ${shown} 提醒` };
   }
   if (todo.reminderState === "fired") {
@@ -210,3 +197,21 @@ export function describeCapability(capability: ReminderCapability): Message {
 /** Windows 计划通知的投递窗口。不写清楚就等于承诺「一定送到」。 */
 export const DELIVERY_WINDOW_NOTE =
   "系统的定时通知有几分钟的投递窗口；关机时间较长时这条提醒可能不会送达，下次打开应用会补一次汇总。";
+
+/**
+ * 产品需求 §5.4 列的五种状态，一处说清楚。
+ *
+ * 这张表是设置页照着渲染的。之所以要五条而不是一句「已开启提醒」，是因为
+ * 「关窗」和「退出」在用户眼里差不多，实际结果完全相反 —— 前者照响，后者不响。
+ */
+export const LIFECYCLE_STATES: Array<{ when: string; what: string }> = [
+  { when: "关闭窗口", what: "照常提醒。窗口只是隐藏到托盘，计划已经交给系统了。" },
+  { when: "点「退出应用」", what: "不再提醒。退出时会撤销所有还没到点的提醒。" },
+  { when: "没给系统通知权限", what: "不弹提醒。待办列表和逾期汇总照常可用。" },
+  { when: "休眠 / 重启 / 关机", what: "由系统决定。错过的会在下次打开应用时汇总一次，不会连着补弹。" },
+  { when: "电脑一直开着", what: "到点由系统发出，应用没在跑也不影响。" },
+];
+
+/** 退出前必须说的那句话。托盘和设置页两个入口都用它。 */
+export const QUIT_WARNING =
+  "退出后不会弹出提醒 —— 还没到点的提醒会被撤销，待办本身都还在。确定退出？";

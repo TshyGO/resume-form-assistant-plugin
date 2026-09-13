@@ -14,6 +14,7 @@ import type {
   TodoWriteResult,
 } from "./api.ts";
 import { input, must, select as selectEl, valueOf } from "./dom.ts";
+import { localInputToUtc, utcToLocalInput } from "./zoned.ts";
 import type { Message } from "./todos.ts";
 import {
   BUCKET_LABEL,
@@ -56,6 +57,8 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
 
   let capability: ReminderCapability = { available: false, reason: null };
   let editing: string | null = null;
+  /// 双击提交会建出两条待办、登记两条提醒。一次只让一个请求在飞。
+  let saving = false;
 
   function say(message: Message | null) {
     if (!message) {
@@ -138,7 +141,11 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
 
   async function loadApplications() {
     try {
-      const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", {});
+      // 命令签名是 `args: ListApplicationsArgs`，Tauri 按参数名取值——直接传 {}
+      // 在真的桌面端会失败，申请下拉是空的，于是新建待办必然报「缺 applicationId」。
+      const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", {
+        args: { limit: 200, offset: 0 },
+      });
       applicationSelect.innerHTML = page.items
         .map(
           (app) =>
@@ -167,17 +174,18 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
 
   function argsFromForm() {
     const precision = precisionSelect.value;
+    const zone = valueOf("todo-timezone").trim() || null;
     return {
       title: valueOf("todo-title").trim(),
       duePrecision: precision,
       dueDate: precision === "date" ? valueOf("todo-date") : null,
-      // datetime-local 给的是当地墙钟，转成 UTC 再交给命令层。
+      // datetime-local 只是一串墙钟文字，没有时区。它属于**这条待办的时区**
+      // （没填就按本机），不是无条件按本机解释——否则给上海的面试在纽约的机器上
+      // 会存成差 12 小时的时刻。
       dueAtUtc:
-        precision === "datetime" && valueOf("todo-datetime")
-          ? new Date(valueOf("todo-datetime")).toISOString()
-          : null,
-      timeZone: valueOf("todo-timezone").trim() || null,
-      remindAtUtc: valueOf("todo-remind") ? new Date(valueOf("todo-remind")).toISOString() : null,
+        precision === "datetime" ? localInputToUtc(valueOf("todo-datetime"), zone) : null,
+      timeZone: zone,
+      remindAtUtc: localInputToUtc(valueOf("todo-remind"), zone),
       interviewRound: Number(valueOf("todo-round")) || null,
     };
   }
@@ -191,12 +199,18 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (saving) return;
     const args = argsFromForm();
     if (!args.title) {
       say({ tone: "warn", text: "待办要有一个标题。" });
       return;
     }
+    saving = true;
+    const submit = must<HTMLButtonElement>("todo-submit");
+    submit.disabled = true;
     try {
+      // 编辑时每个可选字段都显式发出去：命令层把「没给」当成「别动」，
+      // 只有显式的 null 才是「清空」。否则用户删掉提醒时刻会被悄悄保留。
       const result = editing
         ? await invoke<TodoWriteResult>("edit_todo_cmd", { args: { id: editing, ...args } })
         : await invoke<TodoWriteResult>("create_todo_cmd", {
@@ -207,6 +221,9 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
       await refresh();
     } catch (error) {
       say({ tone: "warn", text: `保存失败：${invokeError(error)}` });
+    } finally {
+      saving = false;
+      submit.disabled = false;
     }
   });
 
@@ -224,8 +241,14 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
       input("todo-title").value = todo.title;
       precisionSelect.value = todo.duePrecision;
       dateInput.value = todo.dueDate ?? "";
-      datetimeInput.value = todo.dueAtUtc ? new Date(todo.dueAtUtc).toISOString().slice(0, 16) : "";
+      // 存的是 UTC，控件要的是墙钟。直接把 ISO 串切前 16 位塞进去，保存时又被
+      // 按本机重新解释一遍，到期时间会平移一个时区偏移。
+      datetimeInput.value = todo.dueAtUtc ? utcToLocalInput(todo.dueAtUtc, todo.timeZone) : "";
       input("todo-timezone").value = todo.timeZone ?? "";
+      // 提醒时刻也要回填，否则用户看不到现在设的是几点，一保存还会被当成「清空」。
+      input("todo-remind").value = todo.remindAtUtc
+        ? utcToLocalInput(todo.remindAtUtc, todo.timeZone)
+        : "";
       input("todo-round").value = todo.interviewRound ? String(todo.interviewRound) : "";
       syncPrecision();
       must("todo-submit").textContent = "保存修改";

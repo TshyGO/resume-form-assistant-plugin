@@ -191,6 +191,25 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-
   overflow: auto;
 }
 
+#settings-lifecycle {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#settings-lifecycle th {
+  width: 10em;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 600;
+  padding: 4px 12px 4px 0;
+  white-space: nowrap;
+}
+
+#settings-lifecycle td {
+  vertical-align: top;
+  padding: 4px 0;
+}
+
 .todo {
   border: 1px solid var(--line);
   border-radius: 8px;
