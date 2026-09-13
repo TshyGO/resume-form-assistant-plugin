@@ -13,6 +13,11 @@ pub mod plan;
 mod unsupported;
 pub use unsupported::Unsupported;
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::WindowsToasts;
+
 pub use plan::{fire_at, is_past, to_storage, Due, FireAt, PlanError};
 
 /// 要提醒的内容。
@@ -137,7 +142,14 @@ pub trait ReminderScheduler: Send + Sync {
 /// 平台实现在后续 PR 里填（Windows 计划 Toast、macOS 日历触发）。在那之前，
 /// 以及在没有实现的平台上，返回的是会如实说明原因的 [`Unsupported`]。
 pub fn scheduler() -> Box<dyn ReminderScheduler> {
-    Box::new(Unsupported::new(
-        "这个系统上还没有接入定时通知，待办和逾期汇总照常可用。",
-    ))
+    #[cfg(windows)]
+    {
+        Box::new(WindowsToasts::new())
+    }
+    #[cfg(not(windows))]
+    {
+        Box::new(Unsupported::new(
+            "这个系统上还没有接入定时通知，待办和逾期汇总照常可用。",
+        ))
+    }
 }
