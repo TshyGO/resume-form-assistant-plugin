@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod evidence_commands;
 mod backup_commands;
+mod recycle_commands;
 mod restore;
 mod todo_commands;
 #[cfg(test)]
@@ -445,6 +446,58 @@ fn rollback_to_cmd(
     let paths = restore_paths(&state)?;
     let slot = backup_commands::StoreSlot { slot: &state.store };
     backup_commands::rollback(&slot, &paths, &id, &time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default())
+}
+
+#[tauri::command]
+fn list_recycled_cmd(
+    state: State<AppState>,
+) -> Result<Vec<archive_store::ApplicationSummary>, CommandError> {
+    with_store(&state, recycle_commands::list_recycled)
+}
+
+#[tauri::command]
+fn set_recycled_cmd(
+    state: State<AppState>,
+    id: String,
+    recycled: bool,
+) -> Result<(), CommandError> {
+    with_store(&state, |store| {
+        recycle_commands::set_recycled(store, &id, recycled)
+    })
+}
+
+#[tauri::command]
+fn purge_preview_cmd(
+    state: State<AppState>,
+    id: String,
+) -> Result<recycle_commands::PurgePreview, CommandError> {
+    with_store(&state, |store| recycle_commands::purge_preview(store, &id))
+}
+
+#[tauri::command]
+fn purge_application_cmd(
+    state: State<AppState>,
+    id: String,
+) -> Result<recycle_commands::PurgeResult, CommandError> {
+    let archive_dir = restore_paths(&state)?.archive_dir;
+    with_store(&state, |store| {
+        recycle_commands::purge(store, &archive_dir, &id)
+    })
+}
+
+#[tauri::command]
+fn orphan_report_cmd(
+    state: State<AppState>,
+) -> Result<recycle_commands::OrphanReport, CommandError> {
+    with_store(&state, recycle_commands::orphan_report)
+}
+
+#[tauri::command]
+fn remove_orphan_cmd(state: State<AppState>, sha256: String) -> Result<(), CommandError> {
+    let archive_dir = restore_paths(&state)?.archive_dir;
+    with_store(&state, |store| {
+        recycle_commands::remove_orphan(store, &archive_dir, &sha256)
+    })
 }
 
 #[tauri::command]
@@ -944,6 +997,12 @@ pub fn run() {
             restore_archive_cmd,
             list_rollback_points_cmd,
             rollback_to_cmd,
+            list_recycled_cmd,
+            set_recycled_cmd,
+            purge_preview_cmd,
+            purge_application_cmd,
+            orphan_report_cmd,
+            remove_orphan_cmd,
             update_application_cmd,
             add_note_cmd,
             confirm_submit_cmd,
