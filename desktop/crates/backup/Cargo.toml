@@ -1,0 +1,17 @@
+[package]
+name = "backup"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Resume Pro D12 archive backup format: manifest, content hashes, atomic publish, and validated extraction. It moves bytes; it does not touch the database or know what an application is."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
