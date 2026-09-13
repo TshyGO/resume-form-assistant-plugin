@@ -541,14 +541,24 @@ fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn quit_app(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    // 主动退出默认撤销尚未触发的提醒：进程走了就别留下会替它说话的东西。
+    // 界面在按下退出之前已经告知过这一点（PR6 的文案）。
+    let cancelled = todo_commands::cancel_all_reminders(state.reminders.as_ref());
     if let Ok(paths) = state.paths.lock() {
         if let Some(paths) = paths.as_ref() {
             let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "explicit")]);
+            // 撤销失败就意味着我们刚跟用户说的「退出后不会弹提醒」不成立。
+            // 拦不住退出，但至少要在诊断里留下痕迹，别让它无声无息。
+            if let Err(error) = &cancelled {
+                let _ = write_log(
+                    paths,
+                    "error",
+                    "REMINDER_CANCEL_FAILED",
+                    &[("at", "quit"), ("code", &error.code)],
+                );
+            }
         }
     }
-    // 主动退出默认撤销尚未触发的提醒：进程走了就别留下会替它说话的东西。
-    // 界面在按下退出之前已经告知过这一点（PR6 的文案）。
-    let _ = todo_commands::cancel_all_reminders(state.reminders.as_ref());
     app.exit(0);
     Ok(())
 }
@@ -915,7 +925,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         }
                     }
                     // 和设置页那个退出走同一条路：撤销所有还没到点的提醒。
-                    let _ = todo_commands::cancel_all_reminders(state.reminders.as_ref());
+                    if let Err(error) = todo_commands::cancel_all_reminders(state.reminders.as_ref())
+                    {
+                        if let Ok(paths) = state.paths.lock() {
+                            if let Some(paths) = paths.as_ref() {
+                                let _ = write_log(
+                                    paths,
+                                    "error",
+                                    "REMINDER_CANCEL_FAILED",
+                                    &[("at", "tray"), ("code", &error.code)],
+                                );
+                            }
+                        }
+                    }
                 }
                 app.exit(0);
             }
