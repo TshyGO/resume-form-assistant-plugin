@@ -210,6 +210,30 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-
   padding: 4px 0;
 }
 
+ul.plain {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+ul.plain li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
 .todo {
   border: 1px solid var(--line);
   border-radius: 8px;

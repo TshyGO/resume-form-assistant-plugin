@@ -13,6 +13,10 @@ declare global {
           directory?: boolean;
           filters?: Array<{ name: string; extensions: string[] }>;
         }) => Promise<string | string[] | null>;
+        save?: (options: {
+          defaultPath?: string;
+          filters?: Array<{ name: string; extensions: string[] }>;
+        }) => Promise<string | null>;
       };
       event?: {
         listen?: (

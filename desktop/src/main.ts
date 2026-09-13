@@ -4,6 +4,7 @@ import { createPairingController } from "./pairing-form.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
+import { mountBackup } from "./backup-ui.ts";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -38,6 +39,7 @@ document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) 
     showRoute(btn.dataset.route);
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
+    if (btn.dataset.route === "settings") void showBackup().catch(() => {});
   });
 });
 
@@ -227,6 +229,24 @@ const inbox = mountInbox(command, {
 });
 
 const showTodos = mountTodos(command);
+
+// 备份与恢复要用原生文件对话框。浏览器里跑（没有 Tauri）时两个都是 null，
+// 界面会如实说「请在桌面程序里导出」，而不是给一个点了没反应的按钮。
+const showBackup = mountBackup(command, {
+  save: dialog?.save
+    ? async (suggested: string) => (await dialog.save?.({ defaultPath: suggested })) ?? null
+    : null,
+  open: dialog?.open
+    ? async () => {
+        const chosen = await dialog.open?.({
+          multiple: false,
+          filters: [{ name: "Resume Pro 备份", extensions: ["zip"] }],
+        });
+        if (!chosen) return null;
+        return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
+      }
+    : null,
+});
 void renderReminderSettings().catch(() => {});
 
 showRoute("applications");
