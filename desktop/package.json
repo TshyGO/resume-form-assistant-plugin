@@ -14,7 +14,7 @@
     "test:store": "cargo test --manifest-path crates/archive-store/Cargo.toml --locked",
     "test:app": "cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib",
     "test:frontend": "vite build",
-    "test:ui": "node --test --experimental-strip-types src/pairing-form.test.ts src/applications.test.ts src/applications-ui.test.ts src/inbox.test.ts src/inbox-ui.test.ts",
+    "test:ui": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "test:nm-register": "node --test scripts/nm-dev-register.test.js",
     "nm:register": "node scripts/nm-dev-register.mjs register",
     "nm:unregister": "node scripts/nm-dev-register.mjs unregister",
