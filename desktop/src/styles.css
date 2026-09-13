@@ -191,6 +191,33 @@ dialog { border: 1px solid var(--line); border-radius: 12px; padding: 20px; max-
   overflow: auto;
 }
 
+.todo {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.todo .due {
+  margin: 6px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  margin: 18px 0 6px;
+}
+
 .inbox-split {
   display: grid;
   grid-template-columns: minmax(220px, 320px) 1fr;

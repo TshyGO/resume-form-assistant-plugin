@@ -160,10 +160,54 @@
 
         <section id="view-todos" class="view hidden">
           <h1>待办</h1>
-          <div class="empty">
-            <p>没有待办。</p>
-            <p class="muted">提醒与系统通知尚未实现（D10）。关闭窗口不会登记通知，也不要把托盘驻留理解成提醒已可用。</p>
-          </div>
+
+          <p id="todo-reminder-note" class="note"></p>
+          <p id="todo-digest" class="note" hidden></p>
+
+          <form id="todo-form" class="stack">
+            <label>做什么
+              <input id="todo-title" name="title" autocomplete="off" required />
+            </label>
+            <label>属于哪条申请
+              <select id="todo-application" name="applicationId"></select>
+            </label>
+            <div class="row">
+              <label>什么时候
+                <select id="todo-precision" name="duePrecision">
+                  <option value="none">没有到期</option>
+                  <option value="date">只有日期</option>
+                  <option value="datetime">具体到几点</option>
+                </select>
+              </label>
+              <input id="todo-date" name="dueDate" type="date" hidden />
+              <input id="todo-datetime" name="dueAtUtc" type="datetime-local" hidden />
+            </div>
+            <div class="row">
+              <label>时区
+                <input id="todo-timezone" name="timeZone" placeholder="Asia/Shanghai" autocomplete="off" />
+              </label>
+              <label>提醒时刻（留空则按到期）
+                <input id="todo-remind" name="remindAtUtc" type="datetime-local" />
+              </label>
+              <label>面试第几轮
+                <input id="todo-round" name="interviewRound" type="number" min="1" />
+              </label>
+            </div>
+            <div class="row">
+              <button id="todo-submit" type="submit">添加待办</button>
+              <label>只看
+                <select id="todo-filter">
+                  <option value="open">未完成</option>
+                  <option value="all">全部</option>
+                  <option value="done">已完成</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </label>
+            </div>
+            <p id="todo-status" class="note"></p>
+          </form>
+
+          <div id="todo-list"></div>
         </section>
 
         <section id="view-settings" class="view hidden">
