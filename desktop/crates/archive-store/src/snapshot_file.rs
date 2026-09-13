@@ -15,7 +15,7 @@ const SNAPSHOT_FORMAT: &str = "resume-pro.snapshot";
 
 /// `snapshots/<snapshotId>.json`. The id arrives as a protocol UUID; anything else is refused
 /// rather than escaped, so a hostile id can never name a path.
-pub(crate) fn rel_path_for(snapshot_id: &str) -> Result<String, StoreError> {
+pub fn rel_path_for(snapshot_id: &str) -> Result<String, StoreError> {
     if snapshot_id.is_empty()
         || snapshot_id.len() > 64
         || !snapshot_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')

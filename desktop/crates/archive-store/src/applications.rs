@@ -75,6 +75,14 @@ pub struct ApplicationCandidate {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ApplicationCounts {
+    pub events: i64,
+    pub todos: i64,
+    pub evidence: i64,
+    pub snapshots: i64,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PurgeReport {
     pub application_id: String,
     pub events_removed: usize,
@@ -536,6 +544,24 @@ impl StoreTx<'_> {
     /// 永久删除(二次确认在 UI 层):删除申请及其时间线/待办/证据/快照行,
     /// 在同一事务保留最小幂等墓碑(消息身份 + 摘要 + purged 标记),
     /// 旧请求重试得到 previously_purged,不得复活数据(隐私 §5、§8.11)。
+    /// 一条申请名下各类记录的条数。
+    ///
+    /// 用 `COUNT(*)`，不是把列表拉出来数长度——列表都带 limit，超过就悄悄少算，
+    /// 而这个数字是给用户看「永久删除会连带删掉什么」的，少算等于骗人。
+    pub fn application_counts(&self, id: &str) -> Result<ApplicationCounts, StoreError> {
+        let one = |sql: &str| -> Result<i64, StoreError> {
+            self.conn()
+                .query_row(sql, params![id], |r| r.get::<_, i64>(0))
+                .map_err(StoreError::from)
+        };
+        Ok(ApplicationCounts {
+            events: one("SELECT COUNT(*) FROM events WHERE application_id = ?1")?,
+            todos: one("SELECT COUNT(*) FROM todos WHERE application_id = ?1")?,
+            evidence: one("SELECT COUNT(*) FROM reply_evidence WHERE application_id = ?1")?,
+            snapshots: one("SELECT COUNT(*) FROM resume_snapshots WHERE application_id = ?1")?,
+        })
+    }
+
     pub fn purge_application(&mut self, id: &str) -> Result<PurgeReport, StoreError> {
         let _app = self
             .get_application(id)?

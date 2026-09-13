@@ -24,6 +24,8 @@ pub mod plugin;
 pub mod receipts;
 pub mod schema;
 mod snapshot_file;
+/// 快照文件在档案目录里的相对路径。D12 永久删除时要按它去删文件。
+pub use snapshot_file::rel_path_for as snapshot_rel_path;
 pub mod stage;
 pub mod store;
 pub mod suggestions;
