@@ -18,6 +18,11 @@ mod windows;
 #[cfg(windows)]
 pub use windows::WindowsToasts;
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::MacCalendarNotifications;
+
 pub use plan::{fire_at, is_past, to_storage, Due, FireAt, PlanError};
 
 /// 要提醒的内容。
@@ -146,7 +151,11 @@ pub fn scheduler() -> Box<dyn ReminderScheduler> {
     {
         Box::new(WindowsToasts::new())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(MacCalendarNotifications::new())
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Box::new(Unsupported::new(
             "这个系统上还没有接入定时通知，待办和逾期汇总照常可用。",
