@@ -159,6 +159,21 @@ WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁�
 
 **MVP 备份不加密。** 导出 UI 必须警告：文件含简历与邮件等 PII，应放在用户自己控制的位置。不得在发布说明或界面宣传「已加密」。若未来要加密，另开 issue，不在 D12 悄悄加上。
 
+#### 6.3.1 备份包含项与排除项（D12 落实）
+
+权威清单在 `desktop/crates/backup/src/exclude.rs`，并且有守卫：档案目录里出现清单没覆盖的东西，它**既不进包也不被无声忽略**，而是记进导出报告让用户看见。手写清单不带守卫必然会漏。
+
+| 进包 | 不进包 |
+| --- | --- |
+| 数据库的一致性快照（SQLite backup API，不是正在被写的 `archive.db`） | `archive.db` / `-wal` / `-shm` |
+| `meta.json`（含 archiveId，不含 restoreEpoch） | `current.json`（机器本地指针与当前 epoch） |
+| `attachments/`、`snapshots/` | `tmp/`、`backups/`、`logs/`、WebView 缓存 |
+| `settings.json` 里**白名单内**的键（目前只有配对草稿的扩展 ID） | API Key、认证缓存、机器专属 native-host 路径 |
+
+恢复到新目录后新铸 `restoreEpoch`；同一个备份恢复两次得到两个不同的 epoch。恢复后 `todos` 的提醒记账（`reminder_state` / `reminder_handle` / `reminder_scheduled_for_utc`）清零并重新登记——那些句柄指向的是原来那台机器上的 OS 计划；`overdue_ack_at` 保留。
+
+**卸载不得删除用户数据目录或用户导出的备份文件**（安装器在 D13 落实）。
+
 ### 6.4 写入与失败
 
 写到临时目录，校验哈希后原子改名发布。失败不得覆盖已有有效备份。磁盘满：保留原档案 + 至少一个旧有效备份。

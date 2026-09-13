@@ -179,6 +179,77 @@ export interface OverdueDigest {
   more: number;
 }
 
+/** 各类记录的条数。备份清单与恢复预览都用它。 */
+export interface ArchiveCounts {
+  applications: number;
+  events: number;
+  snapshots: number;
+  todos: number;
+  evidence: number;
+  attachments: number;
+}
+
+export interface ExportReport {
+  path: string;
+  sizeBytes: number;
+  /** 档案目录里没进包的东西，含「清单没覆盖」的那些。 */
+  skipped: string[];
+}
+
+export interface RestorePreview {
+  createdAt: string;
+  archiveId: string;
+  schemaVersion: number;
+  incoming: ArchiveCounts;
+  current: ArchiveCounts;
+  existingRollbackPoints: number;
+  tooManyRollbackPoints: boolean;
+  /** 备份是不是这台机器上这份档案的历史版本。不是的话用户可能拿错了文件。 */
+  sameArchive: boolean;
+}
+
+export interface RestoreReport {
+  archiveDir: string;
+  restoreEpoch: string;
+  rollbackPoint: string;
+  /** 清掉了多少条待办的提醒记账；它们需要重新登记。 */
+  remindersCleared: number;
+  counts: ArchiveCounts;
+}
+
+export interface RollbackPoint {
+  id: string;
+  retiredAt: string;
+}
+
+export interface PurgePreview {
+  applicationId: string;
+  company: string;
+  title: string;
+  events: number;
+  todos: number;
+  evidence: number;
+  snapshots: number;
+}
+
+export interface PurgeResult {
+  applicationId: string;
+  eventsRemoved: number;
+  todosRemoved: number;
+  evidenceRemoved: number;
+  snapshotsRemoved: number;
+  attachmentFilesRemoved: number;
+  attachmentFilesLeft: string[];
+}
+
+export interface OrphanReport {
+  totalBlobs: number;
+  totalEvidence: number;
+  zeroRefBlobs: string[];
+  danglingEvidence: string[];
+  invalidFiles: string[];
+}
+
 export interface ApplicationView {
   application: ApplicationSummary & { summary?: ApplicationSummary; notes?: string | null };
   events: StoredEvent[];

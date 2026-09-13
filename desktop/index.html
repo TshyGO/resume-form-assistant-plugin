@@ -229,6 +229,34 @@
             <p id="pairing-msg" class="muted"></p>
           </form>
 
+          <h2>备份与恢复</h2>
+          <p id="backup-export-note" class="muted"></p>
+          <div class="row">
+            <button type="button" id="backup-export">导出备份</button>
+            <button type="button" id="backup-choose-restore">从备份恢复…</button>
+          </div>
+          <p id="backup-restore-note" class="muted"></p>
+          <p id="backup-status" class="note"></p>
+
+          <div id="backup-preview" class="panel" hidden>
+            <div id="backup-preview-text"></div>
+            <div class="row">
+              <button type="button" id="backup-confirm-restore" class="danger">确认恢复</button>
+              <button type="button" id="backup-cancel-restore">取消</button>
+            </div>
+          </div>
+
+          <h3>回滚点</h3>
+          <ul id="backup-rollback-list" class="plain"></ul>
+
+          <h3>回收站</h3>
+          <ul id="recycle-list" class="plain"></ul>
+
+          <h3>孤立附件</h3>
+          <p class="muted">检查有没有不再被任何证据引用的附件。只报告，删除要逐项确认。</p>
+          <div class="row"><button type="button" id="orphan-check">检查</button></div>
+          <div id="orphan-report"></div>
+
           <h2>提醒</h2>
           <p id="settings-reminder" class="note"></p>
           <p class="muted" id="settings-reminder-window"></p>
