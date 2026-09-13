@@ -16,12 +16,9 @@ desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
-desktop/crates/data-service/target/
-desktop/crates/archive-store/target/
-desktop/crates/local-ipc/target/
-desktop/crates/evidence-import/target/
-desktop/crates/nm-frame/target/
-desktop/crates/protocol/target/
+# 每个 crate 一个独立的 target/。用通配写法，加新 crate 时不会再漏一个进去
+# ——reminders 就是这么被提交上去的（#84，194 MB）。
+desktop/crates/*/target/
 __pycache__/
 .tmp-d04-ui/
 .tmp-d04-cache/
