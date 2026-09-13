@@ -156,6 +156,28 @@ impl ArchiveStore {
         self.transaction(|tx| tx.cancel_todo(id))
     }
 
+    pub fn reopen_todo(&self, id: &str) -> Result<Todo, StoreError> {
+        self.transaction(|tx| tx.reopen_todo(id))
+    }
+
+    pub fn set_todo_reminder(
+        &self,
+        id: &str,
+        state: ReminderState,
+        scheduled_for_utc: Option<&str>,
+        handle: Option<&str>,
+    ) -> Result<Todo, StoreError> {
+        self.transaction(|tx| tx.set_todo_reminder(id, state, scheduled_for_utc, handle))
+    }
+
+    pub fn ack_overdue(&self, ids: &[String], now: &str) -> Result<usize, StoreError> {
+        self.transaction(|tx| tx.ack_overdue(ids, now))
+    }
+
+    pub fn overdue_unacked(&self, now_utc_str: &str, limit: u32) -> Result<Vec<Todo>, StoreError> {
+        self.transaction(|tx| tx.overdue_unacked(now_utc_str, limit))
+    }
+
     pub fn list_todos(
         &self,
         application_id: Option<&str>,

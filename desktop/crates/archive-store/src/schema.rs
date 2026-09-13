@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -240,6 +240,19 @@ CREATE TABLE snapshot_chunk_bytes (
 );
 "#;
 
+/// D10: 提醒的登记与送达是本机投递状态，不是申请历史，所以记在 todos 行上而不是事件里。
+/// `reminder_handle` 存 OS 侧的句柄（Windows 的 tag/group、macOS 的 request identifier），
+/// 没有它就撤不掉改期前登记的旧计划。`overdue_ack_at` 让逾期汇总只报一次，不会每次打开
+/// 都把同一批旧待办重报一遍。
+pub const V3_TODO_REMINDER_BOOKKEEPING: &str = r#"
+ALTER TABLE todos ADD COLUMN reminder_scheduled_for_utc TEXT;
+ALTER TABLE todos ADD COLUMN reminder_handle TEXT;
+ALTER TABLE todos ADD COLUMN reminder_state TEXT NOT NULL DEFAULT 'none'
+  CHECK (reminder_state IN ('none','scheduled','fired','missed','unsupported'));
+ALTER TABLE todos ADD COLUMN overdue_ack_at TEXT;
+CREATE INDEX idx_todos_due ON todos(due_at_utc, due_date);
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -250,5 +263,10 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 2,
         description: "snapshot chunk bytes staged with their receipts until the snapshot file is committed",
         sql: V2_SNAPSHOT_CHUNK_BYTES,
+    },
+    Migration {
+        to_version: 3,
+        description: "todo reminder bookkeeping: scheduled instant, OS handle, delivery state, overdue digest ack",
+        sql: V3_TODO_REMINDER_BOOKKEEPING,
     },
 ];

@@ -761,6 +761,278 @@ fn event_secrets_and_reserved_custom_events_are_rejected() {
     assert_eq!(db.list_events(&a.id).unwrap().len(), 1);
 }
 
+// --- D10 PR1: 重开、按到期排序、date 精度也算到期、提醒记账 -----------------------------
+
+fn todo_of(db: &ArchiveStore, app: &str, title: &str, due: TodoDue) -> Todo {
+    db.create_todo(NewTodo {
+        application_id: app.to_string(),
+        title: title.into(),
+        due,
+        time_zone: None,
+        remind_at_utc: None,
+        interview_round: None,
+        source_event_id: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_finished_todo_can_be_reopened_and_says_so_in_the_timeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let todo = todo_of(&db, &a.id, "测评", TodoDue::Date("2026-09-20".into()));
+
+    db.complete_todo(&todo.id).unwrap();
+    let reopened = db.reopen_todo(&todo.id).unwrap();
+    assert_eq!(reopened.status, TodoStatus::Open);
+
+    // 幂等：已经是 open 就不再追加一条事件。
+    let before = db.list_events(&a.id).unwrap().len();
+    db.reopen_todo(&todo.id).unwrap();
+    assert_eq!(db.list_events(&a.id).unwrap().len(), before);
+
+    let kinds: Vec<String> = db
+        .list_events(&a.id)
+        .unwrap()
+        .iter()
+        .map(|e| e.event_type.clone())
+        .collect();
+    assert!(kinds.contains(&"todo_completed".to_string()));
+    assert!(
+        kinds.contains(&"todo_reopened".to_string()),
+        "重开要留痕，否则时间线上看不出这条待办为什么又活了：{kinds:?}"
+    );
+
+    // 取消的也能重开。
+    db.cancel_todo(&todo.id).unwrap();
+    assert_eq!(db.reopen_todo(&todo.id).unwrap().status, TodoStatus::Open);
+}
+
+#[test]
+fn a_date_only_todo_still_counts_as_due() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let past_date = todo_of(&db, &a.id, "上周截止的测评", TodoDue::Date("2026-09-01".into()));
+    let past_instant = todo_of(
+        &db,
+        &a.id,
+        "上周的面试",
+        TodoDue::DateTime("2026-09-02T01:00:00.000Z".into()),
+    );
+    let future = todo_of(&db, &a.id, "下个月", TodoDue::Date("2026-10-30".into()));
+    let no_due = todo_of(&db, &a.id, "有空再说", TodoDue::None);
+
+    let due = db
+        .list_todos(None, None, Some("2026-09-13T00:00:00.000Z"), 100, 0)
+        .unwrap();
+    let ids: Vec<&str> = due.iter().map(|t| t.id.as_str()).collect();
+
+    assert!(
+        ids.contains(&past_date.id.as_str()),
+        "只有日历日的待办也必须算到期，否则「周五截止」这类整类漏掉"
+    );
+    assert!(ids.contains(&past_instant.id.as_str()));
+    assert!(!ids.contains(&future.id.as_str()));
+    assert!(!ids.contains(&no_due.id.as_str()), "没有到期就谈不上到期");
+}
+
+#[test]
+fn the_list_is_ordered_by_when_it_is_due_not_by_when_it_was_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+
+    // 故意反着建：最后建的最早到期。
+    let no_due = todo_of(&db, &a.id, "无到期", TodoDue::None);
+    let late = todo_of(&db, &a.id, "十月", TodoDue::Date("2026-10-01".into()));
+    let early = todo_of(
+        &db,
+        &a.id,
+        "九月十四早上",
+        TodoDue::DateTime("2026-09-14T01:00:00.000Z".into()),
+    );
+
+    let titles: Vec<String> = db
+        .list_todos(None, None, None, 100, 0)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+
+    assert_eq!(
+        titles,
+        vec![early.id, late.id, no_due.id],
+        "按什么时候要做排，没有到期的排最后"
+    );
+}
+
+#[test]
+fn the_overdue_digest_reports_a_todo_once_and_then_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let overdue = todo_of(&db, &a.id, "早就该做了", TodoDue::Date("2026-09-01".into()));
+    let done = todo_of(&db, &a.id, "已经做完了", TodoDue::Date("2026-09-01".into()));
+    db.complete_todo(&done.id).unwrap();
+
+    let now = "2026-09-13T02:00:00.000Z";
+    let first = db.overdue_unacked(now, 100).unwrap();
+    assert_eq!(first.len(), 1, "做完的不该再进汇总");
+    assert_eq!(first[0].id, overdue.id);
+
+    let ids: Vec<String> = first.iter().map(|t| t.id.clone()).collect();
+    assert_eq!(db.ack_overdue(&ids, now).unwrap(), 1);
+
+    assert!(
+        db.overdue_unacked(now, 100).unwrap().is_empty(),
+        "报过一次就不能每次打开应用再报一遍"
+    );
+    // 重复 ack 不会把已经标记过的再算一次。
+    assert_eq!(db.ack_overdue(&ids, now).unwrap(), 0);
+}
+
+#[test]
+fn today_is_not_yet_overdue_for_a_date_only_todo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let today = todo_of(&db, &a.id, "今天截止", TodoDue::Date("2026-09-13".into()));
+    let yesterday = todo_of(&db, &a.id, "昨天截止", TodoDue::Date("2026-09-12".into()));
+
+    let now = "2026-09-13T02:00:00.000Z";
+    let due = db.list_todos(None, None, Some(now), 100, 0).unwrap();
+    let ids: Vec<&str> = due.iter().map(|t| t.id.as_str()).collect();
+
+    assert!(ids.contains(&yesterday.id.as_str()));
+    assert!(
+        !ids.contains(&today.id.as_str()),
+        "只有日历日的待办在当天还没到期，今天就报会提前一整天"
+    );
+    // 和逾期汇总用的是同一条边界。
+    let digest: Vec<String> = db
+        .overdue_unacked(now, 100)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    assert_eq!(digest, vec![yesterday.id]);
+
+    // 想要「今天及之前」就把边界传成明天零点。
+    let through_today = db
+        .list_todos(None, None, Some("2026-09-14T00:00:00.000Z"), 100, 0)
+        .unwrap();
+    assert_eq!(through_today.len(), 2);
+}
+
+#[test]
+fn acking_cannot_silence_a_todo_that_is_not_actually_overdue() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let now = "2026-09-13T02:00:00.000Z";
+
+    let future = todo_of(&db, &a.id, "下个月", TodoDue::Date("2026-10-30".into()));
+    assert_eq!(
+        db.ack_overdue(&[future.id.clone()], now).unwrap(),
+        0,
+        "还没到期的不能被盖上「已汇总」，否则它以后真逾期了就再也不会被报出来"
+    );
+
+    // 拿到汇总列表之后用户把它改期到将来，这时候的 ack 也不能生效。
+    let rescheduled = todo_of(&db, &a.id, "本来逾期了", TodoDue::Date("2026-09-01".into()));
+    let listed: Vec<String> = db
+        .overdue_unacked(now, 100)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    assert!(listed.contains(&rescheduled.id));
+    db.update_todo(
+        &rescheduled.id,
+        TodoPatch {
+            due: Some(TodoDue::Date("2026-12-01".into())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(db.ack_overdue(&listed, now).unwrap(), 0);
+    assert!(db.get_todo(&rescheduled.id).unwrap().unwrap().overdue_ack_at.is_none());
+
+    // 完成掉的同理：它已经不在汇总里，也不该被盖章。
+    let done = todo_of(&db, &a.id, "做完了", TodoDue::Date("2026-09-01".into()));
+    db.complete_todo(&done.id).unwrap();
+    assert_eq!(db.ack_overdue(&[done.id], now).unwrap(), 0);
+}
+
+#[test]
+fn the_reminder_handle_survives_so_a_rescheduled_todo_can_cancel_the_old_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let db = ArchiveStore::open(cfg.clone()).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let todo = todo_of(
+        &db,
+        &a.id,
+        "一面",
+        TodoDue::DateTime("2026-09-14T02:00:00.000Z".into()),
+    );
+    assert_eq!(todo.reminder_state, ReminderState::None);
+
+    let scheduled = db
+        .set_todo_reminder(
+            &todo.id,
+            ReminderState::Scheduled,
+            Some("2026-09-14T02:00:00.000Z"),
+            Some("toast:resume-pro:todo-1"),
+        )
+        .unwrap();
+    assert_eq!(scheduled.reminder_state, ReminderState::Scheduled);
+    assert_eq!(
+        scheduled.reminder_handle.as_deref(),
+        Some("toast:resume-pro:todo-1")
+    );
+
+    // 关掉再开：句柄要还在，否则改期时撤不掉上一次登记的那条。
+    db.close().unwrap();
+    let db = ArchiveStore::open(cfg).unwrap();
+    let after = db.get_todo(&todo.id).unwrap().unwrap();
+    assert_eq!(after.reminder_handle.as_deref(), Some("toast:resume-pro:todo-1"));
+    assert_eq!(
+        after.reminder_scheduled_for_utc.as_deref(),
+        Some("2026-09-14T02:00:00.000Z")
+    );
+
+    let cleared = db
+        .set_todo_reminder(&todo.id, ReminderState::None, None, None)
+        .unwrap();
+    assert!(cleared.reminder_handle.is_none());
+    assert!(cleared.reminder_scheduled_for_utc.is_none());
+
+    assert!(db
+        .set_todo_reminder("no-such-todo", ReminderState::Scheduled, None, None)
+        .is_err());
+}
+
+#[test]
+fn an_unsupported_reminder_is_recorded_as_such_not_as_scheduled() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let todo = todo_of(&db, &a.id, "二面", TodoDue::Date("2026-09-20".into()));
+
+    let marked = db
+        .set_todo_reminder(&todo.id, ReminderState::Unsupported, None, None)
+        .unwrap();
+
+    assert_eq!(marked.reminder_state, ReminderState::Unsupported);
+    assert!(
+        marked.reminder_scheduled_for_utc.is_none(),
+        "登记不了就不该留下一个像是登记过的时刻"
+    );
+}
+
 #[test]
 fn todo_date_precision_and_nullable_patch_survive_reopen() {
     let dir = tempfile::tempdir().unwrap();

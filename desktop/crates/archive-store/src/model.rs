@@ -449,6 +449,9 @@ pub enum EventPayload {
     TodoCancelled {
         todo_id: String,
     },
+    TodoReopened {
+        todo_id: String,
+    },
     /// D03 允许下游增补事件类型;默认不参与阶段折叠。
     /// `event_type` 为稳定 code;payload 为结构化 JSON。
     Custom {
@@ -484,6 +487,7 @@ impl EventPayload {
             EventPayload::TodoCreated { .. } => "todo_created".into(),
             EventPayload::TodoCompleted { .. } => "todo_completed".into(),
             EventPayload::TodoCancelled { .. } => "todo_cancelled".into(),
+            EventPayload::TodoReopened { .. } => "todo_reopened".into(),
             EventPayload::Custom { event_type, .. } => event_type.clone(),
         }
     }
@@ -731,6 +735,52 @@ pub struct Todo {
     pub source_event_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// D10：提醒登记到 OS 时算出的绝对时刻。
+    pub reminder_scheduled_for_utc: Option<String>,
+    /// D10：OS 侧句柄，撤销旧计划要用。
+    pub reminder_handle: Option<String>,
+    pub reminder_state: ReminderState,
+    /// D10：逾期汇总已经报过这条的时间；报过就不再重复。
+    pub overdue_ack_at: Option<String>,
+}
+
+/// 一条待办的提醒现在处于什么状态。这是**本机投递状态**，不是申请历史，
+/// 所以不进事件流：换台机器恢复档案后没有任何 OS 计划，状态本就该重来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReminderState {
+    /// 没有登记（没到期、没开提醒、或者用户没设提醒时刻）。
+    None,
+    /// 已登记到 OS，等待触发。
+    Scheduled,
+    /// 已经弹过。
+    Fired,
+    /// 到点时没能送达（关机过久、退出前撤销等），打开应用时补进逾期汇总。
+    Missed,
+    /// 这台机器上做不到（未授权、平台不支持、未打包）。
+    Unsupported,
+}
+
+impl ReminderState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReminderState::None => "none",
+            ReminderState::Scheduled => "scheduled",
+            ReminderState::Fired => "fired",
+            ReminderState::Missed => "missed",
+            ReminderState::Unsupported => "unsupported",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "scheduled" => ReminderState::Scheduled,
+            "fired" => ReminderState::Fired,
+            "missed" => ReminderState::Missed,
+            "unsupported" => ReminderState::Unsupported,
+            _ => ReminderState::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
