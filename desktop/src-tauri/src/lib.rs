@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod evidence_commands;
+mod restore;
 mod todo_commands;
 #[cfg(test)]
 mod commands_regression;

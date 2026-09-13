@@ -231,6 +231,23 @@ impl StoreTx<'_> {
         Ok(acked)
     }
 
+    /// 清空所有待办的提醒记账（D12 恢复后调用）。
+    ///
+    /// 这三列是**本机投递状态**：句柄指向的是原来那台机器上的 OS 计划。带着它们
+    /// 恢复到别处，界面会说「将在 X 点提醒」而其实什么都没登记，撤销时还拿着一个
+    /// 不存在的句柄。清零之后由命令层按每条待办当前的到期重新登记一遍。
+    ///
+    /// `overdue_ack_at` **不清**：它记的是「这条已经跟用户说过了」，换台机器也
+    /// 仍然说过了，再报一遍只会变成 #28 说的那种「瞬间重复轰炸」。
+    pub fn clear_todo_reminders(&mut self) -> Result<usize, StoreError> {
+        let changed = self.conn().execute(
+            "UPDATE todos SET reminder_state = 'none', reminder_scheduled_for_utc = NULL, \
+             reminder_handle = NULL WHERE reminder_state != 'none' OR reminder_handle IS NOT NULL",
+            [],
+        )?;
+        Ok(changed)
+    }
+
     /// 已经到期、还没做完、也还没报过的待办——逾期汇总要的就是这一批。
     pub fn overdue_unacked(&self, now_utc_str: &str, limit: u32) -> Result<Vec<Todo>, StoreError> {
         let day = now_utc_str.get(..10).unwrap_or(now_utc_str).to_string();

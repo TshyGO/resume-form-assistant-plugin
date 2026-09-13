@@ -160,6 +160,10 @@ impl ArchiveStore {
         self.transaction(|tx| tx.reopen_todo(id))
     }
 
+    pub fn clear_todo_reminders(&self) -> Result<usize, StoreError> {
+        self.transaction(|tx| tx.clear_todo_reminders())
+    }
+
     pub fn set_todo_reminder(
         &self,
         id: &str,
