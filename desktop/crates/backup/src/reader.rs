@@ -106,6 +106,17 @@ pub fn safe_relative_path(raw: &str) -> Result<PathBuf, BackupError> {
                 if part.is_empty() {
                     return Err(BackupError::Mismatch(format!("条目名里有空路径段：`{raw}`")));
                 }
+                // 冒号要在这里挡，不能指望 `components()`。
+                //
+                // Windows 上 `C:/x` 会被解析成一个 Prefix 组件、直接落进下面的
+                // 兜底分支；**Unix 上它只是一个叫 `C:` 的普通目录名**，于是同一个
+                // 包在两个系统上得到两种判断。包是别的机器打的，判断必须和判断
+                // 它的机器无关——我们自己的条目名里本来也不会有冒号。
+                if part.to_string_lossy().contains(':') {
+                    return Err(BackupError::Mismatch(format!(
+                        "条目名里有盘符或冒号：`{raw}`"
+                    )));
+                }
                 out.push(part);
             }
             // 盘符、根、UNC 前缀、`.`、`..` 一个都不接受。

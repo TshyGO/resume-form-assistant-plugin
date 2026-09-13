@@ -261,7 +261,11 @@ fn nothing_a_manifest_can_say_puts_a_file_outside_the_staging_directory() {
         "../../evil",
         "archive/../../evil",
         "/etc/passwd",
+        // 这两类在 Windows 上是 Prefix 组件，在 Unix 上只是普通目录名——
+        // 同一个包必须在两个系统上得到同一个判断。
         "C:/Windows/System32/evil.dll",
+        "c:/lower/case",
+        "archive/D:/nested",
         "C:\\Windows\\evil.dll",
         "\\\\server\\share\\evil",
         "archive\\..\\..\\evil",
