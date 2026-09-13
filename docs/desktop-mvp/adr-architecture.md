@@ -167,12 +167,23 @@ Chrome **不会启动** host，除非 origin 已在 `allowed_origins`。插件�
 | --- | --- | --- |
 | 关窗 | 隐藏到托盘（若启用） | 隐藏到菜单栏 extra / Dock 仍在（习惯不同，D02 选一种并写进设置） |
 | 后台提醒 | 用户授权后，用 **计划应用通知** `ScheduledToastNotification` / AppNotification 日程 API（[Schedule an app notification](https://learn.microsoft.com/en-us/windows/apps/develop/notifications/app-notifications/app-notifications-scheduled)）。官方：计划通知有约 **5 分钟投递窗口**，关机过久可能丢 | `UNUserNotificationCenter` + `UNCalendarNotificationTrigger`（需通知权限）。不要求 Login Item |
-| 未打包 Win32 | Toast 常需 AUMID / Compat 库，**待验证**（V9） | — |
+| 未打包 Win32 | 需要一个带 AUMID 的开始菜单快捷方式（由安装器创建，D13 / #29）。**已验证**，见 §3.8.1 | — |
 | 主动退出 | 默认移除未触发的计划 Toast，并告知 | 默认移除 pending UNNotification，并告知 |
 | 开机启动 | **不**注册 Run 键 / 计划任务保活 | **不**偷偷加 Login Item |
 | 进程空闲退出 | 允许；与提醒解耦 | 允许；与提醒解耦 |
 
 D10 验收：启用后台提醒并授权后，**杀掉应用进程**，到期仍应尽量弹出系统通知（受 OS 窗口限制）。未授权时待办列表与逾期汇总仍可用。
+
+#### 3.8.1 Windows 计划 Toast 实测（2026-09-13，Windows 11 26200）
+
+原来标着「待验证（V9）」的那条已经在本机跑过，四个结论：
+
+1. **`CreateToastNotifierWithId` 对没注册过的 AUMID 直接抛「无效的 applicationId」。** 所以能力检查就是这一次调用本身，不需要去猜快捷方式文件在不在。这也确认了 AUMID 注册是安装器的责任（D13 / [#29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)），不是运行期能补的。
+2. **计划脱离登记它的进程。** 用一个已注册的 AUMID 登记 70 秒后的通知，登记进程退出；另一个新进程仍能从 `GetScheduledToastNotifications()` 里列出这条计划。这正是本节要求验证的那一条。
+3. **到点由系统投递。** 到期后该计划从列表里消失，通知出现在通知中心。
+4. **勿扰 / 专注助手会压掉横幅，但通知照样进通知中心。** 所以「没弹出来」不等于「没送到」——界面措辞不许把两者混为一谈，也不许因此说提醒失败。
+
+实测用的是一个第三方已打包应用的 AUMID，目的是把「WinRT 这条路通不通」与「我们自己的 AUMID 注册好没有」分开。用我们自己的 AUMID 做端到端走查要等 D13 的安装器。
 
 ### 3.9 跨平台适配边界（D02 起就要列测试）
 

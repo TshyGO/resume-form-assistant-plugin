@@ -10,4 +10,12 @@ publish = false
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 time-tz = "2"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Data_Xml_Dom",
+  "Foundation",
+  "Foundation_Collections",
+  "UI_Notifications",
+] }
+
 [dev-dependencies]
