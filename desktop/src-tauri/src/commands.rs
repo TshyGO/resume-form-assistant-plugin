@@ -190,6 +190,8 @@ pub struct ApplicationView {
     pub snapshot_states: BTreeMap<String, SnapshotState>,
     /// 当前关联到这条申请的回复证据（D09）。和别处一样，不含任何存储路径。
     pub evidence: Vec<crate::evidence_commands::EvidenceSummary>,
+    /// 这条申请的待办（D10）。统一列表和详情页读的是同一份形状。
+    pub todos: Vec<crate::todo_commands::TodoView>,
 }
 
 /// What the WebView may know about a snapshot: never its path in the archive.
@@ -230,12 +232,14 @@ pub fn get_application(store: &ArchiveStore, id: &str) -> Result<ApplicationView
     }
     let snapshots = store.list_snapshots(id)?.into_iter().map(SnapshotSummary::from).collect();
     let evidence = crate::evidence_commands::list_for_application(store, id)?;
+    let todos = crate::todo_commands::list_todos(store, Some(id), None)?;
     Ok(ApplicationView {
         application,
         events,
         snapshots,
         snapshot_states,
         evidence,
+        todos,
     })
 }
 

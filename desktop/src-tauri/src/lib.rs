@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod evidence_commands;
+mod todo_commands;
 #[cfg(test)]
 mod commands_regression;
 mod ipc_client;
@@ -40,6 +41,9 @@ struct AppState {
     /// Serving the local endpoint. Held here so it lives exactly as long as the
     /// application does, which is what ties the unique listener to the unique writer.
     ipc: Mutex<Option<ipc_server::IpcService>>,
+    /// D10：把到期登记给操作系统的那一位。整个进程共用一个，退出时要靠它撤销
+    /// 全部未触发的计划。它不认识数据库，也不认识待办是什么。
+    reminders: Box<dyn reminders::ReminderScheduler>,
 }
 
 fn with_store<T>(
@@ -368,6 +372,67 @@ fn open_evidence_cmd(
 }
 
 #[tauri::command]
+fn create_todo_cmd(
+    state: State<AppState>,
+    args: todo_commands::NewTodoArgs,
+) -> Result<todo_commands::TodoWriteResult, CommandError> {
+    let now = time::OffsetDateTime::now_utc();
+    let scheduler = state.reminders.as_ref();
+    with_store(&state, |store| {
+        todo_commands::create_todo(store, scheduler, args.clone(), now)
+    })
+}
+
+#[tauri::command]
+fn edit_todo_cmd(
+    state: State<AppState>,
+    args: todo_commands::EditTodoArgs,
+) -> Result<todo_commands::TodoWriteResult, CommandError> {
+    let now = time::OffsetDateTime::now_utc();
+    let scheduler = state.reminders.as_ref();
+    with_store(&state, |store| {
+        todo_commands::edit_todo(store, scheduler, args.clone(), now)
+    })
+}
+
+#[tauri::command]
+fn set_todo_status_cmd(
+    state: State<AppState>,
+    id: String,
+    status: String,
+) -> Result<todo_commands::TodoWriteResult, CommandError> {
+    let now = time::OffsetDateTime::now_utc();
+    let scheduler = state.reminders.as_ref();
+    with_store(&state, |store| {
+        todo_commands::set_todo_status(store, scheduler, &id, &status, now)
+    })
+}
+
+#[tauri::command]
+fn list_todos_cmd(
+    state: State<AppState>,
+    application_id: Option<String>,
+    status: Option<String>,
+) -> Result<Vec<todo_commands::TodoView>, CommandError> {
+    with_store(&state, |store| {
+        todo_commands::list_todos(store, application_id.as_deref(), status.as_deref())
+    })
+}
+
+#[tauri::command]
+fn overdue_digest_cmd(
+    state: State<AppState>,
+) -> Result<todo_commands::OverdueDigest, CommandError> {
+    let now = time::OffsetDateTime::now_utc();
+    with_store(&state, |store| todo_commands::overdue_digest(store, now))
+}
+
+#[tauri::command]
+fn reminder_capability_cmd(state: State<AppState>) -> todo_commands::ReminderCapability {
+    todo_commands::reminder_capability(state.reminders.as_ref())
+}
+
+#[tauri::command]
 fn update_application_cmd(
     state: State<AppState>,
     args: UpdateApplicationArgs,
@@ -481,6 +546,9 @@ fn quit_app(app: AppHandle, state: State<AppState>) -> Result<(), String> {
             let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "explicit")]);
         }
     }
+    // 主动退出默认撤销尚未触发的提醒：进程走了就别留下会替它说话的东西。
+    // 界面在按下退出之前已经告知过这一点（PR6 的文案）。
+    let _ = todo_commands::cancel_all_reminders(state.reminders.as_ref());
     app.exit(0);
     Ok(())
 }
@@ -693,6 +761,7 @@ pub fn run() {
             store: Arc::new(Mutex::new(None)),
             store_error: Mutex::new(None),
             hidden_launch,
+            reminders: reminders::scheduler(),
         })
         .setup(move |app| {
             if quit_launch {
@@ -778,6 +847,12 @@ pub fn run() {
             unassociate_evidence_cmd,
             classify_evidence_cmd,
             open_evidence_cmd,
+            create_todo_cmd,
+            edit_todo_cmd,
+            set_todo_status_cmd,
+            list_todos_cmd,
+            overdue_digest_cmd,
+            reminder_capability_cmd,
             update_application_cmd,
             add_note_cmd,
             confirm_submit_cmd,
