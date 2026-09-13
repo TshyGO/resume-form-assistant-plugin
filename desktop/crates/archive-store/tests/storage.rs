@@ -894,6 +894,79 @@ fn the_overdue_digest_reports_a_todo_once_and_then_stops() {
 }
 
 #[test]
+fn today_is_not_yet_overdue_for_a_date_only_todo() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let today = todo_of(&db, &a.id, "今天截止", TodoDue::Date("2026-09-13".into()));
+    let yesterday = todo_of(&db, &a.id, "昨天截止", TodoDue::Date("2026-09-12".into()));
+
+    let now = "2026-09-13T02:00:00.000Z";
+    let due = db.list_todos(None, None, Some(now), 100, 0).unwrap();
+    let ids: Vec<&str> = due.iter().map(|t| t.id.as_str()).collect();
+
+    assert!(ids.contains(&yesterday.id.as_str()));
+    assert!(
+        !ids.contains(&today.id.as_str()),
+        "只有日历日的待办在当天还没到期，今天就报会提前一整天"
+    );
+    // 和逾期汇总用的是同一条边界。
+    let digest: Vec<String> = db
+        .overdue_unacked(now, 100)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    assert_eq!(digest, vec![yesterday.id]);
+
+    // 想要「今天及之前」就把边界传成明天零点。
+    let through_today = db
+        .list_todos(None, None, Some("2026-09-14T00:00:00.000Z"), 100, 0)
+        .unwrap();
+    assert_eq!(through_today.len(), 2);
+}
+
+#[test]
+fn acking_cannot_silence_a_todo_that_is_not_actually_overdue() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let now = "2026-09-13T02:00:00.000Z";
+
+    let future = todo_of(&db, &a.id, "下个月", TodoDue::Date("2026-10-30".into()));
+    assert_eq!(
+        db.ack_overdue(&[future.id.clone()], now).unwrap(),
+        0,
+        "还没到期的不能被盖上「已汇总」，否则它以后真逾期了就再也不会被报出来"
+    );
+
+    // 拿到汇总列表之后用户把它改期到将来，这时候的 ack 也不能生效。
+    let rescheduled = todo_of(&db, &a.id, "本来逾期了", TodoDue::Date("2026-09-01".into()));
+    let listed: Vec<String> = db
+        .overdue_unacked(now, 100)
+        .unwrap()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    assert!(listed.contains(&rescheduled.id));
+    db.update_todo(
+        &rescheduled.id,
+        TodoPatch {
+            due: Some(TodoDue::Date("2026-12-01".into())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(db.ack_overdue(&listed, now).unwrap(), 0);
+    assert!(db.get_todo(&rescheduled.id).unwrap().unwrap().overdue_ack_at.is_none());
+
+    // 完成掉的同理：它已经不在汇总里，也不该被盖章。
+    let done = todo_of(&db, &a.id, "做完了", TodoDue::Date("2026-09-01".into()));
+    db.complete_todo(&done.id).unwrap();
+    assert_eq!(db.ack_overdue(&[done.id], now).unwrap(), 0);
+}
+
+#[test]
 fn the_reminder_handle_survives_so_a_rescheduled_todo_can_cancel_the_old_plan() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = config(dir.path());

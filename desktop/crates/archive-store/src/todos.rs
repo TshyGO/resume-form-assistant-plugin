@@ -212,12 +212,20 @@ impl StoreTx<'_> {
     }
 
     /// 逾期汇总报过一次之后打上标记，下次打开应用不再重复报同一批。
+    ///
+    /// 条件和 `overdue_unacked` 完全一致，不是只按 id 盖章：拿到列表之后用户可能
+    /// 把某条改期到将来或者标记完成，这时候再盖上「已汇总」，它以后真逾期了就
+    /// 永远不会再被报出来了。
     pub fn ack_overdue(&mut self, ids: &[String], now: &str) -> Result<usize, StoreError> {
+        let day = now.get(..10).unwrap_or(now).to_string();
         let mut acked = 0;
         for id in ids {
             acked += self.conn().execute(
-                "UPDATE todos SET overdue_ack_at = ?1 WHERE id = ?2 AND overdue_ack_at IS NULL",
-                params![now, id],
+                "UPDATE todos SET overdue_ack_at = ?1 \
+                 WHERE id = ?2 AND overdue_ack_at IS NULL AND status = 'open' \
+                   AND ((due_precision = 'datetime' AND due_at_utc IS NOT NULL AND due_at_utc < ?1) \
+                     OR (due_precision = 'date' AND due_date IS NOT NULL AND due_date < ?3))",
+                params![now, id, day],
             )?;
         }
         Ok(acked)
@@ -260,8 +268,11 @@ impl StoreTx<'_> {
             clauses.push(format!("status = ?{}", args.len()));
         }
         // 到期过滤必须把 date 精度也算进来，否则「周五截止」这类待办永远进不了
-        // 逾期汇总。date 精度比的是日历日：只要那一天已经过去(或就是今天之前)，
-        // 它就到期了——**不**把 due_date 当成当天零点去和时刻比。
+        // 逾期汇总。date 精度比的是日历日，**不**把 due_date 当成当天零点去和时刻比。
+        //
+        // 两种精度都用严格小于，和 `overdue_unacked` 一致：只有日历日的待办在
+        // 当天还没到期(那一天还没过完)，把今天的算进「已到期」会提前报警。要
+        // 「今天及之前」就传明天零点。
         if let Some(before) = due_before_utc {
             let day = before.get(..10).unwrap_or(before).to_string();
             args.push(Box::new(before.to_string()));
@@ -270,7 +281,7 @@ impl StoreTx<'_> {
             let date = args.len();
             clauses.push(format!(
                 "((due_precision = 'datetime' AND due_at_utc IS NOT NULL AND due_at_utc < ?{at}) \
-                  OR (due_precision = 'date' AND due_date IS NOT NULL AND due_date <= ?{date}))"
+                  OR (due_precision = 'date' AND due_date IS NOT NULL AND due_date < ?{date}))"
             ));
         }
         let where_sql = if clauses.is_empty() {
