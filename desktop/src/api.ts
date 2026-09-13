@@ -131,12 +131,61 @@ export interface ImportReport {
   failed: Array<{ name: string; code: string }>;
 }
 
+export type TodoStatus = "open" | "done" | "cancelled";
+
+/** `datetime` / `date` / `none`。`date` 是**只有日历日**，没有时刻。 */
+export type DuePrecision = "datetime" | "date" | "none";
+
+/** 一条待办的提醒现在处于什么状态（D10）。这是本机投递状态，不是申请历史。 */
+export type ReminderState = "none" | "scheduled" | "fired" | "missed" | "unsupported";
+
+export interface TodoView {
+  id: string;
+  applicationId: string;
+  title: string;
+  duePrecision: DuePrecision;
+  dueAtUtc?: string | null;
+  dueDate?: string | null;
+  timeZone?: string | null;
+  remindAtUtc?: string | null;
+  status: TodoStatus;
+  interviewRound?: number | null;
+  sourceEventId?: string | null;
+  reminderState: ReminderState;
+  reminderScheduledForUtc?: string | null;
+  company?: string | null;
+  position?: string | null;
+}
+
+/** 提醒在这台机器上现在能不能响。不能的话 `reason` 是给用户看的一句话。 */
+export interface ReminderCapability {
+  available: boolean;
+  reason?: string | null;
+}
+
+/**
+ * 一次写操作的结果。
+ *
+ * `todo` 和 `reminderProblem` 分开是有意的：保存成功、提醒失败是完全可能的，
+ * 界面要能同时说出这两件事。
+ */
+export interface TodoWriteResult {
+  todo: TodoView;
+  reminderProblem?: string | null;
+}
+
+export interface OverdueDigest {
+  todos: TodoView[];
+  more: number;
+}
+
 export interface ApplicationView {
   application: ApplicationSummary & { summary?: ApplicationSummary; notes?: string | null };
   events: StoredEvent[];
   snapshots: SnapshotSummary[];
   snapshotStates: Record<string, "stored" | "uploading" | "missing">;
   evidence: EvidenceSummary[];
+  todos: TodoView[];
 }
 
 /** 设置页显示的宿主状态。字段由 `get_runtime_status` 命令给出。 */

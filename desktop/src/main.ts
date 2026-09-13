@@ -3,6 +3,7 @@ import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
+import { mountTodos } from "./todos-ui.ts";
 
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
@@ -26,7 +27,11 @@ function showRoute(name: string | undefined) {
 }
 
 document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
-  btn.addEventListener("click", () => showRoute(btn.dataset.route));
+  btn.addEventListener("click", () => {
+    showRoute(btn.dataset.route);
+    // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
+    if (btn.dataset.route === "todos") void showTodos().catch(() => {});
+  });
 });
 
 chromeInput.addEventListener("input", () => pairing.markChromeDirty());
@@ -187,6 +192,8 @@ const inbox = mountInbox(command, {
       }
     : null,
 });
+
+const showTodos = mountTodos(command);
 
 showRoute("applications");
 refreshStatus().catch((err: unknown) => {
