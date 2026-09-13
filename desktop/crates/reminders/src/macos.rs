@@ -12,8 +12,13 @@
 //! 重启后是否还在，都要等有 Mac 的时候按 D10 的走查跑一遍（issue #26；和 #16 卡的
 //! 是同一件事）。在那之前不要在任何地方说 macOS 的提醒「已经能用」。
 
+use std::sync::mpsc;
+use std::time::Duration;
+
 use block2::RcBlock;
-use objc2_foundation::{NSArray, NSBundle, NSCalendar, NSDate, NSDateComponents, NSString};
+use objc2_foundation::{
+    NSArray, NSBundle, NSCalendar, NSDate, NSDateComponents, NSString, NSTimeZone,
+};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNCalendarNotificationTrigger, UNMutableNotificationContent,
     UNNotificationRequest, UNUserNotificationCenter,
@@ -53,7 +58,17 @@ fn components_for(request: &ReminderRequest) -> objc2::rc::Retained<NSDateCompon
         components.setDay(wall.day() as isize);
         components.setHour(wall.hour() as isize);
         components.setMinute(wall.minute() as isize);
-        components.setSecond(0);
+        // 秒照抄，不清零。显式设了带秒的提醒时刻时，抹掉秒等于提前最多 59 秒弹。
+        components.setSecond(wall.second() as isize);
+
+        // **时区必须跟着走。** 不带时区的分量会被按「这台 Mac 当前的时区」解释：
+        // 待办写的是上海早九点、Mac 设在纽约时，就会在纽约的早九点弹——差 12 小时。
+        // FireAt 已经算好了墙钟属于哪个时区，这里把它一起交出去。
+        if let Some(name) = request.fire_at.time_zone.as_deref() {
+            if let Some(zone) = NSTimeZone::timeZoneWithName(&NSString::from_str(name)) {
+                components.setTimeZone(Some(&zone));
+            }
+        }
     }
     components
 }
@@ -101,8 +116,31 @@ impl ReminderScheduler for MacCalendarNotifications {
             Some(&trigger),
         );
 
-        center.addNotificationRequest_withCompletionHandler(&notification, None);
-        Ok(ScheduledHandle::new(request.todo_id.clone()))
+        // 登记的成败只从 completion handler 里出来。把 None 传进去等于扔掉结果，
+        // 于是「用户拒绝了通知权限」也会返回 Ok，上层就会把 reminder_state 记成
+        // scheduled——界面据此告诉用户「将在 X 点提醒」，而其实什么都没登记。
+        // 这正是本 crate 反复强调不许做的事，所以在这里等一下那个回调。
+        let (tx, rx) = mpsc::channel::<Option<String>>();
+        let sink = tx.clone();
+        let done = RcBlock::new(move |error: *mut objc2_foundation::NSError| {
+            let message = if error.is_null() {
+                None
+            } else {
+                Some(unsafe { (*error).localizedDescription() }.to_string())
+            };
+            let _ = sink.send(message);
+        });
+        center.addNotificationRequest_withCompletionHandler(&notification, Some(&done));
+
+        // 这个回调正常是毫秒级返回的。真等不到就当登记失败——宁可说「没登记上」，
+        // 也不要说一个不会响的「将在 X 点提醒」。
+        match rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(None) => Ok(ScheduledHandle::new(request.todo_id.clone())),
+            Ok(Some(message)) => Err(ReminderError::Platform(message)),
+            Err(_) => Err(ReminderError::Platform(
+                "系统没有回应这次通知登记，无法确认提醒是否生效。".into(),
+            )),
+        }
     }
 
     fn cancel(&self, handle: &ScheduledHandle) -> Result<(), ReminderError> {
@@ -161,6 +199,36 @@ mod tests {
             assert_eq!(components.day(), 20);
             assert_eq!(components.hour(), 9);
             assert_eq!(components.minute(), 0);
+        }
+    }
+
+    #[test]
+    fn the_trigger_carries_the_todo_time_zone_not_the_machine_one() {
+        let components = components_for(&request());
+        let zone = unsafe { components.timeZone() };
+        assert_eq!(
+            zone.map(|z| z.name().to_string()),
+            Some("Asia/Shanghai".to_string()),
+            "不带时区的分量会被按这台 Mac 的时区解释，上海的面试会在纽约的早九点弹"
+        );
+    }
+
+    #[test]
+    fn seconds_in_an_explicit_reminder_time_are_kept() {
+        let mut with_seconds = request();
+        with_seconds.fire_at = fire_at(
+            &Due::None,
+            Some("Asia/Shanghai"),
+            Some("2026-09-20T01:00:30Z"),
+            time!(09:00),
+            UtcOffset::UTC,
+        )
+        .unwrap()
+        .unwrap();
+
+        let components = components_for(&with_seconds);
+        unsafe {
+            assert_eq!(components.second(), 30, "抹掉秒等于提前最多 59 秒弹");
         }
     }
 

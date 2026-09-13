@@ -8,6 +8,7 @@
 //    有一句自己的话，不能用一句「已设置提醒」糊过去。
 
 import type { ReminderCapability, TodoStatus, TodoView } from "./api.ts";
+import { formatInZone } from "./zoned.ts";
 
 export interface Message {
   tone: "info" | "success" | "warn" | "pending";
@@ -99,16 +100,10 @@ export function groupTodos(todos: TodoView[], now: Date): Array<{ bucket: Bucket
  */
 export function describeDue(todo: TodoView): string {
   if (todo.duePrecision === "datetime" && todo.dueAtUtc) {
-    const at = new Date(todo.dueAtUtc);
-    if (Number.isNaN(at.getTime())) return "到期时间读不出来";
-    const shown = at.toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
+    // 按**待办自己的**时区显示。拿本机时区格式化再把时区名拼在后面，机器在纽约、
+    // 待办标着上海时显示的是纽约的钟点却写着 Asia/Shanghai——那不是不准，是说谎。
+    const shown = formatInZone(todo.dueAtUtc, todo.timeZone);
+    if (!shown) return "到期时间读不出来";
     return todo.timeZone ? `${shown}（${todo.timeZone}）` : shown;
   }
   if (todo.duePrecision === "date" && todo.dueDate) {
@@ -129,16 +124,8 @@ export function describeReminder(todo: TodoView, capability: ReminderCapability)
     return { tone: "info", text: "已结束，不会再提醒" };
   }
   if (todo.reminderState === "scheduled" && todo.reminderScheduledForUtc) {
-    const at = new Date(todo.reminderScheduledForUtc);
-    const shown = Number.isNaN(at.getTime())
-      ? todo.reminderScheduledForUtc
-      : at.toLocaleString("zh-CN", {
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        });
+    const shown =
+      formatInZone(todo.reminderScheduledForUtc, todo.timeZone) ?? todo.reminderScheduledForUtc;
     return { tone: "success", text: `将在 ${shown} 提醒` };
   }
   if (todo.reminderState === "fired") {

@@ -21,7 +21,7 @@ windows = { version = "0.58", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSBundle", "NSCalendar", "NSDate", "NSError", "NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSBundle", "NSCalendar", "NSDate", "NSError", "NSString", "NSTimeZone"] }
 objc2-user-notifications = { version = "0.3", features = [
   "UNNotificationContent",
   "UNNotificationRequest",
