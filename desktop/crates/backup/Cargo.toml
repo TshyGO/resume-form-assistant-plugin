@@ -14,4 +14,6 @@ uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+sha2 = "0.10"
 tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
