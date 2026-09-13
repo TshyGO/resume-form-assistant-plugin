@@ -15,6 +15,7 @@ use crate::identity::{
     ArchiveIdentity, ArchiveMetaFile, CurrentPointer,
 };
 use crate::migration::ensure_schema;
+use crate::model::ArchiveCounts;
 use crate::schema::MIGRATIONS;
 use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
@@ -214,6 +215,48 @@ impl ArchiveStore {
             migration_backup,
             _pointer_lock: pointer_lock,
             _archive_lock: archive_lock,
+        })
+    }
+
+    /// 把数据库导出成一个一致性快照文件（D12 备份用）。
+    ///
+    /// 用 SQLite 的 backup API，不是拷 `archive.db`——那份正在被写，拷出来的
+    /// 可能是半个事务。目标文件必须不存在。
+    pub fn snapshot_database_to(&self, destination: &std::path::Path) -> Result<(), StoreError> {
+        if destination.exists() {
+            return Err(StoreError::Validation(format!(
+                "snapshot destination already exists: {}",
+                destination.display()
+            )));
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let guard = self.conn.lock().map_err(|_| StoreError::Internal("poisoned".into()))?;
+        let mut dst = rusqlite::Connection::open(destination)?;
+        rusqlite::backup::Backup::new(&guard, &mut dst)?.run_to_completion(
+            64,
+            std::time::Duration::from_millis(2),
+            None,
+        )?;
+        dst.close().map_err(|(_, e)| e)?;
+        Ok(())
+    }
+
+    /// 各类记录的条数。备份清单写它，恢复预览拿它和当前档案对比——用户得先看到
+    /// 「现在 12 条申请，恢复之后是 8 条」才谈得上确认。
+    pub fn counts(&self) -> Result<ArchiveCounts, StoreError> {
+        let guard = self.conn.lock().map_err(|_| StoreError::Internal("poisoned".into()))?;
+        let count = |sql: &str| -> Result<i64, StoreError> {
+            guard.query_row(sql, [], |r| r.get::<_, i64>(0)).map_err(StoreError::from)
+        };
+        Ok(ArchiveCounts {
+            applications: count("SELECT COUNT(*) FROM applications")?,
+            events: count("SELECT COUNT(*) FROM events")?,
+            snapshots: count("SELECT COUNT(*) FROM resume_snapshots")?,
+            todos: count("SELECT COUNT(*) FROM todos")?,
+            evidence: count("SELECT COUNT(*) FROM reply_evidence")?,
+            attachments: count("SELECT COUNT(*) FROM attachment_blobs")?,
         })
     }
 

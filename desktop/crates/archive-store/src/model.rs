@@ -722,6 +722,21 @@ pub struct ResumeSnapshotMeta {
     pub byte_size: i64,
 }
 
+/// 各类记录的条数。备份清单与恢复预览都用它。
+///
+/// archive-store 自己定义，不反向依赖 `backup` crate——那个 crate 的定位是
+/// 「只搬字节、不认识数据库」，让它被档案库依赖会把这条界线弄反。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveCounts {
+    pub applications: i64,
+    pub events: i64,
+    pub snapshots: i64,
+    pub todos: i64,
+    pub evidence: i64,
+    pub attachments: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Todo {
     pub id: String,
