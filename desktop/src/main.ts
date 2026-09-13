@@ -4,6 +4,13 @@ import { createPairingController } from "./pairing-form.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
+import type { ReminderCapability } from "./api.ts";
+import {
+  DELIVERY_WINDOW_NOTE,
+  LIFECYCLE_STATES,
+  QUIT_WARNING,
+  describeCapability,
+} from "./todos.ts";
 
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
@@ -144,10 +151,36 @@ must("pairing-form").addEventListener("submit", async (event) => {
 
 must("btn-hide").addEventListener("click", () => invoke?.("hide_main_window_cmd"));
 must("btn-quit").addEventListener("click", () => {
-  if (window.confirm("退出后唯一写入者进程会结束。提醒尚未实现，退出不会保留系统通知。确定退出？")) {
+  // §5.4：退出前必须告知提醒会停。关窗不会，退出会——这两件事用户分不清，
+  // 所以在这里说，而不是指望他记得设置页写过。
+  if (window.confirm(QUIT_WARNING)) {
     invoke?.("quit_app");
   }
 });
+
+/** 设置页的「提醒」一段：现在能不能响、为什么、五种状态各是什么结果。 */
+async function renderReminderSettings() {
+  const line = must("settings-reminder");
+  const window_ = must("settings-reminder-window");
+  const table = must("settings-lifecycle");
+
+  let capability: ReminderCapability = { available: false, reason: "未连接到桌面宿主。" };
+  if (invoke) {
+    try {
+      capability = await invoke<ReminderCapability>("reminder_capability_cmd", {});
+    } catch {
+      capability = { available: false, reason: "读不到系统通知的状态。" };
+    }
+  }
+
+  const message = describeCapability(capability);
+  line.textContent = message.text;
+  line.className = `note ${message.tone}`;
+  window_.textContent = DELIVERY_WINDOW_NOTE;
+  table.innerHTML = LIFECYCLE_STATES.map(
+    (state) => `<tr><th>${state.when}</th><td>${state.what}</td></tr>`,
+  ).join("");
+}
 must("btn-diag").addEventListener("click", async () => {
   const msg = must("diag-msg");
   if (!invoke) {
@@ -194,6 +227,7 @@ const inbox = mountInbox(command, {
 });
 
 const showTodos = mountTodos(command);
+void renderReminderSettings().catch(() => {});
 
 showRoute("applications");
 refreshStatus().catch((err: unknown) => {

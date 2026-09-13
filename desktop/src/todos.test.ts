@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ReminderCapability, TodoView } from './api.ts';
 import {
+  LIFECYCLE_STATES,
+  QUIT_WARNING,
   bucketOf,
   describeCapability,
   describeDigest,
@@ -170,4 +172,29 @@ test('设置页要说清关窗会响、退出不会响', () => {
   assert.equal(off.tone, "warn");
   assert.match(off.text, /未授权/);
   assert.match(off.text, /待办列表和逾期汇总照常可用/, "提醒没了不等于功能没了");
+});
+
+test('五种生命周期状态一条不少，且关窗与退出说的是相反的结果', () => {
+  const when = LIFECYCLE_STATES.map((s) => s.when);
+  assert.equal(LIFECYCLE_STATES.length, 5, "§5.4 列了五种，一条都不能省");
+
+  const closed = LIFECYCLE_STATES.find((s) => s.when.includes("关闭窗口"));
+  const quit = LIFECYCLE_STATES.find((s) => s.when.includes("退出"));
+  assert.match(closed?.what ?? "", /照常提醒/);
+  assert.match(quit?.what ?? "", /不再提醒/, "关窗和退出在用户眼里差不多，结果却相反");
+
+  const denied = LIFECYCLE_STATES.find((s) => s.when.includes("权限"));
+  assert.match(denied?.what ?? "", /照常可用/, "没权限不等于待办没了");
+
+  const asleep = LIFECYCLE_STATES.find((s) => s.when.includes("休眠"));
+  assert.match(asleep?.what ?? "", /汇总一次/);
+  assert.doesNotMatch(asleep?.what ?? "", /一定|保证/, "不许承诺关机期间也送到");
+
+  assert.equal(new Set(when).size, 5, "五条不能有重复");
+});
+
+test('退出前那句话要同时说清提醒会停、待办还在', () => {
+  assert.match(QUIT_WARNING, /不会弹出提醒/);
+  assert.match(QUIT_WARNING, /撤销/);
+  assert.match(QUIT_WARNING, /待办本身都还在/, "别让用户以为退出会丢数据");
 });

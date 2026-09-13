@@ -899,7 +899,8 @@ pub fn run() {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    // §5.4：退出会撤销还没到点的提醒。托盘上弹不了确认框，所以把结果写进菜单项本身。
+    let quit = MenuItem::with_id(app, "quit", "退出（提醒也会停）", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -913,6 +914,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                             let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "tray")]);
                         }
                     }
+                    // 和设置页那个退出走同一条路：撤销所有还没到点的提醒。
+                    let _ = todo_commands::cancel_all_reminders(state.reminders.as_ref());
                 }
                 app.exit(0);
             }
