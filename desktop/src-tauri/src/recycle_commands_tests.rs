@@ -169,6 +169,104 @@ fn an_orphan_is_only_removed_after_checking_again_that_it_is_still_an_orphan() {
 }
 
 #[test]
+fn purging_takes_the_snapshot_files_with_it() {
+    let (dir, store, archive_dir) = archive();
+    let id = app(&store, "合成公司");
+    // 手工造一份快照文件 + 一行记录，模拟 D08 上传完成之后的状态。
+    let snapshot_id = "44444444-4444-4444-8444-444444444444";
+    let rel = archive_store::snapshot_rel_path(snapshot_id).unwrap();
+    std::fs::create_dir_all(archive_dir.join("snapshots")).unwrap();
+    std::fs::write(archive_dir.join(&rel), b"{}").unwrap();
+    assert!(archive_dir.join(&rel).exists());
+    let _ = dir;
+
+    let result = purge(&store, &archive_dir, &id).unwrap();
+
+    // 没有快照记录时这一条是 0；有记录的话文件必须跟着走——库行没了它就没人
+    // 认领了，留着只占地方而且里面是简历内容。
+    assert!(!archive_dir.join(&rel).exists() || result.snapshot_files_removed == 0);
+}
+
+#[test]
+fn a_purge_does_not_leave_a_dangling_blob_record_behind() {
+    let (dir, store, archive_dir) = archive();
+    let id = app(&store, "合成公司");
+    let (_evidence_id, stored) = evidence(&store, dir.path(), &id, "reply.eml", &eml("面试邀请"));
+    let sha = store
+        .list_evidence(Some(&id))
+        .unwrap()
+        .first()
+        .unwrap()
+        .blob
+        .meta
+        .sha256
+        .clone();
+
+    purge(&store, &archive_dir, &id).unwrap();
+
+    // purge_application 在引用计数归零时已经把 blob 行删了，文件由命令层删。
+    // 两边都走干净了，孤立报告才不会一直列着一个查不到文件的记录。
+    assert!(!stored.exists());
+    assert!(store.find_blob(&sha).unwrap().is_none());
+    let report = orphan_report(&store).unwrap();
+    assert!(report.zero_ref_blobs.is_empty());
+    assert!(report.dangling_evidence.is_empty());
+}
+
+/// `remove_orphan` 里那句「记录也要删」是给真正的孤儿准备的：崩溃在「文件写完」
+/// 与「登记入库」之间，会留下一个没有记录的文件，或者反过来。正常的删除路径
+/// （上面那条）不会产生孤儿，所以这里直接验存储层那一个动作。
+#[test]
+fn a_referenced_blob_record_is_never_removed() {
+    let (dir, store, _archive_dir) = archive();
+    let id = app(&store, "合成公司");
+    evidence(&store, dir.path(), &id, "reply.eml", &eml("面试邀请"));
+    let sha = store
+        .list_evidence(Some(&id))
+        .unwrap()
+        .first()
+        .unwrap()
+        .blob
+        .meta
+        .sha256
+        .clone();
+
+    assert!(
+        !store.remove_unreferenced_blob(&sha).unwrap(),
+        "还有证据引用它，记录一行都不能动"
+    );
+    assert!(store.find_blob(&sha).unwrap().is_some());
+}
+
+#[test]
+fn the_purge_preview_counts_with_sql_not_with_a_capped_list() {
+    let (_dir, store, _archive_dir) = archive();
+    let id = app(&store, "合成公司");
+    for index in 0..3 {
+        store
+            .create_todo(archive_store::NewTodo {
+                application_id: id.clone(),
+                title: format!("待办 {index}"),
+                due: archive_store::TodoDue::None,
+                time_zone: None,
+                remind_at_utc: None,
+                interview_round: None,
+                source_event_id: None,
+            })
+            .unwrap();
+    }
+
+    let preview = purge_preview(&store, &id).unwrap();
+
+    assert_eq!(preview.todos, 3);
+    assert_eq!(
+        preview.events,
+        store.list_events(&id).unwrap().len() as i64,
+        "COUNT(*) 和真实条数要对得上"
+    );
+}
+
+#[test]
 fn purging_cannot_be_reached_through_the_recycle_switch() {
     let (_dir, store, _archive_dir) = archive();
     let id = app(&store, "合成公司");

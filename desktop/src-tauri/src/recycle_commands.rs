@@ -49,6 +49,8 @@ pub struct PurgeResult {
     pub attachment_files_removed: usize,
     /// 库行删了但文件没删掉的（比如文件已经不在）。不算失败，但要说出来。
     pub attachment_files_left: Vec<String>,
+    /// 跟着删掉的简历快照文件。
+    pub snapshot_files_removed: usize,
 }
 
 /// 孤立附件的报告。**只报告。**
@@ -101,30 +103,19 @@ pub fn purge_preview(store: &ArchiveStore, id: &str) -> Result<PurgePreview, Com
         .get_application(id)
         .map_err(|e| fail("STORE_ERROR", e))?
         .ok_or_else(|| fail("NOT_FOUND", "这条申请不存在。"))?;
-    let events = store
-        .list_events(id)
-        .map_err(|e| fail("STORE_ERROR", e))?
-        .len() as i64;
-    let todos = store
-        .list_todos(Some(id), None, None, 1000, 0)
-        .map_err(|e| fail("STORE_ERROR", e))?
-        .len() as i64;
-    let evidence = store
-        .list_evidence(Some(id))
-        .map_err(|e| fail("STORE_ERROR", e))?
-        .len() as i64;
-    let snapshots = store
-        .list_snapshots(id)
-        .map_err(|e| fail("STORE_ERROR", e))?
-        .len() as i64;
+    // 用 COUNT(*)，不是把列表拉出来数长度：列表都带 limit，超过就悄悄少算，
+    // 而这个数字是给用户看「会连带删掉什么」的，少算等于骗人。
+    let counts = store
+        .application_counts(id)
+        .map_err(|e| fail("STORE_ERROR", e))?;
     Ok(PurgePreview {
         application_id: id.to_string(),
         company: view.company.clone(),
         title: view.title.clone(),
-        events,
-        todos,
-        evidence,
-        snapshots,
+        events: counts.events,
+        todos: counts.todos,
+        evidence: counts.evidence,
+        snapshots: counts.snapshots,
     })
 }
 
@@ -138,8 +129,14 @@ pub fn purge(
     archive_dir: &std::path::Path,
     id: &str,
 ) -> Result<PurgeResult, CommandError> {
-    // 删之前先把 blob 的存储路径问出来——删完就查不到了。
+    // 删之前先把要删的文件路径问出来——删完就查不到了。
     let released_paths = blob_paths(store, id)?;
+    let snapshot_paths: Vec<String> = store
+        .list_snapshots(id)
+        .map_err(|e| fail("STORE_ERROR", e))?
+        .iter()
+        .filter_map(|snapshot| archive_store::snapshot_rel_path(&snapshot.snapshot_id).ok())
+        .collect();
 
     let report = store
         .purge_application(id)
@@ -163,6 +160,16 @@ pub fn purge(
         }
     }
 
+    // 快照文件跟着走：库行没了它们就没人认领了，留着只是占地方而且还含简历内容。
+    let mut snapshot_files_removed = 0usize;
+    for rel in &snapshot_paths {
+        match std::fs::remove_file(archive_dir.join(rel)) {
+            Ok(()) => snapshot_files_removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => snapshot_files_removed += 1,
+            Err(_) => left.push(rel.clone()),
+        }
+    }
+
     Ok(PurgeResult {
         application_id: report.application_id,
         events_removed: report.events_removed,
@@ -171,6 +178,7 @@ pub fn purge(
         snapshots_removed: report.snapshots_removed,
         attachment_files_removed: removed,
         attachment_files_left: left,
+        snapshot_files_removed,
     })
 }
 
@@ -233,10 +241,16 @@ pub fn remove_orphan(
     };
     let path: PathBuf = archive_dir.join(&rel);
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(fail("IO_ERROR", e)),
+        Ok(()) => {}
+        // 文件已经不在了：结果和我们想要的一样，接着把记录也清掉。
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(fail("IO_ERROR", e)),
     }
+    // 记录也要删，否则孤立报告会一直列着它，而它指向的文件已经没了。
+    store
+        .remove_unreferenced_blob(sha256)
+        .map_err(|e| fail("STORE_ERROR", e))?;
+    Ok(())
 }
 
 #[cfg(test)]

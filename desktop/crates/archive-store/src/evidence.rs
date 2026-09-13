@@ -342,6 +342,18 @@ impl StoreTx<'_> {
     }
 
     /// 维护检查(不自动删除):零引用 blob 与悬空证据引用。
+    /// 删掉一条**零引用**的 blob 记录（D12 清理孤儿附件时用）。
+    ///
+    /// 只删 `ref_count = 0` 的行：还有人引用就什么都不做并返回 false，让调用方
+    /// 知道这份附件不该动。文件由调用方删——这一层不碰文件系统。
+    pub fn remove_unreferenced_blob(&mut self, sha256: &str) -> Result<bool, StoreError> {
+        let removed = self.conn().execute(
+            "DELETE FROM attachment_blobs WHERE sha256 = ?1 AND ref_count = 0",
+            params![sha256],
+        )?;
+        Ok(removed > 0)
+    }
+
     pub fn check_attachment_refs(&self) -> Result<AttachmentRefReport, StoreError> {
         let total_blobs: usize =
             self.conn()

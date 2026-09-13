@@ -156,6 +156,17 @@ impl ArchiveStore {
         self.transaction(|tx| tx.cancel_todo(id))
     }
 
+    pub fn application_counts(
+        &self,
+        id: &str,
+    ) -> Result<crate::applications::ApplicationCounts, StoreError> {
+        self.transaction(|tx| tx.application_counts(id))
+    }
+
+    pub fn remove_unreferenced_blob(&self, sha256: &str) -> Result<bool, StoreError> {
+        self.transaction(|tx| tx.remove_unreferenced_blob(sha256))
+    }
+
     pub fn reopen_todo(&self, id: &str) -> Result<Todo, StoreError> {
         self.transaction(|tx| tx.reopen_todo(id))
     }
