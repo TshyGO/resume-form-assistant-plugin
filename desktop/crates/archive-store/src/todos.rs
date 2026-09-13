@@ -8,6 +8,10 @@ use crate::model::*;
 use crate::timeutil::{now_utc, Occurred};
 use crate::tx::{new_uuid, StoreTx};
 
+const TODO_COLUMNS: &str = "id, application_id, title, due_precision, due_at_utc, due_date, \
+     time_zone, remind_at_utc, status, interview_round, source_event_id, created_at, updated_at, \
+     reminder_scheduled_for_utc, reminder_handle, reminder_state, overdue_ack_at";
+
 #[derive(Debug, Clone, Default)]
 pub struct TodoPatch {
     pub title: Option<String>,
@@ -88,9 +92,7 @@ impl StoreTx<'_> {
 
     pub fn get_todo(&self, id: &str) -> Result<Option<Todo>, StoreError> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, application_id, title, due_precision, due_at_utc, due_date, time_zone, \
-             remind_at_utc, status, interview_round, source_event_id, created_at, updated_at \
-             FROM todos WHERE id = ?1",
+            &format!("SELECT {TODO_COLUMNS} FROM todos WHERE id = ?1"),
         )?;
         let mut rows = stmt.query_map(params![id], map_todo_row)?;
         rows.next().transpose().map_err(StoreError::from)
@@ -137,6 +139,13 @@ impl StoreTx<'_> {
         self.set_todo_status(id, TodoStatus::Cancelled, "todo_cancelled")
     }
 
+    /// 重新打开一条已完成或已取消的待办(#26 范围)。重开只改状态，**不**恢复
+    /// 提醒登记：原来的 OS 计划在完成时就撤销了，要不要再登记由 D10 的命令层
+    /// 按当前的到期时刻重新决定。
+    pub fn reopen_todo(&mut self, id: &str) -> Result<Todo, StoreError> {
+        self.set_todo_status(id, TodoStatus::Open, "todo_reopened")
+    }
+
     fn set_todo_status(
         &mut self,
         id: &str,
@@ -158,7 +167,10 @@ impl StoreTx<'_> {
             TodoStatus::Done => EventPayload::TodoCompleted {
                 todo_id: id.to_string(),
             },
-            _ => EventPayload::TodoCancelled {
+            TodoStatus::Cancelled => EventPayload::TodoCancelled {
+                todo_id: id.to_string(),
+            },
+            TodoStatus::Open => EventPayload::TodoReopened {
                 todo_id: id.to_string(),
             },
         };
@@ -176,6 +188,56 @@ impl StoreTx<'_> {
         self.append_events(Some(&todo.application_id), &[draft], &now)?;
         self.get_todo(id)?
             .ok_or_else(|| StoreError::Internal("todo vanished in same transaction".into()))
+    }
+
+    /// 记下一条待办的提醒登记结果(D10)。这是本机投递状态，不发事件。
+    pub fn set_todo_reminder(
+        &mut self,
+        id: &str,
+        state: ReminderState,
+        scheduled_for_utc: Option<&str>,
+        handle: Option<&str>,
+    ) -> Result<Todo, StoreError> {
+        let scheduled = normalize_reminder(scheduled_for_utc)?;
+        let changed = self.conn().execute(
+            "UPDATE todos SET reminder_state = ?1, reminder_scheduled_for_utc = ?2, \
+             reminder_handle = ?3, updated_at = ?4 WHERE id = ?5",
+            params![state.as_str(), scheduled, handle, now_utc(), id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound(format!("todo {id}")));
+        }
+        self.get_todo(id)?
+            .ok_or_else(|| StoreError::Internal("todo vanished in same transaction".into()))
+    }
+
+    /// 逾期汇总报过一次之后打上标记，下次打开应用不再重复报同一批。
+    pub fn ack_overdue(&mut self, ids: &[String], now: &str) -> Result<usize, StoreError> {
+        let mut acked = 0;
+        for id in ids {
+            acked += self.conn().execute(
+                "UPDATE todos SET overdue_ack_at = ?1 WHERE id = ?2 AND overdue_ack_at IS NULL",
+                params![now, id],
+            )?;
+        }
+        Ok(acked)
+    }
+
+    /// 已经到期、还没做完、也还没报过的待办——逾期汇总要的就是这一批。
+    pub fn overdue_unacked(&self, now_utc_str: &str, limit: u32) -> Result<Vec<Todo>, StoreError> {
+        let day = now_utc_str.get(..10).unwrap_or(now_utc_str).to_string();
+        let limit = limit.clamp(1, 1000);
+        let sql = format!(
+            "SELECT {TODO_COLUMNS} FROM todos \
+             WHERE status = 'open' AND overdue_ack_at IS NULL \
+               AND ((due_precision = 'datetime' AND due_at_utc IS NOT NULL AND due_at_utc < ?1) \
+                 OR (due_precision = 'date' AND due_date IS NOT NULL AND due_date < ?2)) \
+             ORDER BY COALESCE(due_at_utc, due_date) ASC LIMIT {limit}"
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(params![now_utc_str, day], map_todo_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     /// 待办列表(供 D04/D10):可按申请、状态、到期过滤;SQL 层分页。
@@ -197,11 +259,18 @@ impl StoreTx<'_> {
             args.push(Box::new(st.as_str().to_string()));
             clauses.push(format!("status = ?{}", args.len()));
         }
+        // 到期过滤必须把 date 精度也算进来，否则「周五截止」这类待办永远进不了
+        // 逾期汇总。date 精度比的是日历日：只要那一天已经过去(或就是今天之前)，
+        // 它就到期了——**不**把 due_date 当成当天零点去和时刻比。
         if let Some(before) = due_before_utc {
+            let day = before.get(..10).unwrap_or(before).to_string();
             args.push(Box::new(before.to_string()));
+            let at = args.len();
+            args.push(Box::new(day));
+            let date = args.len();
             clauses.push(format!(
-                "(due_precision = 'datetime' AND due_at_utc IS NOT NULL AND due_at_utc < ?{})",
-                args.len()
+                "((due_precision = 'datetime' AND due_at_utc IS NOT NULL AND due_at_utc < ?{at}) \
+                  OR (due_precision = 'date' AND due_date IS NOT NULL AND due_date <= ?{date}))"
             ));
         }
         let where_sql = if clauses.is_empty() {
@@ -210,10 +279,14 @@ impl StoreTx<'_> {
             format!("WHERE {}", clauses.join(" AND "))
         };
         let limit = limit.clamp(1, 1000);
+        // 待办列表按「什么时候要做」排，不是按什么时候建的。没有到期的排在最后
+        // (COALESCE 出来的排序键为空)，同批次内再按创建时间稳定排序。
         let sql = format!(
-            "SELECT id, application_id, title, due_precision, due_at_utc, due_date, time_zone, \
-             remind_at_utc, status, interview_round, source_event_id, created_at, updated_at \
-             FROM todos {where_sql} ORDER BY created_at ASC LIMIT {limit} OFFSET {offset}"
+            "SELECT {TODO_COLUMNS} FROM todos {where_sql} \
+             ORDER BY (due_precision = 'none') ASC, \
+                      COALESCE(due_at_utc, due_date) ASC, \
+                      created_at ASC \
+             LIMIT {limit} OFFSET {offset}"
         );
         let map = args.iter().map(|b| b.as_ref()).collect::<Vec<_>>();
         let mut stmt = self.conn().prepare(&sql)?;
@@ -270,5 +343,9 @@ pub(crate) fn map_todo_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Todo> {
         source_event_id: r.get(10)?,
         created_at: r.get(11)?,
         updated_at: r.get(12)?,
+        reminder_scheduled_for_utc: r.get(13)?,
+        reminder_handle: r.get(14)?,
+        reminder_state: ReminderState::from_str(&r.get::<_, String>(15)?),
+        overdue_ack_at: r.get(16)?,
     })
 }

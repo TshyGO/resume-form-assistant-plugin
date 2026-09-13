@@ -313,9 +313,26 @@ fn a_version_one_archive_is_upgraded_with_a_backup() {
     db.close().unwrap();
 
     let db = ArchiveStore::open(cfg.clone()).unwrap();
-    assert_eq!(db.schema_version(), 2);
+    assert_eq!(db.schema_version(), 3);
     assert!(db.migration_backup.as_ref().unwrap().exists());
     assert!(db.get_application(&id).unwrap().is_some());
+
+    // D10 的四列是 ALTER 上去的，v1 时代建的待办要能带着默认值活过来。
+    let todo = db
+        .create_todo(NewTodo {
+            application_id: id.clone(),
+            title: "迁移之后建的待办".into(),
+            due: TodoDue::Date("2026-09-20".into()),
+            time_zone: None,
+            remind_at_utc: None,
+            interview_round: None,
+            source_event_id: None,
+        })
+        .unwrap();
+    assert_eq!(todo.reminder_state, ReminderState::None);
+    assert!(todo.reminder_scheduled_for_utc.is_none());
+    assert!(todo.reminder_handle.is_none());
+    assert!(todo.overdue_ack_at.is_none());
     db.close().unwrap();
 
     let raw = rusqlite::Connection::open(cfg.db_path()).unwrap();
@@ -327,6 +344,14 @@ fn a_version_one_archive_is_upgraded_with_a_backup() {
         )
         .unwrap();
     assert_eq!(tables, 1);
+    let indexes: i64 = raw
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_todos_due'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexes, 1);
 }
 
 // --- PR 6: what the desktop UI reads ------------------------------------------------------
