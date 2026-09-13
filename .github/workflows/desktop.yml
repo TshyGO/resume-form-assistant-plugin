@@ -97,6 +97,10 @@ jobs:
         working-directory: desktop
         run: cargo test --manifest-path crates/local-ipc/Cargo.toml --locked --target ${{ matrix.rust-target }}
 
+      - name: Reminder scheduling tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/reminders/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
       - name: Evidence import tests
         working-directory: desktop
         run: cargo test --manifest-path crates/evidence-import/Cargo.toml --locked --target ${{ matrix.rust-target }}
