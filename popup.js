@@ -19,23 +19,34 @@ const BACKUP_FORMAT = "resume-pro.backup";
 const BACKUP_FORMAT_VERSION = 1;
 let pdfJsPromise = null;
 
+const STORE_KEYS = Object.keys(DEFAULT_STORE);
+
+// 设置页、侧边栏、别的标签页都会读写同一份 storage。读到快照再整份写回，中间别人刚存的
+// 东西就会被旧快照盖掉，所以这里只写真正变了的键。
 const StorageService = {
   async ensureDefaults() {
-    const current = await chrome.storage.local.get(null);
-    const normalized = normalizeStore(current);
+    const current = await chrome.storage.local.get(STORE_KEYS);
+    const missing = {};
 
-    if (JSON.stringify(current) !== JSON.stringify(normalized)) {
-      await chrome.storage.local.set(normalized);
+    for (const key of STORE_KEYS) {
+      if (current[key] === undefined) {
+        missing[key] = structuredClone(DEFAULT_STORE[key]);
+      }
     }
 
-    return normalized;
+    if (Object.keys(missing).length) {
+      await chrome.storage.local.set(missing);
+    }
+
+    return normalizeStore({ ...current, ...missing });
   },
 
   async getState() {
-    const current = await chrome.storage.local.get(null);
+    const current = await chrome.storage.local.get(STORE_KEYS);
     return normalizeStore(current);
   },
 
+  // 整份替换，只给备份恢复这种本来就要覆盖全部的场景用。
   async saveState(nextState) {
     const normalized = normalizeStore(nextState);
     await chrome.storage.local.set(normalized);
@@ -44,8 +55,20 @@ const StorageService = {
 
   async update(updater) {
     const current = await this.getState();
-    const next = await updater(structuredClone(current));
-    return this.saveState(next);
+    const next = normalizeStore(await updater(structuredClone(current)));
+    const changed = {};
+
+    for (const key of STORE_KEYS) {
+      if (JSON.stringify(next[key]) !== JSON.stringify(current[key])) {
+        changed[key] = next[key];
+      }
+    }
+
+    if (Object.keys(changed).length) {
+      await chrome.storage.local.set(changed);
+    }
+
+    return next;
   },
 
   async setActiveTemplate(templateId) {
@@ -1382,6 +1405,7 @@ function cacheParseElements() {
   elements.parseDropZone = document.getElementById("parse-drop-zone");
   elements.parseFileInput = document.getElementById("parse-file-input");
   elements.parseResumeButton = document.getElementById("parse-resume-button");
+  elements.parseDownloadButton = document.getElementById("parse-download-button");
   elements.parseStatus = document.getElementById("parse-status");
   elements.parseDropLabel = document.getElementById("parse-drop-label");
 }
@@ -1419,6 +1443,7 @@ function bindParseEvents() {
   });
 
   elements.parseResumeButton.addEventListener("click", handleParseResumeClick);
+  elements.parseDownloadButton?.addEventListener("click", handleParseDownloadClick);
 }
 
 function updateParseFileSelection(file) {
@@ -1468,6 +1493,8 @@ async function handleParseResumeClick() {
 
   elements.parseResumeButton.disabled = true;
   elements.parseResumeButton.textContent = "解析中...";
+  popupState.lastParsedFields = [];
+  if (elements.parseDownloadButton) elements.parseDownloadButton.hidden = true;
   showParseStatus("正在本地读取简历，然后调用 AI 提取信息...", "success", 0);
 
   try {
@@ -1483,8 +1510,23 @@ async function handleParseResumeClick() {
       throw new Error(result?.error || "简历解析失败。");
     }
 
-    generateAndDownloadExcel(result.fields);
-    showParseStatus("Excel 已下载，请检查补充后导入插件。", "success");
+    const fields = normalizeParsedResult(result.fields);
+    let template = null;
+
+    await StorageService.update((draft) => {
+      template = {
+        id: crypto.randomUUID(),
+        name: resolveTemplateName(`${getTemplateNameFromFile(file.name)}（AI 解析）`, draft.templates),
+        groups: parsedFieldsToGroups(fields)
+      };
+      draft.templates.unshift(template);
+      draft.activeTemplateId = template.id;
+      return draft;
+    });
+
+    popupState.lastParsedFields = result.fields;
+    if (elements.parseDownloadButton) elements.parseDownloadButton.hidden = false;
+    showParseStatus(`已存为模板「${template.name}」并设为当前，共 ${countTemplateFields(template)} 个字段。`, "success", 0);
     updateParseFileSelection(null);
   } catch (error) {
     showParseStatus(error.message || "简历解析失败。", "error", 0);
@@ -1593,11 +1635,7 @@ function extractTextFromHtml(html) {
   return (doc.body?.textContent || "").replace(/\s+\n/g, "\n").trim();
 }
 
-function generateAndDownloadExcel(fields) {
-  if (typeof XLSX === "undefined") {
-    throw new Error("未找到 Excel 生成库。");
-  }
-
+function normalizeParsedResult(fields) {
   const rawFields = Array.isArray(fields)
     ? fields
         .map((field) => ({
@@ -1608,17 +1646,45 @@ function generateAndDownloadExcel(fields) {
         .filter((field) => field.group && field.key)
     : [];
 
-  const normalizedFields = typeof ResumeProAIHelpers?.normalizeParsedFields === "function"
-    ? ResumeProAIHelpers.normalizeParsedFields(rawFields)
+  const normalizedFields = typeof self.ResumeProAIHelpers?.normalizeParsedFields === "function"
+    ? self.ResumeProAIHelpers.normalizeParsedFields(rawFields)
     : rawFields;
 
   if (!normalizedFields.length) {
     throw new Error("AI 未能提取到有效信息，请检查文件内容。");
   }
 
+  return normalizedFields;
+}
+
+// 和 parseTemplateFile 读 Excel 得到的结构一样，存进去的模板与「下载 Excel 再导入」一致。
+function parsedFieldsToGroups(fields) {
+  const groupMap = new Map();
+
+  fields.forEach((field) => {
+    if (!groupMap.has(field.group)) {
+      groupMap.set(field.group, []);
+    }
+
+    groupMap.get(field.group).push({ key: field.key, value: field.value });
+  });
+
+  return Array.from(groupMap, ([name, groupFields]) => ({ name, fields: groupFields }));
+}
+
+function handleParseDownloadClick() {
+  try {
+    generateAndDownloadExcel(popupState.lastParsedFields);
+    showParseStatus("Excel 已下载。", "success");
+  } catch (error) {
+    showParseStatus(error.message || "Excel 导出失败。", "error", 0);
+  }
+}
+
+function generateAndDownloadExcel(fields) {
   const rows = [
     [...TEMPLATE_SHEET_HEADER],
-    ...normalizedFields.map((field) => [field.group, field.key, field.value])
+    ...normalizeParsedResult(fields).map((field) => [field.group, field.key, field.value])
   ];
 
   BackupIO.saveWorkbook(rows, `resume_parsed_${formatCurrentDate()}.xlsx`);
@@ -1658,8 +1724,11 @@ function showParseStatus(message, variant, autoHideDelay = 2200) {
 if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
   self.ResumeProTemplateImportTest = {
     cacheElements,
+    cacheParseElements,
     countTemplateFields,
     handleFileSelection,
+    handleParseDownloadClick,
+    handleParseResumeClick,
     handleTemplateListClick,
     parseTemplateFile,
     popupState,
