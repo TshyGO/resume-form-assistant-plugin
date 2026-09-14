@@ -129,6 +129,9 @@ test("a parsed resume is stored as the active template, with Excel as an optiona
   popup.api.backup.BackupIO.saveWorkbook = (rows) => saved.push(rows);
   popup.api.handleParseDownloadClick();
   assert.equal(saved[0].length, 4);
+
+  popup.api.updateParseFileSelection({ name: "另一份.txt", content: "" });
+  assert.equal(popup.element("parse-download-button").hidden, true, "a new file hides the previous resume's download");
 });
 
 test("a failed parse stores nothing", async () => {
