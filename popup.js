@@ -5,6 +5,11 @@ const DEFAULT_STORE = {
     apiUrl: "https://api.openai.com/v1/chat/completions",
     model: "gpt-4o-mini",
     apiKey: ""
+  },
+  profile: {
+    values: {},
+    family: [],
+    custom: []
   }
 };
 
@@ -95,7 +100,10 @@ const popupState = {
   modelResult: null,
   modelVisible: [],
   modelActiveIndex: -1,
+  profileDirty: false,
+  profileRowSeq: 0,
   statusTimers: {
+    profile: null,
     template: null,
     backup: null,
     config: null,
@@ -116,6 +124,7 @@ document.addEventListener("DOMContentLoaded", () => {
 async function bootstrap() {
   cacheElements();
   bindEvents();
+  applyTabFromHash();
   await StorageService.ensureDefaults();
   await render();
   initializeUpdateFeature().catch((error) => {
@@ -157,6 +166,13 @@ function cacheElements() {
   elements.modelStatus = document.getElementById("model-status");
   elements.urlStatus = document.getElementById("url-status");
   elements.configStatus = document.getElementById("config-status");
+  elements.profileForm = document.getElementById("profile-form");
+  elements.profilePreset = document.getElementById("profile-preset");
+  elements.profileFamily = document.getElementById("profile-family");
+  elements.profileCustom = document.getElementById("profile-custom");
+  elements.profileAddMember = document.getElementById("profile-add-member");
+  elements.profileAddCustom = document.getElementById("profile-add-custom");
+  elements.profileStatus = document.getElementById("profile-status");
   elements.currentVersion = document.getElementById("current-version");
   elements.checkUpdateButton = document.getElementById("check-update-button");
   elements.updateCheckStatus = document.getElementById("update-check-status");
@@ -201,6 +217,20 @@ function bindEvents() {
   });
   elements.templateList.addEventListener("click", handleTemplateListClick);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
+  elements.profileForm.addEventListener("submit", handleProfileSubmit);
+  elements.profileForm.addEventListener("input", markProfileDirty);
+  elements.profileForm.addEventListener("change", markProfileDirty);
+  elements.profileForm.addEventListener("click", handleProfileRemoveClick);
+  elements.profileAddMember.addEventListener("click", () => {
+    elements.profileFamily.insertAdjacentHTML("beforeend", familyRowHtml({ relation: "父亲" }));
+    markProfileDirty();
+  });
+  elements.profileAddCustom.addEventListener("click", () => {
+    elements.profileCustom.insertAdjacentHTML("beforeend", customRowHtml({ key: "", value: "" }));
+    markProfileDirty();
+  });
+  // 侧边栏把空字段加进来之后，会带着 #profile 打开管理面板。
+  self.addEventListener?.("hashchange", applyTabFromHash);
   elements.toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
   elements.fetchModelsButton.addEventListener("click", handleFetchModelsClick);
   bindModelCombo();
@@ -219,7 +249,12 @@ function bindEvents() {
       return;
     }
 
-    if (changes.templates || changes.activeTemplateId || changes.aiConfig) {
+    // 正在改的表单不重画，否则没保存的输入会被冲掉；提醒一句保存会覆盖别处的改动。
+    if (changes.profile && popupState.profileDirty) {
+      showStatus("profile", "「我的信息」在别处被改过了，现在保存会覆盖那边的修改。", "warning", 0);
+    }
+
+    if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.profile) {
       render().catch((error) => {
         console.error("Resume Pro popup render failed:", error);
       });
@@ -243,6 +278,7 @@ async function render() {
   const state = await StorageService.getState();
   renderTemplates(state);
   renderConfig(state.aiConfig);
+  if (!popupState.profileDirty) renderProfile(state.profile);
   setActiveTab(popupState.activeTab);
 }
 
@@ -708,6 +744,186 @@ function toggleApiKeyVisibility() {
   elements.toggleApiKeyButton.innerHTML = `<span aria-hidden="true">${isPassword ? "🙈" : "👁"}</span>`;
 }
 
+// ---------------------------------------------------------------------------
+// 我的信息
+//
+// 表单每个输入框带 data-kind / data-row / data-field，保存时整张表单读出来交给
+// ResumeProProfile.profileFromEntries 还原，只写 profile 这一个键。
+
+function applyTabFromHash() {
+  const tab = typeof location !== "undefined" ? location.hash.replace(/^#/, "").split(":")[0] : "";
+
+  if (tab && elements.tabPanels.some((panel) => panel.dataset.panel === tab)) {
+    popupState.activeTab = tab;
+    setActiveTab(tab);
+  }
+}
+
+function renderProfile(profile) {
+  const api = self.ResumeProProfile;
+
+  elements.profilePreset.innerHTML = api.PROFILE_SCHEMA.map((group) => `
+    <section class="profile-group">
+      <h3 class="profile-group__title">${escapeHtml(group.name)}</h3>
+      <div class="profile-grid">
+        ${group.fields.map((field) => profileInputHtml(field, profile.values[field.id] || "", `data-kind="value" data-field="${escapeHtml(field.id)}"`)).join("")}
+      </div>
+    </section>
+  `).join("");
+  elements.profileFamily.innerHTML = profile.family.map(familyRowHtml).join("");
+  elements.profileCustom.innerHTML = profile.custom.map(customRowHtml).join("");
+  popupState.profileDirty = false;
+}
+
+function profileInputHtml(field, value, dataAttributes) {
+  const id = `profile-input-${++popupState.profileRowSeq}`;
+  const label = `<label for="${id}"><span>${escapeHtml(field.label || field.key)}</span></label>`;
+  const placeholder = field.placeholder ? ` placeholder="${escapeHtml(field.placeholder)}"` : "";
+
+  if (field.type === "select") {
+    // 备份里带来的值不在选项里时也要显示出来，不能保存一次就悄悄丢掉。
+    const options = !value || field.options.includes(value) ? field.options : [...field.options, value];
+    return `
+      <div class="field-block">
+        ${label}
+        <select id="${id}" ${dataAttributes}>
+          <option value=""></option>
+          ${options.map((option) => `<option value="${escapeHtml(option)}"${option === value ? " selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+        </select>
+      </div>
+    `;
+  }
+
+  if (field.type === "textarea") {
+    return `
+      <div class="field-block profile-field--wide">
+        ${label}
+        <textarea id="${id}" rows="2" ${dataAttributes}${placeholder}>${escapeHtml(value)}</textarea>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="field-block">
+      ${label}
+      <input id="${id}" type="${field.type === "month" ? "month" : "text"}" value="${escapeHtml(value)}" autocomplete="off" ${dataAttributes}${placeholder}>
+    </div>
+  `;
+}
+
+function familyRowHtml(member) {
+  const api = self.ResumeProProfile;
+  const row = ++popupState.profileRowSeq;
+  const attributes = (field) => `data-kind="family" data-row="${row}" data-field="${field}"`;
+
+  return `
+    <div class="profile-row">
+      ${profileInputHtml({ key: "关系", type: "select", options: api.FAMILY_RELATIONS }, member.relation || "", attributes("relation"))}
+      ${api.FAMILY_FIELDS.map((field) => profileInputHtml(field, member[field.id] || "", attributes(field.id))).join("")}
+      <div class="profile-row__actions">
+        <button class="text-button" type="button" data-remove-row>删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function customRowHtml(item) {
+  const row = ++popupState.profileRowSeq;
+  const attributes = (field) => `data-kind="custom" data-row="${row}" data-field="${field}"`;
+
+  return `
+    <div class="profile-row${item.key && !item.value ? " is-pending" : ""}">
+      ${profileInputHtml({ key: "字段名" }, item.key, attributes("key"))}
+      ${profileInputHtml({ key: "内容" }, item.value, attributes("value"))}
+      <div class="profile-row__actions">
+        <button class="text-button" type="button" data-remove-row>删除</button>
+      </div>
+    </div>
+  `;
+}
+
+function readProfileForm() {
+  const entries = Array.from(elements.profileForm.querySelectorAll("[data-kind]")).map((input) => ({
+    kind: input.dataset.kind,
+    row: input.dataset.row,
+    field: input.dataset.field,
+    value: input.value
+  }));
+
+  return self.ResumeProProfile.profileFromEntries(entries);
+}
+
+async function handleProfileSubmit(event) {
+  event.preventDefault();
+  await saveProfile(readProfileForm());
+}
+
+async function saveProfile(profile) {
+  const api = self.ResumeProProfile;
+  const state = await StorageService.update((draft) => {
+    draft.profile = profile;
+    return draft;
+  });
+
+  renderProfile(state.profile);
+
+  const count = api.countProfileValues(state.profile);
+  const pending = api.countPendingFields(state.profile);
+
+  showStatus(
+    "profile",
+    pending ? `已保存 ${count} 项，还有 ${pending} 个字段没填内容。` : `已保存 ${count} 项。`,
+    "success",
+    pending ? 0 : 2200
+  );
+
+  return state;
+}
+
+function markProfileDirty() {
+  popupState.profileDirty = true;
+}
+
+function handleProfileRemoveClick(event) {
+  const button = event.target.closest?.("[data-remove-row]");
+
+  if (!button) {
+    return;
+  }
+
+  button.closest(".profile-row")?.remove();
+  markProfileDirty();
+}
+
+// 备份和模板一样过一遍密码 / 验证码剔除。补充字段是用户自己起的名，拦不住一行叫「登录密码」。
+function stripProfileSecrets(profile) {
+  const { isSecretFieldName, isSecretFieldValue } = self.ResumeProSecretFields;
+  const next = self.ResumeProProfile.normalizeProfile(profile);
+  let omitted = 0;
+
+  for (const [id, value] of Object.entries(next.values)) {
+    if (isSecretFieldValue(value)) {
+      delete next.values[id];
+      omitted += 1;
+    }
+  }
+
+  next.custom = next.custom.filter((item) => {
+    const secret = isSecretFieldName(item.key) || isSecretFieldValue(item.value);
+    if (secret) omitted += 1;
+    return !secret;
+  });
+
+  return { profile: next, omitted };
+}
+
+function describeBackupContents(backup) {
+  const parts = [];
+  if (backup.templates.length) parts.push(`${backup.templates.length} 个模板`);
+  if (backup.profile) parts.push("我的信息");
+  return parts.join("和");
+}
+
 async function deleteTemplate(templateId) {
   const state = await StorageService.update((draft) => {
     draft.templates = draft.templates.filter((template) => template.id !== templateId);
@@ -740,8 +956,8 @@ async function deleteTemplate(templateId) {
 async function handleExportBackup() {
   const state = await StorageService.getState();
 
-  if (!state.templates.length) {
-    showStatus("backup", "还没有模板可以导出。", "warning");
+  if (!state.templates.length && !self.ResumeProProfile.hasProfileContent(state.profile)) {
+    showStatus("backup", "还没有模板或我的信息可以导出。", "warning");
     return;
   }
 
@@ -772,8 +988,8 @@ async function exportBackup(includeApiKey) {
     showStatus(
       "backup",
       notes.length
-        ? `已导出 ${report.backup.templates.length} 个模板，${notes.join("，")}。`
-        : `已导出 ${report.backup.templates.length} 个模板。`,
+        ? `已导出 ${describeBackupContents(report.backup)}，${notes.join("，")}。`
+        : `已导出 ${describeBackupContents(report.backup)}。`,
       "success",
       notes.length ? 6000 : 2200
     );
@@ -796,13 +1012,13 @@ async function handleBackupFileSelection(event) {
     const state = await StorageService.getState();
 
     // 刚装完、或者换了扩展 ID，没有东西可覆盖，直接恢复。
-    if (!state.templates.length) {
+    if (!state.templates.length && !self.ResumeProProfile.hasProfileContent(state.profile)) {
       await applyAndSave(backup, "replace");
       return;
     }
 
     popupState.pendingBackup = backup;
-    elements.backupConfirmText.textContent = `备份里有 ${backup.templates.length} 个模板。`;
+    elements.backupConfirmText.textContent = `备份里有 ${describeBackupContents(backup)}。`;
     elements.backupConfirm.hidden = false;
     hideStatus("backup");
   } catch (error) {
@@ -834,8 +1050,8 @@ async function applyAndSave(backup, mode) {
   showStatus(
     "backup",
     mode === "replace"
-      ? `已恢复 ${backup.templates.length} 个模板。`
-      : `已追加 ${backup.templates.length} 个模板。`,
+      ? `已恢复 ${describeBackupContents(backup)}。`
+      : `已追加 ${describeBackupContents(backup)}。`,
     "success"
   );
 }
@@ -870,7 +1086,11 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
     templates.push({ id: template.id, name: template.name, groups: stripped.groups });
   }
 
-  if (!templates.length) {
+  const strippedProfile = stripProfileSecrets(state.profile);
+  const includeProfile = self.ResumeProProfile.hasProfileContent(strippedProfile.profile);
+  omittedFieldCount += strippedProfile.omitted;
+
+  if (!templates.length && !includeProfile) {
     throw new Error("模板里的字段都是密码 / 验证码这类，没有可以写进备份的内容。");
   }
 
@@ -888,6 +1108,7 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
       pluginVersion: chrome.runtime.getManifest().version,
       templates,
       activeTemplateId: state.activeTemplateId,
+      ...(includeProfile ? { profile: strippedProfile.profile } : {}),
       aiConfig: includeApiKey && state.aiConfig.apiKey
         ? { apiUrl: endpoint.url, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
         : { apiUrl: endpoint.url, model: state.aiConfig.model }
@@ -925,20 +1146,27 @@ function parseBackup(text) {
     ? raw.templates.map(normalizeTemplate).filter((template) => template && template.groups.length)
     : [];
 
-  if (!templates.length) {
+  const profile = raw.profile && typeof raw.profile === "object"
+    ? self.ResumeProProfile.normalizeProfile(raw.profile)
+    : null;
+  const hasProfile = Boolean(profile && self.ResumeProProfile.hasProfileContent(profile));
+
+  if (!templates.length && !hasProfile) {
     throw new Error("备份里没有模板。");
   }
 
   return {
     templates,
     activeTemplateId: typeof raw.activeTemplateId === "string" ? raw.activeTemplateId : "",
-    aiConfig: raw.aiConfig && typeof raw.aiConfig === "object" ? raw.aiConfig : null
+    aiConfig: raw.aiConfig && typeof raw.aiConfig === "object" ? raw.aiConfig : null,
+    profile: hasProfile ? profile : null
   };
 }
 
 function applyBackup(state, backup, mode) {
   const next = structuredClone(state);
-  const templates = mode === "replace" ? [] : next.templates;
+  // 只有「我的信息」的备份，替换也不能把本机模板清空。
+  const templates = mode === "replace" && backup.templates.length ? [] : next.templates;
   let activeTemplateId = "";
 
   backup.templates.forEach((template) => {
@@ -958,7 +1186,17 @@ function applyBackup(state, backup, mode) {
   });
 
   next.templates = templates;
-  next.activeTemplateId = activeTemplateId || next.templates[0]?.id || "";
+  next.activeTemplateId = activeTemplateId
+    || (templates.some((template) => template.id === state.activeTemplateId) ? state.activeTemplateId : "")
+    || next.templates[0]?.id
+    || "";
+
+  // 旧备份没有这一项，本机的保持不动；追加时本机已填的不被覆盖。
+  if (backup.profile) {
+    next.profile = mode === "replace"
+      ? backup.profile
+      : self.ResumeProProfile.mergeProfiles(next.profile, backup.profile);
+  }
 
   if (backup.aiConfig) {
     const apiUrl = String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl);
@@ -1201,7 +1439,8 @@ function normalizeStore(rawState) {
   return {
     templates,
     activeTemplateId: resolvedActiveTemplateId,
-    aiConfig: normalizeAiConfig(rawState.aiConfig)
+    aiConfig: normalizeAiConfig(rawState.aiConfig),
+    profile: self.ResumeProProfile.normalizeProfile(rawState.profile)
   };
 }
 
@@ -1734,6 +1973,12 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     popupState,
     resolveTemplateName,
     StorageService,
+    profile: {
+      applyTabFromHash,
+      renderProfile,
+      saveProfile,
+      stripProfileSecrets
+    },
     backup: {
       applyBackup,
       BackupIO,

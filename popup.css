@@ -442,6 +442,99 @@ select {
   margin: 12px 0 0;
 }
 
+.profile-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.profile-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#profile-preset .profile-group + .profile-group,
+#profile-preset + .profile-group,
+.profile-group + .profile-group {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.profile-group__title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.profile-group__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.profile-grid,
+.profile-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.profile-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-row {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.profile-row.is-pending {
+  border-color: var(--warning);
+}
+
+.profile-row__actions,
+.profile-field--wide {
+  grid-column: 1 / -1;
+}
+
+.profile-row__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.profile-grid .field-block,
+.profile-row .field-block {
+  gap: 6px;
+  min-width: 0;
+}
+
+.profile-grid .field-block input,
+.profile-row .field-block input,
+.field-block select,
+.field-block textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 13px;
+}
+
+.field-block textarea {
+  resize: vertical;
+}
+
 .empty-state {
   padding: 24px 16px;
   border: 1px dashed rgba(79, 110, 247, 0.25);

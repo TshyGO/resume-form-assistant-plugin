@@ -13,6 +13,7 @@ export const RESERVED_KEYS = [
   'templates',
   'activeTemplateId',
   'aiConfig',
+  'profile',
   'resumeProUpdateCache',
   'resumeProDismissedVersion'
 ];

@@ -246,7 +246,7 @@
     if (/父亲|爸爸/.test(source)) tags.push("father");
     if (/母亲|妈妈/.test(source)) tags.push("mother");
     if (/配偶|妻子|丈夫/.test(source)) tags.push("spouse");
-    if (/家庭成员|家属|亲属/.test(source)) tags.push("relative");
+    if (/家庭成员|家庭主要成员|家属|亲属|兄弟|姐妹|子女/.test(source)) tags.push("relative");
 
     return tags;
   }

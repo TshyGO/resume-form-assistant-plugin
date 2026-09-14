@@ -56,7 +56,7 @@ test("a fresh install only gets the missing defaults written", async () => {
 
   const state = await popup.api.StorageService.ensureDefaults();
 
-  assert.deepEqual(popup.setCalls, [["templates", "activeTemplateId"]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(popup.setCalls)), [["templates", "activeTemplateId", "profile"]]);
   assert.equal(popup.store.aiConfig.apiUrl, "https://relay.example/v1/chat/completions");
   assert.equal(state.aiConfig.model, "x");
 });
