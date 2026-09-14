@@ -84,6 +84,28 @@ test("select validation accepts the same loose spellings the page fill accepts",
   assert.deepEqual(filtered, [{ fieldId: "degree", value: "本科" }]);
 });
 
+// 没被识别成联动组的下一级下拉框，刚出来时只有「请选择」。AI 给的值要留到页面上等选项加载后再选。
+test("a select whose options have not loaded yet does not throw the value away", () => {
+  const filtered = helpers.filterValidMatches([
+    { fieldId: "city", label: "所在城市", inputType: "select", options: ["请选择"] },
+    { fieldId: "empty", label: "所在区县", inputType: "select", options: [] }
+  ], [{ fieldId: "city", value: "南阳市" }, { fieldId: "empty", value: "南召县" }]);
+
+  assert.deepEqual(filtered, [{ fieldId: "city", value: "南阳市" }, { fieldId: "empty", value: "南召县" }]);
+});
+
+test("region: 户口性质 is filled from a field with exactly that name", () => {
+  const matches = helpers.buildRuleBasedMatches(
+    [{ fieldId: "a", label: "户口性质", inputType: "select", options: ["城镇", "农村"] }],
+    [
+      { group: "户籍与地区", key: "户口所在地省", value: "河南省" },
+      { group: "户籍与地区", key: "户口性质", value: "农村" }
+    ]
+  );
+
+  assert.deepEqual(matches, [{ fieldId: "a", value: "农村" }]);
+});
+
 test("parsed fields get semantic names from anchor values", () => {
   const normalized = helpers.normalizeParsedFields([
     { group: "实习经历", key: "实习1公司", value: "陶氏" },

@@ -1282,7 +1282,7 @@
   function setElementValue(element, value) {
     if (element && typeof element === "object" && element.kind === "radio") {
       const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio) }));
-      const radioIndex = self.ResumeProAIHelpers.findSelectOptionIndex(radioOptions, value);
+      const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
       const matchedRadio = radioIndex >= 0 ? element.elements[radioIndex] : null;
 
       if (!matchedRadio) {
@@ -1356,7 +1356,7 @@
 
     if (element instanceof HTMLSelectElement) {
       const selectOptions = Array.from(element.options).map((option) => ({ value: option.value, text: option.text, disabled: option.disabled }));
-      const optionIndex = self.ResumeProAIHelpers.findSelectOptionIndex(selectOptions, value);
+      const optionIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(selectOptions, value) ?? -1;
       const matchedOption = optionIndex >= 0 ? element.options[optionIndex] : null;
 
       if (!matchedOption) {
