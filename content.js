@@ -792,6 +792,7 @@
     let fieldCount = 0;
     let filledCount = 0;
     let unconfirmedCount = 0;
+    const unfilledLabels = [];
     let outcome = "failed";
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
@@ -870,13 +871,15 @@
       phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
+      const domOrderMap = new Map(fields.map((field, index) => [field.fieldId, index]));
       const sortedMatches = [...response.matches].sort((a, b) => {
         const ma = fieldMetaMap.get(a.fieldId);
         const mb = fieldMetaMap.get(b.fieldId);
         if (ma?.cascadeGroup !== undefined && ma.cascadeGroup === mb?.cascadeGroup) {
           return (ma.cascadeLevel ?? 0) - (mb.cascadeLevel ?? 0);
         }
-        return 0;
+        // 其余按页面顺序从上往下填：没被识别成联动组的省/市/县也能等上一级先选好。
+        return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
       });
 
       for (const match of sortedMatches) {
@@ -897,11 +900,14 @@
 
         const fieldMeta = fieldMetaMap.get(match.fieldId);
 
-        if (!filled && element.kind === "element" && element.element instanceof HTMLSelectElement && fieldMeta?.cascadeGroup !== undefined) {
+        // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
+        // 也按同样的方式等一等（和 worker 放行它用的是同一个判断）；选项出来了却对不上，不再白等。
+        if (!filled && element.kind === "element" && element.element instanceof HTMLSelectElement
+          && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            await new Promise((resolve) => setTimeout(resolve, 150));
             filled = setElementValue(element, match.value);
-            if (filled) break;
+            if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
 
@@ -910,6 +916,8 @@
           highlightFilledField(element, match.value);
         } else if (assisted) {
           unconfirmedCount += 1;
+        } else {
+          unfilledLabels.push(fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段");
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -922,12 +930,20 @@
         }
       }
 
-      outcome = response.warning || unconfirmedCount ? "partial" : "success";
+      outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
+      const unfilledNote = unfilledLabels.length
+        ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。`
+        : "";
       if (assisted) {
         showStatus(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
-      } else showStatus(response.warning
-        ? `本地已填写 ${filledCount} 项；${response.warning}`
-        : `已填写 ${filledCount} 个字段。`, response.warning ? "error" : "success");
+      } else if (response.warning) {
+        showStatus(`本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}`, "error", Boolean(unfilledNote));
+      } else if (unfilledNote) {
+        // 没填上的字段要用户自己去补，提示不自动消失。
+        showStatus(`已填写 ${filledCount} 个字段。${unfilledNote}`, "error", true);
+      } else {
+        showStatus(`已填写 ${filledCount} 个字段。`, "success");
+      }
     } catch (error) {
       showStatus(error.message || "AI 填写失败。", "error");
     } finally {
@@ -940,7 +956,7 @@
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
       const summary = formatFillDiagnostics({ ...timing, totalMs,
-        fieldCount, filledCount, outcome, diagnostics });
+        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics });
       const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
       if (panel && text) {
@@ -963,6 +979,12 @@
     }
   }
 
+  function summarizeLabels(labels, limit = 5) {
+    const unique = [...new Set(labels.map((label) => String(label ?? "").trim()).filter(Boolean))];
+    const shown = unique.slice(0, limit).join("、");
+    return unique.length > limit ? `${shown} 等` : shown;
+  }
+
   function formatFillDiagnostics(result) {
     const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行 / 未取得";
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
@@ -972,7 +994,7 @@
     return [
       `Resume Pro v${chrome.runtime.getManifest().version}`,
       `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
-      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}`,
+      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}`,
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}`,
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
@@ -1233,12 +1255,17 @@
     return null;
   }
 
+  function hasRealSelectOptions(select) {
+    const isPlaceholder = self.ResumeProAIHelpers?.isPlaceholderOption;
+    return Array.from(select.options || []).some((option) => String(option.text ?? "").trim()
+      && !(isPlaceholder && isPlaceholder({ value: option.value, text: option.text, disabled: option.disabled })));
+  }
+
   function setElementValue(element, value) {
     if (element && typeof element === "object" && element.kind === "radio") {
-      const matchedRadio = element.elements.find((radio) => {
-        const optionText = getRadioOptionLabel(radio);
-        return optionText === value.trim() || radio.value === value.trim();
-      });
+      const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
+      const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
+      const matchedRadio = radioIndex >= 0 ? element.elements[radioIndex] : null;
 
       if (!matchedRadio) {
         return false;
@@ -1310,24 +1337,28 @@
     }
 
     if (element instanceof HTMLSelectElement) {
-      if (element.options.length <= 1) {
-        const onlyOption = element.options[0];
-        if (!onlyOption || (onlyOption.value !== value && onlyOption.text.trim() !== value.trim())) {
-          return false;
-        }
+      const selectOptions = Array.from(element.options).map((option) => ({ value: option.value, text: option.text, disabled: option.disabled }));
+      const optionIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(selectOptions, value) ?? -1;
+      const matchedOption = optionIndex >= 0 ? element.options[optionIndex] : null;
+
+      if (!matchedOption) {
+        return false;
       }
 
-      if (Array.from(element.options).some((option) => option.value === value)) {
-        element.value = value;
+      // 走原型上的 setter：有些框架在实例上拦了 value，直接赋值会被吞掉。
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+      if (descriptor?.set) {
+        descriptor.set.call(element, matchedOption.value);
       } else {
-        const matchedOption = Array.from(element.options).find((option) => option.text.trim() === value.trim());
-        if (!matchedOption) {
-          return false;
-        }
         element.value = matchedOption.value;
       }
+      // 几个选项 value 相同时（常见的是一串空值），按 value 赋值会落到第一个，按下标补一次。
+      if (element.selectedIndex !== optionIndex) {
+        element.selectedIndex = optionIndex;
+      }
+      element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
+      return element.selectedIndex === optionIndex;
     }
 
     if (element instanceof HTMLElement && element.isContentEditable) {
@@ -1523,7 +1554,7 @@
     return store.templates.find((template) => template.id === store.activeTemplateId) || store.templates[0];
   }
 
-  function showStatus(message, variant) {
+  function showStatus(message, variant, persist = false) {
     const statusElement = shadowRoot?.querySelector("#resume-pro-status");
 
     if (!statusElement) {
@@ -1535,6 +1566,11 @@
 
     if (state.statusTimer) {
       clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
+
+    if (persist) {
+      return;
     }
 
     state.statusTimer = window.setTimeout(() => {

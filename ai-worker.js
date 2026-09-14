@@ -7,8 +7,12 @@ const AI_SYSTEM_PROMPT = [
   '2. 格式：[{"fieldId":"xxx","value":"yyy"}]',
   "3. 只填写能确定匹配的字段，不确定的跳过",
   "4. 基本信息字段优先精确匹配，不要把教育背景、经历、技能字段填进姓名、邮箱、手机号、出生日期等基础字段",
-  "5. 遇到拼音、证件类型、外语类型/等级、年月分拆下拉框等复杂字段，只有在能确定时才填写",
-  "6. 匹配考虑同义词：手机=电话=联系方式=mobile=phone"
+  "5. 下拉框、单选框的 value 必须是该字段 options 里的原文，不要改写、不要自造，不要选「请选择」这类占位项",
+  "6. 证件类型、学历、学位、外语语种/等级、年月分拆、省市县等下拉框，简历里有明确对应的数据就填写，没有就跳过",
+  "7. 带 cascadeLevel 的字段属于同一组联动下拉，按层级分别给出省、市、县等对应层级的值",
+  "8. 匹配考虑同义词：手机=电话=联系方式=mobile=phone；学历=最高学历=培养层次",
+  "9. 紧急联系人、父亲、母亲、配偶、家庭成员等字段只能用对应那个人的数据；不要把本人的姓名、手机号、邮箱、出生日期填进去，也不要把一个人的数据填给另一个人",
+  "10. 籍贯、高考生源地、户口所在地是三个不同的问题，不能拿一个的数据填另一个；省、市、县要填对应层级"
 ].join("\n");
 
 const activeFillRequests = new Map();
@@ -94,15 +98,16 @@ async function handleAiFill(message, controller = new AbortController()) {
     return { success: false, error: "当前模板没有可用字段。" };
   }
 
-  const ruleMatches = ResumeProAIHelpers.buildRuleBasedMatches(formFields, resumeFields);
+  // 本地值对这个字段有效才算命中。无效的（比如下拉选项里没有这个值）照样交给 AI，
+  // 否则字段既填不上，也不会再有人尝试。
+  const ruleMatches = ResumeProAIHelpers.filterValidMatches(
+    formFields,
+    ResumeProAIHelpers.buildRuleBasedMatches(formFields, resumeFields)
+  );
   const matchedFieldIds = new Set(ruleMatches.map((match) => match.fieldId));
-  const remainingFormFields = formFields.filter((field) => {
-    if (matchedFieldIds.has(field.fieldId)) {
-      return false;
-    }
-
-    return !ResumeProAIHelpers.shouldSkipAIForField(field);
-  });
+  // 以前这里还按字段名把证件类型、学历、学位、年月等下拉框挡在 AI 外面，
+  // 本地规则又不处理它们，这些字段就永远填不上。现在只靠 filterValidMatches 校验结果。
+  const remainingFormFields = formFields.filter((field) => !matchedFieldIds.has(field.fieldId));
   let aiMatches = [];
   const candidates = ResumeProAIHelpers.selectResumeCandidates(remainingFormFields, resumeFields);
   const diagnostics = {

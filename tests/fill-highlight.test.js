@@ -432,9 +432,10 @@ test("diagnostic summary only exposes allowlisted counts, durations and errors",
   const { helpers } = loadHighlightHelpers();
   const summary = helpers.formatFillDiagnostics({
     scanMs: 100, roundTripMs: 1000, fillMs: null, totalMs: 1100,
-    fieldCount: 2, filledCount: 0, outcome: "failed",
+    fieldCount: 2, filledCount: 0, unfilledCount: 1, outcome: "failed",
     diagnostics: { errorCode: "secret-key", apiKey: "secret-key", apiMs: 900, ruleMatches: 1, resumeFields: "private-name" }
   });
+  assert.match(summary, /没填上：1/);
   assert.match(summary, /0.10 s/);
   assert.match(summary, /1.10 s/);
   assert.match(summary, /未执行 \/ 未取得/);
