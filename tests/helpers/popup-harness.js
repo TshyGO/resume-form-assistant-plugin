@@ -32,6 +32,7 @@ function makeTextFile(name, text) {
 
 function loadPopup({ globals = {} } = {}) {
   const store = {};
+  const setCalls = [];
   const statusMessages = [];
   let uuidCounter = 0;
 
@@ -102,6 +103,7 @@ function loadPopup({ globals = {} } = {}) {
             return result;
           },
           async set(values) {
+            setCalls.push(Object.keys(values));
             for (const [key, value] of Object.entries(values)) {
               store[key] = structuredClone(value);
             }
@@ -128,6 +130,8 @@ function loadPopup({ globals = {} } = {}) {
 
   return {
     api,
+    store,
+    setCalls,
     element: (id) => document.getElementById(id),
     statusMessages,
     lastStatus: () => statusMessages.at(-1)?.message || "",
