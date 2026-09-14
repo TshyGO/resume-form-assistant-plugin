@@ -130,6 +130,26 @@ test("findSelectOptionIndex: exact value or text", () => {
   assert.equal(helpers.findSelectOptionIndex(["汉族", "回族"], "回族"), 1);
 });
 
+test("findSelectOptionIndex: 选择其他 is a real option, Select… is a placeholder, values compare loosely", () => {
+  assert.equal(helpers.findSelectOptionIndex(options(["选择", "选择其他", "本科"]), "选择其他"), 1);
+  assert.equal(helpers.findSelectOptionIndex(options(["Select Degree", "Bachelor"]), "degree"), -1);
+  assert.equal(helpers.findSelectOptionIndex([{ value: "MALE", text: "Man" }, { value: "FEMALE", text: "Woman" }], "male"), 0);
+  assert.equal(helpers.isPlaceholderOption({ value: "", text: "Choose one" }), true);
+});
+
+test("person scope: English emergency contact and a 父母 group stay off the applicant", () => {
+  const matches = helpers.buildRuleBasedMatches(
+    [
+      { fieldId: "emg", label: "Emergency Contact Name", inputType: "text", options: [] },
+      { fieldId: "parents", label: "姓名", group: "父母情况", inputType: "text", options: [] },
+      { fieldId: "own", label: "姓名", inputType: "text", options: [] }
+    ],
+    [{ group: "基本信息", key: "姓名", value: "张三" }]
+  );
+
+  assert.deepEqual(matches, [{ fieldId: "own", value: "张三" }]);
+});
+
 test("findSelectOptionIndex: ignores spacing, brackets and hyphens", () => {
   assert.equal(helpers.findSelectOptionIndex(options(["中国(CHINA)", "美国(USA)"]), "中国（CHINA）"), 0);
   assert.equal(helpers.findSelectOptionIndex(options(["CET-6", "CET-4"]), "cet6"), 0);

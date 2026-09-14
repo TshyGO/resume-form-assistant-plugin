@@ -107,6 +107,7 @@
     buildRuleBasedMatches,
     selectResumeCandidates,
     findSelectOptionIndex,
+    isPlaceholderOption,
     filterValidMatches,
     semanticizeParsedFields,
     normalizeParsedFields,
@@ -243,11 +244,12 @@
     const source = String(text ?? "");
     const tags = [];
 
-    if (/紧急联系|紧急联络|紧急电话|监护人/.test(source)) tags.push("contact");
-    if (/父亲|爸爸/.test(source)) tags.push("father");
-    if (/母亲|妈妈/.test(source)) tags.push("mother");
-    if (/配偶|妻子|丈夫/.test(source)) tags.push("spouse");
-    if (/家庭(?:主要)?成员|家属|亲属|兄弟|姐妹|子女/.test(source)) tags.push("relative");
+    // 传进来的是 normalizeText 之后的文字：小写、没有空格，英文词是连在一起的。
+    if (/紧急联系|紧急联络|紧急电话|应急联系|监护人|emergencycontact|emergencyphone|guardian/.test(source)) tags.push("contact");
+    if (/父亲|爸爸|father/.test(source)) tags.push("father");
+    if (/母亲|妈妈|mother/.test(source)) tags.push("mother");
+    if (/配偶|妻子|丈夫|爱人|spouse|wife|husband/.test(source)) tags.push("spouse");
+    if (/家庭(?:主要)?成员|家属|家人|亲属|父母|兄弟|姐妹|子女|familymember|relative|sibling/.test(source)) tags.push("relative");
 
     return tags;
   }
@@ -295,7 +297,8 @@
     const normalizedTarget = normalizeText(target);
     if (!normalizedTarget) return -1;
 
-    index = findUsable((option) => normalizeText(optionText(option)) === normalizedTarget);
+    index = findUsable((option) => normalizeText(optionText(option)) === normalizedTarget
+      || normalizeText(optionValue(option)) === normalizedTarget);
     if (index >= 0) return index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
@@ -456,7 +459,8 @@
     }
 
     const text = String(isObject ? option.text ?? "" : option ?? "").trim();
-    return /^(请选择|请输入|选择|please\s*(select|choose)|--|—)/i.test(text);
+    // 单独的「选择」才算占位，「选择其他」是正经选项；英文的 Select… / Choose… 开头都算。
+    return /^(请选择|请输入|please\s*(select|choose)|select\b|choose\b|--|—)|^选择$/i.test(text);
   }
 
   function isResumeFieldMatch(semantic, resumeField, formField) {
