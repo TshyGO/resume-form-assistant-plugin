@@ -21,7 +21,7 @@ test("normalizeProfile drops blanks and empty members, keeps pending custom fiel
 
   assert.deepEqual(profile.values, { name: "张三" });
   assert.deepEqual(profile.family.map((member) => [member.relation, member.name]), [["父亲", "张父"], ["其他亲属", "张表"]]);
-  assert.deepEqual(profile.custom, [{ key: "是否有亲属在本行", value: "" }]);
+  assert.deepEqual(profile.custom, [{ key: "是否有亲属在本行", value: "否" }], "the filled duplicate wins over the empty one");
   assert.deepEqual(profileApi.normalizeProfile(null), profileApi.emptyProfile());
 });
 
@@ -39,9 +39,12 @@ test("profile fields: presets, numbered repeat relations, filled custom fields o
   assert.deepEqual(fields, [
     { group: "基本信息", key: "姓名", value: "张三" },
     { group: "户籍与地区", key: "籍贯省", value: "河南省" },
+    { group: "家庭主要成员", key: "父亲关系", value: "父亲" },
     { group: "家庭主要成员", key: "父亲姓名", value: "张父" },
     { group: "家庭主要成员", key: "父亲工作单位", value: "某公司" },
+    { group: "家庭主要成员", key: "兄弟姐妹1关系", value: "兄弟姐妹" },
     { group: "家庭主要成员", key: "兄弟姐妹1姓名", value: "张一" },
+    { group: "家庭主要成员", key: "兄弟姐妹2关系", value: "兄弟姐妹" },
     { group: "家庭主要成员", key: "兄弟姐妹2姓名", value: "张二" },
     { group: "补充字段", key: "英语口语", value: "流利" }
   ]);
@@ -94,6 +97,40 @@ test("adding pending fields skips what the profile already has", () => {
   assert.equal(profile.values.name, "张三");
 });
 
+test("password-like custom fields and duplicates of presets never reach the AI field pool", () => {
+  const fields = profileApi.profileToResumeFields({
+    values: { phone: "13800000000" },
+    custom: [
+      { key: "网银登录密码", value: "hunter2" },
+      { key: "手机号码", value: "13900000000" },
+      { key: "英语口语", value: "流利" }
+    ]
+  });
+
+  assert.deepEqual(fields.map((field) => [field.key, field.value]), [["手机号码", "13800000000"], ["英语口语", "流利"]]);
+});
+
+test("known fields cover preset aliases and blank items of members already in the profile", () => {
+  const known = profileApi.knownFieldKeys({ family: [{ relation: "父亲", name: "张父" }] }, []);
+  const labels = profileApi.pickUnansweredLabels(
+    ["手机号", "邮箱", "父亲联系电话", "父亲工作单位", "母亲工作单位"].map((label) => ({ label, inputType: "text" })),
+    known
+  );
+
+  assert.deepEqual(labels, ["母亲工作单位"]);
+});
+
+test("adding pending fields skips password-like labels and says when the list is full", () => {
+  assert.equal(profileApi.addPendingFields({}, ["查询密码"]).added, 0);
+
+  const full = { custom: Array.from({ length: 200 }, (_, index) => ({ key: `字段${index}`, value: "" })) };
+  const result = profileApi.addPendingFields(full, ["职业规划"]);
+  assert.equal(result.added, 0);
+  assert.equal(result.full, true);
+
+  assert.equal(profileApi.addPendingFields({}, ["毕业院校"], [{ key: "毕业院校" }]).added, 0, "template fields count as known");
+});
+
 test("form entries round-trip into a profile", () => {
   const profile = profileApi.profileFromEntries([
     { kind: "value", field: "name", value: "张三" },
@@ -111,16 +148,34 @@ test("form entries round-trip into a profile", () => {
 
 test("merging a backup keeps what this machine already filled in", () => {
   const merged = profileApi.mergeProfiles(
-    { values: { name: "本机" }, family: [{ relation: "父亲", name: "本机父亲" }], custom: [{ key: "英语口语", value: "" }] },
+    {
+      values: { name: "本机" },
+      family: [{ relation: "父亲", name: "本机父亲" }, { relation: "兄弟姐妹", name: "张一" }],
+      custom: [{ key: "英语口语", value: "" }]
+    },
     {
       values: { name: "备份", ethnicity: "汉族" },
-      family: [{ relation: "母亲", name: "备份母亲" }],
+      family: [
+        { relation: "父亲", name: "备份父亲", company: "某公司" },
+        { relation: "母亲", name: "备份母亲" },
+        { relation: "兄弟姐妹", name: "张一", phone: "13900000000" },
+        { relation: "兄弟姐妹", name: "张二" }
+      ],
       custom: [{ key: "英语口语", value: "流利" }, { key: "职业规划", value: "银行" }]
     }
   );
 
   assert.deepEqual(merged.values, { name: "本机", ethnicity: "汉族" });
-  assert.deepEqual(merged.family.map((member) => member.name), ["本机父亲"]);
+  assert.deepEqual(
+    merged.family.map((member) => [member.relation, member.name, member.company, member.phone]),
+    [
+      ["父亲", "本机父亲", "某公司", ""],
+      ["兄弟姐妹", "张一", "", "13900000000"],
+      ["母亲", "备份母亲", "", ""],
+      ["兄弟姐妹", "张二", "", ""]
+    ],
+    "members are merged one by one, filling only what this machine left blank"
+  );
   assert.deepEqual(merged.custom, [{ key: "英语口语", value: "流利" }, { key: "职业规划", value: "银行" }]);
 });
 

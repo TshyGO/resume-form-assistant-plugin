@@ -962,7 +962,7 @@
       if (!assisted) {
         const matchedIds = new Set(response.matches.map((match) => match.fieldId));
         offerUnansweredFields(fields.map((field) => ({
-          label: field.label,
+          label: field.label || field.placeholder || field.name,
           inputType: field.inputType,
           matched: matchedIds.has(field.fieldId),
           hasValue: hasExistingValue(fieldMap.get(field.fieldId))
@@ -1529,6 +1529,7 @@
     }
 
     state.profileOfferLabels = labels;
+    state.profileOfferFields = resumeFields;
     const shown = labels.slice(0, 5).join("、");
     card.querySelector("#resume-pro-profile-offer-text").textContent =
       `网页上还有 ${labels.length} 个字段空着：${shown}${labels.length > 5 ? " 等" : ""}。加到「我的信息」并补上内容，下次就能自动填。`;
@@ -1539,19 +1540,21 @@
     const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
     if (card) card.hidden = true;
     state.profileOfferLabels = [];
+    state.profileOfferFields = [];
   }
 
   async function addUnansweredToProfile() {
     const labels = state.profileOfferLabels;
+    const resumeFields = state.profileOfferFields;
     closeProfileOffer();
 
     try {
       // 用户点了才写，并且只读写 profile 这一个键，不碰模板和 AI 配置。
       const stored = await chrome.storage.local.get("profile");
-      const { profile, added } = self.ResumeProProfile.addPendingFields(stored.profile, labels);
+      const { profile, added, full } = self.ResumeProProfile.addPendingFields(stored.profile, labels, resumeFields);
 
       if (!added) {
-        showStatus("这些字段「我的信息」里已经有了。", "success");
+        showStatus(full ? "补充字段已经满了，先在管理面板里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
         return;
       }
 

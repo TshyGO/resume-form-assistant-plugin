@@ -914,6 +914,16 @@ function stripProfileSecrets(profile) {
     return !secret;
   });
 
+  for (const member of next.family) {
+    for (const field of self.ResumeProProfile.FAMILY_FIELDS) {
+      if (member[field.id] && isSecretFieldValue(member[field.id])) {
+        member[field.id] = "";
+        omitted += 1;
+      }
+    }
+  }
+  next.family = self.ResumeProProfile.normalizeProfile({ family: next.family }).family;
+
   return { profile: next, omitted };
 }
 

@@ -60,7 +60,7 @@ test("backups carry 我的信息, minus anything that looks like a password", as
   await seedTemplate(popup);
   await popup.api.profile.saveProfile({
     values: { name: "张三", ethnicity: "汉族" },
-    family: [{ relation: "父亲", name: "张父" }],
+    family: [{ relation: "父亲", name: "张父", job: "网银密码：hunter3" }],
     custom: [{ key: "网银登录密码", value: "hunter2" }, { key: "职业规划", value: "银行" }]
   });
 
@@ -70,9 +70,10 @@ test("backups carry 我的信息, minus anything that looks like a password", as
   const backup = saved[0];
   assert.equal(backup.profile.values.ethnicity, "汉族");
   assert.equal(backup.profile.family[0].name, "张父");
+  assert.equal(backup.profile.family[0].job, "");
   assert.deepEqual(backup.profile.custom, [{ key: "职业规划", value: "银行" }]);
-  assert.doesNotMatch(JSON.stringify(backup), /hunter2/);
-  assert.match(popup.lastStatusFrom("backup-status"), /已导出 1 个模板和我的信息，跳过 1 个/);
+  assert.doesNotMatch(JSON.stringify(backup), /hunter2|hunter3/);
+  assert.match(popup.lastStatusFrom("backup-status"), /已导出 1 个模板和我的信息，跳过 2 个/);
 });
 
 test("with only 我的信息 and no template, a backup can still be exported and restored", async () => {
