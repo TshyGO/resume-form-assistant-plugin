@@ -201,12 +201,16 @@ fn the_stored_form_round_trips_through_rfc3339() {
 // --- 接口本身 -----------------------------------------------------------------------------
 
 fn request() -> ReminderRequest {
+    // 真的交给系统登记时，过去的时刻会被拒绝（Windows 报「参数错误」），写死日期迟早变红。取明天。
+    let tomorrow = (OffsetDateTime::now_utc() + time::Duration::days(1))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
     ReminderRequest {
         todo_id: "todo-1".into(),
         title: "一面".into(),
         company: Some("合成公司".into()),
         position: Some("后端工程师".into()),
-        fire_at: plan(&Due::DateTime("2026-09-14T02:00:00Z".into()), SHANGHAI, None).unwrap(),
+        fire_at: plan(&Due::DateTime(tomorrow), SHANGHAI, None).unwrap(),
     }
 }
 
