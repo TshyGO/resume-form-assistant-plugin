@@ -1,6 +1,6 @@
 (function () {
   const SIDEBAR_ID = "resume-pro-sidebar";
-  const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig"];
+  const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig", "profile"];
   const FIELD_HIGHLIGHT_CLASS = "resume-pro__field-highlight";
   const FIELD_HIGHLIGHT_STYLE_ID = "resume-pro-field-highlight-styles";
   const FIELD_HIGHLIGHT_STYLE_TEXT = `
@@ -126,6 +126,13 @@
         <button class="resume-pro__manager-button" id="resume-pro-cancel-fill" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
         <p id="resume-pro-wait-hint" role="status" hidden></p>
         <div class="resume-pro__status" id="resume-pro-status" aria-live="polite"></div>
+        <div class="resume-pro__fill-record" id="resume-pro-profile-offer" hidden>
+          <p class="resume-pro__save-note" id="resume-pro-profile-offer-text"></p>
+          <div class="resume-pro__save-actions">
+            <button class="resume-pro__ai-button" type="button" id="resume-pro-profile-offer-add">加到我的信息</button>
+            <button class="resume-pro__manager-button" type="button" id="resume-pro-profile-offer-skip">不用</button>
+          </div>
+        </div>
         <div class="resume-pro__fill-record" id="resume-pro-fill-record" hidden>
           <p class="resume-pro__save-note" id="resume-pro-fill-record-summary"></p>
           <label class="resume-pro__fill-record-option">
@@ -256,6 +263,8 @@
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
     openManagerButton?.addEventListener("click", () => setManagerVisibility(true));
+    sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", addUnansweredToProfile);
+    sidebar.querySelector("#resume-pro-profile-offer-skip")?.addEventListener("click", closeProfileOffer);
     bindDesktopEvents(sidebar);
 
     const chipActions = shadowRoot.querySelector("#resume-pro-chip-actions");
@@ -280,7 +289,7 @@
         return;
       }
 
-      if (changes.templates || changes.activeTemplateId || changes.aiConfig) {
+      if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.profile) {
         state.currentStore = await StorageService.getState();
         renderSidebar();
       }
@@ -307,7 +316,9 @@
 
     templateSelect.disabled = !templates.length;
 
-    if (!activeTemplate) {
+    const profileFields = profileResumeFields();
+
+    if (!activeTemplate && !profileFields.length) {
       groupsContainer.innerHTML = `
         <div class="resume-pro__empty">
           <p>还没有简历数据。</p>
@@ -315,7 +326,7 @@
         </div>
       `;
     } else {
-      groupsContainer.innerHTML = activeTemplate.groups.map((group, groupIndex) => `
+      groupsContainer.innerHTML = (activeTemplate ? activeTemplate.groups : []).map((group, groupIndex) => `
       <section class="resume-pro__group">
         <div class="resume-pro__group-name">${escapeHtml(group.name)}</div>
         <div class="resume-pro__chips">
@@ -332,7 +343,7 @@
           `).join("")}
         </div>
       </section>
-    `).join("");
+    `).join("") + buildProfileChipsHtml(profileFields);
 
       groupsContainer.querySelectorAll(".resume-pro__chip").forEach((button) => {
         button.addEventListener("mousedown", (event) => {
@@ -762,8 +773,10 @@
     const activeTemplate = getActiveTemplate(state.currentStore);
     const aiConfig = state.currentStore?.aiConfig;
 
-    if (!activeTemplate) {
-      showStatus("请先导入简历模板。", "error");
+    const profileFields = profileResumeFields();
+
+    if (!activeTemplate && !profileFields.length) {
+      showStatus("请先导入简历模板，或在「我的信息」里填写内容。", "error");
       return;
     }
 
@@ -806,7 +819,12 @@
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       if (!fields.length) throw new Error("当前页面没有可填写的表单字段。");
-      const resumeFields = flattenTemplateFields(activeTemplate);
+      if (!assisted) closeProfileOffer();
+      // 模板字段在前并且优先；「我的信息」只补模板里没有的字段名。
+      const templateFields = activeTemplate ? flattenTemplateFields(activeTemplate) : [];
+      const resumeFields = self.ResumeProProfile
+        ? self.ResumeProProfile.mergeResumeFields(templateFields, profileFields)
+        : templateFields;
       phase = "roundTripMs";
       phaseStart = performance.now();
       if (cancelButton) {
@@ -939,6 +957,17 @@
         showStatus(`已填写 ${filledCount} 个字段。${unfilledNote}`, "error", true);
       } else {
         showStatus(`已填写 ${filledCount} 个字段。`, "success");
+      }
+
+      if (!assisted) {
+        const matchedIds = new Set(response.matches.map((match) => match.fieldId));
+        offerUnansweredFields(fields.map((field) => ({
+          label: field.label || field.placeholder || field.name,
+          inputType: field.inputType,
+          matched: matchedIds.has(field.fieldId),
+          hasValue: hasExistingValue(fieldMap.get(field.fieldId)),
+          entry: fieldMap.get(field.fieldId)
+        })), resumeFields);
       }
     } catch (error) {
       showStatus(error.message || "AI 填写失败。", "error");
@@ -1464,6 +1493,103 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
+  function profileResumeFields() {
+    return self.ResumeProProfile?.profileToResumeFields(state.currentStore?.profile) || [];
+  }
+
+  function buildProfileChipsHtml(profileFields) {
+    const groups = new Map();
+
+    profileFields.forEach((field) => {
+      if (!groups.has(field.group)) groups.set(field.group, []);
+      groups.get(field.group).push(field);
+    });
+
+    return Array.from(groups, ([name, groupFields]) => `
+      <section class="resume-pro__group">
+        <div class="resume-pro__group-name">我的信息 · ${escapeHtml(name)}</div>
+        <div class="resume-pro__chips">
+          ${groupFields.map((field) => `
+            <button
+              class="resume-pro__chip"
+              type="button"
+              data-chip-id="${escapeHtml(`profile:${name}:${field.key}`)}"
+              data-value="${escapeHtml(field.value)}"
+              title="${escapeHtml(field.value)}"
+            >
+              ${escapeHtml(field.key)}
+            </button>
+          `).join("")}
+        </div>
+      </section>
+    `).join("");
+  }
+
+  // 填完之后，网页上没匹配上、也还空着的字段，问一句要不要加进「我的信息」。
+  // 这样档案里的字段来自真实表单，用户补一次内容，下次同样的字段就能自动填。
+  function offerUnansweredFields(candidates, resumeFields) {
+    const api = self.ResumeProProfile;
+    const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
+    if (!api || !card) return;
+
+    const labels = api.pickUnansweredLabels(candidates, api.knownFieldKeys(state.currentStore?.profile, resumeFields));
+
+    if (!labels.length) {
+      closeProfileOffer();
+      return;
+    }
+
+    state.profileOfferLabels = labels;
+    state.profileOfferFields = resumeFields;
+    state.profileOfferCandidates = candidates;
+    const shown = labels.slice(0, 5).join("、");
+    card.querySelector("#resume-pro-profile-offer-text").textContent =
+      `网页上还有 ${labels.length} 个字段空着：${shown}${labels.length > 5 ? " 等" : ""}。加到「我的信息」并补上内容，下次就能自动填。`;
+    card.hidden = false;
+  }
+
+  function closeProfileOffer() {
+    const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
+    if (card) card.hidden = true;
+    state.profileOfferLabels = [];
+    state.profileOfferFields = [];
+    state.profileOfferCandidates = [];
+  }
+
+  async function addUnansweredToProfile() {
+    // 卡片出来之后用户可能已经手动填了几个，点的时候按网页现在的样子再挑一遍。
+    const candidates = state.profileOfferCandidates || [];
+    const labels = (state.profileOfferLabels || []).filter((label) => candidates.some((candidate) =>
+      String(candidate.label ?? "").trim() === label && candidate.entry && !hasExistingValue(candidate.entry)));
+    const resumeFields = state.profileOfferFields;
+
+    if (!labels.length) {
+      closeProfileOffer();
+      showStatus("这些字段已经在网页上填好了。", "success");
+      return;
+    }
+
+    try {
+      // 用户点了才写，并且只读写 profile 这一个键，不碰模板和 AI 配置。
+      const stored = await chrome.storage.local.get("profile");
+      const { profile, added, full } = self.ResumeProProfile.addPendingFields(stored.profile, labels, resumeFields);
+
+      if (!added) {
+        if (!full) closeProfileOffer();
+        showStatus(full ? "补充字段已经满了，先在管理面板里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
+        return;
+      }
+
+      await chrome.storage.local.set({ profile });
+      // 写成功才收起卡片；写失败时卡片留着，可以直接再点一次。
+      closeProfileOffer();
+      showStatus(`已把 ${added} 个字段加到「我的信息」，在管理面板里补上内容。`, "success", true);
+      setManagerVisibility(true, "profile");
+    } catch (error) {
+      showStatus(`没有加进去：${error.message || "写入失败"}`, "error");
+    }
+  }
+
   function flattenTemplateFields(template) {
     return template.groups.flatMap((group) => group.fields.map((field) => ({
       group: group.name,
@@ -1516,7 +1642,7 @@
       .trim();
   }
 
-  function setManagerVisibility(visible) {
+  function setManagerVisibility(visible, tab = "") {
     const panel = document.getElementById("resume-pro-manager");
 
     if (!panel) {
@@ -1524,8 +1650,9 @@
     }
 
     const frame = panel.querySelector(".resume-pro-manager__frame");
-    if (visible && frame && frame.dataset.loaded !== "true") {
-      frame.src = frame.dataset.src;
+    if (visible && frame && (frame.dataset.loaded !== "true" || tab)) {
+      // 带时间戳，已经打开在同一标签页时也能再触发一次 hashchange。
+      frame.src = tab ? `${frame.dataset.src}#${tab}:${Date.now()}` : frame.dataset.src;
       frame.dataset.loaded = "true";
     }
 
@@ -1654,7 +1781,10 @@
         apiUrl: String(rawState.aiConfig?.apiUrl ?? "https://api.openai.com/v1/chat/completions").trim(),
         model: String(rawState.aiConfig?.model ?? "gpt-4o-mini").trim(),
         apiKey: String(rawState.aiConfig?.apiKey ?? "")
-      }
+      },
+      profile: self.ResumeProProfile
+        ? self.ResumeProProfile.normalizeProfile(rawState.profile)
+        : { values: {}, family: [], custom: [] }
     };
   }
 

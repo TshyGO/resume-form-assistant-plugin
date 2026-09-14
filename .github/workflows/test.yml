@@ -40,6 +40,7 @@ jobs:
           node --check content.js
           node --check popup.js
           node --check resume-utils.js
+          node --check profile-fields.js
 
       - name: Verify manifest and bundled PDF assets
         run: |

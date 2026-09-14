@@ -34,6 +34,7 @@
 
       <nav class="tab-nav" aria-label="功能分区">
         <button class="tab-button is-active" type="button" data-tab="templates">模板管理</button>
+        <button class="tab-button" type="button" data-tab="profile">我的信息</button>
         <button class="tab-button" type="button" data-tab="ai">AI 配置</button>
       </nav>
 
@@ -80,7 +81,7 @@
                 <span>包含 API Key</span>
               </label>
             </div>
-            <p class="backup-row__hint">备份包含全部模板和 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历内容，请存在自己控制的位置。</p>
+            <p class="backup-row__hint">备份包含全部模板、我的信息和 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历和我的信息（证件号、电话、家庭成员等），请存在自己控制的位置。</p>
 
             <input id="backup-file-input" type="file" accept=".json,application/json" hidden>
 
@@ -106,6 +107,39 @@
 
             <div class="status-message" id="backup-status" aria-live="polite"></div>
           </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-panel="profile">
+        <div class="panel-card">
+          <div class="panel-toolbar is-stacked">
+            <div>
+              <h2>我的信息</h2>
+              <p>网申表常问、简历里没有的内容填在这里，AI 填写时和当前模板一起用。模板里已有的字段以模板为准。</p>
+            </div>
+          </div>
+
+          <p class="profile-note">只保存在这个浏览器里，我们不收集。AI 填写时会发给你配置的 AI 服务商，对方可能留存。</p>
+
+          <form id="profile-form" class="config-form">
+            <div id="profile-preset"></div>
+
+            <section class="profile-group">
+              <h3 class="profile-group__title">家庭主要成员</h3>
+              <div class="profile-rows" id="profile-family"></div>
+              <button class="secondary-button" id="profile-add-member" type="button">添加成员</button>
+            </section>
+
+            <section class="profile-group">
+              <h3 class="profile-group__title">补充字段</h3>
+              <p class="profile-group__hint">上面没有的字段自己加。填表后网页上空着的字段，可以在侧边栏一键加到这里。</p>
+              <div class="profile-rows" id="profile-custom"></div>
+              <button class="secondary-button" id="profile-add-custom" type="button">添加字段</button>
+            </section>
+
+            <button class="primary-button is-full" type="submit">保存</button>
+            <div class="status-message" id="profile-status" aria-live="polite"></div>
+          </form>
         </div>
       </section>
 
@@ -193,6 +227,7 @@
     <script src="mammoth.browser.min.js"></script>
     <script src="ai-helpers.js"></script>
     <script src="resume-utils.js"></script>
+    <script src="profile-fields.js"></script>
     <script src="ai-client.js"></script>
     <script src="ai-models.js"></script>
     <script src="popup.js"></script>

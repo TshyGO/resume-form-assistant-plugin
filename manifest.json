@@ -52,6 +52,7 @@
         "ai-models.js",
         "form-agent.js",
         "resume-utils.js",
+        "profile-fields.js",
         "vendor/pdfjs/pdf.min.mjs",
         "vendor/pdfjs/pdf.worker.min.mjs",
         "vendor/pdfjs/cmaps/*",
@@ -73,6 +74,7 @@
       "js": [
         "ai-client.js",
         "ai-helpers.js",
+        "profile-fields.js",
         "form-agent.js",
         "content.js"
       ],

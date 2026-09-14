@@ -120,7 +120,11 @@ function loadPopup({ globals = {} } = {}) {
   context.window = context;
   context.globalThis = context;
 
-  vm.runInNewContext(fs.readFileSync(path.join(ROOT, "popup.js"), "utf8"), context, {
+  // popup.html 里 profile-fields.js 排在 popup.js 前面。
+  const script = new vm.Script(fs.readFileSync(path.join(ROOT, "profile-fields.js"), "utf8"), { filename: "profile-fields.js" });
+  vm.createContext(context);
+  script.runInContext(context);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, "popup.js"), "utf8"), context, {
     filename: "popup.js"
   });
 
