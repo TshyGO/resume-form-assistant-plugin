@@ -21,7 +21,9 @@ const UPDATE_FAILURE_RETRY_MS = 60 * 60 * 1000;
 const MAX_LISTED_ROW_NUMBERS = 20;
 const TEMPLATE_SHEET_HEADER = ["一级分类", "字段名", "值"];
 const BACKUP_FORMAT = "resume-pro.backup";
-const BACKUP_FORMAT_VERSION = 1;
+// 2 起备份里可以带「我的信息」。只有模板的备份仍写 1，旧版插件照样能导入；
+// 带了档案的写 2，旧版插件会提示先更新，而不是悄悄丢掉档案。
+const BACKUP_FORMAT_VERSION = 2;
 let pdfJsPromise = null;
 
 const STORE_KEYS = Object.keys(DEFAULT_STORE);
@@ -1113,7 +1115,7 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
   return {
     backup: {
       format: BACKUP_FORMAT,
-      formatVersion: BACKUP_FORMAT_VERSION,
+      formatVersion: includeProfile ? BACKUP_FORMAT_VERSION : 1,
       exportedAt: now.toISOString(),
       pluginVersion: chrome.runtime.getManifest().version,
       templates,

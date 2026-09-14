@@ -68,6 +68,7 @@ test("backups carry 我的信息, minus anything that looks like a password", as
 
   assert.equal(saved.length, 1);
   const backup = saved[0];
+  assert.equal(backup.formatVersion, 2, "a backup carrying 我的信息 tells older plugins to update instead of dropping it");
   assert.equal(backup.profile.values.ethnicity, "汉族");
   assert.equal(backup.profile.family[0].name, "张父");
   assert.equal(backup.profile.family[0].job, "");
@@ -121,6 +122,26 @@ test("appending a backup only fills in what 我的信息 is missing", async () =
 
   assert.equal(state.profile.values.name, "本机");
   assert.equal(state.profile.values.ethnicity, "汉族");
+});
+
+test("backup format: template-only stays version 1, versions 1 and 2 import, newer ones are refused", async () => {
+  const { popup, saved } = loadPopup();
+  await seedTemplate(popup);
+  await popup.api.backup.handleExportBackup();
+  assert.equal(saved[0].formatVersion, 1, "older plugins can still restore a backup with no 我的信息");
+
+  const { popup: fresh } = loadPopup();
+  const state = await restore(fresh, {
+    format: "resume-pro.backup",
+    formatVersion: 2,
+    templates: [],
+    profile: { values: { name: "张三" } }
+  });
+  assert.equal(state.profile.values.name, "张三");
+
+  const { popup: another } = loadPopup();
+  await restore(another, { format: "resume-pro.backup", formatVersion: 3, templates: [], profile: { values: { name: "张三" } } });
+  assert.match(another.lastStatusFrom("backup-status"), /更新/);
 });
 
 test("an older backup without 我的信息 leaves this machine's profile alone", async () => {
