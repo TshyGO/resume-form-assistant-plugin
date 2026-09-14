@@ -900,14 +900,14 @@
 
         const fieldMeta = fieldMetaMap.get(match.fieldId);
 
-        // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但选项还空着的下拉框
-        // 也按同样的方式等一等；选项齐全却对不上的，重试也没用，不白等。
+        // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
+        // 也按同样的方式等一等（和 worker 放行它用的是同一个判断）；选项出来了却对不上，不再白等。
         if (!filled && element.kind === "element" && element.element instanceof HTMLSelectElement
-          && (fieldMeta?.cascadeGroup !== undefined || element.element.options.length <= 1)) {
+          && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
             filled = setElementValue(element, match.value);
-            if (filled) break;
+            if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
 
@@ -1255,9 +1255,15 @@
     return null;
   }
 
+  function hasRealSelectOptions(select) {
+    const isPlaceholder = self.ResumeProAIHelpers?.isPlaceholderOption;
+    return Array.from(select.options || []).some((option) => String(option.text ?? "").trim()
+      && !(isPlaceholder && isPlaceholder({ value: option.value, text: option.text, disabled: option.disabled })));
+  }
+
   function setElementValue(element, value) {
     if (element && typeof element === "object" && element.kind === "radio") {
-      const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio) }));
+      const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
       const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
       const matchedRadio = radioIndex >= 0 ? element.elements[radioIndex] : null;
 
@@ -1346,9 +1352,13 @@
       } else {
         element.value = matchedOption.value;
       }
+      // 几个选项 value 相同时（常见的是一串空值），按 value 赋值会落到第一个，按下标补一次。
+      if (element.selectedIndex !== optionIndex) {
+        element.selectedIndex = optionIndex;
+      }
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
-      return element.value === matchedOption.value;
+      return element.selectedIndex === optionIndex;
     }
 
     if (element instanceof HTMLElement && element.isContentEditable) {
