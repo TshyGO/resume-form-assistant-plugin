@@ -183,13 +183,18 @@ mod tests {
     use time::UtcOffset;
 
     fn request() -> ReminderRequest {
+        // 不能写死日期：过了那一刻，Windows 登记已经过去的时间会报「参数错误」，
+        // 测试就从那天起一直红。取明天。
+        let tomorrow = (time::OffsetDateTime::now_utc() + time::Duration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         ReminderRequest {
             todo_id: "11111111-2222-4333-8444-555555555555".into(),
             title: "一面 <script>".into(),
             company: Some("合成 & 公司".into()),
             position: Some("后端".into()),
             fire_at: fire_at(
-                &Due::DateTime("2026-09-14T02:00:00Z".into()),
+                &Due::DateTime(tomorrow),
                 None,
                 None,
                 time!(09:00),
