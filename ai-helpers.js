@@ -191,11 +191,12 @@
           return false;
         }
 
-        if (!isSamePersonScope(resumeField, formScope)) {
+        if (!isSamePersonScope(resumeField, formScope) || !isResumeFieldMatch(semantic, resumeField, field)) {
           return false;
         }
 
-        return isResumeFieldMatch(semantic, resumeField, field);
+        // 语义对得上、但值这个字段收不下的（下拉里没有这个选项），不能占住位置，接着往后找。
+        return isValueValidForField(field, resumeField.value);
       });
 
       if (matchIndex >= 0) {
@@ -242,11 +243,11 @@
     const source = String(text ?? "");
     const tags = [];
 
-    if (/紧急联系人|紧急联络人|监护人/.test(source)) tags.push("contact");
+    if (/紧急联系|紧急联络|紧急电话|监护人/.test(source)) tags.push("contact");
     if (/父亲|爸爸/.test(source)) tags.push("father");
     if (/母亲|妈妈/.test(source)) tags.push("mother");
     if (/配偶|妻子|丈夫/.test(source)) tags.push("spouse");
-    if (/家庭成员|家属|亲属/.test(source)) tags.push("relative");
+    if (/家庭(?:主要)?成员|家属|亲属|兄弟|姐妹|子女/.test(source)) tags.push("relative");
 
     return tags;
   }
@@ -276,28 +277,34 @@
       return -1;
     }
 
-    const optionValue = (option) => String(typeof option === "object" && option !== null ? option.value ?? "" : option ?? "");
-    const optionText = (option) => String(typeof option === "object" && option !== null ? option.text ?? "" : option ?? "").trim();
+    const isObject = (option) => typeof option === "object" && option !== null;
+    const optionValue = (option) => String(isObject(option) ? option.value ?? "" : option ?? "").trim();
+    const optionText = (option) => String(isObject(option) ? option.text ?? "" : option ?? "").trim();
+    // 占位项和禁用项每一步都不算：值恰好就是「请选择」也不能当成填上了。
+    const usable = list
+      .map((option, index) => ({ option, index }))
+      .filter(({ option }) => !(isObject(option) && option.disabled)
+        && !/^(请选择|请输入|选择|please\s*(select|choose)|--|—)/i.test(optionText(option)));
+    const findUsable = (test) => usable.find(({ option }) => test(option))?.index ?? -1;
 
-    let index = list.findIndex((option) => optionValue(option) === target);
+    let index = findUsable((option) => optionValue(option) === target);
     if (index >= 0) return index;
 
-    index = list.findIndex((option) => optionText(option) === target);
+    index = findUsable((option) => optionText(option) === target);
     if (index >= 0) return index;
 
     const normalizedTarget = normalizeText(target);
     if (!normalizedTarget) return -1;
 
-    index = list.findIndex((option) => normalizeText(optionText(option)) === normalizedTarget);
+    index = findUsable((option) => normalizeText(optionText(option)) === normalizedTarget);
     if (index >= 0) return index;
 
     // 「全日制」不能落到「非全日制」，反过来也一样。
     const negatedBefore = (text, at) => /(非|不|无|未)$/.test(text.slice(0, at));
-    const candidates = list.flatMap((option, optionIndex) => {
-      const raw = optionText(option);
-      const text = normalizeText(raw);
+    const candidates = usable.flatMap(({ option, index: optionIndex }) => {
+      const text = normalizeText(optionText(option));
 
-      if (text.length < 2 || /^(请选择|请输入|选择|--|—)/.test(raw)) {
+      if (text.length < 2) {
         return [];
       }
 
@@ -336,7 +343,7 @@
   }
 
   function isSameRegionTopic(resumeField, formField) {
-    // 归属先看字段名，字段名看不出来才看分组；分组名「户籍与地区」不能把「籍贯」判成户口。
+    // 两边都是先看字段自己的文字，看不出来才看分组：分组名「户籍与地区」不能把「籍贯」判成户口。
     const keyText = normalizeText(resumeField?.key);
     const keyTopic = regionTopic(keyText) || regionTopic(normalizeText(resumeField?.group));
 
@@ -344,15 +351,28 @@
       return false;
     }
 
-    const formText = fieldContextText(formField);
-    const formTopic = regionTopic(formText);
+    const ownText = normalizeText([
+      formField?.label,
+      formField?.placeholder,
+      formField?.name,
+      formField?.idAttr,
+      formField?.ariaLabel
+    ].filter(Boolean).join(" "));
+    const groupText = normalizeText(formField?.group);
+
+    // 「户口性质」「户籍类型」问的不是地方。
+    if (/性质|类型|类别/.test(ownText)) {
+      return false;
+    }
+
+    const formTopic = regionTopic(ownText) || regionTopic(groupText);
 
     if (formTopic && formTopic !== keyTopic) {
       return false;
     }
 
     const keyLevel = regionLevel(keyText);
-    const formLevel = regionLevel(formText);
+    const formLevel = regionLevel(ownText) || regionLevel(groupText);
 
     return !(keyLevel && formLevel && keyLevel !== formLevel);
   }

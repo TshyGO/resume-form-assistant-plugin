@@ -932,7 +932,7 @@
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
       const unfilledNote = unfilledLabels.length
-        ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动选择。`
+        ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。`
         : "";
       if (assisted) {
         showStatus(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
@@ -1258,7 +1258,8 @@
   function setElementValue(element, value) {
     if (element && typeof element === "object" && element.kind === "radio") {
       const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio) }));
-      const matchedRadio = element.elements[self.ResumeProAIHelpers.findSelectOptionIndex(radioOptions, value)];
+      const radioIndex = self.ResumeProAIHelpers.findSelectOptionIndex(radioOptions, value);
+      const matchedRadio = radioIndex >= 0 ? element.elements[radioIndex] : null;
 
       if (!matchedRadio) {
         return false;
@@ -1330,8 +1331,9 @@
     }
 
     if (element instanceof HTMLSelectElement) {
-      const selectOptions = Array.from(element.options).map((option) => ({ value: option.value, text: option.text }));
-      const matchedOption = element.options[self.ResumeProAIHelpers.findSelectOptionIndex(selectOptions, value)];
+      const selectOptions = Array.from(element.options).map((option) => ({ value: option.value, text: option.text, disabled: option.disabled }));
+      const optionIndex = self.ResumeProAIHelpers.findSelectOptionIndex(selectOptions, value);
+      const matchedOption = optionIndex >= 0 ? element.options[optionIndex] : null;
 
       if (!matchedOption) {
         return false;
