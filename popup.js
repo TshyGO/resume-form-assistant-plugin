@@ -1466,6 +1466,12 @@ function updateParseFileSelection(file) {
   if (elements.parseResumeButton) {
     elements.parseResumeButton.disabled = !file;
   }
+
+  // 换了一份文件，上一份的「下载 Excel 核对」就不该再留着，免得下成旧简历。
+  if (file) {
+    popupState.lastParsedFields = [];
+    if (elements.parseDownloadButton) elements.parseDownloadButton.hidden = true;
+  }
 }
 
 async function handleParseResumeClick() {
@@ -1511,6 +1517,9 @@ async function handleParseResumeClick() {
     }
 
     const fields = normalizeParsedResult(result.fields);
+    // 先留住解析结果：下面存模板就算失败，也还能下载 Excel，不用再调一次 AI。
+    popupState.lastParsedFields = result.fields;
+    if (elements.parseDownloadButton) elements.parseDownloadButton.hidden = false;
     let template = null;
 
     await StorageService.update((draft) => {
@@ -1524,8 +1533,6 @@ async function handleParseResumeClick() {
       return draft;
     });
 
-    popupState.lastParsedFields = result.fields;
-    if (elements.parseDownloadButton) elements.parseDownloadButton.hidden = false;
     showParseStatus(`已存为模板「${template.name}」并设为当前，共 ${countTemplateFields(template)} 个字段。`, "success", 0);
     updateParseFileSelection(null);
   } catch (error) {
@@ -1734,6 +1741,7 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     popupState,
     resolveTemplateName,
     StorageService,
+    updateParseFileSelection,
     backup: {
       applyBackup,
       BackupIO,
