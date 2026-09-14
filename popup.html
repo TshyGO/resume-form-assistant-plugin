@@ -53,13 +53,16 @@
           <input id="template-file-input" type="file" accept=".xlsx,.csv" hidden>
 
           <div class="parse-section" id="parse-section">
-            <div class="parse-section__desc">上传 PDF / Word / TXT，AI 提取信息并下载 Excel，再导入上方</div>
+            <div class="parse-section__desc">上传 PDF / Word / TXT，AI 提取后直接存为模板</div>
             <div class="parse-drop-zone" id="parse-drop-zone">
               <span id="parse-drop-label">拖拽简历文件到此处，或点击选择</span>
               <input type="file" id="parse-file-input" accept=".pdf,.docx,.txt" hidden>
             </div>
             <button class="primary-button is-full" id="parse-resume-button" type="button" disabled>
               开始解析
+            </button>
+            <button class="secondary-button is-full" id="parse-download-button" type="button" hidden>
+              下载 Excel 核对
             </button>
             <div class="status-message" id="parse-status" aria-live="polite"></div>
           </div>

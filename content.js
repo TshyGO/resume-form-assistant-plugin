@@ -48,15 +48,11 @@
   };
 
   const StorageService = {
+    // 只读。每个网页加载都会跑一次，在这里写回会用这一刻的快照盖掉设置页刚存的内容；
+    // 缺省值由设置页补。
     async ensureDefaults() {
       const current = await chrome.storage.local.get(STORAGE_KEYS);
-      const normalized = normalizeStore(current);
-
-      if (JSON.stringify(current) !== JSON.stringify(normalized)) {
-        await chrome.storage.local.set(normalized);
-      }
-
-      return normalized;
+      return normalizeStore(current);
     },
 
     async getState() {
