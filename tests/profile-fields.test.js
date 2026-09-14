@@ -102,6 +102,7 @@ test("password-like custom fields and duplicates of presets never reach the AI f
     values: { phone: "13800000000" },
     custom: [
       { key: "网银登录密码", value: "hunter2" },
+      { key: "备注", value: "网银密码：hunter3" },
       { key: "手机号码", value: "13900000000" },
       { key: "英语口语", value: "流利" }
     ]

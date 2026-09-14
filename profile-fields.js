@@ -107,6 +107,8 @@
   const SKIPPED_INPUT_TYPES = new Set(["password", "file", "checkbox", "hidden", "submit", "button", "reset", "image"]);
   // 补充字段是用户自己起的名，拦不住一行叫「网银密码」：这种字段不推荐、不交给 AI。
   const SECRET_LABEL = /密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret/i;
+  // 名字普通、内容却是「密码：xxx」这种写法的，同样不交给 AI。
+  const SECRET_VALUE = /(密码|口令|验证码|校验码|授权码|密钥|令牌|password|passwd|pwd|token|secret)\s*[:=：]\s*\S/i;
 
   function text(value) {
     return String(value ?? "").trim();
@@ -203,7 +205,7 @@
     const emitted = new Set(fields.map((field) => normalizeKey(field.key)));
     profile.custom.forEach((item) => {
       const normalized = normalizeKey(item.key);
-      if (!item.value || SECRET_LABEL.test(item.key) || emitted.has(normalized)) return;
+      if (!item.value || SECRET_LABEL.test(item.key) || SECRET_VALUE.test(item.value) || emitted.has(normalized)) return;
       emitted.add(normalized);
       fields.push({ group: CUSTOM_GROUP, key: item.key, value: item.value });
     });

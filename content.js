@@ -965,7 +965,8 @@
           label: field.label || field.placeholder || field.name,
           inputType: field.inputType,
           matched: matchedIds.has(field.fieldId),
-          hasValue: hasExistingValue(fieldMap.get(field.fieldId))
+          hasValue: hasExistingValue(fieldMap.get(field.fieldId)),
+          entry: fieldMap.get(field.fieldId)
         })), resumeFields);
       }
     } catch (error) {
@@ -1530,6 +1531,7 @@
 
     state.profileOfferLabels = labels;
     state.profileOfferFields = resumeFields;
+    state.profileOfferCandidates = candidates;
     const shown = labels.slice(0, 5).join("、");
     card.querySelector("#resume-pro-profile-offer-text").textContent =
       `网页上还有 ${labels.length} 个字段空着：${shown}${labels.length > 5 ? " 等" : ""}。加到「我的信息」并补上内容，下次就能自动填。`;
@@ -1541,12 +1543,21 @@
     if (card) card.hidden = true;
     state.profileOfferLabels = [];
     state.profileOfferFields = [];
+    state.profileOfferCandidates = [];
   }
 
   async function addUnansweredToProfile() {
-    const labels = state.profileOfferLabels;
+    // 卡片出来之后用户可能已经手动填了几个，点的时候按网页现在的样子再挑一遍。
+    const candidates = state.profileOfferCandidates || [];
+    const labels = (state.profileOfferLabels || []).filter((label) => candidates.some((candidate) =>
+      String(candidate.label ?? "").trim() === label && candidate.entry && !hasExistingValue(candidate.entry)));
     const resumeFields = state.profileOfferFields;
-    closeProfileOffer();
+
+    if (!labels.length) {
+      closeProfileOffer();
+      showStatus("这些字段已经在网页上填好了。", "success");
+      return;
+    }
 
     try {
       // 用户点了才写，并且只读写 profile 这一个键，不碰模板和 AI 配置。
@@ -1554,11 +1565,14 @@
       const { profile, added, full } = self.ResumeProProfile.addPendingFields(stored.profile, labels, resumeFields);
 
       if (!added) {
+        if (!full) closeProfileOffer();
         showStatus(full ? "补充字段已经满了，先在管理面板里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
         return;
       }
 
       await chrome.storage.local.set({ profile });
+      // 写成功才收起卡片；写失败时卡片留着，可以直接再点一次。
+      closeProfileOffer();
       showStatus(`已把 ${added} 个字段加到「我的信息」，在管理面板里补上内容。`, "success", true);
       setManagerVisibility(true, "profile");
     } catch (error) {
