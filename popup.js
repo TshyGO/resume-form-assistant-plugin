@@ -1103,7 +1103,7 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
   omittedFieldCount += strippedProfile.omitted;
 
   if (!templates.length && !includeProfile) {
-    throw new Error("模板里的字段都是密码 / 验证码这类，没有可以写进备份的内容。");
+    throw new Error("剩下的内容都是密码 / 验证码这类，没有可以写进备份的内容。");
   }
 
   // 有些 OpenAI 兼容接口把凭据放在地址里（?key=…）。不勾「包含 API Key」就一起去掉，
