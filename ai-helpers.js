@@ -283,8 +283,7 @@
     // 占位项和禁用项每一步都不算：值恰好就是「请选择」也不能当成填上了。
     const usable = list
       .map((option, index) => ({ option, index }))
-      .filter(({ option }) => !(isObject(option) && option.disabled)
-        && !/^(请选择|请输入|选择|please\s*(select|choose)|--|—)/i.test(optionText(option)));
+      .filter(({ option }) => !isPlaceholderOption(option));
     const findUsable = (test) => usable.find(({ option }) => test(option))?.index ?? -1;
 
     let index = findUsable((option) => optionValue(option) === target);
@@ -360,9 +359,9 @@
     ].filter(Boolean).join(" "));
     const groupText = normalizeText(formField?.group);
 
-    // 「户口性质」「户籍类型」问的不是地方。
+    // 「户口性质」「户籍类型」问的不是地方，只接受字段名一模一样的那一项。
     if (/性质|类型|类别/.test(ownText)) {
-      return false;
+      return Boolean(keyText) && keyText === normalizeText(formField?.label);
     }
 
     const formTopic = regionTopic(ownText) || regionTopic(groupText);
@@ -448,6 +447,18 @@
     );
   }
 
+  // 占位项和禁用项：「请选择」「--」这类，以及 disabled 的选项。
+  function isPlaceholderOption(option) {
+    const isObject = typeof option === "object" && option !== null;
+
+    if (isObject && option.disabled) {
+      return true;
+    }
+
+    const text = String(isObject ? option.text ?? "" : option ?? "").trim();
+    return /^(请选择|请输入|选择|please\s*(select|choose)|--|—)/i.test(text);
+  }
+
   function isResumeFieldMatch(semantic, resumeField, formField) {
     const keyText = normalizeText([resumeField?.group, resumeField?.key].filter(Boolean).join(" "));
     const value = String(resumeField?.value ?? "").trim();
@@ -482,7 +493,12 @@
       return false;
     }
 
-    if ((field?.inputType === "select" || field?.inputType === "radio") && Array.isArray(field?.options) && field.options.length && field?.cascadeGroup === undefined) {
+    // 只有「请选择」、选项还没加载出来的下拉框（没被识别成联动组的下一级）这里不判，
+    // 交给页面填写时等选项出来再选；否则值在这里就被丢掉，页面上的重试拿不到东西。
+    const hasRealOptions = Array.isArray(field?.options)
+      && field.options.some((option) => !isPlaceholderOption(option) && String(typeof option === "object" && option !== null ? option.text ?? "" : option ?? "").trim());
+
+    if ((field?.inputType === "select" || field?.inputType === "radio") && hasRealOptions && field?.cascadeGroup === undefined) {
       // 和网页上实际选值用同一套规则，否则页面能选上的值会先在这里被丢掉。
       if (findSelectOptionIndex(field.options, text) < 0) {
         return false;
