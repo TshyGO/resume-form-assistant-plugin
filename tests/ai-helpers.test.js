@@ -136,6 +136,60 @@ test("findSelectOptionIndex: placeholders and misses return -1", () => {
   assert.equal(helpers.findSelectOptionIndex(null, "男"), -1);
 });
 
+test("findSelectOptionIndex: a placeholder or disabled option is never a match, even exactly", () => {
+  assert.equal(helpers.findSelectOptionIndex(options(["请选择", "男", "女"]), "请选择"), -1);
+  assert.equal(helpers.findSelectOptionIndex(options(["Please select", "Yes", "No"]), "Please select"), -1);
+  assert.equal(helpers.findSelectOptionIndex([{ value: "x", text: "已停招", disabled: true }, { value: "y", text: "在招" }], "已停招"), -1);
+  assert.equal(helpers.findSelectOptionIndex([{ value: " 1 ", text: "身份证" }], "1"), 0);
+});
+
+test("rules: an invalid first candidate does not block a valid later one", () => {
+  const matches = helpers.buildRuleBasedMatches(
+    [{ fieldId: "a", label: "籍贯", inputType: "select", options: ["河南省"] }],
+    [
+      { group: "户籍与地区", key: "籍贯县", value: "南召县" },
+      { group: "户籍与地区", key: "籍贯省", value: "河南省" }
+    ]
+  );
+
+  assert.deepEqual(matches, [{ fieldId: "a", value: "河南省" }]);
+});
+
+test("region: a form field's own label decides its topic before its group name", () => {
+  const matches = helpers.buildRuleBasedMatches(
+    [{ fieldId: "a", label: "籍贯", group: "户籍与地区", inputType: "select", options: ["河南省"] }],
+    [{ group: "基本信息", key: "籍贯", value: "河南省" }]
+  );
+
+  assert.deepEqual(matches, [{ fieldId: "a", value: "河南省" }]);
+});
+
+test("region: 户口性质 is not a place and never takes 户口所在地", () => {
+  const matches = helpers.buildRuleBasedMatches(
+    [{ fieldId: "a", label: "户口性质", inputType: "text", options: [] }],
+    [{ group: "户籍与地区", key: "户口所在地省", value: "河南省" }]
+  );
+
+  assert.deepEqual(matches, []);
+});
+
+test("person scope: shortened emergency labels and a generic 家庭主要成员 name stay off the applicant", () => {
+  const byId = new Map(helpers.buildRuleBasedMatches(
+    [
+      { fieldId: "own-name", label: "姓名", inputType: "text", options: [] },
+      { fieldId: "emg", label: "紧急联系电话", inputType: "text", options: [] }
+    ],
+    [
+      { group: "家庭主要成员", key: "姓名", value: "张父" },
+      { group: "基本信息", key: "手机", value: "13800000000" },
+      { group: "基本信息", key: "姓名", value: "张三" }
+    ]
+  ).map((match) => [match.fieldId, match.value]));
+
+  assert.equal(byId.get("own-name"), "张三");
+  assert.equal(byId.has("emg"), false, "the applicant's own mobile is not an emergency contact number");
+});
+
 test("region: exam origin is never filled from native place", () => {
   const matches = helpers.buildRuleBasedMatches(
     [
