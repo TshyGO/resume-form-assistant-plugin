@@ -4,9 +4,9 @@
 
 **Goal:** 用户对一份已导入的证据（邮件、粘贴文本）主动点「AI 整理」，看清楚要发出去什么之后再发；模型只给出**可核对的建议**——哪条申请、什么通知、要不要记面试、有没有待办、依据是原文哪一句、哪里拿不准；用户确认、改了再确认、拒绝或暂存。**确认之前，正式阶段和待办一个字都不改。**
 
-**Architecture:** 三层。一个不依赖 Tauri、不联网的 `ai-extract` crate 负责「发什么」和「收回来的东西能不能信」：拼请求、把证据正文当数据而不是指令、按 schema 严格校验返回、把候选编号映射回本地申请、核对引用片段确实出自原文。命令层负责凭据、HTTP、取消和写入；**网络请求期间不持有档案库的锁**。确认走 D03 已经写好的 `confirm_suggestion` 事务，待办提醒走 D10 已有的登记入口，不另写一套。
+**Architecture:** 三层。一个不依赖 Tauri、不联网的 `ai-extract` crate 负责「发什么」和「收回来的东西能不能信」：拼请求、把证据正文当数据而不是指令、按 schema 严格校验返回、把候选编号映射回本地申请、核对引用片段确实出自原文。命令层负责凭据、HTTP、取消和写入；**网络请求期间不持有档案库的锁**。确认走 D03 已经写好的 `confirm_suggestion` 事务，待办提醒走 D10 已有的登记入口，不另写一套。新增的界面用 React 写，挂到现有页面上；旧视图 D11 期间不迁。
 
-**Tech Stack:** Rust（新 crate `ai-extract`、`archive-store`、`src-tauri`）、`reqwest`（rustls）、`keyring`（Windows Credential Manager / macOS Keychain）、Tauri 2 异步命令、TypeScript 前端。
+**Tech Stack:** Rust（新 crate `ai-extract`、`archive-store`、`src-tauri`）、`reqwest`（rustls）、`keyring`（Windows Credential Manager / macOS Keychain）、Tauri 2 异步命令、React 19 + TypeScript、Vitest + Testing Library。
 
 **Spec 来源：** [#25](https://github.com/TshyGO/resume-form-assistant-plugin/issues/25)（范围与验收，含四轮 D01 修订）· [产品需求 §5.3、§6.3、§8.7、§10 场景](../../desktop-mvp/product-requirements.md) · [data-privacy §1、§8、§9、§11](../../desktop-mvp/data-privacy.md) · [ADR](../../desktop-mvp/adr-architecture.md) · [D10 拆分计划](2026-09-13-d10-pr-breakdown.md) · [D12 拆分计划](2026-09-13-d12-pr-breakdown.md)
 
@@ -53,6 +53,10 @@
 - `reqwest v0.13` 在 lock 里，但只是 tauri 在非桌面目标上的传递依赖，**Windows/macOS 构建不编它**。D11 要直接加。
 - 没有任何凭据库 crate。
 - 前端视图：申请、收件箱、待办、设置；收件箱详情已有手动分类表单（`inbox-ui.ts:183-240`，`classify_evidence_cmd`）。
+- **前端没有任何 UI 框架。** 原生 TypeScript，每个视图是 `mountXxx()` 用模板字符串写 `innerHTML`、再手动绑事件；`package.json` 的运行时依赖只有 `@tauri-apps/api`。四个视图是 `index.html` 里静态的 `<section id="view-...">`。
+- `tsconfig.json` 开了 `erasableSyntaxOnly`，`include` 只有 `src/**/*.ts`；测试是 `node --test --experimental-strip-types "src/**/*.test.ts"` 配手写假 DOM。**Node 的类型剥离不认 JSX**，React 组件的测试跑不了这条路。
+- `vite.config.js` 没有任何插件，只配了端口 1420 和 `dist` 输出。
+- Tauri CSP：`default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'`，没有 `unsafe-eval`。React 生产构建不需要 eval，内联样式也被允许。
 - 测试命令：`cargo test --manifest-path crates/<name>/Cargo.toml --locked`、`cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib`、前端 `npm run typecheck` + `npm run test:ui`（glob，新测试文件自动进）。`.github/workflows/desktop.yml` 的步骤列表是权威口径，新 crate 要在那里加一行。
 
 **文档里已经定死的规矩（直接照做）：**
@@ -103,6 +107,9 @@
 **10. 失败不留痕，成功才有建议行。**
 超时、取消、HTTP 错误、JSON 解析失败都**不写** `ai_suggestions`。证据本身和手动分类完全不受影响，面板上始终保留「手动分类」入口。
 
+**11. 新界面用 React，旧视图 D11 期间不迁。**
+设置页的 AI 一段、外发预览、审核面板用 React 19 + TypeScript 写，挂在现有页面留出的挂载点上。申请、收件箱、待办、备份四个旧视图 D11 期间不动，D11 合完后另开 issue 逐个迁。选 React 而不是 Svelte / Preact：生态和测试工具最成熟，插件那边本来就是 JS，贡献者和工具都最熟；桌面应用对运行时体积不敏感。**不引入**状态管理库和路由——审核面板用 `useReducer` 足够，导航沿用现有的；样式沿用 `styles.css`，不加 CSS 框架。
+
 ### 需负责人确认（开工前拍板；未拍板按「推荐」执行）
 
 | # | 问题 | 推荐 | 不选的代价 |
@@ -133,9 +140,17 @@
 | `desktop/src-tauri/src/ai_client.rs` | HTTP、超时、取消、错误映射 |
 | `desktop/src-tauri/src/ai_commands.rs` | 预览外发、发起分析、取消、列出/确认/拒绝/暂存建议 |
 | `desktop/src-tauri/src/ai_commands_tests.rs` | 本地假服务器覆盖慢、失败、非法 JSON、取消、锁不被占用 |
-| `desktop/src/ai-review.ts` / `ai-review-ui.ts` | 外发预览、等待与取消、审核面板 |
-| `desktop/src/ai-settings-ui.ts` | 设置页的 AI 一段 |
-| `desktop/index.html` / `src/styles.css` | 结构与样式 |
+| `desktop/package.json` / `package-lock.json` | React、Vitest、Testing Library 依赖；`test:react` 脚本 |
+| `desktop/vite.config.js` / `desktop/vitest.config.ts` | React 插件；jsdom 测试环境 |
+| `desktop/tsconfig.json` | `jsx: react-jsx`，`include` 加 `src/**/*.tsx` |
+| `desktop/src/react/mount.tsx` | 把组件挂到旧页面的某个节点上，返回卸载函数 |
+| `desktop/src/react/invoke.tsx` | `InvokeContext`：组件经它调命令，测试里换成假的 |
+| `desktop/src/react/RuntimeStatus.tsx` | PR 3 的示范组件（设置页运行状态那一小块） |
+| `desktop/src/ai/AiSettings.tsx` | 设置页的 AI 一段 |
+| `desktop/src/ai/review.ts` | 审核面板的纯逻辑：状态 reducer、改动检测、确认入参组装（`node --test` 可跑） |
+| `desktop/src/ai/AnalyzeDialog.tsx` / `ReviewPanel.tsx` | 外发预览、等待与取消、审核面板 |
+| `desktop/src/**/*.test.tsx` | 组件测试（Vitest + Testing Library） |
+| `desktop/index.html` / `src/styles.css` | 挂载点与样式 |
 | `.github/workflows/desktop.yml` | 新 crate 的测试步骤 |
 | `docs/desktop-mvp/data-privacy.md` | §8 支持矩阵、外发字段清单 |
 
@@ -169,11 +184,30 @@
 
 ---
 
-## PR 3 · 凭据与 AI 设置
+## PR 3 · 前端引入 React：只打地基
+
+**只做：** 让 `desktop/src` 能写、能测、能打包 React 组件，页面里留出挂载点。旧视图只动设置页「运行状态」那一小块作为示范，其余一行不改。
+
+**改动：**
+- 依赖：`react`、`react-dom`（19）；开发依赖 `@vitejs/plugin-react`、`vitest`、`jsdom`、`@testing-library/react`、`@testing-library/user-event`、`@types/react`、`@types/react-dom`。
+- `vite.config.js` 加 React 插件；新增 `vitest.config.ts`（jsdom 环境，只收 `src/**/*.test.tsx`）。
+- `tsconfig.json`：加 `"jsx": "react-jsx"`，`include` 加 `src/**/*.tsx`。`erasableSyntaxOnly` 保留，它保证 `.ts` 文件仍能被 `node --test` 直接跑。
+- `src/react/mount.tsx`：`mountReact(el, element)` 返回卸载函数。`src/react/invoke.tsx`：把 `window.__TAURI__.core.invoke` 放进 `InvokeContext`，组件一律经它调命令。
+- 示范：设置页里「运行状态」那一块（只读，现有 `get_runtime_status` 命令）改成 `RuntimeStatus.tsx`，证明挂载、调命令、测试、打包、CSP 这条链全通。
+- `package.json`：`test:ui` 保持 `node --test` 跑 `.ts`；新增 `test:react`（`vitest run`）；`npm test` 两个都跑。`.github/workflows/desktop.yml` 的「Frontend unit tests」步骤加上 `npm run test:react`。
+- 约定写进 `desktop/README.md`：**纯逻辑放 `.ts`（`node --test`），组件放 `.tsx`（Vitest）**。组件里不写业务判断，判断都在 `.ts` 里测。
+
+**测试：** `RuntimeStatus` 的 Vitest 用例（正常展示、命令报错展示错误码）；`npm run typecheck` 覆盖 `.tsx`；`npm run build` 通过；`desktop:dev` 里人工打开一次，控制台没有 CSP 报错，截图贴 PR。
+
+**验收关联：** 无直接的 #25 条目，是 PR 4、PR 7 界面的前提。
+
+---
+
+## PR 4 · 凭据与 AI 设置
 
 **只做：** 用户能在设置页配置接口地址、模型、Key，Key 进 OS 凭据库。**不发任何请求。**
 
-**改动：** `ai_credentials.rs`（`set_key` / `has_key` / `clear_key`，没有 `get_key` 命令——Key 只在 Rust 侧发请求时取）；`ai_settings.rs`（`ai-settings.json` 原子写、Base URL 补全规则对齐插件）；命令 `get_ai_settings_cmd`（返回地址、模型、`keyConfigured: bool`）、`save_ai_settings_cmd`、`set_ai_key_cmd`、`clear_ai_key_cmd`；设置页一段表单，文案说明「Key 存在系统凭据库里，不进档案、不进备份」「这是桌面自己的一条 Key，和浏览器插件里的互不相通」。
+**改动：** `ai_credentials.rs`（`set_key` / `has_key` / `clear_key`，没有 `get_key` 命令——Key 只在 Rust 侧发请求时取）；`ai_settings.rs`（`ai-settings.json` 原子写、Base URL 补全规则对齐插件）；命令 `get_ai_settings_cmd`（返回地址、模型、`keyConfigured: bool`）、`save_ai_settings_cmd`、`set_ai_key_cmd`、`clear_ai_key_cmd`；设置页的 AI 一段用 React 写（`AiSettings.tsx`，挂在 PR 3 留出的挂载点上），文案说明「Key 存在系统凭据库里，不进档案、不进备份」「这是桌面自己的一条 Key，和浏览器插件里的互不相通」。
 
 **测试：** 设置读写往返；Base URL 补全与插件 `tests/ai-models.test.js` 同一组输入输出；`get_ai_settings_cmd` 的返回里任何地方都搜不到 Key；日志里搜不到 Key；备份包里没有 `ai-settings.json`（接 D12 排除清单守卫）；凭据库不可用时（CI 上用可注入的假实现）返回明确错误码 `CREDENTIAL_STORE_UNAVAILABLE`。
 
@@ -181,7 +215,7 @@
 
 ---
 
-## PR 4 · 外发预览、请求与取消
+## PR 5 · 外发预览、请求与取消
 
 **只做：** 从一份证据发起分析并把结果写成 `pending` 建议。**不做确认。**
 
@@ -198,7 +232,7 @@
 
 ---
 
-## PR 5 · 确认、修改后确认、拒绝、暂存
+## PR 6 · 确认、修改后确认、拒绝、暂存
 
 **只做：** 命令层把建议落成正式记录，并接上 D10 提醒。
 
@@ -210,9 +244,9 @@
 
 ---
 
-## PR 6 · 审核面板、文案与验收
+## PR 7 · 审核面板、文案与验收
 
-**只做：** 界面、文档、走查记录。不加新能力。
+**只做：** 界面、文档、走查记录。不加新能力。界面用 React 写：纯逻辑（状态 reducer、改动检测、确认入参组装）放 `src/ai/review.ts` 用 `node --test` 测，组件放 `AnalyzeDialog.tsx` / `ReviewPanel.tsx`。收件箱和申请详情里的旧视图只加一个「AI 整理」按钮和一个挂载点，面板的状态全在 React 里。
 
 **改动：** 收件箱和申请详情里的证据增加「AI 整理」：
 1. **外发预览**：发往哪个服务商主机、哪个模型、正文多少字（是否截断）、带上哪几个候选（可增删）、明说「对方可能留存」。点「发送」才发。
@@ -223,7 +257,7 @@
 
 文档：data-privacy §8 补支持矩阵与实际外发字段清单；产品需求 §5.3 核对与实现一致。
 
-**测试：** 前端假 DOM 覆盖：未配置 Key 时按钮给出去设置的指引；预览里能看到候选且可删；取消后回到可再次发起的状态；多候选未选时确认按钮不可用；有改动时确认按钮文案变化；「更新进度」默认不勾。人工走查（贴进 #25）：合成邮件导入 → 预览 → 发送 → 暂存 → 退出重开 → 修改 → 确认 → 申请时间线与待办提醒一致；断网发送 → 失败提示 → 手动分类可用；提示注入邮件 → 建议里没有被注入的阶段。
+**测试：** `review.ts` 的 reducer 与入参组装用 `node --test`；组件用 Vitest + Testing Library 覆盖：未配置 Key 时按钮给出去设置的指引；预览里能看到候选且可删；取消后回到可再次发起的状态；多候选未选时确认按钮不可用；有改动时确认按钮文案变化；「更新进度」默认不勾。人工走查（贴进 #25）：合成邮件导入 → 预览 → 发送 → 暂存 → 退出重开 → 修改 → 确认 → 申请时间线与待办提醒一致；断网发送 → 失败提示 → 手动分类可用；提示注入邮件 → 建议里没有被注入的阶段。
 
 **验收关联：** #25 验收全部五条 + 测试节「统计误关联和错误状态建议」（PR 1 的统计测试结果贴进 issue）。
 
@@ -233,11 +267,11 @@
 
 | #25 验收 | 落在哪 | 证据形式 |
 | --- | --- | --- |
-| 确认前数据库的正式阶段/待办未变化 | PR 2、PR 4、PR 5 | 分析后查正式字段不变的回归 + 暂存/拒绝后不变 |
-| 回执不会自动变成「通过筛选」；明确拒信可建议拒绝但仍需确认 | PR 1、PR 5 | fixture 断言 + 确认前阶段不变 |
-| 模糊岗位不会随意选一个；每条重要建议可以回看原文依据 | PR 1、PR 5、PR 6 | 越界编号作废、`AI_NEEDS_DISAMBIGUATION`、引用核对、面板展开原文 |
-| 人工修正、更换模型、重新分析不会抹掉已确认历史 | PR 2、PR 5 | `modified_confirmed` 可追溯 + 重新分析新增行不动旧行 |
-| 隐私预览、错误提示、取消和离线手动回退可用 | PR 3、PR 4、PR 6 | 请求体与日志搜索测试 + 取消不入库 + 走查 |
+| 确认前数据库的正式阶段/待办未变化 | PR 2、PR 5、PR 6 | 分析后查正式字段不变的回归 + 暂存/拒绝后不变 |
+| 回执不会自动变成「通过筛选」；明确拒信可建议拒绝但仍需确认 | PR 1、PR 6 | fixture 断言 + 确认前阶段不变 |
+| 模糊岗位不会随意选一个；每条重要建议可以回看原文依据 | PR 1、PR 6、PR 7 | 越界编号作废、`AI_NEEDS_DISAMBIGUATION`、引用核对、面板展开原文 |
+| 人工修正、更换模型、重新分析不会抹掉已确认历史 | PR 2、PR 6 | `modified_confirmed` 可追溯 + 重新分析新增行不动旧行 |
+| 隐私预览、错误提示、取消和离线手动回退可用 | PR 4、PR 5、PR 7 | 请求体与日志搜索测试 + 取消不入库 + 走查 |
 
 ---
 
@@ -245,7 +279,7 @@
 
 **提示注入不能只靠提示词防。** 真正的防线是：模型没有任何工具权限、返回值逐项校验、确认前不写正式字段。PR 1 的注入 fixture 要断言「就算模型听话照做了，校验之后也落不进正式阶段」，而不是断言「模型没有照做」。
 
-**第一个异步命令。** 目前所有命令都在 `with_store` 里同步持锁。PR 4 是项目里第一次在锁外做长时间工作，「请求进行中其他命令不被卡住」必须有测试，不能只靠读代码。
+**第一个异步命令。** 目前所有命令都在 `with_store` 里同步持锁。PR 5 是项目里第一次在锁外做长时间工作，「请求进行中其他命令不被卡住」必须有测试，不能只靠读代码。
 
 **凭据库在 CI 上不可用。** GitHub 的 Windows/macOS runner 上 Credential Manager / Keychain 行为和桌面不同，`keyring` 可能直接失败。凭据访问要做成可注入的接口，CI 用内存实现；真实凭据库只在人工走查里验证，并在 #25 记录两个平台各一次。
 
@@ -253,4 +287,8 @@
 
 **D11 关不掉，除非 D09（#66）与 D10（#26）的验收也有据可查。** #25 明写硬依赖不得先于本 issue 关闭；#66 已关，#26 还开着，它的人工走查记录要先补上。
 
-**它是 D14 的硬依赖。** D14 的端到端验收要从「导入通知 → AI 建议 → 确认 → 提醒」走一遍，这条链路在 PR 6 之前走不通。
+**它是 D14 的硬依赖。** D14 的端到端验收要从「导入通知 → AI 建议 → 确认 → 提醒」走一遍，这条链路在 PR 7 之前走不通。
+
+**两种界面写法会并存一段时间。** D11 期间旧视图是 `innerHTML` + 假 DOM 测试，新界面是 React + Vitest。边界要守住：旧视图只提供按钮、挂载点和证据 id，面板的状态全在 React 里，**不让 React 组件去改旧视图的 DOM，也不让旧视图读 React 的状态**。旧视图迁移 D11 之后另开 issue，别在 D11 的 PR 里顺手迁。
+
+**测试栈变成两套。** `.ts` 走 `node --test`，`.tsx` 走 Vitest。CI 两套都要跑，漏一套等于那部分测试没在 CI 跑——D10 时 `test:ui` 没用 glob、29 个前端测试没进 CI（#90）就是这个坑。PR 3 要加一条守卫：新增 `.test.tsx` 文件会被 `test:react` 收到。
