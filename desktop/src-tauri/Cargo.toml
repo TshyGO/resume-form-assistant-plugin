@@ -15,11 +15,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+ai-extract = { path = "../crates/ai-extract" }
 archive-store = { path = "../crates/archive-store" }
 backup = { path = "../crates/backup" }
 data-service = { path = "../crates/data-service" }
 evidence-import = { path = "../crates/evidence-import" }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "charset", "system-proxy"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"
@@ -36,6 +39,7 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

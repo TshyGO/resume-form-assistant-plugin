@@ -1,3 +1,7 @@
+mod ai_client;
+mod ai_commands;
+#[cfg(test)]
+mod ai_commands_tests;
 mod ai_credentials;
 mod ai_settings;
 mod cli;
@@ -52,6 +56,9 @@ struct AppState {
     /// D11：桌面这条 AI Key 的存放处。只有发请求时才从这里取，
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
+    /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
+    /// 不排队也不重试。
+    ai_inflight: ai_commands::InflightRegistry,
 }
 
 /// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
@@ -746,6 +753,107 @@ fn clear_ai_key_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandErr
     ai_settings_view(&state)
 }
 
+/// 发送前预览：这次要把什么发出去。**只读，不发请求。**
+#[tauri::command]
+fn preview_analysis_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+    candidate_ids: Option<Vec<String>>,
+) -> Result<ai_commands::OutboundPreview, CommandError> {
+    let settings = ai_settings::load(&ai_data_root(&state)?);
+    with_store(&state, |store| {
+        let gathered = ai_commands::gather(
+            store,
+            store.archive_dir(),
+            &evidence_id,
+            candidate_ids.as_deref(),
+        )?;
+        Ok(ai_commands::preview(&gathered, &settings.api_url, &settings.model))
+    })
+}
+
+/// 分析一份证据，产出一条待确认的建议。
+///
+/// 项目里第一个异步命令。顺序是「持锁读 → **放锁** → 发请求 → 持锁写」：
+/// 请求可能要几十秒，期间不能把档案库锁住，否则插件保存岗位、界面翻列表全都卡住。
+#[tauri::command]
+async fn analyze_evidence_cmd(
+    state: State<'_, AppState>,
+    evidence_id: String,
+    request_id: String,
+    candidate_ids: Option<Vec<String>>,
+) -> Result<archive_store::AiSuggestion, CommandError> {
+    let settings = ai_settings::load(&ai_data_root(&state)?);
+    let key = state
+        .credentials
+        .get_key()
+        .map_err(credential_error)?
+        .ok_or_else(|| CommandError {
+            code: "AI_NOT_CONFIGURED".into(),
+            message: "还没有配置 AI Key，先去设置页填一条。".into(),
+        })?;
+
+    // 第一段：持锁读。`built` 里带着编号与本地 id 的对应关系，解析返回时要用。
+    let (gathered, built) = with_store(&state, |store| {
+        let gathered = ai_commands::gather(
+            store,
+            store.archive_dir(),
+            &evidence_id,
+            candidate_ids.as_deref(),
+        )?;
+        let built = ai_extract::build_request(
+            &settings.api_url,
+            &settings.model,
+            &gathered.evidence,
+            &gathered.candidates,
+        );
+        Ok((gathered, built))
+    })?;
+
+    let cancelled = state.ai_inflight.begin(&evidence_id, &request_id)?;
+
+    let host = ai_settings::host_of(&settings.api_url);
+    let client = ai_client::ChatClient::new()?;
+    // 第二段：锁已经放了。取消就是不再等这个 future，上游是否继续计费我们管不着，
+    // 界面文案也是这么说的。
+    let outcome = tokio::select! {
+        result = client.chat(&settings.api_url, &key, &host, &settings.model, &built.body) => result,
+        _ = cancelled => Err(CommandError {
+            code: "AI_CANCELLED".into(),
+            message: "已取消。取消不保证对方停止计算或停止计费。".into(),
+        }),
+    };
+    state.ai_inflight.finish(&request_id);
+
+    let content = outcome?;
+    let extraction = ai_extract::parse_response(&content, &built.context).map_err(|err| {
+        CommandError {
+            code: err.code().into(),
+            message: err.message(),
+        }
+    })?;
+
+    // 第三段：再持锁写。只写 ai_suggestions，一个正式字段都不动。
+    with_store(&state, |store| {
+        ai_commands::store_suggestion(store, &gathered, extraction, &built.scope)
+    })
+}
+
+#[tauri::command]
+fn cancel_analysis_cmd(state: State<AppState>, request_id: String) -> Result<bool, CommandError> {
+    Ok(state.ai_inflight.cancel(&request_id))
+}
+
+#[tauri::command]
+fn list_suggestions_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+) -> Result<Vec<archive_store::AiSuggestion>, CommandError> {
+    with_store(&state, |store| {
+        ai_commands::list_suggestions(store, &evidence_id)
+    })
+}
+
 #[tauri::command]
 fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     lifecycle::hide_main_window(&app);
@@ -986,6 +1094,7 @@ pub fn run() {
             hidden_launch,
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
+            ai_inflight: ai_commands::InflightRegistry::default(),
         })
         .setup(move |app| {
             if quit_launch {
@@ -1103,7 +1212,11 @@ pub fn run() {
             get_ai_settings_cmd,
             save_ai_settings_cmd,
             set_ai_key_cmd,
-            clear_ai_key_cmd
+            clear_ai_key_cmd,
+            preview_analysis_cmd,
+            analyze_evidence_cmd,
+            cancel_analysis_cmd,
+            list_suggestions_cmd
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {
