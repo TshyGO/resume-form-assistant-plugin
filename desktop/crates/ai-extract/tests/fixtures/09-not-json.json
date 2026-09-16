@@ -1,0 +1,21 @@
+{
+  "name": "返回的根本不是 JSON",
+  "why": "解析不了就是失败，不入库；界面提示里也不能把模型原文照搬出来。",
+  "evidence": {
+    "subject": "面试",
+    "from": "hr@hetech.example",
+    "body": "下周二上午十点"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "抱歉，我不太确定，您能再给我一些上下文吗？",
+  "expect": {
+    "error": "AI_BAD_RESPONSE"
+  }
+}

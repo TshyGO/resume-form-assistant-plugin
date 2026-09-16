@@ -1,0 +1,28 @@
+{
+  "name": "引用是编的",
+  "why": "引用必须逐字出自正文。对不上就丢掉，并如实告诉用户这条建议没有可核对的依据。",
+  "evidence": {
+    "subject": "面试邀请",
+    "from": "hr@hetech.example",
+    "body": "我们希望约您聊一聊，具体时间稍后再定。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"todos\":[],\"excerpts\":[\"面试定于 9 月 20 日上午十点\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "interview_invite",
+    "excerpts": [],
+    "uncertaintyContains": [
+      "引用"
+    ]
+  }
+}

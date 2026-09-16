@@ -1,0 +1,26 @@
+{
+  "name": "模型多给了 schema 外的字段",
+  "why": "「有没有回复过」不是模型能给的结论。多出来的字段直接忽略，不能影响任何判断。",
+  "evidence": {
+    "subject": "面试邀请",
+    "from": "hr@hetech.example",
+    "body": "邀请您参加下周三下午两点的面试。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"stage\":\"interview\",\"noReply\":true,\"replyEvidenceState\":\"none_imported\",\"todos\":[],\"excerpts\":[\"邀请您参加下周三下午两点的面试\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "interview_invite",
+    "stage": "interview",
+    "noUncertainties": true
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "面试改期到第二轮",
+  "why": "改期是面试类，轮次要跟着来；时刻带偏移、时区名给了就留下。",
+  "evidence": {
+    "subject": "二面时间调整",
+    "from": "hr@hetech.example",
+    "body": "抱歉，原定的二面时间需要调整，改为 9 月 28 日下午三点，链接不变。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"stage\":\"interview\",\"round\":2,\"todos\":[{\"title\":\"二面\",\"due\":\"2026-09-28T07:00:00Z\",\"timeZone\":\"Asia/Shanghai\",\"round\":2}],\"excerpts\":[\"改为 9 月 28 日下午三点\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "interview_invite",
+    "sendMode": "human",
+    "stage": "interview",
+    "round": 2,
+    "todoTitles": [
+      "二面"
+    ],
+    "todoDue": "2026-09-28T07:00:00Z"
+  }
+}

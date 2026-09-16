@@ -1,0 +1,28 @@
+{
+  "name": "Offer 之后才补录的测评邮件",
+  "why": "补录不该把阶段拉回测评。这里只要求模型如实说出这份通知可能更早，真正的拦截在确认时的「只记历史」。",
+  "evidence": {
+    "subject": "在线测评邀请",
+    "from": "assess@hetech.example",
+    "body": "请于 2026-08-20 前完成在线测评。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "offer"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"assessment_invite\",\"sendMode\":\"automated\",\"stage\":\"assessment\",\"todos\":[],\"excerpts\":[\"请于 2026-08-20 前完成在线测评\"],\"uncertainties\":[\"这条申请当前已是 offer，这封测评邮件可能是更早的通知\"],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "assessment_invite",
+    "stage": "assessment",
+    "uncertaintyContains": [
+      "可能是更早的通知"
+    ]
+  }
+}

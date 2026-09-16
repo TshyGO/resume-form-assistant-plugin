@@ -1,0 +1,32 @@
+{
+  "name": "模型认不出是哪条申请",
+  "why": "认不出就给空数组，交给用户消歧；这时也不该硬塞一个阶段建议之外的东西。",
+  "evidence": {
+    "subject": "面试邀请",
+    "from": "hr@other.example",
+    "body": "您好，关于您投递的岗位，我们想约个时间聊聊。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    },
+    {
+      "id": "app-b",
+      "company": "合成科技",
+      "title": "前端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"stage\":\"interview\",\"todos\":[],\"excerpts\":[\"我们想约个时间聊聊\"],\"uncertainties\":[\"正文没有写岗位名，两个岗位都对得上\"],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [],
+    "replyClass": "interview_invite",
+    "stage": "interview",
+    "uncertaintyContains": [
+      "没有写岗位名"
+    ]
+  }
+}
