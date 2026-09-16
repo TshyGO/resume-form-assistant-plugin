@@ -191,6 +191,26 @@ impl StoreTx<'_> {
             });
         }
 
+        // 同一条证据只认一次确认。重新分析会产生第二条 pending 建议,把它也确认一遍
+        // 就是把同一封通知的事件和待办再写一遍——用户看到的是凭空多出来的重复记录。
+        // 想改结论就直接改申请里的记录。
+        if self
+            .list_suggestions(Some(&suggestion.evidence_id), None)?
+            .iter()
+            .any(|other| {
+                other.id != suggestion.id
+                    && matches!(
+                        other.status,
+                        SuggestionStatus::Confirmed | SuggestionStatus::ModifiedConfirmed
+                    )
+            })
+        {
+            return Err(StoreError::Conflict(
+                "this evidence already has a confirmed suggestion; edit the application instead"
+                    .into(),
+            ));
+        }
+
         let now = now_utc();
         let mut events: Vec<StoredEvent> = Vec::new();
         let mut todos: Vec<Todo> = Vec::new();

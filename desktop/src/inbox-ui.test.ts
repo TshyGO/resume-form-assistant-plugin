@@ -279,3 +279,40 @@ test('a preview that answers late cannot replace the one selected after it', asy
   assert.match(h.el('inbox-preview').innerHTML, /第二封的正文/);
   assert.doesNotMatch(h.el('inbox-preview').innerHTML, /第一封的正文/);
 });
+
+test('the AI panel gets a mount point, and what it reports lands in the status bar', async () => {
+  // 面板确认完成后宿主会重画这条证据、把面板卸掉。那句话必须由状态栏来说，
+  // 否则用户永远看不到「提醒没登记上」这种要紧的话。
+  const mounted: { evidenceId: string | null; report: ((message: string) => void) | null; unmounted: number } = {
+    evidenceId: null,
+    report: null,
+    unmounted: 0,
+  };
+  const h = harness(
+    (name) => {
+      if (name === 'list_inbox_cmd') return [MAIL];
+      if (name === 'get_evidence_preview_cmd') return { ...MAIL, bodyExtract: '正文' };
+      return undefined;
+    },
+    {
+      mountAi: (_container, evidenceId, onConfirmed) => {
+        mounted.evidenceId = evidenceId;
+        mounted.report = onConfirmed;
+        return { unmount: () => { mounted.unmounted += 1; } };
+      },
+    },
+  );
+  await h.api.refresh();
+  h.button('data-evidence:e1').emit('click');
+  await h.tick();
+  await h.tick();
+
+  assert.equal(mounted.evidenceId, 'e1');
+  assert.match(h.el('inbox-preview').innerHTML, /id="inbox-ai"/);
+
+  mounted.report?.('已确认。待办建好了，但提醒没登记上：这台机器上的提醒不可用');
+  assert.match(h.el('inbox-status').textContent, /提醒没登记上/);
+  // 重画之前先把上一块面板卸掉，它的清理（取消进行中的请求）才跑得到。
+  await h.tick();
+  assert.ok(mounted.unmounted >= 1);
+});

@@ -763,10 +763,28 @@ fn a_different_send_mode_makes_it_a_modified_confirmation() {
 fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     let (dir, store) = archive();
     let a = app(&store, "合成科技");
-    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    // 一条证据只认一次确认，所以三种改法各用一封信。
+    let mails: Vec<String> = (0..3)
+        .map(|n| {
+            import(
+                &store,
+                &dir,
+                &format!("invite-{n}.eml"),
+                format!(
+                    "Subject: 面试邀请 {n}｜合成科技
+From: hr@example.test
+
+合成科技 第 {n} 封：下周二上午十点。
+"
+                )
+                .as_bytes(),
+                None,
+            )
+        })
+        .collect();
 
     // 建议说「面试 一面」，用户改成「测评」。
-    let first = pending(&store, &evidence, &[a.clone()], vec![]);
+    let first = pending(&store, &mails[0], &[a.clone()], vec![]);
     let mut args = confirm_args(&first.id, Some(&a));
     args.stage = Some("assessment".into());
     args.round = None;
@@ -775,7 +793,7 @@ fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 阶段照建议，轮次从一面改成二面。
-    let second = pending(&store, &evidence, &[a.clone()], vec![]);
+    let second = pending(&store, &mails[1], &[a.clone()], vec![]);
     let mut args = confirm_args(&second.id, Some(&a));
     args.round = Some(2);
     args.create_todos = false;
@@ -783,12 +801,43 @@ fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 干脆不记阶段，也是改。
-    let third = pending(&store, &evidence, &[a.clone()], vec![]);
+    let third = pending(&store, &mails[2], &[a.clone()], vec![]);
     let mut args = confirm_args(&third.id, Some(&a));
     args.stage = None;
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
     assert_eq!(result.suggestion.status, "modified_confirmed");
+}
+
+/// 同一封通知只认一次确认。重新分析会产生第二条建议，把它也确认一遍就是把同一条
+/// 通知的事件和待办再写一遍——用户看到的是凭空多出来的重复记录。
+#[test]
+fn a_second_suggestion_for_the_same_evidence_cannot_be_confirmed_too() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let first = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&first.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    // 换个模型重跑一遍，再确认第二条。
+    let second = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    let err = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&second.id, Some(&a)),
+        now(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "CONFLICT");
+    // 第一次确认写下的东西一条不多、一条不少。
+    assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
 }
 
 #[test]
@@ -907,6 +956,9 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
 
 /// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
 /// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
+
+/// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
+/// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
 #[test]
 fn the_json_the_panel_reads_keeps_its_key_names() {
     let (dir, store) = archive();
@@ -974,6 +1026,9 @@ fn the_json_the_panel_reads_keeps_its_key_names() {
     // 请求体里带着「当前阶段」，预览就得有这个字段，否则预览是在少报。
     assert_eq!(preview["candidates"][0]["stage"], "saved");
 }
+
+/// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
+/// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。
 
 /// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
 /// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。

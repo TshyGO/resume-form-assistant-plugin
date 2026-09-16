@@ -7,12 +7,6 @@ import type { AiSuggestion, ReplyClass, SendMode, Stage, SuggestedTodoView } fro
 /** 面板当前在哪一步。 */
 export type Phase = "idle" | "preview" | "sending" | "review" | "failed";
 
-/**
- * 一次最多送几条候选。和 `ai-extract` 的 `MAX_CANDIDATES` 是同一个数：
- * 后端超了会直接报 VALIDATION，界面提前拦住，省得白跑一趟。
- */
-export const MAX_CANDIDATES = 8;
-
 const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -227,6 +221,8 @@ export function highlight(body: string, excerpt: string): Array<{ text: string; 
 }
 
 export interface Failure {
+  /** 原始错误码。界面按它决定要不要给出额外的补救入口。 */
+  code: string;
   /** 出了什么事。 */
   text: string;
   /** 接下来能做什么。空字符串表示没有别的建议。 */
@@ -234,10 +230,12 @@ export interface Failure {
   /** 这次失败之后还能不能原样再来一次。 */
   retryable: boolean;
   /**
-   * 重试指的是哪一步。`analyze` 才给「再试一次」；确认/拒绝失败给的是 `none`——
+   * 重试指的是哪一步。`analyze` 才给「回到预览再发一次」；确认/拒绝失败是 `none`——
    * 那个按钮回到的是外发预览，再点发送等于又付一次钱。
+   *
+   * 默认按错误码给：调用方漏了也不会出现「文案说再试一次、界面上没有按钮」。
    */
-  retry?: "analyze" | "none";
+  retry: "analyze" | "none";
 }
 
 const MANUAL = "这条证据的手动分类照常可用。";
@@ -251,10 +249,19 @@ export function describeFailure(error: unknown): Failure {
   const detail = error as { code?: string; message?: string } | null;
   const code = detail?.code ?? "UNKNOWN";
   const message = detail?.message ?? "没有更多信息。";
+  const failure = (text: string, next: string, retryable: boolean): Failure => ({
+    code,
+    text,
+    next,
+    retryable,
+    // 能重试的一律指向「回到预览再发一次」；不能重试的没有按钮。
+    retry: retryable ? "analyze" : "none",
+  });
+
   const http = /^AI_HTTP_(\d{3})$/.exec(code);
   if (http) {
     const status = Number(http[1]);
-    // 401/403/404 再点一次必然还是这个结果：不给「再试一次」，给去设置页的指引。
+    // 401/403/404 再点一次必然还是这个结果：不给重试，给去设置页的指引。
     const authOrAddress = status === 401 || status === 403 || status === 404;
     const next =
       status === 401 || status === 403
@@ -266,48 +273,38 @@ export function describeFailure(error: unknown): Failure {
             : status === 429
               ? "服务商限流了，过一会儿再试。"
               : "这是服务商那边的错，过一会儿再试。";
-    return { text: message, next: `${next}${MANUAL}`, retryable: !authOrAddress };
+    return failure(message, `${next}${MANUAL}`, !authOrAddress);
   }
   switch (code) {
     case "AI_NOT_CONFIGURED":
-      return { text: "还没有配置 AI Key。", next: `去设置页填接口地址、模型和 Key。${MANUAL}`, retryable: false };
+      return failure("还没有配置 AI Key。", `去设置页填接口地址、模型和 Key。${MANUAL}`, false);
     case "AI_NEEDS_CANDIDATES":
-      return { text: message, next: `先把这条证据关联到某条申请，或者自己选几条候选。${MANUAL}`, retryable: false };
+      return failure(message, `在下面选几条候选再试，或者先把这条证据关联到某条申请。${MANUAL}`, false);
     case "AI_UNSUPPORTED_KIND":
-      return { text: message, next: `把正文复制出来，用「粘贴文本」再导入一次。${MANUAL}`, retryable: false };
+      return failure(message, `把正文复制出来，用「粘贴文本」再导入一次。${MANUAL}`, false);
     case "AI_NO_TEXT":
-      return { text: message, next: MANUAL, retryable: false };
+      return failure(message, MANUAL, false);
     case "AI_TIMEOUT":
-      return {
-        text: message,
-        next: `可以回到预览再发一次，或者换一个更快的模型。${MANUAL}`,
-        retryable: true,
-      };
+      return failure(message, `可以回到预览再发一次，或者换一个更快的模型。${MANUAL}`, true);
     case "AI_NETWORK":
-      return {
-        text: message,
-        next: `检查一下网络或接口地址，回到预览再发一次。${MANUAL}`,
-        retryable: true,
-      };
+      return failure(message, `检查一下网络或接口地址，回到预览再发一次。${MANUAL}`, true);
     case "AI_BUSY":
-      return {
-        text: message,
-        next: `等它结束，或者先取消正在跑的那一次。${MANUAL}`,
-        retryable: false,
-      };
+      return failure(message, `等它结束，或者先取消正在跑的那一次。${MANUAL}`, false);
     case "AI_CANCELLED":
-      return {
-        text: "已取消，这次没有产生建议。",
-        next: `取消不保证对方停止计算或停止计费。${MANUAL}`,
-        retryable: true,
-      };
+      return failure(
+        "已取消，这次没有产生建议。",
+        `取消不保证对方停止计算或停止计费。${MANUAL}`,
+        true,
+      );
     case "AI_BAD_RESPONSE":
     case "AI_CANDIDATE_OUT_OF_RANGE":
-      return { text: message, next: `可以再试一次；老是这样就换一个模型。${MANUAL}`, retryable: true };
+      return failure(message, `可以再试一次；老是这样就换一个模型。${MANUAL}`, true);
     case "AI_NEEDS_DISAMBIGUATION":
-      return { text: message, next: `在候选里选一条再确认。${MANUAL}`, retryable: false };
+      return failure(message, `在候选里选一条再确认。${MANUAL}`, false);
+    case "CONFLICT":
+      return failure(message, `这条通知已经确认过了。要改就直接改申请里的记录。${MANUAL}`, false);
     default:
-      return { text: `${message}（${code}）`, next: MANUAL, retryable: true };
+      return failure(`${message}（${code}）`, MANUAL, true);
   }
 }
 

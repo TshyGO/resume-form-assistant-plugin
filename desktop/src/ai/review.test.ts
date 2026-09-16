@@ -279,3 +279,18 @@ test("唯一候选已经不在了就不替用户填，也不让确认", () => {
   assert.equal(draft.applicationId, "");
   assert.match(confirmBlocker({ ...draft, applicationId: "gone" }, gone) ?? "", /已经不在了/);
 });
+
+test("失败对象自带错误码和重试语义，调用方不必自己补", () => {
+  const timeout = describeFailure({ code: "AI_TIMEOUT", message: "等太久了。" });
+  assert.equal(timeout.code, "AI_TIMEOUT");
+  assert.equal(timeout.retry, "analyze");
+
+  const needs = describeFailure({ code: "AI_NEEDS_CANDIDATES", message: "认不出来。" });
+  assert.equal(needs.retry, "none");
+  assert.match(needs.next, /选几条候选/);
+
+  // 同一封通知确认过第二次会 CONFLICT，文案要说清楚该去哪儿改。
+  const conflict = describeFailure({ code: "CONFLICT", message: "已经确认过了。" });
+  assert.equal(conflict.retryable, false);
+  assert.match(conflict.next, /改申请里的记录/);
+});

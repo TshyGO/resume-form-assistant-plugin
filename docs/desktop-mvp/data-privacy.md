@@ -297,7 +297,7 @@ D08 实现（可核对）：
 
 ### 8.1 桌面这一次分析，实际发出去的是什么
 
-一次 `analyze_evidence_cmd` 的请求体里，**与用户数据有关的只有这些**（另外还有模型名、系统提示词和 JSON 格式要求这些包装字段）。拼装在 `ai-extract::build_request`；「发出去的东西里没有本机 id」这一条由 `ai_commands_tests.rs` 的 `the_request_carries_labels_and_no_local_ids` 盯着，预览与请求字段是否对得上由 `the_json_the_panel_reads_keeps_its_key_names` 盯着：
+一次 `analyze_evidence_cmd` 的请求体里，**与用户数据有关的只有这些**（另外还有模型名、系统提示词和 JSON 格式要求这些包装字段）。拼装在 `ai-extract::build_request`；「发出去的东西里没有本机 id」由 `ai_commands_tests.rs` 的 `the_request_carries_labels_and_no_local_ids` 盯着，「预览和真会发出去的那份逐字段一致」由同一文件的 `the_preview_matches_the_request_field_by_field` 盯着：
 
 | 字段 | 内容 | 不含 |
 | --- | --- | --- |

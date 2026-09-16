@@ -135,7 +135,10 @@ test("取消之后回到能再发一次的状态", async () => {
   await user.click(await screen.findByRole("button", { name: "AI 整理" }));
   await screen.findByText("api.example.test");
   await user.click(screen.getByRole("button", { name: "发送" }));
-  await user.click(await screen.findByRole("button", { name: "取消" }));
+  // 刚点完发送的那半秒里「取消」是按不动的（防手抖连点），等它亮起来再点。
+  const cancel = await screen.findByRole("button", { name: "取消" });
+  await waitFor(() => expect(cancel).toHaveProperty("disabled", false));
+  await user.click(cancel);
   expect(await screen.findByText(/计费/)).toBeTruthy();
   expect(await screen.findByRole("button", { name: "再试一次" })).toBeTruthy();
 });
@@ -360,4 +363,67 @@ test("点了「不等了」之后，晚到的成功结果不会把面板弹回�
 
   await waitFor(() => expect(screen.getByRole("button", { name: "AI 整理" })).toBeTruthy());
   expect(screen.queryByRole("button", { name: "确认" })).toBeNull();
+});
+
+test("认不出候选时，失败页上就能选候选再看一次", async () => {
+  const user = userEvent.setup();
+  let refused = true;
+  const calls = mount((command, args) => {
+    if (command === "preview_analysis_cmd") {
+      if (refused) {
+        refused = false;
+        throw { code: "AI_NEEDS_CANDIDATES", message: "这封通知里认不出是哪一条申请。" };
+      }
+      return preview;
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText(/认不出是哪一条申请/);
+
+  // 文案说「选几条候选」，那就得真有地方选。
+  await user.click(await screen.findByLabelText(/别家公司/));
+  await user.click(screen.getByRole("button", { name: "用选中的候选再看一次" }));
+
+  await screen.findByText("api.example.test");
+  const previews = calls.filter((call) => call.command === "preview_analysis_cmd");
+  expect(previews[previews.length - 1]?.args?.candidateIds).toEqual(["app-b"]);
+});
+
+test("提醒没登记上时，确认的结果里要把这件事说出来", async () => {
+  const user = userEvent.setup();
+  const messages: string[] = [];
+  mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return suggestion;
+    if (command === "confirm_suggestion_cmd") {
+      return {
+        suggestion,
+        alreadyConfirmed: false,
+        events: [],
+        todos: [{ id: "todo-1" }],
+        reminderProblems: ["这台机器上的提醒不可用"],
+      };
+    }
+    return base(command, args);
+  }, (message) => messages.push(message));
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "确认" }));
+
+  await waitFor(() => expect(messages[0]).toMatch(/提醒没登记上：这台机器上的提醒不可用/));
+});
+
+test("这条通知已经确认过时，面板明说别再确认一次", async () => {
+  const user = userEvent.setup();
+  mount((command, args) =>
+    command === "list_suggestions_cmd"
+      ? [
+          { ...suggestion, id: "sug-old", status: "confirmed" },
+          { ...suggestion, id: "sug-new", status: "pending" },
+        ]
+      : base(command, args),
+  );
+  await user.click(await screen.findByRole("button", { name: /打开待确认的建议/ }));
+  expect(await screen.findByText(/已经按另一条建议确认过了/)).toBeTruthy();
 });

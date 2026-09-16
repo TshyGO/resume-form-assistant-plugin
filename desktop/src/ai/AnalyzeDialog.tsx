@@ -63,8 +63,8 @@ export function AnalyzeDialog({
 
       <h5>候选</h5>
       <ul className="ai-candidates">
-        {preview.candidates.map((candidate, index) => (
-          <li key={index}>
+        {preview.candidates.map((candidate) => (
+          <li key={candidate.label}>
             {candidate.company} · {candidate.title}
             {candidate.stage ? `（当前阶段：${stageLabel(candidate.stage)}）` : ""}
           </li>
@@ -107,7 +107,9 @@ export function AnalyzeDialog({
         <div className="stack">
           <p className="note">{waitingText(elapsedSeconds, preview.slowHintSeconds)}</p>
           <div className="row">
-            <button type="button" onClick={onCancelRequest}>
+            {/* 「发送」按下去之后这一行就变成「取消」。同一个位置连点两下会把刚发出去的
+                请求立刻取消掉，而取消不保证对方停止计费——所以头半秒先不接受点击。 */}
+            <button type="button" onClick={onCancelRequest} disabled={elapsedSeconds < 0.5}>
               取消
             </button>
             {/* 取消命令本身也可能失败或者迟迟不返回。留一条纯界面的退路，

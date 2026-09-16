@@ -147,9 +147,15 @@ export function AiReview({
     if (phase !== "sending") return;
     const started = Date.now();
     setElapsed(0);
-    const timer = setInterval(() => setElapsed((Date.now() - started) / 1000), 1000);
+    // 250ms 一跳：文案按整秒显示，但「刚点完发送那半秒不让点取消」需要更细的粒度。
+    const timer = setInterval(() => setElapsed((Date.now() - started) / 1000), 250);
     return () => clearInterval(timer);
   }, [phase]);
+
+  /** 这条证据已经有确认过的建议了。再确认第二条会重复写一遍时间线和待办。 */
+  const alreadyConfirmed = saved.some((row) =>
+    ["confirmed", "modified_confirmed"].includes(row.status),
+  );
 
   const openReview = useCallback(
     async (next: AiSuggestion) => {
@@ -351,6 +357,11 @@ export function AiReview({
         />
       ) : null}
 
+      {phase === "review" && suggestion && draft && alreadyConfirmed ? (
+        <p className="note warn">
+          这条通知已经按另一条建议确认过了。要改结论就直接改申请里的记录，别再确认一次。
+        </p>
+      ) : null}
       {phase === "review" && suggestion && draft ? (
         <ReviewPanel
           suggestion={suggestion}
@@ -369,6 +380,40 @@ export function AiReview({
         <div className="stack">
           <p className="note error">{failure.text}</p>
           <p className="muted">{failure.next}</p>
+          {/* 「自己选几条候选」这句话得配一个真能选的地方，否则是死胡同：
+              这条证据还没关联申请、桌面又认不出来时，用户在面板里无路可走。 */}
+          {failure.code === "AI_NEEDS_CANDIDATES" ? (
+            <div className="stack">
+              <ul className="ai-candidates">
+                {applications.map((application) => (
+                  <li key={application.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={(selectedIds ?? []).includes(application.id)}
+                        onChange={() => {
+                          const chosen = selectedIds ?? [];
+                          const next = chosen.includes(application.id)
+                            ? chosen.filter((item) => item !== application.id)
+                            : [...chosen, application.id];
+                          setSelectedIds(next.length ? next : null);
+                        }}
+                      />
+                      {application.company} · {application.title}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              {truncated ? <p className="muted">申请太多，这里只列出了最近的一部分。</p> : null}
+              <button
+                type="button"
+                onClick={() => void loadPreview(selectedIds)}
+                disabled={busy || !selectedIds?.length}
+              >
+                用选中的候选再看一次
+              </button>
+            </div>
+          ) : null}
           {failure.retryable && failure.retry === "analyze" ? (
             <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={busy}>
               再试一次

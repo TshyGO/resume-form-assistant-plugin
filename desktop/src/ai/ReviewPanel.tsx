@@ -81,7 +81,7 @@ function TodoRow({
         </label>
         {todo.duePrecision === "datetime" ? (
           <label>
-            时刻（UTC）
+            时刻（可带时区偏移）
             <input
               aria-label={`待办 ${index + 1} 时刻`}
               value={todo.dueAtUtc}
