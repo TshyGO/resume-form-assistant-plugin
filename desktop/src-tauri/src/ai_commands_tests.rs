@@ -751,6 +751,38 @@ fn a_different_send_mode_makes_it_a_modified_confirmation() {
 }
 
 #[test]
+fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+
+    // 建议说「面试 一面」，用户改成「测评」。
+    let first = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&first.id, Some(&a));
+    args.stage = Some("assessment".into());
+    args.round = None;
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+
+    // 阶段照建议，轮次从一面改成二面。
+    let second = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&second.id, Some(&a));
+    args.round = Some(2);
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+
+    // 干脆不记阶段，也是改。
+    let third = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&third.id, Some(&a));
+    args.stage = None;
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+}
+
+#[test]
 fn confirming_twice_is_idempotent_and_a_different_decision_conflicts() {
     let (dir, store) = archive();
     let a = app(&store, "合成科技");

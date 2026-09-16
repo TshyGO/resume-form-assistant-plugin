@@ -214,9 +214,20 @@ impl StoreTx<'_> {
             (Some(approved), true) => approved == &suggestion.suggested_todos,
             _ => true,
         };
+        // 阶段和轮次同理。用户把「面试」改成「测评」、把二面改成一面,或者干脆
+        // 不记阶段,都是对建议的修改;状态写成 confirmed 会让审计字段对不上。
+        let approved_stage = input.stage_event.as_ref().and_then(stage_event_target);
+        let stage_kept =
+            approved_stage.as_deref() == suggestion.suggested_stage.map(|s| s.as_str());
+        let round_kept = match input.stage_event.as_ref().and_then(event_round) {
+            Some(round) => Some(round) == suggestion.suggested_round,
+            None => true,
+        };
         let status = if input.approved_reply_class == suggestion.suggested_reply_class
             && input.approved_send_mode == suggestion.suggested_send_mode
             && todos_kept
+            && stage_kept
+            && round_kept
         {
             SuggestionStatus::Confirmed
         } else {
@@ -330,6 +341,15 @@ impl StoreTx<'_> {
         }
         self.get_suggestion(id)?
             .ok_or_else(|| StoreError::Internal("suggestion vanished in same transaction".into()))
+    }
+}
+
+/// 阶段事件里带的轮次。只有面试类事件有。
+fn event_round(draft: &EventDraft) -> Option<i64> {
+    match &draft.payload {
+        EventPayload::InterviewRecorded { round, .. }
+        | EventPayload::InterviewRescheduled { round, .. } => *round,
+        _ => None,
     }
 }
 
