@@ -1,3 +1,5 @@
+mod ai_credentials;
+mod ai_settings;
 mod cli;
 mod commands;
 mod evidence_commands;
@@ -47,6 +49,56 @@ struct AppState {
     /// D10：把到期登记给操作系统的那一位。整个进程共用一个，退出时要靠它撤销
     /// 全部未触发的计划。它不认识数据库，也不认识待办是什么。
     reminders: Box<dyn reminders::ReminderScheduler>,
+    /// D11：桌面这条 AI Key 的存放处。只有发请求时才从这里取，
+    /// 没有把 Key 交回界面的命令。
+    credentials: Box<dyn ai_credentials::CredentialStore>,
+}
+
+/// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiSettingsView {
+    api_url: String,
+    model: String,
+    /// 预览和提示里只出现主机名。
+    host: String,
+    key_configured: bool,
+    /// 凭据库读不出来时说明原因，不假装「没配过」。
+    credential_error: Option<String>,
+}
+
+fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
+    let settings = ai_settings::load(&ai_data_root(state)?);
+    let (key_configured, credential_error) = match state.credentials.get_key() {
+        Ok(found) => (found.is_some(), None),
+        Err(err) => (false, Some(err.message())),
+    };
+    Ok(AiSettingsView {
+        host: ai_settings::host_of(&settings.api_url),
+        api_url: settings.api_url,
+        model: settings.model,
+        key_configured,
+        credential_error,
+    })
+}
+
+fn ai_data_root(state: &AppState) -> Result<std::path::PathBuf, CommandError> {
+    let guard = state.paths.lock().map_err(|e| CommandError {
+        code: "STORE_ERROR".into(),
+        message: e.to_string(),
+    })?;
+    let paths = guard.as_ref().ok_or_else(|| CommandError {
+        code: "NO_DATA_DIR".into(),
+        message: "还没有定位到用户数据目录，设置没有保存。".into(),
+    })?;
+    Ok(paths.data_root.clone())
+}
+
+fn credential_error(err: ai_credentials::CredentialError) -> CommandError {
+    CommandError {
+        code: err.code().into(),
+        message: err.message(),
+    }
 }
 
 fn with_store<T>(
@@ -663,6 +715,38 @@ fn query_candidates_cmd(
 }
 
 #[tauri::command]
+fn get_ai_settings_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn save_ai_settings_cmd(
+    state: State<AppState>,
+    api_url: String,
+    model: String,
+) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::save(&data_root, &api_url, &model).map_err(|message| CommandError {
+        code: "AI_SETTINGS_WRITE_FAILED".into(),
+        message,
+    })?;
+    ai_settings_view(&state)
+}
+
+/// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
+#[tauri::command]
+fn set_ai_key_cmd(state: State<AppState>, key: String) -> Result<AiSettingsView, CommandError> {
+    state.credentials.set_key(&key).map_err(credential_error)?;
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn clear_ai_key_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
+    state.credentials.clear_key().map_err(credential_error)?;
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
 fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     lifecycle::hide_main_window(&app);
     Ok(())
@@ -901,6 +985,7 @@ pub fn run() {
             store_error: Mutex::new(None),
             hidden_launch,
             reminders: reminders::scheduler(),
+            credentials: Box::new(ai_credentials::KeyringStore),
         })
         .setup(move |app| {
             if quit_launch {
@@ -1014,7 +1099,11 @@ pub fn run() {
             record_closed_cmd,
             correct_stage_cmd,
             set_recycle_cmd,
-            query_candidates_cmd
+            query_candidates_cmd,
+            get_ai_settings_cmd,
+            save_ai_settings_cmd,
+            set_ai_key_cmd,
+            clear_ai_key_cmd
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {

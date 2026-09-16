@@ -168,7 +168,7 @@ WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁�
 | 数据库的一致性快照（SQLite backup API，不是正在被写的 `archive.db`） | `archive.db` / `-wal` / `-shm` |
 | `meta.json`（含 archiveId，不含 restoreEpoch） | `current.json`（机器本地指针与当前 epoch） |
 | `attachments/`、`snapshots/` | `tmp/`、`backups/`、`logs/`、WebView 缓存 |
-| `settings.json` 里**白名单内**的键（目前只有配对草稿的扩展 ID） | API Key、认证缓存、机器专属 native-host 路径 |
+| `settings.json` 里**白名单内**的键（目前只有配对草稿的扩展 ID） | API Key、认证缓存、机器专属 native-host 路径、`ai-settings.json`（D11 的桌面 AI 接口地址与模型名） |
 
 恢复到新目录后新铸 `restoreEpoch`；同一个备份恢复两次得到两个不同的 epoch。恢复后 `todos` 的提醒记账（`reminder_state` / `reminder_handle` / `reminder_scheduled_for_utc`）清零并重新登记——那些句柄指向的是原来那台机器上的 OS 计划；`overdue_ack_at` 保留。
 

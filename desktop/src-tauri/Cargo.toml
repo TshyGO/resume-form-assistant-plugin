@@ -19,6 +19,7 @@ archive-store = { path = "../crates/archive-store" }
 backup = { path = "../crates/backup" }
 data-service = { path = "../crates/data-service" }
 evidence-import = { path = "../crates/evidence-import" }
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"

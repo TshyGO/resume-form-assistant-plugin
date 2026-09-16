@@ -260,6 +260,17 @@ export interface ApplicationView {
 }
 
 /** 设置页显示的宿主状态。字段由 `get_runtime_status` 命令给出。 */
+export interface AiSettingsView {
+  apiUrl: string;
+  model: string;
+  /** 只有主机名，不含完整地址。 */
+  host: string;
+  /** Key 配没配。**Key 本身永远不会回到前端。** */
+  keyConfigured: boolean;
+  /** 凭据库读不出来时的原因；正常是 null。 */
+  credentialError: string | null;
+}
+
 export interface RuntimeStatus {
   runtimeLabel: string;
   appVersion: string;

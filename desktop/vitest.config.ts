@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    // Testing Library 靠全局 afterEach 自动卸载上一条用例画出来的东西；
+    // 关掉 globals 会让几条用例共用一个 DOM，第二次查询就撞上「找到多个」。
+    globals: true,
     include: ["src/**/*.test.tsx"],
     restoreMocks: true,
   },
