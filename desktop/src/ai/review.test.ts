@@ -226,3 +226,19 @@ test("提交时把时刻和日期的空白去掉", () => {
   );
   assert.equal(args.todos[0]!.dueAtUtc, "2026-09-22T02:00:00Z");
 });
+
+test("换成模型没指名的申请，也算改过", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  assert.equal(isModified(draft, item), false);
+  assert.equal(isModified({ ...draft, applicationId: "app-z" }, item), true);
+});
+
+test("唯一候选已经不在了就不替用户填，也不让确认", () => {
+  const gone = suggestion({
+    candidates: [{ id: "gone", company: "（这条申请已经不在了）", title: "", stage: "", missing: true }],
+  });
+  const draft = initialDraft(gone);
+  assert.equal(draft.applicationId, "");
+  assert.match(confirmBlocker({ ...draft, applicationId: "gone" }, gone) ?? "", /已经不在了/);
+});

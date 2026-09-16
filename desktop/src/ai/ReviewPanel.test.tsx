@@ -157,5 +157,28 @@ test("模型一条都没指认时，让用户从在办申请里自己挑", async
   expect(screen.getByText(/认不出这封信是哪一条申请/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
   await user.selectOptions(screen.getByLabelText("申请"), "app-c");
-  expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", false);
+  // 模型没指名的申请由用户自己指，这算人工修正，按钮跟着变。
+  expect(screen.getByRole("button", { name: "改完确认" })).toHaveProperty("disabled", false);
+});
+
+test("唯一那条候选已经不在了：不替用户选中，也不许选它", () => {
+  render(
+    <Host
+      suggestion={{
+        ...twoCandidates,
+        candidates: [
+          { id: "gone", company: "（这条申请已经不在了）", title: "", stage: "", missing: true },
+        ],
+      }}
+      applications={
+        [
+          { id: "app-c", company: "第三家", title: "数据实习", current_stage: "submitted" },
+        ] as ApplicationSummary[]
+      }
+    />,
+  );
+  expect(screen.getByLabelText("申请")).toHaveProperty("value", "");
+  expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
+  const gone = screen.getByRole("option", { name: /已经不在了/ });
+  expect(gone).toHaveProperty("disabled", true);
 });

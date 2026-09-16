@@ -933,6 +933,30 @@ fn the_json_the_panel_sends_deserialises_into_confirm_args() {
     assert_eq!(todos[0].time_zone.as_deref(), Some("Asia/Shanghai"));
     assert_eq!(todos[0].interview_round, Some(1));
 
+    // 另外两种到期精度也要认得。
+    let others: ai_commands::ConfirmArgs = serde_json::from_value(json!({
+        "suggestionId": "sug-3",
+        "applicationId": "app-a",
+        "replyClass": "assessment_invite",
+        "sendMode": "unknown",
+        "stage": "assessment",
+        "round": null,
+        "updateProgress": true,
+        "createTodos": true,
+        "todos": [
+            { "title": "测评", "duePrecision": "date", "dueAtUtc": null, "dueDate": "2026-09-22",
+              "timeZone": null, "interviewRound": null },
+            { "title": "回邮件", "duePrecision": "none", "dueAtUtc": null, "dueDate": null,
+              "timeZone": null, "interviewRound": null }
+        ]
+    }))
+    .unwrap();
+    let todos = others.todos.unwrap();
+    assert_eq!(todos[0].due_precision.as_deref(), Some("date"));
+    assert_eq!(todos[0].due_date.as_deref(), Some("2026-09-22"));
+    assert_eq!(todos[1].due_precision.as_deref(), Some("none"));
+    assert!(others.update_progress);
+
     // 面板在「不记阶段、不要待办」时发的是这个样子。
     let minimal: ai_commands::ConfirmArgs = serde_json::from_value(json!({
         "suggestionId": "sug-2",
@@ -977,11 +1001,42 @@ fn a_suggestion_with_no_candidates_can_still_be_confirmed_by_hand() {
         now(),
     )
     .unwrap();
-    assert_eq!(result.suggestion.status, "confirmed");
+    // 模型没指名的申请由用户自己指，这算人工修正，状态要留痕。
+    assert_eq!(result.suggestion.status, "modified_confirmed");
     assert_eq!(
         store.get_evidence(&evidence).unwrap().unwrap().application_id.as_deref(),
         Some(a.as_str())
     );
+}
+
+#[test]
+fn confirming_onto_an_application_the_model_never_named_is_a_modification() {
+    let (dir, store) = archive();
+    let named = app(&store, "合成科技");
+    let other = app(&store, "别家公司");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[named.clone()], vec![]);
+
+    let mut args = confirm_args(&suggestion.id, Some(&other));
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+}
+
+#[test]
+fn a_candidate_that_is_gone_is_marked_so_the_panel_will_not_preselect_it() {
+    let (dir, store) = archive();
+    let alive = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[alive.clone(), "没有这条".into()], vec![]);
+
+    let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    let row = rows.iter().find(|row| row.id == suggestion.id).unwrap();
+
+    assert!(!row.candidates[0].missing);
+    assert!(row.candidates[1].missing);
+    assert!(row.candidates[1].company.contains("不在了"));
 }
 
 #[test]

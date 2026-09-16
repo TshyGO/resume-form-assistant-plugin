@@ -64,8 +64,8 @@ export function AnalyzeDialog({
         ))}
       </ul>
       {busy ? <p className="muted">正在按新的选法重算这次要发什么…</p> : null}
-      {tooMany ? (
-        <p className="note warn">一次最多送 {MAX_CANDIDATES} 条候选，现在选了 {chosen.length} 条。</p>
+      {chosen.length >= MAX_CANDIDATES ? (
+        <p className="note warn">一次最多送 {MAX_CANDIDATES} 条候选，已经选满了。</p>
       ) : null}
 
       <details>
@@ -78,7 +78,13 @@ export function AnalyzeDialog({
                 <input
                   type="checkbox"
                   checked={chosen.includes(application.id)}
-                  disabled={sending || busy}
+                  // 勾满上限之后剩下的就按不动了：让用户走进一个必定失败的预览，
+                  // 再把他锁在没有勾选框的错误页上，是最糟的做法。
+                  disabled={
+                    sending ||
+                    busy ||
+                    (chosen.length >= MAX_CANDIDATES && !chosen.includes(application.id))
+                  }
                   onChange={() => toggle(application.id)}
                 />
                 {application.company} · {application.title}

@@ -59,8 +59,10 @@ function todoDraft(todo: SuggestedTodoView): TodoDraft {
  * 建议 → 草稿。候选只有一条时替用户填上；多于一条留空，**让他自己选**。
  */
 export function initialDraft(suggestion: AiSuggestion): Draft {
+  const only = suggestion.candidates.length === 1 ? suggestion.candidates[0]! : null;
   return {
-    applicationId: suggestion.candidates.length === 1 ? suggestion.candidates[0]!.id : "",
+    // 唯一那条候选已经不在了就不替用户填：填了他还得先发现填错了。
+    applicationId: only && !only.missing ? only.id : "",
     replyClass: suggestion.replyClass,
     sendMode: suggestion.sendMode,
     stage: suggestion.stage ?? "",
@@ -83,6 +85,10 @@ function sameTodo(draft: TodoDraft, todo: SuggestedTodoView) {
 
 /** 用户改过没有。改过按钮就变成「改完确认」，存下来的状态也会是 modified_confirmed。 */
 export function isModified(draft: Draft, suggestion: AiSuggestion): boolean {
+  // 确认到模型没指名的申请上，和改分类一样是人工修正（命令层同一口径）。
+  if (draft.applicationId && !suggestion.candidates.some((c) => c.id === draft.applicationId)) {
+    return true;
+  }
   if (draft.replyClass !== suggestion.replyClass) return true;
   if (draft.sendMode !== suggestion.sendMode) return true;
   if (draft.stage !== (suggestion.stage ?? "")) return true;
@@ -106,6 +112,9 @@ export function confirmBlocker(draft: Draft, suggestion: AiSuggestion): string |
     return suggestion.candidates.length > 1
       ? "这封通知对应哪一条申请还没选。"
       : "先选一条申请再确认。";
+  }
+  if (suggestion.candidates.some((c) => c.id === draft.applicationId && c.missing)) {
+    return "选中的这条申请已经不在了，请换一条。";
   }
   if (!validRound(draft.round)) {
     return "轮次要填 1–99 的整数。";

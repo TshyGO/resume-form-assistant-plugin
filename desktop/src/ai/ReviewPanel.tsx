@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { AiSuggestion, ApplicationSummary, ReplyClass, SendMode, Stage } from "../api.ts";
 import { REPLY_CLASS_OPTIONS, SEND_MODE_OPTIONS } from "../inbox.ts";
+import { stageLabel } from "../applications.ts";
 import { confirmBlocker, confirmLabel, highlight, isModified } from "./review.ts";
 import type { Draft, TodoDraft } from "./review.ts";
 
@@ -148,6 +149,7 @@ export function ReviewPanel({
       company: application.company,
       title: application.title,
       stage: application.current_stage ?? "",
+      missing: false,
     }));
   const choices = [...suggestion.candidates, ...extra];
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
@@ -166,7 +168,7 @@ export function ReviewPanel({
       {suggestion.candidates.length === 0 ? (
         <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
       ) : null}
-      <p className="muted">下拉里前几条是模型给的候选，后面是其余在办申请——它指错了也能改。</p>
+      <p className="muted">下拉里前几条是模型给的候选，后面是其余申请——它指错了也能改。</p>
       <label>
         申请
         <select
@@ -175,8 +177,10 @@ export function ReviewPanel({
         >
           <option value="">请选择…</option>
           {choices.map((candidate) => (
-            <option key={candidate.id} value={candidate.id}>
-              {candidate.company} · {candidate.title}
+            <option key={candidate.id} value={candidate.id} disabled={candidate.missing}>
+              {candidate.company}
+              {candidate.title ? ` · ${candidate.title}` : ""}
+              {candidate.stage ? `（${stageLabel(candidate.stage)}）` : ""}
             </option>
           ))}
         </select>

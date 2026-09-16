@@ -683,6 +683,9 @@ pub struct SuggestionCandidate {
     pub company: String,
     pub title: String,
     pub stage: String,
+    /// 这条候选现在拿不到了（删掉了，或者读出错）。界面不许默认选中它。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -736,12 +739,22 @@ pub fn view(store: &ArchiveStore, suggestion: AiSuggestion) -> SuggestionView {
                 company: detail.summary.company,
                 title: detail.summary.title,
                 stage: detail.summary.current_stage.as_str().to_string(),
+                missing: false,
             },
-            _ => SuggestionCandidate {
+            // 删掉了和读不出来要分开说：后者多半是一时的，说成「已经不在了」是误导。
+            Ok(None) => SuggestionCandidate {
                 id: id.clone(),
                 company: "（这条申请已经不在了）".into(),
                 title: String::new(),
                 stage: String::new(),
+                missing: true,
+            },
+            Err(_) => SuggestionCandidate {
+                id: id.clone(),
+                company: "（这条申请暂时读不出来）".into(),
+                title: String::new(),
+                stage: String::new(),
+                missing: true,
             },
         })
         .collect();

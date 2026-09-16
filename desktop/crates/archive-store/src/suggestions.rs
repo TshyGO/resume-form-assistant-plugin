@@ -223,7 +223,14 @@ impl StoreTx<'_> {
             Some(round) => Some(round) == suggestion.suggested_round,
             None => true,
         };
-        let status = if input.approved_reply_class == suggestion.suggested_reply_class
+        // 确认到模型没指名的那条申请上，也是人工修正:模型指错了、或者压根没指,
+        // 都得留痕。
+        let application_kept = suggestion
+            .candidate_application_ids
+            .iter()
+            .any(|id| id == &input.application_id);
+        let status = if application_kept
+            && input.approved_reply_class == suggestion.suggested_reply_class
             && input.approved_send_mode == suggestion.suggested_send_mode
             && todos_kept
             && stage_kept

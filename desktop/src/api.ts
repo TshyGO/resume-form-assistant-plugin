@@ -348,6 +348,8 @@ export interface SuggestionCandidate {
   company: string;
   title: string;
   stage: string;
+  /** 这条候选现在拿不到了（删掉了，或者读出错）。界面不许默认选中它。 */
+  missing?: boolean;
 }
 
 /** 一条待确认的建议。**全部是建议值**：确认之前，正式字段一个都没改。 */

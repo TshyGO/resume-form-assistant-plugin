@@ -13,6 +13,9 @@ import { ReviewPanel } from "./ReviewPanel.tsx";
 import { confirmArgs, describeFailure, initialDraft } from "./review.ts";
 import type { Draft, Failure, Phase } from "./review.ts";
 
+/** 一次列多少条申请。列不完就明说，别让用户以为第 101 条不存在。 */
+const APPLICATION_LIMIT = 100;
+
 function newRequestId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   return uuid ?? `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -35,6 +38,7 @@ export function AiReview({
   const [phase, setPhase] = useState<Phase>("idle");
   const [preview, setPreview] = useState<OutboundPreview | null>(null);
   const [applications, setApplications] = useState<ApplicationSummary[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[] | null>(null);
   const [suggestion, setSuggestion] = useState<AiSuggestion | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -61,14 +65,25 @@ export function AiReview({
     setSelectedIds(null);
     if (!invoke) return;
     invoke<AiSuggestion[]>("list_suggestions_cmd", { evidenceId })
-      .then(setSaved)
-      .catch(() => setSaved([]));
+      // 归并而不是覆盖：这个请求慢的时候，用户可能已经发完一次分析了，
+      // 后到的旧列表不该把新建议冲掉。
+      .then((rows) =>
+        setSaved((current) => {
+          const merged = new Map((rows ?? []).map((row) => [row.id, row]));
+          for (const row of current) merged.set(row.id, row);
+          return [...merged.values()];
+        }),
+      )
+      .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
     // 申请清单两处都要用：预览里改候选，审核里模型没指认时自己挑。
     invoke<Page<ApplicationSummary>>("list_applications_cmd", {
-      args: { stage: "all", recycle: "active", desc: true, limit: 100, offset: 0 },
+      args: { stage: "all", recycle: "active", desc: true, limit: APPLICATION_LIMIT, offset: 0 },
     })
-      .then((page) => setApplications(page?.items ?? []))
-      .catch(() => setApplications([]));
+      .then((page) => {
+        setApplications(page?.items ?? []);
+        setTruncated((page?.total ?? 0) > (page?.items?.length ?? 0));
+      })
+      .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
   }, [invoke, evidenceId]);
 
   // 面板被卸掉时（旧视图切到另一条证据）请求还在跑，就替用户取消掉：
@@ -97,6 +112,7 @@ export function AiReview({
       setSuggestion(next);
       setDraft(initialDraft(next));
       setPhase("review");
+      setNotice(null);
       if (!invoke) return;
       try {
         const evidence = await invoke<EvidencePreview>("get_evidence_preview_cmd", { evidenceId });
@@ -114,6 +130,7 @@ export function AiReview({
       const token = ++previewToken.current;
       setBusy(true);
       setFailure(null);
+      setNotice(null);
       try {
         // 申请清单在挂载时就取过了，这里只算这一次的外发范围。
         const outbound = await invoke<OutboundPreview>("preview_analysis_cmd", {
@@ -142,6 +159,7 @@ export function AiReview({
     requestId.current = id;
     setPhase("sending");
     setFailure(null);
+    setNotice(null);
     try {
       const next = await invoke<AiSuggestion>("analyze_evidence_cmd", {
         evidenceId,
@@ -193,11 +211,14 @@ export function AiReview({
       // 确认过的那条不再是「待确认」，按钮得跟着消失。
       setSaved((rows) => rows.map((row) => (row.id === outcome.suggestion.id ? outcome.suggestion : row)));
       const problems = outcome.reminderProblems ?? [];
+      const todos = outcome.todos ?? [];
       const message = outcome.alreadyConfirmed
         ? "这条建议已经确认过了，这次没有重复写入。"
         : problems.length
           ? `已确认。待办建好了，但提醒没登记上：${problems.join("；")}`
-          : "已确认。分类、时间线和待办都写好了。";
+          : todos.length
+            ? `已确认。分类、时间线和 ${todos.length} 条待办都写好了。`
+            : "已确认。分类和时间线都写好了，这次没有建待办。";
       setNotice(message);
       // 宿主接着会重画这条证据，把这块面板连同 notice 一起卸掉——所以这句话
       // 得交给面板外面的状态栏去说，不能只 setNotice 就完事。
@@ -229,6 +250,7 @@ export function AiReview({
             {pending.map((row) => (
               <button key={row.id} type="button" onClick={() => void openReview(row)} disabled={busy}>
                 {row.status === "deferred" ? "打开暂存的建议" : "打开待确认的建议"}
+                {pending.length > 1 ? `（${row.modelLabel ?? "模型未知"} · ${row.createdAt.slice(0, 16).replace("T", " ")}）` : ""}
               </button>
             ))}
           </div>
@@ -292,6 +314,9 @@ export function AiReview({
         </div>
       ) : null}
 
+      {truncated && phase === "review" ? (
+        <p className="muted">申请太多，只列出了最近 {APPLICATION_LIMIT} 条。</p>
+      ) : null}
       {notice ? <p className="note ok">{notice}</p> : null}
     </section>
   );
