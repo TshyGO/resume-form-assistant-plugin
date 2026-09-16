@@ -101,6 +101,18 @@ fn ai_data_root(state: &AppState) -> Result<std::path::PathBuf, CommandError> {
     Ok(paths.data_root.clone())
 }
 
+/// 发请求之前再看一眼地址。`save` 已经拦过一次，但旧版本存下的配置、用户手改的
+/// 文件、恢复回来的备份都可能绕过它——真正要紧的是**别把 Key 发出去**。
+fn checked_url(api_url: &str) -> Result<(), CommandError> {
+    match ai_settings::credential_in_url(api_url) {
+        Some(problem) => Err(CommandError {
+            code: "AI_URL_HAS_CREDENTIAL".into(),
+            message: problem,
+        }),
+        None => Ok(()),
+    }
+}
+
 fn credential_error(err: ai_credentials::CredentialError) -> CommandError {
     CommandError {
         code: err.code().into(),
@@ -761,6 +773,7 @@ fn preview_analysis_cmd(
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::OutboundPreview, CommandError> {
     let settings = ai_settings::load(&ai_data_root(&state)?);
+    checked_url(&settings.api_url)?;
     with_store(&state, |store| {
         let gathered = ai_commands::gather(
             store,
@@ -782,8 +795,9 @@ async fn analyze_evidence_cmd(
     evidence_id: String,
     request_id: String,
     candidate_ids: Option<Vec<String>>,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     let settings = ai_settings::load(&ai_data_root(&state)?);
+    checked_url(&settings.api_url)?;
     let key = state
         .credentials
         .get_key()
@@ -848,7 +862,7 @@ fn cancel_analysis_cmd(state: State<AppState>, request_id: String) -> Result<boo
 fn list_suggestions_cmd(
     state: State<AppState>,
     evidence_id: String,
-) -> Result<Vec<archive_store::AiSuggestion>, CommandError> {
+) -> Result<Vec<ai_commands::SuggestionView>, CommandError> {
     with_store(&state, |store| {
         ai_commands::list_suggestions(store, &evidence_id)
     })
@@ -870,7 +884,7 @@ fn confirm_suggestion_cmd(
 fn reject_suggestion_cmd(
     state: State<AppState>,
     suggestion_id: String,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     with_store(&state, |store| {
         ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Rejected)
     })
@@ -881,7 +895,7 @@ fn reject_suggestion_cmd(
 fn defer_suggestion_cmd(
     state: State<AppState>,
     suggestion_id: String,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     with_store(&state, |store| {
         ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Deferred)
     })

@@ -174,7 +174,7 @@ async fn analyze(
     api_url: &str,
     evidence_id: &str,
     selected: Option<&[String]>,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     let (gathered, built) = {
         let guard = store.lock().unwrap();
         let store = guard.as_ref().unwrap();
@@ -266,6 +266,40 @@ fn an_empty_hand_picked_list_is_refused_instead_of_sending_a_request() {
     assert_eq!(err.code, "AI_NEEDS_CANDIDATES");
 }
 
+/// 设置里躺着一条带凭据的地址（旧版本存的、手改的、恢复回来的），发请求之前必须拦住。
+#[test]
+fn a_saved_address_that_carries_a_credential_is_refused_before_sending() {
+    for bad in [
+        "https://someone:sk-123@relay.example/v1/chat/completions",
+        "https://relay.example/v1/chat/completions?api-key=sk-123",
+    ] {
+        assert!(
+            crate::ai_settings::credential_in_url(bad).is_some(),
+            "{bad} 应该被认出来"
+        );
+    }
+    assert!(crate::ai_settings::credential_in_url(
+        "https://api.deepseek.com/v1/chat/completions"
+    )
+    .is_none());
+}
+
+#[test]
+fn hand_picking_more_than_the_cap_is_refused() {
+    let (dir, store) = archive();
+    let ids: Vec<String> = (0..9).map(|n| app(&store, &format!("公司 {n}"))).collect();
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("公司 0"), None);
+
+    let err = ai_commands::gather(&store, store.archive_dir(), &evidence, Some(&ids)).unwrap_err();
+
+    assert_eq!(err.code, "VALIDATION");
+    assert!(
+        err.message.contains(&ai_extract::MAX_CANDIDATES.to_string()),
+        "{}",
+        err.message
+    );
+}
+
 #[test]
 fn a_pdf_is_refused_before_anything_leaves_the_machine() {
     let (dir, store) = archive();
@@ -331,13 +365,16 @@ async fn a_normal_reply_becomes_one_pending_suggestion() {
         .await
         .unwrap();
 
-    assert_eq!(suggestion.status, SuggestionStatus::Pending);
-    assert_eq!(suggestion.candidate_application_ids, vec![application.clone()]);
-    assert_eq!(suggestion.suggested_todos.len(), 1);
-    assert_eq!(
-        suggestion.suggested_todos[0].time_zone.as_deref(),
-        Some("Asia/Shanghai")
-    );
+    assert_eq!(suggestion.status, "pending");
+    let candidates: Vec<&str> = suggestion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.id.as_str())
+        .collect();
+    assert_eq!(candidates, vec![application.as_str()]);
+    assert_eq!(suggestion.todos.len(), 1);
+    assert_eq!(suggestion.todos[0].time_zone.as_deref(), Some("Asia/Shanghai"));
+    assert_eq!(suggestion.todos[0].due_precision, "datetime");
     assert!(suggestion.prompt_scope.is_some());
 
     // 建议归建议：证据自己的分类、关联都没动。
@@ -663,7 +700,7 @@ fn confirming_writes_the_class_the_event_and_the_todo_at_once() {
     )
     .unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::Confirmed);
+    assert_eq!(result.suggestion.status, "confirmed");
     assert!(!result.already_confirmed);
     assert_eq!(result.todos.len(), 1);
     assert!(result.reminder_problems.is_empty());
@@ -720,11 +757,11 @@ fn editing_a_todo_before_confirming_is_recorded_as_a_modification() {
     }]);
     let result = ai_commands::confirm(&store, &scheduler, args, now()).unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
     assert_eq!(result.todos.len(), 1);
     assert_eq!(result.todos[0].title, "一面（改到周三）");
     // 建议行原样留着：模型当初说的是什么，事后查得到。
-    assert_eq!(result.suggestion.suggested_todos[0].title, "一面");
+    assert_eq!(result.suggestion.todos[0].title, "一面");
 }
 
 #[test]
@@ -739,47 +776,90 @@ fn a_different_send_mode_makes_it_a_modified_confirmation() {
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
-    assert_eq!(
-        result.suggestion.suggested_send_mode,
-        archive_store::SendMode::Automated
-    );
-    assert_eq!(
-        result.suggestion.approved_send_mode,
-        Some(archive_store::SendMode::Unknown)
-    );
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+    assert_eq!(result.suggestion.send_mode, "automated");
+    assert_eq!(result.suggestion.approved_send_mode.as_deref(), Some("unknown"));
 }
 
 #[test]
 fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     let (dir, store) = archive();
     let a = app(&store, "合成科技");
-    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    // 一条证据只认一次确认，所以三种改法各用一封信。
+    let mails: Vec<String> = (0..3)
+        .map(|n| {
+            import(
+                &store,
+                &dir,
+                &format!("invite-{n}.eml"),
+                format!(
+                    "Subject: 面试邀请 {n}｜合成科技
+From: hr@example.test
+
+合成科技 第 {n} 封：下周二上午十点。
+"
+                )
+                .as_bytes(),
+                None,
+            )
+        })
+        .collect();
 
     // 建议说「面试 一面」，用户改成「测评」。
-    let first = pending(&store, &evidence, &[a.clone()], vec![]);
+    let first = pending(&store, &mails[0], &[a.clone()], vec![]);
     let mut args = confirm_args(&first.id, Some(&a));
     args.stage = Some("assessment".into());
     args.round = None;
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 阶段照建议，轮次从一面改成二面。
-    let second = pending(&store, &evidence, &[a.clone()], vec![]);
+    let second = pending(&store, &mails[1], &[a.clone()], vec![]);
     let mut args = confirm_args(&second.id, Some(&a));
     args.round = Some(2);
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 干脆不记阶段，也是改。
-    let third = pending(&store, &evidence, &[a.clone()], vec![]);
+    let third = pending(&store, &mails[2], &[a.clone()], vec![]);
     let mut args = confirm_args(&third.id, Some(&a));
     args.stage = None;
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+}
+
+/// 同一封通知只认一次确认。重新分析会产生第二条建议，把它也确认一遍就是把同一条
+/// 通知的事件和待办再写一遍——用户看到的是凭空多出来的重复记录。
+#[test]
+fn a_second_suggestion_for_the_same_evidence_cannot_be_confirmed_too() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let first = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&first.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    // 换个模型重跑一遍，再确认第二条。
+    let second = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    let err = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&second.id, Some(&a)),
+        now(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "AI_EVIDENCE_ALREADY_CONFIRMED");
+    // 第一次确认写下的东西一条不多、一条不少。
+    assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
 }
 
 #[test]
@@ -824,7 +904,7 @@ fn rejecting_leaves_every_formal_field_alone() {
     let rejected =
         ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Rejected).unwrap();
 
-    assert_eq!(rejected.status, SuggestionStatus::Rejected);
+    assert_eq!(rejected.status, "rejected");
     assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
     assert!(store
         .get_evidence(&evidence)
@@ -850,7 +930,7 @@ fn a_deferred_suggestion_survives_a_restart_and_can_still_be_confirmed() {
     let store = open_store(&archive_dir, &pointer).unwrap();
     let reopened = ai_commands::list_suggestions(&store, &evidence).unwrap();
     assert_eq!(reopened.len(), 1);
-    assert_eq!(reopened[0].status, SuggestionStatus::Deferred);
+    assert_eq!(reopened[0].status, "deferred");
     assert!(store
         .get_evidence(&evidence)
         .unwrap()
@@ -861,7 +941,7 @@ fn a_deferred_suggestion_survives_a_restart_and_can_still_be_confirmed() {
     let mut args = confirm_args(&suggestion.id, Some(&a));
     args.send_mode = "unknown".into();
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 }
 
 #[test]
@@ -884,16 +964,371 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
     let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
     assert_eq!(rows.len(), 2);
     let old = rows.iter().find(|row| row.id == first.id).unwrap();
-    assert_eq!(old.status, SuggestionStatus::Confirmed);
+    assert_eq!(old.status, "confirmed");
     assert_eq!(
         rows.iter().find(|row| row.id == second.id).unwrap().status,
-        SuggestionStatus::Pending
+        "pending"
     );
     assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
     assert_eq!(
         store.get_evidence(&evidence).unwrap().unwrap().reply_class,
         Some(archive_store::ReplyClass::InterviewInvite)
     );
+}
+
+/// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
+/// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
+#[test]
+fn the_json_the_panel_reads_keeps_its_key_names() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+
+    let view = serde_json::to_value(
+        ai_commands::list_suggestions(&store, &evidence)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == suggestion.id)
+            .unwrap(),
+    )
+    .unwrap();
+    for key in [
+        "id",
+        "evidenceId",
+        "status",
+        "candidates",
+        "stage",
+        "round",
+        "replyClass",
+        "sendMode",
+        "todos",
+        "excerpts",
+        "uncertainties",
+        "modelLabel",
+        "promptScope",
+        "createdAt",
+    ] {
+        assert!(view.get(key).is_some(), "SuggestionView 少了 {key}：{view}");
+    }
+    let candidate = &view["candidates"][0];
+    for key in ["id", "company", "title", "stage"] {
+        assert!(candidate.get(key).is_some(), "候选少了 {key}");
+    }
+    let todo = &view["todos"][0];
+    for key in ["title", "duePrecision", "dueAtUtc", "timeZone", "interviewRound"] {
+        assert!(todo.get(key).is_some(), "建议待办少了 {key}");
+    }
+
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+    let preview = serde_json::to_value(ai_commands::preview(
+        &gathered,
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+    ))
+    .unwrap();
+    for key in [
+        "host",
+        "model",
+        "bodyChars",
+        "truncated",
+        "hasSubject",
+        "hasFrom",
+        "candidates",
+        "bodyPreview",
+        "summary",
+        "slowHintSeconds",
+        "timeoutSeconds",
+        "maxCandidates",
+    ] {
+        assert!(preview.get(key).is_some(), "OutboundPreview 少了 {key}：{preview}");
+    }
+    // 请求体里带着「当前阶段」，预览就得有这个字段，否则预览是在少报。
+    assert_eq!(preview["candidates"][0]["stage"], "saved");
+}
+
+/// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
+/// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。
+#[test]
+fn the_preview_matches_the_request_field_by_field() {
+    let (dir, store) = archive();
+    app(&store, "合成科技");
+    app(&store, "合成科技分部");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+
+    let built = ai_extract::build_request(
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+        &gathered.evidence,
+        &gathered.candidates,
+    );
+    let preview = ai_commands::preview(
+        &gathered,
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+    );
+
+    assert_eq!(preview.host, built.scope.host);
+    assert_eq!(preview.model, built.scope.model);
+    assert_eq!(preview.body_chars, built.scope.body_chars);
+    assert_eq!(preview.truncated, built.scope.truncated);
+    assert_eq!(preview.has_subject, built.scope.has_subject);
+    assert_eq!(preview.has_from, built.scope.has_from);
+    assert_eq!(preview.candidates.len(), built.scope.candidates.len());
+    for (shown, sent) in preview.candidates.iter().zip(built.scope.candidates.iter()) {
+        assert_eq!(shown.label, sent.label);
+        assert_eq!(shown.company, sent.company);
+        assert_eq!(shown.title, sent.title);
+        assert_eq!(shown.stage, sent.stage);
+    }
+    assert_eq!(preview.max_candidates, ai_extract::MAX_CANDIDATES);
+
+    // 预览里写的每条候选，请求体里都得有同一行：公司、岗位、阶段一字不差。
+    // 按整行比，不按子串比——提示词本来就写着阶段名，子串断言会永远绿。
+    let user_message = built.body["messages"]
+        .as_array()
+        .and_then(|items| items.last())
+        .and_then(|item| item["content"].as_str())
+        .unwrap()
+        .to_string();
+    for candidate in &preview.candidates {
+        let line = format!(
+            "{}: 公司「{}」 岗位「{}」 当前阶段 {}",
+            candidate.label, candidate.company, candidate.title, candidate.stage
+        );
+        assert!(user_message.contains(&line), "请求体里没有这一行：{line}");
+    }
+}
+
+/// `prompt_scope` 会落库、也会显示在面板上。它只能有主机名，不能把完整接口地址
+/// （更别说查询串里的 key）带进去。
+#[test]
+fn the_prompt_scope_never_carries_the_endpoint() {
+    let (dir, store) = archive();
+    app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+    let built = ai_extract::build_request(
+        "https://api.example.test/v1/chat/completions?api-key=sk-secret",
+        "fake-model",
+        &gathered.evidence,
+        &gathered.candidates,
+    );
+
+    let scope = built.scope.summary();
+
+    assert!(scope.contains("api.example.test"));
+    assert!(!scope.contains("chat/completions"), "{scope}");
+    assert!(!scope.contains("sk-secret"), "{scope}");
+    assert!(!scope.contains('?'), "{scope}");
+}
+
+/// 确认过的建议不能再被改成拒绝或暂存。能改的话，「一条证据只认一次确认」就绕得过去：
+/// 确认 A → 把 A 改成 rejected → 再确认 B，同一封通知的事件和待办就写了两遍。
+#[test]
+fn a_confirmed_suggestion_cannot_be_reopened_by_rejecting_it() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    for status in [SuggestionStatus::Rejected, SuggestionStatus::Deferred, SuggestionStatus::Pending] {
+        let err = ai_commands::set_status(&store, &suggestion.id, status).unwrap_err();
+        assert_eq!(err.code, "CONFLICT", "{status:?}");
+    }
+}
+
+/// 面板允许重新打开拒绝过的建议。存储层得真的认这条路，否则那个入口是死的。
+#[test]
+fn a_rejected_suggestion_can_still_be_confirmed_later() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Rejected).unwrap();
+
+    let result = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    assert_eq!(result.suggestion.status, "confirmed");
+    assert_eq!(
+        store.get_evidence(&evidence).unwrap().unwrap().reply_class,
+        Some(archive_store::ReplyClass::InterviewInvite)
+    );
+}
+
+/// 前端 `confirmArgs()` 真正发出来的那个对象。两边的键名对不上就得在这里先红，
+/// 而不是等人工走查时看到一句 serde 的错。
+#[test]
+fn the_json_the_panel_sends_deserialises_into_confirm_args() {
+    let sent = json!({
+        "suggestionId": "sug-1",
+        "applicationId": "app-a",
+        "replyClass": "interview_invite",
+        "sendMode": "automated",
+        "stage": "interview",
+        "round": 1,
+        "updateProgress": false,
+        "createTodos": true,
+        "todos": [{
+            "title": "一面",
+            "duePrecision": "datetime",
+            "dueAtUtc": "2026-09-22T02:00:00Z",
+            "dueDate": null,
+            "timeZone": "Asia/Shanghai",
+            "interviewRound": 1
+        }]
+    });
+
+    let args: ai_commands::ConfirmArgs = serde_json::from_value(sent).unwrap();
+
+    assert_eq!(args.suggestion_id, "sug-1");
+    assert_eq!(args.application_id.as_deref(), Some("app-a"));
+    assert_eq!(args.reply_class, "interview_invite");
+    assert_eq!(args.send_mode, "automated");
+    assert_eq!(args.stage.as_deref(), Some("interview"));
+    assert_eq!(args.round, Some(1));
+    assert!(!args.update_progress);
+    assert!(args.create_todos);
+    let todos = args.todos.unwrap();
+    assert_eq!(todos[0].title, "一面");
+    assert_eq!(todos[0].due_precision.as_deref(), Some("datetime"));
+    assert_eq!(todos[0].due_at_utc.as_deref(), Some("2026-09-22T02:00:00Z"));
+    assert_eq!(todos[0].time_zone.as_deref(), Some("Asia/Shanghai"));
+    assert_eq!(todos[0].interview_round, Some(1));
+
+    // 另外两种到期精度也要认得。
+    let others: ai_commands::ConfirmArgs = serde_json::from_value(json!({
+        "suggestionId": "sug-3",
+        "applicationId": "app-a",
+        "replyClass": "assessment_invite",
+        "sendMode": "unknown",
+        "stage": "assessment",
+        "round": null,
+        "updateProgress": true,
+        "createTodos": true,
+        "todos": [
+            { "title": "测评", "duePrecision": "date", "dueAtUtc": null, "dueDate": "2026-09-22",
+              "timeZone": null, "interviewRound": null },
+            { "title": "回邮件", "duePrecision": "none", "dueAtUtc": null, "dueDate": null,
+              "timeZone": null, "interviewRound": null }
+        ]
+    }))
+    .unwrap();
+    let todos = others.todos.unwrap();
+    assert_eq!(todos[0].due_precision.as_deref(), Some("date"));
+    assert_eq!(todos[0].due_date.as_deref(), Some("2026-09-22"));
+    assert_eq!(todos[1].due_precision.as_deref(), Some("none"));
+    assert!(others.update_progress);
+
+    // 面板在「不记阶段、不要待办」时发的是这个样子。
+    let minimal: ai_commands::ConfirmArgs = serde_json::from_value(json!({
+        "suggestionId": "sug-2",
+        "applicationId": "app-a",
+        "replyClass": "auto_ack",
+        "sendMode": "unknown",
+        "stage": null,
+        "round": null,
+        "updateProgress": false,
+        "createTodos": false,
+        "todos": []
+    }))
+    .unwrap();
+    assert!(minimal.stage.is_none());
+    assert!(minimal.todos.unwrap().is_empty());
+}
+
+/// 模型允许一条都指认不出来（宁可空着也不猜）。这种建议必须还能由用户指定申请确认，
+/// 否则它就永远卡在那儿——界面上的「从在办申请里挑」靠的就是这条。
+#[test]
+fn a_suggestion_with_no_candidates_can_still_be_confirmed_by_hand() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[], vec![interview_todo()]);
+
+    // 没给 applicationId：谁都不知道是哪一条。
+    let err = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, None),
+        now(),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "AI_NEEDS_DISAMBIGUATION");
+
+    // 用户自己指一条在办申请，照常确认。
+    let result = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+    // 模型没指名的申请由用户自己指，这算人工修正，状态要留痕。
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+    assert_eq!(
+        store.get_evidence(&evidence).unwrap().unwrap().application_id.as_deref(),
+        Some(a.as_str())
+    );
+}
+
+#[test]
+fn confirming_onto_an_application_the_model_never_named_is_a_modification() {
+    let (dir, store) = archive();
+    let named = app(&store, "合成科技");
+    let other = app(&store, "别家公司");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[named.clone()], vec![]);
+
+    let mut args = confirm_args(&suggestion.id, Some(&other));
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+}
+
+#[test]
+fn a_candidate_that_is_gone_is_marked_so_the_panel_will_not_preselect_it() {
+    let (dir, store) = archive();
+    let alive = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[alive.clone(), "没有这条".into()], vec![]);
+
+    let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    let row = rows.iter().find(|row| row.id == suggestion.id).unwrap();
+
+    assert!(!row.candidates[0].missing);
+    assert!(row.candidates[1].missing);
+    assert!(!row.candidates[1].unreadable);
+    assert!(row.candidates[1].company.contains("不在了"));
+}
+
+/// 同一条候选被模型重复指认时，面板不该出现两个一模一样的选项。
+#[test]
+fn a_repeated_candidate_is_listed_once() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone(), a.clone()], vec![]);
+
+    let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    let row = rows.iter().find(|row| row.id == suggestion.id).unwrap();
+
+    assert_eq!(row.candidates.len(), 1);
 }
 
 #[test]

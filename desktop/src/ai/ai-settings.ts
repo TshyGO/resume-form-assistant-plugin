@@ -43,6 +43,50 @@ export function describeTransportRisk(apiUrl: string): Message | null {
   };
 }
 
+/**
+ * 接口地址里夹带凭据的提醒。我们承诺「Key 只在 Authorization 头里」，但用户完全
+ * 可能把 key 贴进地址：`https://user:pass@host/…` 或者 `?api-key=…`。那样它会随
+ * 每一次请求出现在 URL 里，也更容易被中转站的访问日志记下来。
+ */
+export function describeUrlSecrets(apiUrl: string): Message | null {
+  const value = apiUrl.trim();
+  if (value === "") return null;
+  const rest = value.split("://")[1] ?? value;
+  const authority = rest.split("/")[0] ?? "";
+  if (authority.includes("@")) {
+    return {
+      tone: "error",
+      text: "接口地址里带了用户名或密码。它会随每次请求一起发出去，也会进中转站的日志。Key 请填在下面的 API Key 里。",
+    };
+  }
+  // 判定规则和命令层的 `ai_settings::credential_in_url` 保持一致：按分段比，
+  // 查询串和 fragment 都看。两边口径不一样，用户会遇到「这里提示、那里能存」。
+  const SECRETS = [
+    "key",
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "auth",
+    "credential",
+    "sig",
+    "sign",
+    "signature",
+  ];
+  const tail = [value.split("?")[1] ?? "", value.split("#")[1] ?? ""].join("&");
+  const suspicious = tail
+    .split(/[&;]/)
+    .map((pair) => (pair.split("=")[0] ?? "").toLowerCase())
+    .find((name) => name.split(/[^a-z0-9]/).some((segment) => SECRETS.includes(segment)));
+  if (suspicious) {
+    return {
+      tone: "warn",
+      text: `接口地址里的 ${suspicious} 看着像一把 Key。保存时会被拒；Key 请填在下面的「API Key」里。`,
+    };
+  }
+  return null;
+}
+
 /** 保存后的提示：地址被补全过就说清楚补成了什么。 */
 export function describeSaved(typedUrl: string, view: AiSettingsView): Message {
   const typed = typedUrl.trim();

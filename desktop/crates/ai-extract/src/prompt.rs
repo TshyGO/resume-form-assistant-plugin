@@ -34,6 +34,9 @@ pub struct ScopeCandidate {
     pub label: String,
     pub company: String,
     pub title: String,
+    /// 当前阶段。请求体里带着它（「当前阶段 submitted」），预览就得照实显示——
+    /// 预览漏掉一个真会发出去的字段，这块预览就不算数。
+    pub stage: String,
 }
 
 impl OutboundScope {
@@ -140,6 +143,7 @@ pub fn build_request(
             label: label.clone(),
             company: candidate.company.clone(),
             title: candidate.title.clone(),
+            stage: candidate.stage.clone(),
         });
         labels.push((label, candidate.id.clone()));
     }

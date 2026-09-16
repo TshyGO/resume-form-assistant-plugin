@@ -318,3 +318,42 @@ ul.inbox-list button {
   max-width: 100%;
   max-height: 40vh;
 }
+
+/* D11 AI 整理：设置页的提示行，以及收件箱里的外发预览与审核面板。 */
+.note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.note.ok { border-color: #c7d2a8; color: var(--ok); }
+.note.warn { border-color: #e7d4a8; color: #7c5a12; }
+.note.error { border-color: #fecdd3; color: var(--danger); }
+
+.ai-panel {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 12px;
+  max-width: none;
+}
+.ai-panel h4, .ai-panel h5 { margin: 0; }
+.ai-candidates, .ai-excerpts, .ai-uncertainties, .ai-todos {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-todos > li { border: 1px solid var(--line); border-radius: 8px; padding: 8px; max-width: none; }
+.ai-review mark { background: #fde68a; }
+
+/* 看着像链接的按钮：它切换的是同一块区域，不是跳转。 */
+button.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}

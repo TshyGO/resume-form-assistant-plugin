@@ -6,7 +6,7 @@ import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
-import { mountAiSettings } from "./ai/mount.tsx";
+import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -184,6 +184,8 @@ const applications = mountApplications(command);
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
 const inbox = mountInbox(command, {
+  mountAi: (container, evidenceId, onConfirmed) =>
+    mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
   pickFiles: dialog?.open
     ? async () => {
         const chosen = await dialog.open?.({
