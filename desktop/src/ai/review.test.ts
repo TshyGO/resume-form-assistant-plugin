@@ -102,6 +102,24 @@ test("确认入参带上改后的待办，不带没勾的那些", () => {
   assert.equal(args.todos[0]!.timeZone, "Asia/Shanghai");
 });
 
+test("没选申请时发 null，不发空串——两种情况后端报的错不一样", () => {
+  const item = suggestion();
+  const draft = { ...initialDraft(item), applicationId: "" };
+  assert.equal(confirmArgs(draft, item).applicationId, null);
+});
+
+test("时区要填 IANA 名字", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  const withZone = (timeZone: string) => ({
+    ...draft,
+    todos: [{ ...draft.todos[0]!, timeZone }],
+  });
+  assert.match(confirmBlocker(withZone("北京时间"), item) ?? "", /时区名/);
+  assert.equal(confirmBlocker(withZone("Asia/Shanghai"), item), null);
+  assert.equal(confirmBlocker(withZone(""), item), null);
+});
+
 test("阶段留空就不发阶段事件", () => {
   const item = suggestion();
   const draft = { ...initialDraft(item), stage: "" as const };

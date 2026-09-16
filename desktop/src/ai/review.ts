@@ -36,6 +36,17 @@ function validDate(value: string): boolean {
   return !!match && realDate(match[1]!, match[2]!, match[3]!);
 }
 
+/** 时区得是 IANA 名字。填错了后端登记提醒时才会发现，那时候确认已经写进去了。 */
+export function validTimeZone(name: string): boolean {
+  if (name.trim() === "") return true;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: name.trim() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 轮次只能是 1–99 的整数。`Number("2.5")` 和 `Number("1e3")` 都得拦住。 */
 export function validRound(round: number | null): boolean {
   return round === null || (Number.isInteger(round) && round >= 1 && round <= 99);
@@ -148,6 +159,9 @@ export function confirmBlocker(draft: Draft, suggestion: AiSuggestion): string |
     if (!validRound(todo.interviewRound)) {
       return "待办的轮次要填 1–99 的整数。";
     }
+    if (!validTimeZone(todo.timeZone)) {
+      return "待办的时区要填 Asia/Shanghai 这样的时区名。";
+    }
     if (todo.duePrecision === "datetime") {
       if (!todo.dueAtUtc.trim()) {
         return "有一条待办说是精确到时刻，却没有时刻。";
@@ -173,7 +187,9 @@ export function confirmArgs(draft: Draft, suggestion: AiSuggestion) {
   const kept = draft.todos.filter((todo) => todo.keep);
   return {
     suggestionId: suggestion.id,
-    applicationId: draft.applicationId,
+    // 空串和「没选」是两回事：后端把 null 映射成 AI_NEEDS_DISAMBIGUATION，
+    // 把 "" 当成一条查不到的申请，报出来的错完全不同。
+    applicationId: draft.applicationId === "" ? null : draft.applicationId,
     replyClass: draft.replyClass,
     sendMode: draft.sendMode,
     stage: draft.stage === "" ? null : draft.stage,
@@ -262,9 +278,17 @@ export function describeFailure(error: unknown): Failure {
     case "AI_NO_TEXT":
       return { text: message, next: MANUAL, retryable: false };
     case "AI_TIMEOUT":
-      return { text: message, next: `可以再试一次，或者换一个更快的模型。${MANUAL}`, retryable: true };
+      return {
+        text: message,
+        next: `可以回到预览再发一次，或者换一个更快的模型。${MANUAL}`,
+        retryable: true,
+      };
     case "AI_NETWORK":
-      return { text: message, next: `检查一下网络或接口地址，再试一次。${MANUAL}`, retryable: true };
+      return {
+        text: message,
+        next: `检查一下网络或接口地址，回到预览再发一次。${MANUAL}`,
+        retryable: true,
+      };
     case "AI_BUSY":
       return {
         text: message,

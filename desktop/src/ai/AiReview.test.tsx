@@ -17,6 +17,7 @@ const preview: OutboundPreview = {
   summary: "发往 api.example.test · 模型 fake-model · 正文 120 字 · 候选 1 条",
   slowHintSeconds: 15,
   timeoutSeconds: 60,
+  maxCandidates: 8,
 };
 
 const suggestion: AiSuggestion = {
@@ -336,4 +337,27 @@ test("拒绝过的建议还能再打开——点错了不该只能再花一次�
   );
   await user.click(await screen.findByRole("button", { name: "打开拒绝过的建议" }));
   expect(await screen.findByRole("button", { name: "确认" })).toBeTruthy();
+});
+
+test("点了「不等了」之后，晚到的成功结果不会把面板弹回审核页", async () => {
+  const user = userEvent.setup();
+  let resolve: ((value: AiSuggestion) => void) | null = null;
+  mount((command, args) => {
+    if (command === "analyze_evidence_cmd") {
+      return new Promise<AiSuggestion>((done) => {
+        resolve = done;
+      });
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByRole("button", { name: "取消" });
+  await user.click(screen.getByRole("button", { name: "不等了，关掉" }));
+
+  resolve!(suggestion);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "AI 整理" })).toBeTruthy());
+  expect(screen.queryByRole("button", { name: "确认" })).toBeNull();
 });

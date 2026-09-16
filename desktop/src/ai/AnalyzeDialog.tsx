@@ -1,6 +1,6 @@
 import type { ApplicationSummary, OutboundPreview } from "../api.ts";
 import { stageLabel } from "../applications.ts";
-import { MAX_CANDIDATES, waitingText } from "./review.ts";
+import { waitingText } from "./review.ts";
 
 /**
  * 发送前的那一屏：**这一次要把什么发出去**，看清楚了再点发送。
@@ -37,7 +37,9 @@ export function AnalyzeDialog({
   onClose: () => void;
 }) {
   const chosen = selectedIds ?? [];
-  const tooMany = chosen.length > MAX_CANDIDATES;
+  // 上限由命令层带回来，界面不另抄一份常量。
+  const cap = preview.maxCandidates;
+  const tooMany = chosen.length > cap;
   const toggle = (id: string) => {
     const next = chosen.includes(id) ? chosen.filter((item) => item !== id) : [...chosen, id];
     onSelectionChange(next.length ? next : null);
@@ -69,8 +71,8 @@ export function AnalyzeDialog({
         ))}
       </ul>
       {busy ? <p className="muted">正在按新的选法重算这次要发什么…</p> : null}
-      {chosen.length >= MAX_CANDIDATES ? (
-        <p className="note warn">一次最多送 {MAX_CANDIDATES} 条候选，已经选满了。</p>
+      {chosen.length >= cap ? (
+        <p className="note warn">一次最多送 {cap} 条候选，已经选满了。</p>
       ) : null}
 
       <details>
@@ -87,9 +89,7 @@ export function AnalyzeDialog({
                   // 勾满上限之后剩下的就按不动了：让用户走进一个必定失败的预览，
                   // 再把他锁在没有勾选框的错误页上，是最糟的做法。
                   disabled={
-                    sending ||
-                    busy ||
-                    (chosen.length >= MAX_CANDIDATES && !chosen.includes(application.id))
+                    sending || busy || (chosen.length >= cap && !chosen.includes(application.id))
                   }
                   onChange={() => toggle(application.id)}
                 />

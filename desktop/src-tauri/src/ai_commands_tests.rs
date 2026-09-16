@@ -975,6 +975,98 @@ fn the_json_the_panel_reads_keeps_its_key_names() {
     assert_eq!(preview["candidates"][0]["stage"], "saved");
 }
 
+/// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
+/// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。
+#[test]
+fn the_preview_matches_the_request_field_by_field() {
+    let (dir, store) = archive();
+    app(&store, "合成科技");
+    app(&store, "合成科技分部");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+
+    let built = ai_extract::build_request(
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+        &gathered.evidence,
+        &gathered.candidates,
+    );
+    let preview = ai_commands::preview(
+        &gathered,
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+    );
+
+    assert_eq!(preview.host, built.scope.host);
+    assert_eq!(preview.model, built.scope.model);
+    assert_eq!(preview.body_chars, built.scope.body_chars);
+    assert_eq!(preview.truncated, built.scope.truncated);
+    assert_eq!(preview.has_subject, built.scope.has_subject);
+    assert_eq!(preview.has_from, built.scope.has_from);
+    assert_eq!(preview.candidates.len(), built.scope.candidates.len());
+    for (shown, sent) in preview.candidates.iter().zip(built.scope.candidates.iter()) {
+        assert_eq!(shown.label, sent.label);
+        assert_eq!(shown.company, sent.company);
+        assert_eq!(shown.title, sent.title);
+        assert_eq!(shown.stage, sent.stage);
+    }
+    assert_eq!(preview.max_candidates, ai_extract::MAX_CANDIDATES);
+
+    // 预览里出现的每条候选，请求体里都得找得着；反过来也不能多。
+    let body = built.body.to_string();
+    for candidate in &preview.candidates {
+        assert!(body.contains(&candidate.company), "请求体里没有 {}", candidate.company);
+        assert!(body.contains(&candidate.stage), "请求体里没有阶段 {}", candidate.stage);
+    }
+}
+
+/// `prompt_scope` 会落库、也会显示在面板上。它只能有主机名，不能把完整接口地址
+/// （更别说查询串里的 key）带进去。
+#[test]
+fn the_prompt_scope_never_carries_the_endpoint() {
+    let (dir, store) = archive();
+    app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+    let built = ai_extract::build_request(
+        "https://api.example.test/v1/chat/completions?api-key=sk-secret",
+        "fake-model",
+        &gathered.evidence,
+        &gathered.candidates,
+    );
+
+    let scope = built.scope.summary();
+
+    assert!(scope.contains("api.example.test"));
+    assert!(!scope.contains("chat/completions"), "{scope}");
+    assert!(!scope.contains("sk-secret"), "{scope}");
+    assert!(!scope.contains('?'), "{scope}");
+}
+
+/// 面板允许重新打开拒绝过的建议。存储层得真的认这条路，否则那个入口是死的。
+#[test]
+fn a_rejected_suggestion_can_still_be_confirmed_later() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Rejected).unwrap();
+
+    let result = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    assert_eq!(result.suggestion.status, "confirmed");
+    assert_eq!(
+        store.get_evidence(&evidence).unwrap().unwrap().reply_class,
+        Some(archive_store::ReplyClass::InterviewInvite)
+    );
+}
+
 /// 前端 `confirmArgs()` 真正发出来的那个对象。两边的键名对不上就得在这里先红，
 /// 而不是等人工走查时看到一句 serde 的错。
 #[test]
@@ -1118,7 +1210,22 @@ fn a_candidate_that_is_gone_is_marked_so_the_panel_will_not_preselect_it() {
 
     assert!(!row.candidates[0].missing);
     assert!(row.candidates[1].missing);
+    assert!(!row.candidates[1].unreadable);
     assert!(row.candidates[1].company.contains("不在了"));
+}
+
+/// 同一条候选被模型重复指认时，面板不该出现两个一模一样的选项。
+#[test]
+fn a_repeated_candidate_is_listed_once() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone(), a.clone()], vec![]);
+
+    let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    let row = rows.iter().find(|row| row.id == suggestion.id).unwrap();
+
+    assert_eq!(row.candidates.len(), 1);
 }
 
 #[test]

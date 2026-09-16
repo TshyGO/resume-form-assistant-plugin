@@ -325,6 +325,8 @@ export interface OutboundPreview {
   /** 等这么久之后界面说「还在等」，再等这么久就算超时。 */
   slowHintSeconds: number;
   timeoutSeconds: number;
+  /** 一次最多送几条候选。界面照这个数拦，不另抄一份常量。 */
+  maxCandidates: number;
 }
 
 export type SuggestionStatus =

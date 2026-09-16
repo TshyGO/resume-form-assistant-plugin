@@ -118,6 +118,8 @@ pub struct OutboundPreview {
     /// 界面照这两个数字显示「还在等」和放弃等待，不要自己另写一套。
     pub slow_hint_seconds: u64,
     pub timeout_seconds: u64,
+    /// 一次最多送几条候选。界面照这个数拦，两边不各写一份常量。
+    pub max_candidates: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -311,6 +313,7 @@ pub fn preview(gathered: &Gathered, api_url: &str, model: &str) -> OutboundPrevi
         summary: scope.summary(),
         slow_hint_seconds: crate::ai_client::SLOW_HINT_SECONDS,
         timeout_seconds: crate::ai_client::TIMEOUT_SECONDS,
+        max_candidates: MAX_CANDIDATES,
         host: scope.host,
         model: scope.model,
         body_chars: scope.body_chars,

@@ -156,7 +156,7 @@ export function ReviewPanel({
   // 不能让下拉框空着让人以为「不记阶段」。
   const stageOptions = STAGE_OPTIONS.some((option) => option.value === draft.stage)
     ? STAGE_OPTIONS
-    : [...STAGE_OPTIONS, { value: draft.stage, label: `${draft.stage}（模型给的）` }];
+    : [...STAGE_OPTIONS, { value: draft.stage, label: `${stageLabel(draft.stage)}（模型给的）` }];
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
 
   return (

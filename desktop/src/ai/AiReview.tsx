@@ -82,6 +82,11 @@ export function AiReview({
   invokeRef.current = invoke;
   /** 预览的请求序号：连点候选时只认最后一次的结果。 */
   const previewToken = useRef(0);
+  /**
+   * 分析请求的代次。用户点了「不等了」之后，这次请求即使成功返回也不能把面板
+   * 重新弹回审核页——他已经说过不要了。
+   */
+  const sendGeneration = useRef(0);
 
   // 这条证据上以前留下的建议（暂存的、拒绝过的、确认过的都在）。
   useEffect(() => {
@@ -100,20 +105,29 @@ export function AiReview({
       // 后到的旧列表不该把新建议冲掉。
       .then((rows) =>
         setSaved((current) => {
-          const merged = new Map((rows ?? []).map((row) => [row.id, row]));
+          const mine = (rows ?? []).filter((row) => row.evidenceId === evidenceId);
+          const merged = new Map(mine.map((row) => [row.id, row]));
           for (const row of current) merged.set(row.id, row);
           return [...merged.values()];
         }),
       )
       .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
     // 申请清单两处都要用：预览里改候选，审核里模型没指认时自己挑。
-    loadApplications(invoke)
-      .then(({ items, truncated: more }) => {
-        setApplications(items);
-        setTruncated(more);
-      })
-      .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
   }, [invoke, evidenceId]);
+
+  /**
+   * 申请清单只在真要用的时候取：选中一条证据就预取上千条申请，多数时候是白取。
+   */
+  const ensureApplications = useCallback(async () => {
+    if (!invoke || applications.length) return;
+    try {
+      const { items, truncated: more } = await loadApplications(invoke);
+      setApplications(items);
+      setTruncated(more);
+    } catch (error) {
+      setFailure({ ...describeFailure(error), retry: "none" });
+    }
+  }, [invoke, applications.length]);
 
   // 面板被卸掉时（旧视图切到另一条证据）请求还在跑，就替用户取消掉：
   // 不然它继续算、继续计费，而界面上再也没有取消它的入口。
@@ -144,6 +158,7 @@ export function AiReview({
       setPhase("review");
       setNotice(null);
       if (!invoke) return;
+      void ensureApplications();
       try {
         const evidence = await invoke<EvidencePreview>("get_evidence_preview_cmd", { evidenceId });
         setBody(evidence?.bodyExtract ?? "");
@@ -158,6 +173,7 @@ export function AiReview({
     async (ids: string[] | null) => {
       if (!invoke) return;
       const token = ++previewToken.current;
+      void ensureApplications();
       setBusy(true);
       setFailure(null);
       setNotice(null);
@@ -186,6 +202,7 @@ export function AiReview({
   const send = async () => {
     if (!invoke) return;
     const id = newRequestId();
+    const generation = ++sendGeneration.current;
     requestId.current = id;
     setPhase("sending");
     setFailure(null);
@@ -196,13 +213,17 @@ export function AiReview({
         requestId: id,
         candidateIds: selectedIds,
       });
+      // 用户已经不等这次了（或者又发起了新的一次）：结果丢掉，不弹回审核页。
+      if (generation !== sendGeneration.current) return;
       setSaved((rows) => [...rows, next]);
       await openReview(next);
     } catch (error) {
+      if (generation !== sendGeneration.current) return;
       setFailure({ ...describeFailure(error), retry: "analyze" });
       setPhase("failed");
     } finally {
-      requestId.current = null;
+      // 只清自己那一次：新请求的 id 不能被上一次的收尾抹掉。
+      if (requestId.current === id) requestId.current = null;
     }
   };
 
@@ -318,6 +339,7 @@ export function AiReview({
             // 正在重算的那次预览作废：不然它回来又把界面拉回预览页。
             // 等待中点「不等了」也走这里：顺手把请求取消掉。
             previewToken.current += 1;
+            sendGeneration.current += 1;
             const id = requestId.current;
             if (id) {
               void invoke?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
