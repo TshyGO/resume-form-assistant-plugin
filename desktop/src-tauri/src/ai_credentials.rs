@@ -43,6 +43,7 @@ pub trait CredentialStore: Send + Sync {
     fn get_key(&self) -> Result<Option<String>, CredentialError>;
     fn clear_key(&self) -> Result<(), CredentialError>;
 
+    #[allow(dead_code)] // 目前只有测试在用；留着是因为它是这个 trait 的语义之一。
     fn has_key(&self) -> bool {
         matches!(self.get_key(), Ok(Some(_)))
     }

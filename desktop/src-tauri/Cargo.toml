@@ -15,11 +15,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+ai-extract = { path = "../crates/ai-extract" }
 archive-store = { path = "../crates/archive-store" }
 backup = { path = "../crates/backup" }
 data-service = { path = "../crates/data-service" }
 evidence-import = { path = "../crates/evidence-import" }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
+# 上界卡在 0.13.4：那一版起 reqwest 要求 Rust 1.85，而本 crate 声明的 rust-version 是 1.77.2。
+# 想升上去就连 rust-version 一起改，别让它自己跳过去。
+reqwest = { version = ">=0.13.0, <0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset", "system-proxy"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync"] }
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"
@@ -36,6 +41,7 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
