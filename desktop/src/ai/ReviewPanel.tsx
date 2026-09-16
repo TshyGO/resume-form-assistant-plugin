@@ -25,6 +25,9 @@ function Excerpts({ body, excerpts }: { body: string; excerpts: string[] }) {
         <li key={index}>
           <details>
             <summary>{excerpt}</summary>
+            {body.includes(excerpt.trim()) ? null : (
+              <p className="note warn">这句话在证据原文里找不到原样的句子，别把它当作依据。</p>
+            )}
             <pre className="evidence-body">
               {highlight(body, excerpt).map((part, index) =>
                 part.hit ? <mark key={index}>{part.text}</mark> : <span key={index}>{part.text}</span>,

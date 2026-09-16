@@ -101,6 +101,10 @@ export function AnalyzeDialog({
       </details>
 
       <h5>正文开头</h5>
+      <p className="muted">
+        下面是前 {preview.bodyPreview.length} 字；这次会发出去的是 {preview.bodyChars} 字
+        {preview.truncated ? "（已按上限截断）" : ""}。
+      </p>
       <pre className="evidence-body">{preview.bodyPreview}</pre>
 
       {sending ? (

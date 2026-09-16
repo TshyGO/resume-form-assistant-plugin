@@ -26,6 +26,8 @@ const MAX_PAGES = 5;
 async function loadApplications(
   invoke: Invoke,
 ): Promise<{ items: ApplicationSummary[]; truncated: boolean }> {
+  // 翻页期间可能有写入，前后两页会重叠。按 id 去重，免得下拉里出现两条一样的。
+  const seen = new Map<string, ApplicationSummary>();
   const items: ApplicationSummary[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const result = await invoke<Page<ApplicationSummary>>("list_applications_cmd", {
@@ -37,7 +39,12 @@ async function loadApplications(
         offset: page * PAGE_SIZE,
       },
     });
-    items.push(...(result?.items ?? []));
+    for (const item of result?.items ?? []) {
+      if (!seen.has(item.id)) {
+        seen.set(item.id, item);
+        items.push(item);
+      }
+    }
     if (items.length >= (result?.total ?? items.length)) {
       return { items, truncated: false };
     }
@@ -79,6 +86,10 @@ export function AiReview({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<AiSuggestion[]>([]);
   const requestId = useRef<string | null>(null);
+  /** 最近一次发出去、还没确认已经结束的请求。AI_BUSY 时要靠它给出取消入口。 */
+  const lastRequestId = useRef<string | null>(null);
+  /** 申请清单是否正在取，避免预览和审核同时各扫一遍。 */
+  const loadingApplications = useRef(false);
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
   /** 组件还在不在。卸载之后不再回写状态，也不再回调宿主。 */
@@ -127,29 +138,35 @@ export function AiReview({
    * 申请清单只在真要用的时候取：选中一条证据就预取上千条申请，多数时候是白取。
    */
   const ensureApplications = useCallback(async () => {
-    if (!invoke || applications.length) return;
+    if (!invoke || applications.length || loadingApplications.current) return;
+    loadingApplications.current = true;
     try {
       const { items, truncated: more } = await loadApplications(invoke);
       setApplications(items);
       setTruncated(more);
     } catch (error) {
       setFailure({ ...describeFailure(error), retry: "none" });
+    } finally {
+      loadingApplications.current = false;
     }
   }, [invoke, applications.length]);
 
   // 面板被卸掉时（旧视图切到另一条证据）请求还在跑，就替用户取消掉：
   // 不然它继续算、继续计费，而界面上再也没有取消它的入口。
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode（以及 Fast Refresh）会走 mount → cleanup → mount。
+    // 这里必须在 effect 体里重新置 true，否则第二次挂载之后所有回写都被当成
+    // 「已经卸载了」丢掉——确认、拒绝、暂存点了会没反应。
+    mounted.current = true;
+    return () => {
       mounted.current = false;
       const id = requestId.current;
       if (id) {
         // 取消本身失败也无所谓：面板已经没了，这里只是尽力而为。
         invokeRef.current?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   // 等待期间的秒表。慢提示和「还在等」都看它。
   useEffect(() => {
@@ -226,6 +243,7 @@ export function AiReview({
     const id = newRequestId();
     const generation = ++sendGeneration.current;
     requestId.current = id;
+    lastRequestId.current = id;
     setPhase("sending");
     setFailure(null);
     setNotice(null);
@@ -246,6 +264,8 @@ export function AiReview({
     } finally {
       // 只清自己那一次：新请求的 id 不能被上一次的收尾抹掉。
       if (requestId.current === id) requestId.current = null;
+      // 这一次确实结束了（成功、失败或超时），AI_BUSY 的取消入口也就不用留了。
+      if (generation === sendGeneration.current) lastRequestId.current = null;
     }
   };
 
@@ -445,6 +465,22 @@ export function AiReview({
                 用选中的候选再看一次
               </button>
             </div>
+          ) : null}
+          {/* 上一次请求还在跑（多半是「不等了」之后取消没生效）。错误文案让用户
+              「先取消正在跑的那一次」，那就得有地方取消。 */}
+          {failure.code === "AI_BUSY" && lastRequestId.current ? (
+            <button
+              type="button"
+              onClick={() => {
+                const id = lastRequestId.current;
+                if (!id) return;
+                void invoke?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
+                lastRequestId.current = null;
+                setFailure(null);
+              }}
+            >
+              取消正在跑的那一次
+            </button>
           ) : null}
           {failure.retryable && failure.retry === "analyze" ? (
             <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={busy}>

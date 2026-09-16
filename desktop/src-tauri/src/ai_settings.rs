@@ -54,8 +54,38 @@ pub fn load(data_root: &Path) -> AiSettings {
     parsed
 }
 
+/// 地址里夹带凭据就不保存。
+///
+/// 文档写着「Key 只在 Authorization 头里，`ai-settings.json` 不含 Key」。用户把 key 贴进
+/// 地址（`https://user:pass@host/…` 或 `?api-key=…`）就会把这句话变成假话：它会落进设置
+/// 文件、随每次请求出现在 URL 里、也更容易被中转站的访问日志记下来。界面上的提醒挡不住
+/// 直接改文件或粘贴，所以这一层必须拦。
+pub fn credential_in_url(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1).unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return Some("接口地址里带了用户名或密码。Key 请填在「API Key」里，别放进地址。".into());
+    }
+    let query = url.split('?').nth(1).unwrap_or("");
+    let looks_like_secret = query.split('&').any(|pair| {
+        let name = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
+        ["key", "token", "secret", "password", "apikey"]
+            .iter()
+            .any(|needle| name.contains(needle))
+    });
+    if looks_like_secret {
+        return Some(
+            "接口地址的查询串里看着像有一把 Key。Key 请填在「API Key」里，别放进地址。".into(),
+        );
+    }
+    None
+}
+
 /// 写设置。先写临时文件再改名，避免写到一半断电留下半个文件。
 pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSettings, String> {
+    if let Some(problem) = credential_in_url(typed_url) {
+        return Err(problem);
+    }
     let current = load(data_root);
     let settings = AiSettings {
         api_url: normalize_api_url(typed_url, &current.api_url),
@@ -195,6 +225,28 @@ mod tests {
 
         std::fs::write(path_for(dir.path()), "{ 坏掉的").unwrap();
         assert_eq!(load(dir.path()), AiSettings::default());
+    }
+
+    #[test]
+    fn an_address_that_carries_a_credential_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in [
+            "https://someone:sk-123@relay.example/v1/chat/completions",
+            "https://relay.example/v1/chat/completions?api-key=sk-123",
+            "https://relay.example/v1/chat/completions?token=abc",
+        ] {
+            let err = save(dir.path(), bad, "m").unwrap_err();
+            assert!(err.contains("API Key"), "{bad}: {err}");
+        }
+        // 正常的版本参数不该被拦。
+        assert!(save(
+            dir.path(),
+            "https://relay.example/v1/chat/completions?api-version=2024-10-21",
+            "m"
+        )
+        .is_ok());
+        let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
+        assert!(!text.contains("sk-123"), "被拒的地址还是写进了文件：{text}");
     }
 
     #[test]

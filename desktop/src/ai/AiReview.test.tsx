@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { expect, test } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -57,17 +58,20 @@ function manyApplications(total: number, offset: number, limit: number) {
 
 type Handler = (command: string, args?: Record<string, unknown>) => unknown;
 
-function mount(handler: Handler, onConfirmed?: (message: string) => void) {
+function mount(handler: Handler, onConfirmed?: (message: string) => void, strict = false) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const invoke = (async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     return handler(command, args);
   }) as Invoke;
-  const view = render(
+  const panel = (
     <InvokeProvider invoke={invoke}>
       <AiReview evidenceId="ev-1" onConfirmed={onConfirmed} />
-    </InvokeProvider>,
+    </InvokeProvider>
   );
+  // 真实挂载走的是 mountReact，它把面板包在 StrictMode 里：开发模式下
+  // mount → cleanup → mount，卸载守卫写错了这里就会红。
+  const view = render(strict ? <StrictMode>{panel}</StrictMode> : panel);
   return Object.assign(calls, { unmount: view.unmount });
 }
 
@@ -427,4 +431,26 @@ test("这条通知已经确认过时，面板明说别再确认一次", async ()
   await user.click(await screen.findByRole("button", { name: /打开待确认的建议/ }));
   expect(await screen.findByText(/已经按另一条建议确认过了/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
+});
+
+test("StrictMode 下重新挂载之后，确认照样有反应", async () => {
+  const user = userEvent.setup();
+  const messages: string[] = [];
+  mount(
+    (command, args) => {
+      if (command === "analyze_evidence_cmd") return suggestion;
+      if (command === "confirm_suggestion_cmd") {
+        return { suggestion, alreadyConfirmed: false, events: [], todos: [], reminderProblems: [] };
+      }
+      return base(command, args);
+    },
+    (message) => messages.push(message),
+    true,
+  );
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "确认" }));
+
+  await waitFor(() => expect(messages[0]).toMatch(/已确认/));
 });

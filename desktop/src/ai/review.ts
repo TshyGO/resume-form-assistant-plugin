@@ -100,12 +100,14 @@ export function initialDraft(suggestion: AiSuggestion): Draft {
 }
 
 function sameTodo(draft: TodoDraft, todo: SuggestedTodoView) {
+  // 和 confirmArgs 用同一套归一化：只多打了个空格不该让按钮说「改完确认」，
+  // 更不该让落库状态和按钮文案对不上。
   return (
-    draft.title === todo.title &&
+    draft.title.trim() === todo.title.trim() &&
     draft.duePrecision === todo.duePrecision &&
-    draft.dueAtUtc === (todo.dueAtUtc ?? "") &&
-    draft.dueDate === (todo.dueDate ?? "") &&
-    draft.timeZone === (todo.timeZone ?? "") &&
+    draft.dueAtUtc.trim() === (todo.dueAtUtc ?? "").trim() &&
+    draft.dueDate.trim() === (todo.dueDate ?? "").trim() &&
+    draft.timeZone.trim() === (todo.timeZone ?? "").trim() &&
     draft.interviewRound === (todo.interviewRound ?? null)
   );
 }

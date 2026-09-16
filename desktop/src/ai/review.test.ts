@@ -297,3 +297,31 @@ test("失败对象自带错误码和重试语义，调用方不必自己补", ()
   assert.equal(conflict.retryable, false);
   assert.match(conflict.next, /改申请里的记录/);
 });
+
+test("时区、日期、时刻的边界：闰年、无冒号偏移、Etc/GMT", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  const withTodo = (patch: Partial<(typeof draft.todos)[number]>) => ({
+    ...draft,
+    todos: [{ ...draft.todos[0]!, ...patch }],
+  });
+  // 2028 是闰年，2027 不是。
+  assert.equal(
+    confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2028-02-29" }), item),
+    null,
+  );
+  assert.match(
+    confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2027-02-29" }), item) ?? "",
+    /真实存在/,
+  );
+  // 偏移可以不带冒号。
+  assert.equal(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+0800" }), item), null);
+  assert.equal(confirmBlocker(withTodo({ timeZone: "Etc/GMT+8" }), item), null);
+});
+
+test("只多打了个空格不算改过", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  const padded = { ...draft, todos: [{ ...draft.todos[0]!, title: " 一面 " }] };
+  assert.equal(isModified(padded, item), false);
+});

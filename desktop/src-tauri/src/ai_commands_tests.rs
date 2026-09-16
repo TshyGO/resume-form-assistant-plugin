@@ -275,7 +275,11 @@ fn hand_picking_more_than_the_cap_is_refused() {
     let err = ai_commands::gather(&store, store.archive_dir(), &evidence, Some(&ids)).unwrap_err();
 
     assert_eq!(err.code, "VALIDATION");
-    assert!(err.message.contains("8"), "{}", err.message);
+    assert!(
+        err.message.contains(&ai_extract::MAX_CANDIDATES.to_string()),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
