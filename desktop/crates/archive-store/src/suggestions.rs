@@ -259,7 +259,7 @@ impl StoreTx<'_> {
                     application_id: input.application_id.clone(),
                     title: st.title.clone(),
                     due: st.due.clone(),
-                    time_zone: None,
+                    time_zone: st.time_zone.clone(),
                     remind_at_utc: None,
                     interview_round: st.interview_round,
                     source_event_id: source_event_id.clone(),
