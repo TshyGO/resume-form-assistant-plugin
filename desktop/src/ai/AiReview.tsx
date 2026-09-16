@@ -23,7 +23,14 @@ function newRequestId(): string {
  *
  * 这一块归 React 管：旧视图只给一个挂载点和证据 id，不读这里的状态，也不改这里的 DOM。
  */
-export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onConfirmed?: () => void }) {
+export function AiReview({
+  evidenceId,
+  onConfirmed,
+}: {
+  evidenceId: string;
+  /** 确认完了告诉宿主一声：它负责刷新那条证据，并把这句话显示在面板之外。 */
+  onConfirmed?: (message: string) => void;
+}) {
   const invoke = useInvoke();
   const [phase, setPhase] = useState<Phase>("idle");
   const [preview, setPreview] = useState<OutboundPreview | null>(null);
@@ -38,6 +45,10 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<AiSuggestion[]>([]);
   const requestId = useRef<string | null>(null);
+  const invokeRef = useRef(invoke);
+  invokeRef.current = invoke;
+  /** 预览的请求序号：连点候选时只认最后一次的结果。 */
+  const previewToken = useRef(0);
 
   // 这条证据上以前留下的建议（暂存的、拒绝过的、确认过的都在）。
   useEffect(() => {
@@ -59,6 +70,18 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
       .then((page) => setApplications(page?.items ?? []))
       .catch(() => setApplications([]));
   }, [invoke, evidenceId]);
+
+  // 面板被卸掉时（旧视图切到另一条证据）请求还在跑，就替用户取消掉：
+  // 不然它继续算、继续计费，而界面上再也没有取消它的入口。
+  useEffect(
+    () => () => {
+      const id = requestId.current;
+      if (id) {
+        void invokeRef.current?.<boolean>("cancel_analysis_cmd", { requestId: id });
+      }
+    },
+    [],
+  );
 
   // 等待期间的秒表。慢提示和「还在等」都看它。
   useEffect(() => {
@@ -88,20 +111,26 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
   const loadPreview = useCallback(
     async (ids: string[] | null) => {
       if (!invoke) return;
+      const token = ++previewToken.current;
       setBusy(true);
       setFailure(null);
       try {
         // 申请清单在挂载时就取过了，这里只算这一次的外发范围。
-        setPreview(await invoke<OutboundPreview>("preview_analysis_cmd", {
+        const outbound = await invoke<OutboundPreview>("preview_analysis_cmd", {
           evidenceId,
           candidateIds: ids,
-        }));
+        });
+        // 连点候选时旧的响应可能后到。晚到的一律丢掉，否则界面上写的候选
+        // 和真正会发出去的那几条对不上——这块预览的意义就没了。
+        if (token !== previewToken.current) return;
+        setPreview(outbound);
         setPhase("preview");
       } catch (error) {
-        setFailure(describeFailure(error));
+        if (token !== previewToken.current) return;
+        setFailure({ ...describeFailure(error), retry: "analyze" });
         setPhase("failed");
       } finally {
-        setBusy(false);
+        if (token === previewToken.current) setBusy(false);
       }
     },
     [invoke, evidenceId],
@@ -122,7 +151,7 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
       setSaved((rows) => [...rows, next]);
       await openReview(next);
     } catch (error) {
-      setFailure(describeFailure(error));
+      setFailure({ ...describeFailure(error), retry: "analyze" });
       setPhase("failed");
     } finally {
       requestId.current = null;
@@ -146,7 +175,9 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
     try {
       done(await invoke(command, args));
     } catch (error) {
-      setFailure(describeFailure(error));
+      // 确认/拒绝失败时**不退出审核**：草稿还在，改完再按一次就行。
+      // 这里也不给「再试一次」，那个按钮回到的是外发预览，再发一次要重新计费。
+      setFailure({ ...describeFailure(error), retry: "none" });
     } finally {
       setBusy(false);
     }
@@ -159,15 +190,18 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
       setPhase("idle");
       setSuggestion(null);
       setDraft(null);
+      // 确认过的那条不再是「待确认」，按钮得跟着消失。
+      setSaved((rows) => rows.map((row) => (row.id === outcome.suggestion.id ? outcome.suggestion : row)));
       const problems = outcome.reminderProblems ?? [];
-      setNotice(
-        outcome.alreadyConfirmed
-          ? "这条建议已经确认过了，这次没有重复写入。"
-          : problems.length
-            ? `已确认。待办建好了，但提醒没登记上：${problems.join("；")}`
-            : "已确认。分类、时间线和待办都写好了。",
-      );
-      onConfirmed?.();
+      const message = outcome.alreadyConfirmed
+        ? "这条建议已经确认过了，这次没有重复写入。"
+        : problems.length
+          ? `已确认。待办建好了，但提醒没登记上：${problems.join("；")}`
+          : "已确认。分类、时间线和待办都写好了。";
+      setNotice(message);
+      // 宿主接着会重画这条证据，把这块面板连同 notice 一起卸掉——所以这句话
+      // 得交给面板外面的状态栏去说，不能只 setNotice 就完事。
+      onConfirmed?.(message);
     });
   };
 
@@ -211,6 +245,7 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
           selectedIds={selectedIds}
           sending={phase === "sending"}
           elapsedSeconds={elapsed}
+          busy={busy}
           onSelectionChange={(ids) => {
             setSelectedIds(ids);
             void loadPreview(ids);
@@ -239,12 +274,19 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
         <div className="stack">
           <p className="note error">{failure.text}</p>
           <p className="muted">{failure.next}</p>
-          {failure.retryable ? (
+          {failure.retryable && failure.retry === "analyze" ? (
             <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={busy}>
               再试一次
             </button>
           ) : null}
-          <button type="button" onClick={() => { setFailure(null); setPhase("idle"); }}>
+          <button
+            type="button"
+            onClick={() => {
+              setFailure(null);
+              // 审核阶段只关掉这条错误：草稿改了一半，不能顺手丢掉。
+              if (phase !== "review") setPhase("idle");
+            }}
+          >
             关掉
           </button>
         </div>

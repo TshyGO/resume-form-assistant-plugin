@@ -893,6 +893,97 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
     );
 }
 
+/// 前端 `confirmArgs()` 真正发出来的那个对象。两边的键名对不上就得在这里先红，
+/// 而不是等人工走查时看到一句 serde 的错。
+#[test]
+fn the_json_the_panel_sends_deserialises_into_confirm_args() {
+    let sent = json!({
+        "suggestionId": "sug-1",
+        "applicationId": "app-a",
+        "replyClass": "interview_invite",
+        "sendMode": "automated",
+        "stage": "interview",
+        "round": 1,
+        "updateProgress": false,
+        "createTodos": true,
+        "todos": [{
+            "title": "一面",
+            "duePrecision": "datetime",
+            "dueAtUtc": "2026-09-22T02:00:00Z",
+            "dueDate": null,
+            "timeZone": "Asia/Shanghai",
+            "interviewRound": 1
+        }]
+    });
+
+    let args: ai_commands::ConfirmArgs = serde_json::from_value(sent).unwrap();
+
+    assert_eq!(args.suggestion_id, "sug-1");
+    assert_eq!(args.application_id.as_deref(), Some("app-a"));
+    assert_eq!(args.reply_class, "interview_invite");
+    assert_eq!(args.send_mode, "automated");
+    assert_eq!(args.stage.as_deref(), Some("interview"));
+    assert_eq!(args.round, Some(1));
+    assert!(!args.update_progress);
+    assert!(args.create_todos);
+    let todos = args.todos.unwrap();
+    assert_eq!(todos[0].title, "一面");
+    assert_eq!(todos[0].due_precision.as_deref(), Some("datetime"));
+    assert_eq!(todos[0].due_at_utc.as_deref(), Some("2026-09-22T02:00:00Z"));
+    assert_eq!(todos[0].time_zone.as_deref(), Some("Asia/Shanghai"));
+    assert_eq!(todos[0].interview_round, Some(1));
+
+    // 面板在「不记阶段、不要待办」时发的是这个样子。
+    let minimal: ai_commands::ConfirmArgs = serde_json::from_value(json!({
+        "suggestionId": "sug-2",
+        "applicationId": "app-a",
+        "replyClass": "auto_ack",
+        "sendMode": "unknown",
+        "stage": null,
+        "round": null,
+        "updateProgress": false,
+        "createTodos": false,
+        "todos": []
+    }))
+    .unwrap();
+    assert!(minimal.stage.is_none());
+    assert!(minimal.todos.unwrap().is_empty());
+}
+
+/// 模型允许一条都指认不出来（宁可空着也不猜）。这种建议必须还能由用户指定申请确认，
+/// 否则它就永远卡在那儿——界面上的「从在办申请里挑」靠的就是这条。
+#[test]
+fn a_suggestion_with_no_candidates_can_still_be_confirmed_by_hand() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[], vec![interview_todo()]);
+
+    // 没给 applicationId：谁都不知道是哪一条。
+    let err = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, None),
+        now(),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "AI_NEEDS_DISAMBIGUATION");
+
+    // 用户自己指一条在办申请，照常确认。
+    let result = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+    assert_eq!(result.suggestion.status, "confirmed");
+    assert_eq!(
+        store.get_evidence(&evidence).unwrap().unwrap().application_id.as_deref(),
+        Some(a.as_str())
+    );
+}
+
 #[test]
 fn a_stage_that_cannot_come_from_a_notification_is_refused() {
     let (dir, store) = archive();

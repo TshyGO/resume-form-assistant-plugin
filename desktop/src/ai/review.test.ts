@@ -125,23 +125,42 @@ test("原文依据在正文里能切出高亮段", () => {
   assert.deepEqual(highlight("正文", "对不上的引用"), [{ text: "正文", hit: false }]);
 });
 
-test("每一种失败都说清楚接下来做什么，并且都提到手动分类还在", () => {
+test("每一种失败都说清楚接下来做什么，并且一条不落地提到手动分类还在", () => {
   const cases = [
     ["AI_NOT_CONFIGURED", /设置页/],
     ["AI_NEEDS_CANDIDATES", /关联|候选/],
     ["AI_UNSUPPORTED_KIND", /粘贴文本/],
+    ["AI_NO_TEXT", /手动分类/],
     ["AI_TIMEOUT", /再试一次|更快/],
     ["AI_NETWORK", /网络|接口地址/],
+    ["AI_BUSY", /等它结束/],
+    ["AI_CANCELLED", /计费/],
+    ["AI_BAD_RESPONSE", /换一个模型/],
+    ["AI_CANDIDATE_OUT_OF_RANGE", /换一个模型/],
+    ["AI_NEEDS_DISAMBIGUATION", /选一条/],
+    ["AI_CLIENT_INIT_FAILED", /手动分类/],
+    ["AI_HTTP_400", /模型名|接口地址/],
     ["AI_HTTP_401", /换一条 Key/],
+    ["AI_HTTP_403", /换一条 Key/],
     ["AI_HTTP_404", /接口地址和模型名/],
     ["AI_HTTP_429", /限流/],
     ["AI_HTTP_500", /服务商/],
-    ["AI_BAD_RESPONSE", /换一个模型/],
+    ["AI_HTTP_502", /服务商/],
+    ["WHATEVER", /手动分类/],
   ] as const;
   for (const [code, pattern] of cases) {
     const failure = describeFailure({ code, message: "出事了。" });
     assert.match(failure.next, pattern, code);
     assert.match(failure.next, /手动分类/, code);
+  }
+});
+
+test("Key 或地址不对时不给「再试一次」——再点一次必然还是这个结果", () => {
+  for (const code of ["AI_HTTP_401", "AI_HTTP_403", "AI_HTTP_404", "AI_NOT_CONFIGURED"]) {
+    assert.equal(describeFailure({ code, message: "不行。" }).retryable, false, code);
+  }
+  for (const code of ["AI_TIMEOUT", "AI_NETWORK", "AI_HTTP_429", "AI_HTTP_500"]) {
+    assert.equal(describeFailure({ code, message: "不行。" }).retryable, true, code);
   }
 });
 
@@ -164,4 +183,46 @@ test("不认识的错误码也要原样带出来，方便对日志", () => {
 test("等久了换成「还在等」", () => {
   assert.equal(waitingText(3, 15), "正在发送…");
   assert.match(waitingText(16, 15), /还在等（已经 16 秒）/);
+});
+
+test("轮次只收 1–99 的整数，小数和科学计数法都拦下来", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  for (const round of [0, -1, 1.5, 100, 1000]) {
+    assert.match(confirmBlocker({ ...draft, round }, item) ?? "", /轮次/, String(round));
+  }
+  assert.equal(confirmBlocker({ ...draft, round: 2 }, item), null);
+  assert.equal(confirmBlocker({ ...draft, round: null }, item), null);
+});
+
+test("待办的时刻和日期要能被后端认，格式不对当场说", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  const withTodo = (patch: Partial<(typeof draft.todos)[number]>) => ({
+    ...draft,
+    todos: [{ ...draft.todos[0]!, ...patch }],
+  });
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "下周二" }), item) ?? "", /时刻要写成/);
+  assert.match(
+    confirmBlocker(withTodo({ duePrecision: "date", dueDate: "" }), item) ?? "",
+    /没有日期/,
+  );
+  assert.match(
+    confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2026/09/22" }), item) ?? "",
+    /日期要写成/,
+  );
+  assert.equal(confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2026-09-22" }), item), null);
+  assert.equal(confirmBlocker(withTodo({ duePrecision: "none" }), item), null);
+  // 不转正的那条不参与校验：用户已经说了不要它。
+  assert.equal(confirmBlocker(withTodo({ keep: false, dueAtUtc: "乱写" }), item), null);
+});
+
+test("提交时把时刻和日期的空白去掉", () => {
+  const item = suggestion();
+  const draft = initialDraft(item);
+  const args = confirmArgs(
+    { ...draft, todos: [{ ...draft.todos[0]!, dueAtUtc: " 2026-09-22T02:00:00Z " }] },
+    item,
+  );
+  assert.equal(args.todos[0]!.dueAtUtc, "2026-09-22T02:00:00Z");
 });

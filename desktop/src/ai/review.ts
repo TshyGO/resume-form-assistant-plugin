@@ -7,6 +7,20 @@ import type { AiSuggestion, ReplyClass, SendMode, Stage, SuggestedTodoView } fro
 /** 面板当前在哪一步。 */
 export type Phase = "idle" | "preview" | "sending" | "review" | "failed";
 
+/**
+ * 一次最多送几条候选。和 `ai-extract` 的 `MAX_CANDIDATES` 是同一个数：
+ * 后端超了会直接报 VALIDATION，界面提前拦住，省得白跑一趟。
+ */
+export const MAX_CANDIDATES = 8;
+
+const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(:\d{2})?([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 轮次只能是 1–99 的整数。`Number("2.5")` 和 `Number("1e3")` 都得拦住。 */
+export function validRound(round: number | null): boolean {
+  return round === null || (Number.isInteger(round) && round >= 1 && round <= 99);
+}
+
 export interface TodoDraft {
   title: string;
   duePrecision: "datetime" | "date" | "none";
@@ -82,18 +96,44 @@ export function confirmLabel(draft: Draft, suggestion: AiSuggestion): string {
   return isModified(draft, suggestion) ? "改完确认" : "确认";
 }
 
-/** 能不能按确认。候选多于一条又没选，就不能——这条界面不替用户做主。 */
+/**
+ * 能不能按确认。候选多于一条又没选，就不能——这条界面不替用户做主。
+ *
+ * 剩下的都是「送到后端只会报错」的输入：与其让用户看一句 serde 的错，不如当场说清楚。
+ */
 export function confirmBlocker(draft: Draft, suggestion: AiSuggestion): string | null {
   if (!draft.applicationId) {
     return suggestion.candidates.length > 1
       ? "这封通知对应哪一条申请还没选。"
       : "先选一条申请再确认。";
   }
-  if (draft.todos.some((todo) => todo.keep && todo.title.trim() === "")) {
-    return "有一条待办没有标题。";
+  if (!validRound(draft.round)) {
+    return "轮次要填 1–99 的整数。";
   }
-  if (draft.todos.some((todo) => todo.keep && todo.duePrecision === "datetime" && !todo.dueAtUtc)) {
-    return "有一条待办说是精确到时刻，却没有时刻。";
+  for (const todo of draft.todos) {
+    if (!todo.keep) continue;
+    if (todo.title.trim() === "") {
+      return "有一条待办没有标题。";
+    }
+    if (!validRound(todo.interviewRound)) {
+      return "待办的轮次要填 1–99 的整数。";
+    }
+    if (todo.duePrecision === "datetime") {
+      if (!todo.dueAtUtc.trim()) {
+        return "有一条待办说是精确到时刻，却没有时刻。";
+      }
+      if (!RFC3339.test(todo.dueAtUtc.trim())) {
+        return "待办的时刻要写成 2026-09-22T10:00:00+08:00 这样的格式。";
+      }
+    }
+    if (todo.duePrecision === "date") {
+      if (!todo.dueDate.trim()) {
+        return "有一条待办说是按日期到期，却没有日期。";
+      }
+      if (!DATE_ONLY.test(todo.dueDate.trim())) {
+        return "待办的日期要写成 2026-09-22 这样的格式。";
+      }
+    }
   }
   return null;
 }
@@ -113,8 +153,8 @@ export function confirmArgs(draft: Draft, suggestion: AiSuggestion) {
     todos: kept.map((todo) => ({
       title: todo.title.trim(),
       duePrecision: todo.duePrecision,
-      dueAtUtc: todo.duePrecision === "datetime" ? todo.dueAtUtc : null,
-      dueDate: todo.duePrecision === "date" ? todo.dueDate : null,
+      dueAtUtc: todo.duePrecision === "datetime" ? todo.dueAtUtc.trim() : null,
+      dueDate: todo.duePrecision === "date" ? todo.dueDate.trim() : null,
       timeZone: todo.timeZone.trim() === "" ? null : todo.timeZone.trim(),
       interviewRound: todo.interviewRound,
     })),
@@ -145,8 +185,13 @@ export interface Failure {
   text: string;
   /** 接下来能做什么。空字符串表示没有别的建议。 */
   next: string;
-  /** 这次失败之后还能不能原样再发一次。 */
+  /** 这次失败之后还能不能原样再来一次。 */
   retryable: boolean;
+  /**
+   * 重试指的是哪一步。`analyze` 才给「再试一次」；确认/拒绝失败给的是 `none`——
+   * 那个按钮回到的是外发预览，再点发送等于又付一次钱。
+   */
+  retry?: "analyze" | "none";
 }
 
 const MANUAL = "这条证据的手动分类照常可用。";
@@ -163,15 +208,19 @@ export function describeFailure(error: unknown): Failure {
   const http = /^AI_HTTP_(\d{3})$/.exec(code);
   if (http) {
     const status = Number(http[1]);
+    // 401/403/404 再点一次必然还是这个结果：不给「再试一次」，给去设置页的指引。
+    const authOrAddress = status === 401 || status === 403 || status === 404;
     const next =
       status === 401 || status === 403
         ? "去设置页换一条 Key。"
         : status === 404
           ? "去设置页核对接口地址和模型名。"
-          : status === 429
-            ? "服务商限流了，过一会儿再试。"
-            : "这是服务商那边的错，过一会儿再试。";
-    return { text: message, next: `${next}${MANUAL}`, retryable: true };
+          : status === 400
+            ? "多半是模型名或接口地址不对，去设置页核对一下。"
+            : status === 429
+              ? "服务商限流了，过一会儿再试。"
+              : "这是服务商那边的错，过一会儿再试。";
+    return { text: message, next: `${next}${MANUAL}`, retryable: !authOrAddress };
   }
   switch (code) {
     case "AI_NOT_CONFIGURED":
@@ -187,14 +236,22 @@ export function describeFailure(error: unknown): Failure {
     case "AI_NETWORK":
       return { text: message, next: `检查一下网络或接口地址，再试一次。${MANUAL}`, retryable: true };
     case "AI_BUSY":
-      return { text: message, next: "等它结束，或者先取消正在跑的那一次。", retryable: false };
+      return {
+        text: message,
+        next: `等它结束，或者先取消正在跑的那一次。${MANUAL}`,
+        retryable: false,
+      };
     case "AI_CANCELLED":
-      return { text: "已取消，这次没有产生建议。", next: "取消不保证对方停止计算或停止计费。", retryable: true };
+      return {
+        text: "已取消，这次没有产生建议。",
+        next: `取消不保证对方停止计算或停止计费。${MANUAL}`,
+        retryable: true,
+      };
     case "AI_BAD_RESPONSE":
     case "AI_CANDIDATE_OUT_OF_RANGE":
       return { text: message, next: `可以再试一次；老是这样就换一个模型。${MANUAL}`, retryable: true };
     case "AI_NEEDS_DISAMBIGUATION":
-      return { text: message, next: "在候选里选一条再确认。", retryable: false };
+      return { text: message, next: `在候选里选一条再确认。${MANUAL}`, retryable: false };
     default:
       return { text: `${message}（${code}）`, next: MANUAL, retryable: true };
   }

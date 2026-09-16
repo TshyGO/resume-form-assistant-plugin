@@ -56,7 +56,11 @@ export interface InboxHost {
    * 这里只给容器和证据 id：**面板的状态不回流到这个旧视图**。
    */
   mountAi?:
-    | ((container: Element, evidenceId: string, onConfirmed: () => void) => { unmount(): void })
+    | ((
+        container: Element,
+        evidenceId: string,
+        onConfirmed: (message: string) => void,
+      ) => { unmount(): void })
     | null;
 }
 
@@ -218,7 +222,11 @@ export function mountInbox(
     `;
     const slot = maybe("inbox-ai");
     if (mountAi && slot) {
-      aiPanel = mountAi(slot as unknown as Element, item.id, () => void select(item.id));
+      // 确认成功那句话由状态栏说：面板本身马上会随着重画被卸掉。
+      aiPanel = mountAi(slot as unknown as Element, item.id, (message) => {
+        say({ tone: "success", text: message });
+        void select(item.id);
+      });
     }
     preview.querySelectorAll<HTMLElement>("button[data-act]").forEach((button) => {
       button.addEventListener("click", () => {

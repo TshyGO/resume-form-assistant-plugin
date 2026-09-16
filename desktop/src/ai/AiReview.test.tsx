@@ -46,18 +46,18 @@ const applications = {
 
 type Handler = (command: string, args?: Record<string, unknown>) => unknown;
 
-function mount(handler: Handler) {
+function mount(handler: Handler, onConfirmed?: (message: string) => void) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const invoke = (async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     return handler(command, args);
   }) as Invoke;
-  render(
+  const view = render(
     <InvokeProvider invoke={invoke}>
-      <AiReview evidenceId="ev-1" />
+      <AiReview evidenceId="ev-1" onConfirmed={onConfirmed} />
     </InvokeProvider>,
   );
-  return calls;
+  return Object.assign(calls, { unmount: view.unmount });
 }
 
 const base: Handler = (command) => {
@@ -152,20 +152,22 @@ test("暂存过的建议下次打开这条证据还能接着看", async () => {
   expect(await screen.findByRole("button", { name: "确认" })).toBeTruthy();
 });
 
-test("确认把改完的入参交给命令层，并说清楚写了什么", async () => {
+test("确认把改完的入参交给命令层，并把结果交给宿主去显示", async () => {
   const user = userEvent.setup();
+  const messages: string[] = [];
   const calls = mount((command, args) => {
     if (command === "analyze_evidence_cmd") return suggestion;
     if (command === "confirm_suggestion_cmd") {
       return { suggestion, alreadyConfirmed: false, events: [], todos: [], reminderProblems: [] };
     }
     return base(command, args);
-  });
+  }, (message) => messages.push(message));
   await user.click(await screen.findByRole("button", { name: "AI 整理" }));
   await screen.findByText("api.example.test");
   await user.click(screen.getByRole("button", { name: "发送" }));
   await user.click(await screen.findByRole("button", { name: "确认" }));
-  await waitFor(() => expect(screen.getByText(/已确认/)).toBeTruthy());
+  // 面板马上会被宿主卸掉重画，所以这句话得交到宿主手上，不能只留在面板里。
+  await waitFor(() => expect(messages[0]).toMatch(/已确认/));
   const confirmed = calls.find((call) => call.command === "confirm_suggestion_cmd");
   const args = confirmed?.args?.args as Record<string, unknown>;
   expect(args.applicationId).toBe("app-a");
@@ -185,4 +187,67 @@ test("拒绝之后明说正式记录没动", async () => {
   await user.click(screen.getByRole("button", { name: "发送" }));
   await user.click(await screen.findByRole("button", { name: "拒绝" }));
   expect(await screen.findByText(/正式记录一个字都没动/)).toBeTruthy();
+});
+
+test("确认失败不会把用户踢出审核，也不给「再试一次」（那是重新发一次的钱）", async () => {
+  const user = userEvent.setup();
+  mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return suggestion;
+    if (command === "confirm_suggestion_cmd") {
+      throw { code: "CONFLICT", message: "这条建议已经按别的决定确认过了。" };
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await user.click(await screen.findByRole("button", { name: "确认" }));
+  await screen.findByText(/别的决定确认过/);
+  expect(screen.queryByRole("button", { name: "再试一次" })).toBeNull();
+  // 草稿还在：四个按钮仍然在页面上。
+  expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "关掉" }));
+  expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
+});
+
+test("面板被卸掉时，正在跑的那次请求会被取消", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return new Promise(() => {});
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByRole("button", { name: "取消" });
+
+  calls.unmount();
+
+  await waitFor(() => {
+    expect(calls.some((call) => call.command === "cancel_analysis_cmd")).toBe(true);
+  });
+});
+
+test("预览还在重算时，改不了候选也发不出去——看到的和发出去的必须是同一份", async () => {
+  const user = userEvent.setup();
+  let release: ((value: OutboundPreview) => void) | null = null;
+  mount((command, args) => {
+    if (command === "preview_analysis_cmd") {
+      const ids = (args?.candidateIds ?? null) as string[] | null;
+      if (!ids) return preview;
+      return new Promise<OutboundPreview>((resolve) => {
+        release = resolve;
+      });
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByLabelText(/别家公司/));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", true));
+  expect(screen.getByLabelText(/合成科技/)).toHaveProperty("disabled", true);
+
+  release!({ ...preview, candidates: [{ label: "c1", company: "别家公司", title: "前端实习" }] });
+  await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", false));
 });

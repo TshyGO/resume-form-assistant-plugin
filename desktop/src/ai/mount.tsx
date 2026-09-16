@@ -16,7 +16,7 @@ export function mountAiReview(
   container: Element,
   invoke: Invoke | null,
   evidenceId: string,
-  onConfirmed?: () => void,
+  onConfirmed?: (message: string) => void,
 ) {
   return mountReact(container, invoke, <AiReview evidenceId={evidenceId} onConfirmed={onConfirmed} />);
 }

@@ -1,5 +1,5 @@
 import type { ApplicationSummary, OutboundPreview } from "../api.ts";
-import { waitingText } from "./review.ts";
+import { MAX_CANDIDATES, waitingText } from "./review.ts";
 
 /**
  * 发送前的那一屏：**这一次要把什么发出去**，看清楚了再点发送。
@@ -12,6 +12,7 @@ export function AnalyzeDialog({
   applications,
   selectedIds,
   sending,
+  busy,
   elapsedSeconds,
   onSelectionChange,
   onSend,
@@ -23,6 +24,8 @@ export function AnalyzeDialog({
   /** 用户手选的候选。`null` 表示交给桌面按公司名去认。 */
   selectedIds: string[] | null;
   sending: boolean;
+  /** 预览正在重算。这期间不让改候选也不让发，免得发的和看到的不是一回事。 */
+  busy: boolean;
   elapsedSeconds: number;
   onSelectionChange: (ids: string[] | null) => void;
   onSend: () => void;
@@ -30,6 +33,7 @@ export function AnalyzeDialog({
   onClose: () => void;
 }) {
   const chosen = selectedIds ?? [];
+  const tooMany = chosen.length > MAX_CANDIDATES;
   const toggle = (id: string) => {
     const next = chosen.includes(id) ? chosen.filter((item) => item !== id) : [...chosen, id];
     onSelectionChange(next.length ? next : null);
@@ -53,12 +57,16 @@ export function AnalyzeDialog({
 
       <h5>候选</h5>
       <ul className="ai-candidates">
-        {preview.candidates.map((candidate) => (
-          <li key={candidate.label}>
+        {preview.candidates.map((candidate, index) => (
+          <li key={index}>
             {candidate.company} · {candidate.title}
           </li>
         ))}
       </ul>
+      {busy ? <p className="muted">正在按新的选法重算这次要发什么…</p> : null}
+      {tooMany ? (
+        <p className="note warn">一次最多送 {MAX_CANDIDATES} 条候选，现在选了 {chosen.length} 条。</p>
+      ) : null}
 
       <details>
         <summary>自己选候选</summary>
@@ -70,7 +78,7 @@ export function AnalyzeDialog({
                 <input
                   type="checkbox"
                   checked={chosen.includes(application.id)}
-                  disabled={sending}
+                  disabled={sending || busy}
                   onChange={() => toggle(application.id)}
                 />
                 {application.company} · {application.title}
@@ -93,7 +101,7 @@ export function AnalyzeDialog({
         </div>
       ) : (
         <div className="row">
-          <button type="button" onClick={onSend}>
+          <button type="button" onClick={onSend} disabled={busy || tooMany}>
             发送
           </button>
           <button type="button" onClick={onClose}>

@@ -20,8 +20,8 @@ function Excerpts({ body, excerpts }: { body: string; excerpts: string[] }) {
   }
   return (
     <ul className="ai-excerpts">
-      {excerpts.map((excerpt) => (
-        <li key={excerpt}>
+      {excerpts.map((excerpt, index) => (
+        <li key={index}>
           <details>
             <summary>{excerpt}</summary>
             <pre className="evidence-body">
@@ -139,16 +139,17 @@ export function ReviewPanel({
 }) {
   const [showScope, setShowScope] = useState(false);
   const blocker = confirmBlocker(draft, suggestion);
-  // 模型指认不出来时给的是空数组（它宁可空着也不许猜）。这种时候面板得让用户
-  // 自己挑，不然这条建议永远确认不了。
-  const choices = suggestion.candidates.length
-    ? suggestion.candidates
-    : applications.map((application) => ({
-        id: application.id,
-        company: application.company,
-        title: application.title,
-        stage: application.current_stage ?? "",
-      }));
+  // 候选之外永远还能挑别的申请：模型可能一条都没指认（它宁可空着也不猜）、
+  // 可能指认错了、也可能指认的那条已经被删了。只给候选会让这些情况没法收场。
+  const extra = applications
+    .filter((application) => !suggestion.candidates.some((c) => c.id === application.id))
+    .map((application) => ({
+      id: application.id,
+      company: application.company,
+      title: application.title,
+      stage: application.current_stage ?? "",
+    }));
+  const choices = [...suggestion.candidates, ...extra];
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
 
   return (
@@ -165,6 +166,7 @@ export function ReviewPanel({
       {suggestion.candidates.length === 0 ? (
         <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
       ) : null}
+      <p className="muted">下拉里前几条是模型给的候选，后面是其余在办申请——它指错了也能改。</p>
       <label>
         申请
         <select
@@ -304,7 +306,10 @@ export function ReviewPanel({
         </button>
       </div>
       {isModified(draft, suggestion) ? (
-        <p className="muted">改过的地方会记成「修改后确认」，模型原本说的什么也留着。</p>
+        <>
+          <p className="muted">改过的地方会记成「修改后确认」，模型原本说的什么也留着。</p>
+          <p className="note warn">暂存只存这条建议本身，不存你刚改的这些；下次打开还是模型原来那份。</p>
+        </>
       ) : null}
     </div>
   );
