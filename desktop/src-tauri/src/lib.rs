@@ -855,6 +855,39 @@ fn list_suggestions_cmd(
 }
 
 #[tauri::command]
+fn confirm_suggestion_cmd(
+    state: State<AppState>,
+    args: ai_commands::ConfirmArgs,
+) -> Result<ai_commands::ConfirmResult, CommandError> {
+    let now = time::OffsetDateTime::now_utc();
+    let scheduler = state.reminders.as_ref();
+    with_store(&state, |store| {
+        ai_commands::confirm(store, scheduler, args.clone(), now)
+    })
+}
+
+#[tauri::command]
+fn reject_suggestion_cmd(
+    state: State<AppState>,
+    suggestion_id: String,
+) -> Result<archive_store::AiSuggestion, CommandError> {
+    with_store(&state, |store| {
+        ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Rejected)
+    })
+}
+
+/// 暂存：这条建议先放着。退出重开之后还在，状态还是待处理。
+#[tauri::command]
+fn defer_suggestion_cmd(
+    state: State<AppState>,
+    suggestion_id: String,
+) -> Result<archive_store::AiSuggestion, CommandError> {
+    with_store(&state, |store| {
+        ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Deferred)
+    })
+}
+
+#[tauri::command]
 fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     lifecycle::hide_main_window(&app);
     Ok(())
@@ -1216,7 +1249,10 @@ pub fn run() {
             preview_analysis_cmd,
             analyze_evidence_cmd,
             cancel_analysis_cmd,
-            list_suggestions_cmd
+            list_suggestions_cmd,
+            confirm_suggestion_cmd,
+            reject_suggestion_cmd,
+            defer_suggestion_cmd
         ])
         .on_window_event(|window, event| {
             if window.label() != "main" {

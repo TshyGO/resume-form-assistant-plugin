@@ -26,6 +26,9 @@ pub struct ConfirmSuggestionInput {
     pub stage_event: Option<EventDraft>,
     /// 是否将建议待办转正。
     pub create_todos: bool,
+    /// 用户改过的待办清单。`None` 表示照建议原样转正;`Some` 表示按这份清单转正
+    /// (空清单 = 一条都不要)。建议行本身不改,原样留着可追溯。
+    pub approved_todos: Option<Vec<SuggestedTodo>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -150,6 +153,7 @@ impl StoreTx<'_> {
         use sha2::{Digest, Sha256};
         let decision = serde_json::json!({"applicationId":input.application_id,"class":input.approved_reply_class,
             "mode":input.approved_send_mode,"todos":input.create_todos,
+            "approvedTodos":input.approved_todos,
             "stageEvent":input.stage_event.as_ref().map(|e| serde_json::json!({"payload":e.payload,"occurred":e.occurred}))});
         let decision_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&decision)?));
 
@@ -205,8 +209,14 @@ impl StoreTx<'_> {
                 suggestion.evidence_id,
             ],
         )?;
+        // 改过待办也算「修改后确认」:用户把时间改对了,这件事必须留痕。
+        let todos_kept = match (&input.approved_todos, input.create_todos) {
+            (Some(approved), true) => approved == &suggestion.suggested_todos,
+            _ => true,
+        };
         let status = if input.approved_reply_class == suggestion.suggested_reply_class
             && input.approved_send_mode == suggestion.suggested_send_mode
+            && todos_kept
         {
             SuggestionStatus::Confirmed
         } else {
@@ -254,7 +264,11 @@ impl StoreTx<'_> {
         // 5. 建议待办转正(引用分类事件)。
         if input.create_todos {
             let source_event_id = events.last().map(|e| e.id.clone());
-            for st in &suggestion.suggested_todos {
+            let approved = input
+                .approved_todos
+                .as_deref()
+                .unwrap_or(&suggestion.suggested_todos);
+            for st in approved {
                 let todo = self.create_todo(NewTodo {
                     application_id: input.application_id.clone(),
                     title: st.title.clone(),

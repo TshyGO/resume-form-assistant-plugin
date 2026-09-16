@@ -854,7 +854,7 @@ impl SuggestionStatus {
 }
 
 /// 建议的待办草案(结构化;确认事务才转正)。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SuggestedTodo {
     pub title: String,
     pub due: TodoDue,

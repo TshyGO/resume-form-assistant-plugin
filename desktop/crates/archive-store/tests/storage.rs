@@ -553,6 +553,7 @@ fn evidence_and_suggestions_are_separate_and_confirmation_is_atomic() {
             actor: Actor::User,
         })),
         create_todos: false,
+        approved_todos: None,
     };
     assert!(db.confirm_suggestion(input.clone()).is_err());
     assert!(db
@@ -1205,6 +1206,7 @@ fn confirmed_suggestion_replay_cannot_change_any_approved_decision() {
             stage_update_mode: StageUpdateMode::HistoryOnly,
         })),
         create_todos: false,
+        approved_todos: None,
     };
     db.confirm_suggestion(input.clone()).unwrap();
     assert!(
@@ -1325,6 +1327,7 @@ fn a_confirmed_todo_keeps_its_time_zone_and_history_only_does_not_move_the_stage
                 stage_update_mode: StageUpdateMode::HistoryOnly,
             })),
             create_todos: true,
+            approved_todos: None,
         })
         .unwrap();
 

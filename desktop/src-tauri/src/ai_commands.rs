@@ -16,10 +16,12 @@ use ai_extract::{
     build_request, Candidate, Due, EvidenceInput, Extraction, OutboundScope, MAX_CANDIDATES,
 };
 use archive_store::{
-    AiSuggestion, ApplicationFilter, ArchiveStore, EvidenceKind, NewAiSuggestion, ReplyClass,
-    SendMode, Stage, SuggestedTodo, TodoDue,
+    Actor, AiSuggestion, ApplicationFilter, ArchiveStore, ConfirmSuggestionInput, EventDraft,
+    EventPayload, EventSource, EvidenceKind, NewAiSuggestion, Occurred, ReplyClass, SendMode,
+    Stage, StageUpdateMode, StoredEvent, SuggestedTodo, SuggestionStatus, TodoDue,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use serde_json::Value;
 
 use crate::commands::CommandError;
@@ -383,5 +385,259 @@ pub fn list_suggestions(
 ) -> Result<Vec<AiSuggestion>, CommandError> {
     store
         .list_suggestions(Some(evidence_id), None)
+        .map_err(CommandError::from)
+}
+
+// --- 确认、拒绝、暂存 ---------------------------------------------------------------------
+
+/// 用户在审核面板里按下「确认」时提交的东西。
+///
+/// 每一项都是**用户批准的值**，不是模型建议的值：面板允许逐项改，改完提交的是改完的。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmArgs {
+    pub suggestion_id: String,
+    /// 候选多于一条时必填。缺了不替用户选第一个。
+    #[serde(default)]
+    pub application_id: Option<String>,
+    pub reply_class: String,
+    pub send_mode: String,
+    /// 要记的阶段事件。不给就不记，只留一条分类事件。
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub round: Option<i64>,
+    /// 事件发生的时刻（多半是邮件的发信时间）。不给就记为「时间未知」。
+    #[serde(default)]
+    pub occurred_at: Option<String>,
+    /// 「同时更新申请进度」。默认 false：导入一封旧通知不该把当前进度改掉。
+    #[serde(default)]
+    pub update_progress: bool,
+    #[serde(default)]
+    pub create_todos: bool,
+    /// 用户改过的待办清单。不给就照建议原样转正。
+    #[serde(default)]
+    pub todos: Option<Vec<TodoEdit>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoEdit {
+    pub title: String,
+    /// `datetime` / `date` / `none`，和 D10 的待办命令一个口径。
+    #[serde(default)]
+    pub due_precision: Option<String>,
+    #[serde(default)]
+    pub due_at_utc: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub time_zone: Option<String>,
+    #[serde(default)]
+    pub interview_round: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmResult {
+    pub suggestion: AiSuggestion,
+    /// 重复确认同一个决定：什么都没有再写一遍。
+    pub already_confirmed: bool,
+    pub events: Vec<StoredEvent>,
+    pub todos: Vec<crate::todo_commands::TodoView>,
+    /// 提醒没登记上的原因，逐条列。确认本身已经成功了，这里只是提醒那一半没成。
+    pub reminder_problems: Vec<String>,
+}
+
+fn round_in_range(round: Option<i64>) -> Result<(), CommandError> {
+    match round {
+        Some(n) if !(1..=99).contains(&n) => Err(invalid("VALIDATION", "面试轮次须为 1–99。")),
+        _ => Ok(()),
+    }
+}
+
+fn occurred_of(occurred_at: Option<&str>) -> Result<Occurred, CommandError> {
+    let occurred = match occurred_at.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => Occurred::DateTime {
+            rfc3339: value.to_string(),
+            time_zone: None,
+        },
+        None => Occurred::Unknown,
+    };
+    occurred.to_columns().map_err(CommandError::from)?;
+    Ok(occurred)
+}
+
+/// 阶段 → 事件。只有 ai-extract 允许的那五个阶段能从通知里推出来；
+/// `saved` / `filling` / `submitted` 是用户自己的动作，AI 不该代劳。
+fn stage_event(
+    stage: &str,
+    round: Option<i64>,
+    update_progress: bool,
+    occurred: Occurred,
+) -> Result<EventDraft, CommandError> {
+    let mode = if update_progress {
+        StageUpdateMode::UpdateProgress
+    } else {
+        StageUpdateMode::HistoryOnly
+    };
+    let payload = match stage {
+        "assessment" => EventPayload::AssessmentRecorded {
+            name: None,
+            due: None,
+            stage_update_mode: mode,
+        },
+        "interview" => EventPayload::InterviewRecorded {
+            round,
+            label: None,
+            stage_update_mode: mode,
+        },
+        "offer" => EventPayload::OfferRecorded {
+            note: None,
+            stage_update_mode: mode,
+        },
+        "rejected" => EventPayload::Rejected {
+            reason: None,
+            stage_update_mode: mode,
+        },
+        "closed" => EventPayload::Closed {
+            note: None,
+            stage_update_mode: mode,
+        },
+        other => {
+            return Err(invalid(
+                "VALIDATION",
+                format!("不能从一封通知里推出 `{other}` 这个阶段。"),
+            ))
+        }
+    };
+    Ok(EventDraft {
+        occurred,
+        // 这三项确认事务里会覆盖，这里给的值不作数。
+        source: EventSource::AiConfirmed,
+        source_request_id: None,
+        actor: Actor::User,
+        payload,
+    })
+}
+
+fn todo_of(edit: TodoEdit) -> Result<SuggestedTodo, CommandError> {
+    let title = edit.title.trim();
+    if title.is_empty() {
+        return Err(invalid("VALIDATION", "待办得有个标题。"));
+    }
+    round_in_range(edit.interview_round)?;
+    Ok(SuggestedTodo {
+        title: title.to_string(),
+        due: crate::todo_commands::parse_due(
+            edit.due_precision.as_deref(),
+            edit.due_at_utc.as_deref(),
+            edit.due_date.as_deref(),
+        )?,
+        time_zone: edit
+            .time_zone
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        interview_round: edit.interview_round,
+    })
+}
+
+/// 确认一条建议：事务里一次写完分类、阶段事件和待办，然后给新待办登记提醒。
+///
+/// 候选多于一条而用户没选，返回 `AI_NEEDS_DISAMBIGUATION`——**不替他选第一个**。
+pub fn confirm(
+    store: &ArchiveStore,
+    scheduler: &dyn reminders::ReminderScheduler,
+    args: ConfirmArgs,
+    now: OffsetDateTime,
+) -> Result<ConfirmResult, CommandError> {
+    let suggestion = store
+        .get_suggestion(&args.suggestion_id)
+        .map_err(CommandError::from)?
+        .ok_or_else(|| invalid("NOT_FOUND", "找不到这条建议。"))?;
+
+    let application_id = match args
+        .application_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => id.to_string(),
+        None => match suggestion.candidate_application_ids.as_slice() {
+            [only] => only.clone(),
+            _ => {
+                return Err(invalid(
+                    "AI_NEEDS_DISAMBIGUATION",
+                    "这条通知对应哪一份申请还没定，先选一条再确认。",
+                ))
+            }
+        },
+    };
+
+    round_in_range(args.round)?;
+    let reply_class = ReplyClass::parse(&args.reply_class)
+        .ok_or_else(|| invalid("VALIDATION", "不认识的通知类型。"))?;
+    let send_mode = SendMode::parse(&args.send_mode)
+        .ok_or_else(|| invalid("VALIDATION", "不认识的发送方式。"))?;
+    let stage_event = match args.stage.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(stage) => Some(stage_event(
+            stage,
+            args.round,
+            args.update_progress,
+            occurred_of(args.occurred_at.as_deref())?,
+        )?),
+        None => None,
+    };
+    let approved_todos = match args.todos {
+        Some(list) => Some(
+            list.into_iter()
+                .map(todo_of)
+                .collect::<Result<Vec<_>, CommandError>>()?,
+        ),
+        None => None,
+    };
+
+    let outcome = store
+        .confirm_suggestion(ConfirmSuggestionInput {
+            suggestion_id: args.suggestion_id.clone(),
+            application_id,
+            approved_reply_class: reply_class,
+            approved_send_mode: send_mode,
+            stage_event,
+            create_todos: args.create_todos,
+            approved_todos,
+        })
+        .map_err(CommandError::from)?;
+
+    // 提醒登记在事务外：登记不上不该把已经确认的东西回滚掉，只是照实说一声。
+    let mut todos = Vec::new();
+    let mut reminder_problems = Vec::new();
+    for created in &outcome.todos {
+        let (todo, problem) = crate::todo_commands::reschedule(store, scheduler, created, now)?;
+        if let Some(problem) = problem {
+            reminder_problems.push(problem);
+        }
+        todos.push(crate::todo_commands::with_application(store, &todo));
+    }
+
+    Ok(ConfirmResult {
+        suggestion: outcome.suggestion,
+        already_confirmed: outcome.already_confirmed,
+        events: outcome.events,
+        todos,
+        reminder_problems,
+    })
+}
+
+/// 拒绝或暂存。两者都**不碰任何正式字段**，只把建议行的状态改掉。
+pub fn set_status(
+    store: &ArchiveStore,
+    suggestion_id: &str,
+    status: SuggestionStatus,
+) -> Result<AiSuggestion, CommandError> {
+    store
+        .set_suggestion_status(suggestion_id, status)
         .map_err(CommandError::from)
 }
