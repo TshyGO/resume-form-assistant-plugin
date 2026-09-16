@@ -308,3 +308,75 @@ export interface CreateApplicationResult {
     same_company?: ApplicationSummary[];
   } | null;
 }
+
+// --- D11 AI 整理 -------------------------------------------------------------------------
+
+/** 发送前预览：这一次要把什么发出去。不含 Key，不含申请 id，不含完整接口地址。 */
+export interface OutboundPreview {
+  host: string;
+  model: string;
+  bodyChars: number;
+  truncated: boolean;
+  hasSubject: boolean;
+  hasFrom: boolean;
+  candidates: Array<{ label: string; company: string; title: string }>;
+  bodyPreview: string;
+  summary: string;
+  /** 等这么久之后界面说「还在等」，再等这么久就算超时。 */
+  slowHintSeconds: number;
+  timeoutSeconds: number;
+}
+
+export type SuggestionStatus =
+  | "pending"
+  | "confirmed"
+  | "modified_confirmed"
+  | "rejected"
+  | "deferred";
+
+export interface SuggestedTodoView {
+  title: string;
+  duePrecision: "datetime" | "date" | "none";
+  dueAtUtc?: string | null;
+  dueDate?: string | null;
+  timeZone?: string | null;
+  interviewRound?: number | null;
+}
+
+export interface SuggestionCandidate {
+  id: string;
+  company: string;
+  title: string;
+  stage: string;
+}
+
+/** 一条待确认的建议。**全部是建议值**：确认之前，正式字段一个都没改。 */
+export interface AiSuggestion {
+  id: string;
+  evidenceId: string;
+  status: SuggestionStatus;
+  candidates: SuggestionCandidate[];
+  stage?: Stage | null;
+  round?: number | null;
+  replyClass: ReplyClass;
+  sendMode: SendMode;
+  todos: SuggestedTodoView[];
+  excerpts: string[];
+  uncertainties: string[];
+  modelLabel?: string | null;
+  promptScope?: string | null;
+  createdAt: string;
+  approvedReplyClass?: ReplyClass | null;
+  approvedSendMode?: SendMode | null;
+  approvedStage?: Stage | null;
+}
+
+export interface ConfirmResult {
+  suggestion: AiSuggestion;
+  /** 重复确认同一个决定：这次什么都没再写。 */
+  alreadyConfirmed: boolean;
+  events: unknown[];
+  todos: TodoView[];
+  /** 提醒没登记上的原因。确认本身已经成了。 */
+  reminderProblems: string[];
+}

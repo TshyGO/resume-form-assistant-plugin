@@ -47,22 +47,39 @@ function invokeError(error: unknown) {
  * 挂载收件箱。`pickFiles` 与 `listenDrop` 由宿主注入（真实实现是 Tauri 的文件对话框与
  * 拖放事件），测试里可以换成假的。
  */
-/** 宿主注入的两件事：打开文件对话框、监听窗口拖放。测试里换成假的。 */
+/** 宿主注入的几件事：打开文件对话框、监听窗口拖放、挂 AI 整理面板。测试里换成假的。 */
 export interface InboxHost {
   pickFiles?: (() => Promise<string[]>) | null;
   listenDrop?: ((handle: (paths: string[]) => void) => void) | null;
+  /**
+   * 把 AI 整理面板挂到预览里的挂载点上。真实实现是 React（`ai/mount.tsx`），
+   * 这里只给容器和证据 id：**面板的状态不回流到这个旧视图**。
+   */
+  mountAi?:
+    | ((container: Element, evidenceId: string, onConfirmed: () => void) => { unmount(): void })
+    | null;
 }
 
-export function mountInbox(invoke: Invoke, { pickFiles = null, listenDrop = null }: InboxHost = {}) {
+export function mountInbox(
+  invoke: Invoke,
+  { pickFiles = null, listenDrop = null, mountAi = null }: InboxHost = {},
+) {
   const list = must("inbox-list");
   const preview = must("inbox-preview");
   const status = must("inbox-status");
   const pasteBox = textarea("inbox-paste");
 
   let items: EvidenceSummary[] = [];
+  let aiPanel: { unmount(): void } | null = null;
   let selectedId: string | null = null;
   let previewToken = 0;
   let applications: ApplicationSummary[] = [];
+
+  /** 重画预览之前先把上一块 React 卸掉，不然它会跟着 innerHTML 一起被丢掉却没收工。 */
+  function clearAiPanel() {
+    aiPanel?.unmount();
+    aiPanel = null;
+  }
 
   function say(message: Message | null) {
     status.textContent = message?.text ?? "";
@@ -79,6 +96,7 @@ export function mountInbox(invoke: Invoke, { pickFiles = null, listenDrop = null
     renderList();
     if (selectedId && !items.some((item) => item.id === selectedId)) {
       selectedId = null;
+      clearAiPanel();
       preview.innerHTML = "";
     }
   }
@@ -111,6 +129,7 @@ export function mountInbox(invoke: Invoke, { pickFiles = null, listenDrop = null
   async function select(evidenceId: string) {
     selectedId = evidenceId;
     const token = ++previewToken;
+    clearAiPanel();
     preview.innerHTML = '<p class="muted">加载中…</p>';
     renderList();
     let data: EvidencePreview;
@@ -195,7 +214,12 @@ export function mountInbox(invoke: Invoke, { pickFiles = null, listenDrop = null
         <button type="button" data-act="classify">保存分类</button>
       </div>
       <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
+      <div id="inbox-ai"></div>
     `;
+    const slot = maybe("inbox-ai");
+    if (mountAi && slot) {
+      aiPanel = mountAi(slot as unknown as Element, item.id, () => void select(item.id));
+    }
     preview.querySelectorAll<HTMLElement>("button[data-act]").forEach((button) => {
       button.addEventListener("click", () => {
         const action = button.dataset.act;

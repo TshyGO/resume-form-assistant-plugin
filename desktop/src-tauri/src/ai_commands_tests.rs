@@ -174,7 +174,7 @@ async fn analyze(
     api_url: &str,
     evidence_id: &str,
     selected: Option<&[String]>,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     let (gathered, built) = {
         let guard = store.lock().unwrap();
         let store = guard.as_ref().unwrap();
@@ -331,13 +331,16 @@ async fn a_normal_reply_becomes_one_pending_suggestion() {
         .await
         .unwrap();
 
-    assert_eq!(suggestion.status, SuggestionStatus::Pending);
-    assert_eq!(suggestion.candidate_application_ids, vec![application.clone()]);
-    assert_eq!(suggestion.suggested_todos.len(), 1);
-    assert_eq!(
-        suggestion.suggested_todos[0].time_zone.as_deref(),
-        Some("Asia/Shanghai")
-    );
+    assert_eq!(suggestion.status, "pending");
+    let candidates: Vec<&str> = suggestion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.id.as_str())
+        .collect();
+    assert_eq!(candidates, vec![application.as_str()]);
+    assert_eq!(suggestion.todos.len(), 1);
+    assert_eq!(suggestion.todos[0].time_zone.as_deref(), Some("Asia/Shanghai"));
+    assert_eq!(suggestion.todos[0].due_precision, "datetime");
     assert!(suggestion.prompt_scope.is_some());
 
     // 建议归建议：证据自己的分类、关联都没动。
@@ -663,7 +666,7 @@ fn confirming_writes_the_class_the_event_and_the_todo_at_once() {
     )
     .unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::Confirmed);
+    assert_eq!(result.suggestion.status, "confirmed");
     assert!(!result.already_confirmed);
     assert_eq!(result.todos.len(), 1);
     assert!(result.reminder_problems.is_empty());
@@ -720,11 +723,11 @@ fn editing_a_todo_before_confirming_is_recorded_as_a_modification() {
     }]);
     let result = ai_commands::confirm(&store, &scheduler, args, now()).unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
     assert_eq!(result.todos.len(), 1);
     assert_eq!(result.todos[0].title, "一面（改到周三）");
     // 建议行原样留着：模型当初说的是什么，事后查得到。
-    assert_eq!(result.suggestion.suggested_todos[0].title, "一面");
+    assert_eq!(result.suggestion.todos[0].title, "一面");
 }
 
 #[test]
@@ -739,15 +742,9 @@ fn a_different_send_mode_makes_it_a_modified_confirmation() {
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
 
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
-    assert_eq!(
-        result.suggestion.suggested_send_mode,
-        archive_store::SendMode::Automated
-    );
-    assert_eq!(
-        result.suggestion.approved_send_mode,
-        Some(archive_store::SendMode::Unknown)
-    );
+    assert_eq!(result.suggestion.status, "modified_confirmed");
+    assert_eq!(result.suggestion.send_mode, "automated");
+    assert_eq!(result.suggestion.approved_send_mode.as_deref(), Some("unknown"));
 }
 
 #[test]
@@ -763,7 +760,7 @@ fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     args.round = None;
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 阶段照建议，轮次从一面改成二面。
     let second = pending(&store, &evidence, &[a.clone()], vec![]);
@@ -771,7 +768,7 @@ fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     args.round = Some(2);
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 
     // 干脆不记阶段，也是改。
     let third = pending(&store, &evidence, &[a.clone()], vec![]);
@@ -779,7 +776,7 @@ fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
     args.stage = None;
     args.create_todos = false;
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 }
 
 #[test]
@@ -824,7 +821,7 @@ fn rejecting_leaves_every_formal_field_alone() {
     let rejected =
         ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Rejected).unwrap();
 
-    assert_eq!(rejected.status, SuggestionStatus::Rejected);
+    assert_eq!(rejected.status, "rejected");
     assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
     assert!(store
         .get_evidence(&evidence)
@@ -850,7 +847,7 @@ fn a_deferred_suggestion_survives_a_restart_and_can_still_be_confirmed() {
     let store = open_store(&archive_dir, &pointer).unwrap();
     let reopened = ai_commands::list_suggestions(&store, &evidence).unwrap();
     assert_eq!(reopened.len(), 1);
-    assert_eq!(reopened[0].status, SuggestionStatus::Deferred);
+    assert_eq!(reopened[0].status, "deferred");
     assert!(store
         .get_evidence(&evidence)
         .unwrap()
@@ -861,7 +858,7 @@ fn a_deferred_suggestion_survives_a_restart_and_can_still_be_confirmed() {
     let mut args = confirm_args(&suggestion.id, Some(&a));
     args.send_mode = "unknown".into();
     let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
-    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.suggestion.status, "modified_confirmed");
 }
 
 #[test]
@@ -884,10 +881,10 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
     let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
     assert_eq!(rows.len(), 2);
     let old = rows.iter().find(|row| row.id == first.id).unwrap();
-    assert_eq!(old.status, SuggestionStatus::Confirmed);
+    assert_eq!(old.status, "confirmed");
     assert_eq!(
         rows.iter().find(|row| row.id == second.id).unwrap().status,
-        SuggestionStatus::Pending
+        "pending"
     );
     assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
     assert_eq!(

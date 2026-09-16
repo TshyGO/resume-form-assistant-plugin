@@ -352,7 +352,7 @@ pub fn store_suggestion(
     gathered: &Gathered,
     extraction: Extraction,
     scope: &OutboundScope,
-) -> Result<AiSuggestion, CommandError> {
+) -> Result<SuggestionView, CommandError> {
     let suggestion = NewAiSuggestion {
         evidence_id: gathered.evidence_id.clone(),
         candidate_application_ids: extraction.application_ids.clone(),
@@ -376,16 +376,20 @@ pub fn store_suggestion(
         model_label: Some(scope.model.clone()),
         prompt_scope: Some(scope.summary()),
     };
-    store.create_suggestion(suggestion).map_err(CommandError::from)
+    let created = store
+        .create_suggestion(suggestion)
+        .map_err(CommandError::from)?;
+    Ok(view(store, created))
 }
 
 pub fn list_suggestions(
     store: &ArchiveStore,
     evidence_id: &str,
-) -> Result<Vec<AiSuggestion>, CommandError> {
-    store
+) -> Result<Vec<SuggestionView>, CommandError> {
+    let rows = store
         .list_suggestions(Some(evidence_id), None)
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    Ok(rows.into_iter().map(|row| view(store, row)).collect())
 }
 
 // --- 确认、拒绝、暂存 ---------------------------------------------------------------------
@@ -440,7 +444,7 @@ pub struct TodoEdit {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfirmResult {
-    pub suggestion: AiSuggestion,
+    pub suggestion: SuggestionView,
     /// 重复确认同一个决定：什么都没有再写一遍。
     pub already_confirmed: bool,
     pub events: Vec<StoredEvent>,
@@ -623,7 +627,7 @@ pub fn confirm(
     }
 
     Ok(ConfirmResult {
-        suggestion: outcome.suggestion,
+        suggestion: view(store, outcome.suggestion),
         already_confirmed: outcome.already_confirmed,
         events: outcome.events,
         todos,
@@ -636,8 +640,128 @@ pub fn set_status(
     store: &ArchiveStore,
     suggestion_id: &str,
     status: SuggestionStatus,
-) -> Result<AiSuggestion, CommandError> {
-    store
+) -> Result<SuggestionView, CommandError> {
+    let suggestion = store
         .set_suggestion_status(suggestion_id, status)
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    Ok(view(store, suggestion))
+}
+
+// --- 给界面看的形状 -----------------------------------------------------------------------
+//
+// 存储层的 `AiSuggestion` 是 snake_case，待办的到期是个枚举。界面读的是 camelCase 和
+// 拆开的到期字段（和 D10 的待办视图一个口径），所以这里转一道，不让前端去猜枚举怎么序列化。
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionView {
+    pub id: String,
+    pub evidence_id: String,
+    pub status: String,
+    /// 候选连带公司名和岗位：面板要让用户看着名字选，而不是看着 UUID 选。
+    pub candidates: Vec<SuggestionCandidate>,
+    pub stage: Option<String>,
+    pub round: Option<i64>,
+    pub reply_class: String,
+    pub send_mode: String,
+    pub todos: Vec<SuggestedTodoView>,
+    /// 原文依据。面板拿它去正文里高亮。
+    pub excerpts: Vec<String>,
+    pub uncertainties: Vec<String>,
+    pub model_label: Option<String>,
+    pub prompt_scope: Option<String>,
+    pub created_at: String,
+    pub approved_reply_class: Option<String>,
+    pub approved_send_mode: Option<String>,
+    pub approved_stage: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionCandidate {
+    pub id: String,
+    pub company: String,
+    pub title: String,
+    pub stage: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedTodoView {
+    pub title: String,
+    /// `datetime` / `date` / `none`，和 D10 的待办视图一一对应。
+    pub due_precision: String,
+    pub due_at_utc: Option<String>,
+    pub due_date: Option<String>,
+    pub time_zone: Option<String>,
+    pub interview_round: Option<i64>,
+}
+
+fn todo_view(todo: &SuggestedTodo) -> SuggestedTodoView {
+    let (precision, at_utc, date) = match &todo.due {
+        TodoDue::DateTime(value) => ("datetime", Some(value.clone()), None),
+        TodoDue::Date(value) => ("date", None, Some(value.clone())),
+        TodoDue::None => ("none", None, None),
+    };
+    SuggestedTodoView {
+        title: todo.title.clone(),
+        due_precision: precision.to_string(),
+        due_at_utc: at_utc,
+        due_date: date,
+        time_zone: todo.time_zone.clone(),
+        interview_round: todo.interview_round,
+    }
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 一条建议的界面形状。候选查不到（比如已经被删了）就只留 id，不让整个面板打不开。
+pub fn view(store: &ArchiveStore, suggestion: AiSuggestion) -> SuggestionView {
+    let candidates = suggestion
+        .candidate_application_ids
+        .iter()
+        .map(|id| match store.get_application(id) {
+            Ok(Some(detail)) => SuggestionCandidate {
+                id: detail.summary.id,
+                company: detail.summary.company,
+                title: detail.summary.title,
+                stage: detail.summary.current_stage.as_str().to_string(),
+            },
+            _ => SuggestionCandidate {
+                id: id.clone(),
+                company: "（这条申请已经不在了）".into(),
+                title: String::new(),
+                stage: String::new(),
+            },
+        })
+        .collect();
+    SuggestionView {
+        id: suggestion.id,
+        evidence_id: suggestion.evidence_id,
+        status: suggestion.status.as_str().to_string(),
+        candidates,
+        stage: suggestion.suggested_stage.map(|s| s.as_str().to_string()),
+        round: suggestion.suggested_round,
+        reply_class: suggestion.suggested_reply_class.as_str().to_string(),
+        send_mode: suggestion.suggested_send_mode.as_str().to_string(),
+        todos: suggestion.suggested_todos.iter().map(todo_view).collect(),
+        excerpts: string_list(suggestion.excerpt_refs.as_ref()),
+        uncertainties: string_list(suggestion.uncertainties.as_ref()),
+        model_label: suggestion.model_label,
+        prompt_scope: suggestion.prompt_scope,
+        created_at: suggestion.created_at,
+        approved_reply_class: suggestion.approved_reply_class.map(|c| c.as_str().to_string()),
+        approved_send_mode: suggestion.approved_send_mode.map(|m| m.as_str().to_string()),
+        approved_stage: suggestion.approved_stage.map(|s| s.as_str().to_string()),
+    }
 }

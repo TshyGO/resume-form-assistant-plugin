@@ -782,7 +782,7 @@ async fn analyze_evidence_cmd(
     evidence_id: String,
     request_id: String,
     candidate_ids: Option<Vec<String>>,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     let settings = ai_settings::load(&ai_data_root(&state)?);
     let key = state
         .credentials
@@ -848,7 +848,7 @@ fn cancel_analysis_cmd(state: State<AppState>, request_id: String) -> Result<boo
 fn list_suggestions_cmd(
     state: State<AppState>,
     evidence_id: String,
-) -> Result<Vec<archive_store::AiSuggestion>, CommandError> {
+) -> Result<Vec<ai_commands::SuggestionView>, CommandError> {
     with_store(&state, |store| {
         ai_commands::list_suggestions(store, &evidence_id)
     })
@@ -870,7 +870,7 @@ fn confirm_suggestion_cmd(
 fn reject_suggestion_cmd(
     state: State<AppState>,
     suggestion_id: String,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     with_store(&state, |store| {
         ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Rejected)
     })
@@ -881,7 +881,7 @@ fn reject_suggestion_cmd(
 fn defer_suggestion_cmd(
     state: State<AppState>,
     suggestion_id: String,
-) -> Result<archive_store::AiSuggestion, CommandError> {
+) -> Result<ai_commands::SuggestionView, CommandError> {
     with_store(&state, |store| {
         ai_commands::set_status(store, &suggestion_id, archive_store::SuggestionStatus::Deferred)
     })
