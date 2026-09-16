@@ -128,7 +128,7 @@ pub struct EditTodoArgs {
 
 // --- 到期的解析与回填 -----------------------------------------------------------------------
 
-fn parse_due(
+pub(crate) fn parse_due(
     precision: Option<&str>,
     at_utc: Option<&str>,
     date: Option<&str>,
@@ -196,7 +196,7 @@ fn view(todo: &Todo, app: Option<&ApplicationDetail>) -> TodoView {
     }
 }
 
-fn with_application(store: &ArchiveStore, todo: &Todo) -> TodoView {
+pub(crate) fn with_application(store: &ArchiveStore, todo: &Todo) -> TodoView {
     let app = store.get_application(&todo.application_id).ok().flatten();
     view(todo, app.as_ref())
 }
@@ -226,7 +226,7 @@ fn cancel_existing(scheduler: &dyn ReminderScheduler, todo: &Todo) {
 ///
 /// 返回「提醒出了什么问题」。返回 `None` 不代表登记成功——也可能是这条待办
 /// 本来就不需要提醒（没有到期、已经完成、时刻已过）。
-fn reschedule(
+pub(crate) fn reschedule(
     store: &ArchiveStore,
     scheduler: &dyn ReminderScheduler,
     todo: &Todo,

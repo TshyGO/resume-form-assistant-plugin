@@ -523,3 +523,390 @@ async fn the_archive_stays_readable_while_a_request_is_in_flight() {
     request.await.unwrap();
     drop(dir);
 }
+
+// --- 确认、拒绝、暂存 ---------------------------------------------------------------------
+//
+// 产品需求 §10 场景 5–7 与 #25 的验收都落在这一段：**确认之前，正式字段一个都不许动。**
+
+/// 记账用的假调度器。这里要验的是「确认之后提醒登记了没有」，不是 Toast 长什么样。
+#[derive(Default)]
+struct FakeScheduler {
+    scheduled: Mutex<Vec<reminders::ReminderRequest>>,
+}
+
+impl reminders::ReminderScheduler for FakeScheduler {
+    fn capability(&self) -> reminders::Capability {
+        reminders::Capability::Available
+    }
+
+    fn schedule(
+        &self,
+        request: &reminders::ReminderRequest,
+    ) -> Result<reminders::ScheduledHandle, reminders::ReminderError> {
+        self.scheduled.lock().unwrap().push(request.clone());
+        Ok(reminders::ScheduledHandle::new(format!(
+            "fake:{}",
+            request.todo_id
+        )))
+    }
+
+    fn cancel(&self, _handle: &reminders::ScheduledHandle) -> Result<(), reminders::ReminderError> {
+        Ok(())
+    }
+
+    fn cancel_all(&self) -> Result<(), reminders::ReminderError> {
+        Ok(())
+    }
+}
+
+fn now() -> time::OffsetDateTime {
+    time::macros::datetime!(2026-09-16 02:00 UTC)
+}
+
+/// 直接造一条 `pending` 建议，省掉一次网络请求。请求那条链路上面已经测过了。
+fn pending(
+    store: &ArchiveStore,
+    evidence_id: &str,
+    candidates: &[String],
+    todos: Vec<archive_store::SuggestedTodo>,
+) -> archive_store::AiSuggestion {
+    store
+        .create_suggestion(archive_store::NewAiSuggestion {
+            evidence_id: evidence_id.to_string(),
+            candidate_application_ids: candidates.to_vec(),
+            suggested_stage: Some(archive_store::Stage::Interview),
+            suggested_round: Some(1),
+            suggested_reply_class: archive_store::ReplyClass::InterviewInvite,
+            suggested_send_mode: archive_store::SendMode::Automated,
+            suggested_todos: todos,
+            excerpt_refs: Some(json!(["下周二上午十点"])),
+            uncertainties: None,
+            model_label: Some("fake-model".into()),
+            prompt_scope: Some("发往 127.0.0.1 · 模型 fake-model · 正文 42 字 · 候选 1 条".into()),
+        })
+        .unwrap()
+}
+
+fn interview_todo() -> archive_store::SuggestedTodo {
+    archive_store::SuggestedTodo {
+        title: "一面".into(),
+        due: archive_store::TodoDue::DateTime("2026-09-22T02:00:00Z".into()),
+        time_zone: Some("Asia/Shanghai".into()),
+        interview_round: Some(1),
+    }
+}
+
+fn confirm_args(suggestion_id: &str, application_id: Option<&str>) -> ai_commands::ConfirmArgs {
+    ai_commands::ConfirmArgs {
+        suggestion_id: suggestion_id.to_string(),
+        application_id: application_id.map(str::to_string),
+        reply_class: "interview_invite".into(),
+        send_mode: "automated".into(),
+        stage: Some("interview".into()),
+        round: Some(1),
+        occurred_at: None,
+        update_progress: false,
+        create_todos: true,
+        todos: None,
+    }
+}
+
+fn stage_of(store: &ArchiveStore, application_id: &str) -> archive_store::Stage {
+    store
+        .get_application(application_id)
+        .unwrap()
+        .unwrap()
+        .summary
+        .current_stage
+}
+
+#[test]
+fn two_candidates_are_never_resolved_for_the_user() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let b = app(&store, "合成科技分部");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone(), b.clone()], vec![interview_todo()]);
+
+    let err = ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, None),
+        now(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.code, "AI_NEEDS_DISAMBIGUATION");
+    assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
+    assert!(store
+        .get_evidence(&evidence)
+        .unwrap()
+        .unwrap()
+        .reply_class
+        .is_none());
+}
+
+#[test]
+fn confirming_writes_the_class_the_event_and_the_todo_at_once() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let b = app(&store, "别家公司");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone(), b.clone()], vec![interview_todo()]);
+    let scheduler = FakeScheduler::default();
+
+    let result = ai_commands::confirm(
+        &store,
+        &scheduler,
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    assert_eq!(result.suggestion.status, SuggestionStatus::Confirmed);
+    assert!(!result.already_confirmed);
+    assert_eq!(result.todos.len(), 1);
+    assert!(result.reminder_problems.is_empty());
+    assert_eq!(scheduler.scheduled.lock().unwrap().len(), 1, "待办没登记提醒");
+
+    let record = store.get_evidence(&evidence).unwrap().unwrap();
+    assert_eq!(
+        record.reply_class,
+        Some(archive_store::ReplyClass::InterviewInvite)
+    );
+    assert_eq!(record.application_id.as_deref(), Some(a.as_str()));
+
+    let detail = store.get_application(&a).unwrap().unwrap();
+    assert_eq!(
+        detail.summary.reply_evidence_state,
+        archive_store::ReplyEvidenceState::Classified
+    );
+    // updateProgress 没勾：只进时间线，不动当前进度。
+    assert_eq!(detail.summary.current_stage, archive_store::Stage::Saved);
+    assert_eq!(stage_of(&store, &b), archive_store::Stage::Saved);
+}
+
+#[test]
+fn ticking_update_progress_is_what_moves_the_stage() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![]);
+
+    let mut args = confirm_args(&suggestion.id, Some(&a));
+    args.update_progress = true;
+    args.create_todos = false;
+    ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+
+    assert_eq!(stage_of(&store, &a), archive_store::Stage::Interview);
+}
+
+#[test]
+fn editing_a_todo_before_confirming_is_recorded_as_a_modification() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    let scheduler = FakeScheduler::default();
+
+    let mut args = confirm_args(&suggestion.id, Some(&a));
+    args.todos = Some(vec![ai_commands::TodoEdit {
+        title: "一面（改到周三）".into(),
+        due_precision: Some("datetime".into()),
+        due_at_utc: Some("2026-09-23T02:00:00Z".into()),
+        due_date: None,
+        time_zone: Some("Asia/Shanghai".into()),
+        interview_round: Some(1),
+    }]);
+    let result = ai_commands::confirm(&store, &scheduler, args, now()).unwrap();
+
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(result.todos.len(), 1);
+    assert_eq!(result.todos[0].title, "一面（改到周三）");
+    // 建议行原样留着：模型当初说的是什么，事后查得到。
+    assert_eq!(result.suggestion.suggested_todos[0].title, "一面");
+}
+
+#[test]
+fn a_different_send_mode_makes_it_a_modified_confirmation() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![]);
+
+    let mut args = confirm_args(&suggestion.id, Some(&a));
+    args.send_mode = "unknown".into();
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+    assert_eq!(
+        result.suggestion.suggested_send_mode,
+        archive_store::SendMode::Automated
+    );
+    assert_eq!(
+        result.suggestion.approved_send_mode,
+        Some(archive_store::SendMode::Unknown)
+    );
+}
+
+#[test]
+fn changing_the_stage_or_the_round_also_counts_as_a_modification() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+
+    // 建议说「面试 一面」，用户改成「测评」。
+    let first = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&first.id, Some(&a));
+    args.stage = Some("assessment".into());
+    args.round = None;
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+
+    // 阶段照建议，轮次从一面改成二面。
+    let second = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&second.id, Some(&a));
+    args.round = Some(2);
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+
+    // 干脆不记阶段，也是改。
+    let third = pending(&store, &evidence, &[a.clone()], vec![]);
+    let mut args = confirm_args(&third.id, Some(&a));
+    args.stage = None;
+    args.create_todos = false;
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+}
+
+#[test]
+fn confirming_twice_is_idempotent_and_a_different_decision_conflicts() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    let scheduler = FakeScheduler::default();
+
+    ai_commands::confirm(
+        &store,
+        &scheduler,
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+    let again = ai_commands::confirm(
+        &store,
+        &scheduler,
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+    assert!(again.already_confirmed);
+    assert!(again.todos.is_empty(), "重复确认又建了一遍待办");
+    assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
+
+    let mut other = confirm_args(&suggestion.id, Some(&a));
+    other.reply_class = "reject".into();
+    let err = ai_commands::confirm(&store, &scheduler, other, now()).unwrap_err();
+    assert_eq!(err.code, "CONFLICT");
+}
+
+#[test]
+fn rejecting_leaves_every_formal_field_alone() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+
+    let rejected =
+        ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Rejected).unwrap();
+
+    assert_eq!(rejected.status, SuggestionStatus::Rejected);
+    assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
+    assert!(store
+        .get_evidence(&evidence)
+        .unwrap()
+        .unwrap()
+        .reply_class
+        .is_none());
+    assert!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().is_empty());
+}
+
+#[test]
+fn a_deferred_suggestion_survives_a_restart_and_can_still_be_confirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let pointer = dir.path().join("current.json");
+    let store = open_store(&archive_dir, &pointer).unwrap();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::set_status(&store, &suggestion.id, SuggestionStatus::Deferred).unwrap();
+    drop(store);
+
+    let store = open_store(&archive_dir, &pointer).unwrap();
+    let reopened = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened[0].status, SuggestionStatus::Deferred);
+    assert!(store
+        .get_evidence(&evidence)
+        .unwrap()
+        .unwrap()
+        .reply_class
+        .is_none());
+
+    let mut args = confirm_args(&suggestion.id, Some(&a));
+    args.send_mode = "unknown".into();
+    let result = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap();
+    assert_eq!(result.suggestion.status, SuggestionStatus::ModifiedConfirmed);
+}
+
+#[test]
+fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let first = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&first.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    // 换个模型重跑一遍：新增一行，旧的那行和它写下的东西都不动。
+    let second = pending(&store, &evidence, &[a.clone()], vec![]);
+
+    let rows = ai_commands::list_suggestions(&store, &evidence).unwrap();
+    assert_eq!(rows.len(), 2);
+    let old = rows.iter().find(|row| row.id == first.id).unwrap();
+    assert_eq!(old.status, SuggestionStatus::Confirmed);
+    assert_eq!(
+        rows.iter().find(|row| row.id == second.id).unwrap().status,
+        SuggestionStatus::Pending
+    );
+    assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
+    assert_eq!(
+        store.get_evidence(&evidence).unwrap().unwrap().reply_class,
+        Some(archive_store::ReplyClass::InterviewInvite)
+    );
+}
+
+#[test]
+fn a_stage_that_cannot_come_from_a_notification_is_refused() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![]);
+
+    let mut args = confirm_args(&suggestion.id, Some(&a));
+    args.stage = Some("submitted".into());
+    let err = ai_commands::confirm(&store, &FakeScheduler::default(), args, now()).unwrap_err();
+
+    assert_eq!(err.code, "VALIDATION");
+    assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
+}
