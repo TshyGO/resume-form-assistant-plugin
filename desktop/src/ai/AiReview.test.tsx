@@ -44,6 +44,16 @@ const applications = {
   total: 2,
 };
 
+/** 造 n 条申请，用来验证翻页。 */
+function manyApplications(total: number, offset: number, limit: number) {
+  const items = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, i) => ({
+    id: `app-${offset + i}`,
+    company: `公司 ${offset + i}`,
+    title: "岗位",
+  }));
+  return { items, total };
+}
+
 type Handler = (command: string, args?: Record<string, unknown>) => unknown;
 
 function mount(handler: Handler, onConfirmed?: (message: string) => void) {
@@ -250,4 +260,45 @@ test("预览还在重算时，改不了候选也发不出去——看到的和�
 
   release!({ ...preview, candidates: [{ label: "c1", company: "别家公司", title: "前端实习" }] });
   await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", false));
+});
+
+test("申请超过一页时会一直翻到取完，第 201 条也选得到", async () => {
+  const user = userEvent.setup();
+  mount((command, args) => {
+    if (command === "list_applications_cmd") {
+      const query = args?.args as { limit: number; offset: number };
+      return manyApplications(250, query.offset, query.limit);
+    }
+    if (command === "analyze_evidence_cmd") return { ...suggestion, candidates: [] };
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await screen.findByText(/认不出这封信是哪一条申请/);
+  expect(screen.getByRole("option", { name: /公司 249/ })).toBeTruthy();
+});
+
+test("预览还在重算时点「先不发」，晚到的结果不会把人拉回预览页", async () => {
+  const user = userEvent.setup();
+  let release: ((value: OutboundPreview) => void) | null = null;
+  mount((command, args) => {
+    if (command === "preview_analysis_cmd") {
+      const ids = (args?.candidateIds ?? null) as string[] | null;
+      if (!ids) return preview;
+      return new Promise<OutboundPreview>((resolve) => {
+        release = resolve;
+      });
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByLabelText(/别家公司/));
+  await user.click(screen.getByRole("button", { name: "先不发" }));
+
+  release!(preview);
+  await waitFor(() => expect(screen.getByRole("button", { name: "AI 整理" })).toBeTruthy());
+  expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
 });

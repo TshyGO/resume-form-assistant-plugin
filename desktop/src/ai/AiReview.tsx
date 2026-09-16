@@ -4,6 +4,7 @@ import type {
   ApplicationSummary,
   ConfirmResult,
   EvidencePreview,
+  Invoke,
   OutboundPreview,
   Page,
 } from "../api.ts";
@@ -13,8 +14,36 @@ import { ReviewPanel } from "./ReviewPanel.tsx";
 import { confirmArgs, describeFailure, initialDraft } from "./review.ts";
 import type { Draft, Failure, Phase } from "./review.ts";
 
-/** 一次列多少条申请。列不完就明说，别让用户以为第 101 条不存在。 */
-const APPLICATION_LIMIT = 100;
+/** 每页取多少条申请，以及最多翻几页。存储层把 limit 卡在 1000 以内。 */
+const PAGE_SIZE = 200;
+const MAX_PAGES = 5;
+
+/**
+ * 把在办申请都取回来。零候选、模型指错、候选被删这几种情况都得靠这份清单收场，
+ * 只取前一页会让第 201 条之后的申请没法选。取满上限还没取完就如实说一声。
+ */
+async function loadApplications(
+  invoke: Invoke,
+): Promise<{ items: ApplicationSummary[]; truncated: boolean }> {
+  const items: ApplicationSummary[] = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await invoke<Page<ApplicationSummary>>("list_applications_cmd", {
+      args: {
+        stage: "all",
+        recycle: "active",
+        desc: true,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      },
+    });
+    items.push(...(result?.items ?? []));
+    if (items.length >= (result?.total ?? items.length)) {
+      return { items, truncated: false };
+    }
+    if (!result?.items?.length) break;
+  }
+  return { items, truncated: true };
+}
 
 function newRequestId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
@@ -76,12 +105,10 @@ export function AiReview({
       )
       .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
     // 申请清单两处都要用：预览里改候选，审核里模型没指认时自己挑。
-    invoke<Page<ApplicationSummary>>("list_applications_cmd", {
-      args: { stage: "all", recycle: "active", desc: true, limit: APPLICATION_LIMIT, offset: 0 },
-    })
-      .then((page) => {
-        setApplications(page?.items ?? []);
-        setTruncated((page?.total ?? 0) > (page?.items?.length ?? 0));
+    loadApplications(invoke)
+      .then(({ items, truncated: more }) => {
+        setApplications(items);
+        setTruncated(more);
       })
       .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
   }, [invoke, evidenceId]);
@@ -274,7 +301,12 @@ export function AiReview({
           }}
           onSend={() => void send()}
           onCancelRequest={() => void cancelRequest()}
-          onClose={() => setPhase("idle")}
+          onClose={() => {
+            // 正在重算的那次预览作废：不然它回来又把界面拉回预览页。
+            previewToken.current += 1;
+            setBusy(false);
+            setPhase("idle");
+          }}
         />
       ) : null}
 
@@ -315,7 +347,7 @@ export function AiReview({
       ) : null}
 
       {truncated && phase === "review" ? (
-        <p className="muted">申请太多，只列出了最近 {APPLICATION_LIMIT} 条。</p>
+        <p className="muted">申请太多，只列出了最近 {PAGE_SIZE * MAX_PAGES} 条。</p>
       ) : null}
       {notice ? <p className="note ok">{notice}</p> : null}
     </section>
