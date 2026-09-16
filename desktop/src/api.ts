@@ -319,7 +319,7 @@ export interface OutboundPreview {
   truncated: boolean;
   hasSubject: boolean;
   hasFrom: boolean;
-  candidates: Array<{ label: string; company: string; title: string }>;
+  candidates: Array<{ label: string; company: string; title: string; stage: string }>;
   bodyPreview: string;
   summary: string;
   /** 等这么久之后界面说「还在等」，再等这么久就算超时。 */
@@ -348,8 +348,10 @@ export interface SuggestionCandidate {
   company: string;
   title: string;
   stage: string;
-  /** 这条候选现在拿不到了（删掉了，或者读出错）。界面不许默认选中它。 */
+  /** 这条申请已经不在了。界面不许默认选中它，也不许选它。 */
   missing?: boolean;
+  /** 这一次没读出来，但它多半还在。不预选，但可以选。 */
+  unreadable?: boolean;
 }
 
 /** 一条待确认的建议。**全部是建议值**：确认之前，正式字段一个都没改。 */

@@ -12,7 +12,7 @@ const preview: OutboundPreview = {
   truncated: false,
   hasSubject: true,
   hasFrom: true,
-  candidates: [{ label: "c1", company: "合成科技", title: "后端实习" }],
+  candidates: [{ label: "c1", company: "合成科技", title: "后端实习", stage: "submitted" }],
   bodyPreview: "您好，时间定在下周二上午十点。",
   summary: "发往 api.example.test · 模型 fake-model · 正文 120 字 · 候选 1 条",
   slowHintSeconds: 15,
@@ -258,7 +258,7 @@ test("预览还在重算时，改不了候选也发不出去——看到的和�
   await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", true));
   expect(screen.getByLabelText(/合成科技/)).toHaveProperty("disabled", true);
 
-  release!({ ...preview, candidates: [{ label: "c1", company: "别家公司", title: "前端实习" }] });
+  release!({ ...preview, candidates: [{ label: "c1", company: "别家公司", title: "前端实习", stage: "submitted" }] });
   await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toHaveProperty("disabled", false));
 });
 
@@ -301,4 +301,39 @@ test("预览还在重算时点「先不发」，晚到的结果不会把人拉�
   release!(preview);
   await waitFor(() => expect(screen.getByRole("button", { name: "AI 整理" })).toBeTruthy());
   expect(screen.queryByRole("button", { name: "发送" })).toBeNull();
+});
+
+test("预览里写明候选连当前阶段一起发出去", async () => {
+  const user = userEvent.setup();
+  mount(base);
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  expect(screen.getByText(/当前阶段：已投递/)).toBeTruthy();
+});
+
+test("等不下去时有一条纯界面的退路，并顺手取消请求", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return new Promise(() => {});
+    if (command === "cancel_analysis_cmd") return new Promise(() => {});
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByRole("button", { name: "取消" });
+
+  await user.click(screen.getByRole("button", { name: "不等了，关掉" }));
+
+  expect(await screen.findByRole("button", { name: "AI 整理" })).toBeTruthy();
+  expect(calls.some((call) => call.command === "cancel_analysis_cmd")).toBe(true);
+});
+
+test("拒绝过的建议还能再打开——点错了不该只能再花一次钱", async () => {
+  const user = userEvent.setup();
+  mount((command, args) =>
+    command === "list_suggestions_cmd" ? [{ ...suggestion, status: "rejected" }] : base(command, args),
+  );
+  await user.click(await screen.findByRole("button", { name: "打开拒绝过的建议" }));
+  expect(await screen.findByRole("button", { name: "确认" })).toBeTruthy();
 });

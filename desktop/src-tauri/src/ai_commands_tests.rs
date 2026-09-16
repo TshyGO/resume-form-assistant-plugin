@@ -267,6 +267,18 @@ fn an_empty_hand_picked_list_is_refused_instead_of_sending_a_request() {
 }
 
 #[test]
+fn hand_picking_more_than_the_cap_is_refused() {
+    let (dir, store) = archive();
+    let ids: Vec<String> = (0..9).map(|n| app(&store, &format!("公司 {n}"))).collect();
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("公司 0"), None);
+
+    let err = ai_commands::gather(&store, store.archive_dir(), &evidence, Some(&ids)).unwrap_err();
+
+    assert_eq!(err.code, "VALIDATION");
+    assert!(err.message.contains("8"), "{}", err.message);
+}
+
+#[test]
 fn a_pdf_is_refused_before_anything_leaves_the_machine() {
     let (dir, store) = archive();
     let id = app(&store, "合成科技");
@@ -891,6 +903,76 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
         store.get_evidence(&evidence).unwrap().unwrap().reply_class,
         Some(archive_store::ReplyClass::InterviewInvite)
     );
+}
+
+/// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
+/// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
+#[test]
+fn the_json_the_panel_reads_keeps_its_key_names() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+
+    let view = serde_json::to_value(
+        ai_commands::list_suggestions(&store, &evidence)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == suggestion.id)
+            .unwrap(),
+    )
+    .unwrap();
+    for key in [
+        "id",
+        "evidenceId",
+        "status",
+        "candidates",
+        "stage",
+        "round",
+        "replyClass",
+        "sendMode",
+        "todos",
+        "excerpts",
+        "uncertainties",
+        "modelLabel",
+        "promptScope",
+        "createdAt",
+    ] {
+        assert!(view.get(key).is_some(), "SuggestionView 少了 {key}：{view}");
+    }
+    let candidate = &view["candidates"][0];
+    for key in ["id", "company", "title", "stage"] {
+        assert!(candidate.get(key).is_some(), "候选少了 {key}");
+    }
+    let todo = &view["todos"][0];
+    for key in ["title", "duePrecision", "dueAtUtc", "timeZone", "interviewRound"] {
+        assert!(todo.get(key).is_some(), "建议待办少了 {key}");
+    }
+
+    let gathered = ai_commands::gather(&store, store.archive_dir(), &evidence, None).unwrap();
+    let preview = serde_json::to_value(ai_commands::preview(
+        &gathered,
+        "https://api.example.test/v1/chat/completions",
+        "fake-model",
+    ))
+    .unwrap();
+    for key in [
+        "host",
+        "model",
+        "bodyChars",
+        "truncated",
+        "hasSubject",
+        "hasFrom",
+        "candidates",
+        "bodyPreview",
+        "summary",
+        "slowHintSeconds",
+        "timeoutSeconds",
+    ] {
+        assert!(preview.get(key).is_some(), "OutboundPreview 少了 {key}：{preview}");
+    }
+    // 请求体里带着「当前阶段」，预览就得有这个字段，否则预览是在少报。
+    assert_eq!(preview["candidates"][0]["stage"], "saved");
 }
 
 /// 前端 `confirmArgs()` 真正发出来的那个对象。两边的键名对不上就得在这里先红，

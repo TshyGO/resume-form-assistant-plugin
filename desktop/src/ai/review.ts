@@ -13,8 +13,28 @@ export type Phase = "idle" | "preview" | "sending" | "review" | "failed";
  */
 export const MAX_CANDIDATES = 8;
 
-const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(:\d{2})?([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** 2026-02-31 这种日历上不存在的日子，正则拦不住，得真的算一遍。 */
+function realDate(year: string, month: string, day: string): boolean {
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return (
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() === Number(month) - 1 &&
+    date.getUTCDate() === Number(day)
+  );
+}
+
+function validInstant(value: string): boolean {
+  const match = RFC3339.exec(value);
+  return !!match && realDate(match[1]!, match[2]!, match[3]!) && !Number.isNaN(Date.parse(value));
+}
+
+function validDate(value: string): boolean {
+  const match = DATE_ONLY.exec(value);
+  return !!match && realDate(match[1]!, match[2]!, match[3]!);
+}
 
 /** 轮次只能是 1–99 的整数。`Number("2.5")` 和 `Number("1e3")` 都得拦住。 */
 export function validRound(round: number | null): boolean {
@@ -61,8 +81,9 @@ function todoDraft(todo: SuggestedTodoView): TodoDraft {
 export function initialDraft(suggestion: AiSuggestion): Draft {
   const only = suggestion.candidates.length === 1 ? suggestion.candidates[0]! : null;
   return {
-    // 唯一那条候选已经不在了就不替用户填：填了他还得先发现填错了。
-    applicationId: only && !only.missing ? only.id : "",
+    // 唯一那条候选已经不在了、或者这次没读出来，就不替用户填：
+    // 填了他还得先发现填错了。
+    applicationId: only && !only.missing && !only.unreadable ? only.id : "",
     replyClass: suggestion.replyClass,
     sendMode: suggestion.sendMode,
     stage: suggestion.stage ?? "",
@@ -131,16 +152,16 @@ export function confirmBlocker(draft: Draft, suggestion: AiSuggestion): string |
       if (!todo.dueAtUtc.trim()) {
         return "有一条待办说是精确到时刻，却没有时刻。";
       }
-      if (!RFC3339.test(todo.dueAtUtc.trim())) {
-        return "待办的时刻要写成 2026-09-22T10:00:00+08:00 这样的格式。";
+      if (!validInstant(todo.dueAtUtc.trim())) {
+        return "待办的时刻要写成 2026-09-22T10:00:00+08:00 这样的格式（秒不能省，日期要真实存在）。";
       }
     }
     if (todo.duePrecision === "date") {
       if (!todo.dueDate.trim()) {
         return "有一条待办说是按日期到期，却没有日期。";
       }
-      if (!DATE_ONLY.test(todo.dueDate.trim())) {
-        return "待办的日期要写成 2026-09-22 这样的格式。";
+      if (!validDate(todo.dueDate.trim())) {
+        return "待办的日期要写成 2026-09-22 这样的格式，而且得是真实存在的日子。";
       }
     }
   }

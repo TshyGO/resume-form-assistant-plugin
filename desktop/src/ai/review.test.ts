@@ -203,6 +203,10 @@ test("待办的时刻和日期要能被后端认，格式不对当场说", () =>
     todos: [{ ...draft.todos[0]!, ...patch }],
   });
   assert.match(confirmBlocker(withTodo({ dueAtUtc: "下周二" }), item) ?? "", /时刻要写成/);
+  // 秒不能省，日历上不存在的日子也得拦住。
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00Z" }), item) ?? "", /时刻要写成/);
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-02-31T10:00:00Z" }), item) ?? "", /时刻要写成/);
+  assert.equal(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+08:00" }), item), null);
   assert.match(
     confirmBlocker(withTodo({ duePrecision: "date", dueDate: "" }), item) ?? "",
     /没有日期/,
@@ -210,6 +214,10 @@ test("待办的时刻和日期要能被后端认，格式不对当场说", () =>
   assert.match(
     confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2026/09/22" }), item) ?? "",
     /日期要写成/,
+  );
+  assert.match(
+    confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2026-02-31" }), item) ?? "",
+    /真实存在/,
   );
   assert.equal(confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2026-09-22" }), item), null);
   assert.equal(confirmBlocker(withTodo({ duePrecision: "none" }), item), null);
@@ -232,6 +240,17 @@ test("换成模型没指名的申请，也算改过", () => {
   const draft = initialDraft(item);
   assert.equal(isModified(draft, item), false);
   assert.equal(isModified({ ...draft, applicationId: "app-z" }, item), true);
+});
+
+test("候选这一次没读出来：不替用户填，但也不拦着他选", () => {
+  const flaky = suggestion({
+    candidates: [
+      { id: "app-a", company: "（这条申请暂时读不出来）", title: "", stage: "", unreadable: true },
+    ],
+  });
+  const draft = initialDraft(flaky);
+  assert.equal(draft.applicationId, "");
+  assert.equal(confirmBlocker({ ...draft, applicationId: "app-a" }, flaky), null);
 });
 
 test("唯一候选已经不在了就不替用户填，也不让确认", () => {

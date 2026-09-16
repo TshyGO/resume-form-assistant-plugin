@@ -162,6 +162,9 @@ export function mountInbox(
   }
 
   function renderPreview(data: EvidencePreview) {
+    // 谁调 renderPreview 都先把上一块 React 卸掉：漏掉这一步，旧面板的清理
+    // （取消进行中的请求）就永远不会跑。
+    clearAiPanel();
     const item = data;
     const duplicate = duplicateNote(item);
     // 正文经过转义写入：邮件里的 <script> 只会作为字面文本出现。

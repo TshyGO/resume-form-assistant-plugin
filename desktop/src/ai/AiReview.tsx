@@ -92,6 +92,8 @@ export function AiReview({
     setFailure(null);
     setNotice(null);
     setSelectedIds(null);
+    setSaved([]);
+    setBody("");
     if (!invoke) return;
     invoke<AiSuggestion[]>("list_suggestions_cmd", { evidenceId })
       // 归并而不是覆盖：这个请求慢的时候，用户可能已经发完一次分析了，
@@ -119,7 +121,8 @@ export function AiReview({
     () => () => {
       const id = requestId.current;
       if (id) {
-        void invokeRef.current?.<boolean>("cancel_analysis_cmd", { requestId: id });
+        // 取消本身失败也无所谓：面板已经没了，这里只是尽力而为。
+        invokeRef.current?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
       }
     },
     [],
@@ -264,7 +267,10 @@ export function AiReview({
     });
   };
 
-  const pending = saved.filter((row) => row.status === "pending" || row.status === "deferred");
+  // 拒绝过的也留个入口：点错了不该只能重新分析一次（那要再付一次钱）。
+  const reopenable = saved.filter((row) =>
+    ["pending", "deferred", "rejected"].includes(row.status),
+  );
 
   return (
     <section className="stack ai-panel">
@@ -274,10 +280,16 @@ export function AiReview({
             <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={!invoke || busy}>
               AI 整理
             </button>
-            {pending.map((row) => (
+            {reopenable.map((row) => (
               <button key={row.id} type="button" onClick={() => void openReview(row)} disabled={busy}>
-                {row.status === "deferred" ? "打开暂存的建议" : "打开待确认的建议"}
-                {pending.length > 1 ? `（${row.modelLabel ?? "模型未知"} · ${row.createdAt.slice(0, 16).replace("T", " ")}）` : ""}
+                {row.status === "deferred"
+                  ? "打开暂存的建议"
+                  : row.status === "rejected"
+                    ? "打开拒绝过的建议"
+                    : "打开待确认的建议"}
+                {reopenable.length > 1
+                  ? `（${row.modelLabel ?? "模型未知"} · ${row.createdAt.slice(0, 16).replace("T", " ")} UTC）`
+                  : ""}
               </button>
             ))}
           </div>
@@ -293,6 +305,7 @@ export function AiReview({
           applications={applications}
           selectedIds={selectedIds}
           sending={phase === "sending"}
+          truncated={truncated}
           elapsedSeconds={elapsed}
           busy={busy}
           onSelectionChange={(ids) => {
@@ -303,7 +316,13 @@ export function AiReview({
           onCancelRequest={() => void cancelRequest()}
           onClose={() => {
             // 正在重算的那次预览作废：不然它回来又把界面拉回预览页。
+            // 等待中点「不等了」也走这里：顺手把请求取消掉。
             previewToken.current += 1;
+            const id = requestId.current;
+            if (id) {
+              void invoke?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
+              requestId.current = null;
+            }
             setBusy(false);
             setPhase("idle");
           }}

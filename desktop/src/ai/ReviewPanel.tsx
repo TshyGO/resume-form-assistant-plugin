@@ -152,6 +152,11 @@ export function ReviewPanel({
       missing: false,
     }));
   const choices = [...suggestion.candidates, ...extra];
+  // 建议里的阶段理论上只会是上面那五个，真出了别的也得显示出来，
+  // 不能让下拉框空着让人以为「不记阶段」。
+  const stageOptions = STAGE_OPTIONS.some((option) => option.value === draft.stage)
+    ? STAGE_OPTIONS
+    : [...STAGE_OPTIONS, { value: draft.stage, label: `${draft.stage}（模型给的）` }];
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
 
   return (
@@ -224,7 +229,7 @@ export function ReviewPanel({
             value={draft.stage}
             onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
           >
-            {STAGE_OPTIONS.map((option) => (
+            {stageOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>

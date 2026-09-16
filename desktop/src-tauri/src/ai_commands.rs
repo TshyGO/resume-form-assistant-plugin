@@ -126,6 +126,7 @@ pub struct PreviewCandidate {
     pub label: String,
     pub company: String,
     pub title: String,
+    pub stage: String,
 }
 
 fn invalid(code: &str, message: impl Into<String>) -> CommandError {
@@ -323,6 +324,7 @@ pub fn preview(gathered: &Gathered, api_url: &str, model: &str) -> OutboundPrevi
                 label: candidate.label,
                 company: candidate.company,
                 title: candidate.title,
+                stage: candidate.stage,
             })
             .collect(),
     }
@@ -683,9 +685,12 @@ pub struct SuggestionCandidate {
     pub company: String,
     pub title: String,
     pub stage: String,
-    /// 这条候选现在拿不到了（删掉了，或者读出错）。界面不许默认选中它。
+    /// 这条申请已经不在了。界面不许默认选中它，也不许选它。
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub missing: bool,
+    /// 这一次没读出来，但它多半还在。不预选，但可以选。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -730,9 +735,20 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
 
 /// 一条建议的界面形状。候选查不到（比如已经被删了）就只留 id，不让整个面板打不开。
 pub fn view(store: &ArchiveStore, suggestion: AiSuggestion) -> SuggestionView {
-    let candidates = suggestion
+    let mut seen: Vec<&str> = Vec::new();
+    let unique: Vec<&String> = suggestion
         .candidate_application_ids
         .iter()
+        .filter(|id| {
+            let fresh = !seen.contains(&id.as_str());
+            if fresh {
+                seen.push(id.as_str());
+            }
+            fresh
+        })
+        .collect();
+    let candidates = unique
+        .into_iter()
         .map(|id| match store.get_application(id) {
             Ok(Some(detail)) => SuggestionCandidate {
                 id: detail.summary.id,
@@ -740,6 +756,7 @@ pub fn view(store: &ArchiveStore, suggestion: AiSuggestion) -> SuggestionView {
                 title: detail.summary.title,
                 stage: detail.summary.current_stage.as_str().to_string(),
                 missing: false,
+                unreadable: false,
             },
             // 删掉了和读不出来要分开说：后者多半是一时的，说成「已经不在了」是误导。
             Ok(None) => SuggestionCandidate {
@@ -748,13 +765,16 @@ pub fn view(store: &ArchiveStore, suggestion: AiSuggestion) -> SuggestionView {
                 title: String::new(),
                 stage: String::new(),
                 missing: true,
+                unreadable: false,
             },
+            // 读不出来多半是一时的：不预选，但也不禁用——申请很可能还在。
             Err(_) => SuggestionCandidate {
                 id: id.clone(),
                 company: "（这条申请暂时读不出来）".into(),
                 title: String::new(),
                 stage: String::new(),
-                missing: true,
+                missing: false,
+                unreadable: true,
             },
         })
         .collect();

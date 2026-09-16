@@ -1,4 +1,5 @@
 import type { ApplicationSummary, OutboundPreview } from "../api.ts";
+import { stageLabel } from "../applications.ts";
 import { MAX_CANDIDATES, waitingText } from "./review.ts";
 
 /**
@@ -13,6 +14,7 @@ export function AnalyzeDialog({
   selectedIds,
   sending,
   busy,
+  truncated,
   elapsedSeconds,
   onSelectionChange,
   onSend,
@@ -26,6 +28,8 @@ export function AnalyzeDialog({
   sending: boolean;
   /** 预览正在重算。这期间不让改候选也不让发，免得发的和看到的不是一回事。 */
   busy: boolean;
+  /** 申请太多没列全，手选清单是不全的，得说一声。 */
+  truncated: boolean;
   elapsedSeconds: number;
   onSelectionChange: (ids: string[] | null) => void;
   onSend: () => void;
@@ -60,6 +64,7 @@ export function AnalyzeDialog({
         {preview.candidates.map((candidate, index) => (
           <li key={index}>
             {candidate.company} · {candidate.title}
+            {candidate.stage ? `（当前阶段：${stageLabel(candidate.stage)}）` : ""}
           </li>
         ))}
       </ul>
@@ -71,6 +76,7 @@ export function AnalyzeDialog({
       <details>
         <summary>自己选候选</summary>
         <p className="muted">不选就由桌面拿公司名去认。选了就只发选中的这几条。</p>
+        {truncated ? <p className="muted">申请太多，这里只列出了最近的一部分。</p> : null}
         <ul className="ai-candidates">
           {applications.map((application) => (
             <li key={application.id}>
@@ -100,9 +106,16 @@ export function AnalyzeDialog({
       {sending ? (
         <div className="stack">
           <p className="note">{waitingText(elapsedSeconds, preview.slowHintSeconds)}</p>
-          <button type="button" onClick={onCancelRequest}>
-            取消
-          </button>
+          <div className="row">
+            <button type="button" onClick={onCancelRequest}>
+              取消
+            </button>
+            {/* 取消命令本身也可能失败或者迟迟不返回。留一条纯界面的退路，
+                不然这块面板会一直停在等待页。 */}
+            <button type="button" onClick={onClose}>
+              不等了，关掉
+            </button>
+          </div>
           <p className="muted">取消不保证对方停止计算或停止计费。</p>
         </div>
       ) : (
