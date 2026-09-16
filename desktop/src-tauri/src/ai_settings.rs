@@ -66,28 +66,29 @@ pub fn credential_in_url(url: &str) -> Option<String> {
     if authority.contains('@') {
         return Some("接口地址里带了用户名或密码。Key 请填在「API Key」里，别放进地址。".into());
     }
-    // 查询串和 fragment 都看：`#api-key=…` 一样会被中转站的日志记下来。
-    let tail = url
-        .split_once('?')
-        .map(|(_, rest)| rest)
-        .or_else(|| url.split_once('#').map(|(_, rest)| rest))
-        .unwrap_or("");
-    let hit = tail.split(['&', ';']).find_map(|pair| {
+    // 查询串会随每次请求发出去；fragment 不会上线，但它照样落进 `ai-settings.json`、
+    // 跟着截图和粘贴到处走，而用户多半以为自己在正确地配 Key。两个都拦。
+    let query = url.split_once('?').map(|(_, rest)| rest).unwrap_or("");
+    let fragment = url.split_once('#').map(|(_, rest)| rest).unwrap_or("");
+    let hit = query
+        .split(['&', ';'])
+        .chain(fragment.split(['&', ';']))
+        .find_map(|pair| {
         let name = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
         // 按分段比，不按子串比：`api-key` / `api_key` / `x-token` 要拦住,
         // `monkey` / `keynote` / `api-version` 不能误伤。
-        let segments = name.split(|c: char| !c.is_ascii_alphanumeric());
-        segments
-            .into_iter()
-            .any(|segment| {
-                matches!(
-                    segment,
-                    "key" | "apikey" | "token" | "secret" | "password" | "auth" | "credential"
-                        | "sig" | "sign" | "signature"
-                )
-            })
-            .then(|| name)
-    });
+            let segments = name.split(|c: char| !c.is_ascii_alphanumeric());
+            segments
+                .into_iter()
+                .any(|segment| {
+                    matches!(
+                        segment,
+                        "key" | "apikey" | "token" | "secret" | "password" | "auth" | "credential"
+                            | "sig" | "sign" | "signature"
+                    )
+                })
+                .then_some(name)
+        });
     if let Some(name) = hit {
         return Some(format!(
             "接口地址里的 `{name}` 看着像一把 Key。Key 请填在「API Key」里，别放进地址。"

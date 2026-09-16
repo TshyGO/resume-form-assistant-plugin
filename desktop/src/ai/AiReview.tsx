@@ -85,6 +85,8 @@ export function AiReview({
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<AiSuggestion[]>([]);
+  /** 这条证据的历史建议还没读回来。读回来之前不知道它确认过没有，先别让发。 */
+  const [loadingSaved, setLoadingSaved] = useState(true);
   const requestId = useRef<string | null>(null);
   /**
    * 最近一次发出去、还没看到它结束的请求。AI_BUSY 时要靠它给出取消入口，
@@ -121,7 +123,11 @@ export function AiReview({
     setSelectedIds(null);
     setSaved([]);
     setBody("");
-    if (!invoke) return;
+    setLoadingSaved(true);
+    if (!invoke) {
+      setLoadingSaved(false);
+      return;
+    }
     invoke<AiSuggestion[]>("list_suggestions_cmd", { evidenceId })
       // 归并而不是覆盖：这个请求慢的时候，用户可能已经发完一次分析了，
       // 后到的旧列表不该把新建议冲掉。
@@ -133,7 +139,8 @@ export function AiReview({
           return [...merged.values()];
         }),
       )
-      .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }));
+      .catch((error: unknown) => setFailure({ ...describeFailure(error), retry: "none" }))
+      .finally(() => setLoadingSaved(false));
     // 申请清单两处都要用：预览里改候选，审核里模型没指认时自己挑。
   }, [invoke, evidenceId]);
 
@@ -353,6 +360,7 @@ export function AiReview({
     <section className="stack ai-panel">
       {phase === "idle" ? (
         <div className="stack">
+          {loadingSaved ? <p className="muted">正在看这条证据以前有没有建议…</p> : null}
           {alreadyConfirmed ? (
             <p className="note warn">
               这条通知已经确认过了。再分析一次也不能再确认第二遍（要改结论就直接改申请里的记录），
@@ -360,7 +368,11 @@ export function AiReview({
             </p>
           ) : null}
           <div className="row">
-            <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={!invoke || busy}>
+            <button
+              type="button"
+              onClick={() => void loadPreview(selectedIds)}
+              disabled={!invoke || busy || loadingSaved}
+            >
               AI 整理
             </button>
             {reopenable.map((row) => (
@@ -434,7 +446,9 @@ export function AiReview({
           <p className="muted">{failure.next}</p>
           {/* 「自己选几条候选」这句话得配一个真能选的地方，否则是死胡同：
               这条证据还没关联申请、桌面又认不出来时，用户在面板里无路可走。 */}
-          {failure.code === "AI_NEEDS_CANDIDATES" ? (
+          {/* VALIDATION 多半就是候选选多了或者选到了已经没有的申请：同样得让他改选，
+              否则「关掉 → 再来一次」用的还是那份选法，必然再失败一次。 */}
+          {["AI_NEEDS_CANDIDATES", "VALIDATION"].includes(failure.code) ? (
             <div className="stack">
               <ul className="ai-candidates">
                 {applications.map((application) => (
@@ -478,6 +492,11 @@ export function AiReview({
           ) : null}
           {/* 上一次请求还在跑（多半是「不等了」之后取消没生效）。错误文案让用户
               「先取消正在跑的那一次」，那就得有地方取消。 */}
+          {failure.code === "AI_BUSY" && !cancellableId ? (
+            <p className="muted">
+              正在跑的那一次不是这个窗口发起的，这里取消不了。等它结束，或者到发起它的地方取消。
+            </p>
+          ) : null}
           {failure.code === "AI_BUSY" && cancellableId ? (
             <button
               type="button"

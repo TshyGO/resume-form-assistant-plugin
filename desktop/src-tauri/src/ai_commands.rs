@@ -608,6 +608,26 @@ pub fn confirm(
         None => None,
     };
 
+    // 存储层也拦这一条（那是最后一道），但错误码得说清楚是哪种冲突：`CONFLICT`
+    // 是共用通道，重复确认同一条建议走的也是它。
+    if store
+        .list_suggestions(Some(&suggestion.evidence_id), None)
+        .map_err(CommandError::from)?
+        .iter()
+        .any(|other| {
+            other.id != suggestion.id
+                && matches!(
+                    other.status,
+                    SuggestionStatus::Confirmed | SuggestionStatus::ModifiedConfirmed
+                )
+        })
+    {
+        return Err(invalid(
+            "AI_EVIDENCE_ALREADY_CONFIRMED",
+            "这条通知已经按另一条建议确认过了，不能再确认一次。",
+        ));
+    }
+
     let outcome = store
         .confirm_suggestion(ConfirmSuggestionInput {
             suggestion_id: args.suggestion_id.clone(),

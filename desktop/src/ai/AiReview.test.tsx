@@ -212,7 +212,10 @@ test("确认失败不会把用户踢出审核，也不给「再试一次」（�
   mount((command, args) => {
     if (command === "analyze_evidence_cmd") return suggestion;
     if (command === "confirm_suggestion_cmd") {
-      throw { code: "CONFLICT", message: "这条建议已经按别的决定确认过了。" };
+      throw {
+        code: "AI_EVIDENCE_ALREADY_CONFIRMED",
+        message: "这条通知已经按另一条建议确认过了，不能再确认一次。",
+      };
     }
     return base(command, args);
   });
@@ -220,7 +223,7 @@ test("确认失败不会把用户踢出审核，也不给「再试一次」（�
   await screen.findByText("api.example.test");
   await user.click(screen.getByRole("button", { name: "发送" }));
   await user.click(await screen.findByRole("button", { name: "确认" }));
-  await screen.findByText(/不能再确认第二次/);
+  await screen.findByText(/不能再确认一次/);
   expect(screen.queryByRole("button", { name: "再试一次" })).toBeNull();
   // 草稿还在：四个按钮仍然在页面上。
   expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();

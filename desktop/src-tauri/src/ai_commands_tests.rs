@@ -857,7 +857,7 @@ fn a_second_suggestion_for_the_same_evidence_cannot_be_confirmed_too() {
     )
     .unwrap_err();
 
-    assert_eq!(err.code, "CONFLICT");
+    assert_eq!(err.code, "AI_EVIDENCE_ALREADY_CONFIRMED");
     // 第一次确认写下的东西一条不多、一条不少。
     assert_eq!(store.list_todos(Some(&a), None, None, 50, 0).unwrap().len(), 1);
 }
@@ -1084,11 +1084,20 @@ fn the_preview_matches_the_request_field_by_field() {
     }
     assert_eq!(preview.max_candidates, ai_extract::MAX_CANDIDATES);
 
-    // 预览里出现的每条候选，请求体里都得找得着；反过来也不能多。
-    let body = built.body.to_string();
+    // 预览里写的每条候选，请求体里都得有同一行：公司、岗位、阶段一字不差。
+    // 按整行比，不按子串比——提示词本来就写着阶段名，子串断言会永远绿。
+    let user_message = built.body["messages"]
+        .as_array()
+        .and_then(|items| items.last())
+        .and_then(|item| item["content"].as_str())
+        .unwrap()
+        .to_string();
     for candidate in &preview.candidates {
-        assert!(body.contains(&candidate.company), "请求体里没有 {}", candidate.company);
-        assert!(body.contains(&candidate.stage), "请求体里没有阶段 {}", candidate.stage);
+        let line = format!(
+            "{}: 公司「{}」 岗位「{}」 当前阶段 {}",
+            candidate.label, candidate.company, candidate.title, candidate.stage
+        );
+        assert!(user_message.contains(&line), "请求体里没有这一行：{line}");
     }
 }
 

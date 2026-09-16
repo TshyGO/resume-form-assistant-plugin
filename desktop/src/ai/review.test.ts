@@ -292,10 +292,16 @@ test("失败对象自带错误码和重试语义，调用方不必自己补", ()
   assert.equal(needs.retry, "none");
   assert.match(needs.next, /选几条候选/);
 
-  // 同一封通知确认过第二次会 CONFLICT，文案要说清楚该去哪儿改。
-  const conflict = describeFailure({ code: "CONFLICT", message: "已经确认过了。" });
-  assert.equal(conflict.retryable, false);
-  assert.match(conflict.next, /改申请里的记录/);
+  // 同一封通知确认第二次有自己的错误码，文案要说清楚该去哪儿改。
+  const already = describeFailure({
+    code: "AI_EVIDENCE_ALREADY_CONFIRMED",
+    message: "这条通知已经按另一条建议确认过了。",
+  });
+  assert.equal(already.retryable, false);
+  assert.match(already.next, /改申请里的记录/);
+  // CONFLICT 是共用通道，透传后端那句话，不替它编解释。
+  const conflict = describeFailure({ code: "CONFLICT", message: "确认的决定和记录不一致。" });
+  assert.match(conflict.text, /决定和记录不一致/);
 });
 
 test("时区、日期、时刻的边界：闰年、无冒号偏移、Etc/GMT", () => {
@@ -314,8 +320,9 @@ test("时区、日期、时刻的边界：闰年、无冒号偏移、Etc/GMT", (
     confirmBlocker(withTodo({ duePrecision: "date", dueDate: "2027-02-29" }), item) ?? "",
     /真实存在/,
   );
-  // 偏移可以不带冒号。
-  assert.equal(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+0800" }), item), null);
+  // 偏移只收 Z 或 ±HH:MM：不带冒号的各家 WebView 解析不一致，存储层也不收。
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+0800" }), item) ?? "", /时刻要写成/);
+  assert.equal(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+08:00" }), item), null);
   assert.equal(confirmBlocker(withTodo({ timeZone: "Etc/GMT+8" }), item), null);
 });
 

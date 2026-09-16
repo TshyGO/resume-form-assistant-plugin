@@ -68,7 +68,20 @@ test("地址里夹带凭据要当场说：Key 只该在 Authorization 头里", (
 
   const query = describeUrlSecrets("https://relay.example/v1/chat/completions?api-key=sk-123");
   assert.equal(query?.tone, "warn");
-  assert.match(query!.text, /查询串/);
+  assert.match(query!.text, /api-key/);
+
+  // fragment 里的也看，口径和命令层的 credential_in_url 一致。
+  assert.equal(
+    describeUrlSecrets("https://relay.example/v1?api-version=1#api-key=sk-1")?.tone,
+    "warn",
+  );
+  // 按分段比，不按子串比：这几个不该被当成 Key。
+  for (const fine of [
+    "https://relay.example/v1/chat/completions?monkey=1",
+    "https://relay.example/v1/chat/completions?keynote=x",
+  ]) {
+    assert.equal(describeUrlSecrets(fine), null, fine);
+  }
 
   // 正常的版本参数不该被当成 Key。
   assert.equal(describeUrlSecrets("https://relay.example/v1/chat/completions?api-version=2024-10-21"), null);

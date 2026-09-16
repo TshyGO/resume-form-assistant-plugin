@@ -7,8 +7,10 @@ import type { AiSuggestion, ReplyClass, SendMode, Stage, SuggestedTodoView } fro
 /** 面板当前在哪一步。 */
 export type Phase = "idle" | "preview" | "sending" | "review" | "failed";
 
+// 偏移只收 `Z` 或 `±HH:MM`：不带冒号的 `+0800` 各家 WebView 解析得不一样，
+// 存储层的 RFC3339 解析也不收，放过去只会在确认事务里才炸。
 const RFC3339 =
-  /^(\d{4})-(\d{2})-(\d{2})[Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** 2026-02-31 这种日历上不存在的日子，正则拦不住，得真的算一遍。 */
@@ -214,7 +216,8 @@ export function confirmArgs(draft: Draft, suggestion: AiSuggestion) {
 /** 正文按原文依据切段，命中的段落 `hit` 为真，组件拿它去高亮。 */
 export function highlight(body: string, excerpt: string): Array<{ text: string; hit: boolean }> {
   const needle = excerpt.trim();
-  if (!needle || !body.includes(needle)) {
+  // 一两个字的引用满篇都是，高亮出来只会让人更找不到重点，也会切出成百上千段。
+  if (needle.length < 3 || !body.includes(needle)) {
     return [{ text: body, hit: false }];
   }
   const parts: Array<{ text: string; hit: boolean }> = [];
@@ -311,12 +314,16 @@ export function describeFailure(error: unknown): Failure {
       return failure(message, `可以再试一次；老是这样就换一个模型。${MANUAL}`, true);
     case "AI_NEEDS_DISAMBIGUATION":
       return failure(message, `在候选里选一条再确认。${MANUAL}`, false);
-    case "CONFLICT":
+    case "AI_EVIDENCE_ALREADY_CONFIRMED":
       return failure(
-        "这条通知已经确认过了，不能再确认第二次。",
+        message,
         `要改结论就直接改申请里的记录：改阶段、改待办，或者把证据重新关联到别的申请。${MANUAL}`,
         false,
       );
+    // CONFLICT 是共用通道（重复确认同一条建议、状态已是终态……），透传后端那句话，
+    // 别替它编一个可能不对的解释。
+    case "CONFLICT":
+      return failure(message, `换个决定或者刷新一下再看。${MANUAL}`, false);
     case "VALIDATION":
       return failure(message, `按提示改一下再试。${MANUAL}`, false);
     case "AI_URL_HAS_CREDENTIAL":

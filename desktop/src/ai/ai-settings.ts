@@ -59,11 +59,29 @@ export function describeUrlSecrets(apiUrl: string): Message | null {
       text: "接口地址里带了用户名或密码。它会随每次请求一起发出去，也会进中转站的日志。Key 请填在下面的 API Key 里。",
     };
   }
-  const query = value.split("?")[1] ?? "";
-  if (/(^|&)[^=&]*(key|token|secret|password|apikey)[^=&]*=/i.test(query)) {
+  // 判定规则和命令层的 `ai_settings::credential_in_url` 保持一致：按分段比，
+  // 查询串和 fragment 都看。两边口径不一样，用户会遇到「这里提示、那里能存」。
+  const SECRETS = [
+    "key",
+    "apikey",
+    "token",
+    "secret",
+    "password",
+    "auth",
+    "credential",
+    "sig",
+    "sign",
+    "signature",
+  ];
+  const tail = [value.split("?")[1] ?? "", value.split("#")[1] ?? ""].join("&");
+  const suspicious = tail
+    .split(/[&;]/)
+    .map((pair) => (pair.split("=")[0] ?? "").toLowerCase())
+    .find((name) => name.split(/[^a-z0-9]/).some((segment) => SECRETS.includes(segment)));
+  if (suspicious) {
     return {
       tone: "warn",
-      text: "接口地址的查询串里看着像有一把 Key。它会随每次请求出现在 URL 里，通常比放在 Authorization 头更容易被日志记下来。",
+      text: `接口地址里的 ${suspicious} 看着像一把 Key。保存时会被拒；Key 请填在下面的「API Key」里。`,
     };
   }
   return null;
