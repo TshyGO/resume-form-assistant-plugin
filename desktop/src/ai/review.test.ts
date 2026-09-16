@@ -224,6 +224,9 @@ test("待办的时刻和日期要能被后端认，格式不对当场说", () =>
   // 秒不能省，日历上不存在的日子也得拦住。
   assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00Z" }), item) ?? "", /时刻要写成/);
   assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-02-31T10:00:00Z" }), item) ?? "", /时刻要写成/);
+  // 24:00 在 JS 里会被当成次日零点，但存储层的 RFC3339 解析不认。
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T24:00:00Z" }), item) ?? "", /时刻要写成/);
+  assert.match(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:61:00Z" }), item) ?? "", /时刻要写成/);
   assert.equal(confirmBlocker(withTodo({ dueAtUtc: "2026-09-22T10:00:00+08:00" }), item), null);
   assert.match(
     confirmBlocker(withTodo({ duePrecision: "date", dueDate: "" }), item) ?? "",

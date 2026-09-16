@@ -100,6 +100,21 @@ function TodoRow({
           </label>
         ) : null}
         <label>
+          轮次
+          <input
+            aria-label={`待办 ${index + 1} 轮次`}
+            value={todo.interviewRound ?? ""}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              onChange({
+                ...todo,
+                interviewRound:
+                  event.target.value.trim() === "" || Number.isNaN(value) ? null : value,
+              });
+            }}
+          />
+        </label>
+        <label>
           时区
           <input
             aria-label={`待办 ${index + 1} 时区`}
@@ -122,6 +137,7 @@ export function ReviewPanel({
   body,
   draft,
   busy,
+  alreadyConfirmed,
   onDraftChange,
   onConfirm,
   onReject,
@@ -133,13 +149,17 @@ export function ReviewPanel({
   body: string;
   draft: Draft;
   busy: boolean;
+  /** 这条证据已经按另一条建议确认过了。再确认一次只会被命令层拒绝。 */
+  alreadyConfirmed: boolean;
   onDraftChange: (next: Draft) => void;
   onConfirm: () => void;
   onReject: () => void;
   onDefer: () => void;
 }) {
   const [showScope, setShowScope] = useState(false);
-  const blocker = confirmBlocker(draft, suggestion);
+  const blocker = alreadyConfirmed
+    ? "这条通知已经按另一条建议确认过了。要改结论就直接改申请里的记录。"
+    : confirmBlocker(draft, suggestion);
   // 候选之外永远还能挑别的申请：模型可能一条都没指认（它宁可空着也不猜）、
   // 可能指认错了、也可能指认的那条已经被删了。只给候选会让这些情况没法收场。
   const extra = applications

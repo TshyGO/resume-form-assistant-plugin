@@ -956,9 +956,6 @@ fn analysing_the_same_evidence_again_does_not_touch_the_confirmed_one() {
 
 /// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
 /// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
-
-/// 另一个方向：命令层发给界面的键名。`api.ts` 里的接口是手写的，这条测试钉住
-/// 它读的每一个键——谁删了 `rename_all` 或改了字段名，这里先红。
 #[test]
 fn the_json_the_panel_reads_keeps_its_key_names() {
     let (dir, store) = archive();
@@ -1020,15 +1017,13 @@ fn the_json_the_panel_reads_keeps_its_key_names() {
         "summary",
         "slowHintSeconds",
         "timeoutSeconds",
+        "maxCandidates",
     ] {
         assert!(preview.get(key).is_some(), "OutboundPreview 少了 {key}：{preview}");
     }
     // 请求体里带着「当前阶段」，预览就得有这个字段，否则预览是在少报。
     assert_eq!(preview["candidates"][0]["stage"], "saved");
 }
-
-/// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
-/// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。
 
 /// 预览必须和真会发出去的那份请求同源。这里拿同一份输入两边各算一次，逐项比。
 /// 预览少报一个字段，这块「发送前看清楚」的承诺就是假的。
@@ -1096,6 +1091,28 @@ fn the_prompt_scope_never_carries_the_endpoint() {
     assert!(!scope.contains("chat/completions"), "{scope}");
     assert!(!scope.contains("sk-secret"), "{scope}");
     assert!(!scope.contains('?'), "{scope}");
+}
+
+/// 确认过的建议不能再被改成拒绝或暂存。能改的话，「一条证据只认一次确认」就绕得过去：
+/// 确认 A → 把 A 改成 rejected → 再确认 B，同一封通知的事件和待办就写了两遍。
+#[test]
+fn a_confirmed_suggestion_cannot_be_reopened_by_rejecting_it() {
+    let (dir, store) = archive();
+    let a = app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+    let suggestion = pending(&store, &evidence, &[a.clone()], vec![interview_todo()]);
+    ai_commands::confirm(
+        &store,
+        &FakeScheduler::default(),
+        confirm_args(&suggestion.id, Some(&a)),
+        now(),
+    )
+    .unwrap();
+
+    for status in [SuggestionStatus::Rejected, SuggestionStatus::Deferred, SuggestionStatus::Pending] {
+        let err = ai_commands::set_status(&store, &suggestion.id, status).unwrap_err();
+        assert_eq!(err.code, "CONFLICT", "{status:?}");
+    }
 }
 
 /// 面板允许重新打开拒绝过的建议。存储层得真的认这条路，否则那个入口是死的。

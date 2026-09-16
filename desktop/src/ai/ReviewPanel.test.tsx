@@ -42,10 +42,12 @@ const body = "您好，时间定在下周二上午十点，地点待定。";
 function Host({
   suggestion,
   applications = [],
+  alreadyConfirmed = false,
   onConfirm,
 }: {
   suggestion: AiSuggestion;
   applications?: ApplicationSummary[];
+  alreadyConfirmed?: boolean;
   onConfirm?: (draft: Draft) => void;
 }) {
   const [draft, setDraft] = useState<Draft>(() => initialDraft(suggestion));
@@ -53,6 +55,7 @@ function Host({
     <ReviewPanel
       suggestion={suggestion}
       applications={applications}
+      alreadyConfirmed={alreadyConfirmed}
       body={body}
       draft={draft}
       busy={false}
@@ -181,4 +184,34 @@ test("唯一那条候选已经不在了：不替用户选中，也不许选它",
   expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
   const gone = screen.getByRole("option", { name: /已经不在了/ });
   expect(gone).toHaveProperty("disabled", true);
+});
+
+test("这条通知已经确认过时，确认按钮就按不下去了", () => {
+  render(
+    <Host
+      suggestion={{ ...twoCandidates, candidates: [twoCandidates.candidates[0]!] }}
+      alreadyConfirmed
+    />,
+  );
+  expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
+  expect(screen.getByText(/已经按另一条建议确认过了/)).toBeTruthy();
+  // 拒绝和暂存照常：这两个不写正式记录。
+  expect(screen.getByRole("button", { name: "拒绝" })).toHaveProperty("disabled", false);
+});
+
+test("待办的轮次也能改，不用回头改顶上那个", async () => {
+  const user = userEvent.setup();
+  let submitted: Draft | null = null;
+  render(
+    <Host
+      suggestion={{ ...twoCandidates, candidates: [twoCandidates.candidates[0]!] }}
+      onConfirm={(draft) => {
+        submitted = draft;
+      }}
+    />,
+  );
+  await user.clear(screen.getByLabelText("待办 1 轮次"));
+  await user.type(screen.getByLabelText("待办 1 轮次"), "2");
+  await user.click(screen.getByRole("button", { name: "改完确认" }));
+  expect(submitted!.todos[0]!.interviewRound).toBe(2);
 });

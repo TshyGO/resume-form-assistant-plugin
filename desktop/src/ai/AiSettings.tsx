@@ -7,6 +7,7 @@ import {
   describeKeyState,
   describeSaved,
   describeTransportRisk,
+  describeUrlSecrets,
 } from "./ai-settings.ts";
 import type { Message } from "./ai-settings.ts";
 
@@ -81,6 +82,7 @@ export function AiSettings() {
 
   const keyState = describeKeyState(view);
   const risk = describeTransportRisk(apiUrl);
+  const secrets = describeUrlSecrets(apiUrl);
 
   return (
     <div className="stack">
@@ -106,6 +108,7 @@ export function AiSettings() {
         </label>
         <p className="muted">填服务商给的 Base URL 就行，保存时会补全成 /chat/completions。</p>
         {risk ? <p className={`note ${risk.tone}`}>{risk.text}</p> : null}
+        {secrets ? <p className={`note ${secrets.tone}`}>{secrets.text}</p> : null}
         <label>
           模型名称
           <input

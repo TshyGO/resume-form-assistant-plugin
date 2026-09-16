@@ -7,7 +7,8 @@ import type { AiSuggestion, ReplyClass, SendMode, Stage, SuggestedTodoView } fro
 /** 面板当前在哪一步。 */
 export type Phase = "idle" | "preview" | "sending" | "review" | "failed";
 
-const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})[Tt]\d{2}:\d{2}:\d{2}([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
+const RFC3339 =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d([.,]\d+)?([Zz]|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** 2026-02-31 这种日历上不存在的日子，正则拦不住，得真的算一遍。 */
@@ -121,6 +122,8 @@ export function isModified(draft: Draft, suggestion: AiSuggestion): boolean {
   if (draft.round !== (suggestion.round ?? null)) return true;
   const kept = draft.todos.filter((todo) => todo.keep);
   if (kept.length !== suggestion.todos.length) return true;
+  // 按下标比对成立，是因为草稿里的待办只能取消、不能新增或换顺序：长度一样就意味着
+  // 一条都没取消，两边下标一一对应。将来允许手动加待办了，这里要改成逐条匹配。
   return kept.some((todo, index) => !sameTodo(todo, suggestion.todos[index]!));
 }
 
@@ -302,7 +305,13 @@ export function describeFailure(error: unknown): Failure {
     case "AI_NEEDS_DISAMBIGUATION":
       return failure(message, `在候选里选一条再确认。${MANUAL}`, false);
     case "CONFLICT":
-      return failure(message, `这条通知已经确认过了。要改就直接改申请里的记录。${MANUAL}`, false);
+      return failure(
+        "这条通知已经确认过了，不能再确认第二次。",
+        `要改结论就直接改申请里的记录：改阶段、改待办，或者把证据重新关联到别的申请。${MANUAL}`,
+        false,
+      );
+    case "VALIDATION":
+      return failure(message, `按提示改一下再试。${MANUAL}`, false);
     default:
       return failure(`${message}（${code}）`, MANUAL, true);
   }

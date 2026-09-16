@@ -8,6 +8,7 @@ import type {
   OutboundPreview,
   Page,
 } from "../api.ts";
+import { stageLabel } from "../applications.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { AnalyzeDialog } from "./AnalyzeDialog.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
@@ -80,6 +81,13 @@ export function AiReview({
   const requestId = useRef<string | null>(null);
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
+  /** 组件还在不在。卸载之后不再回写状态，也不再回调宿主。 */
+  const mounted = useRef(true);
+  /**
+   * 候选上限。第一次预览成功之后由命令层的 `maxCandidates` 覆盖；
+   * 在那之前（比如一上来就认不出候选）先用这个数拦一下。
+   */
+  const [cap, setCap] = useState(8);
   /** 预览的请求序号：连点候选时只认最后一次的结果。 */
   const previewToken = useRef(0);
   /**
@@ -133,6 +141,7 @@ export function AiReview({
   // 不然它继续算、继续计费，而界面上再也没有取消它的入口。
   useEffect(
     () => () => {
+      mounted.current = false;
       const id = requestId.current;
       if (id) {
         // 取消本身失败也无所谓：面板已经没了，这里只是尽力而为。
@@ -167,7 +176,13 @@ export function AiReview({
       void ensureApplications();
       try {
         const evidence = await invoke<EvidencePreview>("get_evidence_preview_cmd", { evidenceId });
-        setBody(evidence?.bodyExtract ?? "");
+        if (!mounted.current) return;
+        // 模型引用的可能是主题或发件人，不只是正文：高亮要在同一份文本里找。
+        setBody(
+          [evidence?.subject, evidence?.fromAddr, evidence?.bodyExtract]
+            .filter((part): part is string => !!part)
+            .join("\n"),
+        );
       } catch {
         setBody("");
       }
@@ -193,6 +208,7 @@ export function AiReview({
         // 和真正会发出去的那几条对不上——这块预览的意义就没了。
         if (token !== previewToken.current) return;
         setPreview(outbound);
+        setCap(outbound.maxCandidates);
         setPhase("preview");
       } catch (error) {
         if (token !== previewToken.current) return;
@@ -248,8 +264,12 @@ export function AiReview({
     setBusy(true);
     setFailure(null);
     try {
-      done(await invoke(command, args));
+      const result = await invoke(command, args);
+      // 用户已经切到别的证据了：写已经写完了，但别再把界面拽回来。
+      if (!mounted.current) return;
+      done(result);
     } catch (error) {
+      if (!mounted.current) return;
       // 确认/拒绝失败时**不退出审核**：草稿还在，改完再按一次就行。
       // 这里也不给「再试一次」，那个按钮回到的是外发预览，再发一次要重新计费。
       setFailure({ ...describeFailure(error), retry: "none" });
@@ -303,6 +323,12 @@ export function AiReview({
     <section className="stack ai-panel">
       {phase === "idle" ? (
         <div className="stack">
+          {alreadyConfirmed ? (
+            <p className="note warn">
+              这条通知已经确认过了。再分析一次也不能再确认第二遍（要改结论就直接改申请里的记录），
+              但那一次请求照样要花钱。
+            </p>
+          ) : null}
           <div className="row">
             <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={!invoke || busy}>
               AI 整理
@@ -357,15 +383,11 @@ export function AiReview({
         />
       ) : null}
 
-      {phase === "review" && suggestion && draft && alreadyConfirmed ? (
-        <p className="note warn">
-          这条通知已经按另一条建议确认过了。要改结论就直接改申请里的记录，别再确认一次。
-        </p>
-      ) : null}
       {phase === "review" && suggestion && draft ? (
         <ReviewPanel
           suggestion={suggestion}
           applications={applications}
+          alreadyConfirmed={alreadyConfirmed}
           body={body}
           draft={draft}
           busy={busy}
@@ -391,6 +413,10 @@ export function AiReview({
                       <input
                         type="checkbox"
                         checked={(selectedIds ?? []).includes(application.id)}
+                        disabled={
+                          (selectedIds?.length ?? 0) >= cap &&
+                          !(selectedIds ?? []).includes(application.id)
+                        }
                         onChange={() => {
                           const chosen = selectedIds ?? [];
                           const next = chosen.includes(application.id)
@@ -400,10 +426,16 @@ export function AiReview({
                         }}
                       />
                       {application.company} · {application.title}
+                      {application.current_stage
+                        ? `（${stageLabel(application.current_stage)}）`
+                        : ""}
                     </label>
                   </li>
                 ))}
               </ul>
+              {(selectedIds?.length ?? 0) >= cap ? (
+                <p className="note warn">一次最多送 {cap} 条候选，已经选满了。</p>
+              ) : null}
               {truncated ? <p className="muted">申请太多，这里只列出了最近的一部分。</p> : null}
               <button
                 type="button"

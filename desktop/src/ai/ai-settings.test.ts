@@ -6,6 +6,7 @@ import {
   describeKeyState,
   describeSaved,
   describeTransportRisk,
+  describeUrlSecrets,
 } from "./ai-settings.ts";
 
 const view = (overrides: Partial<AiSettingsView> = {}): AiSettingsView => ({
@@ -55,4 +56,20 @@ test("命令报错时把错误码留在文案里", () => {
   assert.equal(message.tone, "error");
   assert.match(message.text, /CREDENTIAL_STORE_UNAVAILABLE/);
   assert.match(describeCommandError(null).text, /UNKNOWN/);
+});
+
+test("地址里夹带凭据要当场说：Key 只该在 Authorization 头里", () => {
+  assert.equal(describeUrlSecrets("https://api.deepseek.com/v1/chat/completions"), null);
+  assert.equal(describeUrlSecrets(""), null);
+
+  const userinfo = describeUrlSecrets("https://someone:sk-123@relay.example/v1/chat/completions");
+  assert.equal(userinfo?.tone, "error");
+  assert.match(userinfo!.text, /用户名或密码/);
+
+  const query = describeUrlSecrets("https://relay.example/v1/chat/completions?api-key=sk-123");
+  assert.equal(query?.tone, "warn");
+  assert.match(query!.text, /查询串/);
+
+  // 正常的版本参数不该被当成 Key。
+  assert.equal(describeUrlSecrets("https://relay.example/v1/chat/completions?api-version=2024-10-21"), null);
 });

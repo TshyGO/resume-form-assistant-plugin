@@ -43,6 +43,32 @@ export function describeTransportRisk(apiUrl: string): Message | null {
   };
 }
 
+/**
+ * 接口地址里夹带凭据的提醒。我们承诺「Key 只在 Authorization 头里」，但用户完全
+ * 可能把 key 贴进地址：`https://user:pass@host/…` 或者 `?api-key=…`。那样它会随
+ * 每一次请求出现在 URL 里，也更容易被中转站的访问日志记下来。
+ */
+export function describeUrlSecrets(apiUrl: string): Message | null {
+  const value = apiUrl.trim();
+  if (value === "") return null;
+  const rest = value.split("://")[1] ?? value;
+  const authority = rest.split("/")[0] ?? "";
+  if (authority.includes("@")) {
+    return {
+      tone: "error",
+      text: "接口地址里带了用户名或密码。它会随每次请求一起发出去，也会进中转站的日志。Key 请填在下面的 API Key 里。",
+    };
+  }
+  const query = value.split("?")[1] ?? "";
+  if (/(^|&)[^=&]*(key|token|secret|password|apikey)[^=&]*=/i.test(query)) {
+    return {
+      tone: "warn",
+      text: "接口地址的查询串里看着像有一把 Key。它会随每次请求出现在 URL 里，通常比放在 Authorization 头更容易被日志记下来。",
+    };
+  }
+  return null;
+}
+
 /** 保存后的提示：地址被补全过就说清楚补成了什么。 */
 export function describeSaved(typedUrl: string, view: AiSettingsView): Message {
   const typed = typedUrl.trim();
