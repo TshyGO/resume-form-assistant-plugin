@@ -266,6 +266,24 @@ fn an_empty_hand_picked_list_is_refused_instead_of_sending_a_request() {
     assert_eq!(err.code, "AI_NEEDS_CANDIDATES");
 }
 
+/// 设置里躺着一条带凭据的地址（旧版本存的、手改的、恢复回来的），发请求之前必须拦住。
+#[test]
+fn a_saved_address_that_carries_a_credential_is_refused_before_sending() {
+    for bad in [
+        "https://someone:sk-123@relay.example/v1/chat/completions",
+        "https://relay.example/v1/chat/completions?api-key=sk-123",
+    ] {
+        assert!(
+            crate::ai_settings::credential_in_url(bad).is_some(),
+            "{bad} 应该被认出来"
+        );
+    }
+    assert!(crate::ai_settings::credential_in_url(
+        "https://api.deepseek.com/v1/chat/completions"
+    )
+    .is_none());
+}
+
 #[test]
 fn hand_picking_more_than_the_cap_is_refused() {
     let (dir, store) = archive();

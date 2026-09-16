@@ -325,3 +325,18 @@ test("只多打了个空格不算改过", () => {
   const padded = { ...draft, todos: [{ ...draft.todos[0]!, title: " 一面 " }] };
   assert.equal(isModified(padded, item), false);
 });
+
+test("推不出来的阶段在草稿里直接回落成「不记阶段」", () => {
+  const odd = suggestion({ stage: "submitted" });
+  assert.equal(initialDraft(odd).stage, "");
+  assert.equal(confirmArgs(initialDraft(odd), odd).stage, null);
+});
+
+test("地址里夹带凭据的错误码有自己的指引", () => {
+  const failure = describeFailure({
+    code: "AI_URL_HAS_CREDENTIAL",
+    message: "接口地址里的 `api-key` 看着像一把 Key。",
+  });
+  assert.equal(failure.retryable, false);
+  assert.match(failure.next, /设置页/);
+});

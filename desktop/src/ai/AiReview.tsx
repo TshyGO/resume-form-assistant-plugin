@@ -86,8 +86,11 @@ export function AiReview({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<AiSuggestion[]>([]);
   const requestId = useRef<string | null>(null);
-  /** 最近一次发出去、还没确认已经结束的请求。AI_BUSY 时要靠它给出取消入口。 */
-  const lastRequestId = useRef<string | null>(null);
+  /**
+   * 最近一次发出去、还没看到它结束的请求。AI_BUSY 时要靠它给出取消入口，
+   * 所以得是 state：ref 改了不会重画，按钮就出不来。
+   */
+  const [cancellableId, setCancellableId] = useState<string | null>(null);
   /** 申请清单是否正在取，避免预览和审核同时各扫一遍。 */
   const loadingApplications = useRef(false);
   const invokeRef = useRef(invoke);
@@ -243,7 +246,8 @@ export function AiReview({
     const id = newRequestId();
     const generation = ++sendGeneration.current;
     requestId.current = id;
-    lastRequestId.current = id;
+    const previous = cancellableId;
+    setCancellableId(id);
     setPhase("sending");
     setFailure(null);
     setNotice(null);
@@ -255,17 +259,23 @@ export function AiReview({
       });
       // 用户已经不等这次了（或者又发起了新的一次）：结果丢掉，不弹回审核页。
       if (generation !== sendGeneration.current) return;
+      setCancellableId(null);
       setSaved((rows) => [...rows, next]);
       await openReview(next);
     } catch (error) {
       if (generation !== sendGeneration.current) return;
-      setFailure({ ...describeFailure(error), retry: "analyze" });
+      const described = describeFailure(error);
+      // AI_BUSY 意味着我们这一次根本没跑起来，真正在跑的是上一次：取消入口要指着它。
+      if (described.code === "AI_BUSY") setCancellableId(previous);
+      else setCancellableId(null);
+      setFailure({ ...described, retry: "analyze" });
       setPhase("failed");
+      // 认不出候选时失败页要给选择器，那就得先把清单取回来。
+      if (described.code === "AI_NEEDS_CANDIDATES") await ensureApplications();
+      return;
     } finally {
       // 只清自己那一次：新请求的 id 不能被上一次的收尾抹掉。
       if (requestId.current === id) requestId.current = null;
-      // 这一次确实结束了（成功、失败或超时），AI_BUSY 的取消入口也就不用留了。
-      if (generation === sendGeneration.current) lastRequestId.current = null;
     }
   };
 
@@ -468,14 +478,14 @@ export function AiReview({
           ) : null}
           {/* 上一次请求还在跑（多半是「不等了」之后取消没生效）。错误文案让用户
               「先取消正在跑的那一次」，那就得有地方取消。 */}
-          {failure.code === "AI_BUSY" && lastRequestId.current ? (
+          {failure.code === "AI_BUSY" && cancellableId ? (
             <button
               type="button"
               onClick={() => {
-                const id = lastRequestId.current;
-                if (!id) return;
-                void invoke?.<boolean>("cancel_analysis_cmd", { requestId: id }).catch(() => {});
-                lastRequestId.current = null;
+                void invoke
+                  ?.<boolean>("cancel_analysis_cmd", { requestId: cancellableId })
+                  .catch(() => {});
+                setCancellableId(null);
                 setFailure(null);
               }}
             >

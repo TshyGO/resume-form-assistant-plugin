@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { AiSuggestion, ApplicationSummary, ReplyClass, SendMode, Stage } from "../api.ts";
 import { REPLY_CLASS_OPTIONS, SEND_MODE_OPTIONS } from "../inbox.ts";
 import { stageLabel } from "../applications.ts";
-import { confirmBlocker, confirmLabel, highlight, isModified } from "./review.ts";
+import { confirmBlocker, confirmLabel, highlight, isModified, STAGES } from "./review.ts";
 import type { Draft, TodoDraft } from "./review.ts";
 
 /** 能从一封通知里推出来的阶段。投递、填写是用户自己的动作，这里不给选。 */
@@ -175,11 +175,9 @@ export function ReviewPanel({
       missing: false,
     }));
   const choices = [...suggestion.candidates, ...extra];
-  // 建议里的阶段理论上只会是上面那五个，真出了别的也得显示出来，
-  // 不能让下拉框空着让人以为「不记阶段」。
-  const stageOptions = STAGE_OPTIONS.some((option) => option.value === draft.stage)
-    ? STAGE_OPTIONS
-    : [...STAGE_OPTIONS, { value: draft.stage, label: `${stageLabel(draft.stage)}（模型给的）` }];
+  // 模型给了这五个之外的阶段时，草稿里已经回落成「不记阶段」；这里说一声，
+  // 免得用户以为是自己没选。
+  const unusableStage = suggestion.stage && !STAGES.includes(suggestion.stage as never);
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
 
   return (
@@ -245,6 +243,12 @@ export function ReviewPanel({
       </div>
 
       <h5>进度</h5>
+      {unusableStage ? (
+        <p className="note warn">
+          模型给的阶段（{stageLabel(suggestion.stage!)}）不能从一封通知里推出来，已经忽略。
+          需要记阶段就自己选一个。
+        </p>
+      ) : null}
       <div className="row">
         <label>
           阶段
@@ -252,7 +256,7 @@ export function ReviewPanel({
             value={draft.stage}
             onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
           >
-            {stageOptions.map((option) => (
+            {STAGE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>

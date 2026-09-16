@@ -215,3 +215,18 @@ test("待办的轮次也能改，不用回头改顶上那个", async () => {
   await user.click(screen.getByRole("button", { name: "改完确认" }));
   expect(submitted!.todos[0]!.interviewRound).toBe(2);
 });
+
+test("模型给了推不出来的阶段：忽略掉并说一声，不留一个按下去必然报错的选项", () => {
+  render(
+    <Host
+      suggestion={{
+        ...twoCandidates,
+        candidates: [twoCandidates.candidates[0]!],
+        stage: "submitted",
+      }}
+    />,
+  );
+  expect(screen.getByText(/不能从一封通知里推出来/)).toBeTruthy();
+  expect(screen.getByLabelText("阶段")).toHaveProperty("value", "");
+  expect(screen.queryByRole("option", { name: /模型给的/ })).toBeNull();
+});

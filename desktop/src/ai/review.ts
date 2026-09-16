@@ -84,6 +84,9 @@ function todoDraft(todo: SuggestedTodoView): TodoDraft {
 /**
  * 建议 → 草稿。候选只有一条时替用户填上；多于一条留空，**让他自己选**。
  */
+/** 能从一封通知里推出来的阶段。和命令层 `stage_event` 接受的集合是同一份。 */
+export const STAGES = ["assessment", "interview", "offer", "rejected", "closed"] as const;
+
 export function initialDraft(suggestion: AiSuggestion): Draft {
   const only = suggestion.candidates.length === 1 ? suggestion.candidates[0]! : null;
   return {
@@ -92,7 +95,9 @@ export function initialDraft(suggestion: AiSuggestion): Draft {
     applicationId: only && !only.missing && !only.unreadable ? only.id : "",
     replyClass: suggestion.replyClass,
     sendMode: suggestion.sendMode,
-    stage: suggestion.stage ?? "",
+    // 模型给了这五个之外的阶段就当它没说：留着它只会让用户按下确认再吃一个
+    // VALIDATION。面板会提示「模型给的阶段用不了，自己选一个」。
+    stage: STAGES.includes(suggestion.stage as (typeof STAGES)[number]) ? suggestion.stage! : "",
     round: suggestion.round ?? null,
     updateProgress: false,
     todos: suggestion.todos.map(todoDraft),
@@ -314,6 +319,8 @@ export function describeFailure(error: unknown): Failure {
       );
     case "VALIDATION":
       return failure(message, `按提示改一下再试。${MANUAL}`, false);
+    case "AI_URL_HAS_CREDENTIAL":
+      return failure(message, `去设置页把地址里的 Key 去掉，填到「API Key」里。${MANUAL}`, false);
     default:
       return failure(`${message}（${code}）`, MANUAL, true);
   }

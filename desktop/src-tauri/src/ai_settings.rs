@@ -66,17 +66,32 @@ pub fn credential_in_url(url: &str) -> Option<String> {
     if authority.contains('@') {
         return Some("接口地址里带了用户名或密码。Key 请填在「API Key」里，别放进地址。".into());
     }
-    let query = url.split('?').nth(1).unwrap_or("");
-    let looks_like_secret = query.split('&').any(|pair| {
+    // 查询串和 fragment 都看：`#api-key=…` 一样会被中转站的日志记下来。
+    let tail = url
+        .split_once('?')
+        .map(|(_, rest)| rest)
+        .or_else(|| url.split_once('#').map(|(_, rest)| rest))
+        .unwrap_or("");
+    let hit = tail.split(['&', ';']).find_map(|pair| {
         let name = pair.split('=').next().unwrap_or("").to_ascii_lowercase();
-        ["key", "token", "secret", "password", "apikey"]
-            .iter()
-            .any(|needle| name.contains(needle))
+        // 按分段比，不按子串比：`api-key` / `api_key` / `x-token` 要拦住,
+        // `monkey` / `keynote` / `api-version` 不能误伤。
+        let segments = name.split(|c: char| !c.is_ascii_alphanumeric());
+        segments
+            .into_iter()
+            .any(|segment| {
+                matches!(
+                    segment,
+                    "key" | "apikey" | "token" | "secret" | "password" | "auth" | "credential"
+                        | "sig" | "sign" | "signature"
+                )
+            })
+            .then(|| name)
     });
-    if looks_like_secret {
-        return Some(
-            "接口地址的查询串里看着像有一把 Key。Key 请填在「API Key」里，别放进地址。".into(),
-        );
+    if let Some(name) = hit {
+        return Some(format!(
+            "接口地址里的 `{name}` 看着像一把 Key。Key 请填在「API Key」里，别放进地址。"
+        ));
     }
     None
 }
@@ -238,13 +253,25 @@ mod tests {
             let err = save(dir.path(), bad, "m").unwrap_err();
             assert!(err.contains("API Key"), "{bad}: {err}");
         }
-        // 正常的版本参数不该被拦。
+        // fragment 里的也算。
+        assert!(credential_in_url("https://relay.example/v1/chat/completions#api-key=sk-1").is_some());
+        // 正常参数不该被误伤：按分段比，不按子串比。
+        for fine in [
+            "https://relay.example/v1/chat/completions?api-version=2024-10-21",
+            "https://relay.example/v1/chat/completions?monkey=1",
+            "https://relay.example/v1/chat/completions?keynote=x",
+        ] {
+            assert!(credential_in_url(fine).is_none(), "{fine}");
+        }
         assert!(save(
             dir.path(),
             "https://relay.example/v1/chat/completions?api-version=2024-10-21",
             "m"
         )
         .is_ok());
+        // 报错里带上命中的那个参数名，用户才知道该删哪个。
+        let named = credential_in_url("https://relay.example/v1?x-token=abc").unwrap();
+        assert!(named.contains("x-token"), "{named}");
         let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
         assert!(!text.contains("sk-123"), "被拒的地址还是写进了文件：{text}");
     }

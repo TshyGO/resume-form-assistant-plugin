@@ -454,3 +454,33 @@ test("StrictMode 下重新挂载之后，确认照样有反应", async () => {
 
   await waitFor(() => expect(messages[0]).toMatch(/已确认/));
 });
+
+test("AI_BUSY 时能取消真正在跑的那一次", async () => {
+  const user = userEvent.setup();
+  let first = true;
+  const calls = mount((command, args) => {
+    if (command === "analyze_evidence_cmd") {
+      if (first) {
+        first = false;
+        return new Promise(() => {});
+      }
+      throw { code: "AI_BUSY", message: "这条证据正在分析中。" };
+    }
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByRole("button", { name: "取消" });
+  // 不等了 → 回到 idle，但那次请求可能还在跑。
+  await user.click(screen.getByRole("button", { name: "不等了，关掉" }));
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await screen.findByText("api.example.test");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  // 第二次被 AI_BUSY 挡回来，文案让用户先取消——那就得有地方取消。
+  await screen.findByText(/正在分析中/);
+  const before = calls.filter((call) => call.command === "cancel_analysis_cmd").length;
+  await user.click(screen.getByRole("button", { name: "取消正在跑的那一次" }));
+  expect(calls.filter((call) => call.command === "cancel_analysis_cmd").length).toBe(before + 1);
+});
