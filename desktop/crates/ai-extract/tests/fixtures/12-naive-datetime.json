@@ -1,0 +1,28 @@
+{
+  "name": "待办时间没有时区偏移",
+  "why": "没有偏移的裸时刻换台机器就是另一个时刻。丢掉这条待办并说清楚，不按本机时区脑补。",
+  "evidence": {
+    "subject": "面试邀请",
+    "from": "hr@hetech.example",
+    "body": "面试时间：9 月 20 日 10:00，请准时参加。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"stage\":\"interview\",\"todos\":[{\"title\":\"一面\",\"due\":\"2026-09-20T10:00:00\"}],\"excerpts\":[\"面试时间：9 月 20 日 10:00\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "stage": "interview",
+    "todoTitles": [],
+    "uncertaintyContains": [
+      "时间没法确定"
+    ]
+  }
+}

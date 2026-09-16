@@ -1,0 +1,28 @@
+{
+  "name": "测评邀请只有截止日期",
+  "why": "只知道哪一天就记哪一天，不许编造一个时刻。",
+  "evidence": {
+    "subject": "在线测评邀请",
+    "from": "assess@hetech.example",
+    "body": "请于 2026-09-25 前完成在线测评，测评链接见附件。逾期视为放弃。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"assessment_invite\",\"sendMode\":\"automated\",\"stage\":\"assessment\",\"todos\":[{\"title\":\"完成在线测评\",\"due\":\"2026-09-25\"}],\"excerpts\":[\"请于 2026-09-25 前完成在线测评\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "assessment_invite",
+    "stage": "assessment",
+    "todoTitles": [
+      "完成在线测评"
+    ]
+  }
+}

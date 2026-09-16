@@ -1,0 +1,21 @@
+{
+  "name": "指了一个不存在的候选编号",
+  "why": "编号越界说明模型在凭空指认一条申请，整条建议作废，不能只当成小瑕疵。",
+  "evidence": {
+    "subject": "面试",
+    "from": "hr@hetech.example",
+    "body": "下周二上午十点"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c7\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"unknown\"}",
+  "expect": {
+    "error": "AI_CANDIDATE_OUT_OF_RANGE"
+  }
+}

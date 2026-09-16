@@ -1,0 +1,27 @@
+{
+  "name": "明确拒信",
+  "why": "拒信可以建议 rejected，但仍然只是建议；发送方式看得出是系统发的就记 automated。",
+  "evidence": {
+    "subject": "关于您的应聘结果",
+    "from": "no-reply@hetech.example",
+    "body": "很遗憾地通知您，经过评估，我们决定不再推进您在后端实习岗位的应聘流程。感谢您的关注。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"reject\",\"sendMode\":\"automated\",\"stage\":\"rejected\",\"todos\":[],\"excerpts\":[\"我们决定不再推进您在后端实习岗位的应聘流程\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "reject",
+    "sendMode": "automated",
+    "stage": "rejected",
+    "todoTitles": []
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "面试取消",
+  "why": "取消不是新的面试邀请，也不该推进阶段；模型不给 stage 时不要自己补一个。",
+  "evidence": {
+    "subject": "面试取消通知",
+    "from": "hr@hetech.example",
+    "body": "很抱歉，原定于本周四的面试因故取消，后续如重新安排会再与您联系。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"action_required\",\"sendMode\":\"human\",\"stage\":null,\"todos\":[],\"excerpts\":[\"原定于本周四的面试因故取消\"],\"uncertainties\":[\"没有说会不会重新安排\"],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "action_required",
+    "stage": null,
+    "todoTitles": [],
+    "uncertaintyContains": [
+      "重新安排"
+    ]
+  }
+}

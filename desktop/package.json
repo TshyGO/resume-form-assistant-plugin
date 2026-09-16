@@ -12,6 +12,7 @@
     "desktop:build": "tauri build",
     "test:host": "cargo test --manifest-path crates/data-service/Cargo.toml --locked",
     "test:store": "cargo test --manifest-path crates/archive-store/Cargo.toml --locked",
+    "test:ai-extract": "cargo test --manifest-path crates/ai-extract/Cargo.toml --locked",
     "test:app": "cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib",
     "test:frontend": "vite build",
     "test:ui": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
@@ -19,7 +20,7 @@
     "nm:register": "node scripts/nm-dev-register.mjs register",
     "nm:unregister": "node scripts/nm-dev-register.mjs unregister",
     "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
-    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:nm-register && npm run test:release-allowlist",
+    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:nm-register && npm run test:release-allowlist",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

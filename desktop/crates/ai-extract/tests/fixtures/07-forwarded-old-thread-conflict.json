@@ -1,0 +1,29 @@
+{
+  "name": "转发里夹着上一轮的时间",
+  "why": "转发邮件里同时出现两个时间，模型报了 conflicts：阶段和待办都必须交回给用户。",
+  "evidence": {
+    "subject": "Fwd: 面试安排",
+    "from": "hr@hetech.example",
+    "body": "转发给您。-----原邮件-----一面时间为 9 月 10 日上午十点。-----以上-----本次二面请于 9 月 30 日下午两点参加。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"human\",\"stage\":\"interview\",\"round\":2,\"todos\":[{\"title\":\"二面\",\"due\":\"2026-09-30T06:00:00Z\",\"timeZone\":\"Asia/Shanghai\",\"round\":2}],\"excerpts\":[\"本次二面请于 9 月 30 日下午两点参加\"],\"uncertainties\":[],\"conflicts\":[\"正文里出现了两个面试时间，一个来自被转发的旧邮件\"]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "interview_invite",
+    "stage": null,
+    "todoTitles": [],
+    "uncertaintyContains": [
+      "信息冲突"
+    ]
+  }
+}

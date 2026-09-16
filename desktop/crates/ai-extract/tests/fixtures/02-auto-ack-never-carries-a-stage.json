@@ -1,0 +1,29 @@
+{
+  "name": "自动回执不带阶段",
+  "why": "防的是「收到即通过筛选」。模型给了 stage，回执这一类必须把它抹掉。",
+  "evidence": {
+    "subject": "我们已收到您的申请",
+    "from": "no-reply@hetech.example",
+    "body": "这是一封系统自动发送的邮件。我们已收到您投递的后端实习岗位申请，如有进展会另行通知。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"auto_ack\",\"sendMode\":\"automated\",\"stage\":\"assessment\",\"todos\":[],\"excerpts\":[\"这是一封系统自动发送的邮件\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "auto_ack",
+    "sendMode": "automated",
+    "stage": null,
+    "excerpts": [
+      "这是一封系统自动发送的邮件"
+    ]
+  }
+}

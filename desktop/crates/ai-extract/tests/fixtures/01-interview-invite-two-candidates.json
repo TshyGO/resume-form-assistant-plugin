@@ -1,0 +1,41 @@
+{
+  "name": "同公司两个岗位，模型只指认一条",
+  "why": "防的是「同公司多岗位随便选一个」。候选给两条，模型明确选了 c1，不能变成两条都关联。",
+  "evidence": {
+    "subject": "面试邀请｜合成科技",
+    "from": "hr@hetech.example",
+    "body": "您好，我们希望邀请您参加后端实习岗位的第一轮面试，时间定在下周二上午十点，地点望京。请回复确认。"
+  },
+  "candidates": [
+    {
+      "id": "app-a",
+      "company": "合成科技",
+      "title": "后端实习",
+      "stage": "submitted"
+    },
+    {
+      "id": "app-b",
+      "company": "合成科技",
+      "title": "前端实习",
+      "stage": "submitted"
+    }
+  ],
+  "modelOutput": "{\"candidates\":[\"c1\"],\"replyClass\":\"interview_invite\",\"sendMode\":\"unknown\",\"stage\":\"interview\",\"round\":1,\"todos\":[{\"title\":\"一面\",\"due\":\"2026-09-22T02:00:00Z\",\"timeZone\":\"Asia/Shanghai\",\"round\":1}],\"excerpts\":[\"下周二上午十点\"],\"uncertainties\":[],\"conflicts\":[]}",
+  "expect": {
+    "applicationIds": [
+      "app-a"
+    ],
+    "replyClass": "interview_invite",
+    "sendMode": "unknown",
+    "stage": "interview",
+    "round": 1,
+    "todoTitles": [
+      "一面"
+    ],
+    "todoDue": "2026-09-22T02:00:00Z",
+    "excerpts": [
+      "下周二上午十点"
+    ],
+    "noUncertainties": true
+  }
+}
