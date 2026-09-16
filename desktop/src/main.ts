@@ -5,6 +5,7 @@ import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
+import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -16,6 +17,7 @@ import {
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
 const chromeInput = input("chrome-id");
+const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);
 const edgeInput = input("edge-id");
 
 const views: Record<string, HTMLElement> = {
@@ -46,19 +48,11 @@ document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) 
 chromeInput.addEventListener("input", () => pairing.markChromeDirty());
 edgeInput.addEventListener("input", () => pairing.markEdgeDirty());
 
-function fact(label: string, value: unknown) {
-  return `<dt>${label}</dt><dd><code>${escapeHtml(value ?? "—")}</code></dd>`;
-}
-
 function escapeHtml(value: unknown) {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
-}
-
-function yn(flag: unknown) {
-  return flag ? "是" : "否";
 }
 
 function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: string }) {
@@ -88,30 +82,7 @@ async function refreshStatus() {
   } else {
     banner.classList.add("hidden");
   }
-  must("facts").innerHTML = [
-    fact("应用版本", status.appVersion),
-    fact("标识符", status.identifier),
-    fact("运行状态", status.runtimeLabel),
-    fact("程序目录", status.programDir),
-    fact("用户数据目录", status.dataRoot),
-    fact("档案目录", status.archiveDir),
-    fact("日志目录", status.logsDir),
-    fact("日志文件", status.logFile),
-    fact("应用缓存目录", status.cacheDir),
-    fact("WebView 数据目录", status.webviewDataDir || "未由本应用托管"),
-    fact("WebView 由本应用指定", yn(status.webviewDataManaged)),
-    fact("WebView 说明", status.webviewDataNote),
-    fact("current.json", status.currentPointer),
-    fact("启动时目录可写", yn(status.writable)),
-    fact("唯一写入者", yn(status.uniqueWriter)),
-    fact("窗口可见", yn(status.windowVisible)),
-    fact("本次隐藏启动", yn(status.hiddenLaunch)),
-    fact("开机启动", `${yn(status.autostartEnabled)}（D02 不会注册）`),
-    fact("Native Messaging", `${yn(status.nativeMessagingRegistered)}（未注册，属 D06/D13）`),
-    fact("提醒已实现", `${yn(status.remindersImplemented)}（属 D10）`),
-    fact("关闭窗口", status.closeWindowMeans),
-    fact("退出", status.quitMeans),
-  ].join("");
+  runtimeStatusView.update(status);
   applyPairingFields(pairing.applyStatus(token, status.pairing));
 }
 

@@ -65,6 +65,10 @@ jobs:
         working-directory: desktop
         run: npm run test:ui
 
+      - name: Frontend component tests
+        working-directory: desktop
+        run: npm run test:react
+
       - name: Development registration script tests
         working-directory: desktop
         run: node --test scripts/nm-dev-register.test.js

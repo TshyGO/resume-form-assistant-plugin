@@ -127,6 +127,22 @@ macOS：代码按 Application Support / Caches 分支；WKWebView 数据目录�
 
 代码：`desktop/crates/evidence-import`（安全文件名、嗅探、`.eml` 解析、原子落盘）、`desktop/src-tauri/src/evidence_commands.rs`（命令层）、`desktop/src/inbox*.js`（界面）。
 
+## 前端约定（D11 起）
+
+界面分两套写法，正在逐步统一：
+
+- **新界面用 React**（`src/react/`、`src/ai/` 等 `.tsx`）。组件经 `InvokeContext` 调命令，不直接摸 `window.__TAURI__`；挂到旧页面的容器上用 `mountReact`，容器从此归 React 管。
+- **旧视图**（申请、收件箱、待办、备份）仍是 `mountXxx()` + 模板字符串，D11 期间不迁，之后另开 issue 逐个迁。
+
+测试也是两套，**CI 两套都跑**：
+
+| 放哪 | 跑什么 | 测什么 |
+| --- | --- | --- |
+| `src/**/*.test.ts` | `npm run test:ui`（`node --test`） | 纯逻辑：状态计算、文案、入参组装 |
+| `src/**/*.test.tsx` | `npm run test:react`（Vitest + jsdom） | 组件画出来的东西和交互 |
+
+组件里不写业务判断，判断放 `.ts` 里测。`src/react-wiring.test.ts` 盯着两套都真的挂在 `npm test` 和 CI 上——D10 时 `test:ui` 没写成 glob，29 个前端测试一直没在 CI 跑（#90）。
+
 ## 插件回归
 
 仓库根目录：
