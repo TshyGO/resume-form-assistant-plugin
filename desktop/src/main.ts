@@ -6,6 +6,7 @@ import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
+import { mountAiSettings } from "./ai/mount.tsx";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -18,6 +19,7 @@ const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 const pairing = createPairingController();
 const chromeInput = input("chrome-id");
 const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);
+mountAiSettings(must("ai-settings"), invoke ?? null);
 const edgeInput = input("edge-id");
 
 const views: Record<string, HTMLElement> = {

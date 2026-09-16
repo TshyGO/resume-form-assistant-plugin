@@ -243,3 +243,26 @@ fn the_export_report_surfaces_what_did_not_travel() {
         report.skipped
     );
 }
+
+/// D11：桌面那条 AI Key 存在 OS 凭据库，接口地址存在 `ai-settings.json`。
+/// 两样都不进备份（data-privacy §1）——换台机器重新配一次，比把凭据带着走安全。
+#[test]
+fn the_ai_settings_file_never_enters_a_backup() {
+    let here = layout();
+    here.open();
+    here.seed("合成公司");
+    std::fs::write(
+        crate::ai_settings::path_for(&here.paths.data_root),
+        r#"{"apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat"}"#,
+    )
+    .unwrap();
+
+    let package = here.export_to("backup.zip");
+    let bytes = std::fs::read(&package).unwrap();
+    let dumped = String::from_utf8_lossy(&bytes);
+    assert!(
+        !dumped.contains("ai-settings"),
+        "备份里出现了 ai-settings.json"
+    );
+    assert!(!dumped.contains("api.deepseek.com"), "备份里出现了接口地址");
+}
