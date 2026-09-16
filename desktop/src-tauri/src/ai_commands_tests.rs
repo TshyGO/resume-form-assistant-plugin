@@ -256,6 +256,17 @@ fn an_unrecognised_mail_asks_the_user_instead_of_sending_the_whole_archive() {
 }
 
 #[test]
+fn an_empty_hand_picked_list_is_refused_instead_of_sending_a_request() {
+    let (dir, store) = archive();
+    app(&store, "合成科技");
+    let evidence = import(&store, &dir, "invite.eml", &interview_mail("合成科技"), None);
+
+    let err = ai_commands::gather(&store, store.archive_dir(), &evidence, Some(&[])).unwrap_err();
+
+    assert_eq!(err.code, "AI_NEEDS_CANDIDATES");
+}
+
+#[test]
 fn a_pdf_is_refused_before_anything_leaves_the_machine() {
     let (dir, store) = archive();
     let id = app(&store, "合成科技");

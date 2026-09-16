@@ -220,6 +220,13 @@ fn pick(
     selected: Option<&[String]>,
 ) -> Result<Vec<Candidate>, CommandError> {
     if let Some(ids) = selected {
+        // 手选了个空清单：发出去也只会白花一次钱，模型没有任何候选可指。
+        if ids.is_empty() {
+            return Err(invalid(
+                "AI_NEEDS_CANDIDATES",
+                "一条候选都没选。先选几条，或者让桌面自己去认。",
+            ));
+        }
         if ids.len() > MAX_CANDIDATES {
             return Err(invalid(
                 "VALIDATION",

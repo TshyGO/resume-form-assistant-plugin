@@ -28,9 +28,13 @@ impl ChatClient {
         let inner = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .map_err(|e| CommandError {
-                code: "AI_CLIENT_INIT_FAILED".into(),
-                message: format!("HTTP 客户端没建起来：{e}"),
+            .map_err(|e| {
+                // 原始错误里有本机的代理与 TLS 配置，写日志够了，不往界面上贴。
+                eprintln!("ai: client-init-failed · {e}");
+                CommandError {
+                    code: "AI_CLIENT_INIT_FAILED".into(),
+                    message: "HTTP 客户端没建起来，这次没有发出去。".into(),
+                }
             })?;
         Ok(Self { inner })
     }
