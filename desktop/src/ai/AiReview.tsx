@@ -91,14 +91,11 @@ export function AiReview({ evidenceId, onConfirmed }: { evidenceId: string; onCo
       setBusy(true);
       setFailure(null);
       try {
-        const [outbound, page] = await Promise.all([
-          invoke<OutboundPreview>("preview_analysis_cmd", { evidenceId, candidateIds: ids }),
-          invoke<Page<ApplicationSummary>>("list_applications_cmd", {
-            args: { stage: "all", recycle: "active", desc: true, limit: 100, offset: 0 },
-          }),
-        ]);
-        setPreview(outbound);
-        setApplications(page?.items ?? []);
+        // 申请清单在挂载时就取过了，这里只算这一次的外发范围。
+        setPreview(await invoke<OutboundPreview>("preview_analysis_cmd", {
+          evidenceId,
+          candidateIds: ids,
+        }));
         setPhase("preview");
       } catch (error) {
         setFailure(describeFailure(error));
