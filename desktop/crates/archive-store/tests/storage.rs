@@ -1284,3 +1284,73 @@ fn the_same_bytes_are_found_by_their_digest() {
     assert_eq!(db.find_blob(&"a".repeat(64)).unwrap().unwrap().ref_count, 2);
     assert_eq!(db.evidence_for_blob(&"a".repeat(64)).unwrap().len(), 2);
 }
+
+/// D11：建议待办转正时要带着时区；阶段事件写 history_only 就只进时间线，不动当前阶段。
+#[test]
+fn a_confirmed_todo_keeps_its_time_zone_and_history_only_does_not_move_the_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    let a = db.create_application(app()).unwrap();
+    let e = db.import_evidence(evidence(Some(a.id.clone()))).unwrap();
+    let s = db
+        .create_suggestion(NewAiSuggestion {
+            evidence_id: e.id.clone(),
+            candidate_application_ids: vec![a.id.clone()],
+            suggested_stage: Some(Stage::Interview),
+            suggested_round: Some(1),
+            suggested_reply_class: ReplyClass::InterviewInvite,
+            suggested_send_mode: SendMode::Unknown,
+            suggested_todos: vec![SuggestedTodo {
+                title: "一面".into(),
+                due: TodoDue::DateTime("2026-09-22T02:00:00Z".into()),
+                time_zone: Some("Asia/Shanghai".into()),
+                interview_round: Some(1),
+            }],
+            excerpt_refs: None,
+            uncertainties: None,
+            model_label: Some("synthetic-model".into()),
+            prompt_scope: Some("发往 api.example.test · 候选 1 条".into()),
+        })
+        .unwrap();
+
+    let outcome = db
+        .confirm_suggestion(ConfirmSuggestionInput {
+            suggestion_id: s.id.clone(),
+            application_id: a.id.clone(),
+            approved_reply_class: ReplyClass::InterviewInvite,
+            approved_send_mode: SendMode::Unknown,
+            stage_event: Some(event(EventPayload::InterviewRecorded {
+                round: Some(1),
+                label: None,
+                stage_update_mode: StageUpdateMode::HistoryOnly,
+            })),
+            create_todos: true,
+        })
+        .unwrap();
+
+    assert_eq!(outcome.todos.len(), 1);
+    assert_eq!(
+        outcome.todos[0].time_zone.as_deref(),
+        Some("Asia/Shanghai"),
+        "转正的待办丢了时区，换台机器就是另一个时刻"
+    );
+    assert_eq!(outcome.todos[0].interview_round, Some(1));
+    assert_eq!(
+        db.get_application(&a.id).unwrap().unwrap().current_stage,
+        Stage::Saved,
+        "history_only 的阶段事件只进时间线，不改当前阶段"
+    );
+    assert_eq!(
+        db.get_suggestion(&s.id).unwrap().unwrap().status,
+        SuggestionStatus::Confirmed
+    );
+}
+
+/// D11 之前存下的建议行没有 timeZone 字段，读出来必须仍然可用（不迁移，靠 serde 默认值）。
+#[test]
+fn a_suggested_todo_stored_before_time_zones_existed_still_reads() {
+    let old: SuggestedTodo =
+        serde_json::from_str(r#"{"title":"完成测评","due":{"date":"2026-09-25"}}"#).unwrap();
+    assert_eq!(old.time_zone, None);
+    assert_eq!(old.due, TodoDue::Date("2026-09-25".into()));
+}

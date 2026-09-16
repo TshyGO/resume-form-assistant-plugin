@@ -858,6 +858,10 @@ impl SuggestionStatus {
 pub struct SuggestedTodo {
     pub title: String,
     pub due: TodoDue,
+    /// 时刻所在时区。缺了它，「面试 周二上午十点」换台机器就是另一个时刻。
+    /// `serde(default)`：D11 之前存下的建议行没有这个字段，读出来是 `None`，不用迁移。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interview_round: Option<i64>,
 }
