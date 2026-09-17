@@ -1,5 +1,8 @@
 (function () {
   const SIDEBAR_ID = "resume-pro-sidebar";
+  const SIDEBAR_PANEL_ID = "resume-pro-sidebar-panel";
+  const SIDEBAR_DEFAULT_TOP = 96;
+  const SIDEBAR_DEFAULT_RIGHT = 24;
   const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig", "profile"];
   const FIELD_HIGHLIGHT_CLASS = "resume-pro__field-highlight";
   const FIELD_HIGHLIGHT_STYLE_ID = "resume-pro-field-highlight-styles";
@@ -62,7 +65,7 @@
     },
 
     async getSidebarUiState() {
-      return self.ResumeProSidebarState.read(chrome.storage.local);
+      return self.ResumeProSidebarState.readOrDefault(chrome.storage.local);
     },
 
     async setSidebarUiState(uiState) {
@@ -93,6 +96,7 @@
       StorageService.ensureDefaults(),
       StorageService.getSidebarUiState()
     ]);
+    state.sidebarUiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
     const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(cssText);
@@ -106,18 +110,20 @@
   }
 
   function createSidebar(sheet) {
+    const uiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
+    state.sidebarUiState = uiState;
     const host = document.createElement("div");
     host.id = SIDEBAR_ID;
     Object.assign(host.style, {
       position: "fixed",
-      top: "96px",
-      right: "24px",
+      top: `${SIDEBAR_DEFAULT_TOP}px`,
+      right: `${SIDEBAR_DEFAULT_RIGHT}px`,
       zIndex: "2147483647"
     });
 
-    if (state.sidebarUiState.left !== null && state.sidebarUiState.top !== null) {
-      host.style.left = `${state.sidebarUiState.left}px`;
-      host.style.top = `${state.sidebarUiState.top}px`;
+    if (uiState.left !== null && uiState.top !== null) {
+      host.style.left = `${uiState.left}px`;
+      host.style.top = `${uiState.top}px`;
       host.style.right = "auto";
     }
 
@@ -126,14 +132,15 @@
     shadowRoot.adoptedStyleSheets = [sheet];
 
     const sidebar = document.createElement("aside");
-    sidebar.className = state.sidebarUiState.collapsed ? "resume-pro is-collapsed" : "resume-pro";
+    sidebar.id = SIDEBAR_PANEL_ID;
+    sidebar.className = uiState.collapsed ? "resume-pro is-collapsed" : "resume-pro";
     sidebar.innerHTML = `
       <div class="resume-pro__header" data-drag-handle="true">
         <div class="resume-pro__title-wrap">
           <p class="resume-pro__eyebrow">Resume Pro</p>
           <strong class="resume-pro__title">填表助手</strong>
         </div>
-        <button class="resume-pro__collapse" type="button" aria-label="折叠助手">−</button>
+        <button class="resume-pro__collapse" type="button" aria-label="折叠助手" aria-controls="${SIDEBAR_PANEL_ID}">−</button>
       </div>
       <div class="resume-pro__body">
         <label class="resume-pro__field">
@@ -273,13 +280,15 @@
 
     collapseButton.addEventListener("click", () => {
       const host = document.getElementById(SIDEBAR_ID);
+      if (!host) {
+        return;
+      }
       const rect = host.getBoundingClientRect();
       host.style.left = `${rect.left}px`;
       host.style.top = `${rect.top}px`;
       host.style.right = "auto";
       sidebar.classList.toggle("is-collapsed");
       updateCollapseButton(sidebar);
-      constrainSidebarToViewport();
       persistSidebarUiState();
     });
 
@@ -1794,6 +1803,8 @@
       return self.ResumeProSidebarState.normalize(state.sidebarUiState);
     }
 
+    // The host uses position: fixed, so these are viewport coordinates unless a
+    // page deliberately establishes a transformed containing block.
     const rect = host.getBoundingClientRect();
     return self.ResumeProSidebarState.normalize({
       collapsed: sidebar.classList.contains("is-collapsed"),
@@ -1815,8 +1826,8 @@
 
     if (uiState.left === null || uiState.top === null) {
       host.style.removeProperty("left");
-      host.style.top = "96px";
-      host.style.right = "24px";
+      host.style.top = `${SIDEBAR_DEFAULT_TOP}px`;
+      host.style.right = `${SIDEBAR_DEFAULT_RIGHT}px`;
       state.sidebarUiState = uiState;
       return;
     }
@@ -1834,18 +1845,34 @@
   }
 
   function constrainSidebarToViewport() {
+    const current = self.ResumeProSidebarState.normalize(state.sidebarUiState);
+    if (current.left === null || current.top === null) {
+      // Keep the untouched default anchored to the right edge as the viewport changes.
+      state.sidebarUiState = current;
+      applySidebarUiState();
+      return false;
+    }
+
+    // A resize only pulls the sidebar back into view for this session. It is
+    // deliberately not persisted: a window the user shrank for a moment should not
+    // overwrite the position they chose on a larger one.
     state.sidebarUiState = readSidebarUiState();
     applySidebarUiState();
+    return !self.ResumeProSidebarState.equal(current, state.sidebarUiState);
   }
 
   function persistSidebarUiState() {
+    const previous = self.ResumeProSidebarState.normalize(state.sidebarUiState);
     state.sidebarUiState = readSidebarUiState();
     applySidebarUiState();
+    if (self.ResumeProSidebarState.equal(previous, state.sidebarUiState)) {
+      return;
+    }
     StorageService.setSidebarUiState(state.sidebarUiState).catch(() => {});
   }
 
   function clamp(value, min, max) {
-    return Math.min(Math.max(value, min), Math.max(min, max));
+    return max < min ? 0 : Math.min(Math.max(value, min), max);
   }
 
   function inferPickerInputType(container, inner) {
@@ -2607,6 +2634,12 @@
 
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {
+      applySidebarUiState,
+      bindStorageSync,
+      constrainSidebarToViewport,
+      persistSidebarUiState,
+      readSidebarUiState,
+      stopDrag,
       handleRepeatFillClick,
       formatFillDiagnostics,
       getHighlightTargets,
@@ -2624,6 +2657,15 @@
       },
       setLastFocusedField(field) {
         state.lastFocusedField = field;
+      },
+      setDragging(dragging) {
+        state.dragging = Boolean(dragging);
+      },
+      setSidebarUiState(uiState) {
+        state.sidebarUiState = self.ResumeProSidebarState.normalize(uiState);
+      },
+      getSidebarUiState() {
+        return self.ResumeProSidebarState.normalize(state.sidebarUiState);
       },
       setShadowRoot(root) {
         shadowRoot = root;

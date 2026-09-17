@@ -23,8 +23,19 @@
     };
   }
 
-  function clamp(value, min, max) {
-    return Math.min(Math.max(value, min), Math.max(min, max));
+  function equal(left, right) {
+    const normalizedLeft = normalize(left);
+    const normalizedRight = normalize(right);
+    return normalizedLeft.collapsed === normalizedRight.collapsed
+      && normalizedLeft.left === normalizedRight.left
+      && normalizedLeft.top === normalizedRight.top;
+  }
+
+  function constrainAxis(value, size, viewport, margin) {
+    const maxPosition = Math.max(0, viewport - size);
+    const minPosition = Math.min(margin, maxPosition);
+    const maxInsetPosition = Math.max(minPosition, maxPosition - margin);
+    return Math.min(Math.max(value, minPosition), maxInsetPosition);
   }
 
   function constrain(position, size, viewport, margin = VIEWPORT_MARGIN) {
@@ -37,17 +48,26 @@
     const height = Math.max(0, isFiniteNumber(size?.height) ? size.height : 0);
     const viewportWidth = Math.max(0, isFiniteNumber(viewport?.width) ? viewport.width : 0);
     const viewportHeight = Math.max(0, isFiniteNumber(viewport?.height) ? viewport.height : 0);
+    const safeMargin = Math.max(0, isFiniteNumber(margin) ? margin : VIEWPORT_MARGIN);
 
     return {
       collapsed: normalized.collapsed,
-      left: clamp(normalized.left, margin, viewportWidth - width - margin),
-      top: clamp(normalized.top, margin, viewportHeight - height - margin)
+      left: constrainAxis(normalized.left, width, viewportWidth, safeMargin),
+      top: constrainAxis(normalized.top, height, viewportHeight, safeMargin)
     };
   }
 
   async function read(storage) {
     const current = await storage.get(STORAGE_KEY);
-    return normalize(current[STORAGE_KEY]);
+    return normalize(current?.[STORAGE_KEY]);
+  }
+
+  async function readOrDefault(storage) {
+    try {
+      return await read(storage);
+    } catch (_error) {
+      return normalize(null);
+    }
   }
 
   async function write(storage, uiState) {
@@ -56,5 +76,5 @@
     return normalized;
   }
 
-  return { STORAGE_KEY, VIEWPORT_MARGIN, normalize, constrain, read, write };
+  return { STORAGE_KEY, VIEWPORT_MARGIN, normalize, equal, constrain, read, readOrDefault, write };
 });
