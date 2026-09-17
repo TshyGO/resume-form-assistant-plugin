@@ -84,5 +84,9 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 ## 5. 上架前还没做完的事
 
-- **插件设置的导出 / 导入**（[#29 评论](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)）：商店版是另一个扩展 ID，`chrome.storage.local` 不会跟着迁移。现有用户换过去就是一片空白——简历模板、AI 配置、配对记录全丢。这件事不在 D13 的交付范围里，但**它是上架的前置**，要单独开 issue。
-- Edge Add-ons 是另一个商店、另一个 ID，建议 Chrome 过审之后再补，包不用改。
+- **Chrome Web Store 发布动作**：item 已建（Draft，ID `diagjmploldedipjdenmecmjokckelkl`），包可以上传。
+  `manifest.json` 里的公钥已经固定了这个 ID，本地 unpacked 与 Chrome 商店版是同一个扩展 ID；
+  原先担心的「换 ID 会丢 `chrome.storage.local`」因此不再存在，**不需要为上架单独做插件设置的导出 / 导入**。
+- **Edge Add-ons（可选）**：Edge 商店是另一个商店。以后如果要从 Edge 商店发行，先核实 Edge 对同一份公钥 / ID 的处理；
+  没有把握时继续让 Edge 用户从 Chrome 商店安装即可（Edge 支持「允许来自其他应用商店的扩展」），host 注册已经覆盖这条路径。
+- **列表材料**：128×128 图标、1280×800 截图、简短/详细描述、分类与语言。

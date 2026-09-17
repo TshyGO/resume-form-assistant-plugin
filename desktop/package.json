@@ -18,11 +18,12 @@
     "test:ui": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "test:react": "vitest run",
     "test:nm-register": "node --test scripts/nm-dev-register.test.js",
+    "test:uninstall-hooks": "node --test scripts/check-uninstall-hooks.test.js && node scripts/check-uninstall-hooks.js",
     "nm:register": "node scripts/nm-dev-register.mjs register",
     "nm:unregister": "node scripts/nm-dev-register.mjs unregister",
     "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
     "test:desktop-release": "node --test scripts/check-desktop-release.test.js && node scripts/check-desktop-release.js",
-    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:react && npm run test:nm-register && npm run test:release-allowlist && npm run test:desktop-release",
+    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:react && npm run test:nm-register && npm run test:uninstall-hooks && npm run test:release-allowlist && npm run test:desktop-release",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

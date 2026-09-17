@@ -344,6 +344,76 @@ fn a_file_that_cannot_be_written_is_reported_per_browser() {
 }
 
 #[test]
+fn undo_leaves_a_manifest_that_changed_after_we_wrote_it() {
+    // 回执说这份是我们写的，但之后有人改过它——改过的就不再是「我们写的那份」。
+    let targets = windows_targets(&data_root());
+    let chrome = targets[0].manifest_path.to_string_lossy().to_string();
+    let files = FakeFiles::default();
+    let registry = FakeRegistry::default();
+    let (_, receipt) = ensure(
+        &targets,
+        &exe(),
+        &extension_ids(&[]),
+        &files,
+        &registry,
+        Receipt::default(),
+    );
+    files.write(Path::new(&chrome), "别人后来改的内容").unwrap();
+
+    let problems = undo(&targets, &files, &registry, &receipt);
+
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(files.get(&chrome).as_deref(), Some("别人后来改的内容"));
+}
+
+#[test]
+fn undo_leaves_a_registry_key_that_now_points_elsewhere() {
+    let targets = windows_targets(&data_root());
+    let key = targets[0].registry_key.clone().unwrap();
+    let files = FakeFiles::default();
+    let registry = FakeRegistry::default();
+    let (_, receipt) = ensure(
+        &targets,
+        &exe(),
+        &extension_ids(&[]),
+        &files,
+        &registry,
+        Receipt::default(),
+    );
+    // 别的程序接管了这个 host 名。
+    registry.write(&key, "C:\\别人的\\host.json").unwrap();
+
+    undo(&targets, &files, &registry, &receipt);
+
+    assert_eq!(registry.read(&key).as_deref(), Some("C:\\别人的\\host.json"));
+}
+
+#[test]
+fn a_registry_key_pointing_at_a_file_that_is_gone_is_rewritten() {
+    // 键指着的路径就是我们要写的那个，但文件已经不在了——旧注册残留正是这个样子。
+    let targets = windows_targets(&data_root());
+    let key = targets[0].registry_key.clone().unwrap();
+    let manifest = targets[0].manifest_path.to_string_lossy().to_string();
+    assert!(registry_needs_update(Some(&manifest), &targets[0].manifest_path, false));
+    assert!(!registry_needs_update(Some(&manifest), &targets[0].manifest_path, true));
+    let _ = key;
+}
+
+#[test]
+fn linux_manifests_go_where_linux_browsers_look() {
+    // 我们不发 Linux 包，但开发机可能是 Linux，写到 macOS 的路径上谁也读不到。
+    let targets = linux_targets(Path::new("/home/某人"));
+    let paths: Vec<String> = targets
+        .iter()
+        .map(|t| t.manifest_path.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    assert!(paths[0].ends_with(&format!(".config/google-chrome/NativeMessagingHosts/{HOST_NAME}.json")));
+    assert!(paths[1].ends_with(&format!(".config/microsoft-edge/NativeMessagingHosts/{HOST_NAME}.json")));
+    assert!(paths.iter().all(|p| !p.contains("Application Support")));
+}
+
+#[test]
 fn undo_only_removes_what_we_wrote() {
     let targets = windows_targets(&data_root());
     let chrome = targets[0].manifest_path.to_string_lossy().to_string();

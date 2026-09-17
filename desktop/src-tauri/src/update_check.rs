@@ -16,7 +16,8 @@ use serde_json::Value;
 use crate::commands::CommandError;
 
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases?per_page=20";
+    "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases";
+const RELEASES_PER_PAGE: usize = 100;
 const TAG_PREFIX: &str = "desktop-v";
 const TIMEOUT_SECONDS: u64 = 10;
 const FILE_NAME: &str = "update-check.json";
@@ -117,35 +118,55 @@ pub async fn fetch_latest() -> Result<Option<UpdateInfo>, CommandError> {
             code: "UPDATE_OFFLINE".into(),
             message: "查更新的客户端没建起来。".into(),
         })?;
-    let response = client
-        .get(RELEASES_URL)
-        // GitHub 要求带 User-Agent，不带会直接 403。
-        .header("user-agent", "resume-pro-desktop")
-        .header("accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|_| CommandError {
-            code: "UPDATE_OFFLINE".into(),
-            message: "连不上更新服务器。".into(),
-        })?;
-    let status = response.status();
-    if status.as_u16() == 403 || status.as_u16() == 429 {
-        return Err(CommandError {
-            code: "UPDATE_RATE_LIMITED".into(),
-            message: "更新服务器暂时限流了。".into(),
-        });
-    }
-    if !status.is_success() {
-        return Err(CommandError {
+    let mut page = 1_u32;
+    let mut releases = Vec::new();
+    loop {
+        let url = format!("{RELEASES_URL}?per_page={RELEASES_PER_PAGE}&page={page}");
+        let response = client
+            .get(url)
+            // GitHub 要求带 User-Agent，不带会直接 403。
+            .header("user-agent", "resume-pro-desktop")
+            .header("accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|_| CommandError {
+                code: "UPDATE_OFFLINE".into(),
+                message: "连不上更新服务器。".into(),
+            })?;
+        let status = response.status();
+        if status.as_u16() == 403 || status.as_u16() == 429 {
+            return Err(CommandError {
+                code: "UPDATE_RATE_LIMITED".into(),
+                message: "更新服务器暂时限流了。".into(),
+            });
+        }
+        if !status.is_success() {
+            return Err(CommandError {
+                code: "UPDATE_FAILED".into(),
+                message: format!("更新服务器返回 HTTP {}。", status.as_u16()),
+            });
+        }
+        let body: Value = response.json().await.map_err(|_| CommandError {
             code: "UPDATE_FAILED".into(),
-            message: format!("更新服务器返回 HTTP {}。", status.as_u16()),
-        });
+            message: "更新服务器返回的不是 JSON。".into(),
+        })?;
+        let Some(items) = body.as_array() else {
+            return Err(CommandError {
+                code: "UPDATE_FAILED".into(),
+                message: "更新服务器返回的不是发布列表。".into(),
+            });
+        };
+        let item_count = items.len();
+        releases.extend(items.iter().cloned());
+        if item_count < RELEASES_PER_PAGE {
+            break;
+        }
+        page = page.checked_add(1).ok_or_else(|| CommandError {
+            code: "UPDATE_FAILED".into(),
+            message: "更新记录页数异常。".into(),
+        })?;
     }
-    let body: Value = response.json().await.map_err(|_| CommandError {
-        code: "UPDATE_FAILED".into(),
-        message: "更新服务器返回的不是 JSON。".into(),
-    })?;
-    Ok(latest_desktop_release(&body))
+    Ok(latest_desktop_release(&Value::Array(releases)))
 }
 
 #[cfg(test)]
@@ -165,7 +186,10 @@ mod tests {
     #[test]
     fn only_desktop_tags_count() {
         // 同一个仓库里还有插件的 release，别把它当成桌面的新版本。
-        let body = json!([release("v0.5.0", false, false), release("desktop-v0.2.0", false, false)]);
+        let body = json!([
+            release("v0.5.0", false, false),
+            release("desktop-v0.2.0", false, false)
+        ]);
         let latest = latest_desktop_release(&body).unwrap();
         assert_eq!(latest.version, "0.2.0");
     }
@@ -182,6 +206,20 @@ mod tests {
     }
 
     #[test]
+    fn more_than_twenty_plugin_releases_do_not_hide_the_desktop_release() {
+        let mut releases = (0..25)
+            .map(|index| release(&format!("v0.5.{index}"), false, false))
+            .collect::<Vec<_>>();
+        releases.push(release("desktop-v0.2.0", false, false));
+        assert_eq!(
+            latest_desktop_release(&Value::Array(releases))
+                .unwrap()
+                .version,
+            "0.2.0"
+        );
+    }
+
+    #[test]
     fn drafts_and_prereleases_are_not_offered() {
         let body = json!([
             release("desktop-v0.3.0", true, false),
@@ -194,13 +232,19 @@ mod tests {
     #[test]
     fn nothing_to_offer_is_not_an_error() {
         assert_eq!(latest_desktop_release(&json!([])), None);
-        assert_eq!(latest_desktop_release(&json!([release("v1.0.0", false, false)])), None);
+        assert_eq!(
+            latest_desktop_release(&json!([release("v1.0.0", false, false)])),
+            None
+        );
         // 形状不对的 tag 直接跳过，不 panic。
         assert_eq!(
             latest_desktop_release(&json!([release("desktop-v不是版本号", false, false)])),
             None
         );
-        assert_eq!(latest_desktop_release(&json!({"message": "Not Found"})), None);
+        assert_eq!(
+            latest_desktop_release(&json!({"message": "Not Found"})),
+            None
+        );
     }
 
     #[test]

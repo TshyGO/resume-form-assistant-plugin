@@ -102,7 +102,7 @@ shasum -a 256 "Resume Pro Desktop_0.1.0_aarch64.dmg"     # macOS
 | Windows | `%LOCALAPPDATA%\ResumePro` |
 | macOS | `~/Library/Application Support/ResumePro` |
 
-安装、升级、卸载都不动这个目录（卸载时要删得另外明确勾选，见后续 PR）。
+安装、升级、卸载都不动这个目录（卸载时要删得另外明确勾选，见下面的「卸载」一节）。
 备份与恢复的口径见 [data-privacy.md §6](data-privacy.md)。
 
 ---
