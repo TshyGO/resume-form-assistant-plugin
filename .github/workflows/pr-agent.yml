@@ -60,7 +60,9 @@ jobs:
     needs: review-guard
     if: >-
       !cancelled() && needs.review-guard.outputs.proceed != 'false' && github.event.sender.type != 'Bot' &&
-      ((github.event_name == 'pull_request' && github.event.pull_request.author_association == 'OWNER' && !github.event.pull_request.draft) ||
+      ((github.event_name == 'pull_request' &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+        !github.event.pull_request.draft) ||
        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
         startsWith(github.event.comment.body, '/review')))
