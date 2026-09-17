@@ -81,6 +81,8 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 **权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`scripting`、`activeTab`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
+**`popup.html` 的 sunset 条件**：若 [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 最终改成新标签页、`sidePanel` 或专用 `panel.html`，本文件必须同时从 `web_accessible_resources` 和 `tests/manifest-war.test.js` 里删掉，不要为已经不可用的 iframe 继续保留暴露面。
+
 **`popup.html` 的跨源边界：** 它是扩展源页面，任何网页都能 iframe 它；页面无法跨源读取
 其中的内容，仓库里也没有 `window.postMessage` 通道。它只在用户点击「打开管理面板」后显示，
 面板内的操作仍由用户点击触发。残留风险是点击劫持和扩展存在性探测，这是 iframe 架构的固有
@@ -95,6 +97,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
   发到那家服务商。必须如实勾，不能因为「我们没有服务器」就当作没有传输。
 - **是否出售或用于与功能无关的用途**：否。
 - **是否用于判断信用**：否。
+- **更新检查**：D13 #121 已实现为只读 GitHub releases、每天最多一次、可在设置里关闭；测试在 `desktop/src-tauri/src/update_check.rs`。
 - 隐私政策链接：`docs/privacy-policy.md`（上架时换成 GitHub Pages 的公开地址）。
 
 ---

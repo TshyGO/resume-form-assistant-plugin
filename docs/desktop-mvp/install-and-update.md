@@ -154,6 +154,8 @@ macOS 上 host 清单在 `~/Library/Application Support/{Google/Chrome, Microsof
 真要一起删：在卸载器里勾上「删除应用数据」，之后会**再问一次**，问句里写着具体目录和里面
 有什么。那一步不可撤销。升级和静默卸载走的也是同一个卸载器，那两种情况下既不会问、也不会删。
 
+卸载钩子实现在 `desktop/src-tauri/installer/hooks.nsi`；「要删哪些键、哪些文件、绝对不能裸删哪个目录」由 `desktop/scripts/check-uninstall-hooks.js` 守卫。
+
 ## 7. 后台进程与系统要求
 
 - 关掉窗口不等于退出：程序留在托盘里，为的是浏览器扩展随时能连上来保存岗位，以及到点弹提醒。

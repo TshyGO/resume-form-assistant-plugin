@@ -93,6 +93,53 @@ def stop_application(binary: Path, env: dict) -> None:
     )
 
 
+def mac_manifest_paths() -> list[Path]:
+    if sys.platform != "darwin":
+        return []
+    support = Path.home() / "Library" / "Application Support"
+    return [
+        support / "Google" / "Chrome" / "NativeMessagingHosts" / f"{HOST_NAME}.json",
+        support / "Microsoft Edge" / "NativeMessagingHosts" / f"{HOST_NAME}.json",
+    ]
+
+
+def assert_no_foreign_registration(data_dir: Path) -> None:
+    """Refuse to start if a real registration would be overwritten."""
+    expected = os.path.normcase(os.path.abspath(str(data_dir / "nm")))
+    if sys.platform == "win32":
+        import winreg
+
+        for subkey in (
+            f"Software\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}",
+            f"Software\\Microsoft\\Edge\\NativeMessagingHosts\\{HOST_NAME}",
+        ):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                    value, _ = winreg.QueryValueEx(key, "")
+            except OSError:
+                continue
+            parent = os.path.normcase(os.path.dirname(os.path.abspath(str(value))))
+            if parent != expected:
+                raise SystemExit(
+                    f"existing Native Messaging registration points at {value}; "
+                    "run the app uninstaller or nm-dev-register unregister first"
+                )
+        return
+    for path in mac_manifest_paths():
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        host_path = str(payload.get("path", ""))
+        if not host_path.startswith(str(data_dir)):
+            raise SystemExit(
+                f"existing Native Messaging registration {path} points at {host_path}; "
+                "remove it before running this check"
+            )
+
+
 def remove_registration_written_by_app(data_dir: Path) -> None:
     """Drop the production keys the app wrote for this temporary data root.
 
@@ -100,6 +147,17 @@ def remove_registration_written_by_app(data_dir: Path) -> None:
     hook remove it. A browser check never runs the installer, so it has to remove
     the keys itself — and only while they point into this run's temporary root.
     """
+    if sys.platform == "darwin":
+        for path in mac_manifest_paths():
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if str(payload.get("path", "")).startswith(str(data_dir)):
+                path.unlink(missing_ok=True)
+        return
     if sys.platform != "win32":
         return
     import winreg
@@ -195,6 +253,7 @@ def main() -> int:
     shutil.copy2(source_binary, binary)
 
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
+    assert_no_foreign_registration(data_dir)
     failures: list[str] = []
     registered = False
     results: dict = {}

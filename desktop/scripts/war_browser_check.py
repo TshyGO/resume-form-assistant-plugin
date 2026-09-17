@@ -67,11 +67,14 @@ def main() -> None:
 
                 # 1. Extension page: own subresources must still load.
                 extension_page = context.new_page()
-                extension_page.goto(
-                    f"chrome-extension://{extension_id}/popup.html",
-                    wait_until="load",
-                    timeout=20_000,
-                )
+                try:
+                    extension_page.goto(
+                        f"chrome-extension://{extension_id}/popup.html",
+                        wait_until="load",
+                        timeout=20_000,
+                    )
+                except Exception as exc:  # noqa: BLE001 - report a clean FAIL, not a stack
+                    failure(f"extension page did not load at the fixed id: {exc}")
                 extension_page.wait_for_selector(".popup-shell", timeout=10_000)
                 inside = extension_page.evaluate(
                     """async () => {
@@ -180,9 +183,21 @@ def main() -> None:
                 # 4. Content-script resources loaded without page errors.
                 if page_errors:
                     failure(f"page-side scripts raised errors: {page_errors[:3]}")
+                broken_images = web_page.evaluate(
+                    """() => Array.from(document.images)
+                        .filter((img) => img.src.startsWith('chrome-extension://') && img.naturalWidth === 0)
+                        .map((img) => img.src)"""
+                )
+                if broken_images:
+                    failure(f"content script injected broken extension images: {broken_images[:3]}")
 
                 print(json.dumps({"extensionId": extension_id, "inside": inside, "outside": outside, "managerIframe": manager_iframe}, ensure_ascii=False, indent=2))
-                print("PASS: WAR browser smoke")
+                print("WAR_CONTRACT:PASS")
+                print(
+                    "MANAGER_IFRAME:PASS"
+                    if manager_iframe == "loaded"
+                    else "MANAGER_IFRAME:FAIL(#125)"
+                )
             finally:
                 context.close()
 
