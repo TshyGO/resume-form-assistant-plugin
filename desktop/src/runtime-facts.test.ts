@@ -96,3 +96,10 @@ test("没升级就直说没升级，不留一个空格子", () => {
   const row = rows.find((item) => item.label === "本次升级的迁移备份")!;
   assert.equal(row.value, "本次启动没有升级数据库");
 });
+
+test("读不到档案状态时不冒充「没有升级」", () => {
+  const rows = runtimeFacts(status({ migrationBackupUnknown: true }));
+  const row = rows.find((item) => item.label === "本次升级的迁移备份")!;
+  assert.match(row.value, /读取失败/);
+  assert.doesNotMatch(row.value, /没有升级/);
+});

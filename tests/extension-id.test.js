@@ -35,4 +35,9 @@ test("Rust host 白名单与商店材料写的是同一个 ID", () => {
   assert.match(rust, new RegExp(`STORE_EXTENSION_ID[^\\n]*${STORE_ID}`));
   const listing = fs.readFileSync(path.join(ROOT, "docs", "store-listing.md"), "utf8");
   assert.match(listing, new RegExp(STORE_ID));
+  const browserCheck = fs.readFileSync(
+    path.join(ROOT, "desktop", "scripts", "war_browser_check.py"),
+    "utf8",
+  );
+  assert.match(browserCheck, new RegExp(`EXPECTED_ID = "${STORE_ID}"`));
 });

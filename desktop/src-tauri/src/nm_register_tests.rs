@@ -479,3 +479,14 @@ fn the_decision_table_is_explicit_about_what_it_will_overwrite() {
     assert_eq!(decide(Some("别人的"), desired, Some(&digest(ours))), Decision::NotOurs);
     assert_eq!(decide(Some("别人的"), desired, None), Decision::NotOurs);
 }
+
+#[test]
+fn the_production_manifest_names_one_origin_and_never_a_wildcard() {
+    let manifest = manifest_json(&exe(), &extension_ids(&[])).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(
+        parsed["allowed_origins"],
+        serde_json::json!([format!("chrome-extension://{STORE_EXTENSION_ID}/")])
+    );
+    assert!(!manifest.contains('*'), "通配会让机器上任何一个扩展读到整本档案");
+}

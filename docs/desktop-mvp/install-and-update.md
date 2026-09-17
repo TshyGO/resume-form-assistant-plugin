@@ -140,6 +140,8 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 卸载会删掉：程序文件、开始菜单快捷方式、Chrome 与 Edge 的 Native Messaging 注册项，
 以及桌面写进数据目录的那几份 host 清单。
 
+档案目录本身不动：只清掉应用自己写的 `nm/` 清单；申请记录、附件、待办和备份都留在原处。
+
 **不会删**：`%LOCALAPPDATA%\ResumePro`（Windows）/ `~/Library/Application Support/ResumePro`（macOS）——
 也就是你的申请记录、附件、待办和备份。
 

@@ -43,9 +43,11 @@ export function runtimeFacts(status: RuntimeStatus): Fact[] {
     { label: "Native Messaging", value: nativeMessaging(status) },
     {
       label: "本次升级的迁移备份",
-      value: status.migrationBackup
-        ? `${status.migrationBackup}（升级前自动存的，出问题可以从它恢复）`
-        : "本次启动没有升级数据库",
+      value: status.migrationBackupUnknown
+        ? "读取失败：这次没能确认有没有迁移备份"
+        : status.migrationBackup
+          ? `${status.migrationBackup}（升级前自动存的，出问题可以从它恢复）`
+          : "本次启动没有升级数据库",
     },
     { label: "提醒已实现", value: `${yn(status.remindersImplemented)}（属 D10）` },
     { label: "关闭窗口", value: text(status.closeWindowMeans) },

@@ -5,6 +5,9 @@ Run from anywhere:
 
     python desktop/scripts/war_browser_check.py
 
+This is a manual, headed check. It needs a Windows/macOS desktop session with a
+display and Playwright's Chromium; it is deliberately not wired into CI.
+
 It loads this extension unpacked in the Playwright Chromium and checks two
 things that unit tests cannot check:
 
@@ -68,6 +71,7 @@ def main() -> None:
                     wait_until="load",
                     timeout=20_000,
                 )
+                extension_page.wait_for_selector(".popup-shell", timeout=10_000)
                 inside = extension_page.evaluate(
                     """async () => {
                         const check = async (path) => {
