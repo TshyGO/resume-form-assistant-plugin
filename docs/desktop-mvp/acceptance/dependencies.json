@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-17",
+  "releaseGate": "all entries must have signedOff=true and non-empty acceptanceEvidence before D14 release",
+  "dependencies": [
+    {
+      "id": "D08",
+      "issue": "https://github.com/TshyGO/resume-form-assistant-plugin/issues/22",
+      "observedIssueState": "closed",
+      "implementationPrs": [],
+      "acceptanceEvidence": [],
+      "signedOff": false,
+      "signedOffBy": null,
+      "signedOffAt": null,
+      "note": "issue state alone is not acceptance evidence"
+    },
+    {
+      "id": "D11",
+      "issue": "https://github.com/TshyGO/resume-form-assistant-plugin/issues/25",
+      "observedIssueState": "open",
+      "implementationPrs": [],
+      "acceptanceEvidence": [],
+      "signedOff": false,
+      "signedOffBy": null,
+      "signedOffAt": null,
+      "note": "hard dependency"
+    },
+    {
+      "id": "D13",
+      "issue": "https://github.com/TshyGO/resume-form-assistant-plugin/issues/29",
+      "observedIssueState": "open",
+      "implementationPrs": [],
+      "acceptanceEvidence": [],
+      "signedOff": false,
+      "signedOffBy": null,
+      "signedOffAt": null,
+      "note": "hard dependency; must supply the installed artifacts used by J01/J07/J08"
+    }
+  ]
+}

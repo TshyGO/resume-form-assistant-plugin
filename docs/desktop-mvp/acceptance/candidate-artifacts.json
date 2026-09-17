@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_REGISTERED",
+  "testedSourceCommit": null,
+  "protocolVersion": null,
+  "desktop": {
+    "version": null,
+    "fileName": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "signatureStatus": null
+  },
+  "extension": {
+    "version": null,
+    "fileName": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "distributionChannel": null,
+    "extensionId": null
+  },
+  "registeredBy": null,
+  "registeredAt": null,
+  "notes": [
+    "Populate only after downloading the exact candidate files that will be tested.",
+    "Changing either artifact or tested source commit invalidates dependent acceptance runs."
+  ]
+}
