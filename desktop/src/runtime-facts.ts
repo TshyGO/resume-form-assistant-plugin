@@ -40,12 +40,27 @@ export function runtimeFacts(status: RuntimeStatus): Fact[] {
     { label: "窗口可见", value: yn(status.windowVisible) },
     { label: "本次隐藏启动", value: yn(status.hiddenLaunch) },
     { label: "开机启动", value: `${yn(status.autostartEnabled)}（D02 不会注册）` },
-    {
-      label: "Native Messaging",
-      value: `${yn(status.nativeMessagingRegistered)}（未注册，属 D06/D13）`,
-    },
+    { label: "Native Messaging", value: nativeMessaging(status) },
     { label: "提醒已实现", value: `${yn(status.remindersImplemented)}（属 D10）` },
     { label: "关闭窗口", value: text(status.closeWindowMeans) },
     { label: "退出", value: text(status.quitMeans) },
   ];
+}
+
+/**
+ * 注册状态。整体成没成之外，还要说清楚是哪个浏览器没成、为什么——
+ * 「未注册」三个字解决不了任何人的问题。
+ */
+function nativeMessaging(status: RuntimeStatus): string {
+  const targets = status.nativeMessaging ?? [];
+  if (targets.length === 0) {
+    return `${yn(status.nativeMessagingRegistered)}（还没核对过）`;
+  }
+  const failed = targets.filter((target) => !target.registered);
+  if (failed.length === 0) {
+    return `已注册（${targets.map((t) => t.label).join("、")}）`;
+  }
+  return failed
+    .map((target) => `${target.label} 未注册：${target.note ?? "原因不明"}`)
+    .join("；");
 }
