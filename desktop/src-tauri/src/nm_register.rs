@@ -63,6 +63,15 @@ impl Browser {
             Browser::Edge => PathBuf::from("Microsoft Edge"),
         }
     }
+
+    /// Linux 上的目录名和 macOS 完全不同，不能共用一套。
+    #[cfg_attr(windows, allow(dead_code))]
+    fn linux_dir(&self) -> &'static str {
+        match self {
+            Browser::Chrome => "google-chrome",
+            Browser::Edge => "microsoft-edge",
+        }
+    }
 }
 
 /// 一个浏览器要写的东西：清单路径，以及（Windows 才有的）注册表键。
@@ -97,6 +106,24 @@ pub fn mac_targets(home: &Path) -> Vec<Target> {
             browser: *browser,
             manifest_path: support
                 .join(browser.mac_dir())
+                .join("NativeMessagingHosts")
+                .join(format!("{HOST_NAME}.json")),
+            registry_key: None,
+        })
+        .collect()
+}
+
+/// Linux：`~/.config/<browser>/NativeMessagingHosts/`。我们不发 Linux 包，但
+/// 开发机可能是 Linux，写到 macOS 的路径上只会得到一个谁也不读的文件。
+#[cfg_attr(windows, allow(dead_code))]
+pub fn linux_targets(home: &Path) -> Vec<Target> {
+    Browser::ALL
+        .iter()
+        .map(|browser| Target {
+            browser: *browser,
+            manifest_path: home
+                .join(".config")
+                .join(browser.linux_dir())
                 .join("NativeMessagingHosts")
                 .join(format!("{HOST_NAME}.json")),
             registry_key: None,
@@ -207,11 +234,18 @@ pub fn decide(existing: Option<&str>, desired: &str, receipt_digest: Option<&str
     }
 }
 
-/// 注册表里那条值该不该改。`path` 指向不存在的文件也算该改——这正是「旧注册残留」。
-pub fn registry_needs_update(current: Option<&str>, manifest_path: &Path) -> bool {
+/// 注册表里那条值该不该改。
+///
+/// 指向别的路径要改；指向一个**已经不在了**的文件同样要改——那正是「旧注册残留」
+/// 的样子：键还在，文件早没了，浏览器只会安静地连不上。
+pub fn registry_needs_update(
+    current: Option<&str>,
+    manifest_path: &Path,
+    target_exists: bool,
+) -> bool {
     match current {
         None => true,
-        Some(value) => Path::new(value) != manifest_path,
+        Some(value) => Path::new(value) != manifest_path || !target_exists,
     }
 }
 
@@ -371,7 +405,8 @@ pub fn ensure(
         if registered {
             if let Some(reg_key) = &target.registry_key {
                 let current = registry.read(reg_key);
-                if registry_needs_update(current.as_deref(), &target.manifest_path) {
+                let exists = files.read(&target.manifest_path).is_some();
+                if registry_needs_update(current.as_deref(), &target.manifest_path, exists) {
                     if let Err(problem) = registry.write(reg_key, &key) {
                         registered = false;
                         note = Some(problem);
@@ -403,11 +438,25 @@ pub fn undo(
     let mut problems = Vec::new();
     for target in targets {
         let key = target.manifest_path.to_string_lossy().to_string();
-        if receipt.written.contains_key(&key) {
+        let Some(recorded) = receipt.written.get(&key) else {
+            continue;
+        };
+        // 回执说这份是我们写的，但盘上的内容可能已经被人改过。改过的就不是
+        // 「我们写的那份」了，删它等于删别人的东西。
+        let ours = files
+            .read(&target.manifest_path)
+            .map(|current| digest(&current) == *recorded)
+            .unwrap_or(false);
+        if ours {
             if let Err(problem) = files.remove(&target.manifest_path) {
                 problems.push(problem);
             }
-            if let Some(reg_key) = &target.registry_key {
+        }
+        if let Some(reg_key) = &target.registry_key {
+            // 同理：键现在指着别处，说明别人接管了这个 host 名，不动它。
+            let points_at_us =
+                registry.read(reg_key).as_deref() == Some(key.as_str());
+            if points_at_us {
                 if let Err(problem) = registry.remove(reg_key) {
                     problems.push(problem);
                 }

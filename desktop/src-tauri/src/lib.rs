@@ -121,7 +121,7 @@ fn checked_url(api_url: &str) -> Result<(), CommandError> {
     }
 }
 
-/// 这台机器上要写哪几份清单。Windows 走注册表，macOS 写进浏览器目录。
+/// 这台机器上要写哪几份清单。三个平台的位置互不相同，不能共用一套路径。
 fn native_messaging_targets(data_root: &std::path::Path) -> Vec<nm_register::Target> {
     #[cfg(windows)]
     {
@@ -130,9 +130,24 @@ fn native_messaging_targets(data_root: &std::path::Path) -> Vec<nm_register::Tar
     #[cfg(not(windows))]
     {
         let _ = data_root;
-        match std::env::var("HOME") {
-            Ok(home) => nm_register::mac_targets(std::path::Path::new(&home)),
-            Err(_) => Vec::new(),
+        let Ok(home) = std::env::var("HOME") else {
+            return Vec::new();
+        };
+        let home = std::path::Path::new(&home);
+        #[cfg(target_os = "macos")]
+        {
+            nm_register::mac_targets(home)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            nm_register::linux_targets(home)
+        }
+        // 别的系统我们不发包，也就不知道浏览器读哪里。写一个猜的位置
+        // 只会得到一个谁也不读的文件。
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = home;
+            Vec::new()
         }
     }
 }
@@ -171,16 +186,24 @@ fn refresh_native_messaging(state: &AppState) -> Vec<nm_register::Outcome> {
             }]
         }
     };
-    // 开发模式手填的 ID 从配对草稿里取；正式清单默认只有商店那一条。
-    let draft = match state.host.lock() {
-        Ok(guard) => guard.as_ref().map(|h| h.load_pairing_draft()),
-        Err(_) => None,
-    }
-    .unwrap_or_default();
-    let extra: Vec<String> = [draft.chrome_extension_id, draft.edge_extension_id]
-        .into_iter()
-        .filter(|id| !id.trim().is_empty())
-        .collect();
+    // 配对草稿里手填的 ID **只在开发构建里**并进清单。
+    //
+    // 正式构建不看它：那个文件在用户目录下，任何一个本机进程都能往里写；要是
+    // 照单全收，写一行就等于给一个扩展永久授权读整本求职档案。正式版靠的是
+    // manifest.json 里的公钥——本地 unpacked 和商店版是同一个 ID，本来也不需要填。
+    let extra: Vec<String> = if cfg!(debug_assertions) {
+        let draft = match state.host.lock() {
+            Ok(guard) => guard.as_ref().map(|h| h.load_pairing_draft()),
+            Err(_) => None,
+        }
+        .unwrap_or_default();
+        [draft.chrome_extension_id, draft.edge_extension_id]
+            .into_iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let ids = nm_register::extension_ids(&extra);
 
     let targets = native_messaging_targets(&data_root);
