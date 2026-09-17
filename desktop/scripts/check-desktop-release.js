@@ -131,6 +131,53 @@ export function assertReleaseAssets(names) {
   }
 }
 
+/**
+ * 复算一遍校验和。构建机写的和发布机手里的是两份文件（中间过了一次 artifact），
+ * 只比文件名对不对说明不了它们是同一个东西。
+ */
+export function verifyChecksums(dir, io = { readdirSync, readFileSync }) {
+  const names = io.readdirSync(dir);
+  assertReleaseAssets(names);
+  const checked = [];
+  for (const name of names.filter((n) => n.endsWith(CHECKSUM_SUFFIX))) {
+    const installer = name.slice(0, -CHECKSUM_SUFFIX.length);
+    const recorded = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/)[0];
+    const actual = sha256(io.readFileSync(join(dir, installer)));
+    if (recorded !== actual) {
+      throw new Error(`${installer} 的校验和对不上：文件里写着 ${recorded}，实际是 ${actual}`);
+    }
+    checked.push(installer);
+  }
+  return checked;
+}
+
+/**
+ * 前端产物里不该出现的东西。`resources`/`externalBin` 那道检查只看配置，
+ * 真把 `.env`、sourcemap、测试夹具构建进 `dist` 的话它是看不见的。
+ */
+export const DIST_FORBIDDEN = [/\.map$/i, /^\.env/i, /fixture/i, /\.test\./i, /\.spec\./i];
+
+export function assertDistIsClean(names) {
+  const bad = names.filter((name) => DIST_FORBIDDEN.some((pattern) => pattern.test(name)));
+  if (bad.length > 0) {
+    throw new Error(`前端产物里有不该打进安装包的文件：${bad.join("、")}`);
+  }
+}
+
+function listFiles(dir, io, prefix = "") {
+  const entries = io.readdirSync(dir, { withFileTypes: true });
+  const names = [];
+  for (const entry of entries) {
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      names.push(...listFiles(join(dir, entry.name), io, name));
+    } else {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -176,9 +223,23 @@ function main(argv) {
         console.log(`${digest}  ${name}`);
       }
     } else {
-      assertReleaseAssets(readdirSync(dir));
+      // 发布前复算一遍：artifact 传过一次，名字对不代表内容没变。
+      for (const name of verifyChecksums(dir)) {
+        console.log(`校验和对得上：${name}`);
+      }
     }
     console.log(`桌面 ${version}：${dir} 里只有安装包和配套校验和。`);
+    return;
+  }
+
+  const distAt = argv.indexOf("--dist");
+  if (distAt >= 0) {
+    const dir = argv[distAt + 1];
+    if (!dir || dir.startsWith("--")) {
+      throw new Error("--dist 后面要跟目录");
+    }
+    assertDistIsClean(listFiles(dir, { readdirSync }));
+    console.log(`桌面 ${version}：${dir} 里没有 sourcemap、.env、测试夹具。`);
     return;
   }
 

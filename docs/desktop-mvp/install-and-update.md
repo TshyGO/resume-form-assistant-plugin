@@ -7,6 +7,8 @@
 
 ## 1. 自己构建
 
+工具链和 CI 一致：**Node 22**、**Rust 1.94.0**。`cargo fetch --locked` 会在 `Cargo.lock` 过期时失败——「可复现构建」的前提是锁文件说了算。
+
 ```bash
 cd desktop
 npm ci
@@ -29,7 +31,9 @@ npm run tauri build -- --bundles dmg       # macOS
 node desktop/scripts/check-desktop-release.js desktop-v0.1.0
 ```
 
-它会拦住这些：`tauri.conf.json` 与 `Cargo.toml` 版本号不一致、版本号不是 `1.2.3` 的样子、tag 与版本号对不上、`bundle` 里夹带了额外文件、`frontendDist` 指到了源码或测试目录。
+还有两道：`--dist desktop/dist` 检查前端产物里没有 sourcemap、`.env`、测试夹具；`--assets <目录>`（不带 `--write-checksums`）在发布前**复算一遍校验和**，因为构建机写的和发布机手上的是两份文件。
+
+第一条会拦住这些：`tauri.conf.json` 与 `Cargo.toml` 版本号不一致、版本号不是 `1.2.3` 的样子、tag 与版本号对不上、`bundle` 里夹带了额外文件、`frontendDist` 指到了源码或测试目录。
 
 上传前还有一道，CI 里跑的就是它——顺便把校验和也算了（用 Node，不依赖 `sha256sum`）：
 

@@ -66,6 +66,20 @@ jobs:
         shell: bash
         run: node desktop/scripts/check-desktop-release.js "$TAG"
 
+      # Cargo.lock 过期时这一步会失败，而不是让构建悄悄改锁文件：
+      # 「可复现构建」的前提是锁文件说了算。
+      - name: Check Cargo.lock is current
+        working-directory: desktop/src-tauri
+        run: cargo fetch --locked
+
+      - name: Build frontend
+        working-directory: desktop
+        run: npm run build
+
+      # 配置里没夹带文件，不代表 dist 里没有 sourcemap 或测试夹具。
+      - name: Check frontend output
+        run: node desktop/scripts/check-desktop-release.js --dist desktop/dist
+
       - name: Build installer
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
@@ -119,6 +133,7 @@ jobs:
           path: dist-release
           merge-multiple: true
 
+      # 复算一遍校验和：构建机写的和这里手上的是两份文件，中间过了一次 artifact。
       - name: Check what is about to be published
         shell: bash
         run: node desktop/scripts/check-desktop-release.js --assets dist-release
@@ -151,7 +166,14 @@ jobs:
             echo
             echo "Windows \`%LOCALAPPDATA%\\ResumePro\`，macOS \`~/Library/Application Support/ResumePro\`。卸载默认不动它。"
           } > release-notes.md
+          # 自动生成的变更记录拼在自定义说明后面。`--notes-file` 和 `--generate-notes`
+          # 不能一起用：要么命令失败，要么自动内容把「未签名」那段盖掉。
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body >> release-notes.md || true
           cat release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
 
       # 用 runner 自带的 gh，不再引入一个拿着 contents: write 的第三方 action。
       - name: Create release
@@ -164,5 +186,4 @@ jobs:
           gh release create "$TAG" dist-release/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
-            --notes-file release-notes.md \
-            --generate-notes
+            --notes-file release-notes.md

@@ -7,6 +7,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DESKTOP_TAG_PREFIX,
+  assertDistIsClean,
+  verifyChecksums,
   assertNothingExtraBundled,
   assertReleaseAssets,
   assertTagMatches,
@@ -127,8 +129,14 @@ test("空目录不会被当成成功", () => {
 });
 
 test("命令行真的会跑起来——入口判断错了的话这几条会静默通过", () => {
-  const ok = execFileSync("node", [script, "desktop-v0.1.0"], { encoding: "utf8" });
-  assert.match(ok, /tag desktop-v0\.1\.0 对得上/);
+  // 版本号从仓库里读，别写死：升个版本不该让 CI 变红，报错还长得像管道坏了。
+  const version = desktopVersion({
+    tauriConf: readFileSync(join(desktop, "src-tauri", "tauri.conf.json"), "utf8"),
+    cargoToml: readFileSync(join(desktop, "src-tauri", "Cargo.toml"), "utf8"),
+  });
+  const tag = `${DESKTOP_TAG_PREFIX}${version}`;
+  const ok = execFileSync("node", [script, tag], { encoding: "utf8" });
+  assert.match(ok, new RegExp(`tag ${tag.replace(/\./g, "\.")} 对得上`));
 
   const plain = execFileSync("node", [script], { encoding: "utf8" });
   assert.match(plain, /版本号一致/);
@@ -174,4 +182,39 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   assert.match(flow, /TAG: \$\{\{ github\.ref_type/);
   // 拿着 contents: write 的那一步不引第三方 action。
   assert.doesNotMatch(flow, /softprops\/action-gh-release/);
+});
+
+test("发布前复算校验和：名字对不代表内容没变", () => {
+  const dir = mkdtempSync(join(tmpdir(), "d13-assets-"));
+  writeFileSync(join(dir, "setup.exe"), "真正的安装包");
+  writeChecksums(dir);
+  assert.deepEqual(verifyChecksums(dir), ["setup.exe"]);
+
+  // artifact 传输过程中被换掉的样子。
+  writeFileSync(join(dir, "setup.exe"), "被换掉的内容");
+  assert.throws(() => verifyChecksums(dir), /校验和对不上/);
+});
+
+test("前端产物里不许有 sourcemap、.env 和测试夹具", () => {
+  assertDistIsClean(["index.html", "assets/index-abc.js", "assets/index-abc.css"]);
+  assert.throws(() => assertDistIsClean(["assets/index.js.map"]), /不该打进安装包/);
+  assert.throws(() => assertDistIsClean([".env.production"]), /不该打进安装包/);
+  assert.throws(() => assertDistIsClean(["fixtures/简历.docx"]), /不该打进安装包/);
+  assert.throws(() => assertDistIsClean(["assets/app.test.js"]), /不该打进安装包/);
+});
+
+test("Release 说明不能同时用 --notes-file 和 --generate-notes", () => {
+  // 两个一起给，要么命令失败，要么自动生成的内容把「未签名」那段盖掉。
+  const flow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
+  const createBlock = flow.slice(flow.indexOf("gh release create"));
+  assert.doesNotMatch(createBlock, /--generate-notes/);
+  assert.match(createBlock, /--notes-file release-notes\.md/);
+  // 自动变更记录仍然要有，只是拼进同一个文件。
+  assert.match(flow, /releases\/generate-notes/);
+});
+
+test("发版工作流会拦住过期的 Cargo.lock 和脏 dist", () => {
+  const flow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
+  assert.match(flow, /cargo fetch --locked/);
+  assert.match(flow, /--dist desktop\/dist/);
 });
