@@ -22,6 +22,9 @@ const repo = resolve(here, "..", "..");
 const desktop = resolve(here, "..");
 const script = join(here, "check-desktop-release.js");
 
+/** Windows 上 checkout 会把换行变成 CRLF，正则里的换行符就对不上了。 */
+const readText = (path) => readFileSync(path, "utf8").split("\r\n").join("\n");
+
 const conf = (version, overrides = {}) =>
   JSON.stringify({ version, build: { frontendDist: "../dist" }, bundle: {}, ...overrides });
 
@@ -153,15 +156,15 @@ test("仓库现在的配置本身就是合规的", () => {
 });
 
 test("两个 release 工作流的 tag 触发条件不重叠", () => {
-  const plugin = readFileSync(join(repo, ".github", "workflows", "release.yml"), "utf8");
-  const desktopFlow = readFileSync(join(repo, ".github", "workflows", "desktop-release.yml"), "utf8");
+  const plugin = readText(join(repo, ".github", "workflows", "release.yml"));
+  const desktopFlow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
   assert.match(plugin, /tags:\s*\n\s*-\s*['"]v\*\.\*\.\*['"]/);
   assert.match(desktopFlow, new RegExp(`tags:\\s*\\n\\s*-\\s*['"]${DESKTOP_TAG_PREFIX}\\*['"]`));
   assert.equal(tagIsPluginShaped(`${DESKTOP_TAG_PREFIX}0.1.0`), false);
 });
 
 test("发版工作流自己也要跑这个检查，并且把该说的话说清楚", () => {
-  const flow = readFileSync(join(repo, ".github", "workflows", "desktop-release.yml"), "utf8");
+  const flow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
   // 资产校验必须真的接进流程，不能只活在单测里。
   assert.match(flow, /--assets dist-release --write-checksums/);
   assert.match(flow, /--assets dist-release\n/);
