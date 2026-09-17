@@ -1000,6 +1000,21 @@ fn defer_suggestion_cmd(
     })
 }
 
+/// 扩展的商店页。URL 只有这一份，前端不另抄：改成别的商店或换 ID 时只改这里。
+#[tauri::command]
+fn open_extension_store_cmd(app: AppHandle) -> Result<(), CommandError> {
+    let url = format!(
+        "https://chromewebstore.google.com/detail/{}",
+        nm_register::STORE_EXTENSION_ID
+    );
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|err| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: format!("打不开商店页：{err}"),
+        })
+}
+
 /// 手动重试注册。用户装完浏览器、或者上一次因为权限失败时点它。
 #[tauri::command]
 fn register_native_messaging_cmd(state: State<AppState>) -> Vec<nm_register::Outcome> {
@@ -1324,6 +1339,7 @@ pub fn run() {
             export_diagnostics,
             save_pairing_draft,
             register_native_messaging_cmd,
+            open_extension_store_cmd,
             hide_main_window_cmd,
             quit_app,
             list_applications_cmd,

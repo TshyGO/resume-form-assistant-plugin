@@ -1,6 +1,7 @@
 import type { Invoke, RuntimeStatus } from "./api.ts";
 import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
+import { AFTER_INSTALL_HINT, STORE_PENDING_HINT, describeLink } from "./browser-link.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
@@ -86,7 +87,45 @@ async function refreshStatus() {
   }
   runtimeStatusView.update(status);
   applyPairingFields(pairing.applyStatus(token, status.pairing));
+  applyLinkState(status);
 }
+
+/** 「连接浏览器」这一段：状态、下一步、两个按钮显不显示。 */
+function applyLinkState(status: RuntimeStatus | null) {
+  const state = describeLink(status);
+  const line = must("link-state");
+  line.textContent = state.text;
+  line.className = `note ${state.tone}`;
+  must("link-next").textContent = state.next;
+  (must("link-install") as HTMLButtonElement).hidden = !state.showInstall;
+  (must("link-retry") as HTMLButtonElement).hidden = !state.showRetry;
+  must("link-after-install").textContent = state.showInstall ? AFTER_INSTALL_HINT : "";
+}
+
+must("link-store-pending").textContent = STORE_PENDING_HINT;
+
+must("link-install").addEventListener("click", async () => {
+  if (!invoke) return;
+  const msg = must("link-next");
+  try {
+    await invoke("open_extension_store_cmd");
+  } catch (err: unknown) {
+    const detail = err as { message?: string } | null;
+    msg.textContent = `打不开商店页：${detail?.message ?? "未知错误"}。${STORE_PENDING_HINT}`;
+  }
+});
+
+must("link-retry").addEventListener("click", async () => {
+  if (!invoke) return;
+  const button = must("link-retry") as HTMLButtonElement;
+  button.disabled = true;
+  try {
+    await invoke("register_native_messaging_cmd");
+    await refreshStatus();
+  } finally {
+    button.disabled = false;
+  }
+});
 
 let pairingSaving = false;
 must("pairing-form").addEventListener("submit", async (event) => {
@@ -114,7 +153,15 @@ must("pairing-form").addEventListener("submit", async (event) => {
     const applied = pairing.onSaveSuccess(saved);
     chromeInput.value = applied.chrome;
     edgeInput.value = applied.edge;
-    msg.textContent = "已写入本地 settings.json 草稿，未注册 Native Messaging。";
+    // 手填的 ID 要进 host 清单才有意义，所以保存完顺手重写一次。
+    if (invoke) {
+      try {
+        await invoke("register_native_messaging_cmd");
+      } catch {
+        // 重写失败不影响草稿本身，状态刷新之后界面会说清楚。
+      }
+    }
+    msg.textContent = "已保存，并把这几个 ID 一起写进了 host 清单。";
     await refreshStatus();
   } catch (err: unknown) {
     pairing.onSaveFailure();
