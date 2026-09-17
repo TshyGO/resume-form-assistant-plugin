@@ -76,6 +76,7 @@
         "ai-helpers.js",
         "profile-fields.js",
         "form-agent.js",
+        "sidebar-state.js",
         "content.js"
       ],
       "css": [

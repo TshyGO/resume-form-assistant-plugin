@@ -40,6 +40,7 @@
     dragOffsetX: 0,
     dragOffsetY: 0,
     dragging: false,
+    sidebarUiState: null,
     currentStore: null,
     statusTimer: null,
     lastFocusedField: null,
@@ -58,6 +59,14 @@
     async getState() {
       const current = await chrome.storage.local.get(STORAGE_KEYS);
       return normalizeStore(current);
+    },
+
+    async getSidebarUiState() {
+      return self.ResumeProSidebarState.read(chrome.storage.local);
+    },
+
+    async setSidebarUiState(uiState) {
+      await self.ResumeProSidebarState.write(chrome.storage.local, uiState);
     },
 
     async setActiveTemplate(templateId) {
@@ -80,7 +89,10 @@
       return;
     }
 
-    state.currentStore = await StorageService.ensureDefaults();
+    [state.currentStore, state.sidebarUiState] = await Promise.all([
+      StorageService.ensureDefaults(),
+      StorageService.getSidebarUiState()
+    ]);
     const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(cssText);
@@ -90,6 +102,7 @@
     renderSidebar();
     bindStorageSync();
     bindFocusTracking();
+    window.addEventListener("resize", constrainSidebarToViewport);
   }
 
   function createSidebar(sheet) {
@@ -102,12 +115,18 @@
       zIndex: "2147483647"
     });
 
+    if (state.sidebarUiState.left !== null && state.sidebarUiState.top !== null) {
+      host.style.left = `${state.sidebarUiState.left}px`;
+      host.style.top = `${state.sidebarUiState.top}px`;
+      host.style.right = "auto";
+    }
+
     document.body.appendChild(host);
     shadowRoot = host.attachShadow({ mode: "closed" });
     shadowRoot.adoptedStyleSheets = [sheet];
 
     const sidebar = document.createElement("aside");
-    sidebar.className = "resume-pro";
+    sidebar.className = state.sidebarUiState.collapsed ? "resume-pro is-collapsed" : "resume-pro";
     sidebar.innerHTML = `
       <div class="resume-pro__header" data-drag-handle="true">
         <div class="resume-pro__title-wrap">
@@ -199,6 +218,8 @@
     `;
 
     shadowRoot.appendChild(sidebar);
+    updateCollapseButton(sidebar);
+    constrainSidebarToViewport();
     const chipActions = document.createElement("div");
     chipActions.id = "resume-pro-chip-actions";
     chipActions.className = "resume-pro__chip-actions";
@@ -251,8 +272,15 @@
     document.addEventListener("mouseup", stopDrag);
 
     collapseButton.addEventListener("click", () => {
+      const host = document.getElementById(SIDEBAR_ID);
+      const rect = host.getBoundingClientRect();
+      host.style.left = `${rect.left}px`;
+      host.style.top = `${rect.top}px`;
+      host.style.right = "auto";
       sidebar.classList.toggle("is-collapsed");
-      collapseButton.textContent = sidebar.classList.contains("is-collapsed") ? "+" : "−";
+      updateCollapseButton(sidebar);
+      constrainSidebarToViewport();
+      persistSidebarUiState();
     });
 
     templateSelect.addEventListener("change", async (event) => {
@@ -292,6 +320,12 @@
       if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.profile) {
         state.currentStore = await StorageService.getState();
         renderSidebar();
+      }
+
+      const sidebarStateChange = changes[self.ResumeProSidebarState.STORAGE_KEY];
+      if (sidebarStateChange && !state.dragging) {
+        state.sidebarUiState = self.ResumeProSidebarState.normalize(sidebarStateChange.newValue);
+        applySidebarUiState();
       }
     });
   }
@@ -1738,6 +1772,76 @@
 
     state.dragging = false;
     shadowRoot?.querySelector(".resume-pro")?.classList.remove("is-dragging");
+    persistSidebarUiState();
+  }
+
+  function updateCollapseButton(sidebar = shadowRoot?.querySelector(".resume-pro")) {
+    const collapseButton = sidebar?.querySelector(".resume-pro__collapse");
+    if (!collapseButton) {
+      return;
+    }
+
+    const collapsed = sidebar.classList.contains("is-collapsed");
+    collapseButton.textContent = collapsed ? "+" : "−";
+    collapseButton.setAttribute("aria-label", collapsed ? "展开助手" : "折叠助手");
+    collapseButton.setAttribute("aria-expanded", String(!collapsed));
+  }
+
+  function readSidebarUiState() {
+    const host = document.getElementById(SIDEBAR_ID);
+    const sidebar = shadowRoot?.querySelector(".resume-pro");
+    if (!host || !sidebar) {
+      return self.ResumeProSidebarState.normalize(state.sidebarUiState);
+    }
+
+    const rect = host.getBoundingClientRect();
+    return self.ResumeProSidebarState.normalize({
+      collapsed: sidebar.classList.contains("is-collapsed"),
+      left: rect.left,
+      top: rect.top
+    });
+  }
+
+  function applySidebarUiState() {
+    const host = document.getElementById(SIDEBAR_ID);
+    const sidebar = shadowRoot?.querySelector(".resume-pro");
+    if (!host || !sidebar) {
+      return;
+    }
+
+    const uiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
+    sidebar.classList.toggle("is-collapsed", uiState.collapsed);
+    updateCollapseButton(sidebar);
+
+    if (uiState.left === null || uiState.top === null) {
+      host.style.removeProperty("left");
+      host.style.top = "96px";
+      host.style.right = "24px";
+      state.sidebarUiState = uiState;
+      return;
+    }
+
+    const rect = host.getBoundingClientRect();
+    const constrained = self.ResumeProSidebarState.constrain(
+      uiState,
+      { width: rect.width, height: rect.height },
+      { width: window.innerWidth, height: window.innerHeight }
+    );
+    host.style.left = `${constrained.left}px`;
+    host.style.top = `${constrained.top}px`;
+    host.style.right = "auto";
+    state.sidebarUiState = constrained;
+  }
+
+  function constrainSidebarToViewport() {
+    state.sidebarUiState = readSidebarUiState();
+    applySidebarUiState();
+  }
+
+  function persistSidebarUiState() {
+    state.sidebarUiState = readSidebarUiState();
+    applySidebarUiState();
+    StorageService.setSidebarUiState(state.sidebarUiState).catch(() => {});
   }
 
   function clamp(value, min, max) {
