@@ -1,7 +1,13 @@
 import type { Invoke, RuntimeStatus } from "./api.ts";
 import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
-import { AFTER_INSTALL_HINT, STORE_PENDING_HINT, describeLink } from "./browser-link.ts";
+import {
+  AFTER_INSTALL_HINT,
+  STORE_PENDING_HINT,
+  describeLink,
+  registrationCompleted,
+} from "./browser-link.ts";
+import type { NativeMessagingRegistrationOutcome } from "./browser-link.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
@@ -154,14 +160,18 @@ must("pairing-form").addEventListener("submit", async (event) => {
     chromeInput.value = applied.chrome;
     edgeInput.value = applied.edge;
     // 手填的 ID 要进 host 清单才有意义，所以保存完顺手重写一次。
-    if (invoke) {
-      try {
-        await invoke("register_native_messaging_cmd");
-      } catch {
-        // 重写失败不影响草稿本身，状态刷新之后界面会说清楚。
-      }
+    let registrationOk = false;
+    try {
+      const outcomes = await invoke<NativeMessagingRegistrationOutcome[]>(
+        "register_native_messaging_cmd",
+      );
+      registrationOk = registrationCompleted(outcomes);
+    } catch {
+      // 重写失败不影响草稿本身，状态刷新之后界面会说清楚。
     }
-    msg.textContent = "已保存，并把这几个 ID 一起写进了 host 清单。";
+    msg.textContent = registrationOk
+      ? "已保存，并把这几个 ID 一起写进了 host 清单。"
+      : "ID 已保存，但 host 清单没有全部更新成功。请按上面的“重试注册”。";
     await refreshStatus();
   } catch (err: unknown) {
     pairing.onSaveFailure();

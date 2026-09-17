@@ -17,6 +17,17 @@ export interface LinkState {
   showRetry: boolean;
 }
 
+export interface NativeMessagingRegistrationOutcome {
+  registered: boolean;
+}
+
+/** Only report success when the command returned at least one target and every target registered. */
+export function registrationCompleted(
+  outcomes: readonly NativeMessagingRegistrationOutcome[],
+): boolean {
+  return outcomes.length > 0 && outcomes.every((outcome) => outcome.registered);
+}
+
 /**
  * 三件事凑齐才算连上：清单写了、扩展装了、协议版本对得上。
  * 缺哪一件就说哪一件，不要笼统地说「未连接」。

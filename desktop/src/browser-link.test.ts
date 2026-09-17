@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { RuntimeStatus } from "./api.ts";
-import { AFTER_INSTALL_HINT, describeLink, describeProtocolMismatch } from "./browser-link.ts";
+import {
+  AFTER_INSTALL_HINT,
+  describeLink,
+  describeProtocolMismatch,
+  registrationCompleted,
+} from "./browser-link.ts";
 
 const status = (overrides: Partial<RuntimeStatus> = {}): RuntimeStatus =>
   ({
@@ -77,4 +82,10 @@ test("协议版本对不上时说清楚该升哪一边", () => {
   assert.equal(describeProtocolMismatch(null, 2), null);
   assert.match(describeProtocolMismatch(1, 2) ?? "", /升级桌面/);
   assert.match(describeProtocolMismatch(3, 2) ?? "", /升级扩展/);
+});
+
+test("只有命令返回了目标且每个浏览器都注册成功时才显示成功", () => {
+  assert.equal(registrationCompleted([]), false);
+  assert.equal(registrationCompleted([{ registered: true }, { registered: false }]), false);
+  assert.equal(registrationCompleted([{ registered: true }, { registered: true }]), true);
 });
