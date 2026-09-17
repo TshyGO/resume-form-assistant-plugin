@@ -4,6 +4,9 @@ mod ai_commands;
 mod ai_commands_tests;
 mod ai_credentials;
 mod ai_settings;
+mod nm_register;
+#[cfg(test)]
+mod nm_register_tests;
 mod cli;
 mod commands;
 mod evidence_commands;
@@ -59,6 +62,8 @@ struct AppState {
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
     /// 不排队也不重试。
     ai_inflight: ai_commands::InflightRegistry,
+    /// D13：上一次核对 Native Messaging 注册的结果。启动时算一次，手动重试时更新。
+    native_messaging: Mutex<Vec<nm_register::Outcome>>,
 }
 
 /// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
@@ -113,6 +118,113 @@ fn checked_url(api_url: &str) -> Result<(), CommandError> {
     }
 }
 
+/// 这台机器上要写哪几份清单。三个平台的位置互不相同，不能共用一套路径。
+fn native_messaging_targets(data_root: &std::path::Path) -> Vec<nm_register::Target> {
+    #[cfg(windows)]
+    {
+        nm_register::windows_targets(data_root)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = data_root;
+        let Ok(home) = std::env::var("HOME") else {
+            return Vec::new();
+        };
+        let home = std::path::Path::new(&home);
+        #[cfg(target_os = "macos")]
+        {
+            nm_register::mac_targets(home)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            nm_register::linux_targets(home)
+        }
+        // 别的系统我们不发包，也就不知道浏览器读哪里。写一个猜的位置
+        // 只会得到一个谁也不读的文件。
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = home;
+            Vec::new()
+        }
+    }
+}
+
+fn native_messaging_registry() -> Box<dyn nm_register::Registry> {
+    #[cfg(windows)]
+    {
+        Box::new(nm_register::HkcuRegistry)
+    }
+    #[cfg(not(windows))]
+    {
+        Box::new(nm_register::NoRegistry)
+    }
+}
+
+/// 核对一次注册，需要就写，并把结果存进状态。
+///
+/// 启动时跑一次，用户手动重试时再跑一次。写失败不影响应用别的部分：连不上浏览器
+/// 是一件要说清楚的事，不是一件要拦住启动的事。
+fn refresh_native_messaging(state: &AppState) -> Vec<nm_register::Outcome> {
+    let data_root = match state.paths.lock() {
+        Ok(guard) => guard.as_ref().map(|p| p.data_root.clone()),
+        Err(_) => None,
+    };
+    let Some(data_root) = data_root else {
+        return Vec::new();
+    };
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            return vec![nm_register::Outcome {
+                browser: nm_register::Browser::Chrome,
+                label: "本机".into(),
+                registered: false,
+                note: Some(format!("认不出自己的程序路径：{err}")),
+            }]
+        }
+    };
+    // 配对草稿里手填的 ID **只在开发构建里**并进清单。
+    //
+    // 正式构建不看它：那个文件在用户目录下，任何一个本机进程都能往里写；要是
+    // 照单全收，写一行就等于给一个扩展永久授权读整本求职档案。正式版靠的是
+    // manifest.json 里的公钥——本地 unpacked 和商店版是同一个 ID，本来也不需要填。
+    let extra: Vec<String> = if cfg!(debug_assertions) {
+        let draft = match state.host.lock() {
+            Ok(guard) => guard.as_ref().map(|h| h.load_pairing_draft()),
+            Err(_) => None,
+        }
+        .unwrap_or_default();
+        [draft.chrome_extension_id, draft.edge_extension_id]
+            .into_iter()
+            .filter(|id| !id.trim().is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let ids = nm_register::extension_ids(&extra);
+
+    let targets = native_messaging_targets(&data_root);
+    let files = nm_register::RealFiles;
+    let registry = native_messaging_registry();
+    let receipt_path = nm_register::receipt_path(&data_root);
+    let receipt = nm_register::load_receipt(&files, &receipt_path);
+    let (outcomes, next) = nm_register::ensure(
+        &targets,
+        &exe,
+        &ids,
+        &files,
+        registry.as_ref(),
+        receipt,
+    );
+    if let Err(problem) = nm_register::save_receipt(&files, &receipt_path, &next) {
+        eprintln!("nm: 回执没写成：{problem}");
+    }
+    if let Ok(mut slot) = state.native_messaging.lock() {
+        *slot = outcomes.clone();
+    }
+    outcomes
+}
+
 fn credential_error(err: ai_credentials::CredentialError) -> CommandError {
     CommandError {
         code: err.code().into(),
@@ -163,6 +275,8 @@ struct RuntimeStatus {
     hidden_launch: bool,
     autostart_enabled: bool,
     native_messaging_registered: bool,
+    /// 每个浏览器注册成了没有、没成是因为什么。界面照这个说话。
+    native_messaging: Vec<nm_register::Outcome>,
     reminders_implemented: bool,
     close_window_means: String,
     quit_means: String,
@@ -198,6 +312,12 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         .map(|h| h.load_pairing_draft())
         .unwrap_or_default();
     let resolved = paths.clone().or_else(|| HostPaths::resolve().ok());
+    // 注册结果是启动时算好的：状态查询不该顺手往盘上写东西。
+    let native_messaging = state
+        .native_messaging
+        .lock()
+        .map(|outcomes| outcomes.clone())
+        .unwrap_or_default();
     let data_root = resolved
         .as_ref()
         .map(|p| p.data_root.display().to_string())
@@ -244,7 +364,9 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         window_visible,
         hidden_launch: state.hidden_launch,
         autostart_enabled: false,
-        native_messaging_registered: false,
+        native_messaging_registered: native_messaging.iter().all(|o| o.registered)
+            && !native_messaging.is_empty(),
+        native_messaging,
         reminders_implemented: false,
         close_window_means: "hide-to-tray".into(),
         quit_means: "explicit-quit".into(),
@@ -901,6 +1023,27 @@ fn defer_suggestion_cmd(
     })
 }
 
+/// 扩展的商店页。URL 只有这一份，前端不另抄：改成别的商店或换 ID 时只改这里。
+#[tauri::command]
+fn open_extension_store_cmd(app: AppHandle) -> Result<(), CommandError> {
+    let url = format!(
+        "https://chromewebstore.google.com/detail/{}",
+        nm_register::STORE_EXTENSION_ID
+    );
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|err| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: format!("打不开商店页：{err}"),
+        })
+}
+
+/// 手动重试注册。用户装完浏览器、或者上一次因为权限失败时点它。
+#[tauri::command]
+fn register_native_messaging_cmd(state: State<AppState>) -> Vec<nm_register::Outcome> {
+    refresh_native_messaging(&state)
+}
+
 #[tauri::command]
 fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     lifecycle::hide_main_window(&app);
@@ -1142,6 +1285,7 @@ pub fn run() {
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
             ai_inflight: ai_commands::InflightRegistry::default(),
+            native_messaging: Mutex::new(Vec::new()),
         })
         .setup(move |app| {
             if quit_launch {
@@ -1199,6 +1343,9 @@ pub fn run() {
                 }
             }
 
+            // 浏览器要靠这份清单才找得到 host。放在这里：paths 已经有了，窗口还没显示。
+            refresh_native_messaging(&app.state::<AppState>());
+
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
 
@@ -1214,6 +1361,8 @@ pub fn run() {
             get_runtime_status,
             export_diagnostics,
             save_pairing_draft,
+            register_native_messaging_cmd,
+            open_extension_store_cmd,
             hide_main_window_cmd,
             quit_app,
             list_applications_cmd,

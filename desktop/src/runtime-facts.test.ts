@@ -46,3 +46,38 @@ test("空值显示成破折号，不显示 undefined", () => {
   assert.equal(byLabel.get("程序目录"), "—");
   assert.equal(byLabel.get("WebView 数据目录"), "未由本应用托管");
 });
+
+test("Native Messaging 没注册成时说清楚是哪个浏览器、为什么", () => {
+  const rows = runtimeFacts(
+    status({
+    nativeMessagingRegistered: false,
+    nativeMessaging: [
+      { browser: "chrome", label: "Chrome", registered: true },
+      { browser: "edge", label: "Edge", registered: false, note: "写不了注册表键：被策略挡住了" },
+    ],
+  }),
+  );
+  const row = rows.find((item) => item.label === "Native Messaging")!;
+  assert.match(row.value, /Edge 未注册/);
+  assert.match(row.value, /策略/);
+});
+
+test("两个浏览器都注册好了就只说一句", () => {
+  const rows = runtimeFacts(
+    status({
+      nativeMessagingRegistered: true,
+      nativeMessaging: [
+        { browser: "chrome", label: "Chrome", registered: true },
+        { browser: "edge", label: "Edge", registered: true },
+      ],
+    }),
+  );
+  const row = rows.find((item) => item.label === "Native Messaging")!;
+  assert.equal(row.value, "已注册（Chrome、Edge）");
+});
+
+test("还没核对过时不假装已注册", () => {
+  const rows = runtimeFacts(status({ nativeMessagingRegistered: false }));
+  const row = rows.find((item) => item.label === "Native Messaging")!;
+  assert.match(row.value, /还没核对过/);
+});
