@@ -5,6 +5,7 @@ mod ai_commands_tests;
 mod ai_credentials;
 mod ai_settings;
 mod nm_register;
+mod update_check;
 #[cfg(test)]
 mod nm_register_tests;
 mod cli;
@@ -64,6 +65,8 @@ struct AppState {
     ai_inflight: ai_commands::InflightRegistry,
     /// D13：上一次核对 Native Messaging 注册的结果。启动时算一次，手动重试时更新。
     native_messaging: Mutex<Vec<nm_register::Outcome>>,
+    /// D13：上一次查到的可下载版本。「去下载页」开的是它，不是前端传来的任意地址。
+    latest_update: Mutex<Option<update_check::UpdateInfo>>,
 }
 
 /// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
@@ -1000,6 +1003,97 @@ fn defer_suggestion_cmd(
     })
 }
 
+/// 查一次有没有新版本。**只查、只说**，不下载也不安装。
+#[tauri::command]
+async fn check_update_cmd(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Option<update_check::UpdateInfo>, CommandError> {
+    let data_root = ai_data_root(&state).ok();
+    let latest = update_check::fetch_latest().await;
+    // 查过了就记一笔，无论查到没查到——失败也不该让它每次开窗都重试。
+    if let Some(root) = &data_root {
+        let mut pref = update_check::load(root);
+        pref.last_checked_at = Some(time::OffsetDateTime::now_utc().to_string());
+        if let Err(problem) = update_check::save(root, &pref) {
+            eprintln!("update: 偏好没写成：{problem}");
+        }
+    }
+    let latest = latest?;
+    // 比自己新才算数：本地跑的可能是没发过的开发版。
+    let current = app.package_info().version.to_string();
+    let offer = latest.filter(|info| newer_than(&info.version, &current));
+    if let Ok(mut slot) = state.latest_update.lock() {
+        *slot = offer.clone();
+    }
+    Ok(offer)
+}
+
+/// 打开上一次查到的那个下载页。
+///
+/// 不收前端传来的地址：那等于给界面开了一个「用系统浏览器打开任意 URL」的口子。
+#[tauri::command]
+fn open_update_page_cmd(state: State<AppState>, app: AppHandle) -> Result<(), CommandError> {
+    let url = state
+        .latest_update
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|info| info.url.clone()))
+        .ok_or_else(|| CommandError {
+            code: "UPDATE_NOT_CHECKED".into(),
+            message: "还没查到可下载的版本。".into(),
+        })?;
+    if !url.starts_with("https://github.com/") {
+        return Err(CommandError {
+            code: "UPDATE_BAD_URL".into(),
+            message: format!("这个下载地址不像 Release 页，没有打开：{url}"),
+        });
+    }
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|err| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: format!("打不开下载页：{err}"),
+        })
+}
+
+fn newer_than(candidate: &str, current: &str) -> bool {
+    let parse = |value: &str| -> Option<Vec<u32>> {
+        let parts: Vec<&str> = value.split('.').collect();
+        (parts.len() == 3)
+            .then(|| parts.iter().map(|p| p.parse::<u32>().ok()).collect())
+            .flatten()
+    };
+    match (parse(candidate), parse(current)) {
+        (Some(a), Some(b)) => a > b,
+        // 认不出的版本号就别提示升级。
+        _ => false,
+    }
+}
+
+#[tauri::command]
+fn get_update_preference_cmd(state: State<AppState>) -> update_check::UpdatePreference {
+    match ai_data_root(&state) {
+        Ok(root) => update_check::load(&root),
+        Err(_) => update_check::UpdatePreference::default(),
+    }
+}
+
+#[tauri::command]
+fn set_update_preference_cmd(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<update_check::UpdatePreference, CommandError> {
+    let root = ai_data_root(&state)?;
+    let mut pref = update_check::load(&root);
+    pref.enabled = enabled;
+    update_check::save(&root, &pref).map_err(|message| CommandError {
+        code: "UPDATE_PREF_FAILED".into(),
+        message,
+    })?;
+    Ok(pref)
+}
+
 /// 扩展的商店页。URL 只有这一份，前端不另抄：改成别的商店或换 ID 时只改这里。
 #[tauri::command]
 fn open_extension_store_cmd(app: AppHandle) -> Result<(), CommandError> {
@@ -1263,6 +1357,7 @@ pub fn run() {
             credentials: Box::new(ai_credentials::KeyringStore),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
+            latest_update: Mutex::new(None),
         })
         .setup(move |app| {
             if quit_launch {
@@ -1340,6 +1435,10 @@ pub fn run() {
             save_pairing_draft,
             register_native_messaging_cmd,
             open_extension_store_cmd,
+            check_update_cmd,
+            open_update_page_cmd,
+            get_update_preference_cmd,
+            set_update_preference_cmd,
             hide_main_window_cmd,
             quit_app,
             list_applications_cmd,

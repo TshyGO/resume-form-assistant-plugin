@@ -2,6 +2,8 @@ import type { Invoke, RuntimeStatus } from "./api.ts";
 import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
 import { AFTER_INSTALL_HINT, STORE_PENDING_HINT, describeLink } from "./browser-link.ts";
+import { describeCheckFailure, describeUpdate, shouldCheck } from "./update-check.ts";
+import type { UpdateInfo, UpdatePreference } from "./update-check.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
@@ -88,6 +90,7 @@ async function refreshStatus() {
   runtimeStatusView.update(status);
   applyPairingFields(pairing.applyStatus(token, status.pairing));
   applyLinkState(status);
+  void maybeAutoCheck(status);
 }
 
 /** 「连接浏览器」这一段：状态、下一步、两个按钮显不显示。 */
@@ -282,3 +285,74 @@ inbox.refresh().catch(() => {});
 setInterval(() => {
   refreshStatus().catch(() => {});
 }, 4000);
+
+// --- 版本与更新 ---------------------------------------------------------------------------
+
+let pendingUpdate: UpdateInfo | null = null;
+
+function showUpdate(message: { tone: string; text: string; available: boolean }) {
+  const line = must("update-msg");
+  line.textContent = message.text;
+  line.className = `note ${message.tone}`;
+  (must("update-open") as HTMLButtonElement).hidden = !message.available;
+}
+
+async function checkUpdate(currentVersion: string) {
+  if (!invoke) return;
+  const button = must("update-check") as HTMLButtonElement;
+  button.disabled = true;
+  showUpdate({ tone: "ok", text: "正在查…", available: false });
+  try {
+    pendingUpdate = (await invoke<UpdateInfo | null>("check_update_cmd")) ?? null;
+    showUpdate(describeUpdate(currentVersion, pendingUpdate));
+  } catch (error) {
+    pendingUpdate = null;
+    showUpdate(describeCheckFailure(error));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+must("update-check").addEventListener("click", () => {
+  void checkUpdate(currentAppVersion);
+});
+
+must("update-open").addEventListener("click", async () => {
+  if (!invoke || !pendingUpdate) return;
+  try {
+    await invoke("open_update_page_cmd");
+  } catch {
+    showUpdate({ tone: "warn", text: `打不开下载页，手动去：${pendingUpdate.url}`, available: true });
+  }
+});
+
+must("update-auto").addEventListener("change", async (event) => {
+  if (!invoke) return;
+  const enabled = (event.target as HTMLInputElement).checked;
+  try {
+    await invoke<UpdatePreference>("set_update_preference_cmd", { enabled });
+  } catch {
+    // 存不上就把勾选还原，免得界面说的和实际不一样。
+    (must("update-auto") as HTMLInputElement).checked = !enabled;
+  }
+});
+
+let currentAppVersion = "";
+/** 状态每隔几秒刷一次；自动检查每次启动只做一次。 */
+let autoCheckDone = false;
+
+/** 启动时按偏好查一次。查不到就安静退回，不打扰。 */
+async function maybeAutoCheck(status: { appVersion: string }) {
+  currentAppVersion = status.appVersion;
+  if (!invoke || autoCheckDone) return;
+  autoCheckDone = true;
+  let pref: UpdatePreference;
+  try {
+    pref = await invoke<UpdatePreference>("get_update_preference_cmd");
+  } catch {
+    return;
+  }
+  (must("update-auto") as HTMLInputElement).checked = pref.enabled;
+  if (!shouldCheck(pref, new Date().toISOString())) return;
+  await checkUpdate(status.appVersion);
+}
