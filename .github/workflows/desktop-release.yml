@@ -1,0 +1,125 @@
+name: Release Desktop
+
+# 桌面自己的 tag 命名空间。插件走 release.yml 的 `v*.*.*`，两边不能撞：
+# 一次桌面发版不该顺手把插件也发出去。
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macos-arm64
+            os: macos-14
+            rust-target: aarch64-apple-darwin
+            bundles: dmg
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ matrix.rust-target }}
+
+      - name: Install JS dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # tag、tauri.conf.json、Cargo.toml 三处版本号对不上就别往下走：
+      # 构建出来的文件名会和 tag 不一致，用户下载后无从判断装的是哪一版。
+      - name: Verify tag and bundle config
+        run: node desktop/scripts/check-desktop-release.js "${{ github.ref_name }}"
+
+      - name: Build installer
+        working-directory: desktop
+        run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect artifacts and checksums
+        shell: bash
+        run: |
+          mkdir -p dist-release
+          find "desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle" \
+            -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' \) -print0 |
+            while IFS= read -r -d '' file; do cp "$file" dist-release/; done
+          cd dist-release
+          # 安装包未签名，SHA-256 是用户唯一能自己核对的东西。
+          for file in *; do sha256sum "$file" > "$file.sha256"; done
+          ls -l
+          node "$GITHUB_WORKSPACE/desktop/scripts/check-desktop-release.js"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist-release
+          merge-multiple: true
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          {
+            echo "## 安装包未签名"
+            echo
+            echo "我们还没有代码签名证书，所以："
+            echo
+            echo "- Windows 会弹 SmartScreen 的蓝色拦截页，要点「更多信息 → 仍要运行」。"
+            echo "- macOS 会说「无法验证开发者」，要在访达里右键点开安装包再选「打开」。"
+            echo
+            echo "这不是绕过系统保护的窍门，而是未签名软件的正常表现。介意的话请等有签名的版本。"
+            echo
+            echo "## 核对下载到的文件"
+            echo
+            echo "每个安装包旁边都有一份 \`.sha256\`。Windows PowerShell：\`Get-FileHash 文件名\`；macOS：\`shasum -a 256 文件名\`。"
+            echo
+            echo '```'
+            cat dist-release/*.sha256
+            echo '```'
+            echo
+            echo "## 数据放在哪"
+            echo
+            echo "Windows \`%LOCALAPPDATA%\\ResumePro\`，macOS \`~/Library/Application Support/ResumePro\`。卸载默认不动它。"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/*
+          body_path: release-notes.md
+          generate_release_notes: true

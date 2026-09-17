@@ -73,6 +73,11 @@ jobs:
         working-directory: desktop
         run: node --test scripts/nm-dev-register.test.js
 
+      # 发版脚本不能等到打 tag 那天才发现写错了。
+      - name: Release guard tests
+        working-directory: desktop
+        run: npm run test:desktop-release
+
       - name: Frontend build
         working-directory: desktop
         run: npm run build
