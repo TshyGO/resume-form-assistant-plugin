@@ -14,14 +14,14 @@ npm run tauri build -- --bundles nsis      # Windows
 npm run tauri build -- --bundles dmg       # macOS
 ```
 
-产物在 `desktop/src-tauri/target/release/bundle/` 下：
+产物在 `desktop/src-tauri/target/release/bundle/` 下（带 `--target` 构建时是 `target/<triple>/release/bundle/`，CI 走的是后者）：
 
 | 平台 | 文件 |
 | --- | --- |
 | Windows x64 | `nsis/Resume Pro Desktop_<版本>_x64-setup.exe` |
 | macOS Apple Silicon | `dmg/Resume Pro Desktop_<版本>_aarch64.dmg` |
 
-一次干净构建在本机（Windows 11）约 3 分 35 秒，安装包约 6 MB。NSIS 由 Tauri 自己下载，不用预装。
+参考机（Windows 11，本机）上一次干净构建约 3 分 35 秒，安装包约 6 MB——是量级参考，不是承诺。NSIS 由 Tauri 自己下载，不用预装。
 
 发版前先跑一遍检查——版本号、tag、打包配置：
 
@@ -29,7 +29,17 @@ npm run tauri build -- --bundles dmg       # macOS
 node desktop/scripts/check-desktop-release.js desktop-v0.1.0
 ```
 
-它会拦住三件事：`tauri.conf.json` 与 `Cargo.toml` 版本号不一致、tag 与版本号对不上、`bundle` 里夹带了额外文件。
+它会拦住这些：`tauri.conf.json` 与 `Cargo.toml` 版本号不一致、版本号不是 `1.2.3` 的样子、tag 与版本号对不上、`bundle` 里夹带了额外文件、`frontendDist` 指到了源码或测试目录。
+
+上传前还有一道，CI 里跑的就是它——顺便把校验和也算了（用 Node，不依赖 `sha256sum`）：
+
+```bash
+node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
+```
+
+它要求目录里只有安装包和**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。
+
+发版前想先试一遍构建，不必真打 tag：在 Actions 里手动触发 `Release Desktop`（`workflow_dispatch`），它照样构建、照样校验，只是不建 Release。
 
 ### 1.1 版本号与 tag
 
@@ -54,11 +64,18 @@ node desktop/scripts/check-desktop-release.js desktop-v0.1.0
 我们还没有代码签名证书。这意味着：
 
 - **Windows**：SmartScreen 会拦一次，要点「更多信息 → 仍要运行」。
-- **macOS**：会说「无法验证开发者」，要在访达里右键点安装包再选「打开」。
+- **macOS**（目前只出 Apple Silicon 的包）：
+  1. 在访达里右键点 DMG，选「打开」；
+  2. 把 App 拖进「应用程序」；
+  3. **第一次启动还要再右键点 App 选一次「打开」**——拖进去的 App 仍带着隔离属性。较新的 macOS 会把这个入口放在「系统设置 → 隐私与安全性」里的「仍要打开」。
+
+不要去执行 `xattr -dr com.apple.quarantine` 这类命令：它降低的是整台机器的安全性，不只是这一个 App。
 
 这不是绕过系统保护的窍门，而是未签名软件本来的样子。介意的话，请等有签名的版本，不要去关系统的安全设置。
 
 ### 2.1 核对下载到的文件
+
+校验和与安装包放在同一个 Release 里。它能说明文件没在下载途中损坏或被替换，**不能证明发布者身份**——那要靠代码签名，我们还没有。
 
 每个安装包旁边都有一份 `.sha256`，由 CI 在构建机上生成：
 

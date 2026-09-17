@@ -1,20 +1,25 @@
-// 桌面发版前的三件事：版本号一致、tag 归位、包里没有多余东西。
+// 桌面发版前的门禁：版本号一致、tag 归位、包里没有多余东西、上传的东西是对的。
 //
 // 逻辑放在这里而不是 YAML 里，是为了本地能跑、也能被测试盯住：
 //
 //   node desktop/scripts/check-desktop-release.js desktop-v0.1.0
+//   node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
 //
-// 不给 tag 就只查版本号一致性和打包配置。
+// 校验和也由这里算：`sha256sum` 在 macOS runner 上不一定有，而 Node 到处都有。
 
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** 桌面的 tag 前缀。插件用的是 `v*.*.*`，两边不能撞。 */
 export const DESKTOP_TAG_PREFIX = "desktop-v";
 
-/** 只有这些后缀能作为 Release 资产上传。 */
-export const RELEASE_ASSET_SUFFIXES = [".exe", ".dmg", ".sha256"];
+/** 能作为安装包上传的后缀。以后加 `.msi` 之类改这里，配套校验和的规则自动跟上。 */
+export const INSTALLER_SUFFIXES = [".exe", ".dmg", ".msi"];
+
+/** 除了安装包，只允许它们的校验和。 */
+export const CHECKSUM_SUFFIX = ".sha256";
 
 /**
  * 三处版本号必须一样：`tauri.conf.json` 决定安装包文件名和「关于」页，
@@ -22,15 +27,36 @@ export const RELEASE_ASSET_SUFFIXES = [".exe", ".dmg", ".sha256"];
  */
 export function desktopVersion({ tauriConf, cargoToml }) {
   const fromConf = JSON.parse(tauriConf).version;
-  const match = /^\s*version\s*=\s*"([^"]+)"/m.exec(cargoToml);
-  const fromCargo = match?.[1];
+  const fromCargo = packageVersion(cargoToml);
   if (!fromConf || !fromCargo) {
     throw new Error("读不出版本号：tauri.conf.json 或 Cargo.toml 里没有 version");
   }
   if (fromConf !== fromCargo) {
     throw new Error(`版本号对不上：tauri.conf.json 是 ${fromConf}，Cargo.toml 是 ${fromCargo}`);
   }
+  if (!/^\d+\.\d+\.\d+$/.test(fromConf)) {
+    throw new Error(`版本号要写成 1.2.3 的样子，拿到的是 ${fromConf}。预发布怎么发还没定。`);
+  }
   return fromConf;
+}
+
+/**
+ * 只认 `[package]` 段里的 `version`。整文件抓第一个 `version = "..."`，
+ * 会在依赖项排在前面时取到别人的版本号。
+ */
+export function packageVersion(cargoToml) {
+  let inPackage = false;
+  for (const line of cargoToml.split(/\r?\n/)) {
+    const section = /^\s*\[([^\]]+)\]/.exec(line);
+    if (section) {
+      inPackage = section[1].trim() === "package";
+      continue;
+    }
+    if (!inPackage) continue;
+    const match = /^\s*version\s*=\s*"([^"]+)"/.exec(line);
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 /** tag 与版本号的对应关系。写错一个字就别发版，不然下载下来的文件名对不上。 */
@@ -55,10 +81,12 @@ export function tagIsPluginShaped(tag) {
 /**
  * 打包配置里不许出现「顺手带上的文件」。`resources` / `externalBin` 一旦有值，
  * 安装包里就会多出仓库里的东西，而那正是「不含测试数据、调试 profile」这条验收
- * 最容易破的地方。
+ * 最容易破的地方。前端产物目录也看一眼：指到源码或测试目录上同样是把不该发的
+ * 东西打进包里。
  */
 export function assertNothingExtraBundled(tauriConf) {
-  const bundle = JSON.parse(tauriConf).bundle ?? {};
+  const config = JSON.parse(tauriConf);
+  const bundle = config.bundle ?? {};
   const extras = ["resources", "externalBin", "files"].filter((key) => {
     const value = bundle[key];
     return Array.isArray(value) ? value.length > 0 : value && Object.keys(value).length > 0;
@@ -68,17 +96,64 @@ export function assertNothingExtraBundled(tauriConf) {
       `bundle 里带了额外文件（${extras.join("、")}）。要加东西进安装包，先在 D13 的计划里写明白为什么。`,
     );
   }
+  const frontend = config.build?.frontendDist;
+  if (frontend !== "../dist") {
+    throw new Error(`frontendDist 应该指向构建产物 ../dist，现在指向 ${frontend}`);
+  }
 }
 
-/** Release 只上传安装包和它的校验值，别把整个 target 目录传上去。 */
+/**
+ * 上传前的最后一道：目录里只能有安装包和它们各自的校验和，而且一一配对。
+ * 少一个校验和，用户就没法核对自己下到的东西。
+ */
 export function assertReleaseAssets(names) {
-  const bad = names.filter((name) => !RELEASE_ASSET_SUFFIXES.some((s) => name.endsWith(s)));
-  if (bad.length > 0) {
-    throw new Error(`这些文件不该作为 Release 资产上传：${bad.join("、")}`);
-  }
   if (names.length === 0) {
     throw new Error("一个资产都没有，构建多半失败了");
   }
+  const installers = names.filter((name) => INSTALLER_SUFFIXES.some((s) => name.endsWith(s)));
+  const checksums = names.filter((name) => name.endsWith(CHECKSUM_SUFFIX));
+  const strays = names.filter((name) => !installers.includes(name) && !checksums.includes(name));
+  if (strays.length > 0) {
+    throw new Error(`这些文件不该作为 Release 资产上传：${strays.join("、")}`);
+  }
+  if (installers.length === 0) {
+    throw new Error("只有校验和，没有安装包");
+  }
+  const missing = installers.filter((name) => !checksums.includes(`${name}${CHECKSUM_SUFFIX}`));
+  if (missing.length > 0) {
+    throw new Error(`这些安装包没有配套的校验和：${missing.join("、")}`);
+  }
+  const orphan = checksums.filter(
+    (name) => !installers.includes(name.slice(0, -CHECKSUM_SUFFIX.length)),
+  );
+  if (orphan.length > 0) {
+    throw new Error(`这些校验和没有对应的安装包：${orphan.join("、")}`);
+  }
+}
+
+export function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * 给目录里每个安装包写一份校验和，再把整个目录按上面的规则验一遍。
+ * 用 Node 算而不是 `sha256sum`：后者在 macOS runner 上不一定存在。
+ */
+export function writeChecksums(dir, io = { readdirSync, readFileSync, writeFileSync }) {
+  const installers = io
+    .readdirSync(dir)
+    .filter((name) => INSTALLER_SUFFIXES.some((s) => name.endsWith(s)));
+  if (installers.length === 0) {
+    throw new Error(`${dir} 里没有安装包，构建多半失败了`);
+  }
+  const written = [];
+  for (const name of installers) {
+    const digest = sha256(io.readFileSync(join(dir, name)));
+    io.writeFileSync(join(dir, `${name}${CHECKSUM_SUFFIX}`), `${digest}  ${name}\n`);
+    written.push({ name, digest });
+  }
+  assertReleaseAssets(io.readdirSync(dir));
+  return written;
 }
 
 function main(argv) {
@@ -90,7 +165,24 @@ function main(argv) {
   const version = desktopVersion({ tauriConf, cargoToml });
   assertNothingExtraBundled(tauriConf);
 
-  const tag = argv[2];
+  const assetsAt = argv.indexOf("--assets");
+  if (assetsAt >= 0) {
+    const dir = argv[assetsAt + 1];
+    if (!dir || dir.startsWith("--")) {
+      throw new Error("--assets 后面要跟目录");
+    }
+    if (argv.includes("--write-checksums")) {
+      for (const { name, digest } of writeChecksums(dir)) {
+        console.log(`${digest}  ${name}`);
+      }
+    } else {
+      assertReleaseAssets(readdirSync(dir));
+    }
+    console.log(`桌面 ${version}：${dir} 里只有安装包和配套校验和。`);
+    return;
+  }
+
+  const tag = argv.slice(2).find((arg) => !arg.startsWith("--"));
   if (tag) {
     if (tagIsPluginShaped(tag)) {
       throw new Error(`${tag} 是插件的 tag 形状，桌面要用 ${DESKTOP_TAG_PREFIX}${version}`);
@@ -102,9 +194,21 @@ function main(argv) {
   console.log(`桌面 ${version}：版本号一致，打包配置没有多余文件。`);
 }
 
-// 路径里有空格和盘符，拼字符串比较会在 Windows 上悄悄失效（试过了，什么都不会跑）。
-const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
+/**
+ * 入口判断按 realpath 比：符号链接和相对路径都能对上。
+ * 判断错了的后果是「什么都不做但 exit 0」，CI 照样绿——所以不能只靠字符串相等。
+ */
+function invokedDirectly() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return import.meta.url === pathToFileURL(entry).href;
+  }
+}
+
+if (invokedDirectly()) {
   try {
     main(process.argv);
   } catch (error) {
