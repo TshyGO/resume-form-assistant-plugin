@@ -309,11 +309,15 @@ async function checkUpdate(currentVersion: string) {
     pendingUpdate = null;
     showUpdate(describeCheckFailure(error));
   } finally {
-    button.disabled = false;
+    button.disabled = currentAppVersion.length === 0;
   }
 }
 
 must("update-check").addEventListener("click", () => {
+  if (!currentAppVersion) {
+    showUpdate({ tone: "warn", text: "正在读取应用版本，请稍后再查。", available: false });
+    return;
+  }
   void checkUpdate(currentAppVersion);
 });
 
@@ -344,6 +348,7 @@ let autoCheckDone = false;
 /** 启动时按偏好查一次。查不到就安静退回，不打扰。 */
 async function maybeAutoCheck(status: { appVersion: string }) {
   currentAppVersion = status.appVersion;
+  (must("update-check") as HTMLButtonElement).disabled = currentAppVersion.length === 0;
   if (!invoke || autoCheckDone) return;
   autoCheckDone = true;
   let pref: UpdatePreference;
