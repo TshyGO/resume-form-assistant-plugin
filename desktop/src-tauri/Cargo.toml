@@ -38,6 +38,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
+sha2 = "0.10.9"
 
 [dev-dependencies]
 tempfile = "3"
@@ -45,3 +46,4 @@ tokio = { version = "1", default-features = false, features = ["macros", "rt", "
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+winreg = "0.56.0"

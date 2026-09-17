@@ -291,6 +291,13 @@ export interface RuntimeStatus {
   hiddenLaunch: boolean;
   autostartEnabled: boolean;
   nativeMessagingRegistered: boolean;
+  /** 每个浏览器注册成了没有。没成时 `note` 说清楚为什么。 */
+  nativeMessaging?: Array<{
+    browser: "chrome" | "edge";
+    label: string;
+    registered: boolean;
+    note?: string | null;
+  }>;
   remindersImplemented: boolean;
   closeWindowMeans: string;
   quitMeans: string;
