@@ -42,24 +42,7 @@
         "link/*.mjs",
         "link/protocol/*.mjs",
         "popup.html",
-        "popup.css",
-        "popup.js",
-        "content.css",
-        "xlsx.full.min.js",
-        "mammoth.browser.min.js",
-        "ai-helpers.js",
-        "ai-client.js",
-        "ai-models.js",
-        "form-agent.js",
-        "resume-utils.js",
-        "profile-fields.js",
-        "vendor/pdfjs/pdf.min.mjs",
-        "vendor/pdfjs/pdf.worker.min.mjs",
-        "vendor/pdfjs/cmaps/*",
-        "icons/icon16.png",
-        "icons/icon32.png",
-        "icons/icon48.png",
-        "icons/icon128.png"
+        "content.css"
       ],
       "matches": [
         "<all_urls>"
