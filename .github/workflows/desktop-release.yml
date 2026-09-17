@@ -1,0 +1,189 @@
+name: Release Desktop
+
+# 桌面自己的 tag 命名空间。插件走 release.yml 的 `v*.*.*`，两边不能撞：
+# 一次桌面发版不该顺手把插件也发出去。
+#
+# `workflow_dispatch` 是给发版前试跑用的：同样构建、同样校验，只是不建 Release。
+# 「打 tag 那天才发现构建坏了」是这条管道最贵的失败方式。
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macos-arm64
+            os: macos-15
+            rust-target: aarch64-apple-darwin
+            bundles: dmg
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ matrix.rust-target }}
+
+      - name: Install JS dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # tag、tauri.conf.json、Cargo.toml 三处版本号对不上就别往下走：
+      # 构建出来的文件名会和 tag 不一致，用户下载后无从判断装的是哪一版。
+      # tag 名走 env 传：`run:` 里插值等于把 ref 名当 shell 代码执行。
+      - name: Verify tag and bundle config
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        shell: bash
+        run: node desktop/scripts/check-desktop-release.js "$TAG"
+
+      # Cargo.lock 过期时这一步会失败，而不是让构建悄悄改锁文件：
+      # 「可复现构建」的前提是锁文件说了算。
+      - name: Check Cargo.lock is current
+        working-directory: desktop/src-tauri
+        run: cargo fetch --locked
+
+      - name: Build frontend
+        working-directory: desktop
+        run: npm run build
+
+      # 配置里没夹带文件，不代表 dist 里没有 sourcemap 或测试夹具。
+      - name: Check frontend output
+        run: node desktop/scripts/check-desktop-release.js --dist desktop/dist
+
+      - name: Build installer
+        working-directory: desktop
+        run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect artifacts and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release
+          found=0
+          while IFS= read -r -d '' file; do
+            cp "$file" dist-release/
+            found=$((found + 1))
+          done < <(find "desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle" \
+            -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' \) -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "构建没产出安装包" >&2
+            exit 1
+          fi
+          # 校验和由脚本用 Node 算：macOS runner 上不一定有 sha256sum。
+          # 同一条命令顺手把「目录里只有安装包和配套校验和」验掉。
+          node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist-release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist-release
+          merge-multiple: true
+
+      # 复算一遍校验和：构建机写的和这里手上的是两份文件，中间过了一次 artifact。
+      - name: Check what is about to be published
+        shell: bash
+        run: node desktop/scripts/check-desktop-release.js --assets dist-release
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## 安装包未签名"
+            echo
+            echo "我们还没有代码签名证书，所以："
+            echo
+            echo "- **Windows**：SmartScreen 会弹蓝色拦截页，要点「更多信息 → 仍要运行」。"
+            echo "- **macOS**（仅 Apple Silicon）：右键点 DMG 选「打开」；把 App 拖进「应用程序」之后，**第一次启动还要再右键点 App 选一次「打开」**。较新的 macOS 会把这个入口放在「系统设置 → 隐私与安全性」里的「仍要打开」。"
+            echo
+            echo "这不是绕过系统保护的窍门，而是未签名软件的正常表现。请不要去执行 \`xattr\` 之类降低整机安全性的命令；介意的话请等有签名的版本。"
+            echo
+            echo "## 核对下载到的文件"
+            echo
+            echo "每个安装包旁边都有一份 \`.sha256\`。Windows PowerShell：\`Get-FileHash 文件名\`；macOS：\`shasum -a 256 文件名\`。"
+            echo
+            echo '```'
+            cat dist-release/*.sha256
+            echo '```'
+            echo
+            echo "校验和与安装包放在同一个 Release 里，**只能说明文件没在下载途中损坏或被替换，不能证明发布者身份**——那要靠代码签名，我们还没有。"
+            echo
+            echo "## 数据放在哪"
+            echo
+            echo "Windows \`%LOCALAPPDATA%\\ResumePro\`，macOS \`~/Library/Application Support/ResumePro\`。卸载默认不动它。"
+          } > release-notes.md
+          # 自动生成的变更记录拼在自定义说明后面。`--notes-file` 和 `--generate-notes`
+          # 不能一起用：要么命令失败，要么自动内容把「未签名」那段盖掉。
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body >> release-notes.md || true
+          cat release-notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+
+      # 用 runner 自带的 gh，不再引入一个拿着 contents: write 的第三方 action。
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist-release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file release-notes.md
