@@ -257,6 +257,8 @@ struct RuntimeStatus {
     native_messaging_registered: bool,
     /// 每个浏览器注册成了没有、没成是因为什么。界面照这个说话。
     native_messaging: Vec<nm_register::Outcome>,
+    /// 这次启动升级过数据库的话，迁移前那份自动备份在哪。没升级就是空。
+    migration_backup: Option<String>,
     reminders_implemented: bool,
     close_window_means: String,
     quit_means: String,
@@ -292,6 +294,14 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         .map(|h| h.load_pairing_draft())
         .unwrap_or_default();
     let resolved = paths.clone().or_else(|| HostPaths::resolve().ok());
+    // 升级时 archive-store 会在迁移前自动备份一份（D03）。它是「升级失败还有退路」
+    // 这句话的凭据，得让用户看得见，而不是只躺在日志里。
+    let migration_backup = state
+        .store
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().and_then(|store| store.migration_backup.clone()))
+        .map(|path| path.display().to_string());
     // 注册结果是启动时算好的：状态查询不该顺手往盘上写东西。
     let native_messaging = state
         .native_messaging
@@ -347,6 +357,7 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
         native_messaging_registered: native_messaging.iter().all(|o| o.registered)
             && !native_messaging.is_empty(),
         native_messaging,
+        migration_backup,
         reminders_implemented: false,
         close_window_means: "hide-to-tray".into(),
         quit_means: "explicit-quit".into(),

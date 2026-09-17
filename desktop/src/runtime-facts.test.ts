@@ -81,3 +81,18 @@ test("还没核对过时不假装已注册", () => {
   const row = rows.find((item) => item.label === "Native Messaging")!;
   assert.match(row.value, /还没核对过/);
 });
+
+test("升级过数据库时把迁移备份指给用户看", () => {
+  const rows = runtimeFacts(
+    status({ migrationBackup: "C:/data/archive/backups/archive-v3-2026-09-17.db" }),
+  );
+  const row = rows.find((item) => item.label === "本次升级的迁移备份")!;
+  assert.match(row.value, /archive-v3/);
+  assert.match(row.value, /可以从它恢复/);
+});
+
+test("没升级就直说没升级，不留一个空格子", () => {
+  const rows = runtimeFacts(status());
+  const row = rows.find((item) => item.label === "本次升级的迁移备份")!;
+  assert.equal(row.value, "本次启动没有升级数据库");
+});
