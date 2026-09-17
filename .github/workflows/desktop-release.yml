@@ -169,7 +169,7 @@ jobs:
           # 自动生成的变更记录拼在自定义说明后面。`--notes-file` 和 `--generate-notes`
           # 不能一起用：要么命令失败，要么自动内容把「未签名」那段盖掉。
           gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="$TAG" --jq .body >> release-notes.md || true
+            -f tag_name="$TAG" --jq .body >> release-notes.md
           cat release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

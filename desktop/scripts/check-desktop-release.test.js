@@ -211,6 +211,11 @@ test("Release 说明不能同时用 --notes-file 和 --generate-notes", () => {
   assert.match(createBlock, /--notes-file release-notes\.md/);
   // 自动变更记录仍然要有，只是拼进同一个文件。
   assert.match(flow, /releases\/generate-notes/);
+  assert.doesNotMatch(
+    flow,
+    /releases\/generate-notes[\s\S]*?\|\|\s*true/,
+    "自动发布说明生成失败时必须阻止发布，不能静默吞掉错误",
+  );
 });
 
 test("发版工作流会拦住过期的 Cargo.lock 和脏 dist", () => {
