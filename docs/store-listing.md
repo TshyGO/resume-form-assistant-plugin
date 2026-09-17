@@ -64,6 +64,9 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 探测出你装了这个扩展。
 
 这一条列表由 `tests/manifest-war.test.js` 锁定，误把子资源重新暴露会让 CI 变红。
+真实浏览器冒烟（Playwright Chromium，有头）见 `desktop/scripts/war_browser_check.py`：
+扩展页能加载自己的 `popup.css`/`popup.js`/`xlsx`/PDF.js，普通网页只能加载上面这 4 个 WAR 文件，
+其余全部被浏览器阻止。
 
 **`popup.html` 的跨源边界：** 它是扩展源页面，任何网页都能 iframe 它；页面无法跨源读取
 其中的内容，仓库里也没有 `window.postMessage` 通道。它只在用户点击「打开管理面板」后显示，
