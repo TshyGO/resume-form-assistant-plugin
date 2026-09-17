@@ -214,20 +214,35 @@
           <h1>设置</h1>
           <div id="facts"></div>
 
-          <h2>浏览器扩展 ID（配对草稿）</h2>
+          <h2>连接浏览器</h2>
           <p class="muted">
-            仅保存在本机设置文件，<strong>不会</strong>写入 Native Messaging 注册表或 macOS NativeMessagingHosts。配对与 host 属于 D06/D07/D13。
+            桌面和浏览器扩展连上之后，保存岗位、填写留档才会同步到这里。扩展的 ID 是固定的，正常情况下你不用填任何东西。
           </p>
-          <form id="pairing-form" class="stack">
-            <label>Chrome 扩展 ID
-              <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
-            </label>
-            <label>Edge 扩展 ID
-              <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
-            </label>
-            <button type="submit">保存草稿</button>
-            <p id="pairing-msg" class="muted"></p>
-          </form>
+          <p id="link-state" class="note"></p>
+          <p id="link-next" class="muted"></p>
+          <div class="row">
+            <button type="button" id="link-install">去装扩展</button>
+            <button type="button" id="link-retry">重试注册</button>
+          </div>
+          <p class="muted" id="link-after-install"></p>
+          <details>
+            <summary>开发者模式：手动指定扩展 ID</summary>
+            <p class="muted" id="link-store-pending"></p>
+            <p class="muted">
+              只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的
+              <code>allowed_origins</code>，正式那条 ID 不会被顶掉。
+            </p>
+            <form id="pairing-form" class="stack">
+              <label>Chrome 扩展 ID
+                <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>Edge 扩展 ID
+                <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
+              </label>
+              <button type="submit">保存并重写清单</button>
+              <p id="pairing-msg" class="muted"></p>
+            </form>
+          </details>
 
           <h2>AI 整理（桌面）</h2>
           <div id="ai-settings"></div>
