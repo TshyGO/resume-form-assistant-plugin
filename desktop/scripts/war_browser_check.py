@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -99,6 +100,8 @@ def main() -> None:
 
                 # 2. Ordinary web page: only the reviewed WAR files may load.
                 web_page = context.new_page()
+                page_errors: list[str] = []
+                web_page.on("pageerror", lambda error: page_errors.append(str(error)))
                 web_page.route("https://war-smoke.test/**", lambda route: route.fulfill(body=WEB_PAGE, content_type="text/html"))
                 web_page.goto("https://war-smoke.test/", wait_until="load")
                 outside = web_page.evaluate(
@@ -130,7 +133,55 @@ def main() -> None:
                     if not outside[key].startswith("blocked:"):
                         failure(f"web page unexpectedly loaded non-WAR resource {key}: {outside[key]}")
 
-                print(json.dumps({"extensionId": extension_id, "inside": inside, "outside": outside}, ensure_ascii=False, indent=2))
+                # 3. The real manager path: the content script owns the iframe and
+                #    sets its src. A page script cannot initiate that navigation
+                #    (Chrome blocks it), so trigger the same TOGGLE_MANAGER message
+                #    the extension itself uses instead of faking the iframe in page JS.
+                web_page.wait_for_selector("#resume-pro-sidebar", timeout=10_000)
+                extension_page.evaluate(
+                    """async () => {
+                        const [tab] = await chrome.tabs.query({ url: "https://war-smoke.test/*" });
+                        if (!tab) throw new Error("war-smoke tab not found");
+                        await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_MANAGER" });
+                    }"""
+                )
+                frame = None
+                deadline = time.time() + 10
+                while time.time() < deadline and frame is None:
+                    for candidate in web_page.frames:
+                        if candidate.url.startswith(f"chrome-extension://{extension_id}/popup.html"):
+                            frame = candidate
+                            break
+                    if frame is None:
+                        time.sleep(0.2)
+                manager_iframe = "loaded"
+                if frame is None:
+                    # Chrome and Edge block a delayed iframe navigation to an
+                    # extension page, even when the content script owns the frame.
+                    # That is a pre-existing manager-panel defect, tracked in #125;
+                    # it is not a WAR regression, so record it without failing the
+                    # WAR contract check.
+                    manager_iframe = "blocked (known issue #125)"
+                    iframe_info = web_page.evaluate(
+                        """() => {
+                            const frame = document.querySelector('#resume-pro-manager iframe');
+                            return frame ? { src: frame.src, loaded: frame.dataset.loaded } : null;
+                        }"""
+                    )
+                    print(f"KNOWN ISSUE #125: manager iframe stayed blocked: {iframe_info}")
+                else:
+                    frame.wait_for_selector(".popup-shell", timeout=10_000)
+                    frame_popup_js = frame.evaluate(
+                        "async () => (await fetch(chrome.runtime.getURL('popup.js'))).status"
+                    )
+                    if frame_popup_js != 200:
+                        failure(f"iframe popup.html cannot load popup.js: {frame_popup_js}")
+
+                # 4. Content-script resources loaded without page errors.
+                if page_errors:
+                    failure(f"page-side scripts raised errors: {page_errors[:3]}")
+
+                print(json.dumps({"extensionId": extension_id, "inside": inside, "outside": outside, "managerIframe": manager_iframe}, ensure_ascii=False, indent=2))
                 print("PASS: WAR browser smoke")
             finally:
                 context.close()

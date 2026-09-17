@@ -322,13 +322,17 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
     // 升级时 archive-store 会在迁移前自动备份一份（D03）。它是「升级失败还有退路」
     // 这句话的凭据，得让用户看得见，而不是只躺在日志里。
     let (migration_backup, migration_backup_unknown) = match state.store.lock() {
-        Ok(guard) => (
-            guard
-                .as_ref()
-                .and_then(|store| store.migration_backup.clone())
-                .map(|path| path.display().to_string()),
-            false,
-        ),
+        // A store that failed to open is also "unknown", not "no migration".
+        Ok(guard) => match guard.as_ref() {
+            Some(store) => (
+                store
+                    .migration_backup
+                    .clone()
+                    .map(|path| path.display().to_string()),
+                false,
+            ),
+            None => (None, true),
+        },
         Err(_) => (None, true),
     };
     // 注册结果是启动时算好的：状态查询不该顺手往盘上写东西。

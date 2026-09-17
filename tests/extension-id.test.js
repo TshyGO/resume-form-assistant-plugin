@@ -24,6 +24,7 @@ test("manifest 公钥固定了商店扩展 ID", () => {
   const der = Buffer.from(manifest.key, "base64");
   const publicKey = crypto.createPublicKey({ key: der, format: "der", type: "spki" });
   assert.equal(publicKey.asymmetricKeyType, "rsa");
+  assert.equal(publicKey.asymmetricKeyDetails?.modulusLength, 2048);
   assert.equal(extensionIdFromPublicKey(manifest.key), STORE_ID);
 });
 

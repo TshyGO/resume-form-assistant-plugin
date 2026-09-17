@@ -72,11 +72,14 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 | 加载方 | 资源 | 要不要 WAR |
 | --- | --- | --- |
-| 内容脚本/页面侧 | `content.css`（`fetch`）、`popup.html`（iframe）、`link/*.mjs` 与 `link/protocol/*.mjs`（`content.js` 动态 `import`） | 要，已在列表里 |
+| 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`link/*.mjs` 与 `link/protocol/*.mjs`（`content.js` 动态 `import`） | 要，已在列表里 |
+| 内容脚本/页面侧 | `popup.html`（原计划 iframe 注入管理面板） | 保留；该入口当前被 Chrome/Edge 延迟导航限制，见 [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) |
 | 扩展页/offscreen | `popup.js`、`popup.css`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
 | 浏览器 UI | `icons/*`（只在 `manifest.json` 的 `action`/`icons` 字段里） | 不要；没有任何内容脚本把它注入网页 |
 
 `content.css` 里没有 `url(...)` 引用，因此没有漏掉的图片或字体。
+
+**权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`scripting`、`activeTab`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
 **`popup.html` 的跨源边界：** 它是扩展源页面，任何网页都能 iframe 它；页面无法跨源读取
 其中的内容，仓库里也没有 `window.postMessage` 通道。它只在用户点击「打开管理面板」后显示，
@@ -115,3 +118,4 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 - **列表材料**：128×128 图标、1280×800 截图、简短/详细描述、分类与语言。
 - **隐私政策的公开地址**：把 `docs/privacy-policy.md` 发布成 GitHub Pages 的 HTTPS 页面，再把商店里的链接指过去。
 - **首次发布后复核扩展 ID**：公钥推导和商店 Draft item 现在一致；首次真正发布后再核对一次，若 Edge 或商店换了 ID，就恢复插件设置的导出/导入兜底，不要直接让用户从零开始。
+- **D14 保留 storage.local 分区验证**：首次从商店安装后确认扩展存储分区与 unpacked 一致；若不一致，恢复导出/导入兜底。

@@ -10,12 +10,20 @@ const manifest = JSON.parse(
 );
 
 test("web_accessible_resources 保持人工审过的最小列表", () => {
-  assert.deepEqual(manifest.web_accessible_resources, [
+  assert.deepStrictEqual(manifest.web_accessible_resources, [
     {
       resources: ["link/*.mjs", "link/protocol/*.mjs", "popup.html", "content.css"],
       matches: ["<all_urls>"],
     },
   ]);
+});
+
+test("申报权限与隐私政策逐条对应，没有悄悄加权限", () => {
+  assert.deepStrictEqual(
+    new Set(manifest.permissions),
+    new Set(["offscreen", "storage", "scripting", "activeTab", "tabs", "nativeMessaging", "alarms"]),
+  );
+  assert.deepStrictEqual(manifest.host_permissions, ["<all_urls>"]);
 });
 
 test("扩展页面自己的子资源不能重新对网页开放", () => {

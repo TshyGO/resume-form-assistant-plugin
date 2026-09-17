@@ -112,10 +112,14 @@ def remove_registration_written_by_app(data_dir: Path) -> None:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
                 value, _ = winreg.QueryValueEx(key, "")
-        except FileNotFoundError:
+        except OSError:
             continue
-        if Path(str(value)).resolve().parent == Path(expected).resolve():
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+        parent = os.path.normcase(os.path.dirname(os.path.abspath(str(value))))
+        if parent == os.path.normcase(os.path.abspath(expected)):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+            except OSError:
+                pass
 
 
 def node(*args: str) -> subprocess.CompletedProcess[str]:

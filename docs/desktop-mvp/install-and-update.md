@@ -135,6 +135,9 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 迁移失败可以从它恢复。设置页的运行状态里会写明这次启动有没有做过迁移备份、备份在哪。
 这个提示只在真正发生迁移的那一次启动出现；备份路径是进程内状态，重启后不会继续显示。
 
+回滚步骤：托盘菜单「退出」→ 设置页「备份与恢复」→ 选 `backups/` 下那份迁移备份 → 恢复。
+恢复前应用会先把当前档案留成一个回滚点。
+
 ## 6. 卸载
 
 卸载会删掉：程序文件、开始菜单快捷方式、Chrome 与 Edge 的 Native Messaging 注册项，
@@ -145,6 +148,9 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 **不会删**：`%LOCALAPPDATA%\ResumePro`（Windows）/ `~/Library/Application Support/ResumePro`（macOS）——
 也就是你的申请记录、附件、待办和备份。
 
+macOS 上 host 清单在 `~/Library/Application Support/{Google/Chrome, Microsoft Edge}/NativeMessagingHosts/`；
+卸载只删这两份清单，档案目录原样保留。
+
 真要一起删：在卸载器里勾上「删除应用数据」，之后会**再问一次**，问句里写着具体目录和里面
 有什么。那一步不可撤销。升级和静默卸载走的也是同一个卸载器，那两种情况下既不会问、也不会删。
 
@@ -152,7 +158,7 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 
 - 关掉窗口不等于退出：程序留在托盘里，为的是浏览器扩展随时能连上来保存岗位，以及到点弹提醒。
   真要退出走托盘菜单的「退出」——退出之后提醒不会响，待办还在。
-- 浏览器发消息时，如果程序没在运行，系统会按 host 清单把它拉起来，不会弹出终端窗口。
+- 浏览器发消息时，如果程序没在运行，系统会按 host 清单把它拉起来，不会弹出终端窗口（`cli::tests::native_messaging_mode_never_attaches_a_console` 锁住这条）。
 - 最低系统版本：Windows 10 1809 或更新（需要 WebView2 Runtime）；macOS 11。
 
 ## 8. 插件怎么重载
