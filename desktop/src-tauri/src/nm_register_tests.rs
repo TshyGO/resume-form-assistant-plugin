@@ -95,13 +95,23 @@ impl Registry for FakeRegistry {
     }
 }
 
+/// 安装目录带空格是常态：Windows 的 per-user 装在 `%LOCALAPPDATA%\Resume Pro Desktop`，
+/// macOS 是 `Resume Pro Desktop.app`。路径必须在**当前平台**上算绝对路径，
+/// 否则 `manifest_json` 会先一步拒绝，测的就不是想测的那件事了。
 fn exe() -> PathBuf {
-    // 安装目录带空格是常态：per-user 装在 %LOCALAPPDATA%\Resume Pro Desktop。
-    PathBuf::from(r"C:\Users\某人\AppData\Local\Resume Pro Desktop\resume-pro-desktop.exe")
+    if cfg!(windows) {
+        PathBuf::from(r"C:\Users\某人\AppData\Local\Resume Pro Desktop\resume-pro-desktop.exe")
+    } else {
+        PathBuf::from("/Users/某人/Applications/Resume Pro Desktop.app/Contents/MacOS/resume-pro-desktop")
+    }
 }
 
 fn data_root() -> PathBuf {
-    PathBuf::from(r"C:\Users\某人\AppData\Local\ResumePro")
+    if cfg!(windows) {
+        PathBuf::from(r"C:\Users\某人\AppData\Local\ResumePro")
+    } else {
+        PathBuf::from("/Users/某人/Library/Application Support/ResumePro")
+    }
 }
 
 #[test]
@@ -131,6 +141,7 @@ fn a_path_with_spaces_and_chinese_survives_the_round_trip() {
 #[test]
 fn a_relative_path_or_a_bad_id_is_refused_before_anything_is_written() {
     assert!(manifest_json(Path::new("resume-pro-desktop.exe"), &extension_ids(&[])).is_err());
+    assert!(manifest_json(Path::new("./relative/host"), &extension_ids(&[])).is_err());
     assert!(manifest_json(&exe(), &[]).is_err());
     assert!(manifest_json(&exe(), &["不是扩展 ID".to_string()]).is_err());
 }
@@ -202,7 +213,11 @@ fn a_manifest_written_by_someone_else_is_left_alone() {
 fn a_stale_manifest_we_wrote_is_repaired() {
     let targets = windows_targets(&data_root());
     let chrome = targets[0].manifest_path.to_string_lossy().to_string();
-    let old_exe = PathBuf::from(r"D:\旧位置\resume-pro-desktop.exe");
+    let old_exe = if cfg!(windows) {
+        PathBuf::from(r"D:\旧位置\resume-pro-desktop.exe")
+    } else {
+        PathBuf::from("/Volumes/旧位置/resume-pro-desktop")
+    };
     let stale = manifest_json(&old_exe, &extension_ids(&[])).unwrap();
     let files = FakeFiles::with(&[(chrome.as_str(), stale.as_str())]);
     let registry = FakeRegistry::default();
@@ -228,7 +243,12 @@ fn a_stale_manifest_we_wrote_is_repaired() {
 fn a_registry_key_pointing_at_nothing_is_rewritten() {
     let targets = windows_targets(&data_root());
     let key = targets[0].registry_key.clone().unwrap();
-    let registry = FakeRegistry::with(&[(key.as_str(), r"D:\早就删了\chrome-host.json")]);
+    let gone = if cfg!(windows) {
+        r"D:\早就删了\chrome-host.json"
+    } else {
+        "/Volumes/早就删了/chrome-host.json"
+    };
+    let registry = FakeRegistry::with(&[(key.as_str(), gone)]);
     let files = FakeFiles::default();
 
     let (outcomes, _) = ensure(
