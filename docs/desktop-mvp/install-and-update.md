@@ -102,7 +102,8 @@ shasum -a 256 "Resume Pro Desktop_0.1.0_aarch64.dmg"     # macOS
 | Windows | `%LOCALAPPDATA%\ResumePro` |
 | macOS | `~/Library/Application Support/ResumePro` |
 
-安装、升级、卸载都不动这个目录（卸载时要删得另外明确勾选，见下面的「卸载」一节）。
+安装、升级都不动这个目录里的求职档案；卸载会清掉应用自己写的 Native Messaging 清单，
+但档案本身默认保留，只有用户额外勾选并再次确认才会删（见下面的「卸载」一节）。
 备份与恢复的口径见 [data-privacy.md §6](data-privacy.md)。
 
 ---
@@ -132,6 +133,7 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 
 数据库结构有变化时，桌面会在迁移**之前**自动备份一份到档案目录的 `backups/` 下，
 迁移失败可以从它恢复。设置页的运行状态里会写明这次启动有没有做过迁移备份、备份在哪。
+这个提示只在真正发生迁移的那一次启动出现；备份路径是进程内状态，重启后不会继续显示。
 
 ## 6. 卸载
 
