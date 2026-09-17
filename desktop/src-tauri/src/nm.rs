@@ -23,17 +23,19 @@ pub enum Caller {
     Rejected(String),
 }
 
-/// The origins the desktop has been paired with.
+/// The origins allowed to start the desktop host.
 ///
-/// Edge is Chromium, so an Edge extension's origin uses the `chrome-extension` scheme
-/// too; both stored ids produce the same form. Empty ids are skipped rather than turned
-/// into an origin that could never match.
+/// The fixed store extension must always work, even before a pairing draft has been
+/// saved. Development ids from the draft are added after it. Edge is Chromium, so an
+/// Edge extension's origin uses the `chrome-extension` scheme too.
 pub fn allowed_origins_from(draft: &PairingDraft) -> Vec<String> {
-    [&draft.chrome_extension_id, &draft.edge_extension_id]
-        .into_iter()
-        .filter(|id| !id.is_empty())
-        .map(|id| format!("chrome-extension://{id}/"))
-        .collect()
+    crate::nm_register::extension_ids(&[
+        draft.chrome_extension_id.clone(),
+        draft.edge_extension_id.clone(),
+    ])
+    .into_iter()
+    .map(|id| format!("chrome-extension://{id}/"))
+    .collect()
 }
 
 /// Decide whether the caller may be served.
@@ -367,7 +369,7 @@ mod tests {
     }
 
     const CHROME_ID: &str = "abcdefghijklmnopabcdefghijklmnop";
-    const EDGE_ID: &str = "qrstuvwxyzabcdefqrstuvwxyzabcdef";
+    const EDGE_ID: &str = "ponmlkjihgfedcbaponmlkjihgfedcba";
 
     #[test]
     fn each_paired_extension_id_becomes_one_origin() {
@@ -375,15 +377,46 @@ mod tests {
         assert_eq!(
             allowed_origins_from(&draft(CHROME_ID, EDGE_ID)),
             vec![
+                format!(
+                    "chrome-extension://{}/",
+                    crate::nm_register::STORE_EXTENSION_ID
+                ),
                 format!("chrome-extension://{CHROME_ID}/"),
                 format!("chrome-extension://{EDGE_ID}/"),
             ]
         );
         assert_eq!(
             allowed_origins_from(&draft(CHROME_ID, "")),
-            vec![format!("chrome-extension://{CHROME_ID}/")]
+            vec![
+                format!(
+                    "chrome-extension://{}/",
+                    crate::nm_register::STORE_EXTENSION_ID
+                ),
+                format!("chrome-extension://{CHROME_ID}/"),
+            ]
         );
-        assert!(allowed_origins_from(&draft("", "")).is_empty());
+        assert_eq!(
+            allowed_origins_from(&draft("", "")),
+            vec![format!(
+                "chrome-extension://{}/",
+                crate::nm_register::STORE_EXTENSION_ID
+            )]
+        );
+    }
+
+    #[test]
+    fn store_extension_is_authorised_without_a_pairing_draft() {
+        let allowed = allowed_origins_from(&draft("", ""));
+        assert!(matches!(
+            authorise(
+                Some(&format!(
+                    "chrome-extension://{}/",
+                    crate::nm_register::STORE_EXTENSION_ID
+                )),
+                &allowed
+            ),
+            Caller::Authorised(_)
+        ));
     }
 
     #[test]
