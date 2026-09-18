@@ -22,11 +22,19 @@ test('the service worker loads as a module so it can import the D05 validator', 
   assert.equal(manifest().background.service_worker, 'background.js');
 });
 
-test('the toolbar button still toggles the manager', async () => {
-  // README.md calls this out by name: the desktop link must not take over onClicked.
+test('the toolbar button opens the manager in an extension tab', async () => {
   const source = background();
   assert.match(source, /chrome\.action\.onClicked\.addListener/);
-  assert.match(source, /TOGGLE_MANAGER/);
+  assert.match(source, /chrome\.tabs\.create/);
+  assert.match(source, /OPEN_MANAGER/);
+  assert.doesNotMatch(source, /TOGGLE_MANAGER/);
+});
+
+test('the page sidebar asks the worker to open the manager instead of embedding it', async () => {
+  const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+  assert.match(source, /type:\s*["']OPEN_MANAGER["']/);
+  assert.doesNotMatch(source, /resume-pro-manager__frame/);
+  assert.doesNotMatch(source, /getURL\(["']popup\.html["']\)/);
 });
 
 test('the offscreen AI host is still created on demand', async () => {

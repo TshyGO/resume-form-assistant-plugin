@@ -54,7 +54,6 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 | 留下 | 为什么 |
 | --- | --- |
 | `link/*.mjs`、`link/protocol/*.mjs` | 内容脚本里 `import(chrome.runtime.getURL(...))` 动态加载 |
-| `popup.html` | 以 iframe 注入到网申页面里，由页面发起加载 |
 | `content.css` | 内容脚本 `fetch(chrome.runtime.getURL("content.css"))` |
 
 移掉的那些（`popup.js`、`popup.css`、`xlsx.full.min.js`、`mammoth.browser.min.js`、
@@ -64,8 +63,8 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 探测出你装了这个扩展。
 
 这一条列表由 `tests/manifest-war.test.js` 锁定，误把子资源重新暴露会让 CI 变红。
-真实浏览器冒烟（Playwright Chromium，有头）见 `desktop/scripts/war_browser_check.py`：
-扩展页能加载自己的 `popup.css`/`popup.js`/`xlsx`/PDF.js，普通网页只能加载上面这 4 个 WAR 文件，
+真实浏览器冒烟（Playwright Chromium/Edge，有头）见 `desktop/scripts/war_browser_check.py`：
+扩展页能加载自己的 `popup.css`/`popup.js`/`xlsx`/PDF.js，普通网页只能加载上面这 3 类 WAR 文件，
 其余全部被浏览器阻止。
 
 **加载来源盘点（2026-09-17，全仓 `rg getURL` / `rg "url\\(" content.css`）：**
@@ -73,7 +72,6 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 | 加载方 | 资源 | 要不要 WAR |
 | --- | --- | --- |
 | 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`link/*.mjs` 与 `link/protocol/*.mjs`（`content.js` 动态 `import`） | 要，已在列表里 |
-| 内容脚本/页面侧 | `popup.html`（原计划 iframe 注入管理面板） | 保留；该入口当前被 Chrome/Edge 延迟导航限制，见 [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) |
 | 扩展页/offscreen | `popup.js`、`popup.css`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
 | 浏览器 UI | `icons/*`（只在 `manifest.json` 的 `action`/`icons` 字段里） | 不要；没有任何内容脚本把它注入网页 |
 
@@ -81,12 +79,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 **权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`scripting`、`activeTab`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
-**`popup.html` 的 sunset 条件**：若 [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 最终改成新标签页、`sidePanel` 或专用 `panel.html`，本文件必须同时从 `web_accessible_resources` 和 `tests/manifest-war.test.js` 里删掉，不要为已经不可用的 iframe 继续保留暴露面。
-
-**`popup.html` 的跨源边界：** 它是扩展源页面，任何网页都能 iframe 它；页面无法跨源读取
-其中的内容，仓库里也没有 `window.postMessage` 通道。它只在用户点击「打开管理面板」后显示，
-面板内的操作仍由用户点击触发。残留风险是点击劫持和扩展存在性探测，这是 iframe 架构的固有
-代价；后续若做商店版，优先评估 `use_dynamic_url` 或最小权限的 `panel.html`。
+**管理面板边界：** [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 已改成由扩展 service worker 打开新的扩展标签页，不再把 `popup.html` 暴露给网页。网页既不能 iframe 它，也不能用公开 URL 探测该页面。
 
 ---
 
@@ -98,7 +91,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 - **是否出售或用于与功能无关的用途**：否。
 - **是否用于判断信用**：否。
 - **更新检查**：D13 #121 已实现为只读 GitHub releases、每天最多一次、可在设置里关闭；测试在 `desktop/src-tauri/src/update_check.rs`。
-- 隐私政策链接：`docs/privacy-policy.md`（上架时换成 GitHub Pages 的公开地址）。
+- 隐私政策链接：<https://github.com/TshyGO/resume-form-assistant-plugin/blob/main/docs/privacy-policy.md>（公开、无需登录）。
 
 ---
 

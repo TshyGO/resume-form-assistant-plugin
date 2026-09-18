@@ -41,7 +41,6 @@
       "resources": [
         "link/*.mjs",
         "link/protocol/*.mjs",
-        "popup.html",
         "content.css"
       ],
       "matches": [

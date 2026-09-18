@@ -103,9 +103,24 @@ def mac_manifest_paths() -> list[Path]:
     ]
 
 
-def assert_no_foreign_registration(data_dir: Path) -> None:
+def normalized_path(path: str | Path) -> str:
+    """Return a comparison-safe absolute path even after a temp binary is removed."""
+    return os.path.normcase(os.path.abspath(os.path.realpath(str(path))))
+
+
+def manifest_host_path(path: Path) -> str | None:
+    """Read the executable path from one Native Messaging manifest."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    host_path = payload.get("path")
+    return normalized_path(host_path) if isinstance(host_path, str) and host_path else None
+
+
+def assert_no_foreign_registration(binary: Path) -> None:
     """Refuse to start if a real registration would be overwritten."""
-    expected = os.path.normcase(os.path.abspath(str(data_dir / "nm")))
+    expected_binary = normalized_path(binary)
     if sys.platform == "win32":
         import winreg
 
@@ -118,8 +133,8 @@ def assert_no_foreign_registration(data_dir: Path) -> None:
                     value, _ = winreg.QueryValueEx(key, "")
             except OSError:
                 continue
-            parent = os.path.normcase(os.path.dirname(os.path.abspath(str(value))))
-            if parent != expected:
+            registered_binary = manifest_host_path(Path(str(value)))
+            if registered_binary != expected_binary:
                 raise SystemExit(
                     f"existing Native Messaging registration points at {value}; "
                     "run the app uninstaller or nm-dev-register unregister first"
@@ -128,41 +143,33 @@ def assert_no_foreign_registration(data_dir: Path) -> None:
     for path in mac_manifest_paths():
         if not path.exists():
             continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        host_path = str(payload.get("path", ""))
-        if not host_path.startswith(str(data_dir)):
+        host_path = manifest_host_path(path)
+        if host_path != expected_binary:
             raise SystemExit(
                 f"existing Native Messaging registration {path} points at {host_path}; "
                 "remove it before running this check"
             )
 
 
-def remove_registration_written_by_app(data_dir: Path) -> None:
+def remove_registration_written_by_app(binary: Path) -> None:
     """Drop the production keys the app wrote for this temporary data root.
 
     D13 makes the app register the host on startup and the installer's uninstall
     hook remove it. A browser check never runs the installer, so it has to remove
     the keys itself — and only while they point into this run's temporary root.
     """
+    expected_binary = normalized_path(binary)
     if sys.platform == "darwin":
         for path in mac_manifest_paths():
             if not path.exists():
                 continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if str(payload.get("path", "")).startswith(str(data_dir)):
+            if manifest_host_path(path) == expected_binary:
                 path.unlink(missing_ok=True)
         return
     if sys.platform != "win32":
         return
     import winreg
 
-    expected = str(data_dir / "nm")
     for subkey in (
         f"Software\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}",
         f"Software\\Microsoft\\Edge\\NativeMessagingHosts\\{HOST_NAME}",
@@ -172,12 +179,13 @@ def remove_registration_written_by_app(data_dir: Path) -> None:
                 value, _ = winreg.QueryValueEx(key, "")
         except OSError:
             continue
-        parent = os.path.normcase(os.path.dirname(os.path.abspath(str(value))))
-        if parent == os.path.normcase(os.path.abspath(expected)):
+        if manifest_host_path(Path(str(value))) == expected_binary:
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
-            except OSError:
-                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    f"failed to remove Native Messaging registration {subkey}"
+                ) from exc
 
 
 def node(*args: str) -> subprocess.CompletedProcess[str]:
@@ -253,7 +261,7 @@ def main() -> int:
     shutil.copy2(source_binary, binary)
 
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
-    assert_no_foreign_registration(data_dir)
+    assert_no_foreign_registration(binary)
     failures: list[str] = []
     registered = False
     results: dict = {}
@@ -346,7 +354,7 @@ def main() -> int:
         if registered:
             print(node("unregister").stdout.strip())
         stop_application(binary, env)
-        remove_registration_written_by_app(data_dir)
+        remove_registration_written_by_app(binary)
         if args.keep:
             print(f"left in place: {workspace}")
         else:

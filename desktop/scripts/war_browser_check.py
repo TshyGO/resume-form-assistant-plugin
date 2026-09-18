@@ -8,21 +8,22 @@ Run from anywhere:
 This is a manual, headed check. It needs a Windows/macOS desktop session with a
 display and Playwright's Chromium; it is deliberately not wired into CI.
 
-It loads this extension unpacked in the Playwright Chromium and checks two
+It loads this extension unpacked in Playwright Chromium or Microsoft Edge and checks three
 things that unit tests cannot check:
 
 1. the extension pages themselves still load their own subresources
    (popup.css, popup.js, xlsx, PDF.js) without listing them as WAR;
-2. an ordinary web page can load the four WAR files but cannot load the
-   extension-page subresources that were removed from WAR.
+2. an ordinary web page can load only the reviewed WAR files and cannot load
+   popup.html or extension-page subresources;
+3. the manager command opens popup.html as a new extension tab.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -46,6 +47,9 @@ def failure(message: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
+    args = parser.parse_args()
     if not (ROOT / "manifest.json").is_file():
         failure(f"not a checkout: {ROOT}")
 
@@ -55,6 +59,7 @@ def main() -> None:
             context = playwright.chromium.launch_persistent_context(
                 profile,
                 headless=False,
+                channel="msedge" if args.browser == "edge" else None,
                 args=[
                     f"--disable-extensions-except={ROOT}",
                     f"--load-extension={ROOT}",
@@ -91,13 +96,16 @@ def main() -> None:
                           popupCss: await check('popup.css'),
                           popupJs: await check('popup.js'),
                           xlsx: await check('xlsx.full.min.js'),
+                          mammoth: await check('mammoth.browser.min.js'),
                           pdf: await check('vendor/pdfjs/pdf.min.mjs'),
+                          pdfWorker: await check('vendor/pdfjs/pdf.worker.min.mjs'),
+                          cMap: await check('vendor/pdfjs/cmaps/78-H.bcmap'),
                         };
                     }""",
                 )
                 if not inside["shell"]:
                     failure("popup.html did not render its shell")
-                for key in ("popupCss", "popupJs", "xlsx", "pdf"):
+                for key in ("popupCss", "popupJs", "xlsx", "mammoth", "pdf", "pdfWorker", "cMap"):
                     if inside[key] != 200:
                         failure(f"extension page cannot load {key}: {inside[key]}")
 
@@ -121,6 +129,7 @@ def main() -> None:
                           popupHtml: await check('popup.html'),
                           contentCss: await check('content.css'),
                           linkMjs: await check('link/chrome.mjs'),
+                          linkProtocolMjs: await check('link/protocol/validate.mjs'),
                           popupJs: await check('popup.js'),
                           popupCss: await check('popup.css'),
                           xlsx: await check('xlsx.full.min.js'),
@@ -129,56 +138,28 @@ def main() -> None:
                     }""",
                     extension_id,
                 )
-                for key in ("popupHtml", "contentCss", "linkMjs"):
+                for key in ("contentCss", "linkMjs", "linkProtocolMjs"):
                     if outside[key] != "status:200":
                         failure(f"web page cannot load WAR resource {key}: {outside[key]}")
-                for key in ("popupJs", "popupCss", "xlsx", "pdf"):
+                for key in ("popupHtml", "popupJs", "popupCss", "xlsx", "pdf"):
                     if not outside[key].startswith("blocked:"):
                         failure(f"web page unexpectedly loaded non-WAR resource {key}: {outside[key]}")
 
-                # 3. The real manager path: the content script owns the iframe and
-                #    sets its src. A page script cannot initiate that navigation
-                #    (Chrome blocks it), so trigger the same TOGGLE_MANAGER message
-                #    the extension itself uses instead of faking the iframe in page JS.
-                web_page.wait_for_selector("#resume-pro-sidebar", timeout=10_000)
-                extension_page.evaluate(
-                    """async () => {
-                        const [tab] = await chrome.tabs.query({ url: "https://war-smoke.test/*" });
-                        if (!tab) throw new Error("war-smoke tab not found");
-                        await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_MANAGER" });
-                    }"""
-                )
-                frame = None
-                deadline = time.time() + 10
-                while time.time() < deadline and frame is None:
-                    for candidate in web_page.frames:
-                        if candidate.url.startswith(f"chrome-extension://{extension_id}/popup.html"):
-                            frame = candidate
-                            break
-                    if frame is None:
-                        time.sleep(0.2)
-                manager_iframe = "loaded"
-                if frame is None:
-                    # Chrome and Edge block a delayed iframe navigation to an
-                    # extension page, even when the content script owns the frame.
-                    # That is a pre-existing manager-panel defect, tracked in #125;
-                    # it is not a WAR regression, so record it without failing the
-                    # WAR contract check.
-                    manager_iframe = "blocked (known issue #125)"
-                    iframe_info = web_page.evaluate(
-                        """() => {
-                            const frame = document.querySelector('#resume-pro-manager iframe');
-                            return frame ? { src: frame.src, loaded: frame.dataset.loaded } : null;
-                        }"""
+                # 3. The manager is an extension tab, not a page iframe. This keeps
+                # popup.html out of WAR while preserving the sidebar/toolbar flow.
+                with context.expect_page(timeout=10_000) as manager_info:
+                    result = extension_page.evaluate(
+                        "() => chrome.runtime.sendMessage({ type: 'OPEN_MANAGER' })"
                     )
-                    print(f"KNOWN ISSUE #125: manager iframe stayed blocked: {iframe_info}")
-                else:
-                    frame.wait_for_selector(".popup-shell", timeout=10_000)
-                    frame_popup_js = frame.evaluate(
-                        "async () => (await fetch(chrome.runtime.getURL('popup.js'))).status"
-                    )
-                    if frame_popup_js != 200:
-                        failure(f"iframe popup.html cannot load popup.js: {frame_popup_js}")
+                if not result or not result.get("opened"):
+                    failure(f"manager command failed: {result}")
+                manager_page = manager_info.value
+                manager_page.wait_for_load_state("load")
+                if not manager_page.url.startswith(
+                    f"chrome-extension://{extension_id}/popup.html"
+                ):
+                    failure(f"manager opened the wrong URL: {manager_page.url}")
+                manager_page.wait_for_selector(".popup-shell", timeout=10_000)
 
                 # 4. Content-script resources loaded without page errors.
                 if page_errors:
@@ -191,13 +172,9 @@ def main() -> None:
                 if broken_images:
                     failure(f"content script injected broken extension images: {broken_images[:3]}")
 
-                print(json.dumps({"extensionId": extension_id, "inside": inside, "outside": outside, "managerIframe": manager_iframe}, ensure_ascii=False, indent=2))
+                print(json.dumps({"browser": args.browser, "extensionId": extension_id, "inside": inside, "outside": outside, "managerTab": manager_page.url}, ensure_ascii=False, indent=2))
                 print("WAR_CONTRACT:PASS")
-                print(
-                    "MANAGER_IFRAME:PASS"
-                    if manager_iframe == "loaded"
-                    else "MANAGER_IFRAME:FAIL(#125)"
-                )
+                print("MANAGER_TAB:PASS")
             finally:
                 context.close()
 

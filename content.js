@@ -43,7 +43,6 @@
     currentStore: null,
     statusTimer: null,
     lastFocusedField: null,
-    managerVisible: false,
     chipAction: null
   };
 
@@ -86,7 +85,6 @@
     sheet.replaceSync(cssText);
     injectFieldHighlightStyles();
     createSidebar(sheet);
-    createManagerPanel();
     renderSidebar();
     bindStorageSync();
     bindFocusTracking();
@@ -193,7 +191,7 @@
         <div class="resume-pro__groups" id="resume-pro-groups"></div>
         <div class="resume-pro__footer">
           <button class="resume-pro__manager-button" id="resume-pro-open-manager" type="button">打开管理面板</button>
-          <p class="resume-pro__footer-tip">管理面板会常驻在当前页面，点右上角 X 再关闭。</p>
+          <p class="resume-pro__footer-tip">管理面板会在新的浏览器标签页打开。</p>
         </div>
       </div>
     `;
@@ -211,33 +209,6 @@
     `;
     shadowRoot.appendChild(chipActions);
     bindSidebarEvents(sidebar);
-  }
-
-  function createManagerPanel() {
-    const panel = document.createElement("div");
-    panel.id = "resume-pro-manager";
-    panel.className = "resume-pro-manager";
-    panel.innerHTML = `
-      <div class="resume-pro-manager__panel" role="dialog" aria-modal="false" aria-label="Resume Pro 管理面板">
-        <div class="resume-pro-manager__header">
-          <div>
-            <div class="resume-pro-manager__eyebrow">Resume Pro</div>
-            <div class="resume-pro-manager__title">管理面板</div>
-          </div>
-          <button class="resume-pro-manager__close" id="resume-pro-close-manager" type="button" aria-label="关闭管理面板">×</button>
-        </div>
-        <iframe
-          class="resume-pro-manager__frame"
-          data-src="${chrome.runtime.getURL("popup.html")}"
-          title="Resume Pro 管理面板"
-        ></iframe>
-      </div>
-    `;
-
-    document.body.appendChild(panel);
-    panel.querySelector("#resume-pro-close-manager")?.addEventListener("click", () => {
-      setManagerVisibility(false);
-    });
   }
 
   function bindSidebarEvents(sidebar) {
@@ -262,7 +233,7 @@
 
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
-    openManagerButton?.addEventListener("click", () => setManagerVisibility(true));
+    openManagerButton?.addEventListener("click", () => openManager());
     sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", addUnansweredToProfile);
     sidebar.querySelector("#resume-pro-profile-offer-skip")?.addEventListener("click", closeProfileOffer);
     bindDesktopEvents(sidebar);
@@ -355,7 +326,7 @@
 
     const setupButton = groupsContainer.querySelector("#resume-pro-setup-button");
     if (setupButton) {
-      setupButton.addEventListener("click", () => setManagerVisibility(true));
+      setupButton.addEventListener("click", () => openManager());
     }
 
     closeChipActionMenu();
@@ -1229,7 +1200,7 @@
         return;
       }
 
-      if (target.closest(`#${SIDEBAR_ID}`) || target.closest("#resume-pro-manager")) {
+      if (target.closest(`#${SIDEBAR_ID}`)) {
         return;
       }
 
@@ -1584,7 +1555,7 @@
       // 写成功才收起卡片；写失败时卡片留着，可以直接再点一次。
       closeProfileOffer();
       showStatus(`已把 ${added} 个字段加到「我的信息」，在管理面板里补上内容。`, "success", true);
-      setManagerVisibility(true, "profile");
+      await openManager("profile");
     } catch (error) {
       showStatus(`没有加进去：${error.message || "写入失败"}`, "error");
     }
@@ -1642,22 +1613,15 @@
       .trim();
   }
 
-  function setManagerVisibility(visible, tab = "") {
-    const panel = document.getElementById("resume-pro-manager");
-
-    if (!panel) {
-      return;
+  async function openManager(tab = "") {
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "OPEN_MANAGER", tab });
+      if (!result?.opened) {
+        showStatus(result?.error || "无法打开管理面板，请从浏览器工具栏点击 Resume Pro。", "error");
+      }
+    } catch {
+      showStatus("无法打开管理面板，请从浏览器工具栏点击 Resume Pro。", "error");
     }
-
-    const frame = panel.querySelector(".resume-pro-manager__frame");
-    if (visible && frame && (frame.dataset.loaded !== "true" || tab)) {
-      // 带时间戳，已经打开在同一标签页时也能再触发一次 hashchange。
-      frame.src = tab ? `${frame.dataset.src}#${tab}:${Date.now()}` : frame.dataset.src;
-      frame.dataset.loaded = "true";
-    }
-
-    panel.classList.toggle("is-visible", visible);
-    state.managerVisible = visible;
   }
 
   function isFillTarget(target) {
@@ -2493,13 +2457,6 @@
       ? "稍后"
       : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
-
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === "TOGGLE_MANAGER") {
-      setManagerVisibility(!state.managerVisible);
-    }
-    return false;
-  });
 
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {

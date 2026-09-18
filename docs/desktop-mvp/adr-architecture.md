@@ -142,7 +142,7 @@ Chrome 把 host 的 **stdout 整段当作协议帧**。GUI 框架日志会破坏
 
 ### 3.6 插件侧连接落点（D07 实现，D01 约束）
 
-今天 [`background.js`](../../background.js) 处理 `onClicked` → `TOGGLE_MANAGER` 以及 `ENSURE_AI_HOST`。D07 **追加** NM，不得覆盖 `onClicked`。
+当前 [`background.js`](../../background.js) 的 `onClicked` 打开独立的 `popup.html` 管理标签页，同时处理 `OPEN_MANAGER`、`ENSURE_AI_HOST` 和 Native Messaging worker。管理页不再通过网页 iframe 暴露。
 
 D07 将：在 **service worker** 调用 `connectNative`（推荐）或受控的 `sendNativeMessage`；增加 `nativeMessaging` 权限（**D07 版本号提升，不是 0.3.0**）；`desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing`；侧边栏保存岗位与确认投递。快照字节走扩展源 IndexedDB（见产品 §8.5）。
 

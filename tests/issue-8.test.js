@@ -176,6 +176,7 @@ test("bundled PDF.js rejects invalid PDF bytes", async () => {
 test("runtime source sends extracted text and contains no PDF-as-image path", () => {
   const popupSource = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
   const backgroundSource = fs.readFileSync(path.join(__dirname, "..", "ai-worker.js"), "utf8");
+  const serviceWorkerSource = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
   const contentSource = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   const htmlSource = fs.readFileSync(path.join(__dirname, "..", "popup.html"), "utf8");
 
@@ -190,8 +191,10 @@ test("runtime source sends extracted text and contains no PDF-as-image path", ()
     popupSource,
     /catch \(error\) \{[\s\S]*renderUpdateBanner\(cached\?\.release \|\| null, dismissedVersion, currentVersion\);/u
   );
-  assert.match(contentSource, /data-src=.*popup\.html/u);
-  assert.match(contentSource, /frame\.dataset\.loaded/u);
+  assert.match(contentSource, /type:\s*["']OPEN_MANAGER["']/u);
+  assert.doesNotMatch(contentSource, /data-src=.*popup\.html/u);
+  assert.match(serviceWorkerSource, /chrome\.tabs\.create/u);
+  assert.match(serviceWorkerSource, /getURL\("popup\.html"\)/u);
   assert.match(htmlSource, /check-update-button/u);
   assert.match(htmlSource, /download-update-button/u);
 });
