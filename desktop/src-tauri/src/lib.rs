@@ -1066,7 +1066,9 @@ fn open_update_page_cmd(state: State<AppState>, app: AppHandle) -> Result<(), Co
             code: "UPDATE_NOT_CHECKED".into(),
             message: "还没查到可下载的版本。".into(),
         })?;
-    if !url.starts_with("https://github.com/") {
+    // 和筛选阶段同一把尺子：`https://github.com/` 前缀太松，本仓库以外的
+    // Release 页也能过。两处用同一个函数，免得哪天改了一处。
+    if !update_check::is_release_page(&url) {
         return Err(CommandError {
             code: "UPDATE_BAD_URL".into(),
             message: format!("这个下载地址不像 Release 页，没有打开：{url}"),

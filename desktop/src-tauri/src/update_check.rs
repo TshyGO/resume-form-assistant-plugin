@@ -81,17 +81,26 @@ pub fn latest_desktop_release(body: &Value) -> Option<UpdateInfo> {
         {
             continue;
         }
-        let tag = item["tag_name"].as_str()?;
+        // 这里每一步都得 `continue` 而不是 `?`：用 `?` 的话，列表里任何一条
+        // 缺字段的 release（接口加字段、异常发布、以后 API 变形）都会让整个函数
+        // 返回 None，界面照直说「已经是最新版」——正好是这块代码最该避免的谎。
+        let Some(tag) = item["tag_name"].as_str() else {
+            continue;
+        };
         let Some(version) = tag.strip_prefix(TAG_PREFIX) else {
             continue;
         };
         let Some(parts) = parse_version(version) else {
             continue;
         };
-        let url = item["html_url"].as_str().unwrap_or_default().to_string();
+        // 下载页地址在这里就得站得住：留到点「去下载页」才发现打不开，
+        // 用户已经被告知「有新版本」了。
+        let Some(url) = item["html_url"].as_str().filter(|url| is_release_page(url)) else {
+            continue;
+        };
         let candidate = UpdateInfo {
             version: version.to_string(),
-            url,
+            url: url.to_string(),
         };
         match &best {
             Some((current, _)) if *current >= parts => {}
@@ -99,6 +108,11 @@ pub fn latest_desktop_release(body: &Value) -> Option<UpdateInfo> {
         }
     }
     best.map(|(_, info)| info)
+}
+
+/// 只认本仓库 Release 页的地址。命令层打开前还会再查一次，这里是第一道。
+pub fn is_release_page(url: &str) -> bool {
+    url.starts_with("https://github.com/TshyGO/resume-form-assistant-plugin/releases/")
 }
 
 fn parse_version(value: &str) -> Option<Vec<u32>> {
@@ -179,7 +193,9 @@ mod tests {
             "tag_name": tag,
             "draft": draft,
             "prerelease": prerelease,
-            "html_url": format!("https://example.test/{tag}"),
+            "html_url": format!(
+                "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/{tag}"
+            ),
         })
     }
 
@@ -227,6 +243,32 @@ mod tests {
             release("desktop-v0.1.0", false, false),
         ]);
         assert_eq!(latest_desktop_release(&body).unwrap().version, "0.1.0");
+    }
+
+    #[test]
+    fn one_malformed_entry_does_not_hide_the_rest() {
+        // 缺字段的 release 只该被跳过。整列作废的后果是界面说「已经是最新版」——
+        // 用户永远不知道有新版本，而这正是最难被发现的那种错。
+        let body = json!([
+            json!({ "draft": false, "prerelease": false }),
+            json!({ "tag_name": 42 }),
+            release("desktop-v1.0.0", false, false),
+        ]);
+        assert_eq!(latest_desktop_release(&body).unwrap().version, "1.0.0");
+    }
+
+    #[test]
+    fn a_release_without_a_usable_download_page_is_skipped() {
+        // 说了「有新版」就得能点开。地址不对的条目在筛选阶段就该出局，
+        // 而不是等用户点「去下载页」才报错。
+        let mut broken = release("desktop-v2.0.0", false, false);
+        broken["html_url"] = json!("https://example.test/not-a-release");
+        let body = json!([broken, release("desktop-v1.0.0", false, false)]);
+        assert_eq!(latest_desktop_release(&body).unwrap().version, "1.0.0");
+
+        let mut missing = release("desktop-v3.0.0", false, false);
+        missing["html_url"] = Value::Null;
+        assert_eq!(latest_desktop_release(&json!([missing])), None);
     }
 
     #[test]
