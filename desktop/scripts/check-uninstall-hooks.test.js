@@ -146,3 +146,31 @@ test("删两次说不清哪一次是用户同意的", () => {
   );
   assert.throws(() => assertHooks(twice), /不止一次/);
 });
+
+test("守卫写在宏外面不算数——`!macroend` 也以 !macro 开头，边界得算准", () => {
+  // 把 $UpdateMode 挪到清理注册项那个宏的外面，检查必须红。
+  const outside = guarded.replace(
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode <> 1\n",
+    "${If} $UpdateMode <> 1\n!macro NSIS_HOOK_PREUNINSTALL\n",
+  );
+  assert.throws(() => assertHooks(outside), /清理注册项没有避开升级/);
+});
+
+test("MessageBox 续行时，默认按钮那一段也要认出来", () => {
+  // NSIS 的续行符是一个反斜杠；这里避开在源码里再转义一层。
+  const continuation = String.fromCharCode(92);
+  const wrapped = guarded.replace(
+    `    MessageBox MB_YESNO|MB_DEFBUTTON2 "还要删掉 ${ARCHIVE_DIR} 吗？" IDYES del IDNO keep`,
+    [
+      `    MessageBox MB_YESNO|MB_DEFBUTTON2 ${continuation}`,
+      `      "还要删掉 ${ARCHIVE_DIR} 吗？" ${continuation}`,
+      "      IDYES del IDNO keep",
+    ].join("\n"),
+  );
+  assert.deepEqual(assertHooks(wrapped), { guardedRemovals: 1 });
+});
+
+test("完全没有清理注册项那一段时说得出是缺了什么", () => {
+  const empty = ["!macro NSIS_HOOK_PREUNINSTALL", "!macroend"].join("\n");
+  assert.throws(() => assertHooks(empty), /没有删注册表键/);
+});

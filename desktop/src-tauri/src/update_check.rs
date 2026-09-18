@@ -70,13 +70,34 @@ pub struct UpdateInfo {
     pub url: String,
 }
 
+/// 一次挑选的结果。
+///
+/// 「没有更新」和「判断不出来」必须分开：两者都返回 `None` 的话，仓库改名、
+/// 接口变形、地址全都不合规——这些情况界面都会说「已经是最新版」，而且完全
+/// 静默。这正是这个模块最不该说的谎。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick {
+    /// 列表读懂了，里面没有比这更该提示的桌面版本。
+    Nothing,
+    /// 有一条能用的。
+    Found(UpdateInfo),
+    /// 有桌面版本，但没有一条能用（地址不是本仓库的 Release 页、字段缺失……）。
+    /// 这是「没查成」，不是「已经最新」。
+    Unusable,
+}
+
 /// 从 releases 列表里挑出最新的桌面版本。
 ///
 /// 规则写死在这里而不是靠 GitHub 的 `latest`：那个接口给的是整个仓库的最新
 /// release，很可能是插件的。草稿和预发布一律跳过。
-pub fn latest_desktop_release(body: &Value) -> Option<UpdateInfo> {
+pub fn latest_desktop_release(body: &Value) -> Pick {
     let mut best: Option<(Vec<u32>, UpdateInfo)> = None;
-    for item in body.as_array()? {
+    let mut saw_desktop_release = false;
+    let Some(items) = body.as_array() else {
+        // 连列表都不是：这不是「没有更新」。
+        return Pick::Unusable;
+    };
+    for item in items {
         if item["draft"].as_bool().unwrap_or(false) || item["prerelease"].as_bool().unwrap_or(false)
         {
             continue;
@@ -93,6 +114,7 @@ pub fn latest_desktop_release(body: &Value) -> Option<UpdateInfo> {
         let Some(parts) = parse_version(version) else {
             continue;
         };
+        saw_desktop_release = true;
         // 下载页地址在这里就得站得住：留到点「去下载页」才发现打不开，
         // 用户已经被告知「有新版本」了。
         let Some(url) = item["html_url"].as_str().filter(|url| is_release_page(url)) else {
@@ -107,10 +129,18 @@ pub fn latest_desktop_release(body: &Value) -> Option<UpdateInfo> {
             _ => best = Some((parts, candidate)),
         }
     }
-    best.map(|(_, info)| info)
+    match best {
+        Some((_, info)) => Pick::Found(info),
+        // 有桌面版本却一条都用不了，说明我们对接口的理解已经不成立了。
+        None if saw_desktop_release => Pick::Unusable,
+        None => Pick::Nothing,
+    }
 }
 
 /// 只认本仓库 Release 页的地址。命令层打开前还会再查一次，这里是第一道。
+///
+/// 纯前缀比较：来源是 GitHub API 的 `html_url`，形状是规范的。以后要是接了镜像
+/// 或代理域名，这里会一并拒掉——那时候该显式加白名单，而不是把判断放松。
 pub fn is_release_page(url: &str) -> bool {
     url.starts_with("https://github.com/TshyGO/resume-form-assistant-plugin/releases/")
 }
@@ -180,13 +210,29 @@ pub async fn fetch_latest() -> Result<Option<UpdateInfo>, CommandError> {
             message: "更新记录页数异常。".into(),
         })?;
     }
-    Ok(latest_desktop_release(&Value::Array(releases)))
+    match latest_desktop_release(&Value::Array(releases)) {
+        Pick::Found(info) => Ok(Some(info)),
+        Pick::Nothing => Ok(None),
+        // 说不清的时候说「没查成」。说成「已经是最新版」，用户就再也不会去看了。
+        Pick::Unusable => Err(CommandError {
+            code: "UPDATE_FAILED".into(),
+            message: "读不懂更新服务器给的发布列表，这次没查成。".into(),
+        }),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 挑出来并且能用的那一条。挑不出来时直接让测试失败，信息比 `unwrap` 清楚。
+    fn found(body: &Value) -> UpdateInfo {
+        match latest_desktop_release(body) {
+            Pick::Found(info) => info,
+            other => panic!("没挑出可用的版本：{other:?}"),
+        }
+    }
 
     fn release(tag: &str, draft: bool, prerelease: bool) -> Value {
         json!({
@@ -206,8 +252,7 @@ mod tests {
             release("v0.5.0", false, false),
             release("desktop-v0.2.0", false, false)
         ]);
-        let latest = latest_desktop_release(&body).unwrap();
-        assert_eq!(latest.version, "0.2.0");
+        assert_eq!(found(&body).version, "0.2.0");
     }
 
     #[test]
@@ -218,7 +263,7 @@ mod tests {
             release("desktop-v0.9.0", false, false),
         ]);
         // 字符串比会说 0.9 更大。
-        assert_eq!(latest_desktop_release(&body).unwrap().version, "0.10.0");
+        assert_eq!(found(&body).version, "0.10.0");
     }
 
     #[test]
@@ -227,12 +272,7 @@ mod tests {
             .map(|index| release(&format!("v0.5.{index}"), false, false))
             .collect::<Vec<_>>();
         releases.push(release("desktop-v0.2.0", false, false));
-        assert_eq!(
-            latest_desktop_release(&Value::Array(releases))
-                .unwrap()
-                .version,
-            "0.2.0"
-        );
+        assert_eq!(found(&Value::Array(releases)).version, "0.2.0");
     }
 
     #[test]
@@ -242,7 +282,7 @@ mod tests {
             release("desktop-v0.4.0", false, true),
             release("desktop-v0.1.0", false, false),
         ]);
-        assert_eq!(latest_desktop_release(&body).unwrap().version, "0.1.0");
+        assert_eq!(found(&body).version, "0.1.0");
     }
 
     #[test]
@@ -254,7 +294,7 @@ mod tests {
             json!({ "tag_name": 42 }),
             release("desktop-v1.0.0", false, false),
         ]);
-        assert_eq!(latest_desktop_release(&body).unwrap().version, "1.0.0");
+        assert_eq!(found(&body).version, "1.0.0");
     }
 
     #[test]
@@ -264,28 +304,46 @@ mod tests {
         let mut broken = release("desktop-v2.0.0", false, false);
         broken["html_url"] = json!("https://example.test/not-a-release");
         let body = json!([broken, release("desktop-v1.0.0", false, false)]);
-        assert_eq!(latest_desktop_release(&body).unwrap().version, "1.0.0");
+        assert_eq!(found(&body).version, "1.0.0");
 
+        // 一条桌面版本都用不上时，那是「没查成」，不是「已经最新」。
         let mut missing = release("desktop-v3.0.0", false, false);
         missing["html_url"] = Value::Null;
-        assert_eq!(latest_desktop_release(&json!([missing])), None);
+        assert_eq!(latest_desktop_release(&json!([missing])), Pick::Unusable);
     }
 
     #[test]
-    fn nothing_to_offer_is_not_an_error() {
-        assert_eq!(latest_desktop_release(&json!([])), None);
+    fn a_list_we_cannot_read_is_not_the_same_as_being_up_to_date() {
+        // 仓库改名、接口变形、地址全都不合规——这些都不是「已经是最新版」。
+        assert_eq!(latest_desktop_release(&json!({"message": "Not Found"})), Pick::Unusable);
+        assert_eq!(latest_desktop_release(&json!("字符串")), Pick::Unusable);
+        // 真的没有桌面版本，才是「没有更新」。
+        assert_eq!(latest_desktop_release(&json!([])), Pick::Nothing);
         assert_eq!(
             latest_desktop_release(&json!([release("v1.0.0", false, false)])),
-            None
+            Pick::Nothing
         );
-        // 形状不对的 tag 直接跳过，不 panic。
+    }
+
+    #[test]
+    fn only_this_repository_release_pages_are_accepted() {
+        assert!(is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
+        ));
+        // 别人仓库的 Release 页、明文 http、以及别的路径都不行。
+        assert!(!is_release_page("https://github.com/someone/else/releases/tag/v1"));
+        assert!(!is_release_page(
+            "http://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
+        ));
+        assert!(!is_release_page("https://github.com/TshyGO/resume-form-assistant-plugin"));
+    }
+
+    #[test]
+    fn a_tag_we_cannot_parse_is_skipped_without_panicking() {
+        // 形状不对的 tag 既不是更新，也不该让整次检查炸掉。
         assert_eq!(
             latest_desktop_release(&json!([release("desktop-v不是版本号", false, false)])),
-            None
-        );
-        assert_eq!(
-            latest_desktop_release(&json!({"message": "Not Found"})),
-            None
+            Pick::Nothing
         );
     }
 

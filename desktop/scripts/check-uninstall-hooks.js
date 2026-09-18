@@ -24,8 +24,43 @@ export const MANIFEST_FILES = [
 /** 用户的求职档案。默认一个字节都不能动。 */
 export const ARCHIVE_DIR = String.raw`$LOCALAPPDATA\ResumePro`;
 
+/** 把 `\` 续行拼回一行。 */
+function joinContinuations(lines) {
+  const joined = [];
+  let buffer = null;
+  for (const line of lines) {
+    const text = buffer === null ? line : `${buffer} ${line.trim()}`;
+    if (text.trimEnd().endsWith("\\")) {
+      buffer = text.trimEnd().slice(0, -1);
+      continue;
+    }
+    joined.push(text);
+    buffer = null;
+  }
+  if (buffer !== null) joined.push(buffer);
+  return joined;
+}
+
+/**
+ * 某一行所在的宏体（从最近的 `!macro` 之后到这一行）。
+ *
+ * `!macroend` 也以 `!macro` 开头，所以要连空格一起比——不然宏的边界会算错，
+ * 而这整套检查的前提就是「守卫必须和被守的那行在同一个宏里」。
+ */
+function blockOf(code, index) {
+  let start = 0;
+  for (let i = 0; i < index; i += 1) {
+    if (/^!macro\s/.test(code[i].trim())) {
+      start = i;
+    }
+  }
+  return code.slice(start, index);
+}
+
 export function assertHooks(text) {
-  const lines = text.split(/\r?\n/);
+  // NSIS 用 `\` 续行。`MessageBox` 的参数常常跨好几行，不拼起来的话
+  // 「默认按钮是不是「否」」这类判断会看错行。
+  const lines = joinContinuations(text.split(/\r?\n/));
   // NSIS 的注释是 `;`，也接受 `#`。注释里写什么都不算数——这条检查只看会执行的行。
   const code = lines.filter((line) => {
     const trimmed = line.trim();
@@ -47,10 +82,12 @@ export function assertHooks(text) {
   // 清理注册项这一段也要避开升级。升级走的也是卸载器：那时候删了注册项，
   // 新版本装好、启动、重写清单之前，浏览器就连不上；升级中断在中间更糟。
   const cleanupAt = code.findIndex((line) => line.includes("DeleteRegKey HKCU"));
-  const updateGuardedCleanup = code
-    .slice(0, cleanupAt)
-    .some((line) => line.includes("$UpdateMode"));
-  if (!updateGuardedCleanup) {
+  if (cleanupAt < 0) {
+    throw new Error("找不到清理注册项那一段");
+  }
+  // 和删档案那边一样，只在**同一个宏之内**找守卫：整份文件里搜会搜到另一段的
+  // 守卫，于是这一段漏了也照样通过。
+  if (!blockOf(code, cleanupAt).some((line) => line.includes("$UpdateMode"))) {
     throw new Error("清理注册项没有避开升级（$UpdateMode）");
   }
 
@@ -67,13 +104,8 @@ export function assertHooks(text) {
 
   // 只看**删档案那个宏之内**的条件。整份文件里搜 `$UpdateMode` 会搜到清理注册项
   // 那一段的守卫，于是删档案这边漏了守卫也照样通过——那正是这条检查要防的事。
-  const macroStart = code
-    .slice(0, removals[0].index)
-    .map((line, index) => ({ line, index }))
-    .filter((entry) => entry.line.trim().startsWith("!macro"))
-    .map((entry) => entry.index)
-    .pop();
-  const block = code.slice(macroStart ?? 0, removals[0].index);
+  const block = blockOf(code, removals[0].index);
+  const macroStart = removals[0].index - block.length;
   const guardedBy = (needle) => block.some((line) => line.includes(needle));
 
   if (!guardedBy("MessageBox")) {
