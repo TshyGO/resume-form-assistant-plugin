@@ -29,38 +29,55 @@ export const MANIFEST_FILES = [
 export const ARCHIVE_DIR = String.raw`$LOCALAPPDATA\ResumePro`;
 
 /**
- * 去掉 `/* ... *\/` 块注释。
+ * 去掉所有注释，留下会执行的部分。
  *
- * 不剥的话，注释里写一句 `${If} $UpdateMode <> 1` 就能把守卫检查糊弄过去。
- * 这里不认字符串里的 `/*`——真出现了，会多删掉一些内容，然后某一行找不到、
- * 直接报错。方向是安全的。
+ * 按字符扫一遍，而不是看行首：NSIS 的 `;` 和 `#` 在行内也是注释，
+ * 于是 `${If} $UpdateMode = 1 ; $UpdateMode <> 1` 这种写法能让「守卫在不在」
+ * 的判断从注释里取到答案——运行时的意思正好相反。块注释 `/* *\/` 同理，
+ * 而且它要和行注释一起扫：`; /*` 里的 `/*` 是注释的一部分，不该开块。
+ *
+ * 引号里的 `;` `#` 不算注释。字符串不跨行（跨行要靠 `\` 续行，那时每行的
+ * 引号也是配对的），所以换行一律收尾。
  */
-function stripBlockComments(lines) {
-  const out = [];
-  let inside = false;
-  for (const line of lines) {
-    let text = line;
-    if (inside) {
-      const end = text.indexOf("*" + "/");
-      if (end < 0) {
-        out.push("");
-        continue;
-      }
-      text = text.slice(end + 2);
-      inside = false;
+function stripComments(text) {
+  let out = "";
+  let quote = null;
+  let block = false;
+  let line = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === "\n") {
+      // 块注释跨行继续，行注释和字符串到行尾为止。
+      quote = null;
+      line = false;
+      out += ch;
+      continue;
     }
-    for (;;) {
-      const start = text.indexOf("/" + "*");
-      if (start < 0) break;
-      const end = text.indexOf("*" + "/", start + 2);
-      if (end < 0) {
-        text = text.slice(0, start);
-        inside = true;
-        break;
+    if (block) {
+      if (ch === "*" && next === "/") {
+        block = false;
+        i += 1;
       }
-      text = text.slice(0, start) + text.slice(end + 2);
+      continue;
     }
-    out.push(text);
+    if (line) continue;
+    if (quote) {
+      out += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      block = true;
+      i += 1;
+      continue;
+    }
+    if (ch === ";" || ch === "#") {
+      line = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    out += ch;
   }
   return out;
 }
@@ -158,17 +175,14 @@ function enclosedBy(code, index, pattern) {
 }
 
 export function assertHooks(text) {
-  // NSIS 的注释是 `;`，也接受 `#`。注释里写什么都不算数——这条检查只看会执行的行。
-  //
-  // 顺序要紧：先滤注释，再拼续行。反过来的话，一条以 `\` 结尾的注释会把下一行
+  // 顺序要紧：先去注释，再拼续行。反过来的话，一条以 `\` 结尾的注释会把下一行
   // 真代码并进注释里，然后整行被当注释扔掉——那一行就再也没人检查了。
-  const lines = stripBlockComments(text.split(/\r?\n/)).filter((line) => {
-    const trimmed = line.trim();
-    return !trimmed.startsWith(";") && !trimmed.startsWith("#");
-  });
+  //
   // NSIS 用 `\` 续行。`MessageBox` 的参数常常跨好几行，不拼起来的话
-  // 「默认按钮是不是「否」」这类判断会看错行。
-  const code = joinContinuations(lines);
+  // 「默认按钮是不是「否」」这类判断会看错行。去掉注释后剩下的空行一并扔掉：
+  // 下面有几处是按「紧跟的下一行」判断的。
+  const lines = stripComments(text).split(/\r?\n/);
+  const code = joinContinuations(lines).filter((line) => line.trim() !== "");
   const body = code.join("\n");
 
   for (const key of REGISTRY_KEYS) {

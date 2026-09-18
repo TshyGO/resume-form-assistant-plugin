@@ -117,6 +117,23 @@ test("以反斜杠结尾的注释不能把下一行代码吞掉", () => {
   assert.deepEqual(assertHooks(withComment), { guardedRemovals: 1 });
 });
 
+test("行内注释里的守卫不算数——运行时的意思正好相反", () => {
+  const faked = guarded.replace(
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode <> 1",
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode = 1 ; $UpdateMode <> 1",
+  );
+  assert.throws(() => assertHooks(faked), /清理注册项没有避开升级/);
+});
+
+test("被注释掉的块注释开头不该把真代码吞掉", () => {
+  // `; /*` 整行都是注释，里面的 `/*` 不该开一个块。
+  const commented = guarded.replace(
+    `  DeleteRegKey HKCU "${REGISTRY_KEYS[0]}"`,
+    `  ; /*\n  DeleteRegKey HKCU "${REGISTRY_KEYS[0]}"\n  ; */`,
+  );
+  assert.deepEqual(assertHooks(commented), { guardedRemovals: 1 });
+});
+
 test("块注释里的守卫不算数", () => {
   const faked = guarded.replace(
     "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode <> 1",
