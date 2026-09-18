@@ -149,8 +149,12 @@ pub fn latest_desktop_release(body: &Value) -> Pick {
 ///
 /// 这个地址来自网络响应，最后会被交给系统浏览器打开，所以不能只比前缀：
 /// `…/releases/../../../someone/else` 前缀是对的，浏览器规范化之后却落在
-/// 别人的仓库。先解析成 URL（`..`、`.`、`%2e` 都在解析时就被归一掉），
-/// 再一项项核对主机、端口、用户名密码和路径。
+/// 别人的仓库。先解析成 URL，再一项项核对主机、端口、用户名密码和路径。
+///
+/// 解析会把 `..`、`.`、`%2e%2e`、反斜杠这些归一掉（实测过），但**编码过的
+/// 分隔符不会**：`..%2f..%2f` 在 `Url` 眼里是一个普通路径段，前缀照样对得上，
+/// 交给服务端才决定怎么解释。所以另外再拒一次 `%2e` / `%2f` / `%5c`——正常的
+/// Release 地址里不会出现它们（文件名里的空格是 `%20`，不受影响）。
 ///
 /// 以后要是接了镜像或代理域名，这里会一并拒掉——那时候该显式加白名单，
 /// 而不是把判断放松。
@@ -158,13 +162,17 @@ pub fn is_release_page(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
+    let path = parsed.path();
+    let lower = path.to_ascii_lowercase();
     parsed.scheme() == "https"
         && parsed.host_str() == Some("github.com")
         && parsed.port().is_none()
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && parsed
-            .path()
+        && !lower.contains("%2e")
+        && !lower.contains("%2f")
+        && !lower.contains("%5c")
+        && path
             .strip_prefix("/TshyGO/resume-form-assistant-plugin/releases/")
             .is_some_and(|rest| !rest.is_empty())
 }
@@ -392,6 +400,17 @@ mod tests {
         ));
         assert!(!is_release_page(
             "https://github.com/TshyGO/resume-form-assistant-plugin/releases/%2e%2e/%2e%2e/someone/else"
+        ));
+        // 编码过的分隔符：`Url` 不会把它当成路径分隔符，前缀照样对得上。
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/..%2f..%2fsomeone/else"
+        ));
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/..%5c..%5csomeone/else"
+        ));
+        // 文件名里的空格是 `%20`，不该被上面那条连坐。
+        assert!(is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/download/desktop-v0.1.0/Resume%20Pro%20Desktop_0.1.0_x64-setup.exe"
         ));
         // 主机像是 github.com，其实不是。
         assert!(!is_release_page(
