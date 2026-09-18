@@ -8,6 +8,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
 
+/** 「这一段不在升级时执行」和「不在静默卸载时执行」长什么样。极性写反了不算数。 */
+const SKIPS_UPDATE = /\$UpdateMode\s*<>\s*1/;
+const SKIPS_PASSIVE = /\$PassiveMode\s*<>\s*1/;
+
 /** 卸载必须删掉的注册表键：留着就是指向不存在文件的死注册。 */
 export const REGISTRY_KEYS = [
   String.raw`Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop`,
@@ -87,7 +91,8 @@ export function assertHooks(text) {
   }
   // 和删档案那边一样，只在**同一个宏之内**找守卫：整份文件里搜会搜到另一段的
   // 守卫，于是这一段漏了也照样通过。
-  if (!blockOf(code, cleanupAt).some((line) => line.includes("$UpdateMode"))) {
+  // 看极性：`${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反。
+  if (!blockOf(code, cleanupAt).some((line) => SKIPS_UPDATE.test(line))) {
     throw new Error("清理注册项没有避开升级（$UpdateMode）");
   }
 
@@ -107,6 +112,7 @@ export function assertHooks(text) {
   const block = blockOf(code, removals[0].index);
   const macroStart = removals[0].index - block.length;
   const guardedBy = (needle) => block.some((line) => line.includes(needle));
+  const guardedByPattern = (pattern) => block.some((line) => pattern.test(line));
 
   if (!guardedBy("MessageBox")) {
     throw new Error("删档案之前没有单独的确认框");
@@ -114,10 +120,10 @@ export function assertHooks(text) {
   if (!guardedBy("$DeleteAppDataCheckboxState")) {
     throw new Error("删档案没有挂在「删除应用数据」这个选项后面");
   }
-  if (!guardedBy("$UpdateMode")) {
+  if (!guardedByPattern(SKIPS_UPDATE)) {
     throw new Error("升级走的也是卸载器，这条路径必须排除 $UpdateMode");
   }
-  if (!guardedBy("$PassiveMode")) {
+  if (!guardedByPattern(SKIPS_PASSIVE)) {
     throw new Error("静默卸载时没人能确认，必须排除 $PassiveMode");
   }
   const confirmAt =
@@ -130,15 +136,24 @@ export function assertHooks(text) {
   // 必须是「是/否」，而且默认落在「否」上：默认按钮是「是」的话，一路回车
   // 就把档案删了。
   const confirmLine = code[confirmAt];
-  if (!confirmLine.includes("MB_YESNO")) {
+  // `MB_YESNOCANCEL` 也含 `MB_YESNO`，但它多一个「取消」；取消的返回值没人接，
+  // 就会直接落到下一行——下一行正好是删除。
+  if (!/MB_YESNO(?!CANCEL)/.test(confirmLine)) {
     throw new Error("确认框不是「是/否」");
   }
   if (!confirmLine.includes("MB_DEFBUTTON2")) {
     throw new Error("确认框的默认按钮不是「否」");
   }
   // 删除得落在「是」那条分支里，而不是跟在确认框后面照删不误。
-  if (!confirmText.match(/IDYES\s+\w+/)) {
+  const yes = confirmLine.match(/IDYES\s+(\w+)/);
+  const no = confirmLine.match(/IDNO\s+(\w+)/);
+  if (!yes || !no) {
     throw new Error("删档案不在「是」那条分支里");
+  }
+  // 确认框紧跟着要有一行 `Goto <保留标签>`。`MB_YESNO` 文档上只返回是/否，但
+  // 没被接住的返回值会顺着往下走——而往下一行正是删除。兜底成本一行。
+  if ((code[confirmAt + 1] ?? "").trim() !== `Goto ${no[1]}`) {
+    throw new Error("确认框后面没有兜底跳到保留分支");
   }
   // 删一半（文件被占用、杀毒软件在扫）要说出来，不能让用户以为清干净了。
   const endIfAfter = code.slice(removals[0].index).findIndex((line) => line.includes("${EndIf}"));

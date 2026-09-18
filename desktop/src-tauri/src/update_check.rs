@@ -210,10 +210,18 @@ pub async fn fetch_latest() -> Result<Option<UpdateInfo>, CommandError> {
             message: "更新记录页数异常。".into(),
         })?;
     }
-    match latest_desktop_release(&Value::Array(releases)) {
+    offer_from(&Value::Array(releases))
+}
+
+/// 挑选结果 → 命令层的返回。单独一个函数是为了这层映射也能被测到：
+/// 「说不清」被当成「已经最新」是这块代码最贵的错法。
+pub fn offer_from(body: &Value) -> Result<Option<UpdateInfo>, CommandError> {
+    match latest_desktop_release(body) {
         Pick::Found(info) => Ok(Some(info)),
         Pick::Nothing => Ok(None),
         // 说不清的时候说「没查成」。说成「已经是最新版」，用户就再也不会去看了。
+        // 走到这里有两种原因：返回的不是列表（接口变形、仓库改名），或者列表里
+        // 每条的下载地址都不指向本仓库。对用户来说是同一句话：这次没查成。
         Pick::Unusable => Err(CommandError {
             code: "UPDATE_FAILED".into(),
             message: "读不懂更新服务器给的发布列表，这次没查成。".into(),
@@ -315,7 +323,10 @@ mod tests {
     #[test]
     fn a_list_we_cannot_read_is_not_the_same_as_being_up_to_date() {
         // 仓库改名、接口变形、地址全都不合规——这些都不是「已经是最新版」。
-        assert_eq!(latest_desktop_release(&json!({"message": "Not Found"})), Pick::Unusable);
+        assert_eq!(
+            latest_desktop_release(&json!({"message": "Not Found"})),
+            Pick::Unusable
+        );
         assert_eq!(latest_desktop_release(&json!("字符串")), Pick::Unusable);
         // 真的没有桌面版本，才是「没有更新」。
         assert_eq!(latest_desktop_release(&json!([])), Pick::Nothing);
@@ -331,11 +342,38 @@ mod tests {
             "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
         ));
         // 别人仓库的 Release 页、明文 http、以及别的路径都不行。
-        assert!(!is_release_page("https://github.com/someone/else/releases/tag/v1"));
+        assert!(!is_release_page(
+            "https://github.com/someone/else/releases/tag/v1"
+        ));
         assert!(!is_release_page(
             "http://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
         ));
-        assert!(!is_release_page("https://github.com/TshyGO/resume-form-assistant-plugin"));
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin"
+        ));
+        // Release 页的另外两种形状也要认。
+        assert!(is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/download/desktop-v0.1.0/setup.exe"
+        ));
+        assert!(is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest"
+        ));
+    }
+
+    #[test]
+    fn saying_nothing_and_saying_i_cannot_tell_map_to_different_answers() {
+        // 「没有更新」是 Ok(None)，「读不懂」必须是错误。两者混在一起，用户就
+        // 会在一个坏掉的检查上看到「已经是最新版」。
+        assert_eq!(offer_from(&json!([])).unwrap(), None);
+        let found = offer_from(&json!([release("desktop-v9.9.9", false, false)]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.version, "9.9.9");
+
+        let mut bad_url = release("desktop-v1.0.0", false, false);
+        bad_url["html_url"] = json!("https://github.com/someone/else/releases/tag/v1");
+        let err = offer_from(&json!([bad_url])).unwrap_err();
+        assert_eq!(err.code, "UPDATE_FAILED");
     }
 
     #[test]

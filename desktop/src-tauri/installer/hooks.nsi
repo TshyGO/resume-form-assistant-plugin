@@ -42,6 +42,9 @@
     MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 \
       "还要删掉求职档案吗？$\r$\n$\r$\n$LOCALAPPDATA\ResumePro$\r$\n$\r$\n里面是所有申请、附件、待办和备份。删掉之后找不回来。$\r$\n$\r$\n选「否」就只卸载程序，档案原样留着。" \
       IDYES resumeProDeleteArchive IDNO resumeProKeepArchive
+    ; 兜底：`MB_YESNO` 只会返回是/否，但删除不可逆。任何没被上面接住的返回值
+    ; 都落到「保留」，而不是顺着往下走到删除标签。
+    Goto resumeProKeepArchive
     resumeProDeleteArchive:
       DetailPrint "按用户确认删除求职档案…"
       ClearErrors

@@ -31,6 +31,7 @@ const guarded = [
   "  ${AndIf} $PassiveMode <> 1",
   "  ${AndIf} $DeleteAppDataCheckboxState = 1",
   `    MessageBox MB_YESNO|MB_DEFBUTTON2 "还要删掉 ${ARCHIVE_DIR} 吗？" IDYES del IDNO keep`,
+  "    Goto keep",
   "    del:",
   "      ClearErrors",
   `      RMDir /r "${ARCHIVE_DIR}"`,
@@ -97,6 +98,32 @@ test("确认框必须是「是/否」且默认落在「否」上", () => {
 test("删除必须落在「是」那条分支里", () => {
   const noBranch = guarded.replace(" IDYES del IDNO keep", "");
   assert.throws(() => assertHooks(noBranch), /不在「是」那条分支里/);
+});
+
+test("确认框后面要兜底跳到保留分支", () => {
+  // 少了这一行，任何没被 IDYES/IDNO 接住的返回值都会顺着往下走到删除标签。
+  const noFallback = guarded.replace("    Goto keep\n", "");
+  assert.throws(() => assertHooks(noFallback), /没有兜底跳到保留分支/);
+});
+
+test("多一个「取消」按钮就不是「是/否」了", () => {
+  // MB_YESNOCANCEL 里「取消」的返回值没人接，落到的正好是删除那一行。
+  const withCancel = guarded.replace("MB_YESNO|MB_DEFBUTTON2", "MB_YESNOCANCEL|MB_DEFBUTTON2");
+  assert.throws(() => assertHooks(withCancel), /不是「是\/否」/);
+});
+
+test("守卫写反了不算数", () => {
+  // `${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反：只在升级时删。
+  const inverted = guarded.replace(
+    "!macro NSIS_HOOK_POSTUNINSTALL\n  ${If} $UpdateMode <> 1",
+    "!macro NSIS_HOOK_POSTUNINSTALL\n  ${If} $UpdateMode = 1",
+  );
+  assert.throws(() => assertHooks(inverted), /\$UpdateMode/);
+  const invertedCleanup = guarded.replace(
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode <> 1",
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode = 1",
+  );
+  assert.throws(() => assertHooks(invertedCleanup), /清理注册项没有避开升级/);
 });
 
 test("删一半要说出来，不能让用户以为清干净了", () => {
