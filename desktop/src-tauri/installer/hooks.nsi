@@ -9,35 +9,56 @@
 ; - 档案目录里是所有申请、附件、待办和备份，**删了找不回来**。所以默认一个字节
 ;   都不动；真要删，得在一个单独的确认框里再说一次「是」。
 ;
+; 升级走的也是卸载器（`$UpdateMode = 1`），而且**两段都要避开它**：那时候删掉
+; 注册项，新版本装好、启动、重新写清单之前，浏览器就连不上；升级要是中断在
+; 中间，用户会停在一个「装着旧版但连不上」的状态里。
+;
 ; 这个文件由 `tauri.conf.json` 的 `bundle.windows.nsis.installerHooks` 引入，
 ; 内容会被插进 Tauri 生成的 installer.nsi，所以 LogicLib（`${If}`）是现成的。
 
 !macro NSIS_HOOK_PREUNINSTALL
-  DetailPrint "清理 Native Messaging 注册…"
+  ${If} $UpdateMode <> 1
+    DetailPrint "清理 Native Messaging 注册…"
 
-  ; 浏览器靠这两个键找到 host。
-  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop"
-  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
+    ; 浏览器靠这两个键找到 host。
+    DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop"
+    DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
 
-  ; 清单和回执是应用写进数据目录的，删掉它们不影响档案本身。
-  Delete "$LOCALAPPDATA\ResumePro\nm\chrome-com.resumepro.desktop.json"
-  Delete "$LOCALAPPDATA\ResumePro\nm\edge-com.resumepro.desktop.json"
-  Delete "$LOCALAPPDATA\ResumePro\nm\receipt.json"
-  RMDir "$LOCALAPPDATA\ResumePro\nm"
+    ; 清单和回执是应用写进数据目录的，删掉它们不影响档案本身。
+    Delete "$LOCALAPPDATA\ResumePro\nm\chrome-com.resumepro.desktop.json"
+    Delete "$LOCALAPPDATA\ResumePro\nm\edge-com.resumepro.desktop.json"
+    Delete "$LOCALAPPDATA\ResumePro\nm\receipt.json"
+    RMDir "$LOCALAPPDATA\ResumePro\nm"
+  ${Else}
+    DetailPrint "升级中：保留 Native Messaging 注册，新版本启动时会自己核对。"
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; 升级走的也是卸载器（$UpdateMode = 1）。那种时候什么都不该问、什么都不该删。
-  ; 静默卸载（$PassiveMode = 1）同理：没人在屏幕前，就不能替他做删数据的决定。
+  ; 静默卸载（$PassiveMode = 1，含 /S）时没人在屏幕前，不能替他做删数据的决定。
   ${If} $UpdateMode <> 1
   ${AndIf} $PassiveMode <> 1
   ${AndIf} $DeleteAppDataCheckboxState = 1
     MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 \
       "还要删掉求职档案吗？$\r$\n$\r$\n$LOCALAPPDATA\ResumePro$\r$\n$\r$\n里面是所有申请、附件、待办和备份。删掉之后找不回来。$\r$\n$\r$\n选「否」就只卸载程序，档案原样留着。" \
       IDYES resumeProDeleteArchive IDNO resumeProKeepArchive
+    ; 兜底：`MB_YESNO` 只会返回是/否，但删除不可逆。任何没被上面接住的返回值
+    ; 都落到「保留」，而不是顺着往下走到删除标签。
+    Goto resumeProKeepArchive
     resumeProDeleteArchive:
       DetailPrint "按用户确认删除求职档案…"
+      ClearErrors
       RMDir /r "$LOCALAPPDATA\ResumePro"
+      ; 文件被占用（桌面还没退干净、杀毒软件正在扫）时会删一半。说出来，
+      ; 别让用户以为已经清干净了——他可能正打算把机器转手。
+      ;
+      ; 也要看目录还在不在：`RMDir` 对着一个本来就不存在的目录同样会置错误位，
+      ; 而那种情况下用户早就自己删干净了，再弹一句「可能有文件正被占用」是冤枉。
+      ${If} ${Errors}
+      ${AndIf} ${FileExists} "$LOCALAPPDATA\ResumePro\*.*"
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+          "档案没有完全删掉：$\r$\n$\r$\n$LOCALAPPDATA\ResumePro$\r$\n$\r$\n可能有文件正被占用。关掉桌面程序之后手动删除这个目录。"
+      ${EndIf}
       Goto resumeProArchiveDone
     resumeProKeepArchive:
       DetailPrint "保留求职档案：$LOCALAPPDATA\ResumePro"

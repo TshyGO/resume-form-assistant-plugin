@@ -78,6 +78,12 @@ jobs:
         working-directory: desktop
         run: npm run test:desktop-release
 
+      # NSIS 脚本没法单测，但「卸载会不会把用户的求职档案带走」是一份清单。
+      # 这条检查之前只挂在 `npm test` 上，CI 里没人跑——等于没有。
+      - name: Uninstall hook guard
+        working-directory: desktop
+        run: npm run test:uninstall-hooks
+
       - name: Frontend build
         working-directory: desktop
         run: npm run build
