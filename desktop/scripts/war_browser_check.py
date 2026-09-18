@@ -223,6 +223,7 @@ def main() -> None:
                 # 3. Click the real content-script sidebar button. Its closed
                 # shadow root is addressed through Chromium's accessibility tree,
                 # so this is the actual user path rather than a direct worker call.
+                web_page.wait_for_selector("#resume-pro-sidebar", timeout=10_000)
                 extension_page.close()
                 with context.expect_page(timeout=10_000) as manager_info:
                     click_accessible(context, web_page, "打开管理面板")

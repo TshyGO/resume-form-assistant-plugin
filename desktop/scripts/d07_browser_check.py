@@ -164,7 +164,12 @@ def remove_registration_written_by_app(binary: Path) -> None:
             if not path.exists():
                 continue
             if manifest_host_path(path) == expected_binary:
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"failed to remove Native Messaging manifest {path}"
+                    ) from exc
         return
     if sys.platform != "win32":
         return

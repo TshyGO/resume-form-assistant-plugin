@@ -80,6 +80,18 @@ function Assert-NativeMessagingRegistration([string]$Executable) {
   return $registrationKeys
 }
 
+function Wait-NativeMessagingRegistration([string]$Executable) {
+  $deadline = (Get-Date).AddSeconds(30)
+  while ($true) {
+    try {
+      return Assert-NativeMessagingRegistration $Executable
+    } catch {
+      if ((Get-Date) -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+}
+
 $before = Get-ArchiveSnapshot
 $testRoot = Join-Path $env:TEMP ("resumepro-d13-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -102,8 +114,7 @@ try {
 
   $env:RESUMEPRO_DATA_DIR = $testRoot
   $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
-  Start-Sleep -Seconds 6
-  $keys = Assert-NativeMessagingRegistration $exe.FullName
+  $keys = Wait-NativeMessagingRegistration $exe.FullName
 
   $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
   if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
@@ -129,8 +140,7 @@ try {
     $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
       Select-Object -First 1
     $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
-    Start-Sleep -Seconds 6
-    $keys = Assert-NativeMessagingRegistration $exe.FullName
+    $keys = Wait-NativeMessagingRegistration $exe.FullName
     $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
     if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
     $upgradeTested = $true
@@ -145,6 +155,14 @@ try {
   if (Test-Path -LiteralPath $installDir) { throw "Install directory remained after uninstall" }
   foreach ($key in $keys) {
     if (Test-Path $key) { throw "Registration remained after uninstall: $key" }
+  }
+  if ($upgradeTested) {
+    if (-not (Test-Path -LiteralPath $upgradeSentinel)) {
+      throw "Uninstall removed the active data attachment sentinel"
+    }
+    if ((Get-FileHash -LiteralPath $upgradeSentinel -Algorithm SHA256).Hash -ne $upgradeSentinelHash) {
+      throw "Uninstall changed the active data attachment sentinel"
+    }
   }
   if (-not (Test-Path -LiteralPath $sentinel)) { throw "Uninstall removed the user-data sentinel" }
 

@@ -23,9 +23,9 @@ async function openManagerTab(requestedTab = "") {
   return chrome.tabs.create({ url: targetUrl });
 }
 
-chrome.action.onClicked.addListener(() => {
-  openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."));
-});
+chrome.action.onClicked.addListener(() =>
+  openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."))
+);
 
 // This service worker only creates the host. It never owns a long AI request.
 let creatingHost = null;
