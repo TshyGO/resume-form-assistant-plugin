@@ -17,6 +17,7 @@ const desktop = resolve(here, "..");
 const cleanup = [
   ...REGISTRY_KEYS.map((key) => `  DeleteRegKey HKCU "${key}"`),
   ...MANIFEST_FILES.map((file) => `  Delete "${file}"`),
+  String.raw`  RMDir "${ARCHIVE_DIR}\nm"`,
 ].join("\n");
 
 /** 一份合规的钩子长什么样。每条断言都是从这里挖掉一块。 */
@@ -77,6 +78,30 @@ test("裸删档案目录直接拦住", () => {
     "!macroend",
   ].join("\n");
   assert.throws(() => assertHooks(naked), /没有单独的确认框/);
+});
+
+test("挪一条清理到守卫外面也会红——不是只看第一条", () => {
+  // 只检查第一条 DeleteRegKey 的话，把另一个键或某个清单文件搬到 ${EndIf}
+  // 后面，检查照样通过。
+  const lastKey = `  Delete "${MANIFEST_FILES[MANIFEST_FILES.length - 1]}"`;
+  const moved = guarded.replace(`${lastKey}\n`, "").replace(
+    "  ${EndIf}\n!macroend\n!macro NSIS_HOOK_POSTUNINSTALL",
+    `  \${EndIf}\n${lastKey}\n!macroend\n!macro NSIS_HOOK_POSTUNINSTALL`,
+  );
+  assert.throws(() => assertHooks(moved), /清理注册项没有避开升级/);
+});
+
+test("挪进 ${Else} 分支更不算数——那正是升级走的那条路", () => {
+  const lastKey = `  Delete "${MANIFEST_FILES[MANIFEST_FILES.length - 1]}"`;
+  const moved = guarded
+    .replace(`${lastKey}\n`, "")
+    .replace("  ${EndIf}\n!macroend", `  \${Else}\n${lastKey}\n  \${EndIf}\n!macroend`);
+  assert.throws(() => assertHooks(moved), /清理注册项没有避开升级/);
+});
+
+test("递归删除之前必须 ClearErrors——error flag 是全局的", () => {
+  const stale = guarded.replace("      ClearErrors\n", "");
+  assert.throws(() => assertHooks(stale), /没有 ClearErrors/);
 });
 
 test("升级时清理注册项会把扩展连接弄断，所以那一段也得避开 $UpdateMode", () => {

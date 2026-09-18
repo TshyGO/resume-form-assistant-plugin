@@ -61,6 +61,62 @@ function blockOf(code, index) {
   return code.slice(start, index);
 }
 
+/**
+ * 某一行真正被哪些条件包着（只在它所在的宏之内算）。
+ *
+ * 光看「守卫在这一行之前出现过」不够：`${EndIf}` 之后的行也满足那个说法，
+ * 而它已经在守卫外面了。这里按 `${If}` / `${EndIf}` 维护一个栈，`${Else}`
+ * 把当前这层的条件清掉（那正是「升级时」走的那条路），`${OrIf}` 会让整层
+ * 失效——条件可以由另一半满足，守卫就不成立了。
+ */
+function enclosingConditions(code, index) {
+  const stack = [];
+  let open = null;
+  for (const raw of blockOf(code, index)) {
+    const line = raw.trim();
+    if (/^\$\{If\}/.test(line)) {
+      open = { text: line, weak: false };
+      stack.push(open);
+      continue;
+    }
+    if (open && /^\$\{AndIf\}/.test(line)) {
+      open.text += `\n${line}`;
+      continue;
+    }
+    if (open && /^\$\{OrIf\}/.test(line)) {
+      open.weak = true;
+      continue;
+    }
+    open = null;
+    if (/^\$\{ElseIf\}/.test(line)) {
+      const frame = stack[stack.length - 1];
+      if (frame) {
+        frame.text = line;
+        frame.weak = false;
+        open = frame;
+      }
+      continue;
+    }
+    if (/^\$\{Else\}/.test(line)) {
+      const frame = stack[stack.length - 1];
+      if (frame) {
+        frame.text = "";
+        frame.weak = false;
+      }
+      continue;
+    }
+    if (/^\$\{EndIf\}/.test(line)) {
+      stack.pop();
+    }
+  }
+  return stack;
+}
+
+/** 这一行是不是真的被某个符合 `pattern` 的条件包着。 */
+function enclosedBy(code, index, pattern) {
+  return enclosingConditions(code, index).some((frame) => !frame.weak && pattern.test(frame.text));
+}
+
 export function assertHooks(text) {
   // NSIS 用 `\` 续行。`MessageBox` 的参数常常跨好几行，不拼起来的话
   // 「默认按钮是不是「否」」这类判断会看错行。
@@ -85,15 +141,28 @@ export function assertHooks(text) {
 
   // 清理注册项这一段也要避开升级。升级走的也是卸载器：那时候删了注册项，
   // 新版本装好、启动、重写清单之前，浏览器就连不上；升级中断在中间更糟。
+  //
+  // **每一条**都要单独看。只看第一条的话，把另一个键或某个清单文件挪到守卫
+  // 外面，检查照样通过——那正是这类静态检查最容易被绕开的方式。
   const cleanupAt = code.findIndex((line) => line.includes("DeleteRegKey HKCU"));
   if (cleanupAt < 0) {
     throw new Error("找不到清理注册项那一段");
   }
-  // 和删档案那边一样，只在**同一个宏之内**找守卫：整份文件里搜会搜到另一段的
-  // 守卫，于是这一段漏了也照样通过。
-  // 看极性：`${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反。
-  if (!blockOf(code, cleanupAt).some((line) => SKIPS_UPDATE.test(line))) {
-    throw new Error("清理注册项没有避开升级（$UpdateMode）");
+  const cleanupLines = [
+    ...REGISTRY_KEYS.map((key) => `DeleteRegKey HKCU "${key}"`),
+    ...MANIFEST_FILES.map((file) => `Delete "${file}"`),
+    String.raw`RMDir "${ARCHIVE_DIR}\nm"`,
+  ];
+  for (const needle of cleanupLines) {
+    const at = code.findIndex((line) => line.includes(needle));
+    if (at < 0) {
+      throw new Error(`找不到这一行：${needle}`);
+    }
+    // 只在**同一个宏之内**、而且真的在 `${If}` 里边才算数；顺便看极性：
+    // `${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反。
+    if (!enclosedBy(code, at, SKIPS_UPDATE)) {
+      throw new Error(`清理注册项没有避开升级（$UpdateMode）：${needle}`);
+    }
   }
 
   // 档案目录只允许出现在一处递归删除里，而且必须排在确认框后面。
@@ -112,12 +181,12 @@ export function assertHooks(text) {
   const block = blockOf(code, removals[0].index);
   const macroStart = removals[0].index - block.length;
   const guardedBy = (needle) => block.some((line) => line.includes(needle));
-  const guardedByPattern = (pattern) => block.some((line) => pattern.test(line));
+  const guardedByPattern = (pattern) => enclosedBy(code, removals[0].index, pattern);
 
   if (!guardedBy("MessageBox")) {
     throw new Error("删档案之前没有单独的确认框");
   }
-  if (!guardedBy("$DeleteAppDataCheckboxState")) {
+  if (!guardedByPattern(/\$DeleteAppDataCheckboxState\s*=\s*1/)) {
     throw new Error("删档案没有挂在「删除应用数据」这个选项后面");
   }
   if (!guardedByPattern(SKIPS_UPDATE)) {
@@ -154,6 +223,11 @@ export function assertHooks(text) {
   // 没被接住的返回值会顺着往下走——而往下一行正是删除。兜底成本一行。
   if ((code[confirmAt + 1] ?? "").trim() !== `Goto ${no[1]}`) {
     throw new Error("确认框后面没有兜底跳到保留分支");
+  }
+  // 递归删除之前要 `ClearErrors`。NSIS 的 error flag 是全局的，不清掉的话
+  // 前面任何一步的残留都会让下面那句「没删干净」冤枉一次。
+  if (!confirmText.includes("ClearErrors")) {
+    throw new Error("递归删除之前没有 ClearErrors");
   }
   // 删一半（文件被占用、杀毒软件在扫）要说出来，不能让用户以为清干净了。
   const endIfAfter = code.slice(removals[0].index).findIndex((line) => line.includes("${EndIf}"));

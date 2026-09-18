@@ -93,7 +93,9 @@ pub enum Pick {
 /// release，很可能是插件的。草稿和预发布一律跳过。
 pub fn latest_desktop_release(body: &Value) -> Pick {
     let mut best: Option<(Vec<u32>, UpdateInfo)> = None;
-    let mut saw_desktop_release = false;
+    // 「认得出的最高版本」和「能安全打开的最高版本」分开记。两者不一致，说明
+    // 最新那一版我们打不开——那是「没查成」，不是「已经最新」。
+    let mut highest_seen: Option<Vec<u32>> = None;
     let Some(items) = body.as_array() else {
         // 连列表都不是：这不是「没有更新」。
         return Pick::Unusable;
@@ -115,7 +117,10 @@ pub fn latest_desktop_release(body: &Value) -> Pick {
         let Some(parts) = parse_version(version) else {
             continue;
         };
-        saw_desktop_release = true;
+        match &highest_seen {
+            Some(current) if *current >= parts => {}
+            _ => highest_seen = Some(parts.clone()),
+        }
         // 下载页地址在这里就得站得住：留到点「去下载页」才发现打不开，
         // 用户已经被告知「有新版本」了。
         let Some(url) = item["html_url"].as_str().filter(|url| is_release_page(url)) else {
@@ -130,11 +135,13 @@ pub fn latest_desktop_release(body: &Value) -> Pick {
             _ => best = Some((parts, candidate)),
         }
     }
-    match best {
-        Some((_, info)) => Pick::Found(info),
-        // 有桌面版本却一条都用不了，说明我们对接口的理解已经不成立了。
-        None if saw_desktop_release => Pick::Unusable,
-        None => Pick::Nothing,
+    match (best, highest_seen) {
+        // 最高版本正好是能打开的那一条。
+        (Some((parts, info)), Some(highest)) if parts == highest => Pick::Found(info),
+        // 认得出更高的版本，却只能打开一个更旧的。退回去说「有新版本 vN-1」，
+        // 用户点完下载页装完，还是落后；说「已经最新」更是直接的谎。
+        (_, Some(_)) => Pick::Unusable,
+        (_, None) => Pick::Nothing,
     }
 }
 
@@ -326,15 +333,26 @@ mod tests {
     fn a_release_without_a_usable_download_page_is_skipped() {
         // 说了「有新版」就得能点开。地址不对的条目在筛选阶段就该出局，
         // 而不是等用户点「去下载页」才报错。
-        let mut broken = release("desktop-v2.0.0", false, false);
+        let mut broken = release("desktop-v1.0.0", false, false);
         broken["html_url"] = json!("https://example.test/not-a-release");
-        let body = json!([broken, release("desktop-v1.0.0", false, false)]);
-        assert_eq!(found(&body).version, "1.0.0");
+        let body = json!([release("desktop-v2.0.0", false, false), broken]);
+        assert_eq!(found(&body).version, "2.0.0");
 
         // 一条桌面版本都用不上时，那是「没查成」，不是「已经最新」。
         let mut missing = release("desktop-v3.0.0", false, false);
         missing["html_url"] = Value::Null;
         assert_eq!(latest_desktop_release(&json!([missing])), Pick::Unusable);
+    }
+
+    #[test]
+    fn a_broken_newest_release_is_not_covered_up_by_an_older_working_one() {
+        // 最高版本打不开、次高版本能打开时，不能退回去报次高版本：本机要是已经
+        // 装着次高版本，退回去的结果就是界面说「已经是最新版」——最新那一版
+        // 出了问题，反而一个字都没提。
+        let mut broken = release("desktop-v2.0.0", false, false);
+        broken["html_url"] = json!("https://example.test/not-a-release");
+        let body = json!([broken, release("desktop-v1.0.0", false, false)]);
+        assert_eq!(latest_desktop_release(&body), Pick::Unusable);
     }
 
     #[test]

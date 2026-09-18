@@ -51,7 +51,11 @@
       RMDir /r "$LOCALAPPDATA\ResumePro"
       ; 文件被占用（桌面还没退干净、杀毒软件正在扫）时会删一半。说出来，
       ; 别让用户以为已经清干净了——他可能正打算把机器转手。
+      ;
+      ; 也要看目录还在不在：`RMDir` 对着一个本来就不存在的目录同样会置错误位，
+      ; 而那种情况下用户早就自己删干净了，再弹一句「可能有文件正被占用」是冤枉。
       ${If} ${Errors}
+      ${AndIf} ${FileExists} "$LOCALAPPDATA\ResumePro\*.*"
         MessageBox MB_OK|MB_ICONEXCLAMATION \
           "档案没有完全删掉：$\r$\n$\r$\n$LOCALAPPDATA\ResumePro$\r$\n$\r$\n可能有文件正被占用。关掉桌面程序之后手动删除这个目录。"
       ${EndIf}
