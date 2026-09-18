@@ -52,6 +52,7 @@ test('d14-v1 has the required ambiguity, template history and hostile inputs', (
   assert.ok(dataset.notices.some((notice) => notice.requiresUserChoice));
   assert.ok(dataset.notices.some((notice) => notice.historyOnly));
   assert.ok(dataset.notices.some((notice) => notice.mustNotChangeFormalState));
+  assert.ok(dataset.notices.some((notice) => notice.kind === 'interview_cancelled'));
   assert.ok(dataset.modelResponses.some((response) => response.mode === 'timeout'));
   assert.ok(dataset.modelResponses.some((response) => response.logicalId === 'model-invalid-json'));
   assert.ok(dataset.attachments.every((attachment) => attachment.executable !== true));
@@ -73,6 +74,7 @@ test('d14-v1 has the required ambiguity, template history and hostile inputs', (
 test('D14 dependencies and artifacts start unsigned and unregistered', () => {
   const dependencies = readJson(ACCEPTANCE, 'dependencies.json');
   const artifacts = readJson(ACCEPTANCE, 'candidate-artifacts.json');
+  const report = readJson(ACCEPTANCE, 'report-template.json');
 
   assert.deepEqual(dependencies.dependencies.map((entry) => entry.id), ['D08', 'D11', 'D13']);
   assert.ok(dependencies.dependencies.every((entry) => entry.signedOff === false));
@@ -80,6 +82,9 @@ test('D14 dependencies and artifacts start unsigned and unregistered', () => {
   assert.equal(artifacts.status, 'NOT_REGISTERED');
   assert.equal(artifacts.desktop.sha256, null);
   assert.equal(artifacts.extension.sha256, null);
+  assert.ok(report.dependencies.every((entry) => entry.signedOff === false));
+  assert.ok(report.dependencies.every((entry) => entry.signedOffBy === null));
+  assert.ok(report.dependencies.every((entry) => entry.signedOffAt === null));
 });
 
 test('D14 T2 maps the shared fixture to every deterministic business layer', () => {
@@ -111,7 +116,7 @@ test('D14 T3 maps every fault to exact tests without pretending OS evidence ran'
         `${entry.id} references missing test ${reference}`);
     }
   }
-  assert.ok(matrix.cases.slice(0, 12).every((entry) => entry.automationStatus === 'PASS'));
+  assert.ok(matrix.cases.slice(0, 12).every((entry) => entry.automationStatus === 'COVERED'));
   assert.equal(matrix.cases[12].automationStatus, 'PARTIAL');
   assert.ok(matrix.cases[12].remainingEvidence.length >= 5);
 });

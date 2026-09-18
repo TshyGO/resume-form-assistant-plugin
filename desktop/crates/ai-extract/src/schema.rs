@@ -179,7 +179,9 @@ fn is_calendar_date(value: &str) -> bool {
 
 fn is_rfc3339(value: &str) -> bool {
     let bytes = value.as_bytes();
-    if bytes.len() < 20 || !is_calendar_date(&value[..10]) {
+    // All separators and digits in this wire format are ASCII. Reject first so the byte
+    // slices below can never split a multibyte model response and panic the command.
+    if !value.is_ascii() || bytes.len() < 20 || !is_calendar_date(&value[..10]) {
         return false;
     }
     if bytes[10] != b'T' && bytes[10] != b't' {
@@ -212,6 +214,7 @@ fn is_rfc3339(value: &str) -> bool {
         }
         rest = &fraction[digits..];
     }
+    // RFC 3339 explicitly permits lower-case `t`/`z`; accept both spellings deliberately.
     if rest == "Z" || rest == "z" {
         return true;
     }
@@ -428,6 +431,11 @@ mod tests {
             "2027-02-29",
             "0000-01-01",
             "2026-13-01",
+            "2026-02-30T10:00:00Z",
+            "2027-02-29T10:00:00Z",
+            "0000-01-01T00:00:00Z",
+            "2026-13-01T10:00:00Z",
+            "2026-09-2中T10:00:00Z",
             "2026-09-20T24:00:00Z",
             "2026-09-20T10:60:00Z",
             "2026-09-20T10:00:60Z",

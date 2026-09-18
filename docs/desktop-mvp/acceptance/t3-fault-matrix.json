@@ -5,7 +5,7 @@
   "cases": [
     {
       "id": "F01",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["protocol", "link", "IndexedDB"],
       "deterministicTests": [
         "tests/link-uploads.test.js::walkthrough 10.14: a restart mid-upload resumes with the same ids and the same bytes",
@@ -16,7 +16,7 @@
     },
     {
       "id": "F02",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["link", "IndexedDB"],
       "deterministicTests": [
         "tests/link-staging.test.js::a store that refuses the write is reported as unavailable, never thrown",
@@ -27,7 +27,7 @@
     },
     {
       "id": "F03",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["archive-store", "transaction"],
       "deterministicTests": [
         "desktop/crates/archive-store/tests/storage.rs::transaction_failure_rolls_back_all_effects_and_sequence",
@@ -37,7 +37,7 @@
     },
     {
       "id": "F04",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["archive-store", "link"],
       "deterministicTests": [
         "desktop/crates/archive-store/tests/storage.rs::replay_conflict_purge_and_profile_isolation",
@@ -47,7 +47,7 @@
     },
     {
       "id": "F05",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["protocol", "archive-store", "link"],
       "deterministicTests": [
         "desktop/crates/archive-store/tests/storage.rs::replay_conflict_purge_and_profile_isolation",
@@ -59,7 +59,7 @@
     },
     {
       "id": "F06",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["archive-store", "restore"],
       "deterministicTests": [
         "desktop/crates/archive-store/tests/storage.rs::concurrent_events_allocate_one_monotonic_sequence",
@@ -69,18 +69,20 @@
     },
     {
       "id": "F07",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["backup", "archive-store"],
       "deterministicTests": [
         "desktop/crates/backup/tests/writing.rs::the_database_in_the_package_is_the_snapshot_not_the_live_file",
         "desktop/crates/backup/tests/writing.rs::deleting_a_referenced_file_after_the_database_snapshot_cannot_publish_a_partial_backup",
+        "desktop/crates/backup/tests/writing.rs::a_missing_snapshot_file_is_rejected_without_replacing_the_previous_backup",
+        "desktop/crates/backup/tests/writing.rs::an_orphan_attachment_fails_closed_with_a_repair_hint",
         "desktop/crates/backup/tests/writing.rs::a_failed_backup_does_not_touch_the_previous_good_one"
       ],
-      "remainingEvidence": []
+      "remainingEvidence": ["T6 bind database snapshot path and SHA-256 references to ZIP manifest entries"]
     },
     {
       "id": "F08",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["backup", "restore"],
       "deterministicTests": [
         "desktop/crates/backup/tests/hostile.rs::a_traversing_entry_name_is_rejected_before_anything_is_written",
@@ -92,7 +94,7 @@
     },
     {
       "id": "F09",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["evidence-import", "AI", "review"],
       "deterministicTests": [
         "desktop/src-tauri/src/ai_commands_tests.rs::a_pdf_is_refused_before_anything_leaves_the_machine",
@@ -103,7 +105,7 @@
     },
     {
       "id": "F10",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["AI extract", "review", "command"],
       "deterministicTests": [
         "desktop/crates/ai-extract/tests/d14_business_regression.rs::d14_invalid_model_outputs_never_become_formal_values",
@@ -115,7 +117,7 @@
     },
     {
       "id": "F11",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["privacy", "request", "storage", "release artifact"],
       "deterministicTests": [
         "tests/d14-fault-matrix.test.js::D14 F11: every fixture marker is removed at its plugin boundary",
@@ -123,11 +125,11 @@
         "tests/link-privacy-d08.test.js::no synthetic secret reaches the wire, chrome.storage or IndexedDB",
         "desktop/src-tauri/src/commands_regression.rs::a_preview_is_text_or_a_data_url_and_never_a_path"
       ],
-      "remainingEvidence": []
+      "remainingEvidence": ["T6/T7 desktop candidate artifact marker, hash and signature scan"]
     },
     {
       "id": "F12",
-      "automationStatus": "PASS",
+      "automationStatus": "COVERED",
       "testLayer": ["protocol", "link", "native host"],
       "deterministicTests": [
         "tests/link-envelope.test.js::an identity-required message without a handshake refuses to be built",

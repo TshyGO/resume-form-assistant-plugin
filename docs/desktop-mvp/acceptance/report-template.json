@@ -52,9 +52,9 @@
     { "id": "F13", "status": "NOT_RUN", "testLayer": "real-os", "expected": null, "actual": null, "evidence": [], "defect": null }
   ],
   "dependencies": [
-    { "issue": 22, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false },
-    { "issue": 25, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false },
-    { "issue": 29, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false }
+    { "issue": 22, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null },
+    { "issue": 25, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null },
+    { "issue": 29, "implementationPrs": [], "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null }
   ],
   "review": {
     "reviewer": null,

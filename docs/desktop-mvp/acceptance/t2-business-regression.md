@@ -37,7 +37,7 @@ cargo test --manifest-path desktop/crates/archive-store/Cargo.toml --locked --te
 
 完整回归仍按根目录 `npm test` 和 `.github/workflows/desktop.yml` 执行。报告引用测试结果时必须记录源码 commit 和运行链接；源码文件路径本身不算执行证据。
 
-本地闭环结果：插件 Node 回归 579 项、桌面纯 TypeScript 回归 151 项、`ai-extract` 11 项、`archive-store` 63 项全部通过；根目录 TypeScript 检查通过。
+截至 T2 首次闭环提交，本地结果为插件 Node 579 项、桌面纯 TypeScript 151 项、`ai-extract` 11 项、`archive-store` 63 项通过；T3 加固后的当前总数以 [t3-fault-matrix.md](t3-fault-matrix.md) 和 PR CI 为准。
 
 ## T2 不证明什么
 

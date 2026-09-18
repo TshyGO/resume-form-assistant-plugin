@@ -140,7 +140,7 @@ T6 与 D13 协调：候选阶段使用构建 artifacts 或 draft/prerelease；�
 
 沿用根目录和桌面目录的现有 npm scripts；完整桌面检查以 `.github/workflows/desktop.yml` 为准。当前没有 `desktop/Cargo.toml` 工作区入口，Rust 测试按各 crate manifest 执行。`desktop` 的 `npm test` 不等于整个桌面 CI，验收报告应链接完整 CI 结果。
 
-本 spec 仅新增文档，检查链接、case 覆盖和 `git diff --check` 即可；实现 T2/T3/T6 时再运行对应测试与 CI。T4/T5 无法用源码测试替代实机证据。
+独立 T1 提交只需检查链接、case 覆盖、夹具漂移和 `git diff --check`。当前 PR 已实现 T2/T3，必须额外执行根目录 Node/TypeScript 回归，以及 `ai-extract`、`archive-store`、`backup` 和标准 MSVC `src-tauri` 测试；完整命令见验收目录的 T2/T3 映射文档并以 `.github/workflows/desktop.yml` 为准。T4/T5 无法用源码测试替代实机证据。
 
 - [x] T1：合成数据、完整 case 矩阵、支持范围和报告格式已落地。
 - [x] T2：业务闭环及一致性断言已通过。

@@ -156,13 +156,13 @@ fn build(
         &entries,
         "archive/attachments/",
         source.counts.attachments,
-        "attachments",
+        "附件文件",
     )?;
     require_count(
         &entries,
         "archive/snapshots/",
         source.counts.snapshots,
-        "snapshots",
+        "简历快照文件",
     )?;
 
     // 4. 清单最后写：它要覆盖上面所有条目。
@@ -198,7 +198,7 @@ fn require_count(
         .count() as i64;
     if actual != expected {
         return Err(BackupError::Mismatch(format!(
-            "database snapshot says {expected} {label}, package contains {actual}"
+            "数据库快照记录 {expected} 个{label}，备份目录找到 {actual} 个；请先运行档案完整性检查并修复缺失或孤立文件"
         )));
     }
     Ok(())

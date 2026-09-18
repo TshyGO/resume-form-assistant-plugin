@@ -12,16 +12,17 @@
 
 ## 状态解释
 
-- F01–F12：确定性自动化均有精确映射；表中列出的浏览器、安装器、真实服务或隔离磁盘证据仍由 T4/T5 补充。
+- F01–F12：`automationStatus=COVERED` 只表示已有精确、已执行的自动化覆盖，不等于验收报告的 `PASS`；表中列出的浏览器、安装器、真实服务、候选产物或隔离磁盘证据仍由 T4–T7 补充。
 - F13：只完成调度和界面语义自动化，正式状态保持 `PARTIAL`。杀进程、跨次日、休眠、重启和主动退出必须在真实 Windows 环境执行，不能用单元测试替代。
 - 因 F13 和 F08 的真实 OS/磁盘证据尚未执行，T3 的正式签收仍是 `AUTOMATION_COMPLETE_REAL_OS_PENDING`，不能把报告模板中的 case 改为 `PASS`。
 
 ## 本地验证结果与边界
 
 - 插件 Node 回归：582 项通过；桌面纯 TypeScript：151 项通过；根目录 TypeScript 检查通过。
-- `ai-extract`：13 项通过；`backup`：26 项通过；`archive-store`：63 项通过。
-- `src-tauri` 在本机 GNU 工具链上完整编译成功，但测试进程启动时报 Windows `STATUS_ENTRYPOINT_NOT_FOUND`。这属于 Tauri/WebView2 的 GNU ABI 运行时限制；其中映射的恢复、AI 命令和待办测试仍需项目标准 Windows MSVC CI 复核，不能写成本机已执行通过。
+- `ai-extract`：13 项通过；`backup`：28 项通过；`archive-store`：63 项通过。
+- `src-tauri` 在本机 GNU 工具链上完整编译成功，但测试进程启动时报 Windows `STATUS_ENTRYPOINT_NOT_FOUND`。PR #127 的标准 Windows MSVC 与 macOS CI 已通过，为其中映射的恢复、AI 命令和待办测试提供标准工具链证据；本地 GNU 结果仍只记为编译成功。
 - F08 的真实磁盘满和 F13 的真实生命周期动作仍属于 T5，不在本轮伪造结果。
+- F07 的数量门禁负责阻止缺件/孤儿文件残包；数据库引用的精确路径与 SHA-256 对 ZIP manifest 的逐项绑定仍保留给 T6 发布门禁。
 
 ## 执行命令
 

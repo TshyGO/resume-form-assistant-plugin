@@ -221,12 +221,47 @@ fn deleting_a_referenced_file_after_the_database_snapshot_cannot_publish_a_parti
     fs::remove_file(archive_dir.join("attachments/2026/09/def-截图.png")).unwrap();
     let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
     assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
-    assert!(error.to_string().contains("2 attachments"), "{error}");
+    assert!(error.to_string().contains("2 个附件文件"), "{error}");
+    assert!(error.to_string().contains("档案完整性检查"), "{error}");
     assert_eq!(
         fs::read(&out).unwrap(),
         previous,
         "上一份完整备份不能被残包覆盖"
     );
+}
+
+#[test]
+fn a_missing_snapshot_file_is_rejected_without_replacing_the_previous_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let out = dir.path().join("archive.zip");
+
+    write_archive(&source(&archive_dir, &snapshot), &out).unwrap();
+    let previous = fs::read(&out).unwrap();
+    fs::remove_file(archive_dir.join("snapshots/snap-1.json")).unwrap();
+
+    let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
+    assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
+    assert!(error.to_string().contains("1 个简历快照文件"), "{error}");
+    assert_eq!(fs::read(&out).unwrap(), previous);
+}
+
+#[test]
+fn an_orphan_attachment_fails_closed_with_a_repair_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let out = dir.path().join("archive.zip");
+    write(
+        &archive_dir.join("attachments/2026/09/orphan.bin"),
+        b"orphaned after a rolled-back import",
+    );
+
+    let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
+    assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
+    assert!(error.to_string().contains("档案完整性检查"), "{error}");
+    assert!(!out.exists(), "不完整的首份备份也不能发布");
 }
 
 #[test]

@@ -254,7 +254,12 @@ test('D14 T2: offline job and v1 fill become one application, immutable snapshot
   await drain.run();
 
   assert.equal(model.applications.size, expected.journeys.J02.applicationCreates);
-  assert.equal(model.events.filter(item => item.type === 'fill.submit').length, expected.journeys.J02.fillEvents);
+  const fillEvents = model.events.filter(item => item.type === 'fill.submit');
+  assert.equal(fillEvents.length, expected.journeys.J02.fillEvents);
+  assert.ok(
+    fillEvents.every(item => item.applicationId === applicationA),
+    'the offline fill must bind to the selected application'
+  );
   assert.equal(model.uploads.size, expected.journeys.J02.snapshots);
   assert.equal(model.applications.get(applicationA).stage, expected.journeys.J03.stageBeforeExplicitSubmission);
 

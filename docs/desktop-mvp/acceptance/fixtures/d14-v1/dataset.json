@@ -150,6 +150,17 @@
       "expectedCandidate": "application-b"
     },
     {
+      "logicalId": "notice-cancel-b",
+      "kind": "interview_cancelled",
+      "receivedAt": "2026-10-19T06:00:00.000Z",
+      "subject": "平台工程师面试取消",
+      "body": "原定面试已取消；请等待后续通知，是否更新进度由用户确认。",
+      "expectedCandidate": "application-b",
+      "expectedReplyClass": "other",
+      "expectedSendMode": "automated",
+      "mustNotChangeFormalState": true
+    },
+    {
       "logicalId": "notice-rejection-c",
       "kind": "rejection",
       "receivedAt": "2026-10-20T02:00:00.000Z",
