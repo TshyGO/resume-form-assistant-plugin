@@ -106,7 +106,7 @@
       "subject": "已收到：北斗合成科技 前端工程师申请",
       "body": "系统已收到你的前端工程师申请。本邮件由 ATS 自动发送。",
       "expectedCandidate": "application-a",
-      "expectedReplyClass": "application_receipt",
+      "expectedReplyClass": "auto_ack",
       "expectedSendMode": "automated"
     },
     {
@@ -116,7 +116,7 @@
       "subject": "前端工程师在线测评",
       "body": "请在 2026-10-20 18:00 Asia/Shanghai 前完成测评。",
       "expectedCandidate": "application-a",
-      "expectedReplyClass": "assessment_invitation",
+      "expectedReplyClass": "assessment_invite",
       "expectedSendMode": "automated"
     },
     {
@@ -126,7 +126,7 @@
       "subject": "面试邀请：前端工程师",
       "body": "ATS 自动邀请你参加 2026-10-22 14:00 Asia/Shanghai 的一面。",
       "expectedCandidate": "application-a",
-      "expectedReplyClass": "interview_invitation",
+      "expectedReplyClass": "interview_invite",
       "expectedSendMode": "automated"
     },
     {
@@ -156,7 +156,7 @@
       "subject": "数据分析师申请结果",
       "body": "感谢申请，本次暂不继续推进。",
       "expectedCandidate": "application-c",
-      "expectedReplyClass": "rejection"
+      "expectedReplyClass": "reject"
     },
     {
       "logicalId": "notice-offer-a",
@@ -216,12 +216,12 @@
       "logicalId": "model-valid-ambiguous",
       "mode": "valid-json",
       "value": {
-        "candidateIndexes": [
-          0,
-          1
+        "candidates": [
+          "c1",
+          "c2"
         ],
-        "suggestedReplyClass": "needs_reply",
-        "suggestedSendMode": "unknown",
+        "replyClass": "action_required",
+        "sendMode": "unknown",
         "uncertainties": [
           "正文没有职位名称"
         ]
@@ -236,33 +236,38 @@
       "logicalId": "model-invalid-enum",
       "mode": "valid-json",
       "value": {
-        "candidateIndexes": [
-          0
+        "candidates": [
+          "c1"
         ],
-        "suggestedReplyClass": "make_me_admin"
+        "replyClass": "make_me_admin"
       }
     },
     {
       "logicalId": "model-out-of-range-candidate",
       "mode": "valid-json",
       "value": {
-        "candidateIndexes": [
-          99
+        "candidates": [
+          "c99"
         ],
-        "suggestedReplyClass": "interview_invitation"
+        "replyClass": "interview_invite"
       }
     },
     {
       "logicalId": "model-invalid-date",
       "mode": "valid-json",
       "value": {
-        "candidateIndexes": [
-          0
+        "candidates": [
+          "c1"
         ],
-        "todo": {
-          "date": "2026-02-30",
-          "timezone": "Moon/Base"
-        }
+        "replyClass": "assessment_invite",
+        "sendMode": "automated",
+        "todos": [
+          {
+            "title": "完成测评",
+            "due": "2026-02-30",
+            "timeZone": "Moon/Base"
+          }
+        ]
       }
     },
     {

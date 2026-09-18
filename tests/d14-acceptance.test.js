@@ -56,6 +56,18 @@ test('d14-v1 has the required ambiguity, template history and hostile inputs', (
   assert.ok(dataset.modelResponses.some((response) => response.logicalId === 'model-invalid-json'));
   assert.ok(dataset.attachments.every((attachment) => attachment.executable !== true));
   assert.ok(dataset.actor.email.endsWith('.test'));
+
+  const replyClasses = new Set([
+    'auto_ack', 'assessment_invite', 'interview_invite', 'action_required',
+    'offer', 'reject', 'other', 'unknown'
+  ]);
+  for (const notice of dataset.notices.filter((item) => item.expectedReplyClass)) {
+    assert.ok(replyClasses.has(notice.expectedReplyClass), `${notice.logicalId} must use the D11 enum`);
+  }
+  const ambiguous = dataset.modelResponses.find((response) => response.logicalId === 'model-valid-ambiguous');
+  assert.deepEqual(ambiguous.value.candidates, ['c1', 'c2']);
+  assert.equal(ambiguous.value.replyClass, 'action_required');
+  assert.equal(ambiguous.value.sendMode, 'unknown');
 });
 
 test('D14 dependencies and artifacts start unsigned and unregistered', () => {
@@ -68,6 +80,20 @@ test('D14 dependencies and artifacts start unsigned and unregistered', () => {
   assert.equal(artifacts.status, 'NOT_REGISTERED');
   assert.equal(artifacts.desktop.sha256, null);
   assert.equal(artifacts.extension.sha256, null);
+});
+
+test('D14 T2 maps the shared fixture to every deterministic business layer', () => {
+  const mapping = fs.readFileSync(path.join(ACCEPTANCE, 't2-business-regression.md'), 'utf8');
+  for (const target of [
+    'tests/d14-business-regression.test.js',
+    'desktop/crates/ai-extract/tests/d14_business_regression.rs',
+    'desktop/src/ai/d14-business-regression.test.ts',
+    'desktop/crates/archive-store/tests/d14_business_regression.rs',
+  ]) {
+    assert.match(mapping, new RegExp(target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.ok(fs.existsSync(path.join(ROOT, ...target.split('/'))), `${target} must exist`);
+  }
+  assert.match(mapping, /不能替代 T4\/T5 的真实安装和浏览器证据/);
 });
 
 test('d14-v1 committed JSON is exactly the deterministic generator output', () => {

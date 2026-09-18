@@ -95,7 +95,7 @@ const dataset = {
       subject: "已收到：北斗合成科技 前端工程师申请",
       body: "系统已收到你的前端工程师申请。本邮件由 ATS 自动发送。",
       expectedCandidate: "application-a",
-      expectedReplyClass: "application_receipt",
+      expectedReplyClass: "auto_ack",
       expectedSendMode: "automated",
     },
     {
@@ -105,7 +105,7 @@ const dataset = {
       subject: "前端工程师在线测评",
       body: "请在 2026-10-20 18:00 Asia/Shanghai 前完成测评。",
       expectedCandidate: "application-a",
-      expectedReplyClass: "assessment_invitation",
+      expectedReplyClass: "assessment_invite",
       expectedSendMode: "automated",
     },
     {
@@ -115,7 +115,7 @@ const dataset = {
       subject: "面试邀请：前端工程师",
       body: "ATS 自动邀请你参加 2026-10-22 14:00 Asia/Shanghai 的一面。",
       expectedCandidate: "application-a",
-      expectedReplyClass: "interview_invitation",
+      expectedReplyClass: "interview_invite",
       expectedSendMode: "automated",
     },
     {
@@ -142,7 +142,7 @@ const dataset = {
       subject: "数据分析师申请结果",
       body: "感谢申请，本次暂不继续推进。",
       expectedCandidate: "application-c",
-      expectedReplyClass: "rejection",
+      expectedReplyClass: "reject",
     },
     {
       logicalId: "notice-offer-a",
@@ -202,9 +202,9 @@ const dataset = {
       logicalId: "model-valid-ambiguous",
       mode: "valid-json",
       value: {
-        candidateIndexes: [0, 1],
-        suggestedReplyClass: "needs_reply",
-        suggestedSendMode: "unknown",
+        candidates: ["c1", "c2"],
+        replyClass: "action_required",
+        sendMode: "unknown",
         uncertainties: ["正文没有职位名称"],
       },
     },
@@ -212,17 +212,22 @@ const dataset = {
     {
       logicalId: "model-invalid-enum",
       mode: "valid-json",
-      value: { candidateIndexes: [0], suggestedReplyClass: "make_me_admin" },
+      value: { candidates: ["c1"], replyClass: "make_me_admin" },
     },
     {
       logicalId: "model-out-of-range-candidate",
       mode: "valid-json",
-      value: { candidateIndexes: [99], suggestedReplyClass: "interview_invitation" },
+      value: { candidates: ["c99"], replyClass: "interview_invite" },
     },
     {
       logicalId: "model-invalid-date",
       mode: "valid-json",
-      value: { candidateIndexes: [0], todo: { date: "2026-02-30", timezone: "Moon/Base" } },
+      value: {
+        candidates: ["c1"],
+        replyClass: "assessment_invite",
+        sendMode: "automated",
+        todos: [{ title: "完成测评", due: "2026-02-30", timeZone: "Moon/Base" }],
+      },
     },
     { logicalId: "model-timeout", mode: "timeout", delayMs: 61000 },
     { logicalId: "model-http-500", mode: "http-error", status: 500 },

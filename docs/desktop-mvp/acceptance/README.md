@@ -1,6 +1,6 @@
 # D14 首发验收工作区
 
-本目录实现 [D14 实施 spec](../../superpowers/specs/2026-09-17-d14-release-acceptance-spec.md) 的 T1：固定验收范围、合成数据、case 目录与证据格式。这里目前只定义如何验收，不声明任何 case 已经通过。
+本目录实现 [D14 实施 spec](../../superpowers/specs/2026-09-17-d14-release-acceptance-spec.md) 的验收输入与自动化映射。T1 固定范围、数据和证据格式；T2 使用同一数据集补业务闭环回归。这里不把自动化结果冒充 T4/T5 的实机验收，也不预先修改报告模板状态。
 
 ## 目录
 
@@ -9,6 +9,7 @@
 | [support-matrix.md](support-matrix.md) | 首发支持范围、必测环境和仍待负责人决定的项目 |
 | [cases.md](cases.md) | J01–J08、F01–F13 的动作、断言、测试层与证据要求 |
 | [existing-coverage.md](existing-coverage.md) | 已有自动化/脚本能证明什么，以及仍缺什么 |
+| [t2-business-regression.md](t2-business-regression.md) | T2 新增的跨层业务回归、精确测试名和执行命令 |
 | [fixtures/d14-v1/](fixtures/d14-v1/) | 可重复生成的合成岗位、简历、通知、附件和模型返回 |
 | [report-template.json](report-template.json) | 单次候选验收报告模板；所有 case 初始为 `NOT_RUN` |
 | [dependencies.json](dependencies.json) | D08、D11、D13 的验收签收表 |
