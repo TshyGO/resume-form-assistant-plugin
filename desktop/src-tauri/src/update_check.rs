@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 use crate::commands::CommandError;
 
@@ -139,10 +140,26 @@ pub fn latest_desktop_release(body: &Value) -> Pick {
 
 /// 只认本仓库 Release 页的地址。命令层打开前还会再查一次，这里是第一道。
 ///
-/// 纯前缀比较：来源是 GitHub API 的 `html_url`，形状是规范的。以后要是接了镜像
-/// 或代理域名，这里会一并拒掉——那时候该显式加白名单，而不是把判断放松。
+/// 这个地址来自网络响应，最后会被交给系统浏览器打开，所以不能只比前缀：
+/// `…/releases/../../../someone/else` 前缀是对的，浏览器规范化之后却落在
+/// 别人的仓库。先解析成 URL（`..`、`.`、`%2e` 都在解析时就被归一掉），
+/// 再一项项核对主机、端口、用户名密码和路径。
+///
+/// 以后要是接了镜像或代理域名，这里会一并拒掉——那时候该显式加白名单，
+/// 而不是把判断放松。
 pub fn is_release_page(url: &str) -> bool {
-    url.starts_with("https://github.com/TshyGO/resume-form-assistant-plugin/releases/")
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str() == Some("github.com")
+        && parsed.port().is_none()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed
+            .path()
+            .strip_prefix("/TshyGO/resume-form-assistant-plugin/releases/")
+            .is_some_and(|rest| !rest.is_empty())
 }
 
 fn parse_version(value: &str) -> Option<Vec<u32>> {
@@ -351,6 +368,28 @@ mod tests {
         assert!(!is_release_page(
             "https://github.com/TshyGO/resume-form-assistant-plugin"
         ));
+        // 前缀对、规范化之后却在别人仓库的那几种写法。
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/../../someone/else"
+        ));
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/%2e%2e/%2e%2e/someone/else"
+        ));
+        // 主机像是 github.com，其实不是。
+        assert!(!is_release_page(
+            "https://github.com.evil.test/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
+        ));
+        assert!(!is_release_page(
+            "https://user:pass@github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
+        ));
+        assert!(!is_release_page(
+            "https://github.com:8443/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.1.0"
+        ));
+        // `/releases` 本身不是一个下载页，别把用户扔到一个空路径上。
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/"
+        ));
+        assert!(!is_release_page("不是地址"));
         // Release 页的另外两种形状也要认。
         assert!(is_release_page(
             "https://github.com/TshyGO/resume-form-assistant-plugin/releases/download/desktop-v0.1.0/setup.exe"
