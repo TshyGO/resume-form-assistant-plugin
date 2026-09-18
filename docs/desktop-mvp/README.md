@@ -48,7 +48,7 @@
 | 权限：`offscreen`、`storage`、`scripting`、`activeTab`、`tabs`；`host_permissions`：`<all_urls>` | 同上 |
 | **没有** `nativeMessaging` 权限；**没有** extension `key` | 同上；未打包扩展 ID 由加载路径哈希派生，移动目录会变 |
 | 模板、`activeTemplateId`、`aiConfig`（`apiUrl` / `model` / `apiKey` 明文）存在 `chrome.storage.local` | [`content.js`](../../content.js) `STORAGE_KEYS`；[`popup.js`](../../popup.js) `DEFAULT_STORE` |
-| Service worker 今天 = `chrome.action.onClicked` → `TOGGLE_MANAGER` **加上** `ENSURE_AI_HOST`（offscreen.createDocument）。**没有** NM | [`background.js`](../../background.js)；D07 增加 NM 时不得覆盖 `onClicked` |
+| Service worker 的工具栏入口打开独立的 `popup.html` 管理标签页，并保留 `ENSURE_AI_HOST`（offscreen.createDocument）与 Native Messaging worker | [`background.js`](../../background.js)；管理页不再以网页 iframe 暴露 |
 | AI 请求走 offscreen `ai-host.html` + `ai-worker.js`，不在 service worker 里等响应 | [`ai-host.js`](../../ai-host.js) |
 | `chrome.storage.local` 另有 `resumeProUpdateCache` / `resumeProDismissedVersion`（更新检查）。D07 outbox / 意图队列不得占用这些 key | [`popup.js`](../../popup.js) |
 | 填写由用户点击触发；`form-agent.js` 仅在确认后点击安全的「新增/添加」按钮；不提交表单 | [`form-agent.js`](../../form-agent.js) `isSafeButton` / `execute` |

@@ -43,6 +43,26 @@ node desktop/scripts/check-desktop-release.js --assets dist-release --write-chec
 
 它要求目录里只有安装包和**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。
 
+Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，而且机器上不能已有安装：
+
+```powershell
+./desktop/scripts/d13_install_acceptance.ps1 `
+  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.1.0_x64-setup.exe"
+```
+
+要验 `vN → vN+1`，再传一个不同版本的测试安装包；脚本会在两次安装之间放入附件哨兵，
+升级后逐字节核对，再用新版启动并复查 Native Messaging：
+
+```powershell
+./desktop/scripts/d13_install_acceptance.ps1 `
+  -Installer "./Resume Pro Desktop_0.1.0_x64-setup.exe" `
+  -UpgradeInstaller "./Resume Pro Desktop_0.1.1_x64-setup.exe"
+```
+
+脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
+并确认程序目录与注册项已清理、用户档案和一次性数据哨兵未被删除。它拒绝覆盖已有安装，
+测试应用数据也放在单独临时目录中。
+
 发版前想先试一遍构建，不必真打 tag：在 Actions 里手动触发 `Release Desktop`（`workflow_dispatch`），它照样构建、照样校验，只是不建 Release。
 
 ### 1.1 版本号与 tag
@@ -102,5 +122,68 @@ shasum -a 256 "Resume Pro Desktop_0.1.0_aarch64.dmg"     # macOS
 | Windows | `%LOCALAPPDATA%\ResumePro` |
 | macOS | `~/Library/Application Support/ResumePro` |
 
-安装、升级、卸载都不动这个目录（卸载时要删得另外明确勾选，见后续 PR）。
+安装、升级都不动这个目录里的求职档案；卸载会清掉应用自己写的 Native Messaging 清单，
+但档案本身默认保留，只有用户额外勾选并再次确认才会删（见下面的「卸载」一节）。
 备份与恢复的口径见 [data-privacy.md §6](data-privacy.md)。
+
+---
+
+## 4. 装好之后：连接浏览器
+
+桌面程序每次启动都会核对一次 Native Messaging 注册——往 Chrome 和 Edge 各写一份 host 清单，
+Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\Edge}\NativeMessagingHosts\`。
+移动过安装目录、换过通道重装之后它会自己修好，不用手动折腾。
+
+清单里的 `allowed_origins` **只写了本扩展那一个 ID**（`diagjmploldedipjdenmecmjokckelkl`），
+没有通配：通配意味着机器上任何一个扩展都能启动这个 host、读到整本求职档案。
+
+设置页的「连接浏览器」会告诉你现在缺哪一步：
+
+| 界面说什么 | 意思 |
+| --- | --- |
+| 还没核对过 | 点「重试注册」，让桌面写一次清单 |
+| 桌面这边准备好了 | 去浏览器里装扩展 |
+| 一个都没注册上 | 先解决提示里那个原因（多半是组策略挡了注册表），装了扩展也连不上 |
+
+**装完扩展要重新加载一次扩展或重启浏览器**：浏览器不保证立刻重读 host 清单。
+
+## 5. 升级
+
+下载新版本直接装，不用先卸载。数据目录原样保留。
+
+数据库结构有变化时，桌面会在迁移**之前**自动备份一份到档案目录的 `backups/` 下，
+迁移失败可以从它恢复。设置页的运行状态里会写明这次启动有没有做过迁移备份、备份在哪。
+这个提示只在真正发生迁移的那一次启动出现；备份路径是进程内状态，重启后不会继续显示。
+
+回滚步骤：设置页「备份与恢复」→ 选 `backups/` 下那份迁移备份 → 预览并确认恢复。
+恢复过程会暂停当前档案写入并完成切换；恢复前应用会先把当前档案留成一个回滚点。
+
+## 6. 卸载
+
+卸载会删掉：程序文件、开始菜单快捷方式、Chrome 与 Edge 的 Native Messaging 注册项，
+以及桌面写进数据目录的那几份 host 清单。
+
+档案目录本身不动：只清掉应用自己写的 `nm/` 清单；申请记录、附件、待办和备份都留在原处。
+
+**不会删**：`%LOCALAPPDATA%\ResumePro`（Windows）/ `~/Library/Application Support/ResumePro`（macOS）——
+也就是你的申请记录、附件、待办和备份。
+
+macOS 上 host 清单在 `~/Library/Application Support/{Google/Chrome, Microsoft Edge}/NativeMessagingHosts/`；
+卸载只删这两份清单，档案目录原样保留。
+
+真要一起删：在卸载器里勾上「删除应用数据」，之后会**再问一次**，问句里写着具体目录和里面
+有什么。那一步不可撤销。升级和静默卸载走的也是同一个卸载器，那两种情况下既不会问、也不会删。
+
+卸载钩子实现在 `desktop/src-tauri/installer/hooks.nsi`；「要删哪些键、哪些文件、绝对不能裸删哪个目录」由 `desktop/scripts/check-uninstall-hooks.js` 守卫。
+
+## 7. 后台进程与系统要求
+
+- 关掉窗口不等于退出：程序留在托盘里，为的是浏览器扩展随时能连上来保存岗位，以及到点弹提醒。
+  真要退出走托盘菜单的「退出」——退出之后提醒不会响，待办还在。
+- 浏览器发消息时，如果程序没在运行，系统会按 host 清单把它拉起来，不会弹出终端窗口（`cli::tests::native_messaging_mode_never_attaches_a_console` 锁住这条）。
+- 最低系统版本：Windows 10 1809 或更新（需要 WebView2 Runtime）；macOS 11。
+
+## 8. 插件怎么重载
+
+改过扩展或换过版本之后：浏览器的扩展页 →「重新加载」，或者干脆重启浏览器。
+桌面程序不用重启——host 清单的路径没变。

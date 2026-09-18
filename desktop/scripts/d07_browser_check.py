@@ -75,21 +75,6 @@ def default_binary() -> Path:
     )
 
 
-def pair(data_root: Path, extension_id: str) -> None:
-    """The same settings.json the desktop's own settings window writes."""
-    (data_root / "settings.json").write_text(
-        json.dumps(
-            {
-                "chromeExtensionId": extension_id,
-                "edgeExtensionId": "",
-                "nativeMessagingRegistered": False,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-
 def stop_application(binary: Path, env: dict) -> None:
     """Ask the application to exit before the browser closes.
 
@@ -106,6 +91,106 @@ def stop_application(binary: Path, env: dict) -> None:
         check=False,
         timeout=60,
     )
+
+
+def mac_manifest_paths() -> list[Path]:
+    if sys.platform != "darwin":
+        return []
+    support = Path.home() / "Library" / "Application Support"
+    return [
+        support / "Google" / "Chrome" / "NativeMessagingHosts" / f"{HOST_NAME}.json",
+        support / "Microsoft Edge" / "NativeMessagingHosts" / f"{HOST_NAME}.json",
+    ]
+
+
+def normalized_path(path: str | Path) -> str:
+    """Return a comparison-safe absolute path even after a temp binary is removed."""
+    return os.path.normcase(os.path.abspath(os.path.realpath(str(path))))
+
+
+def manifest_host_path(path: Path) -> str | None:
+    """Read the executable path from one Native Messaging manifest."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    host_path = payload.get("path")
+    return normalized_path(host_path) if isinstance(host_path, str) and host_path else None
+
+
+def assert_no_foreign_registration(binary: Path) -> None:
+    """Refuse to start if a real registration would be overwritten."""
+    expected_binary = normalized_path(binary)
+    if sys.platform == "win32":
+        import winreg
+
+        for subkey in (
+            f"Software\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}",
+            f"Software\\Microsoft\\Edge\\NativeMessagingHosts\\{HOST_NAME}",
+        ):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                    value, _ = winreg.QueryValueEx(key, "")
+            except OSError:
+                continue
+            registered_binary = manifest_host_path(Path(str(value)))
+            if registered_binary != expected_binary:
+                raise SystemExit(
+                    f"existing Native Messaging registration points at {value}; "
+                    "run the app uninstaller or nm-dev-register unregister first"
+                )
+        return
+    for path in mac_manifest_paths():
+        if not path.exists():
+            continue
+        host_path = manifest_host_path(path)
+        if host_path != expected_binary:
+            raise SystemExit(
+                f"existing Native Messaging registration {path} points at {host_path}; "
+                "remove it before running this check"
+            )
+
+
+def remove_registration_written_by_app(binary: Path) -> None:
+    """Drop the production keys the app wrote for this temporary data root.
+
+    D13 makes the app register the host on startup and the installer's uninstall
+    hook remove it. A browser check never runs the installer, so it has to remove
+    the keys itself — and only while they point into this run's temporary root.
+    """
+    expected_binary = normalized_path(binary)
+    if sys.platform == "darwin":
+        for path in mac_manifest_paths():
+            if not path.exists():
+                continue
+            if manifest_host_path(path) == expected_binary:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"failed to remove Native Messaging manifest {path}"
+                    ) from exc
+        return
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    for subkey in (
+        f"Software\\Google\\Chrome\\NativeMessagingHosts\\{HOST_NAME}",
+        f"Software\\Microsoft\\Edge\\NativeMessagingHosts\\{HOST_NAME}",
+    ):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, "")
+        except OSError:
+            continue
+        if manifest_host_path(Path(str(value))) == expected_binary:
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"failed to remove Native Messaging registration {subkey}"
+                ) from exc
 
 
 def node(*args: str) -> subprocess.CompletedProcess[str]:
@@ -186,9 +271,12 @@ def main() -> int:
     results: dict = {}
 
     try:
+        assert_no_foreign_registration(binary)
         with sync_playwright() as playwright:
-            # Phase 1: registered, not paired. Also the only way to learn the id Chrome
-            # assigns to this unpacked directory.
+            # Phase 1: registered, no pairing draft. D13 fixed the store public key, so
+            # that id is authorised by construction; the desktop must answer `ready`
+            # without anyone pasting an id. This is also how we learn the id Chrome
+            # assigns to the unpacked directory.
             context = launch(playwright, workspace, extension, env)
             try:
                 extension_id = worker_of(context).url.split("/")[2]
@@ -206,15 +294,11 @@ def main() -> int:
 
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
-                results["unpaired_save"] = ask(page, {"type": "DESKTOP_SAVE_JOB", "fields": JOB}, tries=3)
-                results["unpaired_storage"] = storage(worker_of(context))
+                results["probe_without_pairing"] = ask(page, {"type": "DESKTOP_PROBE"}, tries=6)
+                results["storage_before"] = storage(worker_of(context))
             finally:
                 stop_application(binary, env)
                 context.close()
-
-            # Pairing is only picked up by a browser that starts afterwards, which is the
-            # reload the plugin's own copy tells the user about.
-            pair(data_dir, extension_id)
 
             context = launch(playwright, workspace, extension, env)
             try:
@@ -275,6 +359,14 @@ def main() -> int:
         if registered:
             print(node("unregister").stdout.strip())
         stop_application(binary, env)
+        try:
+            remove_registration_written_by_app(binary)
+        except RuntimeError as exc:
+            # Do not replace a Playwright/application failure that is already
+            # propagating out of the try block. With no earlier exception this
+            # entry still makes report() return non-zero below.
+            failures.append(str(exc))
+            print(f"CLEANUP FAILURE: {exc}", file=sys.stderr)
         if args.keep:
             print(f"left in place: {workspace}")
         else:
@@ -294,13 +386,11 @@ def main() -> int:
 
 
 def check(results: dict, failures: list[str]) -> None:
-    unpaired = results.get("unpaired_save") or {}
-    if unpaired.get("mode") != "not_paired":
-        failures.append(f"an unpaired extension was not told to pair: {unpaired}")
-    if not unpaired.get("extensionId"):
-        failures.append("the pairing message did not carry the id the user has to paste")
-    if (results.get("unpaired_storage") or {}).get("desktopSaveIntents"):
-        failures.append("an unpaired profile queued an intent nothing could ever drain")
+    without_pairing = results.get("probe_without_pairing") or {}
+    if without_pairing.get("mode") != "ready":
+        failures.append(f"the fixed store id was not authorised without pairing: {without_pairing}")
+    if not without_pairing.get("extensionId"):
+        failures.append("the handshake did not carry the fixed extension id")
 
     probe = results.get("probe") or {}
     if probe.get("mode") != "ready":
@@ -358,7 +448,7 @@ def check(results: dict, failures: list[str]) -> None:
         failures.append("an intent was stamped with an epoch it never had")
 
     for key in ("templates", "activeTemplateId", "aiConfig"):
-        if key in settled and key not in (results.get("unpaired_storage") or {}):
+        if key in settled and key not in (results.get("storage_before") or {}):
             failures.append(f"the desktop link wrote {key}, which belongs to the rest of the plugin")
 
 

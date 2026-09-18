@@ -89,10 +89,10 @@ test('the desktop listener does not answer messages it does not own', async () =
   const api = fakeChrome();
   installDesktopLink(api);
 
-  // ENSURE_AI_HOST and TOGGLE_MANAGER belong to the existing worker. Claiming them here
+  // ENSURE_AI_HOST and OPEN_MANAGER belong to the existing worker. Claiming them here
   // would break the offscreen AI host.
   assert.equal(api.listeners[0]({ type: 'ENSURE_AI_HOST' }, {}, () => {}), false);
-  assert.equal(api.listeners[0]({ type: 'TOGGLE_MANAGER' }, {}, () => {}), false);
+  assert.equal(api.listeners[0]({ type: 'OPEN_MANAGER' }, {}, () => {}), false);
 });
 
 test('a failure inside the desktop link answers an error instead of hanging the sidebar', async () => {

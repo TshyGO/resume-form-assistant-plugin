@@ -48,7 +48,7 @@
 
 **D12 转过来的那条验收：** 「不会因程序卸载而自动删除用户备份或数据」——#28 里标着 ⚠️「文档已写，落实在 D13」。
 
-**上架前置清单**（#29 评论）：`<all_urls>` 收敛、`web_accessible_resources` 收敛、`tabs` 权限、数据用途声明 + 可公开访问的隐私政策页、列表材料；以及「商店版是另一个 ID，`chrome.storage.local` 不迁移 → 上架前先做插件设置的导出/导入」。
+**上架前置清单**（#29 评论）：`<all_urls>` 收敛、`web_accessible_resources` 收敛、`tabs` 权限、数据用途声明 + 可公开访问的隐私政策页、列表材料。**扩展 ID 已由 `manifest.json` 的公钥固定**：本地 unpacked 与 Chrome 商店版是同一个 ID（已用公钥算出的 ID 与商店 item 核对一致），原先担心的 `chrome.storage.local` 迁移问题不再存在，不需要为上架单独做插件设置的导出/导入。
 
 ---
 
@@ -68,7 +68,7 @@
 
 - **Q1 首发平台。** 推荐 Windows x64 + macOS Apple Silicon 都出包，macOS 明确标「未签名未公证」。只做 Windows 也行（这是 V7 写好的降级路径），但 D01 修订说过「Mac 承诺不能只停在口头」。
 - **Q2 更新检查做到哪一步。** 推荐最小版：关于页一个「检查更新」按钮 + 每天最多一次的后台检查（可关），只提示不下载。不做的话首发就是纯手动，用户不会知道有新版。
-- **Q3 插件设置的导出/导入。** 推荐**单独开 issue**，不进 D13——它是插件功能，不是交付管道；但它是「上架商店」的前置（换 ID 会把用户的简历模板、AI 配置、配对记录全丢掉），所以要在 D14 发版门禁里点名。
+- **Q3 插件设置的导出/导入（已核实，不需要）。** 结论：`manifest.json` 的公钥把扩展 ID 固定成 `diagjmploldedipjdenmecmjokckelkl`，本地 unpacked 与 Chrome 商店版是同一个 ID，不会因为上架而丢 `chrome.storage.local`。因此不再把它列为上架前置；如果以后改公钥或换商店，再按新 ID 重新评估。
 - **Q4 WebView2 分发方式。** 推荐 Tauri 默认的 `downloadBootstrapper`（安装包小，Win11 自带 Runtime 时不下载）。离线机器在发布说明里给微软官方离线包链接。这条对应 V6。
 
 ---
@@ -186,7 +186,7 @@ docs/desktop-mvp/
 
 **未签名的第一印象。** SmartScreen 的蓝色拦截页会让相当一部分用户直接放弃。这是既定代价（没有签名证书），但发布说明要写在最前面，而不是藏在末尾。
 
-**商店那条路还有前置。** 上架能换来自动更新和固定 ID，但换 ID 会丢现有用户的 `chrome.storage.local`。Q3 的导出/导入没做完就上架，等于让现有用户从零开始。
+**商店身份迁移风险已解除，但发布动作尚未完成。** 公钥固定让本地与商店版共用同一个 ID，`chrome.storage.local` 不会因为上架而丢；公开隐私政策使用 <https://github.com/TshyGO/resume-form-assistant-plugin/blob/main/docs/privacy-policy.md>。商店 item 仍是 Draft，提交审核与审核结果属于尚未完成的发布动作。若以后更换公钥或改用另一家商店，再按新 ID 重新评估迁移。
 
 **D14 卡在人工走查上，不是卡在代码上。** D11 和 D10 的真机走查都还欠着（真实 Key、断网、提示注入、两个平台的凭据库、提醒调度）。D13 做完也关不掉 D14。
 

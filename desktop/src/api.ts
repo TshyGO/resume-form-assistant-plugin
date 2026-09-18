@@ -291,6 +291,10 @@ export interface RuntimeStatus {
   hiddenLaunch: boolean;
   autostartEnabled: boolean;
   nativeMessagingRegistered: boolean;
+  /** 这次启动升级过数据库的话，迁移前那份自动备份在哪。 */
+  migrationBackup?: string | null;
+  /** 读不到档案状态时为真，界面不能把它说成「没有升级」。 */
+  migrationBackupUnknown?: boolean;
   /** 每个浏览器注册成了没有。没成时 `note` 说清楚为什么。 */
   nativeMessaging?: Array<{
     browser: "chrome" | "edge";
