@@ -12,7 +12,13 @@ async function openManagerTab(requestedTab = "") {
   const tabs = await chrome.tabs.query({});
   const existing = tabs.find((tab) => tab.url?.startsWith(baseUrl));
   if (existing?.id) {
-    return chrome.tabs.update(existing.id, { active: true, url: targetUrl });
+    const update = { active: true };
+    if (existing.url !== targetUrl) update.url = targetUrl;
+    const tab = await chrome.tabs.update(existing.id, update);
+    if (tab.windowId !== undefined) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    return tab;
   }
   return chrome.tabs.create({ url: targetUrl });
 }

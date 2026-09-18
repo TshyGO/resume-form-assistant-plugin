@@ -29,6 +29,7 @@ test('the toolbar button opens the manager in an extension tab', async () => {
   assert.match(source, /chrome\.tabs\.create/);
   assert.match(source, /chrome\.tabs\.update/);
   assert.match(source, /chrome\.tabs\.query/);
+  assert.match(source, /chrome\.windows\.update/);
   assert.match(source, /OPEN_MANAGER/);
   assert.doesNotMatch(source, /TOGGLE_MANAGER/);
 });

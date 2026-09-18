@@ -261,12 +261,12 @@ def main() -> int:
     shutil.copy2(source_binary, binary)
 
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
-    assert_no_foreign_registration(binary)
     failures: list[str] = []
     registered = False
     results: dict = {}
 
     try:
+        assert_no_foreign_registration(binary)
         with sync_playwright() as playwright:
             # Phase 1: registered, no pairing draft. D13 fixed the store public key, so
             # that id is authorised by construction; the desktop must answer `ready`

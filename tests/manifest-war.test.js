@@ -39,7 +39,7 @@ test("web_accessible_resources 保持人工审过的最小列表", () => {
   ]);
 });
 
-test("申报权限与隐私政策逐条对应，没有悄悄加权限", () => {
+test("manifest 权限集合被锁定，没有悄悄加权限", () => {
   assert.deepStrictEqual(
     new Set(manifest.permissions),
     new Set(["offscreen", "storage", "scripting", "activeTab", "tabs", "nativeMessaging", "alarms"]),
@@ -101,6 +101,38 @@ test("内容脚本及其动态模块可达的 getURL 资源全部被 WAR 覆盖"
       `${file} loads ${resource} but it is not covered by web_accessible_resources`,
     );
   }
+});
+
+test("内容脚本动态入口的静态 import 图全部被 WAR 覆盖", () => {
+  const war = manifest.web_accessible_resources.flatMap((entry) => entry.resources);
+  const roots = [];
+  for (const file of manifest.content_scripts.flatMap((entry) => entry.js)) {
+    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+    for (const match of source.matchAll(/getURL\(\s*["']([^"']+\.mjs)["']\s*\)/g)) {
+      roots.push(match[1]);
+    }
+  }
+
+  const seen = new Set();
+  const queue = [...roots];
+  while (queue.length) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    assert.ok(war.includes(file), `${file} 是页面侧 import 依赖，但不在 WAR 白名单`);
+    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+    const imports = source.matchAll(
+      /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g,
+    );
+    for (const match of imports) {
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+      if (resolved.endsWith(".mjs")) queue.push(resolved);
+    }
+  }
+
+  assert.ok(seen.has("link/extract.mjs"));
+  assert.ok(seen.has("link/protocol/validate.mjs"));
+  assert.equal(seen.has("link/worker.mjs"), false);
 });
 
 test("注入网页的 CSS 没有漏申报的扩展资源", () => {
