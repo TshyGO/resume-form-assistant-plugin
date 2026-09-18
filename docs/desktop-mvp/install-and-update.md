@@ -50,6 +50,15 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
   -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.1.0_x64-setup.exe"
 ```
 
+要验 `vN → vN+1`，再传一个不同版本的测试安装包；脚本会在两次安装之间放入附件哨兵，
+升级后逐字节核对，再用新版启动并复查 Native Messaging：
+
+```powershell
+./desktop/scripts/d13_install_acceptance.ps1 `
+  -Installer "./Resume Pro Desktop_0.1.0_x64-setup.exe" `
+  -UpgradeInstaller "./Resume Pro Desktop_0.1.1_x64-setup.exe"
+```
+
 脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
 并确认程序目录与注册项已清理、用户档案和一次性数据哨兵未被删除。它拒绝覆盖已有安装，
 测试应用数据也放在单独临时目录中。

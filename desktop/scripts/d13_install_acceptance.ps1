@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Installer
+  [string]$Installer,
+  [string]$UpgradeInstaller = ""
 )
 
 # Manual D13 acceptance for a machine with no existing Resume Pro Desktop install.
@@ -10,6 +11,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
+$upgradeInstallerPath = if ($UpgradeInstaller) {
+  (Resolve-Path -LiteralPath $UpgradeInstaller).Path
+} else {
+  $null
+}
 $installDir = Join-Path $env:LOCALAPPDATA "Resume Pro Desktop"
 $userDataDir = Join-Path $env:LOCALAPPDATA "ResumePro"
 
@@ -43,6 +49,27 @@ function Assert-ArchiveUnchanged([hashtable]$Before) {
   }
 }
 
+function Assert-NativeMessagingRegistration([string]$Executable) {
+  $keys = @(
+    "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",
+    "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
+  )
+  foreach ($key in $keys) {
+    if (-not (Test-Path $key)) { throw "Missing registration: $key" }
+    $manifest = Get-ItemPropertyValue -Path $key -Name "(default)"
+    if (-not (Test-Path -LiteralPath $manifest)) { throw "Missing host manifest: $manifest" }
+    $payload = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+    if ($payload.path -ne $Executable) {
+      throw "Manifest points at $($payload.path), expected $Executable"
+    }
+    if (@($payload.allowed_origins).Count -ne 1 -or
+        $payload.allowed_origins[0] -ne "chrome-extension://diagjmploldedipjdenmecmjokckelkl/") {
+      throw "Manifest allowed_origins does not contain exactly the store extension"
+    }
+  }
+  return $keys
+}
+
 $before = Get-ArchiveSnapshot
 $testRoot = Join-Path $env:TEMP ("resumepro-d13-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -64,27 +91,38 @@ try {
   $env:RESUMEPRO_DATA_DIR = $testRoot
   $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
   Start-Sleep -Seconds 6
-
-  $keys = @(
-    "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",
-    "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
-  )
-  foreach ($key in $keys) {
-    if (-not (Test-Path $key)) { throw "Missing registration: $key" }
-    $manifest = Get-ItemPropertyValue -Path $key -Name "(default)"
-    if (-not (Test-Path -LiteralPath $manifest)) { throw "Missing host manifest: $manifest" }
-    $payload = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
-    if ($payload.path -ne $exe.FullName) {
-      throw "Manifest points at $($payload.path), expected $($exe.FullName)"
-    }
-    if (@($payload.allowed_origins).Count -ne 1 -or
-        $payload.allowed_origins[0] -ne "chrome-extension://diagjmploldedipjdenmecmjokckelkl/") {
-      throw "Manifest allowed_origins does not contain exactly the store extension"
-    }
-  }
+  $keys = Assert-NativeMessagingRegistration $exe.FullName
 
   $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
   if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
+
+  $upgradeTested = $false
+  $upgradeSentinelHash = $null
+  if ($upgradeInstallerPath) {
+    $attachmentDir = Join-Path $testRoot "attachments"
+    New-Item -ItemType Directory -Path $attachmentDir -Force | Out-Null
+    $upgradeSentinel = Join-Path $attachmentDir "upgrade-sentinel.bin"
+    [IO.File]::WriteAllBytes($upgradeSentinel, [Text.Encoding]::UTF8.GetBytes("resume-pro-d13-upgrade"))
+    $upgradeSentinelHash = (Get-FileHash -LiteralPath $upgradeSentinel -Algorithm SHA256).Hash
+
+    $upgrade = Start-Process -FilePath $upgradeInstallerPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
+    if ($upgrade.ExitCode -ne 0) { throw "Upgrade installer exited with $($upgrade.ExitCode)" }
+    if (-not (Test-Path -LiteralPath $upgradeSentinel)) { throw "Upgrade removed the attachment sentinel" }
+    if ((Get-FileHash -LiteralPath $upgradeSentinel -Algorithm SHA256).Hash -ne $upgradeSentinelHash) {
+      throw "Upgrade changed the attachment sentinel"
+    }
+
+    $exe = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File |
+      Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+    $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
+      Select-Object -First 1
+    $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
+    Start-Sleep -Seconds 6
+    $keys = Assert-NativeMessagingRegistration $exe.FullName
+    $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
+    if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
+    $upgradeTested = $true
+  }
 
   $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
@@ -103,6 +141,8 @@ try {
     InstallerExit = $install.ExitCode
     InstalledExecutable = $exe.FullName
     ChromeAndEdgeRegistered = $true
+    UpgradeTested = $upgradeTested
+    UpgradeAttachmentPreserved = if ($upgradeTested) { $true } else { $null }
     UninstallerExit = $uninstall.ExitCode
     InstallDirectoryRemoved = $true
     ArchiveFilesVerified = $before.Count
