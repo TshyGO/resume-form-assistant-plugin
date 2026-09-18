@@ -2,7 +2,7 @@
 
 - 来源：[D14 #27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27)，总规划 [#15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15)。
 - 编写日期：2026-09-17；本地核对基线：`1b5e5c1`。
-- 状态：任务拆解，尚未执行本 spec 的验收或发布。
+- 状态：T1/T2 的验收输入与确定性业务回归已完成；T3 故障矩阵待执行，实机验收与发布尚未执行。
 - 形式：作为 #27 的实施 spec；下面七项可分别作为小 PR 或子 issue。
 
 ## 1. 要交付什么
@@ -142,8 +142,8 @@ T6 与 D13 协调：候选阶段使用构建 artifacts 或 draft/prerelease；�
 
 本 spec 仅新增文档，检查链接、case 覆盖和 `git diff --check` 即可；实现 T2/T3/T6 时再运行对应测试与 CI。T4/T5 无法用源码测试替代实机证据。
 
-- [ ] T1：合成数据、完整 case 矩阵、支持范围和报告格式已落地。
-- [ ] T2：业务闭环及一致性断言已通过。
+- [x] T1：合成数据、完整 case 矩阵、支持范围和报告格式已落地。
+- [x] T2：业务闭环及一致性断言已通过。
 - [ ] T3：F01–F13 已逐项覆盖或关联有效既有证据。
 - [ ] T4：Windows Chrome、Edge 实际安装闭环通过。
 - [ ] T5：提醒、重复恢复、升级卸载及独立填写通过。

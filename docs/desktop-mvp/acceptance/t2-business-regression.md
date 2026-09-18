@@ -2,6 +2,8 @@
 
 T2 使用同一份 `fixtures/d14-v1/dataset.json` 和 `expected-results.json`，把插件、AI 提取、审核草稿与档案存储四层串在同一个业务预期下。这里登记的是确定性自动化；它不能替代 T4/T5 的真实安装和浏览器证据。
 
+状态：**已完成**。实现已同步到最新 `origin/main` 基线，并在 Windows GNU Rust 工具链上执行通过。生成 JSON 由仓库 `.gitattributes` 固定为 LF，避免 Windows checkout 把行尾转换误报成夹具漂移。
+
 ## 新增回归
 
 | 层级 | 测试 | 覆盖的业务断言 |
@@ -34,6 +36,8 @@ cargo test --manifest-path desktop/crates/archive-store/Cargo.toml --locked --te
 ```
 
 完整回归仍按根目录 `npm test` 和 `.github/workflows/desktop.yml` 执行。报告引用测试结果时必须记录源码 commit 和运行链接；源码文件路径本身不算执行证据。
+
+本地闭环结果：插件 Node 回归 579 项、桌面纯 TypeScript 回归 151 项、`ai-extract` 11 项、`archive-store` 63 项全部通过；根目录 TypeScript 检查通过。
 
 ## T2 不证明什么
 
