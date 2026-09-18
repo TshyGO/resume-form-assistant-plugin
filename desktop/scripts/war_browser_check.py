@@ -32,12 +32,38 @@ ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_ID = "diagjmploldedipjdenmecmjokckelkl"
 
 WEB_PAGE = """<!doctype html>
-<html lang="zh-CN"><body>
-  <form>
-    <label>姓名 <input name="name"></label>
-    <label>手机号 <input name="phone"></label>
-    <label>应聘岗位 <input name="position"></label>
-  </form>
+<html lang="zh-CN"><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Inter, "Microsoft YaHei", sans-serif; color: #182033; background: #f4f6fb; }
+  header { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 54px; background: #17213a; color: white; }
+  header strong { font-size: 20px; letter-spacing: .04em; }
+  header span { color: #b8c2db; font-size: 13px; }
+  main { width: 760px; margin: 34px 0 60px 70px; padding: 30px 34px 38px; border: 1px solid #e1e5ef; border-radius: 18px; background: white; box-shadow: 0 16px 45px rgba(32, 47, 84, .08); }
+  h1 { margin: 0 0 8px; font-size: 25px; }
+  .lead { margin: 0 0 28px; color: #687189; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 22px; }
+  label { display: grid; gap: 7px; color: #414b63; font-size: 13px; font-weight: 650; }
+  input, select { width: 100%; height: 42px; padding: 0 12px; border: 1px solid #d7dce8; border-radius: 9px; background: #fbfcff; font: inherit; }
+  .wide { grid-column: 1 / -1; }
+  button { margin-top: 28px; border: 0; border-radius: 10px; padding: 12px 24px; background: #3156d3; color: white; font-weight: 700; }
+</style></head><body>
+  <header><strong>Northstar Careers</strong><span>软件工程师 · 在线申请</span></header>
+  <main>
+    <h1>候选人信息</h1>
+    <p class="lead">请填写以下信息。截图中的公司、岗位和简历数据均为合成示例。</p>
+    <form>
+      <div class="grid">
+        <label>姓名 <input name="name" placeholder="请输入姓名"></label>
+        <label>手机号 <input name="phone" placeholder="请输入手机号"></label>
+        <label>电子邮箱 <input name="email" placeholder="name@example.com"></label>
+        <label>应聘岗位 <input name="position" value="软件工程师"></label>
+        <label>最高学历 <select name="degree"><option>请选择</option><option>本科</option><option>硕士</option></select></label>
+        <label>期望城市 <input name="city" placeholder="请输入城市"></label>
+        <label class="wide">个人简介 <input name="summary" placeholder="请简要介绍相关经历"></label>
+      </div>
+      <button type="button">下一步</button>
+    </form>
+  </main>
 </body></html>"""
 
 
@@ -49,6 +75,7 @@ def failure(message: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
+    parser.add_argument("--screenshot-dir", type=Path)
     args = parser.parse_args()
     if not (ROOT / "manifest.json").is_file():
         failure(f"not a checkout: {ROOT}")
@@ -60,6 +87,7 @@ def main() -> None:
                 profile,
                 headless=False,
                 channel="msedge" if args.browser == "edge" else None,
+                viewport={"width": 1280, "height": 800},
                 args=[
                     f"--disable-extensions-except={ROOT}",
                     f"--load-extension={ROOT}",
@@ -113,7 +141,10 @@ def main() -> None:
                 web_page = context.new_page()
                 page_errors: list[str] = []
                 web_page.on("pageerror", lambda error: page_errors.append(str(error)))
-                web_page.route("https://war-smoke.test/**", lambda route: route.fulfill(body=WEB_PAGE, content_type="text/html"))
+                web_page.route(
+                    "https://war-smoke.test/**",
+                    lambda route: route.fulfill(body=WEB_PAGE, content_type="text/html; charset=utf-8"),
+                )
                 web_page.goto("https://war-smoke.test/", wait_until="load")
                 outside = web_page.evaluate(
                     """async (extensionId) => {
@@ -160,6 +191,34 @@ def main() -> None:
                 ):
                     failure(f"manager opened the wrong URL: {manager_page.url}")
                 manager_page.wait_for_selector(".popup-shell", timeout=10_000)
+
+                if args.screenshot_dir:
+                    screenshot_dir = args.screenshot_dir.resolve()
+                    screenshot_dir.mkdir(parents=True, exist_ok=True)
+                    extension_page.evaluate(
+                        """() => chrome.storage.local.set({
+                          templates: [{
+                            id: 'store-demo',
+                            name: '演示简历（合成数据）',
+                            groups: [{ name: '基本信息', fields: [
+                              { key: '姓名', value: '林晓然' },
+                              { key: '手机号', value: '13800000000' },
+                              { key: '电子邮箱', value: 'demo@example.com' },
+                              { key: '最高学历', value: '硕士' },
+                              { key: '期望城市', value: '上海' }
+                            ] }]
+                          }],
+                          activeTemplateId: 'store-demo',
+                          aiConfig: { apiUrl: '', apiKey: '', model: '' },
+                          profile: { values: {}, family: [], custom: [] }
+                        })"""
+                    )
+                    web_page.reload(wait_until="load")
+                    web_page.wait_for_selector("#resume-pro-sidebar", timeout=10_000)
+                    web_page.screenshot(path=str(screenshot_dir / "store-sidebar-1280x800.png"))
+                    manager_page.reload(wait_until="load")
+                    manager_page.wait_for_selector(".popup-shell", timeout=10_000)
+                    manager_page.screenshot(path=str(screenshot_dir / "store-manager-1280x800.png"))
 
                 # 4. Content-script resources loaded without page errors.
                 if page_errors:
