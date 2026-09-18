@@ -43,6 +43,17 @@ node desktop/scripts/check-desktop-release.js --assets dist-release --write-chec
 
 它要求目录里只有安装包和**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。
 
+Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，而且机器上不能已有安装：
+
+```powershell
+./desktop/scripts/d13_install_acceptance.ps1 `
+  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.1.0_x64-setup.exe"
+```
+
+脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
+并确认程序目录与注册项已清理、用户档案和一次性数据哨兵未被删除。它拒绝覆盖已有安装，
+测试应用数据也放在单独临时目录中。
+
 发版前想先试一遍构建，不必真打 tag：在 Actions 里手动触发 `Release Desktop`（`workflow_dispatch`），它照样构建、照样校验，只是不建 Release。
 
 ### 1.1 版本号与 tag
