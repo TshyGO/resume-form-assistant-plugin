@@ -174,7 +174,15 @@ pub fn is_release_page(url: &str) -> bool {
         && !lower.contains("%5c")
         && path
             .strip_prefix("/TshyGO/resume-form-assistant-plugin/releases/")
-            .is_some_and(|rest| !rest.is_empty())
+            .is_some_and(is_release_page_tail)
+}
+
+/// Release 页在 `/releases/` 后面只有这三种形状。`/releases/new` 这类同源但
+/// 不是发布页的路径没必要放进来——用户要去的是下载页。
+fn is_release_page_tail(rest: &str) -> bool {
+    rest == "latest"
+        || rest.starts_with("tag/") && rest.len() > "tag/".len()
+        || rest.starts_with("download/") && rest.len() > "download/".len()
 }
 
 fn parse_version(value: &str) -> Option<Vec<u32>> {
@@ -411,6 +419,13 @@ mod tests {
         // 文件名里的空格是 `%20`，不该被上面那条连坐。
         assert!(is_release_page(
             "https://github.com/TshyGO/resume-form-assistant-plugin/releases/download/desktop-v0.1.0/Resume%20Pro%20Desktop_0.1.0_x64-setup.exe"
+        ));
+        // 同一个仓库、同样在 `/releases/` 下面，但不是发布页。
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/new"
+        ));
+        assert!(!is_release_page(
+            "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/"
         ));
         // 主机像是 github.com，其实不是。
         assert!(!is_release_page(

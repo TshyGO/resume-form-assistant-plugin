@@ -117,6 +117,21 @@ test("以反斜杠结尾的注释不能把下一行代码吞掉", () => {
   assert.deepEqual(assertHooks(withComment), { guardedRemovals: 1 });
 });
 
+test("块注释里的守卫不算数", () => {
+  const faked = guarded.replace(
+    "!macro NSIS_HOOK_PREUNINSTALL\n  ${If} $UpdateMode <> 1",
+    "!macro NSIS_HOOK_PREUNINSTALL\n  /* \${If} $UpdateMode <> 1 */",
+  );
+  assert.throws(() => assertHooks(faked), /清理注册项没有避开升级/);
+});
+
+test("把两个标签对调，删除就落到「否」上——这也得拦住", () => {
+  const swapped = guarded
+    .replace("IDYES del IDNO keep", "IDYES keep IDNO del")
+    .replace("    Goto keep", "    Goto del");
+  assert.throws(() => assertHooks(swapped), /没有落在「是」那条分支里/);
+});
+
 test("递归删除之前必须 ClearErrors——error flag 是全局的", () => {
   const stale = guarded.replace("      ClearErrors\n", "");
   assert.throws(() => assertHooks(stale), /没有 ClearErrors/);

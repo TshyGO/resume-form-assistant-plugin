@@ -28,6 +28,43 @@ export const MANIFEST_FILES = [
 /** 用户的求职档案。默认一个字节都不能动。 */
 export const ARCHIVE_DIR = String.raw`$LOCALAPPDATA\ResumePro`;
 
+/**
+ * 去掉 `/* ... *\/` 块注释。
+ *
+ * 不剥的话，注释里写一句 `${If} $UpdateMode <> 1` 就能把守卫检查糊弄过去。
+ * 这里不认字符串里的 `/*`——真出现了，会多删掉一些内容，然后某一行找不到、
+ * 直接报错。方向是安全的。
+ */
+function stripBlockComments(lines) {
+  const out = [];
+  let inside = false;
+  for (const line of lines) {
+    let text = line;
+    if (inside) {
+      const end = text.indexOf("*" + "/");
+      if (end < 0) {
+        out.push("");
+        continue;
+      }
+      text = text.slice(end + 2);
+      inside = false;
+    }
+    for (;;) {
+      const start = text.indexOf("/" + "*");
+      if (start < 0) break;
+      const end = text.indexOf("*" + "/", start + 2);
+      if (end < 0) {
+        text = text.slice(0, start);
+        inside = true;
+        break;
+      }
+      text = text.slice(0, start) + text.slice(end + 2);
+    }
+    out.push(text);
+  }
+  return out;
+}
+
 /** 把 `\` 续行拼回一行。 */
 function joinContinuations(lines) {
   const joined = [];
@@ -125,7 +162,7 @@ export function assertHooks(text) {
   //
   // 顺序要紧：先滤注释，再拼续行。反过来的话，一条以 `\` 结尾的注释会把下一行
   // 真代码并进注释里，然后整行被当注释扔掉——那一行就再也没人检查了。
-  const lines = text.split(/\r?\n/).filter((line) => {
+  const lines = stripBlockComments(text.split(/\r?\n/)).filter((line) => {
     const trimmed = line.trim();
     return !trimmed.startsWith(";") && !trimmed.startsWith("#");
   });
@@ -234,6 +271,17 @@ export function assertHooks(text) {
   // 没被接住的返回值会顺着往下走——而往下一行正是删除。兜底成本一行。
   if ((code[confirmAt + 1] ?? "").trim() !== `Goto ${no[1]}`) {
     throw new Error("确认框后面没有兜底跳到保留分支");
+  }
+  // 两个标签定义在哪儿也要看。只读 `IDYES`/`IDNO` 的话，把两个标签对调一下，
+  // 删除就落到「否」那条分支上，而上面每一条检查都还是绿的。
+  const labelAt = (label) => code.findIndex((line) => line.trim() === `${label}:`);
+  const yesAt = labelAt(yes[1]);
+  const noAt = labelAt(no[1]);
+  if (yesAt < 0 || noAt < 0) {
+    throw new Error("确认框指向的标签没有定义");
+  }
+  if (!(yesAt < removals[0].index && removals[0].index < noAt)) {
+    throw new Error("删档案没有落在「是」那条分支里");
   }
   // 递归删除之前要 `ClearErrors`。NSIS 的 error flag 是全局的，不清掉的话
   // 前面任何一步的残留都会让下面那句「没删干净」冤枉一次。
