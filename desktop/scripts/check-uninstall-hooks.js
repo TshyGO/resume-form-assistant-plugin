@@ -68,6 +68,9 @@ function blockOf(code, index) {
  * 而它已经在守卫外面了。这里按 `${If}` / `${EndIf}` 维护一个栈，`${Else}`
  * 把当前这层的条件清掉（那正是「升级时」走的那条路），`${OrIf}` 会让整层
  * 失效——条件可以由另一半满足，守卫就不成立了。
+ *
+ * 只认 `${If}` 这一族。`${Unless}`、`${While}` 之类不建模：用了它们，这里会
+ * 认为那一行没被守住而报错。方向是对的——宁可拦下来让人看一眼，也不要放过去。
  */
 function enclosingConditions(code, index) {
   const stack = [];
@@ -118,14 +121,17 @@ function enclosedBy(code, index, pattern) {
 }
 
 export function assertHooks(text) {
-  // NSIS 用 `\` 续行。`MessageBox` 的参数常常跨好几行，不拼起来的话
-  // 「默认按钮是不是「否」」这类判断会看错行。
-  const lines = joinContinuations(text.split(/\r?\n/));
   // NSIS 的注释是 `;`，也接受 `#`。注释里写什么都不算数——这条检查只看会执行的行。
-  const code = lines.filter((line) => {
+  //
+  // 顺序要紧：先滤注释，再拼续行。反过来的话，一条以 `\` 结尾的注释会把下一行
+  // 真代码并进注释里，然后整行被当注释扔掉——那一行就再也没人检查了。
+  const lines = text.split(/\r?\n/).filter((line) => {
     const trimmed = line.trim();
     return !trimmed.startsWith(";") && !trimmed.startsWith("#");
   });
+  // NSIS 用 `\` 续行。`MessageBox` 的参数常常跨好几行，不拼起来的话
+  // 「默认按钮是不是「否」」这类判断会看错行。
+  const code = joinContinuations(lines);
   const body = code.join("\n");
 
   for (const key of REGISTRY_KEYS) {
@@ -154,14 +160,19 @@ export function assertHooks(text) {
     String.raw`RMDir "${ARCHIVE_DIR}\nm"`,
   ];
   for (const needle of cleanupLines) {
-    const at = code.findIndex((line) => line.includes(needle));
-    if (at < 0) {
+    // 每一处都要看。只看第一处的话，把同一行复制一份到守卫外面就检查不出来。
+    const found = code
+      .map((line, index) => ({ line, index }))
+      .filter((entry) => entry.line.includes(needle));
+    if (found.length === 0) {
       throw new Error(`找不到这一行：${needle}`);
     }
-    // 只在**同一个宏之内**、而且真的在 `${If}` 里边才算数；顺便看极性：
-    // `${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反。
-    if (!enclosedBy(code, at, SKIPS_UPDATE)) {
-      throw new Error(`清理注册项没有避开升级（$UpdateMode）：${needle}`);
+    for (const { index } of found) {
+      // 只在**同一个宏之内**、而且真的在 `${If}` 里边才算数；顺便看极性：
+      // `${If} $UpdateMode = 1` 也含 `$UpdateMode`，但意思正好相反。
+      if (!enclosedBy(code, index, SKIPS_UPDATE)) {
+        throw new Error(`清理注册项没有避开升级（$UpdateMode）：${needle}`);
+      }
     }
   }
 

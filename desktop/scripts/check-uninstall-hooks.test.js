@@ -99,6 +99,24 @@ test("挪进 ${Else} 分支更不算数——那正是升级走的那条路", ()
   assert.throws(() => assertHooks(moved), /清理注册项没有避开升级/);
 });
 
+test("复制一份到守卫外面也会红——每一处都要看", () => {
+  const key = `  DeleteRegKey HKCU "${REGISTRY_KEYS[0]}"`;
+  const copied = guarded.replace(
+    "  ${EndIf}\n!macroend",
+    `  \${EndIf}\n${key}\n!macroend`,
+  );
+  assert.throws(() => assertHooks(copied), /清理注册项没有避开升级/);
+});
+
+test("以反斜杠结尾的注释不能把下一行代码吞掉", () => {
+  // 先拼续行再滤注释的话，这条注释会把紧跟的那行清理并进来一起扔掉。
+  const withComment = guarded.replace(
+    `  DeleteRegKey HKCU "${REGISTRY_KEYS[0]}"`,
+    `  ; 这条注释以反斜杠结尾 \\\n  DeleteRegKey HKCU "${REGISTRY_KEYS[0]}"`,
+  );
+  assert.deepEqual(assertHooks(withComment), { guardedRemovals: 1 });
+});
+
 test("递归删除之前必须 ClearErrors——error flag 是全局的", () => {
   const stale = guarded.replace("      ClearErrors\n", "");
   assert.throws(() => assertHooks(stale), /没有 ClearErrors/);
