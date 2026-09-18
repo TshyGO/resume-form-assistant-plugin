@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "d14-v1",
+  "status": "AUTOMATION_COMPLETE_REAL_OS_PENDING",
+  "cases": [
+    {
+      "id": "F01",
+      "automationStatus": "PASS",
+      "testLayer": ["protocol", "link", "IndexedDB"],
+      "deterministicTests": [
+        "tests/link-uploads.test.js::walkthrough 10.14: a restart mid-upload resumes with the same ids and the same bytes",
+        "tests/link-uploads.test.js::a lost complete ACK keeps the copy until a resend is answered with one",
+        "tests/link-uploads.test.js::a chunk ACK that skips ahead does not move the cursor past a gap"
+      ],
+      "remainingEvidence": ["T4 installed-browser interruption walkthrough"]
+    },
+    {
+      "id": "F02",
+      "automationStatus": "PASS",
+      "testLayer": ["link", "IndexedDB"],
+      "deterministicTests": [
+        "tests/link-staging.test.js::a store that refuses the write is reported as unavailable, never thrown",
+        "tests/link-uploads.test.js::a crash between writing the chunk ids and queueing the upload is repaired with those ids",
+        "tests/link-uploads.test.js::an upload whose bytes vanished stops and says so instead of regenerating them"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F03",
+      "automationStatus": "PASS",
+      "testLayer": ["archive-store", "transaction"],
+      "deterministicTests": [
+        "desktop/crates/archive-store/tests/storage.rs::transaction_failure_rolls_back_all_effects_and_sequence",
+        "desktop/crates/archive-store/tests/storage.rs::evidence_and_suggestions_are_separate_and_confirmation_is_atomic"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F04",
+      "automationStatus": "PASS",
+      "testLayer": ["archive-store", "link"],
+      "deterministicTests": [
+        "desktop/crates/archive-store/tests/storage.rs::replay_conflict_purge_and_profile_isolation",
+        "tests/link-reconcile.test.js::purged is not rebuilt"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F05",
+      "automationStatus": "PASS",
+      "testLayer": ["protocol", "archive-store", "link"],
+      "deterministicTests": [
+        "desktop/crates/archive-store/tests/storage.rs::replay_conflict_purge_and_profile_isolation",
+        "desktop/crates/archive-store/tests/storage.rs::epoch_rotation_preserves_read_only_receipts_and_rejects_old_writes",
+        "tests/link-reconcile.test.js::conflict and unverifiable both stop for the user",
+        "tests/link-reconcile.test.js::a manual retry cannot revive a paused message"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F06",
+      "automationStatus": "PASS",
+      "testLayer": ["archive-store", "restore"],
+      "deterministicTests": [
+        "desktop/crates/archive-store/tests/storage.rs::concurrent_events_allocate_one_monotonic_sequence",
+        "desktop/src-tauri/src/restore_tests.rs::restoring_the_same_backup_twice_mints_two_different_epochs"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F07",
+      "automationStatus": "PASS",
+      "testLayer": ["backup", "archive-store"],
+      "deterministicTests": [
+        "desktop/crates/backup/tests/writing.rs::the_database_in_the_package_is_the_snapshot_not_the_live_file",
+        "desktop/crates/backup/tests/writing.rs::deleting_a_referenced_file_after_the_database_snapshot_cannot_publish_a_partial_backup",
+        "desktop/crates/backup/tests/writing.rs::a_failed_backup_does_not_touch_the_previous_good_one"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F08",
+      "automationStatus": "PASS",
+      "testLayer": ["backup", "restore"],
+      "deterministicTests": [
+        "desktop/crates/backup/tests/hostile.rs::a_traversing_entry_name_is_rejected_before_anything_is_written",
+        "desktop/crates/backup/tests/hostile.rs::a_truncated_package_does_not_panic",
+        "desktop/crates/backup/tests/hostile.rs::a_file_that_is_longer_than_the_manifest_says_is_stopped_while_writing",
+        "desktop/src-tauri/src/restore_tests.rs::a_backup_that_does_not_validate_leaves_the_current_archive_untouched"
+      ],
+      "remainingEvidence": ["T5 isolated-volume real disk-full run"]
+    },
+    {
+      "id": "F09",
+      "automationStatus": "PASS",
+      "testLayer": ["evidence-import", "AI", "review"],
+      "deterministicTests": [
+        "desktop/src-tauri/src/ai_commands_tests.rs::a_pdf_is_refused_before_anything_leaves_the_machine",
+        "desktop/src-tauri/src/ai_commands_tests.rs::rejecting_leaves_every_formal_field_alone",
+        "desktop/crates/ai-extract/tests/suite.rs::every_fixture_matches_what_it_says_it_expects"
+      ],
+      "remainingEvidence": ["T4 UI walkthrough with inert hostile text attachment"]
+    },
+    {
+      "id": "F10",
+      "automationStatus": "PASS",
+      "testLayer": ["AI extract", "review", "command"],
+      "deterministicTests": [
+        "desktop/crates/ai-extract/tests/d14_business_regression.rs::d14_invalid_model_outputs_never_become_formal_values",
+        "desktop/crates/ai-extract/src/schema.rs::calendar_and_clock_values_must_exist_not_only_match_the_shape",
+        "desktop/src-tauri/src/ai_commands_tests.rs::a_second_request_on_the_same_evidence_is_refused",
+        "desktop/src/ai/review.test.ts::取消的文案说明不保证对方停止计费"
+      ],
+      "remainingEvidence": ["T4/T5 selected real-provider walkthrough and measured error denominators"]
+    },
+    {
+      "id": "F11",
+      "automationStatus": "PASS",
+      "testLayer": ["privacy", "request", "storage", "release artifact"],
+      "deterministicTests": [
+        "tests/d14-fault-matrix.test.js::D14 F11: every fixture marker is removed at its plugin boundary",
+        "tests/d14-fault-matrix.test.js::D14 F11: the reviewed plugin release contains no fixture or forbidden marker",
+        "tests/link-privacy-d08.test.js::no synthetic secret reaches the wire, chrome.storage or IndexedDB",
+        "desktop/src-tauri/src/commands_regression.rs::a_preview_is_text_or_a_data_url_and_never_a_path"
+      ],
+      "remainingEvidence": []
+    },
+    {
+      "id": "F12",
+      "automationStatus": "PASS",
+      "testLayer": ["protocol", "link", "native host"],
+      "deterministicTests": [
+        "tests/link-envelope.test.js::an identity-required message without a handshake refuses to be built",
+        "tests/link-session.test.js::a desktop speaking only a future protocol is incompatible and is not remembered as paired",
+        "tests/link-transport.test.js::a fatal protocol code is not retried"
+      ],
+      "remainingEvidence": ["T4 real Chrome and Edge Native Messaging rejection diagnostics"]
+    },
+    {
+      "id": "F13",
+      "automationStatus": "PARTIAL",
+      "testLayer": ["reminder scheduling", "real OS required"],
+      "deterministicTests": [
+        "desktop/src-tauri/src/todo_commands_tests.rs::rescheduling_cancels_the_previous_plan_before_registering_the_new_one",
+        "desktop/src-tauri/src/todo_commands_tests.rs::quitting_cancels_every_pending_plan",
+        "desktop/src/todos.test.ts::五种提醒状态各有各的说法"
+      ],
+      "remainingEvidence": [
+        "T5 Windows kill-process delivery",
+        "T5 cross-day delivery",
+        "T5 sleep/wake delivery",
+        "T5 reboot delivery",
+        "T5 explicit-quit no-delivery"
+      ]
+    }
+  ]
+}

@@ -54,7 +54,10 @@ fn read_manifest(zip_path: &Path) -> Manifest {
     let file = fs::File::open(zip_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let mut raw = String::new();
-    zip.by_name(MANIFEST_PATH).unwrap().read_to_string(&mut raw).unwrap();
+    zip.by_name(MANIFEST_PATH)
+        .unwrap()
+        .read_to_string(&mut raw)
+        .unwrap();
     serde_json::from_str(&raw).unwrap()
 }
 
@@ -88,9 +91,15 @@ fn a_backup_carries_the_archive_and_a_manifest_that_describes_it() {
     // 清单覆盖包里除自己之外的每一项。
     let mut described: Vec<&str> = manifest.entries.iter().map(|e| e.path.as_str()).collect();
     described.sort();
-    let mut inside: Vec<String> = names(&out).into_iter().filter(|n| n != MANIFEST_PATH).collect();
+    let mut inside: Vec<String> = names(&out)
+        .into_iter()
+        .filter(|n| n != MANIFEST_PATH)
+        .collect();
     inside.sort();
-    assert_eq!(described, inside.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(
+        described,
+        inside.iter().map(String::as_str).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -105,7 +114,10 @@ fn the_database_in_the_package_is_the_snapshot_not_the_live_file() {
     let file = fs::File::open(&out).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let mut bytes = String::new();
-    zip.by_name(DATABASE_PATH).unwrap().read_to_string(&mut bytes).unwrap();
+    zip.by_name(DATABASE_PATH)
+        .unwrap()
+        .read_to_string(&mut bytes)
+        .unwrap();
     assert_eq!(
         bytes, "consistent database snapshot",
         "拷正在被写的 archive.db 拿到的可能是半个事务"
@@ -123,12 +135,22 @@ fn the_things_that_must_not_travel_are_not_in_the_package() {
     let inside = names(&out).join("\n");
 
     for forbidden in ["archive/archive.db-wal", "archive/tmp/", "archive/backups/"] {
-        assert!(!inside.contains(forbidden), "{forbidden} 不该进包：\n{inside}");
+        assert!(
+            !inside.contains(forbidden),
+            "{forbidden} 不该进包：\n{inside}"
+        );
     }
     // 而且它们是被**明确**排除的，不是碰巧没走到。
-    let skipped: Vec<&str> = report.skipped.iter().map(|(path, _)| path.as_str()).collect();
+    let skipped: Vec<&str> = report
+        .skipped
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect();
     for expected in ["archive.db", "archive.db-wal", "tmp", "backups"] {
-        assert!(skipped.contains(&expected), "{expected} 应该出现在 skipped 里：{skipped:?}");
+        assert!(
+            skipped.contains(&expected),
+            "{expected} 应该出现在 skipped 里：{skipped:?}"
+        );
     }
 }
 
@@ -184,6 +206,30 @@ fn a_failed_backup_does_not_touch_the_previous_good_one() {
 }
 
 #[test]
+fn deleting_a_referenced_file_after_the_database_snapshot_cannot_publish_a_partial_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let out = dir.path().join("archive.zip");
+
+    write_archive(&source(&archive_dir, &snapshot), &out).unwrap();
+    let previous = fs::read(&out).unwrap();
+
+    // `source.counts` and snapshot.db have already captured two attachment references. This
+    // deletion models another actor removing one byte file after that barrier but before the
+    // directory walker reaches it.
+    fs::remove_file(archive_dir.join("attachments/2026/09/def-截图.png")).unwrap();
+    let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
+    assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
+    assert!(error.to_string().contains("2 attachments"), "{error}");
+    assert_eq!(
+        fs::read(&out).unwrap(),
+        previous,
+        "上一份完整备份不能被残包覆盖"
+    );
+}
+
+#[test]
 fn the_same_archive_packed_twice_describes_itself_the_same_way() {
     let dir = tempfile::tempdir().unwrap();
     let archive_dir = dir.path().join("archive");
@@ -195,7 +241,10 @@ fn the_same_archive_packed_twice_describes_itself_the_same_way() {
     write_archive(&source(&archive_dir, &snapshot), &second).unwrap();
 
     // 目录遍历顺序不能让清单每次都不一样，否则用户没法比对两次导出。
-    assert_eq!(read_manifest(&first).entries, read_manifest(&second).entries);
+    assert_eq!(
+        read_manifest(&first).entries,
+        read_manifest(&second).entries
+    );
 }
 
 #[test]
@@ -208,7 +257,10 @@ fn only_the_allowlisted_settings_travel() {
 
     let kept = portable_settings(raw).unwrap();
 
-    assert!(kept.contains("diagjmpl"), "配对草稿要跟着走，否则换机要重配");
+    assert!(
+        kept.contains("diagjmpl"),
+        "配对草稿要跟着走，否则换机要重配"
+    );
     assert!(!kept.contains("sk-must-not-travel"), "API Key 一律不进备份");
     assert!(!kept.contains("nativeHostPath"), "机器专属路径不进备份");
     assert!(!kept.contains("someone"), "更不能带上用户名");

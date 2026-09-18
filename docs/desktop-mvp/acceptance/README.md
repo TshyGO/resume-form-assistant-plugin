@@ -10,6 +10,8 @@
 | [cases.md](cases.md) | J01–J08、F01–F13 的动作、断言、测试层与证据要求 |
 | [existing-coverage.md](existing-coverage.md) | 已有自动化/脚本能证明什么，以及仍缺什么 |
 | [t2-business-regression.md](t2-business-regression.md) | T2 新增的跨层业务回归、精确测试名和执行命令 |
+| [t3-fault-matrix.md](t3-fault-matrix.md) | T3 的故障防线、自动化范围和实机限制 |
+| [t3-fault-matrix.json](t3-fault-matrix.json) | F01–F13 的机器可校验精确测试映射与剩余证据 |
 | [fixtures/d14-v1/](fixtures/d14-v1/) | 可重复生成的合成岗位、简历、通知、附件和模型返回 |
 | [report-template.json](report-template.json) | 单次候选验收报告模板；所有 case 初始为 `NOT_RUN` |
 | [dependencies.json](dependencies.json) | D08、D11、D13 的验收签收表 |

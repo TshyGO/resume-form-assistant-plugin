@@ -2,7 +2,7 @@
 
 - 来源：[D14 #27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27)，总规划 [#15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15)。
 - 编写日期：2026-09-17；本地核对基线：`1b5e5c1`。
-- 状态：T1/T2 的验收输入与确定性业务回归已完成；T3 故障矩阵待执行，实机验收与发布尚未执行。
+- 状态：T1/T2 已完成；T3 的 F01–F12 确定性自动化已映射并补缺，F13 与 F08 的真实 OS/磁盘证据待 T5，实机安装与发布尚未执行。
 - 形式：作为 #27 的实施 spec；下面七项可分别作为小 PR 或子 issue。
 
 ## 1. 要交付什么

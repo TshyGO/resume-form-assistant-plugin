@@ -148,13 +148,33 @@ fn parse_due(raw: &str) -> Option<Due> {
 
 fn is_calendar_date(value: &str) -> bool {
     let bytes = value.as_bytes();
-    bytes.len() == 10
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
             .iter()
             .enumerate()
             .all(|(index, b)| index == 4 || index == 7 || b.is_ascii_digit())
+    {
+        return false;
+    }
+    let year = value[0..4].parse::<u32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    if year == 0 || !(1..=12).contains(&month) {
+        return false;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=days).contains(&day)
 }
 
 fn is_rfc3339(value: &str) -> bool {
@@ -166,17 +186,45 @@ fn is_rfc3339(value: &str) -> bool {
         return false;
     }
     let time = &value[11..];
-    let has_zone = time.ends_with('Z')
-        || time.ends_with('z')
-        || time.contains('+')
-        || time.rfind('-').map(|at| at >= 5).unwrap_or(false);
-    has_zone && time.chars().take(8).enumerate().all(|(index, ch)| {
-        if index == 2 || index == 5 {
-            ch == ':'
-        } else {
-            ch.is_ascii_digit()
+    let time_bytes = time.as_bytes();
+    if time_bytes.len() < 9
+        || time_bytes[2] != b':'
+        || time_bytes[5] != b':'
+        || !time_bytes[..8]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 2 || index == 5 || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let hour = time[0..2].parse::<u32>().unwrap_or(24);
+    let minute = time[3..5].parse::<u32>().unwrap_or(60);
+    let second = time[6..8].parse::<u32>().unwrap_or(60);
+    if hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+
+    let mut rest = &time[8..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return false;
         }
-    })
+        rest = &fraction[digits..];
+    }
+    if rest == "Z" || rest == "z" {
+        return true;
+    }
+    let zone = rest.as_bytes();
+    if zone.len() != 6 || !matches!(zone[0], b'+' | b'-') || zone[3] != b':' {
+        return false;
+    }
+    if !zone[1..3].iter().chain(&zone[4..6]).all(u8::is_ascii_digit) {
+        return false;
+    }
+    let offset_hour = rest[1..3].parse::<u32>().unwrap_or(24);
+    let offset_minute = rest[4..6].parse::<u32>().unwrap_or(60);
+    offset_hour <= 23 && offset_minute <= 59
 }
 
 fn positive_round(value: Option<&Value>) -> Option<i64> {
@@ -355,7 +403,10 @@ mod tests {
 
     #[test]
     fn a_calendar_date_and_an_offset_time_are_both_accepted() {
-        assert_eq!(parse_due("2026-09-20"), Some(Due::Date("2026-09-20".into())));
+        assert_eq!(
+            parse_due("2026-09-20"),
+            Some(Due::Date("2026-09-20".into()))
+        );
         assert_eq!(
             parse_due("2026-09-20T02:00:00Z"),
             Some(Due::DateTime("2026-09-20T02:00:00Z".into()))
@@ -368,6 +419,27 @@ mod tests {
         assert_eq!(parse_due("2026-09-20T10:00:00"), None);
         assert_eq!(parse_due("下周二"), None);
         assert_eq!(parse_due(""), Some(Due::None));
+    }
+
+    #[test]
+    fn calendar_and_clock_values_must_exist_not_only_match_the_shape() {
+        for invalid in [
+            "2026-02-30",
+            "2027-02-29",
+            "0000-01-01",
+            "2026-13-01",
+            "2026-09-20T24:00:00Z",
+            "2026-09-20T10:60:00Z",
+            "2026-09-20T10:00:60Z",
+            "2026-09-20T10:00:00+24:00",
+            "2026-09-20T10:00:00+08:60",
+        ] {
+            assert_eq!(parse_due(invalid), None, "{invalid} must be rejected");
+        }
+        assert_eq!(
+            parse_due("2028-02-29T10:00:00.123+08:00"),
+            Some(Due::DateTime("2028-02-29T10:00:00.123+08:00".into()))
+        );
     }
 
     #[test]

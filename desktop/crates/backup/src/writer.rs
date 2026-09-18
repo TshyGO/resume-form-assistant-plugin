@@ -46,13 +46,20 @@ pub struct WriteReport {
     pub skipped: Vec<(String, String)>,
 }
 
-pub fn write_archive(source: &ArchiveSource<'_>, destination: &Path) -> Result<WriteReport, BackupError> {
+pub fn write_archive(
+    source: &ArchiveSource<'_>,
+    destination: &Path,
+) -> Result<WriteReport, BackupError> {
     let parent = destination
         .parent()
         .ok_or_else(|| BackupError::Invalid("备份路径没有上级目录。".into()))?;
     std::fs::create_dir_all(parent)?;
 
-    let staging = parent.join(format!(".{}.tmp-{}", file_name(destination), uuid::Uuid::new_v4()));
+    let staging = parent.join(format!(
+        ".{}.tmp-{}",
+        file_name(destination),
+        uuid::Uuid::new_v4()
+    ));
 
     match build(source, &staging) {
         Ok((entries, skipped)) => {
@@ -120,15 +127,43 @@ fn build(
             if child.file_type()?.is_dir() {
                 walk.push(path);
             } else {
-                entries.push(add_file(&mut zip, options, &format!("archive/{rel}"), &path)?);
+                entries.push(add_file(
+                    &mut zip,
+                    options,
+                    &format!("archive/{rel}"),
+                    &path,
+                )?);
             }
         }
     }
 
     // 3. 过滤后的设置。
     if let Some(settings) = &source.settings_json {
-        entries.push(add_bytes(&mut zip, options, SETTINGS_PATH, settings.as_bytes())?);
+        entries.push(add_bytes(
+            &mut zip,
+            options,
+            SETTINGS_PATH,
+            settings.as_bytes(),
+        )?);
     }
+
+    // 数据库快照里的引用数是打包开始时的业务真相。附件或快照若在快照之后、目录
+    // 遍历之前被删掉，单靠 read_dir 会把它当成「本来就没有」并成功产出残包。这里
+    // 用快照对应的计数卡住发布：少一个或多一个都失败，临时 ZIP 会由调用方删掉，
+    // 上一份成功备份不会被覆盖。应用命令层还会持有 store slot 锁，阻止正常命令
+    // 并发删除；这条是对进程外删除、崩溃遗留和未来绕过命令层代码的第二道防线。
+    require_count(
+        &entries,
+        "archive/attachments/",
+        source.counts.attachments,
+        "attachments",
+    )?;
+    require_count(
+        &entries,
+        "archive/snapshots/",
+        source.counts.snapshots,
+        "snapshots",
+    )?;
 
     // 4. 清单最后写：它要覆盖上面所有条目。
     entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -149,6 +184,24 @@ fn build(
     finished.sync_all()?;
     skipped.sort();
     Ok((manifest.entries.len(), skipped))
+}
+
+fn require_count(
+    entries: &[ManifestEntry],
+    prefix: &str,
+    expected: i64,
+    label: &str,
+) -> Result<(), BackupError> {
+    let actual = entries
+        .iter()
+        .filter(|entry| entry.path.starts_with(prefix))
+        .count() as i64;
+    if actual != expected {
+        return Err(BackupError::Mismatch(format!(
+            "database snapshot says {expected} {label}, package contains {actual}"
+        )));
+    }
+    Ok(())
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {
