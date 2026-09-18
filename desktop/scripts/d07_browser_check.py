@@ -354,7 +354,14 @@ def main() -> int:
         if registered:
             print(node("unregister").stdout.strip())
         stop_application(binary, env)
-        remove_registration_written_by_app(binary)
+        try:
+            remove_registration_written_by_app(binary)
+        except RuntimeError as exc:
+            # Do not replace a Playwright/application failure that is already
+            # propagating out of the try block. With no earlier exception this
+            # entry still makes report() return non-zero below.
+            failures.append(str(exc))
+            print(f"CLEANUP FAILURE: {exc}", file=sys.stderr)
         if args.keep:
             print(f"left in place: {workspace}")
         else:

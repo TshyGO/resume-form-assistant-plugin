@@ -39,8 +39,17 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "link/*.mjs",
-        "link/protocol/*.mjs",
+        "link/copy.mjs",
+        "link/extract.mjs",
+        "link/fillrecords.mjs",
+        "link/limits.mjs",
+        "link/redact.mjs",
+        "link/secret-fields.mjs",
+        "link/snapshot.mjs",
+        "link/protocol/schema-data.mjs",
+        "link/protocol/schema-lite.mjs",
+        "link/protocol/time.mjs",
+        "link/protocol/validate.mjs",
         "content.css"
       ],
       "matches": [

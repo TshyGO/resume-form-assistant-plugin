@@ -20,7 +20,20 @@ function warMatches(resource, pattern) {
 test("web_accessible_resources 保持人工审过的最小列表", () => {
   assert.deepStrictEqual(manifest.web_accessible_resources, [
     {
-      resources: ["link/*.mjs", "link/protocol/*.mjs", "content.css"],
+      resources: [
+        "link/copy.mjs",
+        "link/extract.mjs",
+        "link/fillrecords.mjs",
+        "link/limits.mjs",
+        "link/redact.mjs",
+        "link/secret-fields.mjs",
+        "link/snapshot.mjs",
+        "link/protocol/schema-data.mjs",
+        "link/protocol/schema-lite.mjs",
+        "link/protocol/time.mjs",
+        "link/protocol/validate.mjs",
+        "content.css",
+      ],
       matches: ["<all_urls>"],
     },
   ]);
@@ -56,6 +69,14 @@ test("管理面板不再通过网页 iframe 暴露", () => {
   const exposed = manifest.web_accessible_resources.flatMap((entry) => entry.resources);
   assert.equal(exposed.includes("popup.html"), false);
   assert.equal(manifest.externally_connectable, undefined);
+});
+
+test("service worker 专用模块不对网页暴露", () => {
+  const exposed = manifest.web_accessible_resources.flatMap((entry) => entry.resources);
+  for (const resource of ["link/worker.mjs", "link/chrome.mjs", "link/transport.mjs"]) {
+    assert.equal(exposed.includes(resource), false, `${resource} 只能在 service worker 内运行`);
+  }
+  assert.equal(exposed.some((resource) => resource.includes("*")), false);
 });
 
 test("内容脚本及其动态模块可达的 getURL 资源全部被 WAR 覆盖", () => {

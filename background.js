@@ -7,10 +7,19 @@ installDesktopLink(chrome);
 
 async function openManagerTab(requestedTab = "") {
   const hash = requestedTab === "profile" ? "#profile" : "";
-  return chrome.tabs.create({ url: `${chrome.runtime.getURL("popup.html")}${hash}` });
+  const baseUrl = chrome.runtime.getURL("popup.html");
+  const targetUrl = `${baseUrl}${hash}`;
+  const tabs = await chrome.tabs.query({});
+  const existing = tabs.find((tab) => tab.url?.startsWith(baseUrl));
+  if (existing?.id) {
+    return chrome.tabs.update(existing.id, { active: true, url: targetUrl });
+  }
+  return chrome.tabs.create({ url: targetUrl });
 }
 
-chrome.action.onClicked.addListener(() => openManagerTab());
+chrome.action.onClicked.addListener(() => {
+  openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."));
+});
 
 // This service worker only creates the host. It never owns a long AI request.
 let creatingHost = null;

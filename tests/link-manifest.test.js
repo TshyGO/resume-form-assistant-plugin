@@ -24,8 +24,11 @@ test('the service worker loads as a module so it can import the D05 validator', 
 
 test('the toolbar button opens the manager in an extension tab', async () => {
   const source = background();
+  assert.equal(manifest().action.default_popup, undefined);
   assert.match(source, /chrome\.action\.onClicked\.addListener/);
   assert.match(source, /chrome\.tabs\.create/);
+  assert.match(source, /chrome\.tabs\.update/);
+  assert.match(source, /chrome\.tabs\.query/);
   assert.match(source, /OPEN_MANAGER/);
   assert.doesNotMatch(source, /TOGGLE_MANAGER/);
 });
@@ -55,8 +58,10 @@ test('the sidebar can import the extraction and copy modules', async () => {
   // web-accessible resources. Without this the save button fails with an opaque import
   // error at the moment the user clicks it.
   const resources = manifest().web_accessible_resources[0].resources;
-  assert.ok(resources.includes('link/*.mjs'));
-  assert.ok(resources.includes('link/protocol/*.mjs'));
+  assert.ok(resources.includes('link/extract.mjs'));
+  assert.ok(resources.includes('link/copy.mjs'));
+  assert.ok(resources.includes('link/protocol/validate.mjs'));
+  assert.equal(resources.includes('link/worker.mjs'), false);
 });
 
 test('the sidebar offers saving a job and never formats desktop copy itself', async () => {

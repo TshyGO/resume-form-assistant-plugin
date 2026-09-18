@@ -72,6 +72,28 @@ def failure(message: str) -> None:
     sys.exit(1)
 
 
+def click_accessible(context, page, name: str) -> None:
+    """Click one control inside the sidebar's closed shadow root through Chromium AX."""
+    session = context.new_cdp_session(page)
+    try:
+        tree = session.send("Accessibility.getFullAXTree")
+        matches = [
+            node for node in tree.get("nodes", [])
+            if node.get("role", {}).get("value") == "button"
+            and node.get("name", {}).get("value") == name
+            and node.get("backendDOMNodeId")
+        ]
+        if len(matches) != 1:
+            failure(f"expected one accessible button named {name}, found {len(matches)}")
+        model = session.send(
+            "DOM.getBoxModel", {"backendNodeId": matches[0]["backendDOMNodeId"]}
+        )["model"]
+        quad = model["border"]
+        page.mouse.click(sum(quad[0::2]) / 4, sum(quad[1::2]) / 4)
+    finally:
+        session.detach()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
@@ -159,8 +181,9 @@ def main() -> None:
                         return {
                           popupHtml: await check('popup.html'),
                           contentCss: await check('content.css'),
-                          linkMjs: await check('link/chrome.mjs'),
+                          linkMjs: await check('link/extract.mjs'),
                           linkProtocolMjs: await check('link/protocol/validate.mjs'),
+                          workerMjs: await check('link/worker.mjs'),
                           popupJs: await check('popup.js'),
                           popupCss: await check('popup.css'),
                           xlsx: await check('xlsx.full.min.js'),
@@ -172,18 +195,37 @@ def main() -> None:
                 for key in ("contentCss", "linkMjs", "linkProtocolMjs"):
                     if outside[key] != "status:200":
                         failure(f"web page cannot load WAR resource {key}: {outside[key]}")
-                for key in ("popupHtml", "popupJs", "popupCss", "xlsx", "pdf"):
+                for key in ("popupHtml", "popupJs", "popupCss", "xlsx", "pdf", "workerMjs"):
                     if not outside[key].startswith("blocked:"):
                         failure(f"web page unexpectedly loaded non-WAR resource {key}: {outside[key]}")
 
-                # 3. The manager is an extension tab, not a page iframe. This keeps
-                # popup.html out of WAR while preserving the sidebar/toolbar flow.
+                # The original #125 vector was a delayed iframe navigation. Keep
+                # proving that a page-created frame cannot navigate to popup.html.
+                web_page.evaluate(
+                    """(src) => {
+                        const frame = document.createElement('iframe');
+                        frame.id = 'blocked-manager-frame';
+                        frame.src = src;
+                        document.body.appendChild(frame);
+                    }""",
+                    f"chrome-extension://{extension_id}/popup.html",
+                )
+                web_page.wait_for_timeout(500)
+                escaped_frame = next(
+                    (frame.url for frame in web_page.frames if frame.url.startswith(
+                        f"chrome-extension://{extension_id}/popup.html"
+                    )),
+                    None,
+                )
+                if escaped_frame:
+                    failure(f"ordinary page navigated an iframe to popup.html: {escaped_frame}")
+
+                # 3. Click the real content-script sidebar button. Its closed
+                # shadow root is addressed through Chromium's accessibility tree,
+                # so this is the actual user path rather than a direct worker call.
+                extension_page.close()
                 with context.expect_page(timeout=10_000) as manager_info:
-                    result = extension_page.evaluate(
-                        "() => chrome.runtime.sendMessage({ type: 'OPEN_MANAGER' })"
-                    )
-                if not result or not result.get("opened"):
-                    failure(f"manager command failed: {result}")
+                    click_accessible(context, web_page, "打开管理面板")
                 manager_page = manager_info.value
                 manager_page.wait_for_load_state("load")
                 if not manager_page.url.startswith(
@@ -192,10 +234,32 @@ def main() -> None:
                     failure(f"manager opened the wrong URL: {manager_page.url}")
                 manager_page.wait_for_selector(".popup-shell", timeout=10_000)
 
+                # The profile path reuses the existing manager tab and selects the
+                # intended panel on initial/hash navigation.
+                page_count = len(context.pages)
+                result = manager_page.evaluate(
+                    "() => chrome.runtime.sendMessage({ type: 'OPEN_MANAGER', tab: 'profile' })"
+                )
+                if not result or not result.get("opened"):
+                    failure(f"profile manager command failed: {result}")
+                manager_page.wait_for_url(
+                    f"chrome-extension://{extension_id}/popup.html#profile", timeout=10_000
+                )
+                profile_active = manager_page.evaluate(
+                    """() => Boolean(
+                        document.querySelector('.tab-button[data-tab="profile"].is-active') &&
+                        document.querySelector('.tab-panel[data-panel="profile"].is-active')
+                    )"""
+                )
+                if not profile_active:
+                    failure("#profile did not activate the 我的信息 panel")
+                if len(context.pages) != page_count:
+                    failure("reopening the manager created a duplicate extension tab")
+
                 if args.screenshot_dir:
                     screenshot_dir = args.screenshot_dir.resolve()
                     screenshot_dir.mkdir(parents=True, exist_ok=True)
-                    extension_page.evaluate(
+                    manager_page.evaluate(
                         """() => chrome.storage.local.set({
                           templates: [{
                             id: 'store-demo',

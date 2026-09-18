@@ -53,7 +53,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 | 留下 | 为什么 |
 | --- | --- |
-| `link/*.mjs`、`link/protocol/*.mjs` | 内容脚本里 `import(chrome.runtime.getURL(...))` 动态加载 |
+| `link/extract.mjs`、`copy.mjs`、`fillrecords.mjs`、`snapshot.mjs` 及它们的静态依赖 | 内容脚本里 `import(chrome.runtime.getURL(...))` 动态加载；逐文件列出，不用目录通配 |
 | `content.css` | 内容脚本 `fetch(chrome.runtime.getURL("content.css"))` |
 
 移掉的那些（`popup.js`、`popup.css`、`xlsx.full.min.js`、`mammoth.browser.min.js`、
@@ -71,7 +71,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 | 加载方 | 资源 | 要不要 WAR |
 | --- | --- | --- |
-| 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`link/*.mjs` 与 `link/protocol/*.mjs`（`content.js` 动态 `import`） | 要，已在列表里 |
+| 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`extract/copy/fillrecords/snapshot` 及其静态依赖（`content.js` 动态 `import`） | 要，已逐文件列在 manifest；`worker/chrome/transport` 等 service-worker 专用模块不暴露 |
 | 扩展页/offscreen | `popup.js`、`popup.css`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
 | 浏览器 UI | `icons/*`（只在 `manifest.json` 的 `action`/`icons` 字段里） | 不要；没有任何内容脚本把它注入网页 |
 

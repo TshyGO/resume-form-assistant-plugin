@@ -18,9 +18,23 @@ $upgradeInstallerPath = if ($UpgradeInstaller) {
 }
 $installDir = Join-Path $env:LOCALAPPDATA "Resume Pro Desktop"
 $userDataDir = Join-Path $env:LOCALAPPDATA "ResumePro"
+$registrationKeys = @(
+  "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",
+  "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
+)
+
+$principal = [Security.Principal.WindowsPrincipal]::new(
+  [Security.Principal.WindowsIdentity]::GetCurrent()
+)
+if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  throw "Run this acceptance check from a non-elevated PowerShell session"
+}
 
 if (Test-Path -LiteralPath $installDir) {
   throw "Refusing to overwrite an existing installation: $installDir"
+}
+foreach ($key in $registrationKeys) {
+  if (Test-Path $key) { throw "Refusing to overwrite an existing Native Messaging registration: $key" }
 }
 
 function Get-ArchiveSnapshot {
@@ -50,11 +64,7 @@ function Assert-ArchiveUnchanged([hashtable]$Before) {
 }
 
 function Assert-NativeMessagingRegistration([string]$Executable) {
-  $keys = @(
-    "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",
-    "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.resumepro.desktop"
-  )
-  foreach ($key in $keys) {
+  foreach ($key in $registrationKeys) {
     if (-not (Test-Path $key)) { throw "Missing registration: $key" }
     $manifest = Get-ItemPropertyValue -Path $key -Name "(default)"
     if (-not (Test-Path -LiteralPath $manifest)) { throw "Missing host manifest: $manifest" }
@@ -67,12 +77,14 @@ function Assert-NativeMessagingRegistration([string]$Executable) {
       throw "Manifest allowed_origins does not contain exactly the store extension"
     }
   }
-  return $keys
+  return $registrationKeys
 }
 
 $before = Get-ArchiveSnapshot
 $testRoot = Join-Path $env:TEMP ("resumepro-d13-install-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
+$userDataExisted = Test-Path -LiteralPath $userDataDir
+if (-not $userDataExisted) { New-Item -ItemType Directory -Path $userDataDir | Out-Null }
 $sentinel = Join-Path $userDataDir ("d13-install-acceptance-" + [guid]::NewGuid().ToString("N") + ".sentinel")
 New-Item -ItemType File -Path $sentinel | Out-Null
 $oldOverride = $env:RESUMEPRO_DATA_DIR
@@ -148,7 +160,7 @@ try {
     ArchiveFilesVerified = $before.Count
     ArchiveUnchanged = $true
     UserDataSentinelPreserved = $true
-    IntegrityLevel = (whoami /groups | Select-String "Mandatory Label").Line.Trim()
+    RunningElevated = $false
   }
 } finally {
   $env:RESUMEPRO_DATA_DIR = $oldOverride
@@ -167,5 +179,13 @@ try {
     $safeName = [IO.Path]::GetFileName($resolvedSentinel) -like "d13-install-acceptance-*.sentinel"
     if (-not $safeParent -or -not $safeName) { throw "Unsafe sentinel cleanup target: $resolvedSentinel" }
     Remove-Item -LiteralPath $resolvedSentinel -Force
+  }
+  if (-not $userDataExisted -and (Test-Path -LiteralPath $userDataDir)) {
+    $resolvedUserData = (Resolve-Path -LiteralPath $userDataDir).Path
+    $expectedUserData = [IO.Path]::GetFullPath($userDataDir)
+    $empty = -not (Get-ChildItem -LiteralPath $resolvedUserData -Force | Select-Object -First 1)
+    if ($resolvedUserData -eq $expectedUserData -and $empty) {
+      Remove-Item -LiteralPath $resolvedUserData -Force
+    }
   }
 }
