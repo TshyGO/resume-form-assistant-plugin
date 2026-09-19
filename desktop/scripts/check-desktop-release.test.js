@@ -233,6 +233,7 @@ test("安装验收失败也会清理本轮安装，并给早退进程可操作�
   assert.match(acceptance, /\$installedThisRun = \$false/);
   assert.match(acceptance, /\$installedThisRun = \$true/);
   assert.match(acceptance, /exited before Native Messaging registration/);
+  assert.match(acceptance, /Upgraded application exited before Native Messaging registration/);
   assert.match(acceptance, /if \(\$installedThisRun -and \(Test-Path -LiteralPath \$installDir\)\)/);
   assert.match(acceptance, /\$cleanupUninstaller/);
   assert.match(acceptance, /AcceptanceEligible = -not \$runningElevated/);

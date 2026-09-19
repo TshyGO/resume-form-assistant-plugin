@@ -148,6 +148,10 @@ try {
     $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
       Select-Object -First 1
     $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
+    Start-Sleep -Milliseconds 500
+    if ($app.HasExited) {
+      throw "Upgraded application exited before Native Messaging registration (exit $($app.ExitCode)); check packaged runtime dependencies"
+    }
     $keys = Wait-NativeMessagingRegistration $exe.FullName
     $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
     if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
