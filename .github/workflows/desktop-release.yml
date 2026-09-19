@@ -84,6 +84,15 @@ jobs:
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
+      - name: Install and launch Windows candidate
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem `
+            "desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis" `
+            -Filter "*.exe" -File | Select-Object -Single
+          ./desktop/scripts/d13_install_acceptance.ps1 -Installer $installer.FullName
+
       - name: Collect artifacts and checksums
         shell: bash
         run: |

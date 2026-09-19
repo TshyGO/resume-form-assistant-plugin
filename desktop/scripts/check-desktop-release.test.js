@@ -222,4 +222,15 @@ test("发版工作流会拦住过期的 Cargo.lock 和脏 dist", () => {
   const flow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
   assert.match(flow, /cargo fetch --locked/);
   assert.match(flow, /--dist desktop\/dist/);
+  assert.match(flow, /d13_install_acceptance\.ps1 -Installer/);
+  assert.match(flow, /if: matrix\.name == 'windows-x64'/);
+});
+
+test("安装验收失败也会清理本轮安装，并给早退进程可操作的错误", () => {
+  const acceptance = readText(join(desktop, "scripts", "d13_install_acceptance.ps1"));
+  assert.match(acceptance, /\$installedThisRun = \$false/);
+  assert.match(acceptance, /\$installedThisRun = \$true/);
+  assert.match(acceptance, /exited before Native Messaging registration/);
+  assert.match(acceptance, /if \(\$installedThisRun -and \(Test-Path -LiteralPath \$installDir\)\)/);
+  assert.match(acceptance, /\$cleanupUninstaller/);
 });

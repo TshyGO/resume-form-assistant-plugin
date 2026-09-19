@@ -100,10 +100,12 @@ if (-not $userDataExisted) { New-Item -ItemType Directory -Path $userDataDir | O
 $sentinel = Join-Path $userDataDir ("d13-install-acceptance-" + [guid]::NewGuid().ToString("N") + ".sentinel")
 New-Item -ItemType File -Path $sentinel | Out-Null
 $oldOverride = $env:RESUMEPRO_DATA_DIR
+$installedThisRun = $false
 
 try {
   $install = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+  $installedThisRun = $true
   if (-not (Test-Path -LiteralPath $installDir)) { throw "Installer did not create $installDir" }
 
   $exe = Get-ChildItem -LiteralPath $installDir -Filter "*.exe" -File |
@@ -114,6 +116,10 @@ try {
 
   $env:RESUMEPRO_DATA_DIR = $testRoot
   $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
+  Start-Sleep -Milliseconds 500
+  if ($app.HasExited) {
+    throw "Installed application exited before Native Messaging registration (exit $($app.ExitCode)); check packaged runtime dependencies"
+  }
   $keys = Wait-NativeMessagingRegistration $exe.FullName
 
   $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
@@ -182,6 +188,24 @@ try {
   }
 } finally {
   $env:RESUMEPRO_DATA_DIR = $oldOverride
+  # The script refuses pre-existing installs, so an install directory created during this run is
+  # always safe to remove through its own uninstaller. Failed registration/startup must not leave
+  # a half-tested product installed on the machine.
+  if ($installedThisRun -and (Test-Path -LiteralPath $installDir)) {
+    $cleanupUninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
+      Select-Object -First 1
+    if ($cleanupUninstaller) {
+      $cleanup = Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList "/S" `
+        -Wait -PassThru -WindowStyle Hidden
+      if ($cleanup.ExitCode -ne 0) {
+        Write-Warning "Cleanup uninstaller exited with $($cleanup.ExitCode)"
+      }
+      $cleanupDeadline = (Get-Date).AddSeconds(20)
+      while ((Test-Path -LiteralPath $installDir) -and (Get-Date) -lt $cleanupDeadline) {
+        Start-Sleep -Milliseconds 250
+      }
+    }
+  }
   if (Test-Path -LiteralPath $testRoot) {
     $resolved = (Resolve-Path -LiteralPath $testRoot).Path
     $tempResolved = (Resolve-Path -LiteralPath $env:TEMP).Path
