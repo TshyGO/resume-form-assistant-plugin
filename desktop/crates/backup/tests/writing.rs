@@ -6,11 +6,20 @@ use std::path::{Path, PathBuf};
 
 use backup::exclude::{classify, portable_settings, Disposition};
 use backup::manifest::{Manifest, DATABASE_PATH, MANIFEST_PATH, SETTINGS_PATH};
-use backup::{write_archive, ArchiveCounts, ArchiveSource};
+use backup::{write_archive, ArchiveCounts, ArchiveSource, ReferencedFile};
+use sha2::{Digest, Sha256};
 
 fn write(path: &Path, bytes: &[u8]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, bytes).unwrap();
+}
+
+fn reference(path: &str, bytes: &[u8]) -> ReferencedFile {
+    ReferencedFile {
+        path: path.into(),
+        size_bytes: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+    }
 }
 
 /// 一个长得像真档案目录的目录，外加一份「数据库快照」。
@@ -45,10 +54,10 @@ fn source<'a>(dir: &'a Path, snapshot: &'a Path) -> ArchiveSource<'a> {
             evidence: 2,
             attachments: 2,
         },
-        referenced_paths: vec![
-            "attachments/2026/09/abc-回复.eml".into(),
-            "attachments/2026/09/def-截图.png".into(),
-            "snapshots/snap-1.json".into(),
+        referenced_files: vec![
+            reference("attachments/2026/09/abc-回复.eml", b"eml bytes"),
+            reference("attachments/2026/09/def-截图.png", b"png bytes"),
+            reference("snapshots/snap-1.json", b"{}"),
         ],
         settings_json: None,
         created_at: "2026-09-13T02:00:00.000Z".into(),
@@ -286,6 +295,25 @@ fn a_missing_reference_and_an_orphan_with_the_same_count_still_fail() {
     assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
     assert!(error.to_string().contains("def-截图.png"), "{error}");
     assert!(error.to_string().contains("orphan.bin"), "{error}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn replacing_a_referenced_file_with_same_size_different_bytes_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let out = dir.path().join("archive.zip");
+
+    write(
+        &archive_dir.join("attachments/2026/09/abc-回复.eml"),
+        b"bad bytes",
+    );
+
+    let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
+    assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
+    assert!(error.to_string().contains("abc-回复.eml"), "{error}");
+    assert!(error.to_string().contains("内容或大小变化"), "{error}");
     assert!(!out.exists());
 }
 

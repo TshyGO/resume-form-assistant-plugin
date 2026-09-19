@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "docs" / "desktop-mvp" / "acceptance" / "t5-report-template.json"
 VALID_STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"}
+T4_CASES = [f"J{index:02d}" for index in range(1, 9)] + [
+    f"F{index:02d}" for index in range(1, 14)
+]
 
 
 class T5Error(RuntimeError):
@@ -39,8 +43,30 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def non_empty_strings(value) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
 def artifact_binding(candidate: dict, kind: str) -> dict:
     return {key: candidate[kind].get(key) for key in ("name", "sha256", "downloadUrl")}
+
+
+def validate_t4_baseline(report: dict) -> None:
+    cases = report.get("cases") or []
+    if [item.get("id") for item in cases] != T4_CASES:
+        raise T5Error("T5 baseline must contain J01-J08 and F01-F13 exactly once in order")
+    for item in cases:
+        if item.get("status") != "PASS" or not non_empty_strings(item.get("evidence")):
+            raise T5Error(f"T5 baseline {item.get('id')} is not PASS with evidence")
+    if report.get("environment", {}).get("accountType") != "standard-user":
+        raise T5Error("T5 baseline was not run as a standard user")
+    preflight = report.get("t4Preflight") or {}
+    if preflight.get("installedRegistration") != "VERIFIED":
+        raise T5Error("T5 baseline production registration is not verified")
+    if preflight.get("installedSmoke", {}).get("status") != "PASS":
+        raise T5Error("T5 baseline installed smoke did not pass")
 
 
 def prepare(args) -> None:
@@ -56,6 +82,7 @@ def prepare(args) -> None:
         raise T5Error("T5 requires an approved T4 baseline report")
     if baseline.get("review", {}).get("blockingDefects"):
         raise T5Error("T4 baseline still has blocking defects")
+    validate_t4_baseline(baseline)
 
     report = deepcopy(read_json(TEMPLATE))
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -86,7 +113,16 @@ def snapshot(args) -> None:
     if output.exists():
         raise T5Error(f"refusing to overwrite snapshot evidence: {output}")
     files = []
-    for path in sorted(file for file in root.rglob("*") if file.is_file()):
+    for path in sorted(root.rglob("*")):
+        metadata = path.lstat()
+        is_reparse = bool(
+            getattr(metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+        if path.is_symlink() or is_reparse:
+            raise T5Error(f"snapshot root contains a link/reparse point: {path}")
+        if not path.is_file():
+            continue
         rel = path.relative_to(root).as_posix()
         if any(part.startswith(".tmp-") for part in Path(rel).parts):
             continue
@@ -150,8 +186,8 @@ def verify_report(report: dict, candidate: dict, require_complete: bool) -> list
         status = check.get("status")
         if status not in VALID_STATUSES:
             errors.append(f"{check.get('id')}: invalid status {status}")
-        if status in {"PASS", "FAIL"} and not check.get("evidence"):
-            errors.append(f"{check.get('id')}: {status} requires evidence")
+        if status in {"PASS", "FAIL"} and not non_empty_strings(check.get("evidence")):
+            errors.append(f"{check.get('id')}: {status} requires non-empty evidence strings")
         if status == "BLOCKED" and not check.get("defect"):
             errors.append(f"{check.get('id')}: BLOCKED requires a defect")
         if require_complete and status != "PASS":
@@ -178,6 +214,10 @@ def verify_report(report: dict, candidate: dict, require_complete: bool) -> list
             errors.append("T5 completion requires named and dated review")
         if review.get("blockingDefects"):
             errors.append("T5 completion rejects blocking defects")
+        if report.get("environment", {}).get("accountType") != "standard-user":
+            errors.append("T5 completion requires environment.accountType=standard-user")
+        if not report.get("completedAt"):
+            errors.append("T5 completion requires completedAt")
     return errors
 
 

@@ -120,6 +120,8 @@ case 状态为 `PASS / FAIL / BLOCKED / NOT_RUN / NOT_APPLICABLE`；后者须引
 
 以下默认阻断：数据丢失/损坏、跨档案串写、永久删除后复活、未确认状态变化、附件越界或泄漏、密钥/禁采数据外泄、必测环境不能安装连接、插件独立填写失效、恢复破坏旧库、发行文件与验收对象不一致。阻断缺陷修复后重跑受影响旅程与回归。
 
+“插件独立填写”是本次桌面 MVP 的既有发布契约；它不是对后续大版本的永久承诺。下一大版本的强制桌面依赖决策与迁移工作由 #15/#130 跟踪，届时应建立新的验收基线，不能反向改写本次 Release 的 J08 结论。
+
 非阻断项须记录影响范围、可行规避方法、负责人和后续 issue，并在支持说明中披露。OS 通知限制只有经过设计规定的降级流程、同步产品承诺并通过相应验收后，才能作为明确支持限制；不能仅贴「已知问题」跳过未兑现的承诺。
 
 发布顺序：
@@ -132,7 +134,7 @@ case 状态为 `PASS / FAIL / BLOCKED / NOT_RUN / NOT_APPLICABLE`；后者须引
 
 候选源码或产物改变必须重新登记并按影响重验。证据报告可以在后续文档 commit 归档，但须明确区分报告 commit 和被测源码 commit；不得用「只改文档」掩盖发布包实际包含文件的变化。
 
-T6 与 D13 协调：候选阶段使用构建 artifacts 或 draft/prerelease；桌面 MVP 正式发布必须经过联合门禁。插件独立发版仍保留独立语义，但不能让任意 tag 自动绕过本次联合发行闸门。若流水线重建了产物，重新比较哈希，变化则重新验收，不直接继承旧报告。
+T6 与 D13 协调：候选阶段使用构建 artifacts 或 draft/prerelease；桌面 MVP 正式发布必须经过联合门禁。本次 MVP 的插件独立发版仍保留独立语义，但不能让任意 tag 自动绕过本次联合发行闸门；后续大版本按 #15/#130 的新契约另行验收。若流水线重建了产物，重新比较哈希，变化则重新验收，不直接继承旧报告。
 
 商店渠道若纳入首发：核对实际商店 ID、allowlist、权限/隐私材料、用户设置导入导出及从旧 ID 迁移的证据。现有 D13 文档同时包含固定 ID 和换 ID 的讨论，必须用实际发行渠道澄清，不能把迁移假设当作事实。ZIP 发行范围不因商店待办自动扩大。
 
@@ -153,9 +155,9 @@ T4/T5/T6 的落点与状态：
 
 | 项 | 本地已实现 | 仍未完成 |
 | --- | --- | --- |
-| T4 | `desktop/scripts/d14_acceptance_check.py`（候选哈希绑定、插件 ZIP allowlist 与固定 ID 校验、Chrome/Edge 双报告、生产注册检查、安装后真机烟测、完成门禁），清单见 [t4-windows-browser.md](../../desktop-mvp/acceptance/t4-windows-browser.md) | 无候选安装包与下载地址；J01–J08 未在真实 Chrome/Edge 执行，报告仍为 `NOT_RUN` |
+| T4 | `desktop/scripts/d14_acceptance_check.py`（候选哈希/源码树绑定、MV3 安全语义、签名与安装来源、Chrome/Edge 双报告、生产注册、隔离档案烟测、完整 J/F 门禁），清单见 [t4-windows-browser.md](../../desktop-mvp/acceptance/t4-windows-browser.md) | 无候选安装包与下载地址；J01–J08/F01–F13 未在真实 Chrome/Edge 执行，报告仍为 `NOT_RUN` |
 | T5 | `desktop/scripts/d14_t5_check.py`（16 项报告模板、档案哈希快照与比较、完成门禁），清单见 [t5-lifecycle.md](../../desktop-mvp/acceptance/t5-lifecycle.md) | 重启/休眠/杀进程/跨次日/磁盘满/升级卸载等全部实机动作未执行 |
-| T6 | `desktop/scripts/check-release-acceptance.mjs` 及行为测试；接入点见 [t6-release-gate.md](../../desktop-mvp/acceptance/t6-release-gate.md) | 尚无真实报告可校验；未接入 tag 流水线（缺证据时接入只会误拦发版） |
+| T6 | `desktop/scripts/check-release-acceptance.mjs` 及行为测试；严格校验完整 case、普通用户、烟测、签名、依赖签收、报告绑定和下载副本；接入点见 [t6-release-gate.md](../../desktop-mvp/acceptance/t6-release-gate.md) | 尚无真实报告可校验；未接入 tag 流水线（缺证据时接入只会误拦发版） |
 - [ ] T7：Release、教程、支持说明、限制、反馈模板和最终签收齐全。
 - [ ] D08/D11/D13 验收链接齐全；无未解决阻断缺陷或未执行必测项。
 - [ ] #27 关联实施 PR 和最终报告；最终完成后才关闭 D14，并据此更新 #15/#39 的发行状态。

@@ -220,7 +220,13 @@ fn backup_inventory_reads_attachment_paths_from_the_database_snapshot() {
 
     let inventory = ArchiveStore::backup_inventory_from_snapshot(&snapshot).unwrap();
     assert_eq!(inventory.counts.attachments, 1);
-    assert_eq!(inventory.referenced_paths, vec!["attachments/example.eml"]);
+    assert_eq!(inventory.referenced_files.len(), 1);
+    assert_eq!(
+        inventory.referenced_files[0].path,
+        "attachments/example.eml"
+    );
+    assert_eq!(inventory.referenced_files[0].size_bytes, 10);
+    assert_eq!(inventory.referenced_files[0].sha256, "a".repeat(64));
 }
 
 #[test]

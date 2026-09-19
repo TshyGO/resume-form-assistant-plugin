@@ -9,7 +9,11 @@
     "byteLength": null,
     "sha256": null,
     "downloadUrl": null,
-    "signatureStatus": null
+    "signatureStatus": null,
+    "signaturePolicy": null,
+    "signerSubject": null,
+    "signerThumbprint": null,
+    "unsignedApproval": null
   },
   "extension": {
     "version": null,
@@ -18,7 +22,9 @@
     "sha256": null,
     "downloadUrl": null,
     "distributionChannel": null,
-    "extensionId": null
+    "extensionId": null,
+    "manifestSha256": null,
+    "packageTreeSha256": null
   },
   "registeredBy": null,
   "registeredAt": null,

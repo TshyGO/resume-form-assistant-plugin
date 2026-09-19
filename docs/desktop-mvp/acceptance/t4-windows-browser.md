@@ -22,13 +22,17 @@ python desktop/scripts/d14_acceptance_check.py prepare `
   --source-commit "<40 位源码 SHA>" `
   --desktop-version "0.1.0" `
   --desktop-url "<候选安装包下载地址>" `
-  --extension-url "<候选 ZIP 下载地址>"
+  --extension-url "<候选 ZIP 下载地址>" `
+  --expected-signer-thumbprint "<发布证书指纹>"
 ```
+
+若当前范围明确批准未签名候选，用 `--unsigned-approval "<具名决定/issue 链接>"` 取代证书指纹；`UnknownError`、`HashMismatch` 等状态一律拒绝。下载地址必须是无账号、无查询参数、无 fragment 的稳定 HTTPS 地址，不能把 token 或临时签名写进报告。
 
 脚本会：
 
 - 复算两个产物的 SHA-256 和字节数；
-- 要求插件 ZIP 与发布 allowlist 完全一致、固定公钥导出的 ID 为 `diagjmploldedipjdenmecmjokckelkl`、且不含 `D14_SYNTHETIC_*`；
+- 从指定源码 commit 读取桌面版本和协议常量，拒绝与命令行登记值不一致的候选；
+- 要求插件 ZIP 与发布 allowlist、指定源码 commit 的全部发布文件逐字节一致；核对 MV3、权限、host 权限、CSP/可访问资源、无 `update_url`、固定公钥 ID，并扫描全部文件的 `D14_SYNTHETIC_*`；
 - 记录 Windows、Chrome、Edge、WebView2、时区和标准用户身份；
 - 分别创建 `chrome/report.json` 与 `edge/report.json`，所有 case 保持 `NOT_RUN`。
 
@@ -57,7 +61,7 @@ python desktop/scripts/d14_acceptance_check.py inspect-installed `
   --extension-zip "C:\candidate\resume-pro-v0.4.0.zip"
 ```
 
-检查器要求两个 HKCU 注册项都存在、清单 `path` 精确指向安装目录、`type=stdio`，并且 `allowed_origins` 只有固定商店 ID。它不会把 J01 自动标成通过，因为“无终端闪窗、安装文案、实际点击路径”仍需人看。
+检查器要求 HKCU 卸载记录唯一且版本、安装目录、卸载命令与候选一致；已安装 EXE 的版本和签名策略必须与候选匹配；两个 Native Messaging 注册项都存在、清单 `path` 精确指向安装目录、`type=stdio`，且 `allowed_origins` 只有固定商店 ID。工作区、临时目录或开发注册不能通过。它不会把 J01 自动标成通过，因为“无终端闪窗、安装文案、实际点击路径”仍需人看。
 
 ## 3. 安装后真实浏览器烟测
 
@@ -80,7 +84,7 @@ python desktop/scripts/d14_acceptance_check.py installed-smoke `
   --extension-dir "C:\candidate\extension"
 ```
 
-此烟测使用临时 Profile 与临时合成档案，但不覆盖生产注册：真实浏览器通过安装后的 host 完成握手、保存岗位、绑定、确认投递，并确认队列清空。结果写入各浏览器的 `installed-smoke.json`。它只作为 J01/J03 的机器证据之一，不自动修改 case 状态。
+Edge 使用临时 Profile；Chrome 使用只装候选扩展的专用隔离 Profile。两者都把 host 指向临时合成档案且不覆盖生产注册：启动前后 `--quit` 必须成功并确认进程消失，临时数据目录必须实际产生档案文件，真实浏览器再完成握手、保存岗位、绑定、确认投递和队列清空。结果写入各浏览器的 `installed-smoke.json`。它只作为 J01/J03 的机器证据之一，不自动修改 case 状态。
 
 `war_browser_check.py`、`d07_browser_check.py`、`d08_browser_check.py` 支持 `--browser chromium|edge --extension-dir <候选解压目录>`；其中 Chromium 是 Chrome for Testing，不是正式版 Chrome。它们会使用隔离的开发注册或临时二进制，适合补充回归，不能替代上面的生产注册烟测。
 
@@ -112,7 +116,7 @@ python desktop/scripts/d14_acceptance_check.py verify `
   --extension-zip "C:\candidate\resume-pro-v0.4.0.zip"
 ```
 
-具名审阅人确认 Chrome 与 Edge 的 J01–J08 都有真实证据并设为 `PASS` 后，再运行：
+具名审阅人确认 Chrome 与 Edge 的 J01–J08、F01–F13 均有有效证据并设为 `PASS`，D08/D11/D13 已具名签收，且安装后烟测为 `PASS` 后，再运行：
 
 ```powershell
 python desktop/scripts/d14_acceptance_check.py verify `
@@ -122,4 +126,4 @@ python desktop/scripts/d14_acceptance_check.py verify `
   --require-complete
 ```
 
-`BLOCKED`、`NOT_RUN`、缺下载地址、缺版本、缺证据、注册未核实、产物哈希变化都会使完成门禁失败。
+重复/缺失 case、空证据、管理员会话、`BLOCKED`、`NOT_RUN`、未签收依赖、烟测失败、缺下载地址/版本、注册或安装来源未核实、签名策略不成立、产物哈希变化都会使完成门禁失败。

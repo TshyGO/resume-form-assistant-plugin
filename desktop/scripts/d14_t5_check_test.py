@@ -29,6 +29,8 @@ class T5CheckTests(unittest.TestCase):
             protocolVersion=candidate["protocolVersion"],
             desktopArtifact=T5.artifact_binding(candidate, "desktop"),
             extensionArtifact=T5.artifact_binding(candidate, "extension"),
+            completedAt="2026-09-19T01:00:00Z",
+            environment={"accountType": "standard-user"},
         )
         return value
 
@@ -49,6 +51,18 @@ class T5CheckTests(unittest.TestCase):
         }
         self.assertEqual(T5.verify_report(report, self.candidate(), True), [])
 
+        report["checks"][0]["evidence"] = [""]
+        self.assertIn(
+            "T5-R01: PASS requires non-empty evidence strings",
+            T5.verify_report(report, self.candidate(), True),
+        )
+        report["checks"][0]["evidence"] = ["evidence.json"]
+        report["environment"]["accountType"] = "administrator"
+        self.assertIn(
+            "T5 completion requires environment.accountType=standard-user",
+            T5.verify_report(report, self.candidate(), True),
+        )
+
     def test_candidate_mismatch_is_rejected(self):
         report = self.report()
         report["extensionArtifact"]["sha256"] = "d" * 64
@@ -56,6 +70,23 @@ class T5CheckTests(unittest.TestCase):
             "extensionArtifact does not match the candidate",
             T5.verify_report(report, self.candidate(), False),
         )
+
+    def test_t5_baseline_requires_the_full_t4_matrix_and_smoke(self):
+        baseline = {
+            "cases": [
+                {"id": case_id, "status": "PASS", "evidence": ["evidence"]}
+                for case_id in T5.T4_CASES
+            ],
+            "environment": {"accountType": "standard-user"},
+            "t4Preflight": {
+                "installedRegistration": "VERIFIED",
+                "installedSmoke": {"status": "PASS"},
+            },
+        }
+        T5.validate_t4_baseline(baseline)
+        baseline["cases"].pop()
+        with self.assertRaisesRegex(T5.T5Error, "J01-J08 and F01-F13"):
+            T5.validate_t4_baseline(baseline)
 
     def test_equal_and_preserved_comparisons_distinguish_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:

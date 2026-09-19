@@ -141,6 +141,9 @@ jobs:
         working-directory: desktop
         run: node --test scripts/check-release-acceptance.test.mjs
 
+      - name: D14 fixture drift check
+        run: node docs/desktop-mvp/acceptance/fixtures/d14-v1/generate.mjs --check
+
       - name: Protocol browser catalog
         working-directory: desktop/crates/protocol
         run: |

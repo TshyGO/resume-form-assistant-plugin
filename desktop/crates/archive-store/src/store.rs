@@ -270,21 +270,44 @@ impl ArchiveStore {
             attachments: count("SELECT COUNT(*) FROM attachment_blobs")?,
         };
         let mut stmt = conn.prepare(
-            "SELECT stored_rel_path FROM attachment_blobs \
-             UNION ALL SELECT stored_rel_path FROM resume_snapshots",
+            "SELECT stored_rel_path, size_bytes, sha256 FROM attachment_blobs \
+             UNION ALL SELECT stored_rel_path, byte_size, sha256 FROM resume_snapshots",
         )?;
-        let mut referenced_paths = Vec::new();
-        for row in stmt.query_map([], |row| row.get::<_, String>(0))? {
-            let path = row?;
+        let mut referenced_files = Vec::new();
+        for row in stmt.query_map([], |row| {
+            Ok(crate::BackupFileReference {
+                path: row.get(0)?,
+                size_bytes: row.get(1)?,
+                sha256: row.get(2)?,
+            })
+        })? {
+            let mut reference = row?;
+            let path = &reference.path;
             if !(path.starts_with("attachments/") || path.starts_with("snapshots/")) {
-                return Err(StoreError::PathInvalid(path));
+                return Err(StoreError::PathInvalid(path.clone()));
             }
-            referenced_paths.push(path);
+            if reference.size_bytes < 0 {
+                return Err(StoreError::Validation(format!(
+                    "negative size for backup reference {path}"
+                )));
+            }
+            if reference.sha256.len() != 64
+                || !reference
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(StoreError::Validation(format!(
+                    "invalid sha256 for backup reference {path}"
+                )));
+            }
+            reference.sha256.make_ascii_lowercase();
+            referenced_files.push(reference);
         }
-        referenced_paths.sort();
+        referenced_files.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(BackupSnapshotInventory {
             counts,
-            referenced_paths,
+            referenced_files,
         })
     }
 

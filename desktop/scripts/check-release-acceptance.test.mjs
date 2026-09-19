@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { checkGate, JOURNEYS, T5_CHECKS } from "./check-release-acceptance.mjs";
+import { checkGate, REQUIRED_CASES, T5_CHECKS } from "./check-release-acceptance.mjs";
 
 const json = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -24,8 +24,16 @@ function fixture() {
   const candidate = {
     schemaVersion: 1, fixtureVersion: "d14-v1", testedSourceCommit: "a".repeat(40),
     desktopVersion: "0.1.0", extensionVersion: "0.4.0", protocolVersion: 1,
-    desktop: { ...artifact("setup.exe", desktopBytes, "https://example.test/setup"), signatureStatus: "NotSigned" },
-    extension: { ...artifact("extension.zip", extensionBytes, "https://example.test/zip"), extensionId: "diagjmploldedipjdenmecmjokckelkl" },
+    desktop: {
+      ...artifact("setup.exe", desktopBytes, "https://example.test/setup"),
+      signatureStatus: "NotSigned", signaturePolicy: "UNSIGNED_APPROVED",
+      signerSubject: null, signerThumbprint: null, unsignedApproval: "D14 scope owner 2026-09-19",
+    },
+    extension: {
+      ...artifact("extension.zip", extensionBytes, "https://example.test/zip"),
+      extensionId: "diagjmploldedipjdenmecmjokckelkl",
+      manifestSha256: "b".repeat(64), packageTreeSha256: "c".repeat(64),
+    },
   };
   json(join(dir, "candidate.json"), candidate);
   const binding = {
@@ -36,12 +44,30 @@ function fixture() {
     extensionArtifact: Object.fromEntries(["name", "sha256", "downloadUrl"].map((key) => [key, candidate.extension[key]])),
   };
   const review = { reviewer: "owner", reviewedAt: "2026-09-19T00:00:00Z", decision: "APPROVED", blockingDefects: [] };
+  const dependencyRecords = ["D08", "D11", "D13"].map((id) => ({
+    id, signedOff: true, acceptanceEvidence: ["evidence"], signedOffBy: "owner", signedOffAt: "2026-09-19",
+  }));
+  const reportDependencies = dependencyRecords.map((item, index) => ({
+    issue: [22, 25, 29][index], acceptanceEvidence: item.acceptanceEvidence,
+    signedOff: item.signedOff, signedOffBy: item.signedOffBy, signedOffAt: item.signedOffAt,
+  }));
   for (const browser of ["chrome", "edge"]) {
     json(join(dir, `${browser}.json`), {
       ...binding, completedAt: "2026-09-19T00:00:00Z",
-      environment: { browser, browserVersion: "1", osBuild: "Windows", webview2Version: "1" },
-      t4Preflight: { installedRegistration: "VERIFIED" },
-      cases: JOURNEYS.map((id) => ({ id, status: "PASS", evidence: ["evidence"] })), review,
+      environment: {
+        browser, browserVersion: "1", osBuild: "Windows", webview2Version: "1",
+        accountType: "standard-user",
+      },
+      t4Preflight: {
+        candidateVerified: true, installedRegistration: "VERIFIED",
+        installedSmoke: { status: "PASS" },
+        extensionManifestSha256: candidate.extension.manifestSha256,
+        extensionPackageTreeSha256: candidate.extension.packageTreeSha256,
+        desktopSignatureStatus: candidate.desktop.signatureStatus,
+        desktopSignaturePolicy: candidate.desktop.signaturePolicy,
+      },
+      cases: REQUIRED_CASES.map((id) => ({ id, status: "PASS", evidence: ["evidence"] })),
+      dependencies: reportDependencies, review,
     });
   }
   json(join(dir, "t5.json"), {
@@ -49,9 +75,7 @@ function fixture() {
     checks: T5_CHECKS.map((id) => ({ id, status: "PASS", evidence: ["evidence"] })), review,
   });
   json(join(dir, "dependencies.json"), {
-    dependencies: ["D08", "D11", "D13"].map((id) => ({
-      id, signedOff: true, acceptanceEvidence: ["evidence"], signedOffBy: "owner", signedOffAt: "2026-09-19",
-    })),
+    dependencies: dependencyRecords,
   });
   const gate = {
     schemaVersion: 1, candidateManifest: "candidate.json", dependencies: "dependencies.json",
@@ -108,4 +132,32 @@ test("NOT_RUN T5 evidence and blocking review defects fail closed", () => {
   gate.review.blockingDefects = ["BLOCK-1"];
   json(gatePath, gate);
   assert.throws(() => checkGate(gatePath), /release gate has blocking defects/);
+});
+
+test("missing fault cases, admin execution, and blank evidence fail closed", () => {
+  const { dir, gatePath } = fixture();
+  const chrome = JSON.parse(readFileSync(join(dir, "chrome.json"), "utf8"));
+  chrome.cases.pop();
+  json(join(dir, "chrome.json"), chrome);
+  assert.throws(() => checkGate(gatePath), /J01-J08 and F01-F13/);
+
+  const second = fixture();
+  const edge = JSON.parse(readFileSync(join(second.dir, "edge.json"), "utf8"));
+  edge.environment.accountType = "administrator";
+  json(join(second.dir, "edge.json"), edge);
+  assert.throws(() => checkGate(second.gatePath), /standard user/);
+
+  const third = fixture();
+  const t5 = JSON.parse(readFileSync(join(third.dir, "t5.json"), "utf8"));
+  t5.checks[0].evidence = [""];
+  json(join(third.dir, "t5.json"), t5);
+  assert.throws(() => checkGate(third.gatePath), /T5-R01 must be PASS with evidence/);
+});
+
+test("candidate URLs with credentials or query tokens fail closed", () => {
+  const { dir, gatePath } = fixture();
+  const candidate = JSON.parse(readFileSync(join(dir, "candidate.json"), "utf8"));
+  candidate.desktop.downloadUrl = "https://example.test/setup?token=secret";
+  json(join(dir, "candidate.json"), candidate);
+  assert.throws(() => checkGate(gatePath), /credential-free/);
 });

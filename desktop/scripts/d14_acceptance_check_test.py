@@ -60,6 +60,8 @@ class D14AcceptanceCheckTests(unittest.TestCase):
             details = D14.inspect_extension_zip(archive_path)
             self.assertEqual(details["extensionId"], D14.EXPECTED_EXTENSION_ID)
             self.assertEqual(details["fileCount"], len(expected))
+            self.assertRegex(details["manifestSha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(details["packageTreeSha256"], r"^[0-9a-f]{64}$")
 
             with zipfile.ZipFile(archive_path, "a") as archive:
                 archive.writestr("tests/secret.txt", b"D14_SYNTHETIC_SECRET")
@@ -86,9 +88,9 @@ class D14AcceptanceCheckTests(unittest.TestCase):
             report = Path(temp) / "report.json"
             D14.write_json(report, template)
             errors = D14.verify_report(report, require_complete=False)
-            self.assertIn("J01: PASS requires evidence", errors)
+            self.assertIn("J01: PASS requires non-empty evidence strings", errors)
             complete = D14.verify_report(report, require_complete=True)
-            self.assertTrue(any("J02: T4 completion requires PASS" in error for error in complete))
+            self.assertTrue(any("J02: completion requires PASS" in error for error in complete))
             self.assertIn("T4 completion requires review.decision=APPROVED", complete)
 
     def test_report_must_match_candidate_and_named_review(self):
@@ -96,18 +98,30 @@ class D14AcceptanceCheckTests(unittest.TestCase):
         candidate = {
             "fixtureVersion": "d14-v1",
             "testedSourceCommit": "a" * 40,
+            "desktopVersion": "0.1.0",
+            "extensionVersion": "0.4.0",
             "protocolVersion": 1,
-            "desktop": {"name": "setup.exe", "sha256": "b" * 64, "downloadUrl": "https://example.test/setup"},
-            "extension": {"name": "extension.zip", "sha256": "c" * 64, "downloadUrl": "https://example.test/zip"},
+            "desktop": {
+                "name": "setup.exe", "sha256": "b" * 64,
+                "downloadUrl": "https://example.test/setup",
+                "signatureStatus": "NotSigned", "signaturePolicy": "UNSIGNED_APPROVED",
+            },
+            "extension": {
+                "name": "extension.zip", "sha256": "c" * 64,
+                "downloadUrl": "https://example.test/zip",
+                "manifestSha256": "d" * 64, "packageTreeSha256": "e" * 64,
+            },
         }
+        artifact_fields = ("name", "sha256", "downloadUrl")
         report.update(
             fixtureVersion=candidate["fixtureVersion"],
             testedSourceCommit=candidate["testedSourceCommit"],
             desktopVersion="0.1.0",
             extensionVersion="0.4.0",
             protocolVersion=candidate["protocolVersion"],
-            desktopArtifact=dict(candidate["desktop"]),
-            extensionArtifact=dict(candidate["extension"]),
+            completedAt="2026-09-19T01:00:00Z",
+            desktopArtifact={key: candidate["desktop"][key] for key in artifact_fields},
+            extensionArtifact={key: candidate["extension"][key] for key in artifact_fields},
             environment={
                 "osBuild": "Windows test", "architecture": "AMD64", "accountType": "standard-user",
                 "timezone": "UTC", "browser": "chrome", "browserVersion": "1", "webview2Version": "1",
@@ -117,9 +131,24 @@ class D14AcceptanceCheckTests(unittest.TestCase):
                 "decision": "APPROVED", "blockingDefects": [],
             },
         )
-        report["t4Preflight"] = {"installedRegistration": "VERIFIED"}
+        report["t4Preflight"] = {
+            "candidateVerified": True,
+            "installedRegistration": "VERIFIED",
+            "installedSmoke": {"status": "PASS"},
+            "extensionManifestSha256": candidate["extension"]["manifestSha256"],
+            "extensionPackageTreeSha256": candidate["extension"]["packageTreeSha256"],
+            "desktopSignatureStatus": candidate["desktop"]["signatureStatus"],
+            "desktopSignaturePolicy": candidate["desktop"]["signaturePolicy"],
+        }
+        report["dependencies"] = [
+            {
+                "issue": issue, "implementationPrs": [], "acceptanceEvidence": ["evidence"],
+                "signedOff": True, "signedOffBy": "owner", "signedOffAt": "2026-09-19",
+            }
+            for issue in (22, 25, 29)
+        ]
         for case in report["cases"]:
-            if case["id"] in D14.JOURNEYS:
+            if case["id"] in D14.REQUIRED_CASES:
                 case.update(status="PASS", evidence=["evidence.json"])
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "report.json"
@@ -131,6 +160,59 @@ class D14AcceptanceCheckTests(unittest.TestCase):
                 "desktopArtifact does not match artifacts.json",
                 D14.verify_report(path, True, candidate),
             )
+
+    def test_signature_policy_rejects_ambiguous_or_mismatched_signatures(self):
+        signed = {"status": "Valid", "signerSubject": "CN=Resume Pro", "signerThumbprint": "AB12"}
+        self.assertEqual(
+            D14.apply_signature_policy(signed, "ab 12", None)["policy"],
+            "SIGNED",
+        )
+        with self.assertRaisesRegex(D14.AcceptanceError, "thumbprint"):
+            D14.apply_signature_policy(signed, "FFFF", None)
+        unsigned = {"status": "NotSigned", "signerSubject": None, "signerThumbprint": None}
+        with self.assertRaisesRegex(D14.AcceptanceError, "unsigned-approval"):
+            D14.apply_signature_policy(unsigned, None, None)
+        self.assertEqual(
+            D14.apply_signature_policy(unsigned, None, "owner approved")["policy"],
+            "UNSIGNED_APPROVED",
+        )
+
+    def test_candidate_url_rejects_credentials_query_and_fragment(self):
+        D14.validate_candidate_url("https://downloads.example.test/setup.exe", "desktop")
+        for value in (
+            "https://user:secret@example.test/setup.exe",
+            "https://example.test/setup.exe?token=secret",
+            "https://example.test/setup.exe#fragment",
+        ):
+            with self.subTest(value=value), self.assertRaises(D14.AcceptanceError):
+                D14.validate_candidate_url(value, "desktop")
+
+    def test_source_versions_are_derived_from_the_candidate_commit(self):
+        blobs = {
+            "desktop/src-tauri/tauri.conf.json": b'{"version":"0.1.0"}',
+            "link/envelope.mjs": b"export const PROTOCOL_VERSION = 7;",
+        }
+        with patch.object(D14, "git_blob", side_effect=lambda _commit, name: blobs[name]):
+            self.assertEqual(D14.source_candidate_versions("a" * 40), ("0.1.0", 7))
+
+    def test_git_object_id_matches_the_standard_empty_blob(self):
+        self.assertEqual(
+            D14.git_object_id(b"", "sha1"),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        )
+
+    def test_complete_report_rejects_duplicate_case_blank_evidence_and_failed_smoke(self):
+        report = D14.read_json(D14.REPORT_TEMPLATE)
+        report["cases"].append(dict(report["cases"][0]))
+        report["cases"][0].update(status="PASS", evidence=[""])
+        report["t4Preflight"] = {"installedRegistration": "VERIFIED", "installedSmoke": {"status": "FAIL"}}
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "report.json"
+            D14.write_json(path, report)
+            errors = D14.verify_report(path, True)
+        self.assertTrue(any("duplicate case ids" in error for error in errors))
+        self.assertTrue(any("non-empty evidence strings" in error for error in errors))
+        self.assertIn("T4 completion requires installedSmoke.status=PASS", errors)
 
 
 if __name__ == "__main__":

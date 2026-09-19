@@ -741,8 +741,15 @@ pub struct ArchiveCounts {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackupSnapshotInventory {
     pub counts: ArchiveCounts,
-    /// 附件和简历快照在档案根目录下的受控相对路径。
-    pub referenced_paths: Vec<String>,
+    /// 附件和简历快照在数据库一致性快照中声明的路径、大小与内容哈希。
+    pub referenced_files: Vec<BackupFileReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupFileReference {
+    pub path: String,
+    pub size_bytes: i64,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

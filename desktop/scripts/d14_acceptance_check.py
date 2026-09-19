@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,8 @@ EXPECTED_ORIGIN = f"chrome-extension://{EXPECTED_EXTENSION_ID}/"
 HOST_NAME = "com.resumepro.desktop"
 VALID_STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"}
 JOURNEYS = {f"J{i:02d}" for i in range(1, 9)}
+FAULTS = {f"F{i:02d}" for i in range(1, 14)}
+REQUIRED_CASES = JOURNEYS | FAULTS
 CORE_EXTENSION_FILES = {
     "manifest.json", "background.js", "content.js", "content.css", "sidebar-state.js",
     "ai-helpers.js", "form-agent.js", "ai-worker.js", "ai-host.js", "ai-host.html",
@@ -44,8 +47,19 @@ CORE_EXTENSION_FILES = {
     "popup.html", "popup.css", "popup.js", "xlsx.full.min.js",
     "mammoth.browser.min.js", "README.md", "LICENSE",
 }
-TEXT_SUFFIXES = {".json", ".js", ".mjs", ".cjs", ".html", ".css", ".md", ".txt"}
 SYNTHETIC_MARKER = b"D14_SYNTHETIC_"
+SECURITY_MANIFEST_FIELDS = (
+    "manifest_version",
+    "minimum_chrome_version",
+    "permissions",
+    "host_permissions",
+    "background",
+    "content_security_policy",
+    "web_accessible_resources",
+    "externally_connectable",
+    "update_url",
+    "content_scripts",
+)
 
 
 class AcceptanceError(RuntimeError):
@@ -68,6 +82,91 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def non_empty_strings(value) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
+def validate_candidate_url(value: str, label: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise AcceptanceError(f"--{label}-url must be an https candidate download URL")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise AcceptanceError(
+            f"--{label}-url must be a stable credential-free URL without query or fragment"
+        )
+
+
+def git_blob(commit: str, name: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "-c", f"safe.directory={ROOT.as_posix()}", "show", f"{commit}:{name}"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AcceptanceError(
+            f"could not read {name} from source commit {commit}: "
+            f"{completed.stderr.decode(errors='replace').strip()}"
+        )
+    return completed.stdout
+
+
+def git_tree_blob_ids(commit: str) -> tuple[str, dict[str, str]]:
+    format_result = subprocess.run(
+        ["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "--show-object-format"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    algorithm = format_result.stdout.strip()
+    if format_result.returncode != 0 or algorithm not in {"sha1", "sha256"}:
+        raise AcceptanceError("could not determine the repository object hash format")
+    completed = subprocess.run(
+        ["git", "-c", f"safe.directory={ROOT.as_posix()}", "ls-tree", "-r", "-z", commit],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AcceptanceError(
+            f"could not list source commit {commit}: "
+            f"{completed.stderr.decode(errors='replace').strip()}"
+        )
+    blobs = {}
+    for record in completed.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, name = record.split(b"\t", 1)
+        _mode, kind, object_id = metadata.decode("ascii").split(" ")
+        if kind == "blob":
+            blobs[name.decode("utf-8")] = object_id
+    return algorithm, blobs
+
+
+def git_object_id(content: bytes, algorithm: str) -> str:
+    digest = hashlib.new(algorithm)
+    digest.update(f"blob {len(content)}\0".encode("ascii"))
+    digest.update(content)
+    return digest.hexdigest()
+
+
+def source_candidate_versions(commit: str) -> tuple[str, int]:
+    config = json.loads(git_blob(commit, "desktop/src-tauri/tauri.conf.json"))
+    desktop_version = config.get("version")
+    envelope = git_blob(commit, "link/envelope.mjs").decode("utf-8")
+    match = re.search(r"export const PROTOCOL_VERSION\s*=\s*(\d+)\s*;", envelope)
+    if not desktop_version or not match:
+        raise AcceptanceError("could not derive desktop/protocol version from source commit")
+    return str(desktop_version), int(match.group(1))
+
+
 def extension_id_from_key(encoded_key: str) -> str:
     try:
         key = base64.b64decode(encoded_key, validate=True)
@@ -86,7 +185,7 @@ def safe_zip_name(name: str) -> str:
     return path.as_posix()
 
 
-def inspect_extension_zip(path: Path) -> dict:
+def inspect_extension_zip(path: Path, source_commit: str | None = None) -> dict:
     expected = CORE_EXTENSION_FILES | set(read_json(REVIEWED_ASSETS))
     with zipfile.ZipFile(path) as archive:
         files: dict[str, zipfile.ZipInfo] = {}
@@ -112,21 +211,49 @@ def inspect_extension_zip(path: Path) -> dict:
                 details.append(f"unexpected {len(extra)} files: {', '.join(extra[:8])}")
             raise AcceptanceError("extension ZIP does not match the reviewed release allowlist; " + "; ".join(details))
 
-        manifest = json.loads(archive.read("manifest.json"))
+        manifest_bytes = archive.read("manifest.json")
+        manifest = json.loads(manifest_bytes)
         extension_id = extension_id_from_key(manifest.get("key", ""))
         if extension_id != EXPECTED_EXTENSION_ID:
             raise AcceptanceError(
                 f"extension key resolves to {extension_id}, expected {EXPECTED_EXTENSION_ID}"
             )
-        for name, info in files.items():
-            if PurePosixPath(name).suffix.lower() in TEXT_SUFFIXES:
-                if SYNTHETIC_MARKER in archive.read(info):
-                    raise AcceptanceError(f"extension ZIP contains a D14 synthetic marker: {name}")
+        reviewed_manifest_bytes = (
+            git_blob(source_commit, "manifest.json")
+            if source_commit is not None
+            else (ROOT / "manifest.json").read_bytes()
+        )
+        reviewed_manifest = json.loads(reviewed_manifest_bytes)
+        if manifest.get("manifest_version") != 3:
+            raise AcceptanceError("extension ZIP is not a Manifest V3 package")
+        for field in SECURITY_MANIFEST_FIELDS:
+            if manifest.get(field) != reviewed_manifest.get(field):
+                raise AcceptanceError(f"extension manifest security field differs from source: {field}")
+        if manifest.get("update_url") is not None:
+            raise AcceptanceError("candidate ZIP must not contain update_url")
+
+        source_algorithm, source_blobs = (
+            git_tree_blob_ids(source_commit) if source_commit is not None else (None, {})
+        )
+        tree_digest = hashlib.sha256()
+        for name in sorted(files):
+            content = archive.read(files[name])
+            if SYNTHETIC_MARKER in content:
+                raise AcceptanceError(f"extension ZIP contains a D14 synthetic marker: {name}")
+            if source_commit is not None:
+                expected_object = source_blobs.get(name)
+                if expected_object is None or git_object_id(content, source_algorithm) != expected_object:
+                    raise AcceptanceError(f"extension ZIP content differs from source commit: {name}")
+            tree_digest.update(name.encode("utf-8"))
+            tree_digest.update(b"\0")
+            tree_digest.update(hashlib.sha256(content).digest())
 
     return {
         "version": manifest.get("version"),
         "extensionId": extension_id,
         "fileCount": len(files),
+        "manifestSha256": sha256_bytes(manifest_bytes),
+        "packageTreeSha256": tree_digest.hexdigest(),
     }
 
 
@@ -137,11 +264,17 @@ def assert_extracted_matches_zip(archive_path: Path, directory: Path) -> None:
             for info in archive.infolist()
             if not info.is_dir()
         }
-    actual = {
-        file.relative_to(directory).as_posix(): sha256_file(file)
-        for file in directory.rglob("*")
-        if file.is_file()
-    }
+    actual = {}
+    for file in directory.rglob("*"):
+        metadata = file.lstat()
+        is_reparse = bool(
+            getattr(metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+        if file.is_symlink() or is_reparse:
+            raise AcceptanceError(f"extracted extension contains a link/reparse point: {file}")
+        if file.is_file():
+            actual[file.relative_to(directory).as_posix()] = sha256_file(file)
     if actual != expected:
         missing = sorted(expected.keys() - actual.keys())
         extra = sorted(actual.keys() - expected.keys())
@@ -201,9 +334,66 @@ def file_version(path: Path) -> str | None:
     )
 
 
-def authenticode_status(path: Path) -> str | None:
+def authenticode_metadata(path: Path) -> dict:
     escaped = str(path.resolve(strict=True)).replace("'", "''")
-    return powershell_value(f"(Get-AuthenticodeSignature -LiteralPath '{escaped}').Status")
+    raw = powershell_value(
+        f"$signature=Get-AuthenticodeSignature -LiteralPath '{escaped}'; "
+        "[pscustomobject]@{status=[string]$signature.Status; "
+        "signerSubject=[string]$signature.SignerCertificate.Subject; "
+        "signerThumbprint=[string]$signature.SignerCertificate.Thumbprint} | "
+        "ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AcceptanceError(f"could not parse Authenticode metadata for {path}") from exc
+    return {
+        "status": value.get("status") or None,
+        "signerSubject": value.get("signerSubject") or None,
+        "signerThumbprint": (value.get("signerThumbprint") or "").upper() or None,
+    }
+
+
+def apply_signature_policy(
+    metadata: dict,
+    expected_thumbprint: str | None,
+    unsigned_approval: str | None,
+) -> dict:
+    status = metadata.get("status")
+    expected = expected_thumbprint.replace(" ", "").upper() if expected_thumbprint else None
+    if status == "Valid":
+        actual = metadata.get("signerThumbprint")
+        if not expected:
+            raise AcceptanceError("a Valid installer requires --expected-signer-thumbprint")
+        if actual != expected:
+            raise AcceptanceError(f"installer signer thumbprint {actual} does not match {expected}")
+        return {**metadata, "policy": "SIGNED", "unsignedApproval": None}
+    if status == "NotSigned":
+        if not unsigned_approval or not unsigned_approval.strip():
+            raise AcceptanceError("an unsigned installer requires --unsigned-approval")
+        if expected:
+            raise AcceptanceError("an unsigned installer cannot satisfy an expected signer thumbprint")
+        return {
+            **metadata,
+            "policy": "UNSIGNED_APPROVED",
+            "unsignedApproval": unsigned_approval.strip(),
+        }
+    raise AcceptanceError(f"installer Authenticode status is not acceptable: {status}")
+
+
+def versions_match(actual: str | None, expected: str | None) -> bool:
+    if not actual or not expected:
+        return False
+    normalize = lambda value: tuple(int(part) for part in re.findall(r"\d+", value))
+    left = list(normalize(actual))
+    right = list(normalize(expected))
+    while left and left[-1] == 0:
+        left.pop()
+    while right and right[-1] == 0:
+        right.pop()
+    return left == right
 
 
 def browser_candidates() -> dict[str, list[Path]]:
@@ -294,6 +484,83 @@ def windows_environment(browser: str) -> dict:
     }
 
 
+def uninstall_registrations() -> list[dict]:
+    if sys.platform != "win32":
+        raise AcceptanceError("uninstall registration inspection is Windows-only")
+    raw = powershell_value(
+        "$items=@(Get-ItemProperty "
+        "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+        "-ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -eq 'Resume Pro Desktop'} | "
+        "Select-Object PSChildName,DisplayName,DisplayVersion,InstallLocation,UninstallString); "
+        "$items | ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AcceptanceError("could not parse the per-user uninstall registration") from exc
+    return value if isinstance(value, list) else [value]
+
+
+def validate_install_registration(
+    records: list[dict], installed_exe: Path, expected_version: str
+) -> dict:
+    if len(records) != 1:
+        raise AcceptanceError(
+            f"expected one HKCU uninstall registration for Resume Pro Desktop, found {len(records)}"
+        )
+    record = records[0]
+    if record.get("DisplayName") != "Resume Pro Desktop":
+        raise AcceptanceError("uninstall DisplayName is not Resume Pro Desktop")
+    if not versions_match(record.get("DisplayVersion"), expected_version):
+        raise AcceptanceError(
+            f"uninstall DisplayVersion {record.get('DisplayVersion')} does not match {expected_version}"
+        )
+    location = record.get("InstallLocation")
+    if not isinstance(location, str) or not location.strip():
+        raise AcceptanceError("uninstall registration has no InstallLocation")
+    install_dir = Path(location.strip().strip('"')).resolve(strict=True)
+    try:
+        installed_exe.relative_to(install_dir)
+    except ValueError as exc:
+        raise AcceptanceError(
+            f"installed executable {installed_exe} is outside InstallLocation {install_dir}"
+        ) from exc
+    forbidden = [ROOT.resolve(), Path(tempfile.gettempdir()).resolve()]
+    if any(installed_exe == root or root in installed_exe.parents for root in forbidden):
+        raise AcceptanceError("installed executable points at a workspace or temporary directory")
+    if not record.get("UninstallString"):
+        raise AcceptanceError("uninstall registration has no UninstallString")
+    return {
+        "productCode": record.get("PSChildName"),
+        "displayName": record.get("DisplayName"),
+        "displayVersion": record.get("DisplayVersion"),
+        "installLocation": evidence_path(install_dir),
+        "uninstallStringPresent": True,
+    }
+
+
+def validate_installed_signature(installed_exe: Path, desktop_candidate: dict) -> dict:
+    metadata = authenticode_metadata(installed_exe)
+    if not metadata:
+        raise AcceptanceError("could not determine installed executable Authenticode status")
+    policy = desktop_candidate.get("signaturePolicy")
+    if policy == "SIGNED":
+        if metadata.get("status") != "Valid":
+            raise AcceptanceError("installed executable signature is not Valid")
+        if metadata.get("signerThumbprint") != desktop_candidate.get("signerThumbprint"):
+            raise AcceptanceError("installed executable signer differs from the candidate installer")
+    elif policy == "UNSIGNED_APPROVED":
+        if metadata.get("status") != "NotSigned":
+            raise AcceptanceError("installed executable signature status differs from unsigned candidate")
+        if not desktop_candidate.get("unsignedApproval"):
+            raise AcceptanceError("unsigned candidate has no scope approval")
+    else:
+        raise AcceptanceError(f"unsupported candidate signature policy: {policy}")
+    return metadata
+
+
 def artifact(path: Path, download_url: str | None) -> dict:
     resolved = path.resolve(strict=True)
     return {
@@ -321,11 +588,22 @@ def prepare(args) -> None:
         raise AcceptanceError(f"run directory already exists; refusing to overwrite evidence: {run_dir}")
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit.lower()):
         raise AcceptanceError("--source-commit must be a full 40-character Git commit")
+    source_desktop_version, source_protocol_version = source_candidate_versions(
+        args.source_commit.lower()
+    )
+    if args.desktop_version != source_desktop_version:
+        raise AcceptanceError(
+            f"--desktop-version {args.desktop_version} differs from source {source_desktop_version}"
+        )
+    if args.protocol_version != source_protocol_version:
+        raise AcceptanceError(
+            f"--protocol-version {args.protocol_version} differs from source {source_protocol_version}"
+        )
     for label, value in (("desktop", args.desktop_url), ("extension", args.extension_url)):
-        parsed = urlparse(value)
-        if parsed.scheme != "https" or not parsed.netloc:
-            raise AcceptanceError(f"--{label}-url must be an https candidate download URL")
-    extension_details = inspect_extension_zip(args.extension_zip.resolve(strict=True))
+        validate_candidate_url(value, label)
+    extension_details = inspect_extension_zip(
+        args.extension_zip.resolve(strict=True), args.source_commit.lower()
+    )
     if not extension_details.get("version"):
         raise AcceptanceError("extension manifest has no version")
 
@@ -340,9 +618,19 @@ def prepare(args) -> None:
 
     desktop = artifact(args.installer, args.desktop_url)
     extension = artifact(args.extension_zip, args.extension_url)
-    desktop["signatureStatus"] = authenticode_status(args.installer)
-    if not desktop["signatureStatus"]:
+    signature = authenticode_metadata(args.installer)
+    if not signature:
         raise AcceptanceError("could not determine the installer Authenticode status")
+    signature = apply_signature_policy(
+        signature, args.expected_signer_thumbprint, args.unsigned_approval
+    )
+    desktop.update({
+        "signatureStatus": signature["status"],
+        "signerSubject": signature["signerSubject"],
+        "signerThumbprint": signature["signerThumbprint"],
+        "signaturePolicy": signature["policy"],
+        "unsignedApproval": signature["unsignedApproval"],
+    })
     extension["distributionChannel"] = "candidate-zip"
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     run_id = args.run_id or run_dir.name
@@ -381,7 +669,10 @@ def prepare(args) -> None:
             "candidateVerified": True,
             "extensionId": extension_details["extensionId"],
             "extensionFileCount": extension_details["fileCount"],
+            "extensionManifestSha256": extension_details["manifestSha256"],
+            "extensionPackageTreeSha256": extension_details["packageTreeSha256"],
             "desktopSignatureStatus": desktop["signatureStatus"],
+            "desktopSignaturePolicy": desktop["signaturePolicy"],
             "installedRegistration": "NOT_INSPECTED",
         }
         write_json(browser_dir / "report.json", report)
@@ -413,6 +704,16 @@ def inspect_installed(args) -> None:
     verify_artifact_path(args.extension_zip, artifacts["extension"], "extension")
 
     installed_exe = args.installed_exe.resolve(strict=True)
+    installed_version = file_version(installed_exe)
+    if not versions_match(installed_version, artifacts.get("desktopVersion")):
+        raise AcceptanceError(
+            f"installed executable version {installed_version} does not match "
+            f"candidate {artifacts.get('desktopVersion')}"
+        )
+    uninstall = validate_install_registration(
+        uninstall_registrations(), installed_exe, artifacts["desktopVersion"]
+    )
+    installed_signature = validate_installed_signature(installed_exe, artifacts["desktop"])
     subkey, manifest_path, payload = registry_manifest(args.browser)
     registered_exe = Path(payload.get("path", "")).resolve(strict=True)
     if registered_exe != installed_exe:
@@ -424,26 +725,54 @@ def inspect_installed(args) -> None:
     if payload.get("allowed_origins") != [EXPECTED_ORIGIN]:
         raise AcceptanceError(f"production allowlist is not exact: {payload.get('allowed_origins')}")
 
-    report["desktopVersion"] = file_version(installed_exe) or report.get("desktopVersion")
     report["environment"] = windows_environment(args.browser)
     report["t4Preflight"]["installedRegistration"] = "VERIFIED"
     report["t4Preflight"]["installedExecutable"] = evidence_path(installed_exe)
     report["t4Preflight"]["registryKey"] = f"HKCU\\{subkey}"
     report["t4Preflight"]["nativeManifest"] = evidence_path(manifest_path)
     report["t4Preflight"]["allowedOrigins"] = payload["allowed_origins"]
+    report["t4Preflight"]["installedVersion"] = installed_version
+    report["t4Preflight"]["installedSignature"] = installed_signature
+    report["t4Preflight"]["uninstallRegistration"] = uninstall
     write_json(report_path, report)
     print(f"verified installed production registration for {args.browser}: {installed_exe}")
 
 
+def running_process_ids(binary: Path) -> list[int]:
+    escaped = str(binary.resolve(strict=True)).replace("'", "''")
+    raw = powershell_value(
+        "$ids=@(Get-CimInstance Win32_Process -ErrorAction Stop | "
+        f"Where-Object {{$_.ExecutablePath -eq '{escaped}'}} | Select-Object -ExpandProperty ProcessId); "
+        "$ids | ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AcceptanceError("could not verify whether the installed process exited") from exc
+    return [int(item) for item in (value if isinstance(value, list) else [value])]
+
+
 def stop_application(binary: Path) -> None:
     flags = 0x08000000 if sys.platform == "win32" else 0
-    subprocess.run(
+    completed = subprocess.run(
         [str(binary), "--quit"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
         timeout=30,
         creationflags=flags,
+    )
+    if completed.returncode != 0:
+        raise AcceptanceError(f"installed application --quit returned {completed.returncode}")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not running_process_ids(binary):
+            return
+        time.sleep(0.25)
+    raise AcceptanceError(
+        f"installed application did not exit; remaining pids={running_process_ids(binary)}"
     )
 
 
@@ -486,6 +815,7 @@ def installed_smoke(args) -> None:
         "bind": None,
         "confirm": None,
         "outboxEmpty": False,
+        "temporaryDataFiles": [],
         "status": "FAIL",
         "failures": [],
     }
@@ -561,9 +891,14 @@ def installed_smoke(args) -> None:
                     )
                     state = worker.evaluate("() => chrome.storage.local.get(null)")
                     results["outboxEmpty"] = not state.get("desktopOutbox") and not state.get("desktopSaveIntents")
+                    results["temporaryDataFiles"] = sorted(
+                        file.relative_to(data_dir).as_posix()
+                        for file in data_dir.rglob("*")
+                        if file.is_file()
+                    )
                 finally:
-                    stop_application(installed_exe)
                     context.close()
+                    stop_application(installed_exe)
         finally:
             stop_application(installed_exe)
 
@@ -577,6 +912,10 @@ def installed_smoke(args) -> None:
         failures.append(f"submission confirmation was not saved: {results['confirm']}")
     if not results["outboxEmpty"]:
         failures.append("extension outbox/intents did not drain")
+    if not results["temporaryDataFiles"]:
+        failures.append(
+            "temporary RESUMEPRO_DATA_DIR stayed empty; the browser may have connected to another instance"
+        )
     results["completedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     results["status"] = "PASS" if not failures else "FAIL"
     write_json(result_path, results)
@@ -598,19 +937,24 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
     ids = [case.get("id") for case in cases]
     if not JOURNEYS.issubset(ids):
         errors.append("report is missing one or more J01-J08 journeys")
+    duplicates = sorted({case_id for case_id in ids if ids.count(case_id) > 1})
+    if duplicates:
+        errors.append(f"report contains duplicate case ids: {duplicates}")
+    if require_complete and set(ids) != REQUIRED_CASES:
+        errors.append("T4 completion requires exactly J01-J08 and F01-F13")
     for case in cases:
         status = case.get("status")
         if status not in VALID_STATUSES:
             errors.append(f"{case.get('id')}: invalid status {status}")
             continue
-        if status in {"PASS", "FAIL"} and not case.get("evidence"):
-            errors.append(f"{case.get('id')}: {status} requires evidence")
+        if status in {"PASS", "FAIL"} and not non_empty_strings(case.get("evidence")):
+            errors.append(f"{case.get('id')}: {status} requires non-empty evidence strings")
         if status == "BLOCKED" and not case.get("defect"):
             errors.append(f"{case.get('id')}: BLOCKED requires a blocker/defect")
-        if status == "NOT_APPLICABLE" and not report.get("scopeDecision"):
+        if status == "NOT_APPLICABLE" and not non_empty_strings(report.get("scopeDecision")):
             errors.append(f"{case.get('id')}: NOT_APPLICABLE requires a scopeDecision")
-        if require_complete and case.get("id") in JOURNEYS and status != "PASS":
-            errors.append(f"{case.get('id')}: T4 completion requires PASS, found {status}")
+        if require_complete and case.get("id") in REQUIRED_CASES and status != "PASS":
+            errors.append(f"{case.get('id')}: completion requires PASS, found {status}")
     if require_complete:
         review = report.get("review") or {}
         if review.get("decision") != "APPROVED":
@@ -621,6 +965,21 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
             errors.append("T4 completion requires review.reviewedAt")
         if review.get("blockingDefects"):
             errors.append("T4 completion rejects non-empty review.blockingDefects")
+        dependencies = report.get("dependencies") or []
+        if [item.get("issue") for item in dependencies] != [22, 25, 29]:
+            errors.append("T4 completion requires dependencies 22, 25 and 29 exactly")
+        for dependency in dependencies:
+            label = f"dependency #{dependency.get('issue')}"
+            if dependency.get("signedOff") is not True:
+                errors.append(f"{label} is not signed off")
+            if not non_empty_strings(dependency.get("acceptanceEvidence")):
+                errors.append(f"{label} requires non-empty acceptanceEvidence")
+            if not dependency.get("signedOffBy"):
+                errors.append(f"{label} requires signedOffBy")
+            if not dependency.get("signedOffAt"):
+                errors.append(f"{label} requires signedOffAt")
+        if not report.get("completedAt"):
+            errors.append("T4 completion requires completedAt")
     for field in ("testedSourceCommit", "desktopVersion", "extensionVersion", "protocolVersion"):
         if report.get(field) in (None, ""):
             errors.append(f"missing {field}")
@@ -632,13 +991,22 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
     for field in ("osBuild", "architecture", "accountType", "browser", "browserVersion", "webview2Version"):
         if not environment.get(field):
             errors.append(f"missing environment.{field}")
-    if report.get("t4Preflight", {}).get("installedRegistration") != "VERIFIED":
+    if require_complete and environment.get("accountType") != "standard-user":
+        errors.append("T4 completion requires environment.accountType=standard-user")
+    preflight = report.get("t4Preflight", {})
+    if preflight.get("installedRegistration") != "VERIFIED":
         errors.append("installed production Native Messaging registration was not verified")
+    if require_complete and preflight.get("candidateVerified") is not True:
+        errors.append("T4 completion requires candidateVerified=true")
+    if require_complete and preflight.get("installedSmoke", {}).get("status") != "PASS":
+        errors.append("T4 completion requires installedSmoke.status=PASS")
     if candidate is not None:
         bindings = {
             "fixtureVersion": candidate.get("fixtureVersion"),
             "testedSourceCommit": candidate.get("testedSourceCommit"),
             "protocolVersion": candidate.get("protocolVersion"),
+            "desktopVersion": candidate.get("desktopVersion"),
+            "extensionVersion": candidate.get("extensionVersion"),
             "desktopArtifact": {
                 key: candidate.get("desktop", {}).get(key)
                 for key in ("name", "sha256", "downloadUrl")
@@ -651,6 +1019,15 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
         for field, expected in bindings.items():
             if report.get(field) != expected:
                 errors.append(f"{field} does not match artifacts.json")
+        preflight_bindings = {
+            "extensionManifestSha256": candidate.get("extension", {}).get("manifestSha256"),
+            "extensionPackageTreeSha256": candidate.get("extension", {}).get("packageTreeSha256"),
+            "desktopSignatureStatus": candidate.get("desktop", {}).get("signatureStatus"),
+            "desktopSignaturePolicy": candidate.get("desktop", {}).get("signaturePolicy"),
+        }
+        for field, expected in preflight_bindings.items():
+            if preflight.get(field) != expected:
+                errors.append(f"t4Preflight.{field} does not match artifacts.json")
     return errors
 
 
@@ -686,6 +1063,15 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--protocol-version", type=int, default=1)
     prepare_parser.add_argument("--desktop-url", required=True)
     prepare_parser.add_argument("--extension-url", required=True)
+    signature_group = prepare_parser.add_mutually_exclusive_group(required=True)
+    signature_group.add_argument(
+        "--expected-signer-thumbprint",
+        help="expected Authenticode signer certificate thumbprint for a signed candidate",
+    )
+    signature_group.add_argument(
+        "--unsigned-approval",
+        help="named scope-decision reference approving this exact unsigned candidate",
+    )
     prepare_parser.set_defaults(handler=prepare)
 
     inspect_parser = commands.add_parser("inspect-installed", help="verify production NM registration")

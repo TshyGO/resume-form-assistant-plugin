@@ -102,7 +102,15 @@ pub fn export_archive(
             archive_id: store.identity().archive_id,
             schema_version: store.schema_version(),
             counts,
-            referenced_paths: inventory.referenced_paths,
+            referenced_files: inventory
+                .referenced_files
+                .into_iter()
+                .map(|item| backup::ReferencedFile {
+                    path: item.path,
+                    size_bytes: item.size_bytes as u64,
+                    sha256: item.sha256,
+                })
+                .collect(),
             settings_json,
             created_at: now.to_string(),
         };
