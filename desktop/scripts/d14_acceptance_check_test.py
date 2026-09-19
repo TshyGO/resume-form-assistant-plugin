@@ -97,6 +97,8 @@ class D14AcceptanceCheckTests(unittest.TestCase):
         report = D14.read_json(D14.REPORT_TEMPLATE)
         candidate = {
             "fixtureVersion": "d14-v1",
+            "buildTarget": "x86_64-pc-windows-msvc",
+            "evidencePurpose": "RELEASE_CANDIDATE",
             "testedSourceCommit": "a" * 40,
             "desktopVersion": "0.1.0",
             "extensionVersion": "0.4.0",
@@ -115,6 +117,8 @@ class D14AcceptanceCheckTests(unittest.TestCase):
         artifact_fields = ("name", "sha256", "downloadUrl")
         report.update(
             fixtureVersion=candidate["fixtureVersion"],
+            buildTarget=candidate["buildTarget"],
+            evidencePurpose=candidate["evidencePurpose"],
             testedSourceCommit=candidate["testedSourceCommit"],
             desktopVersion="0.1.0",
             extensionVersion="0.4.0",
@@ -213,6 +217,18 @@ class D14AcceptanceCheckTests(unittest.TestCase):
         self.assertTrue(any("duplicate case ids" in error for error in errors))
         self.assertTrue(any("non-empty evidence strings" in error for error in errors))
         self.assertIn("T4 completion requires installedSmoke.status=PASS", errors)
+
+    def test_gnu_candidate_requires_diagnostic_mode_and_cannot_complete(self):
+        report = D14.read_json(D14.REPORT_TEMPLATE)
+        candidate = {
+            "buildTarget": "x86_64-pc-windows-gnu",
+            "evidencePurpose": "LOCAL_DIAGNOSTIC",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "report.json"
+            D14.write_json(path, report)
+            errors = D14.verify_report(path, True, candidate)
+        self.assertIn("T4 completion requires an x86_64-pc-windows-msvc candidate", errors)
 
 
 if __name__ == "__main__":

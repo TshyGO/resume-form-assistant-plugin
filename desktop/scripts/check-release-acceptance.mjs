@@ -57,6 +57,12 @@ function assertReview(review, label) {
 
 export function assertCandidate(candidate) {
   if (candidate.schemaVersion !== 1) throw new GateError("unsupported candidate schemaVersion");
+  if (candidate.buildTarget !== "x86_64-pc-windows-msvc") {
+    throw new GateError("release candidate must use x86_64-pc-windows-msvc");
+  }
+  if (candidate.evidencePurpose !== "RELEASE_CANDIDATE") {
+    throw new GateError("LOCAL_DIAGNOSTIC candidate cannot pass the release gate");
+  }
   if (candidate.fixtureVersion !== "d14-v1") throw new GateError("candidate fixtureVersion must be d14-v1");
   if (!/^[0-9a-f]{40}$/.test(candidate.testedSourceCommit ?? "")) {
     throw new GateError("candidate testedSourceCommit must be a full Git SHA");
@@ -100,6 +106,8 @@ export function assertCandidate(candidate) {
 function assertBindings(report, candidate, label) {
   const expected = {
     fixtureVersion: candidate.fixtureVersion,
+    buildTarget: candidate.buildTarget,
+    evidencePurpose: candidate.evidencePurpose,
     testedSourceCommit: candidate.testedSourceCommit,
     desktopVersion: candidate.desktopVersion,
     extensionVersion: candidate.extensionVersion,

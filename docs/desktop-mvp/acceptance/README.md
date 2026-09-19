@@ -52,7 +52,7 @@ T1 的所有报告项必须保持 `NOT_RUN`。自动化测试通过后，也要�
 
 ## 证据规则
 
-- 报告必须写明 `fixtureVersion=d14-v1`、被测源码 commit、桌面/插件版本、`protocolVersion`、操作系统与浏览器完整版本。
+- 报告必须写明 `fixtureVersion=d14-v1`、被测源码 commit、构建 target/证据用途、桌面/插件版本、`protocolVersion`、操作系统与浏览器完整版本；GNU/`LOCAL_DIAGNOSTIC` 只用于本地排错，不能进入正式签收。
 - 界面截图只能证明界面当时显示的内容；数据一致性还要给出数据库、备份清单、附件哈希或测试断言。
 - 动态 UUID 在报告中用夹具逻辑名（如 `application-a`）映射；不得把另一轮运行的 UUID 写成固定期望。
 - 故障注入必须记录发生在 mock、进程、浏览器或真实 OS 哪一层。较低层证据不能冒充实机安装证据。

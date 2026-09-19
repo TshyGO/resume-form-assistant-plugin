@@ -14,7 +14,7 @@ T6 只校验证据与字节是否满足放行条件，不替代 T4/T5 的真实�
 - `requiredSourceCommit`：最终发布源码的完整 40 位 SHA；
 - `review`：发布负责人、时间、`APPROVED` 和空的 `blockingDefects`。
 
-所有报告必须绑定同一 `fixtureVersion`、源码 SHA、桌面/插件版本、协议版本、文件名、稳定无凭据下载地址与 SHA-256。Chrome/Edge 的 J01–J08、F01–F13 必须各出现一次、全部 `PASS` 且证据字符串非空；环境必须是普通用户，生产注册和安装后烟测均已通过，签名策略和扩展 manifest/源码树哈希与候选一致；T5 的 16 项必须全部 `PASS`；D08/D11/D13 必须具名签收且与两份浏览器报告内的依赖记录一致。
+所有报告必须绑定同一 `fixtureVersion`、源码 SHA、`buildTarget=x86_64-pc-windows-msvc`、`evidencePurpose=RELEASE_CANDIDATE`、桌面/插件版本、协议版本、文件名、稳定无凭据下载地址与 SHA-256。Chrome/Edge 的 J01–J08、F01–F13 必须各出现一次、全部 `PASS` 且证据字符串非空；环境必须是普通用户，生产注册和安装后烟测均已通过，签名策略和扩展 manifest/源码树哈希与候选一致；T5 的 16 项必须全部 `PASS`；D08/D11/D13 必须具名签收且与两份浏览器报告内的依赖记录一致。
 
 ## 执行
 
@@ -34,7 +34,7 @@ node desktop/scripts/check-release-acceptance.mjs `
 - 硬依赖未签收或没有验收证据；
 - 报告与候选 manifest 不一致；
 - 最终下载文件名、长度或 SHA-256 与候选不同；
-- 候选下载地址不是无凭据/无查询参数的稳定 HTTPS、签名策略无效、固定扩展 ID 或 manifest/源码树哈希不一致、源码 SHA 不完整。
+- 候选不是 MSVC 正式候选（含任何 `LOCAL_DIAGNOSTIC` GNU 包）、下载地址不是无凭据/无查询参数的稳定 HTTPS、签名策略无效、固定扩展 ID 或 manifest/源码树哈希不一致、源码 SHA 不完整。
 
 ## 与 D13 发布流水线的接入点
 

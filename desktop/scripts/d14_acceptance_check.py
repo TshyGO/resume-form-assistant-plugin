@@ -595,6 +595,8 @@ def prepare(args) -> None:
         raise AcceptanceError(f"run directory already exists; refusing to overwrite evidence: {run_dir}")
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit.lower()):
         raise AcceptanceError("--source-commit must be a full 40-character Git commit")
+    if args.build_target == "x86_64-pc-windows-gnu" and not args.diagnostic_only:
+        raise AcceptanceError("GNU packages require --diagnostic-only and cannot become release evidence")
     source_desktop_version, source_protocol_version = source_candidate_versions(
         args.source_commit.lower()
     )
@@ -644,6 +646,8 @@ def prepare(args) -> None:
     candidate = {
         "schemaVersion": 1,
         "runId": run_id,
+        "buildTarget": args.build_target,
+        "evidencePurpose": "LOCAL_DIAGNOSTIC" if args.diagnostic_only else "RELEASE_CANDIDATE",
         "fixtureVersion": "d14-v1",
         "testedSourceCommit": args.source_commit.lower(),
         "desktopVersion": args.desktop_version,
@@ -663,6 +667,8 @@ def prepare(args) -> None:
         report = deepcopy(template)
         report.update(
             runId=f"{run_id}-{browser}",
+            buildTarget=candidate["buildTarget"],
+            evidencePurpose=candidate["evidencePurpose"],
             testedSourceCommit=args.source_commit.lower(),
             startedAt=generated_at,
             desktopVersion=args.desktop_version,
@@ -674,6 +680,8 @@ def prepare(args) -> None:
         )
         report["t4Preflight"] = {
             "candidateVerified": True,
+            "buildTarget": candidate["buildTarget"],
+            "evidencePurpose": candidate["evidencePurpose"],
             "extensionId": extension_details["extensionId"],
             "extensionFileCount": extension_details["fileCount"],
             "extensionManifestSha256": extension_details["manifestSha256"],
@@ -963,6 +971,12 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
         if require_complete and case.get("id") in REQUIRED_CASES and status != "PASS":
             errors.append(f"{case.get('id')}: completion requires PASS, found {status}")
     if require_complete:
+        if candidate is None:
+            errors.append("T4 completion requires artifacts.json candidate bindings")
+        elif candidate.get("buildTarget") != "x86_64-pc-windows-msvc":
+            errors.append("T4 completion requires an x86_64-pc-windows-msvc candidate")
+        elif candidate.get("evidencePurpose") != "RELEASE_CANDIDATE":
+            errors.append("T4 completion rejects LOCAL_DIAGNOSTIC candidates")
         review = report.get("review") or {}
         if review.get("decision") != "APPROVED":
             errors.append("T4 completion requires review.decision=APPROVED")
@@ -1010,6 +1024,8 @@ def verify_report(path: Path, require_complete: bool, candidate: dict | None = N
     if candidate is not None:
         bindings = {
             "fixtureVersion": candidate.get("fixtureVersion"),
+            "buildTarget": candidate.get("buildTarget"),
+            "evidencePurpose": candidate.get("evidencePurpose"),
             "testedSourceCommit": candidate.get("testedSourceCommit"),
             "protocolVersion": candidate.get("protocolVersion"),
             "desktopVersion": candidate.get("desktopVersion"),
@@ -1068,6 +1084,16 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--source-commit", required=True)
     prepare_parser.add_argument("--desktop-version", required=True)
     prepare_parser.add_argument("--protocol-version", type=int, default=1)
+    prepare_parser.add_argument(
+        "--build-target",
+        choices=("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu"),
+        default="x86_64-pc-windows-msvc",
+    )
+    prepare_parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="allow a GNU local package while marking it permanently ineligible for release evidence",
+    )
     prepare_parser.add_argument("--desktop-url", required=True)
     prepare_parser.add_argument("--extension-url", required=True)
     signature_group = prepare_parser.add_mutually_exclusive_group(required=True)

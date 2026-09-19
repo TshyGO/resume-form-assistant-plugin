@@ -14,6 +14,7 @@ class T5CheckTests(unittest.TestCase):
     def candidate(self):
         return {
             "fixtureVersion": "d14-v1", "testedSourceCommit": "a" * 40,
+            "buildTarget": "x86_64-pc-windows-msvc", "evidencePurpose": "RELEASE_CANDIDATE",
             "desktopVersion": "0.1.0", "extensionVersion": "0.4.0", "protocolVersion": 1,
             "desktop": {"name": "setup.exe", "sha256": "b" * 64, "downloadUrl": "https://example.test/setup"},
             "extension": {"name": "extension.zip", "sha256": "c" * 64, "downloadUrl": "https://example.test/zip"},
@@ -23,6 +24,8 @@ class T5CheckTests(unittest.TestCase):
         value = T5.read_json(T5.TEMPLATE)
         candidate = self.candidate()
         value.update(
+            buildTarget=candidate["buildTarget"],
+            evidencePurpose=candidate["evidencePurpose"],
             testedSourceCommit=candidate["testedSourceCommit"],
             desktopVersion=candidate["desktopVersion"],
             extensionVersion=candidate["extensionVersion"],

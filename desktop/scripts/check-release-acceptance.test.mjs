@@ -22,7 +22,9 @@ function fixture() {
     name, byteLength: bytes.length, sha256: digest(bytes), downloadUrl: url,
   });
   const candidate = {
-    schemaVersion: 1, fixtureVersion: "d14-v1", testedSourceCommit: "a".repeat(40),
+    schemaVersion: 1, buildTarget: "x86_64-pc-windows-msvc",
+    evidencePurpose: "RELEASE_CANDIDATE", fixtureVersion: "d14-v1",
+    testedSourceCommit: "a".repeat(40),
     desktopVersion: "0.1.0", extensionVersion: "0.4.0", protocolVersion: 1,
     desktop: {
       ...artifact("setup.exe", desktopBytes, "https://example.test/setup"),
@@ -37,7 +39,8 @@ function fixture() {
   };
   json(join(dir, "candidate.json"), candidate);
   const binding = {
-    fixtureVersion: candidate.fixtureVersion, testedSourceCommit: candidate.testedSourceCommit,
+    fixtureVersion: candidate.fixtureVersion, buildTarget: candidate.buildTarget,
+    evidencePurpose: candidate.evidencePurpose, testedSourceCommit: candidate.testedSourceCommit,
     desktopVersion: candidate.desktopVersion, extensionVersion: candidate.extensionVersion,
     protocolVersion: candidate.protocolVersion,
     desktopArtifact: Object.fromEntries(["name", "sha256", "downloadUrl"].map((key) => [key, candidate.desktop[key]])),
@@ -160,4 +163,13 @@ test("candidate URLs with credentials or query tokens fail closed", () => {
   candidate.desktop.downloadUrl = "https://example.test/setup?token=secret";
   json(join(dir, "candidate.json"), candidate);
   assert.throws(() => checkGate(gatePath), /credential-free/);
+});
+
+test("a GNU diagnostic package can never pass the release gate", () => {
+  const { dir, gatePath } = fixture();
+  const candidate = JSON.parse(readFileSync(join(dir, "candidate.json"), "utf8"));
+  candidate.buildTarget = "x86_64-pc-windows-gnu";
+  candidate.evidencePurpose = "LOCAL_DIAGNOSTIC";
+  json(join(dir, "candidate.json"), candidate);
+  assert.throws(() => checkGate(gatePath), /x86_64-pc-windows-msvc|LOCAL_DIAGNOSTIC/);
 });

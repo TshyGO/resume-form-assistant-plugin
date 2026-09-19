@@ -88,6 +88,8 @@ def prepare(args) -> None:
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     report.update(
         runId=args.run_id or run_dir.name,
+        buildTarget=candidate.get("buildTarget"),
+        evidencePurpose=candidate.get("evidencePurpose"),
         fixtureVersion=candidate.get("fixtureVersion"),
         testedSourceCommit=candidate.get("testedSourceCommit"),
         desktopVersion=candidate.get("desktopVersion"),
@@ -194,6 +196,8 @@ def verify_report(report: dict, candidate: dict, require_complete: bool) -> list
             errors.append(f"{check.get('id')}: T5 completion requires PASS, found {status}")
     bindings = {
         "fixtureVersion": candidate.get("fixtureVersion"),
+        "buildTarget": candidate.get("buildTarget"),
+        "evidencePurpose": candidate.get("evidencePurpose"),
         "testedSourceCommit": candidate.get("testedSourceCommit"),
         "desktopVersion": candidate.get("desktopVersion"),
         "extensionVersion": candidate.get("extensionVersion"),

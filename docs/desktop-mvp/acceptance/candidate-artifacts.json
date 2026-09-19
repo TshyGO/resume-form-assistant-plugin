@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "status": "NOT_REGISTERED",
+  "buildTarget": null,
+  "evidencePurpose": null,
   "testedSourceCommit": null,
   "protocolVersion": null,
   "desktop": {

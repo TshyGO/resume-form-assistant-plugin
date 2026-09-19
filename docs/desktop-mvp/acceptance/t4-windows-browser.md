@@ -21,12 +21,15 @@ python desktop/scripts/d14_acceptance_check.py prepare `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --source-commit "<40 位源码 SHA>" `
   --desktop-version "0.1.0" `
+  --build-target "x86_64-pc-windows-msvc" `
   --desktop-url "<候选安装包下载地址>" `
   --extension-url "<候选 ZIP 下载地址>" `
   --expected-signer-thumbprint "<发布证书指纹>"
 ```
 
 若当前范围明确批准未签名候选，用 `--unsigned-approval "<具名决定/issue 链接>"` 取代证书指纹；`UnknownError`、`HashMismatch` 等状态一律拒绝。下载地址必须是无账号、无查询参数、无 fragment 的稳定 HTTPS 地址，不能把 token 或临时签名写进报告。
+
+本机只有 GNU 工具链时可加 `--build-target x86_64-pc-windows-gnu --diagnostic-only` 做安装诊断；报告会永久写入 `evidencePurpose=LOCAL_DIAGNOSTIC`，T4/T6 完成门禁必定拒绝，不能事后改字段冒充 MSVC 候选。
 
 脚本会：
 

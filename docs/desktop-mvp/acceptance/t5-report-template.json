@@ -2,6 +2,8 @@
   "schemaVersion": 1,
   "phase": "T5",
   "runId": null,
+  "buildTarget": null,
+  "evidencePurpose": null,
   "fixtureVersion": "d14-v1",
   "testedSourceCommit": null,
   "desktopVersion": null,
