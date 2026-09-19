@@ -61,6 +61,7 @@ impl Files for FakeFiles {
 struct FakeRegistry {
     values: RefCell<HashMap<String, String>>,
     fail: bool,
+    drop_writes: bool,
 }
 
 impl FakeRegistry {
@@ -84,6 +85,9 @@ impl Registry for FakeRegistry {
     fn write(&self, key: &str, value: &str) -> Result<(), String> {
         if self.fail {
             return Err("写不了注册表：假装被策略挡住了".into());
+        }
+        if self.drop_writes {
+            return Ok(());
         }
         self.values.borrow_mut().insert(key.to_string(), value.to_string());
         Ok(())
@@ -317,6 +321,32 @@ fn a_registry_that_refuses_gives_a_reason_instead_of_panicking() {
 
     assert!(outcomes.iter().all(|o| !o.registered));
     assert!(outcomes[0].note.as_ref().unwrap().contains("策略"));
+}
+
+#[test]
+fn a_registry_write_that_does_not_persist_is_not_reported_as_success() {
+    let targets = windows_targets(&data_root());
+    let files = FakeFiles::default();
+    let registry = FakeRegistry {
+        drop_writes: true,
+        ..FakeRegistry::default()
+    };
+
+    let (outcomes, _) = ensure(
+        &targets,
+        &exe(),
+        &extension_ids(&[]),
+        &files,
+        &registry,
+        Receipt::default(),
+    );
+
+    assert!(outcomes.iter().all(|outcome| !outcome.registered));
+    assert!(outcomes.iter().all(|outcome| outcome
+        .note
+        .as_deref()
+        .unwrap_or_default()
+        .contains("回读不一致")));
 }
 
 #[test]

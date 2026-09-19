@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::identity::{
@@ -15,7 +15,7 @@ use crate::identity::{
     ArchiveIdentity, ArchiveMetaFile, CurrentPointer,
 };
 use crate::migration::ensure_schema;
-use crate::model::ArchiveCounts;
+use crate::model::{ArchiveCounts, BackupSnapshotInventory};
 use crate::schema::MIGRATIONS;
 use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
@@ -232,7 +232,10 @@ impl ArchiveStore {
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let guard = self.conn.lock().map_err(|_| StoreError::Internal("poisoned".into()))?;
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::Internal("poisoned".into()))?;
         let mut dst = rusqlite::Connection::open(destination)?;
         rusqlite::backup::Backup::new(&guard, &mut dst)?.run_to_completion(
             64,
@@ -243,12 +246,82 @@ impl ArchiveStore {
         Ok(())
     }
 
+    /// 从已经落盘的一致性数据库快照读取备份计数与所有外部文件引用。
+    ///
+    /// 不能在创建快照之后再读 live store：那会把不同时间点的数据库计数、文件引用
+    /// 和目录字节拼在一起。调用方把这里的路径集合交给 backup crate 做逐项比对。
+    pub fn backup_inventory_from_snapshot(
+        database_snapshot: &std::path::Path,
+    ) -> Result<BackupSnapshotInventory, StoreError> {
+        let conn = Connection::open_with_flags(
+            database_snapshot,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let count = |sql: &str| -> Result<i64, StoreError> {
+            conn.query_row(sql, [], |row| row.get::<_, i64>(0))
+                .map_err(StoreError::from)
+        };
+        let counts = ArchiveCounts {
+            applications: count("SELECT COUNT(*) FROM applications")?,
+            events: count("SELECT COUNT(*) FROM events")?,
+            snapshots: count("SELECT COUNT(*) FROM resume_snapshots")?,
+            todos: count("SELECT COUNT(*) FROM todos")?,
+            evidence: count("SELECT COUNT(*) FROM reply_evidence")?,
+            attachments: count("SELECT COUNT(*) FROM attachment_blobs")?,
+        };
+        let mut stmt = conn.prepare(
+            "SELECT stored_rel_path, size_bytes, sha256 FROM attachment_blobs \
+             UNION ALL SELECT stored_rel_path, byte_size, sha256 FROM resume_snapshots",
+        )?;
+        let mut referenced_files = Vec::new();
+        for row in stmt.query_map([], |row| {
+            Ok(crate::BackupFileReference {
+                path: row.get(0)?,
+                size_bytes: row.get(1)?,
+                sha256: row.get(2)?,
+            })
+        })? {
+            let mut reference = row?;
+            let path = &reference.path;
+            if !(path.starts_with("attachments/") || path.starts_with("snapshots/")) {
+                return Err(StoreError::PathInvalid(path.clone()));
+            }
+            if reference.size_bytes < 0 {
+                return Err(StoreError::Validation(format!(
+                    "negative size for backup reference {path}"
+                )));
+            }
+            if reference.sha256.len() != 64
+                || !reference
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(StoreError::Validation(format!(
+                    "invalid sha256 for backup reference {path}"
+                )));
+            }
+            reference.sha256.make_ascii_lowercase();
+            referenced_files.push(reference);
+        }
+        referenced_files.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(BackupSnapshotInventory {
+            counts,
+            referenced_files,
+        })
+    }
+
     /// 各类记录的条数。备份清单写它，恢复预览拿它和当前档案对比——用户得先看到
     /// 「现在 12 条申请，恢复之后是 8 条」才谈得上确认。
     pub fn counts(&self) -> Result<ArchiveCounts, StoreError> {
-        let guard = self.conn.lock().map_err(|_| StoreError::Internal("poisoned".into()))?;
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|_| StoreError::Internal("poisoned".into()))?;
         let count = |sql: &str| -> Result<i64, StoreError> {
-            guard.query_row(sql, [], |r| r.get::<_, i64>(0)).map_err(StoreError::from)
+            guard
+                .query_row(sql, [], |r| r.get::<_, i64>(0))
+                .map_err(StoreError::from)
         };
         Ok(ArchiveCounts {
             applications: count("SELECT COUNT(*) FROM applications")?,

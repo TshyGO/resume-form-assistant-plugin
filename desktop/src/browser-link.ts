@@ -13,7 +13,7 @@ export interface LinkState {
   next: string;
   /** 「去装扩展」这个按钮要不要显示。 */
   showInstall: boolean;
-  /** 「重试注册」要不要显示——注册失败才有意义。 */
+  /** 「重新检查注册」要不要显示。成功时也保留，便于发现启动后的外部改动。 */
   showRetry: boolean;
 }
 
@@ -49,7 +49,7 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     return {
       tone: "warn",
       text: "还没核对过浏览器注册。",
-      next: "点「重试注册」让桌面写一次清单。",
+      next: "点「重新检查注册」让桌面写一次清单。",
       showInstall: false,
       showRetry: true,
     };
@@ -71,7 +71,7 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     text: `桌面这边准备好了：${ready.join("、")}${partial}。`,
     next: "在浏览器里装上扩展，装完回到这里刷新一下。",
     showInstall: true,
-    showRetry: failed.length > 0,
+    showRetry: true,
   };
 }
 

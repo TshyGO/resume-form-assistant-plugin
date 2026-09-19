@@ -4,6 +4,7 @@
 //! （#28）。所以先写一个临时文件、`sync_all`、再 rename 到目标名。中途任何一步
 //! 失败都只留下（并删掉）那个临时文件，用户上一次成功的备份原封不动。
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -29,9 +30,19 @@ pub struct ArchiveSource<'a> {
     pub archive_id: String,
     pub schema_version: i64,
     pub counts: ArchiveCounts,
+    /// 数据库一致性快照引用的附件/简历快照路径、大小与内容哈希。
+    /// 调用方从 `database_snapshot` 读取后传入；不能从正在变化的 live store 推测。
+    pub referenced_files: Vec<ReferencedFile>,
     /// 已经按白名单过滤过的设置 JSON。没有就不写这一项。
     pub settings_json: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferencedFile {
+    pub path: String,
+    pub size_bytes: u64,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,13 +57,20 @@ pub struct WriteReport {
     pub skipped: Vec<(String, String)>,
 }
 
-pub fn write_archive(source: &ArchiveSource<'_>, destination: &Path) -> Result<WriteReport, BackupError> {
+pub fn write_archive(
+    source: &ArchiveSource<'_>,
+    destination: &Path,
+) -> Result<WriteReport, BackupError> {
     let parent = destination
         .parent()
         .ok_or_else(|| BackupError::Invalid("备份路径没有上级目录。".into()))?;
     std::fs::create_dir_all(parent)?;
 
-    let staging = parent.join(format!(".{}.tmp-{}", file_name(destination), uuid::Uuid::new_v4()));
+    let staging = parent.join(format!(
+        ".{}.tmp-{}",
+        file_name(destination),
+        uuid::Uuid::new_v4()
+    ));
 
     match build(source, &staging) {
         Ok((entries, skipped)) => {
@@ -120,15 +138,30 @@ fn build(
             if child.file_type()?.is_dir() {
                 walk.push(path);
             } else {
-                entries.push(add_file(&mut zip, options, &format!("archive/{rel}"), &path)?);
+                entries.push(add_file(
+                    &mut zip,
+                    options,
+                    &format!("archive/{rel}"),
+                    &path,
+                )?);
             }
         }
     }
 
     // 3. 过滤后的设置。
     if let Some(settings) = &source.settings_json {
-        entries.push(add_bytes(&mut zip, options, SETTINGS_PATH, settings.as_bytes())?);
+        entries.push(add_bytes(
+            &mut zip,
+            options,
+            SETTINGS_PATH,
+            settings.as_bytes(),
+        )?);
     }
+
+    // 计数相同不能证明引用完整：少一个被引用文件、同时多一个孤立文件时数量不变。
+    // 因此逐项比较数据库一致性快照里的引用路径与实际归档路径。少文件和孤儿文件
+    // 都会让临时 ZIP 失败，上一次成功备份保持不变。
+    require_referenced_files(&entries, &source.referenced_files)?;
 
     // 4. 清单最后写：它要覆盖上面所有条目。
     entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -149,6 +182,58 @@ fn build(
     finished.sync_all()?;
     skipped.sort();
     Ok((manifest.entries.len(), skipped))
+}
+
+fn require_referenced_files(
+    entries: &[ManifestEntry],
+    referenced_files: &[ReferencedFile],
+) -> Result<(), BackupError> {
+    let expected: BTreeMap<String, (u64, String)> = referenced_files
+        .iter()
+        .map(|item| (item.path.clone(), (item.size_bytes, item.sha256.clone())))
+        .collect();
+    if expected.len() != referenced_files.len() {
+        return Err(BackupError::Mismatch(
+            "数据库快照包含重复的附件或简历快照路径；请先运行档案完整性检查".into(),
+        ));
+    }
+    if let Some(path) = expected
+        .keys()
+        .find(|path| !(path.starts_with("attachments/") || path.starts_with("snapshots/")))
+    {
+        return Err(BackupError::Mismatch(format!(
+            "数据库快照引用了不受支持的归档路径 {path}；请先运行档案完整性检查"
+        )));
+    }
+    let actual: BTreeMap<String, (u64, String)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let path = entry.path.strip_prefix("archive/")?;
+            (path.starts_with("attachments/") || path.starts_with("snapshots/"))
+                .then(|| (path.to_string(), (entry.size_bytes, entry.sha256.clone())))
+        })
+        .collect();
+    if actual != expected {
+        let missing: Vec<_> = expected
+            .keys()
+            .filter(|path| !actual.contains_key(*path))
+            .cloned()
+            .collect();
+        let unexpected: Vec<_> = actual
+            .keys()
+            .filter(|path| !expected.contains_key(*path))
+            .cloned()
+            .collect();
+        let changed: Vec<_> = expected
+            .iter()
+            .filter_map(|(path, value)| (actual.get(path) != Some(value)).then_some(path.clone()))
+            .filter(|path| actual.contains_key(path))
+            .collect();
+        return Err(BackupError::Mismatch(format!(
+            "数据库快照引用与备份目录不一致；缺失={missing:?}，孤立={unexpected:?}，内容或大小变化={changed:?}；请先运行档案完整性检查并修复"
+        )));
+    }
+    Ok(())
 }
 
 fn relative(root: &Path, path: &Path) -> Option<String> {

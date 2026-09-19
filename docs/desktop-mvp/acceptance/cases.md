@@ -1,0 +1,41 @@
+# D14 case 目录
+
+所有 case 初始状态均为 `NOT_RUN`。`testLayer` 表示最终所需的最高验证层，不表示已有覆盖已经达到该层。
+
+## 完整旅程
+
+| ID | 动作与核心断言 | testLayer | 必要证据 | 主要依赖 |
+| --- | --- | --- | --- | --- |
+| J01 | 干净普通 Windows 账户分别用 Chrome/Edge 安装、连接；覆盖先装插件/先装桌面及含空格/中文路径。握手成功、host/allowlist 正确、无终端窗口、未使用开发注册脚本 | installed-browser | 两个浏览器的运行记录、安装路径、NM manifest、host 进程版本 | D13 |
+| J02 | 已配对后使桌面服务真正不可用，保存岗位 A、用模板 v1 填写留档，修改为 v2 并重启 SW/浏览器后恢复桌面。只写一次、历史仍是 v1、完整 ACK 前保留原字节 | installed-browser | UI 状态、outbox/IDB 前后、档案事件与快照哈希 | D08/D13 |
+| J03 | 填写完成后再明确确认已投递，并修改当前模板。填写不自动投递；确认才生成投递事件；历史快照不变 | browser+archive | 时间线、事件序号、快照内容与摘要 | D08 |
+| J04 | 导入回执/测评/面试；外发预览、分析、暂存、重启、修改、确认、重复确认。确认前正式字段不变；确认原子幂等；ATS 面试不标成人工回复 | desktop-ui+archive | 原件、建议、确认前后 diff、待办与提醒登记 | D11 |
+| J05 | 同公司岗位 A/B 接收模糊通知，人工选择 B；重分析；Offer 后补录旧测评。不自动选；只更新批准对象；保留原建议和决定；历史补录不回退 Offer | desktop-ui+archive | 候选列表、决定记录、A/B 时间线和阶段 | D11 |
+| J06 | 建立待办后重启/休眠；备份并恢复新库，再次恢复同一备份；连接含旧消息的插件。顺序稳定、每次新 epoch、旧消息只对账不重放 | real-os+installed-browser | 系统提醒/应用待办、两个恢复 epoch、备份清单、对账结果 | D10/D12/D13 |
+| J07 | 旧候选创建数据后安装新候选；测试兼容/不兼容插件；默认卸载再重装。迁移前备份、数据/附件可读、安全拒绝不兼容写入、默认保留档案 | installed-package | 旧/新版本与哈希、升级日志、计数/哈希、卸载后目录和注册项 | D13 |
+| J08 | 卸载桌面后继续使用插件模板和填写。填写可用，桌面提示准确，从未配对的 Profile 不建长期队列 | installed-browser | 卸载后的插件操作、存储/outbox 状态 | D13 |
+
+## 故障和反例
+
+| ID | 注入与核心断言 | testLayer | 必要证据 | 主要落点 |
+| --- | --- | --- | --- | --- |
+| F01 | 分片乱序/重复/ACK 丢失，传输中断/SW 重启/模板改变；chunk identity/cursor 正确，重传原字节，完整 ACK 前不删，业务不重复 | protocol+browser | 自动化运行和浏览器脚本结果、原/最终 SHA | link/protocol/D08 |
+| F02 | IDB 配额失败、outbox 索引丢失、原字节缺失；不假报成功，索引可修复，缺字节暂停且不重生成 | browser-storage | IDB/outbox 前后与用户可见错误 | link/staging |
+| F03 | 写事务失败或进程在提交边界崩溃；快照/事件/回执一致，重试最多一次业务写入 | process+store | 故障点、事务结果、重试后的计数 | archive-store/host |
+| F04 | 保存 ACK 丢失后永久删除，再重试原消息；墓碑阻止申请复活 | store+link | 删除、回执/墓碑与重试结果 | archive-store/link |
+| F05 | 旧 epoch 回执、不同 Profile 同 messageId、摘要冲突/缺失；不串写、不自动执行、不靠换 epoch 解锁 | protocol+store | 各 Profile/epoch 的查询和最终计数 | protocol/restore/link |
+| F06 | 同时间戳三事件备份后恢复两次；eventSequence 和折叠结果稳定，两次新 epoch 不同 | backup+store | 恢复前后序列及 epoch | backup/archive-store |
+| F07 | 备份期间并发删除附件；产物内引用完整且哈希通过，不能成功产出缺文件包 | backup+concurrency | 并发测试、备份清单与校验结果 | backup/archive-store |
+| F08 | 恢复遇到磁盘满、损坏 ZIP、路径穿越/恶意压缩；失败明确，旧目录/current 不变，无越界落盘 | restore+isolated-disk | 失败码、目录/current 前后、沙箱外无新文件 | backup/restore |
+| F09 | 无执行能力的恶意附件、文件名/正文提示注入；不执行指令、不授予工具权限、错误模型输出不能绕过校验/确认 | import+AI+UI | 导入结果、请求/响应、正式字段前后 | evidence-import/ai-extract/D11 |
+| F10 | AI 非法 JSON/枚举/日期/引用、误关联、慢/失败/取消；正式字段不变、可手动处理、不自动重试，并统计误关联与错误建议 | AI+desktop-ui | 固定响应自动化、统计分母/分子、一次选定服务走查 | D11 |
+| F11 | 合成 Key/Cookie/密码/URL token/裸 code，导入成功/失败/取消；禁采标记不进存储/日志/备份/发布包，路径不持久化，外发符合预览 | privacy+artifact | 标记全目录扫描、请求捕获、包清单 | link/data-service/backup/D13 |
+| F12 | 未授权来源、缺失/错误身份、不兼容协议；按契约拒绝且无写入，health/handshake 无档案身份 | protocol+real-NM | 协议测试、真实 NM 错误及档案计数 | D05/D06/D13 |
+| F13 | 授权系统提醒后杀进程、跨次日、休眠唤醒、重启、主动退出；记录 OS 和应用内结果，不混淆关窗/退出、不重复、不偷偷自启 | real-os | 每种生命周期动作的带时间证据和支持结论 | D10/D13 |
+
+## 统一判定规则
+
+- J01–J08 是首发必测，不能由较低层测试替代。
+- F01–F12 必须至少有确定性自动化；涉及浏览器、安装器或磁盘边界时还要补表中指定的高层证据。F13 必须实机执行。
+- 同一断言可以引用既有测试，但报告需写测试名、commit、运行链接和结果；只有源文件路径不算执行证据。
+- 若 case 包含多个断言，任一断言未执行时整个 case 不能标 `PASS`。

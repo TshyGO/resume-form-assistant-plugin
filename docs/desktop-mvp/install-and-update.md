@@ -7,12 +7,12 @@
 
 ## 1. 自己构建
 
-工具链和 CI 一致：**Node 22**、**Rust 1.94.0**。`cargo fetch --locked` 会在 `Cargo.lock` 过期时失败——「可复现构建」的前提是锁文件说了算。
+工具链和 CI 一致：**Node 22**、**Rust 1.94.0**；Windows 正式候选必须使用 `x86_64-pc-windows-msvc`，不能用本机默认的 GNU target 代替。GNU 可执行文件动态依赖 `WebView2Loader.dll`，Tauri 的标准 NSIS 收集规则不会自动把它当正式资源带入；这样的包只能用于显式加入 DLL 的本地诊断，不能登记为 D14 候选。`cargo fetch --locked` 会在 `Cargo.lock` 过期时失败——「可复现构建」的前提是锁文件说了算。
 
 ```bash
 cd desktop
 npm ci
-npm run tauri build -- --bundles nsis      # Windows
+npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis  # Windows
 npm run tauri build -- --bundles dmg       # macOS
 ```
 

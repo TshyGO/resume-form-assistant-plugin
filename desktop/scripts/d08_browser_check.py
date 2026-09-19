@@ -5,7 +5,8 @@ staged in extension IndexedDB, uploaded chunk by chunk over Native Messaging, an
 the archive afterwards as a file whose bytes are the ones captured — through an interrupted
 upload, a closed desktop and a changed template.
 
-    python scripts/d08_browser_check.py [--binary <path>] [--keep]
+    python scripts/d08_browser_check.py [--binary <path>] [--extension-dir <path>]
+        [--browser chromium|edge] [--keep]
 
 Run it by hand, not in CI: it needs a headed browser, it writes a real Native Messaging
 registration (removed again through the dev script's receipt), and it starts the desktop.
@@ -43,12 +44,14 @@ from playwright.sync_api import sync_playwright
 
 from d07_browser_check import (
     JOB,
+    PLUGIN,
     ask,
+    close_context,
+    copy_binary_runtime,
     copy_extension,
     default_binary,
     launch,
     node,
-    pair,
     stop_application,
     storage,
     worker_of,
@@ -134,22 +137,28 @@ def scan_for_secrets(root: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, default=None)
+    parser.add_argument("--extension-dir", type=Path, default=PLUGIN)
+    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
     source_binary = (args.binary or default_binary()).resolve()
+    if not source_binary.exists():
+        raise SystemExit(f"no such binary: {source_binary}")
+    extension_source = args.extension_dir.resolve()
+    if not (extension_source / "manifest.json").is_file():
+        raise SystemExit(f"not an extracted extension candidate: {extension_source}")
 
     workspace = Path(tempfile.mkdtemp(prefix="resumepro-d08-"))
     data_dir = workspace / "data"
     data_dir.mkdir()
     extension = workspace / "extension"
-    copy_extension(extension)
-    binary = workspace / source_binary.name
-    shutil.copy2(source_binary, binary)
+    copy_extension(extension, extension_source)
+    binary = copy_binary_runtime(source_binary, workspace)
     parked = workspace / (source_binary.name + ".parked")
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
     # The workspace goes on every exit, early returns and exceptions included, unless kept.
     try:
-        return run(workspace, data_dir, extension, binary, parked, env)
+        return run(workspace, data_dir, extension, binary, parked, env, args.browser)
     finally:
         if args.keep:
             print(f"left in place: {workspace}")
@@ -157,7 +166,15 @@ def main() -> int:
             shutil.rmtree(workspace, ignore_errors=True)
 
 
-def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: Path, env: dict) -> int:
+def run(
+    workspace: Path,
+    data_dir: Path,
+    extension: Path,
+    binary: Path,
+    parked: Path,
+    env: dict,
+    browser: str = "chromium",
+) -> int:
     failures: list[str] = []
     results: dict = {}
     registered = False
@@ -167,10 +184,11 @@ def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: 
             # Phase 1 — the id Chrome assigns, a registration, a pairing.
             # Playwright's bundled browser is Chrome for Testing (1.49+), which reads Google
             # Chrome's Native Messaging location, hence --browser chrome below.
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, browser)
             try:
                 extension_id = worker_of(context).url.split("/")[2]
-                outcome = node("register", "--extension-id", extension_id, "--browser", "chrome", "--binary", str(binary))
+                registry_browser = "edge" if browser == "edge" else "chrome"
+                outcome = node("register", "--extension-id", extension_id, "--browser", registry_browser, "--binary", str(binary))
                 print(outcome.stdout.strip() or outcome.stderr.strip())
                 if outcome.returncode != 0 or "skipped" in outcome.stdout:
                     failures.append("registration did not happen; remove any existing one first")
@@ -178,17 +196,15 @@ def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: 
                 registered = True
             finally:
                 stop_application(binary, env)
-                context.close()
-            pair(data_dir, extension_id)
-
+                close_context(context, workspace, browser)
             # Phase 2 — desktop up: an application, then a large upload cut off halfway.
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, browser)
             try:
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
                 results["probe"] = ask(page, {"type": "DESKTOP_PROBE"}, tries=6)
                 if results["probe"].get("mode") != "ready":
-                    failures.append(f"the paired extension did not reach the desktop: {results['probe']}")
+                    failures.append(f"the fixed-id extension did not reach the desktop: {results['probe']}")
                     return report(failures, results)
                 saved = ask(page, {"type": "DESKTOP_SAVE_JOB", "fields": JOB}, tries=3)
                 intent_id = (saved.get("intent") or {}).get("intentId")
@@ -214,10 +230,10 @@ def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: 
                 # the browser closed (D06: a surviving grandchild holds the browser's pipes).
                 wait_for(lambda: not binary.exists() or _park(binary, parked), 20)
                 stop_application(parked if parked.exists() else binary, env)
-                context.close()
+                close_context(context, workspace, browser)
 
             # Phase 3 — desktop gone: archive offline, then change the template (10.10).
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, browser)
             try:
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
@@ -231,11 +247,11 @@ def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: 
                 worker.evaluate("t => chrome.storage.local.set({ templates: [t] })", template(V2_MARK, 20))
                 results["idb_while_offline"] = worker.evaluate(IDB_COUNT)
             finally:
-                context.close()
+                close_context(context, workspace, browser)
 
             # Phase 4 — desktop back: resume, bind, drain to empty.
             shutil.move(str(parked), str(binary))
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, browser)
             try:
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
@@ -261,7 +277,7 @@ def run(workspace: Path, data_dir: Path, extension: Path, binary: Path, parked: 
                 results["final_idb"] = worker.evaluate(IDB_COUNT)
             finally:
                 stop_application(binary, env)
-                context.close()
+                close_context(context, workspace, browser)
     finally:
         if registered:
             print(node("unregister").stdout.strip())
