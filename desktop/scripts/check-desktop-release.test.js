@@ -231,11 +231,14 @@ test("发版工作流会拦住过期的 Cargo.lock 和脏 dist", () => {
 test("安装验收失败也会清理本轮安装，并给早退进程可操作的错误", () => {
   const acceptance = readText(join(desktop, "scripts", "d13_install_acceptance.ps1"));
   assert.match(acceptance, /\$installedThisRun = \$false/);
-  assert.match(acceptance, /\$installedThisRun = \$true/);
+  assert.match(acceptance, /\$installedThisRun = \$true\s+\$install = Start-Process/);
   assert.match(acceptance, /exited before Native Messaging registration/);
   assert.match(acceptance, /Upgraded application exited before Native Messaging registration/);
-  assert.match(acceptance, /if \(\$installedThisRun -and \(Test-Path -LiteralPath \$installDir\)\)/);
+  assert.match(acceptance, /if \(\$installedThisRun\)/);
   assert.match(acceptance, /\$cleanupUninstaller/);
+  assert.match(acceptance, /Cleanup uninstaller failed/);
+  assert.match(acceptance, /Remove-Item -Path \$key -Recurse -Force/);
+  assert.match(acceptance, /Remove-Item -LiteralPath \$resolvedInstallDir -Recurse -Force/);
   assert.match(acceptance, /AcceptanceEligible = -not \$runningElevated/);
   assert.match(acceptance, /ELEVATED_DIAGNOSTIC/);
 });
