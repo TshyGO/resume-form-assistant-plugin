@@ -230,6 +230,21 @@ class D14AcceptanceCheckTests(unittest.TestCase):
             errors = D14.verify_report(path, True, candidate)
         self.assertIn("T4 completion requires an x86_64-pc-windows-msvc candidate", errors)
 
+    def test_smoke_failure_is_written_without_promoting_any_case(self):
+        report = D14.read_json(D14.REPORT_TEMPLATE)
+        report["t4Preflight"] = {"installedRegistration": "VERIFIED"}
+        results = {"failures": ["close Edge first"], "status": "FAIL"}
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp)
+            browser_dir = run_dir / "edge"
+            browser_dir.mkdir()
+            result_path = browser_dir / "installed-smoke.json"
+            report_path = browser_dir / "report.json"
+            D14.write_smoke_result(result_path, report_path, run_dir, report, results)
+            saved = D14.read_json(report_path)
+        self.assertEqual(saved["t4Preflight"]["installedSmoke"]["status"], "FAIL")
+        self.assertTrue(all(case["status"] == "NOT_RUN" for case in saved["cases"]))
+
 
 if __name__ == "__main__":
     unittest.main()

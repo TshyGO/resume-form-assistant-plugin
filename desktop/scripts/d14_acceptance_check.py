@@ -754,10 +754,10 @@ def inspect_installed(args) -> None:
 
 
 def running_process_ids(binary: Path) -> list[int]:
-    escaped = str(binary.resolve(strict=True)).replace("'", "''")
+    process_name = binary.stem.replace("'", "''")
     raw = powershell_value(
-        "$ids=@(Get-CimInstance Win32_Process -ErrorAction Stop | "
-        f"Where-Object {{$_.ExecutablePath -eq '{escaped}'}} | Select-Object -ExpandProperty ProcessId); "
+        f"$ids=@(Get-Process -Name '{process_name}' -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty Id); "
         "$ids | ConvertTo-Json -Compress"
     )
     if not raw:
@@ -767,6 +767,39 @@ def running_process_ids(binary: Path) -> list[int]:
     except json.JSONDecodeError as exc:
         raise AcceptanceError("could not verify whether the installed process exited") from exc
     return [int(item) for item in (value if isinstance(value, list) else [value])]
+
+
+def browser_process_ids(browser: str) -> list[int]:
+    process_name = "chrome" if browser == "chrome" else "msedge"
+    raw = powershell_value(
+        f"$ids=@(Get-Process -Name '{process_name}' -ErrorAction SilentlyContinue | "
+        "Select-Object -ExpandProperty Id); $ids | ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AcceptanceError(f"could not inspect running {browser} processes") from exc
+    return [int(item) for item in (value if isinstance(value, list) else [value])]
+
+
+def write_smoke_result(
+    result_path: Path,
+    report_path: Path,
+    run_dir: Path,
+    report: dict,
+    results: dict,
+) -> None:
+    results["completedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    results["status"] = "PASS" if not results["failures"] else "FAIL"
+    write_json(result_path, results)
+    report["t4Preflight"]["installedSmoke"] = {
+        "status": results["status"],
+        "evidence": str(result_path.relative_to(run_dir).as_posix()),
+        "note": "supplemental automation; human-visible J01-J08 remain unchanged",
+    }
+    write_json(report_path, report)
 
 
 def stop_application(binary: Path) -> None:
@@ -835,6 +868,14 @@ def installed_smoke(args) -> None:
         "failures": [],
     }
     failures = results["failures"]
+    active_browser_pids = browser_process_ids(args.browser)
+    if active_browser_pids:
+        failures.append(
+            f"close every running {args.browser} window before isolated smoke; "
+            f"active pids={active_browser_pids}"
+        )
+        write_smoke_result(result_path, report_path, run_dir, report, results)
+        raise AcceptanceError("\n".join(failures))
     with tempfile.TemporaryDirectory(prefix=f"resumepro-d14-{args.browser}-") as temp:
         workspace = Path(temp)
         data_dir = workspace / "data"
@@ -931,15 +972,7 @@ def installed_smoke(args) -> None:
         failures.append(
             "temporary RESUMEPRO_DATA_DIR stayed empty; the browser may have connected to another instance"
         )
-    results["completedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    results["status"] = "PASS" if not failures else "FAIL"
-    write_json(result_path, results)
-    report["t4Preflight"]["installedSmoke"] = {
-        "status": results["status"],
-        "evidence": str(result_path.relative_to(run_dir).as_posix()),
-        "note": "supplemental automation; human-visible J01-J08 remain unchanged",
-    }
-    write_json(report_path, report)
+    write_smoke_result(result_path, report_path, run_dir, report, results)
     if failures:
         raise AcceptanceError("\n".join(failures))
     print(f"OK: installed {args.browser} host smoke passed; J01-J08 were not auto-promoted")
