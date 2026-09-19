@@ -158,7 +158,7 @@ T4/T5/T6 的落点与状态：
 | T4 | `desktop/scripts/d14_acceptance_check.py`（候选哈希/源码树绑定、MV3 安全语义、签名与安装来源、Chrome/Edge 双报告、生产注册、隔离档案烟测、完整 J/F 门禁），清单见 [t4-windows-browser.md](../../desktop-mvp/acceptance/t4-windows-browser.md) | 无候选安装包与下载地址；J01–J08/F01–F13 未在真实 Chrome/Edge 执行，报告仍为 `NOT_RUN` |
 | T5 | `desktop/scripts/d14_t5_check.py`（16 项报告模板、档案哈希快照与比较、完成门禁），清单见 [t5-lifecycle.md](../../desktop-mvp/acceptance/t5-lifecycle.md) | 重启/休眠/杀进程/跨次日/磁盘满/升级卸载等全部实机动作未执行 |
 | T6 | `desktop/scripts/check-release-acceptance.mjs` 及行为测试；严格校验完整 case、普通用户、烟测、签名、依赖签收、报告绑定和下载副本；接入点见 [t6-release-gate.md](../../desktop-mvp/acceptance/t6-release-gate.md) | 尚无真实报告可校验；未接入 tag 流水线（缺证据时接入只会误拦发版） |
-- [ ] T7：Release、教程、支持说明、限制、反馈模板和最终签收齐全。
+- [ ] T7：教程、支持说明、限制/反馈/发行记录模板已就绪；正式 Release、发布后下载复验和最终签收仍待 T4–T6 真机证据完成。
 - [ ] D08/D11/D13 验收链接齐全；无未解决阻断缺陷或未执行必测项。
 - [ ] #27 关联实施 PR 和最终报告；最终完成后才关闭 D14，并据此更新 #15/#39 的发行状态。
 

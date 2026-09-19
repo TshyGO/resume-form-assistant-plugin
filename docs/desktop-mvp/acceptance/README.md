@@ -17,6 +17,10 @@
 | [t5-report-template.json](t5-report-template.json) | T5 的 16 项真实 OS/安装生命周期报告模板 |
 | [t6-release-gate.md](t6-release-gate.md) | T6 将候选字节、T4/T5 报告、依赖签收和最终下载文件绑定为阻断门禁 |
 | [release-gate-template.json](release-gate-template.json) | T6 单次门禁输入模板 |
+| [t7-release-signoff.md](t7-release-signoff.md) | T7 首发材料、发布后复验与最终签收顺序 |
+| [known-limitations-template.md](known-limitations-template.md) | 已批准非阻断限制的披露模板 |
+| [feedback-template.md](feedback-template.md) | 带隐私提醒的用户问题反馈模板 |
+| [release-record-template.json](release-record-template.json) | 正式 Release 与发布后下载复验记录模板 |
 | [fixtures/d14-v1/](fixtures/d14-v1/) | 可重复生成的合成岗位、简历、通知、附件和模型返回 |
 | [report-template.json](report-template.json) | 单次候选验收报告模板；所有 case 初始为 `NOT_RUN` |
 | [dependencies.json](dependencies.json) | D08、D11、D13 的验收签收表 |

@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -316,13 +317,19 @@ def assert_chrome_profile_has_candidate(profile: Path, extension_dir: Path, vers
 def powershell_value(script: str) -> str | None:
     if sys.platform != "win32":
         return None
+    executable = shutil.which("pwsh") or shutil.which("powershell")
+    if not executable:
+        raise AcceptanceError("PowerShell is required for Windows acceptance inspection")
     completed = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        [executable, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
         check=False,
         timeout=20,
     )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"exit code {completed.returncode}"
+        raise AcceptanceError(f"PowerShell inspection failed: {detail}")
     value = completed.stdout.strip()
     return value or None
 
@@ -338,9 +345,9 @@ def authenticode_metadata(path: Path) -> dict:
     escaped = str(path.resolve(strict=True)).replace("'", "''")
     raw = powershell_value(
         f"$signature=Get-AuthenticodeSignature -LiteralPath '{escaped}'; "
-        "[pscustomobject]@{status=[string]$signature.Status; "
-        "signerSubject=[string]$signature.SignerCertificate.Subject; "
-        "signerThumbprint=[string]$signature.SignerCertificate.Thumbprint} | "
+        "[pscustomobject]@{status=$signature.Status.ToString(); "
+        "signerSubject=if($signature.SignerCertificate){$signature.SignerCertificate.Subject}else{$null}; "
+        "signerThumbprint=if($signature.SignerCertificate){$signature.SignerCertificate.Thumbprint}else{$null}} | "
         "ConvertTo-Json -Compress"
     )
     if not raw:

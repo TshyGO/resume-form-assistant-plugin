@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_RELEASED",
+  "releaseTag": null,
+  "releaseUrl": null,
+  "releasedAt": null,
+  "testedSourceCommit": null,
+  "releaseGate": {
+    "report": null,
+    "result": "NOT_RUN",
+    "verifiedAt": null
+  },
+  "artifacts": {
+    "desktop": {
+      "downloadUrl": null,
+      "name": null,
+      "byteLength": null,
+      "sha256": null,
+      "signatureStatus": null
+    },
+    "extension": {
+      "downloadUrl": null,
+      "name": null,
+      "byteLength": null,
+      "sha256": null,
+      "extensionId": null
+    }
+  },
+  "postReleaseVerification": {
+    "environment": null,
+    "downloadedAt": null,
+    "hashesMatchCandidate": false,
+    "chromeMinimumJourney": "NOT_RUN",
+    "edgeMinimumJourney": "NOT_RUN",
+    "evidence": []
+  },
+  "documentation": {
+    "installAndUpdate": "../../install-and-update.md",
+    "dataPrivacy": "../../data-privacy.md",
+    "supportMatrix": "../support-matrix.md",
+    "knownLimitations": null,
+    "feedbackTemplate": "../feedback-template.md"
+  },
+  "review": {
+    "reviewer": null,
+    "reviewedAt": null,
+    "decision": "NOT_REVIEWED",
+    "blockingDefects": []
+  }
+}

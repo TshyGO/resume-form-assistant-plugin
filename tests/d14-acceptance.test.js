@@ -168,6 +168,23 @@ test('D14 T5 lifecycle evidence starts NOT_RUN and T6 gate fails closed by const
   }
 });
 
+test('D14 T7 release material exists without claiming a release happened', () => {
+  const record = readJson(ACCEPTANCE, 'release-record-template.json');
+  const signoff = fs.readFileSync(path.join(ACCEPTANCE, 't7-release-signoff.md'), 'utf8');
+  const limitations = fs.readFileSync(path.join(ACCEPTANCE, 'known-limitations-template.md'), 'utf8');
+  const feedback = fs.readFileSync(path.join(ACCEPTANCE, 'feedback-template.md'), 'utf8');
+
+  assert.equal(record.status, 'NOT_RELEASED');
+  assert.equal(record.releaseGate.result, 'NOT_RUN');
+  assert.equal(record.postReleaseVerification.hashesMatchCandidate, false);
+  assert.equal(record.review.decision, 'NOT_REVIEWED');
+  assert.match(signoff, /发布后复验/);
+  assert.match(signoff, /install-and-update\.md/);
+  assert.match(limitations, /不能降级为“已知问题”/);
+  assert.match(feedback, /API Key/);
+  assert.match(feedback, /SHA-256/);
+});
+
 test('d14-v1 committed JSON is exactly the deterministic generator output', () => {
   const generator = path.join(FIXTURES, 'generate.mjs');
   const result = spawnSync(process.execPath, [generator, '--check'], {
