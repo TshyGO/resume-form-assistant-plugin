@@ -84,14 +84,23 @@ jobs:
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
-      - name: Install and launch Windows candidate
+      - name: Diagnostic install and launch Windows candidate (not acceptance)
         if: matrix.name == 'windows-x64'
         shell: pwsh
         run: |
-          $installer = Get-ChildItem `
+          $installers = @(Get-ChildItem `
             "desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/nsis" `
-            -Filter "*.exe" -File | Select-Object -Single
-          ./desktop/scripts/d13_install_acceptance.ps1 -Installer $installer.FullName
+            -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          $installer = $installers[0]
+          # GitHub-hosted Windows runners use an administrator token with UAC disabled.
+          # This catches packaging/startup regressions but is explicitly ineligible as the
+          # standard-user D13/T4 acceptance evidence.
+          ./desktop/scripts/d13_install_acceptance.ps1 `
+            -Installer $installer.FullName `
+            -AllowElevatedDiagnostic
 
       - name: Collect artifacts and checksums
         shell: bash

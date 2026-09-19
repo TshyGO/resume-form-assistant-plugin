@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$Installer,
-  [string]$UpgradeInstaller = ""
+  [string]$UpgradeInstaller = "",
+  [switch]$AllowElevatedDiagnostic
 )
 
 # Manual D13 acceptance for a machine with no existing Resume Pro Desktop install.
@@ -26,7 +27,8 @@ $registrationKeys = @(
 $principal = [Security.Principal.WindowsPrincipal]::new(
   [Security.Principal.WindowsIdentity]::GetCurrent()
 )
-if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$runningElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($runningElevated -and -not $AllowElevatedDiagnostic) {
   throw "Run this acceptance check from a non-elevated PowerShell session"
 }
 
@@ -184,7 +186,9 @@ try {
     ArchiveFilesVerified = $before.Count
     ArchiveUnchanged = $true
     UserDataSentinelPreserved = $true
-    RunningElevated = $false
+    RunningElevated = $runningElevated
+    AcceptanceEligible = -not $runningElevated
+    EvidencePurpose = if ($runningElevated) { "ELEVATED_DIAGNOSTIC" } else { "STANDARD_USER_ACCEPTANCE" }
   }
 } finally {
   $env:RESUMEPRO_DATA_DIR = $oldOverride

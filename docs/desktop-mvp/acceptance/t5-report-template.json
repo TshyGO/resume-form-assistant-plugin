@@ -20,7 +20,10 @@
     "timezone": null,
     "webview2Version": null
   },
-  "baselineT4Report": null,
+  "baselineT4Reports": {
+    "chrome": null,
+    "edge": null
+  },
   "checks": [
     { "id": "T5-R01", "caseIds": ["J06", "F13"], "name": "重启后待办与系统提醒", "status": "NOT_RUN", "evidence": [], "defect": null },
     { "id": "T5-R02", "caseIds": ["J06", "F13"], "name": "休眠唤醒后待办与系统提醒", "status": "NOT_RUN", "evidence": [], "defect": null },

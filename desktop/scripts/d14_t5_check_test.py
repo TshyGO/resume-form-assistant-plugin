@@ -34,6 +34,7 @@ class T5CheckTests(unittest.TestCase):
             extensionArtifact=T5.artifact_binding(candidate, "extension"),
             completedAt="2026-09-19T01:00:00Z",
             environment={"accountType": "standard-user"},
+            baselineT4Reports={"chrome": "../chrome/report.json", "edge": "../edge/report.json"},
         )
         return value
 
@@ -75,21 +76,65 @@ class T5CheckTests(unittest.TestCase):
         )
 
     def test_t5_baseline_requires_the_full_t4_matrix_and_smoke(self):
+        candidate = self.candidate()
         baseline = {
+            "buildTarget": candidate["buildTarget"],
+            "evidencePurpose": candidate["evidencePurpose"],
+            "fixtureVersion": candidate["fixtureVersion"],
+            "testedSourceCommit": candidate["testedSourceCommit"],
+            "desktopVersion": candidate["desktopVersion"],
+            "extensionVersion": candidate["extensionVersion"],
+            "protocolVersion": candidate["protocolVersion"],
+            "desktopArtifact": T5.artifact_binding(candidate, "desktop"),
+            "extensionArtifact": T5.artifact_binding(candidate, "extension"),
             "cases": [
                 {"id": case_id, "status": "PASS", "evidence": ["evidence"]}
                 for case_id in T5.T4_CASES
             ],
-            "environment": {"accountType": "standard-user"},
+            "environment": {"accountType": "standard-user", "browser": "chrome"},
             "t4Preflight": {
                 "installedRegistration": "VERIFIED",
                 "installedSmoke": {"status": "PASS"},
             },
+            "review": {
+                "reviewer": "owner", "reviewedAt": "2026-09-19T00:00:00Z",
+                "decision": "APPROVED", "blockingDefects": [],
+            },
         }
-        T5.validate_t4_baseline(baseline)
+        T5.validate_t4_baseline(baseline, candidate, "chrome")
         baseline["cases"].pop()
         with self.assertRaisesRegex(T5.T5Error, "J01-J08 and F01-F13"):
-            T5.validate_t4_baseline(baseline)
+            T5.validate_t4_baseline(baseline, candidate, "chrome")
+
+    def test_t5_baselines_must_name_the_expected_browser_and_candidate(self):
+        candidate = self.candidate()
+        baseline = {
+            "buildTarget": candidate["buildTarget"],
+            "evidencePurpose": candidate["evidencePurpose"],
+            "fixtureVersion": candidate["fixtureVersion"],
+            "testedSourceCommit": candidate["testedSourceCommit"],
+            "desktopVersion": candidate["desktopVersion"],
+            "extensionVersion": candidate["extensionVersion"],
+            "protocolVersion": candidate["protocolVersion"],
+            "desktopArtifact": T5.artifact_binding(candidate, "desktop"),
+            "extensionArtifact": T5.artifact_binding(candidate, "extension"),
+            "cases": [
+                {"id": case_id, "status": "PASS", "evidence": ["evidence"]}
+                for case_id in T5.T4_CASES
+            ],
+            "environment": {"accountType": "standard-user", "browser": "edge"},
+            "t4Preflight": {
+                "installedRegistration": "VERIFIED", "installedSmoke": {"status": "PASS"},
+            },
+            "review": {
+                "reviewer": "owner", "reviewedAt": "2026-09-19T00:00:00Z",
+                "decision": "APPROVED", "blockingDefects": [],
+            },
+        }
+        T5.validate_t4_baseline(baseline, candidate, "edge")
+        baseline["testedSourceCommit"] = "f" * 40
+        with self.assertRaisesRegex(T5.T5Error, "testedSourceCommit"):
+            T5.validate_t4_baseline(baseline, candidate, "edge")
 
     def test_equal_and_preserved_comparisons_distinguish_extra_files(self):
         with tempfile.TemporaryDirectory() as temp:

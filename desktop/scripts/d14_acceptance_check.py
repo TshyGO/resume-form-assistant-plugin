@@ -843,7 +843,7 @@ def stop_browser_profile(browser: str, profile: Path) -> None:
         return
     joined = ",".join(str(value) for value in process_ids)
     powershell_value(
-        f"$ids=@({joined}); Stop-Process -Id $ids -Force -ErrorAction Stop; "
+        f"$ids=@({joined}); Stop-Process -Id $ids -Force -ErrorAction SilentlyContinue; "
         "$ids | ConvertTo-Json -Compress"
     )
     deadline = time.monotonic() + 15

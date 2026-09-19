@@ -75,6 +75,7 @@ function fixture() {
   }
   json(join(dir, "t5.json"), {
     ...binding, phase: "T5", completedAt: "2026-09-19T00:00:00Z",
+    baselineT4Reports: { chrome: "chrome.json", edge: "edge.json" },
     checks: T5_CHECKS.map((id) => ({ id, status: "PASS", evidence: ["evidence"] })), review,
   });
   json(join(dir, "dependencies.json"), {
@@ -121,7 +122,20 @@ test("a report for different candidate bytes is rejected", () => {
   const payload = JSON.parse(readFileSync(join(dir, "edge.json"), "utf8"));
   payload.extensionArtifact.sha256 = "f".repeat(64);
   json(join(dir, "edge.json"), payload);
-  assert.throws(() => checkGate(gatePath), /reports\.edge\.extensionArtifact/);
+  assert.throws(() => checkGate(gatePath), /reports\.edge\.extensionArtifact\.sha256/);
+});
+
+test("artifact object key order does not change candidate binding", () => {
+  const { dir, gatePath } = fixture();
+  const edge = JSON.parse(readFileSync(join(dir, "edge.json"), "utf8"));
+  const artifact = edge.desktopArtifact;
+  edge.desktopArtifact = {
+    downloadUrl: artifact.downloadUrl,
+    sha256: artifact.sha256,
+    name: artifact.name,
+  };
+  json(join(dir, "edge.json"), edge);
+  assert.doesNotThrow(() => checkGate(gatePath));
 });
 
 test("NOT_RUN T5 evidence and blocking review defects fail closed", () => {
@@ -172,4 +186,12 @@ test("a GNU diagnostic package can never pass the release gate", () => {
   candidate.evidencePurpose = "LOCAL_DIAGNOSTIC";
   json(join(dir, "candidate.json"), candidate);
   assert.throws(() => checkGate(gatePath), /x86_64-pc-windows-msvc|LOCAL_DIAGNOSTIC/);
+});
+
+test("T5 must reference the same Chrome and Edge reports the release gate validates", () => {
+  const { dir, gatePath } = fixture();
+  const t5 = JSON.parse(readFileSync(join(dir, "t5.json"), "utf8"));
+  t5.baselineT4Reports.edge = "some-other-edge.json";
+  json(join(dir, "t5.json"), t5);
+  assert.throws(() => checkGate(gatePath), /edge baseline does not reference reports\.edge/);
 });

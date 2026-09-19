@@ -49,7 +49,7 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     return {
       tone: "warn",
       text: "还没核对过浏览器注册。",
-      next: "点「重试注册」让桌面写一次清单。",
+      next: "点「重新检查注册」让桌面写一次清单。",
       showInstall: false,
       showRetry: true,
     };

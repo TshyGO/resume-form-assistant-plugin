@@ -53,7 +53,23 @@ def artifact_binding(candidate: dict, kind: str) -> dict:
     return {key: candidate[kind].get(key) for key in ("name", "sha256", "downloadUrl")}
 
 
-def validate_t4_baseline(report: dict) -> None:
+def validate_t4_baseline(report: dict, candidate: dict, browser: str) -> None:
+    if report.get("environment", {}).get("browser") != browser:
+        raise T5Error(f"T5 {browser} baseline reports the wrong browser")
+    bindings = {
+        "buildTarget": candidate.get("buildTarget"),
+        "evidencePurpose": candidate.get("evidencePurpose"),
+        "fixtureVersion": candidate.get("fixtureVersion"),
+        "testedSourceCommit": candidate.get("testedSourceCommit"),
+        "desktopVersion": candidate.get("desktopVersion"),
+        "extensionVersion": candidate.get("extensionVersion"),
+        "protocolVersion": candidate.get("protocolVersion"),
+        "desktopArtifact": artifact_binding(candidate, "desktop"),
+        "extensionArtifact": artifact_binding(candidate, "extension"),
+    }
+    for field, expected in bindings.items():
+        if report.get(field) != expected:
+            raise T5Error(f"T5 {browser} baseline {field} does not match the candidate")
     cases = report.get("cases") or []
     if [item.get("id") for item in cases] != T4_CASES:
         raise T5Error("T5 baseline must contain J01-J08 and F01-F13 exactly once in order")
@@ -67,6 +83,13 @@ def validate_t4_baseline(report: dict) -> None:
         raise T5Error("T5 baseline production registration is not verified")
     if preflight.get("installedSmoke", {}).get("status") != "PASS":
         raise T5Error("T5 baseline installed smoke did not pass")
+    review = report.get("review") or {}
+    if review.get("decision") != "APPROVED":
+        raise T5Error(f"T5 requires an approved {browser} baseline report")
+    if not review.get("reviewer") or not review.get("reviewedAt"):
+        raise T5Error(f"T5 requires a named and dated {browser} baseline review")
+    if review.get("blockingDefects"):
+        raise T5Error(f"T5 {browser} baseline still has blocking defects")
 
 
 def prepare(args) -> None:
@@ -74,15 +97,13 @@ def prepare(args) -> None:
     if run_dir.exists():
         raise T5Error(f"refusing to overwrite T5 evidence: {run_dir}")
     candidate = read_json(args.candidate.resolve(strict=True))
-    baseline_path = args.baseline_report.resolve(strict=True)
-    baseline = read_json(baseline_path)
-    if baseline.get("testedSourceCommit") != candidate.get("testedSourceCommit"):
-        raise T5Error("T4 baseline and candidate source commit differ")
-    if baseline.get("review", {}).get("decision") != "APPROVED":
-        raise T5Error("T5 requires an approved T4 baseline report")
-    if baseline.get("review", {}).get("blockingDefects"):
-        raise T5Error("T4 baseline still has blocking defects")
-    validate_t4_baseline(baseline)
+    baseline_paths = {
+        "chrome": args.chrome_report.resolve(strict=True),
+        "edge": args.edge_report.resolve(strict=True),
+    }
+    baselines = {browser: read_json(path) for browser, path in baseline_paths.items()}
+    for browser, baseline in baselines.items():
+        validate_t4_baseline(baseline, candidate, browser)
 
     report = deepcopy(read_json(TEMPLATE))
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -99,10 +120,13 @@ def prepare(args) -> None:
         desktopArtifact=artifact_binding(candidate, "desktop"),
         extensionArtifact=artifact_binding(candidate, "extension"),
         environment={
-            key: baseline.get("environment", {}).get(key)
+            key: baselines["chrome"].get("environment", {}).get(key)
             for key in ("osBuild", "architecture", "accountType", "timezone", "webview2Version")
         },
-        baselineT4Report=os.path.relpath(baseline_path, run_dir).replace("\\", "/"),
+        baselineT4Reports={
+            browser: os.path.relpath(path, run_dir).replace("\\", "/")
+            for browser, path in baseline_paths.items()
+        },
     )
     run_dir.mkdir(parents=True)
     write_json(run_dir / "report.json", report)
@@ -211,6 +235,11 @@ def verify_report(report: dict, candidate: dict, require_complete: bool) -> list
     if not re.fullmatch(r"[0-9a-f]{40}", str(report.get("testedSourceCommit", ""))):
         errors.append("testedSourceCommit must be a full Git SHA")
     if require_complete:
+        baselines = report.get("baselineT4Reports") or {}
+        if sorted(baselines) != ["chrome", "edge"]:
+            errors.append("T5 completion requires Chrome and Edge baseline report references")
+        elif not all(isinstance(value, str) and value.strip() for value in baselines.values()):
+            errors.append("T5 completion requires non-empty Chrome and Edge baseline references")
         review = report.get("review") or {}
         if review.get("decision") != "APPROVED":
             errors.append("T5 completion requires review.decision=APPROVED")
@@ -239,7 +268,8 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     item = commands.add_parser("prepare")
     item.add_argument("--candidate", type=Path, required=True)
-    item.add_argument("--baseline-report", type=Path, required=True)
+    item.add_argument("--chrome-report", type=Path, required=True)
+    item.add_argument("--edge-report", type=Path, required=True)
     item.add_argument("--run-dir", type=Path, required=True)
     item.add_argument("--run-id")
     item.set_defaults(handler=prepare)

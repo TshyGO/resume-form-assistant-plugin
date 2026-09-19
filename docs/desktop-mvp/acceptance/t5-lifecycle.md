@@ -4,12 +4,13 @@ T5 使用 T4 已批准的同一组候选字节，补齐真实 Windows 生命周�
 
 ## 创建报告
 
-T4 的 Chrome 或 Edge 基线报告必须已在普通用户环境完成 J01–J08、F01–F13，生产注册和安装后烟测均通过，并经过具名 `APPROVED` 审阅：
+T4 的 Chrome 与 Edge 两份基线报告都必须已在普通用户环境完成 J01–J08、F01–F13，生产注册和安装后烟测均通过，并经过具名 `APPROVED` 审阅；两份报告必须绑定同一候选、源码 commit、版本和协议：
 
 ```powershell
 python desktop/scripts/d14_t5_check.py prepare `
   --candidate "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1\artifacts.json" `
-  --baseline-report "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1\chrome\report.json" `
+  --chrome-report "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1\chrome\report.json" `
+  --edge-report "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1\edge\report.json" `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1\t5"
 ```
 

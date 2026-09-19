@@ -116,7 +116,13 @@ function assertBindings(report, candidate, label) {
     extensionArtifact: artifactBinding(candidate, "extension"),
   };
   for (const [field, value] of Object.entries(expected)) {
-    if (JSON.stringify(report[field]) !== JSON.stringify(value)) {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      for (const [key, inner] of Object.entries(value)) {
+        if (report[field]?.[key] !== inner) {
+          throw new GateError(`${label}.${field}.${key} does not match the candidate`);
+        }
+      }
+    } else if (report[field] !== value) {
       throw new GateError(`${label}.${field} does not match the candidate`);
     }
   }
@@ -190,6 +196,12 @@ export function assertT5Report(report, candidate) {
   if (report.phase !== "T5") throw new GateError("reports.t5 phase is not T5");
   assertBindings(report, candidate, label);
   required(report.completedAt, `${label}.completedAt`);
+  const baselines = report.baselineT4Reports ?? {};
+  if (JSON.stringify(Object.keys(baselines).sort()) !== JSON.stringify(["chrome", "edge"])) {
+    throw new GateError("reports.t5 must reference Chrome and Edge T4 baselines exactly");
+  }
+  required(baselines.chrome, `${label}.baselineT4Reports.chrome`);
+  required(baselines.edge, `${label}.baselineT4Reports.edge`);
   const checks = report.checks ?? [];
   if (JSON.stringify(checks.map((item) => item.id)) !== JSON.stringify(T5_CHECKS)) {
     throw new GateError("reports.t5 check ids/order do not match the T5 template");
@@ -242,12 +254,25 @@ export function checkGate(gatePath) {
   }
   const dependencies = readJson(resolveReference(absoluteGate, gate.dependencies, "dependencies"));
   assertDependencies(dependencies);
-  const chrome = readJson(resolveReference(absoluteGate, gate.reports?.chrome, "reports.chrome"));
-  const edge = readJson(resolveReference(absoluteGate, gate.reports?.edge, "reports.edge"));
-  const t5 = readJson(resolveReference(absoluteGate, gate.reports?.t5, "reports.t5"));
+  const chromePath = resolveReference(absoluteGate, gate.reports?.chrome, "reports.chrome");
+  const edgePath = resolveReference(absoluteGate, gate.reports?.edge, "reports.edge");
+  const t5Path = resolveReference(absoluteGate, gate.reports?.t5, "reports.t5");
+  const chrome = readJson(chromePath);
+  const edge = readJson(edgePath);
+  const t5 = readJson(t5Path);
   assertT4Report(chrome, "chrome", candidate, dependencies.dependencies);
   assertT4Report(edge, "edge", candidate, dependencies.dependencies);
   assertT5Report(t5, candidate);
+  for (const [browser, expectedPath] of [["chrome", chromePath], ["edge", edgePath]]) {
+    const referenced = resolveReference(
+      t5Path,
+      t5.baselineT4Reports?.[browser],
+      `reports.t5.baselineT4Reports.${browser}`,
+    );
+    if (referenced !== expectedPath) {
+      throw new GateError(`reports.t5 ${browser} baseline does not reference reports.${browser}`);
+    }
+  }
   assertReleaseFile(
     resolveReference(absoluteGate, gate.releaseArtifacts?.desktop, "releaseArtifacts.desktop"),
     candidate.desktop,
