@@ -3420,6 +3420,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "url",
  "uuid",
  "windows-sys 0.59.0",
  "winreg 0.56.0",
