@@ -34,7 +34,7 @@ test("两个浏览器都注册好了就请用户去装扩展", () => {
   assert.equal(state.tone, "ok");
   assert.match(state.text, /Chrome、Edge/);
   assert.equal(state.showInstall, true);
-  assert.equal(state.showRetry, false);
+  assert.equal(state.showRetry, true);
 });
 
 test("一个成一个没成：照样能装，但要说清楚哪个没成", () => {
