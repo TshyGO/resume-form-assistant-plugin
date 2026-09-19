@@ -117,9 +117,18 @@ pub fn export_archive(
         write_archive(&source, destination).map_err(|e| fail("BACKUP_ERROR", e))
     })();
 
-    // 快照是中间产物，成败都不留。
-    let _ = std::fs::remove_file(&snapshot);
+    // SQLite 只读打开快照时也可能创建 `-wal` / `-shm`。三者都是同一个中间产物，
+    // 成功和失败都必须一起收走，不能在 staging 留下无法解释的侧车文件。
+    cleanup_sqlite_snapshot(&snapshot);
     result
+}
+
+fn cleanup_sqlite_snapshot(snapshot: &Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let mut value = snapshot.as_os_str().to_os_string();
+        value.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(value));
+    }
 }
 
 // --- 恢复 ---------------------------------------------------------------------------------

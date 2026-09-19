@@ -321,3 +321,22 @@ fn an_export_that_fails_does_not_leave_a_snapshot_behind() {
         .unwrap_or_default();
     assert!(leftovers.is_empty(), "中间快照要收走：{leftovers:?}");
 }
+
+#[test]
+fn sqlite_snapshot_cleanup_removes_the_database_and_both_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    let snapshot = dir.path().join("snapshot.db");
+    for suffix in ["", "-wal", "-shm"] {
+        let mut value = snapshot.as_os_str().to_os_string();
+        value.push(suffix);
+        std::fs::write(std::path::PathBuf::from(value), b"temporary").unwrap();
+    }
+
+    cleanup_sqlite_snapshot(&snapshot);
+
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert!(leftovers.is_empty(), "侧车文件也必须清理：{leftovers:?}");
+}
