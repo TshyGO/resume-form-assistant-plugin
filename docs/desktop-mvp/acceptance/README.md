@@ -13,6 +13,10 @@
 | [t3-fault-matrix.md](t3-fault-matrix.md) | T3 的故障防线、自动化范围和实机限制 |
 | [t3-fault-matrix.json](t3-fault-matrix.json) | F01–F13 的机器可校验精确测试映射与剩余证据 |
 | [t4-windows-browser.md](t4-windows-browser.md) | T4 候选产物、生产注册、Chrome/Edge 烟测与 J01–J08 实机清单 |
+| [t5-lifecycle.md](t5-lifecycle.md) | T5 提醒、恢复、磁盘故障、升级卸载与独立填写实机清单 |
+| [t5-report-template.json](t5-report-template.json) | T5 的 16 项真实 OS/安装生命周期报告模板 |
+| [t6-release-gate.md](t6-release-gate.md) | T6 将候选字节、T4/T5 报告、依赖签收和最终下载文件绑定为阻断门禁 |
+| [release-gate-template.json](release-gate-template.json) | T6 单次门禁输入模板 |
 | [fixtures/d14-v1/](fixtures/d14-v1/) | 可重复生成的合成岗位、简历、通知、附件和模型返回 |
 | [report-template.json](report-template.json) | 单次候选验收报告模板；所有 case 初始为 `NOT_RUN` |
 | [dependencies.json](dependencies.json) | D08、D11、D13 的验收签收表 |
@@ -27,6 +31,8 @@
 5. 在 [dependencies.json](dependencies.json) 中记录每个硬依赖的实现 PR、验收证据与具名签收。GitHub issue 已关闭不能替代签收。
 
 T4 开始前先按 [t4-windows-browser.md](t4-windows-browser.md) 用候选 EXE/ZIP 创建 Chrome、Edge 两份不可覆盖的运行报告。仓库源码或开发注册结果不能代替候选安装证据。
+
+T4 获得已批准基线后，按 [t5-lifecycle.md](t5-lifecycle.md) 记录真实 OS、恢复和升级卸载结果；最后由 [t6-release-gate.md](t6-release-gate.md) 对同一候选、全部报告、依赖签收和最终下载字节做失败关闭校验。
 
 ## 状态语义
 

@@ -4,6 +4,7 @@
 //! （#28）。所以先写一个临时文件、`sync_all`、再 rename 到目标名。中途任何一步
 //! 失败都只留下（并删掉）那个临时文件，用户上一次成功的备份原封不动。
 
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,9 @@ pub struct ArchiveSource<'a> {
     pub archive_id: String,
     pub schema_version: i64,
     pub counts: ArchiveCounts,
+    /// 数据库一致性快照引用的附件/简历快照相对路径。
+    /// 调用方从 `database_snapshot` 读取后传入；不能从正在变化的 live store 推测。
+    pub referenced_paths: Vec<String>,
     /// 已经按白名单过滤过的设置 JSON。没有就不写这一项。
     pub settings_json: Option<String>,
     pub created_at: String,
@@ -147,23 +151,10 @@ fn build(
         )?);
     }
 
-    // 数据库快照里的引用数是打包开始时的业务真相。附件或快照若在快照之后、目录
-    // 遍历之前被删掉，单靠 read_dir 会把它当成「本来就没有」并成功产出残包。这里
-    // 用快照对应的计数卡住发布：少一个或多一个都失败，临时 ZIP 会由调用方删掉，
-    // 上一份成功备份不会被覆盖。应用命令层还会持有 store slot 锁，阻止正常命令
-    // 并发删除；这条是对进程外删除、崩溃遗留和未来绕过命令层代码的第二道防线。
-    require_count(
-        &entries,
-        "archive/attachments/",
-        source.counts.attachments,
-        "附件文件",
-    )?;
-    require_count(
-        &entries,
-        "archive/snapshots/",
-        source.counts.snapshots,
-        "简历快照文件",
-    )?;
+    // 计数相同不能证明引用完整：少一个被引用文件、同时多一个孤立文件时数量不变。
+    // 因此逐项比较数据库一致性快照里的引用路径与实际归档路径。少文件和孤儿文件
+    // 都会让临时 ZIP 失败，上一次成功备份保持不变。
+    require_referenced_paths(&entries, &source.referenced_paths)?;
 
     // 4. 清单最后写：它要覆盖上面所有条目。
     entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -186,19 +177,35 @@ fn build(
     Ok((manifest.entries.len(), skipped))
 }
 
-fn require_count(
+fn require_referenced_paths(
     entries: &[ManifestEntry],
-    prefix: &str,
-    expected: i64,
-    label: &str,
+    referenced_paths: &[String],
 ) -> Result<(), BackupError> {
-    let actual = entries
+    let expected: BTreeSet<String> = referenced_paths.iter().cloned().collect();
+    if expected.len() != referenced_paths.len() {
+        return Err(BackupError::Mismatch(
+            "数据库快照包含重复的附件或简历快照路径；请先运行档案完整性检查".into(),
+        ));
+    }
+    if let Some(path) = expected
         .iter()
-        .filter(|entry| entry.path.starts_with(prefix))
-        .count() as i64;
-    if actual != expected {
+        .find(|path| !(path.starts_with("attachments/") || path.starts_with("snapshots/")))
+    {
         return Err(BackupError::Mismatch(format!(
-            "数据库快照记录 {expected} 个{label}，备份目录找到 {actual} 个；请先运行档案完整性检查并修复缺失或孤立文件"
+            "数据库快照引用了不受支持的归档路径 {path}；请先运行档案完整性检查"
+        )));
+    }
+    let actual: BTreeSet<String> = entries
+        .iter()
+        .filter_map(|entry| entry.path.strip_prefix("archive/"))
+        .filter(|path| path.starts_with("attachments/") || path.starts_with("snapshots/"))
+        .map(str::to_string)
+        .collect();
+    if actual != expected {
+        let missing: Vec<_> = expected.difference(&actual).cloned().collect();
+        let unexpected: Vec<_> = actual.difference(&expected).cloned().collect();
+        return Err(BackupError::Mismatch(format!(
+            "数据库快照引用与备份目录不一致；缺失={missing:?}，孤立={unexpected:?}；请先运行档案完整性检查并修复"
         )));
     }
     Ok(())

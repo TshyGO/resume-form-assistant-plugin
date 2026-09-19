@@ -37,7 +37,7 @@ python desktop/scripts/d14_acceptance_check.py prepare `
 ## 2. 安装和生产注册
 
 1. 通过普通用户可见的安装入口安装候选 NSIS；记录安装提示、未签名状态、安装目录和是否出现意外提权。
-2. 解压候选 ZIP；Chrome 与 Edge 分别以该目录加载扩展。禁止改动解压内容。
+2. 解压候选 ZIP；Chrome 与 Edge 分别以该目录加载扩展。禁止改动解压内容。正式版 Chrome 137+ 不再支持 `--load-extension`，须在专用隔离 Profile 的 `chrome://extensions` 中人工“加载已解压的扩展程序”；后续烟测会核对该 Profile 的固定 ID、版本和目录。
 3. 启动桌面程序一次，让产品自身写入并自愈 Native Messaging 注册；不要用 `nm-dev-register.mjs`。
 4. 记录安装后的可执行文件绝对路径，然后分别执行：
 
@@ -69,7 +69,8 @@ python desktop/scripts/d14_acceptance_check.py installed-smoke `
   --browser chrome `
   --installed-exe "$env:LOCALAPPDATA\Resume Pro Desktop\resume-pro-desktop.exe" `
   --extension-zip "C:\candidate\resume-pro-v0.4.0.zip" `
-  --extension-dir "C:\candidate\extension"
+  --extension-dir "C:\candidate\extension" `
+  --browser-profile "C:\candidate\chrome-profile"
 
 python desktop/scripts/d14_acceptance_check.py installed-smoke `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
@@ -81,7 +82,7 @@ python desktop/scripts/d14_acceptance_check.py installed-smoke `
 
 此烟测使用临时 Profile 与临时合成档案，但不覆盖生产注册：真实浏览器通过安装后的 host 完成握手、保存岗位、绑定、确认投递，并确认队列清空。结果写入各浏览器的 `installed-smoke.json`。它只作为 J01/J03 的机器证据之一，不自动修改 case 状态。
 
-`war_browser_check.py`、`d07_browser_check.py`、`d08_browser_check.py` 现在也支持 `--browser chrome|edge --extension-dir <候选解压目录>`；它们会使用隔离的开发注册或临时二进制，适合补充回归，不能替代上面的生产注册烟测。
+`war_browser_check.py`、`d07_browser_check.py`、`d08_browser_check.py` 支持 `--browser chromium|edge --extension-dir <候选解压目录>`；其中 Chromium 是 Chrome for Testing，不是正式版 Chrome。它们会使用隔离的开发注册或临时二进制，适合补充回归，不能替代上面的生产注册烟测。
 
 ## 4. J01–J08 人工清单（Chrome、Edge 各一份）
 

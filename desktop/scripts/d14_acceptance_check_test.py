@@ -31,6 +31,23 @@ class D14AcceptanceCheckTests(unittest.TestCase):
                 r"%LOCALAPPDATA%\Resume Pro Desktop\app.exe",
             )
 
+    def test_stable_chrome_profile_must_point_at_the_exact_candidate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate = root / "candidate"
+            candidate.mkdir()
+            default = root / "profile" / "Default"
+            default.mkdir(parents=True)
+            D14.write_json(default / "Secure Preferences", {
+                "extensions": {"settings": {D14.EXPECTED_EXTENSION_ID: {
+                    "path": str(candidate),
+                    "manifest": {"version": "0.4.0"},
+                }}}
+            })
+            D14.assert_chrome_profile_has_candidate(root / "profile", candidate, "0.4.0")
+            with self.assertRaises(D14.AcceptanceError):
+                D14.assert_chrome_profile_has_candidate(root / "profile", candidate, "0.4.1")
+
     def test_extension_zip_requires_exact_reviewed_file_set(self):
         expected = D14.CORE_EXTENSION_FILES | set(D14.read_json(D14.REVIEWED_ASSETS))
         with tempfile.TemporaryDirectory() as temp:
@@ -72,6 +89,48 @@ class D14AcceptanceCheckTests(unittest.TestCase):
             self.assertIn("J01: PASS requires evidence", errors)
             complete = D14.verify_report(report, require_complete=True)
             self.assertTrue(any("J02: T4 completion requires PASS" in error for error in complete))
+            self.assertIn("T4 completion requires review.decision=APPROVED", complete)
+
+    def test_report_must_match_candidate_and_named_review(self):
+        report = D14.read_json(D14.REPORT_TEMPLATE)
+        candidate = {
+            "fixtureVersion": "d14-v1",
+            "testedSourceCommit": "a" * 40,
+            "protocolVersion": 1,
+            "desktop": {"name": "setup.exe", "sha256": "b" * 64, "downloadUrl": "https://example.test/setup"},
+            "extension": {"name": "extension.zip", "sha256": "c" * 64, "downloadUrl": "https://example.test/zip"},
+        }
+        report.update(
+            fixtureVersion=candidate["fixtureVersion"],
+            testedSourceCommit=candidate["testedSourceCommit"],
+            desktopVersion="0.1.0",
+            extensionVersion="0.4.0",
+            protocolVersion=candidate["protocolVersion"],
+            desktopArtifact=dict(candidate["desktop"]),
+            extensionArtifact=dict(candidate["extension"]),
+            environment={
+                "osBuild": "Windows test", "architecture": "AMD64", "accountType": "standard-user",
+                "timezone": "UTC", "browser": "chrome", "browserVersion": "1", "webview2Version": "1",
+            },
+            review={
+                "reviewer": "acceptance-owner", "reviewedAt": "2026-09-19T00:00:00Z",
+                "decision": "APPROVED", "blockingDefects": [],
+            },
+        )
+        report["t4Preflight"] = {"installedRegistration": "VERIFIED"}
+        for case in report["cases"]:
+            if case["id"] in D14.JOURNEYS:
+                case.update(status="PASS", evidence=["evidence.json"])
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "report.json"
+            D14.write_json(path, report)
+            self.assertEqual(D14.verify_report(path, True, candidate), [])
+            report["desktopArtifact"]["sha256"] = "d" * 64
+            D14.write_json(path, report)
+            self.assertIn(
+                "desktopArtifact does not match artifacts.json",
+                D14.verify_report(path, True, candidate),
+            )
 
 
 if __name__ == "__main__":

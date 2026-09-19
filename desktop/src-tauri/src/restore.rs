@@ -90,7 +90,9 @@ pub fn export_archive(
         .map_err(|e| fail("STORE_ERROR", e))?;
 
     let result = (|| {
-        let counts = to_backup_counts(&store.counts().map_err(|e| fail("STORE_ERROR", e))?);
+        let inventory = ArchiveStore::backup_inventory_from_snapshot(&snapshot)
+            .map_err(|e| fail("STORE_ERROR", e))?;
+        let counts = to_backup_counts(&inventory.counts);
         let settings_json = std::fs::read_to_string(&paths.settings_file)
             .ok()
             .and_then(|raw| portable_settings(&raw));
@@ -100,6 +102,7 @@ pub fn export_archive(
             archive_id: store.identity().archive_id,
             schema_version: store.schema_version(),
             counts,
+            referenced_paths: inventory.referenced_paths,
             settings_json,
             created_at: now.to_string(),
         };
@@ -168,9 +171,16 @@ pub fn restore_archive(
 
     // 3. 松开旧库，把 staging 挪成一个正式档案目录，然后切换。
     //    切换之前先记下现在生效的是哪个目录——切完指针就问不出来了。
-    let previous = live_archive_dir(paths).or_else(|| paths.archive_dir.exists().then(|| paths.archive_dir.clone()));
+    let previous = live_archive_dir(paths).or_else(|| {
+        paths
+            .archive_dir
+            .exists()
+            .then(|| paths.archive_dir.clone())
+    });
     close_current()?;
-    let restored_dir = paths.data_root.join(format!("archive-{}", uuid::Uuid::new_v4()));
+    let restored_dir = paths
+        .data_root
+        .join(format!("archive-{}", uuid::Uuid::new_v4()));
     if let Err(e) = std::fs::rename(&staged_archive, &restored_dir) {
         cleanup(&staging);
         return Err(fail("IO_ERROR", format!("无法启用恢复出来的档案：{e}")));
@@ -268,7 +278,11 @@ fn live_archive_dir(paths: &RestorePaths) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn retire(paths: &RestorePaths, previous: Option<PathBuf>, now: &str) -> Result<String, std::io::Error> {
+fn retire(
+    paths: &RestorePaths,
+    previous: Option<PathBuf>,
+    now: &str,
+) -> Result<String, std::io::Error> {
     let Some(previous) = previous else {
         return Ok("（没有旧档案）".into());
     };
@@ -328,9 +342,16 @@ pub fn rollback_to(
         return Err(fail("NOT_FOUND", "这个回滚点里没有档案。"));
     }
 
-    let previous = live_archive_dir(paths).or_else(|| paths.archive_dir.exists().then(|| paths.archive_dir.clone()));
+    let previous = live_archive_dir(paths).or_else(|| {
+        paths
+            .archive_dir
+            .exists()
+            .then(|| paths.archive_dir.clone())
+    });
     close_current()?;
-    let restored_dir = paths.data_root.join(format!("archive-{}", uuid::Uuid::new_v4()));
+    let restored_dir = paths
+        .data_root
+        .join(format!("archive-{}", uuid::Uuid::new_v4()));
     std::fs::rename(&source, &restored_dir).map_err(|e| fail("IO_ERROR", e))?;
 
     let (identity, reminders_cleared, counts) = match switch_to(paths, &restored_dir) {

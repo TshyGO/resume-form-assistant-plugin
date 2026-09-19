@@ -45,6 +45,11 @@ fn source<'a>(dir: &'a Path, snapshot: &'a Path) -> ArchiveSource<'a> {
             evidence: 2,
             attachments: 2,
         },
+        referenced_paths: vec![
+            "attachments/2026/09/abc-回复.eml".into(),
+            "attachments/2026/09/def-截图.png".into(),
+            "snapshots/snap-1.json".into(),
+        ],
         settings_json: None,
         created_at: "2026-09-13T02:00:00.000Z".into(),
     }
@@ -221,7 +226,7 @@ fn deleting_a_referenced_file_after_the_database_snapshot_cannot_publish_a_parti
     fs::remove_file(archive_dir.join("attachments/2026/09/def-截图.png")).unwrap();
     let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
     assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
-    assert!(error.to_string().contains("2 个附件文件"), "{error}");
+    assert!(error.to_string().contains("def-截图.png"), "{error}");
     assert!(error.to_string().contains("档案完整性检查"), "{error}");
     assert_eq!(
         fs::read(&out).unwrap(),
@@ -243,7 +248,7 @@ fn a_missing_snapshot_file_is_rejected_without_replacing_the_previous_backup() {
 
     let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
     assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
-    assert!(error.to_string().contains("1 个简历快照文件"), "{error}");
+    assert!(error.to_string().contains("snap-1.json"), "{error}");
     assert_eq!(fs::read(&out).unwrap(), previous);
 }
 
@@ -262,6 +267,26 @@ fn an_orphan_attachment_fails_closed_with_a_repair_hint() {
     assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
     assert!(error.to_string().contains("档案完整性检查"), "{error}");
     assert!(!out.exists(), "不完整的首份备份也不能发布");
+}
+
+#[test]
+fn a_missing_reference_and_an_orphan_with_the_same_count_still_fail() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let out = dir.path().join("archive.zip");
+
+    fs::remove_file(archive_dir.join("attachments/2026/09/def-截图.png")).unwrap();
+    write(
+        &archive_dir.join("attachments/2026/09/orphan.bin"),
+        b"same count, wrong identity",
+    );
+
+    let error = write_archive(&source(&archive_dir, &snapshot), &out).unwrap_err();
+    assert!(matches!(error, backup::BackupError::Mismatch(_)), "{error}");
+    assert!(error.to_string().contains("def-截图.png"), "{error}");
+    assert!(error.to_string().contains("orphan.bin"), "{error}");
+    assert!(!out.exists());
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 - 来源：[D14 #27](https://github.com/TshyGO/resume-form-assistant-plugin/issues/27)，总规划 [#15](https://github.com/TshyGO/resume-form-assistant-plugin/issues/15)。
 - 编写日期：2026-09-17；本地核对基线：`1b5e5c1`。
-- 状态：T1/T2 已完成；T3 的 F01–F12 确定性自动化已映射并补缺，F13 与 F08 的真实 OS/磁盘证据待 T5，实机安装与发布尚未执行。
+- 状态：T1/T2 已完成；T3 的 F01–F12 确定性自动化已映射并补缺，F13 与 F08 的真实 OS/磁盘证据待 T5。T4/T5/T6 的候选登记、真机清单与失败关闭门禁已实现为本地工具，但**尚未执行过任何真实安装或实机验收**：D13 还没有 `desktop-v*` 候选产物，T4/T5 报告全部保持 `NOT_RUN`，T6 也尚未接入发布流水线。
 - 形式：作为 #27 的实施 spec；下面七项可分别作为小 PR 或子 issue。
 
 ## 1. 要交付什么
@@ -148,6 +148,14 @@ T6 与 D13 协调：候选阶段使用构建 artifacts 或 draft/prerelease；�
 - [ ] T4：Windows Chrome、Edge 实际安装闭环通过。
 - [ ] T5：提醒、重复恢复、升级卸载及独立填写通过。
 - [ ] T6：候选和正式下载产物核验、门禁失败行为均有证据。
+
+T4/T5/T6 的落点与状态：
+
+| 项 | 本地已实现 | 仍未完成 |
+| --- | --- | --- |
+| T4 | `desktop/scripts/d14_acceptance_check.py`（候选哈希绑定、插件 ZIP allowlist 与固定 ID 校验、Chrome/Edge 双报告、生产注册检查、安装后真机烟测、完成门禁），清单见 [t4-windows-browser.md](../../desktop-mvp/acceptance/t4-windows-browser.md) | 无候选安装包与下载地址；J01–J08 未在真实 Chrome/Edge 执行，报告仍为 `NOT_RUN` |
+| T5 | `desktop/scripts/d14_t5_check.py`（16 项报告模板、档案哈希快照与比较、完成门禁），清单见 [t5-lifecycle.md](../../desktop-mvp/acceptance/t5-lifecycle.md) | 重启/休眠/杀进程/跨次日/磁盘满/升级卸载等全部实机动作未执行 |
+| T6 | `desktop/scripts/check-release-acceptance.mjs` 及行为测试；接入点见 [t6-release-gate.md](../../desktop-mvp/acceptance/t6-release-gate.md) | 尚无真实报告可校验；未接入 tag 流水线（缺证据时接入只会误拦发版） |
 - [ ] T7：Release、教程、支持说明、限制、反馈模板和最终签收齐全。
 - [ ] D08/D11/D13 验收链接齐全；无未解决阻断缺陷或未执行必测项。
 - [ ] #27 关联实施 PR 和最终报告；最终完成后才关闭 D14，并据此更新 #15/#39 的发行状态。

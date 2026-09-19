@@ -152,6 +152,34 @@ def assert_extracted_matches_zip(archive_path: Path, directory: Path) -> None:
         )
 
 
+def assert_chrome_profile_has_candidate(profile: Path, extension_dir: Path, version: str) -> None:
+    matches = []
+    for preferences in sorted(profile.glob("*/Preferences")) + sorted(profile.glob("*/Secure Preferences")):
+        try:
+            payload = read_json(preferences)
+        except (OSError, json.JSONDecodeError):
+            continue
+        setting = payload.get("extensions", {}).get("settings", {}).get(EXPECTED_EXTENSION_ID)
+        if not isinstance(setting, dict):
+            continue
+        manifest = setting.get("manifest") if isinstance(setting.get("manifest"), dict) else {}
+        configured_path = setting.get("path")
+        if not isinstance(configured_path, str) or not configured_path:
+            continue
+        candidate = Path(configured_path)
+        if not candidate.is_absolute():
+            candidate = (preferences.parent / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        if candidate == extension_dir.resolve() and manifest.get("version") == version:
+            matches.append(preferences)
+    if not matches:
+        raise AcceptanceError(
+            "the isolated Chrome profile does not point the fixed extension id and version "
+            f"at the extracted candidate directory: {extension_dir}"
+        )
+
+
 def powershell_value(script: str) -> str | None:
     if sys.platform != "win32":
         return None
@@ -323,6 +351,8 @@ def prepare(args) -> None:
         "runId": run_id,
         "fixtureVersion": "d14-v1",
         "testedSourceCommit": args.source_commit.lower(),
+        "desktopVersion": args.desktop_version,
+        "extensionVersion": extension_details["version"],
         "protocolVersion": args.protocol_version,
         "generatedAt": generated_at,
         "desktop": desktop,
@@ -433,6 +463,7 @@ def installed_smoke(args) -> None:
     archive_path = verify_artifact_path(args.extension_zip, artifacts["extension"], "extension")
     extension_dir = args.extension_dir.resolve(strict=True)
     assert_extracted_matches_zip(archive_path, extension_dir)
+    extension_version = artifacts["extension"].get("version")
 
     installed_exe = args.installed_exe.resolve(strict=True)
     _, _, native_manifest = registry_manifest(args.browser)
@@ -463,7 +494,21 @@ def installed_smoke(args) -> None:
         workspace = Path(temp)
         data_dir = workspace / "data"
         data_dir.mkdir()
-        profile = workspace / "profile"
+        if args.browser == "chrome":
+            if args.browser_profile is None:
+                raise AcceptanceError(
+                    "stable Chrome requires --browser-profile with the candidate already loaded; "
+                    "command-line extension loading is not supported"
+                )
+            profile = args.browser_profile.resolve(strict=True)
+            assert_chrome_profile_has_candidate(profile, extension_dir, extension_version)
+            browser_args = []
+        else:
+            profile = workspace / "profile"
+            browser_args = [
+                f"--disable-extensions-except={extension_dir}",
+                f"--load-extension={extension_dir}",
+            ]
         env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
         stop_application(installed_exe)
         try:
@@ -473,10 +518,8 @@ def installed_smoke(args) -> None:
                     headless=False,
                     channel="chrome" if args.browser == "chrome" else "msedge",
                     env=env,
-                    args=[
-                        f"--disable-extensions-except={extension_dir}",
-                        f"--load-extension={extension_dir}",
-                    ],
+                    args=browser_args,
+                    ignore_default_args=["--disable-extensions"] if args.browser == "chrome" else None,
                 )
                 try:
                     worker = context.service_workers[0] if context.service_workers else context.wait_for_event(
@@ -548,7 +591,7 @@ def installed_smoke(args) -> None:
     print(f"OK: installed {args.browser} host smoke passed; J01-J08 were not auto-promoted")
 
 
-def verify_report(path: Path, require_complete: bool) -> list[str]:
+def verify_report(path: Path, require_complete: bool, candidate: dict | None = None) -> list[str]:
     report = read_json(path)
     errors = []
     cases = report.get("cases") or []
@@ -568,6 +611,16 @@ def verify_report(path: Path, require_complete: bool) -> list[str]:
             errors.append(f"{case.get('id')}: NOT_APPLICABLE requires a scopeDecision")
         if require_complete and case.get("id") in JOURNEYS and status != "PASS":
             errors.append(f"{case.get('id')}: T4 completion requires PASS, found {status}")
+    if require_complete:
+        review = report.get("review") or {}
+        if review.get("decision") != "APPROVED":
+            errors.append("T4 completion requires review.decision=APPROVED")
+        if not review.get("reviewer"):
+            errors.append("T4 completion requires a named review.reviewer")
+        if not review.get("reviewedAt"):
+            errors.append("T4 completion requires review.reviewedAt")
+        if review.get("blockingDefects"):
+            errors.append("T4 completion rejects non-empty review.blockingDefects")
     for field in ("testedSourceCommit", "desktopVersion", "extensionVersion", "protocolVersion"):
         if report.get(field) in (None, ""):
             errors.append(f"missing {field}")
@@ -581,6 +634,23 @@ def verify_report(path: Path, require_complete: bool) -> list[str]:
             errors.append(f"missing environment.{field}")
     if report.get("t4Preflight", {}).get("installedRegistration") != "VERIFIED":
         errors.append("installed production Native Messaging registration was not verified")
+    if candidate is not None:
+        bindings = {
+            "fixtureVersion": candidate.get("fixtureVersion"),
+            "testedSourceCommit": candidate.get("testedSourceCommit"),
+            "protocolVersion": candidate.get("protocolVersion"),
+            "desktopArtifact": {
+                key: candidate.get("desktop", {}).get(key)
+                for key in ("name", "sha256", "downloadUrl")
+            },
+            "extensionArtifact": {
+                key: candidate.get("extension", {}).get(key)
+                for key in ("name", "sha256", "downloadUrl")
+            },
+        }
+        for field, expected in bindings.items():
+            if report.get(field) != expected:
+                errors.append(f"{field} does not match artifacts.json")
     return errors
 
 
@@ -595,7 +665,7 @@ def verify(args) -> None:
             errors.append(str(exc))
     for browser in ("chrome", "edge"):
         errors.extend(f"{browser}: {error}" for error in verify_report(
-            run_dir / browser / "report.json", args.require_complete
+            run_dir / browser / "report.json", args.require_complete, artifacts
         ))
     if errors:
         raise AcceptanceError("\n".join(errors))
@@ -632,6 +702,11 @@ def parser() -> argparse.ArgumentParser:
     smoke_parser.add_argument("--installed-exe", type=Path, required=True)
     smoke_parser.add_argument("--extension-dir", type=Path, required=True)
     smoke_parser.add_argument("--extension-zip", type=Path, required=True)
+    smoke_parser.add_argument(
+        "--browser-profile",
+        type=Path,
+        help="dedicated stable-Chrome profile with the candidate already loaded (required for chrome)",
+    )
     smoke_parser.set_defaults(handler=installed_smoke)
 
     verify_parser = commands.add_parser("verify", help="check report integrity and optional completion")

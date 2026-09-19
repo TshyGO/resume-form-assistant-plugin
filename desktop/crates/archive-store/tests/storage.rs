@@ -211,6 +211,19 @@ fn evidence(id: Option<String>) -> NewEvidence {
 }
 
 #[test]
+fn backup_inventory_reads_attachment_paths_from_the_database_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ArchiveStore::open(config(dir.path())).unwrap();
+    db.import_evidence(evidence(None)).unwrap();
+    let snapshot = dir.path().join("snapshot.db");
+    db.snapshot_database_to(&snapshot).unwrap();
+
+    let inventory = ArchiveStore::backup_inventory_from_snapshot(&snapshot).unwrap();
+    assert_eq!(inventory.counts.attachments, 1);
+    assert_eq!(inventory.referenced_paths, vec!["attachments/example.eml"]);
+}
+
+#[test]
 fn persistent_application_and_ordered_timeline() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = config(dir.path());

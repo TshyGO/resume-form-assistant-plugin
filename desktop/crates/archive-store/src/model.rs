@@ -737,6 +737,14 @@ pub struct ArchiveCounts {
     pub attachments: i64,
 }
 
+/// D12 从一致性数据库快照读取的备份业务清单。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackupSnapshotInventory {
+    pub counts: ArchiveCounts,
+    /// 附件和简历快照在档案根目录下的受控相对路径。
+    pub referenced_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Todo {
     pub id: String,

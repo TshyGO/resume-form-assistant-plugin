@@ -12,7 +12,7 @@ Run it by hand, not in CI. It needs a headed browser, it writes a real Native Me
 registration, and it starts the desktop process.
 
     python scripts/d07_browser_check.py [--binary <path>] [--extension-dir <path>]
-        [--browser chromium|chrome|edge] [--keep]
+        [--browser chromium|edge] [--keep]
 
 Everything it creates is isolated: a temporary RESUMEPRO_DATA_DIR the browser passes down
 to the host, a temporary browser profile, a temporary copy of the extension, and a
@@ -229,7 +229,7 @@ def storage(worker) -> dict:
 
 
 def browser_channel(browser: str) -> str | None:
-    return {"chromium": None, "chrome": "chrome", "edge": "msedge"}[browser]
+    return {"chromium": None, "edge": "msedge"}[browser]
 
 
 def launch(playwright, workspace: Path, extension: Path, env: dict, browser: str = "chromium"):
@@ -258,7 +258,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, default=None)
     parser.add_argument("--extension-dir", type=Path, default=PLUGIN)
-    parser.add_argument("--browser", choices=("chromium", "chrome", "edge"), default="chromium")
+    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
     source_binary = (args.binary or default_binary()).resolve()
@@ -296,7 +296,7 @@ def main() -> int:
                 extension_id = worker_of(context).url.split("/")[2]
                 print(f"extension id: {extension_id}")
 
-                registry_browser = args.browser if args.browser in {"chrome", "edge"} else "chrome"
+                registry_browser = "edge" if args.browser == "edge" else "chrome"
                 outcome = node(
                     "register", "--extension-id", extension_id,
                     "--browser", registry_browser, "--binary", str(binary),

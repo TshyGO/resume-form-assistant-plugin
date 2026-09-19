@@ -6,7 +6,7 @@ the archive afterwards as a file whose bytes are the ones captured — through a
 upload, a closed desktop and a changed template.
 
     python scripts/d08_browser_check.py [--binary <path>] [--extension-dir <path>]
-        [--browser chromium|chrome|edge] [--keep]
+        [--browser chromium|edge] [--keep]
 
 Run it by hand, not in CI: it needs a headed browser, it writes a real Native Messaging
 registration (removed again through the dev script's receipt), and it starts the desktop.
@@ -137,7 +137,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, default=None)
     parser.add_argument("--extension-dir", type=Path, default=PLUGIN)
-    parser.add_argument("--browser", choices=("chromium", "chrome", "edge"), default="chromium")
+    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
     source_binary = (args.binary or default_binary()).resolve()
@@ -187,7 +187,7 @@ def run(
             context = launch(playwright, workspace, extension, env, browser)
             try:
                 extension_id = worker_of(context).url.split("/")[2]
-                registry_browser = browser if browser in {"chrome", "edge"} else "chrome"
+                registry_browser = "edge" if browser == "edge" else "chrome"
                 outcome = node("register", "--extension-id", extension_id, "--browser", registry_browser, "--binary", str(binary))
                 print(outcome.stdout.strip() or outcome.stderr.strip())
                 if outcome.returncode != 0 or "skipped" in outcome.stdout:

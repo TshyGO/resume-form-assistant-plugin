@@ -96,7 +96,7 @@ def click_accessible(context, page, name: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--browser", choices=("chromium", "chrome", "edge"), default="chromium")
+    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
     parser.add_argument("--extension-dir", type=Path, default=ROOT)
     parser.add_argument("--screenshot-dir", type=Path)
     args = parser.parse_args()
@@ -110,7 +110,7 @@ def main() -> None:
             context = playwright.chromium.launch_persistent_context(
                 profile,
                 headless=False,
-                channel={"chromium": None, "chrome": "chrome", "edge": "msedge"}[args.browser],
+                channel={"chromium": None, "edge": "msedge"}[args.browser],
                 viewport={"width": 1280, "height": 800},
                 args=[
                     f"--disable-extensions-except={extension_dir}",

@@ -142,6 +142,32 @@ test('D14 T4 harness binds candidate bytes without pre-approving browser journey
   assert.ok(report.cases.every((entry) => entry.status === 'NOT_RUN'));
 });
 
+test('D14 T5 lifecycle evidence starts NOT_RUN and T6 gate fails closed by construction', () => {
+  const t5 = readJson(ACCEPTANCE, 't5-report-template.json');
+  const gate = readJson(ACCEPTANCE, 'release-gate-template.json');
+  assert.equal(t5.phase, 'T5');
+  assert.equal(t5.checks.length, 16);
+  assert.equal(new Set(t5.checks.map((entry) => entry.id)).size, 16);
+  assert.ok(t5.checks.every((entry) => entry.status === 'NOT_RUN'));
+  assert.ok(t5.checks.every((entry) => entry.evidence.length === 0));
+  assert.equal(t5.review.decision, 'NOT_REVIEWED');
+  assert.equal(gate.candidateManifest, null);
+  assert.equal(gate.reports.chrome, null);
+  assert.equal(gate.reports.edge, null);
+  assert.equal(gate.reports.t5, null);
+  assert.equal(gate.review.decision, 'NOT_REVIEWED');
+  for (const target of [
+    'desktop/scripts/d14_t5_check.py',
+    'desktop/scripts/d14_t5_check_test.py',
+    'desktop/scripts/check-release-acceptance.mjs',
+    'desktop/scripts/check-release-acceptance.test.mjs',
+    'docs/desktop-mvp/acceptance/t5-lifecycle.md',
+    'docs/desktop-mvp/acceptance/t6-release-gate.md',
+  ]) {
+    assert.ok(fs.existsSync(path.join(ROOT, ...target.split('/'))), `${target} must exist`);
+  }
+});
+
 test('d14-v1 committed JSON is exactly the deterministic generator output', () => {
   const generator = path.join(FIXTURES, 'generate.mjs');
   const result = spawnSync(process.execPath, [generator, '--check'], {
