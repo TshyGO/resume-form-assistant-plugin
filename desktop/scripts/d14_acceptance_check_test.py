@@ -245,6 +245,15 @@ class D14AcceptanceCheckTests(unittest.TestCase):
         self.assertEqual(saved["t4Preflight"]["installedSmoke"]["status"], "FAIL")
         self.assertTrue(all(case["status"] == "NOT_RUN" for case in saved["cases"]))
 
+    def test_profile_cleanup_targets_only_processes_using_the_acceptance_profile(self):
+        calls = []
+        responses = iter(["[41,42]", "[41,42]", None])
+        with patch.object(D14, "powershell_value", side_effect=lambda script: calls.append(script) or next(responses)):
+            D14.stop_browser_profile("edge", Path(r"C:\acceptance\profile"))
+        self.assertIn("Name='msedge.exe'", calls[0])
+        self.assertIn(r"C:\acceptance\profile", calls[0])
+        self.assertIn("Stop-Process -Id $ids", calls[1])
+
 
 if __name__ == "__main__":
     unittest.main()

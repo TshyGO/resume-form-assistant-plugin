@@ -711,6 +711,41 @@ def registry_manifest(browser: str) -> tuple[str, Path, dict]:
     return subkey, manifest_path, payload
 
 
+def native_registry_value(browser: str) -> str | None:
+    if sys.platform != "win32":
+        raise AcceptanceError("Native Messaging registry inspection is Windows-only")
+    import winreg
+
+    vendor = "Google\\Chrome" if browser == "chrome" else "Microsoft\\Edge"
+    subkey = f"Software\\{vendor}\\NativeMessagingHosts\\{HOST_NAME}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+            value, _ = winreg.QueryValueEx(key, "")
+            return str(value)
+    except FileNotFoundError:
+        return None
+
+
+def restore_native_registry(snapshot: dict[str, str | None]) -> None:
+    if sys.platform != "win32":
+        raise AcceptanceError("Native Messaging registry restoration is Windows-only")
+    import winreg
+
+    for browser, value in snapshot.items():
+        vendor = "Google\\Chrome" if browser == "chrome" else "Microsoft\\Edge"
+        subkey = f"Software\\{vendor}\\NativeMessagingHosts\\{HOST_NAME}"
+        if value is None:
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, subkey)
+            except FileNotFoundError:
+                pass
+        else:
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, value)
+        if native_registry_value(browser) != value:
+            raise AcceptanceError(f"failed to restore the {browser} Native Messaging registry")
+
+
 def inspect_installed(args) -> None:
     report_path = args.run_dir.resolve() / args.browser / "report.json"
     report = read_json(report_path)
@@ -782,6 +817,43 @@ def browser_process_ids(browser: str) -> list[int]:
     except json.JSONDecodeError as exc:
         raise AcceptanceError(f"could not inspect running {browser} processes") from exc
     return [int(item) for item in (value if isinstance(value, list) else [value])]
+
+
+def browser_profile_process_ids(browser: str, profile: Path) -> list[int]:
+    process_name = "chrome.exe" if browser == "chrome" else "msedge.exe"
+    escaped_profile = str(profile.resolve()).replace("'", "''")
+    raw = powershell_value(
+        f"$ids=@(Get-CimInstance Win32_Process -Filter \"Name='{process_name}'\" "
+        f"-ErrorAction Stop | Where-Object {{$_.CommandLine -and "
+        f"$_.CommandLine.Contains('{escaped_profile}')}} | Select-Object -ExpandProperty ProcessId); "
+        "$ids | ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AcceptanceError(f"could not inspect the isolated {browser} profile process") from exc
+    return [int(item) for item in (value if isinstance(value, list) else [value])]
+
+
+def stop_browser_profile(browser: str, profile: Path) -> None:
+    process_ids = browser_profile_process_ids(browser, profile)
+    if not process_ids:
+        return
+    joined = ",".join(str(value) for value in process_ids)
+    powershell_value(
+        f"$ids=@({joined}); Stop-Process -Id $ids -Force -ErrorAction Stop; "
+        "$ids | ConvertTo-Json -Compress"
+    )
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if not browser_profile_process_ids(browser, profile):
+            return
+        time.sleep(0.25)
+    raise AcceptanceError(
+        f"isolated {browser} profile did not exit: {browser_profile_process_ids(browser, profile)}"
+    )
 
 
 def write_smoke_result(
@@ -864,6 +936,7 @@ def installed_smoke(args) -> None:
         "confirm": None,
         "outboxEmpty": False,
         "temporaryDataFiles": [],
+        "lastStage": "PREPARED",
         "status": "FAIL",
         "failures": [],
     }
@@ -876,6 +949,9 @@ def installed_smoke(args) -> None:
         )
         write_smoke_result(result_path, report_path, run_dir, report, results)
         raise AcceptanceError("\n".join(failures))
+    registry_snapshot = {
+        browser: native_registry_value(browser) for browser in ("chrome", "edge")
+    }
     with tempfile.TemporaryDirectory(prefix=f"resumepro-d14-{args.browser}-") as temp:
         workspace = Path(temp)
         data_dir = workspace / "data"
@@ -908,20 +984,35 @@ def installed_smoke(args) -> None:
                     ignore_default_args=["--disable-extensions"] if args.browser == "chrome" else None,
                 )
                 try:
+                    results["lastStage"] = "BROWSER_STARTED"
+                    write_json(result_path, results)
                     worker = context.service_workers[0] if context.service_workers else context.wait_for_event(
                         "serviceworker", timeout=30_000
                     )
+                    results["lastStage"] = "SERVICE_WORKER_READY"
+                    write_json(result_path, results)
                     actual_id = worker.url.split("/")[2]
                     if actual_id != EXPECTED_EXTENSION_ID:
                         failures.append(f"browser loaded extension id {actual_id}")
                     page = context.new_page()
-                    page.goto(f"chrome-extension://{EXPECTED_EXTENSION_ID}/popup.html")
+                    page.goto(
+                        f"chrome-extension://{EXPECTED_EXTENSION_ID}/popup.html",
+                        wait_until="domcontentloaded",
+                        timeout=15_000,
+                    )
+                    results["lastStage"] = "POPUP_READY"
+                    write_json(result_path, results)
 
                     def ask(message: dict, tries: int = 1) -> dict:
                         last = None
                         for attempt in range(tries):
                             last = page.evaluate(
-                                "message => new Promise(resolve => chrome.runtime.sendMessage(message, resolve))",
+                                """message => Promise.race([
+                                  new Promise(resolve => chrome.runtime.sendMessage(message, resolve)),
+                                  new Promise(resolve => setTimeout(
+                                    () => resolve({error: 'browser_message_timeout'}), 5000
+                                  ))
+                                ])""",
                                 message,
                             )
                             if last and last.get("mode") != "unavailable" and not last.get("error"):
@@ -931,6 +1022,8 @@ def installed_smoke(args) -> None:
                         return last or {}
 
                     results["probe"] = ask({"type": "DESKTOP_PROBE"}, tries=8)
+                    results["lastStage"] = "PROBE_FINISHED"
+                    write_json(result_path, results)
                     job = {
                         "company": "D14 合成科技有限公司",
                         "title": f"{args.browser} 安装验收工程师",
@@ -939,12 +1032,18 @@ def installed_smoke(args) -> None:
                         "dedupeUrl": f"https://jobs.example.test/d14/{args.browser}",
                     }
                     results["save"] = ask({"type": "DESKTOP_SAVE_JOB", "fields": job}, tries=3)
+                    results["lastStage"] = "SAVE_FINISHED"
+                    write_json(result_path, results)
                     intent_id = (results["save"].get("intent") or {}).get("intentId")
                     results["bind"] = ask({"type": "DESKTOP_BIND", "intentId": intent_id}, tries=3)
+                    results["lastStage"] = "BIND_FINISHED"
+                    write_json(result_path, results)
                     application_id = results["bind"].get("applicationId")
                     results["confirm"] = ask(
                         {"type": "DESKTOP_CONFIRM_SUBMIT", "applicationId": application_id}, tries=3
                     )
+                    results["lastStage"] = "CONFIRM_FINISHED"
+                    write_json(result_path, results)
                     state = worker.evaluate("() => chrome.storage.local.get(null)")
                     results["outboxEmpty"] = not state.get("desktopOutbox") and not state.get("desktopSaveIntents")
                     results["temporaryDataFiles"] = sorted(
@@ -952,11 +1051,36 @@ def installed_smoke(args) -> None:
                         for file in data_dir.rglob("*")
                         if file.is_file()
                     )
+                    results["lastStage"] = "STATE_CAPTURED"
+                    write_json(result_path, results)
                 finally:
-                    context.close()
+                    # Stable Edge/Chrome can leave background mode alive and make Playwright's
+                    # context.close() wait forever. Terminate only processes whose command line
+                    # names this dedicated acceptance profile, never the user's default profile.
+                    stop_browser_profile(args.browser, profile)
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                    results["lastStage"] = "BROWSER_CLOSED"
+                    write_json(result_path, results)
                     stop_application(installed_exe)
         finally:
-            stop_application(installed_exe)
+            active_error = sys.exc_info()[1]
+            cleanup_errors = []
+            try:
+                stop_application(installed_exe)
+            except Exception as exc:
+                cleanup_errors.append(f"application cleanup failed: {exc}")
+            try:
+                restore_native_registry(registry_snapshot)
+            except Exception as exc:
+                cleanup_errors.append(f"registry restoration failed: {exc}")
+            if cleanup_errors:
+                if active_error is not None:
+                    active_error.add_note("; ".join(cleanup_errors))
+                else:
+                    raise AcceptanceError("; ".join(cleanup_errors))
 
     if (results["probe"] or {}).get("mode") != "ready":
         failures.append(f"installed host handshake failed: {results['probe']}")
@@ -972,6 +1096,7 @@ def installed_smoke(args) -> None:
         failures.append(
             "temporary RESUMEPRO_DATA_DIR stayed empty; the browser may have connected to another instance"
         )
+    results["lastStage"] = "COMPLETE"
     write_smoke_result(result_path, report_path, run_dir, report, results)
     if failures:
         raise AcceptanceError("\n".join(failures))
