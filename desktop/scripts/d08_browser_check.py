@@ -46,11 +46,12 @@ from d07_browser_check import (
     JOB,
     PLUGIN,
     ask,
+    close_context,
+    copy_binary_runtime,
     copy_extension,
     default_binary,
     launch,
     node,
-    pair,
     stop_application,
     storage,
     worker_of,
@@ -152,8 +153,7 @@ def main() -> int:
     data_dir.mkdir()
     extension = workspace / "extension"
     copy_extension(extension, extension_source)
-    binary = workspace / source_binary.name
-    shutil.copy2(source_binary, binary)
+    binary = copy_binary_runtime(source_binary, workspace)
     parked = workspace / (source_binary.name + ".parked")
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
     # The workspace goes on every exit, early returns and exceptions included, unless kept.
@@ -196,9 +196,7 @@ def run(
                 registered = True
             finally:
                 stop_application(binary, env)
-                context.close()
-            pair(data_dir, extension_id)
-
+                close_context(context, workspace, browser)
             # Phase 2 — desktop up: an application, then a large upload cut off halfway.
             context = launch(playwright, workspace, extension, env, browser)
             try:
@@ -206,7 +204,7 @@ def run(
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
                 results["probe"] = ask(page, {"type": "DESKTOP_PROBE"}, tries=6)
                 if results["probe"].get("mode") != "ready":
-                    failures.append(f"the paired extension did not reach the desktop: {results['probe']}")
+                    failures.append(f"the fixed-id extension did not reach the desktop: {results['probe']}")
                     return report(failures, results)
                 saved = ask(page, {"type": "DESKTOP_SAVE_JOB", "fields": JOB}, tries=3)
                 intent_id = (saved.get("intent") or {}).get("intentId")
@@ -232,7 +230,7 @@ def run(
                 # the browser closed (D06: a surviving grandchild holds the browser's pipes).
                 wait_for(lambda: not binary.exists() or _park(binary, parked), 20)
                 stop_application(parked if parked.exists() else binary, env)
-                context.close()
+                close_context(context, workspace, browser)
 
             # Phase 3 — desktop gone: archive offline, then change the template (10.10).
             context = launch(playwright, workspace, extension, env, browser)
@@ -249,7 +247,7 @@ def run(
                 worker.evaluate("t => chrome.storage.local.set({ templates: [t] })", template(V2_MARK, 20))
                 results["idb_while_offline"] = worker.evaluate(IDB_COUNT)
             finally:
-                context.close()
+                close_context(context, workspace, browser)
 
             # Phase 4 — desktop back: resume, bind, drain to empty.
             shutil.move(str(parked), str(binary))
@@ -279,7 +277,7 @@ def run(
                 results["final_idb"] = worker.evaluate(IDB_COUNT)
             finally:
                 stop_application(binary, env)
-                context.close()
+                close_context(context, workspace, browser)
     finally:
         if registered:
             print(node("unregister").stdout.strip())

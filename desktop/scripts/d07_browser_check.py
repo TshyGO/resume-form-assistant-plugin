@@ -33,6 +33,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from d14_acceptance_check import stop_browser_profile
+
 DESKTOP = Path(__file__).resolve().parent.parent
 PLUGIN = DESKTOP.parent
 HOST_NAME = "com.resumepro.desktop"
@@ -74,6 +76,17 @@ def default_binary() -> Path:
     raise SystemExit(
         "no desktop binary found; run: cargo build --manifest-path src-tauri/Cargo.toml"
     )
+
+
+def copy_binary_runtime(source_binary: Path, destination: Path) -> Path:
+    """Copy the host and adjacent runtime files needed by a dev build."""
+    destination.mkdir(parents=True, exist_ok=True)
+    binary = destination / source_binary.name
+    shutil.copy2(source_binary, binary)
+    loader = source_binary.parent / "WebView2Loader.dll"
+    if loader.is_file():
+        shutil.copy2(loader, destination / loader.name)
+    return binary
 
 
 def stop_application(binary: Path, env: dict) -> None:
@@ -214,7 +227,12 @@ def ask(page, message: dict, tries: int = 1) -> dict:
     last = None
     for attempt in range(tries):
         last = page.evaluate(
-            "message => new Promise(resolve => chrome.runtime.sendMessage(message, resolve))",
+            """message => Promise.race([
+              new Promise(resolve => chrome.runtime.sendMessage(message, resolve)),
+              new Promise(resolve => setTimeout(
+                () => resolve({error: 'browser_message_timeout'}), 5000
+              ))
+            ])""",
             message,
         )
         if last and last.get("mode") != "unavailable" and not last.get("error"):
@@ -248,6 +266,16 @@ def launch(playwright, workspace: Path, extension: Path, env: dict, browser: str
     return playwright.chromium.launch_persistent_context(**options)
 
 
+def close_context(context, workspace: Path, browser: str) -> None:
+    """Close only the isolated browser profile; never touch the user's default browser."""
+    process_browser = "edge" if browser == "edge" else "chrome"
+    stop_browser_profile(process_browser, workspace / "profile")
+    try:
+        context.close()
+    except Exception:
+        pass
+
+
 def worker_of(context):
     return context.service_workers[0] if context.service_workers else context.wait_for_event(
         "serviceworker", timeout=30_000
@@ -276,8 +304,7 @@ def main() -> int:
 
     # Registered against a copy so the last phase can take the application away without
     # touching the build tree.
-    binary = workspace / source_binary.name
-    shutil.copy2(source_binary, binary)
+    binary = copy_binary_runtime(source_binary, workspace)
 
     env = {**os.environ, "RESUMEPRO_DATA_DIR": str(data_dir)}
     failures: list[str] = []
@@ -313,7 +340,7 @@ def main() -> int:
                 results["storage_before"] = storage(worker_of(context))
             finally:
                 stop_application(binary, env)
-                context.close()
+                close_context(context, workspace, args.browser)
 
             context = launch(playwright, workspace, extension, env, args.browser)
             try:
@@ -346,7 +373,7 @@ def main() -> int:
                 results["storage_after"] = storage(worker_of(context))
             finally:
                 stop_application(binary, env)
-                context.close()
+                close_context(context, workspace, args.browser)
 
             # Phase 3: the desktop is gone. A profile that has paired before must keep the
             # fields as an intent and must not claim anything was saved.
@@ -369,7 +396,7 @@ def main() -> int:
                 )
                 results["offline_storage"] = storage(worker_of(context))
             finally:
-                context.close()
+                close_context(context, workspace, args.browser)
     finally:
         if registered:
             print(node("unregister").stdout.strip())

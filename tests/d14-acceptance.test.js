@@ -142,6 +142,16 @@ test('D14 T4 harness binds candidate bytes without pre-approving browser journey
   assert.ok(report.cases.every((entry) => entry.status === 'NOT_RUN'));
 });
 
+test('D07 and D08 dev browser checks copy the WebView2 runtime with the host', () => {
+  const d07 = fs.readFileSync(path.join(ROOT, 'desktop', 'scripts', 'd07_browser_check.py'), 'utf8');
+  const d08 = fs.readFileSync(path.join(ROOT, 'desktop', 'scripts', 'd08_browser_check.py'), 'utf8');
+  assert.match(d07, /def copy_binary_runtime/);
+  assert.match(d07, /WebView2Loader\.dll/);
+  assert.match(d07, /binary = copy_binary_runtime\(source_binary, workspace\)/);
+  assert.match(d08, /copy_binary_runtime/);
+  assert.match(d08, /binary = copy_binary_runtime\(source_binary, workspace\)/);
+});
+
 test('D14 T5 lifecycle evidence starts NOT_RUN and T6 gate fails closed by construction', () => {
   const t5 = readJson(ACCEPTANCE, 't5-report-template.json');
   const gate = readJson(ACCEPTANCE, 'release-gate-template.json');
