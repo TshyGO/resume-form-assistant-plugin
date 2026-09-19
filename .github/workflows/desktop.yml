@@ -133,6 +133,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: D14 acceptance harness tests
+        working-directory: desktop
+        run: python -m unittest scripts/d14_acceptance_check_test.py
+
       - name: Protocol browser catalog
         working-directory: desktop/crates/protocol
         run: |

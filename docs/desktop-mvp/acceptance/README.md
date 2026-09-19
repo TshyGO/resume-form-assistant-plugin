@@ -1,6 +1,6 @@
 # D14 首发验收工作区
 
-本目录实现 [D14 实施 spec](../../superpowers/specs/2026-09-17-d14-release-acceptance-spec.md) 的验收输入与自动化映射。T1 固定范围、数据和证据格式；T2 使用同一数据集补业务闭环回归。这里不把自动化结果冒充 T4/T5 的实机验收，也不预先修改报告模板状态。
+本目录实现 [D14 实施 spec](../../superpowers/specs/2026-09-17-d14-release-acceptance-spec.md) 的验收输入与自动化映射。T1 固定范围、数据和证据格式；T2 使用同一数据集补业务闭环回归；T3 固定故障矩阵；T4 提供候选字节与真实浏览器验收工具。这里不把自动化结果冒充 T4/T5 的实机验收，也不预先修改报告模板状态。
 
 ## 目录
 
@@ -12,6 +12,7 @@
 | [t2-business-regression.md](t2-business-regression.md) | T2 新增的跨层业务回归、精确测试名和执行命令 |
 | [t3-fault-matrix.md](t3-fault-matrix.md) | T3 的故障防线、自动化范围和实机限制 |
 | [t3-fault-matrix.json](t3-fault-matrix.json) | F01–F13 的机器可校验精确测试映射与剩余证据 |
+| [t4-windows-browser.md](t4-windows-browser.md) | T4 候选产物、生产注册、Chrome/Edge 烟测与 J01–J08 实机清单 |
 | [fixtures/d14-v1/](fixtures/d14-v1/) | 可重复生成的合成岗位、简历、通知、附件和模型返回 |
 | [report-template.json](report-template.json) | 单次候选验收报告模板；所有 case 初始为 `NOT_RUN` |
 | [dependencies.json](dependencies.json) | D08、D11、D13 的验收签收表 |
@@ -24,6 +25,8 @@
 3. 填入本次真正安装的候选文件及 SHA-256，并同步 `candidate-artifacts.json`。从候选下载位置重新下载后再算一次，不能只使用 CI 显示的名称。
 4. 按 [cases.md](cases.md) 执行。只有实际断言和证据齐全时才能把 `NOT_RUN` 改为 `PASS`。
 5. 在 [dependencies.json](dependencies.json) 中记录每个硬依赖的实现 PR、验收证据与具名签收。GitHub issue 已关闭不能替代签收。
+
+T4 开始前先按 [t4-windows-browser.md](t4-windows-browser.md) 用候选 EXE/ZIP 创建 Chrome、Edge 两份不可覆盖的运行报告。仓库源码或开发注册结果不能代替候选安装证据。
 
 ## 状态语义
 

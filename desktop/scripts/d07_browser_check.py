@@ -11,7 +11,8 @@ transport, queues and idempotency — not a second implementation written for th
 Run it by hand, not in CI. It needs a headed browser, it writes a real Native Messaging
 registration, and it starts the desktop process.
 
-    python scripts/d07_browser_check.py [--binary <path>] [--keep]
+    python scripts/d07_browser_check.py [--binary <path>] [--extension-dir <path>]
+        [--browser chromium|chrome|edge] [--keep]
 
 Everything it creates is isolated: a temporary RESUMEPRO_DATA_DIR the browser passes down
 to the host, a temporary browser profile, a temporary copy of the extension, and a
@@ -52,9 +53,9 @@ JOB = {
 }
 
 
-def copy_extension(destination: Path) -> None:
+def copy_extension(destination: Path, source: Path = PLUGIN) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    for entry in PLUGIN.iterdir():
+    for entry in source.iterdir():
         if entry.name in EXCLUDE or entry.name.startswith("."):
             continue
         target = destination / entry.name
@@ -227,16 +228,24 @@ def storage(worker) -> dict:
     return worker.evaluate("() => chrome.storage.local.get(null)")
 
 
-def launch(playwright, workspace: Path, extension: Path, env: dict):
-    return playwright.chromium.launch_persistent_context(
-        user_data_dir=str(workspace / "profile"),
-        headless=False,
-        env=env,
-        args=[
+def browser_channel(browser: str) -> str | None:
+    return {"chromium": None, "chrome": "chrome", "edge": "msedge"}[browser]
+
+
+def launch(playwright, workspace: Path, extension: Path, env: dict, browser: str = "chromium"):
+    options = {
+        "user_data_dir": str(workspace / "profile"),
+        "headless": False,
+        "env": env,
+        "args": [
             f"--disable-extensions-except={extension}",
             f"--load-extension={extension}",
         ],
-    )
+    }
+    channel = browser_channel(browser)
+    if channel:
+        options["channel"] = channel
+    return playwright.chromium.launch_persistent_context(**options)
 
 
 def worker_of(context):
@@ -248,17 +257,22 @@ def worker_of(context):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, default=None)
+    parser.add_argument("--extension-dir", type=Path, default=PLUGIN)
+    parser.add_argument("--browser", choices=("chromium", "chrome", "edge"), default="chromium")
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
     source_binary = (args.binary or default_binary()).resolve()
     if not source_binary.exists():
         raise SystemExit(f"no such binary: {source_binary}")
+    extension_source = args.extension_dir.resolve()
+    if not (extension_source / "manifest.json").is_file():
+        raise SystemExit(f"not an extracted extension candidate: {extension_source}")
 
     workspace = Path(tempfile.mkdtemp(prefix="resumepro-d07-"))
     data_dir = workspace / "data"
     data_dir.mkdir()
     extension = workspace / "extension"
-    copy_extension(extension)
+    copy_extension(extension, extension_source)
 
     # Registered against a copy so the last phase can take the application away without
     # touching the build tree.
@@ -277,14 +291,15 @@ def main() -> int:
             # that id is authorised by construction; the desktop must answer `ready`
             # without anyone pasting an id. This is also how we learn the id Chrome
             # assigns to the unpacked directory.
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, args.browser)
             try:
                 extension_id = worker_of(context).url.split("/")[2]
                 print(f"extension id: {extension_id}")
 
+                registry_browser = args.browser if args.browser in {"chrome", "edge"} else "chrome"
                 outcome = node(
                     "register", "--extension-id", extension_id,
-                    "--browser", "chrome", "--binary", str(binary),
+                    "--browser", registry_browser, "--binary", str(binary),
                 )
                 print(outcome.stdout.strip() or outcome.stderr.strip())
                 if outcome.returncode != 0 or "skipped" in outcome.stdout:
@@ -300,7 +315,7 @@ def main() -> int:
                 stop_application(binary, env)
                 context.close()
 
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, args.browser)
             try:
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")
@@ -345,7 +360,7 @@ def main() -> int:
                         break
                     time.sleep(1)
 
-            context = launch(playwright, workspace, extension, env)
+            context = launch(playwright, workspace, extension, env, args.browser)
             try:
                 page = context.new_page()
                 page.goto(f"chrome-extension://{extension_id}/popup.html")

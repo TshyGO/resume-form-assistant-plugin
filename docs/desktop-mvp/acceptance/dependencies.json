@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "observedAt": "2026-09-17",
+  "observedAt": "2026-09-19",
   "releaseGate": "all entries must have signedOff=true and non-empty acceptanceEvidence before D14 release",
   "dependencies": [
     {
@@ -17,24 +17,24 @@
     {
       "id": "D11",
       "issue": "https://github.com/TshyGO/resume-form-assistant-plugin/issues/25",
-      "observedIssueState": "open",
-      "implementationPrs": [],
+      "observedIssueState": "closed",
+      "implementationPrs": [101, 108, 109, 110, 111, 112, 113, 114, 115],
       "acceptanceEvidence": [],
       "signedOff": false,
       "signedOffBy": null,
       "signedOffAt": null,
-      "note": "hard dependency"
+      "note": "implementation merged; real API and credential-store walkthrough remains tracked by issue #128"
     },
     {
       "id": "D13",
       "issue": "https://github.com/TshyGO/resume-form-assistant-plugin/issues/29",
-      "observedIssueState": "open",
-      "implementationPrs": [],
+      "observedIssueState": "closed",
+      "implementationPrs": [116, 117, 118, 119, 120, 121, 122, 126],
       "acceptanceEvidence": [],
       "signedOff": false,
       "signedOffBy": null,
       "signedOffAt": null,
-      "note": "hard dependency; must supply the installed artifacts used by J01/J07/J08"
+      "note": "implementation merged; candidate artifacts and clean-machine walkthrough remain required, tracked by issue #128"
     }
   ]
 }

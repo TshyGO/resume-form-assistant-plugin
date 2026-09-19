@@ -96,11 +96,13 @@ def click_accessible(context, page, name: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--browser", choices=("chromium", "edge"), default="chromium")
+    parser.add_argument("--browser", choices=("chromium", "chrome", "edge"), default="chromium")
+    parser.add_argument("--extension-dir", type=Path, default=ROOT)
     parser.add_argument("--screenshot-dir", type=Path)
     args = parser.parse_args()
-    if not (ROOT / "manifest.json").is_file():
-        failure(f"not a checkout: {ROOT}")
+    extension_dir = args.extension_dir.resolve()
+    if not (extension_dir / "manifest.json").is_file():
+        failure(f"not an extracted extension candidate: {extension_dir}")
 
     with tempfile.TemporaryDirectory(prefix="resume-pro-war-") as profile:
         with sync_playwright() as playwright:
@@ -108,11 +110,11 @@ def main() -> None:
             context = playwright.chromium.launch_persistent_context(
                 profile,
                 headless=False,
-                channel="msedge" if args.browser == "edge" else None,
+                channel={"chromium": None, "chrome": "chrome", "edge": "msedge"}[args.browser],
                 viewport={"width": 1280, "height": 800},
                 args=[
-                    f"--disable-extensions-except={ROOT}",
-                    f"--load-extension={ROOT}",
+                    f"--disable-extensions-except={extension_dir}",
+                    f"--load-extension={extension_dir}",
                 ],
             )
             try:

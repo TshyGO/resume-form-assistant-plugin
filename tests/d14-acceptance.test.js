@@ -121,6 +121,27 @@ test('D14 T3 maps every fault to exact tests without pretending OS evidence ran'
   assert.ok(matrix.cases[12].remainingEvidence.length >= 5);
 });
 
+test('D14 T4 harness binds candidate bytes without pre-approving browser journeys', () => {
+  const guide = fs.readFileSync(path.join(ACCEPTANCE, 't4-windows-browser.md'), 'utf8');
+  const harnessPath = path.join(ROOT, 'desktop', 'scripts', 'd14_acceptance_check.py');
+  const harness = fs.readFileSync(harnessPath, 'utf8');
+
+  assert.ok(fs.existsSync(path.join(ROOT, 'desktop', 'scripts', 'd14_acceptance_check_test.py')));
+  for (const browser of ['chrome', 'edge']) {
+    assert.match(guide, new RegExp(`--browser ${browser}`));
+  }
+  for (const command of ['prepare', 'inspect-installed', 'installed-smoke', 'verify']) {
+    assert.match(harness, new RegExp(`commands\\.add_parser\\(\"${command}\"`));
+  }
+  assert.match(harness, /refusing to overwrite evidence/);
+  assert.match(harness, /J01-J08 were not auto-promoted/);
+  assert.match(guide, /开发注册[\s\S]*不能替代/);
+  assert.match(guide, /所有 case 保持 `NOT_RUN`/);
+
+  const report = readJson(ACCEPTANCE, 'report-template.json');
+  assert.ok(report.cases.every((entry) => entry.status === 'NOT_RUN'));
+});
+
 test('d14-v1 committed JSON is exactly the deterministic generator output', () => {
   const generator = path.join(FIXTURES, 'generate.mjs');
   const result = spawnSync(process.execPath, [generator, '--check'], {
