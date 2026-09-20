@@ -21,6 +21,15 @@ export const INSTALLER_SUFFIXES = [".exe", ".dmg", ".msi"];
 /** 除了安装包，只允许它们的校验和。 */
 export const CHECKSUM_SUFFIX = ".sha256";
 
+/** 正式版 1.2.3。 */
+export const isStableVersion = (version) => /^\d+\.\d+\.\d+$/.test(version);
+
+/**
+ * 测试版 1.2.3-beta.N：N 从 1 起、不带前导零。
+ * 只认 beta：别的后缀多半是手滑，放行的话会以一个没定义过的发布类别发出去。
+ */
+export const isBetaVersion = (version) => /^\d+\.\d+\.\d+-beta\.[1-9]\d*$/.test(version);
+
 /**
  * 三处版本号必须一样：`tauri.conf.json` 决定安装包文件名和「关于」页，
  * `Cargo.toml` 决定二进制自己报的版本。对不上时用户看到的版本取决于他看哪里。
@@ -34,8 +43,8 @@ export function desktopVersion({ tauriConf, cargoToml }) {
   if (fromConf !== fromCargo) {
     throw new Error(`版本号对不上：tauri.conf.json 是 ${fromConf}，Cargo.toml 是 ${fromCargo}`);
   }
-  if (!/^\d+\.\d+\.\d+$/.test(fromConf)) {
-    throw new Error(`版本号要写成 1.2.3 的样子，拿到的是 ${fromConf}。预发布怎么发还没定。`);
+  if (!isStableVersion(fromConf) && !isBetaVersion(fromConf)) {
+    throw new Error(`版本号要写成 1.2.3 或 1.2.3-beta.N 的样子，拿到的是 ${fromConf}。`);
   }
   return fromConf;
 }
@@ -68,6 +77,21 @@ export function assertTagMatches(tag, version) {
   if (tagged !== version) {
     throw new Error(`tag 是 ${tag}，但版本号是 ${version}`);
   }
+}
+
+/**
+ * 这个 tag 发的是测试版还是正式版。工作流靠它决定要不要建成预发布，
+ * 不在 YAML 里自己猜：认不出的后缀（rc、alpha……）若被当成正式版，
+ * 就会以「最新版」的身份发出去，所以直接报错。
+ */
+export function releaseKind(tag) {
+  if (!tag.startsWith(DESKTOP_TAG_PREFIX)) {
+    throw new Error(`桌面的 tag 要以 ${DESKTOP_TAG_PREFIX} 开头，拿到的是 ${tag}`);
+  }
+  const version = tag.slice(DESKTOP_TAG_PREFIX.length);
+  if (isStableVersion(version)) return "stable";
+  if (isBetaVersion(version)) return "beta";
+  throw new Error(`认不出 ${tag} 的版本后缀：只有 1.2.3 和 1.2.3-beta.N 两种写法`);
 }
 
 /**
@@ -204,6 +228,17 @@ export function writeChecksums(dir, io = { readdirSync, readFileSync, writeFileS
 }
 
 function main(argv) {
+  // 只看 tag 的形状，不读仓库里的版本号：工作流拿它决定发布类别。
+  const kindAt = argv.indexOf("--release-kind");
+  if (kindAt >= 0) {
+    const kindTag = argv[kindAt + 1];
+    if (!kindTag || kindTag.startsWith("--")) {
+      throw new Error("--release-kind 后面要跟 tag");
+    }
+    console.log(releaseKind(kindTag));
+    return;
+  }
+
   const here = dirname(fileURLToPath(import.meta.url));
   const root = resolve(here, "..");
   const tauriConf = readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8");

@@ -1625,3 +1625,31 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     builder.build(app)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod newer_than_tests {
+    use super::newer_than;
+
+    #[test]
+    fn a_higher_release_is_newer_and_an_equal_or_lower_one_is_not() {
+        assert!(newer_than("0.4.1", "0.4.0"));
+        assert!(!newer_than("0.4.0", "0.4.0"));
+        assert!(!newer_than("0.3.9", "0.4.0"));
+        // 按数字比，不是按字符串：0.10.0 比 0.9.0 新。
+        assert!(newer_than("0.10.0", "0.9.0"));
+    }
+
+    #[test]
+    fn a_beta_build_is_not_told_to_upgrade() {
+        // 目前测试版只面向我们自己：它认不出自己带 -beta 的版本号，于是不提示升级。
+        // 想换到新的测试版或回到正式版，要自己到 Releases 页下载（见 install-and-update.md 5.1）。
+        // 开放给用户选装测试版时，这里要改成按通道比较，并同步改这条测试。
+        assert!(!newer_than("0.4.0", "0.4.0-beta.1"));
+        assert!(!newer_than("0.4.1", "0.4.0-beta.1"));
+    }
+
+    #[test]
+    fn a_beta_release_is_never_offered_to_a_stable_build() {
+        assert!(!newer_than("0.4.1-beta.1", "0.4.0"));
+    }
+}

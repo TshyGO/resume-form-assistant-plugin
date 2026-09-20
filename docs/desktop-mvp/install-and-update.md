@@ -28,7 +28,7 @@ npm run tauri build -- --bundles dmg       # macOS
 发版前先跑一遍检查——版本号、tag、打包配置：
 
 ```bash
-node desktop/scripts/check-desktop-release.js desktop-v0.1.0
+node desktop/scripts/check-desktop-release.js desktop-v0.4.0
 ```
 
 还有两道：`--dist desktop/dist` 检查前端产物里没有 sourcemap、`.env`、测试夹具；`--assets <目录>`（不带 `--write-checksums`）在发布前**复算一遍校验和**，因为构建机写的和发布机手上的是两份文件。
@@ -47,7 +47,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.1.0_x64-setup.exe"
+  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.4.0_x64-setup.exe"
 ```
 
 要验 `vN → vN+1`，再传一个不同版本的测试安装包；脚本会在两次安装之间放入附件哨兵，
@@ -55,8 +55,8 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  -UpgradeInstaller "./Resume Pro Desktop_0.1.1_x64-setup.exe"
+  -Installer "./Resume Pro Desktop_0.4.0_x64-setup.exe" `
+  -UpgradeInstaller "./Resume Pro Desktop_0.4.1_x64-setup.exe"
 ```
 
 脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
@@ -72,7 +72,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 | | tag | 版本号来源 | 工作流 |
 | --- | --- | --- | --- |
 | 浏览器插件 | `v0.4.0` | `manifest.json` | `release.yml` |
-| 桌面 | `desktop-v0.1.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
+| 桌面 | `desktop-v0.4.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
 
 两个命名空间不能重叠，否则一次桌面发版会顺手把插件也发出去。这条有测试盯着（`check-desktop-release.test.js`）。
 
@@ -82,6 +82,23 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 [WebView2 Runtime 离线包](https://developer.microsoft.com/microsoft-edge/webview2/)，再装本程序。
 
 ---
+
+### 1.3 测试版（beta）怎么出
+
+测试版是同一个仓库里的预发布，版本号写成 `0.4.0-beta.1`、`0.4.0-beta.2`……（`1.2.3-beta.N`，N 从 1 起），tag 是 `desktop-v0.4.0-beta.1`。别的后缀（rc、alpha）不认。
+
+```bash
+node desktop/scripts/release-beta.js          # 只演示：说明会打哪个 tag，什么都不改
+node desktop/scripts/release-beta.js --push   # 真的打 tag 并推送
+```
+
+脚本从远端 main 切一个临时分支，把三处版本号（`tauri.conf.json`、`Cargo.toml`、`Cargo.lock` 里本应用那一条）改成 beta 版本，提交、打 tag、推送，然后切回原来的地方、删掉临时分支。**main 上不留任何提交**：main 的版本号一直是即将发布的正式版本号，频繁出 beta 不会在 main 上留下一串改版本号的提交。编号按远端已有的 tag 顺延；这一版已经正式发布过的话，先把 main 的版本号升上去。
+
+推送 tag 之后，`desktop-release.yml` 构建并把它建成**预发布**：不会成为 GitHub 的「最新版」，桌面自带的更新检查也不会提示它。发布说明开头会写明这是测试版和风险。
+
+正式版仍然从 main 直接打 `desktop-v0.4.0`。流水线会检查正式 tag 指向的提交在 main 的历史里；指到 beta 的临时提交上会被拒绝，避免没走过 main 的代码被当成正式版发出去。
+
+只想改版本号（比如在分支上手动触发 `workflow_dispatch` 试构建）：`node desktop/scripts/set-version.js 0.4.0-beta.2`，一次改齐三处。
 
 ## 2. 安装包没有签名
 
@@ -104,11 +121,11 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 每个安装包旁边都有一份 `.sha256`，由 CI 在构建机上生成：
 
 ```powershell
-Get-FileHash "Resume Pro Desktop_0.1.0_x64-setup.exe"    # Windows
+Get-FileHash "Resume Pro Desktop_0.4.0_x64-setup.exe"    # Windows
 ```
 
 ```bash
-shasum -a 256 "Resume Pro Desktop_0.1.0_aarch64.dmg"     # macOS
+shasum -a 256 "Resume Pro Desktop_0.4.0_aarch64.dmg"     # macOS
 ```
 
 对不上就别装。
@@ -157,6 +174,14 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 
 回滚步骤：设置页「备份与恢复」→ 选 `backups/` 下那份迁移备份 → 预览并确认恢复。
 恢复过程会暂停当前档案写入并完成切换；恢复前应用会先把当前档案留成一个回滚点。
+
+### 5.1 测试版
+
+测试版用来提前试用新功能，可能有严重问题。它和正式版共用同一个安装位置和同一份数据：装上就是覆盖升级。
+
+测试版如果升级了数据库结构，**就回不到正式版了**：正式版会拒绝打开被更新过的数据库。想回去，先卸载测试版、安装正式版，再从测试版升级前自动做的那份备份（`backups/` 下）恢复，步骤同上。
+
+测试版不会出现在桌面的更新提示里，要自己到 Releases 页找带「Pre-release」标记的那一项下载。测试版自己也不会提示升级：它认不出自己带 `-beta` 的版本号，所以想换到更新的测试版，或者回到正式版，都要自己到 Releases 页下载安装。没有把握的话，用正式版。
 
 ## 6. 卸载
 

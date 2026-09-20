@@ -59,8 +59,12 @@ pub fn parse_from(argv: Vec<String>) -> Args {
 }
 
 pub fn print_help() {
-    println!(
-        "Resume Pro Desktop 0.1.0 (D02 shell)
+    println!("{}", help_text());
+}
+
+pub fn help_text() -> String {
+    format!(
+        "Resume Pro Desktop {} (D02 shell)
 
 Usage:
   resume-pro-desktop [--hidden] [--probe] [--apps-loop] [--nm-host] [--quit] [--help]
@@ -76,8 +80,9 @@ Usage:
 
 Closing the window hides to the tray/menu bar. Use 退出 to quit.
 This build does not register Native Messaging, autostart, or reminders.
-"
-    );
+",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Native Messaging mode must never attach a console: it would put a stream on stdout,
@@ -123,6 +128,18 @@ mod tests {
         let text = include_str!("cli.rs");
         assert!(text.contains("does not register Native Messaging"));
         assert!(text.contains("reminders"));
+    }
+
+    #[test]
+    fn help_text_reports_the_version_this_binary_was_built_as() {
+        // --help 是用户核对「我装的是哪一版」的地方。写死的版本号会在升版之后说谎，
+        // 测试版尤其如此：0.4.0-beta.2 的包如果说自己是 0.1.0，就没法据此排查问题。
+        let expected = format!("Resume Pro Desktop {}", env!("CARGO_PKG_VERSION"));
+        assert!(
+            help_text().starts_with(&expected),
+            "帮助文本开头应该是 {expected:?}，实际是 {:?}",
+            help_text().lines().next()
+        );
     }
 
     #[test]
