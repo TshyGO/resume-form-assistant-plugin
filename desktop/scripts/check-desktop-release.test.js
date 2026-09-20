@@ -14,6 +14,7 @@ import {
   assertTagMatches,
   desktopVersion,
   packageVersion,
+  releaseKind,
   sha256,
   tagIsPluginShaped,
   writeChecksums,
@@ -54,15 +55,34 @@ test("版本号只从 [package] 段取，依赖项排在前面也不会取错", 
   assert.equal(packageVersion(cargo), "0.3.1");
 });
 
-test("预发布版本号暂时不放行——怎么发还没定", () => {
-  assert.throws(
-    () =>
-      desktopVersion({
-        tauriConf: conf("0.2.0-beta.1"),
-        cargoToml: '[package]\nversion = "0.2.0-beta.1"\n',
-      }),
-    /1\.2\.3/,
-  );
+test("beta 版本号 1.2.3-beta.N 放行，其它预发布写法一律不放行", () => {
+  const read = (version) =>
+    desktopVersion({ tauriConf: conf(version), cargoToml: `[package]\nversion = "${version}"\n` });
+  assert.equal(read("0.2.0-beta.1"), "0.2.0-beta.1");
+  assert.equal(read("0.2.0-beta.12"), "0.2.0-beta.12");
+  // 只认 beta：别的后缀多半是手滑，放行的话 rc/alpha 会被当成不同的发布类别。
+  for (const bad of ["0.2.0-beta", "0.2.0-beta.0", "0.2.0-beta.01", "0.2.0-rc.1", "0.2.0-alpha.1", "0.2.0+build.5", "0.2"]) {
+    assert.throws(() => read(bad), /1\.2\.3/, bad);
+  }
+});
+
+test("beta 的 tag 也要和版本号逐字一致，正式 tag 和 beta 版本号不能混着用", () => {
+  assertTagMatches("desktop-v0.2.0-beta.3", "0.2.0-beta.3");
+  assert.throws(() => assertTagMatches("desktop-v0.2.0", "0.2.0-beta.3"), /但版本号是/);
+  assert.throws(() => assertTagMatches("desktop-v0.2.0-beta.3", "0.2.0"), /但版本号是/);
+});
+
+test("beta 还是正式版，看 tag 里有没有 -beta.N；认不出的后缀不能默默当成正式版", () => {
+  assert.equal(releaseKind("desktop-v0.2.0-beta.1"), "beta");
+  assert.equal(releaseKind("desktop-v0.2.0"), "stable");
+  // rc 这类没被放行的后缀，若被当成正式版，就会以「最新版」的身份发出去。
+  assert.throws(() => releaseKind("desktop-v0.2.0-rc.1"), /rc/);
+  assert.throws(() => releaseKind("v0.2.0"), /desktop-v/);
+  // 工作流靠命令行问这个答案，不在 YAML 里自己判断。
+  const out = execFileSync("node", [script, "--release-kind", "desktop-v0.2.0-beta.1"], { encoding: "utf8" });
+  assert.equal(out.trim(), "beta");
+  const stable = execFileSync("node", [script, "--release-kind", "desktop-v0.2.0"], { encoding: "utf8" });
+  assert.equal(stable.trim(), "stable");
 });
 
 test("tag 必须是 desktop-v<版本号>", () => {
@@ -241,4 +261,19 @@ test("安装验收失败也会清理本轮安装，并给早退进程可操作�
   assert.match(acceptance, /Remove-Item -LiteralPath \$resolvedInstallDir -Recurse -Force/);
   assert.match(acceptance, /AcceptanceEligible = -not \$runningElevated/);
   assert.match(acceptance, /ELEVATED_DIAGNOSTIC/);
+});
+
+test("beta 的 tag 建成预发布并带上风险说明，正式 tag 必须来自 main", () => {
+  const flow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
+  // 类别由脚本给出，YAML 里不自己猜。
+  assert.match(flow, /--release-kind/);
+  // --prerelease 只能出现在「是 beta」的分支里，正式版不能被带上。
+  assert.match(flow, /"\$kind" = "beta"[\s\S]*?--prerelease/);
+  assert.equal(flow.split("--prerelease").length - 1, 1);
+  // beta 说明里要把「数据库升级后回不到正式版」这件事讲清楚。
+  assert.match(flow, /测试版/);
+  assert.match(flow, /回不到正式版|无法回到正式版/);
+  // 正式 tag 只能落在 main 的历史上：beta 提交在临时分支里，手滑打成正式 tag 就会发出去。
+  assert.match(flow, /merge-base --is-ancestor/);
+  assert.match(flow, /fetch-depth: 0/);
 });

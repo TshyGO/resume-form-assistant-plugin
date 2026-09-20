@@ -334,6 +334,18 @@ mod tests {
     }
 
     #[test]
+    fn a_beta_tag_is_never_offered_even_if_it_was_not_flagged_as_prerelease() {
+        // 测试版发成预发布，上面那条已经把它挡在外面；这里锁住第二道：
+        // 哪天有人漏勾了「预发布」，带 -beta 的版本号也解析不出来，仍然会被跳过。
+        // 正式版用户不该被推到测试版。
+        let body = json!([
+            release("desktop-v0.2.0-beta.1", false, false),
+            release("desktop-v0.1.0", false, false),
+        ]);
+        assert_eq!(found(&body).version, "0.1.0");
+    }
+
+    #[test]
     fn one_malformed_entry_does_not_hide_the_rest() {
         // 缺字段的 release 只该被跳过。整列作废的后果是界面说「已经是最新版」——
         // 用户永远不知道有新版本，而这正是最难被发现的那种错。

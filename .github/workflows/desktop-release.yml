@@ -39,6 +39,8 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # 要看一个提交在不在 main 的历史里，浅克隆看不出来。
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -65,6 +67,22 @@ jobs:
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         shell: bash
         run: node desktop/scripts/check-desktop-release.js "$TAG"
+
+      # 测试版的提交在临时分支上，不在 main 的历史里；正式 tag 若指到那种提交，
+      # 就等于把没走过 main 的代码当正式版发出去。
+      - name: Stable tags must come from main
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          kind=$(node desktop/scripts/check-desktop-release.js --release-kind "$TAG")
+          echo "release kind: $kind"
+          if [ "$kind" = "stable" ]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "正式版 tag $TAG 指向的提交不在 main 上" >&2; exit 1; }
+          fi
 
       # Cargo.lock 过期时这一步会失败，而不是让构建悄悄改锁文件：
       # 「可复现构建」的前提是锁文件说了算。
@@ -160,7 +178,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          kind=$(node desktop/scripts/check-desktop-release.js --release-kind "$TAG")
           {
+            if [ "$kind" = "beta" ]; then
+              echo "## 这是测试版（beta）"
+              echo
+              echo "测试版用来提前试用新功能，**可能有严重问题**。它和正式版共用同一份数据和同一个安装位置：装上就是覆盖升级。测试版可能会升级数据库结构，升级之后**无法回到正式版**——正式版会拒绝打开被更新过的数据库，只能从升级前自动做的备份里恢复。没有把握的话请用正式版。"
+              echo
+            fi
             echo "## 安装包未签名"
             echo
             echo "我们还没有代码签名证书，所以："
@@ -201,7 +226,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # 测试版建成预发布：GitHub 的「最新版」和桌面自己的更新检查都会跳过预发布，
+          # 所以它不会被推给正式版用户。
+          kind=$(node desktop/scripts/check-desktop-release.js --release-kind "$TAG")
+          flags=()
+          if [ "$kind" = "beta" ]; then
+            flags+=(--prerelease)
+          fi
           gh release create "$TAG" dist-release/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            ${flags[@]+"${flags[@]}"}
