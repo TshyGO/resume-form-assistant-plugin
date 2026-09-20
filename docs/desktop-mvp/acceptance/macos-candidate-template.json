@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "status": "NOT_REGISTERED",
+  "platform": "macos-arm64",
+  "buildTarget": "aarch64-apple-darwin",
+  "evidencePurpose": "RELEASE_CANDIDATE",
+  "fixtureVersion": "d14-v1",
+  "testedSourceCommit": null,
+  "workflowRunUrl": null,
+  "desktopVersion": null,
+  "extensionVersion": null,
+  "protocolVersion": null,
+  "desktop": {
+    "name": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "distributionFormat": "dmg",
+    "signatureStatus": "NOT_INSPECTED",
+    "notarizationStatus": "NOT_INSPECTED",
+    "bundleIdentifier": null,
+    "architecture": null,
+    "minimumSystemVersion": null,
+    "codesignVerifyStatus": "NOT_INSPECTED",
+    "codesignVerifyDetail": null,
+    "unsignedApproval": null
+  },
+  "extension": {
+    "name": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "distributionFormat": "zip",
+    "extensionId": null,
+    "manifestSha256": null,
+    "packageTreeSha256": null,
+    "fileCount": null
+  },
+  "registeredBy": null,
+  "registeredAt": null,
+  "review": {
+    "reviewer": null,
+    "reviewedAt": null,
+    "decision": "NOT_REVIEWED",
+    "blockingDefects": []
+  },
+  "notes": [
+    "Populate only from the exact downloaded DMG and extension ZIP selected for macOS acceptance.",
+    "Changing source commit or either artifact invalidates all dependent browser and lifecycle reports.",
+    "Registration proves file identity and package shape, not installation, Gatekeeper, browser, or lifecycle acceptance."
+  ]
+}

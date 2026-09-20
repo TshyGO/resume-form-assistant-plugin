@@ -173,9 +173,50 @@ test('D14 T5 lifecycle evidence starts NOT_RUN and T6 gate fails closed by const
     'desktop/scripts/check-release-acceptance.test.mjs',
     'docs/desktop-mvp/acceptance/t5-lifecycle.md',
     'docs/desktop-mvp/acceptance/t6-release-gate.md',
+    'desktop/scripts/d14_macos_acceptance_check.py',
+    'desktop/scripts/d14_macos_acceptance_check_test.py',
+    'docs/desktop-mvp/acceptance/t4-macos-browser.md',
   ]) {
     assert.ok(fs.existsSync(path.join(ROOT, ...target.split('/'))), `${target} must exist`);
   }
+});
+
+test('D14 macOS-first templates remain platform-scoped and claim no execution', () => {
+  const environment = readJson(ACCEPTANCE, 'macos-environment-template.json');
+  const candidate = readJson(ACCEPTANCE, 'macos-candidate-template.json');
+  const t4 = readJson(ACCEPTANCE, 'macos-report-template.json');
+  const t5 = readJson(ACCEPTANCE, 't5-macos-report-template.json');
+  const guide = fs.readFileSync(path.join(ACCEPTANCE, 't4-macos-browser.md'), 'utf8');
+  const lifecycle = fs.readFileSync(path.join(ACCEPTANCE, 't5-macos-lifecycle.md'), 'utf8');
+  const script = fs.readFileSync(path.join(ROOT, 'desktop', 'scripts', 'd14_macos_acceptance_check.py'), 'utf8');
+
+  assert.equal(environment.platform, 'macos-arm64');
+  assert.equal(environment.buildTarget, 'aarch64-apple-darwin');
+  assert.equal(environment.installation.gatekeeperExperience, 'NOT_RUN');
+  assert.equal(environment.nativeMessaging.installedRegistration, 'NOT_VERIFIED');
+  assert.equal(candidate.status, 'NOT_REGISTERED');
+  assert.equal(candidate.platform, 'macos-arm64');
+  assert.equal(candidate.buildTarget, 'aarch64-apple-darwin');
+  assert.equal(candidate.desktop.sha256, null);
+  assert.equal(candidate.extension.sha256, null);
+  assert.deepEqual(t4.cases.map((entry) => entry.id), CASES);
+  assert.ok(t4.cases.every((entry) => entry.status === 'NOT_RUN'));
+  assert.ok(t4.cases.every((entry) => entry.evidence.length === 0));
+  assert.equal(t4.overallD14Status, 'PARTIAL_PLATFORM_ACCEPTANCE');
+  assert.equal(t4.windowsStatus, 'NOT_RUN');
+  assert.equal(t4.review.decision, 'NOT_REVIEWED');
+  assert.equal(t5.checks.length, 17);
+  assert.equal(new Set(t5.checks.map((entry) => entry.id)).size, 17);
+  assert.ok(t5.checks.every((entry) => entry.status === 'NOT_RUN'));
+  assert.equal(t5.windowsStatus, 'NOT_RUN');
+  assert.match(guide, /不得使用 `xattr`/);
+  assert.match(guide, /不能据此关闭 D14/);
+  assert.match(guide, /probe-host/);
+  assert.match(guide, /assessments enabled/);
+  assert.match(lifecycle, /跨次日不得修改系统时钟/);
+  assert.match(lifecycle, /PARTIAL_PLATFORM_ACCEPTANCE/);
+  assert.match(script, /def probe_host/);
+  assert.match(script, /STEP0_HOST_PRECHECK/);
 });
 
 test('D14 T7 release material exists without claiming a release happened', () => {
