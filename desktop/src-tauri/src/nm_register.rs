@@ -410,6 +410,11 @@ pub fn ensure(
                     if let Err(problem) = registry.write(reg_key, &key) {
                         registered = false;
                         note = Some(problem);
+                    } else if registry.read(reg_key).as_deref() != Some(key.as_str()) {
+                        registered = false;
+                        note = Some(format!(
+                            "写入注册表后回读不一致：{reg_key}；可能被组策略或安全软件拦截"
+                        ));
                     }
                 }
             }

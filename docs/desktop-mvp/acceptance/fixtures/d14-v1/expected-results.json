@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "d14-v1",
+  "isolationRule": "each case starts from a fresh archive unless the case says otherwise",
+  "logicalEntities": {
+    "applications": [
+      "application-a",
+      "application-b",
+      "application-c"
+    ],
+    "sameCompanyAmbiguity": [
+      "application-a",
+      "application-b"
+    ],
+    "otherCompany": "application-c",
+    "historicalSnapshotMarker": "D14-V1-SNAPSHOT-MARKER",
+    "currentTemplateMarker": "D14-V2-CURRENT-MARKER"
+  },
+  "invariants": [
+    "fill completion does not imply submitted",
+    "formal stage, reply classification and todos change only after the matching user confirmation",
+    "snapshot bytes are immutable and retries use the staged bytes",
+    "same-company candidates are never merged or selected without evidence/user choice",
+    "historical assessment recorded after an offer does not roll current progress backward",
+    "eventSequence, not recordedAt, is the stable ordering key",
+    "a successful restore mints a new current restoreEpoch",
+    "old-epoch messages reconcile and never replay automatically",
+    "forbidden synthetic markers do not enter archive, logs, backup, outbound request or release artifacts"
+  ],
+  "journeys": {
+    "J01": {
+      "requiredBrowsers": [
+        "Chrome",
+        "Edge"
+      ],
+      "productionRegistration": true
+    },
+    "J02": {
+      "applicationCreates": 1,
+      "fillEvents": 1,
+      "snapshots": 1,
+      "snapshotContains": "D14-V1-SNAPSHOT-MARKER",
+      "snapshotExcludes": "D14-V2-CURRENT-MARKER"
+    },
+    "J03": {
+      "stageBeforeExplicitSubmission": "saved",
+      "explicitSubmissionEvents": 1,
+      "historicalSnapshotRemains": "template-v1"
+    },
+    "J04": {
+      "formalChangesBeforeConfirm": 0,
+      "duplicateConfirmBusinessWrites": 0,
+      "atsInterviewSendMode": "automated"
+    },
+    "J05": {
+      "ambiguousAutoSelection": null,
+      "userSelectedApplication": "application-b",
+      "applicationAUnaffectedByChoice": true,
+      "offerRollbackAfterHistoricalAssessment": false
+    },
+    "J06": {
+      "restoreCount": 2,
+      "distinctCurrentRestoreEpochs": 2,
+      "oldQueueAutomaticWrites": 0,
+      "stableSameTimestampOrder": true
+    },
+    "J07": {
+      "preMigrationBackup": true,
+      "attachmentHashStable": true,
+      "defaultUninstallKeepsArchive": true
+    },
+    "J08": {
+      "pluginFillWorksWithoutDesktop": true,
+      "neverPairedPersistentQueueEntries": 0
+    }
+  },
+  "faults": {
+    "F01": {
+      "duplicateBusinessWrites": 0,
+      "originalBytesRetried": true
+    },
+    "F02": {
+      "falseSuccesses": 0,
+      "regenerateFromCurrentTemplate": false
+    },
+    "F03": {
+      "partialCommittedTriples": 0,
+      "maxBusinessWritesAfterRetry": 1
+    },
+    "F04": {
+      "resurrectedApplications": 0
+    },
+    "F05": {
+      "crossProfileWrites": 0,
+      "conflictAutomaticWrites": 0
+    },
+    "F06": {
+      "stableEventSequence": true,
+      "distinctCurrentRestoreEpochs": 2
+    },
+    "F07": {
+      "successfulBackupsWithMissingReferencedFiles": 0
+    },
+    "F08": {
+      "currentPointerChangesOnFailure": 0,
+      "writesOutsideRestoreTarget": 0
+    },
+    "F09": {
+      "executedAttachmentInstructions": 0,
+      "formalChangesWithoutConfirm": 0
+    },
+    "F10": {
+      "formalChangesOnErrorOrCancel": 0,
+      "automaticPaidRetries": 0
+    },
+    "F11": {
+      "forbiddenMarkerOccurrences": 0,
+      "persistedImportSourcePaths": 0
+    },
+    "F12": {
+      "businessWritesFromRejectedEnvelope": 0
+    },
+    "F13": {
+      "duplicateNotifications": 0,
+      "hiddenAutostartEntries": 0
+    }
+  }
+}

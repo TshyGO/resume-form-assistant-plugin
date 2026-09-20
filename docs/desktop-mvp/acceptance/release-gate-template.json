@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "candidateManifest": null,
+  "dependencies": null,
+  "reports": {
+    "chrome": null,
+    "edge": null,
+    "t5": null
+  },
+  "releaseArtifacts": {
+    "desktop": null,
+    "extension": null
+  },
+  "requiredSourceCommit": null,
+  "review": {
+    "reviewer": null,
+    "reviewedAt": null,
+    "decision": "NOT_REVIEWED",
+    "blockingDefects": []
+  }
+}

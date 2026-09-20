@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$Installer,
-  [string]$UpgradeInstaller = ""
+  [string]$UpgradeInstaller = "",
+  [switch]$AllowElevatedDiagnostic
 )
 
 # Manual D13 acceptance for a machine with no existing Resume Pro Desktop install.
@@ -26,7 +27,8 @@ $registrationKeys = @(
 $principal = [Security.Principal.WindowsPrincipal]::new(
   [Security.Principal.WindowsIdentity]::GetCurrent()
 )
-if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$runningElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($runningElevated -and -not $AllowElevatedDiagnostic) {
   throw "Run this acceptance check from a non-elevated PowerShell session"
 }
 
@@ -100,8 +102,14 @@ if (-not $userDataExisted) { New-Item -ItemType Directory -Path $userDataDir | O
 $sentinel = Join-Path $userDataDir ("d13-install-acceptance-" + [guid]::NewGuid().ToString("N") + ".sentinel")
 New-Item -ItemType File -Path $sentinel | Out-Null
 $oldOverride = $env:RESUMEPRO_DATA_DIR
+$installedThisRun = $false
+$app = $null
 
 try {
+  # The preflight above proves the install directory and registration keys were absent. From this
+  # point on, any of them that appear belong to this attempt and are safe for finally to remove,
+  # even when NSIS returns a non-zero exit code after writing partial state.
+  $installedThisRun = $true
   $install = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
   if (-not (Test-Path -LiteralPath $installDir)) { throw "Installer did not create $installDir" }
@@ -114,6 +122,10 @@ try {
 
   $env:RESUMEPRO_DATA_DIR = $testRoot
   $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
+  Start-Sleep -Milliseconds 500
+  if ($app.HasExited) {
+    throw "Installed application exited before Native Messaging registration (exit $($app.ExitCode)); check packaged runtime dependencies"
+  }
   $keys = Wait-NativeMessagingRegistration $exe.FullName
 
   $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
@@ -140,6 +152,10 @@ try {
     $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
       Select-Object -First 1
     $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
+    Start-Sleep -Milliseconds 500
+    if ($app.HasExited) {
+      throw "Upgraded application exited before Native Messaging registration (exit $($app.ExitCode)); check packaged runtime dependencies"
+    }
     $keys = Wait-NativeMessagingRegistration $exe.FullName
     $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
     if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
@@ -178,10 +194,60 @@ try {
     ArchiveFilesVerified = $before.Count
     ArchiveUnchanged = $true
     UserDataSentinelPreserved = $true
-    RunningElevated = $false
+    RunningElevated = $runningElevated
+    AcceptanceEligible = -not $runningElevated
+    EvidencePurpose = if ($runningElevated) { "ELEVATED_DIAGNOSTIC" } else { "STANDARD_USER_ACCEPTANCE" }
   }
 } finally {
   $env:RESUMEPRO_DATA_DIR = $oldOverride
+  # The script refuses pre-existing installs, so an install directory created during this run is
+  # always safe to remove through its own uninstaller. Failed registration/startup must not leave
+  # a half-tested product installed on the machine.
+  if ($installedThisRun) {
+    if ($app -and -not $app.HasExited) {
+      Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $installDir) {
+      try {
+        $cleanupUninstaller = Get-ChildItem -LiteralPath $installDir -Filter "*uninstall*.exe" -File |
+          Select-Object -First 1
+        if ($cleanupUninstaller) {
+          $cleanup = Start-Process -FilePath $cleanupUninstaller.FullName -ArgumentList "/S" `
+            -Wait -PassThru -WindowStyle Hidden
+          if ($cleanup.ExitCode -ne 0) {
+            Write-Warning "Cleanup uninstaller exited with $($cleanup.ExitCode)"
+          }
+          $cleanupDeadline = (Get-Date).AddSeconds(20)
+          while ((Test-Path -LiteralPath $installDir) -and (Get-Date) -lt $cleanupDeadline) {
+            Start-Sleep -Milliseconds 250
+          }
+        }
+      } catch {
+        Write-Warning "Cleanup uninstaller failed: $($_.Exception.Message)"
+      }
+    }
+    foreach ($key in $registrationKeys) {
+      if (Test-Path $key) {
+        try {
+          Remove-Item -Path $key -Recurse -Force
+        } catch {
+          Write-Warning "Failed to remove registration created by this run ($key): $($_.Exception.Message)"
+        }
+      }
+    }
+    if (Test-Path -LiteralPath $installDir) {
+      try {
+        $resolvedInstallDir = (Resolve-Path -LiteralPath $installDir).Path
+        $expectedInstallDir = [IO.Path]::GetFullPath($installDir)
+        if ($resolvedInstallDir -ne $expectedInstallDir) {
+          throw "Unsafe install cleanup target: $resolvedInstallDir"
+        }
+        Remove-Item -LiteralPath $resolvedInstallDir -Recurse -Force
+      } catch {
+        Write-Warning "Failed to remove install directory created by this run: $($_.Exception.Message)"
+      }
+    }
+  }
   if (Test-Path -LiteralPath $testRoot) {
     $resolved = (Resolve-Path -LiteralPath $testRoot).Path
     $tempResolved = (Resolve-Path -LiteralPath $env:TEMP).Path

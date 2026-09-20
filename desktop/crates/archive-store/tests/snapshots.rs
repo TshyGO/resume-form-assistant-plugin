@@ -127,6 +127,21 @@ fn a_complete_upload_becomes_one_snapshot_file_and_its_staging_is_cleared() {
     assert_eq!(settled.staged_bytes, 0, "staged chunk bytes go once the file is the copy");
     assert_eq!(db.list_snapshots(&a.id).unwrap().len(), 1);
 
+    let database_snapshot = dir.path().join("backup-snapshot.db");
+    db.snapshot_database_to(&database_snapshot).unwrap();
+    let inventory = ArchiveStore::backup_inventory_from_snapshot(&database_snapshot).unwrap();
+    assert_eq!(inventory.counts.snapshots, 1);
+    assert_eq!(
+        inventory
+            .referenced_files
+            .iter()
+            .map(|item| item.path.clone())
+            .collect::<Vec<_>>(),
+        vec![meta.stored_rel_path.clone()]
+    );
+    assert_eq!(inventory.referenced_files[0].size_bytes, meta.byte_size);
+    assert_eq!(inventory.referenced_files[0].sha256, meta.sha256);
+
     // A second completion (the plugin resending after a lost complete ACK) is idempotent.
     match db.complete_snapshot_upload(CLIENT, SNAPSHOT).unwrap() {
         SnapshotCompletion::AlreadyComplete(again) => assert_eq!(again.sha256, meta.sha256),

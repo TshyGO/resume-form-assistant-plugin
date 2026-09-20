@@ -174,7 +174,7 @@ must("pairing-form").addEventListener("submit", async (event) => {
     }
     msg.textContent = registrationOk
       ? "已保存，并把这几个 ID 一起写进了 host 清单。"
-      : "ID 已保存，但 host 清单没有全部更新成功。请按上面的“重试注册”。";
+      : "ID 已保存，但 host 清单没有全部更新成功。请按上面的“重新检查注册”。";
     await refreshStatus();
   } catch (err: unknown) {
     pairing.onSaveFailure();
