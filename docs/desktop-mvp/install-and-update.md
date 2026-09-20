@@ -28,7 +28,7 @@ npm run tauri build -- --bundles dmg       # macOS
 发版前先跑一遍检查——版本号、tag、打包配置：
 
 ```bash
-node desktop/scripts/check-desktop-release.js desktop-v0.1.0
+node desktop/scripts/check-desktop-release.js desktop-v0.4.0
 ```
 
 还有两道：`--dist desktop/dist` 检查前端产物里没有 sourcemap、`.env`、测试夹具；`--assets <目录>`（不带 `--write-checksums`）在发布前**复算一遍校验和**，因为构建机写的和发布机手上的是两份文件。
@@ -47,7 +47,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.1.0_x64-setup.exe"
+  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.4.0_x64-setup.exe"
 ```
 
 要验 `vN → vN+1`，再传一个不同版本的测试安装包；脚本会在两次安装之间放入附件哨兵，
@@ -55,7 +55,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./Resume Pro Desktop_0.1.0_x64-setup.exe" `
+  -Installer "./Resume Pro Desktop_0.4.0_x64-setup.exe" `
   -UpgradeInstaller "./Resume Pro Desktop_0.1.1_x64-setup.exe"
 ```
 
@@ -72,7 +72,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 | | tag | 版本号来源 | 工作流 |
 | --- | --- | --- | --- |
 | 浏览器插件 | `v0.4.0` | `manifest.json` | `release.yml` |
-| 桌面 | `desktop-v0.1.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
+| 桌面 | `desktop-v0.4.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
 
 两个命名空间不能重叠，否则一次桌面发版会顺手把插件也发出去。这条有测试盯着（`check-desktop-release.test.js`）。
 
@@ -85,7 +85,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ### 1.3 测试版（beta）怎么出
 
-测试版是同一个仓库里的预发布，版本号写成 `0.1.0-beta.1`、`0.1.0-beta.2`……（`1.2.3-beta.N`，N 从 1 起），tag 是 `desktop-v0.1.0-beta.1`。别的后缀（rc、alpha）不认。
+测试版是同一个仓库里的预发布，版本号写成 `0.4.0-beta.1`、`0.4.0-beta.2`……（`1.2.3-beta.N`，N 从 1 起），tag 是 `desktop-v0.4.0-beta.1`。别的后缀（rc、alpha）不认。
 
 ```bash
 node desktop/scripts/release-beta.js          # 只演示：说明会打哪个 tag，什么都不改
@@ -96,9 +96,9 @@ node desktop/scripts/release-beta.js --push   # 真的打 tag 并推送
 
 推送 tag 之后，`desktop-release.yml` 构建并把它建成**预发布**：不会成为 GitHub 的「最新版」，桌面自带的更新检查也不会提示它。发布说明开头会写明这是测试版和风险。
 
-正式版仍然从 main 直接打 `desktop-v0.1.0`。流水线会检查正式 tag 指向的提交在 main 的历史里；指到 beta 的临时提交上会被拒绝，避免没走过 main 的代码被当成正式版发出去。
+正式版仍然从 main 直接打 `desktop-v0.4.0`。流水线会检查正式 tag 指向的提交在 main 的历史里；指到 beta 的临时提交上会被拒绝，避免没走过 main 的代码被当成正式版发出去。
 
-只想改版本号（比如在分支上手动触发 `workflow_dispatch` 试构建）：`node desktop/scripts/set-version.js 0.1.0-beta.2`，一次改齐三处。
+只想改版本号（比如在分支上手动触发 `workflow_dispatch` 试构建）：`node desktop/scripts/set-version.js 0.4.0-beta.2`，一次改齐三处。
 
 ## 2. 安装包没有签名
 
@@ -121,11 +121,11 @@ node desktop/scripts/release-beta.js --push   # 真的打 tag 并推送
 每个安装包旁边都有一份 `.sha256`，由 CI 在构建机上生成：
 
 ```powershell
-Get-FileHash "Resume Pro Desktop_0.1.0_x64-setup.exe"    # Windows
+Get-FileHash "Resume Pro Desktop_0.4.0_x64-setup.exe"    # Windows
 ```
 
 ```bash
-shasum -a 256 "Resume Pro Desktop_0.1.0_aarch64.dmg"     # macOS
+shasum -a 256 "Resume Pro Desktop_0.4.0_aarch64.dmg"     # macOS
 ```
 
 对不上就别装。
