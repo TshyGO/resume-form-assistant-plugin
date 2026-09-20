@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,3 +157,73 @@ test("以远端的 main 为准：本地 main 落后时，beta 仍然基于远端
   assert.equal(result.code, 0, result.out);
   assert.equal(git(origin, "rev-parse", "desktop-v0.1.0-beta.1^"), latest);
 });
+
+// ---------- 工作流里的「正式 tag 必须来自 main」：把那一步的脚本原样取出来，在临时仓库里真跑 ----------
+
+const workflow = readFileSync(join(here, "..", "..", ".github", "workflows", "desktop-release.yml"), "utf8")
+  .split("\r\n")
+  .join("\n");
+
+/** 取出那一步的 shell 脚本：测的是工作流里真正跑的那几行，不是另抄一份。 */
+function stableTagStep() {
+  const at = workflow.indexOf("- name: Stable tags must come from main");
+  assert.ok(at >= 0, "工作流里找不到「Stable tags must come from main」这一步");
+  const rest = workflow.slice(at);
+  const marker = "        run: |\n";
+  const from = rest.indexOf(marker);
+  assert.ok(from >= 0, "这一步没有 run 脚本");
+  const lines = [];
+  for (const line of rest.slice(from + marker.length).split("\n")) {
+    if (line.startsWith("          ")) lines.push(line.slice(10));
+    else if (line.trim() === "") lines.push("");
+    else break;
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Windows 上 PATH 里的 bash 可能是没装发行版的 WSL 入口，所以用 Git 自带的：
+ * `git --exec-path` 指向 <安装目录>/mingw64/libexec/git-core，往上三层就是安装目录。
+ */
+function findBash() {
+  if (process.platform !== "win32") return "bash";
+  const execPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
+  const candidate = join(resolve(execPath, "..", "..", ".."), "bin", "bash.exe");
+  return existsSync(candidate) ? candidate : null;
+}
+const BASH = findBash();
+const noBash = BASH === null;
+
+test(
+  "「正式 tag 必须来自 main」这一步会拦住只在 beta 临时分支上的提交，也不放过认不出的后缀",
+  { skip: noBash ? "找不到 Git 自带的 bash" : false },
+  () => {
+    const { work } = makeRepos();
+    cpSync(here, join(work, "desktop", "scripts"), { recursive: true });
+    const onMain = git(work, "rev-parse", "HEAD");
+    git(work, "switch", "-c", "beta/tmp");
+    writeFileSync(join(work, "beta-only.txt"), "只在 beta 分支上");
+    git(work, "add", "beta-only.txt");
+    git(work, "commit", "-m", "beta only");
+    const betaOnly = git(work, "rev-parse", "HEAD");
+    git(work, "switch", "main");
+
+    const script = stableTagStep();
+    const step = (tag, sha) => {
+      try {
+        execFileSync(BASH, ["-c", script], {
+          cwd: work,
+          env: { ...process.env, TAG: tag, GITHUB_SHA: sha },
+          stdio: "pipe",
+        });
+        return 0;
+      } catch (error) {
+        return error.status ?? 1;
+      }
+    };
+    assert.equal(step("desktop-v0.4.0", onMain), 0, "正式 tag 指向 main 上的提交应该通过");
+    assert.notEqual(step("desktop-v0.4.0", betaOnly), 0, "正式 tag 指向只在 beta 分支上的提交必须被拒");
+    assert.equal(step("desktop-v0.4.0-beta.1", betaOnly), 0, "beta tag 本来就该指向临时提交");
+    assert.notEqual(step("desktop-v0.4.0-rc.1", onMain), 0, "认不出的后缀不能通过");
+  },
+);
