@@ -5,7 +5,10 @@
 // 三处对不上，发版守卫会拦；Cargo.lock 那一条不跟着改，`cargo fetch --locked` 会失败。
 // 所以这里一次改齐，而不是让人记得改哪几处。
 //
-// 全部算好再写盘：任何一处出错，磁盘上一个字节都不动。
+// 全部算好再写盘：算的时候任何一处出错，磁盘上一个字节都不动；写盘中途失败会还原。
+//
+// desktop/package.json 和它的 lock 不在这里：它们的 version 不参与构建（界面和 --help
+// 报的版本来自 tauri.conf.json / Cargo.toml），随 main 一起写正式版本号，beta 提交里不改。
 
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -94,8 +97,14 @@ function packageName(cargoToml) {
   throw new Error("Cargo.toml 的 [package] 段里没有 name");
 }
 
-/** root 是仓库根目录。返回被改过的文件路径。 */
-export function applyVersion(root, version) {
+/**
+ * root 是仓库根目录。返回被改过的文件路径。
+ *
+ * 先全部算好再写；写盘中途失败（磁盘满、权限）时，把试过写的文件还原成原样，
+ * 不留下三处版本号不一致的状态。还原也失败就把这件事一并报出来，让人手动处理。
+ * write 可以替换，测试靠它模拟写盘失败。
+ */
+export function applyVersion(root, version, { write = writeFileSync } = {}) {
   assertVersion(version);
   const dir = join(root, "desktop", "src-tauri");
   const paths = {
@@ -112,9 +121,34 @@ export function applyVersion(root, version) {
     toml: setCargoTomlVersion(toml, version),
     lock: setCargoLockVersion(lock, packageName(toml), version),
   };
-  writeFileSync(paths.conf, next.conf);
-  writeFileSync(paths.toml, next.toml);
-  writeFileSync(paths.lock, next.lock);
+  const jobs = [
+    [paths.conf, conf, next.conf],
+    [paths.toml, toml, next.toml],
+    [paths.lock, lock, next.lock],
+  ];
+  const attempted = [];
+  try {
+    for (const job of jobs) {
+      attempted.push(job);
+      write(job[0], job[2]);
+    }
+  } catch (error) {
+    // 失败的那一个也要还原：写到一半的文件可能只剩半截。
+    const failures = [];
+    for (const [path, before] of attempted) {
+      try {
+        write(path, before);
+      } catch (restoreError) {
+        failures.push(`${path}：${restoreError.message}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `写盘失败（${error.message}），而且还原时又出错：${failures.join("；")}。请用 git checkout 还原这三个文件`,
+      );
+    }
+    throw error;
+  }
   return Object.values(paths);
 }
 

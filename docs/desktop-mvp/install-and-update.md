@@ -56,7 +56,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
   -Installer "./Resume Pro Desktop_0.4.0_x64-setup.exe" `
-  -UpgradeInstaller "./Resume Pro Desktop_0.1.1_x64-setup.exe"
+  -UpgradeInstaller "./Resume Pro Desktop_0.4.1_x64-setup.exe"
 ```
 
 脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
@@ -181,7 +181,7 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 
 测试版如果升级了数据库结构，**就回不到正式版了**：正式版会拒绝打开被更新过的数据库。想回去，先卸载测试版、安装正式版，再从测试版升级前自动做的那份备份（`backups/` 下）恢复，步骤同上。
 
-测试版不会出现在桌面的更新提示里，要自己到 Releases 页找带「Pre-release」标记的那一项下载。没有把握的话，用正式版。
+测试版不会出现在桌面的更新提示里，要自己到 Releases 页找带「Pre-release」标记的那一项下载。测试版自己也不会提示升级：它认不出自己带 `-beta` 的版本号，所以想换到更新的测试版，或者回到正式版，都要自己到 Releases 页下载安装。没有把握的话，用正式版。
 
 ## 6. 卸载
 

@@ -102,6 +102,46 @@ test("不合规的版本号一律拒绝，改之前就拦下", () => {
   }
 });
 
+/** 把仓库里真实的三个文件拷进临时目录，返回 { root, dir, names, original }。 */
+function realFilesCopy() {
+  const root = mkdtempSync(join(tmpdir(), "set-version-"));
+  const dir = join(root, "desktop", "src-tauri");
+  mkdirSync(dir, { recursive: true });
+  const names = ["tauri.conf.json", "Cargo.toml", "Cargo.lock"];
+  const original = Object.fromEntries(names.map((n) => [n, readFileSync(join(tauriDir, n), "utf8")]));
+  for (const n of names) writeFileSync(join(dir, n), original[n]);
+  return { root, dir, names, original };
+}
+
+test("写盘中途失败时，已经写过的文件要还原成原样，三处不会停在不一致的状态", () => {
+  const { root, dir, names, original } = realFilesCopy();
+  let calls = 0;
+  const write = (path, text) => {
+    calls += 1;
+    if (calls === 3) throw new Error("磁盘满了");
+    writeFileSync(path, text);
+  };
+  assert.throws(() => applyVersion(root, "0.9.9-beta.4", { write }), /磁盘满了/);
+  for (const n of names) assert.equal(readFileSync(join(dir, n), "utf8"), original[n], `${n} 没有还原`);
+});
+
+test("还原本身也失败时，要把这件事说出来，而不是吞掉", () => {
+  const { root } = realFilesCopy();
+  let calls = 0;
+  const write = (path, text) => {
+    calls += 1;
+    // 第 3 次（写第三个文件）和第 4 次（还原第一个文件）都失败。
+    if (calls === 3 || calls === 4) throw new Error(`写不进去 #${calls}`);
+    writeFileSync(path, text);
+  };
+  assert.throws(() => applyVersion(root, "0.9.9-beta.4", { write }), (error) => {
+    assert.match(error.message, /写不进去 #3/);
+    assert.match(error.message, /还原/);
+    assert.match(error.message, /写不进去 #4/);
+    return true;
+  });
+});
+
 test("在仓库真实文件的副本上改：三处读出来一致，改回去逐字节和原来一样", () => {
   const root = mkdtempSync(join(tmpdir(), "set-version-"));
   const dir = join(root, "desktop", "src-tauri");
