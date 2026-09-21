@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "phase": "T4_MACOS",
+  "platform": "macos-arm64",
+  "overallD14Status": "PARTIAL_PLATFORM_ACCEPTANCE",
+  "windowsStatus": "NOT_RUN",
+  "runId": null,
+  "browser": null,
+  "buildTarget": "aarch64-apple-darwin",
+  "evidencePurpose": null,
+  "fixtureVersion": "d14-v1",
+  "testedSourceCommit": null,
+  "startedAt": null,
+  "completedAt": null,
+  "desktopVersion": null,
+  "extensionVersion": null,
+  "protocolVersion": null,
+  "desktopArtifact": {
+    "name": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "signatureStatus": null,
+    "notarizationStatus": null
+  },
+  "extensionArtifact": {
+    "name": null,
+    "byteLength": null,
+    "sha256": null,
+    "downloadUrl": null,
+    "extensionId": null
+  },
+  "environmentRef": null,
+  "scopeDecision": [
+    {
+      "decision": "MACOS_FIRST_WINDOWS_PENDING",
+      "decidedAt": "2026-09-20",
+      "reference": null
+    }
+  ],
+  "t4Preflight": {
+    "candidateBytes": "NOT_VERIFIED",
+    "gatekeeperInstall": "NOT_RUN",
+    "bundleIdentity": "NOT_VERIFIED",
+    "installedRegistration": "NOT_VERIFIED",
+    "installedSmoke": { "status": "NOT_RUN", "evidence": [] }
+  },
+  "cases": [
+    { "id": "J01", "status": "NOT_RUN", "testLayer": "installed-browser", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J02", "status": "NOT_RUN", "testLayer": "installed-browser", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J03", "status": "NOT_RUN", "testLayer": "browser+archive", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J04", "status": "NOT_RUN", "testLayer": "desktop-ui+archive", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J05", "status": "NOT_RUN", "testLayer": "desktop-ui+archive", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J06", "status": "NOT_RUN", "testLayer": "real-os+installed-browser", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J07", "status": "NOT_RUN", "testLayer": "installed-package", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "J08", "status": "NOT_RUN", "testLayer": "installed-browser", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F01", "status": "NOT_RUN", "testLayer": "protocol+browser", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F02", "status": "NOT_RUN", "testLayer": "browser-storage", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F03", "status": "NOT_RUN", "testLayer": "process+store", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F04", "status": "NOT_RUN", "testLayer": "store+link", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F05", "status": "NOT_RUN", "testLayer": "protocol+store", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F06", "status": "NOT_RUN", "testLayer": "backup+store", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F07", "status": "NOT_RUN", "testLayer": "backup+concurrency", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F08", "status": "NOT_RUN", "testLayer": "restore+isolated-disk", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F09", "status": "NOT_RUN", "testLayer": "import+AI+UI", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F10", "status": "NOT_RUN", "testLayer": "AI+desktop-ui", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F11", "status": "NOT_RUN", "testLayer": "privacy+artifact", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F12", "status": "NOT_RUN", "testLayer": "protocol+real-NM", "expected": null, "actual": null, "evidence": [], "defect": null },
+    { "id": "F13", "status": "NOT_RUN", "testLayer": "real-os", "expected": null, "actual": null, "evidence": [], "defect": null }
+  ],
+  "dependencies": [
+    { "issue": 22, "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null },
+    { "issue": 25, "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null },
+    { "issue": 29, "acceptanceEvidence": [], "signedOff": false, "signedOffBy": null, "signedOffAt": null }
+  ],
+  "review": {
+    "reviewer": null,
+    "reviewedAt": null,
+    "decision": "NOT_REVIEWED",
+    "blockingDefects": []
+  }
+}

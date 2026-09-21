@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "platform": "macos-arm64",
+  "buildTarget": "aarch64-apple-darwin",
+  "capturedAt": null,
+  "hardware": {
+    "modelIdentifier": null,
+    "chip": null,
+    "architecture": "arm64"
+  },
+  "operatingSystem": {
+    "productVersion": null,
+    "buildVersion": null,
+    "declaredMinimumVersion": "11.0",
+    "minimumVersionActuallyTested": false
+  },
+  "account": {
+    "type": "NOT_CAPTURED",
+    "timezone": null,
+    "locale": null
+  },
+  "browsers": {
+    "chrome": { "version": null, "profileIsolation": "NOT_VERIFIED" },
+    "edge": { "version": null, "profileIsolation": "NOT_VERIFIED" }
+  },
+  "installation": {
+    "distributionFormat": "dmg",
+    "dmgMountPath": null,
+    "appPath": "/Applications/Resume Pro Desktop.app",
+    "bundleIdentifier": "com.resumepro.desktop",
+    "gatekeeperExperience": "NOT_RUN",
+    "signatureStatus": "NOT_INSPECTED",
+    "notarizationStatus": "NOT_INSPECTED",
+    "codesignVerifyStatus": "NOT_INSPECTED"
+  },
+  "nativeMessaging": {
+    "chromeManifest": "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.resumepro.desktop.json",
+    "edgeManifest": "~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.resumepro.desktop.json",
+    "installedRegistration": "NOT_VERIFIED"
+  },
+  "permissions": {
+    "notifications": "NOT_TESTED",
+    "keychain": "NOT_TESTED"
+  },
+  "dataRoot": "~/Library/Application Support/ResumePro",
+  "notes": []
+}

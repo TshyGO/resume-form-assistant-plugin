@@ -135,7 +135,7 @@ jobs:
 
       - name: D14 acceptance harness tests
         working-directory: desktop
-        run: python -m unittest scripts/d14_acceptance_check_test.py scripts/d14_t5_check_test.py
+        run: python -m unittest scripts/d14_acceptance_check_test.py scripts/d14_t5_check_test.py scripts/d14_macos_acceptance_check_test.py
 
       - name: D14 release acceptance gate tests
         working-directory: desktop

@@ -13,7 +13,14 @@
 | [t3-fault-matrix.md](t3-fault-matrix.md) | T3 的故障防线、自动化范围和实机限制 |
 | [t3-fault-matrix.json](t3-fault-matrix.json) | F01–F13 的机器可校验精确测试映射与剩余证据 |
 | [t4-windows-browser.md](t4-windows-browser.md) | T4 候选产物、生产注册、Chrome/Edge 烟测与 J01–J08 实机清单 |
+| [t4-macos-browser.md](t4-macos-browser.md) | macOS Apple Silicon 主机预检、候选安装、生产注册、Chrome/Edge 与 J01–J08 实机清单 |
+| [macos-environment-template.json](macos-environment-template.json) | macOS 实机、浏览器、Gatekeeper、安装和权限环境模板 |
+| [macos-report-template.json](macos-report-template.json) | 单个 macOS 浏览器的 J01–J08、F01–F13 报告模板 |
+| [macos-candidate-template.json](macos-candidate-template.json) | 尚未登记的 macOS 候选 manifest；不代表已有构建产物 |
+| [m2-macos-candidate.md](m2-macos-candidate.md) | M2 Apple Silicon DMG/插件 ZIP 的取得、登记和字节绑定流程 |
 | [t5-lifecycle.md](t5-lifecycle.md) | T5 提醒、恢复、磁盘故障、升级卸载与独立填写实机清单 |
+| [t5-macos-lifecycle.md](t5-macos-lifecycle.md) | macOS 提醒、钥匙串、恢复、升级卸载和独立填写实机清单 |
+| [t5-macos-report-template.json](t5-macos-report-template.json) | macOS 生命周期报告模板；所有检查初始为 `NOT_RUN` |
 | [t5-report-template.json](t5-report-template.json) | T5 的 16 项真实 OS/安装生命周期报告模板 |
 | [t6-release-gate.md](t6-release-gate.md) | T6 将候选字节、T4/T5 报告、依赖签收和最终下载文件绑定为阻断门禁 |
 | [release-gate-template.json](release-gate-template.json) | T6 单次门禁输入模板 |
@@ -36,7 +43,11 @@
 
 T4 开始前先按 [t4-windows-browser.md](t4-windows-browser.md) 用候选 EXE/ZIP 创建 Chrome、Edge 两份不可覆盖的运行报告。仓库源码或开发注册结果不能代替候选安装证据。
 
+在没有 Windows 环境时，可先按 [t4-macos-browser.md](t4-macos-browser.md) 和 [t5-macos-lifecycle.md](t5-macos-lifecycle.md) 创建独立 macOS 运行。macOS 第 0 步是 `probe-host`：`spctl --status` 必须为 `assessments enabled`，否则这台机器不能当正式证据机。macOS 通过只产生 `PARTIAL_PLATFORM_ACCEPTANCE`；不得修改 Windows 模板或把 D14 总状态标为完成。
+
 T4 获得已批准基线后，按 [t5-lifecycle.md](t5-lifecycle.md) 记录真实 OS、恢复和升级卸载结果；最后由 [t6-release-gate.md](t6-release-gate.md) 对同一候选、全部报告、依赖签收和最终下载字节做失败关闭校验。
+
+macOS 运行开始前先按 [m2-macos-candidate.md](m2-macos-candidate.md) 登记实际下载的 DMG 与插件 ZIP；两份浏览器报告和生命周期报告必须绑定同一份 `artifacts.json`。
 
 ## 状态语义
 
@@ -62,7 +73,7 @@ T1 的所有报告项必须保持 `NOT_RUN`。自动化测试通过后，也要�
 
 `d14-v1` 仅使用虚构身份、`.test` 保留域名和可搜索的 `D14_SYNTHETIC_*` 标记。所谓“恶意附件”是无执行能力的文本夹具，用于检查文件名、正文提示注入和路径处理；它不是恶意软件样本。
 
-验收运行应使用隔离的普通用户账户或可回滚 VM、临时浏览器 Profile 和专用数据目录。任何注册或清理操作都应根据本次运行生成的回执定位目标。
+验收运行必须使用独立浏览器 Profile 和 `d14-v1` 合成数据，不使用真实简历或真实邮件。macOS 主机预检（允许当前 admin/standard-user，但必须没有旧 App/数据/清单/进程）见 [t4-macos-browser.md](t4-macos-browser.md)；Windows 账户要求见 [t4-windows-browser.md](t4-windows-browser.md)。任何注册或清理操作都应根据本次运行生成的回执定位目标。
 
 ## T1 完成定义
 
