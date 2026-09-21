@@ -219,7 +219,7 @@ test('D14 macOS-first templates remain platform-scoped and claim no execution', 
   assert.match(guide, /不能据此关闭 D14/);
   assert.match(guide, /probe-host/);
   assert.match(guide, /assessments enabled/);
-  assert.match(guide, /resume-pro-desktop/);
+  assert.match(guide, /ps -axo comm=/);
   assert.match(guide, /admin/);
   assert.match(lifecycle, /跨次日不得修改系统时钟/);
   assert.match(lifecycle, /PARTIAL_PLATFORM_ACCEPTANCE/);

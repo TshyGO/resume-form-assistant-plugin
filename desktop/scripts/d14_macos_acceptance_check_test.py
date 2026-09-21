@@ -83,8 +83,19 @@ class MacAcceptanceCheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp) / "existing"
             run_dir.mkdir()
+            (run_dir / "artifacts.json").write_text("{}", encoding="utf-8")
             with self.assertRaisesRegex(MAC.MacAcceptanceError, "refusing to overwrite"):
                 MAC.init_run(Namespace(run_dir=run_dir, run_id=None))
+
+    def test_init_run_reuses_directory_that_only_has_host_probe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp) / "macos-rc1"
+            run_dir.mkdir()
+            (run_dir / "host-probe.json").write_text("{}", encoding="utf-8")
+            MAC.init_run(Namespace(run_dir=run_dir, run_id="macos-rc1"))
+            self.assertTrue((run_dir / "host-probe.json").is_file())
+            self.assertTrue((run_dir / "chrome" / "report.json").is_file())
+            self.assertTrue((run_dir / "lifecycle" / "report.json").is_file())
 
     def test_pass_requires_actual_and_evidence(self):
         report = MAC.read_json(MAC.T4_TEMPLATE)
@@ -172,8 +183,7 @@ class MacAcceptanceCheckTests(unittest.TestCase):
             ("csrutil", "status"): (0, "System Integrity Protection status: enabled."),
             ("id", "-Gn"): (0, "staff everyone localaccounts"),
             ("date", "+%Z"): (0, "CST"),
-            ("pgrep", "-x", "resume-pro-desktop"): (1, ""),
-            ("pgrep", "-x", "Resume Pro Desktop"): (1, ""),
+            ("ps", "-axo", "comm="): (0, "launchd\nFinder\n"),
         }
         mapping.update(overrides or {})
         def run_command(argv):
@@ -365,24 +375,23 @@ class MacAcceptanceCheckTests(unittest.TestCase):
 
     def test_inspect_running_processes_absent_and_present(self):
         def none_running(argv):
-            return 1, ""
+            self.assertEqual(argv, ["ps", "-axo", "comm="])
+            return 0, "launchd\nFinder\nGoogle Chrome\n"
 
         absent = MAC.inspect_running_processes(none_running)
         self.assertFalse(absent["runningProcessExists"])
         self.assertEqual(absent["runningProcessDetails"], [])
 
         def desktop_running(argv):
-            if argv == ["pgrep", "-x", "resume-pro-desktop"]:
-                return 0, "1201\n1202\n"
-            return 1, ""
+            return 0, "launchd\nresume-pro-deskto\nresume-pro-deskto\nFinder\n"
 
         present = MAC.inspect_running_processes(desktop_running)
         self.assertTrue(present["runningProcessExists"])
         self.assertEqual(
             present["runningProcessDetails"],
-            [{"processName": "resume-pro-desktop", "pidCount": 2}],
+            [{"processName": "resume-pro-deskto", "pidCount": 2}],
         )
-        self.assertNotIn("1201", str(present["runningProcessDetails"]))
+        self.assertNotIn("--", str(present["runningProcessDetails"]))
 
     def test_probe_host_blocks_running_process(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -393,13 +402,13 @@ class MacAcceptanceCheckTests(unittest.TestCase):
             probe = self.collect_probe(
                 root,
                 apps,
-                self.ready_commands({("pgrep", "-x", "resume-pro-desktop"): (0, "4242")}),
+                self.ready_commands({("ps", "-axo", "comm="): (0, "launchd\nResume Pro Deskt\n")}),
             )
             self.assertEqual(probe["verdict"], "BLOCKED")
             self.assertTrue(probe["existingData"]["runningProcessExists"])
             self.assertEqual(probe["existingData"]["runningProcessDetails"][0]["pidCount"], 1)
             self.assertTrue(any("process still running" in item for item in probe["blockers"]))
-            self.assertNotIn("4242", json.dumps(probe["existingData"]["runningProcessDetails"]))
+            self.assertNotIn("apiKey", json.dumps(probe["existingData"]["runningProcessDetails"]))
 
     def test_probe_host_records_cache_as_warning_and_unconfirmed_residue(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -507,6 +516,30 @@ class MacAcceptanceCheckTests(unittest.TestCase):
         self.assertTrue(
             any("must remain NOT_REVIEWED" in item for item in MAC.validate_t5_report(approved, True))
         )
+
+    def test_t5_check_ids_match_the_shared_windows_template(self):
+        windows = MAC.read_json(MAC.ACCEPTANCE / "t5-report-template.json")
+        self.assertEqual([item["id"] for item in windows["checks"]], MAC.T5_CHECKS)
+        self.assertEqual(len(MAC.T5_CHECKS), 16)
+
+    def test_verify_candidate_reinspects_live_dmg_signature(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.candidate_args(Path(temp))
+            with patch.object(MAC, "verify_dmg_integrity"), patch.object(
+                MAC, "inspect_dmg_bundle", return_value=self.dmg_details()
+            ):
+                MAC.prepare_candidate(args)
+            candidate = MAC.read_json(args.output)
+            candidate["desktop"]["signatureStatus"] = "ADHOC_LINKER_SIGNED"
+            MAC.write_json(args.output, candidate)
+            live = self.dmg_details()
+            with patch.object(MAC, "verify_dmg_integrity"), patch.object(
+                MAC, "inspect_dmg_bundle", return_value=live
+            ):
+                with self.assertRaisesRegex(MAC.MacAcceptanceError, "live DMG inspection"):
+                    MAC.verify_candidate(
+                        Namespace(candidate=args.output, dmg=args.dmg, extension_zip=args.extension_zip)
+                    )
 
     def test_prepare_candidate_rejects_unsigned_unknown_and_failed_strict_verify(self):
         with tempfile.TemporaryDirectory() as temp:

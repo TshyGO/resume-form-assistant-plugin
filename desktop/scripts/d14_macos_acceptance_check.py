@@ -360,10 +360,21 @@ def validate_environment(environment: dict, pristine: bool) -> list[str]:
     return errors
 
 
+def run_dir_only_has_host_probe(run_dir: Path) -> bool:
+    """probe-host may create the future run dir with only host-probe.json."""
+    if not run_dir.exists():
+        return True
+    if not run_dir.is_dir():
+        return False
+    names = {path.name for path in run_dir.iterdir()}
+    return names in (set(), {"host-probe.json"})
+
+
 def init_run(args) -> None:
     run_dir = args.run_dir.resolve()
-    if run_dir.exists():
+    if run_dir.exists() and not run_dir_only_has_host_probe(run_dir):
         raise MacAcceptanceError(f"refusing to overwrite macOS evidence: {run_dir}")
+    run_dir.mkdir(parents=True, exist_ok=True)
     run_id = args.run_id or run_dir.name
     timestamp = now_utc()
     environment = deepcopy(read_json(ENVIRONMENT_TEMPLATE))
@@ -461,7 +472,21 @@ def verify_candidate(args) -> None:
     dmg = args.dmg.resolve(strict=True)
     extension_zip = args.extension_zip.resolve(strict=True)
     verify_dmg_integrity(dmg)
-    errors = validate_candidate(read_json(candidate_path), dmg, extension_zip)
+    candidate = read_json(candidate_path)
+    dmg_details = inspect_dmg_bundle(dmg)
+    errors = validate_candidate(candidate, dmg, extension_zip)
+    desktop = candidate.get("desktop") or {}
+    for key in (
+        "bundleIdentifier",
+        "architecture",
+        "minimumSystemVersion",
+        "signatureStatus",
+        "codesignVerifyStatus",
+    ):
+        if desktop.get(key) != dmg_details.get(key):
+            errors.append(f"macOS candidate: desktop.{key} does not match the live DMG inspection")
+    if candidate.get("desktopVersion") != dmg_details.get("version"):
+        errors.append("macOS candidate: desktopVersion does not match the live DMG inspection")
     if errors:
         raise MacAcceptanceError("\n".join(errors))
     print(f"macOS candidate bytes and manifest match: {candidate_path}")
@@ -487,9 +512,10 @@ def verify_scaffold(args) -> None:
 CHROME_APP_NAME = "Google Chrome.app"
 EDGE_APP_NAME = "Microsoft Edge.app"
 DESKTOP_APP_NAME = "Resume Pro Desktop.app"
-# Exact process names only. `pgrep -x` returns PIDs, never argv, so reports
-# cannot leak API keys or paths that might appear on a live command line.
-PROCESS_NAMES = ("resume-pro-desktop", "Resume Pro Desktop")
+# Darwin stores p_comm in MAXCOMLEN (16) bytes. `resume-pro-desktop` and
+# `Resume Pro Desktop` are longer, so `pgrep -x` on the full name never
+# matches. `ps -axo comm=` returns the truncated comm only — no argv.
+PROCESS_COMM_PREFIXES = ("resume-pro-desk", "Resume Pro Deskt")
 DATA_ROOT_REL = Path("Library/Application Support/ResumePro")
 # Confirmed product cache: HostPaths::cache_dir on macOS is
 # dirs::cache_dir()/ResumePro → ~/Library/Caches/ResumePro (HOST.md, README).
@@ -571,16 +597,17 @@ def inspect_browser(name: str, application_dirs: list[Path]) -> dict:
 
 
 def inspect_running_processes(run_command) -> dict:
-    """Read-only process check. Never uses `ps` so argv cannot leak into reports."""
-    matches = []
-    for name in PROCESS_NAMES:
-        _code, output = run_command(["pgrep", "-x", name])
-        pids = [token for token in (output or "").split() if token.isdigit()]
-        if pids:
-            matches.append({"processName": name, "pidCount": len(pids)})
+    """Read-only process check using `ps` comm names, never command-line arguments."""
+    _code, output = run_command(["ps", "-axo", "comm="])
+    counts: dict[str, int] = {}
+    for line in (output or "").splitlines():
+        comm = line.strip()
+        if comm.startswith(PROCESS_COMM_PREFIXES):
+            counts[comm] = counts.get(comm, 0) + 1
+    details = [{"processName": name, "pidCount": count} for name, count in sorted(counts.items())]
     return {
-        "runningProcessExists": bool(matches),
-        "runningProcessDetails": matches,
+        "runningProcessExists": bool(details),
+        "runningProcessDetails": details,
     }
 
 

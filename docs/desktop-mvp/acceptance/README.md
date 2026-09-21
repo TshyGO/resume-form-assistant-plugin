@@ -73,7 +73,7 @@ T1 的所有报告项必须保持 `NOT_RUN`。自动化测试通过后，也要�
 
 `d14-v1` 仅使用虚构身份、`.test` 保留域名和可搜索的 `D14_SYNTHETIC_*` 标记。所谓“恶意附件”是无执行能力的文本夹具，用于检查文件名、正文提示注入和路径处理；它不是恶意软件样本。
 
-验收运行可以使用当前 macOS 账户（admin 或 standard-user），但开始时必须没有旧 App、旧 ResumePro 数据、旧 Native Messaging 清单或仍在运行的桌面进程；Chrome、Edge 使用独立测试 Profile，业务数据只用 `d14-v1`。任何注册或清理操作都应根据本次运行生成的回执定位目标。`probe-host` 只读，不会替你删除这些残留。
+验收运行必须使用独立浏览器 Profile 和 `d14-v1` 合成数据，不使用真实简历或真实邮件。macOS 主机预检（允许当前 admin/standard-user，但必须没有旧 App/数据/清单/进程）见 [t4-macos-browser.md](t4-macos-browser.md)；Windows 账户要求见 [t4-windows-browser.md](t4-windows-browser.md)。任何注册或清理操作都应根据本次运行生成的回执定位目标。
 
 ## T1 完成定义
 

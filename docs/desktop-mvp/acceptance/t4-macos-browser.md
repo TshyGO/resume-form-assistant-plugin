@@ -11,12 +11,14 @@ python3 desktop/scripts/d14_macos_acceptance_check.py probe-host \
   --output docs/desktop-mvp/acceptance/runs/<run-id>/host-probe.json
 ```
 
+预检可以先创建这个 run 目录并只写入 `host-probe.json`。后面的 `init-run` 允许目录里只有这一份预检文件；如果已经有报告或 `artifacts.json`，仍会拒绝覆盖。`host-probe.json` 不要提交进仓库（可能含本机用户路径）。
+
 不要求另建 macOS 账户，管理员（`admin`）和标准用户（`standard-user`）都可以测试；admin 本身不是 blocker。`READY` 要求 Apple Silicon `arm64`、`spctl --status` 为 `assessments enabled`、已装正式版 Chrome 和 Edge，并且没有：
 
 - 已安装的 `Resume Pro Desktop.app`
 - `~/Library/Application Support/ResumePro`
 - Chrome / Edge 的 `com.resumepro.desktop` Native Messaging 清单
-- 仍在运行的 `resume-pro-desktop` / `Resume Pro Desktop` 进程
+- 仍在运行的桌面进程（按 `ps -axo comm=` 的内核进程名匹配；Darwin 会把长名字截到 16 字节，不能用完整名做 `pgrep -x`）
 
 `~/Library/Caches/ResumePro` 是产品缓存（`HostPaths::cache_dir`）。它不会挡住 Gatekeeper 或数据根首次创建，所以只记 warning，不是 blocker。`~/Library/WebKit/com.resumepro.desktop`、`~/Library/Preferences/com.resumepro.desktop.plist` 和 `Saved Application State` 在源码里没有钉死，预检只记录是否存在，列为 `UNCONFIRMED`，不据此阻断。
 
