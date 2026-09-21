@@ -14,6 +14,7 @@ import {
   assertReleaseAssets,
   assertTagMatches,
   desktopVersion,
+  isPluginZip,
   packageVersion,
   releaseKind,
   sha256,
@@ -132,12 +133,45 @@ test("上传的东西必须是安装包 + 一一配套的校验和", () => {
   assert.throws(() => assertReleaseAssets([]), /一个资产都没有/);
   assert.throws(() => assertReleaseAssets(["resume-pro-desktop.pdb"]), /不该作为 Release 资产/);
   assert.throws(() => assertReleaseAssets(["archive.db"]), /不该作为 Release 资产/);
+  assert.throws(() => assertReleaseAssets(["payload.zip", "payload.zip.sha256"]), /不该作为 Release 资产/);
   // 少一个校验和，用户就没法核对下到的东西。
   assert.throws(() => assertReleaseAssets(["setup.exe"]), /没有配套的校验和/);
   // 校验和对不上任何安装包，多半是上一次构建留下的。
   assert.throws(
     () => assertReleaseAssets(["setup.exe", "setup.exe.sha256", "old.dmg.sha256"]),
-    /没有对应的安装包/,
+    /没有对应的安装包或插件 zip/,
+  );
+});
+
+test("桌面 Release 可以带一份插件 zip，但名字必须对，而且要有校验和", () => {
+  assert.equal(isPluginZip("resume-pro-plugin-0.4.0.zip"), true);
+  assert.equal(isPluginZip("resume-pro-plugin-0.4.0-beta.3.zip"), true);
+  assert.equal(isPluginZip("resume-pro-v0.4.0.zip"), false);
+  assertReleaseAssets([
+    "setup.exe",
+    "setup.exe.sha256",
+    "resume-pro-plugin-0.4.0-beta.3.zip",
+    "resume-pro-plugin-0.4.0-beta.3.zip.sha256",
+  ]);
+  assert.throws(
+    () =>
+      assertReleaseAssets(
+        ["setup.exe", "setup.exe.sha256"],
+        { requirePluginZip: true },
+      ),
+    /必须带上/,
+  );
+  assert.throws(
+    () =>
+      assertReleaseAssets([
+        "setup.exe",
+        "setup.exe.sha256",
+        "resume-pro-plugin-0.4.0.zip",
+        "resume-pro-plugin-0.4.0.zip.sha256",
+        "resume-pro-plugin-0.4.1.zip",
+        "resume-pro-plugin-0.4.1.zip.sha256",
+      ]),
+    /只能有一份/,
   );
 });
 
@@ -149,6 +183,15 @@ test("校验和由 Node 算出来，写完顺手把目录验一遍", () => {
   assert.equal(written.length, 1);
   const text = readFileSync(join(dir, "setup.exe.sha256"), "utf8");
   assert.match(text, new RegExp(`^${sha256(Buffer.from("安装包内容"))}  setup\\.exe`));
+});
+
+test("插件 zip 也会写校验和，但 require 时目录里必须真有那一份", () => {
+  const dir = mkdtempSync(join(tmpdir(), "d13-assets-"));
+  writeFileSync(join(dir, "setup.exe"), "x");
+  writeFileSync(join(dir, "resume-pro-plugin-0.4.0.zip"), "plugin");
+  const written = writeChecksums(dir, undefined, { requirePluginZip: true });
+  assert.equal(written.length, 2);
+  assert.ok(written.some((item) => item.name === "resume-pro-plugin-0.4.0.zip"));
 });
 
 test("目录里混进别的东西时，写校验和这一步就会拦住", () => {
@@ -186,8 +229,11 @@ test("命令行真的会跑起来——入口判断错了的话这几条会静�
   const assets = execFileSync("node", [script, "--assets", dir, "--write-checksums"], {
     encoding: "utf8",
   });
-  assert.match(assets, /只有安装包和配套校验和/);
+  assert.match(assets, /只有安装包、插件 zip（如有）和配套校验和/);
   assert.deepEqual(readdirSync(dir).sort(), ["setup.exe", "setup.exe.sha256"]);
+
+  const printed = execFileSync("node", [script, "--print-version"], { encoding: "utf8" });
+  assert.equal(printed.trim(), version);
 });
 
 test("仓库现在的配置本身就是合规的", () => {
@@ -212,6 +258,10 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   // 资产校验必须真的接进流程，不能只活在单测里。
   assert.match(flow, /--assets dist-release --write-checksums/);
   assert.match(flow, /--assets dist-release\n/);
+  assert.match(flow, /pack-plugin\.js/);
+  assert.match(flow, /--require-plugin-zip/);
+  assert.match(flow, /resume-pro-plugin/);
+  assert.match(flow, /加载已解压的扩展程序/);
   assert.match(flow, /ad-hoc/);
   // tag 名要走 env，不能直接插值进 run：那等于把 ref 名当 shell 代码执行。
   assert.doesNotMatch(flow, /run: node desktop\/scripts\/check-desktop-release\.js "\$\{\{/);

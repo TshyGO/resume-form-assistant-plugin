@@ -1156,6 +1156,26 @@ fn open_extension_store_cmd(app: AppHandle) -> Result<(), CommandError> {
         })
 }
 
+/// 打开当前桌面版本的 GitHub Release 页，让用户下载同一页里的插件 zip。
+///
+/// 地址由本机版本号拼出来，不收前端传来的 URL。
+#[tauri::command]
+fn open_plugin_release_cmd(app: AppHandle) -> Result<(), CommandError> {
+    let url = update_check::desktop_release_tag_url(&app.package_info().version.to_string());
+    if !update_check::is_release_page(&url) {
+        return Err(CommandError {
+            code: "UPDATE_BAD_URL".into(),
+            message: format!("这个下载地址不像 Release 页，没有打开：{url}"),
+        });
+    }
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|err| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: format!("打不开插件下载页：{err}"),
+        })
+}
+
 /// 手动重试注册。用户装完浏览器、或者上一次因为权限失败时点它。
 #[tauri::command]
 fn register_native_messaging_cmd(state: State<AppState>) -> Vec<nm_register::Outcome> {
@@ -1482,6 +1502,7 @@ pub fn run() {
             save_pairing_draft,
             register_native_messaging_cmd,
             open_extension_store_cmd,
+            open_plugin_release_cmd,
             check_update_cmd,
             open_update_page_cmd,
             get_update_preference_cmd,

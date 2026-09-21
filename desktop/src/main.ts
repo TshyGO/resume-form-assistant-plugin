@@ -99,19 +99,30 @@ async function refreshStatus() {
   void maybeAutoCheck(status);
 }
 
-/** 「连接浏览器」这一段：状态、下一步、两个按钮显不显示。 */
+function goToExtensionInstall() {
+  showRoute("settings");
+  const target = must("link-install-section");
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  (must("link-install") as HTMLButtonElement).focus();
+}
+
+/** 「连接浏览器」这一段：状态、下一步、重试按钮显不显示。商店/下载入口始终在。 */
 function applyLinkState(status: RuntimeStatus | null) {
   const state = describeLink(status);
   const line = must("link-state");
   line.textContent = state.text;
   line.className = `note ${state.tone}`;
   must("link-next").textContent = state.next;
-  (must("link-install") as HTMLButtonElement).hidden = !state.showInstall;
+  (must("link-install") as HTMLButtonElement).hidden = false;
+  (must("link-download") as HTMLButtonElement).hidden = false;
   (must("link-retry") as HTMLButtonElement).hidden = !state.showRetry;
-  must("link-after-install").textContent = state.showInstall ? AFTER_INSTALL_HINT : "";
+  must("link-after-install").textContent = AFTER_INSTALL_HINT;
 }
 
 must("link-store-pending").textContent = STORE_PENDING_HINT;
+
+must("nav-install-extension").addEventListener("click", () => goToExtensionInstall());
+must("btn-empty-install").addEventListener("click", () => goToExtensionInstall());
 
 must("link-install").addEventListener("click", async () => {
   if (!invoke) return;
@@ -121,6 +132,17 @@ must("link-install").addEventListener("click", async () => {
   } catch (err: unknown) {
     const detail = err as { message?: string } | null;
     msg.textContent = `打不开商店页：${detail?.message ?? "未知错误"}。${STORE_PENDING_HINT}`;
+  }
+});
+
+must("link-download").addEventListener("click", async () => {
+  if (!invoke) return;
+  const msg = must("link-next");
+  try {
+    await invoke("open_plugin_release_cmd");
+  } catch (err: unknown) {
+    const detail = err as { message?: string } | null;
+    msg.textContent = `打不开插件下载页：${detail?.message ?? "未知错误"}。${STORE_PENDING_HINT}`;
   }
 });
 

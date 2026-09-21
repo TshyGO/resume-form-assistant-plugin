@@ -158,6 +158,13 @@ pub fn latest_desktop_release(body: &Value) -> Pick {
 ///
 /// 以后要是接了镜像或代理域名，这里会一并拒掉——那时候该显式加白名单，
 /// 而不是把判断放松。
+/// 当前这个桌面版本对应的 GitHub Release 页。商店审核期间，插件 zip 就放在这一页。
+pub fn desktop_release_tag_url(version: &str) -> String {
+    format!(
+        "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v{version}"
+    )
+}
+
 pub fn is_release_page(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
@@ -461,6 +468,8 @@ mod tests {
         assert!(is_release_page(
             "https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest"
         ));
+        assert!(is_release_page(&desktop_release_tag_url("0.4.0-beta.3")));
+        assert!(is_release_page(&desktop_release_tag_url("0.4.0")));
     }
 
     #[test]

@@ -174,6 +174,16 @@ jobs:
         shell: bash
         run: node desktop/scripts/check-desktop-release.js --assets dist-release
 
+      # 商店还在审核时，用户没法从 Chrome 商店装扩展。桌面 Release 带上同一份
+      # 插件 zip，设置页可以跳到本页下载。矩阵作业各出各的安装包，zip 只在这里打一次。
+      - name: Pack plugin zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node desktop/scripts/check-desktop-release.js --print-version)
+          node desktop/scripts/pack-plugin.js --output "dist-release/resume-pro-plugin-${version}.zip"
+          node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums --require-plugin-zip
+
       - name: Write release notes
         shell: bash
         run: |
@@ -195,9 +205,13 @@ jobs:
             echo
             echo "这不是绕过系统保护的窍门，而是没有 Developer ID 时的正常表现。请不要去执行 \`xattr\` 之类降低整机安全性的命令；介意的话请等有 Developer ID 签名的版本。"
             echo
+            echo "## 浏览器扩展"
+            echo
+            echo "Chrome 商店还在审核，暂时没法从商店页直接装上。这个 Release 里有一份 \`resume-pro-plugin-*.zip\`：解压后，在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。桌面设置页的「连接浏览器」可以跳到商店页，也可以打开本页下载插件包。"
+            echo
             echo "## 核对下载到的文件"
             echo
-            echo "每个安装包旁边都有一份 \`.sha256\`。Windows PowerShell：\`Get-FileHash 文件名\`；macOS：\`shasum -a 256 文件名\`。"
+            echo "每个安装包和插件 zip 旁边都有一份 \`.sha256\`。Windows PowerShell：\`Get-FileHash 文件名\`；macOS：\`shasum -a 256 文件名\`。"
             echo
             echo '```'
             cat dist-release/*.sha256

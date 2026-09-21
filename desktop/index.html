@@ -16,6 +16,7 @@
           <button type="button" data-route="inbox">证据收件箱</button>
           <button type="button" data-route="todos">待办</button>
           <button type="button" data-route="settings">设置</button>
+          <button type="button" id="nav-install-extension">安装扩展</button>
         </nav>
         <p id="runtime-pill" class="pill">正在读取运行状态…</p>
       </aside>
@@ -56,8 +57,11 @@
           <p id="apps-msg" class="muted" role="status"></p>
           <div id="apps-empty" class="empty hidden">
             <p>还没有申请记录。</p>
-            <p class="muted">不会显示虚构统计。点击「新增申请」开始手动建档。</p>
-            <button type="button" id="btn-empty-new">新增申请</button>
+            <p class="muted">不会显示虚构统计。点击「新增申请」开始手动建档。从网页保存岗位需要先装浏览器扩展。</p>
+            <div class="row">
+              <button type="button" id="btn-empty-new">新增申请</button>
+              <button type="button" id="btn-empty-install">去安装浏览器扩展</button>
+            </div>
           </div>
           <div id="apps-layout" class="apps-layout hidden">
             <div class="apps-list-pane">
@@ -228,20 +232,21 @@
             启动时自动检查（每天最多一次）
           </label>
 
-          <h2>连接浏览器</h2>
+          <h2 id="link-install-section">连接浏览器</h2>
           <p class="muted">
             桌面和浏览器扩展连上之后，保存岗位、填写留档才会同步到这里。扩展的 ID 是固定的，正常情况下你不用填任何东西。
           </p>
+          <p id="link-store-pending" class="note warn"></p>
           <p id="link-state" class="note"></p>
           <p id="link-next" class="muted"></p>
           <div class="row">
             <button type="button" id="link-install">去装扩展</button>
+            <button type="button" id="link-download">下载插件包</button>
             <button type="button" id="link-retry">重新检查注册</button>
           </div>
           <p class="muted" id="link-after-install"></p>
           <details>
             <summary>开发者模式：手动指定扩展 ID</summary>
-            <p class="muted" id="link-store-pending"></p>
             <p class="muted">
               只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的
               <code>allowed_origins</code>，正式那条 ID 不会被顶掉。

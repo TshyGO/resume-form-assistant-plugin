@@ -11,7 +11,7 @@ export interface LinkState {
   text: string;
   /** 接下来该做什么。已经连上时为空。 */
   next: string;
-  /** 「去装扩展」这个按钮要不要显示。 */
+  /** 「去装扩展」这个按钮要不要显示。商店审核期间也要一直在，不能等注册成功才出现。 */
   showInstall: boolean;
   /** 「重新检查注册」要不要显示。成功时也保留，便于发现启动后的外部改动。 */
   showRetry: boolean;
@@ -37,8 +37,8 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     return {
       tone: "warn",
       text: "还没读到桌面状态。",
-      next: "稍等一下，或者重开一次应用。",
-      showInstall: false,
+      next: "稍等一下，或者重开一次应用。商店还在审核的话，可以先下载插件包。",
+      showInstall: true,
       showRetry: false,
     };
   }
@@ -49,8 +49,8 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     return {
       tone: "warn",
       text: "还没核对过浏览器注册。",
-      next: "点「重新检查注册」让桌面写一次清单。",
-      showInstall: false,
+      next: "点「重新检查注册」让桌面写一次清单。商店还在审核的话，先下载插件包加载。",
+      showInstall: true,
       showRetry: true,
     };
   }
@@ -58,8 +58,8 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
     return {
       tone: "error",
       text: `浏览器找不到桌面程序：${failed.map((t) => `${t.label} ${t.note ?? "未注册"}`).join("；")}`,
-      next: "先解决上面的问题再装扩展，否则扩展装了也连不上。",
-      showInstall: false,
+      next: "先解决上面的问题，否则扩展装了也连不上。商店还在审核的话，先下载插件包加载。",
+      showInstall: true,
       showRetry: true,
     };
   }
@@ -69,7 +69,7 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
   return {
     tone: failed.length > 0 ? "warn" : "ok",
     text: `桌面这边准备好了：${ready.join("、")}${partial}。`,
-    next: "在浏览器里装上扩展，装完回到这里刷新一下。",
+    next: "在浏览器里装上扩展，装完回到这里刷新一下。商店还在审核就先下载插件包。",
     showInstall: true,
     showRetry: true,
   };
@@ -86,7 +86,7 @@ export const AFTER_INSTALL_HINT =
  * 商店还没上架时那个链接是打不开的。与其等上架再改代码，不如现在就说清楚。
  */
 export const STORE_PENDING_HINT =
-  "商店页打不开就是还在审核：先在浏览器的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中本仓库的目录。";
+  "商店还在审核，暂时没法从商店页直接装上。请先点「下载插件包」，解压后在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。";
 
 /** 协议版本对不上时，说清楚谁该升。 */
 export function describeProtocolMismatch(

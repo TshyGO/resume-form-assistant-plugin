@@ -22,7 +22,7 @@
     "nm:register": "node scripts/nm-dev-register.mjs register",
     "nm:unregister": "node scripts/nm-dev-register.mjs unregister",
     "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
-    "test:desktop-release": "node --test scripts/check-desktop-release.test.js scripts/set-version.test.js scripts/release-beta.test.js && node scripts/check-desktop-release.js",
+    "test:desktop-release": "node --test scripts/check-desktop-release.test.js scripts/set-version.test.js scripts/release-beta.test.js scripts/pack-plugin.test.js && node scripts/check-desktop-release.js",
     "test:release-acceptance": "node --test scripts/check-release-acceptance.test.mjs",
     "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:react && npm run test:nm-register && npm run test:uninstall-hooks && npm run test:release-allowlist && npm run test:desktop-release && npm run test:release-acceptance",
     "typecheck": "tsc --noEmit"

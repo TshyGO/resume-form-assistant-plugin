@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertPluginOnlyArchive,
   assertRuntimeModulesPackaged,
@@ -7,6 +10,10 @@ import {
   manifestEntryPoints,
   parseGitArchiveEntries,
 } from "./check-plugin-release-allowlist.js";
+import { PLUGIN_ARCHIVE_OPERANDS } from "./pack-plugin.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repo = resolve(here, "..", "..");
 
 const sample = `
         run: |
@@ -15,6 +22,16 @@ const sample = `
             LICENSE
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 `;
+
+test("两个发版工作流都走 pack-plugin.js，不再各写一份 git archive", () => {
+  const plugin = readFileSync(join(repo, ".github", "workflows", "release.yml"), "utf8");
+  const desktop = readFileSync(join(repo, ".github", "workflows", "desktop-release.yml"), "utf8");
+  assert.match(plugin, /desktop\/scripts\/pack-plugin\.js/);
+  assert.match(desktop, /desktop\/scripts\/pack-plugin\.js/);
+  assert.doesNotMatch(plugin, /\bgit archive\b/);
+  assert.ok(PLUGIN_ARCHIVE_OPERANDS.includes("manifest.json"));
+  assert.ok(PLUGIN_ARCHIVE_OPERANDS.includes("link"));
+});
 
 test("parses exact git archive entries", () => {
   const entries = parseGitArchiveEntries(sample);

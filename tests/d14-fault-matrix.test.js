@@ -44,11 +44,10 @@ test('D14 F11: every fixture marker is removed at its plugin boundary', async ()
 
 test('D14 F11: the reviewed plugin release contains no fixture or forbidden marker', async () => {
   const release = await import('../desktop/scripts/check-plugin-release-allowlist.js');
-  const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-  const entries = release.parseGitArchiveEntries(workflow);
+  const { PLUGIN_ARCHIVE_OPERANDS } = await import('../desktop/scripts/pack-plugin.js');
   const leaves = execFileSync(
     'git',
-    ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries],
+    ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...PLUGIN_ARCHIVE_OPERANDS],
     { cwd: ROOT, encoding: 'utf8' }
   ).trim().split(/\r?\n/).filter(Boolean);
 
