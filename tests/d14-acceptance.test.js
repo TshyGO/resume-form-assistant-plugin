@@ -205,16 +205,25 @@ test('D14 macOS-first templates remain platform-scoped and claim no execution', 
   assert.equal(t4.overallD14Status, 'PARTIAL_PLATFORM_ACCEPTANCE');
   assert.equal(t4.windowsStatus, 'NOT_RUN');
   assert.equal(t4.review.decision, 'NOT_REVIEWED');
-  assert.equal(t5.checks.length, 17);
-  assert.equal(new Set(t5.checks.map((entry) => entry.id)).size, 17);
+  assert.deepEqual(
+    t5.checks.map((entry) => entry.id),
+    [
+      'T5-R01', 'T5-R02', 'T5-R03', 'T5-R04', 'T5-R05',
+      'T5-B01', 'T5-B02', 'T5-B03', 'T5-B04', 'T5-F01', 'T5-F02',
+      'T5-U01', 'T5-U02', 'T5-U03', 'T5-U04', 'T5-P01',
+    ],
+  );
   assert.ok(t5.checks.every((entry) => entry.status === 'NOT_RUN'));
   assert.equal(t5.windowsStatus, 'NOT_RUN');
   assert.match(guide, /不得使用 `xattr`/);
   assert.match(guide, /不能据此关闭 D14/);
   assert.match(guide, /probe-host/);
   assert.match(guide, /assessments enabled/);
+  assert.match(guide, /resume-pro-desktop/);
+  assert.match(guide, /admin/);
   assert.match(lifecycle, /跨次日不得修改系统时钟/);
   assert.match(lifecycle, /PARTIAL_PLATFORM_ACCEPTANCE/);
+  assert.match(lifecycle, /16 项/);
   assert.match(script, /def probe_host/);
   assert.match(script, /STEP0_HOST_PRECHECK/);
 });

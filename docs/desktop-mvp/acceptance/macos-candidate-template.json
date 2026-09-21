@@ -47,6 +47,7 @@
   "notes": [
     "Populate only from the exact downloaded DMG and extension ZIP selected for macOS acceptance.",
     "Changing source commit or either artifact invalidates all dependent browser and lifecycle reports.",
-    "Registration proves file identity and package shape, not installation, Gatekeeper, browser, or lifecycle acceptance."
+    "Registration proves file identity and package shape, not installation, Gatekeeper, browser, or lifecycle acceptance.",
+    "Current first-release DMGs are complete ADHOC_SIGNED bundles that pass codesign --verify --deep --strict. That is not Apple Developer ID and not notarization. Linker-only ad-hoc signatures are rejected."
   ]
 }

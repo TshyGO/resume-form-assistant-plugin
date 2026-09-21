@@ -15,8 +15,7 @@
     "minimumVersionActuallyTested": false
   },
   "account": {
-    "type": "standard-user",
-    "isDedicatedTestAccount": null,
+    "type": "NOT_CAPTURED",
     "timezone": null,
     "locale": null
   },
@@ -31,7 +30,8 @@
     "bundleIdentifier": "com.resumepro.desktop",
     "gatekeeperExperience": "NOT_RUN",
     "signatureStatus": "NOT_INSPECTED",
-    "notarizationStatus": "NOT_INSPECTED"
+    "notarizationStatus": "NOT_INSPECTED",
+    "codesignVerifyStatus": "NOT_INSPECTED"
   },
   "nativeMessaging": {
     "chromeManifest": "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.resumepro.desktop.json",

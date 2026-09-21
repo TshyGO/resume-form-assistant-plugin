@@ -5,9 +5,9 @@
 ## 前置条件
 
 - Chrome 与 Edge 的 `macos-report-template.json` 副本均绑定同一候选，并完成生产注册预检。
-- 测试账户为普通隔离账户，数据仅含 `d14-v1` 合成内容。
+- 当前账户已通过主机预检，浏览器使用隔离 Profile，数据仅含 `d14-v1` 合成内容。
 - 候选是 `aarch64-apple-darwin` DMG；旧版和新版 DMG 均有来源、源码 commit、版本和 SHA-256。
-- 未签名/未公证若在批准范围内，批准引用及实际 Gatekeeper 体验已记录。
+- 当前候选是完整 ad-hoc 签名、未公证；批准引用及实际 Gatekeeper 体验已记录。不得把 ad-hoc 写成 Developer ID。
 - `lifecycle/report.json` 的全部项目初始保持 `NOT_RUN`。
 
 ## 提醒与进程生命周期
@@ -38,5 +38,4 @@
 
 ## 完成标准
 
-`t5-macos-report-template.json` 的 17 项检查全部 `PASS` 且各有非空证据，审阅人、审阅时间和决定齐全，没有阻断缺陷。Mac 完成后仍写 `overallD14Status=PARTIAL_PLATFORM_ACCEPTANCE`、`windowsStatus=NOT_RUN`；Windows x64 后续验收完成前不能关闭 D14。
-
+`t5-macos-report-template.json` 的 16 项检查全部 `PASS` 且各有非空证据，审阅人、审阅时间和决定齐全，没有阻断缺陷。钥匙串与真实 AI 走查作为 D11 的独立证据记录，不额外塞进这 16 项。Mac 完成后仍写 `overallD14Status=PARTIAL_PLATFORM_ACCEPTANCE`、`windowsStatus=NOT_RUN`；Windows x64 后续验收完成前不能关闭 D14。

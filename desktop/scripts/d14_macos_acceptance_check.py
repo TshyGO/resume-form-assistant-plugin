@@ -26,6 +26,11 @@ CANDIDATE_TEMPLATE = ACCEPTANCE / "macos-candidate-template.json"
 CASES = [f"J{index:02d}" for index in range(1, 9)] + [
     f"F{index:02d}" for index in range(1, 14)
 ]
+T5_CHECKS = [
+    "T5-R01", "T5-R02", "T5-R03", "T5-R04", "T5-R05",
+    "T5-B01", "T5-B02", "T5-B03", "T5-B04", "T5-F01", "T5-F02",
+    "T5-U01", "T5-U02", "T5-U03", "T5-U04", "T5-P01",
+]
 VALID_STATUSES = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"}
 PLATFORM = "macos-arm64"
 BUILD_TARGET = "aarch64-apple-darwin"
@@ -72,6 +77,34 @@ def inspect_extension_zip(path: Path) -> dict:
         return D14.inspect_extension_zip(path)
     except (D14.AcceptanceError, json.JSONDecodeError) as error:
         raise MacAcceptanceError(str(error)) from error
+
+
+def parse_codesign_details(detail: str) -> str:
+    """Classify `codesign -dv --verbose=4` text without talking to the disk.
+
+    First-release candidates must be a complete ad-hoc *bundle* signature.
+    Linker-only ad-hoc signatures fail `codesign --verify --deep --strict`
+    and must not be recorded as ADHOC_SIGNED.
+    """
+    text = detail or ""
+    lowered = text.lower()
+    if "code object is not signed at all" in lowered:
+        return "UNSIGNED"
+    if "adhoc,linker-signed" in lowered or (
+        "signature=adhoc" in lowered and "linker-signed" in lowered
+    ):
+        return "ADHOC_LINKER_SIGNED"
+    if "signature=adhoc" in lowered:
+        return "ADHOC_SIGNED"
+    has_authority = any(line.startswith("Authority=") and line.split("=", 1)[1].strip() for line in text.splitlines())
+    team = None
+    for line in text.splitlines():
+        if line.startswith("TeamIdentifier="):
+            team = line.split("=", 1)[1].strip()
+            break
+    if has_authority and team and team.lower() != "not set":
+        return "DEVELOPER_ID_SIGNED"
+    return "UNKNOWN"
 
 
 def verify_dmg_integrity(path: Path) -> None:
@@ -130,14 +163,7 @@ def inspect_dmg_bundle(path: Path) -> dict:
         signature_detail = "\n".join(
             part.strip() for part in (signature.stdout, signature.stderr) if part.strip()
         )
-        if "Signature=adhoc" in signature_detail or "flags=0x20002(adhoc,linker-signed)" in signature_detail:
-            signature_status = "ADHOC_LINKER_SIGNED"
-        elif "Authority=" in signature_detail and "TeamIdentifier=not set" not in signature_detail:
-            signature_status = "DEVELOPER_ID_SIGNED"
-        elif "code object is not signed at all" in signature_detail:
-            signature_status = "UNSIGNED"
-        else:
-            signature_status = "UNKNOWN"
+        signature_status = parse_codesign_details(signature_detail)
         strict = subprocess.run(
             ["codesign", "--verify", "--deep", "--strict", "--verbose=4", str(app)],
             capture_output=True,
@@ -202,8 +228,10 @@ def validate_candidate(candidate: dict, dmg: Path | None = None, extension_zip: 
     extension = candidate.get("extension") or {}
     if desktop.get("distributionFormat") != "dmg" or not str(desktop.get("name") or "").endswith(".dmg"):
         errors.append("macOS candidate: desktop artifact must be a DMG")
-    if desktop.get("signatureStatus") not in {"UNSIGNED", "ADHOC_LINKER_SIGNED"}:
-        errors.append("macOS candidate: current unsigned policy permits only UNSIGNED or ADHOC_LINKER_SIGNED")
+    if desktop.get("signatureStatus") != "ADHOC_SIGNED":
+        errors.append("macOS candidate: release DMG must contain a complete ADHOC_SIGNED app bundle")
+    if desktop.get("codesignVerifyStatus") != "PASS":
+        errors.append("macOS candidate: codesign --verify --deep --strict must pass")
     if desktop.get("notarizationStatus") != "NOT_NOTARIZED":
         errors.append("macOS candidate: current policy requires explicit NOT_NOTARIZED status")
     if desktop.get("bundleIdentifier") != "com.resumepro.desktop":
@@ -286,8 +314,8 @@ def validate_t5_report(report: dict, pristine: bool) -> list[str]:
         errors.append("T5 macOS report: phase must be T5_MACOS")
     checks = report.get("checks") or []
     ids = [entry.get("id") for entry in checks]
-    if len(ids) != 17 or len(set(ids)) != 17:
-        errors.append("T5 macOS report must contain 17 unique lifecycle checks")
+    if ids != T5_CHECKS:
+        errors.append("T5 macOS report must contain the 16 shared T5 checks exactly once in order")
     for entry in checks:
         status = entry.get("status")
         if status not in VALID_STATUSES:
@@ -303,8 +331,11 @@ def validate_t5_report(report: dict, pristine: bool) -> list[str]:
             errors.append(f"{entry.get('id')}: PASS requires non-empty evidence")
         if pristine and (status != "NOT_RUN" or entry.get("evidence") != []):
             errors.append(f"{entry.get('id')}: pristine scaffold must remain NOT_RUN without evidence")
-    if pristine and report.get("review", {}).get("decision") != "NOT_REVIEWED":
+    decision = (report.get("review") or {}).get("decision")
+    if pristine and decision != "NOT_REVIEWED":
         errors.append("T5 macOS pristine scaffold must remain NOT_REVIEWED")
+    if decision == "APPROVED" and any(entry.get("status") != "PASS" for entry in checks):
+        errors.append("T5 macOS report: APPROVED requires every check to be PASS")
     return errors
 
 
@@ -313,8 +344,12 @@ def validate_environment(environment: dict, pristine: bool) -> list[str]:
     validate_platform(environment, "macOS environment", errors)
     if environment.get("hardware", {}).get("architecture") != "arm64":
         errors.append("macOS environment: hardware.architecture must be arm64")
-    if environment.get("account", {}).get("type") != "standard-user":
-        errors.append("macOS environment: account.type must be standard-user")
+    account_type = environment.get("account", {}).get("type")
+    if pristine:
+        if account_type != "NOT_CAPTURED":
+            errors.append("macOS pristine environment must not claim an account type")
+    elif account_type not in {"admin", "standard-user"}:
+        errors.append("macOS environment: account.type must be admin or standard-user")
     if environment.get("installation", {}).get("bundleIdentifier") != "com.resumepro.desktop":
         errors.append("macOS environment: unexpected bundle identifier")
     if pristine:
@@ -451,16 +486,42 @@ def verify_scaffold(args) -> None:
 
 CHROME_APP_NAME = "Google Chrome.app"
 EDGE_APP_NAME = "Microsoft Edge.app"
-ARCHIVE_REL = Path("Library/Application Support/ResumePro")
+DESKTOP_APP_NAME = "Resume Pro Desktop.app"
+# Exact process names only. `pgrep -x` returns PIDs, never argv, so reports
+# cannot leak API keys or paths that might appear on a live command line.
+PROCESS_NAMES = ("resume-pro-desktop", "Resume Pro Desktop")
+DATA_ROOT_REL = Path("Library/Application Support/ResumePro")
+# Confirmed product cache: HostPaths::cache_dir on macOS is
+# dirs::cache_dir()/ResumePro → ~/Library/Caches/ResumePro (HOST.md, README).
+CACHE_ROOT_REL = Path("Library/Caches/ResumePro")
 CHROME_NM_REL = Path(
     "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.resumepro.desktop.json"
 )
 EDGE_NM_REL = Path(
     "Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.resumepro.desktop.json"
 )
+# Observed OS locations for bundle id com.resumepro.desktop, but source does
+# not pin them. Record existence only; never treat as product blockers.
+UNCONFIRMED_RESIDUE = (
+    {
+        "relative": Path("Library/WebKit/com.resumepro.desktop"),
+        "reason": "HOST.md says WKWebView data commonly lives under ~/Library/WebKit for identifier com.resumepro.desktop; the exact subdirectory is not pinned in source.",
+    },
+    {
+        "relative": Path("Library/Preferences/com.resumepro.desktop.plist"),
+        "reason": "macOS may write CFBundleIdentifier defaults; Resume Pro source never creates this plist itself.",
+    },
+    {
+        "relative": Path("Library/Saved Application State/com.resumepro.desktop.savedState"),
+        "reason": "Cocoa may persist savedState by bundle id; the product does not write this path.",
+    },
+)
 PROBE_NOTES = [
-    "This probe does not install a DMG, write Native Messaging manifests, or mark J/F cases PASS.",
+    "This probe is read-only: it does not install a DMG, delete App/data/cache, write Native Messaging manifests, or mark J/F/T5 cases PASS.",
     "Gatekeeper first-launch still requires a later T4 install on a machine with assessments enabled.",
+    "The current macOS user may be an admin; isolation comes from clean app/data/process state, dedicated browser profiles, and d14-v1 synthetic data.",
+    "Confirmed residue that blocks first-install evidence: installed App, ~/Library/Application Support/ResumePro, Chrome/Edge Native Messaging manifests, and a running resume-pro-desktop process.",
+    "~/Library/Caches/ResumePro is a confirmed product cache (warning, not a blocker): leftover cache does not hide Gatekeeper or data-root first-create.",
 ]
 
 
@@ -509,14 +570,48 @@ def inspect_browser(name: str, application_dirs: list[Path]) -> dict:
     }
 
 
+def inspect_running_processes(run_command) -> dict:
+    """Read-only process check. Never uses `ps` so argv cannot leak into reports."""
+    matches = []
+    for name in PROCESS_NAMES:
+        _code, output = run_command(["pgrep", "-x", name])
+        pids = [token for token in (output or "").split() if token.isdigit()]
+        if pids:
+            matches.append({"processName": name, "pidCount": len(pids)})
+    return {
+        "runningProcessExists": bool(matches),
+        "runningProcessDetails": matches,
+    }
+
+
+def inspect_unconfirmed_residue(home: Path) -> list[dict]:
+    records = []
+    for item in UNCONFIRMED_RESIDUE:
+        path = home / item["relative"]
+        records.append(
+            {
+                "path": str(path),
+                "exists": path.exists(),
+                "sourceStatus": "UNCONFIRMED",
+                "reason": item["reason"],
+            }
+        )
+    return records
+
+
 def collect_host_probe(
     *,
-    dedicated_test_account: bool,
     run_command=default_run_command,
     home: Path | None = None,
     application_dirs: list[Path] | None = None,
     environ: dict | None = None,
 ) -> dict:
+    """Read-only snapshot of whether this Mac can start official T4/T5 evidence.
+
+    Never creates, deletes, or rewrites App / data / cache / Native Messaging
+    files. Never marks J/F/T5 cases PASS. Admin vs standard-user is recorded,
+    not used as a blocker.
+    """
     home = home or Path.home()
     application_dirs = application_dirs or [Path("/Applications"), home / "Applications"]
     environ = environ if environ is not None else dict(os.environ)
@@ -539,9 +634,13 @@ def collect_host_probe(
     is_admin = "admin" in groups
     chrome = inspect_browser(CHROME_APP_NAME, application_dirs)
     edge = inspect_browser(EDGE_APP_NAME, application_dirs)
-    archive_exists = (home / ARCHIVE_REL).exists()
+    desktop_app = find_app(DESKTOP_APP_NAME, application_dirs)
+    data_root_exists = (home / DATA_ROOT_REL).exists()
+    cache_root_exists = (home / CACHE_ROOT_REL).exists()
     chrome_nm_exists = (home / CHROME_NM_REL).is_file()
     edge_nm_exists = (home / EDGE_NM_REL).is_file()
+    processes = inspect_running_processes(run_command)
+    unconfirmed_residue = inspect_unconfirmed_residue(home)
 
     blockers: list[str] = []
     warnings: list[str] = []
@@ -557,19 +656,20 @@ def collect_host_probe(
         blockers.append("Google Chrome is not installed")
     if not edge["installed"]:
         blockers.append("Microsoft Edge is not installed")
-    if is_admin:
-        blockers.append("current account is an admin user; official evidence needs a standard user")
-    if not dedicated_test_account:
-        blockers.append(
-            "operator did not attest --dedicated-test-account (isolated profile, d14-v1 only)"
-        )
-    if archive_exists:
-        blockers.append(
-            "existing ResumePro archive found; official evidence needs a clean test account"
-        )
+    if desktop_app is not None:
+        blockers.append(f"existing Resume Pro Desktop app found at {desktop_app}")
+    if data_root_exists:
+        blockers.append("existing ResumePro data root found; back it up and start clean")
     if chrome_nm_exists or edge_nm_exists:
+        blockers.append(
+            "existing Native Messaging manifests found; they could hide candidate registration"
+        )
+    if processes["runningProcessExists"]:
+        names = ", ".join(item["processName"] for item in processes["runningProcessDetails"])
+        blockers.append(f"Resume Pro process still running ({names}); quit it before first-install evidence")
+    if cache_root_exists:
         warnings.append(
-            "Native Messaging manifests already exist; T4 must still verify production registration"
+            "existing ~/Library/Caches/ResumePro found; leftover cache does not block T4, but this account has run the app"
         )
     if sip_status and "enabled" not in sip_status.lower():
         warnings.append(f"SIP status is not enabled: {sip_status}")
@@ -601,15 +701,20 @@ def collect_host_probe(
         "account": {
             "type": "admin" if is_admin else "standard-user",
             "isAdmin": is_admin,
-            "isDedicatedTestAccount": dedicated_test_account,
             "timezone": timezone or None,
             "locale": locale,
         },
         "browsers": {"chrome": chrome, "edge": edge},
         "existingData": {
-            "archiveDirExists": archive_exists,
+            "desktopAppExists": desktop_app is not None,
+            "desktopAppPath": str(desktop_app) if desktop_app is not None else None,
+            "dataRootExists": data_root_exists,
+            "cacheRootExists": cache_root_exists,
             "chromeNativeMessagingExists": chrome_nm_exists,
             "edgeNativeMessagingExists": edge_nm_exists,
+            "runningProcessExists": processes["runningProcessExists"],
+            "runningProcessDetails": processes["runningProcessDetails"],
+            "unconfirmedResidue": unconfirmed_residue,
         },
         "blockers": blockers,
         "warnings": warnings,
@@ -638,12 +743,15 @@ def validate_host_probe(probe: dict) -> list[str]:
             errors.append("macOS host probe: READY must set suitableForOfficialEvidence")
         if probe.get("gatekeeper", {}).get("assessmentsEnabled") is not True:
             errors.append("macOS host probe: READY requires assessments enabled")
-        if probe.get("account", {}).get("isDedicatedTestAccount") is not True:
-            errors.append("macOS host probe: READY requires a dedicated test account attestation")
-        if probe.get("account", {}).get("isAdmin") is not False:
-            errors.append("macOS host probe: READY requires a standard user")
-        if probe.get("existingData", {}).get("archiveDirExists"):
-            errors.append("macOS host probe: READY cannot reuse an existing archive")
+        existing = probe.get("existingData", {})
+        if existing.get("desktopAppExists"):
+            errors.append("macOS host probe: READY requires no installed Resume Pro app")
+        if existing.get("dataRootExists"):
+            errors.append("macOS host probe: READY requires a clean ResumePro data root")
+        if existing.get("chromeNativeMessagingExists") or existing.get("edgeNativeMessagingExists"):
+            errors.append("macOS host probe: READY requires no existing Native Messaging manifests")
+        if existing.get("runningProcessExists"):
+            errors.append("macOS host probe: READY requires no running Resume Pro process")
         browsers = probe.get("browsers") or {}
         if not browsers.get("chrome", {}).get("installed") or not browsers.get("edge", {}).get(
             "installed"
@@ -659,7 +767,7 @@ def validate_host_probe(probe: dict) -> list[str]:
 
 
 def probe_host(args) -> None:
-    probe = collect_host_probe(dedicated_test_account=args.dedicated_test_account)
+    probe = collect_host_probe()
     if args.output is not None:
         output = args.output.resolve()
         if output.exists():
@@ -716,11 +824,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="check whether this Mac can produce official T4/T5 evidence",
     )
     probe.add_argument("--output", type=Path)
-    probe.add_argument(
-        "--dedicated-test-account",
-        action="store_true",
-        help="attest this is an isolated test account using only d14-v1 synthetic data",
-    )
     probe.set_defaults(func=probe_host)
     return parser
 

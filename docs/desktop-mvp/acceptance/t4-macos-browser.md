@@ -8,21 +8,27 @@
 
 ```bash
 python3 desktop/scripts/d14_macos_acceptance_check.py probe-host \
-  --output docs/desktop-mvp/acceptance/runs/<run-id>/host-probe.json \
-  --dedicated-test-account
+  --output docs/desktop-mvp/acceptance/runs/<run-id>/host-probe.json
 ```
 
-`--dedicated-test-account` 表示操作者确认：当前是隔离测试账户、浏览器用独立测试 Profile、只用 `d14-v1` 合成数据、不会把日常系统盘写满。没有这条声明时，结论只能是 `BLOCKED`。
+不要求另建 macOS 账户，管理员（`admin`）和标准用户（`standard-user`）都可以测试；admin 本身不是 blocker。`READY` 要求 Apple Silicon `arm64`、`spctl --status` 为 `assessments enabled`、已装正式版 Chrome 和 Edge，并且没有：
 
-`READY` 还要求 Apple Silicon `arm64`、`spctl --status` 为 `assessments enabled`、已装正式版 Chrome 和 Edge、普通标准用户、没有现成的 ResumePro 档案。Gatekeeper 关闭的开发机不能当 T4/T5 证据机；本机 `spctl accepted` 也不能当作 Gatekeeper 通过。
+- 已安装的 `Resume Pro Desktop.app`
+- `~/Library/Application Support/ResumePro`
+- Chrome / Edge 的 `com.resumepro.desktop` Native Messaging 清单
+- 仍在运行的 `resume-pro-desktop` / `Resume Pro Desktop` 进程
 
-`probe-host` 不安装 DMG、不写 Native Messaging、不把任何 J/F case 标成 `PASS`。结论为 `BLOCKED` 时先换隔离账户或打开评估，再进入 M1/M2。
+`~/Library/Caches/ResumePro` 是产品缓存（`HostPaths::cache_dir`）。它不会挡住 Gatekeeper 或数据根首次创建，所以只记 warning，不是 blocker。`~/Library/WebKit/com.resumepro.desktop`、`~/Library/Preferences/com.resumepro.desktop.plist` 和 `Saved Application State` 在源码里没有钉死，预检只记录是否存在，列为 `UNCONFIRMED`，不据此阻断。
+
+Chrome/Edge 仍必须使用独立测试 Profile，业务数据只用 `d14-v1`。Gatekeeper 关闭的机器不能当 T4/T5 证据机。
+
+`probe-host` 只读：不安装 DMG、不删除 App/数据/缓存、不写 Native Messaging、不把任何 J/F/T5 项标成 `PASS`。结论为 `BLOCKED` 时先打开评估并清掉上面那些 blocker，再进入 M1/M2。
 
 ## 1. 固定范围
 
 - 目标为 `aarch64-apple-darwin`，分发格式为 DMG；Intel Mac、Safari、Firefox 不在本轮范围。
 - 使用发布工作流下载的候选 DMG 和同一源码 commit 对应的插件 ZIP。源码目录、`target/release`、开发注册和 CI 编译成功都不能代替安装证据。
-- 当前候选允许明确批准的未签名、未公证状态，但报告、安装体验和发布说明必须一致。首次启动只走 macOS 提供的“右键打开”或“隐私与安全性 → 仍要打开”；不得使用 `xattr` 或关闭系统安全机制。
+- 当前候选使用完整 ad-hoc 签名，但没有 Developer ID、没有公证。报告、安装体验和发布说明必须一致。首次启动只走 macOS 提供的“右键打开”或“隐私与安全性 → 仍要打开”；不得使用 `xattr` 或关闭系统安全机制。
 - Chrome、Edge 使用独立的测试 Profile 和合成档案；不使用日常浏览器 Profile、真实简历、真实邮件或真实 API Key 作为证据附件。
 - 配置声明最低 macOS 11.0。若本轮只在当前系统执行，只能声明当前系统版本已验证，`minimumVersionActuallyTested` 必须保持 `false`。
 
@@ -61,7 +67,7 @@ M2 登记候选后，开始业务走查前必须记录并核对：
 
 1. DMG 与插件 ZIP 的稳定 HTTPS 下载地址、文件名、字节数和 SHA-256。
 2. 完整 40 位源码 commit、桌面版本、插件版本、`protocolVersion` 和固定扩展 ID。
-3. 硬件型号、Apple Silicon 芯片、`arm64` 架构、macOS 产品版本/build、时区、区域和普通测试账户。
+3. 硬件型号、Apple Silicon 芯片、`arm64` 架构、macOS 产品版本/build、时区、区域和账户类型。
 4. DMG 能挂载并将 `Resume Pro Desktop.app` 拖入 `/Applications`；bundle identifier 为 `com.resumepro.desktop`，版本与候选一致。
 5. 实际 Gatekeeper 提示、签名和公证检查结果。未知或与批准策略不一致时不得继续签收。
 6. 应用启动后由产品自身生成生产 Native Messaging 清单；不得使用 `nm-dev-register.mjs` 代替：
@@ -98,4 +104,3 @@ F01–F12 复用 [cases.md](cases.md) 的断言，并补真实浏览器、生产
 - `BLOCKED`、`FAIL`、`NOT_RUN` 都不能放行 Mac 候选。
 - Chrome、Edge 报告必须绑定同一候选、源码 commit、环境文件和依赖签收。
 - 具名审阅只批准 macOS 平台；总状态继续为 `PARTIAL_PLATFORM_ACCEPTANCE`。
-
