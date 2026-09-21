@@ -42,7 +42,7 @@ test("web_accessible_resources 保持人工审过的最小列表", () => {
 test("manifest 权限集合被锁定，没有悄悄加权限", () => {
   assert.deepStrictEqual(
     new Set(manifest.permissions),
-    new Set(["offscreen", "storage", "scripting", "activeTab", "tabs", "nativeMessaging", "alarms"]),
+    new Set(["offscreen", "storage", "tabs", "nativeMessaging", "alarms"]),
   );
   assert.deepStrictEqual(manifest.host_permissions, ["<all_urls>"]);
 });

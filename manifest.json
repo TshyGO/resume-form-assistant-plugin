@@ -8,8 +8,6 @@
   "permissions": [
     "offscreen",
     "storage",
-    "scripting",
-    "activeTab",
     "tabs",
     "nativeMessaging",
     "alarms"
