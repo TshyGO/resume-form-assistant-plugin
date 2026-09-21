@@ -186,14 +186,14 @@ jobs:
               echo "测试版用来提前试用新功能，**可能有严重问题**。它和正式版共用同一份数据和同一个安装位置：装上就是覆盖升级。测试版可能会升级数据库结构，升级之后**无法回到正式版**——正式版会拒绝打开被更新过的数据库，只能从升级前自动做的备份里恢复。没有把握的话请用正式版。"
               echo
             fi
-            echo "## 安装包未签名"
+            echo "## macOS 使用 ad-hoc 签名"
             echo
-            echo "我们还没有代码签名证书，所以："
+            echo "我们还没有 Apple Developer ID 证书。macOS 安装包使用 ad-hoc 签名来保证 App 包结构完整，但 Gatekeeper 无法据此验证发布者身份，所以："
             echo
             echo "- **Windows**：SmartScreen 会弹蓝色拦截页，要点「更多信息 → 仍要运行」。"
             echo "- **macOS**（仅 Apple Silicon）：右键点 DMG 选「打开」；把 App 拖进「应用程序」之后，**第一次启动还要再右键点 App 选一次「打开」**。较新的 macOS 会把这个入口放在「系统设置 → 隐私与安全性」里的「仍要打开」。"
             echo
-            echo "这不是绕过系统保护的窍门，而是未签名软件的正常表现。请不要去执行 \`xattr\` 之类降低整机安全性的命令；介意的话请等有签名的版本。"
+            echo "这不是绕过系统保护的窍门，而是没有 Developer ID 时的正常表现。请不要去执行 \`xattr\` 之类降低整机安全性的命令；介意的话请等有 Developer ID 签名的版本。"
             echo
             echo "## 核对下载到的文件"
             echo
@@ -203,14 +203,14 @@ jobs:
             cat dist-release/*.sha256
             echo '```'
             echo
-            echo "校验和与安装包放在同一个 Release 里，**只能说明文件没在下载途中损坏或被替换，不能证明发布者身份**——那要靠代码签名，我们还没有。"
+            echo "校验和与安装包放在同一个 Release 里，**只能说明文件没在下载途中损坏或被替换，不能证明发布者身份**——那需要 Apple Developer ID 签名，我们还没有。"
             echo
             echo "## 数据放在哪"
             echo
             echo "Windows \`%LOCALAPPDATA%\\ResumePro\`，macOS \`~/Library/Application Support/ResumePro\`。卸载默认不动它。"
           } > release-notes.md
           # 自动生成的变更记录拼在自定义说明后面。`--notes-file` 和 `--generate-notes`
-          # 不能一起用：要么命令失败，要么自动内容把「未签名」那段盖掉。
+          # 不能一起用：要么命令失败，要么自动内容把签名说明盖掉。
           gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
             -f tag_name="$TAG" --jq .body >> release-notes.md
           cat release-notes.md

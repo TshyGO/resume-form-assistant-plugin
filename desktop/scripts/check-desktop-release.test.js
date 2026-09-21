@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   DESKTOP_TAG_PREFIX,
   assertDistIsClean,
+  assertMacOsAdHocSigning,
   verifyChecksums,
   assertNothingExtraBundled,
   assertReleaseAssets,
@@ -112,6 +113,20 @@ test("打包配置里不许夹带文件，前端产物也得指向构建输出",
   );
 });
 
+test("没有 Developer ID 时 macOS 必须完整地 ad-hoc 签名", () => {
+  assertMacOsAdHocSigning(
+    conf("0.4.0", { bundle: { macOS: { signingIdentity: "-" } } }),
+  );
+  assert.throws(() => assertMacOsAdHocSigning(conf("0.4.0")), /signingIdentity/);
+  assert.throws(
+    () =>
+      assertMacOsAdHocSigning(
+        conf("0.4.0", { bundle: { macOS: { signingIdentity: "Developer ID Application" } } }),
+      ),
+    /signingIdentity/,
+  );
+});
+
 test("上传的东西必须是安装包 + 一一配套的校验和", () => {
   assertReleaseAssets(["a_0.1.0_x64-setup.exe", "a_0.1.0_x64-setup.exe.sha256"]);
   assert.throws(() => assertReleaseAssets([]), /一个资产都没有/);
@@ -181,6 +196,7 @@ test("仓库现在的配置本身就是合规的", () => {
   const version = desktopVersion({ tauriConf, cargoToml });
   assert.match(version, /^\d+\.\d+\.\d+$/);
   assertNothingExtraBundled(tauriConf);
+  assertMacOsAdHocSigning(tauriConf);
 });
 
 test("两个 release 工作流的 tag 触发条件不重叠", () => {
@@ -196,7 +212,7 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   // 资产校验必须真的接进流程，不能只活在单测里。
   assert.match(flow, /--assets dist-release --write-checksums/);
   assert.match(flow, /--assets dist-release\n/);
-  assert.match(flow, /未签名/);
+  assert.match(flow, /ad-hoc/);
   // tag 名要走 env，不能直接插值进 run：那等于把 ref 名当 shell 代码执行。
   assert.doesNotMatch(flow, /run: node desktop\/scripts\/check-desktop-release\.js "\$\{\{/);
   assert.match(flow, /TAG: \$\{\{ github\.ref_type/);
