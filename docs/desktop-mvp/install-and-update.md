@@ -16,12 +16,13 @@ npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis  # Windows
 npm run tauri build -- --bundles dmg       # macOS
 ```
 
-产物在 `desktop/src-tauri/target/release/bundle/` 下（带 `--target` 构建时是 `target/<triple>/release/bundle/`，CI 走的是后者）：
+产物在 `desktop/src-tauri/target/release/bundle/` 下（带 `--target` 构建时是 `target/<triple>/release/bundle/`，CI 走的是后者）。桌面 GitHub Release **还会附带一份插件 zip**（`resume-pro-plugin-<版本>.zip`），和安装包放在同一页：
 
 | 平台 | 文件 |
 | --- | --- |
 | Windows x64 | `nsis/Resume Pro Desktop_<版本>_x64-setup.exe` |
 | macOS Apple Silicon | `dmg/Resume Pro Desktop_<版本>_aarch64.dmg` |
+| 浏览器扩展 | `resume-pro-plugin-<版本>.zip`（Release 资产，不是安装器里的文件） |
 
 参考机（Windows 11，本机）上一次干净构建约 3 分 35 秒，安装包约 6 MB——是量级参考，不是承诺。NSIS 由 Tauri 自己下载，不用预装。
 
@@ -41,7 +42,7 @@ node desktop/scripts/check-desktop-release.js desktop-v0.4.0
 node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
 ```
 
-它要求目录里只有安装包和**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。
+它要求目录里只有安装包、至多一份 `resume-pro-plugin-*.zip`，以及**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。真正发布时会再加 `--require-plugin-zip`，没有插件包就发不出去。
 
 Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，而且机器上不能已有安装：
 
@@ -154,13 +155,15 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 清单里的 `allowed_origins` **只写了本扩展那一个 ID**（`diagjmploldedipjdenmecmjokckelkl`），
 没有通配：通配意味着机器上任何一个扩展都能启动这个 host、读到整本求职档案。
 
-设置页的「连接浏览器」会告诉你现在缺哪一步：
+设置页的「连接浏览器」会告诉你现在缺哪一步。侧边栏有「安装扩展」，申请页空状态也有入口，都会跳到这一段：
 
 | 界面说什么 | 意思 |
 | --- | --- |
-| 还没核对过 | 点「重试注册」，让桌面写一次清单 |
+| 还没核对过 | 点「重新检查注册」，让桌面写一次清单 |
 | 桌面这边准备好了 | 去浏览器里装扩展 |
 | 一个都没注册上 | 先解决提示里那个原因（多半是组策略挡了注册表），装了扩展也连不上 |
+
+商店还在审核时，点「去装扩展」可能打不开商店页。同一发布页里有插件 zip：点「下载插件包」打开这一版的 GitHub Release，解压后在 Chrome/Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。公钥已经写进清单，解压加载和商店版是同一个扩展 ID。
 
 **装完扩展要重新加载一次扩展或重启浏览器**：浏览器不保证立刻重读 host 清单。
 

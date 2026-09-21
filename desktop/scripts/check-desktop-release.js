@@ -18,8 +18,27 @@ export const DESKTOP_TAG_PREFIX = "desktop-v";
 /** 能作为安装包上传的后缀。以后加 `.msi` 之类改这里，配套校验和的规则自动跟上。 */
 export const INSTALLER_SUFFIXES = [".exe", ".dmg", ".msi"];
 
-/** 除了安装包，只允许它们的校验和。 */
+/**
+ * 桌面 Release 里那份插件 zip 的文件名。商店审核期间用户靠它加载已解压的扩展。
+ * 不认别的 zip，免得把备份、夹具之类打进去。
+ */
+export const PLUGIN_ZIP_RE = /^resume-pro-plugin-\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?\.zip$/;
+
+/** 除了安装包和插件 zip，只允许它们的校验和。 */
 export const CHECKSUM_SUFFIX = ".sha256";
+
+export function isInstaller(name) {
+  return INSTALLER_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
+
+export function isPluginZip(name) {
+  return PLUGIN_ZIP_RE.test(name);
+}
+
+/** 需要配套校验和的发布文件：安装包，以及可选的那一份插件 zip。 */
+export function isReleaseBinary(name) {
+  return isInstaller(name) || isPluginZip(name);
+}
 
 /** 正式版 1.2.3。 */
 export const isStableVersion = (version) => /^\d+\.\d+\.\d+$/.test(version);
@@ -141,31 +160,39 @@ export function assertMacOsAdHocSigning(tauriConf) {
 }
 
 /**
- * 上传前的最后一道：目录里只能有安装包和它们各自的校验和，而且一一配对。
- * 少一个校验和，用户就没法核对自己下到的东西。
+ * 上传前的最后一道：目录里只能有安装包、至多一份插件 zip，以及它们各自的校验和，
+ * 而且一一配对。少一个校验和，用户就没法核对自己下到的东西。
  */
-export function assertReleaseAssets(names) {
+export function assertReleaseAssets(names, { requirePluginZip = false } = {}) {
   if (names.length === 0) {
     throw new Error("一个资产都没有，构建多半失败了");
   }
-  const installers = names.filter((name) => INSTALLER_SUFFIXES.some((s) => name.endsWith(s)));
+  const installers = names.filter(isInstaller);
+  const pluginZips = names.filter(isPluginZip);
+  const binaries = names.filter(isReleaseBinary);
   const checksums = names.filter((name) => name.endsWith(CHECKSUM_SUFFIX));
-  const strays = names.filter((name) => !installers.includes(name) && !checksums.includes(name));
+  const strays = names.filter((name) => !binaries.includes(name) && !checksums.includes(name));
   if (strays.length > 0) {
     throw new Error(`这些文件不该作为 Release 资产上传：${strays.join("、")}`);
   }
   if (installers.length === 0) {
     throw new Error("只有校验和，没有安装包");
   }
-  const missing = installers.filter((name) => !checksums.includes(`${name}${CHECKSUM_SUFFIX}`));
+  if (pluginZips.length > 1) {
+    throw new Error(`插件 zip 只能有一份，现在有：${pluginZips.join("、")}`);
+  }
+  if (requirePluginZip && pluginZips.length === 0) {
+    throw new Error("桌面 Release 必须带上 resume-pro-plugin-*.zip，商店审核期间用户靠它装扩展");
+  }
+  const missing = binaries.filter((name) => !checksums.includes(`${name}${CHECKSUM_SUFFIX}`));
   if (missing.length > 0) {
-    throw new Error(`这些安装包没有配套的校验和：${missing.join("、")}`);
+    throw new Error(`这些文件没有配套的校验和：${missing.join("、")}`);
   }
   const orphan = checksums.filter(
-    (name) => !installers.includes(name.slice(0, -CHECKSUM_SUFFIX.length)),
+    (name) => !binaries.includes(name.slice(0, -CHECKSUM_SUFFIX.length)),
   );
   if (orphan.length > 0) {
-    throw new Error(`这些校验和没有对应的安装包：${orphan.join("、")}`);
+    throw new Error(`这些校验和没有对应的安装包或插件 zip：${orphan.join("、")}`);
   }
 }
 
@@ -173,18 +200,18 @@ export function assertReleaseAssets(names) {
  * 复算一遍校验和。构建机写的和发布机手里的是两份文件（中间过了一次 artifact），
  * 只比文件名对不对说明不了它们是同一个东西。
  */
-export function verifyChecksums(dir, io = { readdirSync, readFileSync }) {
+export function verifyChecksums(dir, io = { readdirSync, readFileSync }, options = {}) {
   const names = io.readdirSync(dir);
-  assertReleaseAssets(names);
+  assertReleaseAssets(names, options);
   const checked = [];
   for (const name of names.filter((n) => n.endsWith(CHECKSUM_SUFFIX))) {
-    const installer = name.slice(0, -CHECKSUM_SUFFIX.length);
+    const binary = name.slice(0, -CHECKSUM_SUFFIX.length);
     const recorded = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/)[0];
-    const actual = sha256(io.readFileSync(join(dir, installer)));
+    const actual = sha256(io.readFileSync(join(dir, binary)));
     if (recorded !== actual) {
-      throw new Error(`${installer} 的校验和对不上：文件里写着 ${recorded}，实际是 ${actual}`);
+      throw new Error(`${binary} 的校验和对不上：文件里写着 ${recorded}，实际是 ${actual}`);
     }
-    checked.push(installer);
+    checked.push(binary);
   }
   return checked;
 }
@@ -224,20 +251,22 @@ export function sha256(bytes) {
  * 给目录里每个安装包写一份校验和，再把整个目录按上面的规则验一遍。
  * 用 Node 算而不是 `sha256sum`：后者在 macOS runner 上不一定存在。
  */
-export function writeChecksums(dir, io = { readdirSync, readFileSync, writeFileSync }) {
-  const installers = io
-    .readdirSync(dir)
-    .filter((name) => INSTALLER_SUFFIXES.some((s) => name.endsWith(s)));
-  if (installers.length === 0) {
+export function writeChecksums(
+  dir,
+  io = { readdirSync, readFileSync, writeFileSync },
+  options = {},
+) {
+  const binaries = io.readdirSync(dir).filter(isReleaseBinary);
+  if (!binaries.some(isInstaller)) {
     throw new Error(`${dir} 里没有安装包，构建多半失败了`);
   }
   const written = [];
-  for (const name of installers) {
+  for (const name of binaries) {
     const digest = sha256(io.readFileSync(join(dir, name)));
     io.writeFileSync(join(dir, `${name}${CHECKSUM_SUFFIX}`), `${digest}  ${name}\n`);
     written.push({ name, digest });
   }
-  assertReleaseAssets(io.readdirSync(dir));
+  assertReleaseAssets(io.readdirSync(dir), options);
   return written;
 }
 
@@ -262,23 +291,29 @@ function main(argv) {
   assertNothingExtraBundled(tauriConf);
   assertMacOsAdHocSigning(tauriConf);
 
+  if (argv.includes("--print-version")) {
+    console.log(version);
+    return;
+  }
+
   const assetsAt = argv.indexOf("--assets");
   if (assetsAt >= 0) {
     const dir = argv[assetsAt + 1];
     if (!dir || dir.startsWith("--")) {
       throw new Error("--assets 后面要跟目录");
     }
+    const assetOptions = { requirePluginZip: argv.includes("--require-plugin-zip") };
     if (argv.includes("--write-checksums")) {
-      for (const { name, digest } of writeChecksums(dir)) {
+      for (const { name, digest } of writeChecksums(dir, undefined, assetOptions)) {
         console.log(`${digest}  ${name}`);
       }
     } else {
       // 发布前复算一遍：artifact 传过一次，名字对不代表内容没变。
-      for (const name of verifyChecksums(dir)) {
+      for (const name of verifyChecksums(dir, undefined, assetOptions)) {
         console.log(`校验和对得上：${name}`);
       }
     }
-    console.log(`桌面 ${version}：${dir} 里只有安装包和配套校验和。`);
+    console.log(`桌面 ${version}：${dir} 里只有安装包、插件 zip（如有）和配套校验和。`);
     return;
   }
 

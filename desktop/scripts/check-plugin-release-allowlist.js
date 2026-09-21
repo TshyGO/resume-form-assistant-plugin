@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PLUGIN_ARCHIVE_OPERANDS } from "./pack-plugin.js";
 
 const REQUIRED = [
   "manifest.json",
@@ -203,8 +204,18 @@ const isMain =
   resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 if (isMain) {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8");
-  const entries = parseGitArchiveEntries(workflow);
+  const pluginFlow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8");
+  const desktopFlow = readFileSync(join(root, ".github", "workflows", "desktop-release.yml"), "utf8");
+  if (!pluginFlow.includes("desktop/scripts/pack-plugin.js")) {
+    throw new Error("release.yml 必须调用 pack-plugin.js，不能另写一份 git archive 清单");
+  }
+  if (/\bgit archive\b/.test(pluginFlow)) {
+    throw new Error("release.yml 不应再手写 git archive，文件清单以 pack-plugin.js 为准");
+  }
+  if (!desktopFlow.includes("desktop/scripts/pack-plugin.js")) {
+    throw new Error("desktop-release.yml 必须调用 pack-plugin.js，桌面发版要带上同一份插件 zip");
+  }
+  const entries = PLUGIN_ARCHIVE_OPERANDS;
   // Expand directory operands against the exact Git tree that git archive uses.
   // The reviewed asset manifest is static; newly tracked descendants fail.
   const leaves = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', ...entries], {cwd:root,encoding:'utf8'}).trim().split(/\r?\n/);
