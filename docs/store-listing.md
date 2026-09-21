@@ -40,11 +40,14 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 和桌面程序通信。host 清单的 `allowed_origins` 里**只写了本扩展的 ID**，没有通配——
 机器上别的扩展启动不了这个 host。
 
-### `scripting` / `activeTab` / `storage` / `offscreen` / `alarms`
+### `storage` / `offscreen` / `alarms`
 
-分别是：按用户点击注入填写逻辑、当前页交互、存简历模板与设置、在离屏文档的专用 Worker 中处理
+分别是：存简历模板与设置、在离屏文档的专用 Worker 中处理
 用户主动触发的 AI 填写、AI 辅助新增条目和 AI 简历解析请求、安排离线补传的重试。
 简历文件先由扩展管理页在本机读取；AI 简历解析会把提取出的整份简历文字发到用户配置的接口。
+
+当前填写功能由 manifest 中静态声明的内容脚本承载，没有调用 `chrome.scripting`，也没有依赖
+`activeTab` 的临时授权。因此商店提交版本移除了这两项历史遗留权限；静态内容脚本及主机权限保持不变。
 
 ---
 
@@ -78,7 +81,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 `content.css` 里没有 `url(...)` 引用，因此没有漏掉的图片或字体。
 
-**权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`scripting`、`activeTab`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
+**权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
 **管理面板边界：** [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 已改成由扩展 service worker 打开新的扩展标签页，不再把 `popup.html` 暴露给网页。网页既不能 iframe 它，也不能用公开 URL 探测该页面。
 
