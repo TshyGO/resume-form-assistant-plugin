@@ -127,6 +127,20 @@ export function assertNothingExtraBundled(tauriConf) {
 }
 
 /**
+ * 没有 Apple Developer ID 时也必须完整地 ad-hoc 签整个 app bundle。
+ * 只让 Apple Silicon 链接器给主二进制留下临时签名，会让从浏览器下载的 `.app`
+ * 被 Gatekeeper 报成“已损坏”。Tauri 用伪 identity `-` 生成完整 bundle 签名。
+ */
+export function assertMacOsAdHocSigning(tauriConf) {
+  const identity = JSON.parse(tauriConf).bundle?.macOS?.signingIdentity;
+  if (identity !== "-") {
+    throw new Error(
+      `macOS 无 Developer ID 的构建必须设置 bundle.macOS.signingIdentity 为 "-"，现在是 ${String(identity)}`,
+    );
+  }
+}
+
+/**
  * 上传前的最后一道：目录里只能有安装包和它们各自的校验和，而且一一配对。
  * 少一个校验和，用户就没法核对自己下到的东西。
  */
@@ -246,6 +260,7 @@ function main(argv) {
 
   const version = desktopVersion({ tauriConf, cargoToml });
   assertNothingExtraBundled(tauriConf);
+  assertMacOsAdHocSigning(tauriConf);
 
   const assetsAt = argv.indexOf("--assets");
   if (assetsAt >= 0) {
