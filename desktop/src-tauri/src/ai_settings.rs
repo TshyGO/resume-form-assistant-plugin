@@ -155,13 +155,17 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
 }
 
 fn is_version_segment(segment: &str) -> bool {
-    let mut chars = segment.chars();
+    let rest = match segment.strip_prefix('v').or_else(|| segment.strip_prefix('V')) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let mut chars = rest.chars();
     match chars.next() {
-        Some('v') | Some('V') => {}
+        Some(first) if first.is_ascii_digit() => {}
         _ => return false,
     }
-    let rest: String = chars.collect();
-    !rest.is_empty() && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+    // 口径和插件 `ai-models.js` 的 /^v\d+[a-z0-9]*$/ 一致：v1-beta 不算版本段。
+    rest.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// 预览和日志里只出现主机名，不出现完整地址（data-privacy §9）。

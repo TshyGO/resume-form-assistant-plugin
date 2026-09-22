@@ -84,3 +84,59 @@ test("没连上宿主时如实说，不画一个能点的表单", async () => {
   expect(screen.getByRole("button", { name: "保存设置" })).toHaveProperty("disabled", true);
   vi.restoreAllMocks();
 });
+
+test("获取模型成功后列出候选，点一个填进输入框", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command) =>
+    command === "list_ai_models_cmd"
+      ? { models: ["b-chat", "a-chat"], hiddenCount: 2, allModels: ["a-chat", "b-chat", "e1", "e2"], host: "relay.example" }
+      : base,
+  );
+  await screen.findByLabelText("模型名称");
+  await user.clear(screen.getByLabelText("模型名称"));
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+
+  await waitFor(() => expect(screen.getByText("a-chat")).toBeTruthy());
+  expect(screen.getByText(/拿到 2 个模型/)).toBeTruthy();
+  expect(screen.getByText(/2 个非对话模型/)).toBeTruthy();
+
+  const sent = calls.find((call) => call.command === "list_ai_models_cmd");
+  expect(sent?.args).toEqual({ apiUrl: base.apiUrl, key: null });
+
+  await user.click(screen.getByText("a-chat"));
+  expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "a-chat");
+});
+
+test("获取模型失败只说一声，保存设置不拦着", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "list_ai_models_cmd") {
+      throw { code: "AI_MODELS_AUTH", message: "拒绝了这个 Key" };
+    }
+    return base;
+  });
+  await screen.findByLabelText("模型名称");
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+
+  await waitFor(() => expect(screen.getByText(/AI_MODELS_AUTH/)).toBeTruthy());
+  expect(screen.getByRole("button", { name: "保存设置" })).toHaveProperty("disabled", false);
+  expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "deepseek-chat");
+});
+
+test("改地址或 Key 后旧候选作废", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "list_ai_models_cmd"
+      ? { models: ["a-chat"], hiddenCount: 0, allModels: ["a-chat"], host: "relay.example" }
+      : base,
+  );
+  await screen.findByLabelText("模型名称");
+  await user.clear(screen.getByLabelText("模型名称"));
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  await waitFor(() => expect(screen.getByText("a-chat")).toBeTruthy());
+
+  const url = screen.getByLabelText("接口地址");
+  await user.clear(url);
+  await user.type(url, "https://other.example/v1");
+  expect(screen.queryByText("a-chat")).toBeNull();
+});

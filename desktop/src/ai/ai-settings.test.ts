@@ -4,9 +4,11 @@ import type { AiSettingsView } from "../api.ts";
 import {
   describeCommandError,
   describeKeyState,
+  describeModelsResult,
   describeSaved,
   describeTransportRisk,
   describeUrlSecrets,
+  matchModels,
 } from "./ai-settings.ts";
 
 const view = (overrides: Partial<AiSettingsView> = {}): AiSettingsView => ({
@@ -85,4 +87,29 @@ test("地址里夹带凭据要当场说：Key 只该在 Authorization 头里", (
 
   // 正常的版本参数不该被当成 Key。
   assert.equal(describeUrlSecrets("https://relay.example/v1/chat/completions?api-version=2024-10-21"), null);
+});
+
+test("模型拉回来后说清几个能填、几个藏了、问的哪台主机", () => {
+  const ok = describeModelsResult({
+    models: ["a-chat", "b-chat"],
+    hiddenCount: 3,
+    allModels: ["a-chat", "b-chat", "embed-x", "whisper-1", "q-image"],
+    host: "relay.example",
+  });
+  assert.equal(ok.tone, "ok");
+  assert.match(ok.text, /relay\.example/);
+  assert.match(ok.text, /2 个模型/);
+  assert.match(ok.text, /3 个非对话模型/);
+
+  const empty = describeModelsResult({ models: [], hiddenCount: 0, allModels: [], host: "relay.example" });
+  assert.equal(empty.tone, "warn");
+  assert.match(empty.text, /手填/);
+});
+
+test("候选按完全一致、前缀、子串排序，对不上的不要", () => {
+  const ids = ["zzz-gpt", "gpt-4o", "vendor/gpt-4o-mini", "my-gpt-x"];
+  assert.deepEqual(matchModels(ids, "gpt-4o"), ["gpt-4o", "vendor/gpt-4o-mini"]);
+  assert.deepEqual(matchModels(ids, "mini"), ["vendor/gpt-4o-mini"]);
+  assert.deepEqual(matchModels(ids, ""), ids);
+  assert.deepEqual(matchModels(ids, "claude"), []);
 });

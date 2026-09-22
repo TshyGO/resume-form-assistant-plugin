@@ -1,4 +1,4 @@
-import type { AiSettingsView } from "../api.ts";
+import type { AiSettingsView, ModelListView } from "../api.ts";
 
 export interface Message {
   tone: "ok" | "warn" | "error";
@@ -94,6 +94,43 @@ export function describeSaved(typedUrl: string, view: AiSettingsView): Message {
     return { tone: "ok", text: `已保存。接口地址补全为 ${view.apiUrl}` };
   }
   return { tone: "ok", text: "已保存。" };
+}
+
+/** 获取模型成功后的提示：几个能填、几个藏了、问的哪台主机。 */
+export function describeModelsResult(view: ModelListView): Message {
+  const hidden =
+    view.hiddenCount > 0 ? `另有 ${view.hiddenCount} 个非对话模型已隐藏。` : "";
+  if (view.models.length === 0) {
+    return {
+      tone: "warn",
+      text: `问过 ${view.host} 了，列表里没有能填的对话模型。${hidden}可直接手填模型名称。`,
+    };
+  }
+  return {
+    tone: "ok",
+    text: `从 ${view.host} 拿到 ${view.models.length} 个模型，点一个填进去，也可直接手填。${hidden}`,
+  };
+}
+
+/**
+ * 按已敲的字给候选排序：完全一致最前，然后是前缀（含 `vendor/` 后面的部分），
+ * 然后是子串。口径和命令层的 `ai_models::match_models` 一致。
+ */
+export function matchModels(ids: string[], query: string): string[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...ids];
+  const rank = (id: string): number => {
+    const lower = id.toLowerCase();
+    if (lower === needle) return 0;
+    const afterVendor = lower.slice(lower.lastIndexOf("/") + 1);
+    if (lower.startsWith(needle) || afterVendor.startsWith(needle)) return 1;
+    return lower.includes(needle) ? 2 : -1;
+  };
+  return ids
+    .map((id, index) => ({ id, index, rank: rank(id) }))
+    .filter((entry) => entry.rank >= 0)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.id);
 }
 
 /** 命令报错时的文案：错误码留着，方便对日志。 */

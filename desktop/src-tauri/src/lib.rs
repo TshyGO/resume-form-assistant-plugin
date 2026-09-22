@@ -3,6 +3,7 @@ mod ai_commands;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
+mod ai_models;
 mod ai_settings;
 mod nm_register;
 mod update_check;
@@ -899,6 +900,60 @@ fn save_ai_settings_cmd(
     ai_settings_view(&state)
 }
 
+/// 设置页给界面的模型列表：只含名字和主机名。**不含 Key，不含完整地址。**
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelListView {
+    models: Vec<String>,
+    hidden_count: usize,
+    all_models: Vec<String>,
+    host: String,
+}
+
+/// 获取模型：用户在设置页主动点一次，才往所配服务的 `/models` 发一次只带 Key 的 GET。
+///
+/// 和分析请求一样：地址里夹带凭据先拦下；Key 优先用界面上刚填的（还没保存也能试），
+/// 否则用凭据库里存的。失败只报错，不拦着手填模型名。
+#[tauri::command]
+async fn list_ai_models_cmd(
+    state: State<'_, AppState>,
+    api_url: String,
+    key: Option<String>,
+) -> Result<ModelListView, CommandError> {
+    checked_url(&api_url)?;
+    let models_url = ai_models::resolve_endpoints(&api_url)
+        .ok_or_else(|| CommandError {
+            code: "AI_MODELS_BAD_URL".into(),
+            message: "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。".into(),
+        })?
+        .models_url
+        .ok_or_else(|| CommandError {
+            code: "AI_MODELS_UNKNOWN_SHAPE".into(),
+            message: "无法从这个 API URL 推断模型列表地址（通常以 /v1 或 /chat/completions 结尾）。可直接手填模型名称。".into(),
+        })?;
+    let typed = key.unwrap_or_default();
+    let effective = if !typed.trim().is_empty() {
+        typed.trim().to_string()
+    } else {
+        state
+            .credentials
+            .get_key()
+            .map_err(credential_error)?
+            .ok_or_else(|| CommandError {
+                code: "AI_MODELS_MISSING_KEY".into(),
+                message: "请先填写 API Key，再获取模型。".into(),
+            })?
+    };
+    let host = ai_settings::host_of(&api_url);
+    let list = ai_models::fetch_model_list(&models_url, &effective, &host).await?;
+    Ok(ModelListView {
+        models: list.models,
+        hidden_count: list.hidden_count,
+        all_models: list.all_models,
+        host,
+    })
+}
+
 /// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
 #[tauri::command]
 fn set_ai_key_cmd(state: State<AppState>, key: String) -> Result<AiSettingsView, CommandError> {
@@ -1552,6 +1607,7 @@ pub fn run() {
             get_ai_settings_cmd,
             save_ai_settings_cmd,
             set_ai_key_cmd,
+            list_ai_models_cmd,
             clear_ai_key_cmd,
             preview_analysis_cmd,
             analyze_evidence_cmd,

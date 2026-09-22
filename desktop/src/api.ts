@@ -259,6 +259,14 @@ export interface ApplicationView {
   todos: TodoView[];
 }
 
+/** `list_ai_models_cmd` 的结果：只含模型名和主机名。Key 永远不会回到前端。 */
+export interface ModelListView {
+  models: string[];
+  hiddenCount: number;
+  allModels: string[];
+  host: string;
+}
+
 /** 设置页显示的宿主状态。字段由 `get_runtime_status` 命令给出。 */
 export interface AiSettingsView {
   apiUrl: string;

@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { AiSettingsView } from "../api.ts";
+import type { AiSettingsView, ModelListView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import {
   describeCommandError,
   describeKeyState,
+  describeModelsResult,
   describeSaved,
   describeTransportRisk,
   describeUrlSecrets,
+  matchModels,
 } from "./ai-settings.ts";
 import type { Message } from "./ai-settings.ts";
 
@@ -22,6 +24,12 @@ export function AiSettings() {
   const [key, setKey] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
+  // 拉回来的候选：只管点选，不管校验。输入框永远可以手填，拉失败也不拦保存。
+  const [models, setModels] = useState<string[] | null>(null);
+  const [modelsNote, setModelsNote] = useState<Message | null>(null);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  // 地址或 Key 一改，旧候选立刻作废；回包对不上号就扔掉。
+  const modelsRequest = useRef(0);
 
   const apply = (next: AiSettingsView) => {
     setView(next);
@@ -39,6 +47,35 @@ export function AiSettings() {
       .catch((error: unknown) => setMessage(describeCommandError(error)));
   }, [invoke]);
 
+  const clearModels = () => {
+    modelsRequest.current += 1;
+    setModels(null);
+    setModelsNote(null);
+  };
+
+  const fetchModels = () => {
+    if (!invoke || modelsBusy) return;
+    const request = modelsRequest.current + 1;
+    modelsRequest.current = request;
+    setModelsBusy(true);
+    invoke<ModelListView>("list_ai_models_cmd", {
+      apiUrl,
+      key: key.trim() === "" ? null : key,
+    })
+      .then((result) => {
+        if (modelsRequest.current !== request) return;
+        setModels(result.models);
+        setModelsNote(describeModelsResult(result));
+      })
+      .catch((error: unknown) => {
+        if (modelsRequest.current !== request) return;
+        // 拉不到只说一声：手填永远可以，保存也不拦。
+        setModelsNote(describeCommandError(error));
+      })
+      .finally(() => {
+        if (modelsRequest.current === request) setModelsBusy(false);
+      });
+  };
   const run = async (work: () => Promise<AiSettingsView>, done: (next: AiSettingsView) => Message) => {
     if (!invoke || busy) return;
     setBusy(true);
@@ -101,7 +138,10 @@ export function AiSettings() {
           <input
             id="ai-api-url"
             value={apiUrl}
-            onChange={(event) => setApiUrl(event.target.value)}
+            onChange={(event) => {
+              setApiUrl(event.target.value);
+              clearModels();
+            }}
             placeholder="https://api.deepseek.com"
             autoComplete="off"
             spellCheck={false}
@@ -121,6 +161,18 @@ export function AiSettings() {
             spellCheck={false}
           />
         </label>
+        <div className="row">
+          <button
+            type="button"
+            onClick={fetchModels}
+            disabled={modelsBusy || !invoke}
+          >
+            {modelsBusy ? "正在获取…" : "获取模型"}
+          </button>
+        </div>
+        <p className="muted">点一次问一次所配服务的模型列表，只发 Key 不发简历；失败不影响保存，永远可以直接手填。</p>
+        {models !== null ? <ModelCandidates models={models} query={model} onPick={setModel} /> : null}
+        {modelsNote ? <p className={`note ${modelsNote.tone}`}>{modelsNote.text}</p> : null}
         <button type="submit" className="primary" disabled={busy || !invoke}>
           保存设置
         </button>
@@ -133,7 +185,10 @@ export function AiSettings() {
           id="ai-key"
           type="password"
           value={key}
-          onChange={(event) => setKey(event.target.value)}
+          onChange={(event) => {
+            setKey(event.target.value);
+            clearModels();
+          }}
           placeholder="粘贴后点保存，界面不会再显示它"
           autoComplete="off"
           spellCheck={false}
@@ -153,6 +208,42 @@ export function AiSettings() {
       </div>
 
       {message ? <p className={`note ${message.tone}`}>{message.text}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * 拉回来的候选：按已敲的字过滤，点一个填进输入框。只是快捷填入，
+ * 不校验——输错了分析那次会按正常报错走。
+ */
+function ModelCandidates({
+  models,
+  query,
+  onPick,
+}: {
+  models: string[];
+  query: string;
+  onPick: (name: string) => void;
+}) {
+  const matches = matchModels(models, query);
+  const shown = matches.slice(0, 30);
+  if (matches.length === 0) {
+    return <p className="muted">没有对上已敲字的候选，直接手填就行。</p>;
+  }
+  return (
+    <div className="stack">
+      <ul className="model-candidates">
+        {shown.map((name) => (
+          <li key={name}>
+            <button type="button" onClick={() => onPick(name)}>
+              {name}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {matches.length > shown.length ? (
+        <p className="muted">还有 {matches.length - shown.length} 个，继续敲字可筛。</p>
+      ) : null}
     </div>
   );
 }
