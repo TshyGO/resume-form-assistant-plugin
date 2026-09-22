@@ -89,9 +89,9 @@ export function AiSettings() {
       <p className="muted">
         桌面 AI 配置独立于浏览器插件。发送前，你可以预览并确认要交给服务商的内容。
       </p>
+      <p className="muted">证据正文和少量候选申请信息会发给你配置的服务商，对方可能留存。</p>
       <details className="settings-disclosure">
-        <summary>数据发送与 Key 保存说明</summary>
-        <p className="muted">证据正文和少量候选申请信息会发给你配置的服务商，对方可能留存。</p>
+        <summary>Key 保存说明</summary>
         <p className="muted">Key 保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不进入档案、备份或日志。</p>
       </details>
 

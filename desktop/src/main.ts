@@ -58,7 +58,7 @@ document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) 
     showRoute(btn.dataset.route);
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
-    if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup().catch(() => {});
+    if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
   });
 });
 
