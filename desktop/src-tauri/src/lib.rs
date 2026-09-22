@@ -906,7 +906,6 @@ fn save_ai_settings_cmd(
 struct ModelListView {
     models: Vec<String>,
     hidden_count: usize,
-    all_models: Vec<String>,
     host: String,
 }
 
@@ -949,7 +948,6 @@ async fn list_ai_models_cmd(
     Ok(ModelListView {
         models: list.models,
         hidden_count: list.hidden_count,
-        all_models: list.all_models,
         host,
     })
 }

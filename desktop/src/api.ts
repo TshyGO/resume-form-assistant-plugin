@@ -263,7 +263,6 @@ export interface ApplicationView {
 export interface ModelListView {
   models: string[];
   hiddenCount: number;
-  allModels: string[];
   host: string;
 }
 

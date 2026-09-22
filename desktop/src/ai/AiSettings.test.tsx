@@ -89,7 +89,7 @@ test("获取模型成功后列出候选，点一个填进输入框", async () =>
   const user = userEvent.setup();
   const calls = mount((command) =>
     command === "list_ai_models_cmd"
-      ? { models: ["b-chat", "a-chat"], hiddenCount: 2, allModels: ["a-chat", "b-chat", "e1", "e2"], host: "relay.example" }
+      ? { models: ["b-chat", "a-chat"], hiddenCount: 2, host: "relay.example" }
       : base,
   );
   await screen.findByLabelText("模型名称");
@@ -123,11 +123,38 @@ test("获取模型失败只说一声，保存设置不拦着", async () => {
   expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "deepseek-chat");
 });
 
+test("获取中改地址，按钮不会永久卡死", async () => {
+  const user = userEvent.setup();
+  let release!: (value: unknown) => void;
+  mount((command) =>
+    command === "list_ai_models_cmd"
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : base,
+  );
+  await screen.findByLabelText("模型名称");
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "正在获取…" })).toBeTruthy());
+
+  const url = screen.getByLabelText("接口地址");
+  await user.clear(url);
+  await user.type(url, "https://other.example/v1");
+
+  // 旧请求还没回来，按钮已经可以再点了；旧回包回来也不会污染新状态。
+  const fetchButton = screen.getByRole("button", { name: "获取模型" });
+  expect(fetchButton).toHaveProperty("disabled", false);
+  release({ models: ["stale-chat"], hiddenCount: 0, host: "relay.example" });
+  await Promise.resolve();
+  expect(screen.queryByText("stale-chat")).toBeNull();
+  expect(screen.getByRole("button", { name: "获取模型" })).toHaveProperty("disabled", false);
+});
+
 test("改地址或 Key 后旧候选作废", async () => {
   const user = userEvent.setup();
   mount((command) =>
     command === "list_ai_models_cmd"
-      ? { models: ["a-chat"], hiddenCount: 0, allModels: ["a-chat"], host: "relay.example" }
+      ? { models: ["a-chat"], hiddenCount: 0, host: "relay.example" }
       : base,
   );
   await screen.findByLabelText("模型名称");

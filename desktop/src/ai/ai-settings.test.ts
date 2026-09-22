@@ -93,7 +93,6 @@ test("模型拉回来后说清几个能填、几个藏了、问的哪台主机",
   const ok = describeModelsResult({
     models: ["a-chat", "b-chat"],
     hiddenCount: 3,
-    allModels: ["a-chat", "b-chat", "embed-x", "whisper-1", "q-image"],
     host: "relay.example",
   });
   assert.equal(ok.tone, "ok");
@@ -101,7 +100,7 @@ test("模型拉回来后说清几个能填、几个藏了、问的哪台主机",
   assert.match(ok.text, /2 个模型/);
   assert.match(ok.text, /3 个非对话模型/);
 
-  const empty = describeModelsResult({ models: [], hiddenCount: 0, allModels: [], host: "relay.example" });
+  const empty = describeModelsResult({ models: [], hiddenCount: 0, host: "relay.example" });
   assert.equal(empty.tone, "warn");
   assert.match(empty.text, /手填/);
 });

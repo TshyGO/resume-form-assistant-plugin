@@ -170,43 +170,12 @@ pub fn filter_chat_models(ids: &[String]) -> (Vec<String>, Vec<String>) {
     (chat, hidden)
 }
 
-/// 按用户已经敲的字给候选排序：完全一致最前，然后是前缀（含 `vendor/` 后面的部分），
-/// 然后是子串。对不上的不要。下标小的优先，排序是稳定的。
-///
-/// 下拉的过滤发生在前端（`matchModels`），这里留一份同口径实现并由单测钉住，
-/// 免得两边悄悄分叉。
-#[allow(dead_code)]
-pub fn match_models(ids: &[String], query: &str) -> Vec<String> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return ids.to_vec();
-    }
-    let rank = |id: &str| {
-        let lower = id.to_lowercase();
-        if lower == needle {
-            return 0;
-        }
-        let after_vendor = lower.rsplit('/').next().unwrap_or(&lower);
-        if lower.starts_with(&needle) || after_vendor.starts_with(&needle) {
-            return 1;
-        }
-        if lower.contains(&needle) { 2 } else { -1 }
-    };
-    let mut ranked: Vec<(i32, usize, &String)> = ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (rank(id), index, id))
-        .filter(|(rank, _, _)| *rank >= 0)
-        .collect();
-    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    ranked.into_iter().map(|(_, _, id)| id.clone()).collect()
-}
-
+/// 下拉的过滤发生在前端（`ai-settings.ts` 的 `matchModels`，有自己的单测）。
+/// 这里不留第二份实现：测 Rust 副本拦不住 TS 漂移，反而多一份要同步的词表。
 #[derive(Debug, Clone)]
 pub struct ModelList {
     pub models: Vec<String>,
     pub hidden_count: usize,
-    pub all_models: Vec<String>,
 }
 
 /// 服务商报错正文里的一句话，压成一行、最多 200 字。拿不到就空着。
@@ -222,13 +191,7 @@ fn provider_detail(body: Option<&Value>) -> String {
                 .get("message")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .or_else(|| {
-                    if let Some(text) = error.as_str() {
-                        Some(text.to_string())
-                    } else {
-                        None
-                    }
-                })
+                .or_else(|| error.as_str().map(str::to_string))
         })
         .or_else(|| {
             body.get("message")
@@ -294,6 +257,7 @@ pub async fn fetch_model_list_with_timeout(
             message: "HTTP 客户端没建起来，这次没有发出去。".into(),
         }
     })?;
+    // 重定向沿用 reqwest 默认：跨主机跳转不带 Authorization。换 client 配置时别顺手改了这条。
     let response = client
         .get(models_url)
         .bearer_auth(api_key.trim())
@@ -372,10 +336,10 @@ pub async fn fetch_model_list_with_timeout(
             message: format!("{host} 返回的不是模型列表，请检查 API URL 是否指向 OpenAI 兼容接口。"),
         })?;
     let (models, hidden) = filter_chat_models(&all_models);
+    // 全量列表只在内部算隐藏数，不出这道门：前端只要能填的 + 藏了几个。
     Ok(ModelList {
         models,
         hidden_count: hidden.len(),
-        all_models,
     })
 }
 
@@ -487,20 +451,17 @@ mod tests {
         assert_eq!(hidden.len(), 4);
     }
 
-    #[test]
-    fn matching_prefers_exact_then_prefix_then_substring() {
-        let ids = ["zzz-gpt", "gpt-4o", "vendor/gpt-4o-mini", "my-gpt-x"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        assert_eq!(match_models(&ids, "gpt-4o"), vec!["gpt-4o", "vendor/gpt-4o-mini"]);
-        assert_eq!(match_models(&ids, "mini"), vec!["vendor/gpt-4o-mini"]);
-        assert_eq!(match_models(&ids, ""), ids);
-        assert!(match_models(&ids, "claude").is_empty());
+    /// 起一个只回一次的本地 HTTP 服务器，返回它的地址和收到的请求头。
+    /// 发请求不走外网；顺带钉住 Key 只走 Authorization 头。
+    fn serve_once(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
+        serve_once_delayed(status, body, Duration::from_secs(0))
     }
 
-    /// 起一个只回一次的本地 HTTP 服务器，返回它的地址。发请求不走外网。
-    fn serve_once(status: u16, body: &str) -> (String, std::thread::JoinHandle<()>) {
+    fn serve_once_delayed(
+        status: u16,
+        body: &str,
+        delay: Duration,
+    ) -> (String, std::thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let payload = format!(
@@ -510,10 +471,32 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = vec![0u8; 4096];
-            let _ = stream.read(&mut buf);
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
             let _ = stream.write_all(payload.as_bytes());
+            String::from_utf8_lossy(&buf[..n]).into_owned()
         });
         (format!("http://{addr}/v1/models"), handle)
+    }
+
+    /// 占一个端口再放掉：连过去必定被拒绝，用来走 NETWORK 分支，不碰外网。
+    fn refused_url() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}/v1/models")
+    }
+
+    #[test]
+    fn query_string_survives_but_fragment_does_not() {
+        let resolved =
+            resolve_endpoints("https://relay.example/v1/chat/completions?api-version=2024-10-21#frag")
+                .unwrap();
+        let models = resolved.models_url.unwrap();
+        assert!(models.contains("api-version=2024-10-21"), "{models}");
+        assert!(!models.contains("frag"), "{models}");
     }
 
     #[tokio::test]
@@ -528,8 +511,36 @@ mod tests {
                 .unwrap();
         assert_eq!(list.models, vec!["a-chat".to_string(), "c-chat".to_string()]);
         assert_eq!(list.hidden_count, 1);
-        assert_eq!(list.all_models.len(), 3);
-        handle.join().unwrap();
+        let request = handle.join().unwrap();
+        assert!(
+            request.contains("authorization: Bearer sk-test"),
+            "Key 只许走 Authorization 头：\n{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_slow_server_maps_to_timeout_and_a_dead_port_to_network() {
+        let (slow_url, slow) = serve_once_delayed(200, r#"{"data":[]}"#, Duration::from_secs(5));
+        let err = fetch_model_list_with_timeout(
+            &slow_url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_TIMEOUT");
+        slow.join().unwrap();
+
+        let err = fetch_model_list_with_timeout(
+            &refused_url(),
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_NETWORK");
     }
 
     #[tokio::test]

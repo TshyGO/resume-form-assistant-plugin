@@ -51,6 +51,8 @@ export function AiSettings() {
     modelsRequest.current += 1;
     setModels(null);
     setModelsNote(null);
+    // 旧请求回包会被序号守卫丢掉，但忙状态要在这里复位，不然按钮永久卡死。
+    setModelsBusy(false);
   };
 
   const fetchModels = () => {
