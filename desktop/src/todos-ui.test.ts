@@ -13,6 +13,11 @@ class FakeNode {
   textContent = "";
   className = "";
   hidden = false;
+  open = false;
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  focus() {}
+  querySelectorAll() { return []; }
   dataset: Record<string, string> = {};
   listeners: Record<string, (event: unknown) => unknown> = {};
 

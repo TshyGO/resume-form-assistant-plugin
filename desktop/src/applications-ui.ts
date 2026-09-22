@@ -1,3 +1,4 @@
+import { bindDetailControls } from "./application-detail-controls.ts";
 import type {
   ApplicationSummary,
   ApplicationView,
@@ -60,6 +61,7 @@ export function mountApplications(invoke: Invoke) {
   let progressSaving = false;
   let actionBusy = false;
   let detailToken = 0;
+  let detailTab = "timeline";
   const progressKinds: Record<string, string> = { interview: "面试", assessment: "测评", offer: "Offer", rejected: "未通过", withdrawn: "撤回", closed: "结束申请" };
 
   function setFormBusy(busy: boolean) {
@@ -157,14 +159,15 @@ export function mountApplications(invoke: Invoke) {
         .map((row) => {
           const active = row.id === ctl.selectedId ? " class=\"active\"" : "";
           return `<tr data-id="${escapeHtml(row.id)}"${active}>
-            <td title="${escapeHtml(row.company)}">${escapeHtml(row.company)}</td>
-            <td title="${escapeHtml(row.title)}">${escapeHtml(row.title)}</td>
-            <td>${escapeHtml(row.location || "—")}</td>
-            <td>${escapeHtml(stageLabel(row.current_stage))}</td>
-            <td>${escapeHtml(formatTime(row.updated_at))}</td>
+            <td><button type="button" class="app-select" aria-current="${ctl.selectedId === row.id ? "true" : "false"}" title="${escapeHtml(row.company)} · ${escapeHtml(row.title)}">
+              <strong>${escapeHtml(row.company)}</strong><span>${escapeHtml(row.title)}</span>
+            </button></td>
+            <td><span class="stage-badge" data-stage="${escapeHtml(row.current_stage)}">${escapeHtml(stageLabel(row.current_stage))}</span></td>
+            <td class="app-location" title="${escapeHtml(row.location || "—")}">${escapeHtml(row.location || "—")}</td>
+            <td class="app-updated" title="${escapeHtml(formatTime(row.updated_at))}">${escapeHtml(row.updated_at?.slice(0, 10) || "—")}</td>
           </tr>`;
         })
-        .join("");
+        .join("") || `<tr><td colspan="4" class="list-no-results">没有符合筛选条件的申请。</td></tr>`;
       const maxOffset = lastOffset;
       pageEl.textContent = `${Math.floor(ctl.offset / ctl.limit) + 1} / ${Math.max(1, Math.ceil(page.total / ctl.limit))}`;
       input("btn-prev-page").disabled = ctl.offset <= 0;
@@ -182,10 +185,12 @@ export function mountApplications(invoke: Invoke) {
 
   async function loadDetail(id: string) {
     const token = ++detailToken;
+    if (ctl.selectedId !== id) detailTab = "timeline";
     ctl.setSelected(id);
     detail.innerHTML = '<p class="muted">加载中…</p>';
     tbody.querySelectorAll("tr").forEach((tr) => {
       tr.classList.toggle("active", tr.dataset.id === id);
+      tr.querySelector(".app-select")?.setAttribute("aria-current", String(tr.dataset.id === id));
     });
     try {
       const view = await invoke<ApplicationView>("get_application_cmd", { id });
@@ -198,8 +203,32 @@ export function mountApplications(invoke: Invoke) {
       const evidence = view.evidence || [];
       detail.innerHTML = `
         <div class="detail-head">
-          <h2 title="${escapeHtml(app.company)} · ${escapeHtml(app.title)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</h2>
-          <p class="muted">${escapeHtml(stageLabel(app.current_stage))} · ${escapeHtml(evidenceLabel(app.reply_evidence_state))}</p>
+          <p class="detail-company">${escapeHtml(app.company)}</p>
+          <h2>${escapeHtml(app.title)}</h2>
+          <div class="detail-status"><span class="stage-badge" data-stage="${escapeHtml(app.current_stage)}">${escapeHtml(stageLabel(app.current_stage))}</span><span class="muted">${escapeHtml(evidenceLabel(app.reply_evidence_state))}</span></div>
+        </div>
+        <div class="detail-actions">
+          <details class="action-menu">
+            <summary class="primary">记录进度</summary>
+            <div class="action-menu-items">
+              <button type="button" data-act="submit">确认已投递</button>
+              <button type="button" data-act="interview">记录面试</button>
+              <button type="button" data-act="assessment">记录测评</button>
+              <button type="button" data-act="offer">记录 Offer</button>
+              <button type="button" data-act="rejected">记录未通过</button>
+              <button type="button" data-act="withdrawn">记录撤回</button>
+              <button type="button" data-act="closed">结束申请</button>
+            </div>
+          </details>
+          <button type="button" data-act="edit">编辑资料</button>
+          <details class="action-menu action-menu-end">
+            <summary>更多</summary>
+            <div class="action-menu-items">
+              <button type="button" data-act="note">新增备注</button>
+              <button type="button" data-act="correct">纠正阶段</button>
+              <button type="button" data-act="recycle">${app.recycle_state === "recycled" ? "恢复" : "回收"}</button>
+            </div>
+          </details>
         </div>
         <dl class="facts compact">
           <dt>地点</dt><dd>${escapeHtml(app.location || "—")}</dd>
@@ -207,20 +236,13 @@ export function mountApplications(invoke: Invoke) {
           <dt>备注</dt><dd class="break">${escapeHtml(notes || "—")}</dd>
           <dt>更新</dt><dd>${escapeHtml(formatTime(app.updated_at))}</dd>
         </dl>
-        <div class="row wrap">
-          <button type="button" data-act="edit">编辑资料</button>
-          <button type="button" data-act="submit">确认已投递</button>
-          <button type="button" data-act="interview">记录面试</button>
-          <button type="button" data-act="assessment">记录测评</button>
-          <button type="button" data-act="offer">记录 Offer</button>
-          <button type="button" data-act="rejected">记录未通过</button>
-          <button type="button" data-act="withdrawn">记录撤回</button>
-          <button type="button" data-act="closed">结束申请</button>
-          <button type="button" data-act="correct">纠正阶段</button>
-          <button type="button" data-act="note">新增备注</button>
-          <button type="button" data-act="recycle">${app.recycle_state === "recycled" ? "恢复" : "回收"}</button>
+        <p class="detail-note muted">填写事件不等于投递成功。</p>
+        <div class="detail-tabs" role="tablist" aria-label="申请记录">
+          <button type="button" role="tab" id="detail-tab-timeline" data-detail-tab="timeline" aria-controls="detail-panel-timeline">时间线</button>
+          <button type="button" role="tab" id="detail-tab-evidence" data-detail-tab="evidence" aria-controls="detail-panel-evidence">证据 <span>${evidence.length}</span></button>
+          <button type="button" role="tab" id="detail-tab-snapshots" data-detail-tab="snapshots" aria-controls="detail-panel-snapshots">快照 <span>${snapshots.length}</span></button>
         </div>
-        <p class="muted">待办尚未接入，这里不展示假数据。填写事件不等于投递成功。</p>
+        <section id="detail-panel-evidence" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-evidence" tabindex="0" data-detail-panel="evidence" hidden>
         <h3>回复证据（${evidence.length}）</h3>
         ${evidenceNote(app.reply_evidence_state)
           ? `<p class="muted">${escapeHtml(evidenceNote(app.reply_evidence_state))}</p>`
@@ -233,15 +255,20 @@ export function mountApplications(invoke: Invoke) {
             <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
           </li>`).join("")}
         </ul>` : `<p class="muted">收件箱里导入的证据关联到这条申请之后会出现在这里。</p>`}
-        ${snapshots.length ? `
+        </section>
+        <section id="detail-panel-snapshots" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-snapshots" tabindex="0" data-detail-panel="snapshots" hidden>
         <h3>简历快照（${snapshots.length}）</h3>
+        ${snapshots.length ? `
         <ul class="snapshot-list">
           ${snapshots.map((snap) => `<li>
             <span>${escapeHtml(snap.template_name)} · ${escapeHtml(formatTime(snap.created_at))}</span>
             <button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snap.snapshot_id)}">查看</button>
           </li>`).join("")}
-        </ul>` : ""}
-        <h3>时间线</h3>
+        </ul>` : `<p class="muted">还没有简历快照。使用浏览器扩展填写并留档后，可以在这里回看当时的资料。</p>`}
+        </section>
+        <section id="detail-panel-timeline" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-timeline" tabindex="0" data-detail-panel="timeline">
+        <h3 class="sr-only">时间线</h3>
+        ${events.length ? "" : `<p class="muted">还没有进度记录。</p>`}
         <ol class="timeline">
           ${events
             .map((ev) => {
@@ -265,7 +292,9 @@ export function mountApplications(invoke: Invoke) {
             })
             .join("")}
         </ol>
+        </section>
       `;
+      bindDetailControls(detail, detailTab, (tab) => { detailTab = tab; });
       detail.querySelectorAll<HTMLElement>("button[data-act]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const act = btn.dataset.act ?? "";

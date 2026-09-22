@@ -276,10 +276,10 @@ export function mountBackup(invoke: Invoke, pickers: FilePickers, now: () => Dat
     }),
   );
 
-  return async function show() {
+  return async function show(preservePending = false) {
     exportNote.textContent = EXPORT_NOTE;
     restoreNote.textContent = RESTORE_NOTE;
-    clearPending();
+    if (!preservePending) clearPending();
     await refreshRollback();
     await refreshRecycle();
   };

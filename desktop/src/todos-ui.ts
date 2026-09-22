@@ -54,20 +54,26 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
   const dateInput = input("todo-date");
   const datetimeInput = input("todo-datetime");
   const filterSelect = selectEl("todo-filter");
+  const dialog = must<HTMLDialogElement>("todo-dialog");
+  const formStatus = must("todo-form-status");
 
   let capability: ReminderCapability = { available: false, reason: null };
   let editing: string | null = null;
   /// 双击提交会建出两条待办、登记两条提醒。一次只让一个请求在飞。
   let saving = false;
+  let editLoading = false;
 
   function say(message: Message | null) {
     if (!message) {
       status.textContent = "";
       status.className = "note";
+      formStatus.textContent = "";
       return;
     }
     status.textContent = message.text;
     status.className = `note ${message.tone}`;
+    formStatus.textContent = message.text;
+    formStatus.className = `note ${message.tone}`;
   }
 
   /** 到期精度决定哪个输入框可用。三个精度互斥，不会同时填两个。 */
@@ -95,7 +101,8 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
         : `<button type="button" data-todo="${escapeHtml(todo.id)}" data-act="open">重新打开</button>`;
 
     return `
-      <article class="todo" data-id="${escapeHtml(todo.id)}">
+      <article class="todo" data-id="${escapeHtml(todo.id)}" data-status="${escapeHtml(todo.status)}">
+        <div class="todo-content">
         <div class="todo-head">
           <strong>${escapeHtml(todo.title)}</strong>
           <span class="chip">${STATUS_LABEL[todo.status]}</span>
@@ -103,21 +110,21 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
         </div>
         <p class="muted">${where || "（未关联申请信息）"}</p>
         <p class="due">${escapeHtml(describeDue(todo))}</p>
-        <p class="note ${reminder.tone}">${escapeHtml(reminder.text)}</p>
-        <div class="row">${actions}</div>
+        <p class="todo-reminder ${reminder.tone}">${escapeHtml(reminder.text)}</p>
+        </div><div class="todo-actions">${actions}</div>
       </article>
     `;
   }
 
   function render(todos: TodoView[]) {
     if (!todos.length) {
-      list.innerHTML = `<p class="muted">${EMPTY_TODOS}</p>`;
+      list.innerHTML = `<div class="pane-empty"><h2>这里暂时没有待办</h2><p>${EMPTY_TODOS}</p><p>点击「新增待办」，安排下一次面试或跟进。</p></div>`;
       return;
     }
     list.innerHTML = groupTodos(todos, now())
       .map(
         (group) => `
-          <section class="todo-group">
+          <section class="todo-group" data-bucket="${group.bucket}">
             <h2>${BUCKET_LABEL[group.bucket]}<span class="chip">${group.todos.length}</span></h2>
             ${group.todos.map(card).join("")}
           </section>
@@ -193,9 +200,27 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
   function resetForm() {
     editing = null;
     form.reset();
+    applicationSelect.disabled = false;
     syncPrecision();
     must("todo-submit").textContent = "添加待办";
+    must("todo-form-heading").textContent = "新增待办";
   }
+
+  must("todo-new").addEventListener("click", () => {
+    if (saving || editLoading) return;
+    resetForm();
+    formStatus.textContent = "";
+    dialog.showModal();
+    input("todo-title").focus();
+  });
+  function cancel(event: Event) {
+    event.preventDefault();
+    if (saving) return;
+    dialog.close();
+    resetForm();
+  }
+  must("todo-cancel").addEventListener("click", cancel);
+  dialog.addEventListener("cancel", cancel);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -206,6 +231,7 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
       return;
     }
     saving = true;
+    form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button").forEach((field) => { field.disabled = true; });
     const submit = must<HTMLButtonElement>("todo-submit");
     submit.disabled = true;
     try {
@@ -218,11 +244,14 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
           });
       say(describeSave(editing ? "updated" : "created", result.reminderProblem));
       resetForm();
+      dialog.close();
       await refresh();
     } catch (error) {
       say({ tone: "warn", text: `保存失败：${invokeError(error)}` });
     } finally {
       saving = false;
+      form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button").forEach((field) => { field.disabled = false; });
+      applicationSelect.disabled = editing !== null;
       submit.disabled = false;
     }
   });
@@ -232,27 +261,38 @@ export function mountTodos(invoke: Invoke, now: () => Date = () => new Date()) {
     if (!button) return;
     const id = button.dataset.todo ?? "";
     const act = button.dataset.act ?? "";
+    if (saving || editLoading) return;
 
     if (act === "edit") {
-      const todos = await invoke<TodoView[]>("list_todos_cmd", { applicationId: null, status: "all" });
-      const todo = todos.find((item) => item.id === id);
-      if (!todo) return;
-      editing = id;
-      input("todo-title").value = todo.title;
-      precisionSelect.value = todo.duePrecision;
-      dateInput.value = todo.dueDate ?? "";
-      // 存的是 UTC，控件要的是墙钟。直接把 ISO 串切前 16 位塞进去，保存时又被
-      // 按本机重新解释一遍，到期时间会平移一个时区偏移。
-      datetimeInput.value = todo.dueAtUtc ? utcToLocalInput(todo.dueAtUtc, todo.timeZone) : "";
-      input("todo-timezone").value = todo.timeZone ?? "";
-      // 提醒时刻也要回填，否则用户看不到现在设的是几点，一保存还会被当成「清空」。
-      input("todo-remind").value = todo.remindAtUtc
-        ? utcToLocalInput(todo.remindAtUtc, todo.timeZone)
-        : "";
-      input("todo-round").value = todo.interviewRound ? String(todo.interviewRound) : "";
-      syncPrecision();
-      must("todo-submit").textContent = "保存修改";
-      say({ tone: "info", text: "改完点「保存修改」。改期会撤掉原来登记的提醒。" });
+      editLoading = true;
+      try {
+        const todos = await invoke<TodoView[]>("list_todos_cmd", { applicationId: null, status: "all" });
+        const todo = todos.find((item) => item.id === id);
+        if (!todo) return;
+        editing = id;
+        applicationSelect.value = todo.applicationId;
+        applicationSelect.disabled = true;
+        input("todo-title").value = todo.title;
+        precisionSelect.value = todo.duePrecision;
+        dateInput.value = todo.dueDate ?? "";
+        // 存的是 UTC，控件要的是墙钟。直接把 ISO 串切前 16 位塞进去，保存时又被
+        // 按本机重新解释一遍，到期时间会平移一个时区偏移。
+        datetimeInput.value = todo.dueAtUtc ? utcToLocalInput(todo.dueAtUtc, todo.timeZone) : "";
+        input("todo-timezone").value = todo.timeZone ?? "";
+        // 提醒时刻也要回填，否则用户看不到现在设的是几点，一保存还会被当成「清空」。
+        input("todo-remind").value = todo.remindAtUtc
+          ? utcToLocalInput(todo.remindAtUtc, todo.timeZone)
+          : "";
+        input("todo-round").value = todo.interviewRound ? String(todo.interviewRound) : "";
+        syncPrecision();
+        must("todo-submit").textContent = "保存修改";
+        must("todo-form-heading").textContent = "编辑待办";
+        say({ tone: "info", text: "改完点「保存修改」。改期会撤掉原来登记的提醒。" });
+        dialog.showModal();
+        input("todo-title").focus();
+      } catch (error) {
+        say({ tone: "warn", text: `读取待办失败：${invokeError(error)}` });
+      } finally { editLoading = false; }
       return;
     }
 
