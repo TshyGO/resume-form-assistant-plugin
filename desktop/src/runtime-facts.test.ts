@@ -36,7 +36,7 @@ test("布尔值显示成是/否，不显示 true/false", () => {
   const byLabel = new Map(facts.map((fact) => [fact.label, fact.value]));
   assert.equal(byLabel.get("启动时目录可写"), "是");
   assert.equal(byLabel.get("唯一写入者"), "否");
-  assert.equal(byLabel.get("开机启动"), "否（D02 不会注册）");
+  assert.equal(byLabel.get("开机启动"), "否");
 });
 
 test("空值显示成破折号，不显示 undefined", () => {

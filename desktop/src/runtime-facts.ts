@@ -39,7 +39,7 @@ export function runtimeFacts(status: RuntimeStatus): Fact[] {
     { label: "唯一写入者", value: yn(status.uniqueWriter) },
     { label: "窗口可见", value: yn(status.windowVisible) },
     { label: "本次隐藏启动", value: yn(status.hiddenLaunch) },
-    { label: "开机启动", value: `${yn(status.autostartEnabled)}（D02 不会注册）` },
+    { label: "开机启动", value: yn(status.autostartEnabled) },
     { label: "Native Messaging", value: nativeMessaging(status) },
     {
       label: "本次升级的迁移备份",
@@ -49,9 +49,9 @@ export function runtimeFacts(status: RuntimeStatus): Fact[] {
           ? `${status.migrationBackup}（升级前自动存的，出问题可以从它恢复）`
           : "本次启动没有升级数据库",
     },
-    { label: "提醒已实现", value: `${yn(status.remindersImplemented)}（属 D10）` },
-    { label: "关闭窗口", value: text(status.closeWindowMeans) },
-    { label: "退出", value: text(status.quitMeans) },
+    { label: "支持待办提醒", value: yn(status.remindersImplemented) },
+    { label: "关闭窗口", value: status.closeWindowMeans === "hide-to-tray" ? "隐藏到托盘或菜单栏" : text(status.closeWindowMeans) },
+    { label: "退出", value: status.quitMeans === "explicit-quit" ? "通过退出操作结束应用" : text(status.quitMeans) },
   ];
 }
 

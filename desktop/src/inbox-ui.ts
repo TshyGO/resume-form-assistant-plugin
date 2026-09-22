@@ -78,6 +78,7 @@ export function mountInbox(
   let selectedId: string | null = null;
   let previewToken = 0;
   let applications: ApplicationSummary[] = [];
+  const emptyPreview = '<div class="pane-empty"><h2>选择一条证据</h2><p>预览原文，再关联申请或整理分类。</p></div>';
 
   /** 重画预览之前先把上一块 React 卸掉，不然它会跟着 innerHTML 一起被丢掉却没收工。 */
   function clearAiPanel() {
@@ -100,25 +101,27 @@ export function mountInbox(
     renderList();
     if (selectedId && !items.some((item) => item.id === selectedId)) {
       selectedId = null;
+      previewToken += 1;
       clearAiPanel();
-      preview.innerHTML = "";
+      preview.innerHTML = emptyPreview;
     }
   }
 
   function renderList() {
     if (!items.length) {
-      list.innerHTML = `<p class="muted">${escapeHtml(EMPTY_INBOX)}</p>`;
+      list.innerHTML = `<div class="pane-empty"><h3>还没有待整理证据</h3><p>${escapeHtml(EMPTY_INBOX)}</p></div>`;
       return;
     }
     list.innerHTML = `<ul class="inbox-list">${items
       .map((item) => {
         const active = item.id === selectedId ? " class=\"active\"" : "";
-        const badge = item.sameBytesAs?.length ? "<em>内容重复</em>" : "";
+        const badge = item.sameBytesAs?.length ? '<span class="evidence-duplicate">内容重复</span>' : "";
         return `<li${active}>
-          <button type="button" data-evidence="${escapeHtml(item.id)}">
-            <span>${escapeHtml(evidenceTitle(item))}</span>
-            <small>${escapeHtml(kindLabel(item.kind))} · ${escapeHtml(item.importedAt)}</small>
-          </button>${badge}
+          <button type="button" data-evidence="${escapeHtml(item.id)}" aria-current="${item.id === selectedId}">
+            <span class="evidence-list-title">${escapeHtml(evidenceTitle(item))}</span>
+            <small>${escapeHtml(kindLabel(item.kind))} · ${escapeHtml(item.importedAt?.slice(0, 10))}</small>
+            ${badge}
+          </button>
         </li>`;
       })
       .join("")}</ul>`;
@@ -178,17 +181,17 @@ export function mountInbox(
     const openable = item.kind === "pdf" || (item.kind === "screenshot" && !item.imageDataUrl);
 
     preview.innerHTML = `
-      <h3>${escapeHtml(evidenceTitle(item))}</h3>
-      <p class="muted">${escapeHtml(describeEvidenceMeta(item))}</p>
+      <header class="evidence-preview-heading"><p class="evidence-kind">${escapeHtml(kindLabel(item.kind))}</p><h2>${escapeHtml(evidenceTitle(item))}</h2>
+      <p class="muted">${escapeHtml(describeEvidenceMeta(item))}</p></header>
       ${duplicate ? `<p class="muted">${escapeHtml(duplicate)}</p>` : ""}
       ${note}
       ${image}
       ${body}
       ${openable ? '<button type="button" data-act="open">用系统程序打开本机副本</button>' : ""}
-      <h4>关联申请</h4>
+      <section class="evidence-organize"><h3>关联申请</h3>
       <p class="muted">${escapeHtml(CHOOSE_APPLICATION_HINT)}</p>
       <div class="row">
-        <select id="inbox-application">
+        <select id="inbox-application" aria-label="关联申请">
           <option value="">请选择一条申请…</option>
           ${applications
             .map(
@@ -197,11 +200,11 @@ export function mountInbox(
             )
             .join("")}
         </select>
-        <button type="button" data-act="associate">关联</button>
+        <button type="button" data-act="associate" class="primary">关联</button>
         ${item.applicationId ? '<button type="button" data-act="unassociate">取消关联</button>' : ""}
       </div>
-      <h4>分类</h4>
-      <div class="row">
+      </section><section class="evidence-organize"><h3>分类</h3>
+      <div class="row evidence-classification">
         <label>通知类型
           <select id="inbox-reply-class">
             ${REPLY_CLASS_OPTIONS.map(
@@ -221,7 +224,7 @@ export function mountInbox(
         <button type="button" data-act="classify">保存分类</button>
       </div>
       <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
-      <div id="inbox-ai"></div>
+      </section><div id="inbox-ai"></div>
     `;
     const slot = maybe("inbox-ai");
     if (mountAi && slot) {

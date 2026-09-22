@@ -87,14 +87,15 @@ export function AiSettings() {
   return (
     <div className="stack">
       <p className="muted">
-        桌面自己的一条 AI 配置，和浏览器插件里的互不相通。Key 存在系统凭据库（Windows 凭据管理器 /
-        macOS 钥匙串），不进档案、不进备份、不进日志。
+        桌面 AI 配置独立于浏览器插件。发送前，你可以预览并确认要交给服务商的内容。
       </p>
-      <p className="muted">
-        用它整理通知时，证据正文和少量候选申请信息会发给你配的服务商，对方可能留存。发送前会让你先看一遍要发什么。
-      </p>
+      <p className="muted">证据正文和少量候选申请信息会发给你配置的服务商，对方可能留存。</p>
+      <details className="settings-disclosure">
+        <summary>Key 保存说明</summary>
+        <p className="muted">Key 保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不进入档案、备份或日志。</p>
+      </details>
 
-      <form className="stack" onSubmit={saveSettings}>
+      <form className="stack ai-config-form" onSubmit={saveSettings}>
         <label>
           接口地址
           <input
@@ -120,7 +121,7 @@ export function AiSettings() {
             spellCheck={false}
           />
         </label>
-        <button type="submit" disabled={busy || !invoke}>
+        <button type="submit" className="primary" disabled={busy || !invoke}>
           保存设置
         </button>
       </form>

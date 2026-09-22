@@ -14,6 +14,7 @@ import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
+import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
 import type { ReminderCapability } from "./api.ts";
@@ -30,6 +31,9 @@ const chromeInput = input("chrome-id");
 const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);
 mountAiSettings(must("ai-settings"), invoke ?? null);
 const edgeInput = input("edge-id");
+const settingsNavigation = mountSettingsNavigation(must("view-settings"), (name) => {
+  if (name === "data") void showBackup(true).catch(() => {});
+});
 
 const views: Record<string, HTMLElement> = {
   applications: must("view-applications"),
@@ -44,6 +48,8 @@ function showRoute(name: string | undefined) {
   });
   document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.route === name);
+    if (btn.dataset.route === name) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
   });
 }
 
@@ -52,7 +58,7 @@ document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) 
     showRoute(btn.dataset.route);
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
-    if (btn.dataset.route === "settings") void showBackup().catch(() => {});
+    if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
   });
 });
 
@@ -81,11 +87,13 @@ function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: 
 async function refreshStatus() {
   if (!invoke) {
     must("runtime-pill").textContent = "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）";
+    must("settings-version").textContent = "请在桌面应用中查看版本";
     return;
   }
   const token = pairing.beginRefresh();
   const status = await invoke<RuntimeStatus>("get_runtime_status");
   must("runtime-pill").textContent = status.runtimeLabel;
+  must("settings-version").textContent = `版本 ${status.appVersion}`;
   const banner = must("banner");
   if (status.error) {
     banner.classList.remove("hidden");
@@ -101,8 +109,9 @@ async function refreshStatus() {
 
 function goToExtensionInstall() {
   showRoute("settings");
+  settingsNavigation.select("browser");
   const target = must("link-install-section");
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.scrollIntoView({ block: "nearest" });
   (must("link-install") as HTMLButtonElement).focus();
 }
 

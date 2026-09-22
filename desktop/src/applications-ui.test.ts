@@ -46,6 +46,7 @@ class FakeNode {
   }
   focus() {}
   querySelectorAll(selector: string): FakeNode[] {
+    if (["[data-detail-tab]", "[data-detail-panel]", ".action-menu"].includes(selector)) return [];
     if (selector === "button[data-act]") {
       return [
         ...this.innerHTML.matchAll(/data-act="([^"]+)"(?:\s+data-(snapshot|evidence)="([^"]+)")?/g),
