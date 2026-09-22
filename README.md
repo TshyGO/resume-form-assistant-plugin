@@ -519,6 +519,8 @@ icons/                 插件图标
 
 ### 本地开发安装
 
+功能和界面测试怎么拉起 dev（桌面端 + 插件 + 连接注册，Windows / macOS 通用）见 [`docs/dev-quickstart.md`](docs/dev-quickstart.md)，不需要打包。
+
 克隆项目：
 
 ```bash
