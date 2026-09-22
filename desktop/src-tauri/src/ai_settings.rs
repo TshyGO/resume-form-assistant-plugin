@@ -155,8 +155,10 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
 }
 
 /// 版本段（`/v1`、`/api/v3`、`/v1beta`）：`v` 后面必须先是数字，剩下全是字母数字。
-/// 口径和插件 `ai-models.js` 的 `/^v\d+[a-z0-9]*$/iu` 一致，也被 `ai_models` 复用，
-/// 改一边时另一边同步变。注意 `v1-beta` 不算：它不再触发 base 补全（见单测）。
+/// 口径和插件 `ai-models.js` 的 `/^v\d+[a-z0-9]*$/iu` 在 ASCII 输入下一致，
+/// 也被 `ai_models` 复用，改一边时另一边同步变。注意两处刻意的不同：
+/// 插件正则带 `u` 标志还会认 Unicode 数字/字母，桌面侧只认 ASCII（见单测）；
+/// `v1-beta` 不算：它不再触发 base 补全（见单测）。
 pub(crate) fn is_version_segment(segment: &str) -> bool {
     let rest = match segment.strip_prefix('v').or_else(|| segment.strip_prefix('V')) {
         Some(rest) => rest,
@@ -167,7 +169,8 @@ pub(crate) fn is_version_segment(segment: &str) -> bool {
         Some(first) if first.is_ascii_digit() => {}
         _ => return false,
     }
-    // 口径和插件 `ai-models.js` 的 /^v\d+[a-z0-9]*$/ 一致：v1-beta 不算版本段。
+    // 口径和插件 `ai-models.js` 的 /^v\d+[a-z0-9]*$/ 在 ASCII 输入下一致：
+    // v1-beta 不算版本段（插件正则的 `u` 标志还会认 Unicode 数字，桌面侧不认）。
     rest.chars().all(|c| c.is_ascii_alphanumeric())
 }
 

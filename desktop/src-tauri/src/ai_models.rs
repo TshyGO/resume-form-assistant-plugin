@@ -70,6 +70,10 @@ pub fn resolve_endpoints(input: &str) -> Option<ResolvedEndpoints> {
 fn with_path(url: &url::Url, pathname: &str) -> String {
     let mut next = url.clone();
     next.set_fragment(None);
+    // 地址里的 userinfo 本来就该在命令层被 `checked_url` 拦下；
+    // 这里再清一次，拼出来的请求地址不可能夹带凭据，将来复用也不怕。
+    let _ = next.set_username("");
+    let _ = next.set_password(None);
     next.set_path(pathname);
     next.to_string()
 }
@@ -114,36 +118,43 @@ pub fn parse_model_list(body: &Value) -> Option<Vec<String>> {
     Some(ids)
 }
 
-fn non_chat_patterns() -> &'static Vec<Regex> {
-    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-    // 和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条一致（含 `asr` 无前缀、
-    // `audio` 刻意放行以保住 gpt-4o-audio-preview 之类的注释口径）。
-    // 插件加词时这里同步加，单测 `non_chat_models_are_hidden_but_counted` 盯着例子。
+/// 过滤词的唯一正本（字符串形态）：`non_chat_patterns` 和跨端锁死单测共用它，
+/// 插件加词时这里同步加。和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条一致
+/// （含 `asr` 无前缀、`audio` 刻意放行以保住 gpt-4o-audio-preview 之类的注释口径）。
+fn pattern_sources() -> Vec<String> {
+    // 注意和 JS 那边 `\/` 与 `/` 的写法差：比对前单测会统一归一化，见单测注释。
     const SEP: &str = r"(?:^|[/_.:\s-])";
     const END: &str = r"(?:$|[/_.:\s-])";
+    [
+        "embed".to_string(),
+        "rerank".to_string(),
+        format!("{SEP}bge{END}"),
+        format!("{SEP}ttsd?{END}"),
+        format!("asr{END}"),
+        "whisper".to_string(),
+        "transcribe".to_string(),
+        "dall-e".to_string(),
+        format!("{SEP}image{END}"),
+        "moderation".to_string(),
+        format!("{SEP}flux{END}"),
+        "stable-diffusion|sdxl".to_string(),
+        "kolors".to_string(),
+        "cosyvoice".to_string(),
+        "sensevoice".to_string(),
+        "fish-speech".to_string(),
+        format!("{SEP}[ti]2v{END}"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn non_chat_patterns() -> &'static Vec<Regex> {
+    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
-        [
-            "embed",
-            "rerank",
-            format!("{SEP}bge{END}").as_str(),
-            format!("{SEP}ttsd?{END}").as_str(),
-            format!("asr{END}").as_str(),
-            "whisper",
-            "transcribe",
-            "dall-e",
-            format!("{SEP}image{END}").as_str(),
-            "moderation",
-            format!("{SEP}flux{END}").as_str(),
-            "stable-diffusion|sdxl",
-            "kolors",
-            "cosyvoice",
-            "sensevoice",
-            "fish-speech",
-            format!("{SEP}[ti]2v{END}").as_str(),
-        ]
-        .into_iter()
-        .map(|pattern| Regex::new(&format!("(?i){pattern}")).expect("model filter pattern"))
-        .collect()
+        pattern_sources()
+            .into_iter()
+            .map(|pattern| Regex::new(&format!("(?i){pattern}")).expect("model filter pattern"))
+            .collect()
     })
 }
 
@@ -201,6 +212,24 @@ fn provider_detail(body: Option<&Value>) -> String {
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+/// 错误状态（401/403/404/405）的 body 只是可选的服务商摘要：
+/// 读超时、读失败、超大都按“没有摘要”处理，绝不改变状态码已经定好的分类。
+async fn read_optional_summary(response: reqwest::Response) -> String {
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_MODELS_BODY_BYTES)
+    {
+        return String::new();
+    }
+    let Ok(bytes) = response.bytes().await else {
+        return String::new();
+    };
+    if bytes.len() as u64 > MAX_MODELS_BODY_BYTES {
+        return String::new();
+    }
+    provider_detail(serde_json::from_slice(&bytes).ok().as_ref())
 }
 
 /// 拉一次模型列表。调用前地址里的凭据、`models_url` 推不出来、Key 为空这三件事
@@ -282,9 +311,36 @@ pub async fn fetch_model_list_with_timeout(
         })?;
 
     let status = response.status().as_u16();
-    // 模型列表才几 KB：先看一眼长度，超大正文直接拒掉，不读进内存。
-    // 只防 Content-Length 老实标出来的那种；chunked 细水长流的靠总超时兜底，
-    // 和 chat 路径一个待遇，不在这里另起一套流式限流。
+    if status == 401 || status == 403 || status == 404 || status == 405 {
+        // 主分类只看状态码：body 只是可选摘要。之前超大 401 会被误报成“地址不对”，
+        // 卡住的 body 会被误报成超时或断连——现在这两种都不改变分类。
+        let detail = read_optional_summary(response).await;
+        eprintln!(
+            "ai-models: {host} · HTTP {status} · {} ms",
+            started.elapsed().as_millis()
+        );
+        if status == 401 || status == 403 {
+            let suffix = if detail.is_empty() {
+                String::new()
+            } else {
+                format!("服务返回：{detail}")
+            };
+            return Err(CommandError {
+                code: "AI_MODELS_AUTH".into(),
+                message: format!("{host} 拒绝了这个 Key（HTTP {status}）：请检查密钥是否正确、是否有效。{suffix}"),
+            });
+        }
+        return Err(CommandError {
+            code: "AI_MODELS_NOT_FOUND".into(),
+            message: format!(
+                "{host} 没有返回模型列表（HTTP {status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。"
+            ),
+        });
+    }
+    // 模型列表才几 KB：Content-Length 老实标超的，看完头就拒掉，不读进内存；
+    // 没标或谎报的，读完按字节数再拒一次（见下）。chunked 无头细水长流的靠总超时兜底，
+    // 和 chat 路径一个待遇：reqwest 构建时没开 `stream` 特性，
+    // 为这一次设置页请求另起流式限流不值得。
     if response.content_length().is_some_and(|len| len > MAX_MODELS_BODY_BYTES) {
         eprintln!(
             "ai-models: {host} · HTTP {status} · body-too-large · {} ms",
@@ -295,7 +351,7 @@ pub async fn fetch_model_list_with_timeout(
             message: format!("{host} 返回的内容过大（超过 1MB），请检查 API URL 是否指错了地方。"),
         });
     }
-    let text = response.text().await.map_err(|err| {
+    let bytes = response.bytes().await.map_err(|err| {
         if err.is_timeout() {
             let seconds = timeout.as_secs().max(1);
             eprintln!(
@@ -323,28 +379,16 @@ pub async fn fetch_model_list_with_timeout(
         "ai-models: {host} · HTTP {status} · {} ms",
         started.elapsed().as_millis()
     );
-    let body: Option<Value> = serde_json::from_str(&text).ok();
+    if bytes.len() as u64 > MAX_MODELS_BODY_BYTES {
+        return Err(CommandError {
+            code: "AI_MODELS_BAD_RESPONSE".into(),
+            message: format!("{host} 返回的内容过大（超过 1MB），请检查 API URL 是否指错了地方。"),
+        });
+    }
+    // `from_slice` 失败（含非 UTF-8 / 二进制）一律是“形状不对”，不再误报断连。
+    let body: Option<Value> = serde_json::from_slice(&bytes).ok();
     let detail = provider_detail(body.as_ref());
-    let suffix = if detail.is_empty() {
-        String::new()
-    } else {
-        format!("服务返回：{detail}")
-    };
 
-    if status == 401 || status == 403 {
-        return Err(CommandError {
-            code: "AI_MODELS_AUTH".into(),
-            message: format!("{host} 拒绝了这个 Key（HTTP {status}）：请检查密钥是否正确、是否有效。{suffix}"),
-        });
-    }
-    if status == 404 || status == 405 {
-        return Err(CommandError {
-            code: "AI_MODELS_NOT_FOUND".into(),
-            message: format!(
-                "{host} 没有返回模型列表（HTTP {status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。"
-            ),
-        });
-    }
     if !(200..300).contains(&status) {
         let message = if detail.is_empty() {
             format!("从 {host} 获取模型失败（HTTP {status}）。")
@@ -483,7 +527,30 @@ mod tests {
     /// 起一个只回一次的本地 HTTP 服务器，返回它的地址和收到的请求头。
     /// 发请求不走外网；顺带钉住 Key 只走 Authorization 头。
     fn serve_once(status: u16, body: &str) -> (String, std::thread::JoinHandle<String>) {
-        serve_once_delayed(status, body, Duration::from_secs(0))
+        serve_once_bytes(status, body.as_bytes())
+    }
+
+    fn serve_once_bytes(
+        status: u16,
+        body: &[u8],
+    ) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        let body = body.to_vec();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let _ = stream.write_all(&header);
+            let _ = stream.write_all(&body);
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        (format!("http://{addr}/v1/models"), handle)
     }
 
     fn serve_once_delayed(
@@ -512,7 +579,7 @@ mod tests {
 
     /// 只发响应头就停住：Content-Length 说后面还有，但 body 永远不来。
     /// 用来走读 body 阶段的超时分支。
-    fn serve_stalled_body(content_length: usize) -> (String, std::thread::JoinHandle<()>) {
+    fn serve_stalled_body(status: u16, content_length: usize) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
@@ -521,7 +588,7 @@ mod tests {
             let _ = stream.read(&mut buf);
             let _ = stream.write_all(
                 format!(
-                    "HTTP/1.1 200 Test\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
                 )
                 .as_bytes(),
             );
@@ -530,9 +597,35 @@ mod tests {
         (format!("http://{addr}/v1/models"), handle)
     }
 
+    /// 不标 Content-Length、改用 chunked 分块送超大正文：验证读完之后
+    /// 的字节数检查照样拒收（只是比看头多花一次缓冲）。
+    fn serve_chunked(status: u16, body: &[u8]) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = body.to_vec();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            for chunk in body.chunks(128 * 1024) {
+                let _ = stream.write_all(format!("{:X}\r\n", chunk.len()).as_bytes());
+                let _ = stream.write_all(chunk);
+                let _ = stream.write_all(b"\r\n");
+            }
+            let _ = stream.write_all(b"0\r\n\r\n");
+        });
+        (format!("http://{addr}/v1/models"), handle)
+    }
+
     /// 报一个超大 Content-Length 然后拖着不关：客户端应该看完头就拒掉，
     /// 不会真的读 2MB。
-    fn serve_oversized() -> (String, std::thread::JoinHandle<()>) {
+    fn serve_oversized(status: u16) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let handle = std::thread::spawn(move || {
@@ -540,7 +633,10 @@ mod tests {
             let mut buf = vec![0u8; 4096];
             let _ = stream.read(&mut buf);
             let _ = stream.write_all(
-                b"HTTP/1.1 200 Test\r\nContent-Type: application/json\r\nContent-Length: 2097152\r\nConnection: close\r\n\r\n",
+                format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: 2097152\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
             );
             std::thread::sleep(Duration::from_secs(5));
         });
@@ -611,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_body_that_never_arrives_is_still_a_timeout() {
-        let (url, handle) = serve_stalled_body(64);
+        let (url, handle) = serve_stalled_body(200, 64);
         let err = fetch_model_list_with_timeout(
             &url,
             "sk-test",
@@ -626,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_oversized_body_is_refused_from_the_headers() {
-        let (url, handle) = serve_oversized();
+        let (url, handle) = serve_oversized(200);
         let err = fetch_model_list_with_timeout(
             &url,
             "sk-test",
@@ -678,6 +774,164 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "AI_MODELS_BAD_RESPONSE");
         shape.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn error_statuses_win_over_body_problems() {
+        // 401 的 body 卡住：分类仍是 AUTH，不是 TIMEOUT。
+        let (auth_url, auth) = serve_stalled_body(401, 64);
+        let err = fetch_model_list_with_timeout(
+            &auth_url,
+            "sk-bad",
+            "127.0.0.1",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_AUTH");
+        auth.join().unwrap();
+
+        // 404 配超大正文：分类仍是 NOT_FOUND，不是“地址不对”的 BAD_RESPONSE。
+        let (missing_url, missing) = serve_oversized(404);
+        let err = fetch_model_list_with_timeout(
+            &missing_url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_NOT_FOUND");
+        missing.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_utf8_and_oversized_chunked_bodies_are_bad_responses() {
+        // 200 配非法 UTF-8：是“形状不对”，不是断连。
+        let (bin_url, bin_handle) =
+            serve_once_bytes(200, &[0x7b, 0x22, 0xff, 0xfe, 0x7d]);
+        let err = fetch_model_list_with_timeout(
+            &bin_url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_BAD_RESPONSE");
+        bin_handle.join().unwrap();
+
+        // chunked 无头超大正文：读完按字节数拒收，不进解析。
+        let big = vec![b'a'; MAX_MODELS_BODY_BYTES as usize + 16];
+        let (chunked_url, chunked) = serve_chunked(200, &big);
+        let err = fetch_model_list_with_timeout(
+            &chunked_url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_BAD_RESPONSE");
+        assert!(err.message.contains("过大"), "{}", err.message);
+        chunked.join().unwrap();
+    }
+
+    #[test]
+    fn credentials_in_the_address_never_survive_into_models_url() {
+        let resolved = resolve_endpoints("https://user:secret@relay.example/v1").unwrap();
+        let models = resolved.models_url.unwrap();
+        assert!(!models.contains('@'), "{models}");
+        assert!(!models.contains("secret"), "{models}");
+        assert!(models.starts_with("https://relay.example/"), "{models}");
+    }
+
+    /// 和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条锁死：插件加词时这里必须同步加，
+    /// 否则这条测试变红。读的是仓库根下的源文件（编译时相对本文件定位，和运行目录无关）。
+    /// 只比“词”本身：JS 模板里的 `\/` 和这里的 `/` 写法不同但语义一样，比对前统一归一化。
+    #[test]
+    fn non_chat_patterns_match_the_plugin_word_for_word() {
+        const JS: &str = include_str!("../../../ai-models.js");
+        let block = JS
+            .split("NON_CHAT_PATTERNS = [")
+            .nth(1)
+            .expect("NON_CHAT_PATTERNS block")
+            .split("];")
+            .next()
+            .expect("NON_CHAT_PATTERNS end");
+        let js_sep = js_string_const(JS, "const SEP = ").expect("SEP const");
+        let js_end = js_string_const(JS, "const END = ").expect("END const");
+        let mut expected = Vec::new();
+        for raw_line in block.lines() {
+            let line = raw_line.trim().trim_end_matches(',').trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (raw_source, flags) = if line.starts_with('/') {
+                split_regex_literal(line).expect("regex literal entry")
+            } else if line.starts_with("new RegExp") {
+                let template = line.split('`').nth(1).expect("RegExp template");
+                let flags = line.rsplit('"').nth(1).expect("RegExp flags");
+                (
+                    template.replace("${SEP}", &js_sep).replace("${END}", &js_end),
+                    flags.to_string(),
+                )
+            } else {
+                panic!("看不懂的词条（插件改格式了就同步改这里）：{line}");
+            };
+            assert!(
+                flags.contains('i'),
+                "过滤词必须大小写不敏感（和这里的 (?i) 对应）：{line}"
+            );
+            expected.push(raw_source.replace("\\/", "/"));
+        }
+        let actual: Vec<String> = pattern_sources()
+            .into_iter()
+            .map(|pattern| pattern.replace("\\/", "/"))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "过滤词和插件对不上了：插件加词时这里同步加"
+        );
+    }
+
+    /// 取 `const SEP = "(?:^|...)"` 这类 JS 字符串常量的实际串值。
+    /// 文件里只用到了 `\\` 转义，unescape 就处理这一种，够用了。
+    fn js_string_const(js: &str, prefix: &str) -> Option<String> {
+        let line = js
+            .lines()
+            .find(|line| line.trim_start().starts_with(prefix))?;
+        let quoted = line.split('"').nth(1)?;
+        Some(quoted.replace("\\\\", "\\"))
+    }
+
+    /// 拆 `/source/flags` 字面量：`[...]` 字符组里的 `/` 不算结尾，转义的跳过一位。
+    fn split_regex_literal(line: &str) -> Option<(String, String)> {
+        let bytes = line.as_bytes();
+        let mut in_class = false;
+        let mut i = 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 1,
+                b'[' => in_class = true,
+                b']' => in_class = false,
+                b'/' if !in_class => {
+                    return Some((line[1..i].to_string(), line[i + 1..].to_string()));
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn non_ascii_version_lookalikes_are_not_base_paths() {
+        // 插件正则带 `u` 标志，`\d` 会认全角数字；桌面侧刻意只认 ASCII
+        // （见 `ai_settings::is_version_segment` 注释）。这类地址不瞎猜，
+        // 直接走“推不出模型地址”，用户手填。
+        assert!(!is_base_path("/v１２"));
+        assert!(!is_base_path("/Ｖ1"));
     }
 
     #[tokio::test]
