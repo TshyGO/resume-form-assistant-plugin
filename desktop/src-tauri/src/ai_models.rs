@@ -19,6 +19,9 @@ use crate::commands::CommandError;
 /// 插件那边也是 15 秒：`/models` 只是读配置，不值得等一分钟。
 pub const MODELS_TIMEOUT_SECONDS: u64 = 15;
 
+/// 正常模型列表才几 KB：超过这个数的一律当指错了地址，不读进内存。
+const MAX_MODELS_BODY_BYTES: u64 = 1024 * 1024;
+
 pub struct ResolvedEndpoints {
     // 保存时补全地址另有一套老的 `normalize_api_url`（含无 scheme 的脏输入），
     // 这里只给 `/models` 用，chat_url 留给单测钉住和插件一致的口径。
@@ -73,23 +76,10 @@ fn with_path(url: &url::Url, pathname: &str) -> String {
 
 /// 最后一个分段是版本段（`/v1`、`/api/v3`、`/v1beta`）或 `openai` 时，
 /// 这个路径自己不可能是 chat 端点，只能是 base。口径和插件的 `isBasePath` 一致：
-/// `v` 后面必须先是数字，剩下的是字母数字。
+/// `/^v\d+[a-z0-9]*$/iu`（大小写不敏感，`V2` 也算，见单测）。
 fn is_base_path(path: &str) -> bool {
     let last = path.rsplit('/').next().unwrap_or("");
-    last.eq_ignore_ascii_case("openai") || is_version_segment(last)
-}
-
-fn is_version_segment(segment: &str) -> bool {
-    let rest = match segment.strip_prefix('v').or_else(|| segment.strip_prefix('V')) {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let mut chars = rest.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_digit() => {}
-        _ => return false,
-    }
-    rest.chars().all(|c| c.is_ascii_alphanumeric())
+    last.eq_ignore_ascii_case("openai") || crate::ai_settings::is_version_segment(last)
 }
 
 /// `/models` 返回的形状：裸数组，或包在 `data` 里。条目是字符串或带 `id` 的对象。
@@ -126,6 +116,9 @@ pub fn parse_model_list(body: &Value) -> Option<Vec<String>> {
 
 fn non_chat_patterns() -> &'static Vec<Regex> {
     static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+    // 和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条一致（含 `asr` 无前缀、
+    // `audio` 刻意放行以保住 gpt-4o-audio-preview 之类的注释口径）。
+    // 插件加词时这里同步加，单测 `non_chat_models_are_hidden_but_counted` 盯着例子。
     const SEP: &str = r"(?:^|[/_.:\s-])";
     const END: &str = r"(?:$|[/_.:\s-])";
     PATTERNS.get_or_init(|| {
@@ -289,7 +282,43 @@ pub async fn fetch_model_list_with_timeout(
         })?;
 
     let status = response.status().as_u16();
-    let text = response.text().await.unwrap_or_default();
+    // 模型列表才几 KB：先看一眼长度，超大正文直接拒掉，不读进内存。
+    // 只防 Content-Length 老实标出来的那种；chunked 细水长流的靠总超时兜底，
+    // 和 chat 路径一个待遇，不在这里另起一套流式限流。
+    if response.content_length().is_some_and(|len| len > MAX_MODELS_BODY_BYTES) {
+        eprintln!(
+            "ai-models: {host} · HTTP {status} · body-too-large · {} ms",
+            started.elapsed().as_millis()
+        );
+        return Err(CommandError {
+            code: "AI_MODELS_BAD_RESPONSE".into(),
+            message: format!("{host} 返回的内容过大（超过 1MB），请检查 API URL 是否指错了地方。"),
+        });
+    }
+    let text = response.text().await.map_err(|err| {
+        if err.is_timeout() {
+            let seconds = timeout.as_secs().max(1);
+            eprintln!(
+                "ai-models: {host} · body-timeout · {} ms",
+                started.elapsed().as_millis()
+            );
+            CommandError {
+                code: "AI_MODELS_TIMEOUT".into(),
+                message: format!(
+                    "请求超时（{seconds} 秒无响应）：连不上该地址或服务过慢，请检查网络或代理。"
+                ),
+            }
+        } else {
+            eprintln!(
+                "ai-models: {host} · body-error · {} ms",
+                started.elapsed().as_millis()
+            );
+            CommandError {
+                code: "AI_MODELS_NETWORK".into(),
+                message: format!("连不上 {host}：请检查网络、代理，以及 API URL 的域名拼写。"),
+            }
+        }
+    })?;
     eprintln!(
         "ai-models: {host} · HTTP {status} · {} ms",
         started.elapsed().as_millis()
@@ -481,6 +510,43 @@ mod tests {
         (format!("http://{addr}/v1/models"), handle)
     }
 
+    /// 只发响应头就停住：Content-Length 说后面还有，但 body 永远不来。
+    /// 用来走读 body 阶段的超时分支。
+    fn serve_stalled_body(content_length: usize) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 Test\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        (format!("http://{addr}/v1/models"), handle)
+    }
+
+    /// 报一个超大 Content-Length 然后拖着不关：客户端应该看完头就拒掉，
+    /// 不会真的读 2MB。
+    fn serve_oversized() -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 Test\r\nContent-Type: application/json\r\nContent-Length: 2097152\r\nConnection: close\r\n\r\n",
+            );
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        (format!("http://{addr}/v1/models"), handle)
+    }
+
     /// 占一个端口再放掉：连过去必定被拒绝，用来走 NETWORK 分支，不碰外网。
     fn refused_url() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -541,6 +607,37 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code, "AI_MODELS_NETWORK");
+    }
+
+    #[tokio::test]
+    async fn a_body_that_never_arrives_is_still_a_timeout() {
+        let (url, handle) = serve_stalled_body(64);
+        let err = fetch_model_list_with_timeout(
+            &url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_TIMEOUT");
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_refused_from_the_headers() {
+        let (url, handle) = serve_oversized();
+        let err = fetch_model_list_with_timeout(
+            &url,
+            "sk-test",
+            "127.0.0.1",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_BAD_RESPONSE");
+        assert!(err.message.contains("过大"), "{}", err.message);
+        handle.join().unwrap();
     }
 
     #[tokio::test]

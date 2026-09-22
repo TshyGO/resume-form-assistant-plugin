@@ -107,6 +107,22 @@ test("获取模型成功后列出候选，点一个填进输入框", async () =>
   expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "a-chat");
 });
 
+test("拉回空列表就直说没有能填的，也不画候选按钮", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "list_ai_models_cmd"
+      ? { models: [], hiddenCount: 2, host: "relay.example" }
+      : base,
+  );
+  await screen.findByLabelText("模型名称");
+  await user.clear(screen.getByLabelText("模型名称"));
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+
+  await waitFor(() => expect(screen.getByText(/没有能填的对话模型/)).toBeTruthy());
+  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.getByRole("button", { name: "保存设置" })).toHaveProperty("disabled", false);
+});
+
 test("获取模型失败只说一声，保存设置不拦着", async () => {
   const user = userEvent.setup();
   mount((command) => {

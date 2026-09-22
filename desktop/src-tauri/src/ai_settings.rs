@@ -154,7 +154,10 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
     format!("{prefix}{authority}{base}/chat/completions{suffix}")
 }
 
-fn is_version_segment(segment: &str) -> bool {
+/// 版本段（`/v1`、`/api/v3`、`/v1beta`）：`v` 后面必须先是数字，剩下全是字母数字。
+/// 口径和插件 `ai-models.js` 的 `/^v\d+[a-z0-9]*$/iu` 一致，也被 `ai_models` 复用，
+/// 改一边时另一边同步变。注意 `v1-beta` 不算：它不再触发 base 补全（见单测）。
+pub(crate) fn is_version_segment(segment: &str) -> bool {
     let rest = match segment.strip_prefix('v').or_else(|| segment.strip_prefix('V')) {
         Some(rest) => rest,
         None => return false,
@@ -226,6 +229,12 @@ mod tests {
         assert_eq!(
             normalize_api_url("https://relay.example/proxy/openai-compatible", DEFAULT_API_URL),
             "https://relay.example/proxy/openai-compatible"
+        );
+        // `v1-beta` 不是版本段（和插件 `/^v\d+[a-z0-9]*$/iu` 一致）：以前会误补，
+        // 现在原样保留。收紧是 #143 有意对齐插件，不是顺手改的。
+        assert_eq!(
+            normalize_api_url("https://relay.example/v1-beta", DEFAULT_API_URL),
+            "https://relay.example/v1-beta"
         );
     }
 

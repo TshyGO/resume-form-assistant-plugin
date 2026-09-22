@@ -114,7 +114,7 @@ export function describeModelsResult(view: ModelListView): Message {
 
 /**
  * 按已敲的字给候选排序：完全一致最前，然后是前缀（含 `vendor/` 后面的部分），
- * 然后是子串。口径和命令层的 `ai_models::match_models` 一致。
+ * 然后是子串。过滤只在前端做这一份，Rust 不参与（`ai_models.rs` 刻意不定第二份实现）。
  */
 export function matchModels(ids: string[], query: string): string[] {
   const needle = query.trim().toLowerCase();
