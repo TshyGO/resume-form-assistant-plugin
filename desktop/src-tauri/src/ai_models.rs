@@ -871,9 +871,9 @@ mod tests {
 
     #[test]
     fn non_ascii_version_lookalikes_are_not_base_paths() {
-        // 插件正则带 `u` 标志，`\d` 会认全角数字；桌面侧刻意只认 ASCII
-        // （见 `ai_settings::is_version_segment` 注释）。这类地址不瞎猜，
-        // 直接走“推不出模型地址”，用户手填。
+        // JS 的 `\d` 不管带不带 `u` 标志都只认 ASCII 数字，全角数字不算；插件那条正则
+        // 因此本来就不会把这类地址当成版本号段。桌面侧的 `is_version_segment` 同样只认
+        // ASCII，口径一致，不是刻意的分歧。这类地址不瞎猜，直接走“推不出模型地址”，用户手填。
         assert!(!is_base_path("/v１２"));
         assert!(!is_base_path("/Ｖ1"));
     }

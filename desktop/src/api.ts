@@ -281,6 +281,8 @@ export interface SaveProviderResult {
   view: AiSettingsView;
   providerId: string;
   keyCleared: boolean;
+  /** 服务商保存好了，但填的 Key 没能存进系统凭据库；原因在这里。 */
+  keyError: string | null;
 }
 
 /** `list_ai_models_cmd` 的结果：只含模型名和主机名。 */

@@ -22,9 +22,15 @@ export interface ProviderEditorProps {
   onCancel(): void;
   /** 清除 Key 之后把新视图交回列表。 */
   onKeyCleared?(view: AiSettingsView): void;
+  /**
+   * 保存失败时调用。命令本身可能在校验通过之后才失败（比如 Key 存进凭据库那步），
+   * 这时设置其实已经改了，编辑器这份 Key 状态却是保存前读到的、可能过时；上层借这个
+   * 回调重新拉一次 `get_ai_settings_cmd`，界面上看到的 Key 状态才准。
+   */
+  onFailed?(): void;
 }
 
-export function ProviderEditor({ provider, preset, credentialError, onSaved, onCancel, onKeyCleared }: ProviderEditorProps) {
+export function ProviderEditor({ provider, preset, credentialError, onSaved, onCancel, onKeyCleared, onFailed }: ProviderEditorProps) {
   const invoke = useInvoke();
   const [name, setName] = useState(provider?.name ?? preset?.name ?? "");
   const [apiUrl, setApiUrl] = useState(provider?.apiUrl ?? preset?.apiUrl ?? "");
@@ -84,6 +90,7 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
       onSaved(result);
     } catch (error) {
       setMessage(describeCommandError(error));
+      onFailed?.();
     } finally {
       setBusy(false);
     }

@@ -20,12 +20,14 @@ export function AiSettings() {
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const reload = () => {
     if (!invoke) return;
     invoke<AiSettingsView>("get_ai_settings_cmd")
       .then(setView)
       .catch((error: unknown) => setMessage(describeCommandError(error)));
-  }, [invoke]);
+  };
+
+  useEffect(reload, [invoke]);
 
   if (!invoke) return <p className="note warn">没连上桌面宿主，AI 设置读不出来。</p>;
 
@@ -46,9 +48,11 @@ export function AiSettings() {
     setView(result.view);
     setEditing(null);
     setMessage(
-      result.keyCleared
-        ? { tone: "warn", text: "已保存。接口地址换了协议或主机，原来的 Key 已清除，请重新填写这个服务商的 Key。" }
-        : { tone: "ok", text: "已保存。" },
+      result.keyError
+        ? { tone: "warn", text: `服务商已保存，但 Key 没存进系统凭据库：${result.keyError}。请编辑后重新填写 Key。` }
+        : result.keyCleared
+          ? { tone: "warn", text: "已保存。接口地址换了协议或主机，原来的 Key 已清除，请重新填写这个服务商的 Key。" }
+          : { tone: "ok", text: "已保存。" },
     );
   };
 
@@ -138,6 +142,7 @@ export function AiSettings() {
           onSaved={onSaved}
           onCancel={() => setEditing(null)}
           onKeyCleared={setView}
+          onFailed={reload}
         />
       ) : (
         <div className="row">

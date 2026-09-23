@@ -46,6 +46,11 @@ pub struct SaveProviderResult {
     pub provider_id: String,
     /// 协议或主机变了、旧 Key 被清掉、这次又没填新 Key。界面据此提醒重新填。
     pub key_cleared: bool,
+    /// 服务商本身存好了，但填的 Key 没能存进系统凭据库（比如凭据库被策略锁了）。这种情况
+    /// 整体仍然是 Ok：服务商不该因为这一步失败就从设置里消失，调用方也不该误以为整个保存
+    /// 失败了而对着同一次输入重试——那会在 `id` 还是 `None` 的情况下再建一条一模一样的
+    /// 服务商（#158 评审）。界面拿到这个字段就该关掉编辑器，用警示语气提醒用户重新填 Key。
+    pub key_error: Option<String>,
 }
 
 fn credential_error(err: CredentialError) -> CommandError {
@@ -57,8 +62,17 @@ fn settings_error(message: String) -> CommandError {
 }
 
 /// 旧版只有一把 Key。迁出来的 `default` 服务商存在时，把旧 Key 搬过去；幂等。
+///
+/// 只存过 Key、从没有 `ai-settings.json`（v0.4.0 及更早的正常状态）的用户，`load` 会给一份
+/// 空的服务商列表，跟「没有服务商」区分不开——这份 Key 就永远等不到 `default` 服务商出现。
+/// 一旦看到「没有服务商 + 旧 Key 还在」，先补出这条默认服务商（`ensure_legacy_default`），
+/// 再照常搬 Key，用户升级后不会白白丢一把之前存过的 Key（#158 评审）。
 fn migrate(data_root: &Path, creds: &dyn CredentialStore) -> Result<(), CredentialError> {
-    let settings = ai_settings::load(data_root);
+    let mut settings = ai_settings::load(data_root);
+    if settings.providers.is_empty() && creds.get_legacy_key()?.is_some() {
+        ai_settings::ensure_legacy_default(data_root);
+        settings = ai_settings::load(data_root);
+    }
     if settings.providers.iter().any(|p| p.id == LEGACY_PROVIDER_ID) {
         migrate_legacy_key(creds, LEGACY_PROVIDER_ID)?;
     }
@@ -126,10 +140,12 @@ pub fn save_provider(
     }
     let outcome = ai_settings::save_provider(data_root, input).map_err(settings_error)?;
     let key_cleared = outcome.host_changed && had_key && typed.is_none();
-    if let Some(key) = typed {
-        creds.set_key(&outcome.provider_id, &key).map_err(credential_error)?;
-    }
-    Ok(SaveProviderResult { view: settings_view(data_root, creds), provider_id: outcome.provider_id, key_cleared })
+    // 服务商这边已经落盘了。Key 存不进凭据库不该把整个保存变成一个 Err：那样调用方拿不到
+    // provider_id，容易在界面上以为「什么都没存上」又提交一次同样的输入，
+    // 结果建出第二条一模一样的服务商（#158 评审）。改成把失败原因放进 key_error，
+    // 整体照样 Ok。
+    let key_error = typed.and_then(|key| creds.set_key(&outcome.provider_id, &key).err()).map(|e| e.message());
+    Ok(SaveProviderResult { view: settings_view(data_root, creds), provider_id: outcome.provider_id, key_cleared, key_error })
 }
 
 pub fn delete_provider(data_root: &Path, creds: &dyn CredentialStore, id: &str) -> Result<AiSettingsView, CommandError> {
@@ -211,7 +227,30 @@ pub fn key_for_models(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai_credentials::{MemoryStore, UnavailableStore};
+    use crate::ai_credentials::{CredentialError, MemoryStore, UnavailableStore};
+
+    /// 只在 `set_key` 上失败，其它都照常委托给内存实现：验证「Key 存不进凭据库」这一步
+    /// 单独失败时，服务商不会跟着消失、也不会因为调用方误以为整体失败而重试出重复的一条
+    /// （#158 评审）。
+    struct SetOnlyFails(MemoryStore);
+
+    impl CredentialStore for SetOnlyFails {
+        fn set_key(&self, _provider_id: &str, _key: &str) -> Result<(), CredentialError> {
+            Err(CredentialError::Unavailable("凭据库锁了".into()))
+        }
+        fn get_key(&self, provider_id: &str) -> Result<Option<String>, CredentialError> {
+            self.0.get_key(provider_id)
+        }
+        fn clear_key(&self, provider_id: &str) -> Result<(), CredentialError> {
+            self.0.clear_key(provider_id)
+        }
+        fn get_legacy_key(&self) -> Result<Option<String>, CredentialError> {
+            self.0.get_legacy_key()
+        }
+        fn clear_legacy_key(&self) -> Result<(), CredentialError> {
+            self.0.clear_legacy_key()
+        }
+    }
 
     fn args(id: Option<&str>, url: &str) -> ProviderArgs {
         ProviderArgs { id: id.map(str::to_string), name: "P".into(), api_url: url.into(), model: "m".into() }
@@ -244,6 +283,31 @@ mod tests {
         let retyped = save_provider(dir.path(), &creds, args(Some(&id), "https://c.example/v1"), Some("sk-c".into())).unwrap();
         assert!(!retyped.key_cleared, "同时填了新 Key，就不算被清掉");
         assert_eq!(creds.get_key(&id).unwrap().as_deref(), Some("sk-c"));
+    }
+
+    #[test]
+    fn a_key_storage_failure_does_not_fail_the_save_or_duplicate_the_provider() {
+        // Key 存不进凭据库那一步单独失败时，服务商已经建好了：整体应该是 Ok，
+        // 带上 keyError，让调用方拿到 provider_id、编辑器能正常关掉，不会因为
+        // 以为「保存整体失败」而对着同一次输入重试、建出第二条服务商。
+        let dir = tempfile::tempdir().unwrap();
+        let creds = SetOnlyFails(MemoryStore::default());
+        let result = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap();
+        assert!(result.key_error.is_some(), "Key 存失败该体现在 keyError 里");
+        assert!(result.key_error.as_deref().unwrap().contains("凭据库锁了"));
+        assert!(!result.key_cleared);
+        let settings = crate::ai_settings::load(dir.path());
+        assert_eq!(settings.providers.len(), 1, "服务商已经建好了，不该因为 Key 存不进去就消失");
+        assert_eq!(settings.providers[0].id, result.provider_id);
+    }
+
+    #[test]
+    fn a_successful_key_save_has_no_key_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let result = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap();
+        assert!(result.key_error.is_none());
+        assert_eq!(creds.get_key(&result.provider_id).unwrap().as_deref(), Some("sk-a"));
     }
 
     #[test]
@@ -326,6 +390,33 @@ mod tests {
     }
 
     #[test]
+    fn a_key_only_upgrade_from_v0_4_0_gets_a_default_provider() {
+        // v0.4.0 及更早没有 ai-settings.json、没有服务商列表：一个地址、一个模型都是写死的，
+        // Key 单独有个保存按钮。升级后这把 Key 不该找不到主人（#158 评审）。
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::with_legacy("sk-old");
+        let view = settings_view(dir.path(), &creds);
+        assert_eq!(view.providers.len(), 1);
+        let p = &view.providers[0];
+        assert_eq!(p.id, crate::ai_settings::LEGACY_PROVIDER_ID);
+        assert_eq!(p.name, "默认");
+        assert_eq!(p.api_url, crate::ai_settings::DEFAULT_API_URL);
+        assert_eq!(p.model, "gpt-4o-mini");
+        assert!(p.key_configured);
+        assert_eq!(view.active_provider_id.as_deref(), Some(crate::ai_settings::LEGACY_PROVIDER_ID));
+        assert_eq!(creds.get_legacy_key().unwrap(), None, "旧账户该清空");
+    }
+
+    #[test]
+    fn no_file_and_no_legacy_key_still_means_no_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let view = settings_view(dir.path(), &creds);
+        assert!(view.providers.is_empty());
+        assert_eq!(view.active_provider_id, None);
+    }
+
+    #[test]
     fn nothing_configured_is_explained() {
         let dir = tempfile::tempdir().unwrap();
         let creds = MemoryStore::default();
@@ -334,6 +425,28 @@ mod tests {
         let err = active_with_key(dir.path(), &creds).unwrap_err();
         assert_eq!(err.code, "AI_NOT_CONFIGURED");
         assert!(err.message.contains("Key"), "{}", err.message);
+    }
+
+    #[test]
+    fn settings_view_surfaces_an_unavailable_credential_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let workable = MemoryStore::default();
+        save_provider(dir.path(), &workable, args(None, "https://a.example/v1"), None).unwrap();
+        let unavailable = UnavailableStore("locked".into());
+        let view = settings_view(dir.path(), &unavailable);
+        assert!(!view.providers[0].key_configured, "读不出来就当没配，不能瞎猜");
+        let error = view.credential_error.expect("凭据库读不出来得如实说明，不能假装没配置过");
+        assert!(error.contains("locked"), "{error}");
+    }
+
+    #[test]
+    fn active_with_key_surfaces_an_unavailable_credential_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let workable = MemoryStore::default();
+        save_provider(dir.path(), &workable, args(None, "https://a.example/v1"), None).unwrap();
+        let unavailable = UnavailableStore("locked".into());
+        let err = active_with_key(dir.path(), &unavailable).unwrap_err();
+        assert_eq!(err.code, "CREDENTIAL_STORE_UNAVAILABLE");
     }
 
     #[test]

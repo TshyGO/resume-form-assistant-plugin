@@ -95,6 +95,31 @@ pub fn load(data_root: &Path) -> AiSettings {
     }
 }
 
+/// v0.4.0 及更早版本没有服务商列表——一个写死的地址（`DEFAULT_API_URL`）、一个写死的模型
+/// （`gpt-4o-mini`），Key 单独有个保存按钮，不跟着 `ai-settings.json` 走。升级后如果这份
+/// 文件根本不存在，`load` 只会给一个空的 `AiSettings`（跟「从来没配置过」区分不开），这把
+/// 旧 Key 就再没有服务商能接住：它既不在 `LEGACY_PROVIDER_ID` 名下（那是单配置文件被读成
+/// 一条服务商时才有的 id），也没有别的服务商，永远用不上、界面上也看不见、没法清理
+/// （#158 评审）。
+///
+/// 调用方（`ai_provider_commands::migrate`）在检测到「没有服务商 + 旧 Key 还在」时调这个
+/// 函数，把这条默认服务商建出来、设成当前，再照常把 Key 搬过去。已经有服务商（不管是不是
+/// 这个 id）就什么也不做，返回 `false`。
+pub fn ensure_legacy_default(data_root: &Path) -> bool {
+    let mut settings = load(data_root);
+    if !settings.providers.is_empty() {
+        return false;
+    }
+    settings.providers.push(AiProvider {
+        id: LEGACY_PROVIDER_ID.into(),
+        name: "默认".into(),
+        api_url: DEFAULT_API_URL.into(),
+        model: "gpt-4o-mini".into(),
+    });
+    settings.active_provider_id = Some(LEGACY_PROVIDER_ID.into());
+    write(data_root, &settings).is_ok()
+}
+
 pub fn active(settings: &AiSettings) -> Option<&AiProvider> {
     let id = settings.active_provider_id.as_deref()?;
     settings.providers.iter().find(|p| p.id == id)
@@ -126,6 +151,16 @@ pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
     }
     if let Some(problem) = credential_in_url(&input.api_url) {
         return Err(problem);
+    }
+    // 校验的是补全之后的地址：用户多半填的是不带协议的裸主机名（比如直接抄局域网 IP 或者
+    // 把 `https://` 手滑删了），normalize_api_url 不会替他们把协议补上，得在这里挡住，
+    // 不然会存进去一条 `url::Url` 解析不出来、发请求时才炸的地址。这里传的 fallback 不会
+    // 被用到——上面已经确认 `input.api_url` trim 非空。
+    let normalized = normalize_api_url(&input.api_url, DEFAULT_API_URL);
+    let scheme_ok = url::Url::parse(&normalized)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https"));
+    if !scheme_ok {
+        return Err("接口地址要以 http:// 或 https:// 开头。".into());
     }
     if input.model.trim().is_empty() {
         return Err("模型名称不能为空，可以点「获取模型」挑一个。".into());
@@ -338,6 +373,23 @@ mod tests {
     }
 
     #[test]
+    fn load_falls_back_to_the_first_provider_when_the_active_one_is_missing() {
+        // activeProviderId 指向的服务商被手动改过文件、或者是别的原因不在列表里了：
+        // 不该让「当前使用」悬空指向一个不存在的 id，落到第一个还在的服务商上。
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            path_for(dir.path()),
+            r#"{"providers":[
+                {"id":"a","name":"A","apiUrl":"https://a.example/v1","model":"m"},
+                {"id":"b","name":"B","apiUrl":"https://b.example/v1","model":"m"}
+            ],"activeProviderId":"gone"}"#,
+        )
+        .unwrap();
+        let settings = load(dir.path());
+        assert_eq!(settings.active_provider_id.as_deref(), Some("a"));
+    }
+
+    #[test]
     fn a_broken_file_reads_as_empty_not_as_an_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(path_for(dir.path()), "{not json").unwrap();
@@ -406,6 +458,7 @@ mod tests {
             (input(None, "A", "  ", "m"), "接口地址"),
             (input(None, "A", "https://a.example/v1", " "), "模型"),
             (input(None, "A", "https://u:p@a.example/v1", "m"), "用户名或密码"),
+            (input(None, "A", "foo", "m"), "http://"),
             (input(Some("missing"), "A", "https://a.example/v1", "m"), "不在了"),
         ];
         for (bad, needle) in cases {

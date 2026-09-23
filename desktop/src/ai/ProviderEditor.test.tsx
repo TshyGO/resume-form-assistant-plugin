@@ -12,7 +12,7 @@ const existing: AiProviderView = {
 
 const saved = (over: Partial<SaveProviderResult> = {}): SaveProviderResult => ({
   view: { providers: [existing], activeProviderId: "p1", credentialError: null },
-  providerId: "p1", keyCleared: false, ...over,
+  providerId: "p1", keyCleared: false, keyError: null, ...over,
 });
 
 function mount(
@@ -88,6 +88,36 @@ test("获取模型：用刚填的 Key，点候选填进模型名", async () => {
   expect(screen.getByText(/另有 1 个非对话模型已隐藏/)).toBeTruthy();
 });
 
+test("姗姗来迟的获取模型结果被丢弃：地址在它回来之前已经改了", async () => {
+  const user = userEvent.setup();
+  let resolveStale: ((value: unknown) => void) | null = null;
+  const stale = new Promise((resolve) => {
+    resolveStale = resolve;
+  });
+  let requestCount = 0;
+  mount({ provider: existing }, (command) => {
+    if (command === "list_ai_models_cmd") {
+      requestCount += 1;
+      return requestCount === 1 ? stale : { models: ["fresh-model"], hiddenCount: 0, host: "api.moonshot.cn" };
+    }
+    return saved();
+  });
+  await user.clear(screen.getByLabelText("模型名称"));
+  // 第一次点「获取模型」：请求还挂着，还没回来。
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  // 回来之前先把地址改了：这一步应该让第一个请求的序号作废。
+  await user.clear(screen.getByLabelText("接口地址"));
+  await user.type(screen.getByLabelText("接口地址"), "https://api.moonshot.cn/v1");
+  // 现在第一个请求的结果才姗姗来迟——它不该再把候选画出来。
+  resolveStale!({ models: ["stale-model"], hiddenCount: 0, host: "api.deepseek.com" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByRole("button", { name: "stale-model" })).toBeNull();
+  expect(screen.queryByText(/stale-model|api\.deepseek\.com/)).toBeNull();
+  // 新请求正常还能发起、正常展示。
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  expect(await screen.findByRole("button", { name: "fresh-model" })).toBeTruthy();
+});
+
 test("改地址后旧候选作废", async () => {
   const user = userEvent.setup();
   mount({ provider: existing }, () => ({ models: ["deepseek-chat"], hiddenCount: 0, host: "api.deepseek.com" }));
@@ -107,6 +137,31 @@ test("获取失败只提示，不拦保存", async () => {
   expect(await screen.findByText(/拒绝了这个 Key/)).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(calls.some((c) => c.command === "save_ai_provider_cmd")).toBe(true));
+});
+
+test("保存失败时调用 onFailed，让上层刷新 Key 状态", async () => {
+  const user = userEvent.setup();
+  const onFailed = vi.fn();
+  const { calls } = mount({ provider: existing, onFailed }, (command) => {
+    if (command === "save_ai_provider_cmd") throw { code: "AI_SETTINGS_INVALID", message: "模型名称不能为空" };
+    return saved();
+  });
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(calls.some((c) => c.command === "save_ai_provider_cmd")).toBe(true));
+  expect(onFailed).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText(/模型名称不能为空/)).toBeTruthy();
+});
+
+test("获取模型失败不调用 onFailed：那是保存失败专用的", async () => {
+  const user = userEvent.setup();
+  const onFailed = vi.fn();
+  mount({ provider: existing, onFailed }, (command) => {
+    if (command === "list_ai_models_cmd") throw { code: "AI_MODELS_AUTH", message: "拒绝了这个 Key" };
+    return saved();
+  });
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  await screen.findByText(/拒绝了这个 Key/);
+  expect(onFailed).not.toHaveBeenCalled();
 });
 
 test("清除 Key 要确认", async () => {

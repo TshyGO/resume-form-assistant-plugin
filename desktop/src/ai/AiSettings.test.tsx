@@ -98,6 +98,40 @@ test("清除 Key 后编辑器立即显示新的 Key 状态", async () => {
   expect(screen.getAllByText(/还没有 Key/).length).toBeGreaterThan(0);
 });
 
+test("服务商保存好了但 Key 存失败：编辑器照样关掉，警示信息带上失败原因", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "save_ai_provider_cmd"
+      ? { view, providerId: "p1", keyCleared: false, keyError: "凭据库锁了" }
+      : view,
+  );
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  expect(await screen.findByText(/服务商已保存，但 Key 没存进系统凭据库：凭据库锁了/)).toBeTruthy();
+  // 编辑器关掉了：找不到「取消」按钮。
+  expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+});
+
+test("编辑器保存失败后重新拉一次设置，Key 状态不会显示过时的结果", async () => {
+  const user = userEvent.setup();
+  let saveAttempts = 0;
+  const afterFailedSave = { ...view, providers: [{ ...view.providers[0], keyConfigured: false }, view.providers[1]] };
+  const calls = mount((command) => {
+    if (command === "save_ai_provider_cmd") {
+      saveAttempts += 1;
+      throw { code: "AI_SETTINGS_INVALID", message: "存 Key 失败" };
+    }
+    if (command === "get_ai_settings_cmd") return saveAttempts > 0 ? afterFailedSave : view;
+    return view;
+  });
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(calls.filter((c) => c.command === "get_ai_settings_cmd").length).toBe(2));
+  expect(await screen.findByText(/存 Key 失败/)).toBeTruthy();
+});
+
 test("没连上桌面宿主时如实说明", async () => {
   render(
     <InvokeProvider invoke={null}>
