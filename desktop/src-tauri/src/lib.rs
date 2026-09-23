@@ -4,6 +4,7 @@ mod ai_commands;
 mod ai_commands_tests;
 mod ai_credentials;
 mod ai_models;
+mod ai_provider_commands;
 mod ai_settings;
 mod nm_register;
 mod update_check;
