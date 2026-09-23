@@ -10,7 +10,12 @@ export type MessageType =
   | "fill.submit"
   | "snapshot.chunk"
   | "submit.confirm"
-  | "outbox.reconcile";
+  | "outbox.reconcile"
+  | "resume.read"
+  | "resume.update"
+  | "ai.complete"
+  | "ui.open"
+  | "legacy.import";
 
 /** Resume Pro request envelope */
 export interface RequestEnvelope {
@@ -20,7 +25,7 @@ export interface RequestEnvelope {
   messageId: string;
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   clientInstanceId: string;
-  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile";
+  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import";
   /**
    * UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z.
    * pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$
@@ -49,6 +54,14 @@ export interface ResponseEnvelope {
     message?: string;
   };
   payload: Record<string, unknown>;
+}
+
+export interface AiCompletePayload {
+  purpose: "fill" | "plan";
+  /** maxLength: 8000 */
+  system: string;
+  /** maxLength: 60000 */
+  user: string;
 }
 
 export interface FillSubmitPayload {
@@ -153,6 +166,18 @@ export interface JobSavePayload {
   applicationId?: string;
 }
 
+export interface LegacyImportPayload {
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  importId: string;
+  kind: "manifest" | "template" | "profile" | "aiConfig" | "status";
+  /**
+   * minimum: 0
+   * maximum: 63
+   */
+  index?: number;
+  body?: Record<string, unknown>;
+}
+
 export interface OutboxReconcilePayload {
   /**
    * minItems: 1
@@ -187,6 +212,26 @@ export interface QueryCandidatesPayload {
   title?: string;
   /** maxLength: 2000 */
   sourceUrl?: string;
+}
+
+export interface ResumeReadPayload {
+}
+
+export interface ResumeUpdatePayload {
+  op: "setActiveTemplate" | "saveProfile";
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  templateId?: string;
+  profile?: {
+    values: Record<string, string>;
+    family: Record<string, string>[];
+    /** maxItems: 200 */
+    custom: {
+      key: string;
+      value: string;
+    }[];
+  };
+  /** minimum: 0 */
+  expectedRevision?: number;
 }
 
 export interface SnapshotChunkPayload {
@@ -231,6 +276,23 @@ export interface SubmitConfirmPayload {
   applicationId: string;
 }
 
+export interface UiOpenPayload {
+  view: "resume" | "settings-ai" | "home";
+}
+
+export interface AiCompleteResponsePayload {
+  status: "ok" | "failed";
+  text?: string;
+  reason?: "not_configured" | "auth" | "rate_limited" | "timeout" | "network" | "http" | "bad_response" | "input_too_large" | "response_too_large";
+  /**
+   * minimum: 100
+   * maximum: 599
+   */
+  httpStatus?: number;
+  /** maxLength: 253 */
+  host?: string;
+}
+
 export interface HandshakeResponsePayload {
   /**
    * minLength: 1
@@ -253,6 +315,20 @@ export interface HandshakeResponsePayload {
 }
 
 export interface HealthResponsePayload {
+}
+
+export interface LegacyImportResponsePayload {
+  state: "receiving" | "awaiting_confirmation" | "imported" | "rejected" | "expired";
+  /**
+   * minimum: 0
+   * maximum: 63
+   */
+  received: number;
+  /**
+   * minimum: 1
+   * maximum: 63
+   */
+  total: number;
 }
 
 export interface OutboxReconcileResponsePayload {
@@ -324,6 +400,57 @@ export interface QueryCandidatesResponsePayload {
   }[];
 }
 
+export interface ResumeReadResponsePayload {
+  /** maxItems: 25 */
+  templates: {
+    /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+    id: string;
+    /**
+     * minLength: 1
+     * maxLength: 100
+     */
+    name: string;
+    /** minimum: 0 */
+    fieldCount: number;
+  }[];
+  activeTemplate: {
+    /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+    id: string;
+    /**
+     * minLength: 1
+     * maxLength: 100
+     */
+    name: string;
+    groups: {
+      /** minLength: 1 */
+      name: string;
+      fields: {
+        /** minLength: 1 */
+        key: string;
+        value: string;
+      }[];
+    }[];
+  } | null;
+  profile: {
+    values: Record<string, string>;
+    family: Record<string, string>[];
+    /** maxItems: 200 */
+    custom: {
+      key: string;
+      value: string;
+    }[];
+  };
+  /** minimum: 0 */
+  profileRevision: number;
+}
+
+export interface ResumeUpdateResponsePayload {
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  activeTemplateId: string | null;
+  /** minimum: 0 */
+  profileRevision: number;
+}
+
 export interface SnapshotChunkResponsePayload {
   ackKind: "chunk" | "snapshot";
   /**
@@ -338,6 +465,10 @@ export interface SnapshotChunkResponsePayload {
   chunkCursor: number;
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   snapshotId?: string;
+}
+
+export interface UiOpenResponsePayload {
+  opened: true;
 }
 
 export interface WriteResponsePayload {
@@ -355,6 +486,11 @@ export interface RequestPayloadByType {
   "snapshot.chunk": SnapshotChunkPayload;
   "submit.confirm": SubmitConfirmPayload;
   "outbox.reconcile": OutboxReconcilePayload;
+  "resume.read": ResumeReadPayload;
+  "resume.update": ResumeUpdatePayload;
+  "ai.complete": AiCompletePayload;
+  "ui.open": UiOpenPayload;
+  "legacy.import": LegacyImportPayload;
 }
 
 /** Response payload type for a given messageType. Several writes share one response. */
@@ -367,6 +503,11 @@ export interface ResponsePayloadByType {
   "snapshot.chunk": SnapshotChunkResponsePayload;
   "submit.confirm": WriteResponsePayload;
   "outbox.reconcile": OutboxReconcileResponsePayload;
+  "resume.read": ResumeReadResponsePayload;
+  "resume.update": ResumeUpdateResponsePayload;
+  "ai.complete": AiCompleteResponsePayload;
+  "ui.open": UiOpenResponsePayload;
+  "legacy.import": LegacyImportResponsePayload;
 }
 
 /** One request envelope, narrowed to the payload its messageType carries. */

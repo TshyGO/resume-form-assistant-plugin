@@ -119,7 +119,7 @@ test("previously rejected JS cases are now rejected", async () => {
   assert.equal(await codeOfAsync(() => validateRequest(load("requests/job-save-missing-company.json"))), "invalid_payload");
   assert.equal(await codeOfAsync(() => validateRequest(load("requests/job-save-url-token.json"))), "secret_forbidden");
   assert.equal(codeOf(() => validateResponse(load("responses/handshake-empty-payload.json"), "handshake")), "invalid_payload");
-  assert.equal(codeOf(() => validateResponse(load("responses/protocolVersion-2.json"), "job.save")), "protocol_incompatible");
+  assert.equal(codeOf(() => validateResponse(load("responses/protocolVersion-2.json"), "job.save")), null);
   assert.equal(codeOf(() => validateResponse(load("responses/conflict-retryable-true.json"), "job.save")), "invalid_payload");
 });
 
@@ -129,4 +129,3 @@ test("browser entry has no node: imports", () => {
   assert.equal(src.includes("node:"), false);
   assert.equal(lite.includes("node:"), false);
 });
-

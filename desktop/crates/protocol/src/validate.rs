@@ -389,6 +389,19 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             "correlationId does not match the request messageId",
         ));
     }
+    if req.message_type == MessageType::Handshake && value.get("ok") == Some(&Value::Bool(true)) {
+        let request_min = req.payload["minProtocolVersion"].as_i64().unwrap();
+        let request_max = req.payload["maxProtocolVersion"].as_i64().unwrap();
+        let response_min = value["payload"]["minProtocolVersion"].as_i64().unwrap();
+        let response_max = value["payload"]["maxProtocolVersion"].as_i64().unwrap();
+        if response_max < request_min || response_min > request_max {
+            return Err(ProtocolError::new(
+                ErrorCode::ProtocolIncompatible,
+                Layer::Structure,
+                "handshake request and response ranges do not overlap",
+            ));
+        }
+    }
     let invalid = |message: &str| {
         ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message.to_string())
     };

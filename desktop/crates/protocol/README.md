@@ -30,7 +30,7 @@ node --test tests/*.test.js
 | --- | --- | --- |
 | Size | 完整 UTF-8 JSON 信封 ≤ 65536（不含 NM 4 字节前缀）。原始块大小 ≠ 信封大小 | D05 |
 | Structure | 字段、枚举、UUID、SHA-256、白名单 `messageType`、分片上下界、对账批次 ≤ 32 | D05 schema + 校验器 |
-| Identity presence | `health`/`handshake` **禁止**信封 `archiveId`/`restoreEpoch`；其余 **必须**有。禁止用 current 回填 | D05 |
+| Identity presence | `health`/`handshake`/`ai.complete`/`ui.open` **禁止**信封 `archiveId`/`restoreEpoch`；其余 **必须**有。禁止用 current 回填 | D05 |
 | Secrets | 拒绝 API Key/Cookie/Bearer 等键与值；拒绝未脱敏 URL（userinfo / token 查询参数） | D05 |
 | Business identity | 信封是否等于 **当前** `current.json`；`sourceRestoreEpoch` 是否等于当前 epoch | **D03/D06**（`check_current_identity`） |
 | Idempotency | `(clientInstanceId, messageId, sourceRestoreEpoch)` + 摘要 → 重放 / conflict / previously_purged | **D03** 回执表（`evaluate_write` 是契约算法） |
@@ -39,6 +39,20 @@ node --test tests/*.test.js
 | Reconcile | 只读历史回执；`applied/purged/not_found/conflict/unverifiable`；不授予重放 | **D03** 查回执；`reconcile()` 是契约算法 |
 
 SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`。
+
+## v2（#130）
+
+`rules.json` 的支持范围是 v1–v2。原有八类消息在 v1、v2 信封里都可用；新增的五类消息只接受 `protocolVersion: 2`。旧插件的 `link/envelope.mjs` 仍发送 v1，桌面响应版本回显和新消息处理在 PR 3b 接入。
+
+| 消息 | 请求与响应约定 |
+| --- | --- |
+| `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
+| `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。自身幂等，不走 `message_receipts`。 |
+| `ai.complete` | 不带档案身份；插件传提示词，桌面用当前服务商和凭据发出。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
+| `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
+| `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
+
+Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
 
 ## D06 最小用法（Rust host）
 

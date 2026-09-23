@@ -93,7 +93,12 @@
     {"id": "legacy-import-aiconfig-nested-key", "path": "requests/legacy-import-aiconfig-nested-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "ai-complete-prompt-with-password-value", "path": "requests/ai-complete-prompt-with-password-value.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "resume-update-realistic-profile-ok", "path": "requests/resume-update-realistic-profile-ok.json", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "ai-complete-realistic-fill-prompt-ok", "path": "requests/ai-complete-realistic-fill-prompt-ok.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "ai-complete-realistic-fill-prompt-ok", "path": "requests/ai-complete-realistic-fill-prompt-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "legacy-import-aiconfig-url-code", "path": "requests/legacy-import-aiconfig-url-code.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "legacy-import-aiconfig-url-userinfo", "path": "requests/legacy-import-aiconfig-url-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "resume-read-v1-envelope", "path": "requests/resume-read-v1-envelope.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "health-v2-envelope", "path": "requests/health-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "job-save-v2-envelope", "path": "requests/job-save-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
@@ -136,6 +141,7 @@
     {"id": "ai-complete-ok-with-reason", "path": "responses/ai-complete-ok-with-reason.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "ai-complete-host-url", "path": "responses/ai-complete-host-url.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "legacy-import-received-too-many", "path": "responses/legacy-import-received-too-many.json", "requestType": "legacy.import", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
-    {"id": "resume-read-template-bearer-value", "path": "responses/resume-read-template-bearer-value.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "resume-read-template-bearer-value", "path": "responses/resume-read-template-bearer-value.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "handshake-v2-only", "path": "responses/handshake-v2-only.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}, "request": "requests/handshake-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}}
   ]
 }

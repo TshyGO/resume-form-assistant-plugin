@@ -9,6 +9,8 @@ const URL_FIELD_KEYS: &[&str] = &[
     "url_redacted",
     "dedupeurl",
     "dedupe_url",
+    "apiurl",
+    "api_url",
     "url",
 ];
 

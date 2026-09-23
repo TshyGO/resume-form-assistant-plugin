@@ -46,13 +46,19 @@ function constraintDoc(schema) {
 
 function typeExpr(schema, indent) {
   if (Array.isArray(schema.enum)) return schema.enum.map((v) => JSON.stringify(v)).join(" | ");
+  if (Array.isArray(schema.type) && schema.type.includes("null") && schema.type.length === 2) {
+    return `${typeExpr({ ...schema, type: schema.type.find((type) => type !== "null") }, indent)} | null`;
+  }
   switch (schema.type) {
     case "string": return "string";
     case "boolean": return "boolean";
     case "integer":
     case "number": return "number";
     case "array": return `${typeExpr(schema.items ?? {}, indent)}[]`;
-    case "object": return schema.properties ? objectBody(schema, indent) : "Record<string, unknown>";
+    case "object": return schema.properties ? objectBody(schema, indent)
+      : `Record<string, ${schema.additionalProperties && typeof schema.additionalProperties === "object"
+        ? typeExpr(schema.additionalProperties, indent) : "unknown"}>`;
+    case "null": return "null";
     default: return "unknown";
   }
 }
