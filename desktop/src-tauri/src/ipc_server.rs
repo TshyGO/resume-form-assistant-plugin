@@ -13,9 +13,23 @@ use std::sync::{Arc, Mutex};
 use archive_store::ArchiveStore;
 
 use local_ipc::{Endpoint, IpcError, Listener};
-use resume_pro_protocol::{CurrentArchive, ErrorCode, Request};
+use resume_pro_protocol::{CurrentArchive, ErrorCode, MessageType, Request};
 
 use crate::plugin_bridge::Answer;
+
+/// A list refresh. Emitted only after a write has committed. The window re-queries;
+/// this payload is not a row to insert.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationsChanged {
+    pub reason: &'static str,
+    pub message_type: &'static str,
+    pub application_id: Option<String>,
+    pub company: Option<String>,
+    pub title: Option<String>,
+    pub stage: Option<String>,
+    pub recycle_state: Option<String>,
+}
 
 /// The application as a caller can see it: who it is, and what it will commit.
 ///
@@ -30,6 +44,9 @@ pub trait Application: Send + Sync + 'static {
     fn apply(&self, _request: &Request) -> Result<Answer, ErrorCode> {
         Err(ErrorCode::Unavailable)
     }
+
+    /// The write is already durable. The default has no window to tell.
+    fn on_committed(&self, _notice: &ApplicationsChanged) {}
 }
 
 /// The archive this process currently has open.
@@ -39,11 +56,22 @@ pub trait Application: Send + Sync + 'static {
 /// closed or never-opened archive has neither an identity nor anywhere to commit.
 pub struct OpenArchive {
     store: Arc<Mutex<Option<ArchiveStore>>>,
+    notify: Option<Arc<dyn Fn(ApplicationsChanged) + Send + Sync>>,
 }
 
 impl OpenArchive {
     pub fn new(store: Arc<Mutex<Option<ArchiveStore>>>) -> Self {
-        Self { store }
+        Self { store, notify: None }
+    }
+
+    pub fn notifying(
+        store: Arc<Mutex<Option<ArchiveStore>>>,
+        notify: Arc<dyn Fn(ApplicationsChanged) + Send + Sync>,
+    ) -> Self {
+        Self {
+            store,
+            notify: Some(notify),
+        }
     }
 }
 
@@ -65,6 +93,12 @@ impl Application for OpenArchive {
         let guard = self.store.lock().map_err(|_| ErrorCode::Unavailable)?;
         let store = guard.as_ref().ok_or(ErrorCode::Unavailable)?;
         crate::plugin_bridge::apply(request, store)
+    }
+
+    fn on_committed(&self, notice: &ApplicationsChanged) {
+        if let Some(notify) = &self.notify {
+            notify(notice.clone());
+        }
     }
 }
 
@@ -141,6 +175,45 @@ pub fn start<A: Application>(
     })
 }
 
+/// Job, fill and explicit submission change the application list. Snapshot bytes and
+/// reads do not: an unfinished upload must not look like a saved application.
+fn list_notice(request: &Request, answer: &Answer) -> Option<ApplicationsChanged> {
+    if !matches!(
+        request.message_type,
+        MessageType::JobSave | MessageType::FillSubmit | MessageType::SubmitConfirm
+    ) {
+        return None;
+    }
+    let text = |key: &str| {
+        request
+            .payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let bound_id = text("applicationId");
+    let application_id = match request.message_type {
+        MessageType::JobSave => answer.result_id.clone().or(bound_id),
+        _ => bound_id,
+    };
+    let stage = match request.message_type {
+        MessageType::JobSave if request.payload.get("applicationId").and_then(serde_json::Value::as_str).is_none() => {
+            Some("saved".to_string())
+        }
+        MessageType::SubmitConfirm => Some("submitted".to_string()),
+        _ => None,
+    };
+    Some(ApplicationsChanged {
+        reason: "committed",
+        message_type: request.message_type.as_str(),
+        application_id,
+        company: text("company"),
+        title: text("title"),
+        stage,
+        recycle_state: Some("active".to_string()),
+    })
+}
+
 /// Answer frames on one connection until the peer closes it.
 ///
 /// The request is validated again here even though the host already did. The host is a
@@ -208,6 +281,11 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
         // a fact rather than an intention.
         Ok(request) => match application.apply(&request) {
             Ok(answer) => {
+                // apply returns only after the archive transaction has committed.
+                // A read, a failed write, and an unfinished upload do not reach this.
+                if let Some(notice) = list_notice(&request, &answer) {
+                    application.on_committed(&notice);
+                }
                 let mut response = serde_json::json!({
                     "protocolVersion": 1,
                     "correlationId": request.message_id,
@@ -544,5 +622,75 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "unavailable");
         assert!(response.get("resultId").is_none());
+    }
+
+    fn query_candidates(identity: &archive_store::ArchiveIdentity) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "protocolVersion": 1,
+            "messageId": "55555555-5555-4555-8555-555555555555",
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "application.queryCandidates",
+            "occurredAt": "2026-09-06T12:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": {
+                "company": "Synthetic Ltd",
+                "title": "Engineer",
+                "sourceUrl": "https://jobs.example.test/1"
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_committed_plugin_write_notifies_and_a_failed_or_unread_write_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&notices);
+        let app = OpenArchive::notifying(
+            Arc::clone(&shared),
+            Arc::new(move |notice| seen.lock().unwrap().push(notice)),
+        );
+
+        let reply = answer(&job_save(&identity), &app).unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(response["ok"], true, "response was {response}");
+        let id = response["resultId"].as_str().unwrap().to_string();
+        {
+            let got = notices.lock().unwrap();
+            assert_eq!(got.len(), 1, "the commit is the only reason to refresh");
+            assert_eq!(got[0].reason, "committed");
+            assert_eq!(got[0].message_type, "job.save");
+            assert_eq!(got[0].application_id.as_deref(), Some(id.as_str()));
+            assert_eq!(got[0].stage.as_deref(), Some("saved"));
+            assert_eq!(got[0].company.as_deref(), Some("Synthetic Ltd"));
+            assert_eq!(got[0].title.as_deref(), Some("Engineer"));
+        }
+        let found = shared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .query_candidates("Synthetic Ltd", "Engineer", Some("https://jobs.example.test/1"))
+            .unwrap();
+        assert_eq!(found.exact.len(), 1);
+        assert_eq!(found.exact[0].id, id);
+
+        let read = answer(&query_candidates(&identity), &app).unwrap();
+        let read_response: serde_json::Value = serde_json::from_slice(&read).unwrap();
+        assert_eq!(read_response["ok"], true, "response was {read_response}");
+        assert_eq!(notices.lock().unwrap().len(), 1, "a candidate query writes nothing");
+
+        let empty_notices = Arc::new(Mutex::new(0u32));
+        let empty_seen = Arc::clone(&empty_notices);
+        let empty = OpenArchive::notifying(
+            Arc::new(Mutex::new(None)),
+            Arc::new(move |_| *empty_seen.lock().unwrap() += 1),
+        );
+        let failed = answer(&job_save(&identity), &empty).unwrap();
+        let failed_response: serde_json::Value = serde_json::from_slice(&failed).unwrap();
+        assert_eq!(failed_response["ok"], false);
+        assert_eq!(*empty_notices.lock().unwrap(), 0);
     }
 }

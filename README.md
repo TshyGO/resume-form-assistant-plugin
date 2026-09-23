@@ -495,13 +495,13 @@ icons/                 插件图标
 
 ### 桌面程序连接（D07）
 
-装了 Resume Pro 桌面程序之后，侧边栏多出「保存岗位到本地」和「确认已投递」。**没装桌面程序时这两个按钮之外的一切照旧**：模板、AI 填写、手动取消都不依赖它。
+装了 Resume Pro 桌面程序之后，侧边栏多出「保存岗位到桌面端」和「确认已投递」。**没装桌面程序时这两个按钮之外的一切照旧**：模板、AI 填写、手动取消都不依赖它。点保存后先核对识别出的公司和岗位，确认后才写入桌面。
 
 几条不能含糊的规则，改这块代码前先看一眼：
 
 - **「待同步」不等于「桌面已保存」。** 只有桌面持久化并回了 `resultId`，界面才允许说已保存。全部文案集中在 [`link/copy.mjs`](link/copy.mjs)，`tests/link-degradation.test.js` 按 §9 降级矩阵逐行核对。
 - **「未安装」和「未配对」是两件事。** 装了但没配对时要说去桌面粘贴扩展 ID，不能说没装。
-- **队列有两层。** 用户确认了字段但桌面不在 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）；选好绑定谁之后 → Bound outbox（铸 `messageId`、盖当时的 `sourceRestoreEpoch`）。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加一个 `desktopFillRecords`（同样两层：未选申请的留档意图 → 选定之后才是 `fill.submit`）。
+- **队列有两层。** 桌面当时不在，或精确重复还没选定 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）。桌面在线且没有精确重复时，同一次保存会立刻写成 Bound outbox 并发送 `job.save`（新建，阶段是已保存，不是已投递）；有精确重复才问「使用已有 / 新建一条」。同公司的另一个岗位直接新建。Bound outbox 铸 `messageId`、盖当时的 `sourceRestoreEpoch`。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加一个 `desktopFillRecords`（同样两层：未选申请的留档意图 → 选定之后才是 `fill.submit`）。
 - **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联 / 丢弃 / 另存。
 - **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
 

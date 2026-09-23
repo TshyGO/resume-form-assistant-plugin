@@ -89,7 +89,7 @@ node scripts/nm-dev-register.mjs register --extension-id diagjmploldedipjdenmecm
 
 ## 确认连上了
 
-- 插件侧边栏出现「保存岗位到本地」和「确认已投递」；
+- 插件侧边栏出现「保存岗位到桌面端」和「确认已投递」；
 - 桌面窗口能看到数据进来；
 - 桌面端设置页的「Native Messaging」一项显示已注册。
 

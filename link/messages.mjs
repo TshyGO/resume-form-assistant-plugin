@@ -4,6 +4,7 @@
 export const MSG = {
   probe: 'DESKTOP_PROBE',
   saveJob: 'DESKTOP_SAVE_JOB',
+  continueSave: 'DESKTOP_CONTINUE_SAVE',
   candidates: 'DESKTOP_CANDIDATES',
   bind: 'DESKTOP_BIND',
   listQueue: 'DESKTOP_LIST_QUEUE',

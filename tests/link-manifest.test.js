@@ -68,7 +68,11 @@ test('the sidebar can import the extraction and copy modules', async () => {
 test('the sidebar offers saving a job and never formats desktop copy itself', async () => {
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   assert.match(source, /resume-pro-save-job/);
+  assert.match(source, /保存岗位到桌面端/);
   assert.match(source, /DESKTOP_SAVE_JOB/);
+  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('async function runJobAssist'));
+  assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
+  assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
   assert.match(source, /describeSaveResult/);
   assert.equal(source.includes('桌面已保存'), false);

@@ -268,12 +268,15 @@ const notConnected: Invoke = async () => {
 };
 const command: Invoke = invoke ?? notConnected;
 
-const applications = mountApplications(command);
-
 // 文件选择与拖放是宿主能力：这里注入真实实现，测试里注入假的。拖放事件带来的是用户
 // 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
+const applications = mountApplications(command, {
+  listen: events?.listen
+    ? (name, handler) => events.listen?.(name, (event) => handler({ payload: event?.payload }))
+    : undefined,
+});
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),

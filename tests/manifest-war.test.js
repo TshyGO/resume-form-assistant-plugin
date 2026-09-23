@@ -23,6 +23,7 @@ test("web_accessible_resources 保持人工审过的最小列表", () => {
       resources: [
         "link/copy.mjs",
         "link/extract.mjs",
+        "link/save-flow.mjs",
         "link/fillrecords.mjs",
         "link/limits.mjs",
         "link/redact.mjs",

@@ -174,7 +174,7 @@
         </details>
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__desktop">
-          <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到本地</button>
+          <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到桌面端</button>
           <button class="resume-pro__manager-button" id="resume-pro-confirm-submit" type="button">确认已投递</button>
           <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
             <label class="resume-pro__field">
@@ -195,15 +195,22 @@
             </label>
             <p class="resume-pro__save-note" id="resume-pro-save-note"></p>
             <div class="resume-pro__save-actions">
-              <button class="resume-pro__ai-button" type="submit">确认保存</button>
+              <button class="resume-pro__ai-button" type="submit">确认</button>
               <button class="resume-pro__manager-button" type="button" id="resume-pro-save-cancel">取消</button>
             </div>
           </form>
+          <div class="resume-pro__save-form" id="resume-pro-job-assist" hidden>
+            <p class="resume-pro__save-note" id="resume-pro-job-assist-note"></p>
+            <ul class="resume-pro__candidate-list" id="resume-pro-job-assist-fragments"></ul>
+            <div class="resume-pro__save-actions">
+              <button class="resume-pro__manager-button" type="button" id="resume-pro-job-assist-cancel">取消识别</button>
+            </div>
+          </div>
           <div class="resume-pro__candidates" id="resume-pro-candidates" hidden>
             <p class="resume-pro__save-note" id="resume-pro-candidates-note"></p>
             <div class="resume-pro__candidate-list" id="resume-pro-candidate-list"></div>
             <div class="resume-pro__save-actions">
-              <button class="resume-pro__ai-button" type="button" id="resume-pro-bind-new">新建一条申请</button>
+              <button class="resume-pro__ai-button" type="button" id="resume-pro-bind-new">新建一条</button>
               <button class="resume-pro__manager-button" type="button" id="resume-pro-bind-later">稍后再说</button>
             </div>
           </div>
@@ -1945,6 +1952,10 @@
 
   let desktopModules = null;
   let pendingFields = null;
+  let saveInFlight = false;
+  let assistToken = 0;
+  let assistRequestId = null;
+  let assistFallback = null;
   // The finished fill the card is offering to archive, and a copy of the template it used.
   // Held only until the user answers; the template copy leaves only if the box is ticked.
   let pendingFill = null;
@@ -1952,13 +1963,14 @@
 
   async function loadDesktopModules() {
     if (!desktopModules) {
-      const [extract, copy, fillrecords, snapshot] = await Promise.all([
+      const [extract, copy, fillrecords, snapshot, saveFlow] = await Promise.all([
         import(chrome.runtime.getURL("link/extract.mjs")),
         import(chrome.runtime.getURL("link/copy.mjs")),
         import(chrome.runtime.getURL("link/fillrecords.mjs")),
-        import(chrome.runtime.getURL("link/snapshot.mjs"))
+        import(chrome.runtime.getURL("link/snapshot.mjs")),
+        import(chrome.runtime.getURL("link/save-flow.mjs"))
       ]);
-      desktopModules = { extract, copy, fillrecords, snapshot };
+      desktopModules = { extract, copy, fillrecords, snapshot, saveFlow };
     }
     return desktopModules;
   }
@@ -1967,6 +1979,7 @@
     sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
     sidebar.querySelector("#resume-pro-confirm-submit")?.addEventListener("click", handleConfirmSubmitClick);
     sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
+    sidebar.querySelector("#resume-pro-job-assist-cancel")?.addEventListener("click", cancelJobAssist);
     sidebar.querySelector("#resume-pro-fill-record-save")?.addEventListener("click", handleRecordFillClick);
     sidebar.querySelector("#resume-pro-fill-record-skip")?.addEventListener("click", closeFillRecord);
     sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
@@ -1978,27 +1991,127 @@
 
   async function handleSaveJobClick() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form) return;
+    if (!form || saveInFlight) return;
+    const token = ++assistToken;
+    saveInFlight = true;
+    const button = shadowRoot.querySelector("#resume-pro-save-job");
+    if (button) button.disabled = true;
+    setDesktopStatus(null);
 
     try {
-      const { extract } = await loadDesktopModules();
-      const fields = extract.extractJobFields(document, location.href);
-      form.querySelector("#resume-pro-save-company").value = fields.company;
-      form.querySelector("#resume-pro-save-title").value = fields.title;
-      form.querySelector("#resume-pro-save-location").value = fields.location;
-      form.querySelector("#resume-pro-save-url").value = fields.sourceUrl;
-      pendingFields = fields;
-      const note = form.querySelector("#resume-pro-save-note");
-      // Blanks are expected: nothing is guessed. Saying so is what stops a user from
-      // assuming the extension already knows the employer.
-      note.textContent = fields.company
-        ? "请核对，缺的可以自己补。"
-        : "这个页面没有声明公司名，请手动填写；插件不会替你猜。";
-      form.hidden = false;
-      setDesktopStatus(null);
+      const { extract, saveFlow, copy } = await loadDesktopModules();
+      const extraction = extract.extractJobFields(document, location.href);
+      const step = saveFlow.nextSaveStep(extraction);
+      if (step.action === "commit") {
+        openSaveForm(step.fields, copy.describeReviewSave());
+        return;
+      }
+      if (step.action === "assist") {
+        const config = state.currentStore?.aiConfig;
+        if (!config?.apiUrl || !config?.model || !config?.apiKey) {
+          openSaveForm(step.fields, copy.describeManualSave("unconfigured"));
+          return;
+        }
+        assistFallback = step.fields;
+        const outcome = await runJobAssist(config, step.fragments, step.fields, token);
+        if (token !== assistToken || outcome.action === "ignore") return;
+        const { copy: wording } = await loadDesktopModules();
+        openSaveForm(outcome.fields, outcome.action === "commit" ? wording.describeReviewSave() : outcome.note);
+        return;
+      }
+      const { copy: wording } = await loadDesktopModules();
+      openSaveForm(step.fields, wording.describeManualSave(step.reason));
     } catch (error) {
       setDesktopStatus({ tone: "warn", text: "读取页面信息失败，请手动填写后再保存。" });
+      openSaveForm(
+        { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" },
+        "读取页面信息失败，请手动填写。"
+      );
+    } finally {
+      saveInFlight = false;
+      if (button) button.disabled = false;
     }
+  }
+
+  async function runJobAssist(config, fragments, fallback, token) {
+    const { saveFlow, copy } = await loadDesktopModules();
+    const disclosure = saveFlow.assistDisclosure(config, fragments);
+    const described = copy.describeJobAssist(disclosure);
+    showJobAssist(described);
+    const requestId = newRequestId();
+    assistRequestId = requestId;
+    let reply;
+    let timer;
+    try {
+      reply = await Promise.race([
+        self.ResumeProAIClient.send({
+          type: "AI_EXTRACT_JOB",
+          requestId,
+          aiConfig: {
+            apiUrl: config.apiUrl,
+            model: config.model,
+            apiKey: config.apiKey
+          },
+          fragments
+        }),
+        new Promise(resolve => {
+          timer = setTimeout(() => {
+            self.ResumeProAIClient.cancel(requestId);
+            resolve({ status: "manual", reason: "timeout", reliable: false, fields: {} });
+          }, 25000);
+        })
+      ]);
+    } catch {
+      reply = { status: "manual", reason: "network", reliable: false, fields: {} };
+    } finally {
+      clearTimeout(timer);
+      if (assistRequestId === requestId) assistRequestId = null;
+      hideJobAssist();
+    }
+    if (token !== assistToken) return { action: "ignore" };
+    const after = saveFlow.afterAssist(reply, fallback);
+    if (after.action === "form") after.note = copy.describeManualSave(after.reason);
+    return after;
+  }
+
+  function showJobAssist(described) {
+    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
+    if (!panel) return;
+    panel.querySelector("#resume-pro-job-assist-note").textContent = described.text;
+    const list = panel.querySelector("#resume-pro-job-assist-fragments");
+    list.textContent = "";
+    for (const line of described.fragments || []) {
+      const item = document.createElement("li");
+      item.textContent = line;
+      list.appendChild(item);
+    }
+    panel.hidden = false;
+  }
+
+  function hideJobAssist() {
+    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
+    if (panel) panel.hidden = true;
+  }
+
+  function cancelJobAssist() {
+    assistToken += 1;
+    if (assistRequestId) self.ResumeProAIClient.cancel(assistRequestId);
+    hideJobAssist();
+    loadDesktopModules().then(({ copy }) => {
+      openSaveForm(assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" }, copy.describeManualSave("cancelled"));
+    });
+  }
+
+  function openSaveForm(fields, note) {
+    const form = shadowRoot?.querySelector("#resume-pro-save-form");
+    if (!form) return;
+    pendingFields = fields;
+    form.querySelector("#resume-pro-save-company").value = fields.company || "";
+    form.querySelector("#resume-pro-save-title").value = fields.title || "";
+    form.querySelector("#resume-pro-save-location").value = fields.location || "";
+    form.querySelector("#resume-pro-save-url").value = fields.sourceUrl || "";
+    form.querySelector("#resume-pro-save-note").textContent = note;
+    form.hidden = false;
   }
 
   // Confirming a submission is its own act: it has nothing to do with whether the AI fill
@@ -2126,7 +2239,7 @@
     showFillCandidates(options, {
       note: options.length
         ? "这次填写属于哪条申请？"
-        : "桌面里还没有这家公司的申请。可以先「保存岗位到本地」，或者稍后在待同步里选择。",
+        : "桌面里还没有这家公司的申请。可以先「保存岗位到桌面端」，或者稍后在待同步里选择。",
       onPick: applicationId => recordFill(raw, applicationId, snapshotTemplate),
       onLater: () => recordFill(raw, null, snapshotTemplate)
     });
@@ -2230,12 +2343,14 @@
   function closeSaveForm() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
     if (form) form.hidden = true;
+    hideJobAssist();
     pendingFields = null;
+    assistFallback = null;
   }
 
   async function submitSaveForm({ force }) {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form) return;
+    if (!form || saveInFlight) return;
 
     const fields = {
       company: form.querySelector("#resume-pro-save-company").value.trim(),
@@ -2246,7 +2361,17 @@
       sourceUrl: pendingFields?.sourceUrl || "",
       dedupeUrl: pendingFields?.dedupeUrl || ""
     };
+    saveInFlight = true;
+    try {
+      await commitSave(fields, { force });
+    } finally {
+      saveInFlight = false;
+    }
+  }
 
+  // The click, the corrected form and "完成保存" all end here. A live desktop with no exact
+  // duplicate is written in this call. Same-company other jobs are not a second question.
+  async function commitSave(fields, { force }) {
     const { copy } = await loadDesktopModules();
     let result;
     try {
@@ -2254,69 +2379,71 @@
     } catch (error) {
       result = { status: "error" };
     }
+    presentSaveResult(copy, result);
+  }
 
-    setDesktopStatus(copy.describeSaveResult(result ?? { status: "error" }));
-    if (result?.status === "queued") {
+  async function continueIntent(intentId) {
+    const { copy } = await loadDesktopModules();
+    let result;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_CONTINUE_SAVE", intentId });
+    } catch (error) {
+      result = { status: "error" };
+    }
+    presentSaveResult(copy, result);
+  }
+
+  function presentSaveResult(copy, result) {
+    if (result?.status === "needs_choice") {
       closeSaveForm();
-      if (result.mode === "ready") {
-        await offerCandidates(result.intent.intentId);
-      }
+      showExactChoice(result.intent.intentId, result.exact || []);
+      refreshPendingList();
+      return;
+    }
+    setDesktopStatus(describeCommit(copy, result ?? { status: "error" }));
+    if (result?.status === "saved" || result?.status === "pending" || result?.status === "queued" || result?.status === "duplicate") {
+      closeSaveForm();
     }
     refreshPendingList();
   }
 
-  // Two layers, per §7. The exact layer is "this may be the same posting again"; the
-  // same-company layer is a hint and nothing more. Neither ever binds on its own — the
-  // default is always a new application.
-  async function offerCandidates(intentId) {
+  function describeCommit(copy, result) {
+    if (result?.status === "saved" || result?.status === "pending" || result?.status === "failed") {
+      return copy.describeBindResult(result);
+    }
+    if (result?.status === "duplicate" && result?.reason === "already_queued") {
+      return copy.describeBindResult(result);
+    }
+    if (result?.status === "rejected" && ["unknown_intent", "no_identity", "awaiting_reconcile", "not_paused"].includes(result.reason)) {
+      return copy.describeBindResult(result);
+    }
+    return copy.describeSaveResult(result);
+  }
+
+  // Exact duplicate only. Another title at the same company never reaches this box.
+  function showExactChoice(intentId, exact) {
     const box = shadowRoot?.querySelector("#resume-pro-candidates");
     const list = shadowRoot?.querySelector("#resume-pro-candidate-list");
     if (!box || !list) return;
-
-    let result;
-    try {
-      result = await chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES", intentId });
-    } catch {
-      return;
-    }
-    if (result?.status !== "ok") return;
-
     list.textContent = "";
-    const note = shadowRoot.querySelector("#resume-pro-candidates-note");
-    const total = result.exact.length + result.sameCompany.length;
-    note.textContent = total
-      ? "桌面里有相关的申请。要绑定到已有的哪一条，还是新建？默认新建。"
-      : "桌面里没有相关的申请，确认后会新建一条。";
-
-    appendCandidateGroup(list, "可能是同一岗位的重复投递", result.exact, intentId);
-    appendCandidateGroup(list, "同公司的其他岗位（仅供参考）", result.sameCompany, intentId);
-
+    shadowRoot.querySelector("#resume-pro-candidates-note").textContent =
+      "这可能是同一个岗位。要使用已有申请，还是新建一条？";
+    for (const candidate of exact) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "resume-pro__candidate";
+      row.textContent = `使用已有：${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`;
+      row.addEventListener("click", () => bindIntent(intentId, candidate.applicationId));
+      list.appendChild(row);
+    }
     box.hidden = false;
     const bindNew = shadowRoot.querySelector("#resume-pro-bind-new");
     bindNew.hidden = false;
     bindNew.onclick = () => bindIntent(intentId, null);
     shadowRoot.querySelector("#resume-pro-bind-later").onclick = () => {
-      // §5.2.4: cancelling the picker keeps the intent pending. Nothing is bound and nothing
-      // is discarded.
       box.hidden = true;
+      setDesktopStatus({ tone: "pending", text: "已记下，尚未写入桌面。可以稍后在待同步里完成保存。" });
     };
-  }
-
-  function appendCandidateGroup(list, heading, candidates, intentId) {
-    if (!candidates.length) return;
-    const title = document.createElement("p");
-    title.className = "resume-pro__save-note";
-    title.textContent = heading;
-    list.appendChild(title);
-
-    for (const candidate of candidates) {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "resume-pro__candidate";
-      row.textContent = `${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`;
-      row.addEventListener("click", () => bindIntent(intentId, candidate.applicationId));
-      list.appendChild(row);
-    }
   }
 
   async function bindIntent(intentId, applicationId) {
@@ -2408,9 +2535,7 @@
         intent.fields.sourceUrl,
         intent.status === "pending_bind" ? "待绑定申请" : "待同步（尚未绑定申请）"
       );
-      if (intent.status === "pending_bind") {
-        row.appendChild(rowButton("选择绑定", () => offerCandidates(intent.intentId)));
-      }
+      row.appendChild(rowButton("完成保存", () => continueIntent(intent.intentId)));
       row.appendChild(rowButton("删除", async () => {
         await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_INTENT", intentId: intent.intentId });
         refreshPendingList();

@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub use cli::prepare_stdio;
 
@@ -1450,9 +1450,15 @@ pub fn run() {
                     }
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
-                    let application = Arc::new(ipc_server::OpenArchive::new(Arc::clone(
-                        &app.state::<AppState>().store,
-                    )));
+                    let handle = app.handle().clone();
+                    let application = Arc::new(ipc_server::OpenArchive::notifying(
+                        Arc::clone(&app.state::<AppState>().store),
+                        Arc::new(move |notice| {
+                            // The list re-queries. Emitting before the commit, or when the
+                            // write failed, would show a row the archive does not have.
+                            let _ = handle.emit("applications-changed", &notice);
+                        }),
+                    ));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
                             eprintln!("ipc: serving on {}", service.endpoint());

@@ -18,6 +18,12 @@ export function describeSaveResult(result) {
         text: '已记为待同步（尚未绑定申请）。桌面程序的协议版本和插件对不上，升级之后才能同步。'
       };
     }
+    if (reason === 'candidates_unavailable') {
+      return {
+        tone: 'pending',
+        text: '还没能核对是不是同一个岗位，这次没有写入桌面。已记为待同步，稍后再完成保存。'
+      };
+    }
     return {
       tone: 'pending',
       text: '已记为待同步（尚未绑定申请）。桌面程序可用之后再选择绑定到哪条申请。'
@@ -82,6 +88,50 @@ const REFUSALS = {
   identity_not_allowed: '桌面还没有配对这个插件，这次没有保存。',
   protocol_incompatible: '桌面程序的版本和插件对不上，升级之后再试。'
 };
+
+const MANUAL_SAVE = {
+  unconfigured: '插件还没有配置 AI 接口。请补全公司和岗位后再保存，不会猜测。',
+  no_fragments: '这个页面没有可用的岗位片段。请手动填写公司和岗位。',
+  cancelled: '已取消识别。请手动补正。这次不会自动再请求。',
+  timeout: '识别超时。请手动补正。这次不会自动再请求。',
+  network: '识别接口没有连上。请手动补正。这次不会自动再请求。',
+  format: '识别结果无法使用。请手动补正。这次不会自动再请求。',
+  no_evidence: '识别结果对不上页面上的文字。请手动补正，不会保存猜出来的字段。',
+  missing_company: '公司名还不确定。请核对后再保存。',
+  missing_title: '岗位名还不确定。请核对后再保存。',
+  in_flight: '上一次识别还没结束。请先取消，不会自动再请求。'
+};
+
+const ASSIST_SOURCE = {
+  'beisen-company': '公司名称',
+  'beisen-apply-title': '职位标题',
+  'jobposting-company': '招聘元数据 · 公司',
+  'jobposting-title': '招聘元数据 · 岗位',
+  'jobposting-location': '招聘元数据 · 工作地点',
+  'og:title': '页面标题',
+  h1: '页面标题',
+  'document.title': '页面标题'
+};
+
+export function describeReviewSave() {
+  return '请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。';
+}
+
+export function describeManualSave(reason) {
+  return MANUAL_SAVE[reason] || '请核对公司和岗位。缺的请自己补上，插件不会猜。';
+}
+
+export function describeJobAssist(disclosure) {
+  const lines = (disclosure?.fragments || []).map(fragment => {
+    const label = ASSIST_SOURCE[fragment.source] || '页面片段';
+    return `${fragment.id}. ${label}：${fragment.text}`;
+  });
+  return {
+    tone: 'info',
+    text: `正在用插件里配置的接口识别岗位：${disclosure?.origin || '已配置的接口'}，模型 ${disclosure?.model || ''}。下面这些片段会发往该接口。不发送整页、简历、表单里填写的个人信息、Cookie 或原始链接。`,
+    fragments: lines
+  };
+}
 
 export function describeBindResult(result) {
   const { status, code, reason } = result ?? {};

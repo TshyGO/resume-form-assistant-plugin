@@ -28,6 +28,20 @@ function dispatchAiMessage(message, sender, sendResponse) {
     sendResponse({ cancelled: Boolean(controller) });
     return false;
   }
+  if (message?.type === "AI_EXTRACT_JOB") {
+    const key = fillRequestKey(message, sender);
+    if (activeFillRequests.has(key)) {
+      sendResponse({ status: "manual", reason: "in_flight", reliable: false, fields: { company: "", title: "", location: "" } });
+      return false;
+    }
+    const controller = new AbortController();
+    activeFillRequests.set(key, controller);
+    handleExtractJob(message, controller)
+      .then(sendResponse)
+      .catch(() => sendResponse({ status: "manual", reason: "network", reliable: false, fields: { company: "", title: "", location: "" } }))
+      .finally(() => activeFillRequests.delete(key));
+    return true;
+  }
   if (message?.type === "AI_FILL" || message?.type === "AI_PLAN_REPEAT") {
     const key = fillRequestKey(message, sender);
     if (activeFillRequests.has(key)) {
@@ -60,6 +74,16 @@ function dispatchAiMessage(message, sender, sendResponse) {
 self.onmessage = ({ data }) => {
   dispatchAiMessage(data.message, data.sender, reply => self.postMessage({ id: data.id, reply }));
 };
+
+async function handleExtractJob(message, controller) {
+  const mod = await import(chrome.runtime.getURL("link/job-extract.mjs"));
+  return mod.requestJobExtract({
+    fetchImpl: globalThis.fetch.bind(globalThis),
+    aiConfig: message.aiConfig,
+    fragments: message.fragments,
+    signal: controller.signal
+  });
+}
 
 async function handleRepeatPlan(message, controller) {
   const config = normalizeAiConfig(message.aiConfig);

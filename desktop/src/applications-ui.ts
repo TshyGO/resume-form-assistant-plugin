@@ -44,7 +44,15 @@ function invokeError(err: unknown) {
   return String(err);
 }
 
-export function mountApplications(invoke: Invoke) {
+type Listen = (
+  event: string,
+  handler: (event: { payload?: unknown }) => void,
+) => void | Promise<unknown>;
+
+export function mountApplications(
+  invoke: Invoke,
+  options: { listen?: Listen; searchDebounceMs?: number; coalesceMs?: number } = {},
+) {
   const ctl = createApplicationsController();
   const msg = must("apps-msg");
   const empty = must("apps-empty");
@@ -63,6 +71,13 @@ export function mountApplications(invoke: Invoke) {
   let detailToken = 0;
   let detailTab = "timeline";
   const progressKinds: Record<string, string> = { interview: "面试", assessment: "测评", offer: "Offer", rejected: "未通过", withdrawn: "撤回", closed: "结束申请" };
+  const searchDebounceMs = options.searchDebounceMs ?? 250;
+  const coalesceMs = options.coalesceMs ?? 80;
+  let listed: ApplicationSummary[] = [];
+  let committedNotices: Array<Record<string, unknown>> = [];
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+  let composing = false;
 
   function setFormBusy(busy: boolean) {
     form
@@ -149,6 +164,7 @@ export function mountApplications(invoke: Invoke) {
     try {
       const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", { args });
       if (!ctl.isCurrent(token)) return;
+      listed = page.items;
       const lastOffset = page.total ? Math.floor((page.total - 1) / ctl.limit) * ctl.limit : 0;
       if (ctl.offset > lastOffset) { ctl.setOffset(lastOffset); return refreshList(); }
       msg.textContent = page.total ? `共 ${page.total} 条` : "";
@@ -177,10 +193,44 @@ export function mountApplications(invoke: Invoke) {
         ctl.setSelected(null);
         detail.innerHTML = `<p class="muted">当前申请不在此列表过滤中。</p>`;
       }
+      showFreshHint();
     } catch (err) {
       if (!ctl.isCurrent(token)) return;
       msg.textContent = invokeError(err);
     }
+  }
+
+  function showFreshHint() {
+    const fresh = must("apps-fresh");
+    const filters = filterArgs();
+    const visible = new Set(listed.map((item) => item.id));
+    const hidden = committedNotices.filter((notice) => {
+      const id = String(notice.applicationId || "");
+      if (!id || visible.has(id)) return false;
+      const stage = String(notice.stage || "");
+      const recycle = String(notice.recycleState || "active");
+      const query = String(filters.query || "").toLowerCase();
+      const haystack = `${notice.company || ""} ${notice.title || ""}`.toLowerCase();
+      const stageMiss = filters.stage !== "all" && Boolean(stage) && filters.stage !== stage;
+      const recycleMiss = filters.recycle !== "all" && filters.recycle !== recycle;
+      const queryMiss = Boolean(query) && !haystack.includes(query);
+      const filtered = Boolean(filters.query) || filters.stage !== "all" || filters.recycle !== "active";
+      if (!filtered && ctl.offset === 0) return false;
+      return stageMiss || recycleMiss || queryMiss || filtered;
+    });
+    committedNotices = hidden.slice(-10);
+    fresh.hidden = hidden.length === 0;
+  }
+
+  function noteCommitted(payload: unknown) {
+    const notice = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+    if (!notice || notice.reason !== "committed") return;
+    committedNotices.push(notice);
+    if (coalesceTimer) clearTimeout(coalesceTimer);
+    coalesceTimer = setTimeout(() => {
+      coalesceTimer = null;
+      void refreshList();
+    }, coalesceMs);
   }
 
   async function loadDetail(id: string) {
@@ -555,19 +605,59 @@ export function mountApplications(invoke: Invoke) {
     ctl.setOffset(ctl.offset + ctl.limit);
     await refreshList();
   });
-  ["app-search", "app-stage", "app-recycle", "app-sort"].forEach((id) => {
+  ["app-stage", "app-recycle", "app-sort"].forEach((id) => {
     must(id).addEventListener("change", async () => {
       ctl.setOffset(0);
       await refreshList();
     });
   });
-  must("app-search").addEventListener("keydown", async (event: KeyboardEvent) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      ctl.setOffset(0);
-      await refreshList();
+  function queueSearch(immediate: boolean) {
+    const query = input("app-search").value.trim();
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
     }
+    const run = () => {
+      searchTimer = null;
+      ctl.setOffset(0);
+      return refreshList();
+    };
+    if (immediate || !query) return run();
+    searchTimer = setTimeout(() => { void run(); }, searchDebounceMs);
+    return undefined;
+  }
+  const search = must("app-search");
+  search.addEventListener("compositionstart", () => { composing = true; });
+  search.addEventListener("compositionend", () => {
+    composing = false;
+    void queueSearch(false);
   });
+  search.addEventListener("input", () => {
+    if (composing) return;
+    void queueSearch(false);
+  });
+  search.addEventListener("search", () => {
+    if (composing) return;
+    void queueSearch(true);
+  });
+  search.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    composing = false;
+    void queueSearch(true);
+  });
+  must("apps-fresh-clear").addEventListener("click", async () => {
+    input("app-search").value = "";
+    selectEl("app-stage").value = "all";
+    selectEl("app-recycle").value = "active";
+    ctl.setOffset(0);
+    committedNotices = [];
+    must("apps-fresh").hidden = true;
+    await refreshList();
+  });
+  if (options.listen) {
+    void Promise.resolve(options.listen("applications-changed", (event) => noteCommitted(event?.payload))).catch(() => {});
+  }
   document.addEventListener("keydown", (event) => {
     if (event.key === "n" && event.target === document.body && !ctl.saving && !progressDialog.open) {
       ctl.setEditing(null);
