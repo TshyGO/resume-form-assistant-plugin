@@ -116,3 +116,119 @@ fn a_template_reads_back_whole() {
     assert_eq!(db.get_template(&t.id).unwrap(), Some(t));
     assert_eq!(db.get_template("missing").unwrap(), None);
 }
+
+#[test]
+fn reimport_replaces_groups_reports_the_old_count_and_becomes_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let a = db.create_template("a", vec![group("g", vec![field("k1", "v"), field("k2", "v")])]).unwrap();
+    let b = db.create_template("b", vec![group("g", vec![field("k", "v")])]).unwrap();
+    assert_eq!(db.resume_overview().unwrap().active_template_id.as_deref(), Some(b.id.as_str()));
+    let (updated, previous) = db
+        .replace_template_groups(&a.id, vec![group("新", vec![field("x", "1"), field("y", "2"), field("z", "3")])])
+        .unwrap();
+    assert_eq!(previous, 2);
+    assert_eq!(updated.name, "a");
+    assert_eq!(updated.groups[0].name, "新");
+    let overview = db.resume_overview().unwrap();
+    assert_eq!(overview.active_template_id.as_deref(), Some(a.id.as_str()));
+    assert_eq!(overview.templates.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["b", "a"]);
+}
+
+#[test]
+fn a_failed_reimport_leaves_the_template_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let a = db.create_template("a", vec![group("g", vec![field("k", "v")])]).unwrap();
+    assert!(db.replace_template_groups(&a.id, vec![]).is_err());
+    assert_eq!(db.get_template(&a.id).unwrap().unwrap().groups, a.groups);
+}
+
+#[test]
+fn renaming_refuses_a_name_already_in_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let one = vec![group("g", vec![field("k", "v")])];
+    let a = db.create_template("a", one.clone()).unwrap();
+    db.create_template("b", one).unwrap();
+    let err = db.rename_template(&a.id, " b ").unwrap_err();
+    assert!(matches!(err, StoreError::Validation(m) if m.contains("已有同名模板「b」")));
+    assert_eq!(db.rename_template(&a.id, "a").unwrap().name, "a");
+    assert_eq!(db.rename_template(&a.id, "新名").unwrap().name, "新名");
+}
+
+#[test]
+fn deleting_the_current_template_falls_back_to_the_first_remaining() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let one = vec![group("g", vec![field("k", "v")])];
+    let a = db.create_template("a", one.clone()).unwrap();
+    let b = db.create_template("b", one.clone()).unwrap();
+    let c = db.create_template("c", one).unwrap();
+    db.set_active_template(&b.id).unwrap();
+    db.delete_template(&b.id).unwrap();
+    assert_eq!(db.resume_overview().unwrap().active_template_id.as_deref(), Some(c.id.as_str()));
+    db.delete_template(&c.id).unwrap();
+    db.delete_template(&a.id).unwrap();
+    assert_eq!(db.resume_overview().unwrap().active_template_id, None);
+    assert!(matches!(db.delete_template(&a.id), Err(StoreError::NotFound(_))));
+}
+
+#[test]
+fn switching_to_a_missing_template_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    assert!(matches!(db.set_active_template("nope"), Err(StoreError::NotFound(_))));
+}
+
+#[test]
+fn the_profile_starts_empty_and_saves_with_a_revision_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let first = db.get_profile().unwrap();
+    assert_eq!(first.revision, 0);
+    assert_eq!(first.profile, empty_profile());
+    let profile = serde_json::json!({
+        "values": { "name": "张三" },
+        "family": [{ "relation": "父亲", "name": "张大" }],
+        "custom": [{ "key": "户籍派出所", "value": "" }]
+    });
+    let saved = db.save_profile(profile.clone(), 0).unwrap();
+    assert_eq!(saved.revision, 1);
+    assert_eq!(db.get_profile().unwrap().profile, profile);
+    let err = db.save_profile(empty_profile(), 0).unwrap_err();
+    assert!(matches!(err, StoreError::Conflict(_)));
+    assert_eq!(db.get_profile().unwrap().profile, profile);
+}
+
+#[test]
+fn a_malformed_profile_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    for bad in [
+        serde_json::json!([]),
+        serde_json::json!({ "values": { "name": 1 }, "family": [], "custom": [] }),
+        serde_json::json!({ "values": {}, "family": [1], "custom": [] }),
+        serde_json::json!({ "values": {}, "family": [], "custom": [{ "key": "k" }] }),
+        serde_json::json!({ "values": {}, "family": [], "custom": [], "apiKey": "x" }),
+    ] {
+        assert!(matches!(db.save_profile(bad, 0), Err(StoreError::Validation(_))));
+    }
+    let many: Vec<_> = (0..=MAX_CUSTOM_FIELDS).map(|i| serde_json::json!({ "key": format!("k{i}"), "value": "" })).collect();
+    let err = db.save_profile(serde_json::json!({ "values": {}, "family": [], "custom": many }), 0).unwrap_err();
+    assert!(matches!(err, StoreError::Validation(m) if m.contains("最多 200 个")));
+}
+
+#[test]
+fn templates_and_profile_survive_reopening() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = {
+        let db = open(dir.path());
+        let t = db.create_template("t", vec![group("g", vec![field("k", "v")])]).unwrap();
+        db.save_profile(serde_json::json!({ "values": { "name": "张三" }, "family": [], "custom": [] }), 0).unwrap();
+        t.id
+    };
+    let db = open(dir.path());
+    assert_eq!(db.resume_overview().unwrap().active_template_id.as_deref(), Some(id.as_str()));
+    assert_eq!(db.get_profile().unwrap().revision, 1);
+}
