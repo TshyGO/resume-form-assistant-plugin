@@ -38,6 +38,16 @@
   const fieldHighlightTimers = new WeakMap();
   const chipSelectionIdsByTarget = new WeakMap();
   const chipWriteTargets = new WeakSet();
+  const textFillFailures = new WeakMap();
+  // 给页面自己的校验留一点时间。短到不拖慢整表，长过常见的几十毫秒回滚。
+  let textCommitWaitMs = 100;
+  const TEXT_FILL_FAILURE_LABELS = {
+    value_not_committed: "值没有写上",
+    value_reverted: "值被页面退回",
+    element_disconnected: "字段已被页面替换",
+    validation_not_cleared: "页面仍提示无效",
+    framework_state_unsynced: "页面表单状态未同步"
+  };
   let shadowRoot = null;
   const state = {
     dragOffsetX: 0,
@@ -923,7 +933,8 @@
         }
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
-          filled = element.element.isConnected && element.element.value === match.value;
+          filled = element.element.isConnected
+            && String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value);
         }
 
         const fieldMeta = fieldMetaMap.get(match.fieldId);
@@ -945,7 +956,9 @@
         } else if (assisted) {
           unconfirmedCount += 1;
         } else {
-          unfilledLabels.push(fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段");
+          const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段";
+          const why = textFillFailureLabel(element);
+          unfilledLabels.push(why ? `${label}（${why}）` : label);
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -1300,6 +1313,325 @@
       && !(isPlaceholder && isPlaceholder({ value: option.value, text: option.text, disabled: option.disabled })));
   }
 
+  function isTextControl(element) {
+    if (element instanceof HTMLTextAreaElement) {
+      return true;
+    }
+    if (!(element instanceof HTMLInputElement)) {
+      return false;
+    }
+    const type = String(element.type || "text").toLowerCase();
+    return !["checkbox", "radio", "file", "button", "submit", "reset", "image", "hidden", "range", "color", "date", "month", "datetime-local", "time", "week"].includes(type);
+  }
+
+  function prefersSequentialInput(element) {
+    if (!(element instanceof HTMLInputElement)) {
+      return false;
+    }
+    const type = String(element.type || "").toLowerCase();
+    if (type === "tel" || type === "email" || type === "number") {
+      return true;
+    }
+    const hint = `${element.name || ""} ${element.id || ""} ${element.getAttribute?.("autocomplete") || ""} ${element.getAttribute?.("inputmode") || ""}`.toLowerCase();
+    return /tel|phone|mobile|email|e-mail|idcard|id-card|identity|shenfen|身份证/.test(hint);
+  }
+
+  function writeControlValue(element, value) {
+    const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
+    if (descriptor?.set) {
+      descriptor.set.call(element, value);
+    } else {
+      element.value = value;
+    }
+  }
+
+  function dispatchTextInput(element, data) {
+    const text = String(data ?? "");
+    try {
+      if (typeof InputEvent === "function") {
+        element.dispatchEvent(new InputEvent("input", {
+          bubbles: true,
+          inputType: "insertText",
+          data: text
+        }));
+        return;
+      }
+    } catch (_) {
+      // 旧环境构造 InputEvent 会抛，退回普通 Event。
+    }
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function focusControl(element) {
+    try {
+      if (typeof element.focus === "function") {
+        try {
+          element.focus({ preventScroll: true });
+        } catch (_) {
+          element.focus();
+        }
+        return;
+      }
+    } catch (_) {
+      // focus() 不可用时下面补一个事件。
+    }
+    try {
+      element.dispatchEvent(new FocusEvent("focus", { bubbles: false }));
+    } catch (_) {
+      // 没有 FocusEvent 时不再额外发事件。
+    }
+  }
+
+  function blurControl(element) {
+    try {
+      if (typeof element.blur === "function") {
+        element.blur();
+        return;
+      }
+    } catch (_) {
+      // blur() 不可用时下面补一个事件。
+    }
+    try {
+      element.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    } catch (_) {
+      // 没有 FocusEvent 时不再额外发事件。
+    }
+  }
+
+  function nextTask() {
+    if (textCommitWaitMs <= 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
+
+  // 先让 focus 引起的页面更新结束，再写值并通知输入事件。
+  // 如果先写值，受控表单可能在 focus 后按旧状态重绘，把值清空。
+  async function runTextLifecycle(element, value, sequential) {
+    focusControl(element);
+    await nextTask();
+    if (!sequential) {
+      writeControlValue(element, value);
+      dispatchTextInput(element, value);
+    } else {
+      writeControlValue(element, "");
+      dispatchTextInput(element, "");
+      let built = "";
+      for (const char of Array.from(value)) {
+        built += char;
+        writeControlValue(element, built);
+        dispatchTextInput(element, char);
+      }
+    }
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTask();
+    blurControl(element);
+  }
+
+  // 用户不用改字，点一下输入框再点空白，提示就会消失。校验还在时照这个再做一次。
+  async function replayFocusBlur(element) {
+    focusControl(element);
+    await nextTask();
+    blurControl(element);
+  }
+
+  function classText(node) {
+    if (!node) {
+      return "";
+    }
+    if (typeof node.className === "string") {
+      return node.className;
+    }
+    if (node.classList && typeof node.classList.values === "function") {
+      return Array.from(node.classList.values()).join(" ");
+    }
+    return "";
+  }
+
+  function isShown(node) {
+    let current = node;
+    while (current && current !== document) {
+      if (current.hidden) {
+        return false;
+      }
+      const hidden = current.getAttribute?.("hidden");
+      if (hidden != null && hidden !== "false") {
+        return false;
+      }
+      if (current.getAttribute?.("aria-hidden") === "true") {
+        return false;
+      }
+      if (typeof window.getComputedStyle === "function" && current instanceof HTMLElement) {
+        const style = window.getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") {
+          return false;
+        }
+      }
+      current = current.parentElement;
+    }
+    return true;
+  }
+
+  function looksLikeFieldError(node) {
+    if (!node || node === document.body) {
+      return false;
+    }
+    if (node.getAttribute?.("role") === "alert") {
+      return true;
+    }
+    const className = classText(node);
+    return /(?:^|[\s_])(?:error|has-error|is-error|is-invalid|invalid-feedback|field-error|form-error)(?:$|[\s_])/i.test(className)
+      || /el-form-item__error|ant-form-item-explain-error|ant-form-item-has-error|Validform_wrong/.test(className);
+  }
+
+  function listOtherControls(root, skip) {
+    const found = [];
+    const stack = [...(root?.children || [])];
+    while (stack.length) {
+      const node = stack.shift();
+      if (node !== skip && (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement)) {
+        found.push(node);
+      }
+      if (node?.children?.length) {
+        stack.push(...node.children);
+      }
+    }
+    return found;
+  }
+
+  function associatedContainer(element) {
+    let current = element.parentElement;
+    let best = current;
+    while (current && current !== document.body && current !== document.documentElement) {
+      if (listOtherControls(current, element).length > 0) {
+        return best;
+      }
+      best = current;
+      if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(classText(current))) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    // 没有其他控件作边界时，不要把整张表单的错误算到唯一输入框上。
+    return element.parentElement;
+  }
+
+  function describedErrorVisible(element) {
+    const ids = `${element.getAttribute?.("aria-describedby") || ""} ${element.getAttribute?.("aria-errormessage") || ""}`
+      .split(/\s+/)
+      .filter(Boolean);
+    return ids.some((id) => {
+      const node = document.getElementById?.(id);
+      return node && node !== element && isShown(node) && String(node.textContent || "").trim()
+        && (looksLikeFieldError(node) || node.getAttribute?.("role") === "alert");
+    });
+  }
+
+  function containerErrorVisible(element) {
+    const container = associatedContainer(element);
+    if (!container) {
+      return false;
+    }
+    const stack = [...(container.children || [])];
+    while (stack.length) {
+      const node = stack.shift();
+      if (node === element) {
+        continue;
+      }
+      if (looksLikeFieldError(node) && isShown(node) && String(node.textContent || "").trim()) {
+        return true;
+      }
+      if (node?.children?.length) {
+        stack.push(...node.children);
+      }
+    }
+    return false;
+  }
+
+  function containerFrameworkUnsynced(element) {
+    const container = associatedContainer(element);
+    return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
+  }
+
+  function inspectTextCommit(element, expected, committedBeforeWait) {
+    if (element.isConnected === false) {
+      return { ok: false, reason: "element_disconnected" };
+    }
+    const current = String(element.value ?? "");
+    if (current !== expected) {
+      return { ok: false, reason: committedBeforeWait ? "value_reverted" : "value_not_committed" };
+    }
+    if (element.getAttribute?.("aria-invalid") === "true" || describedErrorVisible(element) || containerErrorVisible(element)) {
+      return { ok: false, reason: "validation_not_cleared" };
+    }
+    if (containerFrameworkUnsynced(element)) {
+      return { ok: false, reason: "framework_state_unsynced" };
+    }
+    return { ok: true, reason: "" };
+  }
+
+  function waitForTextCommit() {
+    if (textCommitWaitMs <= 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => window.setTimeout(resolve, textCommitWaitMs));
+  }
+
+  function textFillFailureLabel(element) {
+    const control = element?.kind === "element" ? element.element : element;
+    const reason = control ? textFillFailures.get(control) : "";
+    return TEXT_FILL_FAILURE_LABELS[reason] || "";
+  }
+
+  function normalizeExpectedTextValue(element, value) {
+    const text = String(value ?? "");
+    if (element instanceof HTMLTextAreaElement) {
+      return text.replace(/\r\n?/g, "\n");
+    }
+    if (!(element instanceof HTMLInputElement)) {
+      return text;
+    }
+    const type = String(element.type || "text").toLowerCase();
+    if (type === "email" || type === "url") {
+      return text.replace(/[\r\n]/g, "").replace(/^[\t\f ]+|[\t\f ]+$/g, "");
+    }
+    if (["text", "search", "tel", "password"].includes(type)) {
+      return text.replace(/[\r\n]/g, "");
+    }
+    // 数字等类型的无效值会被浏览器拒绝，不能把清空后的值当成成功。
+    return text;
+  }
+
+  // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
+  // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
+  async function commitTextValue(element, value, sequential = false) {
+    const previous = String(element.value ?? "");
+    const original = String(value ?? "");
+    const expected = normalizeExpectedTextValue(element, original);
+    await runTextLifecycle(element, original, sequential);
+    const committed = String(element.value ?? "") === expected;
+    await waitForTextCommit();
+    let result = inspectTextCommit(element, expected, committed);
+    if (!result.ok && !sequential
+      && (result.reason === "validation_not_cleared" || result.reason === "framework_state_unsynced")) {
+      await replayFocusBlur(element);
+      await waitForTextCommit();
+      result = inspectTextCommit(element, expected, String(element.value ?? "") === expected);
+    }
+    if (!result.ok && !sequential && prefersSequentialInput(element)
+      && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
+      const retried = await commitTextValue(element, original, true);
+      if (!retried.ok && element.isConnected !== false
+        && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
+        writeControlValue(element, previous);
+        dispatchTextInput(element, previous);
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return retried;
+    }
+    return result;
+  }
+
   function setElementValue(element, value) {
     if (element && typeof element === "object" && element.kind === "radio") {
       const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
@@ -1363,16 +1695,23 @@
       });
     }
 
-    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-      const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
-      if (descriptor?.set) {
-        descriptor.set.call(element, value);
-      } else {
-        element.value = value;
-      }
+    if (element instanceof HTMLInputElement && ["week", "range", "color"].includes(element.type)) {
+      const expected = String(value ?? "");
+      writeControlValue(element, expected);
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
+      return element.value === expected;
+    }
+
+    if (isTextControl(element)) {
+      return commitTextValue(element, value).then((result) => {
+        if (result.ok) {
+          textFillFailures.delete(element);
+        } else {
+          textFillFailures.set(element, result.reason);
+        }
+        return result.ok;
+      });
     }
 
     if (element instanceof HTMLSelectElement) {
@@ -2609,6 +2948,14 @@
       applyChipValue,
       composeChipText,
       syncChipSelectionState,
+      setElementValue,
+      setTextCommitWaitMs(ms) {
+        textCommitWaitMs = ms;
+      },
+      textFillFailureReason(element) {
+        const control = element?.kind === "element" ? element.element : element;
+        return textFillFailures.get(control) || "";
+      },
       setCurrentStore(store) {
         state.currentStore = store;
       },
