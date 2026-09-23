@@ -8,6 +8,7 @@ use crate::error::StoreError;
 use crate::evidence::AttachmentRefReport;
 use crate::model::*;
 use crate::receipts::{SnapshotCompletion, SnapshotProgress, SnapshotState};
+use crate::resume::{ProfileRecord, ResumeOverview, ResumeTemplate, TemplateGroup};
 use crate::store::ArchiveStore;
 use crate::suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 use crate::todos::TodoPatch;
@@ -331,5 +332,47 @@ impl ArchiveStore {
         application_id: &str,
     ) -> Result<Vec<ResumeSnapshotMeta>, StoreError> {
         self.transaction(|tx| tx.list_snapshots(application_id))
+    }
+
+    // ---- 简历模板与「我的信息」(#130) ----
+
+    pub fn resume_overview(&self) -> Result<ResumeOverview, StoreError> {
+        self.transaction(|tx| tx.resume_overview())
+    }
+
+    pub fn get_template(&self, id: &str) -> Result<Option<ResumeTemplate>, StoreError> {
+        self.transaction(|tx| tx.get_template(id))
+    }
+
+    pub fn create_template(&self, name: &str, groups: Vec<TemplateGroup>) -> Result<ResumeTemplate, StoreError> {
+        self.transaction(|tx| tx.create_template(name, groups))
+    }
+
+    pub fn replace_template_groups(
+        &self,
+        id: &str,
+        groups: Vec<TemplateGroup>,
+    ) -> Result<(ResumeTemplate, usize), StoreError> {
+        self.transaction(|tx| tx.replace_template_groups(id, groups))
+    }
+
+    pub fn rename_template(&self, id: &str, name: &str) -> Result<ResumeTemplate, StoreError> {
+        self.transaction(|tx| tx.rename_template(id, name))
+    }
+
+    pub fn delete_template(&self, id: &str) -> Result<(), StoreError> {
+        self.transaction(|tx| tx.delete_template(id))
+    }
+
+    pub fn set_active_template(&self, id: &str) -> Result<(), StoreError> {
+        self.transaction(|tx| tx.set_active_template(id))
+    }
+
+    pub fn get_profile(&self) -> Result<crate::resume::ProfileRecord, StoreError> {
+        self.transaction(|tx| tx.get_profile())
+    }
+
+    pub fn save_profile(&self, profile: serde_json::Value, expected_revision: i64) -> Result<ProfileRecord, StoreError> {
+        self.transaction(|tx| tx.save_profile(profile, expected_revision))
     }
 }

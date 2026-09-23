@@ -22,6 +22,7 @@ pub mod model;
 pub mod normalize;
 pub mod plugin;
 pub mod receipts;
+pub mod resume;
 pub mod schema;
 mod snapshot_file;
 /// 快照文件在档案目录里的相对路径。D12 永久删除时要按它去删文件。
@@ -46,6 +47,11 @@ pub use receipts::{SnapshotCompletion, SnapshotProgress, SnapshotState};
 pub use receipts::{
     FillSubmitInput, JobSaveInput, PluginOp, PluginWriteContext, PluginWriteOutcome,
     ReconcileOutcome, ReconcileQueryItem, ReconcileReply, SnapshotChunkInput, SubmitConfirmInput,
+};
+pub use resume::{
+    empty_profile, field_count, normalize_groups, validate_profile, ProfileRecord, ResumeOverview,
+    ResumeTemplate, TemplateField, TemplateGroup, TemplateSummary, MAX_CUSTOM_FIELDS,
+    MAX_PROFILE_BYTES, MAX_TEMPLATE_BYTES,
 };
 pub use store::{ArchiveConfig, ArchiveStore};
 pub use suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
