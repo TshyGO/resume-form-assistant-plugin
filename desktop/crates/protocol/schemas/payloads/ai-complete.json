@@ -1,0 +1,27 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/ai-complete.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "purpose",
+    "system",
+    "user"
+  ],
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "enum": [
+        "fill",
+        "plan"
+      ]
+    },
+    "system": {
+      "type": "string",
+      "maxLength": 8000
+    },
+    "user": {
+      "type": "string",
+      "maxLength": 60000
+    }
+  }
+}
