@@ -105,7 +105,10 @@
     {"id": "resume-update-missing-identity", "path": "requests/resume-update-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
     {"id": "legacy-import-missing-identity", "path": "requests/legacy-import-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
     {"id": "ai-complete-with-identity", "path": "requests/ai-complete-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}},
-    {"id": "ui-open-with-identity", "path": "requests/ui-open-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}}
+    {"id": "ui-open-with-identity", "path": "requests/ui-open-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}},
+    {"id": "legacy-import-profile-ok", "path": "requests/legacy-import-profile-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "legacy-import-profile-nonstring", "path": "requests/legacy-import-profile-nonstring.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "legacy-import-profile-nested-secret-key", "path": "requests/legacy-import-profile-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
