@@ -270,6 +270,7 @@ export interface ModelListView {
 export interface AiSettingsView {
   apiUrl: string;
   model: string;
+  protocol?: "chat" | "responses" | "anthropic";
   /** 只有主机名，不含完整地址。 */
   host: string;
   /** Key 配没配。**Key 本身永远不会回到前端。** */

@@ -26,7 +26,7 @@ export function describeTransportRisk(apiUrl: string): Message | null {
   if (!value.startsWith("http://")) {
     return null;
   }
-  const host = value.slice("http://".length).split("/")[0]?.split(":")[0] ?? "";
+  const host = value.slice("http://".length).split(/[/?#]/)[0]?.split(":")[0] ?? "";
   const local =
     host === "localhost" ||
     host === "::1" ||
@@ -44,7 +44,7 @@ export function describeTransportRisk(apiUrl: string): Message | null {
 }
 
 /**
- * 接口地址里夹带凭据的提醒。我们承诺「Key 只在 Authorization 头里」，但用户完全
+ * 接口地址里夹带凭据的提醒。我们承诺「Key 只在认证请求头里」，但用户完全
  * 可能把 key 贴进地址：`https://user:pass@host/…` 或者 `?api-key=…`。那样它会随
  * 每一次请求出现在 URL 里，也更容易被中转站的访问日志记下来。
  */
@@ -52,7 +52,7 @@ export function describeUrlSecrets(apiUrl: string): Message | null {
   const value = apiUrl.trim();
   if (value === "") return null;
   const rest = value.split("://")[1] ?? value;
-  const authority = rest.split("/")[0] ?? "";
+  const authority = rest.split(/[/?#]/)[0] ?? "";
   if (authority.includes("@")) {
     return {
       tone: "error",

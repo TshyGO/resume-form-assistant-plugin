@@ -21,6 +21,7 @@ export function AiSettings() {
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [apiUrl, setApiUrl] = useState("");
   const [model, setModel] = useState("");
+  const [protocol, setProtocol] = useState<"chat" | "responses" | "anthropic">("chat");
   const [key, setKey] = useState("");
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,6 +29,7 @@ export function AiSettings() {
   const [models, setModels] = useState<string[] | null>(null);
   const [modelsNote, setModelsNote] = useState<Message | null>(null);
   const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
   // 地址或 Key 一改，旧候选立刻作废；回包对不上号就扔掉。
   const modelsRequest = useRef(0);
 
@@ -35,6 +37,7 @@ export function AiSettings() {
     setView(next);
     setApiUrl(next.apiUrl);
     setModel(next.model);
+    setProtocol(next.protocol ?? "chat");
   };
 
   useEffect(() => {
@@ -51,6 +54,7 @@ export function AiSettings() {
     modelsRequest.current += 1;
     setModels(null);
     setModelsNote(null);
+    setModelQuery("");
     // 旧请求回包会被序号守卫丢掉，但忙状态要在这里复位，不然按钮永久卡死。
     setModelsBusy(false);
   };
@@ -63,10 +67,12 @@ export function AiSettings() {
     invoke<ModelListView>("list_ai_models_cmd", {
       apiUrl,
       key: key.trim() === "" ? null : key,
+      protocol,
     })
       .then((result) => {
         if (modelsRequest.current !== request) return;
         setModels(result.models);
+        setModelQuery("");
         setModelsNote(describeModelsResult(result));
       })
       .catch((error: unknown) => {
@@ -96,7 +102,7 @@ export function AiSettings() {
     event.preventDefault();
     const typed = apiUrl;
     void run(
-      () => invoke!<AiSettingsView>("save_ai_settings_cmd", { apiUrl: typed, model }),
+      () => invoke!<AiSettingsView>("save_ai_settings_cmd", { apiUrl: typed, model, protocol }),
       (next) => describeSaved(typed, next),
     );
   };
@@ -136,12 +142,25 @@ export function AiSettings() {
 
       <form className="stack ai-config-form" onSubmit={saveSettings}>
         <label>
+          接口协议
+          <select value={protocol} onChange={(event) => {
+            setProtocol(event.target.value as typeof protocol);
+            clearModels();
+          }}>
+            <option value="chat">Chat Completions</option>
+            <option value="responses">OpenAI Responses</option>
+            <option value="anthropic">Anthropic Messages</option>
+          </select>
+        </label>
+        <label>
           接口地址
           <input
             id="ai-api-url"
             value={apiUrl}
             onChange={(event) => {
               setApiUrl(event.target.value);
+              const match = event.target.value.toLowerCase().split(/[?#]/)[0]?.match(/\/(chat\/completions|responses|messages)\/?$/);
+              if (match) setProtocol(match[1] === "responses" ? "responses" : match[1] === "messages" ? "anthropic" : "chat");
               clearModels();
             }}
             placeholder="https://api.deepseek.com"
@@ -149,7 +168,7 @@ export function AiSettings() {
             spellCheck={false}
           />
         </label>
-        <p className="muted">填服务商给的 Base URL 就行，保存时会补全成 /chat/completions。</p>
+        <p className="muted">填 Base URL 或完整端点；保存时按所选协议补全。自定义代理路径保持原样。</p>
         {risk ? <p className={`note ${risk.tone}`}>{risk.text}</p> : null}
         {secrets ? <p className={`note ${secrets.tone}`}>{secrets.text}</p> : null}
         <label>
@@ -157,7 +176,10 @@ export function AiSettings() {
           <input
             id="ai-model"
             value={model}
-            onChange={(event) => setModel(event.target.value)}
+            onChange={(event) => {
+              setModel(event.target.value);
+              setModelQuery(event.target.value);
+            }}
             placeholder="deepseek-chat"
             autoComplete="off"
             spellCheck={false}
@@ -173,7 +195,7 @@ export function AiSettings() {
           </button>
         </div>
         <p className="muted">点一次问一次所配服务的模型列表，只发 Key 不发简历；失败不影响保存，永远可以直接手填。</p>
-        {models !== null ? <ModelCandidates models={models} query={model} onPick={setModel} /> : null}
+        {models !== null ? <ModelCandidates models={models} query={modelQuery} onPick={setModel} /> : null}
         {modelsNote ? <p className={`note ${modelsNote.tone}`}>{modelsNote.text}</p> : null}
         <button type="submit" className="primary" disabled={busy || !invoke}>
           保存设置

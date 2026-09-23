@@ -1,4 +1,4 @@
-//! 模型列表拉取：往用户配的 OpenAI 兼容接口的 `/models` 发一次只带 Key 的 GET。
+//! 模型列表拉取：往用户所配协议对应的 `/models` 发一次只带 Key 的 GET。
 //!
 //! 规则和插件那边（`ai-models.js`）一致：
 //! - 已经指向 `/chat/completions` 的地址，把后缀换成 `/models`；
@@ -15,6 +15,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::commands::CommandError;
+use ai_extract::AiProtocol;
 
 /// 插件那边也是 15 秒：`/models` 只是读配置，不值得等一分钟。
 pub const MODELS_TIMEOUT_SECONDS: u64 = 15;
@@ -32,6 +33,10 @@ pub struct ResolvedEndpoints {
 
 /// 地址能不能用来拉模型列表。`None` 表示连解析都过不了。
 pub fn resolve_endpoints(input: &str) -> Option<ResolvedEndpoints> {
+    resolve_endpoints_for_protocol(input, AiProtocol::Chat)
+}
+
+pub fn resolve_endpoints_for_protocol(input: &str, protocol: AiProtocol) -> Option<ResolvedEndpoints> {
     let text = input.trim();
     let url = url::Url::parse(text).ok()?;
     if url.scheme() != "http" && url.scheme() != "https" {
@@ -40,13 +45,10 @@ pub fn resolve_endpoints(input: &str) -> Option<ResolvedEndpoints> {
     let path = url.path().trim_end_matches('/').to_string();
     let path_lower = path.to_ascii_lowercase();
 
-    if path_lower
-        .strip_suffix("/chat/completions")
-        .is_some()
-    {
-        let base = &path[..path.len() - "/chat/completions".len()];
+    if let Some(suffix) = ["/chat/completions", "/responses", "/messages"].into_iter().find(|suffix| path_lower.ends_with(suffix)) {
+        let base = &path[..path.len() - suffix.len()];
         return Some(ResolvedEndpoints {
-            chat_url: text.to_string(),
+            chat_url: if suffix == protocol.suffix() { text.to_string() } else { with_path(&url, &format!("{base}{}", protocol.suffix())) },
             models_url: Some(with_path(&url, &format!("{base}/models"))),
         });
     }
@@ -54,7 +56,7 @@ pub fn resolve_endpoints(input: &str) -> Option<ResolvedEndpoints> {
     if path.is_empty() || is_base_path(&path) {
         let base = if path.is_empty() { "/v1".to_string() } else { path };
         return Some(ResolvedEndpoints {
-            chat_url: with_path(&url, &format!("{base}/chat/completions")),
+            chat_url: with_path(&url, &format!("{base}{}", protocol.suffix())),
             models_url: Some(with_path(&url, &format!("{base}/models"))),
         });
     }
@@ -214,35 +216,42 @@ fn provider_detail(body: Option<&Value>) -> String {
         .to_string()
 }
 
-/// 错误状态（401/403/404/405）的 body 只是可选的服务商摘要：
+enum BodyReadError {
+    TooLarge,
+    Transport(reqwest::Error),
+}
+
+async fn read_bounded_body(mut response: reqwest::Response) -> Result<Vec<u8>, BodyReadError> {
+    if response.content_length().is_some_and(|len| len > MAX_MODELS_BODY_BYTES) {
+        return Err(BodyReadError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(BodyReadError::Transport)? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_MODELS_BODY_BYTES as usize {
+            return Err(BodyReadError::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// 错误状态的 body 只是可选的服务商摘要：
 /// 读超时、读失败、超大都按“没有摘要”处理，绝不改变状态码已经定好的分类。
 async fn read_optional_summary(response: reqwest::Response) -> String {
-    if response
-        .content_length()
-        .is_some_and(|len| len > MAX_MODELS_BODY_BYTES)
-    {
-        return String::new();
-    }
-    let Ok(bytes) = response.bytes().await else {
+    let Ok(bytes) = read_bounded_body(response).await else {
         return String::new();
     };
-    if bytes.len() as u64 > MAX_MODELS_BODY_BYTES {
-        return String::new();
-    }
     provider_detail(serde_json::from_slice(&bytes).ok().as_ref())
 }
 
 /// 拉一次模型列表。调用前地址里的凭据、`models_url` 推不出来、Key 为空这三件事
 /// 应该已经在命令层拦过——这里再各守一道，方便单测。
-pub async fn fetch_model_list(
-    models_url: &str,
-    api_key: &str,
-    host: &str,
-) -> Result<ModelList, CommandError> {
-    fetch_model_list_with_timeout(
+pub async fn fetch_model_list_for_protocol(models_url: &str, api_key: &str, host: &str, protocol: AiProtocol) -> Result<ModelList, CommandError> {
+    fetch_model_list_with_timeout_for_protocol(
         models_url,
         api_key,
         host,
+        protocol,
         Duration::from_secs(MODELS_TIMEOUT_SECONDS),
     )
     .await
@@ -252,6 +261,16 @@ pub async fn fetch_model_list_with_timeout(
     models_url: &str,
     api_key: &str,
     host: &str,
+    timeout: Duration,
+) -> Result<ModelList, CommandError> {
+    fetch_model_list_with_timeout_for_protocol(models_url, api_key, host, AiProtocol::Chat, timeout).await
+}
+
+pub async fn fetch_model_list_with_timeout_for_protocol(
+    models_url: &str,
+    api_key: &str,
+    host: &str,
+    protocol: AiProtocol,
     timeout: Duration,
 ) -> Result<ModelList, CommandError> {
     if models_url.trim().is_empty()
@@ -272,18 +291,21 @@ pub async fn fetch_model_list_with_timeout(
     }
 
     let started = Instant::now();
-    let client = reqwest::Client::builder().timeout(timeout).build().map_err(|e| {
+    let client = reqwest::Client::builder().timeout(timeout).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| {
         eprintln!("ai-models: client-init-failed · {e}");
         CommandError {
             code: "AI_CLIENT_INIT_FAILED".into(),
             message: "HTTP 客户端没建起来，这次没有发出去。".into(),
         }
     })?;
-    // 重定向沿用 reqwest 默认：跨主机跳转不带 Authorization。换 client 配置时别顺手改了这条。
-    let response = client
-        .get(models_url)
-        .bearer_auth(api_key.trim())
-        .send()
+    // 不跟随重定向：Anthropic 的 x-api-key 是自定义头，不能让跳转把它带到别的主机。
+    let request = client.get(models_url);
+    let request = if protocol == AiProtocol::Anthropic {
+        request.header("x-api-key", api_key.trim()).header("anthropic-version", "2023-06-01")
+    } else {
+        request.bearer_auth(api_key.trim())
+    };
+    let response = request.send()
         .await
         .map_err(|err| {
             if err.is_timeout() {
@@ -311,7 +333,7 @@ pub async fn fetch_model_list_with_timeout(
         })?;
 
     let status = response.status().as_u16();
-    if status == 401 || status == 403 || status == 404 || status == 405 {
+    if !(200..300).contains(&status) {
         // 主分类只看状态码：body 只是可选摘要。之前超大 401 会被误报成“地址不对”，
         // 卡住的 body 会被误报成超时或断连——现在这两种都不改变分类。
         let detail = read_optional_summary(response).await;
@@ -330,29 +352,27 @@ pub async fn fetch_model_list_with_timeout(
                 message: format!("{host} 拒绝了这个 Key（HTTP {status}）：请检查密钥是否正确、是否有效。{suffix}"),
             });
         }
-        return Err(CommandError {
-            code: "AI_MODELS_NOT_FOUND".into(),
-            message: format!(
-                "{host} 没有返回模型列表（HTTP {status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。"
-            ),
-        });
+        if status == 404 || status == 405 {
+            return Err(CommandError {
+                code: "AI_MODELS_NOT_FOUND".into(),
+                message: format!(
+                    "{host} 没有返回模型列表（HTTP {status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。"
+                ),
+            });
+        }
+        let message = if detail.is_empty() {
+            format!("从 {host} 获取模型失败（HTTP {status}）。")
+        } else {
+            format!("从 {host} 获取模型失败（HTTP {status}）：{detail}")
+        };
+        return Err(CommandError { code: format!("AI_MODELS_HTTP_{status}"), message });
     }
-    // 模型列表才几 KB：Content-Length 老实标超的，看完头就拒掉，不读进内存；
-    // 没标或谎报的，读完按字节数再拒一次（见下）。chunked 无头细水长流的靠总超时兜底，
-    // 和 chat 路径一个待遇：reqwest 构建时没开 `stream` 特性，
-    // 为这一次设置页请求另起流式限流不值得。
-    if response.content_length().is_some_and(|len| len > MAX_MODELS_BODY_BYTES) {
-        eprintln!(
-            "ai-models: {host} · HTTP {status} · body-too-large · {} ms",
-            started.elapsed().as_millis()
-        );
-        return Err(CommandError {
+    let bytes = read_bounded_body(response).await.map_err(|err| match err {
+        BodyReadError::TooLarge => CommandError {
             code: "AI_MODELS_BAD_RESPONSE".into(),
             message: format!("{host} 返回的内容过大（超过 1MB），请检查 API URL 是否指错了地方。"),
-        });
-    }
-    let bytes = response.bytes().await.map_err(|err| {
-        if err.is_timeout() {
+        },
+        BodyReadError::Transport(err) if err.is_timeout() => {
             let seconds = timeout.as_secs().max(1);
             eprintln!(
                 "ai-models: {host} · body-timeout · {} ms",
@@ -364,7 +384,8 @@ pub async fn fetch_model_list_with_timeout(
                     "请求超时（{seconds} 秒无响应）：连不上该地址或服务过慢，请检查网络或代理。"
                 ),
             }
-        } else {
+        }
+        BodyReadError::Transport(_) => {
             eprintln!(
                 "ai-models: {host} · body-error · {} ms",
                 started.elapsed().as_millis()
@@ -379,34 +400,14 @@ pub async fn fetch_model_list_with_timeout(
         "ai-models: {host} · HTTP {status} · {} ms",
         started.elapsed().as_millis()
     );
-    if bytes.len() as u64 > MAX_MODELS_BODY_BYTES {
-        return Err(CommandError {
-            code: "AI_MODELS_BAD_RESPONSE".into(),
-            message: format!("{host} 返回的内容过大（超过 1MB），请检查 API URL 是否指错了地方。"),
-        });
-    }
     // `from_slice` 失败（含非 UTF-8 / 二进制）一律是“形状不对”，不再误报断连。
     let body: Option<Value> = serde_json::from_slice(&bytes).ok();
-    let detail = provider_detail(body.as_ref());
-
-    if !(200..300).contains(&status) {
-        let message = if detail.is_empty() {
-            format!("从 {host} 获取模型失败（HTTP {status}）。")
-        } else {
-            format!("从 {host} 获取模型失败（HTTP {status}）：{detail}")
-        };
-        return Err(CommandError {
-            code: format!("AI_MODELS_HTTP_{status}"),
-            message,
-        });
-    }
-
     let all_models = body
         .as_ref()
         .and_then(parse_model_list)
         .ok_or_else(|| CommandError {
             code: "AI_MODELS_BAD_RESPONSE".into(),
-            message: format!("{host} 返回的不是模型列表，请检查 API URL 是否指向 OpenAI 兼容接口。"),
+            message: format!("{host} 返回的不是模型列表，请检查 API URL 是否指向所选协议的接口。"),
         })?;
     let (models, hidden) = filter_chat_models(&all_models);
     // 全量列表只在内部算隐藏数，不出这道门：前端只要能填的 + 藏了几个。
@@ -955,5 +956,26 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code, "AI_MODELS_BAD_URL");
+    }
+
+    #[tokio::test]
+    async fn anthropic_models_use_their_own_auth_headers() {
+        let endpoint = resolve_endpoints_for_protocol("https://api.anthropic.com/v1/messages", AiProtocol::Anthropic).unwrap();
+        assert_eq!(endpoint.models_url.as_deref(), Some("https://api.anthropic.com/v1/models"));
+        let (url, handle) = serve_once(200, r#"{"data":[{"id":"claude-test"}]}"#);
+        let list = fetch_model_list_with_timeout_for_protocol(&url, "secret", "127.0.0.1", AiProtocol::Anthropic, Duration::from_secs(5)).await.unwrap();
+        assert_eq!(list.models, vec!["claude-test"]);
+        let request = handle.join().unwrap().to_ascii_lowercase();
+        assert!(request.contains("x-api-key: secret"), "{request}");
+        assert!(request.contains("anthropic-version: 2023-06-01"), "{request}");
+        assert!(!request.contains("authorization:"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn server_error_keeps_status_when_body_stalls() {
+        let (url, handle) = serve_stalled_body(500, 16);
+        let err = fetch_model_list_with_timeout(&url, "secret", "127.0.0.1", Duration::from_millis(300)).await.unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_HTTP_500");
+        handle.join().unwrap();
     }
 }

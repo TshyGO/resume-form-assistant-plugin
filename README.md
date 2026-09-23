@@ -6,7 +6,7 @@
 
 如果手里只有 PDF 或 Word 简历，也可以先让 AI 帮你整理成 Excel 模板。
 
-> 插件本身完全免费并开源。AI 功能需要你自己配置一个 OpenAI 兼容接口，接口是否收费取决于你使用的模型服务商。
+> 插件本身完全免费并开源。AI 功能需要你自己配置 Chat Completions、OpenAI Responses 或 Anthropic Messages 接口，接口是否收费取决于你使用的模型服务商。
 
 **[📦 下载最新版](https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest)** · **[📖 小白教程](#小白直接看这里)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
 
@@ -112,15 +112,16 @@ edge://extensions
 AI 配置
 ```
 
-需要填写三个项目：
+需要填写四个项目：
 
 ```text
+接口协议
 API URL
 API Key
 模型名称
 ```
 
-插件支持 OpenAI Chat Completions 兼容接口。
+插件和桌面端都支持三种协议：Chat Completions、OpenAI Responses、Anthropic Messages。选择协议后，请求体、认证头和返回内容解析会一起切换；旧配置按 Chat Completions 继续使用。
 
 例如使用 OpenAI 时，可以填写：
 
@@ -137,13 +138,13 @@ API Key
 
 然后点击「保存配置」。
 
-API URL 填服务商给的 base 地址（如 `https://api.openai.com/v1`）或完整的 `.../chat/completions` 地址都可以。填 base 地址时，保存时会自动补全为完整地址并显示出来。
+API URL 填服务商给的 base 地址（如 `https://api.openai.com/v1`）或完整端点都可以。保存时会按所选协议补成 `.../chat/completions`、`.../responses` 或 `.../messages`；无法识别的代理路径原样保留。
 
 请尽量使用 `https://` 开头的地址。API Key 和发给 AI 的简历内容都会发往这个地址；`http://` 是明文传输，经过公共 WiFi 或不可信网络时可能被截获。填了 `http://` 远程地址时设置页会给出提醒，但不会阻止使用；本机地址（`localhost`、`127.0.0.1`）不会提醒。
 
 填好地址和 Key 后点「获取模型」，插件会从该服务的 `/models` 接口拉取模型列表作为下拉候选，向量、重排、语音、图像这类不能用来对话的模型会被隐藏。拉不到列表（比如服务商不提供这个接口）也不影响使用，直接手动输入模型名称即可。
 
-如果你使用其他兼容 OpenAI 格式的模型服务，把服务商提供的接口地址、API Key 和模型名称填进去即可。
+如果你使用其他模型服务，请按服务商实际支持的协议选择，填入对应地址、API Key 和模型名称。
 
 ### API 配置看不懂怎么办
 
@@ -361,7 +362,7 @@ API Key
 2. API 余额不足
 3. 模型名称写错
 4. API URL 写错
-5. 服务商接口并不兼容 OpenAI Chat Completions
+5. 所选接口协议与服务商实际支持的协议不一致
 6. 当前模型没有权限使用
 
 ### Excel 导入失败
@@ -438,7 +439,7 @@ API Key 请勿分享给他人，也不要提交到公开 GitHub Issue。
 - AI 自动匹配网页网申字段
 - PDF / Word / TXT 简历 AI 解析
 - 自动生成标准 Excel 模板
-- OpenAI 兼容接口自定义
+- Chat Completions、OpenAI Responses、Anthropic Messages 接口自定义
 - 普通输入框、文本框、下拉框、单选框填写
 - 部分日期选择器和级联下拉兼容
 - 字段快捷点击填写和复制

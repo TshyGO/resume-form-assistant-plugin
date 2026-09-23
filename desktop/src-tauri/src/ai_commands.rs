@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ai_extract::{
-    build_request, Candidate, Due, EvidenceInput, Extraction, OutboundScope, MAX_CANDIDATES,
+    Candidate, Due, EvidenceInput, Extraction, OutboundScope, MAX_CANDIDATES,
 };
 use archive_store::{
     Actor, AiSuggestion, ApplicationFilter, ArchiveStore, ConfirmSuggestionInput, EventDraft,
@@ -306,7 +306,11 @@ pub fn gather(
 }
 
 pub fn preview(gathered: &Gathered, api_url: &str, model: &str) -> OutboundPreview {
-    let built = build_request(api_url, model, &gathered.evidence, &gathered.candidates);
+    preview_for_protocol(gathered, api_url, model, ai_extract::AiProtocol::Chat)
+}
+
+pub fn preview_for_protocol(gathered: &Gathered, api_url: &str, model: &str, protocol: ai_extract::AiProtocol) -> OutboundPreview {
+    let built = ai_extract::build_request_for_protocol(api_url, model, &gathered.evidence, &gathered.candidates, protocol);
     let scope = built.scope;
     OutboundPreview {
         body_preview: gathered.evidence.body.chars().take(400).collect(),

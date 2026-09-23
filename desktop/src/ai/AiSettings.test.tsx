@@ -101,10 +101,33 @@ test("获取模型成功后列出候选，点一个填进输入框", async () =>
   expect(screen.getByText(/2 个非对话模型/)).toBeTruthy();
 
   const sent = calls.find((call) => call.command === "list_ai_models_cmd");
-  expect(sent?.args).toEqual({ apiUrl: base.apiUrl, key: null });
+  expect(sent?.args).toEqual({ apiUrl: base.apiUrl, key: null, protocol: "chat" });
 
   await user.click(screen.getByText("a-chat"));
   expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "a-chat");
+});
+
+test("已有模型名不匹配新服务时仍显示拉回的候选", async () => {
+  const user = userEvent.setup();
+  mount((command) => command === "list_ai_models_cmd"
+    ? { models: ["claude-test"], hiddenCount: 0, host: "relay.example" }
+    : base);
+  await screen.findByLabelText("模型名称");
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  expect(await screen.findByText("claude-test")).toBeTruthy();
+  expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "deepseek-chat");
+});
+
+test("选择 Anthropic 后获取模型命令携带协议", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command) => command === "list_ai_models_cmd"
+    ? { models: ["claude-test"], hiddenCount: 0, host: "api.anthropic.com" }
+    : base);
+  await screen.findByLabelText("接口协议");
+  await user.selectOptions(screen.getByLabelText("接口协议"), "anthropic");
+  await user.click(screen.getByRole("button", { name: "获取模型" }));
+  await screen.findByText("claude-test");
+  expect(calls.find((call) => call.command === "list_ai_models_cmd")?.args?.protocol).toBe("anthropic");
 });
 
 test("拉回空列表就直说没有能填的，也不画候选按钮", async () => {

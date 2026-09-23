@@ -10,7 +10,6 @@
   }
 })(typeof self !== "undefined" ? self : globalThis, function createResumeProModels() {
   const DEFAULT_TIMEOUT_MS = 15000;
-  const CHAT_SUFFIX = /\/chat\/completions$/iu;
 
   // A path is treated as an OpenAI-compatible base only when it could not have worked
   // as a chat endpoint itself: it ends in a version segment (/v1, /api/v3, /v1beta) or
@@ -29,8 +28,24 @@
     return next.href;
   }
 
-  function resolveEndpoints(input) {
+  const ENDPOINTS = { chat: "/chat/completions", responses: "/responses", anthropic: "/messages" };
+
+  function normalizeProtocol(value) {
+    return Object.hasOwn(ENDPOINTS, value) ? value : "chat";
+  }
+
+  function protocolFromUrl(input) {
+    try {
+      const path = new URL(String(input)).pathname.replace(/\/+$/u, "").toLowerCase();
+      return Object.keys(ENDPOINTS).find((key) => path.endsWith(ENDPOINTS[key])) || "chat";
+    } catch {
+      return "chat";
+    }
+  }
+
+  function resolveEndpoints(input, selectedProtocol = "chat") {
     const text = String(input ?? "").trim();
+    const protocol = normalizeProtocol(selectedProtocol);
     let url;
 
     try {
@@ -45,13 +60,15 @@
 
     const path = url.pathname.replace(/\/+$/u, "");
 
-    if (CHAT_SUFFIX.test(path)) {
-      return { chatUrl: text, modelsUrl: withPath(url, path.replace(CHAT_SUFFIX, "/models")) };
+    const suffix = Object.values(ENDPOINTS).find((entry) => path.toLowerCase().endsWith(entry));
+    if (suffix) {
+      const base = path.slice(0, -suffix.length);
+      return { chatUrl: suffix === ENDPOINTS[protocol] ? text : withPath(url, `${base}${ENDPOINTS[protocol]}`), modelsUrl: withPath(url, `${base}/models`) };
     }
 
     if (path === "" || isBasePath(path)) {
       const base = path || "/v1";
-      return { chatUrl: withPath(url, `${base}/chat/completions`), modelsUrl: withPath(url, `${base}/models`) };
+      return { chatUrl: withPath(url, `${base}${ENDPOINTS[protocol]}`), modelsUrl: withPath(url, `${base}/models`) };
     }
 
     return { chatUrl: text, modelsUrl: null };
@@ -109,15 +126,48 @@
     };
   }
 
-  // Completion happens on save, never on read: the stored apiUrl keeps meaning "the chat
-  // endpoint", so every call site that fetches it stays untouched. A value the user did
-  // not edit is saved verbatim, so re-saving an old configuration can never rewrite it.
-  function normalizeApiUrlForSave(typed, previous) {
-    if (typed === previous) {
+  // Completion happens on save, never on read. Re-saving an unchanged legacy
+  // configuration preserves the URL; changing protocol switches a known endpoint suffix.
+  function normalizeApiUrlForSave(typed, previous, protocol = "chat", previousProtocol = "chat") {
+    if (typed === previous && protocol === previousProtocol) {
       return typed;
     }
 
-    return resolveEndpoints(typed)?.chatUrl ?? typed;
+    return resolveEndpoints(typed, protocol)?.chatUrl ?? typed;
+  }
+
+  function requestForProtocol({ protocol, model, apiKey, system, user }) {
+    const kind = normalizeProtocol(protocol);
+    const headers = { "Content-Type": "application/json" };
+    if (kind === "anthropic") {
+      headers["x-api-key"] = apiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      return { headers, body: { model, max_tokens: 4096, system, messages: [{ role: "user", content: user }] } };
+    }
+    headers.Authorization = `Bearer ${apiKey}`;
+    if (kind === "responses") {
+      return { headers, body: { model, instructions: system, input: user, store: false } };
+    }
+    return { headers, body: { model, temperature: 0, messages: [
+      { role: "system", content: system }, { role: "user", content: user }
+    ] } };
+  }
+
+  function responseText(data, protocol) {
+    const kind = normalizeProtocol(protocol);
+    if (kind === "responses") {
+      return (Array.isArray(data?.output) ? data.output : [])
+        .filter((item) => item?.type === "message" && item?.role === "assistant")
+        .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+        .filter((part) => part?.type === "output_text" && typeof part.text === "string")
+        .map((part) => part.text).join("");
+    }
+    if (kind === "anthropic") {
+      return (Array.isArray(data?.content) ? data.content : [])
+        .filter((part) => part?.type === "text" && typeof part.text === "string")
+        .map((part) => part.text).join("");
+    }
+    return typeof data?.choices?.[0]?.message?.content === "string" ? data.choices[0].message.content : "";
   }
 
   // Narrow fragments only. Bare "audio" or "voice" would hide chat models such as
@@ -204,8 +254,8 @@
     return String(detail).replace(/\s+/gu, " ").trim().slice(0, 200);
   }
 
-  async function fetchModelList({ apiUrl, apiKey, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-    const endpoints = resolveEndpoints(apiUrl);
+  async function fetchModelList({ apiUrl, apiKey, protocol = "chat", fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+    const endpoints = resolveEndpoints(apiUrl, protocol);
 
     if (!endpoints) {
       return failure("invalid-url", "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。");
@@ -214,7 +264,7 @@
     if (!endpoints.modelsUrl) {
       return failure(
         "unknown-shape",
-        "无法从这个 API URL 推断模型列表地址（通常以 /v1 或 /chat/completions 结尾）。可直接手填模型名称。"
+        "无法从这个 API URL 推断模型列表地址（通常以 /v1、/chat/completions、/responses 或 /messages 结尾）。可直接手填模型名称。"
       );
     }
 
@@ -237,7 +287,10 @@
     try {
       const response = await fetchImpl(endpoints.modelsUrl, {
         method: "GET",
-        headers: { Authorization: `Bearer ${key}` },
+        redirect: "manual",
+        headers: normalizeProtocol(protocol) === "anthropic"
+          ? { "x-api-key": key, "anthropic-version": "2023-06-01" }
+          : { Authorization: `Bearer ${key}` },
         signal: controller.signal
       });
       status = response.status;
@@ -282,7 +335,7 @@
     const allModels = parseModelList(body);
 
     if (!allModels) {
-      return failure("not-a-list", "该地址返回的不是模型列表，请检查 API URL 是否指向 OpenAI 兼容接口。");
+      return failure("not-a-list", "该地址返回的不是模型列表，请检查 API URL 是否指向所选协议的接口。");
     }
 
     const { chat, hidden } = filterChatModels(allModels);
@@ -295,6 +348,10 @@
     filterChatModels,
     matchModels,
     normalizeApiUrlForSave,
+    normalizeProtocol,
+    protocolFromUrl,
+    requestForProtocol,
+    responseText,
     parseModelList,
     resolveEndpoints
   };

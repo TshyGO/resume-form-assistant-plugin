@@ -13,14 +13,16 @@
 pub mod candidates;
 pub mod excerpt;
 pub mod prompt;
+pub mod protocol;
 pub mod schema;
 
 pub use candidates::{pick_candidates, Candidate, MAX_CANDIDATES};
 pub use excerpt::normalize;
 pub use prompt::{
-    build_request, BuiltRequest, EvidenceInput, OutboundScope, RequestContext, ScopeCandidate,
+    build_request, build_request_for_protocol, BuiltRequest, EvidenceInput, OutboundScope, RequestContext, ScopeCandidate,
     MAX_BODY_CHARS,
 };
+pub use protocol::AiProtocol;
 pub use schema::{
     parse_response, Due, ExtractError, Extraction, SuggestedTodo, REPLY_CLASSES, SEND_MODES, STAGES,
 };

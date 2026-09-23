@@ -4,6 +4,7 @@ const DEFAULT_STORE = {
   aiConfig: {
     apiUrl: "https://api.openai.com/v1/chat/completions",
     model: "gpt-4o-mini",
+    protocol: "chat",
     apiKey: ""
   },
   profile: {
@@ -22,8 +23,8 @@ const MAX_LISTED_ROW_NUMBERS = 20;
 const TEMPLATE_SHEET_HEADER = ["一级分类", "字段名", "值"];
 const BACKUP_FORMAT = "resume-pro.backup";
 // 2 起备份里可以带「我的信息」。只有模板的备份仍写 1，旧版插件照样能导入；
-// 带了档案的写 2，旧版插件会提示先更新，而不是悄悄丢掉档案。
-const BACKUP_FORMAT_VERSION = 2;
+// 带了档案的写 2；带非 Chat 协议的写 3。旧版插件会提示更新，避免把新协议当 Chat 调用。
+const BACKUP_FORMAT_VERSION = 3;
 let pdfJsPromise = null;
 
 const STORE_KEYS = Object.keys(DEFAULT_STORE);
@@ -158,6 +159,7 @@ function cacheElements() {
   elements.backupCancelButton = document.getElementById("backup-cancel-button");
   elements.aiConfigForm = document.getElementById("ai-config-form");
   elements.apiUrlInput = document.getElementById("api-url-input");
+  elements.aiProtocolInput = document.getElementById("ai-protocol-input");
   elements.modelInput = document.getElementById("model-input");
   elements.apiKeyInput = document.getElementById("api-key-input");
   elements.toggleApiKeyButton = document.getElementById("toggle-api-key");
@@ -238,6 +240,12 @@ function bindEvents() {
   bindModelCombo();
   // Suggestions fetched for one address and key are wrong for another.
   elements.apiUrlInput.addEventListener("input", clearModelSuggestions);
+  elements.apiUrlInput.addEventListener("input", () => {
+    if (/\/(?:chat\/completions|responses|messages)\/?(?:[?#]|$)/i.test(elements.apiUrlInput.value)) {
+      elements.aiProtocolInput.value = self.ResumeProModels.protocolFromUrl(elements.apiUrlInput.value);
+    }
+  });
+  elements.aiProtocolInput.addEventListener("change", clearModelSuggestions);
   elements.apiUrlInput.addEventListener("input", updateUrlWarning);
   elements.apiKeyInput.addEventListener("input", clearModelSuggestions);
   elements.checkUpdateButton.addEventListener("click", () => {
@@ -328,6 +336,7 @@ function renderTemplates(state) {
 
 function renderConfig(aiConfig) {
   elements.apiUrlInput.value = aiConfig.apiUrl || "";
+  elements.aiProtocolInput.value = aiConfig.protocol || "chat";
   elements.modelInput.value = aiConfig.model || "";
   elements.apiKeyInput.value = aiConfig.apiKey || "";
   updateUrlWarning();
@@ -477,7 +486,8 @@ async function handleConfigSubmit(event) {
   const typedUrl = elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl;
   const { aiConfig: savedConfig } = await StorageService.getState();
   const aiConfig = {
-    apiUrl: self.ResumeProModels.normalizeApiUrlForSave(typedUrl, savedConfig.apiUrl),
+    apiUrl: self.ResumeProModels.normalizeApiUrlForSave(typedUrl, savedConfig.apiUrl, elements.aiProtocolInput.value, savedConfig.protocol || "chat"),
+    protocol: elements.aiProtocolInput.value,
     model: elements.modelInput.value.trim() || DEFAULT_STORE.aiConfig.model,
     apiKey: elements.apiKeyInput.value.trim()
   };
@@ -505,7 +515,8 @@ async function handleFetchModelsClick() {
   try {
     const result = await self.ResumeProModels.fetchModelList({
       apiUrl: elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl,
-      apiKey: elements.apiKeyInput.value
+      apiKey: elements.apiKeyInput.value,
+      protocol: elements.aiProtocolInput.value
     });
 
     if (requestId !== popupState.modelRequestId) {
@@ -1115,15 +1126,15 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
   return {
     backup: {
       format: BACKUP_FORMAT,
-      formatVersion: includeProfile ? BACKUP_FORMAT_VERSION : 1,
+      formatVersion: state.aiConfig.protocol && state.aiConfig.protocol !== "chat" ? 3 : includeProfile ? 2 : 1,
       exportedAt: now.toISOString(),
       pluginVersion: chrome.runtime.getManifest().version,
       templates,
       activeTemplateId: state.activeTemplateId,
       ...(includeProfile ? { profile: strippedProfile.profile } : {}),
       aiConfig: includeApiKey && state.aiConfig.apiKey
-        ? { apiUrl: endpoint.url, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
-        : { apiUrl: endpoint.url, model: state.aiConfig.model }
+        ? { apiUrl: endpoint.url, model: state.aiConfig.model, protocol: state.aiConfig.protocol, apiKey: state.aiConfig.apiKey }
+        : { apiUrl: endpoint.url, model: state.aiConfig.model, protocol: state.aiConfig.protocol }
     },
     omittedFieldCount,
     droppedTemplateCount,
@@ -1221,6 +1232,7 @@ function applyBackup(state, backup, mode) {
     next.aiConfig = {
       apiUrl,
       model: String(backup.aiConfig.model ?? next.aiConfig.model),
+      protocol: self.ResumeProModels.normalizeProtocol(backup.aiConfig.protocol ?? "chat"),
       apiKey: backupKey || (apiUrl === next.aiConfig.apiUrl ? next.aiConfig.apiKey : "")
     };
   }
@@ -1504,6 +1516,7 @@ function normalizeAiConfig(aiConfig) {
   return {
     apiUrl: String(value.apiUrl ?? DEFAULT_STORE.aiConfig.apiUrl).trim() || DEFAULT_STORE.aiConfig.apiUrl,
     model: String(value.model ?? DEFAULT_STORE.aiConfig.model).trim() || DEFAULT_STORE.aiConfig.model,
+    protocol: self.ResumeProModels.normalizeProtocol(value.protocol ?? "chat"),
     apiKey: String(value.apiKey ?? "")
   };
 }
@@ -1987,6 +2000,7 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     handleFileSelection,
     handleParseDownloadClick,
     handleParseResumeClick,
+    handleConfigSubmit,
     handleTemplateListClick,
     parseTemplateFile,
     popupState,

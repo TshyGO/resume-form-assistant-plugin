@@ -16,7 +16,7 @@ function loadWorker(onRequest) {
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "[]" } }] }) };
     }
   });
-  context.self = {};
+  context.self = { ResumeProModels: require("../ai-models.js") };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../ai-worker.js"), "utf8"), context);
   return context;
 }

@@ -45,6 +45,7 @@ test("明文 http：本机温和提示，公网明确警告，https 不提示", 
   const publicRisk = describeTransportRisk("http://relay.example/v1");
   assert.equal(publicRisk?.tone, "error");
   assert.match(publicRisk?.text ?? "", /明文/);
+  assert.equal(describeTransportRisk("http://localhost?tenant=private")?.tone, "warn");
 });
 
 test("地址被补全过就说补成了什么", () => {
@@ -63,6 +64,7 @@ test("命令报错时把错误码留在文案里", () => {
 test("地址里夹带凭据要当场说：Key 只该在 Authorization 头里", () => {
   assert.equal(describeUrlSecrets("https://api.deepseek.com/v1/chat/completions"), null);
   assert.equal(describeUrlSecrets(""), null);
+  assert.equal(describeUrlSecrets("https://relay.example?email=user@example.com"), null);
 
   const userinfo = describeUrlSecrets("https://someone:sk-123@relay.example/v1/chat/completions");
   assert.equal(userinfo?.tone, "error");

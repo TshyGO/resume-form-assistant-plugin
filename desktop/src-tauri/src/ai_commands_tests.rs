@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use archive_store::{ArchiveStore, SuggestionStatus};
 use serde_json::json;
+use ai_extract::AiProtocol;
 
 use crate::ai_client::ChatClient;
 use crate::ai_commands::{self, InflightRegistry};
@@ -1344,4 +1345,51 @@ fn a_stage_that_cannot_come_from_a_notification_is_refused() {
 
     assert_eq!(err.code, "VALIDATION");
     assert_eq!(stage_of(&store, &a), archive_store::Stage::Saved);
+}
+
+#[tokio::test]
+async fn desktop_client_uses_responses_and_anthropic_wire_contracts() {
+    let client = ChatClient::with_timeout(Duration::from_secs(5)).unwrap();
+    for (protocol, body, expected_path, expected_header) in [
+        (
+            AiProtocol::Responses,
+            json!({"output":[{"type":"reasoning"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"[]"}]}]}),
+            "/v1/responses",
+            "authorization: bearer synthetic",
+        ),
+        (
+            AiProtocol::Anthropic,
+            json!({"content":[{"type":"thinking","text":"private"},{"type":"text","text":"[]"}]}),
+            "/v1/messages",
+            "x-api-key: synthetic",
+        ),
+    ] {
+        let server = FakeServer::new(Duration::ZERO, "200 OK", body.to_string());
+        let url = server.url.replace("/v1/chat/completions", expected_path);
+        let request_body = protocol.request_body("model", "rules", "input");
+        let text = client.request(&url, "synthetic", "127.0.0.1", "model", &request_body, protocol).await.unwrap();
+        assert_eq!(text, "[]");
+        let wire = server.received().to_ascii_lowercase();
+        assert!(wire.contains(expected_path), "{wire}");
+        assert!(wire.contains(expected_header), "{wire}");
+        if protocol == AiProtocol::Anthropic {
+            assert!(wire.contains("anthropic-version: 2023-06-01"), "{wire}");
+            assert!(!wire.contains("authorization:"), "{wire}");
+        } else {
+            assert!(wire.contains("\"store\":false"), "{wire}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn anthropic_key_is_not_forwarded_on_redirect() {
+    let target = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    target.set_nonblocking(true).unwrap();
+    let location = format!("http://{}/stolen", target.local_addr().unwrap());
+    let source = FakeServer::new(Duration::ZERO, &format!("302 Found\r\nLocation: {location}"), String::new());
+    let client = ChatClient::with_timeout(Duration::from_secs(2)).unwrap();
+    let body = AiProtocol::Anthropic.request_body("model", "rules", "input");
+    let err = client.request(&source.url, "synthetic", "127.0.0.1", "model", &body, AiProtocol::Anthropic).await.unwrap_err();
+    assert_eq!(err.code, "AI_HTTP_302");
+    assert!(target.accept().is_err(), "redirect target received the API key");
 }

@@ -76,6 +76,7 @@ struct AppState {
 struct AiSettingsView {
     api_url: String,
     model: String,
+    protocol: ai_extract::AiProtocol,
     /// 预览和提示里只出现主机名。
     host: String,
     key_configured: bool,
@@ -93,6 +94,7 @@ fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
         host: ai_settings::host_of(&settings.api_url),
         api_url: settings.api_url,
         model: settings.model,
+        protocol: settings.protocol,
         key_configured,
         credential_error,
     })
@@ -891,9 +893,10 @@ fn save_ai_settings_cmd(
     state: State<AppState>,
     api_url: String,
     model: String,
+    protocol: Option<ai_extract::AiProtocol>,
 ) -> Result<AiSettingsView, CommandError> {
     let data_root = ai_data_root(&state)?;
-    ai_settings::save(&data_root, &api_url, &model).map_err(|message| CommandError {
+    ai_settings::save_with_protocol(&data_root, &api_url, &model, protocol.unwrap_or_default()).map_err(|message| CommandError {
         code: "AI_SETTINGS_WRITE_FAILED".into(),
         message,
     })?;
@@ -918,9 +921,11 @@ async fn list_ai_models_cmd(
     state: State<'_, AppState>,
     api_url: String,
     key: Option<String>,
+    protocol: Option<ai_extract::AiProtocol>,
 ) -> Result<ModelListView, CommandError> {
     checked_url(&api_url)?;
-    let models_url = ai_models::resolve_endpoints(&api_url)
+    let protocol = protocol.unwrap_or_default();
+    let models_url = ai_models::resolve_endpoints_for_protocol(&api_url, protocol)
         .ok_or_else(|| CommandError {
             code: "AI_MODELS_BAD_URL".into(),
             message: "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。".into(),
@@ -928,7 +933,7 @@ async fn list_ai_models_cmd(
         .models_url
         .ok_or_else(|| CommandError {
             code: "AI_MODELS_UNKNOWN_SHAPE".into(),
-            message: "无法从这个 API URL 推断模型列表地址（通常以 /v1 或 /chat/completions 结尾）。可直接手填模型名称。".into(),
+            message: "无法从这个 API URL 推断模型列表地址（通常以 /v1、/chat/completions、/responses 或 /messages 结尾）。可直接手填模型名称。".into(),
         })?;
     let typed = key.unwrap_or_default();
     let effective = if !typed.trim().is_empty() {
@@ -944,7 +949,7 @@ async fn list_ai_models_cmd(
             })?
     };
     let host = ai_settings::host_of(&api_url);
-    let list = ai_models::fetch_model_list(&models_url, &effective, &host).await?;
+    let list = ai_models::fetch_model_list_for_protocol(&models_url, &effective, &host, protocol).await?;
     Ok(ModelListView {
         models: list.models,
         hidden_count: list.hidden_count,
@@ -981,7 +986,7 @@ fn preview_analysis_cmd(
             &evidence_id,
             candidate_ids.as_deref(),
         )?;
-        Ok(ai_commands::preview(&gathered, &settings.api_url, &settings.model))
+        Ok(ai_commands::preview_for_protocol(&gathered, &settings.api_url, &settings.model, settings.protocol))
     })
 }
 
@@ -1015,11 +1020,12 @@ async fn analyze_evidence_cmd(
             &evidence_id,
             candidate_ids.as_deref(),
         )?;
-        let built = ai_extract::build_request(
+        let built = ai_extract::build_request_for_protocol(
             &settings.api_url,
             &settings.model,
             &gathered.evidence,
             &gathered.candidates,
+            settings.protocol,
         );
         Ok((gathered, built))
     })?;
@@ -1031,7 +1037,7 @@ async fn analyze_evidence_cmd(
     // 第二段：锁已经放了。取消就是不再等这个 future，上游是否继续计费我们管不着，
     // 界面文案也是这么说的。
     let outcome = tokio::select! {
-        result = client.chat(&settings.api_url, &key, &host, &settings.model, &built.body) => result,
+        result = client.request(&settings.api_url, &key, &host, &settings.model, &built.body, settings.protocol) => result,
         _ = cancelled => Err(CommandError {
             code: "AI_CANCELLED".into(),
             message: "已取消。取消不保证对方停止计算或停止计费。".into(),

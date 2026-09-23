@@ -309,7 +309,7 @@ D08 实现（可核对）：
 
 右边一列说的是**申请档案里的结构化字段**：这些字段本身不会被送出去。正文是原样发的，所以邮件正文里自然出现的网址、邮箱签名、电话号码会跟着正文一起走——发送前的预览会把正文开头摆出来，就是让用户先看清楚这一点。
 
-Key 只在 `Authorization` 头里，不进正文、不进预览、不进日志、不进备份（`ai-settings.json` 也不含 Key，见 §1 的排除表）。
+Key 只在认证请求头里（Chat Completions / Responses 为 `Authorization`，Anthropic Messages 为 `x-api-key`），不进正文、不进预览、不进日志、不进备份（`ai-settings.json` 也不含 Key，见 §1 的排除表）。Responses 请求设置 `store: false`。
 
 发送前预览（`preview_analysis_cmd`）是本机计算的，**不发请求**：它显示主机名、模型名、正文字数、是否截断、带上哪几条候选，以及正文开头一段。候选可以当场改，改完会重新算一次预览。
 
@@ -331,7 +331,7 @@ Key 只在 `Authorization` 头里，不进正文、不进预览、不进日志�
 - 同一条证据同时只允许一个请求，第二个得到 `AI_BUSY`，不排队。
 - 任何失败之后，这条证据的手动分类都照常可用——界面每一条错误文案都会带上这句。
 - 一条证据只认一次确认（产品需求 §5.3 第 6 条）。确认过之后面板会禁用确认按钮并说明该去哪儿改，重新分析只会多一条看得见但确认不了的建议。
-- 接口地址里不许夹带凭据：带 userinfo（`https://user:pass@host/…`）或查询串里像有 key 的地址**保存不进去**（`ai_settings::credential_in_url`）。否则 Key 会落进 `ai-settings.json`、随每次请求出现在 URL 里，和「Key 只在 Authorization 头里」的口径直接冲突。
+- 接口地址里不许夹带凭据：带 userinfo（`https://user:pass@host/…`）或查询串里像有 key 的地址**保存不进去**（`ai_settings::credential_in_url`）。否则 Key 会落进 `ai-settings.json`、随每次请求出现在 URL 里，和「Key 只在认证请求头里」的口径直接冲突。
 
 ---
 

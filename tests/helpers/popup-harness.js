@@ -78,7 +78,9 @@ function loadPopup({ globals = {} } = {}) {
     // popup.html 里由 ai-models.js 提供，renderConfig 每次都会调到。
     ResumeProModels: {
       describeTransportRisk: () => null,
-      normalizeApiUrlForSave: (typed) => typed
+      normalizeApiUrlForSave: (typed) => typed,
+      normalizeProtocol: (value) => ["chat", "responses", "anthropic"].includes(value) ? value : "chat",
+      protocolFromUrl: (value) => /\/responses(?:[?#]|$)/.test(value) ? "responses" : /\/messages(?:[?#]|$)/.test(value) ? "anthropic" : "chat"
     },
     __RESUME_PRO_TEST__: true,
     crypto: { randomUUID: () => `template-${++uuidCounter}` },

@@ -1,4 +1,4 @@
-//! 往用户自己配的 OpenAI 兼容接口发一次请求。
+//! 按用户所选协议往自己配置的接口发一次请求。
 //!
 //! 三条规矩写死在这里：**不自动重试**（重试等于重复计费，data-privacy §8）、
 //! **有硬超时**（挂死的中转服务不能让按钮永远转圈）、**日志只记状态码和耗时**
@@ -7,6 +7,7 @@
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use ai_extract::AiProtocol;
 
 use crate::commands::CommandError;
 
@@ -27,6 +28,7 @@ impl ChatClient {
     pub fn with_timeout(timeout: Duration) -> Result<Self, CommandError> {
         let inner = reqwest::Client::builder()
             .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| {
                 // 原始错误里有本机的代理与 TLS 配置，写日志够了，不往界面上贴。
@@ -39,7 +41,7 @@ impl ChatClient {
         Ok(Self { inner })
     }
 
-    /// 发一次 Chat Completions，返回模型输出的正文。
+    /// 按所选协议发一次请求，返回模型输出的正文。
     ///
     /// 出错信息里带主机名和模型名，**不带 Key、不带完整地址、不带请求正文**。
     pub async fn chat(
@@ -50,13 +52,26 @@ impl ChatClient {
         model: &str,
         body: &Value,
     ) -> Result<String, CommandError> {
+        self.request(api_url, api_key, host, model, body, AiProtocol::Chat).await
+    }
+
+    pub async fn request(
+        &self,
+        api_url: &str,
+        api_key: &str,
+        host: &str,
+        model: &str,
+        body: &Value,
+        protocol: AiProtocol,
+    ) -> Result<String, CommandError> {
         let started = Instant::now();
-        let response = self
-            .inner
-            .post(api_url)
-            .bearer_auth(api_key)
-            .json(body)
-            .send()
+        let request = self.inner.post(api_url).json(body);
+        let request = if protocol == AiProtocol::Anthropic {
+            request.header("x-api-key", api_key).header("anthropic-version", "2023-06-01")
+        } else {
+            request.bearer_auth(api_key)
+        };
+        let response = request.send()
             .await
             .map_err(|err| {
                 if err.is_timeout() {
@@ -97,15 +112,7 @@ impl ChatClient {
             message: format!("{host} 返回的不是 JSON，这次没有产生建议。"),
         })?;
 
-        parsed
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|item| item.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .filter(|content| !content.trim().is_empty())
-            .map(str::to_string)
+        protocol.response_text(&parsed)
             .ok_or_else(|| CommandError {
                 code: "AI_BAD_RESPONSE".into(),
                 message: format!("{host} 没有返回可用的内容，这次没有产生建议。"),

@@ -1,8 +1,9 @@
 //! 拼请求，并同时产出「这次要发出去什么」的摘要，给预览界面和 `prompt_scope` 用。
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::candidates::Candidate;
+use crate::protocol::AiProtocol;
 
 /// 正文最多发多少字。超过就截断，并在外发摘要里如实标出来。
 pub const MAX_BODY_CHARS: usize = 6000;
@@ -75,7 +76,7 @@ impl RequestContext {
 
 #[derive(Debug, Clone)]
 pub struct BuiltRequest {
-    /// OpenAI 兼容的 Chat Completions 请求体。
+    /// 按所选协议生成的请求体。
     pub body: Value,
     pub scope: OutboundScope,
     pub context: RequestContext,
@@ -101,7 +102,7 @@ const SYSTEM_PROMPT: &str = concat!(
 /// 从接口地址里取主机名，给预览用。取不出来就如实说取不出来，不猜。
 fn host_of(api_url: &str) -> String {
     let rest = api_url.split("://").nth(1).unwrap_or(api_url);
-    let host = rest.split('/').next().unwrap_or("");
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = host.rsplit('@').next().unwrap_or(host);
     if host.is_empty() {
         "（接口地址无法解析）".to_string()
@@ -127,6 +128,16 @@ pub fn build_request(
     model: &str,
     evidence: &EvidenceInput,
     candidates: &[Candidate],
+) -> BuiltRequest {
+    build_request_for_protocol(api_url, model, evidence, candidates, AiProtocol::Chat)
+}
+
+pub fn build_request_for_protocol(
+    api_url: &str,
+    model: &str,
+    evidence: &EvidenceInput,
+    candidates: &[Candidate],
+    protocol: AiProtocol,
 ) -> BuiltRequest {
     let (body_text, truncated) = truncate(&evidence.body);
     let mut labels: Vec<(String, String)> = Vec::new();
@@ -198,14 +209,7 @@ pub fn build_request(
     };
 
     BuiltRequest {
-        body: json!({
-            "model": model,
-            "temperature": 0,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user},
-            ],
-        }),
+        body: protocol.request_body(model, SYSTEM_PROMPT, &user),
         scope,
         context: RequestContext {
             labels,

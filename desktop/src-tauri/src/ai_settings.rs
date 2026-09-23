@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use ai_extract::AiProtocol;
 
 pub const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
@@ -20,6 +21,8 @@ const FILE_NAME: &str = "ai-settings.json";
 pub struct AiSettings {
     pub api_url: String,
     pub model: String,
+    #[serde(default)]
+    pub protocol: AiProtocol,
 }
 
 impl Default for AiSettings {
@@ -27,6 +30,7 @@ impl Default for AiSettings {
         Self {
             api_url: DEFAULT_API_URL.to_string(),
             model: DEFAULT_MODEL.to_string(),
+            protocol: AiProtocol::Chat,
         }
     }
 }
@@ -56,13 +60,13 @@ pub fn load(data_root: &Path) -> AiSettings {
 
 /// 地址里夹带凭据就不保存。
 ///
-/// 文档写着「Key 只在 Authorization 头里，`ai-settings.json` 不含 Key」。用户把 key 贴进
+/// 文档写着「Key 只在认证请求头里，`ai-settings.json` 不含 Key」。用户把 key 贴进
 /// 地址（`https://user:pass@host/…` 或 `?api-key=…`）就会把这句话变成假话：它会落进设置
 /// 文件、随每次请求出现在 URL 里、也更容易被中转站的访问日志记下来。界面上的提醒挡不住
 /// 直接改文件或粘贴，所以这一层必须拦。
 pub fn credential_in_url(url: &str) -> Option<String> {
     let rest = url.split("://").nth(1).unwrap_or(url);
-    let authority = rest.split('/').next().unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.contains('@') {
         return Some("接口地址里带了用户名或密码。Key 请填在「API Key」里，别放进地址。".into());
     }
@@ -99,12 +103,16 @@ pub fn credential_in_url(url: &str) -> Option<String> {
 
 /// 写设置。先写临时文件再改名，避免写到一半断电留下半个文件。
 pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSettings, String> {
+    save_with_protocol(data_root, typed_url, typed_model, AiProtocol::Chat)
+}
+
+pub fn save_with_protocol(data_root: &Path, typed_url: &str, typed_model: &str, protocol: AiProtocol) -> Result<AiSettings, String> {
     if let Some(problem) = credential_in_url(typed_url) {
         return Err(problem);
     }
     let current = load(data_root);
     let settings = AiSettings {
-        api_url: normalize_api_url(typed_url, &current.api_url),
+        api_url: normalize_api_url_for_protocol(typed_url, &current.api_url, protocol),
         model: {
             let model = typed_model.trim();
             if model.is_empty() {
@@ -113,6 +121,7 @@ pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSe
                 model.to_string()
             }
         },
+        protocol,
     };
     let target = path_for(data_root);
     let tmp = target.with_extension("json.tmp");
@@ -125,9 +134,13 @@ pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSe
 /// 用户填的多半是服务商文档上的 Base URL。规则和插件那边（`ai-models.js`）一致：
 /// 已经指向具体端点的原样保留，看着像 base 的补上 `/chat/completions`。
 pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
+    normalize_api_url_for_protocol(typed, fallback, AiProtocol::Chat)
+}
+
+pub fn normalize_api_url_for_protocol(typed: &str, fallback: &str, protocol: AiProtocol) -> String {
     let value = typed.trim();
     if value.is_empty() {
-        return fallback.to_string();
+        return normalize_api_url_for_protocol(fallback, DEFAULT_API_URL, protocol);
     }
     let (prefix, rest) = match value.find("://") {
         Some(at) => value.split_at(at + 3),
@@ -142,8 +155,14 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
     let (authority, path) = trimmed.split_at(path_start);
     let lower = path.to_ascii_lowercase();
 
-    if lower.ends_with("/chat/completions") || lower.ends_with("/messages") {
-        return value.to_string();
+    for endpoint in ["/chat/completions", "/responses", "/messages"] {
+        if lower.ends_with(endpoint) {
+            if endpoint == protocol.suffix() {
+                return value.to_string();
+            }
+            let base = &path[..path.len() - endpoint.len()];
+            return format!("{prefix}{authority}{base}{}{suffix}", protocol.suffix());
+        }
     }
     let last = path.rsplit('/').next().unwrap_or("");
     let looks_like_base = path.is_empty() || is_version_segment(last) || last.eq_ignore_ascii_case("openai");
@@ -151,7 +170,7 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
         return value.to_string();
     }
     let base = if path.is_empty() { "/v1" } else { path };
-    format!("{prefix}{authority}{base}/chat/completions{suffix}")
+    format!("{prefix}{authority}{base}{}{suffix}", protocol.suffix())
 }
 
 /// 版本段（`/v1`、`/api/v3`、`/v1beta`）：`v` 后面必须先是数字，剩下全是字母数字。
@@ -177,7 +196,7 @@ pub(crate) fn is_version_segment(segment: &str) -> bool {
 /// 预览和日志里只出现主机名，不出现完整地址（data-privacy §9）。
 pub fn host_of(api_url: &str) -> String {
     let rest = api_url.split("://").nth(1).unwrap_or(api_url);
-    let authority = rest.split('/').next().unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or(authority);
     if host.is_empty() {
         "（接口地址无法解析）".to_string()
@@ -224,6 +243,10 @@ mod tests {
     fn an_empty_address_keeps_whatever_was_there_before() {
         assert_eq!(normalize_api_url("   ", "https://kept.example/v1/chat/completions"),
             "https://kept.example/v1/chat/completions");
+        assert_eq!(
+            normalize_api_url_for_protocol("   ", "https://kept.example/v1/chat/completions", AiProtocol::Anthropic),
+            "https://kept.example/v1/messages"
+        );
     }
 
     #[test]
@@ -244,6 +267,18 @@ mod tests {
     #[test]
     fn the_host_never_carries_credentials() {
         assert_eq!(host_of("https://user:pass@API.Example.test/v1/chat/completions"), "api.example.test");
+        assert_eq!(host_of("https://relay.example?tenant=private"), "relay.example");
+    }
+
+    #[test]
+    fn protocol_switch_rewrites_known_endpoint_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = save_with_protocol(dir.path(), "https://relay.example/v1/chat/completions", "claude-test", AiProtocol::Anthropic).unwrap();
+        assert_eq!(saved.api_url, "https://relay.example/v1/messages");
+        assert_eq!(load(dir.path()).protocol, AiProtocol::Anthropic);
+        let legacy = dir.path().join("ai-settings.json");
+        std::fs::write(&legacy, r#"{"apiUrl":"https://relay.example/v1/responses","model":"m"}"#).unwrap();
+        assert_eq!(load(dir.path()).protocol, AiProtocol::Chat);
     }
 
     #[test]

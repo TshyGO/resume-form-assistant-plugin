@@ -390,3 +390,53 @@ test("other HTTP errors include the status and the provider's message", async ()
   assert.match(result.message, /429/u);
   assert.match(result.message, /slow down/u);
 });
+
+test("the three protocols resolve their own endpoint and the same model-list path", () => {
+  for (const [protocol, suffix] of [["chat", "/chat/completions"], ["responses", "/responses"], ["anthropic", "/messages"]]) {
+    const fromBase = models.resolveEndpoints("https://relay.example/v1", protocol);
+    assert.equal(fromBase.chatUrl, `https://relay.example/v1${suffix}`);
+    assert.equal(fromBase.modelsUrl, "https://relay.example/v1/models");
+    assert.equal(models.protocolFromUrl(fromBase.chatUrl), protocol);
+    assert.equal(models.normalizeApiUrlForSave("https://relay.example/v1/chat/completions", "https://relay.example/v1/chat/completions", protocol, "chat"), fromBase.chatUrl);
+  }
+});
+
+test("request and text extraction use the selected wire protocol", () => {
+  const common = { model: "m", apiKey: "secret", system: "rules", user: "input" };
+  const chat = models.requestForProtocol({ ...common, protocol: "chat" });
+  assert.equal(chat.headers.Authorization, "Bearer secret");
+  assert.equal(chat.body.messages[1].content, "input");
+  assert.equal(models.responseText({ choices: [{ message: { content: "[]" } }] }, "chat"), "[]");
+
+  const responses = models.requestForProtocol({ ...common, protocol: "responses" });
+  assert.equal(responses.body.store, false);
+  assert.equal(responses.body.instructions, "rules");
+  assert.equal(responses.body.input, "input");
+  assert.equal(models.responseText({ output: [{ type: "reasoning", content: [] }, { type: "message", role: "assistant", content: [{ type: "output_text", text: "[]" }] }] }, "responses"), "[]");
+  assert.equal(models.responseText({ output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "he" }, { type: "output_text", text: "llo" }] }] }, "responses"), "hello");
+
+  const anthropic = models.requestForProtocol({ ...common, protocol: "anthropic" });
+  assert.equal(anthropic.headers["x-api-key"], "secret");
+  assert.equal(anthropic.headers["anthropic-version"], "2023-06-01");
+  assert.equal(anthropic.headers.Authorization, undefined);
+  assert.equal(anthropic.body.max_tokens, 4096);
+  assert.equal(anthropic.body.messages[0].content, "input");
+  assert.equal(models.responseText({ content: [{ type: "thinking", text: "hidden" }, { type: "text", text: "[]" }] }, "anthropic"), "[]");
+  assert.equal(models.responseText({ content: [{ type: "text", text: "he" }, { type: "text", text: "llo" }] }, "anthropic"), "hello");
+});
+
+test("Anthropic model discovery uses its required headers", async () => {
+  let captured;
+  const result = await models.fetchModelList({
+    apiUrl: "https://api.anthropic.com/v1/messages", apiKey: "secret", protocol: "anthropic",
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return jsonResponse(200, { data: [{ id: "claude-test" }] });
+    }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(captured.url, "https://api.anthropic.com/v1/models");
+  assert.equal(captured.init.redirect, "manual");
+  assert.equal(captured.init.headers["x-api-key"], "secret");
+  assert.equal(captured.init.headers.Authorization, undefined);
+});

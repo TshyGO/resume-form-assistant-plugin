@@ -30,7 +30,7 @@ function loadBackground(fetchImpl) {
     chrome: { action: { onClicked: { addListener() {} } }, runtime: { onMessage: { addListener(fn) { listener = fn; } } } },
     fetch: async (url, options) => { requests.push({ url, options }); return fetchImpl(options); }
   });
-  context.self = {};
+  context.self = { ResumeProModels: require("../ai-models.js") };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../ai-worker.js"), "utf8"), context);
   listener = context.dispatchAiMessage;
   return { run: (input = message, controller) => context.handleAiFill(input, controller),
@@ -38,6 +38,29 @@ function loadBackground(fetchImpl) {
     timers, requests, advance(ms) { clock += ms; } };
 }
 const ok = (matches = [{ fieldId: "school", value: "大学乙" }]) => ({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(matches) } }] }) });
+
+test("fill uses Responses and Anthropic request and response formats", async () => {
+  const payload = JSON.stringify([{ fieldId: "school", value: "大学乙" }]);
+  for (const [protocol, data, authHeader] of [
+    ["responses", { output: [{ type: "reasoning" }, { type: "message", role: "assistant", content: [{ type: "output_text", text: payload }] }] }, "Authorization"],
+    ["anthropic", { content: [{ type: "thinking", text: "ignored" }, { type: "text", text: payload }] }, "x-api-key"]
+  ]) {
+    const env = loadBackground(async () => ({ ok: true, json: async () => data }));
+    const result = await env.run({ ...message, aiConfig: { ...message.aiConfig, protocol } });
+    assert.equal(result.diagnostics.aiMatches, 1, protocol);
+    const request = env.requests[0].options;
+    assert.ok(request.headers[authHeader], protocol);
+    assert.equal(request.headers[authHeader === "Authorization" ? "x-api-key" : "Authorization"], undefined);
+    const body = JSON.parse(request.body);
+    if (protocol === "responses") {
+      assert.equal(body.store, false);
+      assert.ok(body.input.includes("表单字段列表"));
+    } else {
+      assert.equal(body.max_tokens, 4096);
+      assert.ok(body.messages[0].content.includes("表单字段列表"));
+    }
+  }
+});
 
 test("candidate pruning retains complete repeated education records and reduces long-resume bytes", () => {
   const selected = helpers.selectResumeCandidates([formFields[1]], resumeFields);
