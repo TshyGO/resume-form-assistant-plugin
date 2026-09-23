@@ -17,6 +17,7 @@ import { mountBackup } from "./backup-ui.ts";
 import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
+import { mountResume } from "./resume/mount.tsx";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -37,6 +38,7 @@ const settingsNavigation = mountSettingsNavigation(must("view-settings"), (name)
 
 const views: Record<string, HTMLElement> = {
   applications: must("view-applications"),
+  resume: must("view-resume"),
   inbox: must("view-inbox"),
   todos: must("view-todos"),
   settings: must("view-settings"),
@@ -274,6 +276,24 @@ const applications = mountApplications(command);
 // 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
+
+// 简历模板只收 .xlsx / .csv；导出默认用模板名。没有 Tauri 时为 null，界面会如实说明。
+const resumePickers =
+  dialog?.open && dialog?.save
+    ? {
+        open: async () => {
+          const chosen = await dialog.open?.({
+            multiple: false,
+            filters: [{ name: "Excel / CSV", extensions: ["xlsx", "csv"] }],
+          });
+          return typeof chosen === "string" ? chosen : null;
+        },
+        save: async (suggested: string) =>
+          (await dialog.save?.({ defaultPath: suggested, filters: [{ name: "Excel", extensions: ["xlsx"] }] })) ?? null,
+      }
+    : null;
+mountResume(must("resume-root"), invoke ?? null, resumePickers);
+
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
