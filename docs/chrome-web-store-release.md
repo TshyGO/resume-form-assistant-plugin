@@ -38,7 +38,7 @@
 
 ## 2. GitHub Secrets
 
-仓库 Settings → Secrets and variables → Actions。名字必须一致，值不要写进仓库、日志或 ZIP。
+在仓库 [Settings → Secrets and variables → Actions](https://github.com/TshyGO/resume-form-assistant-plugin/settings/secrets/actions) 点 **New repository secret**，逐个填入下面的名称和值。服务账号密钥要粘贴整份 JSON 内容，不是文件路径。不要把私钥发在聊天、Issue、PR，或提交进仓库；Secret 保存后只能核对名称，不能读回原值。
 
 | Secret | 何时需要 | 内容 |
 | --- | --- | --- |
@@ -50,6 +50,14 @@
 | `CHROME_REFRESH_TOKEN` | 只有不用服务账号时 | Playground 换出的 refresh token |
 
 `GITHUB_TOKEN` 由 Actions 自己提供，用来把 ZIP 挂到 Release，不用另外建。
+
+首次正式发布前，至少确认三个必需 Secret 已存在、服务账号邮箱已在 Developer Dashboard 的 Account 页授权，并先跑一次第 5 节的 Actions `dry_run`。`dry_run` 不访问商店，因此只能验证检查与打包，不能验证商店授权。缺少商店凭据时，正式流程可能已经把 ZIP 挂到 GitHub Release，但会在上传商店时失败。
+
+### 已手动送审的 0.4.0 如何切换
+
+截至 2026-09-23，商店的 **0.4.0 已由维护者手动提交审核**。合并本工作流不会补发已有版本；不要再创建 `v0.4.0` GitHub Release 来试自动送审，也不要重传 0.4.0。先按原流程处理这次手动审核及最终上线。
+
+第一版自动送审应使用商店尚未使用、且高于 0.4.0 的版本，例如 **0.4.1**：先在 `main` 更新 `manifest.json`，配好上面的 Secret，再创建正式 `v0.4.1` GitHub Release。若 0.4.0 仍在审核中，先等它处理完再启动下一次商店送审。Chrome Web Store 不接受用相同版本号覆盖已上传的包；流水线也会拦住已在线上、审核中或待上线的同版本。
 
 ## 3. 发一个正式版
 
