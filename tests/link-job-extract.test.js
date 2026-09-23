@@ -85,6 +85,7 @@ test('a configured assist sends only allowlisted fragments and keeps an evidence
   });
 
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.redirect, 'error');
   const body = calls[0].init.body;
   assert.equal(body.includes(KEY), false);
   assert.equal(body.includes(PHONE), false);
@@ -141,14 +142,31 @@ test('an apply label cannot become part of the saved job title', async () => {
   assert.equal(result.fields.title, '');
 });
 
-test('a page title without company evidence goes straight to manual review', async () => {
+test('a page title without local company evidence still gets the configured AI chance', async () => {
   const { nextSaveStep } = await loadFlow();
   const result = nextSaveStep({
     reliable: false, company: '', title: '',
     fragments: [{ id: 1, source: 'document.title', role: 'page-title', text: '招聘岗位' }]
   });
-  assert.equal(result.action, 'form');
-  assert.equal(result.reason, 'no_company_evidence');
+  assert.equal(result.action, 'assist');
+});
+
+test('AI may identify a standalone company page title, but not a mixed recruiting title', async () => {
+  const { judgeSuggestion } = await loadAssist();
+  const fragments = [
+    { id: 1, source: 'document.title', role: 'page-title', text: '金发科技股份有限公司' },
+    { id: 2, source: 'h1', role: 'page-title', text: '工艺工程师' }
+  ];
+  const proposed = {
+    company: '金发科技股份有限公司', title: '工艺工程师', location: '',
+    companyFragment: 1, titleFragment: 2, locationFragment: null
+  };
+  assert.equal(judgeSuggestion(proposed, fragments).status, 'ok');
+
+  const mixed = [{ ...fragments[0], text: '工艺工程师 - 金发科技股份有限公司' }, fragments[1]];
+  const rejected = judgeSuggestion({ ...proposed, company: mixed[0].text }, mixed);
+  assert.equal(rejected.status, 'manual');
+  assert.equal(rejected.fields.company, '');
 });
 
 test('format errors, cancellation, timeout and network failure each ask once and then stop', async () => {

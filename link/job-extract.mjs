@@ -29,7 +29,7 @@ const SYSTEM_PROMPT = [
   '不得使用片段之外的知识，不得补全公司、岗位或地点。',
   '只返回一个 JSON 对象，不要 markdown，不要解释：',
   '{"company":"","title":"","location":"","companyFragment":null,"titleFragment":null,"locationFragment":null}',
-  'company 必须与某个 role 为 company 的片段全文一致，并填写该片段编号。',
+  'company 必须与 role 为 company 的片段全文一致；若只有独立、完整的公司名称页面标题，也可引用该 page-title 片段。不得从招聘标题推测公司。',
   'title 必须与某个 role 为 job-title 的片段里「你正在投递职位」后面的全文一致，或与某个 role 为 page-title 的片段全文一致，且不能等于公司名。',
   'location 只有 role 为 job-location 的片段可以填写，而且必须与该片段全文一致。没有就用空字符串和 null。',
   '意向工作地点、期望工作地点、面试站点都不是岗位工作地点。',
@@ -71,6 +71,7 @@ export function requestJobExtract({ fetchImpl, aiConfig, fragments, signal, time
   return fetchImpl(config.apiUrl, {
     method: 'POST',
     signal: local.signal,
+    redirect: 'error',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`
@@ -165,7 +166,13 @@ function judgeField(field, raw, fragmentId, fragments) {
 }
 
 function supports(field, value, fragment, fragments) {
-  if (field === 'company') return fragment.role === 'company' && value === fragment.text;
+  if (field === 'company') {
+    if (fragment.role === 'company') return value === fragment.text;
+    // A standalone employer page title is useful evidence on an unfamiliar site. A title
+    // containing job or navigation text is not, even if its last word is "公司".
+    return fragment.role === 'page-title' && value === fragment.text
+      && /(?:公司|集团)$/.test(value) && !/[-–—|｜:：/]|招聘|职位|岗位/.test(value);
+  }
   if (field === 'location') return fragment.role === 'job-location' && value === fragment.text && !PREFERENCE.test(fragment.text);
   if (field !== 'title') return false;
   if (fragments.some(item => item.role === 'company' && item.text === value)) return false;

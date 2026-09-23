@@ -175,6 +175,7 @@
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__desktop">
           <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到桌面端</button>
+          <p class="resume-pro__footer-tip">本地识别不准时，会把少量岗位文字发给你配置的 AI 服务；不会发送投递表单或简历内容。</p>
           <button class="resume-pro__manager-button" id="resume-pro-confirm-submit" type="button">确认已投递</button>
           <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
             <label class="resume-pro__field">

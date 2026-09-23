@@ -92,7 +92,6 @@ const REFUSALS = {
 const MANUAL_SAVE = {
   unconfigured: '插件还没有配置 AI 接口。请补全公司和岗位后再保存，不会猜测。',
   no_fragments: '这个页面没有可用的岗位片段。请手动填写公司和岗位。',
-  no_company_evidence: '页面没有可核对的公司信息，请手动填写，避免发起无法验证结果的 AI 请求。',
   cancelled: '已取消识别。请手动补正。这次不会自动再请求。',
   timeout: '识别超时。请手动补正。这次不会自动再请求。',
   network: '识别接口没有连上。请手动补正。这次不会自动再请求。',
