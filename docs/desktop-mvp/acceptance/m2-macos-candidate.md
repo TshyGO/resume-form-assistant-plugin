@@ -15,7 +15,7 @@ M2 只把将要验收的 DMG、插件 ZIP、源码 commit 和下载来源绑定�
 下载：
 
 - Apple Silicon `.dmg` 及其 `.sha256`；
-- 同一 Release 中的 `resume-pro-plugin-0.4.0-beta.N.zip` 及其 `.sha256`。不要混用其它 tag 的插件包，也不要再手工 `git archive`。
+- 同一 Release 中的 `resume-pro-plugin-<manifest 版本>.zip` 及其 `.sha256`。新工作流的插件文件名跟随 `manifest.json`，与桌面 beta 版本可以不同；早期 beta.1–beta.3 的历史资产曾用桌面 beta 版本命名，验收旧版时以该 Release 的实际文件名和包内 manifest 为准。不要混用其它 tag 的插件包，也不要再手工 `git archive`。
 
 候选文件保存在受控制品存储，不提交到仓库。下载链接不得含账号、token、查询参数或 fragment；若 GitHub Actions artifact URL 需要登录或会过期，先复制到项目批准的稳定 HTTPS 候选存储，再登记。
 
@@ -26,7 +26,7 @@ M2 只把将要验收的 DMG、插件 ZIP、源码 commit 和下载来源绑定�
 ```bash
 python3 desktop/scripts/d14_macos_acceptance_check.py prepare-candidate \
   --dmg "/path/to/Resume.Pro.Desktop_0.4.0-beta.N_aarch64.dmg" \
-  --extension-zip "/path/to/resume-pro-plugin-0.4.0-beta.N.zip" \
+  --extension-zip "/path/to/resume-pro-plugin-0.4.0.zip" \
   --output "docs/desktop-mvp/acceptance/runs/<run-id>/artifacts.json" \
   --source-commit "<40 位源码 SHA>" \
   --workflow-run-url "https://github.com/TshyGO/resume-form-assistant-plugin/actions/runs/<run-id>" \

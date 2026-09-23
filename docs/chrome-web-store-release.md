@@ -1,6 +1,6 @@
 # Chrome 扩展：从 GitHub Release 到商店送审
 
-维护者文档。日常 push 和 PR 只跑 CI（`.github/workflows/test.yml`），不会碰 Chrome Web Store。正式发布从你创建的 **GitHub Release** 开始，由 `.github/workflows/release.yml` 完成检查、打包、把同一个 ZIP 挂到这个 Release，再上传商店并送审。
+维护者文档。日常 push 和 PR 只跑 CI（`.github/workflows/test.yml`），不会碰 Chrome Web Store。正式发布从你创建的 **GitHub Release** 开始，由 `.github/workflows/release.yml` 完成检查、打包、把同一个 ZIP 挂到这个 Release，再上传商店并送审。插件与桌面端的完整操作顺序见 [发版 SOP](release-sop.md)。
 
 扩展本身没有编译步骤。正式「构建」就是仓库已有的 `node desktop/scripts/pack-plugin.js`：按允许清单从 Git 树打 ZIP，不包含 `desktop/`、`node_modules`、测试和 `.env`。版本号只看 `manifest.json`。根目录 `package.json` 的 `version` 是类型检查工具自己的版本，不参与商店发布。
 
@@ -55,9 +55,9 @@
 
 ### 已手动送审的 0.4.0 如何切换
 
-截至 2026-09-23，商店的 **0.4.0 已由维护者手动提交审核**。合并本工作流不会补发已有版本；不要再创建 `v0.4.0` GitHub Release 来试自动送审，也不要重传 0.4.0。先按原流程处理这次手动审核及最终上线。
+截至 2026-09-23，商店的 **0.4.0 已由维护者手动发布并上线**。合并本工作流不会补发已有版本；不要再创建 `v0.4.0` GitHub Release 来试自动送审，也不要重传 0.4.0。
 
-第一版自动送审应使用商店尚未使用、且高于 0.4.0 的版本，例如 **0.4.1**：先在 `main` 更新 `manifest.json`，配好上面的 Secret，再创建正式 `v0.4.1` GitHub Release。若 0.4.0 仍在审核中，先等它处理完再启动下一次商店送审。Chrome Web Store 不接受用相同版本号覆盖已上传的包；流水线也会拦住已在线上、审核中或待上线的同版本。
+第一版自动送审应使用商店尚未使用、且高于 0.4.0 的版本，例如 **0.4.1**：先在 `main` 更新 `manifest.json`，再创建正式 `v0.4.1` GitHub Release。Chrome Web Store 不接受用相同版本号覆盖已上传的包；流水线也会拦住已在线上、审核中或待上线的同版本。
 
 ## 3. 发一个正式版
 

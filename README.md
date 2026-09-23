@@ -8,7 +8,9 @@
 
 > 插件本身完全免费并开源。AI 功能需要你自己配置一个 OpenAI 兼容接口，接口是否收费取决于你使用的模型服务商。
 
-**[📦 下载最新版](https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest)** · **[📖 小白教程](#小白直接看这里)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+**[🧩 Chrome 商店安装](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)** · **[📦 插件 ZIP 与桌面安装包](https://github.com/TshyGO/resume-form-assistant-plugin/releases)** · **[📖 小白教程](#小白直接看这里)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+
+维护者发新版请按 [插件与桌面端发版 SOP](docs/release-sop.md) 操作。
 
 ## 💬 QQ 交流群
 
@@ -35,14 +37,14 @@
 
 ## 1. 下载插件
 
-推荐直接下载已经打包好的版本：
+Chrome 用户优先从 [Chrome 商店安装](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)。需要手动加载 ZIP 时，打开 Releases，找标签为 **`vX.Y.Z`** 的最新插件正式版；`desktop-vX.Y.Z` 是桌面版，两者版本号可以不同：
 
-**[点击这里进入 Releases 下载最新版](https://github.com/TshyGO/resume-form-assistant-plugin/releases/latest)**
+**[点击这里查看插件 ZIP](https://github.com/TshyGO/resume-form-assistant-plugin/releases)**
 
 在 Releases 页面找到类似下面的文件：
 
 ```text
-resume-pro-v0.4.0-chrome.zip
+resume-pro-vX.Y.Z-chrome.zip
 ```
 
 下载完成后，把 ZIP 文件完整解压到一个固定文件夹。

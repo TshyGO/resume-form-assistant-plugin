@@ -78,6 +78,29 @@ test("release metadata must be stable and point to this repository", () => {
   }), null);
 });
 
+test("plugin update check ignores newer desktop releases and chooses the newest plugin version", () => {
+  const release = (tag_name, extras = {}) => ({
+    tag_name,
+    html_url: `https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/${tag_name}`,
+    draft: false,
+    prerelease: false,
+    ...extras
+  });
+  assert.deepEqual(utils.latestPluginRelease([
+    release("desktop-v9.0.0"),
+    release("v0.4.1", { prerelease: true }),
+    release("v0.3.1"),
+    release("v0.4.0"),
+    release("v0.4.2", { html_url: "https://example.com/other" })
+  ]), {
+    version: "v0.4.0",
+    url: "https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/v0.4.0",
+    summary: "包含功能改进和问题修复。"
+  });
+  assert.equal(utils.latestPluginRelease([release("desktop-v9.0.0")]), null);
+  assert.throws(() => utils.latestPluginRelease({ tag_name: "v0.4.0" }), /列表无效/u);
+});
+
 test("update checks use a bounded daily cache", () => {
   const now = Date.UTC(2026, 8, 1, 12, 0, 0);
   assert.equal(utils.shouldUseUpdateCache(now - 60_000, now), true);

@@ -247,7 +247,7 @@
     }
 
     const version = String(payload.tag_name ?? "").trim();
-    if (!parseVersion(version) || !isTrustedReleaseUrl(payload.html_url)) {
+    if (!/^v\d+\.\d+\.\d+$/u.test(version) || !isTrustedReleaseUrl(payload.html_url)) {
       return null;
     }
 
@@ -256,6 +256,20 @@
       url: payload.html_url,
       summary: summarizeReleaseBody(payload.body || payload.name)
     };
+  }
+
+  function latestPluginRelease(payload) {
+    if (!Array.isArray(payload)) {
+      throw new Error("GitHub Release 列表无效");
+    }
+    let latest = null;
+    for (const item of payload) {
+      const release = normalizeRelease(item);
+      if (release && (!latest || compareVersions(release.version, latest.version) > 0)) {
+        latest = release;
+      }
+    }
+    return latest;
   }
 
   function shouldUseUpdateCache(checkedAt, now = Date.now(), intervalMs = 24 * 60 * 60 * 1000) {
@@ -285,6 +299,7 @@
     extractPdfText,
     formatAiError,
     getPdfExtractionErrorMessage,
+    latestPluginRelease,
     normalizeRelease,
     parseVersion,
     shouldUseUpdateCache
