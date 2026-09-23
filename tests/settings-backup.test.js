@@ -170,6 +170,8 @@ test("不勾选时接口地址里的凭据参数也一起去掉", async () => {
   const saved = captureDownloads(popup);
   const state = await seed(popup);
   state.aiConfig.apiUrl = "https://generativelanguage.example/v1beta?key=AIzaSecret123";
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+  active.apiUrl = state.aiConfig.apiUrl;
   await popup.writeState(state);
 
   await backupApi(popup).handleExportBackup();
@@ -184,6 +186,8 @@ test("确认导出 Key 时接口地址原样保留", async () => {
   const saved = captureDownloads(popup);
   const state = await seed(popup);
   state.aiConfig.apiUrl = "https://generativelanguage.example/v1beta?key=AIzaSecret123";
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+  active.apiUrl = state.aiConfig.apiUrl;
   await popup.writeState(state);
   popup.element("backup-include-key").checked = true;
 
@@ -426,6 +430,180 @@ test("导出的 Excel 能被导入原样解析回来", async () => {
     JSON.stringify(before.templates[0].groups)
   );
   assert.equal(after.templates[0].name, before.templates[0].name);
+});
+
+async function saveTwoProfiles(popup) {
+  const state = await seed(popup, { apiKey: "sk-a" });
+  state.aiProfiles.push({
+    id: "profile-b",
+    name: "B",
+    apiUrl: "https://b.example/v1/chat/completions",
+    model: "model-b",
+    apiKey: "sk-b"
+  });
+  await popup.writeState(state);
+  return popup.readState();
+}
+
+test("多份配置默认导出不含任何 Key，旧的单份备份形状仍然不含 Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await saveTwoProfiles(popup);
+
+  await backupApi(popup).handleExportBackup();
+
+  const backup = saved[0].data;
+  assert.equal(backup.formatVersion, 3);
+  assert.equal(backup.aiProfiles.length, 2);
+  assert.equal("apiKey" in backup.aiConfig, false);
+  assert.equal(backup.aiProfiles.some((profile) => "apiKey" in profile), false);
+  assert.doesNotMatch(JSON.stringify(backup), /sk-a|sk-b/);
+});
+
+test("确认包含 Key 后，每份配置只带自己的 Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await saveTwoProfiles(popup);
+  popup.element("backup-include-key").checked = true;
+
+  const api = backupApi(popup);
+  await api.handleExportBackup();
+  await api.exportBackup(true);
+
+  const profiles = Object.fromEntries(saved[0].data.aiProfiles.map((profile) => [profile.name, profile]));
+  assert.equal(profiles["api.example.com"].apiKey, "sk-a");
+  assert.equal(profiles.B.apiKey, "sk-b");
+  assert.equal(profiles["api.example.com"].apiUrl, "https://api.example.com/v1");
+  assert.equal(profiles.B.apiUrl, "https://b.example/v1/chat/completions");
+});
+
+test("恢复多份备份时，Key 只回到同一个地址的那一份", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  const original = await saveTwoProfiles(popup);
+  popup.element("backup-include-key").checked = true;
+  const api = backupApi(popup);
+  await api.handleExportBackup();
+  await api.exportBackup(true);
+
+  const backup = saved[0].data;
+  const moved = backup.aiProfiles.find((profile) => profile.id === "profile-b");
+  moved.apiUrl = "https://c.example/v1/chat/completions";
+
+  const fresh = loadPopup();
+  await seed(fresh, { apiKey: "sk-local" });
+  await backupApi(fresh).handleBackupFileSelection({
+    target: { files: [makeTextFile("backup.json", JSON.stringify(backup))] }
+  });
+  await backupApi(fresh).commitPendingBackup("replace");
+
+  const state = await fresh.readState();
+  const byId = Object.fromEntries(state.aiProfiles.map((profile) => [profile.id, profile]));
+  const profileA = state.aiProfiles.find((profile) => profile.apiKey === "sk-a");
+  assert.equal(profileA.apiUrl, "https://api.example.com/v1");
+  assert.equal(byId["profile-b"].apiUrl, "https://c.example/v1/chat/completions");
+  assert.equal(byId["profile-b"].apiKey, "sk-b");
+  assert.equal(state.aiProfiles.some((profile) => profile.apiUrl === "https://c.example/v1/chat/completions" && profile.apiKey === "sk-a"), false);
+  assert.notEqual(original.activeAiProfileId, "");
+});
+
+test("不含 Key 的多份备份只在同一条、同一地址上保留本机 Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await saveTwoProfiles(popup);
+  await backupApi(popup).handleExportBackup();
+  const backup = structuredClone(saved[0].data);
+  const moved = backup.aiProfiles.find((profile) => profile.id === "profile-b");
+  moved.apiUrl = "https://c.example/v1/chat/completions";
+
+  await backupApi(popup).handleBackupFileSelection({
+    target: { files: [makeTextFile("backup.json", JSON.stringify(backup))] }
+  });
+  await backupApi(popup).commitPendingBackup("replace");
+
+  const state = await popup.readState();
+  const byId = Object.fromEntries(state.aiProfiles.map((profile) => [profile.id, profile]));
+  const profileA = state.aiProfiles.find((profile) => profile.apiUrl === "https://api.example.com/v1");
+  assert.equal(profileA.apiKey, "sk-a");
+  assert.equal(byId["profile-b"].apiKey, "");
+  assert.equal(state.aiConfig.apiKey, profileA.id === state.activeAiProfileId ? "sk-a" : "");
+});
+
+test("追加多份备份保留本地配置；ID 撞上时另建一条且不借用本地 Key", async () => {
+  const popup = loadPopup();
+  const saved = captureDownloads(popup);
+  await saveTwoProfiles(popup);
+  const before = await popup.readState();
+  await backupApi(popup).handleExportBackup();
+  const backup = structuredClone(saved[0].data);
+  const local = before.aiProfiles.find((profile) => profile.id === before.activeAiProfileId);
+  const incoming = backup.aiProfiles.find((profile) => profile.id === before.activeAiProfileId);
+  incoming.apiUrl = "https://different.example/v1/chat/completions";
+
+  await backupApi(popup).handleBackupFileSelection({
+    target: { files: [makeTextFile("backup.json", JSON.stringify(backup))] }
+  });
+  await backupApi(popup).commitPendingBackup("append");
+
+  const state = await popup.readState();
+  assert.equal(state.aiProfiles.length, 4);
+  assert.equal(state.aiProfiles.find((profile) => profile.id === local.id).apiKey, "sk-a");
+  const added = state.aiProfiles.find((profile) => profile.apiUrl === incoming.apiUrl);
+  assert.notEqual(added.id, local.id);
+  assert.equal(added.apiKey, "");
+  assert.equal(state.aiProfiles.find((profile) => profile.id === "profile-b").apiKey, "sk-b");
+  assert.equal(state.activeAiProfileId, added.id);
+});
+
+test("追加旧版单份备份也不会覆盖本地正在使用的配置", async () => {
+  const popup = loadPopup();
+  await saveTwoProfiles(popup);
+  const before = await popup.readState();
+  await backupApi(popup).handleBackupFileSelection({
+    target: {
+      files: [makeTextFile("backup.json", JSON.stringify({
+        format: "resume-pro.backup",
+        formatVersion: 1,
+        templates: before.templates,
+        activeTemplateId: before.activeTemplateId,
+        aiConfig: { apiUrl: "https://new.example/v1", model: "new-model" }
+      }))]
+    }
+  });
+  await backupApi(popup).commitPendingBackup("append");
+
+  const state = await popup.readState();
+  assert.equal(state.aiProfiles.length, 3);
+  assert.equal(state.aiProfiles.find((profile) => profile.id === before.activeAiProfileId).apiKey, "sk-a");
+  assert.equal(state.aiProfiles.find((profile) => profile.apiUrl === "https://new.example/v1").apiKey, "");
+});
+
+test("旧的单份备份导入后，不会把 Key 写进另一份配置", async () => {
+  const popup = loadPopup();
+  await saveTwoProfiles(popup);
+  const before = await popup.readState();
+  const other = before.aiProfiles.find((profile) => profile.id === "profile-b");
+
+  await backupApi(popup).handleBackupFileSelection({
+    target: {
+      files: [makeTextFile("backup.json", JSON.stringify({
+        format: "resume-pro.backup",
+        formatVersion: 1,
+        templates: before.templates,
+        activeTemplateId: before.activeTemplateId,
+        aiConfig: { apiUrl: "https://new.example/v1", model: "new-model", apiKey: "sk-imported" }
+      }))]
+    }
+  });
+  await backupApi(popup).commitPendingBackup("replace");
+
+  const state = await popup.readState();
+  const survivor = state.aiProfiles.find((profile) => profile.id === other.id);
+  assert.equal(survivor.apiKey, "sk-b");
+  assert.equal(survivor.apiUrl, other.apiUrl);
+  assert.equal(state.aiConfig.apiKey, "sk-imported");
+  assert.equal(state.aiConfig.apiUrl, "https://new.example/v1");
+  assert.equal(state.aiProfiles.filter((profile) => profile.apiKey === "sk-imported").length, 1);
 });
 
 test("模板名里的非法字符不会进文件名", async () => {

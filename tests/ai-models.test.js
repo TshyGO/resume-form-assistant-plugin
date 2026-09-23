@@ -380,6 +380,23 @@ test("the three headline failures carry distinct messages", async () => {
   assert.equal(new Set([auth.message, address.message, network.message]).size, 3);
 });
 
+test("a desktop transport result uses the same wording as a direct fetch", () => {
+  const timeout = models.interpretModelTransport({ reason: "timeout", timeoutMs: 15000 });
+  assert.equal(timeout.reason, "timeout");
+  assert.match(timeout.message, /15 秒/);
+
+  const auth = models.interpretModelTransport({
+    reason: "http",
+    status: 401,
+    body: JSON.stringify({ error: { message: "Incorrect API key" } })
+  });
+  assert.equal(auth.reason, "auth");
+  assert.match(auth.message, /Incorrect API key/);
+
+  const mismatch = models.interpretModelTransport({ reason: "key-url-mismatch" });
+  assert.match(mismatch.message, /别的地址/);
+});
+
 test("other HTTP errors include the status and the provider's message", async () => {
   const result = await models.fetchModelList({
     apiUrl: "https://x.example/v1",

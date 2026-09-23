@@ -50,6 +50,10 @@ function loadPopup({ globals = {} } = {}) {
       addEventListener() {},
       click() {},
       closest: () => null,
+      setAttribute() {},
+      removeAttribute() {},
+      focus() {},
+      contains() { return false; },
       querySelectorAll: () => [],
       set textContent(value) {
         if (value) statusMessages.push({ id, message: value });

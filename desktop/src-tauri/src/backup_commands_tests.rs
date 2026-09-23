@@ -253,7 +253,7 @@ fn the_ai_settings_file_never_enters_a_backup() {
     here.seed("合成公司");
     std::fs::write(
         crate::ai_settings::path_for(&here.paths.data_root),
-        r#"{"apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat"}"#,
+        r#"{"version":2,"activeId":"a","profiles":[{"id":"a","name":"A","apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat"}],"legacyCredentialMigrated":true,"note":"sk-desktop-sentinel"}"#,
     )
     .unwrap();
 
@@ -265,4 +265,5 @@ fn the_ai_settings_file_never_enters_a_backup() {
         "备份里出现了 ai-settings.json"
     );
     assert!(!dumped.contains("api.deepseek.com"), "备份里出现了接口地址");
+    assert!(!dumped.contains("sk-desktop-sentinel"), "备份里出现了 Key");
 }

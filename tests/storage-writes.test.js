@@ -56,7 +56,13 @@ test("a fresh install only gets the missing defaults written", async () => {
 
   const state = await popup.api.StorageService.ensureDefaults();
 
-  assert.deepEqual(JSON.parse(JSON.stringify(popup.setCalls)), [["templates", "activeTemplateId", "profile"]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(popup.setCalls)), [[
+    "templates",
+    "activeTemplateId",
+    "aiProfiles",
+    "activeAiProfileId",
+    "profile"
+  ]]);
   assert.equal(popup.store.aiConfig.apiUrl, "https://relay.example/v1/chat/completions");
   assert.equal(state.aiConfig.model, "x");
 });
@@ -89,13 +95,13 @@ test("a template change does not write back a stale AI config", async () => {
   assert.ok(popup.setCalls.every((keys) => !keys.includes("aiConfig")));
 });
 
-test("saving the AI config writes only aiConfig", async () => {
+test("saving the AI config writes the current config and the profile list", async () => {
   const popup = loadPopup();
   await seed(popup);
 
   await popup.api.StorageService.saveAiConfig({ apiUrl: "https://api.example.com/v1/chat/completions", model: "m2", apiKey: "sk" });
 
-  assert.deepEqual(popup.setCalls, [["aiConfig"]]);
+  assert.deepEqual(popup.setCalls, [["aiConfig", "aiProfiles"]]);
 });
 
 test("a parsed resume is stored as the active template, with Excel as an optional download", async () => {

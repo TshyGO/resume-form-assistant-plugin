@@ -259,13 +259,26 @@ export interface ApplicationView {
   todos: TodoView[];
 }
 
-/** 设置页显示的宿主状态。字段由 `get_runtime_status` 命令给出。 */
+/** 一份已保存的桌面 AI 配置。没有 Key 原文。 */
+export interface AiProfileView {
+  id: string;
+  name: string;
+  apiUrl: string;
+  model: string;
+  /** 这一份自己的 Key 配没配。 */
+  keyConfigured: boolean;
+}
+
+/** 设置页显示的 AI 配置。字段由 `get_ai_settings_cmd` 给出，不含任何 Key。 */
 export interface AiSettingsView {
+  activeId: string | null;
+  profiles: AiProfileView[];
+  /** 当前配置的地址。没有当前配置时为空，不会拿另一份来充数。 */
   apiUrl: string;
   model: string;
   /** 只有主机名，不含完整地址。 */
   host: string;
-  /** Key 配没配。**Key 本身永远不会回到前端。** */
+  /** 当前这一份的 Key 配没配。**Key 本身永远不会回到前端。** */
   keyConfigured: boolean;
   /** 凭据库读不出来时的原因；正常是 null。 */
   credentialError: string | null;

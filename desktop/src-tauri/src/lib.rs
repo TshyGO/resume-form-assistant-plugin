@@ -3,6 +3,7 @@ mod ai_commands;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
+mod ai_models;
 mod ai_settings;
 mod nm_register;
 mod update_check;
@@ -69,10 +70,24 @@ struct AppState {
     latest_update: Mutex<Option<update_check::UpdateInfo>>,
 }
 
-/// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
+/// 设置页要看的一份 AI 配置。**故意不含 Key**，只说这一份配没配。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiProfileView {
+    id: String,
+    name: String,
+    api_url: String,
+    model: String,
+    key_configured: bool,
+}
+
+/// 设置页要看的 AI 配置列表。**故意不含 Key**。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AiSettingsView {
+    active_id: Option<String>,
+    profiles: Vec<AiProfileView>,
+    /// 当前配置的地址；没有当前配置时是空的，不会拿另一份来充数。
     api_url: String,
     model: String,
     /// 预览和提示里只出现主机名。
@@ -83,18 +98,67 @@ struct AiSettingsView {
 }
 
 fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(state)?);
-    let (key_configured, credential_error) = match state.credentials.get_key() {
-        Ok(found) => (found.is_some(), None),
-        Err(err) => (false, Some(err.message())),
-    };
+    let root = ai_data_root(state)?;
+    let (store, mut credential_error) =
+        match ai_settings::load_with_credentials(&root, state.credentials.as_ref()) {
+            Ok(store) => (store, None),
+            Err(err) => (ai_settings::load_store(&root), Some(err.message())),
+        };
+    let mut profiles = Vec::with_capacity(store.profiles.len());
+    for profile in &store.profiles {
+        let key_configured = if credential_error.is_some() {
+            false
+        } else {
+            match state
+                .credentials
+                .get_key(&ai_credentials::profile_account(&profile.id))
+            {
+                Ok(found) => found.is_some(),
+                Err(err) => {
+                    credential_error = Some(err.message());
+                    false
+                }
+            }
+        };
+        profiles.push(AiProfileView {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            api_url: profile.api_url.clone(),
+            model: profile.model.clone(),
+            key_configured,
+        });
+    }
+    let active = store.active();
+    let api_url = active.map(|profile| profile.api_url.clone()).unwrap_or_default();
+    let model = active.map(|profile| profile.model.clone()).unwrap_or_default();
+    let key_configured = active
+        .and_then(|profile| profiles.iter().find(|view| view.id == profile.id))
+        .is_some_and(|view| view.key_configured);
     Ok(AiSettingsView {
-        host: ai_settings::host_of(&settings.api_url),
-        api_url: settings.api_url,
-        model: settings.model,
+        active_id: store.active_id.clone(),
+        host: if api_url.is_empty() {
+            String::new()
+        } else {
+            ai_settings::host_of(&api_url)
+        },
+        profiles,
+        api_url,
+        model,
         key_configured,
         credential_error,
     })
+}
+
+fn load_active_ai(state: &AppState) -> Result<ai_settings::ActiveBinding, CommandError> {
+    let root = ai_data_root(state)?;
+    let store = ai_settings::load_with_credentials(&root, state.credentials.as_ref())
+        .map_err(credential_error)?;
+    ai_settings::active_binding(&store, state.credentials.as_ref())
+        .map_err(credential_error)?
+        .ok_or_else(|| CommandError {
+            code: "AI_NOT_CONFIGURED".into(),
+            message: "还没有选定 AI 配置。先在设置里保存一份并使用。".into(),
+        })
 }
 
 fn ai_data_root(state: &AppState) -> Result<std::path::PathBuf, CommandError> {
@@ -885,31 +949,109 @@ fn get_ai_settings_cmd(state: State<AppState>) -> Result<AiSettingsView, Command
     ai_settings_view(&state)
 }
 
-#[tauri::command]
-fn save_ai_settings_cmd(
-    state: State<AppState>,
-    api_url: String,
-    model: String,
-) -> Result<AiSettingsView, CommandError> {
-    let data_root = ai_data_root(&state)?;
-    ai_settings::save(&data_root, &api_url, &model).map_err(|message| CommandError {
+fn settings_write_error(message: String) -> CommandError {
+    CommandError {
         code: "AI_SETTINGS_WRITE_FAILED".into(),
         message,
+    }
+}
+
+/// 保存并使用。Key 只进这一份配置自己的凭据账户，不写日志、不回显。
+#[tauri::command]
+fn save_ai_profile_cmd(
+    state: State<AppState>,
+    id: Option<String>,
+    name: String,
+    api_url: String,
+    model: String,
+    key: Option<String>,
+) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::save_and_use(
+        &data_root,
+        state.credentials.as_ref(),
+        ai_settings::SaveProfile {
+            id,
+            name,
+            api_url,
+            model,
+            key,
+        },
+    )
+    .map_err(settings_write_error)?;
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn rename_ai_profile_cmd(
+    state: State<AppState>,
+    id: String,
+    name: String,
+) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::rename_profile(&data_root, state.credentials.as_ref(), &id, &name)
+        .map_err(settings_write_error)?;
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn activate_ai_profile_cmd(state: State<AppState>, id: String) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::activate_profile(&data_root, state.credentials.as_ref(), &id)
+        .map_err(settings_write_error)?;
+    ai_settings_view(&state)
+}
+
+/// `next_id` 在删除当前配置时必填：另一份的 id，或空字符串表示进入未配置。
+#[tauri::command]
+fn delete_ai_profile_cmd(
+    state: State<AppState>,
+    id: String,
+    next_id: Option<String>,
+) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::delete_profile(
+        &data_root,
+        state.credentials.as_ref(),
+        &id,
+        next_id.as_deref(),
+    )
+    .map_err(settings_write_error)?;
+    ai_settings_view(&state)
+}
+
+#[tauri::command]
+fn clear_ai_profile_key_cmd(state: State<AppState>, id: String) -> Result<AiSettingsView, CommandError> {
+    let data_root = ai_data_root(&state)?;
+    ai_settings::clear_profile_key(&data_root, state.credentials.as_ref(), &id)
+        .map_err(settings_write_error)?;
+    ai_settings_view(&state)
+}
+
+/// 拉取模型列表。不改当前模型，也不保存刚输入的 Key。
+#[tauri::command]
+async fn fetch_ai_models_cmd(
+    state: State<'_, AppState>,
+    api_url: String,
+    api_key: String,
+    profile_id: Option<String>,
+) -> Result<ai_models::ModelFetchRaw, CommandError> {
+    let root = ai_data_root(&state)?;
+    let store = ai_settings::load_with_credentials(&root, state.credentials.as_ref())
+        .map_err(credential_error)?;
+    let prep = ai_models::prepare_model_fetch(
+        &api_url,
+        &api_key,
+        profile_id.as_deref(),
+        &store,
+        state.credentials.as_ref(),
+    )
+    .map_err(credential_error)?;
+    let client = ai_models::client().map_err(|message| CommandError {
+        code: "AI_CLIENT_INIT_FAILED".into(),
+        message,
     })?;
-    ai_settings_view(&state)
-}
-
-/// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
-#[tauri::command]
-fn set_ai_key_cmd(state: State<AppState>, key: String) -> Result<AiSettingsView, CommandError> {
-    state.credentials.set_key(&key).map_err(credential_error)?;
-    ai_settings_view(&state)
-}
-
-#[tauri::command]
-fn clear_ai_key_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
-    state.credentials.clear_key().map_err(credential_error)?;
-    ai_settings_view(&state)
+    Ok(ai_models::execute(&client, prep).await)
 }
 
 /// 发送前预览：这次要把什么发出去。**只读，不发请求。**
@@ -919,7 +1061,7 @@ fn preview_analysis_cmd(
     evidence_id: String,
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::OutboundPreview, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(&state)?);
+    let settings = load_active_ai(&state)?;
     checked_url(&settings.api_url)?;
     with_store(&state, |store| {
         let gathered = ai_commands::gather(
@@ -943,16 +1085,12 @@ async fn analyze_evidence_cmd(
     request_id: String,
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::SuggestionView, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(&state)?);
+    let settings = load_active_ai(&state)?;
     checked_url(&settings.api_url)?;
-    let key = state
-        .credentials
-        .get_key()
-        .map_err(credential_error)?
-        .ok_or_else(|| CommandError {
-            code: "AI_NOT_CONFIGURED".into(),
-            message: "还没有配置 AI Key，先去设置页填一条。".into(),
-        })?;
+    let key = settings.key.ok_or_else(|| CommandError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "当前这份 AI 配置还没有 Key。不会改用其他配置的 Key。".into(),
+    })?;
 
     // 第一段：持锁读。`built` 里带着编号与本地 id 的对应关系，解析返回时要用。
     let (gathered, built) = with_store(&state, |store| {
@@ -1550,9 +1688,12 @@ pub fn run() {
             set_recycle_cmd,
             query_candidates_cmd,
             get_ai_settings_cmd,
-            save_ai_settings_cmd,
-            set_ai_key_cmd,
-            clear_ai_key_cmd,
+            save_ai_profile_cmd,
+            rename_ai_profile_cmd,
+            activate_ai_profile_cmd,
+            delete_ai_profile_cmd,
+            clear_ai_profile_key_cmd,
+            fetch_ai_models_cmd,
             preview_analysis_cmd,
             analyze_evidence_cmd,
             cancel_analysis_cmd,

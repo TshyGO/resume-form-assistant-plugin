@@ -544,6 +544,54 @@ select {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.ai-current {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-profile {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-alt);
+}
+
+.ai-profile.is-active {
+  border-color: rgba(79, 110, 247, 0.45);
+}
+
+.ai-profile__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ai-profile__main strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.ai-profile__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
 .config-form {
   display: flex;
   flex-direction: column;

@@ -10,48 +10,103 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::ai_credentials::{self, CredentialStore};
 
 pub const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
+/// 从「只有一份」升级来的那条配置。重试用同一个 id，避免 Key 写进一个再也对不上的账户。
+pub const LEGACY_PROFILE_ID: &str = "legacy";
 const FILE_NAME: &str = "ai-settings.json";
+const FILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiSettings {
+pub struct AiProfile {
+    pub id: String,
+    pub name: String,
     pub api_url: String,
     pub model: String,
 }
 
-impl Default for AiSettings {
+/// 地址和模型的列表。Key 不在这里。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiStore {
+    pub active_id: Option<String>,
+    pub profiles: Vec<AiProfile>,
+    pub legacy_credential_migrated: bool,
+}
+
+impl Default for AiStore {
     fn default() -> Self {
         Self {
-            api_url: DEFAULT_API_URL.to_string(),
-            model: DEFAULT_MODEL.to_string(),
+            active_id: None,
+            profiles: Vec::new(),
+            legacy_credential_migrated: true,
         }
     }
+}
+
+impl AiStore {
+    pub fn active(&self) -> Option<&AiProfile> {
+        self.active_id
+            .as_deref()
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveProfile {
+    pub id: Option<String>,
+    pub name: String,
+    pub api_url: String,
+    pub model: String,
+    /// `None` 或空白：编辑时保留这一份自己的 Key；新建时表示没填。
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveBinding {
+    pub api_url: String,
+    pub model: String,
+    pub key: Option<String>,
 }
 
 pub fn path_for(data_root: &Path) -> PathBuf {
     data_root.join(FILE_NAME)
 }
 
-/// 读设置。文件不在、读不动、或者内容坏了，都退回默认值——
-/// 这里没有任何不可再生的数据，报错拦住用户配 AI 没有意义。
-pub fn load(data_root: &Path) -> AiSettings {
+/// 只读文件。不碰凭据库，也不会把旧格式写回。
+/// 文件不在或坏了就当成还没有配置——这里没有必须抢救的正文。
+pub fn load_store(data_root: &Path) -> AiStore {
     let Ok(text) = fs::read_to_string(path_for(data_root)) else {
-        return AiSettings::default();
+        return AiStore::default();
     };
-    let mut parsed: AiSettings = match serde_json::from_str(&text) {
-        Ok(value) => value,
-        Err(_) => AiSettings::default(),
+    parse_store(&text).unwrap_or_default()
+}
+
+/// 读设置，并把升级前那条固定凭据挪到对应配置的账户上。
+pub fn load_with_credentials(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+) -> Result<AiStore, ai_credentials::CredentialError> {
+    if !path_for(data_root).is_file() {
+        return Ok(AiStore::default());
+    }
+    let Some(mut store) = fs::read_to_string(path_for(data_root))
+        .ok()
+        .and_then(|text| parse_store(&text))
+    else {
+        return Ok(AiStore::default());
     };
-    if parsed.api_url.trim().is_empty() {
-        parsed.api_url = DEFAULT_API_URL.to_string();
+    if store.legacy_credential_migrated {
+        return Ok(store);
     }
-    if parsed.model.trim().is_empty() {
-        parsed.model = DEFAULT_MODEL.to_string();
-    }
-    parsed
+    migrate_legacy_account(&store, credentials)?;
+    store.legacy_credential_migrated = true;
+    write_store(data_root, &store).map_err(ai_credentials::CredentialError::Unavailable)?;
+    Ok(store)
 }
 
 /// 地址里夹带凭据就不保存。
@@ -97,29 +152,185 @@ pub fn credential_in_url(url: &str) -> Option<String> {
     None
 }
 
-/// 写设置。先写临时文件再改名，避免写到一半断电留下半个文件。
-pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSettings, String> {
-    if let Some(problem) = credential_in_url(typed_url) {
+/// 保存并使用。新建时必须自带 Key，不会复制其他配置的 Key。
+/// 编辑时 Key 留空表示保留这一份原来的 Key；这一份还没有 Key 就不启用、也不改文件。
+pub fn save_and_use(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+    input: SaveProfile,
+) -> Result<AiStore, String> {
+    if let Some(problem) = credential_in_url(&input.api_url) {
         return Err(problem);
     }
-    let current = load(data_root);
-    let settings = AiSettings {
-        api_url: normalize_api_url(typed_url, &current.api_url),
-        model: {
-            let model = typed_model.trim();
-            if model.is_empty() {
-                current.model.clone()
-            } else {
-                model.to_string()
-            }
-        },
+    let typed_url = input.api_url.trim();
+    let model = input.model.trim();
+    if typed_url.is_empty() || model.is_empty() {
+        return Err("请把接口地址和模型名称都填完。未完成的配置不会启用。".into());
+    }
+    let typed_key = input.key.unwrap_or_default();
+    let typed_key = typed_key.trim();
+    let mut store = load_with_credentials(data_root, credentials).map_err(|err| err.message())?;
+
+    if let Some(id) = input.id.as_deref().filter(|id| !id.is_empty()) {
+        let Some(index) = store.profiles.iter().position(|profile| profile.id == id) else {
+            return Err("要编辑的配置已经不在了，没有保存。".into());
+        };
+        let account = ai_credentials::profile_account(id);
+        if !typed_key.is_empty() {
+            credentials
+                .set_key(&account, typed_key)
+                .map_err(|err| err.message())?;
+        }
+        let has_key = credentials
+            .get_key(&account)
+            .map_err(|err| err.message())?
+            .is_some();
+        if !has_key {
+            return Err("这份配置还没有 Key，没有启用，也没有改动已保存的配置。".into());
+        }
+        let previous_url = store.profiles[index].api_url.clone();
+        let api_url = if typed_url == previous_url {
+            previous_url
+        } else {
+            normalize_api_url(typed_url, &previous_url)
+        };
+        let name = chosen_name(&input.name, &api_url, &store, Some(id));
+        store.profiles[index].name = name;
+        store.profiles[index].api_url = api_url;
+        store.profiles[index].model = model.to_string();
+        store.active_id = Some(id.to_string());
+    } else {
+        if typed_key.is_empty() {
+            return Err("新建配置要填写 API Key。未完成的配置不会启用，也不会复用其他配置的 Key。".into());
+        }
+        let id = Uuid::new_v4().to_string();
+        let api_url = normalize_api_url(typed_url, DEFAULT_API_URL);
+        credentials
+            .set_key(&ai_credentials::profile_account(&id), typed_key)
+            .map_err(|err| err.message())?;
+        let name = chosen_name(&input.name, &api_url, &store, None);
+        store.profiles.push(AiProfile {
+            id: id.clone(),
+            name,
+            api_url,
+            model: model.to_string(),
+        });
+        store.active_id = Some(id);
+    }
+
+    store.legacy_credential_migrated = true;
+    write_store(data_root, &store)?;
+    Ok(store)
+}
+
+pub fn rename_profile(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+    id: &str,
+    name: &str,
+) -> Result<AiStore, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("配置名称不能为空。".into());
+    }
+    let mut store = load_with_credentials(data_root, credentials).map_err(|err| err.message())?;
+    let Some(profile) = store.profiles.iter_mut().find(|profile| profile.id == id) else {
+        return Err("要改名的配置已经不在了。".into());
     };
-    let target = path_for(data_root);
-    let tmp = target.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(&tmp, json).map_err(|e| format!("写 {} 失败：{e}", tmp.display()))?;
-    fs::rename(&tmp, &target).map_err(|e| format!("保存 {} 失败：{e}", target.display()))?;
-    Ok(settings)
+    profile.name = name.chars().take(80).collect();
+    write_store(data_root, &store)?;
+    Ok(store)
+}
+
+pub fn activate_profile(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+    id: &str,
+) -> Result<AiStore, String> {
+    let mut store = load_with_credentials(data_root, credentials).map_err(|err| err.message())?;
+    if !store.profiles.iter().any(|profile| profile.id == id) {
+        return Err("要使用的配置已经不在了。".into());
+    }
+    store.active_id = Some(id.to_string());
+    write_store(data_root, &store)?;
+    Ok(store)
+}
+
+/// `next_id`：删的是当前配置时必填。`Some("")` 表示进入未配置，`None` 则拒绝删除。
+pub fn delete_profile(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+    id: &str,
+    next_id: Option<&str>,
+) -> Result<AiStore, String> {
+    let mut store = load_with_credentials(data_root, credentials).map_err(|err| err.message())?;
+    if !store.profiles.iter().any(|profile| profile.id == id) {
+        return Err("这份配置已经不在了。".into());
+    }
+    let is_active = store.active_id.as_deref() == Some(id);
+    if is_active {
+        match next_id {
+            None => {
+                return Err("删除当前配置时要选择另一份，或明确进入未配置状态。".into());
+            }
+            Some(next) if next == id => {
+                return Err("不能改用正在删除的这一份。".into());
+            }
+            Some(next) if !next.is_empty() && !store.profiles.iter().any(|profile| profile.id == next) => {
+                return Err("要改用的配置不存在，当前配置没有删除。".into());
+            }
+            Some(_) => {}
+        }
+    }
+
+    store.profiles.retain(|profile| profile.id != id);
+    if is_active {
+        let next = next_id.unwrap_or("");
+        store.active_id = if next.is_empty() {
+            None
+        } else {
+            Some(next.to_string())
+        };
+    } else if store.active_id.as_deref() == Some(id) {
+        store.active_id = None;
+    }
+    write_store(data_root, &store)?;
+    credentials
+        .clear_key(&ai_credentials::profile_account(id))
+        .map_err(|err| err.message())?;
+    Ok(store)
+}
+
+pub fn clear_profile_key(
+    data_root: &Path,
+    credentials: &dyn CredentialStore,
+    id: &str,
+) -> Result<AiStore, String> {
+    let store = load_with_credentials(data_root, credentials).map_err(|err| err.message())?;
+    if !store.profiles.iter().any(|profile| profile.id == id) {
+        return Err("这份配置已经不在了。".into());
+    }
+    credentials
+        .clear_key(&ai_credentials::profile_account(id))
+        .map_err(|err| err.message())?;
+    Ok(store)
+}
+
+/// 发请求时只用当前配置自己的 Key。没有当前配置，或这一份没有 Key，就返回 `None` 的 key，
+/// 不会去读其他配置或升级前的那条固定凭据。
+pub fn active_binding(
+    store: &AiStore,
+    credentials: &dyn CredentialStore,
+) -> Result<Option<ActiveBinding>, ai_credentials::CredentialError> {
+    let Some(active) = store.active() else {
+        return Ok(None);
+    };
+    let key = credentials.get_key(&ai_credentials::profile_account(&active.id))?;
+    Ok(Some(ActiveBinding {
+        api_url: active.api_url.clone(),
+        model: active.model.clone(),
+        key,
+    }))
 }
 
 /// 用户填的多半是服务商文档上的 Base URL。规则和插件那边（`ai-models.js`）一致：
@@ -176,6 +387,136 @@ pub fn host_of(api_url: &str) -> String {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyFile {
+    api_url: String,
+    model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiFile {
+    version: u32,
+    active_id: Option<String>,
+    profiles: Vec<AiProfile>,
+    #[serde(default)]
+    legacy_credential_migrated: bool,
+}
+
+fn parse_store(text: &str) -> Option<AiStore> {
+    if let Ok(file) = serde_json::from_str::<AiFile>(text) {
+        if file.version >= FILE_VERSION {
+            let active_id = file
+                .active_id
+                .filter(|id| file.profiles.iter().any(|profile| profile.id == *id));
+            return Some(AiStore {
+                active_id,
+                profiles: file.profiles,
+                legacy_credential_migrated: file.legacy_credential_migrated,
+            });
+        }
+    }
+    let legacy: LegacyFile = serde_json::from_str(text).ok()?;
+    Some(legacy_store(legacy))
+}
+
+fn legacy_store(legacy: LegacyFile) -> AiStore {
+    let api_url = nonempty(&legacy.api_url, DEFAULT_API_URL);
+    let model = nonempty(&legacy.model, DEFAULT_MODEL);
+    AiStore {
+        active_id: Some(LEGACY_PROFILE_ID.to_string()),
+        profiles: vec![AiProfile {
+            id: LEGACY_PROFILE_ID.to_string(),
+            name: default_name(&api_url, &[]),
+            api_url,
+            model,
+        }],
+        legacy_credential_migrated: false,
+    }
+}
+
+fn migrate_legacy_account(
+    store: &AiStore,
+    credentials: &dyn CredentialStore,
+) -> Result<(), ai_credentials::CredentialError> {
+    let Some(legacy_key) = credentials.get_key(ai_credentials::LEGACY_ACCOUNT)? else {
+        return Ok(());
+    };
+    let target = if store.profiles.len() == 1 {
+        Some(store.profiles[0].id.clone())
+    } else {
+        store
+            .profiles
+            .iter()
+            .find(|profile| profile.id == LEGACY_PROFILE_ID)
+            .map(|profile| profile.id.clone())
+    };
+    let Some(id) = target else {
+        // 已经有多份配置，又对不上升级来的那一条：不要把旧 Key 安到其中任何一份上。
+        return Ok(());
+    };
+    let account = ai_credentials::profile_account(&id);
+    if credentials.get_key(&account)?.is_none() {
+        credentials.set_key(&account, &legacy_key)?;
+    }
+    credentials.clear_key(ai_credentials::LEGACY_ACCOUNT)
+}
+
+fn write_store(data_root: &Path, store: &AiStore) -> Result<(), String> {
+    let file = AiFile {
+        version: FILE_VERSION,
+        active_id: store.active_id.clone(),
+        profiles: store.profiles.clone(),
+        legacy_credential_migrated: store.legacy_credential_migrated,
+    };
+    let target = path_for(data_root);
+    let tmp = target.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(&file).map_err(|err| err.to_string())?;
+    fs::write(&tmp, json).map_err(|err| format!("写 {} 失败：{err}", tmp.display()))?;
+    fs::rename(&tmp, &target).map_err(|err| format!("保存 {} 失败：{err}", target.display()))?;
+    Ok(())
+}
+
+fn nonempty(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn default_name(api_url: &str, taken: &[&str]) -> String {
+    let host = host_of(api_url);
+    let base = if host.starts_with('（') { "配置".to_string() } else { host };
+    if !taken.contains(&base.as_str()) {
+        return base;
+    }
+    let mut index = 2;
+    loop {
+        let candidate = format!("{base} ({index})");
+        if !taken.iter().any(|name| *name == candidate) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn chosen_name(typed: &str, api_url: &str, store: &AiStore, ignore_id: Option<&str>) -> String {
+    let typed = typed.trim();
+    if !typed.is_empty() {
+        return typed.chars().take(80).collect();
+    }
+    let taken: Vec<&str> = store
+        .profiles
+        .iter()
+        .filter(|profile| Some(profile.id.as_str()) != ignore_id)
+        .map(|profile| profile.name.as_str())
+        .collect();
+    default_name(api_url, &taken)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,17 +571,53 @@ mod tests {
         assert_eq!(host_of("https://user:pass@API.Example.test/v1/chat/completions"), "api.example.test");
     }
 
-    #[test]
-    fn settings_round_trip_and_a_broken_file_falls_back_to_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(load(dir.path()), AiSettings::default());
+    fn memory() -> crate::ai_credentials::MemoryStore {
+        crate::ai_credentials::MemoryStore::default()
+    }
 
-        let saved = save(dir.path(), "https://api.deepseek.com", "deepseek-chat").unwrap();
-        assert_eq!(saved.api_url, "https://api.deepseek.com/v1/chat/completions");
-        assert_eq!(load(dir.path()), saved);
+    fn save_new(dir: &std::path::Path, url: &str, model: &str, key: &str) -> AiStore {
+        let creds = memory();
+        save_and_use(
+            dir,
+            &creds,
+            SaveProfile {
+                id: None,
+                name: String::new(),
+                api_url: url.to_string(),
+                model: model.to_string(),
+                key: Some(key.to_string()),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn settings_round_trip_and_a_broken_file_is_unconfigured() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_store(dir.path()).profiles.is_empty());
+        assert!(load_store(dir.path()).active().is_none());
+
+        let creds = memory();
+        let saved = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: String::new(),
+                api_url: "https://api.deepseek.com".into(),
+                model: "deepseek-chat".into(),
+                key: Some("sk-synthetic".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            saved.active().unwrap().api_url,
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(load_with_credentials(dir.path(), &creds).unwrap(), saved);
 
         std::fs::write(path_for(dir.path()), "{ 坏掉的").unwrap();
-        assert_eq!(load(dir.path()), AiSettings::default());
+        assert_eq!(load_store(dir.path()), AiStore::default());
     }
 
     #[test]
@@ -251,7 +628,18 @@ mod tests {
             "https://relay.example/v1/chat/completions?api-key=sk-123",
             "https://relay.example/v1/chat/completions?token=abc",
         ] {
-            let err = save(dir.path(), bad, "m").unwrap_err();
+            let err = save_and_use(
+                dir.path(),
+                &memory(),
+                SaveProfile {
+                    id: None,
+                    name: String::new(),
+                    api_url: bad.into(),
+                    model: "m".into(),
+                    key: Some("sk-synthetic".into()),
+                },
+            )
+            .unwrap_err();
             assert!(err.contains("API Key"), "{bad}: {err}");
         }
         // fragment 里的也算。
@@ -264,10 +652,16 @@ mod tests {
         ] {
             assert!(credential_in_url(fine).is_none(), "{fine}");
         }
-        assert!(save(
+        assert!(save_and_use(
             dir.path(),
-            "https://relay.example/v1/chat/completions?api-version=2024-10-21",
-            "m"
+            &memory(),
+            SaveProfile {
+                id: None,
+                name: String::new(),
+                api_url: "https://relay.example/v1/chat/completions?api-version=2024-10-21".into(),
+                model: "m".into(),
+                key: Some("sk-synthetic".into()),
+            },
         )
         .is_ok());
         // 报错里带上命中的那个参数名，用户才知道该删哪个。
@@ -280,10 +674,280 @@ mod tests {
     #[test]
     fn the_settings_file_never_contains_a_key() {
         let dir = tempfile::tempdir().unwrap();
-        save(dir.path(), "https://api.deepseek.com/v1", "deepseek-chat").unwrap();
+        let _ = save_new(dir.path(), "https://api.deepseek.com/v1", "deepseek-chat", "sk-synthetic");
         let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
-        for forbidden in ["key", "Key", "token", "secret"] {
+        for forbidden in ["key", "Key", "token", "secret", "sk-synthetic"] {
             assert!(!text.contains(forbidden), "设置文件里出现了 {forbidden}：{text}");
         }
+    }
+
+    #[test]
+    fn a_legacy_file_and_its_single_credential_become_one_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            path_for(dir.path()),
+            r#"{"apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat"}"#,
+        )
+        .unwrap();
+        let creds = memory();
+        creds
+            .set_key(crate::ai_credentials::LEGACY_ACCOUNT, "sk-legacy")
+            .unwrap();
+
+        let store = load_with_credentials(dir.path(), &creds).unwrap();
+        let active = store.active().unwrap();
+        assert_eq!(active.api_url, "https://api.deepseek.com/v1/chat/completions");
+        assert_eq!(active.model, "deepseek-chat");
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(&active.id))
+                .unwrap()
+                .as_deref(),
+            Some("sk-legacy")
+        );
+        assert_eq!(creds.get_key(crate::ai_credentials::LEGACY_ACCOUNT).unwrap(), None);
+        let binding = active_binding(&store, &creds).unwrap().unwrap();
+        assert_eq!(binding.key.as_deref(), Some("sk-legacy"));
+        assert_eq!(binding.api_url, active.api_url);
+    }
+
+    #[test]
+    fn switching_profiles_reads_only_that_profiles_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = memory();
+        let first = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "A".into(),
+                api_url: "https://a.example/v1".into(),
+                model: "model-a".into(),
+                key: Some("sk-a".into()),
+            },
+        )
+        .unwrap();
+        let id_a = first.active_id.clone().unwrap();
+        let second = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "B".into(),
+                api_url: "https://b.example/v1".into(),
+                model: "model-b".into(),
+                key: Some("sk-b".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(second.profiles.len(), 2);
+        let binding = active_binding(&second, &creds).unwrap().unwrap();
+        assert_eq!(binding.api_url, "https://b.example/v1/chat/completions");
+        assert_eq!(binding.key.as_deref(), Some("sk-b"));
+
+        let switched = activate_profile(dir.path(), &creds, &id_a).unwrap();
+        let binding = active_binding(&switched, &creds).unwrap().unwrap();
+        assert_eq!(binding.api_url, "https://a.example/v1/chat/completions");
+        assert_eq!(binding.key.as_deref(), Some("sk-a"));
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(
+                    second.active_id.as_deref().unwrap()
+                ))
+                .unwrap()
+                .as_deref(),
+            Some("sk-b")
+        );
+    }
+
+    #[test]
+    fn editing_one_profile_does_not_change_the_other_and_a_new_one_does_not_reuse_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = memory();
+        let first = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "A".into(),
+                api_url: "https://a.example/v1".into(),
+                model: "model-a".into(),
+                key: Some("sk-a".into()),
+            },
+        )
+        .unwrap();
+        let id_a = first.active_id.unwrap();
+        save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "B".into(),
+                api_url: "https://b.example/v1".into(),
+                model: "model-b".into(),
+                key: Some("sk-b".into()),
+            },
+        )
+        .unwrap();
+
+        let edited = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: Some(id_a.clone()),
+                name: "A2".into(),
+                api_url: "https://a.example/v1/chat/completions".into(),
+                model: "model-a2".into(),
+                key: None,
+            },
+        )
+        .unwrap();
+        let profile_a = edited.profiles.iter().find(|profile| profile.id == id_a).unwrap();
+        let profile_b = edited.profiles.iter().find(|profile| profile.name == "B").unwrap();
+        assert_eq!(profile_a.model, "model-a2");
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(&profile_a.id))
+                .unwrap()
+                .as_deref(),
+            Some("sk-a")
+        );
+        assert_eq!(profile_b.model, "model-b");
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(&profile_b.id))
+                .unwrap()
+                .as_deref(),
+            Some("sk-b")
+        );
+
+        let err = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "C".into(),
+                api_url: "https://c.example/v1".into(),
+                model: "model-c".into(),
+                key: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("Key"), "{err}");
+        let still = load_with_credentials(dir.path(), &creds).unwrap();
+        assert_eq!(still.profiles.len(), 2);
+        assert!(still.profiles.iter().all(|profile| profile.name != "C"));
+    }
+
+    #[test]
+    fn deleting_the_active_profile_requires_an_explicit_next_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = memory();
+        let first = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "A".into(),
+                api_url: "https://a.example/v1".into(),
+                model: "model-a".into(),
+                key: Some("sk-a".into()),
+            },
+        )
+        .unwrap();
+        let id_a = first.active_id.unwrap();
+        let second = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "B".into(),
+                api_url: "https://b.example/v1".into(),
+                model: "model-b".into(),
+                key: Some("sk-b".into()),
+            },
+        )
+        .unwrap();
+        let id_b = second.active_id.clone().unwrap();
+
+        let err = delete_profile(dir.path(), &creds, &id_b, None).unwrap_err();
+        assert!(err.contains("选择"), "{err}");
+        let unchanged = load_with_credentials(dir.path(), &creds).unwrap();
+        assert_eq!(unchanged.active_id.as_deref(), Some(id_b.as_str()));
+        assert_eq!(
+            active_binding(&unchanged, &creds).unwrap().unwrap().key.as_deref(),
+            Some("sk-b")
+        );
+
+        let cleared = delete_profile(dir.path(), &creds, &id_b, Some("")).unwrap();
+        assert!(cleared.active().is_none());
+        assert!(active_binding(&cleared, &creds).unwrap().is_none());
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(&id_a))
+                .unwrap()
+                .as_deref(),
+            Some("sk-a")
+        );
+        assert_eq!(
+            creds
+                .get_key(&crate::ai_credentials::profile_account(&id_b))
+                .unwrap(),
+            None
+        );
+
+        let again = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "B".into(),
+                api_url: "https://b.example/v1".into(),
+                model: "model-b".into(),
+                key: Some("sk-b2".into()),
+            },
+        )
+        .unwrap();
+        let id_b2 = again.active_id.clone().unwrap();
+        let switched = delete_profile(dir.path(), &creds, &id_b2, Some(&id_a)).unwrap();
+        let binding = active_binding(&switched, &creds).unwrap().unwrap();
+        assert_eq!(binding.key.as_deref(), Some("sk-a"));
+        assert_eq!(binding.api_url, "https://a.example/v1/chat/completions");
+    }
+
+    #[test]
+    fn an_incomplete_edit_does_not_replace_the_active_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = memory();
+        let saved = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: None,
+                name: "A".into(),
+                api_url: "https://a.example/v1".into(),
+                model: "model-a".into(),
+                key: Some("sk-a".into()),
+            },
+        )
+        .unwrap();
+        let id = saved.active_id.unwrap();
+        clear_profile_key(dir.path(), &creds, &id).unwrap();
+        let err = save_and_use(
+            dir.path(),
+            &creds,
+            SaveProfile {
+                id: Some(id.clone()),
+                name: "A".into(),
+                api_url: "https://changed.example/v1".into(),
+                model: "other".into(),
+                key: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("没有启用"), "{err}");
+        let store = load_with_credentials(dir.path(), &creds).unwrap();
+        assert_eq!(store.active().unwrap().api_url, "https://a.example/v1/chat/completions");
+        assert_eq!(store.active().unwrap().model, "model-a");
     }
 }
