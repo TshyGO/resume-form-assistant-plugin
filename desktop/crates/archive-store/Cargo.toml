@@ -14,6 +14,7 @@ thiserror = "2"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 fslock = "0.2"
+regex = "1"
 url = "2"
 
 [dev-dependencies]

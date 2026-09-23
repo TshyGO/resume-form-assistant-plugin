@@ -17,6 +17,7 @@ import { mountBackup } from "./backup-ui.ts";
 import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
+import { mountResume } from "./resume/mount.tsx";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -37,6 +38,7 @@ const settingsNavigation = mountSettingsNavigation(must("view-settings"), (name)
 
 const views: Record<string, HTMLElement> = {
   applications: must("view-applications"),
+  resume: must("view-resume"),
   inbox: must("view-inbox"),
   todos: must("view-todos"),
   settings: must("view-settings"),
@@ -55,7 +57,11 @@ function showRoute(name: string | undefined) {
 
 document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
   btn.addEventListener("click", () => {
+    // 从别的页切进「简历」时重新读取：插件或恢复备份可能在这期间改过档案。
+    // 已经在「简历」页时再点不刷新，免得把正在填的「我的信息」冲掉。
+    const enteringResume = btn.dataset.route === "resume" && views.resume.classList.contains("hidden");
     showRoute(btn.dataset.route);
+    if (enteringResume) resumeView.refresh();
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
     if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
@@ -274,6 +280,24 @@ const applications = mountApplications(command);
 // 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
+
+// 简历模板只收 .xlsx / .csv；导出默认用模板名。没有 Tauri 时为 null，界面会如实说明。
+const resumePickers =
+  dialog?.open && dialog?.save
+    ? {
+        open: async () => {
+          const chosen = await dialog.open?.({
+            multiple: false,
+            filters: [{ name: "Excel / CSV", extensions: ["xlsx", "csv"] }],
+          });
+          return typeof chosen === "string" ? chosen : null;
+        },
+        save: async (suggested: string) =>
+          (await dialog.save?.({ defaultPath: suggested, filters: [{ name: "Excel", extensions: ["xlsx"] }] })) ?? null,
+      }
+    : null;
+const resumeView = mountResume(must("resume-root"), invoke ?? null, resumePickers);
+
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
@@ -298,7 +322,7 @@ const showTodos = mountTodos(command);
 
 // 备份与恢复要用原生文件对话框。浏览器里跑（没有 Tauri）时两个都是 null，
 // 界面会如实说「请在桌面程序里导出」，而不是给一个点了没反应的按钮。
-const showBackup = mountBackup(command, {
+const backupPickers = {
   save: dialog?.save
     ? async (suggested: string) => (await dialog.save?.({ defaultPath: suggested })) ?? null
     : null,
@@ -312,7 +336,9 @@ const showBackup = mountBackup(command, {
         return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
       }
     : null,
-});
+};
+// 恢复 / 换回会把档案整个换掉，「简历」页手里的模板列表和「我的信息」版本号都过时了。
+const showBackup = mountBackup(command, backupPickers, undefined, () => resumeView.refresh());
 void renderReminderSettings().catch(() => {});
 
 showRoute("applications");

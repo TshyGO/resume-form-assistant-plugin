@@ -1,4 +1,4 @@
-//! 物理 schema(v1 + v2)与迁移注册表。
+//! 物理 schema 与迁移注册表。
 //!
 //! 设计要点(均为冻结契约,见 docs/desktop-mvp/):
 //! - applications 无 (company,url)/(company,title) 唯一约束:同公司多岗、同岗重复申请并存。
@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -253,6 +253,30 @@ ALTER TABLE todos ADD COLUMN overdue_ack_at TEXT;
 CREATE INDEX idx_todos_due ON todos(due_at_utc, due_date);
 "#;
 
+/// #130：简历模板与「我的信息」由桌面保存，插件不再存副本。
+/// 分组与档案沿用插件 `chrome.storage.local` 的 JSON 形状，迁移与导入零转换。
+/// `resume_state` 只有一行：当前模板与档案。当前模板不设外键，删除模板时由代码改指向。
+pub const V4_RESUME: &str = r#"
+CREATE TABLE resume_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  groups_json TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_resume_templates_name ON resume_templates(name);
+CREATE INDEX idx_resume_templates_position ON resume_templates(position);
+
+CREATE TABLE resume_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  active_template_id TEXT,
+  profile_json TEXT NOT NULL,
+  profile_revision INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -268,5 +292,10 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 3,
         description: "todo reminder bookkeeping: scheduled instant, OS handle, delivery state, overdue digest ack",
         sql: V3_TODO_REMINDER_BOOKKEEPING,
+    },
+    Migration {
+        to_version: 4,
+        description: "resume templates and profile owned by the desktop (#130)",
+        sql: V4_RESUME,
     },
 ];

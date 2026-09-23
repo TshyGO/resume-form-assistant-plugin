@@ -14,6 +14,7 @@ mod evidence_commands;
 mod backup_commands;
 mod recycle_commands;
 mod restore;
+mod resume_commands;
 mod todo_commands;
 #[cfg(test)]
 mod commands_regression;
@@ -716,6 +717,68 @@ fn remove_orphan_cmd(state: State<AppState>, sha256: String) -> Result<(), Comma
     with_store(&state, |store| {
         recycle_commands::remove_orphan(store, &archive_dir, &sha256)
     })
+}
+
+#[tauri::command]
+fn resume_overview_cmd(state: State<AppState>) -> Result<archive_store::ResumeOverview, CommandError> {
+    with_store(&state, resume_commands::overview)
+}
+
+#[tauri::command]
+fn get_resume_template_cmd(state: State<AppState>, id: String) -> Result<archive_store::ResumeTemplate, CommandError> {
+    with_store(&state, |store| resume_commands::get_template(store, &id))
+}
+
+#[tauri::command]
+fn import_resume_template_cmd(
+    state: State<AppState>,
+    path: String,
+    replace_id: Option<String>,
+) -> Result<resume_commands::ImportResult, CommandError> {
+    // 读文件、解析表格放在档案锁外面，只有落库那一步才占着锁。
+    let (name, groups) = resume_commands::read_sheet(std::path::Path::new(&path))?;
+    with_store(&state, |store| resume_commands::import_template(store, &name, groups, replace_id.as_deref()))
+}
+
+#[tauri::command]
+fn export_resume_template_cmd(state: State<AppState>, id: String, path: String) -> Result<(), CommandError> {
+    with_store(&state, |store| resume_commands::export_template(store, &id, std::path::Path::new(&path)))
+}
+
+#[tauri::command]
+fn rename_resume_template_cmd(
+    state: State<AppState>,
+    id: String,
+    name: String,
+) -> Result<archive_store::TemplateSummary, CommandError> {
+    with_store(&state, |store| resume_commands::rename_template(store, &id, &name))
+}
+
+#[tauri::command]
+fn delete_resume_template_cmd(state: State<AppState>, id: String) -> Result<archive_store::ResumeOverview, CommandError> {
+    with_store(&state, |store| resume_commands::delete_template(store, &id))
+}
+
+#[tauri::command]
+fn set_active_resume_template_cmd(
+    state: State<AppState>,
+    id: String,
+) -> Result<archive_store::ResumeOverview, CommandError> {
+    with_store(&state, |store| resume_commands::set_active_template(store, &id))
+}
+
+#[tauri::command]
+fn get_profile_cmd(state: State<AppState>) -> Result<archive_store::ProfileRecord, CommandError> {
+    with_store(&state, resume_commands::get_profile)
+}
+
+#[tauri::command]
+fn save_profile_cmd(
+    state: State<AppState>,
+    profile: serde_json::Value,
+    revision: i64,
+) -> Result<archive_store::ProfileRecord, CommandError> {
+    with_store(&state, move |store| resume_commands::save_profile(store, profile, revision))
 }
 
 #[tauri::command]
@@ -1520,6 +1583,15 @@ pub fn run() {
             unassociate_evidence_cmd,
             classify_evidence_cmd,
             open_evidence_cmd,
+            resume_overview_cmd,
+            get_resume_template_cmd,
+            import_resume_template_cmd,
+            export_resume_template_cmd,
+            rename_resume_template_cmd,
+            delete_resume_template_cmd,
+            set_active_resume_template_cmd,
+            get_profile_cmd,
+            save_profile_cmd,
             create_todo_cmd,
             edit_todo_cmd,
             set_todo_status_cmd,

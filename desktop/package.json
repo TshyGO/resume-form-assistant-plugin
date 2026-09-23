@@ -13,6 +13,7 @@
     "test:host": "cargo test --manifest-path crates/data-service/Cargo.toml --locked",
     "test:store": "cargo test --manifest-path crates/archive-store/Cargo.toml --locked",
     "test:ai-extract": "cargo test --manifest-path crates/ai-extract/Cargo.toml --locked",
+    "test:resume-sheet": "cargo test --manifest-path crates/resume-sheet/Cargo.toml --locked",
     "test:app": "cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib",
     "test:frontend": "vite build",
     "test:ui": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
@@ -24,7 +25,7 @@
     "test:release-allowlist": "node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js",
     "test:desktop-release": "node --test scripts/check-desktop-release.test.js scripts/set-version.test.js scripts/release-beta.test.js scripts/pack-plugin.test.js scripts/chrome-web-store.test.js && node scripts/check-desktop-release.js",
     "test:release-acceptance": "node --test scripts/check-release-acceptance.test.mjs",
-    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:react && npm run test:nm-register && npm run test:uninstall-hooks && npm run test:release-allowlist && npm run test:desktop-release && npm run test:release-acceptance",
+    "test": "npm run typecheck && npm run test:host && npm run test:store && npm run test:ai-extract && npm run test:resume-sheet && npm run test:app && npm run test:frontend && npm run test:ui && npm run test:react && npm run test:nm-register && npm run test:uninstall-hooks && npm run test:release-allowlist && npm run test:desktop-release && npm run test:release-acceptance",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
