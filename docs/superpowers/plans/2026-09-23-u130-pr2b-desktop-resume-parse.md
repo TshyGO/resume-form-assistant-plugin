@@ -10,7 +10,12 @@
 
 **上级计划：** [2026-09-23-u130-pr-breakdown.md](2026-09-23-u130-pr-breakdown.md)（PR 2）· [#130](https://github.com/TshyGO/resume-form-assistant-plugin/issues/130)
 
-**依赖：** PR 2a（[计划](2026-09-23-u130-pr2a-desktop-ai-providers.md)）必须先合入——本 PR 用它的 `ai_provider_commands::active_with_key` 与 `get_ai_settings_cmd` 新形状。**分支：** `feat/130-pr2b-desktop-resume-parse`，从合入 2a 之后的 `origin/main` 新建。
+**依赖与执行顺序（可与 PR 2a 并行）：**
+- **分支：** `feat/130-pr2b-desktop-resume-parse`（已推到 GitHub，基于只含计划文档的提交，等于当时的 `main` + 两份 PR 2 计划）。
+- **先做 Task 2、3、4**：只动 `desktop/src/resume/`、`desktop/package.json`、`vite.config.js`、`tauri.conf.json`，不依赖 PR 2a，现在就能做。
+- **再等 PR 2a 合入 `main`**，然后 `git fetch origin && git rebase origin/main`（计划文档那个提交内容与 main 相同，rebase 时会自动变空并被丢弃；有冲突只可能在 `desktop/package.json` / `package-lock.json`，以 main 为准重新 `npm install` 解决）。
+- **最后做 Task 1、5、6**：Task 1 用 PR 2a 的 `ai_settings::AiProvider` 与 `ai_provider_commands::active_with_key`，Task 5 用 PR 2a 的 `AiSettingsView { providers, activeProviderId, credentialError }`。
+- 两条线不要改同一个文件：PR 2a 负责 `desktop/src/ai/`、`desktop/src/api.ts` 里的 AI 类型、`src-tauri` 的 AI 模块；PR 2b 在 Task 1 之前不碰这些。
 
 ---
 
