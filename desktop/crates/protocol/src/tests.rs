@@ -109,6 +109,53 @@ fn health_and_handshake_ok() {
 }
 
 #[test]
+fn v2_types_parse_and_round_trip() {
+    for name in ["resume.read", "resume.update", "ai.complete", "ui.open", "legacy.import"] {
+        assert_eq!(MessageType::parse(name).unwrap().as_str(), name);
+    }
+}
+
+#[test]
+fn v1_envelope_cannot_carry_a_v2_type() {
+    let mut request = envelope("resume.read", json!({}));
+    assert_code(validate_request_value(&request).unwrap_err(), "protocol_incompatible");
+    request["protocolVersion"] = json!(2);
+    validate_request_value(&request).unwrap();
+}
+
+#[test]
+fn v1_types_still_accept_v1_and_v2_envelopes() {
+    for (name, payload) in [("health", json!({})), ("job.save", job_save_payload())] {
+        let mut request = envelope(name, payload);
+        validate_request_value(&request).unwrap();
+        request["protocolVersion"] = json!(2);
+        validate_request_value(&request).unwrap();
+    }
+}
+
+#[test]
+fn identity_rules_for_v2_types() {
+    for name in ["resume.read", "resume.update", "legacy.import"] {
+        let mut request = envelope(name, json!({}));
+        request["protocolVersion"] = json!(2);
+        request.as_object_mut().unwrap().remove("archiveId");
+        assert_code(validate_request_value(&request).unwrap_err(), "identity_missing");
+    }
+    for name in ["ai.complete", "ui.open"] {
+        let mut request = envelope(name, json!({}));
+        request["protocolVersion"] = json!(2);
+        assert_code(validate_request_value(&request).unwrap_err(), "identity_not_allowed");
+    }
+}
+
+#[test]
+fn handshake_announces_max_2() {
+    let payload = crate::identity::handshake_response_payload(&current(), "0.4.0");
+    assert_eq!(payload["minProtocolVersion"], 1);
+    assert_eq!(payload["maxProtocolVersion"], 2);
+}
+
+#[test]
 fn handshake_incompatible_version() {
     let mut hs = envelope(
         "handshake",

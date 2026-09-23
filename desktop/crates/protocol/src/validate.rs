@@ -71,6 +71,13 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
     validate_schema(value, &envelope_schema())?;
     let protocol_version = obj.get("protocolVersion").and_then(Value::as_i64).unwrap();
     let message_type = MessageType::parse(obj.get("messageType").and_then(Value::as_str).unwrap())?;
+    if protocol_version < message_type.min_envelope_version() as i64 {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            format!("{} requires protocolVersion 2", message_type.as_str()),
+        ));
+    }
     let message_id = obj.get("messageId").and_then(Value::as_str).unwrap().to_string();
     let client_instance_id = obj
         .get("clientInstanceId")

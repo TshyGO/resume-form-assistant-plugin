@@ -3,9 +3,9 @@ use serde_json::Value;
 
 use crate::error::{ErrorCode, Layer, ProtocolError};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
-pub const MAX_PROTOCOL_VERSION: u32 = 1;
+pub const MAX_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_ENVELOPE_BYTES: usize = 65536;
 pub const SUGGESTED_RAW_CHUNK_BYTES: usize = 32768;
 pub const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
@@ -30,6 +30,16 @@ pub enum MessageType {
     SubmitConfirm,
     #[serde(rename = "outbox.reconcile")]
     OutboxReconcile,
+    #[serde(rename = "resume.read")]
+    ResumeRead,
+    #[serde(rename = "resume.update")]
+    ResumeUpdate,
+    #[serde(rename = "ai.complete")]
+    AiComplete,
+    #[serde(rename = "ui.open")]
+    UiOpen,
+    #[serde(rename = "legacy.import")]
+    LegacyImport,
 }
 
 impl MessageType {
@@ -43,6 +53,11 @@ impl MessageType {
             Self::SnapshotChunk => "snapshot.chunk",
             Self::SubmitConfirm => "submit.confirm",
             Self::OutboxReconcile => "outbox.reconcile",
+            Self::ResumeRead => "resume.read",
+            Self::ResumeUpdate => "resume.update",
+            Self::AiComplete => "ai.complete",
+            Self::UiOpen => "ui.open",
+            Self::LegacyImport => "legacy.import",
         }
     }
 
@@ -56,6 +71,11 @@ impl MessageType {
             "snapshot.chunk" => Ok(Self::SnapshotChunk),
             "submit.confirm" => Ok(Self::SubmitConfirm),
             "outbox.reconcile" => Ok(Self::OutboxReconcile),
+            "resume.read" => Ok(Self::ResumeRead),
+            "resume.update" => Ok(Self::ResumeUpdate),
+            "ai.complete" => Ok(Self::AiComplete),
+            "ui.open" => Ok(Self::UiOpen),
+            "legacy.import" => Ok(Self::LegacyImport),
             "SaveIntent" | "saveIntent" | "save.intent" => Err(ProtocolError::new(
                 ErrorCode::UnknownMessageType,
                 Layer::Structure,
@@ -70,7 +90,7 @@ impl MessageType {
     }
 
     pub fn identity_forbidden(self) -> bool {
-        matches!(self, Self::Health | Self::Handshake)
+        matches!(self, Self::Health | Self::Handshake | Self::AiComplete | Self::UiOpen)
     }
 
     pub fn identity_required(self) -> bool {
@@ -86,6 +106,13 @@ impl MessageType {
 
     pub fn needs_source_restore_epoch(self) -> bool {
         self.is_write()
+    }
+
+    pub fn min_envelope_version(self) -> u32 {
+        match self {
+            Self::ResumeRead | Self::ResumeUpdate | Self::AiComplete | Self::UiOpen | Self::LegacyImport => 2,
+            _ => 1,
+        }
     }
 }
 
