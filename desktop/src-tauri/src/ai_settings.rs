@@ -17,6 +17,10 @@ const FILE_NAME: &str = "ai-settings.json";
 pub const LEGACY_PROVIDER_ID: &str = "default";
 pub const MAX_PROVIDERS: usize = 20;
 pub const MAX_PROVIDER_NAME_CHARS: usize = 40;
+/// v0.4.0 及以前写死的默认模型。旧的单配置文件里 `model` 是空/空白（用户从没改过、或者是
+/// 手动清空过的坏文件）时，落回这个值，跟 `ensure_legacy_default` 补出来的默认服务商口径
+/// 一致（评审）。
+pub const LEGACY_DEFAULT_MODEL: &str = "gpt-4o-mini";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +76,11 @@ pub fn load(data_root: &Path) -> AiSettings {
         return AiSettings::default();
     };
     if let Ok(mut settings) = serde_json::from_str::<AiSettings>(&text) {
+        // 手改过的文件可能塞进奇怪的 id：keychain 账户是拿 id 拼的（`account_for`），
+        // 带 `/`、空格之类字符的 id 会拼出一个不对应任何真实凭据条目的账户名，
+        // 界面上「已配置 Key」的判断也会跟着乱掉。不合规的 id 直接整条服务商丢弃
+        // （评审）。
+        settings.providers.retain(|p| is_valid_provider_id(&p.id));
         let known = |id: &String| settings.providers.iter().any(|p| &p.id == id);
         if !settings.active_provider_id.as_ref().is_some_and(known) {
             settings.active_provider_id = settings.providers.first().map(|p| p.id.clone());
@@ -81,18 +90,27 @@ pub fn load(data_root: &Path) -> AiSettings {
     match serde_json::from_str::<LegacySettings>(&text) {
         Ok(legacy) => {
             let api_url = if legacy.api_url.trim().is_empty() { DEFAULT_API_URL.to_string() } else { legacy.api_url };
+            let model = legacy.model.trim().to_string();
+            let model = if model.is_empty() { LEGACY_DEFAULT_MODEL.to_string() } else { model };
             AiSettings {
                 providers: vec![AiProvider {
                     id: LEGACY_PROVIDER_ID.into(),
                     name: "默认".into(),
                     api_url,
-                    model: legacy.model.trim().to_string(),
+                    model,
                 }],
                 active_provider_id: Some(LEGACY_PROVIDER_ID.into()),
             }
         }
         Err(_) => AiSettings::default(),
     }
+}
+
+/// keychain 账户名（`account_for`）直接拼接 id，只放心得住的字符：字母、数字、连字符，
+/// 1–64 个。
+fn is_valid_provider_id(id: &str) -> bool {
+    let len = id.chars().count();
+    (1..=64).contains(&len) && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// v0.4.0 及更早版本没有服务商列表——一个写死的地址（`DEFAULT_API_URL`）、一个写死的模型
@@ -104,20 +122,22 @@ pub fn load(data_root: &Path) -> AiSettings {
 ///
 /// 调用方（`ai_provider_commands::migrate`）在检测到「没有服务商 + 旧 Key 还在」时调这个
 /// 函数，把这条默认服务商建出来、设成当前，再照常把 Key 搬过去。已经有服务商（不管是不是
-/// 这个 id）就什么也不做，返回 `false`。
-pub fn ensure_legacy_default(data_root: &Path) -> bool {
+/// 这个 id）就什么也不做，返回 `Ok(())`。写文件失败时把原因带出去，调用方据此报
+/// `AI_SETTINGS_WRITE_FAILED`，不能悄悄吞掉——不然「没有服务商 + 旧 Key 还在」这个判断会在
+/// 下一次调用时重新触发，看着像是每次都在正常工作（评审）。
+pub fn ensure_legacy_default(data_root: &Path) -> Result<(), String> {
     let mut settings = load(data_root);
     if !settings.providers.is_empty() {
-        return false;
+        return Ok(());
     }
     settings.providers.push(AiProvider {
         id: LEGACY_PROVIDER_ID.into(),
         name: "默认".into(),
         api_url: DEFAULT_API_URL.into(),
-        model: "gpt-4o-mini".into(),
+        model: LEGACY_DEFAULT_MODEL.into(),
     });
     settings.active_provider_id = Some(LEGACY_PROVIDER_ID.into());
-    write(data_root, &settings).is_ok()
+    write(data_root, &settings)
 }
 
 pub fn active(settings: &AiSettings) -> Option<&AiProvider> {
@@ -373,6 +393,38 @@ mod tests {
     }
 
     #[test]
+    fn a_legacy_config_with_an_empty_model_falls_back_to_the_old_default() {
+        // v0.4.0 写死 gpt-4o-mini；坏文件或者手动清空过 model 的旧配置，读出来不该是空模型名。
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(path_for(dir.path()), r#"{"apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"   "}"#).unwrap();
+        let settings = load(dir.path());
+        assert_eq!(settings.providers[0].model, LEGACY_DEFAULT_MODEL);
+        assert_eq!(LEGACY_DEFAULT_MODEL, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn hand_edited_providers_with_a_bad_id_are_dropped() {
+        // keychain 账户名直接拼 id（account_for），带 `/`、空格之类字符的 id 拼不出真实账户，
+        // 「已配置 Key」的判断会跟着乱掉。手改文件塞进来的坏 id 整条丢弃，好的留着。
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            path_for(dir.path()),
+            r#"{"providers":[
+                {"id":"good-id","name":"A","apiUrl":"https://a.example/v1","model":"m"},
+                {"id":"has space","name":"B","apiUrl":"https://b.example/v1","model":"m"},
+                {"id":"has/slash","name":"C","apiUrl":"https://c.example/v1","model":"m"},
+                {"id":"","name":"D","apiUrl":"https://d.example/v1","model":"m"}
+            ],"activeProviderId":"has space"}"#,
+        )
+        .unwrap();
+        let settings = load(dir.path());
+        assert_eq!(settings.providers.len(), 1);
+        assert_eq!(settings.providers[0].id, "good-id");
+        // 原来指向的 active id 也没了，落到剩下的第一个。
+        assert_eq!(settings.active_provider_id.as_deref(), Some("good-id"));
+    }
+
+    #[test]
     fn load_falls_back_to_the_first_provider_when_the_active_one_is_missing() {
         // activeProviderId 指向的服务商被手动改过文件、或者是别的原因不在列表里了：
         // 不该让「当前使用」悬空指向一个不存在的 id，落到第一个还在的服务商上。
@@ -583,6 +635,17 @@ mod tests {
         assert!(named.contains("x-token"), "{named}");
         let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
         assert!(!text.contains("sk-123"), "被拒的地址还是写进了文件：{text}");
+    }
+
+    #[test]
+    fn ensure_legacy_default_reports_when_the_write_fails() {
+        // data_root 指向一个普通文件（不是目录）：`path_for` 拼出来的路径的父级组件
+        // 不是目录，写文件会失败。`ensure_legacy_default` 不该把这个原因吞掉。
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("this-is-a-file");
+        std::fs::write(&not_a_dir, "x").unwrap();
+        let err = ensure_legacy_default(&not_a_dir).unwrap_err();
+        assert!(!err.is_empty());
     }
 
     #[test]

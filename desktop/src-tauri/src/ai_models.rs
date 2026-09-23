@@ -371,6 +371,38 @@ mod tests {
         );
     }
 
+    /// 保存时补全地址用 `ai_settings::normalize_api_url`，获取模型用 `resolve_endpoints`。
+    /// 两套各自实现、口径本该一致（模块头注释：「规则和插件那边一致」，`normalize_api_url`
+    /// 的注释也是「规则和插件那边一致」）——如果对同一个输入吐出两个不同的 chat 端点，
+    /// 保存时存的地址和获取模型时用的地址就对不上。这里逐条钉住，任何一行不一致就直接
+    /// 报出来是哪一条、期望什么、实际是什么，而不是悄悄让某一边迁就另一边。
+    #[test]
+    fn normalize_api_url_and_resolve_endpoints_agree_on_the_chat_url() {
+        let cases = [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/",
+            "https://api.deepseek.com/v1",
+            "https://api.deepseek.com/v1/",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "https://gateway.example/openai",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "https://relay.example/v1/chat/completions?api-version=2024-10-21",
+            "https://relay.example/custom/path",
+        ];
+        let mut mismatches = Vec::new();
+        for input in cases {
+            let normalized = crate::ai_settings::normalize_api_url(input, crate::ai_settings::DEFAULT_API_URL);
+            let resolved = resolve_endpoints(input).expect("都是合法 http(s) 地址，resolve_endpoints 不该返回 None");
+            if normalized != resolved.chat_url {
+                mismatches.push(format!(
+                    "{input} -> normalize_api_url={normalized:?}, resolve_endpoints.chat_url={:?}",
+                    resolved.chat_url
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "口径不一致：\n{}", mismatches.join("\n"));
+    }
+
     #[test]
     fn base_addresses_gain_both_endpoints() {
         let resolved = resolve_endpoints("https://api.deepseek.com/v1").unwrap();
