@@ -133,3 +133,138 @@ test("命令报错时如实显示", async () => {
   await user.click(await screen.findByRole("button", { name: "导入 Excel" }));
   expect(await screen.findByText(/第 3 行缺少「字段名」/)).toBeTruthy();
 });
+
+test("首次读取模板失败时给出提示与重试按钮", async () => {
+  const user = userEvent.setup();
+  let attempts = 0;
+  mount((command) => {
+    if (command === "resume_overview_cmd") {
+      attempts += 1;
+      if (attempts === 1) throw { code: "IO", message: "读取模板失败，请重试。" };
+      return overview;
+    }
+    return overview;
+  }, pickers(null, null));
+
+  expect(await screen.findByText("读取模板失败，请重试。")).toBeTruthy();
+  const retry = screen.getByRole("button", { name: "重试" });
+  expect(retry).toHaveProperty("type", "button");
+  await user.click(retry);
+  expect(await screen.findByRole("listitem", { name: /校招简历/ })).toBeTruthy();
+});
+
+test("新建（非覆盖）导入失败时补一句「本次导入未生效。」", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "import_resume_template_cmd") throw { code: "SHEET_INVALID", message: "第 3 行缺少「字段名」（第二列）。" };
+    return overview;
+  }, pickers("/tmp/a.xlsx", null));
+  await user.click(await screen.findByRole("button", { name: "导入 Excel" }));
+  expect(await screen.findByText("第 3 行缺少「字段名」（第二列）。本次导入未生效。")).toBeTruthy();
+});
+
+test("重新导入失败时补一句「本次导入未生效，原模板保持不变。」", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "import_resume_template_cmd") throw { code: "SHEET_INVALID", message: "第 3 行缺少「字段名」（第二列）。" };
+    return overview;
+  }, pickers("/tmp/改.xlsx", null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "重新导入" }));
+  expect(await screen.findByText("第 3 行缺少「字段名」（第二列）。本次导入未生效，原模板保持不变。")).toBeTruthy();
+});
+
+test("预览展开后重新导入，预览跟着刷新而不是留着旧内容", async () => {
+  const user = userEvent.setup();
+  let previewCalls = 0;
+  let currentOverview = overview;
+  const calls = mount((command) => {
+    if (command === "resume_overview_cmd") return currentOverview;
+    if (command === "get_resume_template_cmd") {
+      previewCalls += 1;
+      return previewCalls === 1
+        ? { id: "t1", name: "校招简历", updatedAt: "2026-09-22T00:00:00Z", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "旧内容" }] }] }
+        : { id: "t1", name: "校招简历", updatedAt: "2026-09-23T01:00:00Z", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "新内容" }] }] };
+    }
+    if (command === "import_resume_template_cmd") {
+      currentOverview = {
+        templates: [overview.templates[0], { ...overview.templates[1], fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }],
+        activeTemplateId: currentOverview.activeTemplateId,
+      };
+      return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }, previousFieldCount: 12 };
+    }
+    return currentOverview;
+  }, pickers("/tmp/改.xlsx", null));
+
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "预览" }));
+  expect(await within(row).findByText("旧内容")).toBeTruthy();
+
+  await user.click(within(row).getByRole("button", { name: "重新导入" }));
+  await waitFor(() => expect(within(row).getByText("新内容")).toBeTruthy());
+  expect(within(row).queryByText("旧内容")).toBeNull();
+  expect(calls.filter((c) => c.command === "get_resume_template_cmd")).toHaveLength(2);
+});
+
+test("改名被拒绝时表单留着、显示原因", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "rename_resume_template_cmd") throw { code: "VALIDATION", message: "模板名不能包含特殊字符。" };
+    return overview;
+  }, pickers(null, null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "重命名" }));
+  const input = within(row).getByLabelText("新名称");
+  expect(input).toHaveProperty("value", "校招简历");
+  await user.clear(input);
+  await user.type(input, "新名字*");
+  await user.click(within(row).getByRole("button", { name: "保存名称" }));
+  expect(await screen.findByText("模板名不能包含特殊字符。")).toBeTruthy();
+  expect(within(row).getByLabelText("新名称")).toBeTruthy();
+});
+
+test("改名成功后表单收起", async () => {
+  const user = userEvent.setup();
+  mount((command) => (command === "rename_resume_template_cmd" ? { ok: true } : overview), pickers(null, null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "重命名" }));
+  await user.click(within(row).getByRole("button", { name: "保存名称" }));
+  await waitFor(() => expect(within(row).queryByLabelText("新名称")).toBeNull());
+});
+
+test("重命名的名称为空时不能提交", async () => {
+  const user = userEvent.setup();
+  mount(() => overview, pickers(null, null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "重命名" }));
+  const input = within(row).getByLabelText("新名称");
+  await user.clear(input);
+  expect(within(row).getByRole("button", { name: "保存名称" })).toHaveProperty("disabled", true);
+});
+
+test("操作命令报 NOT_FOUND 时自动重新拉取列表", async () => {
+  const user = userEvent.setup();
+  let overviewCalls = 0;
+  mount((command) => {
+    if (command === "resume_overview_cmd") {
+      overviewCalls += 1;
+      return overview;
+    }
+    if (command === "set_active_resume_template_cmd") throw { code: "NOT_FOUND", message: "模板已被删除。" };
+    return overview;
+  }, pickers(null, null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "设为当前" }));
+  await waitFor(() => expect(screen.getByText("模板已被删除。")).toBeTruthy());
+  await waitFor(() => expect(overviewCalls).toBeGreaterThanOrEqual(2));
+});
+
+test("提示带 role=status", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "set_active_resume_template_cmd" ? { ...overview, activeTemplateId: "t1" } : overview,
+  pickers(null, null));
+  const row = await screen.findByRole("listitem", { name: /校招简历/ });
+  await user.click(within(row).getByRole("button", { name: "设为当前" }));
+  expect(await screen.findByRole("status")).toBeTruthy();
+});

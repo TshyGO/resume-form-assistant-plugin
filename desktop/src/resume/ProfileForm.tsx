@@ -29,12 +29,15 @@ function FieldInput({
 }) {
   const label = `${labelPrefix}${def.label ?? def.key}`;
   if (def.type === "select") {
+    // 备份带来的值不在选项里时也要显示出来，不能悄悄被第一个空选项吃掉（对齐插件 popup.js profileInputHtml）。
+    const base = def.options ?? [];
+    const options = !value || base.includes(value) ? base : [...base, value];
     return (
       <label htmlFor={id}>
         {label}
         <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
           <option value="">未填</option>
-          {(def.options ?? []).map((option) => (
+          {options.map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
@@ -51,6 +54,8 @@ function FieldInput({
       </label>
     );
   }
+  // macOS WKWebView 有时把 type=month 渲成普通文本框，给个占位符提示格式。
+  const placeholder = def.placeholder ?? (def.type === "month" ? "YYYY-MM" : undefined);
   return (
     <label htmlFor={id}>
       {label}
@@ -58,7 +63,7 @@ function FieldInput({
         id={id}
         type={def.type === "month" ? "month" : "text"}
         value={value}
-        placeholder={def.placeholder}
+        placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
@@ -91,14 +96,26 @@ export function ProfileForm() {
   }, [load]);
 
   if (!invoke) return <p className="muted">没有连上桌面程序，「我的信息」要在桌面程序里编辑。</p>;
-  if (!profile) return notice ? <p className={`note ${notice.tone}`}>{notice.text}</p> : <p className="muted">正在读取…</p>;
+  if (!profile)
+    return notice ? (
+      <p className={`note ${notice.tone}`} role="status">
+        {notice.text}
+      </p>
+    ) : (
+      <p className="muted">正在读取…</p>
+    );
 
+  // 用户一动手改，上一次保存/冲突的提示就过时了，清掉以免误导。
+  const updateProfile = (next: Profile) => {
+    setProfile(next);
+    setNotice(null);
+  };
   const setValue = (id: string, value: string) =>
-    setProfile({ ...profile, values: { ...profile.values, [id]: value } });
+    updateProfile({ ...profile, values: { ...profile.values, [id]: value } });
   const setMember = (index: number, field: string, value: string) =>
-    setProfile({ ...profile, family: profile.family.map((m, i) => (i === index ? { ...m, [field]: value } : m)) });
+    updateProfile({ ...profile, family: profile.family.map((m, i) => (i === index ? { ...m, [field]: value } : m)) });
   const setCustom = (index: number, field: "key" | "value", value: string) =>
-    setProfile({ ...profile, custom: profile.custom.map((c, i) => (i === index ? { ...c, [field]: value } : c)) });
+    updateProfile({ ...profile, custom: profile.custom.map((c, i) => (i === index ? { ...c, [field]: value } : c)) });
 
   const save = async () => {
     if (busy) return;
@@ -107,9 +124,16 @@ export function ProfileForm() {
       // 规范化用插件同一份规则：空值去掉、同名补充字段合并、全空的家庭成员丢掉。
       const normalized = profileApi.normalizeProfile(profile);
       const record = await invoke<ProfileRecordView>("save_profile_cmd", { profile: normalized, revision });
-      setProfile(profileApi.normalizeProfile(record.profile));
+      const saved = profileApi.normalizeProfile(record.profile);
+      setProfile(saved);
       setRevision(record.revision);
-      setNotice({ tone: "ok", text: "已保存。" });
+      // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
+      const count = profileApi.countProfileValues(saved);
+      const pending = profileApi.countPendingFields(saved);
+      setNotice({
+        tone: "ok",
+        text: pending ? `已保存 ${count} 项，还有 ${pending} 个字段没填内容。` : `已保存 ${count} 项。`,
+      });
     } catch (error) {
       const err = error as { code?: string; message?: string } | null;
       setConflict(err?.code === "CONFLICT");
@@ -172,13 +196,13 @@ export function ProfileForm() {
             ))}
             <button
               type="button"
-              onClick={() => setProfile({ ...profile, family: profile.family.filter((_, i) => i !== index) })}
+              onClick={() => updateProfile({ ...profile, family: profile.family.filter((_, i) => i !== index) })}
             >
               删除成员
             </button>
           </div>
         ))}
-        <button type="button" onClick={() => setProfile({ ...profile, family: [...profile.family, emptyMember()] })}>
+        <button type="button" onClick={() => updateProfile({ ...profile, family: [...profile.family, emptyMember()] })}>
           添加家庭成员
         </button>
       </fieldset>
@@ -196,21 +220,25 @@ export function ProfileForm() {
               内容
               <input id={`custom-${index}-value`} value={item.value} onChange={(event) => setCustom(index, "value", event.target.value)} />
             </label>
-            {!item.value ? <span className="pill warn">待补充</span> : null}
+            {item.key && !item.value ? <span className="pill warn">待补充</span> : null}
             <button
               type="button"
-              onClick={() => setProfile({ ...profile, custom: profile.custom.filter((_, i) => i !== index) })}
+              onClick={() => updateProfile({ ...profile, custom: profile.custom.filter((_, i) => i !== index) })}
             >
               删除
             </button>
           </div>
         ))}
-        <button type="button" onClick={() => setProfile({ ...profile, custom: [...profile.custom, { key: "", value: "" }] })}>
+        <button type="button" onClick={() => updateProfile({ ...profile, custom: [...profile.custom, { key: "", value: "" }] })}>
           添加补充字段
         </button>
       </fieldset>
 
-      {notice ? <p className={`note ${notice.tone}`}>{notice.text}</p> : null}
+      {notice ? (
+        <p className={`note ${notice.tone}`} role="status">
+          {notice.text}
+        </p>
+      ) : null}
       <div className="row">
         <button type="submit" className="primary" disabled={busy}>
           保存我的信息

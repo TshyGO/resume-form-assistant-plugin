@@ -42,6 +42,7 @@ interface ProfileApi {
   normalizeProfile(raw: unknown): Profile;
   emptyProfile(): Profile;
   countPendingFields(profile: Profile): number;
+  countProfileValues(profile: Profile): number;
 }
 
 export const profileApi = (globalThis as unknown as { ResumeProProfile: ProfileApi }).ResumeProProfile;

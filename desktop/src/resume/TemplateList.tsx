@@ -34,27 +34,41 @@ export function TemplateList({ pickers }: { pickers: FilePickers | null }) {
     void reload();
   }, [reload]);
 
-  const run = async (work: () => Promise<void>) => {
-    if (busy) return;
+  // 返回是否成功，给重命名这类「失败要留着表单」的调用方用；describeError 让个别调用方
+  // （比如导入）在通用错误文案后面再补一句。
+  const run = async (work: () => Promise<void>, describeError: (error: unknown) => Notice = describe): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
     try {
       await work();
+      return true;
     } catch (error) {
-      setNotice(describe(error));
+      setNotice(describeError(error));
+      const err = error as { code?: string } | null;
+      // 命令报「这条模板已经不在了」时，列表多半也跟着过时了，顺手刷新一次。
+      if (err?.code === "NOT_FOUND") void reload();
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
   const importFile = (replaceId: string | null) =>
-    run(async () => {
-      if (!invoke || !pickers) return;
-      const path = await pickers.open();
-      if (!path) return;
-      const result = await invoke<ImportResultView>("import_resume_template_cmd", { path, replaceId });
-      setNotice(importMessage(result.template.fieldCount, result.previousFieldCount));
-      await reload();
-    });
+    run(
+      async () => {
+        if (!invoke || !pickers) return;
+        const path = await pickers.open();
+        if (!path) return;
+        const result = await invoke<ImportResultView>("import_resume_template_cmd", { path, replaceId });
+        setNotice(importMessage(result.template.fieldCount, result.previousFieldCount));
+        await reload();
+      },
+      // 对齐插件 popup.js handleTemplateImport：导入失败按是否在覆盖一份已有模板给出不同的收尾提示。
+      (error) => {
+        const hint = replaceId ? "本次导入未生效，原模板保持不变。" : "本次导入未生效。";
+        return { tone: "error", text: `${describe(error).text}${hint}` };
+      },
+    );
 
   const exportTemplate = (template: TemplateSummary) =>
     run(async () => {
@@ -66,7 +80,21 @@ export function TemplateList({ pickers }: { pickers: FilePickers | null }) {
     });
 
   if (!invoke) return <p className="muted">没有连上桌面程序，模板要在桌面程序里管理。</p>;
-  if (!overview) return <p className="muted">正在读取模板…</p>;
+  if (!overview) {
+    if (notice) {
+      return (
+        <div className="stack">
+          <p className={`note ${notice.tone}`} role="status">
+            {notice.text}
+          </p>
+          <button type="button" onClick={() => void reload()}>
+            重试
+          </button>
+        </div>
+      );
+    }
+    return <p className="muted">正在读取模板…</p>;
+  }
 
   return (
     <div className="stack">
@@ -77,7 +105,11 @@ export function TemplateList({ pickers }: { pickers: FilePickers | null }) {
         {!pickers ? <span className="muted">请在桌面程序里导入。</span> : null}
       </div>
       <p className="muted">支持 .xlsx 和 UTF-8 编码的 .csv，三列：一级分类、字段名、值。</p>
-      {notice ? <p className={`note ${notice.tone}`}>{notice.text}</p> : null}
+      {notice ? (
+        <p className={`note ${notice.tone}`} role="status">
+          {notice.text}
+        </p>
+      ) : null}
       {overview.templates.length === 0 ? (
         <p className="muted">还没有简历模板。导入一份 Excel，或在插件旧版里导出后再导入。</p>
       ) : (
@@ -126,7 +158,7 @@ function TemplateRow(props: {
   onActivate(): void;
   onReimport(): void;
   onExport(): void;
-  onRename(name: string): void;
+  onRename(name: string): Promise<boolean>;
   onDelete(): void;
 }) {
   const invoke = useInvoke();
@@ -137,22 +169,32 @@ function TemplateRow(props: {
   const [preview, setPreview] = useState<ResumeTemplateView | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // 父组件改完名会重新拉整份 overview，template.name 跟着变；重新打开表单时要看到最新的名字。
+  const loadPreview = useCallback(async () => {
+    if (!invoke) return;
+    try {
+      setPreview(await invoke<ResumeTemplateView>("get_resume_template_cmd", { id: template.id }));
+      setPreviewError(null);
+    } catch (error) {
+      setPreviewError(describe(error).text);
+    }
+  }, [invoke, template.id]);
+
+  // 重新导入会原地覆盖同一个模板 id，这一行不会重新挂载：展开着的预览要么跟着刷新，
+  // 要么（本来就没展开）保持收起，不能留着重新导入之前的旧内容。
   useEffect(() => {
-    setDraftName(template.name);
-  }, [template.name]);
+    setPreview((current) => {
+      if (current) void loadPreview();
+      return current ? current : null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [template.updatedAt, template.fieldCount]);
 
   const togglePreview = async () => {
     if (preview) {
       setPreview(null);
       return;
     }
-    try {
-      setPreview(await invoke!<ResumeTemplateView>("get_resume_template_cmd", { id: template.id }));
-      setPreviewError(null);
-    } catch (error) {
-      setPreviewError(describe(error).text);
-    }
+    await loadPreview();
   };
 
   return (
@@ -177,7 +219,17 @@ function TemplateRow(props: {
         <button type="button" disabled={props.busy || !props.canUseFiles} onClick={props.onExport}>
           导出 Excel
         </button>
-        <button type="button" disabled={props.busy} onClick={() => setRenaming((v) => !v)}>
+        <button
+          type="button"
+          disabled={props.busy}
+          onClick={() =>
+            setRenaming((open) => {
+              // 打开表单时才把草稿名同步成当前名字：正打开着改的时候不该被外部刷新打断。
+              if (!open) setDraftName(template.name);
+              return !open;
+            })
+          }
+        >
           重命名
         </button>
         {confirming ? (
@@ -198,17 +250,20 @@ function TemplateRow(props: {
       {renaming ? (
         <form
           className="row"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            props.onRename(draftName);
-            setRenaming(false);
+            // 只有真的改成了才收起表单；被拒绝（比如校验不通过）要留着让用户改。
+            const ok = await props.onRename(draftName);
+            if (ok) setRenaming(false);
           }}
         >
           <label>
             新名称
             <input value={draftName} onChange={(event) => setDraftName(event.target.value)} />
           </label>
-          <button type="submit">保存名称</button>
+          <button type="submit" disabled={props.busy || !draftName.trim()}>
+            保存名称
+          </button>
         </form>
       ) : null}
       {previewError ? <p className="note error">{previewError}</p> : null}
