@@ -368,6 +368,7 @@ test("composition holds the query until the candidate is confirmed, and Enter se
   h.el("app-search").emit("compositionstart");
   h.el("app-search").value = "岗";
   h.el("app-search").emit("input");
+  await h.el("app-search").emit("keydown", { key: "Enter", isComposing: true });
   await wait(60);
   assert.equal(listCalls(h).length, 0);
   h.el("app-search").emit("compositionend");
@@ -412,8 +413,8 @@ test("a committed plugin write refreshes the open list from the query", async ()
   await wait(50);
   assert.equal(listCalls(h).length, 0);
 
-  h.emitChanged({ reason: "committed", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
-  h.emitChanged({ reason: "committed", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
+  h.emitChanged({ reason: "committed", messageType: "job.save", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
+  h.emitChanged({ reason: "committed", messageType: "job.save", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
   await wait(10);
   assert.equal(listCalls(h).length, 0);
   await wait(40);
@@ -429,6 +430,7 @@ test("a committed row hidden by the current filter is not inserted and does not 
   h.el("app-search").value = "其他";
   h.emitChanged({
     reason: "committed",
+    messageType: "job.save",
     applicationId: "NEW",
     company: "金发科技股份有限公司",
     title: "研发工程师-化工工艺研究方向",
@@ -449,4 +451,14 @@ test("a committed row hidden by the current filter is not inserted and does not 
   assert.equal(queryOf(listCalls(h).at(-1)!).query, null);
   assert.equal(queryOf(listCalls(h).at(-1)!).stage, "all");
   assert.equal(queryOf(listCalls(h).at(-1)!).offset, 0);
+});
+
+test("an update to an existing application refreshes without claiming there is a new one", async () => {
+  const h = harness((name) => name === "list_applications_cmd" ? { total: 0, items: [] } : undefined);
+  h.el("app-search").value = "其他";
+  h.emitChanged({ reason: "committed", messageType: "fill.submit", applicationId: "EXISTING" });
+  await wait(50);
+  await h.tick();
+  assert.equal(listCalls(h).length, 1);
+  assert.equal(h.el("apps-fresh").hidden, true);
 });

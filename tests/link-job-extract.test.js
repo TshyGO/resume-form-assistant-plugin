@@ -97,6 +97,7 @@ test('a configured assist sends only allowlisted fragments and keeps an evidence
   assert.match(body, /研发工程师-化工工艺研究方向/);
   assert.equal(calls[0].init.headers.Authorization, `Bearer ${KEY}`);
   assert.equal(result.status, 'manual');
+  assert.equal(result.reason, 'location_no_evidence');
   assert.equal(result.fields.company, '金发科技股份有限公司');
   assert.equal(result.fields.title, '研发工程师-化工工艺研究方向');
   assert.equal(result.fields.location, '');
@@ -123,6 +124,31 @@ test('a model answer with no page evidence does not become fields', async () => 
   assert.equal(judged.fields.company, '');
   assert.equal(judged.fields.title, '');
   assert.equal(judged.fields.location, '');
+});
+
+test('an apply label cannot become part of the saved job title', async () => {
+  const { judgeSuggestion } = await loadAssist();
+  const fragments = [
+    { id: 1, source: 'beisen-company', role: 'company', text: '金发科技股份有限公司' },
+    { id: 2, source: 'beisen-apply-title', role: 'job-title', text: '你正在投递职位：研发工程师-化工工艺研究方向' }
+  ];
+  const result = judgeSuggestion({
+    company: '金发科技股份有限公司',
+    title: '你正在投递职位：研发工程师-化工工艺研究方向',
+    location: '', companyFragment: 1, titleFragment: 2, locationFragment: null
+  }, fragments);
+  assert.equal(result.status, 'manual');
+  assert.equal(result.fields.title, '');
+});
+
+test('a page title without company evidence goes straight to manual review', async () => {
+  const { nextSaveStep } = await loadFlow();
+  const result = nextSaveStep({
+    reliable: false, company: '', title: '',
+    fragments: [{ id: 1, source: 'document.title', role: 'page-title', text: '招聘岗位' }]
+  });
+  assert.equal(result.action, 'form');
+  assert.equal(result.reason, 'no_company_evidence');
 });
 
 test('format errors, cancellation, timeout and network failure each ask once and then stop', async () => {

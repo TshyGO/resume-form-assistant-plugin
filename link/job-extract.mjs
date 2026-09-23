@@ -108,10 +108,17 @@ export function judgeSuggestion(parsed, fragments) {
   const company = judgeField('company', parsed.company, parsed.companyFragment, allowed);
   const title = judgeField('title', parsed.title, parsed.titleFragment, allowed);
   const location = judgeField('location', parsed.location, parsed.locationFragment, allowed);
-  if (company.rejected || title.rejected || location.rejected) {
+  if (company.rejected || title.rejected) {
     return manual('no_evidence', {
       company: company.rejected ? '' : company.value,
       title: title.rejected ? '' : title.value,
+      location: ''
+    });
+  }
+  if (location.rejected) {
+    return manual('location_no_evidence', {
+      company: company.value,
+      title: title.value,
       location: ''
     });
   }
@@ -168,9 +175,9 @@ function supports(field, value, fragment, fragments) {
     return value === fragment.text;
   }
   if (fragment.role !== 'job-title') return false;
-  if (value === fragment.text) return true;
   const match = fragment.text.match(/(?:你|您)正在投递(?:的)?职位\s*[:：]\s*(.+)$/);
-  return match?.[1]?.trim() === value;
+  if (match) return match[1].trim() === value;
+  return value === fragment.text;
 }
 
 function manual(reason, fields = emptyFields()) {

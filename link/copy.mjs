@@ -92,15 +92,21 @@ const REFUSALS = {
 const MANUAL_SAVE = {
   unconfigured: '插件还没有配置 AI 接口。请补全公司和岗位后再保存，不会猜测。',
   no_fragments: '这个页面没有可用的岗位片段。请手动填写公司和岗位。',
+  no_company_evidence: '页面没有可核对的公司信息，请手动填写，避免发起无法验证结果的 AI 请求。',
   cancelled: '已取消识别。请手动补正。这次不会自动再请求。',
   timeout: '识别超时。请手动补正。这次不会自动再请求。',
   network: '识别接口没有连上。请手动补正。这次不会自动再请求。',
   internal: '岗位识别功能暂时不可用。请手动补正，这次不会自动再请求。',
   format: '识别结果无法使用。请手动补正。这次不会自动再请求。',
   no_evidence: '识别结果对不上页面上的文字。请手动补正，不会保存猜出来的字段。',
+  location_no_evidence: '公司和岗位已识别，工作地点没有可靠依据，已留空供你核对。',
+  swapped: '页面把公司和岗位写得不清楚，请核对后保存。',
+  company_conflict: '页面出现多个不同的公司名，请确认这次投递的公司。',
+  title_conflict: '页面出现多个不同的岗位名，请确认这次投递的岗位。',
+  site_title_only: '页面标题不足以确认岗位，请手动核对。',
   missing_company: '公司名还不确定。请核对后再保存。',
   missing_title: '岗位名还不确定。请核对后再保存。',
-  in_flight: '上一次识别还没结束。请先取消，不会自动再请求。'
+  in_flight: '上一次 AI 请求还没结束。请先取消，不会自动再请求。'
 };
 
 const ASSIST_SOURCE = {
@@ -183,7 +189,11 @@ export function describeBindResult(result) {
   }
 
   if (status === 'failed') {
-    return { tone: 'warn', text: REFUSALS[code] ?? '桌面拒绝了这次写入，请到桌面核对。' };
+    const detail = REFUSALS[code] ?? '桌面拒绝了这次写入，请到桌面核对。';
+    return {
+      tone: 'warn',
+      text: result?.intent ? `${detail} 这条仍在待同步列表，请在那里处理，避免重复新建。` : detail
+    };
   }
 
   return { tone: 'warn', text: '这次没能保存到桌面，已经留在待同步里。' };

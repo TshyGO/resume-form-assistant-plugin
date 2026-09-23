@@ -27,7 +27,8 @@ const COMPANY_SELECTOR = [
 
 const TEXT_SELECTOR = [
   'h1', 'h2', 'h3', 'p', 'li', 'dt', 'dd', 'strong', 'span',
-  '[class*="company"]', '[class*="job"]', '[class*="title"]', '[class*="position"]', '[class*="logo"]'
+  '[class*="company"]', '[class*="job"]', '[class*="title"]', '[class*="position"]', '[class*="logo"]',
+  '[class*="tenant-name"]', '[class*="tenantName"]'
 ].join(',');
 
 const APPLY_PHRASE = /(?:你|您)正在投递(?:的)?职位\s*[:：]\s*(.+)$/;

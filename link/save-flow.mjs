@@ -13,6 +13,10 @@ export function nextSaveStep(extraction) {
     return { action: 'commit', fields };
   }
   const fragments = Array.isArray(extraction?.fragments) ? extraction.fragments : [];
+  // The model cannot produce an evidenced company without a company-role fragment.
+  if (!fragments.some(fragment => fragment.role === 'company')) {
+    return { action: 'form', fields, reason: 'no_company_evidence' };
+  }
   if (fragments.length) {
     return { action: 'assist', fields, fragments, reasons: extraction?.assistReasons || [] };
   }

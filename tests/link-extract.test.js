@@ -243,6 +243,22 @@ test('a Beisen page title can identify the employer without trusting image alt',
   assert.equal(fields.reliable, true);
 });
 
+test('a Beisen tenant-name div before the apply summary identifies the employer', async () => {
+  const { extractJobFields } = await load();
+  const doc = richDoc({
+    title: '招聘',
+    elements: [
+      element({ className: 'tenant-name', text: '金发科技股份有限公司' }),
+      element({ tag: 'span', text: '你正在投递职位：工艺工程师' })
+    ]
+  });
+
+  const fields = extractJobFields(doc, 'https://kingfa.zhiye.com/form');
+  assert.equal(fields.company, '金发科技股份有限公司');
+  assert.equal(fields.title, '工艺工程师');
+  assert.equal(fields.reliable, true);
+});
+
 test('the same Beisen wording on an unknown site is not treated as a labelled job', async () => {
   const { extractJobFields } = await load();
   const doc = richDoc({

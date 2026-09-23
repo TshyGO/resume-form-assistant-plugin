@@ -214,9 +214,7 @@ export function mountApplications(
       const stageMiss = filters.stage !== "all" && Boolean(stage) && filters.stage !== stage;
       const recycleMiss = filters.recycle !== "all" && filters.recycle !== recycle;
       const queryMiss = Boolean(query) && !haystack.includes(query);
-      const filtered = Boolean(filters.query) || filters.stage !== "all" || filters.recycle !== "active";
-      if (!filtered && ctl.offset === 0) return false;
-      return stageMiss || recycleMiss || queryMiss || filtered;
+      return stageMiss || recycleMiss || queryMiss;
     });
     committedNotices = hidden.slice(-10);
     fresh.hidden = hidden.length === 0;
@@ -225,7 +223,11 @@ export function mountApplications(
   function noteCommitted(payload: unknown) {
     const notice = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
     if (!notice || notice.reason !== "committed") return;
-    committedNotices.push(notice);
+    // Filling or confirming an existing application still refreshes the list, but it is
+    // not a newly created application and must not show the new-application hint.
+    if (notice.messageType === "job.save" && notice.stage === "saved") {
+      committedNotices.push(notice);
+    }
     if (coalesceTimer) clearTimeout(coalesceTimer);
     coalesceTimer = setTimeout(() => {
       coalesceTimer = null;
@@ -641,9 +643,8 @@ export function mountApplications(
     void queueSearch(true);
   });
   search.addEventListener("keydown", (event: KeyboardEvent) => {
-    if (event.key !== "Enter") return;
+    if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
-    composing = false;
     void queueSearch(true);
   });
   must("apps-fresh-clear").addEventListener("click", async () => {

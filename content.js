@@ -1992,7 +1992,7 @@
 
   async function handleSaveJobClick() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form || saveInFlight || assistInFlight) return;
+    if (!form || !form.hidden || saveInFlight || assistInFlight) return;
     const token = ++assistToken;
     assistInFlight = true;
     const button = shadowRoot.querySelector("#resume-pro-save-job");
@@ -2411,7 +2411,7 @@
       return;
     }
     setDesktopStatus(describeCommit(copy, result ?? { status: "error" }));
-    if (result?.status === "saved" || result?.status === "pending" || result?.status === "queued" || result?.status === "duplicate" || (result?.status === "rejected" && result.reason === "queue_full" && result.intent)) {
+    if (result?.status === "saved" || result?.status === "pending" || result?.status === "queued" || result?.status === "duplicate" || (result?.status === "rejected" && result.reason === "queue_full" && result.intent) || (result?.status === "failed" && result.intent)) {
       closeSaveForm();
     }
     refreshPendingList();
@@ -2743,6 +2743,7 @@
       cancelJobAssist,
       submitSaveForm,
       describeCommit,
+      presentSaveResult,
       getSaveInteractionState() {
         return { assistInFlight, saveInFlight, assistToken };
       },

@@ -351,8 +351,12 @@ test("cancelling job recognition allows immediate manual save and ignores a late
     }
   });
   let resolveAi;
+  let aiCalls = 0;
   context.self.ResumeProAIClient = {
-    send: () => new Promise(resolve => { resolveAi = resolve; }),
+    send: () => {
+      aiCalls += 1;
+      return new Promise(resolve => { resolveAi = resolve; });
+    },
     cancel: () => Promise.reject(new Error('cancel response unavailable'))
   };
   const saves = [];
@@ -370,6 +374,9 @@ test("cancelling job recognition allows immediate manual save and ignores a late
   assert.equal(saveButton.disabled, false);
   inputs['#resume-pro-save-company'].value = '星河科技';
   inputs['#resume-pro-save-title'].value = '工艺工程师';
+  await hooks.handleSaveJobClick();
+  assert.equal(aiCalls, 1, 'the open manual form must not restart extraction');
+  assert.equal(inputs['#resume-pro-save-title'].value, '工艺工程师');
   await hooks.submitSaveForm({ force: false });
   assert.equal(saves.length, 1);
   assert.equal(saves[0].fields.title, '工艺工程师');
@@ -388,4 +395,21 @@ test("a full outbound queue reports the retained intent instead of claiming noth
   });
   assert.match(result.text, /岗位已留在待同步列表/);
   assert.match(result.text, /还没有写入桌面/);
+});
+
+test("a bound write failure closes the save form and points to the retained queue entry", async () => {
+  const { hooks } = loadContentScript();
+  const form = { hidden: false };
+  hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-save-form' ? form : null });
+  const copy = await import('../link/copy.mjs');
+
+  hooks.presentSaveResult(copy, {
+    status: 'failed', code: 'invalid_payload', intent: { intentId: 'intent-1' }
+  });
+
+  assert.equal(form.hidden, true);
+  const described = hooks.describeCommit(copy, {
+    status: 'failed', code: 'invalid_payload', intent: { intentId: 'intent-1' }
+  });
+  assert.match(described.text, /待同步列表/);
 });
