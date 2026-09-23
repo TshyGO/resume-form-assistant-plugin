@@ -778,7 +778,7 @@ fn save_profile_cmd(
     profile: serde_json::Value,
     revision: i64,
 ) -> Result<archive_store::ProfileRecord, CommandError> {
-    with_store(&state, |store| resume_commands::save_profile(store, profile.clone(), revision))
+    with_store(&state, move |store| resume_commands::save_profile(store, profile, revision))
 }
 
 #[tauri::command]
