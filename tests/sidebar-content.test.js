@@ -166,6 +166,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     console,
     chrome,
     document,
+    location: { href: 'https://jobs.example.test/apply' },
     window,
     navigator: { clipboard: { writeText: async () => {} } },
     crypto: { randomUUID: () => "test-id" },
@@ -180,6 +181,8 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     HTMLLabelElement: class {},
     self: { __RESUME_PRO_TEST__: true }
   };
+  context.setTimeout = setTimeout;
+  context.clearTimeout = clearTimeout;
   context.globalThis = context;
   context.self.window = window;
   context.window.document = document;
@@ -193,6 +196,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
 
   return {
     hooks,
+    context,
     host,
     sidebar,
     collapseButton,
@@ -306,4 +310,82 @@ test("a normalized state is what gets stored, even after a failed read left it e
   assert.deepEqual(plain(writes), [{
     resumeProSidebarUiState: { collapsed: false, left: 120, top: 80 }
   }]);
+});
+
+test("cancelling job recognition allows immediate manual save and ignores a late AI reply", async () => {
+  const { hooks, context } = loadContentScript();
+  const inputs = Object.fromEntries([
+    '#resume-pro-save-company', '#resume-pro-save-title', '#resume-pro-save-location',
+    '#resume-pro-save-url', '#resume-pro-save-note'
+  ].map(key => [key, { value: '', textContent: '' }]));
+  const form = { hidden: true, querySelector: key => inputs[key] ?? null };
+  const saveButton = { disabled: false };
+  const assistNote = { textContent: '' };
+  const assistList = { textContent: '', appendChild() {} };
+  const assistPanel = {
+    hidden: true,
+    querySelector: key => key === '#resume-pro-job-assist-note' ? assistNote : assistList
+  };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return {
+        '#resume-pro-save-form': form,
+        '#resume-pro-save-job': saveButton,
+        '#resume-pro-job-assist': assistPanel
+      }[selector] ?? null;
+    }
+  });
+  hooks.setCurrentStore({ aiConfig: { apiUrl: 'https://ai.example.test', model: 'demo', apiKey: 'sk-test' } });
+  const fields = { company: '', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
+  hooks.setDesktopModules({
+    extract: { extractJobFields: () => fields },
+    saveFlow: {
+      nextSaveStep: () => ({ action: 'assist', fields, fragments: [] }),
+      assistDisclosure: () => ({ fragments: [] }),
+      afterAssist: () => ({ action: 'commit', fields: { ...fields, company: 'wrong' } })
+    },
+    copy: {
+      describeJobAssist: () => ({ text: 'AI 正在识别', fragments: [] }),
+      describeManualSave: () => '请手动填写',
+      describeBindResult: () => ({ tone: 'success', text: '桌面已保存' })
+    }
+  });
+  let resolveAi;
+  context.self.ResumeProAIClient = {
+    send: () => new Promise(resolve => { resolveAi = resolve; }),
+    cancel: () => Promise.reject(new Error('cancel response unavailable'))
+  };
+  const saves = [];
+  context.chrome.runtime.sendMessage = async message => {
+    saves.push(message);
+    return { status: 'saved' };
+  };
+
+  const recognition = hooks.handleSaveJobClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(hooks.getSaveInteractionState().assistInFlight, true);
+  hooks.cancelJobAssist();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(form.hidden, false);
+  assert.equal(saveButton.disabled, false);
+  inputs['#resume-pro-save-company'].value = '星河科技';
+  inputs['#resume-pro-save-title'].value = '工艺工程师';
+  await hooks.submitSaveForm({ force: false });
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].fields.title, '工艺工程师');
+
+  resolveAi({ status: 'ok', fields: { company: 'wrong', title: 'wrong' } });
+  await recognition;
+  assert.equal(form.hidden, true, 'a late AI reply must not reopen the completed form');
+  assert.equal(hooks.getSaveInteractionState().saveInFlight, false);
+});
+
+test("a full outbound queue reports the retained intent instead of claiming nothing was kept", async () => {
+  const { hooks } = loadContentScript();
+  const copy = await import('../link/copy.mjs');
+  const result = hooks.describeCommit(copy, {
+    status: 'rejected', reason: 'queue_full', intent: { intentId: 'intent-1' }
+  });
+  assert.match(result.text, /岗位已留在待同步列表/);
+  assert.match(result.text, /还没有写入桌面/);
 });

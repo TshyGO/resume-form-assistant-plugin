@@ -162,6 +162,17 @@ test('a full bound queue explains itself and promises filling still works', asyn
   assert.match(copy.text, /填表/);
 });
 
+test('a full outbound queue says the job remains in pending intents', async () => {
+  const { describeBindResult } = await load();
+  const copy = describeBindResult({
+    status: 'rejected', reason: 'queue_full', intent: { intentId: 'intent-1' }
+  });
+
+  assert.match(copy.text, /岗位已留在待同步列表/);
+  assert.match(copy.text, /还没有写入桌面/);
+  assert.doesNotMatch(copy.text, /这次没有保存/);
+});
+
 test('a second bind for the same posting says it is already queued', async () => {
   const { describeBindResult } = await load();
 

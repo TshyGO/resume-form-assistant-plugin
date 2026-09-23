@@ -48,7 +48,7 @@ export function extractJobFields(doc, href) {
   const apply = findApplyPhrase(texts);
   // Host and page type both have to match. A job list on the same host is not this form.
   const beisenApply = isBeisenApplyHost(host) && Boolean(apply);
-  const labeledCompanies = beisenApply ? companyLabels(doc) : [];
+  const labeledCompanies = beisenApply ? companyLabels(doc, texts, apply) : [];
 
   const companyValues = [...labeledCompanies, ...jobCompanies];
   const titleValues = [...(beisenApply && apply?.title ? [apply.title] : []), ...jobTitles];
@@ -163,23 +163,26 @@ function findApplyPhrase(texts) {
   return null;
 }
 
-function companyLabels(doc) {
+function companyLabels(doc, texts, apply) {
+  const applyIndex = texts.indexOf(apply.text);
+  // The employer heading precedes the apply summary. Company names in a later resume or
+  // work-history section are not evidence about this posting's employer.
+  const beforeApply = applyIndex < 0 ? [] : texts.slice(0, applyIndex);
   const fromElements = nodes(doc, COMPANY_SELECTOR)
     .map(node => cleanField(node?.textContent))
-    .filter(isCompanyText);
-  const fromAlt = nodes(doc, 'img[alt]')
-    .map(node => cleanField(node?.getAttribute?.('alt')))
-    .filter(value => isCompanyText(value) && !/logo|图标/i.test(value));
-  if (fromElements.length) return unique(fromElements);
-  if (fromAlt.length) return unique(fromAlt);
-  // A Beisen apply page often prints the employer as one short line ending in 公司, with no
-  // stable class. Several such lines are a conflict, so this only accepts exactly one.
-  const suffix = unique(shortTexts(doc).map(cleanField).filter(value => isCompanyText(value) && /公司$|集团$/.test(value)));
-  return suffix.length === 1 ? suffix : [];
+    .filter(value => isCompanyText(value) && beforeApply.includes(value));
+  const companyLike = value => isCompanyText(value) && /公司$|集团$/.test(value);
+  const pageTitle = cleanField(doc?.title);
+  const titleCandidate = companyLike(pageTitle) ? [pageTitle] : [];
+  const headingCandidates = beforeApply.map(cleanField).filter(companyLike);
+  // An image alt can describe an avatar, navigation item or resume. It is never by itself
+  // evidence of the employer, even when it is the only alt on the page.
+  return unique([...fromElements, ...titleCandidate, ...headingCandidates]);
 }
 
 function isCompanyText(value) {
-  return Boolean(value) && !APPLY_PHRASE.test(value) && !PREFERENCE.test(value) && !FORM_LABEL.test(value);
+  return Boolean(value) && !APPLY_PHRASE.test(value) && !PREFERENCE.test(value) && !FORM_LABEL.test(value)
+    && !SENSITIVE.test(value) && !value.includes('://');
 }
 
 function firstJobLocation(postings) {

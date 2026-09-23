@@ -95,6 +95,7 @@ const MANUAL_SAVE = {
   cancelled: '已取消识别。请手动补正。这次不会自动再请求。',
   timeout: '识别超时。请手动补正。这次不会自动再请求。',
   network: '识别接口没有连上。请手动补正。这次不会自动再请求。',
+  internal: '岗位识别功能暂时不可用。请手动补正，这次不会自动再请求。',
   format: '识别结果无法使用。请手动补正。这次不会自动再请求。',
   no_evidence: '识别结果对不上页面上的文字。请手动补正，不会保存猜出来的字段。',
   missing_company: '公司名还不确定。请核对后再保存。',
@@ -162,7 +163,9 @@ export function describeBindResult(result) {
     if (reason === 'queue_full') {
       return {
         tone: 'warn',
-        text: `待同步的消息已满（${MAX_OUTBOX} 条），这次没有绑定。请先处理已有的几条。填表功能不受影响。`
+        text: result?.intent
+          ? `岗位已留在待同步列表，但待发送消息已满（${MAX_OUTBOX} 条），还没有写入桌面。请先处理已有消息，再从待同步列表继续保存。`
+          : `待同步的消息已满（${MAX_OUTBOX} 条），这次没有绑定。请先处理已有的几条。填表功能不受影响。`
       };
     }
     if (reason === 'unknown_intent') {

@@ -134,6 +134,22 @@ test('one online save persists a new saved application without a second confirma
   assert.deepEqual(storage.data.desktopOutbox, []);
 });
 
+test('a full outbound queue keeps the save intent for later completion', async () => {
+  const model = desktop();
+  const { router, storage } = await harness(message => model.answer(message));
+  const { MAX_OUTBOX } = await import('../link/limits.mjs');
+  storage.data.desktopOutbox = Array.from({ length: MAX_OUTBOX }, (_, index) => ({
+    messageId: `queued-${index}`
+  }));
+
+  const result = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: fields('工艺工程师') });
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.reason, 'queue_full');
+  assert.ok(result.intent?.intentId);
+  assert.equal(storage.data.desktopSaveIntents.length, 1);
+  assert.equal(model.applications.length, 0);
+});
+
 test('the same company with a different title creates a second application and never merges', async () => {
   const model = desktop();
   const { router } = await harness(message => model.answer(message));

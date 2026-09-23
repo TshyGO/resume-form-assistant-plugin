@@ -209,6 +209,40 @@ test('a Beisen apply page can read the employer from the only short company line
   assert.equal(fields.reliable, true);
 });
 
+test('an avatar alt and a later resume employer cannot become the posting company', async () => {
+  const { extractJobFields } = await load();
+  const doc = richDoc({
+    title: '招聘',
+    elements: [
+      element({ tag: 'img', attrs: { alt: '用户头像' } }),
+      element({ tag: 'span', text: '你正在投递职位：工艺工程师' }),
+      element({ tag: 'span', text: '药明康德有限公司' })
+    ]
+  });
+
+  const fields = extractJobFields(doc, 'https://kingfa.zhiye.com/form');
+  assert.equal(fields.company, '');
+  assert.equal(fields.title, '工艺工程师');
+  assert.equal(fields.reliable, false);
+  assert.equal(fields.fragments.some(fragment => fragment.text === '用户头像' || fragment.text === '药明康德有限公司'), false);
+});
+
+test('a Beisen page title can identify the employer without trusting image alt', async () => {
+  const { extractJobFields } = await load();
+  const doc = richDoc({
+    title: '金发科技股份有限公司',
+    elements: [
+      element({ tag: 'img', attrs: { alt: '用户头像' } }),
+      element({ tag: 'span', text: '你正在投递职位：工艺工程师' })
+    ]
+  });
+
+  const fields = extractJobFields(doc, 'https://kingfa.zhiye.com/form');
+  assert.equal(fields.company, '金发科技股份有限公司');
+  assert.equal(fields.title, '工艺工程师');
+  assert.equal(fields.reliable, true);
+});
+
 test('the same Beisen wording on an unknown site is not treated as a labelled job', async () => {
   const { extractJobFields } = await load();
   const doc = richDoc({

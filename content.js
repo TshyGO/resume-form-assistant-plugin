@@ -1953,6 +1953,7 @@
   let desktopModules = null;
   let pendingFields = null;
   let saveInFlight = false;
+  let assistInFlight = false;
   let assistToken = 0;
   let assistRequestId = null;
   let assistFallback = null;
@@ -1991,11 +1992,12 @@
 
   async function handleSaveJobClick() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form || saveInFlight) return;
+    if (!form || saveInFlight || assistInFlight) return;
     const token = ++assistToken;
-    saveInFlight = true;
+    assistInFlight = true;
     const button = shadowRoot.querySelector("#resume-pro-save-job");
     if (button) button.disabled = true;
+    form.hidden = true;
     setDesktopStatus(null);
 
     try {
@@ -2022,14 +2024,17 @@
       const { copy: wording } = await loadDesktopModules();
       openSaveForm(step.fields, wording.describeManualSave(step.reason));
     } catch (error) {
+      if (token !== assistToken) return;
       setDesktopStatus({ tone: "warn", text: "读取页面信息失败，请手动填写后再保存。" });
       openSaveForm(
         { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" },
         "读取页面信息失败，请手动填写。"
       );
     } finally {
-      saveInFlight = false;
-      if (button) button.disabled = false;
+      if (token === assistToken) {
+        assistInFlight = false;
+        if (button) button.disabled = saveInFlight;
+      }
     }
   }
 
@@ -2056,7 +2061,7 @@
         }),
         new Promise(resolve => {
           timer = setTimeout(() => {
-            self.ResumeProAIClient.cancel(requestId);
+            self.ResumeProAIClient.cancel(requestId).catch(() => {});
             resolve({ status: "manual", reason: "timeout", reliable: false, fields: {} });
           }, 25000);
         })
@@ -2066,7 +2071,7 @@
     } finally {
       clearTimeout(timer);
       if (assistRequestId === requestId) assistRequestId = null;
-      hideJobAssist();
+      if (token === assistToken) hideJobAssist();
     }
     if (token !== assistToken) return { action: "ignore" };
     const after = saveFlow.afterAssist(reply, fallback);
@@ -2094,10 +2099,15 @@
   }
 
   function cancelJobAssist() {
-    assistToken += 1;
-    if (assistRequestId) self.ResumeProAIClient.cancel(assistRequestId);
+    const token = ++assistToken;
+    assistInFlight = false;
+    if (assistRequestId) self.ResumeProAIClient.cancel(assistRequestId).catch(() => {});
+    assistRequestId = null;
+    const button = shadowRoot?.querySelector("#resume-pro-save-job");
+    if (button) button.disabled = saveInFlight;
     hideJobAssist();
     loadDesktopModules().then(({ copy }) => {
+      if (token !== assistToken) return;
       openSaveForm(assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" }, copy.describeManualSave("cancelled"));
     });
   }
@@ -2350,7 +2360,7 @@
 
   async function submitSaveForm({ force }) {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form || saveInFlight) return;
+    if (!form || saveInFlight || assistInFlight) return;
 
     const fields = {
       company: form.querySelector("#resume-pro-save-company").value.trim(),
@@ -2401,7 +2411,7 @@
       return;
     }
     setDesktopStatus(describeCommit(copy, result ?? { status: "error" }));
-    if (result?.status === "saved" || result?.status === "pending" || result?.status === "queued" || result?.status === "duplicate") {
+    if (result?.status === "saved" || result?.status === "pending" || result?.status === "queued" || result?.status === "duplicate" || (result?.status === "rejected" && result.reason === "queue_full" && result.intent)) {
       closeSaveForm();
     }
     refreshPendingList();
@@ -2415,6 +2425,9 @@
       return copy.describeBindResult(result);
     }
     if (result?.status === "rejected" && ["unknown_intent", "no_identity", "awaiting_reconcile", "not_paused"].includes(result.reason)) {
+      return copy.describeBindResult(result);
+    }
+    if (result?.status === "rejected" && result.reason === "queue_full" && result.intent) {
       return copy.describeBindResult(result);
     }
     return copy.describeSaveResult(result);
@@ -2726,6 +2739,16 @@
       formatFillDiagnostics,
       getHighlightTargets,
       handleAiFillClick,
+      handleSaveJobClick,
+      cancelJobAssist,
+      submitSaveForm,
+      describeCommit,
+      getSaveInteractionState() {
+        return { assistInFlight, saveInFlight, assistToken };
+      },
+      setDesktopModules(modules) {
+        desktopModules = modules;
+      },
       handleChipAction,
       handleFieldChipClick,
       highlightFilledField,

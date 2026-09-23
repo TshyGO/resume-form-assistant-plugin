@@ -38,7 +38,12 @@ function dispatchAiMessage(message, sender, sendResponse) {
     activeFillRequests.set(key, controller);
     handleExtractJob(message, controller)
       .then(sendResponse)
-      .catch(() => sendResponse({ status: "manual", reason: "network", reliable: false, fields: { company: "", title: "", location: "" } }))
+      .catch(error => {
+        // Module loading and request failures are different problems. The request module
+        // reports network failures itself; reaching here means the worker could not run it.
+        console.warn("job extraction worker failed", error?.name || "unknown");
+        sendResponse({ status: "manual", reason: "internal", reliable: false, fields: { company: "", title: "", location: "" } });
+      })
       .finally(() => activeFillRequests.delete(key));
     return true;
   }
@@ -76,7 +81,8 @@ self.onmessage = ({ data }) => {
 };
 
 async function handleExtractJob(message, controller) {
-  const mod = await import(chrome.runtime.getURL("link/job-extract.mjs"));
+  // This is a dedicated Worker, not an extension context with chrome.runtime.
+  const mod = await import(new URL("link/job-extract.mjs", self.location.href).href);
   return mod.requestJobExtract({
     fetchImpl: globalThis.fetch.bind(globalThis),
     aiConfig: message.aiConfig,
@@ -340,5 +346,4 @@ function normalizeAiConfig(aiConfig) {
     apiKey: String(aiConfig?.apiKey ?? "").trim()
   };
 }
-
 
