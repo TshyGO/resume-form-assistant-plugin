@@ -14,6 +14,7 @@ mod evidence_commands;
 mod backup_commands;
 mod recycle_commands;
 mod restore;
+mod resume_commands;
 mod todo_commands;
 #[cfg(test)]
 mod commands_regression;
