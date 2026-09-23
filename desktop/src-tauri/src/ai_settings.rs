@@ -1,4 +1,4 @@
-//! 桌面这一侧的 AI 设置：接口地址和模型名。
+//! 桌面这一侧的 AI 服务商列表。Key 按服务商另存系统凭据库。
 //!
 //! **Key 不在这里。** 它进 OS 凭据库（见 [`crate::ai_credentials`]），不进这个文件，
 //! 也不进备份（data-privacy §1）。
@@ -12,46 +12,164 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_API_URL: &str = "https://api.openai.com/v1/chat/completions";
-pub const DEFAULT_MODEL: &str = "gpt-4o-mini";
 const FILE_NAME: &str = "ai-settings.json";
+/// 从旧的单配置文件迁移来的那一条服务商的 id。旧 Key 也搬到这个 id 名下（见 `ai_credentials`）。
+pub const LEGACY_PROVIDER_ID: &str = "default";
+pub const MAX_PROVIDERS: usize = 20;
+pub const MAX_PROVIDER_NAME_CHARS: usize = 40;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiSettings {
+pub struct AiProvider {
+    pub id: String,
+    pub name: String,
     pub api_url: String,
     pub model: String,
 }
 
-impl Default for AiSettings {
-    fn default() -> Self {
-        Self {
-            api_url: DEFAULT_API_URL.to_string(),
-            model: DEFAULT_MODEL.to_string(),
-        }
-    }
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettings {
+    pub providers: Vec<AiProvider>,
+    pub active_provider_id: Option<String>,
+}
+
+/// v0.4.0 及以前的文件形状：一个地址、一个模型。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySettings {
+    api_url: String,
+    model: String,
+}
+
+pub struct ProviderInput {
+    /// `None` 表示新建。
+    pub id: Option<String>,
+    pub name: String,
+    pub api_url: String,
+    pub model: String,
+}
+
+#[derive(Debug)]
+pub struct SaveOutcome {
+    pub settings: AiSettings,
+    pub provider_id: String,
+    /// 编辑已有服务商时主机名变了。调用方据此清掉它的 Key：Key 只发给填写它时对应的主机。
+    pub host_changed: bool,
 }
 
 pub fn path_for(data_root: &Path) -> PathBuf {
     data_root.join(FILE_NAME)
 }
 
-/// 读设置。文件不在、读不动、或者内容坏了，都退回默认值——
-/// 这里没有任何不可再生的数据，报错拦住用户配 AI 没有意义。
+/// 读设置。文件不在或坏了就当没有配置——这里没有不可再生的数据。
+/// 旧的单配置文件读成一条 id 为 `default` 的服务商，下次保存时按新形状写回。
 pub fn load(data_root: &Path) -> AiSettings {
     let Ok(text) = fs::read_to_string(path_for(data_root)) else {
         return AiSettings::default();
     };
-    let mut parsed: AiSettings = match serde_json::from_str(&text) {
-        Ok(value) => value,
+    if let Ok(mut settings) = serde_json::from_str::<AiSettings>(&text) {
+        let known = |id: &String| settings.providers.iter().any(|p| &p.id == id);
+        if !settings.active_provider_id.as_ref().is_some_and(known) {
+            settings.active_provider_id = settings.providers.first().map(|p| p.id.clone());
+        }
+        return settings;
+    }
+    match serde_json::from_str::<LegacySettings>(&text) {
+        Ok(legacy) => {
+            let api_url = if legacy.api_url.trim().is_empty() { DEFAULT_API_URL.to_string() } else { legacy.api_url };
+            AiSettings {
+                providers: vec![AiProvider {
+                    id: LEGACY_PROVIDER_ID.into(),
+                    name: "默认".into(),
+                    api_url,
+                    model: legacy.model.trim().to_string(),
+                }],
+                active_provider_id: Some(LEGACY_PROVIDER_ID.into()),
+            }
+        }
         Err(_) => AiSettings::default(),
+    }
+}
+
+pub fn active(settings: &AiSettings) -> Option<&AiProvider> {
+    let id = settings.active_provider_id.as_deref()?;
+    settings.providers.iter().find(|p| p.id == id)
+}
+
+const GONE: &str = "这个服务商已经不在了，刷新一下。";
+
+fn write(data_root: &Path, settings: &AiSettings) -> Result<(), String> {
+    let target = path_for(data_root);
+    let tmp = target.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(&tmp, json).map_err(|e| format!("写 {} 失败：{e}", tmp.display()))?;
+    fs::rename(&tmp, &target).map_err(|e| format!("保存 {} 失败：{e}", target.display()))
+}
+
+pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutcome, String> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > MAX_PROVIDER_NAME_CHARS {
+        return Err(format!("名称不能为空，最多 {MAX_PROVIDER_NAME_CHARS} 个字。"));
+    }
+    if input.api_url.trim().is_empty() {
+        return Err("接口地址不能为空。".into());
+    }
+    if let Some(problem) = credential_in_url(&input.api_url) {
+        return Err(problem);
+    }
+    let model = input.model.trim().to_string();
+    if model.is_empty() {
+        return Err("模型名称不能为空，可以点「获取模型」挑一个。".into());
+    }
+    let mut settings = load(data_root);
+    let (provider_id, host_changed) = match input.id {
+        Some(id) => {
+            let existing = settings.providers.iter_mut().find(|p| p.id == id).ok_or_else(|| GONE.to_string())?;
+            let api_url = normalize_api_url(&input.api_url, &existing.api_url);
+            let host_changed = host_of(&api_url) != host_of(&existing.api_url);
+            *existing = AiProvider { id: id.clone(), name, api_url, model };
+            (id, host_changed)
+        }
+        None => {
+            if settings.providers.len() >= MAX_PROVIDERS {
+                return Err(format!("服务商最多 {MAX_PROVIDERS} 个，先删掉用不上的。"));
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let api_url = normalize_api_url(&input.api_url, DEFAULT_API_URL);
+            settings.providers.push(AiProvider { id: id.clone(), name, api_url, model });
+            if active(&settings).is_none() {
+                settings.active_provider_id = Some(id.clone());
+            }
+            (id, false)
+        }
     };
-    if parsed.api_url.trim().is_empty() {
-        parsed.api_url = DEFAULT_API_URL.to_string();
+    write(data_root, &settings)?;
+    Ok(SaveOutcome { settings, provider_id, host_changed })
+}
+
+pub fn delete_provider(data_root: &Path, id: &str) -> Result<AiSettings, String> {
+    let mut settings = load(data_root);
+    let before = settings.providers.len();
+    settings.providers.retain(|p| p.id != id);
+    if settings.providers.len() == before {
+        return Err(GONE.into());
     }
-    if parsed.model.trim().is_empty() {
-        parsed.model = DEFAULT_MODEL.to_string();
+    if settings.active_provider_id.as_deref() == Some(id) {
+        settings.active_provider_id = settings.providers.first().map(|p| p.id.clone());
     }
-    parsed
+    write(data_root, &settings)?;
+    Ok(settings)
+}
+
+pub fn set_active(data_root: &Path, id: &str) -> Result<AiSettings, String> {
+    let mut settings = load(data_root);
+    if !settings.providers.iter().any(|p| p.id == id) {
+        return Err(GONE.into());
+    }
+    settings.active_provider_id = Some(id.to_string());
+    write(data_root, &settings)?;
+    Ok(settings)
 }
 
 /// 地址里夹带凭据就不保存。
@@ -97,31 +215,6 @@ pub fn credential_in_url(url: &str) -> Option<String> {
     None
 }
 
-/// 写设置。先写临时文件再改名，避免写到一半断电留下半个文件。
-pub fn save(data_root: &Path, typed_url: &str, typed_model: &str) -> Result<AiSettings, String> {
-    if let Some(problem) = credential_in_url(typed_url) {
-        return Err(problem);
-    }
-    let current = load(data_root);
-    let settings = AiSettings {
-        api_url: normalize_api_url(typed_url, &current.api_url),
-        model: {
-            let model = typed_model.trim();
-            if model.is_empty() {
-                current.model.clone()
-            } else {
-                model.to_string()
-            }
-        },
-    };
-    let target = path_for(data_root);
-    let tmp = target.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(&tmp, json).map_err(|e| format!("写 {} 失败：{e}", tmp.display()))?;
-    fs::rename(&tmp, &target).map_err(|e| format!("保存 {} 失败：{e}", target.display()))?;
-    Ok(settings)
-}
-
 /// 用户填的多半是服务商文档上的 Base URL。规则和插件那边（`ai-models.js`）一致：
 /// 已经指向具体端点的原样保留，看着像 base 的补上 `/chat/completions`。
 pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
@@ -154,14 +247,17 @@ pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
     format!("{prefix}{authority}{base}/chat/completions{suffix}")
 }
 
-fn is_version_segment(segment: &str) -> bool {
-    let mut chars = segment.chars();
+pub(crate) fn is_version_segment(segment: &str) -> bool {
+    let rest = match segment.strip_prefix('v').or_else(|| segment.strip_prefix('V')) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let mut chars = rest.chars();
     match chars.next() {
-        Some('v') | Some('V') => {}
+        Some(first) if first.is_ascii_digit() => {}
         _ => return false,
     }
-    let rest: String = chars.collect();
-    !rest.is_empty() && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+    rest.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// 预览和日志里只出现主机名，不出现完整地址（data-privacy §9）。
@@ -179,6 +275,105 @@ pub fn host_of(api_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn input(id: Option<&str>, name: &str, url: &str, model: &str) -> ProviderInput {
+        ProviderInput { id: id.map(str::to_string), name: name.into(), api_url: url.into(), model: model.into() }
+    }
+
+    #[test]
+    fn no_file_means_no_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = load(dir.path());
+        assert!(settings.providers.is_empty());
+        assert_eq!(settings.active_provider_id, None);
+        assert!(active(&settings).is_none());
+    }
+
+    #[test]
+    fn a_legacy_single_config_becomes_the_default_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(path_for(dir.path()), r#"{"apiUrl":"https://api.deepseek.com/v1/chat/completions","model":"deepseek-chat"}"#).unwrap();
+        let settings = load(dir.path());
+        assert_eq!(settings.providers.len(), 1);
+        let p = &settings.providers[0];
+        assert_eq!((p.id.as_str(), p.name.as_str()), (LEGACY_PROVIDER_ID, "默认"));
+        assert_eq!(p.api_url, "https://api.deepseek.com/v1/chat/completions");
+        assert_eq!(p.model, "deepseek-chat");
+        assert_eq!(settings.active_provider_id.as_deref(), Some(LEGACY_PROVIDER_ID));
+    }
+
+    #[test]
+    fn a_broken_file_reads_as_empty_not_as_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(path_for(dir.path()), "{not json").unwrap();
+        assert!(load(dir.path()).providers.is_empty());
+    }
+
+    #[test]
+    fn saving_a_new_provider_normalizes_the_url_and_makes_the_first_one_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = save_provider(dir.path(), input(None, " DeepSeek ", "https://api.deepseek.com", " deepseek-chat ")).unwrap();
+        let p = out.settings.providers.iter().find(|p| p.id == out.provider_id).unwrap();
+        assert_eq!(p.name, "DeepSeek");
+        assert_eq!(p.api_url, "https://api.deepseek.com/v1/chat/completions");
+        assert_eq!(p.model, "deepseek-chat");
+        assert!(!out.host_changed);
+        assert_eq!(out.settings.active_provider_id.as_deref(), Some(out.provider_id.as_str()));
+        let second = save_provider(dir.path(), input(None, "通义", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus")).unwrap();
+        assert_eq!(second.settings.active_provider_id.as_deref(), Some(out.provider_id.as_str()));
+        assert_eq!(load(dir.path()), second.settings);
+    }
+
+    #[test]
+    fn editing_reports_when_the_host_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://api.deepseek.com", "m")).unwrap();
+        let same = save_provider(dir.path(), input(Some(&a.provider_id), "A", "https://API.deepseek.com/v1", "m2")).unwrap();
+        assert!(!same.host_changed);
+        let moved = save_provider(dir.path(), input(Some(&a.provider_id), "A", "https://api.moonshot.cn/v1", "m2")).unwrap();
+        assert!(moved.host_changed);
+    }
+
+    #[test]
+    fn invalid_input_is_refused_with_a_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            (input(None, "", "https://a.example/v1", "m"), "名称"),
+            (input(None, &"名".repeat(MAX_PROVIDER_NAME_CHARS + 1), "https://a.example/v1", "m"), "名称"),
+            (input(None, "A", "  ", "m"), "接口地址"),
+            (input(None, "A", "https://a.example/v1", " "), "模型"),
+            (input(None, "A", "https://u:p@a.example/v1", "m"), "用户名或密码"),
+            (input(Some("missing"), "A", "https://a.example/v1", "m"), "不在了"),
+        ];
+        for (bad, needle) in cases {
+            let err = save_provider(dir.path(), bad).unwrap_err();
+            assert!(err.contains(needle), "{err}");
+        }
+    }
+
+    #[test]
+    fn at_most_twenty_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..MAX_PROVIDERS {
+            save_provider(dir.path(), input(None, &format!("P{i}"), "https://a.example/v1", "m")).unwrap();
+        }
+        let err = save_provider(dir.path(), input(None, "one more", "https://a.example/v1", "m")).unwrap_err();
+        assert!(err.contains("最多"), "{err}");
+    }
+
+    #[test]
+    fn deleting_the_current_provider_falls_back_to_the_first_remaining() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://a.example/v1", "m")).unwrap().provider_id;
+        let b = save_provider(dir.path(), input(None, "B", "https://b.example/v1", "m")).unwrap().provider_id;
+        set_active(dir.path(), &b).unwrap();
+        let after = delete_provider(dir.path(), &b).unwrap();
+        assert_eq!(after.active_provider_id.as_deref(), Some(a.as_str()));
+        let empty = delete_provider(dir.path(), &a).unwrap();
+        assert_eq!(empty.active_provider_id, None);
+        assert!(delete_provider(dir.path(), &a).unwrap_err().contains("不在了"));
+        assert!(set_active(dir.path(), "nope").unwrap_err().contains("不在了"));
+    }
 
     #[test]
     fn a_base_url_grows_the_endpoint_and_a_full_one_is_left_alone() {
@@ -226,22 +421,20 @@ mod tests {
     }
 
     #[test]
+    fn a_hyphenated_version_like_path_is_not_a_base_url() {
+        assert!(!is_version_segment("v1-beta"));
+        assert!(is_version_segment("v1beta"));
+        assert_eq!(
+            normalize_api_url("https://relay.example/v1-beta", DEFAULT_API_URL),
+            "https://relay.example/v1-beta"
+        );
+    }
+
+    #[test]
     fn the_host_never_carries_credentials() {
         assert_eq!(host_of("https://user:pass@API.Example.test/v1/chat/completions"), "api.example.test");
     }
 
-    #[test]
-    fn settings_round_trip_and_a_broken_file_falls_back_to_defaults() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(load(dir.path()), AiSettings::default());
-
-        let saved = save(dir.path(), "https://api.deepseek.com", "deepseek-chat").unwrap();
-        assert_eq!(saved.api_url, "https://api.deepseek.com/v1/chat/completions");
-        assert_eq!(load(dir.path()), saved);
-
-        std::fs::write(path_for(dir.path()), "{ 坏掉的").unwrap();
-        assert_eq!(load(dir.path()), AiSettings::default());
-    }
 
     #[test]
     fn an_address_that_carries_a_credential_is_refused() {
@@ -251,7 +444,7 @@ mod tests {
             "https://relay.example/v1/chat/completions?api-key=sk-123",
             "https://relay.example/v1/chat/completions?token=abc",
         ] {
-            let err = save(dir.path(), bad, "m").unwrap_err();
+            let err = save_provider(dir.path(), input(None, "A", bad, "m")).unwrap_err();
             assert!(err.contains("API Key"), "{bad}: {err}");
         }
         // fragment 里的也算。
@@ -264,10 +457,9 @@ mod tests {
         ] {
             assert!(credential_in_url(fine).is_none(), "{fine}");
         }
-        assert!(save(
+        assert!(save_provider(
             dir.path(),
-            "https://relay.example/v1/chat/completions?api-version=2024-10-21",
-            "m"
+            input(None, "A", "https://relay.example/v1/chat/completions?api-version=2024-10-21", "m")
         )
         .is_ok());
         // 报错里带上命中的那个参数名，用户才知道该删哪个。
@@ -280,7 +472,7 @@ mod tests {
     #[test]
     fn the_settings_file_never_contains_a_key() {
         let dir = tempfile::tempdir().unwrap();
-        save(dir.path(), "https://api.deepseek.com/v1", "deepseek-chat").unwrap();
+        save_provider(dir.path(), input(None, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat")).unwrap();
         let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
         for forbidden in ["key", "Key", "token", "secret"] {
             assert!(!text.contains(forbidden), "设置文件里出现了 {forbidden}：{text}");

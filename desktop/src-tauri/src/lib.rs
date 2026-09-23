@@ -85,14 +85,15 @@ struct AiSettingsView {
 
 fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
     let settings = ai_settings::load(&ai_data_root(state)?);
+    let provider = ai_settings::active(&settings);
     let (key_configured, credential_error) = match state.credentials.get_key() {
         Ok(found) => (found.is_some(), None),
         Err(err) => (false, Some(err.message())),
     };
     Ok(AiSettingsView {
-        host: ai_settings::host_of(&settings.api_url),
-        api_url: settings.api_url,
-        model: settings.model,
+        host: provider.map(|p| ai_settings::host_of(&p.api_url)).unwrap_or_default(),
+        api_url: provider.map(|p| p.api_url.clone()).unwrap_or_default(),
+        model: provider.map(|p| p.model.clone()).unwrap_or_default(),
         key_configured,
         credential_error,
     })
@@ -955,7 +956,13 @@ fn save_ai_settings_cmd(
     model: String,
 ) -> Result<AiSettingsView, CommandError> {
     let data_root = ai_data_root(&state)?;
-    ai_settings::save(&data_root, &api_url, &model).map_err(|message| CommandError {
+    let current = ai_settings::load(&data_root);
+    ai_settings::save_provider(&data_root, ai_settings::ProviderInput {
+        id: ai_settings::active(&current).map(|p| p.id.clone()),
+        name: "默认".into(),
+        api_url,
+        model,
+    }).map_err(|message| CommandError {
         code: "AI_SETTINGS_WRITE_FAILED".into(),
         message,
     })?;
@@ -983,7 +990,11 @@ fn preview_analysis_cmd(
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::OutboundPreview, CommandError> {
     let settings = ai_settings::load(&ai_data_root(&state)?);
-    checked_url(&settings.api_url)?;
+    let provider = ai_settings::active(&settings).ok_or_else(|| CommandError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
+    })?;
+    checked_url(&provider.api_url)?;
     with_store(&state, |store| {
         let gathered = ai_commands::gather(
             store,
@@ -991,7 +1002,7 @@ fn preview_analysis_cmd(
             &evidence_id,
             candidate_ids.as_deref(),
         )?;
-        Ok(ai_commands::preview(&gathered, &settings.api_url, &settings.model))
+        Ok(ai_commands::preview(&gathered, &provider.api_url, &provider.model))
     })
 }
 
@@ -1007,7 +1018,11 @@ async fn analyze_evidence_cmd(
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::SuggestionView, CommandError> {
     let settings = ai_settings::load(&ai_data_root(&state)?);
-    checked_url(&settings.api_url)?;
+    let provider = ai_settings::active(&settings).ok_or_else(|| CommandError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
+    })?;
+    checked_url(&provider.api_url)?;
     let key = state
         .credentials
         .get_key()
@@ -1026,8 +1041,8 @@ async fn analyze_evidence_cmd(
             candidate_ids.as_deref(),
         )?;
         let built = ai_extract::build_request(
-            &settings.api_url,
-            &settings.model,
+            &provider.api_url,
+            &provider.model,
             &gathered.evidence,
             &gathered.candidates,
         );
@@ -1036,12 +1051,12 @@ async fn analyze_evidence_cmd(
 
     let cancelled = state.ai_inflight.begin(&evidence_id, &request_id)?;
 
-    let host = ai_settings::host_of(&settings.api_url);
+    let host = ai_settings::host_of(&provider.api_url);
     let client = ai_client::ChatClient::new()?;
     // 第二段：锁已经放了。取消就是不再等这个 future，上游是否继续计费我们管不着，
     // 界面文案也是这么说的。
     let outcome = tokio::select! {
-        result = client.chat(&settings.api_url, &key, &host, &settings.model, &built.body) => result,
+        result = client.chat(&provider.api_url, &key, &host, &provider.model, &built.body) => result,
         _ = cancelled => Err(CommandError {
             code: "AI_CANCELLED".into(),
             message: "已取消。取消不保证对方停止计算或停止计费。".into(),
