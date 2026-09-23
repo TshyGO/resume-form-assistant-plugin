@@ -4,7 +4,7 @@
 
 **Goal:** 桌面成为简历模板、「我的信息」、AI 服务商配置和 API Key 的唯一来源，插件只负责在网页里识别字段和填写。插件不再保存这些数据，也不再直接向 AI 服务商发请求。
 
-**Architecture:** 桌面档案库新增模板与档案两张表，桌面界面接手插件弹窗的全部管理功能。协议升到 v2，新增读取简历数据、写入「我的信息」补充字段、AI 转发、旧数据导入四类消息。插件侧边栏和 AI worker 改为经 service worker → Native Messaging → 桌面取数据、发请求；插件弹窗精简为连接状态页。
+**Architecture:** 桌面档案库新增模板与档案两张表，桌面界面接手插件弹窗的全部管理功能。协议升到 v2，新增读取简历数据、写入「我的信息」补充字段、AI 转发、打开桌面指定页面、旧数据导入五类消息。插件侧边栏和 AI worker 改为经 service worker → Native Messaging → 桌面取数据、发请求；插件弹窗精简为连接状态页。
 
 **Tech Stack:** Rust（`archive-store`、`protocol`、`src-tauri`）、`reqwest`、`keyring`、Tauri 2、React 19 + TypeScript、Vitest；插件为原生 MV3 JS（无构建步骤）、`node --test`。
 
@@ -21,12 +21,13 @@
 3. **平台只做 Windows x64 与 macOS Apple Silicon。** Intel Mac、Linux 不支持，在商店说明与下载页写清楚。
 4. **直接发统一版，不先发过渡提示版。** 新版插件首次打开即引导安装桌面。
 5. **桌面没有响应时插件不能填写，只提示重试。** 不在插件里缓存档案，保持 ADR §6「桌面档案不镜像进 `chrome.storage`」。
-6. **下一个正式版为 0.4.1，插件与桌面一起发。**
+6. **下一个正式版为 0.4.1，插件与桌面一起发。不单独发 `desktop-v0.4.0`**，桌面首个正式版就是统一后的 `desktop-v0.4.1`，#132 / #133 的验收在统一版候选上执行。本线 PR 直接合入 `main`。
+7. **侧边栏的填写能力全部保留**：简历条目点选填写（含添加/替换）、切换模板、一键 AI 填写、AI 辅助新增条目、加到我的信息、保存岗位、确认已投递、留档。AI 填不完整时用户仍靠条目手动补。变的只是数据来源（改读桌面）和 AI 请求出口（改由桌面发）。
+8. **管理功能全部搬到桌面**：模板、我的信息、简历解析、AI 配置。插件管理页只剩连接状态、「打开桌面」和更新提示；插件 JSON 备份删除，由桌面备份覆盖。侧边栏「打开管理面板」改为「打开桌面」，「上传简历 / 导入模板」改为打开桌面的「简历」页。
 
-## 待负责人确认
+## 其他
 
-- **Q1 桌面 0.4.0 正式版还发不发？** 本计划按「不单独发 `desktop-v0.4.0`，桌面首个正式版就是统一后的 `desktop-v0.4.1`」写。若仍要先发 0.4.0，本线全部 PR 必须等 `desktop-v0.4.0` 打完 tag 再合入 `main`，避免改变 #132 / #133 的候选基线。
-- **Q2 #145（文本输入校验生命周期，P0）** 与本线无冲突，建议照常先合入。
+- #145（文本输入校验生命周期，P0）与本线无冲突，照常先合入。
 
 ---
 
@@ -73,13 +74,14 @@
 **2. 「当前模板」归桌面，插件可切换。**
 侧边栏切换模板发写消息，不在插件本地另存，避免两处「当前」不一致。
 
-**3. 协议升 v2，新增四类消息。**
+**3. 协议升 v2，新增五类消息。**
 
 | messageType | 方向 | 身份 | 说明 |
 | --- | --- | --- | --- |
 | `resume.read` | 插件→桌面 | 必须 | 返回模板摘要列表（id、name、字段数）、当前模板全文、档案。单个模板 > 48 KiB 时拒绝保存（桌面端校验），保证一次返回装得下 |
 | `resume.update` | 插件→桌面 | 必须 | 只允许两种操作：切换当前模板；把侧边栏「加到我的信息」的字段追加进档案（复用 `addPendingFields` 规则） |
 | `ai.complete` | 插件→桌面 | 禁止（同 health） | `{ system, user, purpose: fill \| plan }` → `{ text }`；桌面用当前服务商配置和 Key 发出，返回正文。不重试，超时按 `ai_client` |
+| `ui.open` | 插件→桌面 | 禁止（同 health） | `{ view: resume \| settings-ai \| home }`：把桌面主窗口拉到前台并切到指定页面。主程序没在跑时由 host 正常（非 `--hidden`）拉起 |
 | `legacy.import` | 插件→桌面 | 必须 | 旧版数据一次导入，按 `importId` 分片（模板逐个、档案、AI 配置各一条）。**唯一允许携带 `apiKey` 的消息**，Secrets 层按类型放行；桌面永远不回传 Key |
 
 `maxProtocolVersion` 升到 2。新插件遇到只支持 v1 的桌面，握手无交集 → 提示「请更新桌面」；旧插件（v1）遇到新桌面仍能握手，原有 6 类消息行为不变。
@@ -124,9 +126,9 @@ service worker 在一次性 `sendNativeMessage` 等待 30–60 秒期间可能�
 
 ### PR 3：协议 v2
 
-- `rules.json`、JSON Schema（4 个 payload + 4 个 response）、Rust 校验、`link/protocol/` 副本与一致性测试；Secrets 层对 `legacy.import` 的 `apiKey` 放行、其余类型照旧拒绝；正反测试向量（含真实简历样本不被误判为密钥）。
-- `plugin_bridge::apply` 接入四类消息：`resume.read`、`resume.update` 调 PR1 的存储；`ai.complete` 调 PR2 的当前服务商（`ipc_server` 连接线程里用 Tauri 异步运行时 `block_on`，不持档案库锁发请求）；`legacy.import` 存待确认。
-- **验收：** 用 `--nm-host` + fixture 帧跑通四类消息；v1 插件对新桌面行为不变（现有 D14 自动化用例全绿）。
+- `rules.json`、JSON Schema（5 个 payload + 5 个 response）、Rust 校验、`link/protocol/` 副本与一致性测试；Secrets 层对 `legacy.import` 的 `apiKey` 放行、其余类型照旧拒绝；正反测试向量（含真实简历样本不被误判为密钥）。
+- `plugin_bridge::apply` 接入五类消息：`resume.read`、`resume.update` 调 PR1 的存储；`ui.open` 发 Tauri 事件切换视图并聚焦窗口；`ai.complete` 调 PR2 的当前服务商（`ipc_server` 连接线程里用 Tauri 异步运行时 `block_on`，不持档案库锁发请求）；`legacy.import` 存待确认。
+- **验收：** 用 `--nm-host` + fixture 帧跑通五类消息；v1 插件对新桌面行为不变（现有 D14 自动化用例全绿）。
 
 ### PR 4：插件改为经桌面取数据、发 AI
 
@@ -134,8 +136,9 @@ service worker 在一次性 `sendNativeMessage` 等待 30–60 秒期间可能�
 - `link/`：新增 `resume` 与 `ai` 两个模块；`messages.mjs` 增加侧边栏消息类型；`router.mjs` 分发。
 - `content.js`：`StorageService` 改为经 service worker 读 `resume.read`；去掉对 `aiConfig` 的一切读取；切换模板、加到我的信息改发 `resume.update`；页面重新可见时刷新（替代 `storage.onChanged`）。
 - `ai-worker.js`：`fetch` 换成 `ai.complete`，取消即断开端口；错误文案按 `transport.mjs` 分类。
+- 侧边栏「打开管理面板」→「打开桌面」，「上传简历 / 导入模板」→ `ui.open { view: resume }`；管理页「打开桌面」同理。
 - 降级（#130 第 4 节）：`not_installed` → 引导安装页；`retryable` / 握手超时 → 「桌面没有响应」+ 重试 + 打开桌面；档案为空 → 引导去桌面新建或导入。
-- **验收：** 插件本地不再读写 `templates`、`profile`、`aiConfig`、`activeTemplateId`（加一条测试扫描源码锁死）；Chrome、Edge 各跑一遍填写、AI 填写、重复项规划、取消。
+- **验收：** 侧边栏条目点选、添加/替换、切换模板在桌面数据上行为与 0.4.0 一致（现有侧边栏测试改为注入桌面数据后全绿）；插件本地不再读写 `templates`、`profile`、`aiConfig`、`activeTemplateId`（加一条测试扫描源码锁死）；Chrome、Edge 各跑一遍填写、AI 填写、重复项规划、取消。
 
 ### PR 5：旧数据迁移、插件瘦身、文档
 
