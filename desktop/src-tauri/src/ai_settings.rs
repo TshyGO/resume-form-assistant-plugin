@@ -55,7 +55,9 @@ pub struct SaveOutcome {
     #[allow(dead_code)] // Task 1 的完整存储结果供调用方和测试检查；运行时暂只取 id/主机变更。
     pub settings: AiSettings,
     pub provider_id: String,
-    /// 编辑已有服务商时主机名变了。调用方据此清掉它的 Key：Key 只发给填写它时对应的主机。
+    /// 编辑已有服务商时来源（协议 + 主机 + 端口，见 [`same_origin`]）变了。调用方据此清掉
+    /// 它的 Key：Key 只发给填写它时对应的那个来源。字段名沿用 `host_changed`，语义已经是
+    /// 「来源变了」，不只是主机名（#158 评审）。
     pub host_changed: bool,
 }
 
@@ -110,7 +112,7 @@ fn write(data_root: &Path, settings: &AiSettings) -> Result<(), String> {
 
 /// 校验一条服务商输入：名称、地址、模型、地址里不能夹带凭据，编辑时 id 得真存在。
 ///
-/// 调用方（`ai_provider_commands::save_provider`）必须在算「主机是不是变了」、清旧 Key
+/// 调用方（`ai_provider_commands::save_provider`）必须在算「来源是不是变了」、清旧 Key
 /// 之前先调这个函数——不然一次校验没过的保存（比如模型名填空了）会先把 Key 清掉、
 /// 设置却没改，用户就白白丢了 Key（见 PR #158 评审）。这里保存前也照样调一遍，
 /// 防止以后有别的调用方跳过 `ai_provider_commands` 直接调 `save_provider`。
@@ -146,7 +148,7 @@ pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutco
         Some(id) => {
             let existing = settings.providers.iter_mut().find(|p| p.id == id).ok_or_else(|| GONE.to_string())?;
             let api_url = normalize_api_url(&input.api_url, &existing.api_url);
-            let host_changed = host_of(&api_url) != host_of(&existing.api_url);
+            let host_changed = !same_origin(&api_url, &existing.api_url);
             *existing = AiProvider { id: id.clone(), name, api_url, model };
             (id, host_changed)
         }
@@ -279,6 +281,20 @@ pub(crate) fn is_version_segment(segment: &str) -> bool {
     rest.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+/// 同一来源：协议、主机（大小写不敏感）、端口（省略端口和该协议的默认端口视为一样）都一致。
+/// 光比主机名（`host_of`）会漏掉 `https://api.example.com` 编辑成
+/// `http://api.example.com` 这种情况——主机没变，可是原来只发给 https 的 Key 会跟着
+/// 走上明文连接。「Key 换主机就清」这条规则因此要按完整来源判断，不能只看主机
+/// （#158 评审）。解析不出来的地址一律当作不同源：保存过的 Key 不该被含糊的输入继续沿用。
+pub fn same_origin(a: &str, b: &str) -> bool {
+    let (Ok(a), Ok(b)) = (url::Url::parse(a), url::Url::parse(b)) else {
+        return false;
+    };
+    a.scheme() == b.scheme()
+        && a.host_str().map(str::to_ascii_lowercase) == b.host_str().map(str::to_ascii_lowercase)
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
 /// 预览和日志里只出现主机名，不出现完整地址（data-privacy §9）。
 pub fn host_of(api_url: &str) -> String {
     let rest = api_url.split("://").nth(1).unwrap_or(api_url);
@@ -351,6 +367,34 @@ mod tests {
         assert!(!same.host_changed);
         let moved = save_provider(dir.path(), input(Some(&a.provider_id), "A", "https://api.moonshot.cn/v1", "m2")).unwrap();
         assert!(moved.host_changed);
+    }
+
+    #[test]
+    fn editing_reports_when_only_the_protocol_changed() {
+        // host_of 只比对主机名，https -> http 换协议时不认为变了，旧 Key 会继续被用在明文连接上。
+        // host_changed 现在要按完整来源（协议 + 主机 + 端口）判断（见 same_origin，#158 评审）。
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://api.deepseek.com", "m")).unwrap();
+        let downgraded = save_provider(dir.path(), input(Some(&a.provider_id), "A", "http://api.deepseek.com/v1", "m2")).unwrap();
+        assert!(downgraded.host_changed, "协议从 https 换成 http，来源变了，Key 不该继续沿用");
+        let explicit_default_port =
+            save_provider(dir.path(), input(Some(&a.provider_id), "A", "http://api.deepseek.com:80/v1", "m3")).unwrap();
+        assert!(!explicit_default_port.host_changed, "显式写出默认端口和省略端口是同一个来源");
+        let same_origin_diff_path =
+            save_provider(dir.path(), input(Some(&a.provider_id), "A", "http://api.deepseek.com/v2", "m4")).unwrap();
+        assert!(!same_origin_diff_path.host_changed, "只改路径，来源没变，Key 该留着");
+    }
+
+    #[test]
+    fn same_origin_compares_scheme_host_and_port() {
+        assert!(same_origin("https://api.deepseek.com/v1", "https://API.deepseek.com/v2"), "大小写不敏感、路径不参与比较");
+        assert!(same_origin("https://api.deepseek.com", "https://api.deepseek.com:443"), "https 默认端口 443");
+        assert!(same_origin("http://api.deepseek.com", "http://api.deepseek.com:80"), "http 默认端口 80");
+        assert!(!same_origin("https://api.deepseek.com/v1", "http://api.deepseek.com/v1"), "协议不同");
+        assert!(!same_origin("https://a.example", "https://b.example"), "主机不同");
+        assert!(!same_origin("https://a.example:443", "https://a.example:8443"), "端口不同");
+        assert!(!same_origin("not a url", "https://a.example"), "解析不出来就当不同源");
+        assert!(!same_origin("https://a.example", "not a url"), "解析不出来就当不同源");
     }
 
     #[test]

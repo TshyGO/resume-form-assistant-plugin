@@ -1,5 +1,5 @@
 //! #130 PR 2a：设置页的服务商命令。Key 只往凭据库里写、只在发请求时取，
-//! **没有任何一条路径把 Key 交回界面**。编辑服务商时主机变了就清掉它的 Key。
+//! **没有任何一条路径把 Key 交回界面**。编辑服务商时协议或主机（来源）变了就清掉它的 Key。
 
 use std::path::Path;
 
@@ -44,7 +44,7 @@ pub struct AiSettingsView {
 pub struct SaveProviderResult {
     pub view: AiSettingsView,
     pub provider_id: String,
-    /// 主机变了、旧 Key 被清掉、这次又没填新 Key。界面据此提醒重新填。
+    /// 协议或主机变了、旧 Key 被清掉、这次又没填新 Key。界面据此提醒重新填。
     pub key_cleared: bool,
 }
 
@@ -106,16 +106,17 @@ pub fn save_provider(
         api_url: args.api_url.clone(),
         model: args.model.clone(),
     };
-    // 先校验，再算「主机是不是变了」、再清旧 Key：校验没过就不能有任何副作用，
+    // 先校验，再算「来源是不是变了」、再清旧 Key：校验没过就不能有任何副作用，
     // 不然一次因为模型名填空而被拒的保存会先把 Key 清掉，设置却完全没变（#158 评审）。
     ai_settings::validate(data_root, &input).map_err(settings_error)?;
-    // Clear an old Key before writing a new host. If the credential store is locked,
-    // the settings must still point at the old host so the old Key cannot be sent elsewhere.
+    // Clear an old Key before writing a new origin (scheme + host + port). If the credential
+    // store is locked, the settings must still point at the old origin so the old Key cannot
+    // be sent elsewhere.
     let existing = ai_settings::load(data_root);
     let moving_id = args.id.as_ref().and_then(|id| {
         existing.providers.iter().find(|p| &p.id == id).and_then(|p| {
             let next_url = ai_settings::normalize_api_url(&args.api_url, &p.api_url);
-            (ai_settings::host_of(&next_url) != ai_settings::host_of(&p.api_url)).then_some(id)
+            (!ai_settings::same_origin(&next_url, &p.api_url)).then_some(id)
         })
     });
     let typed = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
@@ -181,8 +182,9 @@ pub fn active_with_key(data_root: &Path, creds: &dyn CredentialStore) -> Result<
     Ok((provider, key))
 }
 
-/// 获取模型用哪把 Key：界面上刚填的优先；否则只有「输入的地址与已保存地址是同一主机」时
-/// 才用这个服务商存着的 Key——未保存的新地址拿不到旧 Key。
+/// 获取模型用哪把 Key：界面上刚填的优先；否则只有「输入的地址与已保存地址同源
+/// （协议 + 主机 + 端口都一致，见 `ai_settings::same_origin`）」时才用这个服务商存着的
+/// Key——未保存的新地址、或者只是把 https 改成 http，都拿不到旧 Key。
 pub fn key_for_models(
     data_root: &Path,
     creds: &dyn CredentialStore,
@@ -200,7 +202,7 @@ pub fn key_for_models(
     let id = provider_id.ok_or_else(missing)?;
     let settings = ai_settings::load(data_root);
     let saved = settings.providers.iter().find(|p| p.id == id).ok_or_else(missing)?;
-    if ai_settings::host_of(&saved.api_url) != ai_settings::host_of(api_url) {
+    if !ai_settings::same_origin(&saved.api_url, api_url) {
         return Err(missing());
     }
     creds.get_key(id).map_err(credential_error)?.ok_or_else(missing)
@@ -344,5 +346,16 @@ mod tests {
         assert_eq!(err.code, "AI_MODELS_MISSING_KEY");
         assert_eq!(key_for_models(dir.path(), &creds, Some(&id), "https://b.example/v1", Some(" sk-b ".into())).unwrap(), "sk-b");
         assert_eq!(key_for_models(dir.path(), &creds, None, "https://a.example/v1", None).unwrap_err().code, "AI_MODELS_MISSING_KEY");
+    }
+
+    #[test]
+    fn key_for_models_refuses_a_protocol_downgrade_even_on_the_same_host() {
+        // 保存的地址是 https，界面上把它改成 http（还没保存）就去获取模型：主机名一样，
+        // 但来源不同，不能把只该发给 https 的 Key 发到明文连接上（#158 评审）。
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let id = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap().provider_id;
+        let err = key_for_models(dir.path(), &creds, Some(&id), "http://a.example/v1", None).unwrap_err();
+        assert_eq!(err.code, "AI_MODELS_MISSING_KEY");
     }
 }

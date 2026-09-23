@@ -82,7 +82,7 @@ test("保存后主机变了、Key 被清掉，提醒重新填", async () => {
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
   await user.click(screen.getByRole("button", { name: "保存" }));
-  expect(await screen.findByText(/换了主机，原来的 Key 已清除/)).toBeTruthy();
+  expect(await screen.findByText(/换了协议或主机，原来的 Key 已清除/)).toBeTruthy();
 });
 
 test("清除 Key 后编辑器立即显示新的 Key 状态", async () => {

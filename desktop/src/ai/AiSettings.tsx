@@ -47,7 +47,7 @@ export function AiSettings() {
     setEditing(null);
     setMessage(
       result.keyCleared
-        ? { tone: "warn", text: "已保存。接口地址换了主机，原来的 Key 已清除，请重新填写这个服务商的 Key。" }
+        ? { tone: "warn", text: "已保存。接口地址换了协议或主机，原来的 Key 已清除，请重新填写这个服务商的 Key。" }
         : { tone: "ok", text: "已保存。" },
     );
   };
