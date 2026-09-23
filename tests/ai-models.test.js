@@ -428,14 +428,14 @@ test("request and text extraction use the selected wire protocol", () => {
 test("Anthropic model discovery uses its required headers", async () => {
   let captured;
   const result = await models.fetchModelList({
-    apiUrl: "https://api.anthropic.com/v1/messages", apiKey: "secret", protocol: "anthropic",
+    apiUrl: "https://api.anthropic.com/v1/messages?tenant=x", apiKey: "secret", protocol: "anthropic",
     fetchImpl: async (url, init) => {
       captured = { url, init };
       return jsonResponse(200, { data: [{ id: "claude-test" }] });
     }
   });
   assert.equal(result.ok, true);
-  assert.equal(captured.url, "https://api.anthropic.com/v1/models");
+  assert.equal(captured.url, "https://api.anthropic.com/v1/models?tenant=x&limit=1000");
   assert.equal(captured.init.redirect, "manual");
   assert.equal(captured.init.headers["x-api-key"], "secret");
   assert.equal(captured.init.headers.Authorization, undefined);

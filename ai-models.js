@@ -279,7 +279,9 @@
     let text;
 
     try {
-      const response = await fetchImpl(endpoints.modelsUrl, {
+      const modelsUrl = new URL(endpoints.modelsUrl);
+      if (normalizeProtocol(protocol) === "anthropic") modelsUrl.searchParams.set("limit", "1000");
+      const response = await fetchImpl(modelsUrl.href, {
         method: "GET",
         redirect: "manual",
         headers: normalizeProtocol(protocol) === "anthropic"

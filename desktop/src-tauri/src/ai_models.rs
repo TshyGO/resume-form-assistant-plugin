@@ -258,7 +258,14 @@ pub async fn fetch_model_list_with_timeout_for_protocol(
         }
     })?;
     // 不跟随重定向：Anthropic 的 x-api-key 是自定义头，不能让跳转把它带到别的主机。
-    let request = client.get(models_url);
+    let mut request_url = url::Url::parse(models_url).map_err(|_| CommandError {
+        code: "AI_MODELS_BAD_URL".into(),
+        message: "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。".into(),
+    })?;
+    if protocol == AiProtocol::Anthropic && !request_url.query_pairs().any(|(name, _)| name == "limit") {
+        request_url.query_pairs_mut().append_pair("limit", "1000");
+    }
+    let request = client.get(request_url);
     let request = if protocol == AiProtocol::Anthropic {
         request.header("x-api-key", api_key.trim()).header("anthropic-version", "2023-06-01")
     } else {
@@ -910,11 +917,12 @@ mod tests {
         let endpoint = resolve_endpoints_for_protocol("https://api.anthropic.com/v1/messages", AiProtocol::Anthropic).unwrap();
         assert_eq!(endpoint.models_url.as_deref(), Some("https://api.anthropic.com/v1/models"));
         let (url, handle) = serve_once(200, r#"{"data":[{"id":"claude-test"}]}"#);
-        let list = fetch_model_list_with_timeout_for_protocol(&url, "secret", "127.0.0.1", AiProtocol::Anthropic, Duration::from_secs(5)).await.unwrap();
+        let list = fetch_model_list_with_timeout_for_protocol(&format!("{url}?tenant=x"), "secret", "127.0.0.1", AiProtocol::Anthropic, Duration::from_secs(5)).await.unwrap();
         assert_eq!(list.models, vec!["claude-test"]);
         let request = handle.join().unwrap().to_ascii_lowercase();
         assert!(request.contains("x-api-key: secret"), "{request}");
         assert!(request.contains("anthropic-version: 2023-06-01"), "{request}");
+        assert!(request.contains("/v1/models?tenant=x&limit=1000"), "{request}");
         assert!(!request.contains("authorization:"), "{request}");
     }
 
