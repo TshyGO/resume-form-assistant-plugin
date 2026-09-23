@@ -25,6 +25,7 @@ concurrency:
   # dry-run 不碰商店，也不去挡正式发布。
   group: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.release_staged == false) && format('chrome-web-store-dry-{0}', github.run_id) || 'chrome-web-store-publish' }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   release-staged:

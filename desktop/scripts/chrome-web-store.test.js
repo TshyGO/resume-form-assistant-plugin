@@ -22,7 +22,6 @@ import {
   publishPackage,
   redact,
   releaseStaged,
-  uploadErrorIsSameVersion,
   verifyServiceAccountAssertion,
   main,
 } from "./chrome-web-store.js";
@@ -132,14 +131,7 @@ test("ZIP 清单拒绝源码、依赖和凭据路径", () => {
   for (const bad of ["desktop/README.md", "node_modules/leftpad/index.js", "../manifest.json", ".env", "secrets/key.pem"]) {
     assert.throws(() => assertZipListing(["manifest.json", bad]), StorePublishError);
   }
-  const listing = parseUnzipListing(`
-Archive:  demo.zip
-  Length      Date    Time    Name
----------  ---------- -----   ----
-     12  09-23-2026 10:00   manifest.json
-      4  09-23-2026 10:00   link/worker.mjs
----------                     -------
-  `);
+  const listing = parseUnzipListing("manifest.json\r\nlink/worker.mjs\r\n");
   assert.deepEqual(listing, ["manifest.json", "link/worker.mjs"]);
 });
 
@@ -251,36 +243,29 @@ test("上传还在处理时等到成功再送审；上传失败则不送审", as
   assert.equal(failedCalls.some((url) => url.endsWith(":publish")), false);
 });
 
-test("草稿里已经有同一版本时不再上传一次，直接送审", async () => {
-  const calls = [];
-  await publishPackage({
-    version: "0.4.0",
-    extensionId: storeId,
-    expectedExtensionId: storeId,
-    publisherId: "pub-1",
-    accessToken: "token-value",
-    zipBytes: Buffer.from("zip"),
-    listing: ["manifest.json"],
-    fetchImpl: async (url, options) => {
-      calls.push({ url: String(url), method: options.method });
-      if (String(url).endsWith(":fetchStatus") && calls.filter((call) => call.url.endsWith(":fetchStatus")).length === 1) {
-        return jsonResponse({ publishedItemRevisionStatus: { distributionChannels: [{ crxVersion: "0.3.1" }] } });
-      }
-      if (String(url).endsWith(":upload")) {
-        return jsonResponse({
-          error: { message: "version 0.4.0 already exists" },
-        }, 400);
-      }
-      if (String(url).endsWith(":publish")) return jsonResponse({ state: "PENDING_REVIEW" });
-      return jsonResponse({
-        submittedItemRevisionStatus: { state: "PENDING_REVIEW", distributionChannels: [{ crxVersion: "0.4.0" }] },
-      });
-    },
-    sleep: async () => {},
-  });
-  assert.equal(calls.filter((call) => call.url.endsWith(":upload")).length, 1);
-  assert.equal(uploadErrorIsSameVersion({ error: { message: "version 0.4.0 already exists" } }, "0.4.0"), true);
-  assert.equal(uploadErrorIsSameVersion({ error: { message: "quota" } }, "0.4.0"), false);
+test("上传失败即停止，不能把同版本的旧草稿当作本次 ZIP 送审", async () => {
+  for (const message of ["version 0.4.0 already exists", "version 0.4.0 invalid ZIP: manifest mismatch"]) {
+    const calls = [];
+    await assert.rejects(() => publishPackage({
+      version: "0.4.0",
+      extensionId: storeId,
+      expectedExtensionId: storeId,
+      publisherId: "pub-1",
+      accessToken: "token-value",
+      zipBytes: Buffer.from("zip"),
+      listing: ["manifest.json"],
+      fetchImpl: async (url) => {
+        calls.push(String(url));
+        if (String(url).endsWith(":fetchStatus")) {
+          return jsonResponse({ publishedItemRevisionStatus: { distributionChannels: [{ crxVersion: "0.3.1" }] } });
+        }
+        if (String(url).endsWith(":upload")) return jsonResponse({ error: { message } }, 400);
+        throw new Error("不能继续送审");
+      },
+    }), /HTTP 400/);
+    assert.equal(calls.filter((url) => url.endsWith(":upload")).length, 1);
+    assert.equal(calls.some((url) => url.endsWith(":publish")), false);
+  }
 });
 
 test("扩展 ID 不一致或直接公开时立刻停止", async () => {
@@ -406,6 +391,7 @@ test("发布工作流只在正式 GitHub Release 时送审，并且复用 pack-p
   assert.match(workflow, /dry_run:/);
   assert.match(workflow, /release_staged:/);
   assert.match(workflow, /cancel-in-progress:\s*false/);
+  assert.match(workflow, /queue:\s*max/);
   assert.match(workflow, /desktop\/scripts\/pack-plugin\.js/);
   assert.match(workflow, /desktop\/scripts\/chrome-web-store\.js publish/);
   assert.match(workflow, /desktop\/scripts\/chrome-web-store\.js release-staged/);

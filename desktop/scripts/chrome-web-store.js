@@ -123,12 +123,6 @@ export function assertUploadAllowed(status, version) {
   }
 }
 
-export function uploadErrorIsSameVersion(body, version) {
-  const text = typeof body === "string" ? body : JSON.stringify(body ?? "");
-  if (!text.includes(version)) return false;
-  return /version|already|exist|duplicate|INVALID_VERSION|ITEM_ALREADY/i.test(text);
-}
-
 export function assertZipListing(names) {
   if (!Array.isArray(names) || names.length === 0) {
     throw new StorePublishError("ZIP 是空的，停止发布");
@@ -155,12 +149,7 @@ export function assertZipListing(names) {
 }
 
 export function parseUnzipListing(text) {
-  const names = [];
-  for (const line of String(text).split(/\r?\n/)) {
-    const match = line.match(/^\s*\d+\s+\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}\s+(.*\S)\s*$/);
-    if (match) names.push(match[1]);
-  }
-  return names;
+  return String(text).split(/\r?\n/).filter((name) => name.length > 0);
 }
 
 export function itemName(publisherId, extensionId) {
@@ -373,22 +362,13 @@ export async function publishPackage({
   const status = await fetchStatus(fetchImpl, name, accessToken, secrets);
   assertUploadAllowed(status, version);
 
-  let uploaded;
-  try {
-    uploaded = await request(fetchImpl, uploadUrl(name), {
-      method: "POST",
-      token: accessToken,
-      headers: { "Content-Type": "application/zip" },
-      body: zipBytes,
-      secrets,
-    });
-  } catch (error) {
-    if (error instanceof StorePublishError && uploadErrorIsSameVersion(error.body, version)) {
-      uploaded = { uploadState: "SUCCEEDED", crxVersion: version, reusedDraft: true };
-    } else {
-      throw error;
-    }
-  }
+  const uploaded = await request(fetchImpl, uploadUrl(name), {
+    method: "POST",
+    token: accessToken,
+    headers: { "Content-Type": "application/zip" },
+    body: zipBytes,
+    secrets,
+  });
 
   if (IN_PROGRESS.has(uploaded?.uploadState)) {
     await waitForUpload(fetchImpl, name, accessToken, secrets, sleep, poll);
@@ -416,7 +396,6 @@ export async function publishPackage({
   return {
     version,
     uploadState: uploaded.uploadState,
-    reusedDraft: Boolean(uploaded.reusedDraft),
     submissionState: confirmed.submittedItemRevisionStatus.state,
   };
 }
@@ -513,7 +492,7 @@ function flag(argv, name) {
 export function listZip(zipPath) {
   let listing;
   try {
-    listing = execFileSync("unzip", ["-l", zipPath], { encoding: "utf8" });
+    listing = execFileSync("unzip", ["-Z", "-1", zipPath], { encoding: "utf8" });
   } catch (error) {
     throw new StorePublishError(`无法列出 ZIP 内容：${error instanceof Error ? error.message : error}`);
   }
@@ -624,7 +603,7 @@ export async function main(argv, env = process.env, io = {}) {
         fetchImpl,
         sleep: io.sleep,
       });
-      log(`submitted ${result.version}: ${result.submissionState}${result.reusedDraft ? " (reused existing draft)" : ""}`);
+      log(`submitted ${result.version}: ${result.submissionState}`);
     } catch (error) {
       throw new StorePublishError(redact(error instanceof Error ? error.message : error, secrets));
     }

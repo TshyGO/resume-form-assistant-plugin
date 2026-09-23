@@ -115,7 +115,7 @@ node desktop/scripts/chrome-web-store.js publish --zip resume-pro-v0.4.0-chrome.
 - 同一时间只有一个会改商店的运行；后来的排队，不会取消正在上传的那次。dry-run 不占这把锁。
 - 这个版本如果已经是线上版本，或已经处于 `PENDING_REVIEW` / `STAGED`，脚本拒绝再次上传。
 - 商店还报告有进行中的上传时，脚本停止。
-- 上传已经成功、送审那一步失败时，重跑如果收到「这个版本已存在」，不会再传一遍 ZIP，只会继续送审。
+- 上传或送审失败后，先到 Dashboard 确认商店草稿及其内容。上传接口只报告「版本已存在」时，流水线无法确认那份草稿与本次 Release 的 ZIP 相同，因此会停止，不会自动送审旧草稿。确认后可在 Dashboard 手动送审；需要重新走自动流水线时，修复问题、递增版本号，再建新 Release。
 - 送审后读回来的版本对不上，脚本会尝试 `cancelSubmission`，然后失败。
 
 不要为了重试去建第二个同版本 Release。版本号已经用过且被商店拒绝时，先把 `manifest.json` 的版本号升上去，再发下一个 Release。
