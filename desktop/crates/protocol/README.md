@@ -57,6 +57,7 @@ Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一�
 `legacy.import` 清单中每片的 `sha256` 是**该片 `body` 本身**的摘要，不含 `kind`、`index` 或信封字段。算法与现有 `payloadSha256` 一致：对象键递归按字典序排列，序列化为无空白的 JSON，以 UTF-8 编码后计算 SHA-256，小写十六进制输出。`fixtures/requests/legacy-import-ok.json` 与 `legacy-import-template-ok.json` 固定了一组含中文内容的真实摘要，Rust/JS 均据此验算。
 
 Secrets 扫描对对象键名采用子串匹配；含 `token`、`secret`、`otp` 等片段的键名即使值不含凭据也会被拒绝。这与 Rust 校验器既有口径相同，PR 3b 处理桌面数据时需考虑这一边界。
+模板字段与档案自定义字段的 `{key, value}` 中，`key` 的字符串内容也按同一规则扫描，防止把敏感字段名移入值后绕过检查。
 
 字段级 `maxLength` 不保证整条信封能放进 65536 字节；请求和响应仍以序列化后的完整 UTF-8 字节数为准，超限不截断。PR 4 的插件需在发送 `ai.complete` 前量字节数；PR 3b 的桌面需在返回 `resume.read` 或 AI 正文前量响应信封。`legacy.import` 的 `body` 形状由 Rust/JS 运行时根据 `kind` 选择本 schema 的 `$defs` 校验；只检查顶层 JSON Schema 不等于完成协议校验。
 

@@ -58,6 +58,10 @@ function walkSecrets(value, allowedPaths = [], path = []) {
     return;
   }
   if (value && typeof value === "object") {
+    if (Object.hasOwn(value, "key") && typeof value.key === "string" && Object.hasOwn(value, "value") &&
+        FORBIDDEN_KEYS.some((forbidden) => value.key.toLowerCase().includes(forbidden))) {
+      throw fail("secret_forbidden", "forbidden dynamic field label", "secrets");
+    }
     for (const [k, v] of Object.entries(value)) {
       const nextPath = [...path, k];
       if (allowedPaths.some((allowed) => allowed.length === nextPath.length && allowed.every((part, index) => part === nextPath[index]))) {

@@ -28,14 +28,22 @@ pub fn reject_secrets_except(value: &Value, allowed_paths: &[&[&str]]) -> Result
 fn walk(value: &Value, path: &mut Vec<String>, allowed_paths: &[&[&str]]) -> Result<(), ProtocolError> {
     match value {
         Value::Object(map) => {
+            if map.get("value").is_some()
+                && map.get("key").and_then(Value::as_str).is_some_and(forbidden_name)
+            {
+                return Err(ProtocolError::new(
+                    ErrorCode::SecretForbidden,
+                    Layer::Secrets,
+                    "forbidden dynamic field label",
+                ));
+            }
             for (k, v) in map {
                 path.push(k.clone());
                 if allowed_paths.iter().any(|allowed| path.iter().map(String::as_str).eq(allowed.iter().copied())) {
                     path.pop();
                     continue;
                 }
-                let key = k.to_ascii_lowercase();
-                if FORBIDDEN_KEYS.iter().any(|f| key == *f || key.contains(f)) {
+                if forbidden_name(k) {
                     return Err(ProtocolError::new(
                         ErrorCode::SecretForbidden,
                         Layer::Secrets,
@@ -69,6 +77,11 @@ fn walk(value: &Value, path: &mut Vec<String>, allowed_paths: &[&[&str]]) -> Res
         _ => {}
     }
     Ok(())
+}
+
+fn forbidden_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    FORBIDDEN_KEYS.iter().any(|forbidden| lower.contains(forbidden))
 }
 
 /// True when a string carries a forbidden key that names a value, as in

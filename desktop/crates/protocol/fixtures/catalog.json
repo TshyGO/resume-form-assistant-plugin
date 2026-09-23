@@ -108,7 +108,10 @@
     {"id": "ui-open-with-identity", "path": "requests/ui-open-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}},
     {"id": "legacy-import-profile-ok", "path": "requests/legacy-import-profile-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "legacy-import-profile-nonstring", "path": "requests/legacy-import-profile-nonstring.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
-    {"id": "legacy-import-profile-nested-secret-key", "path": "requests/legacy-import-profile-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "legacy-import-profile-nested-secret-key", "path": "requests/legacy-import-profile-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "legacy-import-template-dynamic-password-key", "path": "requests/legacy-import-template-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "legacy-import-profile-dynamic-apikey-key", "path": "requests/legacy-import-profile-dynamic-apikey-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "resume-update-custom-dynamic-password-key", "path": "requests/resume-update-custom-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
@@ -158,6 +161,7 @@
     {"id": "resume-update-active-match", "path": "responses/resume-update-active-match.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": true}},
     {"id": "resume-update-active-mismatch", "path": "responses/resume-update-active-mismatch.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
     {"id": "resume-update-conflict", "path": "responses/resume-update-conflict.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-ok.json", "strict": {"accept": true}},
-    {"id": "resume-update-active-case-equivalent", "path": "responses/resume-update-active-case-equivalent.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-uppercase.json", "strict": {"accept": true}}
+    {"id": "resume-update-active-case-equivalent", "path": "responses/resume-update-active-case-equivalent.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-uppercase.json", "strict": {"accept": true}},
+    {"id": "resume-read-dynamic-password-key", "path": "responses/resume-read-dynamic-password-key.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ]
 }
