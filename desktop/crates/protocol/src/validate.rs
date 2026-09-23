@@ -7,7 +7,7 @@ use crate::error::{ErrorCode, Layer, ProtocolError};
 use crate::schema_lite::{
     envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
 };
-use crate::secrets::reject_secrets;
+use crate::secrets::{reject_secrets, reject_secrets_except};
 use crate::urls::{allowlist_from_rules, reject_sensitive_urls};
 use crate::time::is_utc_timestamp;
 use crate::types::{
@@ -106,7 +106,11 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         ));
     }
     let payload = payload_value.as_object().unwrap();
-    reject_secrets(payload_value)?;
+    if message_type == MessageType::LegacyImport && payload.get("kind").and_then(Value::as_str) == Some("aiConfig") {
+        reject_secrets_except(payload_value, &[&["body", "apiKey"]])?;
+    } else {
+        reject_secrets(payload_value)?;
+    }
     if let Some(schema) = payload_schema(message_type.as_str()) {
         validate_schema(payload_value, &schema)?;
     }

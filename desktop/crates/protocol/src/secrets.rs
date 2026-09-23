@@ -16,13 +16,24 @@ const FORBIDDEN_KEYS: &[&str] = &[
 ];
 
 pub fn reject_secrets(value: &Value) -> Result<(), ProtocolError> {
-    walk(value)
+    reject_secrets_except(value, &[])
 }
 
-fn walk(value: &Value) -> Result<(), ProtocolError> {
+/// Exempt only exact paths relative to the scanned value. Callers must still validate
+/// the exempt value's schema; this is reserved for legacy.import body.apiKey.
+pub fn reject_secrets_except(value: &Value, allowed_paths: &[&[&str]]) -> Result<(), ProtocolError> {
+    walk(value, &mut Vec::new(), allowed_paths)
+}
+
+fn walk(value: &Value, path: &mut Vec<String>, allowed_paths: &[&[&str]]) -> Result<(), ProtocolError> {
     match value {
         Value::Object(map) => {
             for (k, v) in map {
+                path.push(k.clone());
+                if allowed_paths.iter().any(|allowed| path.iter().map(String::as_str).eq(allowed.iter().copied())) {
+                    path.pop();
+                    continue;
+                }
                 let key = k.to_ascii_lowercase();
                 if FORBIDDEN_KEYS.iter().any(|f| key == *f || key.contains(f)) {
                     return Err(ProtocolError::new(
@@ -31,12 +42,15 @@ fn walk(value: &Value) -> Result<(), ProtocolError> {
                         format!("forbidden key {k}"),
                     ));
                 }
-                walk(v)?;
+                walk(v, path, allowed_paths)?;
+                path.pop();
             }
         }
         Value::Array(items) => {
-            for item in items {
-                walk(item)?;
+            for (index, item) in items.iter().enumerate() {
+                path.push(index.to_string());
+                walk(item, path, allowed_paths)?;
+                path.pop();
             }
         }
         Value::String(s) => {
