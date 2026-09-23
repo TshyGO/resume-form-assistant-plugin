@@ -397,3 +397,40 @@ export interface ConfirmResult {
   /** 提醒没登记上的原因。确认本身已经成了。 */
   reminderProblems: string[];
 }
+
+// --- #130 简历模板与我的信息 --------------------------------------------------------------
+
+/** #130 简历模板：列表里的一行。 */
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  fieldCount: number;
+  updatedAt: string;
+}
+
+export interface ResumeOverview {
+  templates: TemplateSummary[];
+  activeTemplateId: string | null;
+}
+
+export interface TemplateGroupView {
+  name: string;
+  fields: Array<{ key: string; value: string }>;
+}
+
+export interface ResumeTemplateView {
+  id: string;
+  name: string;
+  groups: TemplateGroupView[];
+  updatedAt: string;
+}
+
+export interface ImportResultView {
+  template: TemplateSummary;
+  previousFieldCount: number | null;
+}
+
+export interface ProfileRecordView {
+  profile: import("./resume/profile.ts").Profile;
+  revision: number;
+}
