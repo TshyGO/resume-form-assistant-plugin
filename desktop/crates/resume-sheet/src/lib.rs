@@ -35,13 +35,14 @@ pub enum SheetError {
     MissingKeys(Vec<usize>),
     NoFields,
     WriteFailed,
+    CellTooLong { group: String, key: String },
 }
 
 impl fmt::Display for SheetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedExtension => f.write_str("仅支持 .xlsx 或 .csv 文件。"),
-            Self::Unreadable => f.write_str("读不出这个 Excel 文件，确认它没有损坏、也不是加密文件。"),
+            Self::Unreadable => f.write_str("读不出这个文件，确认它没有损坏、也不是加密文件。"),
             Self::NotUtf8 => f.write_str("CSV 需要 UTF-8 编码：请在 Excel 里另存为「CSV UTF-8」，或直接用 .xlsx。"),
             Self::NoSheet => f.write_str("文件中没有可用工作表。"),
             Self::Empty => f.write_str("Excel 内容为空。"),
@@ -57,6 +58,10 @@ impl fmt::Display for SheetError {
             }
             Self::NoFields => f.write_str("未解析到任何字段，请检查 Excel 格式。"),
             Self::WriteFailed => f.write_str("生成 Excel 失败。"),
+            Self::CellTooLong { group, key } => write!(
+                f,
+                "「{group} / {key}」超过 Excel 单元格上限 32767 字，无法导出。"
+            ),
         }
     }
 }
@@ -67,9 +72,7 @@ impl std::error::Error for SheetError {}
 type Row = (usize, [String; 3]);
 
 fn extension(file_name: &str) -> Option<String> {
-    let (stem, ext) = file_name.rsplit_once('.')?;
-    let _ = stem;
-    Some(ext.to_ascii_lowercase())
+    file_name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase())
 }
 
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<Vec<Group>, SheetError> {
@@ -81,31 +84,97 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Result<Vec<Group>, SheetError> {
     groups_from_rows(rows)
 }
 
+/// 解一个 `_x([0-9A-Fa-f]{4})_` 转义序列，还原成对应字符。
+/// rust_xlsxwriter/Excel 把共享字符串里的控制字符（`\t`、`\n` 除外）以及字面量
+/// 出现的 `_xHHHH_` 序列本身，都转义成这种形式（字面量的下划线转义成
+/// `_x005F_`）；calamine 0.30.1 读回来不会解码，这里手动单遍、从左到右扫描
+/// 补上，不引入 regex 依赖。单遍扫描意味着 `_x005F_x0041_` 会先把开头的
+/// `_x005F_` 解成 `_`，再把剩下的 `x0041_` 当成普通文本，结果是 `_x0041_`——
+/// 这与 Excel 自己转义/反转义的行为一致。
+fn decode_excel_escapes(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if i + 7 <= chars.len()
+            && chars[i] == '_'
+            && chars[i + 1] == 'x'
+            && chars[i + 6] == '_'
+            && chars[i + 2..i + 6].iter().all(|c| c.is_ascii_hexdigit())
+        {
+            let hex: String = chars[i + 2..i + 6].iter().collect();
+            if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                if let Some(ch) = char::from_u32(code) {
+                    out.push(ch);
+                    i += 7;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 fn cell_text(cell: &Data) -> String {
     match cell {
         Data::Empty => String::new(),
-        Data::String(s) => s.clone(),
-        // 手机号、学号这类整数存成浮点时，别显示成 1.38e10 或带 .0。
-        Data::Float(v) if v.fract() == 0.0 && v.abs() < 1e15 => format!("{}", *v as i64),
-        Data::Int(v) => v.to_string(),
+        Data::String(s) => decode_excel_escapes(s),
+        // 插件把 #N/A 等错误单元格当空值导入。
+        Data::Error(_) => String::new(),
+        // f64 的 Display 不会用科学计数法、也不带多余的 .0，唯一要收拾的是
+        // 负零会打印成 "-0"；Excel 单元格里没有有意义的负零，统一成 "0"。
+        Data::Float(v) if *v == 0.0 => "0".to_string(),
         other => other.to_string(),
     }
 }
 
 fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
     let mut workbook: Xlsx<_> =
-        open_workbook_from_rs(Cursor::new(bytes.to_vec())).map_err(|_| SheetError::Unreadable)?;
+        open_workbook_from_rs(Cursor::new(bytes)).map_err(|_| SheetError::Unreadable)?;
     let first = workbook.sheet_names().first().cloned().ok_or(SheetError::NoSheet)?;
     let range = workbook.worksheet_range(&first).map_err(|_| SheetError::Unreadable)?;
-    let (Some((top, _)), Some((bottom, _))) = (range.start(), range.end()) else {
+    let (Some((top, left)), Some((bottom, _))) = (range.start(), range.end()) else {
         return Ok(Vec::new());
     };
     let mut rows = Vec::new();
     for r in top..=bottom {
-        let cell = |c: u32| range.get_value((r, c)).map(cell_text).unwrap_or_default();
+        // 插件（SheetJS）按 used range 相对取前三列；calamine 的 get_value 要
+        // 绝对坐标，所以要在 used range 最左列（left）上加相对偏移。
+        let cell = |c: u32| range.get_value((r, left + c)).map(cell_text).unwrap_or_default();
         rows.push((r as usize + 1, [cell(0), cell(1), cell(2)]));
     }
     Ok(rows)
+}
+
+/// 一条 CSV 记录在原文本里的真实行号（从 1 起），`\r\n` 算一次换行。
+/// `csv` crate 的 `Position::line()` 在跳过空白行之后会不准，这里改成直接
+/// 用 `Position::byte()`：先跳过记录前残留的换行符（空白行会被 csv
+/// crate 悄悄跳过、不产生记录，但它们的换行符还留在这段字节里），再数
+/// 这段文本里出现过几次真正的换行。
+fn line_number(text: &str, byte: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut start = byte;
+    while start < bytes.len() && (bytes[start] == b'\r' || bytes[start] == b'\n') {
+        start += 1;
+    }
+    let mut breaks = 0usize;
+    let mut i = 0usize;
+    while i < start {
+        match bytes[i] {
+            b'\r' => {
+                breaks += 1;
+                i += if i + 1 < start && bytes[i + 1] == b'\n' { 2 } else { 1 };
+            }
+            b'\n' => {
+                breaks += 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    breaks + 1
 }
 
 fn csv_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
@@ -118,7 +187,10 @@ fn csv_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
     let mut rows = Vec::new();
     for (index, record) in reader.records().enumerate() {
         let record = record.map_err(|_| SheetError::Unreadable)?;
-        let line = record.position().map(|p| p.line() as usize).unwrap_or(index + 1);
+        let line = record
+            .position()
+            .map(|p| line_number(text, p.byte() as usize))
+            .unwrap_or(index + 1);
         let cell = |c: usize| record.get(c).unwrap_or("").to_string();
         rows.push((line, [cell(0), cell(1), cell(2)]));
     }
@@ -166,7 +238,19 @@ fn groups_from_rows(rows: Vec<Row>) -> Result<Vec<Group>, SheetError> {
 
 /// 表头和列序与 `parse` 读的同一套，导出的文件能原样导回来。
 /// 不剔密码类字段：这是用户自己那份 Excel 的往返，剔了就导不回去了。
+const MAX_CELL_CHARS: usize = 32_767;
+
 pub fn write_xlsx(groups: &[Group]) -> Result<Vec<u8>, SheetError> {
+    for group in groups {
+        for field in &group.fields {
+            if group.name.chars().count() > MAX_CELL_CHARS
+                || field.key.chars().count() > MAX_CELL_CHARS
+                || field.value.chars().count() > MAX_CELL_CHARS
+            {
+                return Err(SheetError::CellTooLong { group: group.name.clone(), key: field.key.clone() });
+            }
+        }
+    }
     let mut workbook = Workbook::new();
     let sheet = workbook.add_worksheet();
     sheet.set_name(SHEET_NAME).map_err(|_| SheetError::WriteFailed)?;
@@ -185,11 +269,13 @@ pub fn write_xlsx(groups: &[Group]) -> Result<Vec<u8>, SheetError> {
     workbook.save_to_buffer().map_err(|_| SheetError::WriteFailed)
 }
 
-/// 对齐 `getTemplateNameFromFile`：去掉最后一个扩展名。
+/// 对齐 `getTemplateNameFromFile`：`fileName.replace(/\.[^.]+$/, "")`——只在
+/// 最后一个点后面还有内容时才算扩展名并去掉；点在末尾（如 "a."、"a.b."）时
+/// 正则不匹配，原样保留。
 pub fn template_name_from_file(file_name: &str) -> String {
     let stem = match file_name.rsplit_once('.') {
-        Some((stem, _)) => stem,
-        None => file_name,
+        Some((stem, ext)) if !ext.is_empty() => stem,
+        _ => file_name,
     };
     let stem = stem.trim();
     if stem.is_empty() { UNNAMED.into() } else { stem.into() }
@@ -279,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_broken_xlsx_is_unreadable() {
-        assert_eq!(parse("a.xlsx", b"not a zip").unwrap_err().to_string(), "读不出这个 Excel 文件，确认它没有损坏、也不是加密文件。");
+        assert_eq!(parse("a.xlsx", b"not a zip").unwrap_err().to_string(), "读不出这个文件，确认它没有损坏、也不是加密文件。");
     }
 
     #[test]
@@ -299,5 +385,87 @@ mod tests {
         let csv = "一级分类,字段名,值\n\u{feff}基本信息,\u{feff}姓名,张三\n";
         let groups = parse("a.csv", csv.as_bytes()).unwrap();
         assert_eq!(groups, vec![g("基本信息", &[("姓名", "张三")])]);
+    }
+
+    // --- 修复回归测试（code review 后补） ---
+
+    #[test]
+    fn xlsx_used_range_not_starting_at_column_a_is_read_correctly() {
+        // 插件（SheetJS）按 used range 的最左列取相对列；calamine 的 get_value
+        // 要绝对坐标。数据写在 B2:D3（不是从 A 列开始）时，之前的实现固定读
+        // 绝对列 0、1、2，会读错列、甚至整列漏掉。
+        let mut workbook = Workbook::new();
+        {
+            let sheet = workbook.add_worksheet();
+            sheet.write_string(1, 1, "一级分类").unwrap();
+            sheet.write_string(1, 2, "字段名").unwrap();
+            sheet.write_string(1, 3, "值").unwrap();
+            sheet.write_string(2, 1, "基本信息").unwrap();
+            sheet.write_string(2, 2, "姓名").unwrap();
+            sheet.write_string(2, 3, "张三").unwrap();
+        }
+        let bytes = workbook.save_to_buffer().unwrap();
+        let groups = parse("a.xlsx", &bytes).unwrap();
+        assert_eq!(groups, vec![g("基本信息", &[("姓名", "张三")])]);
+    }
+
+    #[test]
+    fn csv_row_numbers_are_correct_for_crlf_line_endings() {
+        let csv = "h,h,h\r\ng,k,v\r\ng,,x\r\n";
+        let err = parse("a.csv", csv.as_bytes()).unwrap_err();
+        assert_eq!(err.to_string(), "第 3 行缺少「字段名」（第二列）。");
+    }
+
+    #[test]
+    fn csv_row_numbers_skip_over_blank_lf_lines_correctly() {
+        let csv = "h,h,h\n\n\ng,,x\n";
+        let err = parse("a.csv", csv.as_bytes()).unwrap_err();
+        assert_eq!(err.to_string(), "第 4 行缺少「字段名」（第二列）。");
+    }
+
+    #[test]
+    fn csv_row_numbers_skip_over_blank_crlf_lines_correctly() {
+        let csv = "h,h,h\r\n\r\n\r\ng,,x\r\n";
+        let err = parse("a.csv", csv.as_bytes()).unwrap_err();
+        assert_eq!(err.to_string(), "第 4 行缺少「字段名」（第二列）。");
+    }
+
+    #[test]
+    fn csv_row_number_after_a_quoted_multiline_field_is_the_true_line() {
+        let csv = "h,h,h\ng,k,\"a\nb\"\ng,,x\n";
+        let err = parse("a.csv", csv.as_bytes()).unwrap_err();
+        assert_eq!(err.to_string(), "第 4 行缺少「字段名」（第二列）。");
+    }
+
+    #[test]
+    fn control_chars_and_literal_escape_sequences_round_trip() {
+        // rust_xlsxwriter/Excel 把控制字符和字面量 `_xHHHH_` 转义成共享字符串里
+        // 的 `_xHHHH_` 序列；calamine 0.30.1 读回来不会解码。不解码就会把
+        // "a\r\nb _x0041_ c\u{1}d" 读成 "a_x000D_\nb _x005F_x0041_ c_x0001_d"。
+        let groups = vec![g("组", &[("键", "a\r\nb _x0041_ c\u{1}d")])];
+        let bytes = write_xlsx(&groups).unwrap();
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), groups);
+    }
+
+    #[test]
+    fn template_name_from_file_only_strips_a_non_empty_extension() {
+        assert_eq!(template_name_from_file("a."), "a.");
+        assert_eq!(template_name_from_file("a.b."), "a.b.");
+        assert_eq!(template_name_from_file(".csv"), "未命名模板");
+        assert_eq!(template_name_from_file("noext"), "noext");
+    }
+
+    #[test]
+    fn cell_text_reads_error_cells_as_empty_and_normalizes_negative_zero() {
+        assert_eq!(cell_text(&Data::Error(calamine::CellErrorType::NA)), "");
+        assert_eq!(cell_text(&Data::Float(-0.0)), "0");
+        assert_eq!(cell_text(&Data::Float(13_800_000_000.0)), "13800000000");
+    }
+
+    #[test]
+    fn exporting_a_value_over_the_excel_cell_limit_is_rejected() {
+        let groups = vec![g("组", &[("键", &"a".repeat(32_768))])];
+        let err = write_xlsx(&groups).unwrap_err();
+        assert_eq!(err.to_string(), "「组 / 键」超过 Excel 单元格上限 32767 字，无法导出。");
     }
 }
