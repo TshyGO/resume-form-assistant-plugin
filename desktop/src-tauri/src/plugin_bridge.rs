@@ -38,6 +38,9 @@ pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCod
         MessageType::OutboxReconcile => reconcile(request, store),
         MessageType::SnapshotChunk => snapshot_chunk(request, store),
         MessageType::Health | MessageType::Handshake => Err(ErrorCode::UnknownMessageType),
+        // PR 3a defines the v2 wire contract; PR 3b attaches the desktop handlers.
+        MessageType::ResumeRead | MessageType::ResumeUpdate | MessageType::AiComplete
+        | MessageType::UiOpen | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
     }
 }
 
