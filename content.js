@@ -932,7 +932,8 @@
         }
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
-          filled = element.element.isConnected && element.element.value === match.value;
+          filled = element.element.isConnected
+            && String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value);
         }
 
         const fieldMeta = fieldMetaMap.get(match.fieldId);
@@ -1455,6 +1456,12 @@
       if (current.getAttribute?.("aria-hidden") === "true") {
         return false;
       }
+      if (typeof window.getComputedStyle === "function" && current instanceof HTMLElement) {
+        const style = window.getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") {
+          return false;
+        }
+      }
       current = current.parentElement;
     }
     return true;
@@ -1500,7 +1507,8 @@
       }
       current = current.parentElement;
     }
-    return best;
+    // 没有其他控件作边界时，不要把整张表单的错误算到唯一输入框上。
+    return element.parentElement;
   }
 
   function describedErrorVisible(element) {
@@ -1567,11 +1575,31 @@
     return TEXT_FILL_FAILURE_LABELS[reason] || "";
   }
 
+  function normalizeExpectedTextValue(element, value) {
+    const text = String(value ?? "");
+    if (element instanceof HTMLTextAreaElement) {
+      return text.replace(/\r\n?/g, "\n");
+    }
+    if (!(element instanceof HTMLInputElement)) {
+      return text;
+    }
+    const type = String(element.type || "text").toLowerCase();
+    if (type === "email" || type === "url") {
+      return text.replace(/[\r\n]/g, "").replace(/^[\t\f ]+|[\t\f ]+$/g, "");
+    }
+    if (["text", "search", "tel", "password"].includes(type)) {
+      return text.replace(/[\r\n]/g, "");
+    }
+    // 数字等类型的无效值会被浏览器拒绝，不能把清空后的值当成成功。
+    return text;
+  }
+
   // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
   // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
   async function commitTextValue(element, value, sequential = false) {
-    const expected = String(value ?? "");
-    await runTextLifecycle(element, expected, sequential);
+    const original = String(value ?? "");
+    const expected = normalizeExpectedTextValue(element, original);
+    await runTextLifecycle(element, original, sequential);
     const committed = String(element.value ?? "") === expected;
     await waitForTextCommit();
     let result = inspectTextCommit(element, expected, committed);
@@ -1583,7 +1611,7 @@
     }
     if (!result.ok && !sequential && prefersSequentialInput(element)
       && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      return commitTextValue(element, value, true);
+      return commitTextValue(element, original, true);
     }
     return result;
   }
@@ -1649,6 +1677,14 @@
           resolve(element.value === normalized);
         }, 150);
       });
+    }
+
+    if (element instanceof HTMLInputElement && ["week", "range", "color"].includes(element.type)) {
+      const expected = String(value ?? "");
+      writeControlValue(element, expected);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return element.value === expected;
     }
 
     if (isTextControl(element)) {

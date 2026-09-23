@@ -25,6 +25,7 @@ function createHarness({ inputEvent = true } = {}) {
       this.listeners = new Map();
       this.events = [];
       this.hidden = false;
+      this.style = {};
       this.textContent = "";
       this.id = "";
       this.className = "";
@@ -94,7 +95,14 @@ function createHarness({ inputEvent = true } = {}) {
     }
 
     set value(next) {
-      this._value = String(next ?? "");
+      const value = String(next ?? "");
+      if (this.type === "email" || this.type === "url") {
+        this._value = value.replace(/[\r\n]/g, "").replace(/^[\t\f ]+|[\t\f ]+$/g, "");
+      } else if (this.type === "number" && value && !Number.isFinite(Number(value))) {
+        this._value = "";
+      } else {
+        this._value = value.replace(/[\r\n]/g, "");
+      }
     }
   }
 
@@ -109,7 +117,7 @@ function createHarness({ inputEvent = true } = {}) {
     }
 
     set value(next) {
-      this._value = String(next ?? "");
+      this._value = String(next ?? "").replace(/\r\n?/g, "\n");
     }
   }
 
@@ -138,7 +146,14 @@ function createHarness({ inputEvent = true } = {}) {
       return new HTMLElement();
     }
   };
-  const window = { top: null, setTimeout, clearTimeout };
+  const window = {
+    top: null,
+    setTimeout,
+    clearTimeout,
+    getComputedStyle(node) {
+      return { display: node.style.display || "block", visibility: node.style.visibility || "visible" };
+    }
+  };
   window.top = window;
   const context = {
     console,
@@ -394,4 +409,68 @@ test("只剩框架错误类、没有错误文案时记成状态未同步", async
 
   assert.equal(await setElementValue(input, "13800138000"), false);
   assert.equal(reason(input), "framework_state_unsynced");
+});
+
+test("CSS 隐藏的错误文案及其祖先不使已填写字段失败", async () => {
+  const { setElementValue, reason, HTMLElement, HTMLInputElement, body } = createHarness();
+  const { input, error } = fieldBox(HTMLElement, HTMLInputElement, body);
+  error.style.display = "none";
+  assert.equal(await setElementValue(input, "测试用户"), true);
+  assert.equal(reason(input), "");
+
+  error.style.display = "block";
+  const wrapper = new HTMLElement();
+  wrapper.style.visibility = "hidden";
+  const item = error.parentElement;
+  item.children = item.children.filter((node) => node !== error);
+  item.appendChild(wrapper);
+  wrapper.appendChild(error);
+  assert.equal(await setElementValue(input, "测试用户"), true);
+  assert.equal(reason(input), "");
+});
+
+test("单输入框页面不把其他区域的错误归给当前字段", async () => {
+  const { setElementValue, HTMLElement, HTMLInputElement, body } = createHarness();
+  const form = new HTMLElement();
+  const field = new HTMLElement();
+  const input = new HTMLInputElement();
+  const unrelated = new HTMLElement();
+  unrelated.className = "error";
+  unrelated.textContent = "其他内容仍有错误";
+  field.appendChild(input);
+  form.appendChild(field);
+  form.appendChild(unrelated);
+  body.appendChild(form);
+
+  assert.equal(await setElementValue(input, "测试用户"), true);
+});
+
+test("按浏览器规范化后的文本值判断提交，非法数字仍失败", async () => {
+  const { setElementValue, reason, HTMLInputElement, HTMLTextAreaElement } = createHarness();
+  const text = new HTMLInputElement();
+  const email = new HTMLInputElement();
+  email.type = "email";
+  const area = new HTMLTextAreaElement();
+  const number = new HTMLInputElement();
+  number.type = "number";
+
+  assert.equal(await setElementValue(text, "甲\n乙"), true);
+  assert.equal(text.value, "甲乙");
+  assert.equal(await setElementValue(email, "  a@b.c \n"), true);
+  assert.equal(email.value, "a@b.c");
+  assert.equal(await setElementValue(area, "甲\r\n乙"), true);
+  assert.equal(area.value, "甲\n乙");
+  assert.equal(await setElementValue(number, "not a number"), false);
+  assert.equal(reason(number), "value_not_committed");
+});
+
+test("week、range、color 输入仍可沿用原有的直接写值路径", async () => {
+  const { setElementValue, HTMLInputElement } = createHarness();
+  for (const [type, value] of [["week", "2026-W39"], ["range", "42"], ["color", "#123456"]]) {
+    const input = new HTMLInputElement();
+    input.type = type;
+    assert.equal(await setElementValue(input, value), true);
+    assert.equal(input.value, value);
+    assert.deepEqual(input.events.map((event) => event.type), ["input", "change"]);
+  }
 });
