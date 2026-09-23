@@ -26,7 +26,7 @@
 | 数据 | 所有者 | 权威副本 | 允许的副本 |
 | --- | --- | --- | --- |
 | 申请 / 事件 / 待办 / 证据 / 快照 | 用户 | Tauri 后端（`data-service` 库）管理的 archive 目录 | 用户导出的备份文件 |
-| 插件模板、`activeTemplateId` | 用户 | `chrome.storage.local` | 填写归档时生成的 **不可变快照** |
+| 简历模板、「我的信息」、当前模板 | 用户 | 桌面档案（`resume_templates` / `resume_state`，v0.4.1 起，#130） | 填写归档时生成的 **不可变快照**；v0.4.1 以前插件存在 `chrome.storage.local` 的旧副本，导入桌面并确认后清除 |
 | 插件 `aiConfig.apiKey` | 用户 | 仅扩展存储（今天明文） | **禁止**复制到桌面档案或备份 |
 | 桌面模型 Key（D11） | 用户 | OS 凭据库：Windows Credential Manager / DPAPI；macOS Keychain | **禁止**进 SQLite、附件、备份、日志 |
 | 保存意图 / 绑定 outbox | 用户 | `chrome.storage.local` 新 key | 不得含 Key；绑定项以不可变 `sourceRestoreEpoch` 盖章；恢复后与 current 不符则暂停，信封不得被桌面改写成当前身份 |
