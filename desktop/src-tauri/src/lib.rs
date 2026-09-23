@@ -3,6 +3,7 @@ mod ai_commands;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
+mod ai_models;
 mod ai_settings;
 mod nm_register;
 mod update_check;
