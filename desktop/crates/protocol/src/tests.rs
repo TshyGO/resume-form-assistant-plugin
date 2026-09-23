@@ -156,6 +156,16 @@ fn handshake_announces_max_2() {
 }
 
 #[test]
+fn legacy_import_manifest_hashes_the_canonical_body() {
+    let manifest = load_fixture("requests/legacy-import-ok.json");
+    let part = load_fixture("requests/legacy-import-template-ok.json");
+    assert_eq!(
+        payload_body_sha256(&part["payload"]["body"]).unwrap(),
+        manifest["payload"]["body"]["parts"][0]["sha256"].as_str().unwrap()
+    );
+}
+
+#[test]
 fn handshake_incompatible_version() {
     let mut hs = envelope(
         "handshake",

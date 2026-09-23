@@ -21,6 +21,13 @@ import {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const catalog = JSON.parse(readFileSync(join(root, "catalog.json"), "utf8"));
 
+test("legacy.import manifest hashes the canonical body", async () => {
+  const { payloadBodySha256 } = await import("./validate.mjs");
+  const manifest = load("requests/legacy-import-ok.json");
+  const part = load("requests/legacy-import-template-ok.json");
+  assert.equal(await payloadBodySha256(part.payload.body), manifest.payload.body.parts[0].sha256);
+});
+
 function load(rel) {
   return JSON.parse(readFileSync(join(root, rel), "utf8"));
 }

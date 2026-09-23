@@ -100,7 +100,12 @@
     {"id": "health-v2-envelope", "path": "requests/health-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "job-save-v2-envelope", "path": "requests/job-save-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "resume-update-nested-secret-key", "path": "requests/resume-update-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "resume-update-set-active-uppercase", "path": "requests/resume-update-set-active-uppercase.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "resume-update-set-active-uppercase", "path": "requests/resume-update-set-active-uppercase.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-read-missing-identity", "path": "requests/resume-read-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
+    {"id": "resume-update-missing-identity", "path": "requests/resume-update-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
+    {"id": "legacy-import-missing-identity", "path": "requests/legacy-import-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
+    {"id": "ai-complete-with-identity", "path": "requests/ai-complete-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}},
+    {"id": "ui-open-with-identity", "path": "requests/ui-open-with-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_not_allowed"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
