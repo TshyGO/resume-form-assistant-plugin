@@ -49,7 +49,7 @@ test("导入 Excel 用选中的文件新建模板，并说出字段数", async (
   const user = userEvent.setup();
   const calls = mount((command) => {
     if (command === "import_resume_template_cmd") {
-      return { template: { id: "t3", name: "新", fieldCount: 5, updatedAt: "" }, previousFieldCount: null };
+      return { template: { id: "t3", name: "新", fieldCount: 5, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
     }
     return overview;
   }, pickers("/tmp/新.xlsx", null));
@@ -58,11 +58,24 @@ test("导入 Excel 用选中的文件新建模板，并说出字段数", async (
   expect(calls.find((c) => c.command === "import_resume_template_cmd")?.args).toEqual({ path: "/tmp/新.xlsx", replaceId: null });
 });
 
+test("导入时剔掉了像密码的字段要说出来", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "import_resume_template_cmd") {
+      return { template: { id: "t3", name: "新", fieldCount: 5, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 2 };
+    }
+    return overview;
+  }, pickers("/tmp/新.xlsx", null));
+  await user.click(await screen.findByRole("button", { name: "导入 Excel" }));
+  const note = await screen.findByText("简历模板导入成功，共 5 个字段。另有 2 个像密码或验证码的字段没有导入。");
+  expect(note.className).toContain("warn");
+});
+
 test("重新导入带上被覆盖的模板 id", async () => {
   const user = userEvent.setup();
   const calls = mount((command) => {
     if (command === "import_resume_template_cmd") {
-      return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "" }, previousFieldCount: 12 };
+      return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "" }, previousFieldCount: 12, skippedSecretFields: 0 };
     }
     return overview;
   }, pickers("/tmp/改.xlsx", null));
@@ -191,7 +204,7 @@ test("预览展开后重新导入，预览跟着刷新而不是留着旧内容",
         templates: [overview.templates[0], { ...overview.templates[1], fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }],
         activeTemplateId: currentOverview.activeTemplateId,
       };
-      return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }, previousFieldCount: 12 };
+      return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }, previousFieldCount: 12, skippedSecretFields: 0 };
     }
     return currentOverview;
   }, pickers("/tmp/改.xlsx", null));

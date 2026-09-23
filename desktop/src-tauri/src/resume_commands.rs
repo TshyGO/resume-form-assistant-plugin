@@ -1,14 +1,12 @@
-//! #130：简历模板与「我的信息」的命令层。读写用户挑的文件、把存储层的错误翻成中文，
-//! 并拦下密码类内容——档案会整库进 D12 备份，不能让「网银密码」这种补充字段跟着走。
+//! #130：简历模板与「我的信息」的命令层。读写用户挑的文件、把存储层的错误翻成中文。
+//! 密码类内容的拦截在存储层（`archive_store::resume_secrets`），这里不另查一遍。
 
 use std::path::Path;
-use std::sync::OnceLock;
 
 use archive_store::{
-    ArchiveStore, ProfileRecord, ResumeOverview, ResumeTemplate, StoreError, TemplateField, TemplateGroup,
-    TemplateSummary,
+    ArchiveStore, ProfileRecord, ResumeOverview, ResumeTemplate, SavedTemplate, StoreError, TemplateField,
+    TemplateGroup, TemplateSummary,
 };
-use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -32,6 +30,18 @@ pub struct ImportResult {
     pub template: TemplateSummary,
     /// 重新导入时覆盖前的字段数；新建时为空。界面靠它说「字段 A → B」。
     pub previous_field_count: Option<usize>,
+    /// 看起来是密码或验证码、没有导入的字段数。界面据此补一句提示。
+    pub skipped_secret_fields: usize,
+}
+
+impl From<SavedTemplate> for ImportResult {
+    fn from(saved: SavedTemplate) -> Self {
+        Self {
+            template: TemplateSummary::from(&saved.template),
+            previous_field_count: saved.previous_field_count,
+            skipped_secret_fields: saved.skipped_secret_fields,
+        }
+    }
 }
 
 fn error(code: &str, message: impl Into<String>) -> CommandError {
@@ -102,17 +112,14 @@ pub fn import_template(store: &ArchiveStore, path: &Path, replace_id: Option<&st
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let groups = resume_sheet::parse(file_name, &bytes).map_err(|e| error("SHEET_INVALID", e.to_string()))?;
     let groups = to_store(groups);
-    match replace_id {
-        Some(id) => {
-            let (template, previous) = store.replace_template_groups(id, groups).map_err(resume_error)?;
-            Ok(ImportResult { template: TemplateSummary::from(&template), previous_field_count: Some(previous) })
-        }
+    let saved = match replace_id {
+        Some(id) => store.replace_template_groups(id, groups),
         None => {
             let name = truncate_template_name(&resume_sheet::template_name_from_file(file_name));
-            let template = store.create_template(&name, groups).map_err(resume_error)?;
-            Ok(ImportResult { template: TemplateSummary::from(&template), previous_field_count: None })
+            store.create_template(&name, groups)
         }
-    }
+    };
+    saved.map(ImportResult::from).map_err(resume_error)
 }
 
 /// 目标没有 `.xlsx` 后缀（不分大小写）就整段追加，不是替换已有后缀：
@@ -182,74 +189,8 @@ pub fn get_profile(store: &ArchiveStore) -> Result<ProfileRecord, CommandError> 
     store.get_profile().map_err(resume_error)
 }
 
-// 与插件 `profile-fields.js` 的 SECRET_LABEL / SECRET_VALUE 同一口径。
-fn secret_label() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret").unwrap())
-}
-
-fn secret_value() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)(密码|口令|验证码|校验码|授权码|密钥|令牌|password|passwd|pwd|token|secret)\s*[:=：]\s*\S").unwrap()
-    })
-}
-
-/// 命中像密码的内容时给不给用户看字段名：`values`/`family` 的 key 是内部字段 id
-/// （比如 `"skills"`），不是用户自己写的文本，报出来没有意义还可能造成误解；
-/// `custom` 的 key 是用户自己填的标签，点名反而更清楚是哪一项。
-enum SecretHit {
-    /// `custom` 里命中的，带着用户自己写的字段名。
-    Named(String),
-    /// `values` 或 `family` 里命中的，只知道内部字段 id，不适合展示。
-    Unnamed,
-}
-
-/// 找第一处像密码的内容，给提示用；没有返回 None。
-fn secret_like(profile: &Value) -> Option<SecretHit> {
-    let strings = |v: Option<&Value>| -> Vec<(String, String)> {
-        v.and_then(Value::as_object)
-            .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
-            .unwrap_or_default()
-    };
-    for (_, value) in strings(profile.get("values")) {
-        if secret_value().is_match(&value) {
-            return Some(SecretHit::Unnamed);
-        }
-    }
-    for member in profile.get("family").and_then(Value::as_array).into_iter().flatten() {
-        for (_, value) in strings(Some(member)) {
-            if secret_value().is_match(&value) {
-                return Some(SecretHit::Unnamed);
-            }
-        }
-    }
-    for item in profile.get("custom").and_then(Value::as_array).into_iter().flatten() {
-        let key = item.get("key").and_then(Value::as_str).unwrap_or("");
-        let value = item.get("value").and_then(Value::as_str).unwrap_or("");
-        if secret_label().is_match(key) || secret_value().is_match(value) {
-            return Some(SecretHit::Named(key.to_string()));
-        }
-    }
-    None
-}
-
+/// 密码类内容由存储层拒绝，提示原样带 `VALIDATION` 返回。
 pub fn save_profile(store: &ArchiveStore, profile: Value, revision: i64) -> Result<ProfileRecord, CommandError> {
-    match secret_like(&profile) {
-        Some(SecretHit::Named(name)) => {
-            return Err(error(
-                "VALIDATION",
-                format!("「{name}」看起来是密码或验证码，这类内容不存进档案（档案会随备份带走）。"),
-            ));
-        }
-        Some(SecretHit::Unnamed) => {
-            return Err(error(
-                "VALIDATION",
-                "有一项内容看起来是密码或验证码，这类内容不存进档案（档案会随备份带走）。",
-            ));
-        }
-        None => {}
-    }
     store.save_profile(profile, revision).map_err(resume_error)
 }
 
@@ -273,6 +214,24 @@ mod tests {
         assert_eq!(result.template.name, "校招简历");
         assert_eq!(result.template.field_count, 1);
         assert_eq!(result.previous_field_count, None);
+    }
+
+    #[test]
+    fn secret_like_rows_are_dropped_on_import_and_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store(dir.path());
+        let path = dir.path().join("t.csv");
+        std::fs::write(&path, "一级分类,字段名,值\n账号,邮箱,a@example.com\n账号,邮箱密码,abc123\n").unwrap();
+        let result = import_template(&db, &path, None).unwrap();
+        assert_eq!(result.template.field_count, 1);
+        assert_eq!(result.skipped_secret_fields, 1);
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["skippedSecretFields"], 1);
+        let fields = &db.get_template(&result.template.id).unwrap().unwrap().groups[0].fields;
+        assert!(fields.iter().all(|f| f.key != "邮箱密码" && f.value != "abc123"));
+        let replaced = import_template(&db, &path, Some(&result.template.id)).unwrap();
+        assert_eq!(replaced.skipped_secret_fields, 1);
+        assert_eq!(replaced.previous_field_count, Some(1));
     }
 
     #[test]
@@ -330,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn secret_like_profile_content_is_refused() {
+    fn secret_like_profile_content_is_refused_with_a_chinese_message() {
         let dir = tempfile::tempdir().unwrap();
         let db = store(dir.path());
         // custom 的 key 是用户自己写的文本，点名它没问题。

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::StoreError;
+use crate::resume_secrets::{is_secret_label, is_secret_value};
 use crate::timeutil::now_utc;
 use crate::tx::{new_uuid, StoreTx};
 
@@ -41,6 +42,16 @@ pub struct ResumeTemplate {
     pub name: String,
     pub groups: Vec<TemplateGroup>,
     pub updated_at: String,
+}
+
+/// 新建或重新导入之后的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedTemplate {
+    pub template: ResumeTemplate,
+    /// 重新导入时覆盖前的字段数；新建时为 `None`。
+    pub previous_field_count: Option<usize>,
+    /// 看起来是密码或验证码、没有存进档案的字段数（data-privacy §4.1）。
+    pub skipped_secret_fields: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -132,13 +143,34 @@ fn groups_json(groups: &[TemplateGroup]) -> Result<String, StoreError> {
     Ok(json)
 }
 
-fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(Vec<TemplateGroup>, String), StoreError> {
-    let groups = normalize_groups(groups);
+/// 规范化之后剔除像密码、验证码的字段：字段名像（「邮箱密码」），或内容里写着
+/// 「密码：xxx」。剔完变空的组一并丢掉。返回剩下的分组和剔掉的字段数。
+fn without_secrets(groups: Vec<TemplateGroup>) -> (Vec<TemplateGroup>, usize) {
+    let mut skipped = 0;
+    let kept = groups
+        .into_iter()
+        .filter_map(|g| {
+            let before = g.fields.len();
+            let fields: Vec<TemplateField> = g
+                .fields
+                .into_iter()
+                .filter(|f| !is_secret_label(&f.key) && !is_secret_value(&f.value))
+                .collect();
+            skipped += before - fields.len();
+            (!fields.is_empty()).then_some(TemplateGroup { name: g.name, fields })
+        })
+        .collect();
+    (kept, skipped)
+}
+
+/// 返回要存的 JSON 和剔掉的密码类字段数。
+fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(String, usize), StoreError> {
+    let (groups, skipped) = without_secrets(normalize_groups(groups));
     if groups.is_empty() {
         return Err(invalid("未解析到任何字段，请检查 Excel 格式。"));
     }
     let json = groups_json(&groups)?;
-    Ok((groups, json))
+    Ok((json, skipped))
 }
 
 /// 「我的信息」只校验形状和大小；字段级规范化在前端用插件同一份
@@ -176,6 +208,37 @@ pub fn validate_profile(profile: &Value) -> Result<(), StoreError> {
             "「我的信息」太大（超过 {} KB）。",
             MAX_PROFILE_BYTES / 1024
         )));
+    }
+    Ok(())
+}
+
+/// 找「我的信息」里第一处像密码的内容，给出提示。`values` / `family` 的 key 是内部字段 id
+/// （比如 `"skills"`），不是用户写的文本，报出来没有意义还可能造成误解，所以只给笼统的提示；
+/// `custom` 的 key 是用户自己填的标签，点名反而更清楚是哪一项。
+fn reject_secrets(profile: &Value) -> Result<(), StoreError> {
+    const GENERIC: &str = "有一项内容看起来是密码或验证码，这类内容不存进档案（档案会随备份带走）。";
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_object()
+            .map(|o| o.values().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let values = profile.get("values").map(strings).unwrap_or_default();
+    if values.iter().any(|v| is_secret_value(v)) {
+        return Err(invalid(GENERIC));
+    }
+    for member in profile.get("family").and_then(Value::as_array).into_iter().flatten() {
+        if strings(member).iter().any(|v| is_secret_value(v)) {
+            return Err(invalid(GENERIC));
+        }
+    }
+    for item in profile.get("custom").and_then(Value::as_array).into_iter().flatten() {
+        let key = item.get("key").and_then(Value::as_str).unwrap_or("");
+        let value = item.get("value").and_then(Value::as_str).unwrap_or("");
+        if is_secret_label(key) || is_secret_value(value) {
+            return Err(invalid(format!(
+                "「{key}」看起来是密码或验证码，这类内容不存进档案（档案会随备份带走）。"
+            )));
+        }
     }
     Ok(())
 }
@@ -268,8 +331,9 @@ impl StoreTx<'_> {
     }
 
     /// 新模板插到最前并设为当前（插件导入与简历解析都是这样）。
-    pub fn create_template(&mut self, name: &str, groups: Vec<TemplateGroup>) -> Result<ResumeTemplate, StoreError> {
-        let (_, json) = checked_groups(groups)?;
+    /// 像密码、验证码的字段不存，数量放在返回值里让界面说出来。
+    pub fn create_template(&mut self, name: &str, groups: Vec<TemplateGroup>) -> Result<SavedTemplate, StoreError> {
+        let (json, skipped_secret_fields) = checked_groups(groups)?;
         let name = self.unique_template_name(&clean_name(name))?;
         let position: i64 = self.conn().query_row(
             "SELECT COALESCE(MIN(position), 1) - 1 FROM resume_templates",
@@ -284,29 +348,32 @@ impl StoreTx<'_> {
             params![id, name, json, position, now],
         )?;
         self.set_active_template(&id)?;
-        self.get_template(&id)?
-            .ok_or_else(|| StoreError::Internal("template vanished in same transaction".into()))
+        let template = self
+            .get_template(&id)?
+            .ok_or_else(|| StoreError::Internal("template vanished in same transaction".into()))?;
+        Ok(SavedTemplate { template, previous_field_count: None, skipped_secret_fields })
     }
 
-    /// 「重新导入」：换掉分组，名字与位置不动，设为当前。返回覆盖前的字段数。
-    pub fn replace_template_groups(
-        &mut self,
-        id: &str,
-        groups: Vec<TemplateGroup>,
-    ) -> Result<(ResumeTemplate, usize), StoreError> {
+    /// 「重新导入」：换掉分组，名字与位置不动，设为当前。结果里带覆盖前的字段数；
+    /// 密码类字段和新建时一样剔除并计数。
+    pub fn replace_template_groups(&mut self, id: &str, groups: Vec<TemplateGroup>) -> Result<SavedTemplate, StoreError> {
         let previous = self
             .get_template(id)?
             .ok_or_else(|| StoreError::NotFound(format!("template {id}")))?;
-        let (_, json) = checked_groups(groups)?;
+        let (json, skipped_secret_fields) = checked_groups(groups)?;
         self.conn().execute(
             "UPDATE resume_templates SET groups_json = ?1, updated_at = ?2 WHERE id = ?3",
             params![json, now_utc(), id],
         )?;
         self.set_active_template(id)?;
-        let updated = self
+        let template = self
             .get_template(id)?
             .ok_or_else(|| StoreError::Internal("template vanished in same transaction".into()))?;
-        Ok((updated, field_count(&previous.groups)))
+        Ok(SavedTemplate {
+            template,
+            previous_field_count: Some(field_count(&previous.groups)),
+            skipped_secret_fields,
+        })
     }
 
     /// 改名不自动加序号：用户明确要这个名字，撞了就说出来。
@@ -381,8 +448,10 @@ impl StoreTx<'_> {
     }
 
     /// `expected_revision` 是调用方读到的版本号；对不上返回 `Conflict`，不覆盖别处刚存的内容。
+    /// 像密码、验证码的内容整份拒绝（不悄悄删掉用户正在编辑的字段）。
     pub fn save_profile(&mut self, profile: Value, expected_revision: i64) -> Result<ProfileRecord, StoreError> {
         validate_profile(&profile)?;
+        reject_secrets(&profile)?;
         self.ensure_resume_state()?;
         let current = self.get_profile()?.revision;
         if current != expected_revision {

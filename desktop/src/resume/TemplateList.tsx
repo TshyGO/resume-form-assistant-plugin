@@ -60,7 +60,7 @@ export function TemplateList({ pickers }: { pickers: FilePickers | null }) {
         const path = await pickers.open();
         if (!path) return;
         const result = await invoke<ImportResultView>("import_resume_template_cmd", { path, replaceId });
-        setNotice(importMessage(result.template.fieldCount, result.previousFieldCount));
+        setNotice(importMessage(result.template.fieldCount, result.previousFieldCount, result.skippedSecretFields));
         await reload();
       },
       // 对齐插件 popup.js handleTemplateImport：导入失败按是否在覆盖一份已有模板给出不同的收尾提示。

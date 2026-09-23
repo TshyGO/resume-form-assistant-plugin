@@ -428,6 +428,8 @@ export interface ResumeTemplateView {
 export interface ImportResultView {
   template: TemplateSummary;
   previousFieldCount: number | null;
+  /** 看起来是密码或验证码、没有导入的字段数。 */
+  skippedSecretFields: number;
 }
 
 export interface ProfileRecordView {

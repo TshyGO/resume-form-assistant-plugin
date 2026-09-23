@@ -8,7 +8,7 @@ use crate::error::StoreError;
 use crate::evidence::AttachmentRefReport;
 use crate::model::*;
 use crate::receipts::{SnapshotCompletion, SnapshotProgress, SnapshotState};
-use crate::resume::{ProfileRecord, ResumeOverview, ResumeTemplate, TemplateGroup};
+use crate::resume::{ProfileRecord, ResumeOverview, ResumeTemplate, SavedTemplate, TemplateGroup};
 use crate::store::ArchiveStore;
 use crate::suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 use crate::todos::TodoPatch;
@@ -344,7 +344,7 @@ impl ArchiveStore {
         self.transaction(|tx| tx.get_template(id))
     }
 
-    pub fn create_template(&self, name: &str, groups: Vec<TemplateGroup>) -> Result<ResumeTemplate, StoreError> {
+    pub fn create_template(&self, name: &str, groups: Vec<TemplateGroup>) -> Result<SavedTemplate, StoreError> {
         self.transaction(|tx| tx.create_template(name, groups))
     }
 
@@ -352,7 +352,7 @@ impl ArchiveStore {
         &self,
         id: &str,
         groups: Vec<TemplateGroup>,
-    ) -> Result<(ResumeTemplate, usize), StoreError> {
+    ) -> Result<SavedTemplate, StoreError> {
         self.transaction(|tx| tx.replace_template_groups(id, groups))
     }
 

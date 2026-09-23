@@ -68,6 +68,7 @@ name = "archive-store"
 version = "0.1.0"
 dependencies = [
  "fslock",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

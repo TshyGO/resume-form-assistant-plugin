@@ -4,7 +4,17 @@ export interface Notice {
 }
 
 // 手改完 Excel 之后，用户一眼能核对的只有字段数，所以要说出来；数量没变多半是选错了文件。
-export function importMessage(fieldCount: number, previous: number | null): Notice {
+// 像密码、验证码的字段桌面不存（data-privacy §4.1），剔掉了几个也要说，免得用户以为漏导。
+export function importMessage(fieldCount: number, previous: number | null, skippedSecretFields = 0): Notice {
+  const base = baseImportMessage(fieldCount, previous);
+  if (skippedSecretFields <= 0) return base;
+  return {
+    tone: base.tone === "ok" ? "warn" : base.tone,
+    text: `${base.text}另有 ${skippedSecretFields} 个像密码或验证码的字段没有导入。`,
+  };
+}
+
+function baseImportMessage(fieldCount: number, previous: number | null): Notice {
   if (previous === null) return { tone: "ok", text: `简历模板导入成功，共 ${fieldCount} 个字段。` };
   if (previous === fieldCount) {
     return {
