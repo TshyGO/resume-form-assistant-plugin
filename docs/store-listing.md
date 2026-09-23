@@ -4,6 +4,7 @@
 [#29 的评论](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)。
 
 - 扩展 ID：`diagjmploldedipjdenmecmjokckelkl`（已建 item，状态 Draft）
+- 正式发布的构建、打包和送审见 [chrome-web-store-release.md](chrome-web-store-release.md)。这份材料仍然要在 Developer Dashboard 里填好，流水线不会替你创建商店条目，也不会自动把审核通过的版本公开给所有用户。
 - 发布者账号与 Edge 商店的情况见 #29，这里不重复。
 - **ID 固定证据**：`manifest.json` 的 `key` 是 SPKI DER 公钥的 base64；对它的字节做 SHA-256、取前 16 字节并按 a–p 映射，得到上面的 ID。仓库测试 `tests/extension-id.test.js` 会在 CI 重新计算并断言，Rust host 白名单与本文件也被同一测试锁定。
 

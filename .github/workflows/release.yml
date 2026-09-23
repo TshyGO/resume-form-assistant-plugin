@@ -1,36 +1,166 @@
 name: Release Extension
 
+# 普通 push / PR 只走 test.yml。这里只在维护者发布正式 GitHub Release 之后运行，
+# 或者由维护者手动 dry-run / 上线已暂存的版本。桌面的 desktop-v* Release 不是 vX.Y.Z，
+# 下面的 if 会跳过，避免桌面发版把插件送进商店。
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只做检查、测试和打包，不改 Release，也不接触商店
+        type: boolean
+        default: true
+      release_staged:
+        description: 不上传新包。商店里这个版本已是 STAGED 时，才把它正式公开
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # 真正会改商店的运行共用一把锁，后来的排队而不是取消正在上传的那次。
+  # dry-run 不碰商店，也不去挡正式发布。
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run && inputs.release_staged == false) && format('chrome-web-store-dry-{0}', github.run_id) || 'chrome-web-store-publish' }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  release-staged:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_staged
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Release commit must be on main
+        run: git merge-base --is-ancestor HEAD origin/main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Publish the staged store revision
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_WEB_STORE_CREDENTIALS: ${{ secrets.CHROME_WEB_STORE_CREDENTIALS }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: node desktop/scripts/chrome-web-store.js release-staged
+
+  publish:
+    if: >-
+      (github.event_name == 'release' &&
+       github.event.release.prerelease == false &&
+       startsWith(github.event.release.tag_name, 'v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_staged == false)
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          node-version: '22'
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || github.sha }}
 
-      - name: Verify release version and tests
-        run: |
-          node -e "const m=require('./manifest.json'); if ('v'+m.version !== process.env.GITHUB_REF_NAME) throw Error('Tag/manifest version mismatch')"
-          node --test tests/*.test.js
-          node desktop/scripts/check-plugin-release-allowlist.js
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
-      - name: Build extension zip
+      - name: Install dev dependencies
+        run: npm ci
+
+      - name: Check JavaScript syntax
         run: |
-          ZIP_NAME="resume-pro-${GITHUB_REF_NAME}.zip"
+          node --check ai-helpers.js
+          node --check form-agent.js
+          node --check background.js
+          node --check ai-worker.js
+          node --check ai-host.js
+          node --check ai-client.js
+          node --check ai-models.js
+          node --check content.js
+          node --check popup.js
+          node --check resume-utils.js
+          node --check profile-fields.js
+          node --check desktop/scripts/chrome-web-store.js
+
+      - name: Verify manifest and bundled PDF assets
+        run: |
+          node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
+          test -f vendor/pdfjs/pdf.min.mjs
+          test -f vendor/pdfjs/pdf.worker.min.mjs
+          test -f vendor/pdfjs/LICENSE
+          test -f vendor/pdfjs/cmaps/LICENSE
+          test -f vendor/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap
+          test "$(find vendor/pdfjs/cmaps -maxdepth 1 -type f -name '*.bcmap' | wc -l)" -eq 168
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check the release archive allowlist
+        run: node desktop/scripts/check-plugin-release-allowlist.js
+
+      - name: Check tag matches the extension version
+        if: github.event_name == 'release' || inputs.dry_run == false
+        env:
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          PRERELEASE: ${{ github.event.release.prerelease && 'true' || 'false' }}
+        run: node desktop/scripts/chrome-web-store.js check-release --tag "$TAG" --prerelease "$PRERELEASE"
+
+      - name: Release commit must be on main
+        if: github.event_name == 'release' || inputs.dry_run == false
+        run: git merge-base --is-ancestor HEAD origin/main
+
+      - name: Pack the Chrome extension zip
+        run: |
+          set -euo pipefail
+          ZIP_NAME="$(node desktop/scripts/chrome-web-store.js zip-name)"
           node desktop/scripts/pack-plugin.js --output "$ZIP_NAME"
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          node desktop/scripts/chrome-web-store.js verify-zip --zip "$ZIP_NAME"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload the dry-run zip
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: ${{ env.ZIP_NAME }}
-          generate_release_notes: true
+          name: chrome-extension-zip
+          path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+
+      - name: Attach the same zip to the GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          ZIP_NAME: ${{ env.ZIP_NAME }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$ZIP_NAME" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Upload to Chrome Web Store and submit for review
+        if: github.event_name == 'release' || inputs.dry_run == false
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_WEB_STORE_CREDENTIALS: ${{ secrets.CHROME_WEB_STORE_CREDENTIALS }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          ZIP_NAME: ${{ env.ZIP_NAME }}
+        run: node desktop/scripts/chrome-web-store.js publish --zip "$ZIP_NAME"
