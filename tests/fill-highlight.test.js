@@ -201,6 +201,7 @@ function loadHighlightHelpers(options = {}) {
 
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   vm.runInNewContext(contentJs, context);
+  context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
 
   return {
     helpers: context.self.ResumeProHighlightTest,
@@ -480,7 +481,8 @@ test("chip addition writes the combined value and restores the caret", async () 
   assert.equal(input.value, "ACB");
   assert.equal(input.selectionStart, 2);
   assert.equal(input.selectionEnd, 2);
-  assert.equal(input.dispatchedEvents.length, 2);
+  // input、change，以及这个测试桩没有 blur() 时补上的 blur 事件。
+  assert.equal(input.dispatchedEvents.length, 3);
 });
 
 test("a nonempty input waits for add or replace, while a selected chip is removed directly", async () => {
