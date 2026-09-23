@@ -415,7 +415,10 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
     if req.message_type == MessageType::ResumeUpdate
         && req.payload["op"] == "setActiveTemplate"
         && value.get("ok") == Some(&Value::Bool(true))
-        && value["payload"]["activeTemplateId"] != req.payload["templateId"]
+        && value["payload"]["activeTemplateId"]
+            .as_str()
+            .map(|active| active.eq_ignore_ascii_case(req.payload["templateId"].as_str().unwrap()))
+            != Some(true)
     {
         return Err(invalid("resume.update activeTemplateId does not match requested templateId"));
     }

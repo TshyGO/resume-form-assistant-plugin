@@ -99,7 +99,8 @@
     {"id": "resume-read-v1-envelope", "path": "requests/resume-read-v1-envelope.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
     {"id": "health-v2-envelope", "path": "requests/health-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "job-save-v2-envelope", "path": "requests/job-save-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "resume-update-nested-secret-key", "path": "requests/resume-update-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "resume-update-nested-secret-key", "path": "requests/resume-update-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "resume-update-set-active-uppercase", "path": "requests/resume-update-set-active-uppercase.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
@@ -148,6 +149,7 @@
     {"id": "handshake-v2-response-to-v1", "path": "responses/handshake-v2-response-to-v1.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}, "request": "requests/handshake-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}},
     {"id": "resume-update-active-match", "path": "responses/resume-update-active-match.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": true}},
     {"id": "resume-update-active-mismatch", "path": "responses/resume-update-active-mismatch.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
-    {"id": "resume-update-conflict", "path": "responses/resume-update-conflict.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-ok.json", "strict": {"accept": true}}
+    {"id": "resume-update-conflict", "path": "responses/resume-update-conflict.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-ok.json", "strict": {"accept": true}},
+    {"id": "resume-update-active-case-equivalent", "path": "responses/resume-update-active-case-equivalent.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-uppercase.json", "strict": {"accept": true}}
   ]
 }

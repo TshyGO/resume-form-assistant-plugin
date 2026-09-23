@@ -462,7 +462,8 @@ export function validateResponseForRequest(value, request) {
     }
   }
   if (request.messageType === "resume.update" && request.payload?.op === "setActiveTemplate" &&
-      value.ok === true && value.payload?.activeTemplateId !== request.payload.templateId) {
+      value.ok === true && (typeof value.payload?.activeTemplateId !== "string" ||
+        value.payload.activeTemplateId.toLowerCase() !== request.payload.templateId.toLowerCase())) {
     throw fail("invalid_payload", "resume.update activeTemplateId does not match requested templateId");
   }
   if (request.messageType === "snapshot.chunk") {
