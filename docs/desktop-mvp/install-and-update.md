@@ -72,7 +72,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 | | tag | 版本号来源 | 工作流 |
 | --- | --- | --- | --- |
-| 浏览器插件 | `v0.4.0` | `manifest.json` | `release.yml` |
+| 浏览器插件 | `v0.4.0` | `manifest.json` | `release.yml`（GitHub Release 发布后触发，见 [chrome-web-store-release.md](../chrome-web-store-release.md)） |
 | 桌面 | `desktop-v0.4.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
 
 两个命名空间不能重叠，否则一次桌面发版会顺手把插件也发出去。这条有测试盯着（`check-desktop-release.test.js`）。

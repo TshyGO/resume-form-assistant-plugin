@@ -114,8 +114,8 @@ export function releaseKind(tag) {
 }
 
 /**
- * 插件的 release 工作流按 `v*.*.*` 触发。桌面的 tag 必须落在它之外，
- * 否则一次桌面发版会顺手发一个插件包出去。
+ * 插件正式 tag 的形状是 `v1.2.3`。桌面 tag 以 `desktop-v` 开头，
+ * 不会是这个形状，所以桌面发版不会走进插件的商店发布。
  */
 export function tagIsPluginShaped(tag) {
   return /^v\d+\.\d+\.\d+$/.test(tag);

@@ -245,12 +245,15 @@ test("仓库现在的配置本身就是合规的", () => {
   assertMacOsAdHocSigning(tauriConf);
 });
 
-test("两个 release 工作流的 tag 触发条件不重叠", () => {
+test("插件商店发布不由分支 push 触发，桌面 tag 也不会被当成插件 tag", () => {
   const plugin = readText(join(repo, ".github", "workflows", "release.yml"));
   const desktopFlow = readText(join(repo, ".github", "workflows", "desktop-release.yml"));
-  assert.match(plugin, /tags:\s*\n\s*-\s*['"]v\*\.\*\.\*['"]/);
+  assert.match(plugin, /release:\n\s+types:\s*\[published\]/);
+  assert.doesNotMatch(plugin, /pull_request:/);
+  assert.doesNotMatch(plugin, /\n {2}push:\n/);
   assert.match(desktopFlow, new RegExp(`tags:\\s*\\n\\s*-\\s*['"]${DESKTOP_TAG_PREFIX}\\*['"]`));
   assert.equal(tagIsPluginShaped(`${DESKTOP_TAG_PREFIX}0.1.0`), false);
+  assert.equal(tagIsPluginShaped("v0.4.0"), true);
 });
 
 test("发版工作流自己也要跑这个检查，并且把该说的话说清楚", () => {
