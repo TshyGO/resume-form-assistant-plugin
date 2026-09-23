@@ -57,7 +57,11 @@ function showRoute(name: string | undefined) {
 
 document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
   btn.addEventListener("click", () => {
+    // 从别的页切进「简历」时重新读取：插件或恢复备份可能在这期间改过档案。
+    // 已经在「简历」页时再点不刷新，免得把正在填的「我的信息」冲掉。
+    const enteringResume = btn.dataset.route === "resume" && views.resume.classList.contains("hidden");
     showRoute(btn.dataset.route);
+    if (enteringResume) resumeView.refresh();
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
     if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
@@ -292,7 +296,7 @@ const resumePickers =
           (await dialog.save?.({ defaultPath: suggested, filters: [{ name: "Excel", extensions: ["xlsx"] }] })) ?? null,
       }
     : null;
-mountResume(must("resume-root"), invoke ?? null, resumePickers);
+const resumeView = mountResume(must("resume-root"), invoke ?? null, resumePickers);
 
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
@@ -318,7 +322,7 @@ const showTodos = mountTodos(command);
 
 // 备份与恢复要用原生文件对话框。浏览器里跑（没有 Tauri）时两个都是 null，
 // 界面会如实说「请在桌面程序里导出」，而不是给一个点了没反应的按钮。
-const showBackup = mountBackup(command, {
+const backupPickers = {
   save: dialog?.save
     ? async (suggested: string) => (await dialog.save?.({ defaultPath: suggested })) ?? null
     : null,
@@ -332,7 +336,9 @@ const showBackup = mountBackup(command, {
         return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
       }
     : null,
-});
+};
+// 恢复 / 换回会把档案整个换掉，「简历」页手里的模板列表和「我的信息」版本号都过时了。
+const showBackup = mountBackup(command, backupPickers, undefined, () => resumeView.refresh());
 void renderReminderSettings().catch(() => {});
 
 showRoute("applications");

@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { expect, test } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,17 +15,23 @@ const overview: ResumeOverview = {
   activeTemplateId: "t2",
 };
 
-function mount(handler: (command: string, args?: Record<string, unknown>) => unknown, pickers: FilePickers | null) {
+function mount(
+  handler: (command: string, args?: Record<string, unknown>) => unknown,
+  pickers: FilePickers | null,
+  { strict = false }: { strict?: boolean } = {},
+) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const invoke = (async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     return handler(command, args);
   }) as Invoke;
-  render(
+  const tree = (
     <InvokeProvider invoke={invoke}>
       <TemplateList pickers={pickers} />
-    </InvokeProvider>,
+    </InvokeProvider>
   );
+  // 桌面程序里是 StrictMode 挂的（react/mount.tsx），会把状态更新函数跑两遍。
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   return calls;
 }
 
@@ -187,7 +194,7 @@ test("重新导入失败时补一句「本次导入未生效，原模板保持�
   expect(await screen.findByText("第 3 行缺少「字段名」（第二列）。本次导入未生效，原模板保持不变。")).toBeTruthy();
 });
 
-test("预览展开后重新导入，预览跟着刷新而不是留着旧内容", async () => {
+test.each([false, true])("预览展开后重新导入，预览跟着刷新而不是留着旧内容（StrictMode: %s）", async (strict) => {
   const user = userEvent.setup();
   let previewCalls = 0;
   let currentOverview = overview;
@@ -207,7 +214,7 @@ test("预览展开后重新导入，预览跟着刷新而不是留着旧内容",
       return { template: { id: "t1", name: "校招简历", fieldCount: 14, updatedAt: "2026-09-23T01:00:00Z" }, previousFieldCount: 12, skippedSecretFields: 0 };
     }
     return currentOverview;
-  }, pickers("/tmp/改.xlsx", null));
+  }, pickers("/tmp/改.xlsx", null), { strict });
 
   const row = await screen.findByRole("listitem", { name: /校招简历/ });
   await user.click(within(row).getByRole("button", { name: "预览" }));
@@ -216,6 +223,8 @@ test("预览展开后重新导入，预览跟着刷新而不是留着旧内容",
   await user.click(within(row).getByRole("button", { name: "重新导入" }));
   await waitFor(() => expect(within(row).getByText("新内容")).toBeTruthy());
   expect(within(row).queryByText("旧内容")).toBeNull();
+  // 展开一次、重新导入后刷新一次；StrictMode 下也不能多拉。
+  await new Promise((resolve) => setTimeout(resolve, 20));
   expect(calls.filter((c) => c.command === "get_resume_template_cmd")).toHaveLength(2);
 });
 

@@ -15,15 +15,6 @@ use crate::commands::CommandError;
 /// 简历模板的 Excel 不会有几 MB；更大的多半是选错了文件，不读进内存。
 pub const MAX_SHEET_BYTES: u64 = 5 * 1024 * 1024;
 
-/// 模板名的字数上限。插件那边没有限制，但档案库整库进 D12 备份，
-/// 一个离谱长的模板名没有意义，还会把列表挤成一团。
-const MAX_TEMPLATE_NAME_CHARS: usize = 100;
-
-/// 导入自动取名时截到的字数，比 [MAX_TEMPLATE_NAME_CHARS] 小一截：
-/// 存储层可能为了去重加上「 (2)」这类后缀，留出余量才能保证常见情况下
-/// 最终名字仍然不超过 100 个字。
-const MAX_IMPORTED_NAME_CHARS: usize = 96;
-
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
@@ -93,17 +84,9 @@ pub fn get_template(store: &ArchiveStore, id: &str) -> Result<ResumeTemplate, Co
         .ok_or_else(|| resume_error(StoreError::NotFound(id.into())))
 }
 
-/// 超过上限就截到前 [MAX_IMPORTED_NAME_CHARS] 个字。导入是从文件名自动取的名字，
-/// 用户没有机会先改再确认，截断比直接报错更顺手。
-fn truncate_template_name(name: &str) -> String {
-    if name.chars().count() > MAX_IMPORTED_NAME_CHARS {
-        name.chars().take(MAX_IMPORTED_NAME_CHARS).collect()
-    } else {
-        name.to_string()
-    }
-}
-
-pub fn import_template(store: &ArchiveStore, path: &Path, replace_id: Option<&str>) -> Result<ImportResult, CommandError> {
+/// 读并解析用户挑的表，不碰档案：放在档案锁外面做，慢盘上的大文件不会卡住别的命令。
+/// 返回按文件名取的模板名（截断与去重由存储层做）和解析出的分组。
+pub fn read_sheet(path: &Path) -> Result<(String, Vec<TemplateGroup>), CommandError> {
     let meta = std::fs::metadata(path).map_err(|_| error("SHEET_UNREADABLE", "读不到这个文件。"))?;
     if meta.len() > MAX_SHEET_BYTES {
         return Err(error("SHEET_TOO_LARGE", "文件超过 5 MB，不像是简历模板，确认选对了文件。"));
@@ -111,13 +94,19 @@ pub fn import_template(store: &ArchiveStore, path: &Path, replace_id: Option<&st
     let bytes = std::fs::read(path).map_err(|_| error("SHEET_UNREADABLE", "读不到这个文件。"))?;
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let groups = resume_sheet::parse(file_name, &bytes).map_err(|e| error("SHEET_INVALID", e.to_string()))?;
-    let groups = to_store(groups);
+    Ok((resume_sheet::template_name_from_file(file_name), to_store(groups)))
+}
+
+/// 把 [read_sheet] 的结果存进档案：`replace_id` 为空时新建（用 `name`），否则覆盖那个模板。
+pub fn import_template(
+    store: &ArchiveStore,
+    name: &str,
+    groups: Vec<TemplateGroup>,
+    replace_id: Option<&str>,
+) -> Result<ImportResult, CommandError> {
     let saved = match replace_id {
         Some(id) => store.replace_template_groups(id, groups),
-        None => {
-            let name = truncate_template_name(&resume_sheet::template_name_from_file(file_name));
-            store.create_template(&name, groups)
-        }
+        None => store.create_template(name, groups),
     };
     saved.map(ImportResult::from).map_err(resume_error)
 }
@@ -167,11 +156,8 @@ pub fn export_template(store: &ArchiveStore, id: &str, path: &Path) -> Result<()
     })
 }
 
+/// 字数上限（100 字，首尾空白不计）和重名由存储层把关。
 pub fn rename_template(store: &ArchiveStore, id: &str, name: &str) -> Result<TemplateSummary, CommandError> {
-    // 前后空白不计入字数：用户粘贴带首尾空格的名字，不该因为空白超限。
-    if name.trim().chars().count() > MAX_TEMPLATE_NAME_CHARS {
-        return Err(error("VALIDATION", "模板名太长了，请控制在 100 个字以内。"));
-    }
     store.rename_template(id, name).map(|t| TemplateSummary::from(&t)).map_err(resume_error)
 }
 
@@ -204,13 +190,35 @@ mod tests {
         open_store(&dir.join("archive"), &dir.join("current.json")).unwrap()
     }
 
+    /// 与 `import_resume_template_cmd` 同样的两步：先在锁外读表，再进存储。
+    fn import(db: &ArchiveStore, path: &Path, replace_id: Option<&str>) -> Result<ImportResult, CommandError> {
+        let (name, groups) = read_sheet(path)?;
+        import_template(db, &name, groups, replace_id)
+    }
+
+    #[test]
+    fn reading_a_sheet_needs_no_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("校招简历.csv");
+        std::fs::write(&path, "一级分类,字段名,值\n基本信息,姓名,张三\n").unwrap();
+        let (name, groups) = read_sheet(&path).unwrap();
+        assert_eq!(name, "校招简历");
+        assert_eq!(
+            groups,
+            vec![TemplateGroup { name: "基本信息".into(), fields: vec![TemplateField { key: "姓名".into(), value: "张三".into() }] }]
+        );
+        let big = dir.path().join("big.csv");
+        std::fs::write(&big, vec![b'a'; (MAX_SHEET_BYTES + 1) as usize]).unwrap();
+        assert_eq!(read_sheet(&big).unwrap_err().code, "SHEET_TOO_LARGE");
+    }
+
     #[test]
     fn a_csv_import_creates_a_template_named_after_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let db = store(dir.path());
         let path = dir.path().join("校招简历.csv");
         std::fs::write(&path, "一级分类,字段名,值\n基本信息,姓名,张三\n").unwrap();
-        let result = import_template(&db, &path, None).unwrap();
+        let result = import(&db, &path, None).unwrap();
         assert_eq!(result.template.name, "校招简历");
         assert_eq!(result.template.field_count, 1);
         assert_eq!(result.previous_field_count, None);
@@ -222,14 +230,14 @@ mod tests {
         let db = store(dir.path());
         let path = dir.path().join("t.csv");
         std::fs::write(&path, "一级分类,字段名,值\n账号,邮箱,a@example.com\n账号,邮箱密码,abc123\n").unwrap();
-        let result = import_template(&db, &path, None).unwrap();
+        let result = import(&db, &path, None).unwrap();
         assert_eq!(result.template.field_count, 1);
         assert_eq!(result.skipped_secret_fields, 1);
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["skippedSecretFields"], 1);
         let fields = &db.get_template(&result.template.id).unwrap().unwrap().groups[0].fields;
         assert!(fields.iter().all(|f| f.key != "邮箱密码" && f.value != "abc123"));
-        let replaced = import_template(&db, &path, Some(&result.template.id)).unwrap();
+        let replaced = import(&db, &path, Some(&result.template.id)).unwrap();
         assert_eq!(replaced.skipped_secret_fields, 1);
         assert_eq!(replaced.previous_field_count, Some(1));
     }
@@ -240,15 +248,15 @@ mod tests {
         let db = store(dir.path());
         let first = dir.path().join("a.csv");
         std::fs::write(&first, "一级分类,字段名,值\n组,k1,v\n组,k2,v\n").unwrap();
-        let created = import_template(&db, &first, None).unwrap().template;
+        let created = import(&db, &first, None).unwrap().template;
         let bad = dir.path().join("b.csv");
         std::fs::write(&bad, "一级分类,字段名,值\n组,,v\n").unwrap();
-        let err = import_template(&db, &bad, Some(&created.id)).unwrap_err();
+        let err = import(&db, &bad, Some(&created.id)).unwrap_err();
         assert_eq!(err.code, "SHEET_INVALID");
         assert_eq!(db.get_template(&created.id).unwrap().unwrap().groups.len(), 1);
         let good = dir.path().join("c.csv");
         std::fs::write(&good, "一级分类,字段名,值\n组,k,v\n").unwrap();
-        let replaced = import_template(&db, &good, Some(&created.id)).unwrap();
+        let replaced = import(&db, &good, Some(&created.id)).unwrap();
         assert_eq!(replaced.previous_field_count, Some(2));
         assert_eq!(replaced.template.field_count, 1);
         assert_eq!(replaced.template.name, "a");
@@ -260,10 +268,10 @@ mod tests {
         let db = store(dir.path());
         let src = dir.path().join("t.csv");
         std::fs::write(&src, "一级分类,字段名,值\n基本信息,手机号码,13800000000\n").unwrap();
-        let t = import_template(&db, &src, None).unwrap().template;
+        let t = import(&db, &src, None).unwrap().template;
         let out = dir.path().join("导出.xlsx");
         export_template(&db, &t.id, &out).unwrap();
-        let again = import_template(&db, &out, None).unwrap().template;
+        let again = import(&db, &out, None).unwrap().template;
         assert_eq!(
             db.get_template(&again.id).unwrap().unwrap().groups,
             db.get_template(&t.id).unwrap().unwrap().groups
@@ -276,7 +284,7 @@ mod tests {
         let db = store(dir.path());
         let path = dir.path().join("big.csv");
         std::fs::write(&path, vec![b'a'; (MAX_SHEET_BYTES + 1) as usize]).unwrap();
-        assert_eq!(import_template(&db, &path, None).unwrap_err().code, "SHEET_TOO_LARGE");
+        assert_eq!(import(&db, &path, None).unwrap_err().code, "SHEET_TOO_LARGE");
     }
 
     #[test]
@@ -320,7 +328,7 @@ mod tests {
         let db = store(dir.path());
         let path = dir.path().join("a.csv");
         std::fs::write(&path, "一级分类,字段名,值\n组,k,v\n").unwrap();
-        let created = import_template(&db, &path, None).unwrap().template;
+        let created = import(&db, &path, None).unwrap().template;
         let too_long: String = std::iter::repeat('名').take(101).collect();
         let err = rename_template(&db, &created.id, &too_long).unwrap_err();
         assert_eq!(err.code, "VALIDATION");
@@ -339,7 +347,7 @@ mod tests {
         let long_stem: String = std::iter::repeat('名').take(150).collect();
         let path = dir.path().join(format!("{long_stem}.csv"));
         std::fs::write(&path, "一级分类,字段名,值\n组,k,v\n").unwrap();
-        let result = import_template(&db, &path, None).unwrap();
+        let result = import(&db, &path, None).unwrap();
         // 96 个字而不是 100：给存储层可能加的「 (2)」这类去重后缀留出空间，
         // 保证常见情况下最终名字仍然 ≤ 100。
         assert_eq!(result.template.name.chars().count(), 96);
@@ -351,7 +359,7 @@ mod tests {
         let db = store(dir.path());
         let src = dir.path().join("t.csv");
         std::fs::write(&src, "一级分类,字段名,值\n组,k,v\n").unwrap();
-        let t = import_template(&db, &src, None).unwrap().template;
+        let t = import(&db, &src, None).unwrap().template;
         let out = dir.path().join("导出");
         export_template(&db, &t.id, &out).unwrap();
         assert!(dir.path().join("导出.xlsx").is_file());
@@ -364,7 +372,7 @@ mod tests {
         let db = store(dir.path());
         let src = dir.path().join("t.csv");
         std::fs::write(&src, "一级分类,字段名,值\n组,k,v\n").unwrap();
-        let t = import_template(&db, &src, None).unwrap().template;
+        let t = import(&db, &src, None).unwrap().template;
         let out = dir.path().join("foo.csv");
         export_template(&db, &t.id, &out).unwrap();
         assert!(dir.path().join("foo.csv.xlsx").is_file());

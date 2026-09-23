@@ -35,6 +35,14 @@ pub const MAX_TEMPLATES: usize = 25;
 /// 与插件 `profile-fields.js` 的 `MAX_CUSTOM_FIELDS` 一致。
 pub const MAX_CUSTOM_FIELDS: usize = 200;
 
+/// 模板名的字数上限。插件那边没有限制，但一个离谱长的模板名没有意义，
+/// 还会把列表挤成一团、撑大 `resume.read` 的摘要（见上面的账）。
+pub const MAX_TEMPLATE_NAME_CHARS: usize = 100;
+/// 新建时自动取名截到的字数，比 [MAX_TEMPLATE_NAME_CHARS] 小一截：去重可能加上
+/// 「 (2)」这类后缀，留出余量才能保证常见情况下最终名字仍然不超过 100 个字。
+/// 名字多半来自文件名，用户没机会先改再确认，所以截断而不是报错。
+const MAX_CREATED_NAME_CHARS: usize = 96;
+
 const UNGROUPED: &str = "未分类";
 const UNNAMED: &str = "未命名模板";
 
@@ -145,6 +153,10 @@ fn invalid(message: impl Into<String>) -> StoreError {
 fn clean_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() { UNNAMED.into() } else { trimmed.into() }
+}
+
+fn truncate_chars(name: String, max: usize) -> String {
+    if name.chars().count() > max { name.chars().take(max).collect() } else { name }
 }
 
 fn groups_json(groups: &[TemplateGroup]) -> Result<String, StoreError> {
@@ -353,7 +365,7 @@ impl StoreTx<'_> {
             return Err(invalid(format!("模板最多 {MAX_TEMPLATES} 个，先删掉用不上的再导入。")));
         }
         let (json, skipped_secret_fields) = checked_groups(groups)?;
-        let name = self.unique_template_name(&clean_name(name))?;
+        let name = self.unique_template_name(&truncate_chars(clean_name(name), MAX_CREATED_NAME_CHARS))?;
         let position: i64 = self.conn().query_row(
             "SELECT COALESCE(MIN(position), 1) - 1 FROM resume_templates",
             [],
@@ -400,7 +412,11 @@ impl StoreTx<'_> {
         if !self.template_exists(id)? {
             return Err(StoreError::NotFound(format!("template {id}")));
         }
+        // 先 trim 再数：首尾空白不计入字数。
         let name = clean_name(name);
+        if name.chars().count() > MAX_TEMPLATE_NAME_CHARS {
+            return Err(invalid(format!("模板名太长了，请控制在 {MAX_TEMPLATE_NAME_CHARS} 个字以内。")));
+        }
         if self.name_taken(&name, Some(id))? {
             return Err(invalid(format!("已有同名模板「{name}」，换个名字吧。")));
         }

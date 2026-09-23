@@ -735,9 +735,9 @@ fn import_resume_template_cmd(
     path: String,
     replace_id: Option<String>,
 ) -> Result<resume_commands::ImportResult, CommandError> {
-    with_store(&state, |store| {
-        resume_commands::import_template(store, std::path::Path::new(&path), replace_id.as_deref())
-    })
+    // 读文件、解析表格放在档案锁外面，只有落库那一步才占着锁。
+    let (name, groups) = resume_commands::read_sheet(std::path::Path::new(&path))?;
+    with_store(&state, |store| resume_commands::import_template(store, &name, groups, replace_id.as_deref()))
 }
 
 #[tauri::command]

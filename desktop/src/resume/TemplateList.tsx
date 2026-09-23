@@ -166,35 +166,38 @@ function TemplateRow(props: {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(template.name);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<ResumeTemplateView | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  const loadPreview = useCallback(async () => {
-    if (!invoke) return;
-    try {
-      setPreview(await invoke<ResumeTemplateView>("get_resume_template_cmd", { id: template.id }));
-      setPreviewError(null);
-    } catch (error) {
-      setPreviewError(describe(error).text);
-    }
-  }, [invoke, template.id]);
-
-  // 重新导入会原地覆盖同一个模板 id，这一行不会重新挂载：展开着的预览要么跟着刷新，
-  // 要么（本来就没展开）保持收起，不能留着重新导入之前的旧内容。
+  // 展开时拉一次内容。重新导入会原地覆盖同一个模板 id，这一行不会重新挂载，所以
+  // 展开着的预览要跟着 updatedAt / fieldCount 的变化再拉一次，不能留着旧内容；收起时不拉。
   useEffect(() => {
-    setPreview((current) => {
-      if (current) void loadPreview();
-      return current ? current : null;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [template.updatedAt, template.fieldCount]);
+    if (!previewOpen || !invoke) return;
+    let cancelled = false;
+    invoke<ResumeTemplateView>("get_resume_template_cmd", { id: template.id }).then(
+      (loaded) => {
+        if (cancelled) return;
+        setPreview(loaded);
+        setPreviewError(null);
+      },
+      (error: unknown) => {
+        if (!cancelled) setPreviewError(describe(error).text);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [previewOpen, invoke, template.id, template.updatedAt, template.fieldCount]);
 
-  const togglePreview = async () => {
-    if (preview) {
+  const togglePreview = () => {
+    if (previewOpen) {
+      setPreviewOpen(false);
       setPreview(null);
+      setPreviewError(null);
       return;
     }
-    await loadPreview();
+    setPreviewOpen(true);
   };
 
   return (
@@ -210,8 +213,8 @@ function TemplateRow(props: {
             设为当前
           </button>
         ) : null}
-        <button type="button" onClick={() => void togglePreview()}>
-          {preview ? "收起" : "预览"}
+        <button type="button" onClick={togglePreview}>
+          {previewOpen ? "收起" : "预览"}
         </button>
         <button type="button" disabled={props.busy || !props.canUseFiles} onClick={props.onReimport}>
           重新导入
@@ -267,7 +270,7 @@ function TemplateRow(props: {
         </form>
       ) : null}
       {previewError ? <p className="note error">{previewError}</p> : null}
-      {preview ? (
+      {previewOpen && preview ? (
         <div className="template-preview">
           {preview.groups.map((group) => (
             <section key={group.name}>

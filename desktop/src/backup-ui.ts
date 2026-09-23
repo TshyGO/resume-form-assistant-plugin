@@ -50,7 +50,16 @@ export interface FilePickers {
   open: (() => Promise<string | null>) | null;
 }
 
-export function mountBackup(invoke: Invoke, pickers: FilePickers, now: () => Date = () => new Date()) {
+/**
+ * `onRestored`：恢复或换回成功、档案已被整个换掉之后调。别的页面（比如「简历」）
+ * 手里还拿着旧档案读出来的内容，靠它重新读取。
+ */
+export function mountBackup(
+  invoke: Invoke,
+  pickers: FilePickers,
+  now: () => Date = () => new Date(),
+  onRestored: () => void = () => {},
+) {
   const status = must("backup-status");
   const exportNote = must("backup-export-note");
   const restoreNote = must("backup-restore-note");
@@ -140,6 +149,7 @@ export function mountBackup(invoke: Invoke, pickers: FilePickers, now: () => Dat
         const reminders = describeRemindersAfterRestore(report.remindersCleared);
         if (reminders) lines.push(reminders);
         say({ tone: "success", text: lines.map((line) => line.text).join(" ") });
+        onRestored();
         await refreshRollback();
       } catch (error) {
         say({ tone: "warn", text: `恢复失败：${invokeError(error)}` });
@@ -177,6 +187,7 @@ export function mountBackup(invoke: Invoke, pickers: FilePickers, now: () => Dat
       try {
         const report = await invoke<RestoreReport>("rollback_to_cmd", { id });
         say(describeRestore(report.counts, report.rollbackPoint));
+        onRestored();
         await refreshRollback();
       } catch (error) {
         say({ tone: "warn", text: `换回失败：${invokeError(error)}` });

@@ -381,3 +381,31 @@ fn the_template_count_is_capped() {
     db.delete_template(&ids[1]).unwrap();
     assert!(db.create_template("多一个", one).is_ok());
 }
+
+#[test]
+fn renaming_rejects_names_over_100_chars_but_trims_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", vec![group("g", vec![field("k", "v")])]).unwrap().template;
+    let too_long = "名".repeat(101);
+    let err = db.rename_template(&t.id, &too_long).unwrap_err();
+    assert!(matches!(err, StoreError::Validation(m) if m == "模板名太长了，请控制在 100 个字以内。"));
+    let ok_len = "名".repeat(100);
+    assert_eq!(db.rename_template(&t.id, &ok_len).unwrap().name, ok_len);
+    // 前后空白不计入字数：用户粘贴带首尾空格的名字，不该因为空白超限。
+    assert_eq!(db.rename_template(&t.id, &format!("  {ok_len}  ")).unwrap().name, ok_len);
+}
+
+#[test]
+fn created_names_are_cut_to_96_chars_before_numbering() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let one = vec![group("g", vec![field("k", "v")])];
+    let long = format!("  {}  ", "名".repeat(150));
+    let a = db.create_template(&long, one.clone()).unwrap().template;
+    let b = db.create_template(&long, one).unwrap().template;
+    // 96 而不是 100：给去重后缀「 (2)」留出空间，常见情况下最终名字仍然 ≤ 100 个字。
+    assert_eq!(a.name, "名".repeat(96));
+    assert_eq!(b.name, format!("{} (2)", "名".repeat(96)));
+    assert_eq!(b.name.chars().count(), 100);
+}
