@@ -28,4 +28,20 @@ describe("extractText docx（jsdom）", () => {
     const file = new File(["x"], "r.docx");
     await expect(extractText(file, deps)).resolves.toMatch(/张三[\s\S]*某大学/);
   });
+
+  // mammoth 出的真实 HTML 块级标签之间没有换行（"<p>张三</p><p>某大学</p>"），
+  // textContent 会把它们粘成一整行「张三某大学」。这里的 HTML 故意不带换行，
+  // 用来锁死 extract-text.ts 在拿 textContent 前先按块级收尾标签补换行的修复。
+  it("mammoth 输出没有换行也能按段落、单元格分行", async () => {
+    const deps = {
+      docxToHtml: async () =>
+        "<p>张三</p><p>某大学</p><table><tr><td>a</td><td>b</td></tr></table>",
+      pdfToText: async () => {
+        throw new Error("not used");
+      },
+    };
+    const file = new File(["x"], "r.docx");
+    const text = await extractText(file, deps);
+    expect(text.split("\n").filter(Boolean)).toEqual(["张三", "某大学", "a", "b"]);
+  });
 });

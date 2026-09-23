@@ -32,3 +32,15 @@ test("pdf 走注入的抽取器", async () => {
   };
   assert.equal(await extractText(file("r.pdf", "x"), deps), "第一页\n第二页");
 });
+
+test("pdf 解析组件加载失败时说桌面版的重启话术，不是插件的扩展管理页话术", async () => {
+  const deps = {
+    docxToHtml: async () => {
+      throw new Error("not used");
+    },
+    pdfToText: async () => {
+      throw new Error("Failed to fetch dynamically imported module");
+    },
+  };
+  await assert.rejects(extractText(file("r.pdf", "x"), deps), /PDF 解析组件加载失败，请重启应用后重试。/);
+});

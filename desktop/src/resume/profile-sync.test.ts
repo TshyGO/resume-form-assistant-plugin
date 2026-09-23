@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 // 插件与桌面必须用同一份「我的信息」字段定义：字段 id 是存储键，两边一改一不改就会丢数据。
 // 改字段时只改仓库根的 profile-fields.js，再把它原样复制到这里。
@@ -28,9 +29,15 @@ test("解析用的 resume-utils.js、ai-helpers.js 与插件一字不差", () =>
 test("解析提示词与插件 ai-worker.js 的一致", async () => {
   const worker = readFileSync(new URL("../../../ai-worker.js", import.meta.url), "utf8");
   const { RESUME_PARSE_SYSTEM_PROMPT, RESUME_PARSE_USER_PREFIX } = await import("./parse-helpers.ts");
-  for (const line of RESUME_PARSE_SYSTEM_PROMPT.split("\n")) {
-    assert.ok(worker.includes(JSON.stringify(line).slice(1, -1)) || worker.includes(line), line);
-  }
+
+  // 直接把 ai-worker.js 里 `const SYSTEM_PROMPT = [ ... ].join("\n");` 的数组字面量
+  // 抠出来，用 vm 当真正的 JS 求值，再逐字比较——比「每行是不是在文件里出现过」严格，
+  // 不会因为某行文字恰好在别处出现就误判通过。
+  const match = worker.match(/const SYSTEM_PROMPT = (\[[\s\S]*?\])\s*\.join\("\\n"\);/);
+  assert.ok(match, "在 ai-worker.js 里没找到 SYSTEM_PROMPT 数组定义");
+  const promptLines = vm.runInNewContext(`(${match![1]})`);
+  assert.equal(promptLines.join("\n"), RESUME_PARSE_SYSTEM_PROMPT);
+
   assert.ok(worker.includes("请提取以下简历中的所有信息：\\n\\n"));
   assert.equal(RESUME_PARSE_USER_PREFIX, "请提取以下简历中的所有信息：\n\n");
 });
