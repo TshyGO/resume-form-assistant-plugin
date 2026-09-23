@@ -321,3 +321,63 @@ fn secret_like_profile_content_is_refused_by_the_store() {
     let fine = serde_json::json!({ "values": { "name": "张三" }, "family": [], "custom": [{ "key": "户籍派出所", "value": "" }] });
     assert_eq!(db.save_profile(fine, 0).unwrap().revision, 1);
 }
+
+/// 插件的 `resume.read`（u130 PR 3）要在一条协议消息里带回当前模板全文、「我的信息」
+/// 和全部模板摘要，协议信封上限 65536 字节（`resume_pro_protocol::MAX_ENVELOPE_BYTES`，
+/// 按 UTF-8 JSON 计）。这里按各项上限拼出最坏情况，留 1 KiB 给信封字段。
+#[test]
+fn the_worst_case_resume_read_fits_one_protocol_envelope() {
+    const MAX_ENVELOPE_BYTES: usize = 65536;
+    const ENVELOPE_ALLOWANCE: usize = 1024;
+    // 名字：导入截到 96 个字再加去重后缀「 (NN)」；改名最多 100 个字。按 101 个
+    // 四字节字符算（生僻字 / emoji），比常见的三字节汉字还要宽。
+    let name: String = std::iter::repeat('𠀀').take(101).collect();
+    let id = "00000000-0000-4000-8000-000000000000";
+    let updated_at = "2026-09-23T00:00:00.000Z";
+    let pad = |target: usize, wrap: &dyn Fn(&str) -> serde_json::Value| {
+        let base = serde_json::to_vec(&wrap("")).unwrap().len();
+        wrap(&"a".repeat(target - base))
+    };
+    let groups = pad(MAX_TEMPLATE_BYTES, &|v| serde_json::json!([{ "name": "g", "fields": [{ "key": "k", "value": v }] }]));
+    assert_eq!(serde_json::to_vec(&groups).unwrap().len(), MAX_TEMPLATE_BYTES);
+    let profile = pad(MAX_PROFILE_BYTES, &|v| serde_json::json!({ "values": { "k": v }, "family": [], "custom": [] }));
+    assert_eq!(serde_json::to_vec(&profile).unwrap().len(), MAX_PROFILE_BYTES);
+    let summaries: Vec<_> = (0..MAX_TEMPLATES)
+        .map(|_| serde_json::json!({ "id": id, "name": name, "fieldCount": 99999, "updatedAt": updated_at }))
+        .collect();
+    let payload = serde_json::json!({
+        "template": { "id": id, "name": name, "groups": groups, "updatedAt": updated_at },
+        "profile": { "profile": profile, "revision": i64::MAX },
+        "templates": summaries,
+        "activeTemplateId": id,
+    });
+    let size = serde_json::to_vec(&payload).unwrap().len();
+    assert!(size + ENVELOPE_ALLOWANCE <= MAX_ENVELOPE_BYTES, "worst case is {size} bytes");
+}
+
+#[test]
+fn an_oversized_profile_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let big = "a".repeat(MAX_PROFILE_BYTES);
+    let err = db.save_profile(serde_json::json!({ "values": { "name": big }, "family": [], "custom": [] }), 0).unwrap_err();
+    assert!(matches!(err, StoreError::Validation(m) if m.contains("太大")));
+}
+
+#[test]
+fn the_template_count_is_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let one = vec![group("g", vec![field("k", "v")])];
+    let ids: Vec<String> = (0..MAX_TEMPLATES)
+        .map(|i| db.create_template(&format!("t{i}"), one.clone()).unwrap().template.id)
+        .collect();
+    let err = db.create_template("多一个", one.clone()).unwrap_err();
+    let expected = format!("模板最多 {MAX_TEMPLATES} 个，先删掉用不上的再导入。");
+    assert!(matches!(&err, StoreError::Validation(m) if *m == expected), "{err:?}");
+    assert_eq!(db.resume_overview().unwrap().templates.len(), MAX_TEMPLATES);
+    // 重新导入是覆盖，不占新名额。
+    assert!(db.replace_template_groups(&ids[0], one.clone()).is_ok());
+    db.delete_template(&ids[1]).unwrap();
+    assert!(db.create_template("多一个", one).is_ok());
+}

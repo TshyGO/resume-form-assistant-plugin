@@ -13,10 +13,25 @@ use crate::resume_secrets::{is_secret_label, is_secret_value};
 use crate::timeutil::now_utc;
 use crate::tx::{new_uuid, StoreTx};
 
-/// 单个模板序列化后的上限。协议信封 64 KiB，一次 `resume.read` 要装下
-/// 当前模板全文 + 档案 + 列表摘要，所以模板和档案各留 48 KiB 以内。
-pub const MAX_TEMPLATE_BYTES: usize = 48 * 1024;
-pub const MAX_PROFILE_BYTES: usize = 48 * 1024;
+// 上限的账：插件的 `resume.read`（u130 PR 3）要在**一条**协议消息里带回当前模板全文、
+// 「我的信息」和全部模板摘要，信封上限 65536 字节（UTF-8 JSON）。
+//
+//   当前模板分组   ≤ 24 KiB = 24576
+//   「我的信息」   ≤ 24 KiB = 24576
+//   模板摘要       ≤ 25 条 × ~0.52 KB（名字按 101 个四字节字符算）≈ 13.0 KB
+//   当前模板的 id / 名字 / 时间、字段名       ≈ 0.6 KB
+//   合计 ≈ 62.7 KB，给信封字段留 1 KiB 后仍有约 1.8 KB 余量。
+//
+// 模板数若放到 50 条，同样算法最坏要 ~75.7 KB，装不下，所以是 25。
+// `tests/resume.rs` 的 `the_worst_case_resume_read_fits_one_protocol_envelope` 按这些常量
+// 拼最坏情况核对，改任何一个都要让它继续通过。
+
+/// 单个模板分组序列化后的上限。
+pub const MAX_TEMPLATE_BYTES: usize = 24 * 1024;
+/// 「我的信息」序列化后的上限。
+pub const MAX_PROFILE_BYTES: usize = 24 * 1024;
+/// 模板个数上限，满了要先删再导入。
+pub const MAX_TEMPLATES: usize = 25;
 /// 与插件 `profile-fields.js` 的 `MAX_CUSTOM_FIELDS` 一致。
 pub const MAX_CUSTOM_FIELDS: usize = 200;
 
@@ -333,6 +348,10 @@ impl StoreTx<'_> {
     /// 新模板插到最前并设为当前（插件导入与简历解析都是这样）。
     /// 像密码、验证码的字段不存，数量放在返回值里让界面说出来。
     pub fn create_template(&mut self, name: &str, groups: Vec<TemplateGroup>) -> Result<SavedTemplate, StoreError> {
+        let count: i64 = self.conn().query_row("SELECT COUNT(*) FROM resume_templates", [], |r| r.get(0))?;
+        if count as usize >= MAX_TEMPLATES {
+            return Err(invalid(format!("模板最多 {MAX_TEMPLATES} 个，先删掉用不上的再导入。")));
+        }
         let (json, skipped_secret_fields) = checked_groups(groups)?;
         let name = self.unique_template_name(&clean_name(name))?;
         let position: i64 = self.conn().query_row(

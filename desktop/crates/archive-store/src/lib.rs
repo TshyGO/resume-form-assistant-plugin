@@ -52,7 +52,7 @@ pub use receipts::{
 pub use resume::{
     empty_profile, field_count, normalize_groups, validate_profile, ProfileRecord, ResumeOverview,
     ResumeTemplate, SavedTemplate, TemplateField, TemplateGroup, TemplateSummary, MAX_CUSTOM_FIELDS,
-    MAX_PROFILE_BYTES, MAX_TEMPLATE_BYTES,
+    MAX_PROFILE_BYTES, MAX_TEMPLATES, MAX_TEMPLATE_BYTES,
 };
 pub use resume_secrets::{is_secret_label, is_secret_value};
 pub use store::{ArchiveConfig, ArchiveStore};
