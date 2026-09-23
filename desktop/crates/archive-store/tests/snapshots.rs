@@ -328,7 +328,7 @@ fn a_version_one_archive_is_upgraded_with_a_backup() {
     db.close().unwrap();
 
     let db = ArchiveStore::open(cfg.clone()).unwrap();
-    assert_eq!(db.schema_version(), 3);
+    assert_eq!(db.schema_version(), archive_store::current_schema_version());
     assert!(db.migration_backup.as_ref().unwrap().exists());
     assert!(db.get_application(&id).unwrap().is_some());
 
