@@ -87,7 +87,15 @@ export function TemplateList({ pickers }: { pickers: FilePickers | null }) {
           <p className={`note ${notice.tone}`} role="status">
             {notice.text}
           </p>
-          <button type="button" onClick={() => void reload()}>
+          <button
+            type="button"
+            onClick={() => {
+              // 在这里清空，不放进 reload：importFile 会在调用 reload 之前先设一条
+              // 导入提示，reload 里清掉会把那条提示也带没了。
+              setNotice(null);
+              void reload();
+            }}
+          >
             重试
           </button>
         </div>

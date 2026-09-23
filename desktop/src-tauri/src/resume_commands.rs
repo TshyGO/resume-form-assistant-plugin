@@ -344,7 +344,9 @@ mod tests {
     fn imported_names_longer_than_96_chars_are_truncated() {
         let dir = tempfile::tempdir().unwrap();
         let db = store(dir.path());
-        let long_stem: String = std::iter::repeat('名').take(150).collect();
+        // ASCII，不是多字节字符：150 个「名」在 UTF-8 下是 450 字节，加上扩展名会
+        // 超过某些文件系统（如 Linux ext4）255 字节的文件名上限。
+        let long_stem: String = "n".repeat(150);
         let path = dir.path().join(format!("{long_stem}.csv"));
         std::fs::write(&path, "一级分类,字段名,值\n组,k,v\n").unwrap();
         let result = import(&db, &path, None).unwrap();

@@ -148,33 +148,51 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
     Ok(rows)
 }
 
-/// 一条 CSV 记录在原文本里的真实行号（从 1 起），`\r\n` 算一次换行。
+/// 增量算「一条 CSV 记录在原文本里的真实行号」（从 1 起，`\r\n` 算一次换行）。
 /// `csv` crate 的 `Position::line()` 在跳过空白行之后会不准，这里改成直接
 /// 用 `Position::byte()`：先跳过记录前残留的换行符（空白行会被 csv
 /// crate 悄悄跳过、不产生记录，但它们的换行符还留在这段字节里），再数
 /// 这段文本里出现过几次真正的换行。
-fn line_number(text: &str, byte: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut start = byte;
-    while start < bytes.len() && (bytes[start] == b'\r' || bytes[start] == b'\n') {
-        start += 1;
+///
+/// 记录按出现顺序依次喂进来，每条只重新扫描上一条到这一条之间的新增字节，
+/// 而不是从头重扫——否则 5 MB 的 CSV 在 O(n²) 下会卡住。这依赖调用方按序
+/// 调用（`byte` 不回退）；`scanned_upto` 落点保证之前的部分不会正好卡在一对
+/// `\r\n` 中间（跳换行符的循环总是把连续的 `\r`/`\n` 一口气吃完才停），所以
+/// 窗口化扫描不会因为漏看边界而把跨批次的 `\r\n` 数成两次、或漏数一次。
+struct LineCounter {
+    scanned_upto: usize,
+    breaks_so_far: usize,
+}
+
+impl LineCounter {
+    fn new() -> Self {
+        Self { scanned_upto: 0, breaks_so_far: 0 }
     }
-    let mut breaks = 0usize;
-    let mut i = 0usize;
-    while i < start {
-        match bytes[i] {
-            b'\r' => {
-                breaks += 1;
-                i += if i + 1 < start && bytes[i + 1] == b'\n' { 2 } else { 1 };
-            }
-            b'\n' => {
-                breaks += 1;
-                i += 1;
-            }
-            _ => i += 1,
+
+    fn line_number(&mut self, text: &str, byte: usize) -> usize {
+        let bytes = text.as_bytes();
+        // `byte.max(scanned_upto)` 只是防御性兜底：正常情况下 `byte` 不会回退。
+        let mut start = byte.max(self.scanned_upto);
+        while start < bytes.len() && (bytes[start] == b'\r' || bytes[start] == b'\n') {
+            start += 1;
         }
+        let mut i = self.scanned_upto;
+        while i < start {
+            match bytes[i] {
+                b'\r' => {
+                    self.breaks_so_far += 1;
+                    i += if i + 1 < start && bytes[i + 1] == b'\n' { 2 } else { 1 };
+                }
+                b'\n' => {
+                    self.breaks_so_far += 1;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        self.scanned_upto = start;
+        self.breaks_so_far + 1
     }
-    breaks + 1
 }
 
 fn csv_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
@@ -185,11 +203,12 @@ fn csv_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
         .flexible(true)
         .from_reader(text.as_bytes());
     let mut rows = Vec::new();
+    let mut counter = LineCounter::new();
     for (index, record) in reader.records().enumerate() {
         let record = record.map_err(|_| SheetError::Unreadable)?;
         let line = record
             .position()
-            .map(|p| line_number(text, p.byte() as usize))
+            .map(|p| counter.line_number(text, p.byte() as usize))
             .unwrap_or(index + 1);
         let cell = |c: usize| record.get(c).unwrap_or("").to_string();
         rows.push((line, [cell(0), cell(1), cell(2)]));
@@ -435,6 +454,27 @@ mod tests {
         let csv = "h,h,h\ng,k,\"a\nb\"\ng,,x\n";
         let err = parse("a.csv", csv.as_bytes()).unwrap_err();
         assert_eq!(err.to_string(), "第 4 行缺少「字段名」（第二列）。");
+    }
+
+    /// `line_number` 曾对每条记录从字节 0 重新扫描，5 MB 的 CSV 在 O(n²) 下会卡住。
+    /// 20 万行（约 200 万字节）验证改成增量扫描后仍然又快又准：只有最后一条数据行
+    /// 缺字段名，报的行号要对（表头占第 1 行）。
+    #[test]
+    fn two_hundred_thousand_rows_report_the_right_line_number_quickly() {
+        let mut csv = String::from("一级分类,字段名,值\n");
+        for i in 0..200_000usize {
+            if i == 199_999 {
+                csv.push_str("组,,v\n");
+            } else {
+                use std::fmt::Write as _;
+                let _ = write!(csv, "组,k{i},v\n");
+            }
+        }
+        let start = std::time::Instant::now();
+        let err = parse("a.csv", csv.as_bytes()).unwrap_err();
+        let elapsed = start.elapsed();
+        assert_eq!(err.to_string(), "第 200001 行缺少「字段名」（第二列）。");
+        assert!(elapsed.as_secs() < 2, "took too long: {elapsed:?}");
     }
 
     #[test]

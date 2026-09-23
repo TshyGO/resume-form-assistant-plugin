@@ -171,6 +171,7 @@ test("首次读取模板失败时给出提示与重试按钮", async () => {
   expect(retry).toHaveProperty("type", "button");
   await user.click(retry);
   expect(await screen.findByRole("listitem", { name: /校招简历/ })).toBeTruthy();
+  expect(screen.queryByText("读取模板失败，请重试。")).toBeNull();
 });
 
 test("新建（非覆盖）导入失败时补一句「本次导入未生效。」", async () => {

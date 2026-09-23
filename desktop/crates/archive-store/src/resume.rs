@@ -150,8 +150,12 @@ fn invalid(message: impl Into<String>) -> StoreError {
     StoreError::Validation(message.into())
 }
 
+/// 去控制字符（U+0000–U+001F、U+007F）再 trim。控制字符在 JSON 里各要转义成
+/// 6 字节（如 `\u0000`），`resume.read` 最坏情况的账（本文件顶部注释）按每字符
+/// ≤ 4 字节算，不清理就可能超出信封上限。
 fn clean_name(name: &str) -> String {
-    let trimmed = name.trim();
+    let cleaned: String = name.chars().filter(|c| !c.is_control()).collect();
+    let trimmed = cleaned.trim();
     if trimmed.is_empty() { UNNAMED.into() } else { trimmed.into() }
 }
 

@@ -409,3 +409,17 @@ fn created_names_are_cut_to_96_chars_before_numbering() {
     assert_eq!(b.name, format!("{} (2)", "名".repeat(96)));
     assert_eq!(b.name.chars().count(), 100);
 }
+
+/// 控制字符（U+0000–U+001F、U+007F）在 JSON 里各要转义成 6 字节（如 `\u0000`），
+/// 会把 `resume.read` 最坏情况的账算错（见 resume.rs 顶部注释）；干脆不让它们
+/// 存进名字。新建与改名都要清理。
+#[test]
+fn control_characters_are_stripped_from_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let one = vec![group("g", vec![field("k", "v")])];
+    let created = db.create_template("a\u{0}b\tc\n", one.clone()).unwrap().template;
+    assert_eq!(created.name, "abc");
+    let renamed = db.rename_template(&created.id, "x\u{7f}y\u{1}z").unwrap();
+    assert_eq!(renamed.name, "xyz");
+}
