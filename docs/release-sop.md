@@ -33,11 +33,11 @@ node desktop/scripts/chrome-web-store.js check-release --tag vX.Y.Z
 gh release create vX.Y.Z --target "$(git rev-parse HEAD)" --title "vX.Y.Z" --generate-notes
 ```
 
-4. 查看 Actions → **Release Extension**。它会再次检查、从 tag 的 Git 树打包，把同一份 ZIP 挂到该 GitHub Release，上传 Chrome Web Store，并以 `STAGED_PUBLISH` 送审。检查工作流成功、Release 附件存在、商店的待审版本与 tag 相同。失败先查具体步骤和商店草稿，按 [故障处理](chrome-web-store-release.md#6-失败之后怎么重试)处理；不要另建同版本 Release 反复上传。
+4. 查看 Actions → **Release Extension**。它会再次检查、从 tag 的 Git 树打包，把同一份 ZIP 挂到该 GitHub Release，上传 Chrome Web Store，并以 `STAGED_PUBLISH` 送审。检查工作流成功、Release 附件存在、商店的待审版本与 tag 相同。**GitHub Release 和 ZIP 此时已公开，插件内的 GitHub 更新提示也可能出现；商店用户仍要等审核与手动上线。** 失败先查具体步骤和商店草稿，按 [故障处理](chrome-web-store-release.md#6-失败之后怎么重试)处理；不要另建同版本 Release 反复上传。
 5. 审核通过、状态变成 `STAGED` 后，决定上线时在商店后台发布；也可在**该插件 tag** 上运行以下命令。它只公开已暂存的版本，不上传新包：
 
 ```bash
-gh workflow run release.yml --ref vX.Y.Z -f release_staged=true
+gh workflow run release.yml --ref vX.Y.Z -f dry_run=false -f release_staged=true
 ```
 
 6. 回到商店页面和扩展内核对公开版本、安装和更新。送审成功不等于用户已收到新版。
