@@ -10,6 +10,8 @@ import {
 } from "./ai-settings.ts";
 
 const view = (overrides: Partial<AiSettingsView> = {}): AiSettingsView => ({
+  activeId: "a",
+  profiles: [],
   apiUrl: "https://api.deepseek.com/v1/chat/completions",
   model: "deepseek-chat",
   host: "api.deepseek.com",

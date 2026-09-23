@@ -1,11 +1,15 @@
 const DEFAULT_STORE = {
   templates: [],
   activeTemplateId: "",
+  // aiConfig 始终是「当前正在使用」的那一份，给 content.js 等既有读取路径用。
+  // 没有当前配置时 apiKey 为空，不会借其他已保存配置的 Key。
   aiConfig: {
     apiUrl: "https://api.openai.com/v1/chat/completions",
     model: "gpt-4o-mini",
     apiKey: ""
   },
+  aiProfiles: [],
+  activeAiProfileId: "",
   profile: {
     values: {},
     family: [],
@@ -24,7 +28,9 @@ const TEMPLATE_SHEET_HEADER = ["一级分类", "字段名", "值"];
 const BACKUP_FORMAT = "resume-pro.backup";
 // 2 起备份里可以带「我的信息」。只有模板的备份仍写 1，旧版插件照样能导入；
 // 带了档案的写 2，旧版插件会提示先更新，而不是悄悄丢掉档案。
+// 3 起带上多份 AI 配置。只有一份时仍写 1 或 2，旧备份也能按原来的 aiConfig 导入。
 const BACKUP_FORMAT_VERSION = 2;
+const BACKUP_AI_PROFILES_VERSION = 3;
 let pdfJsPromise = null;
 
 const STORE_KEYS = Object.keys(DEFAULT_STORE);
@@ -34,23 +40,32 @@ const STORE_KEYS = Object.keys(DEFAULT_STORE);
 const StorageService = {
   async ensureDefaults() {
     const current = await chrome.storage.local.get(STORE_KEYS);
-    const missing = {};
+    const migration = migrationFromLegacyAi(current);
+    const merged = { ...current, ...migration };
+    const pending = {};
 
     for (const key of STORE_KEYS) {
-      if (current[key] === undefined) {
-        missing[key] = structuredClone(DEFAULT_STORE[key]);
+      if (merged[key] === undefined) {
+        pending[key] = structuredClone(DEFAULT_STORE[key]);
+      } else if (current[key] === undefined && Object.prototype.hasOwnProperty.call(migration, key)) {
+        pending[key] = migration[key];
       }
     }
 
-    if (Object.keys(missing).length) {
-      await chrome.storage.local.set(missing);
+    if (Object.keys(pending).length) {
+      await chrome.storage.local.set(pending);
     }
 
-    return normalizeStore({ ...current, ...missing });
+    return normalizeStore({ ...merged, ...pending });
   },
 
   async getState() {
     const current = await chrome.storage.local.get(STORE_KEYS);
+
+    if (current.aiProfiles === undefined) {
+      return this.ensureDefaults();
+    }
+
     return normalizeStore(current);
   },
 
@@ -86,9 +101,33 @@ const StorageService = {
     });
   },
 
+  // 旧调用方只认识「当前这一份」。有当前配置就改这一份；没有就新建并启用。
+  // 不会去改列表里其他配置的 Key。
   async saveAiConfig(aiConfig) {
     return this.update((state) => {
-      state.aiConfig = normalizeAiConfig(aiConfig);
+      const next = normalizeAiConfig(aiConfig);
+      const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+
+      if (active) {
+        active.apiUrl = next.apiUrl;
+        active.model = next.model;
+        active.apiKey = next.apiKey;
+        return state;
+      }
+
+      if (!next.apiKey) {
+        return state;
+      }
+
+      const profile = {
+        id: crypto.randomUUID(),
+        name: profileNameFromUrl(next.apiUrl, state.aiProfiles),
+        apiUrl: next.apiUrl,
+        model: next.model,
+        apiKey: next.apiKey
+      };
+      state.aiProfiles.push(profile);
+      state.activeAiProfileId = profile.id;
       return state;
     });
   }
@@ -105,6 +144,9 @@ const popupState = {
   modelActiveIndex: -1,
   profileDirty: false,
   profileRowSeq: 0,
+  aiForm: { mode: "new", editingId: "", dirty: false },
+  pendingAiDeleteId: "",
+  renamingAiProfileId: "",
   statusTimers: {
     profile: null,
     template: null,
@@ -158,6 +200,19 @@ function cacheElements() {
   elements.backupReplaceButton = document.getElementById("backup-replace-button");
   elements.backupCancelButton = document.getElementById("backup-cancel-button");
   elements.aiConfigForm = document.getElementById("ai-config-form");
+  elements.aiNewProfile = document.getElementById("ai-new-profile");
+  elements.aiCurrentLabel = document.getElementById("ai-current-label");
+  elements.aiProfileList = document.getElementById("ai-profile-list");
+  elements.aiProfileName = document.getElementById("ai-profile-name");
+  elements.aiDeleteConfirm = document.getElementById("ai-delete-confirm");
+  elements.aiDeleteText = document.getElementById("ai-delete-text");
+  elements.aiDeleteNext = document.getElementById("ai-delete-next");
+  elements.aiDeleteConfirmButton = document.getElementById("ai-delete-confirm-button");
+  elements.aiDeleteCancelButton = document.getElementById("ai-delete-cancel-button");
+  elements.aiRenameRow = document.getElementById("ai-rename-row");
+  elements.aiRenameInput = document.getElementById("ai-rename-input");
+  elements.aiRenameSave = document.getElementById("ai-rename-save");
+  elements.aiRenameCancel = document.getElementById("ai-rename-cancel");
   elements.apiUrlInput = document.getElementById("api-url-input");
   elements.modelInput = document.getElementById("model-input");
   elements.apiKeyInput = document.getElementById("api-key-input");
@@ -219,7 +274,16 @@ function bindEvents() {
     hideStatus("backup");
   });
   elements.templateList.addEventListener("click", handleTemplateListClick);
+  elements.aiProfileList.addEventListener("click", handleAiProfileListClick);
+  elements.aiNewProfile.addEventListener("click", beginNewAiProfile);
+  elements.aiDeleteConfirmButton.addEventListener("click", confirmDeleteAiProfile);
+  elements.aiDeleteCancelButton.addEventListener("click", hideAiDeleteConfirm);
+  elements.aiRenameSave.addEventListener("click", confirmRenameAiProfile);
+  elements.aiRenameCancel.addEventListener("click", hideAiRename);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
+  elements.aiConfigForm.addEventListener("input", () => {
+    popupState.aiForm.dirty = true;
+  });
   elements.profileForm.addEventListener("submit", handleProfileSubmit);
   elements.profileForm.addEventListener("input", markProfileDirty);
   elements.profileForm.addEventListener("change", markProfileDirty);
@@ -257,7 +321,7 @@ function bindEvents() {
       showStatus("profile", "「我的信息」在别处被改过了，现在保存会覆盖那边的修改。", "warning", 0);
     }
 
-    if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.profile) {
+    if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.aiProfiles || changes.activeAiProfileId || changes.profile) {
       render().catch((error) => {
         console.error("Resume Pro popup render failed:", error);
       });
@@ -280,7 +344,7 @@ function setActiveTab(tabName) {
 async function render() {
   const state = await StorageService.getState();
   renderTemplates(state);
-  renderConfig(state.aiConfig);
+  renderAiSection(state);
   if (!popupState.profileDirty) renderProfile(state.profile);
   setActiveTab(popupState.activeTab);
 }
@@ -327,11 +391,120 @@ function renderTemplates(state) {
   }).join("");
 }
 
-function renderConfig(aiConfig) {
-  elements.apiUrlInput.value = aiConfig.apiUrl || "";
-  elements.modelInput.value = aiConfig.model || "";
-  elements.apiKeyInput.value = aiConfig.apiKey || "";
+function renderAiSection(state) {
+  renderAiProfileList(state);
+
+  if (popupState.aiForm.dirty) {
+    return;
+  }
+
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+
+  if (active) {
+    popupState.aiForm = { mode: "edit", editingId: active.id, dirty: false };
+    fillAiForm(active);
+    return;
+  }
+
+  popupState.aiForm = { mode: "new", editingId: "", dirty: false };
+  fillAiForm({ name: "", apiUrl: "", model: "", apiKey: "" });
+}
+
+function renderAiProfileList(state) {
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+  elements.aiCurrentLabel.textContent = active
+    ? `当前使用的配置：${active.name}`
+    : "当前使用的配置：未配置";
+
+  if (!state.aiProfiles.length) {
+    elements.aiProfileList.innerHTML = `<p class="empty-state">还没有已保存的配置。填完下面的表单后点「保存并使用」。</p>`;
+    return;
+  }
+
+  elements.aiProfileList.innerHTML = state.aiProfiles.map((profile) => {
+    const isActive = profile.id === state.activeAiProfileId;
+    const keyNote = profile.apiKey ? "Key 已保存" : "Key 未填写";
+
+    return `
+      <article class="ai-profile ${isActive ? "is-active" : ""}" data-profile-id="${escapeHtml(profile.id)}">
+        <div class="ai-profile__main">
+          <strong>${escapeHtml(profile.name)}</strong>
+          <span>${escapeHtml(profileHost(profile.apiUrl))} · ${escapeHtml(profile.model)} · ${keyNote}</span>
+        </div>
+        <div class="ai-profile__actions">
+          ${isActive ? "" : '<button class="secondary-button" type="button" data-action="use">使用</button>'}
+          <button class="text-button" type="button" data-action="rename">重命名</button>
+          <button class="text-button" type="button" data-action="edit">编辑</button>
+          <button class="text-button" type="button" data-action="delete">删除</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function fillAiForm(profile) {
+  elements.aiProfileName.value = profile.name || "";
+  elements.apiUrlInput.value = profile.apiUrl || "";
+  elements.modelInput.value = profile.model || "";
+  elements.apiKeyInput.value = profile.apiKey || "";
   updateUrlWarning();
+}
+
+function beginNewAiProfile() {
+  popupState.aiForm = { mode: "new", editingId: "", dirty: true };
+  fillAiForm({ name: "", apiUrl: "", model: "", apiKey: "" });
+  clearModelSuggestions();
+  hideAiDeleteConfirm();
+  hideAiRename();
+  showStatus("config", "正在新建配置。Key 不会从当前配置带过来。", "success", 4000);
+}
+
+async function beginEditAiProfile(id) {
+  const state = await StorageService.getState();
+  const profile = state.aiProfiles.find((item) => item.id === id);
+
+  if (!profile) {
+    return;
+  }
+
+  popupState.aiForm = { mode: "edit", editingId: id, dirty: true };
+  fillAiForm(profile);
+  clearModelSuggestions();
+  hideAiDeleteConfirm();
+  showStatus("config", `正在编辑「${profile.name}」。保存后只更新这一份。`, "success", 4000);
+}
+
+async function handleAiProfileListClick(event) {
+  const button = event.target.closest("[data-action]");
+
+  if (!button || !elements.aiProfileList.contains(button)) {
+    return;
+  }
+
+  const id = button.closest("[data-profile-id]")?.dataset.profileId;
+
+  if (!id) {
+    return;
+  }
+
+  if (button.dataset.action === "use") {
+    await activateAiProfile(id);
+    return;
+  }
+
+  if (button.dataset.action === "edit") {
+    await beginEditAiProfile(id);
+    return;
+  }
+
+  if (button.dataset.action === "rename") {
+    await beginRenameAiProfile(id);
+    return;
+  }
+
+  if (button.dataset.action === "delete") {
+    await requestDeleteAiProfile(id);
+  }
 }
 
 // Shown whenever the settings page shows the address -- on open, while typing and after
@@ -472,26 +645,210 @@ function resolveTemplateName(templateName, templates) {
   return `${templateName} (${index})`;
 }
 
-async function handleConfigSubmit(event) {
-  event.preventDefault();
+async function activateAiProfile(id) {
+  popupState.aiForm.dirty = false;
+  const state = await StorageService.update((draft) => {
+    if (draft.aiProfiles.some((profile) => profile.id === id)) {
+      draft.activeAiProfileId = id;
+    }
 
-  const typedUrl = elements.apiUrlInput.value.trim() || DEFAULT_STORE.aiConfig.apiUrl;
-  const { aiConfig: savedConfig } = await StorageService.getState();
-  const aiConfig = {
-    apiUrl: self.ResumeProModels.normalizeApiUrlForSave(typedUrl, savedConfig.apiUrl),
-    model: elements.modelInput.value.trim() || DEFAULT_STORE.aiConfig.model,
-    apiKey: elements.apiKeyInput.value.trim()
-  };
+    return draft;
+  });
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+  showStatus("config", active ? `已改用「${active.name}」。` : "没有找到这份配置。", active ? "success" : "error");
+  await render();
+}
 
-  await StorageService.saveAiConfig(aiConfig);
+async function beginRenameAiProfile(id) {
+  const state = await StorageService.getState();
+  const profile = state.aiProfiles.find((item) => item.id === id);
 
-  if (aiConfig.apiUrl !== typedUrl) {
-    elements.apiUrlInput.value = aiConfig.apiUrl;
-    showStatus("config", `配置已保存。API URL 已补全为 ${aiConfig.apiUrl}`, "success", 6000);
+  if (!profile) {
     return;
   }
 
-  showStatus("config", "配置已保存。", "success");
+  popupState.renamingAiProfileId = id;
+  elements.aiRenameInput.value = profile.name;
+  elements.aiRenameRow.hidden = false;
+  hideAiDeleteConfirm();
+}
+
+function hideAiRename() {
+  popupState.renamingAiProfileId = "";
+  elements.aiRenameRow.hidden = true;
+}
+
+async function confirmRenameAiProfile() {
+  const id = popupState.renamingAiProfileId;
+  const name = elements.aiRenameInput.value.trim();
+
+  if (!id) {
+    return;
+  }
+
+  if (!name) {
+    showStatus("config", "配置名称不能为空。", "error", 0);
+    return;
+  }
+
+  await renameAiProfile(id, name);
+  hideAiRename();
+  showStatus("config", "名称已更新。", "success");
+  await render();
+}
+
+async function renameAiProfile(id, name) {
+  const trimmed = String(name ?? "").trim().slice(0, 80);
+
+  if (!trimmed) {
+    return StorageService.getState();
+  }
+
+  return StorageService.update((draft) => {
+    const profile = draft.aiProfiles.find((item) => item.id === id);
+
+    if (profile) {
+      profile.name = trimmed;
+    }
+
+    return draft;
+  });
+}
+
+async function requestDeleteAiProfile(id) {
+  const state = await StorageService.getState();
+  const profile = state.aiProfiles.find((item) => item.id === id);
+
+  if (!profile) {
+    return;
+  }
+
+  if (profile.id !== state.activeAiProfileId) {
+    await deleteAiProfile(id);
+    showStatus("config", `已删除「${profile.name}」。当前配置没有变。`, "success");
+    await render();
+    return;
+  }
+
+  const others = state.aiProfiles.filter((item) => item.id !== id);
+  elements.aiDeleteNext.innerHTML = [
+    ...others.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`),
+    `<option value="">进入未配置状态</option>`
+  ].join("");
+  elements.aiDeleteText.textContent = `要删除当前配置「${profile.name}」。请选择之后用哪一份；不会自动改用其他配置的 Key。`;
+  elements.aiDeleteConfirm.hidden = false;
+  popupState.pendingAiDeleteId = id;
+  hideAiRename();
+}
+
+function hideAiDeleteConfirm() {
+  popupState.pendingAiDeleteId = "";
+  elements.aiDeleteConfirm.hidden = true;
+}
+
+async function confirmDeleteAiProfile() {
+  const id = popupState.pendingAiDeleteId;
+
+  if (!id) {
+    return;
+  }
+
+  const nextId = elements.aiDeleteNext.value;
+  hideAiDeleteConfirm();
+  popupState.aiForm.dirty = false;
+  await deleteAiProfile(id, nextId);
+  showStatus(
+    "config",
+    nextId ? "已删除当前配置，并改用所选的那一份。" : "已删除当前配置，现在是未配置状态。",
+    "success"
+  );
+  await render();
+}
+
+// nextId 只有在删的是当前配置时才有意义：有值就改用那一份，空字符串表示进入未配置。
+// 不传 nextId 时拒绝删除当前配置，避免静默落到另一份的 Key 上。
+async function deleteAiProfile(id, nextId) {
+  const state = await StorageService.getState();
+  const isActive = state.activeAiProfileId === id;
+
+  if (isActive && nextId === undefined) {
+    throw new Error("删除当前配置时要选择另一份，或明确进入未配置状态。");
+  }
+
+  return StorageService.update((draft) => {
+    const stillActive = draft.activeAiProfileId === id;
+    draft.aiProfiles = draft.aiProfiles.filter((profile) => profile.id !== id);
+
+    if (!stillActive) {
+      return draft;
+    }
+
+    if (nextId && draft.aiProfiles.some((profile) => profile.id === nextId)) {
+      draft.activeAiProfileId = nextId;
+    } else {
+      draft.activeAiProfileId = "";
+    }
+
+    return draft;
+  });
+}
+
+async function handleConfigSubmit(event) {
+  event.preventDefault();
+
+  const typedUrl = elements.apiUrlInput.value.trim();
+  const model = elements.modelInput.value.trim();
+  const apiKey = elements.apiKeyInput.value.trim();
+  const name = elements.aiProfileName.value.trim();
+
+  if (!typedUrl || !model || !apiKey) {
+    showStatus("config", "请把 API URL、API Key 和模型名称都填完后再保存。未完成的配置不会启用。", "error", 0);
+    return;
+  }
+
+  const editingId = popupState.aiForm.mode === "edit" ? popupState.aiForm.editingId : "";
+  const before = await StorageService.getState();
+  const previous = before.aiProfiles.find((profile) => profile.id === editingId);
+  const apiUrl = self.ResumeProModels.normalizeApiUrlForSave(typedUrl, previous?.apiUrl || "");
+
+  if (editingId && !previous) {
+    showStatus("config", "要编辑的配置已经不在了，没有保存。", "error", 0);
+    return;
+  }
+
+  popupState.aiForm.dirty = false;
+  const state = await StorageService.update((draft) => {
+    if (previous) {
+      const target = draft.aiProfiles.find((profile) => profile.id === editingId);
+      target.name = name || target.name;
+      target.apiUrl = apiUrl;
+      target.model = model;
+      target.apiKey = apiKey;
+      draft.activeAiProfileId = target.id;
+      return draft;
+    }
+
+    const profile = {
+      id: crypto.randomUUID(),
+      name: name || profileNameFromUrl(apiUrl, draft.aiProfiles),
+      apiUrl,
+      model,
+      apiKey
+    };
+    draft.aiProfiles.push(profile);
+    draft.activeAiProfileId = profile.id;
+    return draft;
+  });
+  const saved = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId);
+  popupState.aiForm = { mode: "edit", editingId: saved?.id || "", dirty: false };
+
+  if (apiUrl !== typedUrl) {
+    showStatus("config", `「${saved?.name || "配置"}」已保存并使用。API URL 已补全为 ${apiUrl}`, "success", 6000);
+  } else {
+    showStatus("config", `「${saved?.name || "配置"}」已保存并使用。`, "success");
+  }
+
+  await render();
 }
 
 // Fetching never touches the model input or storage: the list only feeds the suggestion
@@ -975,7 +1332,9 @@ async function handleExportBackup() {
   }
 
   // 勾选框太容易顺手点上，真要写 Key 进文件之前再拦一次（data-privacy §4.1.1）。
-  if (elements.backupIncludeKey.checked && state.aiConfig.apiKey) {
+  const hasExportableKey = state.aiProfiles.some((profile) => profile.apiKey) || Boolean(state.aiConfig.apiKey);
+
+  if (elements.backupIncludeKey.checked && hasExportableKey) {
     elements.backupKeyConfirm.hidden = false;
     hideStatus("backup");
     return;
@@ -1107,29 +1466,59 @@ function buildBackup(state, { includeApiKey = false, now = new Date() } = {}) {
     throw new Error("剩下的内容都是密码 / 验证码这类，没有可以写进备份的内容。");
   }
 
-  // 有些 OpenAI 兼容接口把凭据放在地址里（?key=…）。不勾「包含 API Key」就一起去掉，
-  // 否则说着不含 Key 却把它藏在 apiUrl 里。
-  const endpoint = includeApiKey
-    ? { url: state.aiConfig.apiUrl, changed: false }
-    : redactUrlCredentials(state.aiConfig.apiUrl);
+  const active = state.aiProfiles.find((profile) => profile.id === state.activeAiProfileId) || null;
+  const currentSource = active
+    ? { apiUrl: active.apiUrl, model: active.model, apiKey: active.apiKey }
+    : state.aiConfig;
+  const currentExport = exportAiEndpoint(currentSource, includeApiKey, redactUrlCredentials);
+  let endpointRedacted = currentExport.changed;
+  let formatVersion = includeProfile ? BACKUP_FORMAT_VERSION : 1;
+  let aiProfiles;
+
+  // 只有一份时保持旧备份形状，旧插件仍能导入。两份及以上写成版本 3，
+  // 避免旧插件只看见当前这一份、把其余配置悄悄丢掉。
+  if (state.aiProfiles.length >= 2) {
+    formatVersion = BACKUP_AI_PROFILES_VERSION;
+    aiProfiles = state.aiProfiles.map((profile) => {
+      const exported = exportAiEndpoint(profile, includeApiKey, redactUrlCredentials);
+      endpointRedacted = endpointRedacted || exported.changed;
+      return {
+        id: profile.id,
+        name: profile.name,
+        ...exported.config
+      };
+    });
+  }
 
   return {
     backup: {
       format: BACKUP_FORMAT,
-      formatVersion: includeProfile ? BACKUP_FORMAT_VERSION : 1,
+      formatVersion,
       exportedAt: now.toISOString(),
       pluginVersion: chrome.runtime.getManifest().version,
       templates,
       activeTemplateId: state.activeTemplateId,
       ...(includeProfile ? { profile: strippedProfile.profile } : {}),
-      aiConfig: includeApiKey && state.aiConfig.apiKey
-        ? { apiUrl: endpoint.url, model: state.aiConfig.model, apiKey: state.aiConfig.apiKey }
-        : { apiUrl: endpoint.url, model: state.aiConfig.model }
+      aiConfig: currentExport.config,
+      ...(aiProfiles ? { aiProfiles, activeAiProfileId: state.activeAiProfileId } : {})
     },
     omittedFieldCount,
     droppedTemplateCount,
-    endpointRedacted: endpoint.changed
+    endpointRedacted
   };
+}
+
+function exportAiEndpoint(config, includeApiKey, redactUrlCredentials) {
+  const endpoint = includeApiKey
+    ? { url: config.apiUrl, changed: false }
+    : redactUrlCredentials(config.apiUrl);
+  const exported = { apiUrl: endpoint.url, model: config.model };
+
+  if (includeApiKey && config.apiKey) {
+    exported.apiKey = config.apiKey;
+  }
+
+  return { config: exported, changed: endpoint.changed };
 }
 
 function parseBackup(text) {
@@ -1151,7 +1540,7 @@ function parseBackup(text) {
     throw new Error("备份文件已损坏。");
   }
 
-  if (version > BACKUP_FORMAT_VERSION) {
+  if (version > BACKUP_AI_PROFILES_VERSION) {
     throw new Error("备份来自更新版本的插件，请先更新插件。");
   }
 
@@ -1172,6 +1561,8 @@ function parseBackup(text) {
     templates,
     activeTemplateId: typeof raw.activeTemplateId === "string" ? raw.activeTemplateId : "",
     aiConfig: raw.aiConfig && typeof raw.aiConfig === "object" ? raw.aiConfig : null,
+    aiProfiles: Array.isArray(raw.aiProfiles) ? raw.aiProfiles : null,
+    activeAiProfileId: typeof raw.activeAiProfileId === "string" ? raw.activeAiProfileId : "",
     profile: hasProfile ? profile : null
   };
 }
@@ -1211,22 +1602,99 @@ function applyBackup(state, backup, mode) {
       : self.ResumeProProfile.mergeProfiles(next.profile, backup.profile);
   }
 
-  if (backup.aiConfig) {
-    const apiUrl = String(backup.aiConfig.apiUrl ?? next.aiConfig.apiUrl);
+  if (!Array.isArray(next.aiProfiles)) {
+    next.aiProfiles = [];
+  }
 
-    // 备份自己带 Key 的话，Key 和地址是一起导出的，配在一起是对的。备份没带 Key
-    // 就只在地址没变时接着用本机这个；地址变了必须清掉，否则下一次请求会把用户的
-    // Key 发到别人备份里的地址上。
-    const backupKey = typeof backup.aiConfig.apiKey === "string" ? backup.aiConfig.apiKey : "";
-
-    next.aiConfig = {
-      apiUrl,
-      model: String(backup.aiConfig.model ?? next.aiConfig.model),
-      apiKey: backupKey || (apiUrl === next.aiConfig.apiUrl ? next.aiConfig.apiKey : "")
-    };
+  if (Array.isArray(backup.aiProfiles) && backup.aiProfiles.length) {
+    applySavedAiProfiles(next, backup, mode);
+  } else if (backup.aiConfig) {
+    applyLegacyAiConfig(next, backup.aiConfig, mode);
   }
 
   return next;
+}
+
+function applyLegacyAiConfig(next, rawConfig, mode) {
+  const previous = { ...next.aiConfig };
+  const apiUrl = String(rawConfig.apiUrl ?? previous.apiUrl);
+  const backupKey = typeof rawConfig.apiKey === "string" ? rawConfig.apiKey : "";
+  // 备份自己带 Key 的话，Key 和地址是一起导出的，配在一起是对的。备份没带 Key
+  // 就只在地址没变时接着用本机这个；地址变了必须清掉，否则下一次请求会把用户的
+  // Key 发到别人备份里的地址上。
+  const apiKey = backupKey || (mode !== "append" && apiUrl === previous.apiUrl ? previous.apiKey : "");
+  const model = String(rawConfig.model ?? previous.model);
+  const active = next.aiProfiles.find((profile) => profile.id === next.activeAiProfileId);
+
+  if (mode !== "append" && active && active.apiUrl === previous.apiUrl) {
+    active.apiUrl = apiUrl;
+    active.model = model;
+    active.apiKey = apiKey;
+    next.aiConfig = { apiUrl, model, apiKey };
+    return;
+  }
+
+  const profile = {
+    id: crypto.randomUUID(),
+    name: profileNameFromUrl(apiUrl, next.aiProfiles),
+    apiUrl,
+    model,
+    apiKey
+  };
+  next.aiProfiles.push(profile);
+  next.activeAiProfileId = profile.id;
+  next.aiConfig = { apiUrl, model, apiKey };
+}
+
+function applySavedAiProfiles(next, backup, mode) {
+  const localById = new Map(next.aiProfiles.map((profile) => [profile.id, profile]));
+  const restored = mode === "append" ? [...next.aiProfiles] : [];
+  const usedIds = new Set(restored.map((profile) => profile.id));
+  let importedActiveId = "";
+
+  for (const raw of backup.aiProfiles) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+
+    const apiUrl = String(raw.apiUrl ?? "").trim();
+    const model = String(raw.model ?? "").trim();
+
+    if (!apiUrl || !model) {
+      continue;
+    }
+
+    const sourceId = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : crypto.randomUUID();
+    let id = sourceId;
+
+    while (usedIds.has(id)) {
+      id = crypto.randomUUID();
+    }
+    usedIds.add(id);
+    const backupKey = typeof raw.apiKey === "string" ? raw.apiKey : "";
+    const local = mode === "append" ? null : localById.get(sourceId);
+    // Key 只跟导出它的那一条、同一个地址走。地址变了，或这条在本机不存在，就不能借用别的 Key。
+    const apiKey = backupKey || (local && local.apiUrl === apiUrl ? local.apiKey : "");
+    restored.push({
+      id,
+      name: String(raw.name ?? "").trim() || profileNameFromUrl(apiUrl, restored),
+      apiUrl,
+      model,
+      apiKey
+    });
+
+    if (!importedActiveId && sourceId === backup.activeAiProfileId) {
+      importedActiveId = id;
+    }
+  }
+
+  next.aiProfiles = restored;
+  const activeId = importedActiveId || (mode === "append" ? next.activeAiProfileId : "");
+  const active = restored.find((profile) => profile.id === activeId) || null;
+  next.activeAiProfileId = active?.id || "";
+  next.aiConfig = active
+    ? { apiUrl: active.apiUrl, model: active.model, apiKey: active.apiKey }
+    : unconfiguredAiConfig();
 }
 
 async function exportTemplateToExcel(templateId) {
@@ -1449,11 +1917,137 @@ function normalizeStore(rawState) {
     ? activeTemplateId
     : templates[0]?.id || "";
 
+  const profiles = Array.isArray(rawState.aiProfiles)
+    ? rawState.aiProfiles.map(normalizeAiProfile).filter(Boolean)
+    : [];
+  let activeId = typeof rawState.activeAiProfileId === "string" ? rawState.activeAiProfileId : "";
+  let active = profiles.find((profile) => profile.id === activeId) || null;
+
+  if (!active) {
+    activeId = "";
+  }
+
+  // 直接写进来的完整 aiConfig（旧测试、以及还没迁移的保存）在列表为空时成为第一份。
+  // 列表里已经有别的配置时不再收养，避免把这份 Key 安到另一条上。
+  const incoming = normalizeAiConfig(rawState.aiConfig);
+
+  if (!active && profiles.length === 0 && isCompleteAi(incoming)) {
+    const profile = {
+      id: crypto.randomUUID(),
+      name: profileNameFromUrl(incoming.apiUrl, profiles),
+      apiUrl: incoming.apiUrl,
+      model: incoming.model,
+      apiKey: incoming.apiKey
+    };
+    profiles.push(profile);
+    active = profile;
+    activeId = profile.id;
+  }
+
   return {
     templates,
     activeTemplateId: resolvedActiveTemplateId,
-    aiConfig: normalizeAiConfig(rawState.aiConfig),
+    aiConfig: active
+      ? { apiUrl: active.apiUrl, model: active.model, apiKey: active.apiKey }
+      : unconfiguredAiConfig(),
+    aiProfiles: profiles,
+    activeAiProfileId: activeId,
     profile: self.ResumeProProfile.normalizeProfile(rawState.profile)
+  };
+}
+
+function migrationFromLegacyAi(current) {
+  if (current.aiProfiles !== undefined) {
+    return {};
+  }
+
+  if (!current.aiConfig || typeof current.aiConfig !== "object") {
+    return { aiProfiles: [], activeAiProfileId: "" };
+  }
+
+  const config = normalizeAiConfig(current.aiConfig);
+
+  if (!isUserAiConfig(config)) {
+    return { aiProfiles: [], activeAiProfileId: "" };
+  }
+
+  const profile = {
+    id: crypto.randomUUID(),
+    name: profileNameFromUrl(config.apiUrl, []),
+    apiUrl: config.apiUrl,
+    model: config.model,
+    apiKey: config.apiKey
+  };
+
+  return {
+    aiProfiles: [profile],
+    activeAiProfileId: isCompleteAi(profile) ? profile.id : ""
+  };
+}
+
+function unconfiguredAiConfig() {
+  return {
+    apiUrl: DEFAULT_STORE.aiConfig.apiUrl,
+    model: DEFAULT_STORE.aiConfig.model,
+    apiKey: ""
+  };
+}
+
+function isCompleteAi(config) {
+  return Boolean(config.apiUrl && config.model && config.apiKey);
+}
+
+function isUserAiConfig(config) {
+  return Boolean(
+    config.apiKey
+    || config.apiUrl !== DEFAULT_STORE.aiConfig.apiUrl
+    || config.model !== DEFAULT_STORE.aiConfig.model
+  );
+}
+
+function profileHost(apiUrl) {
+  try {
+    return new URL(apiUrl).host || apiUrl;
+  } catch {
+    return String(apiUrl || "");
+  }
+}
+
+function profileNameFromUrl(apiUrl, profiles) {
+  const host = profileHost(apiUrl) || "配置";
+  const used = new Set(profiles.map((profile) => profile.name));
+
+  if (!used.has(host)) {
+    return host;
+  }
+
+  let index = 2;
+
+  while (used.has(`${host} (${index})`)) {
+    index += 1;
+  }
+
+  return `${host} (${index})`;
+}
+
+function normalizeAiProfile(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const apiUrl = String(raw.apiUrl ?? "").trim();
+  const model = String(raw.model ?? "").trim();
+
+  if (!apiUrl || !model) {
+    return null;
+  }
+
+  return {
+    id: typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : crypto.randomUUID(),
+    name: String(raw.name ?? "").trim() || profileNameFromUrl(apiUrl, []),
+    apiUrl,
+    model,
+    apiKey: String(raw.apiKey ?? "")
   };
 }
 
@@ -2008,6 +2602,14 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
       parseBackup,
       templateExportFileName,
       templateToSheetRows
+    },
+    aiProfiles: {
+      activateAiProfile,
+      beginEditAiProfile,
+      beginNewAiProfile,
+      deleteAiProfile,
+      handleConfigSubmit,
+      renameAiProfile
     }
   };
 }

@@ -204,55 +204,52 @@
     return String(detail).replace(/\s+/gu, " ").trim().slice(0, 200);
   }
 
-  async function fetchModelList({ apiUrl, apiKey, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-    const endpoints = resolveEndpoints(apiUrl);
+  // Desktop fetch goes through Rust (the webview cannot call the provider itself) and
+  // comes back as one of these reasons. The wording lives here so the popup and the
+  // desktop settings page cannot drift.
+  function interpretModelTransport(raw) {
+    const reason = String(raw?.reason ?? "");
+    const timeoutMs = Number(raw?.timeoutMs) || DEFAULT_TIMEOUT_MS;
 
-    if (!endpoints) {
+    if (reason === "invalid-url") {
       return failure("invalid-url", "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。");
     }
 
-    if (!endpoints.modelsUrl) {
+    if (reason === "unknown-shape") {
       return failure(
         "unknown-shape",
         "无法从这个 API URL 推断模型列表地址（通常以 /v1 或 /chat/completions 结尾）。可直接手填模型名称。"
       );
     }
 
-    const key = String(apiKey ?? "").trim();
-
-    if (!key) {
+    if (reason === "missing-key") {
       return failure("missing-key", "请先填写 API Key，再获取模型。");
     }
 
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
-
-    let status;
-    let text;
-
-    try {
-      const response = await fetchImpl(endpoints.modelsUrl, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${key}` },
-        signal: controller.signal
-      });
-      status = response.status;
-      text = await response.text();
-    } catch {
-      if (timedOut) {
-        const seconds = Math.max(1, Math.round(timeoutMs / 1000));
-        return failure("timeout", `请求超时（${seconds} 秒无响应）：连不上该地址或服务过慢，请检查网络或代理。`);
-      }
-
-      return failure("network", "连不上该地址：请检查网络、代理，以及 API URL 的域名拼写。");
-    } finally {
-      clearTimeout(timer);
+    if (reason === "key-url-mismatch") {
+      return failure(
+        "key-url-mismatch",
+        "这个地址和该配置已保存的地址不一致。为避免把这份 Key 发到别的地址，请填写要用于这个地址的 API Key。"
+      );
     }
 
+    if (reason === "timeout") {
+      const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+      return failure("timeout", `请求超时（${seconds} 秒无响应）：连不上该地址或服务过慢，请检查网络或代理。`);
+    }
+
+    if (reason === "network") {
+      return failure("network", "连不上该地址：请检查网络、代理，以及 API URL 的域名拼写。");
+    }
+
+    return interpretModelHttp({
+      status: Number(raw?.status),
+      text: String(raw?.body ?? ""),
+      timeoutMs
+    });
+  }
+
+  function interpretModelHttp({ status, text }) {
     let body = null;
 
     try {
@@ -289,10 +286,59 @@
     return { ok: true, models: chat, hiddenCount: hidden.length, allModels };
   }
 
+  async function fetchModelList({ apiUrl, apiKey, fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+    const endpoints = resolveEndpoints(apiUrl);
+
+    if (!endpoints) {
+      return interpretModelTransport({ reason: "invalid-url" });
+    }
+
+    if (!endpoints.modelsUrl) {
+      return interpretModelTransport({ reason: "unknown-shape" });
+    }
+
+    const key = String(apiKey ?? "").trim();
+
+    if (!key) {
+      return interpretModelTransport({ reason: "missing-key" });
+    }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+
+    let status;
+    let text;
+
+    try {
+      const response = await fetchImpl(endpoints.modelsUrl, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${key}` },
+        signal: controller.signal
+      });
+      status = response.status;
+      text = await response.text();
+    } catch {
+      if (timedOut) {
+        return interpretModelTransport({ reason: "timeout", timeoutMs });
+      }
+
+      return interpretModelTransport({ reason: "network" });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    return interpretModelTransport({ reason: "http", status, body: text, timeoutMs });
+  }
+
   return {
     describeTransportRisk,
     fetchModelList,
     filterChatModels,
+    interpretModelTransport,
     matchModels,
     normalizeApiUrlForSave,
     parseModelList,

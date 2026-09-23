@@ -81,13 +81,13 @@
                 <span>包含 API Key</span>
               </label>
             </div>
-            <p class="backup-row__hint">备份包含全部模板、我的信息和 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历和我的信息（证件号、电话、家庭成员等），请存在自己控制的位置。</p>
+            <p class="backup-row__hint">备份包含全部模板、我的信息和每一份 AI 配置，换电脑或重装后导入即可。<br>文件是明文的，里面有简历和我的信息（证件号、电话、家庭成员等），请存在自己控制的位置。默认不含任何 API Key。</p>
 
             <input id="backup-file-input" type="file" accept=".json,application/json" hidden>
 
             <div class="backup-confirm is-warning" id="backup-key-confirm" hidden>
               <p class="backup-confirm__text">
-                导出的文件会包含 API Key，明文保存。不要分享，也不要传网盘。<br>
+                导出的文件会包含每一份 AI 配置自己的 API Key，明文保存。不要分享，也不要传网盘。<br>
                 插件不收集、不上传任何数据，文件只在你自己的电脑上。
               </p>
               <div class="backup-confirm__actions">
@@ -148,11 +148,43 @@
           <div class="panel-toolbar is-stacked">
             <div>
               <h2>AI 配置</h2>
-              <p>支持 OpenAI 兼容接口，用于网页表单智能匹配。</p>
+              <p>可以保存多份 OpenAI 兼容接口。当前使用的那一份负责填写和解析；新建一份不会覆盖已经保存的配置。</p>
+            </div>
+            <button class="secondary-button" id="ai-new-profile" type="button">新建配置</button>
+          </div>
+
+          <p class="ai-current" id="ai-current-label">当前使用的配置：未配置</p>
+          <div class="ai-profile-list" id="ai-profile-list"></div>
+
+          <div class="backup-confirm is-warning" id="ai-delete-confirm" hidden>
+            <p class="backup-confirm__text" id="ai-delete-text"></p>
+            <label class="field-block" for="ai-delete-next">
+              <span>删除后改用</span>
+              <select id="ai-delete-next"></select>
+            </label>
+            <div class="backup-confirm__actions">
+              <button class="danger-button" id="ai-delete-confirm-button" type="button">确认删除</button>
+              <button class="text-button" id="ai-delete-cancel-button" type="button">取消</button>
+            </div>
+          </div>
+
+          <div class="backup-confirm" id="ai-rename-row" hidden>
+            <label class="field-block" for="ai-rename-input">
+              <span>配置名称</span>
+              <input id="ai-rename-input" type="text" maxlength="80" autocomplete="off">
+            </label>
+            <div class="backup-confirm__actions">
+              <button class="secondary-button" id="ai-rename-save" type="button">保存名称</button>
+              <button class="text-button" id="ai-rename-cancel" type="button">取消</button>
             </div>
           </div>
 
           <form id="ai-config-form" class="config-form">
+            <div class="field-block">
+              <label for="ai-profile-name"><span>配置名称</span></label>
+              <input id="ai-profile-name" name="name" type="text" maxlength="80" placeholder="例如 OpenAI、公司中转" autocomplete="off">
+            </div>
+
             <div class="field-block">
               <label for="api-url-input"><span>API URL</span></label>
               <input
@@ -215,7 +247,8 @@
               <div class="status-message is-inline" id="model-status" aria-live="polite"></div>
             </div>
 
-            <button class="primary-button is-full" type="submit">保存配置</button>
+            <button class="primary-button is-full" type="submit">保存并使用</button>
+            <p class="backup-row__hint">地址、Key 和模型都填完才会加入列表并成为当前配置。没填完不会启用，也不会改掉正在使用的那一份。</p>
             <div class="status-message" id="config-status" aria-live="polite"></div>
           </form>
         </div>

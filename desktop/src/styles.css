@@ -218,6 +218,11 @@ dialog .row:last-child { justify-content: flex-end; margin-top: 8px; }
 #settings-data .plain { font-size: 13px; }
 #settings-data .plain li { flex-wrap: wrap; overflow-wrap: anywhere; }
 #ai-settings > .stack { max-width: none; gap: 16px; }
+#ai-settings .ai-current { margin: 0; font-weight: 600; }
+#ai-settings .ai-profile-list { display: flex; flex-direction: column; gap: 8px; }
+#ai-settings .ai-profile { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+#ai-settings .ai-profile.is-active { border-color: var(--accent, #4f6ef7); }
+#ai-settings .ai-profile .muted { margin: 0; }
 #ai-settings .ai-config-form { max-width: 560px; padding: 24px 0; border-block: 1px solid var(--line); }
 #ai-settings .ai-config-form > button { align-self: flex-start; }
 #ai-settings > .stack > label { max-width: 560px; }

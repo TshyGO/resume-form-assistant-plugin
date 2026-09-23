@@ -140,7 +140,7 @@ test("backup format: template-only stays version 1, versions 1 and 2 import, new
   assert.equal(state.profile.values.name, "张三");
 
   const { popup: another } = loadPopup();
-  await restore(another, { format: "resume-pro.backup", formatVersion: 3, templates: [], profile: { values: { name: "张三" } } });
+  await restore(another, { format: "resume-pro.backup", formatVersion: 4, templates: [], profile: { values: { name: "张三" } } });
   assert.match(another.lastStatusFrom("backup-status"), /更新/);
 });
 

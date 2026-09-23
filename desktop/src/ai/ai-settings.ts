@@ -13,9 +13,15 @@ export function describeKeyState(view: AiSettingsView | null): Message {
   if (view.credentialError) {
     return { tone: "error", text: view.credentialError };
   }
+  if (!view.activeId) {
+    return {
+      tone: "warn",
+      text: "还没有当前配置。保存一份并使用之后才能整理；手动分类照常可用。",
+    };
+  }
   return view.keyConfigured
-    ? { tone: "ok", text: "已保存一条 Key（存在系统凭据库里，界面不会显示它）。" }
-    : { tone: "warn", text: "还没有 Key。没有 Key 就不能用 AI 整理，手动分类照常可用。" };
+    ? { tone: "ok", text: "当前配置已保存一条 Key（存在系统凭据库里，界面不会显示它）。" }
+    : { tone: "warn", text: "当前配置还没有 Key。没有 Key 就不能用 AI 整理，手动分类照常可用。" };
 }
 
 /**
