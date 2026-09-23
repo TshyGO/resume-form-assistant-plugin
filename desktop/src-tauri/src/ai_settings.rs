@@ -108,8 +108,14 @@ fn write(data_root: &Path, settings: &AiSettings) -> Result<(), String> {
     fs::rename(&tmp, &target).map_err(|e| format!("保存 {} 失败：{e}", target.display()))
 }
 
-pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutcome, String> {
-    let name = input.name.trim().to_string();
+/// 校验一条服务商输入：名称、地址、模型、地址里不能夹带凭据，编辑时 id 得真存在。
+///
+/// 调用方（`ai_provider_commands::save_provider`）必须在算「主机是不是变了」、清旧 Key
+/// 之前先调这个函数——不然一次校验没过的保存（比如模型名填空了）会先把 Key 清掉、
+/// 设置却没改，用户就白白丢了 Key（见 PR #158 评审）。这里保存前也照样调一遍，
+/// 防止以后有别的调用方跳过 `ai_provider_commands` 直接调 `save_provider`。
+pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
+    let name = input.name.trim();
     if name.is_empty() || name.chars().count() > MAX_PROVIDER_NAME_CHARS {
         return Err(format!("名称不能为空，最多 {MAX_PROVIDER_NAME_CHARS} 个字。"));
     }
@@ -119,10 +125,22 @@ pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutco
     if let Some(problem) = credential_in_url(&input.api_url) {
         return Err(problem);
     }
-    let model = input.model.trim().to_string();
-    if model.is_empty() {
+    if input.model.trim().is_empty() {
         return Err("模型名称不能为空，可以点「获取模型」挑一个。".into());
     }
+    if let Some(id) = &input.id {
+        let settings = load(data_root);
+        if !settings.providers.iter().any(|p| &p.id == id) {
+            return Err(GONE.into());
+        }
+    }
+    Ok(())
+}
+
+pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutcome, String> {
+    validate(data_root, &input)?;
+    let name = input.name.trim().to_string();
+    let model = input.model.trim().to_string();
     let mut settings = load(data_root);
     let (provider_id, host_changed) = match input.id {
         Some(id) => {

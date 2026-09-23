@@ -99,9 +99,18 @@ pub fn save_provider(
     args: ProviderArgs,
     key: Option<String>,
 ) -> Result<SaveProviderResult, CommandError> {
+    migrate(data_root, creds).map_err(credential_error)?;
+    let input = ProviderInput {
+        id: args.id.clone(),
+        name: args.name.clone(),
+        api_url: args.api_url.clone(),
+        model: args.model.clone(),
+    };
+    // 先校验，再算「主机是不是变了」、再清旧 Key：校验没过就不能有任何副作用，
+    // 不然一次因为模型名填空而被拒的保存会先把 Key 清掉，设置却完全没变（#158 评审）。
+    ai_settings::validate(data_root, &input).map_err(settings_error)?;
     // Clear an old Key before writing a new host. If the credential store is locked,
     // the settings must still point at the old host so the old Key cannot be sent elsewhere.
-    migrate(data_root, creds).map_err(credential_error)?;
     let existing = ai_settings::load(data_root);
     let moving_id = args.id.as_ref().and_then(|id| {
         existing.providers.iter().find(|p| &p.id == id).and_then(|p| {
@@ -114,11 +123,7 @@ pub fn save_provider(
     if let Some(id) = moving_id {
         creds.clear_key(id).map_err(credential_error)?;
     }
-    let outcome = ai_settings::save_provider(
-        data_root,
-        ProviderInput { id: args.id, name: args.name, api_url: args.api_url, model: args.model },
-    )
-    .map_err(settings_error)?;
+    let outcome = ai_settings::save_provider(data_root, input).map_err(settings_error)?;
     let key_cleared = outcome.host_changed && had_key && typed.is_none();
     if let Some(key) = typed {
         creds.set_key(&outcome.provider_id, &key).map_err(credential_error)?;
@@ -127,8 +132,10 @@ pub fn save_provider(
 }
 
 pub fn delete_provider(data_root: &Path, creds: &dyn CredentialStore, id: &str) -> Result<AiSettingsView, CommandError> {
-    ai_settings::delete_provider(data_root, id).map_err(settings_error)?;
+    // 先删 Key、再删设置：Key 删不掉（凭据库锁了之类）就别把服务商也删了，不然那把
+    // Key 变成孤儿——留在凭据库里，界面上却再也找不到它、没法清理（#158 评审）。
     creds.clear_key(id).map_err(credential_error)?;
+    ai_settings::delete_provider(data_root, id).map_err(settings_error)?;
     Ok(settings_view(data_root, creds))
 }
 
@@ -249,12 +256,38 @@ mod tests {
     }
 
     #[test]
+    fn a_save_that_fails_validation_does_not_clear_the_key_or_change_the_host_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let id = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap().provider_id;
+        // 主机换了，但模型名填空——这次保存整体应该被拒绝，而不是先清 Key 再报错。
+        let bad = ProviderArgs { id: Some(id.clone()), name: "P".into(), api_url: "https://b.example/v1".into(), model: "  ".into() };
+        let err = save_provider(dir.path(), &creds, bad, None).unwrap_err();
+        assert_eq!(err.code, "AI_SETTINGS_INVALID");
+        assert!(creds.has_key(&id), "校验没过，Key 不该被清掉");
+        let settings = crate::ai_settings::load(dir.path());
+        assert_eq!(settings.providers[0].api_url, "https://a.example/v1/chat/completions", "校验没过，地址也不该被改");
+    }
+
+    #[test]
     fn deleting_a_provider_deletes_its_key() {
         let dir = tempfile::tempdir().unwrap();
         let creds = MemoryStore::default();
         let id = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap().provider_id;
         delete_provider(dir.path(), &creds, &id).unwrap();
         assert!(!creds.has_key(&id));
+    }
+
+    #[test]
+    fn a_failed_key_clear_leaves_the_provider_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let id = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap().provider_id;
+        let unavailable = UnavailableStore("locked".into());
+        let err = delete_provider(dir.path(), &unavailable, &id).unwrap_err();
+        assert_eq!(err.code, "CREDENTIAL_STORE_UNAVAILABLE");
+        let settings = crate::ai_settings::load(dir.path());
+        assert_eq!(settings.providers.len(), 1, "Key 删不掉，服务商不该被删掉，不然 Key 变成孤儿");
     }
 
     #[test]
