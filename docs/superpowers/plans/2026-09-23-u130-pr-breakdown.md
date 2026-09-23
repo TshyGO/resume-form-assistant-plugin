@@ -78,11 +78,11 @@
 
 | messageType | 方向 | 身份 | 说明 |
 | --- | --- | --- | --- |
-| `resume.read` | 插件→桌面 | 必须 | 返回模板摘要列表（id、name、字段数）、当前模板全文、档案。单个模板 > 48 KiB 时拒绝保存（桌面端校验），保证一次返回装得下 |
-| `resume.update` | 插件→桌面 | 必须 | 只允许两种操作：切换当前模板；把侧边栏「加到我的信息」的字段追加进档案（复用 `addPendingFields` 规则） |
+| `resume.read` | 插件→桌面 | 必须 | 返回模板摘要列表（id、name、字段数）、当前模板全文、档案，**整个响应放进一条 64 KiB 信封**（v2 不放宽信封上限）。桌面存储层保证装得下：单个模板 ≤ 24 KiB、档案 ≤ 24 KiB、模板最多 25 个、模板名 ≤ 100 字（#155 已实现，最坏情况约 62.7 KB，有测试锁死）。桌面仍在序列化后校验总字节数，超出返回 `payload_too_large` 而不是截断；协议测试覆盖各项同时到上限的组合 |
+| `resume.update` | 插件→桌面 | 必须 | 只允许两种操作：切换当前模板；带版本号整份写回「我的信息」（插件用同一份 `profile-fields.js` 的 `addPendingFields` 算好后写回，版本号对不上返回冲突，插件重新读取再算一次）。桌面存储层照常校验形状、大小与密码类内容 |
 | `ai.complete` | 插件→桌面 | 禁止（同 health） | `{ system, user, purpose: fill \| plan }` → `{ text }`；桌面用当前服务商配置和 Key 发出，返回正文。不重试，超时按 `ai_client` |
 | `ui.open` | 插件→桌面 | 禁止（同 health） | `{ view: resume \| settings-ai \| home }`：把桌面主窗口拉到前台并切到指定页面。主程序没在跑时由 host 正常（非 `--hidden`）拉起 |
-| `legacy.import` | 插件→桌面 | 必须 | 旧版数据一次导入，按 `importId` 分片（模板逐个、档案、AI 配置各一条）。**唯一允许携带 `apiKey` 的消息**，Secrets 层按类型放行；桌面永远不回传 Key |
+| `legacy.import` | 插件→桌面 | 必须 | 旧版数据一次导入，按 `importId` 分片（模板逐个、档案、AI 配置各一条），首片带分片清单（见决策 8）。**唯一允许携带 `apiKey` 的消息**，Secrets 层按类型放行；桌面永远不回传 Key |
 
 `maxProtocolVersion` 升到 2。新插件遇到只支持 v1 的桌面，握手无交集 → 提示「请更新桌面」；旧插件（v1）遇到新桌面仍能握手，原有 6 类消息行为不变。
 
@@ -100,14 +100,19 @@
 **7. `ai.complete` 的长请求走 `connectNative` 端口，不走一次性消息。**
 service worker 在一次性 `sendNativeMessage` 等待 30–60 秒期间可能被回收；Chrome 对打开着的 native 端口会保持 service worker 存活。PR 4 第一步做 spike 验证，结论写进该 PR 计划；spike 失败再评估改由 offscreen 文档持有端口（offscreen 只能用 `runtime` 消息，需经 service worker 中转）。
 
-**8. 旧数据导入的确认在桌面。**
-桌面收到 `legacy.import` 后先存为「待确认导入」，界面弹窗确认；插件轮询导入状态，桌面确认持久化后插件再清本地四个键。导入失败或用户拒绝，插件本地数据原样保留。桌面已有档案时不合并，导入的模板作为新模板追加，档案冲突时由用户在桌面选择保留哪份。
+**8. 旧数据导入：先收齐、再确认、最后才清插件。**
+- **分片清单**：第一片 `kind: manifest` 带 `importId`、分片总数，以及每片的 `index`、`kind`（template / profile / aiConfig）和内容 SHA-256。其后每片带 `importId` + `index`。
+- **幂等**：同一 `(importId, index)` 重发且摘要相同，返回原结果；摘要不同返回 `conflict`。另一个 `importId` 在当前导入未结束时到达，返回 `conflict`，插件等待当前导入结束。
+- **收齐才算完整**：桌面把分片暂存在待确认区（不写入正式模板与档案），清单里的每一片都到齐、摘要都对上，导入状态才变为「待用户确认」。缺片、摘要不符或超时（24 小时未收齐）一律作废整批，不留半批数据。
+- **确认在桌面**：收齐后桌面弹窗确认。插件界面是网页，确认放在那里容易被冒充点掉。用户确认后，同一事务把整批写入正式表（模板走重名编号与密码类字段剔除，#155 的存储层规则），状态变为「已导入」。
+- **插件清理条件**：插件轮询导入状态，**只有状态为「已导入」时**才清本地四个键。「待确认」「已拒绝」「已作废」或查询失败，插件本地数据原样保留，可以重试。
+- 桌面已有档案时不合并：导入的模板作为新模板追加；档案冲突时由用户在桌面选择保留哪份。
 
 ---
 
 ## PR 拆分
 
-依赖关系：`PR1 → PR2`，`PR1 + PR3 → PR4`，`PR2 + PR4 → PR5`。PR1 与 PR3 可并行。
+依赖关系：`PR1 → PR2 → PR3 → PR4 → PR5`，按顺序做。PR3 的 `resume.read` / `resume.update` 用 PR1 的存储，`ai.complete` 用 PR2 的「当前服务商」配置与 `ai_client`，所以 PR3 在 PR2 之后。PR4 与 PR5 要一起准备好、连着合入：只合 PR4 时插件已改为读桌面，但旧数据还没迁移。
 
 ### PR 1：桌面接手模板与「我的信息」（数据 + 界面）
 
@@ -127,7 +132,7 @@ service worker 在一次性 `sendNativeMessage` 等待 30–60 秒期间可能�
 ### PR 3：协议 v2
 
 - `rules.json`、JSON Schema（5 个 payload + 5 个 response）、Rust 校验、`link/protocol/` 副本与一致性测试；Secrets 层对 `legacy.import` 的 `apiKey` 放行、其余类型照旧拒绝；正反测试向量（含真实简历样本不被误判为密钥）。
-- `plugin_bridge::apply` 接入五类消息：`resume.read`、`resume.update` 调 PR1 的存储；`ui.open` 发 Tauri 事件切换视图并聚焦窗口；`ai.complete` 调 PR2 的当前服务商（`ipc_server` 连接线程里用 Tauri 异步运行时 `block_on`，不持档案库锁发请求）；`legacy.import` 存待确认。
+- `plugin_bridge::apply` 接入五类消息：`resume.read`、`resume.update` 调 PR1 的存储；`ui.open` 发 Tauri 事件切换视图并聚焦窗口；`ai.complete` 调 PR2 的当前服务商（`ipc_server` 连接线程里用 Tauri 异步运行时 `block_on`，不持档案库锁发请求）；`legacy.import` 按决策 8 的分片清单暂存、校验、收齐后置为待确认，用户确认后整批入库。
 - **验收：** 用 `--nm-host` + fixture 帧跑通五类消息；v1 插件对新桌面行为不变（现有 D14 自动化用例全绿）。
 
 ### PR 4：插件改为经桌面取数据、发 AI
@@ -142,7 +147,7 @@ service worker 在一次性 `sendNativeMessage` 等待 30–60 秒期间可能�
 
 ### PR 5：旧数据迁移、插件瘦身、文档
 
-- `legacy.import`：插件升级后首次握手成功即检测本地旧数据并发起导入；桌面确认弹窗；插件轮询、确认后清本地。
+- `legacy.import`：插件升级后首次握手成功即检测本地旧数据，按决策 8 发清单与分片；桌面收齐后弹窗确认；插件轮询，状态为「已导入」才清本地。「我的信息」里含密码类内容时不整份拒绝，改为剔除这些项并在确认弹窗里说明剔了几项（桌面存储层对普通保存仍是拒绝）。
 - 删除弹窗里模板、我的信息、AI 配置、备份、简历解析界面与相关代码；删除 `xlsx.full.min.js`、`mammoth.browser.min.js`、`vendor/pdfjs`、`ai-models.js` 及对应测试；弹窗改为连接状态 + 「打开桌面」+ 更新提示。`desktop/scripts/plugin-release-assets.json` 同步。
 - 文档：ADR §5/§6、data-privacy（插件列改为「经桌面发往所选服务商」、Key 只在凭据库）、`store-listing.md`（去掉「不装主程序也能用」，写明平台范围）、Chrome 商店数据使用声明、`install-and-update.md`、README。
 - 版本：插件 `manifest.json` 与桌面三处版本升到 `0.4.1`（`node desktop/scripts/set-version.js 0.4.1`）。
