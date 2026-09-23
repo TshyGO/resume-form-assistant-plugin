@@ -86,9 +86,12 @@ struct AiSettingsView {
 fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
     let settings = ai_settings::load(&ai_data_root(state)?);
     let provider = ai_settings::active(&settings);
-    let (key_configured, credential_error) = match state.credentials.get_key() {
+    let (key_configured, credential_error) = match provider {
+        Some(provider) => match state.credentials.get_key(&provider.id) {
         Ok(found) => (found.is_some(), None),
         Err(err) => (false, Some(err.message())),
+        },
+        None => (false, None),
     };
     Ok(AiSettingsView {
         host: provider.map(|p| ai_settings::host_of(&p.api_url)).unwrap_or_default(),
@@ -972,13 +975,23 @@ fn save_ai_settings_cmd(
 /// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
 #[tauri::command]
 fn set_ai_key_cmd(state: State<AppState>, key: String) -> Result<AiSettingsView, CommandError> {
-    state.credentials.set_key(&key).map_err(credential_error)?;
+    let settings = ai_settings::load(&ai_data_root(&state)?);
+    let provider = ai_settings::active(&settings).ok_or_else(|| CommandError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
+    })?;
+    state.credentials.set_key(&provider.id, &key).map_err(credential_error)?;
     ai_settings_view(&state)
 }
 
 #[tauri::command]
 fn clear_ai_key_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
-    state.credentials.clear_key().map_err(credential_error)?;
+    let settings = ai_settings::load(&ai_data_root(&state)?);
+    let provider = ai_settings::active(&settings).ok_or_else(|| CommandError {
+        code: "AI_NOT_CONFIGURED".into(),
+        message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
+    })?;
+    state.credentials.clear_key(&provider.id).map_err(credential_error)?;
     ai_settings_view(&state)
 }
 
@@ -1025,7 +1038,7 @@ async fn analyze_evidence_cmd(
     checked_url(&provider.api_url)?;
     let key = state
         .credentials
-        .get_key()
+        .get_key(&provider.id)
         .map_err(credential_error)?
         .ok_or_else(|| CommandError {
             code: "AI_NOT_CONFIGURED".into(),
