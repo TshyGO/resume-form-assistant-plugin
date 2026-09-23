@@ -98,7 +98,8 @@
     {"id": "legacy-import-aiconfig-url-userinfo", "path": "requests/legacy-import-aiconfig-url-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "resume-read-v1-envelope", "path": "requests/resume-read-v1-envelope.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
     {"id": "health-v2-envelope", "path": "requests/health-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
-    {"id": "job-save-v2-envelope", "path": "requests/job-save-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "job-save-v2-envelope", "path": "requests/job-save-v2-envelope.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-nested-secret-key", "path": "requests/resume-update-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

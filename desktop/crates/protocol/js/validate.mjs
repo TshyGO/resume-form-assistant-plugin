@@ -64,7 +64,7 @@ function walkSecrets(value, allowedPaths = [], path = []) {
         continue;
       }
       const key = k.toLowerCase();
-      if (FORBIDDEN_KEYS.some((f) => key === f || key.replaceAll("_", "-") === f)) {
+      if (FORBIDDEN_KEYS.some((f) => key.includes(f))) {
         throw fail("secret_forbidden", `forbidden key ${k}`, "secrets");
       }
       walkSecrets(v, allowedPaths, nextPath);
