@@ -399,6 +399,44 @@ test("电话框拒绝一次性写入时才逐字再试一次", async () => {
   assert.deepEqual(chunks, ["138", "", "1", "3", "8"]);
 });
 
+test("逐字重试失败后恢复字段原值", async () => {
+  const { setElementValue, HTMLInputElement } = createHarness();
+  const input = new HTMLInputElement();
+  input.type = "tel";
+  input.value = "原号码";
+  input.addEventListener("input", (event) => {
+    if (event.data !== "原号码") input.value = "";
+  });
+
+  assert.equal(await setElementValue(input, "138"), false);
+  assert.equal(input.value, "原号码");
+});
+
+test("逐字已写入但页面仍报错时保留内容供手动核对", async () => {
+  const { setElementValue, reason, HTMLInputElement } = createHarness();
+  const input = new HTMLInputElement();
+  input.type = "tel";
+  input.setAttribute("aria-invalid", "true");
+  input.addEventListener("input", (event) => {
+    if (String(event.data || "").length > 1) input.value = "";
+  });
+
+  assert.equal(await setElementValue(input, "138"), false);
+  assert.equal(input.value, "138");
+  assert.equal(reason(input), "validation_not_cleared");
+});
+
+test("聚焦后被页面替换的输入节点不能算填写成功", async () => {
+  const { setElementValue, reason, HTMLInputElement } = createHarness();
+  const input = new HTMLInputElement();
+  input.addEventListener("focus", () => {
+    setTimeout(() => { input.isConnected = false; }, 0);
+  });
+
+  assert.equal(await setElementValue(input, "测试用户"), false);
+  assert.equal(reason(input), "element_disconnected");
+});
+
 test("只剩框架错误类、没有错误文案时记成状态未同步", async () => {
   const { setElementValue, reason, HTMLElement, HTMLInputElement, body } = createHarness();
   const item = new HTMLElement();

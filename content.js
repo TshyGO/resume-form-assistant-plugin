@@ -44,6 +44,7 @@
   const TEXT_FILL_FAILURE_LABELS = {
     value_not_committed: "值没有写上",
     value_reverted: "值被页面退回",
+    element_disconnected: "字段已被页面替换",
     validation_not_cleared: "页面仍提示无效",
     framework_state_unsynced: "页面表单状态未同步"
   };
@@ -1364,7 +1365,11 @@
   function focusControl(element) {
     try {
       if (typeof element.focus === "function") {
-        element.focus();
+        try {
+          element.focus({ preventScroll: true });
+        } catch (_) {
+          element.focus();
+        }
         return;
       }
     } catch (_) {
@@ -1549,6 +1554,9 @@
   }
 
   function inspectTextCommit(element, expected, committedBeforeWait) {
+    if (element.isConnected === false) {
+      return { ok: false, reason: "element_disconnected" };
+    }
     const current = String(element.value ?? "");
     if (current !== expected) {
       return { ok: false, reason: committedBeforeWait ? "value_reverted" : "value_not_committed" };
@@ -1597,6 +1605,7 @@
   // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
   // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
   async function commitTextValue(element, value, sequential = false) {
+    const previous = String(element.value ?? "");
     const original = String(value ?? "");
     const expected = normalizeExpectedTextValue(element, original);
     await runTextLifecycle(element, original, sequential);
@@ -1611,7 +1620,14 @@
     }
     if (!result.ok && !sequential && prefersSequentialInput(element)
       && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      return commitTextValue(element, original, true);
+      const retried = await commitTextValue(element, original, true);
+      if (!retried.ok && element.isConnected !== false
+        && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
+        writeControlValue(element, previous);
+        dispatchTextInput(element, previous);
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return retried;
     }
     return result;
   }
