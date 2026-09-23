@@ -184,38 +184,6 @@ pub struct ModelList {
     pub hidden_count: usize,
 }
 
-/// 服务商报错正文里的一句话，压成一行、最多 200 字。拿不到就空着。
-fn provider_detail(body: Option<&Value>) -> String {
-    let body = match body {
-        Some(body) => body,
-        None => return String::new(),
-    };
-    let detail = body
-        .get("error")
-        .and_then(|error| {
-            error
-                .get("message")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| error.as_str().map(str::to_string))
-        })
-        .or_else(|| {
-            body.get("message")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_default();
-    detail
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(200)
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
 enum BodyReadError {
     TooLarge,
     Transport(reqwest::Error),
@@ -233,15 +201,6 @@ async fn read_bounded_body(mut response: reqwest::Response) -> Result<Vec<u8>, B
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
-}
-
-/// 错误状态的 body 只是可选的服务商摘要：
-/// 读超时、读失败、超大都按“没有摘要”处理，绝不改变状态码已经定好的分类。
-async fn read_optional_summary(response: reqwest::Response) -> String {
-    let Ok(bytes) = read_bounded_body(response).await else {
-        return String::new();
-    };
-    provider_detail(serde_json::from_slice(&bytes).ok().as_ref())
 }
 
 /// 拉一次模型列表。调用前地址里的凭据、`models_url` 推不出来、Key 为空这三件事
@@ -334,22 +293,15 @@ pub async fn fetch_model_list_with_timeout_for_protocol(
 
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        // 主分类只看状态码：body 只是可选摘要。之前超大 401 会被误报成“地址不对”，
-        // 卡住的 body 会被误报成超时或断连——现在这两种都不改变分类。
-        let detail = read_optional_summary(response).await;
+        // 只按状态码分类，不回显服务商正文：错误文本可能包含完整地址或 Key。
         eprintln!(
             "ai-models: {host} · HTTP {status} · {} ms",
             started.elapsed().as_millis()
         );
         if status == 401 || status == 403 {
-            let suffix = if detail.is_empty() {
-                String::new()
-            } else {
-                format!("服务返回：{detail}")
-            };
             return Err(CommandError {
                 code: "AI_MODELS_AUTH".into(),
-                message: format!("{host} 拒绝了这个 Key（HTTP {status}）：请检查密钥是否正确、是否有效。{suffix}"),
+                message: format!("{host} 拒绝了这个 Key（HTTP {status}）：请检查密钥是否正确、是否有效。"),
             });
         }
         if status == 404 || status == 405 {
@@ -360,12 +312,7 @@ pub async fn fetch_model_list_with_timeout_for_protocol(
                 ),
             });
         }
-        let message = if detail.is_empty() {
-            format!("从 {host} 获取模型失败（HTTP {status}）。")
-        } else {
-            format!("从 {host} 获取模型失败（HTTP {status}）：{detail}")
-        };
-        return Err(CommandError { code: format!("AI_MODELS_HTTP_{status}"), message });
+        return Err(CommandError { code: format!("AI_MODELS_HTTP_{status}"), message: format!("从 {host} 获取模型失败（HTTP {status}）。") });
     }
     let bytes = read_bounded_body(response).await.map_err(|err| match err {
         BodyReadError::TooLarge => CommandError {
@@ -739,7 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_statuses_map_to_the_documented_failures() {
-        let (auth_url, auth) = serve_once(401, r#"{"error":{"message":"bad key"}}"#);
+        let (auth_url, auth) = serve_once(401, r#"{"error":{"message":"https://relay.example?api_key=sk-secret"}}"#);
         let err = fetch_model_list_with_timeout(
             &auth_url,
             "sk-bad",
@@ -749,7 +696,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.code, "AI_MODELS_AUTH");
-        assert!(err.message.contains("bad key"), "{}", err.message);
+        assert!(!err.message.contains("sk-secret"), "{}", err.message);
         auth.join().unwrap();
 
         let (missing_url, missing) = serve_once(404, "{}");

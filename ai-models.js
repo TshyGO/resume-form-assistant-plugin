@@ -249,11 +249,6 @@
     return { ok: false, reason, message };
   }
 
-  function providerDetail(body) {
-    const detail = body?.error?.message || body?.message || (typeof body?.error === "string" ? body.error : "");
-    return String(detail).replace(/\s+/gu, " ").trim().slice(0, 200);
-  }
-
   async function fetchModelList({ apiUrl, apiKey, protocol = "chat", fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS }) {
     const endpoints = resolveEndpoints(apiUrl, protocol);
 
@@ -281,7 +276,6 @@
       controller.abort();
     }, timeoutMs);
 
-    let status;
     let text;
 
     try {
@@ -293,7 +287,17 @@
           : { Authorization: `Bearer ${key}` },
         signal: controller.signal
       });
-      status = response.status;
+      const status = response.status;
+      // The provider's error body may echo a URL or secret. Status is enough to guide setup.
+      if (status === 401 || status === 403) {
+        return failure("auth", `API Key 被拒绝（HTTP ${status}）：请检查密钥是否正确、是否有效。`);
+      }
+      if (status === 404 || status === 405) {
+        return failure("not-found", `该地址没有返回模型列表（HTTP ${status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。`);
+      }
+      if (status < 200 || status >= 300) {
+        return failure("http", `获取模型失败（HTTP ${status}）。`);
+      }
       text = await response.text();
     } catch {
       if (timedOut) {
@@ -312,24 +316,6 @@
       body = JSON.parse(text);
     } catch {
       body = null;
-    }
-
-    const detail = providerDetail(body);
-    const suffix = detail ? `服务返回：${detail}` : "";
-
-    if (status === 401 || status === 403) {
-      return failure("auth", `API Key 被拒绝（HTTP ${status}）：请检查密钥是否正确、是否有效。${suffix}`);
-    }
-
-    if (status === 404 || status === 405) {
-      return failure(
-        "not-found",
-        `该地址没有返回模型列表（HTTP ${status}）。可能是地址不对（常见：漏了 /v1），也可能是服务商不提供模型列表——可直接手填模型名称。`
-      );
-    }
-
-    if (status < 200 || status >= 300) {
-      return failure("http", `获取模型失败（HTTP ${status}）${detail ? `：${detail}` : "。"}`);
     }
 
     const allModels = parseModelList(body);

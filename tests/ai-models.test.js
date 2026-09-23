@@ -380,15 +380,15 @@ test("the three headline failures carry distinct messages", async () => {
   assert.equal(new Set([auth.message, address.message, network.message]).size, 3);
 });
 
-test("other HTTP errors include the status and the provider's message", async () => {
+test("HTTP errors include the status without echoing provider secrets", async () => {
   const result = await models.fetchModelList({
     apiUrl: "https://x.example/v1",
     apiKey: "k",
-    fetchImpl: async () => jsonResponse(429, { error: { message: "slow down" } })
+    fetchImpl: async () => ({ status: 429, text: async () => { throw new Error("the error body must not be read"); } })
   });
   assert.equal(result.reason, "http");
   assert.match(result.message, /429/u);
-  assert.match(result.message, /slow down/u);
+  assert.doesNotMatch(result.message, /slow down|secret/u);
 });
 
 test("the three protocols resolve their own endpoint and the same model-list path", () => {
