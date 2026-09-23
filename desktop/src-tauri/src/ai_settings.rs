@@ -52,6 +52,7 @@ pub struct ProviderInput {
 
 #[derive(Debug)]
 pub struct SaveOutcome {
+    #[allow(dead_code)] // Task 1 的完整存储结果供调用方和测试检查；运行时暂只取 id/主机变更。
     pub settings: AiSettings,
     pub provider_id: String,
     /// 编辑已有服务商时主机名变了。调用方据此清掉它的 Key：Key 只发给填写它时对应的主机。

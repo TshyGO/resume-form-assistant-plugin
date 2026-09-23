@@ -131,6 +131,7 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
+    #[cfg(test)]
     pub fn with_legacy(key: &str) -> Self {
         let mut keys = HashMap::new();
         keys.insert(LEGACY_ACCOUNT.into(), key.into());
