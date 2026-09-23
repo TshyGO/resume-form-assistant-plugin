@@ -110,7 +110,7 @@
     {"id": "snapshot-complete-ack", "path": "responses/snapshot-complete-ack.json", "requestType": "snapshot.chunk", "schema": "accept", "protocol": {"accept": true}, "request": "requests/snapshot-chunk-1-ok.json", "strict": {"accept": true}},
     {"id": "outbox-reconcile-ok", "path": "responses/outbox-reconcile-ok.json", "requestType": "outbox.reconcile", "schema": "accept", "protocol": {"accept": true}, "request": "requests/outbox-reconcile-ok.json", "strict": {"accept": true}},
     {"id": "handshake-empty-payload", "path": "responses/handshake-empty-payload.json", "requestType": "handshake", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
-    {"id": "response-protocolVersion-2", "path": "responses/protocolVersion-2.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "response-protocolVersion-2", "path": "responses/protocolVersion-2.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}, "request": "requests/job-save-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}},
     {"id": "conflict-retryable-true", "path": "responses/conflict-retryable-true.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "write-ok-missing-resultId", "path": "responses/write-ok-missing-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "error-with-resultId", "path": "responses/error-with-resultId.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
@@ -143,6 +143,11 @@
     {"id": "ai-complete-host-url", "path": "responses/ai-complete-host-url.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "legacy-import-received-too-many", "path": "responses/legacy-import-received-too-many.json", "requestType": "legacy.import", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "resume-read-template-bearer-value", "path": "responses/resume-read-template-bearer-value.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "handshake-v2-only", "path": "responses/handshake-v2-only.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}, "request": "requests/handshake-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}}
+    {"id": "handshake-v2-only", "path": "responses/handshake-v2-only.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}, "request": "requests/handshake-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "resume-read-v1-response", "path": "responses/resume-read-v1-response.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "handshake-v2-response-to-v1", "path": "responses/handshake-v2-response-to-v1.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}, "request": "requests/handshake-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "resume-update-active-match", "path": "responses/resume-update-active-match.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": true}},
+    {"id": "resume-update-active-mismatch", "path": "responses/resume-update-active-mismatch.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
+    {"id": "resume-update-conflict", "path": "responses/resume-update-conflict.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-ok.json", "strict": {"accept": true}}
   ]
 }

@@ -54,6 +54,8 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 
 Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
 
+字段级 `maxLength` 不保证整条信封能放进 65536 字节；请求和响应仍以序列化后的完整 UTF-8 字节数为准，超限不截断。PR 4 的插件需在发送 `ai.complete` 前量字节数；PR 3b 的桌面需在返回 `resume.read` 或 AI 正文前量响应信封。`legacy.import` 的 `body` 形状由 Rust/JS 运行时根据 `kind` 选择本 schema 的 `$defs` 校验；只检查顶层 JSON Schema 不等于完成协议校验。
+
 ## D06 最小用法（Rust host）
 
 ```rust

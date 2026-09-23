@@ -389,6 +389,13 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             "correlationId does not match the request messageId",
         ));
     }
+    if value["protocolVersion"].as_u64() != Some(req.protocol_version as u64) {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            "response protocolVersion must echo the request version",
+        ));
+    }
     if req.message_type == MessageType::Handshake && value.get("ok") == Some(&Value::Bool(true)) {
         let request_min = req.payload["minProtocolVersion"].as_i64().unwrap();
         let request_max = req.payload["maxProtocolVersion"].as_i64().unwrap();
@@ -405,6 +412,13 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
     let invalid = |message: &str| {
         ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message.to_string())
     };
+    if req.message_type == MessageType::ResumeUpdate
+        && req.payload["op"] == "setActiveTemplate"
+        && value.get("ok") == Some(&Value::Bool(true))
+        && value["payload"]["activeTemplateId"] != req.payload["templateId"]
+    {
+        return Err(invalid("resume.update activeTemplateId does not match requested templateId"));
+    }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req
             .payload
@@ -558,6 +572,13 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         }
     }
     validate_schema(value, &response_schema())?;
+    if obj["protocolVersion"].as_u64().unwrap() < request_type.min_envelope_version() as u64 {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            format!("{} response requires protocolVersion 2", request_type.as_str()),
+        ));
+    }
     let ok = obj.get("ok").and_then(Value::as_bool).unwrap();
     if obj.get("payload").map(Value::is_array).unwrap_or(false) {
         return Err(ProtocolError::new(

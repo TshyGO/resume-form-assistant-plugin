@@ -452,11 +452,18 @@ export function validateResponseForRequest(value, request) {
   if (value.correlationId !== request?.messageId) {
     throw fail("invalid_payload", "correlationId does not match the request messageId");
   }
+  if (value.protocolVersion !== request.protocolVersion) {
+    throw fail("protocol_incompatible", "response protocolVersion must echo the request version");
+  }
   if (request.messageType === "handshake" && value.ok === true) {
     if (value.payload.maxProtocolVersion < request.payload.minProtocolVersion ||
         value.payload.minProtocolVersion > request.payload.maxProtocolVersion) {
       throw fail("protocol_incompatible", "handshake request and response ranges do not overlap");
     }
+  }
+  if (request.messageType === "resume.update" && request.payload?.op === "setActiveTemplate" &&
+      value.ok === true && value.payload?.activeTemplateId !== request.payload.templateId) {
+    throw fail("invalid_payload", "resume.update activeTemplateId does not match requested templateId");
   }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
@@ -565,6 +572,9 @@ export function validateResponse(value, requestType) {
     }
   }
   validateSchema(value, responseSchema());
+  if (RULES.v2MessageTypes.includes(requestType) && value.protocolVersion < 2) {
+    throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 2`);
+  }
   if (Array.isArray(value.payload)) throw fail("invalid_payload", "payload must be an object");
   if (value.ok) {
     if (value.error) throw fail("invalid_payload", "ok:true response must not include error");
