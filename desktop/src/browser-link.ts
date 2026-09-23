@@ -82,11 +82,9 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
 export const AFTER_INSTALL_HINT =
   "装好之后如果还连不上，把扩展在浏览器里重新加载一次，或者重启浏览器——它要重新读一遍 host 清单。";
 
-/**
- * 商店还没上架时那个链接是打不开的。与其等上架再改代码，不如现在就说清楚。
- */
+/** 商店页打不开或无法安装时的手动安装办法。 */
 export const STORE_PENDING_HINT =
-  "商店还在审核，暂时没法从商店页直接装上。请先点「下载插件包」，解压后在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。";
+  "如果暂时无法从商店安装，请点「下载插件包」，解压后在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。";
 
 /** 协议版本对不上时，说清楚谁该升。 */
 export function describeProtocolMismatch(

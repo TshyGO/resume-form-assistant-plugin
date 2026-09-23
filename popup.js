@@ -13,7 +13,8 @@ const DEFAULT_STORE = {
   }
 };
 
-const UPDATE_API_URL = "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases/latest";
+// 一个仓库同时有 desktop-v* 和 v* Release，通用 /releases/latest 可能指向桌面版。
+const UPDATE_API_URL = "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases?per_page=100";
 const UPDATE_CACHE_KEY = "resumeProUpdateCache";
 const UPDATE_DISMISSED_KEY = "resumeProDismissedVersion";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -1563,10 +1564,7 @@ async function checkForUpdates({ force, announce }) {
       throw new Error(`GitHub API HTTP ${response.status}`);
     }
 
-    const release = ResumeProUtils.normalizeRelease(await response.json());
-    if (!release) {
-      throw new Error("GitHub Release 响应无效");
-    }
+    const release = ResumeProUtils.latestPluginRelease(await response.json());
 
     await chrome.storage.local.set({
       [UPDATE_CACHE_KEY]: { checkedAt: Date.now(), release, failed: false }
@@ -1574,7 +1572,7 @@ async function checkForUpdates({ force, announce }) {
     const hasUpdate = renderUpdateBanner(release, dismissedVersion, currentVersion);
 
     if (announce) {
-      elements.updateCheckStatus.textContent = hasUpdate ? "发现新版" : "已是最新版";
+      elements.updateCheckStatus.textContent = !release ? "暂无正式版本" : hasUpdate ? "发现新版" : "已是最新版";
     }
   } catch (error) {
     console.warn("Resume Pro update check failed:", error);
