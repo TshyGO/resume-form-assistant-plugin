@@ -70,7 +70,7 @@ function createClassList() {
 // to pixels" and "the anchor still follows the right edge" are distinguishable.
 function loadContentScript({ width = 1200, height = 900 } = {}) {
   const writes = [];
-  const listeners = { document: {}, window: {}, storageChanged: [] };
+  const listeners = { document: {}, window: {}, storageChanged: [], runtimeMessage: [] };
   const collapseButton = {
     textContent: "",
     attributes: {},
@@ -142,7 +142,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
   const chrome = {
     runtime: {
       getURL: (name) => `chrome-extension://test/${name}`,
-      onMessage: { addListener() {} },
+      onMessage: { addListener(handler) { listeners.runtimeMessage.push(handler); } },
       sendMessage: async () => ({})
     },
     storage: {
@@ -204,6 +204,57 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     }
   };
 }
+
+test("native side panel status exposes pending offers and diagnostics", () => {
+  const { hooks, listeners } = loadContentScript();
+  const profileOffer = { hidden: false, querySelector: () => ({ textContent: "还有 2 个字段空着" }) };
+  const fillOffer = {
+    hidden: false,
+    querySelector(selector) {
+      return selector === "#resume-pro-fill-record-snapshot"
+        ? { disabled: false } : { textContent: "是否留档到桌面" };
+    }
+  };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return ({
+        "#resume-pro-ai-fill": { disabled: false, textContent: "一键 AI 填写" },
+        "#resume-pro-profile-offer": profileOffer,
+        "#resume-pro-fill-record": fillOffer,
+        "#resume-pro-diagnostics": { hidden: false, querySelector: () => ({ value: "网页字段：3" }) }
+      })[selector] || null;
+    }
+  });
+
+  let response;
+  const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+  assert.equal(handled, false);
+  assert.equal(response.ready, true);
+  assert.equal(response.profileOffer, "还有 2 个字段空着");
+  assert.equal(response.fillOffer, "是否留档到桌面");
+  assert.equal(response.snapshotAvailable, true);
+  assert.equal(response.diagnostics, "网页字段：3");
+
+  listeners.runtimeMessage[0]({ type: "RESUME_PANEL_OFFER", action: "profileSkip" }, {}, () => {});
+  assert.equal(profileOffer.hidden, true);
+});
+
+test("native side panel fill command invokes the page's existing fill controller", () => {
+  const { hooks, listeners } = loadContentScript();
+  let clicks = 0;
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-ai-fill"
+        ? { hidden: false, disabled: false, click() { clicks += 1; } }
+        : null;
+    }
+  });
+  let reply;
+  const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_FILL" }, {}, (value) => { reply = value; });
+  assert.equal(handled, false);
+  assert.equal(reply.ok, true);
+  assert.equal(clicks, 1);
+});
 
 test("an untouched sidebar keeps following the right edge when the window widens", () => {
   const { hooks, host, resizeViewport } = loadContentScript();

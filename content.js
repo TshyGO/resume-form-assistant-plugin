@@ -60,6 +60,106 @@
     chipAction: null
   };
 
+  // The native side panel owns the visible UI. The existing shadow DOM remains
+  // mounted as the form-filling controller so its tested AI and site adapters
+  // continue to run in the page's content-script context.
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || !String(message.type || "").startsWith("RESUME_PANEL_")) return false;
+    if (sender.id && sender.id !== chrome.runtime.id) return false;
+
+    if (message.type === "RESUME_PANEL_STATUS") {
+      const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
+      const status = shadowRoot?.querySelector("#resume-pro-status");
+      const cancel = shadowRoot?.querySelector("#resume-pro-cancel-fill");
+      const profileOffer = shadowRoot?.querySelector("#resume-pro-profile-offer");
+      const fillOffer = shadowRoot?.querySelector("#resume-pro-fill-record");
+      const snapshotOption = fillOffer?.querySelector("#resume-pro-fill-record-snapshot");
+      const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
+      const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+      sendResponse({
+        ready: Boolean(button),
+        busy: Boolean(button?.disabled),
+        phase: button?.textContent || "",
+        status: status?.classList.contains("is-visible") ? status.textContent : "",
+        statusKind: status?.classList.contains("is-error") ? "error" : "success",
+        canCancel: Boolean(cancel && !cancel.hidden && !cancel.disabled),
+        profileOffer: profileOffer && !profileOffer.hidden ? profileOffer.querySelector("#resume-pro-profile-offer-text")?.textContent || "" : "",
+        fillOffer: fillOffer && !fillOffer.hidden ? fillOffer.querySelector("#resume-pro-fill-record-summary")?.textContent || "" : "",
+        snapshotAvailable: Boolean(snapshotOption && !snapshotOption.disabled),
+        desktopStatus: desktopStatus?.textContent || "",
+        diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
+          ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : ""
+      });
+      return false;
+    }
+
+    if (message.type === "RESUME_PANEL_FILL" || message.type === "RESUME_PANEL_CANCEL") {
+      const selector = message.type === "RESUME_PANEL_FILL" ? "#resume-pro-ai-fill" : "#resume-pro-cancel-fill";
+      const button = shadowRoot?.querySelector(selector);
+      if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "当前操作不可用。" });
+      else { button.click(); sendResponse({ ok: true }); }
+      return false;
+    }
+
+    if (message.type === "RESUME_PANEL_FIELD") {
+      handlePanelFieldAction(message).then(sendResponse).catch(() => sendResponse({ ok: false, error: "字段填写失败，请手动核对网页。" }));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_OFFER") {
+      const action = String(message.action || "");
+      if (action === "profileSkip") { closeProfileOffer(); sendResponse({ ok: true }); return false; }
+      if (action === "fillSkip") { closeFillRecord(); sendResponse({ ok: true }); return false; }
+      if (action === "profileAdd") {
+        addUnansweredToProfile().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+        return true;
+      }
+      if (action === "fillSave") {
+        const option = shadowRoot?.querySelector("#resume-pro-fill-record-snapshot");
+        if (option) option.checked = !option.disabled && message.withSnapshot !== false;
+        handleRecordFillClick().then(() => {
+          const candidates = shadowRoot?.querySelector("#resume-pro-candidates");
+          if (candidates && !candidates.hidden) {
+            const panel = shadowRoot?.querySelector(".resume-pro");
+            panel?.classList.remove("is-collapsed");
+            panel?.classList.add("is-legacy-open");
+            if (panel) updateCollapseButton(panel);
+            constrainSidebarToViewport();
+          }
+          sendResponse({ ok: true, needsPageChoice: Boolean(candidates && !candidates.hidden) });
+        }).catch(() => sendResponse({ ok: false }));
+        return true;
+      }
+      sendResponse({ ok: false, error: "当前操作不可用。" });
+      return false;
+    }
+    if (message.type === "RESUME_PANEL_ADVANCED") {
+      if (message.action === "close") {
+        shadowRoot?.querySelector(".resume-pro")?.classList.remove("is-legacy-open");
+        sendResponse({ ok: true });
+        return false;
+      }
+      const buttons = {
+        repeat: "#resume-pro-repeat-fill",
+        save: "#resume-pro-save-job",
+        submit: "#resume-pro-confirm-submit"
+      };
+      const selector = Object.prototype.hasOwnProperty.call(buttons, message.action) ? buttons[message.action] : null;
+      const button = selector ? shadowRoot?.querySelector(selector) : null;
+      const panel = shadowRoot?.querySelector(".resume-pro");
+      if (!button || !panel) sendResponse({ ok: false, error: "当前网页无法打开该工具。" });
+      else {
+        panel.classList.remove("is-collapsed");
+        panel.classList.add("is-legacy-open");
+        updateCollapseButton(panel);
+        constrainSidebarToViewport();
+        button.click();
+        sendResponse({ ok: true });
+      }
+      return false;
+    }
+    return false;
+  });
+
   const StorageService = {
     // 只读。每个网页加载都会跑一次，在这里写回会用这一刻的快照盖掉设置页刚存的内容；
     // 缺省值由设置页补。
@@ -112,6 +212,12 @@
     injectFieldHighlightStyles();
     createSidebar(sheet);
     renderSidebar();
+    // A browser without the native side panel still needs a usable fill UI.
+    chrome.runtime.sendMessage({ type: "SIDE_PANEL_CAPABILITY" })
+      .then((result) => {
+        if (!result?.supported) shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open");
+      })
+      .catch(() => shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open"));
     bindStorageSync();
     bindFocusTracking();
     window.addEventListener("resize", constrainSidebarToViewport);
@@ -425,6 +531,49 @@
     }
 
     showChipActionMenu(button, target, value, selection);
+  }
+
+  async function handlePanelFieldAction(message) {
+    if (message.mode !== "fill" && message.mode !== "copy") {
+      return { ok: false, error: "未知的字段操作。" };
+    }
+    // The panel builds these IDs from template/group/field indices (or profile
+    // group/key); renderSidebar uses the same contract for its hidden chips.
+    const chipId = String(message.chipId || "");
+    const button = Array.from(shadowRoot?.querySelectorAll(".resume-pro__chip") || [])
+      .find((item) => item.dataset.chipId === chipId);
+    if (!button) return { ok: false, error: "模板字段已变化，请刷新侧栏。" };
+    const value = button.dataset.value || "";
+    if (!value) return { ok: false, error: "这个字段没有内容。" };
+
+    if (message.mode === "copy") {
+      return { ok: false, needsCopy: true, message: "请在侧栏复制字段内容。" };
+    }
+
+    const target = getLastFocusedFillTarget();
+    if (!target) {
+      return { ok: false, needsCopy: true, message: "没有选中网页输入框；字段内容可复制后粘贴。" };
+    }
+
+    if (isComposableTextTarget(target)) {
+      if (getComposableTargetValue(target)) {
+        return { ok: false, needsCopy: true, message: "网页输入框已有内容；请先核对，再粘贴复制的字段。" };
+      }
+      const filled = await applyChipValue(target, value, "add", captureTextSelection(target), chipId);
+      if (filled) return { ok: true, message: "已填入网页输入框。" };
+      return { ok: false, needsCopy: true, message: "网页控件未接受写入；请手动粘贴复制的字段。" };
+    }
+
+    if (hasExistingValue({ kind: "element", element: target })) {
+      return { ok: false, needsCopy: true, message: "网页控件已有内容；请先核对，再粘贴复制的字段。" };
+    }
+    const filled = await Promise.resolve(setElementValue(target, value));
+    if (filled) {
+      target.focus?.();
+      state.lastFocusedField = target;
+      return { ok: true, message: "已填入网页输入框。" };
+    }
+    return { ok: false, needsCopy: true, message: "网页控件未接受写入；请手动粘贴复制的字段。" };
   }
 
   async function handleChipAction(mode) {
@@ -2942,6 +3091,7 @@
       handleAiFillClick,
       handleChipAction,
       handleFieldChipClick,
+      handlePanelFieldAction,
       highlightFilledField,
       injectFieldHighlightStyles,
       isInViewport,

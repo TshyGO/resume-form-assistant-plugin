@@ -32,9 +32,11 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 ### `tabs`
 
-用来查找、复用并聚焦已经打开的 Resume Pro 管理标签页，避免每次从侧边栏进入都重复开页；
-也用于打开用户主动点击的版本下载页。只读取标签页 URL 元数据来识别本扩展自己的管理页，
-不读取其它标签页正文，也不采集浏览历史。
+用来识别用户当前标签页、向该页的内容脚本发送填表操作消息；也用于查找、复用并聚焦已经打开的 Resume Pro 管理标签页，避免每次从侧边栏进入都重复开页，或打开用户主动点击的版本下载页。扩展不采集浏览历史；只有用户主动使用填写功能时，内容脚本才读取和写入当前页表单字段。
+
+### `sidePanel`
+
+浏览器工具栏图标打开原生侧边栏，显示模板、填表进度和可搜索的简历字段。侧边栏作为扩展页面，通过扩展消息请求当前标签页的内容脚本执行填写；它不是对网页开放的 `web_accessible_resources`。管理面板仍在独立扩展标签页打开。
 
 ### `nativeMessaging`
 
@@ -77,12 +79,12 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 | 加载方 | 资源 | 要不要 WAR |
 | --- | --- | --- |
 | 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`extract/copy/fillrecords/snapshot` 及其静态依赖（`content.js` 动态 `import`） | 要，已逐文件列在 manifest；`worker/chrome/transport` 等 service-worker 专用模块不暴露 |
-| 扩展页/offscreen | `popup.js`、`popup.css`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
+| 扩展页/offscreen | `popup.js`、`popup.css`、`sidepanel.html/css/js`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
 | 浏览器 UI | `icons/*`（只在 `manifest.json` 的 `action`/`icons` 字段里） | 不要；没有任何内容脚本把它注入网页 |
 
 `content.css` 里没有 `url(...)` 引用，因此没有漏掉的图片或字体。
 
-**权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`tabs`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
+**权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`tabs`、`sidePanel`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
 **管理面板边界：** [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 已改成由扩展 service worker 打开新的扩展标签页，不再把 `popup.html` 暴露给网页。网页既不能 iframe 它，也不能用公开 URL 探测该页面。
 
@@ -106,6 +108,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 ## 4. 列表页材料
 
 - [x] 128×128 图标：`icons/icon128.png`
+- [ ] 新版侧栏与独立管理页截图：原截图若仍显示旧悬浮面板，发布前应更新并重新核对商店权限说明
 - [x] 1280×800 截图：[`store-assets/store-sidebar-1280x800.png`](store-assets/store-sidebar-1280x800.png)，只含合成公司、岗位与简历数据
 - [x] 分类：`Productivity`
 - [x] 语言：`中文（简体）`
