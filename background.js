@@ -5,10 +5,10 @@ import { installDesktopLink } from "./link/worker.mjs";
 // keep working whether or not a desktop is installed.
 installDesktopLink(chrome);
 
-async function openManagerTab(requestedTab = "") {
-  const hash = requestedTab === "profile" ? "#profile" : "";
+// Browsers without the side panel API open the status page from the toolbar instead.
+async function openManagerTab() {
   const baseUrl = chrome.runtime.getURL("popup.html");
-  const targetUrl = `${baseUrl}${hash}`;
+  const targetUrl = baseUrl;
   const tabs = await chrome.tabs.query({});
   const existing = tabs.find((tab) => tab.url?.startsWith(baseUrl));
   if (existing?.id) {
@@ -63,12 +63,6 @@ async function ensureAiHost() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "SIDE_PANEL_CAPABILITY") {
     sidePanelReady.then((supported) => sendResponse({ supported }));
-    return true;
-  }
-  if (message?.type === "OPEN_MANAGER") {
-    openManagerTab(message.tab).then(() => sendResponse({ opened: true })).catch(() => {
-      sendResponse({ opened: false, error: "无法打开管理面板，请从浏览器工具栏点击 Resume Pro。" });
-    });
     return true;
   }
   if (message?.type === "ENSURE_AI_HOST") {

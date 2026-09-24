@@ -204,13 +204,10 @@ test('repeat planner exposes a structured desktop AI settings action', async () 
   );
 });
 
-test('resume parsing directs the user to the desktop resume page', async () => {
-  const env = worker();
-  const result = await env.context.handleParseResume({ content: 'synthetic' });
-  assert.equal(result.success, false);
-  assert.equal(result.error, '简历解析已搬到桌面程序的「简历」页。');
-  assert.equal(result.openView, 'resume');
-  assert.equal(env.sent.length, 0);
+test('the worker no longer parses resumes; the host does not forward the request', () => {
+  assert.equal(source.includes('PARSE_RESUME'), false);
+  const host = fs.readFileSync(path.join(__dirname, '..', 'ai-host.js'), 'utf8');
+  assert.equal(host.includes('PARSE_RESUME'), false);
 });
 
 test('a desktop or provider connection failure stops later batches; a bad batch does not', async () => {

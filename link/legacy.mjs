@@ -1,4 +1,3 @@
-// @ts-check
 import { buildEnvelope } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 import { payloadBodySha256, validateRequest } from './protocol/validate.mjs';

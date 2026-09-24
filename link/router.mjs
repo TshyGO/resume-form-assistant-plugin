@@ -2,6 +2,7 @@ import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
 import { mayRecord } from './fillrecords.mjs';
 import { SNAPSHOT_UPLOAD } from './uploads.mjs';
 import { MAX_OUTBOX } from './limits.mjs';
+import { templatesToCsv } from './legacy.mjs';
 
 /**
  * Turns sidebar messages into desktop-link operations.
@@ -42,7 +43,10 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
     if (type === MSG.legacyResend) { await legacy.resend(); return legacy.status(); }
     if (type === MSG.legacyDiscard) { await legacy.discard(); return legacy.status(); }
     if (type === MSG.legacyDropKey) return legacy.dropOldKey();
-    if (type === MSG.legacyUnmigrated) return { templates: await legacy.unmigratedTemplates() };
+    if (type === MSG.legacyUnmigrated) {
+      const templates = await legacy.unmigratedTemplates();
+      return { count: templates.length, csv: templates.length ? templatesToCsv(templates) : '' };
+    }
     if (type === MSG.aiCancel) {
       const controller = aiCalls.get(message.requestId);
       controller?.abort();
