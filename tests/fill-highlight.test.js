@@ -517,6 +517,20 @@ for (const stopped of [false, true]) {
   });
 }
 
+test('assisted add releases the fill button when collection fails before AI starts', async () => {
+  let calls = 0;
+  const formAgent = { collect() { calls += 1; throw new Error('synthetic'); } };
+  const { helpers } = loadHighlightHelpers({ formAgent });
+  const fillButton = { disabled: false };
+  helpers.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本信息', fields: [{ key: '姓名', value: '测试' }] }] }], activeTemplateId: 'one' });
+  const button = { disabled: false };
+  await helpers.handleRepeatFillClick({ currentTarget: button });
+  assert.equal(fillButton.disabled, false);
+  await helpers.handleRepeatFillClick({ currentTarget: button });
+  assert.equal(calls, 2, 'a failed collection must not leave the busy guard set');
+});
+
 test("diagnostic summary only exposes allowlisted counts, durations and errors", () => {
   const { helpers } = loadHighlightHelpers();
   const summary = helpers.formatFillDiagnostics({

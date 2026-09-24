@@ -60,6 +60,12 @@ export function installDesktopLink(api) {
 
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!DESKTOP_MESSAGE_TYPES.has(message?.type)) return false;
+    if (message.type === 'DESKTOP_AI_COMPLETE' || message.type === 'DESKTOP_AI_CANCEL') {
+      if (sender?.id !== api.runtime.id || sender?.url !== api.runtime.getURL('ai-host.html')) {
+        sendResponse(message.type === 'DESKTOP_AI_CANCEL' ? { cancelled: false } : { ok: false, reason: 'unavailable' });
+        return false;
+      }
+    }
     router.handle(message).then(result => {
       sendResponse(result);
       // A bound snapshot starts uploading once the sidebar has its answer, not before it.

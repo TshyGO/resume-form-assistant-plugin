@@ -93,6 +93,14 @@ test('AI cancel aborts the matching long request only', async () => {
   assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: false });
 });
 
+test('a cancel that arrives before AI completion never opens a native request', async () => {
+  let called = false;
+  const { router } = await makeRouter({ ai: { complete: async () => { called = true; return { ok: true, text: 'late' }; } } });
+  await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'early' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'early', purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'cancelled' });
+  assert.equal(called, false);
+});
+
 test('an unknown message is left for the other listeners', async () => {
   const { router } = await makeRouter();
 

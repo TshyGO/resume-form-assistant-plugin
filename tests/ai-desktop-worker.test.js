@@ -57,12 +57,33 @@ test('oversized form prompts are split beneath the UTF-8 user budget', async () 
   const calls = env.sent.filter(item => item.kind === 'desktop-complete');
   assert.ok(calls.length > 1);
   const budget = vm.runInContext('AI_USER_BUDGET', env.context);
-  for (const call of calls) assert.ok(Buffer.byteLength(call.user) <= budget);
+  const { buildEnvelope } = await import('../link/envelope.mjs');
+  for (const call of calls) {
+    assert.ok(Buffer.byteLength(JSON.stringify(call.user)) <= budget);
+    const envelope = await buildEnvelope({
+      messageType: 'ai.complete', messageId: '33333333-3333-4333-8333-333333333333',
+      clientInstanceId: '11111111-1111-4111-8111-111111111111',
+      payload: { purpose: call.purpose, system: call.system, user: call.user }
+    });
+    assert.ok(Buffer.byteLength(JSON.stringify(envelope)) <= 65536);
+  }
+});
+
+test('quote-heavy fields are split using their escaped wire length', async () => {
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  await env.run({
+    formFields: Array.from({ length: 12 }, (_, i) => ({ fieldId: `q${i}`, label: `问题${i}`, options: Array.from({ length: 35 }, () => '"\\'.repeat(18)) })),
+    resumeFields: [{ group: '自定义', key: '说明', value: '合成资料' }]
+  });
+  const calls = env.sent.filter(item => item.kind === 'desktop-complete');
+  assert.ok(calls.length > 1);
+  const budget = vm.runInContext('AI_USER_BUDGET', env.context);
+  for (const call of calls) assert.ok(Buffer.byteLength(JSON.stringify(call.user)) <= budget);
 });
 
 test('password and verification fields never enter any AI prompt', async () => {
   const env = worker(() => ({ ok: true, text: '[]' }));
-  await env.run({
+  const result = await env.run({
     formFields: [
       { fieldId: 'password-field', label: '登录密码', inputType: 'password' },
       { fieldId: 'captcha-field', label: '验证码' },
@@ -75,6 +96,18 @@ test('password and verification fields never enter any AI prompt', async () => {
   assert.ok(!prompts.includes('登录密码'));
   assert.ok(!prompts.includes('验证码'));
   assert.ok(!prompts.includes('synthetic-secret'));
+  assert.ok(result.diagnostics.skippedSecret >= 3);
+});
+
+test('an oversized lone candidate is skipped instead of prompting AI without resume context', async () => {
+  const env = worker(() => { throw new Error('AI must not receive an empty candidate batch'); });
+  const result = await env.run({
+    formFields: [{ fieldId: 'school', label: '学校', inputType: 'select', options: ['大学甲', '大学乙'] }],
+    resumeFields: [{ group: '教育背景', key: '学校', value: '合成资料'.repeat(20_000) }]
+  });
+  assert.equal(env.sent.filter(item => item.kind === 'desktop-complete').length, 0);
+  assert.ok(result.diagnostics.skippedOversized > 0);
+  assert.match(result.warning, /内容太多/);
 });
 
 test('desktop failure reasons produce distinct Chinese guidance', async () => {
@@ -137,6 +170,14 @@ test('repeat planner omits sensitive candidate labels', async () => {
   ] }, new AbortController());
   assert.ok(env.sent[0].user.includes('新增论文'));
   assert.ok(!env.sent[0].user.includes('验证码'));
+});
+
+test('repeat planner exposes a structured desktop AI settings action', async () => {
+  const env = worker(() => ({ ok: false, reason: 'not_configured' }));
+  await assert.rejects(
+    () => env.context.handleRepeatPlan({ candidates: [{ id: 'safe', label: '新增论文', current: 0, target: 1 }] }, new AbortController()),
+    error => error.openView === 'settings-ai' && error.message.includes('桌面还没有配置 AI 服务商')
+  );
 });
 
 test('resume parsing directs the user to the desktop resume page', async () => {

@@ -12,7 +12,7 @@ export function createResume({ session, store, sendNative, sleep, uuid, now, sen
         messageId: uuid(),
         clientInstanceId: await store.clientInstanceId(),
         payload,
-        identity: probe.identity,
+        identity: messageType === 'ui.open' ? null : probe.identity,
         now
       });
       const result = await send(envelope, { sendNative, sleep });

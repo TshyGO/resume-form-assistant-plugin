@@ -56,6 +56,7 @@
     currentStore: null,
     desktopMode: "unavailable",
     aiBusy: false,
+    suggestedView: null,
     statusTimer: null,
     lastFocusedField: null,
     chipAction: null
@@ -83,6 +84,7 @@
         phase: button?.textContent || "",
         status: status?.classList.contains("is-visible") ? status.textContent : "",
         statusKind: status?.classList.contains("is-error") ? "error" : "success",
+        openView: state.suggestedView,
         canCancel: Boolean(cancel && !cancel.hidden && !cancel.disabled),
         profileOffer: profileOffer && !profileOffer.hidden ? profileOffer.querySelector("#resume-pro-profile-offer-text")?.textContent || "" : "",
         fillOffer: fillOffer && !fillOffer.hidden ? fillOffer.querySelector("#resume-pro-fill-record-summary")?.textContent || "" : "",
@@ -880,25 +882,30 @@
     const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (button.disabled || fillButton.disabled || state.aiBusy) return;
     state.aiBusy = true;
+    state.suggestedView = null;
+    const release = message => {
+      state.aiBusy = false;
+      fillButton.disabled = state.desktopMode !== "ready";
+      if (message) showStatus(message, "error");
+    };
     state.currentStore = await StorageService.getState();
     if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     if (state.desktopMode !== "ready") {
-      state.aiBusy = false;
-      showStatus(self.ResumeProResumeData.modeCopy(state.desktopMode).message, "error");
+      release(self.ResumeProResumeData.modeCopy(state.desktopMode).message);
       return;
     }
     const template = getActiveTemplate(state.currentStore);
     const templateFingerprint = JSON.stringify(template);
     if (!template) {
-      state.aiBusy = false;
-      showStatus("请先在桌面准备简历模板。", "error");
+      release("请先在桌面准备简历模板。");
       return;
     }
     const agent = self.ResumeProFormAgent;
-    const snapshot = agent.collect(document, flattenTemplateFields(template));
+    let snapshot;
+    try { snapshot = agent.collect(document, flattenTemplateFields(template)); }
+    catch { release("无法识别网页分组，请手动新增条目。"); return; }
     if (!snapshot.candidates.length) {
-      state.aiBusy = false;
-      showStatus("未识别到可安全新增的分组，请先手动新增条目，再一键填写。", "error");
+      release("未识别到可安全新增的分组，请先手动新增条目，再一键填写。");
       return;
     }
     button.disabled = true;
@@ -934,7 +941,10 @@
       window.clearInterval(timer);
       if (stopped) throw new Error("已停止，未执行新增。");
       if (!reply?.success) {
-        if (reply?.error?.includes("桌面还没有配置 AI 服务商")) await openManager("settings-ai");
+        if (reply?.openView === "settings-ai") {
+          state.suggestedView = "settings-ai";
+          await openManager("settings-ai");
+        }
         throw new Error(reply?.error || "AI 规划失败，未执行新增。可稍后重试或手动新增。");
       }
       const plan = agent.validatePlan(reply.plan, snapshot.candidates);
@@ -980,6 +990,7 @@
     const button = event.currentTarget;
     if (button.disabled || state.aiBusy) return;
     state.aiBusy = true;
+    state.suggestedView = null;
     state.currentStore = await StorageService.getState();
     if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     if (state.desktopMode !== "ready") {
@@ -1089,7 +1100,10 @@
       diagnostics = response?.diagnostics || {};
 
       if (!response?.success) {
-        if (response?.openView === "settings-ai") await openManager("settings-ai");
+        if (response?.openView === "settings-ai") {
+          state.suggestedView = "settings-ai";
+          await openManager("settings-ai");
+        }
         throw new Error(response?.error || "AI 填写失败。");
       }
 
@@ -1232,7 +1246,10 @@
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
     const d = result.diagnostics;
     // Explicit allowlist: never copy provider messages, URL, keys or field values.
-    const code = /^(none|cancelled|network|format|http_\d{3})$/.test(d.errorCode) ? d.errorCode : "unknown";
+    const allowedCodes = new Set(["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
+      "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
+      "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
+    const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : "unknown";
     return [
       `Resume Pro v${chrome.runtime.getManifest().version}`,
       `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
@@ -1240,6 +1257,7 @@
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}`,
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
+      `敏感字段过滤：${count(d.skippedSecret)}；超大资料跳过：${count(d.skippedOversized)}；无对应资料跳过：${count(d.skippedNoContext)}`,
       `用户 prompt：${count(d.promptBytes)} bytes`,
       `扫描：${seconds(result.scanMs)}`,
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,

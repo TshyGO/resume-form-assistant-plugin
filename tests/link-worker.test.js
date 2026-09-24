@@ -11,6 +11,7 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
     runtime: {
       id: 'abcdefghijklmnopabcdefghijklmnop',
       getManifest: () => ({ version: '0.4.0' }),
+      getURL: file => `chrome-extension://abcdefghijklmnopabcdefghijklmnop/${file}`,
       lastError: undefined,
       onMessage: { addListener: fn => listeners.push(fn) },
       sendNativeMessage(hostName, message, callback) {
@@ -38,14 +39,25 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
       }
     },
     // Invoke the registered listener the way the browser does and resolve what it answered.
-    dispatch(message) {
+    dispatch(message, sender = {}) {
       return new Promise(resolve => {
-        const kept = listeners.map(fn => fn(message, {}, resolve));
+        const kept = listeners.map(fn => fn(message, sender, resolve));
         if (!kept.some(Boolean)) resolve(undefined);
       });
     }
   };
 }
+
+test('only the offscreen AI host may request or cancel desktop AI', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  installDesktopLink(api);
+  const request = { type: 'DESKTOP_AI_COMPLETE', requestId: 'synthetic', purpose: 'fill', system: 's', user: 'u' };
+  assert.deepEqual(await api.dispatch(request, { id: api.runtime.id, url: 'https://jobs.example.test' }), { ok: false, reason: 'unavailable' });
+  assert.deepEqual(await api.dispatch({ type: 'DESKTOP_AI_CANCEL', requestId: 'synthetic' }, { id: api.runtime.id, url: 'https://jobs.example.test' }), { cancelled: false });
+  const permitted = await api.dispatch(request, { id: api.runtime.id, url: api.runtime.getURL('ai-host.html') });
+  assert.equal(permitted.reason, 'not_installed');
+});
 
 const PAIRED = { archiveId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', restoreEpoch: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', at: 1 };
 // A write still waiting to go out. Without queued work the drain deliberately does nothing:

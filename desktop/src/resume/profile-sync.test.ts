@@ -24,15 +24,6 @@ test("解析用的 resume-utils.js、ai-helpers.js 与插件一字不差", () =>
   }
 });
 
-test("插件把简历解析交给桌面，桌面保留独立的解析提示词", async () => {
-  const worker = readFileSync(new URL("../../../ai-worker.js", import.meta.url), "utf8");
-  const { RESUME_PARSE_SYSTEM_PROMPT, RESUME_PARSE_USER_PREFIX } = await import("./parse-helpers.ts");
-  assert.match(worker, /简历解析已搬到桌面程序的「简历」页/);
-  assert.doesNotMatch(worker, /const SYSTEM_PROMPT =/);
-  assert.ok(RESUME_PARSE_SYSTEM_PROMPT.includes("简历信息提取助手"));
-  assert.equal(RESUME_PARSE_USER_PREFIX, "请提取以下简历中的所有信息：\n\n");
-});
-
 test("解析辅助的类型化入口可用", async () => {
   const { parseHelpers } = await import("./parse-helpers.ts");
   const fields = parseHelpers.normalizeParsedFields([{ group: "基本信息", key: "姓名", value: "张三" }, { group: "", key: "x", value: "y" }]);

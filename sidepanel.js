@@ -207,7 +207,7 @@
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
         elements.fillResult.classList.toggle("is-error", response.statusKind === "error");
-        if (response.status.includes("桌面还没有配置 AI 服务商")) {
+        if (response.openView === "settings-ai") {
           elements.desktopConnection.hidden = false;
           elements.desktopConnectionText.textContent = response.status;
           elements.desktopConnectionAction.textContent = "打开桌面 AI 设置";

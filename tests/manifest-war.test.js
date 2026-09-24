@@ -17,6 +17,27 @@ function warMatches(resource, pattern) {
   return new RegExp(`^${escaped}$`).test(resource);
 }
 
+function reachablePageModules() {
+  const roots = [];
+  for (const file of manifest.content_scripts.flatMap((entry) => entry.js)) {
+    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+    for (const match of source.matchAll(/getURL\(\s*["']([^"']+\.mjs)["']\s*\)/g)) roots.push(match[1]);
+  }
+  const seen = new Set();
+  const queue = [...roots];
+  while (queue.length) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+    for (const match of source.matchAll(/(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g)) {
+      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
+      if (resolved.endsWith(".mjs")) queue.push(resolved);
+    }
+  }
+  return seen;
+}
+
 test("web_accessible_resources 保持人工审过的最小列表", () => {
   assert.deepStrictEqual(manifest.web_accessible_resources, [
     {
@@ -86,12 +107,9 @@ test("service worker 专用模块不对网页暴露", () => {
 test("内容脚本及其动态模块可达的 getURL 资源全部被 WAR 覆盖", () => {
   const war = manifest.web_accessible_resources.flatMap((entry) => entry.resources);
   const found = [];
-  const linkModules = fs.readdirSync(path.join(ROOT, "link"), { recursive: true })
-    .filter((file) => file.endsWith(".mjs"))
-    .map((file) => path.join("link", file));
   const pageContextFiles = [
     ...manifest.content_scripts.flatMap((entry) => entry.js),
-    ...linkModules,
+    ...reachablePageModules(),
   ];
   for (const file of pageContextFiles) {
     const source = fs.readFileSync(path.join(ROOT, file), "utf8");
@@ -109,29 +127,9 @@ test("内容脚本及其动态模块可达的 getURL 资源全部被 WAR 覆盖"
 
 test("内容脚本动态入口的静态 import 图全部被 WAR 覆盖", () => {
   const war = manifest.web_accessible_resources.flatMap((entry) => entry.resources);
-  const roots = [];
-  for (const file of manifest.content_scripts.flatMap((entry) => entry.js)) {
-    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
-    for (const match of source.matchAll(/getURL\(\s*["']([^"']+\.mjs)["']\s*\)/g)) {
-      roots.push(match[1]);
-    }
-  }
-
-  const seen = new Set();
-  const queue = [...roots];
-  while (queue.length) {
-    const file = queue.pop();
-    if (seen.has(file)) continue;
-    seen.add(file);
+  const seen = reachablePageModules();
+  for (const file of seen) {
     assert.ok(war.includes(file), `${file} 是页面侧 import 依赖，但不在 WAR 白名单`);
-    const source = fs.readFileSync(path.join(ROOT, file), "utf8");
-    const imports = source.matchAll(
-      /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g,
-    );
-    for (const match of imports) {
-      const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[1]));
-      if (resolved.endsWith(".mjs")) queue.push(resolved);
-    }
   }
 
   assert.ok(seen.has("link/extract.mjs"));

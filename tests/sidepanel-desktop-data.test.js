@@ -141,7 +141,7 @@ test('footer opens desktop, and missing desktop offers the download URL', async 
 
 test('a desktop not-configured response exposes the AI settings action', async () => {
   const ui = await harness();
-  ui.setPageResponse({ ready: true, status: '桌面还没有配置 AI 服务商，或当前服务商没有 Key。', statusKind: 'error' });
+  ui.setPageResponse({ ready: true, status: '请查看 AI 设置。', statusKind: 'error', openView: 'settings-ai' });
   ui.poll();
   await ui.tick();
   assert.equal(ui.get('desktop-connection').hidden, false);
