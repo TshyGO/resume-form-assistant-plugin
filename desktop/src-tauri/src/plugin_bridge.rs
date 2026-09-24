@@ -10,8 +10,8 @@ use archive_store::{
     ReconcileQueryItem, SnapshotChunkInput, SnapshotCompletion, StoreError, SubmitConfirmInput,
 };
 use resume_pro_protocol::{
-    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, DurableChunk, ErrorCode, MessageType,
-    Request,
+    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, CurrentArchive, DurableChunk,
+    ErrorCode, MessageType, Request, MAX_ENVELOPE_BYTES,
 };
 use serde_json::{json, Map, Value};
 
@@ -37,11 +37,82 @@ pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCod
         }
         MessageType::OutboxReconcile => reconcile(request, store),
         MessageType::SnapshotChunk => snapshot_chunk(request, store),
+        MessageType::ResumeRead => resume_read(request, store),
+        MessageType::ResumeUpdate => resume_update(request, store),
         MessageType::Health | MessageType::Handshake => Err(ErrorCode::UnknownMessageType),
-        // PR 3a defines the v2 wire contract; PR 3b attaches the desktop handlers.
-        MessageType::ResumeRead | MessageType::ResumeUpdate | MessageType::AiComplete
-        | MessageType::UiOpen | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
+        MessageType::AiComplete | MessageType::UiOpen | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
     }
+}
+
+fn ensure_current_identity(request: &Request, store: &ArchiveStore) -> Result<(), ErrorCode> {
+    let identity = store.identity();
+    let current = CurrentArchive {
+        archive_id: identity.archive_id,
+        restore_epoch: identity.restore_epoch,
+    };
+    resume_pro_protocol::check_current_identity(request, Some(&current)).map_err(|err| err.code)
+}
+
+fn resume_read(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    let overview = store.resume_overview().map_err(code_of)?;
+    let profile = store.get_profile().map_err(code_of)?;
+    let templates = overview.templates.into_iter().map(|summary| json!({
+        "id": summary.id,
+        "name": summary.name,
+        "fieldCount": summary.field_count
+    })).collect::<Vec<_>>();
+    let active = match overview.active_template_id {
+        Some(id) => {
+            let template = store.get_template(&id).map_err(code_of)?.ok_or(ErrorCode::Unavailable)?;
+            json!({"id": template.id, "name": template.name, "groups": template.groups})
+        }
+        None => Value::Null,
+    };
+    let payload = json!({
+        "templates": templates,
+        "activeTemplate": active,
+        "profile": profile.profile,
+        "profileRevision": profile.revision
+    });
+    let payload_size = serde_json::to_vec(&payload).map_err(|_| ErrorCode::Unavailable)?.len();
+    if payload_size > MAX_ENVELOPE_BYTES - 1024 {
+        return Err(ErrorCode::PayloadTooLarge);
+    }
+    let response = json!({
+        "protocolVersion": request.protocol_version,
+        "correlationId": request.message_id,
+        "ok": true,
+        "payload": payload
+    });
+    if serde_json::to_vec(&response).map_err(|_| ErrorCode::Unavailable)?.len() > MAX_ENVELOPE_BYTES {
+        return Err(ErrorCode::PayloadTooLarge);
+    }
+    resume_pro_protocol::validate_response_for_request(&response, request).map_err(|err| err.code)?;
+    Ok(Answer { result_id: None, payload })
+}
+
+fn resume_update(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    let revision = match request.payload["op"].as_str() {
+        Some("setActiveTemplate") => {
+            let id = request.payload["templateId"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            store.set_active_template(&id.to_ascii_lowercase()).map_err(code_of)?;
+            store.get_profile().map_err(code_of)?.revision
+        }
+        Some("saveProfile") => {
+            let profile = request.payload.get("profile").ok_or(ErrorCode::InvalidPayload)?.clone();
+            archive_store::reject_profile_secrets(&profile).map_err(|_| ErrorCode::SecretForbidden)?;
+            let expected = request.payload["expectedRevision"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
+            store.save_profile(profile, expected).map_err(code_of)?.revision
+        }
+        _ => return Err(ErrorCode::InvalidPayload),
+    };
+    let active = store.resume_overview().map_err(code_of)?.active_template_id;
+    Ok(Answer {
+        result_id: None,
+        payload: json!({"activeTemplateId": active, "profileRevision": revision}),
+    })
 }
 
 /// The identity the envelope claims. `None` reaches D03 as `identity_missing` rather than
@@ -431,6 +502,153 @@ mod tests {
             Some(identity),
             json!({"company": "Synthetic Ltd", "title": title, "sourceUrl": JOB_URL}),
         )
+    }
+
+    fn v2_request(message_type: &str, identity: &ArchiveIdentity, payload: Value) -> Request {
+        let envelope = json!({
+            "protocolVersion": 2,
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": CLIENT,
+            "messageType": message_type,
+            "occurredAt": "2026-09-24T00:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": payload
+        });
+        validate_request_bytes(&serde_json::to_vec(&envelope).unwrap()).unwrap()
+    }
+
+    fn checked_v2_response(request: &Request, answer: &Answer) -> Value {
+        let response = json!({
+            "protocolVersion": 2,
+            "correlationId": request.message_id,
+            "ok": true,
+            "payload": answer.payload
+        });
+        resume_pro_protocol::validate_response_for_request(&response, request).unwrap();
+        response
+    }
+
+    #[test]
+    fn resume_read_returns_empty_profile_and_no_templates() {
+        let (_dir, store) = store();
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        assert!(answer.result_id.is_none());
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"], json!([]));
+        assert!(response["payload"]["activeTemplate"].is_null());
+        assert_eq!(response["payload"]["profile"], archive_store::empty_profile());
+        assert_eq!(response["payload"]["profileRevision"], 0);
+    }
+
+    #[test]
+    fn resume_read_returns_summaries_in_desktop_order_and_active_template_body() {
+        let (_dir, store) = store();
+        let groups = vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField { key: "姓名".into(), value: "张三".into() }],
+        }];
+        let first = store.create_template("第一份", groups.clone()).unwrap().template;
+        let second = store.create_template("第二份", groups).unwrap().template;
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"][0]["id"], second.id);
+        assert_eq!(response["payload"]["templates"][1]["id"], first.id);
+        assert_eq!(response["payload"]["activeTemplate"]["id"], second.id);
+        assert_eq!(response["payload"]["activeTemplate"]["groups"][0]["fields"][0]["value"], "张三");
+        assert!(response["payload"]["activeTemplate"].get("updatedAt").is_none());
+    }
+
+    #[test]
+    fn resume_update_switches_by_uuid_and_saves_profile_with_revision() {
+        let (_dir, store) = store();
+        let groups = vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField { key: "姓名".into(), value: "张三".into() }],
+        }];
+        let first = store.create_template("第一份", groups.clone()).unwrap().template;
+        store.create_template("第二份", groups).unwrap();
+        let switch = v2_request("resume.update", &store.identity(), json!({
+            "op": "setActiveTemplate", "templateId": first.id.to_ascii_uppercase()
+        }));
+        let switched = apply(&switch, &store).unwrap();
+        let response = checked_v2_response(&switch, &switched);
+        assert_eq!(response["payload"]["activeTemplateId"], first.id);
+        let missing = v2_request("resume.update", &store.identity(), json!({
+            "op": "setActiveTemplate", "templateId": "ffffffff-ffff-4fff-8fff-ffffffffffff"
+        }));
+        assert_eq!(apply(&missing, &store).err(), Some(ErrorCode::InvalidPayload));
+
+        let profile = json!({"values": {"fullName": "Alice"}, "family": [], "custom": []});
+        let save = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveProfile", "profile": profile, "expectedRevision": 0
+        }));
+        let saved = apply(&save, &store).unwrap();
+        let response = checked_v2_response(&save, &saved);
+        assert_eq!(response["payload"]["profileRevision"], 1);
+        assert_eq!(response["payload"]["activeTemplateId"], first.id);
+        assert_eq!(apply(&save, &store).err(), Some(ErrorCode::Conflict));
+        let secret = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveProfile",
+            "profile": {"values": {"note": "密码：123456"}, "family": [], "custom": []},
+            "expectedRevision": 1
+        }));
+        assert_eq!(apply(&secret, &store).err(), Some(ErrorCode::SecretForbidden));
+    }
+
+    #[test]
+    fn resume_read_rejects_a_foreign_archive_identity() {
+        let (_dir, store) = store();
+        let mut foreign = store.identity();
+        foreign.restore_epoch = "ffffffff-ffff-4fff-8fff-ffffffffffff".into();
+        let request = v2_request("resume.read", &foreign, json!({}));
+        assert_eq!(apply(&request, &store).err(), Some(ErrorCode::RestoreEpochMismatch));
+    }
+
+    #[test]
+    fn resume_read_worst_case_fits_a_single_envelope() {
+        let (_dir, store) = store();
+        let small = vec![archive_store::TemplateGroup {
+            name: "g".into(),
+            fields: vec![archive_store::TemplateField { key: "k".into(), value: "v".into() }],
+        }];
+        let prefix = "𠀀".repeat(98);
+        for i in 0..24 {
+            store.create_template(&format!("{prefix}{i:02}"), small.clone()).unwrap();
+        }
+        let mut large = small;
+        let base = serde_json::to_vec(&large).unwrap().len() - 1;
+        large[0].fields[0].value = "a".repeat(archive_store::MAX_TEMPLATE_BYTES - base);
+        assert_eq!(serde_json::to_vec(&large).unwrap().len(), archive_store::MAX_TEMPLATE_BYTES);
+        store.create_template(&format!("{prefix}24"), large).unwrap();
+        let mut profile = archive_store::empty_profile();
+        profile["values"]["k"] = json!("");
+        let base = serde_json::to_vec(&profile).unwrap().len();
+        profile["values"]["k"] = json!("a".repeat(archive_store::MAX_PROFILE_BYTES - base));
+        assert_eq!(serde_json::to_vec(&profile).unwrap().len(), archive_store::MAX_PROFILE_BYTES);
+        store.save_profile(profile, 0).unwrap();
+
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"].as_array().unwrap().len(), 25);
+        assert!(serde_json::to_vec(&response).unwrap().len() <= resume_pro_protocol::MAX_ENVELOPE_BYTES);
+    }
+
+    #[test]
+    fn resume_read_refuses_a_stored_secret_like_field() {
+        let (_dir, store) = store();
+        store.create_template("已有字段", vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField {
+                key: "备注".into(),
+                value: "Bearer abcdefghijklmnopqrstuvwxyz".into(),
+            }],
+        }]).unwrap();
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        assert_eq!(apply(&request, &store).err(), Some(ErrorCode::SecretForbidden));
     }
 
     #[test]

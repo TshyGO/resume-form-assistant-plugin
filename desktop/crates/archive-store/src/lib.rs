@@ -50,7 +50,7 @@ pub use receipts::{
     ReconcileOutcome, ReconcileQueryItem, ReconcileReply, SnapshotChunkInput, SubmitConfirmInput,
 };
 pub use resume::{
-    empty_profile, field_count, normalize_groups, validate_profile, ProfileRecord, ResumeOverview,
+    empty_profile, field_count, normalize_groups, reject_profile_secrets, validate_profile, ProfileRecord, ResumeOverview,
     ResumeTemplate, SavedTemplate, TemplateField, TemplateGroup, TemplateSummary, MAX_CUSTOM_FIELDS,
     MAX_PROFILE_BYTES, MAX_TEMPLATES, MAX_TEMPLATE_BYTES, MAX_TEMPLATE_NAME_CHARS,
 };
