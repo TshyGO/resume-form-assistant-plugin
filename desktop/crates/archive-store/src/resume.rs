@@ -195,7 +195,7 @@ fn without_secrets(groups: Vec<TemplateGroup>) -> (Vec<TemplateGroup>, usize) {
 }
 
 /// 返回要存的 JSON 和剔掉的密码类字段数。
-fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(String, usize), StoreError> {
+pub(crate) fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(String, usize), StoreError> {
     let (groups, skipped) = without_secrets(normalize_groups(groups));
     if groups.is_empty() {
         return Err(invalid("未解析到任何字段，请检查 Excel 格式。"));

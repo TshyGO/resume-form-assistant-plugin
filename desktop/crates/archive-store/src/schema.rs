@@ -279,6 +279,8 @@ CREATE TABLE resume_state (
 
 /// #130 PR 3b: old plugin data is staged until the user confirms it on the desktop.
 /// `applied_at` makes a confirmation retry safe when the credential-store step fails.
+/// `ai_config_dropped` records that the user finished an applied import without its AI
+/// config; `key_cleaned_at` stops startup cleanup from touching the OS store again.
 pub const V5_LEGACY_IMPORT: &str = r#"
 CREATE TABLE legacy_imports (
   import_id TEXT PRIMARY KEY,
@@ -288,7 +290,9 @@ CREATE TABLE legacy_imports (
   plugin_version TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  applied_at TEXT
+  applied_at TEXT,
+  ai_config_dropped INTEGER NOT NULL DEFAULT 0 CHECK (ai_config_dropped IN (0, 1)),
+  key_cleaned_at TEXT
 );
 CREATE TABLE legacy_import_parts (
   import_id TEXT NOT NULL REFERENCES legacy_imports(import_id) ON DELETE CASCADE,

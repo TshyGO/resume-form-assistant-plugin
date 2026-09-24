@@ -150,3 +150,150 @@ fn a_v4_archive_migrates_to_v5_without_losing_resume_data() {
     let version: i64 = raw.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
     assert_eq!(version, 5);
 }
+
+fn template_body(name: &str) -> serde_json::Value {
+    json!({"name":name,"wasActive":false,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})
+}
+
+fn manifest_of(kinds: &[&str]) -> serde_json::Value {
+    json!({
+        "pluginVersion": "0.4.0", "total": kinds.len(),
+        "parts": kinds.iter().enumerate().map(|(i, kind)| json!({
+            "index": i + 1, "kind": kind, "sha256": HASH
+        })).collect::<Vec<_>>()
+    })
+}
+
+#[test]
+fn manifest_limits_each_kind_to_what_the_desktop_can_hold() {
+    let (_dir, _cfg, store) = open();
+    let too_many_templates = vec!["template"; archive_store::MAX_TEMPLATES + 1];
+    assert!(matches!(store.receive_legacy_manifest(IMPORT, manifest_of(&too_many_templates)), Err(StoreError::Validation(_))));
+    assert!(matches!(store.receive_legacy_manifest(IMPORT, manifest_of(&["profile", "profile"])), Err(StoreError::Validation(_))));
+    assert!(matches!(store.receive_legacy_manifest(IMPORT, manifest_of(&["aiConfig", "aiConfig"])), Err(StoreError::Validation(_))));
+    let mut full = vec!["template"; archive_store::MAX_TEMPLATES];
+    full.extend(["profile", "aiConfig"]);
+    assert_eq!(store.receive_legacy_manifest(IMPORT, manifest_of(&full)).unwrap().total, 27);
+}
+
+#[test]
+fn confirmation_refuses_to_overflow_the_template_limit_and_reports_both_counts() {
+    let (_dir, _cfg, store) = open();
+    for i in 0..archive_store::MAX_TEMPLATES - 1 {
+        store.create_template(&format!("Existing {i}"), vec![archive_store::TemplateGroup {
+            name: "Basic".into(), fields: vec![archive_store::TemplateField { key: "Name".into(), value: "Alice".into() }],
+        }]).unwrap();
+    }
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template", "template"])).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    store.receive_legacy_part(IMPORT, 2, "template", HASH, template_body("Second")).unwrap();
+    assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), Some((24, 2)));
+    assert!(matches!(store.apply_legacy_confirmation(IMPORT), Err(StoreError::Validation(_))));
+    assert_eq!(store.resume_overview().unwrap().templates.len(), 24);
+    assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
+
+    let first = store.resume_overview().unwrap().templates[0].id.clone();
+    store.delete_template(&first).unwrap();
+    assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), None);
+    assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "imported");
+    // Once applied, its own templates are no longer "incoming".
+    assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), None);
+}
+
+#[test]
+fn only_an_incomplete_batch_expires() {
+    let (_dir, _cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template"])).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    let later = (time::OffsetDateTime::now_utc() + time::Duration::hours(25))
+        .format(&time::format_description::well_known::Rfc3339).unwrap();
+    assert!(store.expire_legacy_imports(&later).unwrap().is_empty());
+    assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
+}
+
+#[test]
+fn parts_are_checked_on_receipt_like_confirmation_would() {
+    let (_dir, _cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template", "profile"])).unwrap();
+    let bad = |index: i64, kind: &str, body: serde_json::Value| {
+        assert!(matches!(store.receive_legacy_part(IMPORT, index, kind, HASH, body), Err(StoreError::Validation(_))), "{kind}");
+    };
+    bad(1, "template", json!({"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]}));
+    bad(1, "template", json!({"name":"Blank","groups":[{"name":"Basic","fields":[{"key":"  ","value":"x"}]}]}));
+    bad(1, "template", json!({"name":"Shape","groups":"not groups"}));
+    bad(1, "template", json!({"name":"Huge","groups":[{"name":"Basic","fields":[
+        {"key":"Name","value":"a".repeat(archive_store::MAX_TEMPLATE_BYTES)}
+    ]}]}));
+    bad(2, "profile", json!({"values":{"fullName":1},"family":[],"custom":[]}));
+    bad(2, "profile", json!({"values":{},"family":[],"custom":[{"key":"邮箱密码","value":"hunter2"}]}));
+    assert_eq!(store.legacy_import_status(IMPORT).unwrap().received, 0);
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    store.receive_legacy_part(IMPORT, 2, "profile", HASH, json!({"values":{},"family":[],"custom":[]})).unwrap();
+    assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
+}
+
+#[test]
+fn part_check_reports_whether_the_part_is_new_and_the_import_state() {
+    let (_dir, _cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template"])).unwrap();
+    let fresh = store.check_legacy_part(IMPORT, 1, "template", HASH).unwrap();
+    assert_eq!((fresh.is_new, fresh.state.as_str()), (true, "receiving"));
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    let again = store.check_legacy_part(IMPORT, 1, "template", HASH).unwrap();
+    assert_eq!((again.is_new, again.state.as_str()), (false, "awaiting_confirmation"));
+    store.apply_legacy_confirmation(IMPORT).unwrap();
+    let done = store.check_legacy_part(IMPORT, 1, "template", HASH).unwrap();
+    assert_eq!((done.is_new, done.state.as_str()), (false, "imported"));
+}
+
+#[test]
+fn rejecting_an_applied_import_finishes_it_without_the_ai_config_and_frees_the_slot() {
+    let (_dir, cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template", "aiConfig"])).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    store.receive_legacy_part(IMPORT, 2, "aiConfig", HASH,
+        json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
+    assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "awaiting_confirmation");
+    assert!(matches!(store.receive_legacy_manifest(OTHER, manifest_of(&["template"])), Err(StoreError::Conflict(_))));
+
+    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "imported");
+    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "imported");
+    assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
+    let db = rusqlite::Connection::open(cfg.db_path()).unwrap();
+    let bodies: Vec<String> = db.prepare("SELECT body_json FROM legacy_import_parts WHERE import_id = ?1")
+        .unwrap().query_map([IMPORT], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(bodies, vec!["{}", "{}"]);
+    let dropped: i64 = db.query_row("SELECT ai_config_dropped FROM legacy_imports WHERE import_id = ?1", [IMPORT], |row| row.get(0)).unwrap();
+    assert_eq!(dropped, 1);
+    assert_eq!(store.receive_legacy_manifest(OTHER, manifest_of(&["template"])).unwrap().state, "receiving");
+}
+
+#[test]
+fn rejecting_an_unapplied_import_still_discards_it() {
+    let (_dir, _cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["template"])).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
+    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "rejected");
+    assert!(store.resume_overview().unwrap().templates.is_empty());
+}
+
+#[test]
+fn startup_cleanup_lists_each_finished_ai_import_until_its_key_is_cleaned() {
+    let (_dir, cfg, store) = open();
+    store.receive_legacy_manifest(IMPORT, manifest_of(&["aiConfig"])).unwrap();
+    store.reject_legacy_import(IMPORT).unwrap();
+    store.receive_legacy_manifest(OTHER, manifest_of(&["template"])).unwrap();
+    store.reject_legacy_import(OTHER).unwrap();
+    // A row this build cannot read is skipped rather than blocking every other cleanup.
+    let db = rusqlite::Connection::open(cfg.db_path()).unwrap();
+    db.execute(
+        "INSERT INTO legacy_imports (import_id, state, total, manifest_json, plugin_version, created_at, updated_at) \
+         VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'expired', 1, 'not json', '0.4.0', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    let pending = store.legacy_import_cleanup_ids().unwrap();
+    assert_eq!(pending.ids, vec![IMPORT.to_string()]);
+    assert_eq!(pending.skipped, 1);
+    store.mark_legacy_key_cleaned(IMPORT).unwrap();
+    assert!(store.legacy_import_cleanup_ids().unwrap().ids.is_empty());
+}

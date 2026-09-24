@@ -53,7 +53,7 @@ pub fn reject(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &s
 
 pub fn expire(store: &ArchiveStore, services: &dyn BridgeServices) -> Result<(), ErrorCode> {
     let mut ids = store.expire_legacy_imports(&archive_store::timeutil::now_utc()).map_err(code_of)?;
-    ids.extend(store.legacy_import_cleanup_ids().map_err(code_of)?);
+    ids.extend(store.legacy_import_cleanup_ids().map_err(code_of)?.ids);
     ids.sort();
     ids.dedup();
     for id in ids { services.clear_import_key(&id)?; }
@@ -163,7 +163,12 @@ mod tests {
     #[test]
     fn a_previous_expiration_still_cleans_up_its_temporary_key_on_startup() {
         let (_dir, store) = store();
-        staged(&store);
+        // Only a batch that never finished arriving expires: the template never came.
+        store.receive_legacy_manifest(IMPORT, json!({"pluginVersion":"0.4.0","total":2,"parts":[
+            {"index":1,"kind":"template","sha256":HASH},{"index":2,"kind":"aiConfig","sha256":HASH}
+        ]})).unwrap();
+        store.receive_legacy_part(IMPORT, 2, "aiConfig", HASH,
+            json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
         let later = (time::OffsetDateTime::now_utc() + time::Duration::hours(25))

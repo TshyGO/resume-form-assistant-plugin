@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::StoreError;
+use crate::resume::MAX_TEMPLATES;
 use crate::store::ArchiveStore;
 use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
@@ -28,6 +29,22 @@ pub struct LegacyImportPending {
     pub plugin_version: String,
 }
 
+/// What a part check found before the caller does anything outside SQLite with the part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyPartCheck {
+    /// The part has not been received yet (only possible while the import is `receiving`).
+    pub is_new: bool,
+    pub state: String,
+}
+
+/// Finished imports whose temporary OS-store key has not been cleaned yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LegacyCleanup {
+    pub ids: Vec<String>,
+    /// Rows this build could not read. They are left alone rather than blocking the rest.
+    pub skipped: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct LegacyImportApply {
     pub status: LegacyImportStatus,
@@ -47,6 +64,7 @@ fn validate_manifest(body: &Value) -> Result<(i64, &str), StoreError> {
         return Err(invalid("manifest parts must cover 1..total"));
     }
     let mut seen = HashSet::new();
+    let (mut templates, mut profiles, mut ai_configs) = (0, 0, 0);
     for part in parts {
         let index = part.get("index").and_then(Value::as_i64).ok_or_else(|| invalid("part index missing"))?;
         let kind = part.get("kind").and_then(Value::as_str).ok_or_else(|| invalid("part kind missing"))?;
@@ -57,8 +75,47 @@ fn validate_manifest(body: &Value) -> Result<(i64, &str), StoreError> {
         {
             return Err(invalid("manifest part is not valid"));
         }
+        match kind {
+            "template" => templates += 1,
+            "profile" => profiles += 1,
+            _ => ai_configs += 1,
+        }
+    }
+    if templates > MAX_TEMPLATES || profiles > 1 || ai_configs > 1 {
+        return Err(invalid("manifest declares more parts of one kind than the desktop holds"));
     }
     Ok((total, version))
+}
+
+/// The same checks confirmation applies, run when the part arrives so the plugin hears
+/// about a bad part while it can still do something about it.
+fn validate_part_body(kind: &str, body: &Value) -> Result<(), StoreError> {
+    match kind {
+        "template" => {
+            body.get("name").and_then(Value::as_str).ok_or_else(|| invalid("template name missing"))?;
+            let groups: Vec<crate::resume::TemplateGroup> = serde_json::from_value(
+                body.get("groups").cloned().ok_or_else(|| invalid("template groups missing"))?,
+            ).map_err(|_| invalid("template groups are not valid"))?;
+            crate::resume::checked_groups(groups)?;
+        }
+        "profile" => {
+            crate::resume::validate_profile(body)?;
+            crate::resume::reject_profile_secrets(body)?;
+        }
+        "aiConfig" => {
+            let obj = body.as_object().ok_or_else(|| invalid("AI config body must be an object"))?;
+            if obj.get("hasKey") != Some(&Value::Bool(true)) || obj.contains_key("apiKey")
+                || obj.keys().any(|key| !matches!(key.as_str(), "apiUrl" | "model" | "hasKey"))
+            {
+                return Err(invalid("AI config must be staged without its API key"));
+            }
+            if !obj.get("apiUrl").is_some_and(Value::is_string) || !obj.get("model").is_some_and(Value::is_string) {
+                return Err(invalid("AI config needs apiUrl and model"));
+            }
+        }
+        _ => return Err(invalid("unknown legacy part kind")),
+    }
+    Ok(())
 }
 
 impl ArchiveStore {
@@ -70,8 +127,23 @@ impl ArchiveStore {
         self.transaction(|tx| tx.receive_legacy_part(import_id, index, kind, digest, body))
     }
 
-    pub fn check_legacy_part(&self, import_id: &str, index: i64, kind: &str, digest: &str) -> Result<(), StoreError> {
-        self.transaction(|tx| tx.checked_part(import_id, index, kind, digest).map(|_| ()))
+    /// Check a part against the manifest without storing it. The caller stages anything
+    /// that lives outside SQLite (the AI key) only when `is_new`.
+    pub fn check_legacy_part(&self, import_id: &str, index: i64, kind: &str, digest: &str) -> Result<LegacyPartCheck, StoreError> {
+        self.transaction(|tx| {
+            let (_, existing) = tx.checked_part(import_id, index, kind, digest)?;
+            Ok(LegacyPartCheck { is_new: !existing, state: tx.legacy_import_status(import_id)?.state })
+        })
+    }
+
+    /// `Some((existing, incoming))` when confirming would take the desktop past
+    /// [MAX_TEMPLATES]. An import that has already been applied has nothing incoming.
+    pub fn legacy_template_overflow(&self, import_id: &str) -> Result<Option<(usize, usize)>, StoreError> {
+        self.transaction(|tx| tx.legacy_template_overflow(import_id))
+    }
+
+    pub fn mark_legacy_key_cleaned(&self, import_id: &str) -> Result<(), StoreError> {
+        self.transaction(|tx| tx.mark_legacy_key_cleaned(import_id))
     }
 
     pub fn legacy_import_status(&self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
@@ -93,7 +165,7 @@ impl ArchiveStore {
         self.transaction(|tx| tx.expire_legacy_imports(now))
     }
 
-    pub fn legacy_import_cleanup_ids(&self) -> Result<Vec<String>, StoreError> {
+    pub fn legacy_import_cleanup_ids(&self) -> Result<LegacyCleanup, StoreError> {
         self.transaction(|tx| tx.legacy_import_cleanup_ids())
     }
 
@@ -168,17 +240,32 @@ impl StoreTx<'_> {
         Ok((total, false))
     }
 
+    pub fn legacy_template_overflow(&self, import_id: &str) -> Result<Option<(usize, usize)>, StoreError> {
+        let applied: Option<String> = self.conn().query_row(
+            "SELECT applied_at FROM legacy_imports WHERE import_id = ?1", [import_id], |row| row.get(0),
+        ).optional()?.ok_or_else(|| StoreError::NotFound("legacy import not found".into()))?;
+        if applied.is_some() { return Ok(None); }
+        let incoming: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM legacy_import_parts WHERE import_id = ?1 AND kind = 'template'",
+            [import_id], |row| row.get(0),
+        )?;
+        let existing: i64 = self.conn().query_row("SELECT COUNT(*) FROM resume_templates", [], |row| row.get(0))?;
+        let (existing, incoming) = (existing as usize, incoming as usize);
+        Ok((existing + incoming > MAX_TEMPLATES).then_some((existing, incoming)))
+    }
+
+    pub fn mark_legacy_key_cleaned(&mut self, import_id: &str) -> Result<(), StoreError> {
+        self.conn().execute(
+            "UPDATE legacy_imports SET key_cleaned_at = ?2 WHERE import_id = ?1 AND key_cleaned_at IS NULL",
+            params![import_id, now_utc()],
+        )?;
+        Ok(())
+    }
+
     pub fn receive_legacy_part(&mut self, import_id: &str, index: i64, kind: &str, digest: &str, body: Value) -> Result<LegacyImportStatus, StoreError> {
         let (total, existing) = self.checked_part(import_id, index, kind, digest)?;
         if existing { return self.legacy_import_status(import_id); }
-        if kind == "aiConfig" {
-            let obj = body.as_object().ok_or_else(|| invalid("AI config body must be an object"))?;
-            if obj.get("hasKey") != Some(&Value::Bool(true)) || obj.contains_key("apiKey")
-                || obj.keys().any(|key| !matches!(key.as_str(), "apiUrl" | "model" | "hasKey"))
-            {
-                return Err(invalid("AI config must be staged without its API key"));
-            }
-        }
+        validate_part_body(kind, &body)?;
         self.conn().execute(
             "INSERT INTO legacy_import_parts (import_id, idx, kind, sha256, body_json) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![import_id, index, kind, digest, serde_json::to_string(&body)?],
@@ -210,8 +297,7 @@ impl StoreTx<'_> {
         let instant = crate::timeutil::parse_rfc3339(now)?;
         let cutoff = crate::timeutil::format_timestamp(instant - time::Duration::hours(24));
         let mut stmt = self.conn().prepare(
-            "SELECT import_id FROM legacy_imports WHERE state IN ('receiving','awaiting_confirmation') \
-             AND applied_at IS NULL AND created_at < ?1",
+            "SELECT import_id FROM legacy_imports WHERE state = 'receiving' AND created_at < ?1",
         )?;
         let ids = stmt.query_map([cutoff], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -226,20 +312,21 @@ impl StoreTx<'_> {
         Ok(ids)
     }
 
-    pub fn legacy_import_cleanup_ids(&self) -> Result<Vec<String>, StoreError> {
+    pub fn legacy_import_cleanup_ids(&self) -> Result<LegacyCleanup, StoreError> {
         let mut stmt = self.conn().prepare(
-            "SELECT import_id, manifest_json FROM legacy_imports WHERE state IN ('imported','rejected','expired')",
+            "SELECT import_id, manifest_json FROM legacy_imports \
+             WHERE state IN ('imported','rejected','expired') AND key_cleaned_at IS NULL",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
-        let mut ids = Vec::new();
+        let mut cleanup = LegacyCleanup::default();
         for row in rows {
-            let (id, manifest) = row?;
-            let value: Value = serde_json::from_str(&manifest)?;
+            let Ok((id, manifest)) = row else { cleanup.skipped += 1; continue; };
+            let Ok(value) = serde_json::from_str::<Value>(&manifest) else { cleanup.skipped += 1; continue; };
             if value["parts"].as_array().is_some_and(|parts| parts.iter().any(|part| part["kind"] == "aiConfig")) {
-                ids.push(id);
+                cleanup.ids.push(id);
             }
         }
-        Ok(ids)
+        Ok(cleanup)
     }
 
     fn ai_config_body(&self, import_id: &str) -> Result<Option<Value>, StoreError> {
@@ -262,6 +349,11 @@ impl StoreTx<'_> {
         let ai_config = self.ai_config_body(import_id)?;
         if applied_at.is_some() {
             return Ok(LegacyImportApply { status: self.legacy_import_status(import_id)?, ai_config });
+        }
+        if let Some((existing, incoming)) = self.legacy_template_overflow(import_id)? {
+            return Err(invalid(&format!(
+                "desktop has {existing} templates; importing {incoming} more exceeds {MAX_TEMPLATES}"
+            )));
         }
         let mut stmt = self.conn().prepare(
             "SELECT kind, body_json FROM legacy_import_parts WHERE import_id = ?1 ORDER BY idx",
@@ -329,14 +421,26 @@ impl StoreTx<'_> {
         self.legacy_import_status(import_id)
     }
 
+    /// Discard a staged import. An import whose templates and profile were already applied
+    /// cannot be taken back; rejecting it finishes it without the AI config instead, so an
+    /// AI step that can never succeed (temporary key lost, provider limit) does not hold the
+    /// single import slot forever. The caller deletes the temporary key either way.
     pub fn reject_legacy_import(&mut self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
-        let (state, applied_at): (String, Option<String>) = self.conn().query_row(
-            "SELECT state, applied_at FROM legacy_imports WHERE import_id = ?1",
-            [import_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        let (state, applied_at, dropped): (String, Option<String>, bool) = self.conn().query_row(
+            "SELECT state, applied_at, ai_config_dropped FROM legacy_imports WHERE import_id = ?1",
+            [import_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?.ok_or_else(|| StoreError::NotFound("legacy import not found".into()))?;
-        if state == "rejected" { return self.legacy_import_status(import_id); }
-        if !matches!(state.as_str(), "receiving" | "awaiting_confirmation") || applied_at.is_some() {
-            return Err(conflict("applied legacy import cannot be rejected"));
+        if state == "rejected" || (state == "imported" && dropped) { return self.legacy_import_status(import_id); }
+        if state == "awaiting_confirmation" && applied_at.is_some() {
+            self.conn().execute(
+                "UPDATE legacy_imports SET state = 'imported', ai_config_dropped = 1, updated_at = ?2 WHERE import_id = ?1",
+                params![import_id, now_utc()],
+            )?;
+            self.conn().execute("UPDATE legacy_import_parts SET body_json = '{}' WHERE import_id = ?1", [import_id])?;
+            return self.legacy_import_status(import_id);
+        }
+        if !matches!(state.as_str(), "receiving" | "awaiting_confirmation") {
+            return Err(conflict("finished legacy import cannot be rejected"));
         }
         self.conn().execute("DELETE FROM legacy_import_parts WHERE import_id = ?1", [import_id])?;
         self.conn().execute(
