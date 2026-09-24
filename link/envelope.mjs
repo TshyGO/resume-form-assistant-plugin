@@ -1,14 +1,14 @@
 import { MAX_ENVELOPE_BYTES, payloadBodySha256, utf8JsonLen } from './protocol/validate.mjs';
 import { LinkError } from './errors.mjs';
 
-export const PROTOCOL_VERSION = 1;
-export const MIN_PROTOCOL_VERSION = 1;
-export const MAX_PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
+export const MIN_PROTOCOL_VERSION = 2;
+export const MAX_PROTOCOL_VERSION = 2;
 
 // D05 splits the message types three ways and the split is not cosmetic: health and
 // handshake are refused if they carry archive identity, and the rest are refused if they do
 // not.
-export const IDENTITY_FORBIDDEN = new Set(['health', 'handshake']);
+export const IDENTITY_FORBIDDEN = new Set(['health', 'handshake', 'ai.complete', 'ui.open']);
 
 // Every write is stamped with the epoch it was bound to.
 export const WRITE_TYPES = new Set(['job.save', 'fill.submit', 'snapshot.chunk', 'submit.confirm']);

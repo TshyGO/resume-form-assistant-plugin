@@ -55,7 +55,7 @@ async function harness({ desktop, storage = fakeStorage(), clock = { value: Date
 
 const unavailable = message => ({
   response: {
-    protocolVersion: 1, correlationId: message.messageId, ok: false,
+    protocolVersion: 2, correlationId: message.messageId, ok: false,
     error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
   }
 });
@@ -66,12 +66,12 @@ const unavailable = message => ({
 const reconcileReply = (statusFor, writes = { ok: true }) => message => {
   if (message.messageType !== 'outbox.reconcile') {
     return writes.ok
-      ? { response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} } }
+      ? { response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} } }
       : unavailable(message);
   }
   return {
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       payload: {
@@ -261,7 +261,7 @@ test('a retry after saving again does not mint a third identity', async () => {
     desktop: message => {
       if (message.messageType === 'outbox.reconcile') return reconcileReply(() => 'not_found')(message);
       if (!allowWrite) return unavailable(message);
-      return { response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} } };
+      return { response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} } };
     }
   });
   const entry = await staleEntry(bench, { ok: false });
@@ -340,7 +340,8 @@ test('a manual retry cannot revive a paused message', async () => {
       sendNative: async () => ({ lastError: 'unreachable' }),
       sleep: async () => {},
       uuid: () => '00000000-0000-4000-8000-00000000ffff',
-      now: () => new Date(bench.clock.value)
+      now: () => new Date(bench.clock.value),
+      getManifest: () => ({ version: '0.4.0' })
     }),
     outbox: bench.outbox,
     alarms: { created: [], async create() {}, async clear() { return true; } },

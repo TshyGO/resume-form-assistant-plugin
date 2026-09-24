@@ -28,11 +28,11 @@ function fakeStorage(initial = {}) {
 function handshakeReply(message) {
   return {
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       payload: {
-        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2,
         archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake', 'job.save']
       }
     }
@@ -56,7 +56,7 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
     sent.push(message);
     return reply(message);
   };
-  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now });
+  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now, getManifest: () => ({ version: '0.4.0' }) });
   const intents = createIntents({ store, uuid, now });
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
   const alarms = { created: [], async create(name, options) { this.created.push({ name, ...options }); }, async clear() { return true; } };
@@ -101,7 +101,7 @@ test('an unpaired but installed desktop is reported as unpaired, with the id to 
   const { router } = await makeRouter({
     reply: message => ({
       response: {
-        protocolVersion: 1, correlationId: message.messageId, ok: false,
+        protocolVersion: 2, correlationId: message.messageId, ok: false,
         error: { code: 'identity_not_allowed', retryable: false, message: 'origin is not paired' },
         payload: {}
       }
@@ -157,7 +157,7 @@ function desktopThatAnswers(message) {
   if (message.messageType === 'application.queryCandidates') {
     return {
       response: {
-        protocolVersion: 1, correlationId: message.messageId, ok: true,
+        protocolVersion: 2, correlationId: message.messageId, ok: true,
         payload: {
           exact: [{ applicationId: APPLICATION, company: '星河科技', title: '后端开发', stage: 'saved' }],
           sameCompany: []
@@ -166,7 +166,7 @@ function desktopThatAnswers(message) {
     };
   }
   return {
-    response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
+    response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
   };
 }
 
@@ -197,7 +197,7 @@ test('a bind while the desktop went away stays pending', async () => {
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }
@@ -217,7 +217,7 @@ test('the queue listing includes bound messages, not only intents', async () => 
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }
@@ -237,7 +237,7 @@ test('a stalled write can be retried and cancelled from the sidebar', async () =
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }

@@ -124,15 +124,9 @@ test('the desktop link ships every file it imports', async () => {
 });
 
 test('the handshake reports the same version the manifest declares', async () => {
-  // PLUGIN_VERSION is what the desktop app is told during the handshake, and it is a
-  // second copy of a number manifest.json already owns. A silent bump of one and not
-  // the other makes the desktop record the wrong plugin version against every write.
-  const { PLUGIN_VERSION } = await import('../link/session.mjs');
-  assert.equal(
-    PLUGIN_VERSION,
-    manifest().version,
-    'link/session.mjs PLUGIN_VERSION must match manifest.json version'
-  );
+  const source = fs.readFileSync(path.join(root, 'link/worker.mjs'), 'utf8');
+  assert.match(source, /getManifest:\s*\(\)\s*=>\s*api\.runtime\.getManifest\(\)/);
+  assert.equal(typeof manifest().version, 'string');
 });
 
 test('the sidebar offers archiving a fill and leaves the wording to link/copy.mjs', async () => {

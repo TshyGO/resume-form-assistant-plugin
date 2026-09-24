@@ -49,7 +49,7 @@ function fakeKv() {
 
 const closed = () => ({ lastError: 'Error when communicating with the native messaging host.' });
 const reply = (message, payload, resultId) => ({
-  response: { protocolVersion: 1, correlationId: message.messageId, ok: true, ...(resultId ? { resultId } : {}), payload }
+  response: { protocolVersion: 2, correlationId: message.messageId, ok: true, ...(resultId ? { resultId } : {}), payload }
 });
 
 /** A desktop whose epoch can be moved, that answers reconcile with a scripted status per chunk. */
@@ -57,7 +57,7 @@ function desktop() {
   const model = { epoch: EPOCH, writes: true, reconcileBatches: [], statusFor: () => 'not_found', chunks: [], fills: [] };
   model.answer = message => {
     if (message.messageType === 'handshake') {
-      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1, archiveId: ARCHIVE, restoreEpoch: model.epoch, capabilities: ['handshake'] });
+      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2, archiveId: ARCHIVE, restoreEpoch: model.epoch, capabilities: ['handshake'] });
     }
     if (message.messageType === 'outbox.reconcile') {
       model.reconcileBatches.push(message.payload.items);
@@ -110,7 +110,7 @@ async function worker({ storage, kv, model, clock = { value: Date.parse('2026-09
   };
   const staging = createStaging({ kv, now, uuid });
   const uploads = createUploads({ ...deps, staging });
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const outbox = createOutbox({ ...deps, uploads });
   const reconcile = createReconcile({ ...deps, outbox, uploads });
   const drain = createDrain({ session, outbox, reconcile, alarms, now });

@@ -53,12 +53,12 @@ async function harness({ desktop, storage = fakeStorage(), clock = { value: Date
 }
 
 const savedReply = (message, resultId = APPLICATION) => ({
-  response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId, payload: {} }
+  response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId, payload: {} }
 });
 
 const errorReply = (message, code, retryable = false) => ({
   response: {
-    protocolVersion: 1, correlationId: message.messageId, ok: false,
+    protocolVersion: 2, correlationId: message.messageId, ok: false,
     error: { code, retryable, message: 'synthetic' }, payload: {}
   }
 });
@@ -72,7 +72,7 @@ test('candidates come back in two layers', async () => {
   const { outbox } = await harness({
     desktop: message => ({
       response: {
-        protocolVersion: 1, correlationId: message.messageId, ok: true,
+        protocolVersion: 2, correlationId: message.messageId, ok: true,
         payload: {
           exact: [{ applicationId: APPLICATION, company: '星河科技', title: '后端开发', stage: 'saved' }],
           sameCompany: [{ applicationId: '88888888-8888-4888-8888-888888888888', company: '星河科技', title: '测试开发' }]
@@ -91,7 +91,7 @@ test('candidates come back in two layers', async () => {
 test('a candidate query asks for nothing but the three hint fields', async () => {
   const { outbox, sent } = await harness({
     desktop: message => ({
-      response: { protocolVersion: 1, correlationId: message.messageId, ok: true, payload: { exact: [], sameCompany: [] } }
+      response: { protocolVersion: 2, correlationId: message.messageId, ok: true, payload: { exact: [], sameCompany: [] } }
     })
   });
 

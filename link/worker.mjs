@@ -29,7 +29,8 @@ export function installDesktopLink(api) {
     sendNative: nativeSender(api),
     sleep,
     uuid: () => crypto.randomUUID(),
-    now: () => new Date()
+    now: () => new Date(),
+    getManifest: () => api.runtime.getManifest()
   };
 
   const staging = createStaging({ kv: idbStore(), now: deps.now, uuid: deps.uuid });

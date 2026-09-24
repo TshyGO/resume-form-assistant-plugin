@@ -10,6 +10,7 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
     listeners,
     runtime: {
       id: 'abcdefghijklmnopabcdefghijklmnop',
+      getManifest: () => ({ version: '0.4.0' }),
       lastError: undefined,
       onMessage: { addListener: fn => listeners.push(fn) },
       sendNativeMessage(hostName, message, callback) {
