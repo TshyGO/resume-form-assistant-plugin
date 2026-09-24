@@ -9,10 +9,14 @@ const URL_FIELD_KEYS: &[&str] = &[
     "url_redacted",
     "dedupeurl",
     "dedupe_url",
-    "apiurl",
-    "api_url",
     "url",
 ];
+
+/// `aiConfig.apiUrl` (and its snake_case spelling) points at the plugin/desktop's own AI
+/// provider, which is routinely a LAN or loopback proxy (Ollama and friends) with no TLS.
+/// It gets its own, http-or-https check rather than `URL_FIELD_KEYS`'s https-only rule,
+/// but still forbids userinfo and credential query parameters.
+const API_URL_FIELD_KEYS: &[&str] = &["apiurl", "api_url"];
 
 const SECRET_QUERY_KEYS: &[&str] = &[
     "token",
@@ -57,6 +61,10 @@ fn walk(value: &Value, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> 
                     if let Some(url) = v.as_str() {
                         check_url(url, allowlist)?;
                     }
+                } else if API_URL_FIELD_KEYS.contains(&key.as_str()) {
+                    if let Some(url) = v.as_str() {
+                        check_api_url(url, allowlist)?;
+                    }
                 }
                 walk(v, allowlist)?;
             }
@@ -78,13 +86,39 @@ fn check_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError>
     let Some(rest) = raw.strip_prefix("https://") else {
         return Err(forbidden("URL must be https without credentials"));
     };
+    check_url_rest(raw, rest, allowlist)
+}
+
+/// `apiUrl` allows http as well as https (LAN/loopback AI proxies such as Ollama have no
+/// TLS), but a scheme other than either is a structural defect in the payload, not a
+/// credential leak, so it is reported as `invalid_payload` rather than `secret_forbidden`.
+fn check_api_url(raw: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let rest = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+        .ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                Layer::Structure,
+                "apiUrl must use the http or https scheme",
+            )
+        })?;
+    check_url_rest(raw, rest, allowlist)
+}
+
+/// Shared authority/query/fragment checks once the scheme prefix has already been
+/// stripped and approved by the caller.
+fn check_url_rest(raw: &str, rest: &str, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> {
     // WHATWG parsing strips tab, LF and CR from anywhere in a URL, so
     // "?access_<TAB>token=" reaches the consumer as "access_token" while a literal
     // scan of the raw string sees a name that matches no sensitive key. Reject every
     // C0 control, space and DEL rather than trying to mirror that normalization.
     if rest.is_empty() || raw.chars().any(|c| c.is_ascii_control() || c == ' ') {
         return Err(forbidden(
-            "URL must be https without control characters or credentials",
+            "URL must not carry control characters or credentials",
         ));
     }
     // Authority ends at the first literal path, query or fragment delimiter.
@@ -269,6 +303,29 @@ mod tests {
         )
         .is_err());
         assert!(check_url("https://jobs.example.com/apply?utm_source=mail", &empty).is_ok());
+    }
+
+    #[test]
+    fn api_url_allows_http_for_lan_and_loopback_proxies() {
+        let empty: [UrlAllowRule; 0] = [];
+        assert!(check_api_url("http://localhost:11434/v1/chat/completions", &empty).is_ok());
+        assert!(check_api_url("http://192.168.1.5:8000/v1/chat/completions", &empty).is_ok());
+    }
+
+    #[test]
+    fn api_url_still_forbids_userinfo_and_secret_query_params() {
+        let empty: [UrlAllowRule; 0] = [];
+        let userinfo = check_api_url("http://u:p@host/v1", &empty).unwrap_err();
+        assert_eq!(userinfo.code, ErrorCode::SecretForbidden);
+        let secret_query = check_api_url("https://host/v1?api_key=x", &empty).unwrap_err();
+        assert_eq!(secret_query.code, ErrorCode::SecretForbidden);
+    }
+
+    #[test]
+    fn api_url_rejects_non_http_schemes_as_invalid_payload_not_a_secret_leak() {
+        let empty: [UrlAllowRule; 0] = [];
+        let err = check_api_url("ftp://host", &empty).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidPayload);
     }
 
     #[test]

@@ -22,7 +22,12 @@ const FORBIDDEN_KEYS = ["apikey", "api_key", "api-key", "authorization", "cookie
 // governs the `key` string of a template field or profile custom entry. Real JSON object
 // keys still go through FORBIDDEN_KEYS unchanged.
 const STORE_LABEL_KEYS = ["密码", "口令", "验证码", "校验码", "授权码", "密钥", "私钥", "令牌", "password", "passwd", "captcha", "token", "secret"];
-const URL_FIELD_KEYS = new Set(["sourceurl", "source_url", "urlredacted", "url_redacted", "dedupeurl", "dedupe_url", "apiurl", "api_url", "url"]);
+const URL_FIELD_KEYS = new Set(["sourceurl", "source_url", "urlredacted", "url_redacted", "dedupeurl", "dedupe_url", "url"]);
+// aiConfig.apiUrl (and its snake_case spelling) points at the plugin/desktop's own AI
+// provider, which is routinely a LAN or loopback proxy (Ollama and friends) with no TLS.
+// It gets its own http-or-https check rather than URL_FIELD_KEYS's https-only rule, but
+// still forbids userinfo and credential query parameters.
+const API_URL_FIELD_KEYS = new Set(["apiurl", "api_url"]);
 const SECRET_QUERY_KEYS = new Set(RULES.urlSecretQueryKeys || []);
 const URL_ALLOWLIST = RULES.urlAllowlist || [];
 const RETRYABLE_CODES = new Set(RULES.retryableErrorCodes || ["unavailable"]);
@@ -152,14 +157,35 @@ function queryHasSecret(query, host, path) {
 
 export function checkUrl(raw) {
   if (!raw) return;
+  if (!raw.startsWith("https://")) {
+    throw fail("secret_forbidden", "URL must be https without control characters or credentials", "secrets");
+  }
+  checkUrlRest(raw, raw.slice("https://".length));
+}
+
+// aiConfig.apiUrl allows http as well as https (LAN/loopback AI proxies such as Ollama
+// have no TLS), but a scheme other than either is a structural defect in the payload,
+// not a credential leak, so it is reported as invalid_payload rather than
+// secret_forbidden.
+export function checkApiUrl(raw) {
+  if (!raw) return;
+  const prefix = raw.startsWith("https://") ? "https://" : raw.startsWith("http://") ? "http://" : null;
+  if (!prefix) {
+    throw fail("invalid_payload", "apiUrl must use the http or https scheme");
+  }
+  checkUrlRest(raw, raw.slice(prefix.length));
+}
+
+// Shared authority/query/fragment checks once the scheme prefix has already been
+// stripped and approved by the caller.
+function checkUrlRest(raw, rest) {
   // WHATWG parsing strips tab, LF and CR from anywhere in a URL, so
   // "?access_<TAB>token=" reaches the consumer as "access_token" while a literal
   // scan of the raw string sees a name that matches no sensitive key. Reject every
   // C0 control, space and DEL rather than trying to mirror that normalization.
-  if (!raw.startsWith("https://") || /[\u0000-\u0020\u007f]/.test(raw)) {
-    throw fail("secret_forbidden", "URL must be https without control characters or credentials", "secrets");
+  if (rest === "" || /[\u0000-\u0020\u007f]/.test(raw)) {
+    throw fail("secret_forbidden", "URL must not carry control characters or credentials", "secrets");
   }
-  const rest = raw.slice("https://".length);
   // Keep encoded delimiters in their component; split only literal boundaries.
   const boundary = rest.search(/[/?#]/);
   const authority = boundary === -1 ? rest : rest.slice(0, boundary);
@@ -209,6 +235,7 @@ function walkUrls(value) {
     for (const [k, v] of Object.entries(value)) {
       const key = k.toLowerCase().replaceAll("-", "_");
       if (URL_FIELD_KEYS.has(key) && typeof v === "string") checkUrl(v);
+      else if (API_URL_FIELD_KEYS.has(key) && typeof v === "string") checkApiUrl(v);
       walkUrls(v);
     }
   }
