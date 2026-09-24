@@ -818,6 +818,7 @@ mod tests {
         }
         fn validate_import_provider(&self, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
         fn install_import_provider(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
+        fn discard_import_provider(&self, _: &str) -> Result<(), ErrorCode> { Ok(()) }
     }
 
     const IMPORT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -854,6 +855,26 @@ mod tests {
 
         let answer = send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
         assert_eq!(answer.payload["state"], "imported");
+        assert!(answer.payload.get("aiConfigDropped").is_none(), "a full import carries no drop flag");
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn resending_the_ai_part_after_rejecting_the_ai_step_does_not_stage_the_key_again() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        send_manifest(&store, &services, &[("aiConfig", &ai)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        store.apply_legacy_confirmation(IMPORT_ID).unwrap();
+        assert_eq!(crate::legacy_import_commands::reject(&store, &services, IMPORT_ID).unwrap().state, "imported");
+        assert!(services.keys.lock().unwrap().is_empty());
+
+        send_manifest(&store, &services, &[("aiConfig", &ai)]);
+        let answer = send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        assert_eq!(answer.payload["state"], "imported");
+        assert_eq!(answer.payload["aiConfigDropped"], true);
         assert!(services.keys.lock().unwrap().is_empty());
         assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
     }

@@ -13,10 +13,16 @@ use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyImportStatus {
     pub state: String,
     pub received: i64,
     pub total: i64,
+    /// `imported`, but the AI config was not: the user rejected the AI step after the
+    /// templates and profile were applied. The plugin drops its old templates and profile
+    /// but keeps its old Key. Omitted from the wire when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ai_config_dropped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -27,6 +33,8 @@ pub struct LegacyImportPending {
     pub received: i64,
     pub total: i64,
     pub plugin_version: String,
+    /// Templates/profile have committed, but AI setup still needs a user decision.
+    pub applied: bool,
 }
 
 /// What a part check found before the caller does anything outside SQLite with the part.
@@ -185,10 +193,13 @@ impl ArchiveStore {
 impl StoreTx<'_> {
     pub fn legacy_import_status(&self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         self.conn().query_row(
-            "SELECT i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), i.total \
+            "SELECT i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), i.total, \
+             (i.state = 'imported' AND i.ai_config_dropped = 1) \
              FROM legacy_imports i WHERE i.import_id = ?1",
             [import_id],
-            |row| Ok(LegacyImportStatus { state: row.get(0)?, received: row.get(1)?, total: row.get(2)? }),
+            |row| Ok(LegacyImportStatus {
+                state: row.get(0)?, received: row.get(1)?, total: row.get(2)?, ai_config_dropped: row.get(3)?,
+            }),
         ).optional()?.ok_or_else(|| StoreError::NotFound("legacy import not found".into()))
     }
 
@@ -283,12 +294,12 @@ impl StoreTx<'_> {
     pub fn list_pending_legacy_imports(&self) -> Result<Vec<LegacyImportPending>, StoreError> {
         let mut stmt = self.conn().prepare(
             "SELECT i.import_id, i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), \
-             i.total, i.plugin_version FROM legacy_imports i \
+             i.total, i.plugin_version, (i.applied_at IS NOT NULL) FROM legacy_imports i \
              WHERE i.state IN ('receiving','awaiting_confirmation') ORDER BY i.created_at",
         )?;
         let rows = stmt.query_map([], |row| Ok(LegacyImportPending {
             import_id: row.get(0)?, state: row.get(1)?, received: row.get(2)?,
-            total: row.get(3)?, plugin_version: row.get(4)?,
+            total: row.get(3)?, plugin_version: row.get(4)?, applied: row.get(5)?,
         }))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
     }
@@ -422,9 +433,11 @@ impl StoreTx<'_> {
     }
 
     /// Discard a staged import. An import whose templates and profile were already applied
-    /// cannot be taken back; rejecting it finishes it without the AI config instead, so an
-    /// AI step that can never succeed (temporary key lost, provider limit) does not hold the
-    /// single import slot forever. The caller deletes the temporary key either way.
+    /// cannot be taken back; rejecting it finishes it as `imported` with `ai_config_dropped`,
+    /// so the plugin drops its old templates and profile (no duplicate on a later import)
+    /// but keeps its old Key, and the single import slot is freed. The caller removes any
+    /// partially installed desktop provider before this transition and deletes the
+    /// temporary key after it.
     pub fn reject_legacy_import(&mut self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         let (state, applied_at, dropped): (String, Option<String>, bool) = self.conn().query_row(
             "SELECT state, applied_at, ai_config_dropped FROM legacy_imports WHERE import_id = ?1",

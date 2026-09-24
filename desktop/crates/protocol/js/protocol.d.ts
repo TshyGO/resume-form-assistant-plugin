@@ -329,6 +329,7 @@ export interface LegacyImportResponsePayload {
    * maximum: 63
    */
   total: number;
+  aiConfigDropped?: boolean;
 }
 
 export interface OutboxReconcileResponsePayload {

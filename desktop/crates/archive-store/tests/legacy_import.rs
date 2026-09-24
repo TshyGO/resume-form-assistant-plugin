@@ -255,9 +255,16 @@ fn rejecting_an_applied_import_finishes_it_without_the_ai_config_and_frees_the_s
         json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
     assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "awaiting_confirmation");
     assert!(matches!(store.receive_legacy_manifest(OTHER, manifest_of(&["template"])), Err(StoreError::Conflict(_))));
+    let pending = store.list_pending_legacy_imports().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].applied);
 
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "imported");
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "imported");
+    for _ in 0..2 {
+        let finished = store.reject_legacy_import(IMPORT).unwrap();
+        assert_eq!(finished.state, "imported");
+        assert!(finished.ai_config_dropped, "the plugin must keep its old Key");
+    }
+    assert!(store.legacy_import_status(IMPORT).unwrap().ai_config_dropped);
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     let db = rusqlite::Connection::open(cfg.db_path()).unwrap();
     let bodies: Vec<String> = db.prepare("SELECT body_json FROM legacy_import_parts WHERE import_id = ?1")
@@ -273,7 +280,9 @@ fn rejecting_an_unapplied_import_still_discards_it() {
     let (_dir, _cfg, store) = open();
     store.receive_legacy_manifest(IMPORT, manifest_of(&["template"])).unwrap();
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "rejected");
+    let rejected = store.reject_legacy_import(IMPORT).unwrap();
+    assert_eq!(rejected.state, "rejected");
+    assert!(!rejected.ai_config_dropped);
     assert!(store.resume_overview().unwrap().templates.is_empty());
 }
 
