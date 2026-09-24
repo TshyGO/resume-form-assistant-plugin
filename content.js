@@ -3,7 +3,6 @@
   const SIDEBAR_PANEL_ID = "resume-pro-sidebar-panel";
   const SIDEBAR_DEFAULT_TOP = 96;
   const SIDEBAR_DEFAULT_RIGHT = 24;
-  const STORAGE_KEYS = ["templates", "activeTemplateId", "aiConfig", "profile"];
   const FIELD_HIGHLIGHT_CLASS = "resume-pro__field-highlight";
   const FIELD_HIGHLIGHT_STYLE_ID = "resume-pro-field-highlight-styles";
   const FIELD_HIGHLIGHT_STYLE_TEXT = `
@@ -55,6 +54,7 @@
     dragging: false,
     sidebarUiState: null,
     currentStore: null,
+    desktopMode: "unavailable",
     statusTimer: null,
     lastFocusedField: null,
     chipAction: null
@@ -93,8 +93,18 @@
       return false;
     }
 
-    if (message.type === "RESUME_PANEL_FILL" || message.type === "RESUME_PANEL_CANCEL") {
-      const selector = message.type === "RESUME_PANEL_FILL" ? "#resume-pro-ai-fill" : "#resume-pro-cancel-fill";
+    if (message.type === "RESUME_PANEL_FILL") {
+      StorageService.getState().then(store => {
+        state.currentStore = store;
+        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+        const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
+        if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "桌面简历当前不可用。" });
+        else { button.click(); sendResponse({ ok: true }); }
+      }).catch(() => sendResponse({ ok: false, error: "桌面简历当前不可用。" }));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_CANCEL") {
+      const selector = "#resume-pro-cancel-fill";
       const button = shadowRoot?.querySelector(selector);
       if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "当前操作不可用。" });
       else { button.click(); sendResponse({ ok: true }); }
@@ -102,7 +112,7 @@
     }
 
     if (message.type === "RESUME_PANEL_FIELD") {
-      handlePanelFieldAction(message).then(sendResponse).catch(() => sendResponse({ ok: false, error: "字段填写失败，请手动核对网页。" }));
+      handlePanelFieldAction(message, sender).then(sendResponse).catch(() => sendResponse({ ok: false, error: "字段填写失败，请手动核对网页。" }));
       return true;
     }
     if (message.type === "RESUME_PANEL_OFFER") {
@@ -161,16 +171,15 @@
   });
 
   const StorageService = {
-    // 只读。每个网页加载都会跑一次，在这里写回会用这一刻的快照盖掉设置页刚存的内容；
-    // 缺省值由设置页补。
-    async ensureDefaults() {
-      const current = await chrome.storage.local.get(STORAGE_KEYS);
-      return normalizeStore(current);
-    },
-
     async getState() {
-      const current = await chrome.storage.local.get(STORAGE_KEYS);
-      return normalizeStore(current);
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
+        state.desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
+        return result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+      } catch {
+        state.desktopMode = "unavailable";
+        return null;
+      }
     },
 
     async getSidebarUiState() {
@@ -182,7 +191,7 @@
     },
 
     async setActiveTemplate(templateId) {
-      await chrome.storage.local.set({ activeTemplateId: templateId });
+      return chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_UPDATE", op: "setActiveTemplate", templateId });
     }
   };
 
@@ -202,7 +211,7 @@
     }
 
     [state.currentStore, state.sidebarUiState] = await Promise.all([
-      StorageService.ensureDefaults(),
+      StorageService.getState(),
       StorageService.getSidebarUiState()
     ]);
     state.sidebarUiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
@@ -219,6 +228,11 @@
       })
       .catch(() => shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open"));
     bindStorageSync();
+    document.addEventListener("visibilitychange", async () => {
+      if (document.hidden) return;
+      state.currentStore = await StorageService.getState();
+      renderSidebar();
+    });
     bindFocusTracking();
     window.addEventListener("resize", constrainSidebarToViewport);
   }
@@ -332,8 +346,8 @@
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__groups" id="resume-pro-groups"></div>
         <div class="resume-pro__footer">
-          <button class="resume-pro__manager-button" id="resume-pro-open-manager" type="button">打开管理面板</button>
-          <p class="resume-pro__footer-tip">管理面板会在新的浏览器标签页打开。</p>
+          <button class="resume-pro__manager-button" id="resume-pro-open-manager" type="button">打开桌面</button>
+          <p class="resume-pro__footer-tip">简历数据和 AI 设置由桌面程序管理。</p>
         </div>
       </div>
     `;
@@ -380,13 +394,15 @@
     });
 
     templateSelect.addEventListener("change", async (event) => {
-      await StorageService.setActiveTemplate(event.target.value);
-      showStatus("模板已切换。", "success");
+      const result = await StorageService.setActiveTemplate(event.target.value);
+      state.currentStore = await StorageService.getState();
+      renderSidebar();
+      showStatus(result?.status === "missing_template" ? "这个模板在桌面里已经删掉了" : result?.status === "ok" ? "模板已切换。" : "桌面暂时无法切换模板。", result?.status === "ok" ? "success" : "error");
     });
 
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
-    openManagerButton?.addEventListener("click", () => openManager());
+    openManagerButton?.addEventListener("click", () => openDesktopAction(state.desktopMode === "ready" ? "empty" : state.desktopMode));
     sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", addUnansweredToProfile);
     sidebar.querySelector("#resume-pro-profile-offer-skip")?.addEventListener("click", closeProfileOffer);
     bindDesktopEvents(sidebar);
@@ -413,11 +429,6 @@
         return;
       }
 
-      if (changes.templates || changes.activeTemplateId || changes.aiConfig || changes.profile) {
-        state.currentStore = await StorageService.getState();
-        renderSidebar();
-      }
-
       const sidebarStateChange = changes[self.ResumeProSidebarState.STORAGE_KEY];
       if (sidebarStateChange && !state.dragging) {
         state.sidebarUiState = self.ResumeProSidebarState.normalize(sidebarStateChange.newValue);
@@ -435,6 +446,12 @@
     const groupsContainer = shadowRoot.querySelector("#resume-pro-groups");
     const activeTemplate = getActiveTemplate(state.currentStore);
     const templates = state.currentStore?.templates || [];
+    const profileFields = profileResumeFields();
+    const downgrade = state.desktopMode !== "ready" ? state.desktopMode
+      : !activeTemplate && !profileFields.length ? "empty" : null;
+    const downgradeCopy = downgrade ? self.ResumeProResumeData.modeCopy(downgrade) : null;
+    const openButton = shadowRoot.querySelector("#resume-pro-open-manager");
+    if (openButton) openButton.textContent = downgradeCopy?.action || "打开桌面";
 
     templateSelect.innerHTML = templates.length
       ? templates.map((template) => `
@@ -444,15 +461,15 @@
         `).join("")
       : '<option value="">暂无模板</option>';
 
-    templateSelect.disabled = !templates.length;
+    templateSelect.disabled = Boolean(downgradeCopy) || !templates.length;
+    const aiFillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
+    if (aiFillButton) aiFillButton.disabled = Boolean(downgradeCopy);
 
-    const profileFields = profileResumeFields();
-
-    if (!activeTemplate && !profileFields.length) {
+    if (downgradeCopy) {
       groupsContainer.innerHTML = `
         <div class="resume-pro__empty">
-          <p>还没有简历数据。</p>
-          <button class="resume-pro__setup-button" id="resume-pro-setup-button" type="button">上传简历 / 导入模板</button>
+          <p>${escapeHtml(downgradeCopy.message)}</p>
+          <button class="resume-pro__setup-button" id="resume-pro-setup-button" type="button">${escapeHtml(downgradeCopy.action)}</button>
         </div>
       `;
     } else {
@@ -485,7 +502,7 @@
 
     const setupButton = groupsContainer.querySelector("#resume-pro-setup-button");
     if (setupButton) {
-      setupButton.addEventListener("click", () => openManager());
+      setupButton.addEventListener("click", () => openDesktopAction(downgrade));
     }
 
     closeChipActionMenu();
@@ -533,17 +550,19 @@
     showChipActionMenu(button, target, value, selection);
   }
 
-  async function handlePanelFieldAction(message) {
+  async function handlePanelFieldAction(message, sender) {
     if (message.mode !== "fill" && message.mode !== "copy") {
       return { ok: false, error: "未知的字段操作。" };
     }
-    // The panel builds these IDs from template/group/field indices (or profile
-    // group/key); renderSidebar uses the same contract for its hidden chips.
     const chipId = String(message.chipId || "");
     const button = Array.from(shadowRoot?.querySelectorAll(".resume-pro__chip") || [])
       .find((item) => item.dataset.chipId === chipId);
-    if (!button) return { ok: false, error: "模板字段已变化，请刷新侧栏。" };
-    const value = button.dataset.value || "";
+    // The native side panel has its own fresh desktop snapshot. Its value is trusted
+    // only when the sender is this extension; the hidden page chips may be older.
+    const trustedValue = sender?.id === chrome.runtime.id && typeof message.value === "string";
+    const value = trustedValue
+      ? message.value : button?.dataset.value || "";
+    if (!button && !trustedValue) return { ok: false, error: "模板字段已变化，请刷新侧栏。" };
     if (!value) return { ok: false, error: "这个字段没有内容。" };
 
     if (message.mode === "copy") {
@@ -856,10 +875,13 @@
   }
 
   async function handleRepeatFillClick(event) {
+    state.currentStore = await StorageService.getState();
+    if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     const button = event.currentTarget;
     const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (button.disabled || fillButton.disabled) return;
     const template = getActiveTemplate(state.currentStore);
+    const templateFingerprint = JSON.stringify(template);
     if (!template) {
       showStatus("请先在桌面准备简历模板。", "error");
       return;
@@ -902,15 +924,20 @@
       planning = false;
       window.clearInterval(timer);
       if (stopped) throw new Error("已停止，未执行新增。");
-      if (!reply?.success) throw new Error("AI 规划失败，未执行新增。可稍后重试或手动新增。");
+      if (!reply?.success) {
+        if (reply?.error?.includes("桌面还没有配置 AI 服务商")) await openManager("settings-ai");
+        throw new Error(reply?.error || "AI 规划失败，未执行新增。可稍后重试或手动新增。");
+      }
       const plan = agent.validatePlan(reply.plan, snapshot.candidates);
       if (!plan.length) throw new Error("AI 未给出可确认的新增操作，请手动处理。");
       const preview = plan.map(action => `${snapshot.candidates.find(c => c.id === action.id).label}：${action.count} 条`).join("\n");
       if (!window.confirm(`允许以下操作吗？\n${preview}\n\n确认后将点击网页新增按钮，再用 AI 填写这些分组的空字段。不会提交、删除或覆盖已有内容。网页自身可能保存新条目；停止后不自动删除。`)) return;
-      if (getActiveTemplate(state.currentStore) !== template) throw new Error("当前模板已变化，请重新预览。");
+      state.currentStore = await StorageService.getState();
+      if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+      if (JSON.stringify(getActiveTemplate(state.currentStore)) !== templateFingerprint) throw new Error("当前模板已变化，请重新预览。");
       button.textContent = "正在新增并检查网页...";
       hint.hidden = true;
-      expanded = await agent.execute(plan, snapshot, () => stopped || getActiveTemplate(state.currentStore) !== template);
+      expanded = await agent.execute(plan, snapshot, () => stopped || JSON.stringify(getActiveTemplate(state.currentStore)) !== templateFingerprint);
     } catch (error) {
       showStatus(error.message || "辅助新增失败，请手动核对网页。", "error");
     } finally {
@@ -923,7 +950,7 @@
       fillButton.disabled = false;
       button.textContent = "AI 辅助新增条目（先预览）";
     }
-    if (expanded && !stopped && getActiveTemplate(state.currentStore) === template) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
+    if (expanded && !stopped && JSON.stringify(getActiveTemplate(state.currentStore)) === templateFingerprint) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
   }
 
   function isAssistedTextField(entry) {
@@ -940,9 +967,12 @@
   }
 
   async function handleAiFillClick(event, assisted = null) {
+    state.currentStore = await StorageService.getState();
+    if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     const button = event.currentTarget;
     if (button.disabled) return;
     const activeTemplate = getActiveTemplate(state.currentStore);
+    const activeTemplateFingerprint = JSON.stringify(activeTemplate);
 
     const profileFields = profileResumeFields();
 
@@ -1042,6 +1072,7 @@
       diagnostics = response?.diagnostics || {};
 
       if (!response?.success) {
+        if (response?.openView === "settings-ai") await openManager("settings-ai");
         throw new Error(response?.error || "AI 填写失败。");
       }
 
@@ -1062,7 +1093,7 @@
       });
 
       for (const match of sortedMatches) {
-        if (assisted && getActiveTemplate(state.currentStore) !== activeTemplate) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
+        if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
 
         if (!element) continue;
@@ -2064,21 +2095,30 @@
     }
 
     try {
-      // 用户点了才写，并且只读写 profile 这一个键，不碰模板和 AI 配置。
-      const stored = await chrome.storage.local.get("profile");
-      const { profile, added, full } = self.ResumeProProfile.addPendingFields(stored.profile, labels, resumeFields);
-
-      if (!added) {
-        if (!full) closeProfileOffer();
-        showStatus(full ? "补充字段已经满了，先在管理面板里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const current = await StorageService.getState();
+        if (!current) throw new Error("桌面简历当前不可用。");
+        const { profile, added, full } = self.ResumeProProfile.addPendingFields(current.profile, labels, resumeFields);
+        if (!added) {
+          if (!full) closeProfileOffer();
+          showStatus(full ? "补充字段已经满了，先在桌面里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
+          return;
+        }
+        const result = await chrome.runtime.sendMessage({
+          type: "DESKTOP_RESUME_UPDATE", op: "saveProfile",
+          profile, expectedRevision: current.profileRevision
+        });
+        if (result?.status === "conflict" && attempt === 0) continue;
+        if (result?.status === "conflict") throw new Error("我的信息刚在别处改过，请再点一次。");
+        if (result?.status === "secret") throw new Error("我的信息里有像密码的内容，桌面没有保存。");
+        if (result?.status !== "ok") throw new Error("桌面暂时无法保存我的信息。");
+        state.currentStore = await StorageService.getState();
+        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+        closeProfileOffer();
+        showStatus(`已把 ${added} 个字段加到「我的信息」，在桌面里补上内容。`, "success", true);
+        await openManager("resume");
         return;
       }
-
-      await chrome.storage.local.set({ profile });
-      // 写成功才收起卡片；写失败时卡片留着，可以直接再点一次。
-      closeProfileOffer();
-      showStatus(`已把 ${added} 个字段加到「我的信息」，在管理面板里补上内容。`, "success", true);
-      await openManager("profile");
     } catch (error) {
       showStatus(`没有加进去：${error.message || "写入失败"}`, "error");
     }
@@ -2136,14 +2176,29 @@
       .trim();
   }
 
-  async function openManager(tab = "") {
+  async function openManager(view = "home") {
     try {
-      const result = await chrome.runtime.sendMessage({ type: "OPEN_MANAGER", tab });
-      if (!result?.opened) {
-        showStatus(result?.error || "无法打开管理面板，请从浏览器工具栏点击 Resume Pro。", "error");
+      const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view });
+      if (result?.status !== "ok") {
+        showStatus("桌面程序暂时无法打开，请检查连接。", "error");
       }
     } catch {
-      showStatus("无法打开管理面板，请从浏览器工具栏点击 Resume Pro。", "error");
+      showStatus("桌面程序暂时无法打开，请检查连接。", "error");
+    }
+  }
+
+  async function openDesktopAction(mode) {
+    const kind = self.ResumeProResumeData.modeCopy(mode).kind;
+    if (kind === "download") {
+      window.open(self.ResumeProResumeData.DOWNLOAD_URL, "_blank", "noopener");
+    } else if (kind === "pair") {
+      await copyText(chrome.runtime.id);
+      showStatus("扩展 ID 已复制，请在桌面设置中粘贴并完成配对。", "success", true);
+    } else if (kind === "retry") {
+      state.currentStore = await StorageService.getState();
+      renderSidebar();
+    } else {
+      await openManager(kind === "resume" ? "resume" : "home");
     }
   }
 
@@ -2157,11 +2212,7 @@
   }
 
   function getActiveTemplate(store) {
-    if (!store?.templates?.length) {
-      return null;
-    }
-
-    return store.templates.find((template) => template.id === store.activeTemplateId) || store.templates[0];
+    return store?.activeTemplate || null;
   }
 
   function showStatus(message, variant, persist = false) {
@@ -2336,73 +2387,6 @@
       && styles.visibility !== "hidden"
       && rect.width > 0
       && rect.height > 0;
-  }
-
-  function normalizeStore(rawState) {
-    const templates = Array.isArray(rawState.templates)
-      ? rawState.templates.map(normalizeTemplate).filter(Boolean)
-      : [];
-
-    const activeTemplateId = typeof rawState.activeTemplateId === "string"
-      ? rawState.activeTemplateId
-      : "";
-
-    return {
-      templates,
-      activeTemplateId: templates.some((template) => template.id === activeTemplateId)
-        ? activeTemplateId
-        : templates[0]?.id || "",
-      aiConfig: {
-        apiUrl: String(rawState.aiConfig?.apiUrl ?? "https://api.openai.com/v1/chat/completions").trim(),
-        model: String(rawState.aiConfig?.model ?? "gpt-4o-mini").trim(),
-        apiKey: String(rawState.aiConfig?.apiKey ?? "")
-      },
-      profile: self.ResumeProProfile
-        ? self.ResumeProProfile.normalizeProfile(rawState.profile)
-        : { values: {}, family: [], custom: [] }
-    };
-  }
-
-  function normalizeTemplate(template) {
-    if (!template || typeof template !== "object") {
-      return null;
-    }
-
-    const groups = Array.isArray(template.groups)
-      ? template.groups
-          .map((group) => {
-            if (!group || typeof group !== "object") {
-              return null;
-            }
-
-            const fields = Array.isArray(group.fields)
-              ? group.fields
-                  .map((field) => {
-                    if (!field || typeof field !== "object") {
-                      return null;
-                    }
-
-                    return {
-                      key: String(field.key ?? "").trim(),
-                      value: String(field.value ?? "")
-                    };
-                  })
-                  .filter((field) => field && field.key)
-              : [];
-
-            return {
-              name: String(group.name ?? "").trim() || "未分类",
-              fields
-            };
-          })
-          .filter((group) => group && group.fields.length)
-      : [];
-
-    return {
-      id: typeof template.id === "string" && template.id.trim() ? template.id : crypto.randomUUID(),
-      name: String(template.name ?? "").trim() || "未命名模板",
-      groups
-    };
   }
 
   function escapeHtml(value) {
@@ -3122,6 +3106,7 @@
       readSidebarUiState,
       stopDrag,
       handleRepeatFillClick,
+      addUnansweredToProfile,
       formatFillDiagnostics,
       getHighlightTargets,
       handleAiFillClick,
@@ -3154,6 +3139,11 @@
       },
       setCurrentStore(store) {
         state.currentStore = store;
+      },
+      setProfileOffer({ candidates, labels, fields }) {
+        state.profileOfferCandidates = candidates;
+        state.profileOfferLabels = labels;
+        state.profileOfferFields = fields;
       },
       setLastFocusedField(field) {
         state.lastFocusedField = field;

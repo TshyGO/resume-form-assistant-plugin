@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function loadHighlightHelpers(options = {}) {
+  let desktopData = null;
   const timers = [];
   const clearedTimers = [];
   const clipboardWrites = [];
@@ -176,15 +177,19 @@ function loadHighlightHelpers(options = {}) {
     HTMLSelectElement: class HTMLSelectElement extends HTMLElement {},
     chrome: {
       runtime: {
+        id: 'test-extension',
         getManifest: () => ({ version: "0.2.1" }),
         onMessage: { addListener() {} },
-        sendMessage: options.sendMessage || (async () => ({ success: true, matches: [] }))
+        sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
+          ? { status: 'ok', data: desktopData }
+          : options.sendMessage ? options.sendMessage(message) : { success: true, matches: [] }
       }
     },
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+      ResumeProResumeData: require('../resume-data.js'), ResumeProProfile: require('../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
     window
@@ -203,9 +208,19 @@ function loadHighlightHelpers(options = {}) {
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   vm.runInNewContext(contentJs, context);
   context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
+  const helpers = context.self.ResumeProHighlightTest;
+  const setCurrentStore = helpers.setCurrentStore;
+  helpers.setCurrentStore = store => {
+    const activeTemplate = store.activeTemplate || store.templates?.find(template => template.id === store.activeTemplateId) || store.templates?.[0] || null;
+    desktopData = {
+      templates: (store.templates || []).map(template => ({ id: template.id, name: template.name || '模板', fieldCount: template.groups?.flatMap(group => group.fields).length || 0 })),
+      activeTemplate, profile: store.profile || { values: {}, family: [], custom: [] }, profileRevision: store.profileRevision || 0
+    };
+    setCurrentStore({ ...store, activeTemplate });
+  };
 
   return {
-    helpers: context.self.ResumeProHighlightTest,
+    helpers,
     window,
     timers,
     clearedTimers,
@@ -281,6 +296,18 @@ test("native side panel can address a saved 我的信息 field by its group and 
   const result = await helpers.handlePanelFieldAction({ chipId: "profile:补充字段:期望薪资", mode: "fill" });
   assert.equal(result.ok, true);
   assert.equal(input.value, "面议");
+});
+
+test('a trusted side panel supplies its current value when hidden page chips are stale', async () => {
+  const { helpers, HTMLInputElement } = loadHighlightHelpers();
+  helpers.setShadowRoot({ querySelectorAll: () => [], querySelector: () => null });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+  const result = await helpers.handlePanelFieldAction({ chipId: 'new:0:0', value: '桌面新值', mode: 'fill' }, { id: 'test-extension' });
+  assert.equal(result.ok, true);
+  assert.equal(input.value, '桌面新值');
+  const other = await helpers.handlePanelFieldAction({ chipId: 'new:0:0', value: '不可信', mode: 'fill' }, { id: 'other-extension' });
+  assert.equal(other.ok, false);
 });
 
 test("off-screen fields scroll into view before the highlight animation starts", () => {
@@ -376,6 +403,7 @@ for (const outcome of ["success", "partial", "failure", "transport"]) {
     });
     const button = { disabled: false, textContent: "" };
     const pending = helpers.handleAiFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(button.disabled, true);
     assert.match(button.textContent, /AI 匹配中.*0s/);
     await helpers.handleAiFillClick({ currentTarget: button });
@@ -417,6 +445,7 @@ test("90-second reminder does not cancel; manual button sends matching request a
     activeTemplateId: "one", aiConfig: { apiKey: "key", apiUrl: "https://example.test", model: "test" } });
   const button = { disabled: false };
   const pending = helpers.handleAiFillClick({ currentTarget: button });
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(cancel.hidden, false);
   const timer = timers.find(item => item.delay === 1000);
   clock = 90000;
@@ -475,6 +504,7 @@ for (const stopped of [false, true]) {
     helpers.setShadowRoot({ querySelector: selector => ({ '#resume-pro-ai-fill': fillButton, '#resume-pro-cancel-fill': cancel, '#resume-pro-wait-hint': hint })[selector] });
     helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '论文', fields: [{ key: '论文1标题', value: '合成' }] }] }], activeTemplateId: 'one', aiConfig: { apiKey: 'key', apiUrl: 'https://example.test', model: 'test' } });
     const pending = helpers.handleRepeatFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
     if (stopped) cancel.onclick();
     finish({ success: true, plan: [{ id: 'add-0', count: 2 }] });
     await pending;

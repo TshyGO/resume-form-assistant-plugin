@@ -1,6 +1,9 @@
 (() => {
   const elements = {
     pageState: document.getElementById("page-state"),
+    desktopConnection: document.getElementById("desktop-connection"),
+    desktopConnectionText: document.getElementById("desktop-connection-text"),
+    desktopConnectionAction: document.getElementById("desktop-connection-action"),
     templateSelect: document.getElementById("template-select"),
     configState: document.getElementById("config-state"),
     fillButton: document.getElementById("fill-button"),
@@ -23,6 +26,7 @@
   };
   let currentTabId = null;
   let currentStore = null;
+  let desktopMode = "unavailable";
   let toastTimer = null;
   let statusPolling = false;
 
@@ -78,8 +82,7 @@
   }
 
   function selectedTemplate() {
-    const templates = currentStore?.templates || [];
-    return templates.find((template) => template.id === currentStore.activeTemplateId) || templates[0] || null;
+    return currentStore?.activeTemplate || null;
   }
 
   function groupedFields() {
@@ -105,18 +108,32 @@
 
   function visibleFields(groups) {
     return groups.flatMap((group) => group.fields)
-      .filter((field) => field.key && field.value && !/密码|验证码|口令|密钥|私钥|token|secret/i.test(field.key));
+      .filter((field) => field.key && field.value && !self.ResumeProProfile.SECRET_LABEL.test(field.key));
+  }
+
+  function renderDesktopMode() {
+    const mode = desktopMode === "ready" && !selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile)
+      ? "empty" : desktopMode;
+    const copy = mode === "ready" ? null : self.ResumeProResumeData.modeCopy(mode);
+    elements.desktopConnection.hidden = !copy;
+    if (copy) {
+      elements.desktopConnectionText.textContent = copy.message;
+      elements.desktopConnectionAction.textContent = copy.action;
+    }
+    elements.configState.textContent = copy ? "桌面简历当前不可用" : "简历数据来自桌面程序";
+    elements.templateSelect.disabled = Boolean(copy) || !(currentStore?.templates?.length);
+    elements.fieldSearch.disabled = Boolean(copy);
+    elements.desktopConnectionAction.dataset.kind = copy?.kind || "";
+    document.getElementById("open-manager").textContent = copy?.action || "打开桌面";
   }
 
   function renderFromStore() {
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
-      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)} · ${template.groups?.reduce((n, group) => n + (group.fields?.length || 0), 0) || 0} 个字段</option>`).join("")
+      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)} · ${template.fieldCount} 个字段</option>`).join("")
       : '<option value="">暂无模板</option>';
-    elements.templateSelect.disabled = !templates.length;
-    elements.configState.textContent = currentStore?.aiConfig?.apiKey
-      ? "AI 配置已保存 · 使用你自己的模型服务" : "请先在管理面板配置 AI 接口";
+    renderDesktopMode();
 
     const groups = groupedFields();
     const fields = visibleFields(groups);
@@ -162,8 +179,7 @@
 
   function updateFillAvailability(status = null) {
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
-    const configured = Boolean(currentStore?.aiConfig?.apiKey);
-    elements.fillButton.disabled = !hasData || !configured || currentTabId === null || Boolean(status?.busy);
+    elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy);
     elements.fillButton.textContent = status?.busy ? (status.phase || "正在填写…") : "一键 AI 填写";
     elements.cancelButton.hidden = !status?.canCancel;
   }
@@ -189,6 +205,12 @@
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
         elements.fillResult.classList.toggle("is-error", response.statusKind === "error");
+        if (response.status.includes("桌面还没有配置 AI 服务商")) {
+          elements.desktopConnection.hidden = false;
+          elements.desktopConnectionText.textContent = response.status;
+          elements.desktopConnectionAction.textContent = "打开桌面 AI 设置";
+          elements.desktopConnectionAction.dataset.kind = "settings-ai";
+        }
       }
       if (connected) {
         elements.profileOffer.hidden = !response.profileOffer;
@@ -215,7 +237,14 @@
   }
 
   async function loadStore() {
-    currentStore = await chrome.storage.local.get(["templates", "activeTemplateId", "aiConfig", "profile"]);
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
+      desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
+      currentStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+    } catch {
+      desktopMode = "unavailable";
+      currentStore = null;
+    }
     renderFromStore();
   }
 
@@ -232,9 +261,9 @@
     }
   }, true);
   elements.templateSelect.addEventListener("change", async () => {
-    await chrome.storage.local.set({ activeTemplateId: elements.templateSelect.value });
+    const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_UPDATE", op: "setActiveTemplate", templateId: elements.templateSelect.value });
     await loadStore();
-    toast("当前模板已切换。");
+    toast(result?.status === "missing_template" ? "这个模板在桌面里已经删掉了" : result?.status === "ok" ? "当前模板已切换。" : "桌面暂时无法切换模板。");
   });
   elements.fillButton.addEventListener("click", async () => {
     elements.fillResult.hidden = true;
@@ -252,6 +281,10 @@
     const result = await sendToPage({ type: "RESUME_PANEL_OFFER", action, withSnapshot: elements.fillOfferSnapshot.checked });
     if (!result?.ok) toast(result?.error || "操作未完成，请查看网页。");
     else if (result.needsPageChoice) toast("请在网页上的确认控件里选择对应申请。");
+    else if (action === "profileAdd") {
+      await loadStore();
+      await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" });
+    }
     await pollStatus();
   }));
   async function fieldAction(event, mode) {
@@ -260,13 +293,13 @@
     const field = visibleFields(groupedFields()).find((item) => item.chipId === button.dataset.chipId);
     if (!field) { toast("字段已变化，请刷新侧栏后重试。"); return; }
     if (mode === "copy") {
-      toast(await copyFieldValue(field.value) ? "已复制字段内容。" : "复制失败，请在管理面板核对字段内容。");
+      toast(await copyFieldValue(field.value) ? "已复制字段内容。" : "复制失败，请在桌面核对字段内容。");
       return;
     }
-    const result = await sendToPage({ type: "RESUME_PANEL_FIELD", chipId: button.dataset.chipId, mode });
+    const result = await sendToPage({ type: "RESUME_PANEL_FIELD", chipId: button.dataset.chipId, value: field.value, mode });
     if (result?.needsCopy) {
       const copied = await copyFieldValue(field.value);
-      toast(copied ? `${result.message}字段内容已复制。` : "复制失败，请在管理面板核对字段内容。");
+      toast(copied ? `${result.message}字段内容已复制。` : "复制失败，请在桌面核对字段内容。");
       return;
     }
     toast(result?.message || result?.error || "字段操作未完成。");
@@ -278,15 +311,28 @@
     const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
     toast(result?.ok ? (button.dataset.advanced === "close" ? "网页高级控件已收起。" : "请在网页上的高级控件中继续操作。") : result?.error || "无法打开工具。");
   }));
-  document.getElementById("open-manager").addEventListener("click", async () => {
-    const result = await chrome.runtime.sendMessage({ type: "OPEN_MANAGER" });
-    if (!result?.opened) toast(result?.error || "无法打开管理面板。");
+  async function desktopAction(kind = "home") {
+    if (kind === "download") {
+      await chrome.tabs.create({ url: self.ResumeProResumeData.DOWNLOAD_URL });
+      return;
+    }
+    if (kind === "pair") {
+      await copyFieldValue(chrome.runtime.id);
+      toast("扩展 ID 已复制，请在桌面设置中粘贴。");
+      return;
+    }
+    if (kind === "retry") { await loadStore(); return; }
+    const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: kind === "resume" ? "resume" : kind === "settings-ai" ? "settings-ai" : "home" });
+    if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
+  }
+  elements.desktopConnectionAction.addEventListener("click", () => desktopAction(elements.desktopConnectionAction.dataset.kind).catch(() => toast("当前操作不可用。")));
+  document.getElementById("open-manager").addEventListener("click", () => {
+    const mode = desktopMode === "ready" && !selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile) ? "empty" : desktopMode;
+    return desktopAction(mode === "ready" ? "home" : self.ResumeProResumeData.modeCopy(mode).kind).catch(() => toast("当前操作不可用。"));
   });
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && ["templates", "activeTemplateId", "aiConfig", "profile"].some((key) => changes[key])) loadStore().catch(() => {});
-  });
-  chrome.tabs.onActivated.addListener(() => { pollStatus().catch(() => {}); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadStore().catch(() => {}); });
+  chrome.tabs.onActivated.addListener(() => { loadStore().then(pollStatus).catch(() => {}); });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
-  loadStore().then(pollStatus).catch(() => { elements.pageState.textContent = "无法读取插件数据，请重新加载扩展。"; });
+  loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
   setInterval(() => { pollStatus().catch(() => {}); }, 1500);
 })();

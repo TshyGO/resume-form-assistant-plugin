@@ -68,7 +68,7 @@ function createClassList() {
 // A sidebar-shaped DOM: one host in fixed positioning plus the shadow contents the
 // state code reaches for. Measuring mirrors the real CSS, so "the anchor was frozen
 // to pixels" and "the anchor still follows the right edge" are distinguishable.
-function loadContentScript({ width = 1200, height = 900 } = {}) {
+function loadContentScript({ width = 1200, height = 900, desktopReply = null } = {}) {
   const writes = [];
   const listeners = { document: {}, window: {}, storageChanged: [], runtimeMessage: [] };
   const collapseButton = {
@@ -143,7 +143,9 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     runtime: {
       getURL: (name) => `chrome-extension://test/${name}`,
       onMessage: { addListener(handler) { listeners.runtimeMessage.push(handler); } },
-      sendMessage: async () => ({})
+      sendMessage: async message => desktopReply ? desktopReply(message) : message.type === 'DESKTOP_RESUME_READ'
+        ? { status: 'ok', data: { templates: [], activeTemplate: null, profile: { values: {}, family: [], custom: [] }, profileRevision: 0 } }
+        : ({})
     },
     storage: {
       local: {
@@ -179,7 +181,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     HTMLSelectElement: class {},
     HTMLTextAreaElement: class {},
     HTMLLabelElement: class {},
-    self: { __RESUME_PRO_TEST__: true }
+    self: { __RESUME_PRO_TEST__: true, ResumeProResumeData: require('../resume-data.js'), ResumeProProfile: require('../profile-fields.js') }
   };
   context.setTimeout = setTimeout;
   context.clearTimeout = clearTimeout;
@@ -243,7 +245,7 @@ test("native side panel status exposes pending offers and diagnostics", () => {
   assert.equal(profileOffer.hidden, true);
 });
 
-test("native side panel fill command invokes the page's existing fill controller", () => {
+test("native side panel fill command rereads the desktop before invoking the page controller", async () => {
   const { hooks, listeners } = loadContentScript();
   let clicks = 0;
   hooks.setShadowRoot({
@@ -255,9 +257,36 @@ test("native side panel fill command invokes the page's existing fill controller
   });
   let reply;
   const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_FILL" }, {}, (value) => { reply = value; });
-  assert.equal(handled, false);
+  assert.equal(handled, true);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(reply.ok, true);
   assert.equal(clicks, 1);
+});
+
+test('adding unanswered fields retries one desktop profile conflict with the new revision', async () => {
+  const updates = [];
+  let revision = 0;
+  const { hooks } = loadContentScript({ desktopReply: async message => {
+    if (message.type === 'DESKTOP_RESUME_READ') return { status: 'ok', data: {
+      templates: [], activeTemplate: null,
+      profile: { values: {}, family: [], custom: [] }, profileRevision: revision
+    } };
+    if (message.type === 'DESKTOP_RESUME_UPDATE') {
+      updates.push(message);
+      if (updates.length === 1) { revision = 1; return { status: 'conflict' }; }
+      return { status: 'ok' };
+    }
+    return { status: 'ok' };
+  } });
+  const card = { hidden: false };
+  hooks.setShadowRoot({ querySelector: selector => ({ '#resume-pro-profile-offer': card })[selector] || null });
+  hooks.setProfileOffer({
+    labels: ['期望薪资'], fields: [],
+    candidates: [{ label: '期望薪资', entry: { kind: 'element', element: { isConnected: true, value: '' } } }]
+  });
+  await hooks.addUnansweredToProfile();
+  assert.deepEqual(updates.map(item => item.expectedRevision), [0, 1]);
+  assert.equal(card.hidden, true);
 });
 
 test("an untouched sidebar keeps following the right edge when the window widens", () => {

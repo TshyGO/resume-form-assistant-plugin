@@ -22,6 +22,11 @@
         <p class="page-state" id="page-state">正在连接当前网页…</p>
       </header>
 
+      <div id="desktop-connection" class="desktop-connection" role="status" hidden>
+        <span id="desktop-connection-text"></span>
+        <button id="desktop-connection-action" type="button"></button>
+      </div>
+
       <nav class="dock-tabs" role="tablist" aria-label="侧边栏视图">
         <button type="button" role="tab" data-tab="fill" aria-selected="true" aria-controls="fill-view">填写</button>
         <button type="button" role="tab" data-tab="fields" aria-selected="false" aria-controls="fields-view">简历字段</button>
@@ -67,10 +72,11 @@
         </section>
       </main>
 
-      <footer class="dock-footer"><button id="open-manager" type="button">打开管理面板 ↗</button></footer>
+      <footer class="dock-footer"><button id="open-manager" type="button">打开桌面</button></footer>
       <div id="panel-toast" class="panel-toast" role="status" hidden></div>
     </div>
     <script src="profile-fields.js"></script>
+    <script src="resume-data.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

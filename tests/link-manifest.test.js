@@ -36,9 +36,9 @@ test('the toolbar button opens the native side panel and the manager stays in an
   assert.doesNotMatch(source, /TOGGLE_MANAGER/);
 });
 
-test('the page sidebar asks the worker to open the manager instead of embedding it', async () => {
+test('the page sidebar asks the worker to open desktop instead of embedding the manager', async () => {
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
-  assert.match(source, /type:\s*["']OPEN_MANAGER["']/);
+  assert.match(source, /type:\s*["']DESKTOP_OPEN_VIEW["']/);
   assert.doesNotMatch(source, /resume-pro-manager__frame/);
   assert.doesNotMatch(source, /getURL\(["']popup\.html["']\)/);
 });
