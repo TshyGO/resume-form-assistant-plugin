@@ -22,6 +22,7 @@
   "link/protocol/validate.mjs",
   "link/reconcile.mjs",
   "link/redact.mjs",
+  "link/resume.mjs",
   "link/router.mjs",
   "link/save-flow.mjs",
   "link/secret-fields.mjs",

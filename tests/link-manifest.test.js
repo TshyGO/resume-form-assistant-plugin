@@ -109,6 +109,7 @@ test('the desktop link ships every file it imports', async () => {
     'link/drain.mjs',
     'link/reconcile.mjs',
     'link/router.mjs',
+    'link/resume.mjs',
     'link/worker.mjs',
     'link/messages.mjs',
     'link/limits.mjs',

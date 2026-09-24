@@ -39,7 +39,7 @@ function handshakeReply(message) {
   };
 }
 
-async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage() } = {}) {
+async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage(), resume = null } = {}) {
   const { createStore } = await import('../link/store.mjs');
   const { createSession } = await import('../link/session.mjs');
   const { createIntents } = await import('../link/intents.mjs');
@@ -61,9 +61,25 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
   const alarms = { created: [], async create(name, options) { this.created.push({ name, ...options }); }, async clear() { return true; } };
   const drain = createDrain({ session, outbox, alarms, now });
-  const router = createRouter({ session, intents, outbox, drain, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
+  const router = createRouter({ session, intents, outbox, drain, resume, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
   return { router, storage, sent };
 }
+
+test('resume and open-view messages reach their desktop operations', async () => {
+  const calls = [];
+  const resume = {
+    read: async () => { calls.push('read'); return { status: 'ok', data: {} }; },
+    setActiveTemplate: async id => { calls.push(['active', id]); return { status: 'ok' }; },
+    saveProfile: async (profile, revision) => { calls.push(['profile', profile, revision]); return { status: 'ok' }; },
+    openView: async view => { calls.push(['view', view]); return { status: 'ok' }; }
+  };
+  const { router } = await makeRouter({ resume });
+  assert.equal((await router.handle({ type: 'DESKTOP_RESUME_READ' })).status, 'ok');
+  await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'setActiveTemplate', templateId: 'template' });
+  await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'saveProfile', profile: { values: {} }, expectedRevision: 2 });
+  await router.handle({ type: 'DESKTOP_OPEN_VIEW', view: 'resume' });
+  assert.deepEqual(calls, ['read', ['active', 'template'], ['profile', { values: {} }, 2], ['view', 'resume']]);
+});
 
 test('an unknown message is left for the other listeners', async () => {
   const { router } = await makeRouter();

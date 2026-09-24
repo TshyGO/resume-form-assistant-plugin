@@ -13,7 +13,7 @@ import { MAX_OUTBOX } from './limits.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, drain, reconcile, fillRecords = null, store = null, uploads = null, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, fillRecords = null, store = null, uploads = null, extensionId }) {
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -22,6 +22,16 @@ export function createRouter({ session, intents, outbox, drain, reconcile, fillR
       const probe = await session.probe();
       return { mode: probe.mode, extensionId };
     }
+
+    if (type === MSG.resumeRead) return resume.read();
+    if (type === MSG.resumeUpdate) {
+      return message.op === 'setActiveTemplate'
+        ? resume.setActiveTemplate(message.templateId)
+        : message.op === 'saveProfile'
+          ? resume.saveProfile(message.profile, message.expectedRevision)
+          : { status: 'invalid_payload' };
+    }
+    if (type === MSG.openView) return resume.openView(message.view);
 
     if (type === MSG.saveJob) {
       // The mode is probed at save time, not cached: the desktop may have been opened or

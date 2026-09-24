@@ -1,6 +1,7 @@
 import { idbStore, nativeSender, sleep, storageAdapter } from './chrome.mjs';
 import { createStore } from './store.mjs';
 import { createSession } from './session.mjs';
+import { createResume } from './resume.mjs';
 import { createIntents } from './intents.mjs';
 import { createOutbox } from './outbox.mjs';
 import { createReconcile } from './reconcile.mjs';
@@ -36,12 +37,14 @@ export function installDesktopLink(api) {
   const staging = createStaging({ kv: idbStore(), now: deps.now, uuid: deps.uuid });
   const uploads = createUploads({ ...deps, staging });
   const session = createSession(deps);
+  const resume = createResume({ ...deps, session });
   const outbox = createOutbox({ ...deps, uploads });
   const reconcile = createReconcile({ ...deps, outbox, uploads });
   const drain = createDrain({ session, outbox, reconcile, alarms: api.alarms, now: deps.now });
 
   const router = createRouter({
     session,
+    resume,
     intents: createIntents(deps),
     outbox,
     drain,

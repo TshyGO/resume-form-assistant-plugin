@@ -3,6 +3,9 @@
 // cannot open a native messaging port, so every desktop operation crosses this boundary.
 export const MSG = {
   probe: 'DESKTOP_PROBE',
+  resumeRead: 'DESKTOP_RESUME_READ',
+  resumeUpdate: 'DESKTOP_RESUME_UPDATE',
+  openView: 'DESKTOP_OPEN_VIEW',
   saveJob: 'DESKTOP_SAVE_JOB',
   continueSave: 'DESKTOP_CONTINUE_SAVE',
   candidates: 'DESKTOP_CANDIDATES',
