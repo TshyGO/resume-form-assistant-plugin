@@ -18,6 +18,12 @@ export function describeSaveResult(result) {
         text: '已记为待同步（尚未绑定申请）。桌面程序的协议版本和插件对不上，升级之后才能同步。'
       };
     }
+    if (reason === 'candidates_unavailable') {
+      return {
+        tone: 'pending',
+        text: '还没能核对是不是同一个岗位，这次没有写入桌面。已记为待同步，稍后再完成保存。'
+      };
+    }
     return {
       tone: 'pending',
       text: '已记为待同步（尚未绑定申请）。桌面程序可用之后再选择绑定到哪条申请。'
@@ -83,6 +89,24 @@ const REFUSALS = {
   protocol_incompatible: '桌面程序的版本和插件对不上，升级之后再试。'
 };
 
+const MANUAL_SAVE = {
+  swapped: '页面把公司和岗位写得不清楚，请核对后保存。',
+  company_conflict: '页面出现多个不同的公司名，请确认这次投递的公司。',
+  title_conflict: '页面出现多个不同的岗位名，请确认这次投递的岗位。',
+  site_title_only: '页面标题不足以确认岗位，请手动核对。',
+  title_unconfirmed: '岗位名还不确定。请核对后再保存。',
+  missing_company: '公司名还不确定。请核对后再保存。',
+  missing_title: '岗位名还不确定。请核对后再保存。'
+};
+
+export function describeReviewSave() {
+  return '请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。';
+}
+
+export function describeManualSave(reason) {
+  return MANUAL_SAVE[reason] || '请核对公司和岗位。缺的请自己补上，插件不会猜。';
+}
+
 export function describeBindResult(result) {
   const { status, code, reason } = result ?? {};
 
@@ -112,7 +136,9 @@ export function describeBindResult(result) {
     if (reason === 'queue_full') {
       return {
         tone: 'warn',
-        text: `待同步的消息已满（${MAX_OUTBOX} 条），这次没有绑定。请先处理已有的几条。填表功能不受影响。`
+        text: result?.intent
+          ? `岗位已留在待同步列表，但待发送消息已满（${MAX_OUTBOX} 条），还没有写入桌面。请先处理已有消息，再从待同步列表继续保存。`
+          : `待同步的消息已满（${MAX_OUTBOX} 条），这次没有绑定。请先处理已有的几条。填表功能不受影响。`
       };
     }
     if (reason === 'unknown_intent') {
@@ -130,7 +156,11 @@ export function describeBindResult(result) {
   }
 
   if (status === 'failed') {
-    return { tone: 'warn', text: REFUSALS[code] ?? '桌面拒绝了这次写入，请到桌面核对。' };
+    const detail = REFUSALS[code] ?? '桌面拒绝了这次写入，请到桌面核对。';
+    return {
+      tone: 'warn',
+      text: result?.intent ? `${detail} 这条仍在待同步列表，请在那里处理，避免重复新建。` : detail
+    };
   }
 
   return { tone: 'warn', text: '这次没能保存到桌面，已经留在待同步里。' };

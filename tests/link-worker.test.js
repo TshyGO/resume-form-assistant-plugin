@@ -74,6 +74,19 @@ test('the desktop listener answers a probe', async () => {
   assert.equal(result.extensionId, 'abcdefghijklmnopabcdefghijklmnop');
 });
 
+test('continue-save reaches the router through the desktop message listener', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  installDesktopLink(api);
+
+  // The sidebar sends this after a pending save. An unknown intent must get a router
+  // response, not disappear because a forwarding allowlist omitted the new type.
+  const result = await api.dispatch({ type: 'DESKTOP_CONTINUE_SAVE', intentId: 'missing' });
+
+  assert.equal(result.status, 'rejected');
+  assert.equal(result.reason, 'unknown_intent');
+});
+
 test('the desktop listener keeps the message channel open for its async answer', async () => {
   const { installDesktopLink } = await import('../link/worker.mjs');
   const api = fakeChrome();
