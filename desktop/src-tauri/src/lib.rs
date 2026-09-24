@@ -1,5 +1,6 @@
 mod ai_client;
 mod ai_commands;
+mod ai_complete;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
@@ -1100,6 +1101,39 @@ fn cancel_analysis_cmd(state: State<AppState>, request_id: String) -> Result<boo
     Ok(state.ai_inflight.cancel(&request_id))
 }
 
+/// 用「当前使用」的服务商问一次。只给简历解析用；插件转发在 PR 3 走协议，不走这个命令。
+/// 同一时间只允许一个（`ai_inflight` 以 `resume-parse` 占位），可以 `cancel_analysis_cmd` 取消。
+#[tauri::command]
+async fn ai_complete_cmd(
+    state: State<'_, AppState>,
+    system: String,
+    user: String,
+    request_id: String,
+) -> Result<String, CommandError> {
+    ai_complete::check_sizes(&system, &user)?;
+    let (provider, key) = ai_provider_commands::active_with_key(&ai_data_root(&state)?, state.credentials.as_ref())?;
+    checked_url(&provider.api_url)?;
+    let cancelled = state.ai_inflight.begin("resume-parse", &request_id)?;
+    let outcome = tokio::select! {
+        result = ai_complete::complete(&provider, &key, &system, &user, ai_complete::COMPLETE_TIMEOUT) => result,
+        _ = cancelled => Err(CommandError {
+            code: "AI_CANCELLED".into(),
+            message: "已取消。取消不保证对方停止计算或停止计费。".into(),
+        }),
+    };
+    state.ai_inflight.finish(&request_id);
+    outcome
+}
+
+#[tauri::command]
+fn create_resume_template_cmd(
+    state: State<AppState>,
+    name: String,
+    groups: Vec<archive_store::TemplateGroup>,
+) -> Result<resume_commands::ImportResult, CommandError> {
+    with_store(&state, move |store| resume_commands::create_from_groups(store, &name, groups))
+}
+
 #[tauri::command]
 fn list_suggestions_cmd(
     state: State<AppState>,
@@ -1663,6 +1697,8 @@ pub fn run() {
             preview_analysis_cmd,
             analyze_evidence_cmd,
             cancel_analysis_cmd,
+            ai_complete_cmd,
+            create_resume_template_cmd,
             list_suggestions_cmd,
             confirm_suggestion_cmd,
             reject_suggestion_cmd,
