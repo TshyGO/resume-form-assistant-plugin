@@ -27,6 +27,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "ai-models.js",
   "resume-utils.js",
   "profile-fields.js",
+  "resume-data.js",
   "popup.html",
   "popup.css",
   "popup.js",

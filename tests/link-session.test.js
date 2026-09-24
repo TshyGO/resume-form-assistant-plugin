@@ -22,13 +22,13 @@ function fakeStorage(initial = {}) {
 function handshakeReply(over = {}) {
   return message => ({
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       payload: {
         appVersion: '0.1.0',
         minProtocolVersion: 1,
-        maxProtocolVersion: 1,
+        maxProtocolVersion: 2,
         archiveId: ARCHIVE,
         restoreEpoch: EPOCH,
         capabilities: ['health', 'handshake', 'job.save', 'application.queryCandidates', 'outbox.reconcile'],
@@ -51,7 +51,8 @@ async function makeSession({ reply, storage = fakeStorage() }) {
     },
     sleep: async () => {},
     uuid: () => '33333333-3333-4333-8333-333333333333',
-    now: () => new Date('2026-09-09T00:00:00.000Z')
+    now: () => new Date('2026-09-09T00:00:00.000Z'),
+    getManifest: () => ({ version: '9.8.7' })
   });
   return { session, sent, storage, store };
 }
@@ -73,11 +74,16 @@ test('the handshake itself carries no archive identity', async () => {
 
   assert.equal('archiveId' in sent[0], false);
   assert.equal('restoreEpoch' in sent[0], false);
+  assert.equal(sent[0].protocolVersion, 2);
+  assert.deepEqual(
+    { pluginVersion: sent[0].payload.pluginVersion, min: sent[0].payload.minProtocolVersion, max: sent[0].payload.maxProtocolVersion },
+    { pluginVersion: '9.8.7', min: 2, max: 2 }
+  );
 });
 
-test('a desktop speaking only a future protocol is incompatible and is not remembered as paired', async () => {
+test('a desktop speaking only v1 is incompatible and is not remembered as paired', async () => {
   const { session, storage } = await makeSession({
-    reply: handshakeReply({ minProtocolVersion: 2, maxProtocolVersion: 3 })
+    reply: handshakeReply({ minProtocolVersion: 1, maxProtocolVersion: 1 })
   });
 
   const probe = await session.probe();
@@ -86,6 +92,11 @@ test('a desktop speaking only a future protocol is incompatible and is not remem
   // Recording pairing here would let the queue claim the desktop is usable and start
   // promoting intents into bound messages it can never send.
   assert.equal('desktopPairing' in storage.data, false);
+});
+
+test('a desktop serving v1 through v2 is ready', async () => {
+  const { session } = await makeSession({ reply: handshakeReply({ minProtocolVersion: 1, maxProtocolVersion: 2 }) });
+  assert.equal((await session.probe()).mode, 'ready');
 });
 
 test('a handshake that gets past transport validation with no shared version is still incompatible', async () => {
@@ -99,11 +110,12 @@ test('a handshake that gets past transport validation with no shared version is 
     store: createStore({ storage, uuid: () => '11111111-1111-4111-8111-111111111111' }),
     send: async message => ({
       status: 'ok',
-      response: handshakeReply({ minProtocolVersion: 2, maxProtocolVersion: 3 })(message).response,
+      response: handshakeReply({ minProtocolVersion: 3, maxProtocolVersion: 3 })(message).response,
       resultId: null
     }),
     uuid: () => '33333333-3333-4333-8333-333333333333',
-    now: () => new Date('2026-09-09T00:00:00.000Z')
+    now: () => new Date('2026-09-09T00:00:00.000Z'),
+    getManifest: () => ({ version: '9.8.7' })
   });
 
   assert.deepEqual(await session.probe(), { mode: 'incompatible', identity: null });
@@ -114,7 +126,7 @@ test('a desktop that rejects the handshake outright is incompatible', async () =
   const { session } = await makeSession({
     reply: message => ({
       response: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         correlationId: message.messageId,
         ok: false,
         error: { code: 'protocol_incompatible', retryable: false, message: 'no shared protocol version' },
@@ -136,7 +148,7 @@ test('an unpaired extension is told to pair, not to install', async () => {
   const { session } = await makeSession({
     reply: message => ({
       response: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         correlationId: message.messageId,
         ok: false,
         error: { code: 'identity_not_allowed', retryable: false, message: 'origin is not paired' },
@@ -156,7 +168,7 @@ test('a previously paired profile whose desktop is closed reports unavailable', 
     storage: fakeStorage({ desktopPairing: { archiveId: ARCHIVE, restoreEpoch: EPOCH, at: 1 } }),
     reply: message => ({
       response: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         correlationId: message.messageId,
         ok: false,
         error: { code: 'unavailable', retryable: true, message: 'the application is starting' },

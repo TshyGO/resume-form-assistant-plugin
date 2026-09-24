@@ -28,18 +28,18 @@ function fakeStorage(initial = {}) {
 function handshakeReply(message) {
   return {
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       payload: {
-        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2,
         archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake', 'job.save']
       }
     }
   };
 }
 
-async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage() } = {}) {
+async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage(), resume = null, ai = null } = {}) {
   const { createStore } = await import('../link/store.mjs');
   const { createSession } = await import('../link/session.mjs');
   const { createIntents } = await import('../link/intents.mjs');
@@ -56,14 +56,61 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
     sent.push(message);
     return reply(message);
   };
-  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now });
+  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now, getManifest: () => ({ version: '0.4.0' }) });
   const intents = createIntents({ store, uuid, now });
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
   const alarms = { created: [], async create(name, options) { this.created.push({ name, ...options }); }, async clear() { return true; } };
   const drain = createDrain({ session, outbox, alarms, now });
-  const router = createRouter({ session, intents, outbox, drain, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
+  const router = createRouter({ session, intents, outbox, drain, resume, ai, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
   return { router, storage, sent };
 }
+
+test('resume and open-view messages reach their desktop operations', async () => {
+  const calls = [];
+  const resume = {
+    read: async () => { calls.push('read'); return { status: 'ok', data: {} }; },
+    setActiveTemplate: async id => { calls.push(['active', id]); return { status: 'ok' }; },
+    saveProfile: async (profile, revision) => { calls.push(['profile', profile, revision]); return { status: 'ok' }; },
+    openView: async view => { calls.push(['view', view]); return { status: 'ok' }; }
+  };
+  const { router } = await makeRouter({ resume });
+  assert.equal((await router.handle({ type: 'DESKTOP_RESUME_READ' })).status, 'ok');
+  await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'setActiveTemplate', templateId: 'template' });
+  await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'saveProfile', profile: { values: {} }, expectedRevision: 2 });
+  await router.handle({ type: 'DESKTOP_OPEN_VIEW', view: 'resume' });
+  assert.deepEqual(calls, ['read', ['active', 'template'], ['profile', { values: {} }, 2], ['view', 'resume']]);
+});
+
+test('AI cancel aborts the matching long request only', async () => {
+  const ai = { complete: ({ signal }) => new Promise(resolve => {
+    signal.addEventListener('abort', () => resolve({ ok: false, reason: 'cancelled' }), { once: true });
+  }) };
+  const { router } = await makeRouter({ ai });
+  const pending = router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'call-1', purpose: 'fill', system: 's', user: 'u' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'other' }), { cancelled: false });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: true });
+  assert.deepEqual(await pending, { ok: false, reason: 'cancelled' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: false });
+});
+
+test('a cancel that arrives before AI completion never opens a native request', async () => {
+  let called = false;
+  const { router } = await makeRouter({ ai: { complete: async () => { called = true; return { ok: true, text: 'late' }; } } });
+  await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'early' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'early', purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'cancelled' });
+  assert.equal(called, false);
+});
+
+test('many early cancellations do not evict a request that has not arrived yet', async () => {
+  let called = false;
+  const { router } = await makeRouter({ ai: { complete: async () => { called = true; return { ok: true, text: 'late' }; } } });
+  for (let index = 0; index < 120; index += 1) {
+    await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: `early-${index}` });
+  }
+  const result = await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'early-0', purpose: 'fill', system: 's', user: 'u' });
+  assert.deepEqual(result, { ok: false, reason: 'cancelled' });
+  assert.equal(called, false);
+});
 
 test('an unknown message is left for the other listeners', async () => {
   const { router } = await makeRouter();
@@ -101,7 +148,7 @@ test('an unpaired but installed desktop is reported as unpaired, with the id to 
   const { router } = await makeRouter({
     reply: message => ({
       response: {
-        protocolVersion: 1, correlationId: message.messageId, ok: false,
+        protocolVersion: 2, correlationId: message.messageId, ok: false,
         error: { code: 'identity_not_allowed', retryable: false, message: 'origin is not paired' },
         payload: {}
       }
@@ -157,7 +204,7 @@ function desktopThatAnswers(message) {
   if (message.messageType === 'application.queryCandidates') {
     return {
       response: {
-        protocolVersion: 1, correlationId: message.messageId, ok: true,
+        protocolVersion: 2, correlationId: message.messageId, ok: true,
         payload: {
           exact: [{ applicationId: APPLICATION, company: '星河科技', title: '后端开发', stage: 'saved' }],
           sameCompany: []
@@ -166,7 +213,7 @@ function desktopThatAnswers(message) {
     };
   }
   return {
-    response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
+    response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
   };
 }
 
@@ -197,7 +244,7 @@ test('a bind while the desktop went away stays pending', async () => {
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }
@@ -217,7 +264,7 @@ test('the queue listing includes bound messages, not only intents', async () => 
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }
@@ -237,7 +284,7 @@ test('a stalled write can be retried and cancelled from the sidebar', async () =
       ? handshakeReply(message)
       : {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: false,
+            protocolVersion: 2, correlationId: message.messageId, ok: false,
             error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
           }
         }

@@ -39,14 +39,14 @@ const PAIRED = () => fakeStorage({ desktopPairing: { archiveId: ARCHIVE, restore
 function handshake(message, epoch = EPOCH) {
   return {
     response: {
-      protocolVersion: 1, correlationId: message.messageId, ok: true,
-      payload: { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1, archiveId: ARCHIVE, restoreEpoch: epoch, capabilities: ['handshake', 'fill.submit'] }
+      protocolVersion: 2, correlationId: message.messageId, ok: true,
+      payload: { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2, archiveId: ARCHIVE, restoreEpoch: epoch, capabilities: ['handshake', 'fill.submit'] }
     }
   };
 }
 
 const saved = message => ({
-  response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: EVENT, payload: { resultKind: 'event' } }
+  response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: EVENT, payload: { resultKind: 'event' } }
 });
 
 const closed = () => ({ lastError: 'Error when communicating with the native messaging host.' });
@@ -76,7 +76,7 @@ async function harness({ storage = PAIRED(), desktop = closed } = {}) {
     return state.desktop(message);
   };
   const deps = { store, sendNative, sleep: async () => {}, uuid, now };
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const outbox = createOutbox(deps);
   const reconcile = createReconcile({ ...deps, outbox });
   const alarms = { async create() {}, async clear() { return true; } };
@@ -244,7 +244,7 @@ test('after a restore, an applied fill leaves no record behind and a discarded o
       if (message.messageType === 'outbox.reconcile') {
         return {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: true,
+            protocolVersion: 2, correlationId: message.messageId, ok: true,
             payload: { items: message.payload.items.map(item => ({ ...item, status, ...(status === 'applied' ? { resultId: EVENT } : {}) })) }
           }
         };

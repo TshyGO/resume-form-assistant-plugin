@@ -35,7 +35,7 @@ const deps = extra => ({ sleep: async () => {}, ...extra });
 
 test('a persisted write comes back as ok with its resultId', async () => {
   const { sendOnce } = await import('../link/transport.mjs');
-  const wire = port({ response: { protocolVersion: 1, correlationId: MESSAGE, ok: true, resultId: RESULT, payload: {} } });
+  const wire = port({ response: { protocolVersion: 2, correlationId: MESSAGE, ok: true, resultId: RESULT, payload: {} } });
 
   const result = await sendOnce(await jobSave(), deps({ sendNative: wire.send }));
 
@@ -58,7 +58,7 @@ test('an unpaired extension reads as not paired, never as not installed', async 
   const { sendOnce } = await import('../link/transport.mjs');
   const wire = port({
     response: {
-      protocolVersion: 1, correlationId: MESSAGE, ok: false,
+      protocolVersion: 2, correlationId: MESSAGE, ok: false,
       error: { code: 'identity_not_allowed', retryable: false, message: 'origin is not paired' },
       payload: {}
     }
@@ -86,12 +86,12 @@ test('a cold start that answers unavailable succeeds on the retry', async () => 
   const wire = port(
     {
       response: {
-        protocolVersion: 1, correlationId: MESSAGE, ok: false,
+        protocolVersion: 2, correlationId: MESSAGE, ok: false,
         error: { code: 'unavailable', retryable: true, message: 'the application is starting' },
         payload: {}
       }
     },
-    { response: { protocolVersion: 1, correlationId: MESSAGE, ok: true, resultId: RESULT, payload: {} } }
+    { response: { protocolVersion: 2, correlationId: MESSAGE, ok: true, resultId: RESULT, payload: {} } }
   );
 
   const result = await sendOnce(await jobSave(), deps({ sendNative: wire.send }));
@@ -104,7 +104,7 @@ test('unavailable twice stays retryable and is not escalated to the user', async
   const { sendOnce } = await import('../link/transport.mjs');
   const wire = port({
     response: {
-      protocolVersion: 1, correlationId: MESSAGE, ok: false,
+      protocolVersion: 2, correlationId: MESSAGE, ok: false,
       error: { code: 'unavailable', retryable: true, message: 'the application is starting' },
       payload: {}
     }
@@ -121,7 +121,7 @@ test('a fatal protocol code is not retried', async () => {
   const { sendOnce } = await import('../link/transport.mjs');
   const wire = port({
     response: {
-      protocolVersion: 1, correlationId: MESSAGE, ok: false,
+      protocolVersion: 2, correlationId: MESSAGE, ok: false,
       error: { code: 'restore_epoch_mismatch', retryable: false, message: 'not the current archive identity' },
       payload: {}
     }
@@ -140,7 +140,7 @@ test('a reply correlated to a different request is never taken as success', asyn
   // alone would record this resultId against the wrong outbox entry.
   const wire = port({
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: '99999999-9999-4999-8999-999999999999',
       ok: true, resultId: RESULT, payload: {}
     }
@@ -159,15 +159,15 @@ test('a verdict the validator reaches on its own is fatal, not retryable', async
     messageType: 'handshake',
     messageId: MESSAGE,
     clientInstanceId: CLIENT,
-    payload: { pluginVersion: '0.3.0', minProtocolVersion: 1, maxProtocolVersion: 1 }
+    payload: { pluginVersion: '0.4.0', minProtocolVersion: 2, maxProtocolVersion: 2 }
   });
   // The vendored validator decides protocol compatibility itself. Flattening that verdict
   // into "unreadable reply" would make the queue retry a desktop it can never talk to.
   const wire = port({
     response: {
-      protocolVersion: 1, correlationId: MESSAGE, ok: true,
+      protocolVersion: 2, correlationId: MESSAGE, ok: true,
       payload: {
-        appVersion: '9.0.0', minProtocolVersion: 2, maxProtocolVersion: 3,
+        appVersion: '9.0.0', minProtocolVersion: 1, maxProtocolVersion: 1,
         archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake']
       }
     }
@@ -184,7 +184,7 @@ test('a failed write claiming a resultId is rejected', async () => {
   const { sendOnce } = await import('../link/transport.mjs');
   const wire = port({
     response: {
-      protocolVersion: 1, correlationId: MESSAGE, ok: false, resultId: RESULT,
+      protocolVersion: 2, correlationId: MESSAGE, ok: false, resultId: RESULT,
       error: { code: 'conflict', retryable: false, message: 'digest does not match' },
       payload: {}
     }
@@ -197,7 +197,7 @@ test('a failed write claiming a resultId is rejected', async () => {
 
 test('the transport never reports success without a resultId for a write', async () => {
   const { sendOnce } = await import('../link/transport.mjs');
-  const wire = port({ response: { protocolVersion: 1, correlationId: MESSAGE, ok: true, payload: {} } });
+  const wire = port({ response: { protocolVersion: 2, correlationId: MESSAGE, ok: true, payload: {} } });
 
   const result = await sendOnce(await jobSave(), deps({ sendNative: wire.send }));
 

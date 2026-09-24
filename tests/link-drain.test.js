@@ -65,7 +65,7 @@ async function harness({ desktop, storage = fakeStorage(), clock = { value: Date
 
   const store = createStore({ storage, uuid });
   const deps = { store, uuid, now, sleep: async () => {}, sendNative };
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const intents = createIntents(deps);
   const outbox = createOutbox(deps);
   const alarms = fakeAlarms();
@@ -76,9 +76,9 @@ async function harness({ desktop, storage = fakeStorage(), clock = { value: Date
 
 const handshakeReply = message => ({
   response: {
-    protocolVersion: 1, correlationId: message.messageId, ok: true,
+    protocolVersion: 2, correlationId: message.messageId, ok: true,
     payload: {
-      appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+      appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2,
       archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake', 'job.save']
     }
   }
@@ -86,13 +86,13 @@ const handshakeReply = message => ({
 
 const unavailable = message => ({
   response: {
-    protocolVersion: 1, correlationId: message.messageId, ok: false,
+    protocolVersion: 2, correlationId: message.messageId, ok: false,
     error: { code: 'unavailable', retryable: true, message: 'starting' }, payload: {}
   }
 });
 
 const saved = message => ({
-  response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
+  response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: APPLICATION, payload: {} }
 });
 
 async function bindOne(harnessed, { title = FIELDS.title } = {}) {
@@ -315,9 +315,9 @@ test('a restored archive is noticed before anything is sent', async () => {
     if (message.messageType === 'handshake') {
       return {
         response: {
-          protocolVersion: 1, correlationId: message.messageId, ok: true,
+          protocolVersion: 2, correlationId: message.messageId, ok: true,
           payload: {
-            appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+            appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2,
             archiveId: ARCHIVE, restoreEpoch: epoch, capabilities: ['handshake', 'job.save']
           }
         }
@@ -326,7 +326,7 @@ test('a restored archive is noticed before anything is sent', async () => {
     if (message.messageType === 'outbox.reconcile') {
       return {
         response: {
-          protocolVersion: 1, correlationId: message.messageId, ok: true,
+          protocolVersion: 2, correlationId: message.messageId, ok: true,
           payload: { items: message.payload.items.map(item => ({ ...item, status: 'not_found' })) }
         }
       };
@@ -338,7 +338,7 @@ test('a restored archive is noticed before anything is sent', async () => {
   const deps = { store, uuid, now, sleep: async () => {}, sendNative };
   const outbox = createOutbox(deps);
   const drain = createDrain({
-    session: createSession(deps),
+    session: createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) }),
     outbox,
     reconcile: createReconcile({ ...deps, outbox }),
     alarms: fakeAlarms(),

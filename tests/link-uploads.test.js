@@ -55,7 +55,7 @@ function fakeKv({ failPut = false } = {}) {
 const closed = () => ({ lastError: 'Error when communicating with the native messaging host.' });
 
 function reply(message, payload, resultId = message.messageId) {
-  return { response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId, payload } };
+  return { response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId, payload } };
 }
 
 /**
@@ -68,7 +68,7 @@ function desktop({ online = true, dropCompleteAcks = 0, failCompletions = 0 } = 
   model.answer = message => {
     if (!model.online) return closed();
     if (message.messageType === 'handshake') {
-      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1, archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake'] }, undefined);
+      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2, archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake'] }, undefined);
     }
     if (message.messageType === 'fill.submit') {
       model.events.push(message);
@@ -81,7 +81,7 @@ function desktop({ online = true, dropCompleteAcks = 0, failCompletions = 0 } = 
       model.uploads.set(p.snapshotId, upload);
       const known = upload.ids.get(p.chunkIndex);
       if (known && known !== message.messageId) {
-        return { response: { protocolVersion: 1, correlationId: message.messageId, ok: false, error: { code: 'conflict', retryable: false, message: 'reminted' }, payload: {} } };
+        return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: 'conflict', retryable: false, message: 'reminted' }, payload: {} } };
       }
       upload.ids.set(p.chunkIndex, message.messageId);
       upload.chunks.set(p.chunkIndex, Buffer.from(p.bytesBase64, 'base64'));
@@ -138,7 +138,7 @@ async function worker({ storage, kv, model, clock = { value: Date.parse('2026-09
   const deps = { store, sendNative, sleep: async () => {}, uuid, now };
   const staging = createStaging({ kv, now, uuid });
   const uploads = createUploads({ ...deps, staging });
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const outbox = createOutbox({ ...deps, uploads });
   const reconcile = createReconcile({ ...deps, outbox });
   const drain = createDrain({ session, outbox, reconcile, alarms: { async create() {}, async clear() { return true; } }, now });

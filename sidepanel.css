@@ -28,6 +28,8 @@ button { cursor: pointer; }
 .page-state { margin: 13px 0 0; color: #d8e8e4; font-size: 12px; }
 .page-state::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #69c4a4; vertical-align: 1px; }
 .page-state.is-unavailable::before { background: #b7c1cd; }
+.desktop-connection { display: grid; gap: 5px; padding: 10px 16px; border-bottom: 1px solid #e7d9b1; background: #fff8e7; color: #5b4820; font-size: 12px; }
+.desktop-connection button { justify-self: start; border: 0; padding: 2px 0; background: transparent; color: #286d62; font-weight: 600; }
 .dock-tools { position: absolute; right: 16px; top: 15px; }
 .dock-tools summary { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 1px solid #3b4557; border-radius: 7px; background: #293343; list-style: none; cursor: pointer; font-size: 19px; }
 .dock-tools summary::-webkit-details-marker { display: none; }

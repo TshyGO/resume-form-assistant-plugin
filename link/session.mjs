@@ -1,8 +1,6 @@
 import { buildEnvelope, MAX_PROTOCOL_VERSION, MIN_PROTOCOL_VERSION } from './envelope.mjs';
 import { sendOnce } from './transport.mjs';
 
-export const PLUGIN_VERSION = '0.4.0';
-
 /**
  * The five states §5.2.3 and §9 distinguish, plus `ready`. They are not severities: each one
  * allows a different thing, and collapsing any two of them breaks a rule.
@@ -16,14 +14,14 @@ export const PLUGIN_VERSION = '0.4.0';
  *                 this is the only failure that may persist a SaveIntent
  *   never_paired  no successful handshake was ever recorded; no long-lived queue is created
  */
-export function createSession({ store, sendNative, sleep, uuid, now, send = sendOnce }) {
+export function createSession({ store, sendNative, sleep, uuid, now, getManifest, send = sendOnce }) {
   async function probe() {
     const message = await buildEnvelope({
       messageType: 'handshake',
       messageId: uuid(),
       clientInstanceId: await store.clientInstanceId(),
       payload: {
-        pluginVersion: PLUGIN_VERSION,
+        pluginVersion: getManifest().version,
         minProtocolVersion: MIN_PROTOCOL_VERSION,
         maxProtocolVersion: MAX_PROTOCOL_VERSION
       },

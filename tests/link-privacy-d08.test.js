@@ -80,11 +80,11 @@ test('no synthetic secret reaches the wire, chrome.storage or IndexedDB', async 
   const storage = fakeStorage({ desktopPairing: { archiveId: ARCHIVE, restoreEpoch: EPOCH, at: 1 }, templates: [TEMPLATE] });
   const kv = fakeKv();
   const wire = [];
-  const reply = (message, payload, resultId) => ({ response: { protocolVersion: 1, correlationId: message.messageId, ok: true, ...(resultId ? { resultId } : {}), payload } });
+  const reply = (message, payload, resultId) => ({ response: { protocolVersion: 2, correlationId: message.messageId, ok: true, ...(resultId ? { resultId } : {}), payload } });
   const sendNative = async (host, message) => {
     wire.push(message);
     if (message.messageType === 'handshake') {
-      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1, archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake'] });
+      return reply(message, { appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2, archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ['handshake'] });
     }
     if (message.messageType === 'fill.submit') return reply(message, { resultKind: 'event' }, '99999999-9999-4999-8999-999999999999');
     if (message.messageType === 'snapshot.chunk') {
@@ -101,7 +101,7 @@ test('no synthetic secret reaches the wire, chrome.storage or IndexedDB', async 
   const deps = { store, sendNative, sleep: async () => {}, uuid, now };
   const staging = createStaging({ kv, now, uuid });
   const uploads = createUploads({ ...deps, staging });
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const outbox = createOutbox({ ...deps, uploads });
   const reconcile = createReconcile({ ...deps, outbox, uploads });
   const drain = createDrain({ session, outbox, reconcile, alarms: { async create() {}, async clear() { return true; } }, now });

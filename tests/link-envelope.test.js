@@ -22,13 +22,13 @@ test('handshake carries no archive identity and passes D05 validation', async ()
     messageType: 'handshake',
     messageId: MESSAGE,
     clientInstanceId: CLIENT,
-    payload: { pluginVersion: '0.3.0', minProtocolVersion: 1, maxProtocolVersion: 1 },
+    payload: { pluginVersion: '0.4.0', minProtocolVersion: 2, maxProtocolVersion: 2 },
     identity: IDENTITY
   });
 
   assert.equal('archiveId' in message, false);
   assert.equal('restoreEpoch' in message, false);
-  assert.equal(message.protocolVersion, 1);
+  assert.equal(message.protocolVersion, 2);
   await validate.validateRequest(message);
 });
 

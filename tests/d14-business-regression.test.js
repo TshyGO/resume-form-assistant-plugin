@@ -69,7 +69,7 @@ function fakeKv() {
 function reply(message, payload = {}, resultId = message.messageId) {
   return {
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       resultId,
@@ -99,7 +99,7 @@ function desktopModel() {
       return reply(message, {
         appVersion: '0.1.0',
         minProtocolVersion: 1,
-        maxProtocolVersion: 1,
+        maxProtocolVersion: 2,
         archiveId: ARCHIVE,
         restoreEpoch: EPOCH,
         capabilities: ['handshake', 'job.save', 'fill.submit', 'snapshot.chunk', 'submit.confirm']
@@ -177,7 +177,7 @@ async function harness(model) {
   const deps = { store, sendNative, sleep: async () => {}, uuid, now };
   const staging = createStaging({ kv, now, uuid });
   const uploads = createUploads({ ...deps, staging });
-  const session = createSession(deps);
+  const session = createSession({ ...deps, getManifest: () => ({ version: '0.4.0' }) });
   const outbox = createOutbox({ ...deps, uploads });
   const reconcile = createReconcile({ ...deps, outbox });
   const drain = createDrain({

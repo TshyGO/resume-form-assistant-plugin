@@ -31,11 +31,11 @@ function fields(title, company = '星河科技') {
 function handshake(message, epoch = EPOCH) {
   return {
     response: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       correlationId: message.messageId,
       ok: true,
       payload: {
-        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 1,
+        appVersion: '0.1.0', minProtocolVersion: 1, maxProtocolVersion: 2,
         archiveId: ARCHIVE, restoreEpoch: epoch, capabilities: ['handshake', 'job.save']
       }
     }
@@ -60,7 +60,7 @@ async function harness(answer) {
     return answer(message);
   };
   const store = createStore({ storage, uuid });
-  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now });
+  const session = createSession({ store, sendNative, sleep: async () => {}, uuid, now, getManifest: () => ({ version: '0.4.0' }) });
   const intents = createIntents({ store, uuid, now });
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
   const alarms = { created: [], async create() {}, async clear() { return true; } };
@@ -89,7 +89,7 @@ function desktop() {
         const exact = applications.filter(item => item.company === message.payload.company && item.title === message.payload.title);
         const sameCompany = applications.filter(item => item.company === message.payload.company && item.title !== message.payload.title);
         const view = item => ({ applicationId: item.id, company: item.company, title: item.title, stage: item.stage });
-        return { response: { protocolVersion: 1, correlationId: message.messageId, ok: true, payload: { exact: exact.map(view), sameCompany: sameCompany.map(view) } } };
+        return { response: { protocolVersion: 2, correlationId: message.messageId, ok: true, payload: { exact: exact.map(view), sameCompany: sameCompany.map(view) } } };
       }
       if (message.messageType === 'job.save') {
         const respond = () => {
@@ -97,7 +97,7 @@ function desktop() {
           if (!applications.some(item => item.id === id)) {
             applications.push({ id, company: message.payload.company, title: message.payload.title, stage: 'saved' });
           }
-          return { response: { protocolVersion: 1, correlationId: message.messageId, ok: true, resultId: id, payload: { resultKind: 'application' } } };
+          return { response: { protocolVersion: 2, correlationId: message.messageId, ok: true, resultId: id, payload: { resultKind: 'application' } } };
         };
         if (jobDelay) {
           const gate = jobDelay;
@@ -109,12 +109,12 @@ function desktop() {
       if (message.messageType === 'outbox.reconcile') {
         return {
           response: {
-            protocolVersion: 1, correlationId: message.messageId, ok: true,
+            protocolVersion: 2, correlationId: message.messageId, ok: true,
             payload: { items: message.payload.items.map(item => ({ ...item, status: 'not_found' })) }
           }
         };
       }
-      return { response: { protocolVersion: 1, correlationId: message.messageId, ok: false, error: { code: 'unavailable', retryable: true, message: 'down' }, payload: {} } };
+      return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: 'unavailable', retryable: true, message: 'down' }, payload: {} } };
     }
   };
 }
@@ -224,7 +224,7 @@ test('a queued save is not replayed as success after the archive epoch changes',
   let jobUnavailable = true;
   const { router, drain, storage } = await harness(message => {
     if (message.messageType === 'job.save' && jobUnavailable) {
-      return { response: { protocolVersion: 1, correlationId: message.messageId, ok: false, error: { code: 'unavailable', retryable: true, message: 'down' }, payload: {} } };
+      return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: 'unavailable', retryable: true, message: 'down' }, payload: {} } };
     }
     return model.answer(message);
   });

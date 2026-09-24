@@ -369,6 +369,8 @@
 
   const api = {
     CUSTOM_GROUP,
+    SECRET_LABEL,
+    SECRET_VALUE,
     FAMILY_FIELDS,
     FAMILY_GROUP,
     FAMILY_RELATIONS,

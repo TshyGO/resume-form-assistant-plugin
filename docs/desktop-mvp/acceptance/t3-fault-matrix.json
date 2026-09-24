@@ -133,7 +133,7 @@
       "testLayer": ["protocol", "link", "native host"],
       "deterministicTests": [
         "tests/link-envelope.test.js::an identity-required message without a handshake refuses to be built",
-        "tests/link-session.test.js::a desktop speaking only a future protocol is incompatible and is not remembered as paired",
+        "tests/link-session.test.js::a desktop speaking only v1 is incompatible and is not remembered as paired",
         "tests/link-transport.test.js::a fatal protocol code is not retried"
       ],
       "remainingEvidence": ["T4 real Chrome and Edge Native Messaging rejection diagnostics"]
