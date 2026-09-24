@@ -47,3 +47,12 @@ test('the generator does not restate the messageType mapping', async () => {
     'gen-types.mjs must derive the mapping from schema-lite.mjs, not hard-code messageTypes'
   );
 });
+
+test('an array of a union type is parenthesized so every member is an array item', async () => {
+  const { renderTypes } = await load();
+  const rendered = renderTypes();
+  const capabilities = rendered.split('\n').find(line => line.trim().startsWith('capabilities:'));
+  assert.ok(capabilities, 'handshake response declares capabilities');
+  assert.match(capabilities, /capabilities: \("health" \| .*"legacy\.import"\)\[\];/);
+  assert.doesNotMatch(rendered, /"[^"\n]*" \| "[^"\n]*"\[\]/, 'a bare union followed by [] binds [] to the last member only');
+});
