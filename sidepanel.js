@@ -349,6 +349,8 @@
     const { legacyImport } = await chrome.storage.local.get(["legacyImport"]);
     document.getElementById("legacy-hint").hidden = !["sending", "waiting"].includes(legacyImport?.phase);
   }
+  // Connection details and anything left over from the 0.4.0 migration live on the status page.
+  document.getElementById("open-status").addEventListener("click", () => { chrome.runtime.openOptionsPage?.(); });
   document.getElementById("legacy-hint-open").addEventListener("click", async () => {
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");

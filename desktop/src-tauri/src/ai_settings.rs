@@ -359,7 +359,7 @@ pub fn credential_in_url(url: &str) -> Option<String> {
     None
 }
 
-/// 用户填的多半是服务商文档上的 Base URL。规则和插件那边（`ai-models.js`）一致：
+/// 用户填的多半是服务商文档上的 Base URL。规则沿用 0.4.0 插件 `ai-models.js` 的口径：
 /// 已经指向具体端点的原样保留，看着像 base 的补上 `/chat/completions`。
 pub fn normalize_api_url(typed: &str, fallback: &str) -> String {
     let value = typed.trim();
