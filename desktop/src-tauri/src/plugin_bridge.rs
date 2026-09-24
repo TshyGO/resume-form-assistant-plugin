@@ -122,8 +122,15 @@ pub fn legacy_import(
     services: &dyn crate::bridge_services::BridgeServices,
 ) -> Result<Answer, ErrorCode> {
     ensure_current_identity(request, store)?;
-    for expired in store.expire_legacy_imports(&archive_store::timeutil::now_utc()).map_err(code_of)? {
-        services.clear_import_key(&expired)?;
+    // Housekeeping, not part of the answer: a keychain that cannot delete right now must not
+    // make a status query or a part fail. Undeleted keys are retried at startup.
+    match store.expire_legacy_imports(&archive_store::timeutil::now_utc()) {
+        Ok(expired) => {
+            for id in expired {
+                crate::legacy_import_commands::clear_key_best_effort(store, services, &id);
+            }
+        }
+        Err(err) => eprintln!("legacy import: expiry check deferred ({})", err.code()),
     }
     let import_id = request.payload["importId"].as_str().ok_or(ErrorCode::InvalidPayload)?;
     let kind = request.payload["kind"].as_str().ok_or(ErrorCode::InvalidPayload)?;
@@ -135,6 +142,8 @@ pub fn legacy_import(
             let index = request.payload["index"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
             let body = request.payload.get("body").ok_or(ErrorCode::InvalidPayload)?;
             let digest = resume_pro_protocol::payload_body_sha256(body).map_err(|_| ErrorCode::InvalidPayload)?;
+            let check = store.check_legacy_part(import_id, index, kind, &digest).map_err(code_of)?;
+            if check.is_new { check_new_part(kind, body)?; }
             let stored = if kind == "aiConfig" {
                 json!({
                     "apiUrl": body["apiUrl"],
@@ -144,8 +153,10 @@ pub fn legacy_import(
             } else {
                 body.clone()
             };
-            if kind == "aiConfig" {
-                store.check_legacy_part(import_id, index, kind, &digest).map_err(code_of)?;
+            // Only a part arriving for the first time brings a key worth keeping. A resend
+            // after the batch was confirmed or rejected must not recreate the temporary
+            // account that confirmation or rejection just deleted.
+            if kind == "aiConfig" && check.is_new && check.state == "receiving" {
                 let key = body["apiKey"].as_str().ok_or(ErrorCode::InvalidPayload)?;
                 services.stage_import_key(import_id, key)?;
             }
@@ -154,6 +165,25 @@ pub fn legacy_import(
         _ => return Err(ErrorCode::InvalidPayload),
     };
     Ok(Answer { result_id: None, payload: json!(status) })
+}
+
+/// Checks a new part must pass before anything is staged, with the codes the plugin acts
+/// on. The store repeats the shape checks when it stores the part; the profile's secret
+/// check runs here first so it is reported as `secret_forbidden`, and the AI config's
+/// provider rules live in this crate.
+fn check_new_part(kind: &str, body: &Value) -> Result<(), ErrorCode> {
+    match kind {
+        "profile" => {
+            archive_store::validate_profile(body).map_err(|_| ErrorCode::InvalidPayload)?;
+            archive_store::reject_profile_secrets(body).map_err(|_| ErrorCode::SecretForbidden)
+        }
+        "aiConfig" => {
+            let api_url = body["apiUrl"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            let model = body["model"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            crate::ai_settings::check_import_config(api_url, model).map_err(|_| ErrorCode::InvalidPayload)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The identity the envelope claims. `None` reaches D03 as `identity_missing` rather than
@@ -758,6 +788,123 @@ mod tests {
         assert_eq!(legacy_import(&part, &store, &LockedKeyring).err(), Some(ErrorCode::Unavailable));
         let status = store.legacy_import_status(import_id).unwrap();
         assert_eq!((status.state.as_str(), status.received), ("receiving", 0));
+    }
+
+    /// A keychain stand-in that counts staging and can refuse deletes.
+    #[derive(Default)]
+    struct TempKeys {
+        keys: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        staged: std::sync::atomic::AtomicUsize,
+        fail_clear: std::sync::atomic::AtomicBool,
+    }
+
+    impl crate::bridge_services::BridgeServices for TempKeys {
+        fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+            crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+        }
+        fn open_view(&self, _: &str) -> bool { false }
+        fn stage_import_key(&self, id: &str, key: &str) -> Result<(), ErrorCode> {
+            self.staged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.keys.lock().unwrap().insert(id.into(), key.into());
+            Ok(())
+        }
+        fn get_import_key(&self, id: &str) -> Result<Option<String>, ErrorCode> {
+            Ok(self.keys.lock().unwrap().get(id).cloned())
+        }
+        fn clear_import_key(&self, id: &str) -> Result<(), ErrorCode> {
+            if self.fail_clear.load(std::sync::atomic::Ordering::Relaxed) { return Err(ErrorCode::Unavailable); }
+            self.keys.lock().unwrap().remove(id);
+            Ok(())
+        }
+        fn validate_import_provider(&self, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
+        fn install_import_provider(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
+    }
+
+    const IMPORT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    fn send_manifest(store: &ArchiveStore, services: &TempKeys, parts: &[(&str, &Value)]) {
+        let parts = parts.iter().enumerate().map(|(i, (kind, body))| json!({
+            "index": i + 1, "kind": kind, "sha256": resume_pro_protocol::payload_body_sha256(body).unwrap()
+        })).collect::<Vec<_>>();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": IMPORT_ID, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":parts.len(),"parts":parts}
+        }));
+        legacy_import(&manifest, store, services).unwrap();
+    }
+
+    fn send_part(store: &ArchiveStore, services: &TempKeys, index: usize, kind: &str, body: &Value) -> Result<Answer, ErrorCode> {
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": IMPORT_ID, "kind": kind, "index": index, "body": body
+        }));
+        legacy_import(&part, store, services)
+    }
+
+    #[test]
+    fn resending_the_ai_part_after_import_does_not_stage_the_key_again() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        send_manifest(&store, &services, &[("aiConfig", &ai)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(crate::legacy_import_commands::confirm(&store, &services, IMPORT_ID).unwrap().state, "imported");
+        assert!(services.keys.lock().unwrap().is_empty());
+
+        let answer = send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        assert_eq!(answer.payload["state"], "imported");
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_status_query_survives_a_keychain_that_cannot_delete_expired_keys() {
+        let (dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let template = json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]});
+        send_manifest(&store, &services, &[("aiConfig", &ai), ("template", &template)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        db.execute("UPDATE legacy_imports SET created_at = '2026-01-01T00:00:00.000Z'", []).unwrap();
+        services.fail_clear.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let status = v2_request("legacy.import", &store.identity(), json!({"importId": IMPORT_ID, "kind": "status"}));
+        assert_eq!(legacy_import(&status, &store, &services).unwrap().payload["state"], "expired");
+        // Not deleted yet, so startup cleanup still has it on its list.
+        assert_eq!(store.legacy_import_cleanup_ids().unwrap().ids, vec![IMPORT_ID.to_string()]);
+    }
+
+    #[test]
+    fn a_cleared_expired_key_is_not_listed_for_startup_cleanup_again() {
+        let (dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let template = json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]});
+        send_manifest(&store, &services, &[("aiConfig", &ai), ("template", &template)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        db.execute("UPDATE legacy_imports SET created_at = '2026-01-01T00:00:00.000Z'", []).unwrap();
+        let status = v2_request("legacy.import", &store.identity(), json!({"importId": IMPORT_ID, "kind": "status"}));
+        assert_eq!(legacy_import(&status, &store, &services).unwrap().payload["state"], "expired");
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert!(store.legacy_import_cleanup_ids().unwrap().ids.is_empty());
+    }
+
+    #[test]
+    fn a_bad_part_is_refused_on_arrival_with_the_matching_code() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let secret = json!({"values":{"note":"密码：hunter2"},"family":[],"custom":[]});
+        let blank = json!({"name":"Blank","wasActive":false,"groups":[{"name":"g","fields":[{"key":" ","value":"v"}]}]});
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":" ","apiKey":"sk-synthetic-example-value"});
+        send_manifest(&store, &services, &[("profile", &secret), ("template", &blank), ("aiConfig", &ai)]);
+        assert_eq!(send_part(&store, &services, 1, "profile", &secret).err(), Some(ErrorCode::SecretForbidden));
+        assert_eq!(send_part(&store, &services, 2, "template", &blank).err(), Some(ErrorCode::InvalidPayload));
+        assert_eq!(send_part(&store, &services, 3, "aiConfig", &ai).err(), Some(ErrorCode::InvalidPayload));
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(store.legacy_import_status(IMPORT_ID).unwrap().received, 0);
     }
 
     #[test]

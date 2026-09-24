@@ -782,15 +782,6 @@ fn save_profile_cmd(
     with_store(&state, move |store| resume_commands::save_profile(store, profile, revision))
 }
 
-fn legacy_import_error(code: resume_pro_protocol::ErrorCode) -> CommandError {
-    let message = match code {
-        resume_pro_protocol::ErrorCode::Conflict => "旧数据与当前档案冲突，需要在桌面核对后再确认。",
-        resume_pro_protocol::ErrorCode::InvalidPayload => "旧数据导入的清单或分片不符合协议。",
-        _ => "旧数据导入暂时无法完成，请检查档案与系统凭据库后重试。",
-    };
-    CommandError { code: code.as_str().into(), message: message.into() }
-}
-
 #[tauri::command]
 fn list_legacy_imports_cmd(state: State<AppState>) -> Result<Vec<archive_store::LegacyImportPending>, CommandError> {
     with_store(&state, |store| store.list_pending_legacy_imports().map_err(CommandError::from))
@@ -799,13 +790,13 @@ fn list_legacy_imports_cmd(state: State<AppState>) -> Result<Vec<archive_store::
 #[tauri::command]
 fn confirm_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
     let services = bridge_services::DesktopBridgeServices::new(app);
-    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id).map_err(legacy_import_error))
+    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id).map_err(legacy_import_commands::command_error))
 }
 
 #[tauri::command]
 fn reject_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
     let services = bridge_services::DesktopBridgeServices::new(app);
-    with_store(&state, |store| legacy_import_commands::reject(store, &services, &import_id).map_err(legacy_import_error))
+    with_store(&state, |store| legacy_import_commands::reject(store, &services, &import_id).map_err(|code| legacy_import_commands::command_error(code.into())))
 }
 
 #[tauri::command]

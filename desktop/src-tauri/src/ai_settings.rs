@@ -162,6 +162,29 @@ fn write(data_root: &Path, settings: &AiSettings) -> Result<(), String> {
 /// 设置却没改，用户就白白丢了 Key（见 PR #158 评审）。这里保存前也照样调一遍，
 /// 防止以后有别的调用方跳过 `ai_provider_commands` 直接调 `save_provider`。
 pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
+    validate_fields(input)?;
+    if let Some(id) = &input.id {
+        let settings = load(data_root);
+        if !settings.providers.iter().any(|p| &p.id == id) {
+            return Err(GONE.into());
+        }
+    }
+    Ok(())
+}
+
+/// Whether a legacy import's AI config could become a provider at all, judged from the
+/// config alone (no settings file, no key). Used when the part arrives; the provider limit
+/// and the existing-provider check wait until the user confirms.
+pub fn check_import_config(api_url: &str, model: &str) -> Result<(), String> {
+    validate_fields(&ProviderInput {
+        id: None,
+        name: "插件导入".into(),
+        api_url: api_url.into(),
+        model: model.into(),
+    })
+}
+
+fn validate_fields(input: &ProviderInput) -> Result<(), String> {
     let name = input.name.trim();
     if name.is_empty() || name.chars().count() > MAX_PROVIDER_NAME_CHARS {
         return Err(format!("名称不能为空，最多 {MAX_PROVIDER_NAME_CHARS} 个字。"));
@@ -184,12 +207,6 @@ pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
     }
     if input.model.trim().is_empty() {
         return Err("模型名称不能为空，可以点「获取模型」挑一个。".into());
-    }
-    if let Some(id) = &input.id {
-        let settings = load(data_root);
-        if !settings.providers.iter().any(|p| &p.id == id) {
-            return Err(GONE.into());
-        }
     }
     Ok(())
 }
