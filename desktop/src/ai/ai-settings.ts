@@ -1,21 +1,38 @@
-import type { AiSettingsView } from "../api.ts";
+import type { ModelListView } from "../api.ts";
 
 export interface Message {
   tone: "ok" | "warn" | "error";
   text: string;
 }
 
-/** Key 配没配、凭据库能不能用，说清楚就行，不要让用户去猜。 */
-export function describeKeyState(view: AiSettingsView | null): Message {
-  if (!view) {
-    return { tone: "warn", text: "还没读到 AI 设置。" };
-  }
-  if (view.credentialError) {
-    return { tone: "error", text: view.credentialError };
-  }
-  return view.keyConfigured
-    ? { tone: "ok", text: "已保存一条 Key（存在系统凭据库里，界面不会显示它）。" }
-    : { tone: "warn", text: "还没有 Key。没有 Key 就不能用 AI 整理，手动分类照常可用。" };
+export interface Preset {
+  id: string;
+  name: string;
+  /** Base URL，保存时由桌面补全 /chat/completions。自定义为空。 */
+  apiUrl: string;
+  /** 去哪里申请 Key。只显示为可复制的文字，不在应用里打开外部网页。 */
+  keyPage: string;
+  modelHint: string;
+}
+
+// 只列 OpenAI 兼容 Chat Completions 的常用服务商。模型名不预填：各家更新快。
+export const PRESETS: Preset[] = [
+  { id: "deepseek", name: "DeepSeek", apiUrl: "https://api.deepseek.com/v1", keyPage: "https://platform.deepseek.com/api_keys", modelHint: "deepseek-chat" },
+  { id: "qwen", name: "通义千问", apiUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", keyPage: "https://bailian.console.aliyun.com/", modelHint: "qwen-plus" },
+  { id: "kimi", name: "Kimi", apiUrl: "https://api.moonshot.cn/v1", keyPage: "https://platform.moonshot.cn/console/api-keys", modelHint: "" },
+  { id: "zhipu", name: "智谱", apiUrl: "https://open.bigmodel.cn/api/paas/v4", keyPage: "https://open.bigmodel.cn/usercenter/apikeys", modelHint: "" },
+  { id: "doubao", name: "豆包（火山方舟）", apiUrl: "https://ark.cn-beijing.volces.com/api/v3", keyPage: "https://console.volcengine.com/ark", modelHint: "" },
+  { id: "openrouter", name: "OpenRouter", apiUrl: "https://openrouter.ai/api/v1", keyPage: "https://openrouter.ai/keys", modelHint: "" },
+  { id: "openai", name: "OpenAI", apiUrl: "https://api.openai.com/v1", keyPage: "https://platform.openai.com/api-keys", modelHint: "gpt-4o-mini" },
+  { id: "custom", name: "自定义", apiUrl: "", keyPage: "", modelHint: "" },
+];
+
+/** 一个服务商的 Key 状态。凭据库本身出错时优先说出错。 */
+export function describeProviderKey(provider: { keyConfigured: boolean }, credentialError: string | null): Message {
+  if (credentialError) return { tone: "error", text: credentialError };
+  return provider.keyConfigured
+    ? { tone: "ok", text: "已保存 Key（存在系统凭据库里，界面不会显示它）。" }
+    : { tone: "warn", text: "还没有 Key。没有 Key 就不能用 AI，手动操作照常可用。" };
 }
 
 /**
@@ -87,13 +104,31 @@ export function describeUrlSecrets(apiUrl: string): Message | null {
   return null;
 }
 
-/** 保存后的提示：地址被补全过就说清楚补成了什么。 */
-export function describeSaved(typedUrl: string, view: AiSettingsView): Message {
-  const typed = typedUrl.trim();
-  if (typed && typed !== view.apiUrl) {
-    return { tone: "ok", text: `已保存。接口地址补全为 ${view.apiUrl}` };
+/** 获取模型成功后的提示：几个能填、几个藏了、问的哪台主机。 */
+export function describeModelsResult(view: ModelListView): Message {
+  const hidden = view.hiddenCount > 0 ? `另有 ${view.hiddenCount} 个非对话模型已隐藏。` : "";
+  if (view.models.length === 0) {
+    return { tone: "warn", text: `问过 ${view.host} 了，列表里没有能填的对话模型。${hidden}可直接手填模型名称。` };
   }
-  return { tone: "ok", text: "已保存。" };
+  return { tone: "ok", text: `从 ${view.host} 拿到 ${view.models.length} 个模型，点一个填进去，也可直接手填。${hidden}` };
+}
+
+/** 完全一致优先，然后前缀（含 vendor/ 后半段），最后子串。 */
+export function matchModels(ids: string[], query: string): string[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...ids];
+  const rank = (id: string): number => {
+    const lower = id.toLowerCase();
+    if (lower === needle) return 0;
+    const afterVendor = lower.slice(lower.lastIndexOf("/") + 1);
+    if (lower.startsWith(needle) || afterVendor.startsWith(needle)) return 1;
+    return lower.includes(needle) ? 2 : -1;
+  };
+  return ids
+    .map((id, index) => ({ id, index, rank: rank(id) }))
+    .filter((entry) => entry.rank >= 0)
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.id);
 }
 
 /** 命令报错时的文案：错误码留着，方便对日志。 */

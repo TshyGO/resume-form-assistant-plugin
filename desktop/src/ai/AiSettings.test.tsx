@@ -1,15 +1,16 @@
-import { expect, test, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { expect, test } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AiSettingsView, Invoke } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
 import { AiSettings } from "./AiSettings.tsx";
 
-const base: AiSettingsView = {
-  apiUrl: "https://api.deepseek.com/v1/chat/completions",
-  model: "deepseek-chat",
-  host: "api.deepseek.com",
-  keyConfigured: false,
+const view: AiSettingsView = {
+  providers: [
+    { id: "p1", name: "DeepSeek", apiUrl: "https://api.deepseek.com/v1/chat/completions", model: "deepseek-chat", host: "api.deepseek.com", keyConfigured: true },
+    { id: "p2", name: "通义千问", apiUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-plus", host: "dashscope.aliyuncs.com", keyConfigured: false },
+  ],
+  activeProviderId: "p1",
   credentialError: null,
 };
 
@@ -27,60 +28,115 @@ function mount(handler: (command: string, args?: Record<string, unknown>) => unk
   return calls;
 }
 
-test("读出设置后填进表单，并说明 Key 还没配", async () => {
-  mount(() => base);
-  await waitFor(() => expect(screen.getByLabelText("接口地址")).toHaveProperty("value", base.apiUrl));
-  expect(screen.getByLabelText("模型名称")).toHaveProperty("value", "deepseek-chat");
-  expect(screen.getByText(/还没有 Key/)).toBeTruthy();
+test("列出服务商，标出当前使用、主机、模型、Key 状态", async () => {
+  mount(() => view);
+  const current = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  expect(within(current).getByText("当前使用")).toBeTruthy();
+  expect(within(current).getByText(/api\.deepseek\.com/)).toBeTruthy();
+  const other = screen.getByRole("listitem", { name: /通义千问/ });
+  expect(within(other).getByText(/没有 Key/)).toBeTruthy();
 });
 
-test("保存时把补全后的地址告诉用户", async () => {
+test("没有服务商时引导从预设添加", async () => {
+  mount(() => ({ providers: [], activeProviderId: null, credentialError: null }));
+  expect(await screen.findByText(/还没有配置 AI 服务商/)).toBeTruthy();
+  expect(screen.getByLabelText("从预设添加")).toBeTruthy();
+});
+
+test("切换当前使用", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command) => (command === "set_active_ai_provider_cmd" ? { ...view, activeProviderId: "p2" } : view));
+  const other = await screen.findByRole("listitem", { name: /通义千问/ });
+  await user.click(within(other).getByRole("button", { name: "设为当前" }));
+  await waitFor(() => expect(within(other).getByText("当前使用")).toBeTruthy());
+  expect(calls.find((c) => c.command === "set_active_ai_provider_cmd")?.args).toEqual({ id: "p2" });
+});
+
+test("从预设新建会打开编辑器并预填地址", async () => {
+  const user = userEvent.setup();
+  mount(() => view);
+  await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.selectOptions(screen.getByLabelText("从预设添加"), "kimi");
+  await user.click(screen.getByRole("button", { name: "添加" }));
+  expect(screen.getByLabelText("接口地址")).toHaveProperty("value", "https://api.moonshot.cn/v1");
+});
+
+test("删除要确认，删掉的服务商连 Key 一起删", async () => {
   const user = userEvent.setup();
   const calls = mount((command) =>
-    command === "save_ai_settings_cmd" ? base : { ...base, apiUrl: "https://api.deepseek.com" },
+    command === "delete_ai_provider_cmd" ? { ...view, providers: [view.providers[0]] } : view,
   );
-  await waitFor(() => expect(screen.getByLabelText("接口地址")).toHaveProperty("value", "https://api.deepseek.com"));
-  await user.click(screen.getByRole("button", { name: "保存设置" }));
-  await waitFor(() => expect(screen.getByText(/补全为/)).toBeTruthy());
-  expect(calls.some((call) => call.command === "save_ai_settings_cmd")).toBe(true);
+  const other = await screen.findByRole("listitem", { name: /通义千问/ });
+  await user.click(within(other).getByRole("button", { name: "删除" }));
+  expect(calls.some((c) => c.command === "delete_ai_provider_cmd")).toBe(false);
+  expect(within(other).getByText(/Key 也会一起删除/)).toBeTruthy();
+  await user.click(within(other).getByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(screen.queryByRole("listitem", { name: /通义千问/ })).toBeNull());
 });
 
-test("Key 保存后输入框清空，界面不回显它", async () => {
+test("保存后主机变了、Key 被清掉，提醒重新填", async () => {
   const user = userEvent.setup();
-  const calls = mount((command) => (command === "set_ai_key_cmd" ? { ...base, keyConfigured: true } : base));
-  const input = await screen.findByLabelText("API Key");
-  await user.type(input, "sk-synthetic-value");
-  await user.click(screen.getByRole("button", { name: "保存 Key" }));
-
-  await waitFor(() => expect(screen.getByText(/已存进系统凭据库/)).toBeTruthy());
-  expect(input).toHaveProperty("value", "");
-  expect(document.body.textContent).not.toContain("sk-synthetic-value");
-  const sent = calls.find((call) => call.command === "set_ai_key_cmd");
-  expect(sent?.args).toEqual({ key: "sk-synthetic-value" });
+  mount((command) =>
+    command === "save_ai_provider_cmd" ? { view, providerId: "p1", keyCleared: true } : view,
+  );
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  expect(await screen.findByText(/换了协议或主机，原来的 Key 已清除/)).toBeTruthy();
 });
 
-test("凭据库用不了时如实报错，不说成没配过", async () => {
-  mount(() => ({ ...base, credentialError: "系统凭据库用不了，Key 没有保存：被策略禁用" }));
-  await waitFor(() => expect(screen.getByText(/系统凭据库用不了/)).toBeTruthy());
-});
-
-test("填明文 http 的公网地址时给出警告，但不拦着", async () => {
+test("清除 Key 后编辑器立即显示新的 Key 状态", async () => {
   const user = userEvent.setup();
-  mount(() => base);
-  const input = await screen.findByLabelText("接口地址");
-  await user.clear(input);
-  await user.type(input, "http://relay.example/v1");
-  expect(screen.getByText(/明文 http 的公网地址/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "保存设置" })).toHaveProperty("disabled", false);
+  mount((command) => command === "clear_ai_key_cmd"
+    ? { ...view, providers: [{ ...view.providers[0], keyConfigured: false }, view.providers[1]] }
+    : view);
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "清除 Key" }));
+  await user.click(screen.getByRole("button", { name: "确认清除" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "清除 Key" })).toBeNull());
+  expect(screen.getAllByText(/还没有 Key/).length).toBeGreaterThan(0);
 });
 
-test("没连上宿主时如实说，不画一个能点的表单", async () => {
+test("服务商保存好了但 Key 存失败：编辑器照样关掉，警示信息带上失败原因", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "save_ai_provider_cmd"
+      ? { view, providerId: "p1", keyCleared: false, keyError: "凭据库锁了" }
+      : view,
+  );
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  expect(await screen.findByText(/服务商已保存，但 Key 没存进系统凭据库：凭据库锁了/)).toBeTruthy();
+  // 编辑器关掉了：找不到「取消」按钮。
+  expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+});
+
+test("编辑器保存失败后重新拉一次设置，Key 状态不会显示过时的结果", async () => {
+  const user = userEvent.setup();
+  let saveAttempts = 0;
+  const afterFailedSave = { ...view, providers: [{ ...view.providers[0], keyConfigured: false }, view.providers[1]] };
+  const calls = mount((command) => {
+    if (command === "save_ai_provider_cmd") {
+      saveAttempts += 1;
+      throw { code: "AI_SETTINGS_INVALID", message: "存 Key 失败" };
+    }
+    if (command === "get_ai_settings_cmd") return saveAttempts > 0 ? afterFailedSave : view;
+    return view;
+  });
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(calls.filter((c) => c.command === "get_ai_settings_cmd").length).toBe(2));
+  expect(await screen.findByText(/存 Key 失败/)).toBeTruthy();
+});
+
+test("没连上桌面宿主时如实说明", async () => {
   render(
     <InvokeProvider invoke={null}>
       <AiSettings />
     </InvokeProvider>,
   );
-  await waitFor(() => expect(screen.getByText(/没连上桌面宿主/)).toBeTruthy());
-  expect(screen.getByRole("button", { name: "保存设置" })).toHaveProperty("disabled", true);
-  vi.restoreAllMocks();
+  expect(screen.getByText(/没连上桌面宿主/)).toBeTruthy();
 });

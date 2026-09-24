@@ -3,6 +3,8 @@ mod ai_commands;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
+mod ai_models;
+mod ai_provider_commands;
 mod ai_settings;
 mod nm_register;
 mod update_check;
@@ -70,34 +72,6 @@ struct AppState {
     latest_update: Mutex<Option<update_check::UpdateInfo>>,
 }
 
-/// 设置页要看的 AI 配置。**故意不含 Key**，只说配没配。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AiSettingsView {
-    api_url: String,
-    model: String,
-    /// 预览和提示里只出现主机名。
-    host: String,
-    key_configured: bool,
-    /// 凭据库读不出来时说明原因，不假装「没配过」。
-    credential_error: Option<String>,
-}
-
-fn ai_settings_view(state: &AppState) -> Result<AiSettingsView, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(state)?);
-    let (key_configured, credential_error) = match state.credentials.get_key() {
-        Ok(found) => (found.is_some(), None),
-        Err(err) => (false, Some(err.message())),
-    };
-    Ok(AiSettingsView {
-        host: ai_settings::host_of(&settings.api_url),
-        api_url: settings.api_url,
-        model: settings.model,
-        key_configured,
-        credential_error,
-    })
-}
-
 fn ai_data_root(state: &AppState) -> Result<std::path::PathBuf, CommandError> {
     let guard = state.paths.lock().map_err(|e| CommandError {
         code: "STORE_ERROR".into(),
@@ -119,6 +93,37 @@ fn checked_url(api_url: &str) -> Result<(), CommandError> {
             message: problem,
         }),
         None => Ok(()),
+    }
+}
+
+fn preview_provider(
+    data_root: &std::path::Path,
+    creds: &dyn ai_credentials::CredentialStore,
+) -> Result<ai_settings::AiProvider, CommandError> {
+    let (provider, _key) = ai_provider_commands::active_with_key(data_root, creds)?;
+    checked_url(&provider.api_url)?;
+    Ok(provider)
+}
+
+#[cfg(test)]
+mod ai_provider_wiring_tests {
+    use super::*;
+
+    #[test]
+    fn preview_uses_the_current_provider_and_requires_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = ai_credentials::MemoryStore::default();
+        let add = |name: &str, url: &str| {
+            ai_settings::save_provider(dir.path(), ai_settings::ProviderInput {
+                id: None, name: name.into(), api_url: url.into(), model: "m".into(),
+            }).unwrap().provider_id
+        };
+        let _first = add("A", "https://a.example/v1");
+        let second = add("B", "https://b.example/v1");
+        ai_provider_commands::set_active(dir.path(), &creds, &second).unwrap();
+        assert_eq!(preview_provider(dir.path(), &creds).unwrap_err().code, "AI_NOT_CONFIGURED");
+        ai_provider_commands::set_key(dir.path(), &creds, &second, "sk-b").unwrap();
+        assert_eq!(preview_provider(dir.path(), &creds).unwrap().id, second);
     }
 }
 
@@ -227,13 +232,6 @@ fn refresh_native_messaging(state: &AppState) -> Vec<nm_register::Outcome> {
         *slot = outcomes.clone();
     }
     outcomes
-}
-
-fn credential_error(err: ai_credentials::CredentialError) -> CommandError {
-    CommandError {
-        code: err.code().into(),
-        message: err.message(),
-    }
 }
 
 fn with_store<T>(
@@ -944,35 +942,78 @@ fn query_candidates_cmd(
 }
 
 #[tauri::command]
-fn get_ai_settings_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
-    ai_settings_view(&state)
+fn get_ai_settings_cmd(state: State<AppState>) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    Ok(ai_provider_commands::settings_view(&ai_data_root(&state)?, state.credentials.as_ref()))
 }
 
 #[tauri::command]
-fn save_ai_settings_cmd(
+fn save_ai_provider_cmd(
     state: State<AppState>,
-    api_url: String,
-    model: String,
-) -> Result<AiSettingsView, CommandError> {
-    let data_root = ai_data_root(&state)?;
-    ai_settings::save(&data_root, &api_url, &model).map_err(|message| CommandError {
-        code: "AI_SETTINGS_WRITE_FAILED".into(),
-        message,
-    })?;
-    ai_settings_view(&state)
+    provider: ai_provider_commands::ProviderArgs,
+    key: Option<String>,
+) -> Result<ai_provider_commands::SaveProviderResult, CommandError> {
+    ai_provider_commands::save_provider(&ai_data_root(&state)?, state.credentials.as_ref(), provider, key)
+}
+
+#[tauri::command]
+fn delete_ai_provider_cmd(state: State<AppState>, id: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::delete_provider(&ai_data_root(&state)?, state.credentials.as_ref(), &id)
+}
+
+#[tauri::command]
+fn set_active_ai_provider_cmd(state: State<AppState>, id: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::set_active(&ai_data_root(&state)?, state.credentials.as_ref(), &id)
 }
 
 /// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
 #[tauri::command]
-fn set_ai_key_cmd(state: State<AppState>, key: String) -> Result<AiSettingsView, CommandError> {
-    state.credentials.set_key(&key).map_err(credential_error)?;
-    ai_settings_view(&state)
+fn set_ai_key_cmd(state: State<AppState>, provider_id: String, key: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::set_key(&ai_data_root(&state)?, state.credentials.as_ref(), &provider_id, &key)
 }
 
 #[tauri::command]
-fn clear_ai_key_cmd(state: State<AppState>) -> Result<AiSettingsView, CommandError> {
-    state.credentials.clear_key().map_err(credential_error)?;
-    ai_settings_view(&state)
+fn clear_ai_key_cmd(state: State<AppState>, provider_id: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::clear_key(&ai_data_root(&state)?, state.credentials.as_ref(), &provider_id)
+}
+
+/// 设置页给界面的模型列表：只含名字、隐藏数、主机名。**不含 Key，不含完整地址。**
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelListView {
+    models: Vec<String>,
+    hidden_count: usize,
+    host: String,
+}
+
+/// 用户在设置页主动点一次，才往所填地址对应的 `/models` 发一次只带 Key 的 GET。
+#[tauri::command]
+async fn list_ai_models_cmd(
+    state: State<'_, AppState>,
+    provider_id: Option<String>,
+    api_url: String,
+    key: Option<String>,
+) -> Result<ModelListView, CommandError> {
+    checked_url(&api_url)?;
+    let models_url = ai_models::resolve_endpoints(&api_url)
+        .ok_or_else(|| CommandError {
+            code: "AI_MODELS_BAD_URL".into(),
+            message: "API URL 格式不对，请填写以 http:// 或 https:// 开头的地址。".into(),
+        })?
+        .models_url
+        .ok_or_else(|| CommandError {
+            code: "AI_MODELS_UNKNOWN_SHAPE".into(),
+            message: "无法从这个 API URL 推断模型列表地址（通常以 /v1 或 /chat/completions 结尾）。可直接手填模型名称。".into(),
+        })?;
+    let effective = ai_provider_commands::key_for_models(
+        &ai_data_root(&state)?,
+        state.credentials.as_ref(),
+        provider_id.as_deref(),
+        &api_url,
+        key,
+    )?;
+    let host = ai_settings::host_of(&api_url);
+    let list = ai_models::fetch_model_list(&models_url, &effective, &host).await?;
+    Ok(ModelListView { models: list.models, hidden_count: list.hidden_count, host })
 }
 
 /// 发送前预览：这次要把什么发出去。**只读，不发请求。**
@@ -982,8 +1023,7 @@ fn preview_analysis_cmd(
     evidence_id: String,
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::OutboundPreview, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(&state)?);
-    checked_url(&settings.api_url)?;
+    let provider = preview_provider(&ai_data_root(&state)?, state.credentials.as_ref())?;
     with_store(&state, |store| {
         let gathered = ai_commands::gather(
             store,
@@ -991,7 +1031,7 @@ fn preview_analysis_cmd(
             &evidence_id,
             candidate_ids.as_deref(),
         )?;
-        Ok(ai_commands::preview(&gathered, &settings.api_url, &settings.model))
+        Ok(ai_commands::preview(&gathered, &provider.api_url, &provider.model))
     })
 }
 
@@ -1006,16 +1046,8 @@ async fn analyze_evidence_cmd(
     request_id: String,
     candidate_ids: Option<Vec<String>>,
 ) -> Result<ai_commands::SuggestionView, CommandError> {
-    let settings = ai_settings::load(&ai_data_root(&state)?);
-    checked_url(&settings.api_url)?;
-    let key = state
-        .credentials
-        .get_key()
-        .map_err(credential_error)?
-        .ok_or_else(|| CommandError {
-            code: "AI_NOT_CONFIGURED".into(),
-            message: "还没有配置 AI Key，先去设置页填一条。".into(),
-        })?;
+    let (provider, key) = ai_provider_commands::active_with_key(&ai_data_root(&state)?, state.credentials.as_ref())?;
+    checked_url(&provider.api_url)?;
 
     // 第一段：持锁读。`built` 里带着编号与本地 id 的对应关系，解析返回时要用。
     let (gathered, built) = with_store(&state, |store| {
@@ -1026,8 +1058,8 @@ async fn analyze_evidence_cmd(
             candidate_ids.as_deref(),
         )?;
         let built = ai_extract::build_request(
-            &settings.api_url,
-            &settings.model,
+            &provider.api_url,
+            &provider.model,
             &gathered.evidence,
             &gathered.candidates,
         );
@@ -1036,12 +1068,12 @@ async fn analyze_evidence_cmd(
 
     let cancelled = state.ai_inflight.begin(&evidence_id, &request_id)?;
 
-    let host = ai_settings::host_of(&settings.api_url);
+    let host = ai_settings::host_of(&provider.api_url);
     let client = ai_client::ChatClient::new()?;
     // 第二段：锁已经放了。取消就是不再等这个 future，上游是否继续计费我们管不着，
     // 界面文案也是这么说的。
     let outcome = tokio::select! {
-        result = client.chat(&settings.api_url, &key, &host, &settings.model, &built.body) => result,
+        result = client.chat(&provider.api_url, &key, &host, &provider.model, &built.body) => result,
         _ = cancelled => Err(CommandError {
             code: "AI_CANCELLED".into(),
             message: "已取消。取消不保证对方停止计算或停止计费。".into(),
@@ -1622,9 +1654,12 @@ pub fn run() {
             set_recycle_cmd,
             query_candidates_cmd,
             get_ai_settings_cmd,
-            save_ai_settings_cmd,
+            save_ai_provider_cmd,
+            delete_ai_provider_cmd,
+            set_active_ai_provider_cmd,
             set_ai_key_cmd,
             clear_ai_key_cmd,
+            list_ai_models_cmd,
             preview_analysis_cmd,
             analyze_evidence_cmd,
             cancel_analysis_cmd,

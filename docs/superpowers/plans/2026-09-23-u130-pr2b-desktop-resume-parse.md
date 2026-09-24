@@ -112,7 +112,9 @@ mod tests {
         let long = "字".repeat(MAX_USER_CHARS + 1);
         let err = check_sizes("s", &long).unwrap_err();
         assert_eq!(err.code, "AI_INPUT_TOO_LARGE");
-        assert!(check_sizes(&"s".repeat(MAX_SYSTEM_CHARS + 1), "u").is_err());
+        assert!(!err.message.contains("系统提示词"), "{}", err.message);
+        let system_err = check_sizes(&"s".repeat(MAX_SYSTEM_CHARS + 1), "u").unwrap_err();
+        assert!(system_err.message.contains("系统提示词"), "系统提示词超限不该被说成是用户内容超限：{}", system_err.message);
         assert!(check_sizes("s", "u").is_ok());
     }
 }
@@ -168,7 +170,15 @@ pub const MAX_USER_CHARS: usize = 60_000;
 pub const COMPLETE_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub fn check_sizes(system: &str, user: &str) -> Result<(), CommandError> {
-    if system.chars().count() > MAX_SYSTEM_CHARS || user.chars().count() > MAX_USER_CHARS {
+    // 两条分开的消息：系统提示词超限时不能说成是用户内容超限，那样用户会去找错文件、
+    // 却怎么删减都没用——真正超限的是提示词，不是他选的那份简历。
+    if system.chars().count() > MAX_SYSTEM_CHARS {
+        return Err(CommandError {
+            code: "AI_INPUT_TOO_LARGE".into(),
+            message: format!("系统提示词超过 {MAX_SYSTEM_CHARS} 字，没有发送。"),
+        });
+    }
+    if user.chars().count() > MAX_USER_CHARS {
         return Err(CommandError {
             code: "AI_INPUT_TOO_LARGE".into(),
             message: format!("要发给 AI 的内容超过 {MAX_USER_CHARS} 字，没有发送。确认选对了文件。"),
@@ -680,7 +690,7 @@ test("确认前说清楚发给谁、发多少字，确认后才发送", async ()
   await upload(user);
   expect(await screen.findByText(/DeepSeek/)).toBeTruthy();
   expect(screen.getByText(/api\.deepseek\.com · deepseek-chat/)).toBeTruthy();
-  expect(screen.getByText(/7 字/)).toBeTruthy();
+  expect(screen.getByText(/6 字/)).toBeTruthy();
   expect(calls.some((c) => c.command === "ai_complete_cmd")).toBe(false);
   await user.click(screen.getByRole("button", { name: "发送并解析" }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
