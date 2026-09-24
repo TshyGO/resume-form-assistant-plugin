@@ -44,4 +44,19 @@ describe("extractText docx（jsdom）", () => {
     const text = await extractText(file, deps);
     expect(text.split("\n").filter(Boolean)).toEqual(["张三", "某大学", "a", "b"]);
   });
+
+  // mammoth 走动态 import：打包产物缺文件或者应用更新到一半时，这一步会失败——
+  // 不是这份 .docx 本身有问题，说「确认它能正常打开」只会让用户去修一份没坏的文件。
+  it("docx 组件加载失败时说重启应用，不是文件本身的问题", async () => {
+    const deps = {
+      docxToHtml: async () => {
+        throw new Error("Failed to fetch dynamically imported module");
+      },
+      pdfToText: async () => {
+        throw new Error("not used");
+      },
+    };
+    const file = new File(["x"], "r.docx");
+    await expect(extractText(file, deps)).rejects.toThrow("Word 解析组件加载失败，请重启应用后重试。");
+  });
 });

@@ -2,19 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import type { AiProviderView, AiSettingsView, ImportResultView, ResumeOverview, TemplateGroupView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { extractText } from "./extract-text.ts";
+import { MAX_TEMPLATES, MAX_USER_CHARS } from "./parse-limits.ts";
 import { buildRequest, fieldsToGroups, parseModelReply, templateNameFor } from "./parse-resume.ts";
 import type { Notice } from "./resume-text.ts";
-
-// 与 archive-store::resume::MAX_TEMPLATES 一致：到了上限存不进去，就不该先花一次
-// AI 调用去解析一份注定存不下的模板。
-const MAX_TEMPLATES = 25;
-// 与 ai_complete.rs 的 MAX_USER_CHARS 一致：前端提前拦，免得用户等了一两分钟才被后端拒绝。
-const MAX_USER_CHARS = 60_000;
 
 type Stage =
   | { kind: "idle" }
   | { kind: "reading" }
-  | { kind: "confirm"; fileName: string; text: string; provider: AiProviderView | null; templateCount: number }
+  | {
+      kind: "confirm";
+      fileName: string;
+      text: string;
+      provider: AiProviderView | null;
+      templateCount: number;
+      // 简历全文与「实际发出去的那串（前缀 + 全文）」各数一次，存下来渲染时直接用，
+      // 不在每次渲染时重新展开字符串数一遍。
+      charCount: number;
+      userCharCount: number;
+    }
   | { kind: "sending"; requestId: string; fileName: string }
   | { kind: "saving"; fileName: string; groups: TemplateGroupView[] }
   | { kind: "save-failed"; fileName: string; groups: TemplateGroupView[] }
@@ -43,6 +48,10 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
   // 不能再悄悄建模板、悄悄提示、或者叫一个已经没人看的 onCreated。
   const mountedRef = useRef(true);
   const inflightRequestId = useRef<string | null>(null);
+  // invoke 来自 context，不必是 effect 的依赖：镜像进 ref，让下面这个 effect
+  // 只在真正的挂载/卸载时跑一次，不会因为 context 值的引用变化而重新注册。
+  const invokeRef = useRef(invoke);
+  invokeRef.current = invoke;
 
   useEffect(() => {
     // StrictMode 开发构建会先跑一次 cleanup 再重新执行 effect：这里要把标记改回来，
@@ -51,11 +60,11 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
     return () => {
       mountedRef.current = false;
       const requestId = inflightRequestId.current;
-      if (requestId && invoke) {
-        void invoke("cancel_analysis_cmd", { requestId }).catch(() => {});
+      if (requestId && invokeRef.current) {
+        void invokeRef.current("cancel_analysis_cmd", { requestId }).catch(() => {});
       }
     };
-  }, [invoke]);
+  }, []);
 
   if (!invoke) return null;
 
@@ -72,7 +81,17 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
       ]);
       if (!mountedRef.current) return;
       const provider = settings.providers.find((p) => p.id === settings.activeProviderId && p.keyConfigured) ?? null;
-      setStage({ kind: "confirm", fileName: file.name, text, provider, templateCount: overview.templates.length });
+      const charCount = [...text].length;
+      const userCharCount = [...buildRequest(text).user].length;
+      setStage({
+        kind: "confirm",
+        fileName: file.name,
+        text,
+        provider,
+        templateCount: overview.templates.length,
+        charCount,
+        userCharCount,
+      });
     } catch (error) {
       if (!mountedRef.current) return;
       setStage({ kind: "idle" });
@@ -103,14 +122,16 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
     }
   };
 
-  const send = async (fileName: string, text: string) => {
+  const send = async (fileName: string, text: string, providerId: string) => {
     const requestId = `resume-parse-${Date.now()}-${++counter.current}`;
     inflightRequestId.current = requestId;
     setStage({ kind: "sending", requestId, fileName });
     let reply: string;
     try {
       const { system, user } = buildRequest(text);
-      reply = await invoke<string>("ai_complete_cmd", { system, user, requestId });
+      // 后端会自己再核实一遍「当前使用」是不是还是确认外发时看到的这个服务商
+      // （AI_PROVIDER_CHANGED）：这里传的 providerId 就是确认时快照的那个 id。
+      reply = await invoke<string>("ai_complete_cmd", { system, user, requestId, providerId });
     } catch (error) {
       inflightRequestId.current = null;
       if (!mountedRef.current) return;
@@ -157,26 +178,26 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
       </div>
       {stage.kind === "reading" ? <p className="muted">正在读取文件…</p> : null}
       {stage.kind === "confirm" ? (() => {
-        const { user } = buildRequest(stage.text);
-        const charCount = [...stage.text].length;
-        const blocked = !stage.provider
+        const { provider, templateCount, charCount, userCharCount } = stage;
+        const blocked = !provider
           ? "还没有可用的 AI 服务商（或它还没有 Key）。先在「设置 → AI」添加服务商并填好 Key。"
-          : stage.templateCount >= MAX_TEMPLATES
+          : templateCount >= MAX_TEMPLATES
             ? `模板已经有 ${MAX_TEMPLATES} 个，先删掉用不上的再解析。`
-            : [...user].length > MAX_USER_CHARS
+            : userCharCount > MAX_USER_CHARS
               ? "简历文字太长（超过 6 万字），像是选错了文件。"
               : null;
         return (
           <div className="note warn stack" role="group" aria-label="确认外发">
-            {stage.provider ? (
+            {provider ? (
               <p>
-                将把简历全文（{charCount} 字）发给「{stage.provider.name}」解析：{stage.provider.host} · {stage.provider.model}。对方可能留存这些内容。
+                将把简历全文（{charCount} 字）发给「{provider.name}」解析：{provider.host} · {provider.model}。对方可能留存这些内容。
+                解析结果会直接存成一个新模板并设为当前，可在下面的模板列表里查看或删除。
               </p>
             ) : null}
             {blocked ? <p>{blocked}</p> : null}
             <div className="row">
-              {!blocked ? (
-                <button type="button" className="primary" onClick={() => void send(stage.fileName, stage.text)}>
+              {provider && !blocked ? (
+                <button type="button" className="primary" onClick={() => void send(stage.fileName, stage.text, provider.id)}>
                   发送并解析
                 </button>
               ) : null}

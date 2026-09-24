@@ -38,6 +38,20 @@ function pdfErrorMessageFor(error: unknown): string {
   return message === PLUGIN_PDF_COMPONENT_ERROR ? DESKTOP_PDF_COMPONENT_ERROR : message;
 }
 
+// mammoth 走动态 import（见下面的 browserExtractors.docxToHtml）：打包产物缺文件、或者
+// 应用更新到一半时，浏览器对这类失败的措辞五花八门（Chromium 说
+// "Failed to fetch dynamically imported module"，WebKit 说
+// "Importing a module script failed"），但都不是"这份 .docx 文件本身有问题"，
+// 说「Word 文件读取失败，确认它能正常打开」只会让用户去修一份根本没坏的文件。
+const MODULE_LOAD_ERROR = /dynamically imported module|Failed to fetch|Importing a module script failed/i;
+const DOCX_GENERIC_ERROR = "Word 文件读取失败，确认它能正常打开，或另存为 PDF / TXT 再试。";
+const DOCX_COMPONENT_ERROR = "Word 解析组件加载失败，请重启应用后重试。";
+
+function docxErrorMessageFor(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return MODULE_LOAD_ERROR.test(message) ? DOCX_COMPONENT_ERROR : DOCX_GENERIC_ERROR;
+}
+
 /**
  * 真正的库只在需要时加载：pdf.js 与 mammoth 都不小，打开「简历」页不该就下载它们。
  *
@@ -73,8 +87,8 @@ export async function extractText(file: File, deps: Extractors = browserExtracto
   } else if (ext === "docx") {
     try {
       text = textFromHtml(await deps.docxToHtml(await file.arrayBuffer()));
-    } catch {
-      throw new Error("Word 文件读取失败，确认它能正常打开，或另存为 PDF / TXT 再试。");
+    } catch (error) {
+      throw new Error(docxErrorMessageFor(error));
     }
   } else {
     try {

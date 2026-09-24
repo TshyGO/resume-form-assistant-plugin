@@ -53,12 +53,33 @@ test("确认前说清楚发给谁、发多少字，确认后才发送", async ()
   expect(await screen.findByText(/DeepSeek/)).toBeTruthy();
   expect(screen.getByText(/api\.deepseek\.com · deepseek-chat/)).toBeTruthy();
   expect(screen.getByText(/6 字/)).toBeTruthy();
+  expect(screen.getByText(/解析结果会直接存成一个新模板并设为当前，可在下面的模板列表里查看或删除。/)).toBeTruthy();
   expect(calls.some((c) => c.command === "ai_complete_cmd")).toBe(false);
   await user.click(screen.getByRole("button", { name: "发送并解析" }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
   expect(screen.getByText("已存为模板「张三简历（AI 解析）」并设为当前，共 1 个字段。")).toBeTruthy();
+  const sent = calls.find((c) => c.command === "ai_complete_cmd")!;
+  expect(sent.args?.providerId).toBe("p1");
   const created = calls.find((c) => c.command === "create_resume_template_cmd")!;
   expect(created.args).toEqual({ name: "张三简历（AI 解析）", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "张三" }] }] });
+});
+
+test("确认之后服务商变了：后端拒绝时如实提示，得重新确认一次", async () => {
+  const user = userEvent.setup();
+  const { calls } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") {
+      throw { code: "AI_PROVIDER_CHANGED", message: "当前服务商在确认之后变了，请重新选择文件确认一次。" };
+    }
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  expect(await screen.findByText("当前服务商在确认之后变了，请重新选择文件确认一次。")).toBeTruthy();
+  const sent = calls.find((c) => c.command === "ai_complete_cmd")!;
+  expect(sent.args?.providerId).toBe("p1");
+  expect(calls.some((c) => c.command === "create_resume_template_cmd")).toBe(false);
 });
 
 test("没有可用服务商时不让发送，并指向设置页", async () => {

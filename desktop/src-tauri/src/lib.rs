@@ -1109,9 +1109,13 @@ async fn ai_complete_cmd(
     system: String,
     user: String,
     request_id: String,
+    provider_id: String,
 ) -> Result<String, CommandError> {
     ai_complete::check_sizes(&system, &user)?;
     let (provider, key) = ai_provider_commands::active_with_key(&ai_data_root(&state)?, state.credentials.as_ref())?;
+    // 界面在确认外发那一步看到的是哪个服务商，就得真的发给那一个：确认之后用户在设置页
+    // 切换了「当前使用」，不能悄悄改发给新服务商——那不是用户点「发送并解析」时同意的那次外发。
+    ai_complete::check_provider_unchanged(&provider.id, &provider_id)?;
     checked_url(&provider.api_url)?;
     let cancelled = state
         .ai_inflight
