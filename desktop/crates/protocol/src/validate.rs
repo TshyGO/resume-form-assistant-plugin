@@ -8,7 +8,7 @@ use crate::schema_lite::{
     envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
 };
 use crate::secrets::{reject_secrets, reject_secrets_except};
-use crate::urls::{allowlist_from_rules, reject_sensitive_urls};
+use crate::urls::{allowlist_from_rules, reject_sensitive_urls, reject_sensitive_urls_except};
 use crate::time::is_utc_timestamp;
 use crate::types::{
     MessageType, Request, MAX_ENVELOPE_BYTES, MAX_PROTOCOL_VERSION, MAX_RECONCILE_ITEMS,
@@ -106,7 +106,9 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         ));
     }
     let payload = payload_value.as_object().unwrap();
-    if message_type == MessageType::LegacyImport && payload.get("kind").and_then(Value::as_str) == Some("aiConfig") {
+    let is_aiconfig_import = message_type == MessageType::LegacyImport
+        && payload.get("kind").and_then(Value::as_str) == Some("aiConfig");
+    if is_aiconfig_import {
         reject_secrets_except(payload_value, &[&["body", "apiKey"]])?;
     } else {
         reject_secrets(payload_value)?;
@@ -115,7 +117,15 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         validate_schema(payload_value, &schema)?;
     }
     let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
-    reject_sensitive_urls(payload_value, &allowlist_from_rules(&rules))?;
+    // The http exception is for this one wire shape — legacy.import kind aiConfig's
+    // body.apiUrl — not for the field name wherever it turns up. An apiUrl anywhere
+    // else (profile.values.apiUrl, a template field's value, ...) still gets the
+    // generic https-only rule.
+    if is_aiconfig_import {
+        reject_sensitive_urls_except(payload_value, &allowlist_from_rules(&rules), &[&["body", "apiUrl"]])?;
+    } else {
+        reject_sensitive_urls(payload_value, &allowlist_from_rules(&rules))?;
+    }
     validate_payload_extras(message_type, payload)?;
     if message_type == MessageType::OutboxReconcile {
         let items = payload.get("items").and_then(Value::as_array).unwrap();

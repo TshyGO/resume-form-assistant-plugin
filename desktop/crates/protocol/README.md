@@ -144,4 +144,4 @@ validateResponseForRequest(response, req);
 
 `sourceUrl` / `urlRedacted` 等 URL 字段默认拒绝 userinfo 与 `access_token`/`code`/`key` 等参数（含百分号编码名），且必须是 `https`。校验器不改写 payload；调用方必须先脱敏再计算摘要。`rules.json` 的 `urlAllowlist` 默认为空。
 
-`aiConfig.apiUrl`（`legacy.import` kind `aiConfig` 的 `body.apiUrl`）不走上面这条通用 URL 规则：插件与桌面都允许局域网/本机代理（比如 Ollama）没有 TLS，所以它自己的检查接受 `http` 或 `https` 两种 scheme，但同样拒绝 userinfo 与凭据类查询参数（复用同一套 `SECRET_QUERY_KEYS` 逻辑）。scheme 既不是 `http` 也不是 `https`（比如 `ftp://`）时报 `invalid_payload`，因为这是负载结构问题，不是凭据泄漏；userinfo 或凭据查询参数仍报 `secret_forbidden`。
+`aiConfig.apiUrl`（`legacy.import` kind `aiConfig` 的 `body.apiUrl`，仅此一个精确路径）不走上面这条通用 URL 规则：插件与桌面都允许局域网/本机代理（比如 Ollama）没有 TLS，所以它自己的检查接受 `http` 或 `https` 两种 scheme，但同样拒绝 userinfo 与凭据类查询参数（复用同一套 `SECRET_QUERY_KEYS` 逻辑）。scheme 既不是 `http` 也不是 `https`（比如 `ftp://`）时报 `invalid_payload`，因为这是负载结构问题，不是凭据泄漏；userinfo 或凭据查询参数仍报 `secret_forbidden`。这个例外按**路径**开，不是按字段名：`apiUrl`/`api_url` 键只有恰好落在 `body.apiUrl` 时才用这条 http-or-https 规则；同一个字段名出现在别处（`resume.update` 的 `profile.values.apiUrl`、模板字段的值等）仍然走通用规则，https-only，和这个例外加入之前完全一样。

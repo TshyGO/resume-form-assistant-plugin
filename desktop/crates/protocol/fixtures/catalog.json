@@ -124,7 +124,8 @@
     {"id": "legacy-import-aiconfig-apiurl-http-lan-ok", "path": "requests/legacy-import-aiconfig-apiurl-http-lan-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "legacy-import-aiconfig-apiurl-http-userinfo", "path": "requests/legacy-import-aiconfig-apiurl-http-userinfo.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "legacy-import-aiconfig-apiurl-secret-query", "path": "requests/legacy-import-aiconfig-apiurl-secret-query.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "legacy-import-aiconfig-apiurl-ftp-scheme", "path": "requests/legacy-import-aiconfig-apiurl-ftp-scheme.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}}
+    {"id": "legacy-import-aiconfig-apiurl-ftp-scheme", "path": "requests/legacy-import-aiconfig-apiurl-ftp-scheme.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "resume-update-profile-values-apiurl-http-rejected", "path": "requests/resume-update-profile-values-apiurl-http-rejected.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

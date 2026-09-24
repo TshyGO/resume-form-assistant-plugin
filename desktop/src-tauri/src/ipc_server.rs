@@ -186,7 +186,9 @@ fn serve_connection<S: Read + Write, A: Application + ?Sized>(mut stream: S, app
 /// on the other side of a pipe; treating its output as trusted because it is ours would
 /// be the same mistake as trusting a local endpoint for being local.
 fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<u8>> {
-    use resume_pro_protocol::{handshake_response_payload, validate_request_bytes, MessageType};
+    use resume_pro_protocol::{
+        handshake_response_payload, validate_request_bytes, MessageType, MIN_PROTOCOL_VERSION,
+    };
 
     match validate_request_bytes(frame) {
         // The crate's own validator accepts protocolVersion up to MAX_PROTOCOL_VERSION
@@ -195,14 +197,39 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
         // envelope reach `application.apply`, which has no v2 case and would answer
         // `unavailable` instead of naming the real, fixable cause.
         Ok(request) if request.protocol_version > SERVED_MAX_PROTOCOL_VERSION => {
-            crate::nm::error_frame(&request.message_id, ErrorCode::ProtocolIncompatible)
+            crate::nm::error_frame(
+                &request.message_id,
+                ErrorCode::ProtocolIncompatible,
+                request.protocol_version,
+            )
         }
         Ok(request) if request.message_type == MessageType::Handshake => {
+            // The crate's own structural check only confirms the client's
+            // [minProtocolVersion, maxProtocolVersion] overlaps ITS supported range
+            // (1..=2); it says nothing about what THIS desktop build actually serves.
+            // A client that only speaks v2 (e.g. [2, 2]) must be told incompatible
+            // rather than handed a v1-only handshake as though it agreed to something
+            // it never offered.
+            let client_min = request.payload["minProtocolVersion"].as_i64().unwrap_or(0);
+            let client_max = request.payload["maxProtocolVersion"].as_i64().unwrap_or(0);
+            let served_min = MIN_PROTOCOL_VERSION as i64;
+            let served_max = SERVED_MAX_PROTOCOL_VERSION as i64;
+            if client_max < served_min || client_min > served_max {
+                return crate::nm::error_frame(
+                    &request.message_id,
+                    ErrorCode::ProtocolIncompatible,
+                    request.protocol_version,
+                );
+            }
             let Some(current) = application.identity() else {
                 // No archive open means no identity to hand out. Saying so is retryable;
                 // answering with a placeholder would have the extension stamp writes with
                 // an identity that never existed.
-                return crate::nm::error_frame(&request.message_id, ErrorCode::Unavailable);
+                return crate::nm::error_frame(
+                    &request.message_id,
+                    ErrorCode::Unavailable,
+                    request.protocol_version,
+                );
             };
             let mut payload = handshake_response_payload(&current, env!("CARGO_PKG_VERSION"));
             // handshake_response_payload reports the crate's own MAX_PROTOCOL_VERSION
@@ -250,15 +277,22 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                         "ipc: refusing to send a response that fails validation: {}",
                         err.code
                     );
-                    return crate::nm::error_frame(&request.message_id, ErrorCode::Unavailable);
+                    return crate::nm::error_frame(
+                        &request.message_id,
+                        ErrorCode::Unavailable,
+                        request.protocol_version,
+                    );
                 }
                 serde_json::to_vec(&response).ok()
             }
-            Err(code) => crate::nm::error_frame(&request.message_id, code),
+            Err(code) => crate::nm::error_frame(&request.message_id, code, request.protocol_version),
         },
         Err(err) => {
             let message_id = crate::nm::message_id_of(frame)?;
-            crate::nm::error_frame(&message_id, err.code)
+            // No Request was ever parsed here (the envelope failed structural validation
+            // before a version could be trusted), so there is nothing to echo — fall
+            // back to the fixed version 1.
+            crate::nm::error_frame(&message_id, err.code, 1)
         }
     }
 }
@@ -412,6 +446,35 @@ mod tests {
     }
 
     #[test]
+    fn a_handshake_whose_client_range_cannot_reach_v1_is_protocol_incompatible() {
+        // The crate's own structural check only confirms [min, max] overlaps the crate's
+        // supported range (1..=2); it says nothing about what THIS desktop build actually
+        // serves. A client that only speaks v2 must be told incompatible, not handed a
+        // v1-only handshake as though it agreed to something it never offered.
+        const HANDSHAKE_V2_ONLY: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
+        let reply = answer(HANDSHAKE_V2_ONLY.as_bytes(), open_archive().as_ref()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "protocol_incompatible");
+        // The envelope's own protocolVersion (1 here) is what gets echoed, not the
+        // payload's rejected minProtocolVersion/maxProtocolVersion.
+        assert_eq!(value["protocolVersion"], 1);
+    }
+
+    #[test]
+    fn a_handshake_whose_client_range_merely_touches_v1_still_succeeds() {
+        // A client offering [1, 2] does overlap this desktop's [1, SERVED_MAX] even
+        // though SERVED_MAX is 1: version 1 itself is common ground, so the handshake
+        // must still succeed, just capped to what this build actually serves.
+        const HANDSHAKE_ALSO_OFFERS_V2: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":1,"maxProtocolVersion":2}}"#;
+        let reply = answer(HANDSHAKE_ALSO_OFFERS_V2.as_bytes(), open_archive().as_ref()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["payload"]["maxProtocolVersion"], SERVED_MAX_PROTOCOL_VERSION);
+        assert_eq!(value["payload"]["minProtocolVersion"], 1);
+    }
+
+    #[test]
     fn a_v2_resume_read_envelope_is_protocol_incompatible_until_pr_3b_wires_it_in() {
         // resume.read exists in the D05 protocol crate's own validator (range 1..=2), but
         // PR 3b has not wired it into the desktop's dispatch yet. The envelope must be
@@ -423,6 +486,16 @@ mod tests {
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "protocol_incompatible");
         assert_eq!(value["error"]["retryable"], false);
+        // Both validators require the response protocolVersion to echo the request's
+        // own, so this must be the request's 2, not a hardcoded 1 — and the whole
+        // envelope must actually pass the extension's own response validator for the
+        // request that provoked it.
+        assert_eq!(value["protocolVersion"], 2);
+        let request = resume_pro_protocol::validate_request_value(
+            &serde_json::from_str(RESUME_READ_V2).unwrap(),
+        )
+        .unwrap();
+        resume_pro_protocol::validate_response_for_request(&value, &request).unwrap();
     }
 
     #[test]
@@ -434,6 +507,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "protocol_incompatible");
+        assert_eq!(value["protocolVersion"], 2);
     }
 
     #[test]

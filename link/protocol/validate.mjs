@@ -226,17 +226,31 @@ function checkUrlRest(raw, rest) {
   }
 }
 
-function walkUrls(value) {
+// apiUrlPaths are exact paths (relative to the root value first passed in), the same
+// shape as walkSecrets's allowedPaths. Only an apiUrl/api_url key at one of those paths
+// gets the http exception (checkApiUrl); the same key name anywhere else still gets the
+// generic, https-only checkUrl — exactly as it did before apiUrl had any exception. The
+// http exception is for the one wire shape legacy.import kind aiConfig's body.apiUrl
+// produces, not for the field name wherever it turns up.
+function walkUrls(value, apiUrlPaths = [], path = []) {
   if (Array.isArray(value)) {
-    value.forEach(walkUrls);
+    value.forEach((item, index) => walkUrls(item, apiUrlPaths, [...path, String(index)]));
     return;
   }
   if (value && typeof value === "object") {
     for (const [k, v] of Object.entries(value)) {
+      const nextPath = [...path, k];
       const key = k.toLowerCase().replaceAll("-", "_");
-      if (URL_FIELD_KEYS.has(key) && typeof v === "string") checkUrl(v);
-      else if (API_URL_FIELD_KEYS.has(key) && typeof v === "string") checkApiUrl(v);
-      walkUrls(v);
+      if (URL_FIELD_KEYS.has(key) && typeof v === "string") {
+        checkUrl(v);
+      } else if (API_URL_FIELD_KEYS.has(key) && typeof v === "string") {
+        const exempt = apiUrlPaths.some(
+          (allowed) => allowed.length === nextPath.length && allowed.every((part, i) => part === nextPath[i]),
+        );
+        if (exempt) checkApiUrl(v);
+        else checkUrl(v);
+      }
+      walkUrls(v, apiUrlPaths, nextPath);
     }
   }
 }
@@ -356,8 +370,8 @@ export async function validateRequest(value) {
   if (Array.isArray(value.payload) || !value.payload || typeof value.payload !== "object") {
     throw fail("invalid_payload", "payload must be an object");
   }
-  const allowedPaths = type === "legacy.import" && value.payload.kind === "aiConfig"
-    ? [["body", "apiKey"]] : [];
+  const isAiConfigImport = type === "legacy.import" && value.payload.kind === "aiConfig";
+  const allowedPaths = isAiConfigImport ? [["body", "apiKey"]] : [];
   walkSecrets(value.payload, allowedPaths);
   const hasArchive = Object.prototype.hasOwnProperty.call(value, "archiveId");
   const hasEpoch = Object.prototype.hasOwnProperty.call(value, "restoreEpoch");
@@ -376,7 +390,8 @@ export async function validateRequest(value) {
       throw fail("invalid_payload", e.message);
     }
   }
-  walkUrls(value.payload);
+  const apiUrlPaths = isAiConfigImport ? [["body", "apiUrl"]] : [];
+  walkUrls(value.payload, apiUrlPaths);
   if (RULES.writeTypes.includes(type) && type !== "snapshot.chunk") {
     const actual = await payloadBodySha256(value.payload);
     if (value.payload.payloadSha256 !== actual) {

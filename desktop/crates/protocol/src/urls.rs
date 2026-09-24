@@ -48,14 +48,38 @@ pub struct UrlAllowRule {
 }
 
 /// Reject unsanitized URLs. The validator never rewrites the payload.
+///
+/// No `apiUrl` field is treated as http-allowed here; use `reject_sensitive_urls_except`
+/// for the one exempt path (`legacy.import` kind `aiConfig`'s `body.apiUrl`).
 pub fn reject_sensitive_urls(value: &Value, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> {
-    walk(value, allowlist)
+    reject_sensitive_urls_except(value, allowlist, &[])
 }
 
-fn walk(value: &Value, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> {
+/// Same scan, but any `apiUrl`/`api_url` key at one of `api_url_paths` (exact paths
+/// relative to `value`, the same shape as `secrets::reject_secrets_except`'s
+/// `allowed_paths`) is checked with `check_api_url` (http or https) instead of the
+/// generic `check_url` (https-only). An `apiUrl` key anywhere else — `profile.values`,
+/// a template field's own value, a nested custom field, and so on — still gets the
+/// generic https-only rule: the http exception is for the one wire shape PR 3b's import
+/// path produces, not for the field name wherever it appears.
+pub fn reject_sensitive_urls_except(
+    value: &Value,
+    allowlist: &[UrlAllowRule],
+    api_url_paths: &[&[&str]],
+) -> Result<(), ProtocolError> {
+    walk(value, allowlist, api_url_paths, &mut Vec::new())
+}
+
+fn walk(
+    value: &Value,
+    allowlist: &[UrlAllowRule],
+    api_url_paths: &[&[&str]],
+    path: &mut Vec<String>,
+) -> Result<(), ProtocolError> {
     match value {
         Value::Object(map) => {
             for (k, v) in map {
+                path.push(k.clone());
                 let key = k.to_ascii_lowercase().replace('-', "_");
                 if URL_FIELD_KEYS.contains(&key.as_str()) {
                     if let Some(url) = v.as_str() {
@@ -63,15 +87,25 @@ fn walk(value: &Value, allowlist: &[UrlAllowRule]) -> Result<(), ProtocolError> 
                     }
                 } else if API_URL_FIELD_KEYS.contains(&key.as_str()) {
                     if let Some(url) = v.as_str() {
-                        check_api_url(url, allowlist)?;
+                        let exempt = api_url_paths.iter().any(|allowed| {
+                            path.iter().map(String::as_str).eq(allowed.iter().copied())
+                        });
+                        if exempt {
+                            check_api_url(url, allowlist)?;
+                        } else {
+                            check_url(url, allowlist)?;
+                        }
                     }
                 }
-                walk(v, allowlist)?;
+                walk(v, allowlist, api_url_paths, path)?;
+                path.pop();
             }
         }
         Value::Array(items) => {
-            for item in items {
-                walk(item, allowlist)?;
+            for (index, item) in items.iter().enumerate() {
+                path.push(index.to_string());
+                walk(item, allowlist, api_url_paths, path)?;
+                path.pop();
             }
         }
         _ => {}
@@ -319,6 +353,26 @@ mod tests {
         assert_eq!(userinfo.code, ErrorCode::SecretForbidden);
         let secret_query = check_api_url("https://host/v1?api_key=x", &empty).unwrap_err();
         assert_eq!(secret_query.code, ErrorCode::SecretForbidden);
+    }
+
+    #[test]
+    fn the_http_exception_only_applies_at_the_exempted_path() {
+        // Only legacy.import's body.apiUrl gets the http exception; the same field name
+        // anywhere else (a profile value here) must still go through the generic,
+        // https-only check_url — exactly as it did before apiUrl had any exception.
+        let empty: [UrlAllowRule; 0] = [];
+        let exempt_path: &[&str] = &["body", "apiUrl"];
+
+        let exempt_body = serde_json::json!({"body": {"apiUrl": "http://ollama.local/v1"}});
+        assert!(reject_sensitive_urls_except(&exempt_body, &empty, &[exempt_path]).is_ok());
+
+        let elsewhere = serde_json::json!({"profile": {"values": {"apiUrl": "http://example.com/"}}});
+        let err = reject_sensitive_urls_except(&elsewhere, &empty, &[exempt_path]).unwrap_err();
+        assert_eq!(err.code, ErrorCode::SecretForbidden);
+
+        // The bare, no-exemption entry point must behave the same as passing no paths.
+        let err2 = reject_sensitive_urls(&elsewhere, &empty).unwrap_err();
+        assert_eq!(err2.code, ErrorCode::SecretForbidden);
     }
 
     #[test]

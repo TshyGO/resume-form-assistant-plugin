@@ -137,7 +137,11 @@ pub fn response_for_with<B: Backend>(
             if matches!(caller, Caller::Rejected(_)) {
                 // Answered per message rather than dropped: a closed port reaches the
                 // extension as an unexplained disconnect, while this says why.
-                let response = error_response(&request.message_id, ErrorCode::IdentityNotAllowed);
+                let response = error_response(
+                    &request.message_id,
+                    ErrorCode::IdentityNotAllowed,
+                    request.protocol_version,
+                );
                 return serde_json::to_vec(&response).ok();
             }
             if request.protocol_version > crate::ipc_server::SERVED_MAX_PROTOCOL_VERSION {
@@ -146,7 +150,11 @@ pub fn response_for_with<B: Backend>(
                 // into the desktop yet. `health` is answered right here, without ever
                 // reaching `crate::ipc_server::answer`, so it needs this same guard
                 // rather than silently claiming protocolVersion 2 is already served.
-                let response = error_response(&request.message_id, ErrorCode::ProtocolIncompatible);
+                let response = error_response(
+                    &request.message_id,
+                    ErrorCode::ProtocolIncompatible,
+                    request.protocol_version,
+                );
                 return serde_json::to_vec(&response).ok();
             }
             if request.message_type == MessageType::Health {
@@ -168,7 +176,11 @@ pub fn response_for_with<B: Backend>(
                 Ok(reply) => Some(reply),
                 Err(reason) => {
                     eprintln!("nm-host: cannot reach the application: {reason}");
-                    let response = error_response(&request.message_id, ErrorCode::Unavailable);
+                    let response = error_response(
+                        &request.message_id,
+                        ErrorCode::Unavailable,
+                        request.protocol_version,
+                    );
                     serde_json::to_vec(&response).ok()
                 }
             }
@@ -180,16 +192,26 @@ pub fn response_for_with<B: Backend>(
             } else {
                 err.code
             };
-            serde_json::to_vec(&error_response(&message_id, code)).ok()
+            // No Request was ever parsed here (the envelope failed structural validation
+            // before a version could be trusted), so there is nothing to echo — fall back
+            // to the fixed version 1.
+            serde_json::to_vec(&error_response(&message_id, code, 1)).ok()
         }
     }
 }
 
 /// A fixed message per code. Validator messages quote the offending value, so forwarding
 /// one would hand rejected content back to the extension.
-pub fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
+///
+/// `protocol_version` must be the parsed request's own `protocol_version` whenever a
+/// `Request` exists to read it from — both `validate_response_for_request` and
+/// `validate_response_value` require the response to echo the request's version, so a
+/// hardcoded value here would itself build a response the extension's own validator
+/// refuses. Pass the fixed `1` only when no `Request` was ever parsed (an envelope that
+/// failed structural validation before a `messageId` and version could be trusted).
+pub fn error_response(correlation_id: &str, code: ErrorCode, protocol_version: u32) -> Value {
     json!({
-        "protocolVersion": 1,
+        "protocolVersion": protocol_version,
         "correlationId": correlation_id,
         "ok": false,
         "payload": {},
@@ -202,9 +224,10 @@ pub fn error_response(correlation_id: &str, code: ErrorCode) -> Value {
 }
 
 /// A complete error frame, ready to write. Shared so the host and the application build
-/// their errors the same way rather than drifting into two shapes.
-pub fn error_frame(correlation_id: &str, code: ErrorCode) -> Option<Vec<u8>> {
-    serde_json::to_vec(&error_response(correlation_id, code)).ok()
+/// their errors the same way rather than drifting into two shapes. See `error_response`
+/// for what `protocol_version` must be.
+pub fn error_frame(correlation_id: &str, code: ErrorCode, protocol_version: u32) -> Option<Vec<u8>> {
+    serde_json::to_vec(&error_response(correlation_id, code, protocol_version)).ok()
 }
 
 fn fixed_message(code: ErrorCode) -> &'static str {
@@ -295,6 +318,24 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "protocol_incompatible");
         assert_eq!(response["error"]["retryable"], false);
+        // Both validate_response_for_request and validate_response_value require the
+        // response protocolVersion to echo the request's, so a hardcoded 1 here would
+        // itself be a response the extension's own validator refuses.
+        assert_eq!(response["protocolVersion"], 2);
+    }
+
+    #[test]
+    fn a_rejected_caller_with_a_v2_envelope_still_echoes_its_own_protocol_version() {
+        // Caller::Rejected is answered before the SERVED_MAX_PROTOCOL_VERSION guard runs
+        // (identity takes priority), but the response envelope must still echo whatever
+        // protocolVersion the request actually carried, not a hardcoded 1.
+        let v2_health = HEALTH.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
+        let caller = Caller::Rejected("chrome-extension://zzzz/".into());
+        let raw = response_for(v2_health.as_bytes(), &caller).expect("a response is expected");
+        let response: Value = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "identity_not_allowed");
+        assert_eq!(response["protocolVersion"], 2);
     }
 
     #[test]
@@ -315,6 +356,10 @@ mod tests {
         );
         assert_eq!(response["error"]["code"], "protocol_incompatible");
         assert_eq!(response["error"]["retryable"], false);
+        // protocolVersion:9 fails the crate's own structural check, so no Request is ever
+        // parsed here — there is no request.protocol_version to echo, and the error
+        // envelope must fall back to the fixed version 1 rather than the offending value.
+        assert_eq!(response["protocolVersion"], 1);
     }
 
     #[test]
