@@ -280,26 +280,25 @@ test('D14 T2: offline job and v1 fill become one application, immutable snapshot
   );
 });
 
-test('D14 T2: same-company postings stay distinct and candidate lookup does not choose for the user', async () => {
+test('D14 T2: same-company postings are created separately and an exact repeat waits for a choice', async () => {
   const model = desktopModel();
   model.online = true;
   const { router } = await harness(model);
 
-  const first = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: jobFields('job-a') });
-  const savedA = await router.handle({ type: 'DESKTOP_BIND', intentId: first.intent.intentId });
-  const second = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: jobFields('job-b') });
-  const candidates = await router.handle({ type: 'DESKTOP_CANDIDATES', intentId: second.intent.intentId });
+  const savedA = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: jobFields('job-a') });
+  const savedB = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: jobFields('job-b') });
 
-  assert.equal(candidates.status, 'ok');
-  assert.deepEqual(candidates.exact, []);
-  assert.deepEqual(candidates.sameCompany.map(item => item.applicationId), [savedA.applicationId]);
-  assert.equal(model.applications.size, 1, 'reading candidates never creates or selects an application');
-
-  const savedB = await router.handle({ type: 'DESKTOP_BIND', intentId: second.intent.intentId });
+  assert.equal(savedA.status, 'saved');
+  assert.equal(savedB.status, 'saved');
   assert.notEqual(savedA.applicationId, savedB.applicationId);
   assert.equal(model.applications.size, expected.logicalEntities.sameCompanyAmbiguity.length);
   assert.deepEqual(
     [...model.applications.values()].map(item => item.title).sort(),
     [jobFields('job-a').title, jobFields('job-b').title].sort()
   );
+
+  const repeat = await router.handle({ type: 'DESKTOP_SAVE_JOB', fields: jobFields('job-a') });
+  assert.equal(repeat.status, 'needs_choice');
+  assert.deepEqual(repeat.exact.map(item => item.applicationId), [savedA.applicationId]);
+  assert.equal(model.applications.size, expected.logicalEntities.sameCompanyAmbiguity.length);
 });

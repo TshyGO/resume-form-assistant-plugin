@@ -3,7 +3,7 @@
 //! data-privacy §1：Key **禁止**进 SQLite、附件、备份、日志。所以这里只有三件事：
 //! 存、取（只给 Rust 侧发请求用）、删。**没有把 Key 返回给界面的命令。**
 //!
-//! 插件那条 Key 永不复制过来；用户在桌面另配的是第二条凭据（§8）。
+//! 旧插件 Key 分片先进入这里的临时账户，桌面确认后才移到正式账户；SQLite、备份、日志都不保存（§8）。
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -23,9 +23,25 @@ async function openManagerTab(requestedTab = "") {
   return chrome.tabs.create({ url: targetUrl });
 }
 
-chrome.action.onClicked.addListener(() =>
-  openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."))
-);
+// Register toolbar events synchronously: MV3 service workers can be restarted by
+// the click itself. Browsers without sidePanel fall back to the old manager tab.
+let sidePanelReady = Promise.resolve(false);
+chrome.action.onClicked.addListener(() => {
+  sidePanelReady.then((ready) => {
+    if (!ready) openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."));
+  });
+});
+if (chrome.sidePanel?.setPanelBehavior) {
+  try {
+    sidePanelReady = Promise.resolve(chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }))
+      .then(() => true, () => {
+        console.warn("Resume Pro could not enable the browser side panel.");
+        return false;
+      });
+  } catch {
+    console.warn("Resume Pro could not enable the browser side panel.");
+  }
+}
 
 // This service worker only creates the host. It never owns a long AI request.
 let creatingHost = null;
@@ -45,6 +61,10 @@ async function ensureAiHost() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "SIDE_PANEL_CAPABILITY") {
+    sidePanelReady.then((supported) => sendResponse({ supported }));
+    return true;
+  }
   if (message?.type === "OPEN_MANAGER") {
     openManagerTab(message.tab).then(() => sendResponse({ opened: true })).catch(() => {
       sendResponse({ opened: false, error: "无法打开管理面板，请从浏览器工具栏点击 Resume Pro。" });

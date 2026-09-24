@@ -195,7 +195,7 @@ fn without_secrets(groups: Vec<TemplateGroup>) -> (Vec<TemplateGroup>, usize) {
 }
 
 /// 返回要存的 JSON 和剔掉的密码类字段数。
-fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(String, usize), StoreError> {
+pub(crate) fn checked_groups(groups: Vec<TemplateGroup>) -> Result<(String, usize), StoreError> {
     let (groups, skipped) = without_secrets(normalize_groups(groups));
     if groups.is_empty() {
         return Err(invalid("未解析到任何字段，请检查 Excel 格式。"));
@@ -246,7 +246,7 @@ pub fn validate_profile(profile: &Value) -> Result<(), StoreError> {
 /// 找「我的信息」里第一处像密码的内容，给出提示。`values` / `family` 的 key 是内部字段 id
 /// （比如 `"skills"`），不是用户写的文本，报出来没有意义还可能造成误解，所以只给笼统的提示；
 /// `custom` 的 key 是用户自己填的标签，点名反而更清楚是哪一项。
-fn reject_secrets(profile: &Value) -> Result<(), StoreError> {
+pub fn reject_profile_secrets(profile: &Value) -> Result<(), StoreError> {
     const GENERIC: &str = "有一项内容看起来是密码或验证码，这类内容不存进档案（档案会随备份带走）。";
     let strings = |v: &Value| -> Vec<String> {
         v.as_object()
@@ -311,7 +311,9 @@ impl StoreTx<'_> {
         }
         let mut index = 2;
         loop {
-            let candidate = format!("{wanted} ({index})");
+            let suffix = format!(" ({index})");
+            let base = truncate_chars(wanted.to_string(), MAX_TEMPLATE_NAME_CHARS - suffix.chars().count());
+            let candidate = format!("{base}{suffix}");
             if !self.name_taken(&candidate, None)? {
                 return Ok(candidate);
             }
@@ -490,7 +492,7 @@ impl StoreTx<'_> {
     /// 像密码、验证码的内容整份拒绝（不悄悄删掉用户正在编辑的字段）。
     pub fn save_profile(&mut self, profile: Value, expected_revision: i64) -> Result<ProfileRecord, StoreError> {
         validate_profile(&profile)?;
-        reject_secrets(&profile)?;
+        reject_profile_secrets(&profile)?;
         self.ensure_resume_state()?;
         let current = self.get_profile()?.revision;
         if current != expected_revision {

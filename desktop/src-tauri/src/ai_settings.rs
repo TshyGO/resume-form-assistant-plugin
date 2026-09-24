@@ -162,6 +162,29 @@ fn write(data_root: &Path, settings: &AiSettings) -> Result<(), String> {
 /// 设置却没改，用户就白白丢了 Key（见 PR #158 评审）。这里保存前也照样调一遍，
 /// 防止以后有别的调用方跳过 `ai_provider_commands` 直接调 `save_provider`。
 pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
+    validate_fields(input)?;
+    if let Some(id) = &input.id {
+        let settings = load(data_root);
+        if !settings.providers.iter().any(|p| &p.id == id) {
+            return Err(GONE.into());
+        }
+    }
+    Ok(())
+}
+
+/// Whether a legacy import's AI config could become a provider at all, judged from the
+/// config alone (no settings file, no key). Used when the part arrives; the provider limit
+/// and the existing-provider check wait until the user confirms.
+pub fn check_import_config(api_url: &str, model: &str) -> Result<(), String> {
+    validate_fields(&ProviderInput {
+        id: None,
+        name: "插件导入".into(),
+        api_url: api_url.into(),
+        model: model.into(),
+    })
+}
+
+fn validate_fields(input: &ProviderInput) -> Result<(), String> {
     let name = input.name.trim();
     if name.is_empty() || name.chars().count() > MAX_PROVIDER_NAME_CHARS {
         return Err(format!("名称不能为空，最多 {MAX_PROVIDER_NAME_CHARS} 个字。"));
@@ -184,12 +207,6 @@ pub fn validate(data_root: &Path, input: &ProviderInput) -> Result<(), String> {
     }
     if input.model.trim().is_empty() {
         return Err("模型名称不能为空，可以点「获取模型」挑一个。".into());
-    }
-    if let Some(id) = &input.id {
-        let settings = load(data_root);
-        if !settings.providers.iter().any(|p| &p.id == id) {
-            return Err(GONE.into());
-        }
     }
     Ok(())
 }
@@ -222,6 +239,57 @@ pub fn save_provider(data_root: &Path, input: ProviderInput) -> Result<SaveOutco
     };
     write(data_root, &settings)?;
     Ok(SaveOutcome { settings, provider_id, host_changed })
+}
+
+/// Create the provider from one confirmed legacy import. The stable id lets a retry
+/// finish moving its Key without creating another provider after an interrupted run.
+pub fn validate_import_provider(data_root: &Path, import_id: &str, api_url: &str, model: &str) -> Result<(), String> {
+    let id = format!("legacy-provider-{import_id}");
+    let input = ProviderInput {
+        id: None,
+        name: format!("插件导入 {}", import_id.chars().take(8).collect::<String>()),
+        api_url: api_url.into(),
+        model: model.into(),
+    };
+    validate(data_root, &input)?;
+    let settings = load(data_root);
+    let normalized = normalize_api_url(api_url, DEFAULT_API_URL);
+    if let Some(existing) = settings.providers.iter().find(|provider| provider.id == id) {
+        if existing.api_url != normalized || existing.model != model.trim() {
+            return Err("同一导入编号对应的 AI 配置已经变化，不能覆盖。".into());
+        }
+    } else if settings.providers.len() >= MAX_PROVIDERS {
+        return Err(format!("服务商最多 {MAX_PROVIDERS} 个，先删掉用不上的。"));
+    }
+    Ok(())
+}
+
+pub fn import_provider(data_root: &Path, import_id: &str, api_url: &str, model: &str) -> Result<String, String> {
+    validate_import_provider(data_root, import_id, api_url, model)?;
+    let id = format!("legacy-provider-{import_id}");
+    let input = ProviderInput {
+        id: None,
+        name: format!("插件导入 {}", import_id.chars().take(8).collect::<String>()),
+        api_url: api_url.into(),
+        model: model.into(),
+    };
+    let mut settings = load(data_root);
+    let normalized = normalize_api_url(api_url, DEFAULT_API_URL);
+    if let Some(existing) = settings.providers.iter().find(|provider| provider.id == id) {
+        if existing.api_url == normalized && existing.model == model.trim() {
+            return Ok(id);
+        }
+        return Err("同一导入编号对应的 AI 配置已经变化，不能覆盖。".into());
+    }
+    if settings.providers.len() >= MAX_PROVIDERS {
+        return Err(format!("服务商最多 {MAX_PROVIDERS} 个，先删掉用不上的。"));
+    }
+    settings.providers.push(AiProvider {
+        id: id.clone(), name: input.name, api_url: normalized, model: model.trim().into(),
+    });
+    if active(&settings).is_none() { settings.active_provider_id = Some(id.clone()); }
+    write(data_root, &settings)?;
+    Ok(id)
 }
 
 pub fn delete_provider(data_root: &Path, id: &str) -> Result<AiSettings, String> {
@@ -365,6 +433,19 @@ pub fn host_of(api_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn importing_one_provider_is_idempotent_and_never_overwrites_a_changed_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let id = import_provider(dir.path(), import_id, "https://api.example.com/v1", "m").unwrap();
+        assert_eq!(id, format!("legacy-provider-{import_id}"));
+        assert_eq!(import_provider(dir.path(), import_id, "https://api.example.com/v1", "m").unwrap(), id);
+        assert_eq!(load(dir.path()).providers.len(), 1);
+        assert_eq!(load(dir.path()).active_provider_id.as_deref(), Some(id.as_str()));
+        assert!(import_provider(dir.path(), import_id, "https://other.example.com/v1", "m").is_err());
+        assert_eq!(load(dir.path()).providers.len(), 1);
+    }
 
     fn input(id: Option<&str>, name: &str, url: &str, model: &str) -> ProviderInput {
         ProviderInput { id: id.map(str::to_string), name: name.into(), api_url: url.into(), model: model.into() }

@@ -17,6 +17,16 @@
   overflow: hidden;
 }
 
+/* The visible controls now live in the browser's native side panel. Keep this
+   controller mounted for the existing page-form and desktop-link handlers. */
+:host .resume-pro {
+  display: none;
+}
+
+:host .resume-pro.is-legacy-open {
+  display: flex;
+}
+
 :host .resume-pro.is-dragging {
   cursor: grabbing;
   user-select: none;

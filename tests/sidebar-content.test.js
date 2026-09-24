@@ -70,7 +70,7 @@ function createClassList() {
 // to pixels" and "the anchor still follows the right edge" are distinguishable.
 function loadContentScript({ width = 1200, height = 900 } = {}) {
   const writes = [];
-  const listeners = { document: {}, window: {}, storageChanged: [] };
+  const listeners = { document: {}, window: {}, storageChanged: [], runtimeMessage: [] };
   const collapseButton = {
     textContent: "",
     attributes: {},
@@ -142,7 +142,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
   const chrome = {
     runtime: {
       getURL: (name) => `chrome-extension://test/${name}`,
-      onMessage: { addListener() {} },
+      onMessage: { addListener(handler) { listeners.runtimeMessage.push(handler); } },
       sendMessage: async () => ({})
     },
     storage: {
@@ -166,6 +166,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     console,
     chrome,
     document,
+    location: { href: 'https://jobs.example.test/apply' },
     window,
     navigator: { clipboard: { writeText: async () => {} } },
     crypto: { randomUUID: () => "test-id" },
@@ -180,6 +181,8 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     HTMLLabelElement: class {},
     self: { __RESUME_PRO_TEST__: true }
   };
+  context.setTimeout = setTimeout;
+  context.clearTimeout = clearTimeout;
   context.globalThis = context;
   context.self.window = window;
   context.window.document = document;
@@ -193,6 +196,7 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
 
   return {
     hooks,
+    context,
     host,
     sidebar,
     collapseButton,
@@ -204,6 +208,57 @@ function loadContentScript({ width = 1200, height = 900 } = {}) {
     }
   };
 }
+
+test("native side panel status exposes pending offers and diagnostics", () => {
+  const { hooks, listeners } = loadContentScript();
+  const profileOffer = { hidden: false, querySelector: () => ({ textContent: "还有 2 个字段空着" }) };
+  const fillOffer = {
+    hidden: false,
+    querySelector(selector) {
+      return selector === "#resume-pro-fill-record-snapshot"
+        ? { disabled: false } : { textContent: "是否留档到桌面" };
+    }
+  };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return ({
+        "#resume-pro-ai-fill": { disabled: false, textContent: "一键 AI 填写" },
+        "#resume-pro-profile-offer": profileOffer,
+        "#resume-pro-fill-record": fillOffer,
+        "#resume-pro-diagnostics": { hidden: false, querySelector: () => ({ value: "网页字段：3" }) }
+      })[selector] || null;
+    }
+  });
+
+  let response;
+  const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+  assert.equal(handled, false);
+  assert.equal(response.ready, true);
+  assert.equal(response.profileOffer, "还有 2 个字段空着");
+  assert.equal(response.fillOffer, "是否留档到桌面");
+  assert.equal(response.snapshotAvailable, true);
+  assert.equal(response.diagnostics, "网页字段：3");
+
+  listeners.runtimeMessage[0]({ type: "RESUME_PANEL_OFFER", action: "profileSkip" }, {}, () => {});
+  assert.equal(profileOffer.hidden, true);
+});
+
+test("native side panel fill command invokes the page's existing fill controller", () => {
+  const { hooks, listeners } = loadContentScript();
+  let clicks = 0;
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-ai-fill"
+        ? { hidden: false, disabled: false, click() { clicks += 1; } }
+        : null;
+    }
+  });
+  let reply;
+  const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_FILL" }, {}, (value) => { reply = value; });
+  assert.equal(handled, false);
+  assert.equal(reply.ok, true);
+  assert.equal(clicks, 1);
+});
 
 test("an untouched sidebar keeps following the right edge when the window widens", () => {
   const { hooks, host, resizeViewport } = loadContentScript();
@@ -306,4 +361,144 @@ test("a normalized state is what gets stored, even after a failed read left it e
   assert.deepEqual(plain(writes), [{
     resumeProSidebarUiState: { collapsed: false, left: 120, top: 80 }
   }]);
+});
+
+test("an unreliable extraction opens the editable form and sends nothing to an AI service", async () => {
+  const { hooks, context } = loadContentScript();
+  const inputs = Object.fromEntries([
+    '#resume-pro-save-company', '#resume-pro-save-title', '#resume-pro-save-location',
+    '#resume-pro-save-url', '#resume-pro-save-note'
+  ].map(key => [key, { value: '', textContent: '' }]));
+  const form = { hidden: true, querySelector: key => inputs[key] ?? null };
+  const saveButton = { disabled: false };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return { '#resume-pro-save-form': form, '#resume-pro-save-job': saveButton }[selector] ?? null;
+    }
+  });
+  hooks.setCurrentStore({ aiConfig: { apiUrl: 'https://ai.example.test', model: 'demo', apiKey: 'sk-test' } });
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
+  hooks.setDesktopModules({
+    extract: {
+      extractJobFields: () => ({
+        company: '金发科技股份有限公司', title: '', location: '', sourceUrl: 'https://jobs.example.test/apply',
+        dedupeUrl: 'https://jobs.example.test/apply', reliable: false, assistReasons: ['missing_title'],
+        fragments: [{ id: 1, source: 'h1', text: '金发科技股份有限公司' }]
+      })
+    },
+    saveFlow,
+    copy
+  });
+  let aiCalls = 0;
+  context.self.ResumeProAIClient = {
+    send: async () => { aiCalls += 1; return {}; },
+    cancel: async () => {}
+  };
+  const saves = [];
+  context.chrome.runtime.sendMessage = async message => {
+    saves.push(message);
+    return { status: 'saved' };
+  };
+
+  await hooks.handleSaveJobClick();
+  assert.equal(form.hidden, false);
+  assert.equal(saveButton.disabled, false);
+  assert.equal(hooks.getSaveInteractionState().extractInFlight, false);
+  assert.equal(inputs['#resume-pro-save-company'].value, '金发科技股份有限公司');
+  assert.equal(inputs['#resume-pro-save-title'].value, '');
+  assert.equal(inputs['#resume-pro-save-note'].textContent, copy.describeManualSave('missing_title'));
+  assert.equal(aiCalls, 0, 'saving a job never calls an AI service from the plugin');
+  assert.equal(saves.length, 0, 'nothing reaches the desktop before the user confirms');
+
+  inputs['#resume-pro-save-title'].value = '研发工程师-化工工艺研究方向';
+  await hooks.submitSaveForm({ force: false });
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].fields.title, '研发工程师-化工工艺研究方向');
+  assert.equal(aiCalls, 0);
+});
+
+test("save again after a duplicate resends the confirmed fields, including the redacted URLs", async () => {
+  const { hooks, context } = loadContentScript();
+  const inputs = Object.fromEntries([
+    '#resume-pro-save-company', '#resume-pro-save-title', '#resume-pro-save-location',
+    '#resume-pro-save-url', '#resume-pro-save-note'
+  ].map(key => [key, { value: '', textContent: '' }]));
+  const form = { hidden: true, querySelector: key => inputs[key] ?? null };
+  const buttons = [];
+  const statusBox = {
+    textContent: '', className: '', classList: { add() {} },
+    appendChild(node) { if (node.tag === 'button') buttons.push(node); }
+  };
+  context.document.createElement = tag => ({
+    tag, textContent: '', className: '', listeners: {},
+    addEventListener(type, handler) { this.listeners[type] = handler; }
+  });
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return {
+        '#resume-pro-save-form': form,
+        '#resume-pro-save-job': { disabled: false },
+        '#resume-pro-desktop-status': statusBox
+      }[selector] ?? null;
+    }
+  });
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
+  hooks.setDesktopModules({
+    extract: {
+      extractJobFields: () => ({
+        company: '星河科技', title: '工艺工程师', location: '', reliable: true,
+        sourceUrl: 'https://jobs.example.test/apply/7', dedupeUrl: 'https://jobs.example.test/apply/7'
+      })
+    },
+    saveFlow,
+    copy
+  });
+  const sent = [];
+  context.chrome.runtime.sendMessage = async message => {
+    if (message?.type !== 'DESKTOP_SAVE_JOB') return { intents: [], outbox: [], fillRecords: [] };
+    sent.push(message);
+    return sent.length === 1 ? { status: 'duplicate' } : { status: 'saved' };
+  };
+
+  await hooks.handleSaveJobClick();
+  await hooks.submitSaveForm({ force: false });
+  assert.equal(form.hidden, true, 'a duplicate closes the form');
+  const again = buttons.find(button => button.textContent === '再存一次');
+  assert.ok(again, 'the duplicate offers saving again');
+  await again.listeners.click();
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].force, true);
+  assert.equal(sent[1].fields.sourceUrl, 'https://jobs.example.test/apply/7');
+  assert.equal(sent[1].fields.dedupeUrl, 'https://jobs.example.test/apply/7');
+  assert.equal(sent[1].fields.company, '星河科技');
+});
+
+test("a full outbound queue reports the retained intent instead of claiming nothing was kept", async () => {
+  const { hooks } = loadContentScript();
+  const copy = await import('../link/copy.mjs');
+  const result = hooks.describeCommit(copy, {
+    status: 'rejected', reason: 'queue_full', intent: { intentId: 'intent-1' }
+  });
+  assert.match(result.text, /岗位已留在待同步列表/);
+  assert.match(result.text, /还没有写入桌面/);
+});
+
+test("a bound write failure closes the save form and points to the retained queue entry", async () => {
+  const { hooks } = loadContentScript();
+  const form = { hidden: false };
+  hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-save-form' ? form : null });
+  const copy = await import('../link/copy.mjs');
+
+  hooks.presentSaveResult(copy, {
+    status: 'failed', code: 'invalid_payload', intent: { intentId: 'intent-1' }
+  });
+
+  assert.equal(form.hidden, true);
+  const described = hooks.describeCommit(copy, {
+    status: 'failed', code: 'invalid_payload', intent: { intentId: 'intent-1' }
+  });
+  assert.match(described.text, /待同步列表/);
 });

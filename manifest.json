@@ -9,6 +9,7 @@
     "offscreen",
     "storage",
     "tabs",
+    "sidePanel",
     "nativeMessaging",
     "alarms"
   ],
@@ -28,6 +29,9 @@
       "128": "icons/icon128.png"
     }
   },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -39,6 +43,7 @@
       "resources": [
         "link/copy.mjs",
         "link/extract.mjs",
+        "link/save-flow.mjs",
         "link/fillrecords.mjs",
         "link/limits.mjs",
         "link/redact.mjs",

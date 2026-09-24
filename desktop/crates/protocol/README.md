@@ -42,9 +42,10 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 
 ## v2（#130）
 
-`rules.json` 的支持范围是 v1–v2。原有八类消息在 v1、v2 信封里都可用；新增的五类消息只接受 `protocolVersion: 2`。旧插件的 `link/envelope.mjs` 仍发送 v1，桌面响应版本回显和新消息处理在 PR 3b 接入。
+`rules.json` 的支持范围是 v1–v2。原有八类消息在 v1、v2 信封里都可用；新增的五类消息只接受 `protocolVersion: 2`。旧插件的 `link/envelope.mjs` 仍发送 v1；桌面自 PR 3b 起服务 v2：响应回显请求的 `protocolVersion`，并处理全部五类新消息（插件改发 v2 在 PR 4）。
+桌面握手按请求版本列出能力：v1 响应只含旧八类，v2 响应追加新五类，避免已安装的旧插件因不认识新能力名而拒绝整条握手。
 
-本 crate（D05）的校验器范围本身就是 1..=2（`MAX_PROTOCOL_VERSION`），供 PR 3b/4 直接使用；但在 PR 3b 把新增五类消息接线进桌面业务逻辑之前，`desktop/src-tauri` 不能宣称自己已经在服务 v2。`desktop/src-tauri/src/ipc_server.rs` 的 `SERVED_MAX_PROTOCOL_VERSION`（当前 `1`）是唯一开关：握手响应的 `maxProtocolVersion` 用它覆盖协议库算出的值，`ipc_server::answer` 与 `nm::response_for_with`（host 侧不经应用进程就直接回答的 `health` 短路径）在分发前都会先比较请求的 `protocolVersion`，超过这个常量就答 `protocol_incompatible`，而不是把 v2 信封转发给还没有 v2 分支的业务逻辑（那样只会答出无法诊断的 `unavailable`）。PR 3b 接线完新消息后把这一个常量改成 `2`（plan Task 6），不需要再动校验器本身的范围。
+本 crate（D05）的校验器范围本身就是 1..=2（`MAX_PROTOCOL_VERSION`）。桌面实际服务到哪个版本由 `desktop/src-tauri/src/ipc_server.rs` 的 `SERVED_MAX_PROTOCOL_VERSION` 单独决定（PR 3b 起为 `2`）：握手响应的 `maxProtocolVersion` 用它覆盖协议库算出的值，`ipc_server::answer` 与 `nm::response_for_with`（host 侧不经应用进程就直接回答的 `health` 短路径）在分发前都会先比较请求的 `protocolVersion`，超过这个常量就答 `protocol_incompatible`，而不是把信封转发给没有对应分支的业务逻辑（那样只会答出无法诊断的 `unavailable`）。以后再加协议版本时，先把新消息接进桌面，再调这个常量；校验器范围与服务范围分开调整。
 
 | 消息 | 请求与响应约定 |
 | --- | --- |
@@ -54,21 +55,24 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 
+若桌面已应用模板与档案、但 AI 配置无法完成，用户在桌面拒绝这一批后状态为 `imported`，响应另带 `aiConfigDropped: true`（完整导入时不带这个字段）。已应用的模板与档案不回滚；桌面先清理可能已写入的正式 AI 服务商和 Key，清理失败则保持待确认状态供重试。插件看到 `imported` 清除旧模板与「我的信息」，避免之后重复导入；带 `aiConfigDropped` 时**保留旧 Key**，并提示用户到桌面补填 AI 配置。待确认列表中的 `applied` 标记供确认界面说明这一部分完成的状态。
+
 `resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
 
 `ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
 
-`ai.complete` 失败 `reason` 枚举含 `credential_unavailable`：凭据存放在系统密钥链，读取或写入失败与「未配置」是两件不同的事，值得插件区分提示。**PR 3b** 接线桌面业务逻辑时按下表映射（本 PR 只加枚举值与一条响应向量，不接线）：
+`ai.complete` 失败 `reason` 枚举含 `credential_unavailable`：凭据存放在系统密钥链，读取或写入失败与「未配置」是两件不同的事，值得插件区分提示。桌面（PR 3b，`desktop/src-tauri/src/bridge_services.rs` 的 `from_ai_error`）按下表映射：
 
 | 桌面内部错误 | `ai.complete` `reason` |
 | --- | --- |
 | `AI_NOT_CONFIGURED` | `not_configured` |
+| `AI_URL_HAS_CREDENTIAL`（服务商地址带凭据，配置本身不可用） | `not_configured` |
 | `CREDENTIAL_STORE_UNAVAILABLE` | `credential_unavailable` |
 | `AI_SETTINGS_WRITE_FAILED`（设置写入/准备失败） | `credential_unavailable` |
 | `AI_OUTPUT_TOO_LARGE` | `response_too_large` |
 | `AI_HTTP_3xx`（连同 `httpStatus`） | `http` |
 
-Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
+Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。桌面（PR 3b）把这个 Key 只放进 OS 凭据库临时账户，确认后移到正式服务商账户；SQLite 只存去 Key 后的 `apiUrl`、`model` 与 `hasKey`。
 
 `legacy.import` 清单中每片的 `sha256` 是**该片 `body` 本身**的摘要，不含 `kind`、`index` 或信封字段。算法与现有 `payloadSha256` 一致：对象键递归按字典序排列，序列化为无空白的 JSON，以 UTF-8 编码后计算 SHA-256，小写十六进制输出。`fixtures/requests/legacy-import-ok.json` 与 `legacy-import-template-ok.json` 固定了一组含中文内容的真实摘要，Rust/JS 均据此验算。
 

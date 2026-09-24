@@ -311,7 +311,7 @@ export interface HandshakeResponsePayload {
    * minItems: 1
    * maxItems: 16
    */
-  capabilities: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile"[];
+  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import")[];
 }
 
 export interface HealthResponsePayload {
@@ -329,6 +329,7 @@ export interface LegacyImportResponsePayload {
    * maximum: 63
    */
   total: number;
+  aiConfigDropped?: boolean;
 }
 
 export interface OutboxReconcileResponsePayload {

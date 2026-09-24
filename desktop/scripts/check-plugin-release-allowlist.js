@@ -38,7 +38,7 @@ export function parseGitArchiveEntries(workflowText) {
 
 export function assertPluginOnlyArchive(entries) {
   const allowed = new Set(["manifest.json","background.js","content.js","content.css","sidebar-state.js","ai-helpers.js","form-agent.js",
-    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","ai-models.js","resume-utils.js","profile-fields.js","popup.html","popup.css","popup.js",
+    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","ai-models.js","resume-utils.js","profile-fields.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js",
     "xlsx.full.min.js","mammoth.browser.min.js","README.md","LICENSE",
     ...JSON.parse(readFileSync(new URL('./plugin-release-assets.json', import.meta.url), 'utf8'))]);
   const exact = new Set(entries);
@@ -66,7 +66,8 @@ export function assertPluginOnlyArchive(entries) {
 // gap shipped a real break: background.js became a module importing ./link/worker.mjs
 // while release.yml still packed a file list with no link operand. The zip stayed
 // allowlist-clean and the service worker would have failed to load.
-// A file can enter the running extension six ways, and every one of them has to be in
+// A file can enter the running extension through manifest entry points or the
+// six reference mechanisms below, and every one of them has to be in
 // the archive. Missing any makes this check confidently wrong: it reports a package as
 // complete while the extension breaks on load, which is worse than not checking.
 //
@@ -155,6 +156,7 @@ export function manifestEntryPoints(manifest) {
   if (manifest.background && manifest.background.service_worker) {
     entries.push(manifest.background.service_worker);
   }
+  if (manifest.side_panel?.default_path) entries.push(manifest.side_panel.default_path);
   for (const script of manifest.content_scripts || []) {
     entries.push(...(script.js || []), ...(script.css || []));
   }

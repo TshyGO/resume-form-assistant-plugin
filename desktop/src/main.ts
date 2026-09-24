@@ -18,6 +18,7 @@ import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
 import { mountResume } from "./resume/mount.tsx";
+import { targetForOpenView } from "./open-view.ts";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -274,12 +275,15 @@ const notConnected: Invoke = async () => {
 };
 const command: Invoke = invoke ?? notConnected;
 
-const applications = mountApplications(command);
-
 // 文件选择与拖放是宿主能力：这里注入真实实现，测试里注入假的。拖放事件带来的是用户
 // 自己刚拖进来的路径，只在这一次导入里用；档案里的存储路径永远不下发到界面。
 const dialog = window.__TAURI__?.dialog;
 const events = window.__TAURI__?.event;
+const applications = mountApplications(command, {
+  listen: events?.listen
+    ? (name, handler) => events.listen?.(name, (event) => handler({ payload: event?.payload }))
+    : undefined,
+});
 
 // 简历模板只收 .xlsx / .csv；导出默认用模板名。没有 Tauri 时为 null，界面会如实说明。
 const resumePickers =
@@ -298,6 +302,15 @@ const resumePickers =
     : null;
 const resumeView = mountResume(must("resume-root"), invoke ?? null, resumePickers);
 
+void events?.listen?.("resume-pro://navigate", (event) => {
+  const target = targetForOpenView(event.payload);
+  if (!target) return;
+  const enteringResume = target.route === "resume" && views.resume.classList.contains("hidden");
+  showRoute(target.route);
+  if (target.settingsTab) settingsNavigation.select(target.settingsTab);
+  if (enteringResume) resumeView.refresh();
+});
+
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
@@ -313,7 +326,10 @@ const inbox = mountInbox(command, {
     : null,
   listenDrop: events?.listen
     ? (handle: (paths: string[]) => void) => {
-        void events.listen?.("tauri://drag-drop", (event) => handle(event?.payload?.paths ?? []));
+        void events.listen?.("tauri://drag-drop", (event) => {
+          const payload = event?.payload;
+          handle(typeof payload === "object" && payload !== null ? payload.paths ?? [] : []);
+        });
       }
     : null,
 });

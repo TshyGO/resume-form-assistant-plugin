@@ -968,3 +968,19 @@ fn a_schema_valid_response_still_cannot_exceed_the_envelope_limit() {
     });
     validate_response_value(&small, MessageType::QueryCandidates).unwrap();
 }
+
+#[test]
+fn legacy_import_status_may_say_the_ai_config_was_dropped() {
+    let response = |payload: serde_json::Value| json!({
+        "protocolVersion": 2,
+        "correlationId": MSG,
+        "ok": true,
+        "payload": payload
+    });
+    let full = response(json!({"state": "imported", "received": 2, "total": 2}));
+    validate_response_value(&full, MessageType::LegacyImport).unwrap();
+    let dropped = response(json!({"state": "imported", "received": 2, "total": 2, "aiConfigDropped": true}));
+    validate_response_value(&dropped, MessageType::LegacyImport).unwrap();
+    let wrong_type = response(json!({"state": "imported", "received": 2, "total": 2, "aiConfigDropped": "yes"}));
+    assert!(validate_response_value(&wrong_type, MessageType::LegacyImport).is_err());
+}

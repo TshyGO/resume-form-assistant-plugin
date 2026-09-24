@@ -333,3 +333,193 @@ fn health_is_answered_without_starting_the_application() {
     );
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+#[cfg(unix)]
+fn relay_v2_through_real_host(kind: &str, payload: serde_json::Value, response_payload: serde_json::Value) {
+    let tmp = paired_dir(&format!("v2-{}", kind.replace('.', "-")));
+    let endpoint = local_ipc::Endpoint::for_data_root(&tmp).unwrap();
+    let mut listener = local_ipc::Listener::bind(&endpoint).unwrap();
+    let kind_owned = kind.to_string();
+    let responder = std::thread::spawn(move || {
+        // connect_or_start first probes the endpoint and closes that connection.
+        // The following connection carries the actual request frame.
+        let frame;
+        let mut stream;
+        loop {
+            stream = listener.accept().unwrap();
+            if let Some(next) = nm_frame::read_frame(&mut stream).unwrap() {
+                frame = next;
+                break;
+            }
+        }
+        let request: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        assert_eq!(request["messageType"], kind_owned);
+        assert_eq!(request["protocolVersion"], 2);
+        let reply = serde_json::json!({
+            "protocolVersion": 2,
+            "correlationId": request["messageId"],
+            "ok": true,
+            "payload": response_payload
+        });
+        nm_frame::write_frame(&mut stream, &serde_json::to_vec(&reply).unwrap()).unwrap();
+    });
+    let mut request = serde_json::json!({
+        "protocolVersion": 2,
+        "messageId": "33333333-3333-4333-8333-333333333333",
+        "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+        "messageType": kind,
+        "occurredAt": "2026-09-24T00:00:00.000Z",
+        "payload": payload
+    });
+    if kind == "resume.read" {
+        request["archiveId"] = serde_json::json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        request["restoreEpoch"] = serde_json::json!("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    }
+    let (code, stdout, stderr) = run_host_with_data_dir(&[ORIGIN], &tmp, framed(&request.to_string()));
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.len() > 4, "host returned no response: {stderr}");
+    responder.join().unwrap();
+    let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
+    assert_eq!(stdout.len(), declared + 4);
+    let reply: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
+    assert_eq!(reply["protocolVersion"], 2);
+    assert_eq!(reply["ok"], true);
+    assert_eq!(reply["correlationId"], request["messageId"]);
+    resume_pro_protocol::validate_response_value(&reply, resume_pro_protocol::MessageType::parse(kind).unwrap()).unwrap();
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn v2_resume_read_and_ui_open_cross_the_real_host_process() {
+    relay_v2_through_real_host("resume.read", serde_json::json!({}), serde_json::json!({
+        "templates": [], "activeTemplate": null,
+        "profile": {"values":{},"family":[],"custom":[]}, "profileRevision": 0
+    }));
+    relay_v2_through_real_host("ui.open", serde_json::json!({"view":"home"}), serde_json::json!({"opened":true}));
+}
+
+#[cfg(windows)]
+#[test]
+fn v2_requests_keep_their_version_when_the_real_host_has_no_application() {
+    // Windows verifies that the pipe server runs the same executable as the host. A
+    // fake server in this integration-test process must therefore be refused; the
+    // real application path is covered by ipc_server's in-process archive tests.
+    for (kind, payload, with_identity) in [
+        ("resume.read", serde_json::json!({}), true),
+        ("ui.open", serde_json::json!({"view":"home"}), false),
+    ] {
+        let mut request = serde_json::json!({
+            "protocolVersion": 2,
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": kind,
+            "occurredAt": "2026-09-24T00:00:00.000Z",
+            "payload": payload
+        });
+        if with_identity {
+            request["archiveId"] = serde_json::json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+            request["restoreEpoch"] = serde_json::json!("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        }
+        let (code, stdout, stderr) = run_host_with_data_dir(
+            &["--nm-host"], std::path::Path::new("relative-not-absolute"), framed(&request.to_string()),
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(error_code_of(&stdout), "unavailable");
+        let reply: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
+        assert_eq!(reply["protocolVersion"], 2);
+    }
+}
+
+#[cfg(windows)]
+struct HiddenApplication(std::process::Child);
+
+#[cfg(windows)]
+impl Drop for HiddenApplication {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn v2_resume_read_round_trips_through_the_real_host_and_application() {
+    let tmp = paired_dir("v2-real-app");
+    let program = env!("CARGO_BIN_EXE_resume-pro-desktop");
+    let child = Command::new(program)
+        .arg("--hidden")
+        .env("RESUMEPRO_DATA_DIR", &tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("isolated hidden desktop must start");
+    let application = HiddenApplication(child);
+    let pointer = tmp.join("current.json");
+    let ready_by = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let current: serde_json::Value = loop {
+        if let Ok(bytes) = std::fs::read(&pointer) {
+            if let Ok(value) = serde_json::from_slice(&bytes) { break value; }
+        }
+        assert!(std::time::Instant::now() < ready_by, "desktop did not open an archive in time");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let request = serde_json::json!({
+        "protocolVersion": 2,
+        "messageId": "33333333-3333-4333-8333-333333333333",
+        "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+        "messageType": "resume.read",
+        "occurredAt": "2026-09-24T00:00:00.000Z",
+        "archiveId": current["archive_id"],
+        "restoreEpoch": current["restore_epoch"],
+        "payload": {}
+    });
+    let send = |request: &serde_json::Value| -> serde_json::Value {
+        let (code, stdout, stderr) = run_host_with_data_dir(&[ORIGIN], &tmp, framed(&request.to_string()));
+        assert_eq!(code, 0, "{stderr}");
+        assert!(stdout.len() > 4, "host did not answer: {stderr}");
+        let declared = u32::from_ne_bytes(stdout[..4].try_into().unwrap()) as usize;
+        assert_eq!(stdout.len(), declared + 4);
+        serde_json::from_slice(&stdout[4..]).unwrap()
+    };
+    let reply = send(&request);
+    assert_eq!(reply["protocolVersion"], 2);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["payload"]["templates"], serde_json::json!([]));
+    assert_eq!(reply["payload"]["profileRevision"], 0);
+    let validated = resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&request).unwrap()).unwrap();
+    resume_pro_protocol::validate_response_for_request(&reply, &validated).unwrap();
+
+    let mut update = request.clone();
+    update["messageId"] = serde_json::json!("44444444-4444-4444-8444-444444444444");
+    update["messageType"] = serde_json::json!("resume.update");
+    update["payload"] = serde_json::json!({
+        "op":"saveProfile",
+        "profile":{"values":{"fullName":"Alice"},"family":[],"custom":[]},
+        "expectedRevision":0
+    });
+    let updated = send(&update);
+    assert_eq!(updated["ok"], true, "{updated}");
+    assert_eq!(updated["payload"]["profileRevision"], 1);
+    let validated = resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&update).unwrap()).unwrap();
+    resume_pro_protocol::validate_response_for_request(&updated, &validated).unwrap();
+
+    let mut manifest = request.clone();
+    manifest["messageId"] = serde_json::json!("55555555-5555-4555-8555-555555555555");
+    manifest["messageType"] = serde_json::json!("legacy.import");
+    manifest["payload"] = serde_json::json!({
+        "importId":"77777777-7777-4777-8777-777777777777",
+        "kind":"manifest","index":0,
+        "body":{"pluginVersion":"0.4.0","total":1,"parts":[
+            {"index":1,"kind":"template","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ]}
+    });
+    let staged = send(&manifest);
+    assert_eq!(staged["ok"], true, "{staged}");
+    assert_eq!(staged["payload"]["state"], "receiving");
+    let validated = resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+    resume_pro_protocol::validate_response_for_request(&staged, &validated).unwrap();
+    drop(application);
+    std::fs::remove_dir_all(&tmp).ok();
+}
