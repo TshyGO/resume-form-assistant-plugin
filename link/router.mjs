@@ -32,7 +32,32 @@ export function createRouter({ session, intents, outbox, drain, reconcile, fillR
         mode: probe.mode,
         force: Boolean(message.force)
       });
-      return { ...result, mode: probe.mode, extensionId };
+      // An intent is the durable queue. On a live desktop it is not the end of the click:
+      // no exact duplicate means the new application is written before this reply returns.
+      if (result.status !== 'queued' || probe.mode !== 'ready') {
+        return { ...result, mode: probe.mode, extensionId };
+      }
+      return finishOnlineSave({
+        intent: result.intent,
+        identity: probe.identity,
+        mode: probe.mode,
+        force: Boolean(message.force)
+      });
+    }
+
+    if (type === MSG.continueSave) {
+      // A saved intent the desktop could not take earlier. The user is asking again now.
+      // Nothing here replays an old messageId or an old epoch.
+      const probe = await session.probe();
+      const intent = (await intents.list()).find(item => item.intentId === message.intentId);
+      if (!intent) return { status: 'rejected', reason: 'unknown_intent', mode: probe.mode };
+      if (probe.mode !== 'ready') return { status: 'queued', mode: probe.mode, intent, extensionId };
+      return finishOnlineSave({
+        intent,
+        identity: probe.identity,
+        mode: probe.mode,
+        force: false
+      });
     }
 
     if (type === MSG.candidates) {
@@ -181,6 +206,26 @@ export function createRouter({ session, intents, outbox, drain, reconcile, fillR
     }
 
     return null;
+  }
+
+  // Live desktop, after the intent exists. Same-company applications are not a choice:
+  // a different title is a new application. Only an exact duplicate asks the user.
+  // `force` is the explicit "save again" click, which already chose to create another one.
+  async function finishOnlineSave({ intent, identity, mode, force }) {
+    const candidates = await outbox.queryCandidates({ identity, fields: intent.fields });
+    if (candidates.status !== 'ok') {
+      return { status: 'queued', mode, intent, reason: 'candidates_unavailable', extensionId };
+    }
+    const exact = candidates.exact ?? [];
+    if (exact.length > 0 && !force) {
+      return { status: 'needs_choice', mode, intent, exact, extensionId };
+    }
+    const bound = await outbox.bindAndSend({
+      intentId: intent.intentId,
+      applicationId: null,
+      identity
+    });
+    return { ...bound, mode, intent, extensionId };
   }
 
   // Claim first, then queue. The claim is what makes a second click a duplicate; a queue

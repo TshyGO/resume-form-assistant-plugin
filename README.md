@@ -106,7 +106,7 @@ edge://extensions
 
 打开任意普通网页，然后点击浏览器右上角的 **Resume Pro** 图标。
 
-插件会在当前网页中打开管理面板。
+浏览器会打开 Resume Pro 原生侧边栏。点击侧边栏底部的「打开管理面板」，管理功能会在独立标签页打开。侧边栏显示在浏览器左边还是右边，由浏览器设置决定。
 
 进入：
 
@@ -257,7 +257,7 @@ PDF、Word 和 TXT 都会先在本地读取或提取文字，再发送给 AI 整
 
 1. 打开公司的网申页面
 2. 如果页面之前已经打开，刷新一次
-3. 页面右侧会出现 Resume Pro 填表助手
+3. 点击工具栏的 Resume Pro 图标，打开浏览器侧边栏中的填表助手
 4. 在「当前模板」选择要使用的简历
 5. 点击「一键 AI 填写」
 6. 等待匹配完成
@@ -327,13 +327,13 @@ Ctrl + V
 
 ## 常见问题
 
-### 安装后网页右边没有 Resume Pro
+### 点击图标后没有打开 Resume Pro 侧边栏
 
 先检查：
 
 1. `chrome://extensions` 或 `edge://extensions` 中 Resume Pro 是否已开启
-2. 网申页面是否已经刷新
-3. 当前页面是不是浏览器内部页面
+2. 是否已点击浏览器工具栏中的 Resume Pro 图标；侧边栏的左右位置由浏览器设置决定
+3. 网申页面是否已刷新，以及当前页面是不是浏览器内部页面
 
 例如下面这些页面无法注入普通扩展内容：
 
@@ -421,7 +421,7 @@ API Key
 
 ## 隐私说明
 
-简历模板、「我的信息」、AI 配置，以及侧边栏的位置和折叠状态保存在浏览器本地的扩展存储中，插件不收集。
+简历模板、「我的信息」和 AI 配置保存在浏览器本地的扩展存储中，插件不收集。原生侧边栏的位置由浏览器设置控制。导出备份时默认不含 API Key；只有勾选「包含 API Key」并再确认一次，才会把 Key 写进那一次下载的文件。桌面程序的备份不包含 AI 设置，也不包含 Key。
 
 仓库里不包含任何真实用户简历数据，测试数据均为匿名示例。
 
@@ -445,7 +445,7 @@ API Key 请勿分享给他人，也不要提交到公开 GitHub Issue。
 - 部分日期选择器和级联下拉兼容
 - 字段快捷点击填写和复制
 - AI 填写结果高亮提示
-- 页面内常驻管理面板
+- 浏览器原生侧边栏中的填写与字段查找；管理面板在独立标签页打开
 
 ### AI 填写耗时与诊断
 
@@ -477,7 +477,8 @@ API Key 请勿分享给他人，也不要提交到公开 GitHub Issue。
 ```text
 manifest.json          插件清单
 popup.html/css/js      模板管理、AI 配置、简历解析界面
-content.js/css         页面注入、字段识别、侧边栏和填写逻辑
+sidepanel.html/css/js  浏览器原生侧边栏：填写、字段搜索和高级工具入口
+content.js/css         页面注入、字段识别、填表执行和高级操作控件
 sidebar-state.js       侧边栏位置、折叠状态与可视区域边界规则
 background.js          扩展动作和隐藏请求进程启动
 ai-host.html/js        隐藏文档及消息转发
@@ -495,13 +496,13 @@ icons/                 插件图标
 
 ### 桌面程序连接（D07）
 
-装了 Resume Pro 桌面程序之后，侧边栏多出「保存岗位到本地」和「确认已投递」。**没装桌面程序时这两个按钮之外的一切照旧**：模板、AI 填写、手动取消都不依赖它。
+装了 Resume Pro 桌面程序之后，可从侧边栏「更多工具」使用「保存岗位到桌面端」和「确认已投递」；这些操作会在网页上打开相应的确认控件。点保存后先核对识别出的公司和岗位，确认后才写入桌面。**没装桌面程序时，模板、AI 填写和手动取消仍可使用。**
 
 几条不能含糊的规则，改这块代码前先看一眼：
 
 - **「待同步」不等于「桌面已保存」。** 只有桌面持久化并回了 `resultId`，界面才允许说已保存。全部文案集中在 [`link/copy.mjs`](link/copy.mjs)，`tests/link-degradation.test.js` 按 §9 降级矩阵逐行核对。
 - **「未安装」和「未配对」是两件事。** 装了但没配对时要说去桌面粘贴扩展 ID，不能说没装。
-- **队列有两层。** 用户确认了字段但桌面不在 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）；选好绑定谁之后 → Bound outbox（铸 `messageId`、盖当时的 `sourceRestoreEpoch`）。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加一个 `desktopFillRecords`（同样两层：未选申请的留档意图 → 选定之后才是 `fill.submit`）。
+- **队列有两层。** 桌面当时不在，或精确重复还没选定 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）。桌面在线且没有精确重复时，同一次保存会立刻写成 Bound outbox 并发送 `job.save`（新建，阶段是已保存，不是已投递）；有精确重复才问「使用已有 / 新建一条」。同公司的另一个岗位直接新建。Bound outbox 铸 `messageId`、盖当时的 `sourceRestoreEpoch`。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加一个 `desktopFillRecords`（同样两层：未选申请的留档意图 → 选定之后才是 `fill.submit`）。
 - **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联 / 丢弃 / 另存。
 - **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
 

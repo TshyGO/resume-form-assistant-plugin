@@ -22,10 +22,12 @@ test('the service worker loads as a module so it can import the D05 validator', 
   assert.equal(manifest().background.service_worker, 'background.js');
 });
 
-test('the toolbar button opens the manager in an extension tab', async () => {
+test('the toolbar button opens the native side panel and the manager stays in an extension tab', async () => {
   const source = background();
   assert.equal(manifest().action.default_popup, undefined);
-  assert.match(source, /chrome\.action\.onClicked\.addListener/);
+  assert.equal(manifest().side_panel.default_path, 'sidepanel.html');
+  assert.ok(manifest().permissions.includes('sidePanel'));
+  assert.match(source, /chrome\.sidePanel\.setPanelBehavior\(\{ openPanelOnActionClick: true \}\)/);
   assert.match(source, /chrome\.tabs\.create/);
   assert.match(source, /chrome\.tabs\.update/);
   assert.match(source, /chrome\.tabs\.query/);
@@ -68,7 +70,11 @@ test('the sidebar can import the extraction and copy modules', async () => {
 test('the sidebar offers saving a job and never formats desktop copy itself', async () => {
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   assert.match(source, /resume-pro-save-job/);
+  assert.match(source, /保存岗位到桌面端/);
   assert.match(source, /DESKTOP_SAVE_JOB/);
+  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('function openSaveForm'));
+  assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
+  assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
   assert.match(source, /describeSaveResult/);
   assert.equal(source.includes('桌面已保存'), false);

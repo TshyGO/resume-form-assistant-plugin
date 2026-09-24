@@ -23,6 +23,7 @@ test("web_accessible_resources 保持人工审过的最小列表", () => {
       resources: [
         "link/copy.mjs",
         "link/extract.mjs",
+        "link/save-flow.mjs",
         "link/fillrecords.mjs",
         "link/limits.mjs",
         "link/redact.mjs",
@@ -42,7 +43,7 @@ test("web_accessible_resources 保持人工审过的最小列表", () => {
 test("manifest 权限集合被锁定，没有悄悄加权限", () => {
   assert.deepStrictEqual(
     new Set(manifest.permissions),
-    new Set(["offscreen", "storage", "tabs", "nativeMessaging", "alarms"]),
+    new Set(["offscreen", "storage", "tabs", "sidePanel", "nativeMessaging", "alarms"]),
   );
   assert.deepStrictEqual(manifest.host_permissions, ["<all_urls>"]);
 });
@@ -57,6 +58,9 @@ test("扩展页面自己的子资源不能重新对网页开放", () => {
     "vendor/pdfjs",
     "icons/",
     "popup.html",
+    "sidepanel.html",
+    "sidepanel.js",
+    "sidepanel.css",
   ]) {
     assert.ok(
       !exposed.some((resource) => resource.includes(forbidden)),

@@ -67,7 +67,7 @@ class FakeNode {
   }
 }
 
-function harness(handler?: InvokeHandler) {
+function harness(handler?: InvokeHandler, options: { searchDebounceMs?: number; coalesceMs?: number } = {}) {
   const nodes = new Map<string, FakeNode>();
   const actions = new Map<string, FakeNode>();
   const actionList: FakeNode[] = [];
@@ -122,12 +122,20 @@ function harness(handler?: InvokeHandler) {
     return call.args ?? {};
   }
 
-  const api = mountApplications(invoke);
+  let onChanged: ((event: { payload?: unknown }) => void) | null = null;
+  const api = mountApplications(invoke, {
+    listen: (_name, fn) => { onChanged = fn; },
+    searchDebounceMs: options.searchDebounceMs ?? 40,
+    coalesceMs: options.coalesceMs ?? 30,
+  });
   const select = async (id: string) => {
     el("apps-tbody").emit("click", { target: { closest: () => ({ dataset: { id } }) } });
     await tick();
   };
-  return { el, actions, action, actionList, calls, callArgs, api, select, tick, view };
+  return {
+    el, actions, action, actionList, calls, callArgs, api, select, tick, view,
+    emitChanged(payload: unknown) { onChanged?.({ payload }); },
+  };
 }
 
 test('progress cancel and Escape never dispatch writes for any outcome',async()=>{
@@ -315,4 +323,142 @@ test('an application with no evidence says so without claiming silence from the 
   const html = h.el('app-detail').innerHTML;
   assert.match(html, /回复证据（0）/);
   assert.match(html, /不代表对方没有回复/);
+});
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function listCalls(h: ReturnType<typeof harness>) {
+  return h.calls.filter((call) => call.name === "list_applications_cmd");
+}
+
+function queryOf(call: { args?: Record<string, unknown> }) {
+  return (call.args?.args ?? {}) as { query?: string | null; stage?: string; recycle?: string; offset?: number; sort?: string };
+}
+
+test("search debounces typing, clears immediately, and keeps the other filters", async () => {
+  const h = harness();
+  h.el("app-stage").value = "interview";
+  h.el("app-recycle").value = "active";
+  h.el("app-sort").value = "company";
+  h.el("app-search").value = "甲";
+  h.el("app-search").emit("input");
+  h.el("app-search").value = "甲乙";
+  h.el("app-search").emit("input");
+  await wait(15);
+  assert.equal(listCalls(h).length, 0);
+  await wait(50);
+  assert.equal(listCalls(h).length, 1);
+  assert.equal(queryOf(listCalls(h)[0]).query, "甲乙");
+  assert.equal(queryOf(listCalls(h)[0]).stage, "interview");
+  assert.equal(queryOf(listCalls(h)[0]).sort, "company");
+
+  h.el("app-search").value = "";
+  h.el("app-search").emit("search");
+  await h.tick();
+  const cleared = queryOf(listCalls(h).at(-1)!);
+  assert.equal(cleared.query, null);
+  assert.equal(cleared.offset, 0);
+  assert.equal(cleared.stage, "interview");
+  assert.equal(cleared.recycle, "active");
+  assert.equal(cleared.sort, "company");
+});
+
+test("composition holds the query until the candidate is confirmed, and Enter searches now", async () => {
+  const h = harness();
+  h.el("app-search").emit("compositionstart");
+  h.el("app-search").value = "岗";
+  h.el("app-search").emit("input");
+  await h.el("app-search").emit("keydown", { key: "Enter", isComposing: true });
+  await wait(60);
+  assert.equal(listCalls(h).length, 0);
+  h.el("app-search").emit("compositionend");
+  await wait(60);
+  assert.equal(queryOf(listCalls(h).at(-1)!).query, "岗");
+
+  h.el("app-search").value = "后端";
+  await h.el("app-search").emit("keydown", { key: "Enter" });
+  await h.tick();
+  assert.equal(queryOf(listCalls(h).at(-1)!).query, "后端");
+});
+
+test("a slow search cannot overwrite the list restored by clearing the box", async () => {
+  let release = () => {};
+  const h = harness(async (name, args) => {
+    if (name !== "list_applications_cmd") return undefined;
+    if (queryOf({ args }).query === "慢") {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { total: 1, items: [{ id: "SLOW", company: "SlowCo", title: "慢", current_stage: "saved" }] };
+    }
+    return { total: 1, items: [{ id: "ALL", company: "AllCo", title: "全部", current_stage: "saved" }] };
+  });
+  h.el("app-search").value = "慢";
+  h.el("app-search").emit("input");
+  await wait(50);
+  h.el("app-search").value = "";
+  h.el("app-search").emit("input");
+  await h.tick();
+  await h.tick();
+  release();
+  await h.tick();
+  await h.tick();
+  assert.match(h.el("apps-tbody").innerHTML, /AllCo/);
+  assert.doesNotMatch(h.el("apps-tbody").innerHTML, /SlowCo/);
+});
+
+test("a committed plugin write refreshes the open list from the query", async () => {
+  const h = harness((name) => name === "list_applications_cmd"
+    ? { total: 1, items: [{ id: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", current_stage: "saved" }] }
+    : undefined);
+  h.emitChanged({ reason: "draft", applicationId: "NEW", company: "不该出现" });
+  await wait(50);
+  assert.equal(listCalls(h).length, 0);
+
+  h.emitChanged({ reason: "committed", messageType: "job.save", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
+  h.emitChanged({ reason: "committed", messageType: "job.save", applicationId: "NEW", company: "金发科技股份有限公司", title: "研发工程师-化工工艺研究方向", stage: "saved", recycleState: "active" });
+  await wait(10);
+  assert.equal(listCalls(h).length, 0);
+  await wait(40);
+  await h.tick();
+  assert.equal(listCalls(h).length, 1);
+  assert.match(h.el("apps-tbody").innerHTML, /金发科技股份有限公司/);
+  assert.equal(h.el("apps-fresh").hidden, true);
+});
+
+test("a committed row hidden by the current filter is not inserted and does not clear the filter", async () => {
+  const h = harness((name) => name === "list_applications_cmd" ? { total: 0, items: [] } : undefined);
+  h.el("app-stage").value = "interview";
+  h.el("app-search").value = "其他";
+  h.emitChanged({
+    reason: "committed",
+    messageType: "job.save",
+    applicationId: "NEW",
+    company: "金发科技股份有限公司",
+    title: "研发工程师-化工工艺研究方向",
+    stage: "saved",
+    recycleState: "active",
+  });
+  await wait(50);
+  await h.tick();
+  assert.equal(h.el("app-stage").value, "interview");
+  assert.equal(h.el("app-search").value, "其他");
+  assert.equal(h.el("apps-fresh").hidden, false);
+  assert.doesNotMatch(h.el("apps-tbody").innerHTML, /金发科技股份有限公司/);
+
+  await h.el("apps-fresh-clear").emit("click");
+  await h.tick();
+  assert.equal(h.el("app-stage").value, "all");
+  assert.equal(h.el("app-search").value, "");
+  assert.equal(queryOf(listCalls(h).at(-1)!).query, null);
+  assert.equal(queryOf(listCalls(h).at(-1)!).stage, "all");
+  assert.equal(queryOf(listCalls(h).at(-1)!).offset, 0);
+});
+
+test("an update to an existing application refreshes without claiming there is a new one", async () => {
+  const h = harness((name) => name === "list_applications_cmd" ? { total: 0, items: [] } : undefined);
+  h.el("app-search").value = "其他";
+  h.emitChanged({ reason: "committed", messageType: "fill.submit", applicationId: "EXISTING" });
+  await wait(50);
+  await h.tick();
+  assert.equal(listCalls(h).length, 1);
+  assert.equal(h.el("apps-fresh").hidden, true);
 });

@@ -52,7 +52,7 @@
 ### 3.1 Goals（首版必须）
 
 - 不装插件、不接 AI，也能在桌面手动走完：建档 → 确认投递 → 测评 → 多轮面试 → Offer/拒绝。
-- 从网页 **主动** 保存岗位到本地；填写后可选择留档当次快照与填写事件；投递必须另一次明确确认。
+- 从网页 **主动** 保存岗位到桌面端，先核对再确认；填写后可选择留档当次快照与填写事件；投递必须另一次明确确认。
 - 导入 `.eml` / `.txt` / PNG / JPEG / PDF 与粘贴文本；预览；可选 AI 建议；确认后事务性更新阶段/事件/待办。
 - 同公司多岗位、同岗位多次申请可区分；疑似重复只提示，不自动合并。
 - 完整备份与恢复；升级/卸载默认不删档案。
@@ -105,8 +105,8 @@
 
 ### 5.2 插件辅助：保存意图 vs 已绑定业务消息
 
-1. 用户在招聘页点「保存岗位到本地」（**D07**）。侧边栏展示提取的公司/岗位/地点/URL，缺项手补，不捏造。用户点确认后，插件记下一次 **保存意图**（见下）。
-2. **仅当桌面可握手** 时，才查询两层候选（§7）；用户选「使用已有」或「新建」。默认阶段 `saved`。
+1. 用户在招聘页点「保存岗位到桌面端」（**D07**）。先做本地提取，结果放进可编辑表单；不可靠时说明哪一项不确定，不猜测、不调用 AI，用户核对或修改后点「确认」，这时才写入。公司和岗位都已确认、桌面可握手、且没有精确重复时，这次确认就完成 `job.save`，新建阶段为 `saved` 的申请。只有桌面持久化回执之后才显示「桌面已保存」。「已保存」不是「已投递」。确认之前不写桌面。
+2. 精确重复（规范化公司 + 岗位 + 去重 URL）才询问「使用已有申请 / 新建一条」。同公司不同岗位直接新建，不询问、不按公司合并。公司或岗位缺失、填反、只剩站点标题或本地候选冲突时，表单里只留下有证据的字段，由用户补全。用户确认后不再额外要求点「新建一条申请」。桌面不可用时只留下保存意图并显示「待同步」。
 3. 用户照常使用现有「一键 AI 填写」/「AI 辅助新增条目」。填写本身不依赖桌面。
 4. 可选：将本次填写事件 + 简历快照归档到已绑定申请（D08；快照字节见 §8.5）。
 5. 用户另点「确认已投递」（**插件按钮归 D07**，`submit.confirm`，与填写成功无关），或之后在桌面（D04）/证据确认（D11）推进阶段。
@@ -138,8 +138,8 @@
 | 模式 | 如何判断 | 用户确认保存字段之后 | 恢复后 |
 | --- | --- | --- | --- |
 | **未安装 / 从未配对** | 无 host 注册，或本 origin 从未成功写入过 pairing 记录 | **不建长期意图、不建绑定队列**。说明安装或到桌面粘贴扩展 ID。填写不受影响 | — |
-| **曾经配对，桌面暂不可用** | pairing 记录存在，但 host 拉起失败 / 握手超时 / 管道断开 | **持久化 SaveIntent**，UI「待同步（尚未绑定申请）」。不调用 `queryCandidates`，不铸申请 UUID，不盖 restoreEpoch | 桌面恢复 → 握手 → 若 epoch 与已有 **绑定** 队列冲突则先暂停那些绑定项 → 对每条意图：`queryCandidates` → 用户消歧 → 派发 `job.save`（此时才有 `messageId` + 身份盖章） |
-| **已配对且握手成功** | 握手返回兼容协议 | 可直接 `queryCandidates`；用户选绑定后再写 Bound outbox 并发送。意图可跳过或瞬间转换 | — |
+| **曾经配对，桌面暂不可用** | pairing 记录存在，但 host 拉起失败 / 握手超时 / 管道断开 | **持久化 SaveIntent**，UI「待同步（尚未绑定申请）」。不调用 `queryCandidates`，不铸申请 UUID，不盖 restoreEpoch | 不自动重放。用户稍后点「完成保存」时才握手；没有精确重复就新建，有精确重复才选择。旧 epoch 的已绑定消息仍先暂停，只对账 |
+| **已配对且握手成功** | 握手返回兼容协议 | 先 `queryCandidates`。没有精确重复则同一次操作写 Bound outbox 并发送 `job.save`（新建，`stage=saved`）。有精确重复才让用户选择。同公司不同岗位不询问 | — |
 | **协议不兼容** | 握手返回区间不交 | **不把意图升级为绑定消息**，也不发送。已有意图保留并提示升级；未配对路径仍不建新意图 | 升级后再走「桌面恢复」列 |
 
 `handshake` 与 `application.queryCandidates` 始终是 **读**，不单独构成「已保存」。
@@ -160,15 +160,16 @@ sequenceDiagram
   participant SW as background.js
   participant H as NM host
   participant APP as 应用进程唯一写入者
-  U->>CS: 确认保存字段
-  CS->>CS: 剥离 URL 秘密参数
-  CS->>SW: 保存意图
+  U->>CS: 保存岗位到桌面端
+  CS->>CS: 本地提取，并剥离 URL 秘密参数
+  CS-->>U: 展示可编辑的公司、岗位、地点
+  U->>CS: 核对或修改后点确认
+  CS->>SW: 保存这些字段
   SW->>SW: 探测：安装？曾经配对？
   alt 未安装或从未配对
     SW-->>U: 安装 / 粘贴扩展 ID（不写意图）
   else 曾经配对
     SW->>SW: 持久化 SaveIntent（intentId，无申请 UUID）
-    SW-->>U: 待同步（尚未绑定申请）
     SW->>H: 尝试 handshake（失败也保留意图）
     alt 握手失败或超时
       Note over SW: 意图待桌面恢复；禁止显示桌面已保存
@@ -178,15 +179,22 @@ sequenceDiagram
       SW->>SW: 绑定队列 epoch 检查
       SW->>H: application.queryCandidates（读）
       APP-->>SW: exact[] + sameCompany[]
-      U->>CS: 使用已有 / 新建 / 稍后再说
-      alt 稍后再说
-        Note over SW: 意图保持 pending
-      else 使用已有或新建
+      alt 没有精确重复
         SW->>SW: 写 Bound outbox（messageId；sourceRestoreEpoch=当时 current）
-        SW->>H: job.save
+        SW->>H: job.save（新建）
         APP-->>SW: applicationId + resultId
         SW->>SW: 删除意图与对应绑定项
         SW-->>U: 桌面已保存（stage=saved，非已投递）
+      else 精确重复
+        U->>CS: 使用已有 / 新建一条 / 稍后再说
+        alt 稍后再说
+          Note over SW: 意图保持 pending，不说已保存
+        else 使用已有或新建
+          SW->>SW: 写 Bound outbox（messageId；sourceRestoreEpoch=当时 current）
+          SW->>H: job.save
+          APP-->>SW: applicationId + resultId
+          SW-->>U: 桌面已保存（stage=saved，非已投递）
+        end
       end
     end
   end
@@ -733,7 +741,7 @@ D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstan
 | --- | --- | --- |
 | 1 | 插件保存岗 A | `app-A` UUID1，company=星河科技，title=后端开发，stage=`saved`，Event `job_saved`+`application_created` |
 | 2 | 确认投递 A | Event `submit_confirmed`，stage=`submitted` |
-| 3 | 保存岗 B（同公司不同 title/URL） | **精确三元组不命中**；同公司提示层列出 `app-A`（「同公司其他岗位」）。默认 **新建**。用户选新建 → `app-B` UUID2，stage=`saved`。不自动绑定 |
+| 3 | 保存岗 B（同公司不同 title/URL） | **精确层不命中**。直接新建 `app-B` UUID2，stage=`saved`。不因公司相同询问，也不合并到 `app-A` |
 | 4 | 确认投递 B | `app-B` → `submitted` |
 | 5 | 导入面试邮件 | Evidence `ev-1`，`applicationId=null`，`kind=eml`，`replyClass` 空，收件箱可见 |
 | 6 | 可选 AI | 建议 `candidateApplicationIds=[UUID1,UUID2]`，`replyClass=interview_invite`，`uncertainties` 含「无岗位名」；**不自动选** |
@@ -768,8 +776,8 @@ D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstan
 
 **设定：** `app-A` 已投递 URL `https://jobs.example.com/req/42`。用户再次从同一页保存。
 
-- **精确层** 规范化三元组命中 `app-A`（同一 posting）。同公司提示层可同时列出，但不替代精确警告。
-- 提示：「可能重复。使用已有申请，或作为再一次投递新建？」
+- **精确层** 规范化三元组命中 `app-A`（同一 posting）。同公司的其他岗位不触发这次询问。
+- 提示：「这可能是同一个岗位。要使用已有申请，还是新建一条？」
 - 用户选 **新建** → `app-C` 新 UUID，相同 company/title/URL，stage=`saved`。
 - 两条申请列表并存；后续通知必须消歧（走查 10.1 同类）。
 
@@ -803,7 +811,7 @@ D03 在业务事务中同步持久化回执：所属 `archiveId`、`clientInstan
 | --- | --- | --- | --- |
 | 未安装 / 从未配对 | 填写与今天一致。保存入口说明安装或粘贴 ID。**不是**「待同步」 | 无意图、无绑定队列 | 装好并配对后重新点保存 |
 | 已安装未配对 | 同上填写。文案「请在桌面粘贴扩展 ID」，**不得**显示「未安装」 | 无意图 | 粘贴 ID、重载扩展后再保存 |
-| 曾经配对，应用进程未运行且拉起失败 | 「待同步（尚未绑定申请）」**禁止**「桌面已保存」 | SaveIntent（字段 + intentId），无申请 UUID | 打开桌面后弹出候选，绑定后才 `job.save` |
+| 曾经配对，应用进程未运行且拉起失败 | 「待同步（尚未绑定申请）」**禁止**「桌面已保存」 | SaveIntent（字段 + intentId），无申请 UUID | 不自动重放。用户点「完成保存」后，没有精确重复才 `job.save`；旧 epoch 的绑定消息只对账 |
 | 无互联网 | 桌面手动档案可用。插件 AI 走现有错误 | 同曾经配对：意图可入 | 联网后 AI 另说；意图不依赖网 |
 | AI 宕机 | 桌面建议失败开放。插件「取消 AI 等待（保留本地匹配）」 | 证据与手动阶段不受影响 | 换模型或手改 |
 

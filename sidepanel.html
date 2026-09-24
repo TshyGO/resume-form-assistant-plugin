@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Pro 填表助手</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <div class="dock">
+      <header class="dock-header">
+        <div class="dock-brand"><img src="icons/icon48.png" width="34" height="34" alt=""><div><strong>Resume Pro</strong><span>网申填表助手</span></div></div>
+        <details class="dock-tools">
+          <summary aria-label="更多工具">···</summary>
+          <div class="dock-tools__menu">
+            <button type="button" data-advanced="repeat">AI 辅助新增条目（先预览）</button>
+            <button type="button" data-advanced="save">保存岗位到桌面端</button>
+            <button type="button" data-advanced="submit">确认已投递</button>
+            <button type="button" data-advanced="close">收起网页高级控件</button>
+          </div>
+        </details>
+        <p class="page-state" id="page-state">正在连接当前网页…</p>
+      </header>
+
+      <nav class="dock-tabs" role="tablist" aria-label="侧边栏视图">
+        <button type="button" role="tab" data-tab="fill" aria-selected="true" aria-controls="fill-view">填写</button>
+        <button type="button" role="tab" data-tab="fields" aria-selected="false" aria-controls="fields-view">简历字段</button>
+      </nav>
+
+      <main class="dock-main">
+        <section class="dock-view" id="fill-view" role="tabpanel" data-view="fill">
+          <label for="template-select" class="dock-label">当前模板</label>
+          <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
+          <p class="dock-note" id="config-state"></p>
+          <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
+          <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
+          <p class="safety-note">填写后请核对网页内容，插件不会自动提交</p>
+          <div id="fill-result" class="fill-result" role="status" hidden></div>
+          <div id="profile-offer" class="offer-card" hidden>
+            <p id="profile-offer-text"></p>
+            <div class="offer-actions"><button type="button" data-offer="profileAdd">加到我的信息</button><button type="button" data-offer="profileSkip">不用</button></div>
+          </div>
+          <div id="fill-offer" class="offer-card" hidden>
+            <p id="fill-offer-text"></p>
+            <label class="offer-check"><input id="fill-offer-snapshot" type="checkbox" checked>附上这次使用的简历模板拷贝</label>
+            <div class="offer-actions"><button type="button" data-offer="fillSave">留档到桌面</button><button type="button" data-offer="fillSkip">不留档</button></div>
+          </div>
+          <div id="desktop-status" class="desktop-status" role="status" hidden></div>
+          <details id="fill-diagnostics" class="dock-diagnostics" hidden>
+            <summary>填写诊断（不含简历内容）</summary>
+            <textarea id="fill-diagnostics-text" readonly rows="9" aria-label="填写诊断摘要"></textarea>
+          </details>
+
+          <div class="dock-section-head"><h2>常用字段</h2><button id="show-fields" type="button">查看全部字段 →</button></div>
+          <div id="quick-fields" class="quick-fields"></div>
+          <p class="dock-help">手动补填：先点网页输入框，再点这里的字段；无法写入时可复制。</p>
+        </section>
+
+        <section class="dock-view" id="fields-view" role="tabpanel" data-view="fields" hidden>
+          <h2>简历字段</h2>
+          <p class="field-meta" id="field-meta"></p>
+          <label class="sr-only" for="field-search">搜索简历字段</label>
+          <input id="field-search" type="search" placeholder="搜索字段或内容" autocomplete="off">
+          <p class="target-note">先点击网页上的输入框，再选择字段；切到侧栏后会记住上次选中的目标。</p>
+          <div id="field-groups" class="field-groups"></div>
+          <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。</p>
+        </section>
+      </main>
+
+      <footer class="dock-footer"><button id="open-manager" type="button">打开管理面板 ↗</button></footer>
+      <div id="panel-toast" class="panel-toast" role="status" hidden></div>
+    </div>
+    <script src="profile-fields.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

@@ -16,6 +16,7 @@ test('service worker only creates one concurrent offscreen worker host and never
   let complete, creates = 0;
   const context = vm.createContext({ chrome: {
     action: { onClicked: { addListener() {} } },
+    sidePanel: { setPanelBehavior: async () => {} },
     runtime: { getURL: name => `chrome-extension://test/${name}`, getContexts: async () => [], onMessage: { addListener() {} } },
     offscreen: { createDocument: options => { creates++; assert.equal(options.reasons[0], 'WORKERS'); return new Promise(resolve => { complete = resolve; }); } }
   } });
@@ -26,6 +27,21 @@ test('service worker only creates one concurrent offscreen worker host and never
   complete();
   await Promise.all([a, b]);
   assert.doesNotMatch(source('background.js'), /\bfetch\s*\(/);
+});
+
+test('a browser without the sidePanel API still opens the independent manager tab', async () => {
+  let actionClick;
+  let created;
+  const context = vm.createContext({ chrome: {
+    action: { onClicked: { addListener(fn) { actionClick = fn; } } },
+    runtime: { getURL: name => `chrome-extension://test/${name}`, onMessage: { addListener() {} } },
+    tabs: { query: async () => [], create: async options => { created = options.url; return { id: 1 }; } }
+  } });
+  vm.runInContext(asClassicScript(source('background.js')), context);
+  assert.equal(typeof actionClick, 'function');
+  actionClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(created, 'chrome-extension://test/popup.html');
 });
 
 test('offscreen host forwards sender identity and correlated replies to its dedicated worker', async () => {
