@@ -16,6 +16,7 @@ test('service worker only creates one concurrent offscreen worker host and never
   let complete, creates = 0;
   const context = vm.createContext({ chrome: {
     action: { onClicked: { addListener() {} } },
+    sidePanel: { setPanelBehavior: async () => {} },
     runtime: { getURL: name => `chrome-extension://test/${name}`, getContexts: async () => [], onMessage: { addListener() {} } },
     offscreen: { createDocument: options => { creates++; assert.equal(options.reasons[0], 'WORKERS'); return new Promise(resolve => { complete = resolve; }); } }
   } });

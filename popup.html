@@ -7,18 +7,31 @@
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
+    <div class="manager-app">
+      <aside class="manager-nav">
+        <div class="manager-brand">
+          <img src="icons/icon48.png" width="34" height="34" alt="">
+          <div><strong>Resume Pro</strong><span>插件管理面板</span></div>
+        </div>
+        <nav class="tab-nav" aria-label="功能分区">
+          <button class="tab-button is-active" type="button" data-tab="templates">简历模板</button>
+          <button class="tab-button" type="button" data-tab="profile">我的信息</button>
+          <button class="tab-button" type="button" data-tab="ai">AI 配置</button>
+        </nav>
+        <div class="manager-nav-footer">
+          <span>数据保存在浏览器扩展本地</span>
+          <div class="version-row">
+            <span id="current-version">当前版本</span>
+            <button id="check-update-button" class="text-button" type="button">检查更新</button>
+            <span id="update-check-status" aria-live="polite"></span>
+          </div>
+        </div>
+      </aside>
     <main class="popup-shell">
       <header class="popup-header">
-        <div>
-          <p class="eyebrow">Resume Pro</p>
-          <h1>简历填表助手</h1>
-        </div>
-        <p class="header-note">Excel 维护数据，插件负责导入与填写。</p>
-        <div class="version-row">
-          <span id="current-version">当前版本</span>
-          <button id="check-update-button" class="text-button" type="button">检查更新</button>
-          <span id="update-check-status" aria-live="polite"></span>
-        </div>
+        <p class="eyebrow">RESUME PRO · 插件管理</p>
+        <h1 id="page-title">简历模板</h1>
+        <p class="header-note" id="page-description">管理多套简历，核对解析结果，再到网申侧栏选择使用。</p>
       </header>
 
       <section id="update-banner" class="update-banner" aria-live="polite" hidden>
@@ -32,23 +45,18 @@
         </div>
       </section>
 
-      <nav class="tab-nav" aria-label="功能分区">
-        <button class="tab-button is-active" type="button" data-tab="templates">模板管理</button>
-        <button class="tab-button" type="button" data-tab="profile">我的信息</button>
-        <button class="tab-button" type="button" data-tab="ai">AI 配置</button>
-      </nav>
-
       <section class="tab-panel is-active" data-panel="templates">
+        <div class="template-entry-actions">
+          <button class="primary-button" id="import-template-button" type="button">导入 Excel / CSV</button>
+          <button class="secondary-button" id="parse-toggle-button" type="button" aria-expanded="false" aria-controls="parse-section">AI 解析简历（PDF / Word / TXT）</button>
+        </div>
         <div class="panel-card">
           <div class="panel-toolbar">
             <div>
-              <h2>模板列表</h2>
-              <p>支持多套简历模板，填表前切换对应模板即可。</p>
+              <h2>已保存的模板</h2>
+              <p>填表前选择对应模板；解析或导入后可在下方核对字段。</p>
             </div>
-            <div class="toolbar-actions">
-              <button class="secondary-button" id="parse-toggle-button" type="button">AI 解析简历</button>
-              <button class="primary-button" id="import-template-button" type="button">导入 Excel</button>
-            </div>
+            <span class="panel-count" id="template-count">0 套</span>
           </div>
 
           <input id="template-file-input" type="file" accept=".xlsx,.csv" hidden>
@@ -72,6 +80,25 @@
 
           <div class="template-list" id="template-list"></div>
 
+          <section class="template-preview" id="template-preview" aria-labelledby="template-preview-title" hidden>
+            <div class="template-preview__header">
+              <div>
+                <h3 id="template-preview-title">当前模板字段预览</h3>
+                <p>只读核对；要改内容，请修改 Excel 后重新导入。</p>
+              </div>
+              <label class="preview-search-label" for="template-preview-search">
+                <span class="sr-only">搜索当前模板字段</span>
+                <input id="template-preview-search" type="search" placeholder="搜索字段或内容" autocomplete="off">
+              </label>
+            </div>
+            <p class="template-preview__meta" id="template-preview-meta"></p>
+            <div class="template-preview__groups" id="template-preview-groups"></div>
+            <p class="template-preview__empty" id="template-preview-empty" hidden>没有找到匹配的字段。</p>
+          </section>
+        </div>
+
+        <details class="backup-disclosure">
+          <summary>数据备份与恢复（高级操作）</summary>
           <div class="backup-row">
             <div class="backup-row__actions">
               <button class="text-button" id="export-backup-button" type="button">导出备份</button>
@@ -107,7 +134,7 @@
 
             <div class="status-message" id="backup-status" aria-live="polite"></div>
           </div>
-        </div>
+        </details>
       </section>
 
       <section class="tab-panel" data-panel="profile">
@@ -124,18 +151,18 @@
           <form id="profile-form" class="config-form">
             <div id="profile-preset"></div>
 
-            <section class="profile-group">
-              <h3 class="profile-group__title">家庭主要成员</h3>
+            <details class="profile-group">
+              <summary class="profile-group__title">家庭主要成员</summary>
               <div class="profile-rows" id="profile-family"></div>
               <button class="secondary-button" id="profile-add-member" type="button">添加成员</button>
-            </section>
+            </details>
 
-            <section class="profile-group">
-              <h3 class="profile-group__title">补充字段</h3>
+            <details class="profile-group">
+              <summary class="profile-group__title">补充字段</summary>
               <p class="profile-group__hint">上面没有的字段自己加。填表后网页上空着的字段，可以在侧边栏一键加到这里。</p>
               <div class="profile-rows" id="profile-custom"></div>
               <button class="secondary-button" id="profile-add-custom" type="button">添加字段</button>
-            </section>
+            </details>
 
             <button class="primary-button is-full" type="submit">保存</button>
             <div class="status-message" id="profile-status" aria-live="polite"></div>
@@ -221,6 +248,7 @@
         </div>
       </section>
     </main>
+    </div>
 
     <script type="module" src="link/secret-fields.mjs"></script>
     <script src="xlsx.full.min.js"></script>

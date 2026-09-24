@@ -23,9 +23,14 @@ async function openManagerTab(requestedTab = "") {
   return chrome.tabs.create({ url: targetUrl });
 }
 
-chrome.action.onClicked.addListener(() =>
-  openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."))
-);
+// The toolbar opens the native browser side panel. The management screen stays
+// in its own tab and is opened from the panel's bottom action.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {
+  console.warn("Resume Pro could not enable the browser side panel.");
+  chrome.action.onClicked.addListener(() => {
+    openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."));
+  });
+});
 
 // This service worker only creates the host. It never owns a long AI request.
 let creatingHost = null;

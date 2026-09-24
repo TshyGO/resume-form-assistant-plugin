@@ -80,9 +80,10 @@ test('unknown files and forbidden subdirectories are not allowed',()=>{
 test("manifest entry points cover the service worker and content scripts", () => {
   const entries = manifestEntryPoints({
     background: { service_worker: "background.js", type: "module" },
+    side_panel: { default_path: "sidepanel.html" },
     content_scripts: [{ js: ["a.js", "content.js"], css: ["content.css"] }],
   });
-  assert.deepEqual(entries, ["background.js", "a.js", "content.js", "content.css"]);
+  assert.deepEqual(entries, ["background.js", "sidepanel.html", "a.js", "content.js", "content.css"]);
 });
 
 test("module graph follows relative imports transitively", () => {

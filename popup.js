@@ -138,7 +138,15 @@ async function bootstrap() {
 function cacheElements() {
   elements.tabButtons = Array.from(document.querySelectorAll(".tab-button"));
   elements.tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
+  elements.pageTitle = document.getElementById("page-title");
+  elements.pageDescription = document.getElementById("page-description");
   elements.templateList = document.getElementById("template-list");
+  elements.templateCount = document.getElementById("template-count");
+  elements.templatePreview = document.getElementById("template-preview");
+  elements.templatePreviewSearch = document.getElementById("template-preview-search");
+  elements.templatePreviewMeta = document.getElementById("template-preview-meta");
+  elements.templatePreviewGroups = document.getElementById("template-preview-groups");
+  elements.templatePreviewEmpty = document.getElementById("template-preview-empty");
   elements.templateFileInput = document.getElementById("template-file-input");
   elements.importTemplateButton = document.getElementById("import-template-button");
   elements.parseToggleButton = document.getElementById("parse-toggle-button");
@@ -194,6 +202,7 @@ function bindEvents() {
   elements.parseToggleButton.addEventListener("click", () => {
     const isOpen = elements.parseSection.classList.toggle("is-open");
     elements.parseToggleButton.classList.toggle("is-active", isOpen);
+    elements.parseToggleButton.setAttribute("aria-expanded", String(isOpen));
   });
 
   elements.importTemplateButton.addEventListener("click", () => {
@@ -219,6 +228,7 @@ function bindEvents() {
     hideStatus("backup");
   });
   elements.templateList.addEventListener("click", handleTemplateListClick);
+  elements.templatePreviewSearch?.addEventListener("input", filterTemplatePreview);
   elements.aiConfigForm.addEventListener("submit", handleConfigSubmit);
   elements.profileForm.addEventListener("submit", handleProfileSubmit);
   elements.profileForm.addEventListener("input", markProfileDirty);
@@ -268,8 +278,19 @@ function bindEvents() {
 function setActiveTab(tabName) {
   popupState.activeTab = tabName;
 
+  const pageCopy = {
+    templates: ["简历模板", "管理多套简历，核对解析结果，再到网申侧栏选择使用。"],
+    profile: ["我的信息", "补充网申常问、但简历里没有的资料。"],
+    ai: ["AI 配置", "设置你自己的模型服务，用于解析简历和匹配网页表单。"]
+  };
+  if (pageCopy[tabName]) {
+    if (elements.pageTitle) elements.pageTitle.textContent = pageCopy[tabName][0];
+    if (elements.pageDescription) elements.pageDescription.textContent = pageCopy[tabName][1];
+  }
+
   elements.tabButtons.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.tab === tabName);
+    button.setAttribute("aria-current", button.dataset.tab === tabName ? "page" : "false");
   });
 
   elements.tabPanels.forEach((panel) => {
@@ -287,14 +308,16 @@ async function render() {
 
 function renderTemplates(state) {
   const { templates, activeTemplateId } = state;
+  if (elements.templateCount) elements.templateCount.textContent = `${templates.length} 套`;
 
   if (!templates.length) {
     elements.templateList.innerHTML = `
       <div class="empty-state">
         <p>还没有简历模板。</p>
-        <p>点击右上角按钮导入 Excel，或用下方 AI 解析功能从简历文件一键生成。</p>
+        <p>导入 Excel / CSV，或用 AI 解析 PDF / Word / TXT 简历来创建模板。</p>
       </div>
     `;
+    renderTemplatePreview(null);
     return;
   }
 
@@ -325,6 +348,61 @@ function renderTemplates(state) {
       </article>
     `;
   }).join("");
+
+  renderTemplatePreview(templates.find((template) => template.id === activeTemplateId) || templates[0]);
+}
+
+function renderTemplatePreview(template) {
+  if (!elements.templatePreview || !elements.templatePreviewGroups) return;
+  elements.templatePreview.hidden = !template;
+  if (!template) {
+    elements.templatePreviewGroups.innerHTML = "";
+    return;
+  }
+
+  const groups = Array.isArray(template.groups) ? template.groups : [];
+  const count = countTemplateFields(template);
+  elements.templatePreviewMeta.textContent = `${template.name} · ${groups.length} 个分组 · ${count} 个字段`;
+  elements.templatePreviewGroups.innerHTML = groups.map((group, index) => {
+    const fields = Array.isArray(group.fields) ? group.fields : [];
+    return `
+      <details class="preview-group"${index === 0 ? " open" : ""}>
+        <summary><span>${escapeHtml(group.name || "未分类")} <small>${fields.length} 项</small></span><span class="preview-group__chevron" aria-hidden="true">›</span></summary>
+        <div class="preview-group__rows">
+          ${fields.map((field) => `
+            <div class="preview-row" data-preview-search="${escapeHtml(`${field.key || ""} ${field.value || ""}`.toLocaleLowerCase())}">
+              <span class="preview-row__key">${escapeHtml(field.key || "")}</span>
+              <span class="preview-row__value" title="${escapeHtml(field.value || "")}">${escapeHtml(field.value || "")}</span>
+            </div>
+          `).join("")}
+        </div>
+      </details>
+    `;
+  }).join("");
+  filterTemplatePreview();
+}
+
+function filterTemplatePreview() {
+  if (!elements.templatePreviewGroups) return;
+  const query = (elements.templatePreviewSearch?.value || "").trim().toLocaleLowerCase();
+  const groups = Array.from(elements.templatePreviewGroups.querySelectorAll(".preview-group"));
+  let visibleGroups = 0;
+
+  groups.forEach((group, index) => {
+    const groupMatches = (group.querySelector("summary")?.textContent || "").toLocaleLowerCase().includes(query);
+    let visibleRows = 0;
+    group.querySelectorAll(".preview-row").forEach((row) => {
+      const matches = !query || groupMatches || (row.dataset.previewSearch || "").includes(query);
+      row.hidden = !matches;
+      if (matches) visibleRows += 1;
+    });
+    group.hidden = Boolean(query) && visibleRows === 0;
+    if (!group.hidden) visibleGroups += 1;
+    if (query && visibleRows) group.open = true;
+    if (!query) group.open = index === 0;
+  });
+
+  if (elements.templatePreviewEmpty) elements.templatePreviewEmpty.hidden = visibleGroups !== 0;
 }
 
 function renderConfig(aiConfig) {
@@ -766,12 +844,12 @@ function renderProfile(profile) {
   const api = self.ResumeProProfile;
 
   elements.profilePreset.innerHTML = api.PROFILE_SCHEMA.map((group) => `
-    <section class="profile-group">
-      <h3 class="profile-group__title">${escapeHtml(group.name)}</h3>
+    <details class="profile-group"${group === api.PROFILE_SCHEMA[0] ? " open" : ""}>
+      <summary class="profile-group__title">${escapeHtml(group.name)} <small>${group.fields.filter((field) => profile.values[field.id]).length} / ${group.fields.length} 项已填</small></summary>
       <div class="profile-grid">
         ${group.fields.map((field) => profileInputHtml(field, profile.values[field.id] || "", `data-kind="value" data-field="${escapeHtml(field.id)}"`)).join("")}
       </div>
-    </section>
+    </details>
   `).join("");
   elements.profileFamily.innerHTML = profile.family.map(familyRowHtml).join("");
   elements.profileCustom.innerHTML = profile.custom.map(customRowHtml).join("");
@@ -1988,6 +2066,8 @@ if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     handleTemplateListClick,
     parseTemplateFile,
     popupState,
+    renderTemplates,
+    filterTemplatePreview,
     resolveTemplateName,
     StorageService,
     updateParseFileSelection,

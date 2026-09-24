@@ -225,6 +225,32 @@ test("injects highlight styles into the page document", () => {
   assert.match(styleElements[0].textContent, /\.resume-pro__field-highlight/);
 });
 
+test("native side panel field action fills the focused page input without replacing existing text", async () => {
+  const { helpers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const chip = new HTMLElement();
+  chip.dataset.chipId = "one:0:0";
+  chip.dataset.value = "张三";
+  helpers.setShadowRoot({
+    querySelector: () => null,
+    querySelectorAll: (selector) => selector === ".resume-pro__chip" ? [chip] : []
+  });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+
+  const first = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
+  assert.equal(first.ok, true);
+  assert.equal(input.value, "张三");
+
+  input.value = "已有内容";
+  const second = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
+  assert.equal(second.ok, true);
+  assert.match(second.message, /已有内容/);
+  assert.equal(input.value, "已有内容");
+
+  const missing = await helpers.handlePanelFieldAction({ chipId: "missing", mode: "fill" });
+  assert.equal(missing.ok, false);
+});
+
 test("off-screen fields scroll into view before the highlight animation starts", () => {
   const { helpers, timers, HTMLElement } = loadHighlightHelpers();
   const field = new HTMLElement();
