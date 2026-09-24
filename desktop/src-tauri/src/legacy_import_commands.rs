@@ -98,10 +98,10 @@ pub fn confirm(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &
     Ok(finished)
 }
 
-/// Reject a staged import. If templates/profile were already applied, retain those
-/// rows but report rejected so the plugin keeps its old copy and Key. Remove any
-/// partially installed desktop provider before recording rejection; the temporary
-/// desktop Key is then cleared.
+/// Reject a staged import. If templates/profile were already applied, they stay and the
+/// batch finishes as `imported` with `aiConfigDropped`, so the plugin drops its old
+/// templates and profile but keeps its old Key. Any partially installed desktop provider
+/// is removed first (a failure leaves the batch pending); the temporary Key goes last.
 pub fn reject(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &str) -> Result<LegacyImportStatus, ErrorCode> {
     let current = store.legacy_import_status(import_id).map_err(code_of)?;
     if current.state == "awaiting_confirmation" && store.list_pending_legacy_imports().map_err(code_of)?
@@ -258,7 +258,7 @@ mod tests {
     const OTHER: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
     #[test]
-    fn an_applied_import_whose_ai_step_cannot_finish_is_rejected_without_dropping_the_old_key() {
+    fn an_applied_import_whose_ai_step_cannot_finish_is_finished_without_its_ai_config() {
         let (_dir, store) = store();
         staged(&store);
         let services = FakeServices::default();
@@ -267,7 +267,9 @@ mod tests {
         assert_eq!(confirm(&store, &services, IMPORT).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
 
-        assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "rejected");
+        let finished = reject(&store, &services, IMPORT).unwrap();
+        assert_eq!(finished.state, "imported");
+        assert!(finished.ai_config_dropped);
         assert!(services.keys.lock().unwrap().is_empty());
         assert!(services.providers.lock().unwrap().is_empty());
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
@@ -294,7 +296,9 @@ mod tests {
         assert_eq!(services.keys.lock().unwrap().get(IMPORT).map(String::as_str), Some("sk-synthetic"));
 
         services.fail_discard.store(false, Ordering::Relaxed);
-        assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "rejected");
+        let finished = reject(&store, &services, IMPORT).unwrap();
+        assert_eq!(finished.state, "imported");
+        assert!(finished.ai_config_dropped);
         assert!(services.providers.lock().unwrap().is_empty());
         assert!(services.keys.lock().unwrap().is_empty());
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);

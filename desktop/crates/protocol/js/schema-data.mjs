@@ -1050,6 +1050,9 @@ export const SCHEMA_DATA = {
           "type": "integer",
           "minimum": 1,
           "maximum": 63
+        },
+        "aiConfigDropped": {
+          "type": "boolean"
         }
       }
     },

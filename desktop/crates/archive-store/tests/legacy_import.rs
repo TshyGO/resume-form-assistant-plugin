@@ -247,7 +247,7 @@ fn part_check_reports_whether_the_part_is_new_and_the_import_state() {
 }
 
 #[test]
-fn rejecting_an_applied_import_keeps_the_plugin_copy_and_frees_the_slot() {
+fn rejecting_an_applied_import_finishes_it_without_the_ai_config_and_frees_the_slot() {
     let (_dir, cfg, store) = open();
     store.receive_legacy_manifest(IMPORT, manifest_of(&["template", "aiConfig"])).unwrap();
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
@@ -259,8 +259,12 @@ fn rejecting_an_applied_import_keeps_the_plugin_copy_and_frees_the_slot() {
     assert_eq!(pending.len(), 1);
     assert!(pending[0].applied);
 
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "rejected");
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "rejected");
+    for _ in 0..2 {
+        let finished = store.reject_legacy_import(IMPORT).unwrap();
+        assert_eq!(finished.state, "imported");
+        assert!(finished.ai_config_dropped, "the plugin must keep its old Key");
+    }
+    assert!(store.legacy_import_status(IMPORT).unwrap().ai_config_dropped);
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     let db = rusqlite::Connection::open(cfg.db_path()).unwrap();
     let bodies: Vec<String> = db.prepare("SELECT body_json FROM legacy_import_parts WHERE import_id = ?1")
@@ -276,7 +280,9 @@ fn rejecting_an_unapplied_import_still_discards_it() {
     let (_dir, _cfg, store) = open();
     store.receive_legacy_manifest(IMPORT, manifest_of(&["template"])).unwrap();
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
-    assert_eq!(store.reject_legacy_import(IMPORT).unwrap().state, "rejected");
+    let rejected = store.reject_legacy_import(IMPORT).unwrap();
+    assert_eq!(rejected.state, "rejected");
+    assert!(!rejected.ai_config_dropped);
     assert!(store.resume_overview().unwrap().templates.is_empty());
 }
 

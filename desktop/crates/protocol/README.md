@@ -55,7 +55,7 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 
-若桌面已应用模板与档案、但 AI 配置无法完成，用户在桌面拒绝这一批后状态仍为 `rejected`：已应用的桌面内容不回滚；桌面先清理可能已写入的永久 AI 服务商和 Key，清理失败则保持待确认状态供重试。插件必须保留旧副本和旧 Key，不能当作 `imported` 清理。待确认列表中的 `applied` 标记供确认界面说明这一部分完成的状态。
+若桌面已应用模板与档案、但 AI 配置无法完成，用户在桌面拒绝这一批后状态为 `imported`，响应另带 `aiConfigDropped: true`（完整导入时不带这个字段）。已应用的模板与档案不回滚；桌面先清理可能已写入的正式 AI 服务商和 Key，清理失败则保持待确认状态供重试。插件看到 `imported` 清除旧模板与「我的信息」，避免之后重复导入；带 `aiConfigDropped` 时**保留旧 Key**，并提示用户到桌面补填 AI 配置。待确认列表中的 `applied` 标记供确认界面说明这一部分完成的状态。
 
 `resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
 

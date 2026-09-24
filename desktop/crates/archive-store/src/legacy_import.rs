@@ -13,10 +13,16 @@ use crate::timeutil::now_utc;
 use crate::tx::StoreTx;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LegacyImportStatus {
     pub state: String,
     pub received: i64,
     pub total: i64,
+    /// `imported`, but the AI config was not: the user rejected the AI step after the
+    /// templates and profile were applied. The plugin drops its old templates and profile
+    /// but keeps its old Key. Omitted from the wire when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ai_config_dropped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -187,10 +193,13 @@ impl ArchiveStore {
 impl StoreTx<'_> {
     pub fn legacy_import_status(&self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         self.conn().query_row(
-            "SELECT i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), i.total \
+            "SELECT i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), i.total, \
+             (i.state = 'imported' AND i.ai_config_dropped = 1) \
              FROM legacy_imports i WHERE i.import_id = ?1",
             [import_id],
-            |row| Ok(LegacyImportStatus { state: row.get(0)?, received: row.get(1)?, total: row.get(2)? }),
+            |row| Ok(LegacyImportStatus {
+                state: row.get(0)?, received: row.get(1)?, total: row.get(2)?, ai_config_dropped: row.get(3)?,
+            }),
         ).optional()?.ok_or_else(|| StoreError::NotFound("legacy import not found".into()))
     }
 
@@ -423,9 +432,12 @@ impl StoreTx<'_> {
         self.legacy_import_status(import_id)
     }
 
-    /// Discard a staged import. If templates/profile have already committed, keep those
-    /// rows but report rejected: the plugin must retain its old copy and Key. The
-    /// caller removes any partially installed desktop provider before this transition.
+    /// Discard a staged import. An import whose templates and profile were already applied
+    /// cannot be taken back; rejecting it finishes it as `imported` with `ai_config_dropped`,
+    /// so the plugin drops its old templates and profile (no duplicate on a later import)
+    /// but keeps its old Key, and the single import slot is freed. The caller removes any
+    /// partially installed desktop provider before this transition and deletes the
+    /// temporary key after it.
     pub fn reject_legacy_import(&mut self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         let (state, applied_at, dropped): (String, Option<String>, bool) = self.conn().query_row(
             "SELECT state, applied_at, ai_config_dropped FROM legacy_imports WHERE import_id = ?1",
@@ -434,7 +446,7 @@ impl StoreTx<'_> {
         if state == "rejected" || (state == "imported" && dropped) { return self.legacy_import_status(import_id); }
         if state == "awaiting_confirmation" && applied_at.is_some() {
             self.conn().execute(
-                "UPDATE legacy_imports SET state = 'rejected', ai_config_dropped = 1, updated_at = ?2 WHERE import_id = ?1",
+                "UPDATE legacy_imports SET state = 'imported', ai_config_dropped = 1, updated_at = ?2 WHERE import_id = ?1",
                 params![import_id, now_utc()],
             )?;
             self.conn().execute("UPDATE legacy_import_parts SET body_json = '{}' WHERE import_id = ?1", [import_id])?;
