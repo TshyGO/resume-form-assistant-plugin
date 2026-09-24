@@ -24,6 +24,7 @@
   let currentTabId = null;
   let currentStore = null;
   let toastTimer = null;
+  let statusPolling = false;
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -35,7 +36,7 @@
   }
 
   async function sendToPage(message, tabId = null) {
-    const tab = await activeTab();
+    const tab = tabId ? null : await activeTab();
     const id = tabId || tab?.id;
     if (!id) return { ok: false, error: "请先打开网申网页。" };
     if (message.type !== "RESUME_PANEL_STATUS" && tab?.id !== currentTabId) {
@@ -55,8 +56,30 @@
     toastTimer = setTimeout(() => { elements.toast.hidden = true; }, 3000);
   }
 
+  async function copyFieldValue(value) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      const helper = document.createElement("textarea");
+      helper.value = value;
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      document.body.appendChild(helper);
+      helper.select();
+      try {
+        return document.execCommand("copy");
+      } catch {
+        return false;
+      } finally {
+        helper.remove();
+      }
+    }
+  }
+
   function selectedTemplate() {
-    return currentStore?.templates?.find((template) => template.id === currentStore.activeTemplateId) || null;
+    const templates = currentStore?.templates || [];
+    return templates.find((template) => template.id === currentStore.activeTemplateId) || templates[0] || null;
   }
 
   function groupedFields() {
@@ -89,7 +112,7 @@
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
-      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === currentStore.activeTemplateId ? " selected" : ""}>${escapeHtml(template.name)} · ${template.groups?.reduce((n, group) => n + (group.fields?.length || 0), 0) || 0} 个字段</option>`).join("")
+      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)} · ${template.groups?.reduce((n, group) => n + (group.fields?.length || 0), 0) || 0} 个字段</option>`).join("")
       : '<option value="">暂无模板</option>';
     elements.templateSelect.disabled = !templates.length;
     elements.configState.textContent = currentStore?.aiConfig?.apiKey
@@ -141,47 +164,53 @@
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
     const configured = Boolean(currentStore?.aiConfig?.apiKey);
     elements.fillButton.disabled = !hasData || !configured || currentTabId === null || Boolean(status?.busy);
-    elements.fillButton.textContent = status?.busy ? status.phase : "一键 AI 填写";
+    elements.fillButton.textContent = status?.busy ? (status.phase || "正在填写…") : "一键 AI 填写";
     elements.cancelButton.hidden = !status?.canCancel;
   }
 
   async function pollStatus() {
-    const tab = await activeTab();
-    const nextTabId = tab?.id || null;
-    if (nextTabId !== currentTabId) {
-      elements.fillResult.hidden = true;
-      elements.fillResult.textContent = "";
-    }
-    currentTabId = nextTabId;
-    const response = await sendToPage({ type: "RESUME_PANEL_STATUS" }, currentTabId);
-    const connected = Boolean(response?.ready);
-    elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
-    elements.pageState.classList.toggle("is-unavailable", !connected);
-    if (!connected) currentTabId = null;
-    updateFillAvailability(connected ? response : null);
-    if (connected && response.status) {
-      elements.fillResult.hidden = false;
-      elements.fillResult.textContent = response.status;
-      elements.fillResult.classList.toggle("is-error", response.statusKind === "error");
-    }
-    if (connected) {
-      elements.profileOffer.hidden = !response.profileOffer;
-      elements.profileOfferText.textContent = response.profileOffer || "";
-      if (response.fillOffer && elements.fillOffer.hidden) elements.fillOfferSnapshot.checked = true;
-      elements.fillOffer.hidden = !response.fillOffer;
-      elements.fillOfferText.textContent = response.fillOffer || "";
-      elements.fillOfferSnapshot.disabled = !response.snapshotAvailable;
-      elements.desktopStatus.hidden = !response.desktopStatus;
-      elements.desktopStatus.textContent = response.desktopStatus || "";
-      elements.diagnostics.hidden = !response.diagnostics;
-      if (elements.diagnosticsText.value !== (response.diagnostics || "")) {
-        elements.diagnosticsText.value = response.diagnostics || "";
+    if (statusPolling) return;
+    statusPolling = true;
+    try {
+      const tab = await activeTab();
+      const nextTabId = tab?.id || null;
+      if (nextTabId !== currentTabId) {
+        elements.fillResult.hidden = true;
+        elements.fillResult.textContent = "";
       }
-    } else {
-      elements.profileOffer.hidden = true;
-      elements.fillOffer.hidden = true;
-      elements.desktopStatus.hidden = true;
-      elements.diagnostics.hidden = true;
+      currentTabId = nextTabId;
+      const response = await sendToPage({ type: "RESUME_PANEL_STATUS" }, currentTabId);
+      const connected = Boolean(response?.ready);
+      elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
+      elements.pageState.classList.toggle("is-unavailable", !connected);
+      if (!connected) currentTabId = null;
+      updateFillAvailability(connected ? response : null);
+      if (connected && response.status) {
+        elements.fillResult.hidden = false;
+        elements.fillResult.textContent = response.status;
+        elements.fillResult.classList.toggle("is-error", response.statusKind === "error");
+      }
+      if (connected) {
+        elements.profileOffer.hidden = !response.profileOffer;
+        elements.profileOfferText.textContent = response.profileOffer || "";
+        if (response.fillOffer && elements.fillOffer.hidden) elements.fillOfferSnapshot.checked = true;
+        elements.fillOffer.hidden = !response.fillOffer;
+        elements.fillOfferText.textContent = response.fillOffer || "";
+        elements.fillOfferSnapshot.disabled = !response.snapshotAvailable;
+        elements.desktopStatus.hidden = !response.desktopStatus;
+        elements.desktopStatus.textContent = response.desktopStatus || "";
+        elements.diagnostics.hidden = !response.diagnostics;
+        if (elements.diagnosticsText.value !== (response.diagnostics || "")) {
+          elements.diagnosticsText.value = response.diagnostics || "";
+        }
+      } else {
+        elements.profileOffer.hidden = true;
+        elements.fillOffer.hidden = true;
+        elements.desktopStatus.hidden = true;
+        elements.diagnostics.hidden = true;
+      }
+    } finally {
+      statusPolling = false;
     }
   }
 
@@ -228,7 +257,18 @@
   async function fieldAction(event, mode) {
     const button = event.target.closest("[data-chip-id]");
     if (!button) return;
+    const field = visibleFields(groupedFields()).find((item) => item.chipId === button.dataset.chipId);
+    if (!field) { toast("字段已变化，请刷新侧栏后重试。"); return; }
+    if (mode === "copy") {
+      toast(await copyFieldValue(field.value) ? "已复制字段内容。" : "复制失败，请在管理面板核对字段内容。");
+      return;
+    }
     const result = await sendToPage({ type: "RESUME_PANEL_FIELD", chipId: button.dataset.chipId, mode });
+    if (result?.needsCopy) {
+      const copied = await copyFieldValue(field.value);
+      toast(copied ? `${result.message}字段内容已复制。` : "复制失败，请在管理面板核对字段内容。");
+      return;
+    }
     toast(result?.message || result?.error || "字段操作未完成。");
   }
   elements.quickFields.addEventListener("click", (event) => fieldAction(event, "fill"));
@@ -248,5 +288,5 @@
   chrome.tabs.onActivated.addListener(() => { pollStatus().catch(() => {}); });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.pageState.textContent = "无法读取插件数据，请重新加载扩展。"; });
-  setInterval(() => { pollStatus().catch(() => {}); }, 1000);
+  setInterval(() => { pollStatus().catch(() => {}); }, 1500);
 })();

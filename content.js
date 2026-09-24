@@ -143,7 +143,7 @@
         save: "#resume-pro-save-job",
         submit: "#resume-pro-confirm-submit"
       };
-      const selector = Object.hasOwn(buttons, message.action) ? buttons[message.action] : null;
+      const selector = Object.prototype.hasOwnProperty.call(buttons, message.action) ? buttons[message.action] : null;
       const button = selector ? shadowRoot?.querySelector(selector) : null;
       const panel = shadowRoot?.querySelector(".resume-pro");
       if (!button || !panel) sendResponse({ ok: false, error: "当前网页无法打开该工具。" });
@@ -212,6 +212,12 @@
     injectFieldHighlightStyles();
     createSidebar(sheet);
     renderSidebar();
+    // A browser without the native side panel still needs a usable fill UI.
+    chrome.runtime.sendMessage({ type: "SIDE_PANEL_CAPABILITY" })
+      .then((result) => {
+        if (!result?.supported) shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open");
+      })
+      .catch(() => shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open"));
     bindStorageSync();
     bindFocusTracking();
     window.addEventListener("resize", constrainSidebarToViewport);
@@ -531,6 +537,8 @@
     if (message.mode !== "fill" && message.mode !== "copy") {
       return { ok: false, error: "未知的字段操作。" };
     }
+    // The panel builds these IDs from template/group/field indices (or profile
+    // group/key); renderSidebar uses the same contract for its hidden chips.
     const chipId = String(message.chipId || "");
     const button = Array.from(shadowRoot?.querySelectorAll(".resume-pro__chip") || [])
       .find((item) => item.dataset.chipId === chipId);
@@ -539,33 +547,33 @@
     if (!value) return { ok: false, error: "这个字段没有内容。" };
 
     if (message.mode === "copy") {
-      const copied = await copyText(value);
-      return copied ? { ok: true, message: "已复制字段内容。" } : { ok: false, error: "复制失败，请在管理面板核对字段内容。" };
+      return { ok: false, needsCopy: true, message: "请在侧栏复制字段内容。" };
     }
 
     const target = getLastFocusedFillTarget();
     if (!target) {
-      const copied = await copyText(value);
-      return copied ? { ok: true, message: "没有选中网页输入框，字段内容已复制。" } : { ok: false, error: "没有选中网页输入框，复制也未成功。" };
+      return { ok: false, needsCopy: true, message: "没有选中网页输入框；字段内容可复制后粘贴。" };
     }
 
     if (isComposableTextTarget(target)) {
       if (getComposableTargetValue(target)) {
-        const copied = await copyText(value);
-        return copied ? { ok: true, message: "网页输入框已有内容，字段已复制；请先核对再粘贴。" } : { ok: false, error: "网页输入框已有内容，复制未成功；请先核对再手动处理。" };
+        return { ok: false, needsCopy: true, message: "网页输入框已有内容；请先核对，再粘贴复制的字段。" };
       }
-      const copied = await copyText(value);
       const filled = await applyChipValue(target, value, "add", captureTextSelection(target), chipId);
-      return filled ? { ok: true, message: "已填入网页输入框。" } : copied ? { ok: true, message: "网页控件未接受写入，字段内容已复制。" } : { ok: false, error: "网页控件未接受写入，复制也未成功。" };
+      if (filled) return { ok: true, message: "已填入网页输入框。" };
+      return { ok: false, needsCopy: true, message: "网页控件未接受写入；请手动粘贴复制的字段。" };
     }
 
-    const copied = await copyText(value);
+    if (hasExistingValue({ kind: "element", element: target })) {
+      return { ok: false, needsCopy: true, message: "网页控件已有内容；请先核对，再粘贴复制的字段。" };
+    }
     const filled = await Promise.resolve(setElementValue(target, value));
     if (filled) {
       target.focus?.();
       state.lastFocusedField = target;
+      return { ok: true, message: "已填入网页输入框。" };
     }
-    return filled ? { ok: true, message: "已填入网页输入框。" } : copied ? { ok: true, message: "网页控件未接受写入，字段内容已复制。" } : { ok: false, error: "网页控件未接受写入，复制也未成功。" };
+    return { ok: false, needsCopy: true, message: "网页控件未接受写入；请手动粘贴复制的字段。" };
   }
 
   async function handleChipAction(mode) {

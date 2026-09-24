@@ -22,13 +22,13 @@
         <p class="page-state" id="page-state">正在连接当前网页…</p>
       </header>
 
-      <nav class="dock-tabs" aria-label="侧边栏视图">
-        <button type="button" data-tab="fill" aria-selected="true">填写</button>
-        <button type="button" data-tab="fields" aria-selected="false">简历字段</button>
+      <nav class="dock-tabs" role="tablist" aria-label="侧边栏视图">
+        <button type="button" role="tab" data-tab="fill" aria-selected="true" aria-controls="fill-view">填写</button>
+        <button type="button" role="tab" data-tab="fields" aria-selected="false" aria-controls="fields-view">简历字段</button>
       </nav>
 
       <main class="dock-main">
-        <section class="dock-view" data-view="fill">
+        <section class="dock-view" id="fill-view" role="tabpanel" data-view="fill">
           <label for="template-select" class="dock-label">当前模板</label>
           <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
           <p class="dock-note" id="config-state"></p>
@@ -56,7 +56,7 @@
           <p class="dock-help">手动补填：先点网页输入框，再点这里的字段；无法写入时可复制。</p>
         </section>
 
-        <section class="dock-view" data-view="fields" hidden>
+        <section class="dock-view" id="fields-view" role="tabpanel" data-view="fields" hidden>
           <h2>简历字段</h2>
           <p class="field-meta" id="field-meta"></p>
           <label class="sr-only" for="field-search">搜索简历字段</label>

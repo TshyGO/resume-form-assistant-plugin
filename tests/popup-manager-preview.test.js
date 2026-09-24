@@ -28,12 +28,12 @@ test("manager preview search shows only matching rows and groups", () => {
   const major = { dataset: { previewSearch: "专业 材料" }, hidden: false };
   const phone = { dataset: { previewSearch: "手机号 138" }, hidden: false };
   const education = {
-    hidden: false, open: false,
+    dataset: { previewGroup: "教育背景" }, hidden: false, open: false,
     querySelector: () => ({ textContent: "教育背景 2 项" }),
     querySelectorAll: () => [school, major]
   };
   const basic = {
-    hidden: false, open: false,
+    dataset: { previewGroup: "基本信息" }, hidden: false, open: false,
     querySelector: () => ({ textContent: "基本信息 1 项" }),
     querySelectorAll: () => [phone]
   };
@@ -51,4 +51,18 @@ test("manager preview search shows only matching rows and groups", () => {
   popup.element("template-preview-search").value = "不存在";
   popup.api.filterTemplatePreview();
   assert.equal(popup.element("template-preview-empty").hidden, false);
+
+  popup.element("template-preview-search").value = "项";
+  popup.api.filterTemplatePreview();
+  assert.equal(popup.element("template-preview-empty").hidden, false, "count labels are not searchable group names");
+});
+
+test("pending custom profile fields expand when opened from the side panel", () => {
+  const popup = loadPopup();
+  const group = { open: false };
+  popup.element("profile-custom").closest = () => group;
+  popup.api.profile.renderProfile({
+    values: {}, family: [], custom: [{ key: "补充问题", value: "" }]
+  });
+  assert.equal(group.open, true);
 });

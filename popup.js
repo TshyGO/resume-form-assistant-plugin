@@ -366,7 +366,7 @@ function renderTemplatePreview(template) {
   elements.templatePreviewGroups.innerHTML = groups.map((group, index) => {
     const fields = Array.isArray(group.fields) ? group.fields : [];
     return `
-      <details class="preview-group"${index === 0 ? " open" : ""}>
+      <details class="preview-group" data-preview-group="${escapeHtml(String(group.name || "未分类").toLocaleLowerCase())}"${index === 0 ? " open" : ""}>
         <summary><span>${escapeHtml(group.name || "未分类")} <small>${fields.length} 项</small></span><span class="preview-group__chevron" aria-hidden="true">›</span></summary>
         <div class="preview-group__rows">
           ${fields.map((field) => `
@@ -389,7 +389,7 @@ function filterTemplatePreview() {
   let visibleGroups = 0;
 
   groups.forEach((group, index) => {
-    const groupMatches = (group.querySelector("summary")?.textContent || "").toLocaleLowerCase().includes(query);
+    const groupMatches = (group.dataset.previewGroup || "").includes(query);
     let visibleRows = 0;
     group.querySelectorAll(".preview-row").forEach((row) => {
       const matches = !query || groupMatches || (row.dataset.previewSearch || "").includes(query);
@@ -853,6 +853,10 @@ function renderProfile(profile) {
   `).join("");
   elements.profileFamily.innerHTML = profile.family.map(familyRowHtml).join("");
   elements.profileCustom.innerHTML = profile.custom.map(customRowHtml).join("");
+  const customGroup = elements.profileCustom.closest("details");
+  if (customGroup && profile.custom.some((item) => item.key && !item.value)) {
+    customGroup.open = true;
+  }
   popupState.profileDirty = false;
 }
 

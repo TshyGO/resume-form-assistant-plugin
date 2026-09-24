@@ -29,6 +29,21 @@ test('service worker only creates one concurrent offscreen worker host and never
   assert.doesNotMatch(source('background.js'), /\bfetch\s*\(/);
 });
 
+test('a browser without the sidePanel API still opens the independent manager tab', async () => {
+  let actionClick;
+  let created;
+  const context = vm.createContext({ chrome: {
+    action: { onClicked: { addListener(fn) { actionClick = fn; } } },
+    runtime: { getURL: name => `chrome-extension://test/${name}`, onMessage: { addListener() {} } },
+    tabs: { query: async () => [], create: async options => { created = options.url; return { id: 1 }; } }
+  } });
+  vm.runInContext(asClassicScript(source('background.js')), context);
+  assert.equal(typeof actionClick, 'function');
+  actionClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(created, 'chrome-extension://test/popup.html');
+});
+
 test('offscreen host forwards sender identity and correlated replies to its dedicated worker', async () => {
   let listener, worker;
   class MockWorker { constructor(url) { assert.equal(url, 'ai-worker.js'); worker = this; } postMessage(data) { this.last = data; } }
