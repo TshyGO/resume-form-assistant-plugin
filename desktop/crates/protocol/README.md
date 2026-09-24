@@ -30,7 +30,7 @@ node --test tests/*.test.js
 | --- | --- | --- |
 | Size | 完整 UTF-8 JSON 信封 ≤ 65536（不含 NM 4 字节前缀）。原始块大小 ≠ 信封大小 | D05 |
 | Structure | 字段、枚举、UUID、SHA-256、白名单 `messageType`、分片上下界、对账批次 ≤ 32 | D05 schema + 校验器 |
-| Identity presence | `health`/`handshake` **禁止**信封 `archiveId`/`restoreEpoch`；其余 **必须**有。禁止用 current 回填 | D05 |
+| Identity presence | `health`/`handshake`/`ai.complete`/`ui.open` **禁止**信封 `archiveId`/`restoreEpoch`；其余 **必须**有。禁止用 current 回填 | D05 |
 | Secrets | 拒绝 API Key/Cookie/Bearer 等键与值；拒绝未脱敏 URL（userinfo / token 查询参数） | D05 |
 | Business identity | 信封是否等于 **当前** `current.json`；`sourceRestoreEpoch` 是否等于当前 epoch | **D03/D06**（`check_current_identity`） |
 | Idempotency | `(clientInstanceId, messageId, sourceRestoreEpoch)` + 摘要 → 重放 / conflict / previously_purged | **D03** 回执表（`evaluate_write` 是契约算法） |
@@ -39,6 +39,43 @@ node --test tests/*.test.js
 | Reconcile | 只读历史回执；`applied/purged/not_found/conflict/unverifiable`；不授予重放 | **D03** 查回执；`reconcile()` 是契约算法 |
 
 SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`。
+
+## v2（#130）
+
+`rules.json` 的支持范围是 v1–v2。原有八类消息在 v1、v2 信封里都可用；新增的五类消息只接受 `protocolVersion: 2`。旧插件的 `link/envelope.mjs` 仍发送 v1，桌面响应版本回显和新消息处理在 PR 3b 接入。
+
+本 crate（D05）的校验器范围本身就是 1..=2（`MAX_PROTOCOL_VERSION`），供 PR 3b/4 直接使用；但在 PR 3b 把新增五类消息接线进桌面业务逻辑之前，`desktop/src-tauri` 不能宣称自己已经在服务 v2。`desktop/src-tauri/src/ipc_server.rs` 的 `SERVED_MAX_PROTOCOL_VERSION`（当前 `1`）是唯一开关：握手响应的 `maxProtocolVersion` 用它覆盖协议库算出的值，`ipc_server::answer` 与 `nm::response_for_with`（host 侧不经应用进程就直接回答的 `health` 短路径）在分发前都会先比较请求的 `protocolVersion`，超过这个常量就答 `protocol_incompatible`，而不是把 v2 信封转发给还没有 v2 分支的业务逻辑（那样只会答出无法诊断的 `unavailable`）。PR 3b 接线完新消息后把这一个常量改成 `2`（plan Task 6），不需要再动校验器本身的范围。
+
+| 消息 | 请求与响应约定 |
+| --- | --- |
+| `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
+| `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。不走 `message_receipts`。 |
+| `ai.complete` | 不带档案身份；插件传提示词，桌面用当前服务商和凭据发出。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
+| `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
+| `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
+
+`resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
+
+`ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
+
+`ai.complete` 失败 `reason` 枚举含 `credential_unavailable`：凭据存放在系统密钥链，读取或写入失败与「未配置」是两件不同的事，值得插件区分提示。**PR 3b** 接线桌面业务逻辑时按下表映射（本 PR 只加枚举值与一条响应向量，不接线）：
+
+| 桌面内部错误 | `ai.complete` `reason` |
+| --- | --- |
+| `AI_NOT_CONFIGURED` | `not_configured` |
+| `CREDENTIAL_STORE_UNAVAILABLE` | `credential_unavailable` |
+| `AI_SETTINGS_WRITE_FAILED`（设置写入/准备失败） | `credential_unavailable` |
+| `AI_OUTPUT_TOO_LARGE` | `response_too_large` |
+| `AI_HTTP_3xx`（连同 `httpStatus`） | `http` |
+
+Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
+
+`legacy.import` 清单中每片的 `sha256` 是**该片 `body` 本身**的摘要，不含 `kind`、`index` 或信封字段。算法与现有 `payloadSha256` 一致：对象键递归按字典序排列，序列化为无空白的 JSON，以 UTF-8 编码后计算 SHA-256，小写十六进制输出。`fixtures/requests/legacy-import-ok.json` 与 `legacy-import-template-ok.json` 固定了一组含中文内容的真实摘要，Rust/JS 均据此验算。
+
+Secrets 扫描对对象键名采用子串匹配；含 `token`、`secret`、`otp` 等片段的键名即使值不含凭据也会被拒绝。这与 Rust 校验器既有口径相同，PR 3b 处理桌面数据时需考虑这一边界。
+模板字段与档案自定义字段的 `{key, value}` 中，`key` 的字符串内容按**桌面存储层同一规则**扫描（`archive-store::resume_secrets::is_secret_label`，与插件 `profile-fields.js` 的 `SECRET_LABEL` 同一口径：`密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret`，大小写不敏感），而不是上面对象键名用的完整禁用词表——两张表不同：既没有裸 `otp`/`cookie`/`authorization`/`apikey`，也没有 `secret`/`token` 之外的英文词，但含中文敏感词。所以 "Work Authorization"「Carbon Footprint 项目」（含 "otp"）「Hotpot 爱好」「Cookie 研究方向」这类字段名会被接受，"网银密码""GitHub Token" 会被拒绝；"密码学课程" 虽然是无害的课程名，但因为含子串「密码」，存储层 `is_secret_label` 一样会拒绝它，协议层与其保持一致。存储层能接受的字段名，协议层必须放行；存储层会剥离的，协议层也必须拒绝。真正的 JSON 对象键名仍按上面的完整禁用词表子串匹配，未变。
+
+字段级 `maxLength` 不保证整条信封能放进 65536 字节；请求和响应仍以序列化后的完整 UTF-8 字节数为准，超限不截断。PR 4 的插件需在发送 `ai.complete` 前量字节数；PR 3b 的桌面需在返回 `resume.read` 或 AI 正文前量响应信封。`legacy.import` 的 `body` 形状由 Rust/JS 运行时根据 `kind` 选择本 schema 的 `$defs` 校验；只检查顶层 JSON Schema 不等于完成协议校验。
 
 ## D06 最小用法（Rust host）
 
@@ -105,4 +142,6 @@ validateResponseForRequest(response, req);
 
 `payloadSha256` 是去掉该字段后、对象键排序的 compact UTF-8 JSON 的 SHA-256。`snapshot.chunk` 回执摘要是不可变块身份（snapshot/index/application/count/length/hashes）的同一规范化摘要，不是单独的 `chunkSha256`。合法 fixture 必须使用真实匹配的字节、长度和摘要。
 
-`sourceUrl` / `urlRedacted` 等 URL 字段默认拒绝 userinfo 与 `access_token`/`code`/`key` 等参数（含百分号编码名）。校验器不改写 payload；调用方必须先脱敏再计算摘要。`rules.json` 的 `urlAllowlist` 默认为空。
+`sourceUrl` / `urlRedacted` 等 URL 字段默认拒绝 userinfo 与 `access_token`/`code`/`key` 等参数（含百分号编码名），且必须是 `https`。校验器不改写 payload；调用方必须先脱敏再计算摘要。`rules.json` 的 `urlAllowlist` 默认为空。
+
+`aiConfig.apiUrl`（`legacy.import` kind `aiConfig` 的 `body.apiUrl`，仅此一个精确路径）不走上面这条通用 URL 规则：插件与桌面都允许局域网/本机代理（比如 Ollama）没有 TLS，所以它自己的检查接受 `http` 或 `https` 两种 scheme，但同样拒绝 userinfo 与凭据类查询参数（复用同一套 `SECRET_QUERY_KEYS` 逻辑）。scheme 既不是 `http` 也不是 `https`（比如 `ftp://`）时报 `invalid_payload`，因为这是负载结构问题，不是凭据泄漏；userinfo 或凭据查询参数仍报 `secret_forbidden`。这个例外按**路径**开，不是按字段名：`apiUrl`/`api_url` 键只有恰好落在 `body.apiUrl` 时才用这条 http-or-https 规则；同一个字段名出现在别处（`resume.update` 的 `profile.values.apiUrl`、模板字段的值等）仍然走通用规则，https-only，和这个例外加入之前完全一样。

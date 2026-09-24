@@ -1,0 +1,32 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/legacy-import.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "received",
+    "total"
+  ],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "receiving",
+        "awaiting_confirmation",
+        "imported",
+        "rejected",
+        "expired"
+      ]
+    },
+    "received": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 63
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 63
+    }
+  }
+}

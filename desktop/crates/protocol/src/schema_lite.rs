@@ -20,6 +20,11 @@ pub fn payload_schema(message_type: &str) -> Option<Value> {
         "snapshot.chunk" => include_str!("../schemas/payloads/snapshot-chunk.json"),
         "submit.confirm" => include_str!("../schemas/payloads/submit-confirm.json"),
         "outbox.reconcile" => include_str!("../schemas/payloads/outbox-reconcile.json"),
+        "resume.read" => include_str!("../schemas/payloads/resume-read.json"),
+        "resume.update" => include_str!("../schemas/payloads/resume-update.json"),
+        "ai.complete" => include_str!("../schemas/payloads/ai-complete.json"),
+        "ui.open" => include_str!("../schemas/payloads/ui-open.json"),
+        "legacy.import" => include_str!("../schemas/payloads/legacy-import.json"),
         _ => return None,
     };
     Some(serde_json::from_str(raw).expect("payload schema"))
@@ -33,6 +38,11 @@ pub fn response_payload_schema(message_type: &str) -> Option<Value> {
         "job.save" | "fill.submit" | "submit.confirm" => include_str!("../schemas/responses/write.json"),
         "snapshot.chunk" => include_str!("../schemas/responses/snapshot-chunk.json"),
         "outbox.reconcile" => include_str!("../schemas/responses/outbox-reconcile.json"),
+        "resume.read" => include_str!("../schemas/responses/resume-read.json"),
+        "resume.update" => include_str!("../schemas/responses/resume-update.json"),
+        "ai.complete" => include_str!("../schemas/responses/ai-complete.json"),
+        "ui.open" => include_str!("../schemas/responses/ui-open.json"),
+        "legacy.import" => include_str!("../schemas/responses/legacy-import.json"),
         _ => return None,
     };
     Some(serde_json::from_str(raw).expect("response payload schema"))
@@ -44,7 +54,20 @@ pub fn validate_schema(instance: &Value, schema: &Value) -> Result<(), ProtocolE
 
 fn apply(instance: &Value, schema: &Value) -> Result<(), ProtocolError> {
     let schema_obj = schema.as_object().ok_or_else(|| invalid("schema must be an object"))?;
-    if let Some(ty) = schema_obj.get("type").and_then(Value::as_str) {
+    let declared_type = schema_obj.get("type");
+    if instance.is_null()
+        && declared_type
+            .and_then(Value::as_array)
+            .is_some_and(|types| types.iter().any(|ty| ty == "null"))
+    {
+        return Ok(());
+    }
+    let single_type = declared_type.and_then(Value::as_str).or_else(|| {
+        declared_type.and_then(Value::as_array).and_then(|types| {
+            types.iter().filter_map(Value::as_str).find(|ty| *ty != "null")
+        })
+    });
+    if let Some(ty) = single_type {
         match ty {
             "object" => {
                 let obj = instance.as_object().ok_or_else(|| invalid("value must be an object"))?;
@@ -75,6 +98,13 @@ fn apply(instance: &Value, schema: &Value) -> Result<(), ProtocolError> {
                     for (key, sub) in props {
                         if let Some(value) = obj.get(key) {
                             apply(value, sub)?;
+                        }
+                    }
+                }
+                if let Some(additional) = schema_obj.get("additionalProperties").filter(|v| v.is_object()) {
+                    for (key, value) in obj {
+                        if !schema_obj.get("properties").and_then(Value::as_object).is_some_and(|props| props.contains_key(key)) {
+                            apply(value, additional)?;
                         }
                     }
                 }
@@ -135,6 +165,11 @@ fn apply(instance: &Value, schema: &Value) -> Result<(), ProtocolError> {
             "boolean" => {
                 if !instance.is_boolean() {
                     return Err(invalid("value must be a boolean"));
+                }
+            }
+            "null" => {
+                if !instance.is_null() {
+                    return Err(invalid("value must be null"));
                 }
             }
             other => return Err(invalid(&format!("unsupported schema type {other}"))),

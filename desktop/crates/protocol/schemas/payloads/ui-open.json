@@ -1,0 +1,18 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/ui-open.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "view"
+  ],
+  "properties": {
+    "view": {
+      "type": "string",
+      "enum": [
+        "resume",
+        "settings-ai",
+        "home"
+      ]
+    }
+  }
+}

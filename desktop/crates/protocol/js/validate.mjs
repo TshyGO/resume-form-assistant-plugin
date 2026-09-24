@@ -14,7 +14,20 @@ export const MAX_CHUNK_COUNT = RULES.maxChunkCount;
 export const MAX_SNAPSHOT_BYTES = RULES.maxSnapshotBytes;
 
 const FORBIDDEN_KEYS = ["apikey", "api_key", "api-key", "authorization", "cookie", "set-cookie", "password", "otp", "token", "secret"];
+// The desktop store's own label rule (archive-store::resume_secrets::is_secret_label,
+// mirrored in the plugin's profile-fields.js SECRET_LABEL). Narrower than FORBIDDEN_KEYS:
+// no bare "otp"/"cookie"/"authorization", but the Chinese secret-label terms the store
+// also strips. Anything the store accepts under a dynamic {key, value} label must reach
+// the wire, and anything the store strips must not — so this list, not FORBIDDEN_KEYS,
+// governs the `key` string of a template field or profile custom entry. Real JSON object
+// keys still go through FORBIDDEN_KEYS unchanged.
+const STORE_LABEL_KEYS = ["密码", "口令", "验证码", "校验码", "授权码", "密钥", "私钥", "令牌", "password", "passwd", "captcha", "token", "secret"];
 const URL_FIELD_KEYS = new Set(["sourceurl", "source_url", "urlredacted", "url_redacted", "dedupeurl", "dedupe_url", "url"]);
+// aiConfig.apiUrl (and its snake_case spelling) points at the plugin/desktop's own AI
+// provider, which is routinely a LAN or loopback proxy (Ollama and friends) with no TLS.
+// It gets its own http-or-https check rather than URL_FIELD_KEYS's https-only rule, but
+// still forbids userinfo and credential query parameters.
+const API_URL_FIELD_KEYS = new Set(["apiurl", "api_url"]);
 const SECRET_QUERY_KEYS = new Set(RULES.urlSecretQueryKeys || []);
 const URL_ALLOWLIST = RULES.urlAllowlist || [];
 const RETRYABLE_CODES = new Set(RULES.retryableErrorCodes || ["unavailable"]);
@@ -52,18 +65,26 @@ const SECRET_NAMES_VALUE = new RegExp(
   `(?:^|[^a-z0-9])(?:${FORBIDDEN_KEYS.join("|")}) *[:=] *[^ ]`,
 );
 
-function walkSecrets(value) {
+function walkSecrets(value, allowedPaths = [], path = []) {
   if (Array.isArray(value)) {
-    value.forEach(walkSecrets);
+    value.forEach((item, index) => walkSecrets(item, allowedPaths, [...path, String(index)]));
     return;
   }
   if (value && typeof value === "object") {
+    if (Object.hasOwn(value, "key") && typeof value.key === "string" && Object.hasOwn(value, "value") &&
+        STORE_LABEL_KEYS.some((forbidden) => value.key.toLowerCase().includes(forbidden))) {
+      throw fail("secret_forbidden", "forbidden dynamic field label", "secrets");
+    }
     for (const [k, v] of Object.entries(value)) {
+      const nextPath = [...path, k];
+      if (allowedPaths.some((allowed) => allowed.length === nextPath.length && allowed.every((part, index) => part === nextPath[index]))) {
+        continue;
+      }
       const key = k.toLowerCase();
-      if (FORBIDDEN_KEYS.some((f) => key === f || key.replaceAll("_", "-") === f)) {
+      if (FORBIDDEN_KEYS.some((f) => key.includes(f))) {
         throw fail("secret_forbidden", `forbidden key ${k}`, "secrets");
       }
-      walkSecrets(v);
+      walkSecrets(v, allowedPaths, nextPath);
     }
     return;
   }
@@ -136,14 +157,35 @@ function queryHasSecret(query, host, path) {
 
 export function checkUrl(raw) {
   if (!raw) return;
+  if (!raw.startsWith("https://")) {
+    throw fail("secret_forbidden", "URL must be https without control characters or credentials", "secrets");
+  }
+  checkUrlRest(raw, raw.slice("https://".length));
+}
+
+// aiConfig.apiUrl allows http as well as https (LAN/loopback AI proxies such as Ollama
+// have no TLS), but a scheme other than either is a structural defect in the payload,
+// not a credential leak, so it is reported as invalid_payload rather than
+// secret_forbidden.
+export function checkApiUrl(raw) {
+  if (!raw) return;
+  const prefix = raw.startsWith("https://") ? "https://" : raw.startsWith("http://") ? "http://" : null;
+  if (!prefix) {
+    throw fail("invalid_payload", "apiUrl must use the http or https scheme");
+  }
+  checkUrlRest(raw, raw.slice(prefix.length));
+}
+
+// Shared authority/query/fragment checks once the scheme prefix has already been
+// stripped and approved by the caller.
+function checkUrlRest(raw, rest) {
   // WHATWG parsing strips tab, LF and CR from anywhere in a URL, so
   // "?access_<TAB>token=" reaches the consumer as "access_token" while a literal
   // scan of the raw string sees a name that matches no sensitive key. Reject every
   // C0 control, space and DEL rather than trying to mirror that normalization.
-  if (!raw.startsWith("https://") || /[\u0000-\u0020\u007f]/.test(raw)) {
-    throw fail("secret_forbidden", "URL must be https without control characters or credentials", "secrets");
+  if (rest === "" || /[\u0000-\u0020\u007f]/.test(raw)) {
+    throw fail("secret_forbidden", "URL must not carry control characters or credentials", "secrets");
   }
-  const rest = raw.slice("https://".length);
   // Keep encoded delimiters in their component; split only literal boundaries.
   const boundary = rest.search(/[/?#]/);
   const authority = boundary === -1 ? rest : rest.slice(0, boundary);
@@ -184,16 +226,31 @@ export function checkUrl(raw) {
   }
 }
 
-function walkUrls(value) {
+// apiUrlPaths are exact paths (relative to the root value first passed in), the same
+// shape as walkSecrets's allowedPaths. Only an apiUrl/api_url key at one of those paths
+// gets the http exception (checkApiUrl); the same key name anywhere else still gets the
+// generic, https-only checkUrl — exactly as it did before apiUrl had any exception. The
+// http exception is for the one wire shape legacy.import kind aiConfig's body.apiUrl
+// produces, not for the field name wherever it turns up.
+function walkUrls(value, apiUrlPaths = [], path = []) {
   if (Array.isArray(value)) {
-    value.forEach(walkUrls);
+    value.forEach((item, index) => walkUrls(item, apiUrlPaths, [...path, String(index)]));
     return;
   }
   if (value && typeof value === "object") {
     for (const [k, v] of Object.entries(value)) {
+      const nextPath = [...path, k];
       const key = k.toLowerCase().replaceAll("-", "_");
-      if (URL_FIELD_KEYS.has(key) && typeof v === "string") checkUrl(v);
-      walkUrls(v);
+      if (URL_FIELD_KEYS.has(key) && typeof v === "string") {
+        checkUrl(v);
+      } else if (API_URL_FIELD_KEYS.has(key) && typeof v === "string") {
+        const exempt = apiUrlPaths.some(
+          (allowed) => allowed.length === nextPath.length && allowed.every((part, i) => part === nextPath[i]),
+        );
+        if (exempt) checkApiUrl(v);
+        else checkUrl(v);
+      }
+      walkUrls(v, apiUrlPaths, nextPath);
     }
   }
 }
@@ -304,13 +361,18 @@ export async function validateRequest(value) {
     if (e.code) throw e;
     throw fail("invalid_payload", e.message);
   }
+  if (RULES.v2MessageTypes.includes(type) && value.protocolVersion < 2) {
+    throw fail("protocol_incompatible", `${type} requires protocolVersion 2`);
+  }
   if (!isUtcTimestamp(value.occurredAt)) {
     throw fail("invalid_payload", "occurredAt must be a real UTC RFC3339 timestamp (...Z)");
   }
   if (Array.isArray(value.payload) || !value.payload || typeof value.payload !== "object") {
     throw fail("invalid_payload", "payload must be an object");
   }
-  walkSecrets(value.payload);
+  const isAiConfigImport = type === "legacy.import" && value.payload.kind === "aiConfig";
+  const allowedPaths = isAiConfigImport ? [["body", "apiKey"]] : [];
+  walkSecrets(value.payload, allowedPaths);
   const hasArchive = Object.prototype.hasOwnProperty.call(value, "archiveId");
   const hasEpoch = Object.prototype.hasOwnProperty.call(value, "restoreEpoch");
   if (RULES.identityForbidden.includes(type) && (hasArchive || hasEpoch)) {
@@ -328,7 +390,8 @@ export async function validateRequest(value) {
       throw fail("invalid_payload", e.message);
     }
   }
-  walkUrls(value.payload);
+  const apiUrlPaths = isAiConfigImport ? [["body", "apiUrl"]] : [];
+  walkUrls(value.payload, apiUrlPaths);
   if (RULES.writeTypes.includes(type) && type !== "snapshot.chunk") {
     const actual = await payloadBodySha256(value.payload);
     if (value.payload.payloadSha256 !== actual) {
@@ -383,6 +446,15 @@ export async function validateRequest(value) {
       }
     }
   }
+  if (type === "resume.update") {
+    const payload = value.payload;
+    const valid = payload.op === "setActiveTemplate"
+      ? Object.hasOwn(payload, "templateId") && !Object.hasOwn(payload, "profile") && !Object.hasOwn(payload, "expectedRevision")
+      : payload.op === "saveProfile" && Object.hasOwn(payload, "profile")
+        && Object.hasOwn(payload, "expectedRevision") && !Object.hasOwn(payload, "templateId");
+    if (!valid) throw fail("invalid_payload", "resume.update fields do not match op");
+  }
+  if (type === "legacy.import") validateLegacyImport(value.payload);
   if (type === "handshake") {
     const { minProtocolVersion, maxProtocolVersion } = value.payload;
     if (
@@ -398,6 +470,32 @@ export async function validateRequest(value) {
   return value;
 }
 
+function validateLegacyImport(payload) {
+  if (payload.kind === "status") {
+    if (Object.hasOwn(payload, "index") || Object.hasOwn(payload, "body")) {
+      throw fail("invalid_payload", "legacy.import status must not carry index or body");
+    }
+    return;
+  }
+  if (!Object.hasOwn(payload, "index")) throw fail("invalid_payload", "legacy.import part requires index");
+  if (!Object.hasOwn(payload, "body")) throw fail("invalid_payload", "legacy.import part requires body");
+  validateSchema(payload.body, payloadSchema("legacy.import").$defs[payload.kind]);
+  if (payload.kind === "manifest") {
+    if (payload.index !== 0) throw fail("invalid_payload", "legacy.import manifest index must be 0");
+    const { total, parts } = payload.body;
+    if (parts.length !== total) throw fail("invalid_payload", "legacy.import manifest parts must cover total");
+    const seen = new Set();
+    for (const part of parts) {
+      if (part.index > total || seen.has(part.index)) {
+        throw fail("invalid_payload", "legacy.import manifest indexes must be unique and complete");
+      }
+      seen.add(part.index);
+    }
+  } else if (payload.index === 0) {
+    throw fail("invalid_payload", "legacy.import data part index must be 1..63");
+  }
+}
+
 // Structural response validation plus the checks that need the originating request.
 // validateResponse cannot see the request, so it can only confirm that correlationId is
 // some UUID and that a cursor is a non-negative integer. Hosts and the plugin must use
@@ -407,6 +505,20 @@ export function validateResponseForRequest(value, request) {
   validateResponse(value, request?.messageType);
   if (value.correlationId !== request?.messageId) {
     throw fail("invalid_payload", "correlationId does not match the request messageId");
+  }
+  if (value.protocolVersion !== request.protocolVersion) {
+    throw fail("protocol_incompatible", "response protocolVersion must echo the request version");
+  }
+  if (request.messageType === "handshake" && value.ok === true) {
+    if (value.payload.maxProtocolVersion < request.payload.minProtocolVersion ||
+        value.payload.minProtocolVersion > request.payload.maxProtocolVersion) {
+      throw fail("protocol_incompatible", "handshake request and response ranges do not overlap");
+    }
+  }
+  if (request.messageType === "resume.update" && request.payload?.op === "setActiveTemplate" &&
+      value.ok === true && (typeof value.payload?.activeTemplateId !== "string" ||
+        value.payload.activeTemplateId.toLowerCase() !== request.payload.templateId.toLowerCase())) {
+    throw fail("invalid_payload", "resume.update activeTemplateId does not match requested templateId");
   }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
@@ -515,6 +627,9 @@ export function validateResponse(value, requestType) {
     }
   }
   validateSchema(value, responseSchema());
+  if (RULES.v2MessageTypes.includes(requestType) && value.protocolVersion < 2) {
+    throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 2`);
+  }
   if (Array.isArray(value.payload)) throw fail("invalid_payload", "payload must be an object");
   if (value.ok) {
     if (value.error) throw fail("invalid_payload", "ok:true response must not include error");
@@ -523,6 +638,21 @@ export function validateResponse(value, requestType) {
     }
     const payloadSchemaForType = responsePayloadSchema(requestType);
     if (payloadSchemaForType) validateSchema(value.payload, payloadSchemaForType);
+    if (requestType === "ai.complete") {
+      const payload = value.payload;
+      const valid = payload.status === "ok"
+        ? Object.hasOwn(payload, "text") && !Object.hasOwn(payload, "reason")
+          && !Object.hasOwn(payload, "httpStatus") && !Object.hasOwn(payload, "host")
+        : payload.status === "failed" && Object.hasOwn(payload, "reason") && !Object.hasOwn(payload, "text");
+      if (!valid) throw fail("invalid_payload", "ai.complete response fields do not match status");
+      if (Object.hasOwn(payload, "host") &&
+          (payload.host.length === 0 || !/^[A-Za-z0-9.-]+$/.test(payload.host))) {
+        throw fail("invalid_payload", "ai.complete host must be a hostname");
+      }
+    }
+    if (requestType === "legacy.import" && value.payload.received > value.payload.total) {
+      throw fail("invalid_payload", "legacy.import received exceeds total");
+    }
     if (requestType === "handshake") {
       const { minProtocolVersion, maxProtocolVersion } = value.payload;
       if (

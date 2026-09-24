@@ -1,0 +1,217 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/legacy-import.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "importId",
+    "kind"
+  ],
+  "properties": {
+    "importId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "manifest",
+        "template",
+        "profile",
+        "aiConfig",
+        "status"
+      ]
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 63
+    },
+    "body": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pluginVersion",
+        "total",
+        "parts"
+      ],
+      "properties": {
+        "pluginVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 63
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "kind",
+              "sha256"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 63
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "template",
+                  "profile",
+                  "aiConfig"
+                ]
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "minItems": 1,
+          "maxItems": 63
+        }
+      }
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "wasActive",
+        "groups"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "wasActive": {
+          "type": "boolean"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "fields"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "values",
+        "family",
+        "custom"
+      ],
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "family": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "custom": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "value"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          "maxItems": 200
+        }
+      }
+    },
+    "aiConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiUrl",
+        "model",
+        "apiKey"
+      ],
+      "properties": {
+        "apiUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "apiKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    }
+  }
+}
