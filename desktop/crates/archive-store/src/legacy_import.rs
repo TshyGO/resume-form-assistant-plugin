@@ -79,8 +79,9 @@ pub struct LegacyAiPreview {
 fn profile_item_count(profile: &Value) -> usize {
     let filled = |v: &Value| v.as_str().is_some_and(|s| !s.trim().is_empty());
     let values = profile["values"].as_object().map_or(0, |o| o.values().filter(|v| filled(v)).count());
+    // `relation` says who the member is; it is not an item the user filled in.
     let family = profile["family"].as_array().map_or(0, |members| members.iter()
-        .map(|m| m.as_object().map_or(0, |o| o.values().filter(|v| filled(v)).count())).sum());
+        .map(|m| m.as_object().map_or(0, |o| o.iter().filter(|(k, v)| *k != "relation" && filled(v)).count())).sum());
     let custom = profile["custom"].as_array().map_or(0, |items| items.iter().filter(|i| filled(&i["value"])).count());
     values + family + custom
 }

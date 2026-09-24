@@ -841,6 +841,45 @@ mod tests {
         legacy_import(&part, store, services)
     }
 
+    /// The payloads the plugin produces for a 0.4.0 store (tests/legacy-golden.test.js keeps
+    /// the file honest), replayed through the real handler, previewed and confirmed.
+    #[test]
+    fn the_plugin_golden_import_is_received_previewed_and_confirmed() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let golden: Vec<Value> = serde_json::from_str(include_str!("../../../tests/fixtures/legacy-import-0.4.0.json")).unwrap();
+        let import_id = golden[0]["importId"].as_str().unwrap().to_string();
+        let mut last = None;
+        for payload in &golden {
+            let request = v2_request("legacy.import", &store.identity(), payload.clone());
+            let answer = legacy_import(&request, &store, &services).unwrap();
+            checked_v2_response(&request, &answer);
+            last = Some(answer.payload["state"].as_str().unwrap().to_string());
+        }
+        assert_eq!(last.as_deref(), Some("awaiting_confirmation"));
+        assert_eq!(services.keys.lock().unwrap().get(&import_id).map(String::as_str), Some("sk-synthetic-golden-key"));
+
+        let preview = store.legacy_import_preview(&import_id).unwrap();
+        let wire = serde_json::to_string(&preview).unwrap();
+        assert!(!wire.contains("sk-synthetic-golden-key") && !wire.contains("测试用户") && !wire.contains("/chat/completions"), "{wire}");
+        assert_eq!(preview.templates.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["实习简历（合成）", "校招简历（合成）"]);
+        assert!(preview.templates[0].was_active);
+        assert_eq!(preview.profile_item_count, Some(4));
+        assert_eq!(preview.ai.as_ref().map(|ai| ai.host.as_str()), Some("api.example.com"));
+
+        let done = crate::legacy_import_commands::confirm(&store, &services, &import_id, None).unwrap();
+        assert_eq!(done.state, "imported");
+        assert!(!done.ai_config_dropped);
+        let overview = store.resume_overview().unwrap();
+        assert_eq!(overview.templates.len(), 2);
+        let active = overview.templates.iter().find(|t| Some(t.id.as_str()) == overview.active_template_id.as_deref()).unwrap();
+        assert_eq!(active.name, "实习简历（合成）");
+        let profile = store.get_profile().unwrap().profile;
+        assert_eq!(profile["values"]["nativePlace"], "合成省合成市");
+        assert!(!profile.to_string().contains("synthetic-not-migrated"));
+        assert!(services.keys.lock().unwrap().is_empty(), "the temporary key is gone after the import");
+    }
+
     #[test]
     fn resending_the_ai_part_after_import_does_not_stage_the_key_again() {
         let (_dir, store) = store();
