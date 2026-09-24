@@ -7,8 +7,8 @@ use crate::error::{ErrorCode, Layer, ProtocolError};
 use crate::schema_lite::{
     envelope_schema, payload_schema, response_payload_schema, response_schema, validate_schema,
 };
-use crate::secrets::reject_secrets;
-use crate::urls::{allowlist_from_rules, reject_sensitive_urls};
+use crate::secrets::{reject_secrets, reject_secrets_except};
+use crate::urls::{allowlist_from_rules, reject_sensitive_urls, reject_sensitive_urls_except};
 use crate::time::is_utc_timestamp;
 use crate::types::{
     MessageType, Request, MAX_ENVELOPE_BYTES, MAX_PROTOCOL_VERSION, MAX_RECONCILE_ITEMS,
@@ -71,6 +71,13 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
     validate_schema(value, &envelope_schema())?;
     let protocol_version = obj.get("protocolVersion").and_then(Value::as_i64).unwrap();
     let message_type = MessageType::parse(obj.get("messageType").and_then(Value::as_str).unwrap())?;
+    if protocol_version < message_type.min_envelope_version() as i64 {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            format!("{} requires protocolVersion 2", message_type.as_str()),
+        ));
+    }
     let message_id = obj.get("messageId").and_then(Value::as_str).unwrap().to_string();
     let client_instance_id = obj
         .get("clientInstanceId")
@@ -99,12 +106,26 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         ));
     }
     let payload = payload_value.as_object().unwrap();
-    reject_secrets(payload_value)?;
+    let is_aiconfig_import = message_type == MessageType::LegacyImport
+        && payload.get("kind").and_then(Value::as_str) == Some("aiConfig");
+    if is_aiconfig_import {
+        reject_secrets_except(payload_value, &[&["body", "apiKey"]])?;
+    } else {
+        reject_secrets(payload_value)?;
+    }
     if let Some(schema) = payload_schema(message_type.as_str()) {
         validate_schema(payload_value, &schema)?;
     }
     let rules: Value = serde_json::from_str(crate::RULES_JSON).expect("rules.json");
-    reject_sensitive_urls(payload_value, &allowlist_from_rules(&rules))?;
+    // The http exception is for this one wire shape — legacy.import kind aiConfig's
+    // body.apiUrl — not for the field name wherever it turns up. An apiUrl anywhere
+    // else (profile.values.apiUrl, a template field's value, ...) still gets the
+    // generic https-only rule.
+    if is_aiconfig_import {
+        reject_sensitive_urls_except(payload_value, &allowlist_from_rules(&rules), &[&["body", "apiUrl"]])?;
+    } else {
+        reject_sensitive_urls(payload_value, &allowlist_from_rules(&rules))?;
+    }
     validate_payload_extras(message_type, payload)?;
     if message_type == MessageType::OutboxReconcile {
         let items = payload.get("items").and_then(Value::as_array).unwrap();
@@ -242,7 +263,80 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
                 ));
             }
         }
+        MessageType::ResumeUpdate => {
+            let valid = match payload.get("op").and_then(Value::as_str) {
+                Some("setActiveTemplate") => payload.contains_key("templateId")
+                    && !payload.contains_key("profile") && !payload.contains_key("expectedRevision"),
+                Some("saveProfile") => payload.contains_key("profile")
+                    && payload.contains_key("expectedRevision") && !payload.contains_key("templateId"),
+                _ => false,
+            };
+            if !valid {
+                return Err(invalid_payload("resume.update fields do not match op"));
+            }
+        }
+        MessageType::LegacyImport => validate_legacy_import(payload)?,
         _ => {}
+    }
+    Ok(())
+}
+
+fn invalid_payload(message: &str) -> ProtocolError {
+    ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message)
+}
+
+fn validate_legacy_import(payload: &Map<String, Value>) -> Result<(), ProtocolError> {
+    let kind = payload.get("kind").and_then(Value::as_str).unwrap();
+    if kind == "status" {
+        if payload.contains_key("index") || payload.contains_key("body") {
+            return Err(invalid_payload("legacy.import status must not carry index or body"));
+        }
+        return Ok(());
+    }
+    let index = payload.get("index").and_then(Value::as_u64)
+        .ok_or_else(|| invalid_payload("legacy.import part requires index"))?;
+    let body = payload.get("body")
+        .ok_or_else(|| invalid_payload("legacy.import part requires body"))?;
+    let schema = payload_schema("legacy.import").expect("legacy.import schema");
+    validate_schema(body, &schema["$defs"][kind])?;
+    if kind == "manifest" {
+        if index != 0 {
+            return Err(invalid_payload("legacy.import manifest index must be 0"));
+        }
+        let total = body["total"].as_u64().unwrap();
+        let parts = body["parts"].as_array().unwrap();
+        if parts.len() != total as usize {
+            return Err(invalid_payload("legacy.import manifest parts must cover total"));
+        }
+        let mut seen = vec![false; total as usize];
+        for part in parts {
+            let part_index = part["index"].as_u64().unwrap();
+            if part_index == 0 || part_index > total || seen[(part_index - 1) as usize] {
+                return Err(invalid_payload("legacy.import manifest indexes must be unique and complete"));
+            }
+            seen[(part_index - 1) as usize] = true;
+        }
+    } else if index == 0 {
+        return Err(invalid_payload("legacy.import data part index must be 1..63"));
+    }
+    Ok(())
+}
+
+fn validate_ai_complete_response(payload: &Value) -> Result<(), ProtocolError> {
+    let obj = payload.as_object().unwrap();
+    let valid = match payload["status"].as_str().unwrap() {
+        "ok" => obj.contains_key("text") && !obj.contains_key("reason")
+            && !obj.contains_key("httpStatus") && !obj.contains_key("host"),
+        "failed" => obj.contains_key("reason") && !obj.contains_key("text"),
+        _ => false,
+    };
+    if !valid {
+        return Err(invalid_payload("ai.complete response fields do not match status"));
+    }
+    if let Some(host) = payload.get("host").and_then(Value::as_str) {
+        if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+            return Err(invalid_payload("ai.complete host must be a hostname"));
+        }
     }
     Ok(())
 }
@@ -305,9 +399,39 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             "correlationId does not match the request messageId",
         ));
     }
+    if value["protocolVersion"].as_u64() != Some(req.protocol_version as u64) {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            "response protocolVersion must echo the request version",
+        ));
+    }
+    if req.message_type == MessageType::Handshake && value.get("ok") == Some(&Value::Bool(true)) {
+        let request_min = req.payload["minProtocolVersion"].as_i64().unwrap();
+        let request_max = req.payload["maxProtocolVersion"].as_i64().unwrap();
+        let response_min = value["payload"]["minProtocolVersion"].as_i64().unwrap();
+        let response_max = value["payload"]["maxProtocolVersion"].as_i64().unwrap();
+        if response_max < request_min || response_min > request_max {
+            return Err(ProtocolError::new(
+                ErrorCode::ProtocolIncompatible,
+                Layer::Structure,
+                "handshake request and response ranges do not overlap",
+            ));
+        }
+    }
     let invalid = |message: &str| {
         ProtocolError::new(ErrorCode::InvalidPayload, Layer::Structure, message.to_string())
     };
+    if req.message_type == MessageType::ResumeUpdate
+        && req.payload["op"] == "setActiveTemplate"
+        && value.get("ok") == Some(&Value::Bool(true))
+        && value["payload"]["activeTemplateId"]
+            .as_str()
+            .map(|active| active.eq_ignore_ascii_case(req.payload["templateId"].as_str().unwrap()))
+            != Some(true)
+    {
+        return Err(invalid("resume.update activeTemplateId does not match requested templateId"));
+    }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req
             .payload
@@ -461,6 +585,13 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         }
     }
     validate_schema(value, &response_schema())?;
+    if obj["protocolVersion"].as_u64().unwrap() < request_type.min_envelope_version() as u64 {
+        return Err(ProtocolError::new(
+            ErrorCode::ProtocolIncompatible,
+            Layer::Structure,
+            format!("{} response requires protocolVersion 2", request_type.as_str()),
+        ));
+    }
     let ok = obj.get("ok").and_then(Value::as_bool).unwrap();
     if obj.get("payload").map(Value::is_array).unwrap_or(false) {
         return Err(ProtocolError::new(
@@ -486,6 +617,15 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         }
         if let Some(schema) = response_payload_schema(request_type.as_str()) {
             validate_schema(obj.get("payload").unwrap(), &schema)?;
+        }
+        if request_type == MessageType::AiComplete {
+            validate_ai_complete_response(obj.get("payload").unwrap())?;
+        }
+        if request_type == MessageType::LegacyImport {
+            let payload = obj.get("payload").unwrap();
+            if payload["received"].as_u64().unwrap() > payload["total"].as_u64().unwrap() {
+                return Err(invalid_payload("legacy.import received exceeds total"));
+            }
         }
         if request_type == MessageType::Handshake {
             handshake_response_extras(obj.get("payload").unwrap())?;

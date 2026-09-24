@@ -18,6 +18,11 @@ const PAYLOAD_KEYS = {
   "snapshot.chunk": "snapshot-chunk",
   "submit.confirm": "submit-confirm",
   "outbox.reconcile": "outbox-reconcile",
+  "resume.read": "resume-read",
+  "resume.update": "resume-update",
+  "ai.complete": "ai-complete",
+  "ui.open": "ui-open",
+  "legacy.import": "legacy-import",
 };
 
 const RESPONSE_PAYLOAD_KEYS = {
@@ -29,6 +34,11 @@ const RESPONSE_PAYLOAD_KEYS = {
   "submit.confirm": "write",
   "snapshot.chunk": "snapshot-chunk",
   "outbox.reconcile": "outbox-reconcile",
+  "resume.read": "resume-read",
+  "resume.update": "resume-update",
+  "ai.complete": "ai-complete",
+  "ui.open": "ui-open",
+  "legacy.import": "legacy-import",
 };
 
 export function payloadSchema(messageType) {
@@ -78,14 +88,17 @@ function patternMatches(value, pattern) {
 }
 
 export function validateSchema(instance, schema) {
-  if (schema.type === "object") {
+  const declaredType = schema.type;
+  if (instance === null && Array.isArray(declaredType) && declaredType.includes("null")) return;
+  const type = Array.isArray(declaredType) ? declaredType.find((item) => item !== "null") : declaredType;
+  if (type === "object") {
     if (!instance || typeof instance !== "object" || Array.isArray(instance)) {
       throw fail("value must be an object");
     }
     const properties = schema.properties || {};
     if (schema.additionalProperties === false) {
       for (const key of Object.keys(instance)) {
-        if (!(key in properties)) throw fail(`unexpected field ${key}`);
+        if (!Object.prototype.hasOwnProperty.call(properties, key)) throw fail(`unexpected field ${key}`);
       }
     }
     for (const key of schema.required || []) {
@@ -98,24 +111,31 @@ export function validateSchema(instance, schema) {
         validateSchema(instance[key], sub);
       }
     }
-  } else if (schema.type === "array") {
+    if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      for (const [key, value] of Object.entries(instance)) {
+        if (!Object.prototype.hasOwnProperty.call(properties, key)) validateSchema(value, schema.additionalProperties);
+      }
+    }
+  } else if (type === "array") {
     if (!Array.isArray(instance)) throw fail("value must be an array");
     if (schema.minItems != null && instance.length < schema.minItems) throw fail("array too short");
     if (schema.maxItems != null && instance.length > schema.maxItems) throw fail("array too long");
     if (schema.items) {
       for (const item of instance) validateSchema(item, schema.items);
     }
-  } else if (schema.type === "string") {
+  } else if (type === "string") {
     if (typeof instance !== "string") throw fail("value must be a string");
     if (schema.minLength != null && [...instance].length < schema.minLength) throw fail("string too short");
     if (schema.maxLength != null && [...instance].length > schema.maxLength) throw fail("string too long");
     if (schema.pattern && !patternMatches(instance, schema.pattern)) throw fail("string does not match pattern");
-  } else if (schema.type === "integer") {
+  } else if (type === "integer") {
     if (!Number.isInteger(instance)) throw fail("value must be an integer");
     if (schema.minimum != null && instance < schema.minimum) throw fail("integer below minimum");
     if (schema.maximum != null && instance > schema.maximum) throw fail("integer above maximum");
-  } else if (schema.type === "boolean") {
+  } else if (type === "boolean") {
     if (typeof instance !== "boolean") throw fail("value must be a boolean");
+  } else if (type === "null") {
+    if (instance !== null) throw fail("value must be null");
   }
   if (schema.enum && !schema.enum.some((v) => Object.is(v, instance) || v === instance)) {
     throw fail("value is not in enum");

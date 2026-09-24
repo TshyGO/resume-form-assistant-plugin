@@ -17,11 +17,14 @@ pub mod error;
 pub mod evidence;
 pub mod facade;
 pub mod identity;
+pub mod legacy_import;
 pub mod migration;
 pub mod model;
 pub mod normalize;
 pub mod plugin;
 pub mod receipts;
+pub mod resume;
+pub mod resume_secrets;
 pub mod schema;
 mod snapshot_file;
 /// 快照文件在档案目录里的相对路径。D12 永久删除时要按它去删文件。
@@ -39,6 +42,7 @@ pub use applications::{
 };
 pub use error::StoreError;
 pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
+pub use legacy_import::{LegacyCleanup, LegacyImportApply, LegacyImportPending, LegacyImportStatus, LegacyPartCheck};
 pub use migration::current_schema_version;
 // model::* 已含 Stage / StageUpdateMode / Fold / Occurred / EventPayload 等模型类型。
 pub use model::*;
@@ -47,6 +51,12 @@ pub use receipts::{
     FillSubmitInput, JobSaveInput, PluginOp, PluginWriteContext, PluginWriteOutcome,
     ReconcileOutcome, ReconcileQueryItem, ReconcileReply, SnapshotChunkInput, SubmitConfirmInput,
 };
+pub use resume::{
+    empty_profile, field_count, normalize_groups, reject_profile_secrets, validate_profile, ProfileRecord, ResumeOverview,
+    ResumeTemplate, SavedTemplate, TemplateField, TemplateGroup, TemplateSummary, MAX_CUSTOM_FIELDS,
+    MAX_PROFILE_BYTES, MAX_TEMPLATES, MAX_TEMPLATE_BYTES, MAX_TEMPLATE_NAME_CHARS,
+};
+pub use resume_secrets::{is_secret_label, is_secret_value};
 pub use store::{ArchiveConfig, ArchiveStore};
 pub use suggestions::{ConfirmOutcome, ConfirmSuggestionInput};
 pub use todos::TodoPatch;

@@ -22,10 +22,12 @@ test('the service worker loads as a module so it can import the D05 validator', 
   assert.equal(manifest().background.service_worker, 'background.js');
 });
 
-test('the toolbar button opens the manager in an extension tab', async () => {
+test('the toolbar button opens the native side panel and the manager stays in an extension tab', async () => {
   const source = background();
   assert.equal(manifest().action.default_popup, undefined);
-  assert.match(source, /chrome\.action\.onClicked\.addListener/);
+  assert.equal(manifest().side_panel.default_path, 'sidepanel.html');
+  assert.ok(manifest().permissions.includes('sidePanel'));
+  assert.match(source, /chrome\.sidePanel\.setPanelBehavior\(\{ openPanelOnActionClick: true \}\)/);
   assert.match(source, /chrome\.tabs\.create/);
   assert.match(source, /chrome\.tabs\.update/);
   assert.match(source, /chrome\.tabs\.query/);

@@ -1,4 +1,4 @@
-//! 物理 schema(v1 + v2)与迁移注册表。
+//! 物理 schema 与迁移注册表。
 //!
 //! 设计要点(均为冻结契约,见 docs/desktop-mvp/):
 //! - applications 无 (company,url)/(company,title) 唯一约束:同公司多岗、同岗重复申请并存。
@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -253,6 +253,58 @@ ALTER TABLE todos ADD COLUMN overdue_ack_at TEXT;
 CREATE INDEX idx_todos_due ON todos(due_at_utc, due_date);
 "#;
 
+/// #130：简历模板与「我的信息」由桌面保存，插件不再存副本。
+/// 分组与档案沿用插件 `chrome.storage.local` 的 JSON 形状，迁移与导入零转换。
+/// `resume_state` 只有一行：当前模板与档案。当前模板不设外键，删除模板时由代码改指向。
+pub const V4_RESUME: &str = r#"
+CREATE TABLE resume_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  groups_json TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_resume_templates_name ON resume_templates(name);
+CREATE INDEX idx_resume_templates_position ON resume_templates(position);
+
+CREATE TABLE resume_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  active_template_id TEXT,
+  profile_json TEXT NOT NULL,
+  profile_revision INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+"#;
+
+/// #130 PR 3b: old plugin data is staged until the user confirms it on the desktop.
+/// `applied_at` makes a confirmation retry safe when the credential-store step fails.
+/// `ai_config_dropped` records that the user finished an applied import without its AI
+/// config; `key_cleaned_at` stops startup cleanup from touching the OS store again.
+pub const V5_LEGACY_IMPORT: &str = r#"
+CREATE TABLE legacy_imports (
+  import_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('receiving','awaiting_confirmation','imported','rejected','expired')),
+  total INTEGER NOT NULL CHECK (total BETWEEN 1 AND 63),
+  manifest_json TEXT NOT NULL,
+  plugin_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  applied_at TEXT,
+  ai_config_dropped INTEGER NOT NULL DEFAULT 0 CHECK (ai_config_dropped IN (0, 1)),
+  key_cleaned_at TEXT
+);
+CREATE TABLE legacy_import_parts (
+  import_id TEXT NOT NULL REFERENCES legacy_imports(import_id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL CHECK (idx BETWEEN 1 AND 63),
+  kind TEXT NOT NULL CHECK (kind IN ('template','profile','aiConfig')),
+  sha256 TEXT NOT NULL,
+  body_json TEXT NOT NULL,
+  PRIMARY KEY (import_id, idx)
+);
+CREATE INDEX idx_legacy_imports_state ON legacy_imports(state, created_at);
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -268,5 +320,15 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 3,
         description: "todo reminder bookkeeping: scheduled instant, OS handle, delivery state, overdue digest ack",
         sql: V3_TODO_REMINDER_BOOKKEEPING,
+    },
+    Migration {
+        to_version: 4,
+        description: "resume templates and profile owned by the desktop (#130)",
+        sql: V4_RESUME,
+    },
+    Migration {
+        to_version: 5,
+        description: "staged legacy plugin import, without AI keys in SQLite (#130)",
+        sql: V5_LEGACY_IMPORT,
     },
 ];

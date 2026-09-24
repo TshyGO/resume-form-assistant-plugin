@@ -13,6 +13,7 @@
         <p class="brand-sub">Desktop · 申请管理</p>
         <nav aria-label="主导航">
           <button type="button" data-route="applications" class="active" aria-current="page">申请</button>
+          <button type="button" data-route="resume">简历</button>
           <button type="button" data-route="inbox">证据收件箱</button>
           <button type="button" data-route="todos">待办</button>
           <button type="button" data-route="settings">设置</button>
@@ -143,6 +144,10 @@
               <div class="row"><button id="progress-save" type="submit" class="primary">保存记录</button><button id="progress-cancel" type="button">取消</button></div>
             </form>
           </dialog>
+        </section>
+
+        <section id="view-resume" class="view hidden">
+          <div id="resume-root"></div>
         </section>
 
         <section id="view-inbox" class="view hidden">

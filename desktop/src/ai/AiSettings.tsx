@@ -1,51 +1,42 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
-import type { AiSettingsView } from "../api.ts";
+import type { AiProviderView, AiSettingsView, SaveProviderResult } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
-import {
-  describeCommandError,
-  describeKeyState,
-  describeSaved,
-  describeTransportRisk,
-  describeUrlSecrets,
-} from "./ai-settings.ts";
-import type { Message } from "./ai-settings.ts";
+import { describeCommandError, describeProviderKey, PRESETS } from "./ai-settings.ts";
+import type { Message, Preset } from "./ai-settings.ts";
+import { ProviderEditor } from "./ProviderEditor.tsx";
+
+type Editing = { provider: AiProviderView | null; preset: Preset | null } | null;
 
 /**
- * 设置页的 AI 一段。Key 只往下走，不往上回：保存之后界面只知道「配过了」。
+ * 设置页的 AI 一段：服务商列表 + 当前使用。Key 只往下走，不往上回。
+ * 收件箱「AI 整理」和简历解析都用「当前使用」的那一个；不做失败后自动换服务商。
  */
 export function AiSettings() {
   const invoke = useInvoke();
   const [view, setView] = useState<AiSettingsView | null>(null);
-  const [apiUrl, setApiUrl] = useState("");
-  const [model, setModel] = useState("");
-  const [key, setKey] = useState("");
+  const [editing, setEditing] = useState<Editing>(null);
+  const [presetId, setPresetId] = useState(PRESETS[0].id);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [message, setMessage] = useState<Message | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const apply = (next: AiSettingsView) => {
-    setView(next);
-    setApiUrl(next.apiUrl);
-    setModel(next.model);
+  const reload = () => {
+    if (!invoke) return;
+    invoke<AiSettingsView>("get_ai_settings_cmd")
+      .then(setView)
+      .catch((error: unknown) => setMessage(describeCommandError(error)));
   };
 
-  useEffect(() => {
-    if (!invoke) {
-      setMessage({ tone: "warn", text: "没连上桌面宿主，AI 设置读不出来。" });
-      return;
-    }
-    invoke<AiSettingsView>("get_ai_settings_cmd")
-      .then(apply)
-      .catch((error: unknown) => setMessage(describeCommandError(error)));
-  }, [invoke]);
+  useEffect(reload, [invoke]);
 
-  const run = async (work: () => Promise<AiSettingsView>, done: (next: AiSettingsView) => Message) => {
-    if (!invoke || busy) return;
+  if (!invoke) return <p className="note warn">没连上桌面宿主，AI 设置读不出来。</p>;
+
+  const run = async (work: () => Promise<AiSettingsView>, done: Message) => {
+    if (busy) return;
     setBusy(true);
     try {
-      const next = await work();
-      apply(next);
-      setMessage(done(next));
+      setView(await work());
+      setMessage(done);
     } catch (error) {
       setMessage(describeCommandError(error));
     } finally {
@@ -53,106 +44,128 @@ export function AiSettings() {
     }
   };
 
-  const saveSettings = (event: FormEvent) => {
-    event.preventDefault();
-    const typed = apiUrl;
-    void run(
-      () => invoke!<AiSettingsView>("save_ai_settings_cmd", { apiUrl: typed, model }),
-      (next) => describeSaved(typed, next),
+  const onSaved = (result: SaveProviderResult) => {
+    setView(result.view);
+    setEditing(null);
+    setMessage(
+      result.keyError
+        ? { tone: "warn", text: `服务商已保存，但 Key 没存进系统凭据库：${result.keyError}。请编辑后重新填写 Key。` }
+        : result.keyCleared
+          ? { tone: "warn", text: "已保存。接口地址换了协议或主机，原来的 Key 已清除，请重新填写这个服务商的 Key。" }
+          : { tone: "ok", text: "已保存。" },
     );
   };
-
-  const saveKey = () => {
-    const typed = key;
-    void run(
-      () => invoke!<AiSettingsView>("set_ai_key_cmd", { key: typed }),
-      () => {
-        setKey("");
-        return { tone: "ok", text: "Key 已存进系统凭据库。" };
-      },
-    );
-  };
-
-  const clearKey = () => {
-    void run(
-      () => invoke!<AiSettingsView>("clear_ai_key_cmd"),
-      () => ({ tone: "ok", text: "Key 已从系统凭据库删除。" }),
-    );
-  };
-
-  const keyState = describeKeyState(view);
-  const risk = describeTransportRisk(apiUrl);
-  const secrets = describeUrlSecrets(apiUrl);
 
   return (
     <div className="stack">
-      <p className="muted">
-        桌面 AI 配置独立于浏览器插件。发送前，你可以预览并确认要交给服务商的内容。
-      </p>
-      <p className="muted">证据正文和少量候选申请信息会发给你配置的服务商，对方可能留存。</p>
+      <p className="muted">收件箱的「AI 整理」和简历解析都用「当前使用」的服务商。发送前你可以预览并确认要交给服务商的内容。</p>
       <details className="settings-disclosure">
         <summary>Key 保存说明</summary>
-        <p className="muted">Key 保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不进入档案、备份或日志。</p>
+        <p className="muted">每个服务商的 Key 分别保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不进入档案、备份或日志。</p>
       </details>
 
-      <form className="stack ai-config-form" onSubmit={saveSettings}>
-        <label>
-          接口地址
-          <input
-            id="ai-api-url"
-            value={apiUrl}
-            onChange={(event) => setApiUrl(event.target.value)}
-            placeholder="https://api.deepseek.com"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <p className="muted">填服务商给的 Base URL 就行，保存时会补全成 /chat/completions。</p>
-        {risk ? <p className={`note ${risk.tone}`}>{risk.text}</p> : null}
-        {secrets ? <p className={`note ${secrets.tone}`}>{secrets.text}</p> : null}
-        <label>
-          模型名称
-          <input
-            id="ai-model"
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder="deepseek-chat"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <button type="submit" className="primary" disabled={busy || !invoke}>
-          保存设置
-        </button>
-      </form>
+      {view && view.providers.length === 0 ? <p className="note warn">还没有配置 AI 服务商。从下面的预设添加一个。</p> : null}
 
-      <p className={`note ${keyState.tone}`}>{keyState.text}</p>
-      <label>
-        API Key
-        <input
-          id="ai-key"
-          type="password"
-          value={key}
-          onChange={(event) => setKey(event.target.value)}
-          placeholder="粘贴后点保存，界面不会再显示它"
-          autoComplete="off"
-          spellCheck={false}
+      {view && view.providers.length > 0 ? (
+        <ul className="provider-list">
+          {view.providers.map((provider) => {
+            const active = provider.id === view.activeProviderId;
+            const keyState = describeProviderKey(provider, view.credentialError);
+            return (
+              <li key={provider.id} aria-label={provider.name} className={active ? "provider-item active" : "provider-item"}>
+                <div className="row">
+                  <strong>{provider.name}</strong>
+                  {active ? <span className="pill">当前使用</span> : null}
+                  <span className="muted">
+                    {provider.host} · {provider.model}
+                  </span>
+                </div>
+                <p className={`note ${keyState.tone}`}>{keyState.text}</p>
+                <div className="row">
+                  {!active ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(
+                          () => invoke<AiSettingsView>("set_active_ai_provider_cmd", { id: provider.id }),
+                          { tone: "ok", text: `已切换到「${provider.name}」。` },
+                        )
+                      }
+                    >
+                      设为当前
+                    </button>
+                  ) : null}
+                  <button type="button" disabled={busy} onClick={() => setEditing({ provider, preset: null })}>
+                    编辑
+                  </button>
+                  {confirmDelete === provider.id ? (
+                    <>
+                      <span className="muted">Key 也会一起删除。</span>
+                      <button
+                        type="button"
+                        className="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(
+                            () => invoke<AiSettingsView>("delete_ai_provider_cmd", { id: provider.id }),
+                            { tone: "ok", text: `已删除「${provider.name}」。` },
+                          ).then(() => setConfirmDelete(null))
+                        }
+                      >
+                        确认删除
+                      </button>
+                      <button type="button" onClick={() => setConfirmDelete(null)}>
+                        取消
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" disabled={busy} onClick={() => setConfirmDelete(provider.id)}>
+                      删除
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      {editing ? (
+        <ProviderEditor
+          key={editing.provider?.id ?? `new-${editing.preset?.id}`}
+          provider={editing.provider
+            ? (view?.providers.find((p) => p.id === editing.provider?.id) ?? editing.provider)
+            : null}
+          preset={editing.preset}
+          credentialError={view?.credentialError ?? null}
+          onSaved={onSaved}
+          onCancel={() => setEditing(null)}
+          onKeyCleared={setView}
+          onFailed={reload}
         />
-      </label>
-      <div className="row">
-        <button type="button" onClick={saveKey} disabled={busy || !invoke || key.trim() === ""}>
-          保存 Key
-        </button>
-        <button
-          type="button"
-          onClick={clearKey}
-          disabled={busy || !invoke || !view?.keyConfigured}
-        >
-          删除 Key
-        </button>
-      </div>
+      ) : (
+        <div className="row">
+          <label>
+            从预设添加
+            <select value={presetId} onChange={(event) => setPresetId(event.target.value)}>
+              {PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => setEditing({ provider: null, preset: PRESETS.find((p) => p.id === presetId) ?? null })}
+          >
+            添加
+          </button>
+        </div>
+      )}
 
-      {message ? <p className={`note ${message.tone}`}>{message.text}</p> : null}
+      {message ? <p role="status" className={`note ${message.tone}`}>{message.text}</p> : null}
     </div>
   );
 }

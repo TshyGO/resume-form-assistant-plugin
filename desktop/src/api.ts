@@ -259,16 +259,37 @@ export interface ApplicationView {
   todos: TodoView[];
 }
 
-/** 设置页显示的宿主状态。字段由 `get_runtime_status` 命令给出。 */
-export interface AiSettingsView {
+/** 设置页的一个 AI 服务商。Key 本身永远不会回到前端。 */
+export interface AiProviderView {
+  id: string;
+  name: string;
   apiUrl: string;
   model: string;
   /** 只有主机名，不含完整地址。 */
   host: string;
-  /** Key 配没配。**Key 本身永远不会回到前端。** */
   keyConfigured: boolean;
+}
+
+export interface AiSettingsView {
+  providers: AiProviderView[];
+  activeProviderId: string | null;
   /** 凭据库读不出来时的原因；正常是 null。 */
   credentialError: string | null;
+}
+
+export interface SaveProviderResult {
+  view: AiSettingsView;
+  providerId: string;
+  keyCleared: boolean;
+  /** 服务商保存好了，但填的 Key 没能存进系统凭据库；原因在这里。 */
+  keyError: string | null;
+}
+
+/** `list_ai_models_cmd` 的结果：只含模型名和主机名。 */
+export interface ModelListView {
+  models: string[];
+  hiddenCount: number;
+  host: string;
 }
 
 export interface RuntimeStatus {
@@ -396,4 +417,43 @@ export interface ConfirmResult {
   todos: TodoView[];
   /** 提醒没登记上的原因。确认本身已经成了。 */
   reminderProblems: string[];
+}
+
+// --- #130 简历模板与我的信息 --------------------------------------------------------------
+
+/** #130 简历模板：列表里的一行。 */
+export interface TemplateSummary {
+  id: string;
+  name: string;
+  fieldCount: number;
+  updatedAt: string;
+}
+
+export interface ResumeOverview {
+  templates: TemplateSummary[];
+  activeTemplateId: string | null;
+}
+
+export interface TemplateGroupView {
+  name: string;
+  fields: Array<{ key: string; value: string }>;
+}
+
+export interface ResumeTemplateView {
+  id: string;
+  name: string;
+  groups: TemplateGroupView[];
+  updatedAt: string;
+}
+
+export interface ImportResultView {
+  template: TemplateSummary;
+  previousFieldCount: number | null;
+  /** 看起来是密码或验证码、没有导入的字段数。 */
+  skippedSecretFields: number;
+}
+
+export interface ProfileRecordView {
+  profile: import("./resume/profile.ts").Profile;
+  revision: number;
 }

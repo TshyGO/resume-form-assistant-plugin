@@ -7,6 +7,7 @@ const vm = require("node:vm");
 function loadHighlightHelpers(options = {}) {
   const timers = [];
   const clearedTimers = [];
+  const clipboardWrites = [];
 
   class ClassList {
     constructor() {
@@ -182,7 +183,7 @@ function loadHighlightHelpers(options = {}) {
     },
     crypto: { randomUUID: () => "test-id" },
     document,
-    navigator: { clipboard: { writeText: async () => {} } },
+    navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -201,12 +202,14 @@ function loadHighlightHelpers(options = {}) {
 
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   vm.runInNewContext(contentJs, context);
+  context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
 
   return {
     helpers: context.self.ResumeProHighlightTest,
     window,
     timers,
     clearedTimers,
+    clipboardWrites,
     styleElements,
     HTMLElement,
     HTMLInputElement,
@@ -222,6 +225,62 @@ test("injects highlight styles into the page document", () => {
   assert.equal(styleElements.length, 1);
   assert.equal(styleElements[0].id, "resume-pro-field-highlight-styles");
   assert.match(styleElements[0].textContent, /\.resume-pro__field-highlight/);
+});
+
+test("native side panel field action fills the focused page input without replacing existing text", async () => {
+  const { helpers, HTMLElement, HTMLInputElement, clipboardWrites } = loadHighlightHelpers();
+  const chip = new HTMLElement();
+  chip.dataset.chipId = "one:0:0";
+  chip.dataset.value = "张三";
+  helpers.setShadowRoot({
+    querySelector: () => null,
+    querySelectorAll: (selector) => selector === ".resume-pro__chip" ? [chip] : []
+  });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+
+  const first = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
+  assert.equal(first.ok, true);
+  assert.equal(input.value, "张三");
+  assert.deepEqual(clipboardWrites, [], "a successful fill should leave the user's clipboard alone");
+
+  input.value = "已有内容";
+  const second = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
+  assert.equal(second.ok, false);
+  assert.equal(second.needsCopy, true);
+  assert.match(second.message, /已有内容/);
+  assert.equal(input.value, "已有内容");
+  assert.deepEqual(clipboardWrites, [], "the page bridge leaves copying to the focused side panel");
+
+  const nonTextInput = new HTMLInputElement();
+  nonTextInput.type = "week";
+  nonTextInput.value = "2026-W12";
+  helpers.setLastFocusedField(nonTextInput);
+  const nonTextResult = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
+  assert.equal(nonTextResult.ok, false);
+  assert.equal(nonTextResult.needsCopy, true);
+  assert.match(nonTextResult.message, /已有内容/);
+  assert.equal(nonTextInput.value, "2026-W12", "a filled non-text control must not be overwritten");
+  assert.deepEqual(clipboardWrites, []);
+
+  const missing = await helpers.handlePanelFieldAction({ chipId: "missing", mode: "fill" });
+  assert.equal(missing.ok, false);
+});
+
+test("native side panel can address a saved 我的信息 field by its group and key", async () => {
+  const { helpers, HTMLElement, HTMLInputElement } = loadHighlightHelpers();
+  const chip = new HTMLElement();
+  chip.dataset.chipId = "profile:补充字段:期望薪资";
+  chip.dataset.value = "面议";
+  helpers.setShadowRoot({
+    querySelector: () => null,
+    querySelectorAll: (selector) => selector === ".resume-pro__chip" ? [chip] : []
+  });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+  const result = await helpers.handlePanelFieldAction({ chipId: "profile:补充字段:期望薪资", mode: "fill" });
+  assert.equal(result.ok, true);
+  assert.equal(input.value, "面议");
 });
 
 test("off-screen fields scroll into view before the highlight animation starts", () => {
@@ -480,7 +539,8 @@ test("chip addition writes the combined value and restores the caret", async () 
   assert.equal(input.value, "ACB");
   assert.equal(input.selectionStart, 2);
   assert.equal(input.selectionEnd, 2);
-  assert.equal(input.dispatchedEvents.length, 2);
+  // input、change，以及这个测试桩没有 blur() 时补上的 blur 事件。
+  assert.equal(input.dispatchedEvents.length, 3);
 });
 
 test("a nonempty input waits for add or replace, while a selected chip is removed directly", async () => {

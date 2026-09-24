@@ -29,6 +29,7 @@ local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"
 reminders = { path = "../crates/reminders" }
+resume-sheet = { path = "../crates/resume-sheet" }
 resume-pro-protocol = { path = "../crates/protocol" }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
@@ -42,6 +43,7 @@ sha2 = "0.10.9"
 url = "2.5.8"
 
 [dev-dependencies]
+rusqlite = "0.40"
 tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
