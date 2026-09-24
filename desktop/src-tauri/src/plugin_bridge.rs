@@ -16,6 +16,7 @@ use resume_pro_protocol::{
 use serde_json::{json, Map, Value};
 
 /// A successful answer: the envelope-level `resultId` and the response payload.
+#[derive(Debug)]
 pub struct Answer {
     pub result_id: Option<String>,
     pub payload: Value,

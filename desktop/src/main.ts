@@ -18,6 +18,7 @@ import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
 import { mountResume } from "./resume/mount.tsx";
+import { targetForOpenView } from "./open-view.ts";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -298,6 +299,15 @@ const resumePickers =
     : null;
 const resumeView = mountResume(must("resume-root"), invoke ?? null, resumePickers);
 
+void events?.listen?.("resume-pro://navigate", (event) => {
+  const target = targetForOpenView(event.payload);
+  if (!target) return;
+  const enteringResume = target.route === "resume" && views.resume.classList.contains("hidden");
+  showRoute(target.route);
+  if (target.settingsTab) settingsNavigation.select(target.settingsTab);
+  if (enteringResume) resumeView.refresh();
+});
+
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
@@ -313,7 +323,10 @@ const inbox = mountInbox(command, {
     : null,
   listenDrop: events?.listen
     ? (handle: (paths: string[]) => void) => {
-        void events.listen?.("tauri://drag-drop", (event) => handle(event?.payload?.paths ?? []));
+        void events.listen?.("tauri://drag-drop", (event) => {
+          const payload = event?.payload;
+          handle(typeof payload === "object" && payload !== null ? payload.paths ?? [] : []);
+        });
       }
     : null,
 });

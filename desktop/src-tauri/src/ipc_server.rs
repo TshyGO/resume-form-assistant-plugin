@@ -49,11 +49,20 @@ pub trait Application: Send + Sync + 'static {
 /// closed or never-opened archive has neither an identity nor anywhere to commit.
 pub struct OpenArchive {
     store: Arc<Mutex<Option<ArchiveStore>>>,
+    services: Arc<dyn crate::bridge_services::BridgeServices>,
 }
 
 impl OpenArchive {
+    #[cfg(test)]
     pub fn new(store: Arc<Mutex<Option<ArchiveStore>>>) -> Self {
-        Self { store }
+        Self::with_services(store, Arc::new(crate::bridge_services::NoopServices))
+    }
+
+    pub fn with_services(
+        store: Arc<Mutex<Option<ArchiveStore>>>,
+        services: Arc<dyn crate::bridge_services::BridgeServices>,
+    ) -> Self {
+        Self { store, services }
     }
 }
 
@@ -70,6 +79,9 @@ impl Application for OpenArchive {
     }
 
     fn apply(&self, request: &Request) -> Result<Answer, ErrorCode> {
+        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen) {
+            return crate::bridge_services::answer(request, self.services.as_ref());
+        }
         // The same lock the window's own commands take. One writer means one queue: a
         // browser write and a window edit cannot interleave inside the archive.
         let guard = self.store.lock().map_err(|_| ErrorCode::Unavailable)?;
@@ -316,6 +328,50 @@ mod tests {
             archive_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             restore_epoch: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
         })))
+    }
+
+    struct LockProbe(Arc<Mutex<Option<ArchiveStore>>>);
+
+    impl crate::bridge_services::BridgeServices for LockProbe {
+        fn ai_complete(&self, _purpose: &str, _system: &str, _user: &str) -> crate::bridge_services::AiReply {
+            assert!(self.0.try_lock().is_ok(), "AI must not hold the archive lock");
+            crate::bridge_services::AiReply::Ok("safe result".into())
+        }
+
+        fn open_view(&self, _view: &str) -> bool {
+            assert!(self.0.try_lock().is_ok(), "ui.open must not hold the archive lock");
+            true
+        }
+    }
+
+    #[test]
+    fn v2_service_requests_do_not_take_the_archive_lock() {
+        let shared = Arc::new(Mutex::new(None));
+        let services = Arc::new(LockProbe(Arc::clone(&shared)));
+        let application = OpenArchive::with_services(shared, services);
+        for (kind, payload, expected) in [
+            ("ai.complete", serde_json::json!({"purpose":"fill","system":"SYS","user":"USER"}), "safe result"),
+            ("ui.open", serde_json::json!({"view":"home"}), ""),
+        ] {
+            let raw = serde_json::json!({
+                "protocolVersion": 2,
+                "messageId": "33333333-3333-4333-8333-333333333333",
+                "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+                "messageType": kind,
+                "occurredAt": "2026-09-24T00:00:00.000Z",
+                "payload": payload
+            });
+            let request = resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
+            let answer = application.apply(&request).unwrap();
+            if kind == "ai.complete" { assert_eq!(answer.payload["text"], expected); }
+            else { assert_eq!(answer.payload["opened"], true); }
+            let mut with_identity = raw;
+            with_identity["archiveId"] = serde_json::json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+            assert_eq!(
+                resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&with_identity).unwrap()).err().unwrap().code,
+                ErrorCode::IdentityNotAllowed,
+            );
+        }
     }
 
     const HANDSHAKE: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":1,"maxProtocolVersion":1}}"#;

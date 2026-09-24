@@ -15,6 +15,7 @@ mod cli;
 mod commands;
 mod evidence_commands;
 mod backup_commands;
+mod bridge_services;
 mod recycle_commands;
 mod restore;
 mod resume_commands;
@@ -1586,9 +1587,10 @@ pub fn run() {
                     }
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
-                    let application = Arc::new(ipc_server::OpenArchive::new(Arc::clone(
-                        &app.state::<AppState>().store,
-                    )));
+                    let services = Arc::new(bridge_services::DesktopBridgeServices::new(app.handle().clone()));
+                    let application = Arc::new(ipc_server::OpenArchive::with_services(
+                        Arc::clone(&app.state::<AppState>().store), services,
+                    ));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
                             eprintln!("ipc: serving on {}", service.endpoint());
