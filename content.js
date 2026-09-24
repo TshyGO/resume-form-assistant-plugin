@@ -249,6 +249,9 @@
     if (!inPageUiVisible()) return false;
     state.currentStore = await StorageService.getState();
     renderSidebar();
+    const { legacyImport } = await chrome.storage.local.get(["legacyImport"]).catch(() => ({}));
+    const hint = shadowRoot?.querySelector("#resume-pro-legacy-hint");
+    if (hint) hint.hidden = !["sending", "waiting"].includes(legacyImport?.phase);
     return true;
   }
 
@@ -368,6 +371,7 @@
         <div class="resume-pro__footer">
           <button class="resume-pro__manager-button" id="resume-pro-open-manager" type="button">打开桌面</button>
           <p class="resume-pro__footer-tip">简历数据和 AI 设置由桌面程序管理。</p>
+          <p class="resume-pro__footer-tip" id="resume-pro-legacy-hint" hidden>插件里的旧简历正在迁到桌面，请到桌面「简历」页确认导入。</p>
         </div>
       </div>
     `;

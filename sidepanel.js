@@ -344,4 +344,21 @@
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
   setInterval(() => { pollStatus().catch(() => {}); }, 1500);
+  // 0.4.0 data on its way to the desktop: only while it is in flight does the panel say so.
+  async function renderLegacyHint() {
+    const { legacyImport } = await chrome.storage.local.get(["legacyImport"]);
+    document.getElementById("legacy-hint").hidden = !["sending", "waiting"].includes(legacyImport?.phase);
+  }
+  // Connection details and anything left over from the 0.4.0 migration live on the status page.
+  document.getElementById("open-status").addEventListener("click", () => { chrome.runtime.openOptionsPage?.(); });
+  document.getElementById("legacy-hint-open").addEventListener("click", async () => {
+    const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
+    if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.legacyImport) renderLegacyHint().catch(() => {});
+  });
+  // Opening the panel nudges a stalled migration; with no old data this does no native call.
+  chrome.runtime.sendMessage({ type: "DESKTOP_LEGACY_STATUS" }).catch(() => {});
+  renderLegacyHint().catch(() => {});
 })();

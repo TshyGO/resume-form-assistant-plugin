@@ -37,6 +37,59 @@ pub struct LegacyImportPending {
     pub applied: bool,
 }
 
+/// What the user chose when the desktop already has a non-empty 「我的信息」.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileChoice {
+    KeepDesktop,
+    UseImported,
+}
+
+/// What the confirmation panel shows. Names and counts only: no field value, no API
+/// URL path, no key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportPreview {
+    pub import_id: String,
+    pub state: String,
+    pub applied: bool,
+    pub templates: Vec<LegacyTemplatePreview>,
+    /// `None` when the import carries no 「我的信息」.
+    pub profile_item_count: Option<usize>,
+    pub ai: Option<LegacyAiPreview>,
+    pub desktop_template_count: usize,
+    pub desktop_profile_empty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyTemplatePreview {
+    pub name: String,
+    pub field_count: usize,
+    pub was_active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyAiPreview {
+    pub host: String,
+    pub model: String,
+}
+
+/// Filled 「我的信息」 items: non-empty values, family member entries and custom items.
+fn profile_item_count(profile: &Value) -> usize {
+    let filled = |v: &Value| v.as_str().is_some_and(|s| !s.trim().is_empty());
+    let values = profile["values"].as_object().map_or(0, |o| o.values().filter(|v| filled(v)).count());
+    // `relation` says who the member is; it is not an item the user filled in.
+    let family = profile["family"].as_array().map_or(0, |members| members.iter()
+        .map(|m| m.as_object().map_or(0, |o| o.iter().filter(|(k, v)| *k != "relation" && filled(v)).count())).sum());
+    let custom = profile["custom"].as_array().map_or(0, |items| items.iter().filter(|i| filled(&i["value"])).count());
+    values + family + custom
+}
+
+fn api_host(api_url: &str) -> String {
+    url::Url::parse(api_url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default()
+}
+
 /// What a part check found before the caller does anything outside SQLite with the part.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LegacyPartCheck {
@@ -177,8 +230,12 @@ impl ArchiveStore {
         self.transaction(|tx| tx.legacy_import_cleanup_ids())
     }
 
-    pub fn apply_legacy_confirmation(&self, import_id: &str) -> Result<LegacyImportApply, StoreError> {
-        self.transaction(|tx| tx.apply_legacy_confirmation(import_id))
+    pub fn apply_legacy_confirmation(&self, import_id: &str, profile_choice: Option<ProfileChoice>) -> Result<LegacyImportApply, StoreError> {
+        self.transaction(|tx| tx.apply_legacy_confirmation(import_id, profile_choice))
+    }
+
+    pub fn legacy_import_preview(&self, import_id: &str) -> Result<LegacyImportPreview, StoreError> {
+        self.transaction(|tx| tx.legacy_import_preview(import_id))
     }
 
     pub fn finish_legacy_confirmation(&self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
@@ -348,7 +405,47 @@ impl StoreTx<'_> {
         raw.map(|body| serde_json::from_str(&body).map_err(StoreError::from)).transpose()
     }
 
-    pub fn apply_legacy_confirmation(&mut self, import_id: &str) -> Result<LegacyImportApply, StoreError> {
+    pub fn legacy_import_preview(&self, import_id: &str) -> Result<LegacyImportPreview, StoreError> {
+        let (state, applied): (String, bool) = self.conn().query_row(
+            "SELECT state, applied_at IS NOT NULL FROM legacy_imports WHERE import_id = ?1",
+            [import_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.ok_or_else(|| StoreError::NotFound("legacy import not found".into()))?;
+        let mut stmt = self.conn().prepare(
+            "SELECT kind, body_json FROM legacy_import_parts WHERE import_id = ?1 ORDER BY idx",
+        )?;
+        let parts = stmt.query_map([import_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut preview = LegacyImportPreview {
+            import_id: import_id.to_string(), state, applied,
+            templates: Vec::new(), profile_item_count: None, ai: None,
+            desktop_template_count: 0, desktop_profile_empty: true,
+        };
+        for (kind, raw) in parts {
+            // Bodies are cleared to `{}` once applied; those contribute nothing.
+            let body: Value = serde_json::from_str(&raw)?;
+            match kind.as_str() {
+                "template" if body.get("groups").is_some() => preview.templates.push(LegacyTemplatePreview {
+                    name: body["name"].as_str().unwrap_or_default().to_string(),
+                    field_count: body["groups"].as_array().map_or(0, |groups| groups.iter()
+                        .map(|g| g["fields"].as_array().map_or(0, Vec::len)).sum()),
+                    was_active: body["wasActive"] == true,
+                }),
+                "profile" if body.get("values").is_some() => preview.profile_item_count = Some(profile_item_count(&body)),
+                "aiConfig" if body.get("apiUrl").is_some() => preview.ai = Some(LegacyAiPreview {
+                    host: api_host(body["apiUrl"].as_str().unwrap_or_default()),
+                    model: body["model"].as_str().unwrap_or_default().to_string(),
+                }),
+                _ => {}
+            }
+        }
+        preview.desktop_template_count = self.conn()
+            .query_row("SELECT COUNT(*) FROM resume_templates", [], |row| row.get::<_, i64>(0))? as usize;
+        preview.desktop_profile_empty = self.get_profile()?.profile == crate::resume::empty_profile();
+        Ok(preview)
+    }
+
+    pub fn apply_legacy_confirmation(&mut self, import_id: &str, profile_choice: Option<ProfileChoice>) -> Result<LegacyImportApply, StoreError> {
         let (state, applied_at): (String, Option<String>) = self.conn().query_row(
             "SELECT state, applied_at FROM legacy_imports WHERE import_id = ?1",
             [import_id], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -374,15 +471,17 @@ impl StoreTx<'_> {
         drop(stmt);
         // Check profile conflict before creating any template. The transaction would roll
         // changes back anyway, but this keeps the failure's meaning unambiguous.
+        // An empty desktop profile takes the import whatever the choice; a filled one
+        // needs the user to say which to keep.
+        let desktop_has_profile = self.get_profile()?.profile != crate::resume::empty_profile();
         for (kind, raw) in &parts {
             if kind == "profile" {
-                let current = self.get_profile()?;
-                if current.revision != 0 || current.profile != crate::resume::empty_profile() {
-                    return Err(conflict("existing profile requires a user choice"));
-                }
                 let profile: Value = serde_json::from_str(raw)?;
                 crate::resume::validate_profile(&profile)?;
                 crate::resume::reject_profile_secrets(&profile)?;
+                if desktop_has_profile && profile_choice.is_none() {
+                    return Err(conflict("existing profile requires a user choice"));
+                }
             }
         }
         let mut active_template = None;
@@ -396,7 +495,10 @@ impl StoreTx<'_> {
                     if body["wasActive"] == true { active_template = Some(saved.template.id); }
                 }
                 "profile" => {
-                    self.save_profile(body, 0)?;
+                    if !(desktop_has_profile && profile_choice == Some(ProfileChoice::KeepDesktop)) {
+                        let revision = self.get_profile()?.revision;
+                        self.save_profile(body, revision)?;
+                    }
                 }
                 "aiConfig" => {}
                 _ => return Err(invalid("unknown legacy part kind")),

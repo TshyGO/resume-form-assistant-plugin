@@ -213,6 +213,37 @@
     return fields;
   }
 
+  // 旧数据迁到桌面前用（#130 PR 5）：桌面档案会随备份带走，像密码、验证码的项不收，
+  // 整份送过去会被整片拒绝。这里先剔掉，与桌面 reject_profile_secrets 同一口径。
+  function stripProfileSecrets(rawProfile) {
+    const profile = normalizeProfile(rawProfile);
+    let removed = 0;
+    for (const [id, value] of Object.entries(profile.values)) {
+      if (SECRET_VALUE.test(value)) {
+        delete profile.values[id];
+        removed += 1;
+      }
+    }
+    profile.family = profile.family
+      .map((member) => {
+        const next = { ...member };
+        FAMILY_FIELDS.forEach((field) => {
+          if (next[field.id] && SECRET_VALUE.test(next[field.id])) {
+            next[field.id] = "";
+            removed += 1;
+          }
+        });
+        return next;
+      })
+      .filter((member) => FAMILY_FIELDS.some((field) => member[field.id]));
+    profile.custom = profile.custom.filter((item) => {
+      const secret = SECRET_LABEL.test(item.key) || SECRET_VALUE.test(item.value);
+      if (secret) removed += 1;
+      return !secret;
+    });
+    return { profile, removed };
+  }
+
   function countProfileValues(profile) {
     return profileToResumeFields(profile).length;
   }
@@ -386,7 +417,8 @@
     normalizeProfile,
     pickUnansweredLabels,
     profileFromEntries,
-    profileToResumeFields
+    profileToResumeFields,
+    stripProfileSecrets
   };
 
   if (typeof module !== "undefined" && module.exports) {

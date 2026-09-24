@@ -1,0 +1,27 @@
+{
+  "templates": [
+    {
+      "id": "tpl-campus",
+      "name": "校招简历（合成）",
+      "groups": [
+        { "name": "基本信息", "fields": [{ "key": "姓名", "value": "测试用户" }, { "key": "手机号", "value": "13800000000" }] },
+        { "name": "教育背景", "fields": [{ "key": "学校", "value": "合成大学" }, { "key": "专业", "value": "材料科学与工程" }] }
+      ]
+    },
+    {
+      "id": "tpl-intern",
+      "name": "实习简历（合成）",
+      "groups": [
+        { "name": "基本信息", "fields": [{ "key": "姓名", "value": "测试用户" }] },
+        { "name": "空分组", "fields": [{ "key": "", "value": "会被丢弃" }] }
+      ]
+    }
+  ],
+  "activeTemplateId": "tpl-intern",
+  "profile": {
+    "values": { "nativePlace": "合成省合成市" },
+    "family": [{ "relation": "父亲", "name": "合成父亲", "phone": "13900000000" }],
+    "custom": [{ "key": "期望薪资", "value": "面议" }, { "key": "邮箱密码", "value": "synthetic-not-migrated" }]
+  },
+  "aiConfig": { "apiUrl": "https://api.example.com/v1/chat/completions", "model": "synthetic-model", "apiKey": "sk-synthetic-golden-key" }
+}

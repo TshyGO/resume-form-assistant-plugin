@@ -1,7 +1,7 @@
 //! Confirm or reject a staged import. The archive and OS credential store cannot share
 //! a transaction, so the archive records `applied_at` and retries skip template writes.
 
-use archive_store::{ArchiveStore, LegacyImportStatus, StoreError, MAX_TEMPLATES};
+use archive_store::{ArchiveStore, LegacyImportStatus, ProfileChoice, StoreError, MAX_TEMPLATES};
 use resume_pro_protocol::ErrorCode;
 
 use crate::bridge_services::BridgeServices;
@@ -34,12 +34,22 @@ pub fn command_error(err: ConfirmError) -> CommandError {
             "桌面已有 {existing} 个模板，再导入 {incoming} 个会超过 {MAX_TEMPLATES} 个上限，请先在桌面删掉一些再确认。"
         )),
         ConfirmError::Protocol(code) => (code.as_str().to_string(), match code {
-            ErrorCode::Conflict => "旧数据与当前档案冲突，需要在桌面核对后再确认。",
+            ErrorCode::Conflict => "桌面已经有「我的信息」，请先选择保留桌面的还是用插件里的，再确认。",
             ErrorCode::InvalidPayload => "旧数据导入的清单或分片不符合协议。",
             _ => "旧数据导入暂时无法完成，请检查档案与系统凭据库后重试。",
         }.to_string()),
     };
     CommandError { code, message }
+}
+
+/// The window sends the choice as a string; anything else is a caller bug, not a choice.
+pub fn parse_profile_choice(choice: Option<&str>) -> Result<Option<ProfileChoice>, CommandError> {
+    match choice {
+        None => Ok(None),
+        Some("keep_desktop") => Ok(Some(ProfileChoice::KeepDesktop)),
+        Some("use_imported") => Ok(Some(ProfileChoice::UseImported)),
+        Some(_) => Err(CommandError { code: "invalid_input".into(), message: "「我的信息」的选择无效。".into() }),
+    }
 }
 
 /// Delete an import's temporary key and remember that it is gone. A failure is logged
@@ -64,7 +74,12 @@ fn clear_key(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &st
     store.mark_legacy_key_cleaned(import_id).map_err(code_of)
 }
 
-pub fn confirm(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &str) -> Result<LegacyImportStatus, ConfirmError> {
+pub fn confirm(
+    store: &ArchiveStore,
+    services: &dyn BridgeServices,
+    import_id: &str,
+    profile_choice: Option<ProfileChoice>,
+) -> Result<LegacyImportStatus, ConfirmError> {
     let current = store.legacy_import_status(import_id).map_err(code_of)?;
     if current.state == "imported" {
         if store.legacy_ai_config(import_id).map_err(code_of)?.is_some() {
@@ -87,7 +102,7 @@ pub fn confirm(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &
             ai["model"].as_str().ok_or(ErrorCode::InvalidPayload)?,
         )?;
     }
-    let applied = store.apply_legacy_confirmation(import_id).map_err(code_of)?;
+    let applied = store.apply_legacy_confirmation(import_id, profile_choice).map_err(code_of)?;
     let Some(ai) = applied.ai_config else { return Ok(applied.status); };
     let key = key.ok_or(ErrorCode::Unavailable)?;
     let api_url = ai["apiUrl"].as_str().ok_or(ErrorCode::InvalidPayload)?;
@@ -202,15 +217,74 @@ mod tests {
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
         services.fail_install.store(true, Ordering::Relaxed);
-        assert_eq!(confirm(&store, &services, IMPORT).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
+        assert_eq!(confirm(&store, &services, IMPORT, None).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
         assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
         services.fail_install.store(false, Ordering::Relaxed);
-        assert_eq!(confirm(&store, &services, IMPORT).unwrap().state, "imported");
-        assert_eq!(confirm(&store, &services, IMPORT).unwrap().state, "imported");
+        assert_eq!(confirm(&store, &services, IMPORT, None).unwrap().state, "imported");
+        assert_eq!(confirm(&store, &services, IMPORT, None).unwrap().state, "imported");
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
         assert_eq!(services.providers.lock().unwrap().len(), 1);
         assert!(services.keys.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_filled_desktop_profile_needs_a_choice_and_the_choice_reaches_the_store() {
+        let (_dir, store) = store();
+        store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+        store.receive_legacy_manifest(IMPORT, json!({"pluginVersion":"0.4.0","total":1,"parts":[
+            {"index":1,"kind":"profile","sha256":HASH}
+        ]})).unwrap();
+        store.receive_legacy_part(IMPORT, 1, "profile", HASH,
+            json!({"values":{"fullName":"Plugin"},"family":[],"custom":[]})).unwrap();
+        let services = FakeServices::default();
+        let err = confirm(&store, &services, IMPORT, None).unwrap_err();
+        assert_eq!(command_error(err).code, "conflict");
+        assert_eq!(confirm(&store, &services, IMPORT, Some(ProfileChoice::UseImported)).unwrap().state, "imported");
+        assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Plugin");
+    }
+
+    #[test]
+    fn keeping_the_desktop_profile_then_failing_the_ai_step_can_be_retried_or_finished_without_ai() {
+        for finish_with_retry in [true, false] {
+            let (_dir, store) = store();
+            store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+            store.receive_legacy_manifest(IMPORT, json!({"pluginVersion":"0.4.0","total":3,"parts":[
+                {"index":1,"kind":"template","sha256":HASH},{"index":2,"kind":"profile","sha256":HASH},{"index":3,"kind":"aiConfig","sha256":HASH}
+            ]})).unwrap();
+            store.receive_legacy_part(IMPORT, 1, "template", HASH,
+                json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})).unwrap();
+            store.receive_legacy_part(IMPORT, 2, "profile", HASH, json!({"values":{"fullName":"Plugin"},"family":[],"custom":[]})).unwrap();
+            store.receive_legacy_part(IMPORT, 3, "aiConfig", HASH, json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
+            let services = FakeServices::default();
+            services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
+            services.fail_install.store(true, Ordering::Relaxed);
+            assert!(confirm(&store, &services, IMPORT, Some(ProfileChoice::KeepDesktop)).is_err());
+            assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
+            assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Desktop");
+
+            let finished = if finish_with_retry {
+                // The panel retries without a choice: the templates and profile step is done,
+                // so the profile question does not come back.
+                services.fail_install.store(false, Ordering::Relaxed);
+                confirm(&store, &services, IMPORT, None).unwrap()
+            } else {
+                reject(&store, &services, IMPORT).unwrap()
+            };
+            assert_eq!(finished.state, "imported");
+            assert_eq!(finished.ai_config_dropped, !finish_with_retry);
+            assert_eq!(store.resume_overview().unwrap().templates.len(), 1, "templates are not written twice");
+            assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Desktop");
+            assert!(services.keys.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn only_the_two_known_profile_choices_are_accepted() {
+        assert_eq!(parse_profile_choice(None).unwrap(), None);
+        assert_eq!(parse_profile_choice(Some("keep_desktop")).unwrap(), Some(ProfileChoice::KeepDesktop));
+        assert_eq!(parse_profile_choice(Some("use_imported")).unwrap(), Some(ProfileChoice::UseImported));
+        assert_eq!(parse_profile_choice(Some("merge")).unwrap_err().code, "invalid_input");
     }
 
     #[test]
@@ -231,7 +305,7 @@ mod tests {
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
         services.fail_validate.store(true, Ordering::Relaxed);
-        assert_eq!(confirm(&store, &services, IMPORT).err(), Some(ConfirmError::Protocol(ErrorCode::InvalidPayload)));
+        assert_eq!(confirm(&store, &services, IMPORT, None).err(), Some(ConfirmError::Protocol(ErrorCode::InvalidPayload)));
         assert!(store.resume_overview().unwrap().templates.is_empty());
         assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
         assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "rejected");
@@ -264,7 +338,7 @@ mod tests {
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
         services.fail_install.store(true, Ordering::Relaxed);
-        assert_eq!(confirm(&store, &services, IMPORT).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
+        assert_eq!(confirm(&store, &services, IMPORT, None).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
 
         let finished = reject(&store, &services, IMPORT).unwrap();
@@ -286,7 +360,7 @@ mod tests {
         staged(&store);
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
-        store.apply_legacy_confirmation(IMPORT).unwrap();
+        store.apply_legacy_confirmation(IMPORT, None).unwrap();
         services.install_import_provider(IMPORT, "https://api.example.com/v1", "m", "sk-synthetic").unwrap();
         assert_eq!(services.providers.lock().unwrap().len(), 1);
 
@@ -316,7 +390,7 @@ mod tests {
         staged(&store);
         let services = FakeServices::default();
         services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
-        let err = confirm(&store, &services, IMPORT).unwrap_err();
+        let err = confirm(&store, &services, IMPORT, None).unwrap_err();
         assert_eq!(err, ConfirmError::TooManyTemplates { existing: 25, incoming: 1 });
         let shown = command_error(err);
         assert_eq!(shown.code, "template_limit");

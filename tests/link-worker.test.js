@@ -35,7 +35,8 @@ function fakeChrome({ nativeError = 'Specified native messaging host not found.'
           for (const name of (Array.isArray(keys) ? keys : [keys])) if (name in this._data) out[name] = this._data[name];
           return out;
         },
-        async set(values) { Object.assign(this._data, values); }
+        async set(values) { Object.assign(this._data, values); },
+        async remove(keys) { for (const key of keys) delete this._data[key]; }
       }
     },
     // Invoke the registered listener the way the browser does and resolve what it answered.
@@ -186,4 +187,17 @@ test('a worker with nothing queued neither probes nor sets an alarm', async () =
   await new Promise(resolve => setTimeout(resolve, 0));
 
   assert.equal(api.alarms.created.length, 0, 'nothing to do, so nothing to wake for');
+});
+
+test('only the extension\'s own pages may discard old plugin data', async () => {
+  const { installDesktopLink } = await import('../link/worker.mjs');
+  const api = fakeChrome();
+  api.storage.local._data.templates = [{ id: 't', name: 'x', groups: [] }];
+  installDesktopLink(api);
+  const fromPage = await api.dispatch({ type: 'DESKTOP_LEGACY_DISCARD' }, { id: api.runtime.id, url: 'https://jobs.example.test/apply', tab: { id: 1 } });
+  assert.equal(fromPage.code, 'forbidden');
+  assert.ok(api.storage.local._data.templates, 'a content script cannot delete the old data');
+  const fromStatusPage = await api.dispatch({ type: 'DESKTOP_LEGACY_DISCARD' }, { id: api.runtime.id, url: api.runtime.getURL('popup.html') });
+  assert.equal(fromStatusPage.phase, 'discarded');
+  assert.equal('templates' in api.storage.local._data, false);
 });

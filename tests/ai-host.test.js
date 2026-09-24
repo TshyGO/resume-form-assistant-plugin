@@ -114,12 +114,12 @@ test('failed startup sends no AI request and does not leave cancellation hanging
   assert.deepEqual(calls, ['ENSURE_AI_HOST']);
 });
 
-test('manifest and popup load the client and packaged host dependencies exist', () => {
+test('the content script loads the client and packaged host dependencies exist', () => {
   const manifest = JSON.parse(source('manifest.json'));
   assert.ok(manifest.permissions.includes('offscreen'));
   const scripts = manifest.content_scripts[0].js;
   assert.ok(scripts.indexOf('ai-client.js') < scripts.indexOf('content.js'));
-  const html = source('popup.html');
-  assert.ok(html.indexOf('ai-client.js') < html.indexOf('popup.js'));
+  // The status page talks to the desktop only; it has no AI client.
+  assert.equal(source('popup.html').includes('ai-client.js'), false);
   for (const file of ['ai-host.html', 'ai-host.js', 'ai-worker.js', 'ai-client.js']) assert.ok(source(file));
 });

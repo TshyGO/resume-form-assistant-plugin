@@ -1,11 +1,10 @@
 //! 模型列表拉取：往用户配的 OpenAI 兼容接口的 `/models` 发一次只带 Key 的 GET。
 //!
-//! 规则和插件那边（`ai-models.js`）一致：
+//! 规则（沿用 0.4.0 插件 `ai-models.js` 的口径，0.4.1 起只在桌面实现）：
 //! - 已经指向 `/chat/completions` 的地址，把后缀换成 `/models`；
 //! - 看着像 base（空路径、`/v1` 这类版本段、`/openai`）的，补上 `/models`；
 //! - 别的路径原样不动，也推断不出模型列表地址——直接手填模型名，不瞎猜。
 //! - 只显示看着像对话模型的，别的（embedding、语音、画图）藏起来计数。
-//! 过滤词锁死测试读取插件 `ai-models.js`；PR 5 删除该文件时一并删掉那条测试。
 //!
 //! 日志和报错里只出现主机名，不出现 Key 和完整地址（data-privacy §9）。
 
@@ -119,11 +118,9 @@ pub fn parse_model_list(body: &Value) -> Option<Vec<String>> {
     Some(ids)
 }
 
-/// 过滤词的唯一正本（字符串形态）：`non_chat_patterns` 和跨端锁死单测共用它，
-/// 插件加词时这里同步加。和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条一致
+/// 过滤词的唯一正本（字符串形态）。0.4.1 起插件不再获取模型列表（#130），这里是唯一实现
 /// （含 `asr` 无前缀、`audio` 刻意放行以保住 gpt-4o-audio-preview 之类的注释口径）。
 fn pattern_sources() -> Vec<String> {
-    // 注意和 JS 那边 `\/` 与 `/` 的写法差：比对前单测会统一归一化，见单测注释。
     const SEP: &str = r"(?:^|[/_.:\s-])";
     const END: &str = r"(?:$|[/_.:\s-])";
     [
@@ -820,85 +817,6 @@ mod tests {
         assert!(!models.contains('@'), "{models}");
         assert!(!models.contains("secret"), "{models}");
         assert!(models.starts_with("https://relay.example/"), "{models}");
-    }
-
-    /// 和插件 `ai-models.js` 的 NON_CHAT_PATTERNS 逐条锁死：插件加词时这里必须同步加，
-    /// 否则这条测试变红。读的是仓库根下的源文件（编译时相对本文件定位，和运行目录无关）。
-    /// 只比“词”本身：JS 模板里的 `\/` 和这里的 `/` 写法不同但语义一样，比对前统一归一化。
-    #[test]
-    fn non_chat_patterns_match_the_plugin_word_for_word() {
-        const JS: &str = include_str!("../../../ai-models.js");
-        let block = JS
-            .split("NON_CHAT_PATTERNS = [")
-            .nth(1)
-            .expect("NON_CHAT_PATTERNS block")
-            .split("];")
-            .next()
-            .expect("NON_CHAT_PATTERNS end");
-        let js_sep = js_string_const(JS, "const SEP = ").expect("SEP const");
-        let js_end = js_string_const(JS, "const END = ").expect("END const");
-        let mut expected = Vec::new();
-        for raw_line in block.lines() {
-            let line = raw_line.trim().trim_end_matches(',').trim();
-            if line.is_empty() {
-                continue;
-            }
-            let (raw_source, flags) = if line.starts_with('/') {
-                split_regex_literal(line).expect("regex literal entry")
-            } else if line.starts_with("new RegExp") {
-                let template = line.split('`').nth(1).expect("RegExp template");
-                let flags = line.rsplit('"').nth(1).expect("RegExp flags");
-                (
-                    template.replace("${SEP}", &js_sep).replace("${END}", &js_end),
-                    flags.to_string(),
-                )
-            } else {
-                panic!("看不懂的词条（插件改格式了就同步改这里）：{line}");
-            };
-            assert!(
-                flags.contains('i'),
-                "过滤词必须大小写不敏感（和这里的 (?i) 对应）：{line}"
-            );
-            expected.push(raw_source.replace("\\/", "/"));
-        }
-        let actual: Vec<String> = pattern_sources()
-            .into_iter()
-            .map(|pattern| pattern.replace("\\/", "/"))
-            .collect();
-        assert_eq!(
-            actual, expected,
-            "过滤词和插件对不上了：插件加词时这里同步加"
-        );
-    }
-
-    /// 取 `const SEP = "(?:^|...)"` 这类 JS 字符串常量的实际串值。
-    /// 文件里只用到了 `\\` 转义，unescape 就处理这一种，够用了。
-    fn js_string_const(js: &str, prefix: &str) -> Option<String> {
-        let line = js
-            .lines()
-            .find(|line| line.trim_start().starts_with(prefix))?;
-        let quoted = line.split('"').nth(1)?;
-        Some(quoted.replace("\\\\", "\\"))
-    }
-
-    /// 拆 `/source/flags` 字面量：`[...]` 字符组里的 `/` 不算结尾，转义的跳过一位。
-    fn split_regex_literal(line: &str) -> Option<(String, String)> {
-        let bytes = line.as_bytes();
-        let mut in_class = false;
-        let mut i = 1;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => i += 1,
-                b'[' => in_class = true,
-                b']' => in_class = false,
-                b'/' if !in_class => {
-                    return Some((line[1..i].to_string(), line[i + 1..].to_string()));
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        None
     }
 
     #[test]

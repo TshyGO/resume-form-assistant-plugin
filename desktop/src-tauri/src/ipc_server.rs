@@ -31,6 +31,15 @@ pub struct ApplicationsChanged {
     pub recycle_state: Option<String>,
 }
 
+/// A legacy import moved forward (manifest or part committed). The window re-reads the
+/// pending imports; nothing staged travels in this payload.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportChanged {
+    pub import_id: String,
+    pub state: String,
+}
+
 /// The highest protocol version the desktop actually serves right now.
 ///
 /// The desktop advertises v2 only after all five bridge handlers are wired.
@@ -52,6 +61,9 @@ pub trait Application: Send + Sync + 'static {
 
     /// The write is already durable. The default has no window to tell.
     fn on_committed(&self, _notice: &ApplicationsChanged) {}
+
+    /// A legacy import manifest or part is durable. The default has no window to tell.
+    fn on_legacy_import(&self, _notice: &LegacyImportChanged) {}
 }
 
 /// The archive this process currently has open.
@@ -62,6 +74,7 @@ pub trait Application: Send + Sync + 'static {
 pub struct OpenArchive {
     store: Arc<Mutex<Option<ArchiveStore>>>,
     notify: Option<Arc<dyn Fn(ApplicationsChanged) + Send + Sync>>,
+    legacy_notify: Option<Arc<dyn Fn(LegacyImportChanged) + Send + Sync>>,
     services: Arc<dyn crate::bridge_services::BridgeServices>,
 }
 
@@ -79,12 +92,19 @@ impl OpenArchive {
             store,
             services,
             notify: None,
+            legacy_notify: None,
         }
     }
 
     /// Calls `notify` after each committed write that changes the applications list.
     pub fn notifying(mut self, notify: Arc<dyn Fn(ApplicationsChanged) + Send + Sync>) -> Self {
         self.notify = Some(notify);
+        self
+    }
+
+    /// Calls `notify` after each committed legacy import manifest or part.
+    pub fn notifying_legacy(mut self, notify: Arc<dyn Fn(LegacyImportChanged) + Send + Sync>) -> Self {
+        self.legacy_notify = Some(notify);
         self
     }
 }
@@ -117,6 +137,12 @@ impl Application for OpenArchive {
 
     fn on_committed(&self, notice: &ApplicationsChanged) {
         if let Some(notify) = &self.notify {
+            notify(notice.clone());
+        }
+    }
+
+    fn on_legacy_import(&self, notice: &LegacyImportChanged) {
+        if let Some(notify) = &self.legacy_notify {
             notify(notice.clone());
         }
     }
@@ -197,6 +223,17 @@ pub fn start<A: Application>(
 
 /// Job, fill and explicit submission change the application list. Snapshot bytes and
 /// reads do not: an unfinished upload must not look like a saved application.
+/// A committed legacy import step. A status query changes nothing and says nothing.
+fn legacy_notice(request: &Request, answer: &Answer) -> Option<LegacyImportChanged> {
+    if request.message_type != MessageType::LegacyImport || request.payload["kind"] == "status" {
+        return None;
+    }
+    Some(LegacyImportChanged {
+        import_id: request.payload["importId"].as_str()?.to_string(),
+        state: answer.payload["state"].as_str()?.to_string(),
+    })
+}
+
 fn list_notice(request: &Request, answer: &Answer) -> Option<ApplicationsChanged> {
     if !matches!(
         request.message_type,
@@ -343,6 +380,9 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 // A read, a failed write, and an unfinished upload do not reach this.
                 if let Some(notice) = list_notice(&request, &answer) {
                     application.on_committed(&notice);
+                }
+                if let Some(notice) = legacy_notice(&request, &answer) {
+                    application.on_legacy_import(&notice);
                 }
                 let mut response = serde_json::json!({
                     "protocolVersion": request.protocol_version,
@@ -821,6 +861,48 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "unavailable");
         assert!(response.get("resultId").is_none());
+    }
+
+    fn legacy_import(identity: &archive_store::ArchiveIdentity, message_id: &str, payload: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "protocolVersion": 2,
+            "messageId": message_id,
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "legacy.import",
+            "occurredAt": "2026-09-24T12:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": payload
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_committed_legacy_import_step_notifies_and_a_status_query_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&notices);
+        let app = OpenArchive::new(Arc::clone(&shared))
+            .notifying_legacy(Arc::new(move |notice| seen.lock().unwrap().push(notice)));
+        let import_id = "77777777-7777-4777-8777-777777777777";
+        let body = serde_json::json!({"pluginVersion":"0.4.0","total":1,"parts":[
+            {"index":1,"kind":"template","sha256":"a".repeat(64)}
+        ]});
+        let manifest = legacy_import(&identity, "55555555-5555-4555-8555-555555555555",
+            serde_json::json!({"importId": import_id, "kind": "manifest", "index": 0, "body": body}));
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&manifest, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        {
+            let got = notices.lock().unwrap();
+            assert_eq!(got.len(), 1);
+            assert_eq!((got[0].import_id.as_str(), got[0].state.as_str()), (import_id, "receiving"));
+        }
+        let status = legacy_import(&identity, "66666666-6666-4666-8666-666666666666",
+            serde_json::json!({"importId": import_id, "kind": "status"}));
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&status, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(notices.lock().unwrap().len(), 1, "a status query commits nothing");
     }
 
     fn query_candidates(identity: &archive_store::ArchiveIdentity) -> Vec<u8> {

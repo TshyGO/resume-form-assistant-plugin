@@ -300,7 +300,12 @@ const resumePickers =
           (await dialog.save?.({ defaultPath: suggested, filters: [{ name: "Excel", extensions: ["xlsx"] }] })) ?? null,
       }
     : null;
-const resumeView = mountResume(must("resume-root"), invoke ?? null, resumePickers);
+const resumeView = mountResume(
+  must("resume-root"),
+  invoke ?? null,
+  resumePickers,
+  events?.listen ? (name, handler) => events.listen?.(name, () => handler()) : undefined,
+);
 
 void events?.listen?.("resume-pro://navigate", (event) => {
   const target = targetForOpenView(event.payload);

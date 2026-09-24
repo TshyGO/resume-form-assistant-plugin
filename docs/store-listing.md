@@ -28,26 +28,25 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 **实际读写的范围仍然很窄：** 内容脚本会在所有网站注入，用来在本地判断当前页是不是网申表单；
 只有你主动使用填写功能时才读写当前页的表单字段。除用户主动触发的 AI 填写（把字段说明和
-相关简历片段发到用户自己配置的接口）外，不向第三方发送页面内容；不采集浏览历史。
+相关简历片段交给本机桌面程序，由桌面发到用户自己配置的接口）外，不向第三方发送页面内容；不采集浏览历史。
 
 ### `tabs`
 
-用来识别用户当前标签页、向该页的内容脚本发送填表操作消息；也用于查找、复用并聚焦已经打开的 Resume Pro 管理标签页，避免每次从侧边栏进入都重复开页，或打开用户主动点击的版本下载页。扩展不采集浏览历史；只有用户主动使用填写功能时，内容脚本才读取和写入当前页表单字段。
+用来识别用户当前标签页、向该页的内容脚本发送填表操作消息；也用于查找、复用并聚焦已经打开的 Resume Pro 状态页，或打开用户主动点击的桌面程序下载页。扩展不采集浏览历史；只有用户主动使用填写功能时，内容脚本才读取和写入当前页表单字段。
 
 ### `sidePanel`
 
-浏览器工具栏图标打开原生侧边栏，显示模板、填表进度和可搜索的简历字段。侧边栏作为扩展页面，通过扩展消息请求当前标签页的内容脚本执行填写；它不是对网页开放的 `web_accessible_resources`。管理面板仍在独立扩展标签页打开。
+浏览器工具栏图标打开原生侧边栏，显示桌面里的当前模板、填表进度和可搜索的简历字段。侧边栏作为扩展页面，通过扩展消息请求当前标签页的内容脚本执行填写；它不是对网页开放的 `web_accessible_resources`。
 
 ### `nativeMessaging`
 
-和桌面程序通信。host 清单的 `allowed_origins` 里**只写了本扩展的 ID**，没有通配——
+和桌面程序通信。**这是扩展的核心依赖**：简历模板、「我的信息」和 AI 设置都在桌面程序里，扩展经 Native Messaging 读取简历、写回「我的信息」、请桌面转发 AI 请求、保存岗位与投递记录。host 清单的 `allowed_origins` 里**只写了本扩展的 ID**，没有通配——
 机器上别的扩展启动不了这个 host。
 
 ### `storage` / `offscreen` / `alarms`
 
-分别是：存简历模板与设置、在离屏文档的专用 Worker 中处理
-用户主动触发的 AI 填写、AI 辅助新增条目和 AI 简历解析请求、安排离线补传的重试。
-简历文件先由扩展管理页在本机读取；AI 简历解析会把提取出的整份简历文字发到用户配置的接口。
+分别是：存侧栏界面状态、待同步队列与旧数据迁移状态（不存简历和 Key）；在离屏文档的专用 Worker 中组装
+用户主动触发的 AI 填写与 AI 辅助新增条目的提示词并校验结果（请求由桌面程序发出）；安排离线补传与迁移状态查询的重试。
 
 当前填写功能由 manifest 中静态声明的内容脚本承载，没有调用 `chrome.scripting`，也没有依赖
 `activeTab` 的临时授权。因此商店提交版本移除了这两项历史遗留权限；静态内容脚本及主机权限保持不变。
@@ -63,15 +62,14 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 | `link/extract.mjs`、`copy.mjs`、`fillrecords.mjs`、`snapshot.mjs` 及它们的静态依赖 | 内容脚本里 `import(chrome.runtime.getURL(...))` 动态加载；逐文件列出，不用目录通配 |
 | `content.css` | 内容脚本 `fetch(chrome.runtime.getURL("content.css"))` |
 
-移掉的那些（`popup.js`、`popup.css`、`xlsx.full.min.js`、`mammoth.browser.min.js`、
-`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、
-`icons/*`）都是 `popup.html` 这个**扩展页面**自己的子资源。扩展页面加载同源资源不需要
+移掉的那些（`popup.js`、`popup.css`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、
+`icons/*`）都是扩展页面自己的子资源。0.4.1 起 `xlsx.full.min.js`、`mammoth.browser.min.js`、`vendor/pdfjs/*` 已从扩展里删除（简历解析与 Excel 导入导出搬到了桌面程序）。扩展页面加载同源资源不需要
 `web_accessible_resources`；把它们列出来只有一个效果：任何网页都能加载它们，也能借此
 探测出你装了这个扩展。
 
 这一条列表由 `tests/manifest-war.test.js` 锁定，误把子资源重新暴露会让 CI 变红。
 真实浏览器冒烟（Playwright Chromium/Edge，有头）见 `desktop/scripts/war_browser_check.py`：
-扩展页能加载自己的 `popup.css`/`popup.js`/`xlsx`/PDF.js，普通网页只能加载上面这 3 类 WAR 文件，
+扩展页能加载自己的 `popup.css`/`popup.js`，普通网页只能加载上面这 3 类 WAR 文件，
 其余全部被浏览器阻止。
 
 **加载来源盘点（2026-09-17，全仓 `rg getURL` / `rg "url\\(" content.css`）：**
@@ -79,25 +77,25 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 | 加载方 | 资源 | 要不要 WAR |
 | --- | --- | --- |
 | 内容脚本/页面侧 | `content.css`（`content_scripts.css` 注入 + `content.js` `fetch`）、`extract/copy/fillrecords/snapshot` 及其静态依赖（`content.js` 动态 `import`） | 要，已逐文件列在 manifest；`worker/chrome/transport` 等 service-worker 专用模块不暴露 |
-| 扩展页/offscreen | `popup.js`、`popup.css`、`sidepanel.html/css/js`、`xlsx`、`mammoth`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`vendor/pdfjs/*`、`ai-host.html` | 不要，扩展源自己加载 |
+| 扩展页/offscreen | `popup.html/css/js`（状态页）、`sidepanel.html/css/js`、`resume-data.js`、`ai-*.js`、`resume-utils.js`、`profile-fields.js`、`form-agent.js`、`ai-host.html` | 不要，扩展源自己加载 |
 | 浏览器 UI | `icons/*`（只在 `manifest.json` 的 `action`/`icons` 字段里） | 不要；没有任何内容脚本把它注入网页 |
 
 `content.css` 里没有 `url(...)` 引用，因此没有漏掉的图片或字体。
 
 **权限集合**：`manifest.json` 申报的是 `offscreen`、`storage`、`tabs`、`sidePanel`、`nativeMessaging`、`alarms`，加上 `<all_urls>` host 权限；`privacy-policy.md` 的权限表逐条对应，没有未申报的权限。
 
-**管理面板边界：** [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 已改成由扩展 service worker 打开新的扩展标签页，不再把 `popup.html` 暴露给网页。网页既不能 iframe 它，也不能用公开 URL 探测该页面。
+**状态页边界：** [#125](https://github.com/TshyGO/resume-form-assistant-plugin/issues/125) 起 `popup.html` 只在扩展自己的标签页打开（0.4.1 起它是状态页，也作为 `options_ui` 的选项页），不暴露给网页。网页既不能 iframe 它，也不能用公开 URL 探测该页面。
 
 ---
 
 ## 3. 数据用途声明（后台表单要如实勾）
 
 - **个人身份信息**：是。简历里的姓名、邮箱、电话。
-- **是否传输给第三方**：**是**——用户主动调用自行配置的 AI 接口时，AI 填写会发送表单字段说明和相关简历片段；
-  AI 简历解析会发送从所选文件中提取出的整份简历文字。请求使用用户配置的 API Key 认证。
-  必须如实声明，不能因为「我们没有服务器」就当作没有传输。
+- **是否传输给第三方**：**是**——用户主动使用 AI 填写时，表单字段说明和相关简历片段经本机桌面程序发往用户自行配置的 AI 接口，
+  请求由桌面程序用用户配置的 API Key 认证。必须如实声明，不能因为「我们没有服务器」就当作没有传输。
+  （AI 简历解析在桌面程序里进行，不经过扩展。）
 - **网站内容**：AI 填写涉及当前网申页面的字段说明和内容，应按后台定义如实声明。
-- **身份验证信息**：用户配置的 AI API Key 保存在扩展本地存储，并用于向所配置的接口认证，应按后台定义如实声明。
+- **身份验证信息**：0.4.1 起扩展不保存 AI API Key（Key 在桌面程序的系统凭据库里）。从 0.4.0 升级时，旧 Key 会经本机 Native Messaging 交给桌面一次；桌面没能导入时旧 Key 留在扩展本地存储，用户可在状态页删除。按后台定义如实声明。
 - **是否出售或用于与功能无关的用途**：否。
 - **是否用于判断信用**：否。
 - **更新检查**：D13 #121 已实现为只读 GitHub releases、每天最多一次、可在设置里关闭；测试在 `desktop/src-tauri/src/update_check.rs`。
@@ -108,22 +106,21 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 ## 4. 列表页材料
 
 - [x] 128×128 图标：`icons/icon128.png`
-- [ ] 新版侧栏与独立管理页截图：原截图若仍显示旧悬浮面板，发布前应更新并重新核对商店权限说明
+- [ ] 新版侧栏与状态页截图：原截图若仍显示旧悬浮面板，发布前应更新并重新核对商店权限说明
 - [x] 1280×800 截图：[`store-assets/store-sidebar-1280x800.png`](store-assets/store-sidebar-1280x800.png)，只含合成公司、岗位与简历数据
 - [x] 分类：`Productivity`
 - [x] 语言：`中文（简体）`
 
-**简短描述：** 求职网申场景的简历信息填写助手，支持本地模板、AI 辅助填写和桌面端岗位留档。
+**简短描述：** 求职网申填写助手，配合 Resume Pro 桌面程序使用：简历在桌面管理，扩展在网页上填写。
 
 **详细描述：**
 
-Resume Pro 帮你把重复的网申信息整理成可复用模板，并在招聘网站表单中按需填写。所有模板默认保存在浏览器本地；只有你主动点击填写、保存岗位或调用 AI 时才执行对应操作。
+Resume Pro 帮你把重复的网申信息整理成可复用模板，并在招聘网站表单中按需填写。**需要同时安装 Resume Pro 桌面程序**（支持 macOS Apple 芯片与 Windows x64）：简历模板、「我的信息」和 AI 设置都在桌面程序里管理，数据只保存在你自己的电脑上；扩展负责在网页上填写。
 
-- 导入 Excel 模板，或主动调用自行配置的 AI 接口，将本机简历提取出的整份文字解析为模板；
-- 在网申页面选择字段并填写，提交前始终由你检查；
-- 可选连接 Resume Pro Desktop，在本机保存岗位、申请进度和填写快照；
-- AI 接口完全由用户自行配置，扩展不提供也不代理模型服务；
-- 支持导出/导入插件设置，API Key 默认不进入备份。
+- 在浏览器侧边栏选择桌面里的简历模板，一键 AI 填写或逐个字段填写，提交前始终由你检查；
+- AI 请求由桌面程序发往你自行配置的 OpenAI 兼容接口，扩展不保存 API Key，也不提供或代理模型服务；
+- 保存岗位、确认投递和填写留档写进桌面程序的申请记录；
+- 从旧版升级时，扩展里原有的模板和设置会在你于桌面确认后迁入桌面。
 
 扩展不会自动提交网申，也不会把简历上传到作者服务器。隐私政策公开说明了本地存储、第三方 AI 请求和桌面通信边界。
 

@@ -90,7 +90,8 @@ button { cursor: pointer; }
 .field-row__copy { flex: none; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); font-size: 11px; }
 .field-row__copy:hover { color: var(--accent); border-color: #a9c6bf; }
 .field-empty { margin: 14px 0; color: var(--muted); font-size: 12px; }
-.dock-footer { flex: none; padding: 10px 16px 11px; border-top: 1px solid var(--line); background: #fff; }
+.dock-footer { flex: none; display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 10px 16px 11px; border-top: 1px solid var(--line); background: #fff; }
+.dock-footer #open-status { width: auto; padding: 0 12px; font-weight: 500; color: var(--muted, #5f6b76); }
 .dock-footer button { width: 100%; min-height: 36px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 600; }
 .dock-footer button:hover { background: var(--bg); }
 .panel-toast { position: fixed; right: 12px; bottom: 60px; z-index: 20; max-width: calc(100% - 24px); padding: 9px 12px; border-radius: 7px; background: var(--nav); color: #fff; box-shadow: 0 8px 20px #1c233040; font-size: 11px; }

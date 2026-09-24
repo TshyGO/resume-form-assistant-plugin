@@ -69,15 +69,6 @@ function dispatchAiMessage(message, sender, sendResponse) {
     return true;
   }
 
-  if (message?.type === "PARSE_RESUME") {
-    handleParseResume(message)
-      .then(sendResponse)
-      .catch((error) => {
-        sendResponse({ success: false, error: error.message || "简历解析失败。" });
-      });
-    return true;
-  }
-
   return false;
 }
 
@@ -273,10 +264,6 @@ async function handleAiFill(message, controller = new AbortController()) {
   const warning = [...new Set(warnings)].join(" ");
   return { success: !warning || matches.length > 0, matches, warning, error: warning, diagnostics,
     ...(openView ? { openView } : {}) };
-}
-
-async function handleParseResume() {
-  return { success: false, error: "简历解析已搬到桌面程序的「简历」页。", openView: "resume" };
 }
 
 function buildUserPrompt(formFields, resumeFields) {

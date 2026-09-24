@@ -276,9 +276,9 @@ Host 校验顺序：扫描 argv 的 origin token ∈ 当前 manifest；单帧 �
 | 角色 | 允许 | 禁止 |
 | --- | --- | --- |
 | NM host 进程 | NM 编解码、origin/大小、按需启动应用进程、转发白名单 | 打开 SQLite、写附件、弹业务 GUI、stdout 日志 |
-| 应用进程 | SQLite、附件、快照、幂等表、备份、current 指针、系统通知登记、配对写 manifest | 第三个 writer、监听 127.0.0.1 给网页、执行模型返回的命令 |
+| 应用进程 | SQLite、附件、快照、幂等表、备份、current 指针、系统通知登记、配对写 manifest；简历模板与「我的信息」（#130）；AI 服务商设置与 Key（OS 凭据库）；代插件发 AI 请求 | 第三个 writer、监听 127.0.0.1 给网页、执行模型返回的命令、把 Key 回传给插件 |
 | WebView 子进程 | 经应用内 IPC 调后端 | 直接写 `archive.db` |
-| 插件 SW | 意图队列、绑定 outbox、握手、白名单 RPC、扩展源 IndexedDB 快照暂存 | 把 `aiConfig.apiKey` 放进 NM；从未配对就持久化意图 |
+| 插件 SW | 意图队列、绑定 outbox、握手、白名单 RPC、扩展源 IndexedDB 快照暂存；经 v2 读取简历、写回「我的信息」、转发 AI 请求（`connectNative` 长连接）、一次性旧数据迁移 | 缓存简历或 Key；直连 AI 服务商；除 `legacy.import` 的 AI 配置片外把 Key 放进 NM；从未配对就持久化意图 |
 
 SQLite 是嵌入式库（[sqlite.org](https://sqlite.org/)），单用户本地档案，文件格式跨平台。WAL + 唯一写入者。附件不进 blob 表。
 
@@ -286,14 +286,15 @@ SQLite 是嵌入式库（[sqlite.org](https://sqlite.org/)），单用户本地�
 
 ## 6. API / Interface Changes（相对今天的插件）
 
-D01 **不改**插件。下游预期：
+D01 **不改**插件。下游实际演进：
 
 | 时机 | 变化 |
 | --- | --- |
 | 现在 0.3.0 | 无 NM |
 | D07 | 追加 `nativeMessaging`；意图/绑定队列；粘贴 ID 配对；确认投递 |
 | D08 | 扩展源 IndexedDB 快照暂存；可能申请 `unlimitedStorage` |
-| 永不（v1） | 桌面档案镜像进 `chrome.storage`；插件 Key 复制进备份；content script 直连 native；用第一条 NM 做配对；content script 把快照写进 **页面** IndexedDB |
+| 0.4.1（#130） | 协议 v2：`resume.read`、`resume.update`、`ai.complete`、`ui.open`、`legacy.import`。桌面成为简历模板、「我的信息」、AI 设置的唯一来源；插件只填表，AI 由桌面代发；插件管理页精简为状态页；0.4.0 数据经 `legacy.import` 在桌面确认后迁入 |
+| 永不 | 桌面档案镜像进 `chrome.storage`；Key 回传插件或进备份；content script 直连 native；用第一条 NM 做配对；content script 把快照写进 **页面** IndexedDB |
 
 ---
 

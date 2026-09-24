@@ -1,0 +1,127 @@
+[
+  {
+    "importId": "c0ffee00-0000-4000-8000-000000000001",
+    "kind": "manifest",
+    "index": 0,
+    "body": {
+      "pluginVersion": "0.4.1",
+      "total": 4,
+      "parts": [
+        {
+          "index": 1,
+          "kind": "template",
+          "sha256": "df69553c5d0ee3558474a07d7988ab529d0847dea2955138409f7a05956e72e4"
+        },
+        {
+          "index": 2,
+          "kind": "template",
+          "sha256": "6ee2d99157d0312b46e72909474431c10bde3802927642a5b9c895fd0c1e1583"
+        },
+        {
+          "index": 3,
+          "kind": "profile",
+          "sha256": "b63d59be2852e8d140dbb919b7ed53725c286d6a2d1233d48084738c1b8cb661"
+        },
+        {
+          "index": 4,
+          "kind": "aiConfig",
+          "sha256": "f02fc143d73277338a2efc7dde8dbc94ba101111ccd74f2cc8f56e911715b930"
+        }
+      ]
+    }
+  },
+  {
+    "importId": "c0ffee00-0000-4000-8000-000000000001",
+    "kind": "template",
+    "index": 1,
+    "body": {
+      "name": "实习简历（合成）",
+      "wasActive": true,
+      "groups": [
+        {
+          "name": "基本信息",
+          "fields": [
+            {
+              "key": "姓名",
+              "value": "测试用户"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "importId": "c0ffee00-0000-4000-8000-000000000001",
+    "kind": "template",
+    "index": 2,
+    "body": {
+      "name": "校招简历（合成）",
+      "wasActive": false,
+      "groups": [
+        {
+          "name": "基本信息",
+          "fields": [
+            {
+              "key": "姓名",
+              "value": "测试用户"
+            },
+            {
+              "key": "手机号",
+              "value": "13800000000"
+            }
+          ]
+        },
+        {
+          "name": "教育背景",
+          "fields": [
+            {
+              "key": "学校",
+              "value": "合成大学"
+            },
+            {
+              "key": "专业",
+              "value": "材料科学与工程"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "importId": "c0ffee00-0000-4000-8000-000000000001",
+    "kind": "profile",
+    "index": 3,
+    "body": {
+      "values": {
+        "nativePlace": "合成省合成市"
+      },
+      "family": [
+        {
+          "relation": "父亲",
+          "name": "合成父亲",
+          "birth": "",
+          "political": "",
+          "company": "",
+          "job": "",
+          "phone": "13900000000"
+        }
+      ],
+      "custom": [
+        {
+          "key": "期望薪资",
+          "value": "面议"
+        }
+      ]
+    }
+  },
+  {
+    "importId": "c0ffee00-0000-4000-8000-000000000001",
+    "kind": "aiConfig",
+    "index": 4,
+    "body": {
+      "apiUrl": "https://api.example.com/v1/chat/completions",
+      "model": "synthetic-model",
+      "apiKey": "sk-synthetic-golden-key"
+    }
+  }
+]

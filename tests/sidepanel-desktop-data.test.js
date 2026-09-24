@@ -22,7 +22,9 @@ function element() {
   };
 }
 
-async function harness(initial = { status: 'ok', data: data() }) {
+async function harness(initial = { status: 'ok', data: data() }, { legacy = null } = {}) {
+  let legacyState = legacy;
+  let storageListener = null;
   const elements = new Map();
   const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
   const documentEvents = {};
@@ -53,6 +55,10 @@ async function harness(initial = { status: 'ok', data: data() }) {
         return {};
       }
     },
+    storage: {
+      local: { get: async () => ({ legacyImport: legacyState }) },
+      onChanged: { addListener(listener) { storageListener = listener; } }
+    },
     tabs: {
       query: async () => [{ id: 9 }],
       sendMessage: async (id, message) => { calls.push({ tabId: id, ...message }); return pageResponse; },
@@ -70,7 +76,8 @@ async function harness(initial = { status: 'ok', data: data() }) {
   await new Promise(resolve => setImmediate(resolve));
   return { get, profileAdd, calls, copied, document, documentEvents, tabEvents,
     setResponse: value => { response = value; }, setUpdateResult: value => { updateResult = value; },
-    setPageResponse: value => { pageResponse = value; }, poll: () => poll(), tick: () => new Promise(resolve => setImmediate(resolve)) };
+    setPageResponse: value => { pageResponse = value; }, poll: () => poll(), tick: () => new Promise(resolve => setImmediate(resolve)),
+    setLegacy: value => { legacyState = value; storageListener?.({ legacyImport: { newValue: value } }, 'local'); } };
 }
 
 test('initial native side panel reads desktop summary and active fields', async () => {
@@ -185,5 +192,24 @@ test('a desktop not-configured response exposes the AI settings action', async (
 
 test('the side panel does not access the four old local data keys', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'sidepanel.js'), 'utf8');
-  assert.doesNotMatch(source, /chrome\.storage/);
+  // The only local key the panel may read is the migration state (#130 PR 5).
+  const reads = [...source.matchAll(/chrome\.storage\.local\.(\w+)\(([^)]*)\)/g)];
+  assert.ok(reads.length > 0);
+  for (const [, method, args] of reads) {
+    assert.equal(method, 'get');
+    assert.equal(args.trim(), '["legacyImport"]');
+  }
+  assert.doesNotMatch(source, /["'](templates|activeTemplateId|aiConfig|profile)["']/);
+});
+
+test('the panel says so while old plugin data is on its way to the desktop', async () => {
+  const ui = await harness(undefined, { legacy: { phase: 'waiting' } });
+  await ui.tick();
+  assert.equal(ui.get('legacy-hint').hidden, false);
+  assert.ok(ui.calls.some(call => call.type === 'DESKTOP_LEGACY_STATUS'), 'opening the panel nudges the migration');
+  ui.setLegacy({ phase: 'imported' });
+  await ui.tick();
+  assert.equal(ui.get('legacy-hint').hidden, true);
+  await ui.get('legacy-hint-open').listeners.click();
+  assert.ok(ui.calls.some(call => call.type === 'DESKTOP_OPEN_VIEW' && call.view === 'resume'));
 });

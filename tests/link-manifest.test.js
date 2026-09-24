@@ -32,7 +32,8 @@ test('the toolbar button opens the native side panel and the manager stays in an
   assert.match(source, /chrome\.tabs\.update/);
   assert.match(source, /chrome\.tabs\.query/);
   assert.match(source, /chrome\.windows\.update/);
-  assert.match(source, /OPEN_MANAGER/);
+  // Nothing asks the worker to open the manager any more; the sidebars open the desktop.
+  assert.doesNotMatch(source, /OPEN_MANAGER/);
   assert.doesNotMatch(source, /TOGGLE_MANAGER/);
 });
 

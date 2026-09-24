@@ -1,4 +1,4 @@
-use archive_store::{ArchiveConfig, ArchiveStore, StoreError};
+use archive_store::{ArchiveConfig, ArchiveStore, ProfileChoice, StoreError};
 use serde_json::json;
 
 const IMPORT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -69,12 +69,12 @@ fn confirmation_imports_templates_and_profile_once() {
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template).unwrap();
     let profile = json!({"values":{"fullName":"Alice"},"family":[],"custom":[]});
     store.receive_legacy_part(IMPORT, 2, "profile", HASH, profile.clone()).unwrap();
-    let applied = store.apply_legacy_confirmation(IMPORT).unwrap();
+    let applied = store.apply_legacy_confirmation(IMPORT, None).unwrap();
     assert_eq!(applied.status.state, "imported");
     assert!(applied.ai_config.is_none());
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     assert_eq!(store.get_profile().unwrap().profile, profile);
-    assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "imported");
+    assert_eq!(store.apply_legacy_confirmation(IMPORT, None).unwrap().status.state, "imported");
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     let db = rusqlite::Connection::open(cfg.db_path()).unwrap();
     let bodies: Vec<String> = db.prepare("SELECT body_json FROM legacy_import_parts WHERE import_id = ?1")
@@ -91,7 +91,7 @@ fn existing_profile_conflict_rolls_back_all_imported_templates() {
         json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})).unwrap();
     store.receive_legacy_part(IMPORT, 2, "profile", HASH,
         json!({"values":{"fullName":"Alice"},"family":[],"custom":[]})).unwrap();
-    assert!(matches!(store.apply_legacy_confirmation(IMPORT), Err(StoreError::Conflict(_))));
+    assert!(matches!(store.apply_legacy_confirmation(IMPORT, None), Err(StoreError::Conflict(_))));
     assert!(store.resume_overview().unwrap().templates.is_empty());
     assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
 }
@@ -107,11 +107,11 @@ fn ai_confirmation_can_retry_after_credentials_fail_without_copying_templates_ag
         json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})).unwrap();
     let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true});
     store.receive_legacy_part(IMPORT, 2, "aiConfig", HASH, ai.clone()).unwrap();
-    let first = store.apply_legacy_confirmation(IMPORT).unwrap();
+    let first = store.apply_legacy_confirmation(IMPORT, None).unwrap();
     assert_eq!(first.status.state, "awaiting_confirmation");
     assert_eq!(first.ai_config, Some(ai.clone()));
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
-    let second = store.apply_legacy_confirmation(IMPORT).unwrap();
+    let second = store.apply_legacy_confirmation(IMPORT, None).unwrap();
     assert_eq!(second.ai_config, Some(ai));
     assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     assert_eq!(store.finish_legacy_confirmation(IMPORT).unwrap().state, "imported");
@@ -188,14 +188,14 @@ fn confirmation_refuses_to_overflow_the_template_limit_and_reports_both_counts()
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
     store.receive_legacy_part(IMPORT, 2, "template", HASH, template_body("Second")).unwrap();
     assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), Some((24, 2)));
-    assert!(matches!(store.apply_legacy_confirmation(IMPORT), Err(StoreError::Validation(_))));
+    assert!(matches!(store.apply_legacy_confirmation(IMPORT, None), Err(StoreError::Validation(_))));
     assert_eq!(store.resume_overview().unwrap().templates.len(), 24);
     assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
 
     let first = store.resume_overview().unwrap().templates[0].id.clone();
     store.delete_template(&first).unwrap();
     assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), None);
-    assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "imported");
+    assert_eq!(store.apply_legacy_confirmation(IMPORT, None).unwrap().status.state, "imported");
     // Once applied, its own templates are no longer "incoming".
     assert_eq!(store.legacy_template_overflow(IMPORT).unwrap(), None);
 }
@@ -241,7 +241,7 @@ fn part_check_reports_whether_the_part_is_new_and_the_import_state() {
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
     let again = store.check_legacy_part(IMPORT, 1, "template", HASH).unwrap();
     assert_eq!((again.is_new, again.state.as_str()), (false, "awaiting_confirmation"));
-    store.apply_legacy_confirmation(IMPORT).unwrap();
+    store.apply_legacy_confirmation(IMPORT, None).unwrap();
     let done = store.check_legacy_part(IMPORT, 1, "template", HASH).unwrap();
     assert_eq!((done.is_new, done.state.as_str()), (false, "imported"));
 }
@@ -253,7 +253,7 @@ fn rejecting_an_applied_import_finishes_it_without_the_ai_config_and_frees_the_s
     store.receive_legacy_part(IMPORT, 1, "template", HASH, template_body("First")).unwrap();
     store.receive_legacy_part(IMPORT, 2, "aiConfig", HASH,
         json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
-    assert_eq!(store.apply_legacy_confirmation(IMPORT).unwrap().status.state, "awaiting_confirmation");
+    assert_eq!(store.apply_legacy_confirmation(IMPORT, None).unwrap().status.state, "awaiting_confirmation");
     assert!(matches!(store.receive_legacy_manifest(OTHER, manifest_of(&["template"])), Err(StoreError::Conflict(_))));
     let pending = store.list_pending_legacy_imports().unwrap();
     assert_eq!(pending.len(), 1);
@@ -305,4 +305,86 @@ fn startup_cleanup_lists_each_finished_ai_import_until_its_key_is_cleaned() {
     assert_eq!(pending.skipped, 1);
     store.mark_legacy_key_cleaned(IMPORT).unwrap();
     assert!(store.legacy_import_cleanup_ids().unwrap().ids.is_empty());
+}
+
+fn stage_template_and_profile(store: &ArchiveStore, profile: serde_json::Value) {
+    store.receive_legacy_manifest(IMPORT, manifest(2)).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH,
+        json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})).unwrap();
+    store.receive_legacy_part(IMPORT, 2, "profile", HASH, profile).unwrap();
+}
+
+#[test]
+fn an_empty_desktop_profile_takes_the_import_whatever_the_choice() {
+    let (_dir, _cfg, store) = open();
+    // Filled once and cleared again: revision is not 0, but there is nothing to lose.
+    store.save_profile(json!({"values":{"fullName":"Old"},"family":[],"custom":[]}), 0).unwrap();
+    store.save_profile(json!({"values":{},"family":[],"custom":[]}), 1).unwrap();
+    stage_template_and_profile(&store, json!({"values":{"fullName":"Alice"},"family":[],"custom":[]}));
+    assert_eq!(store.apply_legacy_confirmation(IMPORT, None).unwrap().status.state, "imported");
+    assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Alice");
+}
+
+#[test]
+fn keeping_the_desktop_profile_imports_templates_only() {
+    let (_dir, _cfg, store) = open();
+    store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+    stage_template_and_profile(&store, json!({"values":{"fullName":"Plugin"},"family":[],"custom":[]}));
+    let before = store.get_profile().unwrap().revision;
+    let done = store.apply_legacy_confirmation(IMPORT, Some(ProfileChoice::KeepDesktop)).unwrap();
+    assert_eq!(done.status.state, "imported");
+    let after = store.get_profile().unwrap();
+    assert_eq!(after.profile["values"]["fullName"], "Desktop");
+    assert_eq!(after.revision, before);
+    assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
+}
+
+#[test]
+fn using_the_imported_profile_overwrites_the_desktop_one() {
+    let (_dir, _cfg, store) = open();
+    store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+    stage_template_and_profile(&store, json!({"values":{"fullName":"Plugin"},"family":[],"custom":[]}));
+    let before = store.get_profile().unwrap().revision;
+    store.apply_legacy_confirmation(IMPORT, Some(ProfileChoice::UseImported)).unwrap();
+    let after = store.get_profile().unwrap();
+    assert_eq!(after.profile["values"]["fullName"], "Plugin");
+    assert_eq!(after.revision, before + 1);
+}
+
+#[test]
+fn the_preview_names_what_arrives_without_any_value_url_path_or_key() {
+    let (_dir, _cfg, store) = open();
+    store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+    let parts = json!([
+        {"index":1,"kind":"template","sha256":HASH},
+        {"index":2,"kind":"profile","sha256":HASH},
+        {"index":3,"kind":"aiConfig","sha256":HASH}
+    ]);
+    store.receive_legacy_manifest(IMPORT, json!({"pluginVersion":"0.4.0","total":3,"parts":parts})).unwrap();
+    store.receive_legacy_part(IMPORT, 1, "template", HASH, json!({"name":"研发岗","wasActive":true,"groups":[
+        {"name":"基本信息","fields":[{"key":"姓名","value":"SYNTHETIC-VALUE-1"},{"key":"电话","value":"SYNTHETIC-VALUE-2"}]}
+    ]})).unwrap();
+    store.receive_legacy_part(IMPORT, 2, "profile", HASH, json!({
+        "values":{"fullName":"SYNTHETIC-VALUE-3","email":""},
+        "family":[{"name":"SYNTHETIC-VALUE-4"}],
+        "custom":[{"key":"期望薪资","value":"SYNTHETIC-VALUE-5"}]
+    })).unwrap();
+    store.receive_legacy_part(IMPORT, 3, "aiConfig", HASH,
+        json!({"apiUrl":"https://api.example.com/v1/secret-path?token=x","model":"m-1","hasKey":true})).unwrap();
+
+    let preview = store.legacy_import_preview(IMPORT).unwrap();
+    assert_eq!(preview.state, "awaiting_confirmation");
+    assert!(!preview.applied);
+    assert_eq!(preview.templates.len(), 1);
+    assert_eq!((preview.templates[0].name.as_str(), preview.templates[0].field_count, preview.templates[0].was_active), ("研发岗", 2, true));
+    assert_eq!(preview.profile_item_count, Some(3));
+    let ai = preview.ai.clone().unwrap();
+    assert_eq!((ai.host.as_str(), ai.model.as_str()), ("api.example.com", "m-1"));
+    assert_eq!(preview.desktop_template_count, 0);
+    assert!(!preview.desktop_profile_empty);
+
+    let wire = serde_json::to_string(&preview).unwrap();
+    for leak in ["SYNTHETIC-VALUE", "secret-path", "token", "apiKey", "hasKey"] {
+        assert!(!wire.contains(leak), "preview leaked {leak}: {wire}");
+    }
 }

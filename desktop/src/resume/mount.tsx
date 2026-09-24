@@ -2,6 +2,7 @@ import type { Invoke } from "../api.ts";
 import { mountReact } from "../react/mount.tsx";
 import { ResumeView } from "./ResumeView.tsx";
 import type { FilePickers } from "./TemplateList.tsx";
+import type { Listen } from "./LegacyImport.tsx";
 
 export interface MountedResume {
   /**
@@ -14,9 +15,14 @@ export interface MountedResume {
 }
 
 /** 「简历」主视图。容器归 React 管，旧视图不往里写 innerHTML。 */
-export function mountResume(container: Element, invoke: Invoke | null, pickers: FilePickers | null): MountedResume {
+export function mountResume(
+  container: Element,
+  invoke: Invoke | null,
+  pickers: FilePickers | null,
+  listen?: Listen,
+): MountedResume {
   let generation = 0;
-  const view = () => <ResumeView key={generation} pickers={pickers} />;
+  const view = () => <ResumeView key={generation} pickers={pickers} listen={listen} />;
   const mounted = mountReact(container, invoke, view());
   return {
     refresh: () => {

@@ -26,8 +26,10 @@ class MacAcceptanceCheckTests(unittest.TestCase):
                 archive.writestr(name, content)
 
     def candidate_args(self, root):
+        # The synthetic ZIP carries the repository manifest, so expect whatever version it says.
+        plugin_version = json.loads((MAC.ROOT / "manifest.json").read_text(encoding="utf-8"))["version"]
         dmg = root / "Resume.Pro.Desktop_0.4.0-beta.3_aarch64.dmg"
-        extension = root / "resume-pro-v0.4.0.zip"
+        extension = root / f"resume-pro-v{plugin_version}.zip"
         dmg.write_bytes(b"synthetic-dmg-for-unit-test")
         self.write_extension_zip(extension)
         return Namespace(
@@ -37,7 +39,7 @@ class MacAcceptanceCheckTests(unittest.TestCase):
             source_commit="a" * 40,
             workflow_run_url="https://github.com/example/repo/actions/runs/1",
             desktop_version="0.4.0-beta.3",
-            extension_version="0.4.0",
+            extension_version=plugin_version,
             protocol_version=1,
             dmg_url="https://downloads.example.test/desktop.dmg",
             extension_url="https://downloads.example.test/extension.zip",
