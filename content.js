@@ -860,9 +860,8 @@
     const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (button.disabled || fillButton.disabled) return;
     const template = getActiveTemplate(state.currentStore);
-    const config = state.currentStore?.aiConfig;
-    if (!template || !config?.apiKey || !config?.apiUrl || !config?.model) {
-      showStatus("请先准备简历模板和 AI 接口。", "error");
+    if (!template) {
+      showStatus("请先在桌面准备简历模板。", "error");
       return;
     }
     const agent = self.ResumeProFormAgent;
@@ -899,7 +898,7 @@
     progress();
     const timer = window.setInterval(progress, 1000);
     try {
-      const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId, aiConfig: config, candidates: snapshot.candidates });
+      const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId, candidates: snapshot.candidates });
       planning = false;
       window.clearInterval(timer);
       if (stopped) throw new Error("已停止，未执行新增。");
@@ -944,17 +943,11 @@
     const button = event.currentTarget;
     if (button.disabled) return;
     const activeTemplate = getActiveTemplate(state.currentStore);
-    const aiConfig = state.currentStore?.aiConfig;
 
     const profileFields = profileResumeFields();
 
     if (!activeTemplate && !profileFields.length) {
       showStatus("请先导入简历模板，或在「我的信息」里填写内容。", "error");
-      return;
-    }
-
-    if (!aiConfig?.apiUrl || !aiConfig?.model || !aiConfig?.apiKey) {
-      showStatus("请先在插件中配置 AI 接口。", "error");
       return;
     }
 
@@ -1038,8 +1031,7 @@
         type: "AI_FILL",
         requestId,
         formFields: fields,
-        resumeFields,
-        aiConfig
+        resumeFields
       });
       timing.roundTripMs = performance.now() - phaseStart;
       phase = null;

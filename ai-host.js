@@ -4,6 +4,18 @@ const pending = new Map();
 let sequence = 0;
 let failed = false;
 worker.onmessage = ({ data }) => {
+  if (data?.kind === "desktop-complete") {
+    chrome.runtime.sendMessage({
+      type: "DESKTOP_AI_COMPLETE", requestId: data.callId,
+      purpose: data.purpose, system: data.system, user: data.user
+    }).then(reply => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply }))
+      .catch(() => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply: { ok: false, reason: "unavailable" } }));
+    return;
+  }
+  if (data?.kind === "desktop-cancel") {
+    chrome.runtime.sendMessage({ type: "DESKTOP_AI_CANCEL", requestId: data.callId }).catch(() => {});
+    return;
+  }
   const respond = pending.get(data.id);
   pending.delete(data.id);
   respond?.(data.reply);

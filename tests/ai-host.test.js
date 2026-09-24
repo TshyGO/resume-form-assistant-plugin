@@ -62,6 +62,25 @@ test('offscreen host forwards sender identity and correlated replies to its dedi
   assert.equal(result.ready, false);
 });
 
+test('offscreen host relays desktop AI requests and cancellation', async () => {
+  let worker;
+  const sent = [];
+  class MockWorker { constructor() { worker = this; } postMessage(data) { this.last = data; } }
+  const context = vm.createContext({ Worker: MockWorker, chrome: { runtime: {
+    onMessage: { addListener() {} },
+    sendMessage: async message => { sent.push(message); return { ok: true, text: 'synthetic' }; }
+  } } });
+  vm.runInContext(source('ai-host.js'), context);
+  worker.onmessage({ data: { kind: 'desktop-complete', callId: 'a', purpose: 'fill', system: 's', user: 'u' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent[0].type, 'DESKTOP_AI_COMPLETE');
+  assert.equal(sent[0].requestId, 'a');
+  assert.equal(worker.last.kind, 'desktop-result');
+  assert.equal(worker.last.reply.text, 'synthetic');
+  worker.onmessage({ data: { kind: 'desktop-cancel', callId: 'a' } });
+  assert.equal(sent[1].type, 'DESKTOP_AI_CANCEL');
+});
+
 test('client cancellation waits for startup and original dispatch rather than racing the host', async () => {
   let ready, complete;
   const calls = [];

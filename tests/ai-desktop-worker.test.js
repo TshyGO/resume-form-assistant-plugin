@@ -1,0 +1,139 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(path.join(__dirname, '..', 'ai-worker.js'), 'utf8');
+const helpers = require('../ai-helpers.js');
+const BASE = {
+  formFields: [{ fieldId: 'name', label: '姓名' }, { fieldId: 'school', label: '学校' }],
+  resumeFields: [{ group: '基本信息', key: '姓名', value: '测试用户' }, { group: '教育背景', key: '学校', value: '大学乙' }]
+};
+
+function worker(respond = () => ({ ok: true, text: '[{"fieldId":"school","value":"大学乙"}]' })) {
+  const sent = [];
+  let sequence = 0;
+  const context = vm.createContext({
+    importScripts() {}, ResumeProAIHelpers: helpers,
+    ResumeProProfile: require('../profile-fields.js'),
+    ResumeProFormAgent: require('../form-agent.js'),
+    AbortController, TextEncoder, performance: { now: () => 0 },
+    crypto: { randomUUID: () => `synthetic-${++sequence}` }
+  });
+  context.self = {
+    postMessage(message) {
+      sent.push(message);
+      if (message.kind === 'desktop-complete') {
+        Promise.resolve(respond(message)).then(reply => {
+          context.self.onmessage({ data: { kind: 'desktop-result', callId: message.callId, reply } });
+        });
+      }
+    }
+  };
+  vm.runInContext(source, context);
+  return { context, sent, run: (input = BASE, controller) => context.handleAiFill(input, controller) };
+}
+
+test('AI fill keeps local rules and parses only desktop response text', async () => {
+  const env = worker();
+  const result = await env.run({ ...BASE, aiConfig: { apiKey: 'should-never-leave' } });
+  assert.equal(result.success, true);
+  assert.equal(result.matches.length, 2);
+  assert.equal(env.sent[0].purpose, 'fill');
+  assert.equal(typeof env.sent[0].system, 'string');
+  assert.ok(env.sent[0].user.includes('学校'));
+  assert.ok(!JSON.stringify(env.sent).includes('should-never-leave'));
+  assert.doesNotMatch(source, /\bfetch\s*\(/);
+});
+
+test('oversized form prompts are split beneath the UTF-8 user budget', async () => {
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  const input = {
+    formFields: Array.from({ length: 24 }, (_, i) => ({ fieldId: `f${i}`, label: `问题${i}` + '甲'.repeat(1000) })),
+    resumeFields: [{ group: '自定义', key: '说明', value: '乙'.repeat(2000) }]
+  };
+  await env.run(input);
+  const calls = env.sent.filter(item => item.kind === 'desktop-complete');
+  assert.ok(calls.length > 1);
+  const budget = vm.runInContext('AI_USER_BUDGET', env.context);
+  for (const call of calls) assert.ok(Buffer.byteLength(call.user) <= budget);
+});
+
+test('password and verification fields never enter any AI prompt', async () => {
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  await env.run({
+    formFields: [
+      { fieldId: 'password-field', label: '登录密码', inputType: 'password' },
+      { fieldId: 'captcha-field', label: '验证码' },
+      { fieldId: 'school', label: '学校' }
+    ],
+    resumeFields: [...BASE.resumeFields, { group: '自定义', key: '登录密码', value: 'synthetic-secret' }]
+  });
+  const prompts = env.sent.filter(item => item.kind === 'desktop-complete').map(item => item.user).join('\n');
+  assert.ok(prompts.includes('学校'));
+  assert.ok(!prompts.includes('登录密码'));
+  assert.ok(!prompts.includes('验证码'));
+  assert.ok(!prompts.includes('synthetic-secret'));
+});
+
+test('desktop failure reasons produce distinct Chinese guidance', async () => {
+  const cases = [
+    ['not_configured', '桌面还没有配置 AI 服务商'], ['credential_unavailable', '系统凭据库'],
+    ['auth', 'HTTP 401/403'], ['rate_limited', '限流'], ['timeout', '长时间没有返回'],
+    ['network', '连不上'], ['http', 'HTTP 502'], ['bad_response', '无法使用'],
+    ['input_too_large', '内容太多'], ['response_too_large', '内容过长'],
+    ['secret_in_prompt', '像密码'], ['cancelled', '取消'],
+    ['not_installed', '安装'], ['unavailable', '连接'], ['incompatible', '更新桌面']
+  ];
+  for (const [reason, phrase] of cases) {
+    const env = worker(() => ({ ok: false, reason, httpStatus: reason === 'http' ? 502 : undefined }));
+    const result = await env.run({ ...BASE, formFields: [BASE.formFields[1]] });
+    assert.match(result.warning, new RegExp(phrase), reason);
+    if (reason === 'not_configured') assert.equal(result.openView, 'settings-ai');
+  }
+});
+
+test('a later batch failure keeps matches already returned by the desktop', async () => {
+  let calls = 0;
+  const env = worker(() => (++calls === 1
+    ? { ok: true, text: '[{"fieldId":"f0","value":"大学乙"}]' }
+    : { ok: false, reason: 'network' }));
+  const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));
+  const result = await env.run({ formFields: fields, resumeFields: BASE.resumeFields });
+  assert.ok(calls > 1);
+  assert.equal(result.success, true);
+  assert.ok(result.matches.some(item => item.fieldId === 'f0'));
+  assert.match(result.warning, /连不上/);
+});
+
+test('cancelling forwards a desktop cancel and retains local matches', async () => {
+  const env = worker(() => new Promise(() => {}));
+  const controller = new AbortController();
+  const pending = env.run(BASE, controller);
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  const result = await pending;
+  assert.ok(env.sent.some(item => item.kind === 'desktop-cancel'));
+  assert.equal(result.matches.length, 1);
+  assert.match(result.warning, /取消/);
+});
+
+test('repeat planner sends only candidates and validates the desktop text', async () => {
+  const env = worker(() => ({ ok: true, text: '[{"id":"add-0","count":2}]' }));
+  const candidates = [{ id: 'add-0', domain: 'papers', label: '新增论文', current: 1, target: 3 }];
+  const result = await env.context.handleRepeatPlan({ candidates, resumeFields: BASE.resumeFields }, new AbortController());
+  assert.equal(result.success, true);
+  assert.equal(result.plan[0].count, 2);
+  assert.equal(env.sent[0].purpose, 'plan');
+  assert.ok(!env.sent[0].user.includes('测试用户'));
+});
+
+test('resume parsing directs the user to the desktop resume page', async () => {
+  const env = worker();
+  const result = await env.context.handleParseResume({ content: 'synthetic' });
+  assert.equal(result.success, false);
+  assert.equal(result.error, '简历解析已搬到桌面程序的「简历」页。');
+  assert.equal(result.openView, 'resume');
+  assert.equal(env.sent.length, 0);
+});
