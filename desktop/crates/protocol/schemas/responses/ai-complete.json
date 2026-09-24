@@ -1,0 +1,44 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/ai-complete.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "failed"
+      ]
+    },
+    "text": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "not_configured",
+        "credential_unavailable",
+        "auth",
+        "rate_limited",
+        "timeout",
+        "network",
+        "http",
+        "bad_response",
+        "input_too_large",
+        "response_too_large"
+      ]
+    },
+    "httpStatus": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "host": {
+      "type": "string",
+      "maxLength": 253
+    }
+  }
+}

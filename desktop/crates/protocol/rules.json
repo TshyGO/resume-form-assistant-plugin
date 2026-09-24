@@ -1,7 +1,7 @@
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "minProtocolVersion": 1,
-  "maxProtocolVersion": 1,
+  "maxProtocolVersion": 2,
   "maxEnvelopeBytes": 65536,
   "suggestedRawChunkBytes": 32768,
   "maxSnapshotBytes": 2097152,
@@ -9,14 +9,17 @@
   "maxChunkCount": 128,
   "maxAssemblerSessions": 16,
   "occurredAtSubset": "UTC RFC3339: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ with a real calendar date and clock; Z only, no numeric offsets.",
-  "identityForbidden": ["health", "handshake"],
+  "identityForbidden": ["health", "handshake", "ai.complete", "ui.open"],
   "identityRequired": [
     "application.queryCandidates",
     "job.save",
     "fill.submit",
     "snapshot.chunk",
     "submit.confirm",
-    "outbox.reconcile"
+    "outbox.reconcile",
+    "resume.read",
+    "resume.update",
+    "legacy.import"
   ],
   "writeTypes": [
     "job.save",
@@ -32,8 +35,14 @@
     "fill.submit",
     "snapshot.chunk",
     "submit.confirm",
-    "outbox.reconcile"
+    "outbox.reconcile",
+    "resume.read",
+    "resume.update",
+    "ai.complete",
+    "ui.open",
+    "legacy.import"
   ],
+  "v2MessageTypes": ["resume.read", "resume.update", "ai.complete", "ui.open", "legacy.import"],
   "errorCodes": [
     "identity_missing",
     "identity_not_allowed",

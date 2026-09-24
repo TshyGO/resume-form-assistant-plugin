@@ -1,0 +1,16 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/ui-open.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "opened"
+  ],
+  "properties": {
+    "opened": {
+      "type": "boolean",
+      "enum": [
+        true
+      ]
+    }
+  }
+}

@@ -39,10 +39,13 @@
     "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^6.3.5",
+    "vite-plugin-static-copy": "^4.1.1",
     "vitest": "^3.2.7"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
+    "mammoth": "^1.12.3",
+    "pdfjs-dist": "6.3.289",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   }

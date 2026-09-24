@@ -46,13 +46,26 @@ function constraintDoc(schema) {
 
 function typeExpr(schema, indent) {
   if (Array.isArray(schema.enum)) return schema.enum.map((v) => JSON.stringify(v)).join(" | ");
+  if (Array.isArray(schema.type) && schema.type.includes("null") && schema.type.length === 2) {
+    return `${typeExpr({ ...schema, type: schema.type.find((type) => type !== "null") }, indent)} | null`;
+  }
   switch (schema.type) {
     case "string": return "string";
     case "boolean": return "boolean";
     case "integer":
     case "number": return "number";
-    case "array": return `${typeExpr(schema.items ?? {}, indent)}[]`;
-    case "object": return schema.properties ? objectBody(schema, indent) : "Record<string, unknown>";
+    case "array": {
+      const items = schema.items ?? {};
+      const inner = typeExpr(items, indent);
+      // `A | B[]` means "A, or an array of B": a union item type needs its own parentheses.
+      const union = (Array.isArray(items.enum) && items.enum.length > 1)
+        || (Array.isArray(items.type) && items.type.length > 1);
+      return union ? `(${inner})[]` : `${inner}[]`;
+    }
+    case "object": return schema.properties ? objectBody(schema, indent)
+      : `Record<string, ${schema.additionalProperties && typeof schema.additionalProperties === "object"
+        ? typeExpr(schema.additionalProperties, indent) : "unknown"}>`;
+    case "null": return "null";
     default: return "unknown";
   }
 }

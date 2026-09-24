@@ -1,0 +1,22 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/resume-update.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "activeTemplateId",
+    "profileRevision"
+  ],
+  "properties": {
+    "activeTemplateId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "profileRevision": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

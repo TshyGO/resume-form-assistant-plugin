@@ -156,6 +156,11 @@ pub fn export_template(store: &ArchiveStore, id: &str, path: &Path) -> Result<()
     })
 }
 
+/// 简历解析的结果：插到最前、设为当前，照常剔除密码类字段、编号重名、检查大小。
+pub fn create_from_groups(store: &ArchiveStore, name: &str, groups: Vec<TemplateGroup>) -> Result<ImportResult, CommandError> {
+    store.create_template(name, groups).map(ImportResult::from).map_err(resume_error)
+}
+
 /// 字数上限（100 字，首尾空白不计）和重名由存储层把关。
 pub fn rename_template(store: &ArchiveStore, id: &str, name: &str) -> Result<TemplateSummary, CommandError> {
     store.rename_template(id, name).map(|t| TemplateSummary::from(&t)).map_err(resume_error)
@@ -388,5 +393,23 @@ mod tests {
         assert!(write_error(&sharing).message.contains("正在被 Excel 打开"));
         let other = std::io::Error::new(std::io::ErrorKind::Other, "boom");
         assert!(write_error(&other).message.contains("换个文件夹"));
+    }
+
+    #[test]
+    fn parsed_groups_become_a_new_current_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store(dir.path());
+        let groups = vec![
+            TemplateGroup { name: "基本信息".into(), fields: vec![
+                TemplateField { key: "姓名".into(), value: "张三".into() },
+                TemplateField { key: "邮箱密码".into(), value: "x".into() },
+            ] },
+        ];
+        let result = create_from_groups(&db, "我的简历（AI 解析）", groups).unwrap();
+        assert_eq!(result.template.name, "我的简历（AI 解析）");
+        assert_eq!(result.template.field_count, 1);
+        assert_eq!(result.skipped_secret_fields, 1);
+        assert_eq!(result.previous_field_count, None);
+        assert_eq!(db.resume_overview().unwrap().active_template_id.as_deref(), Some(result.template.id.as_str()));
     }
 }

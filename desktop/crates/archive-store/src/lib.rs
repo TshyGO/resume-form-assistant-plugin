@@ -17,6 +17,7 @@ pub mod error;
 pub mod evidence;
 pub mod facade;
 pub mod identity;
+pub mod legacy_import;
 pub mod migration;
 pub mod model;
 pub mod normalize;
@@ -41,6 +42,7 @@ pub use applications::{
 };
 pub use error::StoreError;
 pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
+pub use legacy_import::{LegacyCleanup, LegacyImportApply, LegacyImportPending, LegacyImportStatus, LegacyPartCheck};
 pub use migration::current_schema_version;
 // model::* 已含 Stage / StageUpdateMode / Fold / Occurred / EventPayload 等模型类型。
 pub use model::*;
@@ -50,7 +52,7 @@ pub use receipts::{
     ReconcileOutcome, ReconcileQueryItem, ReconcileReply, SnapshotChunkInput, SubmitConfirmInput,
 };
 pub use resume::{
-    empty_profile, field_count, normalize_groups, validate_profile, ProfileRecord, ResumeOverview,
+    empty_profile, field_count, normalize_groups, reject_profile_secrets, validate_profile, ProfileRecord, ResumeOverview,
     ResumeTemplate, SavedTemplate, TemplateField, TemplateGroup, TemplateSummary, MAX_CUSTOM_FIELDS,
     MAX_PROFILE_BYTES, MAX_TEMPLATES, MAX_TEMPLATE_BYTES, MAX_TEMPLATE_NAME_CHARS,
 };

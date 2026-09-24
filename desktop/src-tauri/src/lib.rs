@@ -1,5 +1,6 @@
 mod ai_client;
 mod ai_commands;
+mod ai_complete;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
@@ -14,6 +15,7 @@ mod cli;
 mod commands;
 mod evidence_commands;
 mod backup_commands;
+mod bridge_services;
 mod recycle_commands;
 mod restore;
 mod resume_commands;
@@ -23,6 +25,7 @@ mod commands_regression;
 mod ipc_client;
 mod ipc_server;
 mod lifecycle;
+mod legacy_import_commands;
 mod nm;
 mod plugin_bridge;
 
@@ -780,6 +783,23 @@ fn save_profile_cmd(
 }
 
 #[tauri::command]
+fn list_legacy_imports_cmd(state: State<AppState>) -> Result<Vec<archive_store::LegacyImportPending>, CommandError> {
+    with_store(&state, |store| store.list_pending_legacy_imports().map_err(CommandError::from))
+}
+
+#[tauri::command]
+fn confirm_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
+    let services = bridge_services::DesktopBridgeServices::new(app);
+    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id).map_err(legacy_import_commands::command_error))
+}
+
+#[tauri::command]
+fn reject_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
+    let services = bridge_services::DesktopBridgeServices::new(app);
+    with_store(&state, |store| legacy_import_commands::reject(store, &services, &import_id).map_err(|code| legacy_import_commands::command_error(code.into())))
+}
+
+#[tauri::command]
 fn create_todo_cmd(
     state: State<AppState>,
     args: todo_commands::NewTodoArgs,
@@ -1098,6 +1118,46 @@ async fn analyze_evidence_cmd(
 #[tauri::command]
 fn cancel_analysis_cmd(state: State<AppState>, request_id: String) -> Result<bool, CommandError> {
     Ok(state.ai_inflight.cancel(&request_id))
+}
+
+/// 用「当前使用」的服务商问一次。只给简历解析用；插件转发在 PR 3 走协议，不走这个命令。
+/// 同一时间只允许一个（`ai_inflight` 以 `resume-parse` 占位），可以 `cancel_analysis_cmd` 取消。
+#[tauri::command]
+async fn ai_complete_cmd(
+    state: State<'_, AppState>,
+    system: String,
+    user: String,
+    request_id: String,
+    provider_id: String,
+) -> Result<String, CommandError> {
+    ai_complete::check_sizes(&system, &user)?;
+    let (provider, key) = ai_provider_commands::active_with_key(&ai_data_root(&state)?, state.credentials.as_ref())?;
+    // 界面在确认外发那一步看到的是哪个服务商，就得真的发给那一个：确认之后用户在设置页
+    // 切换了「当前使用」，不能悄悄改发给新服务商——那不是用户点「发送并解析」时同意的那次外发。
+    ai_complete::check_provider_unchanged(&provider.id, &provider_id)?;
+    checked_url(&provider.api_url)?;
+    let cancelled = state
+        .ai_inflight
+        .begin("resume-parse", &request_id)
+        .map_err(ai_complete::resume_busy_message)?;
+    let outcome = tokio::select! {
+        result = ai_complete::complete(&provider, &key, &system, &user, ai_complete::COMPLETE_TIMEOUT) => result,
+        _ = cancelled => Err(CommandError {
+            code: "AI_CANCELLED".into(),
+            message: "已取消。取消不保证对方停止计算或停止计费。".into(),
+        }),
+    };
+    state.ai_inflight.finish(&request_id);
+    outcome
+}
+
+#[tauri::command]
+fn create_resume_template_cmd(
+    state: State<AppState>,
+    name: String,
+    groups: Vec<archive_store::TemplateGroup>,
+) -> Result<resume_commands::ImportResult, CommandError> {
+    with_store(&state, move |store| resume_commands::create_from_groups(store, &name, groups))
 }
 
 #[tauri::command]
@@ -1531,8 +1591,12 @@ pub fn run() {
                     if let Ok(mut paths) = app.state::<AppState>().paths.lock() {
                         *paths = Some(host.paths().clone());
                     }
+                    let services = Arc::new(bridge_services::DesktopBridgeServices::new(app.handle().clone()));
                     match open_store(&host.paths().archive_dir, &host.paths().current_pointer) {
                         Ok(store) => {
+                            if let Err(code) = legacy_import_commands::expire(&store, services.as_ref()) {
+                                eprintln!("legacy import cleanup deferred: {}", code.as_str());
+                            }
                             if let Ok(mut slot) = app.state::<AppState>().store.lock() {
                                 *slot = Some(store);
                             }
@@ -1545,9 +1609,9 @@ pub fn run() {
                     }
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
-                    let application = Arc::new(ipc_server::OpenArchive::new(Arc::clone(
-                        &app.state::<AppState>().store,
-                    )));
+                    let application = Arc::new(ipc_server::OpenArchive::with_services(
+                        Arc::clone(&app.state::<AppState>().store), services,
+                    ));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
                             eprintln!("ipc: serving on {}", service.endpoint());
@@ -1624,6 +1688,9 @@ pub fn run() {
             set_active_resume_template_cmd,
             get_profile_cmd,
             save_profile_cmd,
+            list_legacy_imports_cmd,
+            confirm_legacy_import_cmd,
+            reject_legacy_import_cmd,
             create_todo_cmd,
             edit_todo_cmd,
             set_todo_status_cmd,
@@ -1663,6 +1730,8 @@ pub fn run() {
             preview_analysis_cmd,
             analyze_evidence_cmd,
             cancel_analysis_cmd,
+            ai_complete_cmd,
+            create_resume_template_cmd,
             list_suggestions_cmd,
             confirm_suggestion_cmd,
             reject_suggestion_cmd,

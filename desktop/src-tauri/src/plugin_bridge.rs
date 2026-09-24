@@ -10,12 +10,13 @@ use archive_store::{
     ReconcileQueryItem, SnapshotChunkInput, SnapshotCompletion, StoreError, SubmitConfirmInput,
 };
 use resume_pro_protocol::{
-    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, DurableChunk, ErrorCode, MessageType,
-    Request,
+    plugin_chunk_ack_payload, plugin_snapshot_ack_payload, CurrentArchive, DurableChunk,
+    ErrorCode, MessageType, Request, MAX_ENVELOPE_BYTES,
 };
 use serde_json::{json, Map, Value};
 
 /// A successful answer: the envelope-level `resultId` and the response payload.
+#[derive(Debug)]
 pub struct Answer {
     pub result_id: Option<String>,
     pub payload: Value,
@@ -37,7 +38,151 @@ pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCod
         }
         MessageType::OutboxReconcile => reconcile(request, store),
         MessageType::SnapshotChunk => snapshot_chunk(request, store),
+        MessageType::ResumeRead => resume_read(request, store),
+        MessageType::ResumeUpdate => resume_update(request, store),
         MessageType::Health | MessageType::Handshake => Err(ErrorCode::UnknownMessageType),
+        MessageType::AiComplete | MessageType::UiOpen | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
+    }
+}
+
+fn ensure_current_identity(request: &Request, store: &ArchiveStore) -> Result<(), ErrorCode> {
+    let identity = store.identity();
+    let current = CurrentArchive {
+        archive_id: identity.archive_id,
+        restore_epoch: identity.restore_epoch,
+    };
+    resume_pro_protocol::check_current_identity(request, Some(&current)).map_err(|err| err.code)
+}
+
+fn resume_read(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    let overview = store.resume_overview().map_err(code_of)?;
+    let profile = store.get_profile().map_err(code_of)?;
+    let templates = overview.templates.into_iter().map(|summary| json!({
+        "id": summary.id,
+        "name": summary.name,
+        "fieldCount": summary.field_count
+    })).collect::<Vec<_>>();
+    let active = match overview.active_template_id {
+        Some(id) => {
+            let template = store.get_template(&id).map_err(code_of)?.ok_or(ErrorCode::Unavailable)?;
+            json!({"id": template.id, "name": template.name, "groups": template.groups})
+        }
+        None => Value::Null,
+    };
+    let payload = json!({
+        "templates": templates,
+        "activeTemplate": active,
+        "profile": profile.profile,
+        "profileRevision": profile.revision
+    });
+    let payload_size = serde_json::to_vec(&payload).map_err(|_| ErrorCode::Unavailable)?.len();
+    if payload_size > MAX_ENVELOPE_BYTES - 1024 {
+        return Err(ErrorCode::PayloadTooLarge);
+    }
+    let response = json!({
+        "protocolVersion": request.protocol_version,
+        "correlationId": request.message_id,
+        "ok": true,
+        "payload": payload
+    });
+    if serde_json::to_vec(&response).map_err(|_| ErrorCode::Unavailable)?.len() > MAX_ENVELOPE_BYTES {
+        return Err(ErrorCode::PayloadTooLarge);
+    }
+    resume_pro_protocol::validate_response_for_request(&response, request).map_err(|err| err.code)?;
+    Ok(Answer { result_id: None, payload })
+}
+
+fn resume_update(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    let revision = match request.payload["op"].as_str() {
+        Some("setActiveTemplate") => {
+            let id = request.payload["templateId"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            store.set_active_template(&id.to_ascii_lowercase()).map_err(code_of)?;
+            store.get_profile().map_err(code_of)?.revision
+        }
+        Some("saveProfile") => {
+            let profile = request.payload.get("profile").ok_or(ErrorCode::InvalidPayload)?.clone();
+            archive_store::reject_profile_secrets(&profile).map_err(|_| ErrorCode::SecretForbidden)?;
+            let expected = request.payload["expectedRevision"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
+            store.save_profile(profile, expected).map_err(code_of)?.revision
+        }
+        _ => return Err(ErrorCode::InvalidPayload),
+    };
+    let active = store.resume_overview().map_err(code_of)?.active_template_id;
+    Ok(Answer {
+        result_id: None,
+        payload: json!({"activeTemplateId": active, "profileRevision": revision}),
+    })
+}
+
+pub fn legacy_import(
+    request: &Request,
+    store: &ArchiveStore,
+    services: &dyn crate::bridge_services::BridgeServices,
+) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    // Housekeeping, not part of the answer: a keychain that cannot delete right now must not
+    // make a status query or a part fail. Undeleted keys are retried at startup.
+    match store.expire_legacy_imports(&archive_store::timeutil::now_utc()) {
+        Ok(expired) => {
+            for id in expired {
+                crate::legacy_import_commands::clear_key_best_effort(store, services, &id);
+            }
+        }
+        Err(err) => eprintln!("legacy import: expiry check deferred ({})", err.code()),
+    }
+    let import_id = request.payload["importId"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+    let kind = request.payload["kind"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+    let status = match kind {
+        "manifest" => store.receive_legacy_manifest(import_id,
+            request.payload.get("body").ok_or(ErrorCode::InvalidPayload)?.clone()).map_err(code_of)?,
+        "status" => store.legacy_import_status(import_id).map_err(code_of)?,
+        "template" | "profile" | "aiConfig" => {
+            let index = request.payload["index"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
+            let body = request.payload.get("body").ok_or(ErrorCode::InvalidPayload)?;
+            let digest = resume_pro_protocol::payload_body_sha256(body).map_err(|_| ErrorCode::InvalidPayload)?;
+            let check = store.check_legacy_part(import_id, index, kind, &digest).map_err(code_of)?;
+            if check.is_new { check_new_part(kind, body)?; }
+            let stored = if kind == "aiConfig" {
+                json!({
+                    "apiUrl": body["apiUrl"],
+                    "model": body["model"],
+                    "hasKey": true
+                })
+            } else {
+                body.clone()
+            };
+            // Only a part arriving for the first time brings a key worth keeping. A resend
+            // after the batch was confirmed or rejected must not recreate the temporary
+            // account that confirmation or rejection just deleted.
+            if kind == "aiConfig" && check.is_new && check.state == "receiving" {
+                let key = body["apiKey"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+                services.stage_import_key(import_id, key)?;
+            }
+            store.receive_legacy_part(import_id, index, kind, &digest, stored).map_err(code_of)?
+        }
+        _ => return Err(ErrorCode::InvalidPayload),
+    };
+    Ok(Answer { result_id: None, payload: json!(status) })
+}
+
+/// Checks a new part must pass before anything is staged, with the codes the plugin acts
+/// on. The store repeats the shape checks when it stores the part; the profile's secret
+/// check runs here first so it is reported as `secret_forbidden`, and the AI config's
+/// provider rules live in this crate.
+fn check_new_part(kind: &str, body: &Value) -> Result<(), ErrorCode> {
+    match kind {
+        "profile" => {
+            archive_store::validate_profile(body).map_err(|_| ErrorCode::InvalidPayload)?;
+            archive_store::reject_profile_secrets(body).map_err(|_| ErrorCode::SecretForbidden)
+        }
+        "aiConfig" => {
+            let api_url = body["apiUrl"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            let model = body["model"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            crate::ai_settings::check_import_config(api_url, model).map_err(|_| ErrorCode::InvalidPayload)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -428,6 +573,338 @@ mod tests {
             Some(identity),
             json!({"company": "Synthetic Ltd", "title": title, "sourceUrl": JOB_URL}),
         )
+    }
+
+    fn v2_request(message_type: &str, identity: &ArchiveIdentity, payload: Value) -> Request {
+        let envelope = json!({
+            "protocolVersion": 2,
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": CLIENT,
+            "messageType": message_type,
+            "occurredAt": "2026-09-24T00:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": payload
+        });
+        validate_request_bytes(&serde_json::to_vec(&envelope).unwrap()).unwrap()
+    }
+
+    fn checked_v2_response(request: &Request, answer: &Answer) -> Value {
+        let response = json!({
+            "protocolVersion": 2,
+            "correlationId": request.message_id,
+            "ok": true,
+            "payload": answer.payload
+        });
+        resume_pro_protocol::validate_response_for_request(&response, request).unwrap();
+        response
+    }
+
+    #[test]
+    fn resume_read_returns_empty_profile_and_no_templates() {
+        let (_dir, store) = store();
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        assert!(answer.result_id.is_none());
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"], json!([]));
+        assert!(response["payload"]["activeTemplate"].is_null());
+        assert_eq!(response["payload"]["profile"], archive_store::empty_profile());
+        assert_eq!(response["payload"]["profileRevision"], 0);
+    }
+
+    #[test]
+    fn resume_read_returns_summaries_in_desktop_order_and_active_template_body() {
+        let (_dir, store) = store();
+        let groups = vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField { key: "姓名".into(), value: "张三".into() }],
+        }];
+        let first = store.create_template("第一份", groups.clone()).unwrap().template;
+        let second = store.create_template("第二份", groups).unwrap().template;
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"][0]["id"], second.id);
+        assert_eq!(response["payload"]["templates"][1]["id"], first.id);
+        assert_eq!(response["payload"]["activeTemplate"]["id"], second.id);
+        assert_eq!(response["payload"]["activeTemplate"]["groups"][0]["fields"][0]["value"], "张三");
+        assert!(response["payload"]["activeTemplate"].get("updatedAt").is_none());
+    }
+
+    #[test]
+    fn resume_update_switches_by_uuid_and_saves_profile_with_revision() {
+        let (_dir, store) = store();
+        let groups = vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField { key: "姓名".into(), value: "张三".into() }],
+        }];
+        let first = store.create_template("第一份", groups.clone()).unwrap().template;
+        store.create_template("第二份", groups).unwrap();
+        let switch = v2_request("resume.update", &store.identity(), json!({
+            "op": "setActiveTemplate", "templateId": first.id.to_ascii_uppercase()
+        }));
+        let switched = apply(&switch, &store).unwrap();
+        let response = checked_v2_response(&switch, &switched);
+        assert_eq!(response["payload"]["activeTemplateId"], first.id);
+        let missing = v2_request("resume.update", &store.identity(), json!({
+            "op": "setActiveTemplate", "templateId": "ffffffff-ffff-4fff-8fff-ffffffffffff"
+        }));
+        assert_eq!(apply(&missing, &store).err(), Some(ErrorCode::InvalidPayload));
+
+        let profile = json!({"values": {"fullName": "Alice"}, "family": [], "custom": []});
+        let save = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveProfile", "profile": profile, "expectedRevision": 0
+        }));
+        let saved = apply(&save, &store).unwrap();
+        let response = checked_v2_response(&save, &saved);
+        assert_eq!(response["payload"]["profileRevision"], 1);
+        assert_eq!(response["payload"]["activeTemplateId"], first.id);
+        assert_eq!(apply(&save, &store).err(), Some(ErrorCode::Conflict));
+        let secret = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveProfile",
+            "profile": {"values": {"note": "密码：123456"}, "family": [], "custom": []},
+            "expectedRevision": 1
+        }));
+        assert_eq!(apply(&secret, &store).err(), Some(ErrorCode::SecretForbidden));
+    }
+
+    #[test]
+    fn resume_read_rejects_a_foreign_archive_identity() {
+        let (_dir, store) = store();
+        let mut foreign = store.identity();
+        foreign.restore_epoch = "ffffffff-ffff-4fff-8fff-ffffffffffff".into();
+        let request = v2_request("resume.read", &foreign, json!({}));
+        assert_eq!(apply(&request, &store).err(), Some(ErrorCode::RestoreEpochMismatch));
+    }
+
+    #[test]
+    fn resume_read_worst_case_fits_a_single_envelope() {
+        let (_dir, store) = store();
+        let small = vec![archive_store::TemplateGroup {
+            name: "g".into(),
+            fields: vec![archive_store::TemplateField { key: "k".into(), value: "v".into() }],
+        }];
+        let prefix = "𠀀".repeat(98);
+        for i in 0..24 {
+            store.create_template(&format!("{prefix}{i:02}"), small.clone()).unwrap();
+        }
+        let mut large = small;
+        let base = serde_json::to_vec(&large).unwrap().len() - 1;
+        large[0].fields[0].value = "a".repeat(archive_store::MAX_TEMPLATE_BYTES - base);
+        assert_eq!(serde_json::to_vec(&large).unwrap().len(), archive_store::MAX_TEMPLATE_BYTES);
+        store.create_template(&format!("{prefix}24"), large).unwrap();
+        let mut profile = archive_store::empty_profile();
+        profile["values"]["k"] = json!("");
+        let base = serde_json::to_vec(&profile).unwrap().len();
+        profile["values"]["k"] = json!("a".repeat(archive_store::MAX_PROFILE_BYTES - base));
+        assert_eq!(serde_json::to_vec(&profile).unwrap().len(), archive_store::MAX_PROFILE_BYTES);
+        store.save_profile(profile, 0).unwrap();
+
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        let answer = apply(&request, &store).unwrap();
+        let response = checked_v2_response(&request, &answer);
+        assert_eq!(response["payload"]["templates"].as_array().unwrap().len(), 25);
+        assert!(serde_json::to_vec(&response).unwrap().len() <= resume_pro_protocol::MAX_ENVELOPE_BYTES);
+    }
+
+    #[test]
+    fn resume_read_refuses_a_stored_secret_like_field() {
+        let (_dir, store) = store();
+        store.create_template("已有字段", vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField {
+                key: "备注".into(),
+                value: "Bearer abcdefghijklmnopqrstuvwxyz".into(),
+            }],
+        }]).unwrap();
+        let request = v2_request("resume.read", &store.identity(), json!({}));
+        assert_eq!(apply(&request, &store).err(), Some(ErrorCode::SecretForbidden));
+    }
+
+    #[test]
+    fn legacy_ai_config_stages_the_key_outside_sqlite() {
+        struct KeyServices(std::sync::Mutex<Option<String>>);
+        impl crate::bridge_services::BridgeServices for KeyServices {
+            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+            fn stage_import_key(&self, _: &str, key: &str) -> Result<(), ErrorCode> {
+                *self.0.lock().unwrap() = Some(key.into());
+                Ok(())
+            }
+        }
+        let (dir, store) = store();
+        let services = KeyServices(std::sync::Mutex::new(None));
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let body = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let digest = resume_pro_protocol::payload_body_sha256(&body).unwrap();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":1,"parts":[{"index":1,"kind":"aiConfig","sha256":digest}]}
+        }));
+        legacy_import(&manifest, &store, &services).unwrap();
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1, "body": body
+        }));
+        let answer = legacy_import(&part, &store, &services).unwrap();
+        assert_eq!(answer.payload["state"], "awaiting_confirmation");
+        assert_eq!(services.0.lock().unwrap().as_deref(), Some("sk-synthetic-example-value"));
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        let raw: String = db.query_row("SELECT body_json FROM legacy_import_parts", [], |row| row.get(0)).unwrap();
+        assert!(!raw.contains("sk-synthetic-example-value"));
+        assert!(!raw.contains("apiKey"));
+        let changed = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1,
+            "body": {"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-different-synthetic-value"}
+        }));
+        assert_eq!(legacy_import(&changed, &store, &services).err(), Some(ErrorCode::Conflict));
+        assert_eq!(services.0.lock().unwrap().as_deref(), Some("sk-synthetic-example-value"));
+    }
+
+    #[test]
+    fn failed_key_staging_never_marks_an_ai_part_received() {
+        struct LockedKeyring;
+        impl crate::bridge_services::BridgeServices for LockedKeyring {
+            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+            fn stage_import_key(&self, _: &str, _: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+        }
+        let (_dir, store) = store();
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let body = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let digest = resume_pro_protocol::payload_body_sha256(&body).unwrap();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":1,"parts":[{"index":1,"kind":"aiConfig","sha256":digest}]}
+        }));
+        legacy_import(&manifest, &store, &LockedKeyring).unwrap();
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1, "body": body
+        }));
+        assert_eq!(legacy_import(&part, &store, &LockedKeyring).err(), Some(ErrorCode::Unavailable));
+        let status = store.legacy_import_status(import_id).unwrap();
+        assert_eq!((status.state.as_str(), status.received), ("receiving", 0));
+    }
+
+    /// A keychain stand-in that counts staging and can refuse deletes.
+    #[derive(Default)]
+    struct TempKeys {
+        keys: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        staged: std::sync::atomic::AtomicUsize,
+        fail_clear: std::sync::atomic::AtomicBool,
+    }
+
+    impl crate::bridge_services::BridgeServices for TempKeys {
+        fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+            crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+        }
+        fn open_view(&self, _: &str) -> bool { false }
+        fn stage_import_key(&self, id: &str, key: &str) -> Result<(), ErrorCode> {
+            self.staged.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.keys.lock().unwrap().insert(id.into(), key.into());
+            Ok(())
+        }
+        fn get_import_key(&self, id: &str) -> Result<Option<String>, ErrorCode> {
+            Ok(self.keys.lock().unwrap().get(id).cloned())
+        }
+        fn clear_import_key(&self, id: &str) -> Result<(), ErrorCode> {
+            if self.fail_clear.load(std::sync::atomic::Ordering::Relaxed) { return Err(ErrorCode::Unavailable); }
+            self.keys.lock().unwrap().remove(id);
+            Ok(())
+        }
+        fn validate_import_provider(&self, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
+        fn install_import_provider(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> { Ok(()) }
+    }
+
+    const IMPORT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    fn send_manifest(store: &ArchiveStore, services: &TempKeys, parts: &[(&str, &Value)]) {
+        let parts = parts.iter().enumerate().map(|(i, (kind, body))| json!({
+            "index": i + 1, "kind": kind, "sha256": resume_pro_protocol::payload_body_sha256(body).unwrap()
+        })).collect::<Vec<_>>();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": IMPORT_ID, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":parts.len(),"parts":parts}
+        }));
+        legacy_import(&manifest, store, services).unwrap();
+    }
+
+    fn send_part(store: &ArchiveStore, services: &TempKeys, index: usize, kind: &str, body: &Value) -> Result<Answer, ErrorCode> {
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": IMPORT_ID, "kind": kind, "index": index, "body": body
+        }));
+        legacy_import(&part, store, services)
+    }
+
+    #[test]
+    fn resending_the_ai_part_after_import_does_not_stage_the_key_again() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        send_manifest(&store, &services, &[("aiConfig", &ai)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(crate::legacy_import_commands::confirm(&store, &services, IMPORT_ID).unwrap().state, "imported");
+        assert!(services.keys.lock().unwrap().is_empty());
+
+        let answer = send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        assert_eq!(answer.payload["state"], "imported");
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_status_query_survives_a_keychain_that_cannot_delete_expired_keys() {
+        let (dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let template = json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]});
+        send_manifest(&store, &services, &[("aiConfig", &ai), ("template", &template)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        db.execute("UPDATE legacy_imports SET created_at = '2026-01-01T00:00:00.000Z'", []).unwrap();
+        services.fail_clear.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let status = v2_request("legacy.import", &store.identity(), json!({"importId": IMPORT_ID, "kind": "status"}));
+        assert_eq!(legacy_import(&status, &store, &services).unwrap().payload["state"], "expired");
+        // Not deleted yet, so startup cleanup still has it on its list.
+        assert_eq!(store.legacy_import_cleanup_ids().unwrap().ids, vec![IMPORT_ID.to_string()]);
+    }
+
+    #[test]
+    fn a_cleared_expired_key_is_not_listed_for_startup_cleanup_again() {
+        let (dir, store) = store();
+        let services = TempKeys::default();
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let template = json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]});
+        send_manifest(&store, &services, &[("aiConfig", &ai), ("template", &template)]);
+        send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        db.execute("UPDATE legacy_imports SET created_at = '2026-01-01T00:00:00.000Z'", []).unwrap();
+        let status = v2_request("legacy.import", &store.identity(), json!({"importId": IMPORT_ID, "kind": "status"}));
+        assert_eq!(legacy_import(&status, &store, &services).unwrap().payload["state"], "expired");
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert!(store.legacy_import_cleanup_ids().unwrap().ids.is_empty());
+    }
+
+    #[test]
+    fn a_bad_part_is_refused_on_arrival_with_the_matching_code() {
+        let (_dir, store) = store();
+        let services = TempKeys::default();
+        let secret = json!({"values":{"note":"密码：hunter2"},"family":[],"custom":[]});
+        let blank = json!({"name":"Blank","wasActive":false,"groups":[{"name":"g","fields":[{"key":" ","value":"v"}]}]});
+        let ai = json!({"apiUrl":"https://api.example.com/v1","model":" ","apiKey":"sk-synthetic-example-value"});
+        send_manifest(&store, &services, &[("profile", &secret), ("template", &blank), ("aiConfig", &ai)]);
+        assert_eq!(send_part(&store, &services, 1, "profile", &secret).err(), Some(ErrorCode::SecretForbidden));
+        assert_eq!(send_part(&store, &services, 2, "template", &blank).err(), Some(ErrorCode::InvalidPayload));
+        assert_eq!(send_part(&store, &services, 3, "aiConfig", &ai).err(), Some(ErrorCode::InvalidPayload));
+        assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(store.legacy_import_status(IMPORT_ID).unwrap().received, 0);
     }
 
     #[test]
