@@ -16,6 +16,9 @@ pub const TIMEOUT_SECONDS: u64 = 60;
 
 pub struct ChatClient {
     inner: reqwest::Client,
+    /// 超时报错的文案要说实际配的这个值，不能写死成默认的 60 秒
+    /// （简历解析用 `with_timeout(120s)`，说「等了 60 秒」是错的）。
+    timeout: Duration,
 }
 
 impl ChatClient {
@@ -36,7 +39,7 @@ impl ChatClient {
                     message: "HTTP 客户端没建起来，这次没有发出去。".into(),
                 }
             })?;
-        Ok(Self { inner })
+        Ok(Self { inner, timeout })
     }
 
     /// 发一次 Chat Completions，返回模型输出的正文。
@@ -61,10 +64,11 @@ impl ChatClient {
             .map_err(|err| {
                 if err.is_timeout() {
                     log_line(host, model, "timeout", started);
+                    let seconds = self.timeout.as_secs();
                     CommandError {
                         code: "AI_TIMEOUT".into(),
                         message: format!(
-                            "等了 {TIMEOUT_SECONDS} 秒还没有返回，这次没有产生建议（{host} · {model}）。"
+                            "等了 {seconds} 秒还没有返回，这次没有产生建议（{host} · {model}）。"
                         ),
                     }
                 } else {
@@ -120,4 +124,38 @@ fn log_line(host: &str, model: &str, outcome: &str, started: Instant) {
         "ai: {host} · {model} · {outcome} · {} ms",
         started.elapsed().as_millis()
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// 接受连接但永不回应，逼客户端自己的超时先触发（不依赖服务器配合）。
+    /// 连上的 `stream` 必须留在作用域里陪着一起睡：`let _ = listener.accept()`
+    /// 会把它当场丢掉，对端看到的是连接被关闭（`IncompleteMessage`），不是超时。
+    fn accept_and_hang() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let Ok((_stream, _)) = listener.accept() else { return };
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn the_timeout_message_names_the_timeout_this_client_was_built_with() {
+        let url = accept_and_hang();
+        // 用一个明显不是默认值（60 秒）的超时构造客户端：报错文案要说这个数，
+        // 不能不管实际配置、永远说「60 秒」。
+        let client = ChatClient::with_timeout(Duration::from_secs(1)).unwrap();
+        let err = client
+            .chat(&url, "sk-test", "example.com", "m1", &Value::Null)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "AI_TIMEOUT");
+        assert!(err.message.contains("等了 1 秒"), "{}", err.message);
+        assert!(!err.message.contains("60 秒"), "{}", err.message);
+    }
 }

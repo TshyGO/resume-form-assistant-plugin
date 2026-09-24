@@ -1113,7 +1113,10 @@ async fn ai_complete_cmd(
     ai_complete::check_sizes(&system, &user)?;
     let (provider, key) = ai_provider_commands::active_with_key(&ai_data_root(&state)?, state.credentials.as_ref())?;
     checked_url(&provider.api_url)?;
-    let cancelled = state.ai_inflight.begin("resume-parse", &request_id)?;
+    let cancelled = state
+        .ai_inflight
+        .begin("resume-parse", &request_id)
+        .map_err(ai_complete::resume_busy_message)?;
     let outcome = tokio::select! {
         result = ai_complete::complete(&provider, &key, &system, &user, ai_complete::COMPLETE_TIMEOUT) => result,
         _ = cancelled => Err(CommandError {

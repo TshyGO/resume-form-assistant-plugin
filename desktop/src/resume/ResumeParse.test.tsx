@@ -11,6 +11,8 @@ const settings: AiSettingsView = {
   credentialError: null,
 };
 
+const emptyOverview = { templates: [], activeTemplateId: null };
+
 function mount(handler: (command: string, args?: Record<string, unknown>) => unknown) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const invoke = (async (command: string, args?: Record<string, unknown>) => {
@@ -18,23 +20,31 @@ function mount(handler: (command: string, args?: Record<string, unknown>) => unk
     return handler(command, args);
   }) as Invoke;
   const onCreated = vi.fn();
-  render(
+  const { unmount } = render(
     <InvokeProvider invoke={invoke}>
       <ResumeParse onCreated={onCreated} extract={async () => "张三\n某大学"} />
     </InvokeProvider>,
   );
-  return { calls, onCreated };
+  return { calls, onCreated, unmount };
 }
 
 const upload = async (user: ReturnType<typeof userEvent.setup>) =>
-  user.upload(screen.getByLabelText("选择简历文件"), new File(["x"], "张三简历.pdf"));
+  user.upload(screen.getByLabelText(/上传简历/), new File(["x"], "张三简历.pdf"));
+
+// 短暂让出宏任务队列：不依赖组件仍然挂载（unmount 之后 screen 查询会失败），
+// 只用来确认「组件卸载后 promise 落地」这条分支已经跑完。
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test("确认前说清楚发给谁、发多少字，确认后才发送", async () => {
   const user = userEvent.setup();
   const { calls, onCreated } = mount((command) => {
     if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
     if (command === "ai_complete_cmd") return '[{"group":"基本信息","key":"姓名","value":"张三"}]';
-    return { template: { id: "t1", name: "张三简历（AI 解析）", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
+    if (command === "create_resume_template_cmd") {
+      return { template: { id: "t1", name: "张三简历（AI 解析）", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
+    }
+    return null;
   });
   await upload(user);
   expect(await screen.findByText(/DeepSeek/)).toBeTruthy();
@@ -50,19 +60,40 @@ test("确认前说清楚发给谁、发多少字，确认后才发送", async ()
 
 test("没有可用服务商时不让发送，并指向设置页", async () => {
   const user = userEvent.setup();
-  mount((command) => (command === "get_ai_settings_cmd" ? { providers: [], activeProviderId: null, credentialError: null } : null));
+  mount((command) => {
+    if (command === "get_ai_settings_cmd") return { providers: [], activeProviderId: null, credentialError: null };
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  });
   await upload(user);
   expect(await screen.findByText(/先在「设置 → AI」添加服务商/)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "发送并解析" })).toBeNull();
 });
 
-test("等待中可以取消", async () => {
+test("模板已经有 25 个时不让发送，并提示先删掉", async () => {
   const user = userEvent.setup();
-  let release: (value: unknown) => void = () => {};
+  const templates = Array.from({ length: 25 }, (_, i) => ({ id: `t${i}`, name: `t${i}`, fieldCount: 1, updatedAt: "" }));
+  mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return { templates, activeTemplateId: null };
+    return null;
+  });
+  await upload(user);
+  expect(await screen.findByText(/模板已经有 25 个，先删掉用不上的再解析/)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "发送并解析" })).toBeNull();
+});
+
+test("等待中可以取消，取消后如实显示已取消", async () => {
+  const user = userEvent.setup();
+  let reject: (reason?: unknown) => void = () => {};
   const { calls } = mount((command) => {
     if (command === "get_ai_settings_cmd") return settings;
-    if (command === "ai_complete_cmd") return new Promise((resolve) => { release = resolve; });
-    if (command === "cancel_analysis_cmd") { release('[]'); return true; }
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return new Promise((_resolve, rej) => { reject = rej; });
+    if (command === "cancel_analysis_cmd") {
+      reject({ code: "AI_CANCELLED", message: "已取消。取消不保证对方停止计算或停止计费。" });
+      return true;
+    }
     return null;
   });
   await upload(user);
@@ -71,12 +102,14 @@ test("等待中可以取消", async () => {
   const cancel = calls.find((c) => c.command === "cancel_analysis_cmd")!;
   const sent = calls.find((c) => c.command === "ai_complete_cmd")!;
   expect(cancel.args?.requestId).toBe(sent.args?.requestId);
+  expect(await screen.findByText("已取消。取消不保证对方停止计算或停止计费。")).toBeTruthy();
 });
 
 test("模型返回乱码时如实提示，不建模板", async () => {
   const user = userEvent.setup();
   const { calls } = mount((command) => {
     if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
     if (command === "ai_complete_cmd") return "抱歉";
     return null;
   });
@@ -90,10 +123,65 @@ test("剔掉的密码类字段要说出来", async () => {
   const user = userEvent.setup();
   mount((command) => {
     if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
     if (command === "ai_complete_cmd") return '[{"group":"g","key":"k","value":"v"}]';
-    return { template: { id: "t1", name: "n", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 2 };
+    if (command === "create_resume_template_cmd") {
+      return { template: { id: "t1", name: "n", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 2 };
+    }
+    return null;
   });
   await upload(user);
   await user.click(await screen.findByRole("button", { name: "发送并解析" }));
   expect(await screen.findByText(/另有 2 个像密码或验证码的字段没有存/)).toBeTruthy();
+});
+
+test("建模板失败时可以不重新调用 AI、直接重新保存", async () => {
+  const user = userEvent.setup();
+  let createCalls = 0;
+  const { calls } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return '[{"group":"基本信息","key":"姓名","value":"张三"}]';
+    if (command === "create_resume_template_cmd") {
+      createCalls += 1;
+      if (createCalls === 1) throw { code: "STORE_ERROR", message: "写不进去" };
+      return { template: { id: "t1", name: "张三简历（AI 解析）", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
+    }
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  expect(await screen.findByText("写不进去")).toBeTruthy();
+  const retry = await screen.findByRole("button", { name: "重新保存" });
+  await user.click(retry);
+  await waitFor(() => expect(screen.getByText(/已存为模板/)).toBeTruthy());
+  expect(calls.filter((c) => c.command === "ai_complete_cmd")).toHaveLength(1);
+  expect(calls.filter((c) => c.command === "create_resume_template_cmd")).toHaveLength(2);
+});
+
+test("解析中途离开页面：卸载时取消请求，回来的结果不再建模板或提示", async () => {
+  const user = userEvent.setup();
+  let resolveAi: (value: unknown) => void = () => {};
+  const { calls, onCreated, unmount } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return new Promise((resolve) => { resolveAi = resolve; });
+    if (command === "cancel_analysis_cmd") return true;
+    if (command === "create_resume_template_cmd") {
+      return { template: { id: "t1", name: "n", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
+    }
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  expect(calls.some((c) => c.command === "ai_complete_cmd")).toBe(true);
+
+  unmount();
+  expect(calls.some((c) => c.command === "cancel_analysis_cmd")).toBe(true);
+
+  resolveAi('[{"group":"g","key":"k","value":"v"}]');
+  await flush();
+
+  expect(calls.some((c) => c.command === "create_resume_template_cmd")).toBe(false);
+  expect(onCreated).not.toHaveBeenCalled();
 });

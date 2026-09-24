@@ -1,21 +1,32 @@
-import { useRef, useState } from "react";
-import type { AiProviderView, AiSettingsView, ImportResultView } from "../api.ts";
+import { useEffect, useRef, useState } from "react";
+import type { AiProviderView, AiSettingsView, ImportResultView, ResumeOverview, TemplateGroupView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { extractText } from "./extract-text.ts";
 import { buildRequest, fieldsToGroups, parseModelReply, templateNameFor } from "./parse-resume.ts";
 import type { Notice } from "./resume-text.ts";
 
+// 与 archive-store::resume::MAX_TEMPLATES 一致：到了上限存不进去，就不该先花一次
+// AI 调用去解析一份注定存不下的模板。
+const MAX_TEMPLATES = 25;
+// 与 ai_complete.rs 的 MAX_USER_CHARS 一致：前端提前拦，免得用户等了一两分钟才被后端拒绝。
+const MAX_USER_CHARS = 60_000;
+
 type Stage =
   | { kind: "idle" }
   | { kind: "reading" }
-  | { kind: "confirm"; fileName: string; text: string; provider: AiProviderView | null }
-  | { kind: "sending"; requestId: string }
+  | { kind: "confirm"; fileName: string; text: string; provider: AiProviderView | null; templateCount: number }
+  | { kind: "sending"; requestId: string; fileName: string }
+  | { kind: "saving"; fileName: string; groups: TemplateGroupView[] }
+  | { kind: "save-failed"; fileName: string; groups: TemplateGroupView[] }
   | { kind: "done" };
 
 function errorText(error: unknown): string {
+  if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   return (error as { message?: string } | null)?.message ?? "解析失败，请重试。";
 }
+
+const BUSY_STAGES = new Set(["reading", "sending", "saving"]);
 
 /**
  * 上传一份简历，交给「当前使用」的 AI 服务商解析，存成新模板并设为当前。
@@ -27,6 +38,21 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
   const [notice, setNotice] = useState<Notice | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const counter = useRef(0);
+  // 离开「简历」页时 ResumeView 会把这个组件整个卸载：正在等的那次 AI 请求不能假装
+  // 还有界面在等它——卸载时把它取消，回来之后（哪怕这份 promise 稍后才落地）也
+  // 不能再悄悄建模板、悄悄提示、或者叫一个已经没人看的 onCreated。
+  const mountedRef = useRef(true);
+  const inflightRequestId = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      const requestId = inflightRequestId.current;
+      if (requestId && invoke) {
+        void invoke("cancel_analysis_cmd", { requestId }).catch(() => {});
+      }
+    };
+  }, [invoke]);
 
   if (!invoke) return null;
 
@@ -36,23 +62,28 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
     setNotice(null);
     setStage({ kind: "reading" });
     try {
-      const [text, settings] = await Promise.all([extract(file), invoke<AiSettingsView>("get_ai_settings_cmd")]);
+      const [text, settings, overview] = await Promise.all([
+        extract(file),
+        invoke<AiSettingsView>("get_ai_settings_cmd"),
+        invoke<ResumeOverview>("resume_overview_cmd"),
+      ]);
+      if (!mountedRef.current) return;
       const provider = settings.providers.find((p) => p.id === settings.activeProviderId && p.keyConfigured) ?? null;
-      setStage({ kind: "confirm", fileName: file.name, text, provider });
+      setStage({ kind: "confirm", fileName: file.name, text, provider, templateCount: overview.templates.length });
     } catch (error) {
+      if (!mountedRef.current) return;
       setStage({ kind: "idle" });
       setNotice({ tone: "error", text: errorText(error) });
     }
   };
 
-  const send = async (fileName: string, text: string) => {
-    const requestId = `resume-parse-${Date.now()}-${++counter.current}`;
-    setStage({ kind: "sending", requestId });
+  // 保存这一步单独抽出来：AI 解析成功但建模板失败时，重试只再调一次这个函数，
+  // 不必（也不该）为了重试再花一次 AI 调用。
+  const trySave = async (fileName: string, groups: TemplateGroupView[]) => {
+    setStage({ kind: "saving", fileName, groups });
     try {
-      const { system, user } = buildRequest(text);
-      const reply = await invoke<string>("ai_complete_cmd", { system, user, requestId });
-      const groups = fieldsToGroups(parseModelReply(reply));
       const result = await invoke<ImportResultView>("create_resume_template_cmd", { name: templateNameFor(fileName), groups });
+      if (!mountedRef.current) return;
       const skipped = result.skippedSecretFields
         ? `另有 ${result.skippedSecretFields} 个像密码或验证码的字段没有存。`
         : "";
@@ -63,53 +94,109 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
       setStage({ kind: "done" });
       onCreated();
     } catch (error) {
-      setStage({ kind: "idle" });
+      if (!mountedRef.current) return;
       setNotice({ tone: "error", text: errorText(error) });
+      setStage({ kind: "save-failed", fileName, groups });
     }
   };
+
+  const send = async (fileName: string, text: string) => {
+    const requestId = `resume-parse-${Date.now()}-${++counter.current}`;
+    inflightRequestId.current = requestId;
+    setStage({ kind: "sending", requestId, fileName });
+    let reply: string;
+    try {
+      const { system, user } = buildRequest(text);
+      reply = await invoke<string>("ai_complete_cmd", { system, user, requestId });
+    } catch (error) {
+      inflightRequestId.current = null;
+      if (!mountedRef.current) return;
+      setStage({ kind: "idle" });
+      setNotice({ tone: "error", text: errorText(error) });
+      return;
+    }
+    inflightRequestId.current = null;
+    // 等回来时页面已经被卸载：这次解析已经没有界面能看着它了，既不建模板，
+    // 也不提示——onCreated 也不叫，免得打到一个已经不存在的模板列表刷新。
+    if (!mountedRef.current) return;
+    let groups: TemplateGroupView[];
+    try {
+      groups = fieldsToGroups(parseModelReply(reply));
+    } catch (error) {
+      setStage({ kind: "idle" });
+      setNotice({ tone: "error", text: errorText(error) });
+      return;
+    }
+    await trySave(fileName, groups);
+  };
+
+  const cancel = (requestId: string) => {
+    void invoke("cancel_analysis_cmd", { requestId }).catch(() => {});
+  };
+
+  const disabled = BUSY_STAGES.has(stage.kind);
 
   return (
     <div className="stack">
       <div className="row">
-        <label className="button-like">
+        <label className={disabled ? "button-like disabled" : "button-like"}>
           上传简历，AI 解析
           <input
             ref={input}
-            aria-label="选择简历文件"
             type="file"
             accept=".pdf,.docx,.txt"
             className="sr-only"
-            disabled={stage.kind === "reading" || stage.kind === "sending"}
+            disabled={disabled}
             onChange={(event) => void pick(event.target.files?.[0])}
           />
         </label>
         <span className="muted">支持 PDF、Word（.docx）、TXT。扫描版 PDF 抽不出文字。</span>
       </div>
       {stage.kind === "reading" ? <p className="muted">正在读取文件…</p> : null}
-      {stage.kind === "confirm" ? (
-        stage.provider ? (
+      {stage.kind === "confirm" ? (() => {
+        const { user } = buildRequest(stage.text);
+        const charCount = [...stage.text].length;
+        const blocked = !stage.provider
+          ? "还没有可用的 AI 服务商（或它还没有 Key）。先在「设置 → AI」添加服务商并填好 Key。"
+          : stage.templateCount >= MAX_TEMPLATES
+            ? `模板已经有 ${MAX_TEMPLATES} 个，先删掉用不上的再解析。`
+            : [...user].length > MAX_USER_CHARS
+              ? "简历文字太长（超过 6 万字），像是选错了文件。"
+              : null;
+        return (
           <div className="note warn stack" role="group" aria-label="确认外发">
-            <p>
-              将把简历全文（{stage.text.length} 字）发给「{stage.provider.name}」解析：{stage.provider.host} · {stage.provider.model}。对方可能留存这些内容。
-            </p>
+            {stage.provider ? (
+              <p>
+                将把简历全文（{charCount} 字）发给「{stage.provider.name}」解析：{stage.provider.host} · {stage.provider.model}。对方可能留存这些内容。
+              </p>
+            ) : null}
+            {blocked ? <p>{blocked}</p> : null}
             <div className="row">
-              <button type="button" className="primary" onClick={() => void send(stage.fileName, stage.text)}>
-                发送并解析
-              </button>
+              {!blocked ? (
+                <button type="button" className="primary" onClick={() => void send(stage.fileName, stage.text)}>
+                  发送并解析
+                </button>
+              ) : null}
               <button type="button" onClick={() => setStage({ kind: "idle" })}>
                 不发送
               </button>
             </div>
           </div>
-        ) : (
-          <p className="note warn">还没有可用的 AI 服务商（或它还没有 Key）。先在「设置 → AI」添加服务商并填好 Key。</p>
-        )
-      ) : null}
+        );
+      })() : null}
       {stage.kind === "sending" ? (
         <div className="row">
           <span className="muted">正在等待 AI 解析，长简历可能要一两分钟…</span>
-          <button type="button" onClick={() => void invoke("cancel_analysis_cmd", { requestId: stage.requestId })}>
+          <button type="button" onClick={() => cancel(stage.requestId)}>
             取消
+          </button>
+        </div>
+      ) : null}
+      {stage.kind === "saving" ? <p className="muted">正在保存模板…</p> : null}
+      {stage.kind === "save-failed" ? (
+        <div className="row">
+          <button type="button" className="primary" onClick={() => void trySave(stage.fileName, stage.groups)}>
+            重新保存
           </button>
         </div>
       ) : null}

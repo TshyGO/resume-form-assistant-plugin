@@ -35,6 +35,19 @@ pub fn check_sizes(system: &str, user: &str) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// `ai_inflight::begin` 的「正在分析」错误是为证据整理写的用词（「这条证据正在分析中」）；
+/// 简历解析没有「证据」这个概念，换成贴合这个场景的话。其余错误码原样放行。
+pub fn resume_busy_message(err: CommandError) -> CommandError {
+    if err.code == "AI_BUSY" {
+        CommandError {
+            code: "AI_BUSY".into(),
+            message: "上一份简历还在解析中，等它结束或先取消。".into(),
+        }
+    } else {
+        err
+    }
+}
+
 pub async fn complete(
     provider: &AiProvider,
     key: &str,
@@ -107,5 +120,24 @@ mod tests {
         let system_err = check_sizes(&"s".repeat(MAX_SYSTEM_CHARS + 1), "u").unwrap_err();
         assert!(system_err.message.contains("系统提示词"), "系统提示词超限不该被说成是用户内容超限：{}", system_err.message);
         assert!(check_sizes("s", "u").is_ok());
+    }
+
+    #[test]
+    fn resume_busy_message_rewrites_only_the_busy_code() {
+        // `ai_inflight::begin` 是给「证据」整理写的措辞；简历解析没有证据，
+        // 原样透传会让用户看不懂「这条证据正在分析中」说的是什么。
+        let busy = CommandError {
+            code: "AI_BUSY".into(),
+            message: "这条证据正在分析中。等它结束，或者先取消。".into(),
+        };
+        let rewritten = resume_busy_message(busy);
+        assert_eq!(rewritten.code, "AI_BUSY");
+        assert_eq!(rewritten.message, "上一份简历还在解析中，等它结束或先取消。");
+
+        // 别的错误码原样放行，不能被这一层吞掉或改写。
+        let other = CommandError { code: "AI_NOT_CONFIGURED".into(), message: "还没有配置 AI 服务商。".into() };
+        let passthrough = resume_busy_message(CommandError { code: other.code.clone(), message: other.message.clone() });
+        assert_eq!(passthrough.code, other.code);
+        assert_eq!(passthrough.message, other.message);
     }
 }
