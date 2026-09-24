@@ -140,6 +140,30 @@ test('a later batch failure keeps matches already returned by the desktop', asyn
   assert.match(result.warning, /连不上/);
 });
 
+test('candidate subsets for one page field produce at most one fill match', async () => {
+  let calls = 0;
+  const env = worker(() => ({ ok: true, text: JSON.stringify([{ fieldId: 'single', value: `结果${++calls}` }]) }));
+  const result = await env.run({
+    formFields: [{ fieldId: 'single', label: '自我评价', inputType: 'text' }],
+    resumeFields: Array.from({ length: 30 }, (_, i) => ({ group: '自定义', key: `资料${i}`, value: '甲'.repeat(1800) }))
+  });
+  assert.ok(calls > 1);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0].value, '结果1');
+  assert.equal(result.diagnostics.aiMatches, 1);
+});
+
+test('rate limiting stops later prompt batches', async () => {
+  let calls = 0;
+  const env = worker(() => { calls += 1; return { ok: false, reason: 'rate_limited' }; });
+  const result = await env.run({
+    formFields: Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `问题${i}` + '甲'.repeat(1000) })),
+    resumeFields: [{ group: '自定义', key: '说明', value: '合成资料' }]
+  });
+  assert.equal(calls, 1);
+  assert.match(result.warning, /限流/);
+});
+
 test('cancelling forwards a desktop cancel and retains local matches', async () => {
   const env = worker(() => new Promise(() => {}));
   const controller = new AbortController();

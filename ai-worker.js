@@ -239,7 +239,7 @@ async function handleAiFill(message, controller = new AbortController()) {
         if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
         warnings.push(aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
-        if (["cancelled", "not_configured", "credential_unavailable", "auth", "incompatible", "not_installed"].includes(reason)) break;
+        if (["cancelled", "not_configured", "credential_unavailable", "auth", "rate_limited", "incompatible", "not_installed"].includes(reason)) break;
         continue;
       }
       if (controller.signal.aborted) break;
@@ -256,8 +256,14 @@ async function handleAiFill(message, controller = new AbortController()) {
     diagnostics.errorCode = "cancelled";
     warnings.push(aiFailureMessage({ reason: "cancelled" }));
   }
-  const matches = ResumeProAIHelpers.filterValidMatches(formFields, [...ruleMatches, ...aiMatches]);
-  diagnostics.aiMatches = matches.length - ruleMatches.length;
+  const seenMatchIds = new Set();
+  const matches = ResumeProAIHelpers.filterValidMatches(formFields, [...ruleMatches, ...aiMatches])
+    .filter(match => {
+      if (seenMatchIds.has(match.fieldId)) return false;
+      seenMatchIds.add(match.fieldId);
+      return true;
+    });
+  diagnostics.aiMatches = matches.filter(match => !matchedFieldIds.has(match.fieldId)).length;
   const warning = [...new Set(warnings)].join(" ");
   return { success: !warning || matches.length > 0, matches, warning, error: warning, diagnostics,
     ...(openView ? { openView } : {}) };

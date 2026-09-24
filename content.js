@@ -467,6 +467,8 @@
     templateSelect.disabled = Boolean(downgradeCopy) || !templates.length;
     const aiFillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (aiFillButton) aiFillButton.disabled = Boolean(downgradeCopy) || state.aiBusy;
+    const repeatButton = shadowRoot.querySelector("#resume-pro-repeat-fill");
+    if (repeatButton) repeatButton.disabled = Boolean(downgradeCopy) || !activeTemplate || state.aiBusy;
 
     if (downgradeCopy) {
       groupsContainer.innerHTML = `
@@ -885,7 +887,8 @@
     state.suggestedView = null;
     const release = message => {
       state.aiBusy = false;
-      fillButton.disabled = state.desktopMode !== "ready";
+      fillButton.disabled = state.desktopMode !== "ready" || !hasResumeData();
+      button.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
       if (message) showStatus(message, "error");
     };
     state.currentStore = await StorageService.getState();
@@ -965,9 +968,9 @@
       cancel.onclick = null;
       cancel.textContent = "取消 AI 等待（保留本地匹配）";
       hint.hidden = true;
-      button.disabled = false;
+      button.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
       state.aiBusy = false;
-      fillButton.disabled = state.desktopMode !== "ready";
+      fillButton.disabled = state.desktopMode !== "ready" || !hasResumeData();
       button.textContent = "AI 辅助新增条目（先预览）";
     }
     if (expanded && !stopped && JSON.stringify(getActiveTemplate(state.currentStore)) === templateFingerprint) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
@@ -1220,8 +1223,8 @@
         panel.open = true;
       }
       state.aiBusy = false;
-      button.disabled = state.desktopMode !== "ready";
-      if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready";
+      button.disabled = state.desktopMode !== "ready" || !hasResumeData();
+      if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
       button.textContent = "一键 AI 填写";
       // A page with nothing to fill produced nothing worth archiving.
       if (fieldCount > 0) {
@@ -2249,6 +2252,10 @@
 
   function getActiveTemplate(store) {
     return store?.activeTemplate || null;
+  }
+
+  function hasResumeData() {
+    return Boolean(getActiveTemplate(state.currentStore) || profileResumeFields().length);
   }
 
   function showStatus(message, variant, persist = false) {
