@@ -3489,6 +3489,7 @@ dependencies = [
  "reqwest",
  "resume-pro-protocol",
  "resume-sheet",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

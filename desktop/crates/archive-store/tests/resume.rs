@@ -9,10 +9,10 @@ fn open(root: &std::path::Path) -> ArchiveStore {
 }
 
 #[test]
-fn a_new_archive_is_on_schema_v4() {
+fn a_new_archive_is_on_schema_v5() {
     let dir = tempfile::tempdir().unwrap();
     let _db = open(dir.path());
-    assert_eq!(current_schema_version(), 4);
+    assert_eq!(current_schema_version(), 5);
     let raw = rusqlite::Connection::open(config(dir.path()).db_path()).unwrap();
     let tables: Vec<String> = raw
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'resume_%' ORDER BY name")

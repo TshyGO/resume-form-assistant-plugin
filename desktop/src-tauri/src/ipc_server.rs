@@ -86,6 +86,9 @@ impl Application for OpenArchive {
         // browser write and a window edit cannot interleave inside the archive.
         let guard = self.store.lock().map_err(|_| ErrorCode::Unavailable)?;
         let store = guard.as_ref().ok_or(ErrorCode::Unavailable)?;
+        if request.message_type == resume_pro_protocol::MessageType::LegacyImport {
+            return crate::plugin_bridge::legacy_import(request, store, self.services.as_ref());
+        }
         crate::plugin_bridge::apply(request, store)
     }
 }

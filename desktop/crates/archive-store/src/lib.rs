@@ -17,6 +17,7 @@ pub mod error;
 pub mod evidence;
 pub mod facade;
 pub mod identity;
+pub mod legacy_import;
 pub mod migration;
 pub mod model;
 pub mod normalize;
@@ -41,6 +42,7 @@ pub use applications::{
 };
 pub use error::StoreError;
 pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
+pub use legacy_import::{LegacyImportApply, LegacyImportPending, LegacyImportStatus};
 pub use migration::current_schema_version;
 // model::* 已含 Stage / StageUpdateMode / Fold / Occurred / EventPayload 等模型类型。
 pub use model::*;

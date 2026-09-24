@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::plugin_bridge::Answer;
-use crate::{ai_complete, ai_data_root, ai_provider_commands, checked_url, commands::CommandError, AppState};
+use crate::{ai_complete, ai_data_root, ai_provider_commands, ai_settings, checked_url, commands::CommandError, AppState};
 
 #[derive(Debug, Clone)]
 pub enum AiReply {
@@ -20,6 +20,26 @@ pub enum AiReply {
 pub trait BridgeServices: Send + Sync + 'static {
     fn ai_complete(&self, purpose: &str, system: &str, user: &str) -> AiReply;
     fn open_view(&self, view: &str) -> bool;
+
+    fn stage_import_key(&self, _import_id: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+    fn get_import_key(&self, _import_id: &str) -> Result<Option<String>, ErrorCode> { Err(ErrorCode::Unavailable) }
+    fn clear_import_key(&self, _import_id: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+    fn validate_import_provider(&self, _import_id: &str, _api_url: &str, _model: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+    fn install_import_provider(&self, _import_id: &str, _api_url: &str, _model: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+}
+
+pub fn import_account(import_id: &str) -> String { format!("import-{import_id}") }
+
+#[cfg(test)]
+mod import_account_tests {
+    use super::*;
+    #[test]
+    fn temporary_key_account_is_distinct_from_the_imported_provider_account() {
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let temp = crate::ai_credentials::account_for(&import_account(import_id));
+        let permanent = crate::ai_credentials::account_for(&format!("legacy-provider-{import_id}"));
+        assert_ne!(temp, permanent);
+    }
 }
 
 pub struct DesktopBridgeServices {
@@ -88,6 +108,36 @@ impl BridgeServices for DesktopBridgeServices {
             && window.unminimize().is_ok()
             && window.set_focus().is_ok()
             && self.app.emit("resume-pro://navigate", view).is_ok()
+    }
+
+    fn stage_import_key(&self, import_id: &str, key: &str) -> Result<(), ErrorCode> {
+        self.app.state::<AppState>().credentials.set_key(&import_account(import_id), key)
+            .map_err(|_| ErrorCode::Unavailable)
+    }
+
+    fn get_import_key(&self, import_id: &str) -> Result<Option<String>, ErrorCode> {
+        self.app.state::<AppState>().credentials.get_key(&import_account(import_id))
+            .map_err(|_| ErrorCode::Unavailable)
+    }
+
+    fn clear_import_key(&self, import_id: &str) -> Result<(), ErrorCode> {
+        self.app.state::<AppState>().credentials.clear_key(&import_account(import_id))
+            .map_err(|_| ErrorCode::Unavailable)
+    }
+
+    fn install_import_provider(&self, import_id: &str, api_url: &str, model: &str, key: &str) -> Result<(), ErrorCode> {
+        let state = self.app.state::<AppState>();
+        let data_root = ai_data_root(&state).map_err(|_| ErrorCode::Unavailable)?;
+        let provider_id = ai_settings::import_provider(&data_root, import_id, api_url, model)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        state.credentials.set_key(&provider_id, key).map_err(|_| ErrorCode::Unavailable)
+    }
+
+    fn validate_import_provider(&self, import_id: &str, api_url: &str, model: &str) -> Result<(), ErrorCode> {
+        let state = self.app.state::<AppState>();
+        let data_root = ai_data_root(&state).map_err(|_| ErrorCode::Unavailable)?;
+        ai_settings::validate_import_provider(&data_root, import_id, api_url, model)
+            .map_err(|_| ErrorCode::InvalidPayload)
     }
 }
 

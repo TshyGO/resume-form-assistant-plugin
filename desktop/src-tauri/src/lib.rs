@@ -25,6 +25,7 @@ mod commands_regression;
 mod ipc_client;
 mod ipc_server;
 mod lifecycle;
+mod legacy_import_commands;
 mod nm;
 mod plugin_bridge;
 
@@ -779,6 +780,32 @@ fn save_profile_cmd(
     revision: i64,
 ) -> Result<archive_store::ProfileRecord, CommandError> {
     with_store(&state, move |store| resume_commands::save_profile(store, profile, revision))
+}
+
+fn legacy_import_error(code: resume_pro_protocol::ErrorCode) -> CommandError {
+    let message = match code {
+        resume_pro_protocol::ErrorCode::Conflict => "旧数据与当前档案冲突，需要在桌面核对后再确认。",
+        resume_pro_protocol::ErrorCode::InvalidPayload => "旧数据导入的清单或分片不符合协议。",
+        _ => "旧数据导入暂时无法完成，请检查档案与系统凭据库后重试。",
+    };
+    CommandError { code: code.as_str().into(), message: message.into() }
+}
+
+#[tauri::command]
+fn list_legacy_imports_cmd(state: State<AppState>) -> Result<Vec<archive_store::LegacyImportPending>, CommandError> {
+    with_store(&state, |store| store.list_pending_legacy_imports().map_err(CommandError::from))
+}
+
+#[tauri::command]
+fn confirm_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
+    let services = bridge_services::DesktopBridgeServices::new(app);
+    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id).map_err(legacy_import_error))
+}
+
+#[tauri::command]
+fn reject_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
+    let services = bridge_services::DesktopBridgeServices::new(app);
+    with_store(&state, |store| legacy_import_commands::reject(store, &services, &import_id).map_err(legacy_import_error))
 }
 
 #[tauri::command]
@@ -1573,8 +1600,12 @@ pub fn run() {
                     if let Ok(mut paths) = app.state::<AppState>().paths.lock() {
                         *paths = Some(host.paths().clone());
                     }
+                    let services = Arc::new(bridge_services::DesktopBridgeServices::new(app.handle().clone()));
                     match open_store(&host.paths().archive_dir, &host.paths().current_pointer) {
                         Ok(store) => {
+                            if let Err(code) = legacy_import_commands::expire(&store, services.as_ref()) {
+                                eprintln!("legacy import cleanup deferred: {}", code.as_str());
+                            }
                             if let Ok(mut slot) = app.state::<AppState>().store.lock() {
                                 *slot = Some(store);
                             }
@@ -1587,7 +1618,6 @@ pub fn run() {
                     }
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
-                    let services = Arc::new(bridge_services::DesktopBridgeServices::new(app.handle().clone()));
                     let application = Arc::new(ipc_server::OpenArchive::with_services(
                         Arc::clone(&app.state::<AppState>().store), services,
                     ));
@@ -1667,6 +1697,9 @@ pub fn run() {
             set_active_resume_template_cmd,
             get_profile_cmd,
             save_profile_cmd,
+            list_legacy_imports_cmd,
+            confirm_legacy_import_cmd,
+            reject_legacy_import_cmd,
             create_todo_cmd,
             edit_todo_cmd,
             set_todo_status_cmd,

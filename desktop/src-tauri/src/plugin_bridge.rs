@@ -116,6 +116,46 @@ fn resume_update(request: &Request, store: &ArchiveStore) -> Result<Answer, Erro
     })
 }
 
+pub fn legacy_import(
+    request: &Request,
+    store: &ArchiveStore,
+    services: &dyn crate::bridge_services::BridgeServices,
+) -> Result<Answer, ErrorCode> {
+    ensure_current_identity(request, store)?;
+    for expired in store.expire_legacy_imports(&archive_store::timeutil::now_utc()).map_err(code_of)? {
+        services.clear_import_key(&expired)?;
+    }
+    let import_id = request.payload["importId"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+    let kind = request.payload["kind"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+    let status = match kind {
+        "manifest" => store.receive_legacy_manifest(import_id,
+            request.payload.get("body").ok_or(ErrorCode::InvalidPayload)?.clone()).map_err(code_of)?,
+        "status" => store.legacy_import_status(import_id).map_err(code_of)?,
+        "template" | "profile" | "aiConfig" => {
+            let index = request.payload["index"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
+            let body = request.payload.get("body").ok_or(ErrorCode::InvalidPayload)?;
+            let digest = resume_pro_protocol::payload_body_sha256(body).map_err(|_| ErrorCode::InvalidPayload)?;
+            let stored = if kind == "aiConfig" {
+                json!({
+                    "apiUrl": body["apiUrl"],
+                    "model": body["model"],
+                    "hasKey": true
+                })
+            } else {
+                body.clone()
+            };
+            if kind == "aiConfig" {
+                store.check_legacy_part(import_id, index, kind, &digest).map_err(code_of)?;
+                let key = body["apiKey"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+                services.stage_import_key(import_id, key)?;
+            }
+            store.receive_legacy_part(import_id, index, kind, &digest, stored).map_err(code_of)?
+        }
+        _ => return Err(ErrorCode::InvalidPayload),
+    };
+    Ok(Answer { result_id: None, payload: json!(status) })
+}
+
 /// The identity the envelope claims. `None` reaches D03 as `identity_missing` rather than
 /// being silently replaced with the current one, which would let an envelope from a
 /// restored-over archive write as if it belonged here.
@@ -650,6 +690,74 @@ mod tests {
         }]).unwrap();
         let request = v2_request("resume.read", &store.identity(), json!({}));
         assert_eq!(apply(&request, &store).err(), Some(ErrorCode::SecretForbidden));
+    }
+
+    #[test]
+    fn legacy_ai_config_stages_the_key_outside_sqlite() {
+        struct KeyServices(std::sync::Mutex<Option<String>>);
+        impl crate::bridge_services::BridgeServices for KeyServices {
+            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+            fn stage_import_key(&self, _: &str, key: &str) -> Result<(), ErrorCode> {
+                *self.0.lock().unwrap() = Some(key.into());
+                Ok(())
+            }
+        }
+        let (dir, store) = store();
+        let services = KeyServices(std::sync::Mutex::new(None));
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let body = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let digest = resume_pro_protocol::payload_body_sha256(&body).unwrap();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":1,"parts":[{"index":1,"kind":"aiConfig","sha256":digest}]}
+        }));
+        legacy_import(&manifest, &store, &services).unwrap();
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1, "body": body
+        }));
+        let answer = legacy_import(&part, &store, &services).unwrap();
+        assert_eq!(answer.payload["state"], "awaiting_confirmation");
+        assert_eq!(services.0.lock().unwrap().as_deref(), Some("sk-synthetic-example-value"));
+        let db = rusqlite::Connection::open(dir.path().join("archive/archive.db")).unwrap();
+        let raw: String = db.query_row("SELECT body_json FROM legacy_import_parts", [], |row| row.get(0)).unwrap();
+        assert!(!raw.contains("sk-synthetic-example-value"));
+        assert!(!raw.contains("apiKey"));
+        let changed = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1,
+            "body": {"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-different-synthetic-value"}
+        }));
+        assert_eq!(legacy_import(&changed, &store, &services).err(), Some(ErrorCode::Conflict));
+        assert_eq!(services.0.lock().unwrap().as_deref(), Some("sk-synthetic-example-value"));
+    }
+
+    #[test]
+    fn failed_key_staging_never_marks_an_ai_part_received() {
+        struct LockedKeyring;
+        impl crate::bridge_services::BridgeServices for LockedKeyring {
+            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
+                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+            fn stage_import_key(&self, _: &str, _: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+        }
+        let (_dir, store) = store();
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let body = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
+        let digest = resume_pro_protocol::payload_body_sha256(&body).unwrap();
+        let manifest = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "manifest", "index": 0,
+            "body": {"pluginVersion":"0.4.0","total":1,"parts":[{"index":1,"kind":"aiConfig","sha256":digest}]}
+        }));
+        legacy_import(&manifest, &store, &LockedKeyring).unwrap();
+        let part = v2_request("legacy.import", &store.identity(), json!({
+            "importId": import_id, "kind": "aiConfig", "index": 1, "body": body
+        }));
+        assert_eq!(legacy_import(&part, &store, &LockedKeyring).err(), Some(ErrorCode::Unavailable));
+        let status = store.legacy_import_status(import_id).unwrap();
+        assert_eq!((status.state.as_str(), status.received), ("receiving", 0));
     }
 
     #[test]
