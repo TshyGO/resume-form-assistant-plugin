@@ -99,9 +99,16 @@ pub fn confirm(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &
 }
 
 /// Reject a staged import. If templates/profile were already applied, retain those
-/// rows but report rejected so the plugin keeps its old copy and Key. The temporary
-/// desktop Key is cleared either way.
+/// rows but report rejected so the plugin keeps its old copy and Key. Remove any
+/// partially installed desktop provider before recording rejection; the temporary
+/// desktop Key is then cleared.
 pub fn reject(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &str) -> Result<LegacyImportStatus, ErrorCode> {
+    let current = store.legacy_import_status(import_id).map_err(code_of)?;
+    if current.state == "awaiting_confirmation" && store.list_pending_legacy_imports().map_err(code_of)?
+        .iter().any(|pending| pending.import_id == import_id && pending.applied)
+    {
+        services.discard_import_provider(import_id)?;
+    }
     let status = store.reject_legacy_import(import_id).map_err(code_of)?;
     clear_key(store, services, import_id)?;
     Ok(status)
@@ -138,6 +145,7 @@ mod tests {
         keys: Mutex<HashMap<String, String>>,
         providers: Mutex<Vec<String>>,
         fail_install: AtomicBool,
+        fail_discard: AtomicBool,
         fail_validate: AtomicBool,
         fail_clear: AtomicBool,
     }
@@ -159,6 +167,11 @@ mod tests {
             if self.fail_install.load(Ordering::Relaxed) { return Err(ErrorCode::Unavailable); }
             let mut providers = self.providers.lock().unwrap();
             if !providers.contains(&id.to_string()) { providers.push(id.into()); }
+            Ok(())
+        }
+        fn discard_import_provider(&self, id: &str) -> Result<(), ErrorCode> {
+            if self.fail_discard.load(Ordering::Relaxed) { return Err(ErrorCode::Unavailable); }
+            self.providers.lock().unwrap().retain(|provider| provider != id);
             Ok(())
         }
         fn validate_import_provider(&self, _: &str, _: &str, _: &str) -> Result<(), ErrorCode> {
@@ -263,6 +276,28 @@ mod tests {
             {"index":1,"kind":"template","sha256":HASH}
         ]})).unwrap();
         assert_eq!(next.state, "receiving");
+    }
+
+    #[test]
+    fn rejection_compensates_a_provider_installed_before_confirmation_finished() {
+        let (_dir, store) = store();
+        staged(&store);
+        let services = FakeServices::default();
+        services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
+        store.apply_legacy_confirmation(IMPORT).unwrap();
+        services.install_import_provider(IMPORT, "https://api.example.com/v1", "m", "sk-synthetic").unwrap();
+        assert_eq!(services.providers.lock().unwrap().len(), 1);
+
+        services.fail_discard.store(true, Ordering::Relaxed);
+        assert_eq!(reject(&store, &services, IMPORT), Err(ErrorCode::Unavailable));
+        assert_eq!(store.legacy_import_status(IMPORT).unwrap().state, "awaiting_confirmation");
+        assert_eq!(services.keys.lock().unwrap().get(IMPORT).map(String::as_str), Some("sk-synthetic"));
+
+        services.fail_discard.store(false, Ordering::Relaxed);
+        assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "rejected");
+        assert!(services.providers.lock().unwrap().is_empty());
+        assert!(services.keys.lock().unwrap().is_empty());
+        assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
     }
 
     #[test]

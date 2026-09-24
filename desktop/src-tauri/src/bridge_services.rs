@@ -26,19 +26,44 @@ pub trait BridgeServices: Send + Sync + 'static {
     fn clear_import_key(&self, _import_id: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
     fn validate_import_provider(&self, _import_id: &str, _api_url: &str, _model: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
     fn install_import_provider(&self, _import_id: &str, _api_url: &str, _model: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
+    fn discard_import_provider(&self, _import_id: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
 }
 
 pub fn import_account(import_id: &str) -> String { format!("import-{import_id}") }
 
+fn discard_import_provider(data_root: &std::path::Path, credentials: &dyn crate::ai_credentials::CredentialStore, import_id: &str) -> Result<(), ErrorCode> {
+    let provider_id = format!("legacy-provider-{import_id}");
+    // A failed OS-store delete must leave the batch pending, not orphan a Key.
+    credentials.clear_key(&provider_id).map_err(|_| ErrorCode::Unavailable)?;
+    if ai_settings::load(data_root).providers.iter().any(|provider| provider.id == provider_id) {
+        ai_settings::delete_provider(data_root, &provider_id).map_err(|_| ErrorCode::Unavailable)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod import_account_tests {
     use super::*;
+    use crate::ai_credentials::{CredentialStore, MemoryStore};
     #[test]
     fn temporary_key_account_is_distinct_from_the_imported_provider_account() {
         let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
         let temp = crate::ai_credentials::account_for(&import_account(import_id));
         let permanent = crate::ai_credentials::account_for(&format!("legacy-provider-{import_id}"));
         assert_ne!(temp, permanent);
+    }
+
+    #[test]
+    fn discarding_an_import_removes_its_permanent_provider_and_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let import_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let provider_id = ai_settings::import_provider(dir.path(), import_id, "https://api.example.com/v1", "m").unwrap();
+        let credentials = MemoryStore::default();
+        credentials.set_key(&provider_id, "sk-synthetic").unwrap();
+        discard_import_provider(dir.path(), &credentials, import_id).unwrap();
+        discard_import_provider(dir.path(), &credentials, import_id).unwrap();
+        assert!(ai_settings::load(dir.path()).providers.is_empty());
+        assert_eq!(credentials.get_key(&provider_id).unwrap(), None);
     }
 }
 
@@ -134,6 +159,12 @@ impl BridgeServices for DesktopBridgeServices {
         let provider_id = ai_settings::import_provider(&data_root, import_id, api_url, model)
             .map_err(|_| ErrorCode::Unavailable)?;
         state.credentials.set_key(&provider_id, key).map_err(|_| ErrorCode::Unavailable)
+    }
+
+    fn discard_import_provider(&self, import_id: &str) -> Result<(), ErrorCode> {
+        let state = self.app.state::<AppState>();
+        let data_root = ai_data_root(&state).map_err(|_| ErrorCode::Unavailable)?;
+        discard_import_provider(&data_root, state.credentials.as_ref(), import_id)
     }
 
     fn validate_import_provider(&self, import_id: &str, api_url: &str, model: &str) -> Result<(), ErrorCode> {

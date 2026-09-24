@@ -424,8 +424,8 @@ impl StoreTx<'_> {
     }
 
     /// Discard a staged import. If templates/profile have already committed, keep those
-    /// rows but report rejected: the plugin must retain its old copy and Key because
-    /// the AI configuration never reached the desktop's permanent credential account.
+    /// rows but report rejected: the plugin must retain its old copy and Key. The
+    /// caller removes any partially installed desktop provider before this transition.
     pub fn reject_legacy_import(&mut self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         let (state, applied_at, dropped): (String, Option<String>, bool) = self.conn().query_row(
             "SELECT state, applied_at, ai_config_dropped FROM legacy_imports WHERE import_id = ?1",
