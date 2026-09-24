@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { ProfileForm } from "./ProfileForm.tsx";
+import { ResumeParse } from "./ResumeParse.tsx";
 import { TemplateList } from "./TemplateList.tsx";
 import type { FilePickers } from "./TemplateList.tsx";
 
@@ -7,6 +9,7 @@ import type { FilePickers } from "./TemplateList.tsx";
  * 模板优先，模板里没有的字段再用「我的信息」补。
  */
 export function ResumeView({ pickers }: { pickers: FilePickers | null }) {
+  const [listKey, setListKey] = useState(0);
   return (
     <div className="stack">
       <header>
@@ -15,7 +18,8 @@ export function ResumeView({ pickers }: { pickers: FilePickers | null }) {
       </header>
       <section aria-labelledby="resume-templates-title" className="stack">
         <h3 id="resume-templates-title">简历模板</h3>
-        <TemplateList pickers={pickers} />
+        <ResumeParse onCreated={() => setListKey((k) => k + 1)} />
+        <TemplateList key={listKey} pickers={pickers} />
       </section>
       <section aria-labelledby="resume-profile-title" className="stack">
         <h3 id="resume-profile-title">我的信息</h3>
