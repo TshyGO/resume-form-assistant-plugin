@@ -788,9 +788,20 @@ fn list_legacy_imports_cmd(state: State<AppState>) -> Result<Vec<archive_store::
 }
 
 #[tauri::command]
-fn confirm_legacy_import_cmd(app: AppHandle, state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportStatus, CommandError> {
+fn confirm_legacy_import_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    import_id: String,
+    profile_choice: Option<String>,
+) -> Result<archive_store::LegacyImportStatus, CommandError> {
+    let choice = legacy_import_commands::parse_profile_choice(profile_choice.as_deref())?;
     let services = bridge_services::DesktopBridgeServices::new(app);
-    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id).map_err(legacy_import_commands::command_error))
+    with_store(&state, |store| legacy_import_commands::confirm(store, &services, &import_id, choice).map_err(legacy_import_commands::command_error))
+}
+
+#[tauri::command]
+fn legacy_import_preview_cmd(state: State<AppState>, import_id: String) -> Result<archive_store::LegacyImportPreview, CommandError> {
+    with_store(&state, |store| store.legacy_import_preview(&import_id).map_err(CommandError::from))
 }
 
 #[tauri::command]
@@ -1610,12 +1621,16 @@ pub fn run() {
                     // Only now: holding host.lock is what entitles this process to be
                     // the one listening (D01 decision 3).
                     let handle = app.handle().clone();
+                    let legacy_handle = app.handle().clone();
                     let application = Arc::new(ipc_server::OpenArchive::with_services(
                         Arc::clone(&app.state::<AppState>().store), services,
                     ).notifying(Arc::new(move |notice| {
                         // The list re-queries. Emitting before the commit, or when the
                         // write failed, would show a row the archive does not have.
                         let _ = handle.emit("applications-changed", &notice);
+                    })).notifying_legacy(Arc::new(move |notice| {
+                        // The 「简历」 page shows the pending import without a manual refresh.
+                        let _ = legacy_handle.emit("legacy-import-changed", &notice);
                     })));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
@@ -1694,6 +1709,7 @@ pub fn run() {
             get_profile_cmd,
             save_profile_cmd,
             list_legacy_imports_cmd,
+            legacy_import_preview_cmd,
             confirm_legacy_import_cmd,
             reject_legacy_import_cmd,
             create_todo_cmd,

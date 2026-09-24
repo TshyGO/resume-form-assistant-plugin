@@ -42,7 +42,10 @@ pub use applications::{
 };
 pub use error::StoreError;
 pub use identity::{ArchiveIdentity, ArchiveMetaFile, CurrentPointer};
-pub use legacy_import::{LegacyCleanup, LegacyImportApply, LegacyImportPending, LegacyImportStatus, LegacyPartCheck};
+pub use legacy_import::{
+    LegacyAiPreview, LegacyCleanup, LegacyImportApply, LegacyImportPending, LegacyImportPreview, LegacyImportStatus,
+    LegacyPartCheck, LegacyTemplatePreview, ProfileChoice,
+};
 pub use migration::current_schema_version;
 // model::* 已含 Stage / StageUpdateMode / Fold / Occurred / EventPayload 等模型类型。
 pub use model::*;

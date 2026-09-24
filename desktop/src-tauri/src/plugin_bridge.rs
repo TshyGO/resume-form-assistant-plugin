@@ -850,7 +850,7 @@ mod tests {
         send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
         send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
         assert_eq!(services.staged.load(std::sync::atomic::Ordering::Relaxed), 1);
-        assert_eq!(crate::legacy_import_commands::confirm(&store, &services, IMPORT_ID).unwrap().state, "imported");
+        assert_eq!(crate::legacy_import_commands::confirm(&store, &services, IMPORT_ID, None).unwrap().state, "imported");
         assert!(services.keys.lock().unwrap().is_empty());
 
         let answer = send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
@@ -867,7 +867,7 @@ mod tests {
         let ai = json!({"apiUrl":"https://api.example.com/v1","model":"m","apiKey":"sk-synthetic-example-value"});
         send_manifest(&store, &services, &[("aiConfig", &ai)]);
         send_part(&store, &services, 1, "aiConfig", &ai).unwrap();
-        store.apply_legacy_confirmation(IMPORT_ID).unwrap();
+        store.apply_legacy_confirmation(IMPORT_ID, None).unwrap();
         assert_eq!(crate::legacy_import_commands::reject(&store, &services, IMPORT_ID).unwrap().state, "imported");
         assert!(services.keys.lock().unwrap().is_empty());
 
