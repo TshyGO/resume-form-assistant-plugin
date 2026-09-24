@@ -111,7 +111,8 @@
     {"id": "legacy-import-profile-nested-secret-key", "path": "requests/legacy-import-profile-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "legacy-import-template-dynamic-password-key", "path": "requests/legacy-import-template-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "legacy-import-profile-dynamic-apikey-key", "path": "requests/legacy-import-profile-dynamic-apikey-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "resume-update-custom-dynamic-password-key", "path": "requests/resume-update-custom-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "resume-update-custom-dynamic-password-key", "path": "requests/resume-update-custom-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "ai-complete-field-labels-without-values-ok", "path": "requests/ai-complete-field-labels-without-values-ok.json", "schema": "accept", "protocol": {"accept": true}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},

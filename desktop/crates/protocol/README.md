@@ -47,10 +47,14 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | 消息 | 请求与响应约定 |
 | --- | --- |
 | `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
-| `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。自身幂等，不走 `message_receipts`。 |
+| `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。不走 `message_receipts`。 |
 | `ai.complete` | 不带档案身份；插件传提示词，桌面用当前服务商和凭据发出。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
+
+`resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
+
+`ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
 
 Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
 
