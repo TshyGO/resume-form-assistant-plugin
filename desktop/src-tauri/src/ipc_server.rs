@@ -238,6 +238,13 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
             let mut payload = handshake_response_payload(&current, env!("CARGO_PKG_VERSION"));
             // Advertise the version this desktop actually serves.
             payload["maxProtocolVersion"] = serde_json::json!(SERVED_MAX_PROTOCOL_VERSION);
+            // Old v1 plugins validate capabilities against an eight-name enum. Keep
+            // their list intact; only a v2 envelope receives the new capabilities.
+            if request.protocol_version >= 2 {
+                let rules: serde_json::Value = serde_json::from_str(resume_pro_protocol::RULES_JSON).ok()?;
+                let extra = rules["v2MessageTypes"].as_array()?;
+                payload["capabilities"].as_array_mut()?.extend(extra.iter().cloned());
+            }
             serde_json::to_vec(&serde_json::json!({
                 "protocolVersion": request.protocol_version,
                 "correlationId": request.message_id,
@@ -510,7 +517,7 @@ mod tests {
                 .any(|c| c == "job.save"),
             "the extension learns what it may send from this list"
         );
-        assert!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
+        assert!(!value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
     }
 
     #[test]
@@ -521,6 +528,9 @@ mod tests {
         assert_eq!(value["ok"], true);
         assert_eq!(value["protocolVersion"], 2);
         assert_eq!(value["payload"]["maxProtocolVersion"], 2);
+        assert!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
+        let request = resume_pro_protocol::validate_request_bytes(HANDSHAKE_V2_ONLY.as_bytes()).unwrap();
+        resume_pro_protocol::validate_response_for_request(&value, &request).unwrap();
     }
 
     #[test]

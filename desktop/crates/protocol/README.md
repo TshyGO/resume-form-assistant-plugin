@@ -43,6 +43,7 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 ## v2（#130）
 
 `rules.json` 的支持范围是 v1–v2。原有八类消息在 v1、v2 信封里都可用；新增的五类消息只接受 `protocolVersion: 2`。旧插件的 `link/envelope.mjs` 仍发送 v1，桌面响应版本回显和新消息处理在 PR 3b 接入。
+桌面握手按请求版本列出能力：v1 响应只含旧八类，v2 响应追加新五类，避免已安装的旧插件因不认识新能力名而拒绝整条握手。
 
 本 crate（D05）的校验器范围本身就是 1..=2（`MAX_PROTOCOL_VERSION`），供 PR 3b/4 直接使用；但在 PR 3b 把新增五类消息接线进桌面业务逻辑之前，`desktop/src-tauri` 不能宣称自己已经在服务 v2。`desktop/src-tauri/src/ipc_server.rs` 的 `SERVED_MAX_PROTOCOL_VERSION`（当前 `1`）是唯一开关：握手响应的 `maxProtocolVersion` 用它覆盖协议库算出的值，`ipc_server::answer` 与 `nm::response_for_with`（host 侧不经应用进程就直接回答的 `health` 短路径）在分发前都会先比较请求的 `protocolVersion`，超过这个常量就答 `protocol_incompatible`，而不是把 v2 信封转发给还没有 v2 分支的业务逻辑（那样只会答出无法诊断的 `unavailable`）。PR 3b 接线完新消息后把这一个常量改成 `2`（plan Task 6），不需要再动校验器本身的范围。
 
