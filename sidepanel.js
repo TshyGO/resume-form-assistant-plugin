@@ -216,6 +216,11 @@
           elements.desktopConnectionAction.dataset.kind = "settings-ai";
         }
       }
+      // The AI-settings hint belongs to the fill that raised it. Once the page stops
+      // reporting it (a new fill started, or another tab), go back to the desktop state.
+      if (response?.openView !== "settings-ai" && elements.desktopConnectionAction.dataset.kind === "settings-ai") {
+        renderDesktopMode();
+      }
       if (connected) {
         elements.profileOffer.hidden = !response.profileOffer;
         elements.profileOfferText.textContent = response.profileOffer || "";

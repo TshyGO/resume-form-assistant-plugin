@@ -189,6 +189,8 @@ function makePromptBatches(formFields, resumeFields) {
   return { batches, skippedOversized, skippedNoContext };
 }
 
+const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large", "response_too_large", "secret_in_prompt"]);
+
 async function handleAiFill(message, controller = new AbortController()) {
   const incomingFormFields = Array.isArray(message.formFields) ? message.formFields : [];
   const incomingResumeFields = Array.isArray(message.resumeFields) ? message.resumeFields : [];
@@ -239,7 +241,11 @@ async function handleAiFill(message, controller = new AbortController()) {
         if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
         warnings.push(aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
-        if (["cancelled", "not_configured", "credential_unavailable", "auth", "rate_limited", "incompatible", "not_installed"].includes(reason)) break;
+        // Only a failure tied to this batch's content is worth trying the next batch for.
+        // Everything else (desktop gone, not paired, no key, slow or unreachable provider)
+        // will fail the same way again, and each attempt costs a native round trip or a
+        // full provider timeout.
+        if (!BATCH_LOCAL_FAILURES.has(reason)) break;
         continue;
       }
       if (controller.signal.aborted) break;

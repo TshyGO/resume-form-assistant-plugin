@@ -212,3 +212,17 @@ test('resume parsing directs the user to the desktop resume page', async () => {
   assert.equal(result.openView, 'resume');
   assert.equal(env.sent.length, 0);
 });
+
+test('a desktop or provider connection failure stops later batches; a bad batch does not', async () => {
+  const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `问题${i}` + '甲'.repeat(1000) }));
+  for (const reason of ['unavailable', 'not_paired', 'never_paired', 'network', 'timeout']) {
+    let calls = 0;
+    const env = worker(() => { calls += 1; return { ok: false, reason }; });
+    await env.run({ formFields: fields, resumeFields: [{ group: '自定义', key: '说明', value: '合成资料' }] });
+    assert.equal(calls, 1, `${reason} must not be retried batch by batch`);
+  }
+  let calls = 0;
+  const env = worker(() => { calls += 1; return { ok: false, reason: 'bad_response' }; });
+  await env.run({ formFields: fields, resumeFields: [{ group: '自定义', key: '说明', value: '合成资料' }] });
+  assert.ok(calls > 1, 'a malformed answer for one batch still lets the next batch try');
+});

@@ -165,7 +165,8 @@
         panel.classList.add("is-legacy-open");
         updateCollapseButton(panel);
         constrainSidebarToViewport();
-        button.click();
+        // The page has not read the desktop yet; the repeat button is enabled from that read.
+        refreshVisibleStore().catch(() => {}).finally(() => button.click());
         sendResponse({ ok: true });
       }
       return false;
@@ -213,10 +214,10 @@
       return;
     }
 
-    [state.currentStore, state.sidebarUiState] = await Promise.all([
-      StorageService.getState(),
-      StorageService.getSidebarUiState()
-    ]);
+    // No desktop read here. This script runs on every page, and each read starts the
+    // native host (and cold-starts the desktop app). The data is read when the in-page
+    // panel is actually shown, or when the user starts an action.
+    state.sidebarUiState = await StorageService.getSidebarUiState();
     state.sidebarUiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
     const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
     const sheet = new CSSStyleSheet();
@@ -227,17 +228,33 @@
     // A browser without the native side panel still needs a usable fill UI.
     chrome.runtime.sendMessage({ type: "SIDE_PANEL_CAPABILITY" })
       .then((result) => {
-        if (!result?.supported) shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open");
+        if (!result?.supported) openLegacyPanel();
       })
-      .catch(() => shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open"));
+      .catch(openLegacyPanel);
     bindStorageSync();
-    document.addEventListener("visibilitychange", async () => {
-      if (document.hidden) return;
-      state.currentStore = await StorageService.getState();
-      renderSidebar();
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refreshVisibleStore().catch(() => {});
     });
     bindFocusTracking();
     window.addEventListener("resize", constrainSidebarToViewport);
+  }
+
+  function inPageUiVisible() {
+    return Boolean(shadowRoot?.querySelector(".resume-pro")?.classList.contains("is-legacy-open"));
+  }
+
+  // Reads the desktop only while the in-page panel is on screen. With the native side
+  // panel it stays hidden, and the side panel reads for itself.
+  async function refreshVisibleStore() {
+    if (!inPageUiVisible()) return false;
+    state.currentStore = await StorageService.getState();
+    renderSidebar();
+    return true;
+  }
+
+  function openLegacyPanel() {
+    shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open");
+    refreshVisibleStore().catch(() => {});
   }
 
   function createSidebar(sheet) {
@@ -397,7 +414,7 @@
     });
 
     templateSelect.addEventListener("change", async (event) => {
-      const result = await StorageService.setActiveTemplate(event.target.value);
+      const result = await StorageService.setActiveTemplate(event.target.value).catch(() => null);
       state.currentStore = await StorageService.getState();
       renderSidebar();
       showStatus(result?.status === "missing_template" ? "这个模板在桌面里已经删掉了" : result?.status === "ok" ? "模板已切换。" : "桌面暂时无法切换模板。", result?.status === "ok" ? "success" : "error");
@@ -3174,6 +3191,7 @@
       handleChipAction,
       handleFieldChipClick,
       handlePanelFieldAction,
+      refreshVisibleStore,
       highlightFilledField,
       injectFieldHighlightStyles,
       isInViewport,

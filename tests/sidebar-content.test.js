@@ -531,3 +531,29 @@ test("a bound write failure closes the save form and points to the retained queu
   });
   assert.match(described.text, /待同步列表/);
 });
+
+test('the page reads the desktop only while its own panel is on screen', async () => {
+  const reads = [];
+  const { hooks } = loadContentScript({ desktopReply: async message => {
+    if (message.type === 'DESKTOP_RESUME_READ') reads.push(message);
+    return { status: 'ok', data: { templates: [], activeTemplate: null, profile: { values: {}, family: [], custom: [] }, profileRevision: 0 } };
+  } });
+  const classes = new Set();
+  const panel = { classList: { contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name) } };
+  hooks.setShadowRoot({ querySelector: selector => selector === '.resume-pro' ? panel : null });
+
+  assert.equal(await hooks.refreshVisibleStore(), false);
+  assert.equal(reads.length, 0, 'a hidden panel (native side panel in use) must not start the native host');
+  classes.add('is-legacy-open');
+  // This bare shadow root has no panel markup to render into; only the read matters here.
+  await hooks.refreshVisibleStore().catch(() => {});
+  assert.equal(reads.length, 1);
+});
+
+test('loading a page does not read the desktop', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
+  const init = source.slice(source.indexOf('async function init()'), source.indexOf('function inPageUiVisible()'));
+  assert.ok(init.length > 0);
+  assert.equal(init.includes('StorageService.getState'), false);
+  assert.equal(init.includes('DESKTOP_RESUME_READ'), false);
+});
