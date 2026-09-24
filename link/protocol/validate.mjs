@@ -14,6 +14,14 @@ export const MAX_CHUNK_COUNT = RULES.maxChunkCount;
 export const MAX_SNAPSHOT_BYTES = RULES.maxSnapshotBytes;
 
 const FORBIDDEN_KEYS = ["apikey", "api_key", "api-key", "authorization", "cookie", "set-cookie", "password", "otp", "token", "secret"];
+// The desktop store's own label rule (archive-store::resume_secrets::is_secret_label,
+// mirrored in the plugin's profile-fields.js SECRET_LABEL). Narrower than FORBIDDEN_KEYS:
+// no bare "otp"/"cookie"/"authorization", but the Chinese secret-label terms the store
+// also strips. Anything the store accepts under a dynamic {key, value} label must reach
+// the wire, and anything the store strips must not — so this list, not FORBIDDEN_KEYS,
+// governs the `key` string of a template field or profile custom entry. Real JSON object
+// keys still go through FORBIDDEN_KEYS unchanged.
+const STORE_LABEL_KEYS = ["密码", "口令", "验证码", "校验码", "授权码", "密钥", "私钥", "令牌", "password", "passwd", "captcha", "token", "secret"];
 const URL_FIELD_KEYS = new Set(["sourceurl", "source_url", "urlredacted", "url_redacted", "dedupeurl", "dedupe_url", "apiurl", "api_url", "url"]);
 const SECRET_QUERY_KEYS = new Set(RULES.urlSecretQueryKeys || []);
 const URL_ALLOWLIST = RULES.urlAllowlist || [];
@@ -59,7 +67,7 @@ function walkSecrets(value, allowedPaths = [], path = []) {
   }
   if (value && typeof value === "object") {
     if (Object.hasOwn(value, "key") && typeof value.key === "string" && Object.hasOwn(value, "value") &&
-        FORBIDDEN_KEYS.some((forbidden) => value.key.toLowerCase().includes(forbidden))) {
+        STORE_LABEL_KEYS.some((forbidden) => value.key.toLowerCase().includes(forbidden))) {
       throw fail("secret_forbidden", "forbidden dynamic field label", "secrets");
     }
     for (const [k, v] of Object.entries(value)) {

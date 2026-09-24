@@ -110,9 +110,16 @@
     {"id": "legacy-import-profile-nonstring", "path": "requests/legacy-import-profile-nonstring.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "legacy-import-profile-nested-secret-key", "path": "requests/legacy-import-profile-nested-secret-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
     {"id": "legacy-import-template-dynamic-password-key", "path": "requests/legacy-import-template-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "legacy-import-profile-dynamic-apikey-key", "path": "requests/legacy-import-profile-dynamic-apikey-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "legacy-import-profile-dynamic-apikey-key", "path": "requests/legacy-import-profile-dynamic-apikey-key.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "resume-update-custom-dynamic-password-key", "path": "requests/resume-update-custom-dynamic-password-key.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
-    {"id": "ai-complete-field-labels-without-values-ok", "path": "requests/ai-complete-field-labels-without-values-ok.json", "schema": "accept", "protocol": {"accept": true}}
+    {"id": "ai-complete-field-labels-without-values-ok", "path": "requests/ai-complete-field-labels-without-values-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-custom-label-work-authorization-ok", "path": "requests/resume-update-custom-label-work-authorization-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-custom-label-carbon-footprint-ok", "path": "requests/resume-update-custom-label-carbon-footprint-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-custom-label-hotpot-ok", "path": "requests/resume-update-custom-label-hotpot-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-custom-label-cookie-research-ok", "path": "requests/resume-update-custom-label-cookie-research-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "resume-update-custom-label-password-course", "path": "requests/resume-update-custom-label-password-course.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "resume-update-custom-label-bank-password", "path": "requests/resume-update-custom-label-bank-password.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "resume-update-custom-label-github-token", "path": "requests/resume-update-custom-label-github-token.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
