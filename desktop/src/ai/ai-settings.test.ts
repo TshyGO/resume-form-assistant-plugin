@@ -1,39 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AiSettingsView } from "../api.ts";
 import {
   describeCommandError,
-  describeKeyState,
-  describeSaved,
+  describeModelsResult,
+  describeProviderKey,
   describeTransportRisk,
   describeUrlSecrets,
+  matchModels,
+  PRESETS,
 } from "./ai-settings.ts";
 
-const view = (overrides: Partial<AiSettingsView> = {}): AiSettingsView => ({
-  apiUrl: "https://api.deepseek.com/v1/chat/completions",
-  model: "deepseek-chat",
-  host: "api.deepseek.com",
-  keyConfigured: false,
-  credentialError: null,
-  ...overrides,
+test("预设都是 https 的 Base URL，名字不重复", () => {
+  const names = new Set(PRESETS.map((p) => p.name));
+  assert.equal(names.size, PRESETS.length);
+  for (const preset of PRESETS) {
+    if (preset.id === "custom") continue;
+    assert.match(preset.apiUrl, /^https:\/\//);
+    assert.match(preset.keyPage, /^https:\/\//);
+  }
+  assert.ok(PRESETS.some((p) => p.id === "custom" && p.apiUrl === ""));
 });
 
-test("没配 Key 时说清楚手动分类还能用", () => {
-  const message = describeKeyState(view());
-  assert.equal(message.tone, "warn");
-  assert.match(message.text, /手动分类照常可用/);
+test("每个服务商的 Key 状态", () => {
+  assert.equal(describeProviderKey({ keyConfigured: true }, null).tone, "ok");
+  assert.equal(describeProviderKey({ keyConfigured: false }, null).tone, "warn");
+  assert.equal(describeProviderKey({ keyConfigured: false }, "钥匙串锁了").tone, "error");
 });
 
-test("配过 Key 只说配过，不显示它", () => {
-  const message = describeKeyState(view({ keyConfigured: true }));
-  assert.equal(message.tone, "ok");
-  assert.match(message.text, /不会显示/);
+test("模型候选：完全一致 > 前缀（含 vendor/ 之后） > 子串", () => {
+  assert.deepEqual(matchModels(["a/deepseek-chat", "deepseek-chat", "x-deepseek"], "deepseek-chat"), [
+    "deepseek-chat",
+    "a/deepseek-chat",
+  ]);
+  assert.deepEqual(matchModels(["qwen-plus", "qwen-max"], ""), ["qwen-plus", "qwen-max"]);
 });
 
-test("凭据库用不了时报凭据库的错，不说成没配过", () => {
-  const message = describeKeyState(view({ credentialError: "系统凭据库用不了，Key 没有保存：被策略禁用" }));
-  assert.equal(message.tone, "error");
-  assert.match(message.text, /凭据库/);
+test("获取模型的结果提示", () => {
+  assert.match(describeModelsResult({ models: ["a"], hiddenCount: 2, host: "h" }).text, /拿到 1 个模型.*另有 2 个非对话模型已隐藏/);
+  assert.equal(describeModelsResult({ models: [], hiddenCount: 0, host: "h" }).tone, "warn");
 });
 
 test("明文 http：本机温和提示，公网明确警告，https 不提示", () => {
@@ -43,12 +47,6 @@ test("明文 http：本机温和提示，公网明确警告，https 不提示", 
   const publicRisk = describeTransportRisk("http://relay.example/v1");
   assert.equal(publicRisk?.tone, "error");
   assert.match(publicRisk?.text ?? "", /明文/);
-});
-
-test("地址被补全过就说补成了什么", () => {
-  const saved = describeSaved("https://api.deepseek.com", view());
-  assert.match(saved.text, /补全为 https:\/\/api\.deepseek\.com\/v1\/chat\/completions/);
-  assert.equal(describeSaved("https://api.deepseek.com/v1/chat/completions", view()).text, "已保存。");
 });
 
 test("命令报错时把错误码留在文案里", () => {

@@ -529,3 +529,8 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; }
 .profile-form fieldset { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
 .profile-form fieldset > legend, .profile-form fieldset > p, .profile-form fieldset > [role="group"] { grid-column: 1 / -1; }
 .pill.warn { border: 1px solid #e7d4a8; color: #7c5a12; background: transparent; }
+/* AI 服务商列表与模型候选。 */
+.provider-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.provider-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.provider-item.active { border-color: var(--accent); }
+.model-candidates { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
