@@ -46,7 +46,9 @@ label.button-like {
   transition: background-color 140ms, border-color 140ms, color 140ms;
 }
 label.button-like:hover { background: var(--bg); border-color: #b7c1cd; }
-label.button-like:has(input:disabled) { cursor: default; opacity: .45; }
+label.button-like:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* macOS 11 最低支持的 WebKit 不认 :has()，禁用态改由 React 切换这个类。 */
+label.button-like.disabled { cursor: default; opacity: .45; }
 
 #app { display: grid; grid-template-columns: 192px minmax(0, 1fr); height: 100dvh; overflow: hidden; }
 .nav { background: var(--sidebar); color: var(--sidebar-text); display: flex; flex-direction: column; padding: 24px 12px 16px; min-height: 0; overflow: auto; }
