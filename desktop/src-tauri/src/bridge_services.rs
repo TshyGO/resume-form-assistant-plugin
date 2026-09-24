@@ -67,8 +67,9 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
         return AiReply::Failed { reason, http_status: Some(status), host };
     }
     let reason = match code {
-        "AI_NOT_CONFIGURED" | "NO_DATA_DIR" => "not_configured",
-        "CREDENTIAL_STORE_UNAVAILABLE" => "credential_unavailable",
+        // A provider URL carrying credentials is unusable as configured: the user has to fix it.
+        "AI_NOT_CONFIGURED" | "NO_DATA_DIR" | "AI_URL_HAS_CREDENTIAL" => "not_configured",
+        "CREDENTIAL_STORE_UNAVAILABLE" | "AI_SETTINGS_WRITE_FAILED" => "credential_unavailable",
         "AI_INPUT_TOO_LARGE" => "input_too_large",
         "AI_OUTPUT_TOO_LARGE" => "response_too_large",
         "AI_TIMEOUT" => "timeout",
@@ -102,13 +103,14 @@ impl BridgeServices for DesktopBridgeServices {
     }
 
     fn open_view(&self, view: &str) -> bool {
-        let Some(window) = self.app.get_webview_window("main") else { return false; };
-        #[cfg(target_os = "macos")]
-        let _ = self.app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        window.show().is_ok()
-            && window.unminimize().is_ok()
-            && window.set_focus().is_ok()
-            && self.app.emit("resume-pro://navigate", view).is_ok()
+        if self.app.get_webview_window("main").is_none() { return false; }
+        crate::lifecycle::show_main_window(&self.app);
+        // The window is already in front at this point; a lost navigation event leaves the
+        // user on the current page, which is not worth telling the plugin "unavailable".
+        if self.app.emit("resume-pro://navigate", view).is_err() {
+            eprintln!("bridge: ui.open could not emit the navigation event");
+        }
+        true
     }
 
     fn stage_import_key(&self, import_id: &str, key: &str) -> Result<(), ErrorCode> {
@@ -287,6 +289,8 @@ mod tests {
         let cases = [
             ("AI_NOT_CONFIGURED", "not_configured", None),
             ("CREDENTIAL_STORE_UNAVAILABLE", "credential_unavailable", None),
+            ("AI_SETTINGS_WRITE_FAILED", "credential_unavailable", None),
+            ("AI_URL_HAS_CREDENTIAL", "not_configured", None),
             ("AI_HTTP_401", "auth", Some(401)),
             ("AI_HTTP_429", "rate_limited", Some(429)),
             ("AI_HTTP_500", "http", Some(500)),
