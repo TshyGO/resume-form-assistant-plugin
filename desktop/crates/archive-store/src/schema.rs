@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -277,6 +277,34 @@ CREATE TABLE resume_state (
 );
 "#;
 
+/// #130 PR 3b: old plugin data is staged until the user confirms it on the desktop.
+/// `applied_at` makes a confirmation retry safe when the credential-store step fails.
+/// `ai_config_dropped` records that the user finished an applied import without its AI
+/// config; `key_cleaned_at` stops startup cleanup from touching the OS store again.
+pub const V5_LEGACY_IMPORT: &str = r#"
+CREATE TABLE legacy_imports (
+  import_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('receiving','awaiting_confirmation','imported','rejected','expired')),
+  total INTEGER NOT NULL CHECK (total BETWEEN 1 AND 63),
+  manifest_json TEXT NOT NULL,
+  plugin_version TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  applied_at TEXT,
+  ai_config_dropped INTEGER NOT NULL DEFAULT 0 CHECK (ai_config_dropped IN (0, 1)),
+  key_cleaned_at TEXT
+);
+CREATE TABLE legacy_import_parts (
+  import_id TEXT NOT NULL REFERENCES legacy_imports(import_id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL CHECK (idx BETWEEN 1 AND 63),
+  kind TEXT NOT NULL CHECK (kind IN ('template','profile','aiConfig')),
+  sha256 TEXT NOT NULL,
+  body_json TEXT NOT NULL,
+  PRIMARY KEY (import_id, idx)
+);
+CREATE INDEX idx_legacy_imports_state ON legacy_imports(state, created_at);
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -297,5 +325,10 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 4,
         description: "resume templates and profile owned by the desktop (#130)",
         sql: V4_RESUME,
+    },
+    Migration {
+        to_version: 5,
+        description: "staged legacy plugin import, without AI keys in SQLite (#130)",
+        sql: V5_LEGACY_IMPORT,
     },
 ];

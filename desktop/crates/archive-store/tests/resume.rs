@@ -9,10 +9,10 @@ fn open(root: &std::path::Path) -> ArchiveStore {
 }
 
 #[test]
-fn a_new_archive_is_on_schema_v4() {
+fn a_new_archive_is_on_schema_v5() {
     let dir = tempfile::tempdir().unwrap();
     let _db = open(dir.path());
-    assert_eq!(current_schema_version(), 4);
+    assert_eq!(current_schema_version(), 5);
     let raw = rusqlite::Connection::open(config(dir.path()).db_path()).unwrap();
     let tables: Vec<String> = raw
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'resume_%' ORDER BY name")
@@ -403,11 +403,15 @@ fn created_names_are_cut_to_96_chars_before_numbering() {
     let one = vec![group("g", vec![field("k", "v")])];
     let long = format!("  {}  ", "名".repeat(150));
     let a = db.create_template(&long, one.clone()).unwrap().template;
-    let b = db.create_template(&long, one).unwrap().template;
+    let b = db.create_template(&long, one.clone()).unwrap().template;
     // 96 而不是 100：给去重后缀「 (2)」留出空间，常见情况下最终名字仍然 ≤ 100 个字。
     assert_eq!(a.name, "名".repeat(96));
     assert_eq!(b.name, format!("{} (2)", "名".repeat(96)));
     assert_eq!(b.name.chars().count(), 100);
+    for _ in 2..MAX_TEMPLATES {
+        let later = db.create_template(&long, one.clone()).unwrap().template;
+        assert!(later.name.chars().count() <= MAX_TEMPLATE_NAME_CHARS);
+    }
 }
 
 /// 控制字符（U+0000–U+001F、U+007F）在 JSON 里各要转义成 6 字节（如 `\u0000`），

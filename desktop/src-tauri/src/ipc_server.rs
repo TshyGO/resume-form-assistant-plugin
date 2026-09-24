@@ -19,13 +19,8 @@ use crate::plugin_bridge::Answer;
 
 /// The highest protocol version the desktop actually serves right now.
 ///
-/// The D05 protocol crate's own validator range is 1..=2 (`MAX_PROTOCOL_VERSION`) so PR
-/// 3b/4 can build against it, but PR 3b has not wired the five new v2 message types
-/// (`resume.read`, `resume.update`, `ai.complete`, `ui.open`, `legacy.import`) into this
-/// crate's dispatch yet. Announcing `maxProtocolVersion: 2` at handshake, or accepting a
-/// v2 request envelope, would have the extension send messages nothing here can answer.
-/// PR 3b 接线后改为 2（plan Task 6）。
-pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 1;
+/// The desktop advertises v2 only after all five bridge handlers are wired.
+pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 2;
 
 /// The application as a caller can see it: who it is, and what it will commit.
 ///
@@ -49,11 +44,20 @@ pub trait Application: Send + Sync + 'static {
 /// closed or never-opened archive has neither an identity nor anywhere to commit.
 pub struct OpenArchive {
     store: Arc<Mutex<Option<ArchiveStore>>>,
+    services: Arc<dyn crate::bridge_services::BridgeServices>,
 }
 
 impl OpenArchive {
+    #[cfg(test)]
     pub fn new(store: Arc<Mutex<Option<ArchiveStore>>>) -> Self {
-        Self { store }
+        Self::with_services(store, Arc::new(crate::bridge_services::NoopServices))
+    }
+
+    pub fn with_services(
+        store: Arc<Mutex<Option<ArchiveStore>>>,
+        services: Arc<dyn crate::bridge_services::BridgeServices>,
+    ) -> Self {
+        Self { store, services }
     }
 }
 
@@ -70,10 +74,16 @@ impl Application for OpenArchive {
     }
 
     fn apply(&self, request: &Request) -> Result<Answer, ErrorCode> {
+        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen) {
+            return crate::bridge_services::answer(request, self.services.as_ref());
+        }
         // The same lock the window's own commands take. One writer means one queue: a
         // browser write and a window edit cannot interleave inside the archive.
         let guard = self.store.lock().map_err(|_| ErrorCode::Unavailable)?;
         let store = guard.as_ref().ok_or(ErrorCode::Unavailable)?;
+        if request.message_type == resume_pro_protocol::MessageType::LegacyImport {
+            return crate::plugin_bridge::legacy_import(request, store, self.services.as_ref());
+        }
         crate::plugin_bridge::apply(request, store)
     }
 }
@@ -191,11 +201,7 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
     };
 
     match validate_request_bytes(frame) {
-        // The crate's own validator accepts protocolVersion up to MAX_PROTOCOL_VERSION
-        // (2) so PR 3b/4 can build against it, but this desktop build does not dispatch
-        // any v2-only message type yet. Refuse before dispatch rather than let a v2
-        // envelope reach `application.apply`, which has no v2 case and would answer
-        // `unavailable` instead of naming the real, fixable cause.
+        // Keep the served-version guard tied to the handlers this build actually has.
         Ok(request) if request.protocol_version > SERVED_MAX_PROTOCOL_VERSION => {
             crate::nm::error_frame(
                 &request.message_id,
@@ -207,9 +213,7 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
             // The crate's own structural check only confirms the client's
             // [minProtocolVersion, maxProtocolVersion] overlaps ITS supported range
             // (1..=2); it says nothing about what THIS desktop build actually serves.
-            // A client that only speaks v2 (e.g. [2, 2]) must be told incompatible
-            // rather than handed a v1-only handshake as though it agreed to something
-            // it never offered.
+            // A client whose range misses this build's served range is incompatible.
             let client_min = request.payload["minProtocolVersion"].as_i64().unwrap_or(0);
             let client_max = request.payload["maxProtocolVersion"].as_i64().unwrap_or(0);
             let served_min = MIN_PROTOCOL_VERSION as i64;
@@ -232,12 +236,17 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 );
             };
             let mut payload = handshake_response_payload(&current, env!("CARGO_PKG_VERSION"));
-            // handshake_response_payload reports the crate's own MAX_PROTOCOL_VERSION
-            // (2); override it with what this desktop build actually serves so the
-            // extension does not learn about v2-only messages before PR 3b wires them in.
+            // Advertise the version this desktop actually serves.
             payload["maxProtocolVersion"] = serde_json::json!(SERVED_MAX_PROTOCOL_VERSION);
+            // Old v1 plugins validate capabilities against an eight-name enum. Keep
+            // their list intact; only a v2 envelope receives the new capabilities.
+            if request.protocol_version >= 2 {
+                let rules: serde_json::Value = serde_json::from_str(resume_pro_protocol::RULES_JSON).ok()?;
+                let extra = rules["v2MessageTypes"].as_array()?;
+                payload["capabilities"].as_array_mut()?.extend(extra.iter().cloned());
+            }
             serde_json::to_vec(&serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": request.protocol_version,
                 "correlationId": request.message_id,
                 "ok": true,
                 "payload": payload
@@ -246,7 +255,7 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
         }
         Ok(request) if request.message_type == MessageType::Health => {
             serde_json::to_vec(&serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": request.protocol_version,
                 "correlationId": request.message_id,
                 "ok": true,
                 "payload": {}
@@ -258,7 +267,7 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
         Ok(request) => match application.apply(&request) {
             Ok(answer) => {
                 let mut response = serde_json::json!({
-                    "protocolVersion": 1,
+                    "protocolVersion": request.protocol_version,
                     "correlationId": request.message_id,
                     "ok": true,
                     "payload": answer.payload
@@ -316,6 +325,75 @@ mod tests {
             archive_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             restore_epoch: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
         })))
+    }
+
+    struct LockProbe(Arc<Mutex<Option<ArchiveStore>>>);
+
+    impl crate::bridge_services::BridgeServices for LockProbe {
+        fn ai_complete(&self, _purpose: &str, _system: &str, _user: &str) -> crate::bridge_services::AiReply {
+            assert!(self.0.try_lock().is_ok(), "AI must not hold the archive lock");
+            crate::bridge_services::AiReply::Ok("safe result".into())
+        }
+
+        fn open_view(&self, _view: &str) -> bool {
+            assert!(self.0.try_lock().is_ok(), "ui.open must not hold the archive lock");
+            true
+        }
+    }
+
+    #[test]
+    fn v2_service_requests_do_not_take_the_archive_lock() {
+        let shared = Arc::new(Mutex::new(None));
+        let services = Arc::new(LockProbe(Arc::clone(&shared)));
+        let application = OpenArchive::with_services(shared, services);
+        for (kind, payload, expected) in [
+            ("ai.complete", serde_json::json!({"purpose":"fill","system":"SYS","user":"USER"}), "safe result"),
+            ("ui.open", serde_json::json!({"view":"home"}), ""),
+        ] {
+            let raw = serde_json::json!({
+                "protocolVersion": 2,
+                "messageId": "33333333-3333-4333-8333-333333333333",
+                "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+                "messageType": kind,
+                "occurredAt": "2026-09-24T00:00:00.000Z",
+                "payload": payload
+            });
+            let request = resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&raw).unwrap()).unwrap();
+            let answer = application.apply(&request).unwrap();
+            if kind == "ai.complete" { assert_eq!(answer.payload["text"], expected); }
+            else { assert_eq!(answer.payload["opened"], true); }
+            let mut with_identity = raw;
+            with_identity["archiveId"] = serde_json::json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+            assert_eq!(
+                resume_pro_protocol::validate_request_bytes(&serde_json::to_vec(&with_identity).unwrap()).err().unwrap().code,
+                ErrorCode::IdentityNotAllowed,
+            );
+        }
+    }
+
+    #[test]
+    fn v2_resume_read_uses_the_real_open_archive_and_returns_one_valid_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let application = OpenArchive::new(shared);
+        let request = serde_json::json!({
+            "protocolVersion": 2,
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "resume.read",
+            "occurredAt": "2026-09-24T00:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": {}
+        });
+        let frame = serde_json::to_vec(&request).unwrap();
+        let response = answer(&frame, &application).unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(response["protocolVersion"], 2);
+        assert_eq!(response["payload"]["templates"], serde_json::json!([]));
+        assert_eq!(response["payload"]["profileRevision"], 0);
+        let validated = resume_pro_protocol::validate_request_bytes(&frame).unwrap();
+        resume_pro_protocol::validate_response_for_request(&response, &validated).unwrap();
     }
 
     const HANDSHAKE: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":1,"maxProtocolVersion":1}}"#;
@@ -429,12 +507,8 @@ mod tests {
             "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
         );
         assert_eq!(value["payload"]["minProtocolVersion"], 1);
-        // The D05 protocol crate's own validator range is 1..=2 so PR 3b/4 can build on
-        // it, but PR 3b has not wired the new v2 message types into the desktop yet.
-        // Announcing max 2 here would have the extension send resume.read/resume.update/
-        // ai.complete/ui.open/legacy.import before anything on this side can answer them.
         assert_eq!(value["payload"]["maxProtocolVersion"], SERVED_MAX_PROTOCOL_VERSION);
-        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 1);
+        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 2);
         assert!(
             value["payload"]["capabilities"]
                 .as_array()
@@ -443,29 +517,24 @@ mod tests {
                 .any(|c| c == "job.save"),
             "the extension learns what it may send from this list"
         );
+        assert!(!value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
     }
 
     #[test]
-    fn a_handshake_whose_client_range_cannot_reach_v1_is_protocol_incompatible() {
-        // The crate's own structural check only confirms [min, max] overlaps the crate's
-        // supported range (1..=2); it says nothing about what THIS desktop build actually
-        // serves. A client that only speaks v2 must be told incompatible, not handed a
-        // v1-only handshake as though it agreed to something it never offered.
-        const HANDSHAKE_V2_ONLY: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
+    fn a_v2_only_client_can_handshake_after_the_bridge_is_wired() {
+        const HANDSHAKE_V2_ONLY: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.4.0","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
         let reply = answer(HANDSHAKE_V2_ONLY.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
-        assert_eq!(value["ok"], false);
-        assert_eq!(value["error"]["code"], "protocol_incompatible");
-        // The envelope's own protocolVersion (1 here) is what gets echoed, not the
-        // payload's rejected minProtocolVersion/maxProtocolVersion.
-        assert_eq!(value["protocolVersion"], 1);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["protocolVersion"], 2);
+        assert_eq!(value["payload"]["maxProtocolVersion"], 2);
+        assert!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
+        let request = resume_pro_protocol::validate_request_bytes(HANDSHAKE_V2_ONLY.as_bytes()).unwrap();
+        resume_pro_protocol::validate_response_for_request(&value, &request).unwrap();
     }
 
     #[test]
-    fn a_handshake_whose_client_range_merely_touches_v1_still_succeeds() {
-        // A client offering [1, 2] does overlap this desktop's [1, SERVED_MAX] even
-        // though SERVED_MAX is 1: version 1 itself is common ground, so the handshake
-        // must still succeed, just capped to what this build actually serves.
+    fn a_handshake_offering_both_versions_still_succeeds() {
         const HANDSHAKE_ALSO_OFFERS_V2: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":1,"maxProtocolVersion":2}}"#;
         let reply = answer(HANDSHAKE_ALSO_OFFERS_V2.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
@@ -475,17 +544,15 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_resume_read_envelope_is_protocol_incompatible_until_pr_3b_wires_it_in() {
-        // resume.read exists in the D05 protocol crate's own validator (range 1..=2), but
-        // PR 3b has not wired it into the desktop's dispatch yet. The envelope must be
-        // refused before dispatch, not silently forwarded to `application.apply`, which
-        // has no v2 case and would answer `unavailable` instead of naming the real cause.
+    fn a_v2_resume_read_envelope_reaches_the_application() {
+        // FakeIdentity has no archive writer, so dispatch reaches its default
+        // unavailable answer. A real open archive is exercised in the test above.
         const RESUME_READ_V2: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"resume.read","occurredAt":"2026-09-06T12:00:00.000Z","payload":{},"archiveId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","restoreEpoch":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}"#;
         let reply = answer(RESUME_READ_V2.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(value["ok"], false);
-        assert_eq!(value["error"]["code"], "protocol_incompatible");
-        assert_eq!(value["error"]["retryable"], false);
+        assert_eq!(value["error"]["code"], "unavailable");
+        assert_eq!(value["error"]["retryable"], true);
         // Both validators require the response protocolVersion to echo the request's
         // own, so this must be the request's 2, not a hardcoded 1 — and the whole
         // envelope must actually pass the extension's own response validator for the
@@ -499,14 +566,11 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_health_envelope_is_also_protocol_incompatible_until_pr_3b() {
-        // health does not require v2 at all, but the desktop still must not claim to
-        // serve protocolVersion 2 anywhere while max is pinned to 1.
+    fn a_v2_health_envelope_is_served() {
         let v2_health = HEALTH.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
         let reply = answer(v2_health.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
-        assert_eq!(value["ok"], false);
-        assert_eq!(value["error"]["code"], "protocol_incompatible");
+        assert_eq!(value["ok"], true);
         assert_eq!(value["protocolVersion"], 2);
     }
 

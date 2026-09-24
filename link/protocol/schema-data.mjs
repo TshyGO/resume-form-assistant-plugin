@@ -1004,7 +1004,12 @@ export const SCHEMA_DATA = {
               "fill.submit",
               "snapshot.chunk",
               "submit.confirm",
-              "outbox.reconcile"
+              "outbox.reconcile",
+              "resume.read",
+              "resume.update",
+              "ai.complete",
+              "ui.open",
+              "legacy.import"
             ]
           }
         }
