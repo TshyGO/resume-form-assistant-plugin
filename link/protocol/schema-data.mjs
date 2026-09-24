@@ -934,6 +934,7 @@ export const SCHEMA_DATA = {
           "type": "string",
           "enum": [
             "not_configured",
+            "credential_unavailable",
             "auth",
             "rate_limited",
             "timeout",

@@ -56,6 +56,16 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 
 `ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
 
+`ai.complete` 失败 `reason` 枚举含 `credential_unavailable`：凭据存放在系统密钥链，读取或写入失败与「未配置」是两件不同的事，值得插件区分提示。**PR 3b** 接线桌面业务逻辑时按下表映射（本 PR 只加枚举值与一条响应向量，不接线）：
+
+| 桌面内部错误 | `ai.complete` `reason` |
+| --- | --- |
+| `AI_NOT_CONFIGURED` | `not_configured` |
+| `CREDENTIAL_STORE_UNAVAILABLE` | `credential_unavailable` |
+| `AI_SETTINGS_WRITE_FAILED`（设置写入/准备失败） | `credential_unavailable` |
+| `AI_OUTPUT_TOO_LARGE` | `response_too_large` |
+| `AI_HTTP_3xx`（连同 `httpStatus`） | `http` |
+
 Secrets 仅对 `legacy.import` 且 `kind: "aiConfig"` 的 `body.apiKey` 开一个精确路径例外；其他位置仍拒绝。`body.apiUrl` 同样检查 URL 凭据参数与 userinfo。Key 的临时凭据库存放和 SQLite 排除由 PR 3b 实现。
 
 `legacy.import` 清单中每片的 `sha256` 是**该片 `body` 本身**的摘要，不含 `kind`、`index` 或信封字段。算法与现有 `payloadSha256` 一致：对象键递归按字典序排列，序列化为无空白的 JSON，以 UTF-8 编码后计算 SHA-256，小写十六进制输出。`fixtures/requests/legacy-import-ok.json` 与 `legacy-import-template-ok.json` 固定了一组含中文内容的真实摘要，Rust/JS 均据此验算。

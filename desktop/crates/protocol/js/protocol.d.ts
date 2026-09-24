@@ -283,7 +283,7 @@ export interface UiOpenPayload {
 export interface AiCompleteResponsePayload {
   status: "ok" | "failed";
   text?: string;
-  reason?: "not_configured" | "auth" | "rate_limited" | "timeout" | "network" | "http" | "bad_response" | "input_too_large" | "response_too_large";
+  reason?: "not_configured" | "credential_unavailable" | "auth" | "rate_limited" | "timeout" | "network" | "http" | "bad_response" | "input_too_large" | "response_too_large";
   /**
    * minimum: 100
    * maximum: 599

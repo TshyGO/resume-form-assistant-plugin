@@ -175,6 +175,7 @@
     {"id": "resume-update-active-mismatch", "path": "responses/resume-update-active-mismatch.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
     {"id": "resume-update-conflict", "path": "responses/resume-update-conflict.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-ok.json", "strict": {"accept": true}},
     {"id": "resume-update-active-case-equivalent", "path": "responses/resume-update-active-case-equivalent.json", "requestType": "resume.update", "schema": "accept", "protocol": {"accept": true}, "request": "requests/resume-update-set-active-uppercase.json", "strict": {"accept": true}},
-    {"id": "resume-read-dynamic-password-key", "path": "responses/resume-read-dynamic-password-key.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
+    {"id": "resume-read-dynamic-password-key", "path": "responses/resume-read-dynamic-password-key.json", "requestType": "resume.read", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}},
+    {"id": "ai-complete-failed-credential-unavailable", "path": "responses/ai-complete-failed-credential-unavailable.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}}
   ]
 }
