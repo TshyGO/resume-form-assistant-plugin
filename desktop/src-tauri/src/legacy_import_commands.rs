@@ -98,8 +98,9 @@ pub fn confirm(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &
     Ok(finished)
 }
 
-/// Discard a staged import, or finish one whose templates were applied but whose AI step
-/// cannot complete (see `reject_legacy_import`). The temporary key goes either way.
+/// Reject a staged import. If templates/profile were already applied, retain those
+/// rows but report rejected so the plugin keeps its old copy and Key. The temporary
+/// desktop Key is cleared either way.
 pub fn reject(store: &ArchiveStore, services: &dyn BridgeServices, import_id: &str) -> Result<LegacyImportStatus, ErrorCode> {
     let status = store.reject_legacy_import(import_id).map_err(code_of)?;
     clear_key(store, services, import_id)?;
@@ -244,7 +245,7 @@ mod tests {
     const OTHER: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
     #[test]
-    fn an_applied_import_whose_ai_step_cannot_finish_is_finished_by_rejecting_it() {
+    fn an_applied_import_whose_ai_step_cannot_finish_is_rejected_without_dropping_the_old_key() {
         let (_dir, store) = store();
         staged(&store);
         let services = FakeServices::default();
@@ -253,7 +254,7 @@ mod tests {
         assert_eq!(confirm(&store, &services, IMPORT).err(), Some(ConfirmError::Protocol(ErrorCode::Unavailable)));
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
 
-        assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "imported");
+        assert_eq!(reject(&store, &services, IMPORT).unwrap().state, "rejected");
         assert!(services.keys.lock().unwrap().is_empty());
         assert!(services.providers.lock().unwrap().is_empty());
         assert_eq!(store.resume_overview().unwrap().templates.len(), 1);

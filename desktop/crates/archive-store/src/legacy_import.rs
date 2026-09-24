@@ -27,6 +27,8 @@ pub struct LegacyImportPending {
     pub received: i64,
     pub total: i64,
     pub plugin_version: String,
+    /// Templates/profile have committed, but AI setup still needs a user decision.
+    pub applied: bool,
 }
 
 /// What a part check found before the caller does anything outside SQLite with the part.
@@ -283,12 +285,12 @@ impl StoreTx<'_> {
     pub fn list_pending_legacy_imports(&self) -> Result<Vec<LegacyImportPending>, StoreError> {
         let mut stmt = self.conn().prepare(
             "SELECT i.import_id, i.state, (SELECT COUNT(*) FROM legacy_import_parts p WHERE p.import_id = i.import_id), \
-             i.total, i.plugin_version FROM legacy_imports i \
+             i.total, i.plugin_version, (i.applied_at IS NOT NULL) FROM legacy_imports i \
              WHERE i.state IN ('receiving','awaiting_confirmation') ORDER BY i.created_at",
         )?;
         let rows = stmt.query_map([], |row| Ok(LegacyImportPending {
             import_id: row.get(0)?, state: row.get(1)?, received: row.get(2)?,
-            total: row.get(3)?, plugin_version: row.get(4)?,
+            total: row.get(3)?, plugin_version: row.get(4)?, applied: row.get(5)?,
         }))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
     }
@@ -421,10 +423,9 @@ impl StoreTx<'_> {
         self.legacy_import_status(import_id)
     }
 
-    /// Discard a staged import. An import whose templates and profile were already applied
-    /// cannot be taken back; rejecting it finishes it without the AI config instead, so an
-    /// AI step that can never succeed (temporary key lost, provider limit) does not hold the
-    /// single import slot forever. The caller deletes the temporary key either way.
+    /// Discard a staged import. If templates/profile have already committed, keep those
+    /// rows but report rejected: the plugin must retain its old copy and Key because
+    /// the AI configuration never reached the desktop's permanent credential account.
     pub fn reject_legacy_import(&mut self, import_id: &str) -> Result<LegacyImportStatus, StoreError> {
         let (state, applied_at, dropped): (String, Option<String>, bool) = self.conn().query_row(
             "SELECT state, applied_at, ai_config_dropped FROM legacy_imports WHERE import_id = ?1",
@@ -433,7 +434,7 @@ impl StoreTx<'_> {
         if state == "rejected" || (state == "imported" && dropped) { return self.legacy_import_status(import_id); }
         if state == "awaiting_confirmation" && applied_at.is_some() {
             self.conn().execute(
-                "UPDATE legacy_imports SET state = 'imported', ai_config_dropped = 1, updated_at = ?2 WHERE import_id = ?1",
+                "UPDATE legacy_imports SET state = 'rejected', ai_config_dropped = 1, updated_at = ?2 WHERE import_id = ?1",
                 params![import_id, now_utc()],
             )?;
             self.conn().execute("UPDATE legacy_import_parts SET body_json = '{}' WHERE import_id = ?1", [import_id])?;

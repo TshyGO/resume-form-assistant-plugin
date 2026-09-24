@@ -55,6 +55,8 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 
+若桌面已应用模板与档案、但 AI 配置无法完成，用户在桌面拒绝这一批后状态仍为 `rejected`：已应用的桌面内容不回滚，插件必须保留旧副本和旧 Key，不能当作 `imported` 清理。待确认列表中的 `applied` 标记供确认界面说明这一部分完成的状态。
+
 `resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
 
 `ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
