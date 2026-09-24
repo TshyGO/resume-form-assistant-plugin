@@ -15,7 +15,7 @@ import { MAX_OUTBOX } from './limits.mjs';
  */
 export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, ai = null, fillRecords = null, store = null, uploads = null, extensionId }) {
   const aiCalls = new Map();
-  const earlyAiCancels = new Map();
+  const earlyAiCancels = new Set();
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -40,8 +40,7 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
       // Runtime messages from the offscreen page may reach this listener in a
       // different order. A cancel that arrives first must stop the later request.
       if (!controller && message.requestId != null) {
-        earlyAiCancels.set(message.requestId, Date.now());
-        while (earlyAiCancels.size > 100) earlyAiCancels.delete(earlyAiCancels.keys().next().value);
+        earlyAiCancels.add(message.requestId);
       }
       return { cancelled: Boolean(controller) };
     }

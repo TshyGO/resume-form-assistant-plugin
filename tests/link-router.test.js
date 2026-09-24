@@ -101,6 +101,17 @@ test('a cancel that arrives before AI completion never opens a native request', 
   assert.equal(called, false);
 });
 
+test('many early cancellations do not evict a request that has not arrived yet', async () => {
+  let called = false;
+  const { router } = await makeRouter({ ai: { complete: async () => { called = true; return { ok: true, text: 'late' }; } } });
+  for (let index = 0; index < 120; index += 1) {
+    await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: `early-${index}` });
+  }
+  const result = await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'early-0', purpose: 'fill', system: 's', user: 'u' });
+  assert.deepEqual(result, { ok: false, reason: 'cancelled' });
+  assert.equal(called, false);
+});
+
 test('an unknown message is left for the other listeners', async () => {
   const { router } = await makeRouter();
 
