@@ -74,7 +74,7 @@ test("桌面已有我的信息时必须先选保留哪份", async () => {
   });
   const button = await screen.findByRole("button", { name: "导入到桌面" });
   expect((button as HTMLButtonElement).disabled).toBe(true);
-  await userEvent.click(screen.getByLabelText("保留桌面的"));
+  await userEvent.click(screen.getByLabelText(/保留桌面的/));
   expect((button as HTMLButtonElement).disabled).toBe(false);
   await userEvent.click(button);
   await waitFor(() => expect(calls.find((c) => c.command === "confirm_legacy_import_cmd")?.args)
@@ -115,6 +115,9 @@ test("AI 步骤没成功时可以重试或放弃 AI 配置", async () => {
   });
   expect(await screen.findByRole("button", { name: "重试导入 AI 配置" })).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "不导入 AI 配置" }));
+  expect(calls.some((c) => c.command === "reject_legacy_import_cmd")).toBe(false);
+  expect(screen.getByText(/已经导入的模板和「我的信息」会保留/)).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "确定不导入 AI 配置" }));
   expect(await screen.findByText(/AI 配置没有导入/)).toBeTruthy();
   expect(calls.some((c) => c.command === "reject_legacy_import_cmd")).toBe(true);
 });

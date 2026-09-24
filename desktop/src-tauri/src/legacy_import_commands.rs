@@ -245,6 +245,41 @@ mod tests {
     }
 
     #[test]
+    fn keeping_the_desktop_profile_then_failing_the_ai_step_can_be_retried_or_finished_without_ai() {
+        for finish_with_retry in [true, false] {
+            let (_dir, store) = store();
+            store.save_profile(json!({"values":{"fullName":"Desktop"},"family":[],"custom":[]}), 0).unwrap();
+            store.receive_legacy_manifest(IMPORT, json!({"pluginVersion":"0.4.0","total":3,"parts":[
+                {"index":1,"kind":"template","sha256":HASH},{"index":2,"kind":"profile","sha256":HASH},{"index":3,"kind":"aiConfig","sha256":HASH}
+            ]})).unwrap();
+            store.receive_legacy_part(IMPORT, 1, "template", HASH,
+                json!({"name":"First","wasActive":true,"groups":[{"name":"Basic","fields":[{"key":"Name","value":"Alice"}]}]})).unwrap();
+            store.receive_legacy_part(IMPORT, 2, "profile", HASH, json!({"values":{"fullName":"Plugin"},"family":[],"custom":[]})).unwrap();
+            store.receive_legacy_part(IMPORT, 3, "aiConfig", HASH, json!({"apiUrl":"https://api.example.com/v1","model":"m","hasKey":true})).unwrap();
+            let services = FakeServices::default();
+            services.stage_import_key(IMPORT, "sk-synthetic").unwrap();
+            services.fail_install.store(true, Ordering::Relaxed);
+            assert!(confirm(&store, &services, IMPORT, Some(ProfileChoice::KeepDesktop)).is_err());
+            assert_eq!(store.resume_overview().unwrap().templates.len(), 1);
+            assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Desktop");
+
+            let finished = if finish_with_retry {
+                // The panel retries without a choice: the templates and profile step is done,
+                // so the profile question does not come back.
+                services.fail_install.store(false, Ordering::Relaxed);
+                confirm(&store, &services, IMPORT, None).unwrap()
+            } else {
+                reject(&store, &services, IMPORT).unwrap()
+            };
+            assert_eq!(finished.state, "imported");
+            assert_eq!(finished.ai_config_dropped, !finish_with_retry);
+            assert_eq!(store.resume_overview().unwrap().templates.len(), 1, "templates are not written twice");
+            assert_eq!(store.get_profile().unwrap().profile["values"]["fullName"], "Desktop");
+            assert!(services.keys.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn only_the_two_known_profile_choices_are_accepted() {
         assert_eq!(parse_profile_choice(None).unwrap(), None);
         assert_eq!(parse_profile_choice(Some("keep_desktop")).unwrap(), Some(ProfileChoice::KeepDesktop));

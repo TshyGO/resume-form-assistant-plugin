@@ -14,7 +14,7 @@
   function describeMigration(status) {
     const notes = [];
     const skipped = status?.skipped;
-    if (skipped?.profileSecrets) notes.push(`「我的信息」里有 ${skipped.profileSecrets} 项像密码或验证码，没有迁移。`);
+    if (skipped?.profileSecrets) notes.push(`「我的信息」里有 ${skipped.profileSecrets} 项像密码或验证码，按规则不迁移，迁移完成后会随旧数据一起删除。`);
     if (skipped?.profileTooLarge) notes.push("「我的信息」超过 24 KB，没有迁移，仍保留在插件里。");
     if (status?.unmigratedTemplates) {
       const reasons = [...new Set((skipped?.templates || []).map((item) => TEMPLATE_REASON[item.reason]).filter(Boolean))];
@@ -34,7 +34,7 @@
       case "imported_ai_dropped":
         return {
           show: true,
-          text: "简历和「我的信息」已迁到桌面，AI 配置没有导入。请到桌面「设置 → AI」添加服务商；需要的话可以从这里复制旧 API Key。",
+          text: "模板和「我的信息」已按你在桌面的选择迁过去，AI 配置没有导入。请到桌面「设置 → AI 设置」添加服务商；需要的话可以从这里复制旧 API Key。",
           notes,
           actions: status.hasOldKey
             ? [{ id: "copy-key", label: "复制旧 API Key" }, { id: "drop-key", label: "删除旧 Key", danger: true }, ...csv]
@@ -165,7 +165,7 @@
     if (kind === "download") window.open(self.ResumeProResumeData.DOWNLOAD_URL, "_blank", "noopener");
     else if (kind === "pair") {
       await navigator.clipboard.writeText(chrome.runtime.id).catch(() => {});
-      toast("扩展 ID 已复制，请在桌面「设置 → 浏览器」里粘贴完成配对。");
+      toast("扩展 ID 已复制，请在桌面「设置 → 浏览器连接」里粘贴完成配对。");
     } else if (kind === "resume") await openView("resume");
     else await renderDesktop();
   });

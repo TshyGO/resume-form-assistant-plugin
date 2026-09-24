@@ -33,6 +33,7 @@ export function LegacyImport({ listen, onImported }: { listen?: Listen; onImport
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
   const [askReject, setAskReject] = useState(false);
+  const [askDropAi, setAskDropAi] = useState(false);
 
   const load = useCallback(async () => {
     if (!invoke) return;
@@ -71,6 +72,7 @@ export function LegacyImport({ listen, onImported }: { listen?: Listen; onImport
       const status = await work();
       setNotice(doneMessage(status));
       setAskReject(false);
+      setAskDropAi(false);
       setChoice(null);
       if (status.state === "imported") onImported();
     } catch (error) {
@@ -103,12 +105,22 @@ export function LegacyImport({ listen, onImported }: { listen?: Listen; onImport
   if (pending.applied) {
     return (
       <section className="panel stack" aria-label="插件旧数据导入">
-        <p>简历和「我的信息」已导入，AI 配置没导入成功（比如系统凭据库暂时不可用，或服务商已满）。</p>
+        <p>模板和「我的信息」已按你的选择导入，AI 配置没导入成功（比如系统凭据库暂时不可用，或服务商已满）。</p>
         {noticeView}
-        <div className="row">
-          <button type="button" className="primary" disabled={busy} onClick={() => void confirm()}>重试导入 AI 配置</button>
-          <button type="button" disabled={busy} onClick={() => void reject()}>不导入 AI 配置</button>
-        </div>
+        {askDropAi ? (
+          <div className="stack">
+            <p>确定不导入 AI 配置吗？已经导入的模板和「我的信息」会保留；插件里的旧 API Key 也会保留，之后可以在插件状态页复制，再到「设置 → AI 设置」里填入。</p>
+            <div className="row">
+              <button type="button" className="danger" disabled={busy} onClick={() => void reject()}>确定不导入 AI 配置</button>
+              <button type="button" disabled={busy} onClick={() => setAskDropAi(false)}>返回</button>
+            </div>
+          </div>
+        ) : (
+          <div className="row">
+            <button type="button" className="primary" disabled={busy} onClick={() => void confirm()}>重试导入 AI 配置</button>
+            <button type="button" disabled={busy} onClick={() => setAskDropAi(true)}>不导入 AI 配置</button>
+          </div>
+        )}
       </section>
     );
   }
@@ -136,7 +148,7 @@ export function LegacyImport({ listen, onImported }: { listen?: Listen; onImport
           <legend>桌面已经有「我的信息」，保留哪一份？</legend>
           <label>
             <input type="radio" name="legacy-profile" checked={choice === "keep_desktop"} onChange={() => setChoice("keep_desktop")} />
-            保留桌面的
+            保留桌面的（插件里那份不导入，导入完成后会从插件删除）
           </label>
           <label>
             <input type="radio" name="legacy-profile" checked={choice === "use_imported"} onChange={() => setChoice("use_imported")} />
