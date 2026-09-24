@@ -67,7 +67,8 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
         return AiReply::Failed { reason, http_status: Some(status), host };
     }
     let reason = match code {
-        "AI_NOT_CONFIGURED" | "CREDENTIAL_STORE_UNAVAILABLE" | "NO_DATA_DIR" => "not_configured",
+        "AI_NOT_CONFIGURED" | "NO_DATA_DIR" => "not_configured",
+        "CREDENTIAL_STORE_UNAVAILABLE" => "credential_unavailable",
         "AI_INPUT_TOO_LARGE" => "input_too_large",
         "AI_OUTPUT_TOO_LARGE" => "response_too_large",
         "AI_TIMEOUT" => "timeout",
@@ -285,6 +286,7 @@ mod tests {
         }, safe_host("https://api.example.com:8443/v1"));
         let cases = [
             ("AI_NOT_CONFIGURED", "not_configured", None),
+            ("CREDENTIAL_STORE_UNAVAILABLE", "credential_unavailable", None),
             ("AI_HTTP_401", "auth", Some(401)),
             ("AI_HTTP_429", "rate_limited", Some(429)),
             ("AI_HTTP_500", "http", Some(500)),

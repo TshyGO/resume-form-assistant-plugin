@@ -145,11 +145,8 @@ pub fn response_for_with<B: Backend>(
                 return serde_json::to_vec(&response).ok();
             }
             if request.protocol_version > crate::ipc_server::SERVED_MAX_PROTOCOL_VERSION {
-                // The crate's own validator accepts protocolVersion up to 2 so PR 3b/4
-                // can build against it, but PR 3b has not wired the new v2 message types
-                // into the desktop yet. `health` is answered right here, without ever
-                // reaching `crate::ipc_server::answer`, so it needs this same guard
-                // rather than silently claiming protocolVersion 2 is already served.
+                // The host answers health itself, so keep its version gate aligned with
+                // the application's served range before any future protocol upgrade.
                 let response = error_response(
                     &request.message_id,
                     ErrorCode::ProtocolIncompatible,
@@ -162,7 +159,7 @@ pub fn response_for_with<B: Backend>(
                 // archive, so routing it through the application would add a cold start
                 // to a liveness check.
                 let response = json!({
-                    "protocolVersion": 1,
+                    "protocolVersion": request.protocol_version,
                     "correlationId": request.message_id,
                     "ok": true,
                     "payload": {}
@@ -307,17 +304,10 @@ mod tests {
     }
 
     #[test]
-    fn a_v2_health_envelope_is_rejected_until_pr_3b_wires_v2_in() {
-        // health is short-circuited by the host itself, without ever reaching the
-        // application (crate::ipc_server::answer), so it needs the same
-        // SERVED_MAX_PROTOCOL_VERSION guard the application enforces before dispatch.
-        // Otherwise a v2 health envelope would slip through as if the desktop already
-        // served protocolVersion 2, before PR 3b wires the new v2 message types in.
+    fn a_v2_health_envelope_is_served_by_the_host() {
         let v2_health = HEALTH.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
         let response = respond(&v2_health);
-        assert_eq!(response["ok"], false);
-        assert_eq!(response["error"]["code"], "protocol_incompatible");
-        assert_eq!(response["error"]["retryable"], false);
+        assert_eq!(response["ok"], true);
         // Both validate_response_for_request and validate_response_value require the
         // response protocolVersion to echo the request's, so a hardcoded 1 here would
         // itself be a response the extension's own validator refuses.

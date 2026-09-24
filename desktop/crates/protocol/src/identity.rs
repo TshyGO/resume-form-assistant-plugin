@@ -88,6 +88,11 @@ impl MessageType {
             "snapshot.chunk",
             "submit.confirm",
             "outbox.reconcile",
+            "resume.read",
+            "resume.update",
+            "ai.complete",
+            "ui.open",
+            "legacy.import",
         ]
     }
 }
