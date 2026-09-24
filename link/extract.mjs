@@ -80,6 +80,8 @@ export function extractJobFields(doc, href) {
     assistReasons.push('title_unconfirmed');
   }
 
+  // Nothing sends these yet. They are the numbered page snippets a later desktop-routed AI
+  // fallback (#130 follow-up) may use when this local result is unreliable.
   const fragments = buildFragments({
     beisenApply,
     labeledCompanies,

@@ -72,7 +72,7 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   assert.match(source, /resume-pro-save-job/);
   assert.match(source, /保存岗位到桌面端/);
   assert.match(source, /DESKTOP_SAVE_JOB/);
-  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('async function runJobAssist'));
+  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('function openSaveForm'));
   assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
   assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.

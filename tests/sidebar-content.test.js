@@ -363,7 +363,7 @@ test("a normalized state is what gets stored, even after a failed read left it e
   }]);
 });
 
-test("cancelling job recognition allows immediate manual save and ignores a late AI reply", async () => {
+test("an unreliable extraction opens the editable form and sends nothing to an AI service", async () => {
   const { hooks, context } = loadContentScript();
   const inputs = Object.fromEntries([
     '#resume-pro-save-company', '#resume-pro-save-title', '#resume-pro-save-location',
@@ -371,44 +371,29 @@ test("cancelling job recognition allows immediate manual save and ignores a late
   ].map(key => [key, { value: '', textContent: '' }]));
   const form = { hidden: true, querySelector: key => inputs[key] ?? null };
   const saveButton = { disabled: false };
-  const assistNote = { textContent: '' };
-  const assistList = { textContent: '', appendChild() {} };
-  const assistPanel = {
-    hidden: true,
-    querySelector: key => key === '#resume-pro-job-assist-note' ? assistNote : assistList
-  };
   hooks.setShadowRoot({
     querySelector(selector) {
-      return {
-        '#resume-pro-save-form': form,
-        '#resume-pro-save-job': saveButton,
-        '#resume-pro-job-assist': assistPanel
-      }[selector] ?? null;
+      return { '#resume-pro-save-form': form, '#resume-pro-save-job': saveButton }[selector] ?? null;
     }
   });
   hooks.setCurrentStore({ aiConfig: { apiUrl: 'https://ai.example.test', model: 'demo', apiKey: 'sk-test' } });
-  const fields = { company: '', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
   hooks.setDesktopModules({
-    extract: { extractJobFields: () => fields },
-    saveFlow: {
-      nextSaveStep: () => ({ action: 'assist', fields, fragments: [] }),
-      assistDisclosure: () => ({ fragments: [] }),
-      afterAssist: () => ({ action: 'commit', fields: { ...fields, company: 'wrong' } })
+    extract: {
+      extractJobFields: () => ({
+        company: '金发科技股份有限公司', title: '', location: '', sourceUrl: 'https://jobs.example.test/apply',
+        dedupeUrl: 'https://jobs.example.test/apply', reliable: false, assistReasons: ['missing_title'],
+        fragments: [{ id: 1, source: 'h1', text: '金发科技股份有限公司' }]
+      })
     },
-    copy: {
-      describeJobAssist: () => ({ text: 'AI 正在识别', fragments: [] }),
-      describeManualSave: () => '请手动填写',
-      describeBindResult: () => ({ tone: 'success', text: '桌面已保存' })
-    }
+    saveFlow,
+    copy
   });
-  let resolveAi;
   let aiCalls = 0;
   context.self.ResumeProAIClient = {
-    send: () => {
-      aiCalls += 1;
-      return new Promise(resolve => { resolveAi = resolve; });
-    },
-    cancel: () => Promise.reject(new Error('cancel response unavailable'))
+    send: async () => { aiCalls += 1; return {}; },
+    cancel: async () => {}
   };
   const saves = [];
   context.chrome.runtime.sendMessage = async message => {
@@ -416,26 +401,21 @@ test("cancelling job recognition allows immediate manual save and ignores a late
     return { status: 'saved' };
   };
 
-  const recognition = hooks.handleSaveJobClick();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(hooks.getSaveInteractionState().assistInFlight, true);
-  hooks.cancelJobAssist();
-  await new Promise(resolve => setImmediate(resolve));
+  await hooks.handleSaveJobClick();
   assert.equal(form.hidden, false);
   assert.equal(saveButton.disabled, false);
-  inputs['#resume-pro-save-company'].value = '星河科技';
-  inputs['#resume-pro-save-title'].value = '工艺工程师';
-  await hooks.handleSaveJobClick();
-  assert.equal(aiCalls, 1, 'the open manual form must not restart extraction');
-  assert.equal(inputs['#resume-pro-save-title'].value, '工艺工程师');
+  assert.equal(hooks.getSaveInteractionState().extractInFlight, false);
+  assert.equal(inputs['#resume-pro-save-company'].value, '金发科技股份有限公司');
+  assert.equal(inputs['#resume-pro-save-title'].value, '');
+  assert.equal(inputs['#resume-pro-save-note'].textContent, copy.describeManualSave('missing_title'));
+  assert.equal(aiCalls, 0, 'saving a job never calls an AI service from the plugin');
+  assert.equal(saves.length, 0, 'nothing reaches the desktop before the user confirms');
+
+  inputs['#resume-pro-save-title'].value = '研发工程师-化工工艺研究方向';
   await hooks.submitSaveForm({ force: false });
   assert.equal(saves.length, 1);
-  assert.equal(saves[0].fields.title, '工艺工程师');
-
-  resolveAi({ status: 'ok', fields: { company: 'wrong', title: 'wrong' } });
-  await recognition;
-  assert.equal(form.hidden, true, 'a late AI reply must not reopen the completed form');
-  assert.equal(hooks.getSaveInteractionState().saveInFlight, false);
+  assert.equal(saves[0].fields.title, '研发工程师-化工工艺研究方向');
+  assert.equal(aiCalls, 0);
 });
 
 test("a full outbound queue reports the retained intent instead of claiming nothing was kept", async () => {

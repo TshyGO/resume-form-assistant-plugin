@@ -28,25 +28,6 @@ function dispatchAiMessage(message, sender, sendResponse) {
     sendResponse({ cancelled: Boolean(controller) });
     return false;
   }
-  if (message?.type === "AI_EXTRACT_JOB") {
-    const key = fillRequestKey(message, sender);
-    if (activeFillRequests.has(key)) {
-      sendResponse({ status: "manual", reason: "in_flight", reliable: false, fields: { company: "", title: "", location: "" } });
-      return false;
-    }
-    const controller = new AbortController();
-    activeFillRequests.set(key, controller);
-    handleExtractJob(message, controller)
-      .then(sendResponse)
-      .catch(error => {
-        // Module loading and request failures are different problems. The request module
-        // reports network failures itself; reaching here means the worker could not run it.
-        console.warn("job extraction worker failed", error?.name || "unknown");
-        sendResponse({ status: "manual", reason: "internal", reliable: false, fields: { company: "", title: "", location: "" } });
-      })
-      .finally(() => activeFillRequests.delete(key));
-    return true;
-  }
   if (message?.type === "AI_FILL" || message?.type === "AI_PLAN_REPEAT") {
     const key = fillRequestKey(message, sender);
     if (activeFillRequests.has(key)) {
@@ -79,17 +60,6 @@ function dispatchAiMessage(message, sender, sendResponse) {
 self.onmessage = ({ data }) => {
   dispatchAiMessage(data.message, data.sender, reply => self.postMessage({ id: data.id, reply }));
 };
-
-async function handleExtractJob(message, controller) {
-  // This is a dedicated Worker, not an extension context with chrome.runtime.
-  const mod = await import(new URL("link/job-extract.mjs", self.location.href).href);
-  return mod.requestJobExtract({
-    fetchImpl: globalThis.fetch.bind(globalThis),
-    aiConfig: message.aiConfig,
-    fragments: message.fragments,
-    signal: controller.signal
-  });
-}
 
 async function handleRepeatPlan(message, controller) {
   const config = normalizeAiConfig(message.aiConfig);
@@ -346,4 +316,5 @@ function normalizeAiConfig(aiConfig) {
     apiKey: String(aiConfig?.apiKey ?? "").trim()
   };
 }
+
 

@@ -90,33 +90,13 @@ const REFUSALS = {
 };
 
 const MANUAL_SAVE = {
-  unconfigured: '插件还没有配置 AI 接口。请补全公司和岗位后再保存，不会猜测。',
-  no_fragments: '这个页面没有可用的岗位片段。请手动填写公司和岗位。',
-  cancelled: '已取消识别。请手动补正。这次不会自动再请求。',
-  timeout: '识别超时。请手动补正。这次不会自动再请求。',
-  network: '识别接口没有连上。请手动补正。这次不会自动再请求。',
-  internal: '岗位识别功能暂时不可用。请手动补正，这次不会自动再请求。',
-  format: '识别结果无法使用。请手动补正。这次不会自动再请求。',
-  no_evidence: '识别结果对不上页面上的文字。请手动补正，不会保存猜出来的字段。',
-  location_no_evidence: '公司和岗位已识别，工作地点没有可靠依据，已留空供你核对。',
   swapped: '页面把公司和岗位写得不清楚，请核对后保存。',
   company_conflict: '页面出现多个不同的公司名，请确认这次投递的公司。',
   title_conflict: '页面出现多个不同的岗位名，请确认这次投递的岗位。',
   site_title_only: '页面标题不足以确认岗位，请手动核对。',
+  title_unconfirmed: '岗位名还不确定。请核对后再保存。',
   missing_company: '公司名还不确定。请核对后再保存。',
-  missing_title: '岗位名还不确定。请核对后再保存。',
-  in_flight: '上一次 AI 请求还没结束。请先取消，不会自动再请求。'
-};
-
-const ASSIST_SOURCE = {
-  'beisen-company': '公司名称',
-  'beisen-apply-title': '职位标题',
-  'jobposting-company': '招聘元数据 · 公司',
-  'jobposting-title': '招聘元数据 · 岗位',
-  'jobposting-location': '招聘元数据 · 工作地点',
-  'og:title': '页面标题',
-  h1: '页面标题',
-  'document.title': '页面标题'
+  missing_title: '岗位名还不确定。请核对后再保存。'
 };
 
 export function describeReviewSave() {
@@ -125,18 +105,6 @@ export function describeReviewSave() {
 
 export function describeManualSave(reason) {
   return MANUAL_SAVE[reason] || '请核对公司和岗位。缺的请自己补上，插件不会猜。';
-}
-
-export function describeJobAssist(disclosure) {
-  const lines = (disclosure?.fragments || []).map(fragment => {
-    const label = ASSIST_SOURCE[fragment.source] || '页面片段';
-    return `${fragment.id}. ${label}：${fragment.text}`;
-  });
-  return {
-    tone: 'info',
-    text: `正在用插件里配置的接口识别岗位：${disclosure?.origin || '已配置的接口'}，模型 ${disclosure?.model || ''}。下面这些片段会发往该接口。不发送整页、简历、表单里填写的个人信息、Cookie 或原始链接。`,
-    fragments: lines
-  };
 }
 
 export function describeBindResult(result) {

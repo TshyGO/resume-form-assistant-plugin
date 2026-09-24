@@ -12,7 +12,6 @@
   "link/extract.mjs",
   "link/fillrecords.mjs",
   "link/intents.mjs",
-  "link/job-extract.mjs",
   "link/limits.mjs",
   "link/messages.mjs",
   "link/normalize.mjs",

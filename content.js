@@ -291,7 +291,6 @@
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__desktop">
           <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到桌面端</button>
-          <p class="resume-pro__footer-tip">本地识别不准时，会把少量岗位文字发给你配置的 AI 服务；不会发送投递表单或简历内容。</p>
           <button class="resume-pro__manager-button" id="resume-pro-confirm-submit" type="button">确认已投递</button>
           <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
             <label class="resume-pro__field">
@@ -316,13 +315,6 @@
               <button class="resume-pro__manager-button" type="button" id="resume-pro-save-cancel">取消</button>
             </div>
           </form>
-          <div class="resume-pro__save-form" id="resume-pro-job-assist" hidden>
-            <p class="resume-pro__save-note" id="resume-pro-job-assist-note"></p>
-            <ul class="resume-pro__candidate-list" id="resume-pro-job-assist-fragments"></ul>
-            <div class="resume-pro__save-actions">
-              <button class="resume-pro__manager-button" type="button" id="resume-pro-job-assist-cancel">取消识别</button>
-            </div>
-          </div>
           <div class="resume-pro__candidates" id="resume-pro-candidates" hidden>
             <p class="resume-pro__save-note" id="resume-pro-candidates-note"></p>
             <div class="resume-pro__candidate-list" id="resume-pro-candidate-list"></div>
@@ -2442,10 +2434,8 @@
   let desktopModules = null;
   let pendingFields = null;
   let saveInFlight = false;
-  let assistInFlight = false;
-  let assistToken = 0;
-  let assistRequestId = null;
-  let assistFallback = null;
+  let extractInFlight = false;
+  let extractToken = 0;
   // The finished fill the card is offering to archive, and a copy of the template it used.
   // Held only until the user answers; the template copy leaves only if the box is ticked.
   let pendingFill = null;
@@ -2469,7 +2459,6 @@
     sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
     sidebar.querySelector("#resume-pro-confirm-submit")?.addEventListener("click", handleConfirmSubmitClick);
     sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
-    sidebar.querySelector("#resume-pro-job-assist-cancel")?.addEventListener("click", cancelJobAssist);
     sidebar.querySelector("#resume-pro-fill-record-save")?.addEventListener("click", handleRecordFillClick);
     sidebar.querySelector("#resume-pro-fill-record-skip")?.addEventListener("click", closeFillRecord);
     sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
@@ -2481,9 +2470,9 @@
 
   async function handleSaveJobClick() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form || !form.hidden || saveInFlight || assistInFlight) return;
-    const token = ++assistToken;
-    assistInFlight = true;
+    if (!form || !form.hidden || saveInFlight || extractInFlight) return;
+    const token = ++extractToken;
+    extractInFlight = true;
     const button = shadowRoot.querySelector("#resume-pro-save-job");
     if (button) button.disabled = true;
     form.hidden = true;
@@ -2493,112 +2482,25 @@
       const { extract, saveFlow, copy } = await loadDesktopModules();
       const extraction = extract.extractJobFields(document, location.href);
       const step = saveFlow.nextSaveStep(extraction);
+      if (token !== extractToken) return;
       if (step.action === "commit") {
         openSaveForm(step.fields, copy.describeReviewSave());
         return;
       }
-      if (step.action === "assist") {
-        const config = state.currentStore?.aiConfig;
-        if (!config?.apiUrl || !config?.model || !config?.apiKey) {
-          openSaveForm(step.fields, copy.describeManualSave("unconfigured"));
-          return;
-        }
-        assistFallback = step.fields;
-        const outcome = await runJobAssist(config, step.fragments, step.fields, token);
-        if (token !== assistToken || outcome.action === "ignore") return;
-        const { copy: wording } = await loadDesktopModules();
-        openSaveForm(outcome.fields, outcome.action === "commit" ? wording.describeReviewSave() : outcome.note);
-        return;
-      }
-      const { copy: wording } = await loadDesktopModules();
-      openSaveForm(step.fields, wording.describeManualSave(step.reason));
+      openSaveForm(step.fields, copy.describeManualSave(step.reason));
     } catch (error) {
-      if (token !== assistToken) return;
+      if (token !== extractToken) return;
       setDesktopStatus({ tone: "warn", text: "读取页面信息失败，请手动填写后再保存。" });
       openSaveForm(
         { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" },
         "读取页面信息失败，请手动填写。"
       );
     } finally {
-      if (token === assistToken) {
-        assistInFlight = false;
+      if (token === extractToken) {
+        extractInFlight = false;
         if (button) button.disabled = saveInFlight;
       }
     }
-  }
-
-  async function runJobAssist(config, fragments, fallback, token) {
-    const { saveFlow, copy } = await loadDesktopModules();
-    const disclosure = saveFlow.assistDisclosure(config, fragments);
-    const described = copy.describeJobAssist(disclosure);
-    showJobAssist(described);
-    const requestId = newRequestId();
-    assistRequestId = requestId;
-    let reply;
-    let timer;
-    try {
-      reply = await Promise.race([
-        self.ResumeProAIClient.send({
-          type: "AI_EXTRACT_JOB",
-          requestId,
-          aiConfig: {
-            apiUrl: config.apiUrl,
-            model: config.model,
-            apiKey: config.apiKey
-          },
-          fragments
-        }),
-        new Promise(resolve => {
-          timer = setTimeout(() => {
-            self.ResumeProAIClient.cancel(requestId).catch(() => {});
-            resolve({ status: "manual", reason: "timeout", reliable: false, fields: {} });
-          }, 25000);
-        })
-      ]);
-    } catch {
-      reply = { status: "manual", reason: "network", reliable: false, fields: {} };
-    } finally {
-      clearTimeout(timer);
-      if (assistRequestId === requestId) assistRequestId = null;
-      if (token === assistToken) hideJobAssist();
-    }
-    if (token !== assistToken) return { action: "ignore" };
-    const after = saveFlow.afterAssist(reply, fallback);
-    if (after.action === "form") after.note = copy.describeManualSave(after.reason);
-    return after;
-  }
-
-  function showJobAssist(described) {
-    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
-    if (!panel) return;
-    panel.querySelector("#resume-pro-job-assist-note").textContent = described.text;
-    const list = panel.querySelector("#resume-pro-job-assist-fragments");
-    list.textContent = "";
-    for (const line of described.fragments || []) {
-      const item = document.createElement("li");
-      item.textContent = line;
-      list.appendChild(item);
-    }
-    panel.hidden = false;
-  }
-
-  function hideJobAssist() {
-    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
-    if (panel) panel.hidden = true;
-  }
-
-  function cancelJobAssist() {
-    const token = ++assistToken;
-    assistInFlight = false;
-    if (assistRequestId) self.ResumeProAIClient.cancel(assistRequestId).catch(() => {});
-    assistRequestId = null;
-    const button = shadowRoot?.querySelector("#resume-pro-save-job");
-    if (button) button.disabled = saveInFlight;
-    hideJobAssist();
-    loadDesktopModules().then(({ copy }) => {
-      if (token !== assistToken) return;
-      openSaveForm(assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" }, copy.describeManualSave("cancelled"));
-    });
   }
 
   function openSaveForm(fields, note) {
@@ -2842,14 +2744,12 @@
   function closeSaveForm() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
     if (form) form.hidden = true;
-    hideJobAssist();
     pendingFields = null;
-    assistFallback = null;
   }
 
   async function submitSaveForm({ force }) {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
-    if (!form || saveInFlight || assistInFlight) return;
+    if (!form || saveInFlight || extractInFlight) return;
 
     const fields = {
       company: form.querySelector("#resume-pro-save-company").value.trim(),
@@ -3229,12 +3129,11 @@
       getHighlightTargets,
       handleAiFillClick,
       handleSaveJobClick,
-      cancelJobAssist,
       submitSaveForm,
       describeCommit,
       presentSaveResult,
       getSaveInteractionState() {
-        return { assistInFlight, saveInFlight, assistToken };
+        return { extractInFlight, saveInFlight, extractToken };
       },
       setDesktopModules(modules) {
         desktopModules = modules;
