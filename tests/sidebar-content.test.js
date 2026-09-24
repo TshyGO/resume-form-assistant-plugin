@@ -418,6 +418,64 @@ test("an unreliable extraction opens the editable form and sends nothing to an A
   assert.equal(aiCalls, 0);
 });
 
+test("save again after a duplicate resends the confirmed fields, including the redacted URLs", async () => {
+  const { hooks, context } = loadContentScript();
+  const inputs = Object.fromEntries([
+    '#resume-pro-save-company', '#resume-pro-save-title', '#resume-pro-save-location',
+    '#resume-pro-save-url', '#resume-pro-save-note'
+  ].map(key => [key, { value: '', textContent: '' }]));
+  const form = { hidden: true, querySelector: key => inputs[key] ?? null };
+  const buttons = [];
+  const statusBox = {
+    textContent: '', className: '', classList: { add() {} },
+    appendChild(node) { if (node.tag === 'button') buttons.push(node); }
+  };
+  context.document.createElement = tag => ({
+    tag, textContent: '', className: '', listeners: {},
+    addEventListener(type, handler) { this.listeners[type] = handler; }
+  });
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return {
+        '#resume-pro-save-form': form,
+        '#resume-pro-save-job': { disabled: false },
+        '#resume-pro-desktop-status': statusBox
+      }[selector] ?? null;
+    }
+  });
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
+  hooks.setDesktopModules({
+    extract: {
+      extractJobFields: () => ({
+        company: '星河科技', title: '工艺工程师', location: '', reliable: true,
+        sourceUrl: 'https://jobs.example.test/apply/7', dedupeUrl: 'https://jobs.example.test/apply/7'
+      })
+    },
+    saveFlow,
+    copy
+  });
+  const sent = [];
+  context.chrome.runtime.sendMessage = async message => {
+    if (message?.type !== 'DESKTOP_SAVE_JOB') return { intents: [], outbox: [], fillRecords: [] };
+    sent.push(message);
+    return sent.length === 1 ? { status: 'duplicate' } : { status: 'saved' };
+  };
+
+  await hooks.handleSaveJobClick();
+  await hooks.submitSaveForm({ force: false });
+  assert.equal(form.hidden, true, 'a duplicate closes the form');
+  const again = buttons.find(button => button.textContent === '再存一次');
+  assert.ok(again, 'the duplicate offers saving again');
+  await again.listeners.click();
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].force, true);
+  assert.equal(sent[1].fields.sourceUrl, 'https://jobs.example.test/apply/7');
+  assert.equal(sent[1].fields.dedupeUrl, 'https://jobs.example.test/apply/7');
+  assert.equal(sent[1].fields.company, '星河科技');
+});
+
 test("a full outbound queue reports the retained intent instead of claiming nothing was kept", async () => {
   const { hooks } = loadContentScript();
   const copy = await import('../link/copy.mjs');

@@ -2435,6 +2435,7 @@
   let pendingFields = null;
   let saveInFlight = false;
   let extractInFlight = false;
+  let lastSubmittedFields = null;
   let extractToken = 0;
   // The finished fill the card is offering to archive, and a copy of the template it used.
   // Held only until the user answers; the template copy leaves only if the box is ticked.
@@ -2747,11 +2748,13 @@
     pendingFields = null;
   }
 
-  async function submitSaveForm({ force }) {
+  async function submitSaveForm({ force, fields: retryFields = null }) {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
     if (!form || saveInFlight || extractInFlight) return;
 
-    const fields = {
+    // "再存一次" resends what was confirmed. By then the form may be closed and
+    // pendingFields cleared, so reading them again would drop the redacted URLs.
+    const fields = retryFields || {
       company: form.querySelector("#resume-pro-save-company").value.trim(),
       title: form.querySelector("#resume-pro-save-title").value.trim(),
       location: form.querySelector("#resume-pro-save-location").value.trim(),
@@ -2760,6 +2763,7 @@
       sourceUrl: pendingFields?.sourceUrl || "",
       dedupeUrl: pendingFields?.dedupeUrl || ""
     };
+    lastSubmittedFields = fields;
     saveInFlight = true;
     try {
       await commitSave(fields, { force });
@@ -2895,12 +2899,13 @@
       box.appendChild(hint);
     }
 
-    if (copy.offerForce) {
+    if (copy.offerForce && lastSubmittedFields) {
+      const confirmed = lastSubmittedFields;
       const again = document.createElement("button");
       again.type = "button";
       again.className = "resume-pro__manager-button";
       again.textContent = "再存一次";
-      again.addEventListener("click", () => submitSaveForm({ force: true }));
+      again.addEventListener("click", () => submitSaveForm({ force: true, fields: confirmed }));
       box.appendChild(again);
     }
   }
