@@ -457,3 +457,33 @@ export interface ProfileRecordView {
   profile: import("./resume/profile.ts").Profile;
   revision: number;
 }
+
+/** 插件旧数据的一批导入（#130 PR 5）。只有状态与计数，不含任何内容。 */
+export interface LegacyImportPending {
+  importId: string;
+  state: "receiving" | "awaiting_confirmation";
+  received: number;
+  total: number;
+  pluginVersion: string;
+  /** 模板与「我的信息」已写入，只差 AI 配置。 */
+  applied: boolean;
+}
+
+/** 确认面板的预览：名称与计数，不含字段值、接口路径或 Key。 */
+export interface LegacyImportPreview {
+  importId: string;
+  state: string;
+  applied: boolean;
+  templates: Array<{ name: string; fieldCount: number; wasActive: boolean }>;
+  profileItemCount: number | null;
+  ai: { host: string; model: string } | null;
+  desktopTemplateCount: number;
+  desktopProfileEmpty: boolean;
+}
+
+export interface LegacyImportStatus {
+  state: "receiving" | "awaiting_confirmation" | "imported" | "rejected" | "expired";
+  received: number;
+  total: number;
+  aiConfigDropped?: boolean;
+}
