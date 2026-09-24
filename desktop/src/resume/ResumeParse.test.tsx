@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -13,18 +14,20 @@ const settings: AiSettingsView = {
 
 const emptyOverview = { templates: [], activeTemplateId: null };
 
-function mount(handler: (command: string, args?: Record<string, unknown>) => unknown) {
+function mount(handler: (command: string, args?: Record<string, unknown>) => unknown, strict = false) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const invoke = (async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     return handler(command, args);
   }) as Invoke;
   const onCreated = vi.fn();
-  const { unmount } = render(
+  const tree = (
     <InvokeProvider invoke={invoke}>
       <ResumeParse onCreated={onCreated} extract={async () => "张三\n某大学"} />
-    </InvokeProvider>,
+    </InvokeProvider>
   );
+  // 桌面程序用 StrictMode 挂载（react/mount.tsx）：开发构建里 effect 会先卸一次再装一次。
+  const { unmount } = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   return { calls, onCreated, unmount };
 }
 
@@ -184,4 +187,15 @@ test("解析中途离开页面：卸载时取消请求，回来的结果不再�
 
   expect(calls.some((c) => c.command === "create_resume_template_cmd")).toBe(false);
   expect(onCreated).not.toHaveBeenCalled();
+});
+
+test("StrictMode 下挂载后仍能进入确认外发这一步", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  }, true);
+  await upload(user);
+  expect(await screen.findByRole("button", { name: "发送并解析" })).toBeTruthy();
 });

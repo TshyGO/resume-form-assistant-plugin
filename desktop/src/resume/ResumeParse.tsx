@@ -45,6 +45,9 @@ export function ResumeParse({ onCreated, extract = extractText }: { onCreated():
   const inflightRequestId = useRef<string | null>(null);
 
   useEffect(() => {
+    // StrictMode 开发构建会先跑一次 cleanup 再重新执行 effect：这里要把标记改回来，
+    // 否则之后每一步都以为自己已经卸载了。
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       const requestId = inflightRequestId.current;
