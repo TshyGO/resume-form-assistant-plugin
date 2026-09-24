@@ -140,6 +140,15 @@ pub fn response_for_with<B: Backend>(
                 let response = error_response(&request.message_id, ErrorCode::IdentityNotAllowed);
                 return serde_json::to_vec(&response).ok();
             }
+            if request.protocol_version > crate::ipc_server::SERVED_MAX_PROTOCOL_VERSION {
+                // The crate's own validator accepts protocolVersion up to 2 so PR 3b/4
+                // can build against it, but PR 3b has not wired the new v2 message types
+                // into the desktop yet. `health` is answered right here, without ever
+                // reaching `crate::ipc_server::answer`, so it needs this same guard
+                // rather than silently claiming protocolVersion 2 is already served.
+                let response = error_response(&request.message_id, ErrorCode::ProtocolIncompatible);
+                return serde_json::to_vec(&response).ok();
+            }
             if request.message_type == MessageType::Health {
                 // The only request the host can answer alone: it asks nothing of the
                 // archive, so routing it through the application would add a cold start
@@ -272,6 +281,27 @@ mod tests {
         assert_eq!(response["error"]["code"], "unavailable");
         assert_eq!(response["error"]["retryable"], true);
         assert!(response.get("resultId").is_none());
+    }
+
+    #[test]
+    fn a_v2_health_envelope_is_rejected_until_pr_3b_wires_v2_in() {
+        // health is short-circuited by the host itself, without ever reaching the
+        // application (crate::ipc_server::answer), so it needs the same
+        // SERVED_MAX_PROTOCOL_VERSION guard the application enforces before dispatch.
+        // Otherwise a v2 health envelope would slip through as if the desktop already
+        // served protocolVersion 2, before PR 3b wires the new v2 message types in.
+        let v2_health = HEALTH.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
+        let response = respond(&v2_health);
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "protocol_incompatible");
+        assert_eq!(response["error"]["retryable"], false);
+    }
+
+    #[test]
+    fn a_v1_health_envelope_is_still_ok() {
+        let response = respond(HEALTH);
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["payload"], serde_json::json!({}));
     }
 
     #[test]

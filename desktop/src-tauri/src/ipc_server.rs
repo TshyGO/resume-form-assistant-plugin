@@ -17,6 +17,16 @@ use resume_pro_protocol::{CurrentArchive, ErrorCode, Request};
 
 use crate::plugin_bridge::Answer;
 
+/// The highest protocol version the desktop actually serves right now.
+///
+/// The D05 protocol crate's own validator range is 1..=2 (`MAX_PROTOCOL_VERSION`) so PR
+/// 3b/4 can build against it, but PR 3b has not wired the five new v2 message types
+/// (`resume.read`, `resume.update`, `ai.complete`, `ui.open`, `legacy.import`) into this
+/// crate's dispatch yet. Announcing `maxProtocolVersion: 2` at handshake, or accepting a
+/// v2 request envelope, would have the extension send messages nothing here can answer.
+/// PR 3b 接线后改为 2（plan Task 6）。
+pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 1;
+
 /// The application as a caller can see it: who it is, and what it will commit.
 ///
 /// Identity is read per request rather than captured at startup. `restore_epoch` is
@@ -179,6 +189,14 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
     use resume_pro_protocol::{handshake_response_payload, validate_request_bytes, MessageType};
 
     match validate_request_bytes(frame) {
+        // The crate's own validator accepts protocolVersion up to MAX_PROTOCOL_VERSION
+        // (2) so PR 3b/4 can build against it, but this desktop build does not dispatch
+        // any v2-only message type yet. Refuse before dispatch rather than let a v2
+        // envelope reach `application.apply`, which has no v2 case and would answer
+        // `unavailable` instead of naming the real, fixable cause.
+        Ok(request) if request.protocol_version > SERVED_MAX_PROTOCOL_VERSION => {
+            crate::nm::error_frame(&request.message_id, ErrorCode::ProtocolIncompatible)
+        }
         Ok(request) if request.message_type == MessageType::Handshake => {
             let Some(current) = application.identity() else {
                 // No archive open means no identity to hand out. Saying so is retryable;
@@ -186,7 +204,11 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 // an identity that never existed.
                 return crate::nm::error_frame(&request.message_id, ErrorCode::Unavailable);
             };
-            let payload = handshake_response_payload(&current, env!("CARGO_PKG_VERSION"));
+            let mut payload = handshake_response_payload(&current, env!("CARGO_PKG_VERSION"));
+            // handshake_response_payload reports the crate's own MAX_PROTOCOL_VERSION
+            // (2); override it with what this desktop build actually serves so the
+            // extension does not learn about v2-only messages before PR 3b wires them in.
+            payload["maxProtocolVersion"] = serde_json::json!(SERVED_MAX_PROTOCOL_VERSION);
             serde_json::to_vec(&serde_json::json!({
                 "protocolVersion": 1,
                 "correlationId": request.message_id,
@@ -373,6 +395,12 @@ mod tests {
             "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
         );
         assert_eq!(value["payload"]["minProtocolVersion"], 1);
+        // The D05 protocol crate's own validator range is 1..=2 so PR 3b/4 can build on
+        // it, but PR 3b has not wired the new v2 message types into the desktop yet.
+        // Announcing max 2 here would have the extension send resume.read/resume.update/
+        // ai.complete/ui.open/legacy.import before anything on this side can answer them.
+        assert_eq!(value["payload"]["maxProtocolVersion"], SERVED_MAX_PROTOCOL_VERSION);
+        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 1);
         assert!(
             value["payload"]["capabilities"]
                 .as_array()
@@ -381,6 +409,39 @@ mod tests {
                 .any(|c| c == "job.save"),
             "the extension learns what it may send from this list"
         );
+    }
+
+    #[test]
+    fn a_v2_resume_read_envelope_is_protocol_incompatible_until_pr_3b_wires_it_in() {
+        // resume.read exists in the D05 protocol crate's own validator (range 1..=2), but
+        // PR 3b has not wired it into the desktop's dispatch yet. The envelope must be
+        // refused before dispatch, not silently forwarded to `application.apply`, which
+        // has no v2 case and would answer `unavailable` instead of naming the real cause.
+        const RESUME_READ_V2: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"resume.read","occurredAt":"2026-09-06T12:00:00.000Z","payload":{},"archiveId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","restoreEpoch":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}"#;
+        let reply = answer(RESUME_READ_V2.as_bytes(), open_archive().as_ref()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "protocol_incompatible");
+        assert_eq!(value["error"]["retryable"], false);
+    }
+
+    #[test]
+    fn a_v2_health_envelope_is_also_protocol_incompatible_until_pr_3b() {
+        // health does not require v2 at all, but the desktop still must not claim to
+        // serve protocolVersion 2 anywhere while max is pinned to 1.
+        let v2_health = HEALTH.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
+        let reply = answer(v2_health.as_bytes(), open_archive().as_ref()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "protocol_incompatible");
+    }
+
+    #[test]
+    fn a_v1_health_envelope_is_still_ok() {
+        let reply = answer(&framed(HEALTH)[4..], open_archive().as_ref()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["payload"], serde_json::json!({}));
     }
 
     #[test]
