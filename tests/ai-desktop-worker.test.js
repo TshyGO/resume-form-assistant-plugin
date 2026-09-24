@@ -129,6 +129,16 @@ test('repeat planner sends only candidates and validates the desktop text', asyn
   assert.ok(!env.sent[0].user.includes('测试用户'));
 });
 
+test('repeat planner omits sensitive candidate labels', async () => {
+  const env = worker(() => ({ ok: true, text: '[]' }));
+  await env.context.handleRepeatPlan({ candidates: [
+    { id: 'secret', label: '新增验证码', current: 0, target: 1 },
+    { id: 'safe', label: '新增论文', current: 0, target: 1 }
+  ] }, new AbortController());
+  assert.ok(env.sent[0].user.includes('新增论文'));
+  assert.ok(!env.sent[0].user.includes('验证码'));
+});
+
 test('resume parsing directs the user to the desktop resume page', async () => {
   const env = worker();
   const result = await env.context.handleParseResume({ content: 'synthetic' });

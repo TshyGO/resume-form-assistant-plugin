@@ -55,6 +55,7 @@
     sidebarUiState: null,
     currentStore: null,
     desktopMode: "unavailable",
+    aiBusy: false,
     statusTimer: null,
     lastFocusedField: null,
     chipAction: null
@@ -463,7 +464,7 @@
 
     templateSelect.disabled = Boolean(downgradeCopy) || !templates.length;
     const aiFillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
-    if (aiFillButton) aiFillButton.disabled = Boolean(downgradeCopy);
+    if (aiFillButton) aiFillButton.disabled = Boolean(downgradeCopy) || state.aiBusy;
 
     if (downgradeCopy) {
       groupsContainer.innerHTML = `
@@ -875,20 +876,28 @@
   }
 
   async function handleRepeatFillClick(event) {
-    state.currentStore = await StorageService.getState();
-    if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     const button = event.currentTarget;
     const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
-    if (button.disabled || fillButton.disabled) return;
+    if (button.disabled || fillButton.disabled || state.aiBusy) return;
+    state.aiBusy = true;
+    state.currentStore = await StorageService.getState();
+    if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+    if (state.desktopMode !== "ready") {
+      state.aiBusy = false;
+      showStatus(self.ResumeProResumeData.modeCopy(state.desktopMode).message, "error");
+      return;
+    }
     const template = getActiveTemplate(state.currentStore);
     const templateFingerprint = JSON.stringify(template);
     if (!template) {
+      state.aiBusy = false;
       showStatus("请先在桌面准备简历模板。", "error");
       return;
     }
     const agent = self.ResumeProFormAgent;
     const snapshot = agent.collect(document, flattenTemplateFields(template));
     if (!snapshot.candidates.length) {
+      state.aiBusy = false;
       showStatus("未识别到可安全新增的分组，请先手动新增条目，再一键填写。", "error");
       return;
     }
@@ -947,7 +956,8 @@
       cancel.textContent = "取消 AI 等待（保留本地匹配）";
       hint.hidden = true;
       button.disabled = false;
-      fillButton.disabled = false;
+      state.aiBusy = false;
+      fillButton.disabled = state.desktopMode !== "ready";
       button.textContent = "AI 辅助新增条目（先预览）";
     }
     if (expanded && !stopped && JSON.stringify(getActiveTemplate(state.currentStore)) === templateFingerprint) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
@@ -967,16 +977,23 @@
   }
 
   async function handleAiFillClick(event, assisted = null) {
+    const button = event.currentTarget;
+    if (button.disabled || state.aiBusy) return;
+    state.aiBusy = true;
     state.currentStore = await StorageService.getState();
     if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
-    const button = event.currentTarget;
-    if (button.disabled) return;
+    if (state.desktopMode !== "ready") {
+      state.aiBusy = false;
+      showStatus(self.ResumeProResumeData.modeCopy(state.desktopMode).message, "error");
+      return;
+    }
     const activeTemplate = getActiveTemplate(state.currentStore);
     const activeTemplateFingerprint = JSON.stringify(activeTemplate);
 
     const profileFields = profileResumeFields();
 
     if (!activeTemplate && !profileFields.length) {
+      state.aiBusy = false;
       showStatus("请先导入简历模板，或在「我的信息」里填写内容。", "error");
       return;
     }
@@ -1188,8 +1205,9 @@
         panel.hidden = false;
         panel.open = true;
       }
-      button.disabled = false;
-      if (repeatButton) repeatButton.disabled = false;
+      state.aiBusy = false;
+      button.disabled = state.desktopMode !== "ready";
+      if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready";
       button.textContent = "一键 AI 填写";
       // A page with nothing to fill produced nothing worth archiving.
       if (fieldCount > 0) {

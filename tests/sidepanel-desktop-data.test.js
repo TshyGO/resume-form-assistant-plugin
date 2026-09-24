@@ -92,6 +92,17 @@ test('visibility and tab activation reread; the status poll does not', async () 
   assert.equal(count(), before + 2);
 });
 
+test('a desktop reread does not re-enable AI while the page is busy', async () => {
+  const ui = await harness();
+  ui.setPageResponse({ ready: true, busy: true, phase: 'AI 匹配中' });
+  ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('fill-button').disabled, true);
+  ui.documentEvents.visibilitychange();
+  await ui.tick();
+  assert.equal(ui.get('fill-button').disabled, true);
+});
+
 test('template switch writes desktop then rereads, and field action carries snapshot value', async () => {
   const ui = await harness();
   ui.get('template-select').value = TEMPLATE;

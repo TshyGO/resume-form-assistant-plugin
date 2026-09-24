@@ -27,6 +27,7 @@
   let currentTabId = null;
   let currentStore = null;
   let desktopMode = "unavailable";
+  let lastPageStatus = null;
   let toastTimer = null;
   let statusPolling = false;
 
@@ -154,7 +155,7 @@
       </details>`;
     }).join("");
     filterFields();
-    updateFillAvailability();
+    updateFillAvailability(lastPageStatus);
   }
 
   function filterFields() {
@@ -200,7 +201,8 @@
       elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
       elements.pageState.classList.toggle("is-unavailable", !connected);
       if (!connected) currentTabId = null;
-      updateFillAvailability(connected ? response : null);
+      lastPageStatus = connected ? response : null;
+      updateFillAvailability(lastPageStatus);
       if (connected && response.status) {
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
