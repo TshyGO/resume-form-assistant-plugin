@@ -52,7 +52,8 @@ export function nativePort(api) {
 export function storageAdapter(api) {
   return {
     get: keys => api.storage.local.get(keys),
-    set: values => api.storage.local.set(values)
+    set: values => api.storage.local.set(values),
+    remove: keys => api.storage.local.remove(keys)
   };
 }
 

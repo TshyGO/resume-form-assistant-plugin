@@ -13,6 +13,7 @@
   "link/extract.mjs",
   "link/fillrecords.mjs",
   "link/intents.mjs",
+  "link/legacy.mjs",
   "link/limits.mjs",
   "link/messages.mjs",
   "link/normalize.mjs",

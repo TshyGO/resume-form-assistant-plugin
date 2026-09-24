@@ -214,3 +214,34 @@ test("rules: family and emergency contact data never fill the applicant's own fi
   assert.equal(byId.get("father"), "张父");
   assert.equal(byId.get("emg-phone"), "13700000000");
 });
+
+test("stripProfileSecrets removes secret-looking items before migration and counts them", () => {
+  const input = {
+    values: { fullName: "测试用户", email: "邮箱密码：abc123", phone: "13800000000" },
+    family: [
+      { relation: "父亲", name: "测试父亲", phone: "口令=xyz" },
+      { relation: "母亲", name: "token: t-1" }
+    ],
+    custom: [
+      { key: "邮箱密码", value: "anything" },
+      { key: "期望薪资", value: "面议" },
+      { key: "备注", value: "验证码：1234" }
+    ]
+  };
+  const frozen = JSON.stringify(input);
+  const { profile, removed } = profileApi.stripProfileSecrets(input);
+  assert.equal(JSON.stringify(input), frozen, "the input is not modified");
+  assert.equal(removed, 5);
+  assert.deepEqual(profile.values, { fullName: "测试用户", phone: "13800000000" });
+  assert.equal(profile.family.length, 1, "a member left with nothing is dropped");
+  assert.equal(profile.family[0].name, "测试父亲");
+  assert.equal(profile.family[0].phone, "");
+  assert.deepEqual(profile.custom, [{ key: "期望薪资", value: "面议" }]);
+});
+
+test("stripProfileSecrets leaves an ordinary profile unchanged", () => {
+  const input = { values: { fullName: "测试用户" }, family: [], custom: [{ key: "期望薪资", value: "面议" }] };
+  const { profile, removed } = profileApi.stripProfileSecrets(input);
+  assert.equal(removed, 0);
+  assert.deepEqual(profile, profileApi.normalizeProfile(input));
+});

@@ -13,7 +13,7 @@ import { MAX_OUTBOX } from './limits.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, ai = null, fillRecords = null, store = null, uploads = null, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, ai = null, legacy = null, fillRecords = null, store = null, uploads = null, extensionId }) {
   const aiCalls = new Map();
   const earlyAiCancels = new Set();
   async function handle(message) {
@@ -34,6 +34,15 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
           : { status: 'invalid_payload' };
     }
     if (type === MSG.openView) return resume.openView(message.view);
+    if (type === MSG.legacyStatus) {
+      // Opening the status page or the side panel nudges a stalled migration along.
+      await legacy.run();
+      return legacy.status();
+    }
+    if (type === MSG.legacyResend) { await legacy.resend(); return legacy.status(); }
+    if (type === MSG.legacyDiscard) { await legacy.discard(); return legacy.status(); }
+    if (type === MSG.legacyDropKey) return legacy.dropOldKey();
+    if (type === MSG.legacyUnmigrated) return { templates: await legacy.unmigratedTemplates() };
     if (type === MSG.aiCancel) {
       const controller = aiCalls.get(message.requestId);
       controller?.abort();

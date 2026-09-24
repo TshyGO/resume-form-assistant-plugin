@@ -6,6 +6,12 @@ export const MSG = {
   resumeRead: 'DESKTOP_RESUME_READ',
   resumeUpdate: 'DESKTOP_RESUME_UPDATE',
   openView: 'DESKTOP_OPEN_VIEW',
+  // #130 PR 5: moving 0.4.0 plugin data into the desktop.
+  legacyStatus: 'DESKTOP_LEGACY_STATUS',
+  legacyResend: 'DESKTOP_LEGACY_RESEND',
+  legacyDiscard: 'DESKTOP_LEGACY_DISCARD',
+  legacyDropKey: 'DESKTOP_LEGACY_DROP_KEY',
+  legacyUnmigrated: 'DESKTOP_LEGACY_UNMIGRATED',
   aiComplete: 'DESKTOP_AI_COMPLETE',
   aiCancel: 'DESKTOP_AI_CANCEL',
   saveJob: 'DESKTOP_SAVE_JOB',
