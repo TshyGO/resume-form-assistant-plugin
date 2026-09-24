@@ -4,6 +4,7 @@
   "icons/icon16.png",
   "icons/icon32.png",
   "icons/icon48.png",
+  "link/ai.mjs",
   "link/chrome.mjs",
   "link/copy.mjs",
   "link/drain.mjs",

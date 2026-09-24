@@ -39,7 +39,7 @@ function handshakeReply(message) {
   };
 }
 
-async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage(), resume = null } = {}) {
+async function makeRouter({ reply = () => ({ lastError: 'Error when communicating with the native messaging host.' }), storage = fakeStorage(), resume = null, ai = null } = {}) {
   const { createStore } = await import('../link/store.mjs');
   const { createSession } = await import('../link/session.mjs');
   const { createIntents } = await import('../link/intents.mjs');
@@ -61,7 +61,7 @@ async function makeRouter({ reply = () => ({ lastError: 'Error when communicatin
   const outbox = createOutbox({ store, sendNative, sleep: async () => {}, uuid, now });
   const alarms = { created: [], async create(name, options) { this.created.push({ name, ...options }); }, async clear() { return true; } };
   const drain = createDrain({ session, outbox, alarms, now });
-  const router = createRouter({ session, intents, outbox, drain, resume, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
+  const router = createRouter({ session, intents, outbox, drain, resume, ai, extensionId: 'abcdefghijklmnopabcdefghijklmnop' });
   return { router, storage, sent };
 }
 
@@ -79,6 +79,18 @@ test('resume and open-view messages reach their desktop operations', async () =>
   await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'saveProfile', profile: { values: {} }, expectedRevision: 2 });
   await router.handle({ type: 'DESKTOP_OPEN_VIEW', view: 'resume' });
   assert.deepEqual(calls, ['read', ['active', 'template'], ['profile', { values: {} }, 2], ['view', 'resume']]);
+});
+
+test('AI cancel aborts the matching long request only', async () => {
+  const ai = { complete: ({ signal }) => new Promise(resolve => {
+    signal.addEventListener('abort', () => resolve({ ok: false, reason: 'cancelled' }), { once: true });
+  }) };
+  const { router } = await makeRouter({ ai });
+  const pending = router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 'call-1', purpose: 'fill', system: 's', user: 'u' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'other' }), { cancelled: false });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: true });
+  assert.deepEqual(await pending, { ok: false, reason: 'cancelled' });
+  assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: false });
 });
 
 test('an unknown message is left for the other listeners', async () => {
