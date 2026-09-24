@@ -22,6 +22,33 @@ export function nativeSender(api) {
   });
 }
 
+/** One long-lived Native Messaging port per AI request; abort closes that port. */
+export function nativePort(api) {
+  return (hostName, message, { signal } = {}) => new Promise(resolve => {
+    if (signal?.aborted) { resolve({ cancelled: true }); return; }
+    let port;
+    try { port = api.runtime.connectNative(hostName); }
+    catch (error) { resolve({ lastError: error?.message ?? String(error) }); return; }
+    let settled = false;
+    const finish = (result, disconnected = false) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (!disconnected) { try { port.disconnect(); } catch {} }
+      resolve(result);
+    };
+    const onAbort = () => finish({ cancelled: true });
+    port.onMessage.addListener(response => finish({ response }));
+    port.onDisconnect.addListener(() => {
+      const error = api.runtime.lastError;
+      finish({ lastError: error?.message ?? 'disconnected' }, true);
+    });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try { port.postMessage(message); }
+    catch (error) { finish({ lastError: error?.message ?? String(error) }); }
+  });
+}
+
 export function storageAdapter(api) {
   return {
     get: keys => api.storage.local.get(keys),

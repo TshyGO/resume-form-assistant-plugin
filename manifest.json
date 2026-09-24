@@ -69,6 +69,7 @@
         "ai-client.js",
         "ai-helpers.js",
         "profile-fields.js",
+        "resume-data.js",
         "form-agent.js",
         "sidebar-state.js",
         "content.js"

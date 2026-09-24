@@ -131,7 +131,7 @@ test('a maximal chunk still fits a valid snapshot.chunk envelope', async () => {
   const bytes = new Uint8Array(CHUNK_BYTES * 2).map((_, i) => (i * 7) % 256);
   const [first] = await planChunks(bytes);
   const envelope = {
-    protocolVersion: 1,
+    protocolVersion: 2,
     messageId: '33333333-3333-4333-8333-333333333333',
     clientInstanceId: '11111111-1111-4111-8111-111111111111',
     messageType: 'snapshot.chunk',

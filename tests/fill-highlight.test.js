@@ -5,9 +5,11 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function loadHighlightHelpers(options = {}) {
+  let desktopData = null;
   const timers = [];
   const clearedTimers = [];
   const clipboardWrites = [];
+  const desktopMessages = [];
 
   class ClassList {
     constructor() {
@@ -176,15 +178,20 @@ function loadHighlightHelpers(options = {}) {
     HTMLSelectElement: class HTMLSelectElement extends HTMLElement {},
     chrome: {
       runtime: {
+        id: 'test-extension',
         getManifest: () => ({ version: "0.2.1" }),
         onMessage: { addListener() {} },
-        sendMessage: options.sendMessage || (async () => ({ success: true, matches: [] }))
+        sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
+          ? { status: 'ok', data: desktopData }
+          : (desktopMessages.push(message), message.type === 'DESKTOP_OPEN_VIEW'
+            ? { status: 'ok' } : options.sendMessage ? options.sendMessage(message) : { success: true, matches: [] })
       }
     },
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+      ResumeProResumeData: require('../resume-data.js'), ResumeProProfile: require('../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
     window
@@ -203,13 +210,24 @@ function loadHighlightHelpers(options = {}) {
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
   vm.runInNewContext(contentJs, context);
   context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
+  const helpers = context.self.ResumeProHighlightTest;
+  const setCurrentStore = helpers.setCurrentStore;
+  helpers.setCurrentStore = store => {
+    const activeTemplate = store.activeTemplate || store.templates?.find(template => template.id === store.activeTemplateId) || store.templates?.[0] || null;
+    desktopData = {
+      templates: (store.templates || []).map(template => ({ id: template.id, name: template.name || '模板', fieldCount: template.groups?.flatMap(group => group.fields).length || 0 })),
+      activeTemplate, profile: store.profile || { values: {}, family: [], custom: [] }, profileRevision: store.profileRevision || 0
+    };
+    setCurrentStore({ ...store, activeTemplate });
+  };
 
   return {
-    helpers: context.self.ResumeProHighlightTest,
+    helpers,
     window,
     timers,
     clearedTimers,
     clipboardWrites,
+    desktopMessages,
     styleElements,
     HTMLElement,
     HTMLInputElement,
@@ -283,6 +301,18 @@ test("native side panel can address a saved 我的信息 field by its group and 
   assert.equal(input.value, "面议");
 });
 
+test('a trusted side panel supplies its current value when hidden page chips are stale', async () => {
+  const { helpers, HTMLInputElement } = loadHighlightHelpers();
+  helpers.setShadowRoot({ querySelectorAll: () => [], querySelector: () => null });
+  const input = new HTMLInputElement();
+  helpers.setLastFocusedField(input);
+  const result = await helpers.handlePanelFieldAction({ chipId: 'new:0:0', value: '桌面新值', mode: 'fill' }, { id: 'test-extension' });
+  assert.equal(result.ok, true);
+  assert.equal(input.value, '桌面新值');
+  const other = await helpers.handlePanelFieldAction({ chipId: 'new:0:0', value: '不可信', mode: 'fill' }, { id: 'other-extension' });
+  assert.equal(other.ok, false);
+});
+
 test("off-screen fields scroll into view before the highlight animation starts", () => {
   const { helpers, timers, HTMLElement } = loadHighlightHelpers();
   const field = new HTMLElement();
@@ -334,6 +364,21 @@ test("AI fill loop highlights fields after successful writes", async () => {
   assert.equal(input.classList.contains("resume-pro__field-highlight"), true);
 });
 
+test('partial local success still opens desktop AI settings when AI is not configured', async () => {
+  const formElements = [];
+  const { helpers, desktopMessages, HTMLInputElement } = loadHighlightHelpers({
+    formElements,
+    sendMessage: async () => ({ success: true, matches: [], warning: '桌面还没有配置 AI 服务商。', openView: 'settings-ai' })
+  });
+  formElements.push(new HTMLInputElement());
+  helpers.setCurrentStore({
+    templates: [{ id: 'one', groups: [{ name: '基本信息', fields: [{ key: '姓名', value: '测试用户' }] }] }],
+    activeTemplateId: 'one'
+  });
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.ok(desktopMessages.some(message => message.type === 'DESKTOP_OPEN_VIEW' && message.view === 'settings-ai'));
+});
+
 test("radio fields highlight an externally associated label when available", () => {
   const { helpers, HTMLInputElement, HTMLLabelElement } = loadHighlightHelpers();
   const radio = new HTMLInputElement();
@@ -376,6 +421,7 @@ for (const outcome of ["success", "partial", "failure", "transport"]) {
     });
     const button = { disabled: false, textContent: "" };
     const pending = helpers.handleAiFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(button.disabled, true);
     assert.match(button.textContent, /AI 匹配中.*0s/);
     await helpers.handleAiFillClick({ currentTarget: button });
@@ -417,6 +463,7 @@ test("90-second reminder does not cancel; manual button sends matching request a
     activeTemplateId: "one", aiConfig: { apiKey: "key", apiUrl: "https://example.test", model: "test" } });
   const button = { disabled: false };
   const pending = helpers.handleAiFillClick({ currentTarget: button });
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(cancel.hidden, false);
   const timer = timers.find(item => item.delay === 1000);
   clock = 90000;
@@ -475,6 +522,7 @@ for (const stopped of [false, true]) {
     helpers.setShadowRoot({ querySelector: selector => ({ '#resume-pro-ai-fill': fillButton, '#resume-pro-cancel-fill': cancel, '#resume-pro-wait-hint': hint })[selector] });
     helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '论文', fields: [{ key: '论文1标题', value: '合成' }] }] }], activeTemplateId: 'one', aiConfig: { apiKey: 'key', apiUrl: 'https://example.test', model: 'test' } });
     const pending = helpers.handleRepeatFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
     if (stopped) cancel.onclick();
     finish({ success: true, plan: [{ id: 'add-0', count: 2 }] });
     await pending;
@@ -486,6 +534,42 @@ for (const stopped of [false, true]) {
     assert.equal(timers.find(t => t.delay === 1000).cleared, true);
   });
 }
+
+test('assisted add releases the fill button when collection fails before AI starts', async () => {
+  let calls = 0;
+  const formAgent = { collect() { calls += 1; throw new Error('synthetic'); } };
+  const { helpers } = loadHighlightHelpers({ formAgent });
+  const fillButton = { disabled: false };
+  helpers.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本信息', fields: [{ key: '姓名', value: '测试' }] }] }], activeTemplateId: 'one' });
+  const button = { disabled: false };
+  await helpers.handleRepeatFillClick({ currentTarget: button });
+  assert.equal(fillButton.disabled, false);
+  await helpers.handleRepeatFillClick({ currentTarget: button });
+  assert.equal(calls, 2, 'a failed collection must not leave the busy guard set');
+});
+
+test('assisted add stops before AI fill when the desktop template changes during execution', async () => {
+  const sent = [];
+  let helpers;
+  const formAgent = {
+    collect: () => ({ candidates: [{ id: 'add-0', label: '新增论文' }] }),
+    validatePlan: plan => plan,
+    execute: () => {
+      helpers.setCurrentStore({ templates: [{ id: 'two', groups: [{ name: '新模板', fields: [{ key: '学校', value: '大学乙' }] }] }], activeTemplateId: 'two' });
+      return { scopes: [] };
+    }
+  };
+  ({ helpers } = loadHighlightHelpers({ formAgent, confirm: () => true,
+    sendMessage: async message => { sent.push(message); return { success: true, plan: [{ id: 'add-0', count: 1 }] }; } }));
+  const fillButton = { disabled: false }, cancel = {}, hint = { hidden: true };
+  helpers.setShadowRoot({ querySelector: selector => ({ '#resume-pro-ai-fill': fillButton, '#resume-pro-cancel-fill': cancel, '#resume-pro-wait-hint': hint })[selector] || null });
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '论文', fields: [{ key: '论文1标题', value: '合成' }] }] }], activeTemplateId: 'one' });
+  await helpers.handleRepeatFillClick({ currentTarget: { disabled: false } });
+  assert.equal(sent.filter(message => message.type === 'AI_PLAN_REPEAT').length, 1);
+  assert.equal(sent.filter(message => message.type === 'AI_FILL').length, 0);
+  assert.equal(fillButton.disabled, false);
+});
 
 test("diagnostic summary only exposes allowlisted counts, durations and errors", () => {
   const { helpers } = loadHighlightHelpers();

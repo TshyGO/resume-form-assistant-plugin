@@ -13,7 +13,9 @@ import { MAX_OUTBOX } from './limits.mjs';
  * "saved on the desktop" are different claims, and the difference has to survive the trip to
  * the sidebar rather than being decided by whoever formats the string.
  */
-export function createRouter({ session, intents, outbox, drain, reconcile, fillRecords = null, store = null, uploads = null, extensionId }) {
+export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, ai = null, fillRecords = null, store = null, uploads = null, extensionId }) {
+  const aiCalls = new Map();
+  const earlyAiCancels = new Set();
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -21,6 +23,37 @@ export function createRouter({ session, intents, outbox, drain, reconcile, fillR
     if (type === MSG.probe) {
       const probe = await session.probe();
       return { mode: probe.mode, extensionId };
+    }
+
+    if (type === MSG.resumeRead) return resume.read();
+    if (type === MSG.resumeUpdate) {
+      return message.op === 'setActiveTemplate'
+        ? resume.setActiveTemplate(message.templateId)
+        : message.op === 'saveProfile'
+          ? resume.saveProfile(message.profile, message.expectedRevision)
+          : { status: 'invalid_payload' };
+    }
+    if (type === MSG.openView) return resume.openView(message.view);
+    if (type === MSG.aiCancel) {
+      const controller = aiCalls.get(message.requestId);
+      controller?.abort();
+      // Runtime messages from the offscreen page may reach this listener in a
+      // different order. A cancel that arrives first must stop the later request.
+      if (!controller && message.requestId != null) {
+        earlyAiCancels.add(message.requestId);
+      }
+      return { cancelled: Boolean(controller) };
+    }
+    if (type === MSG.aiComplete) {
+      if (message.requestId == null || aiCalls.has(message.requestId)) return { ok: false, reason: 'unavailable' };
+      if (earlyAiCancels.delete(message.requestId)) return { ok: false, reason: 'cancelled' };
+      const controller = new AbortController();
+      aiCalls.set(message.requestId, controller);
+      try {
+        return await ai.complete({ purpose: message.purpose, system: message.system, user: message.user, signal: controller.signal });
+      } finally {
+        aiCalls.delete(message.requestId);
+      }
     }
 
     if (type === MSG.saveJob) {

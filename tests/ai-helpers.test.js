@@ -7,21 +7,22 @@ const helpers = require("../ai-helpers.js");
 
 const options = (texts) => texts.map((text) => ({ value: text, text }));
 
-// 用真实的 ai-worker.js，桩掉 fetch，看它到底把哪些字段交给了 AI。
+// 用真实的 ai-worker.js，桩掉桌面回包，看它到底把哪些字段交给了 AI。
 function loadWorker(onRequest) {
   const context = vm.createContext({
-    importScripts() {}, ResumeProAIHelpers: helpers, AbortController, TextEncoder, SyntaxError, performance,
-    fetch: async (url, init) => {
-      onRequest(JSON.parse(init.body));
-      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "[]" } }] }) };
-    }
+    importScripts() {}, ResumeProAIHelpers: helpers,
+    ResumeProProfile: require('../profile-fields.js'),
+    AbortController, TextEncoder, SyntaxError, performance,
+    crypto: { randomUUID: () => 'synthetic-call' }
   });
-  context.self = {};
+  context.self = { postMessage(message) {
+    if (message.kind !== 'desktop-complete') return;
+    onRequest(message);
+    queueMicrotask(() => context.self.onmessage({ data: { kind: 'desktop-result', callId: message.callId, reply: { ok: true, text: '[]' } } }));
+  } };
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../ai-worker.js"), "utf8"), context);
   return context;
 }
-
-const AI_CONFIG = { apiUrl: "https://example.test/v1/chat/completions", model: "test", apiKey: "key" };
 
 test("rule-based matching keeps strong basic info and ignores unsupported pinyin derivation", () => {
   const formFields = [
@@ -338,7 +339,6 @@ test("worker: choice fields the rules cannot fill are sent to AI with their opti
   const worker = loadWorker((request) => { body = request; });
 
   const result = await worker.handleAiFill({
-    aiConfig: AI_CONFIG,
     formFields: [
       { fieldId: "f1", label: "证件类型", inputType: "select", tagName: "select", options: ["身份证", "护照"] },
       { fieldId: "f2", label: "最高学历", inputType: "select", tagName: "select", options: ["大学本科", "硕士研究生"] },
@@ -352,7 +352,7 @@ test("worker: choice fields the rules cannot fill are sent to AI with their opti
   });
 
   assert.equal(result.diagnostics.aiFields, 3);
-  const prompt = body.messages[1].content;
+  const prompt = body.user;
   for (const text of ["证件类型", "最高学历", "出生年份", "身份证"]) {
     assert.ok(prompt.includes(text), `${text} should reach the prompt`);
   }
@@ -363,12 +363,11 @@ test("worker: a rule value the field cannot accept does not count as matched", a
   const worker = loadWorker((request) => { body = request; });
 
   const result = await worker.handleAiFill({
-    aiConfig: AI_CONFIG,
     formFields: [{ fieldId: "g", label: "Gender", inputType: "select", tagName: "select", options: ["M", "F"] }],
     resumeFields: [{ group: "基本信息", key: "性别", value: "男" }]
   });
 
   assert.equal(result.diagnostics.ruleMatches, 0);
   assert.equal(result.diagnostics.aiFields, 1);
-  assert.ok(body.messages[1].content.includes("Gender"));
+  assert.ok(body.user.includes("Gender"));
 });

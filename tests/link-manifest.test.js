@@ -36,9 +36,9 @@ test('the toolbar button opens the native side panel and the manager stays in an
   assert.doesNotMatch(source, /TOGGLE_MANAGER/);
 });
 
-test('the page sidebar asks the worker to open the manager instead of embedding it', async () => {
+test('the page sidebar asks the worker to open desktop instead of embedding the manager', async () => {
   const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
-  assert.match(source, /type:\s*["']OPEN_MANAGER["']/);
+  assert.match(source, /type:\s*["']DESKTOP_OPEN_VIEW["']/);
   assert.doesNotMatch(source, /resume-pro-manager__frame/);
   assert.doesNotMatch(source, /getURL\(["']popup\.html["']\)/);
 });
@@ -109,6 +109,8 @@ test('the desktop link ships every file it imports', async () => {
     'link/drain.mjs',
     'link/reconcile.mjs',
     'link/router.mjs',
+    'link/resume.mjs',
+    'link/ai.mjs',
     'link/worker.mjs',
     'link/messages.mjs',
     'link/limits.mjs',
@@ -124,15 +126,9 @@ test('the desktop link ships every file it imports', async () => {
 });
 
 test('the handshake reports the same version the manifest declares', async () => {
-  // PLUGIN_VERSION is what the desktop app is told during the handshake, and it is a
-  // second copy of a number manifest.json already owns. A silent bump of one and not
-  // the other makes the desktop record the wrong plugin version against every write.
-  const { PLUGIN_VERSION } = await import('../link/session.mjs');
-  assert.equal(
-    PLUGIN_VERSION,
-    manifest().version,
-    'link/session.mjs PLUGIN_VERSION must match manifest.json version'
-  );
+  const source = fs.readFileSync(path.join(root, 'link/worker.mjs'), 'utf8');
+  assert.match(source, /getManifest:\s*\(\)\s*=>\s*api\.runtime\.getManifest\(\)/);
+  assert.equal(typeof manifest().version, 'string');
 });
 
 test('the sidebar offers archiving a fill and leaves the wording to link/copy.mjs', async () => {
