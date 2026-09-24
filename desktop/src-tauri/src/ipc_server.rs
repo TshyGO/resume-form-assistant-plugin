@@ -377,6 +377,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v2_resume_read_uses_the_real_open_archive_and_returns_one_valid_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let application = OpenArchive::new(shared);
+        let request = serde_json::json!({
+            "protocolVersion": 2,
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "resume.read",
+            "occurredAt": "2026-09-24T00:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": {}
+        });
+        let frame = serde_json::to_vec(&request).unwrap();
+        let response = answer(&frame, &application).unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(response["protocolVersion"], 2);
+        assert_eq!(response["payload"]["templates"], serde_json::json!([]));
+        assert_eq!(response["payload"]["profileRevision"], 0);
+        let validated = resume_pro_protocol::validate_request_bytes(&frame).unwrap();
+        resume_pro_protocol::validate_response_for_request(&response, &validated).unwrap();
+    }
+
     const HANDSHAKE: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.3.0","minProtocolVersion":1,"maxProtocolVersion":1}}"#;
 
     const HEALTH: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"health","occurredAt":"2026-09-06T12:00:00.000Z","payload":{}}"#;
