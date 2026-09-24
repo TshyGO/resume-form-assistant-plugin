@@ -109,7 +109,9 @@
 
   function visibleFields(groups) {
     return groups.flatMap((group) => group.fields)
-      .filter((field) => field.key && field.value && !self.ResumeProProfile.SECRET_LABEL.test(field.key));
+      .filter((field) => field.key && field.value
+        && !self.ResumeProProfile.SECRET_LABEL.test(field.key)
+        && !self.ResumeProProfile.SECRET_VALUE.test(field.value));
   }
 
   function renderDesktopMode() {

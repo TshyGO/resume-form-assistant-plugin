@@ -30,12 +30,15 @@ async function harness(initial = { status: 'ok', data: data() }) {
   const calls = [];
   const copied = [];
   let response = initial;
+  let updateResult = { status: 'ok' };
   let pageResponse = { ready: true, ok: true, message: '已填入' };
   let poll;
+  const profileAdd = element();
+  profileAdd.dataset.offer = 'profileAdd';
   const document = {
     hidden: false,
     getElementById: get,
-    querySelectorAll: () => [],
+    querySelectorAll: selector => selector === '[data-offer]' ? [profileAdd] : [],
     querySelector: () => ({ click() {}, open: false }),
     addEventListener(type, listener) { documentEvents[type] = listener; }
   };
@@ -45,7 +48,7 @@ async function harness(initial = { status: 'ok', data: data() }) {
       sendMessage: async message => {
         calls.push(message);
         if (message.type === 'DESKTOP_RESUME_READ') return response;
-        if (message.type === 'DESKTOP_RESUME_UPDATE') return { status: 'ok' };
+        if (message.type === 'DESKTOP_RESUME_UPDATE') return updateResult;
         if (message.type === 'DESKTOP_OPEN_VIEW') return { status: 'ok' };
         return {};
       }
@@ -65,7 +68,9 @@ async function harness(initial = { status: 'ok', data: data() }) {
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sidepanel.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
-  return { get, calls, copied, document, documentEvents, tabEvents, setResponse: value => { response = value; }, setPageResponse: value => { pageResponse = value; }, poll: () => poll(), tick: () => new Promise(resolve => setImmediate(resolve)) };
+  return { get, profileAdd, calls, copied, document, documentEvents, tabEvents,
+    setResponse: value => { response = value; }, setUpdateResult: value => { updateResult = value; },
+    setPageResponse: value => { pageResponse = value; }, poll: () => poll(), tick: () => new Promise(resolve => setImmediate(resolve)) };
 }
 
 test('initial native side panel reads desktop summary and active fields', async () => {
@@ -76,6 +81,17 @@ test('initial native side panel reads desktop summary and active fields', async 
   assert.equal(ui.get('fill-button').disabled, false);
   assert.equal(ui.get('desktop-connection').hidden, true);
   assert.ok(!ui.get('quick-fields').innerHTML.includes('synthetic-secret'));
+});
+
+test('native side panel hides a secret-looking value under an ordinary field name', async () => {
+  const payload = data();
+  payload.activeTemplate.groups[0].fields = [
+    { key: '备注', value: '密码：synthetic-secret' },
+    { key: '学校', value: '大学乙' }
+  ];
+  const ui = await harness({ status: 'ok', data: payload });
+  assert.ok(!ui.get('field-groups').innerHTML.includes('synthetic-secret'));
+  assert.ok(ui.get('field-groups').innerHTML.includes('大学乙'));
 });
 
 test('visibility and tab activation reread; the status poll does not', async () => {
@@ -111,6 +127,23 @@ test('template switch writes desktop then rereads, and field action carries snap
   assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
   await ui.get('field-groups').listeners.click({ target: { closest: selector => selector === '[data-chip-id]' ? { dataset: { chipId: `${TEMPLATE}:0:0` } } : null } });
   assert.ok(ui.calls.some(item => item.type === 'RESUME_PANEL_FIELD' && item.value === '测试用户'));
+});
+
+test('a template removed on desktop is reported and the native panel rereads', async () => {
+  const ui = await harness();
+  ui.setUpdateResult({ status: 'missing_template' });
+  ui.get('template-select').value = TEMPLATE;
+  await ui.get('template-select').listeners.change();
+  assert.match(ui.get('panel-toast').textContent, /已经删掉/);
+  assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
+});
+
+test('adding to my information refreshes the native panel and opens desktop resume', async () => {
+  const ui = await harness();
+  await ui.profileAdd.listeners.click();
+  assert.ok(ui.calls.some(item => item.type === 'RESUME_PANEL_OFFER' && item.action === 'profileAdd'));
+  assert.ok(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW' && item.view === 'resume'));
+  assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
 });
 
 test('all desktop downgrade states disable data and show an actionable message', async () => {

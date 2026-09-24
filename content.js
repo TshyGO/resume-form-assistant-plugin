@@ -405,7 +405,7 @@
 
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
-    openManagerButton?.addEventListener("click", () => openDesktopAction(state.desktopMode === "ready" ? "empty" : state.desktopMode));
+    openManagerButton?.addEventListener("click", () => state.desktopMode === "ready" ? openManager("home") : openDesktopAction(state.desktopMode));
     sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", addUnansweredToProfile);
     sidebar.querySelector("#resume-pro-profile-offer-skip")?.addEventListener("click", closeProfileOffer);
     bindDesktopEvents(sidebar);
@@ -973,7 +973,14 @@
       fillButton.disabled = state.desktopMode !== "ready" || !hasResumeData();
       button.textContent = "AI 辅助新增条目（先预览）";
     }
-    if (expanded && !stopped && JSON.stringify(getActiveTemplate(state.currentStore)) === templateFingerprint) await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
+    if (expanded && !stopped) {
+      state.currentStore = await StorageService.getState();
+      if (JSON.stringify(getActiveTemplate(state.currentStore)) === templateFingerprint) {
+        await handleAiFillClick({ currentTarget: fillButton }, { scopes: expanded.scopes });
+      } else {
+        showStatus("当前模板已变化，已停止辅助填写，请重新预览。", "error");
+      }
+    }
   }
 
   function isAssistedTextField(entry) {
@@ -1102,11 +1109,11 @@
       if (waitHint) waitHint.hidden = true;
       diagnostics = response?.diagnostics || {};
 
+      if (response?.openView === "settings-ai") {
+        state.suggestedView = "settings-ai";
+        await openManager("settings-ai");
+      }
       if (!response?.success) {
-        if (response?.openView === "settings-ai") {
-          state.suggestedView = "settings-ai";
-          await openManager("settings-ai");
-        }
         throw new Error(response?.error || "AI 填写失败。");
       }
 
@@ -2150,6 +2157,7 @@
         if (result?.status === "conflict" && attempt === 0) continue;
         if (result?.status === "conflict") throw new Error("我的信息刚在别处改过，请再点一次。");
         if (result?.status === "secret") throw new Error("我的信息里有像密码的内容，桌面没有保存。");
+        if (result?.status === "input_too_large") throw new Error("我的信息内容太多，桌面没有保存。");
         if (result?.status !== "ok") throw new Error("桌面暂时无法保存我的信息。");
         state.currentStore = await StorageService.getState();
         if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();

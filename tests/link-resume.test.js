@@ -64,6 +64,13 @@ test('a response that fails request correlation is unavailable', async () => {
   assert.deepEqual(await resume.read(), { status: 'unavailable' });
 });
 
+test('local envelope overflow returns an actionable profile status without sending', async () => {
+  const { resume, sent } = await harness();
+  const oversized = { values: { bio: '甲'.repeat(30_000) }, family: [], custom: [] };
+  assert.equal((await resume.saveProfile(oversized, 0)).status, 'input_too_large');
+  assert.equal(sent.length, 0);
+});
+
 test('ui.open probes mode but sends no archive identity', async () => {
   const { resume, sent } = await harness({ answer: () => ({ ok: true, payload: { opened: true } }) });
   assert.deepEqual(await resume.openView('settings-ai'), { status: 'ok', opened: true });
