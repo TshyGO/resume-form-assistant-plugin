@@ -51,6 +51,25 @@ function dispatchAiMessage(message, sender, sendResponse) {
     sendResponse({ cancelled: Boolean(controller) });
     return false;
   }
+  if (message?.type === "AI_EXTRACT_JOB") {
+    const key = fillRequestKey(message, sender);
+    if (activeFillRequests.has(key)) {
+      sendResponse({ status: "manual", reason: "in_flight", reliable: false, fields: { company: "", title: "", location: "" } });
+      return false;
+    }
+    const controller = new AbortController();
+    activeFillRequests.set(key, controller);
+    handleExtractJob(message, controller)
+      .then(sendResponse)
+      .catch(error => {
+        // Module loading and request failures are different problems. The request module
+        // reports desktop failures itself; reaching here means the worker could not run it.
+        console.warn("job extraction worker failed", error?.name || "unknown");
+        sendResponse({ status: "manual", reason: "internal", reliable: false, fields: { company: "", title: "", location: "" } });
+      })
+      .finally(() => activeFillRequests.delete(key));
+    return true;
+  }
   if (message?.type === "AI_FILL" || message?.type === "AI_PLAN_REPEAT") {
     const key = fillRequestKey(message, sender);
     if (activeFillRequests.has(key)) {
@@ -79,6 +98,21 @@ self.onmessage = ({ data }) => {
   }
   dispatchAiMessage(data.message, data.sender, reply => self.postMessage({ id: data.id, reply }));
 };
+
+async function handleExtractJob(message, controller) {
+  // This is a dedicated Worker, not an extension context with chrome.runtime.
+  const mod = await import(new URL("link/job-extract.mjs", self.location.href).href);
+  const result = await mod.requestJobExtract({
+    complete: sendToDesktop,
+    fragments: message.fragments,
+    signal: controller.signal
+  });
+  if (!result.failure) return result;
+  // Desktop failures read the same as they do for filling.
+  const { failure, ...rest } = result;
+  return { ...rest, note: aiFailureMessage(failure),
+    ...(failure.reason === "not_configured" ? { openView: "settings-ai" } : {}) };
+}
 
 async function handleRepeatPlan(message, controller) {
   const candidates = (Array.isArray(message.candidates) ? message.candidates : [])

@@ -90,6 +90,14 @@ const REFUSALS = {
 };
 
 const MANUAL_SAVE = {
+  no_fragments: '页面上没有能用来识别的文字。请手动填写公司和岗位。',
+  cancelled: '已取消识别。请手动补全后再保存。',
+  timeout: '识别超时。请手动补全后再保存。',
+  internal: '识别出错了。请手动补全后再保存。',
+  format: 'AI 返回的内容无法使用。请手动补全后再保存。',
+  no_evidence: 'AI 给出的结果里有在页面上找不到依据的，这部分没有采用。请逐项核对后再保存。',
+  location_no_evidence: 'AI 给的工作地点在页面上找不到依据，没有采用。请核对后再保存。',
+  in_flight: '上一次识别还没结束。请手动补全后再保存。',
   swapped: '页面把公司和岗位写得不清楚，请核对后保存。',
   company_conflict: '页面出现多个不同的公司名，请确认这次投递的公司。',
   title_conflict: '页面出现多个不同的岗位名，请确认这次投递的岗位。',
@@ -99,12 +107,37 @@ const MANUAL_SAVE = {
   missing_title: '岗位名还不确定。请核对后再保存。'
 };
 
+const ASSIST_SOURCE = {
+  'beisen-company': '公司名称',
+  'beisen-apply-title': '职位标题',
+  'jobposting-company': '招聘元数据 · 公司',
+  'jobposting-title': '招聘元数据 · 岗位',
+  'jobposting-location': '招聘元数据 · 工作地点',
+  'og:title': '页面标题',
+  h1: '页面标题',
+  'document.title': '页面标题'
+};
+
 export function describeReviewSave() {
   return '请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。';
 }
 
-export function describeManualSave(reason) {
+// `detail` is the desktop's failure, worded the same way the fill button words it.
+export function describeManualSave(reason, detail = '') {
+  if (detail) return `${detail}请手动补全后再保存。`;
   return MANUAL_SAVE[reason] || '请核对公司和岗位。缺的请自己补上，插件不会猜。';
+}
+
+export function describeJobAssist(disclosure) {
+  const lines = (disclosure?.fragments || []).map(fragment => {
+    const label = ASSIST_SOURCE[fragment.source] || '页面片段';
+    return `${fragment.id}. ${label}：${fragment.text}`;
+  });
+  return {
+    tone: 'info',
+    text: '页面上的公司或岗位不好确定，正在用桌面当前的 AI 服务识别。只发送下面这几段页面文字：',
+    fragments: lines
+  };
 }
 
 export function describeBindResult(result) {

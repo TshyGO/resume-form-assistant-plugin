@@ -90,6 +90,23 @@ test('protocol errors and missing host map to stable UI reasons', async () => {
   assert.deepEqual(await ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'not_installed' });
 });
 
+test('extract_job passes the plugin schema and an older desktop rejecting it reads as too old', async () => {
+  const accepted = await harness({ respond: request => reply(request, { status: 'ok', text: '{}' }) });
+  assert.deepEqual(await accepted.ai.complete({ purpose: 'extract_job', system: 's', user: '[]' }), { ok: true, text: '{}' });
+  assert.equal(accepted.sent[0].request.payload.purpose, 'extract_job');
+
+  // A 0.4.1 desktop only knows fill and plan, so its schema rejects the payload.
+  const old = await harness({ respond: request => failure(request, 'invalid_payload') });
+  assert.deepEqual(await old.ai.complete({ purpose: 'extract_job', system: 's', user: '[]' }), { ok: false, reason: 'incompatible' });
+  // fill and plan predate every v2 desktop; a rejection there is not about the version.
+  assert.deepEqual(await old.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+
+  // A purpose this plugin's own schema does not know never leaves the plugin.
+  const local = await harness({ respond: () => { throw new Error('sent'); } });
+  assert.deepEqual(await local.ai.complete({ purpose: 'debug', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+  assert.equal(local.sent.length, 0);
+});
+
 test('abort returns cancelled and disconnected desktop returns unavailable', async () => {
   const controller = new AbortController();
   const { ai } = await harness({ respond: () => { controller.abort(); return { cancelled: true }; } });

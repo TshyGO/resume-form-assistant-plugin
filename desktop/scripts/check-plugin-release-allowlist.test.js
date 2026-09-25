@@ -213,6 +213,19 @@ test("worker constructors and their importScripts are followed", () => {
   assert.ok(graph.has("ai-helpers.js") && graph.has("resume-utils.js") && graph.has("form-agent.js"));
 });
 
+test("a module the worker imports through self.location is followed", () => {
+  const files = {
+    "ai-worker.js": `const mod = await import(new URL("link/job-extract.mjs", self.location.href).href);`,
+    "link/job-extract.mjs": ``,
+  };
+  const graph = collectModuleGraph(["ai-worker.js"], (f) => files[f] ?? null);
+  assert.ok(graph.has("link/job-extract.mjs"), "new URL(..., self.location.href) must be followed");
+  assert.throws(
+    () => assertRuntimeModulesPackaged(graph, ["ai-worker.js"]),
+    /link\/job-extract\.mjs/,
+  );
+});
+
 test("a directory reference requires at least one packaged file beneath it", () => {
   const graph = new Set(["popup.js", "vendor/pdfjs/cmaps/"]);
   assert.throws(

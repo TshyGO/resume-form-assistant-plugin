@@ -190,6 +190,23 @@ test('a desktop not-configured response exposes the AI settings action', async (
   assert.ok(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW' && item.view === 'settings-ai'));
 });
 
+test('a job recognition running in the page shows in the panel with a cancel button', async () => {
+  const ui = await harness();
+  assert.equal(ui.get('job-assist').hidden, true, 'nothing is shown until the page reports a recognition');
+  ui.setPageResponse({ ready: true, jobAssist: { fragments: 3 } });
+  ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('job-assist').hidden, false);
+  assert.equal(ui.get('job-assist-text').textContent, '正在用桌面的 AI 识别岗位，发送的 3 段页面文字列在网页上。');
+
+  ui.setPageResponse({ ready: true, ok: true, jobAssist: null });
+  await ui.get('job-assist-cancel').listeners.click();
+  const cancel = ui.calls.find(item => item.type === 'RESUME_PANEL_ADVANCED');
+  assert.deepEqual({ tabId: cancel.tabId, action: cancel.action }, { tabId: 9, action: 'cancel-assist' });
+  assert.equal(ui.get('panel-toast').textContent, '已取消识别，请在网页表单里手动补全。');
+  assert.equal(ui.get('job-assist').hidden, true);
+});
+
 test('the side panel does not access the four old local data keys', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'sidepanel.js'), 'utf8');
   // The only local key the panel may read is the migration state (#130 PR 5).

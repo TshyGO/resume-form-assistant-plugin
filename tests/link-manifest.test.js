@@ -73,12 +73,44 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   assert.match(source, /resume-pro-save-job/);
   assert.match(source, /保存岗位到桌面端/);
   assert.match(source, /DESKTOP_SAVE_JOB/);
-  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('function openSaveForm'));
+  const start = source.indexOf('async function handleSaveJobClick');
+  const end = source.indexOf('async function runJobAssist');
+  assert.ok(start >= 0 && end > start, 'the save click handler was not found');
+  const click = source.slice(start, end);
   assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
+  // Recognition starts without the user asking for it by name; a screen reader must hear it.
+  assert.match(source, /id="resume-pro-job-assist-note" role="status"/);
   assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
   assert.match(source, /describeSaveResult/);
   assert.equal(source.includes('桌面已保存'), false);
+});
+
+test('saving a job reaches AI only through the desktop, never with the plugin AI config', async () => {
+  // #165: the recognition fallback goes out as the desktop's ai.complete. The plugin has
+  // no AI address or key of its own on this path.
+  const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+  const between = (text, from, to) => {
+    const start = text.indexOf(from);
+    const end = text.indexOf(to, start);
+    assert.ok(start >= 0 && end > start, `${from} was not found`);
+    return text.slice(start, end);
+  };
+  const content = read('content.js');
+  const worker = read('ai-worker.js');
+  const paths = {
+    'link/job-extract.mjs': read('link/job-extract.mjs'),
+    'link/save-flow.mjs': read('link/save-flow.mjs'),
+    'content.js save path': between(content, 'async function handleSaveJobClick', 'function openSaveForm'),
+    'ai-worker.js extraction': between(worker, 'async function handleExtractJob', 'async function handleRepeatPlan')
+  };
+  for (const [name, source] of Object.entries(paths)) {
+    assert.ok(source.length > 200, `${name} was not found`);
+    assert.doesNotMatch(source, /\bfetch\s*\(/, `${name} calls fetch`);
+    assert.doesNotMatch(source, /aiConfig|apiKey|apiUrl/, `${name} reads the plugin AI config`);
+  }
+  assert.match(paths['ai-worker.js extraction'], /complete: sendToDesktop/);
+  assert.match(paths['link/job-extract.mjs'], /purpose: 'extract_job'/);
 });
 
 test('the sidebar offers confirming a submission separately from saving', async () => {

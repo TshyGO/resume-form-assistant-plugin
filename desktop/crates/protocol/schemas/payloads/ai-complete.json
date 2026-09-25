@@ -12,7 +12,8 @@
       "type": "string",
       "enum": [
         "fill",
-        "plan"
+        "plan",
+        "extract_job"
       ]
     },
     "system": {

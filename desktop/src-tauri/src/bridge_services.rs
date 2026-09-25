@@ -293,6 +293,16 @@ mod tests {
     }
 
     #[test]
+    fn ai_complete_forwards_job_extraction_like_any_other_purpose() {
+        let user = r#"[{"id":1,"source":"beisen-company","role":"company","text":"金发科技股份有限公司"}]"#;
+        let request = request("ai.complete", json!({"purpose": "extract_job", "system": "SYS", "user": user}));
+        let services = fake(AiReply::Ok(r#"{"company":"金发科技股份有限公司"}"#.into()), false);
+        let result = answer(&request, &services).unwrap();
+        assert_eq!(result.payload, json!({"status": "ok", "text": r#"{"company":"金发科技股份有限公司"}"#}));
+        assert_eq!(services.calls.lock().unwrap().as_slice(), [format!("ai:extract_job:SYS:{user}")]);
+    }
+
+    #[test]
     fn ai_complete_sanitizes_secret_and_oversized_model_text() {
         let request = request("ai.complete", json!({"purpose": "plan", "system": "SYS", "user": "USER"}));
         let secret = fake(AiReply::Ok("Bearer synthetic-secret".into()), false);
