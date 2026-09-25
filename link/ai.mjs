@@ -42,9 +42,11 @@ export function createAi({ session, store, port, uuid, now }) {
     catch (error) { return { ok: false, reason: wireReason(error?.code) }; }
     if (!reply.response.ok) {
       const code = reply.response.error?.code;
-      // The request already passed this plugin's copy of the schema, so a desktop that
-      // rejects its payload is running an older schema (e.g. one without this purpose).
-      return { ok: false, reason: code === 'invalid_payload' ? 'incompatible' : wireReason(code) };
+      // extract_job is newer than the 0.4.1 desktop, whose schema rejects it. The request
+      // already passed this plugin's copy of the schema, so that rejection means an old
+      // desktop. fill and plan are older than any desktop that speaks v2; leave them alone.
+      if (code === 'invalid_payload' && purpose === 'extract_job') return { ok: false, reason: 'incompatible' };
+      return { ok: false, reason: wireReason(code) };
     }
     const payload = reply.response.payload;
     if (payload.status === 'ok') return { ok: true, text: payload.text };

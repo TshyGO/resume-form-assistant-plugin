@@ -318,7 +318,11 @@
   document.querySelectorAll("[data-advanced]").forEach((button) => button.addEventListener("click", async () => {
     document.querySelector(".dock-tools").open = false;
     const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
-    toast(result?.ok ? (button.dataset.advanced === "close" ? "网页高级控件已收起。" : "请在网页上的高级控件中继续操作。") : result?.error || "无法打开工具。");
+    const done = {
+      close: "网页高级控件已收起。",
+      save: "请在网页上的高级控件中核对岗位。需要 AI 识别时，进度和取消按钮也在那里。"
+    }[button.dataset.advanced] || "请在网页上的高级控件中继续操作。";
+    toast(result?.ok ? done : result?.error || "无法打开工具。");
   }));
   async function desktopAction(kind = "home") {
     if (kind === "download") {

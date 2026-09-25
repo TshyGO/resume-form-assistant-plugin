@@ -73,7 +73,10 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   assert.match(source, /resume-pro-save-job/);
   assert.match(source, /保存岗位到桌面端/);
   assert.match(source, /DESKTOP_SAVE_JOB/);
-  const click = source.slice(source.indexOf('async function handleSaveJobClick'), source.indexOf('async function runJobAssist'));
+  const start = source.indexOf('async function handleSaveJobClick');
+  const end = source.indexOf('async function runJobAssist');
+  assert.ok(start >= 0 && end > start, 'the save click handler was not found');
+  const click = source.slice(start, end);
   assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
   assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
@@ -85,13 +88,19 @@ test('saving a job reaches AI only through the desktop, never with the plugin AI
   // #165: the recognition fallback goes out as the desktop's ai.complete. The plugin has
   // no AI address or key of its own on this path.
   const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+  const between = (text, from, to) => {
+    const start = text.indexOf(from);
+    const end = text.indexOf(to, start);
+    assert.ok(start >= 0 && end > start, `${from} was not found`);
+    return text.slice(start, end);
+  };
   const content = read('content.js');
   const worker = read('ai-worker.js');
   const paths = {
     'link/job-extract.mjs': read('link/job-extract.mjs'),
     'link/save-flow.mjs': read('link/save-flow.mjs'),
-    'content.js save path': content.slice(content.indexOf('async function handleSaveJobClick'), content.indexOf('function openSaveForm')),
-    'ai-worker.js extraction': worker.slice(worker.indexOf('async function handleExtractJob'), worker.indexOf('async function handleRepeatPlan'))
+    'content.js save path': between(content, 'async function handleSaveJobClick', 'function openSaveForm'),
+    'ai-worker.js extraction': between(worker, 'async function handleExtractJob', 'async function handleRepeatPlan')
   };
   for (const [name, source] of Object.entries(paths)) {
     assert.ok(source.length > 200, `${name} was not found`);

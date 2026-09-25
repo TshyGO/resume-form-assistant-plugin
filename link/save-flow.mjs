@@ -8,16 +8,54 @@
  * and is never produced by the model.
  */
 
+const ROLES = new Set(['company', 'job-title', 'job-location', 'page-title']);
+const SOURCES = new Set([
+  'beisen-company',
+  'beisen-apply-title',
+  'jobposting-company',
+  'jobposting-title',
+  'jobposting-location',
+  'og:title',
+  'h1',
+  'document.title'
+]);
+const MAX_FRAGMENTS = 8;
+const MAX_FRAGMENT_CHARS = 160;
+const PREFERENCE = /意向工作地点|期望工作地点|期望工作城市|期望城市|意向城市|面试站点|面试地点/;
+const SENSITIVE = /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b1[3-9]\d{9}\b|\b\d{17}[\dXx]\b|cookie|authorization|bearer\s+/i;
+
 export function nextSaveStep(extraction) {
   const fields = publicFields(extraction);
   if (extraction?.reliable && fields.company && fields.title) {
     return { action: 'commit', fields };
   }
-  const fragments = Array.isArray(extraction?.fragments) ? extraction.fragments : [];
+  // The panel lists exactly what job-extract.mjs will send, so both use this one filter.
+  const fragments = allowFragments(extraction?.fragments);
   if (fragments.length) {
     return { action: 'assist', fields, fragments, reasons: extraction?.assistReasons || [] };
   }
   return { action: 'form', fields, reason: extraction?.assistReasons?.[0] || 'manual' };
+}
+
+/** The only page fragments that may go to the desktop's AI. */
+export function allowFragments(fragments) {
+  if (!Array.isArray(fragments)) return [];
+  const kept = [];
+  for (const fragment of fragments) {
+    if (!fragment || typeof fragment !== 'object') continue;
+    const source = String(fragment.source ?? '');
+    const role = String(fragment.role ?? '');
+    const text = typeof fragment.text === 'string' ? fragment.text.replace(/\s+/g, ' ').trim() : '';
+    const id = fragment.id;
+    if (!Number.isInteger(id) || id < 1 || id > MAX_FRAGMENTS) continue;
+    if (!SOURCES.has(source) || !ROLES.has(role)) continue;
+    if (!text || text.length > MAX_FRAGMENT_CHARS) continue;
+    if (PREFERENCE.test(text) || SENSITIVE.test(text) || text.includes('://')) continue;
+    if (kept.some(item => item.id === id)) continue;
+    kept.push({ id, source, role, text });
+    if (kept.length >= MAX_FRAGMENTS) break;
+  }
+  return kept;
 }
 
 export function assistDisclosure(fragments) {

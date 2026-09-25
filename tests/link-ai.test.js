@@ -98,6 +98,8 @@ test('extract_job passes the plugin schema and an older desktop rejecting it rea
   // A 0.4.1 desktop only knows fill and plan, so its schema rejects the payload.
   const old = await harness({ respond: request => failure(request, 'invalid_payload') });
   assert.deepEqual(await old.ai.complete({ purpose: 'extract_job', system: 's', user: '[]' }), { ok: false, reason: 'incompatible' });
+  // fill and plan predate every v2 desktop; a rejection there is not about the version.
+  assert.deepEqual(await old.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
 
   // A purpose this plugin's own schema does not know never leaves the plugin.
   const local = await harness({ respond: () => { throw new Error('sent'); } });
