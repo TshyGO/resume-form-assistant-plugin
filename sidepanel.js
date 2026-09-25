@@ -64,6 +64,8 @@
   let jobSave = null;
   let jobFilled = "";
   let jobPending = false;
+  // Which request currently owns `jobPending`; a request that was overtaken must not clear it.
+  let jobOwner = 0;
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -232,6 +234,9 @@
 
   function applyJobSave(snapshot, tabId = currentTabId) {
     const next = snapshot && snapshot.draftId ? snapshot : null;
+    if (!next && jobSave && snapshot?.discarded === "page-changed") {
+      toast("网页已经换成别的页面，刚才的岗位草稿已作废。请重新点「保存岗位到桌面端」。");
+    }
     // An older answer for the same draft (a poll that left before a click) is not news.
     if (next && jobSave && next.draftId === jobSave.draftId && next.version < jobSave.version && jobSave.tabId === tabId) return;
     jobSave = next ? { ...next, tabId } : null;
@@ -308,19 +313,27 @@
   }
 
   // One request at a time from the panel; the page refuses a second write on its own too.
-  // Cancelling is the exception: it has to reach the page while the draft is still waiting.
+  // Cancelling is the exception: it has to reach the page while the draft is still waiting,
+  // and once it succeeds the panel is free again even though the cancelled draft request
+  // (which waits for the AI) has not returned yet.
   async function jobRequest(message, { interrupt = false } = {}) {
     if (jobPending && !interrupt) return null;
     const owner = !interrupt;
+    const mine = owner ? ++jobOwner : 0;
     if (owner) jobPending = true;
     renderJobSave();
     const tabId = currentTabId;
     try {
       const result = await sendToPage(message);
-      if (result?.jobSave) applyJobSave(result.jobSave, tabId);
+      if (interrupt && result?.ok) {
+        jobOwner += 1;
+        jobPending = false;
+      }
+      // An answer for another tab's page must not draw over the tab that is in front now.
+      if (result?.jobSave && tabId === currentTabId) applyJobSave(result.jobSave, tabId);
       return result;
     } finally {
-      if (owner) jobPending = false;
+      if (owner && jobOwner === mine) jobPending = false;
       renderJobSave();
     }
   }

@@ -79,6 +79,8 @@
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
+      dropStalePanelJob();
+      const jobSave = panelJobSnapshot();
       sendResponse({
         ready: Boolean(button),
         // `disabled` also covers the controller's pre-read state. Treating that as
@@ -100,7 +102,7 @@
         jobAssist: jobAssist && !jobAssist.hidden
           ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null,
         // Saving a job from the side panel itself (#172); held in this page's memory only.
-        jobSave: panelJobSnapshot()
+        jobSave
       });
       return false;
     }
@@ -3112,6 +3114,12 @@
   // page's memory only; nothing about it is written to extension storage.
 
   const PANEL_JOB_LATER = "已记下，尚未写入桌面。可以稍后在待同步里完成保存。";
+  // Shown when the write was sent but its outcome could not be worked out; never "saved".
+  const PANEL_JOB_UNKNOWN = {
+    tone: "pending",
+    text: "没能确认保存结果。请到桌面端查看这个岗位是否已保存；没有的话，再点一次「保存岗位到桌面端」。"
+  };
+  const PANEL_JOB_STALE = "网页已经换成别的页面，刚才的岗位草稿已作废。请重新点「保存岗位到桌面端」。";
   let panelJob = idlePanelJob(null);
 
   // Every reset takes a new token, so an answer still on its way for the old draft is dropped.
@@ -3119,7 +3127,8 @@
     return {
       draftId: null, phase: "idle", version: (previous?.version || 0) + 1, token: (previous?.token || 0) + 1,
       fields: null, revision: 0, note: "", openView: null, error: "", assist: null, requestId: null,
-      fallback: null, confirmed: null, intentId: null, candidates: [], result: null
+      fallback: null, confirmed: null, intentId: null, candidates: [], result: null,
+      pageUrl: "", discarded: null
     };
   }
 
@@ -3144,8 +3153,21 @@
         applicationId: candidate.applicationId,
         label: `${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`
       })),
-      result: job.result ? { ...job.result } : null
+      result: job.result ? { ...job.result } : null,
+      discarded: job.discarded
     };
+  }
+
+  // A single-page site can swap the job under an open draft without reloading the page. The
+  // draft belongs to the address it was read from; once that changes it is thrown away, so
+  // the panel can never save the old company and title for the new page.
+  function dropStalePanelJob() {
+    const open = panelJob.draftId && ["extracting", "assist", "review", "choice"].includes(panelJob.phase);
+    if (!open || panelJob.pageUrl === location.href) return false;
+    if (panelJob.requestId) self.ResumeProAIClient.cancel(panelJob.requestId).catch(() => {});
+    panelJob = idlePanelJob(panelJob);
+    panelJob.discarded = "page-changed";
+    return true;
   }
 
   function openPanelReview(fields, note, openView = null) {
@@ -3160,7 +3182,7 @@
     panelJob = idlePanelJob(panelJob);
     const token = panelJob.token;
     const isCurrent = () => panelJob.token === token;
-    touchPanelJob({ draftId: newRequestId(), phase: "extracting" });
+    touchPanelJob({ draftId: newRequestId(), phase: "extracting", pageUrl: location.href });
     try {
       const draft = await draftJobFields({
         isCurrent,
@@ -3208,6 +3230,7 @@
     if (!message.draftId || message.draftId !== panelJob.draftId) {
       return { ok: false, error: "这份岗位草稿已经失效，请重新点「保存岗位到桌面端」。", jobSave: panelJobSnapshot() };
     }
+    if (dropStalePanelJob()) return { ok: false, error: PANEL_JOB_STALE, jobSave: panelJobSnapshot() };
     const force = message.force === true;
     if (panelJob.phase === "saving" || saveInFlight) return { ok: false, error: "正在保存，请稍候。", jobSave: panelJobSnapshot() };
     // "再存一次" after a duplicate resends exactly what was confirmed; anything else needs the form.
@@ -3227,28 +3250,41 @@
     const token = panelJob.token;
     saveInFlight = true;
     touchPanelJob({ phase: "saving", confirmed: fields, error: "", fields: { ...panelJob.fields, company: fields.company, title: fields.title } });
-    let result;
+    let result = null;
+    let failed = false;
     try {
       result = await saveReviewedJob(fields, { force: force || Boolean(again) });
+    } catch {
+      failed = true;
     } finally {
       saveInFlight = false;
     }
     if (panelJob.token !== token) return { ok: true, jobSave: panelJobSnapshot() };
-    const { copy } = await loadDesktopModules();
-    if (result?.status === "needs_choice") {
-      touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates: result.exact || [], result: null });
-    } else if (saveResultClosesForm(result) || result?.status === "not_queued") {
-      // Written, queued, or a clear "no desktop / not paired" answer the user has to act on.
-      touchPanelJob({ phase: "result", result: describeCommit(copy, result) });
-    } else {
-      // Not written and not queued: keep the reviewed form so the user can try again.
-      touchPanelJob({ phase: "review", error: describeCommit(copy, result).text, result: null });
+    // Whatever goes wrong from here on, the phase must leave "saving": the desktop may
+    // already hold the job, so the panel says it could not tell rather than stay locked.
+    try {
+      if (failed) throw new Error("save-failed");
+      const { copy } = await loadDesktopModules();
+      if (result?.status === "needs_choice") {
+        touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates: result.exact || [], result: null });
+      } else if (saveResultClosesForm(result) || result?.status === "not_queued") {
+        // Written, queued, or a clear "no desktop / not paired" answer the user has to act on.
+        touchPanelJob({ phase: "result", result: describeCommit(copy, result) });
+      } else {
+        // Not written and not queued: keep the reviewed form so the user can try again.
+        touchPanelJob({ phase: "review", error: describeCommit(copy, result).text, result: null });
+      }
+    } catch {
+      if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
     }
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
   }
 
   async function choosePanelJob(message) {
+    if (message.draftId && message.draftId === panelJob.draftId && dropStalePanelJob()) {
+      return { ok: false, error: PANEL_JOB_STALE, jobSave: panelJobSnapshot() };
+    }
     if (!message.draftId || message.draftId !== panelJob.draftId || panelJob.phase !== "choice") {
       return { ok: false, error: "这个选择已经失效了。", jobSave: panelJobSnapshot() };
     }
@@ -3266,10 +3302,15 @@
     }
     const token = panelJob.token;
     touchPanelJob({ phase: "saving" });
-    const result = await bindSavedJob(panelJob.intentId, applicationId);
-    if (panelJob.token !== token) return { ok: true, jobSave: panelJobSnapshot() };
-    const { copy } = await loadDesktopModules();
-    touchPanelJob({ phase: "result", candidates: [], result: copy.describeBindResult(result) });
+    let bound;
+    try {
+      const result = await bindSavedJob(panelJob.intentId, applicationId);
+      if (panelJob.token !== token) return { ok: true, jobSave: panelJobSnapshot() };
+      bound = (await loadDesktopModules()).copy.describeBindResult(result);
+    } catch {
+      bound = { ...PANEL_JOB_UNKNOWN };
+    }
+    if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], result: bound });
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
   }

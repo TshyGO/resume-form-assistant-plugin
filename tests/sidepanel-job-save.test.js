@@ -93,10 +93,10 @@ function loadPage({ extraction, desktop, userAgent }) {
   const fillButton = { disabled: false, textContent: '一键 AI 填写' };
   hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
   return {
-    hooks, desktopCalls, storageWrites, ai,
-    async ready() {
+    hooks, desktopCalls, storageWrites, ai, location: context.location,
+    async ready(copyOverride = {}) {
       const [saveFlow, copy] = await Promise.all([import('../link/save-flow.mjs'), import('../link/copy.mjs')]);
-      hooks.setDesktopModules({ extract: { extractJobFields: () => structuredClone(extraction) }, saveFlow, copy });
+      hooks.setDesktopModules({ extract: { extractJobFields: () => structuredClone(extraction) }, saveFlow, copy: { ...copy, ...copyOverride } });
     },
     deliver(message) {
       return new Promise(resolve => {
@@ -137,9 +137,10 @@ function element(id) {
   return node;
 }
 
-async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome' } = {}) {
+async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride } = {}) {
   const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser] });
-  await page.ready();
+  await page.ready(copyOverride);
+  let activeTabId = 7;
   const elements = new Map();
   const get = id => { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); };
   const toasts = [];
@@ -170,8 +171,13 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     },
     storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } },
     tabs: {
-      query: async () => [{ id: 7 }],
-      sendMessage: async (tabId, message) => { pageMessages.push(message); return page.deliver(message); },
+      query: async () => [{ id: activeTabId }],
+      // Only tab 7 has the page controller; any other tab is a page without the helper.
+      sendMessage: async (tabId, message) => {
+        if (tabId !== 7) throw new Error('no receiver');
+        pageMessages.push(message);
+        return page.deliver(message);
+      },
       create: async () => {},
       onActivated: { addListener() {} },
       onUpdated: { addListener() {} }
@@ -195,6 +201,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     async click(id) { await get(id).listeners.click({ target: get(id) }); await settle(); },
     async submit() { await get('job-save-form').listeners.submit({ preventDefault() {} }); await settle(); },
     async poll() { await poll(); await settle(); },
+    setTab(id) { activeTabId = id; },
     saves: () => page.desktopCalls.filter(message => message.type === 'DESKTOP_SAVE_JOB'),
     toast: () => get('panel-toast').textContent
   };
@@ -427,4 +434,118 @@ test('the panel never submits the job application page', () => {
   const section = content.slice(content.indexOf('// --- Saving a job from the native side panel'), content.indexOf('function setDesktopStatus('));
   assert.ok(section.length > 500);
   assert.doesNotMatch(section, /\.submit\(|requestSubmit|\.click\(\)|chrome\.storage/, 'the side panel path only reads the page and talks to the desktop');
+});
+
+// --- Review follow-ups on #175 ---------------------------------------------------------------
+
+test('after cancelling recognition the panel is usable at once, before the AI has answered', async () => {
+  const panel = await openPanel({ extraction: UNRELIABLE_JOB });
+  const clicking = panel.get('job-save-button').listeners.click();
+  await settle();
+  await panel.poll();
+  await panel.click('job-save-stop');
+
+  // The AI has not answered yet; the draft request is still waiting on it.
+  assert.equal(panel.form.hidden, false);
+  assert.equal(panel.get('job-save-confirm').disabled, false);
+  assert.equal(panel.get('job-save-confirm').textContent, '确定保存');
+  assert.equal(panel.get('job-save-cancel').disabled, false);
+  assert.equal(panel.company.disabled, false);
+
+  panel.title.value = '工艺工程师';
+  await panel.submit();
+  assert.equal(panel.saves().length, 1);
+  assert.equal(panel.saves()[0].fields.title, '工艺工程师');
+
+  // The late answer to the cancelled recognition neither reopens the form nor locks the panel.
+  panel.page.ai.answer({ status: 'ok', reliable: true, fields: { company: 'wrong', title: 'wrong' } });
+  await clicking;
+  await settle();
+  assert.equal(panel.form.hidden, true);
+  assert.equal(panel.get('job-save-result').hidden, false);
+  assert.equal(panel.button.disabled, false, 'the old draft request no longer holds the panel busy');
+  assert.equal(panel.saves().length, 1);
+});
+
+test('a save whose outcome cannot be worked out leaves the saving state instead of freezing the panel', async () => {
+  const boom = () => { throw new Error('copy failed'); };
+  const panel = await openPanel({ copyOverride: { describeBindResult: boom, describeSaveResult: boom } });
+  await panel.click('job-save-button');
+  await panel.submit();
+  assert.equal(panel.saves().length, 1, 'the write itself happened once');
+  assert.equal(panel.form.hidden, true);
+  assert.equal(panel.get('job-save-result').hidden, false);
+  assert.match(panel.get('job-save-result-text').textContent, /没能确认保存结果/);
+  assert.doesNotMatch(panel.get('job-save-result-text').textContent, /桌面已保存/);
+  await panel.click('job-save-dismiss');
+  assert.equal(panel.button.hidden, false);
+  assert.equal(panel.button.disabled, false);
+
+  // The same when the duplicate choice is written.
+  const exact = [{ applicationId: 'app-1', company: '星河科技', title: '后端开发工程师', stage: '' }];
+  const other = await openPanel({
+    copyOverride: { describeBindResult: boom },
+    desktop: message => message.type === 'DESKTOP_SAVE_JOB'
+      ? { status: 'needs_choice', intent: { intentId: 'intent-9' }, exact } : { status: 'saved' }
+  });
+  await other.click('job-save-button');
+  await other.submit();
+  await other.click('job-save-new');
+  assert.equal(other.page.desktopCalls.filter(message => message.type === 'DESKTOP_BIND').length, 1);
+  assert.equal(other.get('job-save-choice').hidden, true);
+  assert.match(other.get('job-save-result-text').textContent, /没能确认保存结果/);
+});
+
+test('a single-page site switching job under an open draft discards the draft and saves nothing', async () => {
+  const panel = await openPanel();
+  await panel.click('job-save-button');
+  assert.equal(panel.form.hidden, false);
+  panel.page.location.href = 'https://jobs.example.com/999';
+
+  // Confirming right away, before any status poll, must not write the old job.
+  await panel.submit();
+  assert.equal(panel.saves().length, 0);
+  assert.match(panel.toast(), /作废/);
+  assert.equal(panel.form.hidden, true);
+  assert.equal(panel.button.hidden, false);
+
+  // The next click starts a fresh draft for the new page.
+  await panel.click('job-save-button');
+  assert.equal(panel.form.hidden, false);
+  await panel.submit();
+  assert.equal(panel.saves().length, 1);
+});
+
+test('the panel drops a draft on its own when the page address changes, and stops a running recognition', async () => {
+  const panel = await openPanel({ extraction: UNRELIABLE_JOB });
+  const clicking = panel.get('job-save-button').listeners.click();
+  await settle();
+  await panel.poll();
+  assert.equal(panel.get('job-save-progress').hidden, false);
+  panel.page.location.href = 'https://kingfa.zhiye.com/apply?job=43';
+  await panel.poll();
+  assert.equal(panel.get('job-save-progress').hidden, true);
+  assert.equal(panel.button.hidden, false);
+  assert.match(panel.toast(), /作废/);
+  assert.equal(panel.page.ai.cancelled.length, 1, 'the AI request for the old page is cancelled');
+
+  panel.page.ai.answer({ status: 'ok', reliable: true, fields: { company: 'wrong', title: 'wrong' } });
+  await clicking;
+  await panel.poll();
+  assert.equal(panel.form.hidden, true, 'a late AI answer for the old page does not reopen a form');
+  assert.equal(panel.saves().length, 0);
+});
+
+test('an answer that comes back after switching tabs is not drawn on the new tab', async () => {
+  const panel = await openPanel({ extraction: UNRELIABLE_JOB });
+  const clicking = panel.get('job-save-button').listeners.click();
+  await settle();
+  panel.setTab(9);
+  await panel.poll();
+  panel.page.ai.answer({ status: 'ok', reliable: true, fields: { company: '金发科技股份有限公司', title: '研发工程师' } });
+  await clicking;
+  await settle();
+  assert.equal(panel.form.hidden, true, 'tab 9 has no draft of its own');
+  assert.equal(panel.get('job-save-progress').hidden, true);
+  assert.equal(panel.saves().length, 0);
 });
