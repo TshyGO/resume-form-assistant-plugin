@@ -365,7 +365,7 @@
             </div>
           </form>
           <div class="resume-pro__save-form" id="resume-pro-job-assist" hidden>
-            <p class="resume-pro__save-note" id="resume-pro-job-assist-note"></p>
+            <p class="resume-pro__save-note" id="resume-pro-job-assist-note" role="status"></p>
             <ul class="resume-pro__candidate-list" id="resume-pro-job-assist-fragments"></ul>
             <div class="resume-pro__save-actions">
               <button class="resume-pro__manager-button" type="button" id="resume-pro-job-assist-cancel">取消识别</button>
@@ -2621,6 +2621,9 @@
   function showJobAssist(described) {
     const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
     if (!panel) return;
+    // The note is a status region: show the panel first so a screen reader hears the text
+    // arrive, rather than finding it already there.
+    panel.hidden = false;
     panel.querySelector("#resume-pro-job-assist-note").textContent = described.text;
     const list = panel.querySelector("#resume-pro-job-assist-fragments");
     list.textContent = "";
@@ -2629,12 +2632,15 @@
       item.textContent = line;
       list.appendChild(item);
     }
-    panel.hidden = false;
   }
 
   function hideJobAssist() {
     const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
-    if (panel) panel.hidden = true;
+    if (!panel) return;
+    panel.hidden = true;
+    // Cleared so the next recognition is announced again.
+    const note = panel.querySelector("#resume-pro-job-assist-note");
+    if (note) note.textContent = "";
   }
 
   function cancelJobAssist() {

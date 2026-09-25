@@ -78,6 +78,8 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   assert.ok(start >= 0 && end > start, 'the save click handler was not found');
   const click = source.slice(start, end);
   assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
+  // Recognition starts without the user asking for it by name; a screen reader must hear it.
+  assert.match(source, /id="resume-pro-job-assist-note" role="status"/);
   assert.equal(click.includes('commitSave('), false);
   // The wording table lives in link/copy.mjs so the §9 distinctions stay testable.
   assert.match(source, /describeSaveResult/);
