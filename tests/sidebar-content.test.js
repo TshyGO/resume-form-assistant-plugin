@@ -773,3 +773,274 @@ test('loading a page does not read the desktop', () => {
   assert.equal(init.includes('StorageService.getState'), false);
   assert.equal(init.includes('DESKTOP_RESUME_READ'), false);
 });
+
+// --- #172: saving a job entirely inside the native side panel ---------------------------
+
+const RELIABLE_JOB = {
+  company: '星河科技', title: '后端开发工程师', location: '上海', reliable: true,
+  sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
+};
+
+async function panelJobPage({ extraction = RELIABLE_JOB, desktop = null, ai = null } = {}) {
+  const loaded = loadContentScript();
+  const { hooks, context, listeners, writes } = loaded;
+  let ids = 0;
+  context.crypto.randomUUID = () => `id-${++ids}`;
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
+  hooks.setDesktopModules({ extract: { extractJobFields: () => structuredClone(extraction) }, saveFlow, copy });
+  const sent = [];
+  context.chrome.runtime.sendMessage = async message => {
+    sent.push(message);
+    if (message.type === 'DESKTOP_LIST_QUEUE') return { intents: [], outbox: [], fillRecords: [] };
+    return desktop ? desktop(message, sent) : { status: 'saved' };
+  };
+  const aiCalls = { sent: [], cancelled: [], answer: null };
+  context.self.ResumeProAIClient = ai || {
+    send: message => { aiCalls.sent.push(message); return new Promise(resolve => { aiCalls.answer = resolve; }); },
+    cancel: async requestId => { aiCalls.cancelled.push(requestId); return { cancelled: true }; }
+  };
+  // Replies are built inside the script's realm; compare them as plain data.
+  const ask = message => new Promise(resolve => {
+    const handled = listeners.runtimeMessage[0](message, { id: undefined }, value => resolve(plain(value)));
+    assert.equal(typeof handled, 'boolean');
+  });
+  const saves = () => sent.filter(message => message.type === 'DESKTOP_SAVE_JOB');
+  const binds = () => sent.filter(message => message.type === 'DESKTOP_BIND');
+  const status = () => ask({ type: 'RESUME_PANEL_STATUS' }).then(reply => reply.jobSave);
+  return { ...loaded, hooks, context, ask, sent, saves, binds, status, aiCalls, copy, writes };
+}
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('#172 a reliable page opens a review draft in the side panel, and nothing is written before confirm', async () => {
+  const page = await panelJobPage();
+  const reply = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  assert.equal(reply.ok, true);
+  const draft = reply.jobSave;
+  assert.equal(draft.phase, 'review');
+  assert.deepEqual(draft.fields, { company: '星河科技', title: '后端开发工程师', sourceUrl: 'https://jobs.example.com/123' });
+  assert.equal(draft.note, page.copy.describeReviewSave());
+  assert.equal('dedupeUrl' in draft.fields, false, 'the panel only sees the redacted source URL');
+  assert.equal(page.saves().length, 0, 'no job.save before the user confirms');
+  assert.equal(page.writes.length, 0, 'the draft never goes to extension storage');
+  // The status poll carries the same draft, so a reopened panel can pick it up.
+  assert.equal((await page.status()).draftId, draft.draftId);
+  // Clicking the button again while a draft is open does not restart it.
+  assert.equal((await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' })).jobSave.draftId, draft.draftId);
+});
+
+test('#172 confirm saves the edited company and title once, with the draft\'s redacted URLs', async () => {
+  let release;
+  const page = await panelJobPage({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
+    ? new Promise(resolve => { release = () => resolve({ status: 'saved' }); }) : {} });
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const confirm = {
+    type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId,
+    company: '  星河科技 ', title: 'Java 后端开发工程师',
+    // A panel cannot swap in another URL: the page keeps the one its redaction produced.
+    sourceUrl: 'https://jobs.example.com/123?token=secret', dedupeUrl: 'https://evil.example'
+  };
+  const first = page.ask(confirm);
+  const second = await page.ask(confirm);
+  assert.equal(second.ok, false, 'a double click is refused while the first save runs');
+  assert.equal((await page.status()).phase, 'saving');
+  release();
+  const done = await first;
+  assert.equal(done.ok, true);
+  assert.equal(page.saves().length, 1);
+  assert.deepEqual(plain(page.saves()[0].fields), {
+    company: '星河科技', title: 'Java 后端开发工程师', location: '上海',
+    sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
+  });
+  assert.equal(page.saves()[0].force, false);
+  assert.equal(done.jobSave.phase, 'result');
+  assert.equal(done.jobSave.result.tone, 'success');
+  assert.match(done.jobSave.result.text, /桌面已保存/);
+  // The finished draft cannot be confirmed a second time.
+  assert.equal((await page.ask(confirm)).ok, false);
+  assert.equal(page.saves().length, 1);
+});
+
+test('#172 cancel writes nothing, and a stale draft cannot be confirmed afterwards', async () => {
+  const page = await panelJobPage();
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const cancelled = await page.ask({ type: 'RESUME_PANEL_SAVE_CANCEL', draftId: jobSave.draftId, scope: 'draft' });
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.jobSave.phase, 'idle');
+  assert.equal(cancelled.jobSave.draftId, null);
+  const late = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '后端' });
+  assert.equal(late.ok, false);
+  assert.equal(page.saves().length, 0);
+  assert.equal(page.sent.some(message => /^DESKTOP_(SAVE_JOB|BIND)$/.test(message.type)), false);
+});
+
+test('#172 an empty company or title is refused with a clear message and no write', async () => {
+  const page = await panelJobPage();
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const noTitle = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '   ' });
+  assert.equal(noTitle.ok, false);
+  assert.deepEqual(noTitle.missing, ['岗位名称']);
+  assert.equal(noTitle.error, '请补全岗位名称后再保存。');
+  assert.equal(noTitle.jobSave.phase, 'review', 'the form stays open for the user to fill in');
+  assert.equal(noTitle.jobSave.error, '请补全岗位名称后再保存。');
+  const neither = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '', title: '' });
+  assert.deepEqual(neither.missing, ['公司名称', '岗位名称']);
+  assert.equal(page.saves().length, 0);
+});
+
+test('#172 AI recognition shows its progress in the side panel and cancelling keeps the late answer out', async () => {
+  const page = await panelJobPage({ extraction: UNRELIABLE_JOB });
+  const drafting = page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  await tick();
+  const running = await page.status();
+  assert.equal(running.phase, 'assist');
+  assert.equal(running.assist.count, 2, 'the panel says how many page fragments went to the desktop AI');
+  assert.deepEqual(running.assist.lines, [
+    '1. 公司名称：金发科技股份有限公司',
+    '2. 职位标题：你正在投递职位：研发工程师-化工工艺研究方向'
+  ]);
+  assert.equal(page.aiCalls.sent.length, 1);
+  assert.deepEqual(plain(page.aiCalls.sent[0].fragments), UNRELIABLE_JOB.fragments);
+
+  const cancelled = await page.ask({ type: 'RESUME_PANEL_SAVE_CANCEL', draftId: running.draftId, scope: 'assist' });
+  assert.equal(cancelled.ok, true);
+  assert.equal(page.aiCalls.cancelled.length, 1, 'the desktop AI call is closed');
+  assert.equal(cancelled.jobSave.phase, 'review');
+  assert.equal(cancelled.jobSave.note, page.copy.describeManualSave('cancelled'));
+  assert.equal(cancelled.jobSave.fields.company, UNRELIABLE_JOB.company);
+  assert.equal(cancelled.jobSave.fields.title, '');
+
+  page.aiCalls.answer({ status: 'ok', reliable: true, fields: { company: 'wrong', title: 'wrong' } });
+  await drafting;
+  const after = await page.status();
+  assert.equal(after.fields.company, UNRELIABLE_JOB.company, 'a late AI answer changes nothing');
+  assert.equal(after.revision, cancelled.jobSave.revision);
+  assert.equal(page.saves().length, 0);
+});
+
+test('#172 cancelling the draft during recognition closes it, and the late AI answer does not reopen the form', async () => {
+  const page = await panelJobPage({ extraction: UNRELIABLE_JOB });
+  const drafting = page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  await tick();
+  const running = await page.status();
+  const cancelled = await page.ask({ type: 'RESUME_PANEL_SAVE_CANCEL', draftId: running.draftId, scope: 'draft' });
+  assert.equal(cancelled.jobSave.phase, 'idle');
+  page.aiCalls.answer({ status: 'ok', reliable: true, fields: { company: '金发科技股份有限公司', title: '研发工程师' } });
+  const finished = await drafting;
+  assert.equal(finished.jobSave.phase, 'idle');
+  assert.equal((await page.status()).phase, 'idle');
+  assert.equal(page.saves().length, 0);
+});
+
+test('#172 a reliable AI answer lands in the review form for the user to confirm', async () => {
+  const page = await panelJobPage({ extraction: UNRELIABLE_JOB });
+  const drafting = page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  await tick();
+  page.aiCalls.answer({ status: 'ok', reason: 'ok', reliable: true, fields: {
+    company: '金发科技股份有限公司', title: '研发工程师-化工工艺研究方向', location: ''
+  } });
+  const { jobSave } = await drafting;
+  assert.equal(jobSave.phase, 'review');
+  assert.equal(jobSave.fields.title, '研发工程师-化工工艺研究方向');
+  assert.equal(jobSave.fields.sourceUrl, UNRELIABLE_JOB.sourceUrl);
+  assert.equal(jobSave.assist, null);
+  assert.equal(page.saves().length, 0);
+});
+
+test('#172 an offline or missing desktop is reported as pending or not saved, never as saved', async () => {
+  const cases = [
+    [{ status: 'queued', mode: 'unavailable', intent: { intentId: 'i-1' } }, 'pending', /待同步/],
+    [{ status: 'pending', intent: { intentId: 'i-1' } }, 'pending', /还没有保存到桌面/],
+    [{ status: 'not_queued', mode: 'not_installed' }, 'info', /没有找到桌面程序，这次没有保存/],
+    [{ status: 'not_queued', mode: 'not_paired', extensionId: 'diagjmploldedipjdenmecmjokckelkl' }, 'info', /还没有配对这个插件，这次没有保存/]
+  ];
+  for (const [answer, tone, text] of cases) {
+    const page = await panelJobPage({ desktop: message => message.type === 'DESKTOP_SAVE_JOB' ? answer : {} });
+    const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+    const done = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '后端开发工程师' });
+    assert.equal(done.jobSave.phase, 'result');
+    assert.equal(done.jobSave.result.tone, tone);
+    assert.match(done.jobSave.result.text, text);
+    assert.doesNotMatch(done.jobSave.result.text, /桌面已保存/);
+  }
+  // A plain failure keeps the reviewed form open with the reason, so the user can retry.
+  const failing = await panelJobPage({ desktop: message => { if (message.type === 'DESKTOP_SAVE_JOB') throw new Error('port closed'); return {}; } });
+  const { jobSave } = await failing.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const failed = await failing.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '后端开发工程师' });
+  assert.equal(failed.jobSave.phase, 'review');
+  assert.match(failed.jobSave.error, /没能保存/);
+  const retried = await failing.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '后端开发工程师' });
+  assert.equal(retried.jobSave.phase, 'review');
+  assert.equal(failing.saves().length, 2);
+});
+
+test('#172 a possible duplicate is resolved in the side panel: link existing, save new or later', async () => {
+  const exact = [{ applicationId: 'app-1', company: '星河科技', title: '后端开发工程师', stage: '已投递' }];
+  const desktop = message => {
+    if (message.type === 'DESKTOP_SAVE_JOB') return { status: 'needs_choice', intent: { intentId: 'intent-9' }, exact };
+    if (message.type === 'DESKTOP_BIND') return { status: 'saved' };
+    return {};
+  };
+  const choose = async (action, applicationId) => {
+    const page = await panelJobPage({ desktop });
+    const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+    const asked = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: '后端开发工程师' });
+    assert.equal(asked.jobSave.phase, 'choice');
+    assert.deepEqual(asked.jobSave.candidates, [{ applicationId: 'app-1', label: '星河科技 · 后端开发工程师（已投递）' }]);
+    assert.equal(JSON.stringify(asked.jobSave).includes('intent-9'), false, 'the intent id stays in the page');
+    const reply = await page.ask({ type: 'RESUME_PANEL_SAVE_CHOICE', draftId: jobSave.draftId, action, applicationId });
+    return { page, reply };
+  };
+
+  const linked = await choose('existing', 'app-1');
+  assert.deepEqual(plain(linked.page.binds()), [{ type: 'DESKTOP_BIND', intentId: 'intent-9', applicationId: 'app-1' }]);
+  assert.equal(linked.reply.jobSave.phase, 'result');
+  assert.match(linked.reply.jobSave.result.text, /桌面已保存/);
+
+  const separate = await choose('new');
+  assert.deepEqual(plain(separate.page.binds()), [{ type: 'DESKTOP_BIND', intentId: 'intent-9', applicationId: null }]);
+
+  const later = await choose('later');
+  assert.equal(later.page.binds().length, 0);
+  assert.equal(later.reply.jobSave.result.tone, 'pending');
+  assert.match(later.reply.jobSave.result.text, /尚未写入桌面/);
+
+  const forged = await choose('existing', 'app-not-offered');
+  assert.equal(forged.reply.ok, false, 'only an offered application can be linked');
+  assert.equal(forged.page.binds().length, 0);
+});
+
+test('#172 "save again" after a duplicate resends the confirmed fields with force', async () => {
+  const page = await panelJobPage({ desktop: (message, sent) => message.type === 'DESKTOP_SAVE_JOB'
+    ? (sent.filter(item => item.type === 'DESKTOP_SAVE_JOB').length === 1 ? { status: 'duplicate', recent: true } : { status: 'saved' }) : {} });
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const dup = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, company: '星河科技', title: 'Java 后端' });
+  assert.equal(dup.jobSave.result.offerForce, true);
+  const again = await page.ask({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId, force: true });
+  assert.equal(again.ok, true);
+  assert.equal(page.saves().length, 2);
+  assert.equal(page.saves()[1].force, true);
+  assert.equal(page.saves()[1].fields.title, 'Java 后端');
+  assert.equal(page.saves()[1].fields.dedupeUrl, RELIABLE_JOB.dedupeUrl);
+});
+
+test('#172 the old page overlay stays available as the fallback path', async () => {
+  const { hooks, listeners } = loadContentScript();
+  let clicked = 0;
+  const panel = { classList: createClassList(), querySelector: () => ({ textContent: '', setAttribute() {} }) };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      if (selector === '.resume-pro') return panel;
+      if (selector === '.resume-pro__collapse') return { setAttribute() {} };
+      if (selector === '#resume-pro-save-job') return { click() { clicked += 1; } };
+      return null;
+    }
+  });
+  let reply;
+  listeners.runtimeMessage[0]({ type: 'RESUME_PANEL_ADVANCED', action: 'save' }, {}, value => { reply = value; });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(reply.ok, true);
+  assert.equal(panel.classList.contains('is-legacy-open'), true);
+  assert.equal(clicked, 1, 'the old form still opens from its own button');
+});

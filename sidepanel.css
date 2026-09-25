@@ -61,6 +61,29 @@ button { cursor: pointer; }
 .offer-check { display: flex; align-items: flex-start; gap: 6px; margin-top: 9px; color: var(--muted); font-size: 11px; }
 .offer-check input { margin-top: 3px; }
 .desktop-status { margin-top: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+.job-save { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.job-save-button { width: 100%; min-height: 40px; border: 1px solid var(--accent); border-radius: 8px; background: #fff; color: var(--accent); font-weight: 650; }
+.job-save-button:hover { background: var(--accent-pale); }
+.job-save-button:disabled { opacity: .6; cursor: default; }
+.job-card { margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 12px; }
+.job-card p { margin: 0; }
+.job-card__title { margin: 0 0 6px !important; font-weight: 650; color: var(--ink); }
+.job-card.is-success { border-color: #a9c6bf; background: var(--accent-pale); color: #315e56; }
+.job-card.is-pending, .job-card.is-info { border-color: #e7d9b1; background: #fff8e7; color: #5b4820; }
+.job-card.is-warn { border-color: #edc5c5; background: #fceeee; color: #b44747; }
+.job-label { display: block; margin: 8px 0 4px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.job-input { display: block; width: 100%; min-height: 35px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; }
+.job-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-pale); outline: 0; }
+.job-input[readonly] { background: var(--bg); color: var(--muted); }
+.job-input[aria-invalid="true"] { border-color: #d98c8c; }
+.job-note { margin-top: 7px !important; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.job-error { margin-top: 7px !important; color: #b44747; font-size: 12px; font-weight: 600; }
+.job-fragments { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 11px; line-height: 1.5; word-break: break-all; }
+.job-link { margin-top: 8px; padding: 2px 0; border: 0; background: transparent; color: #286d62; font-size: 12px; font-weight: 600; }
+.job-candidates { display: grid; gap: 6px; margin-top: 8px; }
+.job-candidates button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); text-align: left; font-size: 12px; }
+.job-candidates button:hover { border-color: #a9c6bf; background: #f8faf9; }
+.offer-actions button:disabled { opacity: .6; cursor: default; }
 .dock-diagnostics { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .dock-diagnostics summary { cursor: pointer; }
 .dock-diagnostics textarea { display: block; width: 100%; margin-top: 7px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font: 11px/1.6 ui-monospace, monospace; resize: vertical; }

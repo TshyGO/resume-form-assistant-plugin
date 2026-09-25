@@ -14,7 +14,6 @@
           <summary aria-label="更多工具">···</summary>
           <div class="dock-tools__menu">
             <button type="button" data-advanced="repeat">AI 辅助新增条目（先预览）</button>
-            <button type="button" data-advanced="save">保存岗位到桌面端</button>
             <button type="button" data-advanced="submit">确认已投递</button>
             <button type="button" data-advanced="close">收起网页高级控件</button>
           </div>
@@ -48,6 +47,51 @@
           <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
           <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
           <p class="safety-note">填写后请核对网页内容，插件不会自动提交</p>
+
+          <section id="job-save" class="job-save" aria-label="保存岗位到桌面端">
+            <button class="job-save-button" id="job-save-button" type="button">保存岗位到桌面端</button>
+            <div id="job-save-progress" class="job-card" role="status" hidden>
+              <p id="job-save-progress-text" class="job-card__title"></p>
+              <p id="job-save-progress-count" class="job-note"></p>
+              <ol id="job-save-fragments" class="job-fragments"></ol>
+              <button id="job-save-stop" class="job-link" type="button">取消识别</button>
+            </div>
+            <form id="job-save-form" class="job-card" novalidate hidden>
+              <p class="job-card__title">核对岗位信息</p>
+              <label class="job-label" for="job-save-company">公司名称</label>
+              <input id="job-save-company" class="job-input" type="text" autocomplete="off" required>
+              <label class="job-label" for="job-save-title">岗位名称</label>
+              <input id="job-save-title" class="job-input" type="text" autocomplete="off" required>
+              <label class="job-label" for="job-save-url">来源网址</label>
+              <input id="job-save-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
+              <p id="job-save-note" class="job-note"></p>
+              <p id="job-save-error" class="job-error" role="alert" hidden></p>
+              <button id="job-save-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
+              <div class="offer-actions">
+                <button id="job-save-confirm" type="submit">确定保存</button>
+                <button id="job-save-cancel" type="button">取消</button>
+              </div>
+              <p class="job-note">只有点「确定保存」才会写入桌面；不会提交网申。</p>
+            </form>
+            <div id="job-save-choice" class="job-card" hidden>
+              <p class="job-card__title">桌面里可能已有这个岗位</p>
+              <p class="job-note">要关联已有岗位，还是另存为新的一条？</p>
+              <div id="job-save-candidates" class="job-candidates"></div>
+              <div class="offer-actions">
+                <button id="job-save-new" type="button">另存为新的岗位</button>
+                <button id="job-save-later" type="button">稍后处理</button>
+              </div>
+            </div>
+            <div id="job-save-result" class="job-card" role="status" hidden>
+              <p id="job-save-result-text"></p>
+              <p id="job-save-result-hint" class="job-note" hidden></p>
+              <div class="offer-actions">
+                <button id="job-save-again" type="button" hidden>再存一次</button>
+                <button id="job-save-copy-id" type="button" hidden>复制扩展 ID</button>
+                <button id="job-save-dismiss" type="button">知道了</button>
+              </div>
+            </div>
+          </section>
           <div id="fill-result" class="fill-result" role="status" hidden></div>
           <div id="profile-offer" class="offer-card" hidden>
             <p id="profile-offer-text"></p>
