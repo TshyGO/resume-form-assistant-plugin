@@ -509,6 +509,16 @@ test("a desktop without AI settings opens the form with the reason and a setting
     '桌面还没有配置 AI 服务商，或当前服务商没有 Key。请手动补全后再保存。');
   assert.equal(page.openAi.hidden, false);
 
+  // The host answers this way when the worker itself has died; the reason still shows.
+  page.form.hidden = true;
+  context.self.ResumeProAIClient.send = async () => {
+    calls += 1;
+    return { success: false, error: 'AI 请求进程已中断，请重新加载扩展。' };
+  };
+  await hooks.handleSaveJobClick();
+  assert.equal(page.inputs['#resume-pro-save-note'].textContent, 'AI 请求进程已中断，请重新加载扩展。请手动补全后再保存。');
+  assert.equal(page.openAi.hidden, true);
+
   // Another failure without a settings link hides the button again.
   page.form.hidden = true;
   context.self.ResumeProAIClient.send = async () => {
@@ -516,7 +526,7 @@ test("a desktop without AI settings opens the form with the reason and a setting
     return { status: 'manual', reason: 'timeout', reliable: false, fields: {} };
   };
   await hooks.handleSaveJobClick();
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(page.inputs['#resume-pro-save-note'].textContent, copy.describeManualSave('timeout'));
   assert.equal(page.openAi.hidden, true);
 });

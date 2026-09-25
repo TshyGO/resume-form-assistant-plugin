@@ -2612,7 +2612,9 @@
     if (token !== extractToken) return { action: "ignore" };
     const after = saveFlow.afterAssist(reply, fallback);
     if (after.action === "form") {
-      after.note = copy.describeManualSave(after.reason, typeof reply?.note === "string" ? reply.note : "");
+      // `note` is a desktop failure from the worker; `error` is the host saying the worker itself died.
+      const detail = [reply?.note, reply?.error].find(value => typeof value === "string" && value) || "";
+      after.note = copy.describeManualSave(after.reason, detail);
       if (reply?.openView === "settings-ai") after.openView = "settings-ai";
     }
     return after;
