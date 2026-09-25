@@ -40,7 +40,12 @@ export function createAi({ session, store, port, uuid, now }) {
     }
     try { validateResponseForRequest(reply?.response, request); }
     catch (error) { return { ok: false, reason: wireReason(error?.code) }; }
-    if (!reply.response.ok) return { ok: false, reason: wireReason(reply.response.error?.code) };
+    if (!reply.response.ok) {
+      const code = reply.response.error?.code;
+      // The request already passed this plugin's copy of the schema, so a desktop that
+      // rejects its payload is running an older schema (e.g. one without this purpose).
+      return { ok: false, reason: code === 'invalid_payload' ? 'incompatible' : wireReason(code) };
+    }
     const payload = reply.response.payload;
     if (payload.status === 'ok') return { ok: true, text: payload.text };
     return {

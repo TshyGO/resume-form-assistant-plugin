@@ -30,7 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ready: !failed });
     return false;
   }
-  if (!["AI_FILL", "AI_PLAN_REPEAT", "CANCEL_AI_FILL"].includes(message?.type)) return false;
+  if (!["AI_FILL", "AI_PLAN_REPEAT", "CANCEL_AI_FILL", "AI_EXTRACT_JOB"].includes(message?.type)) return false;
   if (failed) {
     sendResponse({ success: false, error: "AI 请求进程已中断，请重新加载扩展。" });
     return false;

@@ -252,7 +252,8 @@ export const SCHEMA_DATA = {
           "type": "string",
           "enum": [
             "fill",
-            "plan"
+            "plan",
+            "extract_job"
           ]
         },
         "system": {

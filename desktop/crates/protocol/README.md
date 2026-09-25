@@ -51,7 +51,7 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | --- | --- |
 | `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
 | `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。不走 `message_receipts`。 |
-| `ai.complete` | 不带档案身份；插件传提示词，桌面用当前服务商和凭据发出。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
+| `ai.complete` | 不带档案身份；插件传提示词和用途（`fill`、`plan`、`extract_job`），桌面用当前服务商和凭据发出，不按用途区分处理。旧桌面不认识新用途时以 `invalid_payload` 拒收，插件提示更新桌面。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 

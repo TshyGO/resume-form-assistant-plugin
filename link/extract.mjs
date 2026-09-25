@@ -80,8 +80,8 @@ export function extractJobFields(doc, href) {
     assistReasons.push('title_unconfirmed');
   }
 
-  // Nothing sends these yet. They are the numbered page snippets a later desktop-routed AI
-  // fallback (#130 follow-up) may use when this local result is unreliable.
+  // Numbered page snippets. When this local result is unreliable, save-flow sends them to
+  // the desktop's AI through job-extract.mjs; nothing else from the page goes along.
   const fragments = buildFragments({
     beisenApply,
     labeledCompanies,

@@ -57,7 +57,7 @@ export interface ResponseEnvelope {
 }
 
 export interface AiCompletePayload {
-  purpose: "fill" | "plan";
+  purpose: "fill" | "plan" | "extract_job";
   /** maxLength: 8000 */
   system: string;
   /** maxLength: 60000 */

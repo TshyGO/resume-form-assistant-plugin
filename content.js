@@ -328,6 +328,7 @@
         <div class="resume-pro__divider"></div>
         <div class="resume-pro__desktop">
           <button class="resume-pro__manager-button" id="resume-pro-save-job" type="button">保存岗位到桌面端</button>
+          <p class="resume-pro__footer-tip">页面信息不全时，会经桌面把几段岗位文字发给 AI 识别，不会发送表单或简历内容。</p>
           <button class="resume-pro__manager-button" id="resume-pro-confirm-submit" type="button">确认已投递</button>
           <form class="resume-pro__save-form" id="resume-pro-save-form" hidden>
             <label class="resume-pro__field">
@@ -350,8 +351,16 @@
             <div class="resume-pro__save-actions">
               <button class="resume-pro__ai-button" type="submit">确认</button>
               <button class="resume-pro__manager-button" type="button" id="resume-pro-save-cancel">取消</button>
+              <button class="resume-pro__manager-button" type="button" id="resume-pro-save-open-ai" hidden>打开桌面 AI 设置</button>
             </div>
           </form>
+          <div class="resume-pro__save-form" id="resume-pro-job-assist" hidden>
+            <p class="resume-pro__save-note" id="resume-pro-job-assist-note"></p>
+            <ul class="resume-pro__candidate-list" id="resume-pro-job-assist-fragments"></ul>
+            <div class="resume-pro__save-actions">
+              <button class="resume-pro__manager-button" type="button" id="resume-pro-job-assist-cancel">取消识别</button>
+            </div>
+          </div>
           <div class="resume-pro__candidates" id="resume-pro-candidates" hidden>
             <p class="resume-pro__save-note" id="resume-pro-candidates-note"></p>
             <div class="resume-pro__candidate-list" id="resume-pro-candidate-list"></div>
@@ -2485,6 +2494,8 @@
   let extractInFlight = false;
   let lastSubmittedFields = null;
   let extractToken = 0;
+  let assistRequestId = null;
+  let assistFallback = null;
   // The finished fill the card is offering to archive, and a copy of the template it used.
   // Held only until the user answers; the template copy leaves only if the box is ticked.
   let pendingFill = null;
@@ -2508,6 +2519,8 @@
     sidebar.querySelector("#resume-pro-save-job")?.addEventListener("click", handleSaveJobClick);
     sidebar.querySelector("#resume-pro-confirm-submit")?.addEventListener("click", handleConfirmSubmitClick);
     sidebar.querySelector("#resume-pro-save-cancel")?.addEventListener("click", closeSaveForm);
+    sidebar.querySelector("#resume-pro-job-assist-cancel")?.addEventListener("click", cancelJobAssist);
+    sidebar.querySelector("#resume-pro-save-open-ai")?.addEventListener("click", () => openManager("settings-ai"));
     sidebar.querySelector("#resume-pro-fill-record-save")?.addEventListener("click", handleRecordFillClick);
     sidebar.querySelector("#resume-pro-fill-record-skip")?.addEventListener("click", closeFillRecord);
     sidebar.querySelector("#resume-pro-save-form")?.addEventListener("submit", (event) => {
@@ -2536,6 +2549,14 @@
         openSaveForm(step.fields, copy.describeReviewSave());
         return;
       }
+      if (step.action === "assist") {
+        assistFallback = step.fields;
+        const outcome = await runJobAssist(step.fragments, step.fields, token);
+        if (token !== extractToken || outcome.action === "ignore") return;
+        openSaveForm(outcome.fields, outcome.action === "commit" ? copy.describeReviewSave() : outcome.note,
+          { openView: outcome.openView });
+        return;
+      }
       openSaveForm(step.fields, copy.describeManualSave(step.reason));
     } catch (error) {
       if (token !== extractToken) return;
@@ -2552,7 +2573,75 @@
     }
   }
 
-  function openSaveForm(fields, note) {
+  // The worker asks the desktop's AI and gives up after 25 seconds itself; this timer only
+  // covers a worker that never answers. There is no automatic retry either way.
+  async function runJobAssist(fragments, fallback, token) {
+    const { saveFlow, copy } = await loadDesktopModules();
+    showJobAssist(copy.describeJobAssist(saveFlow.assistDisclosure(fragments)));
+    const requestId = newRequestId();
+    assistRequestId = requestId;
+    let reply;
+    let timer;
+    try {
+      reply = await Promise.race([
+        self.ResumeProAIClient.send({ type: "AI_EXTRACT_JOB", requestId, fragments }),
+        new Promise(resolve => {
+          timer = setTimeout(() => {
+            self.ResumeProAIClient.cancel(requestId).catch(() => {});
+            resolve({ status: "manual", reason: "timeout", reliable: false, fields: {} });
+          }, 30000);
+        })
+      ]);
+    } catch {
+      reply = { status: "manual", reason: "internal", reliable: false, fields: {} };
+    } finally {
+      clearTimeout(timer);
+      if (assistRequestId === requestId) assistRequestId = null;
+      if (token === extractToken) hideJobAssist();
+    }
+    if (token !== extractToken) return { action: "ignore" };
+    const after = saveFlow.afterAssist(reply, fallback);
+    if (after.action === "form") {
+      after.note = copy.describeManualSave(after.reason, typeof reply?.note === "string" ? reply.note : "");
+      if (reply?.openView === "settings-ai") after.openView = "settings-ai";
+    }
+    return after;
+  }
+
+  function showJobAssist(described) {
+    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
+    if (!panel) return;
+    panel.querySelector("#resume-pro-job-assist-note").textContent = described.text;
+    const list = panel.querySelector("#resume-pro-job-assist-fragments");
+    list.textContent = "";
+    for (const line of described.fragments || []) {
+      const item = document.createElement("li");
+      item.textContent = line;
+      list.appendChild(item);
+    }
+    panel.hidden = false;
+  }
+
+  function hideJobAssist() {
+    const panel = shadowRoot?.querySelector("#resume-pro-job-assist");
+    if (panel) panel.hidden = true;
+  }
+
+  function cancelJobAssist() {
+    const token = ++extractToken;
+    extractInFlight = false;
+    if (assistRequestId) self.ResumeProAIClient.cancel(assistRequestId).catch(() => {});
+    assistRequestId = null;
+    const button = shadowRoot?.querySelector("#resume-pro-save-job");
+    if (button) button.disabled = saveInFlight;
+    hideJobAssist();
+    loadDesktopModules().then(({ copy }) => {
+      if (token !== extractToken) return;
+      openSaveForm(assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" }, copy.describeManualSave("cancelled"));
+    });
+  }
+
+  function openSaveForm(fields, note, { openView = null } = {}) {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
     if (!form) return;
     pendingFields = fields;
@@ -2561,6 +2650,8 @@
     form.querySelector("#resume-pro-save-location").value = fields.location || "";
     form.querySelector("#resume-pro-save-url").value = fields.sourceUrl || "";
     form.querySelector("#resume-pro-save-note").textContent = note;
+    const openAi = form.querySelector("#resume-pro-save-open-ai");
+    if (openAi) openAi.hidden = openView !== "settings-ai";
     form.hidden = false;
   }
 
@@ -2793,7 +2884,9 @@
   function closeSaveForm() {
     const form = shadowRoot?.querySelector("#resume-pro-save-form");
     if (form) form.hidden = true;
+    hideJobAssist();
     pendingFields = null;
+    assistFallback = null;
   }
 
   async function submitSaveForm({ force, fields: retryFields = null }) {
@@ -3183,6 +3276,7 @@
       getHighlightTargets,
       handleAiFillClick,
       handleSaveJobClick,
+      cancelJobAssist,
       submitSaveForm,
       describeCommit,
       presentSaveResult,

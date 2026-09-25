@@ -67,7 +67,7 @@ export function assertPluginOnlyArchive(entries) {
 // while release.yml still packed a file list with no link operand. The zip stayed
 // allowlist-clean and the service worker would have failed to load.
 // A file can enter the running extension through manifest entry points or the
-// six reference mechanisms below, and every one of them has to be in
+// seven reference mechanisms below, and every one of them has to be in
 // the archive. Missing any makes this check confidently wrong: it reports a package as
 // complete while the extension breaks on load, which is worse than not checking.
 //
@@ -77,22 +77,25 @@ export function assertPluginOnlyArchive(entries) {
 //   4. `<script src>` / `<link href>`   how popup.html and ai-host.html load code
 //   5. `new Worker('ai-worker.js')`     plus the importScripts() it pulls in
 //   6. `getURL('vendor/pdfjs/cmaps/')`  a directory the runtime appends filenames to
+//   7. `new URL('link/x.mjs', self.location.href)`  how ai-worker.js, which has no
+//      chrome.runtime, finds a module to import()
 //
-// (5) and (6) resolve against the extension root rather than the referring file: a
-// Worker URL resolves against its document and importScripts against the worker
-// script, and every HTML file and worker in this extension sits at the root.
+// (5), (6) and (7) resolve against the extension root rather than the referring file: a
+// Worker URL resolves against its document, importScripts and self.location against the
+// worker script, and every HTML file and worker in this extension sits at the root.
 const RELATIVE_FROM = /from\s*['"](\.[^'"]+)['"]/g;
 const RELATIVE_BARE = /(?:^|[;{}\s])import\s*['"](\.[^'"]+)['"]/g;
 const RELATIVE_DYNAMIC = /import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
 const RUNTIME_URL = /getURL\(\s*['"]([^'"]+)['"]\s*\)/g;
 const HTML_ASSET = /<(?:script[^>]*\ssrc|link[^>]*\shref)\s*=\s*['"]([^'"]+)['"]/gi;
 const WORKER_CTOR = /new\s+(?:Shared)?Worker\s*\(\s*['"]([^'"]+)['"]/g;
+const WORKER_URL = /new\s+URL\s*\(\s*['"]([^'"]+)['"]\s*,\s*self\.location\b/g;
 // importScripts takes any number of scripts in one call.
 const IMPORT_SCRIPTS = /importScripts\s*\(([^)]*)\)/g;
 const QUOTED = /['"]([^'"]+)['"]/g;
 
 const RELATIVE_PATTERNS = [RELATIVE_FROM, RELATIVE_BARE, RELATIVE_DYNAMIC];
-const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET, WORKER_CTOR];
+const ROOT_PATTERNS = [RUNTIME_URL, HTML_ASSET, WORKER_CTOR, WORKER_URL];
 
 function matchAll(pattern, text) {
   pattern.lastIndex = 0;

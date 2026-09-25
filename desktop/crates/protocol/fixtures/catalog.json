@@ -69,6 +69,7 @@
     {"id": "resume-read-ok", "path": "requests/resume-read-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "resume-update-ok", "path": "requests/resume-update-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "ai-complete-ok", "path": "requests/ai-complete-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "ai-complete-extract-job-ok", "path": "requests/ai-complete-extract-job-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "ui-open-ok", "path": "requests/ui-open-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "legacy-import-ok", "path": "requests/legacy-import-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "resume-update-unknown-op", "path": "requests/resume-update-unknown-op.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
