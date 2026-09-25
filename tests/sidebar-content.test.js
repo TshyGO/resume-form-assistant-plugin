@@ -245,6 +245,26 @@ test("native side panel status exposes pending offers and diagnostics", () => {
   assert.equal(profileOffer.hidden, true);
 });
 
+test("an uninitialised page controller is not reported as an active AI fill", () => {
+  const { hooks, listeners } = loadContentScript();
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-ai-fill"
+        ? { disabled: true, textContent: "一键 AI 填写" }
+        : null;
+    }
+  });
+
+  let response;
+  listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+  assert.equal(response.ready, true);
+  assert.equal(response.busy, false, "disabled-before-read must not deadlock the native side panel");
+
+  hooks.setAiBusy(true);
+  listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+  assert.equal(response.busy, true, "a real AI run must still disable the native side panel action");
+});
+
 test("native side panel fill command rereads the desktop before invoking the page controller", async () => {
   const { hooks, listeners } = loadContentScript();
   let clicks = 0;

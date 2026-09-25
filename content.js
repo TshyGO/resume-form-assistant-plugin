@@ -81,7 +81,10 @@
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
       sendResponse({
         ready: Boolean(button),
-        busy: Boolean(button?.disabled),
+        // `disabled` also covers the controller's pre-read state. Treating that as
+        // "busy" deadlocks the native side panel: it cannot send the fill command
+        // which performs the desktop reread below. Only an active AI run is busy.
+        busy: state.aiBusy,
         phase: button?.textContent || "",
         status: status?.classList.contains("is-visible") ? status.textContent : "",
         statusKind: status?.classList.contains("is-error") ? "error" : "success",
@@ -3327,6 +3330,9 @@
       },
       setCurrentStore(store) {
         state.currentStore = store;
+      },
+      setAiBusy(busy) {
+        state.aiBusy = Boolean(busy);
       },
       setProfileOffer({ candidates, labels, fields }) {
         state.profileOfferCandidates = candidates;
