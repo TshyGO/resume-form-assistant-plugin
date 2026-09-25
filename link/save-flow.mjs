@@ -23,6 +23,8 @@ const MAX_FRAGMENTS = 8;
 const MAX_FRAGMENT_CHARS = 160;
 const PREFERENCE = /意向工作地点|期望工作地点|期望工作城市|期望城市|意向城市|面试站点|面试地点/;
 const SENSITIVE = /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b1[3-9]\d{9}\b|\b\d{17}[\dXx]\b|cookie|authorization|bearer\s+/i;
+// A link without a scheme still gives itself away by a query string or a credential key.
+const CREDENTIAL = /[?&][\w.-]+=|(?:access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password|passwd|session[_-]?id|token)\s*[=:]/i;
 
 export function nextSaveStep(extraction) {
   const fields = publicFields(extraction);
@@ -50,7 +52,7 @@ export function allowFragments(fragments) {
     if (!Number.isInteger(id) || id < 1 || id > MAX_FRAGMENTS) continue;
     if (!SOURCES.has(source) || !ROLES.has(role)) continue;
     if (!text || text.length > MAX_FRAGMENT_CHARS) continue;
-    if (PREFERENCE.test(text) || SENSITIVE.test(text) || text.includes('://')) continue;
+    if (PREFERENCE.test(text) || SENSITIVE.test(text) || CREDENTIAL.test(text) || text.includes('://')) continue;
     if (kept.some(item => item.id === id)) continue;
     kept.push({ id, source, role, text });
     if (kept.length >= MAX_FRAGMENTS) break;

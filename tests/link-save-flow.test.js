@@ -46,6 +46,23 @@ test('the panel gets exactly the fragments that will be sent', async () => {
   assert.deepEqual(step.fragments, allowFragments(fragments), 'the worker filters with the same function');
 });
 
+test('link-like and credential-like text is not sent even without a scheme', async () => {
+  const { allowFragments } = await load();
+  const page = text => ({ id: 1, source: 'document.title', role: 'page-title', text });
+  for (const text of [
+    'jobs.example.test/apply?job=42',
+    '投递 - access_token=abc123',
+    'api_key: sk-demo',
+    'Password=hunter2',
+    '工艺工程师 session_id=9f'
+  ]) {
+    assert.deepEqual(allowFragments([page(text)]), [], text);
+  }
+  for (const text of ['Node.js/前端开发工程师', '研发工程师-化工工艺研究方向', '星河科技股份有限公司']) {
+    assert.equal(allowFragments([page(text)]).length, 1, `${text} is an ordinary title`);
+  }
+});
+
 test('when every fragment is filtered out, the form opens without asking the AI', async () => {
   const { nextSaveStep } = await load();
   const step = nextSaveStep({
