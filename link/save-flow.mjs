@@ -79,7 +79,8 @@ export function afterAssist(result, fallback) {
     const fields = {
       company: clean(result.fields.company),
       title: clean(result.fields.title),
-      location: clean(result.fields.location),
+      // The model may leave out a location extraction already had from the page.
+      location: clean(result.fields.location) || base.location,
       sourceUrl: base.sourceUrl,
       dedupeUrl: base.dedupeUrl
     };

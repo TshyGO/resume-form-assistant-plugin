@@ -142,6 +142,21 @@ test('a model answer with no page evidence does not become fields', async () => 
   assert.equal(judged.fields.location, '');
 });
 
+test('a company without evidence is dropped alone; title and location with evidence stay', async () => {
+  const { judgeSuggestion } = await loadAssist();
+  const fragments = [
+    { id: 1, source: 'jobposting-company', role: 'company', text: '金发科技股份有限公司' },
+    { id: 2, source: 'jobposting-title', role: 'job-title', text: '研发工程师' },
+    { id: 3, source: 'jobposting-location', role: 'job-location', text: '广州' }
+  ];
+  const judged = judgeSuggestion({
+    company: '腾讯', title: '研发工程师', location: '广州',
+    companyFragment: 1, titleFragment: 2, locationFragment: 3
+  }, fragments);
+  assert.equal(judged.reason, 'no_evidence');
+  assert.deepEqual(judged.fields, { company: '', title: '研发工程师', location: '广州' });
+});
+
 test('an apply label cannot become part of the saved job title', async () => {
   const { judgeSuggestion } = await loadAssist();
   const fragments = [

@@ -93,10 +93,11 @@ export function judgeSuggestion(parsed, fragments) {
   const title = judgeField('title', parsed.title, parsed.titleFragment, allowed);
   const location = judgeField('location', parsed.location, parsed.locationFragment, allowed);
   if (company.rejected || title.rejected) {
+    // Only the fields without evidence are dropped; a location that has it stays.
     return manual('no_evidence', {
       company: company.rejected ? '' : company.value,
       title: title.rejected ? '' : title.value,
-      location: ''
+      location: location.rejected ? '' : location.value
     });
   }
   if (location.rejected) {

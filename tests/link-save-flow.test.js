@@ -129,6 +129,16 @@ test('a reliable AI answer is reviewed with the locally redacted URLs', async ()
   });
 });
 
+test('a reliable AI answer without a location keeps the one extraction found', async () => {
+  const { afterAssist } = await load();
+  const step = afterAssist(
+    { status: 'ok', reliable: true, fields: { company: '星河科技', title: '工艺工程师', location: '' } },
+    { company: '', title: '', location: '广州', sourceUrl: '', dedupeUrl: '' }
+  );
+  assert.equal(step.action, 'commit');
+  assert.equal(step.fields.location, '广州');
+});
+
 test('a failed or partial AI answer opens the form with what is known', async () => {
   const { afterAssist } = await load();
   const fallback = { company: '金发科技股份有限公司', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
