@@ -51,6 +51,9 @@ test('link-like and credential-like text is not sent even without a scheme', asy
   const page = text => ({ id: 1, source: 'document.title', role: 'page-title', text });
   for (const text of [
     'jobs.example.test/apply?job=42',
+    'jobs.example.com/apply',
+    '投递入口 kingfa.zhiye.com/form',
+    'example.cn:8443/careers',
     '投递 - access_token=abc123',
     'api_key: sk-demo',
     'Password=hunter2',
@@ -58,7 +61,7 @@ test('link-like and credential-like text is not sent even without a scheme', asy
   ]) {
     assert.deepEqual(allowFragments([page(text)]), [], text);
   }
-  for (const text of ['Node.js/前端开发工程师', '研发工程师-化工工艺研究方向', '星河科技股份有限公司']) {
+  for (const text of ['Node.js/前端开发工程师', 'Node.js/React 开发工程师', 'ASP.NET/C# 工程师', '研发工程师-化工工艺研究方向', '星河科技股份有限公司']) {
     assert.equal(allowFragments([page(text)]).length, 1, `${text} is an ordinary title`);
   }
 });

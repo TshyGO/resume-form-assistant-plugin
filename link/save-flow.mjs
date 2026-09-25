@@ -25,6 +25,9 @@ const PREFERENCE = /意向工作地点|期望工作地点|期望工作城市|期
 const SENSITIVE = /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b1[3-9]\d{9}\b|\b\d{17}[\dXx]\b|cookie|authorization|bearer\s+/i;
 // A link without a scheme still gives itself away by a query string or a credential key.
 const CREDENTIAL = /[?&][\w.-]+=|(?:access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password|passwd|session[_-]?id|token)\s*[=:]/i;
+// A host and path such as jobs.example.com/apply. Lowercase common suffixes only, so a
+// job title like "Node.js/React 开发" or "ASP.NET/C#" still goes through.
+const BARE_LINK = /\b(?:[a-z0-9-]+\.)+(?:com|cn|net|org|io|co|cc|top|xyz|info|biz|gov|edu|app|dev|site|tech|work|jobs|me|hk|tw|jp|uk|us)(?::\d+)?[/?#]/;
 
 export function nextSaveStep(extraction) {
   const fields = publicFields(extraction);
@@ -52,7 +55,7 @@ export function allowFragments(fragments) {
     if (!Number.isInteger(id) || id < 1 || id > MAX_FRAGMENTS) continue;
     if (!SOURCES.has(source) || !ROLES.has(role)) continue;
     if (!text || text.length > MAX_FRAGMENT_CHARS) continue;
-    if (PREFERENCE.test(text) || SENSITIVE.test(text) || CREDENTIAL.test(text) || text.includes('://')) continue;
+    if (PREFERENCE.test(text) || SENSITIVE.test(text) || CREDENTIAL.test(text) || text.includes('://') || BARE_LINK.test(text)) continue;
     if (kept.some(item => item.id === id)) continue;
     kept.push({ id, source, role, text });
     if (kept.length >= MAX_FRAGMENTS) break;

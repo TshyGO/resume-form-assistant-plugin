@@ -2651,10 +2651,13 @@
     const button = shadowRoot?.querySelector("#resume-pro-save-job");
     if (button) button.disabled = saveInFlight;
     hideJobAssist();
-    loadDesktopModules().then(({ copy }) => {
-      if (token !== extractToken) return;
-      openSaveForm(assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" }, copy.describeManualSave("cancelled"));
-    });
+    const fields = assistFallback || pendingFields || { company: "", title: "", location: "", sourceUrl: "", dedupeUrl: "" };
+    // The panel is already gone; the form has to open either way or the user is left with nothing.
+    loadDesktopModules().then(({ copy }) => copy.describeManualSave("cancelled"), () => "已取消识别。请手动补全后再保存。")
+      .then(note => {
+        if (token !== extractToken) return;
+        openSaveForm(fields, note);
+      });
   }
 
   function openSaveForm(fields, note, { openView = null } = {}) {

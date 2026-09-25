@@ -96,7 +96,7 @@ const MANUAL_SAVE = {
   internal: '识别出错了。请手动补全后再保存。',
   format: 'AI 返回的内容无法使用。请手动补全后再保存。',
   no_evidence: 'AI 给出的结果在页面上找不到依据，没有采用。请手动补全后再保存。',
-  location_no_evidence: '工作地点在页面上找不到依据，已留空。请核对后再保存。',
+  location_no_evidence: 'AI 给的工作地点在页面上找不到依据，没有采用。请核对后再保存。',
   in_flight: '上一次识别还没结束。请手动补全后再保存。',
   swapped: '页面把公司和岗位写得不清楚，请核对后保存。',
   company_conflict: '页面出现多个不同的公司名，请确认这次投递的公司。',
