@@ -405,7 +405,8 @@ function saveJobPage(hooks) {
   const assistList = { set textContent(value) { assistItems.length = 0; }, appendChild(item) { assistItems.push(item.textContent); } };
   const assistPanel = {
     hidden: true,
-    querySelector: key => key === '#resume-pro-job-assist-note' ? assistNote : assistList
+    querySelector: key => key === '#resume-pro-job-assist-note' ? assistNote : assistList,
+    querySelectorAll: () => assistItems.map(text => ({ textContent: text }))
   };
   hooks.setShadowRoot({
     querySelector(selector) {
@@ -518,6 +519,44 @@ test("a desktop without AI settings opens the form with the reason and a setting
   assert.equal(calls, 2);
   assert.equal(page.inputs['#resume-pro-save-note'].textContent, copy.describeManualSave('timeout'));
   assert.equal(page.openAi.hidden, true);
+});
+
+test("the native side panel sees a running recognition and can cancel it", async () => {
+  const { hooks, context, listeners } = loadContentScript();
+  const page = saveJobPage(hooks);
+  context.document.createElement = () => ({ textContent: '' });
+  const saveFlow = await import('../link/save-flow.mjs');
+  const copy = await import('../link/copy.mjs');
+  hooks.setDesktopModules({ extract: { extractJobFields: () => UNRELIABLE_JOB }, saveFlow, copy });
+  let answer;
+  const cancelled = [];
+  context.self.ResumeProAIClient = {
+    send: message => new Promise(resolve => { answer = resolve; }),
+    cancel: async requestId => { cancelled.push(requestId); return { cancelled: true }; }
+  };
+  // Replies are built inside the script's own realm; compare them as plain data.
+  const ask = message => {
+    let reply;
+    listeners.runtimeMessage[0](message, {}, value => { reply = value; });
+    return JSON.parse(JSON.stringify(reply));
+  };
+
+  const recognition = hooks.handleSaveJobClick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(ask({ type: 'RESUME_PANEL_STATUS' }).jobAssist, { fragments: 2 });
+
+  assert.deepEqual(ask({ type: 'RESUME_PANEL_ADVANCED', action: 'cancel-assist' }), { ok: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelled.length, 1, 'the desktop call is closed');
+  assert.equal(page.assistPanel.hidden, true);
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.inputs['#resume-pro-save-note'].textContent, copy.describeManualSave('cancelled'));
+  assert.equal(ask({ type: 'RESUME_PANEL_STATUS' }).jobAssist, null);
+  assert.deepEqual(ask({ type: 'RESUME_PANEL_ADVANCED', action: 'cancel-assist' }), { ok: false, error: '识别已经结束了。' });
+
+  answer({ status: 'ok', reliable: true, fields: { company: 'wrong', title: 'wrong' } });
+  await recognition;
+  assert.equal(page.inputs['#resume-pro-save-company'].value, UNRELIABLE_JOB.company, 'a late reply changes nothing');
 });
 
 test("cancelling job recognition allows immediate manual save and ignores a late AI reply", async () => {

@@ -78,6 +78,7 @@
       const snapshotOption = fillOffer?.querySelector("#resume-pro-fill-record-snapshot");
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+      const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
       sendResponse({
         ready: Boolean(button),
         busy: Boolean(button?.disabled),
@@ -91,7 +92,10 @@
         snapshotAvailable: Boolean(snapshotOption && !snapshotOption.disabled),
         desktopStatus: desktopStatus?.textContent || "",
         diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
-          ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : ""
+          ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : "",
+        // Job recognition runs in the page's controls; the side panel shows it and can cancel it.
+        jobAssist: jobAssist && !jobAssist.hidden
+          ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null
       });
       return false;
     }
@@ -146,6 +150,12 @@
       return false;
     }
     if (message.type === "RESUME_PANEL_ADVANCED") {
+      if (message.action === "cancel-assist") {
+        const running = Boolean(shadowRoot?.querySelector("#resume-pro-job-assist")?.hidden === false);
+        if (running) cancelJobAssist();
+        sendResponse(running ? { ok: true } : { ok: false, error: "识别已经结束了。" });
+        return false;
+      }
       if (message.action === "close") {
         shadowRoot?.querySelector(".resume-pro")?.classList.remove("is-legacy-open");
         sendResponse({ ok: true });

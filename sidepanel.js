@@ -4,6 +4,9 @@
     desktopConnection: document.getElementById("desktop-connection"),
     desktopConnectionText: document.getElementById("desktop-connection-text"),
     desktopConnectionAction: document.getElementById("desktop-connection-action"),
+    jobAssist: document.getElementById("job-assist"),
+    jobAssistText: document.getElementById("job-assist-text"),
+    jobAssistCancel: document.getElementById("job-assist-cancel"),
     templateSelect: document.getElementById("template-select"),
     configState: document.getElementById("config-state"),
     fillButton: document.getElementById("fill-button"),
@@ -187,6 +190,13 @@
     elements.cancelButton.hidden = !status?.canCancel;
   }
 
+  function renderJobAssist(assist) {
+    elements.jobAssist.hidden = !assist;
+    if (!assist) return;
+    const count = Number.isInteger(assist.fragments) && assist.fragments > 0 ? ` ${assist.fragments} 段` : "";
+    elements.jobAssistText.textContent = `正在用桌面的 AI 识别岗位，发送的${count}页面文字列在网页上。`;
+  }
+
   async function pollStatus() {
     if (statusPolling) return;
     statusPolling = true;
@@ -205,6 +215,7 @@
       if (!connected) currentTabId = null;
       lastPageStatus = connected ? response : null;
       updateFillAvailability(lastPageStatus);
+      renderJobAssist(connected ? response.jobAssist : null);
       if (connected && response.status) {
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
@@ -320,10 +331,15 @@
     const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
     const done = {
       close: "网页高级控件已收起。",
-      save: "请在网页上的高级控件中核对岗位。需要 AI 识别时，进度和取消按钮也在那里。"
+      save: "请在网页上的高级控件中核对岗位。"
     }[button.dataset.advanced] || "请在网页上的高级控件中继续操作。";
     toast(result?.ok ? done : result?.error || "无法打开工具。");
   }));
+  elements.jobAssistCancel.addEventListener("click", async () => {
+    const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: "cancel-assist" });
+    toast(result?.ok ? "已取消识别，请在网页表单里手动补全。" : result?.error || "无法取消识别。");
+    await pollStatus().catch(() => {});
+  });
   async function desktopAction(kind = "home") {
     if (kind === "download") {
       await chrome.tabs.create({ url: self.ResumeProResumeData.DOWNLOAD_URL });
