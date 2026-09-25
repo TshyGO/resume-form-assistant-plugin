@@ -431,14 +431,89 @@ fn v2_requests_keep_their_version_when_the_real_host_has_no_application() {
     }
 }
 
+/// How long the hidden desktop may take to open its archive.
+///
+/// Every run starts it on a brand-new data directory, so WebView2 has to build a new profile
+/// under `cache\webview`. Tauri creates the main window, and waits for WebView2 to start,
+/// before `setup` opens the archive, so `current.json` appears only after all of that. That
+/// takes about a second on a warm machine and has run past 10 seconds on a GitHub Windows
+/// runner. This budget only bounds a hang: a desktop that exits early is reported at once.
 #[cfg(windows)]
-struct HiddenApplication(std::process::Child);
+const HIDDEN_DESKTOP_STARTUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(windows)]
+struct HiddenApplication {
+    child: std::process::Child,
+    data_dir: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+impl HiddenApplication {
+    /// Start the real desktop with `--hidden` on `data_dir`. Its stderr goes to a file in
+    /// that directory, so a failed start can say what the desktop reported.
+    fn start(data_dir: &std::path::Path) -> Self {
+        let stderr = std::fs::File::create(data_dir.join("desktop-stderr.log")).unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_resume-pro-desktop"))
+            .arg("--hidden")
+            .env("RESUMEPRO_DATA_DIR", data_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("isolated hidden desktop must start");
+        HiddenApplication { child, data_dir: data_dir.to_path_buf() }
+    }
+
+    /// Wait for the desktop to open an archive and return the pointer it wrote.
+    fn wait_for_archive(&mut self) -> serde_json::Value {
+        let started = std::time::Instant::now();
+        loop {
+            if let Ok(bytes) = std::fs::read(self.data_dir.join("current.json")) {
+                if let Ok(value) = serde_json::from_slice(&bytes) {
+                    return value;
+                }
+            }
+            if let Some(status) = self.child.try_wait().expect("the desktop can be polled") {
+                // A second instance hands its launch to the running one and exits cleanly.
+                let hint = if status.success() {
+                    " (is another Resume Pro Desktop already running?)"
+                } else {
+                    ""
+                };
+                panic!(
+                    "the hidden desktop exited ({status}) before opening an archive{hint}\n{}",
+                    self.startup_report(started.elapsed())
+                );
+            }
+            if started.elapsed() >= HIDDEN_DESKTOP_STARTUP_BUDGET {
+                panic!(
+                    "desktop did not open an archive within {HIDDEN_DESKTOP_STARTUP_BUDGET:?}\n{}",
+                    self.startup_report(started.elapsed())
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Which startup steps finished, in the order the desktop takes them, and what it said.
+    fn startup_report(&self, elapsed: std::time::Duration) -> String {
+        let done = |step: &str| if self.data_dir.join(step).exists() { "yes" } else { "no" };
+        let stderr = std::fs::read_to_string(self.data_dir.join("desktop-stderr.log"))
+            .unwrap_or_else(|err| format!("<unreadable: {err}>"));
+        format!(
+            "after {elapsed:?}: WebView2 profile created: {}, host.lock taken: {}, current.json written: {}\ndesktop stderr:\n{stderr}",
+            done("cache/webview/EBWebView"),
+            done("host.lock"),
+            done("current.json"),
+        )
+    }
+}
 
 #[cfg(windows)]
 impl Drop for HiddenApplication {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -446,25 +521,8 @@ impl Drop for HiddenApplication {
 #[test]
 fn v2_resume_read_round_trips_through_the_real_host_and_application() {
     let tmp = paired_dir("v2-real-app");
-    let program = env!("CARGO_BIN_EXE_resume-pro-desktop");
-    let child = Command::new(program)
-        .arg("--hidden")
-        .env("RESUMEPRO_DATA_DIR", &tmp)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("isolated hidden desktop must start");
-    let application = HiddenApplication(child);
-    let pointer = tmp.join("current.json");
-    let ready_by = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let current: serde_json::Value = loop {
-        if let Ok(bytes) = std::fs::read(&pointer) {
-            if let Ok(value) = serde_json::from_slice(&bytes) { break value; }
-        }
-        assert!(std::time::Instant::now() < ready_by, "desktop did not open an archive in time");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
+    let mut application = HiddenApplication::start(&tmp);
+    let current = application.wait_for_archive();
     let request = serde_json::json!({
         "protocolVersion": 2,
         "messageId": "33333333-3333-4333-8333-333333333333",
