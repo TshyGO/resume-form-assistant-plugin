@@ -40,6 +40,14 @@
   const textFillFailures = new WeakMap();
   // 给页面自己的校验留一点时间。短到不拖慢整表，长过常见的几十毫秒回滚。
   let textCommitWaitMs = 100;
+  // #173：本次一键填写成功的文本框，只放在当前网页的内存里，不写 storage。
+  let fillSession = null;
+  let submitGesture = null;
+  let submitSyncBound = false;
+  let submitSyncBusy = false;
+  // 网站校验通常在点击后几十毫秒内出结果，多等一拍再检查有没有仍标红的字段。
+  let submitCheckDelayMs = 500;
+  const SUBMIT_GESTURE_DEDUPE_MS = 1500;
   const TEXT_FILL_FAILURE_LABELS = {
     value_not_committed: "值没有写上",
     value_reverted: "值被页面退回",
@@ -215,6 +223,10 @@
   if (window.top !== window) {
     return;
   }
+
+  // Register before a fill starts so this capture listener is as early as the content script
+  // can make it. With no active fill session every handler returns immediately.
+  bindSubmitSync();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init, { once: true });
@@ -1084,6 +1096,8 @@
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
     let cancelRequested = false;
+    // 辅助新增条目是同一次一键填写的延续，接着用当前会话；其余每次都开新会话，上一次的记录清掉。
+    const session = assisted && fillSession ? fillSession : beginFillSession();
 
     try {
       const scanned = scanFillableFields();
@@ -1209,6 +1223,9 @@
         if (filled) {
           filledCount += 1;
           highlightFilledField(element, match.value);
+          if (element.kind === "element" && !element.pickerType) {
+            recordFilledTextControl(session, element.element);
+          }
         } else if (assisted) {
           unconfirmedCount += 1;
         } else {
@@ -1226,6 +1243,8 @@
           }
         }
       }
+
+      await finalSyncFillSession(session);
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
       const unfilledNote = unfilledLabels.length
@@ -1263,15 +1282,10 @@
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
-      const summary = formatFillDiagnostics({ ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics });
-      const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
-      const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
-      if (panel && text) {
-        text.value = summary;
-        panel.hidden = false;
-        panel.open = true;
-      }
+      const summaryInput = { ...timing, totalMs,
+        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics };
+      if (session === fillSession) session.summary = summaryInput;
+      writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
       state.aiBusy = false;
       button.disabled = state.desktopMode !== "ready" || !hasResumeData();
       if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
@@ -1303,10 +1317,14 @@
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
       "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
     const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : "unknown";
+    // 提交校验后网页仍把插件填的框标成无效：不能再算「完成」。
+    const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;
+    const outcome = unsynced && result.outcome === "success" ? "partial" : result.outcome;
     return [
       `Resume Pro v${chrome.runtime.getManifest().version}`,
-      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[result.outcome] || "未知"}；错误类别：${code}`,
+      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[outcome] || "未知"}；错误类别：${code}`,
       `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}`,
+      ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}`,
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
@@ -1511,6 +1529,10 @@
 
   function bindFocusTracking() {
     document.addEventListener("focusin", (event) => {
+      // 提交前同步会短暂聚焦已填字段，不能把它们当成用户最后点过的字段。
+      if (submitSyncBusy) {
+        return;
+      }
       const target = event.target;
 
       if (!(target instanceof HTMLElement)) {
@@ -1694,6 +1716,369 @@
     focusControl(element);
     await nextTask();
     blurControl(element);
+  }
+
+  // ---- #173 提交前同步 ----
+  // 有的网站要等用户第一次点「预览 / 下一步 / 提交」才开始整表校验，那时它内部还没接受插件填的文本，
+  // 于是把已经显示着内容的框标红。用户点一下输入框再点空白就好，说明缺的只是一次 focus → blur。
+  // 这里记住本次填写成功的文本框，在用户真正点按钮、网站自己的点击处理之前补上这一次。
+  // 只做 focus → blur：不写值、不点按钮、不提交、不拦截事件。
+  const SYNC_INPUT_TYPES = new Set(["text", "tel", "email"]);
+  const CAPTCHA_HINT = /captcha|验证码|校验码|图形码|短信码|verif(?:y|ication)[-_ ]?code|one-time-code|(?:^|[^a-z0-9])otp(?:[^a-z0-9]|$)/i;
+  const PASSWORD_HINT = /password|passwd|(?:^|[^a-z0-9])pwd(?:[^a-z0-9]|$)|密码/i;
+  const SUBMIT_TEXT_PATTERN = /预览|下一步|下一页|提交|保存并(?:继续|下一步)|^(?:submit|next|continue|preview|save\s*(?:and|&)\s*(?:continue|next)|(?:review|preview)\s*(?:and|&)\s*submit)\b/i;
+  const NON_SUBMIT_TEXT_PATTERN = /关闭|删除|取消|返回|上一步|上一页|清空|重置|移除|添加|新增|上传|^(?:close|delete|remove|cancel|back|previous|prev|reset|clear|add|upload)\b/i;
+
+  function controlHintText(element) {
+    const parts = [
+      element.name,
+      element.id,
+      element.getAttribute?.("autocomplete"),
+      element.getAttribute?.("placeholder"),
+      element.getAttribute?.("aria-label")
+    ];
+    try {
+      for (const label of Array.from(element.labels || [])) parts.push(label?.textContent);
+    } catch (_) {
+      // A custom control may expose a non-standard labels getter. Its other hints still apply.
+    }
+    const labelledBy = String(element.getAttribute?.("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    for (const id of labelledBy) parts.push(document.getElementById?.(id)?.textContent);
+    return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  // 只有 text / tel / email / textarea 会被记录；密码、验证码、下拉、日期、文件、单选、复选都不碰。
+  function isSyncableTextControl(element) {
+    const textarea = element instanceof HTMLTextAreaElement;
+    const input = element instanceof HTMLInputElement;
+    if (!textarea && !input) return false;
+    if (input && !SYNC_INPUT_TYPES.has(String(element.type || "text").toLowerCase())) return false;
+    const hint = controlHintText(element);
+    return !CAPTCHA_HINT.test(hint) && !PASSWORD_HINT.test(hint);
+  }
+
+  function buttonLabelText(element) {
+    const parts = [
+      String(element.tagName || "").toUpperCase() === "INPUT" ? element.value : "",
+      element.textContent,
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title")
+    ];
+    const text = parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    // 一大段文字不是按钮文案。
+    return text.length > 40 ? "" : text;
+  }
+
+  function isButtonLike(element) {
+    const tag = String(element?.tagName || "").toUpperCase();
+    if (tag === "BUTTON" || tag === "A") {
+      return true;
+    }
+    if (tag === "INPUT") {
+      return ["submit", "button", "image"].includes(String(element.getAttribute?.("type") ?? element.type ?? "").toLowerCase());
+    }
+    return element?.getAttribute?.("role") === "button";
+  }
+
+  function ownerForm(element) {
+    if (element?.form) {
+      return element.form;
+    }
+    let node = element?.parentElement;
+    while (node) {
+      if (String(node.tagName || "").toUpperCase() === "FORM") {
+        return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function belongsToForm(element, form) {
+    return element.form === form || (typeof form.contains === "function" && form.contains(element));
+  }
+
+  // 这个按钮是不是「预览 / 下一步 / 提交」一类会触发整表校验的按钮。
+  function isSubmitTrigger(element) {
+    if (!isButtonLike(element)) {
+      return false;
+    }
+    if (element.disabled === true || element.getAttribute?.("aria-disabled") === "true") {
+      return false;
+    }
+    const text = buttonLabelText(element);
+    if (NON_SUBMIT_TEXT_PATTERN.test(text)) {
+      return false;
+    }
+    const tag = String(element.tagName || "").toUpperCase();
+    const type = String(element.getAttribute?.("type") ?? "").toLowerCase();
+    if (tag === "INPUT" && (type === "submit" || type === "image")) {
+      return true;
+    }
+    if (tag === "BUTTON") {
+      if (type === "submit" || (!type && ownerForm(element))) {
+        return true;
+      }
+    }
+    return SUBMIT_TEXT_PATTERN.test(text);
+  }
+
+  // 从点击落点往上找最近的按钮：最近的按钮就是用户点的那个，它不是提交类就不处理，不再往外层找。
+  function findSubmitTrigger(target) {
+    let node = target;
+    while (node) {
+      if (isButtonLike(node)) {
+        return isSubmitTrigger(node) ? node : null;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  // composedPath crosses a shadow boundary while parentElement does not. The first button-like
+  // node in the path is what the user actually activated; an ordinary inner button must not be
+  // skipped in favour of a submit-looking outer host.
+  function findSubmitTriggerInPath(path, target) {
+    for (const node of path || []) {
+      if (node?.id === SIDEBAR_ID) return null;
+      if (isButtonLike(node)) return isSubmitTrigger(node) ? node : null;
+    }
+    return findSubmitTrigger(target);
+  }
+
+  function deepActiveElement() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active || null;
+  }
+
+  function isEditableElement(element) {
+    if (!element) {
+      return false;
+    }
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+      return true;
+    }
+    if (element instanceof HTMLInputElement) {
+      return !["button", "submit", "reset", "image", "checkbox", "radio", "file"].includes(String(element.type || "text").toLowerCase());
+    }
+    return element.isContentEditable === true;
+  }
+
+  function beginFillSession() {
+    endFillSession();
+    fillSession = { controls: new Map(), checkTimer: null, unsynced: 0, summary: null };
+    bindSubmitSync();
+    return fillSession;
+  }
+
+  function endFillSession() {
+    if (fillSession && fillSession.checkTimer !== null) {
+      window.clearTimeout(fillSession.checkTimer);
+    }
+    fillSession = null;
+    submitGesture = null;
+  }
+
+  function recordFilledTextControl(session, element) {
+    if (!session || session !== fillSession || !isSyncableTextControl(element)) {
+      return false;
+    }
+    session.controls.set(element, String(element.value ?? ""));
+    return true;
+  }
+
+  // 还能安全同步的字段：已断开的丢掉；空的、禁用的、只读的跳过；给了表单就只取这张表单里的。
+  function syncableControls(session, form) {
+    const list = [];
+    for (const element of Array.from(session.controls.keys())) {
+      if (element.isConnected === false) {
+        session.controls.delete(element);
+        continue;
+      }
+      if (!isSyncableTextControl(element) || element.disabled || element.readOnly) {
+        continue;
+      }
+      if (!String(element.value ?? "").trim()) {
+        continue;
+      }
+      if (form && !belongsToForm(element, form)) {
+        continue;
+      }
+      list.push(element);
+    }
+    return list;
+  }
+
+  // 全程同步、没有 await / 定时器：必须赶在网站自己的点击处理之前做完。
+  function focusBlurNow(controls) {
+    if (!controls.length || submitSyncBusy) {
+      return;
+    }
+    const previous = deepActiveElement();
+    submitSyncBusy = true;
+    try {
+      for (const control of controls) {
+        focusControl(control);
+        blurControl(control);
+      }
+    } finally {
+      submitSyncBusy = false;
+    }
+    // 把焦点还给原来的元素：空格键靠按钮保持焦点才会在松开时触发点击。
+    if (previous && previous !== document.body && previous !== document.documentElement
+      && previous.isConnected !== false && deepActiveElement() !== previous) {
+      focusControl(previous);
+    }
+  }
+
+  // 全部填完、页面稳定后补一次。用户正在别的输入框里操作就不抢焦点，提交前同步还在。
+  async function finalSyncFillSession(session) {
+    try {
+      if (!session || session !== fillSession || !session.controls.size) {
+        return;
+      }
+      await waitForTextCommit();
+      if (session !== fillSession || isEditableElement(deepActiveElement())) {
+        return;
+      }
+      focusBlurNow(syncableControls(session, null));
+    } catch (_) {
+      // 最终同步只是加固，出错不能影响填写结果。
+    }
+  }
+
+  function writeFillDiagnostics(input) {
+    const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+    const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
+    if (panel && text) {
+      text.value = formatFillDiagnostics(input);
+      panel.hidden = false;
+      panel.open = true;
+    }
+  }
+
+  // 网站校验之后，看看插件填的、用户没改过的框是不是还被标成无效。
+  // 用户改过的字段、真正为空的字段，网站标红是真实错误，不算在内。
+  function checkUnsyncedControls(session, form) {
+    const unsynced = [];
+    for (const element of syncableControls(session, form)) {
+      const current = String(element.value ?? "");
+      if (current !== session.controls.get(element)) {
+        continue;
+      }
+      // Native type/required/pattern errors are real content errors, not a framework state
+      // that another focus/blur can repair. Reading validity has no submission side effect.
+      if (element.validity?.valid === false) {
+        if (textFillFailures.get(element) === "framework_state_unsynced") textFillFailures.delete(element);
+        continue;
+      }
+      const result = inspectTextCommit(element, current, true);
+      if (!result.ok && (result.reason === "validation_not_cleared" || result.reason === "framework_state_unsynced")) {
+        unsynced.push(element);
+        textFillFailures.set(element, "framework_state_unsynced");
+      } else if (result.ok && textFillFailures.get(element) === "framework_state_unsynced") {
+        textFillFailures.delete(element);
+      }
+    }
+    const hadUnsynced = session.unsynced > 0;
+    const changed = session.unsynced !== unsynced.length;
+    session.unsynced = unsynced.length;
+    if (unsynced.length) {
+      showStatus("页面仍认为部分内容无效，请检查内容或手动点击字段确认", "error", true);
+    } else if (hadUnsynced) {
+      showStatus("页面表单状态已同步。", "success");
+    }
+    if (changed && session.summary) {
+      writeFillDiagnostics({ ...session.summary, unsyncedCount: session.unsynced });
+    }
+  }
+
+  // 一个会话只留一个检查定时器：连续点击只会顺延，不会越积越多。
+  function scheduleUnsyncedCheck(session, form) {
+    if (session.checkTimer !== null) {
+      window.clearTimeout(session.checkTimer);
+    }
+    session.checkTimer = window.setTimeout(() => {
+      session.checkTimer = null;
+      if (session !== fillSession) {
+        return;
+      }
+      try {
+        checkUnsyncedControls(session, form);
+      } catch (_) {
+        // 检查失败不影响网页。
+      }
+    }, submitCheckDelayMs);
+  }
+
+  function syncBeforeSubmit(session, trigger) {
+    const form = ownerForm(trigger);
+    const controls = syncableControls(session, form);
+    if (!controls.length) {
+      return;
+    }
+    focusBlurNow(controls);
+    scheduleUnsyncedCheck(session, form);
+  }
+
+  // 只接住捕获阶段用户真实的鼠标 / 键盘操作：不 preventDefault、不 stopPropagation、不替用户点。
+  // pointerdown / keydown 在网站的 click 处理之前，是主要同步点；随后的 click 只认领已同步过的那次，
+  // 没有前置手势的 click（例如回车触发的隐式提交）才自己同步一次。
+  function handleSubmitGesture(event) {
+    try {
+      const session = fillSession;
+      if (!session || !event || event.isTrusted !== true || submitSyncBusy) {
+        return;
+      }
+      if (event.type === "pointerdown" && event.button !== 0) {
+        return;
+      }
+      if (event.type === "keydown") {
+        const activation = event.key === "Enter" || event.key === " " || event.key === "Spacebar";
+        if (!activation || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+          return;
+        }
+      }
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      const target = path[0] || event.target;
+      if (!target || path.some((node) => node?.id === SIDEBAR_ID)) {
+        return;
+      }
+      const trigger = findSubmitTriggerInPath(path, target);
+      if (!trigger) {
+        return;
+      }
+      const now = Date.now();
+      if (event.type === "click") {
+        const gesture = submitGesture;
+        submitGesture = null;
+        if (gesture && gesture.trigger === trigger && now - gesture.at < SUBMIT_GESTURE_DEDUPE_MS) {
+          return;
+        }
+      } else {
+        submitGesture = { trigger, at: now };
+      }
+      syncBeforeSubmit(session, trigger);
+    } catch (_) {
+      // 同步只是辅助，任何异常都不能挡住网站自己的点击。
+    }
+  }
+
+  // 监听器只注册一次，之后每次新会话复用。
+  function bindSubmitSync() {
+    if (submitSyncBound) {
+      return;
+    }
+    submitSyncBound = true;
+    for (const type of ["pointerdown", "keydown", "click"]) {
+      document.addEventListener(type, handleSubmitGesture, true);
+    }
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("pagehide", endFillSession);
+    }
   }
 
   function classText(node) {
@@ -3321,6 +3706,22 @@
       composeChipText,
       syncChipSelectionState,
       setElementValue,
+      isSyncableTextControl,
+      isSubmitTrigger,
+      findSubmitTrigger,
+      beginFillSession,
+      endFillSession,
+      recordFilledTextControl,
+      finalSyncFillSession,
+      getFillSession() {
+        return fillSession;
+      },
+      fillSessionControls() {
+        return fillSession ? Array.from(fillSession.controls.keys()) : [];
+      },
+      setSubmitCheckDelayMs(ms) {
+        submitCheckDelayMs = ms;
+      },
       setTextCommitWaitMs(ms) {
         textCommitWaitMs = ms;
       },
