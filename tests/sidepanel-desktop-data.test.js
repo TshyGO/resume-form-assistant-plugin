@@ -69,7 +69,7 @@ async function harness(initial = { status: 'ok', data: data() }, { legacy = null
   };
   const context = vm.createContext({
     document, chrome, navigator: { clipboard: { writeText: async value => { copied.push(value); } } },
-    self: { ResumeProProfile: require('../profile-fields.js'), ResumeProResumeData: require('../resume-data.js') },
+    self: { ResumeProProfile: require('../profile-fields.js'), ResumeProResumeData: require('../resume-data.js'), ResumeProCompose: require('../sidepanel-compose.js') },
     setTimeout: () => 1, clearTimeout() {}, setInterval: listener => { poll = listener; }
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'sidepanel.js'), 'utf8'), context);
@@ -132,7 +132,7 @@ test('template switch writes desktop then rereads, and field action carries snap
   await ui.get('template-select').listeners.change();
   assert.ok(ui.calls.some(item => item.type === 'DESKTOP_RESUME_UPDATE' && item.op === 'setActiveTemplate' && item.templateId === TEMPLATE));
   assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
-  await ui.get('field-groups').listeners.click({ target: { closest: selector => selector === '[data-chip-id]' ? { dataset: { chipId: `${TEMPLATE}:0:0` } } : null } });
+  await ui.get('field-groups').listeners.click({ target: { closest: selector => selector === 'button[data-chip-id]' ? { dataset: { chipId: `${TEMPLATE}:0:0` } } : null } });
   assert.ok(ui.calls.some(item => item.type === 'RESUME_PANEL_FIELD' && item.value === '测试用户'));
 });
 
