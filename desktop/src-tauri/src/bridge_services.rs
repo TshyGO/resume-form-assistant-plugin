@@ -67,6 +67,10 @@ mod import_account_tests {
     }
 }
 
+/// How long `ui.open` waits for the main window. Only a cold start waits at all, and only
+/// for as long as WebView2 takes to start; this bounds a start that never finishes.
+const MAIN_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct DesktopBridgeServices {
     app: AppHandle,
 }
@@ -128,6 +132,8 @@ impl BridgeServices for DesktopBridgeServices {
     }
 
     fn open_view(&self, view: &str) -> bool {
+        // On a cold start the endpoint serves before the window is built (#180).
+        if !self.app.state::<AppState>().main_window.wait(MAIN_WINDOW_WAIT) { return false; }
         if self.app.get_webview_window("main").is_none() { return false; }
         crate::lifecycle::show_main_window(&self.app);
         // The window is already in front at this point; a lost navigation event leaves the

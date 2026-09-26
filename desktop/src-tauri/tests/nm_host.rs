@@ -431,20 +431,25 @@ fn v2_requests_keep_their_version_when_the_real_host_has_no_application() {
     }
 }
 
-/// How long the hidden desktop may take to open its archive.
+/// How long a hidden desktop may take to reach each step these tests wait for.
 ///
 /// Every run starts it on a brand-new data directory, so WebView2 has to build a new profile
-/// under `cache\webview`. Tauri creates the main window, and waits for WebView2 to start,
-/// before `setup` opens the archive, so `current.json` appears only after all of that. That
-/// takes about a second on a warm machine and has run past 10 seconds on a GitHub Windows
-/// runner. This budget only bounds a hang: a desktop that exits early is reported at once.
+/// under `cache\webview`. That takes about a second on a warm machine and has run past 10
+/// seconds on a GitHub Windows runner, and a freshly linked executable is also scanned on its
+/// first launch. This budget only bounds a hang: a desktop that exits early is reported at once.
 #[cfg(windows)]
 const HIDDEN_DESKTOP_STARTUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A second desktop hands its launch to the running one and exits, so the tests that start
+/// the real desktop take turns.
+#[cfg(windows)]
+static ONE_DESKTOP_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(windows)]
 struct HiddenApplication {
     child: std::process::Child,
     data_dir: std::path::PathBuf,
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 #[cfg(windows)]
@@ -452,6 +457,8 @@ impl HiddenApplication {
     /// Start the real desktop with `--hidden` on `data_dir`. Its stderr goes to a file in
     /// that directory, so a failed start can say what the desktop reported.
     fn start(data_dir: &std::path::Path) -> Self {
+        // A test that failed while holding the turn has already killed its desktop.
+        let turn = ONE_DESKTOP_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let stderr = std::fs::File::create(data_dir.join("desktop-stderr.log")).unwrap();
         let child = Command::new(env!("CARGO_BIN_EXE_resume-pro-desktop"))
             .arg("--hidden")
@@ -461,33 +468,39 @@ impl HiddenApplication {
             .stderr(stderr)
             .spawn()
             .expect("isolated hidden desktop must start");
-        HiddenApplication { child, data_dir: data_dir.to_path_buf() }
+        HiddenApplication { child, data_dir: data_dir.to_path_buf(), _turn: turn }
     }
 
     /// Wait for the desktop to open an archive and return the pointer it wrote.
     fn wait_for_archive(&mut self) -> serde_json::Value {
+        let pointer = self.data_dir.join("current.json");
+        self.wait_for("opening an archive", || {
+            serde_json::from_slice(&std::fs::read(&pointer).ok()?).ok()
+        })
+    }
+
+    /// Poll `ready` until it yields a value. A desktop that exits first fails at once; one
+    /// that is still running fails at the budget.
+    fn wait_for<T>(&mut self, step: &str, mut ready: impl FnMut() -> Option<T>) -> T {
         let started = std::time::Instant::now();
         loop {
-            if let Ok(bytes) = std::fs::read(self.data_dir.join("current.json")) {
-                if let Ok(value) = serde_json::from_slice(&bytes) {
-                    return value;
-                }
+            if let Some(value) = ready() {
+                return value;
             }
             if let Some(status) = self.child.try_wait().expect("the desktop can be polled") {
-                // A second instance hands its launch to the running one and exits cleanly.
                 let hint = if status.success() {
                     " (is another Resume Pro Desktop already running?)"
                 } else {
                     ""
                 };
                 panic!(
-                    "the hidden desktop exited ({status}) before opening an archive{hint}\n{}",
+                    "the hidden desktop exited ({status}) before {step}{hint}\n{}",
                     self.startup_report(started.elapsed())
                 );
             }
             if started.elapsed() >= HIDDEN_DESKTOP_STARTUP_BUDGET {
                 panic!(
-                    "desktop did not open an archive within {HIDDEN_DESKTOP_STARTUP_BUDGET:?}\n{}",
+                    "the desktop was still short of {step} after {HIDDEN_DESKTOP_STARTUP_BUDGET:?}\n{}",
                     self.startup_report(started.elapsed())
                 );
             }
@@ -501,10 +514,10 @@ impl HiddenApplication {
         let stderr = std::fs::read_to_string(self.data_dir.join("desktop-stderr.log"))
             .unwrap_or_else(|err| format!("<unreadable: {err}>"));
         format!(
-            "after {elapsed:?}: WebView2 profile created: {}, host.lock taken: {}, current.json written: {}\ndesktop stderr:\n{stderr}",
-            done("cache/webview/EBWebView"),
+            "after {elapsed:?}: host.lock taken: {}, current.json written: {}, WebView2 profile created: {}\ndesktop stderr:\n{stderr}",
             done("host.lock"),
             done("current.json"),
+            done("cache/webview/EBWebView"),
         )
     }
 }
@@ -515,6 +528,28 @@ impl Drop for HiddenApplication {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_hidden_start_opens_the_archive_before_webview2_starts() {
+    // A hidden start is for the browser, which needs the archive and the endpoint, not the
+    // window. WebView2 can take many seconds to start, longer than the host waits, so the
+    // archive must not wait for it. Creation times make this independent of how fast either is.
+    let tmp = paired_dir("archive-before-webview");
+    let mut application = HiddenApplication::start(&tmp);
+    application.wait_for_archive();
+    let profile = tmp.join("cache").join("webview").join("EBWebView");
+    application.wait_for("WebView2 creating its profile", || profile.exists().then_some(()));
+    let created = |path: &std::path::Path| std::fs::metadata(path).and_then(|m| m.created()).unwrap();
+    let (archive, webview) = (created(&tmp.join("current.json")), created(&profile));
+    assert!(
+        archive < webview,
+        "the archive was opened {:?} after WebView2 started",
+        archive.duration_since(webview).unwrap_or_default()
+    );
+    drop(application);
+    std::fs::remove_dir_all(&tmp).ok();
 }
 
 #[cfg(windows)]
