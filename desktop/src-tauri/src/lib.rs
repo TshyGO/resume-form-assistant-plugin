@@ -62,6 +62,8 @@ struct AppState {
     ipc: Mutex<Option<ipc_server::IpcService>>,
     /// Set once the main window is built, which happens after the endpoint is serving.
     main_window: lifecycle::MainWindowReady,
+    /// The view `ui.open` asked for, until the page takes it.
+    requested_view: lifecycle::RequestedView,
     /// D10：把到期登记给操作系统的那一位。整个进程共用一个，退出时要靠它撤销
     /// 全部未触发的计划。它不认识数据库，也不认识待办是什么。
     reminders: Box<dyn reminders::ReminderScheduler>,
@@ -1356,6 +1358,12 @@ fn hide_main_window_cmd(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 插件要打开的页面。取走即清掉，同一次请求只切一次（#183）。
+#[tauri::command]
+fn take_requested_view_cmd(state: State<'_, AppState>) -> Option<String> {
+    state.requested_view.take()
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     // 主动退出默认撤销尚未触发的提醒：进程走了就别留下会替它说话的东西。
@@ -1584,6 +1592,7 @@ pub fn run() {
             host: Mutex::new(None),
             ipc: Mutex::new(None),
             main_window: lifecycle::MainWindowReady::default(),
+            requested_view: lifecycle::RequestedView::default(),
             host_error: Mutex::new(None),
             paths: Mutex::new(HostPaths::resolve().ok()),
             store: Arc::new(Mutex::new(None)),
@@ -1705,6 +1714,7 @@ pub fn run() {
             get_update_preference_cmd,
             set_update_preference_cmd,
             hide_main_window_cmd,
+            take_requested_view_cmd,
             quit_app,
             list_applications_cmd,
             create_application_cmd,

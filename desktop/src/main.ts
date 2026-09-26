@@ -18,7 +18,7 @@ import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
 import { mountResume } from "./resume/mount.tsx";
-import { targetForOpenView } from "./open-view.ts";
+import { followRequestedViews } from "./open-view.ts";
 import type { ReminderCapability } from "./api.ts";
 import {
   DELIVERY_WINDOW_NOTE,
@@ -307,15 +307,6 @@ const resumeView = mountResume(
   events?.listen ? (name, handler) => events.listen?.(name, () => handler()) : undefined,
 );
 
-void events?.listen?.("resume-pro://navigate", (event) => {
-  const target = targetForOpenView(event.payload);
-  if (!target) return;
-  const enteringResume = target.route === "resume" && views.resume.classList.contains("hidden");
-  showRoute(target.route);
-  if (target.settingsTab) settingsNavigation.select(target.settingsTab);
-  if (enteringResume) resumeView.refresh();
-});
-
 const inbox = mountInbox(command, {
   mountAi: (container, evidenceId, onConfirmed) =>
     mountAiReview(container, invoke ?? null, evidenceId, onConfirmed),
@@ -363,6 +354,21 @@ const showBackup = mountBackup(command, backupPickers, undefined, () => resumeVi
 void renderReminderSettings().catch(() => {});
 
 showRoute("applications");
+// 插件要打开的页面由桌面记着，这里取。冷启动时请求比页面先到，光靠事件会丢（#183）。
+// 放在默认页之后，免得取到的页面又被切回首页。
+const listenForViews = events?.listen;
+if (invoke && listenForViews) {
+  void followRequestedViews({
+    listen: (name, handler) => listenForViews(name, () => handler()),
+    take: () => invoke<string | null>("take_requested_view_cmd"),
+    show: (target) => {
+      const enteringResume = target.route === "resume" && views.resume.classList.contains("hidden");
+      showRoute(target.route);
+      if (target.settingsTab) settingsNavigation.select(target.settingsTab);
+      if (enteringResume) resumeView.refresh();
+    },
+  }).catch(() => {});
+}
 refreshStatus().catch((err: unknown) => {
   must("runtime-pill").textContent = String(err);
 });
