@@ -10,6 +10,9 @@ function loadHighlightHelpers(options = {}) {
   const clearedTimers = [];
   const clipboardWrites = [];
   const desktopMessages = [];
+  const documentListeners = {};
+  const storageWrites = [];
+  let panelMessageListener = null;
 
   class ClassList {
     constructor() {
@@ -124,7 +127,9 @@ function loadHighlightHelpers(options = {}) {
         styleElements.push(element);
       }
     },
-    addEventListener() {},
+    addEventListener(type, listener) {
+      (documentListeners[type] ||= []).push(listener);
+    },
     querySelector() {
       return null;
     },
@@ -163,6 +168,8 @@ function loadHighlightHelpers(options = {}) {
     }
   };
   window.top = window;
+  class HTMLTextAreaElement extends HTMLElement {}
+  class HTMLSelectElement extends HTMLElement {}
 
   const context = {
     console,
@@ -174,13 +181,20 @@ function loadHighlightHelpers(options = {}) {
     HTMLElement,
     HTMLInputElement,
     HTMLLabelElement,
-    HTMLTextAreaElement: class HTMLTextAreaElement extends HTMLElement {},
-    HTMLSelectElement: class HTMLSelectElement extends HTMLElement {},
+    HTMLTextAreaElement,
+    HTMLSelectElement,
     chrome: {
+      ...(options.storageSpy ? {
+        storage: Object.fromEntries(["local", "session", "sync"].map((area) => [area, {
+          get: async () => ({}),
+          set: async (value) => { storageWrites.push({ area, value }); },
+          remove: async () => {}
+        }]))
+      } : {}),
       runtime: {
         id: 'test-extension',
         getManifest: () => ({ version: "0.2.1" }),
-        onMessage: { addListener() {} },
+        onMessage: { addListener(listener) { panelMessageListener = listener; } },
         sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
           ? { status: 'ok', data: desktopData }
           : (desktopMessages.push(message), message.type === 'DESKTOP_OPEN_VIEW'
@@ -229,9 +243,26 @@ function loadHighlightHelpers(options = {}) {
     clipboardWrites,
     desktopMessages,
     styleElements,
+    documentListeners,
+    storageWrites,
     HTMLElement,
     HTMLInputElement,
-    HTMLLabelElement
+    HTMLLabelElement,
+    HTMLTextAreaElement,
+    HTMLSelectElement,
+    document,
+    // Delivers a message the way chrome.runtime does, and resolves with its response
+    // after the same JSON round trip a real message goes through.
+    sendPanelMessage(message, sender = { id: "test-extension" }) {
+      return new Promise((resolve) => {
+        const respond = (response) => resolve(response === undefined ? undefined : JSON.parse(JSON.stringify(response)));
+        const keepOpen = panelMessageListener(JSON.parse(JSON.stringify(message)), sender, respond);
+        if (!keepOpen) setImmediate(() => resolve(undefined));
+      });
+    },
+    fireDocumentEvent(type, event) {
+      (documentListeners[type] || []).forEach((listener) => listener(event));
+    }
   };
 }
 
@@ -265,7 +296,8 @@ test("native side panel field action fills the focused page input without replac
   input.value = "已有内容";
   const second = await helpers.handlePanelFieldAction({ chipId: "one:0:0", mode: "fill" });
   assert.equal(second.ok, false);
-  assert.equal(second.needsCopy, true);
+  assert.equal(second.needsChoice, true, "a filled text box asks for an explicit add or replace");
+  assert.equal(second.needsCopy, undefined, "composing never falls back to the clipboard");
   assert.match(second.message, /已有内容/);
   assert.equal(input.value, "已有内容");
   assert.deepEqual(clipboardWrites, [], "the page bridge leaves copying to the focused side panel");
@@ -805,4 +837,370 @@ test("highlight styles are not duplicated in content.css", () => {
 
   assert.doesNotMatch(contentCss, /\.resume-pro__field-highlight\b/);
   assert.doesNotMatch(contentCss, /@keyframes\s+resume-pro-field-highlight\b/);
+});
+
+// ---- #174: the native side panel composes fields the way the old page overlay did ----
+
+const Compose = require("../sidepanel-compose.js");
+const ownerChips = (pairs) => pairs.map(([chipId, value]) => ({ chipId, value }));
+const AB = ownerChips([["a", "A"], ["b", "B"], ["c", "C"]]);
+
+function textInput(ctx, value = "", caret = value.length) {
+  const input = new ctx.HTMLInputElement();
+  input.value = value;
+  input.selectionStart = caret;
+  input.selectionEnd = caret;
+  return input;
+}
+
+const queryTarget = (ctx, chips = AB) => ctx.sendPanelMessage({ type: "RESUME_PANEL_TARGET", chips });
+const composeAction = (ctx, mode, chipId, chips = AB) => ctx.sendPanelMessage({
+  type: "RESUME_PANEL_FIELD", mode, chipId, value: chips.find((chip) => chip.chipId === chipId).value, chips
+});
+const rowsOf = (state, chips = AB) => Object.fromEntries(chips.map((chip) => [chip.chipId, Compose.rowState(Compose.normalizeTargetState(state), chip.chipId)]));
+
+test("no web target: nothing is selected and no action can run", async () => {
+  const ctx = loadHighlightHelpers();
+  const state = await queryTarget(ctx);
+  assert.equal(state.targetAvailable, false);
+  assert.equal(state.composable, false);
+  assert.deepEqual(state.selectedChipIds, []);
+  for (const row of Object.values(rowsOf(state))) {
+    assert.deepEqual(row, { selected: false, add: false, replace: false, remove: false });
+  }
+});
+
+test("an empty text box only allows add", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.setLastFocusedField(textInput(ctx, ""));
+  const state = await queryTarget(ctx);
+  assert.equal(state.empty, true);
+  for (const row of Object.values(rowsOf(state))) {
+    assert.deepEqual(row, { selected: false, add: true, replace: false, remove: false });
+  }
+});
+
+test("action availability follows the field, not only the text box", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.setLastFocusedField(textInput(ctx, "A"));
+  const rows = rowsOf(await queryTarget(ctx));
+  // A is already the whole box: adding it again or replacing with it changes nothing.
+  assert.deepEqual(rows.a, { selected: true, add: false, replace: false, remove: true });
+  // B is absent: it can be added or replace the box, but there is nothing to remove.
+  assert.deepEqual(rows.b, { selected: false, add: true, replace: true, remove: false });
+});
+
+test("add, replace and remove produce A+B, B and A through the panel protocol", async () => {
+  const ctx = loadHighlightHelpers();
+  const input = textInput(ctx, "A");
+  ctx.helpers.setLastFocusedField(input);
+
+  const added = await composeAction(ctx, "add", "b");
+  assert.equal(added.ok, true);
+  assert.equal(input.value, "AB");
+  let state = await queryTarget(ctx);
+  assert.deepEqual([...state.selectedChipIds].sort(), ["a", "b"], "both fields are selected");
+
+  const removed = await composeAction(ctx, "remove", "b");
+  assert.equal(removed.ok, true);
+  assert.equal(input.value, "A");
+  state = await queryTarget(ctx);
+  assert.deepEqual(state.selectedChipIds, ["a"], "only the removed field returns to normal");
+
+  const replaced = await composeAction(ctx, "replace", "b");
+  assert.equal(replaced.ok, true);
+  assert.equal(input.value, "B");
+  state = await queryTarget(ctx);
+  assert.deepEqual(state.selectedChipIds, ["b"]);
+  assert.equal(Compose.rowState(Compose.normalizeTargetState(state), "b").replace, false, "replacing again would change nothing");
+  const again = await composeAction(ctx, "replace", "b");
+  assert.equal(again.ok, false);
+  assert.equal(input.value, "B");
+});
+
+test("a field already in the box cannot be added twice, and a missing one cannot be removed", async () => {
+  const ctx = loadHighlightHelpers();
+  const input = textInput(ctx, "AB");
+  ctx.helpers.setLastFocusedField(input);
+  const twice = await composeAction(ctx, "add", "b");
+  assert.equal(twice.ok, false);
+  assert.match(twice.error, /已包含/);
+  const missing = await composeAction(ctx, "remove", "c");
+  assert.equal(missing.ok, false);
+  const onEmpty = textInput(ctx, "");
+  ctx.helpers.setLastFocusedField(onEmpty);
+  const replaceEmpty = await composeAction(ctx, "replace", "a");
+  assert.equal(replaceEmpty.ok, false);
+  assert.equal(input.value, "AB");
+  assert.equal(onEmpty.value, "");
+});
+
+test("editing the text by hand recalculates the selected fields", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const input = textInput(ctx, "AB");
+  ctx.helpers.setLastFocusedField(input);
+  assert.deepEqual([...(await queryTarget(ctx)).selectedChipIds].sort(), ["a", "b"]);
+  await composeAction(ctx, "remove", "a");
+  assert.deepEqual((await queryTarget(ctx)).selectedChipIds, ["b"]);
+
+  input.value = "AC";
+  ctx.fireDocumentEvent("input", { target: input });
+  assert.deepEqual([...(await queryTarget(ctx)).selectedChipIds].sort(), ["a", "c"]);
+  input.value = "";
+  ctx.fireDocumentEvent("input", { target: input });
+  const cleared = await queryTarget(ctx);
+  assert.deepEqual(cleared.selectedChipIds, []);
+  assert.equal(cleared.empty, true);
+});
+
+test("a change made to a text box that is not focused is not remembered as stale field identity", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const first = textInput(ctx, "");
+  const second = textInput(ctx, "");
+  ctx.helpers.setLastFocusedField(first);
+  await queryTarget(ctx);
+  ctx.helpers.setLastFocusedField(second);
+  first.value = "A";
+  ctx.fireDocumentEvent("input", { target: first });
+  ctx.helpers.setLastFocusedField(first);
+  assert.deepEqual((await queryTarget(ctx)).selectedChipIds, ["a"]);
+});
+
+test("switching text boxes follows the new box and never reuses the old cursor", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const first = textInput(ctx, "AB", 1);
+  const second = textInput(ctx, "XY", 2);
+  ctx.fireDocumentEvent("focusin", { target: first });
+  // Neither box can report a cursor from here on (an email input, or a page that reset it).
+  first.selectionStart = first.selectionEnd = null;
+  second.selectionStart = second.selectionEnd = null;
+
+  ctx.fireDocumentEvent("focusin", { target: second });
+  assert.deepEqual((await queryTarget(ctx)).selectedChipIds, [], "the new box holds none of the fields");
+  assert.equal((await composeAction(ctx, "add", "c")).ok, true);
+  assert.equal(second.value, "XYC", "no saved cursor for this box: append, not index 1 of the other box");
+  assert.equal(first.value, "AB");
+
+  ctx.fireDocumentEvent("focusin", { target: first });
+  assert.equal((await composeAction(ctx, "add", "c")).ok, true);
+  assert.equal(first.value, "ACB", "the first box kept its own cursor");
+  assert.equal(first.selectionStart, 2, "the cursor sits after the inserted field");
+});
+
+test("AB with the cursor at index 1 becomes ACB and the cursor lands after C", async () => {
+  const ctx = loadHighlightHelpers();
+  const input = textInput(ctx, "AB", 1);
+  ctx.helpers.setLastFocusedField(input);
+  const result = await composeAction(ctx, "add", "c");
+  assert.equal(result.ok, true);
+  assert.equal(input.value, "ACB");
+  assert.equal(input.selectionStart, 2);
+  assert.equal(input.selectionEnd, 2);
+});
+
+test("an unusable cursor falls back to the end of the text", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const input = textInput(ctx, "AB", 2);
+  ctx.fireDocumentEvent("focusin", { target: input });
+  // The saved cursor (2) no longer fits the shorter text, and the box reports none.
+  input.value = "A";
+  input.selectionStart = input.selectionEnd = null;
+  assert.deepEqual({ ...ctx.helpers.resolveTextSelection(input) }, { start: 1, end: 1 });
+  const noCursor = textInput(ctx, "AB");
+  noCursor.selectionStart = noCursor.selectionEnd = null;
+  ctx.helpers.setLastFocusedField(noCursor);
+  assert.equal((await composeAction(ctx, "add", "c")).ok, true);
+  assert.equal(noCursor.value, "ABC");
+});
+
+test("a contenteditable keeps its cursor after the page selection is gone", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const editable = new ctx.HTMLElement();
+  editable.isContentEditable = true;
+  editable.textContent = "AB";
+  editable.contains = (node) => node === editable;
+  Object.defineProperty(editable, "firstChild", { get: () => ({ nodeType: 3, textContent: editable.textContent, nextSibling: null }) });
+  let live = { start: 1, end: 1 };
+  ctx.window.getSelection = () => ({
+    get rangeCount() { return live ? 1 : 0; },
+    getRangeAt: () => ({
+      commonAncestorContainer: editable, startContainer: editable, startOffset: live.start, endContainer: editable, endOffset: live.end,
+      cloneRange() {
+        return { limit: 0, selectNodeContents() {}, setEnd(_node, offset) { this.limit = offset; }, toString() { return editable.textContent.slice(0, this.limit); } };
+      }
+    }),
+    removeAllRanges() { live = null; },
+    addRange(range) { live = { start: range.offset, end: range.offset }; }
+  });
+  ctx.document.createRange = () => ({ setStart(_node, offset) { this.offset = offset; }, collapse() {} });
+
+  ctx.fireDocumentEvent("focusin", { target: editable });
+  // The user clicked the native side panel: the page's selection is gone.
+  live = null;
+  ctx.fireDocumentEvent("focusout", { target: editable });
+
+  const result = await composeAction(ctx, "add", "c");
+  assert.equal(result.ok, true);
+  assert.equal(editable.textContent, "ACB");
+  assert.deepEqual(live, { start: 2, end: 2 }, "the caret follows the inserted field");
+});
+
+test("replace and remove leave the cursor in the box they acted on", async () => {
+  const ctx = loadHighlightHelpers();
+  const other = textInput(ctx, "KEEP", 2);
+  const input = textInput(ctx, "AB", 2);
+  ctx.helpers.setLastFocusedField(input);
+  await composeAction(ctx, "remove", "a");
+  assert.equal(input.value, "B");
+  assert.equal(input.selectionStart, 0);
+  await composeAction(ctx, "replace", "c");
+  assert.equal(input.value, "C");
+  assert.equal(input.selectionStart, 1);
+  assert.equal(other.value, "KEEP");
+  assert.equal(other.selectionStart, 2);
+});
+
+test("identical, repeated and overlapping values do not select or remove the wrong field", async () => {
+  const ctx = loadHighlightHelpers();
+  const same = ownerChips([["x", "相同内容"], ["y", "相同内容"]]);
+  const input = textInput(ctx, "");
+  ctx.helpers.setLastFocusedField(input);
+
+  assert.equal((await composeAction(ctx, "add", "x", same)).ok, true);
+  assert.deepEqual((await queryTarget(ctx, same)).selectedChipIds, ["x"], "the twin with the same value stays unselected");
+  const twin = await composeAction(ctx, "remove", "y", same);
+  assert.equal(twin.ok, false, "y was never added, so it cannot be removed");
+  assert.equal(input.value, "相同内容");
+  assert.equal((await composeAction(ctx, "remove", "x", same)).ok, true);
+  assert.equal(input.value, "");
+
+  const overlap = ownerChips([["p", "产品"], ["m", "经理"], ["pm", "产品经理"]]);
+  const box = textInput(ctx, "");
+  ctx.helpers.setLastFocusedField(box);
+  assert.equal((await composeAction(ctx, "add", "pm", overlap)).ok, true);
+  assert.deepEqual((await queryTarget(ctx, overlap)).selectedChipIds, ["pm"], "the shorter fields inside it are not selected");
+  assert.equal((await composeAction(ctx, "remove", "p", overlap)).ok, false);
+  assert.equal(box.value, "产品经理");
+
+  const repeated = ownerChips([["r", "ab"]]);
+  const twice = textInput(ctx, "ab-ab", 5);
+  ctx.helpers.setLastFocusedField(twice);
+  assert.equal((await composeAction(ctx, "remove", "r", repeated)).ok, true);
+  assert.equal(twice.value, "ab-", "the occurrence nearest the cursor goes");
+});
+
+test("password, one-time-code, captcha, file and non-text targets cannot compose", async () => {
+  const ctx = loadHighlightHelpers();
+  const blocked = [];
+  const password = textInput(ctx, "");
+  password.type = "password";
+  blocked.push(password);
+  const otpAutocomplete = textInput(ctx, "");
+  otpAutocomplete.setAttribute("autocomplete", "one-time-code");
+  blocked.push(otpAutocomplete);
+  const captchaByName = textInput(ctx, "");
+  captchaByName.name = "captcha_code";
+  blocked.push(captchaByName);
+  const codeByLabel = textInput(ctx, "");
+  codeByLabel.setAttribute("data-label", "短信验证码");
+  blocked.push(codeByLabel);
+  const secretByLabel = textInput(ctx, "");
+  secretByLabel.setAttribute("aria-label", "登录密码");
+  blocked.push(secretByLabel);
+  const file = textInput(ctx, "");
+  file.type = "file";
+  blocked.push(file);
+  const checkbox = textInput(ctx, "");
+  checkbox.type = "checkbox";
+  blocked.push(checkbox);
+  blocked.push(new ctx.HTMLSelectElement());
+
+  for (const target of blocked) {
+    ctx.helpers.setLastFocusedField(target);
+    const state = await queryTarget(ctx);
+    assert.equal(state.targetAvailable, true);
+    assert.equal(state.composable, false, `${target.type || "select"} must not compose`);
+    assert.deepEqual(state.selectedChipIds, []);
+    for (const mode of ["add", "replace", "remove"]) {
+      assert.equal((await composeAction(ctx, mode, "a")).ok, false);
+    }
+    if (target.value !== undefined) assert.equal(target.value, "");
+  }
+  // The legacy quick path must not write a resume value into a secret or file target either.
+  for (const target of [password, otpAutocomplete, captchaByName, codeByLabel, secretByLabel, file]) {
+    ctx.helpers.setLastFocusedField(target);
+    const quick = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "fill", chipId: "a", value: "A" });
+    assert.equal(quick.ok, false);
+    assert.equal(target.value, "");
+  }
+  // An ordinary box whose name merely contains those letters is not caught.
+  const footprint = textInput(ctx, "");
+  footprint.name = "footprint";
+  ctx.helpers.setLastFocusedField(footprint);
+  assert.equal((await queryTarget(ctx)).composable, true);
+});
+
+test("a filled text box asks for an explicit button, an empty one takes the field", async () => {
+  const ctx = loadHighlightHelpers();
+  const input = textInput(ctx, "");
+  ctx.helpers.setLastFocusedField(input);
+  const quick = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "fill", chipId: "a", value: "A" });
+  assert.equal(quick.ok, true);
+  assert.equal(input.value, "A");
+  const filled = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "fill", chipId: "b", value: "B" });
+  assert.equal(filled.ok, false);
+  assert.equal(filled.needsChoice, true);
+  assert.equal(input.value, "A");
+  assert.deepEqual(ctx.clipboardWrites, []);
+});
+
+test("the target state has only booleans and chip ids, and nothing is stored", async () => {
+  const ctx = loadHighlightHelpers({ storageSpy: true });
+  const secretText = "SECRET-PAGE-TEXT-9271";
+  const input = textInput(ctx, `${secretText}A`);
+  ctx.helpers.setLastFocusedField(input);
+  const state = await queryTarget(ctx);
+  const text = JSON.stringify(state);
+  assert.ok(!text.includes(secretText), "the page's own text is never returned");
+  assert.deepEqual(Object.keys(state).sort(), ["actions", "composable", "empty", "ok", "selectedChipIds", "targetAvailable"]);
+  for (const actions of Object.values(state.actions)) {
+    assert.deepEqual(Object.keys(actions).sort(), ["add", "remove", "replace"]);
+    assert.ok(Object.values(actions).every((value) => typeof value === "boolean"));
+  }
+  const acted = await composeAction(ctx, "add", "b");
+  assert.ok(!JSON.stringify(acted).includes(secretText));
+  assert.deepEqual(ctx.storageWrites, [], "the cursor and field identity live in page memory only");
+});
+
+test("the page tells an open panel that the target changed, without any data", async () => {
+  const ctx = loadHighlightHelpers();
+  ctx.helpers.bindFocusTracking();
+  const input = textInput(ctx, "A");
+  ctx.helpers.setLastFocusedField(input);
+  ctx.fireDocumentEvent("input", { target: input });
+  assert.equal(ctx.timers.length, 0, "a closed panel is not messaged");
+
+  await queryTarget(ctx);
+  ctx.fireDocumentEvent("input", { target: input });
+  ctx.fireDocumentEvent("selectionchange", { target: input });
+  assert.equal(ctx.timers.length, 1, "bursts of events collapse into one notice");
+  ctx.timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.desktopMessages.filter((message) => message.type === "RESUME_TARGET_CHANGED"))), [{ type: "RESUME_TARGET_CHANGED" }]);
+});
+
+test("only this extension can drive the compose protocol with its own field list", async () => {
+  const ctx = loadHighlightHelpers();
+  const input = textInput(ctx, "A");
+  ctx.helpers.setLastFocusedField(input);
+  const foreign = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "replace", chipId: "b", value: "B", chips: AB }, { id: "other-extension" });
+  assert.equal(foreign, undefined);
+  assert.equal(input.value, "A");
+  const unknown = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "explode", chipId: "b", value: "B" });
+  assert.equal(unknown.ok, false);
 });

@@ -66,7 +66,7 @@
 
           <div class="dock-section-head"><h2>常用字段</h2><button id="show-fields" type="button">查看全部字段 →</button></div>
           <div id="quick-fields" class="quick-fields"></div>
-          <p class="dock-help">手动补填：先点网页输入框，再点这里的字段；无法写入时可复制。</p>
+          <p class="dock-help">手动补填：先点网页输入框，再点字段；输入框已有内容时，用右侧的「添加」「替换」「删除」。</p>
         </section>
 
         <section class="dock-view" id="fields-view" role="tabpanel" data-view="fields" hidden>
@@ -74,7 +74,7 @@
           <p class="field-meta" id="field-meta"></p>
           <label class="sr-only" for="field-search">搜索简历字段</label>
           <input id="field-search" type="search" placeholder="搜索字段或内容" autocomplete="off">
-          <p class="target-note">先点击网页上的输入框，再选择字段；切到侧栏后会记住上次选中的目标。</p>
+          <p class="target-note">先点击网页上的输入框，再选择字段；切到侧栏后会记住输入框和光标位置。「添加」在光标处插入，「替换」覆盖整个输入框，「删除」只去掉这个字段。</p>
           <div id="field-groups" class="field-groups"></div>
           <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。</p>
         </section>
@@ -85,6 +85,7 @@
     </div>
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
+    <script src="sidepanel-compose.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -33,6 +33,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "sidepanel.html",
   "sidepanel.css",
   "sidepanel.js",
+  "sidepanel-compose.js",
   "link",
   "icons",
   "README.md",
