@@ -364,6 +364,36 @@ test("AI fill loop highlights fields after successful writes", async () => {
   assert.equal(input.classList.contains("resume-pro__field-highlight"), true);
 });
 
+test("AI fill loop records only successfully filled text inputs, and each new fill starts a fresh session", async () => {
+  const formElements = [];
+  let matches = [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "13800138000" }];
+  const { helpers, HTMLInputElement } = loadHighlightHelpers({
+    formElements,
+    sendMessage: async () => ({ success: true, matches })
+  });
+  const name = new HTMLInputElement();
+  name.name = "fullName";
+  const phone = new HTMLInputElement();
+  phone.name = "phone";
+  phone.type = "tel";
+  const password = new HTMLInputElement();
+  password.name = "pwd";
+  password.type = "password";
+  formElements.push(name, phone, password);
+  helpers.setCurrentStore({
+    templates: [{ id: "template-1", name: "默认模板", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "测试用户" }] }] }],
+    activeTemplateId: "template-1",
+    aiConfig: { apiUrl: "https://example.test", model: "test-model", apiKey: "test-key" }
+  });
+
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
+  assert.deepEqual([...helpers.fillSessionControls()], [name, phone]);
+
+  matches = [{ fieldId: "field-0", value: "新的姓名" }];
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
+  assert.deepEqual([...helpers.fillSessionControls()], [name]);
+});
+
 test('partial local success still opens desktop AI settings when AI is not configured', async () => {
   const formElements = [];
   const { helpers, desktopMessages, HTMLInputElement } = loadHighlightHelpers({
