@@ -132,12 +132,14 @@ impl BridgeServices for DesktopBridgeServices {
     }
 
     fn open_view(&self, view: &str) -> bool {
+        let state = self.app.state::<AppState>();
         // On a cold start the endpoint serves before the window is built (#180).
-        if !self.app.state::<AppState>().main_window.wait(MAIN_WINDOW_WAIT) { return false; }
+        if !state.main_window.wait(MAIN_WINDOW_WAIT) { return false; }
         if self.app.get_webview_window("main").is_none() { return false; }
+        // Kept for the page to take: a page that has not loaded yet misses the event below
+        // and takes the view once it listens (#183).
+        state.requested_view.request(view);
         crate::lifecycle::show_main_window(&self.app);
-        // The window is already in front at this point; a lost navigation event leaves the
-        // user on the current page, which is not worth telling the plugin "unavailable".
         if self.app.emit("resume-pro://navigate", view).is_err() {
             eprintln!("bridge: ui.open could not emit the navigation event");
         }
