@@ -63,12 +63,14 @@
               <input id="job-save-company" class="job-input" type="text" autocomplete="off" required>
               <label class="job-label" for="job-save-title">岗位名称</label>
               <input id="job-save-title" class="job-input" type="text" autocomplete="off" required>
+              <label class="job-label" for="job-save-location">工作地点</label>
+              <input id="job-save-location" class="job-input" type="text" autocomplete="off">
               <label class="job-label" for="job-save-url">来源网址</label>
               <input id="job-save-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
               <p id="job-save-note" class="job-note"></p>
               <p id="job-save-error" class="job-error" role="alert" hidden></p>
               <button id="job-save-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
-            <button id="job-save-reassist" class="job-link" type="button" title="把页面上的几段岗位文字交给桌面 AI 重新识别，识别前会列出发送的内容">AI 重新识别</button>
+              <button id="job-save-reassist" class="job-link" type="button" title="把页面上的几段岗位文字交给桌面 AI 重新识别，识别前会列出发送的内容">AI 重新识别</button>
               <div class="offer-actions">
                 <button id="job-save-confirm" type="submit">确定保存</button>
                 <button id="job-save-cancel" type="button">取消</button>

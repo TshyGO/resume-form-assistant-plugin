@@ -39,14 +39,15 @@ const FORM_LABEL = /^(姓名|手机|手机号|电话|邮箱|证件|证件号码|
 // What a company or job name must not be. These come from class-name selectors that are
 // wider than the text they hit: a logo, a menu item, an empty select, a counter.
 const PLACEHOLDER = /^(?:请(?:选择|输入|填写|选)\S{0,6}|选择|未知|暂无|无|待定|其他|全部|更多|详情|null|undefined|n\/?a|none|loading\.*|-+|—+)$/i;
-const NAV_OR_ACTION = /^(?:首页|主页|登录|登陆|注册|退出|退出登录|返回|提交|投递|申请|立即投递|立即申请|确认|确定|取消|保存|下一步|上一步|关闭|搜索|查看|查看详情|职位列表|职位|岗位|社会招聘|校园招聘|校招|社招|实习生招聘|实习招聘|全球招聘|global jobs|jobs|careers|我的简历|我的申请|我的投递|个人中心|关于我们|联系我们|帮助|english|中文|logo)$/i;
+const NAV_OR_ACTION = /^(?:首页|主页|登录|登陆|注册|退出|退出登录|返回|提交|投递|申请|立即投递|立即申请|确认|确定|取消|保存|上传|上传简历|访问公司|访问官网|下一步|上一步|关闭|搜索|查看|查看详情|职位列表|职位|岗位|社会招聘|校园招聘|校招|社招|实习生招聘|实习招聘|全球招聘|global jobs|jobs|careers|我的简历|我的申请|我的投递|个人中心|关于我们|联系我们|帮助|english|中文|logo)$/i;
 const ONLY_SYMBOLS = /^[\d\s\p{P}\p{S}_]+$/u;
 // A name that reads as an organisation. A company line without this shape is a candidate
 // for the desktop AI to look at, not something to accept on the strength of a class name.
-const COMPANY_SUFFIX = /(?:公司|集团|有限责任公司|股份|研究院|研究所|事务所|银行|医院|大学|学院|工厂|inc\.?|ltd\.?|llc|corp\.?|co\.|gmbh)$/i;
+const COMPANY_SUFFIX = /(?:有限责任公司|股份有限公司|有限公司|研究院|研究所|事务所|集团|公司|股份|银行|医院|大学|学院|工厂|inc\.?|ltd\.?|llc|corp\.?|co\.|gmbh)$/i;
 // A "company" that ends like a job, or a "job" that ends like a company, is misread.
 const LOOKS_LIKE_JOB = /(?:工程师|经理|专员|主管|总监|实习生|助理|顾问|管培生|岗位|职位|招聘)$/;
-const LOOKS_LIKE_COMPANY = /(?:公司|集团)$/;
+const LOOKS_LIKE_COMPANY = COMPANY_SUFFIX;
+const COUNT_LIKE_NAME = /^(?:共|约)?\s*\d+\s*(?:家|个|条|家公司|个职位|条记录)?$/;
 
 export function extractJobFields(doc, href) {
   const redacted = redactUrl(href);
@@ -54,7 +55,7 @@ export function extractJobFields(doc, href) {
   const postings = findJobPostings(doc);
   const texts = shortTexts(doc);
 
-  const jobCompanies = unique(postings.map(companyFrom).map(cleanField).filter(value => plausibleName(value) && !LOOKS_LIKE_JOB.test(value)));
+  const jobCompanies = unique(postings.map(companyFrom).map(cleanField).filter(plausibleCompanyName));
   const jobTitles = unique(postings.map(posting => cleanField(posting?.title)).filter(plausibleName));
   const jobLocation = firstJobLocation(postings);
 
@@ -201,16 +202,17 @@ function companyLabels(doc, texts, apply) {
   // work-history section are not evidence about this posting's employer.
   const beforeApply = applyIndex < 0 ? [] : texts.slice(0, applyIndex);
   const seenBeforeApply = nodes(doc, COMPANY_SELECTOR)
+    .filter(node => !isInterfaceNode(node))
     .map(node => cleanField(node?.textContent))
     .filter(value => value && beforeApply.includes(value));
   const fromElements = seenBeforeApply.filter(value => isCompanyText(value));
-  const companyLike = value => isCompanyText(value) && COMPANY_SUFFIX.test(value);
+  const companyLike = value => isCompanyText(value) && hasNamedCompanySuffix(value);
   const pageTitle = cleanField(doc?.title);
   const titleCandidate = companyLike(pageTitle) ? [pageTitle] : [];
   const headingCandidates = beforeApply.map(cleanField).filter(companyLike);
   // An image alt can describe an avatar, navigation item or resume. It is never by itself
   // evidence of the employer, even when it is the only alt on the page.
-  const strong = unique([...fromElements.filter(value => COMPANY_SUFFIX.test(value)), ...titleCandidate, ...headingCandidates]);
+  const strong = unique([...fromElements.filter(hasNamedCompanySuffix), ...titleCandidate, ...headingCandidates]);
   const weak = unique(fromElements.filter(value => !COMPANY_SUFFIX.test(value)));
   return { strong, weak, rejected: seenBeforeApply.length > fromElements.length && !strong.length && !weak.length };
 }
@@ -226,7 +228,37 @@ function plausibleName(value) {
 function isCompanyText(value) {
   return Boolean(value) && plausibleName(value) && !LOOKS_LIKE_JOB.test(value)
     && !APPLY_PHRASE.test(value) && !PREFERENCE.test(value) && !FORM_LABEL.test(value)
-    && !SENSITIVE.test(value) && !value.includes('://');
+    && !SENSITIVE.test(value) && !value.includes('://') && !COUNT_LIKE_NAME.test(value);
+}
+
+function plausibleCompanyName(value) {
+  return isCompanyText(value) && (!COMPANY_SUFFIX.test(value) || hasNamedCompanySuffix(value));
+}
+
+// A suffix is evidence only when a real name remains after generic organisation words are
+// removed. This rejects labels such as "公司", "集团有限公司" and "12 家公司".
+function hasNamedCompanySuffix(value) {
+  if (!COMPANY_SUFFIX.test(value)) return false;
+  let stem = collapse(value);
+  let previous;
+  do {
+    previous = stem;
+    stem = collapse(stem.replace(COMPANY_SUFFIX, ''));
+  } while (stem && stem !== previous && COMPANY_SUFFIX.test(stem));
+  return plausibleName(stem) && !COUNT_LIKE_NAME.test(stem);
+}
+
+function isInterfaceNode(node) {
+  const tag = String(node?.tagName || '').toLowerCase();
+  if (['a', 'button', 'input', 'option', 'select', 'textarea', 'nav'].includes(tag)) return true;
+  const role = String(node?.getAttribute?.('role') || '').toLowerCase();
+  if (['button', 'link', 'menuitem', 'navigation', 'option'].includes(role)) return true;
+  if (node?.getAttribute?.('aria-hidden') === 'true') return true;
+  try {
+    return Boolean(node?.closest?.('a,button,nav,[role="button"],[role="link"],[role="menuitem"],[role="navigation"],[aria-hidden="true"]'));
+  } catch {
+    return false;
+  }
 }
 
 function firstJobLocation(postings) {
@@ -240,6 +272,7 @@ function firstJobLocation(postings) {
 function shortTexts(doc) {
   const values = [];
   for (const node of nodes(doc, TEXT_SELECTOR)) {
+    if (isInterfaceNode(node)) continue;
     if (typeof node?.querySelector === 'function' && node.querySelector('input, textarea, select')) continue;
     const value = collapse(node?.textContent);
     if (!value || value.length > MAX_FRAGMENT_CHARS || FORM_LABEL.test(value)) continue;

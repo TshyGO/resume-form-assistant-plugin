@@ -337,6 +337,21 @@ test('single characters, numbers, placeholders and menu or button text are never
   }
 });
 
+test('interactive controls, generic organisation words and company counts never become reliable employers', async () => {
+  const { extractJobFields } = await load();
+  for (const [text, options] of [
+    ['访问公司', { tag: 'button' }],
+    ['金发科技股份有限公司', { tag: 'button' }],
+    ['公司', {}],
+    ['集团有限公司', {}],
+    ['12 家公司', {}]
+  ]) {
+    const fields = extractJobFields(beisenPage(text, options), 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.reliable, false, `${text} must not skip AI`);
+    assert.notEqual(fields.confidence, 'reliable', text);
+  }
+});
+
 test('a short name with no organisation shape is only a candidate for the AI, never a settled company', async () => {
   const { extractJobFields } = await load();
   const { nextSaveStep } = await import('../link/save-flow.mjs');
@@ -371,6 +386,18 @@ test('a company that reads like a job, or a job that reads like a company, is no
   }), 'https://kingfa.zhiye.com/form');
   assert.equal(employerAsJob.reliable, false);
   assert.ok(employerAsJob.assistReasons.includes('title_suspicious'));
+
+  for (const title of ['南京大学', '星河研究院', '示例银行', 'Example Corp']) {
+    const suspicious = extractJobFields(richDoc({
+      title: '招聘',
+      elements: [
+        element({ className: 'company-name', text: '金发科技股份有限公司' }),
+        element({ tag: 'span', text: `你正在投递职位：${title}` })
+      ]
+    }), 'https://kingfa.zhiye.com/form');
+    assert.equal(suspicious.reliable, false, `${title} looks like an organisation, not a job`);
+    assert.ok(suspicious.assistReasons.includes('title_suspicious'));
+  }
 });
 
 test('junk in a JobPosting is dropped as well', async () => {

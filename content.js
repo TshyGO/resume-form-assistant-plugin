@@ -3005,8 +3005,8 @@
     return {
       company: text(edited.company),
       title: text(edited.title),
-      // Not editable in the panel, so never taken from a message: the draft's own value.
-      location: text(draftFields?.location),
+      // Location is shown beside company and title and is part of the user's confirmation.
+      location: text(edited.location),
       sourceUrl: typeof draftFields?.sourceUrl === "string" ? draftFields.sourceUrl : "",
       dedupeUrl: typeof draftFields?.dedupeUrl === "string" ? draftFields.dedupeUrl : ""
     };
@@ -3160,7 +3160,10 @@
       phase: job.phase,
       version: job.version,
       revision: job.revision,
-      fields: job.fields ? { company: job.fields.company || "", title: job.fields.title || "", sourceUrl: job.fields.sourceUrl || "" } : null,
+      fields: job.fields ? {
+        company: job.fields.company || "", title: job.fields.title || "",
+        location: job.fields.location || "", sourceUrl: job.fields.sourceUrl || ""
+      } : null,
       note: job.note,
       openView: job.openView,
       error: job.error,
@@ -3177,10 +3180,25 @@
   // A single-page site can swap the job under an open draft without reloading the page. The
   // draft belongs to the address it was read from; once that changes it is thrown away, so
   // the panel can never save the old company and title for the new page.
-  // "result" counts too: its "save again" would resend the old job under the new page.
   function dropStalePanelJob() {
-    const open = panelJob.draftId && ["extracting", "assist", "review", "choice", "result"].includes(panelJob.phase);
-    if (!open || panelJob.pageUrl === location.href) return false;
+    if (!panelJob.draftId || panelJob.pageUrl === location.href) return false;
+    // A completed result is a fact about the write that already happened. Keep that fact on
+    // screen after navigation, but an old duplicate warning must not offer "save again" for
+    // the previous page.
+    if (panelJob.phase === "result") {
+      if (panelJob.result?.offerForce) {
+        touchPanelJob({
+          result: {
+            ...panelJob.result,
+            offerForce: false,
+            hint: "网页已经切换；上面的结果仍然有效，但不能为上一页的岗位再存一次。"
+          }
+        });
+      }
+      return false;
+    }
+    const open = ["extracting", "assist", "review", "choice"].includes(panelJob.phase);
+    if (!open) return false;
     cancelAiRequest(panelJob.requestId);
     panelJob = idlePanelJob(panelJob);
     panelJob.discarded = "page-changed";

@@ -819,7 +819,10 @@ test('#172 a reliable page opens a review draft in the side panel, and nothing i
   assert.equal(reply.ok, true);
   const draft = reply.jobSave;
   assert.equal(draft.phase, 'review');
-  assert.deepEqual(draft.fields, { company: '星河科技', title: '后端开发工程师', sourceUrl: 'https://jobs.example.com/123' });
+  assert.deepEqual(draft.fields, {
+    company: '星河科技', title: '后端开发工程师', location: '上海',
+    sourceUrl: 'https://jobs.example.com/123'
+  });
   assert.equal(draft.note, page.copy.describeReviewSave());
   assert.equal('dedupeUrl' in draft.fields, false, 'the panel only sees the redacted source URL');
   assert.equal(page.saves().length, 0, 'no job.save before the user confirms');
@@ -830,14 +833,14 @@ test('#172 a reliable page opens a review draft in the side panel, and nothing i
   assert.equal((await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' })).jobSave.draftId, draft.draftId);
 });
 
-test('#172 confirm saves the edited company and title once, with the draft\'s redacted URLs', async () => {
+test('#172 confirm saves the edited company, title and location once, with the draft\'s redacted URLs', async () => {
   let release;
   const page = await panelJobPage({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
     ? new Promise(resolve => { release = () => resolve({ status: 'saved' }); }) : {} });
   const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
   const confirm = {
     type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId,
-    company: '  星河科技 ', title: 'Java 后端开发工程师',
+    company: '  星河科技 ', title: 'Java 后端开发工程师', location: ' 杭州 ',
     // A panel cannot swap in another URL: the page keeps the one its redaction produced.
     sourceUrl: 'https://jobs.example.com/123?token=secret', dedupeUrl: 'https://evil.example'
   };
@@ -850,7 +853,7 @@ test('#172 confirm saves the edited company and title once, with the draft\'s re
   assert.equal(done.ok, true);
   assert.equal(page.saves().length, 1);
   assert.deepEqual(plain(page.saves()[0].fields), {
-    company: '星河科技', title: 'Java 后端开发工程师', location: '上海',
+    company: '星河科技', title: 'Java 后端开发工程师', location: '杭州',
     sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
   });
   assert.equal(page.saves()[0].force, false);

@@ -35,6 +35,7 @@
     jobForm: document.getElementById("job-save-form"),
     jobCompany: document.getElementById("job-save-company"),
     jobTitle: document.getElementById("job-save-title"),
+    jobLocation: document.getElementById("job-save-location"),
     jobUrl: document.getElementById("job-save-url"),
     jobNote: document.getElementById("job-save-note"),
     jobError: document.getElementById("job-save-error"),
@@ -281,6 +282,7 @@
         jobFilled = key;
         elements.jobCompany.value = job.fields?.company || "";
         elements.jobTitle.value = job.fields?.title || "";
+        elements.jobLocation.value = job.fields?.location || "";
       }
       // Always the page's redacted URL; the input is read-only and never read back.
       elements.jobUrl.value = job.fields?.sourceUrl || "";
@@ -296,6 +298,7 @@
       elements.jobReassist.disabled = saving;
       elements.jobCompany.disabled = saving;
       elements.jobTitle.disabled = saving;
+      elements.jobLocation.disabled = saving;
     }
 
     const showChoice = phase === "choice" || (phase === "saving" && Boolean(job?.candidates?.length));
@@ -520,6 +523,7 @@
     if (!jobSave?.draftId || jobSave.phase !== "review") return;
     const company = elements.jobCompany.value.trim();
     const title = elements.jobTitle.value.trim();
+    const location = elements.jobLocation.value.trim();
     elements.jobCompany.setAttribute?.("aria-invalid", String(!company));
     elements.jobTitle.setAttribute?.("aria-invalid", String(!title));
     if (!company || !title) {
@@ -529,7 +533,7 @@
       (company ? elements.jobTitle : elements.jobCompany).focus?.();
       return;
     }
-    const result = await jobRequest({ type: "RESUME_PANEL_SAVE_CONFIRM", draftId: jobSave.draftId, company, title });
+    const result = await jobRequest({ type: "RESUME_PANEL_SAVE_CONFIRM", draftId: jobSave.draftId, company, title, location });
     if (result && !result.ok && !result.missing) toast(result.error || "这次没能保存，请稍后再试。");
   });
   elements.jobCancel.addEventListener("click", async () => {
@@ -543,7 +547,8 @@
     // What is in the boxes now goes along, so a failed or cancelled recognition gives it back.
     const result = await jobRequest({
       type: "RESUME_PANEL_SAVE_REASSIST", draftId: jobSave.draftId,
-      company: elements.jobCompany.value.trim(), title: elements.jobTitle.value.trim()
+      company: elements.jobCompany.value.trim(), title: elements.jobTitle.value.trim(),
+      location: elements.jobLocation.value.trim()
     });
     if (result && !result.ok) toast(result.error || "暂时无法重新识别。");
   });

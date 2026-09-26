@@ -210,6 +210,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     form: get('job-save-form'),
     company: get('job-save-company'),
     title: get('job-save-title'),
+    location: get('job-save-location'),
     url: get('job-save-url'),
     async click(id) { await get(id).listeners.click({ target: get(id) }); await settle(); },
     async submit() { await get('job-save-form').listeners.submit({ preventDefault() {} }); await settle(); },
@@ -240,9 +241,10 @@ test('the 填写 view shows the save-job button itself, not only inside the ··
   assert.match(fillView, /<button[^>]*id="job-save-button"[^>]*>保存岗位到桌面端<\/button>/);
   assert.doesNotMatch(menu, /保存岗位到桌面端/, 'the ··· menu no longer hides the entry');
   assert.doesNotMatch(menu, /data-advanced="save"/);
-  // The review form: editable company and title, a read-only URL, confirm and cancel.
+  // The review form: editable company, title and location, a read-only URL, confirm and cancel.
   assert.match(fillView, /<input id="job-save-company"[^>]*required/);
   assert.match(fillView, /<input id="job-save-title"[^>]*required/);
+  assert.match(fillView, /<input id="job-save-location"/);
   assert.match(fillView, /<input id="job-save-url"[^>]*readonly/);
   assert.match(fillView, /id="job-save-confirm" type="submit">确定保存</);
   assert.match(fillView, /id="job-save-cancel" type="button">取消</);
@@ -257,12 +259,14 @@ test('clicking the button shows company, title and redacted URL in the panel, an
   assert.equal(panel.button.hidden, true);
   assert.equal(panel.company.value, '星河科技');
   assert.equal(panel.title.value, '后端开发工程师');
+  assert.equal(panel.location.value, '');
   assert.equal(panel.url.value, 'https://jobs.example.com/123', 'the URL is the redacted one, not the address bar');
   assert.equal(panel.saves().length, 0, 'nothing is written before confirming');
   assert.equal(panel.pageMessages.some(message => message.type === 'RESUME_PANEL_ADVANCED'), false, 'the old page overlay is not used');
 
   // The user corrects the title; a status poll meanwhile must not undo the edit.
   panel.title.value = 'Java 后端开发工程师';
+  panel.location.value = '杭州';
   await panel.poll();
   assert.equal(panel.title.value, 'Java 后端开发工程师');
   // The URL field is read-only and is never read back: changing it does nothing.
@@ -271,7 +275,7 @@ test('clicking the button shows company, title and redacted URL in the panel, an
   await panel.submit();
   assert.equal(panel.saves().length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(panel.saves()[0].fields)), {
-    company: '星河科技', title: 'Java 后端开发工程师', location: '',
+    company: '星河科技', title: 'Java 后端开发工程师', location: '杭州',
     sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
   });
   assert.equal(panel.form.hidden, true);
@@ -636,7 +640,7 @@ test('a status answer from tab A that arrives after switching to B is ignored', 
   assert.ok(panel.pageMessages.filter(message => message.type === 'RESUME_PANEL_STATUS').length >= 2);
 });
 
-test('after the page address changes, a finished save can no longer be saved again for the old job', async () => {
+test('after the page address changes, a finished result stays truthful but can no longer save the old job again', async () => {
   let saves = 0;
   const panel = await openPanel({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
     ? (++saves === 1 ? { status: 'duplicate' } : { status: 'saved' }) : {} });
@@ -648,14 +652,15 @@ test('after the page address changes, a finished save can no longer be saved aga
   panel.page.location.href = 'https://jobs.example.com/999';
   const reply = await panel.page.deliver({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId, force: true });
   assert.equal(reply.ok, false);
-  assert.match(reply.error, /作废/);
+  assert.match(reply.error, /核对岗位信息/);
   assert.equal(panel.saves().length, 1, 'the old job was not written again');
 
-  // The old result is gone from the panel too, not just refused.
+  // The completed result remains true; only its unsafe action is removed.
   await panel.poll();
-  assert.equal(panel.get('job-save-result').hidden, true);
-  assert.equal(panel.button.hidden, false);
-  assert.match(panel.toast(), /作废/);
+  assert.equal(panel.get('job-save-result').hidden, false);
+  assert.match(panel.get('job-save-result-text').textContent, /待同步|已经有一条/);
+  assert.equal(panel.get('job-save-again').hidden, true);
+  assert.match(panel.get('job-save-result-hint').textContent, /网页已经切换/);
 });
 
 test('an AI request is not sent when the job was cancelled while the modules were loading', async () => {
@@ -702,13 +707,14 @@ test('a page without the helper turns the button off and says why on screen', as
   assert.equal(panel.get('job-save-hint').hidden, false);
 });
 
-test('a location injected into the confirm message is ignored; the draft\'s location is saved', async () => {
+test('the visible location can be edited and the confirmed value is saved', async () => {
   const panel = await openPanel({ extraction: { ...RELIABLE_JOB, location: '上海' } });
   await panel.click('job-save-button');
-  const draftId = currentDraftId(panel);
-  await panel.page.deliver({ type: 'RESUME_PANEL_SAVE_CONFIRM', draftId, company: '星河科技', title: '后端开发工程师', location: '伪造地点' });
+  assert.equal(panel.location.value, '上海');
+  panel.location.value = '杭州';
+  await panel.submit();
   assert.equal(panel.saves().length, 1);
-  assert.equal(panel.saves()[0].fields.location, '上海');
+  assert.equal(panel.saves()[0].fields.location, '杭州');
 });
 
 test('a reliable read skips the AI entirely', async () => {
