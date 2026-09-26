@@ -50,6 +50,7 @@
 
           <section id="job-save" class="job-save" aria-label="保存岗位到桌面端">
             <button class="job-save-button" id="job-save-button" type="button">保存岗位到桌面端</button>
+            <p id="job-save-hint" class="job-note" hidden>当前网页没有连接填表助手，无法保存岗位。请在招聘网页里打开侧栏。</p>
             <div id="job-save-progress" class="job-card" role="status" hidden>
               <p id="job-save-progress-text" class="job-card__title"></p>
               <p id="job-save-progress-count" class="job-note"></p>
@@ -67,6 +68,7 @@
               <p id="job-save-note" class="job-note"></p>
               <p id="job-save-error" class="job-error" role="alert" hidden></p>
               <button id="job-save-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
+            <button id="job-save-reassist" class="job-link" type="button" title="把页面上的几段岗位文字交给桌面 AI 重新识别，识别前会列出发送的内容">AI 重新识别</button>
               <div class="offer-actions">
                 <button id="job-save-confirm" type="submit">确定保存</button>
                 <button id="job-save-cancel" type="button">取消</button>

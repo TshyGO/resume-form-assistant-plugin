@@ -311,3 +311,104 @@ test('extraction reads nothing beyond the four fields it reports', async () => {
   assert.equal(seen.includes('body'), false);
   assert.ok(seen.every(selector => !/article|resume|cookie|form/.test(selector)), seen.join('\n'));
 });
+
+// --- #175: a wrong local read must not be trusted, so the desktop AI gets asked ------------
+
+function beisenPage(companyText, { tag = 'div', className = 'company-name' } = {}) {
+  return richDoc({
+    title: '招聘',
+    elements: [
+      element({ tag, className, text: companyText }),
+      element({ tag: 'span', text: '你正在投递职位：研发工程师-聚合方向' })
+    ]
+  });
+}
+
+test('single characters, numbers, placeholders and menu or button text are never a reliable company', async () => {
+  const { extractJobFields } = await load();
+  const junk = ['金', '1', 'l', '请选择', '请输入公司', '12345', '2024', '首页', '登录', '立即投递', '社会招聘', '校园招聘', 'Global Jobs', '提交', '取消'];
+  for (const text of junk) {
+    const fields = extractJobFields(beisenPage(text), 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.reliable, false, `${text} must not be reliable`);
+    assert.notEqual(fields.confidence, 'reliable', text);
+    assert.equal(fields.company, '', `${text} must not be offered as the company`);
+    assert.ok(fields.assistReasons.includes('missing_company'), text);
+    assert.equal(fields.fragments.some(fragment => fragment.text === text), false, `${text} is not sent to the AI either`);
+  }
+});
+
+test('a short name with no organisation shape is only a candidate for the AI, never a settled company', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+  const fields = extractJobFields(beisenPage('公安'), 'https://kingfa.zhiye.com/form');
+  assert.equal(fields.confidence, 'uncertain');
+  assert.equal(fields.reliable, false);
+  assert.ok(fields.assistReasons.includes('company_weak_evidence'));
+  assert.equal(fields.sources.company.reliable, false);
+  // It is shown to the AI as a fragment, and the flow asks the AI instead of committing.
+  assert.ok(fields.fragments.some(fragment => fragment.text === '公安'));
+  assert.equal(nextSaveStep(fields).action, 'assist');
+});
+
+test('a company that reads like a job, or a job that reads like a company, is not reliable', async () => {
+  const { extractJobFields } = await load();
+  assert.equal(extractJobFields(beisenPage('研发工程师'), 'https://kingfa.zhiye.com/form').company, '');
+
+  const doc = richDoc({
+    title: '金发科技股份有限公司',
+    elements: [element({ tag: 'span', text: '你正在投递职位：金发科技股份有限公司' })]
+  });
+  const same = extractJobFields(doc, 'https://kingfa.zhiye.com/form');
+  assert.equal(same.reliable, false, 'company and job with the same text');
+  assert.equal(same.confidence, 'invalid');
+
+  const employerAsJob = extractJobFields(richDoc({
+    title: '招聘',
+    elements: [
+      element({ className: 'company-name', text: '金发科技股份有限公司' }),
+      element({ tag: 'span', text: '你正在投递职位：某某科技有限公司' })
+    ]
+  }), 'https://kingfa.zhiye.com/form');
+  assert.equal(employerAsJob.reliable, false);
+  assert.ok(employerAsJob.assistReasons.includes('title_suspicious'));
+});
+
+test('junk in a JobPosting is dropped as well', async () => {
+  const { extractJobFields } = await load();
+  const fields = extractJobFields(fakeDoc({
+    jsonLd: [{ '@type': 'JobPosting', title: '请选择', hiringOrganization: { name: '1' } }]
+  }), 'https://jobs.example.com/apply');
+  assert.equal(fields.company, '');
+  assert.equal(fields.title, '');
+  assert.equal(fields.confidence, 'invalid');
+  assert.equal(fields.reliable, false);
+});
+
+test('a page with clear company and job evidence is reliable and needs no AI', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+  for (const doc of [
+    richDoc({
+      title: '招聘',
+      elements: [
+        element({ className: 'company-name', text: '金发科技股份有限公司' }),
+        element({ tag: 'span', text: '你正在投递职位：研发工程师-聚合方向' })
+      ]
+    }),
+    fakeDoc({ jsonLd: [{ '@type': 'JobPosting', title: '后端开发工程师', hiringOrganization: { name: '星河科技' } }] })
+  ]) {
+    const fields = extractJobFields(doc, 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.confidence, 'reliable');
+    assert.equal(fields.reliable, true);
+    assert.equal(nextSaveStep(fields).action, 'commit');
+  }
+});
+
+test('nothing usable is "invalid"; something read but not trusted is "uncertain"', async () => {
+  const { extractJobFields } = await load();
+  assert.equal(extractJobFields(fakeDoc({}), 'https://jobs.example.com/a').confidence, 'invalid');
+  const titleOnly = extractJobFields(fakeDoc({
+    jsonLd: [{ '@type': 'JobPosting', title: '后端开发工程师' }]
+  }), 'https://jobs.example.com/a');
+  assert.equal(titleOnly.confidence, 'uncertain');
+});
