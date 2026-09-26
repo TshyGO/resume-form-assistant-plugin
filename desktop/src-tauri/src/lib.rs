@@ -60,6 +60,8 @@ struct AppState {
     /// Serving the local endpoint. Held here so it lives exactly as long as the
     /// application does, which is what ties the unique listener to the unique writer.
     ipc: Mutex<Option<ipc_server::IpcService>>,
+    /// Set once the main window is built, which happens after the endpoint is serving.
+    main_window: lifecycle::MainWindowReady,
     /// D10：把到期登记给操作系统的那一位。整个进程共用一个，退出时要靠它撤销
     /// 全部未触发的计划。它不认识数据库，也不认识待办是什么。
     reminders: Box<dyn reminders::ReminderScheduler>,
@@ -1581,6 +1583,7 @@ pub fn run() {
         .manage(AppState {
             host: Mutex::new(None),
             ipc: Mutex::new(None),
+            main_window: lifecycle::MainWindowReady::default(),
             host_error: Mutex::new(None),
             paths: Mutex::new(HostPaths::resolve().ok()),
             store: Arc::new(Mutex::new(None)),
@@ -1663,6 +1666,21 @@ pub fn run() {
 
             // 浏览器要靠这份清单才找得到 host。放在这里：paths 已经有了，窗口还没显示。
             refresh_native_messaging(&app.state::<AppState>());
+
+            // The window is built here rather than from tauri.conf.json. Tauri builds
+            // configured windows before this hook, and on Windows building one waits for
+            // WebView2 to start, which on a cold start can outlast the host's wait for the
+            // endpoint (#180). The archive and the endpoint above do not need a window.
+            let main_window = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .cloned()
+                .ok_or("tauri.conf.json has no main window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &main_window)?.build()?;
+            app.state::<AppState>().main_window.set();
 
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
