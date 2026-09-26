@@ -224,6 +224,10 @@
     return;
   }
 
+  // Register before a fill starts so this capture listener is as early as the content script
+  // can make it. With no active fill session every handler returns immediately.
+  bindSubmitSync();
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init, { once: true });
   } else {
@@ -1720,30 +1724,37 @@
   // 这里记住本次填写成功的文本框，在用户真正点按钮、网站自己的点击处理之前补上这一次。
   // 只做 focus → blur：不写值、不点按钮、不提交、不拦截事件。
   const SYNC_INPUT_TYPES = new Set(["text", "tel", "email"]);
-  const CAPTCHA_HINT = /captcha|验证码|校验码|图形码|短信码|verif(?:y|ication)[-_ ]?code|one-time-code|otp/i;
+  const CAPTCHA_HINT = /captcha|验证码|校验码|图形码|短信码|verif(?:y|ication)[-_ ]?code|one-time-code|(?:^|[^a-z0-9])otp(?:[^a-z0-9]|$)/i;
+  const PASSWORD_HINT = /password|passwd|(?:^|[^a-z0-9])pwd(?:[^a-z0-9]|$)|密码/i;
   const SUBMIT_TEXT_PATTERN = /预览|下一步|下一页|提交|保存并(?:继续|下一步)|^(?:submit|next|continue|preview|save\s*(?:and|&)\s*(?:continue|next)|(?:review|preview)\s*(?:and|&)\s*submit)\b/i;
   const NON_SUBMIT_TEXT_PATTERN = /关闭|删除|取消|返回|上一步|上一页|清空|重置|移除|添加|新增|上传|^(?:close|delete|remove|cancel|back|previous|prev|reset|clear|add|upload)\b/i;
 
-  // 只有 text / tel / email / textarea 会被记录；密码、验证码、下拉、日期、文件、单选、复选都不碰。
-  function isSyncableTextControl(element) {
-    if (element instanceof HTMLTextAreaElement) {
-      return true;
-    }
-    if (!(element instanceof HTMLInputElement)) {
-      return false;
-    }
-    const type = String(element.type || "text").toLowerCase();
-    if (!SYNC_INPUT_TYPES.has(type)) {
-      return false;
-    }
-    const hint = [
+  function controlHintText(element) {
+    const parts = [
       element.name,
       element.id,
       element.getAttribute?.("autocomplete"),
       element.getAttribute?.("placeholder"),
       element.getAttribute?.("aria-label")
-    ].filter(Boolean).join(" ");
-    return !CAPTCHA_HINT.test(hint);
+    ];
+    try {
+      for (const label of Array.from(element.labels || [])) parts.push(label?.textContent);
+    } catch (_) {
+      // A custom control may expose a non-standard labels getter. Its other hints still apply.
+    }
+    const labelledBy = String(element.getAttribute?.("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    for (const id of labelledBy) parts.push(document.getElementById?.(id)?.textContent);
+    return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  // 只有 text / tel / email / textarea 会被记录；密码、验证码、下拉、日期、文件、单选、复选都不碰。
+  function isSyncableTextControl(element) {
+    const textarea = element instanceof HTMLTextAreaElement;
+    const input = element instanceof HTMLInputElement;
+    if (!textarea && !input) return false;
+    if (input && !SYNC_INPUT_TYPES.has(String(element.type || "text").toLowerCase())) return false;
+    const hint = controlHintText(element);
+    return !CAPTCHA_HINT.test(hint) && !PASSWORD_HINT.test(hint);
   }
 
   function buttonLabelText(element) {
@@ -1822,6 +1833,17 @@
       node = node.parentElement;
     }
     return null;
+  }
+
+  // composedPath crosses a shadow boundary while parentElement does not. The first button-like
+  // node in the path is what the user actually activated; an ordinary inner button must not be
+  // skipped in favour of a submit-looking outer host.
+  function findSubmitTriggerInPath(path, target) {
+    for (const node of path || []) {
+      if (node?.id === SIDEBAR_ID) return null;
+      if (isButtonLike(node)) return isSubmitTrigger(node) ? node : null;
+    }
+    return findSubmitTrigger(target);
   }
 
   function deepActiveElement() {
@@ -1947,16 +1969,27 @@
       if (current !== session.controls.get(element)) {
         continue;
       }
+      // Native type/required/pattern errors are real content errors, not a framework state
+      // that another focus/blur can repair. Reading validity has no submission side effect.
+      if (element.validity?.valid === false) {
+        if (textFillFailures.get(element) === "framework_state_unsynced") textFillFailures.delete(element);
+        continue;
+      }
       const result = inspectTextCommit(element, current, true);
       if (!result.ok && (result.reason === "validation_not_cleared" || result.reason === "framework_state_unsynced")) {
         unsynced.push(element);
         textFillFailures.set(element, "framework_state_unsynced");
+      } else if (result.ok && textFillFailures.get(element) === "framework_state_unsynced") {
+        textFillFailures.delete(element);
       }
     }
+    const hadUnsynced = session.unsynced > 0;
     const changed = session.unsynced !== unsynced.length;
     session.unsynced = unsynced.length;
     if (unsynced.length) {
-      showStatus("页面表单状态未同步，请手动点击该字段确认", "error", true);
+      showStatus("页面仍认为部分内容无效，请检查内容或手动点击字段确认", "error", true);
+    } else if (hadUnsynced) {
+      showStatus("页面表单状态已同步。", "success");
     }
     if (changed && session.summary) {
       writeFillDiagnostics({ ...session.summary, unsyncedCount: session.unsynced });
@@ -2005,7 +2038,7 @@
       }
       if (event.type === "keydown") {
         const activation = event.key === "Enter" || event.key === " " || event.key === "Spacebar";
-        if (!activation || event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        if (!activation || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
           return;
         }
       }
@@ -2014,7 +2047,7 @@
       if (!target || path.some((node) => node?.id === SIDEBAR_ID)) {
         return;
       }
-      const trigger = findSubmitTrigger(target);
+      const trigger = findSubmitTriggerInPath(path, target);
       if (!trigger) {
         return;
       }

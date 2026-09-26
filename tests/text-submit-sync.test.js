@@ -93,10 +93,35 @@ test("select、password、file、验证码、日期、单选、复选不会被�
   const oneTime = make("text");
   oneTime.setAttribute("autocomplete", "one-time-code");
   controls.push(oneTime);
+  const captchaArea = new h.HTMLTextAreaElement();
+  captchaArea.name = "captcha";
+  controls.push(captchaArea);
+  const labelledArea = new h.HTMLTextAreaElement();
+  const captchaLabel = new h.HTMLElement("LABEL");
+  captchaLabel.textContent = "短信验证码";
+  labelledArea.labels = [captchaLabel];
+  controls.push(labelledArea);
+  const labelledInput = make("text");
+  const ariaLabel = new h.HTMLElement("SPAN");
+  ariaLabel.id = "verify-label";
+  ariaLabel.textContent = "图形验证码";
+  h.body.appendChild(ariaLabel);
+  labelledInput.setAttribute("aria-labelledby", "verify-label");
+  controls.push(labelledInput);
+  const disguisedPassword = make("text");
+  const passwordLabel = new h.HTMLElement("LABEL");
+  passwordLabel.textContent = "登录密码";
+  disguisedPassword.labels = [passwordLabel];
+  controls.push(disguisedPassword);
   for (const control of controls) {
     assert.equal(h.recordFilledTextControl(session, control), false);
   }
-  assert.deepEqual(h.fillSessionControls(), []);
+  const ordinaryArea = new h.HTMLTextAreaElement();
+  ordinaryArea.name = "notepad";
+  assert.equal(h.recordFilledTextControl(session, ordinaryArea), true, "ordinary textarea still participates");
+  const ordinaryInput = make("text", { name: "desktopExperience" });
+  assert.equal(h.recordFilledTextControl(session, ordinaryInput), true, "otp must be a token, not an arbitrary substring");
+  assert.deepEqual(h.fillSessionControls(), [ordinaryArea, ordinaryInput]);
 });
 
 test("用户第一次点「预览并提交」：同步发生在 pointerdown，早于网站的点击处理", async () => {
@@ -277,6 +302,18 @@ test("点在按钮内部的文字上，找最近的按钮判断", () => {
   assert.equal(h.findSubmitTrigger(new h.HTMLElement()), null);
 });
 
+test("Shadow DOM 的事件路径可以找到跨边界的提交按钮", async () => {
+  const h = createSubmitHarness();
+  const s = buildSite(h);
+  await fillSession(h, [[s.name, "张三"]]);
+  const inner = new h.HTMLElement("SPAN");
+  const shadowHost = makeButton(h, { tag: "DIV", role: "button", text: "下一步" });
+
+  h.fire(inner, "pointerdown", { composedPath: () => [inner, shadowHost, h.body] });
+
+  assert.equal(count(s.name, "blur"), 2);
+});
+
 test("一次鼠标操作（pointerdown + click）只同步一次；再次点击可以再同步", async () => {
   const h = createSubmitHarness();
   const s = buildSite(h);
@@ -315,6 +352,7 @@ test("按住 Enter 的连发、组合键、其他按键不重复同步", async (
   await fillSession(h, [[s.name, "张三"]]);
   h.fire(s.submit, "keydown", { key: "Enter", repeat: true });
   h.fire(s.submit, "keydown", { key: "Enter", ctrlKey: true });
+  h.fire(s.submit, "keydown", { key: "Enter", isComposing: true });
   h.fire(s.submit, "keydown", { key: "a" });
   assert.equal(count(s.name, "blur"), 1);
 });
@@ -470,11 +508,52 @@ test("校验后插件填的框仍被标为无效：提示未同步并写进诊�
   await sleep(40);
 
   assert.equal(s.name.value, "张三");
-  assert.equal(h.statusElement.textContent, "页面表单状态未同步，请手动点击该字段确认");
+  assert.equal(h.statusElement.textContent, "页面仍认为部分内容无效，请检查内容或手动点击字段确认");
   assert.match(h.statusElement.className, /is-error/);
   assert.equal(h.textFillFailureReason(s.name), "framework_state_unsynced");
   assert.match(h.diagnosticsText.value, /页面表单状态未同步：2/);
   assert.match(h.diagnosticsText.value, /结果：部分完成/);
+});
+
+test("用户处理完成后会清除旧的未同步错误和字段失败记录", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const s = buildSite(h, { syncOnBlur: false });
+  const session = await fillSession(h, [[s.name, "张三"]]);
+  session.summary = { fieldCount: 1, filledCount: 1, unfilledCount: 0, outcome: "success", diagnostics: {} };
+  s.site.pageFocused = true;
+
+  h.mouseClick(s.submit);
+  await sleep(40);
+  assert.equal(h.textFillFailureReason(s.name), "framework_state_unsynced");
+  assert.match(h.statusElement.className, /is-error/);
+
+  s.name.addEventListener("blur", () => { s.site.model.name = s.name.value; });
+  h.mouseClick(s.submit);
+  await sleep(40);
+  assert.equal(h.textFillFailureReason(s.name), "");
+  assert.equal(h.statusElement.textContent, "页面表单状态已同步。");
+  assert.match(h.statusElement.className, /is-success/);
+  assert.doesNotMatch(h.diagnosticsText.value, /页面表单状态未同步/);
+  assert.match(h.diagnosticsText.value, /结果：完成/);
+});
+
+test("浏览器原生格式校验失败属于内容错误，不谎称表单状态未同步", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const s = buildSite(h, { syncOnBlur: false });
+  const session = await fillSession(h, [[s.email, "不是邮箱"]]);
+  session.summary = { fieldCount: 1, filledCount: 1, unfilledCount: 0, outcome: "success", diagnostics: {} };
+  s.site.pageFocused = true;
+  s.email.validity = { valid: false };
+
+  h.mouseClick(s.submit);
+  await sleep(40);
+
+  assert.equal(s.site.errors.email, true);
+  assert.equal(h.statusElement.textContent, "");
+  assert.equal(h.textFillFailureReason(s.email), "");
+  assert.doesNotMatch(h.diagnosticsText.value, /页面表单状态未同步：[1-9]/);
 });
 
 test("真正为空或用户改错的字段，网站标红是真实错误，不算未同步", async () => {
