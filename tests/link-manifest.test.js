@@ -77,7 +77,14 @@ test('the sidebar offers saving a job and never formats desktop copy itself', as
   const end = source.indexOf('async function runJobAssist');
   assert.ok(start >= 0 && end > start, 'the save click handler was not found');
   const click = source.slice(start, end);
-  assert.match(click, /openSaveForm\(step\.fields, copy\.describeReviewSave\(\)\)/);
+  // The draft step (shared with the native side panel, #172) only ever opens a review.
+  assert.match(click, /async function draftJobFields/);
+  assert.match(click, /return \{ fields: step\.fields, note: copy\.describeReviewSave\(\)/);
+  assert.match(click, /openSaveForm\(draft\.fields, draft\.note/);
+  const panelDraft = source.slice(source.indexOf('async function startPanelJobDraft'), source.indexOf('async function cancelPanelJob'));
+  assert.ok(panelDraft.length > 0, 'the side panel draft step was not found');
+  assert.equal(panelDraft.includes('saveReviewedJob('), false, 'drafting never writes');
+  assert.equal(panelDraft.includes('DESKTOP_SAVE_JOB'), false, 'drafting never writes');
   // Recognition starts without the user asking for it by name; a screen reader must hear it.
   assert.match(source, /id="resume-pro-job-assist-note" role="status"/);
   assert.equal(click.includes('commitSave('), false);
