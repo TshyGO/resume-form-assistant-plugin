@@ -546,7 +546,11 @@ test('job-save fragments and candidates are escaped for & < > " \' as well', asy
 
 test('the shared escape function turns all five characters into entities', () => {
   const source = read('sidepanel.js');
-  const match = source.match(/const escapeHtml = \(value\) => [\s\S]*?;\n/);
+  // The line end after the terminating `;` is what bounds this match: escapeHtml's own
+  // replacements are HTML entities like "&amp;" and "&quot;", which end in `;` themselves,
+  // so `;` alone would stop the match mid-string. `\r?\n` also survives a Windows checkout,
+  // where this file is normalized to CRLF.
+  const match = source.match(/const escapeHtml = \(value\) => [\s\S]*?;\r?\n/);
   assert.ok(match, 'escapeHtml is defined once in the panel');
   const escapeHtml = new Function(`${match[0]}; return escapeHtml;`)();
   assert.equal(escapeHtml(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
