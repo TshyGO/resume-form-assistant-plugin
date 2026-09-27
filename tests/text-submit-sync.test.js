@@ -538,6 +538,118 @@ test("用户处理完成后会清除旧的未同步错误和字段失败记录",
   assert.match(h.diagnosticsText.value, /结果：完成/);
 });
 
+// 同一页面两张表单：A 的网站状态没同步（页面无焦点时填的），B 一切正常。
+async function twoForms(h, { fillB = true } = {}) {
+  const a = buildSite(h);
+  const b = buildSite(h);
+  const pairs = [[a.name, "甲"], [a.phone, "13800138000"]];
+  if (fillB) pairs.push([b.name, "乙"]);
+  const session = await fillSession(h, pairs);
+  session.summary = { fieldCount: 3, filledCount: 3, unfilledCount: 0, outcome: "success", diagnostics: {} };
+  b.site.pageFocused = true;
+  return { a, b, session };
+}
+
+test("表单 B 检查正常，不会抹掉表单 A 仍未同步的记录；A 恢复后才显示已同步", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const { a, b, session } = await twoForms(h);
+
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 2);
+  assert.match(h.diagnosticsText.value, /页面表单状态未同步：2/);
+
+  h.mouseClick(b.submit);
+  await sleep(40);
+  assert.equal(b.site.errors.name, false);
+  assert.equal(session.unsynced, 2);
+  assert.equal(session.unsyncedControls.size, 2);
+  assert.equal(h.textFillFailureReason(a.name), "framework_state_unsynced");
+  assert.equal(h.textFillFailureReason(a.phone), "framework_state_unsynced");
+  assert.equal(h.statusElement.textContent, "页面仍认为部分内容无效，请检查内容或手动点击字段确认");
+  assert.match(h.statusElement.className, /is-error/);
+  assert.match(h.diagnosticsText.value, /页面表单状态未同步：2/);
+
+  a.site.pageFocused = true;
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 0);
+  assert.equal(session.unsyncedControls.size, 0);
+  assert.equal(h.textFillFailureReason(a.name), "");
+  assert.equal(h.textFillFailureReason(a.phone), "");
+  assert.equal(h.statusElement.textContent, "页面表单状态已同步。");
+  assert.match(h.statusElement.className, /is-success/);
+  assert.doesNotMatch(h.diagnosticsText.value, /页面表单状态未同步/);
+});
+
+test("A 只恢复一部分字段时，数量按集合递减，仍显示未同步错误", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const { a, session } = await twoForms(h, { fillB: false });
+
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 2);
+
+  a.site.pageFocused = true;
+  a.phone.addEventListener("blur", () => { a.site.model.phone = ""; });
+  h.mouseClick(a.submit);
+  await sleep(40);
+
+  assert.equal(session.unsynced, 1);
+  assert.equal(h.textFillFailureReason(a.name), "");
+  assert.equal(h.textFillFailureReason(a.phone), "framework_state_unsynced");
+  assert.match(h.statusElement.className, /is-error/);
+  assert.match(h.diagnosticsText.value, /页面表单状态未同步：1/);
+});
+
+test("未同步的字段被移除、清空或被用户改过后，不再算插件造成的未同步", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const { a, b, session } = await twoForms(h);
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 2);
+
+  // 网页把 A 的姓名节点换掉：在 B 里检查时也会清掉这条旧记录，A 的电话记录保留。
+  a.name.isConnected = false;
+  h.mouseClick(b.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 1);
+  assert.equal(session.unsyncedControls.has(a.name), false);
+  assert.equal(h.textFillFailureReason(a.name), "");
+  assert.equal(h.textFillFailureReason(a.phone), "framework_state_unsynced");
+  assert.match(h.statusElement.className, /is-error/);
+
+  // 用户把电话改了：检查 A 时不再算插件的问题，集合清空。
+  a.phone.value = "13900139000";
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 0);
+  assert.equal(h.textFillFailureReason(a.phone), "");
+  assert.equal(h.statusElement.textContent, "页面表单状态已同步。");
+});
+
+test("未同步的字段被用户清空后，检查所属表单时清掉旧记录", async () => {
+  const h = createSubmitHarness();
+  h.setSubmitCheckDelayMs(10);
+  const { a, session } = await twoForms(h, { fillB: false });
+  h.mouseClick(a.submit);
+  await sleep(40);
+  assert.equal(session.unsynced, 2);
+
+  a.name.value = "";
+  a.phone.disabled = true;
+  a.site.pageFocused = true;
+  h.mouseClick(a.submit);
+  await sleep(40);
+
+  assert.equal(session.unsynced, 0);
+  assert.equal(h.textFillFailureReason(a.name), "");
+  assert.equal(h.textFillFailureReason(a.phone), "");
+});
+
 test("浏览器原生格式校验失败属于内容错误，不谎称表单状态未同步", async () => {
   const h = createSubmitHarness();
   h.setSubmitCheckDelayMs(10);

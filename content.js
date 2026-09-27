@@ -1869,7 +1869,7 @@
 
   function beginFillSession() {
     endFillSession();
-    fillSession = { controls: new Map(), checkTimer: null, unsynced: 0, summary: null };
+    fillSession = { controls: new Map(), unsyncedControls: new Set(), checkTimer: null, unsynced: 0, summary: null };
     bindSubmitSync();
     return fillSession;
   }
@@ -1961,37 +1961,52 @@
   }
 
   // 网站校验之后，看看插件填的、用户没改过的框是不是还被标成无效。
+  // 未同步的字段记在会话的集合里，一次检查只更新它检查的那一部分：
+  // 检查表单 B 不能抹掉表单 A 里仍未同步的记录。
   // 用户改过的字段、真正为空的字段，网站标红是真实错误，不算在内。
   function checkUnsyncedControls(session, form) {
-    const unsynced = [];
-    for (const element of syncableControls(session, form)) {
+    const flagged = session.unsyncedControls;
+    const before = flagged.size;
+    const release = (element) => {
+      flagged.delete(element);
+      if (textFillFailures.get(element) === "framework_state_unsynced") textFillFailures.delete(element);
+    };
+    const inScope = new Set(syncableControls(session, form));
+    // 已移除的字段随时清掉；本范围内不再可检查（清空、禁用、只读）的也清掉；别的表单里的保留。
+    for (const element of Array.from(flagged)) {
+      if (!session.controls.has(element) || element.isConnected === false
+        || (!inScope.has(element) && (!form || belongsToForm(element, form)))) {
+        release(element);
+      }
+    }
+    for (const element of inScope) {
       const current = String(element.value ?? "");
+      // 用户改过的值，网站标红是真实错误。
       if (current !== session.controls.get(element)) {
+        release(element);
         continue;
       }
       // Native type/required/pattern errors are real content errors, not a framework state
       // that another focus/blur can repair. Reading validity has no submission side effect.
       if (element.validity?.valid === false) {
-        if (textFillFailures.get(element) === "framework_state_unsynced") textFillFailures.delete(element);
+        release(element);
         continue;
       }
       const result = inspectTextCommit(element, current, true);
       if (!result.ok && (result.reason === "validation_not_cleared" || result.reason === "framework_state_unsynced")) {
-        unsynced.push(element);
+        flagged.add(element);
         textFillFailures.set(element, "framework_state_unsynced");
-      } else if (result.ok && textFillFailures.get(element) === "framework_state_unsynced") {
-        textFillFailures.delete(element);
+      } else {
+        release(element);
       }
     }
-    const hadUnsynced = session.unsynced > 0;
-    const changed = session.unsynced !== unsynced.length;
-    session.unsynced = unsynced.length;
-    if (unsynced.length) {
+    session.unsynced = flagged.size;
+    if (flagged.size) {
       showStatus("页面仍认为部分内容无效，请检查内容或手动点击字段确认", "error", true);
-    } else if (hadUnsynced) {
+    } else if (before > 0) {
       showStatus("页面表单状态已同步。", "success");
     }
-    if (changed && session.summary) {
+    if (before !== flagged.size && session.summary) {
       writeFillDiagnostics({ ...session.summary, unsyncedCount: session.unsynced });
     }
   }
@@ -2017,7 +2032,8 @@
   function syncBeforeSubmit(session, trigger) {
     const form = ownerForm(trigger);
     const controls = syncableControls(session, form);
-    if (!controls.length) {
+    // 没有可同步的字段时，如果还有旧的未同步记录，也要检查一次，好把已清空 / 已禁用的字段清掉。
+    if (!controls.length && !session.unsyncedControls.size) {
       return;
     }
     focusBlurNow(controls);
