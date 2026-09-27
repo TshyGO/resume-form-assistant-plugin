@@ -81,6 +81,9 @@ export function mountApplications(
   let listed: ApplicationSummary[] = [];
   // 当前列表是用哪个搜索词查出来的；高亮只跟这个走，不跟输入框里还没提交的文字走。
   let listedQuery: string | null = null;
+  // 上一次成功显示的列表是按哪组条件查的。只有搜索词、阶段或回收状态变了才算“被筛掉”；
+  // 翻页、排序、同条件刷新导致选中项不在当前页时，它仍属于结果，只是不在这一页。
+  let shownFilter: { query: string | null; stage: string; recycle: string } | null = null;
   let detailFilteredOut = false;
   let committedNotices: Array<Record<string, unknown>> = [];
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -176,6 +179,9 @@ export function mountApplications(
       listedQuery = args.query;
       const lastOffset = page.total ? Math.floor((page.total - 1) / ctl.limit) * ctl.limit : 0;
       if (ctl.offset > lastOffset) { ctl.setOffset(lastOffset); return refreshList(); }
+      const filterChanged = shownFilter !== null
+        && (shownFilter.query !== args.query || shownFilter.stage !== args.stage || shownFilter.recycle !== args.recycle);
+      shownFilter = { query: args.query, stage: args.stage, recycle: args.recycle };
       msg.textContent = page.total ? `共 ${page.total} 条` : "";
       // 三种互斥状态：档案本来就是空的 / 搜索或筛选没有结果 / 正常列表。
       const filtered = Boolean(args.query) || args.stage !== "all" || args.recycle !== "active";
@@ -206,7 +212,7 @@ export function mountApplications(
         // 选中的申请被筛掉了：让在途的详情请求作废，并清掉旧详情，不替用户改选别的记录。
         detailToken += 1;
         ctl.setSelected(null);
-        detailFilteredOut = page.total > 0;
+        detailFilteredOut = page.total > 0 && filterChanged;
         detail.innerHTML = detailFilteredOut ? DETAIL_FILTERED_OUT : DETAIL_PROMPT;
       } else if (!ctl.selectedId && detailFilteredOut) {
         detailFilteredOut = false;

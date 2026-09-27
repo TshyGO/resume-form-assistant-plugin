@@ -169,6 +169,9 @@ function textChars(field: SearchField, raw: string): NormChar[] {
 
 function queryPattern(field: SearchField, query: string): string[] {
   const trimmed = trimWhitespace(query);
+  // 地点故意不对称：库里的文本只有 SQLite `lower()`（仅 ASCII），但后端拿来比的模式是 Rust 的
+  // `trimmed.to_lowercase()`（Unicode）。所以地点 “é” 搜 “É” 会命中，地点 “É” 搜 “É” 不会命中。
+  // 这里必须照抄，不能为了对称把查询侧也改成 ASCII-only，否则会高亮后端没匹配的位置。
   if (field === "location") return [...trimmed.toLowerCase()];
   const folded = foldWide(trimmed).map((unit) => unit.ch).join("");
   return [...(field === "company" ? stripCompanySuffixes(folded) : folded)];

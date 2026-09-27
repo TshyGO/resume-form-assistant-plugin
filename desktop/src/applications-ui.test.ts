@@ -748,6 +748,7 @@ test('a selection filtered out while other results remain is cleared, not replac
     }
     return undefined;
   });
+  await h.api.refreshList();
   await h.select('A');
   assert.match(h.el('app-detail').innerHTML, /Company-A/);
   const detailCalls = () => h.calls.filter((call) => call.name === 'get_application_cmd').length;
@@ -829,4 +830,102 @@ test('highlight style uses theme variables, not glaring hard-coded colours', () 
   assert.match(root, /--accent:\s*#36756b/);
   for (const name of ['--accent-strong', '--accent-mark']) assert.match(root, new RegExp(`${name}:\\s*#[0-9a-f]{6}`), name);
   assert.doesNotMatch(css, /list-no-results/);
+});
+
+test('location highlight is asymmetric on purpose: it mirrors what SQLite actually matches', () => {
+  // 下面每一行都和真实后端（Rust to_lowercase 的模式 vs SQLite ASCII-only lower() 的文本）核对过。
+  assert.equal(hl('location', 'É', 'É'), 'É');
+  assert.equal(hl('location', 'É', 'é'), 'É');
+  assert.equal(hl('location', 'é', 'é'), MARK('é'));
+  assert.equal(hl('location', 'é', 'É'), MARK('é'));
+  assert.equal(hl('location', 'İstanbul', 'İ'), 'İstanbul');
+  assert.equal(hl('location', 'ABC', 'abc'), MARK('ABC'));
+  assert.equal(hl('location', 'abc', 'ABC'), MARK('abc'));
+  // 公司、岗位仍是 Unicode 小写。
+  assert.equal(hl('title', 'É', 'é'), MARK('É'));
+  assert.equal(hl('company', 'É', 'é'), MARK('É'));
+});
+
+function pagedBackend(name: string, args?: Record<string, unknown>) {
+  if (name !== 'list_applications_cmd') return undefined;
+  const { offset, query, stage } = queryOf({ args });
+  if (query === '乙' || stage === 'interview') {
+    return { total: 1, items: [{ id: 'B', company: 'Company-B', title: 'Engineer', current_stage: 'saved' }] };
+  }
+  const total = 30;
+  return offset
+    ? { total, items: [{ id: 'C', company: 'Company-C', title: 'Engineer', current_stage: 'saved' }] }
+    : { total, items: [{ id: 'A', company: 'Company-A', title: 'Engineer', current_stage: 'saved' }, { id: 'B', company: 'Company-B', title: 'Engineer', current_stage: 'saved' }] };
+}
+
+test('paging away from the selected application clears the detail without claiming it left the results', async () => {
+  const h = harness(pagedBackend);
+  await h.api.refreshList();
+  await h.select('A');
+  assert.match(h.el('app-detail').innerHTML, /Company-A/);
+  const detailCalls = () => h.calls.filter((call) => call.name === 'get_application_cmd').length;
+  const before = detailCalls();
+  await h.el('btn-next-page').emit('click');
+  await h.tick();
+  assert.equal(queryOf(listCalls(h).at(-1)!).offset, 20);
+  assert.equal(h.api.ctl.selectedId, null);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /Company-A/);
+  assert.match(h.el('app-detail').innerHTML, /选择一条申请查看详情与时间线/);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /当前申请不在搜索结果中/);
+  assert.equal(detailCalls(), before, '翻页不能自动选中别的申请');
+});
+
+test('a sort change that moves the selection off the page does not claim it left the results', async () => {
+  const h = harness((name, args) => {
+    if (name !== 'list_applications_cmd') return undefined;
+    return queryOf({ args }).sort === 'company'
+      ? { total: 1, items: [{ id: 'B', company: 'Company-B', title: 'Engineer', current_stage: 'saved' }] }
+      : undefined;
+  });
+  await h.api.refreshList();
+  await h.select('A');
+  h.el('app-sort').value = 'company';
+  await h.el('app-sort').emit('change');
+  await h.tick();
+  assert.equal(h.api.ctl.selectedId, null);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /Company-A/);
+  assert.match(h.el('app-detail').innerHTML, /选择一条申请查看详情与时间线/);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /当前申请不在搜索结果中/);
+});
+
+test('changing the stage filter or the recycle state that drops the selection says it left the results', async () => {
+  const onlyB = { total: 1, items: [{ id: 'B', company: 'Company-B', title: 'Engineer', current_stage: 'saved' }] };
+  for (const change of [
+    (h: ReturnType<typeof harness>) => { h.el('app-stage').value = 'interview'; return h.el('app-stage').emit('change'); },
+    (h: ReturnType<typeof harness>) => { h.el('app-recycle').value = 'recycled'; return h.el('app-recycle').emit('change'); },
+  ]) {
+    const h = harness((name, args) => {
+      if (name !== 'list_applications_cmd') return undefined;
+      const { stage, recycle } = queryOf({ args });
+      return stage === 'interview' || recycle === 'recycled' ? onlyB : pagedBackend(name, args);
+    });
+    await h.api.refreshList();
+    await h.select('A');
+    await change(h);
+    await h.tick();
+    assert.equal(h.api.ctl.selectedId, null);
+    assert.doesNotMatch(h.el('app-detail').innerHTML, /Company-A/);
+    assert.match(h.el('app-detail').innerHTML, /当前申请不在搜索结果中/);
+  }
+});
+
+test('a refresh with unchanged filters that drops the selection does not claim a filter removed it', async () => {
+  let gone = false;
+  const h = harness((name, args) => {
+    if (name !== 'list_applications_cmd') return undefined;
+    return gone ? { total: 1, items: [{ id: 'B', company: 'Company-B', title: 'Engineer', current_stage: 'saved' }] } : pagedBackend(name, args);
+  });
+  await h.api.refreshList();
+  await h.select('A');
+  gone = true;
+  await h.api.refreshList();
+  assert.equal(h.api.ctl.selectedId, null);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /Company-A/);
+  assert.match(h.el('app-detail').innerHTML, /选择一条申请查看详情与时间线/);
+  assert.doesNotMatch(h.el('app-detail').innerHTML, /当前申请不在搜索结果中/);
 });
