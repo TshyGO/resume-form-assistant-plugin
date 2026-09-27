@@ -61,6 +61,49 @@ button { cursor: pointer; }
 .offer-actions { display: flex; gap: 8px; margin-top: 10px; }
 .offer-actions button { flex: 1; min-height: 35px; padding: 6px; border: 1px solid #a9c6bf; border-radius: 7px; background: var(--accent-pale); color: var(--accent); font-size: 12px; font-weight: 600; }
 .offer-actions button:first-child { border-color: var(--accent); background: var(--accent); color: #fff; }
+.offer-actions button:disabled { opacity: .6; cursor: default; }
+.offer-actions--wrap { flex-wrap: wrap; }
+.offer-actions--wrap button { flex: 1 1 calc(50% - 4px); }
+.offer-actions--wrap button:only-child { flex-basis: 100%; }
+.offer-card .offer-title { margin: 0 0 6px; font-weight: 650; }
+.offer-card .offer-hint { margin-top: 6px; color: var(--muted); font-size: 11px; }
+.offer-card.is-success { border-color: #a9c6bf; background: var(--accent-pale); }
+.offer-card.is-success p { color: #315e56; }
+.offer-card.is-pending, .offer-card.is-info { border-color: #e7d9b1; background: #fff8e7; }
+.offer-card.is-pending p, .offer-card.is-info p { color: #5b4820; }
+.offer-card.is-warn { border-color: #edc5c5; background: #fceeee; }
+.offer-card.is-warn p { color: #b44747; }
+.offer-candidates { display: grid; gap: 6px; margin-top: 8px; }
+.offer-candidates button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); text-align: left; font-size: 12px; }
+.offer-candidates button:hover:not(:disabled) { border-color: #a9c6bf; background: #f8faf9; }
+.offer-candidates button:disabled { opacity: .6; cursor: default; }
+.offer-code { display: block; margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: #fff; color: var(--ink); font: 11px ui-monospace, monospace; word-break: break-all; }
+.queue-center { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.queue-toggle { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 38px; padding: 8px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); font-size: 12px; font-weight: 600; text-align: left; }
+.queue-toggle strong { color: var(--accent); }
+.queue-toggle.has-items strong { color: #9a6b12; }
+.queue-chevron { margin-left: auto; color: var(--accent); transition: transform .15s ease; }
+.queue-toggle[aria-expanded="true"] .queue-chevron { transform: rotate(90deg); }
+.queue-body { padding: 0 11px 11px; }
+.queue-intro, .queue-empty { margin: 0 0 8px; color: var(--muted); font-size: 11px; }
+.queue-list { display: grid; gap: 8px; }
+.queue-row { padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; }
+.queue-row.is-focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-pale); }
+.queue-row p { margin: 0; }
+.queue-title { font-weight: 650; word-break: break-all; }
+.queue-subtitle, .queue-note { margin-top: 3px !important; color: var(--muted); font-size: 11px; }
+.queue-state { margin-top: 4px !important; color: #5b4820; font-size: 11px; }
+.queue-message { margin-top: 6px !important; padding: 6px 8px; border-radius: 6px; font-size: 11px; }
+.queue-message.is-success { background: var(--accent-pale); color: #315e56; }
+.queue-message.is-pending, .queue-message.is-info { background: #fff8e7; color: #5b4820; }
+.queue-message.is-warn { background: #fceeee; color: #b44747; }
+.queue-question { margin-top: 7px; }
+.queue-question > p, .queue-id-label { display: block; margin-bottom: 5px !important; font-size: 11px; font-weight: 600; }
+.queue-id { display: block; width: 100%; min-height: 32px; margin-bottom: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font: 11px ui-monospace, monospace; }
+.queue-choices, .queue-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.queue-choices button, .queue-actions button { padding: 5px 9px; border: 1px solid #a9c6bf; border-radius: 6px; background: var(--accent-pale); color: var(--accent); font-size: 11px; font-weight: 600; text-align: left; }
+.queue-choices button:disabled, .queue-actions button:disabled { opacity: .6; cursor: default; }
+.queue-link { margin-top: 6px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
 .offer-check { display: flex; align-items: flex-start; gap: 6px; margin-top: 9px; color: var(--muted); font-size: 11px; }
 .offer-check input { margin-top: 3px; }
 .desktop-status { margin-top: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
