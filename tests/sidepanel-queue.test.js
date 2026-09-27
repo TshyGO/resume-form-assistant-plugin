@@ -89,7 +89,8 @@ test("a fill bound while the desktop was away is retried from the list and then 
   await panel.clickQueue(`fill:${recordId}`, "pick", { applicationId: APP_A });
   // Now it is a bound message waiting to be sent, with its real state.
   const fillMessage = () => panel.queue().rows.find((item) => item.key.startsWith("message:") && /^填写留档/.test(item.text));
-  await until(() => Boolean(fillMessage()), { what: "the queued message" });
+  // Queued first ("已尝试 0 次"), then the first send fails: wait for that attempt, not just the row.
+  await until(() => /待同步（已尝试 1 次/.test(fillMessage()?.text || ""), { what: "the first failed attempt" });
   const row = fillMessage();
   assert.match(row.text, /填写留档 · 测试模板/);
   assert.match(row.text, /待同步（已尝试 1 次/);
