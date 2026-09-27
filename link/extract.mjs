@@ -43,7 +43,13 @@ const NAV_OR_ACTION = /^(?:首页|主页|登录|登陆|注册|退出|退出登�
 const ONLY_SYMBOLS = /^[\d\s\p{P}\p{S}_]+$/u;
 // A name that reads as an organisation. A company line without this shape is a candidate
 // for the desktop AI to look at, not something to accept on the strength of a class name.
-const COMPANY_SUFFIX = /(?:有限责任公司|股份有限公司|有限公司|研究院|研究所|事务所|集团|公司|股份|银行|医院|大学|学院|工厂|inc\.?|ltd\.?|llc|corp\.?|co\.|gmbh)$/i;
+// The English suffixes need a `(?<![a-z])` guard: without it "inc" also matches the tail of
+// "Zinc", and a plain company selector would strip "Z" off a metals company and call the
+// remainder a suffix match. The guard requires a separator (space, punctuation, start of
+// string) before the suffix, so it only ever matches a suffix that is its own word — "Example
+// Inc" still matches, "Zinc" and a no-separator compound like "Buildcorp" do not. Chinese
+// suffixes need no such guard: a script change is already a separator.
+const COMPANY_SUFFIX = /(?:有限责任公司|股份有限公司|有限公司|研究院|研究所|事务所|集团|公司|股份|银行|医院|大学|学院|工厂|(?<![a-z])inc\.?|(?<![a-z])ltd\.?|(?<![a-z])llc|(?<![a-z])corp\.?|(?<![a-z])co\.|(?<![a-z])gmbh)$/i;
 // A "company" that ends like a job, or a "job" that ends like a company, is misread.
 const LOOKS_LIKE_JOB = /(?:工程师|经理|专员|主管|总监|实习生|助理|顾问|管培生|岗位|职位|招聘)$/;
 const LOOKS_LIKE_COMPANY = COMPANY_SUFFIX;

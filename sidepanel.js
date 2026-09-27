@@ -57,14 +57,27 @@
     submitButton: document.getElementById("submit-confirm-button"),
     submitProgress: document.getElementById("submit-confirm-progress"),
     submitProgressText: document.getElementById("submit-confirm-progress-text"),
+    submitProgressCount: document.getElementById("submit-confirm-progress-count"),
+    submitFragments: document.getElementById("submit-confirm-fragments"),
     submitStop: document.getElementById("submit-confirm-stop"),
+    submitForm: document.getElementById("submit-confirm-form"),
+    submitCompany: document.getElementById("submit-confirm-company"),
+    submitTitle: document.getElementById("submit-confirm-title"),
+    submitUrl: document.getElementById("submit-confirm-url"),
+    submitNote: document.getElementById("submit-confirm-note"),
+    submitError: document.getElementById("submit-confirm-error"),
+    submitOpenAi: document.getElementById("submit-confirm-open-ai"),
+    submitQuery: document.getElementById("submit-confirm-query"),
+    submitReviewCancel: document.getElementById("submit-confirm-review-cancel"),
     submitChoice: document.getElementById("submit-confirm-choice"),
     submitCandidates: document.getElementById("submit-confirm-candidates"),
+    submitBack: document.getElementById("submit-confirm-back"),
     submitCancel: document.getElementById("submit-confirm-cancel"),
     submitResult: document.getElementById("submit-confirm-result"),
     submitResultText: document.getElementById("submit-confirm-result-text"),
     submitResultHint: document.getElementById("submit-confirm-result-hint"),
     submitSave: document.getElementById("submit-confirm-save"),
+    submitResultBack: document.getElementById("submit-confirm-result-back"),
     submitCopyId: document.getElementById("submit-confirm-copy-id"),
     submitDismiss: document.getElementById("submit-confirm-dismiss")
   };
@@ -88,6 +101,11 @@
   // poll that left before a click can neither clear nor reopen what the user just did.
   let submitConfirm = null;
   let submitSeen = { tabId: null, epoch: "", version: 0 };
+  // Like `jobFilled`/`jobLocalError` for the save-job form: which review revision is in the
+  // inputs (so a poll never overwrites what the user is typing), and a required-field prompt
+  // that lives in the panel so editing can clear it without a round trip to the page.
+  let submitFilled = "";
+  let submitLocalError = "";
   // Which request currently owns `jobPending`; a request that was overtaken must not clear it.
   let jobOwner = 0;
   // Booleans and chip ids from the page controller, never the page's own text (#174).
@@ -302,7 +320,11 @@
   }
 
   // Phases that need the user's attention before anything else on this page may start.
-  const SUBMIT_ACTIVE = new Set(["extracting", "querying", "choosing", "confirming", "empty"]);
+  const SUBMIT_ACTIVE = new Set([
+    "extracting", "assist", "review", "querying", "choosing", "confirming",
+    "confirmed", "empty", "unavailable", "failed", "unknown"
+  ]);
+  const SUBMIT_BACK_PHASES = new Set(["choosing", "empty", "unavailable", "failed", "unknown"]);
 
   function applySubmitConfirm(snapshot, tabId = currentTabId) {
     if (!snapshot) {
@@ -315,9 +337,10 @@
     submitSeen = { tabId, epoch: snapshot.epoch, version: snapshot.version };
     const next = snapshot.confirmId ? snapshot : null;
     if (!next && submitConfirm && snapshot.discarded === "page-changed") {
-      toast("网页已经换成别的页面，刚才的投递候选已作废。请重新点「确认已投递」。");
+      toast("网页已经换成别的页面，刚才核对的内容已作废。请重新点「确认已投递」。");
     }
     submitConfirm = next ? { ...next, tabId } : null;
+    if (!next) submitLocalError = "";
     renderJobSave();
   }
 
@@ -330,12 +353,46 @@
     elements.submitButton.disabled = noPage || jobPending;
     elements.submitButton.title = noPage ? "当前网页没有连接填表助手，无法确认投递。" : "";
 
-    const waiting = phase === "extracting" || phase === "querying" || phase === "confirming";
-    elements.submitProgress.hidden = !waiting;
-    if (waiting) {
-      elements.submitProgressText.textContent = phase === "confirming" ? "正在确认投递……" : "正在查找对应的投递记录……";
+    elements.submitProgress.hidden = !(phase === "extracting" || phase === "assist" || phase === "querying" || phase === "confirming");
+    if (phase === "extracting" || phase === "querying" || phase === "confirming") {
+      elements.submitProgressText.textContent = phase === "confirming" ? "正在确认投递……"
+        : phase === "querying" ? "正在查找对应的投递记录……" : "正在读取当前网页的岗位信息……";
+      elements.submitProgressCount.textContent = "";
+      elements.submitFragments.innerHTML = "";
       // Once the confirmation is on its way to the desktop it cannot be recalled.
       elements.submitStop.hidden = phase === "confirming";
+    } else if (phase === "assist") {
+      const count = job.assist?.count || 0;
+      elements.submitProgressText.textContent = "正在识别岗位…";
+      elements.submitProgressCount.textContent = `页面上的公司或岗位不好确定，已向桌面的 AI 发送 ${count} 段页面文字：`;
+      elements.submitFragments.innerHTML = (job.assist?.lines || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+      elements.submitStop.hidden = false;
+    }
+
+    const showForm = phase === "review";
+    elements.submitForm.hidden = !showForm;
+    if (showForm) {
+      const key = `${job.confirmId}:${job.revision}`;
+      if (submitFilled !== key) {
+        submitFilled = key;
+        submitLocalError = "";
+        elements.submitCompany.removeAttribute?.("aria-invalid");
+        elements.submitTitle.removeAttribute?.("aria-invalid");
+        elements.submitCompany.value = job.fields?.company || "";
+        elements.submitTitle.value = job.fields?.title || "";
+      }
+      // Always the page's redacted URL; the input is read-only and never read back.
+      elements.submitUrl.value = job.fields?.sourceUrl || "";
+      elements.submitUrl.title = job.fields?.sourceUrl || "";
+      elements.submitNote.textContent = job.note || "";
+      const error = job.error || submitLocalError;
+      elements.submitError.hidden = !error;
+      elements.submitError.textContent = error;
+      elements.submitOpenAi.hidden = job.openView !== "settings-ai";
+      elements.submitQuery.disabled = jobPending;
+      elements.submitReviewCancel.disabled = jobPending;
+      elements.submitCompany.disabled = jobPending;
+      elements.submitTitle.disabled = jobPending;
     }
 
     elements.submitChoice.hidden = phase !== "choosing";
@@ -343,6 +400,7 @@
       elements.submitCandidates.innerHTML = (job.candidates || []).map((candidate) =>
         `<button type="button" data-application-id="${escapeHtml(candidate.applicationId)}">${escapeHtml(candidate.label)}</button>`).join("");
       elements.submitCandidates.querySelectorAll?.("button").forEach((button) => { button.disabled = jobPending; });
+      elements.submitBack.disabled = jobPending;
       elements.submitCancel.disabled = jobPending;
     }
 
@@ -355,6 +413,8 @@
       elements.submitResultHint.textContent = job.result.hint || "";
       elements.submitSave.hidden = phase !== "empty";
       elements.submitSave.disabled = jobPending;
+      elements.submitResultBack.hidden = !SUBMIT_BACK_PHASES.has(phase);
+      elements.submitResultBack.disabled = jobPending;
       elements.submitCopyId.hidden = !job.result.extensionId;
       elements.submitDismiss.textContent = phase === "empty" ? "取消" : "知道了";
     }
@@ -666,18 +726,57 @@
     const result = await submitRequest({ type: "RESUME_PANEL_SUBMIT_START" });
     if (result && !result.ok) toast(result.error || "没能开始确认投递，请稍后再试。");
   });
-  async function cancelSubmitConfirm(interrupt) {
+  // `scope: "assist"` only stops the AI and returns to the (still open) review form — the
+  // same distinction "取消识别" vs "取消" makes for saving a job. Anything else ends the
+  // whole attempt: nothing is queried, confirmed or saved.
+  async function cancelSubmitConfirm(scope, interrupt = false) {
     if (!submitConfirm?.confirmId) return;
-    // Dismissing an answer that is already on screen needs no toast; abandoning a question does.
     const dismissing = ["confirmed", "unavailable", "unknown", "failed"].includes(submitConfirm.phase);
-    const result = await jobRequest({ type: "RESUME_PANEL_SUBMIT_CANCEL", confirmId: submitConfirm.confirmId }, { interrupt });
-    if (result?.ok && !dismissing) toast("已取消，桌面上没有任何变化。");
+    const result = await jobRequest(
+      { type: "RESUME_PANEL_SUBMIT_CANCEL", confirmId: submitConfirm.confirmId, scope }, { interrupt }
+    );
+    if (result?.ok && scope === "assist") toast("已取消，请核对后再查找。");
+    else if (result?.ok && !dismissing) toast("已取消，桌面上没有任何变化。");
     else if (result && !result.ok) toast(result.error || "当前无法取消。");
   }
   // Waiting for the desktop: this has to get through while the lookup is still pending.
-  elements.submitStop.addEventListener("click", () => cancelSubmitConfirm(true));
-  elements.submitCancel.addEventListener("click", () => cancelSubmitConfirm(false));
-  elements.submitDismiss.addEventListener("click", () => cancelSubmitConfirm(false));
+  elements.submitStop.addEventListener("click", () => cancelSubmitConfirm("assist", true));
+  elements.submitReviewCancel.addEventListener("click", () => cancelSubmitConfirm("draft"));
+  elements.submitCancel.addEventListener("click", () => cancelSubmitConfirm("draft"));
+  elements.submitDismiss.addEventListener("click", () => cancelSubmitConfirm("draft"));
+  elements.submitForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!submitConfirm?.confirmId || submitConfirm.phase !== "review") return;
+    const company = elements.submitCompany.value.trim();
+    const title = elements.submitTitle.value.trim();
+    elements.submitCompany.setAttribute?.("aria-invalid", String(!company));
+    elements.submitTitle.setAttribute?.("aria-invalid", String(!title));
+    if (!company || !title) {
+      const missing = [!company && "公司名称", !title && "岗位名称"].filter(Boolean).join("和");
+      submitLocalError = `请补全${missing}后再查找。`;
+      elements.submitError.hidden = false;
+      elements.submitError.textContent = submitLocalError;
+      (company ? elements.submitTitle : elements.submitCompany).focus?.();
+      return;
+    }
+    submitLocalError = "";
+    renderJobSave();
+    const result = await submitRequest({ type: "RESUME_PANEL_SUBMIT_QUERY", confirmId: submitConfirm.confirmId, company, title });
+    if (result && !result.ok && !result.missing) toast(result.error || "没能查到对应的投递记录，请稍后再试。");
+  });
+  // Editing a required field clears only that field's red border, mirroring job-save's inputs.
+  const requiredSubmitInputs = [[elements.submitCompany, "公司名称"], [elements.submitTitle, "岗位名称"]];
+  for (const [input] of requiredSubmitInputs) {
+    input.addEventListener("input", () => {
+      input.removeAttribute?.("aria-invalid");
+      if (!submitLocalError) return;
+      const missing = requiredSubmitInputs
+        .filter(([other]) => other.getAttribute?.("aria-invalid") === "true")
+        .map(([, label]) => label);
+      submitLocalError = missing.length ? `请补全${missing.join("和")}后再查找。` : "";
+      renderJobSave();
+    });
+  }
   elements.submitCandidates.addEventListener("click", async (event) => {
     const button = event.target.closest?.("[data-application-id]");
     if (!button || button.disabled || !submitConfirm?.confirmId) return;
@@ -686,11 +785,19 @@
     });
     if (result && !result.ok) toast(result.error || "没能确认投递，请稍后再试。");
   });
+  async function backToSubmitReview() {
+    if (!submitConfirm?.confirmId) return;
+    const result = await jobRequest({ type: "RESUME_PANEL_SUBMIT_BACK", confirmId: submitConfirm.confirmId });
+    if (result && !result.ok) toast(result.error || "现在无法返回修改。");
+  }
+  elements.submitBack.addEventListener("click", backToSubmitReview);
+  elements.submitResultBack.addEventListener("click", backToSubmitReview);
   elements.submitSave.addEventListener("click", async () => {
     if (!submitConfirm?.confirmId) return;
     const result = await jobRequest({ type: "RESUME_PANEL_SUBMIT_SAVE", confirmId: submitConfirm.confirmId });
     if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
   });
+  elements.submitOpenAi.addEventListener("click", () => desktopAction("settings-ai").catch(() => toast("当前操作不可用。")));
   elements.submitCopyId.addEventListener("click", async () => {
     toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
   });

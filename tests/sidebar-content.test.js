@@ -1135,7 +1135,7 @@ test('#172 re-recognition invalidates the draft when the page changes while modu
   assert.equal(page.saves().length, 0);
 });
 
-test('#172 the old page overlay stays available as the fallback path', async () => {
+test('#172 the old page overlay stays available as the fallback path for "repeat"', async () => {
   const { hooks, listeners } = loadContentScript();
   let clicked = 0;
   const panel = { classList: createClassList(), querySelector: () => ({ textContent: '', setAttribute() {} }) };
@@ -1143,14 +1143,43 @@ test('#172 the old page overlay stays available as the fallback path', async () 
     querySelector(selector) {
       if (selector === '.resume-pro') return panel;
       if (selector === '.resume-pro__collapse') return { setAttribute() {} };
-      if (selector === '#resume-pro-save-job') return { click() { clicked += 1; } };
+      if (selector === '#resume-pro-repeat-fill') return { click() { clicked += 1; } };
       return null;
     }
   });
   let reply;
-  listeners.runtimeMessage[0]({ type: 'RESUME_PANEL_ADVANCED', action: 'save' }, {}, value => { reply = value; });
+  listeners.runtimeMessage[0]({ type: 'RESUME_PANEL_ADVANCED', action: 'repeat' }, {}, value => { reply = value; });
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(reply.ok, true);
   assert.equal(panel.classList.contains('is-legacy-open'), true);
-  assert.equal(clicked, 1, 'the old form still opens from its own button');
+  assert.equal(clicked, 1, 'the old form still opens from its own button, until #188 moves this into the side panel too');
+});
+
+// #172 (this round): "保存岗位到桌面端" and "确认已投递" run entirely in the native side panel
+// now (RESUME_PANEL_SAVE_* / RESUME_PANEL_SUBMIT_*). Their old "···" menu entries had no other
+// caller left, so both are gone from the ADVANCED map — a message naming either is refused,
+// and neither opens the legacy page overlay.
+test('#172 RESUME_PANEL_ADVANCED no longer knows "save" or "submit": no caller is left for either', async () => {
+  const { hooks, listeners } = loadContentScript();
+  let saveClicked = 0;
+  let submitClicked = 0;
+  const panel = { classList: createClassList(), querySelector: () => ({ textContent: '', setAttribute() {} }) };
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      if (selector === '.resume-pro') return panel;
+      if (selector === '.resume-pro__collapse') return { setAttribute() {} };
+      if (selector === '#resume-pro-save-job') return { click() { saveClicked += 1; } };
+      if (selector === '#resume-pro-confirm-submit') return { click() { submitClicked += 1; } };
+      return null;
+    }
+  });
+  for (const action of ['save', 'submit']) {
+    let reply;
+    listeners.runtimeMessage[0]({ type: 'RESUME_PANEL_ADVANCED', action }, {}, value => { reply = value; });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(reply.ok, false, action);
+    assert.equal(panel.classList.contains('is-legacy-open'), false, action);
+  }
+  assert.equal(saveClicked, 0);
+  assert.equal(submitClicked, 0);
 });

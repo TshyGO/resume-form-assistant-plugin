@@ -535,3 +535,49 @@ test('buttons, navigation, form controls and hidden nodes stay filtered even aro
     assert.equal(fields.company, '', tag);
   }
 });
+
+// --- this round: an English suffix must be its own word ("Zinc" is not "Z" + "Inc") -----------
+
+test('a company literally named "Zinc" is not silently dropped: it is offered as weak evidence for the AI, not thrown away', async () => {
+  const { extractJobFields } = await load();
+  const fields = extractJobFields(beisenPage('Zinc'), 'https://kingfa.zhiye.com/form');
+  // Before this fix, "inc" matched the tail of "Zinc" with no separator, the one-letter stem
+  // "Z" failed the plausibility bar, and the company fell out of both the strong and the weak
+  // bucket — the page's own company name never even reached the AI as a fragment.
+  assert.equal(fields.company, 'Zinc');
+  assert.equal(fields.confidence, 'uncertain');
+  assert.equal(fields.reliable, false);
+  assert.ok(fields.assistReasons.includes('company_weak_evidence'));
+  assert.ok(fields.fragments.some(fragment => fragment.text === 'Zinc'), 'sent to the AI rather than disappearing');
+});
+
+test('"Example Inc/Inc./Ltd/Corp/GmbH" are still recognised as company suffixes and settle without AI', async () => {
+  const { extractJobFields } = await load();
+  for (const name of ['Example Inc', 'Example Inc.', 'Example Ltd', 'Example Corp', 'Example GmbH']) {
+    const fields = extractJobFields(beisenPage(name), 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.company, name, name);
+    assert.equal(fields.confidence, 'reliable', name);
+    assert.equal(fields.reliable, true, name);
+  }
+});
+
+test('a compound English word with no separator before the suffix ("Buildcorp") is weak evidence, not an accepted "name + corp" split', async () => {
+  const { extractJobFields } = await load();
+  const fields = extractJobFields(beisenPage('Buildcorp'), 'https://kingfa.zhiye.com/form');
+  // Before this fix, stripping "corp" left the plausible stem "Build", so the whole compound
+  // was accepted as reliable on the strength of a suffix the page never actually separated out.
+  assert.equal(fields.company, 'Buildcorp');
+  assert.equal(fields.confidence, 'uncertain');
+  assert.equal(fields.reliable, false);
+});
+
+test('an English suffix inside an ordinary word is still not a suffix match, whatever the case', async () => {
+  const { extractJobFields } = await load();
+  for (const name of ['zinc', 'ZINC', 'Vinci']) {
+    const fields = extractJobFields(beisenPage(name), 'https://kingfa.zhiye.com/form');
+    assert.notEqual(fields.confidence, 'reliable', name);
+  }
+  // A real separator before the suffix still settles it, lower-case included.
+  const separated = extractJobFields(beisenPage('incredible corp'), 'https://kingfa.zhiye.com/form');
+  assert.equal(separated.confidence, 'reliable');
+});

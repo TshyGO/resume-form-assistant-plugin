@@ -88,13 +88,33 @@
             </div>
             <div id="submit-confirm-progress" class="job-card" role="status" hidden>
               <p id="submit-confirm-progress-text" class="job-card__title"></p>
+              <p id="submit-confirm-progress-count" class="job-note"></p>
+              <ol id="submit-confirm-fragments" class="job-fragments"></ol>
               <button id="submit-confirm-stop" class="job-link" type="button">取消</button>
             </div>
+            <form id="submit-confirm-form" class="job-card" novalidate hidden>
+              <p class="job-card__title">核对岗位信息</p>
+              <label class="job-label" for="submit-confirm-company">公司名称</label>
+              <input id="submit-confirm-company" class="job-input" type="text" autocomplete="off" required>
+              <label class="job-label" for="submit-confirm-title">岗位名称</label>
+              <input id="submit-confirm-title" class="job-input" type="text" autocomplete="off" required>
+              <label class="job-label" for="submit-confirm-url">来源网址</label>
+              <input id="submit-confirm-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
+              <p id="submit-confirm-note" class="job-note"></p>
+              <p id="submit-confirm-error" class="job-error" role="alert" hidden></p>
+              <button id="submit-confirm-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
+              <div class="offer-actions">
+                <button id="submit-confirm-query" type="submit">查找对应申请</button>
+                <button id="submit-confirm-review-cancel" type="button">取消</button>
+              </div>
+              <p class="job-note">这一步只查询桌面已有的申请，不会保存岗位，也不会创建新申请。</p>
+            </form>
             <div id="submit-confirm-choice" class="job-card" hidden>
               <p class="job-card__title">这次确认投递的是哪条申请？</p>
               <p class="job-note">只更新桌面上的申请阶段；不会提交招聘网站上的申请。</p>
               <div id="submit-confirm-candidates" class="job-candidates"></div>
               <div class="offer-actions">
+                <button id="submit-confirm-back" type="button">返回修改</button>
                 <button id="submit-confirm-cancel" type="button">取消</button>
               </div>
             </div>
@@ -103,6 +123,7 @@
               <p id="submit-confirm-result-hint" class="job-note" hidden></p>
               <div class="offer-actions">
                 <button id="submit-confirm-save" type="button" hidden>保存岗位到桌面端</button>
+                <button id="submit-confirm-result-back" type="button" hidden>返回修改</button>
                 <button id="submit-confirm-copy-id" type="button" hidden>复制扩展 ID</button>
                 <button id="submit-confirm-dismiss" type="button">知道了</button>
               </div>

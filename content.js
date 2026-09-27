@@ -210,10 +210,19 @@
         .catch(() => sendResponse({ ok: false, error: "没能开始确认投递，请稍后再试。", submitConfirm: panelSubmitSnapshot() }));
       return true;
     }
+    if (message.type === "RESUME_PANEL_SUBMIT_QUERY") {
+      queryPanelSubmit(message).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "没能查到对应的投递记录，这次没有确认投递。请稍后再试。", submitConfirm: panelSubmitSnapshot() }));
+      return true;
+    }
     if (message.type === "RESUME_PANEL_SUBMIT_CHOICE") {
       choosePanelSubmit(message).then(sendResponse)
         .catch(() => sendResponse({ ok: false, error: "没能确认结果，请到桌面端查看这条申请的当前状态。", submitConfirm: panelSubmitSnapshot() }));
       return true;
+    }
+    if (message.type === "RESUME_PANEL_SUBMIT_BACK") {
+      sendResponse(backPanelSubmit(message));
+      return false;
     }
     if (message.type === "RESUME_PANEL_SUBMIT_CANCEL") {
       sendResponse(cancelPanelSubmit(message));
@@ -236,10 +245,11 @@
         sendResponse({ ok: true });
         return false;
       }
-      // "确认已投递" is no longer opened here: the side panel runs it (RESUME_PANEL_SUBMIT_*).
+      // "保存岗位到桌面端" and "确认已投递" are no longer opened here: the side panel runs both
+      // (RESUME_PANEL_SAVE_* / RESUME_PANEL_SUBMIT_*). Only "repeat" still needs the legacy
+      // popup, until #188 moves AI-assisted new entries into the side panel too.
       const buttons = {
-        repeat: "#resume-pro-repeat-fill",
-        save: "#resume-pro-save-job"
+        repeat: "#resume-pro-repeat-fill"
       };
       const selector = Object.prototype.hasOwnProperty.call(buttons, message.action) ? buttons[message.action] : null;
       const button = selector ? shadowRoot?.querySelector(selector) : null;
@@ -3917,6 +3927,10 @@
   async function startPanelJobDraft() {
     dropStalePanelJob();
     if (panelJob.draftId && panelJob.phase !== "idle" && panelJob.phase !== "result") return panelJobSnapshot();
+    // The two questions are never open together (§172): "确认已投递" owns the area until the
+    // user finishes it. `savePanelSubmitJob` clears its own phase to "cancelled" before
+    // calling here, so that hand-off is not blocked by this guard.
+    if (panelSubmitIsActive()) return panelJobSnapshot();
     panelJob = idlePanelJob(panelJob);
     const token = panelJob.token;
     const pageUrl = location.href;
@@ -4172,25 +4186,36 @@
   // "确认已投递" only moves an application's stage on the desktop: the user says they already
   // applied on the job site. Nothing here clicks, submits or listens to the site's controls.
   //
-  //   idle -> extracting -> querying -> choosing -> confirming
+  //   idle -> extracting -> assist -> review -> querying -> choosing -> confirming
   //        -> confirmed | empty | unavailable | unknown | failed | cancelled
+  //
+  // Step one (extracting/assist) only reads the page and, when it is unsure, asks the
+  // desktop's AI — exactly draftJobFields(), the same step "保存岗位到桌面端" uses. It always
+  // lands on an editable review; nothing is queried yet, so a wrong local read ("公安" instead
+  // of "金发科技") is never sent to the desktop. Only "查找对应申请" (querying) leaves the page,
+  // and only with what the user confirmed on the review form.
   //
   // The state is this page's (one page controller per tab) and is bound to the address it
   // was started on, a token that any cancel, restart or page change replaces, and the list of
   // candidates the desktop offered. The panel can only pick from that list.
 
-  const SUBMIT_STALE = "网页已经换成别的页面，刚才的投递候选已作废。请重新点「确认已投递」。";
-  const SUBMIT_UNRECOGNIZED = "当前网页无法确认是哪家公司，请先保存并核对岗位信息。";
+  const SUBMIT_STALE = "网页已经换成别的页面，刚才核对的内容已作废。请重新点「确认已投递」。";
   const SUBMIT_EMPTY = "桌面里还没有这家公司的投递记录。";
-  const SUBMIT_OPEN_PHASES = ["extracting", "querying", "choosing", "empty"];
-  const SUBMIT_BUSY_PHASES = ["extracting", "querying", "choosing", "confirming"];
+  // Every phase between clicking "确认已投递" and a final answer, except "confirming": a
+  // write already on its way to the desktop is never yanked out from under itself by a page
+  // change, same rule as saving a job. "confirmed" is a fact about the desktop and also stays.
+  const SUBMIT_DROPPABLE_PHASES = [
+    "extracting", "assist", "review", "querying", "choosing", "empty", "unavailable", "failed", "unknown"
+  ];
+  const SUBMIT_BACK_PHASES = ["choosing", "empty", "unavailable", "failed", "unknown"];
   const PANEL_SUBMIT_EPOCH = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let panelSubmit = idlePanelSubmit(null);
 
   function idlePanelSubmit(previous) {
     return {
       confirmId: null, phase: "idle", version: (previous?.version || 0) + 1, token: (previous?.token || 0) + 1,
-      pageUrl: "", candidates: [], reason: "", result: null, discarded: null
+      pageUrl: "", fields: null, revision: 0, note: "", openView: null, error: "", assist: null, requestId: null,
+      fallback: null, candidates: [], reason: "", result: null, discarded: null
     };
   }
 
@@ -4198,8 +4223,8 @@
     Object.assign(panelSubmit, changes, { version: panelSubmit.version + 1 });
   }
 
-  // What the side panel may see: labels and ids of the offered applications, never the
-  // page's own text or the desktop's other fields.
+  // What the side panel may see: the editable draft (never the page's raw text beyond what
+  // the user already typed), AI progress, and labels/ids of the offered applications.
   function panelSubmitSnapshot() {
     const job = panelSubmit;
     return {
@@ -4208,7 +4233,15 @@
       confirmId: job.confirmId,
       phase: job.phase,
       version: job.version,
+      revision: job.revision,
+      fields: job.fields
+        ? { company: job.fields.company || "", title: job.fields.title || "", sourceUrl: job.fields.sourceUrl || "" }
+        : null,
+      note: job.note,
+      openView: job.openView,
+      error: job.error,
       reason: job.reason,
+      assist: job.assist ? { count: job.assist.lines.length, text: job.assist.text, lines: [...job.assist.lines] } : null,
       candidates: job.candidates.map(candidate => ({ applicationId: candidate.applicationId, label: candidate.label })),
       result: job.result ? { ...job.result } : null,
       discarded: job.discarded
@@ -4219,12 +4252,17 @@
     return ["extracting", "assist", "review", "saving", "choice"].includes(panelJob.phase);
   }
 
-  // A single-page site can swap the job under an open question. The candidates belong to the
-  // address they were asked for; once it changes they are thrown away. A write already sent
-  // (confirming) and a finished result are facts about the desktop and stay.
+  function panelSubmitIsActive() {
+    return SUBMIT_DROPPABLE_PHASES.includes(panelSubmit.phase) || panelSubmit.phase === "confirming";
+  }
+
+  // A single-page site can swap the job under an open question. The draft and candidates
+  // belong to the address they were read from; once it changes they are thrown away. A
+  // write already sent (confirming) and a finished result (confirmed) are facts and stay.
   function dropStalePanelSubmit() {
     if (!panelSubmit.confirmId || panelSubmit.pageUrl === location.href) return false;
-    if (!SUBMIT_OPEN_PHASES.includes(panelSubmit.phase)) return false;
+    if (!SUBMIT_DROPPABLE_PHASES.includes(panelSubmit.phase)) return false;
+    cancelAiRequest(panelSubmit.requestId);
     panelSubmit = idlePanelSubmit(panelSubmit);
     panelSubmit.discarded = "page-changed";
     return true;
@@ -4232,9 +4270,19 @@
 
   const submitOutcome = (extra = {}) => ({ ...extra, submitConfirm: panelSubmitSnapshot() });
 
+  function openSubmitReview(fields, note, openView = null) {
+    touchPanelSubmit({
+      phase: "review", fields: { company: "", title: "", sourceUrl: "", ...fields },
+      revision: panelSubmit.revision + 1, note, openView, error: "", assist: null, requestId: null
+    });
+  }
+
+  // Step one, shared with "保存岗位到桌面端" (draftJobFields): read the page, ask the
+  // desktop's AI only when extraction is unsure, and land on an editable review. Nothing
+  // leaves the page here and nothing is written; a query only happens from "查找对应申请".
   async function startPanelSubmit() {
     dropStalePanelSubmit();
-    if (SUBMIT_BUSY_PHASES.includes(panelSubmit.phase)) return submitOutcome({ ok: true });
+    if (panelSubmitIsActive()) return submitOutcome({ ok: true });
     if (panelJobIsActive()) {
       return submitOutcome({ ok: false, error: "请先完成或取消正在进行的岗位保存。" });
     }
@@ -4243,29 +4291,74 @@
     const pageUrl = location.href;
     touchPanelSubmit({ confirmId: newRequestId(), phase: "extracting", pageUrl });
     const isCurrent = () => panelSubmit.token === token && panelSubmit.pageUrl === pageUrl && location.href === pageUrl;
-    // The page moved on under this question: drop it, and say so if it was still ours.
-    const settle = () => {
-      if (panelSubmit.token === token && location.href !== pageUrl) dropStalePanelSubmit();
-      return submitOutcome({ ok: true });
-    };
     try {
-      const { extract, copy } = await loadDesktopModules();
-      if (!isCurrent()) return settle();
-      const fields = extract.extractJobFields(document, pageUrl);
-      if (!fields.company) {
-        touchPanelSubmit({ phase: "empty", reason: "unrecognized", result: { tone: "warn", text: SUBMIT_UNRECOGNIZED } });
-        return submitOutcome({ ok: true });
+      const draft = await draftJobFields({
+        isCurrent,
+        onAssistStart: (described, requestId, fallback) => {
+          if (!isCurrent()) return;
+          touchPanelSubmit({
+            phase: "assist", requestId, fallback,
+            assist: { text: described.text, lines: [...(described.fragments || [])] }
+          });
+        },
+        onAssistEnd: requestId => {
+          if (isCurrent() && panelSubmit.requestId === requestId) touchPanelSubmit({ requestId: null });
+        }
+      });
+      if (draft && isCurrent()) {
+        openSubmitReview(draft.fields, draft.note, draft.openView);
+      } else if (panelSubmit.token === token && location.href !== pageUrl) {
+        dropStalePanelSubmit();
       }
-      touchPanelSubmit({ phase: "querying" });
-      // The desktop matches on company and title; the address is the page's redacted one.
-      const asked = { company: fields.company, title: fields.title || "", sourceUrl: fields.sourceUrl || "" };
-      let answer;
-      try {
-        answer = await waitForPanelJobWrite(chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: asked }));
-      } catch {
-        answer = null;
+    } catch {
+      if (isCurrent()) {
+        openSubmitReview(emptyJobFields(), "读取页面信息失败，请手动填写公司和岗位。");
+      } else if (panelSubmit.token === token && location.href !== pageUrl) {
+        dropStalePanelSubmit();
       }
-      if (!isCurrent()) return settle();
+    }
+    return submitOutcome({ ok: true });
+  }
+
+  // Step two: only now does anything leave the page. `company`/`title` are the user's
+  // reviewed text, whatever they are after "公安" became "金发科技"; the address is always
+  // the draft's own redacted one, never something the panel message could substitute.
+  async function queryPanelSubmit(message) {
+    if (!message.confirmId || message.confirmId !== panelSubmit.confirmId) {
+      return submitOutcome({ ok: false, error: "这份核对内容已经失效，请重新点「确认已投递」。" });
+    }
+    if (dropStalePanelSubmit()) return submitOutcome({ ok: false, error: SUBMIT_STALE });
+    if (panelSubmit.phase !== "review") {
+      return submitOutcome({ ok: false, error: "请先核对公司和岗位。" });
+    }
+    const company = typeof message.company === "string" ? message.company.trim() : "";
+    const title = typeof message.title === "string" ? message.title.trim() : "";
+    const sourceUrl = typeof panelSubmit.fields?.sourceUrl === "string" ? panelSubmit.fields.sourceUrl : "";
+    if (!company || !title) {
+      const missing = [!company && "公司名称", !title && "岗位名称"].filter(Boolean).join("和");
+      const error = `请补全${missing}后再查找。`;
+      touchPanelSubmit({ error, fields: { ...panelSubmit.fields, company, title } });
+      return submitOutcome({ ok: false, error, missing });
+    }
+    const token = panelSubmit.token;
+    const pageUrl = panelSubmit.pageUrl;
+    touchPanelSubmit({ phase: "querying", error: "", fields: { company, title, sourceUrl } });
+    const asked = { company, title, sourceUrl };
+    let answer;
+    try {
+      answer = await waitForPanelJobWrite(chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: asked }));
+    } catch {
+      answer = null;
+    }
+    if (panelSubmit.token !== token) {
+      return submitOutcome({ ok: false, expired: true, error: SUBMIT_STALE });
+    }
+    if (location.href !== pageUrl) {
+      dropStalePanelSubmit();
+      return submitOutcome({ ok: false, error: SUBMIT_STALE });
+    }
+    try {
+      const { copy } = await loadDesktopModules();
       if (answer?.status !== "ok") {
         // No reply is not "no candidates": an empty list would push the user into saving a duplicate.
         touchPanelSubmit({
@@ -4292,14 +4385,10 @@
         touchPanelSubmit({ phase: "choosing", candidates: options });
       }
     } catch {
-      if (isCurrent()) {
-        touchPanelSubmit({
-          phase: "failed", candidates: [],
-          result: { tone: "warn", text: "没能查到对应的投递记录，这次没有确认投递。请稍后再试。" }
-        });
-      } else {
-        return settle();
-      }
+      touchPanelSubmit({
+        phase: "failed", candidates: [],
+        result: { tone: "warn", text: "没能查到对应的投递记录，这次没有确认投递。请稍后再试。" }
+      });
     }
     return submitOutcome({ ok: true });
   }
@@ -4360,15 +4449,53 @@
     return submitOutcome({ ok: true });
   }
 
-  function cancelPanelSubmit({ confirmId }) {
+  // "返回修改": go back to the editable review with what is already there. No re-extraction,
+  // no new AI request, nothing sent to the desktop — the company/title the user last typed
+  // (or the candidates/result screen showed) are exactly what the review form gets back.
+  function backPanelSubmit({ confirmId }) {
+    if (!confirmId || confirmId !== panelSubmit.confirmId) {
+      return submitOutcome({ ok: false, error: "这次确认已经结束了。" });
+    }
+    if (dropStalePanelSubmit()) return submitOutcome({ ok: false, error: SUBMIT_STALE });
+    if (!SUBMIT_BACK_PHASES.includes(panelSubmit.phase)) {
+      return submitOutcome({ ok: false, error: "现在无法返回修改。" });
+    }
+    touchPanelSubmit({ phase: "review", revision: panelSubmit.revision + 1, candidates: [], result: null, error: "" });
+    return submitOutcome({ ok: true });
+  }
+
+  function cancelPanelSubmit({ confirmId, scope }) {
     if (!confirmId || confirmId !== panelSubmit.confirmId) {
       return submitOutcome({ ok: false, error: "这次确认已经结束了。" });
     }
     if (panelSubmit.phase === "confirming") {
       return submitOutcome({ ok: false, error: "已经在确认了，无法取消。请到桌面端查看这条申请的当前状态。" });
     }
-    if (SUBMIT_OPEN_PHASES.includes(panelSubmit.phase)) {
-      // A new token: a candidate list still on its way belongs to a question nobody is asking.
+    if (scope === "assist") {
+      // The one button covers three waits: recognizing the page, and looking the company up
+      // on the desktop. None of them has anything left to do once cancelled but go back to
+      // an editable review — "abandon the whole attempt" is the other button's job.
+      if (!["extracting", "assist", "querying"].includes(panelSubmit.phase)) {
+        return submitOutcome({ ok: false, error: "识别已经结束了。" });
+      }
+      cancelAiRequest(panelSubmit.requestId);
+      if (panelSubmit.phase === "querying") {
+        // Nothing to re-run here, just the fields the user had reviewed before the query.
+        const fields = panelSubmit.fields || emptyJobFields();
+        touchPanelSubmit({ token: panelSubmit.token + 1 });
+        openSubmitReview(fields, "");
+        return submitOutcome({ ok: true });
+      }
+      // A new token: whatever the AI says later belongs to a recognition nobody is waiting for.
+      const fallback = panelSubmit.fallback || emptyJobFields();
+      touchPanelSubmit({ token: panelSubmit.token + 1 });
+      openSubmitReview(fallback, "已取消识别。请手动补全后再查找。");
+      return submitOutcome({ ok: true });
+    }
+    if (SUBMIT_DROPPABLE_PHASES.includes(panelSubmit.phase)) {
+      // A new token: an AI reply or a candidate list still on its way belongs to a question
+      // nobody is asking any more.
+      cancelAiRequest(panelSubmit.requestId);
       panelSubmit = idlePanelSubmit(panelSubmit);
       panelSubmit.phase = "cancelled";
       return submitOutcome({ ok: true });
