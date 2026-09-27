@@ -1311,16 +1311,19 @@
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
+    if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected);
     return Boolean(String(el.value ?? el.textContent ?? "").trim());
   }
 
   // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
   function fillValueSnapshot(entry) {
-    if (entry.kind === "radio") return JSON.stringify(entry.elements.map(el => [el.value, el.checked]));
+    if (entry.kind === "radio") return entry.elements.every(el => el.isConnected)
+      ? JSON.stringify(entry.elements.map(el => [el.value, el.checked])) : null;
     const el = entry.element;
     if (!el?.isConnected) return null;
     if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
     if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
+    if (el instanceof HTMLSelectElement) return JSON.stringify([el.value, el.selectedIndex]);
     return String(el.value ?? el.textContent ?? "");
   }
 
@@ -1488,18 +1491,21 @@
         if (!element) continue;
         if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
-        // 前面的控件可能异步等待；确认不授权覆盖在等待期间再次发生的修改。
-        if (!assisted && fillValueSnapshot(element) !== approvedValues.get(element)) {
+        // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
+        const beforeWrite = assisted ? undefined : () => {
+          if (overwriteDeclined) return false;
+          if (fillValueSnapshot(element) === approvedValues.get(element)) return true;
           overwriteDeclined = true;
           cancelRequested = true;
           outcome = filledCount ? "partial" : "failed";
           showStatus(`填写期间检测到字段内容变化，已停止后续填写，保留该字段的现有内容。此前已填写 ${filledCount} 项，请核对网页。`, "error", true);
-          return;
-        }
-        let filled = setElementValue(element, match.value);
+          return false;
+        };
+        let filled = setElementValue(element, match.value, beforeWrite);
         if (filled instanceof Promise) {
           filled = await filled;
         }
+        if (overwriteDeclined) return;
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           filled = element.element.isConnected
@@ -1514,7 +1520,8 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = setElementValue(element, match.value);
+            filled = setElementValue(element, match.value, beforeWrite);
+            if (overwriteDeclined) return;
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
@@ -2028,9 +2035,10 @@
 
   // 先让 focus 引起的页面更新结束，再写值并通知输入事件。
   // 如果先写值，受控表单可能在 focus 后按旧状态重绘，把值清空。
-  async function runTextLifecycle(element, value, sequential) {
+  async function runTextLifecycle(element, value, sequential, beforeWrite) {
     focusControl(element);
     await nextTask();
+    if (beforeWrite && !beforeWrite()) return false;
     if (!sequential) {
       writeControlValue(element, value);
       dispatchTextInput(element, value);
@@ -2047,6 +2055,7 @@
     element.dispatchEvent(new Event("change", { bubbles: true }));
     await nextTask();
     blurControl(element);
+    return true;
   }
 
   // 用户不用改字，点一下输入框再点空白，提示就会消失。校验还在时照这个再做一次。
@@ -2604,11 +2613,13 @@
 
   // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
   // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
-  async function commitTextValue(element, value, sequential = false) {
+  async function commitTextValue(element, value, sequential = false, beforeWrite) {
     const previous = String(element.value ?? "");
     const original = String(value ?? "");
     const expected = normalizeExpectedTextValue(element, original);
-    await runTextLifecycle(element, original, sequential);
+    if (!await runTextLifecycle(element, original, sequential, beforeWrite)) {
+      return { ok: false, reason: "value_changed" };
+    }
     const committed = String(element.value ?? "") === expected;
     await waitForTextCommit();
     let result = inspectTextCommit(element, expected, committed);
@@ -2620,9 +2631,10 @@
     }
     if (!result.ok && !sequential && prefersSequentialInput(element)
       && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      const retried = await commitTextValue(element, original, true);
+      const retried = await commitTextValue(element, original, true, beforeWrite);
       if (!retried.ok && element.isConnected !== false
         && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
+        if (beforeWrite && !beforeWrite()) return { ok: false, reason: "value_changed" };
         writeControlValue(element, previous);
         dispatchTextInput(element, previous);
         element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2632,7 +2644,8 @@
     return result;
   }
 
-  function setElementValue(element, value) {
+  function setElementValue(element, value, beforeWrite) {
+    if (beforeWrite && !beforeWrite()) return false;
     if (element && typeof element === "object" && element.kind === "radio") {
       const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
       const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
@@ -2660,6 +2673,7 @@
       const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, element.type) ?? value;
       const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
       element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      if (beforeWrite && !beforeWrite()) return false;
       if (descriptor?.set) {
         descriptor.set.call(element, normalized);
       } else {
@@ -2676,6 +2690,7 @@
       element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       return new Promise((resolve) => {
         window.setTimeout(() => {
+          if (beforeWrite && !beforeWrite()) { resolve(false); return; }
           try {
             const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
             if (descriptor?.set) {
@@ -2704,7 +2719,7 @@
     }
 
     if (isTextControl(element)) {
-      return commitTextValue(element, value).then((result) => {
+      return commitTextValue(element, value, false, beforeWrite).then((result) => {
         if (result.ok) {
           textFillFailures.delete(element);
         } else {

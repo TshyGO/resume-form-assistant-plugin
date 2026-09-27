@@ -204,7 +204,7 @@ function loadHighlightHelpers(options = {}) {
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
-    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
       ResumeProResumeData: require('../resume-data.js'), ResumeProProfile: require('../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -1299,3 +1299,82 @@ for (const changedValue of ['确认后又改了', '']) {
     assert.equal(second.dispatchedEvents.length, 0);
   });
 }
+
+test('multi-select prompts even when its first selected value is empty', async () => {
+  const formElements = [];
+  let prompted = false;
+  const ctx = loadHighlightHelpers({ formElements,
+    confirm: () => { prompted = true; return false; },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'B' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', multiple: true, value: '', options: [
+    { value: '', text: '请选择', selected: true }, { value: 'A', text: 'A', selected: true }
+  ] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '项', value: 'B' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(prompted, true);
+  assert.equal(select.dispatchedEvents.length, 0);
+});
+
+test('changing single-select selection with duplicate values stops subsequent writes', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true, aiHelpers: { findSelectOptionIndex: () => 0 },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新姓名' }, { fieldId: 'field-1', value: 'A' }] })
+  });
+  const first = new ctx.HTMLInputElement();
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', value: 'same', selectedIndex: 0, options: [
+    { value: 'same', text: 'A' }, { value: 'same', text: 'B' }
+  ] });
+  first.dispatchEvent = () => { select.selectedIndex = 1; return true; };
+  formElements.push(first, select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新姓名' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(first.value, '新姓名');
+  assert.equal(select.selectedIndex, 1);
+  assert.equal(select.dispatchedEvents.length, 0);
+});
+
+test('a change during the date picker delay survives and stops later fields', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '2026-01-01' }, { fieldId: 'field-1', value: '新姓名' }] })
+  });
+  const picker = new ctx.HTMLInputElement();
+  picker.value = '2025-01-01';
+  const later = new ctx.HTMLInputElement();
+  formElements.push(picker, later);
+  const container = new ctx.HTMLElement();
+  container.querySelectorAll = () => [picker];
+  const query = ctx.document.querySelectorAll;
+  ctx.document.querySelectorAll = selector => selector === '.ant-picker' ? [container] : query(selector);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '日期', value: '2026-01-01' }] }] }], activeTemplateId: 'one' });
+  const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  await new Promise(resolve => setImmediate(resolve));
+  const timer = ctx.timers.find(timer => timer.delay === 150 && !timer.cleared);
+  assert.ok(timer, 'picker is waiting before writing');
+  picker.value = '2027-02-02';
+  const eventsBefore = picker.dispatchedEvents.length;
+  timer.callback();
+  await pending;
+  assert.equal(picker.value, '2027-02-02');
+  assert.equal(picker.dispatchedEvents.length, eventsBefore);
+  assert.equal(later.value, '');
+});
+
+test('a text value changed by focus is rechecked before the delayed write', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '模板值' }] })
+  });
+  const input = new ctx.HTMLInputElement();
+  input.value = '旧值';
+  input.focus = () => { ctx.document.activeElement = input; input.value = '聚焦后新值'; };
+  formElements.push(input);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '模板值' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(input.value, '聚焦后新值');
+  assert.equal(input.dispatchedEvents.length, 0);
+});

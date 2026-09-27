@@ -356,12 +356,13 @@ for (const conflictPath of [false, true]) {
     else await act(async () => fire());
     const readsBefore = calls.filter(c => c.command === "get_profile_cmd").length;
     await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-    expect(screen.getByRole("alertdialog", { name: "确认放弃未保存修改" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "确认放弃未保存修改" })).toBeTruthy();
     expect(calls.filter(c => c.command === "get_profile_cmd").length).toBe(readsBefore);
     await user.click(screen.getByRole("button", { name: "取消，保留当前输入" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
     expect(name).toHaveProperty("value", "张三五");
     expect(calls.filter(c => c.command === "get_profile_cmd").length).toBe(readsBefore);
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("group", { name: "确认放弃未保存修改" })).toBeNull();
     expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toBeTruthy();
   });
 }
@@ -383,4 +384,31 @@ test("稍后处理后的入口可继续确认读取，失败仍保留草稿和�
   expect(name).toHaveProperty("value", "张三五");
   expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", false);
+});
+
+test("手动读取期间到达的更新版本仍保留处理入口，下一次读取成功才清除", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  let finishRead: ((value: ProfileRecordView) => void) | undefined;
+  const { fire } = mountWithListen(() => {
+    reads += 1;
+    if (reads === 2) return new Promise<ProfileRecordView>(resolve => { finishRead = resolve; });
+    return { ...record, revision: reads === 1 ? 3 : 5 };
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fire(4));
+  await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
+  expect(reads).toBe(2);
+  expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "保存我的信息" })).toHaveProperty("disabled", true);
+  await act(async () => fire(5));
+  await act(async () => finishRead?.({ ...record, revision: 4 }));
+  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
+  await waitFor(() => expect(reads).toBe(3));
+  expect(screen.queryByText(/有待同步的补充字段/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "放弃未保存修改并重新读取" })).toBeNull();
 });

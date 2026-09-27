@@ -95,6 +95,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [reloading, setReloading] = useState(false);
   const reloadPendingRef = useRef(false);
+  const reloadButtonRef = useRef<HTMLButtonElement>(null);
   const dirtyRef = useRef(false);
   const revisionRef = useRef(0);
   const editVersionRef = useRef(0);
@@ -133,12 +134,14 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       setRevision(record.revision);
       revisionRef.current = record.revision;
       setConflict(false);
-      setDeferredExternalChange(false);
+      const newerRevision = Math.max(pendingExternalRevisionRef.current, ignoredExternalRevisionRef.current);
+      const hasNewerRevision = newerRevision > record.revision;
+      setDeferredExternalChange(hasNewerRevision);
       setConfirmDiscard(false);
       setNotice(null);
       dirtyRef.current = false;
       setExternalChange(false);
-      pendingExternalRevisionRef.current = 0;
+      pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
       ignoredExternalRevisionRef.current = 0;
     } catch (error) {
       if (loadSequence !== loadSequenceRef.current) return;
@@ -279,7 +282,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
               ? "有待同步的补充字段。当前输入仍保留，可稍后处理。"
               : "插件添加了新的补充字段。当前页面还有未保存的修改。"}</p>
           <div className="row">
-            <button type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
+            <button ref={reloadButtonRef} type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
               放弃未保存修改并重新读取
             </button>
             {externalChange ? (
@@ -299,14 +302,14 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         </div>
       ) : null}
       {confirmDiscard ? (
-        <div className="note warn stack" role="alertdialog" aria-label="确认放弃未保存修改" aria-describedby="profile-discard-description">
+        <div className="note warn stack" role="group" aria-label="确认放弃未保存修改" aria-describedby="profile-discard-description">
           <p id="profile-discard-description">重新读取会丢弃当前未保存的修改，用已保存的档案替换。确定放弃吗？</p>
           <div className="row">
             <button type="button" disabled={busy || reloading} onClick={() => {
               setConfirmDiscard(false);
               void load(true);
             }}>确定放弃并重新读取</button>
-            <button type="button" autoFocus onClick={() => setConfirmDiscard(false)}>取消，保留当前输入</button>
+            <button type="button" autoFocus onClick={() => { setConfirmDiscard(false); reloadButtonRef.current?.focus(); }}>取消，保留当前输入</button>
           </div>
         </div>
       ) : null}
