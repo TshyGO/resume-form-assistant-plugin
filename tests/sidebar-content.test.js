@@ -865,6 +865,21 @@ test('#172 confirm saves the edited company, title and location once, with the d
   assert.equal(page.saves().length, 1);
 });
 
+test('#172 a failed save keeps the user-edited location in the recoverable draft', async () => {
+  const page = await panelJobPage({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
+    ? { status: 'error' } : {} });
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const reply = await page.ask({
+    type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId,
+    company: '星河科技', title: '后端开发工程师', location: '杭州'
+  });
+
+  assert.equal(reply.jobSave.phase, 'review');
+  assert.equal(reply.jobSave.fields.location, '杭州');
+  assert.equal((await page.status()).fields.location, '杭州');
+  assert.equal(page.saves()[0].fields.location, '杭州');
+});
+
 test('#172 cancel writes nothing, and a stale draft cannot be confirmed afterwards', async () => {
   const page = await panelJobPage();
   const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
@@ -1026,6 +1041,63 @@ test('#172 "save again" after a duplicate resends the confirmed fields with forc
   assert.equal(page.saves()[1].force, true);
   assert.equal(page.saves()[1].fields.title, 'Java 后端');
   assert.equal(page.saves()[1].fields.dedupeUrl, RELIABLE_JOB.dedupeUrl);
+});
+
+test('#172 a bind with no response is unknown, never reported as automatically queued', async () => {
+  const candidate = {
+    applicationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    company: '星河科技', title: '后端开发工程师', stage: 'saved'
+  };
+  const page = await panelJobPage({ desktop: message => {
+    if (message.type === 'DESKTOP_SAVE_JOB') {
+      return { status: 'needs_choice', intent: { intentId: 'intent-1' }, exact: [candidate] };
+    }
+    if (message.type === 'DESKTOP_BIND') throw new Error('response lost');
+    return {};
+  } });
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const duplicate = await page.ask({
+    type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId,
+    company: '星河科技', title: '后端开发工程师', location: '上海'
+  });
+  const result = await page.ask({
+    type: 'RESUME_PANEL_SAVE_CHOICE', draftId: duplicate.jobSave.draftId,
+    action: 'existing', applicationId: candidate.applicationId
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.jobSave.phase, 'result');
+  assert.match(result.jobSave.result.text, /没能确认保存结果/);
+  assert.doesNotMatch(result.jobSave.result.text, /自动重试|排进待同步/);
+  assert.equal(page.binds().length, 1);
+});
+
+test('#172 re-recognition invalidates the draft when the page changes while modules load', async () => {
+  const extraction = {
+    ...RELIABLE_JOB,
+    fragments: [{ id: 1, source: 'h1', role: 'page-title', text: '后端开发工程师' }]
+  };
+  const page = await panelJobPage({ extraction });
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  let release;
+  const modules = new Promise(resolve => { release = resolve; });
+  page.hooks.setDesktopModules(modules);
+  const reassisting = page.ask({
+    type: 'RESUME_PANEL_SAVE_REASSIST', draftId: jobSave.draftId,
+    company: '星河科技', title: '后端开发工程师', location: '上海'
+  });
+  await tick();
+  page.context.location.href = 'https://jobs.example.com/999';
+  const [saveFlow, copy] = await Promise.all([import('../link/save-flow.mjs'), import('../link/copy.mjs')]);
+  release({ extract: { extractJobFields: () => structuredClone(extraction) }, saveFlow, copy });
+  const reply = await reassisting;
+
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /作废/);
+  assert.equal(reply.jobSave.draftId, null);
+  assert.equal(reply.jobSave.discarded, 'page-changed');
+  assert.equal(page.aiCalls.sent.length, 0, 'no fragments from the new page are sent under the old draft');
+  assert.equal(page.saves().length, 0);
 });
 
 test('#172 the old page overlay stays available as the fallback path', async () => {

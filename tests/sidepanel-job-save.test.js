@@ -640,6 +640,25 @@ test('a status answer from tab A that arrives after switching to B is ignored', 
   assert.ok(panel.pageMessages.filter(message => message.type === 'RESUME_PANEL_STATUS').length >= 2);
 });
 
+test('a status poll started before a click cannot clear the new draft it overtook', async () => {
+  const panel = await openPanel();
+  const release = panel.holdNextStatus(7);
+  const polling = panel.poll();
+  await settle();
+
+  await panel.click('job-save-button');
+  assert.equal(panel.form.hidden, false, 'the click opened a new review draft');
+  const draftId = currentDraftId(panel);
+
+  release();
+  await polling;
+  await settle();
+
+  assert.equal(panel.form.hidden, false, 'the old null status did not clear the new form');
+  assert.equal(currentDraftId(panel), draftId);
+  assert.equal(panel.company.value, '星河科技');
+});
+
 test('after the page address changes, a finished result stays truthful but can no longer save the old job again', async () => {
   let saves = 0;
   const panel = await openPanel({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'

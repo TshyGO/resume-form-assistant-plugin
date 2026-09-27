@@ -3022,9 +3022,11 @@
 
   async function bindSavedJob(intentId, applicationId) {
     try {
-      return (await chrome.runtime.sendMessage({ type: "DESKTOP_BIND", intentId, applicationId })) ?? { status: "pending" };
+      return (await chrome.runtime.sendMessage({ type: "DESKTOP_BIND", intentId, applicationId })) ?? { status: "unknown" };
     } catch {
-      return { status: "pending" };
+      // A missing response is not proof that the background queued the bind. Callers keep the
+      // existing intent available for recovery, but must not promise an automatic retry.
+      return { status: "unknown" };
     }
   }
 
@@ -3275,14 +3277,20 @@
       const missing = [!fields.company && "公司名称", !fields.title && "岗位名称"].filter(Boolean);
       if (missing.length) {
         const error = `请补全${missing.join("和")}后再保存。`;
-        touchPanelJob({ error, fields: { ...panelJob.fields, company: fields.company, title: fields.title } });
+        touchPanelJob({
+          error,
+          fields: { ...panelJob.fields, company: fields.company, title: fields.title, location: fields.location }
+        });
         return { ok: false, error, missing, jobSave: panelJobSnapshot() };
       }
     }
     // Claimed before the first await, so a second click cannot send a second write.
     const token = panelJob.token;
     saveInFlight = true;
-    touchPanelJob({ phase: "saving", confirmed: fields, error: "", fields: { ...panelJob.fields, company: fields.company, title: fields.title } });
+    touchPanelJob({
+      phase: "saving", confirmed: fields, error: "",
+      fields: { ...panelJob.fields, company: fields.company, title: fields.title, location: fields.location }
+    });
     let result = null;
     let failed = false;
     try {
@@ -3331,6 +3339,7 @@
     if (panelJob.phase !== "review" || saveInFlight) {
       return { ok: false, error: "现在不能重新识别，请稍后再试。", jobSave: panelJobSnapshot() };
     }
+    const pageUrl = panelJob.pageUrl;
     let modules;
     try {
       modules = await loadDesktopModules();
@@ -3339,6 +3348,10 @@
     }
     if (message.draftId !== panelJob.draftId || panelJob.phase !== "review") {
       return { ok: false, error: "这份岗位草稿已经变化，请重新操作。", jobSave: panelJobSnapshot() };
+    }
+    if (panelJob.pageUrl !== pageUrl || location.href !== pageUrl) {
+      dropStalePanelJob();
+      return { ok: false, error: PANEL_JOB_STALE, jobSave: panelJobSnapshot() };
     }
     const { extract, saveFlow, copy } = modules;
     const extraction = extract.extractJobFields(document, location.href);
@@ -3357,10 +3370,10 @@
     // A new token: an answer to an earlier recognition of this draft is dropped.
     touchPanelJob({
       token: panelJob.token + 1, phase: "assist", fields: { ...fallback }, fallback, error: "", note: "",
-      openView: null, requestId: null, assist: { text: "", lines: [] }, pageUrl: location.href
+      openView: null, requestId: null, assist: { text: "", lines: [] }, pageUrl
     });
     const token = panelJob.token;
-    const isCurrent = () => panelJob.token === token;
+    const isCurrent = () => panelJob.token === token && panelJob.pageUrl === pageUrl && location.href === pageUrl;
     try {
       const outcome = await runJobAssist(fragments, fallback, {
         isCurrent,
@@ -3372,7 +3385,13 @@
           if (isCurrent() && panelJob.requestId === requestId) touchPanelJob({ requestId: null });
         }
       });
-      if (!isCurrent() || outcome.action === "ignore") return { ok: true, jobSave: panelJobSnapshot() };
+      if (!isCurrent() || outcome.action === "ignore") {
+        if (panelJob.token === token && location.href !== pageUrl) {
+          dropStalePanelJob();
+          return { ok: false, error: PANEL_JOB_STALE, jobSave: panelJobSnapshot() };
+        }
+        return { ok: true, jobSave: panelJobSnapshot() };
+      }
       if (outcome.action === "commit") {
         openPanelReview(outcome.fields, copy.describeReviewSave());
       } else {
@@ -3398,6 +3417,7 @@
     if (!message.draftId || message.draftId !== panelJob.draftId || panelJob.phase !== "choice") {
       return { ok: false, error: "这个选择已经失效了。", jobSave: panelJobSnapshot() };
     }
+    if (saveInFlight) return { ok: false, error: "正在保存，请稍候。", jobSave: panelJobSnapshot() };
     const action = String(message.action || "");
     if (action === "later") {
       touchPanelJob({ phase: "result", candidates: [], result: { tone: "pending", text: PANEL_JOB_LATER } });
@@ -3411,6 +3431,7 @@
       return { ok: false, error: "当前操作不可用。", jobSave: panelJobSnapshot() };
     }
     const token = panelJob.token;
+    saveInFlight = true;
     touchPanelJob({ phase: "saving" });
     let bound;
     try {
@@ -3419,9 +3440,13 @@
         refreshPendingList();
         return { ok: false, expired: true, error: PANEL_JOB_EXPIRED, jobSave: panelJobSnapshot() };
       }
-      bound = (await loadDesktopModules()).copy.describeBindResult(result);
+      bound = result?.status === "unknown"
+        ? { ...PANEL_JOB_UNKNOWN }
+        : (await loadDesktopModules()).copy.describeBindResult(result);
     } catch {
       bound = { ...PANEL_JOB_UNKNOWN };
+    } finally {
+      saveInFlight = false;
     }
     if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], result: bound });
     refreshPendingList();

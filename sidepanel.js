@@ -369,6 +369,7 @@
       }
       currentTabId = nextTabId;
       const polledTabId = currentTabId;
+      const polledJobOwner = jobOwner;
       const response = await sendToPage({ type: "RESUME_PANEL_STATUS" }, polledTabId);
       // The tab in front may have changed while the page was answering. That answer is about
       // the tab we left and must not be drawn over the new one.
@@ -383,7 +384,13 @@
       renderJobAssist(connected ? response.jobAssist : null);
       // Applied even while a click is waiting: recognition progress only arrives this way.
       // Older snapshots of the same draft are dropped by their version.
-      applyJobSave(connected ? response.jobSave : null, currentTabId);
+      if (jobOwner === polledJobOwner) {
+        applyJobSave(connected ? response.jobSave : null, currentTabId);
+      } else {
+        // A user action produced a newer draft while this poll was in flight. Ask again rather
+        // than letting the old response clear or resurrect the newer state.
+        statusRepoll = true;
+      }
       if (connected && response.status) {
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
