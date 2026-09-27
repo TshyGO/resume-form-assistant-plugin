@@ -632,6 +632,33 @@ test('a stop after some fields were written says how many, not "空记录"', asy
   assert.deepEqual(page.inputs.map((input) => input.value), ['用户已填的第一段', 'AI-field-1', ''], 'nothing written after 停止');
 });
 
+test('a stop while the fill is still preparing sends nothing to the AI', async () => {
+  let page;
+  let stopped = false;
+  // The first time the fill's field scan looks at a new row, the user presses 停止: filling has
+  // begun, but no AI request exists yet that the stop could cancel.
+  page = repeatPage({ onClick: () => {
+    const input = page.inputs[page.inputs.length - 1];
+    Object.defineProperty(input, 'type', { configurable: true, get() {
+      if (!stopped && page.helpers.describeRepeat().phase === 'filling') {
+        stopped = true;
+        page.helpers.handlePanelRepeat({ action: 'stop', requestId: page.helpers.describeRepeat().requestId });
+      }
+      return 'text';
+    } });
+  } });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('preview'));
+  await page.ask({ action: 'confirm', requestId: (await page.status()).requestId });
+  await page.settle((repeat) => ['completed', 'stopped', 'failed'].includes(repeat.phase));
+  const after = await page.status();
+  assert.equal(stopped, true, 'the stop landed during preparation');
+  assert.equal(after.phase, 'stopped');
+  assert.equal(page.aiCalls('AI_FILL').length, 0, 'no resume fields leave after 停止');
+  assert.equal(after.message, '已停止填写。已经新增的 2 条空记录会保留，请在网页中核对。');
+  assert.deepEqual(page.inputs.map((input) => input.value), ['用户已填的第一段', '', '']);
+});
+
 test('知道了 clears the finished run, its requestId included; the status has no unused fields', async () => {
   const page = repeatPage();
   page.helpers.setCurrentStore(templateStore(1));

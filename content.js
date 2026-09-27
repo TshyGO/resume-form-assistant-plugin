@@ -1741,6 +1741,8 @@
       };
       updateProgress();
       timer = window.setInterval(updateProgress, 1000);
+      // A stop during the preparation above had no request to cancel yet: send nothing.
+      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
       assisted?.onRequest?.(requestId);
       const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
