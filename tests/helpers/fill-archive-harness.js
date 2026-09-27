@@ -302,6 +302,8 @@ async function createPanel({ pages, worker, storage }) {
     return elements.get(id);
   };
   const toasts = [];
+  // Every message type the panel sent to the page, in order.
+  const pageMessages = [];
   const state = { tabId: 1, poll: null, activated: null };
   get("panel-toast");
   const copy = await import("../../link/copy.mjs");
@@ -325,6 +327,7 @@ async function createPanel({ pages, worker, storage }) {
         const page = pages[id];
         if (!page) throw new Error("no page");
         if (message.type === "RESUME_PANEL_TARGET") return { ok: true, targetAvailable: false };
+        pageMessages.push(message.type);
         return page.deliver(message);
       },
       create: async () => {},
@@ -332,11 +335,11 @@ async function createPanel({ pages, worker, storage }) {
       onUpdated: { addListener() {} }
     }
   };
-  const saveJobMenu = { clicked: 0, click() { this.clicked += 1; } };
+  // The page overlay's tools. The side panel must never reach for them (#178): counted here.
+  const overlayTools = { clicked: 0, click() { this.clicked += 1; } };
   const documentStub = {
-    // This branch has no native job-save card (#172), so "保存岗位到桌面端" is the tools menu.
-    hidden: false, getElementById: (id) => (id === "job-save-button" ? null : get(id)), querySelectorAll: () => [],
-    querySelector: (selector) => (selector === '[data-advanced="save"]' ? saveJobMenu : { click() {}, open: false }),
+    hidden: false, getElementById: (id) => get(id), querySelectorAll: () => [],
+    querySelector: (selector) => (selector.startsWith("[data-advanced") ? overlayTools : { click() {}, open: false }),
     addEventListener() {}
   };
   const context = vm.createContext({
@@ -371,7 +374,7 @@ async function createPanel({ pages, worker, storage }) {
   });
 
   const panel = {
-    get, toasts, state, card, saveJobMenu,
+    get, toasts, state, card, overlayTools, pageMessages,
     async poll() { await state.poll(); await settle(); },
     // Clicks without waiting for the answer; the caller decides when to settle.
     clickArchive(action) {

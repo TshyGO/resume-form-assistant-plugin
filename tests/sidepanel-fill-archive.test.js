@@ -208,7 +208,9 @@ test("no candidates: save the job, look again, keep for later or cancel — neve
   assert.equal(card.candidates.length, 0);
   panel.clickArchive("savejob");
   await settle(6);
-  assert.equal(panel.saveJobMenu.clicked, 1, "hands over to the job-save flow");
+  // #172's own review in the panel, the same as its 保存岗位到桌面端 button; never the page overlay.
+  assert.ok(panel.pageMessages.includes("RESUME_PANEL_SAVE_DRAFT"), "hands over to the panel's job-save flow");
+  assert.equal(panel.overlayTools.clicked, 0, "the page overlay's tools are never opened");
   assert.equal(worker.handled.some((message) => message.type === "DESKTOP_SAVE_JOB"), false, "nothing is saved from here");
   assert.equal(recordFills(worker).length, 0);
   // The job gets saved elsewhere; looking again now finds it, and the user still chooses.

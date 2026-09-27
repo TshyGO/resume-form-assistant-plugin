@@ -536,10 +536,11 @@
     } else if (action === "copyid") {
       toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
     } else if (action === "savejob") {
-      // Saving the job is its own flow with its own review; nothing is created from here, and
-      // the fill still waits for the user to pick the application afterwards (重新查找).
-      const saveJob = document.getElementById("job-save-button") || document.querySelector('[data-advanced="save"]');
-      saveJob?.click?.();
+      // The panel's own job review (#172), exactly what its 保存岗位到桌面端 button starts —
+      // never the page overlay's form. Nothing is created from here, and the fill still waits
+      // for the user to pick the application afterwards (重新查找).
+      const result = await jobRequest({ type: "RESUME_PANEL_SAVE_DRAFT" });
+      if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
     }
   }
 
