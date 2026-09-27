@@ -937,6 +937,25 @@ test('#172 AI recognition shows its progress in the side panel and cancelling ke
   assert.equal(page.saves().length, 0);
 });
 
+test('#172 initial recognition discards its draft when the page changes before AI returns', async () => {
+  const page = await panelJobPage({ extraction: UNRELIABLE_JOB });
+  const opening = page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  await tick();
+  assert.equal(page.aiCalls.sent.length, 1);
+
+  page.context.location.href = 'https://kingfa.zhiye.com/apply?job=99';
+  page.aiCalls.answer({
+    status: 'ok', reliable: true,
+    fields: { company: '旧公司的结果', title: '旧岗位的结果', location: '' }
+  });
+  const reply = await opening;
+
+  assert.equal(reply.jobSave.draftId, null);
+  assert.equal(reply.jobSave.discarded, 'page-changed');
+  assert.equal(reply.jobSave.phase, 'idle');
+  assert.equal(page.saves().length, 0);
+});
+
 test('#172 cancelling the draft during recognition closes it, and the late AI answer does not reopen the form', async () => {
   const page = await panelJobPage({ extraction: UNRELIABLE_JOB });
   const drafting = page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
@@ -1070,6 +1089,22 @@ test('#172 a bind with no response is unknown, never reported as automatically q
   assert.match(result.jobSave.result.text, /没能确认保存结果/);
   assert.doesNotMatch(result.jobSave.result.text, /自动重试|排进待同步/);
   assert.equal(page.binds().length, 1);
+});
+
+test('#172 a save that never answers leaves saving as an unknown result after the UI deadline', async () => {
+  const page = await panelJobPage({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
+    ? new Promise(() => {}) : {} });
+  page.hooks.setPanelJobWriteTimeoutMs(10);
+  const { jobSave } = await page.ask({ type: 'RESUME_PANEL_SAVE_DRAFT' });
+  const result = await page.ask({
+    type: 'RESUME_PANEL_SAVE_CONFIRM', draftId: jobSave.draftId,
+    company: '星河科技', title: '后端开发工程师', location: '上海'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.jobSave.phase, 'result');
+  assert.match(result.jobSave.result.text, /没能确认保存结果/);
+  assert.doesNotMatch(result.jobSave.result.text, /桌面已保存/);
 });
 
 test('#172 re-recognition invalidates the draft when the page changes while modules load', async () => {

@@ -199,7 +199,11 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   const context = vm.createContext({
     document, chrome,
     navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async () => {} } },
-    self: { ResumeProProfile: require('../profile-fields.js'), ResumeProResumeData: require('../resume-data.js') },
+    self: {
+      ResumeProProfile: require('../profile-fields.js'),
+      ResumeProResumeData: require('../resume-data.js'),
+      ResumeProCompose: require('../sidepanel-compose.js')
+    },
     setTimeout: () => 1, clearTimeout() {}, setInterval: listener => { poll = listener; }
   });
   vm.runInContext(read('sidepanel.js'), context);
@@ -309,6 +313,14 @@ test('an empty company or title is refused in the panel with a clear prompt', as
   assert.equal(panel.company.attributes['aria-invalid'], 'true');
   assert.equal(panel.company.focused, true);
   assert.equal(panel.form.hidden, false);
+
+  await panel.poll();
+  assert.equal(panel.get('job-save-error').hidden, false, 'status polling keeps the local validation prompt');
+  assert.equal(panel.get('job-save-error').textContent, '请补全公司名称后再保存。');
+
+  panel.company.value = '星河科技';
+  panel.company.listeners.input({ target: panel.company });
+  assert.equal(panel.get('job-save-error').hidden, true, 'editing the required field clears the local prompt');
 });
 
 test('a double click on confirm saves once', async () => {
