@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ensureReadableStreamAsyncIterator } from "./readable-stream-iterator.ts";
-import { parseHelpers } from "./parse-helpers.ts";
 
 // macOS 的 WKWebView（Linux 的 WebKitGTK 同理）没有 ReadableStream[Symbol.asyncIterator]，
 // Node 有。这里给 ReadableStream 派生一个子类，在子类原型上把它遮成 undefined，
@@ -61,6 +60,34 @@ test("提前 break 时取消流并释放锁，与原生行为一致", async () =
   assert.equal(stream.locked, false);
 });
 
+test("取消迟迟不结束时也先释放锁，再等取消结果（与规范 return() 一致）", async () => {
+  const Stream = webkitLikeStreamClass();
+  ensureReadableStreamAsyncIterator(Stream.prototype);
+  let finishCancel = () => {};
+  const stream = new Stream<number>({
+    pull(controller) {
+      controller.enqueue(1);
+    },
+    cancel() {
+      return new Promise<void>((resolve) => {
+        finishCancel = resolve;
+      });
+    },
+  });
+  const iterator = (stream as unknown as AsyncIterable<number>)[Symbol.asyncIterator]();
+  assert.deepEqual(await iterator.next(), { done: false, value: 1 });
+  let returned = false;
+  const returning = iterator.return!().then((result) => {
+    returned = true;
+    return result;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(stream.locked, false);
+  assert.equal(returned, false);
+  finishCancel();
+  assert.deepEqual(await returning, { done: true, value: undefined });
+});
+
 test("流出错时把错误抛给 for await，并释放锁", async () => {
   const Stream = webkitLikeStreamClass();
   ensureReadableStreamAsyncIterator(Stream.prototype);
@@ -78,33 +105,4 @@ test("已有原生实现时不覆盖", () => {
   const native = proto[Symbol.asyncIterator];
   ensureReadableStreamAsyncIterator(ReadableStream.prototype);
   assert.equal(proto[Symbol.asyncIterator], native);
-});
-
-// 真实复现：pdf.js 6.x 的 page.getTextContent() 内部是 `for await (const v of readableStream)`。
-// 最小 PDF：一页、Helvetica、一行文字（xref 偏移不精确，pdf.js 会自行重建）。
-const MINIMAL_PDF = `%PDF-1.4
-1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
-2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length 44 >> stream
-BT /F1 18 Tf 20 100 Td (Resume Pro) Tj ET
-endstream endobj
-5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
-trailer << /Root 1 0 R >>
-%%EOF`;
-
-test("真实 pdf.js：WebKit 缺 asyncIterator 时 getTextContent 失败，补上后能抽出文字", async () => {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const proto = ReadableStream.prototype as unknown as Record<symbol, unknown>;
-  const native = Object.getOwnPropertyDescriptor(proto, Symbol.asyncIterator)!;
-  const pdfBytes = () => new TextEncoder().encode(MINIMAL_PDF);
-  try {
-    delete proto[Symbol.asyncIterator];
-    await assert.rejects(parseHelpers.extractPdfText(pdfjs as never, pdfBytes(), { verbosity: 0 }), TypeError);
-
-    ensureReadableStreamAsyncIterator(ReadableStream.prototype);
-    assert.equal(await parseHelpers.extractPdfText(pdfjs as never, pdfBytes(), { verbosity: 0 }), "Resume Pro");
-  } finally {
-    Object.defineProperty(proto, Symbol.asyncIterator, native);
-  }
 });

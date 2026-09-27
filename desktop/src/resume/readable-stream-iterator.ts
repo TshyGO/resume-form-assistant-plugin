@@ -6,7 +6,7 @@
  * 界面落到「PDF 解析失败，请确认文件可以正常打开」，像是用户的文件坏了。
  *
  * 缺了才补，行为按规范的 values()（preventCancel 为 false）：读完释放锁；
- * 提前 break 或出错时先取消流再释放锁。
+ * 提前 break 或出错时取消流并释放锁。
  */
 export function ensureReadableStreamAsyncIterator(proto: ReadableStream = ReadableStream.prototype): void {
   const target = proto as unknown as Record<symbol, unknown>;
@@ -27,8 +27,10 @@ export function ensureReadableStreamAsyncIterator(proto: ReadableStream = Readab
           yield value;
         }
       } finally {
-        if (!finished) await reader.cancel().catch(() => {});
+        // 规范的 return()：先发起取消、立刻释放锁，再等取消结果——取消迟迟不结束也不会把流一直锁住。
+        const cancellation = finished ? undefined : reader.cancel();
         reader.releaseLock();
+        await cancellation?.catch(() => {});
       }
     },
   });
