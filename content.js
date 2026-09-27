@@ -1500,7 +1500,8 @@
         // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
         const beforeWrite = assisted ? undefined : (userEdited = false) => {
           if (overwriteDeclined) return false;
-          if (!userEdited && fillValueSnapshot(element) === approvedValues.get(element)) return true;
+          const currentValue = fillValueSnapshot(element);
+          if (!userEdited && currentValue !== null && currentValue === approvedValues.get(element)) return true;
           overwriteDeclined = true;
           cancelRequested = true;
           outcome = filledCount ? "partial" : "failed";

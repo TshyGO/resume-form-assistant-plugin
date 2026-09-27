@@ -1446,3 +1446,30 @@ test('multi-select with only an empty placeholder does not ask for overwrite', a
   assert.equal(select.value, 'A');
   assert.equal(select.selectedIndex, 1);
 });
+
+for (const disconnected of [false, true]) {
+  test(`radio groups require confirmation for non-first selection and stop on detached options: detached=${disconnected}`, async () => {
+    const formElements = [];
+    let finish;
+    let confirmations = 0;
+    const ctx = loadHighlightHelpers({ formElements,
+      aiHelpers: { findSelectOptionIndex: () => 1 },
+      confirm: () => { confirmations += 1; return false; },
+      sendMessage: () => new Promise(resolve => { finish = resolve; })
+    });
+    const first = new ctx.HTMLInputElement();
+    const second = new ctx.HTMLInputElement();
+    Object.assign(first, { type: 'radio', name: 'group', value: 'A', checked: false });
+    Object.assign(second, { type: 'radio', name: 'group', value: 'B', checked: !disconnected, click() {} });
+    formElements.push(first, second);
+    ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'B' }] }] }], activeTemplateId: 'one' });
+    const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    if (disconnected) first.isConnected = false;
+    finish({ success: true, matches: [{ fieldId: 'field-radio-0', value: 'B' }] });
+    await pending;
+    assert.equal(confirmations, disconnected ? 0 : 1);
+    assert.equal(second.checked, !disconnected);
+    assert.equal(second.dispatchedEvents.length, 0);
+  });
+}
