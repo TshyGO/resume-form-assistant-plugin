@@ -4,7 +4,11 @@ import { useInvoke } from "../react/invoke.tsx";
 import type { Notice } from "./resume-text.ts";
 
 /** 订阅宿主事件，返回取消订阅。测试里注入假的；浏览器里直接打开时为 undefined。 */
-export type Listen = (name: string, handler: () => void) => Promise<() => void> | (() => void) | void;
+export type DesktopEvent = { payload?: unknown };
+export type Listen = (
+  name: string,
+  handler: (event?: DesktopEvent) => void,
+) => Promise<() => void> | (() => void) | void;
 
 type ProfileChoice = "keep_desktop" | "use_imported";
 
