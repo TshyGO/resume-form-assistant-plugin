@@ -110,6 +110,44 @@ test('a confirmed submission says so and nothing more', async () => {
   assert.equal(pending.text.includes('已投递'), false);
 });
 
+test('a confirmation that reached no desktop never says it was queued, and each way in has its own words', async () => {
+  const { describeConfirmResult, describeConfirmBlocked } = await load();
+  const claimsQueue = /已排进|已记为待同步|已经进入/;
+
+  const texts = new Set();
+  for (const mode of ['not_installed', 'not_paired', 'never_paired', 'incompatible', 'unavailable']) {
+    const copy = describeConfirmResult({ status: 'pending', mode });
+    assert.equal(claimsQueue.test(copy.text), false, `${mode}: ${copy.text}`);
+    assert.doesNotMatch(copy.text, /(?<!确认)已投递/, mode);
+    assert.match(copy.text, /没有确认投递/, mode);
+    texts.add(copy.text);
+  }
+  assert.equal(texts.size, 5, 'no two of them share a sentence');
+  assert.equal(describeConfirmBlocked('something_new').text, describeConfirmBlocked('unavailable').text);
+
+  // Only a reply naming a queued message proves an entry exists.
+  assert.match(describeConfirmResult({ status: 'pending', messageId: 'm-1' }).text, /已排进待同步队列/);
+  assert.match(describeConfirmResult({ status: 'pending', messageId: 'm-1', mode: undefined }).text, /待同步/);
+  // Sent, no answer: not queued, not confirmed.
+  const unknown = describeConfirmResult({ status: 'unknown' });
+  assert.equal(unknown.text, '没能确认结果，请到桌面端查看这条申请的当前状态。');
+  assert.equal(claimsQueue.test(unknown.text), false);
+  assert.equal(unknown.text.includes('已投递'), false);
+  // Anything unrecognised is also "could not tell", never the queue sentence.
+  assert.equal(describeConfirmResult(undefined).text, unknown.text);
+  assert.equal(describeConfirmResult({ status: 'failed', code: 'previously_purged' }).tone, 'warn');
+});
+
+test('the stage of a candidate is shown by the desktop\'s own name and its id never appears', async () => {
+  const { describeApplicationChoice } = await load();
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  assert.equal(describeApplicationChoice({ applicationId: id, company: '金发科技', title: '研发工程师', stage: 'saved' }), '金发科技 · 研发工程师（已保存）');
+  assert.equal(describeApplicationChoice({ applicationId: id, company: '金发科技', title: '工艺工程师', stage: 'filling' }), '金发科技 · 工艺工程师（填写中）');
+  assert.equal(describeApplicationChoice({ applicationId: id, company: 'A', title: 'B', stage: '面试中' }), 'A · B（面试中）');
+  assert.equal(describeApplicationChoice({ applicationId: id, company: 'A', title: 'B' }), 'A · B');
+  assert.equal(describeApplicationChoice({ applicationId: id, company: 'A', title: 'B', stage: 'saved' }).includes(id), false);
+});
+
 // --- D08: archiving a fill -----------------------------------------------------------
 
 test('only a persisted fill.submit is described as archived on the desktop', async () => {

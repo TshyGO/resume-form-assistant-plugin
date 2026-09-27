@@ -480,6 +480,10 @@ impl StoreTx<'_> {
     }
 
     /// 两层候选查询(§7)。输入是用户确认过的原始字段;规范化在这里完成。
+    ///
+    /// 只在 `active` 申请里找,和 `list_applications` 默认视图("进行中")一致:
+    /// 回收站里的申请对用户来说已经"删除"了,既不该被当成保存岗位时的"可能重复"提醒出来,
+    /// 也不该被"确认已投递"选去改阶段——那样用户在桌面上再也看不到这条记录被动过。
     pub fn query_candidates(
         &self,
         company: &str,
@@ -503,9 +507,8 @@ impl StoreTx<'_> {
                 updated_at: r.get(5)?,
             })
         };
-        let sql =
-            "SELECT id, company, title, current_stage, source_url, updated_at FROM applications \
-                   WHERE recycle_state != 'purged' AND ";
+        let sql = "SELECT id, company, title, current_stage, source_url, updated_at FROM applications \
+                   WHERE recycle_state = 'active' AND ";
 
         let exact;
         {
