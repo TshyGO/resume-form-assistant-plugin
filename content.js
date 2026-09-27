@@ -1314,6 +1314,16 @@
     return Boolean(String(el.value ?? el.textContent ?? "").trim());
   }
 
+  // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
+  function fillValueSnapshot(entry) {
+    if (entry.kind === "radio") return JSON.stringify(entry.elements.map(el => [el.value, el.checked]));
+    const el = entry.element;
+    if (!el?.isConnected) return null;
+    if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
+    if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
+    return String(el.value ?? el.textContent ?? "");
+  }
+
   async function handleAiFillClick(event, assisted = null) {
     const button = event.currentTarget;
     if (button.disabled || state.aiBusy) return;
@@ -1359,6 +1369,7 @@
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
     let cancelRequested = false;
+    let overwriteDeclined = false;
     // 辅助新增条目是同一次一键填写的延续，接着用当前会话；其余每次都开新会话，上一次的记录清掉。
     const session = assisted && fillSession ? fillSession : beginFillSession();
 
@@ -1453,6 +1464,23 @@
         return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
       });
 
+      const approvedValues = new Map();
+      if (!assisted) {
+        for (const match of sortedMatches) {
+          const entry = fieldMap.get(match.fieldId);
+          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
+        }
+        const occupiedCount = [...approvedValues.keys()].filter(hasExistingValue).length;
+        if (occupiedCount && !window.confirm(
+          `本次将重新填写 ${occupiedCount} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？取消将保留网页现有内容，本次不会写入任何字段。AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
+        )) {
+          overwriteDeclined = true;
+          cancelRequested = true;
+          showStatus("已取消填写，网页现有内容未修改。", "error", true);
+          return;
+        }
+      }
+
       for (const match of sortedMatches) {
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
@@ -1460,6 +1488,14 @@
         if (!element) continue;
         if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
+        // 前面的控件可能异步等待；确认不授权覆盖在等待期间再次发生的修改。
+        if (!assisted && fillValueSnapshot(element) !== approvedValues.get(element)) {
+          overwriteDeclined = true;
+          cancelRequested = true;
+          outcome = filledCount ? "partial" : "failed";
+          showStatus(`填写期间检测到字段内容变化，已停止后续填写，保留该字段的现有内容。此前已填写 ${filledCount} 项，请核对网页。`, "error", true);
+          return;
+        }
         let filled = setElementValue(element, match.value);
         if (filled instanceof Promise) {
           filled = await filled;
@@ -1554,7 +1590,7 @@
       if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
       button.textContent = "一键 AI 填写";
       // A page with nothing to fill produced nothing worth archiving.
-      if (fieldCount > 0) {
+      if (fieldCount > 0 && (!overwriteDeclined || filledCount > 0)) {
         offerFillRecord({
           outcome, cancelled: cancelRequested, fieldCount, filledCount, unconfirmedCount,
           timing: { scanMs: timing.scanMs, roundTripMs: timing.roundTripMs, fillMs: timing.fillMs, totalMs },

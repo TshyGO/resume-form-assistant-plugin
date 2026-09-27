@@ -91,6 +91,10 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const [busy, setBusy] = useState(false);
   // 有没有没保存的修改：插件在后台写入时，靠这个决定是直接刷新还是先问用户（#177）。
   const [externalChange, setExternalChange] = useState(false);
+  const [deferredExternalChange, setDeferredExternalChange] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [reloading, setReloading] = useState(false);
+  const reloadPendingRef = useRef(false);
   const dirtyRef = useRef(false);
   const revisionRef = useRef(0);
   const editVersionRef = useRef(0);
@@ -99,7 +103,11 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const ignoredExternalRevisionRef = useRef(0);
 
   const load = useCallback(async (discardLocalChanges = false, externalRevision = 0) => {
-    if (!invoke) return;
+    if (!invoke || (discardLocalChanges && reloadPendingRef.current)) return;
+    if (discardLocalChanges) {
+      reloadPendingRef.current = true;
+      setReloading(true);
+    }
     const loadSequence = ++loadSequenceRef.current;
     const editVersion = editVersionRef.current;
     try {
@@ -125,6 +133,8 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       setRevision(record.revision);
       revisionRef.current = record.revision;
       setConflict(false);
+      setDeferredExternalChange(false);
+      setConfirmDiscard(false);
       setNotice(null);
       dirtyRef.current = false;
       setExternalChange(false);
@@ -133,6 +143,11 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     } catch (error) {
       if (loadSequence !== loadSequenceRef.current) return;
       setNotice({ tone: "error", text: (error as { message?: string })?.message ?? "读取失败。" });
+    } finally {
+      if (discardLocalChanges) {
+        reloadPendingRef.current = false;
+        setReloading(false);
+      }
     }
   }, [invoke]);
 
@@ -210,7 +225,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     updateProfile({ ...profile, custom: profile.custom.map((c, i) => (i === index ? { ...c, [field]: value } : c)) });
 
   const save = async () => {
-    if (busy) return;
+    if (busy || reloadPendingRef.current || confirmDiscard) return;
     setBusy(true);
     try {
       // 规范化用插件同一份规则：空值去掉、同名补充字段合并、全空的家庭成员丢掉。
@@ -224,6 +239,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       loadSequenceRef.current += 1;
       dirtyRef.current = false;
       setExternalChange(false);
+      setDeferredExternalChange(false);
       pendingExternalRevisionRef.current = 0;
       ignoredExternalRevisionRef.current = 0;
       // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
@@ -255,23 +271,42 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         void save();
       }}
     >
-      {externalChange ? (
+      {externalChange || deferredExternalChange || conflict ? (
         <div className="note warn stack" role="status">
-          <p>插件添加了新的补充字段。当前页面还有未保存的修改。</p>
+          <p>{conflict
+            ? "档案已在别处更新。当前输入仍保留，重新读取会放弃未保存的修改。"
+            : deferredExternalChange
+              ? "有待同步的补充字段。当前输入仍保留，可稍后处理。"
+              : "插件添加了新的补充字段。当前页面还有未保存的修改。"}</p>
           <div className="row">
-            <button type="button" onClick={() => void load(true)}>
-              重新读取
+            <button type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
+              放弃未保存修改并重新读取
             </button>
-            <button type="button" onClick={() => {
-              ignoredExternalRevisionRef.current = Math.max(
-                ignoredExternalRevisionRef.current,
-                pendingExternalRevisionRef.current,
-              );
-              pendingExternalRevisionRef.current = 0;
-              setExternalChange(false);
-            }}>
-              稍后处理
-            </button>
+            {externalChange ? (
+              <button type="button" onClick={() => {
+                ignoredExternalRevisionRef.current = Math.max(
+                  ignoredExternalRevisionRef.current,
+                  pendingExternalRevisionRef.current,
+                );
+                pendingExternalRevisionRef.current = 0;
+                setExternalChange(false);
+                setDeferredExternalChange(true);
+              }}>
+                稍后处理
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {confirmDiscard ? (
+        <div className="note warn stack" role="alertdialog" aria-label="确认放弃未保存修改" aria-describedby="profile-discard-description">
+          <p id="profile-discard-description">重新读取会丢弃当前未保存的修改，用已保存的档案替换。确定放弃吗？</p>
+          <div className="row">
+            <button type="button" disabled={busy || reloading} onClick={() => {
+              setConfirmDiscard(false);
+              void load(true);
+            }}>确定放弃并重新读取</button>
+            <button type="button" autoFocus onClick={() => setConfirmDiscard(false)}>取消，保留当前输入</button>
           </div>
         </div>
       ) : null}
@@ -365,14 +400,9 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         </p>
       ) : null}
       <div className="row">
-        <button type="submit" className="primary" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy || reloading || confirmDiscard}>
           保存我的信息
         </button>
-        {conflict ? (
-          <button type="button" onClick={() => void load(true)}>
-            重新读取
-          </button>
-        ) : null}
       </div>
     </form>
   );

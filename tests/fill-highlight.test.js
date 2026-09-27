@@ -401,6 +401,7 @@ test("AI fill loop records only successfully filled text inputs, and each new fi
   let matches = [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "13800138000" }];
   const { helpers, HTMLInputElement } = loadHighlightHelpers({
     formElements,
+    confirm: () => true,
     sendMessage: async () => ({ success: true, matches })
   });
   const name = new HTMLInputElement();
@@ -1234,3 +1235,67 @@ test("only this extension can drive the compose protocol with its own field list
   const unknown = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "explode", chipId: "b", value: "B" });
   assert.equal(unknown.ok, false);
 });
+
+for (const accept of [false, true]) {
+  test(`ordinary fill asks before overwriting edits made during AI wait; accept=${accept}`, async () => {
+    const formElements = [];
+    const confirmations = [];
+    let finish;
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements,
+      confirm: text => { confirmations.push(text); return accept; },
+      sendMessage: () => new Promise(resolve => { finish = resolve; })
+    });
+    for (const name of ['name', 'school']) {
+      const input = new HTMLInputElement();
+      input.name = name;
+      formElements.push(input);
+    }
+    helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '模板姓名' }] }] }], activeTemplateId: 'one' });
+    const button = { disabled: false };
+    const pending = helpers.handleAiFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
+    formElements[1].value = '等待期间手动输入';
+    finish({ success: true, matches: [{ fieldId: 'field-0', value: '模板姓名' }, { fieldId: 'field-1', value: '模板学校' }] });
+    await pending;
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0], /1 个已有内容/);
+    assert.match(confirmations[0], /可能覆盖你手动修改/);
+    assert.ok(!confirmations[0].includes('等待期间手动输入'));
+    assert.deepEqual(formElements.map(el => el.value), accept ? ['模板姓名', '模板学校'] : ['', '等待期间手动输入']);
+    assert.equal(button.disabled, false);
+    if (!accept) assert.ok(formElements.every(el => el.dispatchedEvents.length === 0));
+  });
+}
+
+test('ordinary empty-page fill does not ask for overwrite confirmation', async () => {
+  const formElements = [];
+  const { helpers, HTMLInputElement } = loadHighlightHelpers({
+    formElements, confirm: () => { throw new Error('empty field must not ask'); },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新值' }] })
+  });
+  formElements.push(new HTMLInputElement());
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新值' }] }] }], activeTemplateId: 'one' });
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(formElements[0].value, '新值');
+});
+
+for (const changedValue of ['确认后又改了', '']) {
+  test(`later fields changed after confirmation are protected, including clearing: ${JSON.stringify(changedValue)}`, async () => {
+    const formElements = [];
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements, confirm: () => true,
+      sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新姓名' }, { fieldId: 'field-1', value: '新学校' }] })
+    });
+    const first = new HTMLInputElement();
+    const second = new HTMLInputElement();
+    second.value = '确认过的旧值';
+    first.dispatchEvent = () => { second.value = changedValue; return true; };
+    formElements.push(first, second);
+    helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新姓名' }] }] }], activeTemplateId: 'one' });
+    await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    assert.equal(first.value, '新姓名');
+    assert.equal(second.value, changedValue);
+    assert.equal(second.dispatchedEvents.length, 0);
+  });
+}
