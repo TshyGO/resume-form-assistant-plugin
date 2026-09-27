@@ -37,6 +37,13 @@
   const fieldHighlightTimers = new WeakMap();
   const chipSelectionIdsByTarget = new WeakMap();
   const chipWriteTargets = new WeakSet();
+  // 每个网页目标最后一次有效的光标/选区。点原生侧栏会让网页失焦，所以不能等到
+  // 收到侧栏操作时才去读 selection。只放在页面内存里，按元素保存，不跨文本框复用。
+  const savedTextSelections = new WeakMap();
+  // 侧栏最近一次来问过目标状态的时间。只有侧栏在线时，才把「目标变了」通知过去。
+  let panelQueriedAt = 0;
+  let panelNotifyTimer = null;
+  const PANEL_ONLINE_MS = 5000;
   const textFillFailures = new WeakMap();
   // 给页面自己的校验留一点时间。短到不拖慢整表，长过常见的几十毫秒回滚。
   let textCommitWaitMs = 100;
@@ -118,6 +125,12 @@
       const button = shadowRoot?.querySelector(selector);
       if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "当前操作不可用。" });
       else { button.click(); sendResponse({ ok: true }); }
+      return false;
+    }
+
+    if (message.type === "RESUME_PANEL_TARGET") {
+      panelQueriedAt = Date.now();
+      sendResponse(describePanelTarget(readPanelChips(message.chips)));
       return false;
     }
 
@@ -571,6 +584,10 @@
       return;
     }
 
+    if (isBlockedFillTarget(target)) {
+      return;
+    }
+
     if (!isComposableTextTarget(target)) {
       await copyText(value);
       const filled = await Promise.resolve(setElementValue(target, value));
@@ -598,8 +615,105 @@
     showChipActionMenu(button, target, value, selection);
   }
 
+  const PANEL_COMPOSE_MODES = new Set(["add", "replace", "remove"]);
+  const PANEL_MAX_CHIPS = 2000;
+
+  // The side panel sends only what it needs to judge a field: its id and its own value.
+  // Nothing here reads the page's text back out to the panel.
+  function readPanelChips(raw, extra = null) {
+    const chips = [];
+    const seen = new Set();
+    const push = (chipId, value) => {
+      if (typeof chipId !== "string" || !chipId || typeof value !== "string" || !value || seen.has(chipId)) return;
+      if (chips.length >= PANEL_MAX_CHIPS) return;
+      seen.add(chipId);
+      chips.push({ dataset: { chipId, value } });
+    };
+    if (Array.isArray(raw)) {
+      raw.forEach((item) => push(item?.chipId, item?.value));
+    }
+    if (extra) {
+      const at = chips.findIndex((chip) => chip.dataset.chipId === extra.chipId);
+      if (at >= 0) chips[at].dataset.value = extra.value;
+      else push(extra.chipId, extra.value);
+    }
+    return chips;
+  }
+
+  function planChipActions(target, chips) {
+    const current = getComposableTargetValue(target);
+    const selection = resolveTextSelection(target);
+    const selected = resolveSelectedChipIds(target, chips, current);
+    const actions = {};
+    chips.forEach((chip) => {
+      const chipId = chip.dataset.chipId;
+      const value = chip.dataset.value;
+      const contained = selected.has(chipId);
+      actions[chipId] = {
+        add: !contained && composeChipText(current, value, "add", selection).changed,
+        replace: current !== "" && composeChipText(current, value, "replace", selection).changed,
+        remove: contained && composeChipText(current, value, "remove", selection).changed
+      };
+    });
+    return { current, selected, actions };
+  }
+
+  // 侧栏只拿到布尔能力和 chipId，不会拿到文本框原文。
+  function describePanelTarget(chips) {
+    const target = getLastFocusedFillTarget();
+    const none = { ok: true, targetAvailable: false, composable: false, empty: true, selectedChipIds: [], actions: {} };
+    if (!target) return none;
+    if (!isComposableTextTarget(target)) return { ...none, targetAvailable: true };
+    const plan = planChipActions(target, chips);
+    return {
+      ok: true,
+      targetAvailable: true,
+      composable: true,
+      empty: plan.current === "",
+      selectedChipIds: Array.from(plan.selected),
+      actions: plan.actions
+    };
+  }
+
+  function panelActionRefusal(mode, plan, chipId) {
+    if (plan.actions[chipId]?.[mode]) return "";
+    if (mode === "add") {
+      return plan.selected.has(chipId) ? "网页输入框已包含这个字段。" : "添加不会改变网页内容。";
+    }
+    if (mode === "replace") {
+      return plan.current === "" ? "网页输入框是空的，请使用「添加」。" : "替换不会改变网页内容。";
+    }
+    return plan.selected.has(chipId) ? "删除不会改变网页内容。" : "网页输入框里没有这个字段。";
+  }
+
+  async function applyPanelComposeAction(message, chipId, value, mode, trusted) {
+    const target = getLastFocusedFillTarget();
+    if (!target) return { ok: false, error: "请先点击网页输入框。" };
+    if (!isComposableTextTarget(target)) {
+      return { ok: false, error: "这个网页控件不能组合字段，请换到普通文本框。" };
+    }
+    // Hidden page chips may be older than the panel's snapshot; only the panel's own
+    // list is used for identity when the sender is this extension.
+    const chips = readPanelChips(trusted ? message.chips : null, { chipId, value });
+    if (!trusted) {
+      Array.from(shadowRoot?.querySelectorAll(".resume-pro__chip") || []).forEach((button) => {
+        if (button.dataset.chipId && button.dataset.value && !chips.some((chip) => chip.dataset.chipId === button.dataset.chipId)) {
+          chips.push({ dataset: { chipId: button.dataset.chipId, value: button.dataset.value } });
+        }
+      });
+    }
+    const plan = planChipActions(target, chips);
+    const refusal = panelActionRefusal(mode, plan, chipId);
+    if (refusal) return { ok: false, error: refusal };
+    const applied = await applyChipValue(target, value, mode, resolveTextSelection(target), chipId);
+    if (!applied) return { ok: false, error: "网页控件没有接受这次修改，内容未变化，请手动核对。" };
+    const done = { add: "已添加到网页输入框。", replace: "已替换网页输入框内容。", remove: "已从网页输入框删除。" };
+    return { ok: true, message: done[mode] };
+  }
+
   async function handlePanelFieldAction(message, sender) {
-    if (message.mode !== "fill" && message.mode !== "copy") {
+    const mode = message.mode;
+    if (mode !== "fill" && mode !== "copy" && !PANEL_COMPOSE_MODES.has(mode)) {
       return { ok: false, error: "未知的字段操作。" };
     }
     const chipId = String(message.chipId || "");
@@ -613,22 +727,29 @@
     if (!button && !trustedValue) return { ok: false, error: "模板字段已变化，请刷新侧栏。" };
     if (!value) return { ok: false, error: "这个字段没有内容。" };
 
-    if (message.mode === "copy") {
+    if (mode === "copy") {
       return { ok: false, needsCopy: true, message: "请在侧栏复制字段内容。" };
     }
+    if (PANEL_COMPOSE_MODES.has(mode)) {
+      return applyPanelComposeAction(message, chipId, value, mode, trustedValue);
+    }
 
+    // 兼容旧的 fill：字段主区域的快捷行为。
     const target = getLastFocusedFillTarget();
     if (!target) {
-      return { ok: false, needsCopy: true, message: "没有选中网页输入框；字段内容可复制后粘贴。" };
+      return { ok: false, error: "请先点击网页输入框，再选择字段。" };
+    }
+    if (isBlockedFillTarget(target)) {
+      return { ok: false, error: "这个输入框可能是密码、验证码或文件，插件不会自动填写。" };
     }
 
     if (isComposableTextTarget(target)) {
       if (getComposableTargetValue(target)) {
-        return { ok: false, needsCopy: true, message: "网页输入框已有内容；请先核对，再粘贴复制的字段。" };
+        return { ok: false, needsChoice: true, message: "网页输入框已有内容，请点击「添加」或「替换」。" };
       }
-      const filled = await applyChipValue(target, value, "add", captureTextSelection(target), chipId);
+      const filled = await applyChipValue(target, value, "add", resolveTextSelection(target), chipId);
       if (filled) return { ok: true, message: "已填入网页输入框。" };
-      return { ok: false, needsCopy: true, message: "网页控件未接受写入；请手动粘贴复制的字段。" };
+      return { ok: false, error: "网页控件没有接受写入，内容未变化，请手动核对。" };
     }
 
     if (hasExistingValue({ kind: "element", element: target })) {
@@ -682,27 +803,23 @@
     state.chipAction = null;
   }
 
-  function captureTextSelection(target) {
+  function readLiveTextSelection(target) {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-      const fallback = target.value.length;
-      return {
-        start: Number.isInteger(target.selectionStart) ? target.selectionStart : fallback,
-        end: Number.isInteger(target.selectionEnd) ? target.selectionEnd : fallback
-      };
+      let start;
+      let end;
+      try {
+        start = target.selectionStart;
+        end = target.selectionEnd;
+      } catch {
+        return null;
+      }
+      return Number.isInteger(start) && Number.isInteger(end) ? { start, end } : null;
     }
 
     const selection = window.getSelection?.();
-    if (!selection?.rangeCount) {
-      const fallback = target.textContent?.length || 0;
-      return { start: fallback, end: fallback };
-    }
-
+    if (!selection?.rangeCount) return null;
     const range = selection.getRangeAt(0);
-    if (!target.contains(range.commonAncestorContainer)) {
-      const fallback = target.textContent?.length || 0;
-      return { start: fallback, end: fallback };
-    }
-
+    if (!target.contains?.(range.commonAncestorContainer)) return null;
     const beforeStart = range.cloneRange();
     beforeStart.selectNodeContents(target);
     beforeStart.setEnd(range.startContainer, range.startOffset);
@@ -710,6 +827,39 @@
     beforeEnd.selectNodeContents(target);
     beforeEnd.setEnd(range.endContainer, range.endOffset);
     return { start: beforeStart.toString().length, end: beforeEnd.toString().length };
+  }
+
+  function validTextSelection(selection, length) {
+    if (!selection || !Number.isInteger(selection.start) || !Number.isInteger(selection.end)) return null;
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    return start >= 0 && end <= length ? { start, end } : null;
+  }
+
+  // 优先取网页里此刻的光标；取不到（例如 contenteditable 失焦后选区没了，或 email
+  // 输入框没有 selectionStart）就用最后保存的；再无效就回到文本末尾。
+  function resolveTextSelection(target) {
+    const length = getComposableTargetValue(target).length;
+    const live = validTextSelection(readLiveTextSelection(target), length);
+    if (live) {
+      savedTextSelections.set(target, live);
+      return live;
+    }
+    const saved = validTextSelection(savedTextSelections.get(target), length);
+    return saved || { start: length, end: length };
+  }
+
+  function captureTextSelection(target) {
+    return resolveTextSelection(target);
+  }
+
+  function rememberTextSelection(target) {
+    // 只记光标下标，不记文本；这里不做敏感判断，避免每次 selectionchange 都去找标签。
+    const textual = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+      || (target instanceof HTMLElement && target.isContentEditable);
+    if (!textual || chipWriteTargets.has(target)) return;
+    const live = validTextSelection(readLiveTextSelection(target), getComposableTargetValue(target).length);
+    if (live) savedTextSelections.set(target, live);
   }
 
   function composeChipText(currentValue, chipValue, mode, selection = {}) {
@@ -802,6 +952,7 @@
     } else {
       setContentEditableCaret(target, composed.caret);
     }
+    savedTextSelections.set(target, { start: composed.caret, end: composed.caret });
     state.lastFocusedField = target;
     syncChipSelectionState();
     return true;
@@ -813,29 +964,80 @@
       : String(target.textContent || "");
   }
 
+  function findTextPosition(root, offset) {
+    let remaining = offset;
+    let last = null;
+    const walk = (node) => {
+      for (let child = node.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType === 3) {
+          const length = child.textContent?.length || 0;
+          if (remaining <= length) return { node: child, offset: remaining };
+          remaining -= length;
+          last = child;
+        } else if (child.firstChild) {
+          const found = walk(child);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const found = walk(root);
+    if (found) return found;
+    return last ? { node: last, offset: last.textContent?.length || 0 } : { node: root, offset: 0 };
+  }
+
   function setContentEditableCaret(target, caret) {
     const selection = window.getSelection?.();
     const range = document.createRange?.();
     if (!selection || !range) {
       return;
     }
-    const textNode = target.firstChild || target;
-    const offset = textNode === target ? 0 : Math.min(caret, textNode.textContent?.length || 0);
-    range.setStart(textNode, offset);
+    const position = findTextPosition(target, caret);
+    range.setStart(position.node, position.offset);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
   }
 
+  // 验证码、一次性口令类字段不能只看 input.type：这里复用档案里的敏感词表，再补上
+  // 验证码/OTP 的常见写法，以及浏览器自己的 autocomplete 声明。
+  const OTP_HINT = /(?:^|[^a-z])otp(?:[^a-z]|$)|one[-_ ]?time|sms[-_ ]?code|verif(?:y|ication)[-_ ]?code|security[-_ ]?code|captcha|验证码|校验码|短信码|动态码|安全码/i;
+
+  function isSensitiveTextTarget(target) {
+    if (!(target instanceof HTMLElement)) return false;
+    const type = String(target.type || "").toLowerCase();
+    if (type === "password") return true;
+    const attr = (name) => String(target.getAttribute?.(name) || "");
+    if (/one-time-code|current-password|new-password/i.test(attr("autocomplete"))) return true;
+    let label = "";
+    try {
+      label = getFieldLabel(target);
+    } catch {
+      label = "";
+    }
+    const hint = [target.name, target.id, attr("placeholder"), attr("aria-label"), attr("data-label"), label].join(" ");
+    const secret = self.ResumeProProfile?.SECRET_LABEL;
+    return OTP_HINT.test(hint) || Boolean(secret && secret.test(hint));
+  }
+
+  function isBlockedFillTarget(target) {
+    return isSensitiveTextTarget(target)
+      || (target instanceof HTMLInputElement && String(target.type || "").toLowerCase() === "file");
+  }
+
   function isComposableTextTarget(target) {
-    if (target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) {
+    if (!(target instanceof HTMLElement) || target.disabled || target.readOnly || isSensitiveTextTarget(target)) {
+      return false;
+    }
+    if (target instanceof HTMLTextAreaElement || target.isContentEditable) {
       return true;
     }
-    return target instanceof HTMLInputElement && ["text", "search", "tel", "url", "email", "password"].includes(target.type || "text");
+    return target instanceof HTMLInputElement && ["text", "search", "tel", "url", "email"].includes(target.type || "text");
   }
 
   function syncChipSelectionState() {
-    if (!shadowRoot?.querySelectorAll) {
+    // 侧栏在线时，选中状态以侧栏发来的字段清单为准；隐藏的旧字段可能比它旧。
+    if (!shadowRoot?.querySelectorAll || Date.now() - panelQueriedAt < PANEL_ONLINE_MS) {
       return;
     }
     const target = getLastFocusedFillTarget();
@@ -1509,7 +1711,26 @@
     return element.getAttribute("placeholder")?.trim() || "";
   }
 
+  // 目标、光标或内容变了，就让在线的侧栏重新问一次状态。消息里不带任何数据。
+  function notifyPanelTargetChanged() {
+    if (Date.now() - panelQueriedAt >= PANEL_ONLINE_MS || panelNotifyTimer) return;
+    panelNotifyTimer = window.setTimeout(() => {
+      panelNotifyTimer = null;
+      try {
+        Promise.resolve(chrome.runtime.sendMessage({ type: "RESUME_TARGET_CHANGED" })).catch(() => {});
+      } catch {
+        // The panel closed between the query and now.
+      }
+    }, 60);
+  }
+
   function bindFocusTracking() {
+    const trackedTarget = (event) => {
+      const candidate = event.target instanceof HTMLElement && isFillTarget(event.target)
+        ? event.target : document.activeElement;
+      return candidate instanceof HTMLElement && isFillTarget(candidate) && !candidate.closest?.(`#${SIDEBAR_ID}`)
+        ? candidate : null;
+    };
     document.addEventListener("focusin", (event) => {
       const target = event.target;
 
@@ -1524,16 +1745,36 @@
       if (isFillTarget(target)) {
         state.lastFocusedField = target;
         closeChipActionMenu();
+        rememberTextSelection(target);
         syncChipSelectionState();
+        notifyPanelTargetChanged();
       }
     }, true);
+    // 失焦前最后记一次：点侧栏之后，contenteditable 的选区可能已经不在了。
+    document.addEventListener("focusout", (event) => {
+      const target = trackedTarget(event);
+      if (target) rememberTextSelection(target);
+    }, true);
+    const trackCaret = (event) => {
+      const target = trackedTarget(event);
+      if (!target) return;
+      rememberTextSelection(target);
+      if (target === state.lastFocusedField) notifyPanelTargetChanged();
+    };
+    document.addEventListener("selectionchange", trackCaret, true);
+    document.addEventListener("keyup", trackCaret, true);
+    document.addEventListener("mouseup", trackCaret, true);
     document.addEventListener("input", (event) => {
+      // 用户手动改过、或页面自己改过：按值重新推断，不再沿用之前记的字段身份。
+      // 我们自己写入时不清，写完由 applyChipValue 收尾。
+      if (event.target && !chipWriteTargets.has(event.target)) {
+        chipSelectionIdsByTarget.delete(event.target);
+      }
       if (event.target === state.lastFocusedField) {
         closeChipActionMenu();
-        if (!chipWriteTargets.has(event.target)) {
-          chipSelectionIdsByTarget.delete(event.target);
-        }
+        rememberTextSelection(event.target);
         syncChipSelectionState();
+        notifyPanelTargetChanged();
       }
     }, true);
   }
@@ -3290,6 +3531,11 @@
     self.ResumeProHighlightTest = {
       applySidebarUiState,
       bindStorageSync,
+      bindFocusTracking,
+      describePanelTarget,
+      readPanelChips,
+      resolveTextSelection,
+      isSensitiveTextTarget,
       constrainSidebarToViewport,
       persistSidebarUiState,
       readSidebarUiState,

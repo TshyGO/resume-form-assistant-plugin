@@ -38,7 +38,7 @@ export function parseGitArchiveEntries(workflowText) {
 
 export function assertPluginOnlyArchive(entries) {
   const allowed = new Set(["manifest.json","background.js","content.js","content.css","sidebar-state.js","ai-helpers.js","form-agent.js",
-    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","profile-fields.js","resume-data.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js",
+    "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","profile-fields.js","resume-data.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js","sidepanel-compose.js",
     "README.md","LICENSE",
     ...JSON.parse(readFileSync(new URL('./plugin-release-assets.json', import.meta.url), 'utf8'))]);
   const exact = new Set(entries);

@@ -33,6 +33,9 @@
   let lastPageStatus = null;
   let toastTimer = null;
   let statusPolling = false;
+  // Booleans and chip ids from the page controller, never the page's own text (#174).
+  let targetState = self.ResumeProCompose.emptyTargetState();
+  let targetRequest = 0;
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -148,7 +151,7 @@
     const quick = preferred.map((key) => fields.find((field) => field.key === key)).filter(Boolean).slice(0, 3);
     if (!quick.length) quick.push(...fields.slice(0, 3));
     elements.quickFields.innerHTML = quick.length
-      ? quick.map((field) => `<button type="button" class="quick-row" data-chip-id="${escapeHtml(field.chipId)}"><span class="row-key">${escapeHtml(field.key)}</span><span class="row-value">${escapeHtml(field.value)}</span></button>`).join("")
+      ? quick.map((field) => self.ResumeProCompose.renderRow(field, "quick")).join("")
       : '<p class="field-empty">还没有可用的简历字段。</p>';
 
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
@@ -156,11 +159,41 @@
       if (!rows.length) return "";
       return `<details class="field-group"${index === 0 ? " open" : ""}>
         <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
-        <div>${rows.map((field) => `<div class="field-row" data-search="${escapeHtml(`${field.key} ${field.value}`.toLocaleLowerCase())}"><button type="button" class="field-row__fill" data-chip-id="${escapeHtml(field.chipId)}"><span class="row-key">${escapeHtml(field.key)}</span><span class="row-value" title="${escapeHtml(field.value)}">${escapeHtml(field.value)}</span></button><button type="button" class="field-row__copy" data-chip-id="${escapeHtml(field.chipId)}">复制</button></div>`).join("")}</div>
+        <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
       </details>`;
     }).join("");
     filterFields();
     updateFillAvailability(lastPageStatus);
+    renderTargetState();
+    refreshTarget().catch(() => {});
+  }
+
+  function panelChips() {
+    return visibleFields(groupedFields()).map((field) => ({ chipId: field.chipId, value: field.value }));
+  }
+
+  function renderTargetState() {
+    self.ResumeProCompose.applyTargetState([elements.quickFields, elements.fieldGroups], targetState);
+  }
+
+  function clearTargetState() {
+    targetRequest += 1;
+    targetState = self.ResumeProCompose.emptyTargetState();
+    renderTargetState();
+  }
+
+  // Asks the page which chips its current text box already holds, and which of the three
+  // actions would change it. A stale answer (the tab or target moved on) is dropped.
+  async function refreshTarget() {
+    const request = ++targetRequest;
+    let next = self.ResumeProCompose.emptyTargetState();
+    if (currentTabId !== null && (selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile))) {
+      const response = await sendToPage({ type: "RESUME_PANEL_TARGET", chips: panelChips() });
+      next = self.ResumeProCompose.normalizeTargetState(response);
+    }
+    if (request !== targetRequest) return;
+    targetState = next;
+    renderTargetState();
   }
 
   function filterFields() {
@@ -206,6 +239,7 @@
       if (nextTabId !== currentTabId) {
         elements.fillResult.hidden = true;
         elements.fillResult.textContent = "";
+        clearTargetState();
       }
       currentTabId = nextTabId;
       const response = await sendToPage({ type: "RESUME_PANEL_STATUS" }, currentTabId);
@@ -251,6 +285,7 @@
         elements.desktopStatus.hidden = true;
         elements.diagnostics.hidden = true;
       }
+      await refreshTarget();
     } finally {
       statusPolling = false;
     }
@@ -307,25 +342,34 @@
     }
     await pollStatus();
   }));
-  async function fieldAction(event, mode) {
-    const button = event.target.closest("[data-chip-id]");
-    if (!button) return;
+  // Every row, quick or grouped, goes through here. The row body is the quick path (the
+  // page decides: an empty box gets the field, a filled one asks for an explicit button);
+  // 添加 / 替换 / 删除 name the operation, and the page refuses one that would change nothing.
+  async function fieldAction(event) {
+    const button = event.target.closest?.("button[data-chip-id]");
+    if (!button || button.disabled) return;
+    const mode = button.dataset.action || "fill";
     const field = visibleFields(groupedFields()).find((item) => item.chipId === button.dataset.chipId);
     if (!field) { toast("字段已变化，请刷新侧栏后重试。"); return; }
-    if (mode === "copy") {
-      toast(await copyFieldValue(field.value) ? "已复制字段内容。" : "复制失败，请在桌面核对字段内容。");
-      return;
-    }
-    const result = await sendToPage({ type: "RESUME_PANEL_FIELD", chipId: button.dataset.chipId, value: field.value, mode });
+    const result = await sendToPage({ type: "RESUME_PANEL_FIELD", chipId: field.chipId, value: field.value, mode, chips: panelChips() });
     if (result?.needsCopy) {
+      // Only a non-text control that refused the write gets here; the toast says what was copied.
       const copied = await copyFieldValue(field.value);
       toast(copied ? `${result.message}字段内容已复制。` : "复制失败，请在桌面核对字段内容。");
-      return;
+    } else {
+      toast(result?.message || result?.error || "字段操作未完成。");
     }
-    toast(result?.message || result?.error || "字段操作未完成。");
+    await refreshTarget().catch(() => {});
   }
-  elements.quickFields.addEventListener("click", (event) => fieldAction(event, "fill"));
-  elements.fieldGroups.addEventListener("click", (event) => fieldAction(event, event.target.closest(".field-row__copy") ? "copy" : "fill"));
+  elements.quickFields.addEventListener("click", fieldAction);
+  elements.fieldGroups.addEventListener("click", fieldAction);
+  chrome.runtime.onMessage?.addListener((message, sender) => {
+    if (message?.type === "RESUME_TARGET_CHANGED" && sender?.id === chrome.runtime.id
+      && currentTabId !== null && sender.tab?.id === currentTabId) {
+      refreshTarget().catch(() => {});
+    }
+    return false;
+  });
   document.querySelectorAll("[data-advanced]").forEach((button) => button.addEventListener("click", async () => {
     document.querySelector(".dock-tools").open = false;
     const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
@@ -360,7 +404,7 @@
     return desktopAction(mode === "ready" ? "home" : self.ResumeProResumeData.modeCopy(mode).kind).catch(() => toast("当前操作不可用。"));
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) loadStore().catch(() => {}); });
-  chrome.tabs.onActivated.addListener(() => { loadStore().then(pollStatus).catch(() => {}); });
+  chrome.tabs.onActivated.addListener(() => { clearTargetState(); loadStore().then(pollStatus).catch(() => {}); });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
   setInterval(() => { pollStatus().catch(() => {}); }, 1500);
