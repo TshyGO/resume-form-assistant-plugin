@@ -95,6 +95,7 @@
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
       dropStalePanelJob();
+      dropStalePanelSubmit();
       const jobSave = panelJobSnapshot();
       sendResponse({
         ready: Boolean(button),
@@ -117,7 +118,9 @@
         jobAssist: jobAssist && !jobAssist.hidden
           ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null,
         // Saving a job from the side panel itself (#172); held in this page's memory only.
-        jobSave
+        jobSave,
+        // Confirming a submission from the side panel (#172); also held in this page's memory only.
+        submitConfirm: panelSubmitSnapshot()
       });
       return false;
     }
@@ -202,6 +205,25 @@
         .catch(() => sendResponse({ ok: false, error: "这次没能保存，请稍后再试。", jobSave: panelJobSnapshot() }));
       return true;
     }
+    if (message.type === "RESUME_PANEL_SUBMIT_START") {
+      startPanelSubmit().then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "没能开始确认投递，请稍后再试。", submitConfirm: panelSubmitSnapshot() }));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_SUBMIT_CHOICE") {
+      choosePanelSubmit(message).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "没能确认结果，请到桌面端查看这条申请的当前状态。", submitConfirm: panelSubmitSnapshot() }));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_SUBMIT_CANCEL") {
+      sendResponse(cancelPanelSubmit(message));
+      return false;
+    }
+    if (message.type === "RESUME_PANEL_SUBMIT_SAVE") {
+      savePanelSubmitJob(message).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "读取岗位信息失败。", jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() }));
+      return true;
+    }
     if (message.type === "RESUME_PANEL_ADVANCED") {
       if (message.action === "cancel-assist") {
         const running = Boolean(shadowRoot?.querySelector("#resume-pro-job-assist")?.hidden === false);
@@ -214,10 +236,10 @@
         sendResponse({ ok: true });
         return false;
       }
+      // "确认已投递" is no longer opened here: the side panel runs it (RESUME_PANEL_SUBMIT_*).
       const buttons = {
         repeat: "#resume-pro-repeat-fill",
-        save: "#resume-pro-save-job",
-        submit: "#resume-pro-confirm-submit"
+        save: "#resume-pro-save-job"
       };
       const selector = Object.prototype.hasOwnProperty.call(buttons, message.action) ? buttons[message.action] : null;
       const button = selector ? shadowRoot?.querySelector(selector) : null;
@@ -3284,11 +3306,18 @@
   // covers a worker that never answers. There is no automatic retry either way.
   async function runJobAssist(fragments, fallback, { isCurrent, onAssistStart, onAssistEnd }) {
     const { saveFlow, copy } = await loadDesktopModules();
+    // The user may have cancelled, or the page moved on, while the modules were loading.
+    // Checked before anything is shown or sent: an assist panel raised for a job nobody is
+    // waiting for would have no request to end it and would stay on screen.
+    if (!isCurrent()) return { action: "ignore" };
     const requestId = newRequestId();
     onAssistStart?.(copy.describeJobAssist(saveFlow.assistDisclosure(fragments)), requestId, fallback);
-    // The user may have cancelled, or the page moved on, while the modules were loading.
-    // Nothing is sent for a job nobody is waiting for.
-    if (!isCurrent()) return { action: "ignore" };
+    // Showing the progress can itself hand control away (a caller that re-renders). If the
+    // job stopped being current, the progress is taken down again and nothing is sent.
+    if (!isCurrent()) {
+      onAssistEnd?.(requestId);
+      return { action: "ignore" };
+    }
     let reply;
     let timer;
     try {
@@ -3393,7 +3422,8 @@
       candidates = null;
     }
     if (candidates?.status !== "ok") {
-      setDesktopStatus(copy.describeConfirmResult({ status: "pending" }));
+      // Nothing was written or queued: say which way the desktop could not be reached.
+      setDesktopStatus(copy.describeConfirmBlocked(confirmBlockedMode(candidates?.status), { extensionId: chrome.runtime.id }));
       return;
     }
 
@@ -3414,16 +3444,28 @@
       row.textContent = `${candidate.company} · ${candidate.title}`;
       row.addEventListener("click", async () => {
         box.hidden = true;
-        const result = await chrome.runtime.sendMessage({
-          type: "DESKTOP_CONFIRM_SUBMIT", applicationId: candidate.applicationId
-        });
-        setDesktopStatus(copy.describeConfirmResult(result ?? { status: "pending" }));
+        let result;
+        try {
+          result = await chrome.runtime.sendMessage({
+            type: "DESKTOP_CONFIRM_SUBMIT", applicationId: candidate.applicationId
+          });
+        } catch {
+          result = { status: "unknown" };
+        }
+        setDesktopStatus(copy.describeConfirmResult(result ?? { status: "unknown" }));
         refreshPendingList();
       });
       list.appendChild(row);
     }
     shadowRoot.querySelector("#resume-pro-bind-new").hidden = true;
     box.hidden = false;
+  }
+
+  // What the desktop's answer to a candidates query means for "确认已投递". Only these modes
+  // have their own wording; a retryable or fatal failure is "the desktop is not answering".
+  const CONFIRM_BLOCKED_MODES = new Set(["not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
+  function confirmBlockedMode(status) {
+    return CONFIRM_BLOCKED_MODES.has(status) ? status : "unavailable";
   }
 
   // --- D08: archiving a finished fill ----------------------------------------------------
@@ -3770,7 +3812,8 @@
   // Shown when the write was sent but its outcome could not be worked out; never "saved".
   const PANEL_JOB_UNKNOWN = {
     tone: "pending",
-    text: "没能确认保存结果。请到桌面端查看这个岗位是否已保存；没有的话，再点一次「保存岗位到桌面端」。"
+    // Kept equal to copy.UNKNOWN_SAVE_TEXT (the page overlay's wording); a test holds them together.
+    text: "没能确认保存结果，请到桌面或待同步列表核对后再操作。"
   };
   const PANEL_JOB_STALE = "网页已经换成别的页面，刚才的岗位内容已作废。请重新点「保存岗位到桌面端」。";
   const PANEL_JOB_EXPIRED = "这次保存的页面已经变化或已被取消，结果已过期。请到桌面端确认这个岗位是否已保存。";
@@ -4122,6 +4165,233 @@
     if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], result: bound });
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
+  }
+
+  // --- Confirming a submission from the native side panel (#172) -------------------------
+  //
+  // "确认已投递" only moves an application's stage on the desktop: the user says they already
+  // applied on the job site. Nothing here clicks, submits or listens to the site's controls.
+  //
+  //   idle -> extracting -> querying -> choosing -> confirming
+  //        -> confirmed | empty | unavailable | unknown | failed | cancelled
+  //
+  // The state is this page's (one page controller per tab) and is bound to the address it
+  // was started on, a token that any cancel, restart or page change replaces, and the list of
+  // candidates the desktop offered. The panel can only pick from that list.
+
+  const SUBMIT_STALE = "网页已经换成别的页面，刚才的投递候选已作废。请重新点「确认已投递」。";
+  const SUBMIT_UNRECOGNIZED = "当前网页无法确认是哪家公司，请先保存并核对岗位信息。";
+  const SUBMIT_EMPTY = "桌面里还没有这家公司的投递记录。";
+  const SUBMIT_OPEN_PHASES = ["extracting", "querying", "choosing", "empty"];
+  const SUBMIT_BUSY_PHASES = ["extracting", "querying", "choosing", "confirming"];
+  const PANEL_SUBMIT_EPOCH = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let panelSubmit = idlePanelSubmit(null);
+
+  function idlePanelSubmit(previous) {
+    return {
+      confirmId: null, phase: "idle", version: (previous?.version || 0) + 1, token: (previous?.token || 0) + 1,
+      pageUrl: "", candidates: [], reason: "", result: null, discarded: null
+    };
+  }
+
+  function touchPanelSubmit(changes) {
+    Object.assign(panelSubmit, changes, { version: panelSubmit.version + 1 });
+  }
+
+  // What the side panel may see: labels and ids of the offered applications, never the
+  // page's own text or the desktop's other fields.
+  function panelSubmitSnapshot() {
+    const job = panelSubmit;
+    return {
+      // Names this page load, so a snapshot from before a reload is never compared by version.
+      epoch: PANEL_SUBMIT_EPOCH,
+      confirmId: job.confirmId,
+      phase: job.phase,
+      version: job.version,
+      reason: job.reason,
+      candidates: job.candidates.map(candidate => ({ applicationId: candidate.applicationId, label: candidate.label })),
+      result: job.result ? { ...job.result } : null,
+      discarded: job.discarded
+    };
+  }
+
+  function panelJobIsActive() {
+    return ["extracting", "assist", "review", "saving", "choice"].includes(panelJob.phase);
+  }
+
+  // A single-page site can swap the job under an open question. The candidates belong to the
+  // address they were asked for; once it changes they are thrown away. A write already sent
+  // (confirming) and a finished result are facts about the desktop and stay.
+  function dropStalePanelSubmit() {
+    if (!panelSubmit.confirmId || panelSubmit.pageUrl === location.href) return false;
+    if (!SUBMIT_OPEN_PHASES.includes(panelSubmit.phase)) return false;
+    panelSubmit = idlePanelSubmit(panelSubmit);
+    panelSubmit.discarded = "page-changed";
+    return true;
+  }
+
+  const submitOutcome = (extra = {}) => ({ ...extra, submitConfirm: panelSubmitSnapshot() });
+
+  async function startPanelSubmit() {
+    dropStalePanelSubmit();
+    if (SUBMIT_BUSY_PHASES.includes(panelSubmit.phase)) return submitOutcome({ ok: true });
+    if (panelJobIsActive()) {
+      return submitOutcome({ ok: false, error: "请先完成或取消正在进行的岗位保存。" });
+    }
+    panelSubmit = idlePanelSubmit(panelSubmit);
+    const token = panelSubmit.token;
+    const pageUrl = location.href;
+    touchPanelSubmit({ confirmId: newRequestId(), phase: "extracting", pageUrl });
+    const isCurrent = () => panelSubmit.token === token && panelSubmit.pageUrl === pageUrl && location.href === pageUrl;
+    // The page moved on under this question: drop it, and say so if it was still ours.
+    const settle = () => {
+      if (panelSubmit.token === token && location.href !== pageUrl) dropStalePanelSubmit();
+      return submitOutcome({ ok: true });
+    };
+    try {
+      const { extract, copy } = await loadDesktopModules();
+      if (!isCurrent()) return settle();
+      const fields = extract.extractJobFields(document, pageUrl);
+      if (!fields.company) {
+        touchPanelSubmit({ phase: "empty", reason: "unrecognized", result: { tone: "warn", text: SUBMIT_UNRECOGNIZED } });
+        return submitOutcome({ ok: true });
+      }
+      touchPanelSubmit({ phase: "querying" });
+      // The desktop matches on company and title; the address is the page's redacted one.
+      const asked = { company: fields.company, title: fields.title || "", sourceUrl: fields.sourceUrl || "" };
+      let answer;
+      try {
+        answer = await waitForPanelJobWrite(chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: asked }));
+      } catch {
+        answer = null;
+      }
+      if (!isCurrent()) return settle();
+      if (answer?.status !== "ok") {
+        // No reply is not "no candidates": an empty list would push the user into saving a duplicate.
+        touchPanelSubmit({
+          phase: "unavailable", candidates: [],
+          result: copy.describeConfirmBlocked(confirmBlockedMode(answer?.status), { extensionId: chrome.runtime.id })
+        });
+        return submitOutcome({ ok: true });
+      }
+      const seen = new Set();
+      const options = [...(answer.exact || []), ...(answer.sameCompany || [])].filter(candidate => {
+        if (!candidate || typeof candidate.applicationId !== "string" || !candidate.applicationId) return false;
+        if (typeof candidate.company !== "string" || typeof candidate.title !== "string") return false;
+        if (seen.has(candidate.applicationId)) return false;
+        seen.add(candidate.applicationId);
+        return true;
+      }).map(candidate => ({
+        applicationId: candidate.applicationId, company: candidate.company, title: candidate.title,
+        label: copy.describeApplicationChoice(candidate)
+      }));
+      if (!options.length) {
+        touchPanelSubmit({ phase: "empty", reason: "no-record", candidates: [], result: { tone: "info", text: SUBMIT_EMPTY } });
+      } else {
+        // Even one candidate waits for the user: the plugin never picks an application.
+        touchPanelSubmit({ phase: "choosing", candidates: options });
+      }
+    } catch {
+      if (isCurrent()) {
+        touchPanelSubmit({
+          phase: "failed", candidates: [],
+          result: { tone: "warn", text: "没能查到对应的投递记录，这次没有确认投递。请稍后再试。" }
+        });
+      } else {
+        return settle();
+      }
+    }
+    return submitOutcome({ ok: true });
+  }
+
+  async function choosePanelSubmit(message) {
+    const stale = () => submitOutcome({ ok: false, error: SUBMIT_STALE });
+    if (message.confirmId && message.confirmId === panelSubmit.confirmId && dropStalePanelSubmit()) return stale();
+    if (!message.confirmId || message.confirmId !== panelSubmit.confirmId) {
+      return submitOutcome({ ok: false, error: "这个选择已经失效了，请重新点「确认已投递」。" });
+    }
+    // Claimed synchronously, so a second click can never send a second confirmation.
+    if (panelSubmit.phase === "confirming") return submitOutcome({ ok: false, error: "正在确认，请稍候。" });
+    if (panelSubmit.phase !== "choosing") return submitOutcome({ ok: false, error: "这个选择已经失效了，请重新点「确认已投递」。" });
+    const candidate = panelSubmit.candidates.find(item => item.applicationId === message.applicationId);
+    if (!candidate) return submitOutcome({ ok: false, error: "请选择列表里的申请。" });
+
+    const token = panelSubmit.token;
+    touchPanelSubmit({ phase: "confirming", result: null });
+    let result = null;
+    try {
+      result = await waitForPanelJobWrite(chrome.runtime.sendMessage({
+        type: "DESKTOP_CONFIRM_SUBMIT", applicationId: candidate.applicationId
+      }));
+    } catch {
+      // The request may have reached the desktop before the port failed: not a failure to retry.
+      result = { status: "unknown" };
+    }
+    if (panelSubmit.token !== token) {
+      refreshPendingList();
+      return submitOutcome({ ok: false, expired: true, error: "这次确认已经过期，请到桌面端查看这条申请的当前状态。" });
+    }
+    let described;
+    let phase;
+    try {
+      const { copy } = await loadDesktopModules();
+      const status = result?.status;
+      described = copy.describeConfirmResult(result ?? { status: "unknown" });
+      if (status === "saved") {
+        // Only a persisted reply gets to say "已确认投递".
+        phase = "confirmed";
+        described = {
+          tone: "success", text: `已确认投递：${candidate.company} · ${candidate.title}`,
+          hint: "只更新了桌面上的申请阶段，没有提交招聘网站上的申请。"
+        };
+      } else if (!status || status === "unknown") {
+        phase = "unknown";
+      } else if (status === "failed" || status === "rejected") {
+        phase = "failed";
+      } else {
+        phase = "unavailable";
+      }
+    } catch {
+      phase = "unknown";
+      described = { tone: "pending", text: "没能确认结果，请到桌面端查看这条申请的当前状态。" };
+    }
+    if (panelSubmit.token === token) touchPanelSubmit({ phase, candidates: [], result: described });
+    refreshPendingList();
+    return submitOutcome({ ok: true });
+  }
+
+  function cancelPanelSubmit({ confirmId }) {
+    if (!confirmId || confirmId !== panelSubmit.confirmId) {
+      return submitOutcome({ ok: false, error: "这次确认已经结束了。" });
+    }
+    if (panelSubmit.phase === "confirming") {
+      return submitOutcome({ ok: false, error: "已经在确认了，无法取消。请到桌面端查看这条申请的当前状态。" });
+    }
+    if (SUBMIT_OPEN_PHASES.includes(panelSubmit.phase)) {
+      // A new token: a candidate list still on its way belongs to a question nobody is asking.
+      panelSubmit = idlePanelSubmit(panelSubmit);
+      panelSubmit.phase = "cancelled";
+      return submitOutcome({ ok: true });
+    }
+    // A finished result being dismissed.
+    panelSubmit = idlePanelSubmit(panelSubmit);
+    return submitOutcome({ ok: true });
+  }
+
+  // "桌面里还没有这家公司的投递记录 → 保存岗位到桌面端": hands over to the review flow.
+  // Nothing is created here, and the application still has to be chosen afterwards.
+  async function savePanelSubmitJob({ confirmId }) {
+    if (!confirmId || confirmId !== panelSubmit.confirmId) {
+      return { ok: false, error: "这次确认已经结束了。", jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
+    }
+    if (dropStalePanelSubmit()) return { ok: false, error: SUBMIT_STALE, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
+    if (panelSubmit.phase !== "empty") {
+      return { ok: false, error: "现在不能保存岗位。", jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
+    }
+    panelSubmit = idlePanelSubmit(panelSubmit);
+    panelSubmit.phase = "cancelled";
+    const jobSave = await startPanelJobDraft();
+    return { ok: true, jobSave, submitConfirm: panelSubmitSnapshot() };
   }
 
   function setDesktopStatus(copy) {

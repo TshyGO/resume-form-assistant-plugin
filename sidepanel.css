@@ -68,6 +68,7 @@ button { cursor: pointer; }
 .job-save-button { width: 100%; min-height: 40px; border: 1px solid var(--accent); border-radius: 8px; background: #fff; color: var(--accent); font-weight: 650; }
 .job-save-button:hover { background: var(--accent-pale); }
 .job-save-button:disabled { opacity: .6; cursor: default; }
+.job-submit-button { margin-top: 8px; }
 .job-card { margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-size: 12px; }
 .job-card p { margin: 0; }
 .job-card__title { margin: 0 0 6px !important; font-weight: 650; color: var(--ink); }

@@ -8,235 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const root = path.join(__dirname, '..');
-const read = file => fs.readFileSync(path.join(root, file), 'utf8');
-const tick = () => new Promise(resolve => setImmediate(resolve));
-const settle = async () => { for (let i = 0; i < 6; i += 1) await tick(); };
-
-const USER_AGENTS = {
-  chrome: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-  edge: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0'
-};
-
-const RELIABLE_JOB = {
-  company: '星河科技', title: '后端开发工程师', location: '', reliable: true,
-  sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
-};
-const UNRELIABLE_JOB = {
-  company: '金发科技股份有限公司', title: '', location: '', reliable: false, assistReasons: ['missing_title'],
-  sourceUrl: 'https://kingfa.zhiye.com/apply?job=42', dedupeUrl: 'https://kingfa.zhiye.com/apply?job=42',
-  fragments: [
-    { id: 1, source: 'beisen-company', role: 'company', text: '金发科技股份有限公司' },
-    { id: 2, source: 'beisen-apply-title', role: 'job-title', text: '你正在投递职位：研发工程师-化工工艺研究方向' }
-  ]
-};
-
-// --- The page half: content.js with just enough of a page around it. ----------------------
-
-function loadPage({ extraction, desktop, userAgent }) {
-  const listeners = [];
-  const desktopCalls = [];
-  const storageWrites = [];
-  const ai = { sent: [], cancelled: [], answer: null };
-  const document = {
-    readyState: 'loading', body: { appendChild() {} },
-    addEventListener() {}, getElementById: () => null, querySelector: () => null, querySelectorAll: () => []
-  };
-  const window = {
-    innerWidth: 1200, innerHeight: 900, addEventListener() {}, setTimeout() { return 0; }, clearTimeout() {},
-    getComputedStyle: () => ({ display: 'block', visibility: 'visible' })
-  };
-  window.top = window;
-  let ids = 0;
-  const context = {
-    console, document, window,
-    location: { href: 'https://jobs.example.com/123?token=secret' },
-    navigator: { userAgent, clipboard: { writeText: async () => {} } },
-    crypto: { randomUUID: () => `draft-${++ids}` },
-    CSS: { escape: value => String(value) },
-    Event: class {}, MouseEvent: class {}, FocusEvent: class {}, HTMLElement: class {}, HTMLInputElement: class {},
-    HTMLSelectElement: class {}, HTMLTextAreaElement: class {}, HTMLLabelElement: class {},
-    setTimeout, clearTimeout,
-    chrome: {
-      runtime: {
-        id: 'diagjmploldedipjdenmecmjokckelkl',
-        getURL: name => `chrome-extension://test/${name}`,
-        onMessage: { addListener(handler) { listeners.push(handler); } },
-        sendMessage: async message => {
-          desktopCalls.push(message);
-          if (message.type === 'DESKTOP_LIST_QUEUE') return { intents: [], outbox: [], fillRecords: [] };
-          return desktop(message, desktopCalls);
-        }
-      },
-      storage: {
-        local: { get: async () => ({}), set: async values => { storageWrites.push(values); } },
-        onChanged: { addListener() {} }
-      }
-    },
-    self: {
-      __RESUME_PRO_TEST__: true,
-      ResumeProResumeData: require('../resume-data.js'),
-      ResumeProProfile: require('../profile-fields.js'),
-      ResumeProAIClient: {
-        send: message => { ai.sent.push(message); return new Promise(resolve => { ai.answer = resolve; }); },
-        cancel: async requestId => { ai.cancelled.push(requestId); return { cancelled: true }; }
-      }
-    }
-  };
-  context.globalThis = context;
-  context.self.window = window;
-  window.document = document;
-  vm.runInNewContext(read('sidebar-state.js'), context);
-  vm.runInNewContext(read('content.js'), context);
-  const hooks = context.self.ResumeProHighlightTest;
-  // The page controller is mounted but its overlay stays closed: the side panel does the work.
-  const fillButton = { disabled: false, textContent: '一键 AI 填写' };
-  hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
-  return {
-    hooks, desktopCalls, storageWrites, ai, location: context.location,
-    async ready(copyOverride = {}) {
-      const [saveFlow, copy] = await Promise.all([import('../link/save-flow.mjs'), import('../link/copy.mjs')]);
-      hooks.setDesktopModules({ extract: { extractJobFields: () => structuredClone(extraction) }, saveFlow, copy: { ...copy, ...copyOverride } });
-    },
-    deliver(message) {
-      return new Promise(resolve => {
-        const handled = listeners[0](message, { id: 'diagjmploldedipjdenmecmjokckelkl' }, value => resolve(JSON.parse(JSON.stringify(value ?? null))));
-        if (handled === false && message.type !== 'RESUME_PANEL_STATUS') resolve(null);
-      });
-    }
-  };
-}
-
-// --- The panel half: sidepanel.js with a small DOM. --------------------------------------
-
-function element(id) {
-  const listeners = {};
-  const attributes = {};
-  const node = {
-    id, listeners, attributes, dataset: {}, hidden: id.startsWith('job-save-') && id !== 'job-save-button',
-    disabled: false, value: '', textContent: '', className: '', title: '', focused: false,
-    classList: { toggle() {}, add() {}, remove() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    setAttribute(name, value) { attributes[name] = String(value); },
-    focus() { node.focused = true; },
-    querySelector() { return { textContent: '' }; },
-    querySelectorAll() { return node.children || []; }
-  };
-  let html = '';
-  Object.defineProperty(node, 'innerHTML', {
-    get: () => html,
-    set(value) {
-      html = String(value);
-      // Enough of a parser for the candidate buttons the panel renders.
-      node.children = [...html.matchAll(/data-application-id="([^"]*)"[^>]*>([^<]*)</g)].map(([, applicationId, text]) => ({
-        dataset: { applicationId }, textContent: text, disabled: false,
-        closest(selector) { return selector === '[data-application-id]' ? this : null; }
-      }));
-    }
-  });
-  return node;
-}
-
-async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride } = {}) {
-  const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser] });
-  await page.ready(copyOverride);
-  let activeTabId = 7;
-  // Tab 7 is the page under test; further tabs (each its own page controller) are added by tests.
-  const pages = new Map([[7, page]]);
-  let statusGate = null;
-  const elements = new Map();
-  const get = id => { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); };
-  const toasts = [];
-  const pageMessages = [];
-  let poll;
-  const html = read('sidepanel.html');
-  const document = {
-    hidden: false,
-    getElementById: get,
-    querySelectorAll: selector => {
-      if (selector === '[data-advanced]') {
-        return [...html.matchAll(/data-advanced="([^"]+)"/g)].map(([, action]) => Object.assign(element(`advanced-${action}`), { dataset: { advanced: action } }));
-      }
-      return [];
-    },
-    querySelector: () => ({ click() {}, open: false }),
-    addEventListener() {},
-    createElement: () => element('scratch'),
-    body: { appendChild() {} }
-  };
-  const chrome = {
-    runtime: {
-      id: 'diagjmploldedipjdenmecmjokckelkl',
-      sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
-        ? { status: 'ok', data: { templates: [], activeTemplate: null, profile: { values: {}, family: [], custom: [] }, profileRevision: 0 } }
-        : { status: 'ok' },
-      openOptionsPage() {}
-    },
-    storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } },
-    tabs: {
-      query: async () => [{ id: activeTabId }],
-      // A tab that is not in `pages` is a page without the helper.
-      sendMessage: async (tabId, message) => {
-        const target = pages.get(tabId);
-        if (!target) throw new Error('no receiver');
-        pageMessages.push(message);
-        const answer = target.deliver(message);
-        if (message.type === 'RESUME_PANEL_STATUS' && statusGate && statusGate.tab === tabId) {
-          // The page has already answered; the answer just takes its time to arrive.
-          const gate = statusGate;
-          statusGate = null;
-          const value = await answer;
-          await gate.opened;
-          return value;
-        }
-        return answer;
-      },
-      create: async () => {},
-      onActivated: { addListener() {} },
-      onUpdated: { addListener() {} }
-    }
-  };
-  const context = vm.createContext({
-    document, chrome,
-    navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async () => {} } },
-    self: {
-      ResumeProProfile: require('../profile-fields.js'),
-      ResumeProResumeData: require('../resume-data.js'),
-      ResumeProCompose: require('../sidepanel-compose.js')
-    },
-    setTimeout: () => 1, clearTimeout() {}, setInterval: listener => { poll = listener; }
-  });
-  vm.runInContext(read('sidepanel.js'), context);
-  await settle();
-  const panel = {
-    page, get, pageMessages, toasts,
-    button: get('job-save-button'),
-    form: get('job-save-form'),
-    company: get('job-save-company'),
-    title: get('job-save-title'),
-    location: get('job-save-location'),
-    url: get('job-save-url'),
-    async click(id) { await get(id).listeners.click({ target: get(id) }); await settle(); },
-    async submit() { await get('job-save-form').listeners.submit({ preventDefault() {} }); await settle(); },
-    async poll() { await poll(); await settle(); },
-    setTab(id) { activeTabId = id; },
-    async addPage(tabId, options = {}) {
-      const other = loadPage({ extraction: RELIABLE_JOB, desktop: () => ({ status: 'saved' }), userAgent: USER_AGENTS[browser], ...options });
-      await other.ready();
-      pages.set(tabId, other);
-      return other;
-    },
-    // The next status answer from `tabId` is delayed until the returned function is called.
-    holdNextStatus(tabId) {
-      let open;
-      statusGate = { tab: tabId, opened: new Promise(resolve => { open = resolve; }) };
-      return open;
-    },
-    saves: () => page.desktopCalls.filter(message => message.type === 'DESKTOP_SAVE_JOB'),
-    toast: () => get('panel-toast').textContent
-  };
-  return panel;
-}
+const {
+  read, tick, settle, USER_AGENTS, RELIABLE_JOB, UNRELIABLE_JOB, loadPage, element, openPanel
+} = require('./helpers/sidepanel-harness.js');
 
 test('the 填写 view shows the save-job button itself, not only inside the ··· menu', () => {
   const html = read('sidepanel.html');
@@ -849,4 +623,113 @@ test('a failed, unsure or cancelled re-recognition keeps the draft the user was 
   assert.equal(cancelled.company.value, '星河科技');
   assert.equal(cancelled.title.value, '我改过的岗位名称', 'a late answer does not overwrite it');
   assert.equal(cancelled.saves().length, 0);
+});
+
+// --- #175 review: cancelled recognition must not come back to life --------------------------------
+
+test('a recognition cancelled before the modules finished loading never shows progress or sends anything', async () => {
+  const page = loadPage({ extraction: UNRELIABLE_JOB, desktop: () => ({}), userAgent: USER_AGENTS.chrome });
+  await page.ready();
+  const events = [];
+  const outcome = await page.hooks.runJobAssist(UNRELIABLE_JOB.fragments, {}, {
+    isCurrent: () => false,
+    onAssistStart: () => events.push('start'),
+    onAssistEnd: () => events.push('end')
+  });
+  assert.equal(outcome.action, 'ignore');
+  assert.deepEqual(events, [], 'the old overlay\'s "正在识别" panel is not raised for a job nobody waits for');
+  assert.equal(page.ai.sent.length, 0);
+});
+
+test('if the job stops being current right after progress is shown, the progress is taken down again', async () => {
+  const page = loadPage({ extraction: UNRELIABLE_JOB, desktop: () => ({}), userAgent: USER_AGENTS.chrome });
+  await page.ready();
+  let current = true;
+  const events = [];
+  const outcome = await page.hooks.runJobAssist(UNRELIABLE_JOB.fragments, {}, {
+    isCurrent: () => current,
+    onAssistStart: (_described, requestId) => { events.push(['start', requestId]); current = false; },
+    onAssistEnd: requestId => events.push(['end', requestId])
+  });
+  assert.equal(outcome.action, 'ignore');
+  assert.equal(events.length, 2);
+  assert.equal(events[0][0], 'start');
+  assert.deepEqual(events[1], ['end', events[0][1]], 'the same request that raised the progress ends it');
+  assert.equal(page.ai.sent.length, 0);
+});
+
+// --- #175 review: required-field red borders ------------------------------------------------------
+
+test('typing in a required field clears only that field\'s red border, and the next submit judges both again', async () => {
+  const panel = await openPanel();
+  await panel.click('job-save-button');
+  panel.company.value = '';
+  panel.title.value = '';
+  await panel.submit();
+  assert.equal(panel.company.attributes['aria-invalid'], 'true');
+  assert.equal(panel.title.attributes['aria-invalid'], 'true');
+  assert.equal(panel.get('job-save-error').textContent, '请补全公司名称和岗位名称后再保存。');
+
+  panel.company.value = '星';
+  panel.company.listeners.input({ target: panel.company });
+  assert.equal(panel.company.attributes['aria-invalid'], undefined, 'the company border is gone');
+  assert.equal(panel.title.attributes['aria-invalid'], 'true', 'the still-empty title keeps its border');
+  assert.equal(panel.get('job-save-error').hidden, false);
+  assert.equal(panel.get('job-save-error').textContent, '请补全岗位名称后再保存。', 'the prompt names what is still missing');
+
+  panel.title.value = '后';
+  panel.title.listeners.input({ target: panel.title });
+  assert.equal(panel.title.attributes['aria-invalid'], undefined);
+  assert.equal(panel.get('job-save-error').hidden, true);
+
+  // Emptied again, then submitted: both are judged afresh.
+  panel.title.value = '  ';
+  await panel.submit();
+  assert.equal(panel.title.attributes['aria-invalid'], 'true');
+  assert.notEqual(panel.company.attributes['aria-invalid'], 'true');
+  assert.equal(panel.saves().length, 0);
+});
+
+test('editing the title does not clear the company\'s border', async () => {
+  const panel = await openPanel();
+  await panel.click('job-save-button');
+  panel.company.value = '';
+  panel.title.value = '';
+  await panel.submit();
+  panel.title.value = '后端';
+  panel.title.listeners.input({ target: panel.title });
+  assert.equal(panel.company.attributes['aria-invalid'], 'true');
+  assert.equal(panel.title.attributes['aria-invalid'], undefined);
+  assert.equal(panel.get('job-save-error').textContent, '请补全公司名称后再保存。');
+});
+
+test('a new draft starts with no red border left over from the last one', async () => {
+  const panel = await openPanel();
+  await panel.click('job-save-button');
+  panel.company.value = '';
+  await panel.submit();
+  assert.equal(panel.company.attributes['aria-invalid'], 'true');
+  await panel.click('job-save-cancel');
+  await panel.click('job-save-button');
+  assert.equal(panel.company.attributes['aria-invalid'], undefined);
+  assert.equal(panel.title.attributes['aria-invalid'], undefined);
+});
+
+// --- #175 review: "unknown" wording is one fixed sentence for old and new UI ----------------------
+
+test('an unknown bind or save is worded the same by the page overlay and the side panel, and claims neither saved nor queued', async () => {
+  const copy = await import('../link/copy.mjs');
+  const fixed = copy.describeBindResult({ status: 'unknown' });
+  assert.equal(fixed.text, '没能确认保存结果，请到桌面或待同步列表核对后再操作。');
+  assert.equal(fixed.text, copy.UNKNOWN_SAVE_TEXT);
+  assert.doesNotMatch(fixed.text, /桌面已保存|已经排进|已记为待同步|自动重试/);
+  assert.notEqual(fixed.tone, 'success');
+
+  const page = await openPanel({ desktop: message => message.type === 'DESKTOP_SAVE_JOB' ? new Promise(() => {}) : {} });
+  page.page.hooks.setPanelJobWriteTimeoutMs(10);
+  await page.click('job-save-button');
+  await page.submit();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  await page.poll();
+  assert.equal(page.get('job-save-result-text').textContent, fixed.text, 'the side panel says exactly the same sentence');
 });

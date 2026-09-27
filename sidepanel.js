@@ -53,7 +53,20 @@
     jobResultHint: document.getElementById("job-save-result-hint"),
     jobAgain: document.getElementById("job-save-again"),
     jobCopyId: document.getElementById("job-save-copy-id"),
-    jobDismiss: document.getElementById("job-save-dismiss")
+    jobDismiss: document.getElementById("job-save-dismiss"),
+    submitButton: document.getElementById("submit-confirm-button"),
+    submitProgress: document.getElementById("submit-confirm-progress"),
+    submitProgressText: document.getElementById("submit-confirm-progress-text"),
+    submitStop: document.getElementById("submit-confirm-stop"),
+    submitChoice: document.getElementById("submit-confirm-choice"),
+    submitCandidates: document.getElementById("submit-confirm-candidates"),
+    submitCancel: document.getElementById("submit-confirm-cancel"),
+    submitResult: document.getElementById("submit-confirm-result"),
+    submitResultText: document.getElementById("submit-confirm-result-text"),
+    submitResultHint: document.getElementById("submit-confirm-result-hint"),
+    submitSave: document.getElementById("submit-confirm-save"),
+    submitCopyId: document.getElementById("submit-confirm-copy-id"),
+    submitDismiss: document.getElementById("submit-confirm-dismiss")
   };
   let currentTabId = null;
   let currentStore = null;
@@ -69,6 +82,12 @@
   let jobLocalError = "";
   let jobPending = false;
   let statusRepoll = false;
+  // "确认已投递" (#172): the page's confirm-submission state as last rendered. Like the save
+  // draft it is the page's; the panel shows it and picks from the candidates it offered.
+  // `submitSeen` remembers the newest snapshot of the current tab and page load, so an older
+  // poll that left before a click can neither clear nor reopen what the user just did.
+  let submitConfirm = null;
+  let submitSeen = { tabId: null, epoch: "", version: 0 };
   // Which request currently owns `jobPending`; a request that was overtaken must not clear it.
   let jobOwner = 0;
   // Booleans and chip ids from the page controller, never the page's own text (#174).
@@ -282,11 +301,72 @@
     renderJobSave();
   }
 
+  // Phases that need the user's attention before anything else on this page may start.
+  const SUBMIT_ACTIVE = new Set(["extracting", "querying", "choosing", "confirming", "empty"]);
+
+  function applySubmitConfirm(snapshot, tabId = currentTabId) {
+    if (!snapshot) {
+      submitConfirm = null;
+      renderJobSave();
+      return;
+    }
+    // An older answer from this page load is not news: it may predate a click or a cancel.
+    if (submitSeen.tabId === tabId && submitSeen.epoch === snapshot.epoch && snapshot.version < submitSeen.version) return;
+    submitSeen = { tabId, epoch: snapshot.epoch, version: snapshot.version };
+    const next = snapshot.confirmId ? snapshot : null;
+    if (!next && submitConfirm && snapshot.discarded === "page-changed") {
+      toast("网页已经换成别的页面，刚才的投递候选已作废。请重新点「确认已投递」。");
+    }
+    submitConfirm = next ? { ...next, tabId } : null;
+    renderJobSave();
+  }
+
+  function renderSubmitConfirm() {
+    const job = submitConfirm;
+    const phase = job?.phase || "idle";
+    const noPage = currentTabId === null;
+    const jobActive = JOB_ACTIVE.has(jobSave?.phase || "idle");
+    elements.submitButton.hidden = SUBMIT_ACTIVE.has(phase) || jobActive;
+    elements.submitButton.disabled = noPage || jobPending;
+    elements.submitButton.title = noPage ? "当前网页没有连接填表助手，无法确认投递。" : "";
+
+    const waiting = phase === "extracting" || phase === "querying" || phase === "confirming";
+    elements.submitProgress.hidden = !waiting;
+    if (waiting) {
+      elements.submitProgressText.textContent = phase === "confirming" ? "正在确认投递……" : "正在查找对应的投递记录……";
+      // Once the confirmation is on its way to the desktop it cannot be recalled.
+      elements.submitStop.hidden = phase === "confirming";
+    }
+
+    elements.submitChoice.hidden = phase !== "choosing";
+    if (phase === "choosing") {
+      elements.submitCandidates.innerHTML = (job.candidates || []).map((candidate) =>
+        `<button type="button" data-application-id="${escapeHtml(candidate.applicationId)}">${escapeHtml(candidate.label)}</button>`).join("");
+      elements.submitCandidates.querySelectorAll?.("button").forEach((button) => { button.disabled = jobPending; });
+      elements.submitCancel.disabled = jobPending;
+    }
+
+    const showResult = Boolean(job?.result) && ["empty", "confirmed", "unavailable", "unknown", "failed"].includes(phase);
+    elements.submitResult.hidden = !showResult;
+    if (showResult) {
+      elements.submitResult.className = `job-card is-${job.result.tone || "info"}`;
+      elements.submitResultText.textContent = job.result.text || "";
+      elements.submitResultHint.hidden = !job.result.hint;
+      elements.submitResultHint.textContent = job.result.hint || "";
+      elements.submitSave.hidden = phase !== "empty";
+      elements.submitSave.disabled = jobPending;
+      elements.submitCopyId.hidden = !job.result.extensionId;
+      elements.submitDismiss.textContent = phase === "empty" ? "取消" : "知道了";
+    }
+  }
+
   function renderJobSave() {
     const job = jobSave;
     const phase = job?.phase || "idle";
     const active = JOB_ACTIVE.has(phase);
-    elements.jobSaveButton.hidden = active;
+    // A confirmation waiting for the user (or a "not saved yet" answer) owns this area: two
+    // different questions are never open at once.
+    elements.jobSaveButton.hidden = active || SUBMIT_ACTIVE.has(submitConfirm?.phase || "idle");
     // No page controller in this tab (an ordinary web page, a browser page, a page that has
     // not finished loading): the button is off and the reason is on screen, not just a tooltip.
     const noPage = currentTabId === null;
@@ -316,6 +396,9 @@
       if (jobFilled !== key) {
         jobFilled = key;
         jobLocalError = "";
+        // A new or re-recognised draft starts with no red borders left over from the last one.
+        elements.jobCompany.removeAttribute?.("aria-invalid");
+        elements.jobTitle.removeAttribute?.("aria-invalid");
         elements.jobCompany.value = job.fields?.company || "";
         elements.jobTitle.value = job.fields?.title || "";
         elements.jobLocation.value = job.fields?.location || "";
@@ -359,6 +442,7 @@
       elements.jobAgain.disabled = jobPending;
       elements.jobCopyId.hidden = !job.result.extensionId;
     }
+    renderSubmitConfirm();
   }
 
   // One request at a time from the panel; the page refuses a second write on its own too.
@@ -380,6 +464,7 @@
       }
       // An answer for another tab's page must not draw over the tab that is in front now.
       if (result?.jobSave && tabId === currentTabId) applyJobSave(result.jobSave, tabId);
+      if (result?.submitConfirm && tabId === currentTabId) applySubmitConfirm(result.submitConfirm, tabId);
       return result;
     } finally {
       if (owner && jobOwner === mine) jobPending = false;
@@ -400,6 +485,8 @@
         jobSave = null;
         jobFilled = "";
         jobLocalError = "";
+        submitConfirm = null;
+        submitSeen = { tabId: null, epoch: "", version: 0 };
         // A request still waiting on the tab we left must not keep this tab's button locked,
         // and its answer is dropped by the tab check in jobRequest.
         jobOwner += 1;
@@ -425,6 +512,7 @@
       // Older snapshots of the same draft are dropped by their version.
       if (jobOwner === polledJobOwner) {
         applyJobSave(connected ? response.jobSave : null, currentTabId);
+        applySubmitConfirm(connected ? response.submitConfirm : null, currentTabId);
       } else {
         // A user action produced a newer draft while this poll was in flight. Ask again rather
         // than letting the old response clear or resurrect the newer state.
@@ -566,6 +654,46 @@
     const result = await jobRequest({ type: "RESUME_PANEL_SAVE_DRAFT" });
     if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
   });
+  // --- 确认已投递: all of it in the panel, nothing on the job site is touched -------------
+  // The page answers a start or a choice only when the desktop has; its progress ("正在查找…",
+  // "正在确认投递…") is already in its snapshot, so fetch that now instead of at the next tick.
+  async function submitRequest(message) {
+    const request = jobRequest(message);
+    pollStatus().catch(() => {});
+    return request;
+  }
+  elements.submitButton.addEventListener("click", async () => {
+    const result = await submitRequest({ type: "RESUME_PANEL_SUBMIT_START" });
+    if (result && !result.ok) toast(result.error || "没能开始确认投递，请稍后再试。");
+  });
+  async function cancelSubmitConfirm(interrupt) {
+    if (!submitConfirm?.confirmId) return;
+    // Dismissing an answer that is already on screen needs no toast; abandoning a question does.
+    const dismissing = ["confirmed", "unavailable", "unknown", "failed"].includes(submitConfirm.phase);
+    const result = await jobRequest({ type: "RESUME_PANEL_SUBMIT_CANCEL", confirmId: submitConfirm.confirmId }, { interrupt });
+    if (result?.ok && !dismissing) toast("已取消，桌面上没有任何变化。");
+    else if (result && !result.ok) toast(result.error || "当前无法取消。");
+  }
+  // Waiting for the desktop: this has to get through while the lookup is still pending.
+  elements.submitStop.addEventListener("click", () => cancelSubmitConfirm(true));
+  elements.submitCancel.addEventListener("click", () => cancelSubmitConfirm(false));
+  elements.submitDismiss.addEventListener("click", () => cancelSubmitConfirm(false));
+  elements.submitCandidates.addEventListener("click", async (event) => {
+    const button = event.target.closest?.("[data-application-id]");
+    if (!button || button.disabled || !submitConfirm?.confirmId) return;
+    const result = await submitRequest({
+      type: "RESUME_PANEL_SUBMIT_CHOICE", confirmId: submitConfirm.confirmId, applicationId: button.dataset.applicationId
+    });
+    if (result && !result.ok) toast(result.error || "没能确认投递，请稍后再试。");
+  });
+  elements.submitSave.addEventListener("click", async () => {
+    if (!submitConfirm?.confirmId) return;
+    const result = await jobRequest({ type: "RESUME_PANEL_SUBMIT_SAVE", confirmId: submitConfirm.confirmId });
+    if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
+  });
+  elements.submitCopyId.addEventListener("click", async () => {
+    toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
+  });
   elements.jobStop.addEventListener("click", async () => {
     if (!jobSave?.draftId) return;
     // Before the AI is asked there is nothing to fall back to, so this ends the draft.
@@ -595,10 +723,17 @@
     const result = await jobRequest({ type: "RESUME_PANEL_SAVE_CONFIRM", draftId: jobSave.draftId, company, title, location });
     if (result && !result.ok && !result.missing) toast(result.error || "这次没能保存，请稍后再试。");
   });
-  for (const input of [elements.jobCompany, elements.jobTitle]) {
+  // Editing a required field clears only that field's red border. The prompt keeps naming
+  // whichever field is still empty, and the next submit judges both again.
+  const requiredJobInputs = [[elements.jobCompany, "公司名称"], [elements.jobTitle, "岗位名称"]];
+  for (const [input] of requiredJobInputs) {
     input.addEventListener("input", () => {
+      input.removeAttribute?.("aria-invalid");
       if (!jobLocalError) return;
-      jobLocalError = "";
+      const missing = requiredJobInputs
+        .filter(([other]) => other.getAttribute?.("aria-invalid") === "true")
+        .map(([, label]) => label);
+      jobLocalError = missing.length ? `请补全${missing.join("和")}后再保存。` : "";
       renderJobSave();
     });
   }

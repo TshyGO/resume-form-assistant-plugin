@@ -248,17 +248,35 @@ function hasNamedCompanySuffix(value) {
   return plausibleName(stem) && !COUNT_LIKE_NAME.test(stem);
 }
 
+// Buttons, navigation, form controls and hidden nodes are never page content. A link is the
+// odd one out: an employer's name is often itself a link, so a link only counts as interface
+// when its own text is a menu or action label ("首页", "访问公司", "查看详情").
+const HARD_INTERFACE_ANCESTORS = 'button,nav,[role="button"],[role="menuitem"],[role="navigation"],[aria-hidden="true"]';
+const LINK_SELECTOR = 'a,[role="link"]';
+
 function isInterfaceNode(node) {
   const tag = String(node?.tagName || '').toLowerCase();
-  if (['a', 'button', 'input', 'option', 'select', 'textarea', 'nav'].includes(tag)) return true;
+  if (['button', 'input', 'option', 'select', 'textarea', 'nav'].includes(tag)) return true;
   const role = String(node?.getAttribute?.('role') || '').toLowerCase();
-  if (['button', 'link', 'menuitem', 'navigation', 'option'].includes(role)) return true;
+  if (['button', 'menuitem', 'navigation', 'option'].includes(role)) return true;
   if (node?.getAttribute?.('aria-hidden') === 'true') return true;
   try {
-    return Boolean(node?.closest?.('a,button,nav,[role="button"],[role="link"],[role="menuitem"],[role="navigation"],[aria-hidden="true"]'));
+    if (node?.closest?.(HARD_INTERFACE_ANCESTORS)) return true;
   } catch {
     return false;
   }
+  return isNavigationLink(node, tag, role);
+}
+
+function isNavigationLink(node, tag, role) {
+  let link = null;
+  try {
+    link = tag === 'a' || role === 'link' ? node : node?.closest?.(LINK_SELECTOR) ?? null;
+  } catch {
+    return false;
+  }
+  if (!link) return false;
+  return !plausibleName(link.textContent);
 }
 
 function firstJobLocation(postings) {

@@ -116,11 +116,26 @@ test('a hiring organisation given as a bare string is read', async () => {
   assert.equal(extractJobFields(doc, 'https://jobs.example.com/a').company, '星河科技');
 });
 
-function element({ tag = 'div', className = '', text = '', attrs = {}, value = undefined }) {
+// `ancestors` are the elements around this one, nearest first, each `{ tag, attrs, text }`;
+// they answer `closest()` the way a real page would (the element itself counts first).
+function element({ tag = 'div', className = '', text = '', attrs = {}, value = undefined, ancestors = [] }) {
+  const matches = (candidate, part) => {
+    const role = part.match(/^\[role="([^"]+)"\]$/);
+    if (role) return candidate.attrs?.role === role[1];
+    const flag = part.match(/^\[([\w-]+)="([^"]+)"\]$/);
+    if (flag) return candidate.attrs?.[flag[1]] === flag[2];
+    return candidate.tag === part;
+  };
   return {
     tagName: tag.toUpperCase(),
     className,
     textContent: text,
+    closest(selector) {
+      const parts = selector.split(',').map(part => part.trim());
+      const chain = [{ tag, attrs, text }, ...ancestors];
+      const found = chain.find(candidate => parts.some(part => matches(candidate, part)));
+      return found ? { tagName: found.tag.toUpperCase(), textContent: found.text ?? '' } : null;
+    },
     getAttribute: name => attrs[name] ?? null,
     querySelector(selector) {
       if (selector.includes('input') && tag === 'input') return this;
@@ -438,4 +453,85 @@ test('nothing usable is "invalid"; something read but not trusted is "uncertain"
     jsonLd: [{ '@type': 'JobPosting', title: '后端开发工程师' }]
   }), 'https://jobs.example.com/a');
   assert.equal(titleOnly.confidence, 'uncertain');
+});
+
+// --- #175 review: a company name inside a link is still a company name ----------------------
+
+const withAncestors = (text, ancestors, options = {}) => richDoc({
+  title: '招聘',
+  elements: [
+    element({ tag: 'span', className: 'company-name', text, ancestors, ...options }),
+    element({ tag: 'span', text: '你正在投递职位：研发工程师-聚合方向' })
+  ]
+});
+
+test('a company name inside a link is kept: only navigation or action text makes a link interface', async () => {
+  const { extractJobFields } = await load();
+  const inLink = extractJobFields(
+    withAncestors('金发科技股份有限公司', [{ tag: 'a', text: '金发科技股份有限公司', attrs: { href: '/company' } }]),
+    'https://kingfa.zhiye.com/form'
+  );
+  assert.equal(inLink.company, '金发科技股份有限公司');
+  assert.equal(inLink.reliable, true);
+  assert.equal(inLink.confidence, 'reliable');
+
+  const roleLink = extractJobFields(
+    withAncestors('金发科技股份有限公司', [{ tag: 'div', text: '金发科技股份有限公司', attrs: { role: 'link' } }]),
+    'https://kingfa.zhiye.com/form'
+  );
+  assert.equal(roleLink.company, '金发科技股份有限公司');
+
+  // The link itself may carry the company class.
+  const selfLink = extractJobFields(richDoc({
+    title: '招聘',
+    elements: [
+      element({ tag: 'a', className: 'company-name', text: '金发科技股份有限公司', attrs: { href: '/company' } }),
+      element({ tag: 'span', text: '你正在投递职位：研发工程师-聚合方向' })
+    ]
+  }), 'https://kingfa.zhiye.com/form');
+  assert.equal(selfLink.company, '金发科技股份有限公司');
+});
+
+test('links whose own text is a menu or action label are still filtered, and the button wording is not loosened', async () => {
+  const { extractJobFields } = await load();
+  for (const label of ['首页', '登录', '访问公司', '查看详情', '访问官网', '立即投递', '职位列表', '关于我们']) {
+    const nested = extractJobFields(
+      withAncestors(label, [{ tag: 'a', text: label, attrs: { href: '/x' } }]),
+      'https://kingfa.zhiye.com/form'
+    );
+    assert.equal(nested.company, '', `${label} inside a link is not a company`);
+    assert.equal(nested.reliable, false, label);
+    assert.equal(nested.fragments.some(fragment => fragment.text === label), false, `${label} is not sent to the AI either`);
+
+    const self = extractJobFields(richDoc({
+      title: '招聘',
+      elements: [
+        element({ tag: 'a', className: 'company-name', text: label, attrs: { href: '/x' } }),
+        element({ tag: 'span', text: '你正在投递职位：研发工程师-聚合方向' })
+      ]
+    }), 'https://kingfa.zhiye.com/form');
+    assert.equal(self.company, '', `${label} as a link is not a company`);
+  }
+});
+
+test('buttons, navigation, form controls and hidden nodes stay filtered even around a real company name', async () => {
+  const { extractJobFields } = await load();
+  for (const ancestors of [
+    [{ tag: 'button', text: '金发科技股份有限公司' }],
+    [{ tag: 'nav', text: '金发科技股份有限公司' }],
+    [{ tag: 'div', text: '金发科技股份有限公司', attrs: { role: 'button' } }],
+    [{ tag: 'div', text: '金发科技股份有限公司', attrs: { role: 'menuitem' } }],
+    [{ tag: 'div', text: '金发科技股份有限公司', attrs: { role: 'navigation' } }],
+    [{ tag: 'div', text: '金发科技股份有限公司', attrs: { 'aria-hidden': 'true' } }],
+    // A link that is itself inside a button or navigation is still interface.
+    [{ tag: 'a', text: '金发科技股份有限公司' }, { tag: 'nav', text: '金发科技股份有限公司' }]
+  ]) {
+    const fields = extractJobFields(withAncestors('金发科技股份有限公司', ancestors), 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.company, '', JSON.stringify(ancestors));
+    assert.equal(fields.reliable, false);
+  }
+  for (const tag of ['button', 'input', 'select', 'option', 'textarea', 'nav']) {
+    const fields = extractJobFields(beisenPage('金发科技股份有限公司', { tag }), 'https://kingfa.zhiye.com/form');
+    assert.equal(fields.company, '', tag);
+  }
 });
