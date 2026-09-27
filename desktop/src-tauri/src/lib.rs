@@ -1634,6 +1634,7 @@ pub fn run() {
                     // the one listening (D01 decision 3).
                     let handle = app.handle().clone();
                     let legacy_handle = app.handle().clone();
+                    let profile_handle = app.handle().clone();
                     let application = Arc::new(ipc_server::OpenArchive::with_services(
                         Arc::clone(&app.state::<AppState>().store), services,
                     ).notifying(Arc::new(move |notice| {
@@ -1643,6 +1644,10 @@ pub fn run() {
                     })).notifying_legacy(Arc::new(move |notice| {
                         // The 「简历」 page shows the pending import without a manual refresh.
                         let _ = legacy_handle.emit("legacy-import-changed", &notice);
+                    })).notifying_profile(Arc::new(move |notice| {
+                        // 「简历」页即使已经停在那儿，也能感知插件写入（#177）；表单自己决定
+                        // 有没有未保存的修改要保护，这里只负责通知，不负责判断。
+                        let _ = profile_handle.emit("resume-profile-changed", &notice);
                     })));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {

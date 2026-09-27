@@ -31,7 +31,11 @@ const BARE_LINK = /\b(?:[a-z0-9-]+\.)+(?:com|cn|net|org|io|co|cc|top|xyz|info|bi
 
 export function nextSaveStep(extraction) {
   const fields = publicFields(extraction);
-  if (extraction?.reliable && fields.company && fields.title) {
+  // Only a "reliable" read skips the AI. "uncertain" (something read, not enough evidence)
+  // and "invalid" (nothing usable) both ask it. Callers that predate `confidence` pass
+  // just `reliable`, which is honoured as before.
+  const settled = extraction?.reliable === true && (extraction.confidence === undefined || extraction.confidence === 'reliable');
+  if (settled && fields.company && fields.title) {
     return { action: 'commit', fields };
   }
   // The panel lists exactly what job-extract.mjs will send, so both use this one filter.

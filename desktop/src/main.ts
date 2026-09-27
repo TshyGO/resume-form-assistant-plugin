@@ -304,7 +304,7 @@ const resumeView = mountResume(
   must("resume-root"),
   invoke ?? null,
   resumePickers,
-  events?.listen ? (name, handler) => events.listen?.(name, () => handler()) : undefined,
+  events?.listen ? (name, handler) => events.listen?.(name, (event) => handler(event)) : undefined,
 );
 
 const inbox = mountInbox(command, {

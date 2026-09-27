@@ -22,6 +22,10 @@ import {
   snapshotStateLabel,
   SNAPSHOT_DISCLAIMER,
 } from "./applications.ts";
+import { highlightHtml } from "./search-highlight.ts";
+
+const DETAIL_PROMPT = '<p class="muted">选择一条申请查看详情与时间线。</p>';
+const DETAIL_FILTERED_OUT = '<p class="muted">当前申请不在搜索结果中。</p>';
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -56,6 +60,7 @@ export function mountApplications(
   const ctl = createApplicationsController();
   const msg = must("apps-msg");
   const empty = must("apps-empty");
+  const noResults = must("apps-no-results");
   const layout = must("apps-layout");
   const tbody = must("apps-tbody");
   const detail = must("app-detail");
@@ -74,6 +79,12 @@ export function mountApplications(
   const searchDebounceMs = options.searchDebounceMs ?? 250;
   const coalesceMs = options.coalesceMs ?? 80;
   let listed: ApplicationSummary[] = [];
+  // 当前列表是用哪个搜索词查出来的；高亮只跟这个走，不跟输入框里还没提交的文字走。
+  let listedQuery: string | null = null;
+  // 上一次成功显示的列表是按哪组条件查的。只有搜索词、阶段或回收状态变了才算“被筛掉”；
+  // 翻页、排序、同条件刷新导致选中项不在当前页时，它仍属于结果，只是不在这一页。
+  let shownFilter: { query: string | null; stage: string; recycle: string } | null = null;
+  let detailFilteredOut = false;
   let committedNotices: Array<Record<string, unknown>> = [];
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -165,33 +176,47 @@ export function mountApplications(
       const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", { args });
       if (!ctl.isCurrent(token)) return;
       listed = page.items;
+      listedQuery = args.query;
       const lastOffset = page.total ? Math.floor((page.total - 1) / ctl.limit) * ctl.limit : 0;
       if (ctl.offset > lastOffset) { ctl.setOffset(lastOffset); return refreshList(); }
+      const filterChanged = shownFilter !== null
+        && (shownFilter.query !== args.query || shownFilter.stage !== args.stage || shownFilter.recycle !== args.recycle);
+      shownFilter = { query: args.query, stage: args.stage, recycle: args.recycle };
       msg.textContent = page.total ? `共 ${page.total} 条` : "";
-      const showEmpty = page.total === 0 && !args.query && args.stage === "all" && args.recycle === "active";
+      // 三种互斥状态：档案本来就是空的 / 搜索或筛选没有结果 / 正常列表。
+      const filtered = Boolean(args.query) || args.stage !== "all" || args.recycle !== "active";
+      const showEmpty = page.total === 0 && !filtered;
+      const showNoResults = page.total === 0 && filtered;
       empty.classList.toggle("hidden", !showEmpty);
-      layout.classList.toggle("hidden", showEmpty);
+      noResults.classList.toggle("hidden", !showNoResults);
+      layout.classList.toggle("hidden", page.total === 0);
       tbody.innerHTML = page.items
         .map((row) => {
           const active = row.id === ctl.selectedId ? " class=\"active\"" : "";
+          const location = row.location ? highlightHtml("location", row.location, listedQuery) : "—";
           return `<tr data-id="${escapeHtml(row.id)}"${active}>
             <td><button type="button" class="app-select" aria-current="${ctl.selectedId === row.id ? "true" : "false"}" title="${escapeHtml(row.company)} · ${escapeHtml(row.title)}">
-              <strong>${escapeHtml(row.company)}</strong><span>${escapeHtml(row.title)}</span>
+              <strong>${highlightHtml("company", row.company, listedQuery)}</strong><span>${highlightHtml("title", row.title, listedQuery)}</span>
             </button></td>
             <td><span class="stage-badge" data-stage="${escapeHtml(row.current_stage)}">${escapeHtml(stageLabel(row.current_stage))}</span></td>
-            <td class="app-location" title="${escapeHtml(row.location || "—")}">${escapeHtml(row.location || "—")}</td>
+            <td class="app-location" title="${escapeHtml(row.location || "—")}">${location}</td>
             <td class="app-updated" title="${escapeHtml(formatTime(row.updated_at))}">${escapeHtml(row.updated_at?.slice(0, 10) || "—")}</td>
           </tr>`;
         })
-        .join("") || `<tr><td colspan="4" class="list-no-results">没有符合筛选条件的申请。</td></tr>`;
+        .join("");
       const maxOffset = lastOffset;
       pageEl.textContent = `${Math.floor(ctl.offset / ctl.limit) + 1} / ${Math.max(1, Math.ceil(page.total / ctl.limit))}`;
       input("btn-prev-page").disabled = ctl.offset <= 0;
       input("btn-next-page").disabled = ctl.offset >= maxOffset || page.total === 0;
       if (ctl.selectedId && !page.items.some((row) => row.id === ctl.selectedId)) {
+        // 选中的申请被筛掉了：让在途的详情请求作废，并清掉旧详情，不替用户改选别的记录。
         detailToken += 1;
         ctl.setSelected(null);
-        detail.innerHTML = `<p class="muted">当前申请不在此列表过滤中。</p>`;
+        detailFilteredOut = page.total > 0 && filterChanged;
+        detail.innerHTML = detailFilteredOut ? DETAIL_FILTERED_OUT : DETAIL_PROMPT;
+      } else if (!ctl.selectedId && detailFilteredOut) {
+        detailFilteredOut = false;
+        detail.innerHTML = DETAIL_PROMPT;
       }
       showFreshHint();
     } catch (err) {
@@ -239,6 +264,7 @@ export function mountApplications(
     const token = ++detailToken;
     if (ctl.selectedId !== id) detailTab = "timeline";
     ctl.setSelected(id);
+    detailFilteredOut = false;
     detail.innerHTML = '<p class="muted">加载中…</p>';
     tbody.querySelectorAll("tr").forEach((tr) => {
       tr.classList.toggle("active", tr.dataset.id === id);

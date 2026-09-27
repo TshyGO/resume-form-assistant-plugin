@@ -159,3 +159,13 @@ test('a reliable flag without both fields still asks the user', async () => {
   assert.equal(nextSaveStep({ company: '星河科技', title: '', reliable: true }).action, 'form');
   assert.equal(nextSaveStep(null).reason, 'manual');
 });
+
+test('an extraction that is not "reliable" by confidence asks the AI even if it carries both fields', async () => {
+  const { nextSaveStep } = await load();
+  const fragments = [{ id: 1, source: 'h1', role: 'page-title', text: '研发工程师-聚合方向' }];
+  for (const confidence of ['uncertain', 'invalid']) {
+    const step = nextSaveStep({ company: '公安', title: '研发工程师', reliable: true, confidence, fragments });
+    assert.equal(step.action, 'assist', confidence);
+  }
+  assert.equal(nextSaveStep({ company: '星河科技', title: '后端开发工程师', reliable: true, confidence: 'reliable' }).action, 'commit');
+});

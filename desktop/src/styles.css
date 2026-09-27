@@ -6,6 +6,9 @@
   --line: #e2e6ed;
   --accent: #36756b;
   --accent-pale: #e9f3f0;
+  /* 搜索命中高亮：由 --accent 派生。底色比 --accent-pale 深一档，选中行（底色 --accent-pale）上也看得出来。 */
+  --accent-strong: #24534b;
+  --accent-mark: #cfe3de;
   --danger: #b44747;
   --ok: #24785b;
   --sidebar: #1c2330;
@@ -108,7 +111,6 @@ code { font: 12px Consolas, "Sarasa Mono SC", monospace; }
 .apps-table tbody tr:hover { background: var(--bg); }
 .apps-table tbody tr.active { background: var(--accent-pale); }
 .apps-table td:first-child { padding: 0; }
-.apps-table td.list-no-results { padding: 32px 16px; text-align: center; color: var(--muted); }
 .app-select { display: block; width: 100%; min-height: 66px; padding: 10px 12px; text-align: left; border: 0; border-radius: 0; background: transparent; }
 .app-select:hover:not(:disabled) { background: transparent; }
 .app-select:focus-visible { outline-offset: -3px; }
@@ -116,6 +118,7 @@ code { font: 12px Consolas, "Sarasa Mono SC", monospace; }
 .app-select strong { font-weight: 600; }
 .app-select span { margin-top: 2px; font-size: 12px; color: var(--muted); }
 .app-location { color: var(--muted); font-size: 12px; }
+.search-match { padding: 0 2px; border-radius: 3px; background: var(--accent-mark); color: var(--accent-strong); font-weight: 650; }
 .app-updated { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .stage-badge { display: inline-flex; padding: 2px 8px; border-radius: 20px; background: #edf0f4; color: #566172; font-size: 12px; white-space: nowrap; }
 .stage-badge[data-stage="interview"], .stage-badge[data-stage="assessment"] { background: #fff5e3; color: #996019; }

@@ -140,6 +140,10 @@ export function describeJobAssist(disclosure) {
   };
 }
 
+// One sentence for "sent, but the answer never came back", shared by the page overlay and the
+// side panel so the two cannot word it differently.
+export const UNKNOWN_SAVE_TEXT = '没能确认保存结果，请到桌面或待同步列表核对后再操作。';
+
 export function describeBindResult(result) {
   const { status, code, reason } = result ?? {};
 
@@ -157,6 +161,12 @@ export function describeBindResult(result) {
       tone: 'pending',
       text: '已经排进待同步队列，桌面可用之后会自动重试。现在还没有保存到桌面。'
     };
+  }
+
+  if (status === 'unknown') {
+    // The request went out and nothing came back. It may or may not have been written, so
+    // this claims neither "saved" nor "queued", and there is no promise of a retry.
+    return { tone: 'pending', text: UNKNOWN_SAVE_TEXT };
   }
 
   if (status === 'duplicate') {
@@ -240,6 +250,45 @@ export function describeApplicationChoice(candidate) {
   return `${candidate?.company ?? ''} · ${candidate?.title ?? ''}${label ? `（${label}）` : ''}`;
 }
 
+// A confirmed submission only moves the application's stage on the desktop. These sentences
+// never say the application was sent to the employer: that happened on the job site, and only
+// the user knows it.
+export const UNKNOWN_CONFIRM_TEXT = '没能确认结果，请到桌面端查看这条申请的当前状态。';
+
+// Why "确认已投递" could not reach the desktop at all. Nothing was written and nothing was
+// queued in any of these, so none of them may say "待同步".
+export function describeConfirmBlocked(mode, { extensionId } = {}) {
+  if (mode === 'not_installed') {
+    return {
+      tone: 'info',
+      text: '没有找到桌面程序，这次没有确认投递。装好之后再回来确认。'
+    };
+  }
+  if (mode === 'not_paired') {
+    return {
+      tone: 'info',
+      extensionId,
+      text: '桌面程序在运行，但还没有配对这个插件，这次没有确认投递。到桌面程序的设置里粘贴下面的扩展 ID。',
+      hint: PAIRING_HINT
+    };
+  }
+  if (mode === 'never_paired') {
+    return {
+      tone: 'info',
+      extensionId,
+      text: '还没有和桌面程序配对过，这次没有确认投递。打开桌面程序，在设置里粘贴下面的扩展 ID。',
+      hint: PAIRING_HINT
+    };
+  }
+  if (mode === 'incompatible') {
+    return { tone: 'warn', text: '桌面程序的版本和插件对不上，这次没有确认投递，升级之后再试。' };
+  }
+  return {
+    tone: 'warn',
+    text: '桌面暂时连不上，这次没有确认投递，也没有排进待同步。桌面恢复后，请再点一次「确认已投递」。'
+  };
+}
+
 export function describeConfirmResult(result) {
   if (result?.status === 'saved') {
     return { tone: 'success', text: '已投递：桌面上的阶段已经更新。' };
@@ -247,9 +296,29 @@ export function describeConfirmResult(result) {
   if (result?.status === 'rejected' && result.reason === 'no_application') {
     return { tone: 'warn', text: '请先选择这次投递对应的申请。' };
   }
-  // Everything else is still in the queue. Saying anything about the stage here would be a
-  // claim about the desktop's records that nothing has confirmed.
-  return { tone: 'pending', text: '已排进待同步队列，桌面可用之后会更新阶段。' };
+  if (result?.status === 'rejected' && result.reason === 'queue_full') {
+    return {
+      tone: 'warn',
+      text: `待同步的消息已满（${MAX_OUTBOX} 条），这次没有确认投递。请先处理已有的几条。`
+    };
+  }
+  if (result?.status === 'unknown') {
+    return { tone: 'pending', text: UNKNOWN_CONFIRM_TEXT };
+  }
+  if (result?.status === 'failed') {
+    return { tone: 'warn', text: REFUSALS[result.code] ?? '桌面拒绝了这次确认，请到桌面核对这条申请。' };
+  }
+  // The router answers `pending` for a desktop it could not reach without queueing anything;
+  // only a reply that names a queued message (`messageId`) proves an entry exists.
+  if (result?.mode && !result.messageId) {
+    return describeConfirmBlocked(result.mode, { extensionId: result.extensionId });
+  }
+  if (result?.status === 'pending' || result?.status === 'stalled') {
+    // Saying anything about the stage here would be a claim about the desktop's records that
+    // nothing has confirmed.
+    return { tone: 'pending', text: '已排进待同步队列，桌面可用之后会更新阶段。' };
+  }
+  return { tone: 'warn', text: UNKNOWN_CONFIRM_TEXT };
 }
 
 // --- D08: archiving a fill ------------------------------------------------------------
