@@ -74,8 +74,13 @@
     suggestedView: null,
     statusTimer: null,
     lastFocusedField: null,
-    chipAction: null
+    chipAction: null,
+    nativeSidePanel: false
   };
+  // #188 辅助新增的状态，只在本页内存里；控制逻辑见 handlePanelRepeat。
+  const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
+  const REPEAT_STOPPABLE = ["scanning", "planning", "executing", "filling"];
+  const repeat = { phase: "idle", requestId: "", message: "", plan: [], added: 0, progress: null, run: null };
 
   // The native side panel owns the visible UI. The existing shadow DOM remains
   // mounted as the form-filling controller so its tested AI and site adapters
@@ -107,7 +112,8 @@
         status: status?.classList.contains("is-visible") ? status.textContent : "",
         statusKind: status?.classList.contains("is-error") ? "error" : "success",
         openView: state.suggestedView,
-        canCancel: Boolean(cancel && !cancel.hidden && !cancel.disabled),
+        // While 辅助新增 runs, its own 停止 is the one control; the fill's cancel stays hidden.
+        canCancel: !repeatActive() && Boolean(cancel && !cancel.hidden && !cancel.disabled),
         profileOffer: profileOffer && !profileOffer.hidden ? profileOffer.querySelector("#resume-pro-profile-offer-text")?.textContent || "" : "",
         fillOffer: fillOffer && !fillOffer.hidden ? fillOffer.querySelector("#resume-pro-fill-record-summary")?.textContent || "" : "",
         snapshotAvailable: Boolean(snapshotOption && !snapshotOption.disabled),
@@ -120,12 +126,18 @@
         // Saving a job from the side panel itself (#172); held in this page's memory only.
         jobSave,
         // Confirming a submission from the side panel (#172); also held in this page's memory only.
-        submitConfirm: panelSubmitSnapshot()
+        submitConfirm: panelSubmitSnapshot(),
+        // AI 辅助新增条目 from the side panel (#188); also held in this page's memory only.
+        repeat: describeRepeat()
       });
       return false;
     }
 
     if (message.type === "RESUME_PANEL_FILL") {
+      if (repeatActive()) {
+        sendResponse({ ok: false, error: "AI 辅助新增正在进行，请先完成或停止。" });
+        return false;
+      }
       StorageService.getState().then(store => {
         state.currentStore = store;
         if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
@@ -141,6 +153,12 @@
       if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "当前操作不可用。" });
       else { button.click(); sendResponse({ ok: true }); }
       return false;
+    }
+
+    if (message.type === "RESUME_PANEL_REPEAT") {
+      Promise.resolve(handlePanelRepeat(message)).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "辅助新增失败，请手动核对网页。" }));
+      return true;
     }
 
     if (message.type === "RESUME_PANEL_TARGET") {
@@ -245,25 +263,9 @@
         sendResponse({ ok: true });
         return false;
       }
-      // "保存岗位到桌面端" and "确认已投递" are no longer opened here: the side panel runs both
-      // (RESUME_PANEL_SAVE_* / RESUME_PANEL_SUBMIT_*). Only "repeat" still needs the legacy
-      // popup, until #188 moves AI-assisted new entries into the side panel too.
-      const buttons = {
-        repeat: "#resume-pro-repeat-fill"
-      };
-      const selector = Object.prototype.hasOwnProperty.call(buttons, message.action) ? buttons[message.action] : null;
-      const button = selector ? shadowRoot?.querySelector(selector) : null;
-      const panel = shadowRoot?.querySelector(".resume-pro");
-      if (!button || !panel) sendResponse({ ok: false, error: "当前网页无法打开该工具。" });
-      else {
-        panel.classList.remove("is-collapsed");
-        panel.classList.add("is-legacy-open");
-        updateCollapseButton(panel);
-        constrainSidebarToViewport();
-        // The page has not read the desktop yet; the repeat button is enabled from that read.
-        refreshVisibleStore().catch(() => {}).finally(() => button.click());
-        sendResponse({ ok: true });
-      }
+      // 保存岗位、确认已投递 (#172) and AI 辅助新增条目 (#188) all run in the side panel itself,
+      // so nothing here opens the page's old controls any more.
+      sendResponse({ ok: false, error: "当前网页无法打开该工具。" });
       return false;
     }
     return false;
@@ -327,12 +329,16 @@
     // A browser without the native side panel still needs a usable fill UI.
     chrome.runtime.sendMessage({ type: "SIDE_PANEL_CAPABILITY" })
       .then((result) => {
+        state.nativeSidePanel = Boolean(result?.supported);
         if (!result?.supported) openLegacyPanel();
+        else renderSidebar();
       })
       .catch(openLegacyPanel);
     bindStorageSync();
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) refreshVisibleStore().catch(() => {});
+      // A plan made for this tab must not keep clicking once the user has moved to another one.
+      if (document.hidden) invalidateRepeat("已切换到其他标签页，计划已失效，请重新预览。");
+      else refreshVisibleStore().catch(() => {});
     });
     bindFocusTracking();
     window.addEventListener("resize", constrainSidebarToViewport);
@@ -597,7 +603,11 @@
     const aiFillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (aiFillButton) aiFillButton.disabled = Boolean(downgradeCopy) || state.aiBusy;
     const repeatButton = shadowRoot.querySelector("#resume-pro-repeat-fill");
-    if (repeatButton) repeatButton.disabled = Boolean(downgradeCopy) || !activeTemplate || state.aiBusy;
+    if (repeatButton) {
+      repeatButton.disabled = Boolean(downgradeCopy) || !activeTemplate || state.aiBusy;
+      // With the native side panel this runs from there; the page's copy (window.confirm) stays off.
+      repeatButton.hidden = Boolean(state.nativeSidePanel);
+    }
 
     if (downgradeCopy) {
       groupsContainer.innerHTML = `
@@ -1197,8 +1207,13 @@
     return crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
   }
 
+  // The page's own copy, only for a browser without the native side panel (#188).
   async function handleRepeatFillClick(event) {
     const button = event.currentTarget;
+    if (state.nativeSidePanel) {
+      showStatus("请在浏览器侧栏的「填写」页使用「AI 辅助新增条目」。", "error");
+      return;
+    }
     const fillButton = shadowRoot.querySelector("#resume-pro-ai-fill");
     if (button.disabled || fillButton.disabled || state.aiBusy) return;
     state.aiBusy = true;
@@ -1301,6 +1316,284 @@
     }
   }
 
+  // #188：原生侧栏的「AI 辅助新增条目」。扫描、规划、预览、执行、填写都在这里跑，侧栏只显示
+  // describeRepeat() 给出的有限字段，并用 requestId 发确认、取消、停止。一次操作绑定本页地址、
+  // 模板 ID 与内容、扫描时的候选；任何一项变了，旧计划作废，不再点击网页。
+
+  function repeatActive() {
+    return REPEAT_ACTIVE.includes(repeat.phase);
+  }
+
+  function repeatLabel(domain) {
+    return self.ResumeProFormAgent?.labels?.[domain] || "条目";
+  }
+
+  function repeatAddedNote(added) {
+    return added > 0 ? `已经新增的 ${added} 条空记录会保留，请在网页中核对。` : "网页没有新增条目。";
+  }
+
+  function setRepeat(run, phase, message, extra = {}) {
+    if (repeat.run !== run) return false;
+    repeat.phase = phase;
+    repeat.message = message;
+    repeat.progress = extra.progress ?? null;
+    if (extra.plan) repeat.plan = extra.plan;
+    if (Number.isInteger(extra.added)) repeat.added = extra.added;
+    if (!REPEAT_ACTIVE.includes(phase)) {
+      run.done = true;
+      state.aiBusy = false;
+      if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+    }
+    return true;
+  }
+
+  // Everything the side panel may see. Labels come from our fixed domain table, never the page.
+  function describeRepeat() {
+    const run = repeat.run;
+    if (run && !run.done && repeat.phase === "preview" && repeatStale(run)) invalidateRepeat(repeatStale(run));
+    const phase = repeat.phase;
+    return {
+      phase,
+      requestId: repeat.requestId,
+      message: repeat.message,
+      plan: repeat.plan.map(({ domain, count }) => ({ domain, count })),
+      added: repeat.added,
+      progress: repeat.progress ? { ...repeat.progress } : null,
+      canConfirm: phase === "preview",
+      canCancel: phase === "preview",
+      canStop: REPEAT_STOPPABLE.includes(phase)
+    };
+  }
+
+  // Why this run may no longer touch the page, or "" while it still may.
+  function repeatStale(run) {
+    if (run.invalid) return run.invalid;
+    if (location.href !== run.url) return "网页地址已变化，计划已失效，请重新预览。";
+    if (document.hidden) return "已切换到其他标签页，计划已失效，请重新预览。";
+    return "";
+  }
+
+  function repeatStopped(run) {
+    return run.stopped || repeat.run !== run || Boolean(repeatStale(run));
+  }
+
+  // Ends whatever run is in flight. A planning request is cancelled; an execution sees the
+  // flag at its next check and stops before the next click.
+  function stopRepeat(run, message) {
+    if (!run || run.done) return;
+    run.stopped = true;
+    if (repeat.phase === "planning") self.ResumeProAIClient.cancel(run.requestId).catch(() => {});
+    if (repeat.phase === "filling" && run.fillRequestId) self.ResumeProAIClient.cancel(run.fillRequestId).catch(() => {});
+    // Planning and preview have not clicked anything, so they end here. Execution and filling
+    // finish their current step and then report the real count.
+    if (["scanning", "planning", "preview"].includes(repeat.phase)) setRepeat(run, "stopped", message);
+  }
+
+  function invalidateRepeat(reason) {
+    const run = repeat.run;
+    if (!run || run.done) return false;
+    run.invalid = reason;
+    stopRepeat(run, reason);
+    return true;
+  }
+
+  async function startRepeat() {
+    if (repeatActive() || state.aiBusy) return { ok: false, error: "已有填写或新增正在进行，请先完成或停止。" };
+    const run = { requestId: newRequestId(), url: location.href, stopped: false, invalid: "", done: false };
+    repeat.run = run;
+    repeat.requestId = run.requestId;
+    repeat.plan = [];
+    repeat.added = 0;
+    state.aiBusy = true;
+    state.suggestedView = null;
+    setRepeat(run, "scanning", "正在检查网页中可以安全新增的经历…");
+    planRepeat(run).catch(error => {
+      if (!run.done) setRepeat(run, "failed", error?.message || "辅助新增失败，请手动核对网页。");
+    });
+    return { ok: true, requestId: run.requestId };
+  }
+
+  async function planRepeat(run) {
+    state.currentStore = await StorageService.getState();
+    if (repeatStopped(run)) return;
+    if (state.desktopMode !== "ready") {
+      setRepeat(run, "failed", self.ResumeProResumeData.modeCopy(state.desktopMode).message);
+      return;
+    }
+    const template = getActiveTemplate(state.currentStore);
+    if (!template) {
+      setRepeat(run, "failed", "请先在桌面准备简历模板。");
+      return;
+    }
+    run.templateId = template.id;
+    run.fingerprint = JSON.stringify(template);
+    const agent = self.ResumeProFormAgent;
+    try {
+      run.snapshot = agent.collect(document, flattenTemplateFields(template));
+    } catch {
+      setRepeat(run, "failed", "无法识别网页分组，请手动新增条目。");
+      return;
+    }
+    if (!run.snapshot.candidates.length) {
+      setRepeat(run, "failed", "未识别到可安全新增的分组，请先手动新增条目，再一键填写。");
+      return;
+    }
+    run.candidates = JSON.stringify(run.snapshot.candidates);
+    setRepeat(run, "planning", "AI 正在规划需要新增的条目…");
+    // Only the local candidate summary goes out: id, domain, label, current, target.
+    const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId: run.requestId, candidates: run.snapshot.candidates });
+    // A stop, cancel, tab switch or newer run already answered the user; this reply is late.
+    if (repeatStopped(run)) return;
+    if (!reply?.success) {
+      if (reply?.openView === "settings-ai") {
+        state.suggestedView = "settings-ai";
+        await openManager("settings-ai").catch(() => {});
+      }
+      setRepeat(run, "failed", reply?.error || "AI 规划失败，未执行新增。可稍后重试或手动新增。");
+      return;
+    }
+    let plan;
+    try {
+      plan = agent.validatePlan(reply.plan, run.snapshot.candidates);
+    } catch (error) {
+      setRepeat(run, "failed", `${error.message || "AI 计划无效。"}未执行新增。`);
+      return;
+    }
+    if (!plan.length) {
+      setRepeat(run, "failed", "AI 未给出可确认的新增操作，请手动处理。");
+      return;
+    }
+    run.plan = plan;
+    const preview = plan.map(action => ({ domain: run.snapshot.candidates.find(c => c.id === action.id).domain, count: action.count }));
+    setRepeat(run, "preview", "计划新增以下条目：", { plan: preview });
+  }
+
+  // The desktop template and the page's candidates must still be what the user previewed.
+  async function recheckRepeat(run) {
+    const stale = repeatStale(run);
+    if (stale) return stale;
+    state.currentStore = await StorageService.getState();
+    if (repeatStopped(run)) return repeatStale(run) || "已停止。";
+    const template = getActiveTemplate(state.currentStore);
+    if (state.desktopMode !== "ready" || !template || template.id !== run.templateId || JSON.stringify(template) !== run.fingerprint) {
+      return "当前模板已变化，计划已失效，请重新预览。";
+    }
+    return "";
+  }
+
+  function repeatGroupsChanged(run) {
+    let fresh;
+    try {
+      fresh = self.ResumeProFormAgent.collect(document, flattenTemplateFields(JSON.parse(run.fingerprint)));
+    } catch {
+      return true;
+    }
+    return JSON.stringify(fresh.candidates) !== run.candidates
+      || fresh.candidates.some(c => fresh.refs.get(c.id)?.button !== run.snapshot.refs.get(c.id)?.button);
+  }
+
+  async function confirmRepeat(requestId) {
+    const run = repeat.run;
+    if (repeat.phase !== "preview" || !run || run.done || run.requestId !== requestId) {
+      return { ok: false, error: "这个计划已经失效，请重新预览。" };
+    }
+    // The phase moves before any await, so a second 确认新增 finds no preview to confirm.
+    setRepeat(run, "executing", "正在核对网页和模板…");
+    executeRepeat(run).catch(error => {
+      if (!run.done) setRepeat(run, "failed", error?.message || "辅助新增失败，请手动核对网页。");
+    });
+    return { ok: true };
+  }
+
+  async function executeRepeat(run) {
+    const stale = await recheckRepeat(run) || (repeatGroupsChanged(run) ? "网页分组已变化，计划已失效，请重新预览。" : "");
+    if (stale) {
+      setRepeat(run, "stopped", `${stale}${repeatAddedNote(0)}`, { added: 0 });
+      return;
+    }
+    let expanded;
+    try {
+      expanded = await self.ResumeProFormAgent.execute(run.plan, run.snapshot, () => repeatStopped(run), progress => {
+        setRepeat(run, "executing", `正在新增${repeatLabel(progress.domain)} ${progress.index}/${progress.count}…`, {
+          added: progress.added, progress: { domain: progress.domain, index: progress.index, count: progress.count }
+        });
+      });
+    } catch (error) {
+      const added = Number.isInteger(error?.added) ? error.added : repeat.added;
+      if (run.stopped || repeatStale(run)) {
+        setRepeat(run, "stopped", `${run.invalid || repeatStale(run) || "已停止。"}${repeatAddedNote(added)}`, { added });
+      } else {
+        setRepeat(run, "failed", `${error?.message || "辅助新增失败。"}${added > 0 ? repeatAddedNote(added) : ""}`, { added });
+      }
+      return;
+    }
+    const added = expanded.added;
+    const summary = run.plan.map(action => `${repeatLabel(run.snapshot.candidates.find(c => c.id === action.id).domain)} ${action.count} 条`).join("、");
+    setRepeat(run, "filling", `已新增${summary}，正在填写新增的分组…`, { added });
+    const stale2 = await recheckRepeat(run);
+    if (stale2) {
+      setRepeat(run, "stopped", `${stale2}已停止填写。${repeatAddedNote(added)}`, { added });
+      return;
+    }
+    // Only the new scopes, only empty text fields; the fill itself never submits the form.
+    state.aiBusy = false;
+    const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
+    if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+    const result = fillButton
+      ? await handleAiFillClick({ currentTarget: fillButton }, {
+        scopes: expanded.scopes, quiet: true,
+        stopped: () => repeatStopped(run),
+        onRequest: id => { run.fillRequestId = id; }
+      })
+      : { outcome: "failed", filledCount: 0, unconfirmedCount: 0, error: "填写控件不可用。" };
+    if (repeat.run !== run) return;
+    if (run.stopped || repeatStale(run)) {
+      setRepeat(run, "stopped", `${run.invalid || repeatStale(run) || "已停止。"}已停止填写。${repeatAddedNote(added)}`, { added });
+    } else if (result?.outcome === "success") {
+      setRepeat(run, "completed", `已新增${summary}，并完成新字段填写（${result.filledCount} 项）。请核对网页内容。`, { added });
+    } else if (result?.outcome === "partial") {
+      setRepeat(run, "completed", `已新增${summary}；新字段已填写 ${result.filledCount} 项${result.unconfirmedCount ? `，${result.unconfirmedCount} 项未确认` : ""}，请核对网页内容。`, { added });
+    } else {
+      const why = result?.error && result.error !== "busy" ? result.error : "填写没有开始";
+      setRepeat(run, "failed", `已新增${summary}，但新字段没有填写：${why}。${repeatAddedNote(added)}`, { added });
+    }
+  }
+
+  function handlePanelRepeat(message) {
+    const action = String(message?.action || "");
+    const requestId = typeof message?.requestId === "string" ? message.requestId : "";
+    const run = repeat.run;
+    const current = run && !run.done && requestId === run.requestId;
+    if (action === "start") return startRepeat();
+    if (action === "confirm") return confirmRepeat(requestId);
+    if (action === "cancel") {
+      if (!current || repeat.phase !== "preview") return { ok: false, error: "这个计划已经结束了。" };
+      run.stopped = true;
+      setRepeat(run, "stopped", "已取消，网页没有变化。");
+      return { ok: true };
+    }
+    if (action === "stop") {
+      if (!current || !REPEAT_STOPPABLE.includes(repeat.phase)) return { ok: false, error: "当前没有可以停止的新增。" };
+      stopRepeat(run, "已停止，未新增任何条目。");
+      return { ok: true };
+    }
+    if (action === "invalidate") {
+      // The side panel switched the template: whatever was planned was for the old one.
+      invalidateRepeat("当前模板已切换，计划已失效，请重新预览。");
+      return { ok: true };
+    }
+    if (action === "dismiss") {
+      if (repeatActive()) return { ok: false, error: "新增还在进行。" };
+      repeat.phase = "idle";
+      repeat.message = "";
+      repeat.plan = [];
+      repeat.added = 0;
+      repeat.progress = null;
+      return { ok: true };
+    }
+    return { ok: false, error: "当前操作不可用。" };
+  }
+
   function isAssistedTextField(entry) {
     const el = entry.element;
     return !el.disabled && !el.readOnly && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && ["text", "email", "tel", "url", "search"].includes(el.type)));
@@ -1314,17 +1607,23 @@
     return Boolean(String(el.value ?? el.textContent ?? "").trim());
   }
 
+  // `assisted` (辅助新增) limits the fill to the new scopes. The side panel reads its
+  // outcome from the returned summary, so `quiet` keeps it out of the page status line, and
+  // `stopped` / `onRequest` let the side panel's 停止 end the wait and the writes.
   async function handleAiFillClick(event, assisted = null) {
     const button = event.currentTarget;
-    if (button.disabled || state.aiBusy) return;
+    const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
+    if (button.disabled || state.aiBusy) return failed("busy");
+    const report = assisted?.quiet ? () => {} : showStatus;
     state.aiBusy = true;
     state.suggestedView = null;
     state.currentStore = await StorageService.getState();
     if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
     if (state.desktopMode !== "ready") {
       state.aiBusy = false;
-      showStatus(self.ResumeProResumeData.modeCopy(state.desktopMode).message, "error");
-      return;
+      const message = self.ResumeProResumeData.modeCopy(state.desktopMode).message;
+      report(message, "error");
+      return failed(message);
     }
     const activeTemplate = getActiveTemplate(state.currentStore);
     const activeTemplateFingerprint = JSON.stringify(activeTemplate);
@@ -1333,8 +1632,8 @@
 
     if (!activeTemplate && !profileFields.length) {
       state.aiBusy = false;
-      showStatus("请先导入简历模板，或在「我的信息」里填写内容。", "error");
-      return;
+      report("请先导入简历模板，或在「我的信息」里填写内容。", "error");
+      return failed("请先导入简历模板，或在「我的信息」里填写内容。");
     }
 
     button.disabled = true;
@@ -1355,6 +1654,7 @@
     let unconfirmedCount = 0;
     const unfilledLabels = [];
     let outcome = "failed";
+    let failure = "";
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
@@ -1415,6 +1715,7 @@
       };
       updateProgress();
       timer = window.setInterval(updateProgress, 1000);
+      assisted?.onRequest?.(requestId);
       const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
         requestId,
@@ -1428,6 +1729,7 @@
       if (cancelButton) cancelButton.hidden = true;
       if (waitHint) waitHint.hidden = true;
       diagnostics = response?.diagnostics || {};
+      if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
 
       if (response?.openView === "settings-ai") {
         state.suggestedView = "settings-ai";
@@ -1454,6 +1756,7 @@
       });
 
       for (const match of sortedMatches) {
+        if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
 
@@ -1514,7 +1817,7 @@
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。`
         : "";
       if (assisted) {
-        showStatus(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
+        report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
       } else if (response.warning) {
         showStatus(`本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}`, "error", Boolean(unfilledNote));
       } else if (unfilledNote) {
@@ -1535,7 +1838,8 @@
         })), resumeFields);
       }
     } catch (error) {
-      showStatus(error.message || "AI 填写失败。", "error");
+      failure = error.message || "AI 填写失败。";
+      report(failure, "error");
     } finally {
       if (cancelButton) {
         cancelButton.hidden = true;
@@ -1563,6 +1867,7 @@
         }, activeTemplate).catch(() => {});
       }
     }
+    return { outcome, filledCount, unconfirmedCount, error: failure };
   }
 
   function summarizeLabels(labels, limit = 5) {
@@ -4809,6 +5114,8 @@
       readSidebarUiState,
       stopDrag,
       handleRepeatFillClick,
+      handlePanelRepeat,
+      describeRepeat,
       addUnansweredToProfile,
       formatFillDiagnostics,
       getHighlightTargets,
@@ -4870,6 +5177,9 @@
       },
       setAiBusy(busy) {
         state.aiBusy = Boolean(busy);
+      },
+      setNativeSidePanel(supported) {
+        state.nativeSidePanel = Boolean(supported);
       },
       setProfileOffer({ candidates, labels, fields }) {
         state.profileOfferCandidates = candidates;

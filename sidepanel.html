@@ -13,7 +13,6 @@
         <details class="dock-tools">
           <summary aria-label="更多工具">···</summary>
           <div class="dock-tools__menu">
-            <button type="button" data-advanced="repeat">AI 辅助新增条目（先预览）</button>
             <button type="button" data-advanced="close">收起网页高级控件</button>
           </div>
         </details>
@@ -45,6 +44,17 @@
           <p class="dock-note" id="config-state"></p>
           <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
           <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
+          <button class="repeat-button" id="repeat-button" type="button">AI 辅助新增条目</button>
+          <div id="repeat-card" class="repeat-card" hidden>
+            <p id="repeat-message" class="repeat-card__message" role="status" aria-live="polite"></p>
+            <ul id="repeat-plan" class="repeat-card__plan" aria-label="计划新增的条目" hidden></ul>
+            <div class="repeat-card__actions">
+              <button type="button" id="repeat-confirm" class="repeat-card__primary" hidden>确认新增</button>
+              <button type="button" id="repeat-cancel" hidden>取消</button>
+              <button type="button" id="repeat-stop" hidden>停止</button>
+              <button type="button" id="repeat-dismiss" hidden>知道了</button>
+            </div>
+          </div>
           <p class="safety-note">填写后请核对网页内容，插件不会自动提交</p>
 
           <section id="job-save" class="job-save" aria-label="保存岗位到桌面端">

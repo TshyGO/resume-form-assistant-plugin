@@ -1135,7 +1135,9 @@ test('#172 re-recognition invalidates the draft when the page changes while modu
   assert.equal(page.saves().length, 0);
 });
 
-test('#172 the old page overlay stays available as the fallback path for "repeat"', async () => {
+// #188: AI 辅助新增条目 now runs in the native side panel (RESUME_PANEL_REPEAT). The old
+// "repeat" entry, kept by #172 until this moved, no longer opens the page overlay.
+test('#188 RESUME_PANEL_ADVANCED "repeat" no longer opens the old page overlay', async () => {
   const { hooks, listeners } = loadContentScript();
   let clicked = 0;
   const panel = { classList: createClassList(), querySelector: () => ({ textContent: '', setAttribute() {} }) };
@@ -1150,9 +1152,9 @@ test('#172 the old page overlay stays available as the fallback path for "repeat
   let reply;
   listeners.runtimeMessage[0]({ type: 'RESUME_PANEL_ADVANCED', action: 'repeat' }, {}, value => { reply = value; });
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(reply.ok, true);
-  assert.equal(panel.classList.contains('is-legacy-open'), true);
-  assert.equal(clicked, 1, 'the old form still opens from its own button, until #188 moves this into the side panel too');
+  assert.equal(reply.ok, false);
+  assert.equal(panel.classList.contains('is-legacy-open'), false);
+  assert.equal(clicked, 0, 'the old form is not opened from the side panel any more');
 });
 
 // #172 (this round): "保存岗位到桌面端" and "确认已投递" run entirely in the native side panel
