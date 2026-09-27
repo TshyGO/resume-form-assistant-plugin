@@ -231,3 +231,46 @@ test('a snapshot paused by a restore explains the answer and offers only upload-
   assert.match(describeSnapshotReconcile('applied').text, /无法确认/);
   assert.match(describeSnapshotReconcile('not_found').text, /不等于没有/);
 });
+
+// --- #178: the side panel's archive card -------------------------------------------------
+
+test('the archive card says archived only with a persisted reply, naming the chosen application', async () => {
+  const { describeFillRecordResult, FILL_ARCHIVE_PENDING_BIND } = await load();
+  const saved = describeFillRecordResult({ status: 'saved' }, { application: { company: '金发科技股份有限公司', title: '研发工程师' } });
+  assert.equal(saved.text, '已留档到桌面：这次填写的结果记在「金发科技股份有限公司 · 研发工程师」下。');
+  const waiting = describeFillRecordResult({ status: 'recorded', mode: 'unavailable' }, { application: { company: '甲', title: '乙' } });
+  assert.ok(waiting.text.startsWith(FILL_ARCHIVE_PENDING_BIND));
+  assert.equal(FILL_ARCHIVE_PENDING_BIND, '已记入待同步，尚未选择申请。现在还没有留档到桌面。');
+  assert.doesNotMatch(waiting.text, /已留档到桌面/);
+});
+
+test('an application is offered as company · title (stage), never by its id', async () => {
+  const { describeApplicationChoice } = await load();
+  const label = describeApplicationChoice({ applicationId: '77777777-7777-4777-8777-777777777777', company: '金发科技股份有限公司', title: '研发工程师', stage: 'saved' });
+  assert.equal(label, '金发科技股份有限公司 · 研发工程师（已保存）');
+  assert.equal(describeApplicationChoice({ company: '甲', title: '乙' }), '甲 · 乙');
+});
+
+test('a blocked lookup keeps a waiting record only where one may be kept, and never says archived', async () => {
+  const { describeFillArchiveBlocked, describeFillArchiveEmpty } = await load();
+  for (const reason of ['unrecognized', 'unavailable', 'incompatible', 'not_installed', 'not_paired', 'never_paired', 'something_new']) {
+    const copy = describeFillArchiveBlocked(reason, { extensionId: 'x' });
+    assert.equal(typeof copy.text, 'string', reason);
+    assert.doesNotMatch(`${copy.text}${copy.hint || ''}`, /已留档到桌面/, reason);
+  }
+  // Same rule as fillrecords.mayRecord: no waiting record without a paired desktop behind it.
+  assert.deepEqual(
+    ['unrecognized', 'unavailable', 'incompatible', 'not_installed', 'not_paired', 'never_paired'].map(reason => describeFillArchiveBlocked(reason).canQueue),
+    [true, true, true, false, false, false]
+  );
+  assert.equal(describeFillArchiveBlocked('not_paired', { extensionId: 'abc' }).extensionId, 'abc');
+  assert.equal(describeFillArchiveEmpty().text, '桌面里还没有这家公司的投递记录。');
+  assert.match(describeFillArchiveEmpty().hint, /不会自动新建申请/);
+});
+
+test('the snapshot line says uploaded only after the upload was seen waiting and then left', async () => {
+  const { describeFillSnapshotProgress } = await load();
+  assert.match(describeFillSnapshotProgress({ status: 'pending', chunkCount: 3, chunks: [{ acked: true }] }).text, /上传中（已传 1\/3 块）/);
+  assert.match(describeFillSnapshotProgress(null).text, /正在后台上传/);
+  assert.equal(describeFillSnapshotProgress(null, { seen: true }).text, '简历快照已上传到桌面。');
+});

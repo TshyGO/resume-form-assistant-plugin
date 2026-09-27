@@ -219,6 +219,27 @@ export function describeReconcileStatus(status) {
   };
 }
 
+// The desktop's own names for an application's stage, so a candidate reads the same in the
+// side panel as it does in the applications list. An unknown code is shown as it came.
+const STAGE_LABELS = {
+  saved: '已保存',
+  filling: '填写中',
+  submitted: '已投递',
+  assessment: '测评',
+  interview: '面试',
+  offer: 'Offer',
+  rejected: '未通过',
+  withdrawn: '已撤回',
+  closed: '已关闭'
+};
+
+/** "公司 · 岗位（阶段）" for a desktop application. Never includes the application id. */
+export function describeApplicationChoice(candidate) {
+  const stage = typeof candidate?.stage === 'string' ? candidate.stage : '';
+  const label = STAGE_LABELS[stage] ?? stage;
+  return `${candidate?.company ?? ''} · ${candidate?.title ?? ''}${label ? `（${label}）` : ''}`;
+}
+
 export function describeConfirmResult(result) {
   if (result?.status === 'saved') {
     return { tone: 'success', text: '已投递：桌面上的阶段已经更新。' };
@@ -268,8 +289,12 @@ const SNAPSHOT_ISSUES = {
   queue_full: `待同步的消息已满（${MAX_OUTBOX} 条），简历快照这次没有排上。`
 };
 
-export function describeFillRecordResult(result) {
-  const copy = describeFillRecordStatus(result);
+/**
+ * `application` is the candidate the user picked ({ company, title }), when there was one:
+ * the success sentence then names it instead of "所选申请".
+ */
+export function describeFillRecordResult(result, { application = null } = {}) {
+  const copy = describeFillRecordStatus(result, application);
   const extra = [];
   if (result?.status === 'saved' && result.uploadQueued) {
     extra.push('简历快照正在后台上传，传完之前本机会保留一份。');
@@ -280,25 +305,30 @@ export function describeFillRecordResult(result) {
   return extra.length ? { ...copy, text: `${copy.text}${extra.join('')}` } : copy;
 }
 
-function describeFillRecordStatus(result) {
+function describeFillRecordStatus(result, application = null) {
   const { status, mode, reason, code } = result ?? {};
 
   if (status === 'saved') {
     // The only sentence that may say the desktop holds the record, and it runs only after a
     // persisted reply.
-    return { tone: 'success', text: '已留档到桌面：这次填写的结果记在所选申请下。' };
+    const named = describeApplicationName(application);
+    return {
+      tone: 'success',
+      text: named ? `已留档到桌面：这次填写的结果记在「${named}」下。` : '已留档到桌面：这次填写的结果记在所选申请下。'
+    };
   }
 
   if (status === 'recorded') {
+    // A waiting record is not an archived one (#178): the sentence says both halves.
     if (mode === 'incompatible') {
       return {
         tone: 'pending',
-        text: '已记为待同步（尚未选择申请）。桌面程序的协议版本和插件对不上，升级之后才能留档。'
+        text: `${FILL_ARCHIVE_PENDING_BIND}桌面程序的协议版本和插件对不上，升级之后才能留档。`
       };
     }
     return {
       tone: 'pending',
-      text: '已记为待同步（尚未选择申请）。桌面程序可用之后，在「待同步」里选择这次填写属于哪条申请。'
+      text: `${FILL_ARCHIVE_PENDING_BIND}可以在「待同步」里选择这次填写属于哪条申请。`
     };
   }
 
@@ -342,6 +372,84 @@ function describeFillRecordStatus(result) {
 const FILL_REFUSALS = {
   invalid_payload: '桌面上找不到所选的申请，这次没有留档。请在「待同步」里重新选择申请。'
 };
+
+// --- #178: choosing the application for a fill in the native side panel ---------------
+//
+// Every question and answer of the side panel's archive card. Waiting ("待同步") and
+// archived ("已留档到桌面") stay two different sentences; nothing here is shown before the
+// user has chosen, and nothing claims the desktop has the record.
+
+export const FILL_ARCHIVE_QUERYING = '正在查找对应的投递记录……';
+export const FILL_ARCHIVE_CHOOSE = '这次填写属于哪条申请？';
+export const FILL_ARCHIVE_EMPTY = '桌面里还没有这家公司的投递记录。';
+export const FILL_ARCHIVE_PENDING_BIND = '已记入待同步，尚未选择申请。现在还没有留档到桌面。';
+export const FILL_ARCHIVE_UNKNOWN = '没能确认留档结果，请到「待同步」或桌面端核对后再操作。';
+export const FILL_ARCHIVE_SAVING = '正在留档到桌面……';
+export const FILL_ARCHIVE_QUEUEING = '正在记入待同步……';
+
+/** "公司 · 岗位" of the application a fill was filed under; empty when there is none. */
+export function describeApplicationName(application) {
+  const company = typeof application?.company === 'string' ? application.company.trim() : '';
+  const title = typeof application?.title === 'string' ? application.title.trim() : '';
+  return [company, title].filter(Boolean).join(' · ');
+}
+
+export function describeFillArchiveEmpty() {
+  return {
+    tone: 'info',
+    text: FILL_ARCHIVE_EMPTY,
+    hint: '可以先「保存岗位到桌面端」，保存好之后点「重新查找」选择申请；也可以稍后在待同步里选择。插件不会自动新建申请，也不会记到相似的岗位下。'
+  };
+}
+
+const PENDING_BIND_OFFER = '可以先记入待同步，稍后在「待同步」里选择申请。现在还没有留档到桌面。';
+
+/**
+ * Why the side panel cannot list applications for this fill. `canQueue` says whether a
+ * waiting record may be kept at all: only a profile that reached a paired desktop keeps one
+ * (link/fillrecords.mjs `mayRecord`), so a missing or unpaired desktop is told so instead.
+ */
+export function describeFillArchiveBlocked(reason, { extensionId } = {}) {
+  if (reason === 'unrecognized') {
+    return { tone: 'warn', canQueue: true, text: '当前网页看不出是哪家公司，没法查找对应的申请。', hint: PENDING_BIND_OFFER };
+  }
+  if (reason === 'incompatible') {
+    return {
+      tone: 'warn', canQueue: true,
+      text: '桌面程序的协议版本和插件对不上，没法查找对应的申请，升级之后才能留档。',
+      hint: PENDING_BIND_OFFER
+    };
+  }
+  if (reason === 'not_installed') {
+    return { tone: 'info', canQueue: false, text: '没有找到桌面程序，这次没有留档。装好之后再回来；填表功能不受影响。' };
+  }
+  if (reason === 'not_paired') {
+    return {
+      tone: 'info', canQueue: false, extensionId,
+      text: '桌面程序在运行，但还没有配对这个插件，这次没有留档。到桌面程序的设置里粘贴下面的扩展 ID。',
+      hint: PAIRING_HINT
+    };
+  }
+  if (reason === 'never_paired') {
+    return {
+      tone: 'info', canQueue: false, extensionId,
+      text: '还没有和桌面程序配对过，这次没有留档。打开桌面程序，在设置里粘贴下面的扩展 ID。',
+      hint: PAIRING_HINT
+    };
+  }
+  return { tone: 'warn', canQueue: true, text: '桌面暂时连不上，没法查找对应的申请。', hint: PENDING_BIND_OFFER };
+}
+
+/**
+ * The snapshot line under "已留档到桌面". `entry` is the snapshot's queue entry, or null once
+ * it has left the queue; `seen` says whether it was ever seen there, so a list read before
+ * the upload was queued is never mistaken for a finished upload.
+ */
+export function describeFillSnapshotProgress(entry, { seen = false } = {}) {
+  if (entry) return describeSnapshotUpload(entry);
+  if (seen) return { text: '简历快照已上传到桌面。', retry: false };
+  return { text: '简历快照正在后台上传，传完之前本机会保留一份。', retry: false };
+}
 
 /**
  * One queued snapshot upload in the pending list. A lost copy is never offered as "retry":
@@ -391,4 +499,47 @@ export function describeSnapshotReconcile(status) {
     text: `${SNAPSHOT_RECONCILE[status] ?? '桌面换过档案库，这份简历快照等你决定。'}可以把本机保留的原始快照重新上传到当前档案库，或者丢弃它。`,
     choices: ['resave', 'discard']
   };
+}
+
+// --- #178: the side panel's pending list ------------------------------------------------
+//
+// The same wording the page overlay's pending list uses, kept here so the side panel does not
+// grow a third copy of it. A queue state is never "saved": everything listed is still waiting.
+
+const QUEUE_FAILURES = {
+  unavailable: '桌面暂时不可用',
+  invalid_payload: '桌面看不懂这条内容',
+  restore_epoch_mismatch: '桌面换过档案库',
+  previously_purged: '已在桌面永久删除',
+  conflict: '与桌面已有记录冲突'
+};
+
+export function describeQueueFailure(code) {
+  return QUEUE_FAILURES[code] ?? '原因未知';
+}
+
+/** One bound message's state, in the pending list. `formatTime` turns an ISO time into a clock. */
+export function describeQueueEntryState(entry, { formatTime = null } = {}) {
+  if (entry?.status === 'paused') return '桌面换过档案库，已暂停';
+  if (entry?.status === 'needs_user') return '桌面换过档案库，等你决定';
+  if (entry?.status === 'failed') return `已停下，需要处理（${describeQueueFailure(entry.lastError)}）`;
+  if (entry?.status === 'stalled') return `重试多次仍未成功，等你决定（${describeQueueFailure(entry.lastError)}）`;
+  const at = entry?.nextAttemptAt && formatTime ? formatTime(entry.nextAttemptAt) : '';
+  const next = at ? `，下次重试 ${at}` : '';
+  return `待同步（已尝试 ${entry?.attempts || 0} 次${next}）`;
+}
+
+export function describeQueueEntryLabel(entry) {
+  if (entry?.messageType === 'fill.submit') return `填写留档 · ${entry.payload?.templateName || ''}`;
+  if (entry?.messageType === 'submit.confirm') return '确认已投递';
+  if (entry?.messageType === 'snapshot.upload') return `简历快照 · ${entry.payload?.templateName || ''}`;
+  return `${entry?.payload?.company || ''} · ${entry?.payload?.title || ''}`;
+}
+
+/** What a retried or resolved entry's answer means, in the words of its own kind. */
+export function describeQueueOutcome(entry, result) {
+  if (entry?.messageType === 'fill.submit') return describeFillRecordResult(result);
+  if (entry?.messageType === 'snapshot.upload') return describeSnapshotResolveResult(result);
+  if (entry?.messageType === 'submit.confirm') return describeConfirmResult(result);
+  return describeBindResult(result);
 }

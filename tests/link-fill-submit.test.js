@@ -293,3 +293,38 @@ test('a record already bound cannot be deleted from a sidebar drawn before the b
   assert.equal(storage.data.desktopFillRecords.length, 1);
   assert.equal(storage.data.desktopOutbox.filter(entry => entry.messageType === 'fill.submit').length, 1);
 });
+
+// --- #178: one finished fill, one record -----------------------------------------------
+
+const FILL_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+test('a record takes the id the page minted for the fill, and a second request for it adds nothing', async () => {
+  const { router, storage, writes } = await harness();
+  const first = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID });
+  assert.equal(first.status, 'recorded');
+  assert.equal(first.record.recordId, FILL_ID);
+  const again = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION });
+  assert.equal(again.status, 'duplicate');
+  assert.equal(again.record.recordId, FILL_ID);
+  assert.equal(storage.data.desktopFillRecords.length, 1);
+  assert.equal(writes('fill.submit').length, 0, 'a repeated request never binds on its own');
+});
+
+test('two requests for the same fill racing each other still make one record and one fill.submit', async () => {
+  const { router, storage, writes } = await harness({ desktop: onlineDesktop });
+  const results = await Promise.all([
+    router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION }),
+    router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION })
+  ]);
+  assert.deepEqual(results.map(result => result.status).sort(), ['duplicate', 'saved']);
+  assert.equal(writes('fill.submit').length, 1);
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+});
+
+test('an id that is not a UUID is not trusted: the record gets its own', async () => {
+  const { router } = await harness();
+  const result = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: '../../etc' });
+  assert.equal(result.status, 'recorded');
+  assert.match(result.record.recordId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(result.record.recordId, '../../etc');
+});

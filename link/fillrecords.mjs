@@ -110,12 +110,24 @@ function jobHint(job) {
  * messageId, no epoch. It becomes a `fill.submit` only once the user has picked the
  * application, against a desktop that answered.
  */
+// The id the page minted when it offered this fill (#178). Anything else is replaced.
+const RECORD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isRecordId(value) {
+  return typeof value === 'string' && RECORD_ID_PATTERN.test(value);
+}
+
 export function createFillRecords({ store, uuid, now }) {
-  async function create({ raw, mode, snapshot = null }) {
+  /**
+   * `recordId` is the id of this one finished fill, minted by the page when it offered it.
+   * A second create under the same id — a double click, a repeated message — is a duplicate
+   * and adds nothing: one fill is one record, and so at most one `fill.submit`.
+   */
+  async function create({ raw, mode, snapshot = null, recordId = null }) {
     if (!MAY_RECORD.has(mode)) return { status: 'not_recorded', reason: mode };
 
     const record = {
-      recordId: uuid(),
+      recordId: isRecordId(recordId) ? recordId : uuid(),
       clientInstanceId: await store.clientInstanceId(),
       fill: buildFillPayload(raw),
       job: jobHint(raw?.job),
@@ -130,6 +142,11 @@ export function createFillRecords({ store, uuid, now }) {
 
     let outcome;
     await store.updateFillRecords(list => {
+      const existing = list.find(item => item.recordId === record.recordId);
+      if (existing) {
+        outcome = { status: 'duplicate', record: existing };
+        return list;
+      }
       if (list.length >= MAX_FILL_RECORDS) {
         outcome = { status: 'rejected', reason: 'queue_full' };
         return list;

@@ -1,5 +1,5 @@
 import { DESKTOP_MESSAGE_TYPES, MSG } from './messages.mjs';
-import { mayRecord } from './fillrecords.mjs';
+import { isRecordId, mayRecord } from './fillrecords.mjs';
 import { SNAPSHOT_UPLOAD } from './uploads.mjs';
 import { MAX_OUTBOX } from './limits.mjs';
 import { templatesToCsv } from './legacy.mjs';
@@ -143,6 +143,12 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
     }
 
     if (type === MSG.recordFill) {
+      // The same finished fill asked again (a repeated message, a second click that raced the
+      // first): nothing is staged and nothing is sent a second time (#178).
+      if (isRecordId(message.recordId)) {
+        const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
+        if (existing) return { status: 'duplicate', record: existing };
+      }
       const probe = await session.probe();
       // Staged before the record exists, so a record never points at bytes that are not there.
       // Nothing is staged for a profile that may not keep a record at all.
@@ -153,7 +159,7 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
         snapshot = staged.snapshot ?? null;
         snapshotIssue = staged.issue ?? null;
       }
-      const created = await fillRecords.create({ raw: message.raw, mode: probe.mode, snapshot });
+      const created = await fillRecords.create({ raw: message.raw, mode: probe.mode, snapshot, recordId: message.recordId });
       if (created.status !== 'recorded') {
         if (snapshot) await uploads.discard(snapshot.snapshotId);
         return { ...created, mode: probe.mode };
