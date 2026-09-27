@@ -796,3 +796,21 @@ test('the README no longer says every save and confirmation waits in the sync qu
   assert.match(readme, /没有回包（结果未知）：让你到桌面或待同步列表核对，不声称已保存、已排队或已确认/);
   assert.doesNotMatch(readme, /「更多工具」里的「确认已投递」/);
 });
+
+test('no candidate → "保存岗位到桌面端" opens the save form with what the user corrected, not a fresh page read', async () => {
+  const panel = await openAndQuery({ extraction: MISREAD, desktop: desktopWith(ok()) }, { company: '金发科技' });
+  assert.equal(resultText(panel), '桌面里还没有这家公司的投递记录。');
+  const aiBefore = panel.page.ai.sent.length;
+  await panel.click('submit-confirm-save');
+  // The page still says "公安"; the form keeps the user's "金发科技" and does not ask the AI again.
+  assert.equal(panel.form.hidden, false);
+  assert.equal(panel.company.value, '金发科技');
+  assert.equal(panel.title.value, '研发工程师');
+  assert.equal(panel.url.value, 'https://jobs.example.com/456');
+  assert.equal(panel.page.ai.sent.length, aiBefore);
+  assert.equal(panel.saves().length, 0, 'still nothing written before 确定保存');
+  await panel.submit();
+  assert.equal(panel.saves().length, 1);
+  assert.equal(panel.saves()[0].fields.company, '金发科技');
+  assert.equal(panel.saves()[0].fields.dedupeUrl, 'https://jobs.example.com/456', 'URLs still come from the page draft');
+});

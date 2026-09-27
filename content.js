@@ -4345,7 +4345,9 @@
     }
     const token = panelSubmit.token;
     const pageUrl = panelSubmit.pageUrl;
-    touchPanelSubmit({ phase: "querying", error: "", fields: { company, title, sourceUrl } });
+    // Only company/title change; the draft's own location and redacted URLs stay, so a later
+    // "保存岗位到桌面端" can start from exactly what the user reviewed here.
+    touchPanelSubmit({ phase: "querying", error: "", fields: { ...panelSubmit.fields, company, title, sourceUrl } });
     const asked = { company, title, sourceUrl };
     let answer;
     try {
@@ -4518,10 +4520,25 @@
     if (panelSubmit.phase !== "empty") {
       return { ok: false, error: "现在不能保存岗位。", jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
     }
+    // The save form opens with what the user already reviewed and corrected here ("公安" →
+    // "金发科技"), not with a fresh read of the page: re-reading would bring the wrong
+    // company back (or ask the AI again), and the user would have to fix it a second time.
+    const reviewed = { ...emptyJobFields(), ...panelSubmit.fields };
+    const pageUrl = panelSubmit.pageUrl;
     panelSubmit = idlePanelSubmit(panelSubmit);
     panelSubmit.phase = "cancelled";
-    const jobSave = await startPanelJobDraft();
-    return { ok: true, jobSave, submitConfirm: panelSubmitSnapshot() };
+    if (panelJob.draftId && panelJob.phase !== "idle" && panelJob.phase !== "result") {
+      return { ok: true, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
+    }
+    let note = "请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。";
+    try { note = (await loadDesktopModules()).copy.describeReviewSave(); } catch {}
+    if (location.href !== pageUrl) {
+      return { ok: false, error: SUBMIT_STALE, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
+    }
+    panelJob = idlePanelJob(panelJob);
+    touchPanelJob({ draftId: newRequestId(), pageUrl });
+    openPanelReview(reviewed, note);
+    return { ok: true, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
   }
 
   function setDesktopStatus(copy) {

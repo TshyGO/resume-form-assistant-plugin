@@ -751,3 +751,22 @@ test('a possible duplicate shows the stage by its Chinese name, not the desktop 
   assert.match(html, /星河科技 · 后端开发工程师（已投递）/);
   assert.doesNotMatch(html, /saved|submitted/);
 });
+
+// Review follow-up: a status poll that left while the save form was open, and answers only
+// after the user cancelled, must not bring the cancelled form back. The panel drops it because
+// the cancel click moved `jobOwner` on; this pins that down for the cancel direction.
+test('a status poll that left before "取消" cannot reopen the cancelled save form', async () => {
+  const panel = await openPanel();
+  await panel.click('job-save-button');
+  assert.equal(panel.form.hidden, false);
+  const release = panel.holdNextStatus(7);
+  const polling = panel.poll();
+  await settle();
+  await panel.click('job-save-cancel');
+  assert.equal(panel.form.hidden, true);
+  release();
+  await polling;
+  await settle();
+  assert.equal(panel.form.hidden, true, 'the late snapshot of the old draft is not drawn');
+  assert.equal(panel.button.hidden, false);
+});
