@@ -992,6 +992,54 @@ mod tests {
     }
 
     #[test]
+    fn a_recycled_application_is_never_offered_as_a_candidate() {
+        // §172/§175: "确认已投递" and the job-save duplicate check both read this list. An
+        // application the user recycled (soft-deleted) must not come back as something to
+        // confirm submission against or to treat as an existing duplicate — from the user's
+        // side it is gone, and offering it anyway silently updates a row they can no longer
+        // see in the default (active) applications list.
+        let (_dir, store) = store();
+        let identity = store.identity();
+        let result_id = apply(
+            &job(
+                "22222222-2222-4222-8222-222222222222",
+                &identity,
+                "Engineer",
+            ),
+            &store,
+        )
+        .unwrap()
+        .result_id
+        .unwrap();
+
+        let before = store
+            .query_candidates("Synthetic Ltd", "Engineer", Some(JOB_URL))
+            .unwrap();
+        assert_eq!(before.exact.len(), 1);
+
+        store
+            .set_recycle_state(&result_id, archive_store::RecycleState::Recycled)
+            .unwrap();
+
+        let after = store
+            .query_candidates("Synthetic Ltd", "Engineer", Some(JOB_URL))
+            .unwrap();
+        assert!(after.exact.is_empty(), "a recycled application is not an exact candidate");
+        assert!(
+            after.same_company.is_empty(),
+            "a recycled application is not offered under 'same company' either"
+        );
+
+        store
+            .set_recycle_state(&result_id, archive_store::RecycleState::Active)
+            .unwrap();
+        let restored = store
+            .query_candidates("Synthetic Ltd", "Engineer", Some(JOB_URL))
+            .unwrap();
+        assert_eq!(restored.exact.len(), 1, "restoring it makes it a candidate again");
+    }
+
+    #[test]
     fn the_same_message_sent_twice_saves_one_application() {
         // The plugin retries when an answer is lost. A second application for the same
         // message would be a duplicate the user has to clean up by hand.
