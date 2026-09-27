@@ -733,3 +733,21 @@ test('an unknown bind or save is worded the same by the page overlay and the sid
   await page.poll();
   assert.equal(page.get('job-save-result-text').textContent, fixed.text, 'the side panel says exactly the same sentence');
 });
+
+// The desktop sends an application's stage as its code ("saved"). The duplicate-job list used
+// to print that code verbatim ("（saved）") while "确认已投递" showed "（已保存）" for the same
+// application; both lists now use the one Chinese label.
+test('a possible duplicate shows the stage by its Chinese name, not the desktop code', async () => {
+  const exact = [
+    { applicationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', company: '星河科技', title: '后端开发工程师', stage: 'saved' },
+    { applicationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', company: '星河科技', title: '后端开发工程师', stage: 'submitted' }
+  ];
+  const panel = await openPanel({ desktop: message => message.type === 'DESKTOP_SAVE_JOB'
+    ? { status: 'needs_choice', intent: { intentId: 'intent-1' }, exact } : {} });
+  await panel.click('job-save-button');
+  await panel.submit();
+  const html = panel.get('job-save-candidates').innerHTML;
+  assert.match(html, /星河科技 · 后端开发工程师（已保存）/);
+  assert.match(html, /星河科技 · 后端开发工程师（已投递）/);
+  assert.doesNotMatch(html, /saved|submitted/);
+});

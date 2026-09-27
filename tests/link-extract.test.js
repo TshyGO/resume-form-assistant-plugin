@@ -370,14 +370,61 @@ test('interactive controls, generic organisation words and company counts never 
 test('a short name with no organisation shape is only a candidate for the AI, never a settled company', async () => {
   const { extractJobFields } = await load();
   const { nextSaveStep } = await import('../link/save-flow.mjs');
-  const fields = extractJobFields(beisenPage('公安'), 'https://kingfa.zhiye.com/form');
+  // "星河": a plausible short name, but no organisation shape. ("公安", the example this test
+  // used to carry, is now page noise outright — see the test below.)
+  const fields = extractJobFields(beisenPage('星河'), 'https://kingfa.zhiye.com/form');
   assert.equal(fields.confidence, 'uncertain');
   assert.equal(fields.reliable, false);
   assert.ok(fields.assistReasons.includes('company_weak_evidence'));
   assert.equal(fields.sources.company.reliable, false);
   // It is shown to the AI as a fragment, and the flow asks the AI instead of committing.
-  assert.ok(fields.fragments.some(fragment => fragment.text === '公安'));
+  assert.ok(fields.fragments.some(fragment => fragment.text === '星河'));
   assert.equal(nextSaveStep(fields).action, 'assist');
+});
+
+// #172 补充 lists "公安" and "招聘" among the page words that must never be a company or a
+// job. Before, "公安" from a page selector was only weak, but the same word in a JobPosting
+// went straight to the strong bucket, and a bare "招聘" title was accepted on either path —
+// either could make the local read "reliable" and skip the AI.
+test('"公安" and a bare "招聘" are page noise on every path, so they never let the local read skip the AI', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+
+  const selector = extractJobFields(beisenPage('公安'), 'https://kingfa.zhiye.com/form');
+  assert.equal(selector.company, '');
+  assert.notEqual(selector.confidence, 'reliable');
+  assert.equal(selector.fragments.some(fragment => fragment.text === '公安'), false, 'not even sent to the AI');
+
+  const posting = extractJobFields(fakeDoc({
+    jsonLd: [{ '@type': 'JobPosting', title: '研发工程师', hiringOrganization: { name: '公安' } }]
+  }), 'https://jobs.example.com/a');
+  assert.equal(posting.company, '');
+  assert.equal(posting.reliable, false);
+  assert.notEqual(nextSaveStep(posting).action, 'commit');
+
+  const bareTitle = extractJobFields(fakeDoc({
+    jsonLd: [{ '@type': 'JobPosting', title: '招聘', hiringOrganization: { name: '星河科技' } }]
+  }), 'https://jobs.example.com/a');
+  assert.equal(bareTitle.title, '');
+  assert.equal(bareTitle.reliable, false);
+  assert.notEqual(nextSaveStep(bareTitle).action, 'commit');
+
+  const applyTitle = extractJobFields(richDoc({
+    title: '招聘',
+    elements: [
+      element({ className: 'company-name', text: '金发科技股份有限公司' }),
+      element({ tag: 'span', text: '你正在投递职位：招聘' })
+    ]
+  }), 'https://kingfa.zhiye.com/form');
+  assert.equal(applyTitle.title, '');
+  assert.equal(applyTitle.reliable, false);
+
+  // Real names that merely contain the words still read normally.
+  const bureau = extractJobFields(fakeDoc({
+    jsonLd: [{ '@type': 'JobPosting', title: '招聘专员', hiringOrganization: { name: '上海市公安局' } }]
+  }), 'https://jobs.example.com/a');
+  assert.equal(bureau.company, '上海市公安局');
+  assert.equal(bureau.title, '招聘专员');
 });
 
 test('a company that reads like a job, or a job that reads like a company, is not reliable', async () => {

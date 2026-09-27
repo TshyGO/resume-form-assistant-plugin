@@ -3882,7 +3882,7 @@
       assist: job.assist ? { count: job.assist.lines.length, text: job.assist.text, lines: [...job.assist.lines] } : null,
       candidates: job.candidates.map(candidate => ({
         applicationId: candidate.applicationId,
-        label: `${candidate.company} · ${candidate.title}${candidate.stage ? `（${candidate.stage}）` : ""}`
+        label: candidate.label || `${candidate.company} · ${candidate.title}`
       })),
       result: job.result ? { ...job.result } : null,
       discarded: job.discarded
@@ -4039,7 +4039,10 @@
       } else {
         const { copy } = await loadDesktopModules();
         if (result?.status === "needs_choice") {
-        touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates: result.exact || [], result: null });
+        // The desktop sends its stage code ("saved"); the label uses the same Chinese name
+        // "确认已投递" shows, so the two lists never read differently for one application.
+        const candidates = (result.exact || []).map(candidate => ({ ...candidate, label: copy.describeApplicationChoice(candidate) }));
+        touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates, result: null });
         } else if (saveResultClosesForm(result) || result?.status === "not_queued") {
           // Written, queued, or a clear "no desktop / not paired" answer the user has to act on.
           touchPanelJob({ phase: "result", result: describeCommit(copy, result) });
