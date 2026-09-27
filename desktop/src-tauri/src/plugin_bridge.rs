@@ -1037,6 +1037,16 @@ mod tests {
             .query_candidates("Synthetic Ltd", "Engineer", Some(JOB_URL))
             .unwrap();
         assert_eq!(restored.exact.len(), 1, "restoring it makes it a candidate again");
+
+        // The other boundary: a permanently purged application (`RecycleState` has no
+        // fourth state the query could still be quietly including) is excluded exactly
+        // like before this change — `= 'active'` is at least as strict as `!= 'purged'`.
+        store.purge_application(&result_id).unwrap();
+        let purged = store
+            .query_candidates("Synthetic Ltd", "Engineer", Some(JOB_URL))
+            .unwrap();
+        assert!(purged.exact.is_empty(), "a purged application is still never a candidate");
+        assert!(purged.same_company.is_empty());
     }
 
     #[test]
