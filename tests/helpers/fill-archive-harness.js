@@ -69,7 +69,7 @@ function reply(message, payload, resultId) {
 
 /**
  * A desktop with applications. `mode`: "online", "closed" (paired before, not answering),
- * "not_paired". `gate`, when set, holds candidate lookups until it resolves.
+ * "not_paired", "incompatible" (answers the handshake with protocol versions the plugin lacks). `gate`, when set, holds candidate lookups until it resolves.
  */
 function createDesktop(applications = []) {
   const desktop = {
@@ -81,6 +81,10 @@ function createDesktop(applications = []) {
     gate: null,
     async answer(message) {
       if (desktop.mode === "closed") return { lastError: "Error when communicating with the native messaging host." };
+      if (desktop.mode === "incompatible" && message.messageType === "handshake") {
+        // A desktop that speaks only a protocol this plugin does not.
+        return reply(message, { appVersion: "9.0.0", minProtocolVersion: 90, maxProtocolVersion: 99, archiveId: ARCHIVE, restoreEpoch: EPOCH, capabilities: ["handshake"] });
+      }
       if (desktop.mode === "not_paired") {
         return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: "identity_not_allowed", retryable: false, message: "not paired" }, payload: {} } };
       }

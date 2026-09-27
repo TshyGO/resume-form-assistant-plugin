@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createStack, settle, until, TEMPLATE } = require("./helpers/fill-archive-harness.js");
+const { createStack, settle, until, TEMPLATE, EXTENSION_ID } = require("./helpers/fill-archive-harness.js");
 const Queue = require("../sidepanel-queue.js");
 
 const APP_A = "11111111-1111-4111-8111-111111111111";
@@ -244,4 +244,22 @@ test("what is typed into the id box survives the list being redrawn", async () =
   await until(() => panel.queue().html !== before || /half-typed-id/.test(panel.queue().html), { what: "the redraw" });
   await settle(6);
   assert.match(panel.queue().html, /class="queue-id"[^>]*value="half-typed-id"/);
+});
+
+test("not paired: the list row shows the extension id its message asks for, with a copy button", async () => {
+  const { panel, desktop } = await waitingFill();
+  desktop.mode = "not_paired";
+  await panel.toggleQueue();
+  await until(() => panel.queue().rows.length === 1, { what: "the row" });
+  const key = panel.queue().rows[0].key;
+  await panel.clickQueue(key, "choose-fill");
+  await until(() => /还没有配对这个插件/.test(panel.queue().html), { what: "the unpaired answer" });
+  const html = panel.queue().html;
+  assert.match(html, /粘贴下面的扩展 ID/);
+  // "下面的扩展 ID" is really below it, as on the fill card.
+  assert.match(html, new RegExp(`<code class="queue-extension-id">${EXTENSION_ID}</code>`));
+  const row = panel.queue().rows.find((item) => item.key === key);
+  assert.ok(row.buttons.some((item) => item.action === "copy-id" && item.label === "复制扩展 ID"));
+  await panel.clickQueue(key, "copy-id");
+  assert.ok(panel.toasts.some((text) => text.startsWith("扩展 ID 已复制")));
 });

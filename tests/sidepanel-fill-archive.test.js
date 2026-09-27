@@ -449,3 +449,31 @@ test("a snapshot dropped in another window is never reported here as uploaded", 
   await panel.waitCard((card) => /没有收到上传完成的确认/.test(card.snapshotLine), "the neutral line");
   assert.doesNotMatch(panel.card().snapshotLine, /已上传/);
 });
+
+test("a desktop with no shared protocol version: the fixed wording, a waiting record on request, and nothing sent", async () => {
+  const { panel, desktop, storage } = await offered({ applications: one, mode: "incompatible" });
+  panel.clickArchive("start");
+  await panel.waitCard(shows(/协议版本和插件对不上/), "the incompatible answer");
+  const card = panel.card();
+  assert.equal(card.text, "桌面程序的协议版本和插件对不上，没法查找对应的申请，升级之后才能留档。");
+  assert.match(card.hint, /现在还没有留档到桌面/);
+  assert.deepEqual(card.actions.map((item) => item.label), ["记入待同步，稍后选择", "重新查找", "取消留档"]);
+  assert.equal(desktop.lookups, 0, "nothing is looked up on a desktop that cannot be spoken to");
+  panel.clickArchive("later");
+  await panel.waitCard(shows(PENDING_BIND), "the pending answer");
+  assert.equal(records(storage).length, 1);
+  assert.equal(desktop.events.length, 0, "no fill.submit to an incompatible desktop");
+});
+
+test("two requests for one fill arriving together stage its snapshot once", async () => {
+  const { page, worker, kv, desktop } = await offered({ applications: one });
+  const raw = page.hooks.getPendingFill();
+  const staged = new Set();
+  const put = kv.put.bind(kv);
+  kv.put = async (key, value) => { staged.add(key); return put(key, value); };
+  const request = () => worker.handle({ type: "DESKTOP_RECORD_FILL", raw, recordId: raw.recordId, applicationId: APP_A, snapshotTemplate: TEMPLATE() });
+  const results = await Promise.all([request(), request()]);
+  assert.deepEqual(results.map((result) => result.status).sort(), ["duplicate", "saved"]);
+  assert.equal(staged.size, 1, "the second request waited for the first instead of staging its own copy");
+  assert.equal(desktop.events.length, 1);
+});

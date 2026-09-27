@@ -17,6 +17,9 @@ import { templatesToCsv } from './legacy.mjs';
 export function createRouter({ session, intents, outbox, drain, reconcile, resume = null, ai = null, legacy = null, fillRecords = null, store = null, uploads = null, extensionId }) {
   const aiCalls = new Map();
   const earlyAiCancels = new Set();
+  // Fills being recorded right now, by the id the page minted (#178). A second request for the
+  // same fill waits for the first instead of probing and staging a snapshot of its own.
+  const recordingFills = new Map();
   async function handle(message) {
     const type = message?.type;
     if (!DESKTOP_MESSAGE_TYPES.has(type)) return null;
@@ -145,32 +148,23 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
     }
 
     if (type === MSG.recordFill) {
-      // The same finished fill asked again (a repeated message, a second click that raced the
-      // first): nothing is staged and nothing is sent a second time (#178).
-      if (isRecordId(message.recordId)) {
-        const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
-        if (existing) return { status: 'duplicate', record: existing };
+      if (!isRecordId(message.recordId)) return recordFill(message);
+      const recordId = message.recordId;
+      // Waited for the same fill: whatever record it made is this request's answer too. It must
+      // not start again — a record that was sent in the meantime is gone from the list, and a
+      // fresh look would make a second record and a second fill.submit. Only a first attempt
+      // that made no record at all (not recorded, queue full) lets this one try.
+      while (recordingFills.has(recordId)) {
+        const first = await recordingFills.get(recordId).catch(() => null);
+        if (first?.record) return { status: 'duplicate', record: first.record };
       }
-      const probe = await session.probe();
-      // Staged before the record exists, so a record never points at bytes that are not there.
-      // Nothing is staged for a profile that may not keep a record at all.
-      let snapshot = null;
-      let snapshotIssue = null;
-      if (message.snapshotTemplate && uploads && mayRecord(probe.mode)) {
-        const staged = await uploads.stage(message.snapshotTemplate);
-        snapshot = staged.snapshot ?? null;
-        snapshotIssue = staged.issue ?? null;
+      const work = recordFill(message);
+      recordingFills.set(recordId, work);
+      try {
+        return await work;
+      } finally {
+        if (recordingFills.get(recordId) === work) recordingFills.delete(recordId);
       }
-      const created = await fillRecords.create({ raw: message.raw, mode: probe.mode, snapshot, recordId: message.recordId });
-      if (created.status !== 'recorded') {
-        if (snapshot) await uploads.discard(snapshot.snapshotId);
-        return { ...created, mode: probe.mode };
-      }
-      if (!message.applicationId || probe.mode !== 'ready') {
-        return { ...created, mode: probe.mode, snapshotIssue };
-      }
-      const sent = await bindFill(created.record.recordId, message.applicationId, probe.identity);
-      return { ...sent, record: created.record, mode: probe.mode, snapshotIssue: sent.snapshotIssue ?? snapshotIssue };
     }
 
     if (type === MSG.bindFill) {
@@ -280,6 +274,36 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
       identity
     });
     return { ...bound, mode, intent, extensionId };
+  }
+
+  // One finished fill becomes at most one record (#178). The same fill asked again (a repeated
+  // message, a second click, a request that waited for this one) finds its record first and is a
+  // duplicate: nothing is probed, staged or sent a second time.
+  async function recordFill(message) {
+    if (isRecordId(message.recordId)) {
+      const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
+      if (existing) return { status: 'duplicate', record: existing };
+    }
+    const probe = await session.probe();
+    // Staged before the record exists, so a record never points at bytes that are not there.
+    // Nothing is staged for a profile that may not keep a record at all.
+    let snapshot = null;
+    let snapshotIssue = null;
+    if (message.snapshotTemplate && uploads && mayRecord(probe.mode)) {
+      const staged = await uploads.stage(message.snapshotTemplate);
+      snapshot = staged.snapshot ?? null;
+      snapshotIssue = staged.issue ?? null;
+    }
+    const created = await fillRecords.create({ raw: message.raw, mode: probe.mode, snapshot, recordId: message.recordId });
+    if (created.status !== 'recorded') {
+      if (snapshot) await uploads.discard(snapshot.snapshotId);
+      return { ...created, mode: probe.mode };
+    }
+    if (!message.applicationId || probe.mode !== 'ready') {
+      return { ...created, mode: probe.mode, snapshotIssue };
+    }
+    const sent = await bindFill(created.record.recordId, message.applicationId, probe.identity);
+    return { ...sent, record: created.record, mode: probe.mode, snapshotIssue: sent.snapshotIssue ?? snapshotIssue };
   }
 
   // Claim first, then queue. The claim is what makes a second click a duplicate; a queue

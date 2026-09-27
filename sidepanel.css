@@ -97,6 +97,9 @@ button { cursor: pointer; }
 .queue-message.is-success { background: var(--accent-pale); color: #315e56; }
 .queue-message.is-pending, .queue-message.is-info { background: #fff8e7; color: #5b4820; }
 .queue-message.is-warn { background: #fceeee; color: #b44747; }
+.queue-message > p { margin: 0 !important; }
+.queue-message-hint { margin-top: 4px !important; opacity: .85; }
+.queue-extension-id { display: block; margin: 6px 0 4px; padding: 4px 6px; border-radius: 4px; background: #fff; color: var(--ink); font: 11px ui-monospace, monospace; word-break: break-all; }
 .queue-question { margin-top: 7px; }
 .queue-question > p, .queue-id-label { display: block; margin-bottom: 5px !important; font-size: 11px; font-weight: 600; }
 .queue-id { display: block; width: 100%; min-height: 32px; margin-bottom: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font: 11px ui-monospace, monospace; }

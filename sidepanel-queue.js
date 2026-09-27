@@ -125,7 +125,8 @@
 
   /**
    * `ui` holds each row's open question: { mode: "choices" | "id" | "", candidates, busy,
-   * message: { tone, text }, allowNew, idLabel }. Candidates show "公司 · 岗位（阶段）" only;
+   * message: { tone, text, hint, extensionId }, allowNew, idLabel }. A message that asks for
+   * the extension id (not paired) shows it with its own copy button, like the fill card. Candidates show "公司 · 岗位（阶段）" only;
    * the application id stays in a data attribute and is never printed.
    */
   function renderRows(rows, ui = new Map(), { focusKey = "" } = {}) {
@@ -141,8 +142,9 @@
       } else if (open.mode === "id") {
         question = `<div class="queue-question"><label class="queue-id-label" for="queue-id-${escapeHtml(row.key)}">${escapeHtml(open.idLabel || "请粘贴桌面里的申请 ID")}</label><input class="queue-id" id="queue-id-${escapeHtml(row.key)}" data-key="${escapeHtml(row.key)}" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(open.typed || "")}"${busy ? " disabled" : ""}><div class="queue-choices"><button type="button" data-queue-action="submit-id" data-key="${escapeHtml(row.key)}"${busy ? " disabled" : ""}>确定</button><button type="button" data-queue-action="close-question" data-key="${escapeHtml(row.key)}"${busy ? " disabled" : ""}>取消</button></div></div>`;
       }
-      const message = open.message?.text
-        ? `<p class="queue-message is-${escapeHtml(open.message.tone || "info")}" role="status">${escapeHtml(open.message.text)}</p>` : "";
+      const said = open.message || {};
+      const message = said.text
+        ? `<div class="queue-message is-${escapeHtml(said.tone || "info")}" role="status"><p>${escapeHtml(said.text)}</p>${said.hint ? `<p class="queue-message-hint">${escapeHtml(said.hint)}</p>` : ""}${said.extensionId ? `<code class="queue-extension-id">${escapeHtml(said.extensionId)}</code><button type="button" class="queue-link" data-queue-action="copy-id" data-key="${escapeHtml(row.key)}">复制扩展 ID</button>` : ""}</div>` : "";
       const notes = row.notes.map((note) => `<p class="queue-note">${escapeHtml(note)}</p>`).join("");
       return `<div class="queue-row${row.key === focusKey ? " is-focused" : ""}" data-key="${escapeHtml(row.key)}"${row.recordId ? ` data-record-id="${escapeHtml(row.recordId)}"` : ""}>
         <p class="queue-title">${escapeHtml(row.title)}</p>

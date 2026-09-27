@@ -686,6 +686,11 @@
       if (message?.text && !queueRows.some((item) => item.key === key)) toast(message.text);
     };
 
+    if (action === "copy-id") {
+      toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
+      return;
+    }
+
     if (action === "close-question") { setRowUi(key, { mode: "", candidates: [], message: null, typed: "" }); return; }
 
     if (action === "choose-fill") {
