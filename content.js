@@ -3908,7 +3908,7 @@
       } else if (status === "saved") {
         // Only a persisted reply gets here, and only this names the application.
         phase = "saved";
-        described = copy.describeFillRecordResult(result, { application });
+        described = copy.describeFillRecordResult(result, { application, uploadShownSeparately: true });
       } else if (status === "recorded" || (status === "duplicate" && result.record?.status === "pending_bind")) {
         phase = "pending_bind";
         described = copy.describeFillRecordResult({ ...result, status: "recorded" });

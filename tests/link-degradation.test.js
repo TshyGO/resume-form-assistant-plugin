@@ -306,9 +306,16 @@ test('a blocked lookup keeps a waiting record only where one may be kept, and ne
   assert.match(describeFillArchiveEmpty().hint, /不会自动新建申请/);
 });
 
-test('the snapshot line says uploaded only after the upload was seen waiting and then left', async () => {
+test('the snapshot line says uploaded only on the desktop\'s confirmation, never from the entry leaving', async () => {
   const { describeFillSnapshotProgress } = await load();
   assert.match(describeFillSnapshotProgress({ status: 'pending', chunkCount: 3, chunks: [{ acked: true }] }).text, /上传中（已传 1\/3 块）/);
   assert.match(describeFillSnapshotProgress(null).text, /正在后台上传/);
-  assert.equal(describeFillSnapshotProgress(null, { seen: true }).text, '简历快照已上传到桌面。');
+  // Confirmed: even an upload too quick to have been seen waiting.
+  assert.equal(describeFillSnapshotProgress(null, { confirmed: true }).text, '简历快照已上传到桌面。');
+  // Left the queue with no confirmation (another window dropped it, the worker restarted):
+  // said to have left, not to have been uploaded.
+  const left = describeFillSnapshotProgress(null, { seen: true }).text;
+  assert.doesNotMatch(left, /已上传/);
+  assert.match(left, /没有收到上传完成的确认/);
+  assert.equal(describeFillSnapshotProgress(null, { seen: true, dropped: true }).text, '简历快照已丢弃，没有上传到桌面。');
 });

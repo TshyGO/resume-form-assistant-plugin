@@ -93,8 +93,11 @@ test("choosing sends one record, and the desktop gets exactly one fill.submit", 
   panel.clickArchive("start");
   await panel.waitCard(choosing, "the candidates");
   panel.clickCandidate(APP_A);
-  // A double click: the second is refused by the panel lock and by the page.
-  panel.clickCandidate(APP_A);
+  // The write is on screen at once, instead of a card of greyed-out candidates.
+  assert.equal(panel.card().candidates.length, 0);
+  assert.match(panel.card().text, /正在留档/);
+  // A double click that lands before the redraw: refused by the panel lock and by the page.
+  panel.clickCandidateAgain(APP_A);
   await panel.waitCard(shows(/已留档到桌面/), "the saved answer");
   assert.equal(recordFills(worker).length, 1);
   assert.equal(recordFills(worker)[0].applicationId, APP_A);
@@ -422,4 +425,27 @@ test("去待同步查看 lands on the fill, not on the snapshot bound with it", 
   const fillSubmit = outbox(storage).find((entry) => entry.messageType === "fill.submit");
   assert.equal(focused.key, `message:${fillSubmit.messageId}`);
   assert.match(focused.text, /^填写留档/);
+});
+
+test("a snapshot dropped in another window is never reported here as uploaded", async () => {
+  const stack = await offered({ applications: one });
+  const { panel, desktop, storage } = stack;
+  holdSnapshotUploads(desktop);
+  panel.clickArchive("start");
+  await panel.waitCard(choosing, "the candidates");
+  panel.clickCandidate(APP_A);
+  await panel.waitCard(shows(/已留档到桌面/), "the saved answer");
+  // The card's text no longer repeats the upload; the live line below is the only one.
+  assert.doesNotMatch(panel.card().text, /快照/);
+  const upload = () => outbox(storage).find((entry) => entry.messageType === "snapshot.upload");
+  await until(() => Boolean(upload()), { what: "the queued upload" });
+  await panel.waitCard((card) => /上传/.test(card.snapshotLine) && card.snapshotLine !== "简历快照已上传到桌面。", "the upload line");
+  const other = await stack.openPanel();
+  await other.toggleQueue();
+  await until(() => other.queue().rows.some((row) => row.buttons.some((b) => b.action === "drop-snapshot")), { what: "the snapshot row there" });
+  const row = other.queue().rows.find((item) => item.buttons.some((b) => b.action === "drop-snapshot"));
+  await other.clickQueue(row.key, "drop-snapshot", { snapshotId: row.buttons.find((b) => b.action === "drop-snapshot").snapshotId });
+  await until(() => !upload(), { what: "the upload to go" });
+  await panel.waitCard((card) => /没有收到上传完成的确认/.test(card.snapshotLine), "the neutral line");
+  assert.doesNotMatch(panel.card().snapshotLine, /已上传/);
 });

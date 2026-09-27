@@ -133,7 +133,9 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
         ? (await fillRecords.list()).filter(record => record.status === 'pending_bind')
         : [];
       const expiredSnapshots = uploads ? await uploads.expired() : [];
-      return { intents: await intents.list(), outbox: await outbox.list(), fillRecords: waiting, expiredSnapshots };
+      // Only what the desktop confirmed complete may be shown as uploaded (#178).
+      const uploadedSnapshots = uploads?.confirmed ? uploads.confirmed() : [];
+      return { intents: await intents.list(), outbox: await outbox.list(), fillRecords: waiting, expiredSnapshots, uploadedSnapshots };
     }
 
     if (type === MSG.linkState) {

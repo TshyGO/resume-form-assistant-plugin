@@ -44,6 +44,16 @@ export function applyChunkAck(entry, chunkIndex, desktopCursor) {
  */
 export function createUploads({ store, staging, sendNative, sleep, uuid, now }) {
   const wire = { sendNative, sleep };
+  // Snapshots the desktop confirmed complete while this worker was running (#178). Kept in
+  // memory only: after a restart the side panel simply cannot say "uploaded" — it never
+  // guesses it from an entry having left the queue.
+  const confirmed = [];
+  const CONFIRMED_KEPT = 200;
+  function confirm(snapshotId) {
+    if (!snapshotId || confirmed.includes(snapshotId)) return;
+    confirmed.push(snapshotId);
+    if (confirmed.length > CONFIRMED_KEPT) confirmed.splice(0, confirmed.length - CONFIRMED_KEPT);
+  }
 
   /** Build and stage a snapshot of the template the fill used. */
   async function stage(template) {
@@ -224,6 +234,7 @@ export function createUploads({ store, staging, sendNative, sleep, uuid, now }) 
   // entry: each step can be repeated after a crash without undoing the one before it.
   async function finish(entry) {
     await patch(entry.messageId, item => ({ ...item, status: 'completed', nextAttemptAt: null }));
+    confirm(entry.snapshotId);
     try {
       await staging.remove(entry.snapshotId);
     } catch {
@@ -453,5 +464,5 @@ export function createUploads({ store, staging, sendNative, sleep, uuid, now }) 
     list.map(item => (item.messageId === messageId ? change(item) : item))
   );
 
-  return { stage, prepare, deliver, resave, discard, abandon, release, repair, expired };
+  return { stage, prepare, deliver, resave, discard, abandon, release, repair, expired, confirmed: () => [...confirmed] };
 }

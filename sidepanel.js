@@ -145,6 +145,14 @@
   // it up (never "uploaded"), or saved it again under a new id (follow the new one).
   const snapshotsDropped = new Set();
   const snapshotsReplaced = new Map();
+  // Snapshots the desktop confirmed complete (worker memory, DESKTOP_LIST_QUEUE). Only these
+  // are ever called uploaded.
+  const snapshotsConfirmed = new Set();
+  // The fill on the card, once the pending list has listed it: only then may its leaving the
+  // list (or its waiting row turning into a bound one) close the card.
+  const archivesListed = new Set();
+  // Fills the user acted on in this panel's pending list: that action already said what happened.
+  const archivesTouched = new Set();
   let linkCopyModule = self.ResumeProLinkCopy || null;
 
   const escapeHtml = (value) => String(value ?? "")
@@ -388,8 +396,13 @@
     if (!job) return;
     const copy = linkCopyModule;
     const busy = Boolean(archivePending);
-    // The click is on its way and the page has not answered yet: already show the lookup.
-    const phase = job.phase === "offer" && archivePending === "RESUME_PANEL_ARCHIVE_START" ? "querying" : job.phase;
+    // The click is on its way and the page has not answered yet: already show what it does
+    // (the lookup, or the write), not a card of greyed-out buttons.
+    let phase = job.phase;
+    let savingKind = job.saving;
+    if (job.phase === "offer" && archivePending === "RESUME_PANEL_ARCHIVE_START") phase = "querying";
+    else if (job.phase === "choosing" && archivePending === "RESUME_PANEL_ARCHIVE_CHOOSE") { phase = "saving"; savingKind = "bind"; }
+    else if (["choosing", "empty", "blocked"].includes(job.phase) && archivePending === "RESUME_PANEL_ARCHIVE_LATER") { phase = "saving"; savingKind = "queue"; }
     const result = job.result || null;
     let title = "";
     let text = "";
@@ -427,7 +440,7 @@
           archiveButton("cancel", "取消留档", { disabled: busy })]
         : [...(result?.extensionId ? [archiveButton("copyid", "复制扩展 ID")] : []), archiveButton("cancel", "知道了", { disabled: busy })];
     } else if (phase === "saving") {
-      text = (job.saving === "bind" ? copy?.FILL_ARCHIVE_SAVING : copy?.FILL_ARCHIVE_QUEUEING) || "";
+      text = (savingKind === "bind" ? copy?.FILL_ARCHIVE_SAVING : copy?.FILL_ARCHIVE_QUEUEING) || "";
     } else {
       text = result?.text || "";
       hint = result?.hint || "";
@@ -466,7 +479,9 @@
     let current = snapshotId;
     for (let hops = 0; snapshotsReplaced.has(current) && hops < 8; hops += 1) current = snapshotsReplaced.get(current);
     const entry = (queueReply?.outbox || []).find((item) => item?.messageType === "snapshot.upload" && item.snapshotId === current) || null;
-    return copy.describeFillSnapshotProgress(entry, { seen: snapshotsSeen.has(current), dropped: snapshotsDropped.has(current) }).text;
+    return copy.describeFillSnapshotProgress(entry, {
+      seen: snapshotsSeen.has(current), dropped: snapshotsDropped.has(current), confirmed: snapshotsConfirmed.has(current)
+    }).text;
   }
 
   // One request at a time from the card; the page refuses a second write on its own too.
@@ -583,6 +598,7 @@
     for (const entry of reply.outbox || []) {
       if (entry?.messageType === "snapshot.upload" && entry.snapshotId) snapshotsSeen.add(entry.snapshotId);
     }
+    for (const snapshotId of reply.uploadedSnapshots || []) snapshotsConfirmed.add(snapshotId);
     queueRows = self.ResumeProQueue.buildRows(reply, copy, { formatTime: formatClock });
     // A row that has left the list (sent, deleted) takes its open question with it.
     for (const key of [...queueUi.keys()]) {
@@ -590,6 +606,25 @@
     }
     renderQueue();
     renderFillArchive();
+    followQueue();
+  }
+
+  // The card and the pending list must never disagree. Once the list has shown this fill, the
+  // list is where its state lives: if it is no longer waiting (bound, sent or deleted — here or
+  // in another window) while the card still says "尚未选择申请", or it has left the list while
+  // the card still says it is queued, the card closes. It never guesses what happened instead.
+  function followQueue() {
+    const job = fillArchive;
+    if (!job?.archiveId || archivePending) return;
+    const rows = queueRows.filter((row) => row.recordId === job.archiveId);
+    if (rows.length) archivesListed.add(job.archiveId);
+    if (!archivesListed.has(job.archiveId)) return;
+    const waiting = rows.some((row) => row.kind === "fill");
+    const stale = (job.phase === "pending_bind" && !waiting)
+      || (["queued", "unknown", "failed"].includes(job.phase) && rows.length === 0);
+    if (!stale) return;
+    if (!archivesTouched.has(job.archiveId)) toast("这次填写已经不在「待同步」里了（已发送，或在别处处理过），可以到桌面这条申请的时间线里核对。");
+    archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CANCEL", archiveId: job.archiveId }).catch(() => {});
   }
 
   function renderQueue() {
@@ -641,6 +676,7 @@
     const key = button.dataset.key;
     const row = queueRows.find((item) => item.key === key);
     if (!row || button.disabled || queueUi.get(key)?.busy) return;
+    if (row.recordId) archivesTouched.add(row.recordId);
     const copy = await linkCopy();
     const action = button.dataset.queueAction;
     // The answer stays on the row; a row that left the list (sent, bound) says it in a toast.
@@ -1185,6 +1221,14 @@
     const button = event.target.closest?.("[data-queue-action]");
     if (!button) return;
     queueAction(button).catch(() => toast("操作未完成，请稍后再试。"));
+  });
+  // What is typed into an id box is kept as it is typed: the list is redrawn whenever the
+  // queue changes (a snapshot chunk, another window), and that must not empty the box.
+  elements.queueList.addEventListener("input", (event) => {
+    const key = event.target?.dataset?.key;
+    if (!key || !event.target.classList?.contains("queue-id")) return;
+    const open = queueUi.get(key);
+    if (open) queueUi.set(key, { ...open, typed: String(event.target.value || "") });
   });
   // Every row, quick or grouped, goes through here. The row body is the quick path (the
   // page decides: an empty box gets the field, a filled one asks for an explicit button);

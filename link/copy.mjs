@@ -362,10 +362,12 @@ const SNAPSHOT_ISSUES = {
  * `application` is the candidate the user picked ({ company, title }), when there was one:
  * the success sentence then names it instead of "所选申请".
  */
-export function describeFillRecordResult(result, { application = null } = {}) {
+export function describeFillRecordResult(result, { application = null, uploadShownSeparately = false } = {}) {
   const copy = describeFillRecordStatus(result, application);
   const extra = [];
-  if (result?.status === 'saved' && result.uploadQueued) {
+  // The side panel shows the upload's live state on its own line; saying "正在后台上传" here
+  // too would contradict that line once the upload is done.
+  if (result?.status === 'saved' && result.uploadQueued && !uploadShownSeparately) {
     extra.push('简历快照正在后台上传，传完之前本机会保留一份。');
   }
   if (result?.snapshotIssue && SNAPSHOT_ISSUES[result.snapshotIssue]) {
@@ -511,14 +513,17 @@ export function describeFillArchiveBlocked(reason, { extensionId } = {}) {
 
 /**
  * The snapshot line under "已留档到桌面". `entry` is the snapshot's queue entry, or null once
- * it has left the queue; `seen` says whether it was ever seen there, so a list read before
- * the upload was queued is never mistaken for a finished upload. `dropped` says the user
- * gave it up: leaving the queue that way is not an upload.
+ * it has left the queue. Only `confirmed` — the desktop's complete ACK — says "uploaded";
+ * `dropped` means the user gave it up. An entry that left the queue for any other reason
+ * (another window dropped it, the worker restarted before the answer was read) is said to
+ * have left, never to have been uploaded. `seen` tells that apart from a list read before
+ * the upload was queued at all.
  */
-export function describeFillSnapshotProgress(entry, { seen = false, dropped = false } = {}) {
+export function describeFillSnapshotProgress(entry, { seen = false, dropped = false, confirmed = false } = {}) {
   if (dropped) return { text: '简历快照已丢弃，没有上传到桌面。', retry: false };
+  if (confirmed) return { text: '简历快照已上传到桌面。', retry: false };
   if (entry) return describeSnapshotUpload(entry);
-  if (seen) return { text: '简历快照已上传到桌面。', retry: false };
+  if (seen) return { text: '简历快照已不在上传队列里，没有收到上传完成的确认，可以到桌面这条申请的时间线里核对。', retry: false };
   return { text: '简历快照正在后台上传，传完之前本机会保留一份。', retry: false };
 }
 

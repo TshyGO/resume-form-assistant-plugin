@@ -394,6 +394,10 @@ async function createPanel({ pages, worker, storage }) {
       if (!button) throw new Error(`no candidate ${applicationId}`);
       get("fill-offer-candidates").listeners.click({ target: { closest: (selector) => (selector === "[data-application-id]" ? { dataset: { applicationId }, disabled: button.disabled } : null) } });
     },
+    // A second click on a candidate that lands before the card was redrawn.
+    clickCandidateAgain(applicationId) {
+      get("fill-offer-candidates").listeners.click({ target: { closest: (selector) => (selector === "[data-application-id]" ? { dataset: { applicationId }, disabled: false } : null) } });
+    },
     async switchTab(tabId) {
       state.tabId = tabId;
       state.activated?.();

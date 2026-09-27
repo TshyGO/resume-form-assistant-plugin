@@ -198,3 +198,50 @@ test("without a native side panel the page overlay still archives the same fill,
   assert.equal(worker.handled.filter((message) => message.type === "DESKTOP_RECORD_FILL").length, 0);
   assert.equal(records(storage).length, 0);
 });
+
+// Opens the waiting fill's row and binds it to APP_A from the given panel's list.
+async function bindFromList(panel) {
+  if (!panel.queue().open) await panel.toggleQueue();
+  await until(() => panel.queue().rows.some((row) => row.key.startsWith("fill:")), { what: "the waiting row" });
+  const key = panel.queue().rows.find((row) => row.key.startsWith("fill:")).key;
+  await panel.clickQueue(key, "choose-fill");
+  await until(() => panel.queue().rows.find((row) => row.key === key)?.buttons.some((b) => b.action === "pick"), { what: "the candidates" });
+  await panel.clickQueue(key, "pick", { applicationId: APP_A });
+}
+
+test("the card follows the list: once the fill is bound there, the card no longer says it is waiting", async () => {
+  const { panel, desktop } = await waitingFill();
+  assert.match(panel.card().text, /尚未选择申请/);
+  await bindFromList(panel);
+  await until(() => desktop.events.length === 1, { what: "the event" });
+  await until(() => panel.card().hidden, { what: "the card to close" });
+  // What the user reads is the bind's own answer, not a second message over it.
+  assert.ok(panel.toasts.at(-1).startsWith("已留档到桌面："), panel.toasts.at(-1));
+  assert.ok(!panel.toasts.some((text) => /已经不在「待同步」里了/.test(text)));
+});
+
+test("bound in another window: this window's card closes too, and says only that it left the list", async () => {
+  const stack = await waitingFill();
+  const other = await stack.openPanel();
+  await bindFromList(other);
+  await until(() => stack.desktop.events.length === 1, { what: "the event" });
+  await until(() => stack.panel.card().hidden, { what: "this window's card to close" });
+  assert.ok(stack.panel.toasts.some((text) => /已经不在「待同步」里了/.test(text)));
+  assert.ok(!stack.panel.toasts.some((text) => text.startsWith("已留档到桌面")), "it does not claim what it did not see");
+});
+
+test("what is typed into the id box survives the list being redrawn", async () => {
+  const stack = await waitingFill({ job: { company: "", title: "", sourceUrl: "" } });
+  const { panel } = stack;
+  await panel.toggleQueue();
+  await until(() => panel.queue().rows.length === 1, { what: "the row" });
+  const key = panel.queue().rows[0].key;
+  await panel.clickQueue(key, "choose-fill");
+  panel.get("queue-list").listeners.input({ target: { dataset: { key }, classList: { contains: (name) => name === "queue-id" }, value: "half-typed-id" } });
+  // Any change to the queue (a chunk, another window) redraws the list.
+  const before = panel.queue().html;
+  await stack.storage.set({ desktopSaveIntents: [] });
+  await until(() => panel.queue().html !== before || /half-typed-id/.test(panel.queue().html), { what: "the redraw" });
+  await settle(6);
+  assert.match(panel.queue().html, /class="queue-id"[^>]*value="half-typed-id"/);
+});
