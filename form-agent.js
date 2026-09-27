@@ -95,9 +95,10 @@
       check();
     });
   }
-  // `onProgress` only reports; it cannot change what is clicked. A thrown error carries
-  // `added`, the rows the page really gained, so a stop after a click is never under-reported.
-  async function execute(plan, snapshot, stopped = () => false, onProgress = null) {
+  // `onProgress` only reports; it cannot change what is clicked. `beforeClick` can only add a
+  // check: returning false stops before that click. A thrown error carries `added`, the rows the
+  // page really gained, so a stop after a click is never under-reported.
+  async function execute(plan, snapshot, stopped = () => false, onProgress = null, beforeClick = null) {
     const actions = validatePlan(plan, snapshot.candidates);
     let added = 0;
     const scopes = [];
@@ -112,7 +113,9 @@
           const before = rows(ref.scope).length;
           if (before !== ref.current + i || before >= ref.target) throw new Error("条目数量已变化，已停止。");
           const saved = controls(ref.scope).map(el => ({ el, value: el.value, checked: el.checked }));
-          if (onProgress) onProgress({ id: action.id, domain: ref.domain.id, index: i + 1, count: action.count, added });
+          const step = { id: action.id, domain: ref.domain.id, index: i + 1, count: action.count, added };
+          if (beforeClick && beforeClick(step) !== true) throw new Error("网页分组已变化，已停止。");
+          if (onProgress) onProgress(step);
           ref.button.click();
           try {
             await waitForGrowth(ref, before, stopped);

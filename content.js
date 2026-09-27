@@ -80,7 +80,7 @@
   // #188 辅助新增的状态，只在本页内存里；控制逻辑见 handlePanelRepeat。
   const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
   const REPEAT_STOPPABLE = ["scanning", "planning", "executing", "filling"];
-  const repeat = { phase: "idle", requestId: "", message: "", plan: [], added: 0, progress: null, run: null };
+  const repeat = { phase: "idle", requestId: "", message: "", plan: [], added: 0, run: null };
 
   // The native side panel owns the visible UI. The existing shadow DOM remains
   // mounted as the form-filling controller so its tested AI and site adapters
@@ -1336,7 +1336,6 @@
     if (repeat.run !== run) return false;
     repeat.phase = phase;
     repeat.message = message;
-    repeat.progress = extra.progress ?? null;
     if (extra.plan) repeat.plan = extra.plan;
     if (Number.isInteger(extra.added)) repeat.added = extra.added;
     if (!REPEAT_ACTIVE.includes(phase)) {
@@ -1350,7 +1349,10 @@
   // Everything the side panel may see. Labels come from our fixed domain table, never the page.
   function describeRepeat() {
     const run = repeat.run;
-    if (run && !run.done && repeat.phase === "preview" && repeatStale(run)) invalidateRepeat(repeatStale(run));
+    // A tab switch or address change (an SPA moving to another job fires no page event) ends
+    // any run in flight. Scanning, planning and preview stop here; execution and filling see the
+    // flag before their next step and report the rows they really added.
+    if (run && !run.done && repeatActive() && repeatStale(run)) invalidateRepeat(repeatStale(run));
     const phase = repeat.phase;
     return {
       phase,
@@ -1358,7 +1360,6 @@
       message: repeat.message,
       plan: repeat.plan.map(({ domain, count }) => ({ domain, count })),
       added: repeat.added,
-      progress: repeat.progress ? { ...repeat.progress } : null,
       canConfirm: phase === "preview",
       canCancel: phase === "preview",
       canStop: REPEAT_STOPPABLE.includes(phase)
@@ -1413,9 +1414,15 @@
     return { ok: true, requestId: run.requestId };
   }
 
+  // A run that went stale while waiting ends with its reason instead of staying "in progress".
+  // A user stop has already ended it, and a newer run owns the card.
+  function abandonRepeat(run) {
+    if (!run.done && repeat.run === run) setRepeat(run, "stopped", repeatStale(run) || "已停止，未新增任何条目。");
+  }
+
   async function planRepeat(run) {
     state.currentStore = await StorageService.getState();
-    if (repeatStopped(run)) return;
+    if (repeatStopped(run)) { abandonRepeat(run); return; }
     if (state.desktopMode !== "ready") {
       setRepeat(run, "failed", self.ResumeProResumeData.modeCopy(state.desktopMode).message);
       return;
@@ -1438,12 +1445,11 @@
       setRepeat(run, "failed", "未识别到可安全新增的分组，请先手动新增条目，再一键填写。");
       return;
     }
-    run.candidates = JSON.stringify(run.snapshot.candidates);
     setRepeat(run, "planning", "AI 正在规划需要新增的条目…");
     // Only the local candidate summary goes out: id, domain, label, current, target.
     const reply = await self.ResumeProAIClient.send({ type: "AI_PLAN_REPEAT", requestId: run.requestId, candidates: run.snapshot.candidates });
     // A stop, cancel, tab switch or newer run already answered the user; this reply is late.
-    if (repeatStopped(run)) return;
+    if (repeatStopped(run)) { abandonRepeat(run); return; }
     if (!reply?.success) {
       if (reply?.openView === "settings-ai") {
         state.suggestedView = "settings-ai";
@@ -1481,15 +1487,33 @@
     return "";
   }
 
-  function repeatGroupsChanged(run) {
+  // The page's candidates must be exactly the scanned ones, moved on only by the rows this plan
+  // has added so far (`addedById`). A group that appears, goes, is rebuilt or grows by itself
+  // means the plan the user confirmed no longer describes the page.
+  function repeatGroupsAsExpected(run, addedById) {
     let fresh;
     try {
       fresh = self.ResumeProFormAgent.collect(document, flattenTemplateFields(JSON.parse(run.fingerprint)));
     } catch {
-      return true;
+      return false;
     }
-    return JSON.stringify(fresh.candidates) !== run.candidates
-      || fresh.candidates.some(c => fresh.refs.get(c.id)?.button !== run.snapshot.refs.get(c.id)?.button);
+    const expected = run.snapshot.candidates
+      .map(c => ({ button: run.snapshot.refs.get(c.id)?.button, domain: c.domain, label: c.label, current: c.current + (addedById.get(c.id) || 0), target: c.target }))
+      .filter(c => c.current < c.target);
+    const actual = fresh.candidates
+      .map(c => ({ button: fresh.refs.get(c.id)?.button, domain: c.domain, label: c.label, current: c.current, target: c.target }));
+    return expected.length === actual.length && expected.every((c, i) => c.button === actual[i].button
+      && c.domain === actual[i].domain && c.label === actual[i].label && c.current === actual[i].current && c.target === actual[i].target);
+  }
+
+  // Rows this plan has added before `step`'s click, per candidate.
+  function repeatAddedBefore(run, step) {
+    const added = new Map();
+    for (const action of run.plan) {
+      if (action.id === step.id) { added.set(action.id, step.index - 1); break; }
+      added.set(action.id, action.count);
+    }
+    return added;
   }
 
   async function confirmRepeat(requestId) {
@@ -1506,7 +1530,7 @@
   }
 
   async function executeRepeat(run) {
-    const stale = await recheckRepeat(run) || (repeatGroupsChanged(run) ? "网页分组已变化，计划已失效，请重新预览。" : "");
+    const stale = await recheckRepeat(run) || (repeatGroupsAsExpected(run, new Map()) ? "" : "网页分组已变化，计划已失效，请重新预览。");
     if (stale) {
       setRepeat(run, "stopped", `${stale}${repeatAddedNote(0)}`, { added: 0 });
       return;
@@ -1514,10 +1538,8 @@
     let expanded;
     try {
       expanded = await self.ResumeProFormAgent.execute(run.plan, run.snapshot, () => repeatStopped(run), progress => {
-        setRepeat(run, "executing", `正在新增${repeatLabel(progress.domain)} ${progress.index}/${progress.count}…`, {
-          added: progress.added, progress: { domain: progress.domain, index: progress.index, count: progress.count }
-        });
-      });
+        setRepeat(run, "executing", `正在新增${repeatLabel(progress.domain)} ${progress.index}/${progress.count}…`, { added: progress.added });
+      }, step => repeatGroupsAsExpected(run, repeatAddedBefore(run, step)));
     } catch (error) {
       const added = Number.isInteger(error?.added) ? error.added : repeat.added;
       if (run.stopped || repeatStale(run)) {
@@ -1547,15 +1569,18 @@
       })
       : { outcome: "failed", filledCount: 0, unconfirmedCount: 0, error: "填写控件不可用。" };
     if (repeat.run !== run) return;
+    // Fields may already be written when a stop or failure lands mid-fill: say so, not "空记录".
+    const filled = Number.isInteger(result?.filledCount) ? result.filledCount : 0;
+    const kept = filled > 0 ? `已新增的 ${added} 条记录会保留，其中 ${filled} 项已填写，请在网页中核对。` : repeatAddedNote(added);
     if (run.stopped || repeatStale(run)) {
-      setRepeat(run, "stopped", `${run.invalid || repeatStale(run) || "已停止。"}已停止填写。${repeatAddedNote(added)}`, { added });
+      setRepeat(run, "stopped", `${run.invalid || repeatStale(run) || ""}已停止填写。${kept}`, { added });
     } else if (result?.outcome === "success") {
       setRepeat(run, "completed", `已新增${summary}，并完成新字段填写（${result.filledCount} 项）。请核对网页内容。`, { added });
     } else if (result?.outcome === "partial") {
       setRepeat(run, "completed", `已新增${summary}；新字段已填写 ${result.filledCount} 项${result.unconfirmedCount ? `，${result.unconfirmedCount} 项未确认` : ""}，请核对网页内容。`, { added });
     } else {
       const why = result?.error && result.error !== "busy" ? result.error : "填写没有开始";
-      setRepeat(run, "failed", `已新增${summary}，但新字段没有填写：${why}。${repeatAddedNote(added)}`, { added });
+      setRepeat(run, "failed", `已新增${summary}，但新字段${filled > 0 ? "没有填完" : "没有填写"}：${why}。${kept}`, { added });
     }
   }
 
@@ -1585,10 +1610,11 @@
     if (action === "dismiss") {
       if (repeatActive()) return { ok: false, error: "新增还在进行。" };
       repeat.phase = "idle";
+      repeat.requestId = "";
       repeat.message = "";
       repeat.plan = [];
       repeat.added = 0;
-      repeat.progress = null;
+      repeat.run = null;
       return { ok: true };
     }
     return { ok: false, error: "当前操作不可用。" };

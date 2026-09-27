@@ -304,7 +304,17 @@ function repeatPage({ effect = 'add', onClick = null, plan = () => ({ success: t
       if (onClick) onClick(clicks);
     }
   };
-  const fx = { document: { querySelectorAll: () => [button] } };
+  // Other sections the page may render later; each has its own safe 新增 button.
+  const extra = [];
+  const addSection = (title = '教育经历') => {
+    const own = { isConnected: true, getClientRects: () => [1], parentElement: { closest: () => null }, querySelector: () => inputs[0] };
+    const sectionHeading = { textContent: title, isConnected: true };
+    const section = { isConnected: true, querySelector: () => sectionHeading, contains: (el) => el === other,
+      querySelectorAll: (selector) => selector === 'fieldset' ? [own] : selector.startsWith('button') ? [other] : [] };
+    const other = { ...button, textContent: `新增${title}`, closest: (selector) => selector.startsWith('#') ? null : section, click() {} };
+    extra.push(other);
+  };
+  const fx = { document: { querySelectorAll: () => [button, ...extra] } };
   const fillButton = { disabled: false, textContent: '一键 AI 填写' };
   helpers.setShadowRoot({ querySelector: (selector) => ({ '#resume-pro-ai-fill': fillButton, '.resume-pro': legacy })[selector] || null });
   helpers.setCurrentStore(templateStore());
@@ -322,7 +332,7 @@ function repeatPage({ effect = 'add', onClick = null, plan = () => ({ success: t
     throw new Error('controller did not settle');
   };
   return { ...harness, helpers, location, inputs, rows, sent, heading, button, legacy, submits, ask, status, settle, fillButton,
-    clicks: () => clicks, confirms: () => confirms, addRow,
+    clicks: () => clicks, confirms: () => confirms, addRow, addSection,
     aiCalls: (type) => sent.filter((message) => message.type === type) };
 }
 
@@ -535,6 +545,105 @@ test('stop while filling ends the fill before it writes', async () => {
   assert.equal(after.added, 2);
   assert.match(after.message, /已停止填写。已经新增的 2 条空记录会保留/);
   assert.deepEqual(page.inputs.map((input) => input.value), ['用户已填的第一段', '', ''], 'no new row was written after 停止');
+});
+
+test('an address change while planning ends the run instead of leaving it "in progress"', async () => {
+  const reply = deferred();
+  const page = repeatPage({ plan: () => reply.promise });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('planning'));
+  const { requestId } = await page.status();
+  // An SPA moves to another job: no tab switch, no page event, only the address changes.
+  page.location.href = 'https://jobs.example.test/other-job';
+  const after = await page.status();
+  assert.equal(after.phase, 'stopped');
+  assert.equal(after.message, '网页地址已变化，计划已失效，请重新预览。');
+  assert.equal(after.canStop, false);
+  assert.deepEqual(page.aiCalls('CANCEL_AI_FILL').map((message) => message.requestId), [requestId]);
+  reply.resolve({ success: true, plan: [{ id: 'add-0', count: 2 }] });
+  await tick(); await tick();
+  assert.equal((await page.status()).phase, 'stopped', 'the late plan does not come back as a preview');
+  assert.equal(page.clicks(), 0);
+  assert.equal((await page.ask({ action: 'start' })).ok, true, 'nothing stays busy: a new run can start');
+});
+
+test('a late plan for a run that went stale on its own also ends it with the reason', async () => {
+  const reply = deferred();
+  const page = repeatPage({ plan: () => reply.promise });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('planning'));
+  page.location.href = 'https://jobs.example.test/other-job';
+  // No status poll in between: the AI answer itself finds the run stale.
+  reply.resolve({ success: true, plan: [{ id: 'add-0', count: 2 }] });
+  await tick(); await tick();
+  const repeat = page.helpers.describeRepeat();
+  assert.equal(repeat.phase, 'stopped');
+  assert.equal(repeat.message, '网页地址已变化，计划已失效，请重新预览。');
+  assert.equal(page.clicks(), 0);
+});
+
+test('another group appearing between two clicks stops before the next click', async () => {
+  let page;
+  page = repeatPage({ onClick: (n) => { if (n === 1) page.addSection('教育经历'); } });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('preview'));
+  await page.ask({ action: 'confirm', requestId: (await page.status()).requestId });
+  await page.settle(settled('failed'));
+  const after = await page.status();
+  assert.equal(page.clicks(), 1, 'the second planned click never happens');
+  assert.equal(after.added, 1);
+  assert.equal(after.message, '网页分组已变化，已停止。已经新增的 1 条空记录会保留，请在网页中核对。');
+  assert.equal(page.aiCalls('AI_FILL').length, 0);
+});
+
+test('the rows this plan adds itself do not count as a change', async () => {
+  const page = repeatPage();
+  page.addSection('项目经历');
+  page.helpers.setCurrentStore({ ...templateStore(), templates: [{ ...templateStore().templates[0], groups: [
+    ...templateStore().templates[0].groups,
+    { name: '项目经历', fields: [{ key: '项目名称1', value: '甲' }, { key: '项目名称2', value: '乙' }] }
+  ] }] });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('preview'));
+  const preview = await page.status();
+  assert.deepEqual(preview.plan, [{ domain: 'education', count: 2 }], 'the untouched 项目经历 candidate is not in this plan');
+  await page.ask({ action: 'confirm', requestId: preview.requestId });
+  await page.settle(settled('completed'));
+  assert.equal(page.clicks(), 2);
+});
+
+test('a stop after some fields were written says how many, not "空记录"', async () => {
+  let page;
+  page = repeatPage({ onClick: () => {
+    const input = page.inputs[page.inputs.length - 1];
+    let value = '';
+    Object.defineProperty(input, 'value', { configurable: true, get: () => value, set: (next) => {
+      value = next;
+      if (next) page.helpers.handlePanelRepeat({ action: 'stop', requestId: page.helpers.describeRepeat().requestId });
+    } });
+  } });
+  await page.ask({ action: 'start' });
+  await page.settle(settled('preview'));
+  await page.ask({ action: 'confirm', requestId: (await page.status()).requestId });
+  await page.settle(settled('stopped'));
+  const after = await page.status();
+  assert.equal(after.added, 2);
+  assert.equal(after.message, '已停止填写。已新增的 2 条记录会保留，其中 1 项已填写，请在网页中核对。');
+  assert.deepEqual(page.inputs.map((input) => input.value), ['用户已填的第一段', 'AI-field-1', ''], 'nothing written after 停止');
+});
+
+test('知道了 clears the finished run, its requestId included; the status has no unused fields', async () => {
+  const page = repeatPage();
+  page.helpers.setCurrentStore(templateStore(1));
+  await page.ask({ action: 'start' });
+  await page.settle(settled('failed'));
+  const { requestId } = await page.status();
+  assert.equal((await page.ask({ action: 'dismiss' })).ok, true);
+  const idle = await page.status();
+  assert.equal(idle.phase, 'idle');
+  assert.equal(idle.requestId, '');
+  assert.deepEqual(Object.keys(idle).sort(), ['added', 'canCancel', 'canConfirm', 'canStop', 'message', 'phase', 'plan', 'requestId']);
+  assert.equal((await page.ask({ action: 'stop', requestId })).ok, false);
 });
 
 test('with the native side panel the page\'s old button never reaches window.confirm', async () => {

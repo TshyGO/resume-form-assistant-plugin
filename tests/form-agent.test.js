@@ -161,6 +161,23 @@ test('reports progress before each click; a stop after one click counts that row
   assert.equal(f.rows.length, 2, 'the added row stays');
 });
 
+test('beforeClick can only stop: false before the first click clicks nothing, before the second keeps the first', async () => {
+  const first = fixture();
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(first.document, first.fields), () => false, null, () => false),
+    (error) => error.added === 0 && /分组已变化/.test(error.message));
+  assert.equal(first.clicks(), 0);
+  const second = fixture();
+  const steps = [];
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(second.document, second.fields), () => false, null,
+    (step) => { steps.push(step.index); return step.index === 1; }), (error) => error.added === 1);
+  assert.deepEqual(steps, [1, 2]);
+  assert.equal(second.clicks(), 1);
+  const third = fixture();
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(third.document, third.fields), () => false, null, () => 'yes'),
+    'anything but true stops');
+  assert.equal(third.clicks(), 0);
+});
+
 test('progress is only a report: a successful run is unchanged with or without it', async () => {
   const f = fixture();
   const seen = [];
