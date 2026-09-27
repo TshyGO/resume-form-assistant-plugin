@@ -87,14 +87,22 @@ test("保存时带上读到的版本号和规范化后的档案", async () => {
 
 test("版本冲突时提示刷新，不覆盖", async () => {
   const user = userEvent.setup();
+  let reads = 0;
+  const fresh: ProfileRecordView = {
+    profile: { ...record.profile, values: { ...record.profile.values, name: "服务器新值" } },
+    revision: 4,
+  };
   mount((command) => {
     if (command === "save_profile_cmd") throw { code: "CONFLICT", message: "「我的信息」已在别处改过，请刷新后再保存。" };
-    return record;
+    reads += 1;
+    return reads === 1 ? record : fresh;
   });
-  await screen.findByLabelText("姓名");
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
   await user.click(screen.getByRole("button", { name: "保存我的信息" }));
   expect(await screen.findByText(/已在别处改过/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "重新读取" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "重新读取" }));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "服务器新值"));
 });
 
 test("可以加家庭成员和补充字段", async () => {
@@ -254,6 +262,44 @@ test("自动读取尚未返回时开始编辑，也不会被外部数据覆盖�
   expect(name).toHaveProperty("value", "张三五");
   expect(await screen.findByText(/插件添加了新的补充字段/)).toBeTruthy();
   expect(screen.queryByRole("group", { name: /国籍/ })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "稍后处理" }));
+  const readsBefore = reads;
+  await act(async () => fire(updated.revision));
+  expect(screen.queryByText(/插件添加了新的补充字段/)).toBeNull();
+  expect(reads).toBe(readsBefore);
+});
+
+test("并发外部读取只采用最后发起的一次，不被晚到的旧响应回滚（#177）", async () => {
+  let reads = 0;
+  let finishOlder: ((value: ProfileRecordView) => void) | null = null;
+  let finishNewer: ((value: ProfileRecordView) => void) | null = null;
+  const older: ProfileRecordView = {
+    profile: { ...record.profile, custom: [...record.profile.custom, { key: "旧字段", value: "" }] },
+    revision: 4,
+  };
+  const newer: ProfileRecordView = {
+    profile: { ...record.profile, custom: [...record.profile.custom, { key: "新字段", value: "" }] },
+    revision: 5,
+  };
+  const { fire } = mountWithListen((command) => {
+    if (command !== "get_profile_cmd") throw new Error(`意外调用 ${command}`);
+    reads += 1;
+    if (reads === 1) return record;
+    return new Promise<ProfileRecordView>((resolve) => {
+      if (reads === 2) finishOlder = resolve;
+      else finishNewer = resolve;
+    });
+  });
+  await screen.findByLabelText("姓名");
+  await act(async () => fire(4));
+  await waitFor(() => expect(reads).toBe(2));
+  await act(async () => fire(5));
+  await waitFor(() => expect(reads).toBe(3));
+  await act(async () => finishNewer?.(newer));
+  expect(await screen.findByRole("group", { name: /新字段/ })).toBeTruthy();
+  await act(async () => finishOlder?.(older));
+  expect(screen.getByRole("group", { name: /新字段/ })).toBeTruthy();
+  expect(screen.queryByRole("group", { name: /旧字段/ })).toBeNull();
 });
 
 test("提示带 role=status", async () => {

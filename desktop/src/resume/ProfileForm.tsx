@@ -94,17 +94,26 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const dirtyRef = useRef(false);
   const revisionRef = useRef(0);
   const editVersionRef = useRef(0);
+  const loadSequenceRef = useRef(0);
   const pendingExternalRevisionRef = useRef(0);
   const ignoredExternalRevisionRef = useRef(0);
 
-  const load = useCallback(async (discardLocalChanges = false) => {
+  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0) => {
     if (!invoke) return;
+    const loadSequence = ++loadSequenceRef.current;
     const editVersion = editVersionRef.current;
     try {
       const record = await invoke<ProfileRecordView>("get_profile_cmd");
+      // 多次外部更新可能同时读取。只允许最后发起的读取落地，避免旧响应晚到后
+      // 把 UI 和 revision 回滚到更早的档案。
+      if (loadSequence !== loadSequenceRef.current) return;
       // 自动刷新等待数据库期间，用户可能已经开始输入。此时不能用刚读回的数据覆盖；
       // 改为提示，由用户明确选择是否放弃本地修改。
       if (!discardLocalChanges && editVersionRef.current !== editVersion) {
+        pendingExternalRevisionRef.current = Math.max(
+          pendingExternalRevisionRef.current,
+          externalRevision || record.revision,
+        );
         setExternalChange(true);
         return;
       }
@@ -118,6 +127,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       pendingExternalRevisionRef.current = 0;
       ignoredExternalRevisionRef.current = 0;
     } catch (error) {
+      if (loadSequence !== loadSequenceRef.current) return;
       setNotice({ tone: "error", text: (error as { message?: string })?.message ?? "读取失败。" });
     }
   }, [invoke]);
@@ -142,14 +152,19 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
           change.revision <= revisionRef.current
           || change.revision <= ignoredExternalRevisionRef.current
         )) return;
+        const externalRevision = change?.revision ?? revisionRef.current + 1;
         if (dirtyRef.current) {
           pendingExternalRevisionRef.current = Math.max(
             pendingExternalRevisionRef.current,
-            change?.revision ?? revisionRef.current + 1,
+            externalRevision,
           );
           setExternalChange(true);
         } else {
-          void load();
+          pendingExternalRevisionRef.current = Math.max(
+            pendingExternalRevisionRef.current,
+            externalRevision,
+          );
+          void load(false, externalRevision);
         }
       }),
     ).then((stop) => {
@@ -340,7 +355,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
           保存我的信息
         </button>
         {conflict ? (
-          <button type="button" onClick={() => void load()}>
+          <button type="button" onClick={() => void load(true)}>
             重新读取
           </button>
         ) : null}
