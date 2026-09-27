@@ -293,6 +293,8 @@ test("并发外部读取只采用最后发起的一次，不被晚到的旧响�
   await screen.findByLabelText("姓名");
   await act(async () => fire(4));
   await waitFor(() => expect(reads).toBe(2));
+  await act(async () => fire(4));
+  expect(reads).toBe(2);
   await act(async () => fire(5));
   await waitFor(() => expect(reads).toBe(3));
   await act(async () => finishNewer?.(newer));
@@ -300,6 +302,33 @@ test("并发外部读取只采用最后发起的一次，不被晚到的旧响�
   await act(async () => finishOlder?.(older));
   expect(screen.getByRole("group", { name: /新字段/ })).toBeTruthy();
   expect(screen.queryByRole("group", { name: /旧字段/ })).toBeNull();
+});
+
+test("主动重新读取后继续输入，新输入不会被晚到的读取覆盖（#177）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  let finishRead: ((value: ProfileRecordView) => void) | null = null;
+  const fresh: ProfileRecordView = {
+    profile: { ...record.profile, values: { ...record.profile.values, name: "服务器新值" } },
+    revision: 4,
+  };
+  mount((command) => {
+    if (command === "save_profile_cmd") throw { code: "CONFLICT", message: "「我的信息」已在别处改过，请刷新后再保存。" };
+    reads += 1;
+    if (reads === 1) return record;
+    return new Promise<ProfileRecordView>((resolve) => {
+      finishRead = resolve;
+    });
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  await user.click(await screen.findByRole("button", { name: "重新读取" }));
+  await waitFor(() => expect(reads).toBe(2));
+  await user.type(name, "六");
+  await act(async () => finishRead?.(fresh));
+  expect(name).toHaveProperty("value", "张三五六");
+  expect(await screen.findByText(/读取期间内容又有修改/)).toBeTruthy();
 });
 
 test("提示带 role=status", async () => {

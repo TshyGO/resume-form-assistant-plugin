@@ -109,12 +109,16 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       if (loadSequence !== loadSequenceRef.current) return;
       // 自动刷新等待数据库期间，用户可能已经开始输入。此时不能用刚读回的数据覆盖；
       // 改为提示，由用户明确选择是否放弃本地修改。
-      if (!discardLocalChanges && editVersionRef.current !== editVersion) {
-        pendingExternalRevisionRef.current = Math.max(
-          pendingExternalRevisionRef.current,
-          externalRevision || record.revision,
-        );
-        setExternalChange(true);
+      if (editVersionRef.current !== editVersion) {
+        if (externalRevision) {
+          pendingExternalRevisionRef.current = Math.max(
+            pendingExternalRevisionRef.current,
+            externalRevision,
+          );
+          setExternalChange(true);
+        } else if (discardLocalChanges) {
+          setNotice({ tone: "warn", text: "读取期间内容又有修改，已保留当前输入。请停止编辑后再重新读取。" });
+        }
         return;
       }
       setProfile(profileApi.normalizeProfile(record.profile));
@@ -147,12 +151,15 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         if (!active) return;
         const change = profileChangedOf(event);
         // 正式事件总有 revision/source。兼容无 payload 的测试/旧宿主时仍刷新一次；
-        // 对当前或更旧 revision 的重复通知则直接忽略。
-        if (change && (
-          change.revision <= revisionRef.current
-          || change.revision <= ignoredExternalRevisionRef.current
-        )) return;
+        // 有 payload 却不符合协议的事件不能伪装成兼容事件触发刷新。
+        if (event?.payload !== undefined && !change) return;
         const externalRevision = change?.revision ?? revisionRef.current + 1;
+        // 当前、旧、已忽略或已经在读取的 revision 都不重复处理。
+        if (
+          externalRevision <= revisionRef.current
+          || externalRevision <= ignoredExternalRevisionRef.current
+          || externalRevision <= pendingExternalRevisionRef.current
+        ) return;
         if (dirtyRef.current) {
           pendingExternalRevisionRef.current = Math.max(
             pendingExternalRevisionRef.current,
@@ -213,6 +220,8 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       setProfile(saved);
       setRevision(record.revision);
       revisionRef.current = record.revision;
+      // 保存结果比此前启动的任何读取都新；让那些响应回来时直接作废。
+      loadSequenceRef.current += 1;
       dirtyRef.current = false;
       setExternalChange(false);
       pendingExternalRevisionRef.current = 0;
@@ -226,7 +235,12 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       });
     } catch (error) {
       const err = error as { code?: string; message?: string } | null;
-      setConflict(err?.code === "CONFLICT");
+      const revisionConflict = err?.code === "CONFLICT";
+      setConflict(revisionConflict);
+      if (revisionConflict) {
+        setExternalChange(false);
+        pendingExternalRevisionRef.current = 0;
+      }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
       setBusy(false);
