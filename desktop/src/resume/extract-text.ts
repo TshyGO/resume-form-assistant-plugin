@@ -1,4 +1,5 @@
 import { parseHelpers } from "./parse-helpers.ts";
+import { ensureReadableStreamAsyncIterator } from "./readable-stream-iterator.ts";
 
 export const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 export type ResumeExtension = "pdf" | "docx" | "txt";
@@ -67,6 +68,7 @@ export const browserExtractors: Extractors = {
     return result.value;
   },
   async pdfToText(data) {
+    ensureReadableStreamAsyncIterator();
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const workerUrl = (await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")).default;
     pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
