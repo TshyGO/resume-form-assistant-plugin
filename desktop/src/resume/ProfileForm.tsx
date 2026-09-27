@@ -242,8 +242,10 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       loadSequenceRef.current += 1;
       dirtyRef.current = false;
       setExternalChange(false);
-      setDeferredExternalChange(false);
-      pendingExternalRevisionRef.current = 0;
+      const newerRevision = Math.max(pendingExternalRevisionRef.current, ignoredExternalRevisionRef.current);
+      const hasNewerRevision = newerRevision > record.revision;
+      setDeferredExternalChange(hasNewerRevision);
+      pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
       ignoredExternalRevisionRef.current = 0;
       // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
       const count = profileApi.countProfileValues(saved);

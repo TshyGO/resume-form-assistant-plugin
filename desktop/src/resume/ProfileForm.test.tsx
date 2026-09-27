@@ -412,3 +412,19 @@ test("手动读取期间到达的更新版本仍保留处理入口，下一次�
   expect(screen.queryByText(/有待同步的补充字段/)).toBeNull();
   expect(screen.queryByRole("button", { name: "放弃未保存修改并重新读取" })).toBeNull();
 });
+
+test("保存成功响应晚于插件更高版本事件时仍保留同步入口", async () => {
+  const user = userEvent.setup();
+  let finishSave: ((value: ProfileRecordView) => void) | undefined;
+  const { fire } = mountWithListen(command => command === "save_profile_cmd"
+    ? new Promise<ProfileRecordView>(resolve => { finishSave = resolve; }) : record);
+  await user.type(await screen.findByLabelText("姓名"), "五");
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  await act(async () => fire(5));
+  await act(async () => finishSave?.({ ...record, revision: 4, profile: {
+    ...record.profile, values: { ...record.profile.values, name: "张三五" }
+  } }));
+  expect(screen.getByLabelText("姓名")).toHaveProperty("value", "张三五");
+  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", false);
+});

@@ -63,6 +63,7 @@ function loadHighlightHelpers(options = {}) {
       this.offsetWidth = 100;
       this.scrollCalls = [];
       this.dispatchedEvents = [];
+      this.listeners = {};
       this.rect = { top: 0, left: 0, bottom: 32, right: 240, width: 240, height: 32 };
     }
 
@@ -89,7 +90,10 @@ function loadHighlightHelpers(options = {}) {
       }
     }
 
+    addEventListener(type, listener) { (this.listeners[type] ||= new Set()).add(listener); }
+    removeEventListener(type, listener) { this.listeners[type]?.delete(listener); }
     dispatchEvent(event) {
+      for (const listener of this.listeners[event.type] || []) listener(event);
       this.dispatchedEvents.push(event);
       return true;
     }
@@ -173,6 +177,7 @@ function loadHighlightHelpers(options = {}) {
 
   const context = {
     console,
+    setTimeout,
     performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
@@ -1377,4 +1382,67 @@ test('a text value changed by focus is rechecked before the delayed write', asyn
   await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
   assert.equal(input.value, '聚焦后新值');
   assert.equal(input.dispatchedEvents.length, 0);
+});
+
+test('an initially empty select can load a placeholder and complete its option retry', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, aiHelpers: require('../ai-helpers.js'),
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'A' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', value: '', selectedIndex: -1, options: [] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'A' }] }] }], activeTemplateId: 'one' });
+  const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  setTimeout(() => {
+    select.options = [{ value: '', text: '请选择' }, { value: 'A', text: 'A' }];
+    select.selectedIndex = 0;
+  }, 20);
+  await pending;
+  assert.equal(select.value, 'A');
+  assert.equal(select.selectedIndex, 1);
+});
+
+for (const mode of ['retry', 'rollback', 'user-edit']) {
+  test(`text retry distinguishes framework rejection from user input: ${mode}`, async () => {
+    const formElements = [];
+    const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+      sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '13800000000' }] })
+    });
+    const input = new ctx.HTMLInputElement();
+    input.type = 'tel';
+    input.value = '13900000000';
+    let rejected = false;
+    const dispatch = input.dispatchEvent.bind(input);
+    input.dispatchEvent = event => {
+      if (input.value === '13800000000' && (!rejected || mode === 'rollback')) {
+        rejected = true;
+        input.value = mode === 'user-edit' ? '13700000000' : '';
+        if (mode === 'user-edit') dispatch({ type: 'input', isTrusted: true });
+      }
+      return dispatch(event);
+    };
+    formElements.push(input);
+    ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '电话', value: '13800000000' }] }] }], activeTemplateId: 'one' });
+    await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    assert.equal(input.value, mode === 'retry' ? '13800000000' : mode === 'rollback' ? '13900000000' : '13700000000');
+    assert.ok(Object.values(input.listeners).every(listeners => listeners.size === 0), 'temporary listeners are removed');
+  });
+}
+
+test('multi-select with only an empty placeholder does not ask for overwrite', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, aiHelpers: require('../ai-helpers.js'),
+    confirm: () => { throw new Error('placeholder is not a real selection'); },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'A' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', multiple: true, value: '', selectedIndex: 0, options: [
+    { value: '', text: '请选择', selected: true }, { value: 'A', text: 'A', selected: false }
+  ] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'A' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(select.value, 'A');
+  assert.equal(select.selectedIndex, 1);
 });

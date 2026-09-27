@@ -1311,7 +1311,8 @@
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
-    if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected);
+    if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected
+      && !(option.value === "" && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
     return Boolean(String(el.value ?? el.textContent ?? "").trim());
   }
 
@@ -1323,7 +1324,12 @@
     if (!el?.isConnected) return null;
     if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
     if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
-    if (el instanceof HTMLSelectElement) return JSON.stringify([el.value, el.selectedIndex]);
+    if (el instanceof HTMLSelectElement) {
+      const option = el.options[el.selectedIndex];
+      const emptyPlaceholder = el.value === "" && (el.selectedIndex < 0
+        || (option && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
+      return JSON.stringify([el.value, emptyPlaceholder ? -1 : el.selectedIndex]);
+    }
     return String(el.value ?? el.textContent ?? "");
   }
 
@@ -1492,9 +1498,9 @@
         if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
         // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
-        const beforeWrite = assisted ? undefined : () => {
+        const beforeWrite = assisted ? undefined : (userEdited = false) => {
           if (overwriteDeclined) return false;
-          if (fillValueSnapshot(element) === approvedValues.get(element)) return true;
+          if (!userEdited && fillValueSnapshot(element) === approvedValues.get(element)) return true;
           overwriteDeclined = true;
           cancelRequested = true;
           outcome = filledCount ? "partial" : "failed";
@@ -2035,15 +2041,17 @@
 
   // 先让 focus 引起的页面更新结束，再写值并通知输入事件。
   // 如果先写值，受控表单可能在 focus 后按旧状态重绘，把值清空。
-  async function runTextLifecycle(element, value, sequential, beforeWrite) {
+  async function runTextLifecycle(element, value, sequential, beforeWrite, didWrite) {
     focusControl(element);
     await nextTask();
     if (beforeWrite && !beforeWrite()) return false;
     if (!sequential) {
       writeControlValue(element, value);
+      didWrite?.();
       dispatchTextInput(element, value);
     } else {
       writeControlValue(element, "");
+      didWrite?.();
       dispatchTextInput(element, "");
       let built = "";
       for (const char of Array.from(value)) {
@@ -2613,11 +2621,11 @@
 
   // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
   // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
-  async function commitTextValue(element, value, sequential = false, beforeWrite) {
+  async function commitTextValue(element, value, sequential = false, beforeWrite, didWrite) {
     const previous = String(element.value ?? "");
     const original = String(value ?? "");
     const expected = normalizeExpectedTextValue(element, original);
-    if (!await runTextLifecycle(element, original, sequential, beforeWrite)) {
+    if (!await runTextLifecycle(element, original, sequential, beforeWrite, didWrite)) {
       return { ok: false, reason: "value_changed" };
     }
     const committed = String(element.value ?? "") === expected;
@@ -2631,7 +2639,7 @@
     }
     if (!result.ok && !sequential && prefersSequentialInput(element)
       && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      const retried = await commitTextValue(element, original, true, beforeWrite);
+      const retried = await commitTextValue(element, original, true, beforeWrite, didWrite);
       if (!retried.ok && element.isConnected !== false
         && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
         if (beforeWrite && !beforeWrite()) return { ok: false, reason: "value_changed" };
@@ -2719,13 +2727,31 @@
     }
 
     if (isTextControl(element)) {
-      return commitTextValue(element, value, false, beforeWrite).then((result) => {
+      let wroteValue = false;
+      let userEdited = false;
+      const trackUserEdit = event => { if (event.isTrusted) userEdited = true; };
+      // 首次写入前比较快照；已开始写入后，框架拒绝/清空属于正常重试流程。
+      // 仅真实用户输入中断本控件的重试和回滚，插件派发的合成事件不算用户修改。
+      const guard = beforeWrite ? () => {
+        if (userEdited) return beforeWrite(true);
+        return wroteValue || beforeWrite();
+      } : undefined;
+      if (beforeWrite) {
+        element.addEventListener("input", trackUserEdit, true);
+        element.addEventListener("change", trackUserEdit, true);
+      }
+      return commitTextValue(element, value, false, guard, () => { wroteValue = true; }).then((result) => {
         if (result.ok) {
           textFillFailures.delete(element);
         } else {
           textFillFailures.set(element, result.reason);
         }
         return result.ok;
+      }).finally(() => {
+        if (beforeWrite) {
+          element.removeEventListener("input", trackUserEdit, true);
+          element.removeEventListener("change", trackUserEdit, true);
+        }
       });
     }
 
