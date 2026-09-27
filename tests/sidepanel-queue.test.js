@@ -125,6 +125,8 @@ test("a fill with no company takes a pasted application id, checked before anyth
   panel.get("queue-list").querySelector = () => ({ value: "not-an-id" });
   await panel.clickQueue(key, "submit-id");
   assert.match(panel.queue().html, /这不是桌面里的申请 ID/);
+  // What was pasted stays in the box after the redraw, so one wrong character is one fix.
+  assert.match(panel.queue().html, /class="queue-id"[^>]*value="not-an-id"/);
   assert.equal(worker.handled.filter((message) => message.type === "DESKTOP_BIND_FILL").length, 0);
   panel.get("queue-list").querySelector = () => ({ value: APP_B });
   await panel.clickQueue(key, "submit-id");

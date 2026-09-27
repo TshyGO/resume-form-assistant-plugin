@@ -362,3 +362,62 @@ test("a waiting record made from the card can be deleted there, and it leaves th
   assert.ok(panel.toasts.includes("已删除这条待同步记录，这次填写没有留档。"));
   await until(() => panel.queue().count === "0 条", { what: "the pending count" });
 });
+
+// The desktop takes the fill event but not the snapshot's chunks, so the upload stays queued.
+function holdSnapshotUploads(desktop) {
+  const answer = desktop.answer;
+  desktop.answer = async (message) => (message.messageType === "snapshot.chunk"
+    ? { lastError: "Error when communicating with the native messaging host." }
+    : answer(message));
+}
+
+test("a snapshot the user drops never reads as uploaded, and a failed drop does not claim success", async () => {
+  const { panel, desktop, worker, storage } = await offered({ applications: one });
+  holdSnapshotUploads(desktop);
+  panel.clickArchive("start");
+  await panel.waitCard(choosing, "the candidates");
+  panel.clickCandidate(APP_A);
+  await panel.waitCard(shows(/已留档到桌面/), "the saved answer");
+  const upload = () => outbox(storage).find((entry) => entry.messageType === "snapshot.upload");
+  await until(() => Boolean(upload()), { what: "the queued upload" });
+  await panel.toggleQueue();
+  await until(() => panel.queue().rows.some((row) => row.buttons.some((b) => b.action === "drop-snapshot")), { what: "the snapshot row" });
+  const row = panel.queue().rows.find((item) => item.buttons.some((b) => b.action === "drop-snapshot"));
+  const { snapshotId } = row.buttons.find((b) => b.action === "drop-snapshot");
+  await panel.waitCard((card) => card.snapshotLine !== "" && card.snapshotLine !== "简历快照已上传到桌面。", "the upload line");
+
+  // The worker cannot drop it: nothing is said to have happened.
+  const handle = worker.handle;
+  worker.handle = async (message) => (message.type === "DESKTOP_DROP_SNAPSHOT" ? null : handle(message));
+  await panel.clickQueue(row.key, "drop-snapshot", { snapshotId });
+  assert.ok(!panel.toasts.some((text) => text.startsWith("已丢弃")), "no success toast for a failed drop");
+  assert.match(panel.queue().html, /没能丢弃这份简历快照/);
+  assert.ok(upload(), "the upload is still there");
+  worker.handle = handle;
+
+  await panel.clickQueue(row.key, "drop-snapshot", { snapshotId });
+  await until(() => !upload(), { what: "the upload to go" });
+  assert.ok(panel.toasts.some((text) => text.startsWith("已丢弃这份简历快照")));
+  await panel.waitCard((card) => card.snapshotLine === "简历快照已丢弃，没有上传到桌面。", "the dropped line");
+  assert.equal(desktop.events.length, 1, "the fill itself stays archived");
+});
+
+test("去待同步查看 lands on the fill, not on the snapshot bound with it", async () => {
+  const { panel, desktop, storage } = await offered({ applications: one });
+  const answer = desktop.answer;
+  desktop.answer = async (message) => (message.messageType === "fill.submit" || message.messageType === "snapshot.chunk"
+    ? { lastError: "Error when communicating with the native messaging host." }
+    : answer(message));
+  panel.clickArchive("start");
+  await panel.waitCard(choosing, "the candidates");
+  panel.clickCandidate(APP_A);
+  await panel.waitCard((card) => card.actions.some((item) => item.action === "openqueue"), "the queued answer");
+  await until(() => outbox(storage).some((entry) => entry.messageType === "snapshot.upload")
+    && outbox(storage).some((entry) => entry.messageType === "fill.submit"), { what: "both rows queued" });
+  panel.clickArchive("openqueue");
+  await until(() => panel.queue().rows.some((row) => row.focused), { what: "the focused row" });
+  const focused = panel.queue().rows.find((row) => row.focused);
+  const fillSubmit = outbox(storage).find((entry) => entry.messageType === "fill.submit");
+  assert.equal(focused.key, `message:${fillSubmit.messageId}`);
+  assert.match(focused.text, /^填写留档/);
+});

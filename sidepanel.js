@@ -66,6 +66,10 @@
   let queueRequest = 0;
   // Snapshot uploads seen waiting at least once: only those may later read as "uploaded".
   const snapshotsSeen = new Set();
+  // What else can take a snapshot off the list, when the panel itself did it: the user gave
+  // it up (never "uploaded"), or saved it again under a new id (follow the new one).
+  const snapshotsDropped = new Set();
+  const snapshotsReplaced = new Map();
   let linkCopyModule = self.ResumeProLinkCopy || null;
 
   const escapeHtml = (value) => String(value ?? "")
@@ -384,8 +388,10 @@
   function describeArchiveSnapshot(snapshotId) {
     const copy = linkCopyModule;
     if (!copy) return "";
-    const entry = (queueReply?.outbox || []).find((item) => item?.messageType === "snapshot.upload" && item.snapshotId === snapshotId) || null;
-    return copy.describeFillSnapshotProgress(entry, { seen: snapshotsSeen.has(snapshotId) }).text;
+    let current = snapshotId;
+    for (let hops = 0; snapshotsReplaced.has(current) && hops < 8; hops += 1) current = snapshotsReplaced.get(current);
+    const entry = (queueReply?.outbox || []).find((item) => item?.messageType === "snapshot.upload" && item.snapshotId === current) || null;
+    return copy.describeFillSnapshotProgress(entry, { seen: snapshotsSeen.has(current), dropped: snapshotsDropped.has(current) }).text;
   }
 
   // One request at a time from the card; the page refuses a second write on its own too.
@@ -528,7 +534,10 @@
   async function openQueue(recordId) {
     setQueueOpen(true);
     await refreshQueue();
-    const row = queueRows.find((item) => item.recordId === recordId);
+    // One fill can have up to three rows (the waiting record, its bound event, its snapshot).
+    // Land on the fill itself, not on its snapshot.
+    const mine = queueRows.filter((item) => item.recordId === recordId);
+    const row = ["fill", "message", "snapshot"].map((kind) => mine.find((item) => item.kind === kind)).find(Boolean);
     queueFocus = row?.key || "";
     renderQueue();
     if (!row) toast("待同步里已经没有这条记录了，可能已经发送或删除。");
@@ -565,12 +574,12 @@
       if (message?.text && !queueRows.some((item) => item.key === key)) toast(message.text);
     };
 
-    if (action === "close-question") { setRowUi(key, { mode: "", candidates: [], message: null }); return; }
+    if (action === "close-question") { setRowUi(key, { mode: "", candidates: [], message: null, typed: "" }); return; }
 
     if (action === "choose-fill") {
       if (!row.job.company) {
         // The page named no company, so there is nothing to look up: the id comes from the desktop.
-        setRowUi(key, { mode: "id", idLabel: "这条留档看不出是哪家公司。请粘贴桌面里对应申请的 ID：", message: null });
+        setRowUi(key, { mode: "id", idLabel: "这条留档看不出是哪家公司。请粘贴桌面里对应申请的 ID：", message: null, typed: "" });
         return;
       }
       const answer = await queueCall(key, { type: "DESKTOP_CANDIDATES_FOR", fields: row.job }, null);
@@ -607,7 +616,9 @@
       const input = elements.queueList.querySelector?.(`input[data-key="${key}"]`);
       const typed = String(input?.value || "").trim();
       if (!self.ResumeProQueue.isApplicationId(typed)) {
-        setRowUi(key, { message: copy.describeFillRecordResult({ status: "rejected", reason: "invalid_application_id" }) });
+        // Kept in the box: the list is redrawn, and one wrong character should not mean
+        // pasting the whole id again.
+        setRowUi(key, { typed, message: copy.describeFillRecordResult({ status: "rejected", reason: "invalid_application_id" }) });
         return;
       }
       if (row.kind === "fill") {
@@ -629,8 +640,14 @@
     }
 
     if (action === "drop-snapshot") {
-      await queueCall(key, { type: "DESKTOP_DROP_SNAPSHOT", snapshotId: button.dataset.snapshotId || row.snapshotId }, null);
-      toast("已丢弃这份简历快照，填写记录不受影响。");
+      const snapshotId = button.dataset.snapshotId || row.snapshotId;
+      const result = await queueCall(key, { type: "DESKTOP_DROP_SNAPSHOT", snapshotId }, null);
+      if (result?.ok) {
+        snapshotsDropped.add(snapshotId);
+        toast("已丢弃这份简历快照，填写记录不受影响。");
+      } else {
+        setRowUi(key, { message: { tone: "warn", text: "没能丢弃这份简历快照，请稍后再试。" } });
+      }
       await refreshQueue();
       return;
     }
@@ -656,8 +673,9 @@
     }
 
     if (action === "remove-intent") {
-      await queueCall(key, { type: "DESKTOP_REMOVE_INTENT", intentId: row.intentId }, null);
-      toast("已删除这条待同步记录。");
+      const result = await queueCall(key, { type: "DESKTOP_REMOVE_INTENT", intentId: row.intentId }, null);
+      if (result?.ok) toast("已删除这条待同步记录。");
+      else setRowUi(key, { message: { tone: "warn", text: "没能删除这条待同步记录，请稍后再试。" } });
       await refreshQueue();
       return;
     }
@@ -670,13 +688,19 @@
     }
 
     if (action === "cancel-message") {
-      await queueCall(key, { type: "DESKTOP_CANCEL", messageId: row.messageId }, null);
+      // Cancelling a bound fill gives up the snapshot bound with it too (router: MSG.cancel).
+      const related = (queueReply?.outbox || [])
+        .filter((item) => item?.messageType === "snapshot.upload" && (item.messageId === row.messageId || (row.recordId && item.recordId === row.recordId)))
+        .map((item) => item.snapshotId);
+      const result = await queueCall(key, { type: "DESKTOP_CANCEL", messageId: row.messageId }, null);
+      if (result?.ok) related.forEach((snapshotId) => snapshotsDropped.add(snapshotId));
+      else setRowUi(key, { message: { tone: "warn", text: "没能取消，请稍后再试。" } });
       await refreshQueue();
       return;
     }
 
     if (action === "resolve-associate") {
-      setRowUi(key, { mode: "id", idLabel: "要关联到哪条申请？请粘贴桌面里的申请 ID：", message: null });
+      setRowUi(key, { mode: "id", idLabel: "要关联到哪条申请？请粘贴桌面里的申请 ID：", message: null, typed: "" });
       return;
     }
 
@@ -684,6 +708,14 @@
       const choice = action === "resolve-resave" ? "resave" : "discard";
       const entry = (queueReply?.outbox || []).find((item) => item.messageId === row.messageId) || {};
       const result = await queueCall(key, { type: "DESKTOP_RESOLVE", messageId: row.messageId, choice }, { status: "pending" });
+      if (row.kind === "snapshot" && row.snapshotId) {
+        if (result?.status === "discarded") snapshotsDropped.add(row.snapshotId);
+        if (result?.status === "queued" && result.messageId) {
+          await refreshQueue();
+          const moved = (queueReply?.outbox || []).find((item) => item?.messageId === result.messageId);
+          if (moved?.snapshotId) snapshotsReplaced.set(row.snapshotId, moved.snapshotId);
+        }
+      }
       // A resaved entry is queued, not yet on the desktop: described as pending.
       const shown = result?.status === "queued" ? { status: "pending" } : result;
       await done(choice === "discard" ? null : copy.describeQueueOutcome(entry, shown));

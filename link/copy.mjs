@@ -443,9 +443,11 @@ export function describeFillArchiveBlocked(reason, { extensionId } = {}) {
 /**
  * The snapshot line under "已留档到桌面". `entry` is the snapshot's queue entry, or null once
  * it has left the queue; `seen` says whether it was ever seen there, so a list read before
- * the upload was queued is never mistaken for a finished upload.
+ * the upload was queued is never mistaken for a finished upload. `dropped` says the user
+ * gave it up: leaving the queue that way is not an upload.
  */
-export function describeFillSnapshotProgress(entry, { seen = false } = {}) {
+export function describeFillSnapshotProgress(entry, { seen = false, dropped = false } = {}) {
+  if (dropped) return { text: '简历快照已丢弃，没有上传到桌面。', retry: false };
   if (entry) return describeSnapshotUpload(entry);
   if (seen) return { text: '简历快照已上传到桌面。', retry: false };
   return { text: '简历快照正在后台上传，传完之前本机会保留一份。', retry: false };
