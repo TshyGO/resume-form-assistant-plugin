@@ -34,7 +34,7 @@ export function ResumeView({ pickers, listen }: { pickers: FilePickers | null; l
       <section aria-labelledby="resume-profile-title" className="stack">
         <h3 id="resume-profile-title">我的信息</h3>
         <p className="muted">网申表常问、简历里通常没有的内容。</p>
-        <ProfileForm key={profileKey} />
+        <ProfileForm key={profileKey} listen={listen} />
       </section>
     </div>
   );

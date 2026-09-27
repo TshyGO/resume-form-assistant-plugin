@@ -1,9 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProfileRecordView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { profileApi } from "./profile.ts";
 import type { FamilyMember, Profile, ProfileFieldDef } from "./profile.ts";
 import type { Notice } from "./resume-text.ts";
+import type { DesktopEvent, Listen } from "./LegacyImport.tsx";
+
+type ProfileChanged = { revision: number; source: "plugin" };
+
+function profileChangedOf(event?: DesktopEvent): ProfileChanged | null {
+  const payload = event?.payload;
+  if (!payload || typeof payload !== "object") return null;
+  const candidate = payload as Partial<ProfileChanged>;
+  return Number.isInteger(candidate.revision) && candidate.source === "plugin"
+    ? candidate as ProfileChanged
+    : null;
+}
 
 function emptyMember(): FamilyMember {
   const member: FamilyMember = { relation: profileApi.FAMILY_RELATIONS[0] };
@@ -70,23 +82,56 @@ function FieldInput({
   );
 }
 
-export function ProfileForm() {
+export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const invoke = useInvoke();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 有没有没保存的修改：插件在后台写入时，靠这个决定是直接刷新还是先问用户（#177）。
+  const [externalChange, setExternalChange] = useState(false);
+  const dirtyRef = useRef(false);
+  const revisionRef = useRef(0);
+  const editVersionRef = useRef(0);
+  const loadSequenceRef = useRef(0);
+  const pendingExternalRevisionRef = useRef(0);
+  const ignoredExternalRevisionRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0) => {
     if (!invoke) return;
+    const loadSequence = ++loadSequenceRef.current;
+    const editVersion = editVersionRef.current;
     try {
       const record = await invoke<ProfileRecordView>("get_profile_cmd");
+      // 多次外部更新可能同时读取。只允许最后发起的读取落地，避免旧响应晚到后
+      // 把 UI 和 revision 回滚到更早的档案。
+      if (loadSequence !== loadSequenceRef.current) return;
+      // 自动刷新等待数据库期间，用户可能已经开始输入。此时不能用刚读回的数据覆盖；
+      // 改为提示，由用户明确选择是否放弃本地修改。
+      if (editVersionRef.current !== editVersion) {
+        if (externalRevision) {
+          pendingExternalRevisionRef.current = Math.max(
+            pendingExternalRevisionRef.current,
+            externalRevision,
+          );
+          setExternalChange(true);
+        } else if (discardLocalChanges) {
+          setNotice({ tone: "warn", text: "读取期间内容又有修改，已保留当前输入。请停止编辑后再重新读取。" });
+        }
+        return;
+      }
       setProfile(profileApi.normalizeProfile(record.profile));
       setRevision(record.revision);
+      revisionRef.current = record.revision;
       setConflict(false);
       setNotice(null);
+      dirtyRef.current = false;
+      setExternalChange(false);
+      pendingExternalRevisionRef.current = 0;
+      ignoredExternalRevisionRef.current = 0;
     } catch (error) {
+      if (loadSequence !== loadSequenceRef.current) return;
       setNotice({ tone: "error", text: (error as { message?: string })?.message ?? "读取失败。" });
     }
   }, [invoke]);
@@ -94,6 +139,51 @@ export function ProfileForm() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 插件把补充字段写进档案后发的信号，不带字段内容（#177）。没有未保存的修改就直接重新读取；
+  // 有未保存的修改不能替用户做主覆盖掉，只弹提示，读不读由用户自己点。
+  useEffect(() => {
+    if (!listen) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void Promise.resolve(
+      listen("resume-profile-changed", (event) => {
+        if (!active) return;
+        const change = profileChangedOf(event);
+        // 正式事件总有 revision/source。兼容无 payload 的测试/旧宿主时仍刷新一次；
+        // 有 payload 却不符合协议的事件不能伪装成兼容事件触发刷新。
+        if (event?.payload !== undefined && !change) return;
+        const externalRevision = change?.revision ?? revisionRef.current + 1;
+        // 当前、旧、已忽略或已经在读取的 revision 都不重复处理。
+        if (
+          externalRevision <= revisionRef.current
+          || externalRevision <= ignoredExternalRevisionRef.current
+          || externalRevision <= pendingExternalRevisionRef.current
+        ) return;
+        if (dirtyRef.current) {
+          pendingExternalRevisionRef.current = Math.max(
+            pendingExternalRevisionRef.current,
+            externalRevision,
+          );
+          setExternalChange(true);
+        } else {
+          pendingExternalRevisionRef.current = Math.max(
+            pendingExternalRevisionRef.current,
+            externalRevision,
+          );
+          void load(false, externalRevision);
+        }
+      }),
+    ).then((stop) => {
+      if (!stop) return;
+      if (active) unlisten = stop;
+      else stop();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [listen, load]);
 
   if (!invoke) return <p className="muted">没有连上桌面程序，「我的信息」要在桌面程序里编辑。</p>;
   if (!profile)
@@ -107,6 +197,8 @@ export function ProfileForm() {
 
   // 用户一动手改，上一次保存/冲突的提示就过时了，清掉以免误导。
   const updateProfile = (next: Profile) => {
+    editVersionRef.current += 1;
+    dirtyRef.current = true;
     setProfile(next);
     setNotice(null);
   };
@@ -127,6 +219,13 @@ export function ProfileForm() {
       const saved = profileApi.normalizeProfile(record.profile);
       setProfile(saved);
       setRevision(record.revision);
+      revisionRef.current = record.revision;
+      // 保存结果比此前启动的任何读取都新；让那些响应回来时直接作废。
+      loadSequenceRef.current += 1;
+      dirtyRef.current = false;
+      setExternalChange(false);
+      pendingExternalRevisionRef.current = 0;
+      ignoredExternalRevisionRef.current = 0;
       // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
       const count = profileApi.countProfileValues(saved);
       const pending = profileApi.countPendingFields(saved);
@@ -136,7 +235,12 @@ export function ProfileForm() {
       });
     } catch (error) {
       const err = error as { code?: string; message?: string } | null;
-      setConflict(err?.code === "CONFLICT");
+      const revisionConflict = err?.code === "CONFLICT";
+      setConflict(revisionConflict);
+      if (revisionConflict) {
+        setExternalChange(false);
+        pendingExternalRevisionRef.current = 0;
+      }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
       setBusy(false);
@@ -151,6 +255,27 @@ export function ProfileForm() {
         void save();
       }}
     >
+      {externalChange ? (
+        <div className="note warn stack" role="status">
+          <p>插件添加了新的补充字段。当前页面还有未保存的修改。</p>
+          <div className="row">
+            <button type="button" onClick={() => void load(true)}>
+              重新读取
+            </button>
+            <button type="button" onClick={() => {
+              ignoredExternalRevisionRef.current = Math.max(
+                ignoredExternalRevisionRef.current,
+                pendingExternalRevisionRef.current,
+              );
+              pendingExternalRevisionRef.current = 0;
+              setExternalChange(false);
+            }}>
+              稍后处理
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {profileApi.PROFILE_SCHEMA.map((group) => (
         <fieldset key={group.name}>
           <legend>{group.name}</legend>
@@ -244,7 +369,7 @@ export function ProfileForm() {
           保存我的信息
         </button>
         {conflict ? (
-          <button type="button" onClick={() => void load()}>
+          <button type="button" onClick={() => void load(true)}>
             重新读取
           </button>
         ) : null}

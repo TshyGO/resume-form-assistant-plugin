@@ -40,6 +40,16 @@ pub struct LegacyImportChanged {
     pub state: String,
 }
 
+/// The extension just committed a profile write (#177). The window's own「我的信息」form
+/// decides for itself whether to re-read: this carries only the new revision, never a
+/// name, contact detail, or custom field content.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileChanged {
+    pub revision: i64,
+    pub source: &'static str,
+}
+
 /// The highest protocol version the desktop actually serves right now.
 ///
 /// The desktop advertises v2 only after all five bridge handlers are wired.
@@ -64,6 +74,9 @@ pub trait Application: Send + Sync + 'static {
 
     /// A legacy import manifest or part is durable. The default has no window to tell.
     fn on_legacy_import(&self, _notice: &LegacyImportChanged) {}
+
+    /// The extension's profile write is durable. The default has no window to tell.
+    fn on_profile_changed(&self, _notice: &ProfileChanged) {}
 }
 
 /// The archive this process currently has open.
@@ -75,6 +88,7 @@ pub struct OpenArchive {
     store: Arc<Mutex<Option<ArchiveStore>>>,
     notify: Option<Arc<dyn Fn(ApplicationsChanged) + Send + Sync>>,
     legacy_notify: Option<Arc<dyn Fn(LegacyImportChanged) + Send + Sync>>,
+    profile_notify: Option<Arc<dyn Fn(ProfileChanged) + Send + Sync>>,
     services: Arc<dyn crate::bridge_services::BridgeServices>,
 }
 
@@ -93,6 +107,7 @@ impl OpenArchive {
             services,
             notify: None,
             legacy_notify: None,
+            profile_notify: None,
         }
     }
 
@@ -105,6 +120,12 @@ impl OpenArchive {
     /// Calls `notify` after each committed legacy import manifest or part.
     pub fn notifying_legacy(mut self, notify: Arc<dyn Fn(LegacyImportChanged) + Send + Sync>) -> Self {
         self.legacy_notify = Some(notify);
+        self
+    }
+
+    /// Calls `notify` after each committed extension profile write (#177).
+    pub fn notifying_profile(mut self, notify: Arc<dyn Fn(ProfileChanged) + Send + Sync>) -> Self {
+        self.profile_notify = Some(notify);
         self
     }
 }
@@ -143,6 +164,12 @@ impl Application for OpenArchive {
 
     fn on_legacy_import(&self, notice: &LegacyImportChanged) {
         if let Some(notify) = &self.legacy_notify {
+            notify(notice.clone());
+        }
+    }
+
+    fn on_profile_changed(&self, notice: &ProfileChanged) {
+        if let Some(notify) = &self.profile_notify {
             notify(notice.clone());
         }
     }
@@ -231,6 +258,20 @@ fn legacy_notice(request: &Request, answer: &Answer) -> Option<LegacyImportChang
     Some(LegacyImportChanged {
         import_id: request.payload["importId"].as_str()?.to_string(),
         state: answer.payload["state"].as_str()?.to_string(),
+    })
+}
+
+/// A profile write the extension made durable (#177). Only `resume.update`'s `saveProfile`
+/// op counts — `setActiveTemplate` does not touch 「我的信息」, and this function is only
+/// ever reached after a commit, so a rejected write (secret content, stale revision) never
+/// gets here at all.
+fn profile_notice(request: &Request, answer: &Answer) -> Option<ProfileChanged> {
+    if request.message_type != MessageType::ResumeUpdate || request.payload["op"] != "saveProfile" {
+        return None;
+    }
+    Some(ProfileChanged {
+        revision: answer.payload["profileRevision"].as_i64()?,
+        source: "plugin",
     })
 }
 
@@ -383,6 +424,9 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 }
                 if let Some(notice) = legacy_notice(&request, &answer) {
                     application.on_legacy_import(&notice);
+                }
+                if let Some(notice) = profile_notice(&request, &answer) {
+                    application.on_profile_changed(&notice);
                 }
                 let mut response = serde_json::json!({
                     "protocolVersion": request.protocol_version,
@@ -903,6 +947,75 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&answer(&status, &app).unwrap()).unwrap();
         assert_eq!(reply["ok"], true, "{reply}");
         assert_eq!(notices.lock().unwrap().len(), 1, "a status query commits nothing");
+    }
+
+    fn resume_update(
+        identity: &archive_store::ArchiveIdentity,
+        message_id: &str,
+        payload: serde_json::Value,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "protocolVersion": 2,
+            "messageId": message_id,
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "resume.update",
+            "occurredAt": "2026-09-24T12:00:00.000Z",
+            "archiveId": identity.archive_id,
+            "restoreEpoch": identity.restore_epoch,
+            "payload": payload
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_committed_profile_write_notifies_with_only_a_revision_and_a_rejected_one_does_not() {
+        // #177: the desktop's 「简历」 page tells a genuine write apart from a rejected one
+        // by whether this notice ever arrives — it must never carry field content.
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&notices);
+        let app = OpenArchive::new(Arc::clone(&shared))
+            .notifying_profile(Arc::new(move |notice| seen.lock().unwrap().push(notice)));
+
+        let save = resume_update(
+            &identity,
+            "77777777-7777-4777-8777-777777777777",
+            serde_json::json!({
+                "op": "saveProfile",
+                "profile": {"values": {"fullName": "机密姓名"}, "family": [], "custom": [{"key": "国籍", "value": ""}]},
+                "expectedRevision": 0
+            }),
+        );
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&save, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        {
+            let got = notices.lock().unwrap();
+            assert_eq!(got.len(), 1, "a committed saveProfile must notify exactly once");
+            assert_eq!(got[0].revision, 1);
+            assert_eq!(got[0].source, "plugin");
+        }
+        // Serialized shape carries only the revision — no name, no custom field content.
+        let serialized = serde_json::to_value(&notices.lock().unwrap()[0]).unwrap();
+        assert_eq!(
+            serialized.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["revision", "source"],
+            "the notice must not leak profile content"
+        );
+
+        // A stale expectedRevision is rejected before it ever commits; must not notify.
+        let stale = resume_update(
+            &identity,
+            "88888888-8888-4888-8888-888888888888",
+            serde_json::json!({
+                "op": "saveProfile",
+                "profile": {"values": {}, "family": [], "custom": []},
+                "expectedRevision": 0
+            }),
+        );
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&stale, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(notices.lock().unwrap().len(), 1, "a rejected write must not notify");
     }
 
     fn query_candidates(identity: &archive_store::ArchiveIdentity) -> Vec<u8> {
