@@ -30,6 +30,23 @@ impl MainWindowReady {
     }
 }
 
+/// The view the browser last asked the window for, kept until the page takes it.
+///
+/// The navigation event reaches only a page that is already listening. On a cold start the
+/// request comes before the page has loaded, so the page takes it once it listens (#183).
+#[derive(Default)]
+pub struct RequestedView(Mutex<Option<String>>);
+
+impl RequestedView {
+    pub fn request(&self, view: &str) {
+        *self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(view.to_string());
+    }
+
+    pub fn take(&self) -> Option<String> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+    }
+}
+
 pub fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.unminimize();
@@ -91,6 +108,23 @@ mod tests {
         let window = MainWindowReady::default();
         window.set();
         assert!(window.wait(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_requested_view_is_taken_once() {
+        let requested = RequestedView::default();
+        assert_eq!(requested.take(), None);
+        requested.request("resume");
+        assert_eq!(requested.take().as_deref(), Some("resume"));
+        assert_eq!(requested.take(), None, "a page that reloads must not be sent there again");
+    }
+
+    #[test]
+    fn the_latest_request_wins() {
+        let requested = RequestedView::default();
+        requested.request("resume");
+        requested.request("settings-ai");
+        assert_eq!(requested.take().as_deref(), Some("settings-ai"));
     }
 
     #[test]
