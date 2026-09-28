@@ -23,8 +23,20 @@
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
     fillOffer: document.getElementById("fill-offer"),
+    fillOfferTitle: document.getElementById("fill-offer-title"),
     fillOfferText: document.getElementById("fill-offer-text"),
+    fillOfferHint: document.getElementById("fill-offer-hint"),
+    fillOfferSnapshotState: document.getElementById("fill-offer-snapshot-state"),
+    fillOfferCheck: document.getElementById("fill-offer-check"),
     fillOfferSnapshot: document.getElementById("fill-offer-snapshot"),
+    fillOfferCandidates: document.getElementById("fill-offer-candidates"),
+    fillOfferExtensionId: document.getElementById("fill-offer-extension-id"),
+    fillOfferActions: document.getElementById("fill-offer-actions"),
+    queueToggle: document.getElementById("queue-toggle"),
+    queueCount: document.getElementById("queue-count"),
+    queueBody: document.getElementById("queue-body"),
+    queueList: document.getElementById("queue-list"),
+    queueEmpty: document.getElementById("queue-empty"),
     desktopStatus: document.getElementById("desktop-status"),
     diagnostics: document.getElementById("fill-diagnostics"),
     diagnosticsText: document.getElementById("fill-diagnostics-text"),
@@ -128,6 +140,42 @@
   const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
   const REPEAT_STOPPABLE = ["scanning", "planning", "executing", "filling"];
   const REPEAT_LABELS = { papers: "论文", education: "教育经历", work: "工作经历", projects: "项目经历" };
+  // Archiving the fill that just ended (#178). The page owns the question and its answer;
+  // the panel draws the page's snapshot, bound to the tab it came from. `archiveSeen` is the
+  // newest snapshot of this tab and page load, so an older poll that left before a click can
+  // neither clear nor reopen what the user just did. `archivePending` names the one request
+  // the panel is waiting on: no second one starts until it returns.
+  let fillArchive = null;
+  let archiveSeen = { tabId: null, epoch: "", version: 0 };
+  let archivePending = "";
+  let archiveOwner = 0;
+  let offerShown = "";
+  // The pending list (DESKTOP_LIST_QUEUE) as last read, and each row's open question.
+  let queueReply = null;
+  let queueRows = [];
+  const queueUi = new Map();
+  let queueFocus = "";
+  let queueRequest = 0;
+  let queueReadCompleted = 0;
+  // A saved card can arrive after an older queue read. Require one fresh read for its
+  // snapshot before deciding that an absent upload needs desktop verification.
+  let snapshotQueryNeeded = { id: "", request: Infinity };
+  // Snapshot uploads seen waiting at least once: if one vanishes without a complete ACK,
+  // its state is unknown rather than uploaded.
+  const snapshotsSeen = new Set();
+  // What else can take a snapshot off the list, when the panel itself did it: the user gave
+  // it up (never "uploaded"), or saved it again under a new id (follow the new one).
+  const snapshotsDropped = new Set();
+  const snapshotsReplaced = new Map();
+  // Snapshots the desktop confirmed complete (worker memory, DESKTOP_LIST_QUEUE). Only these
+  // are ever called uploaded.
+  const snapshotsConfirmed = new Set();
+  // The fill on the card, once the pending list has listed it: only then may its leaving the
+  // list (or its waiting row turning into a bound one) close the card.
+  const archivesListed = new Set();
+  // Fills the user acted on in this panel's pending list: that action already said what happened.
+  const archivesTouched = new Set();
+  let linkCopyModule = self.ResumeProLinkCopy || null;
 
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -395,6 +443,505 @@
     elements.jobAssistText.textContent = `正在用桌面的 AI 识别岗位，发送的${count}页面文字列在网页上。`;
   }
 
+  // link/copy.mjs holds every sentence about the desktop. An extension page can import it
+  // directly; it is loaded once and kept.
+  async function linkCopy() {
+    if (!linkCopyModule) linkCopyModule = self.ResumeProLinkCopy || await import(chrome.runtime.getURL("link/copy.mjs"));
+    return linkCopyModule;
+  }
+
+  // --- 留档到桌面 (#178): the whole question in the panel, nothing on the page overlay -------
+
+  // Phases in which the card waits for the user or the desktop. A cancelled or finished-and-
+  // dismissed archive shows nothing.
+  const ARCHIVE_SHOWN = new Set(["offer", "querying", "choosing", "empty", "blocked", "saving",
+    "saved", "queued", "pending_bind", "failed", "unknown"]);
+
+  function resetFillArchive() {
+    fillArchive = null;
+    archiveSeen = { tabId: null, epoch: "", version: 0 };
+    snapshotQueryNeeded = { id: "", request: Infinity };
+    // A request still waiting on the tab we left must not keep this tab's card locked; its
+    // answer is dropped by the tab check in archiveRequest.
+    archiveOwner += 1;
+    archivePending = "";
+    renderFillArchive();
+  }
+
+  function applyFillArchive(snapshot, tabId) {
+    if (tabId !== currentTabId) return;
+    if (!snapshot) { fillArchive = null; renderFillArchive(); return; }
+    // An older answer from this page load is not news: it may predate a click or a cancel.
+    if (archiveSeen.tabId === tabId && archiveSeen.epoch === snapshot.epoch && snapshot.version < archiveSeen.version) return;
+    archiveSeen = { tabId, epoch: snapshot.epoch, version: snapshot.version };
+    fillArchive = snapshot.archiveId && ARCHIVE_SHOWN.has(snapshot.phase) ? { ...snapshot, tabId } : null;
+    if (fillArchive?.phase === "saved" && fillArchive.snapshotId && snapshotQueryNeeded.id !== fillArchive.snapshotId) {
+      snapshotQueryNeeded = { id: fillArchive.snapshotId, request: queueRequest + 1 };
+      refreshQueue().catch(() => {});
+    }
+    if (fillArchive?.phase === "offer" && offerShown !== fillArchive.archiveId) {
+      // A new finished fill: the snapshot box starts ticked whenever there is a template to attach.
+      offerShown = fillArchive.archiveId;
+      elements.fillOfferSnapshot.checked = Boolean(fillArchive.snapshotAvailable);
+    }
+    renderFillArchive();
+  }
+
+  const archiveButton = (action, label, { disabled = false } = {}) =>
+    `<button type="button" data-archive="${action}"${disabled ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+
+  function renderFillArchive() {
+    const job = fillArchive;
+    elements.fillOffer.hidden = !job;
+    if (!job) return;
+    const copy = linkCopyModule;
+    const busy = Boolean(archivePending);
+    // The click is on its way and the page has not answered yet: already show what it does
+    // (the lookup, or the write), not a card of greyed-out buttons.
+    let phase = job.phase;
+    let savingKind = job.saving;
+    if (job.phase === "offer" && archivePending === "RESUME_PANEL_ARCHIVE_START") phase = "querying";
+    else if (job.phase === "choosing" && archivePending === "RESUME_PANEL_ARCHIVE_CHOOSE") { phase = "saving"; savingKind = "bind"; }
+    else if (["choosing", "empty", "blocked"].includes(job.phase) && archivePending === "RESUME_PANEL_ARCHIVE_LATER") { phase = "saving"; savingKind = "queue"; }
+    const result = job.result || null;
+    let title = "";
+    let text = "";
+    let hint = "";
+    let actions = [];
+    let candidates = "";
+    if (phase === "offer") {
+      text = job.summary || "";
+      actions = [archiveButton("start", "留档到桌面", { disabled: busy }), archiveButton("cancel", "不留档", { disabled: busy })];
+    } else if (phase === "querying") {
+      text = copy?.FILL_ARCHIVE_QUERYING || "";
+      // The only way out of a lookup is giving up on it; it reaches the page even while the
+      // lookup itself is still waiting.
+      actions = [archiveButton("cancel", "取消留档", { disabled: job.phase !== "querying" })];
+    } else if (phase === "choosing") {
+      title = copy?.FILL_ARCHIVE_CHOOSE || "";
+      hint = "选好之后才会写入桌面；只有一条也需要你确认，插件不会替你选。";
+      candidates = (job.candidates || []).map((candidate) =>
+        `<button type="button" data-application-id="${escapeHtml(candidate.applicationId)}"${busy ? " disabled" : ""}>${escapeHtml(candidate.label)}</button>`).join("");
+      actions = [archiveButton("later", "稍后处理", { disabled: busy }), archiveButton("cancel", "取消留档", { disabled: busy })];
+    } else if (phase === "empty") {
+      text = result?.text || "";
+      hint = result?.hint || "";
+      actions = [
+        archiveButton("savejob", "保存岗位到桌面端", { disabled: busy }),
+        archiveButton("requery", "重新查找", { disabled: busy }),
+        archiveButton("later", "稍后在待同步中选择", { disabled: busy }),
+        archiveButton("cancel", "取消留档", { disabled: busy })
+      ];
+    } else if (phase === "blocked") {
+      text = result?.text || "";
+      hint = result?.hint || "";
+      actions = job.canQueue
+        ? [archiveButton("later", "记入待同步，稍后选择", { disabled: busy }), archiveButton("requery", "重新查找", { disabled: busy }),
+          archiveButton("cancel", "取消留档", { disabled: busy })]
+        : [...(result?.extensionId ? [archiveButton("copyid", "复制扩展 ID")] : []), archiveButton("cancel", "知道了", { disabled: busy })];
+    } else if (phase === "saving") {
+      text = (savingKind === "bind" ? copy?.FILL_ARCHIVE_SAVING : copy?.FILL_ARCHIVE_QUEUEING) || "";
+    } else {
+      text = result?.text || "";
+      hint = result?.hint || "";
+      const queueLabel = { pending_bind: "去待同步选择申请", queued: "去待同步查看", unknown: "去待同步核对", failed: "去待同步处理" }[phase];
+      if (queueLabel && (phase !== "failed" || job.recordKept)) actions.push(archiveButton("openqueue", queueLabel));
+      if (phase === "pending_bind") actions.push(archiveButton("remove", "删除这条待同步记录", { disabled: busy }));
+      actions.push(archiveButton("dismiss", "知道了", { disabled: busy }));
+    }
+    const tone = ["offer", "querying", "choosing", "saving"].includes(phase) ? "" : (result?.tone || "info");
+    elements.fillOffer.className = `offer-card${tone ? ` is-${tone}` : ""}`;
+    elements.fillOfferTitle.hidden = !title;
+    elements.fillOfferTitle.textContent = title;
+    elements.fillOfferText.hidden = !text;
+    elements.fillOfferText.textContent = text;
+    elements.fillOfferHint.hidden = !hint;
+    elements.fillOfferHint.textContent = hint;
+    // The box is the user's choice for this offer only; once the lookup starts it is decided.
+    elements.fillOfferCheck.hidden = phase !== "offer";
+    elements.fillOfferSnapshot.disabled = !job.snapshotAvailable || busy;
+    elements.fillOfferCandidates.hidden = !candidates;
+    elements.fillOfferCandidates.innerHTML = candidates;
+    const extensionId = phase === "blocked" ? result?.extensionId || "" : "";
+    elements.fillOfferExtensionId.hidden = !extensionId;
+    elements.fillOfferExtensionId.textContent = extensionId;
+    const snapshotLine = phase === "saved" && job.snapshotId ? describeArchiveSnapshot(job.snapshotId) : "";
+    elements.fillOfferSnapshotState.hidden = !snapshotLine;
+    elements.fillOfferSnapshotState.textContent = snapshotLine;
+    elements.fillOfferActions.innerHTML = actions.join("");
+  }
+
+  // The template copy of a fill that reached the desktop uploads afterwards, on its own. Its
+  // real state comes from the pending list; it says "uploaded" only after it was seen queued.
+  function describeArchiveSnapshot(snapshotId) {
+    const copy = linkCopyModule;
+    if (!copy) return "";
+    let current = snapshotId;
+    for (let hops = 0; snapshotsReplaced.has(current) && hops < 8; hops += 1) current = snapshotsReplaced.get(current);
+    const entry = (queueReply?.outbox || []).find((item) => item?.messageType === "snapshot.upload" && item.snapshotId === current) || null;
+    return copy.describeFillSnapshotProgress(entry, {
+      seen: snapshotsSeen.has(current),
+      queried: snapshotQueryNeeded.id === snapshotId && queueReadCompleted >= snapshotQueryNeeded.request,
+      dropped: snapshotsDropped.has(current), confirmed: snapshotsConfirmed.has(current)
+    }).text;
+  }
+
+  // One request at a time from the card; the page refuses a second write on its own too.
+  // Cancelling a lookup is the exception: it has to reach the page while the lookup is still
+  // waiting, and once it is done the card is free again.
+  async function archiveRequest(message, { interrupt = false } = {}) {
+    if (archivePending && !interrupt) return null;
+    const mine = interrupt ? 0 : ++archiveOwner;
+    if (!interrupt) archivePending = message.type;
+    renderFillArchive();
+    const tabId = currentTabId;
+    try {
+      const result = await sendToPage(message);
+      if (interrupt && result?.ok) {
+        // The overtaken request no longer owns the lock; its late answer is only a snapshot,
+        // which the version check files in order.
+        archiveOwner += 1;
+        archivePending = "";
+      }
+      // An answer for another tab's page must not draw over the tab that is in front now.
+      if (result?.fillArchive && tabId === currentTabId) applyFillArchive(result.fillArchive, tabId);
+      return result;
+    } finally {
+      if (!interrupt && archiveOwner === mine) archivePending = "";
+      renderFillArchive();
+    }
+  }
+
+  async function archiveAction(action, extra = {}) {
+    const job = fillArchive;
+    if (!job?.archiveId) return;
+    const archiveId = job.archiveId;
+    if (action === "start") {
+      const request = archiveRequest({ type: "RESUME_PANEL_ARCHIVE_START", archiveId, withSnapshot: elements.fillOfferSnapshot.checked });
+      // The lookup's progress is in the page's snapshot already; fetch it now, not at the next tick.
+      pollStatus().catch(() => {});
+      const result = await request;
+      if (result && !result.ok) toast(result.error || "没能开始留档，请稍后再试。");
+    } else if (action === "cancel") {
+      // Giving up on a question says so; "不留档" on the offer and "知道了" on a dead end do not.
+      const asking = ["querying", "choosing", "empty"].includes(job.phase) || (job.phase === "blocked" && job.canQueue);
+      const result = await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CANCEL", archiveId }, { interrupt: job.phase === "querying" });
+      if (result?.ok && asking) toast("已取消留档，没有创建任何记录。");
+      else if (result && !result.ok) toast(result.error || "当前无法取消。");
+    } else if (action === "dismiss") {
+      await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CANCEL", archiveId });
+    } else if (action === "requery") {
+      const request = archiveRequest({ type: "RESUME_PANEL_ARCHIVE_REQUERY", archiveId });
+      pollStatus().catch(() => {});
+      const result = await request;
+      if (result && !result.ok) toast(result.error || "没能重新查找，请稍后再试。");
+    } else if (action === "choose") {
+      const result = await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CHOOSE", archiveId, applicationId: extra.applicationId });
+      if (result && !result.ok) toast(result.error || "没能留档，请到「待同步」核对后再操作。");
+      refreshQueue().catch(() => {});
+    } else if (action === "later") {
+      const result = await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_LATER", archiveId });
+      if (result && !result.ok) toast(result.error || "没能记入待同步，请稍后再试。");
+      refreshQueue().catch(() => {});
+    } else if (action === "remove") {
+      const result = await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_REMOVE", archiveId });
+      if (result?.ok) toast("已删除这条待同步记录，这次填写没有留档。");
+      else if (result) toast(result.error || "没能删除这条待同步记录。");
+      refreshQueue().catch(() => {});
+    } else if (action === "openqueue") {
+      await openQueue(archiveId);
+    } else if (action === "copyid") {
+      toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
+    } else if (action === "savejob") {
+      // The panel's own job review (#172), exactly what its 保存岗位到桌面端 button starts —
+      // never the page overlay's form. Nothing is created from here, and the fill still waits
+      // for the user to pick the application afterwards (重新查找).
+      const result = await jobRequest({ type: "RESUME_PANEL_SAVE_DRAFT" });
+      if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
+    }
+  }
+
+  // --- 待同步 (#178): the worker's existing queue, listed and handled in the panel ----------
+
+  function formatClock(iso) {
+    const at = new Date(iso);
+    return Number.isNaN(at.getTime()) ? "稍后" : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  // A snapshot upload rewrites the queue once per chunk. Reads that pile up while one is on
+  // its way collapse into a single read after it, and the newest read always wins.
+  let queueReading = null;
+  let queueDirty = false;
+  function refreshQueue() {
+    if (queueReading) {
+      queueDirty = true;
+      return queueReading;
+    }
+    queueReading = (async () => {
+      do {
+        queueDirty = false;
+        await readQueue();
+      } while (queueDirty);
+    })().finally(() => { queueReading = null; });
+    return queueReading;
+  }
+
+  async function readQueue() {
+    const request = ++queueRequest;
+    let reply;
+    let copy;
+    try {
+      [reply, copy] = await Promise.all([chrome.runtime.sendMessage({ type: "DESKTOP_LIST_QUEUE" }), linkCopy()]);
+    } catch {
+      return;
+    }
+    if (request !== queueRequest || !reply || reply.error) return;
+    queueReply = reply;
+    queueReadCompleted = request;
+    for (const entry of reply.outbox || []) {
+      if (entry?.messageType === "snapshot.upload" && entry.snapshotId) snapshotsSeen.add(entry.snapshotId);
+    }
+    for (const snapshotId of reply.uploadedSnapshots || []) snapshotsConfirmed.add(snapshotId);
+    queueRows = self.ResumeProQueue.buildRows(reply, copy, { formatTime: formatClock });
+    // A row that has left the list (sent, deleted) takes its open question with it.
+    for (const key of [...queueUi.keys()]) {
+      if (!queueRows.some((row) => row.key === key)) queueUi.delete(key);
+    }
+    renderQueue();
+    renderFillArchive();
+    followQueue();
+  }
+
+  // The card and the pending list must never disagree. Once the list has shown this fill, the
+  // list is where its state lives: if it is no longer waiting (bound, sent or deleted — here or
+  // in another window) while the card still says "尚未选择申请", or it has left the list while
+  // the card still says it is queued, the card closes. It never guesses what happened instead.
+  function followQueue() {
+    const job = fillArchive;
+    if (!job?.archiveId || archivePending) return;
+    const rows = queueRows.filter((row) => row.recordId === job.archiveId);
+    if (rows.length) archivesListed.add(job.archiveId);
+    if (!archivesListed.has(job.archiveId)) return;
+    const waiting = rows.some((row) => row.kind === "fill");
+    const stale = (job.phase === "pending_bind" && !waiting)
+      || (["queued", "unknown", "failed"].includes(job.phase) && rows.length === 0);
+    if (!stale) return;
+    if (!archivesTouched.has(job.archiveId)) toast("这次填写已经不在「待同步」里了（已发送，或在别处处理过），可以到桌面这条申请的时间线里核对。");
+    archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CANCEL", archiveId: job.archiveId }).catch(() => {});
+  }
+
+  function renderQueue() {
+    const total = self.ResumeProQueue.queueTotal(queueReply);
+    elements.queueCount.textContent = `${total} 条`;
+    elements.queueToggle.classList.toggle("has-items", total > 0);
+    elements.queueEmpty.hidden = queueRows.length > 0;
+    elements.queueList.innerHTML = self.ResumeProQueue.renderRows(queueRows, queueUi, { focusKey: queueFocus });
+  }
+
+  function setQueueOpen(open) {
+    elements.queueBody.hidden = !open;
+    elements.queueToggle.setAttribute("aria-expanded", String(open));
+  }
+
+  // "去待同步…": open the list on the record this fill just made, wherever it is now (still
+  // waiting for an application, or already bound and waiting to be sent).
+  async function openQueue(recordId) {
+    setQueueOpen(true);
+    await refreshQueue();
+    // One fill can have up to three rows (the waiting record, its bound event, its snapshot).
+    // Land on the fill itself, not on its snapshot.
+    const mine = queueRows.filter((item) => item.recordId === recordId);
+    const row = ["fill", "message", "snapshot"].map((kind) => mine.find((item) => item.kind === kind)).find(Boolean);
+    queueFocus = row?.key || "";
+    renderQueue();
+    if (!row) toast("待同步里已经没有这条记录了，可能已经发送或删除。");
+    else elements.queueList.querySelector?.(`[data-key="${row.key}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }
+
+  function setRowUi(key, changes) {
+    queueUi.set(key, { ...(queueUi.get(key) || {}), ...changes });
+    renderQueue();
+  }
+
+  async function queueCall(key, message, fallback) {
+    setRowUi(key, { busy: true, message: null });
+    try {
+      return (await chrome.runtime.sendMessage(message)) ?? fallback;
+    } catch {
+      return fallback;
+    } finally {
+      const open = queueUi.get(key);
+      if (open) queueUi.set(key, { ...open, busy: false });
+    }
+  }
+
+  async function queueAction(button) {
+    const key = button.dataset.key;
+    const row = queueRows.find((item) => item.key === key);
+    if (!row || button.disabled || queueUi.get(key)?.busy) return;
+    if (row.recordId) archivesTouched.add(row.recordId);
+    const copy = await linkCopy();
+    const action = button.dataset.queueAction;
+    // The answer stays on the row; a row that left the list (sent, bound) says it in a toast.
+    const done = async (message, extra = {}) => {
+      setRowUi(key, { busy: false, message, ...extra });
+      await refreshQueue();
+      if (message?.text && !queueRows.some((item) => item.key === key)) toast(message.text);
+    };
+
+    if (action === "copy-id") {
+      toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
+      return;
+    }
+
+    if (action === "close-question") { setRowUi(key, { mode: "", candidates: [], message: null, typed: "" }); return; }
+
+    if (action === "choose-fill") {
+      if (!row.job.company) {
+        // The page named no company, so there is nothing to look up: the id comes from the desktop.
+        setRowUi(key, { mode: "id", idLabel: "这条留档看不出是哪家公司。请粘贴桌面里对应申请的 ID：", message: null, typed: "" });
+        return;
+      }
+      const answer = await queueCall(key, { type: "DESKTOP_CANDIDATES_FOR", fields: row.job }, null);
+      if (answer?.status !== "ok") {
+        const mode = ["unavailable", "incompatible", "not_installed", "not_paired", "never_paired"].includes(answer?.status) ? answer.status : "unavailable";
+        await done(copy.describeFillArchiveBlocked(mode, { extensionId: chrome.runtime.id }), { mode: "" });
+        return;
+      }
+      const seen = new Set();
+      const candidates = [...(answer.exact || []), ...(answer.sameCompany || [])]
+        .filter((candidate) => typeof candidate?.applicationId === "string" && candidate.applicationId && !seen.has(candidate.applicationId) && seen.add(candidate.applicationId))
+        .map((candidate) => ({ applicationId: candidate.applicationId, company: candidate.company, title: candidate.title, label: copy.describeApplicationChoice(candidate) }));
+      if (!candidates.length) {
+        const empty = copy.describeFillArchiveEmpty();
+        setRowUi(key, { busy: false, mode: "", message: { tone: empty.tone, text: `${empty.text}请先保存岗位到桌面端，再回来选择。` } });
+        return;
+      }
+      setRowUi(key, { busy: false, mode: "choices", candidates, allowNew: false, prompt: copy.FILL_ARCHIVE_CHOOSE, message: null });
+      return;
+    }
+
+    if (action === "pick" && row.kind === "fill") {
+      const candidate = (queueUi.get(key)?.candidates || []).find((item) => item.applicationId === button.dataset.applicationId);
+      if (!candidate) return;
+      const result = await queueCall(key, { type: "DESKTOP_BIND_FILL", recordId: row.recordId, applicationId: candidate.applicationId }, { status: "unknown" });
+      const message = result?.status === "unknown" || result?.error
+        ? { tone: "pending", text: copy.FILL_ARCHIVE_UNKNOWN }
+        : copy.describeFillRecordResult(result, { application: candidate });
+      await done(message, { mode: "", candidates: [] });
+      return;
+    }
+
+    if (action === "submit-id") {
+      const input = elements.queueList.querySelector?.(`input[data-key="${key}"]`);
+      const typed = String(input?.value || "").trim();
+      if (!self.ResumeProQueue.isApplicationId(typed)) {
+        // Kept in the box: the list is redrawn, and one wrong character should not mean
+        // pasting the whole id again.
+        setRowUi(key, { typed, message: copy.describeFillRecordResult({ status: "rejected", reason: "invalid_application_id" }) });
+        return;
+      }
+      if (row.kind === "fill") {
+        const result = await queueCall(key, { type: "DESKTOP_BIND_FILL", recordId: row.recordId, applicationId: typed }, { status: "unknown" });
+        await done(result?.status === "unknown" ? { tone: "pending", text: copy.FILL_ARCHIVE_UNKNOWN } : copy.describeFillRecordResult(result), { mode: "" });
+      } else {
+        const result = await queueCall(key, { type: "DESKTOP_RESOLVE", messageId: row.messageId, choice: "associate", applicationId: typed }, { status: "pending" });
+        await done(copy.describeQueueOutcome({ messageType: row.messageType }, result), { mode: "" });
+      }
+      return;
+    }
+
+    if (action === "remove-fill") {
+      const result = await queueCall(key, { type: "DESKTOP_REMOVE_FILL", recordId: row.recordId }, null);
+      if (result?.ok) toast("已删除这条待同步记录。");
+      else setRowUi(key, { message: { tone: "warn", text: "这条留档已经不在待同步里了，可能已经发送过。" } });
+      await refreshQueue();
+      return;
+    }
+
+    if (action === "drop-snapshot") {
+      const snapshotId = button.dataset.snapshotId || row.snapshotId;
+      const result = await queueCall(key, { type: "DESKTOP_DROP_SNAPSHOT", snapshotId }, null);
+      if (result?.ok) {
+        snapshotsDropped.add(snapshotId);
+        toast("已丢弃这份简历快照，填写记录不受影响。");
+      } else {
+        setRowUi(key, { message: { tone: "warn", text: "没能丢弃这份简历快照，请稍后再试。" } });
+      }
+      await refreshQueue();
+      return;
+    }
+
+    if (action === "continue-intent") {
+      const result = await queueCall(key, { type: "DESKTOP_CONTINUE_SAVE", intentId: row.intentId }, { status: "unknown" });
+      if (result?.status === "needs_choice") {
+        const candidates = (result.exact || []).filter((candidate) => typeof candidate?.applicationId === "string")
+          .map((candidate) => ({ applicationId: candidate.applicationId, label: `使用已有：${copy.describeApplicationChoice(candidate)}` }));
+        setRowUi(key, { busy: false, mode: "choices", candidates, allowNew: true, prompt: "这可能是同一个岗位。要使用已有申请，还是另存为新的？", message: null });
+        return;
+      }
+      await done(self.ResumeProQueue.describeContinueResult(copy, result), { mode: "" });
+      return;
+    }
+
+    if ((action === "pick" || action === "pick-new") && row.kind === "intent") {
+      const applicationId = action === "pick" ? (queueUi.get(key)?.candidates || []).find((item) => item.applicationId === button.dataset.applicationId)?.applicationId : null;
+      if (action === "pick" && !applicationId) return;
+      const result = await queueCall(key, { type: "DESKTOP_BIND", intentId: row.intentId, applicationId }, { status: "unknown" });
+      await done(copy.describeBindResult(result), { mode: "", candidates: [] });
+      return;
+    }
+
+    if (action === "remove-intent") {
+      const result = await queueCall(key, { type: "DESKTOP_REMOVE_INTENT", intentId: row.intentId }, null);
+      if (result?.ok) toast("已删除这条待同步记录。");
+      else setRowUi(key, { message: { tone: "warn", text: "没能删除这条待同步记录，请稍后再试。" } });
+      await refreshQueue();
+      return;
+    }
+
+    if (action === "retry") {
+      const entry = (queueReply?.outbox || []).find((item) => item.messageId === row.messageId) || { messageType: row.messageType };
+      const result = await queueCall(key, { type: "DESKTOP_RETRY", messageId: row.messageId }, { status: "pending" });
+      await done(copy.describeQueueOutcome(entry, result));
+      return;
+    }
+
+    if (action === "cancel-message") {
+      // Cancelling a bound fill gives up the snapshot bound with it too (router: MSG.cancel).
+      const related = (queueReply?.outbox || [])
+        .filter((item) => item?.messageType === "snapshot.upload" && (item.messageId === row.messageId || (row.recordId && item.recordId === row.recordId)))
+        .map((item) => item.snapshotId);
+      const result = await queueCall(key, { type: "DESKTOP_CANCEL", messageId: row.messageId }, null);
+      if (result?.ok) related.forEach((snapshotId) => snapshotsDropped.add(snapshotId));
+      else setRowUi(key, { message: { tone: "warn", text: "没能取消，请稍后再试。" } });
+      await refreshQueue();
+      return;
+    }
+
+    if (action === "resolve-associate") {
+      setRowUi(key, { mode: "id", idLabel: "要关联到哪条申请？请粘贴桌面里的申请 ID：", message: null, typed: "" });
+      return;
+    }
+
+    if (action === "resolve-resave" || action === "resolve-discard") {
+      const choice = action === "resolve-resave" ? "resave" : "discard";
+      const entry = (queueReply?.outbox || []).find((item) => item.messageId === row.messageId) || {};
+      const result = await queueCall(key, { type: "DESKTOP_RESOLVE", messageId: row.messageId, choice }, { status: "pending" });
+      if (row.kind === "snapshot" && row.snapshotId) {
+        if (result?.status === "discarded") snapshotsDropped.add(row.snapshotId);
+        if (result?.status === "queued" && result.messageId) {
+          await refreshQueue();
+          const moved = (queueReply?.outbox || []).find((item) => item?.messageId === result.messageId);
+          if (moved?.snapshotId) snapshotsReplaced.set(row.snapshotId, moved.snapshotId);
+        }
+      }
+      // A resaved entry is queued, not yet on the desktop: described as pending.
+      const shown = result?.status === "queued" ? { status: "pending" } : result;
+      await done(choice === "discard" ? null : copy.describeQueueOutcome(entry, shown));
+    }
+  }
+
   const JOB_ACTIVE = new Set(["extracting", "assist", "review", "saving", "choice"]);
 
   function applyJobSave(snapshot, tabId = currentTabId) {
@@ -644,6 +1191,7 @@
         jobPending = false;
         clearTargetState();
         clearRepeat();
+        resetFillArchive();
       }
       currentTabId = nextTabId;
       const polledTabId = currentTabId;
@@ -692,10 +1240,7 @@
       if (connected) {
         elements.profileOffer.hidden = !response.profileOffer;
         elements.profileOfferText.textContent = response.profileOffer || "";
-        if (response.fillOffer && elements.fillOffer.hidden) elements.fillOfferSnapshot.checked = true;
-        elements.fillOffer.hidden = !response.fillOffer;
-        elements.fillOfferText.textContent = response.fillOffer || "";
-        elements.fillOfferSnapshot.disabled = !response.snapshotAvailable;
+        applyFillArchive(response.fillArchive || null, polledTabId);
         elements.desktopStatus.hidden = !response.desktopStatus;
         elements.desktopStatus.textContent = response.desktopStatus || "";
         elements.diagnostics.hidden = !response.diagnostics;
@@ -704,7 +1249,7 @@
         }
       } else {
         elements.profileOffer.hidden = true;
-        elements.fillOffer.hidden = true;
+        resetFillArchive();
         elements.desktopStatus.hidden = true;
         elements.diagnostics.hidden = true;
       }
@@ -775,15 +1320,44 @@
   });
   document.querySelectorAll("[data-offer]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.offer;
-    const result = await sendToPage({ type: "RESUME_PANEL_OFFER", action, withSnapshot: elements.fillOfferSnapshot.checked });
+    const result = await sendToPage({ type: "RESUME_PANEL_OFFER", action });
     if (!result?.ok) toast(result?.error || "操作未完成，请查看网页。");
-    else if (result.needsPageChoice) toast("请在网页上的确认控件里选择对应申请。");
     else if (action === "profileAdd") {
       await loadStore();
       await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" });
     }
     await pollStatus();
   }));
+  elements.fillOfferActions.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-archive]");
+    if (!button || button.disabled) return;
+    archiveAction(button.dataset.archive).catch(() => toast("操作未完成，请稍后再试。"));
+  });
+  elements.fillOfferCandidates.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-application-id]");
+    if (!button || button.disabled || fillArchive?.phase !== "choosing") return;
+    archiveAction("choose", { applicationId: button.dataset.applicationId }).catch(() => toast("操作未完成，请稍后再试。"));
+  });
+  elements.queueToggle.addEventListener("click", () => {
+    const open = elements.queueBody.hidden;
+    setQueueOpen(open);
+    if (!open) queueFocus = "";
+    if (open) refreshQueue().catch(() => {});
+    else renderQueue();
+  });
+  elements.queueList.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-queue-action]");
+    if (!button) return;
+    queueAction(button).catch(() => toast("操作未完成，请稍后再试。"));
+  });
+  // What is typed into an id box is kept as it is typed: the list is redrawn whenever the
+  // queue changes (a snapshot chunk, another window), and that must not empty the box.
+  elements.queueList.addEventListener("input", (event) => {
+    const key = event.target?.dataset?.key;
+    if (!key || !event.target.classList?.contains("queue-id")) return;
+    const open = queueUi.get(key);
+    if (open) queueUi.set(key, { ...open, typed: String(event.target.value || "") });
+  });
   // Every row, quick or grouped, goes through here. The row body is the quick path (the
   // page decides: an empty box gets the field, a filled one asks for an explicit button);
   // 添加 / 替换 / 删除 name the operation, and the page refuses one that would change nothing.
@@ -1023,7 +1597,11 @@
     const mode = desktopMode === "ready" && !selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile) ? "empty" : desktopMode;
     return desktopAction(mode === "ready" ? "home" : self.ResumeProResumeData.modeCopy(mode).kind).catch(() => toast("当前操作不可用。"));
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadStore().catch(() => {}); });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    loadStore().catch(() => {});
+    refreshQueue().catch(() => {});
+  });
   chrome.tabs.onActivated.addListener(() => {
     tabEpoch += 1;
     clearTargetState();
@@ -1044,9 +1622,17 @@
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
   });
+  // The pending list lives in the worker's storage keys (link/store.mjs). A change there —
+  // a record bound, a message sent, a retry counted — is read again through the worker; the
+  // panel never reads those keys itself.
+  const QUEUE_KEYS = ["desktopSaveIntents", "desktopOutbox", "desktopFillRecords"];
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.legacyImport) renderLegacyHint().catch(() => {});
+    if (area === "local" && QUEUE_KEYS.some((key) => changes[key])) refreshQueue().catch(() => {});
   });
+  linkCopy().then(() => { renderFillArchive(); renderQueue(); }).catch(() => {});
+  // Still there after the job page was closed and the panel reopened: the list is the worker's.
+  refreshQueue().catch(() => {});
   // Opening the panel nudges a stalled migration; with no old data this does no native call.
   chrome.runtime.sendMessage({ type: "DESKTOP_LEGACY_STATUS" }).catch(() => {});
   renderLegacyHint().catch(() => {});

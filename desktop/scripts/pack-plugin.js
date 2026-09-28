@@ -34,6 +34,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "sidepanel.css",
   "sidepanel.js",
   "sidepanel-compose.js",
+  "sidepanel-queue.js",
   "link",
   "icons",
   "README.md",

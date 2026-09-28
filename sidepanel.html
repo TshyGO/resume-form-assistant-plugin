@@ -153,12 +153,25 @@
             <p id="profile-offer-text"></p>
             <div class="offer-actions"><button type="button" data-offer="profileAdd">加到我的信息</button><button type="button" data-offer="profileSkip">不用</button></div>
           </div>
-          <div id="fill-offer" class="offer-card" hidden>
-            <p id="fill-offer-text"></p>
-            <label class="offer-check"><input id="fill-offer-snapshot" type="checkbox" checked>附上这次使用的简历模板拷贝</label>
-            <div class="offer-actions"><button type="button" data-offer="fillSave">留档到桌面</button><button type="button" data-offer="fillSkip">不留档</button></div>
+          <div id="fill-offer" class="offer-card" role="region" aria-label="填写留档" hidden>
+            <p id="fill-offer-title" class="offer-title" hidden></p>
+            <p id="fill-offer-text" role="status"></p>
+            <p id="fill-offer-hint" class="offer-hint" hidden></p>
+            <p id="fill-offer-snapshot-state" class="offer-hint" hidden></p>
+            <label id="fill-offer-check" class="offer-check"><input id="fill-offer-snapshot" type="checkbox" checked>附上这次使用的简历模板拷贝</label>
+            <div id="fill-offer-candidates" class="offer-candidates" hidden></div>
+            <code id="fill-offer-extension-id" class="offer-code" hidden></code>
+            <div id="fill-offer-actions" class="offer-actions offer-actions--wrap"></div>
           </div>
           <div id="desktop-status" class="desktop-status" role="status" hidden></div>
+          <section id="queue-center" class="queue-center" aria-label="待同步">
+            <button id="queue-toggle" class="queue-toggle" type="button" aria-expanded="false" aria-controls="queue-body"><span>待同步</span><strong id="queue-count">0 条</strong><span class="queue-chevron" aria-hidden="true">›</span></button>
+            <div id="queue-body" class="queue-body" hidden>
+              <p class="queue-intro">这里的记录都还没有写入桌面。选择申请或重试成功后，会自动从这里移除。</p>
+              <div id="queue-list" class="queue-list"></div>
+              <p id="queue-empty" class="queue-empty" hidden>没有待同步的记录。</p>
+            </div>
+          </section>
           <details id="fill-diagnostics" class="dock-diagnostics" hidden>
             <summary>填写诊断（不含简历内容）</summary>
             <textarea id="fill-diagnostics-text" readonly rows="9" aria-label="填写诊断摘要"></textarea>
@@ -186,6 +199,7 @@
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
     <script src="sidepanel-compose.js"></script>
+    <script src="sidepanel-queue.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

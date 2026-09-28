@@ -1,11 +1,14 @@
-// The keys allocated to the desktop link: D01's four, plus D08's fill records (the §8.10
-// list was extended for it). Nothing else in chrome.storage.local belongs to it.
+import { MAX_FILL_RECEIPTS } from './limits.mjs';
+
+// The keys allocated to the desktop link: D01's four, plus D08's fill records and compact
+// completed-fill receipts. Nothing else in chrome.storage.local belongs to it.
 export const KEYS = {
   intents: 'desktopSaveIntents',
   outbox: 'desktopOutbox',
   clientInstanceId: 'desktopClientInstanceId',
   pairing: 'desktopPairing',
-  fillRecords: 'desktopFillRecords'
+  fillRecords: 'desktopFillRecords',
+  fillReceipts: 'desktopFillReceipts'
 };
 
 // Keys the existing plugin owns. Listed so the boundary is testable, not just documented.
@@ -68,6 +71,16 @@ export function createStore({ storage, uuid }) {
 
     getFillRecords: () => readList(KEYS.fillRecords),
     updateFillRecords: change => updateList(KEYS.fillRecords, change),
+
+    async getFillReceipt(recordId) {
+      return (await readList(KEYS.fillReceipts)).find(item => item.recordId === recordId) ?? null;
+    },
+    rememberFillReceipt(recordId, outcome) {
+      return updateList(KEYS.fillReceipts, list => [
+        ...list.filter(item => item.recordId !== recordId),
+        { recordId, outcome }
+      ].slice(-MAX_FILL_RECEIPTS));
+    },
 
     async getPairing() {
       const stored = await storage.get([KEYS.pairing]);

@@ -372,7 +372,7 @@ icons/                 插件图标
 
 - **「待同步」不等于「桌面已保存」。** 只有桌面持久化并回了 `resultId`，界面才允许说已保存。全部文案集中在 [`link/copy.mjs`](link/copy.mjs)，`tests/link-degradation.test.js` 按 §9 降级矩阵逐行核对。
 - **「未安装」和「未配对」是两件事。** 装了但没配对时要说去桌面粘贴扩展 ID，不能说没装。
-- **队列有两层。** 桌面当时不在，或精确重复还没选定 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）。桌面在线且没有精确重复时，同一次保存会立刻写成 Bound outbox 并发送 `job.save`（新建，阶段是已保存，不是已投递）；有精确重复才问「使用已有 / 新建一条」。同公司的另一个岗位直接新建。Bound outbox 铸 `messageId`、盖当时的 `sourceRestoreEpoch`。两者都存在 `chrome.storage.local`，只用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加一个 `desktopFillRecords`（同样两层：未选申请的留档意图 → 选定之后才是 `fill.submit`）。
+- **队列有两层。** 桌面当时不在，或精确重复还没选定 → `SaveIntent`（没有 messageId、没有申请 UUID、没有 epoch）。桌面在线且没有精确重复时，同一次保存会立刻写成 Bound outbox 并发送 `job.save`（新建，阶段是已保存，不是已投递）；有精确重复才问「使用已有 / 新建一条」。同公司的另一个岗位直接新建。Bound outbox 铸 `messageId`、盖当时的 `sourceRestoreEpoch`。两者都存在 `chrome.storage.local`，使用 `desktopSaveIntents` / `desktopOutbox` / `desktopClientInstanceId` / `desktopPairing` 四个 key；D08 的填写留档再加 `desktopFillRecords`（未选申请的留档意图）和 `desktopFillReceipts`（最近 200 次已处理填写的 ID 与结果，用于防止重复留档，不含填写值）。`fill.submit` 的 messageId 固定为本次填写的 recordId。
 - **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联 / 丢弃 / 另存。
 - **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
 
@@ -383,6 +383,8 @@ icons/                 插件图标
 - **快照在填写开始时冻结。** 之后改模板不改它；桌面没开时先存在扩展自己的 IndexedDB，桌面可用后按块上传，传完才删本机副本。桌面里能从时间线打开它，并注明快照不能证明网站收到了什么。
 - **留档不等于投递。** 任何留档文案都不说投递；投递之后仍然要点「确认已投递」。
 - **从未配对的用户看不到这张卡片**，也不会在本机存任何东西。
+- **选申请在原生侧栏里完成（#178）。** 点「留档到桌面」后侧栏先查桌面里这家公司的申请，列出「公司 · 岗位（阶段）」让你选；只有一条也要你点，插件不会替你选，也不会新建申请。没有候选时可以先保存岗位再「重新查找」，或者「稍后在待同步中选择」；取消留档不建记录、不暂存快照。只有桌面回了持久化结果，卡片才说「已留档到桌面」；记入待同步时明确写「现在还没有留档到桌面」。每次填写在网页里铸一个 recordId，重复点击或重复消息都只会得到这一条记录、至多一条 `fill.submit`。
+- **侧栏「填写」页有常驻的「待同步 N 条」。** 它就是 worker 现有的队列（`DESKTOP_LIST_QUEUE`），在这里可以给留档选申请、完成岗位保存、重试、删除、丢弃过期快照；关掉招聘网页再打开侧栏，记录还在，写入桌面后自动消失。不支持原生侧栏的浏览器仍用网页里的旧控件。
 
 改这块代码前看 [`docs/superpowers/plans/2026-09-11-d08-pr-breakdown.md`](docs/superpowers/plans/2026-09-11-d08-pr-breakdown.md)。模块：`link/fillrecords.mjs`（留档意图与 allowlist）、`link/snapshot.mjs`（快照格式）、`link/staging.mjs`（IndexedDB 暂存）、`link/uploads.mjs`（分片上传、游标、修复）。真实浏览器端到端：`python desktop/scripts/d08_browser_check.py`。
 

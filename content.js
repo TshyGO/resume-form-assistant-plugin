@@ -63,6 +63,9 @@
     framework_state_unsynced: "页面表单状态未同步"
   };
   let shadowRoot = null;
+  // Archiving a finished fill from the native side panel (#178). Declared up here because the
+  // side panel's status message can arrive before the rest of this script has run.
+  let panelFill = null;
   const state = {
     dragOffsetX: 0,
     dragOffsetY: 0,
@@ -94,8 +97,6 @@
       const status = shadowRoot?.querySelector("#resume-pro-status");
       const cancel = shadowRoot?.querySelector("#resume-pro-cancel-fill");
       const profileOffer = shadowRoot?.querySelector("#resume-pro-profile-offer");
-      const fillOffer = shadowRoot?.querySelector("#resume-pro-fill-record");
-      const snapshotOption = fillOffer?.querySelector("#resume-pro-fill-record-snapshot");
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
@@ -115,8 +116,9 @@
         // While 辅助新增 runs, its own 停止 is the one control; the fill's cancel stays hidden.
         canCancel: !repeatActive() && Boolean(cancel && !cancel.hidden && !cancel.disabled),
         profileOffer: profileOffer && !profileOffer.hidden ? profileOffer.querySelector("#resume-pro-profile-offer-text")?.textContent || "" : "",
-        fillOffer: fillOffer && !fillOffer.hidden ? fillOffer.querySelector("#resume-pro-fill-record-summary")?.textContent || "" : "",
-        snapshotAvailable: Boolean(snapshotOption && !snapshotOption.disabled),
+        // Archiving the fill that just ended (#178): the offer, the application question and
+        // its answer, all drawn by the side panel from this snapshot. Page memory only.
+        fillArchive: panelFillSnapshot(),
         desktopStatus: desktopStatus?.textContent || "",
         diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
           ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : "",
@@ -174,28 +176,42 @@
     if (message.type === "RESUME_PANEL_OFFER") {
       const action = String(message.action || "");
       if (action === "profileSkip") { closeProfileOffer(); sendResponse({ ok: true }); return false; }
-      if (action === "fillSkip") { closeFillRecord(); sendResponse({ ok: true }); return false; }
       if (action === "profileAdd") {
         addUnansweredToProfile().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
         return true;
       }
-      if (action === "fillSave") {
-        const option = shadowRoot?.querySelector("#resume-pro-fill-record-snapshot");
-        if (option) option.checked = !option.disabled && message.withSnapshot !== false;
-        handleRecordFillClick().then(() => {
-          const candidates = shadowRoot?.querySelector("#resume-pro-candidates");
-          if (candidates && !candidates.hidden) {
-            const panel = shadowRoot?.querySelector(".resume-pro");
-            panel?.classList.remove("is-collapsed");
-            panel?.classList.add("is-legacy-open");
-            if (panel) updateCollapseButton(panel);
-            constrainSidebarToViewport();
-          }
-          sendResponse({ ok: true, needsPageChoice: Boolean(candidates && !candidates.hidden) });
-        }).catch(() => sendResponse({ ok: false }));
-        return true;
-      }
+      // Archiving a fill is no longer answered here (#178): the side panel runs the whole
+      // question itself (RESUME_PANEL_ARCHIVE_*) and never sends the user to the page overlay.
       sendResponse({ ok: false, error: "当前操作不可用。" });
+      return false;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_START") {
+      startPanelFillArchive(message).then(sendResponse)
+        .catch(() => sendResponse(panelFillOutcome({ ok: false, error: "没能开始留档，请稍后再试。" })));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_REQUERY") {
+      requeryPanelFillArchive(message).then(sendResponse)
+        .catch(() => sendResponse(panelFillOutcome({ ok: false, error: "没能重新查找，请稍后再试。" })));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_CHOOSE") {
+      choosePanelFillArchive(message).then(sendResponse)
+        .catch(() => sendResponse(panelFillOutcome({ ok: false, error: "没能留档，请到「待同步」核对后再操作。" })));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_LATER") {
+      laterPanelFillArchive(message).then(sendResponse)
+        .catch(() => sendResponse(panelFillOutcome({ ok: false, error: "没能记入待同步，请稍后再试。" })));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_REMOVE") {
+      removePanelFillArchive(message).then(sendResponse)
+        .catch(() => sendResponse(panelFillOutcome({ ok: false, error: "没能删除这条待同步记录，请在「待同步」里再试。" })));
+      return true;
+    }
+    if (message.type === "RESUME_PANEL_ARCHIVE_CANCEL") {
+      sendResponse(cancelPanelFillArchive(message));
       return false;
     }
     if (message.type === "RESUME_PANEL_SAVE_DRAFT") {
@@ -1195,6 +1211,17 @@
 
   function newRequestId() {
     return crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
+  }
+
+  // A fill record's id has to be a real UUID (link/fillrecords.mjs). `randomUUID` is missing
+  // on plain-http pages, so the same shape is built from random bytes there.
+  function newRecordId() {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
   // The retained page button is guarded while Chrome/Edge use the native side panel (#188).
@@ -3902,20 +3929,24 @@
     pendingFillTemplate = template ? structuredClone(template) : null;
     pendingFill = {
       ...raw,
+      // This one finished fill's id (#178). Minted here, it is the record's id if the user
+      // archives it, so a repeated or doubled request can never become a second record.
+      recordId: newRecordId(),
       urlRedacted: job.sourceUrl,
       templateVersion: (await snapshot.templateVersionOf(template)) || "",
       pluginVersion: chrome.runtime.getManifest().version,
       job: { company: job.company, title: job.title, sourceUrl: job.sourceUrl }
     };
     // The summary is built from exactly what would be sent, so the card cannot promise more.
-    card.querySelector("#resume-pro-fill-record-summary").textContent =
-      copy.describeFillOffer(fillrecords.buildFillPayload(pendingFill));
+    const summary = copy.describeFillOffer(fillrecords.buildFillPayload(pendingFill));
+    card.querySelector("#resume-pro-fill-record-summary").textContent = summary;
     const option = card.querySelector("#resume-pro-fill-record-snapshot");
     if (option) {
       option.checked = true;
       option.disabled = !pendingFillTemplate;
     }
     card.hidden = false;
+    offerPanelFillArchive(pendingFill, pendingFillTemplate, summary);
   }
 
   function closeFillRecord() {
@@ -3923,6 +3954,8 @@
     if (card) card.hidden = true;
     pendingFill = null;
     pendingFillTemplate = null;
+    // Answered on the page overlay: the side panel's copy of the same offer goes too.
+    if (panelFill?.phase === "offer") panelFill = idlePanelFill(panelFill);
   }
 
   async function handleRecordFillClick() {
@@ -3961,7 +3994,9 @@
     const { copy } = await loadDesktopModules();
     let result;
     try {
-      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RECORD_FILL", raw, applicationId, snapshotTemplate });
+      result = await chrome.runtime.sendMessage({
+        type: "DESKTOP_RECORD_FILL", raw, recordId: raw.recordId, applicationId, snapshotTemplate
+      });
     } catch {
       result = { status: "rejected" };
     }
@@ -4050,6 +4085,298 @@
     setDesktopStatus(copy.describeFillRecordResult(result ?? { status: "pending" }));
     revealDesktopStatus();
     refreshPendingList();
+  }
+
+  // --- Archiving a fill from the native side panel (#178) --------------------------------
+  //
+  //   offer -> querying -> choosing | empty | blocked -> saving
+  //         -> saved | queued | pending_bind | failed | unknown      (or cancelled)
+  //
+  // The side panel draws every step from panelFillSnapshot() and answers with the messages
+  // above (RESUME_PANEL_ARCHIVE_*). Nothing is written until the user picks an application
+  // or explicitly asks to keep the fill waiting; cancelling writes and stages nothing. The
+  // archive is bound to:
+  //   - `archiveId`, the recordId minted when the fill was offered. The record, if any, gets
+  //     this id, so a second request for the same fill is a duplicate (link/fillrecords.mjs);
+  //   - a token that every cancel, re-query and new fill replaces, so an answer still on its
+  //     way for an earlier question is dropped instead of reopening it;
+  //   - this page load (`epoch`), so the panel never compares versions across a reload.
+  // The candidates are the desktop's list for this fill's company; the panel can only pick
+  // from it, and even a single candidate waits for the user. Page memory only.
+
+  const PANEL_FILL_EPOCH = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const PANEL_FILL_OPEN = ["offer", "querying", "choosing", "empty", "blocked"];
+  const PANEL_FILL_DONE = ["saved", "queued", "pending_bind", "failed", "unknown"];
+  const PANEL_FILL_BLOCKED_MODES = new Set(["unavailable", "incompatible", "not_installed", "not_paired", "never_paired"]);
+  const PANEL_FILL_ENDED = "这次填写的留档已经结束了。";
+  let panelFillWaitMs = 30000;
+  panelFill = idlePanelFill(null);
+
+  function idlePanelFill(previous) {
+    return {
+      archiveId: null, phase: "idle", version: (previous?.version || 0) + 1, token: (previous?.token || 0) + 1,
+      raw: null, template: null, summary: "", withSnapshot: false, candidates: [], reason: "",
+      canQueue: false, result: null, application: null, snapshotId: null, recordKept: false, saving: ""
+    };
+  }
+
+  function touchPanelFill(changes) {
+    Object.assign(panelFill, changes, { version: panelFill.version + 1 });
+  }
+
+  // What the side panel may see: counts in the summary, labels and ids of the offered
+  // applications, and the answer. Never the page's field values, and never the template.
+  function panelFillSnapshot() {
+    const job = panelFill || idlePanelFill(null);
+    return {
+      epoch: PANEL_FILL_EPOCH,
+      archiveId: job.archiveId,
+      phase: job.phase,
+      version: job.version,
+      summary: job.summary,
+      snapshotAvailable: Boolean(job.template),
+      withSnapshot: job.withSnapshot,
+      saving: job.saving,
+      reason: job.reason,
+      canQueue: job.canQueue,
+      candidates: job.candidates.map(candidate => ({ applicationId: candidate.applicationId, label: candidate.label })),
+      result: job.result ? { ...job.result } : null,
+      recordKept: job.recordKept,
+      snapshotId: job.snapshotId
+    };
+  }
+
+  const panelFillOutcome = (extra = {}) => ({ ...extra, fillArchive: panelFillSnapshot() });
+
+  // A new finished fill replaces whatever question the previous one left open. A write that
+  // is already on its way keeps going; its answer is dropped by the token and lands in the
+  // pending list instead.
+  function offerPanelFillArchive(raw, template, summary) {
+    panelFill = idlePanelFill(panelFill);
+    touchPanelFill({ archiveId: raw.recordId, phase: "offer", raw, template, summary, withSnapshot: Boolean(template) });
+  }
+
+  function panelFillMatches(archiveId) {
+    return Boolean(archiveId) && archiveId === panelFill?.archiveId;
+  }
+
+  async function waitForPanelFill(promise, fallback) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise(resolve => { timer = setTimeout(() => resolve(fallback), panelFillWaitMs); })
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function startPanelFillArchive(message) {
+    if (!panelFillMatches(message.archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    // A second click while the first is looking: the same question, not a second one.
+    if (panelFill.phase !== "offer") return panelFillOutcome({ ok: panelFill.phase !== "idle" && panelFill.phase !== "cancelled" });
+    // The side panel owns this fill now; the page overlay's copy of the offer goes away so
+    // the two can never both send it.
+    const card = shadowRoot?.querySelector("#resume-pro-fill-record");
+    if (card) card.hidden = true;
+    pendingFill = null;
+    pendingFillTemplate = null;
+    // Decided now, with the offer on screen: the template copy leaves only if this was ticked.
+    touchPanelFill({ withSnapshot: Boolean(panelFill.template) && message.withSnapshot !== false });
+    return queryPanelFillCandidates();
+  }
+
+  async function requeryPanelFillArchive(message) {
+    if (!panelFillMatches(message.archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    if (panelFill.phase === "querying") return panelFillOutcome({ ok: true });
+    if (!["empty", "blocked", "choosing"].includes(panelFill.phase)) {
+      return panelFillOutcome({ ok: false, error: "现在不能重新查找。" });
+    }
+    return queryPanelFillCandidates();
+  }
+
+  async function queryPanelFillCandidates() {
+    // A new token: an earlier lookup's answer belongs to a question nobody is asking now.
+    touchPanelFill({ phase: "querying", token: panelFill.token + 1, candidates: [], reason: "", canQueue: false, result: null });
+    const token = panelFill.token;
+    const isCurrent = () => panelFill.token === token && panelFill.phase === "querying";
+    const job = panelFill.raw?.job || {};
+    try {
+      const { copy } = await loadDesktopModules();
+      if (!isCurrent()) return panelFillOutcome({ ok: true });
+      if (!job.company) {
+        // Nothing to look up. Not an empty list either: that would suggest the desktop has
+        // no application for a company the page never named.
+        const blocked = copy.describeFillArchiveBlocked("unrecognized");
+        touchPanelFill({ phase: "blocked", reason: "unrecognized", canQueue: blocked.canQueue, result: blocked });
+        return panelFillOutcome({ ok: true });
+      }
+      const asked = { company: job.company, title: job.title || "", sourceUrl: job.sourceUrl || "" };
+      let answer;
+      try {
+        answer = await waitForPanelFill(chrome.runtime.sendMessage({ type: "DESKTOP_CANDIDATES_FOR", fields: asked }), null);
+      } catch {
+        answer = null;
+      }
+      if (!isCurrent()) return panelFillOutcome({ ok: true });
+      if (answer?.status !== "ok") {
+        // No answer is not "no candidates": an empty list would push the user towards saving
+        // a job the desktop may already have.
+        const reason = PANEL_FILL_BLOCKED_MODES.has(answer?.status) ? answer.status : "unavailable";
+        const blocked = copy.describeFillArchiveBlocked(reason, { extensionId: chrome.runtime.id });
+        touchPanelFill({ phase: "blocked", reason, canQueue: blocked.canQueue, result: blocked });
+        return panelFillOutcome({ ok: true });
+      }
+      const seen = new Set();
+      const options = [...(answer.exact || []), ...(answer.sameCompany || [])].filter(candidate => {
+        if (!candidate || typeof candidate.applicationId !== "string" || !candidate.applicationId) return false;
+        if (typeof candidate.company !== "string" || typeof candidate.title !== "string") return false;
+        if (seen.has(candidate.applicationId)) return false;
+        seen.add(candidate.applicationId);
+        return true;
+      }).map(candidate => ({
+        applicationId: candidate.applicationId, company: candidate.company, title: candidate.title,
+        label: copy.describeApplicationChoice(candidate)
+      }));
+      if (options.length) {
+        // Even one candidate waits for the user: the plugin never picks an application.
+        touchPanelFill({ phase: "choosing", candidates: options });
+      } else {
+        touchPanelFill({ phase: "empty", reason: "no-record", result: copy.describeFillArchiveEmpty() });
+      }
+    } catch {
+      if (isCurrent()) {
+        touchPanelFill({
+          phase: "blocked", reason: "unavailable", canQueue: true,
+          result: { tone: "warn", text: "没能查到对应的投递记录。", hint: "可以稍后重新查找，或者先记入待同步。现在还没有留档到桌面。" }
+        });
+      }
+    }
+    return panelFillOutcome({ ok: true });
+  }
+
+  async function choosePanelFillArchive(message) {
+    if (!panelFillMatches(message.archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    // Claimed synchronously below, so a second click can never send a second record.
+    if (panelFill.phase === "saving") return panelFillOutcome({ ok: false, error: "正在留档，请稍候。" });
+    if (panelFill.phase !== "choosing") return panelFillOutcome({ ok: false, error: "这个选择已经失效了。" });
+    const candidate = panelFill.candidates.find(item => item.applicationId === message.applicationId);
+    if (!candidate) return panelFillOutcome({ ok: false, error: "请选择列表里的申请。" });
+    return recordPanelFill(candidate);
+  }
+
+  // "稍后处理" / "稍后在待同步中选择" / "记入待同步": one waiting record, no application.
+  async function laterPanelFillArchive(message) {
+    if (!panelFillMatches(message.archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    if (panelFill.phase === "saving") return panelFillOutcome({ ok: false, error: "正在处理，请稍候。" });
+    const allowed = panelFill.phase === "choosing" || panelFill.phase === "empty"
+      || (panelFill.phase === "blocked" && panelFill.canQueue);
+    if (!allowed) return panelFillOutcome({ ok: false, error: "现在不能记入待同步。" });
+    return recordPanelFill(null);
+  }
+
+  async function recordPanelFill(candidate) {
+    const token = panelFill.token;
+    const archiveId = panelFill.archiveId;
+    const raw = panelFill.raw;
+    const snapshotTemplate = panelFill.withSnapshot ? panelFill.template : null;
+    const application = candidate ? { company: candidate.company, title: candidate.title } : null;
+    touchPanelFill({ phase: "saving", saving: candidate ? "bind" : "later", application, result: null });
+    let result;
+    try {
+      result = await waitForPanelFill(chrome.runtime.sendMessage({
+        type: "DESKTOP_RECORD_FILL", raw, recordId: archiveId,
+        applicationId: candidate ? candidate.applicationId : null, snapshotTemplate
+      }), { status: "unknown" });
+    } catch {
+      // The request may have reached the worker before the port failed: not a failure to retry.
+      result = { status: "unknown" };
+    }
+    refreshPendingList();
+    if (panelFill.token !== token || panelFill.archiveId !== archiveId) {
+      return panelFillOutcome({ ok: false, expired: true, error: "这次留档的结果已经过期，请在「待同步」里核对。" });
+    }
+    let phase;
+    let described;
+    try {
+      const { copy } = await loadDesktopModules();
+      const status = result?.status;
+      if (!status || status === "unknown" || result?.error) {
+        phase = "unknown";
+        described = { tone: "pending", text: copy.FILL_ARCHIVE_UNKNOWN };
+      } else if (status === "saved" || (status === "duplicate" && result.receipt?.outcome === "saved")) {
+        // Only a persisted reply gets here, and only this names the application.
+        phase = "saved";
+        described = copy.describeFillRecordResult(result, { application: status === "saved" ? application : null, uploadShownSeparately: true });
+      } else if (status === "recorded" || (status === "duplicate" && result.record?.status === "pending_bind")) {
+        phase = "pending_bind";
+        described = copy.describeFillRecordResult({ ...result, status: "recorded" });
+      } else if (status === "duplicate" && result.receipt?.outcome === "discarded") {
+        phase = "failed";
+        described = copy.describeFillRecordResult(result);
+      } else if (status === "pending" || status === "stalled" || status === "duplicate") {
+        phase = "queued";
+        described = copy.describeFillRecordResult(status === "stalled" ? { ...result, status: "pending" } : result);
+      } else {
+        phase = "failed";
+        described = copy.describeFillRecordResult(result);
+      }
+    } catch {
+      phase = "unknown";
+      described = { tone: "pending", text: "没能确认留档结果，请到「待同步」或桌面端核对后再操作。" };
+    }
+    touchPanelFill({
+      phase, saving: "", result: described, raw: null, template: null,
+      // Where the record is now, so the panel can offer the pending list only when it exists.
+      recordKept: phase === "pending_bind" || phase === "queued" || phase === "unknown" || Boolean(result?.record),
+      snapshotId: phase === "saved" && result?.uploadQueued ? result.record?.snapshot?.snapshotId || null : null
+    });
+    return panelFillOutcome({ ok: true });
+  }
+
+  // Deleting the waiting record just made, from the answer card. Only a record that is still
+  // waiting can go (removeWaiting); one already sent is left alone.
+  async function removePanelFillArchive(message) {
+    if (!panelFillMatches(message.archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    if (panelFill.phase !== "pending_bind") return panelFillOutcome({ ok: false, error: "这条记录现在不能删除。" });
+    const token = panelFill.token;
+    let reply;
+    try {
+      reply = await chrome.runtime.sendMessage({ type: "DESKTOP_REMOVE_FILL", recordId: panelFill.archiveId });
+    } catch {
+      reply = null;
+    }
+    refreshPendingList();
+    if (!reply?.ok) {
+      return panelFillOutcome({ ok: false, error: "这条记录已经不在待同步里了，可能已经处理过。" });
+    }
+    if (panelFill.token === token) panelFill = idlePanelFill(panelFill);
+    return panelFillOutcome({ ok: true, removed: true });
+  }
+
+  // "不留档" on the offer, "取消留档" on a question, or "知道了" on an answer.
+  function cancelPanelFillArchive({ archiveId }) {
+    if (!panelFillMatches(archiveId)) return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
+    if (panelFill.phase === "saving") {
+      return panelFillOutcome({ ok: false, error: "已经在留档了，无法取消。请在「待同步」里核对。" });
+    }
+    if (PANEL_FILL_OPEN.includes(panelFill.phase)) {
+      // Nothing was created and nothing staged. The page overlay's copy goes too.
+      const card = shadowRoot?.querySelector("#resume-pro-fill-record");
+      if (card) card.hidden = true;
+      pendingFill = null;
+      pendingFillTemplate = null;
+      panelFill = idlePanelFill(panelFill);
+      // Kept, so a lookup answer still on its way is recognised as belonging to a closed one.
+      touchPanelFill({ archiveId, phase: "cancelled" });
+      return panelFillOutcome({ ok: true, cancelled: true });
+    }
+    if (PANEL_FILL_DONE.includes(panelFill.phase) || panelFill.phase === "cancelled") {
+      panelFill = idlePanelFill(panelFill);
+      return panelFillOutcome({ ok: true });
+    }
+    return panelFillOutcome({ ok: false, error: PANEL_FILL_ENDED });
   }
 
   function closeSaveForm() {
@@ -5229,6 +5556,15 @@
       },
       setDesktopModules(modules) {
         desktopModules = modules;
+      },
+      offerFillRecord,
+      handleRecordFillClick,
+      panelFillSnapshot,
+      getPendingFill() {
+        return pendingFill;
+      },
+      setPanelFillWaitMs(ms) {
+        panelFillWaitMs = ms;
       },
       setPanelJobWriteTimeoutMs(ms) {
         panelJobWriteTimeoutMs = ms;
