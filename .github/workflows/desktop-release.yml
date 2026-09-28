@@ -197,12 +197,6 @@ jobs:
               echo "测试版用来提前试用新功能，**可能有严重问题**。它和正式版共用同一份数据和同一个安装位置：装上就是覆盖升级。测试版可能会升级数据库结构，升级之后**无法回到正式版**——正式版会拒绝打开被更新过的数据库，只能从升级前自动做的备份里恢复。没有把握的话请用正式版。"
               echo
             fi
-            if [[ "$TAG" == desktop-v0.4.1 || "$TAG" == desktop-v0.4.1-beta.* ]]; then
-              echo "## 从 Resume Pro Desktop 升级到网申快填"
-              echo
-              echo "这次改名改变了安装位置。升级前请导出备份并退出旧程序。Windows 用户先卸载旧的 Resume Pro Desktop，保留求职档案，再安装网申快填；macOS 用户安装网申快填.app、确认旧档案可读且插件可连接后，再移除旧的 Resume Pro Desktop.app。不要删除 ResumePro 数据目录。详细步骤见[安装与升级说明](https://github.com/$GITHUB_REPOSITORY/blob/$TAG/docs/desktop-mvp/install-and-update.md)。"
-              echo
-            fi
             echo "## macOS 使用 ad-hoc 签名"
             echo
             echo "我们还没有 Apple Developer ID 证书。macOS 安装包使用 ad-hoc 签名来保证 App 包结构完整，但 Gatekeeper 无法据此验证发布者身份，所以："

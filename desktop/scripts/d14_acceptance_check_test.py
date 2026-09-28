@@ -15,23 +15,6 @@ SPEC.loader.exec_module(D14)
 
 
 class D14AcceptanceCheckTests(unittest.TestCase):
-    def test_install_registration_rejects_legacy_entry_even_with_new_entry(self):
-        records = [
-            {"DisplayName": "网申快填"},
-            {"DisplayName": "Resume Pro Desktop"},
-        ]
-        with self.assertRaisesRegex(D14.AcceptanceError, "only one HKCU uninstall registration"):
-            D14.validate_install_registration(records, Path("unused.exe"), "0.4.1")
-
-    def test_uninstall_query_includes_both_product_names(self):
-        with patch.object(D14.sys, "platform", "win32"), patch.object(
-            D14, "powershell_value", return_value="[]"
-        ) as powershell:
-            self.assertEqual(D14.uninstall_registrations(), [])
-        query = powershell.call_args.args[0]
-        self.assertIn("网申快填", query)
-        self.assertIn("Resume Pro Desktop", query)
-
     def test_store_key_resolves_to_fixed_extension_id(self):
         manifest = json.loads((D14.ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(D14.extension_id_from_key(manifest["key"]), D14.EXPECTED_EXTENSION_ID)

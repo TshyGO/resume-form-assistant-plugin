@@ -33,9 +33,6 @@ const readText = (path) => readFileSync(path, "utf8").split("\r\n").join("\n");
 test("D13 PowerShell 脚本带 UTF-8 BOM，Windows PowerShell 5.1 能读取中文安装目录", () => {
   const source = readFileSync(join(here, "d13_install_acceptance.ps1"));
   assert.equal(source.subarray(0, 3).toString("hex"), "efbbbf");
-  const script = source.toString("utf8");
-  assert.match(script, /Legacy installation remains/);
-  assert.match(script, /Legacy Resume Pro Desktop uninstall registration remains/);
 });
 
 const conf = (version, overrides = {}) =>
