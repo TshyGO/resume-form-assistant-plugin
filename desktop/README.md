@@ -1,154 +1,105 @@
-# 网申快填（D02 壳 + D04 申请管理）
+# 网申快填桌面端
 
-最小可运行桌面程序：导航、设置、用户数据目录、单实例，以及不依赖 AI 的申请管理（列表、编辑、阶段与时间线）。浏览器插件仍在仓库根目录，安装方式不变。
+桌面端统一维护简历模板、「我的信息」、AI 设置和本地求职档案，通过 Native Messaging 与仓库根目录的浏览器扩展协作。
 
-本分支的开发基线临时整合了未合并的 D02 `f37b9e1` 与 D03 `05843ae`。这不表示上游已验收或已合并。
+普通用户请从[项目首页](../README.md)下载正式安装包。本页面向开发者；首次拉起桌面与扩展，按[开发快速开始](../docs/dev-quickstart.md)操作。
 
-给 D03/D06 的宿主接口见 [HOST.md](HOST.md)。
+## 当前模块
 
-## 依赖
+| 模块 | 职责 |
+| --- | --- |
+| 申请 | 岗位列表、搜索和筛选、阶段记录、时间线、回收与恢复 |
+| 简历 | 多套模板、我的信息、表格导入导出、AI 简历解析、旧扩展数据迁移 |
+| 证据收件箱 | 导入招聘邮件、截图、PDF 或文本，关联申请，手动分类与可选 AI 整理 |
+| 待办 | 关联申请、到期时间、任务状态与平台提醒能力提示 |
+| 设置 | 浏览器连接、AI 服务商、备份与恢复、回收站、更新检查和诊断 |
+| 扩展协作 | 简历读写、AI 请求转发、岗位保存、投递确认、填写记录与简历快照 |
 
-- Node.js 22+ 与 npm（使用已提交的 `package-lock.json`：`npm ci`）
-- Rust：crate 声明 `rust-version = 1.77.2`（Tauri 2.11 锁定依赖的最低声明）。本仓库 Windows 已用 **rustc 1.94.0** 验证。不承诺未在本仓库跑过的更低或中间版本。
-- Windows：WebView2 Runtime（Windows 11 通常已带）
-- macOS 11+：Xcode 命令行工具
+各模块的使用限制见[使用指南](../docs/user-guide.md)，数据流见[隐私政策](../docs/privacy-policy.md)。功能存在、自动化测试通过和某平台实机验收是不同的状态，平台验证以对应验收记录为准。
 
-## 命令（在 `desktop/` 下）
+## 开发环境
+
+与当前开发 SOP 对齐：Node.js 22、Rust 1.94.0。Windows 需要 MSVC 生成工具和 WebView2 Runtime；macOS 需要 Xcode Command Line Tools。安装包面向 Windows x64 与 macOS Apple Silicon。
+
+在 `desktop/` 目录执行：
 
 ```bash
-npm install
-npm test                 # 宿主/应用单测 + 前端构建 + ZIP 白名单
-npm run desktop:dev      # 开发启动真实 Tauri 窗口
-npm run desktop:build    # 本地打包（不签名、不上架）
+npm ci
+npm run desktop:dev     # 启动真实 Tauri 窗口
+npm run typecheck       # TypeScript 检查
+npm test                # 按 package.json 执行桌面端测试链
+npm run desktop:build   # 本地构建；正式发布另走发布流程
 ```
 
-探针（不打开窗口，打印解析后的目录）：
+正式 Windows 包使用 MSVC target，签名、安装、升级、卸载与资产校验按[构建、安装与升级](../docs/desktop-mvp/install-and-update.md)及[发版 SOP](../docs/release-sop.md)执行。仅用浏览器打开前端不能替代 Tauri 或安装包验收。
 
-```bash
-# 开发二进制
-cargo run --manifest-path src-tauri/Cargo.toml -- --probe
+扩展本身无需构建，加载仓库根目录后还需完成开发用 Native Messaging 注册。参见[连接注册说明](DEV-NATIVE-MESSAGING.md)。
 
-# 申请管理闭环（隔离临时目录，不写真实档案）
-cargo run --manifest-path src-tauri/Cargo.toml -- --apps-loop
+## 代码导航
 
-# 隐藏启动（同一唯一写入者，供后续 D06）
-cargo run --manifest-path src-tauri/Cargo.toml -- --hidden
-
-# 让已运行的唯一写入者退出（不会再开第二个宿主）
-cargo run --manifest-path src-tauri/Cargo.toml -- --quit
+```text
+src/                    TypeScript 前端，包含旧视图与 React 组件
+src/react/              React 基础组件和挂载支持
+src/ai/                 AI 设置与整理结果交互
+src/resume/             简历管理界面
+src-tauri/              Tauri / Rust 应用、命令与平台集成
+crates/                 数据服务、档案存储、协议、AI 与导入等模块
+scripts/                开发注册、检查、打包和验收脚本
+index.html              页面骨架与导航
+package.json            当前开发、检查和测试入口
 ```
 
-Windows 产物大致在：
+宿主接口见 [HOST.md](HOST.md)，浏览器侧的数据流和协议副本规则见[扩展开发说明](../docs/extension-development.md)。
 
-`src-tauri/target/release/resume-pro-desktop.exe`
-
-以及 NSIS 安装包（per-user，不要求管理员）。**不要用浏览器直接打开 `index.html` 当作验收。**
-
-## 数据目录
+## 数据目录与开发隔离
 
 | 平台 | 用户数据 | 缓存 |
 | --- | --- | --- |
-| Windows | `%LOCALAPPDATA%\ResumePro\` | 同一根下 `cache\` |
+| Windows | `%LOCALAPPDATA%\ResumePro\` | 同一根目录下的 `cache\` |
 | macOS | `~/Library/Application Support/ResumePro/` | `~/Library/Caches/ResumePro/` |
 
-目录不可写时会在设置页给出错误码，不会改用临时目录。重装或再次启动不会删除已有档案目录。
+应用显示名已变更为「网申快填」，现有 `ResumePro` 数据目录仍保留以兼容旧档案。不要为统一名称直接改动目录或底层二进制名。
 
-开发覆盖（必须是绝对路径），需导出后再启动同一进程：
-
-PowerShell：
+开发时使用独立的绝对路径，并在启动进程前设置：
 
 ```powershell
-$env:RESUMEPRO_DATA_DIR = "D:\tmp\网申快填 Data"
-$env:RESUMEPRO_CACHE_DIR = "D:\tmp\网申快填 Cache"
+# Windows PowerShell
+$env:RESUMEPRO_DATA_DIR = "D:\tmp\wangshen-dev-data"
+$env:RESUMEPRO_CACHE_DIR = "D:\tmp\wangshen-dev-cache"
 npm run desktop:dev
 ```
-
-macOS / bash：
 
 ```bash
-export RESUMEPRO_DATA_DIR="$HOME/tmp/网申快填 Data"
-export RESUMEPRO_CACHE_DIR="$HOME/tmp/网申快填 Cache"
+# macOS
+export RESUMEPRO_DATA_DIR="$HOME/tmp/wangshen-dev-data"
+export RESUMEPRO_CACHE_DIR="$HOME/tmp/wangshen-dev-cache"
 npm run desktop:dev
 ```
 
-## 生命周期
+配合独立浏览器 Profile，避免测试迁移、恢复或队列操作影响真实求职资料。目录不可写会报告错误，不应静默改用临时数据库。
 
-- 关闭窗口：隐藏到托盘（Windows）或菜单栏（macOS），进程仍是唯一写入者
-- 托盘/菜单「打开」或第二次启动：唤起已有窗口
-- 「退出」：结束进程
-- **没有**开机启动、计划任务或常驻服务
-- **没有**系统提醒（D10）；不要把托盘驻留理解成提醒可用
+## 生命周期与提醒
 
-## 验证状态
+关闭窗口会隐藏到托盘或菜单栏，进程继续运行；再次启动会唤起已有实例。主动退出会结束应用，并按当前提醒实现处理已安排的通知。
 
-Windows（本机已跑过真实 `resume-pro-desktop.exe`，不是浏览器打开前端）：
+待办提醒已有相应模块与界面，但系统权限、平台支持和应用状态会影响可用性。开发及验收应检查应用实际显示的能力、退出提示与生命周期说明。不能把托盘驻留、Windows 验证通过或 macOS CI 构建通过当作另一平台提醒已完成实机验收。
 
-- `--probe` 解析到 `%LOCALAPPDATA%\ResumePro`，与程序目录分离
-- 中文/空格目录可作为 `RESUMEPRO_DATA_DIR`
-- 把数据根指向普通文件时返回 `DIR_CREATE_FAILED` / `DIR_NOT_WRITABLE`，不改用临时目录
-- `--hidden` 后第二次启动仍只有一个进程；`--quit` 结束宿主
-- 关闭窗口后进程仍在；设置页显示版本、数据目录、日志目录、运行状态
-- 申请管理会在档案目录创建 `archive.db` 与 `current.json`（D03 数据层）。初始化失败会明确报错，不会改用临时库。
+## 前端与测试约定
 
-## D04 可用操作
+新界面使用 React，经 `InvokeContext` 调用命令，通过 `mountReact` 挂入页面容器。原有视图与 React 组件并存，不要仅为改文档或修局部问题进行无关的大范围迁移。
 
-- 新增/编辑申请（公司、岗位、链接、地点、备注）
-- 搜索、阶段过滤、排序、分页
-- 确认已投递、记录测评/面试/结果、纠正阶段、备注
-- 回收与恢复（无永久删除）
-- 关闭后重开，资料与时间线保留
-
-进度记录使用独立的保存/取消对话框；取消或 Escape 不写入事件。
-默认仅补录历史，只有勾选「同时更新当前进度」才改变阶段。可填写面试轮次和发生日期，
-日期留空记为未知，不用记录当天冒充发生日期。编辑时清空链接、地点或备注会实际清除旧值。
-
-2026-09-07 Windows 补充验收：真实 Tauri WebView 创建、清空字段、取消/Escape、
-第二轮面试与历史日期保存、重启后回读通过。全套桌面测试通过（宿主 23、存储 34、
-命令 9、前端 15、允许列表 5），插件回归 109 项通过。测试使用独立目录，不触碰真实档案。
-日志脱敏回归覆盖编码秘密参数在日志/诊断中的移除和普通值保留；异常多重编码直接脱敏。
-岗位 URL 会丢弃不确定的嵌套跳转/编码参数，保留普通岗位标识；此规则不追溯改写旧档案。
-诊断包含档案是否可用及脱敏后的打开错误。插件生成的事件保留消息 ID，重复归档不新增事件。
-发布前展开 Git 树并验证固定文件清单；实际插件 ZIP 的 195 个文件已核对通过。
-
-未实现：附件导入、简历快照、待办提醒、浏览器通信、AI。
-
-macOS：代码按 Application Support / Caches 分支；WKWebView 数据目录与应用缓存目录不是同一处。CI 上的 macOS 作业只做构建/单测，**不是实机 UI 验收**。尚未完成实机启动、单实例、隐藏/恢复、Application Support 与实际 WebView 位置验证。不能把 Windows 跑通或 CI 编译说成 Mac 已验收。
-
-## 证据收件箱（D09）
-
-把回复邮件（`.eml`）、截图（PNG/JPEG）或 PDF 拖进窗口，或者用「选择文件…」，或者直接粘贴一段文本。原件被复制进 `attachments/<年>/<月>/`，之后你把原文件移走、改名、删掉都不影响查看。
-
-- **导入不代表对方回复了什么**，也不会改变申请阶段。关联到某条申请之后，那条申请的状态是「已导入，待分类」——分类由你确认。
-- **同一家公司的多条申请不会自动归并**：关联时两条都列出来，都不预选。
-- **重复导入**同一份内容不会重复占空间，但你仍然可以把它关联到另一条申请。
-- **预览是安全的**：邮件正文在 Rust 侧就被压成纯文本，脚本、样式、远程图片和跟踪像素都不会进到界面；`javascript:` 链接只作为文字显示。截图内嵌显示（≤ 8 MiB），**PDF 不在应用内渲染**，可以「用系统程序打开本机副本」——那会离开这个应用。
-- **不支持**：Outlook 的 `.msg` 与虚拟拖拽对象（请在邮件客户端另存为 `.eml`，或粘贴正文）、邮箱账号直连收信。单份上限 25 MiB，一次最多 20 个文件。
-- OCR 与自动分类不属于 D09（见 D11）。
-
-代码：`desktop/crates/evidence-import`（安全文件名、嗅探、`.eml` 解析、原子落盘）、`desktop/src-tauri/src/evidence_commands.rs`（命令层）、`desktop/src/inbox*.js`（界面）。
-
-## 前端约定（D11 起）
-
-界面分两套写法，正在逐步统一：
-
-- **新界面用 React**（`src/react/`、`src/ai/` 等 `.tsx`）。组件经 `InvokeContext` 调命令，不直接摸 `window.__TAURI__`；挂到旧页面的容器上用 `mountReact`，容器从此归 React 管。
-- **旧视图**（申请、收件箱、待办、备份）仍是 `mountXxx()` + 模板字符串，D11 期间不迁，之后另开 issue 逐个迁。
-
-测试也是两套，**CI 两套都跑**：
-
-| 放哪 | 跑什么 | 测什么 |
+| 测试文件 | 命令 | 用途 |
 | --- | --- | --- |
-| `src/**/*.test.ts` | `npm run test:ui`（`node --test`） | 纯逻辑：状态计算、文案、入参组装 |
-| `src/**/*.test.tsx` | `npm run test:react`（Vitest + jsdom） | 组件画出来的东西和交互 |
+| `src/**/*.test.ts` | `npm run test:ui` | 状态计算、文案和入参等纯逻辑 |
+| `src/**/*.test.tsx` | `npm run test:react` | React 组件与交互 |
+| 桌面整体 | `npm test` | 当前 package.json 中的完整测试链 |
 
-组件里不写业务判断，判断放 `.ts` 里测。`src/react-wiring.test.ts` 盯着两套都真的挂在 `npm test` 和 CI 上——D10 时 `test:ui` 没写成 glob，29 个前端测试一直没在 CI 跑（#90）。
+业务判断优先放在可独立测试的 `.ts` 中，组件测试关注交互与呈现。变更脚本后确认相关测试确实接入整体测试链。
 
-## 插件回归
-
-仓库根目录：
+扩展回归在仓库根目录执行：
 
 ```bash
 node --test tests/*.test.js
 ```
 
-GitHub Release 工作流仍然只打包插件运行文件，不会把 `/desktop` 打进 ZIP。
+发布包与实机安装验收不能由单元测试、Vite 预览或 CI 编译替代。历史 D02 / D04 等阶段说明应结合对应提交和验收记录阅读，不应作为当前功能清单。
