@@ -18,6 +18,7 @@ $upgradeInstallerPath = if ($UpgradeInstaller) {
   $null
 }
 $installDir = Join-Path $env:LOCALAPPDATA "网申快填"
+$legacyInstallDir = Join-Path $env:LOCALAPPDATA "Resume Pro Desktop"
 $userDataDir = Join-Path $env:LOCALAPPDATA "ResumePro"
 $registrationKeys = @(
   "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",
@@ -34,6 +35,14 @@ if ($runningElevated -and -not $AllowElevatedDiagnostic) {
 
 if (Test-Path -LiteralPath $installDir) {
   throw "Refusing to overwrite an existing installation: $installDir"
+}
+if (Test-Path -LiteralPath $legacyInstallDir) {
+  throw "Legacy installation remains: $legacyInstallDir. Follow the rename upgrade steps in docs/desktop-mvp/install-and-update.md section 5.2."
+}
+$legacyUninstall = @(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+  Where-Object { $_.DisplayName -eq 'Resume Pro Desktop' })
+if ($legacyUninstall.Count -gt 0) {
+  throw "Legacy Resume Pro Desktop uninstall registration remains. Follow the rename upgrade steps in docs/desktop-mvp/install-and-update.md section 5.2."
 }
 foreach ($key in $registrationKeys) {
   if (Test-Path $key) { throw "Refusing to overwrite an existing Native Messaging registration: $key" }
