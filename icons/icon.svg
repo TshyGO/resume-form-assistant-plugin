@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
   <title id="title">网申快填：简历卡片与上升箭头</title>
-  <!-- Simplified from the selected 1254px artwork for crisp browser-toolbar sizes. -->
-  <rect x="3" y="3" width="122" height="122" rx="27" fill="#F7F8FA"/>
-  <rect x="31" y="25" width="64" height="73" rx="11" fill="#202B3A"/>
-  <circle cx="56" cy="47" r="8" fill="#398F86"/>
-  <path d="M40 72c0-9 7-16 16-16s16 7 16 16v2H40z" fill="#398F86"/>
-  <rect x="42" y="80" width="40" height="5" rx="2.5" fill="#FFF"/>
-  <path d="M19 87c7 20 29 27 52 21 22-6 37-20 44-38" fill="none" stroke="#FFF" stroke-width="20" stroke-linecap="round"/>
-  <path d="M19 87c7 20 29 27 52 21 22-6 37-20 44-38" fill="none" stroke="#398F86" stroke-width="13" stroke-linecap="round"/>
-  <path d="m98 65 22-12-2 24-9-6z" fill="#398F86"/>
+  <!-- Larger foreground shapes for the browser toolbar and side panel. -->
+  <rect x="1" y="1" width="126" height="126" rx="27" fill="#F7F8FA"/>
+  <rect x="22" y="19" width="75" height="85" rx="12" fill="#202B3A"/>
+  <circle cx="53" cy="44" r="10" fill="#398F86"/>
+  <path d="M35 74c0-11 8-19 18-19s18 8 18 19v3H35z" fill="#398F86"/>
+  <rect x="37" y="83" width="48" height="6" rx="3" fill="#FFF"/>
+  <path d="M12 89c8 19 29 27 54 21 23-6 40-21 51-43" fill="none" stroke="#FFF" stroke-width="22" stroke-linecap="round"/>
+  <path d="M12 89c8 19 29 27 54 21 23-6 40-21 51-43" fill="none" stroke="#398F86" stroke-width="15" stroke-linecap="round"/>
+  <path d="m97 65 27-16-2 34-13-10z" fill="#398F86"/>
 </svg>

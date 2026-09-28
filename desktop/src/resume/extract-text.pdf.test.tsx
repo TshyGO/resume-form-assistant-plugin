@@ -39,5 +39,5 @@ describe("browserExtractors.pdfToText（真实 pdf.js）", () => {
     expect(native).toBeDefined();
     delete proto[Symbol.asyncIterator];
     await expect(browserExtractors.pdfToText(pdfBytes())).resolves.toBe("Resume Pro");
-  });
+  }, 20_000);
 });

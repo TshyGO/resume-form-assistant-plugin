@@ -24,7 +24,7 @@ button { cursor: pointer; }
 .dock { display: flex; flex-direction: column; height: 100dvh; min-width: 280px; background: #fff; }
 .dock-header { position: relative; flex: none; padding: 14px 16px 11px; background: var(--nav); color: #e9edf5; }
 .dock-brand { display: flex; align-items: center; gap: 10px; padding-right: 44px; }
-.dock-brand img { width: 34px; height: 34px; padding: 3px; border-radius: 8px; background: #fff; }
+.dock-brand img { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; }
 .dock-brand strong, .dock-brand span { display: block; }
 .dock-brand strong { font-size: 15px; line-height: 1.1; }
 .dock-brand span { margin-top: 3px; color: #9ba8bd; font-size: 11px; }
