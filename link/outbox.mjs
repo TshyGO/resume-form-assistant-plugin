@@ -85,8 +85,9 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
    * Send one archived fill (D08) to the application the user picked.
    *
    * The record has already been claimed for that application (link/fillrecords.mjs), which
-   * is what stops two clicks from sending it twice. The payload is the allowlisted fill body
-   * plus the application; field values never get this far.
+   * is what stops two clicks from sending it twice. Its recordId is also the desktop messageId,
+   * so a replay still has the same identity after a worker restart or receipt eviction.
+   * The payload is the allowlisted fill body plus the application; field values never get here.
    */
   async function sendFill({ record, applicationId, identity, snapshot = null }) {
     if (!identity) return { status: 'rejected', reason: 'no_identity' };
@@ -100,6 +101,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
     }
     return enqueue({
       messageType: 'fill.submit',
+      messageId: record.recordId,
       payload,
       applicationId,
       intentId: null,
@@ -111,9 +113,9 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
 
   // Persist, then send. Never the other way round: an entry that exists only in flight cannot
   // be retried with the same identity after the worker dies.
-  async function enqueue({ messageType, payload, applicationId, intentId, recordId = null, occurredAt = null, identity }) {
+  async function enqueue({ messageType, payload, applicationId, intentId, recordId = null, messageId = null, occurredAt = null, identity }) {
     const entry = {
-      messageId: uuid(),
+      messageId: messageId ?? uuid(),
       intentId,
       recordId,
       // When it happened, if that is not "now" (a fill recorded offline): every attempt says so.
@@ -229,7 +231,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
       // The desktop has committed. Only now may the intent and the queue entry go, and only
       // now may the sidebar say the desktop has it.
       await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
-      await forgetSource(store, entry);
+      await forgetSource(store, entry, { outcome: 'saved' });
       return {
         status: 'saved',
         messageId: entry.messageId,
@@ -322,11 +324,14 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
  * The intent or fill record a finished entry came from. Called once the desktop holds the
  * write (or the user discarded it): the source has nothing left to wait for.
  */
-export async function forgetSource(store, entry) {
+export async function forgetSource(store, entry, { outcome = 'discarded' } = {}) {
   if (entry.intentId) {
     await store.updateIntents(list => list.filter(item => item.intentId !== entry.intentId));
   }
   if (entry.recordId) {
+    // Persist the tiny receipt before deleting the record. A worker stopped between these
+    // writes leaves either the record or the receipt available to reject a late duplicate.
+    await store.rememberFillReceipt(entry.recordId, outcome);
     await store.updateFillRecords(list => list.filter(item => item.recordId !== entry.recordId));
   }
 }

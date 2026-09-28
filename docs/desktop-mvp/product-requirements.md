@@ -667,7 +667,7 @@ erDiagram
 
 ### 8.10 插件队列：SaveIntent 与 Bound outbox
 
-存在 `chrome.storage.local` 的新 key：`desktopSaveIntents`、`desktopOutbox`、`desktopClientInstanceId`、`desktopPairing`（上次成功握手的 archiveId/restoreEpoch/时间，不作提交凭证），以及 D08 增补的 `desktopFillRecords`（用户同意留档、尚未选定申请的填写记录；与 SaveIntent 同理，没有 `messageId` 与 epoch，选定申请后才变成 `fill.submit` 绑定消息）。**禁止**占用 `templates` / `activeTemplateId` / `aiConfig` / `resumeProUpdateCache` / `resumeProDismissedVersion`。
+存在 `chrome.storage.local` 的新 key：`desktopSaveIntents`、`desktopOutbox`、`desktopClientInstanceId`、`desktopPairing`（上次成功握手的 archiveId/restoreEpoch/时间，不作提交凭证），以及 D08 增补的 `desktopFillRecords`（用户同意留档、尚未选定申请的填写记录；与 SaveIntent 同理，没有 `messageId` 与 epoch，选定申请后才变成 `fill.submit` 绑定消息）和 `desktopFillReceipts`（最近 200 次已处理填写的 recordId 与结果，不含填写值；重复请求先查此记录）。`fill.submit` 的 `messageId` 固定为 recordId，以便本地记录被移除后桌面仍能识别重放。**禁止**占用 `templates` / `activeTemplateId` / `aiConfig` / `resumeProUpdateCache` / `resumeProDismissedVersion`。
 
 **SaveIntent**（曾经配对且用户已确认字段；桌面不必当时可用）：
 

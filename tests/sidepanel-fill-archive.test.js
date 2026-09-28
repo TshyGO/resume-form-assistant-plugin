@@ -329,6 +329,23 @@ test("the template snapshot is attached only when ticked, and its upload state i
   assert.equal(unticked.panel.card().snapshotLine, "");
 });
 
+test("after a worker restart, an absent upload without a completion receipt asks for verification", async () => {
+  const stack = await offered({ applications: one });
+  stack.panel.clickArchive("start");
+  await stack.panel.waitCard(choosing, "the candidates");
+  stack.panel.clickCandidate(APP_A);
+  await stack.panel.waitCard(shows(/已留档到桌面/), "the saved answer");
+  await until(() => outbox(stack.storage).length === 0, { what: "the upload to finish" });
+  const originalHandle = stack.worker.handle;
+  stack.worker.handle = async (message) => {
+    const reply = await originalHandle(message);
+    return message.type === "DESKTOP_LIST_QUEUE" ? { ...reply, uploadedSnapshots: [] } : reply;
+  };
+  const reopened = await stack.openPanel();
+  await reopened.waitCard((card) => /没有收到上传完成的确认/.test(card.snapshotLine), "the unknown upload status");
+  assert.doesNotMatch(reopened.card().snapshotLine, /正在后台上传|已上传到桌面/);
+});
+
 test("no field value of the page or the template reaches the panel, storage or the desktop event", async () => {
   const { panel, page, storage, desktop } = await offered({ applications: one });
   const snapshot = JSON.stringify(page.hooks.panelFillSnapshot());

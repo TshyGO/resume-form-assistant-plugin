@@ -62,7 +62,7 @@ export function createReconcile({ store, outbox, uuid, now, sendNative, sleep, u
           // The desktop already executed it. Drop the queue entry and the intent behind it,
           // and add nothing: `applied` confirms history, it does not license a rewrite.
           await store.updateOutbox(list => list.filter(item => item.messageId !== entry.messageId));
-          await forgetSource(store, entry);
+          await forgetSource(store, entry, { outcome: 'saved' });
           report.applied.push({ messageId: entry.messageId, resultId: answer.resultId });
           continue;
         }

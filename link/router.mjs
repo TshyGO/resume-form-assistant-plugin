@@ -156,6 +156,7 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
       // that made no record at all (not recorded, queue full) lets this one try.
       while (recordingFills.has(recordId)) {
         const first = await recordingFills.get(recordId).catch(() => null);
+        if (first?.status === 'saved') return { status: 'duplicate', receipt: { outcome: 'saved' } };
         if (first?.record) return { status: 'duplicate', record: first.record };
       }
       const work = recordFill(message);
@@ -276,11 +277,12 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
     return { ...bound, mode, intent, extensionId };
   }
 
-  // One finished fill becomes at most one record (#178). The same fill asked again (a repeated
-  // message, a second click, a request that waited for this one) finds its record first and is a
-  // duplicate: nothing is probed, staged or sent a second time.
+  // One finished fill becomes at most one record (#178). A completed receipt or a still-live
+  // record answers repeats before probing, staging or sending anything again.
   async function recordFill(message) {
     if (isRecordId(message.recordId)) {
+      const receipt = await store.getFillReceipt(message.recordId);
+      if (receipt) return { status: 'duplicate', receipt };
       const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
       if (existing) return { status: 'duplicate', record: existing };
     }

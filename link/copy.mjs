@@ -408,6 +408,12 @@ function describeFillRecordStatus(result, application = null) {
   }
 
   if (status === 'duplicate') {
+    if (result?.receipt?.outcome === 'saved') {
+      return { tone: 'success', text: '这次填写已留档到桌面，没有重复保存。请到桌面申请时间线核对。' };
+    }
+    if (result?.receipt?.outcome === 'discarded') {
+      return { tone: 'info', text: '这次填写的留档已被放弃，没有重新创建。' };
+    }
     return { tone: 'pending', text: '这次填写已经在待同步队列里了，没有重复排一份。' };
   }
 
@@ -516,14 +522,14 @@ export function describeFillArchiveBlocked(reason, { extensionId } = {}) {
  * it has left the queue. Only `confirmed` — the desktop's complete ACK — says "uploaded";
  * `dropped` means the user gave it up. An entry that left the queue for any other reason
  * (another window dropped it, the worker restarted before the answer was read) is said to
- * have left, never to have been uploaded. `seen` tells that apart from a list read before
- * the upload was queued at all.
+ * have left, never to have been uploaded. `queried` distinguishes a completed queue read
+ * after saving from the brief moment before that first read.
  */
-export function describeFillSnapshotProgress(entry, { seen = false, dropped = false, confirmed = false } = {}) {
-  if (dropped) return { text: '简历快照已丢弃，没有上传到桌面。', retry: false };
+export function describeFillSnapshotProgress(entry, { seen = false, queried = false, dropped = false, confirmed = false } = {}) {
   if (confirmed) return { text: '简历快照已上传到桌面。', retry: false };
+  if (dropped) return { text: '简历快照已丢弃，没有上传到桌面。', retry: false };
   if (entry) return describeSnapshotUpload(entry);
-  if (seen) return { text: '简历快照已不在上传队列里，没有收到上传完成的确认，可以到桌面这条申请的时间线里核对。', retry: false };
+  if (seen || queried) return { text: '简历快照已不在上传队列里，没有收到上传完成的确认，可以到桌面这条申请的时间线里核对。', retry: false };
   return { text: '简历快照正在后台上传，传完之前本机会保留一份。', retry: false };
 }
 

@@ -139,7 +139,12 @@
   const queueUi = new Map();
   let queueFocus = "";
   let queueRequest = 0;
-  // Snapshot uploads seen waiting at least once: only those may later read as "uploaded".
+  let queueReadCompleted = 0;
+  // A saved card can arrive after an older queue read. Require one fresh read for its
+  // snapshot before deciding that an absent upload needs desktop verification.
+  let snapshotQueryNeeded = { id: "", request: Infinity };
+  // Snapshot uploads seen waiting at least once: if one vanishes without a complete ACK,
+  // its state is unknown rather than uploaded.
   const snapshotsSeen = new Set();
   // What else can take a snapshot off the list, when the panel itself did it: the user gave
   // it up (never "uploaded"), or saved it again under a new id (follow the new one).
@@ -365,6 +370,7 @@
   function resetFillArchive() {
     fillArchive = null;
     archiveSeen = { tabId: null, epoch: "", version: 0 };
+    snapshotQueryNeeded = { id: "", request: Infinity };
     // A request still waiting on the tab we left must not keep this tab's card locked; its
     // answer is dropped by the tab check in archiveRequest.
     archiveOwner += 1;
@@ -379,6 +385,10 @@
     if (archiveSeen.tabId === tabId && archiveSeen.epoch === snapshot.epoch && snapshot.version < archiveSeen.version) return;
     archiveSeen = { tabId, epoch: snapshot.epoch, version: snapshot.version };
     fillArchive = snapshot.archiveId && ARCHIVE_SHOWN.has(snapshot.phase) ? { ...snapshot, tabId } : null;
+    if (fillArchive?.phase === "saved" && fillArchive.snapshotId && snapshotQueryNeeded.id !== fillArchive.snapshotId) {
+      snapshotQueryNeeded = { id: fillArchive.snapshotId, request: queueRequest + 1 };
+      refreshQueue().catch(() => {});
+    }
     if (fillArchive?.phase === "offer" && offerShown !== fillArchive.archiveId) {
       // A new finished fill: the snapshot box starts ticked whenever there is a template to attach.
       offerShown = fillArchive.archiveId;
@@ -480,7 +490,9 @@
     for (let hops = 0; snapshotsReplaced.has(current) && hops < 8; hops += 1) current = snapshotsReplaced.get(current);
     const entry = (queueReply?.outbox || []).find((item) => item?.messageType === "snapshot.upload" && item.snapshotId === current) || null;
     return copy.describeFillSnapshotProgress(entry, {
-      seen: snapshotsSeen.has(current), dropped: snapshotsDropped.has(current), confirmed: snapshotsConfirmed.has(current)
+      seen: snapshotsSeen.has(current),
+      queried: snapshotQueryNeeded.id === snapshotId && queueReadCompleted >= snapshotQueryNeeded.request,
+      dropped: snapshotsDropped.has(current), confirmed: snapshotsConfirmed.has(current)
     }).text;
   }
 
@@ -595,6 +607,7 @@
     }
     if (request !== queueRequest || !reply || reply.error) return;
     queueReply = reply;
+    queueReadCompleted = request;
     for (const entry of reply.outbox || []) {
       if (entry?.messageType === "snapshot.upload" && entry.snapshotId) snapshotsSeen.add(entry.snapshotId);
     }

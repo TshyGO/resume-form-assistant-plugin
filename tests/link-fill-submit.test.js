@@ -259,6 +259,9 @@ test('after a restore, an applied fill leaves no record behind and a discarded o
     }
     assert.deepEqual(storage.data.desktopOutbox, [], status);
     assert.deepEqual(storage.data.desktopFillRecords, [], status);
+    assert.deepEqual(storage.data.desktopFillReceipts, [
+      { recordId: entry.recordId, outcome: status === 'applied' ? 'saved' : 'discarded' }
+    ]);
   }
 });
 
@@ -319,6 +322,25 @@ test('two requests for the same fill racing each other still make one record and
   assert.deepEqual(results.map(result => result.status).sort(), ['duplicate', 'saved']);
   assert.equal(writes('fill.submit').length, 1);
   assert.deepEqual(storage.data.desktopFillRecords, []);
+});
+
+test('a fill already saved remains a duplicate after its record is removed and the worker restarts', async () => {
+  const first = await harness({ desktop: onlineDesktop });
+  const request = { type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION };
+  assert.equal((await first.router.handle(request)).status, 'saved');
+  assert.deepEqual(first.storage.data.desktopFillRecords, []);
+  assert.equal(first.writes('fill.submit')[0].messageId, FILL_ID, 'the desktop uses the fill id as its replay identity');
+  assert.deepEqual(first.storage.data.desktopFillReceipts, [{ recordId: FILL_ID, outcome: 'saved' }]);
+
+  const sentBefore = first.sent.length;
+  const repeated = await first.router.handle(request);
+  assert.deepEqual(repeated, { status: 'duplicate', receipt: { recordId: FILL_ID, outcome: 'saved' } });
+  assert.equal(first.sent.length, sentBefore, 'a late request does not even start the native host');
+
+  const restarted = await harness({ storage: first.storage, desktop: onlineDesktop });
+  assert.equal((await restarted.router.handle(request)).status, 'duplicate');
+  assert.equal(restarted.sent.length, 0, 'the persisted receipt survives a new router');
+  assert.deepEqual(first.storage.data.desktopFillRecords, []);
 });
 
 test('an id that is not a UUID is not trusted: the record gets its own', async () => {

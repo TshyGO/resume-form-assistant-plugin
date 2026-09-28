@@ -153,6 +153,10 @@ test('the stage of a candidate is shown by the desktop\'s own name and its id ne
 test('only a persisted fill.submit is described as archived on the desktop', async () => {
   const { describeFillRecordResult } = await load();
   const saved = describeFillRecordResult({ status: 'saved' });
+  const repeated = describeFillRecordResult({ status: 'duplicate', receipt: { outcome: 'saved' } });
+  const discarded = describeFillRecordResult({ status: 'duplicate', receipt: { outcome: 'discarded' } });
+  assert.match(repeated.text, /已留档到桌面.*没有重复保存/);
+  assert.doesNotMatch(discarded.text, /已留档到桌面|待同步/);
   assert.match(saved.text, /已留档到桌面/);
 
   for (const result of [
@@ -318,4 +322,6 @@ test('the snapshot line says uploaded only on the desktop\'s confirmation, never
   assert.doesNotMatch(left, /已上传/);
   assert.match(left, /没有收到上传完成的确认/);
   assert.equal(describeFillSnapshotProgress(null, { seen: true, dropped: true }).text, '简历快照已丢弃，没有上传到桌面。');
+  assert.match(describeFillSnapshotProgress(null, { queried: true }).text, /没有收到上传完成的确认/);
+  assert.equal(describeFillSnapshotProgress(null, { confirmed: true, dropped: true }).text, '简历快照已上传到桌面。');
 });

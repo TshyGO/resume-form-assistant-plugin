@@ -3905,13 +3905,16 @@
       if (!status || status === "unknown" || result?.error) {
         phase = "unknown";
         described = { tone: "pending", text: copy.FILL_ARCHIVE_UNKNOWN };
-      } else if (status === "saved") {
+      } else if (status === "saved" || (status === "duplicate" && result.receipt?.outcome === "saved")) {
         // Only a persisted reply gets here, and only this names the application.
         phase = "saved";
-        described = copy.describeFillRecordResult(result, { application, uploadShownSeparately: true });
+        described = copy.describeFillRecordResult(result, { application: status === "saved" ? application : null, uploadShownSeparately: true });
       } else if (status === "recorded" || (status === "duplicate" && result.record?.status === "pending_bind")) {
         phase = "pending_bind";
         described = copy.describeFillRecordResult({ ...result, status: "recorded" });
+      } else if (status === "duplicate" && result.receipt?.outcome === "discarded") {
+        phase = "failed";
+        described = copy.describeFillRecordResult(result);
       } else if (status === "pending" || status === "stalled" || status === "duplicate") {
         phase = "queued";
         described = copy.describeFillRecordResult(status === "stalled" ? { ...result, status: "pending" } : result);
