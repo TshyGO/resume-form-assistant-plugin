@@ -153,6 +153,10 @@ test('the stage of a candidate is shown by the desktop\'s own name and its id ne
 test('only a persisted fill.submit is described as archived on the desktop', async () => {
   const { describeFillRecordResult } = await load();
   const saved = describeFillRecordResult({ status: 'saved' });
+  const repeated = describeFillRecordResult({ status: 'duplicate', receipt: { outcome: 'saved' } });
+  const discarded = describeFillRecordResult({ status: 'duplicate', receipt: { outcome: 'discarded' } });
+  assert.match(repeated.text, /已留档到桌面.*没有重复保存/);
+  assert.doesNotMatch(discarded.text, /已留档到桌面|待同步/);
   assert.match(saved.text, /已留档到桌面/);
 
   for (const result of [
@@ -268,4 +272,56 @@ test('a snapshot paused by a restore explains the answer and offers only upload-
   // `applied` for every chunk proves history, not a finished snapshot, so it is not "done".
   assert.match(describeSnapshotReconcile('applied').text, /无法确认/);
   assert.match(describeSnapshotReconcile('not_found').text, /不等于没有/);
+});
+
+// --- #178: the side panel's archive card -------------------------------------------------
+
+test('the archive card says archived only with a persisted reply, naming the chosen application', async () => {
+  const { describeFillRecordResult, FILL_ARCHIVE_PENDING_BIND } = await load();
+  const saved = describeFillRecordResult({ status: 'saved' }, { application: { company: '金发科技股份有限公司', title: '研发工程师' } });
+  assert.equal(saved.text, '已留档到桌面：这次填写的结果记在「金发科技股份有限公司 · 研发工程师」下。');
+  const waiting = describeFillRecordResult({ status: 'recorded', mode: 'unavailable' }, { application: { company: '甲', title: '乙' } });
+  assert.ok(waiting.text.startsWith(FILL_ARCHIVE_PENDING_BIND));
+  assert.equal(FILL_ARCHIVE_PENDING_BIND, '已记入待同步，尚未选择申请。现在还没有留档到桌面。');
+  assert.doesNotMatch(waiting.text, /已留档到桌面/);
+});
+
+test('an application is offered as company · title (stage), never by its id', async () => {
+  const { describeApplicationChoice } = await load();
+  const label = describeApplicationChoice({ applicationId: '77777777-7777-4777-8777-777777777777', company: '金发科技股份有限公司', title: '研发工程师', stage: 'saved' });
+  assert.equal(label, '金发科技股份有限公司 · 研发工程师（已保存）');
+  assert.equal(describeApplicationChoice({ company: '甲', title: '乙' }), '甲 · 乙');
+});
+
+test('a blocked lookup keeps a waiting record only where one may be kept, and never says archived', async () => {
+  const { describeFillArchiveBlocked, describeFillArchiveEmpty } = await load();
+  for (const reason of ['unrecognized', 'unavailable', 'incompatible', 'not_installed', 'not_paired', 'never_paired', 'something_new']) {
+    const copy = describeFillArchiveBlocked(reason, { extensionId: 'x' });
+    assert.equal(typeof copy.text, 'string', reason);
+    assert.doesNotMatch(`${copy.text}${copy.hint || ''}`, /已留档到桌面/, reason);
+  }
+  // Same rule as fillrecords.mayRecord: no waiting record without a paired desktop behind it.
+  assert.deepEqual(
+    ['unrecognized', 'unavailable', 'incompatible', 'not_installed', 'not_paired', 'never_paired'].map(reason => describeFillArchiveBlocked(reason).canQueue),
+    [true, true, true, false, false, false]
+  );
+  assert.equal(describeFillArchiveBlocked('not_paired', { extensionId: 'abc' }).extensionId, 'abc');
+  assert.equal(describeFillArchiveEmpty().text, '桌面里还没有这家公司的投递记录。');
+  assert.match(describeFillArchiveEmpty().hint, /不会自动新建申请/);
+});
+
+test('the snapshot line says uploaded only on the desktop\'s confirmation, never from the entry leaving', async () => {
+  const { describeFillSnapshotProgress } = await load();
+  assert.match(describeFillSnapshotProgress({ status: 'pending', chunkCount: 3, chunks: [{ acked: true }] }).text, /上传中（已传 1\/3 块）/);
+  assert.match(describeFillSnapshotProgress(null).text, /正在后台上传/);
+  // Confirmed: even an upload too quick to have been seen waiting.
+  assert.equal(describeFillSnapshotProgress(null, { confirmed: true }).text, '简历快照已上传到桌面。');
+  // Left the queue with no confirmation (another window dropped it, the worker restarted):
+  // said to have left, not to have been uploaded.
+  const left = describeFillSnapshotProgress(null, { seen: true }).text;
+  assert.doesNotMatch(left, /已上传/);
+  assert.match(left, /没有收到上传完成的确认/);
+  assert.equal(describeFillSnapshotProgress(null, { seen: true, dropped: true }).text, '简历快照已丢弃，没有上传到桌面。');
+  assert.match(describeFillSnapshotProgress(null, { queried: true }).text, /没有收到上传完成的确认/);
+  assert.equal(describeFillSnapshotProgress(null, { confirmed: true, dropped: true }).text, '简历快照已上传到桌面。');
 });

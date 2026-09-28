@@ -11,6 +11,10 @@ export const MAX_OUTBOX = 100;
 // full means refuse and say so, never drop the oldest.
 export const MAX_FILL_RECORDS = 100;
 
+// Only ids and final outcomes are kept after a fill leaves the queue. Older receipts may be
+// evicted; the fill's stable messageId remains the desktop's final replay guard.
+export const MAX_FILL_RECEIPTS = 200;
+
 // A same-posting save inside this window is a double click rather than a decision, so the
 // wording says "just saved" instead of "already pending". Either way it is refused as a
 // duplicate: a pending intent for the same posting always requires an explicit "save again",

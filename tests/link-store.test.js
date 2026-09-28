@@ -46,6 +46,16 @@ test('a client instance id survives being read from storage by a fresh worker', 
   assert.equal(await store.clientInstanceId(), 'already-here');
 });
 
+test('completed fill receipts retain only recent ids and outcomes', async () => {
+  const { createStore } = await import('../link/store.mjs');
+  const storage = fakeStorage();
+  const store = createStore({ storage, uuid: () => 'client' });
+  for (let i = 0; i < 201; i += 1) await store.rememberFillReceipt(`fill-${i}`, 'saved');
+  assert.equal(storage.data.desktopFillReceipts.length, 200);
+  assert.equal(await store.getFillReceipt('fill-0'), null);
+  assert.deepEqual(await store.getFillReceipt('fill-200'), { recordId: 'fill-200', outcome: 'saved' });
+});
+
 test('concurrent queue updates do not lose entries', async () => {
   const { createStore } = await import('../link/store.mjs');
   const storage = fakeStorage();

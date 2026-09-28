@@ -214,19 +214,11 @@ function loadContentScript({ width = 1200, height = 900, desktopReply = null } =
 test("native side panel status exposes pending offers and diagnostics", () => {
   const { hooks, listeners } = loadContentScript();
   const profileOffer = { hidden: false, querySelector: () => ({ textContent: "还有 2 个字段空着" }) };
-  const fillOffer = {
-    hidden: false,
-    querySelector(selector) {
-      return selector === "#resume-pro-fill-record-snapshot"
-        ? { disabled: false } : { textContent: "是否留档到桌面" };
-    }
-  };
   hooks.setShadowRoot({
     querySelector(selector) {
       return ({
         "#resume-pro-ai-fill": { disabled: false, textContent: "一键 AI 填写" },
         "#resume-pro-profile-offer": profileOffer,
-        "#resume-pro-fill-record": fillOffer,
         "#resume-pro-diagnostics": { hidden: false, querySelector: () => ({ value: "网页字段：3" }) }
       })[selector] || null;
     }
@@ -237,8 +229,10 @@ test("native side panel status exposes pending offers and diagnostics", () => {
   assert.equal(handled, false);
   assert.equal(response.ready, true);
   assert.equal(response.profileOffer, "还有 2 个字段空着");
-  assert.equal(response.fillOffer, "是否留档到桌面");
-  assert.equal(response.snapshotAvailable, true);
+  // #178: the fill archive is the page's own snapshot, not text read off the page overlay.
+  assert.equal(response.fillArchive.phase, "idle");
+  assert.equal(response.fillArchive.archiveId, null);
+  assert.equal("fillOffer" in response, false);
   assert.equal(response.diagnostics, "网页字段：3");
 
   listeners.runtimeMessage[0]({ type: "RESUME_PANEL_OFFER", action: "profileSkip" }, {}, () => {});

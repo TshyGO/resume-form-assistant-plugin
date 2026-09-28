@@ -259,6 +259,9 @@ test('after a restore, an applied fill leaves no record behind and a discarded o
     }
     assert.deepEqual(storage.data.desktopOutbox, [], status);
     assert.deepEqual(storage.data.desktopFillRecords, [], status);
+    assert.deepEqual(storage.data.desktopFillReceipts, [
+      { recordId: entry.recordId, outcome: status === 'applied' ? 'saved' : 'discarded' }
+    ]);
   }
 });
 
@@ -292,4 +295,95 @@ test('a record already bound cannot be deleted from a sidebar drawn before the b
   assert.equal(result.ok, false);
   assert.equal(storage.data.desktopFillRecords.length, 1);
   assert.equal(storage.data.desktopOutbox.filter(entry => entry.messageType === 'fill.submit').length, 1);
+});
+
+// --- #178: one finished fill, one record -----------------------------------------------
+
+const FILL_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+test('a record takes the id the page minted for the fill, and a second request for it adds nothing', async () => {
+  const { router, storage, writes } = await harness();
+  const first = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID });
+  assert.equal(first.status, 'recorded');
+  assert.equal(first.record.recordId, FILL_ID);
+  const again = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION });
+  assert.equal(again.status, 'duplicate');
+  assert.equal(again.record.recordId, FILL_ID);
+  assert.equal(storage.data.desktopFillRecords.length, 1);
+  assert.equal(writes('fill.submit').length, 0, 'a repeated request never binds on its own');
+});
+
+test('two requests for the same fill racing each other still make one record and one fill.submit', async () => {
+  const { router, storage, writes } = await harness({ desktop: onlineDesktop });
+  const results = await Promise.all([
+    router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION }),
+    router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION })
+  ]);
+  assert.deepEqual(results.map(result => result.status).sort(), ['duplicate', 'saved']);
+  assert.equal(writes('fill.submit').length, 1);
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+});
+
+test('a fill already saved remains a duplicate after its record is removed and the worker restarts', async () => {
+  const first = await harness({ desktop: onlineDesktop });
+  const request = { type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION };
+  assert.equal((await first.router.handle(request)).status, 'saved');
+  assert.deepEqual(first.storage.data.desktopFillRecords, []);
+  assert.equal(first.writes('fill.submit')[0].messageId, FILL_ID, 'the desktop uses the fill id as its replay identity');
+  assert.deepEqual(first.storage.data.desktopFillReceipts, [{ recordId: FILL_ID, outcome: 'saved' }]);
+
+  const sentBefore = first.sent.length;
+  const repeated = await first.router.handle(request);
+  assert.deepEqual(repeated, { status: 'duplicate', receipt: { recordId: FILL_ID, outcome: 'saved' } });
+  assert.equal(first.sent.length, sentBefore, 'a late request does not even start the native host');
+
+  const restarted = await harness({ storage: first.storage, desktop: onlineDesktop });
+  assert.equal((await restarted.router.handle(request)).status, 'duplicate');
+  assert.equal(restarted.sent.length, 0, 'the persisted receipt survives a new router');
+  assert.deepEqual(first.storage.data.desktopFillRecords, []);
+});
+
+test('a late request cannot recreate a fill while its completed record is being removed', async () => {
+  const { router, storage, state, writes } = await harness({
+    desktop: message => (message.messageType === 'handshake' ? handshake(message) : closed())
+  });
+  const request = { type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION };
+  assert.equal((await router.handle(request)).status, 'pending');
+  const messageId = storage.data.desktopOutbox[0].messageId;
+  const get = storage.get.bind(storage);
+  let signalRead;
+  const readStarted = new Promise(resolve => { signalRead = resolve; });
+  let releaseRead;
+  const readGate = new Promise(resolve => { releaseRead = resolve; });
+  let held = false;
+  storage.get = async keys => {
+    if (!held && keys.includes('desktopFillRecords')) {
+      held = true;
+      signalRead();
+      await readGate;
+    }
+    return get(keys);
+  };
+
+  const late = router.handle(request);
+  await readStarted;
+  state.desktop = onlineDesktop;
+  assert.equal((await router.handle({ type: 'DESKTOP_RETRY', messageId })).status, 'saved');
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+  const writesBeforeLateAnswer = writes('fill.submit').length;
+  releaseRead();
+  const result = await late;
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.receipt?.outcome, 'saved');
+  assert.equal(writes('fill.submit').length, writesBeforeLateAnswer, 'the late request makes no new attempt');
+  assert.deepEqual([...new Set(writes('fill.submit').map(message => message.messageId))], [FILL_ID]);
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+});
+
+test('an id that is not a UUID is not trusted: the record gets its own', async () => {
+  const { router } = await harness();
+  const result = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: '../../etc' });
+  assert.equal(result.status, 'recorded');
+  assert.match(result.record.recordId, /^[0-9a-f-]{36}$/);
+  assert.notEqual(result.record.recordId, '../../etc');
 });
