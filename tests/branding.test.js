@@ -13,6 +13,7 @@ test("the extension and desktop use one visible name without changing their iden
   assert.equal(manifest.action.default_title, "网申快填");
   assert.match(manifest.description, /简历一键快填与投递管理/);
   assert.equal(tauri.productName, "网申快填");
+  assert.equal(tauri.mainBinaryName, "resume-pro-desktop");
   assert.equal(tauri.app.windows[0].title, "网申快填");
   assert.equal(tauri.identifier, "com.resumepro.desktop");
   assert.equal(tauri.bundle.windows.wix.upgradeCode, "975d2f79-b2ff-5bf3-9070-0c2642944e04");

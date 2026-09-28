@@ -516,7 +516,7 @@ LEGACY_DESKTOP_APP_NAME = "Resume Pro Desktop.app"
 # Darwin stores p_comm in MAXCOMLEN (16) bytes. `resume-pro-desktop` and
 # the former display name are longer, so `pgrep -x` on the full name never
 # matches. Keep the old prefix for a clean-install precheck after the rename.
-PROCESS_COMM_PREFIXES = ("resume-pro-desk", "Resume Pro Deskt", "网申快填")
+PROCESS_COMM_PREFIXES = ("resume-pro-desk", "Resume Pro Deskt")
 DATA_ROOT_REL = Path("Library/Application Support/ResumePro")
 # Confirmed product cache: HostPaths::cache_dir on macOS is
 # dirs::cache_dir()/ResumePro → ~/Library/Caches/ResumePro (HOST.md, README).

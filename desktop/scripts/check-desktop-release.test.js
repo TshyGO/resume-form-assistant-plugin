@@ -30,6 +30,11 @@ const script = join(here, "check-desktop-release.js");
 /** Windows 上 checkout 会把换行变成 CRLF，正则里的换行符就对不上了。 */
 const readText = (path) => readFileSync(path, "utf8").split("\r\n").join("\n");
 
+test("D13 PowerShell 脚本带 UTF-8 BOM，Windows PowerShell 5.1 能读取中文安装目录", () => {
+  const source = readFileSync(join(here, "d13_install_acceptance.ps1"));
+  assert.equal(source.subarray(0, 3).toString("hex"), "efbbbf");
+});
+
 const conf = (version, overrides = {}) =>
   JSON.stringify({ version, build: { frontendDist: "../dist" }, bundle: {}, ...overrides });
 

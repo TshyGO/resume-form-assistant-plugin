@@ -5,7 +5,7 @@ M2 只把将要验收的 DMG、插件 ZIP、源码 commit 和下载来源绑定�
 ## 当前前置状态
 
 - 桌面 beta Release 已能同时发布 macOS DMG、Windows 安装包和同 commit 的插件 ZIP。
-- 验收只使用准备冻结的最新 `desktop-v0.4.0-beta.N` 预发布；旧 beta 或 Actions 临时 artifact 不得混用。
+- 验收只使用准备冻结的最新 `desktop-vX.Y.Z-beta.N` 预发布；旧 beta 或 Actions 临时 artifact 不得混用。
 - 桌面和插件版本均以 Release 资产及其 tag commit 为准；登记时使用 tag 指向的完整 40 位 commit。
 
 ## 1. 取得候选字节
@@ -25,13 +25,13 @@ M2 只把将要验收的 DMG、插件 ZIP、源码 commit 和下载来源绑定�
 
 ```bash
 python3 desktop/scripts/d14_macos_acceptance_check.py prepare-candidate \
-  --dmg "/path/to/Resume.Pro.Desktop_0.4.0-beta.N_aarch64.dmg" \
-  --extension-zip "/path/to/wangshen-kuaitian-plugin-0.4.0.zip" \
+  --dmg "/path/to/网申快填_0.4.1-beta.N_aarch64.dmg" \
+  --extension-zip "/path/to/wangshen-kuaitian-plugin-0.4.1.zip" \
   --output "docs/desktop-mvp/acceptance/runs/<run-id>/artifacts.json" \
   --source-commit "<40 位源码 SHA>" \
   --workflow-run-url "https://github.com/TshyGO/resume-form-assistant-plugin/actions/runs/<run-id>" \
-  --desktop-version "0.4.0-beta.N" \
-  --extension-version "0.4.0" \
+  --desktop-version "0.4.1-beta.N" \
+  --extension-version "0.4.1" \
   --protocol-version "1" \
   --dmg-url "https://<稳定候选地址>/<file>.dmg" \
   --extension-url "https://<稳定候选地址>/<file>.zip" \

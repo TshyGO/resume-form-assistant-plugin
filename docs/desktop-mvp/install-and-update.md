@@ -209,6 +209,8 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 
 以上是旧测试版跨产品名升级的过渡步骤。更名后的后续版本仍按本页普通升级流程处理。正式发版前，维护者还须用真实旧测试版安装包分别验证 Windows 和 macOS 的这些步骤；开发模式不能替代安装验收。
 
+内部可执行文件继续叫 `resume-pro-desktop`（Windows 为 `.exe`），Tauri 配置显式固定了 `mainBinaryName`；它供 Native Messaging 清单和开发注册脚本定位，不是对用户显示的产品名。WiX `upgradeCode` `975d2f79-b2ff-5bf3-9070-0c2642944e04` 是改名前以旧 `productName=Resume Pro Desktop` 运行 `tauri inspect wix-upgrade-code` 得到的默认值，现予以固定，避免未来 MSI 改名后自动生成不同的升级码。此前公开的桌面 beta Release 只包含 NSIS `.exe` 和 macOS `.dmg`，没有已发布的 MSI 升级链路；正式 Windows 流水线目前也只构建 NSIS。
+
 ## 6. 卸载
 
 卸载会删掉：程序文件、开始菜单快捷方式、Chrome 与 Edge 的 Native Messaging 注册项，
