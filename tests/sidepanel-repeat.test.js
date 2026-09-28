@@ -282,7 +282,8 @@ function repeatPage({ effect = 'add', onClick = null, plan = () => ({ success: t
     input.form = form;
     input.getClientRects = () => [1];
     inputs.push(input);
-    rows.push({ isConnected: true, getClientRects: () => [1], parentElement: { closest: () => null }, querySelector: () => input });
+    rows.push({ isConnected: true, getClientRects: () => [1], parentElement: { closest: () => null }, querySelector: () => input,
+      contains: (el) => el === input });
   };
   addRow('用户已填的第一段');
   const heading = { textContent: '教育经历', isConnected: true };
@@ -384,6 +385,18 @@ test('confirm adds one row per click, fills only the new rows, never submits', a
   assert.deepEqual(page.submits, { form: 0, request: 0 });
   assert.equal(page.confirms(), 0);
   assert.equal(page.legacy.classList.size, 0);
+});
+
+test('an empty field in an existing row is not sent to AI or filled', async () => {
+  const page = repeatPage();
+  page.inputs[0].value = '';
+  await page.ask({ action: 'start' });
+  await page.settle(settled('preview'));
+  await page.ask({ action: 'confirm', requestId: (await page.status()).requestId });
+  await page.settle(settled('completed'));
+  const [fill] = page.aiCalls('AI_FILL');
+  assert.deepEqual(Array.from(fill.formFields, (field) => field.fieldId), ['field-1', 'field-2']);
+  assert.deepEqual(page.inputs.map((input) => input.value), ['', 'AI-field-1', 'AI-field-2']);
 });
 
 test('a second start while one runs is refused and plans only once', async () => {

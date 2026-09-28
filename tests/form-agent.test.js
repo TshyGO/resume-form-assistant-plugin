@@ -124,6 +124,7 @@ test('executes two verified additions and preserves existing content', async () 
   const f = fixture();
   const result = await agent.execute([{ id: 'add-0', count: 2 }], agent.collect(f.document, f.fields));
   assert.equal(result.added, 2);
+  assert.deepEqual(result.scopes, f.rows.slice(1), 'only rows added by this run may be filled');
   assert.equal(f.clicks(), 2);
   assert.equal(f.rows.length, 3);
   assert.equal(f.values[0].value, '用户已填');

@@ -110,7 +110,8 @@
           if (stopped()) throw new Error("已停止辅助新增；已经新增的空条目保留。");
           if (!isSafeButton(ref.button, ref.domain) || !ref.scope.contains(ref.button) ||
               !ref.heading.isConnected || text(ref.heading) !== ref.headingText) throw new Error("新增按钮或分组已变化，请手动检查。");
-          const before = rows(ref.scope).length;
+          const beforeRows = rows(ref.scope);
+          const before = beforeRows.length;
           if (before !== ref.current + i || before >= ref.target) throw new Error("条目数量已变化，已停止。");
           const saved = controls(ref.scope).map(el => ({ el, value: el.value, checked: el.checked }));
           const step = { id: action.id, domain: ref.domain.id, index: i + 1, count: action.count, added };
@@ -125,12 +126,15 @@
             throw error;
           }
           added++;
+          const newRows = rows(ref.scope).filter(row => !beforeRows.includes(row));
+          if (newRows.length !== 1) throw new Error("无法确定新增的条目，已停止填写，请手动核对。");
           if (controls(ref.scope).length <= saved.length) throw new Error("新条目没有可见输入框，已停止。");
           if (saved.some(({ el, value, checked }) => !el.isConnected || el.value !== value || el.checked !== checked)) {
             throw new Error("网页重建或改变了已有字段，已停止，请核对原内容。");
           }
+          // Filling may touch this new row, never the pre-existing rows in its section.
+          scopes.push(newRows[0]);
         }
-        scopes.push(ref.scope);
       }
     } catch (error) {
       error.added = added;
