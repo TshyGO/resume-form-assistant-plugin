@@ -317,6 +317,20 @@ test("发布前复算校验和：名字对不代表内容没变", () => {
   assert.throws(() => verifyChecksums(dir), /校验和对不上/);
 });
 
+test("校验和文件里记的文件名必须就是旁边的资产名", () => {
+  const dir = mkdtempSync(join(tmpdir(), "d13-assets-"));
+  writeFileSync(join(dir, "setup.exe"), "安装包");
+  const digest = sha256(readFileSync(join(dir, "setup.exe")));
+  // 先生成校验和再改名的样子：内容对，名字不对，`shasum -c` 会找不到文件。
+  writeFileSync(join(dir, "setup.exe.sha256"), `${digest}  网申快填_0.4.1_x64-setup.exe\n`);
+  assert.throws(() => verifyChecksums(dir), /记的文件名是 网申快填_0\.4\.1_x64-setup\.exe/);
+  writeFileSync(join(dir, "setup.exe.sha256"), `${digest}\n`);
+  assert.throws(() => verifyChecksums(dir), /（空）/);
+  // `shasum -b` 的二进制模式会在名字前加 `*`，照样认。
+  writeFileSync(join(dir, "setup.exe.sha256"), `${digest} *setup.exe\n`);
+  assert.deepEqual(verifyChecksums(dir), ["setup.exe"]);
+});
+
 test("前端产物里不许有 sourcemap、.env 和测试夹具", () => {
   assertDistIsClean(["index.html", "assets/index-abc.js", "assets/index-abc.css"]);
   assert.throws(() => assertDistIsClean(["assets/index.js.map"]), /不该打进安装包/);

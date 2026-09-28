@@ -238,7 +238,11 @@ export function verifyChecksums(dir, io = { readdirSync, readFileSync }, options
   const checked = [];
   for (const name of names.filter((n) => n.endsWith(CHECKSUM_SUFFIX))) {
     const binary = name.slice(0, -CHECKSUM_SUFFIX.length);
-    const recorded = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/)[0];
+    const [recorded, recordedName] = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/);
+    // `shasum -c` 按文件里记的名字找文件；名字和资产对不上，用户核对时只会看到「找不到文件」。
+    if (recordedName?.replace(/^\*/, "") !== binary) {
+      throw new Error(`${name} 里记的文件名是 ${recordedName ?? "（空）"}，应为 ${binary}`);
+    }
     const actual = sha256(io.readFileSync(join(dir, binary)));
     if (recorded !== actual) {
       throw new Error(`${binary} 的校验和对不上：文件里写着 ${recorded}，实际是 ${actual}`);
