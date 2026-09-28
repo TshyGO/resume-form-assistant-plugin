@@ -124,6 +124,7 @@ test('executes two verified additions and preserves existing content', async () 
   const f = fixture();
   const result = await agent.execute([{ id: 'add-0', count: 2 }], agent.collect(f.document, f.fields));
   assert.equal(result.added, 2);
+  assert.deepEqual(result.scopes, f.rows.slice(1), 'only rows added by this run may be filled');
   assert.equal(f.clicks(), 2);
   assert.equal(f.rows.length, 3);
   assert.equal(f.values[0].value, '用户已填');
@@ -138,10 +139,51 @@ test('stops without clicking after user stop or a changed button', async () => {
   assert.equal(f.clicks(), 0);
 });
 
-for (const effect of ['none', 'change', 'many']) {
+// #188: the error carries how many rows the page really gained, so the side panel can say so.
+for (const [effect, added] of [['none', 0], ['change', 1], ['many', 2]]) {
   test(`stops after first click when webpage effect is ${effect}`, async () => {
     const f = fixture({ effect });
-    await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(f.document, f.fields)));
+    await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(f.document, f.fields)),
+      (error) => error.added === added);
     assert.equal(f.clicks(), 1);
   });
 }
+
+test('reports progress before each click; a stop after one click counts that row', async () => {
+  const f = fixture();
+  const snapshot = agent.collect(f.document, f.fields);
+  const seen = [];
+  let stop = false;
+  const clickOnce = f.button.click.bind(f.button);
+  f.button.click = () => { clickOnce(); stop = true; };
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], snapshot, () => stop, (step) => seen.push(step)), (error) => error.added === 1 && /停止/.test(error.message));
+  assert.deepEqual(seen, [{ id: 'add-0', domain: 'papers', index: 1, count: 2, added: 0 }]);
+  assert.equal(f.clicks(), 1);
+  assert.equal(f.rows.length, 2, 'the added row stays');
+});
+
+test('beforeClick can only stop: false before the first click clicks nothing, before the second keeps the first', async () => {
+  const first = fixture();
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(first.document, first.fields), () => false, null, () => false),
+    (error) => error.added === 0 && /分组已变化/.test(error.message));
+  assert.equal(first.clicks(), 0);
+  const second = fixture();
+  const steps = [];
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(second.document, second.fields), () => false, null,
+    (step) => { steps.push(step.index); return step.index === 1; }), (error) => error.added === 1);
+  assert.deepEqual(steps, [1, 2]);
+  assert.equal(second.clicks(), 1);
+  const third = fixture();
+  await assert.rejects(agent.execute([{ id: 'add-0', count: 2 }], agent.collect(third.document, third.fields), () => false, null, () => 'yes'),
+    'anything but true stops');
+  assert.equal(third.clicks(), 0);
+});
+
+test('progress is only a report: a successful run is unchanged with or without it', async () => {
+  const f = fixture();
+  const seen = [];
+  const result = await agent.execute([{ id: 'add-0', count: 2 }], agent.collect(f.document, f.fields), () => false, (step) => seen.push(step.index));
+  assert.equal(result.added, 2);
+  assert.deepEqual(seen, [1, 2]);
+  assert.deepEqual(agent.labels, { papers: '论文', education: '教育经历', work: '工作经历', projects: '项目经历' });
+});

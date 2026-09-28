@@ -53,6 +53,19 @@ button { cursor: pointer; }
 .fill-button:hover { background: #285c54; }
 .fill-button:disabled { opacity: .7; cursor: wait; }
 .cancel-button { display: block; width: 100%; min-height: 36px; margin-top: 8px; border: 1px solid #a9c6bf; border-radius: 7px; background: #fff; color: var(--accent); font-size: 12px; font-weight: 600; }
+.repeat-button { display: block; width: 100%; min-height: 38px; margin-top: 8px; border: 1px solid #a9c6bf; border-radius: 8px; background: #fff; color: var(--accent); font-size: 13px; font-weight: 600; }
+.repeat-button:hover:not(:disabled) { background: var(--accent-pale); }
+.repeat-button:disabled { border-color: var(--line); color: #a4acb8; cursor: not-allowed; }
+.repeat-card { margin-top: 10px; padding: 11px; border: 1px solid #a9c6bf; border-radius: 8px; background: #fff; }
+.repeat-card.is-error { border-color: #edc5c5; background: #fceeee; }
+.repeat-card__message { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.55; }
+.repeat-card.is-error .repeat-card__message { color: #b44747; }
+.repeat-card__plan { margin: 7px 0 0; padding-left: 18px; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.repeat-card__actions { display: flex; gap: 8px; margin-top: 10px; }
+.repeat-card__actions:not(:has(button:not([hidden]))) { display: none; }
+.repeat-card__actions button { flex: 1; min-height: 34px; padding: 6px; border: 1px solid #a9c6bf; border-radius: 7px; background: var(--accent-pale); color: var(--accent); font-size: 12px; font-weight: 600; }
+.repeat-card__actions .repeat-card__primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.repeat-card__actions button:disabled { opacity: .6; cursor: wait; }
 .safety-note { margin: 8px 0 0; color: var(--muted); text-align: center; font-size: 11px; }
 .fill-result { margin-top: 14px; padding: 10px 11px; border: 1px solid #a9c6bf; border-radius: 8px; background: var(--accent-pale); color: #315e56; font-size: 12px; }
 .fill-result.is-error { border-color: #edc5c5; background: #fceeee; color: #b44747; }

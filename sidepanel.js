@@ -11,6 +11,14 @@
     configState: document.getElementById("config-state"),
     fillButton: document.getElementById("fill-button"),
     cancelButton: document.getElementById("cancel-button"),
+    repeatButton: document.getElementById("repeat-button"),
+    repeatCard: document.getElementById("repeat-card"),
+    repeatMessage: document.getElementById("repeat-message"),
+    repeatPlan: document.getElementById("repeat-plan"),
+    repeatConfirm: document.getElementById("repeat-confirm"),
+    repeatCancel: document.getElementById("repeat-cancel"),
+    repeatStop: document.getElementById("repeat-stop"),
+    repeatDismiss: document.getElementById("repeat-dismiss"),
     fillResult: document.getElementById("fill-result"),
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
@@ -123,6 +131,15 @@
   // Booleans and chip ids from the page controller, never the page's own text (#174).
   let targetState = self.ResumeProCompose.emptyTargetState();
   let targetRequest = 0;
+  // #188 辅助新增：只保存当前标签页上报、经过 normalizeRepeat 的状态。换标签页就清掉。
+  let repeatView = null;
+  let repeatPending = false;
+  let repeatPollTimer = null;
+  let tabEpoch = 0;
+  const REPEAT_PHASES = ["idle", "scanning", "planning", "preview", "executing", "filling", "completed", "stopped", "failed"];
+  const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
+  const REPEAT_STOPPABLE = ["scanning", "planning", "executing", "filling"];
+  const REPEAT_LABELS = { papers: "论文", education: "教育经历", work: "工作经历", projects: "项目经历" };
   // Archiving the fill that just ended (#178). The page owns the question and its answer;
   // the panel draws the page's snapshot, bound to the tab it came from. `archiveSeen` is the
   // newest snapshot of this tab and page load, so an older poll that left before a click can
@@ -341,9 +358,82 @@
 
   function updateFillAvailability(status = null) {
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
-    elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy);
-    elements.fillButton.textContent = status?.busy ? (status.phase || "正在填写…") : "一键 AI 填写";
-    elements.cancelButton.hidden = !status?.canCancel;
+    const repeating = Boolean(repeatView && REPEAT_ACTIVE.includes(repeatView.phase));
+    elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy) || repeating;
+    elements.fillButton.textContent = status?.busy && !repeating ? (status.phase || "正在填写…") : "一键 AI 填写";
+    elements.cancelButton.hidden = !status?.canCancel || repeating;
+    elements.repeatButton.disabled = desktopMode !== "ready" || !selectedTemplate() || currentTabId === null
+      || Boolean(status?.busy) || repeating || repeatPending;
+  }
+
+  // The page's repeat state, cut down to what the card shows. Anything unexpected is dropped
+  // rather than displayed; group names come from the table above, never from the page.
+  function normalizeRepeat(raw) {
+    if (!raw || typeof raw !== "object" || !REPEAT_PHASES.includes(raw.phase)) return null;
+    let plan = raw.phase === "preview" && Array.isArray(raw.plan) && raw.plan.length <= 4
+      ? raw.plan.filter((item) => Object.prototype.hasOwnProperty.call(REPEAT_LABELS, item?.domain)
+        && Number.isInteger(item.count) && item.count >= 1 && item.count <= 5)
+        .map((item) => ({ domain: item.domain, count: item.count }))
+      : [];
+    if (plan.reduce((total, item) => total + item.count, 0) > 5) plan = [];
+    const requestId = typeof raw.requestId === "string" && /^[\w-]{1,64}$/.test(raw.requestId) ? raw.requestId : "";
+    return {
+      phase: raw.phase,
+      requestId,
+      message: typeof raw.message === "string" ? raw.message.slice(0, 240) : "",
+      plan,
+      added: Number.isInteger(raw.added) && raw.added >= 0 && raw.added <= 5 ? raw.added : 0,
+      canConfirm: raw.phase === "preview" && raw.canConfirm === true && Boolean(requestId) && plan.length > 0,
+      canCancel: raw.phase === "preview" && raw.canCancel === true && Boolean(requestId),
+      canStop: REPEAT_STOPPABLE.includes(raw.phase) && raw.canStop === true && Boolean(requestId)
+    };
+  }
+
+  function renderRepeat() {
+    const view = repeatView;
+    const shown = Boolean(view && view.phase !== "idle");
+    elements.repeatCard.hidden = !shown;
+    if (shown) {
+      elements.repeatCard.dataset.phase = view.phase;
+      elements.repeatCard.classList.toggle("is-error", view.phase === "failed");
+      elements.repeatMessage.textContent = view.message;
+      elements.repeatPlan.hidden = !view.plan.length;
+      elements.repeatPlan.replaceChildren(...view.plan.map((item) => {
+        const row = document.createElement("li");
+        row.textContent = `${REPEAT_LABELS[item.domain]}：${item.count} 条`;
+        return row;
+      }));
+      elements.repeatConfirm.hidden = !view.canConfirm;
+      elements.repeatCancel.hidden = !view.canCancel;
+      elements.repeatStop.hidden = !view.canStop;
+      elements.repeatDismiss.hidden = REPEAT_ACTIVE.includes(view.phase);
+      for (const button of [elements.repeatConfirm, elements.repeatCancel, elements.repeatStop, elements.repeatDismiss]) {
+        button.disabled = repeatPending;
+      }
+    }
+    updateFillAvailability(lastPageStatus);
+  }
+
+  function clearRepeat() {
+    repeatView = null;
+    renderRepeat();
+  }
+
+  // Every action names the plan it was shown for; the page refuses a requestId it no longer has.
+  async function repeatAction(action) {
+    if (repeatPending) return;
+    const requestId = repeatView?.requestId || "";
+    if (action !== "start" && !requestId) return;
+    repeatPending = true;
+    renderRepeat();
+    try {
+      const result = await sendToPage({ type: "RESUME_PANEL_REPEAT", action, ...(action === "start" ? {} : { requestId }) });
+      if (!result?.ok) toast(result?.error || "操作未完成，请重试。");
+    } finally {
+      repeatPending = false;
+      renderRepeat();
+    }
+    await pollStatus();
   }
 
   function renderJobAssist(assist) {
@@ -1084,6 +1174,7 @@
     if (statusPolling) { statusRepoll = true; return; }
     statusPolling = true;
     try {
+      const epoch = tabEpoch;
       const tab = await activeTab();
       const nextTabId = tab?.id || null;
       if (nextTabId !== currentTabId) {
@@ -1099,6 +1190,7 @@
         jobOwner += 1;
         jobPending = false;
         clearTargetState();
+        clearRepeat();
         resetFillArchive();
       }
       currentTabId = nextTabId;
@@ -1106,9 +1198,10 @@
       const polledJobOwner = jobOwner;
       const response = await sendToPage({ type: "RESUME_PANEL_STATUS" }, polledTabId);
       // The tab in front may have changed while the page was answering. That answer is about
-      // the tab we left and must not be drawn over the new one.
+      // the tab we left and must not be drawn over the new one. The epoch also catches a
+      // switch away and back (A → B → A) that the front-tab check alone cannot see.
       const front = await activeTab();
-      if ((front?.id || null) !== polledTabId) { statusRepoll = true; return; }
+      if ((front?.id || null) !== polledTabId || epoch !== tabEpoch) { statusRepoll = true; return; }
       const connected = Boolean(response?.ready);
       elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
       elements.pageState.classList.toggle("is-unavailable", !connected);
@@ -1126,6 +1219,8 @@
         // than letting the old response clear or resurrect the newer state.
         statusRepoll = true;
       }
+      repeatView = connected ? normalizeRepeat(response.repeat) : null;
+      renderRepeat();
       if (connected && response.status) {
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
@@ -1166,6 +1261,11 @@
         pollStatus().catch(() => {});
       }
     }
+    // While 辅助新增 runs, follow it more closely than the idle interval.
+    clearTimeout(repeatPollTimer);
+    if (repeatView && REPEAT_ACTIVE.includes(repeatView.phase)) {
+      repeatPollTimer = setTimeout(() => { pollStatus().catch(() => {}); }, 500);
+    }
   }
 
   async function loadStore() {
@@ -1193,6 +1293,8 @@
     }
   }, true);
   elements.templateSelect.addEventListener("change", async () => {
+    // A plan made for the old template must not run with the new one.
+    await sendToPage({ type: "RESUME_PANEL_REPEAT", action: "invalidate" }).catch(() => {});
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_UPDATE", op: "setActiveTemplate", templateId: elements.templateSelect.value });
     await loadStore();
     toast(result?.status === "missing_template" ? "这个模板在桌面里已经删掉了" : result?.status === "ok" ? "当前模板已切换。" : "桌面暂时无法切换模板。");
@@ -1203,6 +1305,14 @@
     if (!result?.ok) toast(result?.error || "无法开始填写。");
     await pollStatus();
   });
+  elements.repeatButton.addEventListener("click", () => {
+    if (elements.repeatButton.disabled) return;
+    repeatAction("start").catch(() => toast("无法开始辅助新增。"));
+  });
+  elements.repeatConfirm.addEventListener("click", () => { repeatAction("confirm").catch(() => {}); });
+  elements.repeatCancel.addEventListener("click", () => { repeatAction("cancel").catch(() => {}); });
+  elements.repeatStop.addEventListener("click", () => { repeatAction("stop").catch(() => {}); });
+  elements.repeatDismiss.addEventListener("click", () => { repeatAction("dismiss").catch(() => {}); });
   elements.cancelButton.addEventListener("click", async () => {
     const result = await sendToPage({ type: "RESUME_PANEL_CANCEL" });
     if (!result?.ok) toast(result?.error || "当前无法取消。");
@@ -1492,7 +1602,12 @@
     loadStore().catch(() => {});
     refreshQueue().catch(() => {});
   });
-  chrome.tabs.onActivated.addListener(() => { clearTargetState(); loadStore().then(pollStatus).catch(() => {}); });
+  chrome.tabs.onActivated.addListener(() => {
+    tabEpoch += 1;
+    clearTargetState();
+    clearRepeat();
+    loadStore().then(pollStatus).catch(() => {});
+  });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
   setInterval(() => { pollStatus().catch(() => {}); }, 1500);

@@ -95,33 +95,55 @@
       check();
     });
   }
-  async function execute(plan, snapshot, stopped = () => false) {
+  // `onProgress` only reports; it cannot change what is clicked. `beforeClick` can only add a
+  // check: returning false stops before that click. A thrown error carries `added`, the rows the
+  // page really gained, so a stop after a click is never under-reported.
+  async function execute(plan, snapshot, stopped = () => false, onProgress = null, beforeClick = null) {
     const actions = validatePlan(plan, snapshot.candidates);
     let added = 0;
     const scopes = [];
-    for (const action of actions) {
-      const ref = snapshot.refs.get(action.id);
-      if (rows(ref.scope).length !== ref.current) throw new Error("页面条目已变化，请重新预览。");
-      for (let i = 0; i < action.count; i++) {
-        if (stopped()) throw new Error("已停止辅助新增；已经新增的空条目保留。");
-        if (!isSafeButton(ref.button, ref.domain) || !ref.scope.contains(ref.button) ||
-            !ref.heading.isConnected || text(ref.heading) !== ref.headingText) throw new Error("新增按钮或分组已变化，请手动检查。");
-        const before = rows(ref.scope).length;
-        if (before !== ref.current + i || before >= ref.target) throw new Error("条目数量已变化，已停止。");
-        const saved = controls(ref.scope).map(el => ({ el, value: el.value, checked: el.checked }));
-        ref.button.click();
-        await waitForGrowth(ref, before, stopped);
-        if (controls(ref.scope).length <= saved.length) throw new Error("新条目没有可见输入框，已停止。");
-        if (saved.some(({ el, value, checked }) => !el.isConnected || el.value !== value || el.checked !== checked)) {
-          throw new Error("网页重建或改变了已有字段，已停止，请核对原内容。");
+    try {
+      for (const action of actions) {
+        const ref = snapshot.refs.get(action.id);
+        if (rows(ref.scope).length !== ref.current) throw new Error("页面条目已变化，请重新预览。");
+        for (let i = 0; i < action.count; i++) {
+          if (stopped()) throw new Error("已停止辅助新增；已经新增的空条目保留。");
+          if (!isSafeButton(ref.button, ref.domain) || !ref.scope.contains(ref.button) ||
+              !ref.heading.isConnected || text(ref.heading) !== ref.headingText) throw new Error("新增按钮或分组已变化，请手动检查。");
+          const beforeRows = rows(ref.scope);
+          const before = beforeRows.length;
+          if (before !== ref.current + i || before >= ref.target) throw new Error("条目数量已变化，已停止。");
+          const saved = controls(ref.scope).map(el => ({ el, value: el.value, checked: el.checked }));
+          const step = { id: action.id, domain: ref.domain.id, index: i + 1, count: action.count, added };
+          if (beforeClick && beforeClick(step) !== true) throw new Error("网页分组已变化，已停止。");
+          if (onProgress) onProgress(step);
+          ref.button.click();
+          try {
+            await waitForGrowth(ref, before, stopped);
+          } catch (error) {
+            const grown = ref.scope.isConnected ? rows(ref.scope).length - before : 0;
+            if (grown > 0) added += grown;
+            throw error;
+          }
+          added++;
+          const newRows = rows(ref.scope).filter(row => !beforeRows.includes(row));
+          if (newRows.length !== 1) throw new Error("无法确定新增的条目，已停止填写，请手动核对。");
+          if (controls(ref.scope).length <= saved.length) throw new Error("新条目没有可见输入框，已停止。");
+          if (saved.some(({ el, value, checked }) => !el.isConnected || el.value !== value || el.checked !== checked)) {
+            throw new Error("网页重建或改变了已有字段，已停止，请核对原内容。");
+          }
+          // Filling may touch this new row, never the pre-existing rows in its section.
+          scopes.push(newRows[0]);
         }
-        added++;
       }
-      scopes.push(ref.scope);
+    } catch (error) {
+      error.added = added;
+      throw error;
     }
     return { added, scopes };
   }
-  const api = { targetCounts, collect, validatePlan, execute };
+  const labels = Object.fromEntries(domains.map(domain => [domain.id, domain.label]));
+  const api = { targetCounts, collect, validatePlan, execute, labels };
   root.ResumeProFormAgent = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);
