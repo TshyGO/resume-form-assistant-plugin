@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Resume Pro Desktop",
+  "productName": "网申快填",
   "version": "0.4.1",
   "identifier": "com.resumepro.desktop",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Resume Pro Desktop",
+        "title": "网申快填",
         "width": 1100,
         "height": 740,
         "minWidth": 860,
@@ -41,6 +41,9 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "installer/hooks.nsi"
+      },
+      "wix": {
+        "upgradeCode": "975d2f79-b2ff-5bf3-9070-0c2642944e04"
       }
     },
     "macOS": {

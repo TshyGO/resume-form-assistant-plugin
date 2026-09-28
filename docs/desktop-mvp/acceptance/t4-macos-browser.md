@@ -15,7 +15,7 @@ python3 desktop/scripts/d14_macos_acceptance_check.py probe-host \
 
 不要求另建 macOS 账户，管理员（`admin`）和标准用户（`standard-user`）都可以测试；admin 本身不是 blocker。`READY` 要求 Apple Silicon `arm64`、`spctl --status` 为 `assessments enabled`、已装正式版 Chrome 和 Edge，并且没有：
 
-- 已安装的 `Resume Pro Desktop.app`
+- 已安装的 `网申快填.app`
 - `~/Library/Application Support/ResumePro`
 - Chrome / Edge 的 `com.resumepro.desktop` Native Messaging 清单
 - 仍在运行的桌面进程（按 `ps -axo comm=` 的内核进程名匹配；Darwin 会把长名字截到 16 字节，不能用完整名做 `pgrep -x`）
@@ -70,7 +70,7 @@ M2 登记候选后，开始业务走查前必须记录并核对：
 1. DMG 与插件 ZIP 的稳定 HTTPS 下载地址、文件名、字节数和 SHA-256。
 2. 完整 40 位源码 commit、桌面版本、插件版本、`protocolVersion` 和固定扩展 ID。
 3. 硬件型号、Apple Silicon 芯片、`arm64` 架构、macOS 产品版本/build、时区、区域和账户类型。
-4. DMG 能挂载并将 `Resume Pro Desktop.app` 拖入 `/Applications`；bundle identifier 为 `com.resumepro.desktop`，版本与候选一致。
+4. DMG 能挂载并将 `网申快填.app` 拖入 `/Applications`；bundle identifier 为 `com.resumepro.desktop`，版本与候选一致。
 5. 实际 Gatekeeper 提示、签名和公证检查结果。未知或与批准策略不一致时不得继续签收。
 6. 应用启动后由产品自身生成生产 Native Messaging 清单；不得使用 `nm-dev-register.mjs` 代替：
 

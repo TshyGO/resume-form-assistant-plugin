@@ -76,7 +76,7 @@ gh release create v0.4.1 --target main --title "v0.4.1" --generate-notes
 
 1. 跑和 CI 同一套语法检查、`npm run typecheck`、`npm test`，以及 `check-plugin-release-allowlist.js`。
 2. 核对 tag、`manifest.json` 版本，以及这个提交在 `main` 上。
-3. 打出 `resume-pro-v0.4.1-chrome.zip`，再拆开核对里面的 `manifest.json`。
+3. 打出 `wangshen-kuaitian-v0.4.1-chrome.zip`，再拆开核对里面的 `manifest.json`。
 4. 把这个 ZIP 挂到刚创建的 Release。
 5. 调 v2 `upload`。如果返回「仍在处理」，就轮询 `fetchStatus`，直到成功或失败。
 6. 核对商店收到的版本。对不上就停止，不会送审。
@@ -107,9 +107,9 @@ node desktop/scripts/chrome-web-store.js release-staged
 
 ```bash
 node desktop/scripts/chrome-web-store.js zip-name
-node desktop/scripts/pack-plugin.js --output resume-pro-v0.4.0-chrome.zip
-node desktop/scripts/chrome-web-store.js verify-zip --zip resume-pro-v0.4.0-chrome.zip
-node desktop/scripts/chrome-web-store.js publish --zip resume-pro-v0.4.0-chrome.zip --dry-run
+node desktop/scripts/pack-plugin.js --output wangshen-kuaitian-v0.4.0-chrome.zip
+node desktop/scripts/chrome-web-store.js verify-zip --zip wangshen-kuaitian-v0.4.0-chrome.zip
+node desktop/scripts/chrome-web-store.js publish --zip wangshen-kuaitian-v0.4.0-chrome.zip --dry-run
 ```
 
 把版本换成 `manifest.json` 里的实际值。`--dry-run` 只检查 ZIP，不换 token，不上传。

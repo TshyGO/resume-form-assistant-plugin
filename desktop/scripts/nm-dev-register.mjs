@@ -87,7 +87,7 @@ export function manifestFor(binaryPath, extensionIds, platform = process.platfor
   }
   return {
     name: HOST_NAME,
-    description: "Resume Pro desktop archive (development registration)",
+    description: "网申快填桌面档案 (development registration)",
     path: binaryPath,
     type: "stdio",
     allowed_origins: extensionIds.map((id) => `chrome-extension://${id}/`),

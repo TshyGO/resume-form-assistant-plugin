@@ -1,4 +1,4 @@
-# Resume Pro Desktop（D02 壳 + D04 申请管理）
+# 网申快填（D02 壳 + D04 申请管理）
 
 最小可运行桌面程序：导航、设置、用户数据目录、单实例，以及不依赖 AI 的申请管理（列表、编辑、阶段与时间线）。浏览器插件仍在仓库根目录，安装方式不变。
 
@@ -58,16 +58,16 @@ Windows 产物大致在：
 PowerShell：
 
 ```powershell
-$env:RESUMEPRO_DATA_DIR = "D:\tmp\Resume Pro Data"
-$env:RESUMEPRO_CACHE_DIR = "D:\tmp\Resume Pro Cache"
+$env:RESUMEPRO_DATA_DIR = "D:\tmp\网申快填 Data"
+$env:RESUMEPRO_CACHE_DIR = "D:\tmp\网申快填 Cache"
 npm run desktop:dev
 ```
 
 macOS / bash：
 
 ```bash
-export RESUMEPRO_DATA_DIR="$HOME/tmp/Resume Pro Data"
-export RESUMEPRO_CACHE_DIR="$HOME/tmp/Resume Pro Cache"
+export RESUMEPRO_DATA_DIR="$HOME/tmp/网申快填 Data"
+export RESUMEPRO_CACHE_DIR="$HOME/tmp/网申快填 Cache"
 npm run desktop:dev
 ```
 

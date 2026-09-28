@@ -64,7 +64,7 @@ pub fn print_help() {
 
 pub fn help_text() -> String {
     format!(
-        "Resume Pro Desktop {} (D02 shell)
+        "网申快填 {} (D02 shell)
 
 Usage:
   resume-pro-desktop [--hidden] [--probe] [--apps-loop] [--nm-host] [--quit] [--help]
@@ -134,7 +134,7 @@ mod tests {
     fn help_text_reports_the_version_this_binary_was_built_as() {
         // --help 是用户核对「我装的是哪一版」的地方。写死的版本号会在升版之后说谎，
         // 测试版尤其如此：0.4.0-beta.2 的包如果说自己是 0.1.0，就没法据此排查问题。
-        let expected = format!("Resume Pro Desktop {}", env!("CARGO_PKG_VERSION"));
+        let expected = format!("网申快填 {}", env!("CARGO_PKG_VERSION"));
         assert!(
             help_text().starts_with(&expected),
             "帮助文本开头应该是 {expected:?}，实际是 {:?}",

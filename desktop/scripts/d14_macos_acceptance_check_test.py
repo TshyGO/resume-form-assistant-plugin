@@ -28,8 +28,8 @@ class MacAcceptanceCheckTests(unittest.TestCase):
     def candidate_args(self, root):
         # The synthetic ZIP carries the repository manifest, so expect whatever version it says.
         plugin_version = json.loads((MAC.ROOT / "manifest.json").read_text(encoding="utf-8"))["version"]
-        dmg = root / "Resume.Pro.Desktop_0.4.0-beta.3_aarch64.dmg"
-        extension = root / f"resume-pro-v{plugin_version}.zip"
+        dmg = root / "网申快填_0.4.0-beta.3_aarch64.dmg"
+        extension = root / f"wangshen-kuaitian-v{plugin_version}.zip"
         dmg.write_bytes(b"synthetic-dmg-for-unit-test")
         self.write_extension_zip(extension)
         return Namespace(
@@ -262,7 +262,7 @@ class MacAcceptanceCheckTests(unittest.TestCase):
             apps = root / "Applications"
             self.write_app(apps, "Google Chrome.app", "140.0.0.0")
             self.write_app(apps, "Microsoft Edge.app", "140.0.0.0")
-            self.write_app(apps, "Resume Pro Desktop.app", "0.4.0-beta.3")
+            self.write_app(apps, "网申快填.app", "0.4.0-beta.3")
             (root / "Library/Application Support/ResumePro").mkdir(parents=True)
             manifest = root / MAC.CHROME_NM_REL
             manifest.parent.mkdir(parents=True)
@@ -274,9 +274,20 @@ class MacAcceptanceCheckTests(unittest.TestCase):
             )
             joined = " ".join(probe["blockers"])
             self.assertIn("need arm64", joined)
-            self.assertIn("existing Resume Pro Desktop app", joined)
+            self.assertIn("existing desktop app", joined)
             self.assertIn("existing ResumePro data root", joined)
             self.assertIn("existing Native Messaging manifests", joined)
+
+    def test_probe_host_blocks_legacy_app_after_rename(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            apps = root / "Applications"
+            self.write_app(apps, "Google Chrome.app", "140.0.0.0")
+            self.write_app(apps, "Microsoft Edge.app", "140.0.0.0")
+            self.write_app(apps, "Resume Pro Desktop.app", "0.4.0-beta.3")
+            probe = self.collect_probe(root, apps, self.ready_commands())
+            self.assertEqual(probe["verdict"], "BLOCKED")
+            self.assertIn("Resume Pro Desktop.app", " ".join(probe["blockers"]))
 
     def test_probe_host_writes_blocked_result_and_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -443,7 +454,7 @@ class MacAcceptanceCheckTests(unittest.TestCase):
 
     def test_probe_host_blocks_each_confirmed_first_start_residue_path(self):
         cases = [
-            ("app", lambda root, apps: self.write_app(apps, "Resume Pro Desktop.app", "0.4.0-beta.3"), "existing Resume Pro Desktop app"),
+            ("app", lambda root, apps: self.write_app(apps, "网申快填.app", "0.4.0-beta.3"), "existing desktop app"),
             ("data", lambda root, apps: (root / MAC.DATA_ROOT_REL).mkdir(parents=True), "existing ResumePro data root"),
             (
                 "chrome-nm",

@@ -145,5 +145,5 @@ export function formatSize(bytes: number): string {
 export function defaultBackupName(at: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}`;
-  return `resume-pro-archive-${stamp}.zip`;
+  return `wangshen-kuaitian-archive-${stamp}.zip`;
 }

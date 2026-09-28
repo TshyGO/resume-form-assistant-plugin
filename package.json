@@ -2,7 +2,7 @@
   "name": "resume-pro-plugin",
   "private": true,
   "version": "0.3.0",
-  "description": "Dev tooling for the Resume Pro browser extension. The extension itself ships no npm dependencies and has no build step; this package exists only for type checking and protocol type generation.",
+  "description": "Dev tooling for the 网申快填 browser extension. The extension itself ships no npm dependencies and has no build step; this package exists only for type checking and protocol type generation.",
   "scripts": {
     "gen:types": "node desktop/crates/protocol/js/gen-types.mjs",
     "typecheck": "tsc --noEmit",

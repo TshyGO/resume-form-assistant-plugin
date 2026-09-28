@@ -158,7 +158,7 @@ pub fn manifest_json(exe: &Path, extension_ids: &[String]) -> Result<String, Str
     }
     let value = json!({
         "name": HOST_NAME,
-        "description": "Resume Pro 桌面档案",
+        "description": "网申快填桌面档案",
         "path": exe.to_string_lossy(),
         "type": "stdio",
         "allowed_origins": origins,

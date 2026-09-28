@@ -362,7 +362,7 @@ fn get_runtime_status(app: AppHandle, state: State<AppState>) -> Result<RuntimeS
     };
     Ok(RuntimeStatus {
         app_version: app.package_info().version.to_string(),
-        product_name: "Resume Pro Desktop".into(),
+        product_name: "网申快填".into(),
         identifier: "com.resumepro.desktop".into(),
         platform: std::env::consts::OS.into(),
         arch: std::env::consts::ARCH.into(),
@@ -1819,7 +1819,7 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Resume Pro Desktop");
+        .expect("error while running 网申快填");
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -1829,7 +1829,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("Resume Pro Desktop")
+        .tooltip("网申快填")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => lifecycle::show_main_window(app),
             "quit" => {

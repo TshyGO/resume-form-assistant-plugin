@@ -144,14 +144,14 @@ test("上传的东西必须是安装包 + 一一配套的校验和", () => {
 });
 
 test("桌面 Release 可以带一份插件 zip，但名字必须对，而且要有校验和", () => {
-  assert.equal(isPluginZip("resume-pro-plugin-0.4.0.zip"), true);
-  assert.equal(isPluginZip("resume-pro-plugin-0.4.0-beta.3.zip"), true);
+  assert.equal(isPluginZip("wangshen-kuaitian-plugin-0.4.0.zip"), true);
+  assert.equal(isPluginZip("wangshen-kuaitian-plugin-0.4.0-beta.3.zip"), true);
   assert.equal(isPluginZip("resume-pro-v0.4.0.zip"), false);
   assertReleaseAssets([
     "setup.exe",
     "setup.exe.sha256",
-    "resume-pro-plugin-0.4.0-beta.3.zip",
-    "resume-pro-plugin-0.4.0-beta.3.zip.sha256",
+    "wangshen-kuaitian-plugin-0.4.0-beta.3.zip",
+    "wangshen-kuaitian-plugin-0.4.0-beta.3.zip.sha256",
   ]);
   assert.throws(
     () =>
@@ -166,10 +166,10 @@ test("桌面 Release 可以带一份插件 zip，但名字必须对，而且要�
       assertReleaseAssets([
         "setup.exe",
         "setup.exe.sha256",
-        "resume-pro-plugin-0.4.0.zip",
-        "resume-pro-plugin-0.4.0.zip.sha256",
-        "resume-pro-plugin-0.4.1.zip",
-        "resume-pro-plugin-0.4.1.zip.sha256",
+        "wangshen-kuaitian-plugin-0.4.0.zip",
+        "wangshen-kuaitian-plugin-0.4.0.zip.sha256",
+        "wangshen-kuaitian-plugin-0.4.1.zip",
+        "wangshen-kuaitian-plugin-0.4.1.zip.sha256",
       ]),
     /只能有一份/,
   );
@@ -188,10 +188,10 @@ test("校验和由 Node 算出来，写完顺手把目录验一遍", () => {
 test("插件 zip 也会写校验和，但 require 时目录里必须真有那一份", () => {
   const dir = mkdtempSync(join(tmpdir(), "d13-assets-"));
   writeFileSync(join(dir, "setup.exe"), "x");
-  writeFileSync(join(dir, "resume-pro-plugin-0.4.0.zip"), "plugin");
+  writeFileSync(join(dir, "wangshen-kuaitian-plugin-0.4.0.zip"), "plugin");
   const written = writeChecksums(dir, undefined, { requirePluginZip: true });
   assert.equal(written.length, 2);
-  assert.ok(written.some((item) => item.name === "resume-pro-plugin-0.4.0.zip"));
+  assert.ok(written.some((item) => item.name === "wangshen-kuaitian-plugin-0.4.0.zip"));
 });
 
 test("目录里混进别的东西时，写校验和这一步就会拦住", () => {
@@ -263,9 +263,9 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   assert.match(flow, /--assets dist-release\n/);
   assert.match(flow, /pack-plugin\.js/);
   assert.match(flow, /plugin_version=\$\(node -p 'require\("\.\/manifest\.json"\)\.version'\)/);
-  assert.match(flow, /resume-pro-plugin-\$\{plugin_version\}\.zip/);
+  assert.match(flow, /wangshen-kuaitian-plugin-\$\{plugin_version\}\.zip/);
   assert.match(flow, /--require-plugin-zip/);
-  assert.match(flow, /resume-pro-plugin/);
+  assert.match(flow, /wangshen-kuaitian-plugin/);
   assert.match(flow, /加载已解压的扩展程序/);
   assert.match(flow, /ad-hoc/);
   // tag 名要走 env，不能直接插值进 run：那等于把 ref 名当 shell 代码执行。

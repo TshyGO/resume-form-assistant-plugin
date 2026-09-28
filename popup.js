@@ -116,7 +116,7 @@
     const url = URL.createObjectURL(new Blob([result.csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = "resume-pro-未迁移模板.csv";
+    link.download = "网申快填-未迁移模板.csv";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }

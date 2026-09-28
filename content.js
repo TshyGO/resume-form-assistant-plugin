@@ -399,7 +399,7 @@
     sidebar.innerHTML = `
       <div class="resume-pro__header" data-drag-handle="true">
         <div class="resume-pro__title-wrap">
-          <p class="resume-pro__eyebrow">Resume Pro</p>
+          <p class="resume-pro__eyebrow">网申快填</p>
           <strong class="resume-pro__title">填表助手</strong>
         </div>
         <button class="resume-pro__collapse" type="button" aria-label="折叠助手" aria-controls="${SIDEBAR_PANEL_ID}">−</button>
@@ -1983,7 +1983,7 @@
     const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;
     const outcome = unsynced && result.outcome === "success" ? "partial" : result.outcome;
     return [
-      `Resume Pro v${chrome.runtime.getManifest().version}`,
+      `网申快填 v${chrome.runtime.getManifest().version}`,
       `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[outcome] || "未知"}；错误类别：${code}`,
       `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}`,
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),

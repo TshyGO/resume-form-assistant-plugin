@@ -16,8 +16,8 @@ T4 只接受 **D13 候选安装包 + 候选插件 ZIP + 真实 Chrome/Edge + 安
 
 ```powershell
 python desktop/scripts/d14_acceptance_check.py prepare `
-  --installer "C:\candidate\Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip" `
+  --installer "C:\candidate\网申快填_0.1.0_x64-setup.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip" `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --source-commit "<40 位源码 SHA>" `
   --desktop-version "0.1.0" `
@@ -52,16 +52,16 @@ python desktop/scripts/d14_acceptance_check.py prepare `
 python desktop/scripts/d14_acceptance_check.py inspect-installed `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser chrome `
-  --installed-exe "$env:LOCALAPPDATA\Resume Pro Desktop\resume-pro-desktop.exe" `
-  --installer "C:\candidate\Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip"
+  --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
+  --installer "C:\candidate\网申快填_0.1.0_x64-setup.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip"
 
 python desktop/scripts/d14_acceptance_check.py inspect-installed `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser edge `
-  --installed-exe "$env:LOCALAPPDATA\Resume Pro Desktop\resume-pro-desktop.exe" `
-  --installer "C:\candidate\Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip"
+  --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
+  --installer "C:\candidate\网申快填_0.1.0_x64-setup.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip"
 ```
 
 检查器要求 HKCU 卸载记录唯一且版本、安装目录、卸载命令与候选一致；已安装 EXE 的版本和签名策略必须与候选匹配；两个 Native Messaging 注册项都存在、清单 `path` 精确指向安装目录、`type=stdio`，且 `allowed_origins` 只有固定商店 ID。工作区、临时目录或开发注册不能通过。它不会把 J01 自动标成通过，因为“无终端闪窗、安装文案、实际点击路径”仍需人看。
@@ -74,16 +74,16 @@ python desktop/scripts/d14_acceptance_check.py inspect-installed `
 python desktop/scripts/d14_acceptance_check.py installed-smoke `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser chrome `
-  --installed-exe "$env:LOCALAPPDATA\Resume Pro Desktop\resume-pro-desktop.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip" `
+  --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip" `
   --extension-dir "C:\candidate\extension" `
   --browser-profile "C:\candidate\chrome-profile"
 
 python desktop/scripts/d14_acceptance_check.py installed-smoke `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser edge `
-  --installed-exe "$env:LOCALAPPDATA\Resume Pro Desktop\resume-pro-desktop.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip" `
+  --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip" `
   --extension-dir "C:\candidate\extension"
 ```
 
@@ -115,8 +115,8 @@ J04/J05 的真实 AI 走查如果需要 API Key，应引用 #128 会话 C 的独
 ```powershell
 python desktop/scripts/d14_acceptance_check.py verify `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
-  --installer "C:\candidate\Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip"
+  --installer "C:\candidate\网申快填_0.1.0_x64-setup.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip"
 ```
 
 具名审阅人确认 Chrome 与 Edge 的 J01–J08、F01–F13 均有有效证据并设为 `PASS`，D08/D11/D13 已具名签收，且安装后烟测为 `PASS` 后，再运行：
@@ -124,8 +124,8 @@ python desktop/scripts/d14_acceptance_check.py verify `
 ```powershell
 python desktop/scripts/d14_acceptance_check.py verify `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
-  --installer "C:\candidate\Resume Pro Desktop_0.1.0_x64-setup.exe" `
-  --extension-zip "C:\candidate\resume-pro-v0.4.0.zip" `
+  --installer "C:\candidate\网申快填_0.1.0_x64-setup.exe" `
+  --extension-zip "C:\candidate\wangshen-kuaitian-v0.4.0.zip" `
   --require-complete
 ```
 

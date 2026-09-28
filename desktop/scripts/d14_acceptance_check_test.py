@@ -27,8 +27,8 @@ class D14AcceptanceCheckTests(unittest.TestCase):
     def test_evidence_paths_do_not_persist_the_windows_username(self):
         with patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\alice\AppData\Local"}):
             self.assertEqual(
-                D14.evidence_path(Path(r"C:\Users\alice\AppData\Local\Resume Pro Desktop\app.exe")),
-                r"%LOCALAPPDATA%\Resume Pro Desktop\app.exe",
+                D14.evidence_path(Path(r"C:\Users\alice\AppData\Local\网申快填\app.exe")),
+                r"%LOCALAPPDATA%\网申快填\app.exe",
             )
 
     def test_stable_chrome_profile_must_point_at_the_exact_candidate(self):

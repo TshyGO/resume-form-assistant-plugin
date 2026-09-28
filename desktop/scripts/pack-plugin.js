@@ -1,7 +1,7 @@
 // 打一份只含插件运行文件的 zip。桌面发版和插件发版共用这一份清单，
 // 避免两个工作流各写一份 git archive，漏了 link/ 之类的目录。
 //
-//   node desktop/scripts/pack-plugin.js --output dist/resume-pro-plugin-0.4.0.zip
+//   node desktop/scripts/pack-plugin.js --output dist/wangshen-kuaitian-plugin-0.4.0.zip
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, realpathSync } from "node:fs";
