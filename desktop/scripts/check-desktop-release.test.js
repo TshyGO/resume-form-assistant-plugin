@@ -160,12 +160,19 @@ test("安装包换成 ASCII 文件名：GitHub 上传时会删掉中文", () => 
   );
   assert.throws(() => releaseInstallerName("setup.exe"), /认不出安装包文件名/);
   assert.throws(() => releaseInstallerName("网申快填_0.4.1_x64.zip"), /认不出安装包文件名/);
-  assert.throws(() => releaseInstallerName("网申快填_0.4.1_x64 setup.exe"), /GitHub 会删掉的字符/);
+  assert.throws(() => releaseInstallerName("网申快填_0.4.1_x64 setup.exe"), /\[A-Za-z0-9\._-\] 以外的字符/);
   // 换名漏掉的话，上传前的门禁要拦住，而不是让 Release 里出现 `_0.4.1_x64-setup.exe`。
   assert.throws(
     () => assertReleaseAssets(["网申快填_0.4.1_x64-setup.exe", "网申快填_0.4.1_x64-setup.exe.sha256"]),
-    /GitHub 上传时会删掉的字符/,
+    /\[A-Za-z0-9\._-\] 以外的字符/,
   );
+  // 改名后的正常名字要能通过门禁，免得将来收紧规则时把正式发布拦住。
+  assertReleaseAssets([
+    "wangshen-kuaitian_0.4.1_x64-setup.exe",
+    "wangshen-kuaitian_0.4.1_x64-setup.exe.sha256",
+    "wangshen-kuaitian_0.4.1_aarch64.dmg",
+    "wangshen-kuaitian_0.4.1_aarch64.dmg.sha256",
+  ]);
   assert.equal(
     execFileSync(process.execPath, [script, "--installer-name", "网申快填_0.4.1_x64-setup.exe"], {
       encoding: "utf8",
@@ -323,9 +330,12 @@ test("校验和文件里记的文件名必须就是旁边的资产名", () => {
   const digest = sha256(readFileSync(join(dir, "setup.exe")));
   // 先生成校验和再改名的样子：内容对，名字不对，`shasum -c` 会找不到文件。
   writeFileSync(join(dir, "setup.exe.sha256"), `${digest}  网申快填_0.4.1_x64-setup.exe\n`);
-  assert.throws(() => verifyChecksums(dir), /记的文件名是 网申快填_0\.4\.1_x64-setup\.exe/);
+  assert.throws(() => verifyChecksums(dir), /实际是：[0-9a-f]+ 网申快填_0\.4\.1_x64-setup\.exe/);
   writeFileSync(join(dir, "setup.exe.sha256"), `${digest}\n`);
-  assert.throws(() => verifyChecksums(dir), /（空）/);
+  assert.throws(() => verifyChecksums(dir), /应只有一行/);
+  // 名字后面多出字段也不是 `shasum` 写出来的格式。
+  writeFileSync(join(dir, "setup.exe.sha256"), `${digest}  setup.exe extra\n`);
+  assert.throws(() => verifyChecksums(dir), /应只有一行/);
   // `shasum -b` 的二进制模式会在名字前加 `*`，照样认。
   writeFileSync(join(dir, "setup.exe.sha256"), `${digest} *setup.exe\n`);
   assert.deepEqual(verifyChecksums(dir), ["setup.exe"]);
