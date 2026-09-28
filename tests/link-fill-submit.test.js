@@ -343,6 +343,43 @@ test('a fill already saved remains a duplicate after its record is removed and t
   assert.deepEqual(first.storage.data.desktopFillRecords, []);
 });
 
+test('a late request cannot recreate a fill while its completed record is being removed', async () => {
+  const { router, storage, state, writes } = await harness({
+    desktop: message => (message.messageType === 'handshake' ? handshake(message) : closed())
+  });
+  const request = { type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: FILL_ID, applicationId: APPLICATION };
+  assert.equal((await router.handle(request)).status, 'pending');
+  const messageId = storage.data.desktopOutbox[0].messageId;
+  const get = storage.get.bind(storage);
+  let signalRead;
+  const readStarted = new Promise(resolve => { signalRead = resolve; });
+  let releaseRead;
+  const readGate = new Promise(resolve => { releaseRead = resolve; });
+  let held = false;
+  storage.get = async keys => {
+    if (!held && keys.includes('desktopFillRecords')) {
+      held = true;
+      signalRead();
+      await readGate;
+    }
+    return get(keys);
+  };
+
+  const late = router.handle(request);
+  await readStarted;
+  state.desktop = onlineDesktop;
+  assert.equal((await router.handle({ type: 'DESKTOP_RETRY', messageId })).status, 'saved');
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+  const writesBeforeLateAnswer = writes('fill.submit').length;
+  releaseRead();
+  const result = await late;
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.receipt?.outcome, 'saved');
+  assert.equal(writes('fill.submit').length, writesBeforeLateAnswer, 'the late request makes no new attempt');
+  assert.deepEqual([...new Set(writes('fill.submit').map(message => message.messageId))], [FILL_ID]);
+  assert.deepEqual(storage.data.desktopFillRecords, []);
+});
+
 test('an id that is not a UUID is not trusted: the record gets its own', async () => {
   const { router } = await harness();
   const result = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: '../../etc' });

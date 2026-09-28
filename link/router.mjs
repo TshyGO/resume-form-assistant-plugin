@@ -281,9 +281,12 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
   // record answers repeats before probing, staging or sending anything again.
   async function recordFill(message) {
     if (isRecordId(message.recordId)) {
+      // forgetSource writes the receipt before deleting the live record. Reading the record
+      // first closes the window where an old receipt read and a later empty record read
+      // could otherwise recreate a fill that the desktop has already accepted.
+      const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
       const receipt = await store.getFillReceipt(message.recordId);
       if (receipt) return { status: 'duplicate', receipt };
-      const existing = (await fillRecords.list()).find(item => item.recordId === message.recordId);
       if (existing) return { status: 'duplicate', record: existing };
     }
     const probe = await session.probe();
