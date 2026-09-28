@@ -63,6 +63,7 @@ function loadHighlightHelpers(options = {}) {
       this.offsetWidth = 100;
       this.scrollCalls = [];
       this.dispatchedEvents = [];
+      this.listeners = {};
       this.rect = { top: 0, left: 0, bottom: 32, right: 240, width: 240, height: 32 };
     }
 
@@ -89,7 +90,10 @@ function loadHighlightHelpers(options = {}) {
       }
     }
 
+    addEventListener(type, listener) { (this.listeners[type] ||= new Set()).add(listener); }
+    removeEventListener(type, listener) { this.listeners[type]?.delete(listener); }
     dispatchEvent(event) {
+      for (const listener of this.listeners[event.type] || []) listener(event);
       this.dispatchedEvents.push(event);
       return true;
     }
@@ -173,6 +177,7 @@ function loadHighlightHelpers(options = {}) {
 
   const context = {
     console,
+    setTimeout,
     performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
@@ -204,7 +209,7 @@ function loadHighlightHelpers(options = {}) {
     crypto: { randomUUID: () => "test-id" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
-    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
       ResumeProResumeData: require('../resume-data.js'), ResumeProProfile: require('../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -401,6 +406,7 @@ test("AI fill loop records only successfully filled text inputs, and each new fi
   let matches = [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "13800138000" }];
   const { helpers, HTMLInputElement } = loadHighlightHelpers({
     formElements,
+    confirm: () => true,
     sendMessage: async () => ({ success: true, matches })
   });
   const name = new HTMLInputElement();
@@ -1234,3 +1240,236 @@ test("only this extension can drive the compose protocol with its own field list
   const unknown = await ctx.sendPanelMessage({ type: "RESUME_PANEL_FIELD", mode: "explode", chipId: "b", value: "B" });
   assert.equal(unknown.ok, false);
 });
+
+for (const accept of [false, true]) {
+  test(`ordinary fill asks before overwriting edits made during AI wait; accept=${accept}`, async () => {
+    const formElements = [];
+    const confirmations = [];
+    let finish;
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements,
+      confirm: text => { confirmations.push(text); return accept; },
+      sendMessage: () => new Promise(resolve => { finish = resolve; })
+    });
+    for (const name of ['name', 'school']) {
+      const input = new HTMLInputElement();
+      input.name = name;
+      formElements.push(input);
+    }
+    helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '模板姓名' }] }] }], activeTemplateId: 'one' });
+    const button = { disabled: false };
+    const pending = helpers.handleAiFillClick({ currentTarget: button });
+    await new Promise(resolve => setImmediate(resolve));
+    formElements[1].value = '等待期间手动输入';
+    finish({ success: true, matches: [{ fieldId: 'field-0', value: '模板姓名' }, { fieldId: 'field-1', value: '模板学校' }] });
+    await pending;
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0], /1 个已有内容/);
+    assert.match(confirmations[0], /可能覆盖你手动修改/);
+    assert.ok(!confirmations[0].includes('等待期间手动输入'));
+    assert.deepEqual(formElements.map(el => el.value), accept ? ['模板姓名', '模板学校'] : ['', '等待期间手动输入']);
+    assert.equal(button.disabled, false);
+    if (!accept) assert.ok(formElements.every(el => el.dispatchedEvents.length === 0));
+  });
+}
+
+test('ordinary empty-page fill does not ask for overwrite confirmation', async () => {
+  const formElements = [];
+  const { helpers, HTMLInputElement } = loadHighlightHelpers({
+    formElements, confirm: () => { throw new Error('empty field must not ask'); },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新值' }] })
+  });
+  formElements.push(new HTMLInputElement());
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新值' }] }] }], activeTemplateId: 'one' });
+  await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(formElements[0].value, '新值');
+});
+
+for (const changedValue of ['确认后又改了', '']) {
+  test(`later fields changed after confirmation are protected, including clearing: ${JSON.stringify(changedValue)}`, async () => {
+    const formElements = [];
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements, confirm: () => true,
+      sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新姓名' }, { fieldId: 'field-1', value: '新学校' }] })
+    });
+    const first = new HTMLInputElement();
+    const second = new HTMLInputElement();
+    second.value = '确认过的旧值';
+    first.dispatchEvent = () => { second.value = changedValue; return true; };
+    formElements.push(first, second);
+    helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新姓名' }] }] }], activeTemplateId: 'one' });
+    await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    assert.equal(first.value, '新姓名');
+    assert.equal(second.value, changedValue);
+    assert.equal(second.dispatchedEvents.length, 0);
+  });
+}
+
+test('multi-select prompts even when its first selected value is empty', async () => {
+  const formElements = [];
+  let prompted = false;
+  const ctx = loadHighlightHelpers({ formElements,
+    confirm: () => { prompted = true; return false; },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'B' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', multiple: true, value: '', options: [
+    { value: '', text: '请选择', selected: true }, { value: 'A', text: 'A', selected: true }
+  ] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '项', value: 'B' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(prompted, true);
+  assert.equal(select.dispatchedEvents.length, 0);
+});
+
+test('changing single-select selection with duplicate values stops subsequent writes', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true, aiHelpers: { findSelectOptionIndex: () => 0 },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '新姓名' }, { fieldId: 'field-1', value: 'A' }] })
+  });
+  const first = new ctx.HTMLInputElement();
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', value: 'same', selectedIndex: 0, options: [
+    { value: 'same', text: 'A' }, { value: 'same', text: 'B' }
+  ] });
+  first.dispatchEvent = () => { select.selectedIndex = 1; return true; };
+  formElements.push(first, select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '新姓名' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(first.value, '新姓名');
+  assert.equal(select.selectedIndex, 1);
+  assert.equal(select.dispatchedEvents.length, 0);
+});
+
+test('a change during the date picker delay survives and stops later fields', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '2026-01-01' }, { fieldId: 'field-1', value: '新姓名' }] })
+  });
+  const picker = new ctx.HTMLInputElement();
+  picker.value = '2025-01-01';
+  const later = new ctx.HTMLInputElement();
+  formElements.push(picker, later);
+  const container = new ctx.HTMLElement();
+  container.querySelectorAll = () => [picker];
+  const query = ctx.document.querySelectorAll;
+  ctx.document.querySelectorAll = selector => selector === '.ant-picker' ? [container] : query(selector);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '日期', value: '2026-01-01' }] }] }], activeTemplateId: 'one' });
+  const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  await new Promise(resolve => setImmediate(resolve));
+  const timer = ctx.timers.find(timer => timer.delay === 150 && !timer.cleared);
+  assert.ok(timer, 'picker is waiting before writing');
+  picker.value = '2027-02-02';
+  const eventsBefore = picker.dispatchedEvents.length;
+  timer.callback();
+  await pending;
+  assert.equal(picker.value, '2027-02-02');
+  assert.equal(picker.dispatchedEvents.length, eventsBefore);
+  assert.equal(later.value, '');
+});
+
+test('a text value changed by focus is rechecked before the delayed write', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '模板值' }] })
+  });
+  const input = new ctx.HTMLInputElement();
+  input.value = '旧值';
+  input.focus = () => { ctx.document.activeElement = input; input.value = '聚焦后新值'; };
+  formElements.push(input);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '模板值' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(input.value, '聚焦后新值');
+  assert.equal(input.dispatchedEvents.length, 0);
+});
+
+test('an initially empty select can load a placeholder and complete its option retry', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, aiHelpers: require('../ai-helpers.js'),
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'A' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', value: '', selectedIndex: -1, options: [] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'A' }] }] }], activeTemplateId: 'one' });
+  const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  setTimeout(() => {
+    select.options = [{ value: '', text: '请选择' }, { value: 'A', text: 'A' }];
+    select.selectedIndex = 0;
+  }, 20);
+  await pending;
+  assert.equal(select.value, 'A');
+  assert.equal(select.selectedIndex, 1);
+});
+
+for (const mode of ['retry', 'rollback', 'user-edit']) {
+  test(`text retry distinguishes framework rejection from user input: ${mode}`, async () => {
+    const formElements = [];
+    const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
+      sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '13800000000' }] })
+    });
+    const input = new ctx.HTMLInputElement();
+    input.type = 'tel';
+    input.value = '13900000000';
+    let rejected = false;
+    const dispatch = input.dispatchEvent.bind(input);
+    input.dispatchEvent = event => {
+      if (input.value === '13800000000' && (!rejected || mode === 'rollback')) {
+        rejected = true;
+        input.value = mode === 'user-edit' ? '13700000000' : '';
+        if (mode === 'user-edit') dispatch({ type: 'input', isTrusted: true });
+      }
+      return dispatch(event);
+    };
+    formElements.push(input);
+    ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '电话', value: '13800000000' }] }] }], activeTemplateId: 'one' });
+    await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    assert.equal(input.value, mode === 'retry' ? '13800000000' : mode === 'rollback' ? '13900000000' : '13700000000');
+    assert.ok(Object.values(input.listeners).every(listeners => listeners.size === 0), 'temporary listeners are removed');
+  });
+}
+
+test('multi-select with only an empty placeholder does not ask for overwrite', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({ formElements, aiHelpers: require('../ai-helpers.js'),
+    confirm: () => { throw new Error('placeholder is not a real selection'); },
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: 'A' }] })
+  });
+  const select = new ctx.HTMLSelectElement();
+  Object.assign(select, { tagName: 'SELECT', multiple: true, value: '', selectedIndex: 0, options: [
+    { value: '', text: '请选择', selected: true }, { value: 'A', text: 'A', selected: false }
+  ] });
+  formElements.push(select);
+  ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'A' }] }] }], activeTemplateId: 'one' });
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(select.value, 'A');
+  assert.equal(select.selectedIndex, 1);
+});
+
+for (const disconnected of [false, true]) {
+  test(`radio groups require confirmation for non-first selection and stop on detached options: detached=${disconnected}`, async () => {
+    const formElements = [];
+    let finish;
+    let confirmations = 0;
+    const ctx = loadHighlightHelpers({ formElements,
+      aiHelpers: { findSelectOptionIndex: () => 1 },
+      confirm: () => { confirmations += 1; return false; },
+      sendMessage: () => new Promise(resolve => { finish = resolve; })
+    });
+    const first = new ctx.HTMLInputElement();
+    const second = new ctx.HTMLInputElement();
+    Object.assign(first, { type: 'radio', name: 'group', value: 'A', checked: false });
+    Object.assign(second, { type: 'radio', name: 'group', value: 'B', checked: !disconnected, click() {} });
+    formElements.push(first, second);
+    ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '选项', value: 'B' }] }] }], activeTemplateId: 'one' });
+    const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    if (disconnected) first.isConnected = false;
+    finish({ success: true, matches: [{ fieldId: 'field-radio-0', value: 'B' }] });
+    await pending;
+    assert.equal(confirmations, disconnected ? 0 : 1);
+    assert.equal(second.checked, !disconnected);
+    assert.equal(second.dispatchedEvents.length, 0);
+  });
+}
