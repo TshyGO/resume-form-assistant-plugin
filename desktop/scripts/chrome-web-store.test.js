@@ -48,7 +48,7 @@ function keyPair() {
 
 test("扩展版本和商店 ZIP 名字只接受三段数字", () => {
   assert.equal(extensionVersion({ version: "0.4.0" }), "0.4.0");
-  assert.equal(chromeZipName("0.4.1"), "resume-pro-v0.4.1-chrome.zip");
+  assert.equal(chromeZipName("0.4.1"), "wangshen-kuaitian-v0.4.1-chrome.zip");
   assert.throws(() => extensionVersion({ version: "0.4.0-beta.1" }), StorePublishError);
   assert.throws(() => chromeZipName("v0.4.0"), StorePublishError);
 });

@@ -4,7 +4,7 @@
 
 | 发布对象 | 版本号来源 | 触发动作 | GitHub 产物 | 用户如何得到新版 |
 | --- | --- | --- | --- | --- |
-| 浏览器插件 | 根目录 `manifest.json` | **发布正式** GitHub Release `vX.Y.Z` | `resume-pro-vX.Y.Z-chrome.zip` | Chrome 商店审核后手动上线；ZIP 可手动安装 |
+| 浏览器插件 | 根目录 `manifest.json` | **发布正式** GitHub Release `vX.Y.Z` | `wangshen-kuaitian-vX.Y.Z-chrome.zip` | Chrome 商店审核后手动上线；ZIP 可手动安装 |
 | 桌面正式版 | `desktop/src-tauri/tauri.conf.json`、`Cargo.toml`、`Cargo.lock` | 推送标签 `desktop-vX.Y.Z` | Windows x64 EXE、macOS ARM64 DMG、各自 SHA-256、备用插件 ZIP | 工作流自动创建正式 GitHub Release；应用只提示下载，不自动安装 |
 | 桌面测试版 | 由 `release-beta.js` 从 `main` 生成 `X.Y.Z-beta.N` | 推送标签 `desktop-vX.Y.Z-beta.N` | 同上 | 工作流自动创建 GitHub 预发布；正式版用户不会收到更新提示 |
 
@@ -15,7 +15,8 @@
 1. 功能、权限和文案已在 PR 中审完并合入 `main`；相应的 [Test](../.github/workflows/test.yml) 与 [Desktop](../.github/workflows/desktop.yml) CI 通过。发版只使用已合入的提交。
 2. 确认本次目标版本和 tag 没用过；插件还要看商店是否已有该版本。**不要复用版本号或移动已经发布的 tag。**
 3. 插件与桌面连接的改动，要用候选安装包和目标浏览器各做一次真实连接、填写和升级检查。CI 构建成功不能代替安装验收。
-4. 记录发布 commit、tag、工作流链接、产物哈希、验收结果和已知限制。桌面首个正式版依照 [T4/T5/T6/T7](desktop-mvp/acceptance/README.md) 完成具名签收；**目前 T6 尚未接入发版工作流，维护者必须在推送正式 tag 前自行把关**。
+4. 首个「网申快填」版本还要按[改名升级说明](desktop-mvp/install-and-update.md#52-从-resume-pro-desktop-测试版升级到网申快填)验证旧测试版迁移：Windows 旧安装项、macOS 旧 `.app`、原档案与 AI Key、扩展 ID 和 Native Messaging 连接。
+5. 记录发布 commit、tag、工作流链接、产物哈希、验收结果和已知限制。桌面首个正式版依照 [T4/T5/T6/T7](desktop-mvp/acceptance/README.md) 完成具名签收；**目前 T6 尚未接入发版工作流，维护者必须在推送正式 tag 前自行把关**。
 
 ## A. 发浏览器插件正式版
 

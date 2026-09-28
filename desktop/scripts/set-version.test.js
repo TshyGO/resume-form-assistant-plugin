@@ -19,7 +19,7 @@ const crlf = (text) => text.split("\n").join("\r\n");
 const hasBareLf = (text) => text.split("\r\n").join("").includes("\n");
 
 const CONF = `{
-  "productName": "Resume Pro Desktop",
+  "productName": "网申快填",
   "version": "0.1.0",
   "plugins": { "updater": { "version": "9.9.9" } }
 }

@@ -95,6 +95,10 @@ node scripts/nm-dev-register.mjs register --extension-id diagjmploldedipjdenmecm
 
 桌面窗口关着也没关系——插件发的第一条消息会把 host 进程唤起来。
 
+### macOS Dock 在 dev 模式显示旧英文名
+
+`tauri dev` 直接启动 `target/debug/resume-pro-desktop`，Dock 悬停提示可能显示这个调试二进制名。它不代表正式安装包的名称：正式 `.app` 的 `CFBundleDisplayName` 与 `CFBundleName` 由 `tauri.conf.json` 的 `productName` 生成，当前均为「网申快填」。需要验收安装后的 Dock 名称时，构建并测试 `.app` 候选包；不要为了修改 dev 提示而重命名二进制，因为 Native Messaging 注册和升级脚本仍引用它。
+
 ## 改了代码怎么生效
 
 | 改了哪里 | 怎么生效 |

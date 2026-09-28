@@ -22,7 +22,7 @@ export const INSTALLER_SUFFIXES = [".exe", ".dmg", ".msi"];
  * 桌面 Release 里那份插件 zip 的文件名。商店审核期间用户靠它加载已解压的扩展。
  * 不认别的 zip，免得把备份、夹具之类打进去。
  */
-export const PLUGIN_ZIP_RE = /^resume-pro-plugin-\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?\.zip$/;
+export const PLUGIN_ZIP_RE = /^wangshen-kuaitian-plugin-\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?\.zip$/;
 
 /** 除了安装包和插件 zip，只允许它们的校验和。 */
 export const CHECKSUM_SUFFIX = ".sha256";
@@ -182,7 +182,7 @@ export function assertReleaseAssets(names, { requirePluginZip = false } = {}) {
     throw new Error(`插件 zip 只能有一份，现在有：${pluginZips.join("、")}`);
   }
   if (requirePluginZip && pluginZips.length === 0) {
-    throw new Error("桌面 Release 必须带上 resume-pro-plugin-*.zip，商店审核期间用户靠它装扩展");
+    throw new Error("桌面 Release 必须带上 wangshen-kuaitian-plugin-*.zip，商店审核期间用户靠它装扩展");
   }
   const missing = binaries.filter((name) => !checksums.includes(`${name}${CHECKSUM_SUFFIX}`));
   if (missing.length > 0) {

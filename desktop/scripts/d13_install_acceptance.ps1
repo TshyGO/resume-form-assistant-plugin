@@ -1,11 +1,11 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)]
   [string]$Installer,
   [string]$UpgradeInstaller = "",
   [switch]$AllowElevatedDiagnostic
 )
 
-# Manual D13 acceptance for a machine with no existing Resume Pro Desktop install.
+# Manual D13 acceptance for a machine with no existing 网申快填 install.
 # Run from a non-elevated PowerShell session. The script refuses to overwrite an
 # installed copy, isolates application data, and verifies the real user archive
 # plus a disposable sentinel survive silent install/uninstall.
@@ -17,7 +17,7 @@ $upgradeInstallerPath = if ($UpgradeInstaller) {
 } else {
   $null
 }
-$installDir = Join-Path $env:LOCALAPPDATA "Resume Pro Desktop"
+$installDir = Join-Path $env:LOCALAPPDATA "网申快填"
 $userDataDir = Join-Path $env:LOCALAPPDATA "ResumePro"
 $registrationKeys = @(
   "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.resumepro.desktop",

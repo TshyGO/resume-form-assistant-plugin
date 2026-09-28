@@ -3,7 +3,7 @@
 上架前要交的东西，以及**审核一定会问的那几条权限该怎么答**。清单的来源是
 [#29 的评论](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29)。
 
-- 扩展 ID：`diagjmploldedipjdenmecmjokckelkl`（已建 item，状态 Draft）
+- 扩展 ID：`diagjmploldedipjdenmecmjokckelkl`（继续更新原商店条目；当前审核和发布状态以 Developer Dashboard 为准）
 - 正式发布的构建、打包和送审见 [chrome-web-store-release.md](chrome-web-store-release.md)。这份材料仍然要在 Developer Dashboard 里填好，流水线不会替你创建商店条目，也不会自动把审核通过的版本公开给所有用户。
 - 发布者账号与 Edge 商店的情况见 #29，这里不重复。
 - **ID 固定证据**：`manifest.json` 的 `key` 是 SPKI DER 公钥的 base64；对它的字节做 SHA-256、取前 16 字节并按 a–p 映射，得到上面的 ID。仓库测试 `tests/extension-id.test.js` 会在 CI 重新计算并断言，Rust host 白名单与本文件也被同一测试锁定。
@@ -33,7 +33,7 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 ### `tabs`
 
-用来识别用户当前标签页、向该页的内容脚本发送填表操作消息；也用于查找、复用并聚焦已经打开的 Resume Pro 状态页，或打开用户主动点击的桌面程序下载页。扩展不采集浏览历史；只有用户主动使用填写功能时，内容脚本才读取和写入当前页表单字段。
+用来识别用户当前标签页、向该页的内容脚本发送填表操作消息；也用于查找、复用并聚焦已经打开的网申快填状态页，或打开用户主动点击的桌面程序下载页。扩展不采集浏览历史；只有用户主动使用填写功能时，内容脚本才读取和写入当前页表单字段。
 
 ### `sidePanel`
 
@@ -107,17 +107,17 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 ## 4. 列表页材料
 
-- [x] 128×128 图标：`icons/icon128.png`
-- [ ] 新版侧栏与状态页截图：原截图若仍显示旧悬浮面板，发布前应更新并重新核对商店权限说明
-- [x] 1280×800 截图：[`store-assets/store-sidebar-1280x800.png`](store-assets/store-sidebar-1280x800.png)，只含合成公司、岗位与简历数据
+- [x] 128×128 图标：`icons/icon128.png`（按 Issue #198 选定图标制作）
+- [x] 1280×800 新版原生侧栏截图：[`store-assets/store-sidebar-1280x800.png`](store-assets/store-sidebar-1280x800.png)，使用当前侧栏 HTML/CSS 与合成公司、岗位、简历数据
+- [ ] 商店后台正式送审前，从候选包实机核对侧栏截图与状态页；截图不能显示旧悬浮面板或真实求职资料
 - [x] 分类：`Productivity`
 - [x] 语言：`中文（简体）`
 
-**简短描述：** 求职网申填写助手，配合 Resume Pro 桌面程序使用：简历在桌面管理，扩展在网页上填写。
+**简短描述：** 简历一键快填与投递管理。需配合网申快填桌面端使用。
 
 **详细描述：**
 
-Resume Pro 帮你把重复的网申信息整理成可复用模板，并在招聘网站表单中按需填写。**需要同时安装 Resume Pro 桌面程序**（支持 macOS Apple 芯片与 Windows x64）：简历模板、「我的信息」和 AI 设置都在桌面程序里管理，数据只保存在你自己的电脑上；扩展负责在网页上填写。
+网申快填帮你把重复的网申信息整理成可复用模板，并在招聘网站表单中按需填写。**需要同时安装网申快填桌面端**（支持 macOS Apple 芯片与 Windows x64）：简历模板、「我的信息」和 AI 设置都在桌面程序里管理，数据只保存在你自己的电脑上；扩展负责在网页上填写。
 
 - 在浏览器侧边栏选择桌面里的简历模板，一键 AI 填写或逐个字段填写，提交前始终由你检查；
 - AI 请求由桌面程序发往你自行配置的 OpenAI 兼容接口，扩展不保存 API Key，也不提供或代理模型服务；

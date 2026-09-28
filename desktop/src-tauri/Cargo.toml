@@ -1,8 +1,8 @@
 [package]
 name = "resume-pro-desktop"
 version = "0.4.1"
-description = "Resume Pro Desktop unique-writer host with D04 application manager"
-authors = ["Resume Pro"]
+description = "网申快填 unique-writer host with application manager"
+authors = ["网申快填"]
 edition = "2021"
 rust-version = "1.77.2"
 publish = false

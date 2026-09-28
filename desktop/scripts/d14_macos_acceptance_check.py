@@ -511,10 +511,11 @@ def verify_scaffold(args) -> None:
 
 CHROME_APP_NAME = "Google Chrome.app"
 EDGE_APP_NAME = "Microsoft Edge.app"
-DESKTOP_APP_NAME = "Resume Pro Desktop.app"
+DESKTOP_APP_NAME = "网申快填.app"
+LEGACY_DESKTOP_APP_NAME = "Resume Pro Desktop.app"
 # Darwin stores p_comm in MAXCOMLEN (16) bytes. `resume-pro-desktop` and
-# `Resume Pro Desktop` are longer, so `pgrep -x` on the full name never
-# matches. `ps -axo comm=` returns the truncated comm only — no argv.
+# the former display name are longer, so `pgrep -x` on the full name never
+# matches. Keep the old prefix for a clean-install precheck after the rename.
 PROCESS_COMM_PREFIXES = ("resume-pro-desk", "Resume Pro Deskt")
 DATA_ROOT_REL = Path("Library/Application Support/ResumePro")
 # Confirmed product cache: HostPaths::cache_dir on macOS is
@@ -535,7 +536,7 @@ UNCONFIRMED_RESIDUE = (
     },
     {
         "relative": Path("Library/Preferences/com.resumepro.desktop.plist"),
-        "reason": "macOS may write CFBundleIdentifier defaults; Resume Pro source never creates this plist itself.",
+        "reason": "macOS may write CFBundleIdentifier defaults; 网申快填 source never creates this plist itself.",
     },
     {
         "relative": Path("Library/Saved Application State/com.resumepro.desktop.savedState"),
@@ -661,7 +662,9 @@ def collect_host_probe(
     is_admin = "admin" in groups
     chrome = inspect_browser(CHROME_APP_NAME, application_dirs)
     edge = inspect_browser(EDGE_APP_NAME, application_dirs)
-    desktop_app = find_app(DESKTOP_APP_NAME, application_dirs)
+    desktop_app = find_app(DESKTOP_APP_NAME, application_dirs) or find_app(
+        LEGACY_DESKTOP_APP_NAME, application_dirs
+    )
     data_root_exists = (home / DATA_ROOT_REL).exists()
     cache_root_exists = (home / CACHE_ROOT_REL).exists()
     chrome_nm_exists = (home / CHROME_NM_REL).is_file()
@@ -684,7 +687,7 @@ def collect_host_probe(
     if not edge["installed"]:
         blockers.append("Microsoft Edge is not installed")
     if desktop_app is not None:
-        blockers.append(f"existing Resume Pro Desktop app found at {desktop_app}")
+        blockers.append(f"existing desktop app found at {desktop_app}")
     if data_root_exists:
         blockers.append("existing ResumePro data root found; back it up and start clean")
     if chrome_nm_exists or edge_nm_exists:
@@ -693,7 +696,7 @@ def collect_host_probe(
         )
     if processes["runningProcessExists"]:
         names = ", ".join(item["processName"] for item in processes["runningProcessDetails"])
-        blockers.append(f"Resume Pro process still running ({names}); quit it before first-install evidence")
+        blockers.append(f"desktop process still running ({names}); quit it before first-install evidence")
     if cache_root_exists:
         warnings.append(
             "existing ~/Library/Caches/ResumePro found; leftover cache does not block T4, but this account has run the app"
@@ -772,13 +775,13 @@ def validate_host_probe(probe: dict) -> list[str]:
             errors.append("macOS host probe: READY requires assessments enabled")
         existing = probe.get("existingData", {})
         if existing.get("desktopAppExists"):
-            errors.append("macOS host probe: READY requires no installed Resume Pro app")
+            errors.append("macOS host probe: READY requires no installed desktop app")
         if existing.get("dataRootExists"):
             errors.append("macOS host probe: READY requires a clean ResumePro data root")
         if existing.get("chromeNativeMessagingExists") or existing.get("edgeNativeMessagingExists"):
             errors.append("macOS host probe: READY requires no existing Native Messaging manifests")
         if existing.get("runningProcessExists"):
-            errors.append("macOS host probe: READY requires no running Resume Pro process")
+            errors.append("macOS host probe: READY requires no running desktop process")
         browsers = probe.get("browsers") or {}
         if not browsers.get("chrome", {}).get("installed") or not browsers.get("edge", {}).get(
             "installed"

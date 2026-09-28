@@ -28,18 +28,18 @@ async function openManagerTab() {
 let sidePanelReady = Promise.resolve(false);
 chrome.action.onClicked.addListener(() => {
   sidePanelReady.then((ready) => {
-    if (!ready) openManagerTab().catch(() => console.warn("Resume Pro could not open its manager tab."));
+    if (!ready) openManagerTab().catch(() => console.warn("网申快填 could not open its manager tab."));
   });
 });
 if (chrome.sidePanel?.setPanelBehavior) {
   try {
     sidePanelReady = Promise.resolve(chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }))
       .then(() => true, () => {
-        console.warn("Resume Pro could not enable the browser side panel.");
+        console.warn("网申快填 could not enable the browser side panel.");
         return false;
       });
   } catch {
-    console.warn("Resume Pro could not enable the browser side panel.");
+    console.warn("网申快填 could not enable the browser side panel.");
   }
 }
 

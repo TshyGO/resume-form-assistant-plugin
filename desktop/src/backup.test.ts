@@ -172,6 +172,6 @@ test('大小和默认文件名', () => {
 
   assert.equal(
     defaultBackupName(new Date(2026, 8, 13, 9, 5)),
-    "resume-pro-archive-20260913-0905.zip",
+    "wangshen-kuaitian-archive-20260913-0905.zip",
   );
 });

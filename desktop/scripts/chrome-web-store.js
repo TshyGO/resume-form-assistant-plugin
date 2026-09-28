@@ -3,9 +3,9 @@
 //
 //   node desktop/scripts/chrome-web-store.js zip-name
 //   node desktop/scripts/chrome-web-store.js check-release --tag v0.4.0
-//   node desktop/scripts/chrome-web-store.js verify-zip --zip resume-pro-v0.4.0-chrome.zip
-//   node desktop/scripts/chrome-web-store.js publish --zip resume-pro-v0.4.0-chrome.zip --dry-run
-//   node desktop/scripts/chrome-web-store.js publish --zip resume-pro-v0.4.0-chrome.zip
+//   node desktop/scripts/chrome-web-store.js verify-zip --zip wangshen-kuaitian-v0.4.0-chrome.zip
+//   node desktop/scripts/chrome-web-store.js publish --zip wangshen-kuaitian-v0.4.0-chrome.zip --dry-run
+//   node desktop/scripts/chrome-web-store.js publish --zip wangshen-kuaitian-v0.4.0-chrome.zip
 //   node desktop/scripts/chrome-web-store.js status
 //   node desktop/scripts/chrome-web-store.js release-staged
 //
@@ -57,7 +57,7 @@ export function extensionVersion(manifest) {
 
 export function chromeZipName(version) {
   const checked = extensionVersion({ version });
-  return `resume-pro-v${checked}-chrome.zip`;
+  return `wangshen-kuaitian-v${checked}-chrome.zip`;
 }
 
 /** Chrome 把公钥 SHA-256 的前 16 字节映射成 a–p，得到扩展 ID。 */

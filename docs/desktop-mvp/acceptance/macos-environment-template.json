@@ -26,7 +26,7 @@
   "installation": {
     "distributionFormat": "dmg",
     "dmgMountPath": null,
-    "appPath": "/Applications/Resume Pro Desktop.app",
+    "appPath": "/Applications/网申快填.app",
     "bundleIdentifier": "com.resumepro.desktop",
     "gatekeeperExperience": "NOT_RUN",
     "signatureStatus": "NOT_INSPECTED",

@@ -342,7 +342,7 @@ const backupPickers = {
     ? async () => {
         const chosen = await dialog.open?.({
           multiple: false,
-          filters: [{ name: "Resume Pro 备份", extensions: ["zip"] }],
+          filters: [{ name: "网申快填备份", extensions: ["zip"] }],
         });
         if (!chosen) return null;
         return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;

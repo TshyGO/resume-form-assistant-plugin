@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::fs;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PRODUCT_NAME: &str = "Resume Pro Desktop";
+const PRODUCT_NAME: &str = "网申快填";
 const IDENTIFIER: &str = "com.resumepro.desktop";
 
 /// Unique-writer host. D03 should reuse this process and `paths()`, not spawn a second writer.

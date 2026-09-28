@@ -17,20 +17,20 @@ npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis  # Windows
 npm run tauri build -- --bundles dmg       # macOS
 ```
 
-产物在 `desktop/src-tauri/target/release/bundle/` 下（带 `--target` 构建时是 `target/<triple>/release/bundle/`，CI 走的是后者）。桌面 GitHub Release **还会附带一份插件 zip**（`resume-pro-plugin-<插件版本>.zip`），和安装包放在同一页。ZIP 的版本取自 `manifest.json`，可能与桌面版本不同：
+产物在 `desktop/src-tauri/target/release/bundle/` 下（带 `--target` 构建时是 `target/<triple>/release/bundle/`，CI 走的是后者）。桌面 GitHub Release **还会附带一份插件 zip**（`wangshen-kuaitian-plugin-<插件版本>.zip`），和安装包放在同一页。ZIP 的版本取自 `manifest.json`，可能与桌面版本不同：
 
 | 平台 | 文件 |
 | --- | --- |
-| Windows x64 | `nsis/Resume Pro Desktop_<版本>_x64-setup.exe` |
-| macOS Apple Silicon | `dmg/Resume Pro Desktop_<版本>_aarch64.dmg` |
-| 浏览器扩展 | `resume-pro-plugin-<插件版本>.zip`（Release 资产，不是安装器里的文件） |
+| Windows x64 | `nsis/网申快填_<版本>_x64-setup.exe` |
+| macOS Apple Silicon | `dmg/网申快填_<版本>_aarch64.dmg` |
+| 浏览器扩展 | `wangshen-kuaitian-plugin-<插件版本>.zip`（Release 资产，不是安装器里的文件） |
 
 参考机（Windows 11，本机）上一次干净构建约 3 分 35 秒，安装包约 6 MB——是量级参考，不是承诺。NSIS 由 Tauri 自己下载，不用预装。
 
 发版前先跑一遍检查——版本号、tag、打包配置：
 
 ```bash
-node desktop/scripts/check-desktop-release.js desktop-v0.4.0
+node desktop/scripts/check-desktop-release.js desktop-v0.4.1
 ```
 
 还有两道：`--dist desktop/dist` 检查前端产物里没有 sourcemap、`.env`、测试夹具；`--assets <目录>`（不带 `--write-checksums`）在发布前**复算一遍校验和**，因为构建机写的和发布机手上的是两份文件。
@@ -43,13 +43,13 @@ node desktop/scripts/check-desktop-release.js desktop-v0.4.0
 node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
 ```
 
-它要求目录里只有安装包、至多一份 `resume-pro-plugin-*.zip`，以及**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。真正发布时会再加 `--require-plugin-zip`，没有插件包就发不出去。
+它要求目录里只有安装包、至多一份 `wangshen-kuaitian-plugin-*.zip`，以及**一一配套**的 `.sha256`，多一个 `.pdb`、少一份校验和都不放行。真正发布时会再加 `--require-plugin-zip`，没有插件包就发不出去。
 
 Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，而且机器上不能已有安装：
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./desktop/src-tauri/target/release/bundle/nsis/Resume Pro Desktop_0.4.0_x64-setup.exe"
+  -Installer "./desktop/src-tauri/target/release/bundle/nsis/网申快填_0.4.1_x64-setup.exe"
 ```
 
 要验 `vN → vN+1`，再传一个不同版本的测试安装包；脚本会在两次安装之间放入附件哨兵，
@@ -57,11 +57,11 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 
 ```powershell
 ./desktop/scripts/d13_install_acceptance.ps1 `
-  -Installer "./Resume Pro Desktop_0.4.0_x64-setup.exe" `
-  -UpgradeInstaller "./Resume Pro Desktop_0.4.1_x64-setup.exe"
+  -Installer "./网申快填_0.4.1_x64-setup.exe" `
+  -UpgradeInstaller "./网申快填_0.4.2_x64-setup.exe"
 ```
 
-脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
+这份自动脚本用于**改名后的同名版本升级**；旧「Resume Pro Desktop」到新名称的过渡按 §5.2 手工验收。脚本会真实静默安装、启动应用、核对 Chrome/Edge Native Messaging 清单、静默卸载，
 并确认程序目录与注册项已清理、用户档案和一次性数据哨兵未被删除。它拒绝覆盖已有安装，
 测试应用数据也放在单独临时目录中。
 
@@ -74,7 +74,7 @@ Windows 真安装/卸载验收要从**非提升权限**的 PowerShell 运行，�
 | | tag | 版本号来源 | 工作流 |
 | --- | --- | --- | --- |
 | 浏览器插件 | `v0.4.0` | `manifest.json` | `release.yml`（GitHub Release 发布后触发，见 [chrome-web-store-release.md](../chrome-web-store-release.md)） |
-| 桌面 | `desktop-v0.4.0` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
+| 桌面 | `desktop-v0.4.1` | `tauri.conf.json` + `Cargo.toml` | `desktop-release.yml` |
 
 两个命名空间不能重叠，否则一次桌面发版会顺手把插件也发出去。这条有测试盯着（`check-desktop-release.test.js`）。
 
@@ -98,7 +98,7 @@ node desktop/scripts/release-beta.js --push   # 真的打 tag 并推送
 
 推送 tag 之后，`desktop-release.yml` 构建并把它建成**预发布**：不会成为 GitHub 的「最新版」，桌面自带的更新检查也不会提示它。发布说明开头会写明这是测试版和风险。
 
-正式版仍然从 main 直接打 `desktop-v0.4.0`。流水线会检查正式 tag 指向的提交在 main 的历史里；指到 beta 的临时提交上会被拒绝，避免没走过 main 的代码被当成正式版发出去。
+正式版仍然从 main 直接打 `desktop-vX.Y.Z`。流水线会检查正式 tag 指向的提交在 main 的历史里；指到 beta 的临时提交上会被拒绝，避免没走过 main 的代码被当成正式版发出去。
 
 只想改版本号（比如在分支上手动触发 `workflow_dispatch` 试构建）：`node desktop/scripts/set-version.js 0.4.0-beta.2`，一次改齐三处。
 
@@ -123,11 +123,11 @@ node desktop/scripts/release-beta.js --push   # 真的打 tag 并推送
 每个安装包旁边都有一份 `.sha256`，由 CI 在构建机上生成：
 
 ```powershell
-Get-FileHash "Resume Pro Desktop_0.4.0_x64-setup.exe"    # Windows
+Get-FileHash "网申快填_0.4.1_x64-setup.exe"    # Windows
 ```
 
 ```bash
-shasum -a 256 "Resume Pro Desktop_0.4.0_aarch64.dmg"     # macOS
+shasum -a 256 "网申快填_0.4.1_aarch64.dmg"     # macOS
 ```
 
 对不上就别装。
@@ -197,6 +197,19 @@ Windows 上还要把清单位置记进 `HKCU\Software\{Google\Chrome,Microsoft\E
 测试版如果升级了数据库结构，**就回不到正式版了**：正式版会拒绝打开被更新过的数据库。想回去，先卸载测试版、安装正式版，再从测试版升级前自动做的那份备份（`backups/` 下）恢复，步骤同上。
 
 测试版不会出现在桌面的更新提示里，要自己到 Releases 页找带「Pre-release」标记的那一项下载。测试版自己也不会提示升级：它认不出自己带 `-beta` 的版本号，所以想换到更新的测试版，或者回到正式版，都要自己到 Releases 页下载安装。没有把握的话，用正式版。
+
+### 5.2 从 Resume Pro Desktop 测试版升级到网申快填
+
+这一次除了版本号，还更改了系统显示的产品名。Tauri 会因此改变 Windows 的安装目录、开始菜单和卸载项名称，以及 macOS 的 `.app` 文件名；插件扩展 ID、桌面 bundle identifier、Native Messaging host 名、`ResumePro` 数据目录与系统凭据服务名保持不变。
+
+1. 在旧桌面端先导出一次完整备份，并退出程序（包括托盘后台进程）。
+2. **Windows：**卸载旧的「Resume Pro Desktop」，卸载时选择**保留求职档案**；然后安装「网申快填」。确认“已安装的应用”里没有两份产品。
+3. **macOS：**将新的「网申快填.app」放入“应用程序”。确认新应用能读到旧档案并连上插件后，再删除旧的「Resume Pro Desktop.app」文件；不要删除 `~/Library/Application Support/ResumePro`。
+4. 插件仍更新原 Chrome 商店条目；更新后核对当前模板、AI 设置、岗位与投递记录，并实际测试一次插件连接。
+
+以上是旧测试版跨产品名升级的过渡步骤。更名后的后续版本仍按本页普通升级流程处理。正式发版前，维护者还须用真实旧测试版安装包分别验证 Windows 和 macOS 的这些步骤；开发模式不能替代安装验收。
+
+内部可执行文件继续叫 `resume-pro-desktop`（Windows 为 `.exe`），Tauri 配置显式固定了 `mainBinaryName`；它供 Native Messaging 清单和开发注册脚本定位，不是对用户显示的产品名。WiX `upgradeCode` `975d2f79-b2ff-5bf3-9070-0c2642944e04` 是改名前以旧 `productName=Resume Pro Desktop` 运行 `tauri inspect wix-upgrade-code` 得到的默认值，现予以固定，避免未来 MSI 改名后自动生成不同的升级码。此前公开的桌面 beta Release 只包含 NSIS `.exe` 和 macOS `.dmg`，没有已发布的 MSI 升级链路；正式 Windows 流水线目前也只构建 NSIS。
 
 ## 6. 卸载
 

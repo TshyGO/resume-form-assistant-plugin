@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           plugin_version=$(node -p 'require("./manifest.json").version')
-          node desktop/scripts/pack-plugin.js --output "dist-release/resume-pro-plugin-${plugin_version}.zip"
+          node desktop/scripts/pack-plugin.js --output "dist-release/wangshen-kuaitian-plugin-${plugin_version}.zip"
           node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums --require-plugin-zip
 
       - name: Write release notes
@@ -208,7 +208,7 @@ jobs:
             echo
             echo "## 浏览器扩展"
             echo
-            echo "浏览器扩展优先从 Chrome 商店安装。若商店不可用或需要手动安装，这个 Release 里也有一份 \`resume-pro-plugin-*.zip\`：解压后，在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。ZIP 文件名是插件版本，可能与桌面版本不同。桌面设置页的「连接浏览器」可以跳到商店页，也可以打开本页下载插件包。"
+            echo "浏览器扩展优先从 Chrome 商店安装。若商店不可用或需要手动安装，这个 Release 里也有一份 \`wangshen-kuaitian-plugin-*.zip\`：解压后，在 Chrome 或 Edge 的扩展页打开「开发者模式」，用「加载已解压的扩展程序」选中解压出来的文件夹。ZIP 文件名是插件版本，可能与桌面版本不同。桌面设置页的「连接浏览器」可以跳到商店页，也可以打开本页下载插件包。"
             echo
             echo "## 核对下载到的文件"
             echo

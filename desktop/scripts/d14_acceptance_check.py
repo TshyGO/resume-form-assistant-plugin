@@ -497,7 +497,7 @@ def uninstall_registrations() -> list[dict]:
     raw = powershell_value(
         "$items=@(Get-ItemProperty "
         "'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
-        "-ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -eq 'Resume Pro Desktop'} | "
+        "-ErrorAction SilentlyContinue | Where-Object {$_.DisplayName -eq '网申快填'} | "
         "Select-Object PSChildName,DisplayName,DisplayVersion,InstallLocation,UninstallString); "
         "$items | ConvertTo-Json -Compress"
     )
@@ -515,11 +515,11 @@ def validate_install_registration(
 ) -> dict:
     if len(records) != 1:
         raise AcceptanceError(
-            f"expected one HKCU uninstall registration for Resume Pro Desktop, found {len(records)}"
+            f"expected one HKCU uninstall registration for 网申快填, found {len(records)}"
         )
     record = records[0]
-    if record.get("DisplayName") != "Resume Pro Desktop":
-        raise AcceptanceError("uninstall DisplayName is not Resume Pro Desktop")
+    if record.get("DisplayName") != "网申快填":
+        raise AcceptanceError("uninstall DisplayName is not 网申快填")
     if not versions_match(record.get("DisplayVersion"), expected_version):
         raise AcceptanceError(
             f"uninstall DisplayVersion {record.get('DisplayVersion')} does not match {expected_version}"

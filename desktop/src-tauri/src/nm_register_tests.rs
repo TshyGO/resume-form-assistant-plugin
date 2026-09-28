@@ -99,14 +99,14 @@ impl Registry for FakeRegistry {
     }
 }
 
-/// 安装目录带空格是常态：Windows 的 per-user 装在 `%LOCALAPPDATA%\Resume Pro Desktop`，
-/// macOS 是 `Resume Pro Desktop.app`。路径必须在**当前平台**上算绝对路径，
+/// 安装目录带空格是常态：Windows 的 per-user 装在 `%LOCALAPPDATA%\网申快填`，
+/// macOS 是 `网申快填.app`。路径必须在**当前平台**上算绝对路径，
 /// 否则 `manifest_json` 会先一步拒绝，测的就不是想测的那件事了。
 fn exe() -> PathBuf {
     if cfg!(windows) {
-        PathBuf::from(r"C:\Users\某人\AppData\Local\Resume Pro Desktop\resume-pro-desktop.exe")
+        PathBuf::from(r"C:\Users\某 人\AppData\Local\网申快填\resume-pro-desktop.exe")
     } else {
-        PathBuf::from("/Users/某人/Applications/Resume Pro Desktop.app/Contents/MacOS/resume-pro-desktop")
+        PathBuf::from("/Users/某 人/Applications/网申快填.app/Contents/MacOS/resume-pro-desktop")
     }
 }
 
@@ -139,7 +139,7 @@ fn a_path_with_spaces_and_chinese_survives_the_round_trip() {
     let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     assert_eq!(parsed["path"], exe().to_string_lossy().to_string());
-    assert!(parsed["path"].as_str().unwrap().contains("Resume Pro Desktop"));
+    assert!(parsed["path"].as_str().unwrap().contains("网申快填"));
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn a_stale_manifest_we_wrote_is_repaired() {
 
     assert!(outcomes[0].registered);
     let now = files.get(&chrome).unwrap();
-    assert!(now.contains("Resume Pro Desktop"), "没有改成新位置：{now}");
+    assert!(now.contains("网申快填"), "没有改成新位置：{now}");
     assert!(!now.contains("旧位置"));
 }
 
