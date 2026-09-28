@@ -63,6 +63,7 @@ function loadHighlightHelpers(options = {}) {
       this.offsetWidth = 100;
       this.scrollCalls = [];
       this.dispatchedEvents = [];
+      this.listeners = {};
       this.rect = { top: 0, left: 0, bottom: 32, right: 240, width: 240, height: 32 };
     }
 
@@ -89,7 +90,10 @@ function loadHighlightHelpers(options = {}) {
       }
     }
 
+    addEventListener(type, listener) { (this.listeners[type] ||= new Set()).add(listener); }
+    removeEventListener(type, listener) { this.listeners[type]?.delete(listener); }
     dispatchEvent(event) {
+      for (const listener of this.listeners[event.type] || []) listener(event);
       this.dispatchedEvents.push(event);
       return true;
     }
@@ -173,6 +177,7 @@ function loadHighlightHelpers(options = {}) {
 
   const context = {
     console,
+    setTimeout,
     performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
@@ -205,7 +210,7 @@ function loadHighlightHelpers(options = {}) {
     location: options.location || { href: "https://jobs.example.test/apply" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
-    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent,
+    self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

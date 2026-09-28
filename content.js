@@ -324,16 +324,11 @@
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(cssText);
     injectFieldHighlightStyles();
+    // Chrome and Edge 116+ own the visible UI in the native side panel.
+    // Background opens the manager tab if that API is unavailable.
+    state.nativeSidePanel = true;
     createSidebar(sheet);
     renderSidebar();
-    // A browser without the native side panel still needs a usable fill UI.
-    chrome.runtime.sendMessage({ type: "SIDE_PANEL_CAPABILITY" })
-      .then((result) => {
-        state.nativeSidePanel = Boolean(result?.supported);
-        if (!result?.supported) openLegacyPanel();
-        else renderSidebar();
-      })
-      .catch(openLegacyPanel);
     bindStorageSync();
     document.addEventListener("visibilitychange", () => {
       // A plan made for this tab must not keep clicking once the user has moved to another one.
@@ -358,11 +353,6 @@
     const hint = shadowRoot?.querySelector("#resume-pro-legacy-hint");
     if (hint) hint.hidden = !["sending", "waiting"].includes(legacyImport?.phase);
     return true;
-  }
-
-  function openLegacyPanel() {
-    shadowRoot?.querySelector(".resume-pro")?.classList.add("is-legacy-open");
-    refreshVisibleStore().catch(() => {});
   }
 
   function createSidebar(sheet) {
@@ -1207,7 +1197,7 @@
     return crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
   }
 
-  // The page's own copy, only for a browser without the native side panel (#188).
+  // The retained page button is guarded while Chrome/Edge use the native side panel (#188).
   async function handleRepeatFillClick(event) {
     const button = event.currentTarget;
     if (state.nativeSidePanel) {
@@ -1630,12 +1620,30 @@
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
+    if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected
+      && !(option.value === "" && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
     return Boolean(String(el.value ?? el.textContent ?? "").trim());
   }
 
-  // `assisted` (辅助新增) limits the fill to the new scopes. The side panel reads its
-  // outcome from the returned summary, so `quiet` keeps it out of the page status line, and
-  // `stopped` / `onRequest` let the side panel's 停止 end the wait and the writes.
+  // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
+  function fillValueSnapshot(entry) {
+    if (entry.kind === "radio") return entry.elements.every(el => el.isConnected)
+      ? JSON.stringify(entry.elements.map(el => [el.value, el.checked])) : null;
+    const el = entry.element;
+    if (!el?.isConnected) return null;
+    if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
+    if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
+    if (el instanceof HTMLSelectElement) {
+      const option = el.options[el.selectedIndex];
+      const emptyPlaceholder = el.value === "" && (el.selectedIndex < 0
+        || (option && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
+      return JSON.stringify([el.value, emptyPlaceholder ? -1 : el.selectedIndex]);
+    }
+    return String(el.value ?? el.textContent ?? "");
+  }
+
+  // `assisted` limits filling to new rows. The returned summary supplies the side panel;
+  // `stopped` and `onRequest` let it stop the AI wait and subsequent writes.
   async function handleAiFillClick(event, assisted = null) {
     const button = event.currentTarget;
     const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
@@ -1685,6 +1693,7 @@
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
     let cancelRequested = false;
+    let overwriteDeclined = false;
     // 辅助新增条目是同一次一键填写的延续，接着用当前会话；其余每次都开新会话，上一次的记录清掉。
     const session = assisted && fillSession ? fillSession : beginFillSession();
 
@@ -1783,6 +1792,23 @@
         return (domOrderMap.get(a.fieldId) ?? 0) - (domOrderMap.get(b.fieldId) ?? 0);
       });
 
+      const approvedValues = new Map();
+      if (!assisted) {
+        for (const match of sortedMatches) {
+          const entry = fieldMap.get(match.fieldId);
+          if (entry) approvedValues.set(entry, fillValueSnapshot(entry));
+        }
+        const occupiedCount = [...approvedValues.keys()].filter(hasExistingValue).length;
+        if (occupiedCount && !window.confirm(
+          `本次将重新填写 ${occupiedCount} 个已有内容的字段，可能覆盖你手动修改的内容。\n\n确定继续填写吗？取消将保留网页现有内容，本次不会写入任何字段。AI 匹配已完成，取消不会撤销已发生的 AI 请求。`
+        )) {
+          overwriteDeclined = true;
+          cancelRequested = true;
+          showStatus("已取消填写，网页现有内容未修改。", "error", true);
+          return;
+        }
+      }
+
       for (const match of sortedMatches) {
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
@@ -1791,10 +1817,22 @@
         if (!element) continue;
         if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
-        let filled = setElementValue(element, match.value);
+        // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
+        const beforeWrite = assisted ? undefined : (userEdited = false) => {
+          if (overwriteDeclined) return false;
+          const currentValue = fillValueSnapshot(element);
+          if (!userEdited && currentValue !== null && currentValue === approvedValues.get(element)) return true;
+          overwriteDeclined = true;
+          cancelRequested = true;
+          outcome = filledCount ? "partial" : "failed";
+          showStatus(`填写期间检测到字段内容变化，已停止后续填写，保留该字段的现有内容。此前已填写 ${filledCount} 项，请核对网页。`, "error", true);
+          return false;
+        };
+        let filled = setElementValue(element, match.value, beforeWrite);
         if (filled instanceof Promise) {
           filled = await filled;
         }
+        if (overwriteDeclined) return;
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           filled = element.element.isConnected
@@ -1809,7 +1847,8 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = setElementValue(element, match.value);
+            filled = setElementValue(element, match.value, beforeWrite);
+            if (overwriteDeclined) return;
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
@@ -1886,7 +1925,7 @@
       if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);
       button.textContent = "一键 AI 填写";
       // A page with nothing to fill produced nothing worth archiving.
-      if (fieldCount > 0) {
+      if (fieldCount > 0 && (!overwriteDeclined || filledCount > 0)) {
         offerFillRecord({
           outcome, cancelled: cancelRequested, fieldCount, filledCount, unconfirmedCount,
           timing: { scanMs: timing.scanMs, roundTripMs: timing.roundTripMs, fillMs: timing.fillMs, totalMs },
@@ -2325,14 +2364,17 @@
 
   // 先让 focus 引起的页面更新结束，再写值并通知输入事件。
   // 如果先写值，受控表单可能在 focus 后按旧状态重绘，把值清空。
-  async function runTextLifecycle(element, value, sequential) {
+  async function runTextLifecycle(element, value, sequential, beforeWrite, didWrite) {
     focusControl(element);
     await nextTask();
+    if (beforeWrite && !beforeWrite()) return false;
     if (!sequential) {
       writeControlValue(element, value);
+      didWrite?.();
       dispatchTextInput(element, value);
     } else {
       writeControlValue(element, "");
+      didWrite?.();
       dispatchTextInput(element, "");
       let built = "";
       for (const char of Array.from(value)) {
@@ -2344,6 +2386,7 @@
     element.dispatchEvent(new Event("change", { bubbles: true }));
     await nextTask();
     blurControl(element);
+    return true;
   }
 
   // 用户不用改字，点一下输入框再点空白，提示就会消失。校验还在时照这个再做一次。
@@ -2901,11 +2944,13 @@
 
   // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
   // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
-  async function commitTextValue(element, value, sequential = false) {
+  async function commitTextValue(element, value, sequential = false, beforeWrite, didWrite) {
     const previous = String(element.value ?? "");
     const original = String(value ?? "");
     const expected = normalizeExpectedTextValue(element, original);
-    await runTextLifecycle(element, original, sequential);
+    if (!await runTextLifecycle(element, original, sequential, beforeWrite, didWrite)) {
+      return { ok: false, reason: "value_changed" };
+    }
     const committed = String(element.value ?? "") === expected;
     await waitForTextCommit();
     let result = inspectTextCommit(element, expected, committed);
@@ -2917,9 +2962,10 @@
     }
     if (!result.ok && !sequential && prefersSequentialInput(element)
       && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      const retried = await commitTextValue(element, original, true);
+      const retried = await commitTextValue(element, original, true, beforeWrite, didWrite);
       if (!retried.ok && element.isConnected !== false
         && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
+        if (beforeWrite && !beforeWrite()) return { ok: false, reason: "value_changed" };
         writeControlValue(element, previous);
         dispatchTextInput(element, previous);
         element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2929,7 +2975,8 @@
     return result;
   }
 
-  function setElementValue(element, value) {
+  function setElementValue(element, value, beforeWrite) {
+    if (beforeWrite && !beforeWrite()) return false;
     if (element && typeof element === "object" && element.kind === "radio") {
       const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
       const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
@@ -2957,6 +3004,7 @@
       const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, element.type) ?? value;
       const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
       element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+      if (beforeWrite && !beforeWrite()) return false;
       if (descriptor?.set) {
         descriptor.set.call(element, normalized);
       } else {
@@ -2973,6 +3021,7 @@
       element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       return new Promise((resolve) => {
         window.setTimeout(() => {
+          if (beforeWrite && !beforeWrite()) { resolve(false); return; }
           try {
             const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
             if (descriptor?.set) {
@@ -3001,13 +3050,31 @@
     }
 
     if (isTextControl(element)) {
-      return commitTextValue(element, value).then((result) => {
+      let wroteValue = false;
+      let userEdited = false;
+      const trackUserEdit = event => { if (event.isTrusted) userEdited = true; };
+      // 首次写入前比较快照；已开始写入后，框架拒绝/清空属于正常重试流程。
+      // 仅真实用户输入中断本控件的重试和回滚，插件派发的合成事件不算用户修改。
+      const guard = beforeWrite ? () => {
+        if (userEdited) return beforeWrite(true);
+        return wroteValue || beforeWrite();
+      } : undefined;
+      if (beforeWrite) {
+        element.addEventListener("input", trackUserEdit, true);
+        element.addEventListener("change", trackUserEdit, true);
+      }
+      return commitTextValue(element, value, false, guard, () => { wroteValue = true; }).then((result) => {
         if (result.ok) {
           textFillFailures.delete(element);
         } else {
           textFillFailures.set(element, result.reason);
         }
         return result.ok;
+      }).finally(() => {
+        if (beforeWrite) {
+          element.removeEventListener("input", trackUserEdit, true);
+          element.removeEventListener("change", trackUserEdit, true);
+        }
       });
     }
 
