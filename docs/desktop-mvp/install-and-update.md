@@ -25,6 +25,8 @@ npm run tauri build -- --bundles dmg       # macOS
 | macOS Apple Silicon | `dmg/网申快填_<版本>_aarch64.dmg` |
 | 浏览器扩展 | `wangshen-kuaitian-plugin-<插件版本>.zip`（Release 资产，不是安装器里的文件） |
 
+上表是本地构建产物的文件名。GitHub 上传资产时会删掉中文，所以发布工作流上传前把安装包改名为 `wangshen-kuaitian_<版本>_x64-setup.exe` 与 `wangshen-kuaitian_<版本>_aarch64.dmg`，`.sha256` 里记的也是这个名字；安装后的应用名仍是「网申快填」。
+
 参考机（Windows 11，本机）上一次干净构建约 3 分 35 秒，安装包约 6 MB——是量级参考，不是承诺。NSIS 由 Tauri 自己下载，不用预装。
 
 发版前先跑一遍检查——版本号、tag、打包配置：

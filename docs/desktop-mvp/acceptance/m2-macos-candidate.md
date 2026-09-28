@@ -25,7 +25,7 @@ M2 只把将要验收的 DMG、插件 ZIP、源码 commit 和下载来源绑定�
 
 ```bash
 python3 desktop/scripts/d14_macos_acceptance_check.py prepare-candidate \
-  --dmg "/path/to/网申快填_0.4.1-beta.N_aarch64.dmg" \
+  --dmg "/path/to/wangshen-kuaitian_0.4.1-beta.N_aarch64.dmg" \
   --extension-zip "/path/to/wangshen-kuaitian-plugin-0.4.1.zip" \
   --output "docs/desktop-mvp/acceptance/runs/<run-id>/artifacts.json" \
   --source-commit "<40 位源码 SHA>" \

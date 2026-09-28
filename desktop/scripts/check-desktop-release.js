@@ -27,6 +27,33 @@ export const PLUGIN_ZIP_RE = /^wangshen-kuaitian-plugin-\d+\.\d+\.\d+(?:-beta\.[
 /** 除了安装包和插件 zip，只允许它们的校验和。 */
 export const CHECKSUM_SUFFIX = ".sha256";
 
+/**
+ * Release 里安装包的文件名前缀。Tauri 用 productName「网申快填」命名，
+ * 但 GitHub 上传资产时会删掉非 ASCII 字符，只剩 `_0.4.1_x64-setup.exe`，
+ * 而 `.sha256` 里记的仍是中文原名，`shasum -c` 对不上。所以上传前改成 ASCII 名。
+ */
+export const INSTALLER_ASSET_PREFIX = "wangshen-kuaitian";
+
+/** GitHub 会原样保留的资产文件名字符。 */
+const SAFE_ASSET_NAME_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Tauri 产物 `<productName>_<版本>_<平台>.<后缀>` → `wangshen-kuaitian_<版本>_<平台>.<后缀>`。
+ * 假设 productName 本身不含下划线（「网申快填」成立），换产品名时留意。
+ * 形状对不上就报错，免得悄悄上传一个认不出来的名字。
+ */
+export function releaseInstallerName(bundleName) {
+  const match = /^[^_]+_(\d+\.\d+\.\d+(?:-beta\.[1-9]\d*)?_.+)$/.exec(bundleName);
+  if (!match || !isInstaller(bundleName)) {
+    throw new Error(`认不出安装包文件名：${bundleName}（应为 <产品名>_<版本>_<平台>.exe/.dmg）`);
+  }
+  const renamed = `${INSTALLER_ASSET_PREFIX}_${match[1]}`;
+  if (!SAFE_ASSET_NAME_RE.test(renamed)) {
+    throw new Error(`改名后的 ${renamed} 含有 [A-Za-z0-9._-] 以外的字符（来自 ${bundleName}）`);
+  }
+  return renamed;
+}
+
 export function isInstaller(name) {
   return INSTALLER_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
@@ -175,6 +202,12 @@ export function assertReleaseAssets(names, { requirePluginZip = false } = {}) {
   if (strays.length > 0) {
     throw new Error(`这些文件不该作为 Release 资产上传：${strays.join("、")}`);
   }
+  const unsafe = names.filter((name) => !SAFE_ASSET_NAME_RE.test(name));
+  if (unsafe.length > 0) {
+    throw new Error(
+      `这些文件名含有 [A-Za-z0-9._-] 以外的字符，GitHub 上传时可能改写：${unsafe.join("、")}`,
+    );
+  }
   if (installers.length === 0) {
     throw new Error("只有校验和，没有安装包");
   }
@@ -206,7 +239,12 @@ export function verifyChecksums(dir, io = { readdirSync, readFileSync }, options
   const checked = [];
   for (const name of names.filter((n) => n.endsWith(CHECKSUM_SUFFIX))) {
     const binary = name.slice(0, -CHECKSUM_SUFFIX.length);
-    const recorded = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/)[0];
+    const fields = io.readFileSync(join(dir, name), "utf8").trim().split(/\s+/);
+    const [recorded, recordedName] = fields;
+    // `shasum -c` 按文件里记的名字找文件；名字和资产对不上，用户核对时只会看到「找不到文件」。
+    if (fields.length !== 2 || recordedName.replace(/^\*/, "") !== binary) {
+      throw new Error(`${name} 应只有一行「<哈希>  ${binary}」，实际是：${fields.join(" ") || "（空）"}`);
+    }
     const actual = sha256(io.readFileSync(join(dir, binary)));
     if (recorded !== actual) {
       throw new Error(`${binary} 的校验和对不上：文件里写着 ${recorded}，实际是 ${actual}`);
@@ -279,6 +317,17 @@ function main(argv) {
       throw new Error("--release-kind 后面要跟 tag");
     }
     console.log(releaseKind(kindTag));
+    return;
+  }
+
+  // 同样只看参数：工作流收集安装包时用它换成 Release 里的 ASCII 文件名。
+  const nameAt = argv.indexOf("--installer-name");
+  if (nameAt >= 0) {
+    const bundleName = argv[nameAt + 1];
+    if (!bundleName || bundleName.startsWith("--")) {
+      throw new Error("--installer-name 后面要跟安装包文件名");
+    }
+    console.log(releaseInstallerName(bundleName));
     return;
   }
 
