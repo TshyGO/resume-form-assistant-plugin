@@ -127,7 +127,9 @@ jobs:
           mkdir -p dist-release
           found=0
           while IFS= read -r -d '' file; do
-            cp "$file" dist-release/
+            # Tauri 用中文 productName 命名，GitHub 上传时会删掉中文；这里换成 ASCII 名。
+            name=$(node desktop/scripts/check-desktop-release.js --installer-name "$(basename "$file")")
+            cp "$file" "dist-release/$name"
             found=$((found + 1))
           done < <(find "desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle" \
             -maxdepth 2 -type f \( -name '*.exe' -o -name '*.dmg' \) -print0)

@@ -16,7 +16,7 @@ T4 只接受 **D13 候选安装包 + 候选插件 ZIP + 真实 Chrome/Edge + 安
 
 ```powershell
 python desktop/scripts/d14_acceptance_check.py prepare `
-  --installer "C:\candidate\网申快填_0.4.1_x64-setup.exe" `
+  --installer "C:\candidate\wangshen-kuaitian_0.4.1_x64-setup.exe" `
   --extension-zip "C:\candidate\wangshen-kuaitian-plugin-0.4.1.zip" `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --source-commit "<40 位源码 SHA>" `
@@ -53,14 +53,14 @@ python desktop/scripts/d14_acceptance_check.py inspect-installed `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser chrome `
   --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
-  --installer "C:\candidate\网申快填_0.4.1_x64-setup.exe" `
+  --installer "C:\candidate\wangshen-kuaitian_0.4.1_x64-setup.exe" `
   --extension-zip "C:\candidate\wangshen-kuaitian-plugin-0.4.1.zip"
 
 python desktop/scripts/d14_acceptance_check.py inspect-installed `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
   --browser edge `
   --installed-exe "$env:LOCALAPPDATA\网申快填\resume-pro-desktop.exe" `
-  --installer "C:\candidate\网申快填_0.4.1_x64-setup.exe" `
+  --installer "C:\candidate\wangshen-kuaitian_0.4.1_x64-setup.exe" `
   --extension-zip "C:\candidate\wangshen-kuaitian-plugin-0.4.1.zip"
 ```
 
@@ -115,7 +115,7 @@ J04/J05 的真实 AI 走查如果需要 API Key，应引用 #128 会话 C 的独
 ```powershell
 python desktop/scripts/d14_acceptance_check.py verify `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
-  --installer "C:\candidate\网申快填_0.4.1_x64-setup.exe" `
+  --installer "C:\candidate\wangshen-kuaitian_0.4.1_x64-setup.exe" `
   --extension-zip "C:\candidate\wangshen-kuaitian-plugin-0.4.1.zip"
 ```
 
@@ -124,7 +124,7 @@ python desktop/scripts/d14_acceptance_check.py verify `
 ```powershell
 python desktop/scripts/d14_acceptance_check.py verify `
   --run-dir "docs\desktop-mvp\acceptance\runs\2026-09-19-rc1" `
-  --installer "C:\candidate\网申快填_0.4.1_x64-setup.exe" `
+  --installer "C:\candidate\wangshen-kuaitian_0.4.1_x64-setup.exe" `
   --extension-zip "C:\candidate\wangshen-kuaitian-plugin-0.4.1.zip" `
   --require-complete
 ```

@@ -16,6 +16,7 @@ import {
   desktopVersion,
   isPluginZip,
   packageVersion,
+  releaseInstallerName,
   releaseKind,
   sha256,
   tagIsPluginShaped,
@@ -145,6 +146,31 @@ test("上传的东西必须是安装包 + 一一配套的校验和", () => {
   assert.throws(
     () => assertReleaseAssets(["setup.exe", "setup.exe.sha256", "old.dmg.sha256"]),
     /没有对应的安装包或插件 zip/,
+  );
+});
+
+test("安装包换成 ASCII 文件名：GitHub 上传时会删掉中文", () => {
+  assert.equal(
+    releaseInstallerName("网申快填_0.4.1_x64-setup.exe"),
+    "wangshen-kuaitian_0.4.1_x64-setup.exe",
+  );
+  assert.equal(
+    releaseInstallerName("网申快填_0.4.1-beta.2_aarch64.dmg"),
+    "wangshen-kuaitian_0.4.1-beta.2_aarch64.dmg",
+  );
+  assert.throws(() => releaseInstallerName("setup.exe"), /认不出安装包文件名/);
+  assert.throws(() => releaseInstallerName("网申快填_0.4.1_x64.zip"), /认不出安装包文件名/);
+  assert.throws(() => releaseInstallerName("网申快填_0.4.1_x64 setup.exe"), /GitHub 会删掉的字符/);
+  // 换名漏掉的话，上传前的门禁要拦住，而不是让 Release 里出现 `_0.4.1_x64-setup.exe`。
+  assert.throws(
+    () => assertReleaseAssets(["网申快填_0.4.1_x64-setup.exe", "网申快填_0.4.1_x64-setup.exe.sha256"]),
+    /GitHub 上传时会删掉的字符/,
+  );
+  assert.equal(
+    execFileSync(process.execPath, [script, "--installer-name", "网申快填_0.4.1_x64-setup.exe"], {
+      encoding: "utf8",
+    }).trim(),
+    "wangshen-kuaitian_0.4.1_x64-setup.exe",
   );
 });
 
