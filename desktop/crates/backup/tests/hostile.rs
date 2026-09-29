@@ -103,7 +103,7 @@ fn a_package_that_is_not_ours_is_told_apart_from_one_that_is_too_new() {
 
     let foreign = package(dir.path(), "foreign.zip", &[("x", b"y")], None, 1, "someone-else");
     let error = must_reject(&foreign, &dir.path().join("s1"));
-    assert!(error.to_string().contains("不是 Resume Pro"), "{error}");
+    assert!(error.to_string().contains("不是网申快填"), "{error}");
 
     let future = package(dir.path(), "future.zip", &[("x", b"y")], None, 99, "resume-pro.archive");
     let error = must_reject(&future, &dir.path().join("s2"));
@@ -122,7 +122,7 @@ fn a_zip_without_a_manifest_is_not_our_package() {
     zip.finish().unwrap();
 
     let error = must_reject(&path, &dir.path().join("s"));
-    assert!(error.to_string().contains("不是 Resume Pro"), "{error}");
+    assert!(error.to_string().contains("不是网申快填"), "{error}");
 }
 
 #[test]

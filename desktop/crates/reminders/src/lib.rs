@@ -49,7 +49,7 @@ impl ReminderRequest {
             (Some(c), Some(p)) if !c.is_empty() && !p.is_empty() => format!("{c} · {p}"),
             (Some(c), _) if !c.is_empty() => c.to_string(),
             (_, Some(p)) if !p.is_empty() => p.to_string(),
-            _ => "Resume Pro".to_string(),
+            _ => "网申快填".to_string(),
         }
     }
 }

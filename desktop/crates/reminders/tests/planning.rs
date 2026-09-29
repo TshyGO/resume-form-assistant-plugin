@@ -225,7 +225,7 @@ fn the_notification_title_is_the_company_and_role_and_nothing_else() {
     let mut nothing = request();
     nothing.company = None;
     nothing.position = None;
-    assert_eq!(nothing.notification_title(), "Resume Pro");
+    assert_eq!(nothing.notification_title(), "网申快填");
 }
 
 #[test]
