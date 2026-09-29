@@ -211,6 +211,7 @@ function loadHighlightHelpers(options = {}) {
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
+      ResumeProFillProbe: options.fillProbe,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

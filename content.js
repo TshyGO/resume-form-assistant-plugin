@@ -1714,6 +1714,11 @@
     let filledCount = 0;
     let unconfirmedCount = 0;
     const unfilledLabels = [];
+    const unfilledControls = [];
+    let probe = null;
+    // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
+    const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
+      ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
     const requestId = newRequestId();
@@ -1734,7 +1739,13 @@
       fieldCount = fields.length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
-      if (!fields.length) throw new Error("当前页面没有可填写的表单字段。");
+      // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
+      probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+      if (!fields.length) {
+        // 辅助新增只是过滤后为空，页面本身有字段：不给「先点编辑」这类提示。
+        const hint = scanned.fields.length ? "" : withFillProbe(api => api.emptyPageHint(probe), "");
+        throw new Error(`当前页面没有可填写的表单字段。${hint}`);
+      }
       if (!assisted) closeProfileOffer();
       // 模板字段在前并且优先；「我的信息」只补模板里没有的字段名。
       const templateFields = activeTemplate ? flattenTemplateFields(activeTemplate) : [];
@@ -1892,6 +1903,11 @@
           const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段";
           const why = textFillFailureLabel(element);
           unfilledLabels.push(why ? `${label}（${why}）` : label);
+          // 字段名可能是兜底规则从旁边取来的页面文字；跟要填的值重叠时不放进诊断。
+          const value = String(match.value ?? "").trim();
+          const overlaps = value.length >= 2 && (label.includes(value) || value.includes(label));
+          unfilledControls.push({ label: overlaps ? "（字段名已隐藏）" : label, reason: why,
+            control: withFillProbe(api => api.describeControl(element), null) });
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -1910,8 +1926,12 @@
       const unfilledNote = unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。`
         : "";
+      const emptyHint = viewModeHint();
       if (assisted) {
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
+      } else if (emptyHint) {
+        // 一个都没填上：提示放最后，AI 的提醒和没填上的字段照旧列出。
+        showStatus(`已填写 0 个字段。${unfilledNote}${response.warning || ""}${emptyHint}`, "error", true);
       } else if (response.warning) {
         showStatus(`本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}`, "error", Boolean(unfilledNote));
       } else if (unfilledNote) {
@@ -1933,6 +1953,10 @@
       }
     } catch (error) {
       failure = error.message || "AI 填写失败。";
+      // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
+      if (!failure.includes("「编辑」") && ["none", "no_context"].includes(diagnostics.errorCode)) {
+        failure += viewModeHint();
+      }
       report(failure, "error");
     } finally {
       if (cancelButton) {
@@ -1944,7 +1968,7 @@
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
       const summaryInput = { ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics };
+        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls };
       if (session === fillSession) session.summary = summaryInput;
       writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
       state.aiBusy = false;
@@ -1968,6 +1992,16 @@
     const unique = [...new Set(labels.map((label) => String(label ?? "").trim()).filter(Boolean))];
     const shown = unique.slice(0, limit).join("、");
     return unique.length > limit ? `${shown} 等` : shown;
+  }
+
+  // fill-probe.js 只读页面结构，给诊断和空页面提示用；它缺席或出错都不能影响填写。
+  function withFillProbe(use, fallback) {
+    try {
+      const api = self.ResumeProFillProbe;
+      return api ? use(api) ?? fallback : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   function formatFillDiagnostics(result) {
@@ -1995,7 +2029,8 @@
       `扫描：${seconds(result.scanMs)}`,
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
       `API（含响应读取）：${seconds(d.apiMs)}`,
-      `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`
+      `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
+      ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
     ].join("\n");
   }
 
