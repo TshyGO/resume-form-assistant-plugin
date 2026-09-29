@@ -789,12 +789,16 @@ test('the shared escape function turns all five characters into entities', () =>
   assert.equal(escapeHtml(null), '');
 });
 
-test('the README no longer says every save and confirmation waits in the sync queue when the desktop is away', () => {
-  const readme = read('README.md');
-  assert.doesNotMatch(readme, /保存岗位和确认投递会留在待同步队列里/);
-  assert.match(readme, /未安装或未配对：这次没有保存岗位，也不进入待同步/);
-  assert.match(readme, /没有回包（结果未知）：让你到桌面或待同步列表核对，不声称已保存、已排队或已确认/);
-  assert.doesNotMatch(readme, /「更多工具」里的「确认已投递」/);
+test('the docs no longer say every save and confirmation waits in the sync queue when the desktop is away', () => {
+  // The offline rules users can see live in the user guide; the README only links to it.
+  const guide = read('docs/user-guide.md');
+  assert.match(guide, /未安装或未配对：这次没有保存岗位，也不进入待同步/);
+  assert.match(guide, /没有回包（结果未知）：让你到桌面或待同步列表核对，不声称已保存、已排队或已确认/);
+  for (const doc of ['README.md', 'docs/user-guide.md']) {
+    const text = read(doc);
+    assert.doesNotMatch(text, /保存岗位和确认投递会留在待同步队列里/, doc);
+    assert.doesNotMatch(text, /「更多工具」里的「确认已投递」/, doc);
+  }
 });
 
 test('no candidate → "保存岗位到桌面端" opens the save form with what the user corrected, not a fresh page read', async () => {

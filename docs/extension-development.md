@@ -20,7 +20,7 @@ ai-helpers.js          匹配、清洗和辅助规则
 form-agent.js          受限新增计划、分组识别与执行检查
 resume-utils.js        与桌面共用的字段整理和错误提示
 resume-data.js         桌面简历数据视图和降级文案
-link/                  桌面连接、简历读写、AI 转发和待同步队列
+link/                  桌面程序连接：简历读写、AI 转发、旧数据迁移、保存岗位和待同步队列
 link/protocol/         桌面协议校验器的 vendored 副本
 tests/                 扩展单元与回归测试
 icons/                 扩展图标
@@ -47,6 +47,15 @@ node --test tests/*.test.js
 保存岗位先在侧栏确认公司和岗位，网址只读且已脱敏。需要 AI 回退时，发送的是限定的页面文字片段。重复岗位由用户选择关联或另存；取消不写入。
 
 「确认已投递」和填写留档都要求用户明确选择申请，即使候选只有一条也不预选。无候选时引导先保存岗位。确认投递只更新本地状态，不触发招聘网站的提交操作。
+
+改这块代码前先看这几条，它们都有测试守着：
+
+- **「待同步」不等于「桌面已保存」。** 只有桌面持久化并回了 `resultId`，界面才允许说已保存。文案集中在 [`link/copy.mjs`](../link/copy.mjs)，[`tests/link-degradation.test.js`](../tests/link-degradation.test.js) 按降级矩阵逐行核对。用户可见的离线规则见[使用指南](user-guide.md#待同步记录)，改文案时两边保持一致。
+- **「未安装」和「未配对」是两件事。** 装了但没配对时要说去桌面粘贴扩展 ID，不能说没装。
+- **队列有两层。** 桌面当时不在，或精确重复还没选定 → `SaveIntent`（没有 `messageId`、没有申请 UUID、没有 epoch）。桌面在线且没有精确重复时，同一次保存会立刻写成 Bound outbox 并发送 `job.save`（新建，阶段是已保存，不是已投递）；有精确重复才问「使用已有 / 新建一条」，同公司的另一个岗位直接新建。Bound outbox 铸 `messageId`，盖当时的 `sourceRestoreEpoch`。两者都存在 `chrome.storage.local`，使用 `desktopSaveIntents`、`desktopOutbox`、`desktopClientInstanceId`、`desktopPairing` 四个 key；填写留档再加 `desktopFillRecords`（未选申请的留档意图）和 `desktopFillReceipts`（最近 200 次已处理填写的 ID 与结果，用于防止重复留档，不含填写值）。`fill.submit` 的 `messageId` 固定为本次填写的 `recordId`。
+- **`sourceRestoreEpoch` 盖上就不改。** 重试时信封换成最新握手身份，载荷不换。桌面恢复过备份之后，旧 epoch 的消息一律暂停，只能走 `outbox.reconcile`，由用户决定关联、丢弃或另存。
+- **重试沿用原 `messageId`。** 换 ID 就是第二条申请。
+- **留档不等于投递。** 任何留档文案都不说投递；投递之后仍然要点「确认已投递」。
 
 协议的源文件位于 `desktop/crates/protocol/js/`，`link/protocol/` 为副本。修改源文件后重新复制，由 `tests/protocol-vendor.test.js` 校验一致性。`resume-utils.js` 的扩展与桌面副本也需保持一致。
 
