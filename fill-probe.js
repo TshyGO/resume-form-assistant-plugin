@@ -1,25 +1,27 @@
 // #206 填写诊断用的只读页面探测。只看结构：标签名、type、role、组件库 class 前缀和计数；
-// 从不读取字段值、页面正文或完整网址。content.js 经 withFillProbe() 调用，
-// 这里缺席或出错时诊断退回原样，填写不受影响。
+// 从不输出字段值、页面正文或完整网址（为了认出「编辑」按钮会读文本节点，但只匹配、不保留、不输出）。
+// content.js 经 withFillProbe() 调用，这里缺席或出错时诊断退回原样，填写不受影响。
 (function (root) {
   const SELECTORS = {
     frames: "iframe, frame",
     inputs: "input:not([type=hidden]), textarea, select",
-    custom: "[role=combobox], [role=listbox], [aria-haspopup=listbox], [contenteditable=''], [contenteditable=true], "
+    custom: "[role=combobox], [role=listbox], [aria-haspopup=listbox], [contenteditable]:not([contenteditable=false]), "
       + ".ant-select, .ant-cascader, .el-select, .el-cascader, .arco-select, .arco-cascader, "
       + ".ivu-select, .ivu-cascader, .semi-select, .layui-form-select",
-    buttons: "button, a, [role=button], [class*=edit]",
+    labelled: "[aria-label], [title]",
     locked: "input[readonly]:not([type=hidden]), input[disabled]:not([type=hidden]), textarea[readonly], textarea[disabled], select[disabled]",
     all: "*"
   };
-  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|立即完善|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
+  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
   const MAX_WALK = 3000;
+  const MAX_TEXT_NODES = 20000;
+  const SKIP_TEXT_PARENTS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TEXTAREA"]);
   const MAX_LISTED = 10;
   const LIBRARIES = [
     ["antd", /^ant-/], ["element", /^el-/], ["arco", /^arco-/], ["iview", /^ivu-/],
     ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/], ["mui", /^Mui/]
   ];
-  const TOKEN = /^[a-z][a-z-]{0,23}$/;
+  const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const MAX_ANCESTORS = 4;
   const MAX_LABEL = 16;
 
@@ -61,13 +63,21 @@
   function safeLabel(label) {
     const text = String(label ?? "").replace(/\s+/g, " ").trim();
     if (!text) return "未命名字段";
-    if (/[@＠]|\d{5,}/.test(text)) return "（字段名已隐藏）";
-    return text.length > MAX_LABEL ? `${text.slice(0, MAX_LABEL)}…` : text;
+    // 邮箱，或去掉空格、连字符、括号后连着 5 位以上数字（含全角数字）的手机号/证件号。
+    if (/[@＠]/.test(text) || /[0-9０-９]{5,}/.test(text.replace(/[\s\-－.．()（）]/g, ""))) return "（字段名已隐藏）";
+    const chars = Array.from(text);
+    return chars.length > MAX_LABEL ? `${chars.slice(0, MAX_LABEL).join("")}…` : text;
   }
 
   const visible = el => Boolean(el?.getClientRects?.().length);
   const shown = list => Array.from(list || []).filter(visible);
-  const compact = value => String(value ?? "").replace(/\s+/g, "");
+  // 框架只算有实际尺寸的：0×0 的统计/单点登录 iframe 在 Chrome 里也会返回 1 个 client rect。
+  const sized = el => {
+    const r = el.getBoundingClientRect?.();
+    return Boolean(r && r.width >= 100 && r.height >= 50);
+  };
+  // 去掉空白、标点、符号和 iconfont 的私用区字形，只留文字本身。
+  const bare = value => String(value ?? "").replace(/[\s\p{P}\p{S}\p{Co}-]/gu, "");
 
   function hostOf(href) {
     try {
@@ -77,14 +87,26 @@
     }
   }
 
-  function isEditButton(el) {
-    return EDIT_TEXT.test(compact(el.textContent))
-      || EDIT_TEXT.test(compact(el.getAttribute?.("aria-label") || el.getAttribute?.("title")));
+  // 「编辑」按钮写法五花八门（a、span、带图标、悬停才出现），所以按文字找：文字正好是「编辑」一类的文本节点，
+  // 数它们所在的元素（同一元素只算一次）；再补上只有 aria-label / title 的图标按钮。不要求可见。
+  function countEditControls(doc) {
+    const found = new Set();
+    const walker = doc.createTreeWalker?.(doc.body || doc, 4 /* NodeFilter.SHOW_TEXT */);
+    for (let count = 0; walker && count < MAX_TEXT_NODES; count += 1) {
+      const text = walker.nextNode();
+      if (!text) break;
+      const parent = text.parentElement;
+      if (parent && !SKIP_TEXT_PARENTS.has(parent.tagName) && EDIT_TEXT.test(bare(text.data))) found.add(parent);
+    }
+    for (const el of Array.from(doc.querySelectorAll(SELECTORS.labelled) || [])) {
+      if (EDIT_TEXT.test(bare(el.getAttribute?.("aria-label") || el.getAttribute?.("title")))) found.add(el);
+    }
+    return found.size;
   }
 
-  // 页面层面的线索：只数数，不读内容。
+  // 页面层面的线索：只数数，不输出内容。
   function probePage(doc, { href = "" } = {}) {
-    const frames = shown(doc.querySelectorAll(SELECTORS.frames));
+    const frames = Array.from(doc.querySelectorAll(SELECTORS.frames)).filter(sized);
     let crossOrigin = 0;
     let frameInputs = 0;
     for (const frame of frames) {
@@ -119,8 +141,8 @@
       host: hostOf(href),
       frames: { total: frames.length, crossOrigin, frameInputs },
       custom: { total: customTotal, byLibrary },
-      editButtons: shown(doc.querySelectorAll(SELECTORS.buttons)).filter(isEditButton).length,
-      locked: shown(doc.querySelectorAll(SELECTORS.locked)).length,
+      editButtons: countEditControls(doc),
+      locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => !el.closest?.(SELECTORS.custom)).length,
       shadowHosts
     };
   }
