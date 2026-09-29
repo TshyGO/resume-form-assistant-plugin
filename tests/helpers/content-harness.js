@@ -178,6 +178,8 @@ function loadHighlightHelpers(options = {}) {
   const context = {
     console,
     setTimeout,
+    // showStatus 直接调用全局 clearTimeout：走 window 的记录，测试才看得到哪些定时器被清掉了。
+    clearTimeout: id => window.clearTimeout(id),
     performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},

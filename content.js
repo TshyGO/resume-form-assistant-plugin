@@ -1721,6 +1721,8 @@
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
+    // 失败信息里带了「先点编辑」这类提示：要一直留在屏幕上，不像别的失败几秒后消失。
+    let hinted = false;
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
@@ -1742,8 +1744,9 @@
       // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
       probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
       if (!fields.length) {
-        // 辅助新增只是过滤后为空，页面本身有字段：不给「先点编辑」这类提示。
-        const hint = scanned.fields.length ? "" : withFillProbe(api => api.emptyPageHint(probe), "");
+        // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
+        const hint = !assisted && !scanned.fields.length ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
+        hinted = Boolean(hint);
         throw new Error(`当前页面没有可填写的表单字段。${hint}`);
       }
       if (!assisted) closeProfileOffer();
@@ -1904,8 +1907,12 @@
           const why = textFillFailureLabel(element);
           unfilledLabels.push(why ? `${label}（${why}）` : label);
           // 字段名可能是兜底规则从旁边取来的页面文字；跟要填的值重叠时不放进诊断。
-          const value = String(match.value ?? "").trim();
-          const overlaps = value.length >= 2 && (label.includes(value) || value.includes(label));
+          // 比较前去掉空白、统一全角半角和大小写：「Java」「java」「本 科」都算重叠。
+          const norm = text => String(text ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+          const shownValue = norm(match.value);
+          const shownLabel = norm(label);
+          const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
+            || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
           unfilledControls.push({ label: overlaps ? "（字段名已隐藏）" : label, reason: why,
             control: withFillProbe(api => api.describeControl(element), null) });
         }
@@ -1954,10 +1961,12 @@
     } catch (error) {
       failure = error.message || "AI 填写失败。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
-      if (!failure.includes("「编辑」") && ["none", "no_context"].includes(diagnostics.errorCode)) {
-        failure += viewModeHint();
+      if (!hinted && ["none", "no_context"].includes(diagnostics.errorCode)) {
+        const hint = viewModeHint();
+        failure += hint;
+        hinted = Boolean(hint);
       }
-      report(failure, "error");
+      report(failure, "error", hinted);
     } finally {
       if (cancelButton) {
         cancelButton.hidden = true;
