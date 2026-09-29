@@ -136,12 +136,17 @@ async function runOnViewPage(response, { fillProbe = VIEW_PROBE, fields = 1, ref
     formElements.push(input);
     return input;
   });
-  helpers.setShadowRoot({ querySelectorAll: () => [], querySelector: selector => (selector === "#resume-pro-status" ? status : null) });
+  const text = { value: "" };
+  helpers.setShadowRoot({ querySelectorAll: () => [], querySelector: selector => ({
+    "#resume-pro-status": status,
+    "#resume-pro-diagnostics": { hidden: true, open: false },
+    "#resume-pro-diagnostics-text": text
+  })[selector] || null });
   helpers.setCurrentStore(STORE);
   const button = { disabled: false };
   const again = () => helpers.handleAiFillClick({ currentTarget: button }, assisted);
   const result = await again();
-  return { result, status, input: inputs[0], timers, again };
+  return { result, status, text, input: inputs[0], timers, again };
 }
 
 test("a view page with one irrelevant field and no AI matches still tells the user to click 编辑", async () => {
@@ -149,6 +154,20 @@ test("a view page with one irrelevant field and no AI matches still tells the us
   assert.equal(status.textContent, `已填写 0 个字段。${EDIT_HINT}`);
   assert.match(status.className, /is-error/);
   assert.equal(result.filledCount, 0);
+});
+
+test("a view page where nothing was filled counts as failed, so the diagnostics and the archive offer do not say 完成", async () => {
+  const { result, text } = await runOnViewPage({ success: true, matches: [], diagnostics: { errorCode: "none" } });
+  assert.equal(result.outcome, "failed");
+  assert.match(text.value, /结果：失败；/);
+  assert.ok(!text.value.includes("结果：完成"), text.value);
+  // 没有「编辑」按钮的页面：0 项也照旧是原来的结果，不多加判断。
+  const plain = await runOnViewPage({ success: true, matches: [] }, { fillProbe: { ...realProbe, probePage: () => ({ ...LIEPIN_VIEW, editButtons: 0 }) } });
+  assert.equal(plain.result.outcome, "success");
+  // 已经是部分完成（有没填上的字段）就保持部分完成，不降成失败。
+  const refused = await runOnViewPage({ success: true, matches: [{ fieldId: "field-0", value: "测试用户" }] }, { refuse: true });
+  assert.equal(refused.result.outcome, "partial");
+  assert.match(refused.text.value, /结果：部分完成；/);
 });
 
 test("the edit hint follows the no_context warning, and only that or a no-match failure", async () => {
@@ -236,6 +255,38 @@ for (const [label, value, hidden] of [
     if (hidden) {
       assert.ok(text.value.includes("- （字段名已隐藏）：input[text]"), text.value);
       assert.ok(!text.value.includes(label.trim()) && !text.value.includes(value), text.value);
+    } else {
+      assert.ok(text.value.includes(`- ${label}：input[text]`), text.value);
+    }
+  });
+}
+
+// 字段名可能是兜底规则从旁边取来的页面文字：在分块编辑的网站上，那可能是另一块已保存的简历内容。
+// 只要它含有简历里任何一项的值（不只是这个字段自己要填的那个），就不放进诊断。
+const SCHOOLS_STORE = { templates: [{ id: "one", groups: [{ name: "教育", fields: [
+  { key: "本科学校", value: "北京大学" }, { key: "硕士学校", value: "清华大学" }, { key: "服从调剂", value: "是" }] }] }], activeTemplateId: "one" };
+for (const [label, hidden] of [
+  ["北京大学 计算机", true], ["最高学历", false],
+  // 只有一个字的值不参与比较，否则「是否服从调剂」这类正常字段名都会被藏掉。
+  ["是否服从调剂", false]
+]) {
+  test(`the field name ${JSON.stringify(label)} is ${hidden ? "hidden" : "kept"} when the template holds other resume values`, async () => {
+    const formElements = [];
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements, fillProbe: realProbe,
+      sendMessage: async () => ({ success: true, matches: [{ fieldId: "field-0", value: "清华大学" }] })
+    });
+    const input = new HTMLInputElement();
+    input.attributes["data-label"] = label;
+    refuseWrites(input);
+    formElements.push(input);
+    const { text, fill, shadow } = diagnosticsShadow();
+    helpers.setShadowRoot(shadow);
+    helpers.setCurrentStore(SCHOOLS_STORE);
+    await helpers.handleAiFillClick({ currentTarget: fill });
+    if (hidden) {
+      assert.ok(text.value.includes("- （字段名已隐藏）：input[text]"), text.value);
+      assert.ok(!text.value.includes("北京大学") && !text.value.includes("清华大学"), text.value);
     } else {
       assert.ok(text.value.includes(`- ${label}：input[text]`), text.value);
     }

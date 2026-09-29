@@ -1755,6 +1755,8 @@
       const resumeFields = self.ResumeProProfile
         ? self.ResumeProProfile.mergeResumeFields(templateFields, profileFields)
         : templateFields;
+      // 诊断里要藏起来的简历内容（一个字的值太容易撞上普通字段名，不参与比较）。
+      const resumeValues = resumeFields.map(field => normalizeForOverlap(field?.value)).filter(value => value.length >= 2);
       phase = "roundTripMs";
       phaseStart = performance.now();
       if (cancelButton) {
@@ -1906,14 +1908,15 @@
           const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段";
           const why = textFillFailureLabel(element);
           unfilledLabels.push(why ? `${label}（${why}）` : label);
-          // 字段名可能是兜底规则从旁边取来的页面文字；跟要填的值重叠时不放进诊断。
+          // 字段名可能是兜底规则从旁边取来的页面文字：跟要填的值重叠时不放进诊断；
+          // 在分块编辑的网站上，那段文字还可能是另一块已保存的简历内容，所以含有简历里任何一项的值也一样藏起来。
           // 比较前去掉空白、统一全角半角和大小写：「Java」「java」「本 科」都算重叠。
-          const norm = text => String(text ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
-          const shownValue = norm(match.value);
-          const shownLabel = norm(label);
+          const shownValue = normalizeForOverlap(match.value);
+          const shownLabel = normalizeForOverlap(label);
           const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
             || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
-          unfilledControls.push({ label: overlaps ? "（字段名已隐藏）" : label, reason: why,
+          const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
+          unfilledControls.push({ label: overlaps || showsResume ? "（字段名已隐藏）" : label, reason: why,
             control: withFillProbe(api => api.describeControl(element), null) });
         }
 
@@ -1938,6 +1941,8 @@
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
       } else if (emptyHint) {
         // 一个都没填上：提示放最后，AI 的提醒和没填上的字段照旧列出。
+        // 状态已经说要先点「编辑」了，诊断和留档就不能再写「完成」；已经是部分完成的保持不变。
+        if (outcome === "success") outcome = "failed";
         showStatus(`已填写 0 个字段。${unfilledNote}${response.warning || ""}${emptyHint}`, "error", true);
       } else if (response.warning) {
         showStatus(`本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}`, "error", Boolean(unfilledNote));
@@ -2001,6 +2006,11 @@
     const unique = [...new Set(labels.map((label) => String(label ?? "").trim()).filter(Boolean))];
     const shown = unique.slice(0, limit).join("、");
     return unique.length > limit ? `${shown} 等` : shown;
+  }
+
+  // 比较字段名和简历内容前先去掉空白、统一全角半角和大小写。
+  function normalizeForOverlap(text) {
+    return String(text ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
   }
 
   // fill-probe.js 只读页面结构，给诊断和空页面提示用；它缺席或出错都不能影响填写。
