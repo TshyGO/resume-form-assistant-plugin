@@ -139,7 +139,7 @@ function element(id) {
   return node;
 }
 
-async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride } = {}) {
+async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride, clipboardRejects = false } = {}) {
   const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser] });
   await page.ready(copyOverride);
   let activeTabId = 7;
@@ -164,7 +164,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     },
     querySelector: () => ({ click() {}, open: false }),
     addEventListener() {},
-    createElement: () => element('scratch'),
+    createElement: () => Object.assign(element('scratch'), { style: {}, select() {}, remove() {} }),
     body: { appendChild() {} }
   };
   const chrome = {
@@ -201,7 +201,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   };
   const context = vm.createContext({
     document, chrome,
-    navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async value => { clipboardWrites.push(value); } } },
+    navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async value => { if (clipboardRejects) throw new Error('denied'); clipboardWrites.push(value); } } },
     self: {
       ResumeProProfile: require('../../profile-fields.js'),
       ResumeProResumeData: require('../../resume-data.js'),

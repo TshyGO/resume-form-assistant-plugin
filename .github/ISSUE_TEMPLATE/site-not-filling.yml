@@ -1,11 +1,12 @@
 name: 网站填不上 / 填错
 description: 某个网申网站一键填写失败、部分字段没填上或填错
 title: "[网站兼容] "
+labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈！提交前请遮住截图里的姓名、电话、邮箱等个人信息。「填写诊断」不含简历内容和完整网址，可以直接粘贴。
+        感谢反馈！提交前请遮住截图里的姓名、电话、邮箱等个人信息。侧栏「填写诊断」需要先展开，里面不含简历内容和完整网址，可以直接粘贴。
   - type: input
     id: site
     attributes:
@@ -37,13 +38,18 @@ body:
     id: diagnostics
     attributes:
       label: 填写诊断
-      description: 侧栏「填写诊断（不含简历内容）」里点「复制诊断」，粘贴到这里
+      description: 展开侧栏「填写诊断（不含简历内容）」，点「复制诊断」，粘贴到这里
       render: text
   - type: textarea
     id: screenshots
     attributes:
       label: 截图
       description: 直接拖进来，记得先遮住个人信息
+  - type: input
+    id: version
+    attributes:
+      label: 插件与桌面版本
+      placeholder: 插件 0.4.1 / 桌面 0.4.1（诊断第一行有插件版本）
   - type: input
     id: browser
     attributes:
