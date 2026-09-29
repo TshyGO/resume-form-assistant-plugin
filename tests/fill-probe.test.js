@@ -109,3 +109,31 @@ test("the empty-page hint prefers the edit button, then locked inputs, frames an
   assert.equal(probe.emptyPageHint(EMPTY), "");
   assert.equal(probe.emptyPageHint(null), "");
 });
+
+test("the report lists page clues and the structure of unfilled controls, never their values", () => {
+  const lines = probe.formatReport({
+    host: "c.liepin.com", frames: { total: 1, crossOrigin: 1, frameInputs: 0 },
+    custom: { total: 3, byLibrary: { antd: 2, 其他: 1 } }, editButtons: 4, locked: 0, shadowHosts: 0
+  }, [{
+    label: "最高学历", reason: "值被页面退回",
+    control: { tag: "input", type: "text", role: "combobox", popup: "listbox", readOnly: true, picker: "", library: "antd" }
+  }]);
+  assert.deepEqual(lines, [
+    "页面：c.liepin.com",
+    "页面线索：内嵌框架 1（跨域 1，同源框架内输入框 0）；自定义控件 3（antd 2、其他 1）；只读或禁用输入框 0；「编辑」按钮 4；含输入框的 Shadow DOM 0",
+    "没填上的字段（控件结构）：",
+    "- 最高学历：input[text] role=combobox 弹出=listbox 只读 组件库=antd｜值被页面退回"
+  ]);
+});
+
+test("the report lists at most ten fields and hides contact-like field names", () => {
+  const unfilled = Array.from({ length: 12 }, (_, index) => ({ label: `字段${index + 1}`, reason: "", control: null }));
+  unfilled[0].label = "邮箱 a@b.com";
+  const lines = probe.formatReport(null, unfilled);
+  assert.equal(lines.length, 12);
+  assert.equal(lines[0], "没填上的字段（控件结构）：");
+  assert.equal(lines[1], "- （字段名已隐藏）：结构未知");
+  assert.equal(lines[2], "- 字段2：结构未知");
+  assert.equal(lines[11], "- 还有 2 个未列出");
+  assert.deepEqual(probe.formatReport(null, []), []);
+});

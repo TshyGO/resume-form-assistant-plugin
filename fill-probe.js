@@ -14,6 +14,7 @@
   };
   const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|立即完善|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
   const MAX_WALK = 3000;
+  const MAX_LISTED = 10;
   const LIBRARIES = [
     ["antd", /^ant-/], ["element", /^el-/], ["arco", /^arco-/], ["iview", /^ivu-/],
     ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/], ["mui", /^Mui/]
@@ -138,7 +139,38 @@
     return "";
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, emptyPageHint };
+  function formatControl(control) {
+    if (!control) return "结构未知";
+    const parts = [`${control.tag || "?"}${control.type ? `[${control.type}]` : ""}`];
+    if (control.role) parts.push(`role=${control.role}`);
+    if (control.popup) parts.push(`弹出=${control.popup}`);
+    if (control.readOnly) parts.push("只读");
+    if (control.picker) parts.push(`日期控件=${control.picker}`);
+    if (control.library) parts.push(`组件库=${control.library}`);
+    return parts.join(" ");
+  }
+
+  // 追加到填写诊断末尾的几行。unfilled 的 reason 只能是 content.js 里固定的失败原因文案。
+  function formatReport(probe, unfilled = []) {
+    const lines = [];
+    if (probe) {
+      const libraries = Object.entries(probe.custom.byLibrary).map(([name, count]) => `${name} ${count}`).join("、");
+      lines.push(`页面：${probe.host || "未知"}`);
+      lines.push(`页面线索：内嵌框架 ${probe.frames.total}（跨域 ${probe.frames.crossOrigin}，同源框架内输入框 ${probe.frames.frameInputs}）；`
+        + `自定义控件 ${probe.custom.total}${libraries ? `（${libraries}）` : ""}；只读或禁用输入框 ${probe.locked}；`
+        + `「编辑」按钮 ${probe.editButtons}；含输入框的 Shadow DOM ${probe.shadowHosts}`);
+    }
+    if (unfilled.length) {
+      lines.push("没填上的字段（控件结构）：");
+      for (const item of unfilled.slice(0, MAX_LISTED)) {
+        lines.push(`- ${safeLabel(item.label)}：${formatControl(item.control)}${item.reason ? `｜${item.reason}` : ""}`);
+      }
+      if (unfilled.length > MAX_LISTED) lines.push(`- 还有 ${unfilled.length - MAX_LISTED} 个未列出`);
+    }
+    return lines;
+  }
+
+  const api = { SELECTORS, describeControl, safeLabel, probePage, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);
