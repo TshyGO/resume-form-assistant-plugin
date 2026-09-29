@@ -270,3 +270,18 @@ test("the manifest loads the probe before the content script", () => {
   assert.ok(scripts.includes("fill-probe.js"));
   assert.ok(scripts.indexOf("fill-probe.js") < scripts.indexOf("content.js"));
 });
+
+test("field names that look like web addresses, or numbers split by other separators, are hidden", () => {
+  for (const label of ["https://jobs.example.com/apply?id=1", "见 www.example.com", "138/1234/5678", "138_1234_5678", "138—1234—5678"]) {
+    assert.equal(probe.safeLabel(label), "（字段名已隐藏）", label);
+  }
+  assert.equal(probe.safeLabel("2023年毕业"), "2023年毕业");
+  assert.equal(probe.safeLabel("个人主页"), "个人主页");
+});
+
+test("a same-origin frame that cannot be queried counts as unreadable instead of losing every page clue", () => {
+  const frame = node({ tag: "iframe", contentDocument: { querySelectorAll() { throw new Error("navigating"); } } });
+  const result = probe.probePage(page({ [SELECTORS.frames]: [frame] }), { href: "https://c.liepin.com/resume" });
+  assert.equal(result.host, "c.liepin.com");
+  assert.deepEqual(result.frames, { total: 1, crossOrigin: 1, frameInputs: 0 });
+});

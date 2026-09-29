@@ -64,8 +64,9 @@
   function safeLabel(label) {
     const text = String(label ?? "").replace(/\s+/g, " ").trim();
     if (!text) return "未命名字段";
-    // 邮箱，或去掉空格、连字符、括号后连着 5 位以上数字（含全角数字）的手机号/证件号。
-    if (/[@＠]/.test(text) || /[0-9０-９]{5,}/.test(text.replace(/[\s\-－.．()（）]/g, ""))) return "（字段名已隐藏）";
+    // 邮箱、网址，或去掉空白和标点符号后连着 5 位以上数字（含全角数字）的手机号/证件号。
+    if (/[@＠]|(?:https?|wss?|ftp):\/\/|www\./i.test(text)
+      || /[0-9０-９]{5,}/.test(text.replace(/[\s\p{P}\p{S}]/gu, ""))) return "（字段名已隐藏）";
     const chars = Array.from(text);
     return chars.length > MAX_LABEL ? `${chars.slice(0, MAX_LABEL).join("")}…` : text;
   }
@@ -114,14 +115,16 @@
     let crossOrigin = 0;
     let frameInputs = 0;
     for (const frame of frames) {
-      let inner = null;
+      // 跨域框架读不到文档；同源框架正在跳转时查询也可能失败，都按读不到算，不能丢掉整份线索。
+      let inputs = null;
       try {
-        inner = frame.contentDocument;
+        const inner = frame.contentDocument;
+        inputs = inner ? Array.from(inner.querySelectorAll(SELECTORS.inputs)).length : null;
       } catch {
-        inner = null;
+        inputs = null;
       }
-      if (inner) frameInputs += Array.from(inner.querySelectorAll(SELECTORS.inputs)).length;
-      else crossOrigin += 1;
+      if (inputs === null) crossOrigin += 1;
+      else frameInputs += inputs;
     }
 
     const byLibrary = {};
