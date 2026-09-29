@@ -149,6 +149,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   const elements = new Map();
   const get = id => { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); };
   const toasts = [];
+  const clipboardWrites = [];
   const pageMessages = [];
   let poll;
   const html = read('sidepanel.html');
@@ -200,7 +201,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   };
   const context = vm.createContext({
     document, chrome,
-    navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async () => {} } },
+    navigator: { userAgent: USER_AGENTS[browser], clipboard: { writeText: async value => { clipboardWrites.push(value); } } },
     self: {
       ResumeProProfile: require('../../profile-fields.js'),
       ResumeProResumeData: require('../../resume-data.js'),
@@ -211,7 +212,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   vm.runInContext(read('sidepanel.js'), context);
   await settle();
   const panel = {
-    page, get, pageMessages, toasts,
+    page, get, pageMessages, toasts, clipboardWrites,
     button: get('job-save-button'),
     form: get('job-save-form'),
     company: get('job-save-company'),

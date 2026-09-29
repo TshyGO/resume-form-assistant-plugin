@@ -150,6 +150,7 @@ button { cursor: pointer; }
 .dock-diagnostics { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .dock-diagnostics summary { cursor: pointer; }
 .dock-diagnostics textarea { display: block; width: 100%; margin-top: 7px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font: 11px/1.6 ui-monospace, monospace; resize: vertical; }
+.dock-diagnostics-copy { margin-top: 6px; }
 .dock-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 23px 0 9px; }
 .dock-section-head h2, .dock-view > h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .dock-section-head button { padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 600; }
