@@ -167,7 +167,7 @@ export function nativePort(api) {
   - 降级表五种情况各一条：文案、按钮、条目区与 AI 按钮置灰。
   - 「打开桌面」「上传简历 / 导入模板」发 `DESKTOP_OPEN_VIEW`；桌面没装时显示「去下载」而不是打开插件管理页。
   - 源码静态断言：`content.js` 不再读写 `chrome.storage.local` 的 `templates`、`activeTemplateId`、`aiConfig`、`profile`（只剩侧边栏界面状态键）。
-- [ ] 实现：`StorageService` 改名为 `ResumeData`（或保留名字但内部改为 `sendMessage`），`normalizeStore` 改为整理 `resume.read` 的结果；`getActiveTemplate` 读 `state.currentStore.activeTemplate`；删 `aiConfig` 相关检查（AI 是否配置由桌面在请求时说明）；降级 UI 复用现有桌面连接状态区的样式；`DESKTOP_DOWNLOAD_URL = "https://github.com/TshyGO/resume-form-assistant-plugin/releases?q=desktop-v&expanded=true"`。测试钩子 `setCurrentStore` 保留（改为新形状），现有依赖它的测试更新注入数据。
+- [ ] 实现：`StorageService` 改名为 `ResumeData`（或保留名字但内部改为 `sendMessage`），`normalizeStore` 改为整理 `resume.read` 的结果；`getActiveTemplate` 读 `state.currentStore.activeTemplate`；删 `aiConfig` 相关检查（AI 是否配置由桌面在请求时说明）；降级 UI 复用现有桌面连接状态区的样式；`DESKTOP_DOWNLOAD_URL = "https://19991107.xyz/tools/wangshen-kuaitian/download/"`。测试钩子 `setCurrentStore` 保留（改为新形状），现有依赖它的测试更新注入数据。
 - [ ] 提交 `feat(sidebar): 简历条目、切换模板与我的信息改为向桌面读写，桌面不可用时按降级表提示 (#130)`。
 
 ### Task 7：收尾

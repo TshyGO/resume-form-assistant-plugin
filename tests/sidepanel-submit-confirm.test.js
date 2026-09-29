@@ -789,8 +789,9 @@ test('the shared escape function turns all five characters into entities', () =>
   assert.equal(escapeHtml(null), '');
 });
 
-test('the README no longer says every save and confirmation waits in the sync queue when the desktop is away', () => {
-  const readme = read('README.md');
+test('the linked user guide distinguishes unpaired, pending and unknown save results', () => {
+  assert.match(read('README.md'), /docs\/user-guide\.md/);
+  const readme = read('docs/user-guide.md');
   assert.doesNotMatch(readme, /保存岗位和确认投递会留在待同步队列里/);
   assert.match(readme, /未安装或未配对：这次没有保存岗位，也不进入待同步/);
   assert.match(readme, /没有回包（结果未知）：让你到桌面或待同步列表核对，不声称已保存、已排队或已确认/);
