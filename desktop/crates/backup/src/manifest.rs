@@ -94,7 +94,7 @@ pub enum UnreadableManifest {
 impl std::fmt::Display for UnreadableManifest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnreadableManifest::NotOurs => write!(f, "这不是 Resume Pro 的备份文件。"),
+            UnreadableManifest::NotOurs => write!(f, "这不是网申快填的备份文件。"),
             UnreadableManifest::Corrupt => write!(f, "备份文件的清单已损坏。"),
             UnreadableManifest::TooNew { found, supported } => write!(
                 f,
