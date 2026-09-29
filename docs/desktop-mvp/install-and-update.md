@@ -1,5 +1,7 @@
 # 桌面端的构建、安装与升级
 
+普通用户请使用[固定下载入口](https://19991107.xyz/tools/wangshen-kuaitian/download/)，自动查询最新正式桌面版与配套插件，无需自行查找版本标签。
+
 面向两类读者：要自己构建的人（第 1 节），和拿到安装包的用户（第 2 节起）。
 维护者每次发新版的操作顺序见 [发版 SOP](../release-sop.md)。
 本文随 [D13 #29](https://github.com/TshyGO/resume-form-assistant-plugin/issues/29) 一起长出来，先落构建与发布口径，安装、升级、卸载的细节随后续 PR 补齐。

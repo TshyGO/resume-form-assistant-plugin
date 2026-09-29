@@ -48,6 +48,8 @@ node --test tests/*.test.js
 
 「确认已投递」和填写留档都要求用户明确选择申请，即使候选只有一条也不预选。无候选时引导先保存岗位。确认投递只更新本地状态，不触发招聘网站的提交操作。
 
+待同步写入在绑定时记录 `sourceRestoreEpoch`，重试时不改写；恢复桌面备份后必须核对旧记录，不能直接把旧队列当作新档案中的有效写入。
+
 协议的源文件位于 `desktop/crates/protocol/js/`，`link/protocol/` 为副本。修改源文件后重新复制，由 `tests/protocol-vendor.test.js` 校验一致性。`resume-utils.js` 的扩展与桌面副本也需保持一致。
 
 开发注册细节见 [DEV-NATIVE-MESSAGING.md](../desktop/DEV-NATIVE-MESSAGING.md)。更改 host 注册后重新加载扩展或重启浏览器。

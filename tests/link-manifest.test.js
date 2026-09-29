@@ -129,8 +129,10 @@ test('the sidebar offers confirming a submission separately from saving', async 
 
 test('the desktop link is documented where a maintainer will look', async () => {
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(readme, /link\/ +桌面程序连接/);
-  assert.match(readme, /sourceRestoreEpoch/);
+  assert.match(readme, /docs\/extension-development\.md/);
+  const guide = fs.readFileSync(path.join(root, 'docs/extension-development.md'), 'utf8');
+  assert.match(guide, /link\/ +桌面连接/);
+  assert.match(guide, /sourceRestoreEpoch/);
 });
 
 test('the desktop link ships every file it imports', async () => {
