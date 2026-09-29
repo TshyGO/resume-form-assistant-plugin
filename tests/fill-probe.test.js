@@ -5,10 +5,10 @@ const probe = require("../fill-probe.js");
 
 // 只有探测会用到的那几个 DOM 接口。
 function node({ tag = "div", text = "", attrs = {}, className = "", visible = true, parent = null,
-  insideCustom = false, shadowRoot = null, contentDocument = null, readOnly = false,
+  insideCustom = false, shadowRoot = null, contentDocument = null, readOnly = false, disabled = false,
   rect = { width: 300, height: 200 } } = {}) {
   return {
-    tagName: tag.toUpperCase(), textContent: text, className, parentElement: parent, shadowRoot, contentDocument, readOnly,
+    tagName: tag.toUpperCase(), textContent: text, className, parentElement: parent, shadowRoot, contentDocument, readOnly, disabled,
     type: tag === "input" ? attrs.type || "text" : undefined,
     getAttribute: name => (Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null),
     getClientRects: () => (visible ? [{}] : []),
@@ -165,8 +165,42 @@ test("icon-only buttons are found through aria-label or title, without double co
 });
 
 test("the text-node walk stops at a fixed number of nodes", () => {
-  const many = Array.from({ length: 20001 }, () => textNode("编辑", node({ tag: "a" })));
-  assert.equal(editCount(many), 20000);
+  const many = Array.from({ length: 50001 }, () => textNode("编辑", node({ tag: "a" })));
+  assert.equal(editCount(many), 50000);
+});
+
+test("text nodes longer than 40 characters are skipped before matching", () => {
+  // 标点垫到 41 个字符：去掉标点后正好是「编辑」，所以只有长度判断能把它挡在外面。
+  const padded = length => `编${"-".repeat(length - 2)}辑`;
+  assert.equal(editCount([textNode(padded(41), node({ tag: "p" }))]), 0);
+  assert.equal(editCount([textNode(padded(40), node({ tag: "a" }))]), 1);
+  // 长度按去掉首尾空白之后算，所以外面包一大段空白的「编辑」照样认得出来。
+  assert.equal(editCount([textNode(`  编辑${" ".repeat(60)}`, node({ tag: "a" }))]), 1);
+  // 一整段带「编辑」的正文既不匹配，也不会被计入。
+  assert.equal(editCount([textNode(`${"字".repeat(20)}编辑${"字".repeat(20)}`, node({ tag: "p" }))]), 0);
+});
+
+test("invisible characters around the text do not hide an edit button", () => {
+  // 变体选择符（✏️ = U+270F U+FE0F）和零宽空格。
+  assert.equal(editCount([textNode("\u270F\uFE0F编辑", node({ tag: "a" }))]), 1);
+  assert.equal(editCount([textNode("\u200B编辑", node({ tag: "a" }))]), 1);
+  assert.equal(editCount([textNode("编\u200B辑", node({ tag: "a" }))]), 1);
+});
+
+test("aria-label and title are both checked, not just the first one present", () => {
+  assert.equal(editCount([], [node({ tag: "button", attrs: { "aria-label": "更多", title: "编辑" } })]), 1);
+  assert.equal(editCount([], [node({ tag: "button", attrs: { "aria-label": "编辑", title: "更多" } })]), 1);
+  assert.equal(editCount([], [node({ tag: "button", attrs: { "aria-label": "更多", title: "帮助" } })]), 0);
+});
+
+test("a disabled input still counts as locked inside a custom control, a readonly one does not", () => {
+  const doc = page({
+    [SELECTORS.locked]: [
+      node({ tag: "input", disabled: true, insideCustom: true }),
+      node({ tag: "input", attrs: { readonly: "" }, readOnly: true, insideCustom: true })
+    ]
+  });
+  assert.equal(probe.probePage(doc).locked, 1);
 });
 
 test("the custom-control selector matches every contenteditable except contenteditable=false", () => {

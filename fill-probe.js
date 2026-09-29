@@ -14,7 +14,8 @@
   };
   const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
   const MAX_WALK = 3000;
-  const MAX_TEXT_NODES = 20000;
+  const MAX_TEXT_NODES = 50000;
+  const MAX_EDIT_TEXT = 40;
   const SKIP_TEXT_PARENTS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TEXTAREA"]);
   const MAX_LISTED = 10;
   const LIBRARIES = [
@@ -76,8 +77,8 @@
     const r = el.getBoundingClientRect?.();
     return Boolean(r && r.width >= 100 && r.height >= 50);
   };
-  // 去掉空白、标点、符号和 iconfont 的私用区字形，只留文字本身。
-  const bare = value => String(value ?? "").replace(/[\s\p{P}\p{S}\p{Co}-]/gu, "");
+  // 去掉空白、标点、符号、iconfont 的私用区字形，以及变体选择符、零宽字符这类不可见字符，只留文字本身。
+  const bare = value => String(value ?? "").replace(/[\s\p{P}\p{S}\p{Co}\p{M}\p{Cf}-]/gu, "");
 
   function hostOf(href) {
     try {
@@ -96,10 +97,13 @@
       const text = walker.nextNode();
       if (!text) break;
       const parent = text.parentElement;
-      if (parent && !SKIP_TEXT_PARENTS.has(parent.tagName) && EDIT_TEXT.test(bare(text.data))) found.add(parent);
+      if (!parent || SKIP_TEXT_PARENTS.has(parent.tagName)) continue;
+      // 按钮文字很短：长文本先挡掉，正文既不用跑正则，也不会被读进来。
+      if (String(text.data ?? "").trim().length > MAX_EDIT_TEXT) continue;
+      if (EDIT_TEXT.test(bare(text.data))) found.add(parent);
     }
     for (const el of Array.from(doc.querySelectorAll(SELECTORS.labelled) || [])) {
-      if (EDIT_TEXT.test(bare(el.getAttribute?.("aria-label") || el.getAttribute?.("title")))) found.add(el);
+      if ([el.getAttribute?.("aria-label"), el.getAttribute?.("title")].some(value => EDIT_TEXT.test(bare(value)))) found.add(el);
     }
     return found.size;
   }
@@ -142,7 +146,8 @@
       frames: { total: frames.length, crossOrigin, frameInputs },
       custom: { total: customTotal, byLibrary },
       editButtons: countEditControls(doc),
-      locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => !el.closest?.(SELECTORS.custom)).length,
+      // 只读的下拉输入框属于自定义控件，不算；禁用的输入框即使套在自定义控件里也照算。
+      locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => el.disabled || !el.closest?.(SELECTORS.custom)).length,
       shadowHosts
     };
   }
