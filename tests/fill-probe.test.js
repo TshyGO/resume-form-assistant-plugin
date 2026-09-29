@@ -137,3 +137,12 @@ test("the report lists at most ten fields and hides contact-like field names", (
   assert.equal(lines[11], "- 还有 2 个未列出");
   assert.deepEqual(probe.formatReport(null, []), []);
 });
+
+test("the manifest loads the probe before the content script", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+  const scripts = manifest.content_scripts.find(entry => entry.js?.includes("content.js"))?.js ?? [];
+  assert.ok(scripts.includes("fill-probe.js"));
+  assert.ok(scripts.indexOf("fill-probe.js") < scripts.indexOf("content.js"));
+});

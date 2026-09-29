@@ -32,6 +32,7 @@ jobs:
         run: |
           node --check ai-helpers.js
           node --check form-agent.js
+          node --check fill-probe.js
           node --check background.js
           node --check ai-worker.js
           node --check ai-host.js
