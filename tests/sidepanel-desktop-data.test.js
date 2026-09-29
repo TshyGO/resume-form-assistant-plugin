@@ -173,7 +173,7 @@ test('footer opens desktop, and missing desktop offers the download URL', async 
   assert.ok(ready.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW' && item.view === 'home'));
   const missing = await harness({ status: 'not_installed' });
   await missing.get('open-manager').listeners.click();
-  assert.ok(missing.calls.some(item => item.createdTab?.includes('/releases?')));
+  assert.ok(missing.calls.some(item => item.createdTab === 'https://19991107.xyz/tools/wangshen-kuaitian/download/'));
   const unpaired = await harness({ status: 'not_paired' });
   await unpaired.get('desktop-connection-action').listeners.click();
   assert.deepEqual(unpaired.copied, ['diagjmploldedipjdenmecmjokckelkl']);

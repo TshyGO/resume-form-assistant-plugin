@@ -77,3 +77,11 @@ git push origin desktop-vX.Y.Z
 - **保留插件正式 Release 的 ZIP。** 它是送商店的同一份包，也给 Edge、手动安装和故障排查提供下载入口。由 CI 从 tag 的 Git 树生成，作为 Release 附件；**不要把 ZIP 二进制提交进 Git 仓库**。
 - **现阶段保留桌面 Release 的备用 ZIP。** 桌面设置页的“下载插件包”目前指向该桌面 Release。它是该桌面 tag 的插件源码快照，文件名按 `manifest.json` 的**插件版本**命名，不代表桌面版本，也不自动等同于另一枚插件 Release 或商店已审核的字节。发桌面版时要核对包内版本、兼容性和来源 commit。
 - 长期可在桌面下载入口改为定位对应的**插件正式 Release** 后，移除桌面 Release 的重复 ZIP。那之前直接删掉会让现有下载按钮失效。不要使用仓库通用的 `/releases/latest` 找插件：桌面正式版可能成为整个仓库的 latest。
+
+## 固定下载入口与官网
+
+对外统一使用 [官网正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)。官网在访客打开页面时读取公开 GitHub Releases API，只选择非草稿、非预发布的最高数字版本 `desktop-vX.Y.Z`，并展示该 Release 的实际附件。因此正常推送正式桌面 tag、等待现有工作流发布完整附件即可，无需每次修改网址、官网版本号或维护数据库。
+
+保留现有附件命名约定：`wangshen-kuaitian_<桌面版本>_x64-setup.exe`、`wangshen-kuaitian_<桌面版本>_aarch64.dmg`、`wangshen-kuaitian-plugin-<插件版本>.zip`。更改命名或新增平台时，同步调整官网仓库 `TshyGO/tools` 的下载解析器。附件缺失时官网会显示不可用；API 查询失败时会显示备用发布列表，不会把旧版本标成最新版。
+
+不要使用 `releases?q=desktop-v` 搜索链接作为桌面下载入口，也不要用仓库通用的 `releases/latest`：它可能指向插件独立发布。桌面内用于当前版本配套插件的精确 tag 链接继续保留，不能替换成另一桌面版本的插件包。GitHub 的最新配套插件不代表 Chrome 商店已公开同版本；商店状态仍按上面的独立流程核对。

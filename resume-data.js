@@ -1,6 +1,6 @@
 // One view model for both the native side panel and the page's hidden fill controller.
 (function attachResumeData(root) {
-  const DOWNLOAD_URL = 'https://github.com/TshyGO/resume-form-assistant-plugin/releases?q=desktop-v&expanded=true';
+  const DOWNLOAD_URL = 'https://19991107.xyz/tools/wangshen-kuaitian/download/';
   const STATES = {
     not_installed: { message: '这台浏览器还没有连接桌面程序。安装桌面后才能使用简历条目和 AI 填写。', action: '去下载', kind: 'download' },
     not_paired: { message: '桌面程序尚未与这个插件配对。请在桌面设置中粘贴扩展 ID。', action: '复制扩展 ID', kind: 'pair' },

@@ -6,9 +6,9 @@
 
 准备好简历，在不同网站重复使用；看到合适的岗位，确认后保存；提交申请后，记录进度、整理通知，再安排下一步。
 
-**[🧩 Chrome 商店安装插件](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)** · **[🖥️ 桌面应用下载](https://github.com/TshyGO/resume-form-assistant-plugin/releases?q=desktop-v&expanded=true)** · **[📖 快速开始](#快速开始)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+**[🧩 Chrome 商店安装插件](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)** · **[🖥️ 桌面应用下载](https://19991107.xyz/tools/wangshen-kuaitian/download/)** · **[📖 快速开始](#快速开始)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
 
-> **优先从商店安装扩展。** 商店审核和更新分发可能晚于 GitHub 发布。如果商店版本落后于发布页的配套插件，或出现版本不兼容提示，请从[桌面端发布页](https://github.com/TshyGO/resume-form-assistant-plugin/releases?q=desktop-v&expanded=true)下载配套插件 ZIP，按[手动安装说明](#手动安装扩展)加载。
+> **优先从商店安装扩展。** 商店审核和更新分发可能晚于 GitHub 发布。如果商店版本落后于发布页的配套插件，或出现版本不兼容提示，请从[正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)下载配套插件 ZIP，按[手动安装说明](#手动安装扩展)加载。
 
 ## 💬 QQ 交流群
 
@@ -49,9 +49,11 @@
 
 | 组件 | 支持范围 | 获取方式 |
 | --- | --- | --- |
-| Windows 桌面应用 | Windows x64 | [桌面端发布页](https://github.com/TshyGO/resume-form-assistant-plugin/releases?q=desktop-v&expanded=true)，下载 `wangshen-kuaitian_<版本>_x64-setup.exe` |
+| Windows 桌面应用 | Windows x64 | [正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)，下载 `wangshen-kuaitian_<版本>_x64-setup.exe` |
 | macOS 桌面应用 | Apple Silicon（Apple 芯片） | 同一发布页，下载 `wangshen-kuaitian_<版本>_aarch64.dmg` |
 | 浏览器扩展 | Chrome / Edge 116 或更新版本 | 优先从 [Chrome 商店](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)安装；商店不可用或版本尚未同步时使用配套 ZIP |
+
+**[固定下载入口](https://19991107.xyz/tools/wangshen-kuaitian/download/)会自动查询最新桌面正式版及其配套插件，后续发版无需更换网址。** 查询失败时可使用页面中的 GitHub 发布列表备用入口。商店审核和分发可能滞后，商店版不保证是最新配套版本。
 
 桌面端的正式发布标签为 `desktop-vX.Y.Z`。**同一发布页提供桌面安装包和配套插件 ZIP**，扩展文件名为 `wangshen-kuaitian-plugin-<版本>.zip`。桌面与扩展独立发版，版本号不要求完全相同，请按发布说明选择配套版本。
 
