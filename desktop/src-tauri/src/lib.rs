@@ -1535,6 +1535,7 @@ pub fn run() {
     }
 
     configure_webview_cache();
+    let context = tauri::generate_context!();
 
     let hidden_launch = args.hidden;
     let quit_launch = args.quit;
@@ -1555,6 +1556,9 @@ pub fn run() {
         });
         if let Err(error) = allowed {
             eprintln!("launch blocked: {error}");
+            if !hidden_launch {
+                lifecycle::report_launch_failure(context);
+            }
             return;
         }
     }
@@ -1603,7 +1607,13 @@ pub fn run() {
         })
         .setup(move |app| {
             if quit_launch {
-                lifecycle::quit_or_report(app.handle(), "cli");
+                // No writer/window exists in this first-instance CLI path. Unlike a
+                // running application's failed quit, the command must fail and exit
+                // rather than leave an inaccessible, windowless process behind.
+                if let Err(message) = lifecycle::request_quit(app.handle(), "cli") {
+                    eprintln!("{message}");
+                    app.handle().exit(1);
+                }
                 return Ok(());
             }
             // Recheck under the launch gate after single-instance arbitration. Keep
@@ -1837,7 +1847,7 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running 网申快填");
 }
 

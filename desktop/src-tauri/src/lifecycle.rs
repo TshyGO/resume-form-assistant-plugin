@@ -65,6 +65,30 @@ pub fn quit_or_report(app: &AppHandle, reason: &str) {
     }
 }
 
+/// Startup preflight runs before single-instance arbitration and before there is an
+/// AppHandle. A failed *manual* launch gets a dialog-only runtime, with no archive,
+/// endpoint or registration. It can report even while a retiring instance owns the gate.
+pub fn report_launch_failure(context: tauri::Context<tauri::Wry>) {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog_app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .build(context);
+    match dialog_app {
+        Ok(app) => app.run(|app, event| {
+            if !matches!(event, tauri::RunEvent::Ready) {
+                return;
+            }
+            let handle = app.clone();
+            app.dialog()
+                .message("暂时无法打开网申快填。程序可能仍在退出，请稍后重试；如仍无法打开，请检查数据目录权限和磁盘空间。")
+                .title("无法打开网申快填")
+                .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                .show(move |_| handle.exit(1));
+        }),
+        Err(error) => eprintln!("could not show launch failure: {error}"),
+    }
+}
+
 /// macOS's predefined Quit sends terminate: directly, bypassing the Tauri quit
 /// command. Replace the default application submenu with a custom Quit action.
 #[cfg(target_os = "macos")]

@@ -245,6 +245,19 @@ try {
     if ($quitAlone.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) {
       throw "Quit without a running instance did not preserve explicit quit"
     }
+    Write-Host "Verify failed first-instance quit returns nonzero without a lingering process"
+    $quitBytes = [IO.File]::ReadAllBytes($marker)
+    Remove-Item -LiteralPath $marker
+    New-Item -ItemType Directory -Path $marker | Out-Null
+    try {
+      $failedQuit = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -PassThru -WindowStyle Hidden
+      if (-not $failedQuit.WaitForExit(15000)) { throw "Failed first-instance quit left a process running" }
+      if ($failedQuit.ExitCode -eq 0) { throw "Failed quit was reported as success" }
+      if (-not (Test-Path -LiteralPath $marker -PathType Container)) { throw "Failed quit bypassed the stop marker" }
+    } finally {
+      Remove-Item -LiteralPath $marker
+      [IO.File]::WriteAllBytes($marker, $quitBytes)
+    }
   }
 
   $upgradeTested = $false
