@@ -106,6 +106,20 @@ $oldOverride = $env:RESUMEPRO_DATA_DIR
 $installedThisRun = $false
 $app = $null
 
+function Read-NativeBytes([IO.Stream]$Stream, [int]$Count, [DateTime]$Deadline) {
+  $bytes = [byte[]]::new($Count)
+  $offset = 0
+  while ($offset -lt $Count) {
+    $remaining = [int][Math]::Max(0, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds)
+    if ($remaining -eq 0) { throw "Native response read timed out" }
+    $read = $Stream.ReadAsync($bytes, $offset, $Count - $offset)
+    if (-not $read.Wait($remaining)) { throw "Native response read timed out" }
+    if ($read.Result -eq 0) { throw "Native host closed an incomplete response frame" }
+    $offset += $read.Result
+  }
+  return ,$bytes
+}
+
 function Invoke-NativeFrame([string]$Executable, [string]$Type, [hashtable]$Payload) {
   $request = @{
     protocolVersion = 2; messageId = [guid]::NewGuid().ToString()
@@ -129,17 +143,19 @@ function Invoke-NativeFrame([string]$Executable, [string]$Type, [hashtable]$Payl
     $process.StandardInput.BaseStream.Write($length, 0, 4)
     $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
     $process.StandardInput.Close()
-    # The diagnostic only requests small handshake/open replies, well below pipe capacity.
-    if (-not $process.WaitForExit(45000)) { throw "Native request $Type timed out" }
-    $buffer = [IO.MemoryStream]::new()
-    $process.StandardOutput.BaseStream.CopyTo($buffer)
-    $wire = $buffer.ToArray()
-    $buffer.Dispose()
-    if ($process.ExitCode -ne 0 -or $wire.Length -lt 4) {
-      throw "Native request $Type failed: $($errors.Result)"
+    # Read one length-prefixed frame, not EOF: a spawned GUI can inherit another
+    # handle to the pipe and keep it open after the native host has already exited.
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    $header = Read-NativeBytes $process.StandardOutput.BaseStream 4 $deadline
+    $replyLength = [BitConverter]::ToUInt32($header, 0)
+    if ($replyLength -eq 0 -or $replyLength -gt 1048576) { throw "Invalid native reply length" }
+    $wire = Read-NativeBytes $process.StandardOutput.BaseStream $replyLength $deadline
+    if (-not $process.WaitForExit(15000)) { throw "Native request $Type did not exit" }
+    if ($process.ExitCode -ne 0) {
+      $errorText = if ($errors.IsCompleted -and -not $errors.IsFaulted) { $errors.Result } else { "stderr still open" }
+      throw "Native request $Type failed: $errorText"
     }
-    if ([BitConverter]::ToUInt32($wire, 0) -ne $wire.Length - 4) { throw "Invalid native reply frame" }
-    return [Text.Encoding]::UTF8.GetString($wire, 4, $wire.Length - 4) | ConvertFrom-Json
+    return [Text.Encoding]::UTF8.GetString($wire) | ConvertFrom-Json
   } finally {
     if ($started -and -not $process.HasExited) { $process.Kill() }
     $process.Dispose()

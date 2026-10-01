@@ -99,6 +99,7 @@ jobs:
         run: node desktop/scripts/check-desktop-release.js --dist desktop/dist
 
       - name: Build installer
+        id: installer
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
@@ -123,6 +124,7 @@ jobs:
             -AllowElevatedDiagnostic
 
       - name: Collect artifacts and checksums
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -144,6 +146,7 @@ jobs:
           node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
 
       - name: Upload artifacts
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.name }}
