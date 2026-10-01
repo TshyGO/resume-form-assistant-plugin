@@ -120,8 +120,9 @@ function Invoke-NativeFrame([string]$Executable, [string]$Type, [hashtable]$Payl
   $process.StartInfo.RedirectStandardInput = $true
   $process.StartInfo.RedirectStandardOutput = $true
   $process.StartInfo.RedirectStandardError = $true
+  $started = $false
   try {
-    $null = $process.Start()
+    $started = $process.Start()
     $errors = $process.StandardError.ReadToEndAsync()
     $bytes = [Text.Encoding]::UTF8.GetBytes($request)
     $length = [BitConverter]::GetBytes([uint32]$bytes.Length)
@@ -140,9 +141,20 @@ function Invoke-NativeFrame([string]$Executable, [string]$Type, [hashtable]$Payl
     if ([BitConverter]::ToUInt32($wire, 0) -ne $wire.Length - 4) { throw "Invalid native reply frame" }
     return [Text.Encoding]::UTF8.GetString($wire, 4, $wire.Length - 4) | ConvertFrom-Json
   } finally {
-    if ($process.Id -and -not $process.HasExited) { $process.Kill() }
+    if ($started -and -not $process.HasExited) { $process.Kill() }
     $process.Dispose()
   }
+}
+
+function Request-InstalledQuit([string]$Executable) {
+  Write-Host "Explicit quit request"
+  $forwarder = Start-Process -FilePath $Executable -ArgumentList "--quit" -PassThru -WindowStyle Hidden
+  if (-not $forwarder.WaitForExit(15000)) {
+    Stop-Process -Id $forwarder.Id -Force -ErrorAction SilentlyContinue
+    throw "Quit forwarding process did not exit within 15 seconds"
+  }
+  # Forwarder exit only means the arguments were delivered. Callers separately
+  # inspect the actual application process and persisted marker.
 }
 
 try {
@@ -150,6 +162,7 @@ try {
   # point on, any of them that appear belong to this attempt and are safe for finally to remove,
   # even when NSIS returns a non-zero exit code after writing partial state.
   $installedThisRun = $true
+  Write-Host "Install candidate"
   $install = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
   if (-not (Test-Path -LiteralPath $installDir)) { throw "Installer did not create $installDir" }
@@ -160,6 +173,7 @@ try {
     Select-Object -First 1
   if (-not $exe -or -not $uninstaller) { throw "Installed executable or uninstaller is missing" }
 
+  Write-Host "Launch installed candidate and wait for registration"
   $env:RESUMEPRO_DATA_DIR = $testRoot
   $app = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
   Start-Sleep -Milliseconds 500
@@ -168,13 +182,14 @@ try {
   }
   $keys = Wait-NativeMessagingRegistration $exe.FullName
 
-  $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
+  Request-InstalledQuit $exe.FullName
   if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
 
   if ($CheckExplicitQuit) {
     if (-not $app.HasExited) { throw "Explicit quit did not terminate the installed application" }
     $marker = Join-Path $testRoot "explicit-quit"
     if (-not (Test-Path -LiteralPath $marker)) { throw "Explicit quit was not persisted" }
+    Write-Host "Verify delayed hidden launch and stopped native hosts"
     $delayed = Start-Process -FilePath $exe.FullName -ArgumentList "--hidden" -PassThru -WindowStyle Hidden
     if (-not $delayed.WaitForExit(15000)) {
       Stop-Process -Id $delayed.Id -Force
@@ -191,21 +206,29 @@ try {
     $running = @(Get-Process -Name "resume-pro-desktop" -ErrorAction SilentlyContinue |
       Where-Object { $_.Path -eq $exe.FullName })
     if ($running.Count -ne 0) { throw "Background requests restarted the installed application" }
+    Write-Host "Resume through explicit ui.open"
     $opened = Invoke-NativeFrame $exe.FullName "ui.open" @{ view = "resume" }
     if (-not $opened.ok -or -not $opened.payload.opened -or (Test-Path -LiteralPath $marker)) {
       throw "Explicit ui.open did not resume the installed application"
     }
     $app = Get-Process -Name "resume-pro-desktop" | Where-Object { $_.Path -eq $exe.FullName } | Select-Object -First 1
     if (-not $app) { throw "No desktop process after explicit open" }
-    $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
+    Request-InstalledQuit $exe.FullName
     if (-not $app.WaitForExit(10000)) { throw "Second explicit quit did not terminate the application" }
+    Write-Host "Resume through a manual executable launch"
     # A shortcut launch has no --hidden argument and must resume as well.
     $app = Start-Process -FilePath $exe.FullName -PassThru
     $deadline = (Get-Date).AddSeconds(15)
     while ((Test-Path -LiteralPath $marker) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
     if ((Test-Path -LiteralPath $marker) -or $app.HasExited) { throw "Manual launch did not resume" }
-    $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
+    Request-InstalledQuit $exe.FullName
     if (-not $app.WaitForExit(10000)) { throw "Final explicit quit did not terminate the application" }
+    # Exercise setup's quit branch as well as the single-instance forwarding path.
+    $quitAlone = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -PassThru -WindowStyle Hidden
+    if (-not $quitAlone.WaitForExit(10000)) { throw "Quit without a running instance did not exit" }
+    if ($quitAlone.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) {
+      throw "Quit without a running instance did not preserve explicit quit"
+    }
   }
 
   $upgradeTested = $false
@@ -235,11 +258,12 @@ try {
       throw "Upgraded application exited before Native Messaging registration (exit $($app.ExitCode)); check packaged runtime dependencies"
     }
     $keys = Wait-NativeMessagingRegistration $exe.FullName
-    $null = Start-Process -FilePath $exe.FullName -ArgumentList "--quit" -Wait -PassThru -WindowStyle Hidden
+    Request-InstalledQuit $exe.FullName
     if (-not $app.HasExited) { $null = $app.WaitForExit(10000) }
     $upgradeTested = $true
   }
 
+  Write-Host "Uninstall candidate and verify preserved data"
   $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
   $deadline = (Get-Date).AddSeconds(20)

@@ -13,14 +13,17 @@ use local_ipc::{Endpoint, IpcError};
 
 /// How long to wait for a cold-started application to answer its endpoint.
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(10);
+// ui.open is deliberately not replayed by the extension. Give its one connection
+// attempt the cold-start allowance formerly supplied by two ten-second attempts.
+const MANUAL_START_TIMEOUT: Duration = Duration::from_secs(21);
 const RETRY_INTERVAL: Duration = Duration::from_millis(150);
 
 /// Reach the application, starting it if nothing is listening.
 ///
 /// Several hosts can run at once — a browser starts one per message, and Chrome and Edge
 /// each have their own — so several may find the application missing and try to start it
-/// together. No extra mutex is needed: the single-instance rule means the extra processes
-/// exit and the winner takes `host.lock` and listens, which the others reach by retrying.
+/// together. The launch gate serializes each decision with quit, while single-instance
+/// arbitration and `host.lock` still select the one application that owns the archive.
 pub fn connect_or_start(data_root: &Path, program: &Path) -> Result<local_ipc::Stream, IpcError> {
     connect_with_intent(data_root, program, false)
 }
@@ -31,44 +34,48 @@ pub fn connect_with_intent(
     program: &Path,
     manual_open: bool,
 ) -> Result<local_ipc::Stream, IpcError> {
-    let policy = LaunchGuard::acquire(
-        data_root,
+    let startup_budget = if manual_open { MANUAL_START_TIMEOUT } else { COLD_START_TIMEOUT };
+    let policy = if manual_open {
+        LaunchGuard::acquire(data_root, COLD_START_TIMEOUT)?
+    } else {
+        LaunchGuard::acquire_background(data_root, COLD_START_TIMEOUT).map_err(|error| {
+            log_launch(data_root, "APP_AUTOSTART_BLOCKED", "policy");
+            error
+        })?
+    };
+    let resume = || -> Result<(), IpcError> {
         if manual_open {
-            COLD_START_TIMEOUT
-        } else {
-            Duration::ZERO
-        },
-    )?;
-    if manual_open {
-        policy.resume()?;
-        log_launch(data_root, "APP_MANUAL_RESUME", "ui.open");
-    } else if let Err(error) = policy.ensure_background_allowed() {
-        log_launch(data_root, "APP_AUTOSTART_BLOCKED", "policy");
-        return Err(error.into());
-    }
+            policy.resume()?;
+            log_launch(data_root, "APP_MANUAL_RESUME", "ui.open");
+        }
+        Ok(())
+    };
     let endpoint = Endpoint::for_data_root(data_root)?;
     match local_ipc::connect(&endpoint) {
-        Ok(stream) => return Ok(stream),
+        Ok(stream) => {
+            resume()?;
+            return Ok(stream);
+        }
         // Busy means it is running and saturated, so waiting is right and starting a
         // second one would be wrong.
         Err(IpcError::Busy) => {
+            resume()?;
             drop(policy);
-            return wait_for(data_root, &endpoint, COLD_START_TIMEOUT);
+            return wait_for(data_root, &endpoint, startup_budget);
         }
         Err(IpcError::NotRunning) => {}
         Err(other) => return Err(other),
     }
 
-    if let Err(err) = start_hidden(program) {
-        // A missing executable, a security product, a crash on startup: none of them can
-        // be told apart from here, and none is worth failing differently. The wait below
-        // decides, so this is reported and not returned.
-        eprintln!("nm-host: could not start the application: {err}");
-    }
+    // Do not erase quit if even spawning fails. The child waits for our gate before
+    // checking the marker. Once spawned, the user's explicit launch intent applies
+    // even if initialization is slow; a timeout must not overwrite a newer quit.
+    start_hidden(program)?;
+    resume()?;
     // The child checks again under this same lock before opening the archive. A quit
     // that wins between spawn and child setup therefore cannot be bypassed.
     drop(policy);
-    wait_for(data_root, &endpoint, COLD_START_TIMEOUT)
+    wait_for(data_root, &endpoint, startup_budget)
 }
 
 fn log_launch(root: &Path, code: &str, reason: &str) {
@@ -101,17 +108,9 @@ fn wait_for(
 ) -> Result<local_ipc::Stream, IpcError> {
     let deadline = Instant::now() + budget;
     loop {
-        let policy = match LaunchGuard::acquire(data_root, Duration::ZERO) {
-            Ok(policy) => policy,
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
-            {
-                std::thread::sleep(RETRY_INTERVAL);
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
-        policy.ensure_background_allowed()?;
+        let policy = LaunchGuard::acquire_background(
+            data_root, deadline.saturating_duration_since(Instant::now()),
+        )?;
         match local_ipc::connect(endpoint) {
             Ok(stream) => return Ok(stream),
             Err(IpcError::NotRunning) | Err(IpcError::Busy) => {
@@ -183,6 +182,17 @@ mod tests {
             wait_for(dir.path(), &endpoint, Duration::from_millis(200)),
             Err(IpcError::NotRunning)
         ));
+    }
+
+    #[test]
+    fn failed_manual_spawn_preserves_explicit_quit() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        policy.record_quit().unwrap();
+        drop(policy);
+        assert!(connect_with_intent(dir.path(), &dir.path().join("missing-program"), true).is_err());
+        let policy = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        assert!(policy.ensure_background_allowed().is_err());
     }
 
     #[test]

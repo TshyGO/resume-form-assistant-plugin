@@ -37,9 +37,34 @@ impl LaunchGuard {
     }
 
     pub fn ensure_background_allowed(&self) -> io::Result<()> {
+        Self::check_marker(&self.root)
+    }
+
+    /// Wait for ordinary initialization, but stop promptly when a quitting process
+    /// writes its marker and holds the gate until process death. The unlocked check
+    /// can only reject; permission is checked again after acquiring the gate.
+    pub fn acquire_background(root: &Path, budget: Duration) -> io::Result<Self> {
+        let started = Instant::now();
+        loop {
+            Self::check_marker(root)?;
+            match Self::acquire(root, Duration::ZERO) {
+                Ok(guard) => {
+                    guard.ensure_background_allowed()?;
+                    return Ok(guard);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock
+                    && started.elapsed() < budget => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn check_marker(root: &Path) -> io::Result<()> {
         // exists() hides permission/I/O errors. Only a confirmed missing marker allows
         // a background start; even a malformed marker is a reason to stay stopped.
-        match fs::symlink_metadata(self.root.join(MARKER)) {
+        match fs::symlink_metadata(root.join(MARKER)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
             Ok(_) => Err(io::Error::new(
@@ -114,6 +139,28 @@ mod tests {
         drop(quitting);
         let delayed_child = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
         assert!(delayed_child.ensure_background_allowed().is_err());
+    }
+
+    #[test]
+    fn background_waits_for_startup_but_observes_quit_while_gate_is_still_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let startup = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        std::thread::scope(|scope| {
+            let pending = scope.spawn(|| LaunchGuard::acquire_background(dir.path(), Duration::from_secs(2)));
+            std::thread::sleep(Duration::from_millis(75));
+            drop(startup);
+            assert!(pending.join().unwrap().is_ok());
+        });
+        let quitting = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        std::thread::scope(|scope| {
+            let pending = scope.spawn(|| LaunchGuard::acquire_background(dir.path(), Duration::from_secs(10)));
+            std::thread::sleep(Duration::from_millis(75));
+            quitting.record_quit().unwrap();
+            let started = Instant::now();
+            assert!(pending.join().unwrap().is_err());
+            assert!(started.elapsed() < Duration::from_secs(2));
+            // The quitting process still owns the guard here.
+        });
     }
 
     #[test]

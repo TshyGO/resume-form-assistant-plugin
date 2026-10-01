@@ -1609,9 +1609,17 @@ pub fn run() {
             // Recheck under the launch gate after single-instance arbitration. Keep
             // it through opening the writer and endpoint, closing the delayed-child race.
             let paths = HostPaths::resolve()?;
-            let startup_policy = data_service::launch_policy::LaunchGuard::acquire(
+            let startup_policy = match data_service::launch_policy::LaunchGuard::acquire(
                 &paths.data_root, std::time::Duration::from_secs(10),
-            )?;
+            ) {
+                Ok(policy) => policy,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let _ = write_log(&paths, "info", "APP_AUTOSTART_BLOCKED", &[("reason", "startup-busy")]);
+                    app.handle().exit(0);
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
             if startup_policy.ensure_background_allowed().is_err() {
                 let _ = write_log(&paths, "info", "APP_AUTOSTART_BLOCKED", &[("reason", "startup")]);
                 app.handle().exit(0);
@@ -1707,6 +1715,8 @@ pub fn run() {
 
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
+            #[cfg(target_os = "macos")]
+            lifecycle::install_application_menu(app.handle())?;
 
             if hidden_launch {
                 lifecycle::hide_main_window(app.handle());

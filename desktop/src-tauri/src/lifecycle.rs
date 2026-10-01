@@ -26,11 +26,13 @@ pub fn request_quit(app: &AppHandle, reason: &str) -> Result<(), String> {
         Ok(guard)
     });
     let policy = policy.map_err(|error| {
+        let error_kind = format!("{:?}", error.kind());
+        let os_code = error.raw_os_error().map(|code| code.to_string()).unwrap_or_default();
         let _ = data_service::write_log(
             &paths,
             "error",
             "APP_QUIT_STATE_FAILED",
-            &[("reason", reason)],
+            &[("reason", reason), ("error_kind", &error_kind), ("os_code", &os_code)],
         );
         if error.kind() == std::io::ErrorKind::WouldBlock {
             "程序正在处理启动或退出，请稍后重试。".to_string()
@@ -61,6 +63,36 @@ pub fn quit_or_report(app: &AppHandle, reason: &str) {
             .kind(tauri_plugin_dialog::MessageDialogKind::Error)
             .show(|_| {});
     }
+}
+
+/// macOS's predefined Quit sends terminate: directly, bypassing the Tauri quit
+/// command. Replace the default application submenu with a custom Quit action.
+#[cfg(target_os = "macos")]
+pub fn install_application_menu(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+    let menu = Menu::default(app)?;
+    let quit = MenuItem::with_id(app, "explicit-quit", "退出网申快填", true, Some("CmdOrCtrl+Q"))?;
+    let application = Submenu::with_items(app, "网申快填", true, &[
+        &PredefinedMenuItem::about(app, None, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::services(app, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &PredefinedMenuItem::hide(app, None)?,
+        &PredefinedMenuItem::hide_others(app, None)?,
+        &PredefinedMenuItem::separator(app)?,
+        &quit,
+    ])?;
+    // Tauri's default macOS menu starts with the application submenu; retain its
+    // File/Edit/View/Window/Help menus and their standard keyboard shortcuts.
+    menu.remove_at(0)?;
+    menu.prepend(&application)?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id.as_ref() == "explicit-quit" {
+            quit_or_report(app, "native-menu");
+        }
+    });
+    Ok(())
 }
 
 /// Whether the main window has been built.

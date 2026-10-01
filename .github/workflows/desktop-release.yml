@@ -104,6 +104,7 @@ jobs:
 
       - name: Diagnostic install and launch Windows candidate (not acceptance)
         if: matrix.name == 'windows-x64'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem `
