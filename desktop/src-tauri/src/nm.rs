@@ -81,7 +81,14 @@ pub struct AppBackend {
 
 impl Backend for AppBackend {
     fn exchange(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
-        let mut stream = crate::ipc_client::connect_or_start(&self.data_root, &self.program)
+        // response_for_with has already checked the caller and envelope. Re-validate
+        // here so direct uses of this backend cannot turn malformed JSON into a resume.
+        let request = validate_request_bytes(frame).map_err(|_| "invalid launch request")?;
+        let mut stream = if request.message_type == MessageType::UiOpen {
+            crate::ipc_client::connect_with_intent(&self.data_root, &self.program, true)
+        } else {
+            crate::ipc_client::connect_or_start(&self.data_root, &self.program)
+        }
             .map_err(|e| e.to_string())?;
         crate::ipc_client::exchange(&mut stream, frame).map_err(|e| e.to_string())
     }
@@ -263,6 +270,27 @@ pub fn message_id_of(frame: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn rejected_or_malformed_open_requests_cannot_clear_an_explicit_quit() {
+        use data_service::launch_policy::LaunchGuard;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap().record_quit().unwrap();
+        let mut backend = AppBackend { data_root: dir.path().to_path_buf(), program: dir.path().join("must-not-start") };
+        let open = json!({
+            "protocolVersion": 2, "messageId": "33333333-3333-4333-8333-333333333333",
+            "clientInstanceId": "11111111-1111-4111-8111-111111111111",
+            "messageType": "ui.open", "occurredAt": "2026-09-06T12:00:00.000Z", "payload": { "view": "home" }
+        });
+        let reply = response_for_with(&serde_json::to_vec(&open).unwrap(), &Caller::Rejected("unpaired".into()), &mut backend).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&reply).unwrap()["error"]["code"], "identity_not_allowed");
+        let mut malformed = open;
+        malformed["payload"]["view"] = json!("not-a-view");
+        let reply = response_for_with(&serde_json::to_vec(&malformed).unwrap(), &Caller::Unidentified, &mut backend).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&reply).unwrap()["error"]["code"], "invalid_payload");
+        assert!(LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap().ensure_background_allowed().is_err());
+    }
 
     const HEALTH: &str = r#"{"protocolVersion":1,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"health","occurredAt":"2026-09-06T12:00:00.000Z","payload":{}}"#;
 

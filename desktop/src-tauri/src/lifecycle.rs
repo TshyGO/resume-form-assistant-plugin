@@ -1,7 +1,67 @@
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
+use data_service::launch_policy::LaunchGuard;
 use tauri::{AppHandle, Manager, WindowEvent};
+
+/// Mark the user's intent durably before any cleanup or exit request. Keep the gate
+/// locked until process death: a manual reopen must wait for this instance to finish.
+pub fn request_quit(app: &AppHandle, reason: &str) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let mut quitting = state
+        .quit_guard
+        .lock()
+        .map_err(|_| "退出状态不可用，请重试。")?;
+    if quitting.is_some() {
+        return Ok(());
+    }
+    let paths = state
+        .paths
+        .lock()
+        .map_err(|_| "无法读取数据目录。")?
+        .clone()
+        .ok_or("无法定位数据目录，未退出。")?;
+    let policy = LaunchGuard::acquire(&paths.data_root, Duration::from_secs(3)).and_then(|guard| {
+        guard.record_quit()?;
+        Ok(guard)
+    });
+    let policy = policy.map_err(|error| {
+        let _ = data_service::write_log(
+            &paths,
+            "error",
+            "APP_QUIT_STATE_FAILED",
+            &[("reason", reason)],
+        );
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            "程序正在处理启动或退出，请稍后重试。".to_string()
+        } else {
+            "无法保存退出状态，软件暂未退出。请检查数据目录权限和磁盘空间后重试。".to_string()
+        }
+    })?;
+    *quitting = Some(policy);
+    let _ = data_service::write_log(&paths, "info", "APP_QUIT", &[("reason", reason)]);
+    if let Err(error) = crate::todo_commands::cancel_all_reminders(state.reminders.as_ref()) {
+        let _ = data_service::write_log(
+            &paths,
+            "error",
+            "REMINDER_CANCEL_FAILED",
+            &[("at", reason), ("code", &error.code)],
+        );
+    }
+    app.exit(0);
+    Ok(())
+}
+
+pub fn quit_or_report(app: &AppHandle, reason: &str) {
+    if let Err(message) = request_quit(app, reason) {
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog()
+            .message(message)
+            .title("无法退出")
+            .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+            .show(|_| {});
+    }
+}
 
 /// Whether the main window has been built.
 ///

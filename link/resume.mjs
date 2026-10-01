@@ -5,7 +5,9 @@ import { validateRequest } from './protocol/validate.mjs';
 /** Read and update the desktop-owned resume without caching a plugin copy. */
 export function createResume({ session, store, sendNative, sleep, uuid, now, send = sendOnce }) {
   async function request(messageType, payload) {
-    const probe = await session.probe();
+    // ui.open is itself the explicit user request to resume. A background handshake
+    // first would be refused after quit and prevent that request ever reaching the host.
+    const probe = messageType === 'ui.open' ? { mode: 'ready', identity: null } : await session.probe();
     if (probe.mode !== 'ready') return { status: probe.mode };
     try {
       const envelope = await buildEnvelope({
@@ -19,7 +21,7 @@ export function createResume({ session, store, sendNative, sleep, uuid, now, sen
       // Validate the wire shape locally. The desktop owns profile-secret policy and
       // returns secret_forbidden, which saveProfile maps to the sidebar status.
       await validateRequest(envelope);
-      const result = await send(envelope, { sendNative, sleep });
+      const result = await send(envelope, { sendNative, sleep, retry: messageType !== 'ui.open' });
       if (result.status === 'ok') return { status: 'ok', data: result.response.payload };
       if (result.status === 'fatal') return { status: result.code === 'payload_too_large' ? 'input_too_large'
         : result.code === 'protocol_incompatible' ? 'incompatible' : result.code ?? 'unavailable' };

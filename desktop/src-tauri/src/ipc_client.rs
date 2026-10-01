@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use data_service::launch_policy::LaunchGuard;
 use local_ipc::{Endpoint, IpcError};
 
 /// How long to wait for a cold-started application to answer its endpoint.
@@ -21,12 +22,39 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(150);
 /// together. No extra mutex is needed: the single-instance rule means the extra processes
 /// exit and the winner takes `host.lock` and listens, which the others reach by retrying.
 pub fn connect_or_start(data_root: &Path, program: &Path) -> Result<local_ipc::Stream, IpcError> {
+    connect_with_intent(data_root, program, false)
+}
+
+/// Only a validated ui.open request may resume an explicitly stopped application.
+pub fn connect_with_intent(
+    data_root: &Path,
+    program: &Path,
+    manual_open: bool,
+) -> Result<local_ipc::Stream, IpcError> {
+    let policy = LaunchGuard::acquire(
+        data_root,
+        if manual_open {
+            COLD_START_TIMEOUT
+        } else {
+            Duration::ZERO
+        },
+    )?;
+    if manual_open {
+        policy.resume()?;
+        log_launch(data_root, "APP_MANUAL_RESUME", "ui.open");
+    } else if let Err(error) = policy.ensure_background_allowed() {
+        log_launch(data_root, "APP_AUTOSTART_BLOCKED", "policy");
+        return Err(error.into());
+    }
     let endpoint = Endpoint::for_data_root(data_root)?;
     match local_ipc::connect(&endpoint) {
         Ok(stream) => return Ok(stream),
         // Busy means it is running and saturated, so waiting is right and starting a
         // second one would be wrong.
-        Err(IpcError::Busy) => return wait_for(&endpoint, COLD_START_TIMEOUT),
+        Err(IpcError::Busy) => {
+            drop(policy);
+            return wait_for(data_root, &endpoint, COLD_START_TIMEOUT);
+        }
         Err(IpcError::NotRunning) => {}
         Err(other) => return Err(other),
     }
@@ -37,7 +65,15 @@ pub fn connect_or_start(data_root: &Path, program: &Path) -> Result<local_ipc::S
         // decides, so this is reported and not returned.
         eprintln!("nm-host: could not start the application: {err}");
     }
-    wait_for(&endpoint, COLD_START_TIMEOUT)
+    // The child checks again under this same lock before opening the archive. A quit
+    // that wins between spawn and child setup therefore cannot be bypassed.
+    drop(policy);
+    wait_for(data_root, &endpoint, COLD_START_TIMEOUT)
+}
+
+fn log_launch(root: &Path, code: &str, reason: &str) {
+    let paths = data_service::HostPaths::from_roots(root.to_path_buf(), root.join("cache"));
+    let _ = data_service::write_log(&paths, "info", code, &[("reason", reason)]);
 }
 
 fn start_hidden(program: &Path) -> std::io::Result<()> {
@@ -58,15 +94,31 @@ fn start_hidden(program: &Path) -> std::io::Result<()> {
 }
 
 /// Retry until the endpoint answers or the deadline passes.
-fn wait_for(endpoint: &Endpoint, budget: Duration) -> Result<local_ipc::Stream, IpcError> {
+fn wait_for(
+    data_root: &Path,
+    endpoint: &Endpoint,
+    budget: Duration,
+) -> Result<local_ipc::Stream, IpcError> {
     let deadline = Instant::now() + budget;
     loop {
+        let policy = match LaunchGuard::acquire(data_root, Duration::ZERO) {
+            Ok(policy) => policy,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(RETRY_INTERVAL);
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        policy.ensure_background_allowed()?;
         match local_ipc::connect(endpoint) {
             Ok(stream) => return Ok(stream),
             Err(IpcError::NotRunning) | Err(IpcError::Busy) => {
                 if Instant::now() >= deadline {
                     return Err(IpcError::NotRunning);
                 }
+                drop(policy);
                 std::thread::sleep(RETRY_INTERVAL);
             }
             // An untrusted or unusable endpoint will not become usable by waiting.
@@ -108,7 +160,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
         let started = Instant::now();
-        let outcome = wait_for(&endpoint, Duration::from_millis(400));
+        let outcome = wait_for(dir.path(), &endpoint, Duration::from_millis(400));
         assert!(matches!(outcome, Err(IpcError::NotRunning)));
         assert!(
             started.elapsed() >= Duration::from_millis(400),
@@ -128,7 +180,7 @@ mod tests {
         let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
         assert!(start_hidden(&missing).is_err());
         assert!(matches!(
-            wait_for(&endpoint, Duration::from_millis(200)),
+            wait_for(dir.path(), &endpoint, Duration::from_millis(200)),
             Err(IpcError::NotRunning)
         ));
     }
@@ -150,5 +202,61 @@ mod tests {
         let stream = connect_or_start(dir.path(), &impossible).unwrap();
         drop(stream);
         assert!(!impossible.exists());
+    }
+
+    #[test]
+    fn quit_blocks_repeated_hosts_without_even_waiting_for_a_cold_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        policy.record_quit().unwrap();
+        drop(policy);
+        let started = Instant::now();
+        for _ in 0..4 {
+            assert!(connect_or_start(dir.path(), &dir.path().join("missing-program")).is_err());
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "must not enter the 10-second cold-start wait"
+        );
+    }
+
+    #[test]
+    fn background_requests_cannot_reach_a_marked_but_still_listening_instance() {
+        let dir = tempfile::tempdir().unwrap();
+        struct NoArchive;
+        impl crate::ipc_server::Application for NoArchive {
+            fn identity(&self) -> Option<resume_pro_protocol::CurrentArchive> {
+                None
+            }
+        }
+        let _service =
+            crate::ipc_server::start(dir.path(), std::sync::Arc::new(NoArchive)).unwrap();
+        let policy = LaunchGuard::acquire(dir.path(), Duration::ZERO).unwrap();
+        policy.record_quit().unwrap();
+        drop(policy);
+        let program = dir.path().join("must-not-start");
+        assert!(connect_or_start(dir.path(), &program).is_err());
+        // A later manual request is allowed, and clears the persistent barrier.
+        assert!(connect_with_intent(dir.path(), &program, true).is_ok());
+        assert!(connect_or_start(dir.path(), &program).is_ok());
+    }
+
+    #[test]
+    fn a_quit_during_the_cold_start_wait_stops_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
+        std::thread::scope(|scope| {
+            let root = dir.path();
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                LaunchGuard::acquire(root, Duration::from_secs(1))
+                    .unwrap()
+                    .record_quit()
+                    .unwrap();
+            });
+            let started = Instant::now();
+            assert!(wait_for(root, &endpoint, Duration::from_secs(5)).is_err());
+            assert!(started.elapsed() < Duration::from_secs(2));
+        });
     }
 }

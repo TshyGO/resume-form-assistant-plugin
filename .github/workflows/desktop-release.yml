@@ -117,6 +117,7 @@ jobs:
           # This catches packaging/startup regressions but is explicitly ineligible as the
           # standard-user D13/T4 acceptance evidence.
           ./desktop/scripts/d13_install_acceptance.ps1 `
+            -CheckExplicitQuit `
             -Installer $installer.FullName `
             -AllowElevatedDiagnostic
 

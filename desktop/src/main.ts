@@ -227,7 +227,7 @@ must("btn-quit").addEventListener("click", () => {
   // §5.4：退出前必须告知提醒会停。关窗不会，退出会——这两件事用户分不清，
   // 所以在这里说，而不是指望他记得设置页写过。
   if (window.confirm(QUIT_WARNING)) {
-    invoke?.("quit_app");
+    invoke?.("quit_app").catch((error: unknown) => window.alert(String(error)));
   }
 });
 

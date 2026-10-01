@@ -26,9 +26,9 @@ const HOST_MISSING_MARKERS = ['host not found', 'host has not been found'];
  * It never throws for an expected failure: a queue that has to catch to decide whether to
  * retry ends up with the policy in two places.
  */
-export async function sendOnce(message, { sendNative, sleep, hostName = HOST_NAME }) {
+export async function sendOnce(message, { sendNative, sleep, hostName = HOST_NAME, retry = true }) {
   let result = await attempt(message, sendNative, hostName);
-  if (result.status === 'retryable') {
+  if (retry && result.status === 'retryable') {
     await sleep(COLD_START_RETRY_DELAY_MS);
     result = await attempt(message, sendNative, hostName);
   }

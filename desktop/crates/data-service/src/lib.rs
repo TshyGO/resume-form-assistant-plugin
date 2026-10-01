@@ -8,6 +8,7 @@
 mod error;
 mod host;
 mod logging;
+pub mod launch_policy;
 mod paths;
 mod redact;
 mod webview;
