@@ -1612,7 +1612,11 @@ pub fn run() {
                 // rather than leave an inaccessible, windowless process behind.
                 if let Err(message) = lifecycle::request_quit(app.handle(), "cli") {
                     eprintln!("{message}");
-                    app.handle().exit(1);
+                    // Wry 2.11.4 turns RequestExit(code) into ControlFlow::Exit,
+                    // losing the failure code on Windows. No writer or window has
+                    // started here, so clean up and return the CLI status directly.
+                    app.handle().cleanup_before_exit();
+                    std::process::exit(1);
                 }
                 return Ok(());
             }
