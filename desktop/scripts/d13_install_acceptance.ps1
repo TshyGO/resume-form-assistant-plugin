@@ -161,8 +161,8 @@ try {
   # The preflight above proves the install directory and registration keys were absent. From this
   # point on, any of them that appear belong to this attempt and are safe for finally to remove,
   # even when NSIS returns a non-zero exit code after writing partial state.
-  $installedThisRun = $true
   Write-Host "Install candidate"
+  $installedThisRun = $true
   $install = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru -WindowStyle Hidden
   if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
   if (-not (Test-Path -LiteralPath $installDir)) { throw "Installer did not create $installDir" }

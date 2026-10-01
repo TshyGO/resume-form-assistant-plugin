@@ -15,7 +15,10 @@ fn an_explicit_quit_survives_new_native_hosts_and_delayed_hidden_launches() {
     drop(policy);
     let handshake = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.4.1","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
     for _ in 0..3 {
-        let (code, stdout, stderr) = run_host_with_data_dir(&["--nm-host"], tmp.path(), framed(handshake));
+        // The released store extension is allowed even with a fresh pairing file.
+        // Use the same caller as the Windows installed-package diagnostic.
+        let (code, stdout, stderr) = run_host_with_data_dir(
+            &["chrome-extension://diagjmploldedipjdenmecmjokckelkl/"], tmp.path(), framed(handshake));
         assert_eq!(code, 0, "{stderr}");
         let reply: serde_json::Value = serde_json::from_slice(&stdout[4..]).unwrap();
         assert_eq!(reply["error"]["code"], "unavailable");
@@ -27,6 +30,10 @@ fn an_explicit_quit_survives_new_native_hosts_and_delayed_hidden_launches() {
     assert_eq!(code, 0);
     assert!(!tmp.path().join("archive").exists());
     assert!(tmp.path().join("explicit-quit").exists());
+    let marker = std::fs::read(tmp.path().join("explicit-quit")).unwrap();
+    let _ = run_host_with_data_dir(&["--probe"], tmp.path(), Vec::new());
+    assert_eq!(std::fs::read(tmp.path().join("explicit-quit")).unwrap(), marker,
+        "diagnostics must not clear the explicit quit state");
 }
 
 fn framed(body: &str) -> Vec<u8> {
