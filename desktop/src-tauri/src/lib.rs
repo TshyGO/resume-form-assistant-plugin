@@ -9,6 +9,7 @@ mod ai_provider_commands;
 mod ai_settings;
 mod nm_register;
 mod update_check;
+mod feedback;
 #[cfg(test)]
 mod nm_register_tests;
 mod cli;
@@ -1623,6 +1624,9 @@ pub fn run() {
             // Recheck under the launch gate after single-instance arbitration. Keep
             // it through opening the writer and endpoint, closing the delayed-child race.
             let paths = HostPaths::resolve()?;
+            let reporter = feedback::Reporter::new(paths.data_root.clone());
+            reporter.install_panic_hook();
+            app.manage(reporter);
             let startup_policy = match data_service::launch_policy::LaunchGuard::acquire(
                 &paths.data_root, std::time::Duration::from_secs(10),
             ) {
@@ -1741,6 +1745,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            feedback::feedback_status,
+            feedback::feedback_consent,
+            feedback::feedback_preview,
+            feedback::feedback_send,
+            feedback::report_frontend_error,
             get_runtime_status,
             export_diagnostics,
             save_pairing_draft,

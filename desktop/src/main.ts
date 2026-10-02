@@ -1,3 +1,5 @@
+import { installFrontendErrors } from "./feedback.ts";
+import { mountFeedbackSettings } from "./react/feedback-mount.tsx";
 import type { Invoke, RuntimeStatus } from "./api.ts";
 import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
@@ -28,6 +30,8 @@ import {
 } from "./todos.ts";
 
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
+installFrontendErrors(invoke ?? null);
+mountFeedbackSettings(must("desktop-feedback"), must("feedback-consent"), invoke ?? null);
 const pairing = createPairingController();
 const chromeInput = input("chrome-id");
 const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);
