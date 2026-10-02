@@ -79,18 +79,18 @@
     if (fieldCount === 0 || unfilledCount > 0 || editHint) return filledCount > 0 ? "fill_partial" : "fill_failed";
     return null;
   }
-  function install(send, { origin, requireOwn = false } = {}) {
+  function install(send, { origin, requireOwn = false, captureErrors = true } = {}) {
     if (!root.addEventListener) return;
     const forward = data => {
       if (requireOwn && !data.stack) return;
       try { Promise.resolve(send(data)).catch(() => {}); } catch { /* no recursive reporting */ }
     };
-    root.addEventListener("error", e => {
-      if (requireOwn && (e.isTrusted !== true || typeof e.error?.stack !== "string")) return;
+    if (captureErrors) root.addEventListener("error", e => {
+      if (requireOwn && (e.isTrusted !== true || !(e.error instanceof Error) || typeof e.error.stack !== "string" || !String(e.filename || "").startsWith(origin))) return;
       forward(exception(e.error, origin, "error", requireOwn ? "" : e.filename, e.lineno, e.colno));
     });
     root.addEventListener("unhandledrejection", e => {
-      if (requireOwn && (e.isTrusted !== true || typeof e.reason?.stack !== "string")) return;
+      if (requireOwn && (e.isTrusted !== true || !(e.reason instanceof Error) || typeof e.reason.stack !== "string")) return;
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }

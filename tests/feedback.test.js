@@ -180,14 +180,20 @@ test('content hooks reject synthetic events, filename-only errors and extension 
   vm.runInNewContext(fs.readFileSync(require.resolve('../feedback-core.js'), 'utf8'), context);
   const origin = 'chrome-extension://example/';
   context.ResumeProFeedback.install(report => reports.push(report), { origin, requireOwn: true });
-  const own = { name: 'Error', message: 'failure', stack: `Error: failure\n at test (${origin}content.js:1:2)` };
+  const makeOwnError = vm.runInContext('(message, stack) => { const error = new Error(message); error.stack = stack; return error; }', context);
+  const own = makeOwnError('failure', `Error: failure\n at test (${origin}content.js:1:2)`);
   handlers.error({ isTrusted: false, error: own, filename: origin + 'content.js', lineno: 1, colno: 2 });
   handlers.error({ isTrusted: true, filename: origin + 'content.js', lineno: 1, colno: 2 });
   handlers.unhandledrejection({ isTrusted: false, reason: own });
   const message = `pretend\n at ${origin}content.js:1:2`;
   handlers.error({ isTrusted: true, error: { name: 'Error', message, stack: `Error: ${message}\n at https://page.test/app.js:1:2` } });
   assert.equal(reports.length, 0);
-  handlers.error({ isTrusted: true, error: own }); assert.equal(reports.length, 1);
+  const foreign = new Error('forged'); foreign.stack = own.stack;
+  handlers.error({ isTrusted: true, error: foreign, filename: origin + 'content.js' });
+  handlers.unhandledrejection({ isTrusted: true, reason: foreign });
+  handlers.error({ isTrusted: true, error: own, filename: 'https://page.test/app.js' });
+  assert.equal(reports.length, 0);
+  handlers.error({ isTrusted: true, error: own, filename: origin + 'content.js' }); assert.equal(reports.length, 1);
   assert.equal(reports[0].stack, 'content.js:1:2');
 });
 
@@ -196,4 +202,18 @@ test('manual redaction removes whole sensitive headers and common unlabelled tok
     const safe = core.redact(raw);
     assert.ok(!/privateOne|privateTwo|abcdefghijkl/.test(safe), raw);
   }
+});
+
+test('the real AI worker leaves uncaught errors to its host and reports rejections once', () => {
+  const vm = require('node:vm'); const fs = require('node:fs'); const path = require('node:path');
+  const handlers = {}; const messages = [];
+  const self = { location: { href: 'chrome-extension://test/ai-worker.js' }, addEventListener: (name, fn) => { handlers[name] = fn; }, postMessage: message => messages.push(message) };
+  const context = vm.createContext({ self, console, URL, TextEncoder, AbortController, setTimeout, clearTimeout });
+  context.importScripts = (...files) => files.forEach(file => vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context));
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../ai-worker.js'), 'utf8'), context);
+  assert.equal(handlers.error, undefined);
+  handlers.unhandledrejection({ reason: { name: 'TypeError', message: 'private', stack: 'TypeError: private\n at chrome-extension://test/ai-worker.js:10:2' } });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, 'feedback-error');
+  assert.equal(messages[0].report.stack, 'ai-worker.js:10:2');
 });
