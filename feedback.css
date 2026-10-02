@@ -1,0 +1,9 @@
+.feedback-card { margin: 12px 0; padding: 14px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: #243b36; font-size: 13px; line-height: 1.6; }
+.feedback-card h2 { margin: 0 0 8px; font-size: 15px; }
+.feedback-card button { padding: 7px 12px; margin: 5px 0; border: 1px solid #91b5ad; border-radius: 6px; background: #edf6f3; color: #245e54; cursor: pointer; }
+.feedback-card button:disabled { opacity: .55; cursor: default; }
+.feedback-card label { display: block; }
+.feedback-card textarea { display: block; box-sizing: border-box; width: 100%; margin: 8px 0; padding: 8px; border: 1px solid #94a3b8; border-radius: 6px; }
+.feedback-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 10px; background: #f1f5f9; }
+.feedback-note { color: #526763; font-size: 12px; }
+.feedback-card [hidden] { display: none !important; }

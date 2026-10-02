@@ -1,4 +1,6 @@
 (function () {
+  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }),
+    { origin: chrome.runtime.getURL(""), requireOwn: true });
   const SIDEBAR_ID = "resume-pro-sidebar";
   const SIDEBAR_PANEL_ID = "resume-pro-sidebar-panel";
   const SIDEBAR_DEFAULT_TOP = 96;
@@ -1940,6 +1942,7 @@
       if (assisted) {
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
       } else if (emptyHint) {
+        hinted = true;
         // 一个都没填上：提示放最后，AI 的提醒和没填上的字段照旧列出。
         // 状态已经说要先点「编辑」了，诊断和留档就不能再写「完成」；已经是部分完成的保持不变。
         if (outcome === "success") outcome = "failed";
@@ -1985,6 +1988,15 @@
         fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls };
       if (session === fillSession) session.summary = summaryInput;
       writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
+      // Feedback cannot delay filling, archiving or releasing the busy state.
+      try {
+        const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted), cancelled: cancelRequested,
+          overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length,
+          editHint: hinted && probe?.editButtons > 0 });
+        if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
+          kind, diagnostics: self.ResumeProFeedback.diagnostics(formatFillDiagnostics(summaryInput))
+        } })).catch(() => {});
+      } catch { /* feedback is optional; never break the fill lifecycle */ }
       state.aiBusy = false;
       button.disabled = state.desktopMode !== "ready" || !hasResumeData();
       if (repeatButton) repeatButton.disabled = state.desktopMode !== "ready" || !getActiveTemplate(state.currentStore);

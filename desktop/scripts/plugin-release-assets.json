@@ -10,6 +10,7 @@
   "link/drain.mjs",
   "link/envelope.mjs",
   "link/errors.mjs",
+  "link/feedback.mjs",
   "link/extract.mjs",
   "link/fillrecords.mjs",
   "link/intents.mjs",

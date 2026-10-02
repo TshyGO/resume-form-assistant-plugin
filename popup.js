@@ -1,6 +1,7 @@
 // 插件状态页（#130 PR 5）。模板、「我的信息」和 AI 配置都搬到了桌面，这一页只说明
 // 桌面连没连上，以及 0.4.0 留下的旧数据迁到哪一步了，并提供取回与删除。
 (() => {
+  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }), { origin: chrome.runtime.getURL("") });
   const TEMPLATE_REASON = { too_large: "超过 24 KB", over_limit: "超过 25 个" };
 
   /** 桌面连接状态的文案与按钮。模式来自 service worker 的握手。 */

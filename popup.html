@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网申快填</title>
     <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="feedback.css">
   </head>
   <body>
     <main class="status-page">
@@ -33,8 +34,11 @@
         <div class="actions" id="migration-actions"></div>
       </section>
 
+      <div id="feedback-root"></div>
       <p id="toast" class="toast" role="status" hidden></p>
     </main>
+    <script src="feedback-core.js"></script>
+    <script src="feedback-ui.js"></script>
     <script src="resume-data.js"></script>
     <script src="popup.js"></script>
   </body>

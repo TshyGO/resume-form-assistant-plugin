@@ -1,4 +1,7 @@
 import { installDesktopLink } from "./link/worker.mjs";
+import { installFeedback } from "./link/feedback.mjs";
+
+installFeedback(chrome);
 
 // The desktop link owns its own message listener. It deliberately does not touch
 // chrome.action.onClicked or ENSURE_AI_HOST below: those belong to the existing plugin and

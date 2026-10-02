@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网申快填</title>
     <link rel="stylesheet" href="sidepanel.css">
+    <link rel="stylesheet" href="feedback.css">
   </head>
   <body>
     <div class="dock">
@@ -38,6 +39,7 @@
       </nav>
 
       <main class="dock-main">
+        <div id="feedback-root"></div>
         <section class="dock-view" id="fill-view" role="tabpanel" data-view="fill">
           <label for="template-select" class="dock-label">当前模板</label>
           <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
@@ -197,6 +199,8 @@
       <footer class="dock-footer"><button id="open-manager" type="button">打开桌面</button><button id="open-status" type="button">插件状态</button></footer>
       <div id="panel-toast" class="panel-toast" role="status" hidden></div>
     </div>
+    <script src="feedback-core.js"></script>
+    <script src="feedback-ui.js"></script>
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
     <script src="sidepanel-compose.js"></script>

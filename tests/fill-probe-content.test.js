@@ -292,3 +292,28 @@ for (const [label, hidden] of [
     }
   });
 }
+
+test('#208 actual fill lifecycle reports empty and rejected fields without user values; success and assisted stay silent', async () => {
+  const core = require('../feedback-core.js');
+  for (const scenario of ['empty', 'refused', 'success', 'assisted']) {
+    const sent = []; const formElements = [];
+    const { helpers, HTMLInputElement } = loadHighlightHelpers({
+      formElements, fillProbe: VIEW_PROBE, feedback: core,
+      sendMessage: async message => { sent.push(message); return { success: true, matches: [{ fieldId: 'field-0', value: '本科' }] }; }
+    });
+    if (scenario !== 'empty') {
+      const input = new HTMLInputElement(); input.name = 'degree';
+      if (scenario === 'refused' || scenario === 'assisted') refuseWrites(input);
+      formElements.push(input);
+    }
+    helpers.setCurrentStore(EDUCATION_STORE);
+    await helpers.handleAiFillClick({ currentTarget: { disabled: false } }, scenario === 'assisted' ? { report: () => {} } : null);
+    const reports = sent.filter(message => message.type === 'FEEDBACK_AUTO');
+    assert.equal(reports.length, ['empty', 'refused'].includes(scenario) ? 1 : 0, scenario);
+    if (reports.length) {
+      assert.equal(reports[0].report.kind, 'fill_failed');
+      assert.match(reports[0].report.diagnostics, /网页字段：/);
+      assert.ok(!reports[0].report.diagnostics.includes('本科'));
+    }
+  }
+});

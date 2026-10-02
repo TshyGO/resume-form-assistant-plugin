@@ -201,6 +201,7 @@ function loadHighlightHelpers(options = {}) {
       } : {}),
       runtime: {
         id: 'test-extension',
+        getURL: path => 'chrome-extension://test-extension/' + path,
         getManifest: () => ({ version: "0.2.1" }),
         onMessage: { addListener(listener) { panelMessageListener = listener; } },
         sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
@@ -214,7 +215,7 @@ function loadHighlightHelpers(options = {}) {
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
-      ResumeProFillProbe: options.fillProbe,
+      ResumeProFillProbe: options.fillProbe, ResumeProFeedback: options.feedback,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

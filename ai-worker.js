@@ -1,4 +1,5 @@
-importScripts("ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js");
+importScripts("feedback-core.js", "ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js");
+self.ResumeProFeedback?.install(report => self.postMessage({ kind: "feedback-error", report }), { origin: self.location.href.slice(0, self.location.href.lastIndexOf("/") + 1) });
 
 const AI_USER_BUDGET = 50_000;
 

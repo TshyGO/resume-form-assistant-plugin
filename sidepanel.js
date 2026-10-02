@@ -1,4 +1,5 @@
 (() => {
+  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }), { origin: chrome.runtime.getURL("") });
   const elements = {
     pageState: document.getElementById("page-state"),
     desktopConnection: document.getElementById("desktop-connection"),
