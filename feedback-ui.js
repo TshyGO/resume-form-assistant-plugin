@@ -23,12 +23,14 @@
         <button type="submit" id="feedback-send" disabled>确认发送</button>
         <button type="button" id="feedback-close">取消</button>
       </form>
+      <button type="button" id="feedback-retry" hidden>重新读取设置</button>
       <p id="feedback-status" role="status" aria-live="polite"></p>
     </section>`;
   const $ = id => document.getElementById(`feedback-${id}`);
   let token = null;
   let revision = 0;
   let busy = false;
+  let preparing = false;
   let coolUntil = 0;
   const invalidate = () => { revision++; token = null; $('send').disabled = true; $('preview').hidden = true; };
   const status = text => { $('status').textContent = text; };
@@ -36,6 +38,8 @@
     $('consent').hidden = result.consent !== null;
     $('toggle').checked = result.consent === true;
     $('toggle').disabled = result.consent === undefined;
+    $('retry').hidden = result.consent !== undefined;
+    if (result.consent === undefined) status('无法读取反馈设置，请重新读取。');
   }
   async function consent(enabled) {
     $('toggle').disabled = true;
@@ -43,6 +47,7 @@
     renderConsent(result);
     status(result.consent === undefined ? '设置未保存，请重试。' : enabled ? '已开启匿名错误报告。' : '已关闭自动上报，安装标识已删除。');
   }
+  $('retry').onclick = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
   $('enable').onclick = () => consent(true);
   $('decline').onclick = () => consent(false);
   $('toggle').onchange = () => consent($('toggle').checked);
@@ -53,7 +58,8 @@
   chrome.tabs?.onActivated?.addListener(invalidate);
   chrome.tabs?.onUpdated?.addListener((_id, change) => { if (change.url || change.status === 'loading') invalidate(); });
   $('preview-button').onclick = async () => {
-    if (busy) return;
+    if (busy || preparing) return;
+    preparing = true; $('preview-button').disabled = true;
     invalidate(); const current = revision;
     let diagnostics = ''; let tabId;
     try {
@@ -74,6 +80,7 @@
       $('send').disabled = Date.now() < coolUntil;
       status(diagnostics ? '请核对预览，确认后发送。' : '未附上填写诊断。请核对预览，确认后发送。');
     } catch { status('无法读取填写诊断，请重试或取消勾选。'); }
+    finally { preparing = false; $('preview-button').disabled = busy; }
   };
   $('form').onsubmit = async event => {
     event.preventDefault();
@@ -82,8 +89,9 @@
     $('description').disabled = true; $('attach').disabled = true;
     coolUntil = Date.now() + 60000; status('正在发送…');
     const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
+    if (result.reason === 'preview') coolUntil = 0;
     busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = false;
-    status(result.ok ? `发送成功，编号：${result.id}` : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒。' : '发送失败，没有自动重试。请稍后重新预览并发送。');
+    status(result.ok ? `发送成功，编号：${result.id}` : result.reason === 'preview' ? '预览已过期或后台已重启，请重新预览后确认发送。' : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒。' : '发送失败，没有自动重试。请稍后重新预览并发送。');
     setTimeout(() => { if (token && !busy) $('send').disabled = false; }, Math.max(0, coolUntil - Date.now()));
   };
   send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
