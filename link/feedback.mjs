@@ -117,7 +117,7 @@ export function installFeedback(api) {
         const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics) };
         let host = '';
         if (Number.isInteger(message.tabId)) {
-          const tab = await api.tabs.get(message.tabId); host = core.hostname(tab.url);
+          const tab = await api.tabs.get(message.tabId).catch(() => null); host = core.hostname(tab?.url);
         }
         const token = crypto.randomUUID();
         for (const [key, item] of previews) if (Date.now() - item.time > 600000 || item.owner === owner) previews.delete(key);

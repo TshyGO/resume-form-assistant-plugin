@@ -146,6 +146,10 @@ test('router rejects foreign senders and binds exact previews to one privileged 
     assert.equal((await message({ type: 'FEEDBACK_SEND', token: draft.token, description: 'unreviewed' })).ok, true);
     assert.deepEqual(calls[1], draft.payload);
     assert.equal((await message({ type: 'FEEDBACK_SEND', token: draft.token })).ok, false);
+    api.tabs.get = async () => { throw new Error('tab closed'); };
+    const closed = await message({ type: 'FEEDBACK_PREVIEW', description: '仍能反馈', tabId: 1 });
+    assert.equal(closed.ok, true);
+    assert.ok(!closed.payload.user_description.includes('网站:'));
   } finally { global.fetch = originalFetch; }
 });
 
