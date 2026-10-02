@@ -3,7 +3,7 @@
   const root = document.getElementById('feedback-root');
   if (!root) return;
   const core = self.ResumeProFeedback;
-  const send = data => chrome.runtime.sendMessage(data).catch(() => ({ ok: false, reason: 'unavailable' }));
+  const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
   root.innerHTML = `
     <section class="feedback-card" id="feedback-consent" hidden aria-label="错误报告选择">
       <h2>帮助改进填写</h2><p>出错时自动发送匿名错误报告？包含错误类型、代码位置、版本、系统和出错网站的域名；一键填写有字段没填上时，还会附上填写诊断（字段名和控件结构）。不含简历、填写内容和完整网址。</p>
@@ -27,12 +27,18 @@
       <p id="feedback-status" role="status" aria-live="polite"></p>
     </section>`;
   const $ = id => document.getElementById(`feedback-${id}`);
+  const hasDiagnostics = location.pathname.endsWith('/sidepanel.html');
+  if (!hasDiagnostics) {
+    $('attach').checked = false; $('attach').disabled = true;
+    $('attach').parentElement.append('（请在侧栏附上填写诊断）');
+  }
   let token = null;
+  let previewTabId;
   let revision = 0;
   let busy = false;
   let preparing = false;
   let coolUntil = 0;
-  const invalidate = () => { revision++; token = null; $('send').disabled = true; $('preview').hidden = true; };
+  const invalidate = () => { revision++; token = null; previewTabId = undefined; $('send').disabled = true; $('preview').hidden = true; };
   const status = text => { $('status').textContent = text; };
   function renderConsent(result) {
     $('consent').hidden = result.consent !== null;
@@ -55,17 +61,19 @@
   $('close').onclick = () => { if (busy) return; $('form').hidden = true; invalidate(); };
   $('description').oninput = invalidate;
   $('attach').onchange = invalidate;
-  chrome.tabs?.onActivated?.addListener(invalidate);
-  chrome.tabs?.onUpdated?.addListener((_id, change) => { if (change.url || change.status === 'loading') invalidate(); });
+  chrome.tabs?.onActivated?.addListener(() => { if (hasDiagnostics && $('attach').checked) invalidate(); });
+  chrome.tabs?.onUpdated?.addListener((id, change) => { if (id === previewTabId && (change.url || change.status === 'loading')) invalidate(); });
   $('preview-button').onclick = async () => {
     if (busy || preparing) return;
     preparing = true; $('preview-button').disabled = true;
     invalidate(); const current = revision;
     let diagnostics = ''; let tabId;
     try {
-      if ($('attach').checked && location.pathname.endsWith('/sidepanel.html')) {
+      if ($('attach').checked && hasDiagnostics) {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (current !== revision) return;
         tabId = tab?.id;
+        previewTabId = tabId;
         if (Number.isInteger(tabId)) {
           const page = await chrome.tabs.sendMessage(tabId, { type: 'RESUME_PANEL_STATUS' }).catch(() => null);
           diagnostics = core.diagnostics(page?.diagnostics || '');
@@ -90,7 +98,7 @@
     coolUntil = Date.now() + 60000; status('正在发送…');
     const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
     if (result.reason === 'preview') coolUntil = 0;
-    busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = false;
+    busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = !hasDiagnostics;
     status(result.ok ? `发送成功，编号：${result.id}` : result.reason === 'preview' ? '预览已过期或后台已重启，请重新预览后确认发送。' : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒。' : '发送失败，没有自动重试。请稍后重新预览并发送。');
     setTimeout(() => { if (token && !busy) $('send').disabled = false; }, Math.max(0, coolUntil - Date.now()));
   };
