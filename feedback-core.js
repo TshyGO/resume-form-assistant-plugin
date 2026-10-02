@@ -1,4 +1,5 @@
-// Shared by isolated content scripts, extension pages and the service worker.
+// Classic script shared by content scripts/pages/worker and imported for side effects.
+// Do not add ESM exports: content scripts and importScripts require classic syntax.
 // Automatic reports never carry arbitrary exception messages or object serialization.
 (function (root) {
   const TYPES = new Set(["Error", "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "AggregateError"]);
@@ -8,6 +9,8 @@
     return String(value ?? "").slice(0, 40000).normalize("NFKC")
       .replace(/(?:[A-Za-z]:[\\/]Users[\\/]|\/(?:Users|home)\/)[^\s\\/]+/gi, "[用户目录]")
       .replace(/(?:(?:Bearer|Basic)\s+\S+|(?:sk|oc_sk|key|token)[-_][A-Za-z0-9_-]{8,})/gi, "[凭据]")
+      .replace(/(?:^|\n)\s*(?:cookie|set-cookie|authorization)\s*:\s*[^\n]*/gi, "\n[敏感请求头]")
+      .replace(/(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})/g, "[凭据]")
       .replace(/["']?(?:api[-_ ]?key|authorization|cookie|password|secret|(?:auth|access|refresh|id)[-_ ]?token|token|密码|姓名|联系人)["']?\s*[:=：]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n;；,}]+)/gi, "[敏感信息]")
       .replace(/https?:\/\/[^\s<>"'）)]+/gi, "[网址]")
       .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[邮箱]")
@@ -25,9 +28,9 @@
   function frames(stack, origin) {
     const found = [];
     for (const line of String(stack ?? "").slice(0, 40000).split("\n")) {
-      const start = line.indexOf(origin);
-      if (start < 0) continue;
-      const match = /^([^\s?#():]+):(\d{1,6}):(\d{1,6})/.exec(line.slice(start + origin.length));
+      const frame = /^\s*at (?:[^()\n]+ \()?([^\s()]+)\)?\s*$/.exec(line);
+      if (!frame || !frame[1].startsWith(origin)) continue;
+      const match = /^([^\s?#():]+):(\d{1,6}):(\d{1,6})$/.exec(frame[1].slice(origin.length));
       if (match && FILES.test(match[1])) found.push(`${match[1]}:${match[2]}:${match[3]}`);
       if (found.length === 20) break;
     }
@@ -35,7 +38,10 @@
   }
   function exception(error, origin, source = "error", filename = "", line = 0, column = 0) {
     const name = TYPES.has(error?.name) ? error.name : "Error";
-    const stack = frames(error?.stack || (filename ? `${filename}:${Number(line) || 0}:${Number(column) || 0}` : ""), origin);
+    let raw = typeof error?.stack === "string" ? error.stack : "";
+    const header = typeof error?.message === "string" ? `${error.name || "Error"}: ${error.message}` : "";
+    if (header && raw.startsWith(header)) raw = raw.slice(header.length);
+    const stack = frames(raw || (filename ? `at ${filename}:${Number(line) || 0}:${Number(column) || 0}` : ""), origin);
     return { kind: "exception", name, source: source === "unhandledrejection" ? source : "error", stack };
   }
   // Parse the local #206 text into a closed vocabulary. In particular, unknown labels,
@@ -79,8 +85,14 @@
       if (requireOwn && !data.stack) return;
       try { Promise.resolve(send(data)).catch(() => {}); } catch { /* no recursive reporting */ }
     };
-    root.addEventListener("error", e => forward(exception(e.error, origin, "error", e.filename, e.lineno, e.colno)));
-    root.addEventListener("unhandledrejection", e => forward(exception(e.reason, origin, "unhandledrejection")));
+    root.addEventListener("error", e => {
+      if (requireOwn && (e.isTrusted !== true || typeof e.error?.stack !== "string")) return;
+      forward(exception(e.error, origin, "error", requireOwn ? "" : e.filename, e.lineno, e.colno));
+    });
+    root.addEventListener("unhandledrejection", e => {
+      if (requireOwn && (e.isTrusted !== true || typeof e.reason?.stack !== "string")) return;
+      forward(exception(e.reason, origin, "unhandledrejection"));
+    });
   }
   const api = { redact, hostname, os, frames, exception, diagnostics, fillFailure, install };
   root.ResumeProFeedback = api;
