@@ -81,6 +81,33 @@ test('offscreen host relays desktop AI requests and cancellation', async () => {
   assert.equal(sent[1].type, 'DESKTOP_AI_CANCEL');
 });
 
+test('feedback failures cannot interrupt worker failure cleanup after extension context loss', () => {
+  for (const failure of ['getURL', 'sendMessage']) {
+    let listener, worker, invalidated = false;
+    class MockWorker { constructor() { worker = this; } postMessage() {} }
+    const context = vm.createContext({ Worker: MockWorker,
+      ResumeProFeedback: { install() {}, exception: () => ({ type: 'exception' }) },
+      chrome: { runtime: {
+        getURL: () => { if (invalidated && failure === 'getURL') throw new Error('context invalidated'); return 'chrome-extension://test/'; },
+        sendMessage: () => { throw new Error('context invalidated'); },
+        onMessage: { addListener(fn) { listener = fn; } }
+      } }
+    });
+    vm.runInContext(source('ai-host.js'), context);
+    const replies = [];
+    listener({ type: 'AI_FILL' }, {}, reply => replies.push(reply));
+    listener({ type: 'AI_EXTRACT_JOB' }, {}, reply => replies.push(reply));
+    invalidated = true;
+    assert.doesNotThrow(() => worker.onmessage({ data: { kind: 'feedback-error', report: {} } }));
+    assert.doesNotThrow(() => worker.onerror());
+    assert.equal(replies.length, 2);
+    assert.ok(replies.every(reply => reply.success === false));
+    worker.onerror();
+    assert.equal(replies.length, 2, 'pending responses are cleared');
+    listener({ type: 'AI_HOST_READY' }, {}, reply => assert.equal(reply.ready, false));
+  }
+});
+
 test('client cancellation waits for startup and original dispatch rather than racing the host', async () => {
   let ready, complete;
   const calls = [];
