@@ -164,3 +164,12 @@ test('disabling aborts active automatic reports and blocks subsequent attempts',
   assert.equal((await sending).ok, false);
   assert.equal((await f.service.automatic({ ...crash, stack: 'content.js:200:1' })).reason, 'suppressed');
 });
+
+
+test('manual redaction removes quoted JSON tokens and Basic credentials before preview', async () => {
+  const f = await fixture();
+  for (const description of ['{"authToken":"privateCredential"}', '{"token":"privateCredential"}', 'Basic privateCredential', 'access_token=privateCredential', '{"apiKey":"privateCredential"}', "'password': 'privateCredential'"]) {
+    const preview = f.service.preview({ description });
+    assert.ok(!preview.user_description.includes('privateCredential'), description);
+  }
+});

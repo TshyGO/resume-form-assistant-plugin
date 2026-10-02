@@ -7,8 +7,8 @@
   function redact(value, limit = 5000) {
     return String(value ?? "").slice(0, 40000).normalize("NFKC")
       .replace(/(?:[A-Za-z]:[\\/]Users[\\/]|\/(?:Users|home)\/)[^\s\\/]+/gi, "[用户目录]")
-      .replace(/(?:Bearer\s+\S+|(?:sk|oc_sk|key|token)[-_][A-Za-z0-9_-]{8,})/gi, "[凭据]")
-      .replace(/(?:api[-_ ]?key|authorization|cookie|密码|姓名|联系人)\s*[:=：]\s*[^\n;；]+/gi, "[敏感信息]")
+      .replace(/(?:(?:Bearer|Basic)\s+\S+|(?:sk|oc_sk|key|token)[-_][A-Za-z0-9_-]{8,})/gi, "[凭据]")
+      .replace(/["']?(?:api[-_ ]?key|authorization|cookie|password|secret|(?:auth|access|refresh|id)[-_ ]?token|token|密码|姓名|联系人)["']?\s*[:=：]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n;；,}]+)/gi, "[敏感信息]")
       .replace(/https?:\/\/[^\s<>"'）)]+/gi, "[网址]")
       .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[邮箱]")
       .replace(/\d(?:[\s().+_-]*\d){4,}[xX]?/g, "[数字]")
