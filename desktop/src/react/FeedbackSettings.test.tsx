@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Invoke } from "../api.ts";
 import { FeedbackSettings } from "./FeedbackSettings.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
@@ -37,8 +37,8 @@ test('editing invalidates preview and a stale async response cannot enable sendi
   fireEvent.click(screen.getByRole('button', { name: '反馈问题' }));
   fireEvent.click(screen.getByRole('button', { name: '预览将发送的内容' }));
   fireEvent.change(screen.getByLabelText(/问题描述/), { target: { value: '新描述' } });
-  finish(draft);
-  await waitFor(() => expect(screen.queryByText(/random-test-id/)).toBeNull());
+  await act(async () => { finish(draft); });
+  expect(screen.queryByText(/random-test-id/)).toBeNull();
   expect((screen.getByRole('button', { name: '确认发送' }) as HTMLButtonElement).disabled).toBe(true);
 });
 test('failed manual feedback is explicit and cannot resend without a new preview', async () => {
@@ -65,4 +65,13 @@ test('window hooks and React boundary report only safe app frames without except
   render(<ErrorBoundary invoke={invoke}><Crash /></ErrorBoundary>);
   await screen.findByRole('alert'); expect(screen.getByRole('button', { name: '重新显示' })).toBeTruthy();
   expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toMatch(/张三|secret|private.test|API response/);
+});
+
+test('consent save failure stays visible in the choice card while privacy panel is hidden', async () => {
+  const portal = document.createElement('div'); document.body.append(portal);
+  const invoke = vi.fn((name: string) => name === 'feedback_status' ? Promise.resolve({ consent: null }) : Promise.reject(new Error('disk'))) as Invoke;
+  const { unmount } = render(<div hidden><FeedbackSettings invoke={invoke} consentContainer={portal} /></div>);
+  fireEvent.click(await within(portal).findByRole('button', { name: '开启' }));
+  expect((await within(portal).findByRole('alert')).textContent).toBe('设置未能保存，请重试。');
+  unmount(); portal.remove();
 });

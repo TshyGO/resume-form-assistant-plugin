@@ -107,11 +107,11 @@ pub fn redact(value: &str) -> String {
             "[用户目录]",
         ),
         (
-            r"(?i)(?:Bearer\s+\S+|(?:sk|oc_sk|key|token)[-_][A-Za-z0-9_-]{8,})",
+            r"(?i)(?:(?:Bearer|Basic)\s+\S+|(?:sk|oc_sk|key|token)[-_][A-Za-z0-9_-]{8,})",
             "[凭据]",
         ),
         (
-            r"(?i)(?:api[-_ ]?key|authorization|cookie|密码|姓名|联系人)\s*[:=：]\s*[^\n;；]+",
+            r#"(?i)["']?(?:api[-_ ]?key|authorization|cookie|password|secret|(?:auth|access|refresh|id)[-_ ]?token|token|密码|姓名|联系人)["']?\s*[:=：]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n;；,}]+)"#,
             "[敏感信息]",
         ),
         (r#"(?i)https?://[^\s<>"'）)]+"#, "[网址]"),
@@ -635,6 +635,27 @@ mod tests {
             ""
         );
         assert_eq!(redact(&"测".repeat(1400)).chars().count(), 1400);
+    }
+    #[test]
+    fn preview_redacts_json_and_basic_credentials() {
+        let (_dir, reporter) = reporter();
+        for text in [
+            r#"{"authToken":"privateCredential"}"#,
+            r#"{"token":"privateCredential"}"#,
+            r#"{"apiKey":"privateCredential"}"#,
+            "Basic privateCredential",
+            "access_token=privateCredential",
+            "'password': 'privateCredential'",
+        ] {
+            let preview = reporter.preview(text).unwrap();
+            assert!(
+                !preview
+                    .payload
+                    .user_description
+                    .contains("privateCredential"),
+                "{text}"
+            );
+        }
     }
     #[tokio::test]
     async fn sends_exact_manual_preview_while_disabled_with_explicit_ua() {

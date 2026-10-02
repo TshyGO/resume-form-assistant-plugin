@@ -7,6 +7,7 @@ type Preview = { token: string; payload: Record<string, unknown> };
 type Receipt = { ok: boolean; id?: string; reason?: string };
 export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke | null; consentContainer?: Element }) {
   const [consent, setConsent] = useState<boolean | null | undefined>(undefined);
+  const [consentError, setConsentError] = useState("");
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState("");
@@ -24,9 +25,9 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
   }, [invoke]);
   async function changeConsent(enabled: boolean) {
     if (!invoke || saving) return;
-    setSaving(true);
+    setSaving(true); setConsentError("");
     try { const result = await invoke<Status>("feedback_consent", { enabled }); setConsent(result.consent); setStatus(enabled ? "已开启匿名错误报告。" : "已关闭自动上报，安装标识已删除。"); }
-    catch { setStatus("设置未能保存，请重试。"); }
+    catch { setConsentError("设置未能保存，请重试。"); setStatus("设置未能保存，请重试。"); }
     finally { setSaving(false); }
   }
   function invalidate() { revision.current++; setPreview(null); }
@@ -51,6 +52,7 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
   const choice = consent === null ? <section className="feedback-choice" aria-label="错误报告选择">
     <h2>帮助改进网申快填</h2><p>出错时自动发送匿名错误报告？包含错误类型、代码位置、版本和系统。不含简历、填写内容和完整网址。</p>
     <button type="button" disabled={saving} onClick={() => void changeConsent(true)}>开启</button>{" "}<button type="button" disabled={saving} onClick={() => void changeConsent(false)}>暂不</button>
+    {consentError && <p role="alert">{consentError}</p>}
   </section> : null;
   return <>
     {consentContainer ? createPortal(choice, consentContainer) : choice}
