@@ -99,11 +99,13 @@ jobs:
         run: node desktop/scripts/check-desktop-release.js --dist desktop/dist
 
       - name: Build installer
+        id: installer
         working-directory: desktop
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       - name: Diagnostic install and launch Windows candidate (not acceptance)
         if: matrix.name == 'windows-x64'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem `
@@ -117,10 +119,12 @@ jobs:
           # This catches packaging/startup regressions but is explicitly ineligible as the
           # standard-user D13/T4 acceptance evidence.
           ./desktop/scripts/d13_install_acceptance.ps1 `
+            -CheckExplicitQuit `
             -Installer $installer.FullName `
             -AllowElevatedDiagnostic
 
       - name: Collect artifacts and checksums
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -142,6 +146,7 @@ jobs:
           node desktop/scripts/check-desktop-release.js --assets dist-release --write-checksums
 
       - name: Upload artifacts
+        if: ${{ !cancelled() && steps.installer.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.name }}

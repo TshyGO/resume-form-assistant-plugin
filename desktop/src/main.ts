@@ -224,10 +224,15 @@ must("pairing-form").addEventListener("submit", async (event) => {
 
 must("btn-hide").addEventListener("click", () => invoke?.("hide_main_window_cmd"));
 must("btn-quit").addEventListener("click", () => {
+  const errorLine = must("quit-error");
+  errorLine.hidden = true;
   // §5.4：退出前必须告知提醒会停。关窗不会，退出会——这两件事用户分不清，
   // 所以在这里说，而不是指望他记得设置页写过。
   if (window.confirm(QUIT_WARNING)) {
-    invoke?.("quit_app");
+    invoke?.("quit_app").catch((error: unknown) => {
+      errorLine.textContent = String(error);
+      errorLine.hidden = false;
+    });
   }
 });
 

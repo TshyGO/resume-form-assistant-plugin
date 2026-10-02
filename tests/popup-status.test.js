@@ -15,7 +15,7 @@ const { modeCopy } = require('../resume-data.js');
 test('the desktop card mirrors the side panel downgrade states', () => {
   const { describeDesktop } = page();
   assert.deepEqual(JSON.parse(JSON.stringify(describeDesktop('ready', modeCopy))), { text: '已连接桌面程序。', action: null, canOpen: true });
-  for (const [mode, kind] of [['not_installed', 'download'], ['not_paired', 'pair'], ['incompatible', 'download'], ['unavailable', 'retry']]) {
+  for (const [mode, kind] of [['not_installed', 'download'], ['not_paired', 'pair'], ['incompatible', 'download'], ['unavailable', 'home']]) {
     const view = describeDesktop(mode, modeCopy);
     assert.equal(view.action.kind, kind, mode);
     assert.equal(view.canOpen, false);

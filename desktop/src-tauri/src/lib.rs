@@ -51,6 +51,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub use cli::prepare_stdio;
 
 struct AppState {
+    /// Held from a durable explicit quit until the process exits (#210).
+    quit_guard: Mutex<Option<data_service::launch_policy::LaunchGuard>>,
     host: Mutex<Option<DataHost>>,
     host_error: Mutex<Option<HostErrorDto>>,
     paths: Mutex<Option<HostPaths>>,
@@ -1365,27 +1367,8 @@ fn take_requested_view_cmd(state: State<'_, AppState>) -> Option<String> {
 }
 
 #[tauri::command]
-fn quit_app(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    // 主动退出默认撤销尚未触发的提醒：进程走了就别留下会替它说话的东西。
-    // 界面在按下退出之前已经告知过这一点（PR6 的文案）。
-    let cancelled = todo_commands::cancel_all_reminders(state.reminders.as_ref());
-    if let Ok(paths) = state.paths.lock() {
-        if let Some(paths) = paths.as_ref() {
-            let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "explicit")]);
-            // 撤销失败就意味着我们刚跟用户说的「退出后不会弹提醒」不成立。
-            // 拦不住退出，但至少要在诊断里留下痕迹，别让它无声无息。
-            if let Err(error) = &cancelled {
-                let _ = write_log(
-                    paths,
-                    "error",
-                    "REMINDER_CANCEL_FAILED",
-                    &[("at", "quit"), ("code", &error.code)],
-                );
-            }
-        }
-    }
-    app.exit(0);
-    Ok(())
+fn quit_app(app: AppHandle) -> Result<(), String> {
+    lifecycle::request_quit(&app, "explicit")
 }
 
 fn configure_webview_cache() {
@@ -1552,9 +1535,33 @@ pub fn run() {
     }
 
     configure_webview_cache();
+    let context = tauri::generate_context!();
 
     let hidden_launch = args.hidden;
     let quit_launch = args.quit;
+    if !quit_launch {
+        // Do this before single-instance dispatch: a manual launch during shutdown
+        // waits for the retiring process instead of being swallowed by that instance.
+        let allowed = HostPaths::resolve().map_err(|e| e.to_string()).and_then(|paths| {
+            let policy = data_service::launch_policy::LaunchGuard::acquire(
+                &paths.data_root, std::time::Duration::from_secs(10),
+            ).map_err(|e| e.to_string())?;
+            if hidden_launch {
+                policy.ensure_background_allowed().map_err(|e| e.to_string())
+            } else {
+                policy.resume().map_err(|e| e.to_string())?;
+                let _ = write_log(&paths, "info", "APP_MANUAL_RESUME", &[("reason", "launch")]);
+                Ok(())
+            }
+        });
+        if let Err(error) = allowed {
+            eprintln!("launch blocked: {error}");
+            if !hidden_launch {
+                lifecycle::report_launch_failure(context);
+            }
+            return;
+        }
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1563,14 +1570,7 @@ pub fn run() {
             let wants_probe = argv.iter().any(|a| a == "--probe");
             let wants_quit = argv.iter().any(|a| a == "--quit");
             if wants_quit {
-                if let Some(state) = app.try_state::<AppState>() {
-                    if let Ok(paths) = state.paths.lock() {
-                        if let Some(paths) = paths.as_ref() {
-                            let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "cli")]);
-                        }
-                    }
-                }
-                app.exit(0);
+                lifecycle::quit_or_report(app, "cli");
                 return;
             }
             if !wants_hidden && !wants_probe {
@@ -1589,6 +1589,7 @@ pub fn run() {
             }
         }))
         .manage(AppState {
+            quit_guard: Mutex::new(None),
             host: Mutex::new(None),
             ipc: Mutex::new(None),
             main_window: lifecycle::MainWindowReady::default(),
@@ -1606,6 +1607,35 @@ pub fn run() {
         })
         .setup(move |app| {
             if quit_launch {
+                // No writer/window exists in this first-instance CLI path. Unlike a
+                // running application's failed quit, the command must fail and exit
+                // rather than leave an inaccessible, windowless process behind.
+                if let Err(message) = lifecycle::request_quit(app.handle(), "cli") {
+                    eprintln!("{message}");
+                    // Wry 2.11.4 turns RequestExit(code) into ControlFlow::Exit,
+                    // losing the failure code on Windows. No writer or window has
+                    // started here, so clean up and return the CLI status directly.
+                    app.handle().cleanup_before_exit();
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            // Recheck under the launch gate after single-instance arbitration. Keep
+            // it through opening the writer and endpoint, closing the delayed-child race.
+            let paths = HostPaths::resolve()?;
+            let startup_policy = match data_service::launch_policy::LaunchGuard::acquire(
+                &paths.data_root, std::time::Duration::from_secs(10),
+            ) {
+                Ok(policy) => policy,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let _ = write_log(&paths, "info", "APP_AUTOSTART_BLOCKED", &[("reason", "startup-busy")]);
+                    app.handle().exit(0);
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if startup_policy.ensure_background_allowed().is_err() {
+                let _ = write_log(&paths, "info", "APP_AUTOSTART_BLOCKED", &[("reason", "startup")]);
                 app.handle().exit(0);
                 return Ok(());
             }
@@ -1678,6 +1708,7 @@ pub fn run() {
                 }
             }
 
+            drop(startup_policy);
             // 浏览器要靠这份清单才找得到 host。放在这里：paths 已经有了，窗口还没显示。
             refresh_native_messaging(&app.state::<AppState>());
 
@@ -1698,6 +1729,8 @@ pub fn run() {
 
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
+            #[cfg(target_os = "macos")]
+            lifecycle::install_application_menu(app.handle())?;
 
             if hidden_launch {
                 lifecycle::hide_main_window(app.handle());
@@ -1818,7 +1851,7 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running 网申快填");
 }
 
@@ -1833,28 +1866,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => lifecycle::show_main_window(app),
             "quit" => {
-                if let Some(state) = app.try_state::<AppState>() {
-                    if let Ok(paths) = state.paths.lock() {
-                        if let Some(paths) = paths.as_ref() {
-                            let _ = write_log(paths, "info", "APP_QUIT", &[("reason", "tray")]);
-                        }
-                    }
-                    // 和设置页那个退出走同一条路：撤销所有还没到点的提醒。
-                    if let Err(error) = todo_commands::cancel_all_reminders(state.reminders.as_ref())
-                    {
-                        if let Ok(paths) = state.paths.lock() {
-                            if let Some(paths) = paths.as_ref() {
-                                let _ = write_log(
-                                    paths,
-                                    "error",
-                                    "REMINDER_CANCEL_FAILED",
-                                    &[("at", "tray"), ("code", &error.code)],
-                                );
-                            }
-                        }
-                    }
-                }
-                app.exit(0);
+                lifecycle::quit_or_report(app, "tray");
             }
             _ => {}
         })

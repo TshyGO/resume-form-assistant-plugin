@@ -1591,6 +1591,7 @@
     if (kind === "retry") { await loadStore(); return; }
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: kind === "resume" ? "resume" : kind === "settings-ai" ? "settings-ai" : "home" });
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
+    else await loadStore();
   }
   elements.desktopConnectionAction.addEventListener("click", () => desktopAction(elements.desktopConnectionAction.dataset.kind).catch(() => toast("当前操作不可用。")));
   document.getElementById("open-manager").addEventListener("click", () => {

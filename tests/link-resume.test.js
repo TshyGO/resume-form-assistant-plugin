@@ -71,10 +71,41 @@ test('local envelope overflow returns an actionable profile status without sendi
   assert.equal(sent.length, 0);
 });
 
-test('ui.open probes mode but sends no archive identity', async () => {
+test('ui.open sends no archive identity', async () => {
   const { resume, sent } = await harness({ answer: () => ({ ok: true, payload: { opened: true } }) });
   assert.deepEqual(await resume.openView('settings-ai'), { status: 'ok', opened: true });
   assert.equal(sent[0].messageType, 'ui.open');
   assert.equal('archiveId' in sent[0], false);
   assert.deepEqual(sent[0].payload, { view: 'settings-ai' });
+});
+
+test('an explicit open reaches the host even when background probes cannot reach the desktop', async () => {
+  const { createResume } = await import('../link/resume.mjs');
+  const sent = [];
+  const resume = createResume({
+    session: { probe: async () => { throw new Error('a background probe must not precede a manual open'); } },
+    store: { clientInstanceId: async () => '11111111-1111-4111-8111-111111111111' },
+    sendNative: async (_host, request) => {
+      sent.push(request);
+      return { response: { protocolVersion: 2, correlationId: request.messageId, ok: true, payload: { opened: true } } };
+    },
+    sleep: async () => {}, uuid: () => '33333333-3333-4333-8333-333333333333',
+    now: () => new Date('2026-09-24T00:00:00.000Z')
+  });
+  assert.deepEqual(await resume.openView('resume'), { status: 'ok', opened: true });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].messageType, 'ui.open');
+  assert.equal(sent[0].payload.view, 'resume');
+});
+
+test('an unavailable manual open is not replayed after the user might have quit again', async () => {
+  const { resume, sent } = await harness({ answer: () => ({ ok: false, payload: {}, error: { code: 'unavailable', retryable: true, message: 'stopped' } }) });
+  assert.deepEqual(await resume.openView('home'), { status: 'unavailable' });
+  assert.equal(sent.length, 1);
+});
+
+test('invalid open views are rejected before they can clear the quit state', async () => {
+  const { resume, sent } = await harness();
+  assert.deepEqual(await resume.openView('not-a-view'), { status: 'unavailable' });
+  assert.equal(sent.length, 0);
 });

@@ -179,6 +179,16 @@ test('footer opens desktop, and missing desktop offers the download URL', async 
   assert.deepEqual(unpaired.copied, ['diagjmploldedipjdenmecmjokckelkl']);
 });
 
+test('an unavailable desktop offers an explicit open rather than another background probe', async () => {
+  const ui = await harness({ status: 'unavailable' });
+  assert.equal(ui.get('desktop-connection-action').textContent, '打开桌面');
+  ui.calls.length = 0;
+  await ui.get('desktop-connection-action').listeners.click();
+  assert.equal(ui.calls[0].type, 'DESKTOP_OPEN_VIEW');
+  assert.equal(ui.calls[0].view, 'home');
+  assert.ok(ui.calls.some(call => call.type === 'DESKTOP_RESUME_READ'));
+});
+
 test('a desktop not-configured response exposes the AI settings action', async () => {
   const ui = await harness();
   ui.setPageResponse({ ready: true, status: '请查看 AI 设置。', statusKind: 'error', openView: 'settings-ai' });

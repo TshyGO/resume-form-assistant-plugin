@@ -73,6 +73,7 @@
   async function openView(view) {
     const result = await send({ type: "DESKTOP_OPEN_VIEW", view });
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
+    else await renderDesktop();
   }
 
   async function renderDesktop() {
@@ -167,6 +168,7 @@
       await navigator.clipboard.writeText(chrome.runtime.id).catch(() => {});
       toast("扩展 ID 已复制，请在桌面「设置 → 浏览器连接」里粘贴完成配对。");
     } else if (kind === "resume") await openView("resume");
+    else if (kind === "home") await openView("home");
     else await renderDesktop();
   });
   $("desktop-open").addEventListener("click", () => openView("home"));

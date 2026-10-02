@@ -249,6 +249,38 @@ test('the queue survives a browser restart and keeps draining', async () => {
   assert.deepEqual(storage.data.desktopSaveIntents, []);
 });
 
+test('explicit quit preserves queued payloads across retries and browser restart until resume', async () => {
+  const storage = fakeStorage();
+  const first = await harness({
+    storage,
+    desktop: message => message.messageType === 'handshake' ? handshakeReply(message) : unavailable(message)
+  });
+  await bindOne(first);
+  await first.store.setPairing({ ...IDENTITY, at: 1 });
+  const queued = structuredClone(storage.data.desktopOutbox);
+  const intents = structuredClone(storage.data.desktopSaveIntents);
+  let stopped = true;
+  const restarted = await harness({
+    storage,
+    clock: { value: first.clock.value + 60_000 },
+    desktop: message => stopped ? unavailable(message)
+      : message.messageType === 'handshake' ? handshakeReply(message) : saved(message)
+  });
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await restarted.drain.run()).mode, 'unavailable');
+    assert.deepEqual(storage.data.desktopOutbox, queued);
+    assert.deepEqual(storage.data.desktopSaveIntents, intents);
+    restarted.clock.value += 60_000;
+  }
+  assert.ok(restarted.sent.every(message => message.messageType === 'handshake'),
+    'background drain must never issue ui.open');
+  stopped = false; // A separate explicit user open has resumed the desktop.
+  assert.equal((await restarted.drain.run()).saved.length, 1);
+  assert.equal(restarted.sent.at(-1).messageId, queued[0].messageId);
+  assert.deepEqual(storage.data.desktopOutbox, []);
+  assert.deepEqual(storage.data.desktopSaveIntents, []);
+});
+
 test('two queued writes go out one at a time', async () => {
   const bench = await harness({ desktop: message => (message.messageType === 'handshake' ? handshakeReply(message) : saved(message)) });
   await bindOne(bench, { title: '后端开发' });
