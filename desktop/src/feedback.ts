@@ -12,6 +12,7 @@ export function reportFrontendError(error: unknown, invoke: Invoke | null, fallb
       const match = /(?:tauri:\/\/localhost\/|https?:\/\/tauri\.localhost\/|http:\/\/(?:localhost|127\.0\.0\.1):1420\/)(?:assets|src)\/[A-Za-z0-9_./-]+\.(?:js|tsx?|jsx):\d{1,6}:\d{1,6}(?=\)|\s|$)/.exec(line);
       return match?.[0] || "";
     }).filter(Boolean).slice(0, 20).join("\n");
+    if (!stack) return;
     void invoke("report_frontend_error", { error: { name, stack } }).catch(() => {});
   } catch { /* feedback must never cause another exception */ }
 }

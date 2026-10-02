@@ -111,8 +111,16 @@ pub fn redact(value: &str) -> String {
             "[凭据]",
         ),
         (
+            r"(?im)^\s*(?:cookie|set-cookie|authorization)\s*:\s*[^\n]*",
+            "[敏感请求头]",
+        ),
+        (
             r#"(?i)["']?(?:api[-_ ]?key|authorization|cookie|password|secret|(?:auth|access|refresh|id)[-_ ]?token|token|密码|姓名|联系人)["']?\s*[:=：]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\n;；,}]+)"#,
             "[敏感信息]",
+        ),
+        (
+            r"(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})",
+            "[凭据]",
         ),
         (r#"(?i)https?://[^\s<>"'）)]+"#, "[网址]"),
         (r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[邮箱]"),
@@ -150,6 +158,27 @@ fn stack_locations(value: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+fn own_panic_location(file: &str, line: u32, column: u32) -> String {
+    let normalized = file.replace('\\', "/");
+    let manifest = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+    let desktop = manifest.strip_suffix("/src-tauri").unwrap_or(&manifest);
+    let own = normalized
+        .strip_prefix(&format!("{manifest}/"))
+        .or_else(|| normalized.strip_prefix(&format!("{desktop}/")))
+        .or_else(|| normalized.strip_prefix("../"))
+        .unwrap_or(&normalized);
+    if !(own.starts_with("src/") || own.starts_with("crates/"))
+        || !own.ends_with(".rs")
+        || own.split('/').any(|part| part == "..")
+        || !own
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_/.-".contains(&b))
+    {
+        return String::new();
+    }
+    format!("{own}:{line}:{column}")
+}
+
 fn payload(kind: &str, stack: String, description: String, id: String) -> Payload {
     let os = match std::env::consts::OS {
         "macos" => "macOS",
@@ -249,7 +278,20 @@ impl Reporter {
             self.changes
                 .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
         }
-        self.save(&next)?;
+        if let Err(error) = self.save(&next) {
+            if enabled {
+                return Err(error);
+            }
+            // Deleting the old consent also revokes it durably if atomic replacement
+            // fails (e.g. disk full). Never re-enable reporting after a failed opt-out.
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(
+                    "本次运行已停止自动上报，但关闭设置无法保存。请在重启前检查磁盘权限并重试。",
+                ),
+            }
+        }
         *state = next;
         self.enabled.store(enabled, Ordering::Release);
         Ok(Status {
@@ -268,6 +310,9 @@ impl Reporter {
         } else {
             stack_locations(&error.stack)
         };
+        if stack.is_empty() {
+            return None;
+        }
         let message = format!("{name}: 未处理的代码异常");
         let signature = format!(
             "{name}|{message}|{}",
@@ -320,7 +365,7 @@ impl Reporter {
             let Ok(mut slot) = self.draft.lock() else {
                 return Receipt::fail("unavailable");
             };
-            let Some(draft) = slot.take() else {
+            let Some(draft) = slot.as_ref() else {
                 return Receipt::fail("preview");
             };
             if draft.token != token || now().saturating_sub(draft.created) > 600_000 {
@@ -342,7 +387,9 @@ impl Reporter {
                 return Receipt::fail("unavailable");
             }
             *state = next;
-            draft.payload
+            let body = draft.payload.clone();
+            *slot = None;
+            body
         };
         self.transmit(&body).await
     }
@@ -440,22 +487,12 @@ impl Reporter {
             if enabled.load(Ordering::Acquire) {
                 let stack = info
                     .location()
-                    .map(|loc| {
-                        let file = loc
-                            .file()
-                            .rsplit(['/', '\\'])
-                            .next()
-                            .unwrap_or("unknown.rs");
-                        if file
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-                        {
-                            format!("{file}:{}:{}", loc.line(), loc.column())
-                        } else {
-                            String::new()
-                        }
-                    })
+                    .map(|loc| own_panic_location(loc.file(), loc.line(), loc.column()))
                     .unwrap_or_default();
+                if stack.is_empty() {
+                    previous(info);
+                    return;
+                }
                 let _ = tx.try_send(FrontendError {
                     name: "panic".into(),
                     stack,
@@ -668,6 +705,7 @@ mod tests {
         Arc::get_mut(&mut reporter).unwrap().endpoint = url;
         reporter.consent(false).unwrap();
         let preview = reporter.preview("按钮无响应 邮箱 a@example.com").unwrap();
+        assert_eq!(reporter.manual("wrong-token").await.reason, Some("preview"));
         let receipt = reporter.manual(&preview.token).await;
         assert!(receipt.ok);
         assert_eq!(receipt.id.as_deref(), Some("test-receipt"));
@@ -740,6 +778,146 @@ mod tests {
             .unwrap();
         reporter.consent(false).unwrap();
         assert_eq!(task.await.unwrap().reason, Some("disabled"));
+    }
+    #[test]
+    fn foreign_and_empty_frames_never_reserve_a_report() {
+        let (_dir, reporter) = reporter();
+        reporter.consent(true).unwrap();
+        assert!(reporter
+            .reserve(FrontendError::default(), false, now())
+            .is_none());
+        assert!(reporter
+            .reserve(
+                FrontendError {
+                    name: "Error".into(),
+                    stack: "https://foreign.test/a.js:1:2".into()
+                },
+                false,
+                now()
+            )
+            .is_none());
+        assert_eq!(
+            own_panic_location("src/feedback.rs", 1, 2),
+            "src/feedback.rs:1:2"
+        );
+        assert_eq!(
+            own_panic_location(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"), 1, 2),
+            "src/lib.rs:1:2"
+        );
+        assert_eq!(
+            own_panic_location("../crates/archive-store/src/lib.rs", 1, 2),
+            "crates/archive-store/src/lib.rs:1:2"
+        );
+        for path in [
+            "/Users/alice/.cargo/registry/src/dependency/src/lib.rs",
+            "/rustc/hash/library/std/src/lib.rs",
+            "C:\\Users\\alice\\.cargo\\registry\\src\\lib.rs",
+            "src/../../private.rs",
+        ] {
+            assert_eq!(own_panic_location(path, 1, 2), "");
+        }
+    }
+    #[test]
+    fn full_cookie_headers_and_common_tokens_are_removed() {
+        for raw in [
+            "Cookie: a=privateOne; b=privateTwo",
+            "Authorization: Basic privateOne; extra=privateTwo",
+            "ghp_abcdefghijklmnopqr",
+            "xoxb-abcdefghijklmno",
+            "eyJabcdefghij.abcdefghijk.abcdefghijk",
+        ] {
+            let safe = redact(raw);
+            for secret in ["privateOne", "privateTwo", "abcdefghijkl"] {
+                assert!(!safe.contains(secret), "{raw} -> {safe}");
+            }
+        }
+    }
+    #[test]
+    fn optout_revokes_persisted_identity_even_if_atomic_replacement_fails() {
+        let (dir, reporter) = reporter();
+        reporter.consent(true).unwrap();
+        std::fs::create_dir(reporter.path.with_extension("json.tmp")).unwrap();
+        reporter.consent(false).unwrap();
+        assert!(!reporter.path.exists());
+        let restarted = Reporter::new(dir.path().into());
+        assert_ne!(restarted.status().unwrap().consent, Some(true));
+        assert!(restarted.state.lock().unwrap().anonymous_id.is_none());
+    }
+
+    #[test]
+    fn feedback_identity_is_absent_from_real_archive_export_and_diagnostics() {
+        let (dir, reporter) = reporter();
+        let paths =
+            data_service::HostPaths::from_roots(dir.path().into(), dir.path().join("cache"));
+        paths.ensure_layout().unwrap();
+        reporter.consent(true).unwrap();
+        reporter.reserve(error(1), false, now()).unwrap();
+        let id = reporter.state.lock().unwrap().anonymous_id.clone().unwrap();
+        let store =
+            crate::commands::open_store(&paths.archive_dir, &paths.current_pointer).unwrap();
+        let export_paths = crate::restore::RestorePaths {
+            data_root: paths.data_root.clone(),
+            archive_dir: paths.archive_dir.clone(),
+            current_pointer: paths.current_pointer.clone(),
+            archives_retired_dir: paths.archives_retired_dir.clone(),
+            settings_file: paths.settings_file.clone(),
+        };
+        let destination = dir.path().join("backup.zip");
+        crate::restore::export_archive(&store, &export_paths, &destination, "2026-10-03T00:00:00Z")
+            .unwrap();
+        let manifest = backup::read_manifest(&destination).unwrap();
+        assert!(manifest
+            .entries
+            .iter()
+            .all(|entry| !entry.path.contains("feedback")));
+        let diagnostics = data_service::diagnostics_from(&paths, true, &[]).to_string();
+        assert!(!diagnostics.contains(&id));
+        assert!(!diagnostics.contains("feedback-state"));
+    }
+    #[test]
+    fn panic_hook_preserves_previous_handler_and_respects_consent() {
+        const CHILD: &str = "RESUMEPRO_FEEDBACK_PANIC_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "feedback::tests::panic_hook_preserves_previous_handler_and_respects_consent",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let (_dir, mut reporter) = reporter();
+        let (url, requests) = server(
+            200,
+            r#"{"ok":true,"id":"panic-test"}"#.into(),
+            Duration::ZERO,
+        );
+        Arc::get_mut(&mut reporter).unwrap().endpoint = url;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            count.fetch_add(1, Ordering::Relaxed);
+            previous(info);
+        }));
+        reporter.install_panic_hook();
+        let _ = std::panic::catch_unwind(|| panic!("private synthetic panic"));
+        assert!(requests.try_recv().is_err());
+        reporter.consent(true).unwrap();
+        let _ = std::panic::catch_unwind(|| panic!("private synthetic panic"));
+        let request = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(request.contains("\"error_type\":\"panic\""));
+        assert!(request.contains("src/feedback.rs:"));
+        assert!(!request.contains("private synthetic"));
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
     #[tokio::test]
     #[ignore = "explicit live synthetic relay acceptance only"]

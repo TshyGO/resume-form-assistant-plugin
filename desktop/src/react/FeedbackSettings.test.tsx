@@ -59,7 +59,9 @@ test('window hooks and React boundary report only safe app frames without except
   expect(invoke).toHaveBeenCalledWith('report_frontend_error', { error: { name: 'TypeError', stack: 'tauri://localhost/assets/index-abc.js:12:3' } });
   const target = new EventTarget() as Window; const cleanup = installFrontendErrors(invoke, target);
   target.dispatchEvent(new ErrorEvent('error', { error })); cleanup();
-  const count = vi.mocked(invoke).mock.calls.length; target.dispatchEvent(new ErrorEvent('error', { error }));
+  const count = vi.mocked(invoke).mock.calls.length;
+  reportFrontendError(new Error('opaque failure'), invoke);
+  expect(vi.mocked(invoke).mock.calls.length).toBe(count); target.dispatchEvent(new ErrorEvent('error', { error }));
   expect(vi.mocked(invoke).mock.calls.length).toBe(count);
   function Crash(): never { throw error; }
   render(<ErrorBoundary invoke={invoke}><Crash /></ErrorBoundary>);

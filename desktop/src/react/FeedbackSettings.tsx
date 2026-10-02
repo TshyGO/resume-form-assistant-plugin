@@ -12,6 +12,8 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const preparingRef = useRef(false);
+  const [preparing, setPreparing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cooling, setCooling] = useState(false);
   const [status, setStatus] = useState("");
@@ -27,17 +29,22 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
     if (!invoke || saving) return;
     setSaving(true); setConsentError("");
     try { const result = await invoke<Status>("feedback_consent", { enabled }); setConsent(result.consent); setStatus(enabled ? "已开启匿名错误报告。" : "已关闭自动上报，安装标识已删除。"); }
-    catch { setConsentError("设置未能保存，请重试。"); setStatus("设置未能保存，请重试。"); }
+    catch (error) {
+      const message = typeof error === "string" && error.startsWith("本次运行已停止自动上报") ? error : "设置未能保存，请重试。";
+      setConsentError(message); setStatus(message);
+    }
     finally { setSaving(false); }
   }
   function invalidate() { revision.current++; setPreview(null); }
   async function prepare() {
-    if (!invoke || busy) return;
+    if (!invoke || busy || preparingRef.current) return;
+    preparingRef.current = true; setPreparing(true);
     invalidate(); const current = revision.current;
     try {
       const result = await invoke<Preview>("feedback_preview", { description });
       if (mounted.current && revision.current === current) { setPreview(result); setStatus("请核对下面的全部内容，确认后发送。"); }
     } catch { if (revision.current === current) setStatus("无法准备反馈，请重试。"); }
+    finally { preparingRef.current = false; if (mounted.current) setPreparing(false); }
   }
   async function send() {
     if (!invoke || !preview || busy || cooling) return;
@@ -50,7 +57,7 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
     finally { setBusy(false); }
   }
   const choice = consent === null ? <section className="feedback-choice" aria-label="错误报告选择">
-    <h2>帮助改进网申快填</h2><p>出错时自动发送匿名错误报告？包含错误类型、代码位置、版本和系统。不含简历、填写内容和完整网址。</p>
+    <h2>帮助改进网申快填</h2><p>出错时自动发送匿名错误报告？包含错误类型、代码位置、版本和系统。不含简历、填写内容和完整网址。报告使用随机匿名标识，经 Cloudflare 中转，由 Muse 整理为可能公开的 GitHub issue。</p>
     <button type="button" disabled={saving} onClick={() => void changeConsent(true)}>开启</button>{" "}<button type="button" disabled={saving} onClick={() => void changeConsent(false)}>暂不</button>
     {consentError && <p role="alert">{consentError}</p>}
   </section> : null;
@@ -64,7 +71,7 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
         <label htmlFor="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
         <textarea id="feedback-description" rows={5} maxLength={1400} value={description} disabled={busy} onChange={event => { setDescription(event.target.value); invalidate(); }} />
         <p className="muted">自动附上版本和系统。请核对预览，删除可能包含的个人信息。</p>
-        <button type="button" disabled={busy} onClick={() => void prepare()}>预览将发送的内容</button>
+        <button type="button" disabled={busy || preparing} onClick={() => void prepare()}>预览将发送的内容</button>
         {preview && <pre className="feedback-preview" tabIndex={0}>{JSON.stringify(preview.payload, null, 2)}</pre>}
         <div className="actions"><button type="submit" disabled={!preview || busy || cooling}>确认发送</button><button type="button" disabled={busy} onClick={() => { setOpen(false); invalidate(); }}>取消</button></div>
       </form>}
