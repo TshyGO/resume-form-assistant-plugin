@@ -178,6 +178,9 @@ function loadHighlightHelpers(options = {}) {
   const context = {
     console,
     setTimeout,
+    // showStatus 直接调用全局 clearTimeout：假定时器（数字 id）走 window 的记录，测试才看得到哪些被清掉了；
+    // 上面全局 setTimeout 仍是 Node 真实的，它返回的对象要交给真实的 clearTimeout。
+    clearTimeout: id => (typeof id === "number" ? window.clearTimeout(id) : clearTimeout(id)),
     performance: options.performance || performance,
     CSS: { escape: (value) => String(value) },
     Event: class {},
@@ -211,6 +214,7 @@ function loadHighlightHelpers(options = {}) {
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
+      ResumeProFillProbe: options.fillProbe,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

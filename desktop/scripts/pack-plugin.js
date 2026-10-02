@@ -20,6 +20,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "sidebar-state.js",
   "ai-helpers.js",
   "form-agent.js",
+  "fill-probe.js",
   "ai-worker.js",
   "ai-host.js",
   "ai-host.html",

@@ -1,0 +1,57 @@
+name: 网站填不上 / 填错
+description: 某个网申网站一键填写失败、部分字段没填上或填错
+title: "[网站兼容] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请遮住截图里的姓名、电话、邮箱等个人信息。侧栏「填写诊断」需要先展开，里面不含简历内容和完整网址，可以直接粘贴。
+  - type: input
+    id: site
+    attributes:
+      label: 网站域名
+      description: 只填域名，例如 c.liepin.com、xxx.zhiye.com
+    validations:
+      required: true
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: 遇到的情况
+      options:
+        - 提示“当前页面没有可填写的表单字段”
+        - 部分字段没填上
+        - 填上了但内容不对
+        - 填上了但提交时网站仍提示必填或无效
+        - AI 辅助新增条目失败
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 卡在哪一步
+      description: 例如：打开在线简历 → 点一键填写 → 提示没有可填写字段
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 填写诊断
+      description: 展开侧栏「填写诊断（不含简历内容）」，点「复制诊断」，粘贴到这里
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图
+      description: 直接拖进来，记得先遮住个人信息
+  - type: input
+    id: version
+    attributes:
+      label: 插件与桌面版本
+      placeholder: 插件 0.4.1 / 桌面 0.4.1（诊断第一行有插件版本）
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与版本
+      placeholder: Chrome 140 / Edge 140

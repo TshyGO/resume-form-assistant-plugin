@@ -367,7 +367,7 @@ Key 只在 `Authorization` 头里，不进正文、不进预览、不进日志�
 
 用户导出诊断：日志 + 版本 + 档案元数据 + 队列长度。默认不含附件。导出同样警告可能残留 PII（公司名等若曾入上下文）。
 
-现有插件诊断 [`formatFillDiagnostics`](../../content.js) 已用错误类别 allowlist；桌面应对齐该纪律。
+现有插件诊断 [`formatFillDiagnostics`](../../content.js) 已用错误类别 allowlist；桌面应对齐该纪律。插件诊断另附 [`fill-probe.js`](../../fill-probe.js) 的页面结构线索：只含 hostname、计数、标签名 / type / role / 组件库名，以及脱敏后的字段名（≤16 字；含 @、网址、5 位以上数字，与要填写的值重叠，或包含任一 ≥2 字的简历内容时隐藏），不含字段值、路径和参数、原始 class。
 
 ---
 

@@ -75,6 +75,7 @@
         "profile-fields.js",
         "resume-data.js",
         "form-agent.js",
+        "fill-probe.js",
         "sidebar-state.js",
         "content.js"
       ],

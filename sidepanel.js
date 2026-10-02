@@ -40,6 +40,7 @@
     desktopStatus: document.getElementById("desktop-status"),
     diagnostics: document.getElementById("fill-diagnostics"),
     diagnosticsText: document.getElementById("fill-diagnostics-text"),
+    copyDiagnostics: document.getElementById("copy-diagnostics"),
     quickFields: document.getElementById("quick-fields"),
     fieldMeta: document.getElementById("field-meta"),
     fieldSearch: document.getElementById("field-search"),
@@ -1298,6 +1299,11 @@
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_UPDATE", op: "setActiveTemplate", templateId: elements.templateSelect.value });
     await loadStore();
     toast(result?.status === "missing_template" ? "这个模板在桌面里已经删掉了" : result?.status === "ok" ? "当前模板已切换。" : "桌面暂时无法切换模板。");
+  });
+  elements.copyDiagnostics.addEventListener("click", async () => {
+    toast(await copyFieldValue(elements.diagnosticsText.value)
+      ? "填写诊断已复制，可以粘贴到反馈里。"
+      : "复制失败，请手动选中诊断文字复制。");
   });
   elements.fillButton.addEventListener("click", async () => {
     elements.fillResult.hidden = true;

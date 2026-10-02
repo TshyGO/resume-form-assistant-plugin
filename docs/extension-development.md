@@ -18,6 +18,7 @@ ai-worker.js           提示词、分批与结果校验
 ai-client.js           请求进程准备及客户端取消顺序
 ai-helpers.js          匹配、清洗和辅助规则
 form-agent.js          受限新增计划、分组识别与执行检查
+fill-probe.js          填写诊断的页面结构探测（只读结构，不读字段值）
 resume-utils.js        与桌面共用的字段整理和错误提示
 resume-data.js         桌面简历数据视图和降级文案
 link/                  桌面连接、简历读写、AI 转发和待同步队列

@@ -150,7 +150,7 @@
 
 **Excel 导入失败、接口报错、某个字段填不上？** 详见[使用指南与排错](docs/user-guide.md#常见问题)，其中保留了模板格式、手动补填、诊断和高级使用说明。
 
-**需要反馈问题？** 请提供桌面与扩展版本、系统和浏览器、招聘网站名称、出问题的字段，以及打码后的截图或诊断摘要。使用交流可以进上方 QQ 群，可复现的 Bug 建议同时提交 [Issue](https://github.com/TshyGO/resume-form-assistant-plugin/issues)。
+**需要反馈问题？** 请提供桌面与扩展版本、系统和浏览器、招聘网站名称、出问题的字段，以及打码后的截图或诊断摘要。使用交流可以进上方 QQ 群，可复现的 Bug 建议同时提交 [Issue](https://github.com/TshyGO/resume-form-assistant-plugin/issues/new/choose)。网站填不上或填错时，选「网站填不上 / 填错」模板，并附上侧栏「填写诊断」里「复制诊断」得到的文字。
 
 <a id="给开发者"></a>
 
