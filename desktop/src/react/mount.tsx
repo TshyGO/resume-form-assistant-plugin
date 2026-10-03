@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { StrictMode } from "react";
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -22,7 +23,7 @@ export function mountReact(container: Element, invoke: Invoke | null, node: Reac
   const render = (next: ReactNode) => {
     root.render(
       <StrictMode>
-        <InvokeProvider invoke={invoke}>{next}</InvokeProvider>
+        <ErrorBoundary invoke={invoke}><InvokeProvider invoke={invoke}>{next}</InvokeProvider></ErrorBoundary>
       </StrictMode>,
     );
   };

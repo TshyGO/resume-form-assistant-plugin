@@ -22,6 +22,7 @@
         <p id="runtime-pill" class="pill">正在读取运行状态…</p>
       </aside>
       <main>
+        <div id="feedback-consent"></div>
         <div id="banner" class="banner hidden"></div>
 
         <section id="view-applications" class="view">
@@ -236,6 +237,7 @@
               <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1">浏览器连接</button>
               <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1">AI 设置</button>
               <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1">数据与备份</button>
+              <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1">隐私</button>
               <button type="button" role="tab" id="settings-tab-about" data-settings-tab="about" aria-controls="settings-about" aria-selected="false" tabindex="-1">关于与诊断</button>
             </nav>
             <div class="settings-content">
@@ -328,6 +330,10 @@
           <div class="row"><button type="button" id="orphan-check">检查</button></div>
           <div id="orphan-report"></div>
                 </details>
+              </section>
+              <section id="settings-privacy" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" data-settings-panel="privacy" hidden>
+                <div class="settings-section-heading"><h2>隐私</h2><p>选择是否分享脱敏问题报告。</p></div>
+                <div id="desktop-feedback"></div>
               </section>
               <section id="settings-about" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" data-settings-panel="about" hidden>
                 <div class="settings-section-heading"><h2>关于与诊断</h2><p>查看版本、检查更新，或获取排查问题所需的信息。</p></div>
