@@ -5,19 +5,20 @@ import { FeedbackSettings } from "./FeedbackSettings.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { reportFrontendError, installFrontendErrors } from "../feedback.ts";
 const draft = { token: 'preview-token', payload: { app: 'resume-form-assistant-desktop', user_description: '已清洗的描述', anonymous_id: 'random-test-id' } };
-function mockInvoke(consent: boolean | null = null) {
+function mockInvoke(consent = true, noticeSeen = false) {
   const fn = vi.fn(async (name: string, args?: Record<string, unknown>) => {
-    if (name === 'feedback_status') return { consent };
-    if (name === 'feedback_consent') return { consent: args?.enabled === true };
+    if (name === 'feedback_status') return { consent, notice_seen: noticeSeen };
+    if (name === 'feedback_notice_seen') return { consent, notice_seen: true };
+    if (name === 'feedback_consent') return { consent: args?.enabled === true, notice_seen: true };
     if (name === 'feedback_preview') return draft;
     return { ok: true, id: 'received-123' };
   });
   return { fn, invoke: fn as Invoke };
 }
-test('choice is explicit; manual sends only after complete preview and while opted out', async () => {
+test('default-on notice allows immediate opt-out; manual sends only after complete preview and while opted out', async () => {
   const { invoke, fn } = mockInvoke(); render(<FeedbackSettings invoke={invoke} />);
-  fireEvent.click(await screen.findByRole('button', { name: '暂不' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: '开启' })).toBeNull());
+  fireEvent.click(await screen.findByRole('button', { name: '关闭自动上报' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '知道了' })).toBeNull());
   expect(fn).toHaveBeenCalledWith('feedback_consent', { enabled: false });
   fireEvent.click(screen.getByRole('button', { name: '反馈问题' }));
   expect((screen.getByRole('button', { name: '确认发送' }) as HTMLButtonElement).disabled).toBe(true);
@@ -71,9 +72,25 @@ test('window hooks and React boundary report only safe app frames without except
 
 test('consent save failure stays visible in the choice card while privacy panel is hidden', async () => {
   const portal = document.createElement('div'); document.body.append(portal);
-  const invoke = vi.fn((name: string) => name === 'feedback_status' ? Promise.resolve({ consent: null }) : Promise.reject(new Error('disk'))) as Invoke;
+  const invoke = vi.fn((name: string) => name === 'feedback_status' ? Promise.resolve({ consent: true, notice_seen: false }) : Promise.reject(new Error('disk'))) as Invoke;
   const { unmount } = render(<div hidden><FeedbackSettings invoke={invoke} consentContainer={portal} /></div>);
-  fireEvent.click(await within(portal).findByRole('button', { name: '开启' }));
+  fireEvent.click(await within(portal).findByRole('button', { name: '知道了' }));
   expect((await within(portal).findByRole('alert')).textContent).toBe('设置未能保存，请重试。');
   unmount(); portal.remove();
+});
+
+
+test('acknowledging the first-use notice does not change the enabled preference', async () => {
+  const { invoke, fn } = mockInvoke(); render(<FeedbackSettings invoke={invoke} />);
+  fireEvent.click(await screen.findByRole('button', { name: '知道了' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '知道了' })).toBeNull());
+  expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+  expect(fn).toHaveBeenCalledWith('feedback_notice_seen');
+  expect(fn.mock.calls.some(([name]) => name === 'feedback_consent')).toBe(false);
+});
+test('previously disabled preference remains off without a new notice', async () => {
+  const { invoke } = mockInvoke(false, true); render(<FeedbackSettings invoke={invoke} />);
+  await waitFor(() => expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(false));
+  expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+  expect(screen.queryByRole('button', { name: '知道了' })).toBeNull();
 });
