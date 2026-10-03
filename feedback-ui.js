@@ -1,30 +1,65 @@
 // Runs only in extension-owned pages. No inline handlers, HTML from reports or secrets.
+// Two independent features share this file: 自动错误报告 (a preference, default on) and
+// 手动反馈问题 (a draft the user previews and confirms). Neither changes the other.
 (() => {
-  const root = document.getElementById('feedback-root');
-  if (!root) return;
+  const noticeRoot = document.getElementById('feedback-notice-root');
+  const autoRoot = document.getElementById('feedback-auto-root');
+  const manualRoot = document.getElementById('feedback-manual-root');
+  if (!noticeRoot || !autoRoot || !manualRoot) return;
   const core = self.ResumeProFeedback;
   const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
-  root.innerHTML = `
-    <section class="feedback-card" id="feedback-consent" hidden aria-label="错误报告说明">
-      <h2>帮助改进网申快填</h2><p>自动错误报告默认已开启，用于定位问题、改进填写兼容性。报告仅含错误类别、本插件代码位置、版本、系统，以及出错页域名和经过筛选的填写诊断。不上传简历、填写值、页面正文、完整网址、Cookie 或密钥。</p><p>报告使用随机标识，发送前先脱敏，经 Cloudflare 中转（最长暂存 90 天），由 Muse 再次脱敏整理为可能公开的 GitHub issue。你可立即关闭，也可随时使用下方开关；关闭不影响填写功能。</p>
-      <button type="button" id="feedback-enable">知道了</button> <button type="button" id="feedback-decline">关闭自动上报</button>
-    </section>
-    <section class="feedback-card" aria-label="问题反馈">
-      <label><input type="checkbox" id="feedback-toggle" disabled>自动发送匿名错误报告</label>
-      <p class="feedback-note">默认开启；可随时关闭，关闭删除随机安装标识。插件与桌面分别设置。</p>
-      <button type="button" id="feedback-open">反馈问题</button>
+  // The side panel keeps the automatic preference to one line; the status page owns the switch.
+  const compact = autoRoot.dataset.variant === 'compact';
+  noticeRoot.innerHTML = `
+    <section class="feedback-card feedback-notice" id="feedback-consent" tabindex="-1" hidden aria-labelledby="feedback-notice-title">
+      <h2 id="feedback-notice-title">错误报告与问题反馈</h2>
+      <p>网申快填有两种互相独立的方式帮助改进：</p>
+      <ul class="feedback-ways">
+        <li><strong>自动错误报告</strong>（默认开启）：插件检测到自身异常，或一键填写后有字段没填上时，自动发送一份脱敏诊断。关闭它不影响手动反馈问题。</li>
+        <li><strong>手动反馈问题</strong>：由你填写描述，预览全部内容并确认后才发送。</li>
+      </ul>
+      <p class="feedback-note">用途是定位问题、改进填写兼容性。报告仅含错误类别、本插件代码位置、版本、系统，以及出错页域名和经过筛选的填写诊断；不上传简历、填写值、页面正文、完整网址、Cookie 或密钥。自动错误报告使用随机安装标识，关闭即删除。发送前先脱敏，经 Cloudflare 中转（最长暂存 90 天），由 Muse 再次脱敏整理为可能公开的 GitHub issue。插件与桌面分别设置。</p>
+      <div class="feedback-actions">
+        <button type="button" id="feedback-enable" class="feedback-primary">知道了</button>
+        <button type="button" id="feedback-decline" hidden>关闭自动错误报告</button>
+      </div>
+      <p class="feedback-note">「知道了」只收起本说明，不改变设置；以后可点「查看完整说明」重看。</p>
+    </section>`;
+  autoRoot.innerHTML = compact ? `
+    <div class="feedback-auto-line">
+      <span id="feedback-auto-state">自动错误报告：正在读取…</span>
+      <button type="button" id="feedback-about" class="feedback-link">查看完整说明</button>
+      <button type="button" id="feedback-retry" class="feedback-link" hidden>重新读取设置</button>
+      <p id="feedback-auto-status" role="status" aria-live="polite"></p>
+    </div>` : `
+    <section class="feedback-card" aria-labelledby="feedback-auto-title">
+      <h2 id="feedback-auto-title">自动错误报告</h2>
+      <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
+      <p id="feedback-auto-state" class="feedback-state">正在读取设置…</p>
+      <p class="feedback-note">默认开启。关闭会删除随机安装标识，不影响下方的手动反馈问题。插件与桌面分别设置。</p>
+      <div class="feedback-actions">
+        <button type="button" id="feedback-about">查看完整说明</button>
+        <button type="button" id="feedback-retry" hidden>重新读取设置</button>
+      </div>
+      <p id="feedback-auto-status" role="status" aria-live="polite"></p>
+    </section>`;
+  manualRoot.innerHTML = `
+    <section class="feedback-card feedback-manual" aria-labelledby="feedback-manual-title">
+      <div class="feedback-head">
+        <h2 id="feedback-manual-title">手动反馈问题</h2>
+        <button type="button" id="feedback-expand" aria-expanded="false" aria-controls="feedback-form">展开</button>
+      </div>
+      <p id="feedback-summary" class="feedback-summary" role="status" aria-live="polite"></p>
       <form id="feedback-form" hidden>
         <label for="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
         <textarea id="feedback-description" maxlength="1400" rows="4"></textarea>
         <label><input type="checkbox" id="feedback-attach" checked>附上最近一次填写诊断</label>
-        <p class="feedback-note">发送至 Cloudflare 中转，由 Muse 脱敏整理为 GitHub issue；最长暂存 90 天。发送前请核对下方全部内容。</p>
+        <p class="feedback-note">只有点「确认发送」才会发送：经 Cloudflare 中转，由 Muse 脱敏整理为 GitHub issue；最长暂存 90 天。发送前请核对下方全部内容。</p>
         <button type="button" id="feedback-preview-button">预览将发送的内容</button>
         <pre id="feedback-preview" tabindex="0" hidden></pre>
-        <button type="submit" id="feedback-send" disabled>确认发送</button>
-        <button type="button" id="feedback-close">取消</button>
+        <button type="submit" id="feedback-send" class="feedback-primary" disabled>确认发送</button>
+        <p id="feedback-status" role="status" aria-live="polite"></p>
       </form>
-      <button type="button" id="feedback-retry" hidden>重新读取设置</button>
-      <p id="feedback-status" role="status" aria-live="polite"></p>
     </section>`;
   const $ = id => document.getElementById(`feedback-${id}`);
   const hasDiagnostics = location.pathname.endsWith('/sidepanel.html');
@@ -32,37 +67,85 @@
     $('attach').checked = false; $('attach').disabled = true;
     $('attach').parentElement.append('（请在侧栏附上填写诊断）');
   }
-  let token = null;
-  let previewTabId;
-  let revision = 0;
-  let busy = false;
+
+  // ---- 自动错误报告 and the notice that explains both features ----
+  let settings = {};
+  let aboutOpen = false;
   let savingConsent = false;
-  let preparing = false;
-  let coolUntil = 0;
-  const invalidate = () => { revision++; token = null; previewTabId = undefined; $('send').disabled = true; $('preview').hidden = true; };
-  const status = text => { $('status').textContent = text; };
-  function renderConsent(result) {
-    $('consent').hidden = result.noticeSeen !== false;
-    $('toggle').checked = result.consent === true;
-    $('toggle').disabled = result.consent === undefined;
-    $('retry').hidden = result.consent !== undefined;
-    if (result.consent === undefined) status('无法读取反馈设置，请重新读取。');
+  const autoStatus = text => { $('auto-status').textContent = text; };
+  function renderConsent(result = settings) {
+    settings = result;
+    const known = result.consent === true || result.consent === false;
+    $('consent').hidden = !(aboutOpen || result.noticeSeen === false);
+    noticeRoot.hidden = $('consent').hidden;
+    $('decline').hidden = !known;
+    $('decline').textContent = result.consent === false ? '开启自动错误报告' : '关闭自动错误报告';
+    if ($('toggle')) { $('toggle').checked = result.consent === true; $('toggle').disabled = !known || savingConsent; }
+    const state = !known ? '无法读取设置' : result.consent ? '已开启' : '已关闭';
+    $('auto-state').textContent = compact ? `自动错误报告：${state}`
+      : !known ? '无法读取设置。' : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
+    $('retry').hidden = known;
+    if (!known) autoStatus('无法读取反馈设置，请重新读取。');
   }
   async function consent(enabled) {
     if (savingConsent) return;
     savingConsent = true;
-    $('toggle').disabled = true; $('enable').disabled = true; $('decline').disabled = true;
+    $('enable').disabled = true; $('decline').disabled = true; if ($('toggle')) $('toggle').disabled = true;
     const result = await send(enabled === undefined ? { type: 'FEEDBACK_NOTICE_SEEN' } : { type: 'FEEDBACK_CONSENT', enabled });
     savingConsent = false; $('enable').disabled = false; $('decline').disabled = false;
+    const saved = result.consent === true || result.consent === false;
+    if (saved) aboutOpen = false;
     renderConsent(result);
-    status(result.consent === undefined ? '设置未保存，请重试。' : result.consent ? '已开启匿名错误报告。' : '已关闭自动上报，安装标识已删除。');
+    autoStatus(!saved ? '设置未保存，请重试。'
+      : enabled === undefined ? `已收起说明，自动错误报告保持${result.consent ? '开启' : '关闭'}。`
+      : result.consent ? '已开启自动错误报告。' : '已关闭自动错误报告，随机安装标识已删除。手动反馈问题不受影响。');
   }
-  $('retry').onclick = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
-  $('enable').onclick = () => consent();
-  $('decline').onclick = () => consent(false);
-  $('toggle').onchange = () => consent($('toggle').checked);
-  $('open').onclick = () => { $('form').hidden = false; $('description').focus(); };
-  $('close').onclick = () => { if (busy) return; $('form').hidden = true; invalidate(); };
+  const refresh = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
+  $('retry').onclick = refresh;
+  $('enable').onclick = () => {
+    // A notice reopened later is only folded away again; nothing is stored.
+    if (settings.noticeSeen === false) { consent(); return; }
+    aboutOpen = false; renderConsent();
+  };
+  $('decline').onclick = () => consent(settings.consent !== true);
+  if ($('toggle')) $('toggle').onchange = () => consent($('toggle').checked);
+  $('about').onclick = () => {
+    aboutOpen = true; renderConsent();
+    $('consent').scrollIntoView?.({ block: 'nearest' });
+    $('consent').focus?.();
+  };
+
+  // ---- 手动反馈问题 ----
+  let token = null;
+  let previewTabId;
+  let revision = 0;
+  let busy = false;
+  let preparing = false;
+  let coolUntil = 0;
+  let expanded = false;
+  let message = '';
+  let sent = false; // The compact 发送成功 line is kept only until a new draft is opened.
+  function renderManual() {
+    $('form').hidden = !expanded;
+    $('expand').textContent = expanded ? '收起' : '展开';
+    $('expand').setAttribute('aria-expanded', String(expanded));
+    const draft = $('description').value.trim() !== '' || !$('preview').hidden;
+    $('summary').hidden = expanded;
+    $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '由你填写描述、预览并确认后才发送。');
+    $('status').textContent = expanded ? message : '';
+  }
+  const status = text => { message = text; sent = false; renderManual(); };
+  const invalidate = () => {
+    revision++; token = null; previewTabId = undefined;
+    $('send').disabled = true; $('preview').hidden = true; $('preview').textContent = '';
+  };
+  // Folding never clears the draft and never cancels a send that is already on its way.
+  $('expand').onclick = () => {
+    expanded = !expanded;
+    if (expanded && sent) { message = ''; sent = false; }
+    renderManual();
+    if (expanded && !busy) $('description').focus();
+  };
   $('description').oninput = invalidate;
   $('attach').onchange = invalidate;
   chrome.tabs?.onActivated?.addListener(() => { if (hasDiagnostics && $('attach').checked) invalidate(); });
@@ -103,11 +186,23 @@
     const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
     if (result.reason === 'preview') coolUntil = 0;
     busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = !hasDiagnostics;
-    status(result.ok ? `发送成功，编号：${result.id}` : result.reason === 'preview' ? '预览已过期或后台已重启，请重新预览后确认发送。' : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒。' : '发送失败，没有自动重试。请稍后重新预览并发送。');
+    if (result.ok) {
+      // A sent report leaves nothing behind: the next report starts as a new, unreviewed draft.
+      $('description').value = ''; $('attach').checked = hasDiagnostics; invalidate();
+      expanded = false; status(`发送成功，编号：${result.id}`); sent = true;
+    } else {
+      // The draft stays for the user to edit; the consumed preview must be made again.
+      invalidate();
+      status(result.reason === 'preview' ? '预览已过期或后台已重启，草稿已保留。请重新预览后确认发送。'
+        : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒，草稿已保留。'
+        : '发送失败，没有自动重试，草稿已保留。请稍后重新预览并发送。');
+    }
     setTimeout(() => { if (token && !busy) $('send').disabled = false; }, Math.max(0, coolUntil - Date.now()));
   };
-  send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
+
+  renderManual();
+  refresh();
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.feedbackStateV1) send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
+    if (area === 'local' && changes.feedbackStateV1) refresh();
   });
 })();

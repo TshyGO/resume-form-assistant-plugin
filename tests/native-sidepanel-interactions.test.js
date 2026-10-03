@@ -58,7 +58,7 @@ function rowContainer() {
 async function panel({ target = { ok: true, targetAvailable: false } } = {}) {
   const elements = new Map();
   const get = (id) => {
-    if (!elements.has(id)) elements.set(id, id === 'quick-fields' || id === 'field-groups' ? rowContainer() : element());
+    if (!elements.has(id)) elements.set(id, id === 'field-groups' ? rowContainer() : element());
     return elements.get(id);
   };
   const calls = [];
@@ -105,7 +105,7 @@ async function panel({ target = { ok: true, targetAvailable: false } } = {}) {
   await tick();
   await poll();
   await tick();
-  const rows = () => [...get('quick-fields').querySelectorAll('.field-row'), ...get('field-groups').querySelectorAll('.field-row')];
+  const rows = () => get('field-groups').querySelectorAll('.field-row');
   const row = (container, chipId) => get(container).querySelectorAll('.field-row').find((item) => item.dataset.chipId === chipId);
   const buttonState = (item) => Object.fromEntries(item.buttons.map((button) => [button.dataset.action, !button.disabled]));
   return { get, calls, copied, state, poll: async () => { await poll(); await tick(); }, tick, rows, row, buttonState, runtimeListeners, chrome,
@@ -121,19 +121,17 @@ async function panel({ target = { ok: true, targetAvailable: false } } = {}) {
 const composable = (extra = {}) => ({ ok: true, targetAvailable: true, composable: true, empty: false, selectedChipIds: [], actions: {}, ...extra });
 const allow = (add, replace, remove) => ({ add, replace, remove });
 
-test('every field row, quick or grouped, always has the same three fixed buttons and no copy button', async () => {
+test('every field row always has the same three fixed buttons and no copy button', async () => {
   const ui = await panel();
-  assert.equal(ui.rows().length, 3, 'one quick row (the preferred 姓名) and two grouped rows');
+  assert.equal(ui.rows().length, 2, 'two grouped rows; the fill view no longer repeats common fields');
   for (const item of ui.rows()) {
     assert.deepEqual(item.buttons.map((button) => button.dataset.action), ['add', 'replace', 'remove']);
     assert.deepEqual(item.buttons.map((button) => button.label), ['添加', '替换', '删除']);
   }
-  for (const id of ['quick-fields', 'field-groups']) {
-    const html = ui.get(id).innerHTML;
-    assert.ok(!html.includes('复制'), 'no copy button');
-    assert.ok(!html.includes('field-row__copy'));
-    assert.ok(!html.includes('quick-row'), 'quick fields use the same row as grouped ones');
-  }
+  const html = ui.get('field-groups').innerHTML;
+  assert.ok(!html.includes('复制'), 'no copy button');
+  assert.ok(!html.includes('field-row__copy'));
+  assert.equal(ui.get('quick-fields').innerHTML, '', 'nothing is rendered into a common-fields list');
 });
 
 test('with no web target all three buttons are present but disabled, and nothing is selected', async () => {
@@ -161,19 +159,18 @@ test('an empty box enables only add; a filled one follows the page per field', a
   await ui.poll();
   assert.deepEqual(ui.buttonState(ui.row('field-groups', NAME)), { add: false, replace: true, remove: true });
   assert.deepEqual(ui.buttonState(ui.row('field-groups', SCHOOL)), { add: true, replace: true, remove: false });
-  assert.deepEqual(ui.buttonState(ui.row('quick-fields', NAME)), { add: false, replace: true, remove: true }, 'a quick row behaves like its grouped twin');
 });
 
 test('selected rows follow the page: A, then A+B, then only A, then none', async () => {
   const ui = await panel({ target: composable({ selectedChipIds: [NAME] }) });
   const selected = () => ui.rows().filter((item) => item.classes.has('is-in-field')).map((item) => item.dataset.chipId);
-  assert.deepEqual(selected(), [NAME, NAME], 'the quick row and grouped row of the field');
+  assert.deepEqual(selected(), [NAME]);
   assert.equal(ui.row('field-groups', NAME).fill.pressed, 'true');
   assert.equal(ui.row('field-groups', SCHOOL).fill.pressed, 'false');
 
   ui.state.target = composable({ selectedChipIds: [NAME, SCHOOL] });
   await ui.poll();
-  assert.deepEqual(selected().sort(), [NAME, NAME, SCHOOL].sort());
+  assert.deepEqual(selected().sort(), [NAME, SCHOOL].sort());
 
   ui.state.target = composable({ selectedChipIds: [NAME] });
   await ui.poll();
@@ -202,8 +199,8 @@ test('an add button sends the operation with the panel’s own value and never c
 
 test('replace and remove are sent as their own modes', async () => {
   const ui = await panel({ target: composable({ selectedChipIds: [NAME], actions: { [NAME]: allow(false, true, true) } }) });
-  await ui.click('quick-fields', NAME, 'replace');
-  await ui.click('quick-fields', NAME, 'remove');
+  await ui.click('field-groups', NAME, 'replace');
+  await ui.click('field-groups', NAME, 'remove');
   const modes = ui.calls.filter((call) => call.type === 'RESUME_PANEL_FIELD').map((call) => call.mode);
   assert.deepEqual(modes, ['replace', 'remove']);
 });
@@ -225,7 +222,7 @@ test('a disabled button never reaches the page', async () => {
 
 test('the row body is the quick path: the page decides, and asking for a button is not a copy', async () => {
   const ui = await panel({ target: composable({ empty: true, actions: { [NAME]: allow(true, false, false) } }) });
-  await ui.click('quick-fields', NAME);
+  await ui.click('field-groups', NAME);
   assert.equal(ui.calls.filter((call) => call.type === 'RESUME_PANEL_FIELD').at(-1).mode, 'fill');
   ui.state.field = { ok: false, needsChoice: true, message: '网页输入框已有内容，请点击「添加」或「替换」。' };
   await ui.click('field-groups', SCHOOL);
@@ -236,7 +233,7 @@ test('the row body is the quick path: the page decides, and asking for a button 
 test('a non-text control that refuses the quick fill still gets the honest copy fallback', async () => {
   const ui = await panel({ target: { ok: true, targetAvailable: true, composable: false } });
   ui.state.field = { ok: false, needsCopy: true, message: '网页控件已有内容；请先核对，再粘贴复制的字段。' };
-  await ui.click('quick-fields', NAME);
+  await ui.click('field-groups', NAME);
   assert.deepEqual(ui.copied, ['测试用户']);
   assert.match(ui.get('panel-toast').textContent, /字段内容已复制/);
 });

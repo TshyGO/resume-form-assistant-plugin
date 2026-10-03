@@ -42,3 +42,4 @@ button:disabled { opacity: 0.6; cursor: default; }
 .notes:empty { display: none; }
 .toast { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
 .toast[hidden] { display: none; }
+.status-page .feedback-card { margin: 0; padding: 16px; border-radius: 10px; }
