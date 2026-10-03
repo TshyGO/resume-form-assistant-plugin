@@ -16,10 +16,16 @@ async function fixture(options = {}) {
 }
 const crash = { kind: 'exception', name: 'TypeError', source: 'error', stack: 'content.js:100:2', message: 'Secret name and resume data' };
 
-test('undecided and declined never send; opt out deletes identity', async () => {
+test('new installs default on with a notice; opt out deletes identity', async () => {
   const f = await fixture();
-  assert.deepEqual(await f.service.status(), { consent: null });
-  await f.service.automatic(crash); assert.equal(f.calls.length, 0);
+  assert.deepEqual(await f.service.status(), { consent: true, noticeSeen: false });
+  const initialId = f.data[f.key].anonymousId;
+  assert.match(initialId, /^[0-9a-f-]{36}$/);
+  const restart = await fixture({ data: f.data });
+  assert.deepEqual(await restart.service.status(), { consent: true, noticeSeen: false });
+  assert.equal(f.data[f.key].anonymousId, initialId);
+  await f.service.automatic({ ...crash, stack: 'content.js:9:1' }); assert.equal(f.calls.length, 1);
+  f.calls.length = 0;
   await f.service.setConsent(false); await f.service.automatic(crash); assert.equal(f.calls.length, 0);
   await f.service.setConsent(true); const id = f.data[f.key].anonymousId; assert.match(id, /^[0-9a-f-]{36}$/);
   await f.service.automatic(crash, 'c.liepin.com'); assert.equal(f.calls.length, 1);
@@ -134,6 +140,8 @@ test('router rejects foreign senders and binds exact previews to one privileged 
     const message = (body, sender = page) => new Promise(resolve => listener(body, sender, resolve));
     assert.equal((await message({ type: 'FEEDBACK_CONSENT', enabled: true }, content)).ok, false);
     assert.equal((await message({ type: 'FEEDBACK_CONSENT', enabled: true }, { ...page, id: 'other' })).ok, false);
+    assert.equal((await message({ type: 'FEEDBACK_NOTICE_SEEN' }, content)).ok, false);
+    await message({ type: 'FEEDBACK_CONSENT', enabled: false });
     await message({ type: 'FEEDBACK_AUTO', report: crash }, content); assert.equal(calls.length, 0);
     await message({ type: 'FEEDBACK_CONSENT', enabled: true });
     await message({ type: 'FEEDBACK_AUTO', report: { ...crash, stack: '' } }, content); assert.equal(calls.length, 0);
@@ -216,4 +224,32 @@ test('the real AI worker leaves uncaught errors to its host and reports rejectio
   assert.equal(messages.length, 1);
   assert.equal(messages[0].kind, 'feedback-error');
   assert.equal(messages[0].report.stack, 'ai-worker.js:10:2');
+});
+
+
+test('notice acknowledgement persists without overriding another page opt-out', async () => {
+  const f = await fixture();
+  await f.service.status();
+  assert.deepEqual(await f.service.acknowledgeNotice(), { consent: true, noticeSeen: true });
+  await f.service.setConsent(false);
+  assert.deepEqual(await f.service.acknowledgeNotice(), { consent: false, noticeSeen: true });
+  const restart = await fixture({ data: f.data });
+  await restart.service.automatic(crash);
+  assert.equal(restart.calls.length, 0);
+  assert.equal((await restart.service.status()).consent, false);
+});
+test('migration preserves prior explicit choices and enables only undecided installations', async () => {
+  for (const previous of [true, false, null]) {
+    const f = await fixture({ data: { feedbackStateV1: { consent: previous, anonymousId: previous === true ? 'existing-id' : null } } });
+    assert.deepEqual(await f.service.status(), { consent: previous !== false, noticeSeen: previous !== null });
+    if (previous === false) assert.equal(f.data[f.key].anonymousId, null);
+    if (previous === true) assert.equal(f.data[f.key].anonymousId, 'existing-id');
+  }
+});
+test('default initialization cannot send when preferences cannot be persisted', async () => {
+  const { createFeedback } = await import('../link/feedback.mjs');
+  let requests = 0;
+  const service = createFeedback({ storage: { get: async () => ({}), set: async () => { throw new Error('disk'); } }, fetchImpl: async () => { requests++; }, version: 'test', os: 'test' });
+  await assert.rejects(service.automatic(crash), /disk/);
+  assert.equal(requests, 0);
 });
