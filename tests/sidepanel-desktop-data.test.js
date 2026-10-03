@@ -87,7 +87,7 @@ test('initial native side panel reads desktop summary and active fields', async 
   assert.match(ui.get('field-groups').innerHTML, /测试用户/);
   assert.equal(ui.get('fill-button').disabled, false);
   assert.equal(ui.get('desktop-connection').hidden, true);
-  assert.ok(!ui.get('quick-fields').innerHTML.includes('synthetic-secret'));
+  assert.equal(ui.get('quick-fields').innerHTML, '', 'the fill view no longer repeats common fields');
 });
 
 test('native side panel hides a secret-looking value under an ordinary field name', async () => {
