@@ -28,15 +28,16 @@ test('manual feedback follows the fill result and diagnostics, with the automati
   assert.match(ui, /<form id="feedback-form" hidden>/, 'folded by default');
 });
 
-test('the status page keeps the automatic switch and manual feedback in separate sections', () => {
+test('the status page keeps only the automatic switch; manual feedback lives in the side panel', () => {
   const popup = read('popup.html');
   assert.ok(at(popup, 'id="feedback-notice-root"') < at(popup, 'id="feedback-auto-root"'));
-  assert.ok(at(popup, 'id="feedback-auto-root"') < at(popup, 'id="feedback-manual-root"'));
+  assert.ok(!popup.includes('feedback-manual-root'), 'no second manual feedback form');
   assert.ok(!popup.includes('id="feedback-root"'));
+  assert.equal(sidepanel.split('id="feedback-manual-root"').length, 2);
   const ui = read('feedback-ui.js');
   assert.match(ui, /<h2 id="feedback-auto-title">自动错误报告<\/h2>/);
   assert.match(ui, /<h2 id="feedback-manual-title">手动反馈问题<\/h2>/);
-  assert.doesNotMatch(ui, /自动上报|匿名错误报告/, 'one name for the automatic feature');
+  assert.doesNotMatch(ui, /自动上报|匿名错误报告|请在侧栏附上填写诊断/, 'one name for the automatic feature; no status-page form');
 });
 
 test('the duplicated 常用字段 list is gone; the 简历字段 tab and manual add/replace/remove stay', () => {

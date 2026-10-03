@@ -1,15 +1,18 @@
 // Runs only in extension-owned pages. No inline handlers, HTML from reports or secrets.
-// Two independent features share this file: 自动错误报告 (a preference, default on) and
-// 手动反馈问题 (a draft the user previews and confirms). Neither changes the other.
+// Two independent features share this file: 自动错误报告 (a preference, default on, set on the
+// status page) and 手动反馈问题 (a draft previewed and confirmed in the side panel only).
+// Neither changes the other.
 (() => {
   const noticeRoot = document.getElementById('feedback-notice-root');
   const autoRoot = document.getElementById('feedback-auto-root');
   const manualRoot = document.getElementById('feedback-manual-root');
-  if (!noticeRoot || !autoRoot || !manualRoot) return;
+  if (!noticeRoot || !autoRoot) return;
   const core = self.ResumeProFeedback;
   const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
   // The side panel keeps the automatic preference to one line; the status page owns the switch.
   const compact = autoRoot.dataset.variant === 'compact';
+  // Where the switch lives, worded for the page the notice is shown on.
+  const where = compact ? '以后如需关闭，可在「插件状态」中取消勾选「开启自动错误报告」。' : '如需关闭，取消勾选下方「开启自动错误报告」即可。';
   noticeRoot.innerHTML = `
     <section class="feedback-card feedback-notice" id="feedback-consent" tabindex="-1" hidden aria-labelledby="feedback-notice-title">
       <h2 id="feedback-notice-title">错误报告与问题反馈</h2>
@@ -23,7 +26,7 @@
         <button type="button" id="feedback-enable" class="feedback-primary">知道了</button>
         <button type="button" id="feedback-decline" hidden>关闭自动错误报告</button>
       </div>
-      <p class="feedback-note">「知道了」只收起本说明，不改变设置；以后可点「查看完整说明」重看。</p>
+      <p class="feedback-note">${where}「知道了」只收起本说明，不改变设置；以后可点「查看完整说明」重看。</p>
     </section>`;
   autoRoot.innerHTML = compact ? `
     <div class="feedback-auto-line">
@@ -36,14 +39,14 @@
       <h2 id="feedback-auto-title">自动错误报告</h2>
       <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
       <p id="feedback-auto-state" class="feedback-state">正在读取设置…</p>
-      <p class="feedback-note">默认开启。关闭会删除随机安装标识，不影响下方的手动反馈问题。插件与桌面分别设置。</p>
+      <p class="feedback-note">默认开启。关闭会删除随机安装标识，不影响侧栏里的「手动反馈问题」。插件与桌面分别设置。</p>
       <div class="feedback-actions">
         <button type="button" id="feedback-about">查看完整说明</button>
         <button type="button" id="feedback-retry" hidden>重新读取设置</button>
       </div>
       <p id="feedback-auto-status" role="status" aria-live="polite"></p>
     </section>`;
-  manualRoot.innerHTML = `
+  if (manualRoot) manualRoot.innerHTML = `
     <section class="feedback-card feedback-manual" aria-labelledby="feedback-manual-title">
       <div class="feedback-head">
         <h2 id="feedback-manual-title">手动反馈问题</h2>
@@ -62,11 +65,6 @@
       </form>
     </section>`;
   const $ = id => document.getElementById(`feedback-${id}`);
-  const hasDiagnostics = location.pathname.endsWith('/sidepanel.html');
-  if (!hasDiagnostics) {
-    $('attach').checked = false; $('attach').disabled = true;
-    $('attach').parentElement.append('（请在侧栏附上填写诊断）');
-  }
 
   // ---- 自动错误报告 and the notice that explains both features ----
   let settings = {};
@@ -76,13 +74,16 @@
   function renderConsent(result = settings) {
     settings = result;
     const known = result.consent === true || result.consent === false;
-    $('consent').hidden = !(aboutOpen || result.noticeSeen === false);
+    const firstUse = result.noticeSeen === false;
+    $('consent').hidden = !(aboutOpen || firstUse);
     noticeRoot.hidden = $('consent').hidden;
-    $('decline').hidden = !known;
-    $('decline').textContent = result.consent === false ? '开启自动错误报告' : '关闭自动错误报告';
+    // A reopened notice is only an explanation. The first-use notice in the side panel keeps a
+    // direct opt-out; on the status page the switch right below does that job.
+    $('enable').textContent = firstUse ? '知道了' : '收起';
+    $('decline').hidden = !(compact && firstUse && result.consent === true);
     if ($('toggle')) { $('toggle').checked = result.consent === true; $('toggle').disabled = !known || savingConsent; }
     const state = !known ? '无法读取设置' : result.consent ? '已开启' : '已关闭';
-    $('auto-state').textContent = compact ? `自动错误报告：${state}`
+    $('auto-state').textContent = compact ? `自动错误报告：${state}${known ? '（在「插件状态」中设置）' : ''}`
       : !known ? '无法读取设置。' : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;
     if (!known) autoStatus('无法读取反馈设置，请重新读取。');
@@ -107,7 +108,7 @@
     if (settings.noticeSeen === false) { consent(); return; }
     aboutOpen = false; renderConsent();
   };
-  $('decline').onclick = () => consent(settings.consent !== true);
+  $('decline').onclick = () => consent(false);
   if ($('toggle')) $('toggle').onchange = () => consent($('toggle').checked);
   $('about').onclick = () => {
     aboutOpen = true; renderConsent();
@@ -115,92 +116,94 @@
     $('consent').focus?.();
   };
 
-  // ---- 手动反馈问题 ----
-  let token = null;
-  let previewTabId;
-  let revision = 0;
-  let busy = false;
-  let preparing = false;
-  let coolUntil = 0;
-  let expanded = false;
-  let message = '';
-  let sent = false; // The compact 发送成功 line is kept only until a new draft is opened.
-  function renderManual() {
-    $('form').hidden = !expanded;
-    $('expand').textContent = expanded ? '收起' : '展开';
-    $('expand').setAttribute('aria-expanded', String(expanded));
-    const draft = $('description').value.trim() !== '' || !$('preview').hidden;
-    $('summary').hidden = expanded;
-    $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '由你填写描述、预览并确认后才发送。');
-    $('status').textContent = expanded ? message : '';
-  }
-  const status = text => { message = text; sent = false; renderManual(); };
-  const invalidate = () => {
-    revision++; token = null; previewTabId = undefined;
-    $('send').disabled = true; $('preview').hidden = true; $('preview').textContent = '';
-  };
-  // Folding never clears the draft and never cancels a send that is already on its way.
-  $('expand').onclick = () => {
-    expanded = !expanded;
-    if (expanded && sent) { message = ''; sent = false; }
-    renderManual();
-    if (expanded && !busy) $('description').focus();
-  };
-  $('description').oninput = invalidate;
-  $('attach').onchange = invalidate;
-  chrome.tabs?.onActivated?.addListener(() => { if (hasDiagnostics && $('attach').checked) invalidate(); });
-  chrome.tabs?.onUpdated?.addListener((id, change) => { if (id === previewTabId && (change.url || change.status === 'loading')) invalidate(); });
-  $('preview-button').onclick = async () => {
-    if (busy || preparing) return;
-    preparing = true; $('preview-button').disabled = true;
-    invalidate(); const current = revision;
-    let diagnostics = ''; let tabId;
-    try {
-      if ($('attach').checked && hasDiagnostics) {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (current !== revision) return;
-        tabId = tab?.id;
-        previewTabId = tabId;
-        if (Number.isInteger(tabId)) {
-          const page = await chrome.tabs.sendMessage(tabId, { type: 'RESUME_PANEL_STATUS' }).catch(() => null);
-          diagnostics = core.diagnostics(page?.diagnostics || '');
-        }
-      }
-      const result = await send({ type: 'FEEDBACK_PREVIEW', description: $('description').value, diagnostics, tabId });
-      if (current !== revision) return;
-      if (!result.ok) { status('无法准备反馈，请重试。'); return; }
-      token = result.token;
-      $('preview').textContent = JSON.stringify(result.payload, null, 2);
-      $('preview').hidden = false;
-      $('send').disabled = Date.now() < coolUntil;
-      status(diagnostics ? '请核对预览，确认后发送。' : '未附上填写诊断。请核对预览，确认后发送。');
-    } catch { status('无法读取填写诊断，请重试或取消勾选。'); }
-    finally { preparing = false; $('preview-button').disabled = busy; }
-  };
-  $('form').onsubmit = async event => {
-    event.preventDefault();
-    if (busy || !token || Date.now() < coolUntil) return;
-    busy = true; const confirmed = token; token = null; $('send').disabled = true; $('preview-button').disabled = true;
-    $('description').disabled = true; $('attach').disabled = true;
-    coolUntil = Date.now() + 60000; status('正在发送…');
-    const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
-    if (result.reason === 'preview') coolUntil = 0;
-    busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = !hasDiagnostics;
-    if (result.ok) {
-      // A sent report leaves nothing behind: the next report starts as a new, unreviewed draft.
-      $('description').value = ''; $('attach').checked = hasDiagnostics; invalidate();
-      expanded = false; status(`发送成功，编号：${result.id}`); sent = true;
-    } else {
-      // The draft stays for the user to edit; the consumed preview must be made again.
-      invalidate();
-      status(result.reason === 'preview' ? '预览已过期或后台已重启，草稿已保留。请重新预览后确认发送。'
-        : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒，草稿已保留。'
-        : '发送失败，没有自动重试，草稿已保留。请稍后重新预览并发送。');
+  // ---- 手动反馈问题 (side panel only) ----
+  if (manualRoot) {
+    let token = null;
+    let previewTabId;
+    let revision = 0;
+    let busy = false;
+    let preparing = false;
+    let coolUntil = 0;
+    let expanded = false;
+    let message = '';
+    let sent = false; // The compact 发送成功 line is kept only until a new draft is opened.
+    function renderManual() {
+      $('form').hidden = !expanded;
+      $('expand').textContent = expanded ? '收起' : '展开';
+      $('expand').setAttribute('aria-expanded', String(expanded));
+      const draft = $('description').value.trim() !== '' || !$('preview').hidden;
+      $('summary').hidden = expanded;
+      $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '由你填写描述、预览并确认后才发送。');
+      $('status').textContent = expanded ? message : '';
     }
-    setTimeout(() => { if (token && !busy) $('send').disabled = false; }, Math.max(0, coolUntil - Date.now()));
-  };
+    const status = text => { message = text; sent = false; renderManual(); };
+    const invalidate = () => {
+      revision++; token = null; previewTabId = undefined;
+      $('send').disabled = true; $('preview').hidden = true; $('preview').textContent = '';
+    };
+    // Folding never clears the draft and never cancels a send that is already on its way.
+    $('expand').onclick = () => {
+      expanded = !expanded;
+      if (expanded && sent) { message = ''; sent = false; }
+      renderManual();
+      if (expanded && !busy) $('description').focus();
+    };
+    $('description').oninput = invalidate;
+    $('attach').onchange = invalidate;
+    chrome.tabs?.onActivated?.addListener(() => { if ($('attach').checked) invalidate(); });
+    chrome.tabs?.onUpdated?.addListener((id, change) => { if (id === previewTabId && (change.url || change.status === 'loading')) invalidate(); });
+    $('preview-button').onclick = async () => {
+      if (busy || preparing) return;
+      preparing = true; $('preview-button').disabled = true;
+      invalidate(); const current = revision;
+      let diagnostics = ''; let tabId;
+      try {
+        if ($('attach').checked) {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (current !== revision) return;
+          tabId = tab?.id;
+          previewTabId = tabId;
+          if (Number.isInteger(tabId)) {
+            const page = await chrome.tabs.sendMessage(tabId, { type: 'RESUME_PANEL_STATUS' }).catch(() => null);
+            diagnostics = core.diagnostics(page?.diagnostics || '');
+          }
+        }
+        const result = await send({ type: 'FEEDBACK_PREVIEW', description: $('description').value, diagnostics, tabId });
+        if (current !== revision) return;
+        if (!result.ok) { status('无法准备反馈，请重试。'); return; }
+        token = result.token;
+        $('preview').textContent = JSON.stringify(result.payload, null, 2);
+        $('preview').hidden = false;
+        $('send').disabled = Date.now() < coolUntil;
+        status(diagnostics ? '请核对预览，确认后发送。' : '未附上填写诊断。请核对预览，确认后发送。');
+      } catch { status('无法读取填写诊断，请重试或取消勾选。'); }
+      finally { preparing = false; $('preview-button').disabled = busy; }
+    };
+    $('form').onsubmit = async event => {
+      event.preventDefault();
+      if (busy || !token || Date.now() < coolUntil) return;
+      busy = true; const confirmed = token; token = null; $('send').disabled = true; $('preview-button').disabled = true;
+      $('description').disabled = true; $('attach').disabled = true;
+      coolUntil = Date.now() + 60000; status('正在发送…');
+      const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
+      if (result.reason === 'preview') coolUntil = 0;
+      busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = false;
+      if (result.ok) {
+        // A sent report leaves nothing behind: the next report starts as a new, unreviewed draft.
+        $('description').value = ''; $('attach').checked = true; invalidate();
+        expanded = false; status(`发送成功，编号：${result.id}`); sent = true;
+      } else {
+        // The draft stays for the user to edit; the consumed preview must be made again.
+        invalidate();
+        status(result.reason === 'preview' ? '预览已过期或后台已重启，草稿已保留。请重新预览后确认发送。'
+          : result.reason === 'cooldown' ? '两次反馈请至少间隔 60 秒，草稿已保留。'
+          : '发送失败，没有自动重试，草稿已保留。请稍后重新预览并发送。');
+      }
+      setTimeout(() => { if (token && !busy) $('send').disabled = false; }, Math.max(0, coolUntil - Date.now()));
+    };
+    renderManual();
+  }
 
-  renderManual();
   refresh();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.feedbackStateV1) refresh();

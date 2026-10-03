@@ -6,13 +6,13 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 type Reply = Record<string, unknown>;
 // Mounts the real plugin feedback-ui.js (Chrome and Edge load the same file) with the same
 // mount points as sidepanel.html or popup.html, against a scripted service worker.
-function setup(failure = '', pathname = '/sidepanel.html') {
+function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: boolean; noticeSeen?: boolean } = {}) {
   document.body.innerHTML = pathname === '/sidepanel.html'
     ? '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>'
-    : '<div id="feedback-notice-root" hidden></div><div id="feedback-auto-root"></div><div id="feedback-manual-root"></div>';
+    : '<div id="feedback-notice-root" hidden></div><div id="feedback-auto-root"></div>';
   const calls: Record<string, unknown>[] = [];
-  let consent = true;
-  let noticeSeen = false;
+  let consent = initial.consent ?? true;
+  let noticeSeen = initial.noticeSeen ?? false;
   let now = 100000;
   let previews = 0;
   let updated: (id: number, change: { status: string }) => void = () => {};
@@ -61,7 +61,7 @@ async function previewDraft(text = '按钮没反应') {
 
 // ---- first-use notice and the automatic preference ----
 
-test('the notice explains both independent ways and sits after the fill button', async () => {
+test('the side-panel notice explains both ways, sits after the fill button and points to the status page', async () => {
   setup();
   const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
   const fill = button('一键 AI 填写');
@@ -70,31 +70,33 @@ test('the notice explains both independent ways and sits after the fill button',
   expect(text).toMatch(/自动错误报告（默认开启）：插件检测到自身异常，或一键填写后有字段没填上时，自动发送一份脱敏诊断。关闭它不影响手动反馈问题。/);
   expect(text).toMatch(/手动反馈问题：由你填写描述，预览全部内容并确认后才发送。/);
   for (const disclosure of ['定位问题', '不上传简历', 'Cloudflare', '90 天', 'GitHub issue', '随机安装标识']) expect(text).toContain(disclosure);
+  expect(text).toContain('以后如需关闭，可在「插件状态」中取消勾选「开启自动错误报告」。');
   expect(text).toMatch(/「知道了」只收起本说明，不改变设置/);
   expect(within(notice).getByRole('button', { name: '关闭自动错误报告' })).toBeTruthy();
 });
 
-test('知道了 only folds the notice, and the full text can be reopened later without storing anything', async () => {
+test('知道了 only folds the notice; reopening it shows the explanation without any switch', async () => {
   const { calls } = setup();
   await screen.findByRole('button', { name: '知道了' });
-  await screen.findByText('自动错误报告：已开启');
+  await screen.findByText('自动错误报告：已开启（在「插件状态」中设置）');
   fireEvent.click(button('知道了'));
   await waitFor(() => expect(screen.queryByRole('button', { name: '知道了' })).toBeNull());
   expect(calls.filter(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toHaveLength(1);
   expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
-  expect(screen.getByText('自动错误报告：已开启')).toBeTruthy();
+  expect(screen.getByText('自动错误报告：已开启（在「插件状态」中设置）')).toBeTruthy();
   fireEvent.click(button('查看完整说明'));
   const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
   expect(notice.textContent).toContain('Cloudflare');
-  fireEvent.click(within(notice).getByRole('button', { name: '知道了' }));
+  expect(within(notice).getAllByRole('button').map(b => b.textContent)).toEqual(['收起']);
+  fireEvent.click(within(notice).getByRole('button', { name: '收起' }));
   await waitFor(() => expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull());
   expect(calls.filter(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toHaveLength(1);
 });
 
-test('turning automatic reports off from the notice leaves manual feedback working', async () => {
+test('turning automatic reports off from the side-panel notice leaves manual feedback working', async () => {
   const { calls, sends } = setup();
   fireEvent.click(await screen.findByRole('button', { name: '关闭自动错误报告' }));
-  await screen.findByText('自动错误报告：已关闭');
+  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
   expect(screen.queryByRole('button', { name: '知道了' })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: false }]);
   await screen.findByText(/手动反馈问题不受影响/);
@@ -103,30 +105,49 @@ test('turning automatic reports off from the notice leaves manual feedback worki
   await screen.findByText('发送成功，编号：receipt-123');
   expect(sends()).toEqual([{ type: 'FEEDBACK_SEND', token: 'draft-1' }]);
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toHaveLength(1);
-  // The reopened notice offers the opposite action.
+  // Reopened later, the notice offers no way to change the preference.
   fireEvent.click(button('查看完整说明'));
-  fireEvent.click(await screen.findByRole('button', { name: '开启自动错误报告' }));
-  await screen.findByText('自动错误报告：已开启');
-  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
-  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT').at(-1)).toEqual({ type: 'FEEDBACK_CONSENT', enabled: true });
+  const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
+  expect(within(notice).queryByRole('button', { name: /自动错误报告/ })).toBeNull();
 });
 
-test('status page separates the automatic switch from manual feedback and neither changes the other', async () => {
+test('a side panel opened after the choice was made shows the off state and only the explanation', async () => {
+  setup('', '/sidepanel.html', { consent: false, noticeSeen: true });
+  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
+  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
+  expect(screen.queryByRole('checkbox', { name: /自动错误报告/ })).toBeNull();
+});
+
+test('the status-page notice points to the switch below instead of repeating it as a button', async () => {
   const { calls } = setup('', '/popup.html');
+  const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
+  expect(notice.textContent).toContain('如需关闭，取消勾选下方「开启自动错误报告」即可。');
+  expect(within(notice).getAllByRole('button').map(b => b.textContent)).toEqual(['知道了']);
   const auto = screen.getByRole('region', { name: '自动错误报告' });
-  const manual = screen.getByRole('region', { name: '手动反馈问题' });
-  expect(auto.contains(manual) || manual.contains(auto)).toBe(false);
+  expect(notice.compareDocumentPosition(auto) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(within(notice).getByRole('button', { name: '知道了' }));
+  await waitFor(() => expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull());
+  expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
+});
+
+test('the status page has the automatic switch only, with no manual feedback', async () => {
+  const { calls } = setup('', '/popup.html', { noticeSeen: true });
+  const auto = screen.getByRole('region', { name: '自动错误报告' });
+  expect(screen.queryByRole('region', { name: '手动反馈问题' })).toBeNull();
+  for (const name of ['展开', '预览将发送的内容', '确认发送']) expect(screen.queryByRole('button', { name })).toBeNull();
+  expect(auto.textContent).toContain('不影响侧栏里的「手动反馈问题」');
   const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
   await waitFor(() => expect(toggle.checked).toBe(true));
-  expect(manual.textContent).not.toMatch(/自动/);
-  expect(within(auto).queryByRole('button', { name: /展开|确认发送/ })).toBeNull();
-  fireEvent.click(within(manual).getByRole('button', { name: '展开' }));
-  fireEvent.input(description(), { target: { value: '草稿' } });
   fireEvent.click(toggle);
   await waitFor(() => expect(toggle.checked).toBe(false));
   await within(auto).findByText('已关闭：不会自动发送任何报告。');
-  expect(description().value).toBe('草稿');
-  expect(form().hidden).toBe(false);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.checked).toBe(true));
+  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT').map(c => c.enabled)).toEqual([false, true]);
+  // 查看完整说明 is only an explanation here too.
+  fireEvent.click(within(auto).getByRole('button', { name: '查看完整说明' }));
+  const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
+  expect(within(notice).getAllByRole('button').map(b => b.textContent)).toEqual(['收起']);
   expect(calls.some(c => c.type === 'FEEDBACK_PREVIEW' || c.type === 'FEEDBACK_SEND')).toBe(false);
 });
 
@@ -232,14 +253,4 @@ test('only navigation of the attached tab invalidates a preview', async () => {
   await previewDraft();
   updated(2); expect(button('确认发送').disabled).toBe(false);
   updated(1); expect(button('确认发送').disabled).toBe(true);
-});
-
-test('popup explains unavailable diagnostics and keeps that checkbox disabled after sending', async () => {
-  setup('', '/popup.html');
-  fireEvent.click(button('展开'));
-  const box = screen.getByRole('checkbox', { name: /请在侧栏附上填写诊断/ }) as HTMLInputElement;
-  expect(box.checked).toBe(false); expect(box.disabled).toBe(true);
-  await previewDraft();
-  fireEvent.click(button('确认发送')); await screen.findByText('发送成功，编号：receipt-123');
-  expect(box.checked).toBe(false); expect(box.disabled).toBe(true);
 });
