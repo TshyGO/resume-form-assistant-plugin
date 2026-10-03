@@ -1,9 +1,14 @@
 // Offscreen documents support runtime messaging; the dedicated worker owns fetch.
+globalThis.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }), { origin: chrome.runtime.getURL("") });
 const worker = new Worker("ai-worker.js");
 const pending = new Map();
 let sequence = 0;
 let failed = false;
 worker.onmessage = ({ data }) => {
+  if (data?.kind === "feedback-error") {
+    try { chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: data.report }).catch(() => {}); } catch {}
+    return;
+  }
   if (data?.kind === "desktop-complete") {
     chrome.runtime.sendMessage({
       type: "DESKTOP_AI_COMPLETE", requestId: data.callId,
@@ -20,7 +25,12 @@ worker.onmessage = ({ data }) => {
   pending.delete(data.id);
   respond?.(data.reply);
 };
-worker.onerror = () => {
+worker.onerror = (event = {}) => {
+  // Reporting must never interrupt the existing failure cleanup, even after extension reload.
+  try {
+    const report = globalThis.ResumeProFeedback?.exception(event.error, chrome.runtime.getURL(""), "error", event.filename, event.lineno, event.colno);
+    if (report) chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }).catch(() => {});
+  } catch {}
   failed = true;
   for (const respond of pending.values()) respond({ success: false, error: "AI 请求进程已中断，请重新加载扩展。" });
   pending.clear();

@@ -1,0 +1,29 @@
+/* Shared by the side panel and the status page; colours come from each page's own tokens. */
+.feedback-card { margin: 12px 0 0; padding: 12px; border: 1px solid var(--line, #d8dee4); border-radius: 8px; background: var(--panel, #fff); color: var(--text, var(--ink, #20242d)); font-size: 13px; line-height: 1.6; }
+.feedback-card h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.feedback-card p { margin: 6px 0 0; }
+.feedback-card p:empty { display: none; }
+.feedback-notice { border-color: var(--accent-line, var(--accent, #0f766e)); }
+.feedback-details { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line, #d8dee4); }
+.feedback-ways { margin: 6px 0 0; padding-left: 18px; }
+.feedback-ways li + li { margin-top: 4px; }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.feedback-card button { min-height: 32px; margin: 8px 8px 0 0; padding: 5px 12px; border: 1px solid var(--accent-line, var(--line, #c7dcd6)); border-radius: 7px; background: var(--accent-pale, transparent); color: var(--accent, #0f766e); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.feedback-actions button { margin: 0; }
+.feedback-actions:not(:has(button:not([hidden]))) { display: none; }
+.feedback-card .feedback-primary { border-color: var(--accent, #0f766e); background: var(--accent, #0f766e); color: #fff; }
+.feedback-card button:disabled { opacity: .55; cursor: default; }
+.feedback-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.feedback-head button { min-height: 28px; margin: 0; padding: 3px 12px; }
+.feedback-summary { color: var(--muted, #5f6b76); font-size: 12px; }
+.feedback-state { font-weight: 600; }
+.feedback-card label { display: block; margin-top: 8px; }
+.feedback-card input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -2px; }
+.feedback-card textarea { display: block; box-sizing: border-box; width: 100%; margin: 6px 0 0; padding: 8px; border: 1px solid var(--line, #94a3b8); border-radius: 6px; background: var(--panel, #fff); color: inherit; font: inherit; resize: vertical; }
+.feedback-card pre { margin: 8px 0 0; padding: 10px; max-height: 300px; overflow: auto; border-radius: 6px; background: var(--bg, #f1f5f9); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.feedback-note { color: var(--muted, #5f6b76); font-size: 12px; }
+.feedback-auto-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 8px; color: var(--muted, #5f6b76); font-size: 11px; }
+.feedback-auto-line p { flex-basis: 100%; margin: 0; }
+.feedback-auto-line p:empty { display: none; }
+.feedback-link { padding: 0; border: 0; background: transparent; color: var(--accent, #0f766e); font: inherit; font-weight: 600; cursor: pointer; }
+.feedback-card [hidden], .feedback-auto-line [hidden], [id^="feedback-"][hidden] { display: none !important; }

@@ -152,13 +152,11 @@ button { cursor: pointer; }
 .dock-diagnostics textarea { display: block; width: 100%; margin-top: 7px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font: 11px/1.6 ui-monospace, monospace; resize: vertical; }
 .dock-diagnostics-copy { margin-top: 6px; padding: 5px 10px; border: 1px solid #a9c6bf; border-radius: 6px; background: var(--accent-pale); color: var(--accent); font-size: 12px; font-weight: 600; cursor: pointer; }
 .dock-diagnostics-copy:hover { background: #dcece7; }
-.dock-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 23px 0 9px; }
-.dock-section-head h2, .dock-view > h2 { margin: 0; font-size: 14px; font-weight: 650; }
-.dock-section-head button { padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; font-weight: 600; }
-.quick-fields { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.dock-view > h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .row-key { min-width: 76px; font-size: 12px; font-weight: 600; }
 .row-value { min-width: 0; overflow: hidden; color: var(--muted); text-align: right; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .dock-help { margin: 11px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.dock-help-link { padding: 0; border: 0; background: transparent; color: var(--accent); font-size: inherit; font-weight: 600; }
 .field-meta { margin: 3px 0 12px; color: var(--muted); font-size: 11px; }
 .target-note { margin: 10px 0 12px; padding: 8px 10px; border: 1px solid #c7dcd6; border-radius: 7px; background: var(--accent-pale); color: #315e56; font-size: 11px; }
 .field-groups { display: flex; flex-direction: column; gap: 6px; }
@@ -172,7 +170,6 @@ button { cursor: pointer; }
 .field-group__body { background: #fff; }
 .field-row { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 8px 6px 10px; border-top: 1px solid var(--line); border-left: 3px solid transparent; background: #fff; }
 .field-group__body .field-row { padding-left: 16px; border-left-color: var(--accent-line); }
-.quick-fields .field-row:first-child { border-top: 0; }
 .field-row:hover { background: #f8faf9; }
 .field-row.is-in-field, .field-row.is-in-field:hover { border-left-color: var(--accent); background: var(--field-selected); color: var(--ink); }
 .field-row.is-in-field:hover { background: var(--field-selected-hover); }

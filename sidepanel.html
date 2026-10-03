@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网申快填</title>
     <link rel="stylesheet" href="sidepanel.css">
+    <link rel="stylesheet" href="feedback.css">
   </head>
   <body>
     <div class="dock">
@@ -56,6 +57,7 @@
             </div>
           </div>
           <p class="safety-note">填写后请核对网页内容，插件不会自动提交</p>
+          <div id="feedback-notice-root" hidden></div>
 
           <section id="job-save" class="job-save" aria-label="保存岗位到桌面端">
             <button class="job-save-button" id="job-save-button" type="button">保存岗位到桌面端</button>
@@ -178,9 +180,9 @@
             <button id="copy-diagnostics" class="dock-diagnostics-copy" type="button">复制诊断</button>
           </details>
 
-          <div class="dock-section-head"><h2>常用字段</h2><button id="show-fields" type="button">查看全部字段 →</button></div>
-          <div id="quick-fields" class="quick-fields"></div>
-          <p class="dock-help">手动补填：先点网页输入框，再点字段；输入框已有内容时，用右侧的「添加」「替换」「删除」。</p>
+          <div id="feedback-manual-root"></div>
+          <div id="feedback-auto-root" data-variant="compact"></div>
+          <p class="dock-help">需要手动补填？到 <button id="show-fields" class="dock-help-link" type="button">简历字段</button> 页，先点网页输入框，再点字段；输入框已有内容时，用「添加」「替换」「删除」。</p>
         </section>
 
         <section class="dock-view" id="fields-view" role="tabpanel" data-view="fields" hidden>
@@ -197,6 +199,8 @@
       <footer class="dock-footer"><button id="open-manager" type="button">打开桌面</button><button id="open-status" type="button">插件状态</button></footer>
       <div id="panel-toast" class="panel-toast" role="status" hidden></div>
     </div>
+    <script src="feedback-core.js"></script>
+    <script src="feedback-ui.js"></script>
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
     <script src="sidepanel-compose.js"></script>

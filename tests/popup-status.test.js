@@ -56,7 +56,7 @@ test('the status page manages nothing locally and loads no parsing or spreadshee
     assert.doesNotMatch(source, pattern);
   }
   const html = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
-  assert.deepEqual([...html.matchAll(/<script src="([^"]+)"/g)].map(match => match[1]), ['resume-data.js', 'popup.js']);
+  assert.deepEqual([...html.matchAll(/<script src="([^"]+)"/g)].map(match => match[1]), ['feedback-core.js', 'feedback-ui.js', 'resume-data.js', 'popup.js']);
   // Deleting data and copying the old key are behind an explicit confirm.
   assert.match(source, /"drop-key": async \(\) => \{\s*if \(!confirm\(/);
   assert.match(source, /discard: async \(\) => \{\s*if \(!confirm\(/);

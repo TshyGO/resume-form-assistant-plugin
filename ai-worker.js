@@ -1,4 +1,7 @@
-importScripts("ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js");
+importScripts("feedback-core.js", "ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js");
+// Uncaught worker errors are reported by ai-host worker.onerror, which also fails
+// pending calls. Here report only rejections, avoiding two reports for one crash.
+self.ResumeProFeedback?.install(report => self.postMessage({ kind: "feedback-error", report }), { captureErrors: false, origin: self.location.href.slice(0, self.location.href.lastIndexOf("/") + 1) });
 
 const AI_USER_BUDGET = 50_000;
 

@@ -1,4 +1,5 @@
 (() => {
+  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }), { origin: chrome.runtime.getURL("") });
   const elements = {
     pageState: document.getElementById("page-state"),
     desktopConnection: document.getElementById("desktop-connection"),
@@ -41,7 +42,6 @@
     diagnostics: document.getElementById("fill-diagnostics"),
     diagnosticsText: document.getElementById("fill-diagnostics-text"),
     copyDiagnostics: document.getElementById("copy-diagnostics"),
-    quickFields: document.getElementById("quick-fields"),
     fieldMeta: document.getElementById("field-meta"),
     fieldSearch: document.getElementById("field-search"),
     fieldGroups: document.getElementById("field-groups"),
@@ -288,13 +288,6 @@
     const groups = groupedFields();
     const fields = visibleFields(groups);
     elements.fieldMeta.textContent = `${selected?.name || "我的信息"} · ${groups.length} 个分组 · ${fields.length} 项`;
-    const preferred = ["姓名", "手机号", "手机号码", "邮箱", "常用邮箱"];
-    const quick = preferred.map((key) => fields.find((field) => field.key === key)).filter(Boolean).slice(0, 3);
-    if (!quick.length) quick.push(...fields.slice(0, 3));
-    elements.quickFields.innerHTML = quick.length
-      ? quick.map((field) => self.ResumeProCompose.renderRow(field, "quick")).join("")
-      : '<p class="field-empty">还没有可用的简历字段。</p>';
-
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
       if (!rows.length) return "";
@@ -314,7 +307,7 @@
   }
 
   function renderTargetState() {
-    self.ResumeProCompose.applyTargetState([elements.quickFields, elements.fieldGroups], targetState);
+    self.ResumeProCompose.applyTargetState([elements.fieldGroups], targetState);
   }
 
   function clearTargetState() {
@@ -1364,7 +1357,7 @@
     const open = queueUi.get(key);
     if (open) queueUi.set(key, { ...open, typed: String(event.target.value || "") });
   });
-  // Every row, quick or grouped, goes through here. The row body is the quick path (the
+  // Every field row goes through here. The row body is the quick path (the
   // page decides: an empty box gets the field, a filled one asks for an explicit button);
   // 添加 / 替换 / 删除 name the operation, and the page refuses one that would change nothing.
   async function fieldAction(event) {
@@ -1383,7 +1376,6 @@
     }
     await refreshTarget().catch(() => {});
   }
-  elements.quickFields.addEventListener("click", fieldAction);
   elements.fieldGroups.addEventListener("click", fieldAction);
   chrome.runtime.onMessage?.addListener((message, sender) => {
     if (message?.type === "RESUME_TARGET_CHANGED" && sender?.id === chrome.runtime.id
