@@ -4,12 +4,13 @@
 .feedback-card p { margin: 6px 0 0; }
 .feedback-card p:empty { display: none; }
 .feedback-notice { border-color: var(--accent-line, var(--accent, #0f766e)); }
-.feedback-notice:focus { outline: none; }
+.feedback-details { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line, #d8dee4); }
 .feedback-ways { margin: 6px 0 0; padding-left: 18px; }
 .feedback-ways li + li { margin-top: 4px; }
 .feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .feedback-card button { min-height: 32px; margin: 8px 8px 0 0; padding: 5px 12px; border: 1px solid var(--accent-line, var(--line, #c7dcd6)); border-radius: 7px; background: var(--accent-pale, transparent); color: var(--accent, #0f766e); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
 .feedback-actions button { margin: 0; }
+.feedback-actions:not(:has(button:not([hidden]))) { display: none; }
 .feedback-card .feedback-primary { border-color: var(--accent, #0f766e); background: var(--accent, #0f766e); color: #fff; }
 .feedback-card button:disabled { opacity: .55; cursor: default; }
 .feedback-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

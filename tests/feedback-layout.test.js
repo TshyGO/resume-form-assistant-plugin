@@ -30,7 +30,8 @@ test('manual feedback follows the fill result and diagnostics, with the automati
 
 test('the status page keeps only the automatic switch; manual feedback lives in the side panel', () => {
   const popup = read('popup.html');
-  assert.ok(at(popup, 'id="feedback-notice-root"') < at(popup, 'id="feedback-auto-root"'));
+  at(popup, 'id="feedback-auto-root"');
+  assert.ok(!popup.includes('feedback-notice-root'), 'the explanation unfolds inside the 自动错误报告 card');
   assert.ok(!popup.includes('feedback-manual-root'), 'no second manual feedback form');
   assert.ok(!popup.includes('id="feedback-root"'));
   assert.equal(sidepanel.split('id="feedback-manual-root"').length, 2);
