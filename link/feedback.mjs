@@ -5,16 +5,27 @@ export const STORAGE_KEY = 'feedbackStateV1';
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 const core = globalThis.ResumeProFeedback;
-const empty = () => ({ consent: null, anonymousId: null, recent: {}, hourly: [], backoff: 0, manualAt: 0 });
+const empty = () => ({ consent: null, noticeSeen: false, anonymousId: null, recent: {}, hourly: [], backoff: 0, manualAt: 0 });
 
 export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, timeoutMs = 5000 }) {
   let serial = Promise.resolve();
   let stopped = false;
   const active = new Set();
   const locked = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
-  const read = async () => ({ ...empty(), ...(await storage.get(STORAGE_KEY))[STORAGE_KEY] });
   const save = state => storage.set({ [STORAGE_KEY]: state });
-  const view = state => ({ consent: state.consent === true ? true : state.consent === false ? false : null });
+  const read = async () => {
+    const stored = (await storage.get(STORAGE_KEY))[STORAGE_KEY];
+    const state = { ...empty(), ...stored };
+    // Only missing/undecided preferences adopt the default. Never undo an opt-out.
+    if (state.consent === null || state.consent === undefined) {
+      state.consent = true; state.noticeSeen = false; state.anonymousId = uuid();
+      await save(state); // A failed write must not enable automatic network traffic.
+    } else if (stored?.noticeSeen === undefined) {
+      state.noticeSeen = true; // An earlier explicit choice already acknowledged reporting.
+    }
+    return state;
+  };
+  const view = state => ({ consent: state.consent === true, noticeSeen: state.noticeSeen === true });
   function build(input, host, id) {
     const kind = ['fill_failed', 'fill_partial', 'manual'].includes(input.kind) ? input.kind : 'exception';
     const errorType = kind === 'exception' ? (['Error','TypeError','ReferenceError','SyntaxError','RangeError','URIError','EvalError','AggregateError'].includes(input.name) ? input.name : 'Error') : kind;
@@ -58,11 +69,14 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
       stopped = enabled !== true;
       if (stopped) for (const controller of active) controller.abort();
       return locked(async () => {
-        const state = await read(); state.consent = enabled === true;
+        const state = await read(); state.consent = enabled === true; state.noticeSeen = true;
         state.anonymousId = enabled === true ? state.anonymousId || uuid() : null;
         await save(state); return view(state);
       });
     },
+    acknowledgeNotice: () => locked(async () => {
+      const state = await read(); state.noticeSeen = true; await save(state); return view(state);
+    }),
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
       const payload = await locked(async () => {
@@ -112,6 +126,7 @@ export function installFeedback(api) {
       }
       if (!page) return { ok: false, reason: 'forbidden' };
       if (message.type === 'FEEDBACK_STATUS') return service.status();
+      if (message.type === 'FEEDBACK_NOTICE_SEEN') return service.acknowledgeNotice();
       if (message.type === 'FEEDBACK_CONSENT') return service.setConsent(message.enabled === true);
       if (message.type === 'FEEDBACK_PREVIEW') {
         const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics) };

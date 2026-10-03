@@ -5,13 +5,13 @@
   const core = self.ResumeProFeedback;
   const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
   root.innerHTML = `
-    <section class="feedback-card" id="feedback-consent" hidden aria-label="错误报告选择">
-      <h2>帮助改进填写</h2><p>出错时自动发送匿名错误报告？包含错误类型、代码位置、版本、系统和出错网站的域名；一键填写有字段没填上时，还会附上填写诊断（字段名和控件结构）。不含简历、填写内容和完整网址。</p>
-      <button type="button" id="feedback-enable">开启</button> <button type="button" id="feedback-decline">暂不</button>
+    <section class="feedback-card" id="feedback-consent" hidden aria-label="错误报告说明">
+      <h2>帮助改进网申快填</h2><p>自动错误报告默认已开启，用于定位问题、改进填写兼容性。报告仅含错误类别、本插件代码位置、版本、系统，以及出错页域名和经过筛选的填写诊断。不上传简历、填写值、页面正文、完整网址、Cookie 或密钥。</p><p>报告使用随机标识，发送前先脱敏，经 Cloudflare 中转（最长暂存 90 天），由 Muse 再次脱敏整理为可能公开的 GitHub issue。你可立即关闭，也可随时使用下方开关；关闭不影响填写功能。</p>
+      <button type="button" id="feedback-enable">知道了</button> <button type="button" id="feedback-decline">关闭自动上报</button>
     </section>
     <section class="feedback-card" aria-label="问题反馈">
       <label><input type="checkbox" id="feedback-toggle" disabled>自动发送匿名错误报告</label>
-      <p class="feedback-note">仅在你开启后发送；可随时关闭。插件与桌面分别设置。</p>
+      <p class="feedback-note">默认开启；可随时关闭，关闭删除随机安装标识。插件与桌面分别设置。</p>
       <button type="button" id="feedback-open">反馈问题</button>
       <form id="feedback-form" hidden>
         <label for="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
@@ -36,25 +36,29 @@
   let previewTabId;
   let revision = 0;
   let busy = false;
+  let savingConsent = false;
   let preparing = false;
   let coolUntil = 0;
   const invalidate = () => { revision++; token = null; previewTabId = undefined; $('send').disabled = true; $('preview').hidden = true; };
   const status = text => { $('status').textContent = text; };
   function renderConsent(result) {
-    $('consent').hidden = result.consent !== null;
+    $('consent').hidden = result.noticeSeen !== false;
     $('toggle').checked = result.consent === true;
     $('toggle').disabled = result.consent === undefined;
     $('retry').hidden = result.consent !== undefined;
     if (result.consent === undefined) status('无法读取反馈设置，请重新读取。');
   }
   async function consent(enabled) {
-    $('toggle').disabled = true;
-    const result = await send({ type: 'FEEDBACK_CONSENT', enabled });
+    if (savingConsent) return;
+    savingConsent = true;
+    $('toggle').disabled = true; $('enable').disabled = true; $('decline').disabled = true;
+    const result = await send(enabled === undefined ? { type: 'FEEDBACK_NOTICE_SEEN' } : { type: 'FEEDBACK_CONSENT', enabled });
+    savingConsent = false; $('enable').disabled = false; $('decline').disabled = false;
     renderConsent(result);
-    status(result.consent === undefined ? '设置未保存，请重试。' : enabled ? '已开启匿名错误报告。' : '已关闭自动上报，安装标识已删除。');
+    status(result.consent === undefined ? '设置未保存，请重试。' : result.consent ? '已开启匿名错误报告。' : '已关闭自动上报，安装标识已删除。');
   }
   $('retry').onclick = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
-  $('enable').onclick = () => consent(true);
+  $('enable').onclick = () => consent();
   $('decline').onclick = () => consent(false);
   $('toggle').onchange = () => consent($('toggle').checked);
   $('open').onclick = () => { $('form').hidden = false; $('description').focus(); };

@@ -5,7 +5,8 @@ import { fireEvent, screen, waitFor } from '@testing-library/dom';
 function setup(failure = '', pathname = '/sidepanel.html') {
   document.body.innerHTML = '<div id="feedback-root"></div>';
   const calls: Record<string, unknown>[] = [];
-  let consent: boolean | null = null;
+  let consent = true;
+  let noticeSeen = false;
   let now = 100000;
   let updated: (id: number, change: { status: string }) => void = () => {};
   const timers: (() => void)[] = [];
@@ -13,8 +14,9 @@ function setup(failure = '', pathname = '/sidepanel.html') {
   const api = {
     runtime: { sendMessage: vi.fn(async (message: Record<string, unknown>) => {
       calls.push(message);
-      if (message.type === 'FEEDBACK_STATUS') return failure === 'settings' ? { ok: false } : { consent };
-      if (message.type === 'FEEDBACK_CONSENT') { consent = message.enabled === true; return { consent }; }
+      if (message.type === 'FEEDBACK_STATUS') return failure === 'settings' ? { ok: false } : { consent, noticeSeen };
+      if (message.type === 'FEEDBACK_CONSENT') { consent = message.enabled === true; noticeSeen = true; return { consent, noticeSeen }; }
+      if (message.type === 'FEEDBACK_NOTICE_SEEN') { noticeSeen = true; return { consent, noticeSeen }; }
       if (message.type === 'FEEDBACK_PREVIEW') return { ok: true, token: 'draft', payload: { description: 'reviewed', anonymous_id: 'test-id' } };
       return failure ? { ok: false, reason: failure } : { ok: true, id: 'receipt-123' };
     }) },
@@ -26,9 +28,9 @@ function setup(failure = '', pathname = '/sidepanel.html') {
   vm.runInContext(readFileSync('../feedback-ui.js', 'utf8'), context);
   return { calls, updated: (id: number) => updated(id, { status: 'loading' }), finishCooldown: () => { now += 60001; timers.forEach(callback => callback()); } };
 }
-test('plugin displays explicit choice, previews complete payload and sends only its token while opted out', async () => {
-  const { calls } = setup(); fireEvent.click(await screen.findByRole('button', { name: '暂不' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: '开启' })).toBeNull());
+test('plugin displays default-on notice, previews complete payload and sends only its token while opted out', async () => {
+  const { calls } = setup(); fireEvent.click(await screen.findByRole('button', { name: '关闭自动上报' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '知道了' })).toBeNull());
   fireEvent.click(screen.getByRole('button', { name: '反馈问题' }));
   fireEvent.click(screen.getByRole('button', { name: '预览将发送的内容' }));
   await waitFor(() => expect((screen.getByRole('button', { name: '确认发送' }) as HTMLButtonElement).disabled).toBe(false));
@@ -87,4 +89,16 @@ test('a preview prepared during cooldown becomes sendable when the existing time
   fireEvent.click(preview); await screen.findByText('请核对预览，确认后发送。');
   expect(send.disabled).toBe(true);
   finishCooldown(); expect(send.disabled).toBe(false);
+});
+
+
+test('plugin notice acknowledgement keeps reporting enabled without changing its preference', async () => {
+  const { calls } = setup();
+  const toggle = await screen.findByRole('checkbox', { name: '自动发送匿名错误报告' }) as HTMLInputElement;
+  await waitFor(() => expect(toggle.checked).toBe(true));
+  fireEvent.click(screen.getByRole('button', { name: '知道了' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '知道了' })).toBeNull());
+  expect(toggle.checked).toBe(true);
+  expect(calls.some(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toBe(true);
+  expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
 });
