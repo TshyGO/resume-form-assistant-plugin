@@ -2,7 +2,8 @@
 name = "resume-sheet"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+# 与开发文档和双平台 CI 实际验证的工具链下限一致。
+rust-version = "1.94"
 description = "Resume Pro #130: 简历模板与 Excel/CSV 互转。表头、跳行、报错口径与插件 popup.js 一致。不碰数据库，不认识 Tauri。"
 publish = false
 

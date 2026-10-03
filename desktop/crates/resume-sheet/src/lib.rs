@@ -84,6 +84,7 @@ fn extension(file_name: &str) -> Option<String> {
     file_name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase())
 }
 
+/// 文件大小上限为 5 MiB；解析预算超限与损坏文件一样返回 Unreadable。
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<Vec<Group>, SheetError> {
     if bytes.len() as u64 > MAX_SHEET_BYTES {
         return Err(SheetError::Unreadable);
@@ -138,7 +139,7 @@ fn cell_text(cell: &Data) -> String {
 }
 
 /// 在 calamine 的 CFB 探测、共享字符串预分配和 XML 解析之前执行。
-fn validate_xlsx(bytes: &[u8]) -> Result<(), SheetError> {
+fn validate_xlsx(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, SheetError> {
     if !bytes.starts_with(b"PK\x03\x04") {
         return Err(SheetError::Unreadable);
     }
@@ -147,6 +148,7 @@ fn validate_xlsx(bytes: &[u8]) -> Result<(), SheetError> {
         return Err(SheetError::Unreadable);
     }
     let mut remaining = MAX_XLSX_EXPANDED_BYTES;
+    let mut parts = BTreeMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|_| SheetError::Unreadable)?;
         if file.size() > remaining {
@@ -163,15 +165,24 @@ fn validate_xlsx(bytes: &[u8]) -> Result<(), SheetError> {
         remaining -= content.len() as u64;
         // 工作表关系可指向 .bin 等任意后缀。扫描所有成员，不能凭后缀跳过安全检查。
         validate_xlsx_xml(&content, name.ends_with(".xml") || name.ends_with(".rels"))?;
+        parts.insert(name.replace('\\', "/"), content);
     }
-    Ok(())
+    Ok(parts)
+}
+
+fn xlsx_xml_reader(content: &[u8]) -> quick_xml::Reader<&[u8]> {
+    let mut xml = quick_xml::Reader::from_reader(content);
+    xml.config_mut().check_end_names = false;
+    xml.config_mut().check_comments = false;
+    xml.config_mut().trim_text(false);
+    xml.config_mut().expand_empty_elements = true;
+    xml
 }
 
 fn validate_xlsx_xml(content: &[u8], require_xml: bool) -> Result<(), SheetError> {
-    let mut xml = quick_xml::Reader::from_reader(content);
     // 与 calamine 的 XML tokenizer 一致，防止预检提前停止而实际解析继续。
-    xml.config_mut().check_end_names = false;
-    xml.config_mut().expand_empty_elements = true;
+    let mut xml = xlsx_xml_reader(content);
+    let mut shared_strings = 0;
     loop {
         let event = match xml.read_event() {
             Ok(event) => event,
@@ -180,6 +191,18 @@ fn validate_xlsx_xml(content: &[u8], require_xml: bool) -> Result<(), SheetError
         };
         match event {
             Event::Start(e) | Event::Empty(e) => {
+                if e.local_name().as_ref() == b"si" {
+                    shared_strings += 1;
+                    if shared_strings > MAX_XLSX_CELLS { return Err(SheetError::Unreadable); }
+                }
+                // calamine 的 raw-attribute reader 允许比 XML 更多的 ASCII 空白。
+                // 先拒绝非法控制字节，防止它把预检看到的不同属性名解释成 uniqueCount/r/ref。
+                let guarded_tag = matches!(e.local_name().as_ref(), b"sst" | b"row" | b"c" | b"dimension" | b"f");
+                if (require_xml || guarded_tag)
+                    && e.iter().any(|b| b.is_ascii_control() && !matches!(b, b'\t' | b'\n' | b'\r'))
+                {
+                    return Err(SheetError::Unreadable);
+                }
                 for (index, attr) in e.attributes().enumerate() {
                     if index >= MAX_XML_ATTRIBUTES {
                         return Err(SheetError::Unreadable);
@@ -195,7 +218,7 @@ fn validate_xlsx_xml(content: &[u8], require_xml: bool) -> Result<(), SheetError
                     match (e.local_name().as_ref(), attr.key.as_ref()) {
                         (b"row", b"r") => { validate_cell_reference(&attr.value, false)?; }
                         (b"c", b"r") => { validate_cell_reference(&attr.value, true)?; }
-                        (b"dimension" | b"f", b"ref") => validate_cell_range(&attr.value)?,
+                        (b"dimension", b"ref") => validate_cell_range(&attr.value)?,
                         _ => {}
                     }
                     if e.local_name().as_ref() == b"sst" && attr.key.as_ref() == b"uniqueCount" {
@@ -247,8 +270,91 @@ fn validate_cell_range(reference: &[u8]) -> Result<(), SheetError> {
     Ok(())
 }
 
+fn xml_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8], decoder: quick_xml::Decoder, local: bool)
+    -> Result<Option<String>, SheetError>
+{
+    for attr in e.attributes() {
+        let attr = attr.map_err(|_| SheetError::Unreadable)?;
+        let matches = if local { attr.key.local_name().as_ref() == key } else { attr.key.as_ref() == key };
+        if matches {
+            // 与 calamine::attrs::decode_attr 相同，不额外规范化关系路径中的空白。
+            let decoded = decoder.decode(&attr.value).map_err(|_| SheetError::Unreadable)?;
+            return quick_xml::escape::unescape(&decoded).map(|v| Some(v.into_owned()))
+                .map_err(|_| SheetError::Unreadable);
+        }
+    }
+    Ok(None)
+}
+
+/// calamine 的 DataRef 不区分 inlineStr 与 t=str，只有后者仍需 Excel 转义解码。
+/// 从同一 ZIP 的实际关系链定位首表，并按 XML 流顺序保留类型；不能用是否存在公式猜测。
+fn first_sheet_string_types(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<bool>, SheetError> {
+    let part = |path: &str| parts.get(&path.replace('\\', "/").to_ascii_lowercase())
+        .map(Vec::as_slice).ok_or(SheetError::Unreadable);
+    let mut directory = "xl/".to_string();
+    if let Some(root) = parts.get("_rels/.rels") {
+        let mut xml = xlsx_xml_reader(root);
+        loop {
+            match xml.read_event().map_err(|_| SheetError::Unreadable)? {
+                Event::Start(e) if e.local_name().as_ref() == b"Relationship" => {
+                    if xml_attr(&e, b"Type", xml.decoder(), false)?.is_some_and(|v| v.ends_with("/relationships/officeDocument")) {
+                        if let Some(target) = xml_attr(&e, b"Target", xml.decoder(), false)? {
+                            directory = target.rfind('/').map(|i| target[..=i].trim_start_matches('/').to_string()).unwrap_or_default();
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+    }
+    let mut xml = xlsx_xml_reader(part(&format!("{directory}workbook.xml"))?);
+    let sheet_id = loop {
+        match xml.read_event().map_err(|_| SheetError::Unreadable)? {
+            Event::Start(e) if e.local_name().as_ref() == b"sheet" => {
+                break xml_attr(&e, b"id", xml.decoder(), true)?.ok_or(SheetError::Unreadable)?;
+            }
+            Event::Eof => return Err(SheetError::Unreadable),
+            _ => {}
+        }
+    };
+    let mut xml = xlsx_xml_reader(part(&format!("{directory}_rels/workbook.xml.rels"))?);
+    let mut target = None;
+    loop {
+        match xml.read_event().map_err(|_| SheetError::Unreadable)? {
+            Event::Start(e) if e.local_name().as_ref() == b"Relationship" => {
+                if xml_attr(&e, b"Id", xml.decoder(), false)?.as_deref() == Some(&sheet_id) {
+                    target = xml_attr(&e, b"Target", xml.decoder(), false)?;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    let target = target.ok_or(SheetError::Unreadable)?;
+    let path = target.strip_prefix('/').map(str::to_string).unwrap_or_else(|| format!("{directory}{target}"));
+    let mut xml = xlsx_xml_reader(part(&path)?);
+    let mut in_data = false;
+    let mut in_cell = false;
+    let mut types = Vec::new();
+    loop {
+        match xml.read_event().map_err(|_| SheetError::Unreadable)? {
+            Event::Start(e) if e.local_name().as_ref() == b"sheetData" => in_data = true,
+            Event::Start(e) if in_data && e.local_name().as_ref() == b"c" => {
+                if in_cell || types.len() == MAX_XLSX_CELLS { return Err(SheetError::Unreadable); }
+                in_cell = true;
+                types.push(xml_attr(&e, b"t", xml.decoder(), false)?.as_deref() == Some("str"));
+            }
+            Event::End(e) if in_data && e.local_name().as_ref() == b"c" => in_cell = false,
+            Event::End(e) if in_data && e.local_name().as_ref() == b"sheetData" => return Ok(types),
+            Event::Eof => return Err(SheetError::Unreadable),
+            _ => {}
+        }
+    }
+}
+
 fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
-    validate_xlsx(bytes)?;
+    let parts = validate_xlsx(bytes)?;
     let mut workbook: Xlsx<_> =
         open_workbook_from_rs(Cursor::new(bytes)).map_err(|_| SheetError::Unreadable)?;
     let first = workbook.sheet_names().first().cloned().ok_or(SheetError::NoSheet)?;
@@ -257,21 +363,23 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
         Err(XlsxError::NotAWorksheet(_)) => return Ok(Vec::new()),
         Err(_) => return Err(SheetError::Unreadable),
     };
+    let string_types = first_sheet_string_types(&parts)?;
+    drop(parts);
     // 不调用 worksheet_range：两个距离很远的单元格也会让 Range 分配巨大矩形。
     let mut cells = Vec::new();
     let mut left = u32::MAX;
     let mut text_bytes = 0u64;
     let mut count = 0;
-    while let Some(cell) = reader.next_cell_with_formula_metadata().map_err(|_| SheetError::Unreadable)? {
+    while let Some(cell) = reader.next_cell().map_err(|_| SheetError::Unreadable)? {
         count += 1;
         if count > MAX_XLSX_CELLS {
             return Err(SheetError::Unreadable);
         }
-        let value = &cell.value;
+        let value = cell.get_value();
         if matches!(value, DataRef::Empty) {
             continue;
         }
-        let (row, col) = cell.pos;
+        let (row, col) = cell.get_position();
         if row >= 1_048_576 || col >= 16_384 {
             return Err(SheetError::Unreadable);
         }
@@ -286,7 +394,7 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
             return Err(SheetError::Unreadable);
         }
         left = left.min(col);
-        let text = if cell.formula.is_some() {
+        let text = if *string_types.get(count - 1).ok_or(SheetError::Unreadable)? {
             match value {
                 // calamine 已解码共享/内联字符串，但公式缓存 t=str 仍返回原始 Excel 转义。
                 DataRef::String(s) => decode_excel_escapes(s),
@@ -297,6 +405,7 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
         };
         cells.push((row, col, text));
     }
+    if count != string_types.len() { return Err(SheetError::Unreadable); }
     let mut rows: BTreeMap<u32, [String; 3]> = BTreeMap::new();
     for (row, col, text) in cells {
         // 按整个 used range 的最左列取相对前三列；相同坐标最后一个非空值生效。
@@ -642,6 +751,81 @@ mod tests {
             </sheetData></worksheet>"#;
         let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml);
         assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "1")])]);
+    }
+
+    #[test]
+    fn non_xml_whitespace_cannot_hide_guarded_attributes() {
+        for control in [0x0b, 0x0c] {
+            let mut xml = b"<sst ".to_vec();
+            xml.push(control);
+            xml.extend_from_slice(b"uniqueCount=\"18446744073709551615\"/>");
+            // 不先运行有风险的分配器：必须由同一预检直接拒绝，包括无 XML 后缀的路径。
+            assert_eq!(validate_xlsx_xml(&xml, false), Err(SheetError::Unreadable));
+            let bytes = with_member(&sample_xlsx(), "xl/sharedStrings.xml", &xml);
+            assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+        }
+    }
+
+    #[test]
+    fn string_types_decode_once_with_or_without_formulas() {
+        for (kind, body) in [
+            ("str", "<v>a_x000D_b _x005F_x0041_</v>"),
+            ("inlineStr", "<is><t>a_x000D_b _x005F_x0041_</t></is>"),
+        ] {
+            let xml = format!(r#"<worksheet><sheetData>
+                <row r="1"><c r="A1" t="inlineStr"><is><t>header</t></is></c></row>
+                <row r="2"><c r="B2" t="inlineStr"><is><t>key</t></is></c>
+                <c r="C2" t="{kind}">{body}</c></row></sheetData></worksheet>"#);
+            let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml.as_bytes());
+            assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "a\rb _x0041_")])]);
+        }
+    }
+
+    #[test]
+    fn actual_shared_string_entries_are_bounded_without_a_declared_count() {
+        let xml = format!("<sst>{}</sst>", "<si><t>x</t></si>".repeat(MAX_XLSX_CELLS + 1));
+        let bytes = with_member(&sample_xlsx(), "xl/sharedStrings.xml", xml.as_bytes());
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn worksheet_relationships_can_use_non_xml_extensions() {
+        let xml = br#"<worksheet><sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>header</t></is></c></row>
+            <row r="2"><c r="B2" t="inlineStr"><is><t>key</t></is></c>
+            <c r="C2" t="str"><v>a_x000D_b</v></c></row></sheetData></worksheet>"#;
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.bin", xml);
+        let rels = br#"<Relationships><Relationship Id="rId1"
+            Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+            Target="worksheets/sheet1.bin"/></Relationships>"#;
+        let bytes = with_member(&bytes, "xl/_rels/workbook.xml.rels", rels);
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "a\rb")])]);
+        let attack = b"<worksheet><dimension ref=\"B2:A1\"/><sheetData/></worksheet>";
+        let bytes = with_member(&bytes, "xl/worksheets/sheet1.bin", attack);
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn workbook_directory_and_member_case_follow_package_relationships() {
+        use std::io::Write;
+        let bytes = sample_xlsx();
+        let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for i in 0..input.len() {
+            let mut file = input.by_index(i).unwrap();
+            if file.name() == "_rels/.rels" { continue; }
+            let name = file.name().strip_prefix("xl/").map(|p| format!("CUSTOM/{p}").to_ascii_uppercase())
+                .unwrap_or_else(|| file.name().to_string());
+            output.start_file(name, options).unwrap();
+            std::io::copy(&mut file, &mut output).unwrap();
+        }
+        output.start_file("_rels/.rels", options).unwrap();
+        output.write_all(br#"<Relationships><Relationship Id="rId1"
+            Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+            Target="/custom/workbook.xml"/></Relationships>"#).unwrap();
+        let bytes = output.finish().unwrap().into_inner();
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("组", &[("键", "值")])]);
     }
 
     #[test]
