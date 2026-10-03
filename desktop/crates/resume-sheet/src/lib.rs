@@ -1,10 +1,12 @@
 //! 简历模板 ↔ Excel/CSV。口径逐条对齐插件 `popup.js` 的 `parseTemplateFile`、
 //! `templateToSheetRows`、`templateExportFileName`、`getTemplateNameFromFile`。
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
-use calamine::{open_workbook_from_rs, Data, Reader, Xlsx};
+use calamine::{open_workbook_from_rs, Data, DataRef, Reader, Xlsx, XlsxError};
+use quick_xml::events::Event;
 use rust_xlsxwriter::Workbook;
 
 pub const HEADER: [&str; 3] = ["一级分类", "字段名", "值"];
@@ -12,6 +14,13 @@ pub const SHEET_NAME: &str = "简历模板";
 const UNGROUPED: &str = "未分类";
 const UNNAMED: &str = "未命名模板";
 const MAX_LISTED_ROW_NUMBERS: usize = 20;
+
+pub const MAX_SHEET_BYTES: u64 = 5 * 1024 * 1024;
+// 压缩文件大小不等于解析成本。上限覆盖解压、元数据预分配和共享字符串重复引用。
+const MAX_XLSX_EXPANDED_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_XLSX_MEMBERS: usize = 1024;
+const MAX_XLSX_CELLS: usize = 200_000;
+const MAX_XML_ATTRIBUTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
@@ -76,6 +85,9 @@ fn extension(file_name: &str) -> Option<String> {
 }
 
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<Vec<Group>, SheetError> {
+    if bytes.len() as u64 > MAX_SHEET_BYTES {
+        return Err(SheetError::Unreadable);
+    }
     let rows = match extension(file_name).as_deref() {
         Some("xlsx") => xlsx_rows(bytes)?,
         Some("csv") => csv_rows(bytes)?,
@@ -84,13 +96,7 @@ pub fn parse(file_name: &str, bytes: &[u8]) -> Result<Vec<Group>, SheetError> {
     groups_from_rows(rows)
 }
 
-/// 解一个 `_x([0-9A-Fa-f]{4})_` 转义序列，还原成对应字符。
-/// rust_xlsxwriter/Excel 把共享字符串里的控制字符（`\t`、`\n` 除外）以及字面量
-/// 出现的 `_xHHHH_` 序列本身，都转义成这种形式（字面量的下划线转义成
-/// `_x005F_`）；calamine 0.30.1 读回来不会解码，这里手动单遍、从左到右扫描
-/// 补上，不引入 regex 依赖。单遍扫描意味着 `_x005F_x0041_` 会先把开头的
-/// `_x005F_` 解成 `_`，再把剩下的 `x0041_` 当成普通文本，结果是 `_x0041_`——
-/// 这与 Excel 自己转义/反转义的行为一致。
+// 仅用于 calamine 尚未解码的公式字符串缓存。共享/内联字符串不能再解一次。
 fn decode_excel_escapes(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
@@ -120,7 +126,8 @@ fn decode_excel_escapes(s: &str) -> String {
 fn cell_text(cell: &Data) -> String {
     match cell {
         Data::Empty => String::new(),
-        Data::String(s) => decode_excel_escapes(s),
+        // calamine 0.36 已解码 Excel 转义；再解一次会破坏字面量 _xHHHH_。
+        Data::String(s) => s.clone(),
         // 插件把 #N/A 等错误单元格当空值导入。
         Data::Error(_) => String::new(),
         // f64 的 Display 不会用科学计数法、也不带多余的 .0，唯一要收拾的是
@@ -130,22 +137,174 @@ fn cell_text(cell: &Data) -> String {
     }
 }
 
+/// 在 calamine 的 CFB 探测、共享字符串预分配和 XML 解析之前执行。
+fn validate_xlsx(bytes: &[u8]) -> Result<(), SheetError> {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return Err(SheetError::Unreadable);
+    }
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| SheetError::Unreadable)?;
+    if archive.len() > MAX_XLSX_MEMBERS {
+        return Err(SheetError::Unreadable);
+    }
+    let mut remaining = MAX_XLSX_EXPANDED_BYTES;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|_| SheetError::Unreadable)?;
+        if file.size() > remaining {
+            return Err(SheetError::Unreadable);
+        }
+        let name = file.name().to_ascii_lowercase();
+        // 不信任 ZIP 声明的大小；实际读取也受限，并读到 EOF 校验 CRC。
+        let mut content = Vec::new();
+        file.by_ref().take(remaining + 1).read_to_end(&mut content)
+            .map_err(|_| SheetError::Unreadable)?;
+        if content.len() as u64 > remaining {
+            return Err(SheetError::Unreadable);
+        }
+        remaining -= content.len() as u64;
+        // 工作表关系可指向 .bin 等任意后缀。扫描所有成员，不能凭后缀跳过安全检查。
+        validate_xlsx_xml(&content, name.ends_with(".xml") || name.ends_with(".rels"))?;
+    }
+    Ok(())
+}
+
+fn validate_xlsx_xml(content: &[u8], require_xml: bool) -> Result<(), SheetError> {
+    let mut xml = quick_xml::Reader::from_reader(content);
+    // 与 calamine 的 XML tokenizer 一致，防止预检提前停止而实际解析继续。
+    xml.config_mut().check_end_names = false;
+    xml.config_mut().expand_empty_elements = true;
+    loop {
+        let event = match xml.read_event() {
+            Ok(event) => event,
+            Err(_) if !require_xml => return Ok(()), // 图片等二进制；calamine 也无法越过此错误。
+            Err(_) => return Err(SheetError::Unreadable),
+        };
+        match event {
+            Event::Start(e) | Event::Empty(e) => {
+                for (index, attr) in e.attributes().enumerate() {
+                    if index >= MAX_XML_ATTRIBUTES {
+                        return Err(SheetError::Unreadable);
+                    }
+                    let attr = match attr {
+                        Ok(attr) => attr,
+                        // 二进制附件中偶然出现尖括号不是 XML；仍继续扫描后续事件。
+                        Err(_) if !require_xml => continue,
+                        Err(_) => return Err(SheetError::Unreadable),
+                    };
+                    // calamine 按关系文件寻找工作簿目录，所以检查所有 XML 路径，
+                    // 也检查自闭合/带命名空间的 sst，而非只检查 xl/sharedStrings.xml。
+                    match (e.local_name().as_ref(), attr.key.as_ref()) {
+                        (b"row", b"r") => { validate_cell_reference(&attr.value, false)?; }
+                        (b"c", b"r") => { validate_cell_reference(&attr.value, true)?; }
+                        (b"dimension" | b"f", b"ref") => validate_cell_range(&attr.value)?,
+                        _ => {}
+                    }
+                    if e.local_name().as_ref() == b"sst" && attr.key.as_ref() == b"uniqueCount" {
+                        let count = std::str::from_utf8(&attr.value)
+                            .ok().and_then(|s| s.parse::<usize>().ok())
+                            .ok_or(SheetError::Unreadable)?;
+                        if count > MAX_XLSX_CELLS {
+                            return Err(SheetError::Unreadable);
+                        }
+                    }
+                }
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+// calamine 在返回 cell 前用 u32 算坐标；先拒绝越界文本，避免解析器内部溢出。
+fn validate_cell_reference(reference: &[u8], column_required: bool) -> Result<(u32, u32), SheetError> {
+    let letters = reference.iter().take_while(|b| b.is_ascii_alphabetic()).count();
+    let mut column = 0u32;
+    for letter in &reference[..letters] {
+        column = column.checked_mul(26)
+            .and_then(|n| n.checked_add((letter.to_ascii_uppercase() - b'A' + 1) as u32))
+            .ok_or(SheetError::Unreadable)?;
+    }
+    let digits = &reference[letters..];
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(SheetError::Unreadable);
+    }
+    let row = std::str::from_utf8(digits).ok().and_then(|s| s.parse::<u32>().ok())
+        .ok_or(SheetError::Unreadable)?;
+    if row == 0 || row > 1_048_576 || column > 16_384 || (column_required && column == 0) {
+        return Err(SheetError::Unreadable);
+    }
+    Ok((row, column))
+}
+
+fn validate_cell_range(reference: &[u8]) -> Result<(), SheetError> {
+    let mut endpoints = reference.split(|b| *b == b':');
+    let start = validate_cell_reference(endpoints.next().ok_or(SheetError::Unreadable)?, true)?;
+    if let Some(end) = endpoints.next() {
+        let end = validate_cell_reference(end, true)?;
+        if end.0 < start.0 || end.1 < start.1 || endpoints.next().is_some() {
+            return Err(SheetError::Unreadable);
+        }
+    }
+    Ok(())
+}
+
 fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
+    validate_xlsx(bytes)?;
     let mut workbook: Xlsx<_> =
         open_workbook_from_rs(Cursor::new(bytes)).map_err(|_| SheetError::Unreadable)?;
     let first = workbook.sheet_names().first().cloned().ok_or(SheetError::NoSheet)?;
-    let range = workbook.worksheet_range(&first).map_err(|_| SheetError::Unreadable)?;
-    let (Some((top, left)), Some((bottom, _))) = (range.start(), range.end()) else {
-        return Ok(Vec::new());
+    let mut reader = match workbook.worksheet_cells_reader(&first) {
+        Ok(reader) => reader,
+        Err(XlsxError::NotAWorksheet(_)) => return Ok(Vec::new()),
+        Err(_) => return Err(SheetError::Unreadable),
     };
-    let mut rows = Vec::new();
-    for r in top..=bottom {
-        // 插件（SheetJS）按 used range 相对取前三列；calamine 的 get_value 要
-        // 绝对坐标，所以要在 used range 最左列（left）上加相对偏移。
-        let cell = |c: u32| range.get_value((r, left + c)).map(cell_text).unwrap_or_default();
-        rows.push((r as usize + 1, [cell(0), cell(1), cell(2)]));
+    // 不调用 worksheet_range：两个距离很远的单元格也会让 Range 分配巨大矩形。
+    let mut cells = Vec::new();
+    let mut left = u32::MAX;
+    let mut text_bytes = 0u64;
+    let mut count = 0;
+    while let Some(cell) = reader.next_cell_with_formula_metadata().map_err(|_| SheetError::Unreadable)? {
+        count += 1;
+        if count > MAX_XLSX_CELLS {
+            return Err(SheetError::Unreadable);
+        }
+        let value = &cell.value;
+        if matches!(value, DataRef::Empty) {
+            continue;
+        }
+        let (row, col) = cell.pos;
+        if row >= 1_048_576 || col >= 16_384 {
+            return Err(SheetError::Unreadable);
+        }
+        // 先计算借用的共享字符串长度，防止大量引用在 clone 后才发现超限。
+        let string_len = match value {
+            DataRef::String(s) => s.len(),
+            DataRef::SharedString(s) => s.len(),
+            _ => 0,
+        };
+        text_bytes += string_len as u64;
+        if text_bytes > MAX_XLSX_EXPANDED_BYTES {
+            return Err(SheetError::Unreadable);
+        }
+        left = left.min(col);
+        let text = if cell.formula.is_some() {
+            match value {
+                // calamine 已解码共享/内联字符串，但公式缓存 t=str 仍返回原始 Excel 转义。
+                DataRef::String(s) => decode_excel_escapes(s),
+                _ => cell_text(&Data::from(value.clone())),
+            }
+        } else {
+            cell_text(&Data::from(value.clone()))
+        };
+        cells.push((row, col, text));
     }
-    Ok(rows)
+    let mut rows: BTreeMap<u32, [String; 3]> = BTreeMap::new();
+    for (row, col, text) in cells {
+        // 按整个 used range 的最左列取相对前三列；相同坐标最后一个非空值生效。
+        if col - left < 3 {
+            rows.entry(row).or_default()[(col - left) as usize] = text;
+        }
+    }
+    Ok(rows.into_iter().map(|(row, cells)| (row as usize + 1, cells)).collect())
 }
 
 /// 增量算「一条 CSV 记录在原文本里的真实行号」（从 1 起，`\r\n` 算一次换行）。
@@ -321,6 +480,177 @@ mod tests {
         }
     }
 
+    /// 保留真实导出文件的关系/类型信息，只替换被测 XML 部件。
+    fn with_member(bytes: &[u8], name: &str, content: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for i in 0..input.len() {
+            let mut file = input.by_index(i).unwrap();
+            if file.name() == name { continue; }
+            output.start_file(file.name(), options).unwrap();
+            std::io::copy(&mut file, &mut output).unwrap();
+        }
+        output.start_file(name, options).unwrap();
+        output.write_all(content).unwrap();
+        output.finish().unwrap().into_inner()
+    }
+
+    fn sample_xlsx() -> Vec<u8> {
+        write_xlsx(&[g("组", &[("键", "值")])]).unwrap()
+    }
+
+    #[test]
+    fn xlsx_excessive_attributes_are_rejected_before_workbook_parsing() {
+        use std::fmt::Write;
+        let mut xml = String::from("<worksheet><dimension");
+        for i in 0..=MAX_XML_ATTRIBUTES {
+            write!(xml, " a{i}=\"x\"").unwrap();
+        }
+        xml.push_str(" ref=\"A1:C2\"/><sheetData/></worksheet>");
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml.as_bytes());
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn xlsx_rejects_untrusted_shared_string_capacity_in_all_tag_forms() {
+        for xml in [
+            "<sst uniqueCount=\"18446744073709551615\"></sst>",
+            "<sst uniqueCount=\"18446744073709551615\"/>",
+            "<s:sst xmlns:s=\"urn:test\" uniqueCount=\"18446744073709551615\"/>",
+        ] {
+            let bytes = with_member(&sample_xlsx(), "xl/sharedStrings.xml", xml.as_bytes());
+            assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+            // 大小写、反斜杠和非标准目录不能绕过预检。
+            let bytes = with_member(&sample_xlsx(), "other\\SHAREDSTRINGS.XML", xml.as_bytes());
+            assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+        }
+    }
+
+    #[test]
+    fn xlsx_rejects_ole_headers_before_calamine_cfb_probe() {
+        // CFB 扇区计数来自文件头；不能先进入其预分配路径再检查 ZIP。
+        let mut bytes = vec![0xff; 512];
+        bytes[..8].copy_from_slice(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+        assert_eq!(parse("renamed.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn xlsx_bounds_decompression_even_for_an_unused_member() {
+        let expanded = vec![b'a'; MAX_XLSX_EXPANDED_BYTES as usize + 1];
+        let bytes = with_member(&sample_xlsx(), "unused.bin", &expanded);
+        assert!(bytes.len() < MAX_SHEET_BYTES as usize);
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn sparse_xlsx_does_not_allocate_its_bounding_rectangle() {
+        // 两个极远坐标曾触发约 512 GiB 的 Range 分配；dimension 也可能不诚实。
+        for dimension in ["A1", "A1:XFD1048576"] {
+            let xml = format!(r#"<worksheet><dimension ref="{dimension}"/><sheetData>
+                <row r="1"><c r="A1" t="inlineStr"><is><t>分类</t></is></c>
+                <c r="B1" t="inlineStr"><is><t>字段</t></is></c></row>
+                <row r="1048576"><c r="B1048576" t="inlineStr"><is><t>键</t></is></c>
+                <c r="C1048576" t="inlineStr"><is><t>值</t></is></c>
+                <c r="XFD1048576" t="inlineStr"><is><t>忽略</t></is></c></row>
+                </sheetData></worksheet>"#);
+            let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml.as_bytes());
+            assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("键", "值")])]);
+        }
+    }
+
+    #[test]
+    fn repeated_shared_strings_have_an_aggregate_output_budget() {
+        let strings = format!("<sst uniqueCount=\"1\"><si><t>{}</t></si></sst>", "a".repeat(2 * 1024 * 1024));
+        let mut xml = String::from("<worksheet><sheetData>");
+        for row in 1..=20 {
+            xml.push_str(&format!("<row r=\"{row}\"><c r=\"A{row}\" t=\"s\"><v>0</v></c></row>"));
+        }
+        xml.push_str("</sheetData></worksheet>");
+        let bytes = with_member(&sample_xlsx(), "xl/sharedStrings.xml", strings.as_bytes());
+        let bytes = with_member(&bytes, "xl/worksheets/sheet1.xml", xml.as_bytes());
+        assert!(bytes.len() < MAX_SHEET_BYTES as usize);
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn xlsx_preserves_global_left_column_row_order_and_duplicate_values() {
+        let xml = br#"<worksheet><sheetData>
+            <row r="4"><c r="D4" t="inlineStr"><is><t>old</t></is></c>
+            <c r="C4" t="inlineStr"><is><t>key</t></is></c>
+            <c r="D4" t="inlineStr"><is><t>value</t></is></c><c r="D4"/></row>
+            <row r="2"><c r="B2" t="inlineStr"><is><t>group</t></is></c>
+            <c r="C2" t="inlineStr"><is><t>key</t></is></c></row>
+            </sheetData></worksheet>"#;
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml);
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "value")])]);
+    }
+
+    #[test]
+    fn xlsx_rejects_coordinate_overflow_before_entering_the_cell_reader() {
+        for body in [
+            "<row r=\"999999999999999999999\"/>",
+            "<row><c r=\"ZZZZZZZZZZZZZZZZ1\"><v>1</v></c></row>",
+            "<row><c r=\"A4294967296\"><v>1</v></c></row>",
+        ] {
+            let xml = format!("<worksheet><sheetData>{body}</sheetData></worksheet>");
+            let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml.as_bytes());
+            assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+        }
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml",
+            b"<worksheet><dimension ref=\"A1:ZZZZZZZZZZ9999999999999\"/><sheetData/></worksheet>");
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+    }
+
+    #[test]
+    fn xlsx_rejects_reversed_dimensions_and_non_xml_extension_bypasses() {
+        for dimension in ["B2:A1", "C1:B2", "A1:A1:A1", "A1:ZZZZZZZZ99999999999999"] {
+            let xml = format!("<worksheet><dimension ref=\"{dimension}\"/><sheetData/></worksheet>");
+            for member in ["xl/worksheets/sheet1.xml", "xl/worksheets/sheet1.bin"] {
+                let bytes = with_member(&sample_xlsx(), member, xml.as_bytes());
+                assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+            }
+        }
+    }
+
+    #[test]
+    fn cached_formula_strings_still_decode_excel_escapes_once() {
+        let xml = br#"<worksheet><sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>group</t></is></c>
+            <c r="B1" t="inlineStr"><is><t>key</t></is></c></row>
+            <row r="2"><c r="B2" t="inlineStr"><is><t>key</t></is></c>
+            <c r="C2" t="str"><f>CHAR(13)</f><v>a_x000D_b _x005F_x0041_</v></c></row>
+            </sheetData></worksheet>"#;
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml);
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "a\rb _x0041_")])]);
+    }
+
+    #[test]
+    fn binary_attachments_do_not_need_to_be_well_formed_xml() {
+        let bytes = with_member(&sample_xlsx(), "xl/media/image.bin", b"binary <garbage invalid> </different> tail");
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("组", &[("键", "值")])]);
+    }
+
+    #[test]
+    fn shared_formula_indices_are_not_used_as_allocation_sizes() {
+        let xml = br#"<worksheet><sheetData>
+            <row r="1"><c r="A1" t="inlineStr"><is><t>group</t></is></c></row>
+            <row r="2"><c r="B2" t="inlineStr"><is><t>key</t></is></c>
+            <c r="C2"><f t="shared" si="18446744073709551614" ref="C2:C3">1</f><v>1</v></c></row>
+            </sheetData></worksheet>"#;
+        let bytes = with_member(&sample_xlsx(), "xl/worksheets/sheet1.xml", xml);
+        assert_eq!(parse("a.xlsx", &bytes).unwrap(), vec![g("未分类", &[("key", "1")])]);
+    }
+
+    #[test]
+    fn public_parse_enforces_the_file_size_limit() {
+        let bytes = vec![b'a'; MAX_SHEET_BYTES as usize + 1];
+        assert_eq!(parse("a.xlsx", &bytes), Err(SheetError::Unreadable));
+        assert_eq!(parse("a.csv", &bytes), Err(SheetError::Unreadable));
+    }
+
     #[test]
     fn csv_rows_become_groups_in_first_seen_order() {
         let csv = "\u{feff}一级分类,字段名,值\n基本信息,姓名, 张三 \n,手机号码,138\n\n教育经历,学校,某大学\n基本信息,邮箱,a@b.c\n,,\n";
@@ -480,7 +810,7 @@ mod tests {
     #[test]
     fn control_chars_and_literal_escape_sequences_round_trip() {
         // rust_xlsxwriter/Excel 把控制字符和字面量 `_xHHHH_` 转义成共享字符串里
-        // 的 `_xHHHH_` 序列；calamine 0.30.1 读回来不会解码。不解码就会把
+        // 的 `_xHHHH_` 序列；依赖升级后必须恰好解码一次，否则会把
         // "a\r\nb _x0041_ c\u{1}d" 读成 "a_x000D_\nb _x005F_x0041_ c_x0001_d"。
         let groups = vec![g("组", &[("键", "a\r\nb _x0041_ c\u{1}d")])];
         let bytes = write_xlsx(&groups).unwrap();
