@@ -14,7 +14,7 @@ export function ResumeView({ pickers, listen }: { pickers: FilePickers | null; l
   const [listKey, setListKey] = useState(0);
   const [profileKey, setProfileKey] = useState(0);
   return (
-    <div className="stack">
+    <div className="stack resume-view">
       <header>
         <h2>简历</h2>
         <p className="muted">插件填写网页时用这里的「当前模板」和「我的信息」。模板里已有的字段优先，其余由「我的信息」补上。</p>
@@ -31,7 +31,7 @@ export function ResumeView({ pickers, listen }: { pickers: FilePickers | null; l
         <ResumeParse onCreated={() => setListKey((k) => k + 1)} />
         <TemplateList key={listKey} pickers={pickers} />
       </section>
-      <section aria-labelledby="resume-profile-title" className="stack">
+      <section aria-labelledby="resume-profile-title" className="stack resume-profile">
         <h3 id="resume-profile-title">我的信息</h3>
         <p className="muted">网申表常问、简历里通常没有的内容。</p>
         <ProfileForm key={profileKey} listen={listen} />
