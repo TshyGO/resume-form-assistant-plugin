@@ -6,6 +6,7 @@ const path = require("node:path");
 const { JSDOM } = require("jsdom");
 const scanner = require("../field-scan.js");
 const helpers = require("../ai-helpers.js");
+const profileApi = require("../profile-fields.js");
 
 // jsdom 不排版：没有尺寸，也不算样式。这里只把 hidden 和行内 display:none 当成看不见。
 const isVisible = (el) => !el.closest("[hidden], [style*='display: none'], [style*='display:none']");
@@ -65,16 +66,66 @@ test("Beisen form: description boxes keep their real questions instead of 0/2000
   assert.equal(new Set(offers).size, offers.length);
 });
 
-test("Beisen form: repeated 名称 / 成绩 are told apart by section and entry, long questions stay whole", () => {
+test("Beisen form: section titles with generated class names are found, so repeated 名称 / 获得时间 are told apart", () => {
   const result = scan(new JSDOM(BEISEN).window.document);
   const byLabel = (label) => result.controls.filter((control) => control.label === label);
 
-  assert.deepEqual(byLabel("名称").map((control) => control.offerLabel), ["获奖情况-名称", "学生工作经历-名称"]);
-  assert.deepEqual(byLabel("成绩").map((control) => control.offerLabel), ["教育经历1-成绩", "教育经历2-成绩"]);
-  assert.deepEqual(byLabel("成绩").map((control) => control.group), ["教育经历 1", "教育经历 2"]);
+  assert.deepEqual(byLabel("名称").map((control) => control.offerLabel), ["论文/专著-名称", "学生工作经历-名称"]);
+  assert.deepEqual(byLabel("获得时间").map((control) => control.offerLabel), ["获奖/专利-获得时间", "证书-获得时间"]);
+  assert.deepEqual(byLabel("开始时间").map((control) => control.group), ["教育经历", "学生工作经历"]);
+  // 结束时间外面多包了两层、旁边还有「至今」：仍归学生工作经历。
+  assert.deepEqual(byLabel("结束时间").map((control) => control.group), ["教育经历", "学生工作经历"]);
+  // 没有 input 的「是否为海外留学经历」只是一行文字，不能被当成后面字段的区块标题。
+  assert.equal(result.controls.some((control) => control.group === "是否为海外留学经历"), false);
   const long = result.controls.find((control) => control.label.startsWith("在校期间"));
   assert.equal(long.offerLabel, long.label);
   assert.ok(long.label.length > 30);
+});
+
+test("Beisen form: 加到我的信息 offers only single-value questions, never fields inside experience sections", () => {
+  const result = scan(new JSDOM(BEISEN).window.document);
+  const stats = {};
+  const candidates = result.controls.filter((control) => control.offerable).map((control) => ({
+    label: control.offerLabel, title: control.label, section: control.section, sectionRepeatable: control.sectionRepeatable,
+    inputType: control.controlKind === "checkbox" ? "checkbox" : "text"
+  }));
+  assert.deepEqual(profileApi.pickUnansweredLabels(candidates, profileApi.knownFieldKeys({}, []), undefined, stats), [
+    "面试站点",
+    "意向工作地点",
+    "班级排名",
+    "在校期间是否有补考、重修情况？如有，请列出具体科目、次数以及当时的原因说明",
+    "请简要描述你的个人优缺点"
+  ]);
+  assert.equal(stats.entry, 18);
+});
+
+test("an unclassed section title is the top line before a group of fields, not the description under it", () => {
+  const doc = load(`
+    <div class="a1"><div class="x9">项目经历</div><div class="y7">最多填写三段</div>
+      <div class="z3"><div class="row"><span class="t">项目名称</span><input></div><div class="row"><span class="t">项目描述</span><textarea></textarea></div></div></div>
+    <div class="a1"><div class="x9">其他信息</div>
+      <div class="z3"><div class="row"><span class="t">项目名称</span><input></div><div class="row"><span class="t">期望薪资</span><input></div></div></div>`);
+  const result = scan(doc);
+  assert.deepEqual(result.controls.map((control) => control.group), ["项目经历", "项目经历", "其他信息", "其他信息"]);
+  assert.deepEqual(result.controls.map((control) => control.offerLabel), ["项目经历-项目名称", "项目描述", "其他信息-项目名称", "期望薪资"]);
+});
+
+test("a section with an 添加 button, or the same title twice, is a repeatable list", () => {
+  const doc = load(`
+    <div class="sec"><div class="x9">学术活动</div>
+      <div class="body"><div class="row"><span class="t">活动名称</span><input></div><div class="row"><span class="t">举办单位</span><input></div></div>
+      <span class="add">+ 添加</span></div>
+    <div class="sec"><div class="x9">志愿服务</div>
+      <div class="body"><div class="entry"><div class="row"><span class="t">服务内容</span><input></div><div class="row"><span class="t">时长</span><input></div></div>
+        <div class="entry"><div class="row"><span class="t">服务内容</span><input></div><div class="row"><span class="t">时长</span><input></div></div></div></div>
+    <div class="sec"><div class="x9">补充信息</div>
+      <div class="body"><div class="row"><span class="t">期望薪资</span><input></div><div class="row"><span class="t">到岗时间</span><input></div></div></div>`);
+  const result = scan(doc);
+  assert.deepEqual(result.controls.map((control) => [control.group.replace(/ \d$/, ""), control.sectionRepeatable]), [
+    ["学术活动", true], ["学术活动", true],
+    ["志愿服务", true], ["志愿服务", true], ["志愿服务", true], ["志愿服务", true],
+    ["补充信息", false], ["补充信息", false]
+  ]);
 });
 
 test("a header search without recognisable page-chrome markup is still left out", () => {
@@ -114,6 +165,24 @@ test("a dropdown's inline filter input merges into the dropdown even without pop
   assert.equal(result.skipped.merged, 1);
 });
 
+test("same-titled fields whose section cannot be found are not offered with a bare number", () => {
+  const doc = load(`
+    <div class="blk"><div class="blk-hd">x</div>
+      <div class="row"><div class="label">名称</div><input></div>
+      <div class="row"><div class="label">开始时间</div><input></div></div>
+    <div class="blk">
+      <div class="row"><div class="label">名称</div><input></div>
+      <div class="row"><div class="label">开始时间</div><input></div>
+      <div class="row"><div class="label">证书种类</div><input></div></div>`);
+  const result = scan(doc);
+  assert.deepEqual(result.controls.map((control) => [control.label, control.offerable, control.offerLabel]), [
+    ["名称", false, ""], ["开始时间", false, ""], ["名称", false, ""], ["开始时间", false, ""], ["证书种类", true, "证书种类"]
+  ]);
+  assert.equal(result.skipped.ambiguous, 4);
+  // 仍可一键填写：只是不进「加到我的信息」。
+  assert.equal(result.controls.length, 5);
+});
+
 test("explicit associations win: label[for], wrapping label, aria-labelledby and aria-label", () => {
   const doc = load(`
     <div><label for="a">手机号码</label><span>0/11</span><input id="a"></div>
@@ -138,7 +207,8 @@ test("table layouts: the cell before the control, or the column header for repea
   const result = scan(doc);
   assert.deepEqual(labels(result), ["姓名", "性别", "称谓", "工作单位", "称谓", "工作单位"]);
   assert.deepEqual(result.controls.slice(2).map((control) => control.offerLabel),
-    ["家庭成员1-称谓", "家庭成员1-工作单位", "家庭成员2-称谓", "家庭成员2-工作单位"]);
+    ["家庭成员-称谓", "家庭成员-工作单位", "家庭成员-称谓", "家庭成员-工作单位"]);
+  assert.deepEqual(result.controls.slice(2).map((control) => control.group), ["家庭成员 1", "家庭成员 1", "家庭成员 2", "家庭成员 2"]);
 });
 
 test("inline sibling text only labels the next control and never crosses another control", () => {
@@ -228,7 +298,7 @@ test("a dynamically expanded entry is picked up by a fresh scan and labelled on 
       <div class="entry" hidden><div class="label">公司名称</div><input></div></div>`);
   assert.deepEqual(scan(doc).controls.map((control) => control.offerLabel), ["公司名称"]);
   doc.querySelector("[hidden]").removeAttribute("hidden");
-  assert.deepEqual(scan(doc).controls.map((control) => control.offerLabel), ["实习经历1-公司名称", "实习经历2-公司名称"]);
+  assert.deepEqual(scan(doc).controls.map((control) => control.offerLabel), ["实习经历-公司名称", "实习经历-公司名称"]);
 });
 
 test("a selected custom dropdown reports that it has a value without exposing it", () => {

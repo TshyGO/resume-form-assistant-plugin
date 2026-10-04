@@ -1976,16 +1976,21 @@
       if (!assisted) {
         const matchedIds = new Set(response.matches.map((match) => match.fieldId));
         // 只有对上了题目的字段才问：占位文字、计数器、跨行借来的文字都不会出现在这里。
+        const offerStats = {};
         offerUnansweredFields(fields.flatMap((field) => {
           const entry = fieldMap.get(field.fieldId);
           return entry?.offerable && entry.offerLabel ? [{
             label: entry.offerLabel,
+            title: entry.binding?.label || "",
+            section: entry.binding?.section || "",
+            sectionRepeatable: Boolean(entry.binding?.sectionRepeatable),
             inputType: field.inputType,
             matched: matchedIds.has(field.fieldId),
             hasValue: hasExistingValue(entry),
             entry
           }] : [];
-        }), resumeFields);
+        }), resumeFields, offerStats);
+        if (scanStats?.skipped) scanStats.skipped.entry = offerStats.entry || 0;
       }
     } catch (error) {
       failure = error.message || "AI 填写失败。";
@@ -2063,7 +2068,7 @@
     const sources = stats.sources;
     const sum = (...keys) => keys.reduce((total, key) => total + (Number.isInteger(sources[key]) ? sources[key] : 0), 0);
     return [
-      `扫描跳过：页头导航 ${count(skipped.pageChrome)}；下拉内部输入 ${count(skipped.popup)}；并入同一控件 ${count(skipped.merged)}；站内搜索 ${count(skipped.siteSearch)}；表单外 ${count(skipped.outsideForm)}；对不上题目 ${count(skipped.noLabel)}`,
+      `扫描跳过：页头导航 ${count(skipped.pageChrome)}；下拉内部输入 ${count(skipped.popup)}；并入同一控件 ${count(skipped.merged)}；站内搜索 ${count(skipped.siteSearch)}；表单外 ${count(skipped.outsideForm)}；对不上题目 ${count(skipped.noLabel)}；同名找不到区块 ${count(skipped.ambiguous ?? 0)}；经历类区块 ${count(skipped.entry ?? 0)}`,
       `字段名来源：明确关联 ${sum("explicit")}；表单项 ${sum("item", "item-text")}；表格 ${sum("table", "table-header")}；相邻文字 ${sum("sibling")}；仅占位文字 ${sum("placeholder")}`
     ];
   }
@@ -3265,12 +3270,12 @@
 
   // 填完之后，网页上没匹配上、也还空着的字段，问一句要不要加进「我的信息」。
   // 这样档案里的字段来自真实表单，用户补一次内容，下次同样的字段就能自动填。
-  function offerUnansweredFields(candidates, resumeFields) {
+  function offerUnansweredFields(candidates, resumeFields, stats = null) {
     const api = self.ResumeProProfile;
     const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
     if (!api || !card) return;
 
-    const labels = api.pickUnansweredLabels(candidates, api.knownFieldKeys(state.currentStore?.profile, resumeFields));
+    const labels = api.pickUnansweredLabels(candidates, api.knownFieldKeys(state.currentStore?.profile, resumeFields), undefined, stats);
 
     if (!labels.length) {
       closeProfileOffer();
@@ -3300,7 +3305,8 @@
     const candidates = state.profileOfferCandidates || [];
     // 动态展开或重渲染之后，控件可能已经不在原来的题目下：对应关系变了的不加。
     const labels = (state.profileOfferLabels || []).filter((label) => candidates.some((candidate) =>
-      String(candidate.label ?? "").trim() === label && candidate.entry && !hasExistingValue(candidate.entry)
+      [candidate.label, candidate.title].some((name) => String(name ?? "").trim() === label)
+      && candidate.entry && !hasExistingValue(candidate.entry)
       && isFieldBindingCurrent(candidate.entry)));
     const resumeFields = state.profileOfferFields;
 

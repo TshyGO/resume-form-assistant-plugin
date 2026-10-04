@@ -48,8 +48,8 @@ test("the profile offer lists only reliably titled fields, by their section-qual
     sendMessage: async () => ({ success: true, matches: [] }) });
   const [award, practice, placeholderOnly] = [0, 1, 2].map(() => new ctx.HTMLInputElement());
   late.holder.current = scanWith([
-    control(award, { label: "名称", offerLabel: "获奖情况-名称" }),
-    control(practice, { label: "名称", offerLabel: "学生工作经历-名称" }),
+    control(award, { label: "备注", section: "求职意向", offerLabel: "求职意向-备注" }),
+    control(practice, { label: "备注", section: "附加信息", offerLabel: "附加信息-备注" }),
     control(placeholderOnly, { label: "", labelSource: "placeholder", offerable: false, placeholder: "请输入手机号码" })
   ]);
   const ui = shadow();
@@ -59,8 +59,29 @@ test("the profile offer lists only reliably titled fields, by their section-qual
   await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
 
   assert.equal(ui.parts["#resume-pro-profile-offer"].hidden, false);
-  assert.match(ui.parts.offerText.textContent, /还有 2 个字段空着：获奖情况-名称、学生工作经历-名称。/);
+  assert.match(ui.parts.offerText.textContent, /还有 2 个字段空着：求职意向-备注、附加信息-备注。/);
   assert.doesNotMatch(ui.parts.offerText.textContent, /手机号码|请输入/);
+});
+
+test("fields inside an experience section are not offered, and the diagnostics count them", async () => {
+  const late = lateScanner();
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async () => ({ success: true, matches: [] }) });
+  const [school, rank, salary] = [0, 1, 2].map(() => new ctx.HTMLInputElement());
+  late.holder.current = scanWith([
+    control(school, { label: "所在实验室名称", section: "教育经历", offerLabel: "所在实验室名称" }),
+    control(rank, { label: "班级排名", section: "教育经历", offerLabel: "班级排名" }),
+    control(salary, { label: "期望薪资（元/月）", section: "求职意向", offerLabel: "期望薪资（元/月）" })
+  ]);
+  const ui = shadow();
+  const diagnostics = { "#resume-pro-diagnostics": { hidden: true }, "#resume-pro-diagnostics-text": { value: "" } };
+  ctx.helpers.setShadowRoot({ querySelector: (selector) => ui.parts[selector] || diagnostics[selector] || null, querySelectorAll: () => [] });
+  ctx.helpers.setCurrentStore(store);
+
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
+
+  assert.match(ui.parts.offerText.textContent, /还有 2 个字段空着：班级排名、期望薪资（元\/月）。/);
+  assert.match(diagnostics["#resume-pro-diagnostics-text"].value, /经历类区块 1$/m);
 });
 
 test("a field whose title binding went stale during matching is not written", async () => {
@@ -103,11 +124,11 @@ test("diagnostics carry scan counts and label sources, and survive the feedback 
   const ctx = loadHighlightHelpers({ formElements: [] });
   const text = ctx.helpers.formatFillDiagnostics({
     fieldCount: 3, filledCount: 1, unfilledCount: 0, outcome: "partial", diagnostics: {},
-    scanStats: { skipped: { pageChrome: 1, popup: 1, merged: 2, siteSearch: 0, outsideForm: 0, noLabel: 4 },
+    scanStats: { skipped: { pageChrome: 1, popup: 1, merged: 2, siteSearch: 0, outsideForm: 0, noLabel: 4, ambiguous: 2, entry: 5 },
       sources: { explicit: 1, item: 2, "item-text": 1, "table-header": 2, sibling: 1, placeholder: 1 } }
   });
   const lines = [
-    "扫描跳过：页头导航 1；下拉内部输入 1；并入同一控件 2；站内搜索 0；表单外 0；对不上题目 4",
+    "扫描跳过：页头导航 1；下拉内部输入 1；并入同一控件 2；站内搜索 0；表单外 0；对不上题目 4；同名找不到区块 2；经历类区块 5",
     "字段名来源：明确关联 1；表单项 3；表格 2；相邻文字 1；仅占位文字 1"
   ];
   lines.forEach((line) => assert.ok(text.split("\n").includes(line), line));

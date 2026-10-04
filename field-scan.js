@@ -656,14 +656,18 @@
 
   // --- 区块与重复条目 ---------------------------------------------------------
 
-  function sectionTitle(control, ctx, claimed) {
+  // 所属区块：从字段所在的表单项往外一层层找。
+  // 1) 标签或 class 明说是标题的（h1–h6、legend、class 带 title/header 等词）：前面装着控件的兄弟跳过，继续往前找。
+  // 2) 标题行只有自动生成的 class（北森的 sc-xxxx）：只在“装着一组字段”的容器前面，
+  //    取紧挨着的那几行纯文字里最上面一行——标题在上，说明文字在下。单个字段旁边的纯文字不算区块标题。
+  function findSection(control, ctx, claimed) {
     const start = control.item;
     let depth = 0;
-    for (let node = start; node && node !== ctx.body && node.tagName !== "HTML" && depth < 12; node = node.parentElement, depth += 1) {
+    for (let node = start; node && node !== ctx.body && node.tagName !== "HTML" && depth < 14; node = node.parentElement, depth += 1) {
       if (node.tagName === "FIELDSET" && node !== start) {
         const legend = node.querySelector("legend");
         const text = legend && !claimed.has(legend) ? headingText(legend, ctx, control) : "";
-        if (text) return text;
+        if (text) return { text, root: node };
       }
       for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
         if (!ctx.isVisible(prev) || containsBoundary(prev, ctx) || claimed.has(prev)) continue;
@@ -671,10 +675,48 @@
         const heading = isHeadingLike(prev) ? prev : prev.querySelector("h1, h2, h3, h4, h5, h6, legend, [role='heading']");
         if (!heading) continue;
         const text = headingText(heading, ctx, control);
-        if (text) return text;
+        if (text) return { text, root: node.parentElement };
+      }
+      if (!hasForeignControl(node, control.root, ctx)) continue;
+      const run = [];
+      for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        // 已经当了别的字段题目的（比如表头那一行）不是区块标题。
+        if (!ctx.isVisible(prev) || claimed.has(prev) || Array.from(claimed).some((el) => el && prev.contains(el))) continue;
+        if (containsBoundary(prev, ctx)) {
+          // 前面一条结构相同的重复条目：跳过它，接着找它前面的标题。
+          if (sameShape(prev, node)) continue;
+          break;
+        }
+        run.push(prev);
+      }
+      for (const candidate of run.reverse()) {
+        const text = headingText(candidate, ctx, control);
+        if (text) return { text, root: node.parentElement };
       }
     }
-    return "";
+    return { text: "", root: null };
+  }
+
+  function sameShape(a, b) {
+    const cls = attr(a, "class");
+    return Boolean(cls) && a.tagName === b.tagName && cls === attr(b, "class");
+  }
+
+  // 区块里有「添加」「新增」这类按钮：能加多条，是经历类列表。
+  const ADD_ENTRY = /^[+＋]?\s*(?:添加|新增|增加|继续添加|再添加)[\u4e00-\u9fa5/／]{0,10}$/;
+  function hasAddEntry(root, ctx) {
+    if (!root) return false;
+    if (!ctx.addEntry) ctx.addEntry = new Map();
+    if (!ctx.addEntry.has(root)) {
+      const walker = ctx.doc.createTreeWalker(root, 4);
+      let found = false;
+      for (let node = walker.nextNode(); node && !found; node = walker.nextNode()) {
+        if (node.parentElement?.tagName === "OPTION") continue;
+        found = ADD_ENTRY.test(squash(node.data)) && ctx.isVisible(node.parentElement);
+      }
+      ctx.addEntry.set(root, found);
+    }
+    return ctx.addEntry.get(root);
   }
 
   function headingText(el, ctx, control) {
@@ -701,7 +743,7 @@
 
   function scanPage(doc, options = {}) {
     const ctx = makeContext(doc, options);
-    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0 };
+    const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
       .filter((el) => isControlElement(el) && !ctx.excluded(el) && ctx.isVisible(el));
     skipped.popup = allControls.filter((el) => isPopupInternal(el, ctx)).length;
@@ -753,7 +795,9 @@
     const kept = controls.filter((control) => control.fillable);
     const claimed = new Set(kept.map((control) => control.labelEl).filter(Boolean));
     kept.forEach((control) => {
-      control.section = control.label ? sectionTitle(control, ctx, claimed) : "";
+      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+      control.section = found.text;
+      control.sectionRoot = found.root;
     });
 
     // 同一区块里同名的题目（重复条目、表格多行）按页面顺序编号。
@@ -767,10 +811,17 @@
       const key = normalizeKey(control.label);
       sameLabel.set(key, (sameLabel.get(key) || 0) + 1);
     });
+    const sectionsWithRepeats = new Set();
     sameSlot.forEach((list) => list.forEach((control, index) => {
       control.repeatIndex = list.length > 1 ? index + 1 : 0;
+      if (list.length > 1 && control.section) sectionsWithRepeats.add(normalizeKey(control.section));
     }));
+    kept.forEach((control) => {
+      control.sectionRepeatable = Boolean(control.section)
+        && (sectionsWithRepeats.has(normalizeKey(control.section)) || hasAddEntry(control.sectionRoot, ctx));
+    });
 
+    let ambiguousSkipped = 0;
     kept.forEach((control) => {
       control.group = control.section
         ? (control.repeatIndex ? `${control.section} ${control.repeatIndex}` : control.section)
@@ -783,8 +834,14 @@
       const ambiguous = (sameLabel.get(normalizeKey(control.label)) || 0) > 1;
       let offer = control.label;
       if (ambiguous) {
-        const index = control.repeatIndex || "";
-        offer = control.section ? `${control.section}${index}-${control.label}` : `${control.label}${index}`;
+        // 同名题目只有找到所属区块才能说清是哪一个；光加个序号（「名称2」）用户看不懂，不如不问。
+        if (!control.section) {
+          control.offerable = false;
+          control.offerLabel = "";
+          ambiguousSkipped += 1;
+          return;
+        }
+        offer = `${control.section}-${control.label}`;
       }
       control.offerLabel = truncate(offer, MAX_OFFER_CHARS);
     });
@@ -794,6 +851,7 @@
       sources[control.labelSource] = (sources[control.labelSource] || 0) + 1;
     });
 
+    skipped.ambiguous = ambiguousSkipped;
     return {
       controls: kept.map(publicControl),
       skipped,
@@ -814,6 +872,7 @@
       section: control.section || "",
       group: control.group || "",
       repeatIndex: control.repeatIndex || 0,
+      sectionRepeatable: Boolean(control.sectionRepeatable),
       offerable: control.offerable,
       offerLabel: control.offerLabel || "",
       pickerType: control.pickerType || "",
