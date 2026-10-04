@@ -169,6 +169,9 @@ test("fields the AI never saw are not counted as AI misses", () => {
     promptBytes: 0, aiMatches: 0, skippedNoContext: 0 } }), [["not_sent", 2]]);
   assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "none", ruleMatches: 1, aiFields: 2,
     promptBytes: 200, aiMatches: 1, skippedNoContext: 0 } }), [["ai_unmatched", 1]]);
+  // 只有一部分字段送了 AI：AI 未匹配的数量以 aiFields 为上限，其余算没送 AI。
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "none", ruleMatches: 0, aiFields: 1,
+    promptBytes: 50, aiMatches: 0, skippedNoContext: 0 } }), [["ai_unmatched", 1], ["not_sent", 2]]);
 });
 
 test("the longest valid lines still pass the allowlist instead of being dropped whole", () => {

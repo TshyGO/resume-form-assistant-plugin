@@ -151,16 +151,17 @@
     const n = positive;
     const secret = n(d?.secretFormFields);
     const noMapping = n(d?.skippedNoContext);
-    // Fields neither matched nor skipped: missed by the AI if it was called; with an empty
-    // template there was no resume data at all; otherwise they were never sent (e.g. too large).
+    // Fields neither matched nor skipped. Those handed to the AI (at most aiFields, less the
+    // ones skipped for lack of resume data) are AI misses; with an empty template the rest had
+    // no resume data at all; otherwise they were never sent (e.g. too large).
     const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches)) : 0;
-    const restReason = aiCalled(input) ? "ai_unmatched" : d?.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent";
+    const missed = aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
-      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping, ai_unmatched: 0, not_sent: 0,
+      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping, ai_unmatched: missed, not_sent: 0,
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
-    counts[restReason] += rest;
+    counts[d?.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - missed;
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 
