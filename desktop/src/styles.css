@@ -548,15 +548,24 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; }
 .template-preview dt { font-weight: 600; min-width: 8em; }
 .template-preview dd { margin: 0; white-space: pre-wrap; }
 .profile-form fieldset { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
-.profile-form fieldset > legend, .profile-form fieldset > p, .profile-form fieldset > [role="group"] { grid-column: 1 / -1; }
+.profile-form fieldset > legend, .profile-form fieldset > p, .profile-form fieldset > [role="group"], .profile-form fieldset > .custom-field-head { grid-column: 1 / -1; }
 .pill.warn { border: 1px solid #e7d4a8; color: #7c5a12; background: transparent; }
-/* 补充字段（#228）：字段名和内容两栏一样宽，框一样高；长题目自动换行显示全文。 */
-.custom-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 5.5em auto; gap: 8px 12px; align-items: end; }
-.custom-field-row textarea { box-sizing: border-box; width: 100%; min-height: 34px; padding: 6px 10px; line-height: 1.5; resize: none; overflow: hidden; overflow-wrap: anywhere; }
-.custom-field-row > button { min-height: 34px; }
-.custom-field-status { display: flex; align-items: center; min-height: 34px; }
-@media (max-width: 640px) {
-  .custom-field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+/* 「我的信息」用满内容区宽度（.view 已限制最宽 1160px），不再挤在左边 520px。 */
+.profile-form { max-width: none; }
+/* 补充字段（#228）：表头只出现一次；每行字段名、内容两栏等宽、框一样高，长题目自动换行显示全文；
+   「待补充」和「删除」放在固定宽度的右侧，上下居中，行行对齐。 */
+.custom-field-head, .custom-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 10.5em; gap: 12px; align-items: center; }
+.custom-field-head { color: var(--muted); font-size: 13px; }
+.custom-field-row > label { gap: 0; }
+.custom-field-row textarea { box-sizing: border-box; width: 100%; min-height: 38px; padding: 8px 12px; line-height: 1.6; resize: none; overflow: hidden; overflow-wrap: anywhere; }
+.custom-field-actions { display: grid; grid-template-columns: 5em auto; align-items: center; gap: 8px; }
+.custom-field-status { display: flex; align-items: center; }
+.custom-field-actions .pill { margin: 0; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.custom-field-actions > button { min-height: 34px; }
+@media (max-width: 720px) {
+  .custom-field-head, .custom-field-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .custom-field-head > span:last-child { display: none; }
+  .custom-field-actions { grid-column: 1 / -1; justify-content: end; }
 }
 /* AI 服务商列表与模型候选。 */
 .provider-list { list-style: none; padding: 0; display: grid; gap: 12px; }

@@ -70,8 +70,9 @@ function CustomFieldRow({
 
   return (
     <div role="group" aria-label={item.key || `补充字段 ${index + 1}`} className="custom-field-row">
+      {/* 「字段名」「内容」只在列表顶上显示一次，这里留给读屏。 */}
       <label htmlFor={`custom-${index}-key`}>
-        字段名
+        <span className="sr-only">字段名</span>
         <textarea
           ref={keyRef}
           id={`custom-${index}-key`}
@@ -82,7 +83,7 @@ function CustomFieldRow({
         />
       </label>
       <label htmlFor={`custom-${index}-value`}>
-        内容
+        <span className="sr-only">内容</span>
         <textarea
           ref={valueRef}
           id={`custom-${index}-value`}
@@ -92,10 +93,12 @@ function CustomFieldRow({
           onChange={(event) => onChange("value", singleLine(event.target.value))}
         />
       </label>
-      <span className="custom-field-status">{item.key && !item.value ? <span className="pill warn">待补充</span> : null}</span>
-      <button type="button" onClick={onRemove}>
-        删除
-      </button>
+      <div className="custom-field-actions">
+        <span className="custom-field-status">{item.key && !item.value ? <span className="pill warn">待补充</span> : null}</span>
+        <button type="button" onClick={onRemove}>
+          删除
+        </button>
+      </div>
     </div>
   );
 }
@@ -450,6 +453,13 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       <fieldset>
         <legend>{profileApi.CUSTOM_GROUP}</legend>
         <p className="muted">从网页上「加到我的信息」的字段会出现在这里，补上内容后下次就能自动填。</p>
+        {profile.custom.length ? (
+          <div className="custom-field-head" aria-hidden="true">
+            <span>字段名</span>
+            <span>内容</span>
+            <span />
+          </div>
+        ) : null}
         {profile.custom.map((item, index) => (
           <CustomFieldRow
             key={index}
