@@ -1764,7 +1764,7 @@
       stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
       // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
       probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
-      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, title: document.title, probe, stats }), null);
+      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
         const hint = !assisted && !scanned.fields.length
@@ -2104,7 +2104,7 @@
     })();
     const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
       grouped: "单选项合并", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
-      ai_unmatched: "AI 未匹配", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+      ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
     const pageType = result.pageType
       ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
         url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`

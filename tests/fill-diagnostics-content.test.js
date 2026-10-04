@@ -79,6 +79,14 @@ test("an application page whose form sits in a cross-origin frame is reported as
   assert.ok(!block.includes("secret-session"));
 });
 
+test("a page with no form signals but a cross-origin frame is still reported, as iframe_blocked", async () => {
+  const { reports, result } = await run({ path: "/jobs/1970", probe: { ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } } });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].diagnostics, /^error_category: iframe_blocked$/m);
+  assert.match(reports[0].diagnostics, /^page_type: unknown$/m);
+  assert.match(result.error, /内嵌框架/);
+});
+
 test("an application page whose inputs are all hidden is reported as no_fields_found with the drop reasons", async () => {
   const { reports } = await run({ path: "/campus/apply", hiddenInputs: 3 });
   assert.equal(reports.length, 1);
@@ -116,6 +124,7 @@ test("a desktop or AI service failure is a service_error, not a match failure", 
       promptBytes: 300, apiMs: 5, resumeFields: 3, candidateFields: 1, errorCode: "unavailable" } }) });
   assert.match(report, /^error_category: service_error$/m);
   assert.match(report, /^error_code: unavailable$/m);
+  assert.match(report, /^drop_reasons: no_result=1$/m);
 });
 
 test("the report describes the page that was scanned, even if the page navigates during the fill, and both channels agree", async () => {

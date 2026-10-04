@@ -60,7 +60,7 @@
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "grouped", "out_of_scope", "secret",
-    "no_resume_mapping", "ai_unmatched", "not_sent", "not_written", "unconfirmed", "unsynced"];
+    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
   // URL path segments are kept only when every word in them is a common route word, so
   // user names and slugs (/u/zhangsan, /people/john-doe) never leave as written.
   const ROUTE_WORDS = new Set(("apply applies application applications applicant resume resumes cv jianli toudi delivery deliver "
@@ -123,10 +123,11 @@
   function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, matched, filledCount, unfilledCount }) {
     if (!scanned) return { category: "unknown", stage: "scan" };
     if (fieldCount === 0) {
+      // A form may sit in a frame even when nothing else on the page looks like one.
+      if (frames?.crossOrigin > 0 || frames?.frameInputs > 0) return { category: "iframe_blocked", stage: "scan" };
       // A page that is not an application form has nothing to fix. When the probe is
       // missing we cannot tell, so the page is treated as a form that yielded no fields.
-      if (pageType === "unknown") return { category: "page_not_supported", stage: "scan" };
-      return { category: frames?.crossOrigin > 0 || frames?.frameInputs > 0 ? "iframe_blocked" : "no_fields_found", stage: "scan" };
+      return { category: pageType === "unknown" ? "page_not_supported" : "no_fields_found", stage: "scan" };
     }
     if (failedStage === "match") {
       if (!responded) return { category: "unknown", stage: "match" };
@@ -152,16 +153,21 @@
     const secret = n(d?.secretFormFields);
     const noMapping = n(d?.skippedNoContext);
     // Fields neither matched nor skipped. Those handed to the AI (at most aiFields, less the
-    // ones skipped for lack of resume data) are AI misses; with an empty template the rest had
-    // no resume data at all; otherwise they were never sent (e.g. too large).
-    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches)) : 0;
-    const missed = aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
+    // ones skipped for lack of resume data) are AI misses, or got no result when the AI service
+    // or desktop link failed; with an empty template the rest had no resume data at all;
+    // otherwise they were never sent (e.g. too large). A request with no answer at all leaves
+    // every field without a result.
+    const failed = Boolean(d) && (d.errorCode === "timeout" || SERVICE_CODES.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode ?? ""));
+    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
+      : input.requested ? n(input.fieldCount) : 0;
+    const sent = d && aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
-      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping, ai_unmatched: missed, not_sent: 0,
+      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
+      ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
-    counts[d?.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - missed;
+    if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 

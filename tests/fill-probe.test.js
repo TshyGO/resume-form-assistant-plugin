@@ -242,6 +242,8 @@ test("a page counts as an application form by its address, title, edit buttons o
   assert.deepEqual(type({ pathname: "/campus/apply/123" }), { type: "application_form", reason: "url" });
   assert.deepEqual(type({ pathname: "/candidate/myResume" }), { type: "application_form", reason: "url" });
   assert.deepEqual(type({ pathname: "/u/profile" }), { type: "application_form", reason: "url" });
+  // 单页应用的哈希路由。
+  assert.deepEqual(type({ pathname: "/", hash: "#/campus/apply/123?from=list" }), { type: "application_form", reason: "url" });
   assert.deepEqual(type({ title: "个人简历 - 某公司招聘" }), { type: "application_form", reason: "title" });
   assert.deepEqual(type({ title: "Online Application" }), { type: "application_form", reason: "title" });
   assert.deepEqual(type({ probe: { ...EMPTY, editButtons: 2 } }), { type: "application_form", reason: "edit_button" });

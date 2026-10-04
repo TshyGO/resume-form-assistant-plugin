@@ -26,6 +26,9 @@ test("url paths keep only common route words; names, ids, tokens and non-ASCII s
 test("an empty page is page_not_supported unless it looks like an application form", () => {
   const empty = { scanned: true, fieldCount: 0, frames: { crossOrigin: 0, frameInputs: 0 } };
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown" }), { category: "page_not_supported", stage: "scan" });
+  // 看不出是表单页，但有跨域框架：申请表可能就嵌在里面，判断不了就照常上报。
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown", frames: { crossOrigin: 1, frameInputs: 0 } }),
+    { category: "iframe_blocked", stage: "scan" });
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form" }), { category: "no_fields_found", stage: "scan" });
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form", frames: { crossOrigin: 2, frameInputs: 0 } }),
     { category: "iframe_blocked", stage: "scan" });
@@ -169,6 +172,14 @@ test("fields the AI never saw are not counted as AI misses", () => {
     promptBytes: 0, aiMatches: 0, skippedNoContext: 0 } }), [["not_sent", 2]]);
   assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "none", ruleMatches: 1, aiFields: 2,
     promptBytes: 200, aiMatches: 1, skippedNoContext: 0 } }), [["ai_unmatched", 1]]);
+  // AI 或桌面服务出错：送出去的字段没拿到结果，不算 AI 没匹配上。
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "unavailable", ruleMatches: 0, aiFields: 3,
+    promptBytes: 300, aiMatches: 0, skippedNoContext: 0 } }), [["no_result", 3]]);
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "http_502", ruleMatches: 1, aiFields: 2,
+    promptBytes: 300, aiMatches: 0, skippedNoContext: 0 } }), [["no_result", 2]]);
+  // 请求发出去了但没收到回复：字段不能从漏斗里消失。
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: {} }), [["no_result", 3]]);
+  assert.deepEqual(core.fillDrops({ ...base, requested: false, diagnostics: {} }), []);
   // 只有一部分字段送了 AI：AI 未匹配的数量以 aiFields 为上限，其余算没送 AI。
   assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "none", ruleMatches: 0, aiFields: 1,
     promptBytes: 50, aiMatches: 0, skippedNoContext: 0 } }), [["ai_unmatched", 1], ["not_sent", 2]]);

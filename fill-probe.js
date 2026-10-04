@@ -181,8 +181,9 @@
 
   // 是不是网申填写页，以及依据。地址和标题只在本地比对，不输出。探测失败又看不出来时返回 null（判断不了）。
   // stats 是 content.js 扫描时的计数：页面上可填的输入框有几个（不算 type=hidden 和按钮、文件框；可见与否都算）。
-  function pageType({ pathname = "", title = "", probe = null, stats = null } = {}) {
-    const path = String(pathname ?? "");
+  // hash：单页应用的哈希路由（#/campus/apply），只取 ? 之前的部分。
+  function pageType({ pathname = "", hash = "", title = "", probe = null, stats = null } = {}) {
+    const path = `${String(pathname ?? "")} ${String(hash ?? "").replace(/^#/, "").split("?")[0]}`;
     if (FORM_URL.test(path) || path.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/).some(word => FORM_URL_WORDS.has(word.toLowerCase()))) {
       return { type: "application_form", reason: "url" };
     }
