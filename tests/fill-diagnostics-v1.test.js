@@ -3,16 +3,22 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const core = require("../feedback-core.js");
 
-test("url paths keep route words and replace ids, tokens and non-ASCII segments", () => {
-  assert.equal(core.pathTemplate("/atsc/apply/12345"), "/atsc/apply/:id");
+test("url paths keep only common route words; names, ids, tokens and non-ASCII segments become :id", () => {
+  assert.equal(core.pathTemplate("/atsc/apply/12345"), "/:id/apply/:id");
+  assert.equal(core.pathTemplate("/u/zhangsan"), "/u/:id");
+  assert.equal(core.pathTemplate("/people/john-doe/resume"), "/:id/:id/resume");
+  assert.equal(core.pathTemplate("/candidate/my-resume/edit"), "/candidate/my-resume/edit");
+  assert.equal(core.pathTemplate("/campus/myResume/apply.html"), "/campus/myResume/apply.html");
+  assert.equal(core.pathTemplate("/v2/apply"), "/v2/apply");
+  assert.equal(core.pathTemplate("/resume/abc/edit"), "/resume/:id/edit");
   assert.equal(core.pathTemplate("/resume/5f3a9c2e8b/edit"), "/resume/:id/edit");
   assert.equal(core.pathTemplate("/job/abc123def/apply"), "/job/:id/apply");
   assert.equal(core.pathTemplate("/u/a%40b.com/profile"), "/u/:id/profile");
   assert.equal(core.pathTemplate("/%E5%BC%A0%E4%B8%89/resume"), "/:id/resume");
   assert.equal(core.pathTemplate("/apply/abcdefghijklmnopqrstu"), "/apply/:id");
-  assert.equal(core.pathTemplate("/bad/%E0%A4%A"), "/bad/:id");
+  assert.equal(core.pathTemplate("/apply/%E0%A4%A"), "/apply/:id");
   assert.equal(core.pathTemplate("/v2/apply/"), "/v2/apply");
-  assert.equal(core.pathTemplate("/a/b/c/d/e/f/g/h/i/j"), "/a/b/c/d/e/f/g/h/:more");
+  assert.equal(core.pathTemplate("/m/s/p/c/u/en/my/app/i/j"), "/m/s/p/c/u/en/my/app/:more");
   assert.equal(core.pathTemplate(""), "/");
   assert.equal(core.pathTemplate(undefined), "/");
 });
@@ -73,7 +79,7 @@ const IFRAME_PAGE = {
 test("the v1 block answers why a page had no fields, section by section", () => {
   assert.equal(core.fillReport(IFRAME_PAGE), [
     "[页面]",
-    "url_path: /atsc/apply/:id",
+    "url_path: /:id/apply/:id",
     "page_type: application_form",
     "page_type_reason: url",
     "dom_ready_at_scan: true",
@@ -155,6 +161,31 @@ const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan
   "local_matches", "ai_fields", "ai_called", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
   "timings_ms"];
 
+test("fields the AI never saw are not counted as AI misses", () => {
+  const base = { ...IFRAME_PAGE, fieldCount: 3, matched: 0, requested: true, stats: null };
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "no_resume_fields", secretFormFields: 0 } }),
+    [["no_resume_mapping", 3]]);
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "input_too_large", ruleMatches: 1, aiFields: 2,
+    promptBytes: 0, aiMatches: 0, skippedNoContext: 0 } }), [["not_sent", 2]]);
+  assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "none", ruleMatches: 1, aiFields: 2,
+    promptBytes: 200, aiMatches: 1, skippedNoContext: 0 } }), [["ai_unmatched", 1]]);
+});
+
+test("the longest valid lines still pass the allowlist instead of being dropped whole", () => {
+  const big = 999999;
+  const report = core.fillReport({ ...IFRAME_PAGE,
+    path: "/campus/application/personalInformation/education/experience/attachment/preview/confirm/submit",
+    stats: { domInputs: big, visible: big, typeHidden: big, nonFillable: big, disabled: big, invisible: big, grouped: big, outOfScope: big },
+    fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, requested: true,
+    diagnostics: { ruleMatches: 1, aiFields: big, aiMatches: 1, promptBytes: 10, apiMs: 1, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
+    probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
+      ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } } });
+  const drops = /^drop_reasons: (.*)$/m.exec(report);
+  assert.ok(drops && drops[1].split(",").length === 12, report);
+  assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}other=999999$/m);
+  assert.match(report, /^url_path: \/campus\/application\/personalInformation\/education\/experience\/attachment\/preview\/confirm\/:more$/m);
+});
+
 test("every v1 key survives the allowlist, including when the probe and scan stats are missing", () => {
   for (const input of [IFRAME_PAGE, { ...IFRAME_PAGE, pageType: null, probe: null, stats: null, readyAtScan: null, path: undefined }]) {
     const report = core.fillReport(input);
@@ -166,7 +197,7 @@ test("every v1 key survives the allowlist, including when the probe and scan sta
 test("the allowlist drops unknown keys, free text, spoofed origin lines and the old Chinese lines", () => {
   const forged = [
     "[来源]", "host: evil.example", "app_version: 9.9.9",
-    "[页面]", "url_path: /apply/zhangsan@example.com", "url_path: /apply/:id",
+    "[页面]", "url_path: /apply/zhangsan@example.com", "url_path: /u/zhangsan", "url_path: /apply/:id",
     "page_title: 张三的简历", "page_type: application_form",
     "[错误]", "error_category: no_fields_found", "error_category: 张三", "error_code: sk-secret",
     "console_errors: [\"Uncaught TypeError: token=abc\"]",

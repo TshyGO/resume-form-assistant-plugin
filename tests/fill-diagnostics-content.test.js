@@ -18,11 +18,11 @@ async function run({ path = "/", title = "", probe = EMPTY, fields = [], hiddenI
   const sent = [];
   const formElements = [];
   const allInputs = hiddenInputs ? [] : undefined;
+  const location = { href: `https://jobs.example.test${path}?token=secret-session`, pathname: path };
   const env = loadHighlightHelpers({
-    formElements, allInputs, feedback: core,
-    location: { href: `https://jobs.example.test${path}?token=secret-session`, pathname: path },
+    formElements, allInputs, feedback: core, location,
     fillProbe: { ...realProbe, probePage: typeof probe === "function" ? probe : () => probe },
-    sendMessage: async message => { sent.push(message); return message.type === "AI_FILL" ? respond(message) : { ok: true }; }
+    sendMessage: async message => { sent.push(message); return message.type === "AI_FILL" ? respond(message, location) : { ok: true }; }
   });
   env.document.title = title;
   for (const setup of fields) {
@@ -118,6 +118,18 @@ test("a desktop or AI service failure is a service_error, not a match failure", 
   assert.match(report, /^error_code: unavailable$/m);
 });
 
+test("the report describes the page that was scanned, even if the page navigates during the fill, and both channels agree", async () => {
+  const { reports, report } = await run({ path: "/apply", fields: [input => { input.name = "name"; refuseWrites(input); }],
+    respond: (_message, location) => {
+      location.pathname = "/jobs/list";
+      return { success: true, matches: [{ fieldId: "field-0", value: "张三" }],
+        diagnostics: { ruleMatches: 1, aiFields: 0, aiMatches: 0, promptBytes: 0, apiMs: 0, resumeFields: 3, candidateFields: 0, errorCode: "none" } };
+    } });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].diagnostics, /^url_path: \/apply$/m);
+  assert.equal(reports[0].diagnostics, report);
+});
+
 test("a page that refuses every write is reported as fill_rejected without any name, phone or e-mail value", async () => {
   const { reports, report } = await run({ path: "/apply", fields: [
     input => { input.name = "name"; refuseWrites(input); },
@@ -133,7 +145,8 @@ test("a page that refuses every write is reported as fill_rejected without any n
   assert.match(block, /^error_category: fill_rejected$/m);
   assert.match(block, /^first_failing_stage: fill$/m);
   assert.match(block, /^matched: 3$/m);
-  assert.match(block, /^drop_reasons: ai_unmatched=1,not_written=3$/m);
+  // 第 4 个字段本地没匹配上，也没送 AI（promptBytes 为 0）。
+  assert.match(block, /^drop_reasons: not_sent=1,not_written=3$/m);
   assert.match(block, /^\[未填字段\]$/m);
   for (const value of PRIVATE) {
     assert.ok(!JSON.stringify(reports).includes(value), value);

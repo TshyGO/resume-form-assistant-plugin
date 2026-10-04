@@ -1732,6 +1732,7 @@
     let matched = null;
     let stats = null;
     let pageType = null;
+    let scanPath = location.pathname;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
@@ -1758,10 +1759,12 @@
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       scanDone = true;
+      // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
+      scanPath = location.pathname;
       stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
       // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
       probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
-      pageType = withFillProbe(api => api.pageType({ pathname: location.pathname, title: document.title, probe, stats }), null);
+      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, title: document.title, probe, stats }), null);
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
         const hint = !assisted && !scanned.fields.length
@@ -2013,9 +2016,11 @@
         failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length });
       const summaryInput = { ...timing, totalMs,
         fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
-        path: location.pathname, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict };
+        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict };
       if (session === fillSession) session.summary = summaryInput;
-      writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
+      // 侧栏、手动反馈和自动上报用同一份输入，两个通道的诊断块一致。
+      const reportInput = { ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 };
+      writeFillDiagnostics(reportInput);
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
         // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
@@ -2023,7 +2028,7 @@
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length,
           editHint: hinted && probe?.editButtons > 0, category: verdict.category });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
-          kind, diagnostics: self.ResumeProFeedback.fillReport(summaryInput)
+          kind, diagnostics: self.ResumeProFeedback.fillReport(reportInput)
         } })).catch(() => {});
       } catch { /* feedback is optional; never break the fill lifecycle */ }
       state.aiBusy = false;
@@ -2099,7 +2104,7 @@
     })();
     const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
       grouped: "单选项合并", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
-      ai_unmatched: "AI 未匹配", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+      ai_unmatched: "AI 未匹配", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
     const pageType = result.pageType
       ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
         url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`

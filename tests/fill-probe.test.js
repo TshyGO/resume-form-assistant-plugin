@@ -229,6 +229,13 @@ test("inputs inside nested shadow roots are found, one count per shadow root tha
   assert.equal(probe.probePage(page({ [SELECTORS.all]: [outer, node()] })).shadowHosts, 1);
 });
 
+test("a nested shadow root is searched before the rest of a large page uses up the walk", () => {
+  const inner = node({ shadowRoot: { querySelector: () => ({}), querySelectorAll: () => [] } });
+  const outer = node({ shadowRoot: { querySelector: () => null, querySelectorAll: selector => (selector === SELECTORS.all ? [inner] : []) } });
+  const plain = Array.from({ length: 19999 }, () => node());
+  assert.equal(probe.probePage(page({ [SELECTORS.all]: [outer, ...plain] })).shadowHosts, 1);
+});
+
 test("a page counts as an application form by its address, title, edit buttons or form structure", () => {
   const stats = { domInputs: 1, typeHidden: 1 };
   const type = (input) => probe.pageType({ pathname: "/", title: "", probe: EMPTY, stats, ...input });
@@ -242,6 +249,8 @@ test("a page counts as an application form by its address, title, edit buttons o
   assert.deepEqual(type({ probe: { ...EMPTY, frames: { total: 1, crossOrigin: 0, frameInputs: 4 } } }), { type: "application_form", reason: "structure" });
   assert.deepEqual(type({ probe: { ...EMPTY, custom: { total: 2, byLibrary: {} } } }), { type: "application_form", reason: "structure" });
   assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 2 } }), { type: "application_form", reason: "structure" });
+  // 提交、按钮、文件框不算可填的输入框。
+  assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 0, nonFillable: 3 } }), { type: "unknown", reason: "none" });
 });
 
 test("a video-interview room, a job detail page or a portal home is not an application form", () => {
@@ -271,7 +280,10 @@ test("the empty-page hint prefers the edit button, then locked inputs, frames an
 
 test("a page that is not an application form says so, after the edit-button and locked-input hints", () => {
   assert.match(probe.emptyPageHint(EMPTY, { notForm: true }), /不是网申填写页/);
-  assert.match(probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, { notForm: true }), /不是网申填写页/);
+  const framed = probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, { notForm: true });
+  assert.match(framed, /不是网申填写页/);
+  assert.match(framed, /内嵌框架/);
+  assert.doesNotMatch(probe.emptyPageHint(EMPTY, { notForm: true }), /内嵌框架/);
   assert.match(probe.emptyPageHint({ ...EMPTY, locked: 1 }, { notForm: true }), /只读或禁用/);
   assert.match(probe.emptyPageHint({ ...EMPTY, editButtons: 1 }, { notForm: true }), /先点网页上的「编辑」/);
 });

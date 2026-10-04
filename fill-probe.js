@@ -158,25 +158,29 @@
   }
 
   // 含输入框的 Shadow DOM：往下逐层找（Web Components 常常一层套一层），每个含输入框的 shadow root 算一个。
+  // 深度优先：遇到 shadow root 先进去找完再往后走，大页面不会在顶层就把额度用完。
   function countShadowHosts(all) {
     let hosts = 0;
     let visited = 0;
-    const pending = [all];
-    while (pending.length && visited < MAX_WALK) {
-      const list = pending.pop() || [];
-      for (let index = 0; index < (list.length || 0) && visited < MAX_WALK; index += 1, visited += 1) {
-        const shadow = list[index]?.shadowRoot;
-        if (!shadow) continue;
-        if (shadow.querySelector?.(SELECTORS.inputs)) hosts += 1;
-        const inner = shadow.querySelectorAll?.(SELECTORS.all);
-        if (inner?.length) pending.push(inner);
+    const stack = [{ list: all || [], index: 0 }];
+    while (stack.length && visited < MAX_WALK) {
+      const top = stack[stack.length - 1];
+      if (top.index >= (top.list.length || 0)) {
+        stack.pop();
+        continue;
       }
+      const shadow = top.list[top.index++]?.shadowRoot;
+      visited += 1;
+      if (!shadow) continue;
+      if (shadow.querySelector?.(SELECTORS.inputs)) hosts += 1;
+      const inner = shadow.querySelectorAll?.(SELECTORS.all);
+      if (inner?.length) stack.push({ list: inner, index: 0 });
     }
     return hosts;
   }
 
   // 是不是网申填写页，以及依据。地址和标题只在本地比对，不输出。探测失败又看不出来时返回 null（判断不了）。
-  // stats 是 content.js 扫描时的计数：页面上不算 type=hidden 的输入框有几个（可见与否都算）。
+  // stats 是 content.js 扫描时的计数：页面上可填的输入框有几个（不算 type=hidden 和按钮、文件框；可见与否都算）。
   function pageType({ pathname = "", title = "", probe = null, stats = null } = {}) {
     const path = String(pathname ?? "");
     if (FORM_URL.test(path) || path.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/).some(word => FORM_URL_WORDS.has(word.toLowerCase()))) {
@@ -186,7 +190,7 @@
     if (!probe) return null;
     if (probe.editButtons > 0) return { type: "application_form", reason: "edit_button" };
     // 跨域框架不算证据：广告、页脚和客服窗口都是这样嵌进来的。
-    const inputs = Number(stats?.domInputs) - Number(stats?.typeHidden || 0);
+    const inputs = Number(stats?.domInputs) - Number(stats?.typeHidden || 0) - Number(stats?.nonFillable || 0);
     if (probe.shadowHosts > 0 || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || inputs >= FORM_INPUTS) {
       return { type: "application_form", reason: "structure" };
     }
@@ -199,7 +203,11 @@
     if (!probe) return "";
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
-    if (notForm) return "这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。";
+    if (notForm) {
+      // 跨域框架不算表单的证据，但也可能就是申请表：两种可能都告诉用户。
+      return `这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。${probe.frames?.crossOrigin > 0
+        ? "如果申请表就在这个页面的内嵌框架里，插件暂时读不到。" : ""}`;
+    }
     if (probe.frames.crossOrigin > 0 || probe.frames.frameInputs > 0) {
       return "表单可能在网页的内嵌框架里，插件暂时读不到。可以把侧栏的「填写诊断」复制给我们。";
     }

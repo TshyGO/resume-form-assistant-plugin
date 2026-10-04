@@ -60,7 +60,18 @@
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "grouped", "out_of_scope", "secret",
-    "no_resume_mapping", "ai_unmatched", "not_written", "unconfirmed", "unsynced"];
+    "no_resume_mapping", "ai_unmatched", "not_sent", "not_written", "unconfirmed", "unsynced"];
+  // URL path segments are kept only when every word in them is a common route word, so
+  // user names and slugs (/u/zhangsan, /people/john-doe) never leave as written.
+  const ROUTE_WORDS = new Set(("apply applies application applications applicant resume resumes cv jianli toudi delivery deliver "
+    + "job jobs position positions post posts campus social career careers recruit recruitment recruiting hire hiring zhaopin "
+    + "xiaozhao shezhao intern interns internship graduate school candidate candidates talent talents portal user users account "
+    + "accounts profile profiles personal info information basic base detail details education experience work project projects "
+    + "skill skills family contact attachment attachments upload step steps form forms edit editor preview submit confirm success "
+    + "result view list index home main center centre my me mine new create add update manage management page pages wizard "
+    + "interview interviews assessment exam test online register signup sign up in login logout auth oauth sso enroll enrollment "
+    + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
+    + "static html htm shtml php jsp aspx asp do action").split(" "));
   const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "other"];
   const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced"];
   const MAX_UNFILLED = 10;
@@ -68,7 +79,7 @@
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
   const oneOf = (names, extra = "") => new RegExp(`^(?:${names.join("|")}${extra})$`);
   const VALUES = {
-    url_path: /^\/(?:(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)(?:\/(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)){0,7}(?:\/:more)?)?$/,
+    url_path: /^\/(?:(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)(?:\/(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)){0,7}(?:\/:more)?)?$/,  // + safePath()
     page_type: /^(?:application_form|unknown|-)$/, page_type_reason: /^(?:url|title|edit_button|structure|none|-)$/,
     dom_ready_at_scan: /^(?:true|false|-)$/, scan_duration_ms: INT,
     dom_inputs: INT, visible_fields: INT, candidates: INT, matched: INT, filled: INT, drop_reasons: tally(DROPS),
@@ -86,17 +97,26 @@
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
     + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|reason=(?:${FILL_REASONS.join("|")}))$`);
 
-  // Route words survive; ids, hashes, tokens, e-mail addresses and non-ASCII segments become :id.
+  function routeSegment(text) {
+    if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return false;
+    return text.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s._-]+/).filter(Boolean)
+      .every(word => ROUTE_WORDS.has(word.toLowerCase()) || /^v\d{1,2}$/i.test(word));
+  }
+
+  // Common route words survive; every other segment (names, ids, tokens, non-ASCII) becomes :id.
   function pathTemplate(pathname) {
     const segments = String(pathname ?? "").split("/").filter(Boolean);
     const kept = segments.slice(0, 8).map(segment => {
       let text;
       try { text = decodeURIComponent(segment); } catch { return ":id"; }
-      if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return ":id";
-      if ((text.match(/\d/g) || []).length >= 3 || /^[0-9a-f]{8,}$/i.test(text)) return ":id";
-      return text;
+      return routeSegment(text) ? text : ":id";
     });
     return `/${kept.join("/")}${segments.length > 8 ? "/:more" : ""}`;
+  }
+
+  // The worker re-checks the vocabulary, not just the shape, of a path it is handed.
+  function safePath(value) {
+    return VALUES.url_path.test(value) && value.split("/").filter(Boolean).every(part => part === ":id" || part === ":more" || routeSegment(part));
   }
 
   // Why the fill failed and the first stage that failed. `none` means nothing failed.
@@ -131,12 +151,16 @@
     const n = positive;
     const secret = n(d?.secretFormFields);
     const noMapping = n(d?.skippedNoContext);
+    // Fields neither matched nor skipped: missed by the AI if it was called; with an empty
+    // template there was no resume data at all; otherwise they were never sent (e.g. too large).
+    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches)) : 0;
+    const restReason = aiCalled(input) ? "ai_unmatched" : d?.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent";
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
-      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
-      ai_unmatched: d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches)) : 0,
+      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping, ai_unmatched: 0, not_sent: 0,
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
+    counts[restReason] += rest;
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 
@@ -235,9 +259,11 @@
         if (SECTIONS.has(section[1])) safe.push(...(safe.length ? ["", line] : [line]));
         continue;
       }
-      const entry = /^([a-z_]{1,32}): (.{1,120})$/.exec(line);
+      // Every value has its own closed pattern; the length cap only bounds the regex work.
+      const entry = /^([a-z_]{1,32}): (.{1,300})$/.exec(line);
       if (entry) {
-        if (Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2])) safe.push(line);
+        const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2]);
+        if (known && (entry[1] !== "url_path" || safePath(entry[2]))) safe.push(line);
         continue;
       }
       const control = /^- (.{1,40}): (.{1,200})$/.exec(line);
