@@ -103,6 +103,20 @@
   const CUSTOM_GROUP = "补充字段";
   const MAX_CUSTOM_FIELDS = 200;
   const MAX_OFFERED_LABELS = 20;
+  // 长题目要整句留着（#228），只防住异常长的整段文字。和 field-scan.js 的 MAX_OFFER_CHARS 一致。
+  const MAX_OFFERED_LABEL_CHARS = 120;
+  // 扫描已经不会把这些当字段名；这里再兜一层：纯计数器、纯占位文字不进「我的信息」。
+  const NOT_A_LABEL = /^[\d\s\/／()（）]+$|^(?:请)?(?:选择|输入|填写|上传|搜索)$/;
+
+  // #228：可以加多条的经历（教育、实习、获奖、证书……）里的字段，换个网站就对不上是哪一条，
+  // 交给简历模板，不进「我的信息」。「语言」「技能」不算：上面「语言与技能」本来就是单值信息。
+  const ENTRY_SECTION = /经历|教育背景|学习背景|实习|工作经验|任职|项目|科研|研究成果|获奖|奖项|奖励|荣誉|专利|证书|资格|论文|专著|发表|成果|培训|实践|校园|学生干部|学生工作|社团|家庭|成员|亲属/;
+  const INTENT_SECTION = /意向|期望|求职/;
+  const FAMILY_SECTION = /家庭|成员|亲属/;
+  // 和上面「教育补充」「语言与技能」「求职补充」同类的概括信息，出现在经历区块里也照收（「班级排名」之于「专业排名」）。
+  const PROFILE_LIKE_TITLE = /排名|最高学历|最高学位|学习形式|学生干部|双学位|专升本|外语|英语|语种|四六级|cet|计算机|技能|特长/i;
+  // 找不到所属区块时，离开上下文就看不懂的题目不问。
+  const CONTEXTLESS_TITLE = /^(?:名称|名字|时间|开始时间|结束时间|起止时间|起始时间|获得时间|日期|描述|说明|备注|类型|类别|级别|等级|内容|地点|单位|职务|角色)$/;
 
   const SKIPPED_INPUT_TYPES = new Set(["password", "file", "checkbox", "hidden", "submit", "button", "reset", "image"]);
   // 补充字段是用户自己起的名，拦不住一行叫「网银密码」：这种字段不推荐、不交给 AI。
@@ -293,17 +307,33 @@
     return keys;
   }
 
-  // 一次填写之后，网页上既没匹配上、也还空着的字段。密码验证码、文件、勾选框不算。
-  function pickUnansweredLabels(candidates, knownKeys, limit = MAX_OFFERED_LABELS) {
+  // 经历类区块里的字段：返回要用的名字（同类概括信息）或 null（不收）。
+  function entryFieldLabel(candidate) {
+    const section = text(candidate?.section);
+    const title = text(candidate?.title ?? candidate?.label);
+    if (!section) return CONTEXTLESS_TITLE.test(title) ? null : undefined;
+    if (FAMILY_SECTION.test(section)) return null;
+    const entry = candidate?.sectionRepeatable || (ENTRY_SECTION.test(section) && !INTENT_SECTION.test(section));
+    if (!entry) return undefined;
+    return PROFILE_LIKE_TITLE.test(title) ? title : null;
+  }
+
+  // 一次填写之后，网页上既没匹配上、也还空着的字段。密码验证码、文件、勾选框、经历类区块里的字段不算。
+  function pickUnansweredLabels(candidates, knownKeys, limit = MAX_OFFERED_LABELS, stats = null) {
     const picked = [];
     const seen = new Set();
 
     for (const candidate of Array.isArray(candidates) ? candidates : []) {
-      const label = text(candidate?.label);
+      if (candidate?.matched || candidate?.hasValue) continue;
+      const entryLabel = entryFieldLabel(candidate);
+      if (entryLabel === null) {
+        if (stats) stats.entry = (stats.entry || 0) + 1;
+        continue;
+      }
+      const label = text(entryLabel ?? candidate?.label);
       const normalized = normalizeKey(label);
 
-      if (candidate?.matched || candidate?.hasValue) continue;
-      if (normalized.length < 2 || label.length > 30) continue;
+      if (normalized.length < 2 || label.length > MAX_OFFERED_LABEL_CHARS || NOT_A_LABEL.test(label)) continue;
       if (SKIPPED_INPUT_TYPES.has(candidate?.inputType) || SECRET_LABEL.test(label)) continue;
       if (knownKeys?.has(normalized) || seen.has(normalized)) continue;
 
