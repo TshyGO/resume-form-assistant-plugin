@@ -79,11 +79,25 @@ test("unanswered labels skip matched, filled, secret, file and known fields", ()
     { label: "职业规划", inputType: "textarea" }
   ], known);
 
-  assert.deepEqual(labels, ["是否有亲属在本行工作", "职业规划"]);
+  // #228：长题目整句保留，不再因为超过 30 字被静默丢掉。
+  assert.deepEqual(labels, ["是否有亲属在本行工作", "这是一个非常非常非常非常非常非常非常非常非常长的说明文字字段标签内容", "职业规划"]);
   assert.equal(profileApi.pickUnansweredLabels(
     Array.from({ length: 30 }, (_, index) => ({ label: `字段${index}`, inputType: "text" })),
     new Set()
   ).length, 20);
+});
+
+test("unanswered labels never offer counters or bare placeholder prompts, and cap runaway text (#228)", () => {
+  const long = "请说明".padEnd(120, "题");
+  const labels = profileApi.pickUnansweredLabels([
+    { label: "0/2000", inputType: "textarea" },
+    { label: "0/4000", inputType: "textarea" },
+    { label: "请选择", inputType: "text" },
+    { label: "请输入", inputType: "text" },
+    { label: long, inputType: "textarea" },
+    { label: `${long}超出`, inputType: "textarea" }
+  ], new Set());
+  assert.deepEqual(labels, [long]);
 });
 
 test("adding pending fields skips what the profile already has", () => {

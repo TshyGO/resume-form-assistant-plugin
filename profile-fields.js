@@ -103,6 +103,10 @@
   const CUSTOM_GROUP = "补充字段";
   const MAX_CUSTOM_FIELDS = 200;
   const MAX_OFFERED_LABELS = 20;
+  // 长题目要整句留着（#228），只防住异常长的整段文字。和 field-scan.js 的 MAX_OFFER_CHARS 一致。
+  const MAX_OFFERED_LABEL_CHARS = 120;
+  // 扫描已经不会把这些当字段名；这里再兜一层：纯计数器、纯占位文字不进「我的信息」。
+  const NOT_A_LABEL = /^[\d\s\/／()（）]+$|^(?:请)?(?:选择|输入|填写|上传|搜索)$/;
 
   const SKIPPED_INPUT_TYPES = new Set(["password", "file", "checkbox", "hidden", "submit", "button", "reset", "image"]);
   // 补充字段是用户自己起的名，拦不住一行叫「网银密码」：这种字段不推荐、不交给 AI。
@@ -303,7 +307,7 @@
       const normalized = normalizeKey(label);
 
       if (candidate?.matched || candidate?.hasValue) continue;
-      if (normalized.length < 2 || label.length > 30) continue;
+      if (normalized.length < 2 || label.length > MAX_OFFERED_LABEL_CHARS || NOT_A_LABEL.test(label)) continue;
       if (SKIPPED_INPUT_TYPES.has(candidate?.inputType) || SECRET_LABEL.test(label)) continue;
       if (knownKeys?.has(normalized) || seen.has(normalized)) continue;
 

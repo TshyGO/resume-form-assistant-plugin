@@ -1651,7 +1651,10 @@
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
     if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected
       && !(option.value === "" && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
-    return Boolean(String(el.value ?? el.textContent ?? "").trim());
+    if (String(el.value ?? el.textContent ?? "").trim()) return true;
+    // 自定义下拉选好的内容显示在组件里，内部 input 常常是空的。
+    return entry.controlKind === "custom-select" && Boolean(entry.binding)
+      && Boolean(self.ResumeProFieldScan?.hasDisplayedValue(entry.binding, { isVisible }));
   }
 
   // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
@@ -1718,6 +1721,7 @@
     const unfilledLabels = [];
     const unfilledControls = [];
     let probe = null;
+    let scanStats = null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
@@ -1736,6 +1740,7 @@
     try {
       const scanned = scanFillableFields();
       const fieldMap = scanned.fieldMap;
+      scanStats = scanned.scanStats;
       const fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
@@ -1860,6 +1865,18 @@
         const element = fieldMap.get(match.fieldId);
 
         if (!element) continue;
+        // 匹配期间页面可能展开、重渲染：控件已经不在原来的题目下，就不按旧的对应关系写。
+        if (!isFieldBindingCurrent(element)) {
+          if (assisted) {
+            unconfirmedCount += 1;
+          } else {
+            const staleMeta = fieldMetaMap.get(match.fieldId);
+            unfilledLabels.push(`${staleMeta?.label || staleMeta?.placeholder || staleMeta?.name || "未命名字段"}（页面已变化）`);
+            unfilledControls.push({ label: "（字段名已隐藏）", reason: "页面已变化",
+              control: withFillProbe(api => api.describeControl(element), null) });
+          }
+          continue;
+        }
         if (assisted && (!isAssistedTextField(element) || hasExistingValue(element) || !assisted.scopes.some(scope => scope.isConnected && scope.contains(element.element)))) continue;
 
         // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
@@ -1958,13 +1975,17 @@
 
       if (!assisted) {
         const matchedIds = new Set(response.matches.map((match) => match.fieldId));
-        offerUnansweredFields(fields.map((field) => ({
-          label: field.label || field.placeholder || field.name,
-          inputType: field.inputType,
-          matched: matchedIds.has(field.fieldId),
-          hasValue: hasExistingValue(fieldMap.get(field.fieldId)),
-          entry: fieldMap.get(field.fieldId)
-        })), resumeFields);
+        // 只有对上了题目的字段才问：占位文字、计数器、跨行借来的文字都不会出现在这里。
+        offerUnansweredFields(fields.flatMap((field) => {
+          const entry = fieldMap.get(field.fieldId);
+          return entry?.offerable && entry.offerLabel ? [{
+            label: entry.offerLabel,
+            inputType: field.inputType,
+            matched: matchedIds.has(field.fieldId),
+            hasValue: hasExistingValue(entry),
+            entry
+          }] : [];
+        }), resumeFields);
       }
     } catch (error) {
       failure = error.message || "AI 填写失败。";
@@ -1985,7 +2006,7 @@
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
       const summaryInput = { ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls };
+        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls, scanStats };
       if (session === fillSession) session.summary = summaryInput;
       writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
       // Feedback cannot delay filling, archiving or releasing the busy state.
@@ -2035,6 +2056,18 @@
     }
   }
 
+  // #228 扫描诊断：只有数量，没有字段名、网页内容或网址。
+  function formatScanStats(stats, count) {
+    if (!stats?.skipped || !stats.sources) return [];
+    const skipped = stats.skipped;
+    const sources = stats.sources;
+    const sum = (...keys) => keys.reduce((total, key) => total + (Number.isInteger(sources[key]) ? sources[key] : 0), 0);
+    return [
+      `扫描跳过：页头导航 ${count(skipped.pageChrome)}；下拉内部输入 ${count(skipped.popup)}；并入同一控件 ${count(skipped.merged)}；站内搜索 ${count(skipped.siteSearch)}；表单外 ${count(skipped.outsideForm)}；对不上题目 ${count(skipped.noLabel)}`,
+      `字段名来源：明确关联 ${sum("explicit")}；表单项 ${sum("item", "item-text")}；表格 ${sum("table", "table-header")}；相邻文字 ${sum("sibling")}；仅占位文字 ${sum("placeholder")}`
+    ];
+  }
+
   function formatFillDiagnostics(result) {
     const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行 / 未取得";
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
@@ -2057,6 +2090,7 @@
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
       `敏感字段过滤：${count(d.skippedSecret)}；超大资料跳过：${count(d.skippedOversized)}；无对应资料跳过：${count(d.skippedNoContext)}`,
       `用户 prompt：${count(d.promptBytes)} bytes`,
+      ...formatScanStats(result.scanStats, count),
       `扫描：${seconds(result.scanMs)}`,
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
       `API（含响应读取）：${seconds(d.apiMs)}`,
@@ -2065,107 +2099,62 @@
     ].join("\n");
   }
 
+  // #228：扫描交给 field-scan.js。只收能对上题目的逻辑控件：自定义下拉连同内部输入算一个，
+  // 页头搜索、下拉弹层里的搜索框、对不上题目的控件都跳过，只在诊断里记数量。
   function scanFillableFields() {
-    const candidates = Array.from(document.querySelectorAll(
-      "input:not([type='hidden']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']):not([disabled]), textarea:not([disabled]), select:not([disabled])"
-    )).filter((element) => isVisible(element) && !element.closest(`#${SIDEBAR_ID}`));
-
+    const scan = self.ResumeProFieldScan.scanPage(document, {
+      isVisible,
+      exclude: (element) => Boolean(element.closest(`#${SIDEBAR_ID}`))
+    });
     const fieldMap = new Map();
     const fields = [];
-    const radioGroups = new Set();
 
-    candidates.forEach((element, index) => {
-      if (element instanceof HTMLInputElement && element.type === "radio") {
-        const groupName = element.name || `__radio__${index}`;
+    scan.controls.forEach((control) => {
+      const element = control.element;
+      // 扫描时的对应关系原样留着，填写和「加到我的信息」用之前拿它复查。
+      const binding = control;
+      const common = { controlKind: control.controlKind, root: control.root, binding,
+        offerable: control.offerable, offerLabel: control.offerLabel };
+      const base = {
+        label: control.label,
+        placeholder: control.placeholder,
+        ariaLabel: element.getAttribute("aria-label") || "",
+        group: control.group
+      };
 
-        if (radioGroups.has(groupName)) {
-          return;
-        }
-
-        radioGroups.add(groupName);
-        const radioElements = candidates.filter((candidate) => candidate instanceof HTMLInputElement && candidate.type === "radio" && (candidate.name || `__radio__${index}`) === groupName);
+      if (control.kind === "radio") {
         const fieldId = `field-radio-${fields.length}`;
-        fieldMap.set(fieldId, { kind: "radio", elements: radioElements });
+        fieldMap.set(fieldId, { kind: "radio", elements: control.elements, ...common });
         fields.push({
-          fieldId,
-          label: getFieldLabel(element),
-          placeholder: "",
-          name: groupName,
-          idAttr: "",
-          ariaLabel: element.getAttribute("aria-label") || "",
-          tagName: "input",
-          inputType: "radio",
-          options: radioElements.map((radio) => getRadioOptionLabel(radio)).filter(Boolean),
-          group: findNearestGroupLabel(element)
+          fieldId, ...base, placeholder: "", name: element.name || "", idAttr: "",
+          tagName: "input", inputType: "radio",
+          options: control.elements.map((radio) => getRadioOptionLabel(radio)).filter(Boolean)
         });
         return;
       }
 
       const fieldId = `field-${fields.length}`;
-      fieldMap.set(fieldId, { kind: "element", element });
+      if (control.controlKind === "date-picker") {
+        const pickerType = control.pickerType || "generic";
+        const pickerInputType = inferPickerInputType(control.root, element);
+        fieldMap.set(fieldId, { kind: "element", element, pickerType, pickerInputType, ...common });
+        fields.push({
+          fieldId, ...base, name: element.getAttribute("name") || "", idAttr: element.id || "",
+          tagName: "input", inputType: "date-picker", pickerType, pickerInputType, options: []
+        });
+        return;
+      }
+
+      fieldMap.set(fieldId, { kind: "element", element, ...common });
       fields.push({
-        fieldId,
-        label: getFieldLabel(element),
-        placeholder: element.getAttribute("placeholder") || "",
+        fieldId, ...base,
         name: element.getAttribute("name") || "",
         idAttr: element.id || "",
-        ariaLabel: element.getAttribute("aria-label") || "",
         tagName: element.tagName.toLowerCase(),
         inputType: element instanceof HTMLInputElement ? element.type || "text" : element.tagName.toLowerCase(),
         options: element instanceof HTMLSelectElement
           ? Array.from(element.options).map((option) => option.text.trim()).filter(Boolean)
-          : [],
-        group: findNearestGroupLabel(element)
-      });
-    });
-
-    const pickerSelectors = [
-      { selector: ".ant-picker", pickerType: "antd" },
-      { selector: ".el-date-editor", pickerType: "element" },
-      { selector: "[class*='date-picker']", pickerType: "generic" }
-    ];
-
-    pickerSelectors.forEach(({ selector, pickerType }) => {
-      document.querySelectorAll(selector).forEach((container) => {
-        if (container.closest(`#${SIDEBAR_ID}`)) return;
-        if (!isVisible(container)) return;
-
-        Array.from(container.querySelectorAll("input:not([type='hidden']):not([disabled])"))
-          .filter((inner) => isVisible(inner))
-          .forEach((inner) => {
-          const pickerInputType = inferPickerInputType(container, inner);
-
-          const existingEntry = Array.from(fieldMap.entries()).find(([, v]) => v.element === inner);
-          if (existingEntry) {
-            const [existingId, entryValue] = existingEntry;
-            entryValue.pickerType = pickerType;
-            entryValue.pickerInputType = pickerInputType;
-            const existingField = fields.find((f) => f.fieldId === existingId);
-            if (existingField) {
-              existingField.inputType = "date-picker";
-              existingField.pickerType = pickerType;
-              existingField.pickerInputType = pickerInputType;
-            }
-            return;
-          }
-
-          const fieldId = `field-${fields.length}`;
-          fieldMap.set(fieldId, { kind: "element", element: inner, pickerType, pickerInputType });
-          fields.push({
-            fieldId,
-            label: getFieldLabel(inner),
-            placeholder: inner.getAttribute("placeholder") || "",
-            name: inner.getAttribute("name") || "",
-            idAttr: inner.id || "",
-            ariaLabel: inner.getAttribute("aria-label") || "",
-            tagName: "input",
-            inputType: "date-picker",
-            pickerType,
-            pickerInputType,
-            options: [],
-            group: findNearestGroupLabel(inner)
-          });
-        });
+          : []
       });
     });
 
@@ -2174,85 +2163,24 @@
       self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
     }
 
-    return { fields, fieldMap };
+    return { fields, fieldMap, scanStats: { skipped: scan.skipped, sources: scan.sources } };
+  }
+
+  // 题目和控件的对应关系还成立吗：控件还在原来的表单项里、表单项没混进别的控件、题目没变。
+  function isFieldBindingCurrent(entry) {
+    if (!entry?.binding) return true;
+    try {
+      return self.ResumeProFieldScan.isBindingCurrent(entry.binding, document, { isVisible });
+    } catch {
+      return false;
+    }
   }
 
   function getFieldLabel(element) {
-    const cleanedElementLabel = sanitizeLabelText(element.getAttribute("data-label"));
-    if (cleanedElementLabel) return cleanedElementLabel;
-
-    // 1. 标准 label 关联
-    if (element.labels?.length) {
-      const labelText = sanitizeLabelText(Array.from(element.labels).map((label) => label.textContent?.trim() || "").join(" / "));
-      if (labelText) return labelText;
-    }
-
-    // 2. label[for] 关联
-    if (element.id) {
-      const linked = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
-      const linkedText = sanitizeLabelText(linked?.textContent);
-      if (linkedText) return linkedText;
-    }
-
-    // 3. 包裹在 label 里
-    const wrappingLabel = element.closest("label");
-    const wrappingText = sanitizeLabelText(wrappingLabel?.textContent);
-    if (wrappingText) return wrappingText;
-
-    // 4. aria-labelledby
-    const labelledBy = element.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const text = sanitizeLabelText(labelledBy.split(" ").map(id => document.getElementById(id)?.textContent?.trim()).filter(Boolean).join(" "));
-      if (text) return text;
-    }
-
-    // 5. 同一行的前一个兄弟元素文本（td/th/span/div/p）
-    let sibling = element.previousElementSibling;
-    while (sibling) {
-      const text = sanitizeLabelText(sibling.textContent);
-      if (text && text.length < 30) return text;
-      sibling = sibling.previousElementSibling;
-    }
-
-    // 6. 父容器内、input 之前的文本节点或标签元素（常见于 td 布局）
-    const parent = element.parentElement;
-    if (parent) {
-      // 找父容器的前一个兄弟（如 th/td）
-      let parentSibling = parent.previousElementSibling;
-      while (parentSibling) {
-        const text = sanitizeLabelText(parentSibling.textContent);
-        if (text && text.length < 30) return text;
-        parentSibling = parentSibling.previousElementSibling;
-      }
-
-      // 父容器本身的直接文本（排除 input 本身的内容）
-      const clone = parent.cloneNode(true);
-      clone.querySelectorAll("input, select, textarea, button").forEach(el => el.remove());
-      const text = sanitizeLabelText(clone.textContent);
-      if (text && text.length < 30) return text;
-    }
-
-    // 7. 向上追溯祖先容器的前序单元格/标签，适配表格或复杂布局
-    let current = parent;
-    let depth = 0;
-    while (current && depth < 5) {
-      let previous = current.previousElementSibling;
-      while (previous) {
-        const text = sanitizeLabelText(previous.textContent);
-        if (text && text.length < 40) return text;
-        previous = previous.previousElementSibling;
-      }
-
-      const scopedLabel = current.querySelector("label, th, .label, .form-label, .ant-form-item-label");
-      const scopedText = sanitizeLabelText(scopedLabel?.textContent);
-      if (scopedText && scopedText.length < 40) return scopedText;
-
-      current = current.parentElement;
-      depth += 1;
-    }
-
-    // 8. placeholder 兜底
-    return element.getAttribute("placeholder")?.trim() || "";
+    return self.ResumeProFieldScan?.labelForElement(element, {
+      isVisible,
+      exclude: (candidate) => Boolean(candidate.closest(`#${SIDEBAR_ID}`))
+    }) || "";
   }
 
   // 目标、光标或内容变了，就让在线的侧栏重新问一次状态。消息里不带任何数据。
@@ -3352,7 +3280,8 @@
     state.profileOfferLabels = labels;
     state.profileOfferFields = resumeFields;
     state.profileOfferCandidates = candidates;
-    const shown = labels.slice(0, 5).join("、");
+    // 长题目在卡片里缩写显示，加到「我的信息」的仍是完整名称。
+    const shown = labels.slice(0, 5).map((label) => label.length > 24 ? `${label.slice(0, 23)}…` : label).join("、");
     card.querySelector("#resume-pro-profile-offer-text").textContent =
       `网页上还有 ${labels.length} 个字段空着：${shown}${labels.length > 5 ? " 等" : ""}。加到「我的信息」并补上内容，下次就能自动填。`;
     card.hidden = false;
@@ -3369,13 +3298,16 @@
   async function addUnansweredToProfile() {
     // 卡片出来之后用户可能已经手动填了几个，点的时候按网页现在的样子再挑一遍。
     const candidates = state.profileOfferCandidates || [];
+    // 动态展开或重渲染之后，控件可能已经不在原来的题目下：对应关系变了的不加。
     const labels = (state.profileOfferLabels || []).filter((label) => candidates.some((candidate) =>
-      String(candidate.label ?? "").trim() === label && candidate.entry && !hasExistingValue(candidate.entry)));
+      String(candidate.label ?? "").trim() === label && candidate.entry && !hasExistingValue(candidate.entry)
+      && isFieldBindingCurrent(candidate.entry)));
     const resumeFields = state.profileOfferFields;
 
     if (!labels.length) {
+      const stale = candidates.some((candidate) => candidate.entry && !isFieldBindingCurrent(candidate.entry));
       closeProfileOffer();
-      showStatus("这些字段已经在网页上填好了。", "success");
+      showStatus(stale ? "网页内容已经变化，请重新一键填写后再加。" : "这些字段已经在网页上填好了。", stale ? "error" : "success");
       return;
     }
 
@@ -3431,35 +3363,6 @@
     }
 
     return radio.value?.trim() || "";
-  }
-
-  function findNearestGroupLabel(element) {
-    const sectionSelectors = ["fieldset", "[role='group']", ".form-item", ".ant-form-item", "tr", "li", "section", "td"];
-
-    for (const selector of sectionSelectors) {
-      const container = element.closest(selector);
-
-      if (!container) {
-        continue;
-      }
-
-      const labelCandidate = container.querySelector("legend, label, th, .label, .form-label, .ant-form-item-label");
-      const text = labelCandidate?.textContent?.trim().replace(/[*\s]+$/g, "").trim();
-
-      if (text && text.length < 40) {
-        return text;
-      }
-    }
-
-    return "";
-  }
-
-  function sanitizeLabelText(text) {
-    return String(text || "")
-      .replace(/\s+/g, " ")
-      .replace(/^\*+/, "")
-      .replace(/\*+$/g, "")
-      .trim();
   }
 
   async function openManager(view = "home") {

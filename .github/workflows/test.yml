@@ -33,6 +33,7 @@ jobs:
           node --check ai-helpers.js
           node --check form-agent.js
           node --check fill-probe.js
+          node --check field-scan.js
           node --check feedback-core.js
           node --check feedback-ui.js
           node --check link/feedback.mjs
