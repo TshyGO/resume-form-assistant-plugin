@@ -1,0 +1,184 @@
+// fill_failed 诊断载荷 v1（#215 后续）：一次上报就能看出失败卡在哪一步，且只含结构和计数。
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const core = require("../feedback-core.js");
+
+test("url paths keep route words and replace ids, tokens and non-ASCII segments", () => {
+  assert.equal(core.pathTemplate("/atsc/apply/12345"), "/atsc/apply/:id");
+  assert.equal(core.pathTemplate("/resume/5f3a9c2e8b/edit"), "/resume/:id/edit");
+  assert.equal(core.pathTemplate("/job/abc123def/apply"), "/job/:id/apply");
+  assert.equal(core.pathTemplate("/u/a%40b.com/profile"), "/u/:id/profile");
+  assert.equal(core.pathTemplate("/%E5%BC%A0%E4%B8%89/resume"), "/:id/resume");
+  assert.equal(core.pathTemplate("/apply/abcdefghijklmnopqrstu"), "/apply/:id");
+  assert.equal(core.pathTemplate("/bad/%E0%A4%A"), "/bad/:id");
+  assert.equal(core.pathTemplate("/v2/apply/"), "/v2/apply");
+  assert.equal(core.pathTemplate("/a/b/c/d/e/f/g/h/i/j"), "/a/b/c/d/e/f/g/h/:more");
+  assert.equal(core.pathTemplate(""), "/");
+  assert.equal(core.pathTemplate(undefined), "/");
+});
+
+test("an empty page is page_not_supported unless it looks like an application form", () => {
+  const empty = { scanned: true, fieldCount: 0, frames: { crossOrigin: 0, frameInputs: 0 } };
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown" }), { category: "page_not_supported", stage: "scan" });
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form" }), { category: "no_fields_found", stage: "scan" });
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form", frames: { crossOrigin: 2, frameInputs: 0 } }),
+    { category: "iframe_blocked", stage: "scan" });
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: "application_form", frames: { crossOrigin: 0, frameInputs: 3 } }),
+    { category: "iframe_blocked", stage: "scan" });
+  // 页面探测不可用：判断不了是不是表单页，照旧当成没找到字段上报。
+  assert.deepEqual(core.fillCategory({ ...empty, pageType: null, frames: null }), { category: "no_fields_found", stage: "scan" });
+  assert.deepEqual(core.fillCategory({ scanned: false, fieldCount: 0 }), { category: "unknown", stage: "scan" });
+});
+
+test("failures after the scan name the stage, and a service failure is not called a match failure", () => {
+  const base = { scanned: true, fieldCount: 4, pageType: "application_form" };
+  const failedMatch = { ...base, failedStage: "match", responded: true };
+  assert.deepEqual(core.fillCategory({ ...base, failedStage: "match", responded: false }), { category: "unknown", stage: "match" });
+  assert.deepEqual(core.fillCategory({ ...failedMatch, errorCode: "timeout" }), { category: "timeout", stage: "match" });
+  for (const errorCode of ["network", "auth", "not_paired", "unavailable", "http_502", "bad_response"]) {
+    assert.deepEqual(core.fillCategory({ ...failedMatch, errorCode }), { category: "service_error", stage: "match" }, errorCode);
+  }
+  for (const errorCode of ["none", "no_context", "secret_only", "no_resume_fields", undefined]) {
+    assert.deepEqual(core.fillCategory({ ...failedMatch, errorCode }), { category: "match_failed", stage: "match" }, String(errorCode));
+  }
+  assert.deepEqual(core.fillCategory({ ...base, failedStage: "fill" }), { category: "unknown", stage: "fill" });
+  assert.deepEqual(core.fillCategory({ ...base, matched: 0, filledCount: 0, unfilledCount: 0 }), { category: "match_failed", stage: "match" });
+  assert.deepEqual(core.fillCategory({ ...base, matched: 3, filledCount: 0, unfilledCount: 3 }), { category: "fill_rejected", stage: "fill" });
+  assert.deepEqual(core.fillCategory({ ...base, matched: 3, filledCount: 2, unfilledCount: 1 }), { category: "fill_rejected", stage: "fill" });
+  assert.deepEqual(core.fillCategory({ ...base, matched: 3, filledCount: 3, unfilledCount: 0 }), { category: "none", stage: "none" });
+});
+
+test("pages that are not application forms are never reported automatically", () => {
+  const empty = { fieldCount: 0, filledCount: 0, unfilledCount: 0 };
+  assert.equal(core.fillFailure({ ...empty, category: "page_not_supported" }), null);
+  for (const category of ["no_fields_found", "iframe_blocked", undefined]) {
+    assert.equal(core.fillFailure({ ...empty, category }), "fill_failed", String(category));
+  }
+});
+
+const IFRAME_PAGE = {
+  path: "/atsc/apply/12345",
+  pageType: { type: "application_form", reason: "url" },
+  readyAtScan: true,
+  scanMs: 12.4, roundTripMs: null, fillMs: null, totalMs: 15.2,
+  stats: { domInputs: 14, visible: 0, typeHidden: 3, nonFillable: 1, disabled: 2, invisible: 8, grouped: 0, outOfScope: 0 },
+  fieldCount: 0, matched: null, filledCount: 0, unfilledCount: 0, unconfirmedCount: 0, unsyncedCount: 0, requested: false,
+  probe: { frames: { total: 2, crossOrigin: 2, frameInputs: 0 }, custom: { total: 0, byLibrary: {} },
+    editButtons: 0, locked: 3, shadowHosts: 1, elements: 830 },
+  category: "iframe_blocked", stage: "scan",
+  diagnostics: null,
+  unfilledControls: []
+};
+
+test("the v1 block answers why a page had no fields, section by section", () => {
+  assert.equal(core.fillReport(IFRAME_PAGE), [
+    "[页面]",
+    "url_path: /atsc/apply/:id",
+    "page_type: application_form",
+    "page_type_reason: url",
+    "dom_ready_at_scan: true",
+    "scan_duration_ms: 12",
+    "",
+    "[字段漏斗]",
+    "dom_inputs: 14",
+    "visible_fields: 0",
+    "candidates: 0",
+    "matched: -",
+    "filled: 0",
+    "drop_reasons: type_hidden=3,non_fillable=1,disabled=2,invisible=8",
+    "",
+    "[页面结构]",
+    "dom_elements: 830",
+    "iframes_total: 2",
+    "iframes_cross_origin: 2",
+    "same_origin_iframe_inputs: 0",
+    "shadow_roots_with_inputs: 1",
+    "custom_controls: 0",
+    "custom_libraries: -",
+    "readonly_or_disabled: 3",
+    "edit_buttons: 0",
+    "",
+    "[错误]",
+    "error_category: iframe_blocked",
+    "first_failing_stage: scan",
+    "error_code: -",
+    "",
+    "[匹配]",
+    "local_matches: -",
+    "ai_fields: -",
+    "ai_called: false",
+    "ai_matches: -",
+    "ai_latency_ms: -",
+    "resume_fields: -",
+    "resume_candidates: -",
+    "prompt_bytes: -",
+    "",
+    "[性能]",
+    "timings_ms: scan=12,match=-,fill=-,total=15"
+  ].join("\n"));
+});
+
+test("match and fill drops are counted separately, and ai_called tells 'not called' from 'called without result'", () => {
+  const report = core.fillReport({
+    ...IFRAME_PAGE, category: "fill_rejected", stage: "fill", requested: true,
+    stats: { domInputs: 9, visible: 8, typeHidden: 1, nonFillable: 0, disabled: 0, invisible: 0, grouped: 2, outOfScope: 0 },
+    fieldCount: 6, matched: 3, filledCount: 1, unfilledCount: 2, roundTripMs: 2300.6, fillMs: 410, totalMs: 2730,
+    diagnostics: { ruleMatches: 2, aiFields: 4, aiMatches: 1, apiMs: 2100.2, promptBytes: 812, resumeFields: 20,
+      candidateFields: 5, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
+    probe: { ...IFRAME_PAGE.probe, custom: { total: 3, byLibrary: { antd: 2, 其他: 1 } } },
+    unfilledControls: [
+      { label: "姓名", reasonCode: "value_reverted", control: { tag: "input", type: "text", role: "textbox", readOnly: true, library: "antd" } },
+      { label: "张三的学校", reasonCode: "", control: { tag: "select", type: "" } }
+    ]
+  });
+  assert.match(report, /^drop_reasons: type_hidden=1,grouped=2,secret=1,no_resume_mapping=1,ai_unmatched=1,not_written=2$/m);
+  assert.match(report, /^ai_called: true$/m);
+  assert.match(report, /^ai_latency_ms: 2100$/m);
+  assert.match(report, /^custom_libraries: antd=2,other=1$/m);
+  assert.match(report, /^timings_ms: scan=12,match=2301,fill=410,total=2730$/m);
+  assert.match(report, /^\[未填字段\]\n- 姓名: input\[text\] role=textbox readonly lib=antd reason=value_reverted\n- （字段名已隐藏）: select$/m);
+  assert.ok(!report.includes("张三"));
+
+  const notCalled = core.fillReport({ ...IFRAME_PAGE, requested: true,
+    diagnostics: { ruleMatches: 6, aiFields: 0, aiMatches: 0, apiMs: 0, promptBytes: 0, errorCode: "none" } });
+  assert.match(notCalled, /^ai_called: false$/m);
+  assert.match(notCalled, /^ai_latency_ms: -$/m);
+  // 请求发出去了但没收到回复（例如通道断开）：不知道 AI 有没有被调用。
+  assert.match(core.fillReport({ ...IFRAME_PAGE, requested: true }), /^ai_called: -$/m);
+});
+
+const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan", "scan_duration_ms",
+  "dom_inputs", "visible_fields", "candidates", "matched", "filled", "drop_reasons",
+  "dom_elements", "iframes_total", "iframes_cross_origin", "same_origin_iframe_inputs", "shadow_roots_with_inputs",
+  "custom_controls", "custom_libraries", "readonly_or_disabled", "edit_buttons",
+  "error_category", "first_failing_stage", "error_code",
+  "local_matches", "ai_fields", "ai_called", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
+  "timings_ms"];
+
+test("every v1 key survives the allowlist, including when the probe and scan stats are missing", () => {
+  for (const input of [IFRAME_PAGE, { ...IFRAME_PAGE, pageType: null, probe: null, stats: null, readyAtScan: null, path: undefined }]) {
+    const report = core.fillReport(input);
+    assert.equal(core.diagnostics(report), report);
+    for (const key of V1_KEYS) assert.match(report, new RegExp(`^${key}: `, "m"), key);
+  }
+});
+
+test("the allowlist drops unknown keys, free text, spoofed origin lines and the old Chinese lines", () => {
+  const forged = [
+    "[来源]", "host: evil.example", "app_version: 9.9.9",
+    "[页面]", "url_path: /apply/zhangsan@example.com", "url_path: /apply/:id",
+    "page_title: 张三的简历", "page_type: application_form",
+    "[错误]", "error_category: no_fields_found", "error_category: 张三", "error_code: sk-secret",
+    "console_errors: [\"Uncaught TypeError: token=abc\"]",
+    "dom_inputs: 14", "dom_inputs: 13800138000",
+    "drop_reasons: hidden=3", "drop_reasons: type_hidden=3,secret=1",
+    "[未填字段]", "- 张三: input[text] data-x=13800138000", "- 姓名: input[text] onclick=steal()",
+    "网页字段：5；成功填写：2；没填上：1"
+  ].join("\n");
+  const out = core.diagnostics(forged);
+  assert.equal(out, [
+    "[页面]", "url_path: /apply/:id", "page_type: application_form",
+    "", "[错误]", "error_category: no_fields_found", "dom_inputs: 14", "drop_reasons: type_hidden=3,secret=1",
+    "", "[未填字段]", "- （字段名已隐藏）: input[text]", "- 姓名: input[text]"
+  ].join("\n"));
+});

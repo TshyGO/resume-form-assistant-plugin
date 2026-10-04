@@ -141,6 +141,10 @@ function loadHighlightHelpers(options = {}) {
       if (selector.includes("input:not")) {
         return options.formElements || [];
       }
+      // 诊断漏斗数页面上全部输入框（含隐藏的）；不传就和可填的那批一样。
+      if (selector === "input, select, textarea") {
+        return options.allInputs || options.formElements || [];
+      }
       return [];
     },
     createElement(tagName) {
@@ -211,7 +215,7 @@ function loadHighlightHelpers(options = {}) {
       }
     },
     crypto: { randomUUID: options.randomUUID || (() => "test-id") },
-    location: options.location || { href: "https://jobs.example.test/apply" },
+    location: options.location || { href: "https://jobs.example.test/apply", pathname: "/apply" },
     document,
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
