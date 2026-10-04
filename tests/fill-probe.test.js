@@ -251,6 +251,8 @@ test("a page counts as an application form by its address, title, edit buttons o
   assert.deepEqual(type({ probe: { ...EMPTY, frames: { total: 1, crossOrigin: 0, frameInputs: 4 } } }), { type: "application_form", reason: "structure" });
   assert.deepEqual(type({ probe: { ...EMPTY, custom: { total: 2, byLibrary: {} } } }), { type: "application_form", reason: "structure" });
   assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 2 } }), { type: "application_form", reason: "structure" });
+  // 看得见但被禁用的输入框：扫描不收，但它就是表单（例如要先完成上一步）。
+  assert.deepEqual(type({ probe: { ...EMPTY, locked: 1 } }), { type: "application_form", reason: "structure" });
   // 提交、按钮、文件框不算可填的输入框。
   assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 0, nonFillable: 3 } }), { type: "unknown", reason: "none" });
 });

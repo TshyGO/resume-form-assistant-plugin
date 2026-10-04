@@ -87,6 +87,14 @@ test("a page with no form signals but a cross-origin frame is still reported, as
   assert.match(result.error, /内嵌框架/);
 });
 
+test("a page whose only visible inputs are disabled is reported, even without form words in the address", async () => {
+  const { reports } = await run({ path: "/quick/go", probe: { ...EMPTY, locked: 2 } });
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].diagnostics, /^error_category: no_fields_found$/m);
+  assert.match(reports[0].diagnostics, /^page_type_reason: structure$/m);
+  assert.match(reports[0].diagnostics, /^readonly_or_disabled: 2$/m);
+});
+
 test("an application page whose inputs are all hidden is reported as no_fields_found with the drop reasons", async () => {
   const { reports } = await run({ path: "/campus/apply", hiddenInputs: 3 });
   assert.equal(reports.length, 1);

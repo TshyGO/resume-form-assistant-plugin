@@ -190,9 +190,12 @@
     if (FORM_TITLE.test(String(title ?? ""))) return { type: "application_form", reason: "title" };
     if (!probe) return null;
     if (probe.editButtons > 0) return { type: "application_form", reason: "edit_button" };
+    // 结构证据：Shadow DOM 或同源框架里的输入框、看得见的自定义控件、看得见但被禁用的输入框（扫描不收），
+    // 或可填的输入框够多（看不见的也算）。看不见的少于 3 个不算：职位详情页常藏着两三个框的登录弹窗。
     // 跨域框架不算证据：广告、页脚和客服窗口都是这样嵌进来的。
     const inputs = Number(stats?.domInputs) - Number(stats?.typeHidden || 0) - Number(stats?.nonFillable || 0);
-    if (probe.shadowHosts > 0 || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || inputs >= FORM_INPUTS) {
+    if (probe.shadowHosts > 0 || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || probe.locked > 0
+      || inputs >= FORM_INPUTS) {
       return { type: "application_form", reason: "structure" };
     }
     return { type: "unknown", reason: "none" };
