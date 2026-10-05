@@ -312,7 +312,7 @@ test('#208 actual fill lifecycle reports empty and rejected fields without user 
     assert.equal(reports.length, ['empty', 'refused'].includes(scenario) ? 1 : 0, scenario);
     if (reports.length) {
       assert.equal(reports[0].report.kind, 'fill_failed');
-      assert.match(reports[0].report.diagnostics, /网页字段：/);
+      assert.match(reports[0].report.diagnostics, /^candidates: \d+$/m);
       assert.ok(!reports[0].report.diagnostics.includes('本科'));
     }
   }

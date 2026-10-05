@@ -179,7 +179,8 @@
           previewTabId = tabId;
           if (Number.isInteger(tabId)) {
             const page = await chrome.tabs.sendMessage(tabId, { type: 'RESUME_PANEL_STATUS' }).catch(() => null);
-            diagnostics = core.diagnostics(page?.diagnostics || '');
+            // The v1 block (#215), not the sidebar's human-readable text; the worker filters it again.
+            diagnostics = core.diagnostics(page?.diagnosticsReport || '');
           }
         }
         const result = await send({ type: 'FEEDBACK_PREVIEW', description: $('description').value, diagnostics, tabId });

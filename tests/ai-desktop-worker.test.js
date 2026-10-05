@@ -223,3 +223,18 @@ test('a desktop or provider connection failure stops later batches; a bad batch 
   await env.run({ formFields: fields, resumeFields: [{ group: '自定义', key: '说明', value: '合成资料' }] });
   assert.ok(calls > 1, 'a malformed answer for one batch still lets the next batch try');
 });
+
+test('AI fill diagnostics count secret form fields on their own and name the early failures', async () => {
+  const env = worker();
+  const password = { fieldId: 'pw', label: '登录', inputType: 'password' };
+  const secretOnly = await env.run({ ...BASE, formFields: [password] });
+  assert.equal(secretOnly.success, false);
+  assert.equal(secretOnly.diagnostics.errorCode, 'secret_only');
+  assert.equal(secretOnly.diagnostics.secretFormFields, 1);
+  const noResume = await env.run({ ...BASE, resumeFields: [] });
+  assert.equal(noResume.success, false);
+  assert.equal(noResume.diagnostics.errorCode, 'no_resume_fields');
+  const mixed = await env.run({ ...BASE, formFields: [...BASE.formFields, password] });
+  assert.equal(mixed.diagnostics.secretFormFields, 1);
+  assert.equal(env.sent.filter(item => item.kind === 'desktop-complete').length, 1);
+});

@@ -44,40 +44,266 @@
     const stack = frames(raw || (filename ? `at ${filename}:${Number(line) || 0}:${Number(column) || 0}` : ""), origin);
     return { kind: "exception", name, source: source === "unhandledrejection" ? source : "error", stack };
   }
-  // Parse the local #206 text into a closed vocabulary. In particular, unknown labels,
-  // DOM attributes and appended page/provider text never cross the network boundary.
-  function diagnostics(value) {
-    const lines = String(value ?? "").slice(0, 20000).split("\n");
-    const safe = [];
-    const count = "(?:[0-9]{1,6}|未取得)";
-    const patterns = [
-      /^网申快填 v[0-9.]{1,20}$/, /^结果：(完成|部分完成|失败|未知)；错误类别：[a-z_]{1,32}(?:\d{3})?$/,
-      new RegExp(`^网页字段：${count}；成功填写：${count}；没填上：${count}$`),
-      new RegExp(`^本地匹配：${count}；AI 匹配：${count}$`), new RegExp(`^送 AI 字段：${count}$`),
-      new RegExp(`^候选 / 简历字段：${count} / ${count}$`),
-      new RegExp(`^敏感字段过滤：${count}；超大资料跳过：${count}；无对应资料跳过：${count}$`),
-      new RegExp(`^用户 prompt：${count} bytes$`),
-      /^(扫描|匹配往返（含后台处理）|API（含响应读取）)：(?:[0-9.]{1,12} s|未执行 \/ 未取得)$/,
-      /^填写：(\d{1,9}\.\d{2} s|未执行 \/ 未取得)；总计：(\d{1,9}\.\d{2} s|未执行 \/ 未取得)$/,
-      /^页面表单状态未同步：\d{1,6}（提交校验后网页仍标为无效，请手动点击这些字段确认）$/,
-      /^页面线索：内嵌框架 \d{1,6}（跨域 \d{1,6}，同源框架内输入框 \d{1,6}）；自定义控件 \d{1,6}(?:（(?:(?:antd|element|arco|iview|semi|vant|layui|mui) \d{1,6}[、]?)+）)?；只读或禁用输入框 \d{1,6}；「编辑」按钮 \d{1,6}；含输入框的 Shadow DOM \d{1,6}$/,
-      new RegExp(`^扫描跳过：页头导航 ${count}；下拉内部输入 ${count}；并入同一控件 ${count}；站内搜索 ${count}；表单外 ${count}；对不上题目 ${count}；同名找不到区块 ${count}；经历类区块 ${count}$`),
-      new RegExp(`^字段名来源：明确关联 ${count}；表单项 ${count}；表格 ${count}；相邻文字 ${count}；仅占位文字 ${count}$`),
-      /^没填上的字段（控件结构）：$/, /^- 还有 \d{1,6} 个未列出$/
+  // --- fill_failed diagnostics v1 ----------------------------------------------------------
+  // The content script builds the block with fillReport(); the worker re-parses it with
+  // diagnostics() before sending. Every key has a closed value pattern, so field values,
+  // page text, titles, full URLs and provider messages never cross the network boundary.
+  // The worker writes the [来源] section (version, OS, host) itself; a page cannot supply it.
+  const SECTIONS = new Set(["页面", "字段漏斗", "页面结构", "错误", "匹配", "性能", "未填字段"]);
+  const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_blocked", "match_failed", "fill_rejected",
+    "timeout", "service_error", "unknown", "none"];
+  const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
+    "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
+    "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
+    "secret_only", "no_resume_fields"];
+  // A failure of the AI service or the desktop link, not of matching this page.
+  const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
+    "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
+  // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
+  const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
+    "site_search", "outside_form", "no_label", "out_of_scope", "secret",
+    "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
+  // Where each scanned field's title came from, and why a field was not offered for 我的信息 (#228).
+  const LABEL_SOURCES = ["explicit", "item", "table", "sibling", "placeholder"];
+  const OFFER_SKIPS = ["ambiguous", "entry"];
+  // URL path segments are kept only when every word in them is a common route word, so
+  // user names and slugs (/u/zhangsan, /people/john-doe) never leave as written.
+  const ROUTE_WORDS = new Set(("apply applies application applications applicant resume resumes cv jianli toudi delivery deliver "
+    + "job jobs position positions post posts campus social career careers recruit recruitment recruiting hire hiring zhaopin "
+    + "xiaozhao shezhao intern interns internship graduate school candidate candidates talent talents portal user users account "
+    + "accounts profile profiles personal info information basic base detail details education experience work project projects "
+    + "skill skills family contact attachment attachments upload step steps form forms edit editor preview submit confirm success "
+    + "result view list index home main center centre my me mine new create add update manage management page pages wizard "
+    + "interview interviews assessment exam test online register signup sign up in login logout auth oauth sso enroll enrollment "
+    + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
+    + "static html htm shtml php jsp aspx asp do action").split(" "));
+  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "other"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced"];
+  const MAX_UNFILLED = 10;
+  const INT = /^(?:\d{1,9}|-)$/;
+  const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
+  const oneOf = (names, extra = "") => new RegExp(`^(?:${names.join("|")}${extra})$`);
+  const VALUES = {
+    url_path: /^\/(?:(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)(?:\/(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)){0,7}(?:\/:more)?)?$/,  // + safePath()
+    page_type: /^(?:application_form|unknown|-)$/, page_type_reason: /^(?:url|title|edit_button|structure|none|-)$/,
+    dom_ready_at_scan: /^(?:true|false|-)$/, scan_duration_ms: INT,
+    dom_inputs: INT, visible_fields: INT, candidates: INT, matched: INT, filled: INT, drop_reasons: tally(DROPS),
+    label_sources: tally(LABEL_SOURCES), offer_skipped: tally(OFFER_SKIPS),
+    dom_elements: INT, iframes_total: INT, iframes_cross_origin: INT, same_origin_iframe_inputs: INT,
+    shadow_roots_with_inputs: INT, custom_controls: INT, custom_libraries: tally(LIBRARY_NAMES),
+    readonly_or_disabled: INT, edit_buttons: INT,
+    error_category: oneOf(CATEGORIES), first_failing_stage: /^(?:scan|match|fill|none)$/,
+    error_code: oneOf(ERROR_CODES, "|http_\\d{3}|-"),
+    local_matches: INT, ai_fields: INT, ai_called: /^(?:true|false|-)$/, ai_matches: INT, ai_latency_ms: INT,
+    resume_fields: INT, resume_candidates: INT, prompt_bytes: INT,
+    timings_ms: /^scan=(?:\d{1,9}|-),match=(?:\d{1,9}|-),fill=(?:\d{1,9}|-),total=(?:\d{1,9}|-)$/,
+    unlisted: INT
+  };
+  const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
+    + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|reason=(?:${FILL_REASONS.join("|")}))$`);
+
+  function routeSegment(text) {
+    if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return false;
+    return text.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s._-]+/).filter(Boolean)
+      .every(word => ROUTE_WORDS.has(word.toLowerCase()) || /^v\d{1,2}$/i.test(word));
+  }
+
+  // Common route words survive; every other segment (names, ids, tokens, non-ASCII) becomes :id.
+  function pathTemplate(pathname) {
+    const segments = String(pathname ?? "").split("/").filter(Boolean);
+    const kept = segments.slice(0, 8).map(segment => {
+      let text;
+      try { text = decodeURIComponent(segment); } catch { return ":id"; }
+      return routeSegment(text) ? text : ":id";
+    });
+    return `/${kept.join("/")}${segments.length > 8 ? "/:more" : ""}`;
+  }
+
+  // The worker re-checks the vocabulary, not just the shape, of a path it is handed.
+  function safePath(value) {
+    return VALUES.url_path.test(value) && value.split("/").filter(Boolean).every(part => part === ":id" || part === ":more" || routeSegment(part));
+  }
+
+  // Why the fill failed and the first stage that failed. `none` means nothing failed.
+  function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, matched, filledCount, unfilledCount }) {
+    if (!scanned) return { category: "unknown", stage: "scan" };
+    if (fieldCount === 0) {
+      // A form may sit in a frame even when nothing else on the page looks like one.
+      if (frames?.crossOrigin > 0 || frames?.frameInputs > 0) return { category: "iframe_blocked", stage: "scan" };
+      // A page that is not an application form has nothing to fix. When the probe is
+      // missing we cannot tell, so the page is treated as a form that yielded no fields.
+      return { category: pageType === "unknown" ? "page_not_supported" : "no_fields_found", stage: "scan" };
+    }
+    if (failedStage === "match") {
+      if (!responded) return { category: "unknown", stage: "match" };
+      if (errorCode === "timeout") return { category: "timeout", stage: "match" };
+      if (SERVICE_CODES.has(errorCode) || /^http_\d{3}$/.test(errorCode ?? "")) return { category: "service_error", stage: "match" };
+      return { category: "match_failed", stage: "match" };
+    }
+    if (failedStage) return { category: "unknown", stage: failedStage };
+    if (!matched) return { category: "match_failed", stage: "match" };
+    if (filledCount === 0 || unfilledCount > 0) return { category: "fill_rejected", stage: "fill" };
+    return { category: "none", stage: "none" };
+  }
+
+  const positive = value => Number.isInteger(value) && value > 0 ? value : 0;
+  // The worker's diagnostics when the AI request got an answer; content.js keeps {} otherwise.
+  const answer = input => (input.diagnostics && Object.keys(input.diagnostics).length ? input.diagnostics : null);
+
+  // Fields lost at each step of scan → match → fill, in funnel order; only non-zero reasons.
+  function fillDrops(input) {
+    const s = input.stats || null;
+    const d = answer(input);
+    const n = positive;
+    const secret = n(d?.secretFormFields);
+    const noMapping = n(d?.skippedNoContext);
+    // Fields neither matched nor skipped. Those handed to the AI (at most aiFields, less the
+    // ones skipped for lack of resume data) are AI misses, or got no result when the AI service
+    // or desktop link failed; with an empty template the rest had no resume data at all;
+    // otherwise they were never sent (e.g. too large). A request with no answer at all leaves
+    // every field without a result.
+    const failed = Boolean(d) && (d.errorCode === "timeout" || SERVICE_CODES.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode ?? ""));
+    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
+      : input.requested ? n(input.fieldCount) : 0;
+    const sent = d && aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
+    const counts = {
+      type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
+      popup_internal: n(s?.popup), grouped: n(s?.grouped), page_chrome: n(s?.pageChrome), site_search: n(s?.siteSearch),
+      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
+      ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
+      not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
+    };
+    if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
+    return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
+  }
+
+  // Scanned fields by where their title came from (field-scan.js sources, folded into LABEL_SOURCES).
+  function labelSources(stats) {
+    const sources = stats?.sources || {};
+    const n = key => positive(sources[key]);
+    const counts = { explicit: n("explicit"), item: n("item") + n("item-text"), table: n("table") + n("table-header"),
+      sibling: n("sibling"), placeholder: n("placeholder") };
+    return LABEL_SOURCES.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
+  }
+
+  // Whether the AI was actually called: true / false, or null when the request got no answer.
+  function aiCalled(input) {
+    const d = answer(input);
+    if (d) return positive(d.promptBytes) > 0;
+    return input.requested ? null : false;
+  }
+
+  function fillReport(input) {
+    const count = value => Number.isInteger(value) && value >= 0 ? String(value) : "-";
+    const ms = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? String(Math.round(value)) : "-";
+    const flag = value => typeof value === "boolean" ? String(value) : "-";
+    const s = input.stats || null;
+    const p = input.probe || null;
+    const d = answer(input);
+    const n = positive;
+    const libraries = {};
+    for (const [name, value] of Object.entries(p?.custom?.byLibrary || {})) {
+      const key = LIBRARY_NAMES.includes(name) ? name : "other";
+      libraries[key] = (libraries[key] || 0) + n(value);
+    }
+    const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
+    const called = aiCalled(input);
+    const lines = [
+      "[页面]",
+      `url_path: ${pathTemplate(input.path)}`,
+      `page_type: ${input.pageType?.type || "-"}`,
+      `page_type_reason: ${input.pageType?.reason || "-"}`,
+      `dom_ready_at_scan: ${flag(input.readyAtScan)}`,
+      `scan_duration_ms: ${ms(input.scanMs)}`,
+      "",
+      "[字段漏斗]",
+      `dom_inputs: ${count(s?.domInputs)}`,
+      `visible_fields: ${count(s?.visible)}`,
+      `candidates: ${count(input.fieldCount)}`,
+      `matched: ${count(input.matched)}`,
+      `filled: ${count(input.filledCount)}`,
+      `drop_reasons: ${fillDrops(input).map(([key, value]) => `${key}=${value}`).join(",") || "-"}`,
+      `label_sources: ${labelSources(s).map(([key, value]) => `${key}=${value}`).join(",") || "-"}`,
+      `offer_skipped: ${listed(s?.offerSkipped || {}, OFFER_SKIPS)}`,
+      "",
+      "[页面结构]",
+      `dom_elements: ${count(p?.elements)}`,
+      `iframes_total: ${count(p?.frames?.total)}`,
+      `iframes_cross_origin: ${count(p?.frames?.crossOrigin)}`,
+      `same_origin_iframe_inputs: ${count(p?.frames?.frameInputs)}`,
+      `shadow_roots_with_inputs: ${count(p?.shadowHosts)}`,
+      `custom_controls: ${count(p?.custom?.total)}`,
+      `custom_libraries: ${listed(libraries, LIBRARY_NAMES)}`,
+      `readonly_or_disabled: ${count(p?.locked)}`,
+      `edit_buttons: ${count(p?.editButtons)}`,
+      "",
+      "[错误]",
+      `error_category: ${input.category || "unknown"}`,
+      `first_failing_stage: ${input.stage || "none"}`,
+      `error_code: ${typeof d?.errorCode === "string" && VALUES.error_code.test(d.errorCode) ? d.errorCode : "-"}`,
+      "",
+      "[匹配]",
+      `local_matches: ${count(d?.ruleMatches)}`,
+      `ai_fields: ${count(d?.aiFields)}`,
+      `ai_called: ${flag(called)}`,
+      `ai_matches: ${count(d?.aiMatches)}`,
+      `ai_latency_ms: ${called ? ms(d.apiMs) : "-"}`,
+      `resume_fields: ${count(d?.resumeFields)}`,
+      `resume_candidates: ${count(d?.candidateFields)}`,
+      `prompt_bytes: ${count(d?.promptBytes)}`,
+      "",
+      "[性能]",
+      `timings_ms: scan=${ms(input.scanMs)},match=${ms(input.roundTripMs)},fill=${ms(input.fillMs)},total=${ms(input.totalMs)}`
     ];
-    for (const line of lines.slice(0, 40)) {
-      if (patterns.some(p => p.test(line))) { safe.push(line); continue; }
-      const control = /^- (.{1,40})：(.{1,300})$/.exec(line);
+    const unfilled = Array.isArray(input.unfilledControls) ? input.unfilledControls : [];
+    if (unfilled.length) {
+      lines.push("", "[未填字段]");
+      for (const item of unfilled.slice(0, MAX_UNFILLED)) {
+        const c = item?.control || {};
+        const tokens = [`${c.tag || "?"}${c.type ? `[${c.type}]` : ""}`];
+        if (c.role) tokens.push(`role=${c.role}`);
+        if (c.popup) tokens.push(`popup=${c.popup}`);
+        if (c.readOnly) tokens.push("readonly");
+        if (c.picker) tokens.push(`picker=${c.picker}`);
+        if (c.library) tokens.push(`lib=${c.library}`);
+        if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
+        lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
+      }
+      if (unfilled.length > MAX_UNFILLED) lines.push(`unlisted: ${unfilled.length - MAX_UNFILLED}`);
+    }
+    return diagnostics(lines.join("\n"));
+  }
+
+  // Keep only v1 lines whose key and value are both in the closed vocabulary.
+  function diagnostics(value) {
+    const safe = [];
+    for (const line of String(value ?? "").slice(0, 20000).split("\n").slice(0, 120)) {
+      const section = /^\[(.{1,8})\]$/.exec(line);
+      if (section) {
+        if (SECTIONS.has(section[1])) safe.push(...(safe.length ? ["", line] : [line]));
+        continue;
+      }
+      // Every value has its own closed pattern; the length cap only bounds the regex work.
+      // The longest reachable value is drop_reasons with every reason at six digits (348 chars).
+      const entry = /^([a-z_]{1,32}): (.{1,400})$/.exec(line);
+      if (entry) {
+        const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2]);
+        if (known && (entry[1] !== "url_path" || safePath(entry[2]))) safe.push(line);
+        continue;
+      }
+      const control = /^- (.{1,40}): (.{1,200})$/.exec(line);
       if (!control) continue;
-      const label = LABELS.has(control[1]) ? control[1] : "（字段名已隐藏）";
-      const tokens = control[2].split("｜")[0].split(" ").filter(t => /^(?:input|textarea|select|button|div|span)(?:\[(?:text|date|month|number|radio|checkbox|email|tel|search)\])?$/.test(t)
-        || /^(?:role=(?:textbox|combobox|listbox|button|radio|checkbox)|弹出=(?:listbox|dialog|true)|只读|(?:日期控件|组件库)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui))$/.test(t));
-      safe.push(`- ${label}：${tokens.join(" ") || "结构未知"}`);
+      const tokens = control[2].split(" ").filter(token => CONTROL_TOKEN.test(token));
+      safe.push(`- ${LABELS.has(control[1]) ? control[1] : "（字段名已隐藏）"}: ${tokens.join(" ") || "?"}`);
     }
     return safe.join("\n").slice(0, 3500);
   }
-  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, editHint }) {
+
+  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, editHint, category }) {
     if (assisted || cancelled || overwriteDeclined) return null;
+    // A page that is not an application form has nothing to fix; reporting it is noise.
+    if (category === "page_not_supported") return null;
     if (fieldCount === 0 || unfilledCount > 0 || editHint) return filledCount > 0 ? "fill_partial" : "fill_failed";
     return null;
   }
@@ -96,7 +322,8 @@
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }
-  const api = { redact, hostname, os, frames, exception, diagnostics, fillFailure, install };
+  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, fillDrops, labelSources, aiCalled, fillReport,
+    diagnostics, fillFailure, install };
   root.ResumeProFeedback = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

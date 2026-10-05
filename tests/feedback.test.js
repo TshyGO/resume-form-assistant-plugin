@@ -30,7 +30,7 @@ test('new installs default on with a notice; opt out deletes identity', async ()
   await f.service.setConsent(true); const id = f.data[f.key].anonymousId; assert.match(id, /^[0-9a-f-]{36}$/);
   await f.service.automatic(crash, 'c.liepin.com'); assert.equal(f.calls.length, 1);
   assert.ok(!JSON.stringify(f.calls[0].payload).includes('Secret'));
-  assert.match(f.calls[0].payload.user_description, /网站: c.liepin.com/);
+  assert.match(f.calls[0].payload.user_description, /^host: c\.liepin\.com$/m);
   await f.service.setConsent(false); assert.equal(f.data[f.key].anonymousId, null);
   await f.service.setConsent(true); assert.notEqual(f.data[f.key].anonymousId, id);
 });
@@ -99,11 +99,15 @@ test('redaction removes contact, credentials, URLs and OS user paths', () => {
   for (const secret of ['张三', 'a@example.com', '138', '110105', 'host.test', 'alice', 'bob', 'password123', '123456789abcdef']) assert.ok(!result.includes(secret), secret);
 });
 
-test('diagnostics reject raw content/attributes while retaining counts and known control structure', () => {
-  const input = '网申快填 v0.4.1\n结果：部分完成；错误类别：http\n网页字段：5；成功填写：2；没填上：1\n页面：https://example.com/resume?secret=123\n- 张三：input[text] role=textbox data-secret=secret｜敏感内容\n- 姓名：input[text]\nAPI key: secret\n简历全文';
-  const out = core.diagnostics(input);
-  assert.match(out, /网页字段：5/); assert.match(out, /姓名：input\[text\]/); assert.match(out, /字段名已隐藏/);
-  for (const secret of ['张三','secret','example.com','敏感内容','简历全文']) assert.ok(!out.includes(secret));
+test('reports carry the v1 block: the worker writes [来源], the page only supplies allowlisted sections', async () => {
+  const f = await fixture();
+  const page = core.fillReport({ path: '/apply/12345', fieldCount: 0, filledCount: 0, category: 'no_fields_found', stage: 'scan' });
+  await f.service.automatic({ kind: 'fill_failed', diagnostics: `${page}\n[来源]\nhost: evil.example\napp_version: 9.9.9\npage_title: 张三的简历` }, 'c.liepin.com');
+  const text = f.calls[0].payload.user_description;
+  assert.ok(text.startsWith(`--- 诊断信息 v1 ---\n[来源]\napp_version: 0.4.1\nos: macOS / Edge 140\nhost: c.liepin.com\n\n[页面]\nurl_path: /apply/:id\n`), text);
+  for (const forged of ['evil.example', '9.9.9', '张三', 'page_title']) assert.ok(!text.includes(forged), forged);
+  assert.equal(f.service.preview({ description: '按钮不可用' }).user_description,
+    '按钮不可用\n--- 诊断信息 v1 ---\n[来源]\napp_version: 0.4.1\nos: macOS / Edge 140');
 });
 
 test('foreign page errors are excluded; extension frames drop messages, paths and function names', () => {
@@ -146,7 +150,7 @@ test('router rejects foreign senders and binds exact previews to one privileged 
     await message({ type: 'FEEDBACK_CONSENT', enabled: true });
     await message({ type: 'FEEDBACK_AUTO', report: { ...crash, stack: '' } }, content); assert.equal(calls.length, 0);
     await message({ type: 'FEEDBACK_AUTO', report: crash }, content); assert.equal(calls.length, 1);
-    assert.match(calls[0].user_description, /网站: c.liepin.com/);
+    assert.match(calls[0].user_description, /^host: c\.liepin\.com$/m);
     assert.ok(!JSON.stringify(calls[0]).includes('private'));
     const stolen = await message({ type: 'FEEDBACK_PREVIEW', description: '按钮不可用', tabId: 1 });
     assert.equal((await message({ type: 'FEEDBACK_SEND', token: stolen.token }, { ...page, documentId: 'doc-b' })).ok, false);
@@ -157,7 +161,7 @@ test('router rejects foreign senders and binds exact previews to one privileged 
     api.tabs.get = async () => { throw new Error('tab closed'); };
     const closed = await message({ type: 'FEEDBACK_PREVIEW', description: '仍能反馈', tabId: 1 });
     assert.equal(closed.ok, true);
-    assert.ok(!closed.payload.user_description.includes('网站:'));
+    assert.ok(!closed.payload.user_description.includes('host:'));
   } finally { global.fetch = originalFetch; }
 });
 

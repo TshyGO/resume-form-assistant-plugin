@@ -65,6 +65,8 @@
     framework_state_unsynced: "页面表单状态未同步"
   };
   let shadowRoot = null;
+  // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
+  let lastFillReport = "";
   // Archiving a finished fill from the native side panel (#178). Declared up here because the
   // side panel's status message can arrive before the rest of this script has run.
   let panelFill = null;
@@ -124,6 +126,8 @@
         desktopStatus: desktopStatus?.textContent || "",
         diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
           ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : "",
+        // 手动反馈附上的诊断（#215 v1）：只含结构和计数，后台还会再按白名单过滤一遍。
+        diagnosticsReport: diagnosticsPanel && !diagnosticsPanel.hidden ? lastFillReport : "",
         // Job recognition runs in the page's controls; the side panel shows it and can cancel it.
         jobAssist: jobAssist && !jobAssist.hidden
           ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null,
@@ -1721,7 +1725,17 @@
     const unfilledLabels = [];
     const unfilledControls = [];
     let probe = null;
-    let scanStats = null;
+    // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
+    const readyAtScan = document.readyState === "complete";
+    let scanDone = false;
+    let stage = "scan";
+    let failedStage = null;
+    let requested = false;
+    let responded = false;
+    let matched = null;
+    let stats = null;
+    let pageType = null;
+    let scanPath = location.pathname;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
@@ -1740,7 +1754,6 @@
     try {
       const scanned = scanFillableFields();
       const fieldMap = scanned.fieldMap;
-      scanStats = scanned.scanStats;
       const fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
@@ -1748,11 +1761,17 @@
       fieldCount = fields.length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
+      scanDone = true;
+      // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
+      scanPath = location.pathname;
+      stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
       // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
       probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
-        const hint = !assisted && !scanned.fields.length ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
+        const hint = !assisted && !scanned.fields.length
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown" }), "") : "";
         hinted = Boolean(hint);
         throw new Error(`当前页面没有可填写的表单字段。${hint}`);
       }
@@ -1765,6 +1784,7 @@
       // 诊断里要藏起来的简历内容（一个字的值太容易撞上普通字段名，不参与比较）。
       const resumeValues = resumeFields.map(field => normalizeForOverlap(field?.value)).filter(value => value.length >= 2);
       phase = "roundTripMs";
+      stage = "match";
       phaseStart = performance.now();
       if (cancelButton) {
         cancelButton.hidden = false;
@@ -1803,6 +1823,7 @@
       // A stop during the preparation above had no request to cancel yet: send nothing.
       if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
       assisted?.onRequest?.(requestId);
+      requested = true;
       const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
         requestId,
@@ -1816,6 +1837,8 @@
       if (cancelButton) cancelButton.hidden = true;
       if (waitHint) waitHint.hidden = true;
       diagnostics = response?.diagnostics || {};
+      responded = Boolean(response);
+      matched = Array.isArray(response?.matches) ? response.matches.length : null;
       if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
 
       if (response?.openView === "settings-ai") {
@@ -1828,6 +1851,7 @@
 
       button.textContent = "正在填写网页...";
       phase = "fillMs";
+      stage = "fill";
       phaseStart = performance.now();
 
       const fieldMetaMap = new Map(fields.map((f) => [f.fieldId, f]));
@@ -1936,7 +1960,7 @@
             || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
           const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
           unfilledControls.push({ label: overlaps || showsResume ? "（字段名已隐藏）" : label, reason: why,
-            control: withFillProbe(api => api.describeControl(element), null) });
+            reasonCode: textFillFailureCode(element), control: withFillProbe(api => api.describeControl(element), null) });
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -1950,6 +1974,7 @@
       }
 
       await finalSyncFillSession(session);
+      stage = null;
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
       const unfilledNote = unfilledLabels.length
@@ -1990,9 +2015,11 @@
             entry
           }] : [];
         }), resumeFields, offerStats);
-        if (scanStats?.skipped) scanStats.skipped.entry = offerStats.entry || 0;
+        // 「加到我的信息」没问的字段：只有这里真的挑过一遍，辅助新增和填写失败时不记。
+        if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
     } catch (error) {
+      failedStage = stage;
       failure = error.message || "AI 填写失败。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
       if (!hinted && ["none", "no_context"].includes(diagnostics.errorCode)) {
@@ -2010,17 +2037,23 @@
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
+      const verdict = fillVerdict({ scanned: scanDone, fieldCount, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
+        failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length });
       const summaryInput = { ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls, scanStats };
+        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
+        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict };
       if (session === fillSession) session.summary = summaryInput;
-      writeFillDiagnostics({ ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 });
+      // 侧栏、手动反馈和自动上报用同一份输入，两个通道的诊断块一致。
+      const reportInput = { ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 };
+      writeFillDiagnostics(reportInput);
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
+        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
         const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted), cancelled: cancelRequested,
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length,
-          editHint: hinted && probe?.editButtons > 0 });
+          editHint: hinted && probe?.editButtons > 0, category: verdict.category });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
-          kind, diagnostics: self.ResumeProFeedback.diagnostics(formatFillDiagnostics(summaryInput))
+          kind, diagnostics: self.ResumeProFeedback.fillReport(reportInput)
         } })).catch(() => {});
       } catch { /* feedback is optional; never break the fill lifecycle */ }
       state.aiBusy = false;
@@ -2051,6 +2084,15 @@
     return String(text ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
   }
 
+  // 失败类别和第一个失败的阶段由 feedback-core.js 判断；它缺席或出错时退回 unknown，填写不受影响。
+  function fillVerdict(input) {
+    try {
+      const verdict = self.ResumeProFeedback?.fillCategory?.(input);
+      if (verdict) return verdict;
+    } catch { /* fall through */ }
+    return { category: "unknown", stage: input.failedStage || "none" };
+  }
+
   // fill-probe.js 只读页面结构，给诊断和空页面提示用；它缺席或出错都不能影响填写。
   function withFillProbe(use, fallback) {
     try {
@@ -2061,44 +2103,71 @@
     }
   }
 
-  // #228 扫描诊断：只有数量，没有字段名、网页内容或网址。
-  function formatScanStats(stats, count) {
-    if (!stats?.skipped || !stats.sources) return [];
-    const skipped = stats.skipped;
-    const sources = stats.sources;
-    const sum = (...keys) => keys.reduce((total, key) => total + (Number.isInteger(sources[key]) ? sources[key] : 0), 0);
+  // #228 扫描诊断：只有数量，没有字段名、网页内容或网址。没跳过的扫描原因见「丢弃原因」。
+  function formatScanStats(stats, feedback) {
+    if (!stats) return [];
+    const sourceLabels = { explicit: "明确关联", item: "表单项", table: "表格", sibling: "相邻文字", placeholder: "仅占位文字" };
+    const sources = (() => {
+      try { return feedback?.labelSources?.(stats) || []; } catch { return []; }
+    })();
+    const offer = stats.offerSkipped;
     return [
-      `扫描跳过：页头导航 ${count(skipped.pageChrome)}；下拉内部输入 ${count(skipped.popup)}；并入同一控件 ${count(skipped.merged)}；站内搜索 ${count(skipped.siteSearch)}；表单外 ${count(skipped.outsideForm)}；对不上题目 ${count(skipped.noLabel)}；同名找不到区块 ${count(skipped.ambiguous ?? 0)}；经历类区块 ${count(skipped.entry ?? 0)}`,
-      `字段名来源：明确关联 ${sum("explicit")}；表单项 ${sum("item", "item-text")}；表格 ${sum("table", "table-header")}；相邻文字 ${sum("sibling")}；仅占位文字 ${sum("placeholder")}`
+      ...(sources.length ? [`字段名来源：${sources.map(([key, value]) => `${sourceLabels[key] || key} ${value}`).join("、")}`] : []),
+      ...(offer ? [`「加到我的信息」没问：同名找不到区块 ${offer.ambiguous || 0}；经历类区块 ${offer.entry || 0}`] : [])
     ];
   }
 
   function formatFillDiagnostics(result) {
-    const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行 / 未取得";
-    const count = (value) => Number.isInteger(value) && value >= 0 ? value : "未取得";
+    // 阶段没跑：未执行；跑了但没拿到数字（例如请求发出去后通道断开）：未取得。
+    const missing = result.requested ? "未取得" : "未执行";
+    const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行";
+    const count = (value) => Number.isInteger(value) && value >= 0 ? value : missing;
     const d = result.diagnostics;
+    const feedback = self.ResumeProFeedback;
     // Explicit allowlist: never copy provider messages, URL, keys or field values.
     const allowedCodes = new Set(["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
-      "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
-    const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : "unknown";
+      "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
+      "secret_only", "no_resume_fields"]);
+    const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : missing;
     // 提交校验后网页仍把插件填的框标成无效：不能再算「完成」。
     const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;
     const outcome = unsynced && result.outcome === "success" ? "partial" : result.outcome;
+    const category = /^[a-z_]{1,32}$/.test(result.category || "") ? result.category : "unknown";
+    const stage = ({ scan: "扫描", match: "匹配", fill: "填写", none: "无" })[result.stage] || "无";
+    const called = (() => {
+      try { return feedback?.aiCalled?.(result) ?? null; } catch { return null; }
+    })();
+    const drops = (() => {
+      try { return feedback?.fillDrops?.(result) || []; } catch { return []; }
+    })();
+    const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
+      popup_internal: "下拉内部输入", grouped: "并入同一控件", page_chrome: "页头导航", site_search: "站内搜索",
+      outside_form: "表单外", no_label: "对不上题目", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
+      ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+    const pageType = result.pageType
+      ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
+        url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`
+      : "未取得";
+    const stats = result.stats || {};
     return [
       `网申快填 v${chrome.runtime.getManifest().version}`,
-      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[outcome] || "未知"}；错误类别：${code}`,
+      `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[outcome] || "未知"}；错误类别：${category}；失败阶段：${stage}`,
+      `页面类型：${pageType}；扫描时已加载完：${result.readyAtScan === true ? "是" : result.readyAtScan === false ? "否" : "未取得"}`,
+      `输入框：页面共 ${count(stats.domInputs)} → 可见可填 ${count(stats.visible)} → 进入匹配 ${count(result.fieldCount)}`
+        + ` → 匹配 ${count(result.matched)} → 填入 ${count(result.filledCount)}`,
+      ...(drops.length ? [`丢弃原因：${drops.map(([key, value]) => `${dropLabels[key] || key} ${value}`).join("、")}`] : []),
+      ...formatScanStats(result.stats, feedback),
       `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}`,
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
-      `送 AI 字段：${count(d.aiFields)}`,
+      `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
       `敏感字段过滤：${count(d.skippedSecret)}；超大资料跳过：${count(d.skippedOversized)}；无对应资料跳过：${count(d.skippedNoContext)}`,
       `用户 prompt：${count(d.promptBytes)} bytes`,
-      ...formatScanStats(result.scanStats, count),
       `扫描：${seconds(result.scanMs)}`,
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
-      `API（含响应读取）：${seconds(d.apiMs)}`,
+      `API（含响应读取）：${called === true ? seconds(d.apiMs) : called === false ? "未调用" : "未取得"}`,
       `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
       ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
     ].join("\n");
@@ -2168,7 +2237,34 @@
       self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
     }
 
-    return { fields, fieldMap, scanStats: { skipped: scan.skipped, sources: scan.sources } };
+    return { fields, fieldMap, stats: scanStats(scan, fields.length) };
+  }
+
+  // 诊断漏斗（#215 / #228）：页面上全部输入框按「为什么没进入匹配」分开数。只数数，不读值。
+  // 隐藏、按钮或文件框、禁用、看不见按 DOM 数；看得见的再按 field-scan.js 的跳过原因分，
+  // 剩下没单列的是并进同一个控件的输入框（一组单选、自定义下拉里的几个输入框算一个）。
+  function scanStats(scan, fields) {
+    const all = Array.from(document.querySelectorAll("input, select, textarea")).filter((element) => !element.closest?.(`#${SIDEBAR_ID}`));
+    let typeHidden = 0;
+    let nonFillable = 0;
+    let disabled = 0;
+    let visible = 0;
+    for (const element of all) {
+      const type = element instanceof HTMLInputElement ? String(element.type || "").toLowerCase() : "";
+      if (type === "hidden") typeHidden += 1;
+      else if (["file", "button", "submit", "reset", "image"].includes(type)) nonFillable += 1;
+      else if (element.disabled) disabled += 1;
+      else if (isVisible(element)) visible += 1;
+    }
+    const count = (value) => Number.isInteger(value) && value > 0 ? value : 0;
+    const skipped = scan?.skipped || {};
+    const listed = { popup: count(skipped.popup), pageChrome: count(skipped.pageChrome), siteSearch: count(skipped.siteSearch),
+      outsideForm: count(skipped.outsideForm), noLabel: count(skipped.noLabel) };
+    const listedTotal = Object.values(listed).reduce((total, value) => total + value, 0);
+    return { domInputs: all.length, visible, typeHidden, nonFillable, disabled,
+      invisible: all.length - typeHidden - nonFillable - disabled - visible, ...listed,
+      grouped: Math.max(0, visible - fields - listedTotal),
+      sources: scan?.sources || {}, ambiguous: count(skipped.ambiguous) };
   }
 
   // 题目和控件的对应关系还成立吗：控件还在原来的表单项里、表单项没混进别的控件、题目没变。
@@ -2655,6 +2751,11 @@
   }
 
   function writeFillDiagnostics(input) {
+    try {
+      lastFillReport = self.ResumeProFeedback?.fillReport?.(input) || "";
+    } catch {
+      lastFillReport = "";
+    }
     const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
     const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
     if (panel && text) {
@@ -2943,10 +3044,13 @@
     return new Promise((resolve) => window.setTimeout(resolve, textCommitWaitMs));
   }
 
-  function textFillFailureLabel(element) {
+  function textFillFailureCode(element) {
     const control = element?.kind === "element" ? element.element : element;
-    const reason = control ? textFillFailures.get(control) : "";
-    return TEXT_FILL_FAILURE_LABELS[reason] || "";
+    return (control && textFillFailures.get(control)) || "";
+  }
+
+  function textFillFailureLabel(element) {
+    return TEXT_FILL_FAILURE_LABELS[textFillFailureCode(element)] || "";
   }
 
   function normalizeExpectedTextValue(element, value) {

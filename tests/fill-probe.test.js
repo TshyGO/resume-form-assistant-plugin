@@ -120,7 +120,7 @@ test("page clues count frames, custom controls, edit buttons, locked inputs and 
     host: "c.liepin.com",
     frames: { total: 2, crossOrigin: 1, frameInputs: 2 },
     custom: { total: 2, byLibrary: { antd: 1, 其他: 1 } },
-    editButtons: 2, locked: 1, shadowHosts: 1
+    editButtons: 2, locked: 1, shadowHosts: 1, elements: 3
   });
 });
 
@@ -219,8 +219,56 @@ test("a frame that throws on access counts as cross-origin, and a bad address gi
 });
 
 test("the shadow-root walk stops at a fixed number of elements", () => {
-  const hosts = Array.from({ length: 3001 }, () => node({ shadowRoot: { querySelector: () => ({}) } }));
-  assert.equal(probe.probePage(page({ [SELECTORS.all]: hosts })).shadowHosts, 3000);
+  const hosts = Array.from({ length: 20001 }, () => node({ shadowRoot: { querySelector: () => ({}), querySelectorAll: () => [] } }));
+  assert.equal(probe.probePage(page({ [SELECTORS.all]: hosts })).shadowHosts, 20000);
+});
+
+test("inputs inside nested shadow roots are found, one count per shadow root that holds them", () => {
+  const inner = node({ shadowRoot: { querySelector: () => ({}), querySelectorAll: () => [] } });
+  const outer = node({ shadowRoot: { querySelector: () => null, querySelectorAll: selector => (selector === SELECTORS.all ? [inner] : []) } });
+  assert.equal(probe.probePage(page({ [SELECTORS.all]: [outer, node()] })).shadowHosts, 1);
+});
+
+test("a nested shadow root is searched before the rest of a large page uses up the walk", () => {
+  const inner = node({ shadowRoot: { querySelector: () => ({}), querySelectorAll: () => [] } });
+  const outer = node({ shadowRoot: { querySelector: () => null, querySelectorAll: selector => (selector === SELECTORS.all ? [inner] : []) } });
+  const plain = Array.from({ length: 19999 }, () => node());
+  assert.equal(probe.probePage(page({ [SELECTORS.all]: [outer, ...plain] })).shadowHosts, 1);
+});
+
+test("a page counts as an application form by its address, title, edit buttons or form structure", () => {
+  const stats = { domInputs: 1, typeHidden: 1 };
+  const type = (input) => probe.pageType({ pathname: "/", title: "", probe: EMPTY, stats, ...input });
+  assert.deepEqual(type({ pathname: "/campus/apply/123" }), { type: "application_form", reason: "url" });
+  assert.deepEqual(type({ pathname: "/candidate/myResume" }), { type: "application_form", reason: "url" });
+  assert.deepEqual(type({ pathname: "/u/profile" }), { type: "application_form", reason: "url" });
+  // 单页应用的哈希路由。
+  assert.deepEqual(type({ pathname: "/", hash: "#/campus/apply/123?from=list" }), { type: "application_form", reason: "url" });
+  assert.deepEqual(type({ title: "个人简历 - 某公司招聘" }), { type: "application_form", reason: "title" });
+  assert.deepEqual(type({ title: "Online Application" }), { type: "application_form", reason: "title" });
+  assert.deepEqual(type({ probe: { ...EMPTY, editButtons: 2 } }), { type: "application_form", reason: "edit_button" });
+  assert.deepEqual(type({ probe: { ...EMPTY, shadowHosts: 1 } }), { type: "application_form", reason: "structure" });
+  assert.deepEqual(type({ probe: { ...EMPTY, frames: { total: 1, crossOrigin: 0, frameInputs: 4 } } }), { type: "application_form", reason: "structure" });
+  assert.deepEqual(type({ probe: { ...EMPTY, custom: { total: 2, byLibrary: {} } } }), { type: "application_form", reason: "structure" });
+  assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 2 } }), { type: "application_form", reason: "structure" });
+  // 看得见但被禁用的输入框：扫描不收，但它就是表单（例如要先完成上一步）。
+  assert.deepEqual(type({ probe: { ...EMPTY, locked: 1 } }), { type: "application_form", reason: "structure" });
+  // 提交、按钮、文件框不算可填的输入框。
+  assert.deepEqual(type({ stats: { domInputs: 5, typeHidden: 0, nonFillable: 3 } }), { type: "unknown", reason: "none" });
+});
+
+test("a video-interview room, a job detail page or a portal home is not an application form", () => {
+  const stats = { domInputs: 2, typeHidden: 1 };
+  for (const [pathname, title] of [["/interview/room", "多面视频面试工具"], ["/job/1970/detail", "Java 工程师 - 职位详情"],
+    ["/career", "加入我们"], ["/platform/information", "Information"]]) {
+    assert.deepEqual(probe.pageType({ pathname, title, probe: EMPTY, stats }), { type: "unknown", reason: "none" }, pathname);
+  }
+  // 跨域框架本身不算表单的证据：广告、页脚和客服窗口都是这样嵌进来的。
+  assert.deepEqual(probe.pageType({ pathname: "/", title: "", probe: { ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, stats }),
+    { type: "unknown", reason: "none" });
+  // 页面探测失败：判断不了。
+  assert.equal(probe.pageType({ pathname: "/", title: "", probe: null, stats }), null);
+  assert.deepEqual(probe.pageType({ pathname: "/apply", title: "", probe: null, stats: null }), { type: "application_form", reason: "url" });
 });
 
 test("the empty-page hint prefers the edit button, then locked inputs, frames and unknown controls", () => {
@@ -232,6 +280,16 @@ test("the empty-page hint prefers the edit button, then locked inputs, frames an
   assert.match(probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 0, frameInputs: 2 } }), /内嵌框架/);
   assert.equal(probe.emptyPageHint(EMPTY), "");
   assert.equal(probe.emptyPageHint(null), "");
+});
+
+test("a page that is not an application form says so, after the edit-button and locked-input hints", () => {
+  assert.match(probe.emptyPageHint(EMPTY, { notForm: true }), /不是网申填写页/);
+  const framed = probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, { notForm: true });
+  assert.match(framed, /不是网申填写页/);
+  assert.match(framed, /内嵌框架/);
+  assert.doesNotMatch(probe.emptyPageHint(EMPTY, { notForm: true }), /内嵌框架/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, locked: 1 }, { notForm: true }), /只读或禁用/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, editButtons: 1 }, { notForm: true }), /先点网页上的「编辑」/);
 });
 
 test("the report lists page clues and the structure of unfilled controls, never their values", () => {

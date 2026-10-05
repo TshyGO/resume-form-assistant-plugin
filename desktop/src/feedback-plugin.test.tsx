@@ -31,7 +31,8 @@ function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: 
       if (state.hold) return new Promise<Reply>(resolve => { held = resolve; });
       return reply;
     }) },
-    tabs: { query: async () => [{ id: 1 }], sendMessage: async () => ({ diagnostics: '网页字段：1；成功填写：0；没填上：1' }), onActivated: { addListener: () => {} }, onUpdated: { addListener: (listener: typeof updated) => { updated = listener; } } },
+    // The page also returns the sidebar's human-readable text; only the v1 block (#215) is attached.
+    tabs: { query: async () => [{ id: 1 }], sendMessage: async () => ({ diagnostics: '网页字段：1；成功填写：0；没填上：1', diagnosticsReport: '[错误]\nerror_category: no_fields_found' }), onActivated: { addListener: () => {} }, onUpdated: { addListener: (listener: typeof updated) => { updated = listener; } } },
     storage: { onChanged: { addListener: () => {} } }
   };
   const context = vm.createContext({ document, chrome: api, self: {}, location: { pathname }, Date: Clock, setTimeout: (callback: () => void) => { timers.push(callback); return 0; } });
@@ -198,6 +199,8 @@ test('manual feedback starts folded and folding keeps the draft and its preview'
   expect(expand().getAttribute('aria-expanded')).toBe('false');
   expect(summary().textContent).toBe('由你填写描述、预览并确认后才发送。');
   await previewDraft('第二步没填上');
+  expect(preview().textContent).toContain('error_category: no_fields_found');
+  expect(preview().textContent).not.toContain('网页字段');
   fireEvent.click(button('收起'));
   expect(form().hidden).toBe(true);
   expect(expand().getAttribute('aria-expanded')).toBe('false');
