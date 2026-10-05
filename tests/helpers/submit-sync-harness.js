@@ -236,6 +236,7 @@ function createSubmitHarness() {
   };
   context.globalThis = context;
   window.document = document;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "..", "control-adapters.js"), "utf8"), context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "..", "content.js"), "utf8"), context);
   const api = context.self.ResumeProHighlightTest;
   api.setShadowRoot({ querySelector: (selector) => shadowParts[selector] || null });

@@ -73,6 +73,7 @@
         "feedback-core.js",
         "ai-client.js",
         "ai-helpers.js",
+        "control-adapters.js",
         "profile-fields.js",
         "resume-data.js",
         "form-agent.js",

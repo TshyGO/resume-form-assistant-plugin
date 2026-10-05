@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>#221 日期失焦回归夹具</title>
+<style>body{font:16px sans-serif;padding:24px}label{display:block;margin:16px}input,button{font:inherit;padding:8px}pre{white-space:pre-wrap}</style>
+<h1>日期失焦与最终状态核验</h1>
+<p>只有虚构资料。本页不含网络请求、保存或提交动作。</p>
+<label>保留写入 <input id="accepted" type="month"></label>
+<label>失焦后延迟退回 <input id="reverted" type="month"></label>
+<label>失焦后节点替换 <input id="removed" type="month"></label>
+<label>只读日期输入拒绝写入 <input id="readonly" readonly placeholder="请选择" class="generic-date-picker"></label>
+<button type="button" id="blank">空白焦点目标</button><pre id="results"></pre>
+<script src="../../../ai-helpers.js"></script><script src="../../../control-adapters.js"></script>
+<script>
+reverted.addEventListener('blur', () => setTimeout(() => { reverted.value = ''; }, 60));
+removed.addEventListener('blur', () => setTimeout(() => { removed.replaceWith(removed.cloneNode()); }, 60));
+const operator = ResumeProControls.create();
+// The browser validation calls this explicit fixture entrypoint, never a recruitment submit button.
+window.runCases = async () => {
+  const result = {};
+  for (const id of ['accepted', 'reverted', 'removed', 'readonly']) {
+    const el = document.getElementById(id);
+    result[id] = await operator.operate(id === 'readonly' ? {kind:'element',element:el,pickerType:'generic',pickerInputType:'month'} : el, '1998-06');
+  }
+  document.getElementById('blank').focus();
+  result.acceptedAfterFocusChange = document.getElementById('accepted').value === '1998-06';
+  document.getElementById('results').textContent = JSON.stringify(result,null,2);
+  return result;
+};
+</script></html>

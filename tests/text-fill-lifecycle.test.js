@@ -173,6 +173,7 @@ function createHarness({ inputEvent = true } = {}) {
   if (inputEvent) context.InputEvent = DomInputEvent;
   context.globalThis = context;
   context.window.document = document;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "control-adapters.js"), "utf8"), context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8"), context);
   return {
     setElementValue: context.self.ResumeProHighlightTest.setElementValue,

@@ -73,7 +73,7 @@
     + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
     + "static html htm shtml php jsp aspx asp do action").split(" "));
   const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "other"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
@@ -120,7 +120,7 @@
   }
 
   // Why the fill failed and the first stage that failed. `none` means nothing failed.
-  function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, matched, filledCount, unfilledCount }) {
+  function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
     if (!scanned) return { category: "unknown", stage: "scan" };
     if (fieldCount === 0) {
       // A form may sit in a frame even when nothing else on the page looks like one.
@@ -137,7 +137,7 @@
     }
     if (failedStage) return { category: "unknown", stage: failedStage };
     if (!matched) return { category: "match_failed", stage: "match" };
-    if (filledCount === 0 || unfilledCount > 0) return { category: "fill_rejected", stage: "fill" };
+    if (filledCount === 0 || unfilledCount > 0 || unconfirmedCount > 0) return { category: "fill_rejected", stage: "fill" };
     return { category: "none", stage: "none" };
   }
 
@@ -281,11 +281,11 @@
     return safe.join("\n").slice(0, 3500);
   }
 
-  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, editHint, category }) {
+  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, unconfirmedCount, editHint, category }) {
     if (assisted || cancelled || overwriteDeclined) return null;
     // A page that is not an application form has nothing to fix; reporting it is noise.
     if (category === "page_not_supported") return null;
-    if (fieldCount === 0 || unfilledCount > 0 || editHint) return filledCount > 0 ? "fill_partial" : "fill_failed";
+    if (fieldCount === 0 || unfilledCount > 0 || unconfirmedCount > 0 || editHint) return filledCount > 0 ? "fill_partial" : "fill_failed";
     return null;
   }
   function install(send, { origin, requireOwn = false, captureErrors = true } = {}) {

@@ -230,6 +230,7 @@ function createPage({ worker, job, href = "https://jobs.example.test/apply" }) {
   context.self.window = window;
   window.document = document;
   vm.runInNewContext(fs.readFileSync(path.join(root, "sidebar-state.js"), "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(path.join(root, "control-adapters.js"), "utf8"), context);
   vm.runInNewContext(fs.readFileSync(path.join(root, "content.js"), "utf8"), context);
   const hooks = context.self.ResumeProHighlightTest;
   hooks.setShadowRoot(shadowRoot);

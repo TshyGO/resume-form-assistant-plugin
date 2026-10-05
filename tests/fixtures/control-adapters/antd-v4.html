@@ -1,0 +1,25 @@
+<!doctype html><meta charset="utf-8"><title>#221 猎聘结构与 AntD 日期验收</title>
+<link rel="stylesheet" href="/output/playwright/vendor/antd/package/dist/antd.min.css">
+<style>body{padding:24px}label{display:block;margin:20px}pre{white-space:pre-wrap}</style>
+<script src="/output/playwright/vendor/react/package/umd/react.development.js"></script>
+<script src="/output/playwright/vendor/react-dom/package/umd/react-dom.development.js"></script>
+<script src="/output/playwright/vendor/moment/package/min/moment.min.js"></script>
+<script src="/output/playwright/vendor/antd/package/dist/antd.min.js"></script>
+<script src="/ai-helpers.js"></script><script src="/control-adapters.js"></script>
+<h1>AntD 4.24.16 受控日期（虚构资料；出生年月结构取自猎聘）</h1><div id="app"></div><button type="button" id="blank">空白焦点目标</button><pre id="results"></pre>
+<script>
+const e=React.createElement;
+function Picker(props){const [value,setValue]=React.useState(null);return e('label',{},props.kind,e(antd.DatePicker,{id:props.id,picker:props.kind,value,onChange:setValue,inputReadOnly:true,className:props.kind==='month'?'resume-valid-birthday':undefined,defaultPickerValue:moment('2001-01-01')}));}
+ReactDOM.render(e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'})),document.getElementById('app'));
+window.runCases=async()=>{
+ const operator=ResumeProControls.create();const results={};
+ for(const [id,value] of [['antd-month','1998-06'],['antd-date','1998-06-17'],['antd-year','1998']]){
+  const input=document.getElementById(id);
+  results[id]=await operator.operate({kind:'element',element:input,pickerType:'antd'},value);
+  document.getElementById('blank').focus();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  results[id].retainedAfterFocusChange=input.value===value;
+ }
+ document.getElementById('results').textContent=JSON.stringify(results,null,2);return results;
+};
+</script>

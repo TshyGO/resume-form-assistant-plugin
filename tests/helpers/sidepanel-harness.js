@@ -85,6 +85,7 @@ function loadPage({ extraction, desktop, userAgent }) {
   context.self.window = window;
   window.document = document;
   vm.runInNewContext(read('sidebar-state.js'), context);
+  vm.runInNewContext(read('control-adapters.js'), context);
   vm.runInNewContext(read('content.js'), context);
   const hooks = context.self.ResumeProHighlightTest;
   // The page controller is mounted but its overlay stays closed: the side panel does the work.
