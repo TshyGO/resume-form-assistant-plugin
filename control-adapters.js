@@ -69,7 +69,10 @@
       if (stop(ctx, true) || el.isConnected === false) return stop(ctx, true) || 'element_disconnected';
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true }));
-      el.click();
+      // Native activation emits trusted input/change even when .click() itself is
+      // synthetic. Exclude only this synchronous activation from user-edit tracking.
+      ctx.activating = true;
+      try { el.click(); } finally { ctx.activating = false; }
       return '';
     }
     // Observe the relevant subtree and also sample properties: .value/.checked changes
@@ -142,12 +145,14 @@
     async function operate(target, desiredValue, options = {}) {
       const el = target?.kind === 'element' ? target.element : target;
       const nodes = target?.kind === 'radio' ? target.elements || [] : el ? [el] : [];
+      // PR1 accepts the shared hint contract for future adapters. Native types and
+      // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
       if (!KINDS.has(ctx.kind) || ['custom-select', 'cascader'].includes(ctx.kind)) return result(false, 'unsupported_control', ctx);
       if (ctx.el && typeof ctx.el === 'object') checks.delete(ctx.el);
       const refused = stop(ctx, true);
       if (refused) return result(false, refused, ctx);
-      const track = event => { if (event.isTrusted) ctx.userEdited = true; };
+      const track = event => { if (event.isTrusted && !ctx.activating) ctx.userEdited = true; };
       for (const node of nodes) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.addEventListener?.(type, track, true);
       try {
         if (['text', 'textarea'].includes(ctx.kind) && !['range', 'color'].includes(ctx.el.type)) return await text(ctx, desiredValue);

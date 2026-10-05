@@ -4,13 +4,16 @@
 <script src="/output/playwright/vendor/react/package/umd/react.development.js"></script>
 <script src="/output/playwright/vendor/react-dom/package/umd/react-dom.development.js"></script>
 <script src="/output/playwright/vendor/moment/package/min/moment.min.js"></script>
-<script src="/output/playwright/vendor/antd/package/dist/antd.min.js"></script>
+<script src="/output/playwright/vendor/moment/package/locale/zh-cn.js"></script>
+<script src="/output/playwright/vendor/antd/package/dist/antd-with-locales.min.js"></script>
 <script src="/ai-helpers.js"></script><script src="/control-adapters.js"></script>
 <h1>AntD 4.24.16 受控日期（虚构资料；出生年月结构取自猎聘）</h1><div id="app"></div><button type="button" id="blank">空白焦点目标</button><pre id="results"></pre>
 <script>
 const e=React.createElement;
+const locale = new URLSearchParams(location.search).get('locale') === 'zh-cn' ? antd.locales.zh_CN : antd.locales.en_US;
+moment.locale(locale.locale === 'zh-cn' ? 'zh-cn' : 'en');
 function Picker(props){const [value,setValue]=React.useState(null);return e('label',{},props.kind,e(antd.DatePicker,{id:props.id,picker:props.kind,value,onChange:setValue,inputReadOnly:true,className:props.kind==='month'?'resume-valid-birthday':undefined,defaultPickerValue:moment('2001-01-01')}));}
-ReactDOM.render(e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'})),document.getElementById('app'));
+ReactDOM.render(e(antd.ConfigProvider,{locale},e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'}))),document.getElementById('app'));
 window.runCases=async()=>{
  const operator=ResumeProControls.create();const results={};
  for(const [id,value] of [['antd-month','1998-06'],['antd-date','1998-06-17'],['antd-year','1998']]){

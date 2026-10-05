@@ -14,7 +14,8 @@ moment@2.30.1 and antd@4.24.16 into
 `output/playwright/vendor/<package-name>/package/`. Those development files are
 ignored and are not extension dependencies or release assets. Serve the repository
 root, open this fixture, and evaluate `await runCases()`. All three controls must
-return `ok: true` and `retainedAfterFocusChange: true`. Its month wrapper class and
+return `ok: true` and `retainedAfterFocusChange: true`. Repeat with `?locale=zh-cn`
+to validate actual Chinese locale cell titles. Its month wrapper class and
 readonly input mirror the inspected Liepin birth-month structure; library tests
 alone do not establish live-site acceptance.
 
@@ -26,6 +27,10 @@ actual focus/blur cleared it. For the candidate, invoke `operate()` on
 scanner's inferred `pickerInputType: 'date'`. The actual month panel must determine
 the format. After operation, click blank space, focus another field, and return:
 the birth month must remain. Refresh afterwards; do not save the resume.
+
+The self-contained fixture also checks actual native select/radio/checkbox
+activation. Native `.click()` may emit trusted input/change; those synchronous
+events must not be confused with a later user edit.
 
 Record each browser/version, Windows platform, source SHA, page/fixture and results
 in the PR. Keep live-site and synthetic/library evidence separate. Cancellation,

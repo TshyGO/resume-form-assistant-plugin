@@ -106,6 +106,17 @@ test('radio and checkbox verify the final checked state', async () => {
   assert.equal((await h.operate(check, 'maybe')).ok, false);
 });
 
+test('native activation trusted change is distinguished from subsequent user edits', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'checkbox';
+  input.click = () => { input.checked = !input.checked; input.dispatchEvent({type:'change',isTrusted:true}); };
+  assert.equal((await h.operate(input, true)).ok, true);
+  input.addEventListener('blur', () => setTimeout(() => {
+    input.checked = false; input.dispatchEvent({type:'change',isTrusted:true});
+  }, 20));
+  assert.equal((await h.operate(input, true)).reason, 'value_changed');
+  assert.equal(input.checked, false);
+});
+
 test('the closed control and hints sets reject unsupported controls and strip unknown hints', async () => {
   const h = harness(); const input = new h.Input();
   assert.equal((await h.operate({kind:'element',element:input,controlKind:'custom-select'}, 'A')).reason, 'unsupported_control');
@@ -135,6 +146,8 @@ test('a disabled radio option does not disable the rest of its group', async () 
   const first = new h.Input(); Object.assign(first, {type:'radio',value:'A',disabled:true});
   const second = new h.Input(); Object.assign(second, {type:'radio',value:'B'});
   assert.equal((await h.operate({kind:'radio',elements:[first,second]}, 'B')).ok, true);
+  assert.equal((await h.operate({kind:'radio',elements:[first,second]}, 'A')).reason, 'no_option_match');
+  assert.equal(Boolean(first.checked), false);
 });
 
 test('cancellation during settlement preserves the written value and removes temporary listeners', async () => {
