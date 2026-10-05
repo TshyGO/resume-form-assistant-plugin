@@ -224,9 +224,12 @@ async function handleAiFill(message, controller = new AbortController()) {
   const incomingResumeFields = Array.isArray(message.resumeFields) ? message.resumeFields : [];
   const formFields = incomingFormFields.filter(field => !isSecretField(field));
   const resumeFields = incomingResumeFields.filter(safeResumeField);
+  const secretFormFields = incomingFormFields.length - formFields.length;
   if (!formFields.length) return { success: false, error: incomingFormFields.length
-    ? "表单里只有像密码的字段，没有发给 AI。" : "当前页面没有可填写的表单字段。" };
-  if (!resumeFields.length) return { success: false, error: "当前模板没有可用字段。" };
+    ? "表单里只有像密码的字段，没有发给 AI。" : "当前页面没有可填写的表单字段。",
+    diagnostics: { errorCode: incomingFormFields.length ? "secret_only" : "none", secretFormFields } };
+  if (!resumeFields.length) return { success: false, error: "当前模板没有可用字段。",
+    diagnostics: { errorCode: "no_resume_fields", secretFormFields } };
 
   const ruleMatches = ResumeProAIHelpers.filterValidMatches(
     formFields, ResumeProAIHelpers.buildRuleBasedMatches(formFields, resumeFields)
@@ -240,6 +243,7 @@ async function handleAiFill(message, controller = new AbortController()) {
     candidateFields: selectedCandidates.length, resumeFields: resumeFields.length,
     apiMs: 0, promptBytes: 0, errorCode: "none", aiMatches: 0,
     skippedSecret: incomingFormFields.length - formFields.length + incomingResumeFields.length - resumeFields.length,
+    secretFormFields,
     skippedOversized: 0, skippedNoContext: 0
   };
   const aiMatches = [];

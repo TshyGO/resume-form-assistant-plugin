@@ -382,7 +382,9 @@ test("diagnostic summary only exposes allowlisted counts, durations and errors",
   assert.match(summary, /没填上：1/);
   assert.match(summary, /0.10 s/);
   assert.match(summary, /1.10 s/);
-  assert.match(summary, /未执行 \/ 未取得/);
+  // 没跑的阶段写「未执行」，不再和「未取得」混在一起。
+  assert.match(summary, /填写：未执行；/);
+  assert.ok(!summary.includes("未执行 / 未取得"));
   assert.ok(!summary.includes("secret-key"));
   assert.ok(!summary.includes("private-name"));
 });

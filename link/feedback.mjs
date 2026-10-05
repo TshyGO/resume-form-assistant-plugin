@@ -32,8 +32,10 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     const stack = kind === 'exception' ? String(input.stack || '').split('\n').filter(line => /^(?:[a-z][a-z0-9-]*\.js|link\/(?:[a-z][a-z0-9-]*\/)*[a-z][a-z0-9-]*\.mjs):\d{1,6}:\d{1,6}$/.test(line)).slice(0, 20).join('\n') : '';
     const details = core.diagnostics(input.diagnostics);
     const description = kind === 'manual' ? core.redact(input.description, 1400) : kind === 'exception' ? `${errorType}: ${input.source === 'unhandledrejection' ? '未处理的 Promise 拒绝' : '未处理的代码异常'}` : '';
+    // Diagnostics block v1. Only the worker writes [来源]; core.diagnostics() drops it from page input.
+    const source = ['[来源]', `app_version: ${version}`, `os: ${os}`, ...(host ? [`host: ${host}`] : [])].join('\n');
     return { app: 'resume-form-assistant-plugin', app_version: version, os, error_type: errorType,
-      error_stack: stack, user_description: `${description}${description ? '\n' : ''}--- 诊断信息 ---\n版本: ${version} / 系统: ${os}${host ? `\n网站: ${host}` : ''}${details ? `\n${details}` : ''}`.slice(0, 5000),
+      error_stack: stack, user_description: `${description}${description ? '\n' : ''}--- 诊断信息 v1 ---\n${source}${details ? `\n\n${details}` : ''}`.slice(0, 5000),
       anonymous_id: id, timestamp: new Date(now()).toISOString() };
   }
   async function transmit(payload, automatic) {

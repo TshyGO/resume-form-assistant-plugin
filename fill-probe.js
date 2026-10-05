@@ -13,7 +13,8 @@
     all: "*"
   };
   const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
-  const MAX_WALK = 3000;
+  // 页面元素和各层 Shadow DOM 里的元素合计最多看这么多个：只读属性，很快。
+  const MAX_WALK = 20000;
   const MAX_TEXT_NODES = 50000;
   const MAX_EDIT_TEXT = 40;
   const SKIP_TEXT_PARENTS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TEXTAREA"]);
@@ -25,6 +26,12 @@
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const MAX_ANCESTORS = 4;
   const MAX_LABEL = 16;
+  // 判断是不是网申填写页：地址里的强信号可以是子串（applyJob、myResume），form / profile 这类常见词要整词出现
+  // （platform、information 不算）。职位详情、招聘首页（job、career、campus）不算填写页。
+  const FORM_URL = /apply|applica|resume|jianli|toudi|baoming|signup|register|enroll|onboard/i;
+  const FORM_URL_WORDS = new Set(["form", "forms", "profile", "cv"]);
+  const FORM_TITLE = /简历|网申|申请|投递|报名|应聘|个人信息|基本信息|登记表|入职|填写|apply|application|resume|register|sign ?up|profile/i;
+  const FORM_INPUTS = 3;
 
   const token = value => {
     const text = String(value ?? "").trim().toLowerCase();
@@ -138,12 +145,6 @@
     }
 
     const all = doc.querySelectorAll(SELECTORS.all);
-    const limit = Math.min(all.length || 0, MAX_WALK);
-    let shadowHosts = 0;
-    for (let index = 0; index < limit; index += 1) {
-      if (all[index]?.shadowRoot?.querySelector?.(SELECTORS.inputs)) shadowHosts += 1;
-    }
-
     return {
       host: hostOf(href),
       frames: { total: frames.length, crossOrigin, frameInputs },
@@ -151,15 +152,66 @@
       editButtons: countEditControls(doc),
       // 只读的下拉输入框属于自定义控件，不算；禁用的输入框即使套在自定义控件里也照算。
       locked: shown(doc.querySelectorAll(SELECTORS.locked)).filter(el => el.disabled || !el.closest?.(SELECTORS.custom)).length,
-      shadowHosts
+      shadowHosts: countShadowHosts(all),
+      elements: all.length || 0
     };
   }
 
+  // 含输入框的 Shadow DOM：往下逐层找（Web Components 常常一层套一层），每个含输入框的 shadow root 算一个。
+  // 深度优先：遇到 shadow root 先进去找完再往后走，大页面不会在顶层就把额度用完。
+  function countShadowHosts(all) {
+    let hosts = 0;
+    let visited = 0;
+    const stack = [{ list: all || [], index: 0 }];
+    while (stack.length && visited < MAX_WALK) {
+      const top = stack[stack.length - 1];
+      if (top.index >= (top.list.length || 0)) {
+        stack.pop();
+        continue;
+      }
+      const shadow = top.list[top.index++]?.shadowRoot;
+      visited += 1;
+      if (!shadow) continue;
+      if (shadow.querySelector?.(SELECTORS.inputs)) hosts += 1;
+      const inner = shadow.querySelectorAll?.(SELECTORS.all);
+      if (inner?.length) stack.push({ list: inner, index: 0 });
+    }
+    return hosts;
+  }
+
+  // 是不是网申填写页，以及依据。地址和标题只在本地比对，不输出。探测失败又看不出来时返回 null（判断不了）。
+  // stats 是 content.js 扫描时的计数：页面上可填的输入框有几个（不算 type=hidden 和按钮、文件框；可见与否都算）。
+  // hash：单页应用的哈希路由（#/campus/apply），只取 ? 之前的部分。
+  function pageType({ pathname = "", hash = "", title = "", probe = null, stats = null } = {}) {
+    const path = `${String(pathname ?? "")} ${String(hash ?? "").replace(/^#/, "").split("?")[0]}`;
+    if (FORM_URL.test(path) || path.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/).some(word => FORM_URL_WORDS.has(word.toLowerCase()))) {
+      return { type: "application_form", reason: "url" };
+    }
+    if (FORM_TITLE.test(String(title ?? ""))) return { type: "application_form", reason: "title" };
+    if (!probe) return null;
+    if (probe.editButtons > 0) return { type: "application_form", reason: "edit_button" };
+    // 结构证据：Shadow DOM 或同源框架里的输入框、看得见的自定义控件、看得见但被禁用的输入框（扫描不收），
+    // 或可填的输入框够多（看不见的也算）。看不见的少于 3 个不算：职位详情页常藏着两三个框的登录弹窗。
+    // 跨域框架不算证据：广告、页脚和客服窗口都是这样嵌进来的。
+    const inputs = Number(stats?.domInputs) - Number(stats?.typeHidden || 0) - Number(stats?.nonFillable || 0);
+    if (probe.shadowHosts > 0 || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || probe.locked > 0
+      || inputs >= FORM_INPUTS) {
+      return { type: "application_form", reason: "structure" };
+    }
+    return { type: "unknown", reason: "none" };
+  }
+
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
-  function emptyPageHint(probe) {
+  // notForm：pageType() 判断这不是网申填写页。
+  function emptyPageHint(probe, { notForm = false } = {}) {
     if (!probe) return "";
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
+    if (notForm) {
+      // 跨域框架不算表单的证据，但也可能就是申请表：两种可能都告诉用户。
+      return `这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。${probe.frames?.crossOrigin > 0
+        ? "如果申请表就在这个页面的内嵌框架里，插件暂时读不到。" : ""}`;
+    }
     if (probe.frames.crossOrigin > 0 || probe.frames.frameInputs > 0) {
       return "表单可能在网页的内嵌框架里，插件暂时读不到。可以把侧栏的「填写诊断」复制给我们。";
     }
@@ -200,7 +252,7 @@
     return lines;
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, emptyPageHint, formatReport };
+  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);
