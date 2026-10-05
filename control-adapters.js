@@ -56,7 +56,12 @@
       if (writing && !ctx.wrote && ctx.options.beforeWrite && !ctx.options.beforeWrite()) return 'value_changed';
       return '';
     }
-    function write(el, value) {
+    function markWrite(ctx) {
+      if (!ctx.wrote) ctx.options.onWrite?.();
+      ctx.wrote = true;
+    }
+    function write(el, value, ctx) {
+      if (ctx) markWrite(ctx);
       if (deps.writeValue) return deps.writeValue(el, value);
       const descriptor = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value');
       if (descriptor?.set) descriptor.set.call(el, value); else el.value = value;
@@ -67,7 +72,7 @@
     }
     function focus(el) { if (deps.focus) deps.focus(el); else el.focus?.(); }
     function blur(el) { if (deps.blur) deps.blur(el); else el.blur?.(); }
-    function click(el, ctx) {
+    function click(el, ctx, committing = false) {
       const reason = stop(ctx, true);
       if (reason) return reason;
       if (el.disabled) return 'control_disabled';
@@ -87,7 +92,7 @@
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
       ctx.activating = true;
-      try { el.click(); } finally { ctx.activating = false; }
+      try { if (committing) markWrite(ctx); el.click(); } finally { ctx.activating = false; }
       return '';
     }
     // Observe the relevant subtree and also sample properties: .value/.checked changes
@@ -130,30 +135,37 @@
       const previous = String(ctx.el.value ?? '');
       const expected = deps.normalizeText(ctx.el, value);
       const guard = () => !stop(ctx, true);
-      const didWrite = () => { ctx.wrote = true; };
+      const didWrite = () => markWrite(ctx);
       if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
       ctx.acceptedOnce = String(ctx.el.value ?? '') === expected;
       await deps.waitTextCommit();
-      if (stop(ctx)) return result(false, stop(ctx), ctx);
+      let stopped = stop(ctx);
+      if (stopped) return result(false, stopped, ctx);
       let verdict = deps.inspectText(ctx.el, expected, ctx.acceptedOnce);
       if (!verdict.ok && ['validation_not_cleared', 'framework_state_unsynced'].includes(verdict.reason)) {
-        if (stop(ctx)) return result(false, stop(ctx), ctx);
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
         await deps.replayFocusBlur(ctx.el);
         await deps.waitTextCommit();
-        if (stop(ctx)) return result(false, stop(ctx), ctx);
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
       }
       if (!verdict.ok && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
         const committed = String(ctx.el.value ?? '') === expected;
         await deps.waitTextCommit();
-        if (stop(ctx)) return result(false, stop(ctx), ctx);
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, committed);
         if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && guard()) {
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
+      if (verdict.ok) checks.set(ctx.el, { ctx,
+        accepted: () => String(ctx.el.value ?? '') === expected,
+        inspect: () => deps.inspectText(ctx.el, expected, true) });
       return result(verdict.ok, verdict.reason, ctx);
     }
 
@@ -179,13 +191,14 @@
         }
         if (!direct) focus(ctx.el);
         await delay(0);
-        if (stop(ctx, true)) return result(false, stop(ctx, true), ctx);
+        const afterFocus = stop(ctx, true);
+        if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
         if (ctx.kind === 'radio') {
           const index = helpers?.findSelectOptionIndex?.(nodes.map(node => ({value:node.value,text:deps.radioLabel?.(node) || node.value,disabled:node.disabled})), desiredValue) ?? -1;
           const chosen = nodes[index];
           if (!chosen) return result(false, 'no_option_match', ctx);
-          const reason = click(chosen, ctx); if (reason) return result(false, reason, ctx);
+          const reason = click(chosen, ctx, true); if (reason) return result(false, reason, ctx);
           // A controlled component may reject activation. Never force checked after
           // its handler restored state: DOM assignment would create a false success.
           accepted = () => chosen.checked === true;
@@ -193,14 +206,14 @@
           const value = String(desiredValue).trim().toLowerCase();
           if (!['true', 'false', '1', '0', '是', '否'].includes(value)) return result(false, 'no_option_match', ctx);
           const checked = ['true', '1', '是'].includes(value);
-          if (Boolean(ctx.el.checked) !== checked) { const reason = click(ctx.el, ctx); if (reason) return result(false, reason, ctx); }
+          if (Boolean(ctx.el.checked) !== checked) { const reason = click(ctx.el, ctx, true); if (reason) return result(false, reason, ctx); }
           accepted = () => Boolean(ctx.el.checked) === checked;
         } else if (ctx.kind === 'native-select') {
           const index = helpers?.findSelectOptionIndex?.(Array.from(ctx.el.options).map(option => ({value:option.value,text:option.text,disabled:option.disabled})), desiredValue) ?? -1;
           if (index < 0) return result(false, 'no_option_match', ctx);
           const chosenValue = ctx.el.options[index].value;
           const chosenText = ctx.el.options[index].text;
-          write(ctx.el, chosenValue); ctx.el.selectedIndex = index; input(ctx.el);
+          write(ctx.el, chosenValue, ctx); ctx.el.selectedIndex = index; input(ctx.el);
           accepted = () => ctx.el.selectedIndex === index && ctx.el.options[index]?.value === chosenValue && ctx.el.options[index]?.text === chosenText;
         } else if (ctx.kind === 'date') {
           const date = await operateDate(ctx, desiredValue);
@@ -214,13 +227,13 @@
             return canonical === date.expected;
           };
         } else if (ctx.kind === 'contenteditable') {
-          const expected = String(desiredValue ?? ''); ctx.el.textContent = expected;
+          const expected = String(desiredValue ?? ''); markWrite(ctx); ctx.el.textContent = expected;
           ctx.el.dispatchEvent(new Event('input', { bubbles: true })); accepted = () => ctx.el.textContent === expected;
         } else {
-          const expected = String(desiredValue ?? ''); write(ctx.el, expected); input(ctx.el);
+          const expected = String(desiredValue ?? ''); write(ctx.el, expected, ctx); input(ctx.el);
           accepted = () => ctx.el.value === expected;
         }
-        ctx.wrote = true; ctx.acceptedOnce = accepted();
+        ctx.acceptedOnce = accepted();
         if (!direct) blur(ctx.el);
         const inspect = ctx.kind === 'date' && !direct && deps.inspectText
           ? () => deps.inspectText(ctx.el, String(ctx.el.value ?? ''), true) : null;
@@ -239,7 +252,7 @@
       if (['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type)) {
         const expected = helpers?.normalizeDateValue?.(raw, ctx.el.type) ?? String(raw ?? '');
         if (!expected) return { reason: 'invalid_date' };
-        write(ctx.el, expected); input(ctx.el); return { expected };
+        write(ctx.el, expected, ctx); input(ctx.el); return { expected };
       }
       // An AntD picker often starts readonly, then opens an editable input. Writing
       // that input does not commit rc-picker state; choose an actual calendar cell.
@@ -252,8 +265,9 @@
       // Preserve the existing generic/Element picker opening window. Recheck the
       // target and user edits after the page has had time to render its popup.
       await delay(150);
-      if (stop(ctx, true)) return { reason: stop(ctx, true) };
-      write(ctx.el, expected); input(ctx.el);
+      const afterOpening = stop(ctx, true);
+      if (afterOpening) return { reason: afterOpening };
+      write(ctx.el, expected, ctx); input(ctx.el);
       return { expected };
     }
 
@@ -276,9 +290,9 @@
       if (!expected || !(mode === 'year' ? /^\d{4}$/ : mode === 'month' ? /^\d{4}-\d{2}$/ : /^\d{4}-\d{2}-\d{2}$/).test(expected)) return { reason: 'invalid_date' };
       const year = Number(expected.slice(0, 4));
       if (year < 1900 || year > 2100) return { reason: 'invalid_date' };
-      const take = async node => {
+      const take = async (node, committing = false) => {
         if (!node || node.disabled || node.closest?.('.ant-picker-cell-disabled')) return 'no_option_match';
-        return click(node.querySelector?.('.ant-picker-cell-inner') || node, ctx);
+        return click(node.querySelector?.('.ant-picker-cell-inner') || node, ctx, committing);
       };
       if (mode !== 'year') {
         const why = await take(popup.querySelector('.ant-picker-year-btn')); if (why) return { reason: why };
@@ -291,7 +305,7 @@
         const panel = popup.querySelector('.ant-picker-year-panel');
         if (!panel) return { reason: 'selection_not_committed' };
         const cell = panel.querySelector(`td[title="${year}"]`);
-        if (cell) { const why = await take(cell); if (why) return { reason: why }; selected = true; break; }
+        if (cell) { const why = await take(cell, mode === 'year'); if (why) return { reason: why }; selected = true; break; }
         const years = Array.from(panel.querySelectorAll('td[title]')).map(node => Number(node.title)).filter(Number.isFinite);
         if (!years.length) return { reason: 'selection_not_committed' };
         const previous = panel.textContent;
@@ -310,11 +324,11 @@
         if (month.reason) return { reason: month.reason };
       }
       const monthCell = popup.querySelector(`.ant-picker-month-panel td[title="${expected.slice(0, 7)}"]`);
-      const monthWhy = await take(monthCell); if (monthWhy) return { reason: monthWhy };
+      const monthWhy = await take(monthCell, mode === 'month'); if (monthWhy) return { reason: monthWhy };
       if (mode === 'date') {
         const day = await waitUntil(ctx, popup, () => popup.querySelector(`.ant-picker-date-panel td[title="${expected}"]`), Boolean);
         if (day.reason) return { reason: day.reason };
-        const why = await take(day.value); if (why) return { reason: why };
+        const why = await take(day.value, true); if (why) return { reason: why };
       }
       return { expected, mode };
     }

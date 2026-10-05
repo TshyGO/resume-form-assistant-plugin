@@ -1148,7 +1148,8 @@ test('cancel during a date operation stops later fields and preserves the user i
   ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
   const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
   assert.equal(date.value, '2001-02'); assert.equal(name.value, ''); assert.equal(result.filledCount, 0);
-  assert.equal(result.unconfirmedCount, 1); assert.equal(cancel.onclick, null); assert.equal(cancel.hidden, true);
+  assert.equal(result.unconfirmedCount, 0); assert.equal(cancel.onclick, null); assert.equal(cancel.hidden, true);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
 });
 
 test('overwrite refusal still rechecks earlier controls and returns final counts', async () => {
@@ -1164,8 +1165,8 @@ test('overwrite refusal still rechecks earlier controls and returns final counts
   ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
   const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
   assert.equal(date.value, ''); assert.equal(name.value, '用户自己输入'); assert.equal(next.value, '');
-  assert.equal(result.filledCount, 0); assert.equal(result.unconfirmedCount, 1);
-  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+  assert.equal(result.filledCount, 0); assert.equal(result.unconfirmedCount, 0);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 2);
   assert.equal(result.outcome, 'failed');
 });
 
@@ -1183,7 +1184,43 @@ test('cancelling a later operation preserves an earlier retained verified date',
   ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
   const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
   assert.equal(first.value, '1998-06'); assert.equal(second.value, ''); assert.equal(next.value, '');
-  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 1); assert.equal(result.outcome, 'partial');
+  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 0); assert.equal(result.outcome, 'partial');
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+});
+
+for (const multiline of [false, true]) test(`final fill count includes text rollback: textarea=${multiline}`, async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'虚构说明'}, {fieldId:'field-1',value:'1998-06'}
+    ]})});
+  const first = multiline ? new ctx.HTMLTextAreaElement() : new ctx.HTMLInputElement();
+  if (multiline) first.tagName = 'TEXTAREA';
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const focus = date.focus.bind(date); date.focus = () => { focus(); first.value = ''; };
+  formElements.push(first,date);
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'说明',value:'虚构说明'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(first.value, ''); assert.equal(date.value, '1998-06');
+  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 0);
+  assert.equal(result.outcome, 'partial');
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+});
+
+test('cancellation after a date write remains unconfirmed without rewriting', async () => {
+  const formElements = []; const cancel = {}, hint = {};
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[{fieldId:'field-0',value:'1998-06'}]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  date.blur = () => { cancel.onclick(); };
+  formElements.push(date);
+  ctx.helpers.setShadowRoot({querySelector:selector=>({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'日期',value:'1998-06'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, '1998-06'); assert.equal(result.filledCount, 0);
+  assert.equal(result.unconfirmedCount, 1);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 0);
+  assert.equal(date.dispatchedEvents.length, 2, 'only the original input/change, no retry');
 });
 
 test('a text value changed by focus is rechecked before the delayed write', async () => {

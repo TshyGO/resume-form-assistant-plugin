@@ -50,3 +50,8 @@ in the PR. Keep live-site and synthetic/library evidence separate. Cancellation,
 trusted edits and final success-count corrections also have integration coverage
 in `tests/fill-highlight.test.js`; adapter guard and settlement failures are covered
 in `tests/control-adapters.test.js`.
+Final read-only reconciliation also includes text and textarea controls. A stop
+before any attempted write is counted as unfilled; a write interrupted before
+verification is counted as unconfirmed. Cancelling does not erase earlier retained
+verified results. This accounting uses a host callback, never model-supplied hints
+or values in diagnostic output.

@@ -195,3 +195,24 @@ test('read-only final verification preserves completed evidence after cancellati
   assert.equal(h.check(input).ok, true); assert.equal(input.events.length, before);
   input.isConnected = false; assert.equal(h.check(input).reason, 'element_disconnected');
 });
+
+test('write accounting distinguishes a refused guard from an interrupted attempted write', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'month';
+  let writes = 0, active = true;
+  const onWrite = () => writes++;
+  await h.operate(input, '1998-06', {beforeWrite:()=>false, onWrite});
+  assert.equal(writes, 0);
+  input.addEventListener('blur', () => { active = false; });
+  const result = await h.operate(input, '1998-06', {isCurrent:()=>active, onWrite});
+  assert.equal(result.reason, 'cancelled'); assert.equal(writes, 1);
+  assert.equal(input.value, '1998-06');
+  assert.ok(!JSON.stringify(result).includes('1998'));
+});
+
+test('guard callbacks are evaluated once at each stop point', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'month';
+  let guardCalls = 0;
+  const result = await h.operate(input, '1998-06', {beforeWrite:()=> ++guardCalls === 1});
+  assert.equal(result.reason, 'value_changed'); assert.equal(guardCalls, 2);
+  assert.equal(input.value, '');
+});

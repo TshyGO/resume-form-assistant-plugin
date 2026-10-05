@@ -1731,7 +1731,6 @@
     let fieldCount = 0;
     let filledCount = 0;
     let unconfirmedCount = 0;
-    const unconfirmedLabels = [];
     const verifiedControls = [];
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
@@ -1909,15 +1908,15 @@
         }
       }
 
-      const noteControlFailure = (element, fieldMeta, value, reason) => {
+      const noteControlFailure = (element, fieldMeta, value, reason, uncertain) => {
         const control = element.kind === 'element' ? element.element : element;
         textFillFailures.set(control, reason);
-        if (assisted) { unconfirmedCount += 1; return; }
+        if (assisted) { if (uncertain !== false) unconfirmedCount += 1; return; }
         const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || '未命名字段';
         const why = TEXT_FILL_FAILURE_LABELS[reason] || '';
         const shown = why ? `${label}（${why}）` : label;
-        if (['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
-          unconfirmedCount += 1; unconfirmedLabels.push(shown);
+        if (uncertain ?? ['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
+          unconfirmedCount += 1;
         } else unfilledLabels.push(shown);
         // Preserve the existing overlap redaction for both immediate and final failures.
         const shownValue = normalizeForOverlap(value);
@@ -1962,16 +1961,26 @@
           showStatus(`填写期间检测到字段内容变化，已停止后续填写，保留该字段的现有内容。此前已填写 ${filledCount} 项，请核对网页。`, "error", true);
           return false;
         };
-        let filled = await setElementValue(element, match.value, beforeWrite, isCurrent);
-        if (overwriteDeclined) { unconfirmedCount += 1; throw new Error("字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"); }
-        if (!isCurrent()) { cancelRequested = true; unconfirmedCount += 1; throw new Error("已停止填写，请核对网页。"); }
+        const fieldMeta = fieldMetaMap.get(match.fieldId);
+        // Host-owned accounting callback: a guard refusal before any write is
+        // skipped, while an interrupted attempted write remains unconfirmed.
+        let writeAttempted = false;
+        const onWrite = () => { writeAttempted = true; };
+        const stopInterruptedControl = () => {
+          if (!overwriteDeclined && isCurrent()) return;
+          cancelRequested = true;
+          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element) || 'cancelled', writeAttempted);
+          throw new Error(overwriteDeclined
+            ? "字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"
+            : "已停止填写，请核对网页。");
+        };
+        let filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+        stopInterruptedControl();
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           filled = element.element.isConnected
             && String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value);
         }
-
-        const fieldMeta = fieldMetaMap.get(match.fieldId);
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
         // 也按同样的方式等一等（和 worker 放行它用的是同一个判断）；选项出来了却对不上，不再白等。
@@ -1979,8 +1988,8 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = await setElementValue(element, match.value, beforeWrite, isCurrent);
-            if (overwriteDeclined) { unconfirmedCount += 1; throw new Error("字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"); }
+            filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+            stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
@@ -2015,7 +2024,7 @@
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
-        + (unconfirmedLabels.length ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
+        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
       const emptyHint = viewModeHint();
       if (assisted) {
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
@@ -3200,8 +3209,8 @@
     return controlOperator.operate(entry, value, options);
   }
 
-  async function setElementValue(target, value, beforeWrite, isCurrent) {
-    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent });
+  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
+    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
     const control = target?.kind === 'element' ? target.element : target;
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
