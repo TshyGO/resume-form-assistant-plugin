@@ -1,6 +1,7 @@
 //! #130：简历模板与「我的信息」的命令层。读写用户挑的文件、把存储层的错误翻成中文。
 //! 密码类内容的拦截在存储层（`archive_store::resume_secrets`），这里不另查一遍。
 
+use std::io::Read;
 use std::path::Path;
 
 use archive_store::{
@@ -13,7 +14,7 @@ use serde_json::Value;
 use crate::commands::CommandError;
 
 /// 简历模板的 Excel 不会有几 MB；更大的多半是选错了文件，不读进内存。
-pub const MAX_SHEET_BYTES: u64 = 5 * 1024 * 1024;
+pub const MAX_SHEET_BYTES: u64 = resume_sheet::MAX_SHEET_BYTES;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -91,7 +92,14 @@ pub fn read_sheet(path: &Path) -> Result<(String, Vec<TemplateGroup>), CommandEr
     if meta.len() > MAX_SHEET_BYTES {
         return Err(error("SHEET_TOO_LARGE", "文件超过 5 MB，不像是简历模板，确认选对了文件。"));
     }
-    let bytes = std::fs::read(path).map_err(|_| error("SHEET_UNREADABLE", "读不到这个文件。"))?;
+    // metadata 检查后文件仍可能增长；实际读取也必须有硬上限。
+    let file = std::fs::File::open(path).map_err(|_| error("SHEET_UNREADABLE", "读不到这个文件。"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SHEET_BYTES + 1).read_to_end(&mut bytes)
+        .map_err(|_| error("SHEET_UNREADABLE", "读不到这个文件。"))?;
+    if bytes.len() as u64 > MAX_SHEET_BYTES {
+        return Err(error("SHEET_TOO_LARGE", "文件超过 5 MB，不像是简历模板，确认选对了文件。"));
+    }
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let groups = resume_sheet::parse(file_name, &bytes).map_err(|e| error("SHEET_INVALID", e.to_string()))?;
     Ok((resume_sheet::template_name_from_file(file_name), to_store(groups)))
