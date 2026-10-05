@@ -1117,20 +1117,24 @@ test('a cancelled AI request cannot write a late successful response', async () 
   assert.equal(input.value, '用户自己输入'); assert.equal(input.dispatchedEvents.length, 0);
 });
 
-test('final fill count excludes a date rolled back when the next field receives focus', async () => {
+for (const replaced of [false, true]) {
+test(`final fill count rechecks an earlier date: replaced=${replaced}`, async () => {
   const formElements = [];
   const ctx = loadHighlightHelpers({formElements,
     sendMessage:async () => ({success:true,matches:[{fieldId:'field-0',value:'1998-06'},{fieldId:'field-1',value:'虚构用户'}]})});
   const date = new ctx.HTMLInputElement(); date.type = 'month';
   const name = new ctx.HTMLInputElement(); const focus = name.focus.bind(name);
-  name.focus = () => { focus(); date.value = ''; };
+  name.focus = () => { focus(); if (replaced) date.isConnected = false; else date.value = ''; };
   formElements.push(date,name);
   ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
   const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
-  assert.equal(date.value, ''); assert.equal(name.value, '虚构用户');
+  assert.equal(date.value, replaced ? '1998-06' : ''); assert.equal(name.value, '虚构用户');
   assert.equal(result.filledCount, 1); assert.equal(result.outcome, 'partial');
-  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, replaced ? 0 : 1);
+  assert.equal(result.unconfirmedCount, replaced ? 1 : 0);
 });
+
+}
 
 test('cancel during a date operation stops later fields and preserves the user input', async () => {
   const formElements = []; const cancel = {}, hint = {};
@@ -1144,7 +1148,7 @@ test('cancel during a date operation stops later fields and preserves the user i
   ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
   const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
   assert.equal(date.value, '2001-02'); assert.equal(name.value, ''); assert.equal(result.filledCount, 0);
-  assert.equal(result.unconfirmedCount, 1); assert.equal(cancel.onclick, null);
+  assert.equal(result.unconfirmedCount, 1); assert.equal(cancel.onclick, null); assert.equal(cancel.hidden, true);
 });
 
 test('a text value changed by focus is rechecked before the delayed write', async () => {

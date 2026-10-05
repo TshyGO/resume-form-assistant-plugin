@@ -36,13 +36,7 @@
       if (entry?.controlKind && !KINDS.has(entry.controlKind)) return 'unsupported';
       if (entry?.controlKind) return entry.controlKind;
       if (entry?.pickerType) return 'date';
-      if (el instanceof HTMLTextAreaElement) return 'textarea';
-      if (el instanceof HTMLInputElement) {
-        if (['checkbox', 'radio'].includes(el.type)) return el.type;
-        if (['date', 'month', 'datetime-local', 'time', 'week'].includes(el.type)) return 'date';
-        if (['file', 'submit', 'button', 'reset', 'image', 'hidden', 'password'].includes(el.type)) return 'unsupported';
-        return 'text';
-      }
+      if (el instanceof HTMLInputElement) return 'text';
       return el?.isContentEditable ? 'contenteditable' : 'unsupported';
     }
     function stop(ctx, writing = false) {
@@ -226,7 +220,9 @@
       const expected = helpers?.normalizeDateValue?.(raw, ctx.entry.pickerInputType || 'date') ?? String(raw ?? '');
       if (ctx.el.readOnly) return { reason: 'unsupported_control' };
       if (typeof ctx.el.click === 'function') ctx.el.click();
-      await delay(0);
+      // Preserve the existing generic/Element picker opening window. Recheck the
+      // target and user edits after the page has had time to render its popup.
+      await delay(150);
       if (stop(ctx, true)) return { reason: stop(ctx, true) };
       write(ctx.el, expected); input(ctx.el);
       return { expected };

@@ -1915,7 +1915,7 @@
         const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || '未命名字段';
         const why = TEXT_FILL_FAILURE_LABELS[reason] || '';
         const shown = why ? `${label}（${why}）` : label;
-        if (['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled'].includes(reason)) {
+        if (['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
           unconfirmedCount += 1; unconfirmedLabels.push(shown);
         } else unfilledLabels.push(shown);
         // Preserve the existing overlap redaction for both immediate and final failures.

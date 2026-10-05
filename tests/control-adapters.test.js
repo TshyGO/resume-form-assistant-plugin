@@ -74,6 +74,17 @@ test('cancellation after focus prevents the first write', async () => {
   assert.equal(result.ok, false); assert.equal(result.reason, 'cancelled'); assert.equal(input.value, '');
 });
 
+test('generic date waits for popup rendering and rechecks replacement before writing', async () => {
+  const h = harness(); const input = new h.Input(); let ready = false;
+  input.click = () => setTimeout(() => { ready = true; }, 50);
+  input.addEventListener('input', () => assert.equal(ready, true));
+  assert.equal((await h.operate({kind:'element', element:input, pickerType:'generic'}, '1998-06-17')).ok, true);
+  input.value = '';
+  input.click = () => setTimeout(() => { input.isConnected = false; }, 50);
+  const result = await h.operate({kind:'element', element:input, pickerType:'generic'}, '1998-06-17');
+  assert.equal(result.reason, 'element_disconnected'); assert.equal(input.value, '');
+});
+
 test('native select uses existing resolver and detects rollback', async () => {
   const h = harness(); const select = new h.Select(); select.tagName = 'SELECT';
   select.options = [{value:'',text:'请选择'}, {value:'A',text:'全日制'}, {value:'B',text:'非全日制'}];
