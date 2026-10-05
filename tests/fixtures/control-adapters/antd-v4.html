@@ -11,17 +11,25 @@
 <script>
 const e=React.createElement;
 const locale = new URLSearchParams(location.search).get('locale') === 'zh-cn' ? antd.locales.zh_CN : antd.locales.en_US;
+const localizedDisplay = new URLSearchParams(location.search).get('display') === 'zh';
+const formats={month:'YYYY年MM月',date:'YYYY年MM月DD日',year:'YYYY年'};
 moment.locale(locale.locale === 'zh-cn' ? 'zh-cn' : 'en');
-function Picker(props){const [value,setValue]=React.useState(null);return e('label',{},props.kind,e(antd.DatePicker,{id:props.id,picker:props.kind,value,onChange:setValue,inputReadOnly:true,className:props.kind==='month'?'resume-valid-birthday':undefined,defaultPickerValue:moment('2001-01-01')}));}
+function Picker(props){const [value,setValue]=React.useState(null);return e('label',{},props.kind,e(antd.DatePicker,{id:props.id,picker:props.kind,value,onChange:setValue,format:localizedDisplay?formats[props.kind]:undefined,inputReadOnly:true,className:props.kind==='month'?'resume-valid-birthday':undefined,defaultPickerValue:moment('2001-01-01')}));}
 ReactDOM.render(e(antd.ConfigProvider,{locale},e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'}),e('label',{},'受控单选拒绝选择',e('input',{id:'rejected-radio',type:'radio',value:'B',checked:false,onChange:()=>{}})),e('label',{},'受控复选拒绝选择',e('input',{id:'rejected-checkbox',type:'checkbox',checked:false,onChange:()=>{}})))),document.getElementById('app'));
 window.runCases=async()=>{
  const operator=ResumeProControls.create();const results={};
+ if(new URLSearchParams(location.search).get('motion')==='slow'){
+  const hold=document.createElement('style');hold.textContent='.ant-picker-dropdown{transform:scale(0)!important}';
+  document.head.appendChild(hold);setTimeout(()=>hold.remove(),2600);
+ }
  for(const [id,value] of [['antd-month','1998-06'],['antd-date','1998-06-17'],['antd-year','1998']]){
   const input=document.getElementById(id);
   results[id]=await operator.operate({kind:'element',element:input,pickerType:'antd'},value);
   document.getElementById('blank').focus();
   await new Promise(resolve=>setTimeout(resolve,100));
-  results[id].retainedAfterFocusChange=input.value===value;
+  const kind=id.replace('antd-','');
+  const expected=localizedDisplay?moment(value,kind==='year'?'YYYY':kind==='month'?'YYYY-MM':'YYYY-MM-DD',true).format(formats[kind]):value;
+  results[id].retainedAfterFocusChange=input.value===expected;
  }
  for(const [id,value] of [['rejected-radio','B'],['rejected-checkbox',true]]){
   const input=document.getElementById(id);results[id]=await operator.operate(input,value);

@@ -18,8 +18,16 @@
     const settleMs = () => deps.getSettleMs ? deps.getSettleMs() : deps.settleMs ?? 250;
     const checks = new WeakMap();
     const timeoutMs = deps.timeoutMs ?? 2000;
-    const visible = el => Boolean(el && el.isConnected !== false && !el.hidden
-      && (deps.isVisible ? deps.isVisible(el) : !el.getBoundingClientRect || el.getBoundingClientRect().height > 0));
+    const visible = el => {
+      if (!el || el.isConnected === false || el.hidden || el.classList?.contains('ant-picker-dropdown-hidden')) return false;
+      if (deps.isVisible ? deps.isVisible(el) : !el.getBoundingClientRect || el.getBoundingClientRect().height > 0) return true;
+      // Liepin's opening motion starts at scale(0): the rendered rect is empty,
+      // while the mounted calendar already has layout and can commit selection.
+      // Hidden/unmounted parked popups still fail the style/layout checks.
+      const css = el.ownerDocument?.defaultView?.getComputedStyle?.(el);
+      return Boolean(css && css.display !== 'none' && css.visibility !== 'hidden'
+        && el.offsetHeight > 0 && el.offsetWidth > 0);
+    };
     const result = (ok, reason, ctx, extra = {}) => ({ ok, reason, observed: {
       ...(KINDS.has(ctx.kind) ? { controlKind: ctx.kind } : {}), connected: ctx.nodes.every(el => el.isConnected !== false),
       rolledBack: reason === 'value_reverted', ...ctx.observed, ...extra
@@ -190,7 +198,14 @@
         } else if (ctx.kind === 'date') {
           const date = await operateDate(ctx, desiredValue);
           if (date.reason) return result(false, date.reason, ctx, date.observed);
-          accepted = () => String(ctx.el.value ?? '') === date.expected;
+          accepted = () => {
+            const display = String(ctx.el.value ?? '');
+            // The real Liepin picker displays YYYY年MM月 after calendar commit.
+            // Compare the actual panel's date precision, preserving its display format.
+            const canonical = date.mode === 'year' ? display.match(/^\s*(\d{4})(?:年)?\s*$/)?.[1]
+              : date.mode ? helpers?.normalizeDateValue?.(display, date.mode) : display;
+            return canonical === date.expected;
+          };
         } else if (ctx.kind === 'contenteditable') {
           const expected = String(desiredValue ?? ''); ctx.el.textContent = expected;
           ctx.el.dispatchEvent(new Event('input', { bubbles: true })); accepted = () => ctx.el.textContent === expected;
@@ -279,7 +294,7 @@
         if (changed.reason) return { reason: changed.reason };
       }
       if (!selected) return { reason: 'verification_timeout' };
-      if (mode === 'year') return { expected };
+      if (mode === 'year') return { expected, mode };
       const leftYear = await waitUntil(ctx, popup, () => popup.querySelector('.ant-picker-year-panel'), panel => !panel);
       if (leftYear.reason) return { reason: leftYear.reason };
       if (mode === 'date' && !popup.querySelector('.ant-picker-month-panel')) {
@@ -294,7 +309,7 @@
         if (day.reason) return { reason: day.reason };
         const why = await take(day.value); if (why) return { reason: why };
       }
-      return { expected };
+      return { expected, mode };
     }
     function check(target) {
       const el = target?.kind === 'radio' ? target.elements?.[0] : target?.kind === 'element' ? target.element : target;

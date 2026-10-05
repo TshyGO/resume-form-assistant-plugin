@@ -18,6 +18,12 @@ return `ok: true` and `retainedAfterFocusChange: true`. Repeat with `?locale=zh-
 to validate actual Chinese locale cell titles. Its month wrapper class and
 readonly input mirror the inspected Liepin birth-month structure; library tests
 alone do not establish live-site acceptance.
+Repeat with `?locale=zh-cn&motion=slow` to hold the popup at scale(0) for 2600 ms,
+matching Liepin's observed opening stage (zero rendered rect, 280×307 layout).
+Mounted calendars must still commit; hidden cached dropdowns must not be selected.
+Add `&display=zh` to test Liepin's actual `YYYY年MM月` display format (and the
+analogous year/day formats), separately from cell-title locale. Verification compares
+date precision without rewriting the component's formatted display.
 
 Live Liepin verification uses `https://c.liepin.com/resume/create`, then “立即填写”,
 and only the empty birth-month control. The old native value setter plus
