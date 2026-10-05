@@ -1733,6 +1733,7 @@
     let unconfirmedCount = 0;
     const unconfirmedLabels = [];
     const verifiedControls = [];
+    let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
     let probe = null;
@@ -1927,6 +1928,18 @@
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null) });
       };
+      let controlsRechecked = false;
+      recheckVerifiedControls = () => {
+        if (controlsRechecked) return;
+        controlsRechecked = true;
+        for (const item of verifiedControls) {
+          const checked = controlOperator?.check(item.element);
+          if (checked && !checked.ok) {
+            filledCount -= 1;
+            noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
+          }
+        }
+      };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.()
         && location.href === fillUrl && session === fillSession;
       for (const match of sortedMatches) {
@@ -1950,7 +1963,7 @@
           return false;
         };
         let filled = await setElementValue(element, match.value, beforeWrite, isCurrent);
-        if (overwriteDeclined) { unconfirmedCount += 1; return; }
+        if (overwriteDeclined) { unconfirmedCount += 1; throw new Error("字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"); }
         if (!isCurrent()) { cancelRequested = true; unconfirmedCount += 1; throw new Error("已停止填写，请核对网页。"); }
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
@@ -1967,7 +1980,7 @@
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
             filled = await setElementValue(element, match.value, beforeWrite, isCurrent);
-            if (overwriteDeclined) return;
+            if (overwriteDeclined) { unconfirmedCount += 1; throw new Error("字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"); }
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
@@ -1996,13 +2009,7 @@
       await finalSyncFillSession(session);
       // A later control's focus can roll back an earlier picker. Re-read the final
       // state before counting success; verification never writes or retries.
-      for (const item of verifiedControls) {
-        const checked = controlOperator?.check(item.element);
-        if (checked && !checked.ok) {
-          filledCount -= 1;
-          noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
-        }
-      }
+      recheckVerifiedControls();
       stage = null;
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
@@ -2038,6 +2045,10 @@
         })), resumeFields);
       }
     } catch (error) {
+      // Interrupted fills still get a read-only final count; never replay focus,
+      // write, or retry after a stop/overwrite refusal.
+      recheckVerifiedControls();
+      if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       failure = error.message || "AI 填写失败。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。

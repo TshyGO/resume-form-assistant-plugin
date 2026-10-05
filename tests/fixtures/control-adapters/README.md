@@ -31,6 +31,9 @@ the birth month must remain. Refresh afterwards; do not save the resume.
 The self-contained fixture also checks actual native select/radio/checkbox
 activation. Native `.click()` may emit trusted input/change; those synchronous
 events must not be confused with a later user edit.
+The React fixture additionally rejects radio/checkbox activation on purpose. Both
+must return `value_not_committed` and remain unchecked; do not force DOM state after
+the framework rejected a click.
 
 Record each browser/version, Windows platform, source SHA, page/fixture and results
 in the PR. Keep live-site and synthetic/library evidence separate. Cancellation,

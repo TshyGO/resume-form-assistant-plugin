@@ -1151,6 +1151,24 @@ test('cancel during a date operation stops later fields and preserves the user i
   assert.equal(result.unconfirmedCount, 1); assert.equal(cancel.onclick, null); assert.equal(cancel.hidden, true);
 });
 
+test('overwrite refusal still rechecks earlier controls and returns final counts', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'1998-06'}, {fieldId:'field-1',value:'虚构用户'}, {fieldId:'field-2',value:'不要继续'}
+    ]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const name = new ctx.HTMLInputElement(); const next = new ctx.HTMLInputElement();
+  name.focus = () => { date.value = ''; name.value = '用户自己输入'; };
+  formElements.push(date,name,next);
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, ''); assert.equal(name.value, '用户自己输入'); assert.equal(next.value, '');
+  assert.equal(result.filledCount, 0); assert.equal(result.unconfirmedCount, 1);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+  assert.equal(result.outcome, 'failed');
+});
+
 test('a text value changed by focus is rechecked before the delayed write', async () => {
   const formElements = [];
   const ctx = loadHighlightHelpers({ formElements, confirm: () => true,

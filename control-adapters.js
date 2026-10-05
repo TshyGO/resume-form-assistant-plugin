@@ -171,8 +171,8 @@
           const chosen = nodes[index];
           if (!chosen) return result(false, 'no_option_match', ctx);
           const reason = click(chosen, ctx); if (reason) return result(false, reason, ctx);
-          // Native click selects the radio; this fallback preserves old test/DOM hosts.
-          if (!chosen.checked) { chosen.checked = true; input(chosen); }
+          // A controlled component may reject activation. Never force checked after
+          // its handler restored state: DOM assignment would create a false success.
           accepted = () => chosen.checked === true;
         } else if (ctx.kind === 'checkbox') {
           const value = String(desiredValue).trim().toLowerCase();
@@ -224,7 +224,9 @@
       if (ctx.entry.pickerType === 'antd') return await antDate(ctx, raw);
       const expected = helpers?.normalizeDateValue?.(raw, ctx.entry.pickerInputType || 'date') ?? String(raw ?? '');
       if (ctx.el.readOnly) return { reason: 'unsupported_control' };
-      if (typeof ctx.el.click === 'function') ctx.el.click();
+      if (typeof ctx.el.click === 'function') {
+        const reason = click(ctx.el, ctx); if (reason) return { reason };
+      }
       // Preserve the existing generic/Element picker opening window. Recheck the
       // target and user edits after the page has had time to render its popup.
       await delay(150);

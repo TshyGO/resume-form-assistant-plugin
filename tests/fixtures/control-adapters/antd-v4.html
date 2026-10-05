@@ -13,7 +13,7 @@ const e=React.createElement;
 const locale = new URLSearchParams(location.search).get('locale') === 'zh-cn' ? antd.locales.zh_CN : antd.locales.en_US;
 moment.locale(locale.locale === 'zh-cn' ? 'zh-cn' : 'en');
 function Picker(props){const [value,setValue]=React.useState(null);return e('label',{},props.kind,e(antd.DatePicker,{id:props.id,picker:props.kind,value,onChange:setValue,inputReadOnly:true,className:props.kind==='month'?'resume-valid-birthday':undefined,defaultPickerValue:moment('2001-01-01')}));}
-ReactDOM.render(e(antd.ConfigProvider,{locale},e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'}))),document.getElementById('app'));
+ReactDOM.render(e(antd.ConfigProvider,{locale},e('div',{},e(Picker,{id:'antd-month',kind:'month'}),e(Picker,{id:'antd-date',kind:'date'}),e(Picker,{id:'antd-year',kind:'year'}),e('label',{},'受控单选拒绝选择',e('input',{id:'rejected-radio',type:'radio',value:'B',checked:false,onChange:()=>{}})),e('label',{},'受控复选拒绝选择',e('input',{id:'rejected-checkbox',type:'checkbox',checked:false,onChange:()=>{}})))),document.getElementById('app'));
 window.runCases=async()=>{
  const operator=ResumeProControls.create();const results={};
  for(const [id,value] of [['antd-month','1998-06'],['antd-date','1998-06-17'],['antd-year','1998']]){
@@ -22,6 +22,10 @@ window.runCases=async()=>{
   document.getElementById('blank').focus();
   await new Promise(resolve=>setTimeout(resolve,100));
   results[id].retainedAfterFocusChange=input.value===value;
+ }
+ for(const [id,value] of [['rejected-radio','B'],['rejected-checkbox',true]]){
+  const input=document.getElementById(id);results[id]=await operator.operate(input,value);
+  results[id].remainsUnchecked=input.checked===false;
  }
  document.getElementById('results').textContent=JSON.stringify(results,null,2);return results;
 };

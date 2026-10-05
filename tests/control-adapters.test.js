@@ -117,6 +117,14 @@ test('native activation trusted change is distinguished from subsequent user edi
   assert.equal(input.checked, false);
 });
 
+test('a controlled radio rejection is not forcibly checked or counted as success', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'radio'; input.value = 'B';
+  input.click = () => { input.checked = false; };
+  const result = await h.operate(input, 'B');
+  assert.equal(result.ok, false); assert.equal(result.reason, 'value_not_committed');
+  assert.equal(input.checked, false); assert.ok(!input.events.includes('input'));
+});
+
 test('the closed control and hints sets reject unsupported controls and strip unknown hints', async () => {
   const h = harness(); const input = new h.Input();
   assert.equal((await h.operate({kind:'element',element:input,controlKind:'custom-select'}, 'A')).reason, 'unsupported_control');
