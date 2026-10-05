@@ -24,6 +24,10 @@ Mounted calendars must still commit; hidden cached dropdowns must not be selecte
 Add `&display=zh` to test Liepin's actual `YYYY年MM月` display format (and the
 analogous year/day formats), separately from cell-title locale. Verification compares
 date precision without rewriting the component's formatted display.
+AntD year navigation is bounded to 1900–2100 and at most 24 decade steps; dates
+outside this resume-oriented range fail explicitly. Range/multiple-panel pickers
+remain unsupported. Native readonly dates are refused; readonly text inputs inside
+an AntD picker use the calendar, preserving the component's own commit behavior.
 
 Live Liepin verification uses `https://c.liepin.com/resume/create`, then “立即填写”,
 and only the empty birth-month control. The old native value setter plus

@@ -50,6 +50,7 @@
     function stop(ctx, writing = false) {
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
+      if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
       if (ctx.userEdited) { ctx.options.beforeWrite?.(true); return 'value_changed'; }
       if (writing && !ctx.wrote && ctx.options.beforeWrite && !ctx.options.beforeWrite()) return 'value_changed';
@@ -69,14 +70,20 @@
     function click(el, ctx) {
       const reason = stop(ctx, true);
       if (reason) return reason;
+      if (el.disabled) return 'control_disabled';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mousedown', { bubbles: true }));
       // A page handler can replace the target, or a cancellation can happen on mousedown.
-      if (stop(ctx, true) || el.isConnected === false) return stop(ctx, true) || 'element_disconnected';
+      const afterPress = stop(ctx, true);
+      if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
+      if (el.disabled) return 'control_disabled';
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true }));
+      const beforeActivation = stop(ctx, true);
+      if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
+      if (el.disabled) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
       ctx.activating = true;
@@ -315,11 +322,16 @@
       const el = target?.kind === 'radio' ? target.elements?.[0] : target?.kind === 'element' ? target.element : target;
       const saved = checks.get(el);
       if (!saved) return null;
-      const reason = stop(saved.ctx);
-      if (reason) return result(false, reason, saved.ctx);
-      if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
-      const verdict = saved.inspect?.();
-      return result(verdict ? verdict.ok : true, verdict?.reason || '', saved.ctx);
+      // Cancellation gates new actions, not evidence from a completed operation.
+      // This path only reads the final DOM and never invokes write/stop callbacks.
+      try {
+        if (saved.ctx.nodes.some(node => node.isConnected === false)) return result(false, 'element_disconnected', saved.ctx);
+        if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
+        const verdict = saved.inspect?.();
+        return result(verdict ? verdict.ok : true, verdict?.reason || '', saved.ctx);
+      } catch {
+        return result(false, 'operation_failed', saved.ctx);
+      }
     }
     return { operate, check };
   }

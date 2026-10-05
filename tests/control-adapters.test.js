@@ -50,6 +50,13 @@ test('native month is actually focused and blurred, then verified', async () => 
   assert.ok(input.events.indexOf('input') < input.events.indexOf('blur'));
 });
 
+test('readonly native date is refused before focus or any value change', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'month'; input.readOnly = true;
+  input.value = '2001-02';
+  assert.equal((await h.operate(input, '1998-06')).reason, 'unsupported_control');
+  assert.equal(input.value, '2001-02'); assert.deepEqual(input.events, []);
+});
+
 test('user edits during verification are preserved and not counted as success', async () => {
   const h = harness(); const input = new h.Input(); input.type = 'month';
   input.addEventListener('blur', () => setTimeout(() => {
@@ -158,6 +165,13 @@ test('a disabled radio option does not disable the rest of its group', async () 
   assert.equal(Boolean(first.checked), false);
 });
 
+for (const eventType of ['mousedown', 'mouseup']) test(`a radio disabled by ${eventType} is not activated`, async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'radio'; input.value = 'B';
+  input.addEventListener(eventType, () => { input.disabled = true; });
+  assert.equal((await h.operate(input, 'B')).reason, 'control_disabled');
+  assert.equal(Boolean(input.checked), false); assert.ok(!input.events.includes('click'));
+});
+
 test('cancellation during settlement preserves the written value and removes temporary listeners', async () => {
   const h = harness(); const input = new h.Input(); input.type = 'month'; let active = true;
   input.addEventListener('blur', () => setTimeout(() => { active = false; }, 20));
@@ -172,4 +186,12 @@ test('final read catches an earlier successful control rolled back by a later fi
   input.value = '';
   assert.equal(h.check(input).ok, false); assert.equal(h.check(input).reason, 'value_reverted');
   assert.equal(input.value, '');
+});
+
+test('read-only final verification preserves completed evidence after cancellation', async () => {
+  const h = harness(); const input = new h.Input(); input.type = 'month'; let active = true;
+  assert.equal((await h.operate(input, '1998-06', {isCurrent:()=>active})).ok, true);
+  active = false; const before = input.events.length;
+  assert.equal(h.check(input).ok, true); assert.equal(input.events.length, before);
+  input.isConnected = false; assert.equal(h.check(input).reason, 'element_disconnected');
 });

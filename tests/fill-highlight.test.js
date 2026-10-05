@@ -1169,6 +1169,23 @@ test('overwrite refusal still rechecks earlier controls and returns final counts
   assert.equal(result.outcome, 'failed');
 });
 
+test('cancelling a later operation preserves an earlier retained verified date', async () => {
+  const formElements = []; const cancel = {}, hint = {};
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'1998-06'}, {fieldId:'field-1',value:'2001-02'}, {fieldId:'field-2',value:'不要继续'}
+    ]})});
+  const first = new ctx.HTMLInputElement(); first.type = 'month';
+  const second = new ctx.HTMLInputElement(); second.type = 'month'; const next = new ctx.HTMLInputElement();
+  const focus = second.focus.bind(second); second.focus = () => { focus(); cancel.onclick(); };
+  formElements.push(first,second,next);
+  ctx.helpers.setShadowRoot({querySelector:selector=>({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(first.value, '1998-06'); assert.equal(second.value, ''); assert.equal(next.value, '');
+  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 1); assert.equal(result.outcome, 'partial');
+});
+
 test('a text value changed by focus is rechecked before the delayed write', async () => {
   const formElements = [];
   const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
