@@ -90,7 +90,7 @@ test('search waits for the updated live options rather than treating the query a
   h.el.onclick = () => { list.hidden = false; h.el.setAttribute('aria-expanded', 'true'); };
   h.el.oninput = () => setTimeout(() => {
     list.innerHTML = '<div role="option">北京大学</div>';
-    list.firstChild.onclick = () => { h.el.value = '北京大学'; list.firstChild.setAttribute('aria-selected', 'true'); h.el.setAttribute('aria-expanded', 'false'); list.hidden = true; };
+    list.firstChild.onclick = () => { h.el.value = '北京大学'; h.el.setAttribute('aria-valuetext','北京大学'); list.firstChild.setAttribute('aria-selected', 'true'); h.el.setAttribute('aria-expanded', 'false'); list.hidden = true; };
   }, 35);
   assert.equal((await h.api.operate(h.target, '北京大学')).ok, true);
   assert.equal(h.el.getAttribute('aria-expanded'), 'false');
@@ -220,7 +220,7 @@ test('closing a popup after clicking cannot turn a query into a committed select
   h.el.oninput = () => { list.innerHTML = '<div role="option" aria-selected="false">北京大学</div>'; list.firstChild.onclick = () => { list.hidden = true; h.el.setAttribute('aria-expanded', 'false'); }; };
   assert.equal((await h.api.operate(h.target, '北京大学')).reason, 'selection_not_committed');
   const state = JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target));
-  assert.deepEqual(state.selection, []); assert.equal(state.query, '北京大学');
+  assert.equal(state.selection, null); assert.equal(state.query, '北京大学');
   assert.equal(h.w.ResumeProCustomControls.hasExistingValue(h.target), true, 'protect user-visible input without calling it a selection');
 });
 
@@ -340,4 +340,11 @@ test('cascade child wait follows a remounted owned popup and its busy state',asy
     fresh.lastChild.firstChild.onclick=()=>{h.el.value='广东省 / 深圳市';fresh.hidden=true;};h.w.document.body.append(fresh);setTimeout(()=>fresh.removeAttribute('aria-busy'),30);
   },30);};
   assert.equal((await h.api.operate(h.target,'广东省 / 深圳市')).ok,true);
+});
+
+test('hidden stale aria-selected plus the typed query does not prove commitment',async()=>{
+  const h=harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">',{timeoutMs:250});
+  const popup=h.w.document.createElement('div');popup.id='choices';popup.setAttribute('role','listbox');h.w.document.body.append(popup);
+  h.el.oninput=()=>{popup.innerHTML='<div role="option" aria-selected="true">硕士</div>';popup.firstChild.onclick=()=>{popup.hidden=true;};};
+  assert.equal((await h.api.operate(h.target,'硕士')).reason,'selection_not_committed');
 });

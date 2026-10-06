@@ -5,6 +5,14 @@
   const SHELLS = '.ant-select-dropdown, .ant-cascader-dropdown, .el-select__popper, .el-select-dropdown, .el-cascader__dropdown, .arco-select-popup, .arco-cascader-popup, .arco-trigger-popup';
   const POPUPS = `${SHELLS}, [role="listbox"], [role="tree"]`;
   const trim = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+  function shown(node) {
+    for(let current=node;current;current=current.parentElement){
+      if(current.hidden || current.getAttribute('aria-hidden')==='true') return false;
+      const css=current.ownerDocument.defaultView.getComputedStyle(current);
+      if(css.display==='none' || css.visibility==='hidden') return false;
+    }
+    return true;
+  }
   function describe(target) {
     const el = target?.element || target;
     const root = el?.closest?.(ROOTS) || target?.root || el;
@@ -29,7 +37,10 @@
       const linked = ownedPopup(info, () => true);
       if (linked.ambiguous) return null;
       const popup = linked.popup || info.popup || root.querySelector('[role="listbox"]');
-      if (popup?.isConnected) return Array.from(popup.querySelectorAll('[role="option"][aria-selected="true"]'), node => trim(node.textContent));
+      // Mounted but closed menus can retain highlight/selection attributes from
+      // an earlier attempt. Only a visible menu can supply this transient cue;
+      // blur/final verification needs a persistent value/label signal instead.
+      if (popup?.isConnected && shown(popup)) return Array.from(popup.querySelectorAll('[role="option"][aria-selected="true"]'), node => trim(node.textContent));
       // The input may contain a query even after Escape/blur closed the popup.
       // Without an independent selected-state signal, commitment is unknown.
       return el.value ? null : [];
