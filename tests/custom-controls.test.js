@@ -255,3 +255,17 @@ test('ARIA tree cascader waits for nested groups without treating child names as
   assert.equal((await h.api.operate(h.target, '广东省 / 深圳市 / 南山区')).ok, true);
   assert.equal(h.api.check(h.target).ok, true);
 });
+
+test('an ARIA button with only a hidden value remains a single scanned control', () => {
+  const h = harness('<label id="q">学历</label><button type="button" role="combobox" aria-labelledby="q" aria-controls="choices">请选择<input type="hidden" value=""></button>');
+  const result = scanner.scanPage(h.w.document);
+  assert.equal(result.controls.length, 1); assert.equal(result.controls[0].controlKind, 'custom-select');
+  assert.equal(result.controls[0].label, '学历');
+});
+
+test('a visible ARIA container survives an invisible internal input', () => {
+  const h = harness('<label id="q">学历</label><div role="combobox" tabindex="0" aria-labelledby="q" aria-controls="choices">请选择<input style="display:none"></div>');
+  const result = scanner.scanPage(h.w.document, { isVisible: el => !el.matches('[style="display:none"]') });
+  assert.equal(result.controls.length, 1); assert.equal(result.controls[0].controlKind, 'custom-select');
+  assert.equal(result.controls[0].element.tagName, 'DIV');
+});

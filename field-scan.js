@@ -53,10 +53,14 @@
     return el.tagName === "INPUT" ? String(el.getAttribute("type") || "text").toLowerCase() : "";
   }
 
-  function isControlElement(el) {
+  function isControlElement(el, ctx) {
     if (!el) return false;
     if (!["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) {
-      return hasComboSignal(el) && !el.querySelector("input, textarea, select, [role='combobox']");
+      return hasComboSignal(el) && !Array.from(el.querySelectorAll(CONTROL_SELECTOR)).some(child => {
+        if (ctx && !ctx.isVisible(child)) return false;
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(child.tagName)) return !NON_CONTROL_TYPES.has(inputType(child));
+        return hasComboSignal(child);
+      });
     }
     return !NON_CONTROL_TYPES.has(inputType(el));
   }
@@ -145,7 +149,7 @@
   function boundaryControls(ctx) {
     if (!ctx.boundaries) {
       ctx.boundaries = new Set(Array.from(ctx.doc.querySelectorAll(CONTROL_SELECTOR))
-        .filter((el) => isControlElement(el) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx)));
+        .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx)));
     }
     return ctx.boundaries;
   }
@@ -750,7 +754,7 @@
     const ctx = makeContext(doc, options);
     const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
-      .filter((el) => isControlElement(el) && !ctx.excluded(el) && ctx.isVisible(el));
+      .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el));
     skipped.popup = allControls.filter((el) => isPopupInternal(el, ctx)).length;
 
     const controls = collectLogicalControls(ctx);
@@ -924,10 +928,11 @@
 
   // 单个控件的题目：焦点、敏感字段判断用。没有可靠题目就返回空字符串。
   function labelForElement(element, options = {}) {
-    if (!element?.ownerDocument || !isControlElement(element)) return "";
+    if (!element?.ownerDocument) return "";
     const doc = element.ownerDocument;
     const ctx = makeContext(doc, { ...options, isVisible: options.isVisible || (() => true) });
-    ctx.boundaries = new Set(Array.from(doc.querySelectorAll(CONTROL_SELECTOR)).filter((el) => isControlElement(el) && (el === element || !ctx.excluded(el))));
+    if (!isControlElement(element, ctx)) return "";
+    ctx.boundaries = new Set(Array.from(doc.querySelectorAll(CONTROL_SELECTOR)).filter((el) => isControlElement(el, ctx) && (el === element || !ctx.excluded(el))));
     const type = inputType(element);
     let control;
     if (type === "radio") {
