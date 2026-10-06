@@ -115,14 +115,15 @@
       if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
-      // Button handlers can change type/form ownership during click dispatch.
-      // Cancel its default activation while still letting option handlers run.
-      const preventButtonDefault = event => event.preventDefault();
-      const button = el.tagName === 'BUTTON';
-      if (button) el.addEventListener('click', preventButtonDefault, { capture: true });
+      // Custom option handlers can change type/form/href during click dispatch.
+      // Cancel default activation while still letting selection handlers run.
+      // Native checkbox/radio activation keeps its normal toggle behavior.
+      const preventDefaultActivation = event => event.preventDefault();
+      const cancelDefault = el.tagName === 'BUTTON' || ['custom-select', 'cascader'].includes(ctx.kind);
+      if (cancelDefault) el.addEventListener('click', preventDefaultActivation, { capture: true });
       ctx.activating = true;
       try { if (committing) markWrite(ctx); el.click(); } finally {
-        if (button) el.removeEventListener('click', preventButtonDefault, true);
+        if (cancelDefault) el.removeEventListener('click', preventDefaultActivation, true);
         ctx.activating = false;
       }
       return '';

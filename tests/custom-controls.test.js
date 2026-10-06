@@ -396,3 +396,19 @@ test('popup lookup targets escaped declared ids without scanning all document id
   h.el.onclick=()=>{const popup=addOptions(h);popup.id=id;};
   assert.equal((await h.api.operate(h.target,'硕士')).ok,true);assert.equal(scans,0);
 });
+
+test('a visible highlighted ARIA option after blur is not a persistent commitment',async()=>{
+  const h=harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">',{timeoutMs:250});
+  h.el.onclick=()=>{const popup=addOptions(h);popup.firstChild.textContent='硕士';popup.lastChild.remove();popup.firstChild.onclick=()=>{popup.firstChild.setAttribute('aria-selected','true');};};
+  const outcome=await h.api.operate(h.target,'硕士');assert.equal(outcome.reason,'selection_not_committed');
+});
+test('an INPUT option changing type during click cannot submit',async()=>{
+  const h=harness(button);let submitted=0;const form=h.w.document.querySelector('form');form.id='input-click-form';form.onsubmit=e=>{submitted++;e.preventDefault();};
+  h.el.onclick=()=>{const popup=addOptions(h);popup.innerHTML='<input type="button" role="option" value="硕士">';popup.firstChild.onclick=()=>{popup.firstChild.type='submit';popup.firstChild.setAttribute('form',form.id);h.el.textContent='硕士';popup.hidden=true;};};
+  const outcome=await h.api.operate(h.target,'硕士');assert.equal(outcome.reason,'selection_not_committed');assert.equal(submitted,0);
+});
+test('an anchor option gaining href during click has its default navigation canceled',async()=>{
+  const h=harness(button);let event;
+  h.el.onclick=()=>{const popup=addOptions(h);popup.innerHTML='<a role="option">硕士</a>';popup.firstChild.onclick=e=>{event=e;popup.firstChild.href='https://example.test/side-effect';h.el.textContent='硕士';popup.hidden=true;};};
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);assert.equal(event.defaultPrevented,true);
+});

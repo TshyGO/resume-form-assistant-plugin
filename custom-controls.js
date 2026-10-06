@@ -34,13 +34,8 @@
       if (explicit) return [explicit];
       const hidden = root.querySelectorAll('input[type="hidden"]');
       if (hidden.length === 1) return hidden[0].value ? [String(hidden[0].value)] : [];
-      const linked = ownedPopup(info, () => true);
-      if (linked.ambiguous) return null;
-      const popup = linked.popup || info.popup || root.querySelector('[role="listbox"]');
-      // Mounted but closed menus can retain highlight/selection attributes from
-      // an earlier attempt. Only a visible menu can supply this transient cue;
-      // blur/final verification needs a persistent value/label signal instead.
-      if (popup?.isConnected && shown(popup)) return Array.from(popup.querySelectorAll('[role="option"][aria-selected="true"]'), node => trim(node.textContent));
+      // aria-selected in an open popup can describe visual focus rather than a
+      // committed value. Editable controls always need a persistent signal.
       // The input may contain a query even after Escape/blur closed the popup.
       // Without an independent selected-state signal, commitment is unknown.
       return el.value ? null : [];
