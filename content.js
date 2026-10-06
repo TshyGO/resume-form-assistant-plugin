@@ -1994,10 +1994,10 @@
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           // 日期控件显示的是组件自己的格式（猎聘是「1998年06月」）：交给控件层按面板精度复核，不逐字比较（#236）。
-          filled = element.pickerType
+          // 节点被页面替换的，两种都算未确认。
+          filled = element.element.isConnected && (element.pickerType
             ? Boolean(controlOperator?.check(element)?.ok)
-            : element.element.isConnected
-              && String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value);
+            : String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value));
         }
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
