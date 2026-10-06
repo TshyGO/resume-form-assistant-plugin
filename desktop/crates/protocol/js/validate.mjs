@@ -520,6 +520,12 @@ export function validateResponseForRequest(value, request) {
         value.payload.activeTemplateId.toLowerCase() !== request.payload.templateId.toLowerCase())) {
     throw fail("invalid_payload", "resume.update activeTemplateId does not match requested templateId");
   }
+  // A plugin that predates tiers rejects a response carrying `tier`: its schema copy has
+  // additionalProperties: false. Only a request that asked for a tier may get one back.
+  if (request.messageType === "ai.complete" && value.ok === true && Object.hasOwn(value.payload ?? {}, "tier") &&
+      !Object.hasOwn(request.payload ?? {}, "tier") && request.payload?.purpose !== "analyze") {
+    throw fail("invalid_payload", "ai.complete tier is only returned to a request that asked for one");
+  }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
     const requestedIndex = request.payload?.chunkIndex;

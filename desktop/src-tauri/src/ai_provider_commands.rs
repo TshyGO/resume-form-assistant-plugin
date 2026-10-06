@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ai_credentials::{migrate_legacy_key, CredentialError, CredentialStore};
-use crate::ai_settings::{self, AiProvider, ProviderInput, LEGACY_PROVIDER_ID};
+use crate::ai_settings::{self, AiProvider, ProviderInput, Tier, LEGACY_PROVIDER_ID};
 use crate::commands::CommandError;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -35,6 +35,8 @@ pub struct ProviderView {
 pub struct AiSettingsView {
     pub providers: Vec<ProviderView>,
     pub active_provider_id: Option<String>,
+    /// 强模型（#223）。`None` 表示没设，全部走当前服务商。
+    pub strong_provider_id: Option<String>,
     /// 凭据库读不出来时说明原因，不假装「没配过」。
     pub credential_error: Option<String>,
 }
@@ -114,7 +116,12 @@ pub fn settings_view(data_root: &Path, creds: &dyn CredentialStore) -> AiSetting
             }
         })
         .collect();
-    AiSettingsView { providers, active_provider_id: settings.active_provider_id, credential_error }
+    AiSettingsView {
+        providers,
+        active_provider_id: settings.active_provider_id,
+        strong_provider_id: settings.strong_provider_id,
+        credential_error,
+    }
 }
 
 /// 保存服务商；`key` 非空时顺带存 Key（新建时可以一步填完）。
@@ -185,6 +192,11 @@ pub fn set_active(data_root: &Path, creds: &dyn CredentialStore, id: &str) -> Re
     Ok(settings_view(data_root, creds))
 }
 
+pub fn set_strong(data_root: &Path, creds: &dyn CredentialStore, id: Option<&str>) -> Result<AiSettingsView, CommandError> {
+    ai_settings::set_strong(data_root, id).map_err(settings_error)?;
+    Ok(settings_view(data_root, creds))
+}
+
 fn provider_exists(data_root: &Path, id: &str) -> Result<(), CommandError> {
     let settings = ai_settings::load(data_root);
     if settings.providers.iter().any(|p| p.id == id) {
@@ -209,17 +221,37 @@ pub fn clear_key(data_root: &Path, creds: &dyn CredentialStore, id: &str) -> Res
 
 /// 分析、解析、转发都用它：当前服务商 + 它的 Key。
 pub fn active_with_key(data_root: &Path, creds: &dyn CredentialStore) -> Result<(AiProvider, String), CommandError> {
-    migrate(data_root, creds)?;
+    routed_with_key(data_root, creds, false).1
+}
+
+/// 按档位挑服务商并取它的 Key（#223）。档位在挑出服务商之后就定了：强模型没有 Key
+/// 也照实报 strong，不悄悄换成当前服务商——用户以为发给强模型的内容不能发给别家。
+/// 还没挑出服务商（一个都没配、迁移失败）时档位是 `None`。
+pub fn routed_with_key(
+    data_root: &Path,
+    creds: &dyn CredentialStore,
+    strong: bool,
+) -> (Option<Tier>, Result<(AiProvider, String), CommandError>) {
+    if let Err(err) = migrate(data_root, creds) {
+        return (None, Err(err));
+    }
     let settings = ai_settings::load(data_root);
-    let provider = ai_settings::active(&settings).cloned().ok_or_else(|| CommandError {
-        code: "AI_NOT_CONFIGURED".into(),
-        message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
-    })?;
-    let key = creds.get_key(&provider.id).map_err(credential_error)?.ok_or_else(|| CommandError {
-        code: "AI_NOT_CONFIGURED".into(),
-        message: format!("「{}」还没有 Key，先去设置页填一条。", provider.name),
-    })?;
-    Ok((provider, key))
+    let (provider, tier) = ai_settings::route(&settings, strong);
+    let Some(provider) = provider.cloned() else {
+        return (None, Err(CommandError {
+            code: "AI_NOT_CONFIGURED".into(),
+            message: "还没有配置 AI 服务商，先去设置页添加一个。".into(),
+        }));
+    };
+    let key = match creds.get_key(&provider.id) {
+        Ok(Some(key)) => key,
+        Ok(None) => return (Some(tier), Err(CommandError {
+            code: "AI_NOT_CONFIGURED".into(),
+            message: format!("「{}」还没有 Key，先去设置页填一条。", provider.name),
+        })),
+        Err(err) => return (Some(tier), Err(credential_error(err))),
+    };
+    (Some(tier), Ok((provider, key)))
 }
 
 /// 获取模型用哪把 Key：界面上刚填的优先；否则只有「输入的地址与已保存地址同源
@@ -571,6 +603,35 @@ mod tests {
         let unavailable = UnavailableStore("locked".into());
         let err = active_with_key(dir.path(), &unavailable).unwrap_err();
         assert_eq!(err.code, "CREDENTIAL_STORE_UNAVAILABLE");
+    }
+
+    #[test]
+    fn routing_reports_the_tier_it_chose_even_when_that_provider_has_no_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = MemoryStore::default();
+        let (tier, result) = routed_with_key(dir.path(), &creds, true);
+        assert_eq!((tier, result.unwrap_err().code.as_str()), (None, "AI_NOT_CONFIGURED"));
+
+        let daily = save_provider(dir.path(), &creds, args(None, "https://a.example/v1"), Some("sk-a".into())).unwrap().provider_id;
+        let strong = save_provider(dir.path(), &creds, args(None, "https://b.example/v1"), None).unwrap().provider_id;
+        let (tier, result) = routed_with_key(dir.path(), &creds, true);
+        assert_eq!((tier, result.unwrap().0.id), (Some(Tier::Default), daily.clone()), "没设强模型就退回当前服务商");
+
+        let view = set_strong(dir.path(), &creds, Some(&strong)).unwrap();
+        assert_eq!(view.strong_provider_id.as_deref(), Some(strong.as_str()));
+        let (tier, result) = routed_with_key(dir.path(), &creds, true);
+        assert_eq!(tier, Some(Tier::Strong));
+        assert_eq!(result.unwrap_err().code, "AI_NOT_CONFIGURED", "强模型没有 Key 时不能改用当前服务商的 Key");
+        let (provider, key) = active_with_key(dir.path(), &creds).unwrap();
+        assert_eq!((provider.id, key.as_str()), (daily.clone(), "sk-a"), "当前服务商照常可用");
+
+        set_key(dir.path(), &creds, &strong, "sk-b").unwrap();
+        let (tier, result) = routed_with_key(dir.path(), &creds, true);
+        assert_eq!((tier, result.unwrap().1), (Some(Tier::Strong), "sk-b".into()));
+
+        let view = delete_provider(dir.path(), &creds, &strong).unwrap();
+        assert_eq!(view.strong_provider_id, None);
+        assert_eq!(routed_with_key(dir.path(), &creds, true).0, Some(Tier::Default));
     }
 
     #[test]

@@ -93,6 +93,14 @@ test('AI cancel aborts the matching long request only', async () => {
   assert.deepEqual(await router.handle({ type: 'DESKTOP_AI_CANCEL', requestId: 'call-1' }), { cancelled: false });
 });
 
+test('the router hands a requested tier to the desktop link', async () => {
+  const seen = [];
+  const { router } = await makeRouter({ ai: { complete: async args => { seen.push(args.tier); return { ok: true, text: '[]' }; } } });
+  await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 't-1', purpose: 'fill', tier: 'strong', system: 's', user: 'u' });
+  await router.handle({ type: 'DESKTOP_AI_COMPLETE', requestId: 't-2', purpose: 'fill', system: 's', user: 'u' });
+  assert.deepEqual(seen, ['strong', undefined]);
+});
+
 test('a cancel that arrives before AI completion never opens a native request', async () => {
   let called = false;
   const { router } = await makeRouter({ ai: { complete: async () => { called = true; return { ok: true, text: 'late' }; } } });

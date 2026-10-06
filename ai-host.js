@@ -12,7 +12,7 @@ worker.onmessage = ({ data }) => {
   if (data?.kind === "desktop-complete") {
     chrome.runtime.sendMessage({
       type: "DESKTOP_AI_COMPLETE", requestId: data.callId,
-      purpose: data.purpose, system: data.system, user: data.user
+      purpose: data.purpose, tier: data.tier, system: data.system, user: data.user
     }).then(reply => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply }))
       .catch(() => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply: { ok: false, reason: "unavailable" } }));
     return;

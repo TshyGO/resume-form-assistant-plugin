@@ -47,6 +47,31 @@ test('AI fill keeps local rules and parses only desktop response text', async ()
   assert.doesNotMatch(source, /\bfetch\s*\(/);
 });
 
+test('a fill without a tier sends none and adds nothing to the diagnostics', async () => {
+  const env = worker();
+  const result = await env.run();
+  assert.equal(env.sent.find(item => item.kind === 'desktop-complete').tier, undefined);
+  assert.equal('tierRequested' in result.diagnostics, false);
+  assert.equal('tierUsed' in result.diagnostics, false);
+});
+
+test('a strong re-match asks for the tier and records the tier the desktop used', async () => {
+  const env = worker(() => ({ ok: true, text: '[{"fieldId":"school","value":"大学乙"}]', tier: 'default' }));
+  const result = await env.run({ ...BASE, tier: 'strong' });
+  assert.equal(env.sent.find(item => item.kind === 'desktop-complete').tier, 'strong');
+  assert.equal(result.diagnostics.tierRequested, 'strong');
+  assert.equal(result.diagnostics.tierUsed, 'default');
+
+  const unknown = worker();
+  await unknown.run({ ...BASE, tier: 'turbo' });
+  assert.equal(unknown.sent.find(item => item.kind === 'desktop-complete').tier, undefined, 'an unknown tier is dropped, not forwarded');
+
+  const old = worker(() => ({ ok: false, reason: 'incompatible' }));
+  const failed = await old.run({ ...BASE, tier: 'strong' });
+  assert.match(failed.warning, /用强模型重新匹配需要更新桌面程序/);
+  assert.equal('tierUsed' in failed.diagnostics, false);
+});
+
 test('oversized form prompts are split beneath the UTF-8 user budget', async () => {
   const env = worker(() => ({ ok: true, text: '[]' }));
   const input = {

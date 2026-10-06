@@ -2255,6 +2255,9 @@
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
+      // #223：只有这次指定了档位才写，普通一键填写的诊断不变。
+      ...(["strong", "default"].includes(d.tierRequested) ? [`模型档位：${d.tierUsed === "strong" ? "强"
+        : d.tierUsed === "default" ? (d.tierRequested === "strong" ? "强模型未设置，已退回日常" : "日常") : "未取得"}`] : []),
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
       `敏感字段过滤：${count(d.skippedSecret)}；超大资料跳过：${count(d.skippedOversized)}；无对应资料跳过：${count(d.skippedNoContext)}`,
       `用户 prompt：${count(d.promptBytes)} bytes`,

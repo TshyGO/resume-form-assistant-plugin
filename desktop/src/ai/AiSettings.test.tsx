@@ -11,6 +11,7 @@ const view: AiSettingsView = {
     { id: "p2", name: "通义千问", apiUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen-plus", host: "dashscope.aliyuncs.com", keyConfigured: false },
   ],
   activeProviderId: "p1",
+  strongProviderId: null,
   credentialError: null,
 };
 
@@ -50,6 +51,45 @@ test("切换当前使用", async () => {
   await user.click(within(other).getByRole("button", { name: "设为当前" }));
   await waitFor(() => expect(within(other).getByText("当前使用")).toBeTruthy());
   expect(calls.find((c) => c.command === "set_active_ai_provider_cmd")?.args).toEqual({ id: "p2" });
+});
+
+test("强模型默认不使用，可选一个已保存的服务商，也可改回不使用", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command, args) =>
+    command === "set_strong_ai_provider_cmd" ? { ...view, strongProviderId: (args?.id as string | null) ?? null } : view,
+  );
+  const select = await screen.findByLabelText("强模型（可选）");
+  expect(select).toHaveProperty("value", "");
+  expect(within(select).getByRole("option", { name: "不使用（全部用当前服务商）" })).toBeTruthy();
+
+  await user.selectOptions(select, "p2");
+  await waitFor(() => expect(within(screen.getByRole("listitem", { name: /通义千问/ })).getByText("强模型")).toBeTruthy());
+  expect(screen.getByText("强模型改用「通义千问」。")).toBeTruthy();
+
+  await user.selectOptions(screen.getByLabelText("强模型（可选）"), "");
+  await waitFor(() => expect(screen.queryByText("强模型", { selector: ".pill" })).toBeNull());
+  expect(calls.filter((c) => c.command === "set_strong_ai_provider_cmd").map((c) => c.args)).toEqual([{ id: "p2" }, { id: null }]);
+});
+
+test("强模型那条服务商删掉后，下拉框回到不使用", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "delete_ai_provider_cmd"
+      ? { ...view, providers: [view.providers[0]], strongProviderId: null }
+      : { ...view, strongProviderId: "p2" },
+  );
+  const select = await screen.findByLabelText("强模型（可选）");
+  expect(select).toHaveProperty("value", "p2");
+  const other = screen.getByRole("listitem", { name: /通义千问/ });
+  await user.click(within(other).getByRole("button", { name: "删除" }));
+  await user.click(within(other).getByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(screen.getByLabelText("强模型（可选）")).toHaveProperty("value", ""));
+});
+
+test("没有服务商时不显示强模型选项", async () => {
+  mount(() => ({ providers: [], activeProviderId: null, strongProviderId: null, credentialError: null }));
+  await screen.findByText(/还没有配置 AI 服务商/);
+  expect(screen.queryByLabelText("强模型（可选）")).toBeNull();
 });
 
 test("从预设新建会打开编辑器并预填地址", async () => {

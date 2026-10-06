@@ -107,6 +107,36 @@ test('extract_job passes the plugin schema and an older desktop rejecting it rea
   assert.equal(local.sent.length, 0);
 });
 
+test('a tier is sent only when asked for, and the tier the desktop used comes back', async () => {
+  const plain = await harness({ respond: request => reply(request, { status: 'ok', text: '[]' }) });
+  assert.deepEqual(await plain.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: true, text: '[]' });
+  // Every desktop up to 0.4.2 rejects an unknown key, so a plain fill must not carry one.
+  assert.equal('tier' in plain.sent[0].request.payload, false);
+
+  const strong = await harness({ respond: request => reply(request, { status: 'ok', text: '[]', tier: 'default' }) });
+  assert.deepEqual(await strong.ai.complete({ purpose: 'fill', tier: 'strong', system: 's', user: 'u' }), { ok: true, text: '[]', tier: 'default' });
+  assert.equal(strong.sent[0].request.payload.tier, 'strong');
+
+  const analyze = await harness({ respond: request => reply(request, { status: 'failed', reason: 'timeout', tier: 'strong' }) });
+  assert.deepEqual(await analyze.ai.complete({ purpose: 'analyze', system: 's', user: 'u' }), { ok: false, reason: 'timeout', tier: 'strong' });
+});
+
+test('a desktop older than tiers reads as too old for analyze or a tier, not for a plain fill', async () => {
+  const old = await harness({ respond: request => failure(request, 'invalid_payload') });
+  assert.deepEqual(await old.ai.complete({ purpose: 'analyze', system: 's', user: 'u' }), { ok: false, reason: 'incompatible' });
+  assert.deepEqual(await old.ai.complete({ purpose: 'fill', tier: 'strong', system: 's', user: 'u' }), { ok: false, reason: 'incompatible' });
+  assert.deepEqual(await old.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+
+  // A tier this plugin does not know never leaves the plugin.
+  const local = await harness({ respond: () => { throw new Error('sent'); } });
+  assert.deepEqual(await local.ai.complete({ purpose: 'fill', tier: 'turbo', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+  assert.equal(local.sent.length, 0);
+
+  // A response that carries a tier the request never asked for is refused, not trusted.
+  const stray = await harness({ respond: request => reply(request, { status: 'ok', text: '[]', tier: 'strong' }) });
+  assert.deepEqual(await stray.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+});
+
 test('abort returns cancelled and disconnected desktop returns unavailable', async () => {
   const controller = new AbortController();
   const { ai } = await harness({ respond: () => { controller.abort(); return { cancelled: true }; } });
