@@ -194,6 +194,7 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
+      ctx.startedEditable = ctx.el instanceof HTMLInputElement && !ctx.el.readOnly;
       const custom = ['custom-select', 'cascader'].includes(ctx.kind);
       if (!KINDS.has(ctx.kind) || (custom && !scope.ResumeProCustomControls)) return result(false, 'unsupported_control', ctx);
       if (custom) ctx.nodes = Array.from(new Set([...nodes, scope.ResumeProCustomControls.describe(ctx.entry).root].filter(Boolean)));

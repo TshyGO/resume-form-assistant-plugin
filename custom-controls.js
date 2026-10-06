@@ -37,6 +37,12 @@
     const selector = library === 'antd' ? '.ant-select-selection-item'
       : library === 'element' ? '.el-select__selected-item:not(.el-select__input-wrapper):not(.is-transparent), .el-select__tags-text'
       : library === 'arco' ? '.arco-select-view-value, .arco-select-view-tag, .arco-cascader-view-value' : '';
+    if (library === 'element' && cascade && (info.requireCascadeSignal || !el.readOnly)) {
+      const leaf = info.lastChoice;
+      const checked = leaf?.isConnected && (leaf.getAttribute('aria-checked') === 'true'
+        || leaf.classList.contains('is-checked') || Boolean(leaf.querySelector('input[type="radio"]:checked, .el-radio.is-checked')));
+      if (!checked) return [];
+    }
     if (selector) {
       const values = Array.from(root.querySelectorAll(selector), node => trim(node.textContent)).filter(Boolean);
       if (values.length) return cascade ? values.join(' / ').split(/\s*(?:\/|>|→)\s*/).filter(Boolean) : values;
@@ -44,7 +50,7 @@
       if (library !== 'element' || (!cascade && !el.readOnly)) return [];
     }
     const value = trim(el.tagName === 'INPUT' ? el.value : el.getAttribute('role') === 'combobox' ? el.textContent : '');
-    if (!value || /^(请选择|Select|Please select)$/i.test(value)) return [];
+    if (!value || scope.ResumeProAIHelpers?.isPlaceholderOption(value)) return [];
     return cascade ? value.split(/\s*(?:\/|>|→)\s*/).filter(Boolean) : [value];
   }
   function snapshot(target) {
@@ -126,6 +132,8 @@
   async function perform(ctx, raw, h, state) {
     const info = describe(ctx.entry);
     state.info = info;
+    info.requireCommitSignal = info.library === 'aria' && ctx.startedEditable;
+    info.requireCascadeSignal = info.library === 'element' && info.cascade && ctx.startedEditable;
     if (!info.root || info.multiple || ctx.hints.multiple === true) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
@@ -213,6 +221,7 @@
       const activation = info.library === 'arco' && info.cascade
         ? latest.option.node.querySelector('.arco-cascader-list-item-label') || latest.option.node : latest.option.node;
       state.activated = true;
+      info.lastChoice = latest.option.node;
       const reason = h.click(activation, ctx, true);
       if (reason) return { reason };
       chosenLabels.push(latest.option.text);
@@ -226,9 +235,10 @@
     const accepted = () => {
       const values = selectedTexts(info);
       if (!values || values.length !== chosenLabels.length) return false;
-      const hidden = info.library === 'aria' && info.el.tagName === 'INPUT' && !info.el.readOnly
+      const hidden = info.library === 'aria' && info.el.tagName === 'INPUT' && (!info.el.readOnly || info.requireCommitSignal)
         ? info.root.querySelectorAll('input[type="hidden"]') : [];
-      const expected = hidden.length === 1 ? chosenValues : chosenLabels;
+      const explicitLabel = trim(info.combo.getAttribute('aria-valuetext'));
+      const expected = hidden.length === 1 && !explicitLabel ? chosenValues : chosenLabels;
       if (!values.every((value, index) => h.helpers.normalizeText(value) === h.helpers.normalizeText(expected[index]))) return false;
       return true;
     };

@@ -115,7 +115,7 @@ test('a cascader waits for each child column and commits only the complete path'
     popup.innerHTML = '<div class="el-cascader-menu"><div class="el-cascader-node"><span class="el-cascader-node__label">广东省</span></div></div>';
     popup.firstChild.firstChild.onclick = () => setTimeout(() => {
       const column = h.w.document.createElement('div'); column.className = 'el-cascader-menu'; column.innerHTML = '<div class="el-cascader-node"><span class="el-cascader-node__label">深圳市</span></div>';
-      column.firstChild.onclick = () => { h.el.value = '广东省 / 深圳市'; popup.hidden = true; };
+      column.firstChild.onclick = () => { h.el.value = '广东省 / 深圳市'; column.firstChild.classList.add('is-checked'); popup.hidden = true; };
       popup.append(column);
     }, 25);
     h.w.document.body.append(popup);
@@ -309,4 +309,24 @@ test('opaque displayed state guards exclude popup choices and detect selection c
   assert.deepEqual(scanner.displayedStateForGuard(control),['本科']);
   h.w.document.getElementById('chosen').textContent='硕士';
   assert.deepEqual(scanner.displayedStateForGuard(control),['硕士']);
+});
+
+test('modified placeholder captions are not existing selections', () => {
+  for(const placeholder of ['请选择学历','请选择…','Please select an option','Select a degree']){
+    const h=harness(button.replace('请选择',placeholder));
+    assert.equal(h.w.ResumeProCustomControls.hasExistingValue(h.target),false,placeholder);
+  }
+});
+test('an explicit ARIA label is compared as a label even when a hidden value also exists',async()=>{
+  const h=harness('<div class="custom-select"><input role="combobox" aria-controls="choices" aria-autocomplete="list"><input type="hidden" value=""></div>',{timeoutMs:300});
+  h.target.root=h.el.parentElement;const hidden=h.target.root.querySelector('input[type="hidden"]');
+  const popup=h.w.document.createElement('div');popup.id='choices';popup.setAttribute('role','listbox');h.w.document.body.append(popup);
+  h.el.oninput=()=>{popup.innerHTML='<div role="option" data-value="master">硕士</div>';popup.firstChild.onclick=()=>{hidden.value='master';h.el.setAttribute('aria-valuetext','硕士');popup.hidden=true;};};
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);
+});
+test('editable Element cascader query plus rejected leaf is not commitment',async()=>{
+  const h=harness('<div class="el-cascader"><input role="combobox" aria-controls="choices"></div>',{timeoutMs:200});
+  h.target.controlKind='cascader';h.target.root=h.el.parentElement;h.el.value='广东省';
+  h.target.root.onclick=()=>{const popup=h.w.document.createElement('div');popup.id='choices';popup.className='el-cascader__dropdown';popup.innerHTML='<div class="el-cascader-menu"><div class="el-cascader-node">广东省</div></div>';popup.firstChild.firstChild.onclick=()=>{popup.hidden=true;};h.w.document.body.append(popup);};
+  assert.equal((await h.api.operate(h.target,'广东省')).reason,'selection_not_committed');
 });
