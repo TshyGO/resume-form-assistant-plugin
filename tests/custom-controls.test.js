@@ -330,3 +330,14 @@ test('editable Element cascader query plus rejected leaf is not commitment',asyn
   h.target.root.onclick=()=>{const popup=h.w.document.createElement('div');popup.id='choices';popup.className='el-cascader__dropdown';popup.innerHTML='<div class="el-cascader-menu"><div class="el-cascader-node">广东省</div></div>';popup.firstChild.firstChild.onclick=()=>{popup.hidden=true;};h.w.document.body.append(popup);};
   assert.equal((await h.api.operate(h.target,'广东省')).reason,'selection_not_committed');
 });
+
+test('cascade child wait follows a remounted owned popup and its busy state',async()=>{
+  const h=harness('<div class="el-cascader"><input role="combobox" readonly aria-controls="choices"></div>',{timeoutMs:300});
+  h.target.root=h.el.parentElement;h.target.controlKind='cascader';
+  const create=()=>{const popup=h.w.document.createElement('div');popup.id='choices';popup.className='el-cascader__dropdown';popup.innerHTML='<div class="el-cascader-menu"><div class="el-cascader-node">广东省</div></div>';return popup;};
+  h.el.onclick=()=>{const popup=create();h.w.document.body.append(popup);popup.firstChild.firstChild.onclick=()=>setTimeout(()=>{
+    popup.remove();const fresh=create();fresh.setAttribute('aria-busy','true');fresh.insertAdjacentHTML('beforeend','<div class="el-cascader-menu"><div class="el-cascader-node">深圳市</div></div>');
+    fresh.lastChild.firstChild.onclick=()=>{h.el.value='广东省 / 深圳市';fresh.hidden=true;};h.w.document.body.append(fresh);setTimeout(()=>fresh.removeAttribute('aria-busy'),30);
+  },30);};
+  assert.equal((await h.api.operate(h.target,'广东省 / 深圳市')).ok,true);
+});

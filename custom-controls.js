@@ -213,7 +213,7 @@
       if (latest.reason) return latest;
       if (!info.pathNodes) info.pathNodes = [];
       info.pathNodes[level] = latest.option.node;
-      const previousChildren = info.cascade ? options(popup, info, level + 1, h) : [];
+      const previousChildren = info.cascade ? readOptions(level + 1) : [];
       const parentActive = latest.option.node.getAttribute('aria-expanded') === 'true'
         || latest.option.node.matches('.ant-cascader-menu-item-active, .el-cascader-node.is-active, .arco-cascader-list-item-active');
       // Some cascaders commit parent selections (changeOnSelect/checkStrictly).
@@ -227,7 +227,7 @@
       chosenLabels.push(latest.option.text);
       chosenValues.push(String(latest.option.value));
       if (info.cascade && level < desired.length - 1) {
-        const next = await h.waitUntil(ctx, doc.documentElement, () => options(popup, info, level + 1, h), children => children.length > 0 && (parentActive
+        const next = await h.waitUntil(ctx, doc.documentElement, () => readOptions(level + 1), children => !loading() && children.length > 0 && (parentActive
           || children.length !== previousChildren.length || children.some((child, index) => child.node !== previousChildren[index]?.node || child.value !== previousChildren[index]?.value || child.text !== previousChildren[index]?.text)));
         if (next.reason) return { reason: next.reason === 'verification_timeout' ? 'cascade_timeout' : next.reason };
       }
