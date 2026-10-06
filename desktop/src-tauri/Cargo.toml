@@ -1,6 +1,6 @@
 [package]
 name = "resume-pro-desktop"
-version = "0.4.1"
+version = "0.4.2"
 description = "网申快填 unique-writer host with application manager"
 authors = ["网申快填"]
 edition = "2021"

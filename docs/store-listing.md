@@ -114,6 +114,8 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 - [x] 分类：`Productivity`
 - [x] 语言：`中文（简体）`
 
+**单一用途说明：** 在网申页面填写网申快填桌面端里保存的简历信息，并把岗位保存到桌面端。（草稿来自 #241；后台已填的内容不同时，以后台为准并回写这里。）
+
 **简短描述：** 简历一键快填与投递管理。需配合网申快填桌面端使用。
 
 **详细描述：**
@@ -131,7 +133,8 @@ DOM。`activeTab` 只在用户点击扩展图标之后才给权限，那时候�
 
 ## 5. 上架前还没做完的事
 
-- **Chrome Web Store 发布动作**：item 已建（Draft，ID `diagjmploldedipjdenmecmjokckelkl`），包可以上传。
+- **Chrome Web Store 发布动作**：item ID `diagjmploldedipjdenmecmjokckelkl`。2026-10-07 核对，商店详情页可以直接打开，
+  显示版本 0.4.1、更新于 2026-09-30；可见性（公开或不公开）以 Developer Dashboard 为准。
   `manifest.json` 里的公钥已经固定了这个 ID，本地 unpacked 与 Chrome 商店版是同一个扩展 ID；
   原先担心的「换 ID 会丢 `chrome.storage.local`」因此不再存在，**不需要为上架单独做插件设置的导出 / 导入**。
 - **Edge Add-ons（可选）**：Edge 商店是另一个商店。以后如果要从 Edge 商店发行，先核实 Edge 对同一份公钥 / ID 的处理；
