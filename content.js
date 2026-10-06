@@ -3148,7 +3148,10 @@
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
     });
     // #230's scanner uses date-picker; the #219 operation contract uses date.
-    const entry = target?.controlKind === 'date-picker' ? { ...target, controlKind: 'date' } : target;
+    // Until the custom-select adapter lands, #230's custom-select (autocomplete
+    // included) keeps the text lifecycle it had before #219.
+    const entry = target?.controlKind === 'date-picker' ? { ...target, controlKind: 'date' }
+      : target?.controlKind === 'custom-select' ? { ...target, controlKind: 'text' } : target;
     return controlOperator.operate(entry, value, options);
   }
 

@@ -236,6 +236,19 @@ test("受控表单聚焦后重渲染不会清掉尚未发 input 的值", async (
   assert.equal(input.value, "测试用户");
 });
 
+test("扫描标成自定义下拉的自动完成框，在下拉适配之前仍按文本填写", async () => {
+  const { setElementValue, reason, HTMLInputElement, body } = createHarness();
+  const input = new HTMLInputElement();
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  body.appendChild(input);
+  const entry = { kind: "element", controlKind: "custom-select", element: input, elements: [input], root: input };
+
+  assert.equal(await setElementValue(entry, "北京大学"), true);
+  assert.equal(input.value, "北京大学");
+  assert.equal(reason(input), "");
+});
+
 test("第一次失焦还留着红字时，再补一次点入再点出", async () => {
   const { setElementValue, HTMLElement, HTMLInputElement, body } = createHarness();
   const { input, error } = fieldBox(HTMLElement, HTMLInputElement, body);
