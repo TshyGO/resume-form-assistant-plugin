@@ -78,6 +78,31 @@ test('a failed parent blocks later fields in its cascade group', async () => {
   assert.equal(result.filledCount, 0); assert.equal(childEvents, 0); assert.equal(child.selectedIndex, 0);
 });
 
+test('later field focus changing an earlier binding removes that earlier success', async () => {
+  const late = lateScanner(), stale = new Set();
+  const ctx = loadHighlightHelpers({formElements:[],fieldScan:late.proxy,
+    sendMessage:async()=>({success:true,matches:[{fieldId:'field-0',value:'测试用户'},{fieldId:'field-1',value:'18888888888'}]})});
+  const name = new ctx.HTMLInputElement(), phone = new ctx.HTMLInputElement();
+  phone.focus = () => { stale.add(name); ctx.document.activeElement = phone; };
+  late.holder.current = scanWith([control(name,{label:'姓名'}),control(phone,{label:'电话'})],stale);
+  ctx.helpers.setCurrentStore(store);ctx.helpers.setShadowRoot(shadow().root);
+  const result=await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false,textContent:''}});
+  assert.equal(name.value,'测试用户');assert.equal(phone.value,'18888888888');
+  assert.equal(result.filledCount,1);assert.equal(result.unconfirmedCount,1);
+});
+test('existing opaque displayed selections retain the scanner overwrite protection', async () => {
+  const late = lateScanner(); let confirms=0;
+  const ctx=loadHighlightHelpers({formElements:[],fieldScan:late.proxy,
+    customControls:{snapshot:()=>'{"selection":[],"query":null}',hasExistingValue:()=>false},
+    confirm:()=>{confirms++;return false;},
+    sendMessage:async()=>({success:true,matches:[{fieldId:'field-0',value:'硕士'}]})});
+  const input=new ctx.HTMLInputElement();input.readOnly=true;
+  late.holder.current={...scanWith([control(input,{label:'学历',controlKind:'custom-select'})]),hasDisplayedValue:()=>true};
+  ctx.helpers.setCurrentStore(store);ctx.helpers.setShadowRoot(shadow().root);
+  await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false,textContent:''}});
+  assert.equal(confirms,1);assert.equal(input.value,'');
+});
+
 test("the profile offer lists only reliably titled fields, by their section-qualified names", async () => {
   const late = lateScanner();
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,

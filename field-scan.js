@@ -240,7 +240,7 @@
   // 自定义下拉、级联、自动完成：取最外层像组件根、又只装着这个控件的祖先。
   function customSelectRoot(el, ctx) {
     const ownSignal = hasComboSignal(el);
-    let best = null;
+    let best = attr(el, 'role') === 'combobox' ? el : null;
     let node = el.parentElement;
     for (let depth = 0; node && node !== ctx.body && depth < 5; depth += 1, node = node.parentElement) {
       const tokens = classTokens(node);
@@ -249,6 +249,8 @@
       if (!tokenMatch && !ariaMatch) continue;
       if (!componentScopeOk(node, ctx, 3)) break;
       const library = tokens.some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
+      if (library || ariaMatch) return node;
+      if (best && Array.from(node.querySelectorAll('[role="combobox"]')).some(other => !best.contains(other))) break;
       if (ariaMatch || library || ownSignal || el.readOnly || inputType(el) === "search"
         || node.querySelector("[role='combobox'], [aria-haspopup]:not([aria-haspopup='false']), input[readonly]")) {
         best = node;
@@ -905,9 +907,10 @@
     return Boolean(label) && label === control.label;
   }
 
-  // 自定义下拉选好之后，选中的文字通常显示在组件里而不是 input.value。只回答有没有，不返回内容。
-  function hasDisplayedValue(control, options = {}) {
-    if (!control?.root?.isConnected) return false;
+  // Only the fill's in-memory write guard reads this UI state. It is not included
+  // in scan descriptors, diagnostics, AI requests or persisted fill records.
+  function displayedStateForGuard(control, options = {}) {
+    if (!control?.root?.isConnected) return [];
     const ctx = makeContext(control.root.ownerDocument, options);
     const placeholders = placeholdersOf(control);
     const skip = new Set();
@@ -917,13 +920,17 @@
         if (child.nodeType === 3) {
           const text = squash(child.data);
           if (text) segments.push(text);
-        } else if (child.nodeType === 1 && !skipTextElement(child, ctx, skip)) {
+        } else if (child.nodeType === 1 && !child.matches(POPUP_SELECTOR)
+          && !classTokens(child).some(token => POPUP_TOKEN.test(token)) && !skipTextElement(child, ctx, skip)) {
           walk(child);
         }
       }
     };
     walk(control.root);
-    return segments.some((text) => !isNoiseText(text, placeholders));
+    return segments.filter((text) => !isNoiseText(text, placeholders));
+  }
+  function hasDisplayedValue(control, options = {}) {
+    return displayedStateForGuard(control, options).length > 0;
   }
 
   // 单个控件的题目：焦点、敏感字段判断用。没有可靠题目就返回空字符串。
@@ -952,6 +959,7 @@
   const api = {
     MAX_OFFER_CHARS,
     cleanLabel,
+    displayedStateForGuard,
     hasDisplayedValue,
     isBindingCurrent,
     isNoiseText,

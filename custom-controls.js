@@ -21,7 +21,7 @@
   function selectedTexts(info) {
     const { root, el, library, cascade } = info;
     if (!root?.isConnected) return null;
-    if (library === 'aria' && el.tagName === 'INPUT' && !el.readOnly) {
+    if (library === 'aria' && el.tagName === 'INPUT' && (!el.readOnly || info.requireCommitSignal)) {
       const explicit = trim(info.combo.getAttribute('aria-valuetext'));
       if (explicit) return [explicit];
       const hidden = root.querySelectorAll('input[type="hidden"]');
@@ -150,41 +150,58 @@
     }, Boolean);
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
-    const popup = opened.value.popup; ctx.popup = popup;
+    let popup = opened.value.popup; ctx.popup = popup;
     info.popup = popup;
     const role = popup.getAttribute('role');
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component', optionCount: 0 };
-    const searchInput = info.combo.tagName === 'INPUT' && !info.combo.readOnly ? info.combo
-      : info.root.querySelector('input:not([readonly]):not([type="hidden"])');
+    if (popup.getAttribute('aria-multiselectable') === 'true') return { reason: 'unsupported_control' };
+    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
+      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
+    state.safeSearch = safeSearch;
+    const candidates = [info.combo, ...info.root.querySelectorAll('input'), ...popup.querySelectorAll('input')];
+    const searchInput = candidates.find(input => safeSearch(input) && h.visible(input));
     const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true
       || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
+      || searchInput.getAttribute('role') === 'searchbox' || searchInput.type === 'search'
       || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
     let searchDone = false;
+    const readOptions = level => {
+      if (!popup.isConnected) {
+        const linked = ownedPopup(info, h.visible);
+        if (linked.popup && !linked.ambiguous) { popup = linked.popup; ctx.popup = popup; info.popup = popup; }
+      }
+      return options(popup, info, level, h);
+    };
+    const loading = () => info.combo.getAttribute('aria-busy') === 'true' || popup.getAttribute('aria-busy') === 'true';
     const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
-      const ready = await h.waitUntil(ctx, doc.documentElement, () => options(popup, info, level, h), list => list.length > 0 || (searchable && !searchDone));
+      const ready = await h.waitUntil(ctx, doc.documentElement, () => readOptions(level), list => (!loading() && list.length > 0) || (searchable && !searchDone && list.length === 0));
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
       let found = match(list, desired[level], h.helpers);
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
+        if (!safeSearch(searchInput)) return { reason: 'unsupported_control' };
+        if (!searchInput.isConnected || (!info.root.contains(searchInput) && !popup.contains(searchInput))) return { reason: 'element_disconnected' };
         const signature = list.map(option => `${option.value}:${option.text}`).join('\n');
         state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = desired[level];
+        info.requireCommitSignal = info.library === 'aria';
         h.write(searchInput, desired[level], ctx); h.input(searchInput); searchDone = true;
         let lastSignature = signature, stableSince = Date.now();
         const updated = await h.waitUntil(ctx, doc.documentElement, () => {
-          const current = options(popup, info, level, h);
+          const current = readOptions(level);
           const next = current.map(option => `${option.value}:${option.text}`).join('\n');
           if (next !== lastSignature) { stableSince = Date.now(); lastSignature = next; }
           return current;
-        }, current => lastSignature !== signature && current.length > 0 && Date.now() - stableSince >= 80);
+        }, current => !loading() && lastSignature !== signature && current.length > 0 && Date.now() - stableSince >= 80);
         if (updated.reason) return { reason: updated.reason === 'verification_timeout' ? 'options_timeout' : updated.reason };
         list = updated.value; found = match(list, desired[level], h.helpers);
       }
       ctx.observed.optionCount = Math.min(200, list.length);
       if (found.reason) return found;
       // Re-read immediately before activation: async renders can replace an option.
-      const latest = match(options(popup, info, level, h), desired[level], h.helpers);
+      const latest = match(readOptions(level), desired[level], h.helpers);
+      if (popup.getAttribute('aria-multiselectable') === 'true') return { reason: 'unsupported_control' };
       if (latest.reason) return latest;
       if (!info.pathNodes) info.pathNodes = [];
       info.pathNodes[level] = latest.option.node;
@@ -227,7 +244,8 @@
       // including cleanup. Never undo an attempted semantic selection.
       if (outcome?.reason && !h.stop(ctx)) {
         const input = state.searchInput;
-        if (!state.activated && input?.isConnected && input.value === state.query) {
+        if (!state.activated && input?.isConnected && state.safeSearch?.(input)
+          && (state.info.root.contains(input) || ctx.popup?.contains(input)) && input.value === state.query) {
           h.write(input, state.searchBefore); h.input(input);
         }
         const info = state.info;

@@ -49,6 +49,9 @@
     }
     function stop(ctx, writing = false) {
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
+      if (ctx.nodes.some(el => el instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(el.type))) return 'unsupported_control';
+      if (ctx.kind === 'checkbox' && ctx.el.type !== 'checkbox') return 'unsupported_control';
+      if (ctx.kind === 'radio' && ctx.nodes.some(el => el.type !== 'radio')) return 'unsupported_control';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
@@ -89,14 +92,19 @@
       // Framework options may commit on pointerdown/mousedown, before click.
       // Account for that attempt before dispatching, preserving native activation.
       if (committing && ['custom-select', 'cascader'].includes(ctx.kind)) markWrite(ctx);
-      if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
-      if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mousedown', { bubbles: true }));
+      const dispatch = event => {
+        const previous = ctx.activating;
+        if (committing && ['custom-select', 'cascader'].includes(ctx.kind)) ctx.activating = true;
+        try { el.dispatchEvent(event); } finally { ctx.activating = previous; }
+      };
+      if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
+      if (ViewMouseEvent) dispatch(new ViewMouseEvent('mousedown', { bubbles: true }));
       // A page handler can replace the target, or a cancellation can happen on mousedown.
       const afterPress = stop(ctx, true);
       if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
       if (disabled()) return 'control_disabled';
-      if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
-      if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true }));
+      if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
+      if (ViewMouseEvent) dispatch(new ViewMouseEvent('mouseup', { bubbles: true }));
       const beforeActivation = stop(ctx, true);
       if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
       if (disabled()) return 'control_disabled';
@@ -364,6 +372,10 @@
       // This path only reads the final DOM and never invokes write/stop callbacks.
       try {
         if (saved.ctx.nodes.some(node => node.isConnected === false)) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.nodes.some(node => node instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(node.type))) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'checkbox' && saved.ctx.el.type !== 'checkbox') return result(false, 'element_disconnected', saved.ctx);
+        if (kindOf(saved.ctx.entry, saved.ctx.el) !== saved.ctx.kind) return result(false, 'element_disconnected', saved.ctx);
         if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
         const verdict = saved.inspect?.();
         return result(verdict ? verdict.ok : true, verdict?.reason || '', saved.ctx);

@@ -269,3 +269,44 @@ test('a visible ARIA container survives an invisible internal input', () => {
   assert.equal(result.controls.length, 1); assert.equal(result.controls[0].controlKind, 'custom-select');
   assert.equal(result.controls[0].element.tagName, 'DIV');
 });
+
+test('independent library selects under a select-group are not merged', () => {
+  const h = harness('<div class="select-group"><label id="q1">学历</label><div class="ant-select"><input role="combobox" aria-labelledby="q1"></div><label id="q2">学校</label><div class="ant-select"><input role="combobox" aria-labelledby="q2"></div></div>');
+  const result = scanner.scanPage(h.w.document);
+  assert.deepEqual(result.controls.map(item => item.label), ['学历', '学校']);
+});
+test('plain ARIA siblings under a select-group stay independent', () => {
+  const h = harness('<div class="select-group"><input role="combobox" aria-label="学历"><input role="combobox" aria-label="学校"></div>');
+  assert.equal(scanner.scanPage(h.w.document).controls.length, 2);
+});
+test('multi-select declared on the popup is refused before choosing an option', async () => {
+  const h = harness(button); let writes = 0;
+  h.el.onclick = () => { addOptions(h).setAttribute('aria-multiselectable', 'true'); };
+  assert.equal((await h.api.operate(h.target, '硕士', { onWrite: () => writes++ })).reason, 'unsupported_control');
+  assert.equal(writes, 0); assert.equal(h.el.textContent, '请选择');
+});
+test('a target becoming a password on focus is not written', async () => {
+  const h = harness('<input role="combobox" aria-controls="choices">'); let writes = 0;
+  h.el.onfocus = () => { h.el.type = 'password'; h.el.value = 'existing-fictitious-value'; };
+  assert.equal((await h.api.operate(h.target, '硕士', { onWrite: () => writes++ })).reason, 'unsupported_control');
+  assert.equal(writes, 0); assert.equal(h.el.value, 'existing-fictitious-value');
+});
+test('a searched input becoming readonly still needs actual commitment', async () => {
+  const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 250 });
+  const popup = h.w.document.createElement('div'); popup.id = 'choices'; popup.setAttribute('role','listbox'); h.w.document.body.append(popup);
+  h.el.oninput = () => { popup.innerHTML='<div role="option" aria-selected="false">硕士</div>'; popup.firstChild.onclick=()=>{h.el.readOnly=true;popup.hidden=true;}; };
+  assert.equal((await h.api.operate(h.target, '硕士')).reason, 'selection_not_committed');
+});
+test('busy old options are not treated as the final option set', async () => {
+  const h = harness(button, { timeoutMs: 250 });
+  h.el.onclick = () => { const popup=addOptions(h,['本科']);popup.setAttribute('aria-busy','true');setTimeout(()=>{popup.remove();addOptions(h);},60); };
+  assert.equal((await h.api.operate(h.target,'硕士')).ok, true);
+});
+
+test('opaque displayed state guards exclude popup choices and detect selection changes', () => {
+  const h=harness('<label id="q">学历</label><div class="custom-select"><span id="chosen">本科</span><input readonly role="combobox" aria-labelledby="q"><div role="listbox"><div role="option">硕士</div></div></div>');
+  const control=scanner.scanPage(h.w.document).controls[0];
+  assert.deepEqual(scanner.displayedStateForGuard(control),['本科']);
+  h.w.document.getElementById('chosen').textContent='硕士';
+  assert.deepEqual(scanner.displayedStateForGuard(control),['硕士']);
+});

@@ -1672,7 +1672,8 @@
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
-      return self.ResumeProCustomControls.hasExistingValue(entry);
+      return self.ResumeProCustomControls.hasExistingValue(entry)
+        || Boolean(entry.binding && self.ResumeProFieldScan?.hasDisplayedValue(entry.binding, { isVisible }));
     }
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
     if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected
@@ -1689,7 +1690,11 @@
       ? JSON.stringify(entry.elements.map(el => [el.value, el.checked])) : null;
     const el = entry.element;
     if (!el?.isConnected) return null;
-    if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) return self.ResumeProCustomControls.snapshot(entry);
+    if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
+      const state = self.ResumeProCustomControls.snapshot(entry);
+      return state === null ? null : JSON.stringify([state,
+        entry.binding ? self.ResumeProFieldScan?.displayedStateForGuard?.(entry.binding, { isVisible }) || [] : []]);
+    }
     if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
     if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
     if (el instanceof HTMLSelectElement) {
@@ -1946,7 +1951,8 @@
         if (controlsRechecked) return;
         controlsRechecked = true;
         for (const item of verifiedControls) {
-          const checked = controlOperator?.check(item.element);
+          const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element)
+            : { ok: false, reason: 'element_disconnected' };
           if (checked && !checked.ok) {
             filledCount -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
