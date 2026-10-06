@@ -120,7 +120,9 @@
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component', optionCount: 0 };
     const searchInput = info.combo.tagName === 'INPUT' && !info.combo.readOnly ? info.combo
       : info.root.querySelector('input:not([readonly]):not([type="hidden"])');
-    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true || searchInput.getAttribute('aria-autocomplete') === 'list' || info.root.matches('.ant-select-show-search'));
+    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true
+      || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
+      || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
     let searchDone = false;
     const chosenLabels = [];
     for (let level = 0; level < desired.length; level++) {

@@ -158,3 +158,19 @@ test('Element committed display is read independently of its empty search input'
   assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["硕士"]');
   h.el.value = 'search'; assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["硕士"]');
 });
+
+test('Element filterable remote options are searched without a model hint', async () => {
+  const h = harness('<div class="el-select"><div class="el-select__wrapper is-filterable"><input role="combobox" aria-controls="choices" aria-autocomplete="none"></div></div>', { timeoutMs: 500 });
+  h.target.root = h.el.closest('.el-select');
+  const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); list.hidden = true; h.w.document.body.append(list);
+  h.target.root.onclick = () => { list.hidden = false; };
+  h.el.oninput = () => setTimeout(() => {
+    list.innerHTML = '<div role="option">北京大学</div>';
+    list.firstChild.onclick = () => {
+      const label = h.w.document.createElement('span'); label.className = 'el-select__selected-item'; label.textContent = '北京大学';
+      h.target.root.append(label); h.el.value = ''; list.hidden = true;
+    };
+  }, 35);
+  assert.equal((await h.api.operate(h.target, '北京大学')).ok, true);
+  assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["北京大学"]');
+});
