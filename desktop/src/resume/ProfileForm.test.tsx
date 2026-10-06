@@ -428,3 +428,32 @@ test("保存成功响应晚于插件更高版本事件时仍保留同步入口",
   expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", false);
 });
+
+// #228：网页上的长题目要整句看得到；字段名和内容一样大，保存的仍是单行。
+test("补充字段的长题目整句显示，字段名和内容的框一样高", async () => {
+  const longKey = "在校期间是否有补考、重修情况？如有，请列出具体科目、次数以及当时的原因说明";
+  mount(() => ({ ...record, profile: { ...record.profile, custom: [{ key: longKey, value: "" }] } }));
+  const row = await screen.findByRole("group", { name: longKey });
+  const key = within(row).getByLabelText("字段名") as HTMLTextAreaElement;
+  const value = within(row).getByLabelText("内容") as HTMLTextAreaElement;
+  expect(key.tagName).toBe("TEXTAREA");
+  expect(key.value).toBe(longKey);
+  expect(value.tagName).toBe("TEXTAREA");
+  expect(key.style.height).not.toBe("");
+  expect(key.style.height).toBe(value.style.height);
+});
+
+test("补充字段里回车不换行，粘贴进来的换行变成空格", async () => {
+  const calls = mount((command) => (command === "save_profile_cmd" ? { revision: 4 } : record));
+  const row = await screen.findByRole("group", { name: /户籍派出所/ });
+  const value = within(row).getByLabelText("内容") as HTMLTextAreaElement;
+  await userEvent.click(value);
+  await userEvent.keyboard("第一行{Enter}");
+  expect(value.value).toBe("第一行");
+  await userEvent.paste("甲\n乙");
+  expect(value.value).toBe("第一行甲 乙");
+  await userEvent.click(screen.getByRole("button", { name: "保存我的信息" }));
+  await waitFor(() => expect(calls.some((c) => c.command === "save_profile_cmd")).toBe(true));
+  const saved = calls.find((c) => c.command === "save_profile_cmd")!.args!.profile as { custom: Array<{ key: string; value: string }> };
+  expect(saved.custom.find((c) => c.key === "户籍派出所")?.value).toBe("第一行甲 乙");
+});

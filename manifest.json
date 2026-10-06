@@ -77,6 +77,7 @@
         "resume-data.js",
         "form-agent.js",
         "fill-probe.js",
+        "field-scan.js",
         "sidebar-state.js",
         "content.js"
       ],

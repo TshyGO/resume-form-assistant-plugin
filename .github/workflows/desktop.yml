@@ -34,7 +34,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            desktop/package-lock.json
+            package-lock.json
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
@@ -170,6 +172,10 @@ jobs:
       - name: Release ZIP allowlist
         working-directory: desktop
         run: node --test scripts/check-plugin-release-allowlist.test.js && node scripts/check-plugin-release-allowlist.js
+
+      # 插件测试的开发依赖（jsdom）装在仓库根目录，和 desktop/ 的分开。
+      - name: Install plugin test dependencies
+        run: npm ci
 
       - name: Plugin regression
         run: node --test tests/*.test.js

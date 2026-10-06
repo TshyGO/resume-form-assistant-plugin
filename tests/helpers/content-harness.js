@@ -4,6 +4,54 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+// 填写流程测试用的扫描替身：假 DOM 没有树结构，每个表单控件按旧规则各算一个字段（单选按 name 合并）。
+// 真实的扫描、取名和跳过规则在 field-scan.test.js 里用 jsdom 测。
+function fakeFieldScan() {
+  const labelOf = (element) => String(element.getAttribute?.("data-label")
+    || (element.labels || []).map((label) => label.textContent || "").join(" / ")
+    || element.getAttribute?.("aria-label") || "").trim();
+  return {
+    scanPage(doc, scanOptions = {}) {
+      const elements = Array.from(doc.querySelectorAll("input:not([type='hidden']), textarea, select"))
+        .filter((element) => (!scanOptions.isVisible || scanOptions.isVisible(element)) && !scanOptions.exclude?.(element));
+      const controls = [];
+      const radios = new Map();
+      elements.forEach((element, index) => {
+        if (element.type === "radio") {
+          const name = element.name || `__radio__${index}`;
+          if (!radios.has(name)) {
+            radios.set(name, []);
+            controls.push({ kind: "radio", controlKind: "radio", element, elements: radios.get(name) });
+          }
+          radios.get(name).push(element);
+          return;
+        }
+        controls.push({ kind: "element", controlKind: element.tagName === "SELECT" ? "select" : "text", element, elements: [element] });
+      });
+      [[".ant-picker", "antd"], [".el-date-editor", "element"], ["[class*='date-picker']", "generic"]].forEach(([selector, pickerType]) => {
+        Array.from(doc.querySelectorAll(selector)).forEach((container) => {
+          Array.from(container.querySelectorAll("input:not([type='hidden']):not([disabled])")).forEach((inner) => {
+            const control = controls.find((candidate) => candidate.element === inner);
+            if (control) Object.assign(control, { controlKind: "date-picker", pickerType, pickerRoot: container });
+          });
+        });
+      });
+      controls.forEach((control) => {
+        const label = labelOf(control.element);
+        Object.assign(control, {
+          root: control.pickerRoot || control.element, item: control.element, label, labelSource: label ? "explicit" : "placeholder",
+          section: "", group: "", repeatIndex: 0, offerable: Boolean(label), offerLabel: label, pickerType: control.pickerType || "", rangePart: "",
+          placeholder: control.element.getAttribute?.("placeholder") || ""
+        });
+      });
+      return { controls, skipped: { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0 }, sources: {} };
+    },
+    isBindingCurrent: () => true,
+    hasDisplayedValue: () => false,
+    labelForElement: labelOf
+  };
+}
+
 function loadHighlightHelpers(options = {}) {
   let desktopData = null;
   const timers = [];
@@ -220,6 +268,7 @@ function loadHighlightHelpers(options = {}) {
     navigator: { clipboard: { writeText: async (value) => { clipboardWrites.push(value); } } },
     self: { __RESUME_PRO_TEST__: true, ResumeProFormAgent: options.formAgent, ResumeProAIHelpers: options.aiHelpers,
       ResumeProFillProbe: options.fillProbe, ResumeProFeedback: options.feedback,
+      ResumeProFieldScan: options.fieldScan || fakeFieldScan(),
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -281,4 +330,4 @@ function loadHighlightHelpers(options = {}) {
   };
 }
 
-module.exports = { loadHighlightHelpers };
+module.exports = { loadHighlightHelpers, fakeFieldScan };

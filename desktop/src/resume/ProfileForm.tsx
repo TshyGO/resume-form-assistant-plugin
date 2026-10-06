@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import type { ProfileRecordView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { profileApi } from "./profile.ts";
@@ -23,6 +24,83 @@ function emptyMember(): FamilyMember {
     member[field.id] = "";
   });
   return member;
+}
+
+// 补充字段的一行（#228）：网页上的长题目要整句看得到。字段名和内容用一样宽的自动换行框，
+// 两个框取较高的那个一起撑高，看起来是对齐的一行。保存的仍是单行：回车不换行，粘贴进来的换行变成空格。
+function CustomFieldRow({
+  index,
+  item,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  item: { key: string; value: string };
+  onChange(field: "key" | "value", value: string): void;
+  onRemove(): void;
+}) {
+  const keyRef = useRef<HTMLTextAreaElement>(null);
+  const valueRef = useRef<HTMLTextAreaElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const boxes = [keyRef.current, valueRef.current].filter((box): box is HTMLTextAreaElement => Boolean(box));
+    boxes.forEach((box) => {
+      box.style.height = "auto";
+    });
+    const height = Math.max(...boxes.map((box) => box.scrollHeight + box.offsetHeight - box.clientHeight));
+    boxes.forEach((box) => {
+      box.style.height = `${height}px`;
+    });
+  }, [item.key, item.value, width]);
+
+  // 窗口变宽变窄时文字重新折行，高度跟着重算。
+  useEffect(() => {
+    const box = keyRef.current;
+    if (!box || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => setWidth(box.clientWidth));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+
+  const singleLine = (text: string) => text.replace(/\r?\n/g, " ");
+  const noEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) event.preventDefault();
+  };
+
+  return (
+    <div role="group" aria-label={item.key || `补充字段 ${index + 1}`} className="custom-field-row">
+      {/* 「字段名」「内容」只在列表顶上显示一次，这里留给读屏。 */}
+      <label htmlFor={`custom-${index}-key`}>
+        <span className="sr-only">字段名</span>
+        <textarea
+          ref={keyRef}
+          id={`custom-${index}-key`}
+          rows={1}
+          value={item.key}
+          onKeyDown={noEnter}
+          onChange={(event) => onChange("key", singleLine(event.target.value))}
+        />
+      </label>
+      <label htmlFor={`custom-${index}-value`}>
+        <span className="sr-only">内容</span>
+        <textarea
+          ref={valueRef}
+          id={`custom-${index}-value`}
+          rows={1}
+          value={item.value}
+          onKeyDown={noEnter}
+          onChange={(event) => onChange("value", singleLine(event.target.value))}
+        />
+      </label>
+      <div className="custom-field-actions">
+        <span className="custom-field-status">{item.key && !item.value ? <span className="pill warn">待补充</span> : null}</span>
+        <button type="button" onClick={onRemove}>
+          删除
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function FieldInput({
@@ -375,24 +453,21 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       <fieldset>
         <legend>{profileApi.CUSTOM_GROUP}</legend>
         <p className="muted">从网页上「加到我的信息」的字段会出现在这里，补上内容后下次就能自动填。</p>
-        {profile.custom.map((item, index) => (
-          <div key={index} role="group" aria-label={item.key || `补充字段 ${index + 1}`} className="row">
-            <label htmlFor={`custom-${index}-key`}>
-              字段名
-              <input id={`custom-${index}-key`} value={item.key} onChange={(event) => setCustom(index, "key", event.target.value)} />
-            </label>
-            <label htmlFor={`custom-${index}-value`}>
-              内容
-              <input id={`custom-${index}-value`} value={item.value} onChange={(event) => setCustom(index, "value", event.target.value)} />
-            </label>
-            {item.key && !item.value ? <span className="pill warn">待补充</span> : null}
-            <button
-              type="button"
-              onClick={() => updateProfile({ ...profile, custom: profile.custom.filter((_, i) => i !== index) })}
-            >
-              删除
-            </button>
+        {profile.custom.length ? (
+          <div className="custom-field-head" aria-hidden="true">
+            <span>字段名</span>
+            <span>内容</span>
+            <span />
           </div>
+        ) : null}
+        {profile.custom.map((item, index) => (
+          <CustomFieldRow
+            key={index}
+            index={index}
+            item={item}
+            onChange={(field, value) => setCustom(index, field, value)}
+            onRemove={() => updateProfile({ ...profile, custom: profile.custom.filter((_, i) => i !== index) })}
+          />
         ))}
         <button type="button" onClick={() => updateProfile({ ...profile, custom: [...profile.custom, { key: "", value: "" }] })}>
           添加补充字段
