@@ -16,6 +16,13 @@ Serve the repository root on localhost. Pages:
 - `custom-element.html`
 - `custom-arco.html`
 
+`custom-aria.html` separately covers a delayed portal, updated searchable
+options, a nested ARIA tree cascader, closed-popup rejection and blur rollback.
+Its `startUserEdit()` starts a pending operation on `#user-edit`; send actual
+browser keyboard input while it waits and await `window.userOperation`. The
+result must be `value_changed`, `window.trustedEdit` must be true, and the user's
+text and focus must remain. This distinguishes real input from script events.
+
 In each page, `await runCases()` runs a controlled single select, a three-level
 cascader, and a controlled select which refuses the requested value. The first
 two must return `ok: true`, retain the expected selection after focus changes,
@@ -33,6 +40,9 @@ cancellation, and refusal to reuse a stale child column after a rejected parent.
 
 The adapter dispatches synthetic pointer/mouse events; it does not turn them
 into `isTrusted` user events. Unsupported multi-select shapes fail closed.
+Editable ARIA selections need an independent commitment signal; closing a
+popup with the query still present is insufficient. Internal snapshots keep
+selection and query separately so user input remains protected.
 
 Repository verification:
 

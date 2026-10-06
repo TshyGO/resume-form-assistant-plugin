@@ -2271,9 +2271,12 @@
       const element = control.element;
       // 扫描时的对应关系原样留着，填写和「加到我的信息」用之前拿它复查。
       const binding = control;
-      const common = { controlKind: control.controlKind, root: control.root, binding,
+      const controlKind = control.controlKind === 'select' ? 'native-select'
+        : control.controlKind === 'date-picker' ? 'date' : control.controlKind;
+      const common = { controlKind, root: control.root, binding,
         offerable: control.offerable, offerLabel: control.offerLabel };
       const base = {
+        controlKind,
         label: control.label,
         placeholder: control.placeholder,
         ariaLabel: element.getAttribute("aria-label") || "",
@@ -2306,7 +2309,6 @@
       fieldMap.set(fieldId, { kind: "element", element, ...common });
       fields.push({
         fieldId, ...base,
-        controlKind: control.controlKind,
         dynamicOptions: ["custom-select", "cascader"].includes(control.controlKind),
         name: element.getAttribute("name") || "",
         idAttr: element.id || "",

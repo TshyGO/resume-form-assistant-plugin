@@ -315,7 +315,8 @@
     }
 
     customByRoot.forEach((inputs, root) => {
-      const cascade = root.matches(".ant-cascader, .el-cascader, .arco-cascader") || Boolean(root.querySelector(".ant-cascader, .el-cascader, .arco-cascader"));
+      const cascade = root.matches(".ant-cascader, .el-cascader, .arco-cascader") || Boolean(root.querySelector(".ant-cascader, .el-cascader, .arco-cascader"))
+        || root.getAttribute('aria-haspopup') === 'tree' || primaryInput(inputs).getAttribute('aria-haspopup') === 'tree';
       controls.push({ kind: "element", controlKind: cascade ? "cascader" : "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
     });
 

@@ -234,3 +234,24 @@ test('editable ARIA commitment can be proved by an owned hidden value after popu
   assert.deepEqual(JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target)).selection, ['master']);
   assert.equal(h.api.check(h.target).ok, true);
 });
+
+test('scanner recognizes a readonly ARIA tree combobox as a cascader', () => {
+  const h = harness('<label id="q">籍贯</label><input role="combobox" readonly aria-labelledby="q" aria-haspopup="tree" aria-controls="choices">');
+  const result = scanner.scanPage(h.w.document);
+  assert.equal(result.controls.length, 1); assert.equal(result.controls[0].controlKind, 'cascader');
+});
+test('ARIA tree cascader waits for nested groups without treating child names as parent labels', async () => {
+  const h = harness('<input role="combobox" readonly aria-haspopup="tree" aria-controls="choices">', { timeoutMs: 250 });
+  h.target.controlKind = 'cascader';
+  const doc = h.w.document;
+  const item = (text, next) => {
+    const node = doc.createElement('div'); node.setAttribute('role', 'treeitem'); node.textContent = text;
+    node.onclick = event => { event.stopPropagation(); if (next) setTimeout(() => {
+      node.setAttribute('aria-expanded', 'true'); const group = doc.createElement('div'); group.setAttribute('role', 'group'); group.append(next()); node.append(group);
+    }, 25); else { h.el.value = '广东省 / 深圳市 / 南山区'; node.setAttribute('aria-selected', 'true'); node.closest('[role="tree"]').hidden = true; } };
+    return node;
+  };
+  h.el.onclick = () => { const popup = doc.createElement('div'); popup.id = 'choices'; popup.setAttribute('role', 'tree'); popup.append(item('广东省', () => item('深圳市', () => item('南山区')))); doc.body.append(popup); };
+  assert.equal((await h.api.operate(h.target, '广东省 / 深圳市 / 南山区')).ok, true);
+  assert.equal(h.api.check(h.target).ok, true);
+});

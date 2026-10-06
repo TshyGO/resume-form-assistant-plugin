@@ -76,6 +76,14 @@
   }
   function optionNodes(popup, info, level) {
     if (info.cascade) {
+      if (info.library === 'aria' && popup.getAttribute('role') === 'tree') {
+        const parent = level === 0 ? popup : info.pathNodes?.[level - 1];
+        if (!parent?.isConnected) return [];
+        return Array.from(parent.querySelectorAll('[role="treeitem"]')).filter(node => {
+          const ancestor = node.parentElement.closest('[role="treeitem"]');
+          return level === 0 ? !ancestor : ancestor === parent;
+        });
+      }
       const columns = popup.querySelectorAll('.ant-cascader-menu, .el-cascader-menu, .arco-cascader-list, [role="group"]');
       const column = columns[level];
       return column ? Array.from(column.querySelectorAll('.ant-cascader-menu-item, .el-cascader-node, .arco-cascader-list-item, [role="treeitem"], [role="option"]')) : [];
@@ -89,7 +97,9 @@
   function options(popup, info, level, h) {
     return optionNodes(popup, info, level).filter(h.visible).map(node => {
       const label = node.querySelector('.ant-select-item-option-content, .el-cascader-node__label, .arco-cascader-list-item-label') || node;
-      return { node, text: trim(label.textContent), value: node.getAttribute('data-value') ?? node.getAttribute('value') ?? trim(label.textContent),
+      const text = info.library === 'aria' && info.cascade ? trim(node.getAttribute('aria-label') || Array.from(node.childNodes)
+        .filter(child => child.nodeType !== 1 || !child.matches('[role="group"]')).map(child => child.textContent).join(' ')) : trim(label.textContent);
+      return { node, text, value: node.getAttribute('data-value') ?? node.getAttribute('value') ?? text,
         disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled') || Boolean(node.disabled) };
     });
   }
@@ -176,6 +186,8 @@
       // Re-read immediately before activation: async renders can replace an option.
       const latest = match(options(popup, info, level, h), desired[level], h.helpers);
       if (latest.reason) return latest;
+      if (!info.pathNodes) info.pathNodes = [];
+      info.pathNodes[level] = latest.option.node;
       const previousChildren = info.cascade ? options(popup, info, level + 1, h) : [];
       const parentActive = latest.option.node.getAttribute('aria-expanded') === 'true'
         || latest.option.node.matches('.ant-cascader-menu-item-active, .el-cascader-node.is-active, .arco-cascader-list-item-active');

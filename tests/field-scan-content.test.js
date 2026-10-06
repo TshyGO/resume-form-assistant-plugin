@@ -43,21 +43,38 @@ const store = {
   activeTemplateId: "t"
 };
 
+test('fill descriptors normalize legacy scanner names to the closed control kinds', async () => {
+  const late = lateScanner(); let sent;
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async message => { sent = message; return { success: true, matches: [] }; } });
+  const select = new ctx.HTMLSelectElement(), date = new ctx.HTMLInputElement();
+  select.tagName = 'SELECT';
+  select.options = [];
+  late.holder.current = scanWith([control(select, { controlKind: 'select', label: '姓名' }), control(date, { controlKind: 'date-picker', pickerType: 'element', label: '姓名' })]);
+  ctx.helpers.setCurrentStore(store); ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.ok(sent, JSON.stringify(result));
+  assert.deepEqual(Array.from(sent.formFields, field => field.controlKind), ['native-select', 'date']);
+});
+
 test('a failed parent blocks later fields in its cascade group', async () => {
   const late = lateScanner();
   const aiHelpers = { ...require('../ai-helpers.js'), detectCascadeGroups(fields) {
     fields.forEach((field, index) => { field.cascadeGroup = 'region'; field.cascadeLevel = index; });
   } };
+  let requested = false, requestedFields;
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers,
-    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '未知省' }, { fieldId: 'field-1', value: '深圳市' }] }) });
+    sendMessage: async message => { requested = true; requestedFields = message.formFields; return { success: true, matches: [{ fieldId: 'field-0', value: '未知省' }, { fieldId: 'field-1', value: '深圳市' }] }; } });
   const parent = new ctx.HTMLSelectElement(), child = new ctx.HTMLSelectElement();
+  parent.tagName = child.tagName = 'SELECT';
   parent.options = [{ value: '', text: '请选择' }, { value: 'gd', text: '广东省' }];
   child.options = [{ value: '', text: '请选择' }, { value: 'sz', text: '深圳市' }];
   parent.selectedIndex = child.selectedIndex = 0;
   let childEvents = 0; child.addEventListener('change', () => childEvents++);
   late.holder.current = scanWith([control(parent, { controlKind: 'select', label: '省' }), control(child, { controlKind: 'select', label: '市' })]);
-  ctx.helpers.setCurrentStore(store); ctx.helpers.setShadowRoot(shadow().root);
+  ctx.helpers.setCurrentStore({templates:[{id:'t',name:'模板',groups:[{name:'基本信息',fields:[{key:'省',value:'未知省'},{key:'市',value:'深圳市'}]}]}],activeTemplateId:'t'}); ctx.helpers.setShadowRoot(shadow().root);
   const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(requested, true, JSON.stringify(result)); assert.equal(requestedFields.length, 2);
   assert.equal(result.filledCount, 0); assert.equal(childEvents, 0); assert.equal(child.selectedIndex, 0);
 });
 
