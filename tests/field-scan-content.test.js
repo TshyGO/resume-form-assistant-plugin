@@ -43,6 +43,66 @@ const store = {
   activeTemplateId: "t"
 };
 
+test('fill descriptors normalize legacy scanner names to the closed control kinds', async () => {
+  const late = lateScanner(); let sent;
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async message => { sent = message; return { success: true, matches: [] }; } });
+  const select = new ctx.HTMLSelectElement(), date = new ctx.HTMLInputElement();
+  select.tagName = 'SELECT';
+  select.options = [];
+  late.holder.current = scanWith([control(select, { controlKind: 'select', label: '姓名' }), control(date, { controlKind: 'date-picker', pickerType: 'element', label: '姓名' })]);
+  ctx.helpers.setCurrentStore(store); ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.ok(sent, JSON.stringify(result));
+  assert.deepEqual(Array.from(sent.formFields, field => field.controlKind), ['native-select', 'date']);
+});
+
+test('a failed parent blocks later fields in its cascade group', async () => {
+  const late = lateScanner();
+  const aiHelpers = { ...require('../ai-helpers.js'), detectCascadeGroups(fields) {
+    fields.forEach((field, index) => { field.cascadeGroup = 'region'; field.cascadeLevel = index; });
+  } };
+  let requested = false, requestedFields;
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers,
+    sendMessage: async message => { requested = true; requestedFields = message.formFields; return { success: true, matches: [{ fieldId: 'field-0', value: '未知省' }, { fieldId: 'field-1', value: '深圳市' }] }; } });
+  const parent = new ctx.HTMLSelectElement(), child = new ctx.HTMLSelectElement();
+  parent.tagName = child.tagName = 'SELECT';
+  parent.options = [{ value: '', text: '请选择' }, { value: 'gd', text: '广东省' }];
+  child.options = [{ value: '', text: '请选择' }, { value: 'sz', text: '深圳市' }];
+  parent.selectedIndex = child.selectedIndex = 0;
+  let childEvents = 0; child.addEventListener('change', () => childEvents++);
+  late.holder.current = scanWith([control(parent, { controlKind: 'select', label: '省' }), control(child, { controlKind: 'select', label: '市' })]);
+  ctx.helpers.setCurrentStore({templates:[{id:'t',name:'模板',groups:[{name:'基本信息',fields:[{key:'省',value:'未知省'},{key:'市',value:'深圳市'}]}]}],activeTemplateId:'t'}); ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(requested, true, JSON.stringify(result)); assert.equal(requestedFields.length, 2);
+  assert.equal(result.filledCount, 0); assert.equal(childEvents, 0); assert.equal(child.selectedIndex, 0);
+});
+
+test('later field focus changing an earlier binding removes that earlier success', async () => {
+  const late = lateScanner(), stale = new Set();
+  const ctx = loadHighlightHelpers({formElements:[],fieldScan:late.proxy,
+    sendMessage:async()=>({success:true,matches:[{fieldId:'field-0',value:'测试用户'},{fieldId:'field-1',value:'18888888888'}]})});
+  const name = new ctx.HTMLInputElement(), phone = new ctx.HTMLInputElement();
+  phone.focus = () => { stale.add(name); ctx.document.activeElement = phone; };
+  late.holder.current = scanWith([control(name,{label:'姓名'}),control(phone,{label:'电话'})],stale);
+  ctx.helpers.setCurrentStore(store);ctx.helpers.setShadowRoot(shadow().root);
+  const result=await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false,textContent:''}});
+  assert.equal(name.value,'测试用户');assert.equal(phone.value,'18888888888');
+  assert.equal(result.filledCount,1);assert.equal(result.unconfirmedCount,1);
+});
+test('existing opaque displayed selections retain the scanner overwrite protection', async () => {
+  const late = lateScanner(); let confirms=0;
+  const ctx=loadHighlightHelpers({formElements:[],fieldScan:late.proxy,
+    customControls:{snapshot:()=>'{"selection":[],"query":null}',hasExistingValue:()=>false},
+    confirm:()=>{confirms++;return false;},
+    sendMessage:async()=>({success:true,matches:[{fieldId:'field-0',value:'硕士'}]})});
+  const input=new ctx.HTMLInputElement();input.readOnly=true;
+  late.holder.current={...scanWith([control(input,{label:'学历',controlKind:'custom-select'})]),hasDisplayedValue:()=>true};
+  ctx.helpers.setCurrentStore(store);ctx.helpers.setShadowRoot(shadow().root);
+  await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false,textContent:''}});
+  assert.equal(confirms,1);assert.equal(input.value,'');
+});
+
 test("the profile offer lists only reliably titled fields, by their section-qualified names", async () => {
   const late = lateScanner();
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,

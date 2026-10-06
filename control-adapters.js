@@ -49,7 +49,15 @@
     }
     function stop(ctx, writing = false) {
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
+      if (ctx.nodes.some(el => el instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(el.type))) return 'unsupported_control';
+      if (ctx.kind === 'checkbox' && ctx.el.type !== 'checkbox') return 'unsupported_control';
+      if (ctx.kind === 'radio' && ctx.nodes.some(el => el.type !== 'radio')) return 'unsupported_control';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
+      if (['custom-select', 'cascader'].includes(ctx.kind)) {
+        const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
+        if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled')) return 'control_disabled';
+      }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
       if (ctx.userEdited) { ctx.options.beforeWrite?.(true); return 'value_changed'; }
@@ -75,24 +83,49 @@
     function click(el, ctx, committing = false) {
       const reason = stop(ctx, true);
       if (reason) return reason;
-      if (el.disabled) return 'control_disabled';
+      const disabled = () => el.disabled || Boolean(el.closest?.('[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled'));
+      if (disabled()) return 'control_disabled';
+      // ARIA/component markup does not authorize form submission or reset.
+      const submits = () => ['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)
+        && !(el.tagName === 'BUTTON' && !el.hasAttribute('type') && !el.form);
+      const navigates = () => Boolean(el.closest?.('a[href], area[href]'));
+      if (submits() || navigates()) return 'unsupported_control';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
-      if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
-      if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mousedown', { bubbles: true }));
+      // Framework options may commit on pointerdown/mousedown, before click.
+      // Account for that attempt before dispatching, preserving native activation.
+      if (committing && ['custom-select', 'cascader'].includes(ctx.kind)) markWrite(ctx);
+      const dispatch = event => {
+        const previous = ctx.activating;
+        if (committing && ['custom-select', 'cascader'].includes(ctx.kind)) ctx.activating = true;
+        try { el.dispatchEvent(event); } finally { ctx.activating = previous; }
+      };
+      if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
+      if (ViewMouseEvent) dispatch(new ViewMouseEvent('mousedown', { bubbles: true }));
       // A page handler can replace the target, or a cancellation can happen on mousedown.
       const afterPress = stop(ctx, true);
       if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
-      if (el.disabled) return 'control_disabled';
-      if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
-      if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true }));
+      if (submits() || navigates()) return 'unsupported_control';
+      if (disabled()) return 'control_disabled';
+      if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
+      if (ViewMouseEvent) dispatch(new ViewMouseEvent('mouseup', { bubbles: true }));
       const beforeActivation = stop(ctx, true);
       if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
-      if (el.disabled) return 'control_disabled';
+      if (submits() || navigates()) return 'unsupported_control';
+      if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
+      // Custom option handlers can change type/form/href during click dispatch.
+      // Cancel default activation while still letting selection handlers run.
+      // Native checkbox/radio activation keeps its normal toggle behavior.
+      const preventDefaultActivation = event => event.preventDefault();
+      const cancelDefault = el.tagName === 'BUTTON' || ['custom-select', 'cascader'].includes(ctx.kind);
+      if (cancelDefault) el.addEventListener('click', preventDefaultActivation, { capture: true });
       ctx.activating = true;
-      try { if (committing) markWrite(ctx); el.click(); } finally { ctx.activating = false; }
+      try { if (committing) markWrite(ctx); el.click(); } finally {
+        if (cancelDefault) el.removeEventListener('click', preventDefaultActivation, true);
+        ctx.activating = false;
+      }
       return '';
     }
     // Observe the relevant subtree and also sample properties: .value/.checked changes
@@ -175,12 +208,22 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
-      if (!KINDS.has(ctx.kind) || ['custom-select', 'cascader'].includes(ctx.kind)) return result(false, 'unsupported_control', ctx);
+      ctx.startedEditable = ctx.el instanceof HTMLInputElement && !ctx.el.readOnly;
+      const custom = ['custom-select', 'cascader'].includes(ctx.kind);
+      if (!KINDS.has(ctx.kind) || (custom && !scope.ResumeProCustomControls)) return result(false, 'unsupported_control', ctx);
+      if (custom) ctx.nodes = Array.from(new Set([...nodes, scope.ResumeProCustomControls.describe(ctx.entry).root].filter(Boolean)));
       if (ctx.el && typeof ctx.el === 'object') checks.delete(ctx.el);
       const refused = stop(ctx, true);
       if (refused) return result(false, refused, ctx);
-      const track = event => { if (event.isTrusted && !ctx.activating) ctx.userEdited = true; };
-      for (const node of nodes) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.addEventListener?.(type, track, true);
+      const track = event => {
+        if (!event.isTrusted || ctx.activating) return;
+        if (custom && event.currentTarget === ctx.el.ownerDocument
+          && !ctx.entry.root?.contains(event.target) && !ctx.el.contains(event.target) && !ctx.popup?.contains(event.target)) return;
+        ctx.userEdited = true;
+      };
+      const watched = custom ? Array.from(new Set([...nodes, ctx.entry.root].filter(Boolean))) : nodes;
+      if (custom && ctx.el.ownerDocument) watched.push(ctx.el.ownerDocument);
+      for (const node of watched) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.addEventListener?.(type, track, true);
       try {
         if (['text', 'textarea'].includes(ctx.kind) && !['range', 'color'].includes(ctx.el.type)) return await text(ctx, desiredValue);
         const direct = ['week', 'range', 'color'].includes(ctx.el.type);
@@ -194,7 +237,11 @@
         const afterFocus = stop(ctx, true);
         if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
-        if (ctx.kind === 'radio') {
+        if (custom) {
+          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
+          if (outcome.reason) return result(false, outcome.reason, ctx);
+          accepted = outcome.accepted;
+        } else if (ctx.kind === 'radio') {
           const index = helpers?.findSelectOptionIndex?.(nodes.map(node => ({value:node.value,text:deps.radioLabel?.(node) || node.value,disabled:node.disabled})), desiredValue) ?? -1;
           const chosen = nodes[index];
           if (!chosen) return result(false, 'no_option_match', ctx);
@@ -235,7 +282,7 @@
         }
         ctx.acceptedOnce = accepted();
         if (!direct) blur(ctx.el);
-        const inspect = ctx.kind === 'date' && !direct && deps.inspectText
+        const inspect = ['date', 'custom-select', 'cascader'].includes(ctx.kind) && !direct && deps.inspectText
           ? () => deps.inspectText(ctx.el, String(ctx.el.value ?? ''), true) : null;
         const verified = await verify(ctx, accepted, inspect);
         if (verified.ok) checks.set(ctx.el, { ctx, accepted, inspect });
@@ -244,7 +291,7 @@
         // Page exceptions are untrusted and can contain resume data. Only a fixed code escapes.
         return result(false, stop(ctx) || 'operation_failed', ctx);
       } finally {
-        for (const node of nodes) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.removeEventListener?.(type, track, true);
+        for (const node of watched) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.removeEventListener?.(type, track, true);
       }
     }
 
@@ -340,6 +387,10 @@
       // This path only reads the final DOM and never invokes write/stop callbacks.
       try {
         if (saved.ctx.nodes.some(node => node.isConnected === false)) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.nodes.some(node => node instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(node.type))) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'checkbox' && saved.ctx.el.type !== 'checkbox') return result(false, 'element_disconnected', saved.ctx);
+        if (kindOf(saved.ctx.entry, saved.ctx.el) !== saved.ctx.kind) return result(false, 'element_disconnected', saved.ctx);
         if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
         const verdict = saved.inspect?.();
         return result(verdict ? verdict.ok : true, verdict?.reason || '', saved.ctx);

@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>#222 Arco real components</title>
+<link rel="stylesheet" href="/output/playwright/vendor/arco/package/dist/css/arco.css">
+<script src="/output/playwright/vendor/react/package/umd/react.development.js"></script>
+<script src="/output/playwright/vendor/react-dom/package/umd/react-dom.development.js"></script>
+<script src="/output/playwright/vendor/arco/package/dist/arco.min.js"></script>
+<script src="/ai-helpers.js"></script><script src="/custom-controls.js"></script><script src="/control-adapters.js"></script><script src="/field-scan.js"></script>
+<style>body{padding:30px}label{display:block;margin:25px}.arco-select,.arco-cascader{width:300px}pre{white-space:pre-wrap}</style>
+<h1>Arco React 2.66.16 — fictitious data, no submission</h1><div id="app"></div><button type="button" id="blank">Blur target</button><pre id="results"></pre>
+<script>
+const e=React.createElement;
+const region=[{value:'gd',label:'广东省',children:[{value:'sz',label:'深圳市',children:[{value:'ns',label:'南山区'}]}]}];
+function Demo(){const [degree,setDegree]=React.useState(),[place,setPlace]=React.useState();return e('form',{},
+e('label',{},'学历',e(arco.Select,{id:'degree',value:degree,onChange:setDegree,showSearch:true,options:[{value:'bachelor',label:'本科'},{value:'master',label:'硕士'},{value:'disabled',label:'博士',disabled:true}]})),
+e('label',{},'籍贯',e(arco.Cascader,{id:'region',value:place,onChange:setPlace,options:region})),
+e('label',{},'拒绝选择',e(arco.Select,{id:'reject',value:'',onChange:()=>{},options:[{value:'master',label:'硕士'}]})) );}
+ReactDOM.render(e(Demo),document.getElementById('app'));
+window.runCases=async()=>{const operator=ResumeProControls.create();const results={};const scanned=ResumeProFieldScan.scanPage(document,{isVisible:n=>n.getBoundingClientRect().height>0});
+for(const [id,value,kind] of [['degree','硕士','custom-select'],['region','广东省 / 深圳市 / 南山区','cascader'],['reject','硕士','custom-select']]){
+const host=document.getElementById(id),input=host.matches('input')?host:host.querySelector('input'),target=scanned.controls.find(control=>control.elements.includes(input));if(!target || target.controlKind!==kind || !target.root.contains(input))throw new Error('Scanner classification/root mismatch: '+id);results[id]=await operator.operate(target,value);document.getElementById('blank').focus();results[id].final=operator.check(target);results[id].snapshot=ResumeProCustomControls.snapshot(target);
+} results.scan=ResumeProFieldScan.scanPage(document,{isVisible:n=>n.getBoundingClientRect().height>0}).controls.map(n=>({label:n.label,kind:n.controlKind}));document.getElementById('results').textContent=JSON.stringify(results,null,2);return results;};
+</script>

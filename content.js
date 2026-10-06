@@ -67,7 +67,13 @@
     verification_timeout: "尚未确认页面已接受",
     unsupported_control: "控件暂不支持",
     no_option_match: "没有匹配的选项",
-    selection_not_committed: "日期选择未提交",
+    selection_not_committed: "选项选择未提交",
+    options_not_rendered: "没有发现选项",
+    options_timeout: "等待选项更新超时",
+    ambiguous_option: "选项存在歧义",
+    ambiguous_popup: "无法确定控件弹层",
+    cascade_timeout: "等待下一级选项超时",
+    cascade_parent_failed: "上一级选择失败",
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     operation_failed: "控件操作失败",
@@ -1657,6 +1663,7 @@
 
   function isAssistedTextField(entry) {
     const el = entry.element;
+    if (["custom-select", "cascader"].includes(entry.controlKind)) return false;
     return !el.disabled && !el.readOnly && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && ["text", "email", "tel", "url", "search"].includes(el.type)));
   }
 
@@ -1664,6 +1671,10 @@
     if (entry.kind === "radio") return entry.elements.some(el => el.checked);
     const el = entry.element;
     if (!el?.isConnected) return true;
+    if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
+      return self.ResumeProCustomControls.hasExistingValue(entry)
+        || Boolean(entry.binding && self.ResumeProFieldScan?.hasDisplayedValue(entry.binding, { isVisible }));
+    }
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
     if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected
       && !(option.value === "" && self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled })));
@@ -1679,6 +1690,11 @@
       ? JSON.stringify(entry.elements.map(el => [el.value, el.checked])) : null;
     const el = entry.element;
     if (!el?.isConnected) return null;
+    if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
+      const state = self.ResumeProCustomControls.snapshot(entry);
+      return state === null ? null : JSON.stringify([state,
+        entry.binding ? self.ResumeProFieldScan?.displayedStateForGuard?.(entry.binding, { isVisible }) || [] : []]);
+    }
     if (el.type === "checkbox" || el.type === "radio") return JSON.stringify(el.checked);
     if (el.multiple && el.options) return JSON.stringify(Array.from(el.options, option => [option.value, option.selected]));
     if (el instanceof HTMLSelectElement) {
@@ -1935,7 +1951,8 @@
         if (controlsRechecked) return;
         controlsRechecked = true;
         for (const item of verifiedControls) {
-          const checked = controlOperator?.check(item.element);
+          const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element)
+            : { ok: false, reason: 'element_disconnected' };
           if (checked && !checked.ok) {
             filledCount -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
@@ -1944,6 +1961,7 @@
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.()
         && location.href === fillUrl && session === fillSession;
+      const failedCascadeGroups = new Set();
       for (const match of sortedMatches) {
         if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
@@ -1953,6 +1971,8 @@
         if (!element) continue;
         // 匹配期间页面可能展开、重渲染：控件已经不在原来的题目下，就不按旧的对应关系写。
         if (!isFieldBindingCurrent(element)) {
+          const stale = fieldMetaMap.get(match.fieldId);
+          if (stale?.cascadeGroup !== undefined) failedCascadeGroups.add(stale.cascadeGroup);
           if (assisted) {
             unconfirmedCount += 1;
           } else {
@@ -1977,10 +1997,15 @@
           return false;
         };
         const fieldMeta = fieldMetaMap.get(match.fieldId);
+        if (fieldMeta?.cascadeGroup !== undefined && failedCascadeGroups.has(fieldMeta.cascadeGroup)) {
+          noteControlFailure(element, fieldMeta, match.value, 'cascade_parent_failed');
+          continue;
+        }
         // Host-owned accounting callback: a guard refusal before any write is
         // skipped, while an interrupted attempted write remains unconfirmed.
         let writeAttempted = false;
         const onWrite = () => { writeAttempted = true; };
+        const controlCurrent = () => isCurrent() && isFieldBindingCurrent(element);
         const stopInterruptedControl = () => {
           if (!overwriteDeclined && isCurrent()) return;
           cancelRequested = true;
@@ -1989,7 +2014,7 @@
             ? "字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"
             : "已停止填写，请核对网页。");
         };
-        let filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+        let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
         stopInterruptedControl();
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
@@ -2006,7 +2031,7 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
             stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
@@ -2016,11 +2041,12 @@
           filledCount += 1;
           verifiedControls.push({ element, fieldMeta, value: match.value });
           highlightFilledField(element, match.value);
-          if (element.kind === "element" && !element.pickerType) {
+          if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
           }
         } else {
           noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -2254,9 +2280,12 @@
       const element = control.element;
       // 扫描时的对应关系原样留着，填写和「加到我的信息」用之前拿它复查。
       const binding = control;
-      const common = { controlKind: control.controlKind, root: control.root, binding,
+      const controlKind = control.controlKind === 'select' ? 'native-select'
+        : control.controlKind === 'date-picker' ? 'date' : control.controlKind;
+      const common = { controlKind, root: control.root, binding,
         offerable: control.offerable, offerLabel: control.offerLabel };
       const base = {
+        controlKind,
         label: control.label,
         placeholder: control.placeholder,
         ariaLabel: element.getAttribute("aria-label") || "",
@@ -2289,10 +2318,12 @@
       fieldMap.set(fieldId, { kind: "element", element, ...common });
       fields.push({
         fieldId, ...base,
+        dynamicOptions: ["custom-select", "cascader"].includes(control.controlKind),
         name: element.getAttribute("name") || "",
         idAttr: element.id || "",
         tagName: element.tagName.toLowerCase(),
-        inputType: element instanceof HTMLInputElement ? element.type || "text" : element.tagName.toLowerCase(),
+        inputType: ["custom-select", "cascader"].includes(control.controlKind) ? "select"
+          : element instanceof HTMLInputElement ? element.type || "text" : element.tagName.toLowerCase(),
         options: element instanceof HTMLSelectElement
           ? Array.from(element.options).map((option) => option.text.trim()).filter(Boolean)
           : []
@@ -3151,10 +3182,7 @@
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
     });
     // #230's scanner uses date-picker; the #219 operation contract uses date.
-    // Until the custom-select adapter lands, #230's custom-select (autocomplete
-    // included) keeps the text lifecycle it had before #219.
-    const entry = target?.controlKind === 'date-picker' ? { ...target, controlKind: 'date' }
-      : target?.controlKind === 'custom-select' ? { ...target, controlKind: 'text' } : target;
+    const entry = target?.controlKind === 'date-picker' ? { ...target, controlKind: 'date' } : target;
     return controlOperator.operate(entry, value, options);
   }
 

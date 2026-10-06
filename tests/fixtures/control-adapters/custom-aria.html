@@ -1,0 +1,30 @@
+<!doctype html><meta charset="utf-8"><title>#222 ARIA behavior fixture</title>
+<script src="/ai-helpers.js"></script><script src="/custom-controls.js"></script><script src="/control-adapters.js"></script><script src="/field-scan.js"></script>
+<style>body{padding:25px;font-family:sans-serif}label{display:block;margin:18px}input,button{margin-left:12px}pre{white-space:pre-wrap}[role=option],[role=treeitem]{padding:8px}[role=listbox],[role=tree]{background:#eee;border:1px solid #999}</style>
+<h1>ARIA portal, search, nested tree and rejection — fictitious data</h1><form>
+<label for="portal">学历</label><button id="portal" type="button" role="combobox" aria-controls="portal-list" aria-expanded="false">请选择</button>
+<label for="search">学校</label><input id="search" role="combobox" aria-controls="search-list" aria-autocomplete="list" aria-expanded="false">
+<label for="tree">籍贯</label><input id="tree" role="combobox" readonly aria-controls="tree-list" aria-haspopup="tree">
+<label for="reject">拒绝提交</label><input id="reject" role="combobox" aria-controls="reject-list" aria-autocomplete="list" aria-expanded="false">
+<label for="rollback">失焦回滚</label><button id="rollback" type="button" role="combobox" aria-controls="rollback-list">请选择</button>
+<label for="user-edit">用户修改保护</label><input id="user-edit" role="combobox" aria-controls="user-edit-list" aria-autocomplete="list">
+</form><pre id="results"></pre>
+<script>
+const byId=id=>document.getElementById(id);
+function list(id,role='listbox'){byId(id+'-list')?.remove();const popup=document.createElement('div');popup.id=id+'-list';popup.setAttribute('role',role);document.body.append(popup);return popup;}
+function choose(popup,label,select){const node=document.createElement('div');node.setAttribute('role','option');node.setAttribute('aria-selected','false');node.textContent=label;node.onclick=()=>{select(node);popup.hidden=true;};popup.append(node);return node;}
+for(const id of ['portal','rollback']){
+ const el=byId(id);el.onclick=()=>{el.setAttribute('aria-expanded','true');setTimeout(()=>{const popup=list(id);choose(popup,'硕士',node=>{el.textContent='硕士';node.setAttribute('aria-selected','true');el.setAttribute('aria-expanded','false');});const disabled=choose(popup,'博士',()=>{});disabled.setAttribute('aria-disabled','true');},id==='portal'?300:0);};
+ el.onblur=()=>{const popup=byId(id+'-list');if(popup)popup.hidden=true;if(id==='rollback')setTimeout(()=>el.textContent='请选择',60);};
+}
+for(const id of ['search','reject','user-edit']){
+ const el=byId(id);el.onclick=()=>{if(id==='user-edit')setTimeout(()=>list(id),900);else list(id);el.setAttribute('aria-expanded','true');};
+ el.oninput=event=>{if(id==='user-edit')window.trustedEdit=event.isTrusted;const popup=byId(id+'-list');if(!popup)return;popup.replaceChildren();setTimeout(()=>choose(popup,'北京大学',node=>{if(id!=='reject'){el.value='北京大学';el.setAttribute('aria-valuetext','北京大学');node.setAttribute('aria-selected','true');}el.setAttribute('aria-expanded','false');}),120);};
+ el.onblur=()=>{const popup=byId(id+'-list');if(popup)popup.hidden=true;};
+}
+const treeItem=(text,next)=>{const node=document.createElement('div');node.setAttribute('role','treeitem');node.textContent=text;node.onclick=event=>{event.stopPropagation();if(next)setTimeout(()=>{node.setAttribute('aria-expanded','true');const group=document.createElement('div');group.setAttribute('role','group');group.append(next());node.append(group);},150);else{byId('tree').value='广东省 / 深圳市 / 南山区';node.setAttribute('aria-selected','true');node.closest('[role=tree]').hidden=true;}};return node;};
+byId('tree').onclick=()=>list('tree','tree').append(treeItem('广东省',()=>treeItem('深圳市',()=>treeItem('南山区'))));
+function target(id){const element=byId(id);return {kind:'element',element,root:element,controlKind:id==='tree'?'cascader':'custom-select'};}
+window.runCases=async()=>{const op=ResumeProControls.create(),results={};for(const [id,value] of [['portal','硕士'],['search','北京大学'],['tree','广东省 / 深圳市 / 南山区'],['reject','北京大学'],['rollback','硕士']]){const entry=target(id);results[id]=await op.operate(entry,value);results[id].final=op.check(entry);results[id].state=JSON.parse(ResumeProCustomControls.snapshot(entry));}results.scan=ResumeProFieldScan.scanPage(document,{isVisible:n=>n.getBoundingClientRect().height>0}).controls.map(n=>({label:n.label,kind:n.controlKind}));byId('results').textContent=JSON.stringify(results,null,2);return results;};
+window.startUserEdit=()=>{window.trustedEdit=false;window.userOperation=ResumeProControls.create().operate(target('user-edit'),'北京大学');};
+</script>

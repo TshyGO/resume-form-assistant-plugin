@@ -3,7 +3,7 @@
 // 再找每个控件所在的最小表单项，题目只从明确关联或这一项里取，不跨到别的题目借字。
 // 占位文字、字数计数器、帮助说明、校验错误都不能当字段名；对不上题目的控件直接跳过。
 (function attachResumeProFieldScan(globalScope) {
-  const CONTROL_SELECTOR = "input, textarea, select";
+  const CONTROL_SELECTOR = "input, textarea, select, [role='combobox'], button[aria-haspopup='listbox']";
   const NON_CONTROL_TYPES = new Set(["hidden", "button", "submit", "reset", "image"]);
   const DATE_TYPES = new Set(["date", "month", "time", "datetime-local", "week"]);
   // 这几类控件的自带文字是选项本身，不能当题目。
@@ -53,8 +53,15 @@
     return el.tagName === "INPUT" ? String(el.getAttribute("type") || "text").toLowerCase() : "";
   }
 
-  function isControlElement(el) {
-    if (!el || !["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return false;
+  function isControlElement(el, ctx) {
+    if (!el) return false;
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) {
+      return hasComboSignal(el) && !Array.from(el.querySelectorAll(CONTROL_SELECTOR)).some(child => {
+        if (ctx && !ctx.isVisible(child)) return false;
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(child.tagName)) return !NON_CONTROL_TYPES.has(inputType(child));
+        return hasComboSignal(child);
+      });
+    }
     return !NON_CONTROL_TYPES.has(inputType(el));
   }
 
@@ -142,7 +149,7 @@
   function boundaryControls(ctx) {
     if (!ctx.boundaries) {
       ctx.boundaries = new Set(Array.from(ctx.doc.querySelectorAll(CONTROL_SELECTOR))
-        .filter((el) => isControlElement(el) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx)));
+        .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx)));
     }
     return ctx.boundaries;
   }
@@ -206,7 +213,7 @@
     let inputs = 0;
     for (const el of node.querySelectorAll(CONTROL_SELECTOR)) {
       if (!boundaries.has(el)) continue;
-      if (el.tagName !== "INPUT" || CHOICE_TYPES.has(inputType(el)) || inputType(el) === "file") return false;
+      if ((el.tagName !== "INPUT" && !hasComboSignal(el)) || CHOICE_TYPES.has(inputType(el)) || inputType(el) === "file") return false;
       inputs += 1;
     }
     return inputs <= maxInputs;
@@ -233,7 +240,7 @@
   // 自定义下拉、级联、自动完成：取最外层像组件根、又只装着这个控件的祖先。
   function customSelectRoot(el, ctx) {
     const ownSignal = hasComboSignal(el);
-    let best = null;
+    let best = attr(el, 'role') === 'combobox' ? el : null;
     let node = el.parentElement;
     for (let depth = 0; node && node !== ctx.body && depth < 5; depth += 1, node = node.parentElement) {
       const tokens = classTokens(node);
@@ -242,6 +249,8 @@
       if (!tokenMatch && !ariaMatch) continue;
       if (!componentScopeOk(node, ctx, 3)) break;
       const library = tokens.some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
+      if (library || ariaMatch) return node;
+      if (best && Array.from(node.querySelectorAll('[role="combobox"]')).some(other => !best.contains(other))) break;
       if (ariaMatch || library || ownSignal || el.readOnly || inputType(el) === "search"
         || node.querySelector("[role='combobox'], [aria-haspopup]:not([aria-haspopup='false']), input[readonly]")) {
         best = node;
@@ -312,7 +321,9 @@
     }
 
     customByRoot.forEach((inputs, root) => {
-      controls.push({ kind: "element", controlKind: "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
+      const cascade = root.matches(".ant-cascader, .el-cascader, .arco-cascader") || Boolean(root.querySelector(".ant-cascader, .el-cascader, .arco-cascader"))
+        || root.getAttribute('aria-haspopup') === 'tree' || primaryInput(inputs).getAttribute('aria-haspopup') === 'tree';
+      controls.push({ kind: "element", controlKind: cascade ? "cascader" : "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
     });
 
     pickerInputs.forEach((inputs, root) => {
@@ -745,7 +756,7 @@
     const ctx = makeContext(doc, options);
     const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
-      .filter((el) => isControlElement(el) && !ctx.excluded(el) && ctx.isVisible(el));
+      .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el));
     skipped.popup = allControls.filter((el) => isPopupInternal(el, ctx)).length;
 
     const controls = collectLogicalControls(ctx);
@@ -896,9 +907,10 @@
     return Boolean(label) && label === control.label;
   }
 
-  // 自定义下拉选好之后，选中的文字通常显示在组件里而不是 input.value。只回答有没有，不返回内容。
-  function hasDisplayedValue(control, options = {}) {
-    if (!control?.root?.isConnected) return false;
+  // Only the fill's in-memory write guard reads this UI state. It is not included
+  // in scan descriptors, diagnostics, AI requests or persisted fill records.
+  function displayedStateForGuard(control, options = {}) {
+    if (!control?.root?.isConnected) return [];
     const ctx = makeContext(control.root.ownerDocument, options);
     const placeholders = placeholdersOf(control);
     const skip = new Set();
@@ -908,21 +920,26 @@
         if (child.nodeType === 3) {
           const text = squash(child.data);
           if (text) segments.push(text);
-        } else if (child.nodeType === 1 && !skipTextElement(child, ctx, skip)) {
+        } else if (child.nodeType === 1 && !child.matches(POPUP_SELECTOR)
+          && !classTokens(child).some(token => POPUP_TOKEN.test(token)) && !skipTextElement(child, ctx, skip)) {
           walk(child);
         }
       }
     };
     walk(control.root);
-    return segments.some((text) => !isNoiseText(text, placeholders));
+    return segments.filter((text) => !isNoiseText(text, placeholders));
+  }
+  function hasDisplayedValue(control, options = {}) {
+    return displayedStateForGuard(control, options).length > 0;
   }
 
   // 单个控件的题目：焦点、敏感字段判断用。没有可靠题目就返回空字符串。
   function labelForElement(element, options = {}) {
-    if (!element?.ownerDocument || !isControlElement(element)) return "";
+    if (!element?.ownerDocument) return "";
     const doc = element.ownerDocument;
     const ctx = makeContext(doc, { ...options, isVisible: options.isVisible || (() => true) });
-    ctx.boundaries = new Set(Array.from(doc.querySelectorAll(CONTROL_SELECTOR)).filter((el) => isControlElement(el) && (el === element || !ctx.excluded(el))));
+    if (!isControlElement(element, ctx)) return "";
+    ctx.boundaries = new Set(Array.from(doc.querySelectorAll(CONTROL_SELECTOR)).filter((el) => isControlElement(el, ctx) && (el === element || !ctx.excluded(el))));
     const type = inputType(element);
     let control;
     if (type === "radio") {
@@ -942,6 +959,7 @@
   const api = {
     MAX_OFFER_CHARS,
     cleanLabel,
+    displayedStateForGuard,
     hasDisplayedValue,
     isBindingCurrent,
     isNoiseText,

@@ -78,7 +78,7 @@
     + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
     + "static html htm shtml php jsp aspx asp do action").split(" "));
   const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "other"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
