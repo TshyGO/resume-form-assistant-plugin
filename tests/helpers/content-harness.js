@@ -287,6 +287,8 @@ function loadHighlightHelpers(options = {}) {
 
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "..", "content.js"), "utf8");
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "..", "control-adapters.js"), "utf8"), context);
+  // 假 DOM 造不出真实日历：需要时用替身代替控件层，只测 content.js 怎么用它的结果。
+  if (options.controls) context.self.ResumeProControls = options.controls;
   vm.runInNewContext(contentJs, context);
   context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
   const helpers = context.self.ResumeProHighlightTest;

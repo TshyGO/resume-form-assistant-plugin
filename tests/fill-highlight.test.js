@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { loadHighlightHelpers } = require("./helpers/content-harness.js");
+const { loadHighlightHelpers, fakeFieldScan } = require("./helpers/content-harness.js");
 
 test("injects highlight styles into the page document", () => {
   const { helpers, styleElements } = loadHighlightHelpers();
@@ -308,6 +308,78 @@ test("assisted filling excludes existing and unrelated values, including user ed
   assert.equal(sent.formFields[0].fieldId, 'field-1');
   assert.deepEqual(formElements.map(el => el.value), ['已有内容', '用户在等待时输入', '']);
 });
+
+// #236：辅助新增填完一项后等 50ms 再复查。日期控件显示的是组件自己的格式，要按控件层的复核算，
+// 不拿「1998年06月」和简历里的「1998-06」逐字比较；文本框照旧逐字比较。
+// beforeRecheck 在复查前改动页面：清空值、替换节点。
+async function runAssistedFill({ picker, beforeRecheck = () => {}, controls, value }) {
+  const formElements = [];
+  const fieldScan = { ...fakeFieldScan() };
+  const scanPage = fieldScan.scanPage;
+  fieldScan.scanPage = (doc, scanOptions) => {
+    const scan = scanPage(doc, scanOptions);
+    if (picker) Object.assign(scan.controls[0], { controlKind: 'date-picker', pickerType: 'antd' });
+    return scan;
+  };
+  const { helpers, timers, HTMLInputElement } = loadHighlightHelpers({ formElements, fieldScan, controls,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value }] }) });
+  const input = new HTMLInputElement();
+  formElements.push(input);
+  const status = { textContent: '', className: '' };
+  helpers.setShadowRoot({ querySelector: selector => selector === '#resume-pro-status' ? status : null, querySelectorAll: () => [] });
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '工作经历', fields: [{ key: '入职时间', value }] }] }], activeTemplateId: 'one' });
+  let done = false;
+  const pending = helpers.handleAiFillClick({ currentTarget: { disabled: false } }, { scopes: [{ isConnected: true, contains: () => true }] })
+    .finally(() => { done = true; });
+  for (let turn = 0; turn < 200 && !done; turn++) {
+    await new Promise(resolve => setImmediate(resolve));
+    for (const timer of timers) {
+      if (timer.delay !== 50 || timer.cleared || timer.fired) continue;
+      timer.fired = true;
+      beforeRecheck(input);
+      timer.callback();
+    }
+  }
+  return { result: await pending, status, input };
+}
+
+// 控件层替身：日历提交后输入框显示组件格式，check() 只看值还在不在，故意不查节点是否已被替换。
+function calendarControls(displayed) {
+  return { create: () => ({
+    operate: async target => { target.element.value = displayed; return { ok: true, reason: '', observed: {} }; },
+    check: target => target.element.value === displayed ? { ok: true, reason: '' } : { ok: false, reason: 'value_reverted' }
+  }) };
+}
+const clear = input => { input.value = ''; };
+const replace = input => { input.isConnected = false; };
+
+test('an assisted date picker committed through the calendar counts as verified despite its display format', async () => {
+  const { result, status, input } = await runAssistedFill({ picker: true, value: '1998-06', controls: calendarControls('1998年06月') });
+  assert.equal(input.value, '1998年06月');
+  assert.equal(result.filledCount, 1);
+  assert.equal(result.unconfirmedCount, 0);
+  assert.equal(result.outcome, 'success');
+  assert.equal(status.textContent, '辅助填写：已验证 1 项。');
+});
+
+for (const [change, beforeRecheck] of [['cleared', clear], ['replaced', replace]]) {
+  test(`an assisted date picker ${change} after the calendar commit stays unconfirmed`, async () => {
+    const { result, status } = await runAssistedFill({ picker: true, beforeRecheck, value: '1998-06', controls: calendarControls('1998年06月') });
+    assert.equal(result.filledCount, 0);
+    assert.equal(result.unconfirmedCount, 1);
+    assert.equal(result.outcome, 'partial');
+    assert.equal(status.textContent, '辅助填写：已验证 0 项。1 项未确认，请核对网页。');
+  });
+}
+
+for (const [change, beforeRecheck] of [['kept', undefined], ['cleared', clear], ['replaced', replace]]) {
+  test(`an assisted text field ${change} after filling is still compared by its value`, async () => {
+    const { result, input } = await runAssistedFill({ picker: false, beforeRecheck, value: '测试公司' });
+    assert.equal(input.value, change === 'cleared' ? '' : '测试公司');
+    assert.equal(result.filledCount, change === 'kept' ? 1 : 0);
+    assert.equal(result.unconfirmedCount, change === 'kept' ? 0 : 1);
+  });
+}
 
 for (const stopped of [false, true]) {
   test(`assisted preparation does not execute after ${stopped ? 'stop' : 'declined preview'}`, async () => {
