@@ -361,3 +361,16 @@ test('implicit button acquiring a form on mousedown is refused before activation
   assert.equal((await h.api.operate(h.target,'硕士')).reason,'unsupported_control');
   assert.equal(clicked,0);assert.equal(submitted,0);
 });
+
+test('a link masquerading as an option is not activated',async()=>{
+  const h=harness(button);let clicked=0;
+  h.el.onclick=()=>{const popup=addOptions(h);popup.innerHTML='<a role="option" href="https://example.test/side-effect">硕士</a>';popup.firstChild.onclick=e=>{clicked++;e.preventDefault();};};
+  assert.equal((await h.api.operate(h.target,'硕士')).reason,'unsupported_control');assert.equal(clicked,0);
+});
+test('popup lookup targets escaped declared ids without scanning all document ids',async()=>{
+  const h=harness(button);const id='choices"\\特殊';h.el.setAttribute('aria-controls',id);
+  const query=h.w.document.querySelectorAll.bind(h.w.document);let scans=0;
+  h.w.document.querySelectorAll=selector=>{if(selector==='[id]')scans++;return query(selector);};
+  h.el.onclick=()=>{const popup=addOptions(h);popup.id=id;};
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);assert.equal(scans,0);
+});

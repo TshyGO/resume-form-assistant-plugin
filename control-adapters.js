@@ -88,7 +88,8 @@
       // ARIA/component markup does not authorize form submission or reset.
       const submits = () => ['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)
         && !(el.tagName === 'BUTTON' && !el.hasAttribute('type') && !el.form);
-      if (submits()) return 'unsupported_control';
+      const navigates = () => Boolean(el.closest?.('a[href], area[href]'));
+      if (submits() || navigates()) return 'unsupported_control';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
       // Framework options may commit on pointerdown/mousedown, before click.
@@ -104,13 +105,13 @@
       // A page handler can replace the target, or a cancellation can happen on mousedown.
       const afterPress = stop(ctx, true);
       if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
-      if (submits()) return 'unsupported_control';
+      if (submits() || navigates()) return 'unsupported_control';
       if (disabled()) return 'control_disabled';
       if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) dispatch(new ViewMouseEvent('mouseup', { bubbles: true }));
       const beforeActivation = stop(ctx, true);
       if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
-      if (submits()) return 'unsupported_control';
+      if (submits() || navigates()) return 'unsupported_control';
       if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.

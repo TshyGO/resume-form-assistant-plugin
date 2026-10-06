@@ -87,7 +87,10 @@
     // Duplicate ids are invalid HTML but occur in repeated application rows.
     // getElementById would silently pick the first popup and could select a
     // different row's option. Only one visible referenced popup is acceptable.
-    const referenced = Array.from(info.el.ownerDocument.querySelectorAll('[id]')).filter(node => ids.has(node.id));
+    // Resolve only declared ids. Attribute-string CSS escaping also works where
+    // CSS.escape is unavailable; no page value becomes an executable selector.
+    const escaped = id => id.replace(/[\u0000-\u001f\u007f"\\]/g, character => `\\${character.codePointAt(0).toString(16)} `);
+    const referenced = Array.from(ids).flatMap(id => Array.from(info.el.ownerDocument.querySelectorAll(`[id="${escaped(id)}"]`)));
     const owned = Array.from(new Set(referenced.map(outerPopup).filter(visible)));
     return { hasIds: ids.size > 0, popup: owned.length === 1 ? owned[0] : null, ambiguous: owned.length > 1 };
   }
