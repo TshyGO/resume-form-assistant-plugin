@@ -86,7 +86,9 @@
       const disabled = () => el.disabled || Boolean(el.closest?.('[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled'));
       if (disabled()) return 'control_disabled';
       // ARIA/component markup does not authorize form submission or reset.
-      if (['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)) return 'unsupported_control';
+      const submits = () => ['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)
+        && !(el.tagName === 'BUTTON' && !el.hasAttribute('type') && !el.form);
+      if (submits()) return 'unsupported_control';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
       // Framework options may commit on pointerdown/mousedown, before click.
@@ -102,11 +104,13 @@
       // A page handler can replace the target, or a cancellation can happen on mousedown.
       const afterPress = stop(ctx, true);
       if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
+      if (submits()) return 'unsupported_control';
       if (disabled()) return 'control_disabled';
       if (ViewPointerEvent) dispatch(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) dispatch(new ViewMouseEvent('mouseup', { bubbles: true }));
       const beforeActivation = stop(ctx, true);
       if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
+      if (submits()) return 'unsupported_control';
       if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.

@@ -348,3 +348,16 @@ test('hidden stale aria-selected plus the typed query does not prove commitment'
   h.el.oninput=()=>{popup.innerHTML='<div role="option" aria-selected="true">硕士</div>';popup.firstChild.onclick=()=>{popup.hidden=true;};};
   assert.equal((await h.api.operate(h.target,'硕士')).reason,'selection_not_committed');
 });
+
+test('implicit button combobox outside a form is safely operable',async()=>{
+  const h=harness(button.replace('type="button"',''));h.w.document.body.append(h.el);
+  h.el.onclick=()=>addOptions(h);
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);
+});
+test('implicit button acquiring a form on mousedown is refused before activation',async()=>{
+  const h=harness(button.replace('type="button"',''));h.w.document.body.append(h.el);
+  let clicked=0,submitted=0;const form=h.w.document.querySelector('form');form.id='target-form';form.onsubmit=e=>{submitted++;e.preventDefault();};
+  h.el.onmousedown=()=>h.el.setAttribute('form',form.id);h.el.onclick=()=>clicked++;
+  assert.equal((await h.api.operate(h.target,'硕士')).reason,'unsupported_control');
+  assert.equal(clicked,0);assert.equal(submitted,0);
+});
