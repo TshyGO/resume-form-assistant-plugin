@@ -1003,6 +1003,12 @@ fn set_active_ai_provider_cmd(state: State<AppState>, id: String) -> Result<ai_p
     ai_provider_commands::set_active(&ai_data_root(&state)?, state.credentials.as_ref(), &id)
 }
 
+/// 强模型（#223）。`id` 为空表示不用强模型。
+#[tauri::command]
+fn set_strong_ai_provider_cmd(state: State<AppState>, id: Option<String>) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::set_strong(&ai_data_root(&state)?, state.credentials.as_ref(), id.as_deref())
+}
+
 /// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
 #[tauri::command]
 fn set_ai_key_cmd(state: State<AppState>, provider_id: String, key: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
@@ -1821,6 +1827,7 @@ pub fn run() {
             save_ai_provider_cmd,
             delete_ai_provider_cmd,
             set_active_ai_provider_cmd,
+            set_strong_ai_provider_cmd,
             set_ai_key_cmd,
             clear_ai_key_cmd,
             list_ai_models_cmd,

@@ -9,6 +9,7 @@ import { ResumeParse } from "./ResumeParse.tsx";
 const settings: AiSettingsView = {
   providers: [{ id: "p1", name: "DeepSeek", apiUrl: "https://api.deepseek.com/v1/chat/completions", model: "deepseek-chat", host: "api.deepseek.com", keyConfigured: true }],
   activeProviderId: "p1",
+  strongProviderId: null,
   credentialError: null,
 };
 

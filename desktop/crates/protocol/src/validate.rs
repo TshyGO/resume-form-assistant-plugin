@@ -432,6 +432,16 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
     {
         return Err(invalid("resume.update activeTemplateId does not match requested templateId"));
     }
+    // A plugin that predates tiers rejects a response carrying `tier`: its schema copy has
+    // additionalProperties: false. Only a request that asked for a tier may get one back.
+    if req.message_type == MessageType::AiComplete
+        && value.get("ok") == Some(&Value::Bool(true))
+        && value["payload"].get("tier").is_some()
+        && req.payload.get("tier").is_none()
+        && req.payload["purpose"] != "analyze"
+    {
+        return Err(invalid("ai.complete tier is only returned to a request that asked for one"));
+    }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req
             .payload

@@ -76,6 +76,7 @@ export function AiSettings() {
                 <div className="row">
                   <strong>{provider.name}</strong>
                   {active ? <span className="pill">当前使用</span> : null}
+                  {provider.id === view.strongProviderId ? <span className="pill">强模型</span> : null}
                   <span className="muted">
                     {provider.host} · {provider.model}
                   </span>
@@ -129,6 +130,40 @@ export function AiSettings() {
             );
           })}
         </ul>
+      ) : null}
+
+      {view && view.providers.length > 0 ? (
+        <div className="stack">
+          <label>
+            强模型（可选）
+            <select
+              value={view.strongProviderId ?? ""}
+              disabled={busy}
+              onChange={(event) => {
+                const id = event.target.value || null;
+                const name = view.providers.find((p) => p.id === id)?.name;
+                void run(
+                  () => invoke<AiSettingsView>("set_strong_ai_provider_cmd", { id }),
+                  { tone: "ok", text: name ? `强模型改用「${name}」。` : "不使用强模型，全部用当前服务商。" },
+                );
+              }}
+            >
+              <option value="">不使用（全部用当前服务商）</option>
+              {view.providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">用于「深度分析本页」和效果不好时的重新匹配。建议选更强的模型，同一个网站一般只用 1～2 次。</p>
+          {(() => {
+            const strong = view.providers.find((p) => p.id === view.strongProviderId);
+            return strong && !strong.keyConfigured && !view.credentialError
+              ? <p className="note warn">「{strong.name}」还没有 Key，用到强模型时会失败。</p>
+              : null;
+          })()}
+        </div>
       ) : null}
 
       {editing ? (

@@ -273,6 +273,8 @@ export interface AiProviderView {
 export interface AiSettingsView {
   providers: AiProviderView[];
   activeProviderId: string | null;
+  /** 强模型（#223）：深度分析和重新匹配用。null 表示不用，全部走当前服务商。 */
+  strongProviderId: string | null;
   /** 凭据库读不出来时的原因；正常是 null。 */
   credentialError: string | null;
 }

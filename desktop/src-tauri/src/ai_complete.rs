@@ -16,6 +16,14 @@ pub const MAX_SYSTEM_CHARS: usize = 8_000;
 pub const MAX_USER_CHARS: usize = 60_000;
 /// 解析一份长简历，慢的模型可能要一两分钟。
 pub const COMPLETE_TIMEOUT: Duration = Duration::from_secs(120);
+/// 插件的「深度分析」（purpose=analyze，#223）：强模型读整页大纲，比填写慢。插件到桌面
+/// 这一路没有别的定时器，等多久由这里决定；插件取消会关掉端口，不必等到这个时间。
+pub const ANALYZE_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 插件经桌面转发的 `ai.complete` 等多久：只有 `analyze` 用 180 秒。
+pub fn timeout_for(purpose: &str) -> Duration {
+    if purpose == "analyze" { ANALYZE_TIMEOUT } else { COMPLETE_TIMEOUT }
+}
 /// 模型返回的正文上限（字符数）。正常的简历解析结果是一份 JSON 数组，几千字封顶；
 /// 远超这个数多半是模型发疯了（复读、把系统提示词或整份原文吐回来），这种内容不该
 /// 被当成解析结果存进模板。
@@ -134,6 +142,14 @@ mod tests {
         assert!(request.contains(r#""model":"m1""#));
         assert!(request.contains(r#""temperature":0"#));
         assert!(request.contains("SYS") && request.contains("USER"));
+    }
+
+    #[test]
+    fn only_analyze_waits_longer() {
+        assert_eq!(timeout_for("analyze"), Duration::from_secs(180));
+        for purpose in ["fill", "plan", "extract_job"] {
+            assert_eq!(timeout_for(purpose), Duration::from_secs(120), "{purpose}");
+        }
     }
 
     #[test]

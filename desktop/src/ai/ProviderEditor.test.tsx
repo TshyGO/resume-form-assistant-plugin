@@ -11,7 +11,7 @@ const existing: AiProviderView = {
 };
 
 const saved = (over: Partial<SaveProviderResult> = {}): SaveProviderResult => ({
-  view: { providers: [existing], activeProviderId: "p1", credentialError: null },
+  view: { providers: [existing], activeProviderId: "p1", strongProviderId: null, credentialError: null },
   providerId: "p1", keyCleared: false, keyError: null, ...over,
 });
 

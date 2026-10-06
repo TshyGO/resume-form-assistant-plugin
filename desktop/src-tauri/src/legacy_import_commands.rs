@@ -166,7 +166,7 @@ mod tests {
     }
 
     impl BridgeServices for FakeServices {
-        fn ai_complete(&self, _: &str, _: &str, _: &str) -> AiReply { AiReply::Ok(String::new()) }
+        fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (AiReply, Option<crate::ai_settings::Tier>) { (AiReply::Ok(String::new()), None) }
         fn open_view(&self, _: &str) -> bool { false }
         fn stage_import_key(&self, id: &str, key: &str) -> Result<(), ErrorCode> {
             self.keys.lock().unwrap().insert(id.into(), key.into()); Ok(())
