@@ -37,7 +37,7 @@ export function parseGitArchiveEntries(workflowText) {
 }
 
 export function assertPluginOnlyArchive(entries) {
-  const allowed = new Set(["manifest.json","background.js","content.js","content.css","sidebar-state.js","ai-helpers.js","form-agent.js","fill-probe.js","field-scan.js",
+  const allowed = new Set(["manifest.json","background.js","content.js","content.css","sidebar-state.js","control-adapters.js","ai-helpers.js","form-agent.js","fill-probe.js","field-scan.js",
     "feedback-core.js","feedback-ui.js","feedback.css",
     "ai-worker.js","ai-host.js","ai-host.html","ai-client.js","resume-utils.js","profile-fields.js","resume-data.js","popup.html","popup.css","popup.js","sidepanel.html","sidepanel.css","sidepanel.js","sidepanel-compose.js","sidepanel-queue.js",
     "README.md","LICENSE",

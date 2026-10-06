@@ -1077,7 +1077,7 @@ test('changing single-select selection with duplicate values stops subsequent wr
   assert.equal(select.dispatchedEvents.length, 0);
 });
 
-test('a change during the date picker delay survives and stops later fields', async () => {
+test('a change after date focus survives and stops later fields', async () => {
   const formElements = [];
   const ctx = loadHighlightHelpers({ formElements, confirm: () => true,
     sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '2026-01-01' }, { fieldId: 'field-1', value: '新姓名' }] })
@@ -1091,17 +1091,136 @@ test('a change during the date picker delay survives and stops later fields', as
   const query = ctx.document.querySelectorAll;
   ctx.document.querySelectorAll = selector => selector === '.ant-picker' ? [container] : query(selector);
   ctx.helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '日期', value: '2026-01-01' }] }] }], activeTemplateId: 'one' });
-  const pending = ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
-  await new Promise(resolve => setImmediate(resolve));
-  const timer = ctx.timers.find(timer => timer.delay === 150 && !timer.cleared);
-  assert.ok(timer, 'picker is waiting before writing');
-  picker.value = '2027-02-02';
-  const eventsBefore = picker.dispatchedEvents.length;
-  timer.callback();
-  await pending;
+  picker.type = 'month';
+  const oldFocus = picker.focus.bind(picker);
+  picker.focus = () => { oldFocus(); picker.value = '2027-02-02'; };
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false } });
   assert.equal(picker.value, '2027-02-02');
-  assert.equal(picker.dispatchedEvents.length, eventsBefore);
+  assert.equal(picker.dispatchedEvents.length, 0, 'nothing is dispatched after the changed snapshot');
   assert.equal(later.value, '');
+});
+
+test('a cancelled AI request cannot write a late successful response', async () => {
+  const formElements = []; let finish;
+  const ctx = loadHighlightHelpers({ formElements,
+    sendMessage: message => message.type === 'CANCEL_AI_FILL' ? Promise.resolve({cancelled:true}) : new Promise(resolve => { finish = resolve; }) });
+  const input = new ctx.HTMLInputElement(); formElements.push(input);
+  const cancel = {}, hint = {};
+  ctx.helpers.setShadowRoot({querySelector: selector => ({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const pending = ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  await new Promise(resolve => setImmediate(resolve));
+  await cancel.onclick();
+  input.value = '用户自己输入';
+  finish({success:true,matches:[{fieldId:'field-0',value:'虚构用户'}]});
+  await pending;
+  assert.equal(input.value, '用户自己输入'); assert.equal(input.dispatchedEvents.length, 0);
+});
+
+for (const replaced of [false, true]) {
+test(`final fill count rechecks an earlier date: replaced=${replaced}`, async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[{fieldId:'field-0',value:'1998-06'},{fieldId:'field-1',value:'虚构用户'}]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const name = new ctx.HTMLInputElement(); const focus = name.focus.bind(name);
+  name.focus = () => { focus(); if (replaced) date.isConnected = false; else date.value = ''; };
+  formElements.push(date,name);
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, replaced ? '1998-06' : ''); assert.equal(name.value, '虚构用户');
+  assert.equal(result.filledCount, 1); assert.equal(result.outcome, 'partial');
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, replaced ? 0 : 1);
+  assert.equal(result.unconfirmedCount, replaced ? 1 : 0);
+});
+
+}
+
+test('cancel during a date operation stops later fields and preserves the user input', async () => {
+  const formElements = []; const cancel = {}, hint = {};
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[{fieldId:'field-0',value:'1998-06'},{fieldId:'field-1',value:'虚构用户'}]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const name = new ctx.HTMLInputElement(); const focus = date.focus.bind(date);
+  date.focus = () => { focus(); date.value = '2001-02'; cancel.onclick(); };
+  formElements.push(date,name);
+  ctx.helpers.setShadowRoot({querySelector: selector => ({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, '2001-02'); assert.equal(name.value, ''); assert.equal(result.filledCount, 0);
+  assert.equal(result.unconfirmedCount, 0); assert.equal(cancel.onclick, null); assert.equal(cancel.hidden, true);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+});
+
+test('overwrite refusal still rechecks earlier controls and returns final counts', async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'1998-06'}, {fieldId:'field-1',value:'虚构用户'}, {fieldId:'field-2',value:'不要继续'}
+    ]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const name = new ctx.HTMLInputElement(); const next = new ctx.HTMLInputElement();
+  name.focus = () => { date.value = ''; name.value = '用户自己输入'; };
+  formElements.push(date,name,next);
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, ''); assert.equal(name.value, '用户自己输入'); assert.equal(next.value, '');
+  assert.equal(result.filledCount, 0); assert.equal(result.unconfirmedCount, 0);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 2);
+  assert.equal(result.outcome, 'failed');
+});
+
+test('cancelling a later operation preserves an earlier retained verified date', async () => {
+  const formElements = []; const cancel = {}, hint = {};
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'1998-06'}, {fieldId:'field-1',value:'2001-02'}, {fieldId:'field-2',value:'不要继续'}
+    ]})});
+  const first = new ctx.HTMLInputElement(); first.type = 'month';
+  const second = new ctx.HTMLInputElement(); second.type = 'month'; const next = new ctx.HTMLInputElement();
+  const focus = second.focus.bind(second); second.focus = () => { focus(); cancel.onclick(); };
+  formElements.push(first,second,next);
+  ctx.helpers.setShadowRoot({querySelector:selector=>({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'姓名',value:'虚构用户'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(first.value, '1998-06'); assert.equal(second.value, ''); assert.equal(next.value, '');
+  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 0); assert.equal(result.outcome, 'partial');
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+});
+
+for (const multiline of [false, true]) test(`final fill count includes text rollback: textarea=${multiline}`, async () => {
+  const formElements = [];
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[
+      {fieldId:'field-0',value:'虚构说明'}, {fieldId:'field-1',value:'1998-06'}
+    ]})});
+  const first = multiline ? new ctx.HTMLTextAreaElement() : new ctx.HTMLInputElement();
+  if (multiline) first.tagName = 'TEXTAREA';
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  const focus = date.focus.bind(date); date.focus = () => { focus(); first.value = ''; };
+  formElements.push(first,date);
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'说明',value:'虚构说明'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(first.value, ''); assert.equal(date.value, '1998-06');
+  assert.equal(result.filledCount, 1); assert.equal(result.unconfirmedCount, 0);
+  assert.equal(result.outcome, 'partial');
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 1);
+});
+
+test('cancellation after a date write remains unconfirmed without rewriting', async () => {
+  const formElements = []; const cancel = {}, hint = {};
+  const ctx = loadHighlightHelpers({formElements,
+    sendMessage:async () => ({success:true,matches:[{fieldId:'field-0',value:'1998-06'}]})});
+  const date = new ctx.HTMLInputElement(); date.type = 'month';
+  date.blur = () => { cancel.onclick(); };
+  formElements.push(date);
+  ctx.helpers.setShadowRoot({querySelector:selector=>({'#resume-pro-cancel-fill':cancel,'#resume-pro-wait-hint':hint})[selector] || null});
+  ctx.helpers.setCurrentStore({templates:[{id:'one',groups:[{name:'基本',fields:[{key:'日期',value:'1998-06'}]}]}],activeTemplateId:'one'});
+  const result = await ctx.helpers.handleAiFillClick({currentTarget:{disabled:false}});
+  assert.equal(date.value, '1998-06'); assert.equal(result.filledCount, 0);
+  assert.equal(result.unconfirmedCount, 1);
+  assert.equal(ctx.helpers.getFillSession().summary.unfilledCount, 0);
+  assert.equal(date.dispatchedEvents.length, 2, 'only the original input/change, no retry');
 });
 
 test('a text value changed by focus is rechecked before the delayed write', async () => {

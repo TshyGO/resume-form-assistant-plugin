@@ -85,6 +85,7 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
+          node --check control-adapters.js
           node --check ai-helpers.js
           node --check form-agent.js
           node --check fill-probe.js

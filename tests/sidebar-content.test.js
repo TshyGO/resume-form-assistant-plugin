@@ -191,6 +191,7 @@ function loadContentScript({ width = 1200, height = 900, desktopReply = null } =
 
   const root = path.join(__dirname, "..");
   vm.runInNewContext(fs.readFileSync(path.join(root, "sidebar-state.js"), "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(path.join(root, "control-adapters.js"), "utf8"), context);
   vm.runInNewContext(fs.readFileSync(path.join(root, "content.js"), "utf8"), context);
 
   const hooks = context.self.ResumeProHighlightTest;

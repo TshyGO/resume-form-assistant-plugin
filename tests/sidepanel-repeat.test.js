@@ -641,7 +641,7 @@ test('a stop after some fields were written says how many, not "空记录"', asy
   await page.settle(settled('stopped'));
   const after = await page.status();
   assert.equal(after.added, 2);
-  assert.equal(after.message, '已停止填写。已新增的 2 条记录会保留，其中 1 项已填写，请在网页中核对。');
+  assert.equal(after.message, '已停止填写。已新增的 2 条记录会保留，其中 0 项已确认填写，1 项可能已写入但未确认，请在网页中核对。');
   assert.deepEqual(page.inputs.map((input) => input.value), ['用户已填的第一段', 'AI-field-1', ''], 'nothing written after 停止');
 });
 

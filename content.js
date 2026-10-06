@@ -62,7 +62,16 @@
     value_reverted: "值被页面退回",
     element_disconnected: "字段已被页面替换",
     validation_not_cleared: "页面仍提示无效",
-    framework_state_unsynced: "页面表单状态未同步"
+    framework_state_unsynced: "页面表单状态未同步",
+    value_changed: "字段内容已变化",
+    verification_timeout: "尚未确认页面已接受",
+    unsupported_control: "控件暂不支持",
+    no_option_match: "没有匹配的选项",
+    selection_not_committed: "日期选择未提交",
+    control_disabled: "字段不可操作",
+    invalid_date: "日期格式或范围不符",
+    operation_failed: "控件操作失败",
+    cancelled: "填写已停止"
   };
   let shadowRoot = null;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
@@ -1594,7 +1603,10 @@
     if (repeat.run !== run) return;
     // Fields may already be written when a stop or failure lands mid-fill: say so, not "空记录".
     const filled = Number.isInteger(result?.filledCount) ? result.filledCount : 0;
-    const kept = filled > 0 ? `已新增的 ${added} 条记录会保留，其中 ${filled} 项已填写，请在网页中核对。` : repeatAddedNote(added);
+    const unconfirmed = Number.isInteger(result?.unconfirmedCount) ? result.unconfirmedCount : 0;
+    const kept = filled || unconfirmed
+      ? `已新增的 ${added} 条记录会保留，其中 ${filled} 项已确认填写${unconfirmed ? `，${unconfirmed} 项可能已写入但未确认` : ""}，请在网页中核对。`
+      : repeatAddedNote(added);
     if (run.stopped || repeatStale(run)) {
       setRepeat(run, "stopped", `${run.invalid || repeatStale(run) || ""}已停止填写。${kept}`, { added });
     } else if (result?.outcome === "success") {
@@ -1722,6 +1734,8 @@
     let fieldCount = 0;
     let filledCount = 0;
     let unconfirmedCount = 0;
+    const verifiedControls = [];
+    let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
     let probe = null;
@@ -1747,6 +1761,8 @@
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
     const waitHint = shadowRoot?.querySelector("#resume-pro-wait-hint");
     let cancelRequested = false;
+    let writeCancelled = false;
+    const fillUrl = location.href;
     let overwriteDeclined = false;
     // 辅助新增条目是同一次一键填写的延续，接着用当前会话；其余每次都开新会话，上一次的记录清掉。
     const session = assisted && fillSession ? fillSession : beginFillSession();
@@ -1790,16 +1806,23 @@
         cancelButton.hidden = false;
         cancelButton.disabled = false;
         cancelButton.onclick = async () => {
+          if (phase === 'fillMs') {
+            writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
+            return;
+          }
           if (phase !== "roundTripMs") return;
+          cancelRequested = true;
           cancelButton.disabled = true;
           try {
             const reply = await self.ResumeProAIClient.cancel(requestId);
-            if (reply?.cancelled) cancelRequested = true;
+            cancelRequested = Boolean(reply?.cancelled);
             if (waitHint && phase === "roundTripMs") {
               waitHint.hidden = false;
               waitHint.textContent = reply?.cancelled ? "正在取消 AI 等待，保留本地匹配结果。" : "请求已结束或无法取消，正在等待结果。";
             }
           } catch {
+            cancelRequested = false;
             if (phase === "roundTripMs") {
               cancelButton.disabled = false;
               if (waitHint) {
@@ -1834,10 +1857,15 @@
       phase = null;
       window.clearInterval(timer);
       timer = null;
-      if (cancelButton) cancelButton.hidden = true;
       if (waitHint) waitHint.hidden = true;
       diagnostics = response?.diagnostics || {};
       responded = Boolean(response);
+      // Cancellation may race a successful AI reply. Only the worker's explicitly
+      // cancelled response may retain its documented local matches.
+      if (cancelRequested && diagnostics.errorCode !== 'cancelled') {
+        writeCancelled = true;
+        throw new Error('已取消填写，忽略迟到的 AI 结果。');
+      }
       matched = Array.isArray(response?.matches) ? response.matches.length : null;
       if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
 
@@ -1883,7 +1911,41 @@
         }
       }
 
+      const noteControlFailure = (element, fieldMeta, value, reason, uncertain) => {
+        const control = element.kind === 'element' ? element.element : element;
+        textFillFailures.set(control, reason);
+        if (assisted) { if (uncertain !== false) unconfirmedCount += 1; return; }
+        const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || '未命名字段';
+        const why = TEXT_FILL_FAILURE_LABELS[reason] || '';
+        const shown = why ? `${label}（${why}）` : label;
+        if (uncertain ?? ['verification_timeout', 'framework_state_unsynced', 'value_changed', 'cancelled', 'element_disconnected'].includes(reason)) {
+          unconfirmedCount += 1;
+        } else unfilledLabels.push(shown);
+        // Preserve the existing overlap redaction for both immediate and final failures.
+        const shownValue = normalizeForOverlap(value);
+        const shownLabel = normalizeForOverlap(label);
+        const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
+          || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
+        const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
+        unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
+          reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null) });
+      };
+      let controlsRechecked = false;
+      recheckVerifiedControls = () => {
+        if (controlsRechecked) return;
+        controlsRechecked = true;
+        for (const item of verifiedControls) {
+          const checked = controlOperator?.check(item.element);
+          if (checked && !checked.ok) {
+            filledCount -= 1;
+            noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
+          }
+        }
+      };
+      const isCurrent = () => !writeCancelled && !assisted?.stopped?.()
+        && location.href === fillUrl && session === fillSession;
       for (const match of sortedMatches) {
+        if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         const element = fieldMap.get(match.fieldId);
@@ -1905,7 +1967,7 @@
 
         // 控件内部也会异步等待；实际写入及重试前复查，不能仅在进入控件时检查。
         const beforeWrite = assisted ? undefined : (userEdited = false) => {
-          if (overwriteDeclined) return false;
+          if (overwriteDeclined || !isCurrent()) return false;
           const currentValue = fillValueSnapshot(element);
           if (!userEdited && currentValue !== null && currentValue === approvedValues.get(element)) return true;
           overwriteDeclined = true;
@@ -1914,18 +1976,26 @@
           showStatus(`填写期间检测到字段内容变化，已停止后续填写，保留该字段的现有内容。此前已填写 ${filledCount} 项，请核对网页。`, "error", true);
           return false;
         };
-        let filled = setElementValue(element, match.value, beforeWrite);
-        if (filled instanceof Promise) {
-          filled = await filled;
-        }
-        if (overwriteDeclined) return;
+        const fieldMeta = fieldMetaMap.get(match.fieldId);
+        // Host-owned accounting callback: a guard refusal before any write is
+        // skipped, while an interrupted attempted write remains unconfirmed.
+        let writeAttempted = false;
+        const onWrite = () => { writeAttempted = true; };
+        const stopInterruptedControl = () => {
+          if (!overwriteDeclined && isCurrent()) return;
+          cancelRequested = true;
+          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element) || 'cancelled', writeAttempted);
+          throw new Error(overwriteDeclined
+            ? "字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"
+            : "已停止填写，请核对网页。");
+        };
+        let filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+        stopInterruptedControl();
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           filled = element.element.isConnected
             && String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value);
         }
-
-        const fieldMeta = fieldMetaMap.get(match.fieldId);
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
         // 也按同样的方式等一等（和 worker 放行它用的是同一个判断）；选项出来了却对不上，不再白等。
@@ -1933,34 +2003,21 @@
           && (fieldMeta?.cascadeGroup !== undefined || !hasRealSelectOptions(element.element))) {
           for (let retry = 0; retry < 3; retry++) {
             await new Promise((resolve) => setTimeout(resolve, 150));
-            filled = setElementValue(element, match.value, beforeWrite);
-            if (overwriteDeclined) return;
+            filled = await setElementValue(element, match.value, beforeWrite, isCurrent, onWrite);
+            stopInterruptedControl();
             if (filled || (fieldMeta?.cascadeGroup === undefined && hasRealSelectOptions(element.element))) break;
           }
         }
 
         if (filled) {
           filledCount += 1;
+          verifiedControls.push({ element, fieldMeta, value: match.value });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType) {
             recordFilledTextControl(session, element.element);
           }
-        } else if (assisted) {
-          unconfirmedCount += 1;
         } else {
-          const label = fieldMeta?.label || fieldMeta?.placeholder || fieldMeta?.name || "未命名字段";
-          const why = textFillFailureLabel(element);
-          unfilledLabels.push(why ? `${label}（${why}）` : label);
-          // 字段名可能是兜底规则从旁边取来的页面文字：跟要填的值重叠时不放进诊断；
-          // 在分块编辑的网站上，那段文字还可能是另一块已保存的简历内容，所以含有简历里任何一项的值也一样藏起来。
-          // 比较前去掉空白、统一全角半角和大小写：「Java」「java」「本 科」都算重叠。
-          const shownValue = normalizeForOverlap(match.value);
-          const shownLabel = normalizeForOverlap(label);
-          const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
-            || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
-          const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
-          unfilledControls.push({ label: overlaps || showsResume ? "（字段名已隐藏）" : label, reason: why,
-            reasonCode: textFillFailureCode(element), control: withFillProbe(api => api.describeControl(element), null) });
+          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
         }
 
         if (filled && fieldMeta?.cascadeGroup !== undefined) {
@@ -1974,12 +2031,15 @@
       }
 
       await finalSyncFillSession(session);
+      // A later control's focus can roll back an earlier picker. Re-read the final
+      // state before counting success; verification never writes or retries.
+      recheckVerifiedControls();
       stage = null;
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
-      const unfilledNote = unfilledLabels.length
-        ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。`
-        : "";
+      const unfilledNote = (unfilledLabels.length
+        ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
+        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
       const emptyHint = viewModeHint();
       if (assisted) {
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
@@ -2019,6 +2079,10 @@
         if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
     } catch (error) {
+      // Interrupted fills still get a read-only final count; never replay focus,
+      // write, or retry after a stop/overwrite refusal.
+      recheckVerifiedControls();
+      if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       failure = error.message || "AI 填写失败。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
@@ -2038,7 +2102,7 @@
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
       const verdict = fillVerdict({ scanned: scanDone, fieldCount, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
-        failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length });
+        failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
       const summaryInput = { ...timing, totalMs,
         fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict };
@@ -2050,7 +2114,7 @@
       try {
         // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
         const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted), cancelled: cancelRequested,
-          overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length,
+          overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount,
           editHint: hinted && probe?.editButtons > 0, category: verdict.category });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
           kind, diagnostics: self.ResumeProFeedback.fillReport(reportInput)
@@ -2158,7 +2222,7 @@
         + ` → 匹配 ${count(result.matched)} → 填入 ${count(result.filledCount)}`,
       ...(drops.length ? [`丢弃原因：${drops.map(([key, value]) => `${dropLabels[key] || key} ${value}`).join("、")}`] : []),
       ...formatScanStats(result.stats, feedback),
-      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}`,
+      `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}；未确认：${count(result.unconfirmedCount)}`,
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
@@ -2507,6 +2571,7 @@
     }
     element.dispatchEvent(new Event("change", { bubbles: true }));
     await nextTask();
+    if (beforeWrite && !beforeWrite()) return false;
     blurControl(element);
     return true;
   }
@@ -3072,174 +3137,32 @@
     return text;
   }
 
-  // 普通文本要走完真实的 focus → 写入 → input/change → blur，再等页面校验。
-  // 电话、邮箱、数字框如果一次性写入被退回，才逐字再试一次。
-  async function commitTextValue(element, value, sequential = false, beforeWrite, didWrite) {
-    const previous = String(element.value ?? "");
-    const original = String(value ?? "");
-    const expected = normalizeExpectedTextValue(element, original);
-    if (!await runTextLifecycle(element, original, sequential, beforeWrite, didWrite)) {
-      return { ok: false, reason: "value_changed" };
-    }
-    const committed = String(element.value ?? "") === expected;
-    await waitForTextCommit();
-    let result = inspectTextCommit(element, expected, committed);
-    if (!result.ok && !sequential
-      && (result.reason === "validation_not_cleared" || result.reason === "framework_state_unsynced")) {
-      await replayFocusBlur(element);
-      await waitForTextCommit();
-      result = inspectTextCommit(element, expected, String(element.value ?? "") === expected);
-    }
-    if (!result.ok && !sequential && prefersSequentialInput(element)
-      && (result.reason === "value_not_committed" || result.reason === "value_reverted")) {
-      const retried = await commitTextValue(element, original, true, beforeWrite, didWrite);
-      if (!retried.ok && element.isConnected !== false
-        && (retried.reason === "value_not_committed" || retried.reason === "value_reverted")) {
-        if (beforeWrite && !beforeWrite()) return { ok: false, reason: "value_changed" };
-        writeControlValue(element, previous);
-        dispatchTextInput(element, previous);
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-      return retried;
-    }
-    return result;
+  let controlOperator;
+  function operateControl(target, value, options = {}) {
+    if (!controlOperator) controlOperator = self.ResumeProControls.create({
+      helpers: self.ResumeProAIHelpers, radioLabel: getRadioOptionLabel,
+      isVisible, writeValue: writeControlValue, focus: focusControl, blur: blurControl,
+      normalizeText: normalizeExpectedTextValue, runTextLifecycle,
+      inspectText: inspectTextCommit, waitTextCommit: waitForTextCommit,
+      replayFocusBlur, prefersSequential: prefersSequentialInput, dispatchTextInput,
+      getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
+    });
+    // #230's scanner uses date-picker; the #219 operation contract uses date.
+    // Until the custom-select adapter lands, #230's custom-select (autocomplete
+    // included) keeps the text lifecycle it had before #219.
+    const entry = target?.controlKind === 'date-picker' ? { ...target, controlKind: 'date' }
+      : target?.controlKind === 'custom-select' ? { ...target, controlKind: 'text' } : target;
+    return controlOperator.operate(entry, value, options);
   }
 
-  function setElementValue(element, value, beforeWrite) {
-    if (beforeWrite && !beforeWrite()) return false;
-    if (element && typeof element === "object" && element.kind === "radio") {
-      const radioOptions = element.elements.map((radio) => ({ value: radio.value, text: getRadioOptionLabel(radio), disabled: radio.disabled }));
-      const radioIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(radioOptions, value) ?? -1;
-      const matchedRadio = radioIndex >= 0 ? element.elements[radioIndex] : null;
-
-      if (!matchedRadio) {
-        return false;
-      }
-
-      matchedRadio.checked = true;
-      matchedRadio.dispatchEvent(new Event("input", { bubbles: true }));
-      matchedRadio.dispatchEvent(new Event("change", { bubbles: true }));
-      matchedRadio.click();
-      return true;
+  async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
+    const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
+    const control = target?.kind === 'element' ? target.element : target;
+    if (control && typeof control === 'object') {
+      if (result.ok) textFillFailures.delete(control);
+      else textFillFailures.set(control, result.reason);
     }
-
-    const pickerType = (element && typeof element === "object" && element.kind === "element") ? element.pickerType : null;
-    const pickerInputType = (element && typeof element === "object" && element.kind === "element") ? (element.pickerInputType || "date") : "date";
-
-    if (element && typeof element === "object" && element.kind === "element") {
-      element = element.element;
-    }
-
-    if (element instanceof HTMLInputElement && ["date", "month", "datetime-local", "time"].includes(element.type)) {
-      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, element.type) ?? value;
-      const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
-      element.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
-      if (beforeWrite && !beforeWrite()) return false;
-      if (descriptor?.set) {
-        descriptor.set.call(element, normalized);
-      } else {
-        element.value = normalized;
-      }
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-      return element.value === normalized;
-    }
-
-    if (element instanceof HTMLInputElement && (pickerType === "antd" || pickerType === "element" || pickerType === "generic")) {
-      const normalized = self.ResumeProAIHelpers?.normalizeDateValue?.(value, pickerInputType) ?? value;
-      element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      return new Promise((resolve) => {
-        window.setTimeout(() => {
-          if (beforeWrite && !beforeWrite()) { resolve(false); return; }
-          try {
-            const descriptor = Object.getOwnPropertyDescriptor(element.constructor.prototype, "value");
-            if (descriptor?.set) {
-              descriptor.set.call(element, normalized);
-            } else {
-              element.value = normalized;
-            }
-            element.dispatchEvent(new Event("input", { bubbles: true }));
-            element.dispatchEvent(new Event("change", { bubbles: true }));
-            element.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-          } catch (_) {
-            resolve(false);
-            return;
-          }
-          resolve(element.value === normalized);
-        }, 150);
-      });
-    }
-
-    if (element instanceof HTMLInputElement && ["week", "range", "color"].includes(element.type)) {
-      const expected = String(value ?? "");
-      writeControlValue(element, expected);
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      return element.value === expected;
-    }
-
-    if (isTextControl(element)) {
-      let wroteValue = false;
-      let userEdited = false;
-      const trackUserEdit = event => { if (event.isTrusted) userEdited = true; };
-      // 首次写入前比较快照；已开始写入后，框架拒绝/清空属于正常重试流程。
-      // 仅真实用户输入中断本控件的重试和回滚，插件派发的合成事件不算用户修改。
-      const guard = beforeWrite ? () => {
-        if (userEdited) return beforeWrite(true);
-        return wroteValue || beforeWrite();
-      } : undefined;
-      if (beforeWrite) {
-        element.addEventListener("input", trackUserEdit, true);
-        element.addEventListener("change", trackUserEdit, true);
-      }
-      return commitTextValue(element, value, false, guard, () => { wroteValue = true; }).then((result) => {
-        if (result.ok) {
-          textFillFailures.delete(element);
-        } else {
-          textFillFailures.set(element, result.reason);
-        }
-        return result.ok;
-      }).finally(() => {
-        if (beforeWrite) {
-          element.removeEventListener("input", trackUserEdit, true);
-          element.removeEventListener("change", trackUserEdit, true);
-        }
-      });
-    }
-
-    if (element instanceof HTMLSelectElement) {
-      const selectOptions = Array.from(element.options).map((option) => ({ value: option.value, text: option.text, disabled: option.disabled }));
-      const optionIndex = self.ResumeProAIHelpers?.findSelectOptionIndex?.(selectOptions, value) ?? -1;
-      const matchedOption = optionIndex >= 0 ? element.options[optionIndex] : null;
-
-      if (!matchedOption) {
-        return false;
-      }
-
-      // 走原型上的 setter：有些框架在实例上拦了 value，直接赋值会被吞掉。
-      const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
-      if (descriptor?.set) {
-        descriptor.set.call(element, matchedOption.value);
-      } else {
-        element.value = matchedOption.value;
-      }
-      // 几个选项 value 相同时（常见的是一串空值），按 value 赋值会落到第一个，按下标补一次。
-      if (element.selectedIndex !== optionIndex) {
-        element.selectedIndex = optionIndex;
-      }
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      return element.selectedIndex === optionIndex;
-    }
-
-    if (element instanceof HTMLElement && element.isContentEditable) {
-      element.textContent = value;
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      return true;
-    }
-
-    return false;
+    return result.ok;
   }
 
   function highlightFilledField(fieldEntry, value) {
@@ -5659,6 +5582,7 @@
       composeChipText,
       syncChipSelectionState,
       setElementValue,
+      operateControl,
       isSyncableTextControl,
       isSubmitTrigger,
       findSubmitTrigger,

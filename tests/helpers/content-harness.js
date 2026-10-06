@@ -286,6 +286,7 @@ function loadHighlightHelpers(options = {}) {
   window.clearInterval = window.clearTimeout;
 
   const contentJs = fs.readFileSync(path.join(__dirname, "..", "..", "content.js"), "utf8");
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "..", "control-adapters.js"), "utf8"), context);
   vm.runInNewContext(contentJs, context);
   context.self.ResumeProHighlightTest.setTextCommitWaitMs(0);
   const helpers = context.self.ResumeProHighlightTest;
