@@ -31,6 +31,11 @@ leave its committed selection empty and have no success check. The scanner must
 return exactly three logical fields with the matching titles; component roots,
 inputs and popup contents must not appear as duplicate fields.
 
+On the Element page, run `await runMultiCase()` after the main cases. It mounts
+an empty, labeled, actual multiple select; the scanner must find it and the
+operator must return `unsupported_control`, with an empty selection and zero
+tags. This checks the dropdown's `is-multiple` signal before selecting anything.
+
 Use Chrome and Edge independently and record the candidate commit, browser
 version, library version, returned reasons and final state. These fixture runs
 do not replace the separate live Ant Design/Element website acceptance required
