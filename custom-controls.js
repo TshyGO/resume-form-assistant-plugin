@@ -21,6 +21,19 @@
   function selectedTexts(info) {
     const { root, el, library, cascade } = info;
     if (!root?.isConnected) return null;
+    if (library === 'aria' && el.tagName === 'INPUT' && !el.readOnly) {
+      const explicit = trim(info.combo.getAttribute('aria-valuetext'));
+      if (explicit) return [explicit];
+      const hidden = root.querySelectorAll('input[type="hidden"]');
+      if (hidden.length === 1) return hidden[0].value ? [String(hidden[0].value)] : [];
+      const linked = ownedPopup(info, () => true);
+      if (linked.ambiguous) return null;
+      const popup = linked.popup || info.popup || root.querySelector('[role="listbox"]');
+      if (popup?.isConnected) return Array.from(popup.querySelectorAll('[role="option"][aria-selected="true"]'), node => trim(node.textContent));
+      // The input may contain a query even after Escape/blur closed the popup.
+      // Without an independent selected-state signal, commitment is unknown.
+      return el.value ? null : [];
+    }
     const selector = library === 'antd' ? '.ant-select-selection-item'
       : library === 'element' ? '.el-select__selected-item:not(.el-select__input-wrapper):not(.is-transparent), .el-select__tags-text'
       : library === 'arco' ? '.arco-select-view-value, .arco-select-view-tag, .arco-cascader-view-value' : '';
@@ -37,7 +50,14 @@
   function snapshot(target) {
     const info = describe(target);
     if (!info.root?.isConnected || !info.el?.isConnected) return null;
-    return JSON.stringify(selectedTexts(info));
+    return JSON.stringify({ selection: selectedTexts(info),
+      query: info.el.tagName === 'INPUT' && !info.el.readOnly ? String(info.el.value ?? '') : null });
+  }
+  function hasExistingValue(target) {
+    const info = describe(target), values = selectedTexts(info);
+    // A query is existing user input which needs overwrite protection, not
+    // evidence of a committed selection. The snapshot tracks it separately.
+    return values === null || values.length > 0 || (info.el.tagName === 'INPUT' && !info.el.readOnly && Boolean(info.el.value));
   }
   function outerPopup(node) { return node?.closest?.(SHELLS) || node; }
   function popups(doc, visible) {
@@ -47,7 +67,11 @@
   function ownedPopup(info, visible) {
     const sources = [info.combo, info.el, info.root, ...info.root.querySelectorAll('[aria-controls], [aria-owns]')];
     const ids = new Set(sources.flatMap(node => `${node.getAttribute('aria-controls') || ''} ${node.getAttribute('aria-owns') || ''}`.split(/\s+/).filter(Boolean)));
-    const owned = Array.from(new Set(Array.from(ids, id => outerPopup(info.el.ownerDocument.getElementById(id))).filter(node => node && visible(node))));
+    // Duplicate ids are invalid HTML but occur in repeated application rows.
+    // getElementById would silently pick the first popup and could select a
+    // different row's option. Only one visible referenced popup is acceptable.
+    const referenced = Array.from(info.el.ownerDocument.querySelectorAll('[id]')).filter(node => ids.has(node.id));
+    const owned = Array.from(new Set(referenced.map(outerPopup).filter(visible)));
     return { hasIds: ids.size > 0, popup: owned.length === 1 ? owned[0] : null, ambiguous: owned.length > 1 };
   }
   function optionNodes(popup, info, level) {
@@ -89,8 +113,9 @@
     }
     return { option: list[index] };
   }
-  async function run(ctx, raw, h) {
+  async function perform(ctx, raw, h, state) {
     const info = describe(ctx.entry);
+    state.info = info;
     if (!info.root || info.multiple || ctx.hints.multiple === true) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
@@ -116,6 +141,7 @@
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
     const popup = opened.value.popup; ctx.popup = popup;
+    info.popup = popup;
     const role = popup.getAttribute('role');
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component', optionCount: 0 };
     const searchInput = info.combo.tagName === 'INPUT' && !info.combo.readOnly ? info.combo
@@ -124,7 +150,7 @@
       || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
       || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
     let searchDone = false;
-    const chosenLabels = [];
+    const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
       const ready = await h.waitUntil(ctx, doc.documentElement, () => options(popup, info, level, h), list => list.length > 0 || (searchable && !searchDone));
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
@@ -133,6 +159,7 @@
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
         const signature = list.map(option => `${option.value}:${option.text}`).join('\n');
+        state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = desired[level];
         h.write(searchInput, desired[level], ctx); h.input(searchInput); searchDone = true;
         let lastSignature = signature, stableSince = Date.now();
         const updated = await h.waitUntil(ctx, doc.documentElement, () => {
@@ -156,9 +183,11 @@
       // Every path activation can change component state, even before the leaf.
       const activation = info.library === 'arco' && info.cascade
         ? latest.option.node.querySelector('.arco-cascader-list-item-label') || latest.option.node : latest.option.node;
+      state.activated = true;
       const reason = h.click(activation, ctx, true);
       if (reason) return { reason };
       chosenLabels.push(latest.option.text);
+      chosenValues.push(String(latest.option.value));
       if (info.cascade && level < desired.length - 1) {
         const next = await h.waitUntil(ctx, doc.documentElement, () => options(popup, info, level + 1, h), children => children.length > 0 && (parentActive
           || children.length !== previousChildren.length || children.some((child, index) => child.node !== previousChildren[index]?.node || child.value !== previousChildren[index]?.value || child.text !== previousChildren[index]?.text)));
@@ -168,14 +197,31 @@
     const accepted = () => {
       const values = selectedTexts(info);
       if (!values || values.length !== chosenLabels.length) return false;
-      if (!values.every((value, index) => h.helpers.normalizeText(value) === h.helpers.normalizeText(chosenLabels[index]))) return false;
-      // A typed search query alone is not a committed ARIA selection.
-      if (info.library === 'aria' && searchDone) return info.combo.getAttribute('aria-expanded') === 'false';
+      const hidden = info.library === 'aria' && info.el.tagName === 'INPUT' && !info.el.readOnly
+        ? info.root.querySelectorAll('input[type="hidden"]') : [];
+      const expected = hidden.length === 1 ? chosenValues : chosenLabels;
+      if (!values.every((value, index) => h.helpers.normalizeText(value) === h.helpers.normalizeText(expected[index]))) return false;
       return true;
     };
     const committed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
     if (committed.reason) return { reason: committed.reason === 'verification_timeout' ? 'selection_not_committed' : committed.reason };
     return { accepted };
   }
-  scope.ResumeProCustomControls = { describe, snapshot, run };
+  async function run(ctx, raw, h) {
+    const state = {}; let outcome;
+    try { outcome = await perform(ctx, raw, h, state); return outcome; }
+    finally {
+      // Cancellation, user edits and stale bindings forbid further actions,
+      // including cleanup. Never undo an attempted semantic selection.
+      if (outcome?.reason && !h.stop(ctx)) {
+        const input = state.searchInput;
+        if (!state.activated && input?.isConnected && input.value === state.query) {
+          h.write(input, state.searchBefore); h.input(input);
+        }
+        const info = state.info;
+        if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
+      }
+    }
+  }
+  scope.ResumeProCustomControls = { describe, snapshot, hasExistingValue, run };
 })(typeof self !== 'undefined' ? self : globalThis);

@@ -1672,8 +1672,7 @@
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
-      const snapshot = self.ResumeProCustomControls.snapshot(entry);
-      return snapshot === null || snapshot !== "[]";
+      return self.ResumeProCustomControls.hasExistingValue(entry);
     }
     if (el.type === "checkbox" || el.type === "radio") return el.checked;
     if (el.multiple && el.options) return Array.from(el.options).some(option => option.selected

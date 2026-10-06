@@ -90,7 +90,7 @@ test('search waits for the updated live options rather than treating the query a
   h.el.onclick = () => { list.hidden = false; h.el.setAttribute('aria-expanded', 'true'); };
   h.el.oninput = () => setTimeout(() => {
     list.innerHTML = '<div role="option">北京大学</div>';
-    list.firstChild.onclick = () => { h.el.value = '北京大学'; h.el.setAttribute('aria-expanded', 'false'); list.hidden = true; };
+    list.firstChild.onclick = () => { h.el.value = '北京大学'; list.firstChild.setAttribute('aria-selected', 'true'); h.el.setAttribute('aria-expanded', 'false'); list.hidden = true; };
   }, 35);
   assert.equal((await h.api.operate(h.target, '北京大学')).ok, true);
   assert.equal(h.el.getAttribute('aria-expanded'), 'false');
@@ -155,8 +155,8 @@ test('combobox semantics never authorize a submit button', async () => {
 test('Element committed display is read independently of its empty search input', () => {
   const h = harness('<div class="el-select"><input role="combobox" readonly><div class="el-select__selected-item el-select__input-wrapper is-hidden"></div><div class="el-select__selected-item el-select__placeholder">硕士</div></div>');
   h.target.root = h.el.parentElement;
-  assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["硕士"]');
-  h.el.value = 'search'; assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["硕士"]');
+  assert.deepEqual(JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target)).selection, ['硕士']);
+  h.el.value = 'search'; assert.deepEqual(JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target)).selection, ['硕士']);
 });
 
 test('Element filterable remote options are searched without a model hint', async () => {
@@ -172,5 +172,65 @@ test('Element filterable remote options are searched without a model hint', asyn
     };
   }, 35);
   assert.equal((await h.api.operate(h.target, '北京大学')).ok, true);
-  assert.equal(h.w.ResumeProCustomControls.snapshot(h.target), '["北京大学"]');
+  assert.deepEqual(JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target)).selection, ['北京大学']);
+});
+
+test('ordinary failed search restores only its temporary query and blurs its own input', async () => {
+  const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 250 });
+  const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); list.hidden = true; h.w.document.body.append(list);
+  h.el.onclick = () => { list.hidden = false; };
+  h.el.oninput = () => { list.innerHTML = '<div role="option">其他大学</div>'; };
+  h.el.onblur = () => { list.hidden = true; };
+  assert.equal((await h.api.operate(h.target, '北京大学')).reason, 'no_option_match');
+  assert.equal(h.el.value, ''); assert.equal(list.hidden, true);
+});
+test('cancelled search does not revert the query or steal focus for cleanup', async () => {
+  let current = true; const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">');
+  const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); h.w.document.body.append(list);
+  h.el.oninput = () => { current = false; }; let blurs = 0; h.el.onblur = () => blurs++;
+  assert.equal((await h.api.operate(h.target, '北京大学', { isCurrent: () => current })).reason, 'cancelled');
+  assert.equal(h.el.value, '北京大学'); assert.equal(blurs, 0);
+});
+
+test('committed custom display does not hide a validation error after blur', async () => {
+  const h = harness(button, { inspectText: el => el.getAttribute('aria-invalid') === 'true'
+    ? { ok: false, reason: 'validation_not_cleared' } : { ok: true } });
+  h.el.onclick = () => addOptions(h); h.el.onblur = () => h.el.setAttribute('aria-invalid', 'true');
+  assert.equal((await h.api.operate(h.target, '硕士')).reason, 'validation_not_cleared');
+  assert.equal(h.el.textContent, '硕士');
+});
+
+test('duplicate visible popup ids are refused instead of selecting the first row', async () => {
+  const h = harness(button); let writes = 0;
+  h.el.onclick = () => { addOptions(h); addOptions(h); };
+  assert.equal((await h.api.operate(h.target, '硕士', { onWrite: () => writes++ })).reason, 'ambiguous_popup');
+  assert.equal(writes, 0); assert.equal(h.el.textContent, '请选择');
+});
+test('custom option commitment on mousedown is accounted before a simultaneous cancel', async () => {
+  let current = true, writes = 0; const h = harness(button);
+  h.el.onclick = () => { const list = addOptions(h); list.lastChild.onmousedown = () => { h.el.textContent = '硕士'; current = false; }; };
+  assert.equal((await h.api.operate(h.target, '硕士', { isCurrent: () => current, onWrite: () => writes++ })).reason, 'cancelled');
+  assert.equal(writes, 1); assert.equal(h.el.textContent, '硕士');
+});
+
+test('closing a popup after clicking cannot turn a query into a committed selection', async () => {
+  const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list" aria-expanded="false">', { timeoutMs: 250 });
+  const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); list.hidden = true; h.w.document.body.append(list);
+  h.el.onclick = () => { list.hidden = false; h.el.setAttribute('aria-expanded', 'true'); };
+  h.el.oninput = () => { list.innerHTML = '<div role="option" aria-selected="false">北京大学</div>'; list.firstChild.onclick = () => { list.hidden = true; h.el.setAttribute('aria-expanded', 'false'); }; };
+  assert.equal((await h.api.operate(h.target, '北京大学')).reason, 'selection_not_committed');
+  const state = JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target));
+  assert.deepEqual(state.selection, []); assert.equal(state.query, '北京大学');
+  assert.equal(h.w.ResumeProCustomControls.hasExistingValue(h.target), true, 'protect user-visible input without calling it a selection');
+});
+
+test('editable ARIA commitment can be proved by an owned hidden value after popup removal', async () => {
+  const h = harness('<div class="custom-select"><input role="combobox" aria-controls="choices" aria-autocomplete="list"><input type="hidden" value=""></div>', { timeoutMs: 300 });
+  h.target.root = h.el.parentElement; const hidden = h.target.root.querySelector('input[type="hidden"]');
+  const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); list.hidden = true; h.w.document.body.append(list);
+  h.target.root.onclick = () => { list.hidden = false; };
+  h.el.oninput = () => { list.innerHTML = '<div role="option" data-value="master">硕士</div>'; list.firstChild.onclick = () => { hidden.value = 'master'; list.remove(); }; };
+  assert.equal((await h.api.operate(h.target, '硕士')).ok, true);
+  assert.deepEqual(JSON.parse(h.w.ResumeProCustomControls.snapshot(h.target)).selection, ['master']);
+  assert.equal(h.api.check(h.target).ok, true);
 });

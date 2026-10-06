@@ -80,22 +80,26 @@
     function click(el, ctx, committing = false) {
       const reason = stop(ctx, true);
       if (reason) return reason;
-      if (el.disabled) return 'control_disabled';
+      const disabled = () => el.disabled || Boolean(el.closest?.('[aria-disabled="true"], .ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled'));
+      if (disabled()) return 'control_disabled';
       // ARIA/component markup does not authorize form submission or reset.
       if (['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)) return 'unsupported_control';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
+      // Framework options may commit on pointerdown/mousedown, before click.
+      // Account for that attempt before dispatching, preserving native activation.
+      if (committing && ['custom-select', 'cascader'].includes(ctx.kind)) markWrite(ctx);
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mousedown', { bubbles: true }));
       // A page handler can replace the target, or a cancellation can happen on mousedown.
       const afterPress = stop(ctx, true);
       if (afterPress || el.isConnected === false) return afterPress || 'element_disconnected';
-      if (el.disabled) return 'control_disabled';
+      if (disabled()) return 'control_disabled';
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerup', { bubbles: true, pointerType: 'mouse' }));
       if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true }));
       const beforeActivation = stop(ctx, true);
       if (beforeActivation || el.isConnected === false) return beforeActivation || 'element_disconnected';
-      if (el.disabled) return 'control_disabled';
+      if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
       ctx.activating = true;
@@ -211,7 +215,7 @@
         if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
         if (custom) {
-          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil });
+          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;
         } else if (ctx.kind === 'radio') {
@@ -255,7 +259,7 @@
         }
         ctx.acceptedOnce = accepted();
         if (!direct) blur(ctx.el);
-        const inspect = ctx.kind === 'date' && !direct && deps.inspectText
+        const inspect = ['date', 'custom-select', 'cascader'].includes(ctx.kind) && !direct && deps.inspectText
           ? () => deps.inspectText(ctx.el, String(ctx.el.value ?? ''), true) : null;
         const verified = await verify(ctx, accepted, inspect);
         if (verified.ok) checks.set(ctx.el, { ctx, accepted, inspect });
