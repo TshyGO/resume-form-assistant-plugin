@@ -711,7 +711,27 @@ mod tests {
     }
 
     #[test]
-    fn settings_written_before_tiers_still_load_and_stay_readable_by_an_older_desktop() {
+    fn a_file_with_a_strong_model_still_reads_in_the_older_desktop_shape() {
+        // 0.4.2 及以前的 AiSettings 只有这两项，也没有 deny_unknown_fields：多出的字段被忽略。
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct OlderSettings {
+            providers: Vec<AiProvider>,
+            active_provider_id: Option<String>,
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://a.example/v1", "m")).unwrap().provider_id;
+        set_strong(dir.path(), Some(&a)).unwrap();
+        let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
+        assert!(text.contains("strongProviderId"), "{text}");
+        let older: OlderSettings = serde_json::from_str(&text).unwrap();
+        assert_eq!(older.providers.len(), 1);
+        assert_eq!(older.active_provider_id.as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn settings_written_before_tiers_load_and_unset_strong_is_not_written() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             path_for(dir.path()),

@@ -157,6 +157,12 @@ export function AiSettings() {
             </select>
           </label>
           <p className="muted">用于「深度分析本页」和效果不好时的重新匹配。建议选更强的模型，同一个网站一般只用 1～2 次。</p>
+          {(() => {
+            const strong = view.providers.find((p) => p.id === view.strongProviderId);
+            return strong && !strong.keyConfigured && !view.credentialError
+              ? <p className="note warn">「{strong.name}」还没有 Key，用到强模型时会失败。</p>
+              : null;
+          })()}
         </div>
       ) : null}
 

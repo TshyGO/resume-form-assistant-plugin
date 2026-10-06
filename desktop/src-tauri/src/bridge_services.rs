@@ -127,7 +127,7 @@ impl BridgeServices for DesktopBridgeServices {
             return (from_ai_error(err, None), tier);
         }
         let host = safe_host(&provider.api_url);
-        let timeout = if purpose == "analyze" { ai_complete::ANALYZE_TIMEOUT } else { ai_complete::COMPLETE_TIMEOUT };
+        let timeout = ai_complete::timeout_for(purpose);
         let reply = match tauri::async_runtime::block_on(ai_complete::complete(&provider, &key, system, user, timeout)) {
             Ok(text) => AiReply::Ok(text),
             Err(err) => from_ai_error(err, host),

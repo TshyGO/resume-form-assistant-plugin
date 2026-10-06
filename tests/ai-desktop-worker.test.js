@@ -70,6 +70,19 @@ test('a strong re-match asks for the tier and records the tier the desktop used'
   const failed = await old.run({ ...BASE, tier: 'strong' });
   assert.match(failed.warning, /用强模型重新匹配需要更新桌面程序/);
   assert.equal('tierUsed' in failed.diagnostics, false);
+  const daily = await old.run({ ...BASE, tier: 'default' });
+  assert.match(daily.warning, /桌面程序版本太旧/, 'an explicit daily tier is not about the strong model');
+});
+
+test('a strong provider without a key is named as the problem, not the current provider', async () => {
+  const env = worker(() => ({ ok: false, reason: 'not_configured', tier: 'strong' }));
+  const result = await env.run({ ...BASE, tier: 'strong' });
+  assert.match(result.warning, /强模型那条服务商还没有 Key/);
+  assert.doesNotMatch(result.warning, /当前服务商没有 Key/);
+  assert.equal(result.openView, 'settings-ai');
+  // Nothing configured at all is still the general message.
+  const none = worker(() => ({ ok: false, reason: 'not_configured' }));
+  assert.match((await none.run({ ...BASE, tier: 'strong' })).warning, /桌面还没有配置 AI 服务商/);
 });
 
 test('oversized form prompts are split beneath the UTF-8 user budget', async () => {

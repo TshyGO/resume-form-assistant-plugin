@@ -156,6 +156,17 @@ function aiFailureMessage(result) {
   }
 }
 
+// #223: with the strong tier asked for, these two failures are about the strong model, not
+// the desktop's current provider, which may be working fine.
+function strongFailureMessage(tier, result) {
+  if (tier !== "strong") return null;
+  if (result?.reason === "incompatible") return "用强模型重新匹配需要更新桌面程序。";
+  if (result?.reason === "not_configured" && result.tier === "strong") {
+    return "强模型那条服务商还没有 Key，请在桌面设置里填写，或把强模型改成「不使用」。";
+  }
+  return null;
+}
+
 function isSecretField(field) {
   return String(field?.inputType ?? "").toLowerCase() === "password"
     || ResumeProProfile.SECRET_LABEL.test([field?.label, field?.name, field?.key].filter(Boolean).join(" "));
@@ -276,7 +287,7 @@ async function handleAiFill(message, controller = new AbortController()) {
       if (!result?.ok) {
         const reason = result?.reason ?? "unavailable";
         if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
-        warnings.push(tier && reason === "incompatible" ? "用强模型重新匹配需要更新桌面程序。" : aiFailureMessage(result));
+        warnings.push(strongFailureMessage(tier, result) ?? aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
         // Only a failure tied to this batch's content is worth trying the next batch for.
         // Everything else (desktop gone, not paired, no key, slow or unreachable provider)

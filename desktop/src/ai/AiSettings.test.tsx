@@ -86,6 +86,11 @@ test("强模型那条服务商删掉后，下拉框回到不使用", async () =>
   await waitFor(() => expect(screen.getByLabelText("强模型（可选）")).toHaveProperty("value", ""));
 });
 
+test("选作强模型的服务商没有 Key 时提醒", async () => {
+  mount(() => ({ ...view, strongProviderId: "p2" }));
+  expect(await screen.findByText("「通义千问」还没有 Key，用到强模型时会失败。")).toBeTruthy();
+});
+
 test("没有服务商时不显示强模型选项", async () => {
   mount(() => ({ providers: [], activeProviderId: null, strongProviderId: null, credentialError: null }));
   await screen.findByText(/还没有配置 AI 服务商/);

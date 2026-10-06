@@ -127,6 +127,13 @@ test('a desktop older than tiers reads as too old for analyze or a tier, not for
   assert.deepEqual(await old.ai.complete({ purpose: 'fill', tier: 'strong', system: 's', user: 'u' }), { ok: false, reason: 'incompatible' });
   assert.deepEqual(await old.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
 
+  // What an old host actually sends: its validator refuses the envelope before any version
+  // can be trusted, so the error comes back as protocolVersion 1 (nm.rs response_for_with).
+  const oldHost = await harness({ respond: request => ({ response: { protocolVersion: 1, correlationId: request.messageId, ok: false, payload: {},
+    error: { code: 'invalid_payload', retryable: false, message: 'synthetic' } } }) });
+  assert.deepEqual(await oldHost.ai.complete({ purpose: 'analyze', system: 's', user: 'u' }), { ok: false, reason: 'incompatible' });
+  assert.deepEqual(await oldHost.ai.complete({ purpose: 'fill', tier: 'strong', system: 's', user: 'u' }), { ok: false, reason: 'incompatible' });
+
   // A tier this plugin does not know never leaves the plugin.
   const local = await harness({ respond: () => { throw new Error('sent'); } });
   assert.deepEqual(await local.ai.complete({ purpose: 'fill', tier: 'turbo', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
