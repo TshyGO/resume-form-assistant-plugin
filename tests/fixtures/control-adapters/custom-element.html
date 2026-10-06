@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>#222 Element Plus real components</title>
+<link rel="stylesheet" href="/output/playwright/vendor/element-plus/package/dist/index.css">
+<script src="/output/playwright/vendor/vue/package/dist/vue.global.js"></script>
+<script src="/output/playwright/vendor/element-plus/package/dist/index.full.js"></script>
+<script src="/ai-helpers.js"></script><script src="/custom-controls.js"></script><script src="/control-adapters.js"></script><script src="/field-scan.js"></script>
+<style>body{padding:30px}label{display:block;margin:25px}.el-select,.el-cascader{width:300px}pre{white-space:pre-wrap}</style>
+<h1>Element Plus 2.14.6 / Vue 3.5.43 — fictitious data, no submission</h1>
+<div id="app"><form>
+<label>学历<el-select id="degree" v-model="degree" filterable><el-option label="本科" value="bachelor"></el-option><el-option label="硕士" value="master"></el-option><el-option label="博士" value="disabled" disabled></el-option></el-select></label>
+<label>籍贯<el-cascader id="region" v-model="place" :options="region"></el-cascader></label>
+<label>拒绝选择<el-select id="reject" model-value=""><el-option label="硕士" value="master"></el-option></el-select></label>
+</form></div><button type="button" id="blank">Blur target</button><pre id="results"></pre>
+<script>
+Vue.createApp({data:()=>({degree:undefined,place:undefined,region:[{value:'gd',label:'广东省',children:[{value:'sz',label:'深圳市',children:[{value:'ns',label:'南山区'}]}]}]})}).use(ElementPlus).mount('#app');
+window.runCases=async()=>{const operator=ResumeProControls.create();const results={};
+for(const [id,value,kind] of [['degree','硕士','custom-select'],['region','广东省 / 深圳市 / 南山区','cascader'],['reject','硕士','custom-select']]){
+const input=id==='region'?document.querySelector('.el-cascader input'):document.getElementById(id),target={kind:'element',element:input,root:input.closest('.el-select,.el-cascader'),controlKind:kind};results[id]=await operator.operate(target,value);document.getElementById('blank').focus();results[id].final=operator.check(target);results[id].snapshot=ResumeProCustomControls.snapshot(target);
+} results.scan=ResumeProFieldScan.scanPage(document,{isVisible:n=>n.getBoundingClientRect().height>0}).controls.map(n=>({label:n.label,kind:n.controlKind}));document.getElementById('results').textContent=JSON.stringify(results,null,2);return results;};
+</script>

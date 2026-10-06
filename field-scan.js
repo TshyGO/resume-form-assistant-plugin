@@ -3,7 +3,7 @@
 // 再找每个控件所在的最小表单项，题目只从明确关联或这一项里取，不跨到别的题目借字。
 // 占位文字、字数计数器、帮助说明、校验错误都不能当字段名；对不上题目的控件直接跳过。
 (function attachResumeProFieldScan(globalScope) {
-  const CONTROL_SELECTOR = "input, textarea, select";
+  const CONTROL_SELECTOR = "input, textarea, select, [role='combobox'], button[aria-haspopup='listbox']";
   const NON_CONTROL_TYPES = new Set(["hidden", "button", "submit", "reset", "image"]);
   const DATE_TYPES = new Set(["date", "month", "time", "datetime-local", "week"]);
   // 这几类控件的自带文字是选项本身，不能当题目。
@@ -54,7 +54,10 @@
   }
 
   function isControlElement(el) {
-    if (!el || !["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return false;
+    if (!el) return false;
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) {
+      return hasComboSignal(el) && !el.querySelector("input, textarea, select, [role='combobox']");
+    }
     return !NON_CONTROL_TYPES.has(inputType(el));
   }
 
@@ -206,7 +209,7 @@
     let inputs = 0;
     for (const el of node.querySelectorAll(CONTROL_SELECTOR)) {
       if (!boundaries.has(el)) continue;
-      if (el.tagName !== "INPUT" || CHOICE_TYPES.has(inputType(el)) || inputType(el) === "file") return false;
+      if ((el.tagName !== "INPUT" && !hasComboSignal(el)) || CHOICE_TYPES.has(inputType(el)) || inputType(el) === "file") return false;
       inputs += 1;
     }
     return inputs <= maxInputs;
@@ -312,7 +315,8 @@
     }
 
     customByRoot.forEach((inputs, root) => {
-      controls.push({ kind: "element", controlKind: "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
+      const cascade = root.matches(".ant-cascader, .el-cascader, .arco-cascader") || Boolean(root.querySelector(".ant-cascader, .el-cascader, .arco-cascader"));
+      controls.push({ kind: "element", controlKind: cascade ? "cascader" : "custom-select", element: primaryInput(inputs), elements: inputs, root, merged: inputs.length - 1 });
     });
 
     pickerInputs.forEach((inputs, root) => {

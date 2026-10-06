@@ -43,6 +43,24 @@ const store = {
   activeTemplateId: "t"
 };
 
+test('a failed parent blocks later fields in its cascade group', async () => {
+  const late = lateScanner();
+  const aiHelpers = { ...require('../ai-helpers.js'), detectCascadeGroups(fields) {
+    fields.forEach((field, index) => { field.cascadeGroup = 'region'; field.cascadeLevel = index; });
+  } };
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '未知省' }, { fieldId: 'field-1', value: '深圳市' }] }) });
+  const parent = new ctx.HTMLSelectElement(), child = new ctx.HTMLSelectElement();
+  parent.options = [{ value: '', text: '请选择' }, { value: 'gd', text: '广东省' }];
+  child.options = [{ value: '', text: '请选择' }, { value: 'sz', text: '深圳市' }];
+  parent.selectedIndex = child.selectedIndex = 0;
+  let childEvents = 0; child.addEventListener('change', () => childEvents++);
+  late.holder.current = scanWith([control(parent, { controlKind: 'select', label: '省' }), control(child, { controlKind: 'select', label: '市' })]);
+  ctx.helpers.setCurrentStore(store); ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(result.filledCount, 0); assert.equal(childEvents, 0); assert.equal(child.selectedIndex, 0);
+});
+
 test("the profile offer lists only reliably titled fields, by their section-qualified names", async () => {
   const late = lateScanner();
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,

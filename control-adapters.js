@@ -50,6 +50,11 @@
     function stop(ctx, writing = false) {
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
+      if (['custom-select', 'cascader'].includes(ctx.kind)) {
+        const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
+        if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled')) return 'control_disabled';
+      }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
       if (ctx.userEdited) { ctx.options.beforeWrite?.(true); return 'value_changed'; }
@@ -76,6 +81,8 @@
       const reason = stop(ctx, true);
       if (reason) return reason;
       if (el.disabled) return 'control_disabled';
+      // ARIA/component markup does not authorize form submission or reset.
+      if (['BUTTON', 'INPUT'].includes(el.tagName) && ['submit', 'reset', 'image'].includes(el.type)) return 'unsupported_control';
       const ViewMouseEvent = el.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
       const ViewPointerEvent = el.ownerDocument?.defaultView?.PointerEvent || (typeof PointerEvent === 'function' ? PointerEvent : null);
       if (ViewPointerEvent) el.dispatchEvent(new ViewPointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }));
@@ -175,12 +182,21 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
-      if (!KINDS.has(ctx.kind) || ['custom-select', 'cascader'].includes(ctx.kind)) return result(false, 'unsupported_control', ctx);
+      const custom = ['custom-select', 'cascader'].includes(ctx.kind);
+      if (!KINDS.has(ctx.kind) || (custom && !scope.ResumeProCustomControls)) return result(false, 'unsupported_control', ctx);
+      if (custom) ctx.nodes = Array.from(new Set([...nodes, scope.ResumeProCustomControls.describe(ctx.entry).root].filter(Boolean)));
       if (ctx.el && typeof ctx.el === 'object') checks.delete(ctx.el);
       const refused = stop(ctx, true);
       if (refused) return result(false, refused, ctx);
-      const track = event => { if (event.isTrusted && !ctx.activating) ctx.userEdited = true; };
-      for (const node of nodes) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.addEventListener?.(type, track, true);
+      const track = event => {
+        if (!event.isTrusted || ctx.activating) return;
+        if (custom && event.currentTarget === ctx.el.ownerDocument
+          && !ctx.entry.root?.contains(event.target) && !ctx.el.contains(event.target) && !ctx.popup?.contains(event.target)) return;
+        ctx.userEdited = true;
+      };
+      const watched = custom ? Array.from(new Set([...nodes, ctx.entry.root].filter(Boolean))) : nodes;
+      if (custom && ctx.el.ownerDocument) watched.push(ctx.el.ownerDocument);
+      for (const node of watched) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.addEventListener?.(type, track, true);
       try {
         if (['text', 'textarea'].includes(ctx.kind) && !['range', 'color'].includes(ctx.el.type)) return await text(ctx, desiredValue);
         const direct = ['week', 'range', 'color'].includes(ctx.el.type);
@@ -194,7 +210,11 @@
         const afterFocus = stop(ctx, true);
         if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
-        if (ctx.kind === 'radio') {
+        if (custom) {
+          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil });
+          if (outcome.reason) return result(false, outcome.reason, ctx);
+          accepted = outcome.accepted;
+        } else if (ctx.kind === 'radio') {
           const index = helpers?.findSelectOptionIndex?.(nodes.map(node => ({value:node.value,text:deps.radioLabel?.(node) || node.value,disabled:node.disabled})), desiredValue) ?? -1;
           const chosen = nodes[index];
           if (!chosen) return result(false, 'no_option_match', ctx);
@@ -244,7 +264,7 @@
         // Page exceptions are untrusted and can contain resume data. Only a fixed code escapes.
         return result(false, stop(ctx) || 'operation_failed', ctx);
       } finally {
-        for (const node of nodes) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.removeEventListener?.(type, track, true);
+        for (const node of watched) for (const type of ['input', 'change', 'keydown', 'pointerdown']) node.removeEventListener?.(type, track, true);
       }
     }
 
