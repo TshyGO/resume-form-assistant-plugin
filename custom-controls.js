@@ -176,7 +176,11 @@
     info.popup = popup;
     const role = popup.getAttribute('role');
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component', optionCount: 0 };
-    if (popup.getAttribute('aria-multiselectable') === 'true') return { reason: 'unsupported_control' };
+    const multiplePopup = () => popup.getAttribute('aria-multiselectable') === 'true'
+      || Boolean(popup.querySelector('[aria-multiselectable="true"]'))
+      || (info.library === 'element' && (popup.matches('.el-select-dropdown.is-multiple')
+        || Boolean(popup.querySelector('.el-select-dropdown.is-multiple'))));
+    if (multiplePopup()) return { reason: 'unsupported_control' };
     const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
       && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
     state.safeSearch = safeSearch;
@@ -223,7 +227,7 @@
       if (found.reason) return found;
       // Re-read immediately before activation: async renders can replace an option.
       const latest = match(readOptions(level), desired[level], h.helpers);
-      if (popup.getAttribute('aria-multiselectable') === 'true') return { reason: 'unsupported_control' };
+      if (multiplePopup()) return { reason: 'unsupported_control' };
       if (latest.reason) return latest;
       if (!info.pathNodes) info.pathNodes = [];
       info.pathNodes[level] = latest.option.node;

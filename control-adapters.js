@@ -115,8 +115,16 @@
       if (disabled()) return 'control_disabled';
       // Native activation emits trusted input/change even when .click() itself is
       // synthetic. Exclude only this synchronous activation from user-edit tracking.
+      // Button handlers can change type/form ownership during click dispatch.
+      // Cancel its default activation while still letting option handlers run.
+      const preventButtonDefault = event => event.preventDefault();
+      const button = el.tagName === 'BUTTON';
+      if (button) el.addEventListener('click', preventButtonDefault, { capture: true });
       ctx.activating = true;
-      try { if (committing) markWrite(ctx); el.click(); } finally { ctx.activating = false; }
+      try { if (committing) markWrite(ctx); el.click(); } finally {
+        if (button) el.removeEventListener('click', preventButtonDefault, true);
+        ctx.activating = false;
+      }
       return '';
     }
     // Observe the relevant subtree and also sample properties: .value/.checked changes

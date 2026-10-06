@@ -362,6 +362,28 @@ test('implicit button acquiring a form on mousedown is refused before activation
   assert.equal(clicked,0);assert.equal(submitted,0);
 });
 
+test('implicit button acquiring a form during click still selects without submitting',async()=>{
+  const h=harness(button.replace('type="button"',''));h.w.document.body.append(h.el);
+  let submitted=0;const form=h.w.document.querySelector('form');form.id='target-form';form.onsubmit=e=>{submitted++;e.preventDefault();};
+  h.el.onclick=()=>{h.el.setAttribute('form',form.id);addOptions(h);};
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);assert.equal(submitted,0);
+  // The temporary listener must not suppress later user-owned activations.
+  h.el.onclick=null;h.el.click();assert.equal(submitted,1);
+});
+test('button option changing its type during click commits without submitting',async()=>{
+  const h=harness(button);let submitted=0;const form=h.w.document.querySelector('form');form.id='target-form';form.onsubmit=e=>{submitted++;e.preventDefault();};
+  h.el.onclick=()=>{const popup=addOptions(h);popup.innerHTML='<button type="button" role="option">硕士</button>';
+    popup.firstChild.onclick=()=>{popup.firstChild.type='submit';popup.firstChild.setAttribute('form',form.id);h.el.textContent='硕士';popup.hidden=true;};};
+  assert.equal((await h.api.operate(h.target,'硕士')).ok,true);assert.equal(submitted,0);
+});
+
+test('Element Plus empty multiple select is refused from its owned dropdown class',async()=>{
+  const h=harness('<div class="el-select"><input role="combobox" readonly aria-controls="choices"></div>');
+  h.target.root=h.el.parentElement;let chosen=0;
+  h.target.root.onclick=()=>{const popup=addOptions(h);popup.className='el-select__popper';popup.innerHTML='<div class="el-select-dropdown is-multiple"><div class="el-select-dropdown__item">硕士</div></div>';popup.querySelector('.el-select-dropdown__item').onclick=()=>chosen++;};
+  assert.equal((await h.api.operate(h.target,'硕士')).reason,'unsupported_control');assert.equal(chosen,0);
+});
+
 test('a link masquerading as an option is not activated',async()=>{
   const h=harness(button);let clicked=0;
   h.el.onclick=()=>{const popup=addOptions(h);popup.innerHTML='<a role="option" href="https://example.test/side-effect">硕士</a>';popup.firstChild.onclick=e=>{clicked++;e.preventDefault();};};
