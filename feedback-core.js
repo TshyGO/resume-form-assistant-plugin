@@ -59,8 +59,13 @@
   // A failure of the AI service or the desktop link, not of matching this page.
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
-  const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "grouped", "out_of_scope", "secret",
+  // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
+  const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
+    "site_search", "outside_form", "no_label", "out_of_scope", "secret",
     "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
+  // Where each scanned field's title came from, and why a field was not offered for 我的信息 (#228).
+  const LABEL_SOURCES = ["explicit", "item", "table", "sibling", "placeholder"];
+  const OFFER_SKIPS = ["ambiguous", "entry"];
   // URL path segments are kept only when every word in them is a common route word, so
   // user names and slugs (/u/zhangsan, /people/john-doe) never leave as written.
   const ROUTE_WORDS = new Set(("apply applies application applications applicant resume resumes cv jianli toudi delivery deliver "
@@ -83,6 +88,7 @@
     page_type: /^(?:application_form|unknown|-)$/, page_type_reason: /^(?:url|title|edit_button|structure|none|-)$/,
     dom_ready_at_scan: /^(?:true|false|-)$/, scan_duration_ms: INT,
     dom_inputs: INT, visible_fields: INT, candidates: INT, matched: INT, filled: INT, drop_reasons: tally(DROPS),
+    label_sources: tally(LABEL_SOURCES), offer_skipped: tally(OFFER_SKIPS),
     dom_elements: INT, iframes_total: INT, iframes_cross_origin: INT, same_origin_iframe_inputs: INT,
     shadow_roots_with_inputs: INT, custom_controls: INT, custom_libraries: tally(LIBRARY_NAMES),
     readonly_or_disabled: INT, edit_buttons: INT,
@@ -163,12 +169,22 @@
     const sent = d && aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
-      grouped: n(s?.grouped), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
+      popup_internal: n(s?.popup), grouped: n(s?.grouped), page_chrome: n(s?.pageChrome), site_search: n(s?.siteSearch),
+      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
       ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
     if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
+  }
+
+  // Scanned fields by where their title came from (field-scan.js sources, folded into LABEL_SOURCES).
+  function labelSources(stats) {
+    const sources = stats?.sources || {};
+    const n = key => positive(sources[key]);
+    const counts = { explicit: n("explicit"), item: n("item") + n("item-text"), table: n("table") + n("table-header"),
+      sibling: n("sibling"), placeholder: n("placeholder") };
+    return LABEL_SOURCES.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 
   // Whether the AI was actually called: true / false, or null when the request got no answer.
@@ -208,6 +224,8 @@
       `matched: ${count(input.matched)}`,
       `filled: ${count(input.filledCount)}`,
       `drop_reasons: ${fillDrops(input).map(([key, value]) => `${key}=${value}`).join(",") || "-"}`,
+      `label_sources: ${labelSources(s).map(([key, value]) => `${key}=${value}`).join(",") || "-"}`,
+      `offer_skipped: ${listed(s?.offerSkipped || {}, OFFER_SKIPS)}`,
       "",
       "[页面结构]",
       `dom_elements: ${count(p?.elements)}`,
@@ -267,7 +285,8 @@
         continue;
       }
       // Every value has its own closed pattern; the length cap only bounds the regex work.
-      const entry = /^([a-z_]{1,32}): (.{1,300})$/.exec(line);
+      // The longest reachable value is drop_reasons with every reason at six digits (348 chars).
+      const entry = /^([a-z_]{1,32}): (.{1,400})$/.exec(line);
       if (entry) {
         const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2]);
         if (known && (entry[1] !== "url_path" || safePath(entry[2]))) safe.push(line);
@@ -303,7 +322,8 @@
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }
-  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, fillDrops, aiCalled, fillReport, diagnostics, fillFailure, install };
+  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, fillDrops, labelSources, aiCalled, fillReport,
+    diagnostics, fillFailure, install };
   root.ResumeProFeedback = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

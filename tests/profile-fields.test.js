@@ -79,11 +79,45 @@ test("unanswered labels skip matched, filled, secret, file and known fields", ()
     { label: "职业规划", inputType: "textarea" }
   ], known);
 
-  assert.deepEqual(labels, ["是否有亲属在本行工作", "职业规划"]);
+  // #228：长题目整句保留，不再因为超过 30 字被静默丢掉。
+  assert.deepEqual(labels, ["是否有亲属在本行工作", "这是一个非常非常非常非常非常非常非常非常非常长的说明文字字段标签内容", "职业规划"]);
   assert.equal(profileApi.pickUnansweredLabels(
     Array.from({ length: 30 }, (_, index) => ({ label: `字段${index}`, inputType: "text" })),
     new Set()
   ).length, 20);
+});
+
+test("unanswered labels never offer counters or bare placeholder prompts, and cap runaway text (#228)", () => {
+  const long = "请说明".padEnd(120, "题");
+  const labels = profileApi.pickUnansweredLabels([
+    { label: "0/2000", inputType: "textarea" },
+    { label: "0/4000", inputType: "textarea" },
+    { label: "请选择", inputType: "text" },
+    { label: "请输入", inputType: "text" },
+    { label: long, inputType: "textarea" },
+    { label: `${long}超出`, inputType: "textarea" }
+  ], new Set());
+  assert.deepEqual(labels, [long]);
+});
+
+test("fields inside experience sections stay out of 我的信息 unless they are like a profile field (#228)", () => {
+  const stats = {};
+  const labels = profileApi.pickUnansweredLabels([
+    { label: "所在实验室名称", title: "所在实验室名称", section: "教育经历" },
+    { label: "教育经历-开始时间", title: "开始时间", section: "教育经历" },
+    { label: "班级排名", title: "班级排名", section: "教育经历" },
+    { label: "教育背景-班级排名", title: "班级排名", section: "教育背景" },
+    { label: "英语等级", title: "英语等级", section: "学术活动", sectionRepeatable: true },
+    { label: "活动名称", title: "活动名称", section: "学术活动", sectionRepeatable: true },
+    { label: "联系电话", title: "联系电话", section: "家庭成员" },
+    { label: "外语等级说明", title: "外语等级说明", section: "家庭成员" },
+    { label: "工作意向城市", title: "工作意向城市", section: "工作意向" },
+    { label: "名称", title: "名称", section: "" },
+    { label: "你为什么选择我们公司", title: "你为什么选择我们公司", section: "附加问题" },
+    { label: "技能证书", title: "技能证书", section: "语言与技能" }
+  ], new Set(), undefined, stats);
+  assert.deepEqual(labels, ["班级排名", "英语等级", "工作意向城市", "你为什么选择我们公司", "技能证书"]);
+  assert.equal(stats.entry, 6);
 });
 
 test("adding pending fields skips what the profile already has", () => {

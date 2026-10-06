@@ -95,6 +95,8 @@ test("the v1 block answers why a page had no fields, section by section", () => 
     "matched: -",
     "filled: 0",
     "drop_reasons: type_hidden=3,non_fillable=1,disabled=2,invisible=8",
+    "label_sources: -",
+    "offer_skipped: -",
     "",
     "[页面结构]",
     "dom_elements: 830",
@@ -157,7 +159,7 @@ test("match and fill drops are counted separately, and ai_called tells 'not call
 });
 
 const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan", "scan_duration_ms",
-  "dom_inputs", "visible_fields", "candidates", "matched", "filled", "drop_reasons",
+  "dom_inputs", "visible_fields", "candidates", "matched", "filled", "drop_reasons", "label_sources", "offer_skipped",
   "dom_elements", "iframes_total", "iframes_cross_origin", "same_origin_iframe_inputs", "shadow_roots_with_inputs",
   "custom_controls", "custom_libraries", "readonly_or_disabled", "edit_buttons",
   "error_category", "first_failing_stage", "error_code",
@@ -189,13 +191,17 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
   const big = 999999;
   const report = core.fillReport({ ...IFRAME_PAGE,
     path: "/campus/application/personalInformation/education/experience/attachment/preview/confirm/submit",
-    stats: { domInputs: big, visible: big, typeHidden: big, nonFillable: big, disabled: big, invisible: big, grouped: big, outOfScope: big },
+    stats: { domInputs: big, visible: big, typeHidden: big, nonFillable: big, disabled: big, invisible: big, grouped: big, outOfScope: big,
+      popup: big, pageChrome: big, siteSearch: big, outsideForm: big, noLabel: big,
+      sources: { explicit: big, item: big, table: big, sibling: big, placeholder: big }, offerSkipped: { ambiguous: big, entry: big } },
     fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, requested: true,
     diagnostics: { ruleMatches: 1, aiFields: big, aiMatches: 1, promptBytes: 10, apiMs: 1, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
     probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
       ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } } });
   const drops = /^drop_reasons: (.*)$/m.exec(report);
-  assert.ok(drops && drops[1].split(",").length === 12, report);
+  assert.ok(drops && drops[1].split(",").length === 17, report);
+  assert.match(report, /^label_sources: (?:[a-z]+=999999,){4}placeholder=999999$/m);
+  assert.match(report, /^offer_skipped: ambiguous=999999,entry=999999$/m);
   assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}other=999999$/m);
   assert.match(report, /^url_path: \/campus\/application\/personalInformation\/education\/experience\/attachment\/preview\/confirm\/:more$/m);
 });

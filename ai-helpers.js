@@ -127,9 +127,10 @@
       .replace(/[\s:：*（）()【】\[\]\-_/.]+/g, "");
   }
 
+  // 只看字段自己的文字：group 是所属区块（「联系方式」「家庭成员」），会把「地址」「QQ」也带成电话。
+  // 区块只用来分清是谁的字段（personScope）。
   function inferFieldSemantic(field) {
     const haystack = normalizeText([
-      field?.group,
       field?.label,
       field?.placeholder,
       field?.name,
