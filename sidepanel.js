@@ -281,6 +281,8 @@
   }
 
   function renderFromStore() {
+    const oldGroups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
+    const openGroupKeys = new Set(oldGroups.filter((group) => group.open).map((group) => group.dataset.groupKey));
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
@@ -294,12 +296,14 @@
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
       if (!rows.length) return "";
-      return `<details class="field-group"${index === 0 ? " open" : ""}>
+      const groupKey = `${group.name}:${index}`;
+      const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
+      return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
         <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
         <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
       </details>`;
     }).join("");
-    filterFields();
+    filterFields(oldGroups.length > 0);
     updateFillAvailability(lastPageStatus);
     renderTargetState();
     refreshTarget().catch(() => {});
@@ -333,7 +337,7 @@
     renderTargetState();
   }
 
-  function filterFields() {
+  function filterFields(preserveOpen = false) {
     const query = elements.fieldSearch.value.trim().toLocaleLowerCase();
     let visible = 0;
     const groups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
@@ -348,7 +352,7 @@
       group.hidden = Boolean(query) && rowCount === 0;
       if (!group.hidden) visible += 1;
       if (query && rowCount) group.open = true;
-      if (!query) group.open = index === 0;
+      if (!query && !preserveOpen) group.open = index === 0;
     });
     elements.fieldEmpty.hidden = visible !== 0;
   }
@@ -1291,7 +1295,7 @@
     document.querySelectorAll(".dock-view").forEach((view) => { view.hidden = view.dataset.view !== tab; });
   }));
   document.getElementById("show-fields").addEventListener("click", () => document.querySelector('.dock-tabs button[data-tab="fields"]').click());
-  elements.fieldSearch.addEventListener("input", filterFields);
+  elements.fieldSearch.addEventListener("input", () => filterFields());
   elements.fieldGroups.addEventListener("toggle", (event) => {
     if (event.target.matches?.(".field-group") && event.target.open && !elements.fieldSearch.value) {
       elements.fieldGroups.querySelectorAll(".field-group").forEach((group) => { if (group !== event.target) group.open = false; });
