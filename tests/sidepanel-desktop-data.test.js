@@ -61,7 +61,7 @@ async function harness(initial = { status: 'ok', data: data() }, { legacy = null
     },
     tabs: {
       query: async () => [{ id: 9 }],
-      sendMessage: async (id, message) => { calls.push({ tabId: id, ...message }); return pageResponse; },
+      sendMessage: async (id, message) => { calls.push({ tabId: id, ...message }); return typeof pageResponse === 'function' ? pageResponse(message) : pageResponse; },
       create: async options => { calls.push({ createdTab: options.url }); },
       onActivated: { addListener(listener) { tabEvents.activated = listener; } },
       onUpdated: { addListener(listener) { tabEvents.updated = listener; } }
@@ -179,12 +179,42 @@ test('a template removed on desktop is reported and the native panel rereads', a
   assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
 });
 
-test('adding to my information refreshes the native panel and opens desktop resume', async () => {
+test('saving to my information sends the ticked items, rereads the desktop, and does not force the desktop open', async () => {
   const ui = await harness();
+  const offer = (result = null) => ({ epoch: 'e1', version: 1, saving: false, summary: '可保存到我的信息：已填 1 项，待补 0 项',
+    filled: [{ id: '兴趣爱好', key: '兴趣爱好', value: '摄影', completes: false, jobSpecific: false, defaultSelected: true }],
+    pending: [], conflicts: [], notes: [], same: 0, hidden: 0, result });
+  // 页面把结果留在快照里，直到用户点「知道了」：保存之后的状态轮询看到的也是它。
+  let result = null;
+  ui.setPageResponse(message => {
+    if (message.type === 'RESUME_PANEL_OFFER') {
+      result = { kind: 'success', text: '已保存 1 项，下次填写可用。', hint: '', details: [], saved: 1,
+        savedItems: [{ key: '兴趣爱好', value: '摄影', kind: 'filled' }] };
+      return { ok: true, saved: 1, profileOffer: offer(result) };
+    }
+    return { ready: true, profileOffer: offer(result) };
+  });
+  await ui.tick();
+  await ui.poll();
+  await ui.tick();
+  assert.equal(ui.get('profile-offer').hidden, false);
+  assert.match(ui.get('profile-offer-groups').innerHTML, /兴趣爱好/);
+  assert.equal(ui.get('profile-offer-save').textContent, '记住这 1 项');
+  const reads = () => ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length;
+  const before = reads();
+
   await ui.profileAdd.listeners.click();
-  assert.ok(ui.calls.some(item => item.type === 'RESUME_PANEL_OFFER' && item.action === 'profileAdd'));
-  assert.ok(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW' && item.view === 'resume'));
-  assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
+
+  const sent = ui.calls.find(item => item.type === 'RESUME_PANEL_OFFER' && item.action === 'profileAdd');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.selected)),
+    [{ id: '兴趣爱好', key: '兴趣爱好', kind: 'filled', reviewedValue: '摄影' }]);
+  assert.equal(sent.version, 1);
+  assert.equal(reads(), before + 1, 'the panel follows the desktop after a confirmed save');
+  assert.equal(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW'), false);
+  assert.equal(ui.get('profile-offer-text').textContent, '已记住「兴趣爱好：摄影」');
+  assert.match(ui.get('profile-offer-result').innerHTML, /已保存到桌面「我的信息」/);
+  assert.equal(ui.get('profile-offer-view').hidden, false);
+  assert.equal(ui.get('profile-offer-save').hidden, true);
 });
 
 test('all desktop downgrade states disable data and show an actionable message', async () => {

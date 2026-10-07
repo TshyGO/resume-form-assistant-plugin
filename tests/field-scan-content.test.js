@@ -120,8 +120,10 @@ test("the profile offer lists only reliably titled fields, by their section-qual
   await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
 
   assert.equal(ui.parts["#resume-pro-profile-offer"].hidden, false);
-  assert.match(ui.parts.offerText.textContent, /还有 2 个字段空着：求职意向-备注、附加信息-备注。/);
-  assert.doesNotMatch(ui.parts.offerText.textContent, /手机号码|请输入/);
+  assert.equal(ui.parts.offerText.textContent, "可保存到我的信息：已填 0 项，待补 2 项");
+  const offer = JSON.parse(JSON.stringify(ctx.helpers.panelProfileSnapshot()));
+  assert.deepEqual(offer.pending.map((item) => item.key), ["求职意向-备注", "附加信息-备注"]);
+  assert.doesNotMatch(JSON.stringify(offer), /手机号码|请输入/);
 });
 
 test("fields inside an experience section are not offered, and the diagnostics count them", async () => {
@@ -141,7 +143,8 @@ test("fields inside an experience section are not offered, and the diagnostics c
 
   await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
 
-  assert.match(ui.parts.offerText.textContent, /还有 2 个字段空着：班级排名、期望薪资（元\/月）。/);
+  assert.equal(ui.parts.offerText.textContent, "可保存到我的信息：已填 0 项，待补 2 项");
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.helpers.panelProfileSnapshot())).pending.map((item) => item.key), ["班级排名", "期望薪资（元/月）"]);
   assert.match(diagnostics["#resume-pro-diagnostics-text"].value, /经历类区块 1$/m);
 });
 
@@ -162,22 +165,32 @@ test("a field whose title binding went stale during matching is not written", as
   assert.match(ui.parts["#resume-pro-status"].textContent, /1 项没填上：姓名（页面已变化）/);
 });
 
-test("adding to 我的信息 re-checks the binding and adds nothing that moved since the scan", async () => {
+test("saving to 我的信息 re-checks the binding: a control that moved since the scan is reported, kept as a candidate, and never written", async () => {
   const late = lateScanner();
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy });
   const element = new ctx.HTMLInputElement();
-  late.holder.current = scanWith([], new Set([element]));
-  const ui = shadow();
-  ctx.helpers.setShadowRoot(ui.root);
+  element.value = "2 万";
+  const stale = new Set([element]);
+  late.holder.current = scanWith([], stale);
+  ctx.helpers.setShadowRoot(shadow().root);
   ctx.helpers.setProfileOffer({
-    labels: ["期望薪资"], fields: [],
     candidates: [{ label: "期望薪资", entry: { kind: "element", element, binding: { element } } }]
   });
+  const selected = [{ id: "期望薪资", key: "期望薪资", kind: "filled" }];
 
-  await ctx.helpers.addUnansweredToProfile();
+  const reply = await ctx.helpers.addUnansweredToProfile({ selected });
 
   assert.equal(ctx.desktopMessages.some((message) => message.type === "DESKTOP_RESUME_UPDATE"), false);
-  assert.match(ui.parts["#resume-pro-status"].textContent, /网页内容已经变化/);
+  assert.equal(reply.ok, false);
+  const result = JSON.parse(JSON.stringify(reply.profileOffer.result));
+  assert.equal(result.kind, "info");
+  assert.match(result.details.join(), /所在的网页内容已经变化/);
+
+  // 候选没有丢：控件对回题目之后，同一项又能保存，值是它此刻的值。
+  stale.clear();
+  element.value = "3 万";
+  const snapshot = JSON.parse(JSON.stringify(ctx.helpers.panelProfileSnapshot()));
+  assert.deepEqual(snapshot.filled.map((item) => [item.key, item.value]), [["期望薪资", "3 万"]]);
 });
 
 test("diagnostics carry scan skips and label sources in the v1 block, and survive the feedback allowlist", async () => {

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>网申快填 保存到我的信息测试（#189）</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f5f7fb; color: #1e293b; }
+    main { width: min(680px, calc(100% - 40px)); margin: 32px auto; padding: 28px; border-radius: 16px; background: #fff; box-shadow: 0 14px 40px rgba(30, 41, 59, .1); }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    h2 { margin: 26px 0 10px; font-size: 16px; color: #3855d9; }
+    .lead { margin: 0 0 18px; color: #64748b; line-height: 1.7; font-size: 14px; }
+    .row { margin-bottom: 14px; }
+    .row > label, .row > .q { display: block; margin-bottom: 6px; font-weight: 700; font-size: 14px; }
+    input[type=text], input[type=password], select, textarea { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 2px solid #cbd5e1; border-radius: 10px; font-size: 15px; font-family: inherit; }
+    .radios label { margin-right: 18px; font-weight: 400; }
+    .tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+    button { padding: 8px 12px; border: 0; border-radius: 8px; background: #e2e8f0; color: #334155; cursor: pointer; font-weight: 700; }
+    button.primary { background: #3855d9; color: #fff; }
+    #log { margin-top: 18px; padding: 10px 12px; border-radius: 10px; background: #f1f5f9; color: #475569; font-size: 13px; line-height: 1.7; }
+    #log strong { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>保存到「我的信息」测试页</h1>
+    <p class="lead">先在桌面「我的信息」填好姓名和手机号码，再在侧栏点「一键 AI 填写」。下面「补充信息」里的字段简历里没有，应该进入侧栏的保存候选。底部计数用来确认插件从不自动提交。</p>
+
+    <form id="apply" autocomplete="off">
+      <h2>基本信息</h2>
+      <div class="row"><label for="f-name">姓名</label><input id="f-name" type="text"></div>
+      <div class="row"><label for="f-phone">手机号码</label><input id="f-phone" type="text"></div>
+
+      <h2>补充信息</h2>
+      <div class="row"><label for="f-hobby">兴趣爱好</label><input id="f-hobby" type="text"></div>
+      <div class="row"><label for="f-salary">期望薪资</label><input id="f-salary" type="text"></div>
+      <div class="row"><label for="f-skill">特长</label><input id="f-skill" type="text"></div>
+      <div class="row"><label for="f-license">驾驶证类型</label>
+        <select id="f-license">
+          <option value="">请选择</option>
+          <option value="A1">C1 小型汽车</option>
+          <option value="A2">C2 小型自动挡汽车</option>
+          <option value="B1">B2 大型货车</option>
+        </select>
+      </div>
+      <div class="row"><span class="q" id="q-trip">是否接受出差</span>
+        <div class="radios" role="radiogroup" aria-labelledby="q-trip">
+          <label><input type="radio" name="trip" value="1"> 是</label>
+          <label><input type="radio" name="trip" value="0"> 否</label>
+        </div>
+      </div>
+      <div class="row"><label for="f-why">你为什么想加入我们</label><textarea id="f-why" rows="3"></textarea></div>
+      <div class="row"><label for="f-extra">其他补充信息</label><input id="f-extra" type="text"></div>
+
+      <h2>账号安全（不应被保存）</h2>
+      <div class="row"><label for="f-code">短信验证码</label><input id="f-code" type="text" autocomplete="one-time-code"></div>
+      <div class="row"><label for="f-pwd">登录密码</label><input id="f-pwd" type="password"></div>
+
+      <div class="tools">
+        <button class="primary" id="submit" type="submit">提交申请（应保持 0 次）</button>
+      </div>
+    </form>
+
+    <div class="tools">
+      <button type="button" id="prefill">模拟：网页先填好几项</button>
+      <button type="button" id="later">模拟：一键填写后再手动补值</button>
+      <button type="button" id="secret">模拟：某项写了「密码：xxx」</button>
+      <button type="button" id="clear">清空补充信息</button>
+      <button type="button" id="rerender">模拟：页面重渲染（换了题目）</button>
+    </div>
+    <div id="log" role="status">提交次数：<span id="submits">0</span>　点击提交按钮才会增加。</div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const set = (id, value) => { $(id).value = value; $(id).dispatchEvent(new Event("input", { bubbles: true })); $(id).dispatchEvent(new Event("change", { bubbles: true })); };
+    let submits = 0;
+    $("apply").addEventListener("submit", (event) => {
+      event.preventDefault();
+      submits += 1;
+      $("submits").innerHTML = submits ? `<strong>${submits}</strong>` : "0";
+    });
+    $("prefill").addEventListener("click", () => {
+      set("f-hobby", "摄影、徒步");
+      set("f-skill", "钢琴十级");
+      $("f-license").value = "A1";
+      document.querySelector('input[name="trip"][value="1"]').checked = true;
+      set("f-why", "我很认同公司的产品方向，也希望能在这个岗位上成长。");
+    });
+    $("later").addEventListener("click", () => {
+      set("f-salary", "2 万 / 月");
+      set("f-hobby", "摄影、徒步、骑行");
+    });
+    $("secret").addEventListener("click", () => set("f-extra", "银行卡密码：123456"));
+    $("clear").addEventListener("click", () => {
+      ["f-hobby", "f-salary", "f-skill", "f-why", "f-extra"].forEach((id) => set(id, ""));
+      $("f-license").value = "";
+      document.querySelectorAll('input[name="trip"]').forEach((radio) => { radio.checked = false; });
+    });
+    // 重渲染：把「特长」整行换成新节点并改了题目，模拟前端框架重绘后控件对不上原来的字段。
+    $("rerender").addEventListener("click", () => {
+      const row = $("f-skill").closest(".row");
+      row.innerHTML = '<label for="f-skill2">擅长领域</label><input id="f-skill2" type="text" value="钢琴十级">';
+    });
+  </script>
+</body>
+</html>

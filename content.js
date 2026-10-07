@@ -97,7 +97,15 @@
     statusTimer: null,
     lastFocusedField: null,
     chipAction: null,
-    nativeSidePanel: false
+    nativeSidePanel: false,
+    // 「加到我的信息」（#189）：候选连着网页上的控件，只在本页内存里；值每次都现读。
+    profileOfferCandidates: [],
+    profileOfferVersion: 0,
+    profileOfferEpoch: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+    profileOfferResult: null,
+    profileResultCandidateSignature: "",
+    profileDismissedCandidateSignature: null,
+    profileSaving: false
   };
   // #188 辅助新增的状态，只在本页内存里；控制逻辑见 handlePanelRepeat。
   const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
@@ -115,7 +123,6 @@
       const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
       const status = shadowRoot?.querySelector("#resume-pro-status");
       const cancel = shadowRoot?.querySelector("#resume-pro-cancel-fill");
-      const profileOffer = shadowRoot?.querySelector("#resume-pro-profile-offer");
       const desktopStatus = shadowRoot?.querySelector("#resume-pro-desktop-status");
       const diagnosticsPanel = shadowRoot?.querySelector("#resume-pro-diagnostics");
       const jobAssist = shadowRoot?.querySelector("#resume-pro-job-assist");
@@ -134,7 +141,8 @@
         openView: state.suggestedView,
         // While 辅助新增 runs, its own 停止 is the one control; the fill's cancel stays hidden.
         canCancel: !repeatActive() && Boolean(cancel && !cancel.hidden && !cancel.disabled),
-        profileOffer: profileOffer && !profileOffer.hidden ? profileOffer.querySelector("#resume-pro-profile-offer-text")?.textContent || "" : "",
+        // 保存到「我的信息」的候选、勾选依据和结果（#189）；null 表示没有可问的。
+        profileOffer: panelProfileSnapshot(),
         // Archiving the fill that just ended (#178): the offer, the application question and
         // its answer, all drawn by the side panel from this snapshot. Page memory only.
         fillArchive: panelFillSnapshot(),
@@ -197,8 +205,10 @@
     if (message.type === "RESUME_PANEL_OFFER") {
       const action = String(message.action || "");
       if (action === "profileSkip") { closeProfileOffer(); sendResponse({ ok: true }); return false; }
+      if (action === "profileDismiss") { dismissProfileResult(); sendResponse({ ok: true, profileOffer: panelProfileSnapshot() }); return false; }
       if (action === "profileAdd") {
-        addUnansweredToProfile().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+        addUnansweredToProfile(message).then(sendResponse)
+          .catch(() => sendResponse({ ok: false, saved: 0, error: "保存失败，请稍后再试。", profileOffer: panelProfileSnapshot() }));
         return true;
       }
       // Archiving a fill is no longer answered here (#178): the side panel runs the whole
@@ -438,7 +448,7 @@
         <div class="resume-pro__fill-record" id="resume-pro-profile-offer" hidden>
           <p class="resume-pro__save-note" id="resume-pro-profile-offer-text"></p>
           <div class="resume-pro__save-actions">
-            <button class="resume-pro__ai-button" type="button" id="resume-pro-profile-offer-add">加到我的信息</button>
+            <button class="resume-pro__ai-button" type="button" id="resume-pro-profile-offer-add">保存到我的信息</button>
             <button class="resume-pro__manager-button" type="button" id="resume-pro-profile-offer-skip">不用</button>
           </div>
         </div>
@@ -568,7 +578,7 @@
     aiFillButton.addEventListener("click", handleAiFillClick);
     sidebar.querySelector("#resume-pro-repeat-fill").addEventListener("click", handleRepeatFillClick);
     openManagerButton?.addEventListener("click", () => state.desktopMode === "ready" ? openManager("home") : openDesktopAction(state.desktopMode));
-    sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", addUnansweredToProfile);
+    sidebar.querySelector("#resume-pro-profile-offer-add")?.addEventListener("click", () => { addUnansweredToProfile().catch(() => {}); });
     sidebar.querySelector("#resume-pro-profile-offer-skip")?.addEventListener("click", closeProfileOffer);
     bindDesktopEvents(sidebar);
 
@@ -2093,17 +2103,19 @@
         const offerStats = {};
         offerUnansweredFields(fields.flatMap((field) => {
           const entry = fieldMap.get(field.fieldId);
-          return entry?.offerable && entry.offerLabel ? [{
+          if (!(entry?.offerable && entry.offerLabel)) return [];
+          const control = entry.element || entry.elements?.[0];
+          return [{
             label: entry.offerLabel,
             title: entry.binding?.label || "",
             section: entry.binding?.section || "",
             sectionRepeatable: Boolean(entry.binding?.sectionRepeatable),
             inputType: field.inputType,
             matched: matchedIds.has(field.fieldId),
-            hasValue: hasExistingValue(entry),
+            autocomplete: control?.getAttribute?.("autocomplete") || "",
             entry
-          }] : [];
-        }), resumeFields, offerStats);
+          }];
+        }), offerStats);
         // 「加到我的信息」没问的字段：只有这里真的挑过一遍，辅助新增和填写失败时不记。
         if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
@@ -3326,84 +3338,237 @@
     `).join("");
   }
 
-  // 填完之后，网页上没匹配上、也还空着的字段，问一句要不要加进「我的信息」。
-  // 这样档案里的字段来自真实表单，用户补一次内容，下次同样的字段就能自动填。
-  function offerUnansweredFields(candidates, resumeFields, stats = null) {
+  // 填完之后，网页上没匹配上的字段（已填的和空着的）和它们此刻的内容，列给用户勾选后存进桌面「我的信息」（#189）。
+  // 档案只在桌面：这里不留副本，每次都按网页当前的值和桌面最新的档案重新算。
+  function offerUnansweredFields(candidates, stats = null) {
     const api = self.ResumeProProfile;
-    const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
-    if (!api || !card) return;
+    if (!api) return;
 
-    const labels = api.pickUnansweredLabels(candidates, api.knownFieldKeys(state.currentStore?.profile, resumeFields), undefined, stats);
+    state.profileOfferCandidates = candidates;
+    state.profileOfferResult = null;
+    state.profileResultCandidateSignature = "";
+    state.profileDismissedCandidateSignature = null;
+    state.profileOfferVersion += 1;
+    const plan = currentProfilePlan(state.currentStore, stats);
 
-    if (!labels.length) {
+    if (!api.planHasOffer(plan)) {
       closeProfileOffer();
       return;
     }
-
-    state.profileOfferLabels = labels;
-    state.profileOfferFields = resumeFields;
-    state.profileOfferCandidates = candidates;
-    // 长题目在卡片里缩写显示，加到「我的信息」的仍是完整名称。
-    const shown = labels.slice(0, 5).map((label) => label.length > 24 ? `${label.slice(0, 23)}…` : label).join("、");
-    card.querySelector("#resume-pro-profile-offer-text").textContent =
-      `网页上还有 ${labels.length} 个字段空着：${shown}${labels.length > 5 ? " 等" : ""}。加到「我的信息」并补上内容，下次就能自动填。`;
-    card.hidden = false;
+    syncProfileOfferCard(plan);
   }
 
   function closeProfileOffer() {
     const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
     if (card) card.hidden = true;
-    state.profileOfferLabels = [];
-    state.profileOfferFields = [];
     state.profileOfferCandidates = [];
+    state.profileOfferResult = null;
+    state.profileResultCandidateSignature = "";
+    state.profileDismissedCandidateSignature = null;
   }
 
-  async function addUnansweredToProfile() {
-    // 卡片出来之后用户可能已经手动填了几个，点的时候按网页现在的样子再挑一遍。
-    const candidates = state.profileOfferCandidates || [];
-    // 动态展开或重渲染之后，控件可能已经不在原来的题目下：对应关系变了的不加。
-    const labels = (state.profileOfferLabels || []).filter((label) => candidates.some((candidate) =>
-      [candidate.label, candidate.title].some((name) => String(name ?? "").trim() === label)
-      && candidate.entry && !hasExistingValue(candidate.entry)
-      && isFieldBindingCurrent(candidate.entry)));
-    const resumeFields = state.profileOfferFields;
+  // 「完成」收起整张卡；保留候选以便网页上补出新答案时重新出现。
+  function dismissProfileResult() {
+    const result = state.profileOfferResult;
+    state.profileOfferResult = null;
+    state.profileResultCandidateSignature = "";
+    // 部分保存后仍有可处理的候选时，直接把更新后的内容交还给用户复核。
+    state.profileDismissedCandidateSignature = result?.kind === "partial" ? null
+      : profileCandidateSignature(currentProfilePlan());
+  }
 
-    if (!labels.length) {
-      const stale = candidates.some((candidate) => candidate.entry && !isFieldBindingCurrent(candidate.entry));
-      closeProfileOffer();
-      showStatus(stale ? "网页内容已经变化，请重新一键填写后再加。" : "这些字段已经在网页上填好了。", stale ? "error" : "success");
-      return;
-    }
+  function syncProfileOfferCard(plan) {
+    const api = self.ResumeProProfile;
+    const card = shadowRoot?.querySelector("#resume-pro-profile-offer");
+    if (!card) return;
+    const offered = api.planHasOffer(plan);
+    card.hidden = !offered;
+    const note = card.querySelector?.("#resume-pro-profile-offer-text");
+    if (offered && note) note.textContent = api.profileOfferSummary(plan);
+  }
 
+  const PROFILE_UNREADABLE_TYPES = new Set(["password", "file", "hidden", "checkbox"]);
+
+  function cleanProfileText(value, multiline) {
+    const raw = String(value ?? "").replace(/\r\n?/g, "\n").trim();
+    return multiline ? raw : raw.replace(/\s+/g, " ");
+  }
+
+  // 读出用户眼前看到的值：文本原样、下拉和单选是选项文字（不是内部 code）。
+  // stale = 控件没了或和题目的对应关系变了；unreadable = 有内容但读不准，不猜。
+  function readProfileEntry(entry) {
+    const stale = { state: "stale", value: "" };
+    const unreadable = { state: "unreadable", value: "" };
+    const ready = (value) => ({ state: "ready", value });
+    const controls = entry?.kind === "radio" ? entry.elements : [entry?.element];
+    if (!controls?.length || !controls.every((el) => el?.isConnected) || !isFieldBindingCurrent(entry)) return stale;
     try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const current = await StorageService.getState();
-        if (!current) throw new Error("桌面简历当前不可用。");
-        const { profile, added, full } = self.ResumeProProfile.addPendingFields(current.profile, labels, resumeFields);
-        if (!added) {
-          if (!full) closeProfileOffer();
-          showStatus(full ? "补充字段已经满了，先在桌面里删掉用不上的。" : "这些字段「我的信息」里已经有了。", full ? "error" : "success");
-          return;
-        }
-        const result = await chrome.runtime.sendMessage({
-          type: "DESKTOP_RESUME_UPDATE", op: "saveProfile",
-          profile, expectedRevision: current.profileRevision
-        });
-        if (result?.status === "conflict" && attempt === 0) continue;
-        if (result?.status === "conflict") throw new Error("我的信息刚在别处改过，请再点一次。");
-        if (result?.status === "secret") throw new Error("我的信息里有像密码的内容，桌面没有保存。");
-        if (result?.status === "input_too_large") throw new Error("我的信息内容太多，桌面没有保存。");
-        if (result?.status !== "ok") throw new Error("桌面暂时无法保存我的信息。");
-        state.currentStore = await StorageService.getState();
-        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
-        closeProfileOffer();
-        showStatus(`已把 ${added} 个字段加到「我的信息」，在桌面里补上内容。`, "success", true);
-        await openManager("resume");
-        return;
+      if (entry.kind === "radio") {
+        const checked = entry.elements.find((el) => el.checked);
+        if (!checked) return ready("");
+        const label = cleanProfileText(checked.labels?.[0]?.textContent || checked.closest?.("label")?.textContent
+          || checked.getAttribute?.("aria-label"), false);
+        return label ? ready(label) : unreadable;
       }
-    } catch (error) {
-      showStatus(`没有加进去：${error.message || "写入失败"}`, "error");
+      const el = entry.element;
+      if (PROFILE_UNREADABLE_TYPES.has(String(el.type || "").toLowerCase())) return unreadable;
+      if (["custom-select", "cascader"].includes(entry.controlKind)) {
+        const selection = self.ResumeProCustomControls?.readSelection?.(entry);
+        if (selection?.texts?.length) return ready(cleanProfileText(selection.texts.join(selection.cascade ? "/" : "、"), false));
+        return hasExistingValue(entry) ? unreadable : ready("");
+      }
+      if (el instanceof HTMLSelectElement) {
+        const options = Array.from(el.options || []);
+        const chosen = el.multiple ? options.filter((option) => option.selected) : [options[el.selectedIndex]].filter(Boolean);
+        const texts = chosen
+          .filter((option) => option.value !== "" && !self.ResumeProAIHelpers?.isPlaceholderOption?.({ value: option.value, text: option.text, disabled: option.disabled }))
+          .map((option) => cleanProfileText(option.text ?? option.textContent, false))
+          .filter(Boolean);
+        return ready(texts.join("、"));
+      }
+      return ready(cleanProfileText(el.isContentEditable ? el.textContent : el.value, el.tagName === "TEXTAREA" || el.isContentEditable));
+    } catch {
+      return unreadable;
     }
+  }
+
+  // 此刻的候选规划：网页当前的值 × 给定的桌面档案和模板。
+  function currentProfilePlan(store = state.currentStore, stats = null) {
+    const candidates = (state.profileOfferCandidates || []).map((candidate) =>
+      candidate.matched ? candidate : { ...candidate, ...readProfileEntry(candidate.entry) });
+    const template = getActiveTemplate(store);
+    return self.ResumeProProfile.planProfileOffer({
+      candidates, profile: store?.profile, templateFields: template ? flattenTemplateFields(template) : [], stats
+    });
+  }
+
+  // 侧栏画候选用的快照。值只经这条本机消息给侧栏，不进诊断、反馈或存储。
+  function panelProfileSnapshot() {
+    const api = self.ResumeProProfile;
+    let result = state.profileOfferResult;
+    if (!api || (!state.profileOfferCandidates?.length && !result)) return null;
+    const plan = state.profileOfferCandidates?.length
+      ? currentProfilePlan()
+      : { filled: [], pending: [], conflicts: [], notes: [], same: 0, hidden: 0 };
+    // 保存完成后保持简短结果；用户随后在网页补出新答案时，再展示新的保存建议。
+    if (result?.saved > 0 && profileCandidateSignature(plan) !== state.profileResultCandidateSignature) {
+      state.profileOfferResult = null;
+      result = null;
+    }
+    if (state.profileDismissedCandidateSignature !== null) {
+      if (profileCandidateSignature(plan) === state.profileDismissedCandidateSignature) return null;
+      state.profileDismissedCandidateSignature = null;
+    }
+    if (!api.planHasOffer(plan) && !result) return null;
+    return {
+      epoch: state.profileOfferEpoch,
+      version: state.profileOfferVersion,
+      saving: state.profileSaving,
+      summary: api.planHasOffer(plan) ? api.profileOfferSummary(plan) : "",
+      filled: plan.filled.map(({ id, key, value, completes, jobSpecific, defaultSelected }) => ({ id, key, value, completes, jobSpecific, defaultSelected })),
+      pending: plan.pending.map(({ id, key, unreadable }) => ({ id, key, unreadable, defaultSelected: false })),
+      conflicts: plan.conflicts.map(({ id, key, value, existing }) => ({ id, key, value, existing, defaultSelected: false })),
+      notes: plan.notes.map((note) => note.text),
+      same: plan.same,
+      hidden: plan.hidden,
+      result: state.profileOfferResult ? { ...state.profileOfferResult } : null
+    };
+  }
+
+  function profileCandidateSignature(plan) {
+    return JSON.stringify([
+      ...(plan?.filled || []).map((item) => [item.id, item.value]),
+      ...(plan?.conflicts || []).map((item) => [item.id, item.value, item.existing])
+    ]);
+  }
+
+  function normalizeProfileSelection(raw) {
+    return (Array.isArray(raw) ? raw : []).slice(0, 200).map((item) => ({
+      id: String(item?.id ?? ""),
+      key: String(item?.key ?? ""),
+      kind: ["filled", "pending", "conflict"].includes(item?.kind) ? item.kind : undefined,
+      reviewedValue: typeof item?.reviewedValue === "string" ? item.reviewedValue : undefined,
+      replaceOf: typeof item?.replaceOf === "string" ? item.replaceOf : undefined
+    }));
+  }
+
+  function profileSaveFailure(status) {
+    if (status === "conflict") return "「我的信息」刚在别处改过，这次没有保存；候选还在，请再点一次保存。";
+    if (status === "secret") return "桌面认为有一项内容像密码或验证码，这次没有保存任何内容；候选还在。";
+    if (status === "input_too_large") return "「我的信息」太大，桌面没有保存。先在桌面删掉用不上的补充字段；候选还在。";
+    if (status === "invalid_payload") return "桌面没有接受这次保存（可能超出补充字段数量或大小限制），什么都没有写入；候选还在。";
+    if (["not_installed", "not_paired", "never_paired", "incompatible", "unavailable"].includes(status)) {
+      return `没有保存：${self.ResumeProResumeData.modeCopy(status).message}候选还在，连上后再点保存。`;
+    }
+    return "桌面暂时无法保存「我的信息」，什么都没有写入；候选还在，可以稍后再试。";
+  }
+
+  // 点击保存：重新读桌面档案和网页当前的值，按用户的勾选写入，成功后再读一次桌面档案。
+  async function saveProfileSelection(request) {
+    const api = self.ResumeProProfile;
+    const fail = (text) => ({ kind: "error", text, hint: "", details: [], saved: 0 });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const fresh = await StorageService.getState();
+      if (!fresh) return fail(profileSaveFailure(state.desktopMode));
+      state.currentStore = fresh;
+      const plan = currentProfilePlan(fresh);
+      const selection = request ? normalizeProfileSelection(request.selected) : api.defaultProfileSelection(plan);
+      const outcome = api.applyProfileSelection(fresh.profile, plan, selection);
+      if (!outcome.saved.length) return { ...api.describeProfileSave(outcome), saved: 0 };
+
+      const reply = await chrome.runtime.sendMessage({
+        type: "DESKTOP_RESUME_UPDATE", op: "saveProfile",
+        profile: outcome.profile, expectedRevision: fresh.profileRevision
+      });
+      if (reply?.status === "conflict" && attempt === 0) continue;
+      if (reply?.status !== "ok") return fail(profileSaveFailure(reply?.status));
+
+      // 桌面确认写入了；插件显示和下次填写用的都是重新读到的桌面档案。
+      const after = await StorageService.getState();
+      if (after) {
+        state.currentStore = after;
+        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+      }
+      const message = api.describeProfileSave(outcome);
+      return {
+        ...message, saved: outcome.saved.length,
+        savedItems: outcome.saved.map(({ key, value, kind }) => ({ key, value, kind })),
+        hint: [message.hint, after ? "" : "暂时没能重新读取桌面档案，下次填写前会再读一次。"].filter(Boolean).join(" ")
+      };
+    }
+    return fail(profileSaveFailure("conflict"));
+  }
+
+  async function addUnansweredToProfile(request = null) {
+    const done = (extra) => ({ ...extra, profileOffer: panelProfileSnapshot() });
+    if (!self.ResumeProProfile || !state.profileOfferCandidates?.length) {
+      return done({ ok: false, saved: 0, error: "没有可保存的内容，请先一键填写。" });
+    }
+    if (Number.isInteger(request?.version) && request.version !== state.profileOfferVersion) {
+      return done({ ok: false, saved: 0, error: "候选已经更新，请重新核对后再保存。" });
+    }
+    if (state.profileSaving) return done({ ok: false, saved: 0, error: "正在保存，请稍候。" });
+
+    state.profileSaving = true;
+    state.profileOfferResult = null;
+    let result;
+    try {
+      result = await saveProfileSelection(request);
+    } catch (error) {
+      result = { kind: "error", text: `没有保存：${error?.message || "写入失败"}；候选还在。`, hint: "", details: [], saved: 0 };
+    } finally {
+      state.profileSaving = false;
+    }
+    state.profileOfferResult = result;
+    const plan = currentProfilePlan();
+    state.profileResultCandidateSignature = profileCandidateSignature(plan);
+    syncProfileOfferCard(plan);
+    // 原生侧栏自己显示结果；旧的页面内侧栏只读这块状态区，需要明确反馈。
+    if (inPageUiVisible()) {
+      const shown = [result.text, ...(result.details || []), result.hint].filter(Boolean).join(" ");
+      showStatus(shown, result.kind === "success" ? "success" : "error", result.kind !== "success");
+    }
+    return done({ ok: result.saved > 0, saved: result.saved });
   }
 
   function flattenTemplateFields(template) {
@@ -5646,11 +5811,17 @@
       setNativeSidePanel(supported) {
         state.nativeSidePanel = Boolean(supported);
       },
-      setProfileOffer({ candidates, labels, fields }) {
+      setProfileOffer({ candidates }) {
         state.profileOfferCandidates = candidates;
-        state.profileOfferLabels = labels;
-        state.profileOfferFields = fields;
+        state.profileOfferResult = null;
+        state.profileOfferVersion += 1;
       },
+      getProfileOfferVersion() {
+        return state.profileOfferVersion;
+      },
+      panelProfileSnapshot,
+      offerUnansweredFields,
+      dismissProfileResult,
       setLastFocusedField(field) {
         state.lastFocusedField = field;
       },
