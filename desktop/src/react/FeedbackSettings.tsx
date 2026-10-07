@@ -60,7 +60,9 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
     } catch { setStatus("发送失败，没有自动重试。请稍后重试。"); }
     finally { setBusy(false); }
   }
-  const choice = consent === null ? <dialog ref={choiceRef} className="feedback-choice" aria-label="帮我们改进网申快填">
+  const choice = consent === null ? <dialog ref={choiceRef} className="feedback-choice" aria-label="帮我们改进网申快填"
+    // Esc is not an answer. If the webview closes it anyway, it stays on the page as a card.
+    onCancel={event => event.preventDefault()} onClose={event => event.currentTarget.show()}>
     <h2>帮我们改进网申快填</h2>
     <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「用不了」，看不出卡在哪一步，很难找到原因。开启自动错误报告后，程序出错时会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
     <p>报告里只有技术信息：错误类型、出错的代码位置、程序版本、系统、发送时间和一个随机生成的安装编号。不包含你的简历、个人资料、填写的内容、Cookie 或密钥。发送前会先去掉可能的个人信息。报告最多保存 90 天；部分内容可能会公开在网申快填的 GitHub 项目里，方便复现问题，公开的内容会长期保留；安装编号不会公开。</p>
