@@ -163,6 +163,15 @@ export function installFeedback(api) {
     handle().then(reply).catch(() => reply({ ok: false, reason: 'unavailable' }));
     return true;
   });
+  // Ask right away instead of waiting for the user to find the setting: after an install, or an
+  // update, that leaves the choice unanswered, open the status page, which shows the choice.
+  // Registered synchronously, as MV3 requires for events that wake the worker.
+  api.runtime.onInstalled?.addListener(details => {
+    if (details?.reason !== 'install' && details?.reason !== 'update') return;
+    service.status()
+      .then(view => view.decided ? null : api.tabs.create({ url: api.runtime.getURL('popup.html') }))
+      .catch(() => {});
+  });
   core.install(data => service.automatic(data).catch(() => {}), { origin });
   return service;
 }
