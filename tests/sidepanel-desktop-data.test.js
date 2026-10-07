@@ -133,6 +133,22 @@ test('an open side panel picks up a profile field saved in the desktop', async (
   assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
 });
 
+test('a failed periodic reread keeps visible fields until an explicit connection check', async () => {
+  const ui = await harness();
+  ui.setResponse({ status: 'unavailable' });
+  for (let i = 0; i < 4; i += 1) {
+    ui.poll();
+    await ui.tick();
+  }
+
+  assert.match(ui.get('field-groups').innerHTML, /测试用户/);
+  assert.equal(ui.get('desktop-connection').hidden, true);
+  ui.documentEvents.visibilitychange();
+  await ui.tick();
+  assert.doesNotMatch(ui.get('field-groups').innerHTML, /测试用户/);
+  assert.equal(ui.get('desktop-connection').hidden, false);
+});
+
 test('a desktop reread does not re-enable AI while the page is busy', async () => {
   const ui = await harness();
   ui.setPageResponse({ ready: true, busy: true, phase: 'AI 匹配中' });

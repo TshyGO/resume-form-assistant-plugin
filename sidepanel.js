@@ -293,10 +293,13 @@
     const groups = groupedFields();
     const fields = visibleFields(groups);
     elements.fieldMeta.textContent = `${selected?.name || "我的信息"} · ${groups.length} 个分组 · ${fields.length} 项`;
+    const groupOccurrences = new Map();
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
       if (!rows.length) return "";
-      const groupKey = `${group.name}:${index}`;
+      const occurrence = groupOccurrences.get(group.name) || 0;
+      groupOccurrences.set(group.name, occurrence + 1);
+      const groupKey = JSON.stringify([group.name, occurrence]);
       const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
       return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
         <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
@@ -1269,7 +1272,7 @@
     }
   }
 
-  async function loadStore() {
+  async function loadStore({ periodic = false } = {}) {
     const sequence = ++storeReadSequence;
     let result;
     try {
@@ -1278,6 +1281,9 @@
       result = null;
     }
     if (sequence !== storeReadSequence) return;
+    // A periodic refresh looks for new data, not connection health. A transient native
+    // messaging failure must not erase the fields the user is currently browsing.
+    if (periodic && result?.status !== "ok" && storeLoaded) return;
     const nextMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
     const nextStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
     const nextSnapshot = JSON.stringify(nextStore);
@@ -1629,7 +1635,7 @@
     pollStatus().catch(() => {});
     // The page status poll does not include desktop profile changes. Reread while the
     // panel stays open so desktop edits appear without a tab switch or reopening it.
-    if (!document.hidden && ++statusPollCount % 4 === 0) loadStore().catch(() => {});
+    if (!document.hidden && ++statusPollCount % 4 === 0) loadStore({ periodic: true }).catch(() => {});
   }, 1500);
   // 0.4.0 data on its way to the desktop: only while it is in flight does the panel say so.
   async function renderLegacyHint() {
