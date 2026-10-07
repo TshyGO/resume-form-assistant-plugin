@@ -548,6 +548,11 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; }
 .template-preview dt { font-weight: 600; min-width: 8em; }
 .template-preview dd { margin: 0; white-space: pre-wrap; }
 .profile-form fieldset { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
+.profile-form > .note.warn.stack { max-width: 900px; }
+.profile-conflict-details { border-top: 1px solid currentColor; padding-top: 12px; }
+.profile-conflict-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.profile-conflict-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; }
+.profile-conflict-values p { margin: 0; overflow-wrap: anywhere; }
 .profile-form fieldset > legend, .profile-form fieldset > p, .profile-form fieldset > [role="group"], .profile-form fieldset > .custom-field-head { grid-column: 1 / -1; }
 .pill.warn { border: 1px solid #e7d4a8; color: #7c5a12; background: transparent; }
 /* 「我的信息」用满内容区宽度（.view 已限制最宽 1160px），不再挤在左边 520px。

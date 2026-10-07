@@ -6,6 +6,8 @@ import { profileApi } from "./profile.ts";
 import type { FamilyMember, Profile, ProfileFieldDef } from "./profile.ts";
 import type { Notice } from "./resume-text.ts";
 import type { DesktopEvent, Listen } from "./LegacyImport.tsx";
+import { applyProfileChoices, inspectProfileUpdate, validSeparateName } from "./profile-draft-sync.ts";
+import type { ConflictChoice } from "./profile-draft-sync.ts";
 
 type ProfileChanged = { revision: number; source: "plugin" };
 
@@ -167,25 +169,36 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [conflict, setConflict] = useState(false);
   const [busy, setBusy] = useState(false);
-  // 有没有没保存的修改：插件在后台写入时，靠这个决定是直接刷新还是先问用户（#177）。
+  // 插件更新可以到达正在编辑的表单，草稿与上次读取的基准分别保存。
   const [externalChange, setExternalChange] = useState(false);
   const [deferredExternalChange, setDeferredExternalChange] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [pendingRemote, setPendingRemote] = useState<ProfileRecordView | null>(null);
+  const [showConflictDetails, setShowConflictDetails] = useState(false);
+  const [choices, setChoices] = useState<Record<string, ConflictChoice>>({});
+  const [renames, setRenames] = useState<Record<string, string>>({});
+  const [confirmExternalChoice, setConfirmExternalChoice] = useState<string | null>(null);
   const reloadPendingRef = useRef(false);
+  const savingRef = useRef(false);
   const reloadButtonRef = useRef<HTMLButtonElement>(null);
   const dirtyRef = useRef(false);
+  const profileRef = useRef<Profile | null>(null);
+  const baseProfileRef = useRef<Profile | null>(null);
   const revisionRef = useRef(0);
   const editVersionRef = useRef(0);
   const loadSequenceRef = useRef(0);
   const pendingExternalRevisionRef = useRef(0);
-  const ignoredExternalRevisionRef = useRef(0);
+  const unknownExternalPendingRef = useRef(false);
 
-  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0) => {
+  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0, checkExternal = externalRevision > 0) => {
     if (!invoke || (discardLocalChanges && reloadPendingRef.current)) return;
     if (discardLocalChanges) {
       reloadPendingRef.current = true;
       setReloading(true);
+    } else if (checkExternal) {
+      setSyncing(true);
     }
     const loadSequence = ++loadSequenceRef.current;
     const editVersion = editVersionRef.current;
@@ -194,25 +207,70 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       // 多次外部更新可能同时读取。只允许最后发起的读取落地，避免旧响应晚到后
       // 把 UI 和 revision 回滚到更早的档案。
       if (loadSequence !== loadSequenceRef.current) return;
-      // 自动刷新等待数据库期间，用户可能已经开始输入。此时不能用刚读回的数据覆盖；
-      // 改为提示，由用户明确选择是否放弃本地修改。
-      if (editVersionRef.current !== editVersion) {
-        if (externalRevision) {
-          pendingExternalRevisionRef.current = Math.max(
-            pendingExternalRevisionRef.current,
-            externalRevision,
-          );
-          setExternalChange(true);
-        } else if (discardLocalChanges) {
-          setNotice({ tone: "warn", text: "读取期间内容又有修改，已保留当前输入。请停止编辑后再重新读取。" });
-        }
+      const remote = profileApi.normalizeProfile(record.profile);
+      const latestRequested = Math.max(externalRevision, pendingExternalRevisionRef.current);
+      if (checkExternal && latestRequested && record.revision < latestRequested) {
+        setDeferredExternalChange(true);
         return;
       }
-      setProfile(profileApi.normalizeProfile(record.profile));
+      // 用户确认放弃后若又开始输入，不能让晚到的读取覆盖新输入。
+      if (discardLocalChanges && editVersionRef.current !== editVersion) {
+        setNotice({ tone: "warn", text: "读取期间内容又有修改，已保留当前输入。请停止编辑后再重新读取。" });
+        return;
+      }
+      const draft = profileRef.current;
+      const base = baseProfileRef.current;
+      if (!discardLocalChanges && draft && base && dirtyRef.current) {
+        if (record.revision <= revisionRef.current) {
+          // 旧宿主没有 revision 的通知只要求核对一次；读回相同版本时不能虚构待同步状态。
+          if (checkExternal && !pendingExternalRevisionRef.current) {
+            unknownExternalPendingRef.current = false;
+            setExternalChange(false);
+            setDeferredExternalChange(false);
+            setConflict(false);
+          }
+          return;
+        }
+        const result = inspectProfileUpdate(base, draft, remote);
+        if (result.conflicts.length) {
+          unknownExternalPendingRef.current = false;
+          setPendingRemote(record);
+          setNotice(null);
+          setChoices({});
+          setRenames({});
+          setConfirmExternalChoice(null);
+          setExternalChange(false);
+          setConflict(true);
+          setDeferredExternalChange(false);
+          pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, record.revision);
+          return;
+        }
+        const merged = { ...draft, custom: [...draft.custom, ...result.additions] };
+        profileRef.current = merged;
+        setProfile(merged);
+        baseProfileRef.current = remote;
+        setRevision(record.revision);
+        revisionRef.current = record.revision;
+        setPendingRemote(null);
+        setConflict(false);
+        setExternalChange(false);
+        setDeferredExternalChange(false);
+        pendingExternalRevisionRef.current = 0;
+        unknownExternalPendingRef.current = false;
+        setNotice(result.additions.length
+          ? { tone: "warn", text: "插件新增了补充字段，已加入当前草稿；你的修改仍未保存。" }
+          : null);
+        return;
+      }
+      profileRef.current = remote;
+      baseProfileRef.current = remote;
+      setProfile(remote);
       setRevision(record.revision);
       revisionRef.current = record.revision;
       setConflict(false);
-      const newerRevision = Math.max(pendingExternalRevisionRef.current, ignoredExternalRevisionRef.current);
+      setPendingRemote(null);
+      setShowConflictDetails(false);
+      const newerRevision = pendingExternalRevisionRef.current;
       const hasNewerRevision = newerRevision > record.revision;
       setDeferredExternalChange(hasNewerRevision);
       setConfirmDiscard(false);
@@ -220,15 +278,17 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       dirtyRef.current = false;
       setExternalChange(false);
       pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
-      ignoredExternalRevisionRef.current = 0;
+      unknownExternalPendingRef.current = false;
     } catch (error) {
       if (loadSequence !== loadSequenceRef.current) return;
+      if (checkExternal) setDeferredExternalChange(true);
       setNotice({ tone: "error", text: (error as { message?: string })?.message ?? "读取失败。" });
     } finally {
       if (discardLocalChanges) {
         reloadPendingRef.current = false;
         setReloading(false);
       }
+      if (checkExternal && loadSequence === loadSequenceRef.current) setSyncing(false);
     }
   }, [invoke]);
 
@@ -236,8 +296,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     void load();
   }, [load]);
 
-  // 插件把补充字段写进档案后发的信号，不带字段内容（#177）。没有未保存的修改就直接重新读取；
-  // 有未保存的修改不能替用户做主覆盖掉，只弹提示，读不读由用户自己点。
+  // 事件不带字段内容；脏表单先读取到临时数据，再只合入可证明安全的新增空字段。
   useEffect(() => {
     if (!listen) return;
     let active = true;
@@ -249,26 +308,16 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         // 正式事件总有 revision/source。兼容无 payload 的测试/旧宿主时仍刷新一次；
         // 有 payload 却不符合协议的事件不能伪装成兼容事件触发刷新。
         if (event?.payload !== undefined && !change) return;
-        const externalRevision = change?.revision ?? revisionRef.current + 1;
-        // 当前、旧、已忽略或已经在读取的 revision 都不重复处理。
-        if (
-          externalRevision <= revisionRef.current
-          || externalRevision <= ignoredExternalRevisionRef.current
-          || externalRevision <= pendingExternalRevisionRef.current
-        ) return;
-        if (dirtyRef.current) {
-          pendingExternalRevisionRef.current = Math.max(
-            pendingExternalRevisionRef.current,
-            externalRevision,
-          );
-          setExternalChange(true);
+        const externalRevision = change?.revision ?? 0;
+        // 有真实 revision 的事件去重；旧宿主的无 payload 事件只核对，不编造新版本。
+        if (change) {
+          if (externalRevision <= revisionRef.current || externalRevision <= pendingExternalRevisionRef.current) return;
+          pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, externalRevision);
         } else {
-          pendingExternalRevisionRef.current = Math.max(
-            pendingExternalRevisionRef.current,
-            externalRevision,
-          );
-          void load(false, externalRevision);
+          unknownExternalPendingRef.current = true;
         }
+        setExternalChange(true);
+        if (!savingRef.current && !reloadPendingRef.current) void load(false, externalRevision, true);
       }),
     ).then((stop) => {
       if (!stop) return;
@@ -295,7 +344,12 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const updateProfile = (next: Profile) => {
     editVersionRef.current += 1;
     dirtyRef.current = true;
+    profileRef.current = next;
     setProfile(next);
+    if (pendingRemote) {
+      setChoices({});
+      setConfirmExternalChoice(null);
+    }
     setNotice(null);
   };
   const setValue = (id: string, value: string) =>
@@ -307,43 +361,116 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
 
   const save = async () => {
     if (busy || reloadPendingRef.current || confirmDiscard) return;
+    if (pendingRemote || externalChange || deferredExternalChange || conflict || syncing) {
+      setShowConflictDetails(true);
+      setNotice({ tone: "warn", text: "请先处理外部更新，再保存当前草稿。" });
+      return;
+    }
     setBusy(true);
+    savingRef.current = true;
+    const editVersion = editVersionRef.current;
     try {
       // 规范化用插件同一份规则：空值去掉、同名补充字段合并、全空的家庭成员丢掉。
       const normalized = profileApi.normalizeProfile(profile);
       const record = await invoke<ProfileRecordView>("save_profile_cmd", { profile: normalized, revision });
       const saved = profileApi.normalizeProfile(record.profile);
-      setProfile(saved);
+      if (editVersionRef.current === editVersion) {
+        profileRef.current = saved;
+        setProfile(saved);
+        dirtyRef.current = false;
+      } else {
+        // 保存请求发出后用户又输入，响应不能抹掉这段新草稿。
+        dirtyRef.current = true;
+      }
+      baseProfileRef.current = saved;
       setRevision(record.revision);
       revisionRef.current = record.revision;
       // 保存结果比此前启动的任何读取都新；让那些响应回来时直接作废。
       loadSequenceRef.current += 1;
-      dirtyRef.current = false;
-      setExternalChange(false);
-      const newerRevision = Math.max(pendingExternalRevisionRef.current, ignoredExternalRevisionRef.current);
+      const unknownExternalPending = unknownExternalPendingRef.current;
+      setExternalChange(unknownExternalPending);
+      const newerRevision = pendingExternalRevisionRef.current;
       const hasNewerRevision = newerRevision > record.revision;
-      setDeferredExternalChange(hasNewerRevision);
+      setDeferredExternalChange(hasNewerRevision || unknownExternalPending);
       pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
-      ignoredExternalRevisionRef.current = 0;
       // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
       const count = profileApi.countProfileValues(saved);
       const pending = profileApi.countPendingFields(saved);
-      setNotice({
+      setNotice(editVersionRef.current === editVersion ? {
         tone: "ok",
         text: pending ? `已保存 ${count} 项，还有 ${pending} 个字段没填内容。` : `已保存 ${count} 项。`,
-      });
+      } : { tone: "warn", text: "已保存此前的修改；保存期间的新输入仍未保存。" });
+      if (hasNewerRevision) void load(false, newerRevision, true);
+      else if (unknownExternalPending) void load(false, 0, true);
     } catch (error) {
       const err = error as { code?: string; message?: string } | null;
       const revisionConflict = err?.code === "CONFLICT";
       setConflict(revisionConflict);
       if (revisionConflict) {
-        setExternalChange(false);
-        pendingExternalRevisionRef.current = 0;
+        setExternalChange(true);
+        pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, revisionRef.current + 1);
+        void load(false, pendingExternalRevisionRef.current, true);
       }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
+      savingRef.current = false;
       setBusy(false);
     }
+  };
+
+  const inspection = pendingRemote && baseProfileRef.current
+    ? inspectProfileUpdate(baseProfileRef.current, profile, profileApi.normalizeProfile(pendingRemote.profile))
+    : null;
+  const chooseConflict = (id: string, choice: ConflictChoice) => {
+    if (choice === "remote") {
+      setConfirmExternalChoice(id);
+      return;
+    }
+    setChoices((current) => ({ ...current, [id]: choice }));
+    setConfirmExternalChoice(null);
+  };
+  const applyChoices = () => {
+    if (!pendingRemote || !inspection) return;
+    const latest = profileApi.normalizeProfile(pendingRemote.profile);
+    if (pendingExternalRevisionRef.current > pendingRemote.revision) {
+      setNotice({ tone: "warn", text: "又收到新的更新，请先读取最新版本。" });
+      void load(false, pendingExternalRevisionRef.current, true);
+      return;
+    }
+    if (inspection.conflicts.some((item) => !choices[item.id])) {
+      setNotice({ tone: "warn", text: "请为每一处更新选择处理方式。" });
+      return;
+    }
+    const invalidRename = inspection.conflicts.find((item) => choices[item.id] === "both" && (
+      !validSeparateName(renames[item.id] ?? "", profile, item)
+      || latest.custom.some((field) => profileApi.normalizeKey(field.key) === profileApi.normalizeKey(renames[item.id] ?? ""))
+    ));
+    if (invalidRename) {
+      setNotice({ tone: "warn", text: `请为「${invalidRename.label}」填写一个不同且未使用的字段名。` });
+      return;
+    }
+    const merged = applyProfileChoices(profile, inspection.additions, inspection.conflicts, choices, renames);
+    if (choices.family === "remote") merged.family = latest.family.map((member) => ({ ...member }));
+    const intendedKeys = merged.custom.map((item) => profileApi.normalizeKey(item.key)).filter(Boolean);
+    if (new Set(intendedKeys).size !== intendedKeys.length || profileApi.normalizeProfile(merged).custom.length !== intendedKeys.length) {
+      setNotice({ tone: "warn", text: "补充字段存在同名项或已达数量上限，请调整后再应用。" });
+      return;
+    }
+    profileRef.current = merged;
+    baseProfileRef.current = latest;
+    setProfile(merged);
+    setRevision(pendingRemote.revision);
+    revisionRef.current = pendingRemote.revision;
+    dirtyRef.current = true;
+    editVersionRef.current += 1;
+    pendingExternalRevisionRef.current = 0;
+    setPendingRemote(null);
+    setConflict(false);
+    setExternalChange(false);
+    setDeferredExternalChange(false);
+    setShowConflictDetails(false);
+    setConfirmExternalChoice(null);
+    setNotice({ tone: "warn", text: "更新已加入当前草稿；你的修改仍未保存。" });
   };
 
   return (
@@ -354,31 +481,68 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         void save();
       }}
     >
-      {externalChange || deferredExternalChange || conflict ? (
+      {externalChange || deferredExternalChange || conflict || pendingRemote ? (
         <div className="note warn stack" role="status">
-          <p>{conflict
-            ? "档案已在别处更新。当前输入仍保留，重新读取会放弃未保存的修改。"
-            : deferredExternalChange
-              ? "有待同步的补充字段。当前输入仍保留，可稍后处理。"
-              : "插件添加了新的补充字段。当前页面还有未保存的修改。"}</p>
+          <p>{pendingRemote
+            ? `有 ${inspection?.conflicts.length ?? 0} 处更新需要确认。你的未保存修改已保留。`
+            : syncing
+              ? "正在检查插件更新；你的未保存修改已保留。"
+              : deferredExternalChange
+                ? "有待同步的更新。当前输入仍保留，可稍后处理。"
+                : "档案已在别处更新。当前输入仍保留，正在读取更新。"}</p>
           <div className="row">
+            {pendingRemote ? (
+              <button type="button" onClick={() => setShowConflictDetails(true)}>查看并处理</button>
+            ) : (
+              <button type="button" disabled={syncing || reloading || busy} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>
+                重新检查更新
+              </button>
+            )}
+            {pendingRemote && pendingExternalRevisionRef.current > pendingRemote.revision ? (
+              <button type="button" disabled={syncing} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>读取最新更新</button>
+            ) : null}
+            <button type="button" disabled={syncing} onClick={() => {
+              setShowConflictDetails(false);
+              setDeferredExternalChange(true);
+            }}>稍后处理</button>
             <button ref={reloadButtonRef} type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
               放弃未保存修改并重新读取
             </button>
-            {externalChange ? (
-              <button type="button" onClick={() => {
-                ignoredExternalRevisionRef.current = Math.max(
-                  ignoredExternalRevisionRef.current,
-                  pendingExternalRevisionRef.current,
-                );
-                pendingExternalRevisionRef.current = 0;
-                setExternalChange(false);
-                setDeferredExternalChange(true);
-              }}>
-                稍后处理
-              </button>
-            ) : null}
           </div>
+          {pendingRemote && showConflictDetails && inspection ? (
+            <div className="profile-conflict-details stack" role="group" aria-label="处理外部更新">
+              <p>选择当前草稿会在下次保存时覆盖对应外部值；选择外部版本会替换当前输入。</p>
+              {inspection.conflicts.map((item) => (
+                <div key={item.id} className="profile-conflict-item stack" role="group" aria-label={`冲突：${item.label}`}>
+                  <strong>{item.label}</strong>
+                  <div className="profile-conflict-values">
+                    <p>当前草稿：<span>{item.kind === "custom" && item.localItem ? `${item.localItem.key} — ` : ""}{item.local}</span></p>
+                    <p>外部版本：<span>{item.kind === "custom" && item.remoteItem ? `${item.remoteItem.key} — ` : ""}{item.remote}</span></p>
+                  </div>
+                  <div className="row">
+                    <button type="button" aria-pressed={choices[item.id] === "local"} onClick={() => chooseConflict(item.id, "local")}>使用当前草稿</button>
+                    <button type="button" aria-pressed={choices[item.id] === "remote"} onClick={() => chooseConflict(item.id, "remote")}>使用外部版本</button>
+                    {item.kind === "custom" && item.newlyAdded && item.localItem && item.remoteItem ? (
+                      <button type="button" aria-pressed={choices[item.id] === "both"} onClick={() => chooseConflict(item.id, "both")}>分别保留</button>
+                    ) : null}
+                  </div>
+                  {confirmExternalChoice === item.id ? (
+                    <div className="row" role="group" aria-label={`确认使用外部版本：${item.label}`}>
+                      <span>这会放弃该处当前草稿内容，确定吗？</span>
+                      <button type="button" onClick={() => { setChoices((current) => ({ ...current, [item.id]: "remote" })); setConfirmExternalChoice(null); }}>确定使用外部版本</button>
+                      <button type="button" onClick={() => setConfirmExternalChoice(null)}>取消</button>
+                    </div>
+                  ) : null}
+                  {choices[item.id] === "both" ? (
+                    <label>给当前草稿中的字段改名
+                      <input value={renames[item.id] ?? ""} onChange={(event) => setRenames((current) => ({ ...current, [item.id]: event.target.value }))} />
+                    </label>
+                  ) : null}
+                </div>
+              ))}
+              <button type="button" onClick={applyChoices}>应用选择，继续编辑</button>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {confirmDiscard ? (
