@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Invoke } from "../api.ts";
 
-type Status = { consent: boolean | null; notice_seen: boolean };
+// `consent: null` means the user has not chosen; nothing automatic is sent until they do.
+type Status = { consent: boolean | null };
 type Preview = { token: string; payload: Record<string, unknown> };
 type Receipt = { ok: boolean; id?: string; reason?: string };
 export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke | null; consentContainer?: Element }) {
   const [consent, setConsent] = useState<boolean | null | undefined>(undefined);
-  const [noticeSeen, setNoticeSeen] = useState(true);
   const [consentError, setConsentError] = useState("");
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
@@ -23,13 +23,13 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     mounted.current = true;
-    if (invoke) void invoke<Status>("feedback_status").then(result => { if (mounted.current) { setConsent(result.consent); setNoticeSeen(result.notice_seen !== false); } }).catch(() => { if (mounted.current) setStatus("无法读取反馈设置，请重新打开此页。"); });
+    if (invoke) void invoke<Status>("feedback_status").then(result => { if (mounted.current) { setConsent(result.consent); } }).catch(() => { if (mounted.current) setStatus("无法读取反馈设置，请重新打开此页。"); });
     return () => { mounted.current = false; revision.current++; clearTimeout(timer.current); };
   }, [invoke]);
-  async function changeConsent(enabled?: boolean) {
+  async function changeConsent(enabled: boolean) {
     if (!invoke || saving) return;
     setSaving(true); setConsentError("");
-    try { const result = await (enabled === undefined ? invoke<Status>("feedback_notice_seen") : invoke<Status>("feedback_consent", { enabled })); setConsent(result.consent); setNoticeSeen(result.notice_seen !== false); setStatus(result.consent ? "已开启匿名错误报告。" : "已关闭自动上报，安装标识已删除。"); }
+    try { const result = await invoke<Status>("feedback_consent", { enabled }); setConsent(result.consent); setStatus(result.consent ? "已开启自动错误报告，谢谢。" : "自动错误报告没有开启，不会自动发送任何报告。"); }
     catch (error) {
       const message = typeof error === "string" && error.startsWith("本次运行已停止自动上报") ? error : "设置未能保存，请重试。";
       setConsentError(message); setStatus(message);
@@ -57,14 +57,17 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
     } catch { setStatus("发送失败，没有自动重试。请稍后重试。"); }
     finally { setBusy(false); }
   }
-  const choice = !noticeSeen ? <section className="feedback-choice" aria-label="错误报告说明">
-    <h2>帮助改进网申快填</h2><p>{consent === true ? "自动错误报告默认已开启" : "自动错误报告当前已关闭"}，用于定位问题、改进软件。报告仅含错误类别、本程序代码位置、版本和系统。不上传简历、填写值、页面正文、完整网址、Cookie 或密钥。</p><p>报告使用随机标识，发送前先脱敏，经 Cloudflare 中转（最长暂存 90 天），由 Muse 再次脱敏整理为可能公开的 GitHub issue。你可立即关闭，也可随时在“设置 → 隐私”调整；关闭不影响正常使用。</p>
-    <button type="button" disabled={saving} onClick={() => void changeConsent()}>知道了</button>{" "}<button type="button" disabled={saving} onClick={() => void changeConsent(false)}>关闭自动上报</button>
+  const choice = consent === null ? <section className="feedback-choice" aria-label="帮我们改进网申快填">
+    <h2>帮我们改进网申快填</h2>
+    <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「用不了」，看不出卡在哪一步，很难找到原因。开启自动错误报告后，程序出错时会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
+    <p>报告里只有技术信息：错误类型、出错的代码位置、程序版本、系统、发送时间和一个随机生成的安装编号。不包含你的简历、个人资料、填写的内容、Cookie 或密钥。发送前会先去掉可能的个人信息，再经 Cloudflare 中转（最多保存 90 天），由 Muse 整理成 GitHub issue，这些 issue 可能是公开的。</p>
+    <p>你同意后才开始发送，同意前出的错不会补发。以后可以在“设置 → 隐私”里关闭，关闭后删除安装编号，不影响正常使用。桌面程序和插件分开设置。</p>
+    <button type="button" disabled={saving} onClick={() => void changeConsent(true)}>同意并开启</button>{" "}<button type="button" disabled={saving} onClick={() => void changeConsent(false)}>暂不开启</button>
     {consentError && <p role="alert">{consentError}</p>}
   </section> : null;
   return <>
     {consentContainer ? createPortal(choice, consentContainer) : choice}
-    <div className="setting-row"><div><label htmlFor="feedback-auto" className="setting-label">自动发送匿名错误报告</label><p>默认开启；可随时关闭，关闭删除随机安装标识。桌面和插件分别设置。</p></div>
+    <div className="setting-row"><div><label htmlFor="feedback-auto" className="setting-label">自动发送错误报告</label><p>你同意后才会开启。程序出错时自动发送错误类型、代码位置、版本和系统等技术信息，帮我们找到问题，不含简历和个人资料。可随时关闭，关闭后删除安装编号。桌面程序和插件分开设置。</p></div>
       <input id="feedback-auto" type="checkbox" className="setting-toggle" checked={consent === true} disabled={!invoke || consent === undefined || saving} onChange={event => void changeConsent(event.target.checked)} /></div>
     <div className="settings-group"><h3>反馈问题</h3><p>预览后发送至 Cloudflare 中转，Muse 脱敏整理为 GitHub issue。报告最长暂存 90 天；不开启自动报告也能使用。</p>
       {!open && <button type="button" disabled={!invoke} onClick={() => setOpen(true)}>反馈问题</button>}

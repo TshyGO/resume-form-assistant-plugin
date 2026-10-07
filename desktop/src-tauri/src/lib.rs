@@ -1746,7 +1746,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             feedback::feedback_status,
-            feedback::feedback_notice_seen,
             feedback::feedback_consent,
             feedback::feedback_preview,
             feedback::feedback_send,
