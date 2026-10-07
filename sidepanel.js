@@ -105,6 +105,9 @@
   let currentTabId = null;
   let currentStore = null;
   let desktopMode = "unavailable";
+  let storeSnapshot = "";
+  let storeLoaded = false;
+  let storeReadSequence = 0;
   let lastPageStatus = null;
   let toastTimer = null;
   let statusPolling = false;
@@ -278,6 +281,8 @@
   }
 
   function renderFromStore() {
+    const oldGroups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
+    const openGroupKeys = new Set(oldGroups.filter((group) => group.open).map((group) => group.dataset.groupKey));
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
@@ -288,15 +293,20 @@
     const groups = groupedFields();
     const fields = visibleFields(groups);
     elements.fieldMeta.textContent = `${selected?.name || "我的信息"} · ${groups.length} 个分组 · ${fields.length} 项`;
+    const groupOccurrences = new Map();
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
       if (!rows.length) return "";
-      return `<details class="field-group"${index === 0 ? " open" : ""}>
+      const occurrence = groupOccurrences.get(group.name) || 0;
+      groupOccurrences.set(group.name, occurrence + 1);
+      const groupKey = JSON.stringify([group.name, occurrence]);
+      const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
+      return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
         <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
         <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
       </details>`;
     }).join("");
-    filterFields();
+    filterFields(oldGroups.length > 0);
     updateFillAvailability(lastPageStatus);
     renderTargetState();
     refreshTarget().catch(() => {});
@@ -330,7 +340,7 @@
     renderTargetState();
   }
 
-  function filterFields() {
+  function filterFields(preserveOpen = false) {
     const query = elements.fieldSearch.value.trim().toLocaleLowerCase();
     let visible = 0;
     const groups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
@@ -345,7 +355,7 @@
       group.hidden = Boolean(query) && rowCount === 0;
       if (!group.hidden) visible += 1;
       if (query && rowCount) group.open = true;
-      if (!query) group.open = index === 0;
+      if (!query && !preserveOpen) group.open = index === 0;
     });
     elements.fieldEmpty.hidden = visible !== 0;
   }
@@ -1262,16 +1272,27 @@
     }
   }
 
-  async function loadStore() {
+  async function loadStore({ periodic = false } = {}) {
+    const sequence = ++storeReadSequence;
+    let result;
     try {
-      const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
-      desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
-      currentStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
     } catch {
-      desktopMode = "unavailable";
-      currentStore = null;
+      result = null;
     }
-    renderFromStore();
+    if (sequence !== storeReadSequence) return;
+    // A periodic refresh looks for new data, not connection health. A transient native
+    // messaging failure must not erase the fields the user is currently browsing.
+    if (periodic && result?.status !== "ok" && storeLoaded) return;
+    const nextMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
+    const nextStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+    const nextSnapshot = JSON.stringify(nextStore);
+    const changed = !storeLoaded || desktopMode !== nextMode || storeSnapshot !== nextSnapshot;
+    desktopMode = nextMode;
+    currentStore = nextStore;
+    storeSnapshot = nextSnapshot;
+    storeLoaded = true;
+    if (changed) renderFromStore();
   }
 
   document.querySelectorAll(".dock-tabs button").forEach((button) => button.addEventListener("click", () => {
@@ -1280,7 +1301,7 @@
     document.querySelectorAll(".dock-view").forEach((view) => { view.hidden = view.dataset.view !== tab; });
   }));
   document.getElementById("show-fields").addEventListener("click", () => document.querySelector('.dock-tabs button[data-tab="fields"]').click());
-  elements.fieldSearch.addEventListener("input", filterFields);
+  elements.fieldSearch.addEventListener("input", () => filterFields());
   elements.fieldGroups.addEventListener("toggle", (event) => {
     if (event.target.matches?.(".field-group") && event.target.open && !elements.fieldSearch.value) {
       elements.fieldGroups.querySelectorAll(".field-group").forEach((group) => { if (group !== event.target) group.open = false; });
@@ -1609,7 +1630,13 @@
   });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
-  setInterval(() => { pollStatus().catch(() => {}); }, 1500);
+  let statusPollCount = 0;
+  setInterval(() => {
+    pollStatus().catch(() => {});
+    // The page status poll does not include desktop profile changes. Reread while the
+    // panel stays open so desktop edits appear without a tab switch or reopening it.
+    if (!document.hidden && ++statusPollCount % 4 === 0) loadStore({ periodic: true }).catch(() => {});
+  }, 1500);
   // 0.4.0 data on its way to the desktop: only while it is in flight does the panel say so.
   async function renderLegacyHint() {
     const { legacyImport } = await chrome.storage.local.get(["legacyImport"]);
