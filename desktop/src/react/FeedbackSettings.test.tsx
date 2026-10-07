@@ -4,6 +4,8 @@ import type { Invoke } from "../api.ts";
 import { FeedbackSettings } from "./FeedbackSettings.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { reportFrontendError, installFrontendErrors } from "../feedback.ts";
+// jsdom has no modal dialogs; the app opens the choice with showModal().
+HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) { this.open = true; };
 const draft = { token: 'preview-token', payload: { app: 'resume-form-assistant-desktop', user_description: '已清洗的描述', anonymous_id: 'random-test-id' } };
 // `null` is a new installation that has not chosen yet.
 function mockInvoke(consent: boolean | null = null) {
@@ -18,7 +20,7 @@ function mockInvoke(consent: boolean | null = null) {
 test('暂不开启 answers the choice; manual sends only after complete preview and while opted out', async () => {
   const { invoke, fn } = mockInvoke(); render(<FeedbackSettings invoke={invoke} />);
   fireEvent.click(await screen.findByRole('button', { name: '暂不开启' }));
-  await waitFor(() => expect(screen.queryByRole('region', { name: '帮我们改进网申快填' })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: '帮我们改进网申快填' })).toBeNull());
   expect(fn).toHaveBeenCalledWith('feedback_consent', { enabled: false });
   fireEvent.click(screen.getByRole('button', { name: '反馈问题' }));
   expect((screen.getByRole('button', { name: '确认发送' }) as HTMLButtonElement).disabled).toBe(true);
@@ -83,7 +85,8 @@ test('consent save failure stays visible in the choice card while privacy panel 
 
 test('a new installation is off and asks first: the choice says why and what is sent', async () => {
   const { invoke, fn } = mockInvoke(); render(<FeedbackSettings invoke={invoke} />);
-  const choice = await screen.findByRole('region', { name: '帮我们改进网申快填' });
+  const choice = await screen.findByRole('dialog', { name: '帮我们改进网申快填' });
+  expect((choice as HTMLDialogElement).open).toBe(true);
   const text = choice.textContent || '';
   for (const disclosure of ['只有一句「用不了」', '随机生成的安装编号', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '公开的内容会长期保留', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号']) expect(text).toContain(disclosure);
   expect(within(choice).getAllByRole('button').map(b => b.textContent)).toEqual(['同意并开启', '暂不开启']);
@@ -91,7 +94,7 @@ test('a new installation is off and asks first: the choice says why and what is 
   expect(toggle.checked).toBe(false);
   expect(fn.mock.calls.some(([name]) => name === 'feedback_consent')).toBe(false);
   fireEvent.click(within(choice).getByRole('button', { name: '同意并开启' }));
-  await waitFor(() => expect(screen.queryByRole('region', { name: '帮我们改进网申快填' })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: '帮我们改进网申快填' })).toBeNull());
   expect(fn).toHaveBeenCalledWith('feedback_consent', { enabled: true });
   expect(toggle.checked).toBe(true);
   expect(screen.getByText('已开启自动错误报告，谢谢。')).toBeTruthy();
@@ -101,7 +104,7 @@ test('a choice already made shows no card, whichever it was', async () => {
     const { invoke } = mockInvoke(consent); const { unmount } = render(<FeedbackSettings invoke={invoke} />);
     await waitFor(() => expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(false));
     expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(consent);
-    expect(screen.queryByRole('region', { name: '帮我们改进网申快填' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: '帮我们改进网申快填' })).toBeNull();
     unmount();
   }
 });

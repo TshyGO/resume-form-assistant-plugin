@@ -575,7 +575,7 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; }
 .provider-item.active { border-color: var(--accent); }
 .model-candidates { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 
-.feedback-choice { margin: 0 0 20px; padding: 16px 20px; border: 1px solid var(--line, #d6e0dd); border-radius: 12px; background: var(--surface, #fff); }
+dialog.feedback-choice { max-width: 560px; }
 .feedback-choice h2 { margin: 0 0 8px; font-size: 17px; }
 .feedback-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; padding: 14px; background: #f0f5f3; border-radius: 8px; font-size: 12px; }
 #desktop-feedback textarea { display: block; box-sizing: border-box; width: 100%; margin: 10px 0; }

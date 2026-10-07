@@ -294,3 +294,28 @@ test('storage failures never turn automatic reports on', async () => {
   await assert.rejects(unreadable.automatic(crash), /read/);
   assert.equal(requests, 0);
 });
+test('an install or update that leaves the choice open shows it right away; a made choice is not asked again', async () => {
+  const { installFeedback, CONSENT_VERSION } = await import('../link/feedback.mjs');
+  const cases = [
+    ['install', undefined, true],
+    ['update', undefined, true],
+    // 0.4.1 had no reports; an earlier test build's default grant is no choice either.
+    ['update', { consent: true, noticeSeen: true, anonymousId: 'old-id' }, true],
+    ['update', { consent: false }, false],
+    ['update', { consent: true, consentVersion: CONSENT_VERSION, anonymousId: 'granted-id' }, false],
+    ['chrome_update', undefined, false]
+  ];
+  for (const [reason, stored, opens] of cases) {
+    const data = stored ? { feedbackStateV1: stored } : {};
+    const opened = []; let onInstalled;
+    installFeedback({
+      runtime: { id: 'test', getURL: p => `chrome-extension://test/${p}`, getManifest: () => ({ version: '0.4.2' }),
+        onMessage: { addListener: () => {} }, onInstalled: { addListener: fn => { onInstalled = fn; } } },
+      storage: { local: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) } },
+      tabs: { create: async ({ url }) => { opened.push(url); } }
+    });
+    onInstalled({ reason });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(opened, opens ? ['chrome-extension://test/popup.html'] : [], `${reason} ${JSON.stringify(stored)}`);
+  }
+});
