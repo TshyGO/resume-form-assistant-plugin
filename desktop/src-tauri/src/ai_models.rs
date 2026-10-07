@@ -220,7 +220,11 @@ pub async fn fetch_model_list_with_timeout(
     }
 
     let started = Instant::now();
-    let client = reqwest::Client::builder().timeout(timeout).build().map_err(|e| {
+    let client = reqwest::Client::builder()
+        .user_agent(crate::ai_client::USER_AGENT)
+        .timeout(timeout)
+        .build()
+        .map_err(|e| {
         eprintln!("ai-models: client-init-failed · {e}");
         CommandError {
             code: "AI_CLIENT_INIT_FAILED".into(),
