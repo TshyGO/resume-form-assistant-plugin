@@ -85,7 +85,7 @@ test('a new installation is off and asks first: the choice says why and what is 
   const { invoke, fn } = mockInvoke(); render(<FeedbackSettings invoke={invoke} />);
   const choice = await screen.findByRole('region', { name: '帮我们改进网申快填' });
   const text = choice.textContent || '';
-  for (const disclosure of ['只有一句「用不了」', '随机生成的安装编号', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号']) expect(text).toContain(disclosure);
+  for (const disclosure of ['只有一句「用不了」', '随机生成的安装编号', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '公开的内容会长期保留', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号']) expect(text).toContain(disclosure);
   expect(within(choice).getAllByRole('button').map(b => b.textContent)).toEqual(['同意并开启', '暂不开启']);
   const toggle = screen.getByRole('checkbox', { name: '自动发送错误报告' }) as HTMLInputElement;
   expect(toggle.checked).toBe(false);

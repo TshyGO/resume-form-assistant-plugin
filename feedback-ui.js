@@ -15,7 +15,7 @@
   const explanation = `
       <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「填不上」「用不了」，看不出是哪个网站、卡在哪一步，很难找到原因。开启自动错误报告后，插件出错或一键填写有字段没填上时，会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
       <p class="feedback-note">报告里只有技术信息：错误类型、出错的代码位置、插件版本、系统、发送时间和一个随机生成的安装编号。网页上出的问题还会带上网站域名和这次填写的统计，比如页面路径（其中的编号会去掉）、字段和控件的数量与类型、填上了多少、用时、卡在哪一步。不包含你的简历、填写的内容、页面上的文字、完整网址、Cookie 或密钥。</p>
-      <p class="feedback-note">发送前会先去掉可能的个人信息。报告最多保存 90 天，其中的网站域名和填写统计可能会公开在网申快填的 GitHub 项目里，方便复现问题；安装编号不会公开。</p>
+      <p class="feedback-note">发送前会先去掉可能的个人信息。报告最多保存 90 天；其中的网站域名和填写统计可能会公开在网申快填的 GitHub 项目里，方便复现问题，公开的内容会长期保留；安装编号不会公开。</p>
       <p class="feedback-note">你同意后才开始发送，同意前出的错不会补发。可以随时关闭，关闭后停止发送并删除安装编号，不影响填写。插件和桌面程序分开设置。</p>
       <p class="feedback-note">遇到问题也可以在${compact ? '' : '侧栏的'}「手动反馈问题」里自己写，预览确认后才会发送。</p>`;
   if (compact && noticeRoot) noticeRoot.innerHTML = `
@@ -62,7 +62,7 @@
         <label for="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
         <textarea id="feedback-description" maxlength="1400" rows="4"></textarea>
         <label><input type="checkbox" id="feedback-attach" checked>附上最近一次填写诊断</label>
-        <p class="feedback-note">只有点「确认发送」才会发送。报告最多保存 90 天，可能会公开在网申快填的 GitHub 项目里。发送前请核对下方全部内容。</p>
+        <p class="feedback-note">只有点「确认发送」才会发送。报告最多保存 90 天；可能会公开在网申快填的 GitHub 项目里，公开的内容会长期保留。发送前请核对下方全部内容。</p>
         <button type="button" id="feedback-preview-button">预览将发送的内容</button>
         <pre id="feedback-preview" tabindex="0" hidden></pre>
         <button type="submit" id="feedback-send" class="feedback-primary" disabled>确认发送</button>

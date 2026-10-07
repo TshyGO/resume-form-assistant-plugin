@@ -68,7 +68,7 @@ async function previewDraft(text = '按钮没反应') {
 const buttons = (root: HTMLElement) => within(root).queryAllByRole('button').map(b => b.textContent);
 const NOTICE = '帮我们改进网申快填';
 // What the explanation has to tell before anyone can agree (#247).
-const DISCLOSURES = ['只有一句「填不上」', '随机生成的安装编号', '网站域名', '页面路径', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号'];
+const DISCLOSURES = ['只有一句「填不上」', '随机生成的安装编号', '网站域名', '页面路径', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '公开的内容会长期保留', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号'];
 
 test('the side-panel choice says why and what is sent, sits after the fill button and offers two plain answers', async () => {
   const { calls } = setup();
