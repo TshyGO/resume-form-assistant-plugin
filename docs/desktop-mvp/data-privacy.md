@@ -285,7 +285,7 @@ AI 配置片的 apiKey 是协议唯一允许携带 Key 的位置。桌面接收�
 
 0.4.1 起插件不再保存 Key，AI 请求统一经桌面发往「当前使用」服务商；旧插件 Key 只在迁移时经 §7.4 进入 OS 凭据库。
 
-桌面发往服务商的 AI 请求和获取模型请求都带 User-Agent `wangshen-kuaitian-desktop/<版本>`（#212）。发往 opencode.ai 时另带 `x-opencode-session`：每次启动随机生成的一个编号，不含用户信息，只为满足 OpenCode 的要求，别的服务商不带。
+桌面发往服务商的 AI 请求和获取模型请求都带 User-Agent `wangshen-kuaitian-desktop/<版本>`（#212）。发往 opencode.ai 的 AI 请求另带 `x-opencode-session`：每次启动随机生成的一个编号，不含用户信息，只为满足 OpenCode 的要求。获取模型请求不带，别的服务商也不带。
 
 | | 插件填写/解析 | 桌面通知整理（D11） |
 | --- | --- | --- |
