@@ -287,9 +287,10 @@ const planOf = (candidates, profile = {}, templateFields = [], extra = {}) =>
   profileApi.planProfileOffer({ candidates, profile, templateFields, ...extra });
 const saveAll = (profile, plan, kinds = {}) => {
   const items = [
-    ...plan.filled.map((item) => ({ id: item.id, key: item.key, kind: "filled" })),
-    ...plan.pending.map((item) => ({ id: item.id, key: item.key, kind: "pending" })),
-    ...plan.conflicts.map((item) => ({ id: item.id, key: item.key, kind: "conflict", replaceOf: kinds.replace ? item.existing : undefined }))
+    ...plan.filled.map((item) => ({ id: item.id, key: item.key, kind: "filled", reviewedValue: item.value })),
+    ...plan.pending.map((item) => ({ id: item.id, key: item.key, kind: "pending", reviewedValue: "" })),
+    ...plan.conflicts.map((item) => ({ id: item.id, key: item.key, kind: "conflict", reviewedValue: item.value,
+      replaceOf: kinds.replace ? item.existing : undefined }))
   ];
   return profileApi.applyProfileSelection(profile, plan, items);
 };
@@ -356,6 +357,25 @@ test("plan: an existing pending field is completed, an equal one skipped, a diff
   assert.equal(profileApi.planHasOffer(blank), false, "a name that is already waiting on the desktop is not offered again");
 });
 
+test("plan: completing an existing empty field does not preselect company-specific or long answers", () => {
+  const profile = { custom: [
+    { key: "你为什么想加入我们", value: "" },
+    { key: "其他说明", value: "" },
+    { key: "期望薪资", value: "" }
+  ] };
+  const plan = planOf([
+    web("你为什么想加入我们", "因为认同这家公司的产品"),
+    web("其他说明", "长".repeat(301)),
+    web("期望薪资", "2 万 / 月")
+  ], profile);
+  assert.deepEqual(plan.filled.map((item) => [item.key, item.completes, item.jobSpecific, item.defaultSelected]), [
+    ["你为什么想加入我们", true, true, false],
+    ["其他说明", true, true, false],
+    ["期望薪资", true, false, true]
+  ]);
+  assert.deepEqual(profileApi.defaultProfileSelection(plan).map((item) => item.key), ["期望薪资"]);
+});
+
 test("plan: preset and template names are never saved as a second custom row", () => {
   const profile = { values: { ethnicity: "汉族" }, custom: [] };
   const template = [{ key: "毕业院校", value: "测试大学" }];
@@ -379,7 +399,8 @@ test("apply: writes only what was ticked, keeps the input untouched, and a repea
   const plan = planOf(candidates, profile);
 
   const first = profileApi.applyProfileSelection(profile, plan, [
-    { id: "兴趣爱好", key: "兴趣爱好", kind: "filled" }, { id: "驾照", key: "驾照", kind: "pending" }
+    { id: "兴趣爱好", key: "兴趣爱好", kind: "filled", reviewedValue: "摄影" },
+    { id: "驾照", key: "驾照", kind: "pending", reviewedValue: "" }
   ]);
   assert.equal(JSON.stringify(profile), frozen);
   assert.deepEqual(first.profile.custom, [{ key: "旧字段", value: "旧值" }, { key: "兴趣爱好", value: "摄影" }, { key: "驾照", value: "" }]);
@@ -389,7 +410,8 @@ test("apply: writes only what was ticked, keeps the input untouched, and a repea
   // 同一批再点一次：桌面里已经有了，计划里这两项不再出现，也就不会写第二行。
   const again = planOf(candidates, first.profile);
   const second = profileApi.applyProfileSelection(first.profile, again, [
-    { id: "兴趣爱好", key: "兴趣爱好", kind: "filled" }, { id: "驾照", key: "驾照", kind: "pending" }
+    { id: "兴趣爱好", key: "兴趣爱好", kind: "filled", reviewedValue: "摄影" },
+    { id: "驾照", key: "驾照", kind: "pending", reviewedValue: "" }
   ]);
   assert.equal(second.saved.length, 0);
   assert.deepEqual(second.skipped.map((item) => item.reason), ["same", "same"]);
@@ -420,31 +442,41 @@ test("apply: a different desktop value is replaced only with an explicit, still-
   // 用户看到的旧值是「钢琴」，点击时桌面已经被改成「小提琴」：不覆盖，如实说明。
   const moved = profileApi.applyProfileSelection({ custom: [{ key: "特长", value: "小提琴" }] },
     planOf([web("特长", "绘画")], { custom: [{ key: "特长", value: "小提琴" }] }),
-    [{ id: "特长", key: "特长", kind: "conflict", replaceOf: "钢琴" }]);
+    [{ id: "特长", key: "特长", kind: "conflict", reviewedValue: "绘画", replaceOf: "钢琴" }]);
   assert.equal(moved.saved.length, 0);
   assert.equal(moved.skipped[0].reason, "existing-changed");
 });
 
 test("apply: what the user saw is checked against what is there now, never silently swapped", () => {
   // 勾选时有内容，点击时网页上已经清空。
-  const cleared = profileApi.applyProfileSelection({}, planOf([web("兴趣爱好", "")]), [{ id: "兴趣爱好", key: "兴趣爱好", kind: "filled" }]);
+  const cleared = profileApi.applyProfileSelection({}, planOf([web("兴趣爱好", "")]),
+    [{ id: "兴趣爱好", key: "兴趣爱好", kind: "filled", reviewedValue: "摄影" }]);
   assert.deepEqual([cleared.saved.length, cleared.skipped[0].reason], [0, "cleared"]);
 
-  // 勾选时空着，点击时用户已经填好：按此刻的值保存。
-  const filledNow = profileApi.applyProfileSelection({}, planOf([web("兴趣爱好", "摄影")]), [{ id: "兴趣爱好", key: "兴趣爱好", kind: "pending" }]);
-  assert.deepEqual(filledNow.profile.custom, [{ key: "兴趣爱好", value: "摄影" }]);
+  // 勾选时空着，点击时用户已经填好：先展示新内容供核对。
+  const filledNow = profileApi.applyProfileSelection({}, planOf([web("兴趣爱好", "摄影")]),
+    [{ id: "兴趣爱好", key: "兴趣爱好", kind: "pending", reviewedValue: "" }]);
+  assert.deepEqual(filledNow.profile.custom, []);
+  assert.equal(filledNow.skipped[0].reason, "value-changed");
 
   // 勾选时是新字段，点击时桌面刚有了同名的不同内容。
   const raced = profileApi.applyProfileSelection({ custom: [{ key: "特长", value: "钢琴" }] },
-    planOf([web("特长", "绘画")], { custom: [{ key: "特长", value: "钢琴" }] }), [{ id: "特长", key: "特长", kind: "filled" }]);
+    planOf([web("特长", "绘画")], { custom: [{ key: "特长", value: "钢琴" }] }),
+    [{ id: "特长", key: "特长", kind: "filled", reviewedValue: "绘画" }]);
   assert.deepEqual([raced.saved.length, raced.skipped[0].reason], [0, "existing-changed"]);
 
   // 勾选的项这时变成了敏感内容或已消失：各报各的原因，不影响其它安全项。
   const mixed = profileApi.applyProfileSelection({}, planOf([web("补充信息", "口令：abc"), web("兴趣爱好", "摄影")]), [
-    { id: "补充信息", key: "补充信息", kind: "filled" }, { id: "兴趣爱好", key: "兴趣爱好", kind: "filled" }, { id: "不存在", key: "不存在", kind: "filled" }
+    { id: "补充信息", key: "补充信息", kind: "filled", reviewedValue: "原值" },
+    { id: "兴趣爱好", key: "兴趣爱好", kind: "filled", reviewedValue: "摄影" },
+    { id: "不存在", key: "不存在", kind: "filled", reviewedValue: "" }
   ]);
   assert.deepEqual(mixed.saved.map((item) => item.key), ["兴趣爱好"]);
   assert.deepEqual(mixed.skipped.map((item) => item.reason), ["secret", "gone"]);
+
+  const missingReview = profileApi.applyProfileSelection({}, planOf([web("兴趣爱好", "摄影")]),
+    [{ id: "兴趣爱好", key: "兴趣爱好", kind: "filled" }]);
+  assert.equal(missingReview.saved.length, 0, "a request without the reviewed value cannot save");
 });
 
 test("apply: the custom-field count and the desktop's 24 KB profile size are respected, and the rest still save", () => {

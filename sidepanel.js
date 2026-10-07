@@ -1311,14 +1311,17 @@
     elements.profileOfferSkip.disabled = busy;
     elements.profileOfferView.hidden = !completed;
     elements.profileOfferDismiss.hidden = !result;
-    elements.profileOfferDismiss.textContent = completed ? "完成" : "关闭提示";
+    elements.profileOfferDismiss.textContent = completed
+      ? result.kind === "partial" && items.length ? "查看未保存的项" : "完成"
+      : "关闭提示";
   }
 
   // 一次点击就保存勾选的项，不再二次确认；写入由页面那边在点击时重新读网页和桌面后完成。
   async function saveProfileOffer() {
     if (!profileOffer || profileSavePending) return;
     const selected = profileItems().filter(profileChecked).map((item) => ({
-      id: item.id, key: item.key, kind: item.kind, ...(item.kind === "conflict" ? { replaceOf: item.existing } : {})
+      id: item.id, key: item.key, kind: item.kind, reviewedValue: item.value ?? "",
+      ...(item.kind === "conflict" ? { replaceOf: item.existing } : {})
     }));
     if (!selected.length) return;
     profileSavePending = true;
@@ -1330,10 +1333,10 @@
       profileSavePending = false;
     }
     if (reply?.profileOffer) setProfileOffer(reply.profileOffer);
-    else {
-      renderProfileOffer();
-      toast(reply?.error || "保存没有完成，候选还在，请稍后再试。");
-    }
+    else renderProfileOffer();
+    // 版本已变化等提前返回仍会附上候选快照；错误不能被快照分支吞掉。
+    if (reply?.error) toast(reply.error);
+    else if (!reply?.profileOffer) toast("保存没有完成，候选还在，请稍后再试。");
     // 保存成功后侧栏也改读桌面的最新档案，下次填写和「简历字段」页看到的就是它。
     if (reply?.saved > 0) await loadStore();
     await pollStatus();

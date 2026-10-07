@@ -169,16 +169,17 @@ test('one click sends exactly the ticked items with what the user saw; a conflic
   assert.match(ui.groups.innerHTML, /网页：绘画/);
 
   await ui.save.listeners.click();
-  assert.deepEqual(JSON.parse(JSON.stringify(ui.sent()[0].selected)), [{ id: '兴趣爱好', key: '兴趣爱好', kind: 'filled' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.sent()[0].selected)),
+    [{ id: '兴趣爱好', key: '兴趣爱好', kind: 'filled', reviewedValue: '摄影' }]);
   assert.equal(ui.sent()[0].version, 1);
 
   await ui.toggle('特长', true);
   await ui.toggle('期望薪资', true);
   await ui.save.listeners.click();
   assert.deepEqual(JSON.parse(JSON.stringify(ui.sent()[1].selected)), [
-    { id: '兴趣爱好', key: '兴趣爱好', kind: 'filled' },
-    { id: '期望薪资', key: '期望薪资', kind: 'pending' },
-    { id: '特长', key: '特长', kind: 'conflict', replaceOf: '钢琴' }
+    { id: '兴趣爱好', key: '兴趣爱好', kind: 'filled', reviewedValue: '摄影' },
+    { id: '期望薪资', key: '期望薪资', kind: 'pending', reviewedValue: '' },
+    { id: '特长', key: '特长', kind: 'conflict', reviewedValue: '绘画', replaceOf: '钢琴' }
   ]);
 });
 
@@ -210,6 +211,20 @@ test('a failed save shows the real reason, keeps every candidate and tick, and c
   assert.equal(ui.sent().length, 2);
 });
 
+test('an early rejection is visible even when the response includes a fresh offer', async () => {
+  const ui = await harness();
+  ui.setPage(message => message.type === 'RESUME_PANEL_OFFER'
+    ? { ok: false, error: '候选已经更新，请重新核对后再保存。', profileOffer: offer({ version: 2 }) }
+    : { ready: true, profileOffer: offer() });
+  await ui.refresh();
+  await ui.save.listeners.click();
+
+  assert.equal(ui.get('panel-toast').textContent, '候选已经更新，请重新核对后再保存。');
+  assert.equal(ui.get('panel-toast').hidden, false);
+  assert.equal(ui.get('profile-offer').hidden, false);
+  assert.equal(ui.save.disabled, false);
+});
+
 test('while a save is on its way the button is busy and a second click does not send another request', async () => {
   const ui = await harness();
   const saved = { kind: 'success', text: '已保存 1 项，下次填写可用。', hint: '', details: [], saved: 1,
@@ -236,6 +251,20 @@ test('while a save is on its way the button is busy and a second click does not 
   assert.equal(ui.get('profile-offer-view').hidden, false);
   // 保存后只留下结果；未选的候选不会和成功信息混在一起。
   assert.equal(ui.save.hidden, true);
+  assert.equal(ui.get('profile-offer-detail').hidden, true);
+});
+
+test('a partial result points to the still available candidates', async () => {
+  const ui = await harness();
+  ui.setPage({ ready: true, profileOffer: offer({
+    filled: [{ id: '兴趣爱好', key: '兴趣爱好', value: '徒步', defaultSelected: true }],
+    pending: [],
+    result: { kind: 'partial', text: '已保存 1 项，另有 1 项没保存。', hint: '',
+      details: ['「兴趣爱好」网页内容已变化，请核对更新后的内容再保存。'], saved: 1,
+      savedItems: [{ key: '期望薪资', value: '2 万 / 月', kind: 'filled' }] }
+  }) });
+  await ui.refresh();
+  assert.equal(ui.get('profile-offer-dismiss').textContent, '查看未保存的项');
   assert.equal(ui.get('profile-offer-detail').hidden, true);
 });
 

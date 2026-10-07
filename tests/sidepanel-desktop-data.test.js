@@ -206,7 +206,8 @@ test('saving to my information sends the ticked items, rereads the desktop, and 
   await ui.profileAdd.listeners.click();
 
   const sent = ui.calls.find(item => item.type === 'RESUME_PANEL_OFFER' && item.action === 'profileAdd');
-  assert.deepEqual(JSON.parse(JSON.stringify(sent.selected)), [{ id: '兴趣爱好', key: '兴趣爱好', kind: 'filled' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.selected)),
+    [{ id: '兴趣爱好', key: '兴趣爱好', kind: 'filled', reviewedValue: '摄影' }]);
   assert.equal(sent.version, 1);
   assert.equal(reads(), before + 1, 'the panel follows the desktop after a confirmed save');
   assert.equal(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW'), false);

@@ -61,7 +61,15 @@ function page({ profile = { values: {}, family: [], custom: [] }, update = null,
         isBindingCurrent: (binding) => !stale.has(binding.element) };
     },
     fill: () => ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } }),
-    save: (selected, extra = {}) => ctx.helpers.addUnansweredToProfile({ selected, ...extra }) };
+    save: (selected, extra = {}) => {
+      const offer = ctx.helpers.panelProfileSnapshot();
+      const shown = new Map([...(offer?.filled || []), ...(offer?.pending || []), ...(offer?.conflicts || [])]
+        .map((item) => [item.id, item.value ?? ""]));
+      return ctx.helpers.addUnansweredToProfile({
+        selected: selected.map((item) => ({ ...item, reviewedValue: item.reviewedValue ?? shown.get(item.id) ?? "" })),
+        ...extra
+      });
+    } };
 }
 
 const filled = (id, key = id) => ({ id, key: key, kind: "filled" });
@@ -92,8 +100,10 @@ test("after a fill, filled and empty unmatched fields are candidates; a value ty
   assert.deepEqual(offer.filled.map((item) => item.key), ["兴趣爱好", "期望薪资", "你为什么想加入我们"], "listed in page order");
   assert.equal(offer.pending.length, 0);
 
-  // 点保存之前又改了一次：写进桌面的是点击那一刻的值，不是一键填写时或上次看到的值。
+  // 网页再次修改后，侧栏刷新到新值；用户核对过这次显示的内容再保存。
   hobby.value = "摄影、徒步";
+  offer = p.snapshot();
+  assert.deepEqual(offer.filled.slice(0, 2).map((item) => item.value), ["摄影、徒步", "2 万 / 月"]);
   const reply = await p.save([filled("兴趣爱好"), filled("期望薪资")], { version: p.ctx.helpers.getProfileOfferVersion() });
 
   assert.equal(reply.ok, true);
@@ -108,6 +118,47 @@ test("after a fill, filled and empty unmatched fields are candidates; a value ty
   assert.deepEqual(reply.profileOffer.filled.map((item) => item.key), ["你为什么想加入我们"]);
   assert.deepEqual([hobby.value, salary.value, why.value], ["摄影、徒步", "2 万 / 月", "因为热爱这份工作"]);
   assert.deepEqual([hobby, salary, why].map((element) => element.dispatchedEvents.length), [0, 0, 0], "saving never fires events on the page's inputs");
+});
+
+test("a value changed after review is not silently saved; the refreshed value can be confirmed next", async () => {
+  const p = page();
+  const hobby = new p.ctx.HTMLInputElement();
+  hobby.value = "摄影";
+  p.scan([control(hobby, { label: "兴趣爱好", offerLabel: "兴趣爱好" })]);
+  await p.fill();
+  const reviewedValue = p.snapshot().filled[0].value;
+
+  hobby.value = "徒步";
+  const first = await p.save([{ ...filled("兴趣爱好"), reviewedValue }]);
+  assert.equal(first.saved, 0);
+  assert.equal(p.updates.length, 0);
+  assert.match(first.profileOffer.result.details[0], /网页内容已变化/);
+  assert.equal(first.profileOffer.filled[0].value, "徒步");
+
+  const second = await p.save([filled("兴趣爱好")]);
+  assert.equal(second.saved, 1);
+  assert.deepEqual(p.desktop.profile.custom, [{ key: "兴趣爱好", value: "徒步" }]);
+});
+
+test("a partial save keeps changed answers available for another review", async () => {
+  const p = page();
+  const [hobby, salary] = [new p.ctx.HTMLInputElement(), new p.ctx.HTMLInputElement()];
+  hobby.value = "摄影";
+  salary.value = "2 万 / 月";
+  p.scan([control(hobby, { label: "兴趣爱好", offerLabel: "兴趣爱好" }),
+    control(salary, { label: "期望薪资", offerLabel: "期望薪资" })]);
+  await p.fill();
+  const reviewedHobby = p.snapshot().filled.find((item) => item.key === "兴趣爱好").value;
+
+  hobby.value = "徒步";
+  const first = await p.save([{ ...filled("兴趣爱好"), reviewedValue: reviewedHobby }, filled("期望薪资")]);
+  assert.equal(first.saved, 1);
+  assert.equal(first.profileOffer.result.kind, "partial");
+  assert.deepEqual(p.desktop.profile.custom, [{ key: "期望薪资", value: "2 万 / 月" }]);
+
+  const dismissed = await p.ctx.sendPanelMessage({ type: "RESUME_PANEL_OFFER", action: "profileDismiss" });
+  assert.equal(dismissed.profileOffer.result, null);
+  assert.deepEqual(dismissed.profileOffer.filled.map((item) => [item.key, item.value]), [["兴趣爱好", "徒步"]]);
 });
 
 test("a failed write is reported as a failure, nothing is claimed saved, and every candidate is still there for a retry", async () => {
@@ -134,6 +185,27 @@ test("a failed write is reported as a failure, nothing is claimed saved, and eve
   assert.equal(retried.ok, true);
   assert.deepEqual(p.desktop.profile.custom, [{ key: "兴趣爱好", value: "摄影" }, { key: "期望薪资", value: "" }]);
   assert.match(retried.profileOffer.result.text, /^已保存 2 项/);
+});
+
+test("the visible in-page panel explains a refused desktop save", async () => {
+  const p = page({ update: async () => ({ status: "unavailable" }) });
+  const status = { textContent: "", className: "" };
+  const card = { hidden: true, querySelector: () => ({ textContent: "" }) };
+  p.ctx.helpers.setShadowRoot({ querySelector: (selector) => ({
+    ".resume-pro": { classList: { contains: (name) => name === "is-legacy-open" } },
+    "#resume-pro-status": status,
+    "#resume-pro-profile-offer": card
+  })[selector] || null });
+  const hobby = new p.ctx.HTMLInputElement();
+  hobby.value = "摄影";
+  p.scan([control(hobby, { label: "兴趣爱好", offerLabel: "兴趣爱好" })]);
+  await p.fill();
+
+  const reply = await p.save([filled("兴趣爱好")]);
+  assert.equal(reply.ok, false);
+  assert.match(status.textContent, /没有保存.*候选还在/);
+  assert.match(status.className, /is-error/);
+  assert.equal(card.hidden, false, "the user can retry from the same card");
 });
 
 test("each desktop refusal has its own honest message, and none of them drops the candidates", async () => {
@@ -334,7 +406,8 @@ test("the panel messages round-trip: save, dismiss the result, and skip", async 
   await p.fill();
   const version = p.ctx.helpers.getProfileOfferVersion();
 
-  const saved = await p.ctx.sendPanelMessage({ type: "RESUME_PANEL_OFFER", action: "profileAdd", version, selected: [filled("兴趣爱好")] });
+  const saved = await p.ctx.sendPanelMessage({ type: "RESUME_PANEL_OFFER", action: "profileAdd", version,
+    selected: [{ ...filled("兴趣爱好"), reviewedValue: "摄影" }] });
   assert.equal(saved.ok, true);
   assert.equal(saved.profileOffer.result.saved, 1);
   assert.deepEqual(saved.profileOffer.pending.map((item) => item.key), ["期望薪资"]);

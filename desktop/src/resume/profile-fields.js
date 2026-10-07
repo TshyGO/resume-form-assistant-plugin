@@ -379,6 +379,7 @@
     "fixed-empty": (key) => `「${key}」属于简历模板或预置字段，请在桌面「我的信息」里直接填写，没有保存。`,
     same: (key) => `「${key}」桌面里已经有相同内容，没有重复保存。`,
     cleared: (key) => `「${key}」在网页上已经清空，没有保存。`,
+    "value-changed": (key) => `「${key}」网页内容已变化，请核对更新后的内容再保存。`,
     "existing-changed": (key) => `「${key}」在桌面里刚有了不同的内容，没有覆盖；请重新核对后再保存。`,
     "conflict-unconfirmed": (key) => `「${key}」与桌面已有内容不同，需要勾选「替换」才会覆盖，没有保存。`,
     gone: (key) => `「${key}」在网页上找不到了，没有保存。`,
@@ -452,7 +453,11 @@
         if (existing && sameValue(existing, value)) { plan.same += 1; plan.sameIds.push(id); continue; }
         if (listed >= limit) { plan.hidden += 1; continue; }
         if (existing) plan.conflicts.push({ id, key: custom.key, value, existing });
-        else plan.filled.push({ id, key: custom.key, value, completes: true, jobSpecific: false, defaultSelected: true });
+        else {
+          const jobSpecific = JOB_SPECIFIC_LABEL.test(key) || JOB_SPECIFIC_LABEL.test(custom.key)
+            || value.length > JOB_SPECIFIC_VALUE_CHARS;
+          plan.filled.push({ id, key: custom.key, value, completes: true, jobSpecific, defaultSelected: !jobSpecific });
+        }
         continue;
       }
 
@@ -479,7 +484,8 @@
 
   // 没有用户勾选信息时（页面上保留的旧按钮）：按默认勾选的项保存，冲突项从不默认替换。
   function defaultProfileSelection(plan) {
-    const pick = (items, kind) => (items || []).filter((item) => item.defaultSelected).map((item) => ({ id: item.id, key: item.key, kind }));
+    const pick = (items, kind) => (items || []).filter((item) => item.defaultSelected)
+      .map((item) => ({ id: item.id, key: item.key, kind, reviewedValue: item.value ?? "" }));
     return [...pick(plan?.filled, "filled"), ...pick(plan?.pending, "pending")];
   }
 
@@ -493,7 +499,7 @@
   }
 
   // 把用户勾选的项写进档案。plan 必须是点击那一刻按网页当前值和桌面最新档案重算的；
-  // selection 每项 { id, key, kind: 用户看到的 filled|pending|conflict, replaceOf: 看到的桌面旧值 }。
+  // selection 每项 { id, key, kind, reviewedValue: 用户看到的网页值, replaceOf: 看到的桌面旧值 }。
   // 看到的和现在的对不上（网页清空了、桌面刚有了别的值）就不写，也不悄悄换成别的：照实报在 skipped 里。
   function applyProfileSelection(rawProfile, plan, selection = []) {
     const profile = normalizeProfile(rawProfile);
@@ -525,8 +531,14 @@
         continue;
       }
 
-      const seen = choice?.kind || (item.kind === "pending" ? "pending" : "filled");
+      const seen = choice?.kind;
+      if (!["filled", "pending", "conflict"].includes(seen)) { skip(id, key, "value-changed"); continue; }
       if (item.kind === "pending" && (seen === "filled" || seen === "conflict")) { skip(id, key, "cleared"); continue; }
+      if (seen !== item.kind) { skip(id, key, seen === "pending" ? "value-changed" : "existing-changed"); continue; }
+      if (typeof choice?.reviewedValue !== "string" || choice.reviewedValue !== (item.value ?? "")) {
+        skip(id, key, "value-changed");
+        continue;
+      }
       if (item.kind === "conflict") {
         if (seen !== "conflict" || choice?.replaceOf === undefined) { skip(id, key, seen === "conflict" ? "conflict-unconfirmed" : "existing-changed"); continue; }
         if (!sameValue(choice.replaceOf, item.existing)) { skip(id, key, "existing-changed"); continue; }

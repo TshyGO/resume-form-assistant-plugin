@@ -3369,9 +3369,12 @@
 
   // 「完成」收起整张卡；保留候选以便网页上补出新答案时重新出现。
   function dismissProfileResult() {
+    const result = state.profileOfferResult;
     state.profileOfferResult = null;
     state.profileResultCandidateSignature = "";
-    state.profileDismissedCandidateSignature = profileCandidateSignature(currentProfilePlan());
+    // 部分保存后仍有可处理的候选时，直接把更新后的内容交还给用户复核。
+    state.profileDismissedCandidateSignature = result?.kind === "partial" ? null
+      : profileCandidateSignature(currentProfilePlan());
   }
 
   function syncProfileOfferCard(plan) {
@@ -3484,6 +3487,7 @@
       id: String(item?.id ?? ""),
       key: String(item?.key ?? ""),
       kind: ["filled", "pending", "conflict"].includes(item?.kind) ? item.kind : undefined,
+      reviewedValue: typeof item?.reviewedValue === "string" ? item.reviewedValue : undefined,
       replaceOf: typeof item?.replaceOf === "string" ? item.replaceOf : undefined
     }));
   }
@@ -3559,6 +3563,11 @@
     const plan = currentProfilePlan();
     state.profileResultCandidateSignature = profileCandidateSignature(plan);
     syncProfileOfferCard(plan);
+    // 原生侧栏自己显示结果；旧的页面内侧栏只读这块状态区，需要明确反馈。
+    if (inPageUiVisible()) {
+      const shown = [result.text, ...(result.details || []), result.hint].filter(Boolean).join(" ");
+      showStatus(shown, result.kind === "success" ? "success" : "error", result.kind !== "success");
+    }
     return done({ ok: result.saved > 0, saved: result.saved });
   }
 

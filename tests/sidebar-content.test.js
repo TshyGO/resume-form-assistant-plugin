@@ -309,7 +309,7 @@ test('saving the profile offer retries one desktop conflict with the new revisio
   hooks.setProfileOffer({
     candidates: [{ label: '期望薪资', entry: { kind: 'element', element: { isConnected: true, value: '2 万' } } }]
   });
-  const reply = await hooks.addUnansweredToProfile({ selected: [{ id: '期望薪资', key: '期望薪资', kind: 'filled' }] });
+  const reply = await hooks.addUnansweredToProfile({ selected: [{ id: '期望薪资', key: '期望薪资', kind: 'filled', reviewedValue: '2 万' }] });
   assert.deepEqual(updates.map(item => item.expectedRevision), [0, 1]);
   assert.deepEqual(plain(updates[1].profile.custom), [{ key: '期望薪资', value: '2 万' }]);
   assert.equal(reply.ok, true);
