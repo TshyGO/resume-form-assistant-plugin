@@ -115,6 +115,24 @@ test('visibility and tab activation reread; the status poll does not', async () 
   assert.equal(count(), before + 2);
 });
 
+test('an open side panel picks up a profile field saved in the desktop', async () => {
+  const ui = await harness();
+  const updated = data();
+  updated.profile.custom = [{ key: '自定义地点', value: '示例城市' }];
+  updated.profileRevision += 1;
+  ui.setResponse({ status: 'ok', data: updated });
+
+  assert.doesNotMatch(ui.get('field-groups').innerHTML, /自定义地点/);
+  for (let i = 0; i < 4; i += 1) {
+    ui.poll();
+    await ui.tick();
+  }
+
+  assert.match(ui.get('field-groups').innerHTML, /自定义地点/);
+  assert.match(ui.get('field-groups').innerHTML, /示例城市/);
+  assert.ok(ui.calls.filter(item => item.type === 'DESKTOP_RESUME_READ').length >= 2);
+});
+
 test('a desktop reread does not re-enable AI while the page is busy', async () => {
   const ui = await harness();
   ui.setPageResponse({ ready: true, busy: true, phase: 'AI 匹配中' });

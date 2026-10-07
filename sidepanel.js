@@ -105,6 +105,9 @@
   let currentTabId = null;
   let currentStore = null;
   let desktopMode = "unavailable";
+  let storeSnapshot = "";
+  let storeLoaded = false;
+  let storeReadSequence = 0;
   let lastPageStatus = null;
   let toastTimer = null;
   let statusPolling = false;
@@ -1263,15 +1266,23 @@
   }
 
   async function loadStore() {
+    const sequence = ++storeReadSequence;
+    let result;
     try {
-      const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
-      desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
-      currentStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+      result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
     } catch {
-      desktopMode = "unavailable";
-      currentStore = null;
+      result = null;
     }
-    renderFromStore();
+    if (sequence !== storeReadSequence) return;
+    const nextMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
+    const nextStore = result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+    const nextSnapshot = JSON.stringify(nextStore);
+    const changed = !storeLoaded || desktopMode !== nextMode || storeSnapshot !== nextSnapshot;
+    desktopMode = nextMode;
+    currentStore = nextStore;
+    storeSnapshot = nextSnapshot;
+    storeLoaded = true;
+    if (changed) renderFromStore();
   }
 
   document.querySelectorAll(".dock-tabs button").forEach((button) => button.addEventListener("click", () => {
@@ -1609,7 +1620,13 @@
   });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });
   loadStore().then(pollStatus).catch(() => { elements.configState.textContent = "无法连接桌面，请稍后重试。"; });
-  setInterval(() => { pollStatus().catch(() => {}); }, 1500);
+  let statusPollCount = 0;
+  setInterval(() => {
+    pollStatus().catch(() => {});
+    // The page status poll does not include desktop profile changes. Reread while the
+    // panel stays open so desktop edits appear without a tab switch or reopening it.
+    if (!document.hidden && ++statusPollCount % 4 === 0) loadStore().catch(() => {});
+  }, 1500);
   // 0.4.0 data on its way to the desktop: only while it is in flight does the panel say so.
   async function renderLegacyHint() {
     const { legacyImport } = await chrome.storage.local.get(["legacyImport"]);
