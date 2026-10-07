@@ -103,6 +103,8 @@
     profileOfferVersion: 0,
     profileOfferEpoch: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
     profileOfferResult: null,
+    profileResultCandidateSignature: "",
+    profileDismissedCandidateSignature: null,
     profileSaving: false
   };
   // #188 辅助新增的状态，只在本页内存里；控制逻辑见 handlePanelRepeat。
@@ -3344,6 +3346,8 @@
 
     state.profileOfferCandidates = candidates;
     state.profileOfferResult = null;
+    state.profileResultCandidateSignature = "";
+    state.profileDismissedCandidateSignature = null;
     state.profileOfferVersion += 1;
     const plan = currentProfilePlan(state.currentStore, stats);
 
@@ -3359,12 +3363,15 @@
     if (card) card.hidden = true;
     state.profileOfferCandidates = [];
     state.profileOfferResult = null;
+    state.profileResultCandidateSignature = "";
+    state.profileDismissedCandidateSignature = null;
   }
 
-  // 只收起结果；还有没处理的候选就留着。
+  // 「完成」收起整张卡；保留候选以便网页上补出新答案时重新出现。
   function dismissProfileResult() {
     state.profileOfferResult = null;
-    if (!self.ResumeProProfile?.planHasOffer(currentProfilePlan())) closeProfileOffer();
+    state.profileResultCandidateSignature = "";
+    state.profileDismissedCandidateSignature = profileCandidateSignature(currentProfilePlan());
   }
 
   function syncProfileOfferCard(plan) {
@@ -3435,11 +3442,20 @@
   // 侧栏画候选用的快照。值只经这条本机消息给侧栏，不进诊断、反馈或存储。
   function panelProfileSnapshot() {
     const api = self.ResumeProProfile;
-    const result = state.profileOfferResult;
+    let result = state.profileOfferResult;
     if (!api || (!state.profileOfferCandidates?.length && !result)) return null;
     const plan = state.profileOfferCandidates?.length
       ? currentProfilePlan()
       : { filled: [], pending: [], conflicts: [], notes: [], same: 0, hidden: 0 };
+    // 保存完成后保持简短结果；用户随后在网页补出新答案时，再展示新的保存建议。
+    if (result?.saved > 0 && profileCandidateSignature(plan) !== state.profileResultCandidateSignature) {
+      state.profileOfferResult = null;
+      result = null;
+    }
+    if (state.profileDismissedCandidateSignature !== null) {
+      if (profileCandidateSignature(plan) === state.profileDismissedCandidateSignature) return null;
+      state.profileDismissedCandidateSignature = null;
+    }
     if (!api.planHasOffer(plan) && !result) return null;
     return {
       epoch: state.profileOfferEpoch,
@@ -3452,8 +3468,15 @@
       notes: plan.notes.map((note) => note.text),
       same: plan.same,
       hidden: plan.hidden,
-      result: result ? { ...result } : null
+      result: state.profileOfferResult ? { ...state.profileOfferResult } : null
     };
+  }
+
+  function profileCandidateSignature(plan) {
+    return JSON.stringify([
+      ...(plan?.filled || []).map((item) => [item.id, item.value]),
+      ...(plan?.conflicts || []).map((item) => [item.id, item.value, item.existing])
+    ]);
   }
 
   function normalizeProfileSelection(raw) {
@@ -3505,6 +3528,7 @@
       const message = api.describeProfileSave(outcome);
       return {
         ...message, saved: outcome.saved.length,
+        savedItems: outcome.saved.map(({ key, value, kind }) => ({ key, value, kind })),
         hint: [message.hint, after ? "" : "暂时没能重新读取桌面档案，下次填写前会再读一次。"].filter(Boolean).join(" ")
       };
     }
@@ -3532,7 +3556,9 @@
       state.profileSaving = false;
     }
     state.profileOfferResult = result;
-    syncProfileOfferCard(currentProfilePlan());
+    const plan = currentProfilePlan();
+    state.profileResultCandidateSignature = profileCandidateSignature(plan);
+    syncProfileOfferCard(plan);
     return done({ ok: result.saved > 0, saved: result.saved });
   }
 

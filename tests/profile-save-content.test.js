@@ -100,6 +100,10 @@ test("after a fill, filled and empty unmatched fields are candidates; a value ty
   assert.deepEqual(p.desktop.profile.custom, [{ key: "兴趣爱好", value: "摄影、徒步" }, { key: "期望薪资", value: "2 万 / 月" }]);
   assert.equal(p.desktop.revision, 1);
   assert.equal(reply.profileOffer.result.text, "已保存 2 项，下次填写可用。");
+  assert.deepEqual(plain(reply.profileOffer.result.savedItems), [
+    { key: "兴趣爱好", value: "摄影、徒步", kind: "filled" },
+    { key: "期望薪资", value: "2 万 / 月", kind: "filled" }
+  ]);
   // 已保存的不再是候选；没勾选的岗位相关回答还在，网页上的输入一个字都没动。
   assert.deepEqual(reply.profileOffer.filled.map((item) => item.key), ["你为什么想加入我们"]);
   assert.deepEqual([hobby.value, salary.value, why.value], ["摄影、徒步", "2 万 / 月", "因为热爱这份工作"]);
@@ -336,11 +340,28 @@ test("the panel messages round-trip: save, dismiss the result, and skip", async 
   assert.deepEqual(saved.profileOffer.pending.map((item) => item.key), ["期望薪资"]);
 
   const dismissed = await p.ctx.sendPanelMessage({ type: "RESUME_PANEL_OFFER", action: "profileDismiss" });
-  assert.equal(dismissed.profileOffer.result, null);
-  assert.equal(dismissed.profileOffer.pending.length, 1, "the unticked empty field is still a candidate");
+  assert.equal(dismissed.profileOffer, null, "completing the save hides the whole card");
+  salary.value = "29000";
+  assert.deepEqual(p.snapshot().filled.map((item) => item.key), ["期望薪资"], "a new answer brings the card back");
 
   await p.ctx.sendPanelMessage({ type: "RESUME_PANEL_OFFER", action: "profileSkip" });
   assert.equal(p.snapshot(), null);
+});
+
+test("saving shows a result until the user fills another unanswered field on the page", async () => {
+  const p = page();
+  const [hobby, salary] = [new p.ctx.HTMLInputElement(), new p.ctx.HTMLInputElement()];
+  hobby.value = "摄影";
+  p.scan([control(hobby, { label: "兴趣爱好", offerLabel: "兴趣爱好" }), control(salary, { label: "期望薪资", offerLabel: "期望薪资" })]);
+  await p.fill();
+  const saved = await p.save([filled("兴趣爱好")]);
+  assert.equal(saved.profileOffer.result.saved, 1);
+  assert.deepEqual(saved.profileOffer.pending.map((item) => item.key), ["期望薪资"]);
+
+  salary.value = "29000";
+  const next = p.snapshot();
+  assert.equal(next.result, null, "a new answer brings back the save suggestion automatically");
+  assert.deepEqual(next.filled.map((item) => [item.key, item.value]), [["期望薪资", "29000"]]);
 });
 
 test("a new fill replaces the previous offer and its result", async () => {

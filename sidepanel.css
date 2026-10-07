@@ -188,10 +188,15 @@ button { cursor: pointer; }
 .panel-toast { position: fixed; right: 12px; bottom: 60px; z-index: 20; max-width: calc(100% - 24px); padding: 9px 12px; border-radius: 7px; background: var(--nav); color: #fff; box-shadow: 0 8px 20px #1c233040; font-size: 11px; }
 @media (max-width: 340px) { .dock-view { padding: 12px; } .dock-header, .dock-footer { padding-left: 12px; padding-right: 12px; } .row-key { min-width: 52px; } .field-row__actions { grid-template-columns: repeat(3, 30px); gap: 2px; } .field-row__action { font-size: 10px; } .field-group__body .field-row { padding-left: 12px; } }
 
-/* 保存到「我的信息」（#189）：可核对、可取消勾选的候选 */
-.profile-offer .profile-detail { margin-top: 8px; }
-.profile-offer .profile-detail > summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
-.profile-groups { display: grid; gap: 10px; margin-top: 8px; }
+/* 先显示可保存的答案；未填问题和已有值冲突留在次要入口。 */
+.profile-offer .profile-detail { margin-top: 10px; }
+.profile-offer .profile-intro { color: var(--muted); }
+.profile-offer.is-done { border-color: var(--accent-line); background: var(--accent-pale); }
+.profile-offer.is-done .profile-result { padding: 0; background: transparent; }
+.profile-groups { display: grid; gap: 8px; }
+.profile-more { padding-top: 7px; border-top: 1px solid var(--line); }
+.profile-more summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+.profile-more .profile-items { margin-top: 7px; }
 .profile-group__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .profile-group__title { margin: 0; font-size: 12px; font-weight: 650; color: var(--ink); }
 .profile-group__toggle { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); font-size: 11px; }
@@ -210,3 +215,7 @@ button { cursor: pointer; }
 .profile-result.is-success { background: var(--accent-pale); color: #315e56; }
 .profile-result.is-partial, .profile-result.is-info { background: #fff8e7; color: #5b4820; }
 .profile-result.is-error { background: #fceeee; color: #b44747; }
+.profile-actions { flex-direction: column; }
+.profile-actions button { flex: none; width: 100%; }
+.profile-actions #profile-offer-skip, .profile-actions #profile-offer-dismiss { min-height: 28px; border: 0; background: transparent; color: var(--muted); }
+.profile-actions #profile-offer-view { border-color: var(--accent); background: #fff; color: var(--accent); }

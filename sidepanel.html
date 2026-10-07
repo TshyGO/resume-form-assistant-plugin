@@ -153,17 +153,17 @@
           <div id="fill-result" class="fill-result" role="status" hidden></div>
           <div id="profile-offer" class="offer-card profile-offer" role="region" aria-label="保存到我的信息" hidden>
             <p id="profile-offer-text" class="offer-title"></p>
+            <p id="profile-offer-intro" class="profile-intro"></p>
             <div id="profile-offer-result" class="profile-result" role="status" hidden></div>
-            <details id="profile-offer-detail" class="profile-detail" open>
-              <summary>展开查看和勾选</summary>
+            <div id="profile-offer-detail" class="profile-detail">
               <div id="profile-offer-groups" class="profile-groups"></div>
-            </details>
+            </div>
             <p id="profile-offer-notes" class="offer-hint" hidden></p>
-            <div class="offer-actions offer-actions--wrap">
-              <button id="profile-offer-save" type="button" data-offer="profileAdd">保存到我的信息</button>
-              <button id="profile-offer-skip" type="button" data-offer="profileSkip">不用</button>
-              <button id="profile-offer-view" type="button" hidden>查看我的信息</button>
-              <button id="profile-offer-dismiss" type="button" data-offer="profileDismiss" hidden>知道了</button>
+            <div class="offer-actions profile-actions">
+              <button id="profile-offer-save" type="button" data-offer="profileAdd">记住这 1 项</button>
+              <button id="profile-offer-skip" type="button" data-offer="profileSkip">暂不保存</button>
+              <button id="profile-offer-view" type="button" hidden>在桌面查看</button>
+              <button id="profile-offer-dismiss" type="button" data-offer="profileDismiss" hidden>完成</button>
             </div>
           </div>
           <div id="fill-offer" class="offer-card" role="region" aria-label="填写留档" hidden>

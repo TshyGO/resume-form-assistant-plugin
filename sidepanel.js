@@ -23,6 +23,7 @@
     fillResult: document.getElementById("fill-result"),
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
+    profileOfferIntro: document.getElementById("profile-offer-intro"),
     profileOfferResult: document.getElementById("profile-offer-result"),
     profileOfferDetail: document.getElementById("profile-offer-detail"),
     profileOfferGroups: document.getElementById("profile-offer-groups"),
@@ -1189,12 +1190,6 @@
   let profileSavePending = false;
   let profileRenderSig = "";
   const PROFILE_PREVIEW_CHARS = 80;
-  const PROFILE_GROUPS = [
-    { kind: "filled", title: "已填，可复用", hint: "" },
-    { kind: "pending", title: "待补充", hint: "只保存字段名，之后在桌面补上内容才能自动填。" },
-    { kind: "conflict", title: "与桌面已有内容不同", hint: "默认不替换；勾选后用网页内容替换桌面里的内容。" }
-  ];
-
   const profileItems = () => !profileOffer ? [] : [
     ...profileOffer.filled.map((item) => ({ ...item, kind: "filled" })),
     ...profileOffer.pending.map((item) => ({ ...item, kind: "pending" })),
@@ -1233,31 +1228,67 @@
     const selected = items.filter(profileChecked);
     const busy = profileSavePending || Boolean(offer.saving);
     const result = offer.result;
+    const completed = Boolean(result?.saved > 0);
+    elements.profileOffer.classList.toggle("is-done", completed);
     const signature = JSON.stringify([offer, [...profileChoices], busy, desktopMode]);
     if (signature === profileRenderSig) return;
     profileRenderSig = signature;
-
-    elements.profileOfferText.hidden = !offer.summary;
-    elements.profileOfferText.textContent = offer.summary || "";
+    const filled = items.filter((item) => item.kind === "filled");
+    const pending = items.filter((item) => item.kind === "pending");
+    const conflicts = items.filter((item) => item.kind === "conflict");
+    const savedItems = Array.isArray(result?.savedItems) ? result.savedItems : [];
+    const savedContent = savedItems.filter((item) => item.kind !== "pending");
+    const savedQuestions = savedItems.length - savedContent.length;
+    if (completed) {
+      const only = savedContent.length === 1 && savedItems.length === 1 ? savedContent[0] : null;
+      const value = only?.value?.length > 24 ? `${only.value.slice(0, 24)}…` : only?.value;
+      elements.profileOfferText.textContent = only
+        ? `已记住「${only.key}：${value}」`
+        : savedContent.length
+          ? `已记住 ${savedContent.length} 项内容${savedQuestions ? `，另记下 ${savedQuestions} 个问题` : ""}`
+          : `已记下 ${savedQuestions || result.saved} 个问题`;
+    } else {
+      elements.profileOfferText.textContent = !items.length && result?.text ? result.text : filled.length
+        ? "要记住这次填写的内容吗？"
+        : conflicts.length
+          ? "网页内容与桌面已有内容不同"
+          : `还有 ${pending.length} 个问题需要你填写`;
+    }
+    elements.profileOfferIntro.hidden = completed || !items.length;
+    elements.profileOfferIntro.textContent = filled.length
+      ? "保存后，下次遇到相同问题可以使用。"
+      : conflicts.length
+        ? "桌面原内容会保留；只有你选中时才会替换。"
+        : "在网页填好后，这里会自动显示可保存的答案。";
     elements.profileOfferResult.hidden = !result;
     if (result) {
       elements.profileOfferResult.className = `profile-result is-${result.kind}`;
-      elements.profileOfferResult.innerHTML = `<strong>${escapeHtml(result.text)}</strong>`
-        + (result.hint ? `<span>${escapeHtml(result.hint)}</span>` : "")
+      elements.profileOfferResult.innerHTML = completed
+        ? `<span>${escapeHtml(savedContent.length ? "已保存到桌面「我的信息」，下次填写可以使用。" : "已保存到桌面「我的信息」；补上答案后，下次填写可以使用。")}</span>`
+          + (result.kind === "partial" ? `<span>${escapeHtml(result.text)}</span>` : "")
+          + (result.hint && (result.kind === "partial" || result.hint.includes("暂时没能重新读取")) ? `<span>${escapeHtml(result.hint)}</span>` : "")
+          + (result.details?.length ? `<ul>${result.details.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : "")
+        : `<strong>${escapeHtml(result.text)}</strong>`
+          + (result.hint ? `<span>${escapeHtml(result.hint)}</span>` : "")
         + (result.details?.length ? `<ul>${result.details.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : "");
     }
 
-    elements.profileOfferDetail.hidden = !items.length;
+    elements.profileOfferDetail.hidden = completed || !items.length;
     const focused = document.activeElement?.dataset?.profileId;
-    elements.profileOfferGroups.innerHTML = PROFILE_GROUPS.map((group) => {
-      const list = items.filter((item) => item.kind === group.kind);
-      if (!list.length) return "";
-      const toggle = group.kind === "conflict" ? ""
-        : `<button type="button" class="profile-group__toggle" data-profile-group="${group.kind}"${busy ? " disabled" : ""}>${list.every(profileChecked) ? "全不选" : "全选"}</button>`;
-      return `<section class="profile-group"><div class="profile-group__head"><h3 class="profile-group__title">${group.title}（${list.length}）</h3>${toggle}</div>`
-        + (group.hint ? `<p class="profile-group__hint">${escapeHtml(group.hint)}</p>` : "")
-        + `<div class="profile-items">${list.map(profileRow).join("")}</div></section>`;
-    }).join("");
+    const openMore = new Set(Array.from(elements.profileOfferGroups.querySelectorAll?.("details.profile-more[open]") || [])
+      .map((detail) => detail.dataset.profileMore));
+    const more = (kind, list, title, hint) => !list.length ? ""
+      : `<details class="profile-more" data-profile-more="${kind}"${openMore.has(kind) ? " open" : ""}>`
+        + `<summary>${title}</summary>`
+        + `<p class="profile-group__hint">${hint}</p>`
+        + `<div class="profile-items">${list.map(profileRow).join("")}</div></details>`;
+    elements.profileOfferGroups.innerHTML = completed ? "" : [
+      filled.length ? `<div class="profile-items profile-items--filled">${filled.map(profileRow).join("")}</div>` : "",
+      more("pending", pending, filled.length
+        ? `还有 ${pending.length} 个问题没填 · 稍后处理`
+        : `查看这 ${pending.length} 个问题`, "只记下问题名称；在网页填好后，这里会自动出现可保存的答案。"),
+      more("conflict", conflicts, `桌面已有 ${conflicts.length} 项不同内容`, "默认保留桌面原内容；勾选后才会用网页内容替换。")
+    ].join("");
     if (focused) {
       Array.from(elements.profileOfferGroups.querySelectorAll?.("input[data-profile-id]") || [])
         .find((box) => box.dataset.profileId === focused)?.focus?.();
@@ -1266,16 +1297,21 @@
     const notes = [...offer.notes.slice(0, 5), ...(offer.notes.length > 5 ? [`还有 ${offer.notes.length - 5} 项不能保存的字段。`] : []),
       ...(offer.same ? [`${offer.same} 项桌面里已经有相同内容，不会重复保存。`] : []),
       ...(offer.hidden ? [`还有 ${offer.hidden} 项没有列出。`] : [])];
-    elements.profileOfferNotes.hidden = !notes.length;
+    elements.profileOfferNotes.hidden = completed || !notes.length;
     elements.profileOfferNotes.innerHTML = notes.map(escapeHtml).join("<br>");
 
-    elements.profileOfferSave.hidden = !items.length;
-    elements.profileOfferSkip.hidden = !items.length;
-    elements.profileOfferSave.textContent = busy ? "正在保存…" : `保存 ${selected.length} 项到我的信息`;
+    elements.profileOfferSave.hidden = completed || !items.length || (!selected.length && !filled.length && !conflicts.length);
+    elements.profileOfferSkip.hidden = completed || !items.length;
+    elements.profileOfferSave.textContent = busy ? "正在保存…" : !selected.length
+      ? "选择要保存的内容"
+      : selected.every((item) => item.kind === "pending")
+        ? `记录这 ${selected.length} 个问题`
+        : `记住这 ${selected.length} 项`;
     elements.profileOfferSave.disabled = busy || !selected.length || desktopMode !== "ready";
     elements.profileOfferSkip.disabled = busy;
-    elements.profileOfferView.hidden = !(result && result.saved > 0);
+    elements.profileOfferView.hidden = !completed;
     elements.profileOfferDismiss.hidden = !result;
+    elements.profileOfferDismiss.textContent = completed ? "完成" : "关闭提示";
   }
 
   // 一次点击就保存勾选的项，不再二次确认；写入由页面那边在点击时重新读网页和桌面后完成。

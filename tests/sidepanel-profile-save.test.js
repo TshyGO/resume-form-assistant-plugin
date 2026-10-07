@@ -100,24 +100,25 @@ test('candidates show names and values; reusable filled items start ticked, job-
 
   const html = ui.groups.innerHTML;
   assert.equal(ui.get('profile-offer').hidden, false);
-  assert.equal(ui.get('profile-offer-text').textContent, '可保存到我的信息：已填 2 项，待补 1 项');
+  assert.equal(ui.get('profile-offer-text').textContent, '要记住这次填写的内容吗？');
+  assert.match(ui.get('profile-offer-intro').textContent, /下次遇到相同问题/);
   assert.match(html, /兴趣爱好[\s\S]*摄影/);
   assert.match(html, /可能只适用于当前岗位，默认不勾选/);
   assert.match(html, /data-profile-id="兴趣爱好" checked/);
   assert.doesNotMatch(html, /data-profile-id="你为什么想加入" checked/);
   assert.doesNotMatch(html, /data-profile-id="期望薪资" checked/);
-  assert.match(html, /待补充（1）/);
-  assert.equal(ui.save.textContent, '保存 1 项到我的信息');
+  assert.match(html, /<details class="profile-more" data-profile-more="pending"><summary>还有 1 个问题没填 · 稍后处理<\/summary>/);
+  assert.equal(ui.save.textContent, '记住这 1 项');
   assert.equal(ui.save.disabled, false);
 
   await ui.toggle('期望薪资', true);
-  assert.equal(ui.save.textContent, '保存 2 项到我的信息');
+  assert.equal(ui.save.textContent, '记住这 2 项');
   await ui.toggle('兴趣爱好', false);
   await ui.toggle('期望薪资', false);
-  assert.equal(ui.save.textContent, '保存 0 项到我的信息');
+  assert.equal(ui.save.textContent, '选择要保存的内容');
   assert.equal(ui.save.disabled, true, 'nothing ticked, nothing to save');
   await ui.toggleGroup('filled');
-  assert.equal(ui.save.textContent, '保存 2 项到我的信息');
+  assert.equal(ui.save.textContent, '记住这 2 项');
 });
 
 test('what the user ticked survives the status polls, and an item that shows up later follows its default', async () => {
@@ -134,12 +135,27 @@ test('what the user ticked survives the status polls, and an item that shows up 
 
   assert.doesNotMatch(ui.groups.innerHTML, /data-profile-id="兴趣爱好" checked/, 'the untick was not undone');
   assert.match(ui.groups.innerHTML, /data-profile-id="特长" checked/);
-  assert.equal(ui.save.textContent, '保存 1 项到我的信息');
+  assert.equal(ui.save.textContent, '记住这 1 项');
 
   // 另一次一键填写给出的是新的候选：旧的勾选不带过去。
   ui.setPage({ ready: true, profileOffer: offer({ version: 2 }) });
   await ui.refresh();
   assert.match(ui.groups.innerHTML, /data-profile-id="兴趣爱好" checked/);
+});
+
+test('empty questions stay folded and have no save action until the user selects one', async () => {
+  const ui = await harness();
+  ui.setPage({ ready: true, profileOffer: offer({ filled: [], pending: [
+    { id: '期望薪资', key: '期望薪资', unreadable: false, defaultSelected: false }
+  ] }) });
+  await ui.refresh();
+
+  assert.equal(ui.get('profile-offer-text').textContent, '还有 1 个问题需要你填写');
+  assert.match(ui.groups.innerHTML, /<details class="profile-more" data-profile-more="pending"><summary>查看这 1 个问题<\/summary>/);
+  assert.equal(ui.save.hidden, true);
+  await ui.toggle('期望薪资', true);
+  assert.equal(ui.save.hidden, false);
+  assert.equal(ui.save.textContent, '记录这 1 个问题');
 });
 
 test('one click sends exactly the ticked items with what the user saw; a conflict is replaced only when ticked', async () => {
@@ -196,7 +212,8 @@ test('a failed save shows the real reason, keeps every candidate and tick, and c
 
 test('while a save is on its way the button is busy and a second click does not send another request', async () => {
   const ui = await harness();
-  const saved = { kind: 'success', text: '已保存 1 项，下次填写可用。', hint: '', details: [], saved: 1 };
+  const saved = { kind: 'success', text: '已保存 1 项，下次填写可用。', hint: '', details: [], saved: 1,
+    savedItems: [{ key: '兴趣爱好', value: '摄影', kind: 'filled' }] };
   const after = () => offer({ filled: [], pending: [], result: saved });
   let release;
   let done = false;
@@ -214,10 +231,12 @@ test('while a save is on its way the button is busy and a second click does not 
   await first;
 
   assert.equal(ui.sent().length, 1);
-  assert.match(ui.get('profile-offer-result').innerHTML, /已保存 1 项，下次填写可用/);
+  assert.equal(ui.get('profile-offer-text').textContent, '已记住「兴趣爱好：摄影」');
+  assert.match(ui.get('profile-offer-result').innerHTML, /已保存到桌面「我的信息」/);
   assert.equal(ui.get('profile-offer-view').hidden, false);
-  // 候选全部处理完之后，只剩结果和「知道了」，不再有保存按钮。
+  // 保存后只留下结果；未选的候选不会和成功信息混在一起。
   assert.equal(ui.save.hidden, true);
+  assert.equal(ui.get('profile-offer-detail').hidden, true);
 });
 
 test('values from the page are escaped before they reach the panel markup', async () => {
@@ -241,15 +260,17 @@ test('long values are shortened on screen but not cut in the tooltip', async () 
 
 test('the result can be dismissed, the saved items can be opened on the desktop, and an unreadable field says so', async () => {
   const ui = await harness();
-  const result = { kind: 'success', text: '已保存 1 项，下次填写可用。', hint: '其中 1 项只存了字段名，可稍后到桌面「我的信息」补充内容。', details: [], saved: 1 };
+  const result = { kind: 'success', text: '已添加 1 项待补充字段。', hint: '其中 1 项只存了字段名，可稍后到桌面「我的信息」补充内容。', details: [], saved: 1,
+    savedItems: [{ key: '语言证书', value: '', kind: 'pending' }] };
   let dismissed = false;
   ui.setPage(message => {
     if (message.type === 'RESUME_PANEL_OFFER') { dismissed = true; return { ok: true, profileOffer: null }; }
     return { ready: true, profileOffer: dismissed ? null : offer({ result, pending: [{ id: '语言证书', key: '语言证书', unreadable: true, defaultSelected: false }] }) };
   });
   await ui.refresh();
-  assert.match(ui.get('profile-offer-result').innerHTML, /其中 1 项只存了字段名/);
-  assert.match(ui.groups.innerHTML, /网页上已有内容但读不准，只保存字段名/);
+  assert.equal(ui.get('profile-offer-text').textContent, '已记下 1 个问题');
+  assert.match(ui.get('profile-offer-result').innerHTML, /补上答案后/);
+  assert.equal(ui.get('profile-offer-detail').hidden, true);
 
   await ui.get('profile-offer-view').listeners.click();
   assert.ok(ui.calls.some(item => item.type === 'DESKTOP_OPEN_VIEW' && item.view === 'resume'));
