@@ -444,6 +444,7 @@
     knownFieldKeys,
     mergeProfiles,
     mergeResumeFields,
+    normalizeKey,
     normalizeProfile,
     pickUnansweredLabels,
     profileFromEntries,
