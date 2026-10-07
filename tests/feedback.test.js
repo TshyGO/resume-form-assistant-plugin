@@ -49,15 +49,27 @@ test('50 simultaneous repeats only send once, including after worker restart', a
   f.advance(24 * 3600000 + 1); await f.service.automatic(crash); assert.equal(f.calls.length, 2);
 });
 
-test('all auto categories share five per hour limit; fill dedup is host and type', async () => {
+test('code errors stop at five an hour; fill reports have their own twenty and dedup by host and type', async () => {
   const f = await fixture(); await f.service.setConsent(true);
-  for (let i = 0; i < 4; i++) await f.service.automatic({ ...crash, stack: `content.js:${i}:1` });
-  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com');
-  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com');
+  for (let i = 0; i < 6; i++) await f.service.automatic({ ...crash, stack: `content.js:${i}:1` });
   assert.equal(f.calls.length, 5);
+  // A long application session: every site is new, and code errors used up their own budget only.
+  for (let i = 0; i < 22; i++) await f.service.automatic({ kind: 'fill_partial' }, `site${i}.example.com`);
+  assert.equal(f.calls.length, 25);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 25);
   f.advance(3600001);
-  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 5);
-  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com'); assert.equal(f.calls.length, 6);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 26);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 26);
+  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com'); assert.equal(f.calls.length, 27);
+  await f.service.automatic({ kind: 'fill_partial' }, 'site0.example.com'); assert.equal(f.calls.length, 27);
+  await f.service.automatic({ ...crash, stack: 'content.js:99:1' }); assert.equal(f.calls.length, 28);
+  // State saved before this split has no fill bucket (or a damaged one); it reads as empty.
+  for (const fillHourly of [undefined, null, 'x']) {
+    const saved = { ...f.data[f.key], fillHourly };
+    if (fillHourly === undefined) delete saved.fillHourly;
+    const old = await fixture({ data: { feedbackStateV1: saved } });
+    await old.service.automatic({ kind: 'fill_partial' }, 'new.example.com'); assert.equal(old.calls.length, 1);
+  }
 });
 
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {

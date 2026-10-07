@@ -7,8 +7,13 @@ export const STORAGE_KEY = 'feedbackStateV1';
 export const CONSENT_VERSION = 1;
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
+// Per installation, per rolling hour. Code errors can repeat in a loop, so they stay tight. Fill
+// reports are already once a day per site and type; their cap only matters when someone fills many
+// different sites in one sitting, and it should not cut those off after five.
+const ERRORS_PER_HOUR = 5;
+const FILLS_PER_HOUR = 20;
 const core = globalThis.ResumeProFeedback;
-const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, recent: {}, hourly: [], backoff: 0, manualAt: 0 });
+const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, recent: {}, hourly: [], fillHourly: [], backoff: 0, manualAt: 0 });
 
 export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, timeoutMs = 5000 }) {
   let serial = Promise.resolve();
@@ -28,6 +33,7 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
       await save(state).catch(() => {}); // Undecided in memory either way; the next choice rewrites it.
     }
     if (state.consent !== true) state.anonymousId = null;
+    for (const key of ['hourly', 'fillHourly']) if (!Array.isArray(state[key])) state[key] = [];
     return state;
   };
   const view = state => ({ consent: state.consent === true, decided: state.consent !== null });
@@ -91,9 +97,11 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
         const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature)))].map(x => x.toString(16).padStart(2, '0')).join('');
         state.hourly = state.hourly.filter(t => time - t < HOUR);
+        state.fillHourly = state.fillHourly.filter(t => time - t < HOUR);
         state.recent = Object.fromEntries(Object.entries(state.recent).filter(([, t]) => time - t < DAY));
-        if (state.hourly.length >= 5 || state.recent[hash] !== undefined) return null;
-        state.anonymousId = body.anonymous_id; state.hourly.push(time); state.recent[hash] = time;
+        const [sent, limit] = body.error_type.startsWith('fill_') ? [state.fillHourly, FILLS_PER_HOUR] : [state.hourly, ERRORS_PER_HOUR];
+        if (sent.length >= limit || state.recent[hash] !== undefined) return null;
+        state.anonymousId = body.anonymous_id; sent.push(time); state.recent[hash] = time;
         await save(state); return body;
       });
       return payload ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
