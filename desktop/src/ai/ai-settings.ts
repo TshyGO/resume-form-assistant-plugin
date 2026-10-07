@@ -13,6 +13,8 @@ export interface Preset {
   /** 去哪里申请 Key。只显示为可复制的文字，不在应用里打开外部网页。 */
   keyPage: string;
   modelHint: string;
+  /** 这家服务商用起来要注意的地方，选了这个预设时显示在编辑器里。 */
+  note?: string;
 }
 
 // 只列 OpenAI 兼容 Chat Completions 的常用服务商。模型名不预填：各家更新快。
@@ -24,6 +26,10 @@ export const PRESETS: Preset[] = [
   { id: "doubao", name: "豆包（火山方舟）", apiUrl: "https://ark.cn-beijing.volces.com/api/v3", keyPage: "https://console.volcengine.com/ark", modelHint: "" },
   { id: "openrouter", name: "OpenRouter", apiUrl: "https://openrouter.ai/api/v1", keyPage: "https://openrouter.ai/keys", modelHint: "" },
   { id: "openai", name: "OpenAI", apiUrl: "https://api.openai.com/v1", keyPage: "https://platform.openai.com/api-keys", modelHint: "gpt-4o-mini" },
+  {
+    id: "opencode-go", name: "OpenCode Go", apiUrl: "https://opencode.ai/zen/go/v1", keyPage: "https://opencode.ai/v2/docs/console/go", modelHint: "deepseek-v4.1-flash",
+    note: "只能用走 Chat Completions 的模型：OpenCode 文档模型表里 Endpoint 是 chat/completions 的那些。走 responses 或 messages 的模型（如 Grok、GPT、MiniMax、Qwen）在这里用不了。",
+  },
   { id: "custom", name: "自定义", apiUrl: "", keyPage: "", modelHint: "" },
 ];
 

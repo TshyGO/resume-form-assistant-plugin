@@ -42,6 +42,8 @@
 
 可以添加多个服务商，切换当前使用的配置。软件不赠送模型额度，也不代办 API 账号。请尽量使用 HTTPS；HTTP 会明文传输请求。
 
+预设里有 OpenCode Go。它只能用走 Chat Completions 的模型（OpenCode 文档模型表里 Endpoint 是 chat/completions 的那些），Grok、GPT 等走其他接口的模型用不了。
+
 API Key 保存在 macOS 钥匙串或 Windows 凭据管理器中，不写进扩展，不进入桌面备份。恢复备份后，需要检查并按提示重新配置密钥。
 
 不配置 AI，仍可导入 Excel 模板、点击字段辅助填写，并使用本地岗位管理。AI 简历解析、AI 填写、岗位识别中的 AI 回退和通知 AI 整理需要可用的服务商配置。

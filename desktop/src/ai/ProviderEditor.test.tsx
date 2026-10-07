@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { AiProviderView, Invoke, SaveProviderResult } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
 import { ProviderEditor } from "./ProviderEditor.tsx";
+import { PRESETS } from "./ai-settings.ts";
 
 const existing: AiProviderView = {
   id: "p1", name: "DeepSeek", apiUrl: "https://api.deepseek.com/v1/chat/completions",
@@ -50,6 +51,19 @@ test("从预设新建：填好地址，保存时连 Key 一起交出去", async 
     command: "save_ai_provider_cmd",
     args: { provider: { id: null, name: "DeepSeek", apiUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" }, key: "sk-x" },
   });
+});
+
+test("OpenCode Go 预设预填地址，并说明只能用 Chat Completions 的模型", async () => {
+  const preset = PRESETS.find((p) => p.id === "opencode-go")!;
+  mount({ preset }, () => saved());
+  expect(screen.getByLabelText("接口地址")).toHaveProperty("value", "https://opencode.ai/zen/go/v1");
+  expect(screen.getByText(/只能用走 Chat Completions 的模型/)).toBeTruthy();
+  expect(screen.getByLabelText("模型名称")).toHaveProperty("placeholder", "deepseek-v4.1-flash");
+});
+
+test("没有说明的预设不显示说明", () => {
+  mount({ preset: PRESETS.find((p) => p.id === "deepseek")! }, () => saved());
+  expect(screen.queryByText(/只能用走 Chat Completions/)).toBeNull();
 });
 
 test("编辑已有服务商不填 Key 时不动原来的 Key", async () => {

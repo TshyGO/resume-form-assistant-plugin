@@ -143,6 +143,7 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
           去这里申请 Key：<code>{preset.keyPage}</code>
         </p>
       ) : null}
+      {preset?.note ? <p className="note warn">{preset.note}</p> : null}
       <label>
         模型名称
         <input
