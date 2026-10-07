@@ -52,6 +52,7 @@ function mountWithListen(handler: (command: string, args?: Record<string, unknow
   return {
     calls,
     fire: (revision = 4) => handlerRef?.({ payload: { revision, source: "plugin" } }),
+    fireLegacy: () => handlerRef?.(),
   };
 }
 
@@ -223,7 +224,7 @@ test("同名补充字段显示冲突，确认放弃后才能重新读取（#191�
   await act(async () => fire());
   await screen.findByText(/有 1 处更新需要确认/);
   await user.click(screen.getByRole("button", { name: "查看并处理" }));
-  expect(within(screen.getByRole("group", { name: "冲突：国籍" })).getByText("中国")).toBeTruthy();
+  expect(within(screen.getByRole("group", { name: "冲突：国籍" })).getByText("国籍 — 中国")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
   await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
   await waitFor(() => expect(screen.getByRole("group", { name: /国籍/ })).toBeTruthy());
@@ -301,7 +302,7 @@ test("同名字段分别保留时先改名，使用外部版本需二次确认�
   await user.click(within(detail).getByRole("button", { name: "使用外部版本" }));
   expect(within(detail).getByText(/这会放弃该处当前草稿内容/)).toBeTruthy();
   await user.click(within(detail).getByRole("button", { name: "取消" }));
-  expect(within(detail).getByText("中国")).toBeTruthy();
+  expect(within(detail).getByText("国籍 — 中国")).toBeTruthy();
   await user.click(within(detail).getByRole("button", { name: "分别保留" }));
   await user.click(screen.getByRole("button", { name: "应用选择，继续编辑" }));
   expect(screen.getByText(/请为「国籍」填写一个不同/)).toBeTruthy();
@@ -388,6 +389,38 @@ test("重复或旧 revision 不会反复重新读取（#177）", async () => {
   await act(async () => fire(record.revision));
   await act(async () => fire(record.revision - 1));
   expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore);
+});
+
+test("旧宿主无 revision 事件读回相同版本后不阻止保存（#191）", async () => {
+  const user = userEvent.setup();
+  const { fireLegacy, calls } = mountWithListen((command, args) =>
+    command === "save_profile_cmd" ? { profile: args?.profile, revision: 4 } : record,
+  );
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fireLegacy());
+  expect(name).toHaveProperty("value", "张三五");
+  expect(screen.queryByText(/有待同步的更新/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(1);
+});
+
+test("旧宿主无 revision 事件读取失败后，手动重试相同版本会清除待同步（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const { fireLegacy, calls } = mountWithListen((command, args) => {
+    if (command === "save_profile_cmd") return { profile: args?.profile, revision: 4 };
+    reads += 1;
+    if (reads === 2) throw new Error("暂时读取失败");
+    return record;
+  });
+  await user.type(await screen.findByLabelText("姓名"), "五");
+  await act(async () => fireLegacy());
+  expect(screen.getByText(/有待同步的更新/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "重新检查更新" }));
+  await waitFor(() => expect(screen.queryByText(/有待同步的更新/)).toBeNull());
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(1);
 });
 
 test("自动读取期间开始编辑，安全字段仍加入最新草稿（#191）", async () => {

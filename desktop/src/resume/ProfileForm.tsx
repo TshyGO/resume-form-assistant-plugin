@@ -190,13 +190,14 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const editVersionRef = useRef(0);
   const loadSequenceRef = useRef(0);
   const pendingExternalRevisionRef = useRef(0);
+  const unknownExternalPendingRef = useRef(false);
 
-  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0) => {
+  const load = useCallback(async (discardLocalChanges = false, externalRevision = 0, checkExternal = externalRevision > 0) => {
     if (!invoke || (discardLocalChanges && reloadPendingRef.current)) return;
     if (discardLocalChanges) {
       reloadPendingRef.current = true;
       setReloading(true);
-    } else if (externalRevision) {
+    } else if (checkExternal) {
       setSyncing(true);
     }
     const loadSequence = ++loadSequenceRef.current;
@@ -208,7 +209,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       if (loadSequence !== loadSequenceRef.current) return;
       const remote = profileApi.normalizeProfile(record.profile);
       const latestRequested = Math.max(externalRevision, pendingExternalRevisionRef.current);
-      if (externalRevision && record.revision < latestRequested) {
+      if (checkExternal && latestRequested && record.revision < latestRequested) {
         setDeferredExternalChange(true);
         return;
       }
@@ -220,9 +221,19 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       const draft = profileRef.current;
       const base = baseProfileRef.current;
       if (!discardLocalChanges && draft && base && dirtyRef.current) {
-        if (record.revision <= revisionRef.current) return;
+        if (record.revision <= revisionRef.current) {
+          // 旧宿主没有 revision 的通知只要求核对一次；读回相同版本时不能虚构待同步状态。
+          if (checkExternal && !pendingExternalRevisionRef.current) {
+            unknownExternalPendingRef.current = false;
+            setExternalChange(false);
+            setDeferredExternalChange(false);
+            setConflict(false);
+          }
+          return;
+        }
         const result = inspectProfileUpdate(base, draft, remote);
         if (result.conflicts.length) {
+          unknownExternalPendingRef.current = false;
           setPendingRemote(record);
           setNotice(null);
           setChoices({});
@@ -245,6 +256,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         setExternalChange(false);
         setDeferredExternalChange(false);
         pendingExternalRevisionRef.current = 0;
+        unknownExternalPendingRef.current = false;
         setNotice(result.additions.length
           ? { tone: "warn", text: "插件新增了补充字段，已加入当前草稿；你的修改仍未保存。" }
           : null);
@@ -266,16 +278,17 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       dirtyRef.current = false;
       setExternalChange(false);
       pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
+      unknownExternalPendingRef.current = false;
     } catch (error) {
       if (loadSequence !== loadSequenceRef.current) return;
-      if (externalRevision) setDeferredExternalChange(true);
+      if (checkExternal) setDeferredExternalChange(true);
       setNotice({ tone: "error", text: (error as { message?: string })?.message ?? "读取失败。" });
     } finally {
       if (discardLocalChanges) {
         reloadPendingRef.current = false;
         setReloading(false);
       }
-      if (externalRevision && loadSequence === loadSequenceRef.current) setSyncing(false);
+      if (checkExternal && loadSequence === loadSequenceRef.current) setSyncing(false);
     }
   }, [invoke]);
 
@@ -295,15 +308,16 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         // 正式事件总有 revision/source。兼容无 payload 的测试/旧宿主时仍刷新一次；
         // 有 payload 却不符合协议的事件不能伪装成兼容事件触发刷新。
         if (event?.payload !== undefined && !change) return;
-        const externalRevision = change?.revision ?? revisionRef.current + 1;
-        // 当前、旧、已忽略或已经在读取的 revision 都不重复处理。
-        if (
-          externalRevision <= revisionRef.current
-          || externalRevision <= pendingExternalRevisionRef.current
-        ) return;
-        pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, externalRevision);
+        const externalRevision = change?.revision ?? 0;
+        // 有真实 revision 的事件去重；旧宿主的无 payload 事件只核对，不编造新版本。
+        if (change) {
+          if (externalRevision <= revisionRef.current || externalRevision <= pendingExternalRevisionRef.current) return;
+          pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, externalRevision);
+        } else {
+          unknownExternalPendingRef.current = true;
+        }
         setExternalChange(true);
-        if (!savingRef.current && !reloadPendingRef.current) void load(false, externalRevision);
+        if (!savingRef.current && !reloadPendingRef.current) void load(false, externalRevision, true);
       }),
     ).then((stop) => {
       if (!stop) return;
@@ -373,10 +387,11 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       revisionRef.current = record.revision;
       // 保存结果比此前启动的任何读取都新；让那些响应回来时直接作废。
       loadSequenceRef.current += 1;
-      setExternalChange(false);
+      const unknownExternalPending = unknownExternalPendingRef.current;
+      setExternalChange(unknownExternalPending);
       const newerRevision = pendingExternalRevisionRef.current;
       const hasNewerRevision = newerRevision > record.revision;
-      setDeferredExternalChange(hasNewerRevision);
+      setDeferredExternalChange(hasNewerRevision || unknownExternalPending);
       pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
       // 与插件 popup.js saveProfile 同款措辞：已保存的项数，剩下多少补充字段还没填内容。
       const count = profileApi.countProfileValues(saved);
@@ -385,7 +400,8 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         tone: "ok",
         text: pending ? `已保存 ${count} 项，还有 ${pending} 个字段没填内容。` : `已保存 ${count} 项。`,
       } : { tone: "warn", text: "已保存此前的修改；保存期间的新输入仍未保存。" });
-      if (hasNewerRevision) void load(false, newerRevision);
+      if (hasNewerRevision) void load(false, newerRevision, true);
+      else if (unknownExternalPending) void load(false, 0, true);
     } catch (error) {
       const err = error as { code?: string; message?: string } | null;
       const revisionConflict = err?.code === "CONFLICT";
@@ -393,7 +409,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       if (revisionConflict) {
         setExternalChange(true);
         pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, revisionRef.current + 1);
-        void load(false, pendingExternalRevisionRef.current);
+        void load(false, pendingExternalRevisionRef.current, true);
       }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
@@ -418,7 +434,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     const latest = profileApi.normalizeProfile(pendingRemote.profile);
     if (pendingExternalRevisionRef.current > pendingRemote.revision) {
       setNotice({ tone: "warn", text: "又收到新的更新，请先读取最新版本。" });
-      void load(false, pendingExternalRevisionRef.current);
+      void load(false, pendingExternalRevisionRef.current, true);
       return;
     }
     if (inspection.conflicts.some((item) => !choices[item.id])) {
@@ -478,12 +494,12 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
             {pendingRemote ? (
               <button type="button" onClick={() => setShowConflictDetails(true)}>查看并处理</button>
             ) : (
-              <button type="button" disabled={syncing || reloading || busy} onClick={() => void load(false, pendingExternalRevisionRef.current || revisionRef.current + 1)}>
+              <button type="button" disabled={syncing || reloading || busy} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>
                 重新检查更新
               </button>
             )}
             {pendingRemote && pendingExternalRevisionRef.current > pendingRemote.revision ? (
-              <button type="button" disabled={syncing} onClick={() => void load(false, pendingExternalRevisionRef.current)}>读取最新更新</button>
+              <button type="button" disabled={syncing} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>读取最新更新</button>
             ) : null}
             <button type="button" disabled={syncing} onClick={() => {
               setShowConflictDetails(false);
@@ -500,8 +516,8 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
                 <div key={item.id} className="profile-conflict-item stack" role="group" aria-label={`冲突：${item.label}`}>
                   <strong>{item.label}</strong>
                   <div className="profile-conflict-values">
-                    <p>当前草稿：<span>{item.local}</span></p>
-                    <p>外部版本：<span>{item.remote}</span></p>
+                    <p>当前草稿：<span>{item.kind === "custom" && item.localItem ? `${item.localItem.key} — ` : ""}{item.local}</span></p>
+                    <p>外部版本：<span>{item.kind === "custom" && item.remoteItem ? `${item.remoteItem.key} — ` : ""}{item.remote}</span></p>
                   </div>
                   <div className="row">
                     <button type="button" aria-pressed={choices[item.id] === "local"} onClick={() => chooseConflict(item.id, "local")}>使用当前草稿</button>
