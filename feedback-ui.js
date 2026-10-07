@@ -1,6 +1,6 @@
 // Runs only in extension-owned pages. No inline handlers, HTML from reports or secrets.
-// Two independent features share this file: 自动错误报告 (a preference, default on, set on the
-// status page) and 手动反馈问题 (a draft previewed and confirmed in the side panel only).
+// Two independent features share this file: 自动错误报告 (off until the user agrees, then set on
+// the status page) and 手动反馈问题 (a draft previewed and confirmed in the side panel only).
 // Neither changes the other.
 (() => {
   const noticeRoot = document.getElementById('feedback-notice-root');
@@ -9,23 +9,22 @@
   if (!autoRoot) return;
   const core = self.ResumeProFeedback;
   const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
-  // The side panel shows the preference as one line plus a first-use notice of its own. The
-  // status page owns the switch and unfolds the same explanation inside its card.
+  // The side panel shows the preference as one line plus the choice of its own while the user has
+  // not chosen. The status page owns the switch and unfolds the same explanation inside its card.
   const compact = autoRoot.dataset.variant === 'compact';
   const explanation = `
-      <p>网申快填有两种互相独立的方式帮助改进：</p>
-      <ul class="feedback-ways">
-        <li><strong>自动错误报告</strong>（默认开启）：插件检测到自身异常，或一键填写后有字段没填上时，自动发送一份脱敏诊断。关闭它不影响手动反馈问题。</li>
-        <li><strong>手动反馈问题</strong>：由你${compact ? '' : '在侧栏'}填写描述，预览全部内容并确认后才发送。</li>
-      </ul>
-      <p class="feedback-note">用途是定位问题、改进填写兼容性。报告仅含错误类别、本插件代码位置、版本、系统，以及出错页域名和经过筛选的填写诊断；不上传简历、填写值、页面正文、完整网址、Cookie 或密钥。自动错误报告使用随机安装标识，关闭即删除。发送前先脱敏，经 Cloudflare 中转（最长暂存 90 天），由 Muse 再次脱敏整理为可能公开的 GitHub issue。插件与桌面分别设置。</p>`;
+      <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「填不上」「用不了」，看不出是哪个网站、卡在哪一步，很难找到原因。开启自动错误报告后，插件出错或一键填写有字段没填上时，会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
+      <p class="feedback-note">报告里只有技术信息：错误类型、出错的代码位置、插件版本、系统、发送时间和一个随机生成的安装编号。网页上出的问题还会带上网站域名和这次填写的统计，比如页面路径（其中的编号会去掉）、字段和控件的数量与类型、填上了多少、用时、卡在哪一步。不包含你的简历、填写的内容、页面上的文字、完整网址、Cookie 或密钥。</p>
+      <p class="feedback-note">发送前会先去掉可能的个人信息。报告最多保存 90 天；其中的网站域名和填写统计可能会公开在网申快填的 GitHub 项目里，方便复现问题，公开的内容会长期保留；安装编号不会公开。</p>
+      <p class="feedback-note">你同意后才开始发送，同意前出的错不会补发。可以随时关闭，关闭后停止发送并删除安装编号，不影响填写。插件和桌面程序分开设置。</p>
+      <p class="feedback-note">遇到问题也可以在${compact ? '' : '侧栏的'}「手动反馈问题」里自己写，预览确认后才会发送。</p>`;
   if (compact && noticeRoot) noticeRoot.innerHTML = `
     <section class="feedback-card feedback-notice" id="feedback-consent" hidden aria-labelledby="feedback-notice-title">
-      <h2 id="feedback-notice-title">错误报告与问题反馈</h2>${explanation}
-      <p class="feedback-note">点「知道了」只收起本说明，自动错误报告保持开启。以后如需关闭，或想重看本说明，请到「插件状态」。</p>
+      <h2 id="feedback-notice-title">帮我们改进网申快填</h2>${explanation}
+      <p class="feedback-note">以后可以到「插件状态」更改。</p>
       <div class="feedback-actions">
-        <button type="button" id="feedback-enable" class="feedback-primary">知道了</button>
-        <button type="button" id="feedback-decline" hidden>关闭自动错误报告</button>
+        <button type="button" id="feedback-enable">同意并开启</button>
+        <button type="button" id="feedback-decline">暂不开启</button>
       </div>
     </section>`;
   autoRoot.innerHTML = compact ? `
@@ -38,14 +37,17 @@
       <h2 id="feedback-auto-title">自动错误报告</h2>
       <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
       <p id="feedback-auto-state" class="feedback-state">正在读取设置…</p>
-      <p class="feedback-note">默认开启。关闭会删除随机安装标识，不影响侧栏里的「手动反馈问题」。插件与桌面分别设置。</p>
+      <p class="feedback-note">你同意后才会开启。关闭后删除安装编号，不影响侧栏里的「手动反馈问题」。插件和桌面程序分开设置。</p>
       <div class="feedback-actions">
         <button type="button" id="feedback-about" aria-expanded="false" aria-controls="feedback-details" hidden>查看完整说明</button>
         <button type="button" id="feedback-retry" hidden>重新读取设置</button>
       </div>
       <div id="feedback-details" class="feedback-details" role="region" aria-label="完整说明" hidden>${explanation}
         <p class="feedback-note" id="feedback-details-hint"></p>
-        <div class="feedback-actions"><button type="button" id="feedback-enable" class="feedback-primary" hidden>知道了</button></div>
+        <div class="feedback-actions">
+          <button type="button" id="feedback-enable" hidden>同意并开启</button>
+          <button type="button" id="feedback-decline" hidden>暂不开启</button>
+        </div>
       </div>
       <p id="feedback-auto-status" role="status" aria-live="polite"></p>
     </section>`;
@@ -60,7 +62,7 @@
         <label for="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
         <textarea id="feedback-description" maxlength="1400" rows="4"></textarea>
         <label><input type="checkbox" id="feedback-attach" checked>附上最近一次填写诊断</label>
-        <p class="feedback-note">只有点「确认发送」才会发送：经 Cloudflare 中转，由 Muse 脱敏整理为 GitHub issue；最长暂存 90 天。发送前请核对下方全部内容。</p>
+        <p class="feedback-note">只有点「确认发送」才会发送。报告最多保存 90 天；可能会公开在网申快填的 GitHub 项目里，公开的内容会长期保留。发送前请核对下方全部内容。</p>
         <button type="button" id="feedback-preview-button">预览将发送的内容</button>
         <pre id="feedback-preview" tabindex="0" hidden></pre>
         <button type="submit" id="feedback-send" class="feedback-primary" disabled>确认发送</button>
@@ -76,32 +78,31 @@
   const autoStatus = text => { $('auto-status').textContent = text; };
   function renderConsent(result = settings) {
     settings = result;
-    const known = result.consent === true || result.consent === false;
-    const firstUse = result.noticeSeen === false;
+    const known = typeof result.consent === 'boolean' && typeof result.decided === 'boolean';
+    // Not chosen yet: nothing is sent, and the choice stays on screen until the user makes one.
+    const undecided = known && !result.decided;
     if (compact) {
-      // Side panel: a first-use notice only. Re-reading and changing the setting happen on the status page.
-      if ($('consent')) {
-        $('consent').hidden = !firstUse; noticeRoot.hidden = !firstUse;
-        $('decline').hidden = !(firstUse && result.consent === true);
-      }
+      // Side panel: the choice only. Re-reading and changing the setting happen on the status page.
+      if ($('consent')) { $('consent').hidden = !undecided; noticeRoot.hidden = !undecided; }
     } else {
-      // Status page: the explanation unfolds inside the card. On first use it starts open and
-      // only 「知道了」 folds it; afterwards 「查看完整说明」 / 「收起说明」 toggles it.
-      const open = firstUse || aboutOpen;
+      // Status page: the explanation unfolds inside the card. While undecided it stays open with the
+      // two choices; afterwards 「查看完整说明」 / 「收起说明」 toggles it.
+      const open = undecided || aboutOpen;
       $('details').hidden = !open;
       // Hidden until the settings are known, so an early click cannot render a failure state.
-      $('about').hidden = firstUse || !known;
+      $('about').hidden = undecided || !known;
       $('about').textContent = open ? '收起说明' : '查看完整说明';
       $('about').setAttribute('aria-expanded', String(open));
-      $('enable').hidden = !firstUse;
-      $('details-hint').textContent = firstUse
-        ? '点「知道了」只收起说明，自动错误报告保持开启。如需关闭，取消勾选上方「开启自动错误报告」即可。'
+      $('enable').hidden = !undecided; $('decline').hidden = !undecided;
+      $('details-hint').textContent = undecided
+        ? '以后也可以用上方的「开启自动错误报告」更改。'
         : '如需开启或关闭，勾选或取消勾选上方「开启自动错误报告」即可。';
       $('toggle').checked = result.consent === true; $('toggle').disabled = !known || savingConsent;
     }
-    const state = !known ? '无法读取设置' : result.consent ? '已开启' : '已关闭';
+    const state = !known ? '无法读取设置' : undecided ? '未开启' : result.consent ? '已开启' : '已关闭';
     $('auto-state').textContent = compact ? `自动错误报告：${state}${known ? '（在「插件状态」中设置）' : ''}`
-      : !known ? '无法读取设置。' : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
+      : !known ? '无法读取设置。' : undecided ? '未开启：你选择之前不会自动发送任何报告。'
+      : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;
     if (!known) autoStatus('无法读取反馈设置，请重新读取。');
   }
@@ -110,22 +111,22 @@
     if (savingConsent) return;
     savingConsent = true;
     controls().forEach(control => { control.disabled = true; });
-    const result = await send(enabled === undefined ? { type: 'FEEDBACK_NOTICE_SEEN' } : { type: 'FEEDBACK_CONSENT', enabled });
+    const result = await send({ type: 'FEEDBACK_CONSENT', enabled });
     savingConsent = false;
     controls().forEach(control => { control.disabled = false; });
-    const saved = result.consent === true || result.consent === false;
-    renderConsent(result);
+    const saved = typeof result.consent === 'boolean' && typeof result.decided === 'boolean';
+    // A failed save changes nothing, so the choice (or the switch's last saved state) stays as it was.
+    renderConsent(saved ? result : settings);
     autoStatus(!saved ? '设置未保存，请重试。'
-      : enabled === undefined ? `已收起说明，自动错误报告保持${result.consent ? '开启' : '关闭'}。`
-      : result.consent ? '已开启自动错误报告。' : '已关闭自动错误报告，随机安装标识已删除。手动反馈问题不受影响。');
+      : result.consent ? '已开启自动错误报告，谢谢。' : '自动错误报告没有开启，不会自动发送任何报告。手动反馈问题不受影响。');
   }
   const refresh = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
   $('retry').onclick = refresh;
-  if ($('enable')) $('enable').onclick = () => { aboutOpen = false; consent(); };
-  if ($('decline')) $('decline').onclick = () => consent(false);
+  if ($('enable')) $('enable').onclick = () => { aboutOpen = false; consent(true); };
+  if ($('decline')) $('decline').onclick = () => { aboutOpen = false; consent(false); };
   if ($('toggle')) $('toggle').onchange = () => {
-    // Choosing on first use counts as having read the explanation; keep it open while reading.
-    if (settings.noticeSeen === false) aboutOpen = true;
+    // Choosing with the switch while undecided: keep the explanation open, it is being read.
+    if (settings.decided === false) aboutOpen = true;
     consent($('toggle').checked);
   };
   if ($('about')) $('about').onclick = () => { aboutOpen = !aboutOpen; renderConsent(); };

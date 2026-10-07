@@ -17,12 +17,17 @@ const ENDPOINT: &str = "https://app-feedback-relay.nebula-lab.workers.dev/feedba
 const HOUR: u64 = 3_600_000;
 const DAY: u64 = 24 * HOUR;
 const SAVE_ERROR: &str = "反馈设置未能保存，请重试。";
+/// The explanation the user agreed to. Raise it when automatic reports start carrying something
+/// the notice does not describe: earlier grants then count as undecided and the user is asked again.
+const CONSENT_VERSION: u32 = 1;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Stored {
+    /// `None` until the user chooses; nothing automatic is sent or kept before that.
     consent: Option<bool>,
-    notice_seen: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consent_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     anonymous_id: Option<String>,
     recent: BTreeMap<String, u64>,
@@ -33,7 +38,6 @@ struct Stored {
 #[derive(Serialize)]
 pub struct Status {
     consent: Option<bool>,
-    notice_seen: bool,
 }
 #[derive(Clone, Serialize, Debug, PartialEq)]
 pub struct Payload {
@@ -215,30 +219,28 @@ impl Reporter {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Stored::default()),
             _ => None,
         };
-        // Missing/undecided preferences adopt the default; corrupt/unreadable files
-        // fail closed. Explicit old choices always win over the new default.
+        // A missing file is a new installation: undecided, and nothing is written until the user
+        // chooses. Corrupt/unreadable files fail closed as declined, so a lost opt-out stays off.
         let mut state = loaded.unwrap_or_else(|| Stored {
             consent: Some(false),
-            notice_seen: Some(false),
             ..Stored::default()
         });
-        if state.consent.is_none() {
-            state.consent = Some(true);
-            state.notice_seen = Some(false);
-            state.anonymous_id = Some(uuid::Uuid::new_v4().to_string());
-            if Self::save_to(&path, &state).is_err() {
-                state.consent = Some(false);
-                state.anonymous_id = None;
-            }
-        } else if state.notice_seen.is_none() {
-            state.notice_seen = Some(true);
+        // Builds before #247 wrote `consent: true` by default and their notice only folded, so a
+        // grant without the current version is no grant: ask again. An opt-out is always kept.
+        if state.consent == Some(true) && state.consent_version != Some(CONSENT_VERSION) {
+            state.consent = None;
+            state.consent_version = None;
+            state.anonymous_id = None;
+            // Undecided in memory either way; the next choice rewrites the file.
+            let _ = Self::save_to(&path, &state);
         }
-        if state.consent != Some(true)
-            || state
-                .anonymous_id
-                .as_deref()
-                .and_then(|s| uuid::Uuid::parse_str(s).ok())
-                .is_none()
+        if state.consent != Some(true) {
+            state.anonymous_id = None;
+        } else if state
+            .anonymous_id
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .is_none()
         {
             state.anonymous_id = None;
             state.consent = Some(false);
@@ -281,25 +283,13 @@ impl Reporter {
         let state = self.state.lock().map_err(|_| SAVE_ERROR)?;
         Ok(Status {
             consent: state.consent,
-            notice_seen: state.notice_seen == Some(true),
-        })
-    }
-    pub fn acknowledge_notice(&self) -> Result<Status, &'static str> {
-        let mut state = self.state.lock().map_err(|_| SAVE_ERROR)?;
-        let mut next = state.clone();
-        next.notice_seen = Some(true);
-        self.save(&next)?;
-        *state = next;
-        Ok(Status {
-            consent: state.consent,
-            notice_seen: true,
         })
     }
     pub fn consent(&self, enabled: bool) -> Result<Status, &'static str> {
         let mut state = self.state.lock().map_err(|_| SAVE_ERROR)?;
         let mut next = state.clone();
         next.consent = Some(enabled);
-        next.notice_seen = Some(true);
+        next.consent_version = enabled.then_some(CONSENT_VERSION);
         next.anonymous_id = if enabled {
             next.anonymous_id
                 .or_else(|| Some(uuid::Uuid::new_v4().to_string()))
@@ -316,8 +306,8 @@ impl Reporter {
             if enabled {
                 return Err(error);
             }
-            // Never delete the state file: absence now means a new default-on install.
-            // A disabled tombstone is safe even if interrupted (invalid JSON fails closed).
+            // Never delete the state file: absence means undecided, and the user would be asked
+            // again. A disabled tombstone is safe even if interrupted (invalid JSON fails closed).
             use std::io::Write;
             let revoke = || -> std::io::Result<()> {
                 let mut options = std::fs::OpenOptions::new();
@@ -328,7 +318,7 @@ impl Reporter {
                     options.mode(0o600);
                 }
                 let mut file = options.open(&self.path)?;
-                file.write_all(b"{\"consent\":false,\"notice_seen\":true}")?;
+                file.write_all(b"{\"consent\":false}")?;
                 file.sync_all()
             };
             if revoke().is_err() {
@@ -341,7 +331,6 @@ impl Reporter {
         self.enabled.store(enabled, Ordering::Release);
         Ok(Status {
             consent: state.consent,
-            notice_seen: state.notice_seen == Some(true),
         })
     }
     fn reserve(&self, error: FrontendError, panic_location: bool, time: u64) -> Option<Payload> {
@@ -554,10 +543,6 @@ pub async fn feedback_status(state: State<'_, Arc<Reporter>>) -> Result<Status, 
     state.status()
 }
 #[tauri::command]
-pub async fn feedback_notice_seen(state: State<'_, Arc<Reporter>>) -> Result<Status, &'static str> {
-    state.acknowledge_notice()
-}
-#[tauri::command]
 pub async fn feedback_consent(
     state: State<'_, Arc<Reporter>>,
     enabled: bool,
@@ -645,9 +630,11 @@ mod tests {
     #[test]
     fn consent_identity_and_persistent_concurrent_dedup() {
         let (dir, reporter) = reporter();
-        assert_eq!(reporter.status().unwrap().consent, Some(true));
-        assert!(!reporter.status().unwrap().notice_seen);
-        assert!(reporter.enabled.load(Ordering::Acquire));
+        // New installation: undecided, nothing enabled, nothing kept, nothing written.
+        assert_eq!(reporter.status().unwrap().consent, None);
+        assert!(!reporter.enabled.load(Ordering::Acquire));
+        assert!(reporter.reserve(error(1), false, now()).is_none());
+        assert!(!reporter.path.exists());
         reporter.consent(false).unwrap();
         assert!(reporter.reserve(error(1), false, now()).is_none());
         reporter.consent(true).unwrap();
@@ -687,53 +674,78 @@ mod tests {
         );
     }
     #[test]
-    fn default_notice_and_prior_choices_survive_restarts() {
+    fn choices_survive_restarts_and_old_default_grants_are_not_consent() {
         let (dir, reporter) = reporter();
-        let id = reporter.state.lock().unwrap().anonymous_id.clone().unwrap();
-        let restarted = Reporter::new(dir.path().into());
-        assert_eq!(restarted.status().unwrap().consent, Some(true));
-        assert!(!restarted.status().unwrap().notice_seen);
         assert_eq!(
-            restarted.state.lock().unwrap().anonymous_id.as_deref(),
+            Reporter::new(dir.path().into()).status().unwrap().consent,
+            None
+        );
+        reporter.consent(true).unwrap();
+        let id = reporter.state.lock().unwrap().anonymous_id.clone().unwrap();
+        let granted = Reporter::new(dir.path().into());
+        assert_eq!(granted.status().unwrap().consent, Some(true));
+        assert!(granted.enabled.load(Ordering::Acquire));
+        assert_eq!(
+            granted.state.lock().unwrap().anonymous_id.as_deref(),
             Some(id.as_str())
         );
-        restarted.acknowledge_notice().unwrap();
-        assert!(
-            Reporter::new(dir.path().into())
-                .status()
-                .unwrap()
-                .notice_seen
-        );
-        restarted.consent(false).unwrap();
-        // A stale notice acknowledgement must not undo an opt-out.
-        restarted.acknowledge_notice().unwrap();
-        let disabled = Reporter::new(dir.path().into());
-        assert_eq!(disabled.status().unwrap().consent, Some(false));
-        assert!(disabled.status().unwrap().notice_seen);
-        assert!(disabled.state.lock().unwrap().anonymous_id.is_none());
-        for consent in [Some(true), Some(false), None] {
-            let old = Stored {
-                consent,
-                anonymous_id: consent.filter(|v| *v).map(|_| id.clone()),
-                ..Stored::default()
-            };
-            reporter.save(&old).unwrap();
+        reporter.consent(false).unwrap();
+        let declined = Reporter::new(dir.path().into());
+        assert_eq!(declined.status().unwrap().consent, Some(false));
+        assert!(declined.state.lock().unwrap().anonymous_id.is_none());
+        // Files written by the default-on builds: never shown, folded with 「知道了」, or switched
+        // on by hand. The last two look the same, so none of them proves a choice.
+        let undecided = [
+            format!(r#"{{"consent":true,"notice_seen":false,"anonymous_id":"{id}"}}"#),
+            format!(r#"{{"consent":true,"notice_seen":true,"anonymous_id":"{id}"}}"#),
+            format!(r#"{{"consent":true,"anonymous_id":"{id}"}}"#),
+            format!(
+                r#"{{"consent":true,"consent_version":{},"anonymous_id":"{id}"}}"#,
+                CONSENT_VERSION + 1
+            ),
+            r#"{"consent":null,"notice_seen":false}"#.into(),
+            "{}".into(),
+        ];
+        for old in undecided {
+            std::fs::write(&reporter.path, &old).unwrap();
             let migrated = Reporter::new(dir.path().into());
-            assert_eq!(
-                migrated.status().unwrap().consent,
-                Some(consent != Some(false))
+            assert_eq!(migrated.status().unwrap().consent, None, "{old}");
+            assert!(!migrated.enabled.load(Ordering::Acquire), "{old}");
+            assert!(migrated.reserve(error(1), false, now()).is_none(), "{old}");
+            assert!(
+                !std::fs::read_to_string(&reporter.path)
+                    .unwrap()
+                    .contains(&id),
+                "{old}"
             );
-            assert_eq!(migrated.status().unwrap().notice_seen, consent.is_some());
-            if consent == Some(true) {
-                assert_eq!(
-                    migrated.state.lock().unwrap().anonymous_id.as_deref(),
-                    Some(id.as_str())
-                );
-            }
         }
+        for old in [
+            r#"{"consent":false,"notice_seen":true}"#,
+            r#"{"consent":false}"#,
+        ] {
+            std::fs::write(&reporter.path, old).unwrap();
+            assert_eq!(
+                Reporter::new(dir.path().into()).status().unwrap().consent,
+                Some(false),
+                "{old}"
+            );
+        }
+        std::fs::write(
+            &reporter.path,
+            format!(
+                r#"{{"consent":true,"consent_version":{CONSENT_VERSION},"anonymous_id":"{id}"}}"#
+            ),
+        )
+        .unwrap();
+        let current = Reporter::new(dir.path().into());
+        assert_eq!(current.status().unwrap().consent, Some(true));
+        assert_eq!(
+            current.state.lock().unwrap().anonymous_id.as_deref(),
+            Some(id.as_str())
+        );
     }
     #[test]
-    fn invalid_or_unwritable_initial_preferences_fail_closed() {
+    fn invalid_or_unwritable_preferences_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("feedback-state.json");
         std::fs::write(&path, b"invalid JSON").unwrap();
@@ -743,19 +755,28 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
         let unwritable = Reporter::new(dir.path().into());
-        assert_eq!(unwritable.status().unwrap().consent, Some(false));
+        assert_eq!(unwritable.status().unwrap().consent, None);
+        assert!(unwritable.consent(true).is_err());
+        assert_eq!(unwritable.status().unwrap().consent, None);
+        assert!(!unwritable.enabled.load(Ordering::Acquire));
         assert!(unwritable.reserve(error(1), false, now()).is_none());
     }
     #[tokio::test]
-    async fn fresh_install_reports_before_notice_acknowledgement() {
+    async fn fresh_install_sends_nothing_until_consent() {
         let (_dir, mut reporter) = reporter();
         let (url, received) = server(
             200,
-            r#"{"ok":true,"id":"default-on-test"}"#.into(),
+            r#"{"ok":true,"id":"consent-test"}"#.into(),
             Duration::ZERO,
         );
         Arc::get_mut(&mut reporter).unwrap().endpoint = url;
-        assert!(!reporter.status().unwrap().notice_seen);
+        assert_eq!(
+            reporter.automatic(error(1), false).await.reason,
+            Some("suppressed")
+        );
+        assert!(received.try_recv().is_err());
+        reporter.consent(true).unwrap();
+        // The error from before the choice was not kept, so the same error now is a first report.
         assert!(reporter.automatic(error(1), false).await.ok);
         assert!(received
             .recv()
