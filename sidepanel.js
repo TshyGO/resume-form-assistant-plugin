@@ -23,6 +23,14 @@
     fillResult: document.getElementById("fill-result"),
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
+    profileOfferResult: document.getElementById("profile-offer-result"),
+    profileOfferDetail: document.getElementById("profile-offer-detail"),
+    profileOfferGroups: document.getElementById("profile-offer-groups"),
+    profileOfferNotes: document.getElementById("profile-offer-notes"),
+    profileOfferSave: document.getElementById("profile-offer-save"),
+    profileOfferSkip: document.getElementById("profile-offer-skip"),
+    profileOfferView: document.getElementById("profile-offer-view"),
+    profileOfferDismiss: document.getElementById("profile-offer-dismiss"),
     fillOffer: document.getElementById("fill-offer"),
     fillOfferTitle: document.getElementById("fill-offer-title"),
     fillOfferText: document.getElementById("fill-offer-text"),
@@ -1173,6 +1181,128 @@
     }
   }
 
+  // 保存到「我的信息」（#189）。候选、值和结果都是网页那边的快照；这里只记用户改过的勾选，
+  // 没动过的跟着快照的默认走，所以用户在网页上又填了几项，新出现的项按默认勾选，已取消的不会被勾回去。
+  let profileOffer = null;
+  let profileChoices = new Map();
+  let profileOfferKey = "";
+  let profileSavePending = false;
+  let profileRenderSig = "";
+  const PROFILE_PREVIEW_CHARS = 80;
+  const PROFILE_GROUPS = [
+    { kind: "filled", title: "已填，可复用", hint: "" },
+    { kind: "pending", title: "待补充", hint: "只保存字段名，之后在桌面补上内容才能自动填。" },
+    { kind: "conflict", title: "与桌面已有内容不同", hint: "默认不替换；勾选后用网页内容替换桌面里的内容。" }
+  ];
+
+  const profileItems = () => !profileOffer ? [] : [
+    ...profileOffer.filled.map((item) => ({ ...item, kind: "filled" })),
+    ...profileOffer.pending.map((item) => ({ ...item, kind: "pending" })),
+    ...profileOffer.conflicts.map((item) => ({ ...item, kind: "conflict" }))
+  ];
+  const profileChecked = (item) => profileChoices.has(item.id) ? profileChoices.get(item.id) : Boolean(item.defaultSelected);
+
+  function setProfileOffer(snapshot) {
+    const key = snapshot ? `${currentTabId}:${snapshot.epoch}:${snapshot.version}` : "";
+    if (key !== profileOfferKey) { profileChoices = new Map(); profileOfferKey = key; }
+    profileOffer = snapshot || null;
+    renderProfileOffer();
+  }
+
+  function profileRow(item) {
+    const preview = (value) => value.length > PROFILE_PREVIEW_CHARS ? `${value.slice(0, PROFILE_PREVIEW_CHARS)}…` : value;
+    const lines = [];
+    if (item.kind === "conflict") {
+      lines.push(`<span class="profile-item__value" title="${escapeHtml(item.existing)}">桌面：${escapeHtml(preview(item.existing))}</span>`);
+      lines.push(`<span class="profile-item__value" title="${escapeHtml(item.value)}">网页：${escapeHtml(preview(item.value))}</span>`);
+    } else if (item.kind === "filled") {
+      lines.push(`<span class="profile-item__value" title="${escapeHtml(item.value)}">${escapeHtml(preview(item.value))}</span>`);
+    }
+    if (item.completes) lines.push('<em class="profile-item__tag">桌面里已有这个待补充项，会补上内容</em>');
+    if (item.jobSpecific) lines.push('<em class="profile-item__tag">可能只适用于当前岗位，默认不勾选</em>');
+    if (item.unreadable) lines.push('<em class="profile-item__tag">网页上已有内容但读不准，只保存字段名</em>');
+    return `<label class="profile-item"><input type="checkbox" data-profile-id="${escapeHtml(item.id)}"${profileChecked(item) ? " checked" : ""}${profileSavePending || profileOffer?.saving ? " disabled" : ""}>`
+      + `<span class="profile-item__body"><span class="profile-item__key">${escapeHtml(item.key)}</span>${lines.join("")}</span></label>`;
+  }
+
+  function renderProfileOffer() {
+    const offer = profileOffer;
+    elements.profileOffer.hidden = !offer;
+    if (!offer) { profileRenderSig = ""; return; }
+    const items = profileItems();
+    const selected = items.filter(profileChecked);
+    const busy = profileSavePending || Boolean(offer.saving);
+    const result = offer.result;
+    const signature = JSON.stringify([offer, [...profileChoices], busy, desktopMode]);
+    if (signature === profileRenderSig) return;
+    profileRenderSig = signature;
+
+    elements.profileOfferText.hidden = !offer.summary;
+    elements.profileOfferText.textContent = offer.summary || "";
+    elements.profileOfferResult.hidden = !result;
+    if (result) {
+      elements.profileOfferResult.className = `profile-result is-${result.kind}`;
+      elements.profileOfferResult.innerHTML = `<strong>${escapeHtml(result.text)}</strong>`
+        + (result.hint ? `<span>${escapeHtml(result.hint)}</span>` : "")
+        + (result.details?.length ? `<ul>${result.details.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : "");
+    }
+
+    elements.profileOfferDetail.hidden = !items.length;
+    const focused = document.activeElement?.dataset?.profileId;
+    elements.profileOfferGroups.innerHTML = PROFILE_GROUPS.map((group) => {
+      const list = items.filter((item) => item.kind === group.kind);
+      if (!list.length) return "";
+      const toggle = group.kind === "conflict" ? ""
+        : `<button type="button" class="profile-group__toggle" data-profile-group="${group.kind}"${busy ? " disabled" : ""}>${list.every(profileChecked) ? "全不选" : "全选"}</button>`;
+      return `<section class="profile-group"><div class="profile-group__head"><h3 class="profile-group__title">${group.title}（${list.length}）</h3>${toggle}</div>`
+        + (group.hint ? `<p class="profile-group__hint">${escapeHtml(group.hint)}</p>` : "")
+        + `<div class="profile-items">${list.map(profileRow).join("")}</div></section>`;
+    }).join("");
+    if (focused) {
+      Array.from(elements.profileOfferGroups.querySelectorAll?.("input[data-profile-id]") || [])
+        .find((box) => box.dataset.profileId === focused)?.focus?.();
+    }
+
+    const notes = [...offer.notes.slice(0, 5), ...(offer.notes.length > 5 ? [`还有 ${offer.notes.length - 5} 项不能保存的字段。`] : []),
+      ...(offer.same ? [`${offer.same} 项桌面里已经有相同内容，不会重复保存。`] : []),
+      ...(offer.hidden ? [`还有 ${offer.hidden} 项没有列出。`] : [])];
+    elements.profileOfferNotes.hidden = !notes.length;
+    elements.profileOfferNotes.innerHTML = notes.map(escapeHtml).join("<br>");
+
+    elements.profileOfferSave.hidden = !items.length;
+    elements.profileOfferSkip.hidden = !items.length;
+    elements.profileOfferSave.textContent = busy ? "正在保存…" : `保存 ${selected.length} 项到我的信息`;
+    elements.profileOfferSave.disabled = busy || !selected.length || desktopMode !== "ready";
+    elements.profileOfferSkip.disabled = busy;
+    elements.profileOfferView.hidden = !(result && result.saved > 0);
+    elements.profileOfferDismiss.hidden = !result;
+  }
+
+  // 一次点击就保存勾选的项，不再二次确认；写入由页面那边在点击时重新读网页和桌面后完成。
+  async function saveProfileOffer() {
+    if (!profileOffer || profileSavePending) return;
+    const selected = profileItems().filter(profileChecked).map((item) => ({
+      id: item.id, key: item.key, kind: item.kind, ...(item.kind === "conflict" ? { replaceOf: item.existing } : {})
+    }));
+    if (!selected.length) return;
+    profileSavePending = true;
+    renderProfileOffer();
+    let reply = null;
+    try {
+      reply = await sendToPage({ type: "RESUME_PANEL_OFFER", action: "profileAdd", version: profileOffer.version, selected });
+    } finally {
+      profileSavePending = false;
+    }
+    if (reply?.profileOffer) setProfileOffer(reply.profileOffer);
+    else {
+      renderProfileOffer();
+      toast(reply?.error || "保存没有完成，候选还在，请稍后再试。");
+    }
+    // 保存成功后侧栏也改读桌面的最新档案，下次填写和「简历字段」页看到的就是它。
+    if (reply?.saved > 0) await loadStore();
+    await pollStatus();
+  }
+
   async function pollStatus() {
     // A poll asked for while one is running is not lost: it runs again once this one ends.
     if (statusPolling) { statusRepoll = true; return; }
@@ -1196,6 +1326,8 @@
         clearTargetState();
         clearRepeat();
         resetFillArchive();
+        profileOfferKey = "";
+        setProfileOffer(null);
       }
       currentTabId = nextTabId;
       const polledTabId = currentTabId;
@@ -1242,8 +1374,8 @@
         renderDesktopMode();
       }
       if (connected) {
-        elements.profileOffer.hidden = !response.profileOffer;
-        elements.profileOfferText.textContent = response.profileOffer || "";
+        // While a save is on its way its own answer is the newest word; an older poll must not redraw over it.
+        if (!profileSavePending) setProfileOffer(response.profileOffer || null);
         applyFillArchive(response.fillArchive || null, polledTabId);
         elements.desktopStatus.hidden = !response.desktopStatus;
         elements.desktopStatus.textContent = response.desktopStatus || "";
@@ -1252,7 +1384,7 @@
           elements.diagnosticsText.value = response.diagnostics || "";
         }
       } else {
-        elements.profileOffer.hidden = true;
+        setProfileOffer(null);
         resetFillArchive();
         elements.desktopStatus.hidden = true;
         elements.diagnostics.hidden = true;
@@ -1340,14 +1472,30 @@
   });
   document.querySelectorAll("[data-offer]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.offer;
+    if (action === "profileAdd") { await saveProfileOffer(); return; }
     const result = await sendToPage({ type: "RESUME_PANEL_OFFER", action });
     if (!result?.ok) toast(result?.error || "操作未完成，请查看网页。");
-    else if (action === "profileAdd") {
-      await loadStore();
-      await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" });
-    }
+    else setProfileOffer("profileOffer" in result ? result.profileOffer : null);
     await pollStatus();
   }));
+  elements.profileOfferGroups.addEventListener("change", (event) => {
+    const box = event.target?.closest?.("input[data-profile-id]");
+    if (!box) return;
+    profileChoices.set(box.dataset.profileId, Boolean(box.checked));
+    renderProfileOffer();
+  });
+  elements.profileOfferGroups.addEventListener("click", (event) => {
+    const toggle = event.target?.closest?.("button[data-profile-group]");
+    if (!toggle) return;
+    const list = profileItems().filter((item) => item.kind === toggle.dataset.profileGroup);
+    const allChecked = list.every(profileChecked);
+    list.forEach((item) => profileChoices.set(item.id, !allChecked));
+    renderProfileOffer();
+  });
+  elements.profileOfferView.addEventListener("click", async () => {
+    const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
+    if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
+  });
   elements.fillOfferActions.addEventListener("click", (event) => {
     const button = event.target.closest?.("[data-archive]");
     if (!button || button.disabled) return;

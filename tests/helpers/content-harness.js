@@ -257,7 +257,7 @@ function loadHighlightHelpers(options = {}) {
         getManifest: () => ({ version: "0.2.1" }),
         onMessage: { addListener(listener) { panelMessageListener = listener; } },
         sendMessage: async message => message.type === 'DESKTOP_RESUME_READ'
-          ? { status: 'ok', data: desktopData }
+          ? (options.desktopRead ? options.desktopRead() : { status: 'ok', data: desktopData })
           : (desktopMessages.push(message), message.type === 'DESKTOP_OPEN_VIEW'
             ? { status: 'ok' } : options.sendMessage ? options.sendMessage(message) : { success: true, matches: [] })
       }

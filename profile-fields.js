@@ -103,6 +103,11 @@
   const CUSTOM_GROUP = "补充字段";
   const MAX_CUSTOM_FIELDS = 200;
   const MAX_OFFERED_LABELS = 20;
+  // #189：已填项也进候选，一张表上可复用的内容比空字段多，上限放宽；超出的只报个数。
+  const MAX_OFFERED_CANDIDATES = 40;
+  // 单项内容的上限；超出的多半是整段作答，不当作可复用信息。桌面整份档案另有 24 KB 上限（MAX_PROFILE_BYTES）。
+  const MAX_CANDIDATE_VALUE_CHARS = 2000;
+  const MAX_PROFILE_BYTES = 24 * 1024;
   // 长题目要整句留着（#228），只防住异常长的整段文字。和 field-scan.js 的 MAX_OFFER_CHARS 一致。
   const MAX_OFFERED_LABEL_CHARS = 120;
   // 扫描已经不会把这些当字段名；这里再兜一层：纯计数器、纯占位文字不进「我的信息」。
@@ -123,6 +128,11 @@
   const SECRET_LABEL = /密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret/i;
   // 名字普通、内容却是「密码：xxx」这种写法的，同样不交给 AI。
   const SECRET_VALUE = /(密码|口令|验证码|校验码|授权码|密钥|令牌|password|passwd|pwd|token|secret)\s*[:=：]\s*\S/i;
+  // 网页自己声明了这是密码、一次性验证码或银行卡信息（autocomplete 属性）：不管字段名怎么写都不收。
+  const SENSITIVE_AUTOCOMPLETE = /one-time-code|cc-|password/i;
+  // 明显只适用于当前岗位/公司的作答：可以列出来，但不默认勾选。
+  const JOB_SPECIFIC_LABEL = /为什么|原因|理由|动机|谈谈|请(?:简述|简要|描述|介绍|说明|阐述)|自我评价|自我介绍|应聘|报考|投递|[本该贵](?:岗位|职位|公司|单位)|岗位|职位|招聘(?:信息|渠道)|得知|推荐人|内推/;
+  const JOB_SPECIFIC_VALUE_CHARS = 300;
 
   function text(value) {
     return String(value ?? "").trim();
@@ -318,6 +328,23 @@
     return PROFILE_LIKE_TITLE.test(title) ? title : null;
   }
 
+  // 候选字段的名字：对不上题目、噪声和敏感类控件返回空串。「加到我的信息」的两条路（只收空字段的旧筛选、
+  // 连已填项一起收的候选规划）共用这一道，字段识别范围不会因为后者而变。
+  function candidateLabel(candidate, stats = null) {
+    const entryLabel = entryFieldLabel(candidate);
+    if (entryLabel === null) {
+      if (stats) stats.entry = (stats.entry || 0) + 1;
+      return "";
+    }
+    const label = text(entryLabel ?? candidate?.label);
+    const normalized = normalizeKey(label);
+
+    if (normalized.length < 2 || label.length > MAX_OFFERED_LABEL_CHARS || NOT_A_LABEL.test(label)) return "";
+    if (SKIPPED_INPUT_TYPES.has(candidate?.inputType) || SECRET_LABEL.test(label)) return "";
+    if (SENSITIVE_AUTOCOMPLETE.test(text(candidate?.autocomplete))) return "";
+    return label;
+  }
+
   // 一次填写之后，网页上既没匹配上、也还空着的字段。密码验证码、文件、勾选框、经历类区块里的字段不算。
   function pickUnansweredLabels(candidates, knownKeys, limit = MAX_OFFERED_LABELS, stats = null) {
     const picked = [];
@@ -325,16 +352,9 @@
 
     for (const candidate of Array.isArray(candidates) ? candidates : []) {
       if (candidate?.matched || candidate?.hasValue) continue;
-      const entryLabel = entryFieldLabel(candidate);
-      if (entryLabel === null) {
-        if (stats) stats.entry = (stats.entry || 0) + 1;
-        continue;
-      }
-      const label = text(entryLabel ?? candidate?.label);
+      const label = candidateLabel(candidate, stats);
+      if (!label) continue;
       const normalized = normalizeKey(label);
-
-      if (normalized.length < 2 || label.length > MAX_OFFERED_LABEL_CHARS || NOT_A_LABEL.test(label)) continue;
-      if (SKIPPED_INPUT_TYPES.has(candidate?.inputType) || SECRET_LABEL.test(label)) continue;
       if (knownKeys?.has(normalized) || seen.has(normalized)) continue;
 
       seen.add(normalized);
@@ -343,6 +363,217 @@
     }
 
     return picked;
+  }
+
+  function sameValue(left, right) {
+    const squash = (value) => text(value).replace(/\s+/g, " ");
+    return squash(left) === squash(right);
+  }
+
+  const SKIP_TEXT = {
+    secret: (key) => `「${key}」的内容像密码或验证码，不会保存。`,
+    stale: (key) => `「${key}」所在的网页内容已经变化，对不上了；重新一键填写后可再保存。`,
+    "too-long": (key) => `「${key}」的内容太长，不会保存。`,
+    ambiguous: (key) => `「${key}」在网页上出现多次且内容不同，没有保存。`,
+    "fixed-conflict": (key) => `「${key}」在桌面已有内容（来自简历模板或预置字段），与网页不同，没有保存。`,
+    "fixed-empty": (key) => `「${key}」属于简历模板或预置字段，请在桌面「我的信息」里直接填写，没有保存。`,
+    same: (key) => `「${key}」桌面里已经有相同内容，没有重复保存。`,
+    cleared: (key) => `「${key}」在网页上已经清空，没有保存。`,
+    "existing-changed": (key) => `「${key}」在桌面里刚有了不同的内容，没有覆盖；请重新核对后再保存。`,
+    "conflict-unconfirmed": (key) => `「${key}」与桌面已有内容不同，需要勾选「替换」才会覆盖，没有保存。`,
+    gone: (key) => `「${key}」在网页上找不到了，没有保存。`,
+    full: (key) => `「${key}」放不下：「我的信息」已满，先在桌面删掉用不上的补充字段。`
+  };
+
+  function skipNote(id, key, reason) {
+    return { id, key, reason, text: SKIP_TEXT[reason](key) };
+  }
+
+  // 候选规划（#189）：网页上没对上简历、也不在经历区块里的字段，连同它们此刻的内容，按桌面现有档案分好类。
+  // candidates 每项是 { label, …题目信息, matched, state: ready|stale|unreadable, value, autocomplete }，
+  // 内容由网页端在读取那一刻填，这里不碰页面。同名字段只留一条（id 就是规范化后的字段名）：
+  //   filled   已填、可保存的新字段；completes 表示补全桌面里同名的待补充项
+  //   pending  只有字段名（网页上空着，或有内容但读不出来），保存后在桌面标「待补充」
+  //   conflicts 桌面同名补充字段已有不同的内容，由用户决定是否替换
+  //   notes    不能保存的项和原因；same 桌面已有相同内容的项数（sameIds 是它们的 id）
+  function planProfileOffer({ candidates, profile: rawProfile, templateFields = [], limit = MAX_OFFERED_CANDIDATES, stats = null } = {}) {
+    const profile = normalizeProfile(rawProfile);
+    // 模板和预置字段（含家庭成员）：同名的没法再存成补充字段，存了也会被它们盖住。
+    const fixedProfile = { ...profile, custom: [] };
+    const fixedValues = new Map();
+    mergeResumeFields(templateFields, profileToResumeFields(fixedProfile)).forEach((field) => {
+      const id = normalizeKey(field?.key);
+      if (id && !fixedValues.has(id)) fixedValues.set(id, text(field.value));
+    });
+    const fixedKeys = knownFieldKeys(fixedProfile, templateFields);
+    const customByKey = new Map(profile.custom.map((item) => [normalizeKey(item.key), item]));
+
+    const rank = (entry) => entry.state === "ready" ? (entry.value ? 3 : 2) : entry.state === "unreadable" ? 1 : 0;
+    const merged = new Map();
+    for (const candidate of Array.isArray(candidates) ? candidates : []) {
+      if (candidate?.matched) continue;
+      const label = candidateLabel(candidate, stats);
+      if (!label) continue;
+      const state = candidate.state === "stale" ? "stale" : candidate.state === "unreadable" ? "unreadable" : "ready";
+      const entry = { id: normalizeKey(label), key: label, state, value: state === "ready" ? text(candidate.value) : "", ambiguous: false };
+      const prior = merged.get(entry.id);
+      if (!prior) {
+        merged.set(entry.id, entry);
+      } else if (prior.value && entry.value && !sameValue(prior.value, entry.value)) {
+        prior.ambiguous = true;
+      } else if (rank(entry) > rank(prior)) {
+        merged.set(entry.id, { ...entry, key: prior.key, ambiguous: prior.ambiguous });
+      }
+    }
+
+    const plan = { filled: [], pending: [], conflicts: [], notes: [], same: 0, sameIds: [], hidden: 0 };
+    for (const entry of merged.values()) {
+      const { id, key, value } = entry;
+      if (entry.ambiguous) { plan.notes.push(skipNote(id, key, "ambiguous")); continue; }
+      if (entry.state === "stale") { plan.notes.push(skipNote(id, key, "stale")); continue; }
+      if (SECRET_VALUE.test(value)) { plan.notes.push(skipNote(id, key, "secret")); continue; }
+      if (value.length > MAX_CANDIDATE_VALUE_CHARS) { plan.notes.push(skipNote(id, key, "too-long")); continue; }
+      const hasValue = Boolean(value);
+      const unreadable = entry.state === "unreadable";
+
+      if (fixedKeys.has(id)) {
+        if (!hasValue) continue;
+        const existing = fixedValues.get(id) || "";
+        if (existing && sameValue(existing, value)) { plan.same += 1; plan.sameIds.push(id); }
+        else plan.notes.push(skipNote(id, key, existing ? "fixed-conflict" : "fixed-empty"));
+        continue;
+      }
+
+      const listed = plan.filled.length + plan.pending.length + plan.conflicts.length;
+      const custom = customByKey.get(id);
+      if (custom) {
+        const existing = text(custom.value);
+        if (!hasValue) { plan.sameIds.push(id); continue; }
+        if (existing && sameValue(existing, value)) { plan.same += 1; plan.sameIds.push(id); continue; }
+        if (listed >= limit) { plan.hidden += 1; continue; }
+        if (existing) plan.conflicts.push({ id, key: custom.key, value, existing });
+        else plan.filled.push({ id, key: custom.key, value, completes: true, jobSpecific: false, defaultSelected: true });
+        continue;
+      }
+
+      if (listed >= limit) { plan.hidden += 1; continue; }
+      if (hasValue) {
+        const jobSpecific = JOB_SPECIFIC_LABEL.test(key) || value.length > JOB_SPECIFIC_VALUE_CHARS;
+        plan.filled.push({ id, key, value, completes: false, jobSpecific, defaultSelected: !jobSpecific });
+      } else {
+        plan.pending.push({ id, key, unreadable });
+      }
+    }
+    return plan;
+  }
+
+  function profileOfferSummary(plan) {
+    const conflicts = plan?.conflicts?.length || 0;
+    return `可保存到我的信息：已填 ${plan?.filled?.length || 0} 项，待补 ${plan?.pending?.length || 0} 项`
+      + (conflicts ? `；另有 ${conflicts} 项与桌面已有内容不同` : "");
+  }
+
+  function planHasOffer(plan) {
+    return Boolean(plan && (plan.filled.length || plan.pending.length || plan.conflicts.length));
+  }
+
+  // 没有用户勾选信息时（页面上保留的旧按钮）：按默认勾选的项保存，冲突项从不默认替换。
+  function defaultProfileSelection(plan) {
+    const pick = (items, kind) => (items || []).filter((item) => item.defaultSelected).map((item) => ({ id: item.id, key: item.key, kind }));
+    return [...pick(plan?.filled, "filled"), ...pick(plan?.pending, "pending")];
+  }
+
+  function utf8Length(value) {
+    let bytes = 0;
+    for (const char of String(value)) {
+      const code = char.codePointAt(0);
+      bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    }
+    return bytes;
+  }
+
+  // 把用户勾选的项写进档案。plan 必须是点击那一刻按网页当前值和桌面最新档案重算的；
+  // selection 每项 { id, key, kind: 用户看到的 filled|pending|conflict, replaceOf: 看到的桌面旧值 }。
+  // 看到的和现在的对不上（网页清空了、桌面刚有了别的值）就不写，也不悄悄换成别的：照实报在 skipped 里。
+  function applyProfileSelection(rawProfile, plan, selection = []) {
+    const profile = normalizeProfile(rawProfile);
+    const items = new Map();
+    (plan?.filled || []).forEach((item) => items.set(item.id, { ...item, kind: "filled" }));
+    (plan?.pending || []).forEach((item) => items.set(item.id, { ...item, kind: "pending" }));
+    (plan?.conflicts || []).forEach((item) => items.set(item.id, { ...item, kind: "conflict" }));
+    const notes = new Map((plan?.notes || []).map((note) => [note.id, note]));
+    const sameIds = new Set(plan?.sameIds || []);
+
+    const saved = [];
+    const skipped = [];
+    const seenIds = new Set();
+    let full = false;
+    const skip = (id, key, reason) => skipped.push(skipNote(id, key, reason));
+    const fits = () => utf8Length(JSON.stringify(profile)) <= MAX_PROFILE_BYTES;
+
+    for (const choice of Array.isArray(selection) ? selection : []) {
+      const id = text(choice?.id);
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      const item = items.get(id);
+      const key = item?.key || notes.get(id)?.key || text(choice?.key) || id;
+
+      if (!item) {
+        const note = notes.get(id);
+        if (note) skipped.push(note);
+        else skip(id, key, sameIds.has(id) ? "same" : "gone");
+        continue;
+      }
+
+      const seen = choice?.kind || (item.kind === "pending" ? "pending" : "filled");
+      if (item.kind === "pending" && (seen === "filled" || seen === "conflict")) { skip(id, key, "cleared"); continue; }
+      if (item.kind === "conflict") {
+        if (seen !== "conflict" || choice?.replaceOf === undefined) { skip(id, key, seen === "conflict" ? "conflict-unconfirmed" : "existing-changed"); continue; }
+        if (!sameValue(choice.replaceOf, item.existing)) { skip(id, key, "existing-changed"); continue; }
+      }
+
+      const existing = profile.custom.find((entry) => normalizeKey(entry.key) === id);
+      const before = JSON.stringify(profile.custom);
+      if (existing) {
+        existing.value = item.kind === "pending" ? existing.value : item.value;
+      } else {
+        if (profile.custom.length >= MAX_CUSTOM_FIELDS) { full = true; skip(id, key, "full"); continue; }
+        profile.custom.push({ key: item.key, value: item.kind === "pending" ? "" : item.value });
+      }
+      if (!fits()) {
+        profile.custom = JSON.parse(before);
+        full = true;
+        skip(id, key, "full");
+        continue;
+      }
+      saved.push({
+        id, key: existing?.key || item.key, value: item.kind === "pending" ? "" : item.value,
+        kind: item.kind === "pending" ? "pending" : item.kind === "conflict" ? "replaced" : item.completes ? "completed" : "filled"
+      });
+    }
+
+    return { profile, saved, skipped, full };
+  }
+
+  // 保存结果给用户看的话。saved 非空只表示桌面确认写入了这些项；skipped 里的照实列出，不混进「已保存」。
+  function describeProfileSave({ saved = [], skipped = [] } = {}) {
+    const filled = saved.filter((item) => item.kind !== "pending").length;
+    const pending = saved.length - filled;
+    const details = skipped.map((item) => item.text);
+    if (!saved.length) {
+      return { kind: "info", text: skipped.length ? "没有保存任何内容。" : "没有选中要保存的内容。", hint: "", details };
+    }
+    const kind = skipped.length ? "partial" : "success";
+    if (!filled) {
+      return { kind, text: `已添加 ${pending} 项待补充字段${skipped.length ? `，另有 ${skipped.length} 项没保存` : ""}。`,
+        hint: "它们只存了字段名；到桌面「我的信息」补上内容后，下次填写才能用。", details };
+    }
+    return {
+      kind,
+      text: `已保存 ${saved.length} 项，下次填写可用${skipped.length ? `；另有 ${skipped.length} 项没保存` : ""}。`,
+      hint: pending ? `其中 ${pending} 项只存了字段名，可稍后到桌面「我的信息」补充内容。` : "",
+      details
+    };
   }
 
   function addPendingFields(rawProfile, labels, resumeFields = []) {
@@ -436,9 +667,13 @@
     FAMILY_GROUP,
     FAMILY_RELATIONS,
     PROFILE_SCHEMA,
+    MAX_OFFERED_CANDIDATES,
     addPendingFields,
+    applyProfileSelection,
     countPendingFields,
     countProfileValues,
+    defaultProfileSelection,
+    describeProfileSave,
     emptyProfile,
     hasProfileContent,
     knownFieldKeys,
@@ -446,7 +681,10 @@
     mergeResumeFields,
     normalizeProfile,
     pickUnansweredLabels,
+    planHasOffer,
+    planProfileOffer,
     profileFromEntries,
+    profileOfferSummary,
     profileToResumeFields,
     stripProfileSecrets
   };

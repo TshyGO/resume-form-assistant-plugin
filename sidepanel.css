@@ -187,3 +187,26 @@ button { cursor: pointer; }
 .dock-footer button:hover { background: var(--bg); }
 .panel-toast { position: fixed; right: 12px; bottom: 60px; z-index: 20; max-width: calc(100% - 24px); padding: 9px 12px; border-radius: 7px; background: var(--nav); color: #fff; box-shadow: 0 8px 20px #1c233040; font-size: 11px; }
 @media (max-width: 340px) { .dock-view { padding: 12px; } .dock-header, .dock-footer { padding-left: 12px; padding-right: 12px; } .row-key { min-width: 52px; } .field-row__actions { grid-template-columns: repeat(3, 30px); gap: 2px; } .field-row__action { font-size: 10px; } .field-group__body .field-row { padding-left: 12px; } }
+
+/* 保存到「我的信息」（#189）：可核对、可取消勾选的候选 */
+.profile-offer .profile-detail { margin-top: 8px; }
+.profile-offer .profile-detail > summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+.profile-groups { display: grid; gap: 10px; margin-top: 8px; }
+.profile-group__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.profile-group__title { margin: 0; font-size: 12px; font-weight: 650; color: var(--ink); }
+.profile-group__toggle { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); font-size: 11px; }
+.profile-group__hint { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.profile-items { display: grid; gap: 4px; margin-top: 6px; }
+.profile-item { display: flex; align-items: flex-start; gap: 7px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; line-height: 1.45; }
+.profile-item input { margin-top: 3px; }
+.profile-item__body { display: grid; gap: 1px; min-width: 0; }
+.profile-item__key { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.profile-item__value { color: var(--muted); overflow-wrap: anywhere; white-space: pre-wrap; }
+.profile-item__tag { color: #8a6a1f; font-size: 11px; font-style: normal; }
+.profile-result { margin-top: 8px; padding: 8px 10px; border-radius: 7px; font-size: 12px; line-height: 1.55; }
+.profile-result strong { display: block; font-weight: 650; }
+.profile-result span { display: block; margin-top: 2px; }
+.profile-result ul { margin: 4px 0 0; padding-left: 16px; }
+.profile-result.is-success { background: var(--accent-pale); color: #315e56; }
+.profile-result.is-partial, .profile-result.is-info { background: #fff8e7; color: #5b4820; }
+.profile-result.is-error { background: #fceeee; color: #b44747; }
