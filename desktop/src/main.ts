@@ -7,6 +7,7 @@ import {
   AFTER_INSTALL_HINT,
   STORE_PENDING_HINT,
   describeLink,
+  describeRegistration,
   registrationCompleted,
 } from "./browser-link.ts";
 import type { NativeMessagingRegistrationOutcome } from "./browser-link.ts";
@@ -97,14 +98,17 @@ function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: 
 
 async function refreshStatus() {
   if (!invoke) {
-    must("runtime-pill").textContent = "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）";
+    showPill({ tone: "error", text: "未连接到桌面宿主", title: "请用 Tauri 启动，不要只打开浏览器。" });
     must("settings-version").textContent = "请在桌面应用中查看版本";
     return;
   }
   const token = pairing.beginRefresh();
   const status = await invoke<RuntimeStatus>("get_runtime_status");
-  must("runtime-pill").textContent = status.runtimeLabel;
+  showPill(describeRegistration(status));
   must("settings-version").textContent = `版本 ${status.appVersion}`;
+  const version = must("app-version");
+  version.textContent = status.appVersion ? `v${status.appVersion}` : "";
+  version.hidden = !status.appVersion;
   const banner = must("banner");
   if (status.error) {
     banner.classList.remove("hidden");
@@ -116,6 +120,13 @@ async function refreshStatus() {
   applyPairingFields(pairing.applyStatus(token, status.pairing));
   applyLinkState(status);
   void maybeAutoCheck(status);
+}
+
+function showPill(state: { tone: string; text: string; title: string }) {
+  const pill = must("runtime-pill");
+  pill.textContent = state.text;
+  pill.title = state.title;
+  pill.dataset.tone = state.tone;
 }
 
 function goToExtensionInstall() {
@@ -379,7 +390,7 @@ if (invoke && listenForViews) {
   }).catch(() => {});
 }
 refreshStatus().catch((err: unknown) => {
-  must("runtime-pill").textContent = String(err);
+  showPill({ tone: "error", text: "读不到运行状态", title: String(err) });
 });
 applications.refreshList().catch((err: unknown) => {
   must("apps-msg").textContent = String(err);

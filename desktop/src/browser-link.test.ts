@@ -9,6 +9,7 @@ import {
   STORE_PENDING_HINT,
   describeLink,
   describeProtocolMismatch,
+  describeRegistration,
   registrationCompleted,
 } from "./browser-link.ts";
 
@@ -107,4 +108,22 @@ test("只有命令返回了目标且每个浏览器都注册成功时才显示�
   assert.equal(registrationCompleted([]), false);
   assert.equal(registrationCompleted([{ registered: true }, { registered: false }]), false);
   assert.equal(registrationCompleted([{ registered: true }, { registered: true }]), true);
+});
+
+test("顶栏只说注册结果，从不说扩展已连接", () => {
+  const chrome = { browser: "chrome" as const, label: "Chrome", registered: true };
+  const edge = { browser: "edge" as const, label: "Edge", registered: false, note: "目录不可写" };
+  const cases = [
+    [describeRegistration(null), "pending", /正在读取/],
+    [describeRegistration(status({ nativeMessaging: [] })), "warn", /未核对/],
+    [describeRegistration(status({ nativeMessaging: [{ ...edge }] })), "error", /未注册/],
+    [describeRegistration(status({ nativeMessaging: [chrome, edge] })), "warn", /已注册 Chrome · Edge 未注册/],
+    [describeRegistration(status({ nativeMessaging: [chrome, { ...edge, registered: true }] })), "ok", /^已注册 Chrome、Edge$/],
+  ] as const;
+  for (const [pill, tone, text] of cases) {
+    assert.equal(pill.tone, tone);
+    assert.match(pill.text, text);
+    assert.doesNotMatch(pill.text, /连接|连上/);
+    assert.match(pill.title, /不代表扩展已安装或已经连上/);
+  }
 });
