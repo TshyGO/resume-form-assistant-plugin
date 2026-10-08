@@ -641,6 +641,7 @@ export function mountApplications(
       return;
     }
     actionBusy = true;
+    let done = "已保存。";
     try {
       if (act === "edit") {
         actionBusy = false;
@@ -663,6 +664,12 @@ export function mountApplications(
         await invoke("add_note_cmd", { args: { id, text } });
       } else if (act === "recycle") {
         const recycled = app.recycle_state !== "recycled";
+        // 默认快捷筛选里没有「回收站」：回收后要告诉用户去哪里找回。
+        done = !recycled
+          ? "已从回收站恢复。"
+          : visibleShortcuts.includes("recycled")
+            ? "已移到回收站。可点「回收站」查看或恢复。"
+            : "已移到回收站。可在快捷筛选设置中显示「回收站」查看或恢复。";
         const ok = window.confirm(
           recycled
             ? "回收后申请离开进行中列表，历史事件仍保留，可以恢复。本次不提供永久删除。"
@@ -673,7 +680,7 @@ export function mountApplications(
       }
       await refreshList();
       if (ctl.selectedId === id) await loadDetail(id);
-      msg.textContent = "已保存。";
+      msg.textContent = done;
     } catch (err) {
       msg.textContent = invokeError(err);
     } finally { actionBusy = false; }

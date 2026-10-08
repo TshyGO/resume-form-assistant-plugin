@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fireEvent, within, waitFor } from "@testing-library/dom";
 import { mountApplications } from "./applications-ui";
@@ -222,4 +222,30 @@ test("the top bar keeps every route and the install entry, without a fixed versi
   expect(version.hidden).toBe(true);
   expect(version.textContent).toBe("");
   expect(document.querySelector(".topbar")!.textContent).not.toMatch(/已连接|v\d/);
+});
+
+test("the recycle filter only offers the active list and the recycle bin", () => {
+  const options = Array.from((document.getElementById("app-recycle") as HTMLSelectElement).options, (option) => option.value);
+  expect(options).toEqual(["active", "recycled"]);
+});
+
+test("recycling says where the application went, and restoring says it is back", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const cases: Array<[string, string[] | null, string]> = [
+    ["active", null, "已移到回收站。可在快捷筛选设置中显示「回收站」查看或恢复。"],
+    ["active", ["submitted", "recycled"], "已移到回收站。可点「回收站」查看或恢复。"],
+    ["recycled", null, "已从回收站恢复。"],
+  ];
+  for (const [recycleState, shortcuts, message] of cases) {
+    window.localStorage.clear();
+    if (shortcuts) window.localStorage.setItem("applications-shortcuts-v1", JSON.stringify(shortcuts));
+    document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
+    const { ui } = mountWith({ application: { id: "A", company: "公司A", title: "工程师", current_stage: "saved", recycle_state: recycleState } });
+    await ui.refreshList();
+    fireEvent.click(within(document.getElementById("view-applications")!).getByRole("button", { name: "公司A 工程师" }));
+    await waitFor(() => expect(document.querySelector('[data-act="recycle"]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-act="recycle"]')!);
+    await waitFor(() => expect(document.getElementById("apps-msg")!.textContent).toBe(message));
+  }
+  confirm.mockRestore();
 });
