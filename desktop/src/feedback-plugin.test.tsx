@@ -10,7 +10,7 @@ function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: 
   const manual = '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>';
   document.body.innerHTML = pathname !== '/sidepanel.html' ? '<div id="feedback-auto-root"></div>'
     // The side panel as it ships (#261): the preview gets its own panel over the 填写 page.
-    : initial.panel ? `<div id="fill-home">${manual}</div><section id="task-panel" hidden></section><div id="feedback-preview-root"></div>` : manual;
+    : initial.panel ? `<div id="fill-home">${manual}</div><section id="task-panel" hidden><h2 id="task-title" tabindex="-1">保存岗位到桌面端</h2></section><div id="feedback-preview-root"></div>` : manual;
   const calls: Record<string, unknown>[] = [];
   // A new installation: nothing chosen, nothing sent.
   let consent = initial.consent ?? false;
@@ -370,4 +370,17 @@ test('a side-panel preview stays covered by a sidebar flow: closing it keeps the
   (document.getElementById('task-panel') as HTMLElement).hidden = false;
   fireEvent.click(within(document.getElementById('feedback-preview-panel') as HTMLElement).getAllByRole('button', { name: '返回修改' })[0]!);
   expect(home.inert).toBe(true);
+  // The keyboard lands on the flow in front, not on a button under it that cannot be reached.
+  expect(document.activeElement).toBe(document.getElementById('task-title'));
+});
+
+test('a preview that closes on its own leaves the focus where the user put it', async () => {
+  const { updated } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  await previewDraft();
+  const elsewhere = document.getElementById('fill-button') as HTMLButtonElement;
+  elsewhere.focus();
+  updated(1);
+  expect(panel.hidden).toBe(true);
+  expect(document.activeElement).toBe(elsewhere);
 });

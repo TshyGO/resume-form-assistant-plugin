@@ -179,12 +179,18 @@
     // goes back to the form. Nothing is sent or dropped by opening or closing it.
     const panel = $('preview-panel');
     const home = document.getElementById('fill-home');
+    // Focus moves only when it was in the preview: closing it then lands on a control the user
+    // can reach (the side panel's flow, if one is in front; otherwise `focus`). A preview that
+    // closes on its own while the user is elsewhere leaves their focus where it is.
     function showPanel(open, focus) {
       if (!panel) return;
+      const hadFocus = panel.contains(document.activeElement);
       panel.hidden = !open;
       const task = document.getElementById('task-panel');
-      if (home) home.inert = open || (Boolean(task) && task.hidden === false);
-      (open ? $('preview-title') : focus)?.focus?.();
+      const taskOpen = Boolean(task) && task.hidden === false;
+      if (home) home.inert = open || taskOpen;
+      if (open) $('preview-title')?.focus?.();
+      else if (hadFocus) (taskOpen ? document.getElementById('task-title') : focus)?.focus?.();
     }
     function renderManual() {
       $('form').hidden = !expanded;

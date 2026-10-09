@@ -353,6 +353,9 @@
   // The 当前网页 card: whether this tab has the page controller, its host name (http/https
   // only, nothing else of the address), and in one line whether filling can start.
   let pageHost = "";
+  // The page the job was read from: address without its #fragment, kept in panel memory only
+  // and used for nothing but noticing that the tab has moved to another page.
+  let pageAddress = "";
   function renderPageCard() {
     elements.pageState.textContent = pageConnected ? "当前网页已连接填表助手" : pageChecked ? "当前页面无法使用填表助手" : "正在连接当前网页…";
     elements.pageState.classList.toggle("is-unavailable", !pageConnected);
@@ -366,6 +369,14 @@
     elements.pageReady.dataset.tone = tone;
     elements.pageReady.textContent = text;
   }
+  function addressOf(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? `${parsed.origin}${parsed.pathname}${parsed.search}` : "";
+    } catch {
+      return "";
+    }
+  }
   function hostOf(url) {
     try {
       const parsed = new URL(String(url || ""));
@@ -377,7 +388,7 @@
 
   function noteJob(fields, tabId) {
     if (!fields || !(fields.company || fields.title) || tabId === null) return;
-    jobSeen = { tabId, host: pageHost, company: String(fields.company || ""), title: String(fields.title || ""), location: String(fields.location || "") };
+    jobSeen = { tabId, address: pageAddress, company: String(fields.company || ""), title: String(fields.title || ""), location: String(fields.location || "") };
     renderJobSummary();
   }
   function renderJobSummary() {
@@ -1675,9 +1686,12 @@
       const tab = await activeTab();
       const nextTabId = tab?.id || null;
       const nextHost = hostOf(tab?.url);
-      // Another tab, or this tab on another site: the job read before is not this page's.
-      if (jobSeen && (jobSeen.tabId !== nextTabId || jobSeen.host !== nextHost)) jobSeen = null;
+      const nextAddress = addressOf(tab?.url);
+      // Another tab, or another page in this tab (even on the same site): the job read before
+      // is not this page's.
+      if (jobSeen && (jobSeen.tabId !== nextTabId || jobSeen.address !== nextAddress)) jobSeen = null;
       pageHost = nextHost;
+      pageAddress = nextAddress;
       if (nextTabId !== currentTabId) {
         elements.fillResult.hidden = true;
         elements.fillResult.textContent = "";

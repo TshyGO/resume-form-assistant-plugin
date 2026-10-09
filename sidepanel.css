@@ -420,7 +420,7 @@ button:disabled { cursor: not-allowed; }
 }
 @media (prefers-reduced-motion: reduce) {
   .fill-progress__bar::after, .progress-line::after { animation: none; width: 100%; opacity: .45; }
-  .queue-chevron, .field-group__chevron { transition: none; }
+  .queue-chevron, .field-group__chevron, .guide-toggle .icon { transition: none; }
 }
 /* The panel header already names these steps. */
 #job-save-form > .job-card__title, #submit-confirm-form > .job-card__title, #job-save-choice > .job-card__title, #submit-confirm-choice > .job-note { display: none; }

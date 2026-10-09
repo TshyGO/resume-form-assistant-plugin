@@ -54,7 +54,39 @@
     }
   }
 
-  const exported = { describeDesktop, describeMigration };
+  /**
+   * What a migration action actually did, read from the status the worker answers with
+   * (`{ phase, error, hasOldKey, … }`), never from the mere presence of an answer. A refusal
+   * (`{ error: true, code }`) or no answer at all is never reported as done.
+   */
+  function describeLegacyResult(action, result) {
+    const status = result && typeof result === "object" && !result.code ? result : null;
+    if (action === "drop-key") {
+      return status?.hasOldKey === false
+        ? { tone: "ok", text: "旧 Key 已删除。" }
+        : { tone: "warn", text: "没有删除成功，旧 Key 仍在插件里，请稍后重试。" };
+    }
+    if (action === "discard") {
+      return status?.phase === "discarded"
+        ? { tone: "ok", text: "删除完成，桌面里已有的数据不受影响。" }
+        : { tone: "warn", text: "没有删除成功，旧数据仍在插件里，请稍后重试。" };
+    }
+    switch (status?.phase) {
+      case "waiting":
+        return { tone: "ok", text: "已重新发送到桌面，请到桌面「简历」页确认导入。" };
+      case "sending":
+        return { tone: "info", text: "正在发送到桌面。桌面暂时没有接收时会自动重试，完成后这里会更新。" };
+      case "imported":
+      case "imported_ai_dropped":
+        return { tone: "ok", text: "旧数据已迁到桌面。" };
+      case "failed":
+        return { tone: "warn", text: `桌面没有接受这批数据：${status.error || "原因未知"}` };
+      default:
+        return { tone: "warn", text: "没有重新发送：插件里没有可发送的旧数据，或桌面暂时无法接收，请稍后重试。" };
+    }
+  }
+
+  const exported = { describeDesktop, describeMigration, describeLegacyResult };
   if (typeof self !== "undefined" && self.__RESUME_PRO_TEST__) {
     self.ResumeProStatusPage = exported;
     return;
@@ -186,12 +218,12 @@
         body: ["删除后无法从插件取回。如果还没有粘贴到桌面「设置 → AI 设置」，请先取消并复制旧 Key。"],
         action: "删除旧 Key"
       })) return;
-      const result = await send({ type: "DESKTOP_LEGACY_DROP_KEY" });
-      report("migration-result", result ? "旧 Key 已删除。" : "没有删除成功，旧 Key 仍在插件里，请稍后重试。", result ? "ok" : "warn");
+      const result = describeLegacyResult("drop-key", await send({ type: "DESKTOP_LEGACY_DROP_KEY" }));
+      report("migration-result", result.text, result.tone);
     },
     resend: async () => {
-      const result = await send({ type: "DESKTOP_LEGACY_RESEND" });
-      report("migration-result", result ? "已重新发送，请到桌面「简历」页确认。" : "没有发送成功，请确认桌面已打开后重试。", result ? "ok" : "warn");
+      const result = describeLegacyResult("resend", await send({ type: "DESKTOP_LEGACY_RESEND" }));
+      report("migration-result", result.text, result.tone);
     },
     discard: async () => {
       if (!await confirmDanger({
@@ -199,8 +231,8 @@
         body: ["将从插件中删除：", ["旧简历模板", "「我的信息」", "AI 配置（含旧 API Key）"], "桌面里已有的数据不受影响；插件内删除后无法取回。"],
         action: "删除旧数据"
       })) return;
-      const result = await send({ type: "DESKTOP_LEGACY_DISCARD" });
-      report("migration-result", result ? "删除完成，桌面里已有的数据不受影响。" : "没有删除成功，旧数据仍在插件里，请稍后重试。", result ? "ok" : "warn");
+      const result = describeLegacyResult("discard", await send({ type: "DESKTOP_LEGACY_DISCARD" }));
+      report("migration-result", result.text, result.tone);
     }
   };
 

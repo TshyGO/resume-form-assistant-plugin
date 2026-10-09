@@ -92,7 +92,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .result { margin: 12px 0 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); font-size: 13px; }
 .result[data-tone="ok"] { border-color: #c4e0d6; background: #eef7f3; color: var(--ok); }
 .result[data-tone="warn"] { border-color: var(--danger-line); background: var(--danger-bg); color: var(--danger); }
-#migration-title:focus { outline: 0; }
+#migration-title:focus:not(:focus-visible) { outline: 0; }
 .status-page .feedback-card { padding: 18px 20px; border-radius: 16px; }
 
 /* 不可恢复操作的确认框：标题和按钮固定，正文滚动。 */

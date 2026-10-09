@@ -87,6 +87,27 @@ test('while a save is on its way the panel offers no way out, and the result off
   assert.equal(panel.saves().length, 1);
 });
 
+test('the job summary shows only the job read on this page, and goes when the tab moves to another page of the same site', async () => {
+  const panel = await openPanel();
+  panel.setUrl('https://jobs.example.com/job/a?from=list#apply');
+  await panel.poll();
+  assert.equal(panel.get('job-summary').hidden, true, 'nothing is claimed before the page returns a job');
+  await panel.click('job-save-button');
+  await panel.click('job-save-cancel');
+  assert.equal(panel.get('job-summary').hidden, false);
+  assert.equal(panel.get('job-summary-title').textContent, '后端开发工程师');
+  assert.equal(panel.get('job-summary-badge').hidden, false);
+  // Only the #fragment changed: still the same page.
+  panel.setUrl('https://jobs.example.com/job/a?from=list#top');
+  await panel.poll();
+  assert.equal(panel.get('job-summary').hidden, false);
+  // Same site, another job page.
+  panel.setUrl('https://jobs.example.com/job/b');
+  await panel.poll();
+  assert.equal(panel.get('job-summary').hidden, true);
+  assert.equal(panel.get('job-summary-badge').hidden, true);
+});
+
 test('the field rows no longer reveal a whole value on hover', () => {
   const compose = require('../sidepanel-compose.js');
   const row = compose.renderRow({ chipId: 't:0:0', key: '身份证号', value: '110101199001011234' }, 'group');
