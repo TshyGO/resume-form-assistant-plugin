@@ -23,9 +23,42 @@ import {
   SNAPSHOT_DISCLAIMER,
 } from "./applications.ts";
 import { highlightHtml } from "./search-highlight.ts";
+import { STATUS_LABEL, describeDue } from "./todos.ts";
 
-const DETAIL_PROMPT = '<p class="muted">选择一条申请查看详情与时间线。</p>';
-const DETAIL_FILTERED_OUT = '<p class="muted">当前申请不在搜索结果中。</p>';
+const DETAIL_PROMPT = '<p class="detail-empty muted">选择一条申请查看详情与时间线。</p>';
+const DETAIL_FILTERED_OUT = '<p class="detail-empty muted">当前申请不在搜索结果中。</p>';
+const SHORTCUTS = [
+  ["submitted", "已投递"], ["interview", "面试"], ["offer", "Offer"],
+  ["saved", "已保存"], ["filling", "填写中"], ["assessment", "测评"],
+  ["rejected", "未通过"], ["withdrawn", "已撤回"], ["closed", "已关闭"],
+  ["recycled", "回收站"],
+] as const;
+const DEFAULT_SHORTCUTS = ["submitted", "interview", "offer"];
+const SHORTCUTS_KEY = "applications-shortcuts-v1";
+
+// 列表和详情用的线条图标。只是装饰，读屏跳过。
+const ICON = {
+  clock: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  progress: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>',
+  edit: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg>',
+  more: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>',
+  back: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+};
+
+// 待办的提醒登记结果，只说这条记录本身是什么状态，不推断会议、日历或结果。
+const REMINDER_STATE: Record<string, string> = {
+  none: "未设提醒",
+  scheduled: "已登记提醒",
+  fired: "已提醒",
+  missed: "到点没能提醒",
+  unsupported: "这台机器不能提醒",
+};
+
+/** 装饰用的首字：公司名的第一个字符（按码点取，不拆开代理对）。 */
+function initialOf(name: string | null | undefined) {
+  const first = Array.from(String(name ?? "").trim())[0];
+  return first ? first.toUpperCase() : "?";
+}
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -37,7 +70,7 @@ function escapeHtml(value: unknown) {
 
 function formatTime(value: string | null | undefined) {
   if (!value) return "—";
-  return String(value).replace("T", " ").replace("Z", " UTC");
+  return String(value).replace("T", " ").replace(/\.\d+(?=Z$)/, "").replace("Z", " UTC");
 }
 
 function invokeError(err: unknown) {
@@ -62,7 +95,12 @@ export function mountApplications(
   const empty = must("apps-empty");
   const noResults = must("apps-no-results");
   const layout = must("apps-layout");
-  const tbody = must("apps-tbody");
+  const list = must("apps-list");
+  const shell = maybe("apps-shell");
+  const stageChips = maybe("app-stage-chips");
+  const shortcutSettings = maybe<HTMLDetailsElement>("app-shortcut-settings");
+  const shortcutOptions = maybe("app-shortcut-options");
+  let listLoaded = false;
   const detail = must("app-detail");
   const dialog = dialogEl("app-form-dialog");
   const form = must<HTMLFormElement>("app-form");
@@ -70,8 +108,12 @@ export function mountApplications(
   const pageEl = must("apps-page");
   const progressDialog = dialogEl("progress-dialog");
   const progressForm = must<HTMLFormElement>("progress-form");
+  const correctDialog = dialogEl("correct-stage-dialog");
+  const correctForm = must<HTMLFormElement>("correct-stage-form");
   let progressContext: { act: string; id: string } | null = null;
   let progressSaving = false;
+  let correctContext: { id: string; from: string } | null = null;
+  let correctSaving = false;
   let actionBusy = false;
   let detailToken = 0;
   let detailTab = "timeline";
@@ -89,6 +131,26 @@ export function mountApplications(
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
   let composing = false;
+  let sortDirection = { sort: "updatedAt", desc: true };
+  let visibleShortcuts = [...DEFAULT_SHORTCUTS];
+
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SHORTCUTS_KEY) || "null");
+    if (Array.isArray(saved)) {
+      visibleShortcuts = SHORTCUTS.map(([value]) => value).filter((value) => saved.includes(value));
+    }
+  } catch { /* Keep the defaults when local storage is unavailable. */ }
+
+  function renderShortcuts(updateOptions = true) {
+    if (stageChips) {
+      stageChips.innerHTML = `<button type="button" data-stage-chip="all" aria-pressed="false">全部</button>${SHORTCUTS.filter(([value]) => visibleShortcuts.includes(value)).map(([value, label]) => `<button type="button" data-stage-chip="${value}" aria-pressed="false">${label}</button>`).join("")}`;
+      syncStageChips(selectEl("app-stage").value, selectEl("app-recycle").value);
+    }
+    if (shortcutOptions && updateOptions) {
+      shortcutOptions.innerHTML = SHORTCUTS.map(([value, label]) => `<label><input type="checkbox" value="${value}" aria-label="${label}"${visibleShortcuts.includes(value) ? " checked" : ""}>${label}</label>`).join("");
+    }
+  }
+  renderShortcuts();
 
   function setFormBusy(busy: boolean) {
     form
@@ -111,6 +173,43 @@ export function mountApplications(
   must("progress-cancel").addEventListener("click", cancelProgress);
   progressDialog.addEventListener("cancel", cancelProgress);
   dialog.addEventListener("cancel", cancelForm);
+
+  function cancelCorrection(event?: Event) {
+    event?.preventDefault();
+    if (correctSaving) return;
+    correctContext = null;
+    correctDialog.close();
+  }
+  must("correct-stage-cancel").addEventListener("click", cancelCorrection);
+  correctDialog.addEventListener("cancel", cancelCorrection);
+  correctForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!correctContext || correctSaving) return;
+    const { id, from } = correctContext;
+    const to = selectEl("correct-stage-to").value;
+    const reason = must<HTMLTextAreaElement>("correct-stage-reason").value.trim();
+    const status = must("correct-stage-msg");
+    if (to === from) { status.textContent = "请选择与当前阶段不同的阶段。"; return; }
+    if (!reason) { status.textContent = "请填写纠正原因。"; return; }
+    correctSaving = true;
+    correctForm.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>("input,select,textarea,button")
+      .forEach((field) => { field.disabled = true; });
+    status.textContent = "保存中…";
+    try {
+      await invoke("correct_stage_cmd", { args: { id, from, to, reason } });
+      correctContext = null;
+      correctDialog.close();
+      await refreshList();
+      if (ctl.selectedId === id) await loadDetail(id);
+      msg.textContent = "已纠正阶段。";
+    } catch (error) {
+      status.textContent = invokeError(error);
+    } finally {
+      correctSaving = false;
+      correctForm.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement>("input,select,textarea,button")
+        .forEach((field) => { field.disabled = false; });
+    }
+  });
 
   progressForm.addEventListener("submit", async event => {
     event.preventDefault();
@@ -139,19 +238,20 @@ export function mountApplications(
   });
 
   function filterArgs() {
+    const sort = selectEl("app-sort").value;
     return {
       query: input("app-search").value.trim() || null,
       stage: selectEl("app-stage").value,
       recycle: selectEl("app-recycle").value,
-      sort: selectEl("app-sort").value,
-      desc: true,
+      sort,
+      desc: sortDirection.sort === sort ? sortDirection.desc : sort === "updatedAt",
       limit: ctl.limit,
       offset: ctl.offset,
     };
   }
 
   function openForm(title: string, values: Partial<ApplicationSummary>) {
-    if (ctl.saving || actionBusy || progressSaving) return;
+    if (ctl.saving || actionBusy || progressSaving || correctSaving) return;
     must("app-form-title").textContent = title;
     input("f-company").value = values.company || "";
     input("f-title").value = values.title || "";
@@ -172,6 +272,8 @@ export function mountApplications(
     const token = ctl.beginList();
     const args = filterArgs();
     ctl.setFilter(args);
+    syncStageChips(args.stage, args.recycle);
+    if (!listLoaded) msg.textContent = "正在读取申请…";
     try {
       const page = await invoke<Page<ApplicationSummary>>("list_applications_cmd", { args });
       if (!ctl.isCurrent(token)) return;
@@ -182,7 +284,8 @@ export function mountApplications(
       const filterChanged = shownFilter !== null
         && (shownFilter.query !== args.query || shownFilter.stage !== args.stage || shownFilter.recycle !== args.recycle);
       shownFilter = { query: args.query, stage: args.stage, recycle: args.recycle };
-      msg.textContent = page.total ? `共 ${page.total} 条` : "";
+      must("apps-count").textContent = page.total ? `共 ${page.total} 条` : "";
+      msg.textContent = "";
       // 三种互斥状态：档案本来就是空的 / 搜索或筛选没有结果 / 正常列表。
       const filtered = Boolean(args.query) || args.stage !== "all" || args.recycle !== "active";
       const showEmpty = page.total === 0 && !filtered;
@@ -190,28 +293,34 @@ export function mountApplications(
       empty.classList.toggle("hidden", !showEmpty);
       noResults.classList.toggle("hidden", !showNoResults);
       layout.classList.toggle("hidden", page.total === 0);
-      tbody.innerHTML = page.items
+      // 档案本来就是空的时候没有可选的详情，右栏让给空状态。
+      shell?.classList.toggle("is-empty", showEmpty);
+      listLoaded = true;
+      list.innerHTML = page.items
         .map((row) => {
-          const active = row.id === ctl.selectedId ? " class=\"active\"" : "";
+          const active = row.id === ctl.selectedId ? " active" : "";
           const location = row.location ? highlightHtml("location", row.location, listedQuery) : "—";
-          return `<tr data-id="${escapeHtml(row.id)}"${active}>
-            <td><button type="button" class="app-select" aria-current="${ctl.selectedId === row.id ? "true" : "false"}" title="${escapeHtml(row.company)} · ${escapeHtml(row.title)}">
-              <strong>${highlightHtml("company", row.company, listedQuery)}</strong><span>${highlightHtml("title", row.title, listedQuery)}</span>
-            </button></td>
-            <td><span class="stage-badge" data-stage="${escapeHtml(row.current_stage)}">${escapeHtml(stageLabel(row.current_stage))}</span></td>
-            <td class="app-location" title="${escapeHtml(row.location || "—")}">${location}</td>
-            <td class="app-updated" title="${escapeHtml(formatTime(row.updated_at))}">${escapeHtml(row.updated_at?.slice(0, 10) || "—")}</td>
-          </tr>`;
+          const recycled = row.recycle_state === "recycled" ? '<span class="recycled-tag">回收站</span>' : "";
+          return `<li data-id="${escapeHtml(row.id)}" class="app-item${active}">
+            <span class="app-avatar" aria-hidden="true">${escapeHtml(initialOf(row.company))}</span>
+            <button type="button" class="app-select" aria-current="${ctl.selectedId === row.id ? "true" : "false"}" title="${escapeHtml(row.company)} · ${escapeHtml(row.title)}"><strong>${highlightHtml("company", row.company, listedQuery)}</strong><span>${highlightHtml("title", row.title, listedQuery)}</span></button>
+            <span class="app-meta">
+              <span class="app-location${row.location ? "" : " is-empty"}" title="${escapeHtml(row.location || "—")}">${location}</span>
+              <span class="app-updated" title="${escapeHtml(formatTime(row.updated_at))}">更新 ${escapeHtml(row.updated_at?.slice(0, 10) || "—")}</span>
+            </span>
+            <span class="app-stage">${recycled}<span class="stage-badge" data-stage="${escapeHtml(row.current_stage)}">${escapeHtml(stageLabel(row.current_stage))}</span></span>
+          </li>`;
         })
         .join("");
       const maxOffset = lastOffset;
-      pageEl.textContent = `${Math.floor(ctl.offset / ctl.limit) + 1} / ${Math.max(1, Math.ceil(page.total / ctl.limit))}`;
+      pageEl.textContent = `第 ${Math.floor(ctl.offset / ctl.limit) + 1} / ${Math.max(1, Math.ceil(page.total / ctl.limit))} 页`;
       input("btn-prev-page").disabled = ctl.offset <= 0;
       input("btn-next-page").disabled = ctl.offset >= maxOffset || page.total === 0;
       if (ctl.selectedId && !page.items.some((row) => row.id === ctl.selectedId)) {
         // 选中的申请被筛掉了：让在途的详情请求作废，并清掉旧详情，不替用户改选别的记录。
         detailToken += 1;
         ctl.setSelected(null);
+        shell?.classList.remove("show-detail");
         detailFilteredOut = page.total > 0 && filterChanged;
         detail.innerHTML = detailFilteredOut ? DETAIL_FILTERED_OUT : DETAIL_PROMPT;
       } else if (!ctl.selectedId && detailFilteredOut) {
@@ -223,6 +332,16 @@ export function mountApplications(
       if (!ctl.isCurrent(token)) return;
       msg.textContent = invokeError(err);
     }
+  }
+
+  /** 快捷按钮共用同一组阶段和回收状态筛选。 */
+  function syncStageChips(stage: string, recycle: string) {
+    stageChips?.querySelectorAll<HTMLElement>("[data-stage-chip]").forEach((chip) => {
+      const selected = recycle === "recycled"
+        ? chip.dataset.stageChip === "recycled"
+        : chip.dataset.stageChip === stage;
+      chip.setAttribute("aria-pressed", String(selected));
+    });
   }
 
   function showFreshHint() {
@@ -264,11 +383,12 @@ export function mountApplications(
     const token = ++detailToken;
     if (ctl.selectedId !== id) detailTab = "timeline";
     ctl.setSelected(id);
+    shell?.classList.add("show-detail");
     detailFilteredOut = false;
-    detail.innerHTML = '<p class="muted">加载中…</p>';
-    tbody.querySelectorAll("tr").forEach((tr) => {
-      tr.classList.toggle("active", tr.dataset.id === id);
-      tr.querySelector(".app-select")?.setAttribute("aria-current", String(tr.dataset.id === id));
+    detail.innerHTML = '<p class="detail-empty muted">加载中…</p>';
+    list.querySelectorAll<HTMLElement>("li[data-id]").forEach((item) => {
+      item.classList.toggle("active", item.dataset.id === id);
+      item.querySelector(".app-select")?.setAttribute("aria-current", String(item.dataset.id === id));
     });
     try {
       const view = await invoke<ApplicationView>("get_application_cmd", { id });
@@ -279,15 +399,31 @@ export function mountApplications(
       const snapshotStates = view.snapshotStates || {};
       const snapshots = view.snapshots || [];
       const evidence = view.evidence || [];
+      const todos = view.todos || [];
+      const recycled = app.recycle_state === "recycled";
+      const sourceUrl = app.source_url || "";
       detail.innerHTML = `
+        <button type="button" class="detail-back" data-detail-back>${ICON.back}返回申请列表</button>
         <div class="detail-head">
-          <p class="detail-company">${escapeHtml(app.company)}</p>
-          <h2>${escapeHtml(app.title)}</h2>
-          <div class="detail-status"><span class="stage-badge" data-stage="${escapeHtml(app.current_stage)}">${escapeHtml(stageLabel(app.current_stage))}</span><span class="muted">${escapeHtml(evidenceLabel(app.reply_evidence_state))}</span></div>
+          <span class="detail-avatar" aria-hidden="true">${escapeHtml(initialOf(app.company))}</span>
+          <div class="detail-title">
+            <h2 title="${escapeHtml(app.company)}">${escapeHtml(app.company)}</h2>
+            <p title="${escapeHtml(app.title)}">${escapeHtml(app.title)}</p>
+          </div>
+          <div class="detail-status">
+            <span class="stage-badge stage-badge-lg" data-stage="${escapeHtml(app.current_stage)}">${escapeHtml(stageLabel(app.current_stage))}</span>
+            ${recycled ? '<span class="recycled-tag">在回收站</span>' : ""}
+          </div>
         </div>
+        <dl class="detail-facts">
+          <div><dt>工作地点</dt><dd title="${escapeHtml(app.location || "—")}">${escapeHtml(app.location || "—")}</dd></div>
+          <div><dt>最近更新</dt><dd title="${escapeHtml(formatTime(app.updated_at))}">${escapeHtml(app.updated_at?.slice(0, 10) || "—")}</dd></div>
+          <div><dt>来源网址</dt><dd class="detail-url" title="${escapeHtml(sourceUrl || "—")}">${escapeHtml(sourceUrl || "—")}</dd></div>
+          <div><dt>备注</dt><dd title="${escapeHtml(notes || "—")}">${escapeHtml(notes || "—")}</dd></div>
+        </dl>
         <div class="detail-actions">
           <details class="action-menu">
-            <summary class="primary">记录进度</summary>
+            <summary class="primary">${ICON.progress}记录进度</summary>
             <div class="action-menu-items">
               <button type="button" data-act="submit">确认已投递</button>
               <button type="button" data-act="interview">记录面试</button>
@@ -298,57 +434,66 @@ export function mountApplications(
               <button type="button" data-act="closed">结束申请</button>
             </div>
           </details>
-          <button type="button" data-act="edit">编辑资料</button>
+          <button type="button" data-act="edit">${ICON.edit}编辑资料</button>
           <details class="action-menu action-menu-end">
-            <summary>更多</summary>
+            <summary aria-label="更多操作" title="更多操作">${ICON.more}</summary>
             <div class="action-menu-items">
               <button type="button" data-act="note">新增备注</button>
               <button type="button" data-act="correct">纠正阶段</button>
-              <button type="button" data-act="recycle">${app.recycle_state === "recycled" ? "恢复" : "回收"}</button>
+              <button type="button" data-act="recycle">${recycled ? "从回收站恢复" : "移到回收站"}</button>
             </div>
           </details>
         </div>
-        <dl class="facts compact">
-          <dt>地点</dt><dd>${escapeHtml(app.location || "—")}</dd>
-          <dt>链接</dt><dd class="break">${escapeHtml(app.source_url || "—")}</dd>
-          <dt>备注</dt><dd class="break">${escapeHtml(notes || "—")}</dd>
-          <dt>更新</dt><dd>${escapeHtml(formatTime(app.updated_at))}</dd>
-        </dl>
-        <p class="detail-note muted">填写事件不等于投递成功。</p>
         <div class="detail-tabs" role="tablist" aria-label="申请记录">
-          <button type="button" role="tab" id="detail-tab-timeline" data-detail-tab="timeline" aria-controls="detail-panel-timeline">时间线</button>
-          <button type="button" role="tab" id="detail-tab-evidence" data-detail-tab="evidence" aria-controls="detail-panel-evidence">证据 <span>${evidence.length}</span></button>
-          <button type="button" role="tab" id="detail-tab-snapshots" data-detail-tab="snapshots" aria-controls="detail-panel-snapshots">快照 <span>${snapshots.length}</span></button>
+          <button type="button" role="tab" id="detail-tab-timeline" data-detail-tab="timeline" aria-controls="detail-panel-timeline">时间线 <span class="tab-count">${events.length}</span></button>
+          <button type="button" role="tab" id="detail-tab-evidence" data-detail-tab="evidence" aria-controls="detail-panel-evidence">回复证据 <span class="tab-count">${evidence.length}</span></button>
+          <button type="button" role="tab" id="detail-tab-snapshots" data-detail-tab="snapshots" aria-controls="detail-panel-snapshots">简历快照 <span class="tab-count">${snapshots.length}</span></button>
         </div>
         <section id="detail-panel-evidence" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-evidence" tabindex="0" data-detail-panel="evidence" hidden>
-        <h3>回复证据（${evidence.length}）</h3>
+        <h3 class="sr-only">回复证据（${evidence.length}）</h3>
         ${evidenceNote(app.reply_evidence_state)
-          ? `<p class="muted">${escapeHtml(evidenceNote(app.reply_evidence_state))}</p>`
+          ? `<p class="panel-note">${escapeHtml(evidenceNote(app.reply_evidence_state))}</p>`
           : ""}
         ${evidence.length ? `
-        <ul class="snapshot-list">
-          ${evidence.map((item) => `<li>
-            <span>${escapeHtml(item.subject || item.originalFilename || "导入的证据")} — ${escapeHtml(evidenceLine(item))}</span>
-            <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
-            <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
+        <ul class="record-list">
+          ${evidence.map((item) => `<li class="record-card">
+            <div class="record-text"><strong>${escapeHtml(item.subject || item.originalFilename || "导入的证据")}</strong><span>${escapeHtml(evidenceLine(item))}</span></div>
+            <div class="record-actions">
+              <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
+              <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
+            </div>
           </li>`).join("")}
-        </ul>` : `<p class="muted">收件箱里导入的证据关联到这条申请之后会出现在这里。</p>`}
+        </ul>` : `<p class="panel-empty">收件箱里导入的证据关联到这条申请之后会出现在这里。</p>`}
         </section>
         <section id="detail-panel-snapshots" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-snapshots" tabindex="0" data-detail-panel="snapshots" hidden>
-        <h3>简历快照（${snapshots.length}）</h3>
+        <h3 class="sr-only">简历快照（${snapshots.length}）</h3>
+        <p class="panel-note">${escapeHtml(SNAPSHOT_DISCLAIMER)}</p>
         ${snapshots.length ? `
-        <ul class="snapshot-list">
-          ${snapshots.map((snap) => `<li>
-            <span>${escapeHtml(snap.template_name)} · ${escapeHtml(formatTime(snap.created_at))}</span>
-            <button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snap.snapshot_id)}">查看</button>
+        <ul class="record-list">
+          ${snapshots.map((snap) => `<li class="record-card">
+            <div class="record-text"><strong>${escapeHtml(snap.template_name)}</strong><span>拷贝于 ${escapeHtml(formatTime(snap.created_at))}</span></div>
+            <div class="record-actions"><button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snap.snapshot_id)}">查看</button></div>
           </li>`).join("")}
-        </ul>` : `<p class="muted">还没有简历快照。使用浏览器扩展填写并留档后，可以在这里回看当时的资料。</p>`}
+        </ul>` : `<p class="panel-empty">还没有简历快照。使用浏览器扩展填写并留档后，可以在这里回看当时的资料。</p>`}
         </section>
         <section id="detail-panel-timeline" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-timeline" tabindex="0" data-detail-panel="timeline">
         <h3 class="sr-only">时间线</h3>
-        ${events.length ? "" : `<p class="muted">还没有进度记录。</p>`}
+        ${todos.length ? `
+        <section class="detail-todos" aria-label="关联待办">
+          <h4>关联待办 <span>待办是接下来的安排，不是进度历史</span></h4>
+          <ul>
+            ${todos.map((todo) => `<li data-status="${escapeHtml(todo.status)}">
+              <strong>${escapeHtml(todo.title)}</strong>
+              <span>${escapeHtml(describeDue(todo))} · ${escapeHtml(STATUS_LABEL[todo.status] ?? todo.status)} · ${escapeHtml(REMINDER_STATE[todo.reminderState] ?? todo.reminderState)}</span>
+            </li>`).join("")}
+          </ul>
+        </section>` : ""}
+        <p class="panel-note">填写事件不等于投递成功。</p>
+        ${events.length ? "" : `<p class="panel-empty">还没有进度记录。</p>`}
         <ol class="timeline">
           ${events
+            .slice()
+            .reverse()
             .map((ev) => {
               const payload = ev.payload || {};
               const extra = payload.text || payload.note || payload.reason || payload.label || payload.name || "";
@@ -357,15 +502,19 @@ export function mountApplications(
               const fill = fillSummary(payload);
               const snapshotId = payload.snapshot_id;
               const snapshotNote = typeof snapshotId === "string" ? snapshotStateLabel(snapshotStates[snapshotId]) : null;
-              return `<li>
-                <strong>#${escapeHtml(ev.event_sequence)} ${escapeHtml(eventLabel(ev.event_type))}</strong>
-                <span class="muted">发生：${escapeHtml(occurredLabel(ev.occurred))} · 记录于：${escapeHtml(formatTime(ev.recorded_at))}</span>
-                ${payload.round ? `<div>第 ${escapeHtml(payload.round)} 轮面试</div>` : ""}
-                ${extra ? `<div class="break">${escapeHtml(extra)}</div>` : ""}
-                ${fill ? `<div>${escapeHtml(fill)}</div>` : ""}
-                ${snapshotId && !snapshotNote ? `<div><button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snapshotId)}">查看简历快照</button></div>` : ""}
-                ${snapshotNote ? `<div class="muted">${escapeHtml(snapshotNote)}</div>` : ""}
-                ${modeText && !fill ? `<div class="muted">${escapeHtml(modeText)}</div>` : ""}
+              const round = payload.round ? ` · 第 ${escapeHtml(payload.round)} 轮` : "";
+              return `<li class="timeline-item">
+                <div class="event-card">
+                  <div class="event-head">
+                    <strong>${escapeHtml(eventLabel(ev.event_type))}${round}</strong>
+                    ${modeText && !fill ? `<span class="event-tag">${escapeHtml(modeText)}</span>` : ""}
+                  </div>
+                  <p class="event-time">${ICON.clock}<span>发生：${escapeHtml(occurredLabel(ev.occurred))} · 记录于：${escapeHtml(formatTime(ev.recorded_at))}</span><span class="event-seq">#${escapeHtml(ev.event_sequence)}</span></p>
+                  ${extra ? `<div class="event-body break">${escapeHtml(extra)}</div>` : ""}
+                  ${fill ? `<div class="event-body">${escapeHtml(fill)}</div>` : ""}
+                  ${snapshotId && !snapshotNote ? `<div class="event-links"><button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snapshotId)}">查看简历快照</button></div>` : ""}
+                  ${snapshotNote ? `<p class="event-note">${escapeHtml(snapshotNote)}</p>` : ""}
+                </div>
               </li>`;
             })
             .join("")}
@@ -386,7 +535,7 @@ export function mountApplications(
       });
     } catch (err) {
       if (token !== detailToken || ctl.selectedId !== id) return;
-      detail.innerHTML = `<p class="banner">${escapeHtml(invokeError(err))}</p>`;
+      detail.innerHTML = `<p class="banner detail-error">${escapeHtml(invokeError(err))}</p>`;
     }
   }
 
@@ -467,7 +616,7 @@ export function mountApplications(
   async function handleAction(act: string, view: ApplicationView) {
     const app = view.application.summary || view.application;
     const id = app.id;
-    if (ctl.selectedId !== id || ctl.saving || actionBusy || progressSaving) return;
+    if (ctl.selectedId !== id || ctl.saving || actionBusy || progressSaving || correctSaving) return;
     if (progressKinds[act]) {
       progressContext = { act, id };
       must("progress-title").textContent = `记录${progressKinds[act]} · ${app.company} / ${app.title}`;
@@ -480,7 +629,19 @@ export function mountApplications(
       progressDialog.showModal();
       return;
     }
+    if (act === "correct") {
+      const currentStage = app.current_stage || "saved";
+      correctContext = { id, from: currentStage };
+      must("correct-stage-from").textContent = stageLabel(currentStage);
+      selectEl("correct-stage-to").value = currentStage;
+      must<HTMLTextAreaElement>("correct-stage-reason").value = "";
+      must("correct-stage-msg").textContent = "";
+      correctDialog.showModal();
+      selectEl("correct-stage-to").focus();
+      return;
+    }
     actionBusy = true;
+    let done = "已保存。";
     try {
       if (act === "edit") {
         actionBusy = false;
@@ -497,23 +658,18 @@ export function mountApplications(
       if (act === "submit") {
         if (!window.confirm("确认这条申请已经投递？填写完成不会自动变成已投递。")) return;
         await invoke("confirm_submit_cmd", { args: { id } });
-      } else if (act === "correct") {
-        const to = window.prompt("纠正到哪个阶段？(saved/filling/submitted/assessment/interview/offer/rejected/withdrawn/closed)", app.current_stage ?? "");
-        if (!to) return;
-        const reason = window.prompt("纠正原因（必填）", "");
-        if (!reason || !reason.trim()) {
-          msg.textContent = "纠正阶段必须填写原因。";
-          return;
-        }
-        await invoke("correct_stage_cmd", {
-          args: { id, from: app.current_stage, to: to.trim(), reason: reason.trim() },
-        });
       } else if (act === "note") {
         const text = window.prompt("备注", "");
         if (!text || !text.trim()) return;
         await invoke("add_note_cmd", { args: { id, text } });
       } else if (act === "recycle") {
         const recycled = app.recycle_state !== "recycled";
+        // 默认快捷筛选里没有「回收站」：回收后要告诉用户去哪里找回。
+        done = !recycled
+          ? "已从回收站恢复。"
+          : visibleShortcuts.includes("recycled")
+            ? "已移到回收站。可点「回收站」查看或恢复。"
+            : "已移到回收站。可在快捷筛选设置中显示「回收站」查看或恢复。";
         const ok = window.confirm(
           recycled
             ? "回收后申请离开进行中列表，历史事件仍保留，可以恢复。本次不提供永久删除。"
@@ -524,7 +680,7 @@ export function mountApplications(
       }
       await refreshList();
       if (ctl.selectedId === id) await loadDetail(id);
-      msg.textContent = "已保存。";
+      msg.textContent = done;
     } catch (err) {
       msg.textContent = invokeError(err);
     } finally { actionBusy = false; }
@@ -620,24 +776,87 @@ export function mountApplications(
     ctl.setEditing(null);
     openForm("新增申请", {});
   });
-  tbody.addEventListener("click", (event) => {
-    const tr = (event.target as HTMLElement | null)?.closest<HTMLElement>("tr[data-id]");
-    const id = tr?.dataset.id;
+  list.addEventListener("click", (event) => {
+    const item = (event.target as HTMLElement | null)?.closest<HTMLElement>("li[data-id]");
+    const id = item?.dataset.id;
     if (id) void loadDetail(id);
+  });
+  detail.addEventListener("click", (event) => {
+    if (!(event.target as HTMLElement | null)?.closest("[data-detail-back]")) return;
+    shell?.classList.remove("show-detail");
+    list.querySelector<HTMLElement>(".app-item.active .app-select")?.focus();
+  });
+  stageChips?.addEventListener("click", async (event) => {
+    const chip = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-stage-chip]");
+    const stage = chip?.dataset.stageChip;
+    if (!stage) return;
+    const nextRecycle = stage === "recycled" ? "recycled" : "active";
+    const nextStage = stage === "recycled" ? "all" : stage;
+    if (selectEl("app-stage").value === nextStage && selectEl("app-recycle").value === nextRecycle) return;
+    selectEl("app-stage").value = nextStage;
+    selectEl("app-recycle").value = nextRecycle;
+    ctl.setOffset(0);
+    await refreshList();
+  });
+  shortcutOptions?.addEventListener("change", async (event) => {
+    const box = event.target as HTMLInputElement;
+    if (box.type !== "checkbox") return;
+    visibleShortcuts = [...shortcutOptions.querySelectorAll<HTMLInputElement>('input:checked')].map((item) => item.value);
+    try { window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify(visibleShortcuts)); } catch { /* In-memory choice still works. */ }
+    if (!visibleShortcuts.includes(box.value) && box.value === "recycled" && selectEl("app-recycle").value === "recycled") {
+      selectEl("app-recycle").value = "active";
+      ctl.setOffset(0);
+      renderShortcuts(false);
+      await refreshList();
+      return;
+    }
+    if (!visibleShortcuts.includes(box.value) && box.value === selectEl("app-stage").value) {
+      selectEl("app-stage").value = "all";
+      ctl.setOffset(0);
+      renderShortcuts(false);
+      await refreshList();
+      return;
+    }
+    renderShortcuts(false);
+  });
+  shortcutSettings?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    shortcutSettings.open = false;
+    shortcutSettings.querySelector<HTMLElement>("summary")?.focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (shortcutSettings?.open && !shortcutSettings.contains(event.target as Node)) {
+      shortcutSettings.open = false;
+    }
   });
   must("btn-prev-page").addEventListener("click", async () => {
     ctl.setOffset(Math.max(0, ctl.offset - ctl.limit));
+    list.scrollTop = 0;
     await refreshList();
   });
   must("btn-next-page").addEventListener("click", async () => {
     ctl.setOffset(ctl.offset + ctl.limit);
+    list.scrollTop = 0;
     await refreshList();
   });
-  ["app-stage", "app-recycle", "app-sort"].forEach((id) => {
+  ["app-stage", "app-recycle"].forEach((id) => {
     must(id).addEventListener("change", async () => {
       ctl.setOffset(0);
       await refreshList();
     });
+  });
+  must("app-sort").addEventListener("change", async () => {
+    const sort = selectEl("app-sort").value;
+    sortDirection = { sort, desc: sort === "updatedAt" };
+    must("app-sort-direction").setAttribute("aria-pressed", String(sortDirection.desc));
+    ctl.setOffset(0);
+    await refreshList();
+  });
+  must("app-sort-direction").addEventListener("click", async () => {
+    sortDirection = { sort: selectEl("app-sort").value, desc: !filterArgs().desc };
+    must("app-sort-direction").setAttribute("aria-pressed", String(sortDirection.desc));
+    ctl.setOffset(0);
+    await refreshList();
   });
   function queueSearch(immediate: boolean) {
     const query = input("app-search").value.trim();

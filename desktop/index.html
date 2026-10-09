@@ -8,91 +8,110 @@
   </head>
   <body>
     <div id="app">
-      <aside class="nav">
-        <p class="brand">网申快填</p>
-        <p class="brand-sub">简历快填 · 投递管理</p>
-        <nav aria-label="主导航">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-mark" src="./src-tauri/icons/64x64.png" alt="" width="32" height="32" />
+          <span class="brand-name">网申快填</span>
+          <span id="app-version" class="brand-version" hidden></span>
+        </div>
+        <nav class="nav" aria-label="主导航">
           <button type="button" data-route="applications" class="active" aria-current="page">申请</button>
           <button type="button" data-route="resume">简历</button>
           <button type="button" data-route="inbox">证据收件箱</button>
           <button type="button" data-route="todos">待办</button>
           <button type="button" data-route="settings">设置</button>
-          <button type="button" id="nav-install-extension">安装扩展</button>
         </nav>
-        <p id="runtime-pill" class="pill">正在读取运行状态…</p>
-      </aside>
+        <div class="topbar-status">
+          <p id="runtime-pill" class="status-pill" data-tone="pending">正在读取浏览器注册…</p>
+          <button type="button" id="nav-install-extension">安装扩展</button>
+        </div>
+      </header>
       <main>
         <div id="feedback-consent"></div>
         <div id="banner" class="banner hidden"></div>
 
         <section id="view-applications" class="view">
-          <div class="apps-toolbar">
-            <div class="workspace-heading">
-              <div><h1>申请</h1><p class="muted">管理岗位，追踪每一步进展。</p></div>
-              <button type="button" id="btn-new-app" class="primary">新增申请</button>
-            </div>
-            <div class="apps-filters">
-              <input id="app-search" type="search" placeholder="搜索公司、岗位或地点" aria-label="搜索申请" />
-              <select id="app-stage" aria-label="阶段过滤">
-                <option value="all">全部阶段</option>
-                <option value="saved">已保存</option>
-                <option value="filling">填写中</option>
-                <option value="submitted">已投递</option>
-                <option value="assessment">测评</option>
-                <option value="interview">面试</option>
-                <option value="offer">Offer</option>
-                <option value="rejected">未通过</option>
-                <option value="withdrawn">已撤回</option>
-                <option value="closed">已关闭</option>
-              </select>
-              <select id="app-recycle" aria-label="回收状态">
-                <option value="active">进行中</option>
-                <option value="recycled">回收站</option>
-                <option value="all">全部</option>
-              </select>
-              <select id="app-sort" aria-label="排序">
-                <option value="updatedAt">更新时间</option>
-                <option value="company">公司</option>
-                <option value="title">岗位</option>
-                <option value="stage">阶段</option>
-              </select>
-            </div>
-          </div>
-          <p id="apps-msg" class="muted" role="status"></p>
-          <p id="apps-fresh" hidden><button type="button" id="apps-fresh-clear">有新申请，清除筛选查看</button></p>
-          <div id="apps-empty" class="empty hidden">
-            <p>还没有申请记录。</p>
-            <p class="muted">新增第一条申请，或安装浏览器扩展，从招聘网页保存岗位。</p>
-            <div class="row">
-              <button type="button" id="btn-empty-new" class="primary">新增申请</button>
-              <button type="button" id="btn-empty-install">去安装浏览器扩展</button>
-            </div>
-          </div>
-          <div id="apps-no-results" class="empty hidden" role="status">
-            <p>没有相关投递记录</p>
-            <p class="muted">请尝试其他关键词或调整筛选条件</p>
-          </div>
-          <div id="apps-layout" class="apps-layout hidden">
-            <div class="apps-list-pane">
-              <table class="apps-table" aria-label="申请列表">
-                <thead>
-                  <tr>
-                    <th scope="col">公司 / 岗位</th>
-                    <th scope="col">阶段</th>
-                    <th scope="col" class="app-location">地点</th>
-                    <th scope="col">更新</th>
-                  </tr>
-                </thead>
-                <tbody id="apps-tbody"></tbody>
-              </table>
-              <div class="apps-pagination">
-                <button type="button" id="btn-prev-page">上一页</button>
-                <span id="apps-page" class="muted"></span>
-                <button type="button" id="btn-next-page">下一页</button>
+          <h1 class="sr-only">申请</h1>
+          <div id="apps-shell" class="apps-shell">
+            <div class="apps-list-card">
+              <div class="apps-toolbar">
+                <div class="apps-search-row">
+                  <label class="search-field">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input id="app-search" type="search" placeholder="搜索公司、岗位或地点" aria-label="搜索申请" />
+                  </label>
+                  <button type="button" id="btn-new-app" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新增申请</button>
+                </div>
+                <div class="apps-filter-row">
+                  <div id="app-stage-chips" class="stage-chips" role="group" aria-label="申请筛选">
+                    <button type="button" data-stage-chip="all" aria-pressed="true">全部</button>
+                    <button type="button" data-stage-chip="submitted" aria-pressed="false">已投递</button>
+                    <button type="button" data-stage-chip="interview" aria-pressed="false">面试</button>
+                    <button type="button" data-stage-chip="offer" aria-pressed="false">Offer</button>
+                  </div>
+                  <details id="app-shortcut-settings" class="shortcut-settings">
+                    <summary aria-label="设置快捷筛选" title="设置快捷筛选"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></summary>
+                    <div class="shortcut-settings-menu">
+                      <p>显示以下快捷筛选</p>
+                      <div id="app-shortcut-options"></div>
+                    </div>
+                  </details>
+                  <div class="apps-filter-state hidden" aria-hidden="true">
+                    <select id="app-stage" aria-label="阶段过滤">
+                      <option value="all">全部阶段</option>
+                      <option value="saved">已保存</option>
+                      <option value="filling">填写中</option>
+                      <option value="submitted">已投递</option>
+                      <option value="assessment">测评</option>
+                      <option value="interview">面试</option>
+                      <option value="offer">Offer</option>
+                      <option value="rejected">未通过</option>
+                      <option value="withdrawn">已撤回</option>
+                      <option value="closed">已关闭</option>
+                    </select>
+                    <select id="app-recycle" aria-label="回收状态">
+                      <option value="active">进行中</option>
+                      <option value="recycled">回收站</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="apps-list-tools">
+                  <span id="apps-count" class="muted" role="status"></span>
+                  <div class="apps-sort-controls">
+                    <select id="app-sort" aria-label="排序">
+                      <option value="updatedAt">按更新时间</option>
+                      <option value="company">按公司</option>
+                      <option value="title">按岗位</option>
+                    </select>
+                    <button type="button" id="app-sort-direction" aria-label="切换排序方向" aria-pressed="true" title="切换排序方向"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg></button>
+                  </div>
+                </div>
+              </div>
+              <p id="apps-msg" class="muted" role="status"></p>
+              <p id="apps-fresh" hidden><button type="button" id="apps-fresh-clear">有新申请，清除筛选查看</button></p>
+              <div id="apps-empty" class="empty hidden">
+                <p>还没有申请记录。</p>
+                <p class="muted">新增第一条申请，或安装浏览器扩展，从招聘网页保存岗位。</p>
+                <div class="row">
+                  <button type="button" id="btn-empty-new" class="primary">新增申请</button>
+                  <button type="button" id="btn-empty-install">去安装浏览器扩展</button>
+                </div>
+              </div>
+              <div id="apps-no-results" class="empty hidden" role="status">
+                <p>没有相关投递记录</p>
+                <p class="muted">请尝试其他关键词或调整筛选条件</p>
+              </div>
+              <div id="apps-layout" class="apps-list-region hidden">
+                <ul id="apps-list" class="apps-list" aria-label="申请列表"></ul>
+                <div class="apps-pagination">
+                  <button type="button" id="btn-prev-page">上一页</button>
+                  <span id="apps-page" class="muted"></span>
+                  <button type="button" id="btn-next-page">下一页</button>
+                </div>
               </div>
             </div>
-            <div id="app-detail" class="apps-detail-pane">
-              <p class="muted">选择一条申请查看详情与时间线。</p>
+            <div id="app-detail" class="apps-detail-card" aria-label="申请详情" role="region">
+              <p class="detail-empty muted">选择一条申请查看详情与时间线。</p>
             </div>
           </div>
           <dialog id="app-form-dialog">
@@ -147,6 +166,31 @@
               <label><input id="progress-update" type="checkbox" /> 同时更新当前进度（默认只补录历史）</label>
               <p id="progress-msg" class="muted"></p>
               <div class="row"><button id="progress-save" type="submit" class="primary">保存记录</button><button id="progress-cancel" type="button">取消</button></div>
+            </form>
+          </dialog>
+          <dialog id="correct-stage-dialog">
+            <form id="correct-stage-form" class="stack">
+              <h2>纠正阶段</h2>
+              <p class="muted">修正当前阶段，并在时间线留下更正记录。</p>
+              <p>当前阶段：<strong id="correct-stage-from"></strong></p>
+              <label>改为
+                <select id="correct-stage-to" required>
+                  <option value="saved">已保存</option>
+                  <option value="filling">填写中</option>
+                  <option value="submitted">已投递</option>
+                  <option value="assessment">测评</option>
+                  <option value="interview">面试</option>
+                  <option value="offer">Offer</option>
+                  <option value="rejected">未通过</option>
+                  <option value="withdrawn">已撤回</option>
+                  <option value="closed">已关闭</option>
+                </select>
+              </label>
+              <label>纠正原因
+                <textarea id="correct-stage-reason" rows="3" maxlength="2000" required placeholder="例如：之前选错了阶段"></textarea>
+              </label>
+              <p id="correct-stage-msg" class="muted" role="status"></p>
+              <div class="row"><button id="correct-stage-save" type="submit" class="primary">保存纠正</button><button id="correct-stage-cancel" type="button">取消</button></div>
             </form>
           </dialog>
         </section>

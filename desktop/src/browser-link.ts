@@ -75,6 +75,37 @@ export function describeLink(status: RuntimeStatus | null): LinkState {
   };
 }
 
+export interface RegistrationPill {
+  tone: "ok" | "warn" | "error" | "pending";
+  text: string;
+  /** 悬停说明：注册只是桌面写好了清单，不等于扩展装好或连上。 */
+  title: string;
+}
+
+const REGISTRATION_ONLY =
+  "这里只说明桌面是否已在浏览器里登记连接方式，不代表扩展已安装或已经连上。";
+
+/**
+ * 顶栏那颗状态胶囊。桌面只掌握 Native Messaging 清单写没写成，所以只说「已注册」，
+ * 绝不说「已连接」——扩展装没装、连没连上，桌面这边并不知道。
+ */
+export function describeRegistration(status: RuntimeStatus | null): RegistrationPill {
+  if (!status) return { tone: "pending", text: "正在读取浏览器注册…", title: REGISTRATION_ONLY };
+  const targets = status.nativeMessaging ?? [];
+  if (targets.length === 0) {
+    return { tone: "warn", text: "浏览器注册未核对", title: REGISTRATION_ONLY };
+  }
+  const ready = targets.filter((target) => target.registered).map((target) => target.label);
+  const failed = targets.filter((target) => !target.registered).map((target) => target.label);
+  if (ready.length === 0) {
+    return { tone: "error", text: "浏览器未注册", title: `${failed.join("、")} 未注册。${REGISTRATION_ONLY}` };
+  }
+  if (failed.length > 0) {
+    return { tone: "warn", text: `已注册 ${ready.join("、")} · ${failed.join("、")} 未注册`, title: REGISTRATION_ONLY };
+  }
+  return { tone: "ok", text: `已注册 ${ready.join("、")}`, title: REGISTRATION_ONLY };
+}
+
 /**
  * 装完扩展之后的提示。浏览器要重新读一次 host 清单，才连得上刚写好的注册
  * （D01 的 V3：清单变了不保证不重启就生效）。

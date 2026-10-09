@@ -14,8 +14,10 @@ class FakeNode {
   open = false;
   disabled = false;
   hidden = false;
+  scrollTop = 0;
   innerHTML = "";
   textContent = "";
+  attributes: Record<string, string> = {};
   dataset: Record<string, string> = {};
   listeners: Record<string, (event: unknown) => unknown> = {};
   classes = new Set<string>();
@@ -57,8 +59,9 @@ class FakeNode {
     this.open = false;
   }
   focus() {}
+  setAttribute(name: string, value: string) { this.attributes[name] = value; }
   querySelectorAll(selector: string): FakeNode[] {
-    if (["[data-detail-tab]", "[data-detail-panel]", ".action-menu"].includes(selector)) return [];
+    if (["[data-detail-tab]", "[data-detail-panel]", ".action-menu", "[data-stage-chip]", "li[data-id]"].includes(selector)) return [];
     if (selector === "button[data-act]") {
       return [
         ...this.innerHTML.matchAll(/data-act="([^"]+)"(?:\s+data-(snapshot|evidence)="([^"]+)")?/g),
@@ -70,7 +73,6 @@ class FakeNode {
         return node;
       });
     }
-    if (selector === "tr") return [];
     const ids =
       this.id === "app-form"
         ? ["f-company", "f-title", "f-url", "f-location", "f-notes", "btn-save-app", "btn-cancel-app"]
@@ -141,7 +143,7 @@ function harness(handler?: InvokeHandler, options: { searchDebounceMs?: number; 
     coalesceMs: options.coalesceMs ?? 30,
   });
   const select = async (id: string) => {
-    el("apps-tbody").emit("click", { target: { closest: () => ({ dataset: { id } }) } });
+    el("apps-list").emit("click", { target: { closest: () => ({ dataset: { id } }) } });
     await tick();
   };
   return {
@@ -191,8 +193,8 @@ test('edit clearing sends empty strings, save locks fields and Escape cannot dis
 });
 
 test('list falls back from an empty last page before rendering page count',async()=>{
- const h=harness((name,args)=>name==='list_applications_cmd'?{total:20,items:(args?.args as {offset?:number})?.offset?[]:[{id:'A',company:'A',title:'x'}]}:undefined);
- h.api.ctl.setOffset(20);await h.api.refreshList();assert.equal(h.api.ctl.offset,0);assert.equal(h.el('apps-page').textContent,'1 / 1');
+ const h=harness((name,args)=>name==='list_applications_cmd'?{total:8,items:(args?.args as {offset?:number})?.offset?[]:[{id:'A',company:'A',title:'x'}]}:undefined);
+ h.api.ctl.setOffset(h.api.ctl.limit);await h.api.refreshList();assert.equal(h.api.ctl.offset,0);assert.equal(h.el('apps-page').textContent,'第 1 / 1 页');
 });
 
 test('new selection survives completion of an earlier action',async()=>{
@@ -413,8 +415,8 @@ test("a slow search cannot overwrite the list restored by clearing the box", asy
   release();
   await h.tick();
   await h.tick();
-  assert.match(h.el("apps-tbody").innerHTML, /AllCo/);
-  assert.doesNotMatch(h.el("apps-tbody").innerHTML, /SlowCo/);
+  assert.match(h.el("apps-list").innerHTML, /AllCo/);
+  assert.doesNotMatch(h.el("apps-list").innerHTML, /SlowCo/);
 });
 
 test("a committed plugin write refreshes the open list from the query", async () => {
@@ -432,7 +434,7 @@ test("a committed plugin write refreshes the open list from the query", async ()
   await wait(40);
   await h.tick();
   assert.equal(listCalls(h).length, 1);
-  assert.match(h.el("apps-tbody").innerHTML, /金发科技股份有限公司/);
+  assert.match(h.el("apps-list").innerHTML, /金发科技股份有限公司/);
   assert.equal(h.el("apps-fresh").hidden, true);
 });
 
@@ -454,7 +456,7 @@ test("a committed row hidden by the current filter is not inserted and does not 
   assert.equal(h.el("app-stage").value, "interview");
   assert.equal(h.el("app-search").value, "其他");
   assert.equal(h.el("apps-fresh").hidden, false);
-  assert.doesNotMatch(h.el("apps-tbody").innerHTML, /金发科技股份有限公司/);
+  assert.doesNotMatch(h.el("apps-list").innerHTML, /金发科技股份有限公司/);
 
   await h.el("apps-fresh-clear").emit("click");
   await h.tick();
@@ -620,7 +622,7 @@ test('the list highlights company, title and location for the query that produce
   h.el('app-search').value = '发';
   await h.el('app-search').emit('keydown', { key: 'Enter' });
   await h.tick();
-  const html = h.el('apps-tbody').innerHTML;
+  const html = h.el('apps-list').innerHTML;
   assert.match(html, new RegExp(`<strong>金${MARK('发')}科技</strong><span>研${MARK('发')}工程师</span>`));
   assert.match(html, new RegExp(`<strong>中化集团</strong><span>研${MARK('发')}专员</span>`));
   assert.match(html, new RegExp(`<strong>星河公司</strong><span>研${MARK('发')}经理</span>`));
@@ -637,17 +639,17 @@ test('location matches are highlighted in the location column only', async () =>
   h.el('app-search').value = 'pudong';
   await h.el('app-search').emit('keydown', { key: 'Enter' });
   await h.tick();
-  const html = h.el('apps-tbody').innerHTML;
-  assert.match(html, new RegExp(`<td class="app-location" title="Shanghai Pudong">Shanghai ${MARK('Pudong')}</td>`));
+  const html = h.el('apps-list').innerHTML;
+  assert.match(html, new RegExp(`<span class="app-location" title="Shanghai Pudong">Shanghai ${MARK('Pudong')}</span>`));
   assert.equal((html.match(/<mark/g) ?? []).length, 1);
 });
 
 test('an empty search shows the list with no highlight, and a missing location stays a dash', async () => {
   const h = harness(searchBackend);
   await h.api.refreshList();
-  const html = h.el('apps-tbody').innerHTML;
+  const html = h.el('apps-list').innerHTML;
   assert.doesNotMatch(html, /<mark/);
-  assert.match(html, /<td class="app-location" title="—">—<\/td>/);
+  assert.match(html, /<span class="app-location is-empty" title="—">—<\/span>/);
 });
 
 test('hostile company, title and location render as text in the list', async () => {
@@ -657,12 +659,12 @@ test('hostile company, title and location render as text in the list', async () 
   h.el('app-search').value = '<script>';
   await h.el('app-search').emit('keydown', { key: 'Enter' });
   await h.tick();
-  const html = h.el('apps-tbody').innerHTML;
+  const html = h.el('apps-list').innerHTML;
   const rest = html.replaceAll('<mark class="search-match">', '').replaceAll('</mark>', '');
   assert.doesNotMatch(rest, /<img|<script|<b>/);
   assert.match(html, /<strong>&lt;img src=x onerror=alert\(1\)&gt;&amp;Co<\/strong>/);
   assert.match(html, /<span>&quot;&gt;<mark class="search-match">&lt;script&gt;<\/mark>alert\(1\)&lt;\/script&gt;&#39;<\/span>/);
-  assert.match(html, /<td class="app-location" title="[^"]*"><mark class="search-match">&lt;script&gt;<\/mark>&amp;&lt;\/script&gt;<\/td>/);
+  assert.match(html, /<span class="app-location" title="[^"]*"><mark class="search-match">&lt;script&gt;<\/mark>&amp;&lt;\/script&gt;<\/span>/);
 });
 
 test('a search with no results shows its own empty state, not a table row', async () => {
@@ -673,8 +675,8 @@ test('a search with no results shows its own empty state, not a table row', asyn
   assert.equal(hidden(h, 'apps-no-results'), false);
   assert.equal(hidden(h, 'apps-empty'), true);
   assert.equal(hidden(h, 'apps-layout'), true);
-  assert.equal(h.el('apps-tbody').innerHTML, '');
-  assert.doesNotMatch(h.el('apps-tbody').innerHTML, /<tr|没有符合筛选条件/);
+  assert.equal(h.el('apps-list').innerHTML, '');
+  assert.doesNotMatch(h.el('apps-list').innerHTML, /<tr|没有符合筛选条件/);
   assert.equal(h.el('apps-msg').textContent, '');
   assert.equal(h.el('btn-prev-page').disabled, true);
   assert.equal(h.el('btn-next-page').disabled, true);
@@ -780,10 +782,10 @@ test('clearing the search brings the full list back and selection works again', 
   await h.tick();
   assert.equal(hidden(h, 'apps-no-results'), true);
   assert.equal(hidden(h, 'apps-layout'), false);
-  assert.match(h.el('apps-tbody').innerHTML, /Company-A/);
-  assert.match(h.el('apps-tbody').innerHTML, /Company-B/);
-  assert.doesNotMatch(h.el('apps-tbody').innerHTML, /<mark/);
-  assert.equal(h.el('apps-msg').textContent, '共 2 条');
+  assert.match(h.el('apps-list').innerHTML, /Company-A/);
+  assert.match(h.el('apps-list').innerHTML, /Company-B/);
+  assert.doesNotMatch(h.el('apps-list').innerHTML, /<mark/);
+  assert.equal(h.el('apps-count').textContent, '共 2 条');
   assert.doesNotMatch(h.el('app-detail').innerHTML, /当前申请不在搜索结果中|Company-A/);
   await h.select('B');
   assert.match(h.el('app-detail').innerHTML, /Company-B/);
@@ -809,8 +811,8 @@ test('a slow search cannot repaint highlights or the empty state over the cleare
   release();
   await h.tick();
   await h.tick();
-  assert.match(h.el('apps-tbody').innerHTML, /AllCo/);
-  assert.doesNotMatch(h.el('apps-tbody').innerHTML, /<mark/);
+  assert.match(h.el('apps-list').innerHTML, /AllCo/);
+  assert.doesNotMatch(h.el('apps-list').innerHTML, /<mark/);
   assert.equal(hidden(h, 'apps-no-results'), true);
   assert.equal(hidden(h, 'apps-layout'), false);
 });
@@ -865,9 +867,12 @@ test('paging away from the selected application clears the detail without claimi
   assert.match(h.el('app-detail').innerHTML, /Company-A/);
   const detailCalls = () => h.calls.filter((call) => call.name === 'get_application_cmd').length;
   const before = detailCalls();
+  h.el('apps-list').scrollTop = 240;
   await h.el('btn-next-page').emit('click');
   await h.tick();
-  assert.equal(queryOf(listCalls(h).at(-1)!).offset, 20);
+  assert.equal(h.api.ctl.limit, 8);
+  assert.equal(queryOf(listCalls(h).at(-1)!).offset, 8);
+  assert.equal(h.el('apps-list').scrollTop, 0);
   assert.equal(h.api.ctl.selectedId, null);
   assert.doesNotMatch(h.el('app-detail').innerHTML, /Company-A/);
   assert.match(h.el('app-detail').innerHTML, /选择一条申请查看详情与时间线/);
