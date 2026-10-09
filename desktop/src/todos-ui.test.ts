@@ -69,7 +69,7 @@ class FakeNode {
   clickButton(todoId: string, act: string) {
     const target = {
       closest: (selector: string) =>
-        selector.includes("data-todo")
+        selector.includes("[data-todo]")
           ? { dataset: { todo: todoId, act } }
           : null,
     };

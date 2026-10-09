@@ -178,3 +178,122 @@ test("evidence preview escapes original text and requires an explicit associatio
   fireEvent.click(document.querySelector('[data-act="associate"]')!);
   await waitFor(() => expect(calls).toHaveBeenCalledWith("associate_evidence_cmd", { evidenceId: "e1", applicationId: "a2" }));
 });
+
+test.each(["storage", "too_large"])("paste failure report (%s) keeps the dialog and text for retry", async (code) => {
+  let fail = true;
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    if (name === "list_inbox_cmd") return [] as T;
+    if (name === "import_evidence_cmd") return (fail
+      ? { imported: [], duplicates: [], failed: [{ name: "粘贴文本", code }] }
+      : { imported: [{ id: "e1" }], duplicates: [], failed: [] }) as T;
+    return {} as T;
+  };
+  const h = mountInbox(invoke); await h.refresh();
+  fireEvent.click(document.getElementById("inbox-paste-open")!);
+  const dialog = document.getElementById("inbox-paste-dialog") as HTMLDialogElement;
+  const text = document.getElementById("inbox-paste") as HTMLTextAreaElement;
+  text.value = "重要面试邀请，请保留";
+  await h.submitPaste();
+  expect(dialog.open).toBe(true);
+  expect(text.value).toBe("重要面试邀请，请保留");
+  expect(document.getElementById("inbox-paste-status")!.textContent).toContain(code === "storage" ? "写入档案目录失败" : "超过 25 MiB");
+  expect(text.readOnly).toBe(false);
+  expect((document.getElementById("inbox-paste-save") as HTMLButtonElement).disabled).toBe(false);
+  fail = false;
+  await h.submitPaste();
+  expect(dialog.open).toBe(false);
+  expect(text.value).toBe("");
+});
+
+test("saved paste closes even when refreshing fails, and says it was saved", async () => {
+  let imported = false;
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    if (name === "list_inbox_cmd") {
+      if (imported) throw new Error("读取失败");
+      return [] as T;
+    }
+    if (name === "import_evidence_cmd") {
+      imported = true;
+      return { imported: [{ id: "e1" }], duplicates: [], failed: [] } as T;
+    }
+    return {} as T;
+  };
+  const h = mountInbox(invoke); await h.refresh();
+  fireEvent.click(document.getElementById("inbox-paste-open")!);
+  (document.getElementById("inbox-paste") as HTMLTextAreaElement).value = "已经保存";
+  await h.submitPaste();
+  expect((document.getElementById("inbox-paste-dialog") as HTMLDialogElement).open).toBe(false);
+  expect(document.getElementById("inbox-status")!.textContent).toContain("材料已保存，无需重复导入");
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test.each([false, true])("classification stays locked during refresh; selection changed=%s", async (switchSelection) => {
+  const items = [
+    { id: "e1", kind: "paste", subject: "第一封", importedAt: "2026-10-09", bodyExtract: "第一封正文" },
+    { id: "e2", kind: "paste", subject: "第二封", importedAt: "2026-10-09", bodyExtract: "第二封正文" },
+  ];
+  const refresh = deferred<typeof items>();
+  let reads = 0;
+  const calls = vi.fn();
+  const invoke: Invoke = async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
+    calls(name, args);
+    if (name === "list_inbox_cmd") return (++reads === 2 ? refresh.promise : items) as T;
+    if (name === "get_evidence_preview_cmd" || name === "classify_evidence_cmd") return items.find((item) => item.id === args?.evidenceId) as T;
+    if (name === "list_applications_cmd") return { items: apps } as T;
+    return {} as T;
+  };
+  const h = mountInbox(invoke); await h.refresh();
+  fireEvent.click(document.querySelector('[data-evidence="e1"]')!);
+  await waitFor(() => expect(document.querySelector('[data-act="classify"]')).toBeTruthy());
+  fireEvent.click(document.querySelector('[data-act="classify"]')!);
+  await waitFor(() => expect(reads).toBe(2));
+  if (switchSelection) {
+    fireEvent.click(document.querySelector('[data-evidence="e2"]')!);
+    await waitFor(() => expect(document.querySelector(".evidence-body")!.textContent).toBe("第二封正文"));
+  }
+  const button = document.querySelector('[data-act="classify"]') as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(calls.mock.calls.filter(([name]) => name === "classify_evidence_cmd")).toHaveLength(1);
+  refresh.resolve(items);
+  await waitFor(() => expect((document.querySelector('[data-act="classify"]') as HTMLButtonElement).disabled).toBe(false));
+  expect(document.querySelector(".evidence-body")!.textContent).toBe(switchSelection ? "第二封正文" : "第一封正文");
+  fireEvent.click(document.querySelector('[data-act="classify"]')!);
+  await waitFor(() => expect(calls.mock.calls.filter(([name]) => name === "classify_evidence_cmd")).toHaveLength(2));
+});
+
+test.each([false, true])("todo read failure has retry and keeps previously loaded data=%s", async (previouslyLoaded) => {
+  let fail = !previouslyLoaded;
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    if (name === "list_todos_cmd") {
+      if (fail) throw new Error("数据库打不开");
+      return [task, { ...task, id: "t2", title: "保留选中任务" }] as T;
+    }
+    if (name === "list_applications_cmd") return { items: apps } as T;
+    if (name === "overdue_digest_cmd") return { todos: [], more: 0 } as T;
+    if (name === "reminder_capability_cmd") return { available: false } as T;
+    return {} as T;
+  };
+  const show = mountTodos(invoke);
+  await show();
+  if (previouslyLoaded) {
+    fireEvent.click(document.querySelector('[data-todo="t2"][data-act="select"]')!);
+    fail = true;
+    await show();
+    expect(document.querySelector('[data-todo="t2"][data-act="select"]')!.getAttribute("aria-current")).toBe("true");
+    expect(document.querySelector("#todo-detail h2")!.textContent).toBe("保留选中任务");
+    expect(document.querySelector('[data-filter="open"]')!.textContent).toContain("2");
+    expect(document.getElementById("todo-status")!.textContent).toContain("当前显示上次读取的结果");
+  }
+  expect(document.getElementById("todo-list")!.textContent).toContain("数据库打不开");
+  expect(document.getElementById("todo-list")!.textContent).not.toContain("还没有待办");
+  fail = false;
+  fireEvent.click(document.querySelector('[data-todo-retry]')!);
+  await waitFor(() => expect(document.querySelector('[data-todo-retry]')).toBeNull());
+  expect(document.getElementById("todo-status")!.textContent).toBe("已刷新待办。");
+});

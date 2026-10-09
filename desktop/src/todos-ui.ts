@@ -112,6 +112,7 @@ export function mountTodos(
   /** 一次取回全部状态，筛选在本地做：计数和「一条都没有」才分得清。 */
   let todos: TodoView[] = [];
   let loaded = false;
+  let listError: string | null = null;
   let filter: TodoFilter = "open";
   let selectedId: string | null = null;
   let editing: string | null = null;
@@ -195,9 +196,9 @@ export function mountTodos(
 
   function renderList() {
     renderFilter();
-    shell.classList.toggle("is-empty", loaded && todos.length === 0);
+    shell.classList.toggle("is-empty", loaded && todos.length === 0 && !listError);
     if (!loaded) {
-      list.innerHTML = '<p class="todo-list-note muted">正在读取待办…</p>';
+      list.innerHTML = listError ? readError() : '<p class="todo-list-note muted">正在读取待办…</p>';
       return;
     }
     if (!todos.length) {
@@ -285,7 +286,12 @@ export function mountTodos(
 
   function render() {
     renderList();
+    if (loaded && listError) list.insertAdjacentHTML("afterbegin", readError());
     renderDetail();
+  }
+
+  function readError() {
+    return `<div class="pane-error" role="alert"><p class="note warn">${escapeHtml(listError)}</p><button type="button" data-todo-retry>重新读取</button></div>`;
   }
 
   async function refresh() {
@@ -294,14 +300,18 @@ export function mountTodos(
       // 和「这个状态下没有」。
       todos = await invoke<TodoView[]>("list_todos_cmd", { applicationId: null, status: "all" });
       loaded = true;
+      if (listError) say(null);
+      listError = null;
     } catch (error) {
-      say({ tone: "warn", text: `读取待办失败：${invokeError(error)}` });
-      loaded = true;
-      todos = [];
+      listError = `读取待办失败：${invokeError(error)}${loaded ? "。当前显示上次读取的结果。" : ""}`;
+      say({ tone: "warn", text: listError });
+      render();
+      return false;
     }
     if (selectedId && !todos.some((todo) => todo.id === selectedId)) selectedId = null;
     if (!selectedId) selectedId = firstShown();
     render();
+    return true;
   }
 
   async function loadApplications() {
@@ -595,6 +605,10 @@ export function mountTodos(
   });
 
   list.addEventListener("click", (event) => {
+    if ((event.target as HTMLElement | null)?.closest("button[data-todo-retry]")) {
+      void refresh().then((ok) => { if (ok) say({ tone: "info", text: "已刷新待办。" }); });
+      return;
+    }
     const empty = (event.target as HTMLElement | null)?.closest<HTMLElement>("button[data-empty-act]");
     if (empty) {
       if (empty.dataset.emptyAct === "application") createApplication?.();

@@ -61,7 +61,8 @@ test('associating says what it did and what it did not do', () => {
   assert.match(said, /星河科技/);
   assert.match(said, /已导入，待分类/);
   assert.doesNotMatch(said, /投递|回复了/);
-  assert.match(describeUnassociation().text, /尚未导入回复证据/);
+  assert.match(describeUnassociation().text, /已取消关联.*招聘通知.*待整理/);
+  assert.doesNotMatch(describeUnassociation().text, /回复证据|尚未导入/, '不推断申请是否还有其他材料');
   assert.match(said, /申请详情的「招聘通知」/, '关联之后材料去了哪儿要说出来');
 });
 

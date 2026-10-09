@@ -367,6 +367,8 @@ export function mountInbox(
         if (action) void act(action, item);
       });
     });
+    // 保存期间切换通知或重画详情，新按钮也必须遵守同一个操作锁。
+    setActing(acting);
   }
 
   function setActing(busy: boolean) {
@@ -378,6 +380,7 @@ export function mountInbox(
 
   async function act(action: string, item: EvidencePreview) {
     if (acting) return;
+    const selectionToken = previewToken;
     try {
       if (action === "open") {
         setActing(true);
@@ -416,9 +419,10 @@ export function mountInbox(
           sendMode,
         });
         say(describeClassification(updated ?? ({ replyClass, sendMode } as Partial<EvidenceSummary>)));
-        setActing(false);
         await refresh();
-        await select(item.id);
+        if (selectedId === item.id && previewToken === selectionToken) {
+          await select(item.id);
+        }
       }
     } catch (error) {
       say({ tone: "warn", text: `没能完成这一步：${invokeError(error)}` });
@@ -432,7 +436,7 @@ export function mountInbox(
     await runImport({ paths });
   }
 
-  /** 导入一批。返回是否真的交给了命令层并拿到了结果（失败时调用方保留输入）。 */
+  /** 返回内容是否已保存或确认已存在；收到失败报告不等于导入成功。 */
   async function runImport(args: { paths?: string[]; text?: string }): Promise<boolean> {
     if (importing) {
       say({ tone: "warn", text: "上一批还在导入，等它完成再导入下一批。" });
@@ -442,14 +446,19 @@ export function mountInbox(
     say({ tone: "pending", text: "正在导入…" });
     try {
       const report = await invoke<ImportReport>("import_evidence_cmd", { args });
-      say(describeImport(report));
-      await refresh();
+      const message = describeImport(report);
+      const stored = (report?.imported?.length ?? 0) + (report?.duplicates?.length ?? 0) > 0;
+      say(message);
+      const refreshed = await refresh();
+      if (!refreshed) {
+        say({ tone: "warn", text: `${message.text}列表刷新失败，${stored ? "材料已保存，无需重复导入。" : "内容仍保留，可重试导入。"}` });
+      }
       // 只导入了一条新的：直接打开它，省得再去列表里找。
       const fresh = report?.imported ?? [];
-      if (fresh.length === 1 && fresh[0] && items.some((item) => item.id === fresh[0]!.id)) {
+      if (refreshed && fresh.length === 1 && fresh[0] && items.some((item) => item.id === fresh[0]!.id)) {
         await select(fresh[0].id);
       }
-      return true;
+      return stored;
     } catch (error) {
       say({ tone: "warn", text: `导入失败：${invokeError(error)}` });
       return false;

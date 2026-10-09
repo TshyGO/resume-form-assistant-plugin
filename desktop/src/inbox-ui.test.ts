@@ -55,7 +55,7 @@ class FakeNode {
     const attribute = selector.includes("data-evidence") ? "data-evidence" : "data-act";
     const pattern = new RegExp(`${attribute}="([^"]+)"`, "g");
     return [...this.innerHTML.matchAll(pattern)].map((match) => {
-      const node = new FakeNode(match[1], this.buttons);
+      const node = this.buttons.get(`${attribute}:${match[1]}`) ?? new FakeNode(match[1], this.buttons);
       node.dataset = attribute === "data-evidence" ? { evidence: match[1] } : { act: match[1] };
       this.buttons.set(`${attribute}:${match[1]}`, node);
       return node;

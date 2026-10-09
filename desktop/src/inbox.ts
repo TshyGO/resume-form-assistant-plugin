@@ -134,7 +134,7 @@ export function describeAssociation(result: unknown, company: string | undefined
 }
 
 export function describeUnassociation(): Message {
-  return { tone: "info", text: "已从那条申请里取出，回到「招聘通知」待整理。那条申请回到「尚未导入回复证据」。" };
+  return { tone: "info", text: "已取消关联，这条材料已回到「招聘通知」待整理。" };
 }
 
 export function describeClassification(item: Partial<EvidenceSummary> | null | undefined): Message {
