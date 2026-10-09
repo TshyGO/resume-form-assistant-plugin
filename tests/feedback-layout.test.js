@@ -48,7 +48,10 @@ test('the duplicated 常用字段 list is gone; the 简历字段 tab and manual 
   assert.match(sidepanel, /data-tab="fields"[^>]*>简历字段<\/button>/);
   assert.match(fieldsView, /id="field-search"/);
   assert.match(fieldsView, /id="field-groups"/);
-  assert.match(fieldsView, /「添加」在光标处插入，「替换」覆盖整个输入框，「删除」只去掉这个字段/);
+  // The three action symbols are explained in the 填写指引 card (#261: the row buttons are icons).
+  assert.match(fieldsView, /<strong>添加<\/strong>在光标处插入/);
+  assert.match(fieldsView, /<strong>替换<\/strong>覆盖整个输入框/);
+  assert.match(fieldsView, /<strong>删除<\/strong>只去掉这个字段/);
   // A pointer from the 填写 page to the field tab, not a second list.
   assert.match(fillView, /<button id="show-fields"[^>]*>简历字段<\/button>/);
   assert.match(read('sidepanel.js'), /getElementById\("show-fields"\)\.addEventListener\("click"/);

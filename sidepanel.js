@@ -361,7 +361,7 @@
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
     const [tone, text] = !pageChecked ? ["idle", "正在读取当前网页…"]
       : !pageConnected ? ["idle", "请切换到招聘网页，或刷新网页后再使用侧栏。浏览器自带页面不能填写。"]
-        : desktopMode === "ready" && hasData ? ["ok", "网页已就绪：可以一键填写，也可以到「简历字段」手动补填。"]
+        : desktopMode === "ready" && hasData ? ["ok", "可一键填写，或到「简历字段」手动补填"]
           : ["warn", "网页已连接；桌面简历可用后即可填写。"];
     elements.pageReady.dataset.tone = tone;
     elements.pageReady.textContent = text;
@@ -411,7 +411,8 @@
       const occurrence = groupOccurrences.get(group.name) || 0;
       groupOccurrences.set(group.name, occurrence + 1);
       const groupKey = JSON.stringify([group.name, occurrence]);
-      const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
+      // Every group starts folded; the user opens the one they need (#261).
+      const open = oldGroups.length > 0 && openGroupKeys.has(groupKey);
       return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
         <summary><span class="group-icon" aria-hidden="true">${groupIcon(group.name)}</span><span class="group-name">${escapeHtml(group.name)}</span><small>${rows.length} 项</small><span class="field-group__chevron" aria-hidden="true">›</span></summary>
         <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
@@ -476,7 +477,7 @@
     const query = elements.fieldSearch.value.trim().toLocaleLowerCase();
     let visible = 0;
     const groups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
-    groups.forEach((group, index) => {
+    groups.forEach((group) => {
       const groupMatches = group.querySelector("summary").textContent.toLocaleLowerCase().includes(query);
       let rowCount = 0;
       group.querySelectorAll(".field-row").forEach((row) => {
@@ -487,7 +488,7 @@
       group.hidden = Boolean(query) && rowCount === 0;
       if (!group.hidden) visible += 1;
       if (query && rowCount) group.open = true;
-      if (!query && !preserveOpen) group.open = index === 0;
+      if (!query && !preserveOpen) group.open = false;
     });
     elements.fieldEmpty.hidden = visible !== 0;
   }
@@ -1803,6 +1804,10 @@
       item.tabIndex = item.dataset.tab === tab ? 0 : -1;
     });
     document.querySelectorAll(".dock-view").forEach((view) => { view.hidden = view.dataset.view !== tab; });
+    // Coming to 简历字段 shows the groups folded, unless a search is narrowing them.
+    if (tab === "fields" && !elements.fieldSearch.value.trim()) {
+      elements.fieldGroups.querySelectorAll?.(".field-group").forEach((group) => { group.open = false; });
+    }
   }
   tabButtons.forEach((button, index) => {
     button.addEventListener("click", () => selectTab(button.dataset.tab));
@@ -1817,16 +1822,6 @@
   });
   elements.taskExit.addEventListener("click", () => {
     if (taskExitTarget && !taskExitTarget.disabled && !taskExitTarget.hidden) taskExitTarget.click?.();
-  });
-  // The ··· menu closes like a menu: Escape (back to its button) or a click elsewhere.
-  const toolsMenu = document.querySelector(".dock-tools");
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || !toolsMenu?.open) return;
-    toolsMenu.open = false;
-    toolsMenu.querySelector?.("summary")?.focus?.();
-  });
-  document.addEventListener("click", (event) => {
-    if (toolsMenu?.open && toolsMenu.contains && !toolsMenu.contains(event.target)) toolsMenu.open = false;
   });
   document.getElementById("show-fields").addEventListener("click", () => document.querySelector('.dock-tabs button[data-tab="fields"]').click());
   elements.fieldSearch.addEventListener("input", () => filterFields());
@@ -1949,14 +1944,6 @@
     }
     return false;
   });
-  document.querySelectorAll("[data-advanced]").forEach((button) => button.addEventListener("click", async () => {
-    document.querySelector(".dock-tools").open = false;
-    const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
-    const done = {
-      close: "网页高级控件已收起。"
-    }[button.dataset.advanced] || "请在网页上的高级控件中继续操作。";
-    toast(result?.ok ? done : result?.error || "无法打开工具。");
-  }));
   elements.jobSaveButton.addEventListener("click", async () => {
     const result = await jobRequest({ type: "RESUME_PANEL_SAVE_DRAFT" });
     if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");

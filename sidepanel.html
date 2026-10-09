@@ -18,12 +18,6 @@
               <span class="dock-brand__sub">填网申 · 管投递</span>
             </div>
           </div>
-          <details class="dock-tools">
-            <summary aria-label="更多工具" title="更多工具"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></summary>
-            <div class="dock-tools__menu">
-              <button type="button" data-advanced="close">收起网页高级控件</button>
-            </div>
-          </details>
         </div>
       </header>
       <nav class="dock-tabs" role="tablist" aria-label="侧边栏视图">
@@ -308,7 +302,12 @@
                 <h2 id="guide-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>填写指引</h2>
                 <span id="target-state" class="chip" role="status" aria-live="polite" hidden></span>
               </div>
-              <p class="target-note">先点击网页上的输入框，再选择字段；切到侧栏后会记住输入框和光标位置。「添加」在光标处插入，「替换」覆盖整个输入框，「删除」只去掉这个字段。</p>
+              <p class="target-note">先点网页上的输入框，再点字段内容直接填入；切到侧栏后会记住输入框和光标位置。输入框已有内容时，用字段右侧的符号：</p>
+              <ul class="action-legend">
+                <li><span class="legend-icon is-add"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><strong>添加</strong>在光标处插入</li>
+                <li><span class="legend-icon is-replace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><strong>替换</strong>覆盖整个输入框</li>
+                <li><span class="legend-icon is-remove"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></span><strong>删除</strong>只去掉这个字段</li>
+              </ul>
             </section>
             <div id="field-groups" class="field-groups"></div>
             <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。换个关键词，或清空搜索查看全部分组。</p>

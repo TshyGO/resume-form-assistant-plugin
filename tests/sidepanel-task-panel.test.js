@@ -26,6 +26,10 @@ test('every multi-step flow sits in the one task panel; the entries stay on the 
   assert.equal(html.split('id="task-panel"').length, 2, 'one panel');
 });
 
+test('the header has no ··· menu: the page has no advanced controls left to fold', () => {
+  assert.doesNotMatch(html, /dock-tools|data-advanced=|收起网页高级控件/);
+});
+
 test('the pages keep Manifest V3 rules: no inline scripts or handlers', () => {
   for (const file of ['sidepanel.html', 'popup.html']) {
     const page = read(file);

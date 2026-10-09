@@ -13,7 +13,8 @@
     { id: "replace", label: "替换" },
     { id: "remove", label: "删除" }
   ];
-  // Line icons beside each label; 删除 shows its icon only and keeps its name for screen readers.
+  // Icon-only buttons (#261): each keeps its name for screen readers, and the 填写指引 card
+  // explains the three symbols.
   const ICONS = {
     add: '<path d="M12 5v14M5 12h14"/>',
     replace: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
@@ -60,7 +61,7 @@
     const id = escapeHtml(field.chipId);
     const key = escapeHtml(field.key);
     const search = variant === "group" ? ` data-search="${escapeHtml(`${field.key} ${field.value}`.toLocaleLowerCase())}"` : "";
-    const buttons = ACTIONS.map((action) => `<button type="button" class="field-row__action" data-chip-id="${id}" data-action="${action.id}" aria-label="${action.label} ${key}" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[action.id]}</svg><span${action.id === "remove" ? ' class="sr-only"' : ""}>${action.label}</span></button>`).join("");
+    const buttons = ACTIONS.map((action) => `<button type="button" class="field-row__action" data-chip-id="${id}" data-action="${action.id}" aria-label="${action.label} ${key}" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[action.id]}</svg><span class="sr-only">${action.label}</span></button>`).join("");
     return `<div class="field-row field-row--${variant}" data-chip-id="${id}"${search}><button type="button" class="field-row__fill" data-role="fill" data-chip-id="${id}" aria-pressed="false"><span class="row-key">${key}</span><span class="row-value">${escapeHtml(field.value)}</span></button><span class="field-row__actions" role="group" aria-label="${key}">${buttons}</span></div>`;
   }
 
