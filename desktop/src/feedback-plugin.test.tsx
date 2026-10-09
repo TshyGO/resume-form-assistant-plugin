@@ -84,14 +84,14 @@ test('the side-panel choice says why and what is sent, sits after the fill butto
   // The explanation comes before the buttons that answer it; showing it is not an answer.
   const why = within(notice).getByText(/只有一句「填不上」/);
   expect(why.compareDocumentPosition(button('同意并开启')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByText('自动错误报告：未开启（在「插件状态」中设置）')).toBeTruthy();
+  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
   expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
 });
 
 test('同意并开启 is the only way the side panel turns reports on', async () => {
   const { calls } = setup();
   fireEvent.click(await screen.findByRole('button', { name: '同意并开启' }));
-  await screen.findByText('自动错误报告：已开启（在「插件状态」中设置）');
+  await screen.findByText('自动错误报告：已开启');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
   await screen.findByText('已开启自动错误报告，谢谢。');
@@ -101,7 +101,7 @@ test('同意并开启 is the only way the side panel turns reports on', async ()
 test('暂不开启 records the answer and leaves manual feedback working', async () => {
   const { calls, sends } = setup();
   fireEvent.click(await screen.findByRole('button', { name: '暂不开启' }));
-  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
+  await screen.findByText('自动错误报告：已关闭');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: false }]);
   await screen.findByText(/手动反馈问题不受影响/);
@@ -118,7 +118,7 @@ test('a failed save keeps the choice on screen; an unanswered choice comes back 
   await screen.findByText('设置未保存，请重试。');
   expect(screen.getByRole('region', { name: NOTICE })).toBeTruthy();
   expect(button('同意并开启').disabled).toBe(false);
-  expect(screen.getByText('自动错误报告：未开启（在「插件状态」中设置）')).toBeTruthy();
+  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
   setup();
   expect(await screen.findByRole('region', { name: NOTICE })).toBeTruthy();
 });
@@ -135,10 +135,12 @@ test('a failed save on the status page puts the switch back', async () => {
 
 test('a side panel opened after the choice was made shows only the state line', async () => {
   setup('', '/sidepanel.html', { consent: false, decided: true });
-  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
+  await screen.findByText('自动错误报告：已关闭');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(screen.queryByRole('checkbox', { name: /自动错误报告/ })).toBeNull();
   expect(screen.queryByRole('button', { name: /说明/ })).toBeNull();
+  // Changing it is on the status page; the side panel only links there (#261).
+  expect(button('在「插件状态」中设置')).toBeTruthy();
 });
 
 test('while undecided the status page keeps the explanation open with the same two answers', async () => {

@@ -15,6 +15,7 @@
   // The side panel shows the preference as one line plus the choice of its own while the user has
   // not chosen. The status page owns the switch and unfolds the same explanation inside its card.
   const compact = autoRoot.dataset.variant === 'compact';
+  const BUG = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="8" width="10" height="12" rx="5"/><path d="M9.5 8a2.5 2.5 0 0 1 5 0M12 12v5M3 13h4M17 13h4M4 7l3 2M20 7l-3 2M4 19l3-2M20 19l-3-2"/></svg>';
   const explanation = `
       <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「填不上」「用不了」，看不出是哪个网站、卡在哪一步，很难找到原因。开启自动错误报告后，插件出错或一键填写有字段没填上时，会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
       <p class="feedback-note">报告里只有技术信息：错误类型、出错的代码位置、插件版本、系统、发送时间和一个随机生成的安装编号。网页上出的问题还会带上网站域名和这次填写的统计，比如页面路径（其中的编号会去掉）、字段和控件的数量与类型、填上了多少、用时、卡在哪一步。不包含你的简历、填写的内容、页面上的文字、完整网址、Cookie 或密钥。</p>
@@ -34,14 +35,21 @@
     <div class="feedback-auto-line">
       <span id="feedback-auto-state">自动错误报告：正在读取…</span>
       <button type="button" id="feedback-retry" class="feedback-link" hidden>重新读取设置</button>
+      <button type="button" id="feedback-open-status" class="feedback-link">在「插件状态」中设置</button>
       <p id="feedback-auto-status" role="status" aria-live="polite"></p>
     </div>` : `
-    <section class="feedback-card" aria-labelledby="feedback-auto-title">
-      <h2 id="feedback-auto-title">自动错误报告</h2>
-      <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
+    <section class="feedback-card feedback-auto" aria-labelledby="feedback-auto-title">
+      <div class="feedback-auto-head">
+        <span class="card-icon" aria-hidden="true">${BUG}</span>
+        <div class="feedback-auto-heading">
+          <h2 id="feedback-auto-title">自动错误报告</h2>
+          <p class="feedback-sub">开启后，出错时只发送去掉个人信息的技术诊断</p>
+        </div>
+        <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
+      </div>
       <p id="feedback-auto-state" class="feedback-state">正在读取设置…</p>
-      <p class="feedback-note">你同意后才会开启。关闭后删除安装编号，不影响侧栏里的「手动反馈问题」。插件和桌面程序分开设置。</p>
-      <div class="feedback-actions">
+      <p class="feedback-note feedback-box">你同意后才会开启。关闭后删除安装编号，不影响侧栏里的「手动反馈问题」。插件和桌面程序分开设置。</p>
+      <div class="feedback-actions feedback-actions--end">
         <button type="button" id="feedback-about" aria-expanded="false" aria-controls="feedback-details" hidden>查看完整说明</button>
         <button type="button" id="feedback-retry" hidden>重新读取设置</button>
       </div>
@@ -57,7 +65,7 @@
   if (manualRoot) manualRoot.innerHTML = `
     <section class="feedback-card feedback-manual" aria-labelledby="feedback-manual-title">
       <div class="feedback-head">
-        <h2 id="feedback-manual-title">手动反馈问题</h2>
+        <span class="feedback-head__title">${BUG}<h2 id="feedback-manual-title">手动反馈问题</h2></span>
         <button type="button" id="feedback-expand" aria-expanded="false" aria-controls="feedback-form">展开</button>
       </div>
       <p id="feedback-summary" class="feedback-summary" role="status" aria-live="polite"></p>
@@ -122,7 +130,8 @@
       $('toggle').checked = result.consent === true; $('toggle').disabled = !known || savingConsent;
     }
     const state = !known ? '无法读取设置' : undecided ? '未开启' : result.consent ? '已开启' : '已关闭';
-    $('auto-state').textContent = compact ? `自动错误报告：${state}${known ? '（在「插件状态」中设置）' : ''}`
+    $('auto-state').dataset.tone = !known ? 'unknown' : result.consent === true ? 'on' : 'off';
+    $('auto-state').textContent = compact ? `自动错误报告：${state}`
       : !known ? '无法读取设置。' : undecided ? '未开启：你选择之前不会自动发送任何报告。'
       : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;
@@ -144,6 +153,8 @@
   }
   const refresh = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
   $('retry').onclick = refresh;
+  // The side panel only shows the state; changing it is on the status page.
+  if ($('open-status')) $('open-status').onclick = () => chrome.runtime.openOptionsPage?.();
   if ($('enable')) $('enable').onclick = () => { aboutOpen = false; consent(true); };
   if ($('decline')) $('decline').onclick = () => { aboutOpen = false; consent(false); };
   if ($('toggle')) $('toggle').onchange = () => {

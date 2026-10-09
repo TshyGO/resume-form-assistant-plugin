@@ -115,6 +115,17 @@
     fillProgressPhase: document.getElementById("fill-progress-phase"),
     fillReason: document.getElementById("fill-reason"),
     targetState: document.getElementById("target-state"),
+    desktopPill: document.getElementById("desktop-pill"),
+    pageDomain: document.getElementById("page-domain"),
+    pageReady: document.getElementById("page-ready"),
+    templateMeta: document.getElementById("template-meta"),
+    pluginVersion: document.getElementById("plugin-version"),
+    fieldsTemplate: document.getElementById("fields-template"),
+    jobSummary: document.getElementById("job-summary"),
+    jobSummaryTitle: document.getElementById("job-summary-title"),
+    jobSummaryMeta: document.getElementById("job-summary-meta"),
+    jobSummaryBadge: document.getElementById("job-summary-badge"),
+    queueState: document.getElementById("queue-state"),
     fillHome: document.getElementById("fill-home"),
     taskPanel: document.getElementById("task-panel"),
     taskIcon: document.getElementById("task-icon"),
@@ -140,6 +151,10 @@
   let lastPageStatus = null;
   // Set once the first page status has come back, so "no page" is not claimed before it is known.
   let pageChecked = false;
+  let pageConnected = false;
+  // The job the page actually read for this tab and address (#261): shown only once the page
+  // reported it in a save or submission draft, never guessed from the page itself.
+  let jobSeen = null;
   let toastTimer = null;
   let statusPolling = false;
   // The page's save-job draft as last rendered. The page owns it; the panel only shows it
@@ -305,6 +320,11 @@
       elements.desktopConnectionAction.textContent = copy.action;
     }
     elements.configState.textContent = copy ? "桌面简历当前不可用" : "简历数据来自桌面程序";
+    const pill = { ready: ["已连接", "ok"], empty: ["已连接", "ok"], not_installed: ["未安装桌面", "error"], incompatible: ["桌面需更新", "error"],
+      not_paired: ["未配对", "warn"], never_paired: ["未配对", "warn"] }[mode] || ["桌面未响应", "warn"];
+    elements.desktopPill.textContent = storeLoaded ? pill[0] : "正在连接";
+    elements.desktopPill.dataset.tone = storeLoaded ? pill[1] : "idle";
+    renderPageCard();
     elements.templateSelect.disabled = Boolean(copy) || !(currentStore?.templates?.length);
     // No template is not an error: the profile alone can still fill. Say where templates come from.
     elements.templateEmpty.hidden = desktopMode !== "ready" || Boolean(currentStore?.templates?.length);
@@ -313,19 +333,77 @@
     document.getElementById("open-manager").textContent = copy?.action || "打开桌面";
   }
 
+  // A line icon by what the group is about; decoration only.
+  const GROUP_ICONS = [
+    [/我的信息/, '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c1.2-3.4 3.8-5 7-5s5.8 1.6 7 5"/>'],
+    [/教育|学历|学校/, '<path d="m3 9 9-4 9 4-9 4z"/><path d="M7 11v4c1.5 1.4 3.2 2 5 2s3.5-.6 5-2v-4M21 9v5"/>'],
+    [/论文|专利|出版|发表/, '<path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6M9 14h6M9 18h4"/>'],
+    [/科研|项目|研究/, '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7.5 15h9"/>'],
+    [/工作|实习|经历|任职/, '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/>'],
+    [/技能|证书|语言|荣誉|奖/, '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>'],
+    [/会议|报告|讲座/, '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8M7 12l3-3 2 2 4-4"/>'],
+    [/评价|自我|简介|介绍/, '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>'],
+    [/基本|个人|联系/, '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.7-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h4"/>']
+  ];
+  function groupIcon(name) {
+    const path = GROUP_ICONS.find(([pattern]) => pattern.test(name))?.[1] || '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>';
+    return `<svg class="icon" viewBox="0 0 24 24">${path}</svg>`;
+  }
+
+  // The 当前网页 card: whether this tab has the page controller, its host name (http/https
+  // only, nothing else of the address), and in one line whether filling can start.
+  let pageHost = "";
+  function renderPageCard() {
+    elements.pageState.textContent = pageConnected ? "当前网页已连接填表助手" : pageChecked ? "当前页面无法使用填表助手" : "正在连接当前网页…";
+    elements.pageState.classList.toggle("is-unavailable", !pageConnected);
+    elements.pageDomain.hidden = !pageConnected || !pageHost;
+    elements.pageDomain.textContent = pageConnected ? pageHost : "";
+    const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
+    const [tone, text] = !pageChecked ? ["idle", "正在读取当前网页…"]
+      : !pageConnected ? ["idle", "请切换到招聘网页，或刷新网页后再使用侧栏。浏览器自带页面不能填写。"]
+        : desktopMode === "ready" && hasData ? ["ok", "网页已就绪：可以一键填写，也可以到「简历字段」手动补填。"]
+          : ["warn", "网页已连接；桌面简历可用后即可填写。"];
+    elements.pageReady.dataset.tone = tone;
+    elements.pageReady.textContent = text;
+  }
+  function hostOf(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.hostname : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function noteJob(fields, tabId) {
+    if (!fields || !(fields.company || fields.title) || tabId === null) return;
+    jobSeen = { tabId, host: pageHost, company: String(fields.company || ""), title: String(fields.title || ""), location: String(fields.location || "") };
+    renderJobSummary();
+  }
+  function renderJobSummary() {
+    const job = jobSeen && jobSeen.tabId === currentTabId ? jobSeen : null;
+    elements.jobSummary.hidden = !job;
+    elements.jobSummaryBadge.hidden = !job;
+    elements.jobSummaryTitle.textContent = job ? job.title || "岗位名称未识别" : "";
+    elements.jobSummaryMeta.textContent = job ? [job.company || "公司未识别", job.location].filter(Boolean).join(" · ") : "";
+  }
+
   function renderFromStore() {
     const oldGroups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
     const openGroupKeys = new Set(oldGroups.filter((group) => group.open).map((group) => group.dataset.groupKey));
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
-      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)} · ${template.fieldCount} 个字段</option>`).join("")
+      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)}</option>`).join("")
       : '<option value="">暂无模板</option>';
     renderDesktopMode();
 
     const groups = groupedFields();
     const fields = visibleFields(groups);
-    elements.fieldMeta.textContent = `${selected?.name || "我的信息"} · ${groups.length} 个分组 · ${fields.length} 项`;
+    elements.fieldMeta.textContent = `${groups.length} 个分组 · ${fields.length} 项`;
+    elements.fieldsTemplate.textContent = selected?.name || "我的信息";
+    const selectedInfo = templates.find((template) => template.id === selected?.id);
+    elements.templateMeta.textContent = selectedInfo ? `${selectedInfo.fieldCount} 个字段 · 共 ${templates.length} 份模板` : templates.length ? "" : "暂无模板";
     const groupOccurrences = new Map();
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
@@ -335,7 +413,7 @@
       const groupKey = JSON.stringify([group.name, occurrence]);
       const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
       return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
-        <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
+        <summary><span class="group-icon" aria-hidden="true">${groupIcon(group.name)}</span><span class="group-name">${escapeHtml(group.name)}</span><small>${rows.length} 项</small><span class="field-group__chevron" aria-hidden="true">›</span></summary>
         <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
       </details>`;
     }).join("");
@@ -363,8 +441,15 @@
 
   function renderTargetState() {
     self.ResumeProCompose.applyTargetState([elements.fieldGroups], targetState);
-    elements.targetState.textContent = describeTarget();
-    elements.targetState.classList?.toggle("is-ready", targetState.targetAvailable);
+    // A short badge in the guide card; the full sentence stays available as its title.
+    const long = describeTarget();
+    const short = !long ? "" : currentTabId === null ? "网页未连接" : !targetState.targetAvailable ? "未选中输入框"
+      : !targetState.composable ? "已选中特殊控件" : targetState.empty ? "已选中空输入框" : "已选中输入框";
+    elements.targetState.hidden = !short;
+    elements.targetState.textContent = short;
+    elements.targetState.title = long;
+    elements.targetState.setAttribute?.("aria-label", long);
+    elements.targetState.classList?.toggle("chip--ok", Boolean(short) && targetState.targetAvailable);
   }
 
   function clearTargetState() {
@@ -424,7 +509,7 @@
     // A disabled button says why, in the card, not only in a tooltip.
     let reason = "";
     if (!filling && !repeating) {
-      if (currentTabId === null) reason = pageChecked ? "当前网页没有连接填表助手，请在招聘网页中打开侧栏后再填写。" : "";
+      if (currentTabId === null) reason = "";
       else if (desktopMode !== "ready") reason = "桌面简历当前不可用，处理上方提示后即可填写。";
       else if (!hasData) reason = "桌面里还没有可用的简历数据，请先到桌面创建模板或填写「我的信息」。";
       else if (!selectedTemplate()) reason = "「AI 辅助新增条目」需要先在桌面选一份简历模板。";
@@ -808,6 +893,8 @@
   function renderQueue() {
     const total = self.ResumeProQueue.queueTotal(queueReply);
     elements.queueCount.textContent = `${total} 条`;
+    // Never "synced": an empty list only means nothing here is waiting.
+    elements.queueState.textContent = total ? "还没有写入桌面，点开处理" : "没有待处理的记录";
     elements.queueToggle.classList.toggle("has-items", total > 0);
     elements.queueEmpty.hidden = queueRows.length > 0;
     elements.queueList.innerHTML = self.ResumeProQueue.renderRows(queueRows, queueUi, { focusKey: queueFocus });
@@ -1032,6 +1119,8 @@
     if (next && jobSave && next.draftId === jobSave.draftId && next.version < jobSave.version && jobSave.tabId === tabId) return;
     jobSave = next ? { ...next, tabId } : null;
     if (!next) jobLocalError = "";
+    if (next?.fields) noteJob(next.fields, tabId);
+    if (!next && snapshot?.discarded === "page-changed") { jobSeen = null; renderJobSummary(); }
     renderJobSave();
   }
 
@@ -1222,6 +1311,8 @@
     }
     submitConfirm = next ? { ...next, tabId } : null;
     if (!next) submitLocalError = "";
+    if (next?.fields) noteJob(next.fields, tabId);
+    if (!next && snapshot.discarded === "page-changed") { jobSeen = null; renderJobSummary(); }
     renderJobSave();
   }
 
@@ -1582,6 +1673,10 @@
       const epoch = tabEpoch;
       const tab = await activeTab();
       const nextTabId = tab?.id || null;
+      const nextHost = hostOf(tab?.url);
+      // Another tab, or this tab on another site: the job read before is not this page's.
+      if (jobSeen && (jobSeen.tabId !== nextTabId || jobSeen.host !== nextHost)) jobSeen = null;
+      pageHost = nextHost;
       if (nextTabId !== currentTabId) {
         elements.fillResult.hidden = true;
         elements.fillResult.textContent = "";
@@ -1611,8 +1706,9 @@
       if ((front?.id || null) !== polledTabId || epoch !== tabEpoch) { statusRepoll = true; return; }
       const connected = Boolean(response?.ready);
       pageChecked = true;
-      elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
-      elements.pageState.classList.toggle("is-unavailable", !connected);
+      pageConnected = connected;
+      renderPageCard();
+      renderJobSummary();
       if (!connected) currentTabId = null;
       lastPageStatus = connected ? response : null;
       updateFillAvailability(lastPageStatus);
@@ -2092,6 +2188,9 @@
   }
   // Connection details and anything left over from the 0.4.0 migration live on the status page.
   document.getElementById("open-status").addEventListener("click", () => { chrome.runtime.openOptionsPage?.(); });
+  const version = chrome.runtime.getManifest?.()?.version || "";
+  elements.pluginVersion.textContent = version ? `插件 v${version}` : "";
+  elements.pluginVersion.hidden = !version;
   document.getElementById("legacy-hint-open").addEventListener("click", async () => {
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");

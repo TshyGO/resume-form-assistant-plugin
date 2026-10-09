@@ -12,35 +12,42 @@
       <div class="brand">
         <img class="brand-mark" src="icons/icon48.png" width="32" height="32" alt="">
         <span class="brand-name">网申快填</span>
-        <span class="brand-version">插件 <span id="plugin-version"></span></span>
+        <span class="brand-version">v<span id="plugin-version-top"></span></span>
+        <p class="status-pill" id="desktop-pill" data-tone="idle">正在连接桌面…</p>
       </div>
-      <p class="status-pill" id="desktop-pill" data-tone="idle">正在连接桌面…</p>
     </header>
 
     <main class="status-page">
-      <div class="page-head">
-        <h1>插件状态</h1>
-        <p class="muted">简历模板、「我的信息」和 AI 配置都在桌面程序里管理，插件只负责在网页上填写和记录投递。</p>
+      <div class="hero">
+        <span class="hero-mark"><img src="icons/icon128.png" width="64" height="64" alt=""><span id="hero-dot" class="hero-dot" data-tone="idle" aria-hidden="true"></span></span>
+        <h1>网申快填 <span class="hero-tag">浏览器插件</span></h1>
+        <p class="muted">简历一键快填与投递管理 · 插件 <span id="plugin-version"></span></p>
       </div>
 
       <section class="card" aria-labelledby="desktop-title">
-        <div class="card-head">
+        <div class="card-head card-head--split">
           <span class="card-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
-          <h2 id="desktop-title">桌面程序</h2>
+          <div class="card-heading">
+            <h2 id="desktop-title">桌面程序连接状态 <span id="desktop-chip" class="chip" data-tone="idle">正在检测</span></h2>
+            <p id="desktop-text" class="card-sub" role="status">正在连接桌面…</p>
+          </div>
+          <div class="actions actions--head">
+            <button type="button" id="desktop-action" class="primary" hidden></button>
+            <button type="button" id="desktop-open" class="primary with-icon" hidden>打开桌面</button>
+            <button type="button" id="desktop-recheck">重新检测</button>
+          </div>
         </div>
-        <p id="desktop-text" role="status">正在连接桌面…</p>
-        <div class="actions">
-          <button type="button" id="desktop-action" class="primary" hidden></button>
-          <button type="button" id="desktop-open" class="primary" hidden>打开桌面</button>
-          <button type="button" id="desktop-recheck">重新检测</button>
-        </div>
+        <p class="info-box">简历模板、「我的信息」和 AI 配置都在桌面程序里管理，插件只负责在网页上填写和记录投递。</p>
         <p id="desktop-result" class="result" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="card" id="migration" aria-labelledby="migration-title" hidden>
-        <div class="card-head">
+        <div class="card-head card-head--split">
           <span class="card-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M4 12h12"/><path d="m12 6 6 6-6 6"/><path d="M20 4v16"/></svg></span>
-          <h2 id="migration-title">旧数据迁移</h2>
+          <div class="card-heading">
+            <h2 id="migration-title" tabindex="-1">旧数据迁移</h2>
+            <p class="card-sub">0.4.0 留在插件里的模板、「我的信息」和 AI 配置</p>
+          </div>
         </div>
         <p id="migration-text" role="status"></p>
         <ul id="migration-notes" class="notes"></ul>

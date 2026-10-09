@@ -118,6 +118,9 @@
     const [pill, tone] = PILL[mode] || PILL.unavailable;
     $("desktop-pill").textContent = pill;
     $("desktop-pill").dataset.tone = tone;
+    $("desktop-chip").textContent = mode === "ready" ? "已连接桌面程序" : pill;
+    $("desktop-chip").dataset.tone = tone;
+    $("hero-dot").dataset.tone = tone;
     const action = $("desktop-action");
     action.hidden = !view.action;
     if (view.action) {
@@ -236,6 +239,7 @@
   });
 
   $("plugin-version").textContent = chrome.runtime.getManifest().version;
+  $("plugin-version-top").textContent = chrome.runtime.getManifest().version;
   renderDesktop().catch(() => {});
   renderMigration().catch(() => {});
 })();
