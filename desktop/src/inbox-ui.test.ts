@@ -11,6 +11,30 @@ class FakeNode {
   innerHTML = "";
   textContent = "";
   dataset: Record<string, string> = {};
+  open = false;
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  classes = new Set<string>();
+  classList = {
+    toggle: (name: string, on?: boolean) => {
+      const next = on ?? !this.classes.has(name);
+      if (next) this.classes.add(name);
+      else this.classes.delete(name);
+      return next;
+    },
+    contains: (name: string) => this.classes.has(name),
+    add: (name: string) => void this.classes.add(name),
+    remove: (name: string) => void this.classes.delete(name),
+  };
+  attributes: Record<string, string> = {};
+  setAttribute(name: string, value: string) { this.attributes[name] = value; }
+  removeAttribute(name: string) { delete this.attributes[name]; }
+  querySelector() { return null; }
+  insertAdjacentHTML(_where: string, html: string) { this.innerHTML += html; }
+  disabled = false;
+  readOnly = false;
+  focus() {}
+  placeholder = "";
   listeners: Record<string, (event: unknown) => unknown> = {};
   private readonly buttons: Map<string, FakeNode>;
 
@@ -97,8 +121,14 @@ const MAIL = {
 test('an empty inbox explains itself without claiming nobody replied', async () => {
   const h = harness();
   await h.api.refresh();
-  assert.match(h.el('inbox-list').innerHTML, /没有待处理的证据/);
+  assert.match(h.el('inbox-list').innerHTML, /没有待整理的通知/);
   assert.doesNotMatch(h.el('inbox-list').innerHTML, /未回复|没有回复/);
+  const page = h.el('inbox-preview').innerHTML;
+  assert.match(page, /data-empty-act="pick"/, '空状态直接给导入入口');
+  assert.match(page, /data-empty-act="paste"/);
+  assert.match(page, /保存在本机/);
+  assert.doesNotMatch(page, /未回复|没有回复|同步邮箱/);
+  assert.equal(h.el('inbox-shell').classList.contains('is-empty'), true);
 });
 
 test('dropped files are imported by path and the result is reported', async () => {
@@ -249,10 +279,31 @@ test('pasted text is imported as text and the box is cleared', async () => {
     ? { imported: [{ ...MAIL, kind: 'paste' }], duplicates: [], failed: [] }
     : undefined));
   h.el('inbox-paste').value = '他们说下周二面试。';
-  await h.el('inbox-paste-save').emit('click');
+  await h.el('inbox-paste-form').emit('submit');
   await h.tick();
   assert.deepEqual(h.callArgs('import_evidence_cmd').args, { text: '他们说下周二面试。' });
   assert.equal(h.el('inbox-paste').value, '');
+});
+
+test('a paste that fails to import keeps the text in the box and says why', async () => {
+  const h = harness((name) => {
+    if (name === 'import_evidence_cmd') throw { code: 'STORAGE', message: '磁盘满了' };
+    return undefined;
+  });
+  h.el('inbox-paste-dialog').open = true;
+  h.el('inbox-paste').value = '这一大段不能丢';
+  await h.api.submitPaste();
+  assert.equal(h.el('inbox-paste').value, '这一大段不能丢');
+  assert.equal(h.el('inbox-paste-dialog').open, true, '失败时弹窗不关');
+  assert.match(h.el('inbox-paste-status').textContent, /磁盘满了/);
+});
+
+test('an empty paste is refused inside the dialog without calling the host', async () => {
+  const h = harness();
+  h.el('inbox-paste').value = '   ';
+  await h.api.submitPaste();
+  assert.equal(h.calls.some((call) => call.name === 'import_evidence_cmd'), false);
+  assert.match(h.el('inbox-paste-status').textContent, /先粘贴/);
 });
 
 test('a preview that answers late cannot replace the one selected after it', async () => {

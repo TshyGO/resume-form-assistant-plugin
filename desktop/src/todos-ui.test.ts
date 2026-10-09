@@ -19,6 +19,26 @@ class FakeNode {
   focus() {}
   querySelectorAll() { return []; }
   dataset: Record<string, string> = {};
+  classes = new Set<string>();
+  classList = {
+    toggle: (name: string, on?: boolean) => {
+      const next = on ?? !this.classes.has(name);
+      if (next) this.classes.add(name);
+      else this.classes.delete(name);
+      return next;
+    },
+    contains: (name: string) => this.classes.has(name),
+    add: (name: string) => void this.classes.add(name),
+    remove: (name: string) => void this.classes.delete(name),
+  };
+  attributes: Record<string, string> = {};
+  setAttribute(name: string, value: string) { this.attributes[name] = value; }
+  removeAttribute(name: string) { delete this.attributes[name]; }
+  querySelector() { return null; }
+  insertAdjacentHTML(_where: string, html: string) { this.innerHTML += html; }
+  disabled = false;
+  readOnly = false;
+  placeholder = "";
   listeners: Record<string, (event: unknown) => unknown> = {};
 
   constructor(id: string) {
@@ -37,11 +57,19 @@ class FakeNode {
     this.value = "";
   }
 
+  /** 点状态筛选里的某一个按钮。 */
+  clickFilter(filter: string) {
+    const target = {
+      closest: (selector: string) => (selector.includes("data-filter") ? { dataset: { filter } } : null),
+    };
+    return this.emit("click", { target });
+  }
+
   /** 从 innerHTML 里挑一个按钮，模拟点击它。 */
   clickButton(todoId: string, act: string) {
     const target = {
       closest: (selector: string) =>
-        selector.startsWith("button")
+        selector.includes("data-todo")
           ? { dataset: { todo: todoId, act } }
           : null,
     };
@@ -64,7 +92,9 @@ function harness(handler?: InvokeHandler) {
     const custom = handler?.(name, args);
     if (custom !== undefined) return custom as T;
     if (name === "reminder_capability_cmd") return { available: true, reason: null } as T;
-    if (name === "list_applications_cmd") return { total: 0, items: [] } as T;
+    if (name === "list_applications_cmd") {
+      return { total: 1, items: [{ id: "a1", company: "合成公司", title: "后端工程师" }] } as T;
+    }
     if (name === "overdue_digest_cmd") return { todos: [], more: 0 } as T;
     if (name === "list_todos_cmd") return [] as T;
     return {} as T;
@@ -119,7 +149,7 @@ test('系统通知不可用时待办照常显示，并写明原因', async () =>
   assert.match(h.el("todo-list").innerHTML, /一面/, "提醒没了不等于待办列表没了");
   assert.match(h.el("todo-reminder-note").textContent, /未授权/);
   assert.match(h.el("todo-reminder-note").textContent, /投递窗口/, "投递窗口要写清楚");
-  assert.match(h.el("todo-list").innerHTML, /未授权/, "这一条为什么不会响也要写出来");
+  assert.match(h.el("todo-detail").innerHTML, /未授权/, "这一条为什么不会响也要写出来");
 });
 
 test('只有日历日的待办在列表里不带时刻', async () => {
@@ -127,9 +157,12 @@ test('只有日历日的待办在列表里不带时刻', async () => {
   await h.show();
 
   const html = h.el("todo-list").innerHTML;
-  assert.match(html, /2026-09-20/);
+  assert.match(html, /9月20日/);
   assert.doesNotMatch(html, /00:00/);
   assert.match(html, /合成公司/, "统一列表要显示关联申请");
+  const detail = h.el("todo-detail").innerHTML;
+  assert.match(detail, /2026-09-20（未定时间）/, "详情里写完整日期");
+  assert.doesNotMatch(detail, /00:00/);
 });
 
 test('新建待办把当地时刻换算成 UTC 再交给命令层', async () => {
@@ -159,6 +192,7 @@ test('保存成功但提醒没登记上，两件事都要说', async () => {
   await h.show();
 
   h.el("todo-title").value = "二面";
+  h.el("todo-application").value = "a1";
   await h.el("todo-form").emit("submit");
 
   const said = h.el("todo-status").textContent;
@@ -174,8 +208,11 @@ test('没有标题不发请求', async () => {
   h.el("todo-title").value = "   ";
   await h.el("todo-form").emit("submit");
 
+  h.el("todo-application").value = "a1";
+  await h.el("todo-form").emit("submit");
+
   assert.equal(h.called("create_todo_cmd").length, 0);
-  assert.match(h.el("todo-status").textContent, /标题/);
+  assert.match(h.el("todo-form-status").textContent, /标题/, "错误写在弹窗里，就近显示");
 });
 
 test('完成一条之后会重新拉列表', async () => {
@@ -199,9 +236,14 @@ test('已完成的待办给的是「重新打开」', async () => {
   );
   await h.show();
 
-  const html = h.el("todo-list").innerHTML;
+  assert.match(h.el("todo-list").innerHTML, /没有未完成的待办/, "筛选没结果和一条都没有是两回事");
+  await h.el("todo-filter").clickFilter("done");
+  await h.el("todo-list").clickButton("t1", "select");
+
+  const html = h.el("todo-detail").innerHTML;
   assert.match(html, /重新打开/);
   assert.doesNotMatch(html, /data-act="done"/, "已经完成的不再给「完成」");
+  assert.doesNotMatch(h.el("todo-list").innerHTML, /data-act="done"/);
 });
 
 test('逾期汇总有内容时才显示那条横幅', async () => {
@@ -225,4 +267,79 @@ test('读列表失败时说出来，不是留一片空白', async () => {
   await h.show();
 
   assert.match(h.el("todo-status").textContent, /数据库打不开/);
+});
+
+test('编辑时清空提醒、时区和轮次，会显式发 null 让命令层清空', async () => {
+  const h = harness((name) =>
+    name === "list_todos_cmd"
+      ? [todo({ duePrecision: "datetime", dueDate: null, dueAtUtc: "2026-09-20T06:00:00Z", timeZone: "Asia/Shanghai", remindAtUtc: "2026-09-20T05:00:00Z", interviewRound: 2 })]
+      : undefined,
+  );
+  await h.show();
+  await h.el("todo-detail").clickButton("t1", "edit");
+
+  assert.equal(h.el("todo-dialog").open, true);
+  assert.equal(h.el("todo-datetime").value, "2026-09-20T14:00", "按待办自己的时区回填墙钟");
+  assert.equal(h.el("todo-remind").value, "2026-09-20T13:00");
+  assert.equal(h.el("todo-round").value, "2");
+  assert.equal(h.el("todo-application").disabled, true, "编辑时关联申请只读");
+
+  h.el("todo-timezone").value = "";
+  h.el("todo-remind").value = "";
+  h.el("todo-round").value = "";
+  await h.el("todo-form").emit("submit");
+
+  const args = h.called("edit_todo_cmd").at(0)?.args?.args as Record<string, unknown>;
+  assert.equal(args.id, "t1");
+  assert.ok("timeZone" in args && args.timeZone === null);
+  assert.ok("remindAtUtc" in args && args.remindAtUtc === null);
+  assert.ok("interviewRound" in args && args.interviewRound === null);
+  assert.equal(args.applicationId, undefined, "编辑不换申请");
+});
+
+test('具体到几点却没填时刻、时区写错、轮次不是整数，都不发请求并就近说明', async () => {
+  const h = harness();
+  await h.show();
+  h.el("todo-title").value = "测评";
+  h.el("todo-application").value = "a1";
+
+  h.el("todo-precision").value = "datetime";
+  await h.el("todo-form").emit("submit");
+  assert.match(h.el("todo-form-status").textContent, /日期和时刻/);
+
+  h.el("todo-datetime").value = "2026-09-14T10:00";
+  h.el("todo-timezone").value = "Mars/Olympus";
+  await h.el("todo-form").emit("submit");
+  assert.match(h.el("todo-form-status").textContent, /时区/);
+
+  h.el("todo-timezone").value = "";
+  h.el("todo-round").value = "1.5";
+  await h.el("todo-form").emit("submit");
+  assert.match(h.el("todo-form-status").textContent, /轮次/);
+  assert.equal(h.called("create_todo_cmd").length, 0);
+});
+
+test('一条申请都没有时，新增待办先领去建申请，不让提交', async () => {
+  const nodes = harness((name) => (name === "list_applications_cmd" ? { total: 0, items: [] } : undefined));
+  await nodes.show();
+  assert.match(nodes.el("todo-list").innerHTML, /去新增申请/, "空状态直接给入口");
+  await nodes.el("todo-new").emit("click");
+  assert.equal(nodes.el("todo-no-apps").hidden, false);
+  assert.equal(nodes.el("todo-submit").disabled, true);
+});
+
+test('筛选在本地做，按钮上带着各状态的数量', async () => {
+  const h = harness((name) =>
+    name === "list_todos_cmd"
+      ? [todo(), todo({ id: "t2", status: "done" }), todo({ id: "t3", status: "cancelled" })]
+      : undefined,
+  );
+  await h.show();
+  assert.deepEqual(h.called("list_todos_cmd").at(-1)?.args, { applicationId: null, status: "all" });
+  const filters = h.el("todo-filter").innerHTML;
+  assert.match(filters, /未完成<span class="segment-count">1</);
+  assert.match(filters, /全部<span class="segment-count">3</);
+  await h.el("todo-filter").clickFilter("cancelled");
+  assert.match(h.el("todo-list").innerHTML, /data-id="t3"/);
+  assert.doesNotMatch(h.el("todo-list").innerHTML, /data-id="t1"/);
 });

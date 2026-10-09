@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ReminderCapability, TodoView } from './api.ts';
 import {
+  describeEmptyFilter,
+  describeRemindAt,
+  shortDue,
   LIFECYCLE_STATES,
   QUIT_WARNING,
   bucketOf,
@@ -197,4 +200,31 @@ test('退出前那句话要同时说清提醒会停、待办还在', () => {
   assert.match(QUIT_WARNING, /不会弹出提醒/);
   assert.match(QUIT_WARNING, /撤销/);
   assert.match(QUIT_WARNING, /待办本身都还在/, "别让用户以为退出会丢数据");
+});
+
+test('列表标签：只有日期的不带时刻，精确时刻按待办自己的时区写钟点', () => {
+  const now = new Date(2026, 8, 13, 10, 0, 0);
+  assert.deepEqual(shortDue(todo({ duePrecision: 'date', dueDate: '2026-09-13' }), now), { text: '今天', tone: 'today' });
+  assert.deepEqual(shortDue(todo({ duePrecision: 'date', dueDate: '2026-09-14' }), now), { text: '明天', tone: 'normal' });
+  assert.deepEqual(shortDue(todo({ duePrecision: 'date', dueDate: '2026-09-12' }), now), { text: '已逾期 · 昨天', tone: 'overdue' });
+  assert.equal(shortDue(todo({ duePrecision: 'date', dueDate: '2026-10-02' }), now).text, '10月2日');
+  assert.equal(shortDue(todo({ duePrecision: 'date', dueDate: '2027-01-02' }), now).text, '2027年1月2日');
+  const zoned = shortDue(
+    todo({ duePrecision: 'datetime', dueDate: null, dueAtUtc: '2026-09-20T06:30:00Z', timeZone: 'Asia/Shanghai' }),
+    now,
+  );
+  assert.equal(zoned.text, '9月20日 14:30');
+  assert.deepEqual(shortDue(todo({ duePrecision: 'none', dueDate: null }), now), { text: '无到期', tone: 'none' });
+  assert.equal(shortDue(todo({ status: 'done', duePrecision: 'date', dueDate: '2026-09-12' }), now).tone, 'closed', '已完成的不再标逾期');
+});
+
+test('提醒时刻：没单独设就说按到期提醒，不编一个时刻', () => {
+  assert.match(describeRemindAt(todo({ duePrecision: 'date', dueDate: '2026-09-20', remindAtUtc: null })), /按到期时间/);
+  assert.equal(describeRemindAt(todo({ duePrecision: 'none', dueDate: null, remindAtUtc: null })), '未设');
+  assert.match(describeRemindAt(todo({ remindAtUtc: '2026-09-20T01:00:00Z', timeZone: 'Asia/Shanghai' })), /09:00/);
+});
+
+test('筛选没结果时按状态说，不和「一条都没有」混在一起', () => {
+  assert.match(describeEmptyFilter('open').title, /未完成/);
+  assert.match(describeEmptyFilter('cancelled').title, /已取消/);
 });

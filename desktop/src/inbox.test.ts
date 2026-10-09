@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CHOOSE_APPLICATION_HINT,
   EMPTY_INBOX,
+  PRIVACY_NOTE,
   describeAssociation,
   describeClassification,
   describeEvidenceMeta,
@@ -12,6 +13,7 @@ import {
   duplicateNote,
   evidenceTitle,
   importErrorText,
+  importedAtLabel,
   replyClassLabel,
   sendModeLabel,
   sizeLabel,
@@ -60,6 +62,7 @@ test('associating says what it did and what it did not do', () => {
   assert.match(said, /已导入，待分类/);
   assert.doesNotMatch(said, /投递|回复了/);
   assert.match(describeUnassociation().text, /尚未导入回复证据/);
+  assert.match(said, /申请详情的「招聘通知」/, '关联之后材料去了哪儿要说出来');
 });
 
 test('a title falls back from subject to filename to kind', () => {
@@ -78,8 +81,10 @@ test('the meta line carries the sender and both times, and sizes read as sizes',
   });
   assert.match(meta, /邮件/);
   assert.match(meta, /hr@example\.test/);
-  assert.match(meta, /发送于 2026-09-12T08:00:00\.000Z/);
-  assert.match(meta, /导入于 2026-09-12T09:00:00\.000Z/);
+  // 时间按本机时区写成「年-月-日 时:分」，不把 UTC 的 ISO 串直接丢给用户。
+  assert.match(meta, new RegExp(`发送于 ${importedAtLabel('2026-09-12T08:00:00.000Z')}`));
+  assert.match(meta, new RegExp(`导入于 ${importedAtLabel('2026-09-12T09:00:00.000Z')}`));
+  assert.doesNotMatch(meta, /T08:00/);
   assert.match(meta, /2\.0 KiB/);
   assert.equal(sizeLabel(999), '999 B');
   assert.equal(sizeLabel(5 * 1024 * 1024), '5.0 MiB');
@@ -92,7 +97,10 @@ test('the duplicate hint counts the others and explains the single copy', () => 
 });
 
 test('the empty inbox and the application hint say the honest thing', () => {
-  assert.match(EMPTY_INBOX, /没有待处理/);
+  assert.match(EMPTY_INBOX, /申请详情/, '关联过的材料去了哪儿要说清楚');
+  assert.match(PRIVACY_NOTE, /本机/);
+  assert.match(PRIVACY_NOTE, /确认/);
+  assert.doesNotMatch(PRIVACY_NOTE, /同步邮箱|自动收信/);
   assert.doesNotMatch(EMPTY_INBOX, /没有回复|未回复/);
   assert.match(CHOOSE_APPLICATION_HINT, /不会替你猜/);
 });
