@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, MutableRefObject } from "react";
 import type { ProfileRecordView } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
 import { profileApi } from "./profile.ts";
@@ -7,7 +7,8 @@ import type { FamilyMember, Profile, ProfileFieldDef } from "./profile.ts";
 import type { Notice } from "./resume-text.ts";
 import type { DesktopEvent, Listen } from "./LegacyImport.tsx";
 import { applyProfileChoices, inspectProfileUpdate, validSeparateName } from "./profile-draft-sync.ts";
-import type { ConflictChoice } from "./profile-draft-sync.ts";
+import type { ConflictChoice, ProfileConflict } from "./profile-draft-sync.ts";
+import { ResumeDialog } from "./ResumeDialog.tsx";
 
 type ProfileChanged = { revision: number; source: "plugin" };
 
@@ -140,7 +141,7 @@ function FieldInput({
   }
   if (def.type === "textarea") {
     return (
-      <label htmlFor={id}>
+      <label htmlFor={id} className="is-wide">
         {label}
         <textarea id={id} value={value} placeholder={def.placeholder} onChange={(event) => onChange(event.target.value)} />
       </label>
@@ -162,7 +163,32 @@ function FieldInput({
   );
 }
 
-export function ProfileForm({ listen }: { listen?: Listen } = {}) {
+/** 简历页拿来问「有没有没保存的修改」，以及导入旧数据后让表单安全地重新核对一次档案。 */
+export interface ProfileProbe {
+  dirty(): boolean;
+  sync(): void;
+}
+
+type Section =
+  | { kind: "schema"; name: string; index: number }
+  | { kind: "family"; name: string }
+  | { kind: "custom"; name: string };
+
+// 左侧的八个分组（#257）：六组固定字段，按 PROFILE_SCHEMA 原顺序，再加家庭成员与补充字段。
+const SECTIONS: Section[] = [
+  ...profileApi.PROFILE_SCHEMA.map((group, index): Section => ({ kind: "schema", name: group.name, index })),
+  { kind: "family", name: profileApi.FAMILY_GROUP },
+  { kind: "custom", name: profileApi.CUSTOM_GROUP },
+];
+
+type ConflictView = { kind: "list" } | { kind: "confirm-remote"; id: string } | { kind: "rename"; id: string; draft: string; error: string | null };
+
+function conflictValue(item: ProfileConflict, side: "local" | "remote"): string {
+  const custom = item.kind === "custom" ? (side === "local" ? item.localItem : item.remoteItem) : undefined;
+  return `${custom ? `${custom.key} — ` : ""}${side === "local" ? item.local : item.remote}`;
+}
+
+export function ProfileForm({ listen, probe }: { listen?: Listen; probe?: MutableRefObject<ProfileProbe | null> } = {}) {
   const invoke = useInvoke();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [revision, setRevision] = useState(0);
@@ -179,10 +205,15 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const [showConflictDetails, setShowConflictDetails] = useState(false);
   const [choices, setChoices] = useState<Record<string, ConflictChoice>>({});
   const [renames, setRenames] = useState<Record<string, string>>({});
-  const [confirmExternalChoice, setConfirmExternalChoice] = useState<string | null>(null);
+  const [conflictView, setConflictView] = useState<ConflictView>({ kind: "list" });
+  const [dialogNotice, setDialogNotice] = useState<string | null>(null);
+  const [dirty, setDirtyState] = useState(false);
+  const [section, setSection] = useState(0);
   const reloadPendingRef = useRef(false);
   const savingRef = useRef(false);
   const reloadButtonRef = useRef<HTMLButtonElement>(null);
+  // 刚新增的家庭成员/补充字段：画出来之后把它滚进视野并聚焦第一个输入框。
+  const focusAddedRef = useRef<string | null>(null);
   const dirtyRef = useRef(false);
   const profileRef = useRef<Profile | null>(null);
   const baseProfileRef = useRef<Profile | null>(null);
@@ -191,6 +222,13 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   const loadSequenceRef = useRef(0);
   const pendingExternalRevisionRef = useRef(0);
   const unknownExternalPendingRef = useRef(false);
+  // 「放弃并重新读取」进行中又收到 sync：那次读取可能早于导入写库，结束后要再核对一次。
+  const syncAfterReloadRef = useRef(false);
+  // 页脚的「尚未保存」要跟着重画，所以 ref 之外再存一份 state。
+  const setDirty = (value: boolean) => {
+    dirtyRef.current = value;
+    setDirtyState(value);
+  };
 
   const load = useCallback(async (discardLocalChanges = false, externalRevision = 0, checkExternal = externalRevision > 0) => {
     if (!invoke || (discardLocalChanges && reloadPendingRef.current)) return;
@@ -238,7 +276,8 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
           setNotice(null);
           setChoices({});
           setRenames({});
-          setConfirmExternalChoice(null);
+          setConflictView({ kind: "list" });
+          setDialogNotice(null);
           setExternalChange(false);
           setConflict(true);
           setDeferredExternalChange(false);
@@ -275,7 +314,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       setDeferredExternalChange(hasNewerRevision);
       setConfirmDiscard(false);
       setNotice(null);
-      dirtyRef.current = false;
+      setDirty(false);
       setExternalChange(false);
       pendingExternalRevisionRef.current = hasNewerRevision ? newerRevision : 0;
       unknownExternalPendingRef.current = false;
@@ -287,6 +326,12 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       if (discardLocalChanges) {
         reloadPendingRef.current = false;
         setReloading(false);
+        if (syncAfterReloadRef.current) {
+          syncAfterReloadRef.current = false;
+          unknownExternalPendingRef.current = true;
+          setExternalChange(true);
+          void load(false, 0, true);
+        }
       }
       if (checkExternal && loadSequence === loadSequenceRef.current) setSyncing(false);
     }
@@ -295,6 +340,39 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const id = focusAddedRef.current;
+    if (!id) return;
+    focusAddedRef.current = null;
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    // 补充字段的框高在布局后才算好：下一帧再把整行滚进视野，免得被页脚挡住半行。
+    const reveal = () => (target.closest(".custom-field-row, .profile-member") ?? target).scrollIntoView?.({ block: "nearest" });
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(reveal);
+    else reveal();
+  });
+
+  useEffect(() => {
+    if (!probe) return undefined;
+    // 导入旧数据后不整块重挂（那会丢掉草稿）：按外部更新的规则核对一次，
+    // 干净的表单直接换成新档案，有草稿时走逐项冲突。
+    // 与 resume-profile-changed 同一规则：先记下待核对；保存或「放弃并重新读取」进行中时不插队，
+    // 免得作废它们的响应，等它们结束后由保存的收尾逻辑补读。
+    probe.current = {
+      dirty: () => dirtyRef.current,
+      sync: () => {
+        unknownExternalPendingRef.current = true;
+        setExternalChange(true);
+        if (reloadPendingRef.current) syncAfterReloadRef.current = true;
+        else if (!savingRef.current) void load(false, 0, true);
+      },
+    };
+    return () => {
+      probe.current = null;
+    };
+  }, [probe, load]);
 
   // 事件不带字段内容；脏表单先读取到临时数据，再只合入可证明安全的新增空字段。
   useEffect(() => {
@@ -330,25 +408,32 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     };
   }, [listen, load]);
 
-  if (!invoke) return <p className="muted">没有连上桌面程序，「我的信息」要在桌面程序里编辑。</p>;
+  if (!invoke) return <p className="muted resume-offline">没有连上桌面程序，「我的信息」要在桌面程序里编辑。</p>;
   if (!profile)
-    return notice ? (
-      <p className={`note ${notice.tone}`} role="status">
-        {notice.text}
-      </p>
-    ) : (
-      <p className="muted">正在读取…</p>
+    return (
+      <div className="resume-card resume-placeholder">
+        {notice ? (
+          <>
+            <p className={`note ${notice.tone}`} role="status">
+              {notice.text}
+            </p>
+            <button type="button" onClick={() => void load()}>重试</button>
+          </>
+        ) : (
+          <p className="muted">正在读取「我的信息」…</p>
+        )}
+      </div>
     );
 
   // 用户一动手改，上一次保存/冲突的提示就过时了，清掉以免误导。
   const updateProfile = (next: Profile) => {
     editVersionRef.current += 1;
-    dirtyRef.current = true;
+    setDirty(true);
     profileRef.current = next;
     setProfile(next);
     if (pendingRemote) {
       setChoices({});
-      setConfirmExternalChoice(null);
+      setConflictView({ kind: "list" });
     }
     setNotice(null);
   };
@@ -356,13 +441,23 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     updateProfile({ ...profile, values: { ...profile.values, [id]: value } });
   const setMember = (index: number, field: string, value: string) =>
     updateProfile({ ...profile, family: profile.family.map((m, i) => (i === index ? { ...m, [field]: value } : m)) });
+  // 「添加」按钮在页脚、和保存按钮并排（不随列表变长被挤到下面）。
+  const addMember = () => {
+    focusAddedRef.current = `family-${profile.family.length}-relation`;
+    updateProfile({ ...profile, family: [...profile.family, emptyMember()] });
+  };
+  const addCustom = () => {
+    focusAddedRef.current = `custom-${profile.custom.length}-key`;
+    updateProfile({ ...profile, custom: [...profile.custom, { key: "", value: "" }] });
+  };
   const setCustom = (index: number, field: "key" | "value", value: string) =>
     updateProfile({ ...profile, custom: profile.custom.map((c, i) => (i === index ? { ...c, [field]: value } : c)) });
 
   const save = async () => {
     if (busy || reloadPendingRef.current || confirmDiscard) return;
     if (pendingRemote || externalChange || deferredExternalChange || conflict || syncing) {
-      setShowConflictDetails(true);
+      // 只有已经读到外部版本时才打开逐项处理；还在读取时等提示条里的入口。
+      if (pendingRemote) setShowConflictDetails(true);
       setNotice({ tone: "warn", text: "请先处理外部更新，再保存当前草稿。" });
       return;
     }
@@ -377,10 +472,10 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       if (editVersionRef.current === editVersion) {
         profileRef.current = saved;
         setProfile(saved);
-        dirtyRef.current = false;
+        setDirty(false);
       } else {
         // 保存请求发出后用户又输入，响应不能抹掉这段新草稿。
-        dirtyRef.current = true;
+        setDirty(true);
       }
       baseProfileRef.current = saved;
       setRevision(record.revision);
@@ -410,6 +505,9 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
         setExternalChange(true);
         pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, revisionRef.current + 1);
         void load(false, pendingExternalRevisionRef.current, true);
+      } else if (unknownExternalPendingRef.current) {
+        // 保存期间到达、因为保存而推迟的核对（旧宿主事件、导入旧数据后的 sync）现在补上。
+        void load(false, 0, true);
       }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
@@ -422,23 +520,27 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     ? inspectProfileUpdate(baseProfileRef.current, profile, profileApi.normalizeProfile(pendingRemote.profile))
     : null;
   const chooseConflict = (id: string, choice: ConflictChoice) => {
+    setDialogNotice(null);
     if (choice === "remote") {
-      setConfirmExternalChoice(id);
+      setConflictView({ kind: "confirm-remote", id });
+      return;
+    }
+    if (choice === "both") {
+      setConflictView({ kind: "rename", id, draft: renames[id] ?? "", error: null });
       return;
     }
     setChoices((current) => ({ ...current, [id]: choice }));
-    setConfirmExternalChoice(null);
   };
   const applyChoices = () => {
     if (!pendingRemote || !inspection) return;
     const latest = profileApi.normalizeProfile(pendingRemote.profile);
     if (pendingExternalRevisionRef.current > pendingRemote.revision) {
-      setNotice({ tone: "warn", text: "又收到新的更新，请先读取最新版本。" });
+      setDialogNotice("又收到新的更新，正在读取最新版本，请再核对一遍。");
       void load(false, pendingExternalRevisionRef.current, true);
       return;
     }
     if (inspection.conflicts.some((item) => !choices[item.id])) {
-      setNotice({ tone: "warn", text: "请为每一处更新选择处理方式。" });
+      setDialogNotice("请为每一处更新选择处理方式。");
       return;
     }
     const invalidRename = inspection.conflicts.find((item) => choices[item.id] === "both" && (
@@ -446,14 +548,14 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
       || latest.custom.some((field) => profileApi.normalizeKey(field.key) === profileApi.normalizeKey(renames[item.id] ?? ""))
     ));
     if (invalidRename) {
-      setNotice({ tone: "warn", text: `请为「${invalidRename.label}」填写一个不同且未使用的字段名。` });
+      setDialogNotice(`请为「${invalidRename.label}」填写一个不同且未使用的字段名。`);
       return;
     }
     const merged = applyProfileChoices(profile, inspection.additions, inspection.conflicts, choices, renames);
     if (choices.family === "remote") merged.family = latest.family.map((member) => ({ ...member }));
     const intendedKeys = merged.custom.map((item) => profileApi.normalizeKey(item.key)).filter(Boolean);
     if (new Set(intendedKeys).size !== intendedKeys.length || profileApi.normalizeProfile(merged).custom.length !== intendedKeys.length) {
-      setNotice({ tone: "warn", text: "补充字段存在同名项或已达数量上限，请调整后再应用。" });
+      setDialogNotice("补充字段存在同名项或已达数量上限，请调整后再应用。");
       return;
     }
     profileRef.current = merged;
@@ -461,7 +563,7 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     setProfile(merged);
     setRevision(pendingRemote.revision);
     revisionRef.current = pendingRemote.revision;
-    dirtyRef.current = true;
+    setDirty(true);
     editVersionRef.current += 1;
     pendingExternalRevisionRef.current = 0;
     setPendingRemote(null);
@@ -469,98 +571,165 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
     setExternalChange(false);
     setDeferredExternalChange(false);
     setShowConflictDetails(false);
-    setConfirmExternalChoice(null);
+    setConflictView({ kind: "list" });
+    setDialogNotice(null);
     setNotice({ tone: "warn", text: "更新已加入当前草稿；你的修改仍未保存。" });
   };
 
-  return (
-    <form
-      className="stack profile-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void save();
-      }}
-    >
-      {externalChange || deferredExternalChange || conflict || pendingRemote ? (
-        <div className="note warn stack" role="status">
-          <p>{pendingRemote
-            ? `有 ${inspection?.conflicts.length ?? 0} 处更新需要确认。你的未保存修改已保留。`
-            : syncing
-              ? "正在检查插件更新；你的未保存修改已保留。"
-              : deferredExternalChange
-                ? "有待同步的更新。当前输入仍保留，可稍后处理。"
-                : "档案已在别处更新。当前输入仍保留，正在读取更新。"}</p>
-          <div className="row">
-            {pendingRemote ? (
-              <button type="button" onClick={() => setShowConflictDetails(true)}>查看并处理</button>
-            ) : (
-              <button type="button" disabled={syncing || reloading || busy} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>
-                重新检查更新
+  const current = SECTIONS[section] ?? SECTIONS[0];
+  const pendingCount = profileApi.countPendingFields(profile);
+  const syncVisible = externalChange || deferredExternalChange || conflict || Boolean(pendingRemote);
+  const newerPending = Boolean(pendingRemote && pendingExternalRevisionRef.current > pendingRemote.revision);
+  const conflicts = inspection?.conflicts ?? [];
+  const unresolved = conflicts.filter((item) => !choices[item.id]).length;
+  const latestRemote = pendingRemote ? profileApi.normalizeProfile(pendingRemote.profile) : null;
+  const viewItem = conflictView.kind !== "list" ? conflicts.find((item) => item.id === conflictView.id) ?? null : null;
+  const closeConflicts = () => {
+    setShowConflictDetails(false);
+    setConflictView({ kind: "list" });
+    setDialogNotice(null);
+    // 「稍后处理」只是先关掉弹窗，提示条和入口都还在。
+    setDeferredExternalChange(true);
+  };
+  const renameProblem = (draft: string, item: ProfileConflict): string | null => {
+    if (!validSeparateName(draft, profile, item)) return "请填一个与现有字段都不同的名字。";
+    if (latestRemote?.custom.some((field) => profileApi.normalizeKey(field.key) === profileApi.normalizeKey(draft))) {
+      return "外部版本里已经有这个字段名，请换一个。";
+    }
+    return null;
+  };
+
+  const conflictDialog = (() => {
+    if (!pendingRemote || !showConflictDetails || !inspection) return null;
+    if (conflictView.kind === "confirm-remote" && viewItem) {
+      return (
+        <ResumeDialog
+          open
+          tone="warn"
+          title="改用外部版本？"
+          focusKey={`remote:${viewItem.id}`}
+          onCancel={() => setConflictView({ kind: "list" })}
+          footer={
+            <>
+              <button type="button" data-autofocus onClick={() => setConflictView({ kind: "list" })}>取消</button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => {
+                  setChoices((existing) => ({ ...existing, [viewItem.id]: "remote" }));
+                  setConflictView({ kind: "list" });
+                }}
+              >
+                确定使用外部版本
               </button>
-            )}
-            {pendingRemote && pendingExternalRevisionRef.current > pendingRemote.revision ? (
+            </>
+          }
+        >
+          <p>「{viewItem.label}」的当前草稿内容将被外部值替换。其他没有冲突的输入会继续保留。</p>
+          <div className="profile-conflict-values">
+            <p>当前草稿：<span>{conflictValue(viewItem, "local")}</span></p>
+            <p>外部版本：<span>{conflictValue(viewItem, "remote")}</span></p>
+          </div>
+        </ResumeDialog>
+      );
+    }
+    if (conflictView.kind === "rename" && viewItem) {
+      const problem = conflictView.draft.trim() ? renameProblem(conflictView.draft, viewItem) : null;
+      return (
+        <ResumeDialog
+          open
+          tone="warn"
+          title="为当前草稿中的字段改名"
+          focusKey={`rename:${viewItem.id}`}
+          onCancel={() => setConflictView({ kind: "list" })}
+          footer={
+            <>
+              <button type="button" onClick={() => setConflictView({ kind: "list" })}>返回选择</button>
+              <button
+                type="button"
+                className="primary"
+                disabled={!conflictView.draft.trim() || Boolean(problem)}
+                onClick={() => {
+                  const name = conflictView.draft.trim();
+                  setRenames((existing) => ({ ...existing, [viewItem.id]: name }));
+                  setChoices((existing) => ({ ...existing, [viewItem.id]: "both" }));
+                  setConflictView({ kind: "list" });
+                }}
+              >
+                分别保留
+              </button>
+            </>
+          }
+        >
+          <p>外部版本新增了同名的「{viewItem.label}」。给当前草稿中的这一项换个名字，两项都会保留；名称必须与现有字段不同。</p>
+          <label>
+            新字段名
+            <input
+              data-autofocus
+              value={conflictView.draft}
+              onChange={(event) => setConflictView({ ...conflictView, draft: event.target.value.replace(/\r?\n/g, " ") })}
+            />
+          </label>
+          {problem ? <p className="note warn">{problem}</p> : null}
+        </ResumeDialog>
+      );
+    }
+    return (
+      <ResumeDialog
+        open
+        wide
+        tone="warn"
+        title="处理资料冲突"
+        focusKey="list"
+        onCancel={closeConflicts}
+        footer={
+          <>
+            <button type="button" onClick={closeConflicts}>稍后处理</button>
+            {newerPending ? (
               <button type="button" disabled={syncing} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>读取最新更新</button>
             ) : null}
-            <button type="button" disabled={syncing} onClick={() => {
-              setShowConflictDetails(false);
-              setDeferredExternalChange(true);
-            }}>稍后处理</button>
-            <button ref={reloadButtonRef} type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
-              放弃未保存修改并重新读取
-            </button>
-          </div>
-          {pendingRemote && showConflictDetails && inspection ? (
-            <div className="profile-conflict-details stack" role="group" aria-label="处理外部更新">
-              <p>选择当前草稿会在下次保存时覆盖对应外部值；选择外部版本会替换当前输入。</p>
-              {inspection.conflicts.map((item) => (
-                <div key={item.id} className="profile-conflict-item stack" role="group" aria-label={`冲突：${item.label}`}>
-                  <strong>{item.label}</strong>
-                  <div className="profile-conflict-values">
-                    <p>当前草稿：<span>{item.kind === "custom" && item.localItem ? `${item.localItem.key} — ` : ""}{item.local}</span></p>
-                    <p>外部版本：<span>{item.kind === "custom" && item.remoteItem ? `${item.remoteItem.key} — ` : ""}{item.remote}</span></p>
-                  </div>
-                  <div className="row">
-                    <button type="button" aria-pressed={choices[item.id] === "local"} onClick={() => chooseConflict(item.id, "local")}>使用当前草稿</button>
-                    <button type="button" aria-pressed={choices[item.id] === "remote"} onClick={() => chooseConflict(item.id, "remote")}>使用外部版本</button>
-                    {item.kind === "custom" && item.newlyAdded && item.localItem && item.remoteItem ? (
-                      <button type="button" aria-pressed={choices[item.id] === "both"} onClick={() => chooseConflict(item.id, "both")}>分别保留</button>
-                    ) : null}
-                  </div>
-                  {confirmExternalChoice === item.id ? (
-                    <div className="row" role="group" aria-label={`确认使用外部版本：${item.label}`}>
-                      <span>这会放弃该处当前草稿内容，确定吗？</span>
-                      <button type="button" onClick={() => { setChoices((current) => ({ ...current, [item.id]: "remote" })); setConfirmExternalChoice(null); }}>确定使用外部版本</button>
-                      <button type="button" onClick={() => setConfirmExternalChoice(null)}>取消</button>
-                    </div>
-                  ) : null}
-                  {choices[item.id] === "both" ? (
-                    <label>给当前草稿中的字段改名
-                      <input value={renames[item.id] ?? ""} onChange={(event) => setRenames((current) => ({ ...current, [item.id]: event.target.value }))} />
-                    </label>
+            <button type="button" className="primary" disabled={unresolved > 0} onClick={applyChoices}>应用选择，继续编辑</button>
+          </>
+        }
+      >
+        <p className="muted">你的草稿已保留。请逐项决定使用哪个版本：选当前草稿会在下次保存时覆盖对应外部值，选外部版本会替换当前输入。处理后仍需手动保存。</p>
+        {newerPending ? <p className="note warn">又收到更新的外部版本，请先读取最新更新再处理。</p> : null}
+        <div className="profile-conflict-list">
+          {conflicts.map((item) => {
+            const chosen = choices[item.id];
+            const canKeepBoth = item.kind === "custom" && item.newlyAdded && item.localItem && item.remoteItem;
+            return (
+              <div key={item.id} className="profile-conflict-item" role="group" aria-label={`冲突：${item.label}`}>
+                <strong>{item.label}</strong>
+                <div className="profile-conflict-values">
+                  <p>当前草稿：<span>{conflictValue(item, "local")}</span></p>
+                  <p>外部版本：<span>{conflictValue(item, "remote")}</span></p>
+                </div>
+                <div className="row">
+                  <button type="button" aria-pressed={chosen === "local"} onClick={() => chooseConflict(item.id, "local")}>用当前草稿</button>
+                  <button type="button" aria-pressed={chosen === "remote"} onClick={() => chooseConflict(item.id, "remote")}>用外部版本…</button>
+                  {canKeepBoth ? (
+                    <button type="button" aria-pressed={chosen === "both"} onClick={() => chooseConflict(item.id, "both")}>分别保留…</button>
                   ) : null}
                 </div>
-              ))}
-              <button type="button" onClick={applyChoices}>应用选择，继续编辑</button>
-            </div>
-          ) : null}
+                {chosen === "both" ? <p className="muted">当前草稿中的这一项将改名为「{renames[item.id]}」，两项都保留。</p> : null}
+              </div>
+            );
+          })}
         </div>
-      ) : null}
-      {confirmDiscard ? (
-        <div className="note warn stack" role="group" aria-label="确认放弃未保存修改" aria-describedby="profile-discard-description">
-          <p id="profile-discard-description">重新读取会丢弃当前未保存的修改，用已保存的档案替换。确定放弃吗？</p>
-          <div className="row">
-            <button type="button" disabled={busy || reloading} onClick={() => {
-              setConfirmDiscard(false);
-              void load(true);
-            }}>确定放弃并重新读取</button>
-            <button type="button" autoFocus onClick={() => { setConfirmDiscard(false); reloadButtonRef.current?.focus(); }}>取消，保留当前输入</button>
-          </div>
-        </div>
-      ) : null}
+        {unresolved > 0 ? <p className="muted">还有 {unresolved} 处没有选择。</p> : null}
+        {dialogNotice ? <p className="note warn" role="alert">{dialogNotice}</p> : null}
+      </ResumeDialog>
+    );
+  })();
 
-      {profileApi.PROFILE_SCHEMA.map((group) => (
-        <fieldset key={group.name}>
-          <legend>{group.name}</legend>
+  // 八组都挂着、只显示当前这组：切换分组不会卸掉别组的输入框，焦点和草稿都不受影响。
+  const renderSection = (item: Section) => {
+    if (item.kind === "schema") {
+      const group = profileApi.PROFILE_SCHEMA[item.index];
+      return (
+        <fieldset className="profile-fields">
+          <legend className="sr-only">{group.name}</legend>
           {group.fields.map((def) => (
             <FieldInput
               key={def.id}
@@ -571,59 +740,68 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
             />
           ))}
         </fieldset>
-      ))}
-
-      <fieldset>
-        <legend>{profileApi.FAMILY_GROUP}</legend>
-        {profile.family.map((member, index) => (
-          <div key={index} role="group" aria-label={`家庭成员 ${index + 1}`} className="row">
-            <label htmlFor={`family-${index}-relation`}>
-              成员 {index + 1} 关系
-              <select
-                id={`family-${index}-relation`}
-                value={member.relation}
-                onChange={(event) => setMember(index, "relation", event.target.value)}
-              >
-                {profileApi.FAMILY_RELATIONS.map((relation) => (
-                  <option key={relation} value={relation}>
-                    {relation}
-                  </option>
+      );
+    }
+    if (item.kind === "family") {
+      return (
+        <fieldset className="profile-family">
+          <legend className="sr-only">{profileApi.FAMILY_GROUP}</legend>
+          {profile.family.length === 0 ? <p className="muted">还没有家庭成员。网申表常要求填父母或配偶的信息，点下方「添加家庭成员」。</p> : null}
+          {profile.family.map((member, index) => (
+            <div key={index} role="group" aria-label={`家庭成员 ${index + 1}`} className="profile-member">
+              <div className="profile-member-head">
+                <strong>成员 {index + 1}</strong>
+                <button
+                  type="button"
+                  onClick={() => updateProfile({ ...profile, family: profile.family.filter((_, i) => i !== index) })}
+                >
+                  删除成员
+                </button>
+              </div>
+              <div className="profile-fields">
+                <label htmlFor={`family-${index}-relation`}>
+                  成员 {index + 1} 关系
+                  <select
+                    id={`family-${index}-relation`}
+                    value={member.relation}
+                    onChange={(event) => setMember(index, "relation", event.target.value)}
+                  >
+                    {profileApi.FAMILY_RELATIONS.map((relation) => (
+                      <option key={relation} value={relation}>
+                        {relation}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {profileApi.FAMILY_FIELDS.map((def) => (
+                  <FieldInput
+                    key={def.id}
+                    id={`family-${index}-${def.id}`}
+                    def={def}
+                    labelPrefix={`成员 ${index + 1} `}
+                    value={member[def.id] ?? ""}
+                    onChange={(value) => setMember(index, def.id, value)}
+                  />
                 ))}
-              </select>
-            </label>
-            {profileApi.FAMILY_FIELDS.map((def) => (
-              <FieldInput
-                key={def.id}
-                id={`family-${index}-${def.id}`}
-                def={def}
-                labelPrefix={`成员 ${index + 1} `}
-                value={member[def.id] ?? ""}
-                onChange={(value) => setMember(index, def.id, value)}
-              />
-            ))}
-            <button
-              type="button"
-              onClick={() => updateProfile({ ...profile, family: profile.family.filter((_, i) => i !== index) })}
-            >
-              删除成员
-            </button>
-          </div>
-        ))}
-        <button type="button" onClick={() => updateProfile({ ...profile, family: [...profile.family, emptyMember()] })}>
-          添加家庭成员
-        </button>
-      </fieldset>
-
-      <fieldset>
-        <legend>{profileApi.CUSTOM_GROUP}</legend>
-        <p className="muted">从网页上「加到我的信息」的字段会出现在这里，补上内容后下次就能自动填。</p>
+              </div>
+            </div>
+          ))}
+        </fieldset>
+      );
+    }
+    return (
+      <fieldset className="profile-custom">
+        <legend className="sr-only">{profileApi.CUSTOM_GROUP}</legend>
+        <p className="resume-panel-note">从网页上「加到我的信息」的字段会出现在这里，补上内容后下次就能自动填。</p>
         {profile.custom.length ? (
           <div className="custom-field-head" aria-hidden="true">
             <span>字段名</span>
             <span>内容</span>
             <span />
           </div>
-        ) : null}
+        ) : (
+          <p className="muted">还没有补充字段，点下方「添加补充字段」。</p>
+        )}
         {profile.custom.map((item, index) => (
           <CustomFieldRow
             key={index}
@@ -633,21 +811,141 @@ export function ProfileForm({ listen }: { listen?: Listen } = {}) {
             onRemove={() => updateProfile({ ...profile, custom: profile.custom.filter((_, i) => i !== index) })}
           />
         ))}
-        <button type="button" onClick={() => updateProfile({ ...profile, custom: [...profile.custom, { key: "", value: "" }] })}>
-          添加补充字段
-        </button>
       </fieldset>
+    );
+  };
 
-      {notice ? (
-        <p className={`note ${notice.tone}`} role="status">
-          {notice.text}
-        </p>
-      ) : null}
-      <div className="row">
-        <button type="submit" className="primary" disabled={busy || reloading || confirmDiscard}>
-          保存我的信息
-        </button>
-      </div>
-    </form>
+  return (
+    <div className="profile-workspace">
+      <nav className="resume-card profile-nav" aria-label="信息分组">
+        <div className="profile-nav-head">
+          <h2>信息分组</h2>
+          <p>选择一组，集中编辑</p>
+        </div>
+        <div className="profile-nav-list">
+          {SECTIONS.map((item, index) => (
+            <button
+              key={item.name}
+              type="button"
+              className={item.kind === "family" ? "has-divider" : undefined}
+              aria-current={index === section ? "true" : undefined}
+              onClick={() => setSection(index)}
+            >
+              <span>{item.name}</span>
+              {item.kind === "custom" && pendingCount ? (
+                <span className="profile-nav-badge">{pendingCount} 待补充</span>
+              ) : (
+                <span className="profile-nav-arrow" aria-hidden="true">›</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <p className="resume-card-foot">插件添加的新字段会出现在「补充字段」。</p>
+      </nav>
+      <form
+        className="resume-card profile-form"
+        aria-label={`${current.name}编辑`}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
+        <div className="profile-form-head">
+          <div>
+            <p className="resume-kicker">资料分组 · {String(section + 1).padStart(2, "0")} / {String(SECTIONS.length).padStart(2, "0")}</p>
+            <h2>{current.name}</h2>
+          </div>
+          <label className="profile-group-select">
+            <span className="sr-only">切换信息分组</span>
+            <select value={section} onChange={(event) => setSection(Number(event.target.value))}>
+              {SECTIONS.map((item, index) => (
+                <option key={item.name} value={index}>
+                  {item.name}
+                  {item.kind === "custom" && pendingCount ? `（${pendingCount} 待补充）` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className={`profile-state${dirty ? " is-dirty" : ""}`}>{dirty ? "有未保存的修改" : "填写后点击保存"}</span>
+        </div>
+        {syncVisible ? (
+          <div className="profile-sync" role="status">
+            <p>{pendingRemote
+              ? `有 ${conflicts.length} 处更新需要确认。你的未保存修改已保留。`
+              : syncing
+                ? "正在检查插件更新；你的未保存修改已保留。"
+                : deferredExternalChange
+                  ? "有待同步的更新。当前输入仍保留，可稍后处理。"
+                  : "档案已在别处更新。当前输入仍保留，正在读取更新。"}</p>
+            <div className="row">
+              {pendingRemote ? (
+                <button type="button" className="primary" onClick={() => setShowConflictDetails(true)}>查看并处理</button>
+              ) : (
+                <button type="button" disabled={syncing || reloading || busy} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>
+                  重新检查更新
+                </button>
+              )}
+              {newerPending ? (
+                <button type="button" disabled={syncing} onClick={() => void load(false, pendingExternalRevisionRef.current, true)}>读取最新更新</button>
+              ) : null}
+              <button ref={reloadButtonRef} type="button" disabled={busy || reloading} onClick={() => setConfirmDiscard(true)}>
+                放弃未保存修改并重新读取
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="profile-form-body">
+          {SECTIONS.map((item, index) => (
+            <div key={item.name} hidden={index !== section}>
+              {renderSection(item)}
+            </div>
+          ))}
+        </div>
+        <div className="profile-form-foot">
+          {notice ? (
+            <p className={`note ${notice.tone}`} role="status">
+              {notice.text}
+            </p>
+          ) : (
+            <p className="muted">{dirty ? "当前编辑内容尚未保存；插件仍使用上次保存的信息。" : "插件填写时使用这里已保存的信息。"}</p>
+          )}
+          <div className="profile-form-actions">
+            {current.kind === "family" ? (
+              <button type="button" onClick={addMember}>添加家庭成员</button>
+            ) : current.kind === "custom" ? (
+              <button type="button" onClick={addCustom}>添加补充字段</button>
+            ) : null}
+            <button type="submit" className="primary" disabled={busy || reloading || confirmDiscard}>
+              {busy ? "正在保存…" : "保存我的信息"}
+            </button>
+          </div>
+        </div>
+      </form>
+      {conflictDialog}
+      <ResumeDialog
+        open={confirmDiscard}
+        tone="warn"
+        title="放弃当前草稿？"
+        onCancel={() => setConfirmDiscard(false)}
+        footer={
+          <>
+            <button type="button" data-autofocus onClick={() => setConfirmDiscard(false)}>继续编辑</button>
+            <button
+              type="button"
+              className="danger"
+              disabled={busy || reloading}
+              onClick={() => {
+                setConfirmDiscard(false);
+                void load(true);
+              }}
+            >
+              放弃并重新读取
+            </button>
+          </>
+        }
+      >
+        <p>重新读取会用已保存的资料替换当前未保存的修改。取消后，表单内容和冲突处理入口都保留。</p>
+      </ResumeDialog>
+    </div>
   );
 }
