@@ -109,7 +109,38 @@
     submitSave: document.getElementById("submit-confirm-save"),
     submitResultBack: document.getElementById("submit-confirm-result-back"),
     submitCopyId: document.getElementById("submit-confirm-copy-id"),
-    submitDismiss: document.getElementById("submit-confirm-dismiss")
+    submitDismiss: document.getElementById("submit-confirm-dismiss"),
+    templateEmpty: document.getElementById("template-empty"),
+    fillProgress: document.getElementById("fill-progress"),
+    fillProgressPhase: document.getElementById("fill-progress-phase"),
+    fillReason: document.getElementById("fill-reason"),
+    targetState: document.getElementById("target-state"),
+    desktopPill: document.getElementById("desktop-pill"),
+    pageDomain: document.getElementById("page-domain"),
+    pageReady: document.getElementById("page-ready"),
+    templateMeta: document.getElementById("template-meta"),
+    pluginVersion: document.getElementById("plugin-version"),
+    fieldsTemplate: document.getElementById("fields-template"),
+    jobSummary: document.getElementById("job-summary"),
+    jobSummaryTitle: document.getElementById("job-summary-title"),
+    jobSummaryMeta: document.getElementById("job-summary-meta"),
+    jobSummaryBadge: document.getElementById("job-summary-badge"),
+    queueState: document.getElementById("queue-state"),
+    fillHome: document.getElementById("fill-home"),
+    taskPanel: document.getElementById("task-panel"),
+    taskIcon: document.getElementById("task-icon"),
+    taskTitle: document.getElementById("task-title"),
+    taskDesc: document.getElementById("task-desc"),
+    taskExit: document.getElementById("task-exit"),
+    taskNotice: document.getElementById("task-notice"),
+    taskSteps: document.getElementById("task-steps"),
+    taskBody: document.getElementById("task-body"),
+    taskFlows: {
+      repeat: document.getElementById("task-flow-repeat"),
+      job: document.getElementById("task-flow-job"),
+      submit: document.getElementById("task-flow-submit"),
+      archive: document.getElementById("task-flow-archive")
+    }
   };
   let currentTabId = null;
   let currentStore = null;
@@ -118,6 +149,12 @@
   let storeLoaded = false;
   let storeReadSequence = 0;
   let lastPageStatus = null;
+  // Set once the first page status has come back, so "no page" is not claimed before it is known.
+  let pageChecked = false;
+  let pageConnected = false;
+  // The job the page actually read for this tab and address (#261): shown only once the page
+  // reported it in a save or submission draft, never guessed from the page itself.
+  let jobSeen = null;
   let toastTimer = null;
   let statusPolling = false;
   // The page's save-job draft as last rendered. The page owns it; the panel only shows it
@@ -283,10 +320,83 @@
       elements.desktopConnectionAction.textContent = copy.action;
     }
     elements.configState.textContent = copy ? "桌面简历当前不可用" : "简历数据来自桌面程序";
+    const pill = { ready: ["已连接", "ok"], empty: ["已连接", "ok"], not_installed: ["未安装桌面", "error"], incompatible: ["桌面需更新", "error"],
+      not_paired: ["未配对", "warn"], never_paired: ["未配对", "warn"] }[mode] || ["桌面未响应", "warn"];
+    elements.desktopPill.textContent = storeLoaded ? pill[0] : "正在连接";
+    elements.desktopPill.dataset.tone = storeLoaded ? pill[1] : "idle";
+    renderPageCard();
     elements.templateSelect.disabled = Boolean(copy) || !(currentStore?.templates?.length);
+    // No template is not an error: the profile alone can still fill. Say where templates come from.
+    elements.templateEmpty.hidden = desktopMode !== "ready" || Boolean(currentStore?.templates?.length);
     elements.fieldSearch.disabled = Boolean(copy);
     elements.desktopConnectionAction.dataset.kind = copy?.kind || "";
     document.getElementById("open-manager").textContent = copy?.action || "打开桌面";
+  }
+
+  // A line icon by what the group is about; decoration only.
+  const GROUP_ICONS = [
+    [/我的信息/, '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c1.2-3.4 3.8-5 7-5s5.8 1.6 7 5"/>'],
+    [/教育|学历|学校/, '<path d="m3 9 9-4 9 4-9 4z"/><path d="M7 11v4c1.5 1.4 3.2 2 5 2s3.5-.6 5-2v-4M21 9v5"/>'],
+    [/论文|专利|出版|发表/, '<path d="M6 3h9l3 3v15H6z"/><path d="M9 10h6M9 14h6M9 18h4"/>'],
+    [/科研|项目|研究/, '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7.5 15h9"/>'],
+    [/工作|实习|经历|任职/, '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/>'],
+    [/技能|证书|语言|荣誉|奖/, '<path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"/><path d="m9 12 2 2 4-4"/>'],
+    [/会议|报告|讲座/, '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8M7 12l3-3 2 2 4-4"/>'],
+    [/评价|自我|简介|介绍/, '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>'],
+    [/基本|个人|联系/, '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.7-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h4"/>']
+  ];
+  function groupIcon(name) {
+    const path = GROUP_ICONS.find(([pattern]) => pattern.test(name))?.[1] || '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>';
+    return `<svg class="icon" viewBox="0 0 24 24">${path}</svg>`;
+  }
+
+  // The 当前网页 card: whether this tab has the page controller, its host name (http/https
+  // only, nothing else of the address), and in one line whether filling can start.
+  let pageHost = "";
+  // The page the job was read from: address without its #fragment, kept in panel memory only
+  // and used for nothing but noticing that the tab has moved to another page.
+  let pageAddress = "";
+  function renderPageCard() {
+    elements.pageState.textContent = pageConnected ? "当前网页已连接填表助手" : pageChecked ? "当前页面无法使用填表助手" : "正在连接当前网页…";
+    elements.pageState.classList.toggle("is-unavailable", !pageConnected);
+    elements.pageDomain.hidden = !pageConnected || !pageHost;
+    elements.pageDomain.textContent = pageConnected ? pageHost : "";
+    const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
+    const [tone, text] = !pageChecked ? ["idle", "正在读取当前网页…"]
+      : !pageConnected ? ["idle", "请切换到招聘网页，或刷新网页后再使用侧栏。浏览器自带页面不能填写。"]
+        : desktopMode === "ready" && hasData ? ["ok", "可一键填写，或到「简历字段」手动补填"]
+          : ["warn", "网页已连接；桌面简历可用后即可填写。"];
+    elements.pageReady.dataset.tone = tone;
+    elements.pageReady.textContent = text;
+  }
+  function addressOf(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? `${parsed.origin}${parsed.pathname}${parsed.search}` : "";
+    } catch {
+      return "";
+    }
+  }
+  function hostOf(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.hostname : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function noteJob(fields, tabId) {
+    if (!fields || !(fields.company || fields.title) || tabId === null) return;
+    jobSeen = { tabId, address: pageAddress, company: String(fields.company || ""), title: String(fields.title || ""), location: String(fields.location || "") };
+    renderJobSummary();
+  }
+  function renderJobSummary() {
+    const job = jobSeen && jobSeen.tabId === currentTabId ? jobSeen : null;
+    elements.jobSummary.hidden = !job;
+    elements.jobSummaryBadge.hidden = !job;
+    elements.jobSummaryTitle.textContent = job ? job.title || "岗位名称未识别" : "";
+    elements.jobSummaryMeta.textContent = job ? [job.company || "公司未识别", job.location].filter(Boolean).join(" · ") : "";
   }
 
   function renderFromStore() {
@@ -295,13 +405,16 @@
     const templates = currentStore?.templates || [];
     const selected = selectedTemplate();
     elements.templateSelect.innerHTML = templates.length
-      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)} · ${template.fieldCount} 个字段</option>`).join("")
+      ? templates.map((template) => `<option value="${escapeHtml(template.id)}"${template.id === selected?.id ? " selected" : ""}>${escapeHtml(template.name)}</option>`).join("")
       : '<option value="">暂无模板</option>';
     renderDesktopMode();
 
     const groups = groupedFields();
     const fields = visibleFields(groups);
-    elements.fieldMeta.textContent = `${selected?.name || "我的信息"} · ${groups.length} 个分组 · ${fields.length} 项`;
+    elements.fieldMeta.textContent = `${groups.length} 个分组 · ${fields.length} 项`;
+    elements.fieldsTemplate.textContent = selected?.name || "我的信息";
+    const selectedInfo = templates.find((template) => template.id === selected?.id);
+    elements.templateMeta.textContent = selectedInfo ? `${selectedInfo.fieldCount} 个字段 · 共 ${templates.length} 份模板` : templates.length ? "" : "暂无模板";
     const groupOccurrences = new Map();
     elements.fieldGroups.innerHTML = groups.map((group, index) => {
       const rows = group.fields.filter((field) => fields.includes(field));
@@ -309,9 +422,10 @@
       const occurrence = groupOccurrences.get(group.name) || 0;
       groupOccurrences.set(group.name, occurrence + 1);
       const groupKey = JSON.stringify([group.name, occurrence]);
-      const open = oldGroups.length ? openGroupKeys.has(groupKey) : index === 0;
+      // Every group starts folded; the user opens the one they need (#261).
+      const open = oldGroups.length > 0 && openGroupKeys.has(groupKey);
       return `<details class="field-group" data-group-key="${escapeHtml(groupKey)}"${open ? " open" : ""}>
-        <summary><span>${escapeHtml(group.name)} <small>${rows.length} 项</small></span><span class="field-group__chevron" aria-hidden="true">›</span></summary>
+        <summary><span class="group-icon" aria-hidden="true">${groupIcon(group.name)}</span><span class="group-name">${escapeHtml(group.name)}</span><small>${rows.length} 项</small><span class="field-group__chevron" aria-hidden="true">›</span></summary>
         <div class="field-group__body">${rows.map((field) => self.ResumeProCompose.renderRow(field, "group")).join("")}</div>
       </details>`;
     }).join("");
@@ -325,8 +439,29 @@
     return visibleFields(groupedFields()).map((field) => ({ chipId: field.chipId, value: field.value }));
   }
 
+  // What the page controller last said about its text box, in words. Only its booleans are
+  // used; nothing is claimed about a box the page did not report.
+  function describeTarget() {
+    if (!selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile)) return "";
+    if (currentTabId === null) return pageChecked ? "当前网页没有连接填表助手，打开招聘网页后才能填入字段。" : "";
+    if (!targetState.targetAvailable) return "还没有选中网页输入框：先点一下网页上的输入框，再回来点字段。";
+    if (!targetState.composable) return "已选中网页上的控件：点字段可直接填入；这类控件不能用「添加」「替换」「删除」。";
+    return targetState.empty
+      ? "已选中网页输入框，目前是空的：点字段或「添加」即可填入。"
+      : "已选中网页输入框，里面已有内容：可用「添加」「替换」「删除」调整。";
+  }
+
   function renderTargetState() {
     self.ResumeProCompose.applyTargetState([elements.fieldGroups], targetState);
+    // A short badge in the guide card; the full sentence stays available as its title.
+    const long = describeTarget();
+    const short = !long ? "" : currentTabId === null ? "网页未连接" : !targetState.targetAvailable ? "未选中输入框"
+      : !targetState.composable ? "已选中特殊控件" : targetState.empty ? "已选中空输入框" : "已选中输入框";
+    elements.targetState.hidden = !short;
+    elements.targetState.textContent = short;
+    elements.targetState.title = long;
+    elements.targetState.setAttribute?.("aria-label", long);
+    elements.targetState.classList?.toggle("chip--ok", Boolean(short) && targetState.targetAvailable);
   }
 
   function clearTargetState() {
@@ -353,7 +488,7 @@
     const query = elements.fieldSearch.value.trim().toLocaleLowerCase();
     let visible = 0;
     const groups = Array.from(elements.fieldGroups.querySelectorAll(".field-group"));
-    groups.forEach((group, index) => {
+    groups.forEach((group) => {
       const groupMatches = group.querySelector("summary").textContent.toLocaleLowerCase().includes(query);
       let rowCount = 0;
       group.querySelectorAll(".field-row").forEach((row) => {
@@ -364,7 +499,7 @@
       group.hidden = Boolean(query) && rowCount === 0;
       if (!group.hidden) visible += 1;
       if (query && rowCount) group.open = true;
-      if (!query && !preserveOpen) group.open = index === 0;
+      if (!query && !preserveOpen) group.open = false;
     });
     elements.fieldEmpty.hidden = visible !== 0;
   }
@@ -372,11 +507,27 @@
   function updateFillAvailability(status = null) {
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
     const repeating = Boolean(repeatView && REPEAT_ACTIVE.includes(repeatView.phase));
+    const filling = Boolean(status?.busy) && !repeating;
     elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy) || repeating;
-    elements.fillButton.textContent = status?.busy && !repeating ? (status.phase || "正在填写…") : "一键 AI 填写";
+    elements.fillButton.textContent = filling ? (status.phase || "正在填写…") : "一键 AI 填写";
     elements.cancelButton.hidden = !status?.canCancel || repeating;
     elements.repeatButton.disabled = desktopMode !== "ready" || !selectedTemplate() || currentTabId === null
       || Boolean(status?.busy) || repeating || repeatPending;
+    // While the page fills, the card says so with the page's own phase text; no made-up percentage.
+    elements.fillProgress.hidden = !filling;
+    elements.fillProgressPhase.textContent = filling ? (status.phase || "正在填写…") : "";
+    elements.fillButton.hidden = filling;
+    elements.repeatButton.hidden = filling;
+    // A disabled button says why, in the card, not only in a tooltip.
+    let reason = "";
+    if (!filling && !repeating) {
+      if (currentTabId === null) reason = "";
+      else if (desktopMode !== "ready") reason = "桌面简历当前不可用，处理上方提示后即可填写。";
+      else if (!hasData) reason = "桌面里还没有可用的简历数据，请先到桌面创建模板或填写「我的信息」。";
+      else if (!selectedTemplate()) reason = "「AI 辅助新增条目」需要先在桌面选一份简历模板。";
+    }
+    elements.fillReason.hidden = !reason;
+    elements.fillReason.textContent = reason;
   }
 
   // The page's repeat state, cut down to what the card shows. Anything unexpected is dropped
@@ -425,6 +576,7 @@
       }
     }
     updateFillAvailability(lastPageStatus);
+    renderTaskPanel();
   }
 
   function clearRepeat() {
@@ -500,13 +652,15 @@
     renderFillArchive();
   }
 
-  const archiveButton = (action, label, { disabled = false } = {}) =>
-    `<button type="button" data-archive="${action}"${disabled ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+  const archiveButton = (action, label, { disabled = false, tone = "" } = {}) =>
+    `<button type="button" data-archive="${action}"${tone ? ` class="btn-${tone}"` : ""}${disabled ? " disabled" : ""}>${escapeHtml(label)}</button>`;
+  // The phase the card is drawing (a click on its way already shows what it does).
+  let archiveShownPhase = "";
 
   function renderFillArchive() {
     const job = fillArchive;
     elements.fillOffer.hidden = !job;
-    if (!job) return;
+    if (!job) { archiveShownPhase = ""; renderTaskPanel(); return; }
     const copy = linkCopyModule;
     const busy = Boolean(archivePending);
     // The click is on its way and the page has not answered yet: already show what it does
@@ -524,7 +678,7 @@
     let candidates = "";
     if (phase === "offer") {
       text = job.summary || "";
-      actions = [archiveButton("start", "留档到桌面", { disabled: busy }), archiveButton("cancel", "不留档", { disabled: busy })];
+      actions = [archiveButton("start", "留档到桌面", { disabled: busy, tone: "primary" }), archiveButton("cancel", "不留档", { disabled: busy })];
     } else if (phase === "querying") {
       text = copy?.FILL_ARCHIVE_QUERYING || "";
       // The only way out of a lookup is giving up on it; it reaches the page even while the
@@ -540,7 +694,7 @@
       text = result?.text || "";
       hint = result?.hint || "";
       actions = [
-        archiveButton("savejob", "保存岗位到桌面端", { disabled: busy }),
+        archiveButton("savejob", "保存岗位到桌面端", { disabled: busy, tone: "primary" }),
         archiveButton("requery", "重新查找", { disabled: busy }),
         archiveButton("later", "稍后在待同步中选择", { disabled: busy }),
         archiveButton("cancel", "取消留档", { disabled: busy })
@@ -549,7 +703,7 @@
       text = result?.text || "";
       hint = result?.hint || "";
       actions = job.canQueue
-        ? [archiveButton("later", "记入待同步，稍后选择", { disabled: busy }), archiveButton("requery", "重新查找", { disabled: busy }),
+        ? [archiveButton("later", "记入待同步，稍后选择", { disabled: busy, tone: "primary" }), archiveButton("requery", "重新查找", { disabled: busy }),
           archiveButton("cancel", "取消留档", { disabled: busy })]
         : [...(result?.extensionId ? [archiveButton("copyid", "复制扩展 ID")] : []), archiveButton("cancel", "知道了", { disabled: busy })];
     } else if (phase === "saving") {
@@ -558,8 +712,8 @@
       text = result?.text || "";
       hint = result?.hint || "";
       const queueLabel = { pending_bind: "去待同步选择申请", queued: "去待同步查看", unknown: "去待同步核对", failed: "去待同步处理" }[phase];
-      if (queueLabel && (phase !== "failed" || job.recordKept)) actions.push(archiveButton("openqueue", queueLabel));
-      if (phase === "pending_bind") actions.push(archiveButton("remove", "删除这条待同步记录", { disabled: busy }));
+      if (queueLabel && (phase !== "failed" || job.recordKept)) actions.push(archiveButton("openqueue", queueLabel, { tone: "primary" }));
+      if (phase === "pending_bind") actions.push(archiveButton("remove", "删除这条待同步记录", { disabled: busy, tone: "danger" }));
       actions.push(archiveButton("dismiss", "知道了", { disabled: busy }));
     }
     const tone = ["offer", "querying", "choosing", "saving"].includes(phase) ? "" : (result?.tone || "info");
@@ -582,6 +736,8 @@
     elements.fillOfferSnapshotState.hidden = !snapshotLine;
     elements.fillOfferSnapshotState.textContent = snapshotLine;
     elements.fillOfferActions.innerHTML = actions.join("");
+    archiveShownPhase = phase;
+    renderTaskPanel();
   }
 
   // The template copy of a fill that reached the desktop uploads afterwards, on its own. Its
@@ -662,6 +818,9 @@
       else if (result) toast(result.error || "没能删除这条待同步记录。");
       refreshQueue().catch(() => {});
     } else if (action === "openqueue") {
+      // The list is on the 填写 page under the panel: the answer is already given, so the
+      // panel steps aside (as 知道了 does, writing nothing) and the list opens on the record.
+      await archiveRequest({ type: "RESUME_PANEL_ARCHIVE_CANCEL", archiveId });
       await openQueue(archiveId);
     } else if (action === "copyid") {
       toast(await copyFieldValue(chrome.runtime.id) ? "扩展 ID 已复制，请在桌面设置中粘贴。" : "复制失败。");
@@ -746,6 +905,8 @@
   function renderQueue() {
     const total = self.ResumeProQueue.queueTotal(queueReply);
     elements.queueCount.textContent = `${total} 条`;
+    // Never "synced": an empty list only means nothing here is waiting.
+    elements.queueState.textContent = total ? "还没有写入桌面，点开处理" : "没有待处理的记录";
     elements.queueToggle.classList.toggle("has-items", total > 0);
     elements.queueEmpty.hidden = queueRows.length > 0;
     elements.queueList.innerHTML = self.ResumeProQueue.renderRows(queueRows, queueUi, { focusKey: queueFocus });
@@ -768,7 +929,11 @@
     queueFocus = row?.key || "";
     renderQueue();
     if (!row) toast("待同步里已经没有这条记录了，可能已经发送或删除。");
-    else elements.queueList.querySelector?.(`[data-key="${row.key}"]`)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    else {
+      const shown = elements.queueList.querySelector?.(`[data-key="${row.key}"]`);
+      shown?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+      shown?.querySelector?.("button")?.focus?.({ preventScroll: true });
+    }
   }
 
   function setRowUi(key, changes) {
@@ -966,6 +1131,8 @@
     if (next && jobSave && next.draftId === jobSave.draftId && next.version < jobSave.version && jobSave.tabId === tabId) return;
     jobSave = next ? { ...next, tabId } : null;
     if (!next) jobLocalError = "";
+    if (next?.fields) noteJob(next.fields, tabId);
+    if (!next && snapshot?.discarded === "page-changed") { jobSeen = null; renderJobSummary(); }
     renderJobSave();
   }
 
@@ -975,6 +1142,171 @@
     "confirmed", "empty", "unavailable", "failed", "unknown"
   ]);
   const SUBMIT_BACK_PHASES = new Set(["choosing", "empty", "unavailable", "failed", "unknown"]);
+
+  // --- 任务面板 (#261): one multi-step flow at a time, over the 填写 page --------------------
+  // The panel only arranges what the flows above already render; every button in it is the
+  // flow's own. Which flow is in front follows the existing exclusion rules: a job save (also
+  // the one started from a fill's "保存岗位"), then a submission check, then 辅助新增, then the
+  // fill's archive question, which comes back once the job save is done.
+  const TASK_ICON = {
+    job: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3 13h18"/></svg>',
+    submit: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.3 2.4 2.4 4.8-5"/></svg>',
+    repeat: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6h11M4 12h11M4 18h7M18 15v6M15 18h6"/></svg>',
+    archive: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9M10 13h4"/></svg>'
+  };
+  const TASK_STEPS = {
+    job: ["读取岗位", "核对信息", "保存结果"],
+    submit: ["读取岗位", "核对信息", "选择申请", "确认结果"],
+    repeat: ["扫描网页", "制定计划", "预览计划", "执行中", "结束"],
+    archive: ["是否留档", "选择申请", "留档结果"]
+  };
+  let taskShown = "";
+  let taskPhase = "";
+  let taskReturnFocus = null;
+  let taskExitTarget = null;
+
+  function activeTask() {
+    const jobPhase = jobSave?.phase || "idle";
+    if (JOB_ACTIVE.has(jobPhase) || (jobPhase === "result" && jobSave?.result)) return "job";
+    if (SUBMIT_ACTIVE.has(submitConfirm?.phase || "idle")) return "submit";
+    if (repeatView && repeatView.phase !== "idle") return "repeat";
+    if (fillArchive) return "archive";
+    return "";
+  }
+
+  // The header of the flow in front: its title, one line of where it stands, its step, and
+  // the one way out. That way out is always one of the flow's own buttons under its own
+  // name ("取消识别", "取消留档"…); a step whose only exits write something, or that is
+  // already writing, offers none here.
+  function describeTask(task) {
+    if (task === "job") {
+      const phase = jobSave.phase;
+      if (phase === "extracting" || phase === "assist") {
+        return { key: phase, title: "保存岗位到桌面端", step: 0, exit: { button: elements.jobStop, label: phase === "assist" ? "取消识别" : "取消" },
+          desc: phase === "assist" ? "正在用桌面的 AI 识别岗位信息" : "正在读取当前网页的岗位信息" };
+      }
+      if (phase === "choice" || (phase === "saving" && jobSave.candidates?.length)) {
+        return { key: "choice", title: "这可能是同一岗位", step: 1, exit: null, desc: phase === "saving" ? "正在保存到桌面…" : "关联已有的岗位，或另存为新的一条" };
+      }
+      if (phase === "result") {
+        return { key: "result", title: "保存岗位到桌面端", step: 2, error: jobSave.result?.tone === "warn",
+          desc: "保存结果", exit: { button: elements.jobDismiss, label: "返回" } };
+      }
+      const saving = phase === "saving" || jobPending;
+      return { key: phase, title: "核对岗位信息", step: 1, exit: saving ? null : { button: elements.jobCancel, label: "取消" },
+        desc: saving ? "正在保存到桌面…" : "核对后点「确定保存」才写入桌面" };
+    }
+    if (task === "submit") {
+      const phase = submitConfirm.phase;
+      const exit = { button: elements.submitDismiss, label: "返回" };
+      if (phase === "extracting" || phase === "assist") {
+        return { key: phase, title: "确认已投递", step: 0, exit: { button: elements.submitStop, label: "取消" },
+          desc: phase === "assist" ? "正在用桌面的 AI 识别岗位" : "正在读取当前网页的岗位信息" };
+      }
+      if (phase === "review") return { key: phase, title: "核对岗位信息", step: 1, exit: { button: elements.submitReviewCancel, label: "取消" }, desc: "核对后查找桌面里对应的申请" };
+      if (phase === "querying") return { key: phase, title: "正在查找对应申请", step: 2, exit: { button: elements.submitStop, label: "取消" }, desc: "只查询桌面已有的申请" };
+      if (phase === "choosing") return { key: phase, title: "选择对应申请", step: 2, exit: { button: elements.submitCancel, label: "取消" }, desc: "选中后才会更新桌面的申请阶段" };
+      if (phase === "confirming") return { key: phase, title: "正在确认投递", step: 3, exit: null, desc: "请求已发给桌面，请稍候" };
+      if (phase === "empty") return { key: phase, title: "没有找到对应申请", step: 2, error: true, exit: { button: elements.submitDismiss, label: "取消" }, desc: "可以先保存岗位，或返回修改后再查找" };
+      return { key: phase, title: phase === "confirmed" ? "已确认投递" : "确认投递的结果", step: 3,
+        error: phase === "failed" || phase === "unavailable", exit, desc: "" };
+    }
+    if (task === "repeat") {
+      const view = repeatView;
+      const exit = view.canStop ? { button: elements.repeatStop, label: "停止" }
+        : view.canCancel ? { button: elements.repeatCancel, label: "取消" }
+          : REPEAT_ACTIVE.includes(view.phase) ? null : { button: elements.repeatDismiss, label: "返回" };
+      const steps = { scanning: 0, planning: 1, preview: 2, executing: 3, filling: 3 };
+      const desc = {
+        scanning: "正在扫描网页上可以新增的分组",
+        planning: "正在制定新增计划",
+        preview: "当前支持论文、教育经历、工作经历、项目经历；确认后才会新增",
+        executing: "正在网页上新增条目",
+        filling: "正在填写新增的条目",
+        completed: `实际新增 ${view.added} 条，请在网页上核对`,
+        stopped: view.added ? `已停止，停止前新增了 ${view.added} 条` : "已停止，没有新增条目",
+        failed: "这次没有完成，网页上已有内容不受影响"
+      }[view.phase] || "";
+      // A run that failed or was stopped does not say which steps it got through: none is marked done.
+      return { key: view.phase, title: "AI 辅助新增条目", step: steps[view.phase] ?? 4, error: view.phase === "failed", exit, desc,
+        unsure: view.phase === "failed" || view.phase === "stopped" };
+    }
+    const phase = archiveShownPhase || fillArchive.phase;
+    const cancel = elements.fillOfferActions.querySelector?.('[data-archive="cancel"]');
+    const dismiss = elements.fillOfferActions.querySelector?.('[data-archive="dismiss"]');
+    if (phase === "offer") return { key: phase, title: "将本次填写留档？", step: 0, exit: { button: cancel, label: "不留档" }, desc: "选择「留档到桌面」后才会写入桌面" };
+    if (phase === "querying") return { key: phase, title: "正在查找对应申请", step: 1, exit: { button: cancel, label: "取消留档" }, desc: "只查询桌面已有的申请" };
+    if (phase === "choosing") return { key: phase, title: "选择对应申请", step: 1, exit: { button: cancel, label: "取消留档" }, desc: "选好之后才会写入桌面" };
+    if (phase === "empty") return { key: phase, title: "没有找到对应申请", step: 1, error: true, exit: { button: cancel, label: "取消留档" }, desc: "可以先保存岗位，再回来重新查找" };
+    if (phase === "blocked") {
+      return { key: phase, title: "暂时无法留档", step: 1, error: true, desc: "",
+        exit: { button: cancel, label: fillArchive.canQueue ? "取消留档" : "返回" } };
+    }
+    if (phase === "saving") return { key: phase, title: "正在留档", step: 2, exit: null, desc: "正在写入，请稍候" };
+    return { key: phase, title: "留档结果", step: 2, error: phase === "failed", exit: { button: dismiss, label: "返回" }, desc: "" };
+  }
+
+  function usableFocus(node) {
+    return Boolean(node?.isConnected && !node.disabled && node.offsetParent !== null && !node.closest?.("[inert]"));
+  }
+
+  // The 填写 page under the panel is out of reach while a flow (or the feedback preview) is open.
+  function syncHomeInert() {
+    const preview = document.getElementById("feedback-preview-panel");
+    elements.fillHome.inert = Boolean(taskShown) || Boolean(preview?.isConnected && preview.hidden === false);
+  }
+
+  function renderTaskPanel() {
+    const task = activeTask();
+    const view = task ? describeTask(task) : null;
+    const panel = elements.taskPanel;
+    const active = document.activeElement || null;
+    const focusInPanel = Boolean(active && panel.contains?.(active));
+    if (task && !taskShown) taskReturnFocus = active;
+    const previous = taskShown;
+    taskShown = task;
+    panel.hidden = !task;
+    for (const [name, flow] of Object.entries(elements.taskFlows)) flow.hidden = name !== task;
+    syncHomeInert();
+    if (view) {
+      elements.taskIcon.innerHTML = TASK_ICON[task];
+      elements.taskTitle.textContent = view.title;
+      elements.taskDesc.textContent = view.desc || "";
+      elements.taskNotice.hidden = task !== "submit";
+      elements.taskNotice.textContent = task === "submit" ? "此操作只更新桌面申请阶段，不会提交招聘网站的申请。" : "";
+      const steps = TASK_STEPS[task];
+      elements.taskSteps.hidden = !steps;
+      elements.taskSteps.innerHTML = steps.map((label, index) => {
+        const last = index === steps.length - 1;
+        const name = task === "repeat" && last && view.step === index
+          ? { completed: "完成", stopped: "已停止", failed: "失败" }[view.key] || label : label;
+        const state = index < view.step ? (view.unsure ? "" : ' class="is-done"')
+          : index === view.step ? `${view.error ? ' class="is-error"' : ""} aria-current="step"` : "";
+        return `<li${state}>${escapeHtml(name)}</li>`;
+      }).join("");
+      taskExitTarget = view.exit?.button || null;
+      elements.taskExit.hidden = !taskExitTarget;
+      elements.taskExit.disabled = Boolean(taskExitTarget?.disabled);
+      elements.taskExit.textContent = taskExitTarget ? view.exit.label : "";
+    } else {
+      taskExitTarget = null;
+    }
+    const key = view ? `${task}:${view.key}` : "";
+    if (key && key !== taskPhase) {
+      // A new flow starts at its title; a flow that moved on does so too when the control the
+      // user was on is no longer shown (a submit button that became a result).
+      if (task !== previous) elements.taskBody.scrollTop = 0;
+      if (task !== previous || !(focusInPanel && usableFocus(active))) elements.taskTitle.focus?.();
+    }
+    taskPhase = key;
+    if (!task && previous && (focusInPanel || !active || active === document.body)) {
+      // Back where the flow was started, or its entry button when that control is gone.
+      const entry = { job: elements.jobSaveButton, submit: elements.submitButton, repeat: elements.repeatButton, archive: elements.fillButton }[previous];
+      const target = [taskReturnFocus, entry, elements.fillButton, elements.templateSelect].find(usableFocus);
+      target?.focus?.();
+      taskReturnFocus = null;
+    }
+  }
 
   function applySubmitConfirm(snapshot, tabId = currentTabId) {
     if (!snapshot) {
@@ -991,6 +1323,8 @@
     }
     submitConfirm = next ? { ...next, tabId } : null;
     if (!next) submitLocalError = "";
+    if (next?.fields) noteJob(next.fields, tabId);
+    if (!next && snapshot.discarded === "page-changed") { jobSeen = null; renderJobSummary(); }
     renderJobSave();
   }
 
@@ -1153,6 +1487,7 @@
       elements.jobCopyId.hidden = !job.result.extensionId;
     }
     renderSubmitConfirm();
+    renderTaskPanel();
   }
 
   // One request at a time from the panel; the page refuses a second write on its own too.
@@ -1350,6 +1685,13 @@
       const epoch = tabEpoch;
       const tab = await activeTab();
       const nextTabId = tab?.id || null;
+      const nextHost = hostOf(tab?.url);
+      const nextAddress = addressOf(tab?.url);
+      // Another tab, or another page in this tab (even on the same site): the job read before
+      // is not this page's.
+      if (jobSeen && (jobSeen.tabId !== nextTabId || jobSeen.address !== nextAddress)) jobSeen = null;
+      pageHost = nextHost;
+      pageAddress = nextAddress;
       if (nextTabId !== currentTabId) {
         elements.fillResult.hidden = true;
         elements.fillResult.textContent = "";
@@ -1378,8 +1720,10 @@
       const front = await activeTab();
       if ((front?.id || null) !== polledTabId || epoch !== tabEpoch) { statusRepoll = true; return; }
       const connected = Boolean(response?.ready);
-      elements.pageState.textContent = connected ? "当前网页已连接填表助手" : "当前页面无法使用填表助手";
-      elements.pageState.classList.toggle("is-unavailable", !connected);
+      pageChecked = true;
+      pageConnected = connected;
+      renderPageCard();
+      renderJobSummary();
       if (!connected) currentTabId = null;
       lastPageStatus = connected ? response : null;
       updateFillAvailability(lastPageStatus);
@@ -1466,11 +1810,51 @@
     if (changed) renderFromStore();
   }
 
-  document.querySelectorAll(".dock-tabs button").forEach((button) => button.addEventListener("click", () => {
-    const tab = button.dataset.tab;
-    document.querySelectorAll(".dock-tabs button").forEach((item) => item.setAttribute("aria-selected", String(item.dataset.tab === tab)));
+  const tabButtons = Array.from(document.querySelectorAll(".dock-tabs button"));
+  // Switching views never touches the page's text box or an open flow; each view keeps its scroll.
+  function selectTab(tab) {
+    tabButtons.forEach((item) => {
+      item.setAttribute("aria-selected", String(item.dataset.tab === tab));
+      item.tabIndex = item.dataset.tab === tab ? 0 : -1;
+    });
     document.querySelectorAll(".dock-view").forEach((view) => { view.hidden = view.dataset.view !== tab; });
-  }));
+    // Coming to 简历字段 shows the groups folded, unless a search is narrowing them.
+    if (tab === "fields" && !elements.fieldSearch.value.trim()) {
+      elements.fieldGroups.querySelectorAll?.(".field-group").forEach((group) => { group.open = false; });
+    }
+  }
+  tabButtons.forEach((button, index) => {
+    button.addEventListener("click", () => selectTab(button.dataset.tab));
+    button.addEventListener("keydown", (event) => {
+      const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabButtons.length - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault();
+      const target = tabButtons[(next + tabButtons.length) % tabButtons.length];
+      selectTab(target.dataset.tab);
+      target.focus();
+    });
+  });
+  // 填写指引 starts open; once folded (or reopened) it stays that way for this browser profile.
+  // A per-viewer convenience only: if storage is unavailable it simply starts open.
+  const GUIDE_KEY = "sidepanelGuideFolded";
+  const guideToggle = document.getElementById("guide-toggle");
+  const guideBody = document.getElementById("guide-body");
+  function setGuideFolded(folded) {
+    guideBody.hidden = folded;
+    guideToggle.setAttribute?.("aria-expanded", String(!folded));
+    const label = folded ? "展开填写指引" : "收起填写指引";
+    guideToggle.setAttribute?.("aria-label", label);
+    guideToggle.title = label;
+  }
+  try { setGuideFolded(self.localStorage?.getItem(GUIDE_KEY) === "1"); } catch { setGuideFolded(false); }
+  guideToggle.addEventListener("click", () => {
+    const folded = !guideBody.hidden;
+    setGuideFolded(folded);
+    try { self.localStorage?.setItem(GUIDE_KEY, folded ? "1" : "0"); } catch {}
+  });
+  elements.taskExit.addEventListener("click", () => {
+    if (taskExitTarget && !taskExitTarget.disabled && !taskExitTarget.hidden) taskExitTarget.click?.();
+  });
   document.getElementById("show-fields").addEventListener("click", () => document.querySelector('.dock-tabs button[data-tab="fields"]').click());
   elements.fieldSearch.addEventListener("input", () => filterFields());
   elements.fieldGroups.addEventListener("toggle", (event) => {
@@ -1592,14 +1976,6 @@
     }
     return false;
   });
-  document.querySelectorAll("[data-advanced]").forEach((button) => button.addEventListener("click", async () => {
-    document.querySelector(".dock-tools").open = false;
-    const result = await sendToPage({ type: "RESUME_PANEL_ADVANCED", action: button.dataset.advanced });
-    const done = {
-      close: "网页高级控件已收起。"
-    }[button.dataset.advanced] || "请在网页上的高级控件中继续操作。";
-    toast(result?.ok ? done : result?.error || "无法打开工具。");
-  }));
   elements.jobSaveButton.addEventListener("click", async () => {
     const result = await jobRequest({ type: "RESUME_PANEL_SAVE_DRAFT" });
     if (result && !result.ok) toast(result.error || "无法读取当前网页的岗位信息。");
@@ -1831,6 +2207,9 @@
   }
   // Connection details and anything left over from the 0.4.0 migration live on the status page.
   document.getElementById("open-status").addEventListener("click", () => { chrome.runtime.openOptionsPage?.(); });
+  const version = chrome.runtime.getManifest?.()?.version || "";
+  elements.pluginVersion.textContent = version ? `插件 v${version}` : "";
+  elements.pluginVersion.hidden = !version;
   document.getElementById("legacy-hint-open").addEventListener("click", async () => {
     const result = await chrome.runtime.sendMessage({ type: "DESKTOP_OPEN_VIEW", view: "resume" }).catch(() => null);
     if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");

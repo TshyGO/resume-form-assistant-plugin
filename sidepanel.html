@@ -10,204 +10,320 @@
   <body>
     <div class="dock">
       <header class="dock-header">
-        <div class="dock-brand"><img src="icons/icon48.png" width="34" height="34" alt=""><div><strong>网申快填</strong><span>填网申 · 管投递</span></div></div>
-        <details class="dock-tools">
-          <summary aria-label="更多工具">···</summary>
-          <div class="dock-tools__menu">
-            <button type="button" data-advanced="close">收起网页高级控件</button>
+        <div class="dock-header__row">
+          <div class="dock-brand">
+            <img src="icons/icon48.png" width="34" height="34" alt="">
+            <div class="dock-brand__text">
+              <p class="dock-brand__line"><strong>网申快填</strong><span id="desktop-pill" class="brand-pill" data-tone="idle">正在连接</span></p>
+              <span class="dock-brand__sub">填网申 · 管投递</span>
+            </div>
           </div>
-        </details>
-        <p class="page-state" id="page-state">正在连接当前网页…</p>
+        </div>
       </header>
-
-      <div id="desktop-connection" class="desktop-connection" role="status" hidden>
-        <span id="desktop-connection-text"></span>
-        <button id="desktop-connection-action" type="button"></button>
-      </div>
-      <div id="job-assist" class="desktop-connection" role="status" hidden>
-        <span id="job-assist-text"></span>
-        <button id="job-assist-cancel" type="button">取消识别</button>
-      </div>
-      <div id="legacy-hint" class="desktop-connection" role="status" hidden>
-        <span>插件里的旧简历正在迁到桌面，请到桌面「简历」页确认导入。</span>
-        <button id="legacy-hint-open" type="button">打开桌面简历页</button>
-      </div>
-
       <nav class="dock-tabs" role="tablist" aria-label="侧边栏视图">
-        <button type="button" role="tab" data-tab="fill" aria-selected="true" aria-controls="fill-view">填写</button>
-        <button type="button" role="tab" data-tab="fields" aria-selected="false" aria-controls="fields-view">简历字段</button>
+        <button type="button" role="tab" id="tab-fill" data-tab="fill" aria-selected="true" aria-controls="fill-view">填写</button>
+        <button type="button" role="tab" id="tab-fields" data-tab="fields" aria-selected="false" aria-controls="fields-view" tabindex="-1">简历字段</button>
       </nav>
 
+      <div id="desktop-connection" class="status-strip is-warn" role="status" hidden>
+        <svg class="icon status-strip__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4"/><path d="M12 17h.01"/></svg>
+        <div class="status-strip__body">
+          <span id="desktop-connection-text"></span>
+          <button id="desktop-connection-action" type="button"></button>
+        </div>
+      </div>
+      <div id="job-assist" class="status-strip is-info" role="status" hidden>
+        <svg class="icon status-strip__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <div class="status-strip__body">
+          <span id="job-assist-text"></span>
+          <button id="job-assist-cancel" type="button">取消识别</button>
+        </div>
+      </div>
+      <div id="legacy-hint" class="status-strip is-info" role="status" hidden>
+        <svg class="icon status-strip__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12"/><path d="m12 6 6 6-6 6"/><path d="M20 4v16"/></svg>
+        <div class="status-strip__body">
+          <span>插件里的旧简历正在迁到桌面，请到桌面「简历」页确认导入。</span>
+          <button id="legacy-hint-open" type="button">打开桌面简历页</button>
+        </div>
+      </div>
+
       <main class="dock-main">
-        <section class="dock-view" id="fill-view" role="tabpanel" data-view="fill">
-          <label for="template-select" class="dock-label">当前模板</label>
-          <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
-          <p class="dock-note" id="config-state"></p>
-          <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
-          <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
-          <button class="repeat-button" id="repeat-button" type="button">AI 辅助新增条目</button>
-          <div id="repeat-card" class="repeat-card" hidden>
-            <p id="repeat-message" class="repeat-card__message" role="status" aria-live="polite"></p>
-            <ul id="repeat-plan" class="repeat-card__plan" aria-label="计划新增的条目" hidden></ul>
-            <div class="repeat-card__actions">
-              <button type="button" id="repeat-confirm" class="repeat-card__primary" hidden>确认新增</button>
-              <button type="button" id="repeat-cancel" hidden>取消</button>
-              <button type="button" id="repeat-stop" hidden>停止</button>
-              <button type="button" id="repeat-dismiss" hidden>知道了</button>
-            </div>
-          </div>
-          <p class="safety-note">填写后请核对网页内容，插件不会自动提交</p>
-          <div id="feedback-notice-root" hidden></div>
+        <section class="dock-view" id="fill-view" role="tabpanel" aria-labelledby="tab-fill" data-view="fill">
+          <div class="view-scroll" id="fill-home">
+            <section class="card page-card" aria-label="当前网页">
+              <div class="card-head">
+                <p class="page-state is-unavailable" id="page-state">正在连接当前网页…</p>
+                <span id="page-domain" class="chip chip--mono" hidden></span>
+              </div>
+              <p id="page-ready" class="page-ready" data-tone="idle"></p>
+            </section>
 
-          <section id="job-save" class="job-save" aria-label="保存岗位到桌面端">
-            <button class="job-save-button" id="job-save-button" type="button">保存岗位到桌面端</button>
-            <button class="job-save-button job-submit-button" id="submit-confirm-button" type="button" title="你已经在招聘网站投递之后，在这里告诉桌面。插件不会替你提交申请。">确认已投递</button>
-            <p id="job-save-hint" class="job-note" hidden>当前网页没有连接填表助手，无法保存岗位。请在招聘网页里打开侧栏。</p>
-            <div id="job-save-progress" class="job-card" role="status" hidden>
-              <p id="job-save-progress-text" class="job-card__title"></p>
-              <p id="job-save-progress-count" class="job-note"></p>
-              <ol id="job-save-fragments" class="job-fragments"></ol>
-              <button id="job-save-stop" class="job-link" type="button">取消识别</button>
-            </div>
-            <form id="job-save-form" class="job-card" novalidate hidden>
-              <p class="job-card__title">核对岗位信息</p>
-              <label class="job-label" for="job-save-company">公司名称</label>
-              <input id="job-save-company" class="job-input" type="text" autocomplete="off" required>
-              <label class="job-label" for="job-save-title">岗位名称</label>
-              <input id="job-save-title" class="job-input" type="text" autocomplete="off" required>
-              <label class="job-label" for="job-save-location">工作地点</label>
-              <input id="job-save-location" class="job-input" type="text" autocomplete="off">
-              <label class="job-label" for="job-save-url">来源网址</label>
-              <input id="job-save-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
-              <p id="job-save-note" class="job-note"></p>
-              <p id="job-save-error" class="job-error" role="alert" hidden></p>
-              <button id="job-save-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
-              <button id="job-save-reassist" class="job-link" type="button" title="把页面上的几段岗位文字交给桌面 AI 重新识别，识别前会列出发送的内容">AI 重新识别</button>
-              <div class="offer-actions">
-                <button id="job-save-confirm" type="submit">确定保存</button>
-                <button id="job-save-cancel" type="button">取消</button>
+            <section class="card template-card" aria-label="当前模板">
+              <div class="card-head">
+                <label for="template-select" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="12" cy="10" r="2.6"/><path d="M7.5 17c.9-2 2.5-3 4.5-3s3.6 1 4.5 3"/></svg>当前模板</label>
               </div>
-              <p class="job-note">只有点「确定保存」才会写入桌面；不会提交网申。</p>
-            </form>
-            <div id="job-save-choice" class="job-card" hidden>
-              <p class="job-card__title">桌面里可能已有这个岗位</p>
-              <p class="job-note">要关联已有岗位，还是另存为新的一条？</p>
-              <div id="job-save-candidates" class="job-candidates"></div>
-              <div class="offer-actions">
-                <button id="job-save-new" type="button">另存为新的岗位</button>
-                <button id="job-save-later" type="button">稍后处理</button>
+              <div class="template-picker">
+                <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
+                <p id="template-meta" class="template-meta"></p>
               </div>
-            </div>
-            <div id="submit-confirm-progress" class="job-card" role="status" hidden>
-              <p id="submit-confirm-progress-text" class="job-card__title"></p>
-              <p id="submit-confirm-progress-count" class="job-note"></p>
-              <ol id="submit-confirm-fragments" class="job-fragments"></ol>
-              <button id="submit-confirm-stop" class="job-link" type="button">取消</button>
-            </div>
-            <form id="submit-confirm-form" class="job-card" novalidate hidden>
-              <p class="job-card__title">核对岗位信息</p>
-              <label class="job-label" for="submit-confirm-company">公司名称</label>
-              <input id="submit-confirm-company" class="job-input" type="text" autocomplete="off" required>
-              <label class="job-label" for="submit-confirm-title">岗位名称</label>
-              <input id="submit-confirm-title" class="job-input" type="text" autocomplete="off" required>
-              <label class="job-label" for="submit-confirm-url">来源网址</label>
-              <input id="submit-confirm-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
-              <p id="submit-confirm-note" class="job-note"></p>
-              <p id="submit-confirm-error" class="job-error" role="alert" hidden></p>
-              <button id="submit-confirm-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
-              <div class="offer-actions">
-                <button id="submit-confirm-query" type="submit">查找对应申请</button>
-                <button id="submit-confirm-review-cancel" type="button">取消</button>
+              <p id="template-empty" class="card-hint" hidden>桌面里还没有简历模板。可以到桌面「简历」页创建，侧栏的资料都来自桌面程序。</p>
+              <p class="source-line"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><span id="config-state"></span><span id="plugin-version" class="chip chip--mono"></span></p>
+              <div id="fill-progress" class="fill-progress" role="status" hidden>
+                <p class="fill-progress__title">正在填写当前网页</p>
+                <p id="fill-progress-phase" class="fill-progress__phase"></p>
+                <span class="fill-progress__bar" aria-hidden="true"></span>
               </div>
-              <p class="job-note">这一步只查询桌面已有的申请，不会保存岗位，也不会创建新申请。</p>
-            </form>
-            <div id="submit-confirm-choice" class="job-card" hidden>
-              <p class="job-card__title">这次确认投递的是哪条申请？</p>
-              <p class="job-note">只更新桌面上的申请阶段；不会提交招聘网站上的申请。</p>
-              <div id="submit-confirm-candidates" class="job-candidates"></div>
-              <div class="offer-actions">
-                <button id="submit-confirm-back" type="button">返回修改</button>
-                <button id="submit-confirm-cancel" type="button">取消</button>
+              <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
+              <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
+              <button class="repeat-button" id="repeat-button" type="button">AI 辅助新增条目</button>
+              <p id="fill-reason" class="card-hint fill-reason" hidden></p>
+              <div id="fill-result" class="fill-result" role="status" hidden></div>
+              <p class="safety-note"><span>填写后请核对网页内容，插件<strong>不会自动提交</strong>表单，提交由你在招聘网站上完成。</span></p>
+            </section>
+            <div id="feedback-notice-root" hidden></div>
+
+            <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-label="保存到我的信息" hidden>
+              <p id="profile-offer-text" class="offer-title"></p>
+              <p id="profile-offer-intro" class="profile-intro"></p>
+              <div id="profile-offer-result" class="profile-result" role="status" hidden></div>
+              <div id="profile-offer-detail" class="profile-detail">
+                <div id="profile-offer-groups" class="profile-groups"></div>
+              </div>
+              <p id="profile-offer-notes" class="offer-hint" hidden></p>
+              <div class="offer-actions profile-actions">
+                <button id="profile-offer-save" type="button" data-offer="profileAdd">记住这 1 项</button>
+                <button id="profile-offer-skip" type="button" data-offer="profileSkip">暂不保存</button>
+                <button id="profile-offer-view" type="button" hidden>在桌面查看</button>
+                <button id="profile-offer-dismiss" type="button" data-offer="profileDismiss" hidden>完成</button>
               </div>
             </div>
-            <div id="submit-confirm-result" class="job-card" role="status" hidden>
-              <p id="submit-confirm-result-text"></p>
-              <p id="submit-confirm-result-hint" class="job-note" hidden></p>
-              <div class="offer-actions">
-                <button id="submit-confirm-save" type="button" hidden>保存岗位到桌面端</button>
-                <button id="submit-confirm-result-back" type="button" hidden>返回修改</button>
-                <button id="submit-confirm-copy-id" type="button" hidden>复制扩展 ID</button>
-                <button id="submit-confirm-dismiss" type="button">知道了</button>
+
+            <section id="job-save" class="card flow-card" aria-labelledby="flow-title">
+              <div class="card-head">
+                <h2 id="flow-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.6-3.8M8.2 13.1l7.6 3.8"/></svg>投递流转</h2>
+                <span id="job-summary-badge" class="chip chip--ok" hidden>已读取岗位</span>
               </div>
+              <div id="job-summary" class="job-summary" hidden>
+                <p id="job-summary-title" class="job-summary__title"></p>
+                <p id="job-summary-meta" class="job-summary__meta"></p>
+              </div>
+              <div class="flow-actions">
+                <button class="job-save-button" id="job-save-button" type="button">保存岗位到桌面端</button>
+                <button class="job-save-button job-submit-button" id="submit-confirm-button" type="button" title="你已经在招聘网站投递之后，在这里告诉桌面。插件不会替你提交申请。">确认已投递</button>
+              </div>
+              <p id="job-save-hint" class="card-hint" hidden>当前网页没有连接填表助手，无法保存岗位。请在招聘网页里打开侧栏。</p>
+              <div id="desktop-status" class="desktop-status" role="status" hidden></div>
+              <section id="queue-center" class="queue-center" aria-label="待同步">
+                <button id="queue-toggle" class="queue-toggle" type="button" aria-expanded="false" aria-controls="queue-body"><span class="queue-dot" aria-hidden="true"></span><span>待同步</span><strong id="queue-count">0 条</strong><span id="queue-state" class="queue-state-text">没有待处理的记录</span><span class="queue-chevron" aria-hidden="true">›</span></button>
+                <div id="queue-body" class="queue-body" hidden>
+                  <p class="queue-intro">这里的记录都还没有写入桌面。选择申请或重试成功后，会自动从这里移除。</p>
+                  <div id="queue-list" class="queue-list"></div>
+                  <p id="queue-empty" class="queue-empty" hidden>没有待同步的记录。</p>
+                </div>
+              </section>
+            </section>
+
+            <details id="fill-diagnostics" class="card dock-diagnostics" hidden>
+              <summary><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg>填写诊断（不含简历内容）</summary>
+              <textarea id="fill-diagnostics-text" readonly rows="9" aria-label="填写诊断摘要"></textarea>
+              <button id="copy-diagnostics" class="dock-diagnostics-copy" type="button">复制诊断</button>
+            </details>
+            <div class="card feedback-wrap">
+              <div id="feedback-manual-root"></div>
+              <div id="feedback-auto-root" data-variant="compact"></div>
             </div>
-            <div id="job-save-result" class="job-card" role="status" hidden>
-              <p id="job-save-result-text"></p>
-              <p id="job-save-result-hint" class="job-note" hidden></p>
-              <div class="offer-actions">
-                <button id="job-save-again" type="button" hidden>再存一次</button>
-                <button id="job-save-copy-id" type="button" hidden>复制扩展 ID</button>
-                <button id="job-save-dismiss" type="button">知道了</button>
+            <p class="dock-help">需要手动补填？到 <button id="show-fields" class="dock-help-link" type="button">简历字段</button> 页，先点网页输入框，再点字段；输入框已有内容时，用「添加」「替换」「删除」。</p>
+          </div>
+
+          <!-- 多步流程的任务面板：盖住填写页的内容区，一次只显示一个流程。 -->
+          <section id="task-panel" class="task-panel" role="region" aria-labelledby="task-title" hidden>
+            <header class="task-head">
+              <span id="task-icon" class="task-icon" aria-hidden="true"></span>
+              <div class="task-heading">
+                <h2 id="task-title" tabindex="-1"></h2>
+                <p id="task-desc"></p>
+              </div>
+              <button id="task-exit" class="task-exit" type="button" hidden></button>
+            </header>
+            <p id="task-notice" class="task-notice" hidden></p>
+            <ol id="task-steps" class="task-steps" aria-label="步骤" hidden></ol>
+            <div class="task-body" id="task-body">
+              <div class="task-flow" id="task-flow-repeat" data-task="repeat">
+                <div id="repeat-card" class="repeat-card" hidden>
+                  <p id="repeat-message" class="repeat-card__message" role="status" aria-live="polite"></p>
+                  <ul id="repeat-plan" class="repeat-card__plan" aria-label="计划新增的条目" hidden></ul>
+                  <div class="repeat-card__actions task-foot">
+                    <button type="button" id="repeat-confirm" class="repeat-card__primary" hidden>确认新增</button>
+                    <button type="button" id="repeat-cancel" hidden>取消</button>
+                    <button type="button" id="repeat-stop" hidden>停止</button>
+                    <button type="button" id="repeat-dismiss" hidden>知道了</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="task-flow" id="task-flow-job" data-task="job">
+                <div id="job-save-progress" class="job-card" role="status" hidden>
+                  <p id="job-save-progress-text" class="job-card__title"></p>
+                  <span class="progress-line" aria-hidden="true"></span>
+                  <p id="job-save-progress-count" class="job-note"></p>
+                  <details class="job-fragments-box">
+                    <summary>查看发送的页面文字</summary>
+                    <ol id="job-save-fragments" class="job-fragments"></ol>
+                  </details>
+                  <div class="offer-actions task-foot">
+                    <button id="job-save-stop" class="job-link" type="button">取消识别</button>
+                  </div>
+                </div>
+                <form id="job-save-form" class="job-card" novalidate hidden>
+                  <p class="job-card__title">核对岗位信息</p>
+                  <label class="job-label" for="job-save-company">公司名称<span class="required" aria-hidden="true">*</span></label>
+                  <input id="job-save-company" class="job-input" type="text" autocomplete="off" required aria-describedby="job-save-error">
+                  <label class="job-label" for="job-save-title">岗位名称<span class="required" aria-hidden="true">*</span></label>
+                  <input id="job-save-title" class="job-input" type="text" autocomplete="off" required aria-describedby="job-save-error">
+                  <p id="job-save-error" class="job-error" role="alert" hidden></p>
+                  <label class="job-label" for="job-save-location">工作地点</label>
+                  <input id="job-save-location" class="job-input" type="text" autocomplete="off">
+                  <label class="job-label" for="job-save-url">来源网址（已去掉个人参数，只读）</label>
+                  <input id="job-save-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
+                  <p id="job-save-note" class="job-note"></p>
+                  <div class="job-secondary">
+                    <button id="job-save-reassist" class="job-link" type="button" title="把页面上的几段岗位文字交给桌面 AI 重新识别，识别前会列出发送的内容">AI 重新识别</button>
+                    <button id="job-save-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
+                  </div>
+                  <p class="job-note">只有点「确定保存」才会写入桌面；不会提交网申。</p>
+                  <div class="offer-actions task-foot">
+                    <button class="btn-primary" id="job-save-confirm" type="submit">确定保存</button>
+                    <button id="job-save-cancel" type="button">取消</button>
+                  </div>
+                </form>
+                <div id="job-save-choice" class="job-card" hidden>
+                  <p class="job-card__title">桌面里可能已有这个岗位</p>
+                  <p class="job-note">要关联已有岗位，还是另存为新的一条？</p>
+                  <div id="job-save-candidates" class="job-candidates"></div>
+                  <div class="offer-actions task-foot">
+                    <button id="job-save-new" type="button">另存为新的岗位</button>
+                    <button id="job-save-later" type="button">稍后处理</button>
+                  </div>
+                </div>
+                <div id="job-save-result" class="job-card" role="status" hidden>
+                  <p id="job-save-result-text" class="job-result-text"></p>
+                  <p id="job-save-result-hint" class="job-note" hidden></p>
+                  <div class="offer-actions task-foot">
+                    <button id="job-save-again" type="button" hidden>再存一次</button>
+                    <button id="job-save-copy-id" type="button" hidden>复制扩展 ID</button>
+                    <button id="job-save-dismiss" type="button">知道了</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="task-flow" id="task-flow-submit" data-task="submit">
+                <div id="submit-confirm-progress" class="job-card" role="status" hidden>
+                  <p id="submit-confirm-progress-text" class="job-card__title"></p>
+                  <span class="progress-line" aria-hidden="true"></span>
+                  <p id="submit-confirm-progress-count" class="job-note"></p>
+                  <details class="job-fragments-box">
+                    <summary>查看发送的页面文字</summary>
+                    <ol id="submit-confirm-fragments" class="job-fragments"></ol>
+                  </details>
+                  <div class="offer-actions task-foot">
+                    <button id="submit-confirm-stop" class="job-link" type="button">取消</button>
+                  </div>
+                </div>
+                <form id="submit-confirm-form" class="job-card" novalidate hidden>
+                  <p class="job-card__title">核对岗位信息</p>
+                  <label class="job-label" for="submit-confirm-company">公司名称<span class="required" aria-hidden="true">*</span></label>
+                  <input id="submit-confirm-company" class="job-input" type="text" autocomplete="off" required aria-describedby="submit-confirm-error">
+                  <label class="job-label" for="submit-confirm-title">岗位名称<span class="required" aria-hidden="true">*</span></label>
+                  <input id="submit-confirm-title" class="job-input" type="text" autocomplete="off" required aria-describedby="submit-confirm-error">
+                  <p id="submit-confirm-error" class="job-error" role="alert" hidden></p>
+                  <label class="job-label" for="submit-confirm-url">来源网址（已去掉个人参数，只读）</label>
+                  <input id="submit-confirm-url" class="job-input" type="text" readonly aria-readonly="true" tabindex="-1">
+                  <p id="submit-confirm-note" class="job-note"></p>
+                  <div class="job-secondary">
+                    <button id="submit-confirm-open-ai" class="job-link" type="button" hidden>打开桌面 AI 设置</button>
+                  </div>
+                  <p class="job-note">这一步只查询桌面已有的申请，不会保存岗位，也不会创建新申请。</p>
+                  <div class="offer-actions task-foot">
+                    <button class="btn-primary" id="submit-confirm-query" type="submit">查找对应申请</button>
+                    <button id="submit-confirm-review-cancel" type="button">取消</button>
+                  </div>
+                </form>
+                <div id="submit-confirm-choice" class="job-card" hidden>
+                  <p class="job-card__title">这次确认投递的是哪条申请？</p>
+                  <p class="job-note">只更新桌面上的申请阶段；不会提交招聘网站上的申请。</p>
+                  <div id="submit-confirm-candidates" class="job-candidates"></div>
+                  <div class="offer-actions task-foot">
+                    <button id="submit-confirm-back" type="button">返回修改</button>
+                    <button id="submit-confirm-cancel" type="button">取消</button>
+                  </div>
+                </div>
+                <div id="submit-confirm-result" class="job-card" role="status" hidden>
+                  <p id="submit-confirm-result-text" class="job-result-text"></p>
+                  <p id="submit-confirm-result-hint" class="job-note" hidden></p>
+                  <div class="offer-actions task-foot">
+                    <button id="submit-confirm-save" type="button" hidden>保存岗位到桌面端</button>
+                    <button id="submit-confirm-result-back" type="button" hidden>返回修改</button>
+                    <button id="submit-confirm-copy-id" type="button" hidden>复制扩展 ID</button>
+                    <button id="submit-confirm-dismiss" type="button">知道了</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="task-flow" id="task-flow-archive" data-task="archive">
+                <div id="fill-offer" class="offer-card" role="region" aria-label="填写留档" hidden>
+                  <p id="fill-offer-title" class="offer-title" hidden></p>
+                  <p id="fill-offer-text" role="status"></p>
+                  <p id="fill-offer-hint" class="offer-hint" hidden></p>
+                  <p id="fill-offer-snapshot-state" class="offer-hint" hidden></p>
+                  <label id="fill-offer-check" class="offer-check"><input id="fill-offer-snapshot" type="checkbox" checked>附上这次使用的简历模板拷贝</label>
+                  <div id="fill-offer-candidates" class="offer-candidates" hidden></div>
+                  <code id="fill-offer-extension-id" class="offer-code" hidden></code>
+                  <div id="fill-offer-actions" class="offer-actions offer-actions--wrap task-foot"></div>
+                </div>
               </div>
             </div>
           </section>
-          <div id="fill-result" class="fill-result" role="status" hidden></div>
-          <div id="profile-offer" class="offer-card profile-offer" role="region" aria-label="保存到我的信息" hidden>
-            <p id="profile-offer-text" class="offer-title"></p>
-            <p id="profile-offer-intro" class="profile-intro"></p>
-            <div id="profile-offer-result" class="profile-result" role="status" hidden></div>
-            <div id="profile-offer-detail" class="profile-detail">
-              <div id="profile-offer-groups" class="profile-groups"></div>
-            </div>
-            <p id="profile-offer-notes" class="offer-hint" hidden></p>
-            <div class="offer-actions profile-actions">
-              <button id="profile-offer-save" type="button" data-offer="profileAdd">记住这 1 项</button>
-              <button id="profile-offer-skip" type="button" data-offer="profileSkip">暂不保存</button>
-              <button id="profile-offer-view" type="button" hidden>在桌面查看</button>
-              <button id="profile-offer-dismiss" type="button" data-offer="profileDismiss" hidden>完成</button>
-            </div>
-          </div>
-          <div id="fill-offer" class="offer-card" role="region" aria-label="填写留档" hidden>
-            <p id="fill-offer-title" class="offer-title" hidden></p>
-            <p id="fill-offer-text" role="status"></p>
-            <p id="fill-offer-hint" class="offer-hint" hidden></p>
-            <p id="fill-offer-snapshot-state" class="offer-hint" hidden></p>
-            <label id="fill-offer-check" class="offer-check"><input id="fill-offer-snapshot" type="checkbox" checked>附上这次使用的简历模板拷贝</label>
-            <div id="fill-offer-candidates" class="offer-candidates" hidden></div>
-            <code id="fill-offer-extension-id" class="offer-code" hidden></code>
-            <div id="fill-offer-actions" class="offer-actions offer-actions--wrap"></div>
-          </div>
-          <div id="desktop-status" class="desktop-status" role="status" hidden></div>
-          <section id="queue-center" class="queue-center" aria-label="待同步">
-            <button id="queue-toggle" class="queue-toggle" type="button" aria-expanded="false" aria-controls="queue-body"><span>待同步</span><strong id="queue-count">0 条</strong><span class="queue-chevron" aria-hidden="true">›</span></button>
-            <div id="queue-body" class="queue-body" hidden>
-              <p class="queue-intro">这里的记录都还没有写入桌面。选择申请或重试成功后，会自动从这里移除。</p>
-              <div id="queue-list" class="queue-list"></div>
-              <p id="queue-empty" class="queue-empty" hidden>没有待同步的记录。</p>
-            </div>
-          </section>
-          <details id="fill-diagnostics" class="dock-diagnostics" hidden>
-            <summary>填写诊断（不含简历内容）</summary>
-            <textarea id="fill-diagnostics-text" readonly rows="9" aria-label="填写诊断摘要"></textarea>
-            <button id="copy-diagnostics" class="dock-diagnostics-copy" type="button">复制诊断</button>
-          </details>
-
-          <div id="feedback-manual-root"></div>
-          <div id="feedback-auto-root" data-variant="compact"></div>
-          <p class="dock-help">需要手动补填？到 <button id="show-fields" class="dock-help-link" type="button">简历字段</button> 页，先点网页输入框，再点字段；输入框已有内容时，用「添加」「替换」「删除」。</p>
+          <div id="feedback-preview-root"></div>
         </section>
 
-        <section class="dock-view" id="fields-view" role="tabpanel" data-view="fields" hidden>
-          <h2>简历字段</h2>
-          <p class="field-meta" id="field-meta"></p>
-          <label class="sr-only" for="field-search">搜索简历字段</label>
-          <input id="field-search" type="search" placeholder="搜索字段或内容" autocomplete="off">
-          <p class="target-note">先点击网页上的输入框，再选择字段；切到侧栏后会记住输入框和光标位置。「添加」在光标处插入，「替换」覆盖整个输入框，「删除」只去掉这个字段。</p>
-          <div id="field-groups" class="field-groups"></div>
-          <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。</p>
+        <section class="dock-view" id="fields-view" role="tabpanel" aria-labelledby="tab-fields" data-view="fields" hidden>
+          <div class="view-scroll">
+            <section class="card fields-head" aria-labelledby="fields-title">
+              <h2 id="fields-title"><span class="fields-dot" aria-hidden="true"></span><span id="fields-template">简历字段</span></h2>
+              <p class="field-meta" id="field-meta"></p>
+            </section>
+            <label class="sr-only" for="field-search">搜索简历字段</label>
+            <div class="search-box">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="field-search" type="search" placeholder="搜索字段名称或简历内容" autocomplete="off">
+            </div>
+            <section class="card guide-card" aria-labelledby="guide-title">
+              <div class="card-head">
+                <h2 id="guide-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>填写指引</h2>
+                <span class="guide-tools">
+                  <span id="target-state" class="chip" role="status" aria-live="polite" hidden></span>
+                  <button id="guide-toggle" class="guide-toggle" type="button" aria-expanded="true" aria-controls="guide-body" aria-label="收起填写指引" title="收起填写指引"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                </span>
+              </div>
+              <div id="guide-body" class="guide-body">
+              <p class="target-note">先点网页输入框，再点字段内容直接填入；输入框已有内容时，用字段右侧的符号：</p>
+              <ul class="action-legend">
+                <li><span class="legend-icon is-add"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><strong>添加</strong>在光标处插入</li>
+                <li><span class="legend-icon is-replace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><strong>替换</strong>覆盖整个输入框</li>
+                <li><span class="legend-icon is-remove"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></span><strong>删除</strong>只去掉这个字段</li>
+              </ul>
+              </div>
+            </section>
+            <div id="field-groups" class="field-groups"></div>
+            <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。换个关键词，或清空搜索查看全部分组。</p>
+          </div>
         </section>
       </main>
 
-      <footer class="dock-footer"><button id="open-manager" type="button">打开桌面</button><button id="open-status" type="button">插件状态</button></footer>
+      <footer class="dock-footer">
+        <button id="open-manager" type="button">打开桌面</button>
+        <button id="open-status" type="button">插件状态</button>
+      </footer>
       <div id="panel-toast" class="panel-toast" role="status" hidden></div>
     </div>
     <script src="feedback-core.js"></script>

@@ -5455,7 +5455,7 @@
     if (panelJob.draftId && panelJob.phase !== "idle" && panelJob.phase !== "result") {
       return { ok: true, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
     }
-    let note = "请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。";
+    let note = "可直接修改，确认后才会写入桌面。";
     try { note = (await loadDesktopModules()).copy.describeReviewSave(); } catch {}
     if (location.href !== pageUrl) {
       return { ok: false, error: SUBMIT_STALE, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };

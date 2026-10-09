@@ -83,7 +83,9 @@ async function harness(initial = { status: 'ok', data: data() }, { legacy = null
 test('initial native side panel reads desktop summary and active fields', async () => {
   const ui = await harness();
   assert.equal(ui.calls[0].type, 'DESKTOP_RESUME_READ');
-  assert.match(ui.get('template-select').innerHTML, /桌面模板 · 2 个字段/);
+  assert.match(ui.get('template-select').innerHTML, />桌面模板<\/option>/);
+  // The count sits under the picker (#261), from the desktop's own summary.
+  assert.match(ui.get('template-meta').textContent, /^2 个字段/);
   assert.match(ui.get('field-groups').innerHTML, /测试用户/);
   assert.equal(ui.get('fill-button').disabled, false);
   assert.equal(ui.get('desktop-connection').hidden, true);
