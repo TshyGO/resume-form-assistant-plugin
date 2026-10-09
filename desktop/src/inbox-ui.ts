@@ -327,7 +327,7 @@ export function mountInbox(
               </div>
               <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
               <div class="organize-actions">
-                <button type="button" data-act="classify">保存分类</button>
+                <button type="button" data-act="classify" class="primary">保存分类</button>
               </div>
             </div>
           </div>

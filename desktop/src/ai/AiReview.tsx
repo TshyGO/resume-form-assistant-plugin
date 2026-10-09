@@ -467,7 +467,7 @@ export function AiReview({
         <div className="ai-actions">
           <button
             type="button"
-            className="ai-start"
+            className="primary ai-start"
             onClick={() => void loadPreview(selectedIds)}
             disabled={!invoke || busy || loadingSaved || !idle}
           >
