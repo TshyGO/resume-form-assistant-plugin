@@ -824,11 +824,12 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; white-space: nowrap;
 .organize-block h4 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; }
 .organize-block h4 .icon { color: var(--accent); }
 .organize-block > p { margin: 0; font-size: 12.5px; line-height: 1.7; }
-.organize-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
-.organize-row > select { flex: 1 1 200px; min-height: 38px; }
-.organize-row button { min-height: 38px; border-radius: 9px; }
-.evidence-classification label { flex: 1 1 140px; color: #4a5361; font-size: 12.5px; font-weight: 500; }
-.evidence-classification select { width: 100%; min-height: 38px; color: var(--ink); font-size: 13px; font-weight: 400; }
+/* 两块卡片同一结构：说明 → 选择 → 底部右对齐的按钮行；控件与按钮同为 36px 高。 */
+.organize-block select { width: 100%; height: 36px; min-height: 36px; padding-block: 0; border-radius: 8px; color: var(--ink); font-size: 13px; font-weight: 400; }
+.organize-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.organize-fields label { gap: 4px; min-width: 0; color: #4a5361; font-size: 12.5px; font-weight: 500; }
+.organize-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 4px; }
+.organize-actions button { height: 36px; min-height: 36px; padding: 0 18px; border-radius: 8px; font-size: 13px; }
 .inbox-empty { margin: 20px; max-width: none; border: 2px dashed #c9d9d4; border-radius: 16px; background: linear-gradient(180deg, #fbfdfc, #f5faf8); }
 .inbox-empty > p { max-width: 520px; }
 .format-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }

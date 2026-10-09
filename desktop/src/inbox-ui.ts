@@ -290,24 +290,24 @@ export function mountInbox(
             <div class="organize-block">
               <h4>${ICON.link}关联申请</h4>
               <p class="muted">${escapeHtml(CHOOSE_APPLICATION_HINT)}</p>
-              <div class="organize-row">
-                <select id="inbox-application" aria-label="关联申请">
-                  <option value="">请选择一条申请…</option>
-                  ${applications
-                    .map(
-                      (app) =>
-                        `<option value="${escapeHtml(app.id)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</option>`,
-                    )
-                    .join("")}
-                </select>
-                <button type="button" data-act="associate" class="primary">关联</button>
-                ${item.applicationId ? '<button type="button" data-act="unassociate">取消关联</button>' : ""}
-              </div>
+              <select id="inbox-application" aria-label="关联申请">
+                <option value="">请选择一条申请…</option>
+                ${applications
+                  .map(
+                    (app) =>
+                      `<option value="${escapeHtml(app.id)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</option>`,
+                  )
+                  .join("")}
+              </select>
               ${applications.length ? "" : '<p class="muted">还没有在办的申请。先到「申请」页新增一条，再回来关联。</p>'}
+              <div class="organize-actions">
+                ${item.applicationId ? '<button type="button" data-act="unassociate">取消关联</button>' : ""}
+                <button type="button" data-act="associate" class="primary">关联</button>
+              </div>
             </div>
             <div class="organize-block">
               <h4>${ICON.tag}分类</h4>
-              <div class="organize-row evidence-classification">
+              <div class="organize-fields evidence-classification">
                 <label>通知类型
                   <select id="inbox-reply-class">
                     ${REPLY_CLASS_OPTIONS.map(
@@ -324,9 +324,11 @@ export function mountInbox(
                     ).join("")}
                   </select>
                 </label>
-                <button type="button" data-act="classify">保存分类</button>
               </div>
               <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
+              <div class="organize-actions">
+                <button type="button" data-act="classify">保存分类</button>
+              </div>
             </div>
           </div>
         </section>
