@@ -118,7 +118,10 @@ function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: 
   }
 }
 
+let statusRequest = 0;
+
 async function refreshStatus() {
+  const request = ++statusRequest;
   if (!invoke) {
     showPill({ tone: "error", text: "未连接到桌面宿主", title: "请用 Tauri 启动，不要只打开浏览器。" });
     must("settings-version").textContent = "请在桌面应用中查看版本";
@@ -130,11 +133,14 @@ async function refreshStatus() {
   try {
     status = await invoke<RuntimeStatus>("get_runtime_status");
   } catch (error) {
+    if (request !== statusRequest) return;
     const reason = describeDialogError(error);
     applyLinkState(null, reason);
     runtimeStatusView.fail(reason);
     throw error;
   }
+  // 定时刷新与手动注册刷新可能重叠，过期的成功和失败都不能覆盖最新状态。
+  if (request !== statusRequest) return;
   showPill(describeRegistration(status));
   must("settings-version").textContent = status.appVersion ? "简历模板、求职档案与浏览器扩展协作的桌面端" : "版本未知";
   const versionTag = must("settings-version-tag");
@@ -253,7 +259,10 @@ must("link-download").addEventListener("click", async () => {
 });
 
 must("link-retry").addEventListener("click", async () => {
-  if (!invoke) return;
+  if (!invoke) {
+    say("link-action-msg", { tone: "warn", text: "未连接到桌面宿主，请用 Tauri 启动后重新检查注册。" });
+    return;
+  }
   const button = must("link-retry") as HTMLButtonElement;
   // 不禁用按钮（禁用会弄丢键盘焦点），用 aria-busy 挡重复点击。
   if (button.getAttribute("aria-busy") === "true") return;
@@ -551,8 +560,13 @@ async function checkUpdate(currentVersion: string) {
     pendingUpdate = null;
     showUpdate(describeCheckFailure(error));
   } finally {
-    // 宿主查完（无论成败）都会记下这次检查的时间；这里显示的就是这一次。
-    showCheckedAt(new Date());
+    // 检查失败也可能记录尝试时间，但只有宿主实际保存的记录才是显示依据。
+    try {
+      const pref = await invoke<UpdatePreference>("get_update_preference_cmd");
+      showCheckedAt(parseCheckedAt(pref.lastCheckedAt));
+    } catch {
+      showCheckedAt(null);
+    }
     button.removeAttribute("aria-busy");
     button.disabled = currentAppVersion.length === 0;
   }

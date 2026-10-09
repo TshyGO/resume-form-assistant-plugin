@@ -187,7 +187,7 @@ export function AiSettings() {
                       编辑
                     </button>
                     {provider.keyConfigured && !view.credentialError ? (
-                      <button type="button" className="settings-warn" disabled={busy} onClick={() => setClearing(provider)}>
+                      <button type="button" className="settings-warn" disabled={busy || isEditing} onClick={() => setClearing(provider)}>
                         清除 Key
                       </button>
                     ) : null}

@@ -151,6 +151,7 @@ test("清除 Key 后编辑器立即显示新的 Key 状态", async () => {
     : view);
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
+  expect(within(row).getByRole("button", { name: "清除 Key" })).toHaveProperty("disabled", true);
   await user.click(screen.getByRole("button", { name: "清除已保存的 Key" }));
   await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除 Key" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "清除已保存的 Key" })).toBeNull());
