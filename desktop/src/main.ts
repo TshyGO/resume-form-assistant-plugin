@@ -354,7 +354,7 @@ const inbox = mountInbox(command, {
     ? async () => {
         const chosen = await dialog.open?.({
           multiple: true,
-          filters: [{ name: "回复证据", extensions: ["eml", "txt", "png", "jpg", "jpeg", "pdf"] }],
+          filters: [{ name: "招聘通知", extensions: ["eml", "txt", "png", "jpg", "jpeg", "pdf"] }],
         });
         if (!chosen) return [];
         return Array.isArray(chosen) ? chosen : [chosen];
@@ -370,7 +370,14 @@ const inbox = mountInbox(command, {
     : null,
 });
 
-const showTodos = mountTodos(command);
+// 待办只能挂在申请下面：一条申请都没有时，「去新增申请」切到申请页并打开新增表单。
+const showTodos = mountTodos(command, undefined, {
+  createApplication: () => {
+    void navigate("applications").then((moved) => {
+      if (moved) must("btn-new-app").click();
+    });
+  },
+});
 
 // 备份与恢复要用原生文件对话框。浏览器里跑（没有 Tauri）时两个都是 null，
 // 界面会如实说「请在桌面程序里导出」，而不是给一个点了没反应的按钮。

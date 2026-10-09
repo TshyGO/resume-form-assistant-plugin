@@ -312,7 +312,7 @@ test('the detail lists its evidence, opens it read-only and can take it back out
   });
   await h.select('A');
   const html = h.el('app-detail').innerHTML;
-  assert.match(html, /回复证据（1）/);
+  assert.match(html, /招聘通知（1）/);
   assert.match(html, /面试邀请/);
   assert.match(html, /待分类/);
   assert.doesNotMatch(html, /附件和待办尚未接入/);
@@ -335,7 +335,7 @@ test('an application with no evidence says so without claiming silence from the 
     : undefined));
   await h.select('A');
   const html = h.el('app-detail').innerHTML;
-  assert.match(html, /回复证据（0）/);
+  assert.match(html, /招聘通知（0）/);
   assert.match(html, /不代表对方没有回复/);
 });
 

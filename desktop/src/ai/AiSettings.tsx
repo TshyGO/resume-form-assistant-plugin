@@ -58,7 +58,7 @@ export function AiSettings() {
 
   return (
     <div className="stack">
-      <p className="muted">收件箱的「AI 整理」和简历解析都用「当前使用」的服务商。发送前你可以预览并确认要交给服务商的内容。</p>
+      <p className="muted">「招聘通知」的「AI 整理」和简历解析都用「当前使用」的服务商。发送前你可以预览并确认要交给服务商的内容。</p>
       <details className="settings-disclosure">
         <summary>Key 保存说明</summary>
         <p className="muted">每个服务商的 Key 分别保存在系统凭据库（Windows 凭据管理器 / macOS 钥匙串），不进入档案、备份或日志。</p>

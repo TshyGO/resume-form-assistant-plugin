@@ -46,6 +46,8 @@ export interface ResumeDialogProps {
   tone?: "default" | "warn" | "danger";
   /** 旧数据预览、逐项冲突这类内容多的用宽版。 */
   wide?: boolean;
+  /** 额外的类名：招聘通知的 AI 审核弹窗（#262）要比宽版再宽一些。 */
+  className?: string;
   /** 同一个弹窗里换了一屏内容（比如从冲突列表进到二次确认）时换个值，焦点重新落到 data-autofocus 上。 */
   focusKey?: string;
 }
@@ -64,7 +66,7 @@ function focusInitial(dialog: HTMLDialogElement) {
   target?.focus();
 }
 
-function DialogPanel({ title, children, footer, onCancel, cancelDisabled = false, tone = "default", wide = false, focusKey }: ResumeDialogProps) {
+function DialogPanel({ title, children, footer, onCancel, cancelDisabled = false, tone = "default", wide = false, focusKey, className }: ResumeDialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const cancelRef = useRef({ onCancel, cancelDisabled });
@@ -113,7 +115,7 @@ function DialogPanel({ title, children, footer, onCancel, cancelDisabled = false
   return (
     <dialog
       ref={ref}
-      className={`resume-dialog${wide ? " is-wide" : ""}${tone !== "default" ? ` tone-${tone}` : ""}`}
+      className={`resume-dialog${wide ? " is-wide" : ""}${tone !== "default" ? ` tone-${tone}` : ""}${className ? ` ${className}` : ""}`}
       aria-labelledby={titleId}
       onKeyDown={onKeyDown}
       onCancel={onNativeCancel}

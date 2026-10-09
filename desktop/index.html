@@ -17,7 +17,7 @@
         <nav class="nav" aria-label="主导航">
           <button type="button" data-route="applications" class="active" aria-current="page">申请</button>
           <button type="button" data-route="resume">简历</button>
-          <button type="button" data-route="inbox">证据收件箱</button>
+          <button type="button" data-route="inbox">招聘通知</button>
           <button type="button" data-route="todos">待办</button>
           <button type="button" data-route="settings">设置</button>
         </nav>
@@ -141,7 +141,7 @@
           </dialog>
           <dialog id="evidence-dialog">
             <div class="stack">
-              <h3>回复证据</h3>
+              <h3>招聘通知原文</h3>
               <div id="evidence-body"></div>
               <div class="row">
                 <button type="button" id="evidence-close">关闭</button>
@@ -200,76 +200,121 @@
         </section>
 
         <section id="view-inbox" class="view hidden">
-          <header class="workspace-page-header">
-            <div><h1>证据收件箱</h1><p>集中整理招聘邮件、截图和文件。</p></div>
-            <div class="row"><button type="button" id="inbox-refresh">刷新</button><button type="button" id="inbox-pick" class="primary">导入文件</button></div>
+          <header class="workspace-header">
+            <div><h1>招聘通知</h1><p>集中保存招聘邮件、聊天截图和文件，关联到对应申请。</p></div>
+            <div class="workspace-header-actions">
+              <button type="button" id="inbox-refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>刷新</button>
+              <button type="button" id="inbox-paste-open"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/></svg>粘贴文本导入</button>
+              <button type="button" id="inbox-pick" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>导入文件</button>
+            </div>
           </header>
-          <div class="inbox-import-bar">
-            <p class="muted">将 .eml 邮件、截图或 PDF 拖入窗口。导入后，由你确认关联和分类，不会自动改变申请阶段。</p>
-            <details class="inbox-paste">
-              <summary>粘贴文本导入</summary>
-              <label for="inbox-paste" class="sr-only">邮件正文或说明</label>
-              <textarea id="inbox-paste" rows="4" placeholder="粘贴邮件正文或一段说明"></textarea>
-              <button type="button" id="inbox-paste-save" class="primary">导入这段文本</button>
-            </details>
-          </div>
+          <p class="inbox-drop-hint"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>也可以把文件拖进窗口导入。支持 .eml 邮件、PNG / JPEG 截图、PDF、文本（.txt）；单个文件不超过 25 MiB，每次最多 20 个。</p>
           <p id="inbox-status" class="workspace-status" role="status"></p>
-          <div class="inbox-split">
-            <aside class="inbox-list-pane" aria-label="待整理证据"><div class="pane-label">待整理</div><div id="inbox-list"></div></aside>
-            <div id="inbox-preview"><div class="pane-empty"><h2>选择一条证据</h2><p>预览原文，再关联申请或整理分类。</p></div></div>
+          <div id="inbox-shell" class="workspace-shell inbox-shell">
+            <aside class="workspace-list-card" aria-label="待整理的招聘通知">
+              <div class="workspace-list-head inbox-list-head">
+                <h2>待整理 <span id="inbox-count" class="tab-count"></span></h2>
+                <p>这里只列还没关联申请的材料。</p>
+              </div>
+              <div id="inbox-list" class="workspace-list-scroll"></div>
+              <p class="workspace-list-foot">关联申请后，材料会移到那条申请详情的「招聘通知」里。</p>
+            </aside>
+            <div id="inbox-preview" class="workspace-detail-card" role="region" aria-label="通知预览与整理"><div class="pane-empty"><h2>选择一条通知</h2><p>预览原文，再关联申请或整理分类。</p></div></div>
           </div>
+          <dialog id="inbox-paste-dialog" class="resume-dialog is-wide" aria-labelledby="inbox-paste-heading">
+            <form id="inbox-paste-form" class="dialog-form" novalidate>
+              <div class="resume-dialog-head">
+                <h2 id="inbox-paste-heading">粘贴文本导入</h2>
+                <p class="dialog-intro">粘贴邮件正文、聊天记录或一段说明，作为一条招聘通知保存在本机。</p>
+              </div>
+              <div class="resume-dialog-body">
+                <label for="inbox-paste">通知内容</label>
+                <textarea id="inbox-paste" rows="10" placeholder="粘贴邮件正文或一段说明" aria-describedby="inbox-paste-hint"></textarea>
+                <p id="inbox-paste-hint" class="field-hint">导入本身不会改变申请阶段。导入后再关联申请、整理分类。</p>
+                <p id="inbox-paste-status" class="note" role="alert"></p>
+              </div>
+              <div class="resume-dialog-actions">
+                <button type="button" id="inbox-paste-cancel">取消</button>
+                <button type="submit" id="inbox-paste-save" class="primary">导入这段文本</button>
+              </div>
+            </form>
+          </dialog>
         </section>
 
         <section id="view-todos" class="view hidden">
-          <header class="workspace-page-header">
-            <div><h1>待办</h1><p>安排下一步，让重要的跟进有迹可循。</p></div>
-            <button type="button" id="todo-new" class="primary">新增待办</button>
-          </header>
-          <div class="todo-workspace">
-            <div class="todo-toolbar"><label for="todo-filter">任务状态</label><select id="todo-filter" aria-label="任务状态"><option value="open">未完成</option><option value="all">全部</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></div>
-            <p id="todo-digest" class="note" role="status" hidden></p>
-            <p id="todo-status" class="note" role="status"></p>
-            <div id="todo-list"></div>
-            <details class="todo-reminder-help"><summary>系统提醒说明</summary><p id="todo-reminder-note" class="note"></p></details>
+          <div id="todo-shell" class="workspace-shell">
+            <div class="workspace-list-card todo-list-card">
+              <div class="workspace-list-head">
+                <div class="workspace-title-row">
+                  <div><h1>待办</h1><p>安排下一步，让重要的跟进有迹可循。</p></div>
+                  <button type="button" id="todo-new" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新增待办</button>
+                </div>
+                <div id="todo-filter" class="segmented" role="group" aria-label="任务状态"></div>
+                <p id="todo-digest" class="note" role="status" hidden></p>
+              </div>
+              <p id="todo-status" class="note" role="status"></p>
+              <div id="todo-list" class="workspace-list-scroll" aria-label="待办列表"></div>
+            </div>
+            <div id="todo-detail" class="workspace-detail-card" role="region" aria-label="待办详情"></div>
           </div>
-          <dialog id="todo-dialog" aria-labelledby="todo-form-heading">
-          <form id="todo-form" class="stack">
-            <h2 id="todo-form-heading">新增待办</h2>
-            <label>做什么
-              <input id="todo-title" name="title" autocomplete="off" required />
-            </label>
-            <label>属于哪条申请
-              <select id="todo-application" name="applicationId"></select>
-            </label>
-            <div class="row" id="todo-schedule">
-              <label>什么时候
-                <select id="todo-precision" name="duePrecision">
-                  <option value="none">没有到期</option>
-                  <option value="date">只有日期</option>
-                  <option value="datetime">具体到几点</option>
-                </select>
-              </label>
-              <input aria-label="到期日期" id="todo-date" name="dueDate" type="date" hidden />
-              <input aria-label="到期时间" id="todo-datetime" name="dueAtUtc" type="datetime-local" hidden />
-            </div>
-            <div class="row">
-              <label>时区
-                <input id="todo-timezone" name="timeZone" placeholder="Asia/Shanghai" autocomplete="off" />
-              </label>
-              <label>提醒时刻（留空则按到期）
-                <input id="todo-remind" name="remindAtUtc" type="datetime-local" />
-              </label>
-              <label>面试第几轮
-                <input id="todo-round" name="interviewRound" type="number" min="1" />
-              </label>
-            </div>
-            <div class="row todo-form-actions">
-              <button id="todo-submit" type="submit" class="primary">添加待办</button>
-              <button id="todo-cancel" type="button">取消</button>
-
-            </div>
-            <p id="todo-form-status" class="note" role="status"></p>
-          </form>
+          <details class="workspace-help todo-reminder-help"><summary>系统提醒说明<span>本机通知依赖系统权限与应用运行状态，重要日程请另设提醒。</span></summary><p id="todo-reminder-note" class="note"></p></details>
+          <dialog id="todo-dialog" class="resume-dialog" aria-labelledby="todo-form-heading">
+            <form id="todo-form" class="dialog-form" novalidate>
+              <div class="resume-dialog-head">
+                <h2 id="todo-form-heading">新增待办</h2>
+                <p id="todo-form-intro" class="dialog-intro">关联一条申请，写清楚做什么、什么时候。</p>
+              </div>
+              <div class="resume-dialog-body">
+                <div id="todo-no-apps" class="dialog-callout" hidden>
+                  <p>待办需要关联一条申请。还没有申请记录，请先新增申请，或在浏览器扩展里保存岗位。</p>
+                  <button type="button" id="todo-go-applications">去新增申请</button>
+                </div>
+                <div class="field">
+                  <label>属于哪条申请
+                    <select id="todo-application" name="applicationId" required aria-describedby="todo-application-hint"></select>
+                  </label>
+                  <p id="todo-application-hint" class="field-hint" hidden>待办建好后不能换到另一条申请。</p>
+                </div>
+                <label>做什么
+                  <input id="todo-title" name="title" autocomplete="off" maxlength="200" required placeholder="例如：完成在线测评" />
+                </label>
+                <div class="field-row" id="todo-schedule">
+                  <label>什么时候
+                    <select id="todo-precision" name="duePrecision">
+                      <option value="none">没有到期</option>
+                      <option value="date">只有日期</option>
+                      <option value="datetime">具体到几点</option>
+                    </select>
+                  </label>
+                  <label id="todo-date-field" hidden>到期日期
+                    <input id="todo-date" name="dueDate" type="date" hidden />
+                  </label>
+                  <label id="todo-datetime-field" hidden>到期时间
+                    <input id="todo-datetime" name="dueAtUtc" type="datetime-local" hidden />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <label>时区
+                    <input id="todo-timezone" name="timeZone" autocomplete="off" spellcheck="false" placeholder="留空按本机时区" />
+                  </label>
+                  <label>面试第几轮
+                    <input id="todo-round" name="interviewRound" type="number" min="1" max="99" step="1" placeholder="不需要就留空" />
+                  </label>
+                </div>
+                <div class="field">
+                  <label>提醒时刻
+                    <input id="todo-remind" name="remindAtUtc" type="datetime-local" aria-describedby="todo-remind-hint" />
+                  </label>
+                  <p id="todo-remind-hint" class="field-hint">留空则按到期时间提醒。日期和时刻都按上面的时区理解。</p>
+                </div>
+                <p id="todo-edit-note" class="field-hint" hidden>改期或修改提醒时刻会撤掉原来登记的提醒，再按新的时间重新登记。</p>
+                <p id="todo-form-status" class="note" role="alert"></p>
+              </div>
+              <div class="resume-dialog-actions">
+                <button id="todo-cancel" type="button">取消</button>
+                <button id="todo-submit" type="submit" class="primary">添加待办</button>
+              </div>
+            </form>
           </dialog>
         </section>
 
@@ -341,7 +386,7 @@
                 </div>
               </section>
               <section id="settings-ai" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-ai" tabindex="0" data-settings-panel="ai" hidden>
-                <div class="settings-section-heading"><h2>AI 设置</h2><p>连接你的服务商，用 AI 整理回复证据。</p></div>
+                <div class="settings-section-heading"><h2>AI 设置</h2><p>连接你的服务商，用 AI 整理招聘通知。</p></div>
                 <div id="ai-settings"></div>
               </section>
               <section id="settings-data" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0" data-settings-panel="data" hidden>
