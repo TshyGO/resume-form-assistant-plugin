@@ -123,12 +123,19 @@ export function mountInbox(
     status.dataset.tone = message?.tone ?? "info";
   }
 
-  async function refresh() {
+  /** 重新读一遍待整理列表。读不出来时返回 false，并且**不**把列表画成空的。 */
+  async function refresh(): Promise<boolean> {
     try {
       items = await invoke<EvidenceSummary[]>("list_inbox_cmd");
     } catch (error) {
-      items = [];
       say({ tone: "warn", text: `读不到招聘通知：${invokeError(error)}` });
+      // 读失败不等于没有通知：已经显示的列表原样留着；从没读成功过就如实说读不出来，
+      // 而不是摆出「没有待整理的招聘通知」的空状态。
+      if (!loaded) {
+        list.innerHTML = '<div class="pane-empty"><h3>读不到招聘通知</h3><p>点右上角「刷新」再试一次。</p></div>';
+        if (count) count.textContent = "";
+      }
+      return false;
     }
     loaded = true;
     renderList();
@@ -143,6 +150,7 @@ export function mountInbox(
     } else if (!selectedId && preview.querySelector?.(".workspace-empty")) {
       preview.innerHTML = emptyPreview;
     }
+    return true;
   }
 
   /** 一条都没有：整页给空状态，导入入口就在眼前。 */
@@ -157,7 +165,7 @@ export function mountInbox(
           <button type="button" data-empty-act="paste">${ICON.paste}粘贴文本</button>
         </div>
         <ul class="format-chips" aria-label="支持的格式">
-          <li>${KIND_ICON.eml}.eml 邮件</li><li>${KIND_ICON.screenshot}PNG / JPEG 截图</li><li>${KIND_ICON.pdf}PDF 文档</li><li>${KIND_ICON.text}粘贴文本</li>
+          <li>${KIND_ICON.eml}.eml 邮件</li><li>${KIND_ICON.screenshot}PNG / JPEG 截图</li><li>${KIND_ICON.pdf}PDF 文档</li><li>${KIND_ICON.text}文本（.txt）或粘贴</li>
         </ul>
         <p class="privacy-note">${ICON.lock}<span>${escapeHtml(PRIVACY_NOTE)}</span></p>
       </div>`;
@@ -408,7 +416,7 @@ export function mountInbox(
           sendMode,
         });
         say(describeClassification(updated ?? ({ replyClass, sendMode } as Partial<EvidenceSummary>)));
-        acting = false;
+        setActing(false);
         await refresh();
         await select(item.id);
       }
@@ -517,8 +525,8 @@ export function mountInbox(
 
   maybe("inbox-pick")?.addEventListener("click", () => void pick());
   maybe("inbox-refresh")?.addEventListener("click", async () => {
-    await refresh();
-    say({ tone: "info", text: "已刷新。" });
+    // 只有真的读到了才说「已刷新」：失败时留着 refresh 写下的那条错误。
+    if (await refresh()) say({ tone: "info", text: "已刷新。" });
   });
   maybe("inbox-paste-open")?.addEventListener("click", openPaste);
   maybe("inbox-paste-cancel")?.addEventListener("click", () => {

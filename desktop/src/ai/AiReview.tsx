@@ -517,6 +517,7 @@ export function AiReview({
             setBusy(false);
             setPhase("idle");
           }}
+          extra={failureBlock}
         />
       ) : null}
 
@@ -548,7 +549,8 @@ export function AiReview({
         />
       ) : null}
 
-      {phase !== "review" ? failureBlock : null}
+      {/* 审核与发送确认都在弹窗里：那两个阶段的错误由弹窗自己显示，这里只管弹窗外的。 */}
+      {phase === "idle" || phase === "failed" ? failureBlock : null}
       {notice ? <p className="note ok">{notice}</p> : null}
     </section>
   );

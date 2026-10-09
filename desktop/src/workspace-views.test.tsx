@@ -151,6 +151,7 @@ test("paste import is a dialog: empty text is refused inline, success closes and
 test("the notification page names itself and promises nothing it cannot do", () => {
   const text = document.getElementById("view-inbox")!.textContent ?? "";
   expect(text).toContain("集中保存招聘邮件、聊天截图和文件，关联到对应申请。");
+  expect(text).toContain("文本（.txt）");
   for (const fake of ["证据收件箱", "导出原文", "删除材料", "匹配度", "置信度", "快捷待认领", "已整理", "搜索"]) expect(text).not.toContain(fake);
   const todosText = document.getElementById("view-todos")!.textContent ?? "";
   for (const fake of ["任务备注", "自动保存", "任务类型", "自查清单", "分享", "快捷模板", "岗位编号"]) expect(todosText).not.toContain(fake);

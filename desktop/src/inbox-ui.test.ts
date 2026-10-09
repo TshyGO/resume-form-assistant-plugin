@@ -367,3 +367,38 @@ test('the AI panel gets a mount point, and what it reports lands in the status b
   await h.tick();
   assert.ok(mounted.unmounted >= 1);
 });
+
+test('a refresh that cannot read the list keeps the error and the list, never claiming success', async () => {
+  let fail = false;
+  const h = harness((name) => {
+    if (name === 'list_inbox_cmd') {
+      if (fail) throw { code: 'STORE_ERROR', message: '数据库打不开' };
+      return [MAIL];
+    }
+    return undefined;
+  });
+  await h.api.refresh();
+  assert.match(h.el('inbox-list').innerHTML, /data-evidence="e1"/);
+  fail = true;
+  await h.el('inbox-refresh').emit('click');
+  await h.tick();
+  assert.match(h.el('inbox-status').textContent, /读不到招聘通知：数据库打不开/);
+  assert.doesNotMatch(h.el('inbox-status').textContent, /已刷新/);
+  assert.match(h.el('inbox-list').innerHTML, /data-evidence="e1"/, '读失败不等于没有通知，已显示的列表留着');
+  fail = false;
+  await h.el('inbox-refresh').emit('click');
+  await h.tick();
+  assert.equal(h.el('inbox-status').textContent, '已刷新。');
+});
+
+test('a first read that fails says so instead of showing the empty state', async () => {
+  const h = harness((name) => {
+    if (name === 'list_inbox_cmd') throw { code: 'STORE_ERROR', message: '数据库打不开' };
+    return undefined;
+  });
+  const ok = await h.api.refresh();
+  assert.equal(ok, false);
+  assert.match(h.el('inbox-list').innerHTML, /读不到招聘通知/);
+  assert.doesNotMatch(h.el('inbox-preview').innerHTML, /没有待整理/);
+  assert.equal(h.el('inbox-shell').classList.contains('is-empty'), false);
+});

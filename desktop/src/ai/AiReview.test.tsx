@@ -533,3 +533,15 @@ test("暂存之后明说只存了模型的建议，没存刚改的地方", async
   expect(await screen.findByText(/你刚改的地方没有存/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "打开暂存的建议" })).toBeTruthy();
 });
+
+test("发送确认弹窗开着时出的错，显示在弹窗里面", async () => {
+  const user = userEvent.setup();
+  mount((command, args) => {
+    if (command === "list_applications_cmd") throw { code: "STORE_ERROR", message: "申请列表读不出来" };
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  const dialog = (await screen.findByRole("heading", { name: "发送前确认" })).closest("dialog")!;
+  await waitFor(() => expect(dialog.textContent).toContain("申请列表读不出来"));
+  expect(dialog.contains(screen.getByRole("button", { name: "关掉" }))).toBe(true);
+});

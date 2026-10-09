@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ApplicationSummary, OutboundPreview } from "../api.ts";
 import { stageLabel } from "../applications.ts";
 import { ResumeDialog } from "../resume/ResumeDialog.tsx";
@@ -21,6 +22,7 @@ export function AnalyzeDialog({
   onSend,
   onCancelRequest,
   onClose,
+  extra,
 }: {
   preview: OutboundPreview;
   applications: ApplicationSummary[];
@@ -36,6 +38,8 @@ export function AnalyzeDialog({
   onSend: () => void;
   onCancelRequest: () => void;
   onClose: () => void;
+  /** 弹窗开着时出的错（比如候选申请读不出来），由宿主给，就近显示在弹窗里。 */
+  extra?: ReactNode;
 }) {
   const chosen = selectedIds ?? [];
   // 上限由命令层带回来，界面不另抄一份常量。
@@ -172,6 +176,7 @@ export function AnalyzeDialog({
           {preview.truncated ? "（已按上限截断）" : ""}。
         </p>
         <pre className="evidence-body">{preview.bodyPreview}</pre>
+        {extra}
       </div>
     </ResumeDialog>
   );
