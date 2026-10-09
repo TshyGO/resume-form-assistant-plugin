@@ -30,7 +30,7 @@ test("list selection exposes detail tabs; arrow keys change panels without writi
   const app = within(document.getElementById("view-applications")!);
   fireEvent.click(app.getByRole("button", { name: "公司A 工程师" }));
   await waitFor(() => expect(app.getByRole("tab", { name: "时间线 0" }).getAttribute("aria-selected")).toBe("true"));
-  const evidence = app.getByRole("tab", { name: "回复证据 0" });
+  const evidence = app.getByRole("tab", { name: "招聘通知 0" });
   fireEvent.click(evidence);
   expect(app.getByRole("tabpanel").getAttribute("id")).toBe("detail-panel-evidence");
   expect(app.getByText("这只表示还没有导入任何回复证据，不代表对方没有回复。")).toBeTruthy();
@@ -46,8 +46,8 @@ test("same application refresh preserves selected tab; another application reset
   const { ui } = setup(); await ui.refreshList();
   const app = within(document.getElementById("view-applications")!);
   fireEvent.click(app.getByRole("button", { name: "公司A 工程师" }));
-  await waitFor(() => expect(app.getByRole("tab", { name: "回复证据 0" })).toBeTruthy());
-  fireEvent.click(app.getByRole("tab", { name: "回复证据 0" }));
+  await waitFor(() => expect(app.getByRole("tab", { name: "招聘通知 0" })).toBeTruthy());
+  fireEvent.click(app.getByRole("tab", { name: "招聘通知 0" }));
   fireEvent.click(app.getByRole("button", { name: "公司A 工程师" }));
   await waitFor(() => expect(app.getByRole("tabpanel").id).toBe("detail-panel-evidence"));
   fireEvent.click(app.getByRole("button", { name: "公司B 工程师" }));
@@ -190,7 +190,7 @@ test("detail counts come from the data, and todos are shown apart from the histo
   const app = within(document.getElementById("view-applications")!);
   fireEvent.click(app.getByRole("button", { name: "星河 工程师" }));
   await waitFor(() => expect(app.getByRole("tab", { name: "时间线 2" })).toBeTruthy());
-  expect(app.getByRole("tab", { name: "回复证据 0" })).toBeTruthy();
+  expect(app.getByRole("tab", { name: "招聘通知 0" })).toBeTruthy();
   expect(app.getByRole("tab", { name: "简历快照 0" })).toBeTruthy();
   const items = document.querySelectorAll(".timeline-item");
   expect(items[0].textContent).toContain("记录面试 · 第 2 轮");
@@ -216,7 +216,7 @@ test("an empty archive gives the whole page to the empty state", async () => {
 
 test("the top bar keeps every route and the install entry, without a fixed version or avatar", () => {
   const routes = Array.from(document.querySelectorAll<HTMLElement>(".topbar [data-route]"), (node) => node.textContent);
-  expect(routes).toEqual(["申请", "简历", "证据收件箱", "待办", "设置"]);
+  expect(routes).toEqual(["申请", "简历", "招聘通知", "待办", "设置"]);
   expect(document.getElementById("nav-install-extension")).toBeTruthy();
   const version = document.getElementById("app-version")!;
   expect(version.hidden).toBe(true);

@@ -97,7 +97,7 @@ export function AiSettings() {
       <section className="settings-card">
         <header className="settings-card-head">
           <h2>AI 设置</h2>
-          <p>收件箱的「AI 整理」和简历解析都用「当前使用」的服务商。发送前你可以预览并确认要交给服务商的内容。</p>
+          <p>「招聘通知」的「AI 整理」和简历解析都用「当前使用」的服务商。发送前你可以预览并确认要交给服务商的内容。</p>
         </header>
         <details className="settings-note-fold">
           <summary>Key 保存说明</summary>

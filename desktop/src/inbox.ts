@@ -1,4 +1,4 @@
-// D09 收件箱的文案与纯函数。界面只负责拼 DOM，说什么由这里决定（沿用 D07/D08 的
+// D09「招聘通知」（原「证据收件箱」）的文案与纯函数。界面只负责拼 DOM，说什么由这里决定（沿用 D07/D08 的
 // 「文案只在一处说」）。这里的每一句都要经得起 §11 的检查：导入不等于对方回复了什么，
 // 关联后未分类不叫「尚未导入」。
 
@@ -110,8 +110,8 @@ export function duplicateNote(item: Partial<EvidenceSummary> | null | undefined)
 export function describeEvidenceMeta(item: Partial<EvidencePreview> | null | undefined): string {
   const parts = [kindLabel(item?.kind)];
   if (item?.fromAddr) parts.push(`来自 ${item.fromAddr}`);
-  if (item?.sentAt) parts.push(`发送于 ${item.sentAt}`);
-  parts.push(`导入于 ${item?.importedAt ?? "未知时间"}`);
+  if (item?.sentAt) parts.push(`发送于 ${importedAtLabel(item.sentAt)}`);
+  parts.push(`导入于 ${item?.importedAt ? importedAtLabel(item.importedAt) : "未知时间"}`);
   if (Number.isInteger(item?.sizeBytes)) parts.push(sizeLabel(item?.sizeBytes));
   return parts.join(" · ");
 }
@@ -129,12 +129,12 @@ export function describeAssociation(result: unknown, company: string | undefined
   const where = company ? `「${company}」` : "所选申请";
   return {
     tone: "success",
-    text: `已关联到${where}，状态是「已导入，待分类」。分类由你确认，导入本身不改变申请阶段。`,
+    text: `已关联到${where}，状态是「已导入，待分类」，材料已移到那条申请详情的「招聘通知」里。分类由你确认，导入本身不改变申请阶段。`,
   };
 }
 
 export function describeUnassociation(): Message {
-  return { tone: "info", text: "已从那条申请里取出，回到收件箱。那条申请回到「尚未导入回复证据」。" };
+  return { tone: "info", text: "已取消关联，这条材料已回到「招聘通知」待整理。" };
 }
 
 export function describeClassification(item: Partial<EvidenceSummary> | null | undefined): Message {
@@ -144,9 +144,22 @@ export function describeClassification(item: Partial<EvidenceSummary> | null | u
   };
 }
 
-/** 空收件箱：说清楚这里为什么空，不暗示对方没回复。 */
+/** 没有待整理的通知：说清楚这里为什么空，不暗示对方没回复。 */
 export const EMPTY_INBOX =
-  "收件箱里没有待处理的证据。把回复邮件（.eml）、截图或 PDF 拖进窗口，或者粘贴一段文本，就能存进档案。";
+  "导入招聘邮件（.eml）、截图或 PDF，也可以直接粘贴文字。已关联申请的材料在对应申请详情里查看。";
+
+/** 隐私说明：材料存在哪、AI 发什么、导入会不会动申请。不暗示会自动同步邮箱。 */
+export const PRIVACY_NOTE =
+  "材料默认保存在本机。使用 AI 整理时，会先展示将发送给所配置服务商的内容，由你确认后才发送。导入和手动分类本身不会改变申请阶段，也不会读取你的邮箱。";
+
+/** 列表里的导入时间：本机时区的「年-月-日 时:分」，读不出来就原样给。 */
+export function importedAtLabel(value: string | null | undefined): string {
+  if (!value) return "";
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime()) || !/T|\d:\d/.test(value)) return value.slice(0, 16);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
 
 /** 候选申请列表的提示：同公司多个岗位不合并，必须自己选（§7、走查 10.1）。 */
 export const CHOOSE_APPLICATION_HINT =

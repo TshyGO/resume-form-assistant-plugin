@@ -446,24 +446,24 @@ export function mountApplications(
         </div>
         <div class="detail-tabs" role="tablist" aria-label="申请记录">
           <button type="button" role="tab" id="detail-tab-timeline" data-detail-tab="timeline" aria-controls="detail-panel-timeline">时间线 <span class="tab-count">${events.length}</span></button>
-          <button type="button" role="tab" id="detail-tab-evidence" data-detail-tab="evidence" aria-controls="detail-panel-evidence">回复证据 <span class="tab-count">${evidence.length}</span></button>
+          <button type="button" role="tab" id="detail-tab-evidence" data-detail-tab="evidence" aria-controls="detail-panel-evidence">招聘通知 <span class="tab-count">${evidence.length}</span></button>
           <button type="button" role="tab" id="detail-tab-snapshots" data-detail-tab="snapshots" aria-controls="detail-panel-snapshots">简历快照 <span class="tab-count">${snapshots.length}</span></button>
         </div>
         <section id="detail-panel-evidence" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-evidence" tabindex="0" data-detail-panel="evidence" hidden>
-        <h3 class="sr-only">回复证据（${evidence.length}）</h3>
+        <h3 class="sr-only">招聘通知（${evidence.length}）</h3>
         ${evidenceNote(app.reply_evidence_state)
           ? `<p class="panel-note">${escapeHtml(evidenceNote(app.reply_evidence_state))}</p>`
           : ""}
         ${evidence.length ? `
         <ul class="record-list">
           ${evidence.map((item) => `<li class="record-card">
-            <div class="record-text"><strong>${escapeHtml(item.subject || item.originalFilename || "导入的证据")}</strong><span>${escapeHtml(evidenceLine(item))}</span></div>
+            <div class="record-text"><strong>${escapeHtml(item.subject || item.originalFilename || "导入的材料")}</strong><span>${escapeHtml(evidenceLine(item))}</span></div>
             <div class="record-actions">
               <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
               <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
             </div>
           </li>`).join("")}
-        </ul>` : `<p class="panel-empty">收件箱里导入的证据关联到这条申请之后会出现在这里。</p>`}
+        </ul>` : `<p class="panel-empty">在「招聘通知」里导入材料并关联到这条申请后，会出现在这里。</p>`}
         </section>
         <section id="detail-panel-snapshots" class="detail-panel" role="tabpanel" aria-labelledby="detail-tab-snapshots" tabindex="0" data-detail-panel="snapshots" hidden>
         <h3 class="sr-only">简历快照（${snapshots.length}）</h3>
@@ -606,7 +606,7 @@ export function mountApplications(
   async function unassociateEvidence(evidenceId: string, applicationId: string) {
     try {
       await invoke("unassociate_evidence_cmd", { evidenceId });
-      msg.textContent = "已取出到收件箱。这条申请的证据状态按剩下的证据重算。";
+      msg.textContent = "已取出，材料回到「招聘通知」待整理。这条申请的证据状态按剩下的材料重算。";
       if (ctl.selectedId === applicationId) await loadDetail(applicationId);
     } catch (err) {
       msg.textContent = invokeError(err);

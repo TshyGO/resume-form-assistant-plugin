@@ -117,13 +117,24 @@ pub struct EditTodoArgs {
     pub due_at_utc: Option<String>,
     #[serde(default)]
     pub due_date: Option<String>,
-    /// 显式给空字符串表示清空，不给表示不动。
-    #[serde(default)]
-    pub time_zone: Option<String>,
-    #[serde(default)]
-    pub remind_at_utc: Option<String>,
-    #[serde(default)]
-    pub interview_round: Option<i64>,
+    /// 下面三项：不给表示不动；显式给 `null`（或空字符串）表示清空。
+    /// 只用 `Option` 分不出这两种——`null` 会被读成「没给」，用户在编辑框里
+    /// 删掉的提醒时刻、时区和面试轮次就会被悄悄保留。
+    #[serde(default, deserialize_with = "present")]
+    pub time_zone: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub remind_at_utc: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    pub interview_round: Option<Option<i64>>,
+}
+
+/// 字段出现了就是 `Some`，值是 `null` 时里面是 `None`；字段缺省时由 `default` 给 `None`。
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 // --- 到期的解析与回填 -----------------------------------------------------------------------
@@ -372,9 +383,9 @@ pub fn edit_todo(
     let patch = TodoPatch {
         title: args.title,
         due,
-        time_zone: args.time_zone.map(blank_to_none_str),
-        remind_at_utc: args.remind_at_utc.map(blank_to_none_str),
-        interview_round: args.interview_round.map(Some),
+        time_zone: args.time_zone.map(blank_to_none),
+        remind_at_utc: args.remind_at_utc.map(blank_to_none),
+        interview_round: args.interview_round,
     };
     let updated = store.update_todo(&args.id, patch).map_err(store_error)?;
 
@@ -388,10 +399,6 @@ pub fn edit_todo(
 
 fn blank_to_none(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.trim().is_empty())
-}
-
-fn blank_to_none_str(value: String) -> Option<String> {
-    Some(value).filter(|s| !s.trim().is_empty())
 }
 
 pub fn set_todo_status(
