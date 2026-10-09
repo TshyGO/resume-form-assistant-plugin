@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { AiProviderView, AiSettingsView, ModelListView, SaveProviderResult } from "../api.ts";
 import { useInvoke } from "../react/invoke.tsx";
@@ -11,6 +11,7 @@ import {
   matchModels,
 } from "./ai-settings.ts";
 import type { Message, Preset } from "./ai-settings.ts";
+import { ClearKeyDialog } from "./ProviderDialogs.tsx";
 
 export interface ProviderEditorProps {
   /** 编辑已有的；新建时为 null。 */
@@ -38,7 +39,10 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const ids = useId();
+  const field = (part: string) => `${ids}-${part}`;
+  const rootRef = useRef<HTMLElement>(null);
   // 候选只对拉取那一刻的地址与 Key 有效；改了就作废，迟到的回包按序号丢掉。
   const [models, setModels] = useState<string[] | null>(null);
   const [modelsNote, setModelsNote] = useState<Message | null>(null);
@@ -81,6 +85,7 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
     event.preventDefault();
     if (!invoke || busy) return;
     setBusy(true);
+    setMessage(null);
     try {
       const result = await invoke<SaveProviderResult>("save_ai_provider_cmd", {
         provider: { id: provider?.id ?? null, name, apiUrl, model },
@@ -96,20 +101,11 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
     }
   };
 
-  const clearKey = async () => {
-    if (!invoke || !provider || busy) return;
-    setBusy(true);
-    try {
-      const view = await invoke<AiSettingsView>("clear_ai_key_cmd", { providerId: provider.id });
-      setConfirmClear(false);
-      setMessage({ tone: "ok", text: "Key 已从系统凭据库删除。" });
-      onKeyCleared?.(view);
-    } catch (error) {
-      setMessage(describeCommandError(error));
-    } finally {
-      setBusy(false);
-    }
-  };
+  // 打开编辑器时把它滚进视野，焦点落到第一个输入框，键盘用户不用再找。
+  useEffect(() => {
+    rootRef.current?.scrollIntoView?.({ block: "nearest" });
+    rootRef.current?.querySelector<HTMLInputElement>("[data-autofocus]")?.focus();
+  }, []);
 
   const risk = describeTransportRisk(apiUrl);
   const secrets = describeUrlSecrets(apiUrl);
@@ -117,101 +113,116 @@ export function ProviderEditor({ provider, preset, credentialError, onSaved, onC
   const candidates = models ? matchModels(models, model).slice(0, 30) : [];
 
   return (
-    <form className="stack ai-config-form" onSubmit={save}>
-      <label>
-        名称
-        <input value={name} onChange={(event) => setName(event.target.value)} maxLength={40} autoComplete="off" />
-      </label>
-      <label>
-        接口地址
-        <input
-          value={apiUrl}
-          onChange={(event) => {
-            setApiUrl(event.target.value);
-            invalidateModels();
-          }}
-          placeholder="https://api.deepseek.com/v1"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      <p className="muted">填 Base URL 就行，保存时补全成 /chat/completions；自定义代理路径保持原样。</p>
-      {risk ? <p role="status" className={`note ${risk.tone}`}>{risk.text}</p> : null}
-      {secrets ? <p role="status" className={`note ${secrets.tone}`}>{secrets.text}</p> : null}
-      {preset?.keyPage ? (
-        <p className="muted">
-          去这里申请 Key：<code>{preset.keyPage}</code>
-        </p>
-      ) : null}
-      {preset?.note ? <p className="note warn">{preset.note}</p> : null}
-      <label>
-        模型名称
-        <input
-          value={model}
-          onChange={(event) => setModel(event.target.value)}
-          placeholder={preset?.modelHint || "deepseek-chat"}
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      <div className="row">
-        <button type="button" onClick={fetchModels} disabled={modelsBusy || !invoke || apiUrl.trim() === ""}>
-          {modelsBusy ? "正在获取…" : "获取模型"}
-        </button>
-        <span className="muted">只发 Key，不发简历；失败不影响保存，永远可以手填。</span>
-      </div>
-      {candidates.length ? (
-        <ul className="model-candidates">
-          {candidates.map((id) => (
-            <li key={id}>
-              <button type="button" onClick={() => setModel(id)}>
-                {id}
+    <section ref={rootRef} className="settings-card provider-editor" aria-labelledby={field("title")}>
+      <header className="settings-card-head has-aside">
+        <div>
+          <h2 id={field("title")}>{provider ? "编辑服务商配置" : `添加服务商${preset && preset.id !== "custom" ? `：${preset.name}` : ""}`}</h2>
+          <p>配置 OpenAI 兼容格式的 Chat Completions 接口，只保存在这台电脑上。</p>
+        </div>
+        <span className="settings-chip">OpenAI 兼容</span>
+      </header>
+      <form className="settings-form ai-config-form" onSubmit={save}>
+        <div className="settings-field">
+          <label htmlFor={field("name")}>服务商名称</label>
+          <input id={field("name")} value={name} onChange={(event) => setName(event.target.value)} maxLength={40} autoComplete="off" data-autofocus />
+          <p className="field-hint">只用来在本机界面区分，如「DeepSeek 官方」或「公司中转」。</p>
+        </div>
+        <div className="settings-field">
+          <label htmlFor={field("url")}>接口地址</label>
+          <input
+            id={field("url")}
+            value={apiUrl}
+            onChange={(event) => {
+              setApiUrl(event.target.value);
+              invalidateModels();
+            }}
+            placeholder="https://api.deepseek.com/v1"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <p className="field-hint">填 Base URL 就行，保存时补全成 /chat/completions；自定义代理路径保持原样。</p>
+          {risk ? <p role="status" className="settings-inline-msg" data-tone={risk.tone}>{risk.text}</p> : null}
+          {secrets ? <p role="status" className="settings-inline-msg" data-tone={secrets.tone}>{secrets.text}</p> : null}
+          {preset?.keyPage ? (
+            <p className="field-hint">
+              去这里申请 Key：<code className="selectable">{preset.keyPage}</code>
+            </p>
+          ) : null}
+          {preset?.note ? <p className="settings-inline-msg" data-tone="warn">{preset.note}</p> : null}
+        </div>
+        <div className="settings-field">
+          <div className="settings-field-label">
+            <label htmlFor={field("key")}>API Key</label>
+            {provider?.keyConfigured ? (
+              <button type="button" className="settings-link-danger" onClick={() => setClearing(true)} disabled={busy}>
+                清除已保存的 Key
               </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {modelsNote ? <p role="status" className={`note ${modelsNote.tone}`}>{modelsNote.text}</p> : null}
-      {keyState ? <p className={`note ${keyState.tone}`}>{keyState.text}</p> : null}
-      <label>
-        API Key
-        <input
-          type="password"
-          value={key}
-          onChange={(event) => {
-            setKey(event.target.value);
-            invalidateModels();
-          }}
-          placeholder={provider?.keyConfigured ? "不改就留空" : "粘贴后点保存，界面不会再显示它"}
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </label>
-      {provider?.keyConfigured ? (
-        confirmClear ? (
-          <div className="row">
-            <button type="button" className="danger" onClick={() => void clearKey()} disabled={busy}>
-              确认清除
-            </button>
-            <button type="button" onClick={() => setConfirmClear(false)}>
-              取消
+            ) : null}
+          </div>
+          <input
+            id={field("key")}
+            type="password"
+            value={key}
+            onChange={(event) => {
+              setKey(event.target.value);
+              invalidateModels();
+            }}
+            placeholder={provider?.keyConfigured ? "留空表示不修改" : "粘贴后点保存，界面不会再显示它"}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {keyState ? <p className="settings-inline-msg" data-tone={keyState.tone}>{keyState.text}</p> : null}
+          {provider?.keyConfigured ? <p className="field-hint">留空表示继续使用系统凭据库里已保存的 Key；输入新值会直接替换它。</p> : null}
+        </div>
+        <div className="settings-field">
+          <label htmlFor={field("model")}>模型名称</label>
+          <div className="settings-input-row">
+            <input
+              id={field("model")}
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              placeholder={preset?.modelHint || "deepseek-chat"}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button type="button" onClick={fetchModels} disabled={modelsBusy || !invoke || apiUrl.trim() === ""}>
+              {modelsBusy ? "正在获取…" : "获取模型"}
             </button>
           </div>
-        ) : (
-          <button type="button" onClick={() => setConfirmClear(true)} disabled={busy}>
-            清除 Key
+          <p className="field-hint">获取模型只发 Key，不发简历；失败不影响保存，随时可以手填。</p>
+          {candidates.length ? (
+            <ul className="model-candidates" aria-label="可选模型">
+              {candidates.map((id) => (
+                <li key={id}>
+                  <button type="button" aria-pressed={id === model} onClick={() => setModel(id)}>
+                    {id}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {modelsNote ? <p role="status" className="settings-inline-msg" data-tone={modelsNote.tone}>{modelsNote.text}</p> : null}
+        </div>
+        {message ? <p role="status" className="settings-callout" data-tone={message.tone}>{message.text}</p> : null}
+        <div className="settings-form-actions">
+          <p className="field-hint">删除服务商会同时从系统凭据库删除它的 Key。</p>
+          <button type="button" onClick={onCancel} disabled={busy}>
+            取消
           </button>
-        )
-      ) : null}
-      {message ? <p role="status" className={`note ${message.tone}`}>{message.text}</p> : null}
-      <div className="row">
-        <button type="submit" className="primary" disabled={busy || !invoke}>
-          保存
-        </button>
-        <button type="button" onClick={onCancel}>
-          取消
-        </button>
-      </div>
-    </form>
+          <button type="submit" className="primary" disabled={busy || !invoke}>
+            {busy ? "正在保存…" : "保存配置"}
+          </button>
+        </div>
+      </form>
+      <ClearKeyDialog
+        provider={clearing && provider ? provider : null}
+        onCancel={() => setClearing(false)}
+        onCleared={(view) => {
+          setClearing(false);
+          setMessage({ tone: "ok", text: "Key 已从系统凭据库删除。" });
+          onKeyCleared?.(view);
+        }}
+      />
+    </section>
   );
 }

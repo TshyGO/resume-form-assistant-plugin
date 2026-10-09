@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>网申快填</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/settings.css" />
   </head>
   <body>
     <div id="app">
@@ -274,125 +275,153 @@
         </section>
 
         <section id="view-settings" class="view hidden">
-          <header class="settings-heading"><h1>设置</h1><p class="muted">管理应用偏好、连接和本地数据。</p></header>
+          <header class="settings-heading"><h1>设置</h1><p>管理应用偏好、连接和本地数据。</p></header>
           <div class="settings-layout">
             <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
-              <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-general" aria-selected="true">通用</button>
-              <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1">浏览器连接</button>
-              <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1">AI 设置</button>
-              <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1">数据与备份</button>
-              <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1">隐私</button>
-              <button type="button" role="tab" id="settings-tab-about" data-settings-tab="about" aria-controls="settings-about" aria-selected="false" tabindex="-1">关于与诊断</button>
+              <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-general" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>通用</span></button>
+              <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>浏览器连接</span></button>
+              <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span>AI 设置</span></button>
+              <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"/></svg><span>数据与备份</span></button>
+              <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/></svg><span>隐私</span></button>
+              <button type="button" role="tab" id="settings-tab-about" data-settings-tab="about" aria-controls="settings-about" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>关于与诊断</span></button>
             </nav>
             <div class="settings-content">
               <section id="settings-general" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-general" tabindex="0" data-settings-panel="general">
-                <div class="settings-section-heading"><h2>通用</h2><p>调整日常使用中的更新与窗口行为。</p></div>
-                <div class="setting-row">
-                  <div><label for="update-auto" class="setting-label">自动检查更新</label><p>启动时检查新版本，每天最多一次。下载与安装由你决定。</p></div>
-                  <input type="checkbox" id="update-auto" class="setting-toggle" />
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>通用</h2><p>调整日常使用中的更新与窗口行为。</p></header>
+                  <div class="setting-row">
+                    <div><label for="update-auto" class="setting-label">自动检查更新</label><p>启动时检查新版本，每天最多一次。下载与安装由你决定。</p></div>
+                    <input type="checkbox" id="update-auto" class="setting-toggle" disabled />
+                  </div>
+                  <p id="update-auto-msg" class="settings-inline-msg" role="status"></p>
+                  <div class="setting-row">
+                    <div><h3>关闭窗口</h3><p>关闭后收起到托盘或菜单栏，应用继续运行。</p></div>
+                    <button type="button" id="btn-hide">隐藏窗口</button>
+                  </div>
+                  <p id="hide-msg" class="settings-inline-msg" role="status"></p>
                 </div>
-                <div class="setting-row">
-                  <div><h3>关闭窗口</h3><p>关闭后收起到托盘或菜单栏，应用继续运行。</p></div>
-                  <button type="button" id="btn-hide">隐藏窗口</button>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>待办提醒</h2><p>系统能不能按时弹出提醒，以及几种情况下会怎样。</p></header>
+                  <div id="settings-reminder-callout" class="settings-callout" data-tone="pending">
+                    <div><p id="settings-reminder">正在读取系统通知能力…</p><p id="settings-reminder-window" class="settings-callout-sub"></p></div>
+                  </div>
+                  <details class="settings-fold"><summary>哪些情况下可以收到提醒？</summary><table id="settings-lifecycle" class="settings-table"></table></details>
                 </div>
-                <div class="settings-group">
-                  <h3>待办提醒</h3>
-                  <p id="settings-reminder" class="note"></p>
-          <p class="muted" id="settings-reminder-window"></p>
-          <details class="settings-disclosure"><summary>哪些情况下可以收到提醒？</summary><table id="settings-lifecycle"></table></details>
+                <div class="settings-card settings-card-row">
+                  <div><h2>退出应用</h2><p>完全退出网申快填桌面程序，停止后台运行并暂停待办定时提醒。</p></div>
+                  <button type="button" id="btn-quit" class="settings-danger">退出应用</button>
+                  <p id="quit-error" class="settings-inline-msg" data-tone="error" role="alert" hidden></p>
                 </div>
-                <div class="setting-row settings-exit">
-                  <div><h3>退出应用</h3><p>退出后停止运行，待办提醒也会暂停。</p></div>
-                  <button type="button" id="btn-quit" class="danger">退出应用</button>
-                </div>
-                <p id="quit-error" class="note warn" role="alert" hidden></p>
               </section>
               <section id="settings-browser" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-browser" tabindex="0" data-settings-panel="browser" hidden>
-                <div class="settings-section-heading"><h2>浏览器连接</h2><p>将网页上保存的岗位和填写记录同步到桌面。</p></div>
-                <div class="settings-group browser-connection">
-                  <h3 id="link-install-section">连接状态</h3>
-
-          <p id="link-store-pending" class="note warn"></p>
-          <p id="link-state" class="note"></p>
-          <p id="link-next" class="muted"></p>
-          <div class="row">
-            <button type="button" id="link-install">安装浏览器扩展</button>
-            <button type="button" id="link-download" class="primary">下载插件包</button>
-            <button type="button" id="link-retry">重新检查注册</button>
-          </div>
-          <p class="muted" id="link-after-install"></p>
-          <details class="settings-disclosure">
-            <summary>高级：手动指定扩展 ID</summary>
-            <p class="muted">
-              只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的
-              <code>allowed_origins</code>，正式那条 ID 不会被顶掉。
-            </p>
-            <form id="pairing-form" class="stack">
-              <label>Chrome 扩展 ID
-                <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
-              </label>
-              <label>Edge 扩展 ID
-                <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
-              </label>
-              <button type="submit">保存并重写清单</button>
-              <p id="pairing-msg" class="muted"></p>
-            </form>
-          </details>
+                <div class="settings-card browser-connection">
+                  <header class="settings-card-head"><h2 id="link-install-section">浏览器连接</h2><p>将网页上保存的岗位和填写记录同步到桌面。这里显示的是桌面在浏览器里的注册结果，不代表扩展已安装或已连上。</p></header>
+                  <div class="link-status-row">
+                    <p id="link-status" class="settings-status" data-tone="pending" role="status">正在读取注册状态…</p>
+                    <div class="settings-actions">
+                      <button type="button" id="link-download" class="primary">下载插件包</button>
+                      <button type="button" id="link-install">安装浏览器扩展</button>
+                      <button type="button" id="link-retry" hidden>重新检查注册</button>
+                    </div>
+                  </div>
+                  <div id="link-problem" class="settings-callout" data-tone="error" hidden>
+                    <div>
+                      <p id="link-state"></p>
+                      <details id="link-problem-details" class="settings-callout-fold"><summary>查看每个浏览器的原因与文件路径</summary><ul id="link-problem-list" class="link-problem-list"></ul></details>
+                    </div>
+                  </div>
+                  <p id="link-next" class="settings-text"></p>
+                  <p id="link-action-msg" class="settings-inline-msg" role="status"></p>
+                  <div class="settings-divider" role="presentation"></div>
+                  <h3 class="settings-subhead">手动安装（商店暂时无法安装时）</h3>
+                  <ol class="install-steps">
+                    <li><span>步骤 1</span><strong>下载并解压</strong><p>点「下载插件包」，把下载的压缩包解压成一个文件夹。</p></li>
+                    <li><span>步骤 2</span><strong>打开扩展管理页</strong><p>在地址栏输入 <code>chrome://extensions</code>；Edge 输入 <code>edge://extensions</code>。</p></li>
+                    <li><span>步骤 3</span><strong>开启开发者模式</strong><p>Chrome 在页面右上角，Edge 在左侧栏底部。</p></li>
+                    <li><span>步骤 4</span><strong>加载已解压的扩展</strong><p>点「加载已解压的扩展程序」（Edge 为「加载解压缩的扩展」），选中解压出的文件夹。</p></li>
+                  </ol>
+                  <p id="link-after-install" class="settings-caption"></p>
                 </div>
+                <details id="pairing-advanced" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">高级：手动指定扩展 ID</span><span class="settings-fold-hint">自编译开发或测试配置</span></summary>
+                  <div class="settings-fold-body">
+                    <p class="settings-text">只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的 <code>allowed_origins</code>，正式那条 ID 不会被顶掉。</p>
+                    <form id="pairing-form" class="settings-form">
+                      <div class="settings-form-grid">
+                        <label>Chrome 扩展 ID
+                          <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
+                        </label>
+                        <label>Edge 扩展 ID
+                          <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
+                        </label>
+                      </div>
+                      <div class="settings-form-actions">
+                        <p id="pairing-msg" class="settings-inline-msg" role="status"></p>
+                        <button type="submit" class="primary">保存并重写清单</button>
+                      </div>
+                    </form>
+                  </div>
+                </details>
               </section>
               <section id="settings-ai" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-ai" tabindex="0" data-settings-panel="ai" hidden>
-                <div class="settings-section-heading"><h2>AI 设置</h2><p>连接你的服务商，用 AI 整理回复证据。</p></div>
                 <div id="ai-settings"></div>
               </section>
               <section id="settings-data" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0" data-settings-panel="data" hidden>
-                <div class="settings-section-heading"><h2>数据与备份</h2><p>保存档案副本，或恢复到之前的记录。</p></div>
-                <div class="settings-group"><h3>备份与恢复</h3>
-                  <p id="backup-export-note" class="muted"></p>
-          <div class="row">
-            <button type="button" id="backup-export" class="primary">导出备份</button>
-            <button type="button" id="backup-choose-restore">从备份恢复…</button>
-          </div>
-          <p id="backup-restore-note" class="muted"></p>
-          <p id="backup-status" class="note"></p>
-
-          <div id="backup-preview" class="panel" hidden>
-            <div id="backup-preview-text"></div>
-            <div class="row">
-              <button type="button" id="backup-confirm-restore" class="danger">确认恢复</button>
-              <button type="button" id="backup-cancel-restore">取消</button>
-            </div>
-          </div>
-
-          </div><details class="settings-disclosure"><summary>回滚点</summary>
-          <ul id="backup-rollback-list" class="plain"></ul>
-
-          </details><details class="settings-disclosure"><summary>回收站</summary>
-          <ul id="recycle-list" class="plain"></ul>
-
-          </details><details class="settings-disclosure"><summary>附件清理</summary>
-          <p class="muted">检查有没有不再被任何证据引用的附件。只报告，删除要逐项确认。</p>
-          <div class="row"><button type="button" id="orphan-check">检查</button></div>
-          <div id="orphan-report"></div>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>备份与恢复</h2><p>保存档案副本，或从备份恢复到之前的求职记录。</p></header>
+                  <ul id="backup-export-note" class="settings-points"></ul>
+                  <div class="settings-actions">
+                    <button type="button" id="backup-export" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出备份</button>
+                    <button type="button" id="backup-choose-restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></svg>从备份恢复…</button>
+                  </div>
+                  <p id="backup-restore-note" class="settings-caption"></p>
+                  <div id="backup-status" class="settings-callout" data-tone="info" role="status" hidden></div>
+                </div>
+                <details id="backup-rollback" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">回滚点<span id="backup-rollback-count" class="settings-count"></span></span><span class="settings-fold-hint">恢复或换回前的档案，随时可以换回</span></summary>
+                  <div class="settings-fold-body">
+                    <ul id="backup-rollback-list" class="settings-list"></ul>
+                    <p id="rollback-status" class="settings-inline-msg" role="status"></p>
+                  </div>
+                </details>
+                <details id="backup-recycle" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">回收站<span id="recycle-count" class="settings-count"></span></span><span class="settings-fold-hint">已移入回收站的申请，可恢复或永久删除</span></summary>
+                  <div class="settings-fold-body">
+                    <ul id="recycle-list" class="settings-list"></ul>
+                    <p id="recycle-status" class="settings-inline-msg" role="status"></p>
+                  </div>
+                </details>
+                <details id="backup-orphans" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">附件清理</span><span class="settings-fold-hint">只处理没有被任何证据引用的附件</span></summary>
+                  <div class="settings-fold-body">
+                    <p class="settings-text">先检查生成报告；只报告，不会自动删除。删除要逐份确认。</p>
+                    <div class="settings-actions"><button type="button" id="orphan-check"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>检查未引用的附件</button></div>
+                    <div id="orphan-report"></div>
+                  </div>
                 </details>
               </section>
               <section id="settings-privacy" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" data-settings-panel="privacy" hidden>
-                <div class="settings-section-heading"><h2>隐私</h2><p>选择是否分享脱敏问题报告。</p></div>
                 <div id="desktop-feedback"></div>
               </section>
               <section id="settings-about" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" data-settings-panel="about" hidden>
-                <div class="settings-section-heading"><h2>关于与诊断</h2><p>查看版本、检查更新，或获取排查问题所需的信息。</p></div>
-                <div class="setting-row about-version">
-                  <div><h3>网申快填</h3><p id="settings-version">正在读取版本…</p></div>
-                  <div class="row"><button type="button" id="update-check" disabled>检查更新</button><button type="button" id="update-open" class="primary" hidden>去下载页</button></div>
+                <div class="settings-card">
+                  <div class="about-head">
+                    <img class="about-mark" src="./src-tauri/icons/64x64.png" alt="" width="48" height="48" />
+                    <div class="about-title"><h2>网申快填 <span id="settings-version-tag" class="settings-chip" hidden></span></h2><p id="settings-version">正在读取版本…</p></div>
+                    <div class="settings-actions"><button type="button" id="update-check" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>检查更新</button><button type="button" id="update-open" class="primary" hidden>去下载页</button></div>
+                  </div>
+                  <div id="update-msg" class="settings-callout" data-tone="info" role="status" hidden><div><p id="update-msg-text"></p></div></div>
+                  <p class="settings-caption">更新需要手动下载安装。安装包尚未签名，请确认下载来源。<span id="update-checked-at" class="update-checked-at" hidden></span></p>
                 </div>
-                <p id="update-msg" class="note" role="status"></p>
-                <p class="settings-caption">更新需要手动下载安装。安装包尚未签名，请确认下载来源。</p>
-                <div class="setting-row">
-                  <div><h3>导出诊断</h3><p>遇到问题时，导出诊断信息用于排查。</p></div>
-                  <button type="button" id="btn-diag">导出诊断</button>
+                <div class="settings-card settings-card-row">
+                  <div><h2>导出诊断</h2><p>遇到问题时，导出一份运行状态与排查信息（JSON 文件，存到本机日志目录；路径已脱敏，不含简历内容和 API Key）。</p></div>
+                  <button type="button" id="btn-diag"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出诊断</button>
+                  <p id="diag-msg" class="settings-inline-msg" role="status"></p>
                 </div>
-                <p id="diag-msg" class="muted" role="status"></p>
-                <details class="settings-disclosure technical-details"><summary>技术详情<span>运行状态、数据位置与浏览器注册信息</span></summary><div id="facts"></div></details>
+                <details class="settings-card settings-card-fold technical-details">
+                  <summary><span class="settings-fold-title">技术详情</span><span class="settings-fold-hint">运行状态、数据位置与浏览器注册信息</span></summary>
+                  <div class="settings-fold-body"><div id="facts"></div></div>
+                </details>
               </section>
             </div>
           </div>

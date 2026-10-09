@@ -42,6 +42,15 @@ export function describeProviderKey(provider: { keyConfigured: boolean }, creden
 }
 
 /**
+ * 列表里那一行 Key 状态，只说三种真实结果。Key 本身和它的尾号都不会回到界面——
+ * 命令层压根不返回。凭据库读失败的具体原因在列表上方单独说一次。
+ */
+export function providerKeyBadge(provider: { keyConfigured: boolean }, credentialError: string | null): Message {
+  if (credentialError) return { tone: "error", text: "凭据库读取失败" };
+  return provider.keyConfigured ? { tone: "ok", text: "已保存 Key" } : { tone: "warn", text: "未配置 Key" };
+}
+
+/**
  * 明文传输提醒。和插件那边一个口径：局域网温和提示，公网明确警告，都不拦着用。
  */
 export function describeTransportRisk(apiUrl: string): Message | null {

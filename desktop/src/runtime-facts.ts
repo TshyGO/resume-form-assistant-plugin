@@ -72,3 +72,46 @@ function nativeMessaging(status: RuntimeStatus): string {
     .map((target) => `${target.label} 未注册：${target.note ?? "原因不明"}`)
     .join("；");
 }
+
+export interface FactGroup {
+  title: string;
+  facts: Fact[];
+}
+
+const GROUPS: Array<{ title: string; labels: string[] }> = [
+  {
+    title: "应用与窗口",
+    labels: ["应用版本", "标识符", "运行状态", "程序目录", "窗口可见", "本次隐藏启动", "开机启动", "关闭窗口", "退出"],
+  },
+  {
+    title: "本地数据",
+    labels: ["用户数据目录", "档案目录", "current.json", "日志目录", "日志文件", "应用缓存目录", "启动时目录可写", "唯一写入者"],
+  },
+  {
+    title: "浏览器与 WebView",
+    labels: ["Native Messaging", "WebView 数据目录", "WebView 由本应用指定", "WebView 说明"],
+  },
+  { title: "迁移与提醒", labels: ["本次升级的迁移备份", "支持待办提醒"] },
+];
+
+/**
+ * 技术详情按四组展示。分组只是换个排法：`runtimeFacts` 里的每一项都必须出现且只出现一次，
+ * 万一以后加了新字段却忘了归组，就放进最后一组，不会悄悄丢掉。
+ */
+export function runtimeFactGroups(status: RuntimeStatus): FactGroup[] {
+  const facts = runtimeFacts(status);
+  const byLabel = new Map(facts.map((fact) => [fact.label, fact]));
+  const placed = new Set<string>();
+  const groups = GROUPS.map((group) => ({
+    title: group.title,
+    facts: group.labels.flatMap((label) => {
+      const fact = byLabel.get(label);
+      if (!fact) return [];
+      placed.add(label);
+      return [fact];
+    }),
+  }));
+  const rest = facts.filter((fact) => !placed.has(fact.label));
+  if (rest.length) groups[groups.length - 1].facts.push(...rest);
+  return groups;
+}

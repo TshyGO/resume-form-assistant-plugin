@@ -7,19 +7,21 @@
 // 另一条是恢复的措辞。恢复是这个程序里唯一一个会把现有档案整个换掉的操作，
 // 所以每一句都要让用户在点确认之前知道会发生什么，包括「旧的去哪了」。
 
-import type { ArchiveCounts, OrphanReport, PurgePreview, RestorePreview } from "./api.ts";
+import type { ArchiveCounts, OrphanReport, PurgePreview, RestorePreview, RollbackPoint } from "./api.ts";
 
 export interface Message {
   tone: "info" | "success" | "warn" | "pending";
   text: string;
 }
 
-/** 导出按钮旁边常驻的说明。三句话，一句都不能少。 */
-export const EXPORT_NOTE = [
-  "备份包含全部申请、事件、待办、回复证据和简历快照。",
+/** 导出按钮旁边常驻的说明。三句话，一句都不能少；界面上逐条列出。 */
+export const EXPORT_POINTS = [
+  "备份是一个 ZIP 文件，包含全部申请、事件、待办、回复证据（含附件）和简历快照。",
   "文件不加密，里面有简历和邮件内容，请放在自己控制的位置。",
   "API Key、日志和这台机器专属的配置不会进备份。",
-].join("");
+];
+
+export const EXPORT_NOTE = EXPORT_POINTS.join("");
 
 /** 恢复之前的说明。 */
 export const RESTORE_NOTE =
@@ -47,6 +49,30 @@ export function describeChange(preview: RestorePreview): string[] {
   return LABELS.filter(([key]) => preview.current[key] !== preview.incoming[key]).map(
     ([key, label]) => `${label} ${preview.current[key]} → ${preview.incoming[key]}`,
   );
+}
+
+/** 恢复预览的对比表：六类都列，会变的标出来。 */
+export function restoreRows(preview: RestorePreview): Array<{ label: string; current: number; incoming: number; changed: boolean }> {
+  return LABELS.map(([key, label]) => ({
+    label,
+    current: preview.current[key],
+    incoming: preview.incoming[key],
+    changed: preview.current[key] !== preview.incoming[key],
+  }));
+}
+
+/**
+ * 时间戳给人看：能解析就换成本机时间 `2026-10-09 14:20`，解析不了就原样显示，
+ * 不猜、不补。只有日期的（如回滚点 `2026-10-09`）原样留着，不编出一个 00:00。
+ */
+export function formatTimestamp(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value) return "时间未知";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 /** 恢复预览要说的话。 */
@@ -104,6 +130,30 @@ export function describeRemindersAfterRestore(cleared: number): Message | null {
     tone: "info",
     text: `${cleared} 条待办的提醒需要重新登记：原来的提醒排在另一台机器上，待办本身都在。`,
   };
+}
+
+/**
+ * 回滚点是什么时候存下的。接口只给了标识和日期；标识开头是存档那一刻的 UTC 时间
+ * （`2026-10-09T14-20-00-123Z-<uuid>`，冒号被换成了横线），能认出来就换成本机时间，
+ * 认不出来就只显示日期。
+ */
+export function rollbackTime(point: RollbackPoint): string {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(point.id);
+  if (match) {
+    const at = new Date(`${match[1]}T${match[2]}:${match[3]}:${match[4]}Z`);
+    if (!Number.isNaN(at.getTime())) return formatTimestamp(at.toISOString());
+  }
+  return formatTimestamp(point.retiredAt);
+}
+
+/** 永久删除前要列出的连带数据。 */
+export function purgeRows(preview: PurgePreview): Array<[string, string]> {
+  return [
+    ["事件", `${preview.events} 条`],
+    ["待办", `${preview.todos} 条`],
+    ["回复证据", `${preview.evidence} 份`],
+    ["简历快照", `${preview.snapshots} 份`],
+  ];
 }
 
 export function describePurgePreview(preview: PurgePreview): string {

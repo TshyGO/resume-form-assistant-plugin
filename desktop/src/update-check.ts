@@ -83,3 +83,36 @@ export function describeCheckFailure(error: unknown): UpdateMessage {
       };
   }
 }
+
+/**
+ * 宿主记下的上次检查时间。它用 `time` 的默认格式写盘（`2026-10-09 6:20:00.123 +00:00:00`），
+ * 不是 RFC3339；两种都认，认不出来就返回 null——宁可不显示，也不编一个时间。
+ */
+export function parseCheckedAt(raw: string | null | undefined): Date | null {
+  const value = (raw ?? "").trim();
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?\s*(Z|[+-]\d{2}(?::?\d{2})?(?::\d{2})?)?$/.exec(value);
+  if (!match) return null;
+  const [, y, mo, d, h, mi, sec, zone] = match;
+  let offsetMinutes = 0;
+  if (zone && zone !== "Z") {
+    const sign = zone.startsWith("-") ? -1 : 1;
+    const parts = zone.slice(1).split(":");
+    const hours = Number(parts[0]?.slice(0, 2) ?? 0);
+    const minutes = Number(parts[1] ?? (parts[0]?.length === 4 ? parts[0].slice(2) : 0));
+    offsetMinutes = sign * (hours * 60 + minutes);
+  } else if (!zone) {
+    return null;
+  }
+  const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec)) - offsetMinutes * 60000;
+  const at = new Date(utc);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/** 「今天 14:20」「2026-10-08 09:05」。按本机时间显示。 */
+export function formatCheckedAt(at: Date, now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const day = (value: Date) => `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+  const time = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+  return day(at) === day(now) ? `今天 ${time}` : `${day(at)} ${time}`;
+}
