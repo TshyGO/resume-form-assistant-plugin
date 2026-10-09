@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { Invoke, ProfileRecordView } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
 import { ProfileForm } from "./ProfileForm.tsx";
+import type { ProfileProbe } from "./ProfileForm.tsx";
 import type { Listen } from "./LegacyImport.tsx";
 
 const record: ProfileRecordView = {
@@ -718,4 +719,88 @@ test("添加按钮和保存按钮并排在页脚，只在对应分组出现；�
   expect(addMember.parentElement).toBe(save.parentElement);
   await user.click(addMember);
   expect(document.activeElement).toBe(screen.getByLabelText("成员 2 关系"));
+});
+
+
+// 导入插件旧数据后，简历页用 probe.sync() 让表单核对一次（后端不会为导入发 resume-profile-changed）。
+function mountWithProbe(handler: (command: string, args?: Record<string, unknown>) => unknown) {
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  const invoke = (async (command: string, args?: Record<string, unknown>) => {
+    calls.push({ command, args });
+    return handler(command, args);
+  }) as Invoke;
+  let fire: ((event?: { payload?: unknown }) => void) | null = null;
+  const listen: Listen = (name, cb) => {
+    if (name === "resume-profile-changed") fire = cb;
+    return () => {};
+  };
+  const probe = { current: null as ProfileProbe | null };
+  render(
+    <InvokeProvider invoke={invoke}>
+      <ProfileForm listen={listen} probe={probe} />
+    </InvokeProvider>,
+  );
+  return { calls, probe, fire: (revision: number) => fire?.({ payload: { revision, source: "plugin" } }) };
+}
+
+const imported: ProfileRecordView = {
+  profile: { ...record.profile, values: { ...record.profile.values, name: "导入后" } },
+  revision: 5,
+};
+
+test("保存进行中收到 sync 不插队，保存结束后再核对并读到导入的档案", async () => {
+  const user = userEvent.setup();
+  let finishSave: ((value: ProfileRecordView) => void) | undefined;
+  let saved = false;
+  const { calls, probe } = mountWithProbe((command) => {
+    if (command === "save_profile_cmd") return new Promise<ProfileRecordView>((resolve) => { finishSave = resolve; });
+    return saved ? imported : record;
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  const readsBefore = calls.filter((c) => c.command === "get_profile_cmd").length;
+  act(() => probe.current?.sync());
+  expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore);
+  saved = true;
+  await act(async () => finishSave?.({ ...record, revision: 4, profile: { ...record.profile, values: { ...record.profile.values, name: "张三五" } } }));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore + 1);
+});
+
+test("「放弃并重新读取」进行中收到 sync：放弃照常生效，结束后再核对一次", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  let finishDiscard: ((value: ProfileRecordView) => void) | undefined;
+  const remoteEdit: ProfileRecordView = { ...record, revision: 4, profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } } };
+  const { probe, fire } = mountWithProbe(() => {
+    reads += 1;
+    if (reads === 1) return record;
+    if (reads === 2) return remoteEdit;
+    if (reads === 3) return new Promise<ProfileRecordView>((resolve) => { finishDiscard = resolve; });
+    return imported;
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fire(4));
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  await waitFor(() => expect(reads).toBe(3));
+  act(() => probe.current?.sync());
+  expect(reads).toBe(3);
+  // 放弃那次读取早于导入写库，读回的是旧档案；放弃本身仍然生效。
+  await act(async () => finishDiscard?.(remoteEdit));
+  await waitFor(() => expect(reads).toBe(4));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(screen.queryByText(/更新需要确认/)).toBeNull();
+});
+
+test("干净的表单收到 sync 直接换成新档案", async () => {
+  let reads = 0;
+  const { probe } = mountWithProbe(() => (++reads === 1 ? record : imported));
+  await screen.findByLabelText("姓名");
+  act(() => probe.current?.sync());
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(screen.getByText("填写后点击保存")).toBeTruthy();
 });

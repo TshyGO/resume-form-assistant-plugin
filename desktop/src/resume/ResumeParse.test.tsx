@@ -352,3 +352,24 @@ test("读取文件时可以取消，晚到的读取结果作废", async () => {
   await flush();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("点了取消后 AI 仍成功返回：不建模板，如实说明没有保存", async () => {
+  const user = userEvent.setup();
+  let resolveAi: (value: unknown) => void = () => {};
+  const { calls, onCreated } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return new Promise((resolve) => { resolveAi = resolve; });
+    // 取消命令没来得及让请求失败：回复照常到达。
+    if (command === "cancel_analysis_cmd") return true;
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  await user.click(await screen.findByRole("button", { name: "取消解析" }));
+  resolveAi('[{"group":"基本信息","key":"姓名","value":"张三"}]');
+  expect(await screen.findByText(/已取消，AI 返回的结果没有保存/)).toBeTruthy();
+  expect(calls.some((c) => c.command === "create_resume_template_cmd")).toBe(false);
+  expect(onCreated).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

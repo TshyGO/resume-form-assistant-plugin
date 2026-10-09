@@ -71,6 +71,8 @@ export function useResumeParse({ onCreated, extract = extractText }: ResumeParse
   // 之后（哪怕这份 promise 稍后才落地）也不能再悄悄建模板、悄悄提示、或者叫 onCreated。
   const mountedRef = useRef(true);
   const inflightRequestId = useRef<string | null>(null);
+  // 点过「取消解析」的那次请求。取消命令和 AI 成功回复会赛跑：回复先到也不能再建模板。
+  const cancelledRequestId = useRef<string | null>(null);
   // invoke 来自 context，不必是 effect 的依赖：镜像进 ref，让下面这个 effect
   // 只在真正的挂载/卸载时跑一次，不会因为 context 值的引用变化而重新注册。
   const invokeRef = useRef(invoke);
@@ -179,6 +181,13 @@ export function useResumeParse({ onCreated, extract = extractText }: ResumeParse
     inflightRequestId.current = null;
     // 等回来时页面已经被卸载：这次解析已经没有界面能看着它了，既不建模板，也不提示。
     if (!mountedRef.current) return;
+    if (cancelledRequestId.current === requestId) {
+      cancelledRequestId.current = null;
+      setStage({ kind: "idle" });
+      setDialogOpen(false);
+      setNotice({ tone: "warn", text: "已取消，AI 返回的结果没有保存。取消不保证对方停止计算或停止计费。" });
+      return;
+    }
     let groups: TemplateGroupView[];
     try {
       groups = fieldsToGroups(parseModelReply(reply));
@@ -191,6 +200,7 @@ export function useResumeParse({ onCreated, extract = extractText }: ResumeParse
 
   const cancel = () => {
     if (stage.kind !== "sending" || stage.cancelling || !invoke) return;
+    cancelledRequestId.current = stage.requestId;
     setStage({ ...stage, cancelling: true });
     void invoke("cancel_analysis_cmd", { requestId: stage.requestId }).catch(() => {});
   };

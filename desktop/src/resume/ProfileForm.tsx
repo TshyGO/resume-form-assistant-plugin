@@ -222,6 +222,8 @@ export function ProfileForm({ listen, probe }: { listen?: Listen; probe?: Mutabl
   const loadSequenceRef = useRef(0);
   const pendingExternalRevisionRef = useRef(0);
   const unknownExternalPendingRef = useRef(false);
+  // 「放弃并重新读取」进行中又收到 sync：那次读取可能早于导入写库，结束后要再核对一次。
+  const syncAfterReloadRef = useRef(false);
   // 页脚的「尚未保存」要跟着重画，所以 ref 之外再存一份 state。
   const setDirty = (value: boolean) => {
     dirtyRef.current = value;
@@ -324,6 +326,12 @@ export function ProfileForm({ listen, probe }: { listen?: Listen; probe?: Mutabl
       if (discardLocalChanges) {
         reloadPendingRef.current = false;
         setReloading(false);
+        if (syncAfterReloadRef.current) {
+          syncAfterReloadRef.current = false;
+          unknownExternalPendingRef.current = true;
+          setExternalChange(true);
+          void load(false, 0, true);
+        }
       }
       if (checkExternal && loadSequence === loadSequenceRef.current) setSyncing(false);
     }
@@ -350,7 +358,17 @@ export function ProfileForm({ listen, probe }: { listen?: Listen; probe?: Mutabl
     if (!probe) return undefined;
     // 导入旧数据后不整块重挂（那会丢掉草稿）：按外部更新的规则核对一次，
     // 干净的表单直接换成新档案，有草稿时走逐项冲突。
-    probe.current = { dirty: () => dirtyRef.current, sync: () => void load(false, 0, true) };
+    // 与 resume-profile-changed 同一规则：先记下待核对；保存或「放弃并重新读取」进行中时不插队，
+    // 免得作废它们的响应，等它们结束后由保存的收尾逻辑补读。
+    probe.current = {
+      dirty: () => dirtyRef.current,
+      sync: () => {
+        unknownExternalPendingRef.current = true;
+        setExternalChange(true);
+        if (reloadPendingRef.current) syncAfterReloadRef.current = true;
+        else if (!savingRef.current) void load(false, 0, true);
+      },
+    };
     return () => {
       probe.current = null;
     };
@@ -487,6 +505,9 @@ export function ProfileForm({ listen, probe }: { listen?: Listen; probe?: Mutabl
         setExternalChange(true);
         pendingExternalRevisionRef.current = Math.max(pendingExternalRevisionRef.current, revisionRef.current + 1);
         void load(false, pendingExternalRevisionRef.current, true);
+      } else if (unknownExternalPendingRef.current) {
+        // 保存期间到达、因为保存而推迟的核对（旧宿主事件、导入旧数据后的 sync）现在补上。
+        void load(false, 0, true);
       }
       setNotice({ tone: "error", text: err?.message ?? "保存失败。" });
     } finally {
