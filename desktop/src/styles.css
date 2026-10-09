@@ -73,11 +73,11 @@ label.button-like.disabled { cursor: default; opacity: .45; }
 .status-pill[data-tone="warn"]::before { background: #d9a53c; }
 .status-pill[data-tone="error"] { border-color: #edc5c5; background: #fcf1f1; color: var(--danger); }
 .status-pill[data-tone="error"]::before { background: var(--danger); }
-/* 简历、AI 设置页的小标签沿用原样式；那几页另行改版。 */
+/* AI 设置页与「我的信息」补充字段里的小标签沿用原样式。 */
 .pill { margin: auto 0 0; padding: 12px; font-size: 12px; color: #9ba8bd; overflow-wrap: anywhere; }
 #nav-install-extension { flex: none; font-size: 13px; border-radius: 999px; padding-inline: 14px; border-color: #3b4656; }
 main { min-width: 0; min-height: 0; overflow: auto; }
-.view:not(#view-applications) { padding: 28px 32px 40px; max-width: 1160px; margin: auto; }
+.view:not(#view-applications):not(#view-resume) { padding: 28px 32px 40px; max-width: 1160px; margin: auto; }
 h1 { margin: 0; font-size: 24px; line-height: 30px; font-weight: 650; letter-spacing: -.025em; }
 h2 { margin: 28px 0 8px; font-size: 18px; }
 h3 { font-size: 14px; font-weight: 600; }
@@ -268,7 +268,7 @@ dialog .row:last-child { justify-content: flex-end; margin-top: 8px; }
   .nav button { flex: 1; }
   .brand-version { display: none; }
   #view-applications { height: 100%; }
-  .view:not(#view-applications) { padding: 24px; }
+  .view:not(#view-applications):not(#view-resume) { padding: 24px; }
   .inbox-split { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -627,25 +627,191 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; }
 #todo-schedule > input { flex: 1 1 160px; }
 .todo-form-actions { justify-content: flex-end; padding-top: 8px; }
 
-.template-list { list-style: none; padding: 0; display: grid; gap: 12px; }
-.template-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
-.template-item.active { border-color: var(--accent); }
-.template-preview { display: grid; gap: 8px; max-height: 320px; overflow: auto; }
-.template-preview dl { margin: 0; display: grid; gap: 4px; }
-.template-preview dt { font-weight: 600; min-width: 8em; }
-.template-preview dd { margin: 0; white-space: pre-wrap; }
-.profile-form fieldset { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
-.profile-form > .note.warn.stack { max-width: 900px; }
-.profile-conflict-details { border-top: 1px solid currentColor; padding-top: 12px; }
-.profile-conflict-item { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
-.profile-conflict-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; }
-.profile-conflict-values p { margin: 0; overflow-wrap: anywhere; }
-.profile-form fieldset > legend, .profile-form fieldset > p, .profile-form fieldset > [role="group"], .profile-form fieldset > .custom-field-head { grid-column: 1 / -1; }
 .pill.warn { border: 1px solid #e7d4a8; color: #7c5a12; background: transparent; }
-/* 「我的信息」用满内容区宽度（.view 已限制最宽 1160px），不再挤在左边 520px。
-   简历页外层和「我的信息」这一节都是 .stack，要一起放开；「简历模板」那一节仍保持原来的宽度。 */
-.resume-view, .resume-profile, .profile-form { max-width: none; }
-.resume-view > header, .resume-view > section:not(.resume-profile) { max-width: 520px; }
+/* 简历页（#257）：与申请页同一套工作区——中性底色、白色圆角卡片、细线与绿色主操作。
+   规则都挂在简历页自己的类名下，不影响其他页面。 */
+#view-resume { height: 100%; min-height: 0; padding: 20px 24px; background: var(--surface); }
+#resume-root { height: 100%; min-height: 0; }
+.resume-view { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.resume-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.resume-header h1 { font-size: 23px; }
+.resume-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.resume-switch { flex: none; display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--card-line); border-radius: 11px; background: var(--panel); box-shadow: 0 1px 2px #1c23300d; }
+.resume-switch button { position: relative; min-height: 36px; padding: 0 20px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.resume-switch button:hover:not(:disabled) { background: var(--bg); color: var(--ink); }
+.resume-switch button[aria-selected="true"], .resume-switch button[aria-selected="true"]:hover:not(:disabled) { background: var(--accent); color: #fff; font-weight: 600; }
+.resume-switch-busy { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #d9a53c; box-shadow: 0 0 0 2px var(--panel); }
+.resume-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.resume-offline, .resume-placeholder { padding: 24px; }
+.resume-placeholder { gap: 12px; align-items: flex-start; }
+.resume-card { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--panel); border: 1px solid var(--card-line); border-radius: 16px; box-shadow: var(--shadow); }
+.resume-card-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.resume-card-title h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.resume-card-title span { font-size: 12px; }
+.resume-card-foot { flex: none; margin: 0; padding: 12px 18px; border-top: 1px solid var(--card-line); background: #fbfcfd; color: var(--muted); font-size: 12px; }
+.resume-kicker { margin: 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.resume-hint { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.resume-hint.warn { color: #7c5a12; }
+.resume-panel-note { margin: 0 0 20px; padding: 12px 16px; border: 1px solid var(--card-line); border-radius: 10px; background: #f8faf9; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.resume-notices { flex: none; display: flex; flex-direction: column; gap: 8px; }
+.resume-notices:empty { display: none; }
+.resume-view .note { font-size: 13px; overflow-wrap: anywhere; }
+.resume-view > .note { flex: none; }
+.resume-task { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 10px 14px; border: 1px solid #c7dcd7; border-radius: 12px; background: var(--accent-pale); font-size: 13px; }
+.resume-task.is-error { border-color: #e7d4a8; background: #fdf7ea; color: #7c5a12; }
+.resume-task p { margin: 0; flex: 1 1 260px; overflow-wrap: anywhere; }
+.resume-task button, .profile-sync button { min-height: 30px; padding: 3px 12px; border-radius: 8px; font-size: 12px; }
+.legacy-banner { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border: 1px solid #c7dcd7; border-radius: 12px; background: var(--accent-pale); font-size: 13px; }
+.legacy-banner.is-warn { border-color: #e7d4a8; background: #fdf7ea; color: #7c5a12; }
+.legacy-banner p { margin: 0; overflow-wrap: anywhere; }
+.legacy-banner button { flex: none; min-height: 32px; border-radius: 8px; font-size: 13px; }
+.resume-back { display: none; }
+
+label.button-like.primary { justify-content: center; background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+label.button-like.primary:hover { background: #2b6058; border-color: #2b6058; }
+button.danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
+button.danger-solid:hover:not(:disabled) { background: #9a3a3a; border-color: #9a3a3a; }
+button.danger:hover:not(:disabled) { background: #fcf1f1; border-color: #e3aaaa; }
+
+/* 模板视图：左列表、右预览。 */
+.template-workspace-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.template-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(330px, 38%) minmax(0, 1fr); gap: 20px; }
+.template-list-head { flex: none; padding: 18px 18px 16px; border-bottom: 1px solid var(--card-line); }
+.template-create { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+.template-create > button, .template-create > label.button-like { width: auto; min-height: 44px; padding-inline: 12px; border-radius: 10px; font-weight: 600; text-align: center; }
+.template-list-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.template-list-state { margin: 8px 6px; }
+.template-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.template-card { display: flex; flex-direction: column; gap: 6px; width: 100%; min-height: 0; padding: 14px; text-align: left; border: 1px solid var(--card-line); border-radius: 12px; background: var(--panel); }
+.template-card:hover:not(:disabled) { border-color: #c9d6d2; background: var(--panel); box-shadow: 0 2px 10px #1c23300d; }
+.template-card.is-selected, .template-card.is-selected:hover:not(:disabled) { border-color: #9fcabe; background: #f4faf8; box-shadow: inset 4px 0 var(--accent), 0 2px 12px #36756b14; }
+.template-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.template-card-head strong { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.template-badge { flex: none; padding: 2px 10px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.template-card-meta { display: flex; flex-wrap: wrap; gap: 0 6px; color: var(--muted); font-size: 12px; }
+.template-card-meta > span + span::before { content: "·"; margin-right: 6px; }
+.template-card-hint { color: var(--accent); font-size: 12px; }
+.template-empty { padding: 24px 18px; border: 1px dashed var(--card-line); border-radius: 12px; background: #fbfcfc; }
+.template-empty p { margin: 0; }
+.template-empty p:first-child { margin-bottom: 6px; font-size: 16px; font-weight: 600; }
+.template-empty .muted { font-size: 13px; line-height: 1.7; }
+.template-detail-head { flex: none; padding: 20px 24px 16px; border-bottom: 1px solid var(--card-line); }
+.template-detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.template-detail-title > div { min-width: 0; }
+.template-detail-title h2 { margin: 4px 0; font-size: 21px; font-weight: 600; letter-spacing: -.015em; line-height: 1.35; overflow-wrap: anywhere; }
+.template-detail-title .muted { font-size: 12px; }
+.template-detail-title > button { flex: none; }
+.template-use-badge { flex: none; padding: 4px 12px; border: 1px solid #c7dcd7; border-radius: 999px; background: var(--accent-pale); color: var(--accent); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.template-actions button { min-height: 36px; padding-inline: 12px; border-radius: 9px; font-size: 13px; }
+.template-detail-body { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px; }
+.template-detail-empty { margin: auto; padding: 32px 24px; text-align: center; }
+.template-detail-empty h2 { margin: 0 0 8px; font-size: 18px; }
+.template-preview-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.template-preview { display: flex; flex-direction: column; gap: 20px; }
+.template-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.template-group-head h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.template-group-head span { flex: none; font-size: 11px; }
+/* 每一项的下边线往下压 1px，被 dl 的 overflow 裁掉：最后一排不会多出一条线。 */
+.template-preview dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; margin: 0; padding: 0 16px; overflow: hidden; border: 1px solid var(--card-line); border-radius: 12px; font-size: 13px; }
+.template-preview dl > div { min-width: 0; margin-bottom: -1px; padding: 10px 0; border-bottom: 1px solid #edf0f3; }
+.template-preview dl > div.is-wide { grid-column: 1 / -1; }
+.template-preview dt { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.template-preview dd { margin: 0; font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 我的信息：左分组、右表单，底部唯一的保存按钮。 */
+.profile-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 20px; }
+.profile-nav-head { flex: none; padding: 16px 18px; border-bottom: 1px solid var(--card-line); }
+.profile-nav-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.profile-nav-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.profile-nav-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px; }
+.profile-nav-list button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 0; padding: 10px 12px; border: 0; border-radius: 9px; background: transparent; color: #4a5361; font-size: 13px; text-align: left; }
+.profile-nav-list button:hover:not(:disabled) { background: var(--bg); }
+.profile-nav-list button[aria-current="true"], .profile-nav-list button[aria-current="true"]:hover:not(:disabled) { background: var(--accent-pale); color: var(--accent); font-weight: 600; }
+.profile-nav-list button.has-divider { position: relative; margin-top: 13px; }
+.profile-nav-list button.has-divider::before { content: ""; position: absolute; left: 8px; right: 8px; top: -9px; border-top: 1px solid var(--card-line); }
+.profile-nav-arrow { color: #a1aab5; }
+.profile-nav-list button[aria-current="true"] .profile-nav-arrow { color: inherit; }
+.profile-nav-badge { flex: none; padding: 1px 8px; border-radius: 999px; background: #fdf7ea; color: #7c5a12; font-size: 10px; font-weight: 500; white-space: nowrap; }
+.profile-form-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--card-line); }
+.profile-form-head h2 { margin: 4px 0 0; font-size: 19px; font-weight: 600; }
+.profile-group-select { display: none; }
+.profile-state { flex: none; padding: 4px 12px; border: 1px solid var(--card-line); border-radius: 999px; background: #fbfcfd; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.profile-state.is-dirty { border-color: #ecd9ae; background: #fdf7ea; color: #7c5a12; }
+.profile-sync { flex: none; display: flex; flex-direction: column; gap: 10px; margin: 14px 24px 0; padding: 12px 14px; border: 1px solid #ecd9ae; border-radius: 10px; background: #fdf7ea; color: #7c5a12; font-size: 13px; }
+.profile-sync p { margin: 0; }
+.profile-form-body { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px; }
+.profile-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.profile-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.profile-fields > label { min-width: 0; color: #4a5361; font-size: 12px; font-weight: 500; }
+.profile-fields > label.is-wide { grid-column: 1 / -1; }
+.profile-fields input, .profile-fields select { width: 100%; min-height: 40px; border-radius: 8px; color: var(--ink); font-size: 13px; font-weight: 400; }
+.profile-fields textarea { width: 100%; min-height: 76px; border-radius: 8px; color: var(--ink); font-size: 13px; font-weight: 400; }
+.profile-family, .profile-custom { display: flex; flex-direction: column; gap: 12px; }
+.profile-family > p, .profile-custom > p { margin: 0; font-size: 13px; }
+.profile-custom > .resume-panel-note { margin: 0 0 4px; }
+.profile-member, .custom-field-row { scroll-margin-block: 16px; }
+.profile-member { padding: 14px 16px; border: 1px solid var(--card-line); border-radius: 12px; }
+.profile-member-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.profile-member-head button { min-height: 30px; padding: 3px 12px; border-radius: 8px; font-size: 12px; }
+.profile-form-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; border-top: 1px solid var(--card-line); background: #fbfcfd; }
+.profile-form-foot > p { flex: 1; min-width: 0; margin: 0; font-size: 12px; }
+.profile-form-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.profile-form-actions > button { min-height: 38px; padding-inline: 16px; border-radius: 9px; }
+.profile-form-actions > button.primary { padding-inline: 20px; }
+
+/* 简历页的弹窗：白色面板、细边、轻阴影；内容长时只滚动正文，标题与按钮一直可见。 */
+dialog.resume-dialog { width: calc(100% - 32px); max-width: 540px; max-height: calc(100dvh - 48px); padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px #1c233033; }
+dialog.resume-dialog[open] { display: flex; flex-direction: column; }
+dialog.resume-dialog.is-wide { max-width: 720px; }
+dialog.resume-dialog.tone-warn { border-color: #e7d4a8; }
+dialog.resume-dialog.tone-danger { border-color: #edc5c5; }
+.resume-dialog-head { flex: none; padding: 20px 24px 0; }
+.resume-dialog-head h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.resume-dialog-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 10px 24px 4px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.resume-dialog-body p { margin: 0; }
+.resume-dialog-body .muted { color: var(--muted); }
+.resume-dialog-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 24px 20px; }
+.resume-dialog-actions button { min-height: 36px; padding-inline: 16px; border-radius: 8px; }
+.resume-dialog .row, .resume-dialog .row:last-child { justify-content: flex-start; margin-top: 0; }
+.resume-dialog-facts { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 4px 0; margin: 0; padding: 12px; border-radius: 8px; background: var(--bg); }
+.resume-dialog-facts dt { color: var(--muted); }
+.resume-dialog-facts dd { margin: 0; overflow-wrap: anywhere; }
+.resume-dialog-warn { color: #7c5a12; }
+.resume-dialog-fact { padding: 12px; border-radius: 8px; background: var(--bg); color: var(--muted); }
+.resume-dialog-form { display: flex; flex-direction: column; gap: 8px; }
+.resume-dialog-body label { font-weight: 500; }
+.resume-dialog-body input:not([type="radio"]) { min-height: 40px; font-weight: 400; }
+.legacy-preview-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 12px 12px 12px 30px; border-radius: 8px; background: var(--bg); }
+.legacy-choice { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
+.legacy-choice legend { margin-bottom: 6px; padding: 0; font-weight: 500; }
+.legacy-choice label { flex-direction: row; align-items: flex-start; gap: 8px; font-weight: 400; }
+.legacy-choice input[type="radio"] { flex: none; min-height: 0; margin: 5px 0 0; padding: 0; border: 0; accent-color: var(--accent); }
+.profile-conflict-list { display: flex; flex-direction: column; gap: 10px; }
+.profile-conflict-item { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--card-line); border-radius: 10px; }
+.profile-conflict-item strong { overflow-wrap: anywhere; }
+.profile-conflict-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.profile-conflict-values p { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.profile-conflict-item button { min-height: 30px; padding: 3px 12px; border-radius: 8px; font-size: 12px; }
+.profile-conflict-item button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-pale); color: var(--accent); font-weight: 600; }
+
+/* 窄窗口：模板页在列表与详情之间切换，「我的信息」把分组改成顶部的选择器。 */
+@media (max-width: 980px) {
+  #view-resume { padding: 16px; }
+  .resume-header { flex-wrap: wrap; }
+  .template-workspace, .profile-workspace { grid-template-columns: minmax(0, 1fr); }
+  .template-workspace:not(.show-detail) .template-detail-card { display: none; }
+  .template-workspace.show-detail .template-list-card { display: none; }
+  .resume-back { display: inline-flex; align-self: flex-start; min-height: 30px; margin-bottom: 10px; padding: 3px 8px; border: 0; color: var(--accent); background: transparent; font-size: 12px; }
+  .resume-back:hover:not(:disabled) { background: var(--accent-pale); }
+  .profile-nav { display: none; }
+  .profile-form-head { flex-wrap: wrap; }
+  .profile-group-select { display: flex; flex: 1 1 200px; }
+  .profile-group-select select { min-height: 36px; }
+  .profile-fields, .profile-conflict-values { grid-template-columns: minmax(0, 1fr); }
+  .profile-form-foot { flex-wrap: wrap; }
+}
+
 /* 补充字段（#228）：表头只出现一次；每行字段名、内容两栏等宽、框一样高，长题目自动换行显示全文；
    「待补充」和「删除」放在固定宽度的右侧，上下居中，行行对齐。 */
 .custom-field-head, .custom-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 10.5em; gap: 12px; align-items: center; }

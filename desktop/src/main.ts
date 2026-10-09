@@ -61,13 +61,33 @@ function showRoute(name: string | undefined) {
   });
 }
 
+/**
+ * 切页的唯一入口（#257）：从「简历」离开时，「我的信息」有没保存的修改要先确认；
+ * 从别的页切进「简历」时重新读取——插件或恢复备份可能在这期间改过档案。
+ * 已经在「简历」页时再切过去不刷新，免得把正在填的「我的信息」冲掉。返回是否真的切了。
+ */
+let routeChange: Promise<boolean> | null = null;
+async function navigate(route: string | undefined): Promise<boolean> {
+  // 上一次切页还在等用户回答离开确认：这次不叠加第二个确认。
+  if (routeChange) return false;
+  const onResume = !views.resume.classList.contains("hidden");
+  if (onResume && route !== "resume") {
+    routeChange = resumeView.confirmLeave();
+    try {
+      if (!(await routeChange)) return false;
+    } finally {
+      routeChange = null;
+    }
+  }
+  const enteringResume = route === "resume" && !onResume;
+  showRoute(route);
+  if (enteringResume) resumeView.refresh();
+  return true;
+}
+
 document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    // 从别的页切进「简历」时重新读取：插件或恢复备份可能在这期间改过档案。
-    // 已经在「简历」页时再点不刷新，免得把正在填的「我的信息」冲掉。
-    const enteringResume = btn.dataset.route === "resume" && views.resume.classList.contains("hidden");
-    showRoute(btn.dataset.route);
-    if (enteringResume) resumeView.refresh();
+  btn.addEventListener("click", async () => {
+    if (!(await navigate(btn.dataset.route))) return;
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
     if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
@@ -129,8 +149,8 @@ function showPill(state: { tone: string; text: string; title: string }) {
   pill.dataset.tone = state.tone;
 }
 
-function goToExtensionInstall() {
-  showRoute("settings");
+async function goToExtensionInstall() {
+  if (!(await navigate("settings"))) return;
   settingsNavigation.select("browser");
   const target = must("link-install-section");
   target.scrollIntoView({ block: "nearest" });
@@ -152,8 +172,8 @@ function applyLinkState(status: RuntimeStatus | null) {
 
 must("link-store-pending").textContent = STORE_PENDING_HINT;
 
-must("nav-install-extension").addEventListener("click", () => goToExtensionInstall());
-must("btn-empty-install").addEventListener("click", () => goToExtensionInstall());
+must("nav-install-extension").addEventListener("click", () => void goToExtensionInstall());
+must("btn-empty-install").addEventListener("click", () => void goToExtensionInstall());
 
 must("link-install").addEventListener("click", async () => {
   if (!invoke) return;
@@ -381,11 +401,9 @@ if (invoke && listenForViews) {
   void followRequestedViews({
     listen: (name, handler) => listenForViews(name, () => handler()),
     take: () => invoke<string | null>("take_requested_view_cmd"),
-    show: (target) => {
-      const enteringResume = target.route === "resume" && views.resume.classList.contains("hidden");
-      showRoute(target.route);
+    show: async (target) => {
+      if (!(await navigate(target.route))) return;
       if (target.settingsTab) settingsNavigation.select(target.settingsTab);
-      if (enteringResume) resumeView.refresh();
     },
   }).catch(() => {});
 }

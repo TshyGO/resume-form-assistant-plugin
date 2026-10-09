@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Invoke, LegacyImportPending, LegacyImportPreview } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
@@ -55,11 +55,18 @@ test("待确认时列出模板、我的信息与 AI 主机，确认后通知刷�
     if (command === "confirm_legacy_import_cmd") { list = []; return { state: "imported", received: 3, total: 3 }; }
     return null;
   }, { onImported: () => { imported += 1; } });
-  expect(await screen.findByText(/模板「研发岗」：12 个字段（插件里的当前模板）/)).toBeTruthy();
+  expect(await screen.findByText(/插件里有旧数据待导入桌面/)).toBeTruthy();
+  // 提示条不展开内容，点开弹窗才看预览。
+  expect(screen.queryByText(/模板「研发岗」/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "查看并导入" }));
+  const dialog = screen.getByRole("dialog", { name: "插件里有旧数据" });
+  expect(within(dialog).getByText(/模板「研发岗」：12 个字段（插件里的当前模板）/)).toBeTruthy();
   expect(screen.getByText("「我的信息」：5 项")).toBeTruthy();
   expect(screen.getByText(/api\.example\.com，模型 m-1/)).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "导入到桌面" }));
   await screen.findByText(/已导入桌面/);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("region", { name: "插件旧数据导入" })).toBeNull();
   const confirm = calls.find((c) => c.command === "confirm_legacy_import_cmd");
   expect(confirm?.args).toEqual({ importId: IMPORT, profileChoice: null });
   expect(imported).toBe(1);
@@ -72,6 +79,7 @@ test("桌面已有我的信息时必须先选保留哪份", async () => {
     if (command === "confirm_legacy_import_cmd") return { state: "imported", received: 3, total: 3 };
     return null;
   });
+  await userEvent.click(await screen.findByRole("button", { name: "查看并导入" }));
   const button = await screen.findByRole("button", { name: "导入到桌面" });
   expect((button as HTMLButtonElement).disabled).toBe(true);
   await userEvent.click(screen.getByLabelText(/保留桌面的/));
@@ -90,8 +98,10 @@ test("模板超额时显示桌面给的两个数字", async () => {
     }
     return null;
   });
+  await userEvent.click(await screen.findByRole("button", { name: "查看并导入" }));
   await userEvent.click(await screen.findByRole("button", { name: "导入到桌面" }));
-  expect(await screen.findByText(/桌面已有 24 个模板，再导入 3 个/)).toBeTruthy();
+  // 失败留在弹窗里，可以就地处理。
+  expect(await within(screen.getByRole("dialog")).findByText(/桌面已有 24 个模板，再导入 3 个/)).toBeTruthy();
 });
 
 test("不导入要再确认一次", async () => {
@@ -101,8 +111,14 @@ test("不导入要再确认一次", async () => {
     if (command === "reject_legacy_import_cmd") return { state: "rejected", received: 3, total: 3 };
     return null;
   });
-  await userEvent.click(await screen.findByRole("button", { name: "不导入" }));
+  await userEvent.click(await screen.findByRole("button", { name: "查看并导入" }));
+  await userEvent.click(await screen.findByRole("button", { name: "不导入…" }));
   expect(calls.some((c) => c.command === "reject_legacy_import_cmd")).toBe(false);
+  const confirm = screen.getByRole("dialog", { name: "确认不导入旧数据？" });
+  // 返回回到预览，不执行任何命令。
+  await userEvent.click(within(confirm).getByRole("button", { name: "返回" }));
+  expect(screen.getByRole("dialog", { name: "插件里有旧数据" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "不导入…" }));
   await userEvent.click(screen.getByRole("button", { name: "确定不导入" }));
   expect(await screen.findByText(/插件里的数据原样保留/)).toBeTruthy();
 });
@@ -113,8 +129,10 @@ test("AI 步骤没成功时可以重试或放弃 AI 配置", async () => {
     if (command === "reject_legacy_import_cmd") return { state: "imported", received: 3, total: 3, aiConfigDropped: true };
     return null;
   });
-  expect(await screen.findByRole("button", { name: "重试导入 AI 配置" })).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "不导入 AI 配置" }));
+  await userEvent.click(await screen.findByRole("button", { name: "处理 AI 配置" }));
+  expect(screen.getByRole("dialog", { name: "模板与资料已导入" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "重试导入 AI 配置" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "不导入 AI 配置…" }));
   expect(calls.some((c) => c.command === "reject_legacy_import_cmd")).toBe(false);
   expect(screen.getByText(/已经导入的模板和「我的信息」会保留/)).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "确定不导入 AI 配置" }));
@@ -130,8 +148,33 @@ test("收到到达事件会重新读取", async () => {
     if (command === "legacy_import_preview_cmd") return preview();
     return null;
   }, { listen: (_name, handler) => { fire = handler; return () => {}; } });
-  await waitFor(() => expect(screen.queryByRole("button", { name: "导入到桌面" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("button", { name: "查看并导入" })).toBeNull());
   list = [pending()];
   fire();
-  expect(await screen.findByRole("button", { name: "导入到桌面" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "查看并导入" })).toBeTruthy();
+});
+
+test("批次在弹窗打开时消失（过期或在别处处理），弹窗跟着关掉", async () => {
+  let fire: () => void = () => {};
+  let list: LegacyImportPending[] = [pending()];
+  mount((command) => {
+    if (command === "list_legacy_imports_cmd") return list;
+    if (command === "legacy_import_preview_cmd") return preview();
+    return null;
+  }, { listen: (_name, handler) => { fire = handler; return () => {}; } });
+  await userEvent.click(await screen.findByRole("button", { name: "查看并导入" }));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  list = [];
+  fire();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("预览不显示字段值或 Key", async () => {
+  mount((command) => {
+    if (command === "list_legacy_imports_cmd") return [pending()];
+    if (command === "legacy_import_preview_cmd") return preview();
+    return null;
+  });
+  await userEvent.click(await screen.findByRole("button", { name: "查看并导入" }));
+  expect(within(screen.getByRole("dialog")).getByText(/不显示字段值或 API Key/)).toBeTruthy();
 });
