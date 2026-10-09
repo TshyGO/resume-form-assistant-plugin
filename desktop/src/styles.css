@@ -831,7 +831,7 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; white-space: nowrap;
 .organize-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 4px; }
 /* 招聘通知里的三个主操作（关联、保存分类、AI 整理）同一个样子：墨绿实心，36px 高。 */
 .organize-actions button, .ai-actions button { height: 36px; min-height: 36px; padding: 0 18px; border-radius: 8px; font-size: 13px; }
-.organize-actions button.primary, .ai-actions button.ai-start { font-weight: 600; }
+.organize-actions button.primary, .ai-actions button.ai-start { width: 112px; justify-content: center; font-weight: 600; }
 .inbox-empty { margin: 20px; max-width: none; border: 2px dashed #c9d9d4; border-radius: 16px; background: linear-gradient(180deg, #fbfdfc, #f5faf8); }
 .inbox-empty > p { max-width: 520px; }
 .format-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
