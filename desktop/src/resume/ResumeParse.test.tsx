@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { expect, test, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AiSettingsView, Invoke } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
@@ -50,14 +50,19 @@ test("确认前说清楚发给谁、发多少字，确认后才发送", async ()
     return null;
   });
   await upload(user);
-  expect(await screen.findByText(/DeepSeek/)).toBeTruthy();
-  expect(screen.getByText(/api\.deepseek\.com · deepseek-chat/)).toBeTruthy();
-  expect(screen.getByText(/6 字/)).toBeTruthy();
-  expect(screen.getByText(/解析结果会直接存成一个新模板并设为当前，可在下面的模板列表里查看或删除。/)).toBeTruthy();
+  const dialog = await screen.findByRole("dialog", { name: "发送简历给 AI 解析？" });
+  expect(within(dialog).getByText("DeepSeek")).toBeTruthy();
+  expect(within(dialog).getByText("api.deepseek.com")).toBeTruthy();
+  expect(within(dialog).getByText("deepseek-chat")).toBeTruthy();
+  expect(within(dialog).getByText(/《张三简历\.pdf》的全文（6 字）/)).toBeTruthy();
+  expect(within(dialog).getByText(/对方可能留存这些内容。解析成功后会直接新建模板并设为当前/)).toBeTruthy();
+  // 外发不是默认动作：焦点先落在「不发送」上。
+  expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "不发送" }));
   expect(calls.some((c) => c.command === "ai_complete_cmd")).toBe(false);
-  await user.click(screen.getByRole("button", { name: "发送并解析" }));
-  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  await user.click(within(dialog).getByRole("button", { name: "发送并解析" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("t1"));
   expect(screen.getByText("已存为模板「张三简历（AI 解析）」并设为当前，共 1 个字段。")).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
   const sent = calls.find((c) => c.command === "ai_complete_cmd")!;
   expect(sent.args?.providerId).toBe("p1");
   const created = calls.find((c) => c.command === "create_resume_template_cmd")!;
@@ -91,7 +96,7 @@ test("没有可用服务商时不让发送，并指向设置页", async () => {
   });
   await upload(user);
   expect(await screen.findByText(/先在「设置 → AI」添加服务商/)).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "发送并解析" })).toBeNull();
+  expect(screen.getByRole("button", { name: "发送并解析" })).toHaveProperty("disabled", true);
 });
 
 test("模板已经有 25 个时不让发送，并提示先删掉", async () => {
@@ -104,7 +109,7 @@ test("模板已经有 25 个时不让发送，并提示先删掉", async () => {
   });
   await upload(user);
   expect(await screen.findByText(/模板已经有 25 个，先删掉用不上的再解析/)).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "发送并解析" })).toBeNull();
+  expect(screen.getByRole("button", { name: "发送并解析" })).toHaveProperty("disabled", true);
 });
 
 test("等待中可以取消，取消后如实显示已取消", async () => {
@@ -122,7 +127,7 @@ test("等待中可以取消，取消后如实显示已取消", async () => {
   });
   await upload(user);
   await user.click(await screen.findByRole("button", { name: "发送并解析" }));
-  await user.click(await screen.findByRole("button", { name: "取消" }));
+  await user.click(await screen.findByRole("button", { name: "取消解析" }));
   const cancel = calls.find((c) => c.command === "cancel_analysis_cmd")!;
   const sent = calls.find((c) => c.command === "ai_complete_cmd")!;
   expect(cancel.args?.requestId).toBe(sent.args?.requestId);
@@ -219,4 +224,131 @@ test("StrictMode 下挂载后仍能进入确认外发这一步", async () => {
   }, true);
   await upload(user);
   expect(await screen.findByRole("button", { name: "发送并解析" })).toBeTruthy();
+});
+
+test("文字超过 6 万字时不让发送", async () => {
+  const user = userEvent.setup();
+  const onCreated = vi.fn();
+  const invoke = (async (command: string) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  }) as Invoke;
+  render(
+    <InvokeProvider invoke={invoke}>
+      <ResumeParse onCreated={onCreated} extract={async () => "字".repeat(61_000)} />
+    </InvokeProvider>,
+  );
+  await upload(user);
+  expect(await screen.findByText(/超过 6 万字/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "发送并解析" })).toHaveProperty("disabled", true);
+});
+
+test("不发送就关掉确认，什么都不外发", async () => {
+  const user = userEvent.setup();
+  const { calls } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "不发送" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(calls.some((c) => c.command === "ai_complete_cmd")).toBe(false);
+});
+
+test("文件读不出文字时如实提示，不进入外发确认", async () => {
+  const user = userEvent.setup();
+  const invoke = (async (command: string) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  }) as Invoke;
+  render(
+    <InvokeProvider invoke={invoke}>
+      <ResumeParse onCreated={() => {}} extract={async () => { throw new Error("这份 PDF 没有可读取的文字，可能是扫描版。"); }} />
+    </InvokeProvider>,
+  );
+  await upload(user);
+  expect(await screen.findByText("这份 PDF 没有可读取的文字，可能是扫描版。")).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("等待时可以在后台继续，工作区里仍能查看进度和取消", async () => {
+  const user = userEvent.setup();
+  let reject: (reason?: unknown) => void = () => {};
+  const { calls } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return new Promise((_resolve, rej) => { reject = rej; });
+    if (command === "cancel_analysis_cmd") {
+      reject({ code: "AI_CANCELLED", message: "已取消。取消不保证对方停止计算或停止计费。" });
+      return true;
+    }
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  const waiting = await screen.findByRole("dialog", { name: "AI 正在解析" });
+  expect(within(waiting).getByText(/不保证对方停止计算或计费/)).toBeTruthy();
+  await user.click(within(waiting).getByRole("button", { name: "在后台继续" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const progress = screen.getByRole("group", { name: "AI 解析进度" });
+  expect(within(progress).getByText(/AI 正在解析《张三简历\.pdf》/)).toBeTruthy();
+  await user.click(within(progress).getByRole("button", { name: "查看进度" }));
+  expect(screen.getByRole("dialog", { name: "AI 正在解析" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "在后台继续" }));
+  await user.click(within(screen.getByRole("group", { name: "AI 解析进度" })).getByRole("button", { name: "取消解析" }));
+  expect(calls.some((c) => c.command === "cancel_analysis_cmd")).toBe(true);
+  expect(await screen.findByText("已取消。取消不保证对方停止计算或停止计费。")).toBeTruthy();
+  expect(screen.queryByRole("group", { name: "AI 解析进度" })).toBeNull();
+  expect(calls.some((c) => c.command === "create_resume_template_cmd")).toBe(false);
+});
+
+test("后台保存失败时不自己弹窗，工作区里可以重新保存", async () => {
+  const user = userEvent.setup();
+  let resolveAi: (value: unknown) => void = () => {};
+  let createCalls = 0;
+  const { calls } = mount((command) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    if (command === "ai_complete_cmd") return new Promise((resolve) => { resolveAi = resolve; });
+    if (command === "create_resume_template_cmd") {
+      createCalls += 1;
+      if (createCalls === 1) throw { code: "STORE_ERROR", message: "写不进去" };
+      return { template: { id: "t1", name: "n", fieldCount: 1, updatedAt: "" }, previousFieldCount: null, skippedSecretFields: 0 };
+    }
+    return null;
+  });
+  await upload(user);
+  await user.click(await screen.findByRole("button", { name: "发送并解析" }));
+  await user.click(await screen.findByRole("button", { name: "在后台继续" }));
+  resolveAi('[{"group":"g","key":"k","value":"v"}]');
+  const progress = await screen.findByRole("group", { name: "AI 解析进度" });
+  await waitFor(() => expect(within(progress).getByRole("button", { name: "重新保存" })).toBeTruthy());
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await user.click(within(progress).getByRole("button", { name: "重新保存" }));
+  await waitFor(() => expect(screen.getByText(/已存为模板/)).toBeTruthy());
+  expect(calls.filter((c) => c.command === "ai_complete_cmd")).toHaveLength(1);
+});
+
+test("读取文件时可以取消，晚到的读取结果作废", async () => {
+  const user = userEvent.setup();
+  let finish: (text: string) => void = () => {};
+  const invoke = (async (command: string) => {
+    if (command === "get_ai_settings_cmd") return settings;
+    if (command === "resume_overview_cmd") return emptyOverview;
+    return null;
+  }) as Invoke;
+  render(
+    <InvokeProvider invoke={invoke}>
+      <ResumeParse onCreated={() => {}} extract={() => new Promise((resolve) => { finish = resolve; })} />
+    </InvokeProvider>,
+  );
+  await upload(user);
+  const reading = await screen.findByRole("dialog", { name: "正在读取简历" });
+  await user.click(within(reading).getByRole("button", { name: "取消" }));
+  finish("张三");
+  await flush();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
