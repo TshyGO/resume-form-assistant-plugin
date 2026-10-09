@@ -6,10 +6,11 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 type Reply = Record<string, unknown>;
 // Mounts the real plugin feedback-ui.js (Chrome and Edge load the same file) with the same
 // mount points as sidepanel.html or popup.html, against a scripted service worker.
-function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: boolean; decided?: boolean } = {}) {
-  document.body.innerHTML = pathname === '/sidepanel.html'
-    ? '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>'
-    : '<div id="feedback-auto-root"></div>';
+function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: boolean; decided?: boolean; panel?: boolean } = {}) {
+  const manual = '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>';
+  document.body.innerHTML = pathname !== '/sidepanel.html' ? '<div id="feedback-auto-root"></div>'
+    // The side panel as it ships (#261): the preview gets its own panel over the 填写 page.
+    : initial.panel ? `<div id="fill-home">${manual}</div><section id="task-panel" hidden></section><div id="feedback-preview-root"></div>` : manual;
   const calls: Record<string, unknown>[] = [];
   // A new installation: nothing chosen, nothing sent.
   let consent = initial.consent ?? false;
@@ -318,4 +319,53 @@ test('only navigation of the attached tab invalidates a preview', async () => {
   await previewDraft();
   updated(2); expect(button('确认发送').disabled).toBe(false);
   updated(1); expect(button('确认发送').disabled).toBe(true);
+});
+
+// ---- the side panel's preview panel (#261) ----
+
+test('in the side panel the preview opens as its own panel, and 返回修改 keeps the draft but not the preview', async () => {
+  const { sends } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  const home = document.getElementById('fill-home') as HTMLElement & { inert: boolean };
+  expect(panel.hidden).toBe(true);
+  await previewDraft('简历上传按钮没反应');
+  expect(panel.hidden).toBe(false);
+  expect(home.inert).toBe(true);
+  expect(document.activeElement).toBe(document.getElementById('feedback-preview-title'));
+  expect(within(panel).getByText('请核对预览，确认后发送。')).toBeTruthy();
+  // The payload is shown in the panel, and the send button there submits the form.
+  expect(within(panel).getByLabelText('将发送的内容').textContent).toContain('简历上传按钮没反应');
+  fireEvent.click(within(panel).getAllByRole('button', { name: '返回修改' })[1]!);
+  expect(panel.hidden).toBe(true);
+  expect(home.inert).toBe(false);
+  expect(document.activeElement).toBe(button('预览将发送的内容'));
+  expect(description().value).toBe('简历上传按钮没反应');
+  expect(screen.getByText('预览已关闭，草稿已保留。修改后请重新预览。')).toBeTruthy();
+  expect(sends()).toHaveLength(0);
+  await previewDraft('简历上传按钮没反应');
+  fireEvent.click(button('确认发送'));
+  await screen.findByText('发送成功，编号：receipt-123');
+  expect(panel.hidden).toBe(true);
+  expect(home.inert).toBe(false);
+  expect(sends()).toEqual([{ type: 'FEEDBACK_SEND', token: 'draft-2' }]);
+});
+
+test('a side-panel preview that the page invalidates closes and says why', async () => {
+  const { updated, sends } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  await previewDraft();
+  updated(1);
+  expect(panel.hidden).toBe(true);
+  expect(screen.getByText('当前网页已变化，刚才的预览已失效。草稿已保留，请重新预览。')).toBeTruthy();
+  expect(description().value).toBe('按钮没反应');
+  expect(sends()).toHaveLength(0);
+});
+
+test('a side-panel preview stays covered by a sidebar flow: closing it keeps the page under that flow out of reach', async () => {
+  setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const home = document.getElementById('fill-home') as HTMLElement & { inert: boolean };
+  await previewDraft();
+  (document.getElementById('task-panel') as HTMLElement).hidden = false;
+  fireEvent.click(within(document.getElementById('feedback-preview-panel') as HTMLElement).getAllByRole('button', { name: '返回修改' })[0]!);
+  expect(home.inert).toBe(true);
 });

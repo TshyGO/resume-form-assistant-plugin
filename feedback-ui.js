@@ -6,6 +6,9 @@
   const noticeRoot = document.getElementById('feedback-notice-root');
   const autoRoot = document.getElementById('feedback-auto-root');
   const manualRoot = document.getElementById('feedback-manual-root');
+  // The side panel gives the preview a panel of its own over the 填写 page (#261); without
+  // that mount point the preview stays inside the form, as before.
+  const previewRoot = manualRoot && document.getElementById('feedback-preview-root');
   if (!autoRoot) return;
   const core = self.ResumeProFeedback;
   const send = async data => { try { return await chrome.runtime.sendMessage(data); } catch { return { ok: false, reason: 'unavailable' }; } };
@@ -63,11 +66,30 @@
         <textarea id="feedback-description" maxlength="1400" rows="4"></textarea>
         <label><input type="checkbox" id="feedback-attach" checked>附上最近一次填写诊断</label>
         <p class="feedback-note">只有点「确认发送」才会发送。报告最多保存 90 天；可能会公开在网申快填的 GitHub 项目里，公开的内容会长期保留。发送前请核对下方全部内容。</p>
-        <button type="button" id="feedback-preview-button">预览将发送的内容</button>
+        <button type="button" id="feedback-preview-button">预览将发送的内容</button>${previewRoot ? '' : `
         <pre id="feedback-preview" tabindex="0" hidden></pre>
-        <button type="submit" id="feedback-send" class="feedback-primary" disabled>确认发送</button>
+        <button type="submit" id="feedback-send" class="feedback-primary" disabled>确认发送</button>`}
         <p id="feedback-status" role="status" aria-live="polite"></p>
       </form>
+    </section>`;
+  if (previewRoot) previewRoot.innerHTML = `
+    <section class="task-panel feedback-preview-panel" id="feedback-preview-panel" role="region" aria-labelledby="feedback-preview-title" hidden>
+      <header class="task-head">
+        <span class="task-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg></span>
+        <div class="task-heading">
+          <h2 id="feedback-preview-title" tabindex="-1">预览将发送的内容</h2>
+          <p>去掉个人信息后实际发送的全部内容</p>
+        </div>
+        <button type="button" class="task-exit" id="feedback-preview-exit">返回修改</button>
+      </header>
+      <div class="task-body feedback-preview-body">
+        <p id="feedback-preview-note" class="feedback-note" role="status" aria-live="polite"></p>
+        <pre id="feedback-preview" tabindex="0" aria-label="将发送的内容" hidden></pre>
+        <div class="task-foot">
+          <button type="submit" form="feedback-form" id="feedback-send" class="feedback-primary" disabled>确认发送</button>
+          <button type="button" id="feedback-back">返回修改</button>
+        </div>
+      </div>
     </section>`;
   const $ = id => document.getElementById(`feedback-${id}`);
 
@@ -142,6 +164,17 @@
     let expanded = false;
     let message = '';
     let sent = false; // The compact 发送成功 line is kept only until a new draft is opened.
+    // Only in the side panel's own preview panel: opening it covers the 填写 page; closing it
+    // goes back to the form. Nothing is sent or dropped by opening or closing it.
+    const panel = $('preview-panel');
+    const home = document.getElementById('fill-home');
+    function showPanel(open, focus) {
+      if (!panel) return;
+      panel.hidden = !open;
+      const task = document.getElementById('task-panel');
+      if (home) home.inert = open || (Boolean(task) && task.hidden === false);
+      (open ? $('preview-title') : focus)?.focus?.();
+    }
     function renderManual() {
       $('form').hidden = !expanded;
       $('expand').textContent = expanded ? '收起' : '展开';
@@ -149,12 +182,17 @@
       const draft = $('description').value.trim() !== '' || !$('preview').hidden;
       $('summary').hidden = expanded;
       $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '由你填写描述、预览并确认后才发送。');
-      $('status').textContent = expanded ? message : '';
+      const panelOpen = Boolean(panel) && !panel.hidden;
+      $('status').textContent = expanded && !panelOpen ? message : '';
+      if (panel) $('preview-note').textContent = panelOpen ? message : '';
     }
     const status = text => { message = text; sent = false; renderManual(); };
-    const invalidate = () => {
+    const invalidate = (focus = $('preview-button')) => {
+      const shown = !$('preview').hidden;
       revision++; token = null; previewTabId = undefined;
       $('send').disabled = true; $('preview').hidden = true; $('preview').textContent = '';
+      if (shown) showPanel(false, focus);
+      return shown;
     };
     // Folding never clears the draft and never cancels a send that is already on its way.
     $('expand').onclick = () => {
@@ -163,10 +201,14 @@
       renderManual();
       if (expanded && !busy) $('description').focus();
     };
-    $('description').oninput = invalidate;
-    $('attach').onchange = invalidate;
-    chrome.tabs?.onActivated?.addListener(() => { if ($('attach').checked) invalidate(); });
-    chrome.tabs?.onUpdated?.addListener((id, change) => { if (id === previewTabId && (change.url || change.status === 'loading')) invalidate(); });
+    $('description').oninput = () => invalidate();
+    $('attach').onchange = () => invalidate();
+    // A preview that leaves the screen because the page changed says so; the draft stays.
+    const pageChanged = () => { if (invalidate() && panel) status('当前网页已变化，刚才的预览已失效。草稿已保留，请重新预览。'); };
+    chrome.tabs?.onActivated?.addListener(() => { if ($('attach').checked) pageChanged(); });
+    chrome.tabs?.onUpdated?.addListener((id, change) => { if (id === previewTabId && (change.url || change.status === 'loading')) pageChanged(); });
+    const back = () => { if (!busy) { invalidate(); status('预览已关闭，草稿已保留。修改后请重新预览。'); } };
+    if (panel) { $('back').onclick = back; $('preview-exit').onclick = back; }
     $('preview-button').onclick = async () => {
       if (busy || preparing) return;
       preparing = true; $('preview-button').disabled = true;
@@ -190,6 +232,7 @@
         token = result.token;
         $('preview').textContent = JSON.stringify(result.payload, null, 2);
         $('preview').hidden = false;
+        showPanel(true);
         $('send').disabled = Date.now() < coolUntil;
         status(diagnostics ? '请核对预览，确认后发送。' : '未附上填写诊断。请核对预览，确认后发送。');
       } catch { status('无法读取填写诊断，请重试或取消勾选。'); }
@@ -200,13 +243,15 @@
       if (busy || !token || Date.now() < coolUntil) return;
       busy = true; const confirmed = token; token = null; $('send').disabled = true; $('preview-button').disabled = true;
       $('description').disabled = true; $('attach').disabled = true;
+      if (panel) { $('back').disabled = true; $('preview-exit').disabled = true; }
       coolUntil = Date.now() + 60000; status('正在发送…');
       const result = await send({ type: 'FEEDBACK_SEND', token: confirmed });
       if (result.reason === 'preview') coolUntil = 0;
       busy = false; $('preview-button').disabled = false; $('description').disabled = false; $('attach').disabled = false;
+      if (panel) { $('back').disabled = false; $('preview-exit').disabled = false; }
       if (result.ok) {
         // A sent report leaves nothing behind: the next report starts as a new, unreviewed draft.
-        $('description').value = ''; $('attach').checked = true; invalidate();
+        $('description').value = ''; $('attach').checked = true; invalidate($('expand'));
         expanded = false; status(`发送成功，编号：${result.id}`); sent = true;
       } else {
         // The draft stays for the user to edit; the consumed preview must be made again.

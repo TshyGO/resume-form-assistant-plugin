@@ -57,9 +57,26 @@ test('the status page manages nothing locally and loads no parsing or spreadshee
   }
   const html = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
   assert.deepEqual([...html.matchAll(/<script src="([^"]+)"/g)].map(match => match[1]), ['feedback-core.js', 'feedback-ui.js', 'resume-data.js', 'popup.js']);
-  // Deleting data and copying the old key are behind an explicit confirm.
-  assert.match(source, /"drop-key": async \(\) => \{\s*if \(!confirm\(/);
-  assert.match(source, /discard: async \(\) => \{\s*if \(!confirm\(/);
+  // Deleting data and the old key are behind the page's own confirmation box (#261).
+  assert.match(source, /"drop-key": async \(\) => \{\s*if \(!await confirmDanger\(/);
+  assert.match(source, /discard: async \(\) => \{\s*if \(!await confirmDanger\(/);
+  assert.doesNotMatch(source, /\bconfirm\(/, 'no browser confirm() popup');
+});
+
+test('the confirmation box focuses 取消, never the dangerous button, and only 主动作 confirms', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'popup.html'), 'utf8');
+  const dialog = html.slice(html.indexOf('<dialog id="confirm-dialog"'), html.indexOf('</dialog>'));
+  assert.match(dialog, /<form method="dialog"/, 'Escape and 取消 close it without submitting anything');
+  assert.match(dialog, /<button type="submit" value="cancel" id="confirm-cancel" autofocus>取消<\/button>/);
+  assert.match(dialog, /<button type="submit" value="confirm" id="confirm-ok" class="danger-solid"><\/button>/);
+  assert.doesNotMatch(dialog.slice(dialog.indexOf('id="confirm-ok"')), /autofocus/);
+  // The decision is read from the button that closed it; anything else is a cancel.
+  assert.match(source, /settle\(event\.submitter\?\.value === "confirm"\)/);
+  assert.match(source, /settle\(dialog\.returnValue === "confirm"\)/);
+  assert.match(source, /dialog\.returnValue = "";/);
+  for (const text of ['删除插件中的旧 API Key？', '删除旧 Key', '删除插件里的旧数据？', '删除旧数据', '桌面里已有的数据不受影响']) {
+    assert.ok(source.includes(text), text);
+  }
 });
 
 test('removed manager files are gone from the package', () => {

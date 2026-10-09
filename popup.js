@@ -61,26 +61,63 @@
   }
 
   const $ = (id) => document.getElementById(id);
-  let toastTimer = null;
-  function toast(text) {
-    $("toast").textContent = text;
-    $("toast").hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { $("toast").hidden = true; }, 4000);
+  // Results are reported in the card that started them, not in a passing toast (#261).
+  function report(id, text, tone = "info") {
+    $(id).textContent = text;
+    $(id).dataset.tone = tone;
+    $(id).hidden = !text;
   }
 
   const send = (message) => chrome.runtime.sendMessage(message).catch(() => null);
 
-  async function openView(view) {
+  // The connection in short, for the header pill. Same modes as the card below.
+  const PILL = {
+    ready: ["桌面已连接", "ok"], not_installed: ["桌面未安装", "error"], not_paired: ["桌面未配对", "warn"],
+    never_paired: ["桌面未配对", "warn"], incompatible: ["桌面版本不兼容", "error"], unavailable: ["桌面未响应", "warn"]
+  };
+
+  /**
+   * The one confirmation box for what cannot be undone. Nothing happens before 「主动作」;
+   * 取消, Escape and closing change nothing. 取消 has the focus, never the dangerous button.
+   */
+  function confirmDanger({ title, body, action }) {
+    const dialog = $("confirm-dialog");
+    $("confirm-title").textContent = title;
+    $("confirm-body").replaceChildren(...body.map((line) => {
+      if (Array.isArray(line)) {
+        const list = document.createElement("ul");
+        list.replaceChildren(...line.map((text) => Object.assign(document.createElement("li"), { textContent: text })));
+        return list;
+      }
+      return Object.assign(document.createElement("p"), { textContent: line });
+    }));
+    $("confirm-ok").textContent = action;
+    dialog.returnValue = "";
+    return new Promise((resolve) => {
+      // Decided by the button that submitted the form; Escape or anything else closing it is a cancel.
+      let settled = false;
+      const settle = (confirmed) => { if (!settled) { settled = true; resolve(confirmed); } };
+      dialog.querySelector("form").addEventListener("submit", (event) => settle(event.submitter?.value === "confirm"), { once: true });
+      dialog.addEventListener("close", () => settle(dialog.returnValue === "confirm"), { once: true });
+      dialog.showModal();
+      $("confirm-cancel").focus();
+    });
+  }
+
+  async function openView(view, resultId = "desktop-result") {
     const result = await send({ type: "DESKTOP_OPEN_VIEW", view });
-    if (result?.status !== "ok") toast("桌面程序暂时无法打开，请检查连接。");
-    else await renderDesktop();
+    if (result?.status !== "ok") report(resultId, "桌面程序暂时无法打开，请检查连接。", "warn");
+    else { report(resultId, ""); await renderDesktop(); }
   }
 
   async function renderDesktop() {
     const probe = await send({ type: "DESKTOP_PROBE" });
-    const view = describeDesktop(probe?.mode || "unavailable", self.ResumeProResumeData.modeCopy);
+    const mode = probe?.mode || "unavailable";
+    const view = describeDesktop(mode, self.ResumeProResumeData.modeCopy);
     $("desktop-text").textContent = view.text;
+    const [pill, tone] = PILL[mode] || PILL.unavailable;
+    $("desktop-pill").textContent = pill;
+    $("desktop-pill").dataset.tone = tone;
     const action = $("desktop-action");
     action.hidden = !view.action;
     if (view.action) {
@@ -114,65 +151,85 @@
 
   async function downloadCsv() {
     const result = await send({ type: "DESKTOP_LEGACY_UNMIGRATED" });
-    if (!result?.csv) { toast("没有需要下载的模板。"); return; }
+    if (!result?.csv) { report("migration-result", "没有需要下载的模板。"); return; }
     const url = URL.createObjectURL(new Blob([result.csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = "网申快填-未迁移模板.csv";
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    report("migration-result", "已开始下载 CSV，可以到桌面「简历」页导入。", "ok");
   }
 
   async function copyOldKey() {
     const { aiConfig } = await chrome.storage.local.get(["aiConfig"]);
     const key = String(aiConfig?.apiKey ?? "").trim();
-    if (!key) { toast("插件里没有旧 Key。"); return; }
+    if (!key) { report("migration-result", "插件里没有旧 Key。"); return; }
     try {
       await navigator.clipboard.writeText(key);
-      toast("旧 API Key 已复制。粘贴到桌面后，建议在这里删除旧 Key。");
+      report("migration-result", "旧 API Key 已复制。粘贴到桌面后，建议在这里删除旧 Key。", "ok");
     } catch {
-      toast("复制失败，请重试。");
+      report("migration-result", "复制失败，请重试。", "warn");
     }
   }
 
   const handlers = {
-    "open-resume": () => openView("resume"),
+    "open-resume": () => openView("resume", "migration-result"),
     csv: downloadCsv,
     "copy-key": copyOldKey,
     "drop-key": async () => {
-      if (!confirm("删除插件里的旧 API Key？删除后无法从插件取回。")) return;
-      await send({ type: "DESKTOP_LEGACY_DROP_KEY" });
-      toast("旧 Key 已删除。");
+      if (!await confirmDanger({
+        title: "删除插件中的旧 API Key？",
+        body: ["删除后无法从插件取回。如果还没有粘贴到桌面「设置 → AI 设置」，请先取消并复制旧 Key。"],
+        action: "删除旧 Key"
+      })) return;
+      const result = await send({ type: "DESKTOP_LEGACY_DROP_KEY" });
+      report("migration-result", result ? "旧 Key 已删除。" : "没有删除成功，旧 Key 仍在插件里，请稍后重试。", result ? "ok" : "warn");
     },
     resend: async () => {
-      await send({ type: "DESKTOP_LEGACY_RESEND" });
-      toast("已重新发送，请到桌面「简历」页确认。");
+      const result = await send({ type: "DESKTOP_LEGACY_RESEND" });
+      report("migration-result", result ? "已重新发送，请到桌面「简历」页确认。" : "没有发送成功，请确认桌面已打开后重试。", result ? "ok" : "warn");
     },
     discard: async () => {
-      if (!confirm("删除插件里的旧模板、「我的信息」和 AI 配置？删除后无法从插件取回，桌面里已有的数据不受影响。")) return;
-      await send({ type: "DESKTOP_LEGACY_DISCARD" });
-      toast("插件里的旧数据已删除。");
+      if (!await confirmDanger({
+        title: "删除插件里的旧数据？",
+        body: ["将从插件中删除：", ["旧简历模板", "「我的信息」", "AI 配置（含旧 API Key）"], "桌面里已有的数据不受影响；插件内删除后无法取回。"],
+        action: "删除旧数据"
+      })) return;
+      const result = await send({ type: "DESKTOP_LEGACY_DISCARD" });
+      report("migration-result", result ? "删除完成，桌面里已有的数据不受影响。" : "没有删除成功，旧数据仍在插件里，请稍后重试。", result ? "ok" : "warn");
     }
   };
 
   $("migration-actions").addEventListener("click", async (event) => {
-    const id = event.target.closest("button")?.dataset.action;
+    const button = event.target.closest("button");
+    const id = button?.dataset.action;
     if (!handlers[id]) return;
-    event.target.disabled = true;
-    try { await handlers[id](); } finally { await renderMigration(); }
+    button.disabled = true;
+    try { await handlers[id](); } finally {
+      await renderMigration();
+      // The buttons were redrawn: keep the keyboard in this card.
+      const same = $("migration-actions").querySelector(`[data-action="${id}"]`);
+      (same || $("migration-actions").querySelector("button") || $("migration-title"))?.focus?.();
+    }
   });
 
   $("desktop-action").addEventListener("click", async (event) => {
     const kind = event.currentTarget.dataset.kind;
     if (kind === "download") window.open(self.ResumeProResumeData.DOWNLOAD_URL, "_blank", "noopener");
     else if (kind === "pair") {
-      await navigator.clipboard.writeText(chrome.runtime.id).catch(() => {});
-      toast("扩展 ID 已复制，请在桌面「设置 → 浏览器连接」里粘贴完成配对。");
+      const copied = await navigator.clipboard.writeText(chrome.runtime.id).then(() => true, () => false);
+      report("desktop-result", copied ? "扩展 ID 已复制，请在桌面「设置 → 浏览器连接」里粘贴完成配对。" : `复制失败，请手动复制扩展 ID：${chrome.runtime.id}`, copied ? "ok" : "warn");
     } else if (kind === "resume") await openView("resume");
     else if (kind === "home") await openView("home");
     else await renderDesktop();
   });
   $("desktop-open").addEventListener("click", () => openView("home"));
+  $("desktop-recheck").addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    report("desktop-result", "");
+    try { await renderDesktop(); } finally { $("desktop-recheck").disabled = false; }
+  });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes.legacyImport) renderMigration().catch(() => {});

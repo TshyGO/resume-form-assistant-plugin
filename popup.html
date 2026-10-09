@@ -3,40 +3,64 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>网申快填</title>
+    <title>插件状态 · 网申快填</title>
     <link rel="stylesheet" href="popup.css">
     <link rel="stylesheet" href="feedback.css">
   </head>
   <body>
+    <header class="topbar">
+      <div class="brand">
+        <img class="brand-mark" src="icons/icon48.png" width="32" height="32" alt="">
+        <span class="brand-name">网申快填</span>
+        <span class="brand-version">插件 <span id="plugin-version"></span></span>
+      </div>
+      <p class="status-pill" id="desktop-pill" data-tone="idle">正在连接桌面…</p>
+    </header>
+
     <main class="status-page">
-      <header class="status-header">
-        <img src="icons/icon48.png" width="40" height="40" alt="">
-        <div>
-          <h1>网申快填</h1>
-          <p class="muted">简历一键快填与投递管理 · 插件 <span id="plugin-version"></span></p>
-        </div>
-      </header>
+      <div class="page-head">
+        <h1>插件状态</h1>
+        <p class="muted">简历模板、「我的信息」和 AI 配置都在桌面程序里管理，插件只负责在网页上填写和记录投递。</p>
+      </div>
 
       <section class="card" aria-labelledby="desktop-title">
-        <h2 id="desktop-title">桌面程序</h2>
+        <div class="card-head">
+          <span class="card-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+          <h2 id="desktop-title">桌面程序</h2>
+        </div>
         <p id="desktop-text" role="status">正在连接桌面…</p>
         <div class="actions">
           <button type="button" id="desktop-action" class="primary" hidden></button>
-          <button type="button" id="desktop-open" hidden>打开桌面</button>
+          <button type="button" id="desktop-open" class="primary" hidden>打开桌面</button>
+          <button type="button" id="desktop-recheck">重新检测</button>
         </div>
-        <p class="muted">简历模板、「我的信息」和 AI 配置都在桌面程序里管理，插件只负责在网页上填写。</p>
+        <p id="desktop-result" class="result" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="card" id="migration" aria-labelledby="migration-title" hidden>
-        <h2 id="migration-title">旧数据迁移</h2>
+        <div class="card-head">
+          <span class="card-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M4 12h12"/><path d="m12 6 6 6-6 6"/><path d="M20 4v16"/></svg></span>
+          <h2 id="migration-title">旧数据迁移</h2>
+        </div>
         <p id="migration-text" role="status"></p>
         <ul id="migration-notes" class="notes"></ul>
         <div class="actions" id="migration-actions"></div>
+        <p id="migration-result" class="result" role="status" aria-live="polite" hidden></p>
       </section>
 
       <div id="feedback-auto-root"></div>
-      <p id="toast" class="toast" role="status" hidden></p>
     </main>
+
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+      <form method="dialog" class="confirm-form">
+        <h2 id="confirm-title"></h2>
+        <div id="confirm-body" class="confirm-body"></div>
+        <div class="confirm-actions">
+          <button type="submit" value="cancel" id="confirm-cancel" autofocus>取消</button>
+          <button type="submit" value="confirm" id="confirm-ok" class="danger-solid"></button>
+        </div>
+      </form>
+    </dialog>
     <script src="feedback-core.js"></script>
     <script src="feedback-ui.js"></script>
     <script src="resume-data.js"></script>

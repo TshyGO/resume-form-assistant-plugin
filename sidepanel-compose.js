@@ -55,7 +55,7 @@
     const key = escapeHtml(field.key);
     const search = variant === "group" ? ` data-search="${escapeHtml(`${field.key} ${field.value}`.toLocaleLowerCase())}"` : "";
     const buttons = ACTIONS.map((action) => `<button type="button" class="field-row__action" data-chip-id="${id}" data-action="${action.id}" aria-label="${action.label} ${key}" disabled>${action.label}</button>`).join("");
-    return `<div class="field-row field-row--${variant}" data-chip-id="${id}"${search}><button type="button" class="field-row__fill" data-role="fill" data-chip-id="${id}" aria-pressed="false"><span class="row-key">${key}</span><span class="row-value" title="${escapeHtml(field.value)}">${escapeHtml(field.value)}</span></button><span class="field-row__actions" role="group" aria-label="${key}">${buttons}</span></div>`;
+    return `<div class="field-row field-row--${variant}" data-chip-id="${id}"${search}><button type="button" class="field-row__fill" data-role="fill" data-chip-id="${id}" aria-pressed="false"><span class="row-key">${key}</span><span class="row-value">${escapeHtml(field.value)}</span></button><span class="field-row__actions" role="group" aria-label="${key}">${buttons}</span></div>`;
   }
 
   function applyTargetState(containers, state) {
