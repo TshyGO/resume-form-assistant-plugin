@@ -353,6 +353,14 @@ button:disabled { cursor: not-allowed; }
 #field-search:disabled { background: var(--soft); cursor: not-allowed; }
 .guide-card { padding: 12px 14px; }
 .guide-card .card-head { margin-bottom: 6px; }
+.guide-card:has(.guide-body[hidden]) .card-head { margin-bottom: 0; }
+.guide-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.guide-tools .chip { max-width: none; }
+.guide-card .card-head__title { white-space: nowrap; }
+.guide-toggle { display: grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); }
+.guide-toggle:hover { border-color: var(--line-strong); background: var(--soft); color: var(--ink); }
+.guide-toggle .icon { transition: transform .15s ease; }
+.guide-toggle[aria-expanded="true"] .icon { transform: rotate(180deg); }
 .guide-card .card-head__title .icon { color: #a0782a; }
 .target-note { margin: 0; color: #4a5361; font-size: 12px; line-height: 1.6; }
 .action-legend { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; color: #4a5361; font-size: 12px; }

@@ -1183,7 +1183,7 @@
       }
       const saving = phase === "saving" || jobPending;
       return { key: phase, title: "核对岗位信息", step: 1, exit: saving ? null : { button: elements.jobCancel, label: "取消" },
-        desc: saving ? "正在保存到桌面…" : "核对无误后点「确定保存」，才会写入桌面" };
+        desc: saving ? "正在保存到桌面…" : "核对后点「确定保存」才写入桌面" };
     }
     if (task === "submit") {
       const phase = submitConfirm.phase;
@@ -1819,6 +1819,24 @@
       selectTab(target.dataset.tab);
       target.focus();
     });
+  });
+  // 填写指引 starts open; once folded (or reopened) it stays that way for this browser profile.
+  // A per-viewer convenience only: if storage is unavailable it simply starts open.
+  const GUIDE_KEY = "sidepanelGuideFolded";
+  const guideToggle = document.getElementById("guide-toggle");
+  const guideBody = document.getElementById("guide-body");
+  function setGuideFolded(folded) {
+    guideBody.hidden = folded;
+    guideToggle.setAttribute?.("aria-expanded", String(!folded));
+    const label = folded ? "展开填写指引" : "收起填写指引";
+    guideToggle.setAttribute?.("aria-label", label);
+    guideToggle.title = label;
+  }
+  try { setGuideFolded(self.localStorage?.getItem(GUIDE_KEY) === "1"); } catch { setGuideFolded(false); }
+  guideToggle.addEventListener("click", () => {
+    const folded = !guideBody.hidden;
+    setGuideFolded(folded);
+    try { self.localStorage?.setItem(GUIDE_KEY, folded ? "1" : "0"); } catch {}
   });
   elements.taskExit.addEventListener("click", () => {
     if (taskExitTarget && !taskExitTarget.disabled && !taskExitTarget.hidden) taskExitTarget.click?.();

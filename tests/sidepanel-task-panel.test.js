@@ -30,6 +30,13 @@ test('the header has no ··· menu: the page has no advanced controls left to f
   assert.doesNotMatch(html, /dock-tools|data-advanced=|收起网页高级控件/);
 });
 
+test('the 填写指引 card folds with a labelled toggle that controls its body', () => {
+  assert.match(html, /<button id="guide-toggle"[^>]*aria-expanded="true" aria-controls="guide-body" aria-label="收起填写指引"/);
+  assert.match(html, /<div id="guide-body" class="guide-body">/);
+  const source = read('sidepanel.js');
+  assert.match(source, /localStorage\?\.setItem\(GUIDE_KEY/, 'the choice is remembered');
+});
+
 test('the pages keep Manifest V3 rules: no inline scripts or handlers', () => {
   for (const file of ['sidepanel.html', 'popup.html']) {
     const page = read(file);

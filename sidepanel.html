@@ -300,14 +300,19 @@
             <section class="card guide-card" aria-labelledby="guide-title">
               <div class="card-head">
                 <h2 id="guide-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>填写指引</h2>
-                <span id="target-state" class="chip" role="status" aria-live="polite" hidden></span>
+                <span class="guide-tools">
+                  <span id="target-state" class="chip" role="status" aria-live="polite" hidden></span>
+                  <button id="guide-toggle" class="guide-toggle" type="button" aria-expanded="true" aria-controls="guide-body" aria-label="收起填写指引" title="收起填写指引"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+                </span>
               </div>
-              <p class="target-note">先点网页上的输入框，再点字段内容直接填入；切到侧栏后会记住输入框和光标位置。输入框已有内容时，用字段右侧的符号：</p>
+              <div id="guide-body" class="guide-body">
+              <p class="target-note">先点网页输入框，再点字段内容直接填入；输入框已有内容时，用字段右侧的符号：</p>
               <ul class="action-legend">
                 <li><span class="legend-icon is-add"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><strong>添加</strong>在光标处插入</li>
                 <li><span class="legend-icon is-replace"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><strong>替换</strong>覆盖整个输入框</li>
                 <li><span class="legend-icon is-remove"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></span><strong>删除</strong>只去掉这个字段</li>
               </ul>
+              </div>
             </section>
             <div id="field-groups" class="field-groups"></div>
             <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。换个关键词，或清空搜索查看全部分组。</p>
