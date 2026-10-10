@@ -93,7 +93,9 @@ test('a new installation is off and asks first: the choice says why and what is 
   expect(escape.defaultPrevented).toBe(true);
   const text = choice.textContent || '';
   for (const disclosure of ['只有一句「用不了」', '随机生成的安装编号', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '公开的内容会长期保留', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号']) expect(text).toContain(disclosure);
-  expect(within(choice).getAllByRole('button').map(b => b.textContent)).toEqual(['同意并开启', '暂不开启']);
+  expect(within(choice).getAllByRole('button').map(b => b.textContent)).toEqual(['暂不开启', '同意并开启']);
+  // Neither answer is pre-selected: focus starts on the explanation, not on a button.
+  expect(document.activeElement?.tagName).not.toBe('BUTTON');
   const toggle = screen.getByRole('checkbox', { name: '自动发送错误报告' }) as HTMLInputElement;
   expect(toggle.checked).toBe(false);
   expect(fn.mock.calls.some(([name]) => name === 'feedback_consent')).toBe(false);
@@ -111,4 +113,29 @@ test('a choice already made shows no card, whichever it was', async () => {
     expect(screen.queryByRole('dialog', { name: '帮我们改进网申快填' })).toBeNull();
     unmount();
   }
+});
+
+test('feedback opens in a dialog; the preview is read-only, cancel closes it and returns focus', async () => {
+  const { invoke, fn } = mockInvoke(false); render(<FeedbackSettings invoke={invoke} />);
+  const trigger = screen.getByRole('button', { name: '反馈问题' });
+  trigger.focus(); fireEvent.click(trigger);
+  const dialog = await screen.findByRole('dialog', { name: '反馈问题' });
+  expect(document.activeElement).toBe(within(dialog).getByLabelText(/问题描述/));
+  fireEvent.change(within(dialog).getByLabelText(/问题描述/), { target: { value: '按钮无法使用' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '预览将发送的内容' }));
+  const preview = await within(dialog).findByLabelText('将发送的内容（只读）');
+  expect(preview.tagName).toBe('PRE');
+  expect(within(dialog).queryByRole('textbox', { name: '将发送的内容（只读）' })).toBeNull();
+  fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: '反馈问题' })).toBeNull());
+  expect(document.activeElement).toBe(trigger);
+  expect(fn.mock.calls.some(([name]) => name === 'feedback_send')).toBe(false);
+});
+
+test('privacy card states the undecided and failed states truthfully', async () => {
+  const invoke = vi.fn((name: string) => name === 'feedback_status' ? Promise.reject(new Error('io')) : Promise.resolve({})) as Invoke;
+  render(<FeedbackSettings invoke={invoke} />);
+  expect(await screen.findByText('无法读取反馈设置，请重新打开此页。')).toBeTruthy();
+  expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+  expect(document.body.textContent).not.toMatch(/加密排队/);
 });

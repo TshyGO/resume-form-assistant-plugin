@@ -5,13 +5,14 @@ import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
 import {
   AFTER_INSTALL_HINT,
+  CONFLICT_HINT,
   STORE_PENDING_HINT,
   describeLink,
   describeRegistration,
   registrationCompleted,
 } from "./browser-link.ts";
 import type { NativeMessagingRegistrationOutcome } from "./browser-link.ts";
-import { describeCheckFailure, describeUpdate, shouldCheck } from "./update-check.ts";
+import { describeCheckFailure, describeUpdate, formatCheckedAt, parseCheckedAt, shouldCheck } from "./update-check.ts";
 import type { UpdateInfo, UpdatePreference } from "./update-check.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
@@ -29,6 +30,7 @@ import {
   QUIT_WARNING,
   describeCapability,
 } from "./todos.ts";
+import { describeDialogError, fragment, openSettingsDialog, paragraph } from "./settings-dialog.ts";
 
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 installFrontendErrors(invoke ?? null);
@@ -39,7 +41,7 @@ const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);
 mountAiSettings(must("ai-settings"), invoke ?? null);
 const edgeInput = input("edge-id");
 const settingsNavigation = mountSettingsNavigation(must("view-settings"), (name) => {
-  if (name === "data") void showBackup(true).catch(() => {});
+  if (name === "data") void showBackup().catch(() => {});
 });
 
 const views: Record<string, HTMLElement> = {
@@ -90,7 +92,7 @@ document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) 
     if (!(await navigate(btn.dataset.route))) return;
     // 待办的逾期汇总要在进入视图时算一次，不能在启动时就把它消费掉。
     if (btn.dataset.route === "todos") void showTodos().catch(() => {});
-    if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup(true).catch(() => {});
+    if (btn.dataset.route === "settings" && !must("settings-data").hidden) void showBackup().catch(() => {});
   });
 });
 
@@ -116,16 +118,34 @@ function applyPairingFields(result: { applied: boolean; chrome?: string; edge?: 
   }
 }
 
+let statusRequest = 0;
+
 async function refreshStatus() {
+  const request = ++statusRequest;
   if (!invoke) {
     showPill({ tone: "error", text: "未连接到桌面宿主", title: "请用 Tauri 启动，不要只打开浏览器。" });
     must("settings-version").textContent = "请在桌面应用中查看版本";
+    applyLinkState(null, "未连接到桌面宿主（请用 Tauri 启动，不要只打开浏览器）");
     return;
   }
   const token = pairing.beginRefresh();
-  const status = await invoke<RuntimeStatus>("get_runtime_status");
+  let status: RuntimeStatus;
+  try {
+    status = await invoke<RuntimeStatus>("get_runtime_status");
+  } catch (error) {
+    if (request !== statusRequest) return;
+    const reason = describeDialogError(error);
+    applyLinkState(null, reason);
+    runtimeStatusView.fail(reason);
+    throw error;
+  }
+  // 定时刷新与手动注册刷新可能重叠，过期的成功和失败都不能覆盖最新状态。
+  if (request !== statusRequest) return;
   showPill(describeRegistration(status));
-  must("settings-version").textContent = `版本 ${status.appVersion}`;
+  must("settings-version").textContent = status.appVersion ? "简历模板、求职档案与浏览器扩展协作的桌面端" : "版本未知";
+  const versionTag = must("settings-version-tag");
+  versionTag.textContent = status.appVersion ? `v${status.appVersion}` : "";
+  versionTag.hidden = !status.appVersion;
   const version = must("app-version");
   version.textContent = status.appVersion ? `v${status.appVersion}` : "";
   version.hidden = !status.appVersion;
@@ -157,12 +177,43 @@ async function goToExtensionInstall() {
   (must("link-install") as HTMLButtonElement).focus();
 }
 
-/** 「连接浏览器」这一段：状态、下一步、重试按钮显不显示。商店/下载入口始终在。 */
-function applyLinkState(status: RuntimeStatus | null) {
-  const state = describeLink(status);
-  const line = must("link-state");
-  line.textContent = state.text;
-  line.className = `note ${state.tone}`;
+/** 上一次画出来的问题清单。每隔几秒刷新一次，内容没变就不重画，免得把用户展开的详情和选中的文字冲掉。 */
+let lastLinkProblems = "";
+
+/** 「浏览器连接」卡片：状态、原因、下一步、重试按钮显不显示。商店/下载入口始终在。 */
+function applyLinkState(status: RuntimeStatus | null, readError?: string | null) {
+  const state = describeLink(status, readError);
+  const pill = must("link-status");
+  pill.textContent = state.status;
+  pill.dataset.tone = state.tone;
+  const problem = must("link-problem");
+  problem.hidden = state.text === "";
+  problem.dataset.tone = state.tone === "warn" ? "warn" : "error";
+  must("link-state").textContent = state.text;
+  const details = must("link-problem-details");
+  details.hidden = state.problems.length === 0;
+  const signature = JSON.stringify(state.problems);
+  if (signature !== lastLinkProblems) {
+    lastLinkProblems = signature;
+    const list = must("link-problem-list");
+    list.replaceChildren(
+      ...state.problems.map((item) => {
+        const li = document.createElement("li");
+        const label = document.createElement("strong");
+        label.textContent = item.label;
+        const note = document.createElement("code");
+        note.className = "selectable";
+        note.textContent = item.note;
+        li.append(label, note);
+        if (item.conflict) {
+          const hint = document.createElement("p");
+          hint.textContent = CONFLICT_HINT;
+          li.append(hint);
+        }
+        return li;
+      }),
+    );
+  }
   must("link-next").textContent = state.next;
   (must("link-install") as HTMLButtonElement).hidden = false;
   (must("link-download") as HTMLButtonElement).hidden = false;
@@ -170,43 +221,67 @@ function applyLinkState(status: RuntimeStatus | null) {
   must("link-after-install").textContent = AFTER_INSTALL_HINT;
 }
 
-must("link-store-pending").textContent = STORE_PENDING_HINT;
+/** 卡片里按钮动作的结果：成功、失败都写在按钮旁边，不靠别处的隐藏状态行。 */
+function say(id: string, message: { tone: string; text: string } | null) {
+  const line = must(id);
+  line.textContent = message?.text ?? "";
+  if (message) line.dataset.tone = message.tone;
+  else delete line.dataset.tone;
+}
 
 must("nav-install-extension").addEventListener("click", () => void goToExtensionInstall());
 must("btn-empty-install").addEventListener("click", () => void goToExtensionInstall());
 
 must("link-install").addEventListener("click", async () => {
-  if (!invoke) return;
-  const msg = must("link-next");
+  if (!invoke) {
+    say("link-action-msg", { tone: "warn", text: "未连接到桌面宿主，打不开商店页。" });
+    return;
+  }
+  say("link-action-msg", null);
   try {
     await invoke("open_extension_store_cmd");
   } catch (err: unknown) {
-    const detail = err as { message?: string } | null;
-    msg.textContent = `打不开商店页：${detail?.message ?? "未知错误"}。${STORE_PENDING_HINT}`;
+    say("link-action-msg", { tone: "error", text: `打不开商店页：${describeDialogError(err)}。${STORE_PENDING_HINT}` });
   }
 });
 
 must("link-download").addEventListener("click", async () => {
-  if (!invoke) return;
-  const msg = must("link-next");
+  if (!invoke) {
+    say("link-action-msg", { tone: "warn", text: "未连接到桌面宿主，打不开插件下载页。" });
+    return;
+  }
+  say("link-action-msg", null);
   try {
     await invoke("open_plugin_release_cmd");
   } catch (err: unknown) {
-    const detail = err as { message?: string } | null;
-    msg.textContent = `打不开插件下载页：${detail?.message ?? "未知错误"}。${STORE_PENDING_HINT}`;
+    say("link-action-msg", { tone: "error", text: `打不开插件下载页：${describeDialogError(err)}。${STORE_PENDING_HINT}` });
   }
 });
 
 must("link-retry").addEventListener("click", async () => {
-  if (!invoke) return;
-  const button = must("link-retry") as HTMLButtonElement;
-  button.disabled = true;
-  try {
-    await invoke("register_native_messaging_cmd");
-    await refreshStatus();
-  } finally {
-    button.disabled = false;
+  if (!invoke) {
+    say("link-action-msg", { tone: "warn", text: "未连接到桌面宿主，请用 Tauri 启动后重新检查注册。" });
+    return;
   }
+  const button = must("link-retry") as HTMLButtonElement;
+  // 不禁用按钮（禁用会弄丢键盘焦点），用 aria-busy 挡重复点击。
+  if (button.getAttribute("aria-busy") === "true") return;
+  button.setAttribute("aria-busy", "true");
+  say("link-action-msg", { tone: "pending", text: "正在重新检查注册…" });
+  try {
+    const outcomes = await invoke<NativeMessagingRegistrationOutcome[]>("register_native_messaging_cmd");
+    say(
+      "link-action-msg",
+      registrationCompleted(outcomes)
+        ? { tone: "ok", text: "已重新检查，所有浏览器都注册好了。" }
+        : { tone: "warn", text: "已重新检查，仍有浏览器没注册上，原因见上方。" },
+    );
+  } catch (err: unknown) {
+    say("link-action-msg", { tone: "error", text: `重新检查注册失败：${describeDialogError(err)}` });
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
+  await refreshStatus().catch(() => {});
 });
 
 let pairingSaving = false;
@@ -216,9 +291,9 @@ must("pairing-form").addEventListener("submit", async (event) => {
   pairingSaving = true;
   const fields = must("pairing-form").querySelectorAll<HTMLInputElement | HTMLButtonElement>("input,button");
   fields.forEach((field) => { field.disabled = true; });
-  const msg = must("pairing-msg");
+  say("pairing-msg", { tone: "pending", text: "正在保存…" });
   if (!invoke) {
-    msg.textContent = "未连接到桌面宿主，草稿没有保存。";
+    say("pairing-msg", { tone: "warn", text: "未连接到桌面宿主，草稿没有保存。" });
     pairingSaving = false;
     fields.forEach((field) => { field.disabled = false; });
     return;
@@ -245,30 +320,59 @@ must("pairing-form").addEventListener("submit", async (event) => {
     } catch {
       // 重写失败不影响草稿本身，状态刷新之后界面会说清楚。
     }
-    msg.textContent = registrationOk
-      ? "已保存，并把这几个 ID 一起写进了 host 清单。"
-      : "ID 已保存，但 host 清单没有全部更新成功。请按上面的“重新检查注册”。";
-    await refreshStatus();
+    say(
+      "pairing-msg",
+      registrationOk
+        ? { tone: "ok", text: "已保存，并把这几个 ID 一起写进了 host 清单。" }
+        : { tone: "warn", text: "ID 已保存，但 host 清单没有全部更新成功。原因见上方连接卡片，处理后点「重新检查注册」。" },
+    );
+    await refreshStatus().catch(() => {});
   } catch (err: unknown) {
     pairing.onSaveFailure();
     chromeInput.value = typed.chrome;
     edgeInput.value = typed.edge;
-    msg.textContent = String(err);
+    say("pairing-msg", { tone: "error", text: `没有保存：${describeDialogError(err)}。输入的内容还在，可以修改后重试。` });
   } finally { pairingSaving = false; fields.forEach((field) => { field.disabled = false; }); }
 });
 
-must("btn-hide").addEventListener("click", () => invoke?.("hide_main_window_cmd"));
+must("btn-hide").addEventListener("click", async () => {
+  say("hide-msg", null);
+  if (!invoke) {
+    say("hide-msg", { tone: "warn", text: "未连接到桌面宿主，窗口没有隐藏。" });
+    return;
+  }
+  try {
+    await invoke("hide_main_window_cmd");
+  } catch (error) {
+    say("hide-msg", { tone: "error", text: `没能隐藏窗口：${describeDialogError(error)}` });
+  }
+});
 must("btn-quit").addEventListener("click", () => {
   const errorLine = must("quit-error");
   errorLine.hidden = true;
   // §5.4：退出前必须告知提醒会停。关窗不会，退出会——这两件事用户分不清，
   // 所以在这里说，而不是指望他记得设置页写过。
-  if (window.confirm(QUIT_WARNING)) {
-    invoke?.("quit_app").catch((error: unknown) => {
-      errorLine.textContent = String(error);
-      errorLine.hidden = false;
-    });
-  }
+  void openSettingsDialog({
+    title: "退出网申快填？",
+    body: fragment(
+      paragraph(QUIT_WARNING),
+      paragraph("只想关掉窗口的话，用「隐藏窗口」：应用留在托盘或菜单栏，提醒照常。", "settings-dialog-note"),
+    ),
+    confirmLabel: "退出应用",
+    busyLabel: "正在退出…",
+    tone: "danger",
+    action: async () => {
+      if (!invoke) throw new Error("未连接到桌面宿主，没有退出。");
+      try {
+        await invoke("quit_app");
+      } catch (error) {
+        errorLine.textContent = `没能退出：${describeDialogError(error)}`;
+        errorLine.hidden = false;
+        throw error;
+      }
+    },
+    describeError: (error) => `没能退出：${describeDialogError(error)}`,
+  });
 });
 
 /** 设置页的「提醒」一段：现在能不能响、为什么、五种状态各是什么结果。 */
@@ -288,23 +392,28 @@ async function renderReminderSettings() {
 
   const message = describeCapability(capability);
   line.textContent = message.text;
-  line.className = `note ${message.tone}`;
+  must("settings-reminder-callout").dataset.tone = message.tone;
   window_.textContent = DELIVERY_WINDOW_NOTE;
-  table.innerHTML = LIFECYCLE_STATES.map(
-    (state) => `<tr><th>${state.when}</th><td>${state.what}</td></tr>`,
-  ).join("");
+  table.innerHTML = `<thead><tr><th scope="col">情况</th><th scope="col">会不会提醒</th></tr></thead><tbody>${LIFECYCLE_STATES.map(
+    (state) => `<tr><th scope="row">${escapeHtml(state.when)}</th><td>${escapeHtml(state.what)}</td></tr>`,
+  ).join("")}</tbody>`;
 }
 must("btn-diag").addEventListener("click", async () => {
-  const msg = must("diag-msg");
+  const button = must("btn-diag") as HTMLButtonElement;
   if (!invoke) {
-    msg.textContent = "未连接到桌面宿主，没有导出。";
+    say("diag-msg", { tone: "warn", text: "未连接到桌面宿主，没有导出。" });
     return;
   }
+  if (button.getAttribute("aria-busy") === "true") return;
+  button.setAttribute("aria-busy", "true");
+  say("diag-msg", { tone: "pending", text: "正在导出…" });
   try {
     const result = await invoke<{ exportPath: string }>("export_diagnostics");
-    msg.textContent = `已导出到 ${result.exportPath}`;
+    say("diag-msg", { tone: "ok", text: `已导出到 ${result.exportPath}` });
   } catch (err: unknown) {
-    msg.textContent = String(err);
+    say("diag-msg", { tone: "error", text: `导出失败：${describeDialogError(err)}` });
+  } finally {
+    button.removeAttribute("aria-busy");
   }
 });
 
@@ -430,17 +539,27 @@ setInterval(() => {
 let pendingUpdate: UpdateInfo | null = null;
 
 function showUpdate(message: { tone: string; text: string; available: boolean }) {
-  const line = must("update-msg");
-  line.textContent = message.text;
-  line.className = `note ${message.tone}`;
+  const box = must("update-msg");
+  must("update-msg-text").textContent = message.text;
+  box.dataset.tone = message.tone;
+  box.hidden = false;
   (must("update-open") as HTMLButtonElement).hidden = !message.available;
+}
+
+/** 只有拿到真实的检查时间才显示「上次检查」，读不出来就不显示，不编一个。 */
+function showCheckedAt(at: Date | null) {
+  const line = must("update-checked-at");
+  const text = at ? formatCheckedAt(at, new Date()) : "";
+  line.textContent = text ? `上次检查：${text}` : "";
+  line.hidden = !text;
 }
 
 async function checkUpdate(currentVersion: string) {
   if (!invoke) return;
   const button = must("update-check") as HTMLButtonElement;
-  button.disabled = true;
-  showUpdate({ tone: "ok", text: "正在查…", available: false });
+  if (button.getAttribute("aria-busy") === "true") return;
+  button.setAttribute("aria-busy", "true");
+  showUpdate({ tone: "pending", text: "正在检查更新…", available: false });
   try {
     pendingUpdate = (await invoke<UpdateInfo | null>("check_update_cmd")) ?? null;
     showUpdate(describeUpdate(currentVersion, pendingUpdate));
@@ -448,6 +567,14 @@ async function checkUpdate(currentVersion: string) {
     pendingUpdate = null;
     showUpdate(describeCheckFailure(error));
   } finally {
+    // 检查失败也可能记录尝试时间，但只有宿主实际保存的记录才是显示依据。
+    try {
+      const pref = await invoke<UpdatePreference>("get_update_preference_cmd");
+      showCheckedAt(parseCheckedAt(pref.lastCheckedAt));
+    } catch {
+      showCheckedAt(null);
+    }
+    button.removeAttribute("aria-busy");
     button.disabled = currentAppVersion.length === 0;
   }
 }
@@ -465,18 +592,35 @@ must("update-open").addEventListener("click", async () => {
   try {
     await invoke("open_update_page_cmd");
   } catch {
-    showUpdate({ tone: "warn", text: `打不开下载页，手动去：${pendingUpdate.url}`, available: true });
+    showUpdate({ tone: "warn", text: `打不开下载页，请手动访问：${pendingUpdate.url}`, available: true });
   }
 });
 
 must("update-auto").addEventListener("change", async (event) => {
-  if (!invoke) return;
-  const enabled = (event.target as HTMLInputElement).checked;
+  const toggle = event.target as HTMLInputElement;
+  const enabled = toggle.checked;
+  if (!invoke) {
+    toggle.checked = !enabled;
+    say("update-auto-msg", { tone: "warn", text: "未连接到桌面宿主，偏好没有保存。" });
+    return;
+  }
+  // 上一次还没存完：这次的改动先不算，界面保持和正在保存的那个值一致。
+  if (toggle.getAttribute("aria-busy") === "true") {
+    toggle.checked = !enabled;
+    return;
+  }
+  toggle.setAttribute("aria-busy", "true");
+  say("update-auto-msg", { tone: "pending", text: "正在保存…" });
   try {
-    await invoke<UpdatePreference>("set_update_preference_cmd", { enabled });
-  } catch {
+    const saved = await invoke<UpdatePreference>("set_update_preference_cmd", { enabled });
+    toggle.checked = saved?.enabled ?? enabled;
+  } catch (error) {
     // 存不上就把勾选还原，免得界面说的和实际不一样。
-    (must("update-auto") as HTMLInputElement).checked = !enabled;
+    toggle.checked = !enabled;
+    say("update-auto-msg", { tone: "error", text: `没能保存：${describeDialogError(error)}。开关已恢复为原来的状态。` });
+  } finally {
+    toggle.removeAttribute("aria-busy");
+    if (must("update-auto-msg").dataset.tone === "pending") say("update-auto-msg", null);
   }
 });
 
@@ -493,10 +637,14 @@ async function maybeAutoCheck(status: { appVersion: string }) {
   let pref: UpdatePreference;
   try {
     pref = await invoke<UpdatePreference>("get_update_preference_cmd");
-  } catch {
+  } catch (error) {
+    say("update-auto-msg", { tone: "error", text: `读不到更新偏好：${describeDialogError(error)}` });
     return;
   }
-  (must("update-auto") as HTMLInputElement).checked = pref.enabled;
+  const toggle = must("update-auto") as HTMLInputElement;
+  toggle.checked = pref.enabled;
+  toggle.disabled = false;
+  showCheckedAt(parseCheckedAt(pref.lastCheckedAt));
   if (!shouldCheck(pref, new Date().toISOString())) return;
   await checkUpdate(status.appVersion);
 }

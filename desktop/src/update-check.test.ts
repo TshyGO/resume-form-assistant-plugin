@@ -4,6 +4,8 @@ import {
   compareVersions,
   describeCheckFailure,
   describeUpdate,
+  formatCheckedAt,
+  parseCheckedAt,
   shouldCheck,
 } from "./update-check.ts";
 
@@ -48,4 +50,21 @@ test("查不到是「没查成」，不是「已经最新」", () => {
 
   assert.match(describeCheckFailure({ code: "UPDATE_RATE_LIMITED" }).text, /限流/);
   assert.match(describeCheckFailure({ message: "说不清" }).text, /说不清/);
+});
+
+test("上次检查时间：宿主写的两种格式都认，认不出来就不显示", () => {
+  const expected = Date.UTC(2026, 9, 9, 6, 20, 0);
+  assert.equal(parseCheckedAt("2026-10-09 6:20:00.123456 +00:00:00")?.getTime(), expected);
+  assert.equal(parseCheckedAt("2026-10-09T06:20:00Z")?.getTime(), expected);
+  assert.equal(parseCheckedAt("2026-10-09T14:20:00+08:00")?.getTime(), expected);
+  assert.equal(parseCheckedAt("2026-10-09 6:20:00"), null, "没有时区就不知道是几点");
+  assert.equal(parseCheckedAt(""), null);
+  assert.equal(parseCheckedAt(null), null);
+  assert.equal(parseCheckedAt("昨天"), null);
+});
+
+test("检查时间按本机时间显示，今天的写「今天」", () => {
+  const now = new Date(2026, 9, 9, 18, 0);
+  assert.equal(formatCheckedAt(new Date(2026, 9, 9, 14, 5), now), "今天 14:05");
+  assert.equal(formatCheckedAt(new Date(2026, 9, 8, 9, 5), now), "2026-10-08 09:05");
 });

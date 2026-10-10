@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AiProviderView, Invoke, SaveProviderResult } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
@@ -45,7 +45,7 @@ test("从预设新建：填好地址，保存时连 Key 一起交出去", async 
   expect(screen.getByText("https://platform.deepseek.com/api_keys")).toBeTruthy();
   await user.type(screen.getByLabelText("模型名称"), "deepseek-chat");
   await user.type(screen.getByLabelText("API Key"), "sk-x");
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect(calls[0]).toEqual({
     command: "save_ai_provider_cmd",
@@ -69,7 +69,7 @@ test("没有说明的预设不显示说明", () => {
 test("编辑已有服务商不填 Key 时不动原来的 Key", async () => {
   const user = userEvent.setup();
   const { calls } = mount({ provider: existing }, () => saved());
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(calls.length).toBe(1));
   expect(calls[0].args?.key).toBeNull();
 });
@@ -80,7 +80,7 @@ test("主机变了、旧 Key 被清掉时要说出来", async () => {
   const url = screen.getByLabelText("接口地址");
   await user.clear(url);
   await user.type(url, "https://api.moonshot.cn/v1");
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect(onSaved.mock.calls[0][0]).toMatchObject({ keyCleared: true });
 });
@@ -149,7 +149,7 @@ test("获取失败只提示，不拦保存", async () => {
   });
   await user.click(screen.getByRole("button", { name: "获取模型" }));
   expect(await screen.findByText(/拒绝了这个 Key/)).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(calls.some((c) => c.command === "save_ai_provider_cmd")).toBe(true));
 });
 
@@ -160,7 +160,7 @@ test("保存失败时调用 onFailed，让上层刷新 Key 状态", async () => 
     if (command === "save_ai_provider_cmd") throw { code: "AI_SETTINGS_INVALID", message: "模型名称不能为空" };
     return saved();
   });
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(calls.some((c) => c.command === "save_ai_provider_cmd")).toBe(true));
   expect(onFailed).toHaveBeenCalledTimes(1);
   expect(await screen.findByText(/模型名称不能为空/)).toBeTruthy();
@@ -178,13 +178,42 @@ test("获取模型失败不调用 onFailed：那是保存失败专用的", async
   expect(onFailed).not.toHaveBeenCalled();
 });
 
-test("清除 Key 要确认", async () => {
+test("清除 Key 要在弹窗里确认，取消不动凭据库", async () => {
   const user = userEvent.setup();
   const { calls } = mount({ provider: existing }, () => ({ providers: [{ ...existing, keyConfigured: false }], activeProviderId: "p1", credentialError: null }));
-  await user.click(screen.getByRole("button", { name: "清除 Key" }));
+  const trigger = screen.getByRole("button", { name: "清除已保存的 Key" });
+  await user.click(trigger);
+  const dialog = await screen.findByRole("dialog", { name: "清除这个服务商的 Key？" });
+  expect(within(dialog).getByText("服务商：DeepSeek")).toBeTruthy();
+  // 危险动作默认停在「取消」上。
+  expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(calls).toHaveLength(0);
-  await user.click(screen.getByRole("button", { name: "确认清除" }));
+  expect(document.activeElement).toBe(trigger);
+  await user.click(trigger);
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除 Key" }));
   await waitFor(() => expect(calls[0]).toEqual({ command: "clear_ai_key_cmd", args: { providerId: "p1" } }));
+  expect(await screen.findByText("Key 已从系统凭据库删除。")).toBeTruthy();
+});
+
+test("清除 Key 失败时弹窗不关，原因写在弹窗里", async () => {
+  const user = userEvent.setup();
+  mount({ provider: existing }, () => { throw { code: "AI_CREDENTIAL", message: "钥匙串锁着" }; });
+  await user.click(screen.getByRole("button", { name: "清除已保存的 Key" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("button", { name: "清除 Key" }));
+  expect((await within(dialog).findByRole("alert")).textContent).toMatch(/钥匙串锁着/);
+  expect(screen.getByRole("dialog")).toBe(dialog);
+});
+
+test("已保存 Key 时输入框留空表示不改，界面不显示 Key 或尾号", () => {
+  mount({ provider: existing }, () => saved());
+  const input = screen.getByLabelText("API Key") as HTMLInputElement;
+  expect(input.value).toBe("");
+  expect(input.type).toBe("password");
+  expect(input.placeholder).toBe("留空表示不修改");
+  expect(screen.getByText(/留空表示继续使用系统凭据库里已保存的 Key/)).toBeTruthy();
 });
 
 test("明文 http 与地址里夹带凭据会提示", async () => {

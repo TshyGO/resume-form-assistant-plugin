@@ -5,11 +5,23 @@
 
 import type { RuntimeStatus } from "./api.ts";
 
+export interface LinkProblem {
+  label: string;
+  /** 宿主给的原始说明，含完整路径；原样显示，可选中复制。 */
+  note: string;
+  /** 是不是「已经有一份别的同名清单」。只有这种才配「同名清单冲突」的说明。 */
+  conflict: boolean;
+}
+
 export interface LinkState {
-  tone: "ok" | "warn" | "error";
-  /** 现在是什么情况。 */
+  tone: "pending" | "ok" | "warn" | "error";
+  /** 状态胶囊上的短语：只说注册结果，不说「已连接」。 */
+  status: string;
+  /** 出问题时的原因摘要；没问题时为空。 */
   text: string;
-  /** 接下来该做什么。已经连上时为空。 */
+  /** 每个没注册上的浏览器各一条。 */
+  problems: LinkProblem[];
+  /** 接下来该做什么。 */
   next: string;
   /** 「去装扩展」这个按钮要不要显示。商店审核期间也要一直在，不能等注册成功才出现。 */
   showInstall: boolean;
@@ -28,49 +40,94 @@ export function registrationCompleted(
   return outcomes.length > 0 && outcomes.every((outcome) => outcome.registered);
 }
 
+/** 宿主在「别人的同名清单」时写的说法（nm_register.rs 的 Decision::NotOurs）。 */
+function isConflict(note: string): boolean {
+  return note.includes("同名清单");
+}
+
+/** 同名清单冲突时的处理办法。只配给真的冲突，不拿去解释权限之类的别的错。 */
+export const CONFLICT_HINT =
+  "这份同名清单不是本程序写的，可能来自已安装的正式版或旧版本。确认不再需要后删除上面的文件，再点「重新检查注册」。";
+
+function summarize(problems: LinkProblem[]): string {
+  const labels = problems.map((problem) => problem.label).join("、");
+  if (problems.every((problem) => problem.conflict)) {
+    return `${labels} 注册失败：已经有一份别的同名清单，桌面没有改动它。`;
+  }
+  if (problems.length === 1) return `${labels} 注册失败：${problems[0].note}`;
+  if (problems.every((problem) => !problem.conflict)) {
+    return `${labels} 注册失败：写入连接清单时出错，展开查看每个浏览器的原因。`;
+  }
+  return `${labels} 注册失败，原因各不相同，展开查看每个浏览器的原因。`;
+}
+
 /**
- * 三件事凑齐才算连上：清单写了、扩展装了、协议版本对得上。
- * 缺哪一件就说哪一件，不要笼统地说「未连接」。
+ * 浏览器连接卡片要说的话。桌面只掌握 Native Messaging 清单写没写成：
+ * 注册不等于扩展装好，也不等于连上，所以从不说「已连接」。
+ * `readError` 是这一次读运行状态失败的原因；有它时不沿用旧状态假装知道。
  */
-export function describeLink(status: RuntimeStatus | null): LinkState {
-  if (!status) {
+export function describeLink(status: RuntimeStatus | null, readError?: string | null): LinkState {
+  const base = { problems: [] as LinkProblem[], text: "", showInstall: true };
+  if (readError) {
     return {
-      tone: "warn",
-      text: "还没读到桌面状态。",
-      next: "稍等一下，或者重开一次应用。商店还在审核的话，可以先下载插件包。",
-      showInstall: true,
-      showRetry: false,
+      ...base,
+      tone: "error",
+      status: "读取注册状态失败",
+      text: `读不到桌面运行状态：${readError}`,
+      next: "页面每隔几秒会自动重读；也可以点「重新检查注册」。",
+      showRetry: true,
     };
+  }
+  if (!status) {
+    return { ...base, tone: "pending", status: "正在读取注册状态…", next: "", showRetry: false };
   }
 
   const targets = status.nativeMessaging ?? [];
-  const failed = targets.filter((target) => !target.registered);
   if (targets.length === 0) {
     return {
+      ...base,
       tone: "warn",
-      text: "还没核对过浏览器注册。",
-      next: "点「重新检查注册」让桌面写一次清单。商店还在审核的话，先下载插件包加载。",
-      showInstall: true,
-      showRetry: true,
-    };
-  }
-  if (failed.length === targets.length) {
-    return {
-      tone: "error",
-      text: `浏览器找不到桌面程序：${failed.map((t) => `${t.label} ${t.note ?? "未注册"}`).join("；")}`,
-      next: "先解决上面的问题，否则扩展装了也连不上。商店还在审核的话，先下载插件包加载。",
-      showInstall: true,
+      status: "尚未核对注册",
+      next: "还没核对过浏览器注册。点「重新检查注册」让桌面写一次清单。商店暂时无法安装时，可以先下载插件包手动加载。",
       showRetry: true,
     };
   }
 
+  const problems = targets
+    .filter((target) => !target.registered)
+    .map((target) => {
+      const note = target.note?.trim() || "原因不明";
+      return { label: target.label, note, conflict: isConflict(note) };
+    });
   const ready = targets.filter((target) => target.registered).map((target) => target.label);
-  const partial = failed.length > 0 ? `（${failed.map((t) => t.label).join("、")}没注册上）` : "";
+
+  if (ready.length === 0) {
+    return {
+      ...base,
+      tone: "error",
+      status: "浏览器注册失败",
+      text: summarize(problems),
+      problems,
+      next: "先处理上面的问题，再点「重新检查注册」。在这之前，扩展装上了也连不上桌面。",
+      showRetry: true,
+    };
+  }
+  if (problems.length > 0) {
+    return {
+      ...base,
+      tone: "warn",
+      status: `已注册 ${ready.join("、")} · ${problems.map((p) => p.label).join("、")} 注册失败`,
+      text: summarize(problems),
+      problems,
+      next: `${ready.join("、")} 可以装上扩展使用；${problems.map((p) => p.label).join("、")} 要先处理上面的问题。`,
+      showRetry: true,
+    };
+  }
   return {
-    tone: failed.length > 0 ? "warn" : "ok",
-    text: `桌面这边准备好了：${ready.join("、")}${partial}。`,
-    next: "在浏览器里装上扩展，装完回到这里刷新一下。商店还在审核就先下载插件包。",
-    showInstall: true,
+    ...base,
+    tone: "ok",
+    status: `已注册 ${ready.join("、")}`,
+    next: "在浏览器里装上扩展就能使用。扩展有没有装好、连没连上，要在浏览器里查看。",
     showRetry: true,
   };
 }
