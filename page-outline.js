@@ -26,7 +26,10 @@
   const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, legend, caption, [role='heading']";
   // 和 profile-fields.js、协议的密钥检查一致：像凭据的文字一律不外发。
   const SECRET_LABEL = /密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret/i;
-  const SENSITIVE_AUTOCOMPLETE = /one-time-code|cc-|password/i;
+  // 只有这些自动填充值说明是密码、验证码或银行卡。普通文本框上的 new-password / new_password 是网站
+  // 关掉浏览器自动填充的写法（#224 Moka 真机：姓名、邮箱都带它），不算敏感；真正的密码框是 type=password，
+  // 题目里带「密码」「验证码」的照样按 SECRET_LABEL 跳过。
+  const SENSITIVE_AUTOCOMPLETE = /one-time-code|cc-|current-password/i;
   const CREDENTIAL_TEXT = /(?:^|[^a-z0-9])(?:sk-[a-z0-9_-]{8,}|bearer\s|apikey|api[_-]key|authorization|cookie|set-cookie|password|passwd|pwd|otp|token|secret)\b/i;
   const SECRET_VALUE = /(密码|口令|验证码|校验码|授权码|密钥|令牌|password|passwd|pwd|token|secret)\s*[:=：]\s*\S/i;
 

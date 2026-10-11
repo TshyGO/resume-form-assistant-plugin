@@ -223,3 +223,18 @@ test("a component dropdown with a plain input (Beisen phoenix-select) is shown w
   assert.equal(node.shape, "下拉");
   assert.ok(node.shapeRoot.classList.contains("phoenix-select"), "the component root is kept for the operator");
 });
+
+test("autocomplete=new-password on an ordinary text box is the anti-autofill trick, not a password", () => {
+  // #224 Moka 真机：姓名、邮箱、公司名称都带 autocomplete="new_password"，原来被当成密码框整体跳过。
+  const doc = load(`
+    <label for="n">姓名</label><input id="n" autocomplete="new_password">
+    <label for="m">邮箱</label><input id="m" autocomplete="new-password">
+    <label for="p">设置密码</label><input id="p" type="text" autocomplete="new-password">
+    <label for="c">登录</label><input id="c" autocomplete="current-password">`);
+  const result = build(doc);
+  const all = text(result);
+  assert.match(all, /← 姓名/);
+  assert.match(all, /← 邮箱/);
+  assert.ok(!/设置密码|登录/.test(all), all);
+  assert.equal(result.stats.skippedSecret, 2);
+});

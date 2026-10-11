@@ -14,12 +14,14 @@
   const ACTION_KINDS = new Set(["edit", "expand"]);
   const DOMAIN_LABELS = { education: "教育经历", work: "工作经历", projects: "项目经历", papers: "论文" };
   // 按钮文字去掉空白和符号后再比。允许列表只认「让输入框出现」的写法。
+  // 中英双语的按钮（「添加 / Add」，#224 Moka 真机）去掉符号后是「添加Add」：中文部分后面允许跟对应的英文，
+  // 纯英文的同义按钮也认；英文不区分大小写。禁止列表同样认英文。
   const ALLOW = {
-    edit: /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料|填写|去填写|立即填写)$/,
-    expand: /^(?:展开|展开全部|展开更多|查看更多|更多|显示更多|展开详情)$/,
-    add: /^(?:新增|添加|增加|继续添加|再添加|新增一条|添加一条)[一-龥]{0,8}$/
+    edit: /^(?:(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料|填写|去填写|立即填写)(?:edit|modify)?|edit|modify)$/i,
+    expand: /^(?:(?:展开|展开全部|展开更多|查看更多|更多|显示更多|展开详情)(?:more|expand|showmore|viewmore)?|more|expand|showmore|viewmore)$/i,
+    add: /^(?:(?:新增|添加|增加|继续添加|再添加|新增一条|添加一条)[一-龥]{0,8}(?:add|addmore|addnew|new)?|add|addmore|addnew)$/i
   };
-  const DENY = /提交|保存|确认|确定|删除|移除|下一步|上一步|投递|退出|返回|取消|登录|注销|发送|支付|清空|重置/;
+  const DENY = /提交|保存|确认|确定|删除|移除|下一步|上一步|投递|退出|返回|取消|登录|注销|发送|支付|清空|重置|submit|save|confirm|delete|remove|next|prev|apply|logout|signout|login|signin|cancel|back|reset|send|pay/i;
   const BARE = value => String(value ?? "").replace(/[\s\p{P}\p{S}\p{Co}\p{M}\p{Cf}]/gu, "");
 
   // 提示词里不能出现协议密钥检查拦截的写法（例如「某某: 值」形式的凭据字样）。

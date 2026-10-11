@@ -458,3 +458,20 @@ test("a plain input the model reads as a dropdown is operated from the component
   assert.equal(prepared.fields[0].dynamicOptions, true);
   assert.match(deep.ANALYZE_SYSTEM_PROMPT, /外观=下拉/);
 });
+
+test("bilingual buttons such as 「添加 / Add」 and 「编辑 / Edit」 are allowed; English forbidden words are still refused", () => {
+  // #224 Moka 真机：新增按钮是「添加 / Add」，原来的允许列表只认纯中文，整份说明书因此被误判作废。
+  const doc = new JSDOM(`<body><input aria-label="学校"><button type="button">添加 / Add</button><button type="button">编辑 / Edit</button>
+    <button type="button">Add</button><button type="button">保存 / Save</button><button type="button">Delete</button><button type="button">Add &amp; Submit</button></body>`,
+    { url: "https://jobs.example.test/apply" }).window.document;
+  const built = outline.build(doc, { isVisible, fieldScan });
+  const ref = (label) => [...built.nodes.entries()].find(([, node]) => node.type === "button" && node.text === label)[0];
+  const context = { nodes: built.nodes, refs: new Set(built.parts[0].refs), redact: built.redact };
+  const section = (addRef) => deep.validateSpec({ pageState: "editing", sections: [{ domain: "education", addRef }] }, context);
+  assert.equal(section(ref("添加 / Add")).ok, true);
+  assert.equal(section(ref("Add")).ok, true);
+  assert.equal(deep.validateSpec({ pageState: "viewing", preActions: [{ ref: ref("编辑 / Edit"), kind: "edit" }] }, context).ok, true);
+  for (const label of ["保存 / Save", "Delete", "Add & Submit"]) {
+    assert.equal(section(ref(label)).reason, "forbidden_action", label);
+  }
+});
