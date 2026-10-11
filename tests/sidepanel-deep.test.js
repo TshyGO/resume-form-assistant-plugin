@@ -126,9 +126,11 @@ test("the prominent offer follows the page's verdict and only shows next to a fi
   ui.state.status = { ...ui.state.status, status: "已填写 2 个字段。3 项没填上", statusKind: "error", deepOffer: "prominent" };
   await ui.poll();
   assert.equal(ui.get("deep-offer").hidden, false);
+  assert.equal(ui.get("deep-button").hidden, true, "only one entry at a time: the quiet one steps back while the offer shows");
   ui.state.status = { ...ui.state.status, deepOffer: "none" };
   await ui.poll();
   assert.equal(ui.get("deep-offer").hidden, true, "auth, network or not-configured failures do not invite a deep analysis");
+  assert.equal(ui.get("deep-button").hidden, false, "the quiet entry is back");
   ui.state.status = { ...ui.state.status, deepOffer: "bogus" };
   await ui.poll();
   assert.equal(ui.get("deep-offer").hidden, true);

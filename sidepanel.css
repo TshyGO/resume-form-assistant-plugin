@@ -242,6 +242,8 @@ button:disabled { cursor: not-allowed; }
 .offer-candidates button::after, #submit-confirm-candidates button::after { content: "选择"; flex: none; padding: 2px 10px; border: 1px solid var(--accent-line); border-radius: 999px; color: var(--accent-strong); font-size: 12px; font-weight: 600; }
 .offer-candidates button:hover:not(:disabled), .job-candidates button:hover:not(:disabled) { border-color: var(--accent-line); background: #f4faf8; }
 .offer-candidates button:disabled, .job-candidates button:disabled { opacity: .55; }
+.profile-offer .card-head { margin-bottom: 8px; }
+.profile-offer .offer-title { margin: 0 0 4px; color: var(--ink); font-size: 13px; font-weight: 650; }
 .profile-offer .profile-detail { margin-top: 10px; }
 .profile-offer .profile-intro { color: var(--muted); }
 .profile-offer.is-done { border-color: var(--accent-line); background: var(--accent-pale); }

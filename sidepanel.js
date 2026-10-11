@@ -36,6 +36,7 @@
     fillResult: document.getElementById("fill-result"),
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
+    profileOfferCount: document.getElementById("profile-offer-count"),
     profileOfferIntro: document.getElementById("profile-offer-intro"),
     profileOfferResult: document.getElementById("profile-offer-result"),
     profileOfferDetail: document.getElementById("profile-offer-detail"),
@@ -537,10 +538,11 @@
       || Boolean(status?.busy) || repeating || repeatPending || deepRunning;
     elements.deepButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null
       || Boolean(status?.busy) || repeating || deepRunning || deepPending;
-    elements.deepButton.hidden = filling;
     // 突出提示只跟着上一次常规填写的结果走；认证、网络、未配置这类失败页面会报 none。
     elements.deepOffer.hidden = filling || repeating || deepRunning || deepOffer !== "prominent"
       || elements.deepButton.disabled || elements.fillResult.hidden;
+    // 同一时间只有一个入口：结果下面出现提示卡时，按钮区那行次要入口收起来。
+    elements.deepButton.hidden = filling || !elements.deepOffer.hidden;
     // While the page fills, the card says so with the page's own phase text; no made-up percentage.
     elements.fillProgress.hidden = !filling;
     elements.fillProgressPhase.textContent = filling ? (status.phase || "正在填写…") : "";
@@ -1734,18 +1736,22 @@
           ? `已记住 ${savedContent.length} 项内容${savedQuestions ? `，另记下 ${savedQuestions} 个问题` : ""}`
           : `已记下 ${savedQuestions || result.saved} 个问题`;
     } else {
+      // 重点是「补充字段」：简历和「我的信息」里还没有的网页问题，可以存成桌面「我的信息」的补充字段。
       elements.profileOfferText.textContent = !items.length && result?.text ? result.text : filled.length
-        ? "要记住这次填写的内容吗？"
+        ? `可以把 ${filled.length} 个答案加入补充字段`
         : conflicts.length
-          ? "网页内容与桌面已有内容不同"
-          : `还有 ${pending.length} 个问题需要你填写`;
+          ? "网页内容与补充字段里已有的内容不同"
+          : `有 ${pending.length} 个问题可以加入补充字段`;
     }
+    const offerCount = filled.length + pending.length + conflicts.length;
+    elements.profileOfferCount.hidden = completed || !offerCount;
+    elements.profileOfferCount.textContent = offerCount ? `${offerCount} 个问题` : "";
     elements.profileOfferIntro.hidden = completed || !items.length;
     elements.profileOfferIntro.textContent = filled.length
-      ? "保存后，下次遇到相同问题可以使用。"
+      ? "这些问题你的简历里还没有。保存到桌面「我的信息 · 补充字段」后，下次遇到相同问题会自动填写。"
       : conflicts.length
         ? "桌面原内容会保留；只有你选中时才会替换。"
-        : "在网页填好后，这里会自动显示可保存的答案。";
+        : "这些问题你的简历里还没有。在网页填好答案后，这里会列出可以保存的内容；保存到桌面「我的信息 · 补充字段」后，下次遇到相同问题会自动填写。";
     elements.profileOfferResult.hidden = !result;
     if (result) {
       elements.profileOfferResult.className = `profile-result is-${result.kind}`;

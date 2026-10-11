@@ -87,7 +87,11 @@
             </section>
             <div id="feedback-notice-root" hidden></div>
 
-            <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-label="保存到我的信息" hidden>
+            <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-labelledby="profile-offer-heading" hidden>
+              <div class="card-head">
+                <h2 id="profile-offer-heading" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8.5h8M8 12h5M15.5 15v4M13.5 17h4"/></svg>补充字段</h2>
+                <span id="profile-offer-count" class="chip" hidden></span>
+              </div>
               <p id="profile-offer-text" class="offer-title"></p>
               <p id="profile-offer-intro" class="profile-intro"></p>
               <div id="profile-offer-result" class="profile-result" role="status" hidden></div>

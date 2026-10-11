@@ -100,7 +100,7 @@ test('candidates show names and values; reusable filled items start ticked, job-
 
   const html = ui.groups.innerHTML;
   assert.equal(ui.get('profile-offer').hidden, false);
-  assert.equal(ui.get('profile-offer-text').textContent, '要记住这次填写的内容吗？');
+  assert.equal(ui.get('profile-offer-text').textContent, '可以把 2 个答案加入补充字段');
   assert.match(ui.get('profile-offer-intro').textContent, /下次遇到相同问题/);
   assert.match(html, /兴趣爱好[\s\S]*摄影/);
   assert.match(html, /可能只适用于当前岗位，默认不勾选/);
@@ -150,7 +150,9 @@ test('empty questions stay folded and have no save action until the user selects
   ] }) });
   await ui.refresh();
 
-  assert.equal(ui.get('profile-offer-text').textContent, '还有 1 个问题需要你填写');
+  assert.equal(ui.get('profile-offer-text').textContent, '有 1 个问题可以加入补充字段');
+  assert.match(ui.get('profile-offer-intro').textContent, /我的信息 · 补充字段/);
+  assert.equal(ui.get('profile-offer-count').textContent, '1 个问题');
   assert.match(ui.groups.innerHTML, /<details class="profile-more" data-profile-more="pending"><summary>查看这 1 个问题<\/summary>/);
   assert.equal(ui.save.hidden, true);
   await ui.toggle('期望薪资', true);
