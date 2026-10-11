@@ -30,6 +30,12 @@ test('drafts and unfinished uploads are not counted, and prerelease flag is resp
   assert.equal(snapshot.assets[0].release_channel, 'prerelease');
 });
 
+test('GitHub open upload state is skipped alongside failed starter uploads', async () => {
+  const { createDownloadSnapshot } = await load();
+  const snapshot = createDownloadSnapshot([release([{ name: 'pending.zip', state: 'open' }, { name: 'failed.zip', state: 'starter' }, asset()])], after);
+  assert.deepEqual(snapshot.assets.map(a => a.asset_id), [1]);
+});
+
 test('recognizes historical names but does not treat unrelated ZIPs as plugin packages', async () => {
   const { createDownloadSnapshot } = await load();
   const snapshot = createDownloadSnapshot([
@@ -99,6 +105,18 @@ test('counter decrease and metadata changes are anomalies, not downloads', async
   const previous = createDownloadSnapshot([release([asset(), asset(2)])], before);
   const current = createDownloadSnapshot([release([asset(1, 99), asset(2, 105, 'renamed.exe')])], after);
   assert.deepEqual(compareDownloadSnapshots(previous, current).rows.map(a => [a.status, a.increment]), [['count_decreased', null], ['metadata_changed', null]]);
+});
+
+test('changed publication times are metadata anomalies but equivalent timezone representations are not', async () => {
+  const { createDownloadSnapshot, compareDownloadSnapshots } = await load();
+  const previous = createDownloadSnapshot([release()], before);
+  const current = createDownloadSnapshot([release([asset(1, 108)], 'desktop-v0.4.3', { published_at: '2026-10-09T01:00:00Z' })], after);
+  const changed = compareDownloadSnapshots(previous, current).rows[0];
+  assert.equal(changed.status, 'metadata_changed');
+  assert.equal(changed.increment, null);
+  const sameInstant = createDownloadSnapshot([release([asset(1, 108)])], after);
+  sameInstant.assets[0].published_at = '2026-10-09T08:00:00+08:00';
+  assert.equal(compareDownloadSnapshots(previous, sameInstant).rows[0].increment, 8);
 });
 
 test('missed snapshots yield a labelled multi-day interval, never one-day downloads', async () => {

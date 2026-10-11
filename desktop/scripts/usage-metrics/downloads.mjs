@@ -52,8 +52,9 @@ export function createDownloadSnapshot(releases, observedAt) {
     const publishedAt = publicationAtObservation(release.published_at, observed);
     for (const asset of release.assets) {
       if (!asset || typeof asset.name !== 'string' || !asset.name || typeof asset.state !== 'string') throw new Error('Invalid asset');
-      if (!['uploaded', 'starter'].includes(asset.state)) throw new Error('Invalid asset state');
-      if (asset.name.toLowerCase().endsWith('.sha256') || asset.state === 'starter') continue;
+      // GitHub's schema includes open; failed uploads can also leave starter assets.
+      if (!['uploaded', 'open', 'starter'].includes(asset.state)) throw new Error('Invalid asset state');
+      if (asset.name.toLowerCase().endsWith('.sha256') || asset.state !== 'uploaded') continue;
       if (!positiveId(asset.id) || !Number.isSafeInteger(asset.download_count) || asset.download_count < 0) throw new Error('Invalid asset counter');
       if (ids.has(asset.id)) throw new Error('Duplicate asset ID; collect a fresh complete snapshot');
       ids.add(asset.id);
@@ -107,7 +108,8 @@ export function compareDownloadSnapshots(previous, current) {
     let increment = null;
     if (previous === null) status = 'baseline';
     else if (!old) status = 'new_asset';
-    else if (['release_id', 'tag_name', 'file_name', 'release_family', 'release_channel', 'artifact_kind'].some(key => old[key] !== asset[key])) status = 'metadata_changed';
+    else if (['release_id', 'tag_name', 'file_name', 'release_family', 'release_channel', 'artifact_kind'].some(key => old[key] !== asset[key]) ||
+             Date.parse(old.published_at) !== Date.parse(asset.published_at)) status = 'metadata_changed';
     else if (asset.download_count < old.download_count) status = 'count_decreased';
     else {
       increment = asset.download_count - old.download_count;
