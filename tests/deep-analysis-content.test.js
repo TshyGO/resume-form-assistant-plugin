@@ -21,7 +21,7 @@ const store = () => ({
   activeTemplateId: TEMPLATE
 });
 
-function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false } = {}) {
+function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false, labels = [] } = {}) {
   const location = { href: "https://jobs.example.test/apply", pathname: "/apply" };
   const inputs = [];
   const sent = [];
@@ -68,6 +68,7 @@ function deepPage({ consent = true, analyze, fill, confirm = () => true, existin
     const input = new HTMLInputElement();
     input.value = value;
     input.getClientRects = () => [1];
+    if (labels[inputs.length]) input.setAttribute("data-label", labels[inputs.length]);
     inputs.push(input);
   });
   // staleButton：刷新后的页面还没读过桌面，网页里的填写按钮停在禁用状态，模板下拉也在。
@@ -256,4 +257,31 @@ test("a freshly loaded page whose own fill button still waits for the desktop re
   const done = await page.settle(finished);
   assert.equal(done.phase, "completed", done.message);
   assert.deepEqual(page.inputs.map((input) => input.value), ["AI-姓名", "AI-现居城市"]);
+});
+
+test("after a deep fill, fields the normal scan also knows are offered to 我的信息 like after a normal fill", async () => {
+  const page = deepPage({
+    labels: ["姓名", "期望到岗时间"],
+    analyze: () => ({ success: true, spec: { pageState: "editing", fields: [
+      { ref: "e1", label: "姓名", control: "text" }, { ref: "e2", label: "期望到岗时间", control: "text" }] } }),
+    fill: (message) => ({ success: true, matches: [{ fieldId: message.formFields[0].fieldId, value: "测试用户" }],
+      diagnostics: { ruleMatches: 1, aiMatches: 0, calls: 1, errorCode: "none" } })
+  });
+  await page.ask({ action: "start" });
+  await page.settle(finished);
+  const offer = (await page.status()).profileOffer;
+  assert.ok(offer, "the 加到我的信息 card is offered");
+  assert.match(JSON.stringify(offer), /期望到岗时间/);
+});
+
+test("the deep fill's diagnostics name the control kinds the fill used", async () => {
+  const page = deepPage({
+    analyze: () => ({ success: true, spec: { pageState: "editing", fields: [
+      { ref: "e1", label: "姓名", control: "text" }, { ref: "e2", label: "现居城市", control: "radio" }] } })
+  });
+  await page.ask({ action: "start" });
+  await page.settle(finished);
+  // 普通输入框不能当单选：按 DOM 改回 text，计数按改正后的类型。
+  assert.match(page.diagnosticsText.value, /控件类型按网页改正 1/);
+  assert.match(page.diagnosticsText.value, /说明书控件类型：text 2/);
 });

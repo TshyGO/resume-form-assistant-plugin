@@ -14,7 +14,12 @@
   const REDACTED = "〔内容〕";
 
   const LIBRARIES = [["antd", /^ant-/], ["element", /^el-/], ["arco", /^arco-/], ["iview", /^ivu-/],
-    ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/]];
+    ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/], ["beisen", /^phoenix-/]];
+  // 组件外观（#224 真机：北森 phoenix-select 的输入框是普通 input，没有 ARIA）：输入框或它上面几层的
+  // class 词说明它是下拉、级联或日期组件时，大纲写出来，让模型能判断控件类型。只看 class 词，不读内容。
+  const SHAPES = [["级联", /(?:^|[-_])cascader(?:$|[-_])/i], ["日期", /(?:^|[-_])(?:date|datepicker|date-picker|calendar|time-picker)(?:$|[-_])/i],
+    ["下拉", /(?:^|[-_])(?:select|selector|dropdown|combobox|combo|picker)(?:$|[-_])/i]];
+  const SHAPE_DEPTH = 4;
   const BUTTON_SELECTOR = "button, a[href], [role='button'], [role='link'], input[type='button'], input[type='submit'], input[type='reset']";
   const ARIA_CONTROL_SELECTOR = "[contenteditable]:not([contenteditable='false']), [role='textbox'], [role='listbox'], [role='radiogroup'], [role='switch'], [role='spinbutton'], [role='checkbox']";
   const TEXT_CLUE_SELECTOR = "label, legend, th, dt, [role='heading'], h1, h2, h3, h4, h5, h6, caption";
@@ -71,6 +76,23 @@
       }
     }
     return "";
+  }
+
+  // 返回 { shape, root }：外观取最近一层能说明它的（含自身）；root 取这个范围内最外层的组件祖先，
+  // 交给控件操作器当组件根（北森的输入框自己就带 phoenix-select__input，组件根在外面几层）。
+  function shapeOf(el) {
+    let shape = "";
+    let root = null;
+    for (let node = el, depth = 0; node && depth <= SHAPE_DEPTH; node = node.parentElement, depth += 1) {
+      // 再往上就是别的题目：这一层装着不止一个输入框时停下。
+      if (node !== el && node.querySelectorAll?.("input, select, textarea").length > 1) break;
+      const tokens = typeof node.className === "string" ? node.className.split(/\s+/).filter(Boolean) : [];
+      const hit = SHAPES.find(([, pattern]) => tokens.some(token => pattern.test(token)));
+      if (!hit) continue;
+      if (!shape) shape = hit[0];
+      if (node !== el) root = node;
+    }
+    return { shape, root };
   }
 
   function defaultVisible(el) {
@@ -186,6 +208,10 @@
       if (isSecretControl(control)) { ctx.stats.skippedSecret += 1; continue; }
       const entry = { type: "control", control, element: control.element, elements: control.elements, root: control.root,
         pickerType: control.pickerType, domKind: domKindOf(control), frame: ctx.frame };
+      if (entry.domKind === "text") {
+        const found = shapeOf(control.element);
+        if (found.shape) Object.assign(entry, { shape: found.shape, shapeRoot: found.root });
+      }
       add(control.root, entry);
     }
 
@@ -261,6 +287,7 @@
     const parts = [item.ref, describeKind(item)];
     const library = libraryOf(item.root || el);
     if (library) parts.push(`lib=${library}`);
+    if (item.shape) parts.push(`外观=${item.shape}`);
     const placeholder = attr(el, "placeholder");
     if (placeholder) parts.push(`ph="${redact(placeholder, MAX_SEGMENT)}"`);
     if (item.domKind === "radio") {

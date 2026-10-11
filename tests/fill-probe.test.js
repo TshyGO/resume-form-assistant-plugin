@@ -353,3 +353,10 @@ test("#224: with 深度分析本页 available, same-origin frames and custom con
     "a cross-origin frame is out of reach for the deep analysis too");
   assert.match(probe.emptyPageHint({ ...EMPTY, editButtons: 1 }, deep), /先点网页上的「编辑」/, "view mode still says 编辑 first");
 });
+
+test("#224: an unfilled field from a deep fill says which control kind it was operated as", () => {
+  const lines = probe.formatReport(null, [{ label: "民族", control: { tag: "input", type: "text" }, reason: "值没有写上", operated: "custom-select" },
+    { label: "x", control: { tag: "input" }, operated: "<b>evil</b>" }]);
+  assert.match(lines.join("\n"), /民族：input\[text\]｜按 custom-select 操作｜值没有写上/);
+  assert.doesNotMatch(lines.join("\n"), /evil/);
+});

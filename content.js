@@ -1792,7 +1792,7 @@
         type: "AI_ANALYZE_PAGE", requestId, outline: text, part, parts
       }).catch(() => ({ success: false, error: "无法连接 AI 请求进程，请重新加载扩展后再试。", errorCode: "unavailable" })),
       cancelRequest: requestId => { self.ResumeProAIClient.cancel(requestId).catch(() => {}); },
-      toFillInput: (fields, nodes) => api.toFillInput(fields, nodes, { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType }),
+      toFillInput: (fields, nodes) => withScanBindings(api.toFillInput(fields, nodes, { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType })),
       async fill(options) {
         const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
         if (!fillButton) return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "填写控件不可用。" };
@@ -1805,6 +1805,28 @@
       },
       onFinish: report => { if (report && !report.fillStarted) writeDeepDiagnostics(report); }
     };
+  }
+
+  // 普通扫描也认识的控件：沿用它的题目对应关系。填写前的复查、「加到我的信息」的询问都和普通填写一致；
+  // 只有深度分析才找到的控件（框架、Shadow DOM 里的）没有这份对应关系，不询问，免得用模型起的题目名存档。
+  function withScanBindings(prepared) {
+    let scanned;
+    try {
+      scanned = scanFillableFields();
+    } catch {
+      return prepared;
+    }
+    const byElement = new Map();
+    for (const entry of scanned.fieldMap.values()) {
+      const key = entry.kind === "radio" ? entry.elements?.[0] : entry.element;
+      if (key) byElement.set(key, entry);
+    }
+    for (const entry of prepared.fieldMap.values()) {
+      const known = byElement.get(entry.kind === "radio" ? entry.elements?.[0] : entry.element);
+      if (!known?.binding) continue;
+      Object.assign(entry, { binding: known.binding, offerable: known.offerable, offerLabel: known.offerLabel });
+    }
+    return prepared;
   }
 
   async function handlePanelDeep(message) {
@@ -2127,7 +2149,9 @@
           || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
-          reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null) });
+          reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
+          // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
+          ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
       let controlsRechecked = false;
       recheckVerifiedControls = () => {
@@ -2469,6 +2493,8 @@
     return [
       `深度分析：大纲 ${count(report.outlineChars)} 字，分 ${count(report.parts)} 次分析${report.truncated ? "（页面过长，后面的部分没有分析）" : ""}`,
       `页面说明书：字段 ${count(report.specFields)}，可填写 ${count(report.usedFields)}${report.overridden ? `，控件类型按网页改正 ${count(report.overridden)}` : ""}；校验：${validation}`,
+      ...(report.controlKinds && Object.keys(report.controlKinds).length ? [`说明书控件类型：${Object.entries(report.controlKinds)
+        .filter(([kind]) => self.ResumeProDeepAnalysis?.CONTROLS?.has(kind)).map(([kind, n]) => `${kind} ${count(n)}`).join("、")}`] : []),
       `深度分析模型调用：${count(report.calls)}/${count(report.limit)}${report.budgetExhausted ? "（已达上限）" : ""}；分析档位：${tier}`
     ];
   }

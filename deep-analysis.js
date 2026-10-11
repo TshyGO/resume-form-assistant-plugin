@@ -35,6 +35,7 @@
     "3. hints 只能包含 searchable（布尔）、popup（inline 或 portal）、dateFormat（YYYY-MM-DD、YYYY-MM 或 YYYY）、multiple（布尔），不确定就省略。",
     "4. label 是这个字段在页面上的题目，group 是它所属的分组标题，都不超过 30 字；不要写入任何个人信息或字段的值。",
     "5. 页头搜索框、登录框、筛选条件、站内导航不是要填写的字段。",
+    "5a. 写着「外观=下拉」「外观=级联」「外观=日期」的输入框是组件库的下拉框、级联选择或日期选择器，control 分别写 custom-select、cascader、date（日期题目也可能显示为「外观=下拉」）。",
     "6. preActions 只用于填写前必须点的「编辑」「展开」类按钮，最多 5 个；新增条目的按钮放在 sections.addRef，不放进 preActions。",
     "7. 提交、保存、确认、删除、下一步、投递、返回、取消等按钮绝不能出现在 preActions 或 addRef 里。",
     "8. 页面只是查看状态、没有可填写的输入框时，pageState 写 viewing，并在 preActions 里给出需要点的「编辑」按钮；不是填写表单时写 not_form。",
@@ -239,8 +240,10 @@
       }
       const tag = String(element.tagName || "").toLowerCase();
       const dynamic = item.control === "custom-select" || item.control === "cascader";
-      const entry = { kind: "element", element, elements: control.elements, controlKind: item.control, root: control.root,
-        hints: item.hints, deepRef: item.ref };
+      // 普通输入框被认成下拉、级联或日期时，组件根用大纲找到的外观祖先（操作器从那里开弹层、读已选值）。
+      const refined = node.domKind === "text" && item.control !== "text" && node.shapeRoot;
+      const entry = { kind: "element", element, elements: control.elements, controlKind: item.control,
+        root: refined ? node.shapeRoot : control.root, hints: item.hints, deepRef: item.ref };
       if (item.control === "date" && node.pickerType) {
         entry.pickerType = node.pickerType;
         entry.pickerInputType = pickerInputType(control.root, element);
@@ -397,6 +400,7 @@
       }
       report.validation = "通过";
       report.specFields = merged.fields.length;
+      report.controlKinds = merged.fields.reduce((counts, field) => ({ ...counts, [field.control]: (counts[field.control] || 0) + 1 }), {});
 
       if (merged.preActions.length) {
         const names = describeActions(merged.preActions, outline.nodes);

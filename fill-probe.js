@@ -248,7 +248,8 @@
     if (unfilled.length) {
       lines.push("没填上的字段（控件结构）：");
       for (const item of unfilled.slice(0, MAX_LISTED)) {
-        lines.push(`- ${safeLabel(item.label)}：${formatControl(item.control)}${item.reason ? `｜${item.reason}` : ""}`);
+        const operated = /^[a-z-]{1,20}$/.test(item.operated || "") ? `｜按 ${item.operated} 操作` : "";
+        lines.push(`- ${safeLabel(item.label)}：${formatControl(item.control)}${operated}${item.reason ? `｜${item.reason}` : ""}`);
       }
       if (unfilled.length > MAX_LISTED) lines.push(`- 还有 ${unfilled.length - MAX_LISTED} 个未列出`);
     }

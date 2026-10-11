@@ -442,3 +442,19 @@ test("several buttons with the same text are named once with a count", async () 
   const done = await h.settle(finished);
   assert.match(done.message, /手动点击「编辑」（共 3 处）、「展开」，/);
 });
+
+test("a plain input the model reads as a dropdown is operated from the component root the outline found", () => {
+  const doc = new JSDOM(`<body><div class="phoenix-select"><ul><li><input class="phoenix-select__input" aria-label="民族"></li></ul></div></body>`,
+    { url: "https://jobs.example.test/apply" }).window.document;
+  const built = outline.build(doc, { isVisible, fieldScan });
+  const [ref, node] = [...built.nodes.entries()][0];
+  assert.match(built.parts[0].text, /外观=下拉/);
+  const checked = deep.validateSpec({ pageState: "editing", fields: [{ ref, label: "民族", control: "custom-select" }] },
+    { nodes: built.nodes, refs: new Set(built.parts[0].refs), redact: built.redact });
+  const prepared = deep.toFillInput(checked.spec.fields, built.nodes);
+  const entry = prepared.fieldMap.get(`deep-${ref}`);
+  assert.equal(entry.controlKind, "custom-select");
+  assert.equal(entry.root, node.shapeRoot);
+  assert.equal(prepared.fields[0].dynamicOptions, true);
+  assert.match(deep.ANALYZE_SYSTEM_PROMPT, /外观=下拉/);
+});
