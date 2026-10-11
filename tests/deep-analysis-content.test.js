@@ -162,7 +162,8 @@ test("overwrite confirmation still applies: declining leaves every existing valu
   const done = await page.settle(finished);
   assert.equal(page.confirms(), 1);
   assert.deepEqual(page.inputs.map((input) => input.value), ["用户自己填的", ""]);
-  assert.notEqual(done.phase, "completed");
+  assert.equal(done.phase, "stopped");
+  assert.equal(done.message, "已按你的选择停止填写，网页现有内容没有改动。");
 });
 
 test("a value the user changes after approving is protected by the same write guard", async () => {

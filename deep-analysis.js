@@ -451,6 +451,9 @@
       const tail = `${unfilled ? `${unfilled} 项没填上，` : ""}${unconfirmed ? `${unconfirmed} 项未确认，` : ""}请核对网页内容。`;
       if (run.stopped || stale(run)) {
         set(run, "stopped", `${run.invalid || stale(run) || "已停止。"}停止前已填写 ${filled} 项，${tail}`, { result: counts });
+      } else if (result?.overwriteDeclined && !filled) {
+        // 用户在覆盖确认里点了取消，或填写途中改了字段：照普通填写的保护停下，不是失败。
+        set(run, "stopped", "已按你的选择停止填写，网页现有内容没有改动。", { result: counts });
       } else if (result?.outcome === "success" || result?.outcome === "partial") {
         set(run, "completed", `深度填写：AI 找到 ${prepared.fields.length} 个字段，已填写 ${filled} 项。${tail}`, { result: counts });
       } else {

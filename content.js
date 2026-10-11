@@ -2104,7 +2104,9 @@
           overwriteDeclined = true;
           cancelRequested = true;
           showStatus("已取消填写，网页现有内容未修改。", "error", true);
-          return;
+          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
+          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
+            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
         }
       }
 
@@ -2351,7 +2353,7 @@
         }, activeTemplate).catch(() => {});
       }
     }
-    return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure,
+    return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure, overwriteDeclined,
       calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
   }
 
