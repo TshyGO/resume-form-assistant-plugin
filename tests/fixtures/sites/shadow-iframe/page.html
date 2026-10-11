@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>在线申请</title></head>
+<body>
+<!-- 合成页面：表单一半在开放的 Shadow DOM 里（Web Components 写法），一半在同源 iframe 里。
+     普通一键填写只扫主文档，两部分都看不到；深度分析的大纲会进去。全部资料虚构，没有提交按钮的真实动作。 -->
+<h1>校园招聘 · 在线申请</h1>
+<apply-basic></apply-basic>
+<h2>教育经历</h2>
+<iframe id="edu" title="教育经历" style="width:520px;height:220px;border:1px solid #ccc"
+  srcdoc='<!doctype html><meta charset="utf-8"><body><form>
+    <p><label for="school">学校名称</label> <input id="school"></p>
+    <p><label for="major">专业</label> <input id="major"></p>
+    <p><label for="degree">学历</label> <select id="degree"><option value="">请选择</option><option>大专</option><option>本科</option><option>硕士</option><option>博士</option></select></p>
+    <p><label for="start">开始时间</label> <input id="start" type="month"></p>
+  </form></body>'></iframe>
+<script>
+  customElements.define("apply-basic", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = `<style>p{margin:6px 0}</style><fieldset><legend>基本信息</legend>
+        <p><label for="name">姓名</label> <input id="name"></p>
+        <p><label for="mobile">手机号码</label> <input id="mobile" type="tel"></p>
+        <p><label for="mail">邮箱</label> <input id="mail" type="email"></p>
+        <p><label for="city">现居城市</label> <input id="city"></p>
+        <p><label for="pwd">设置登录密码</label> <input id="pwd" type="password"></p>
+      </fieldset>`;
+    }
+  });
+</script>
+</body></html>

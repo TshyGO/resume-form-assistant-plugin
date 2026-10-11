@@ -330,7 +330,7 @@ test("a spec asking for 编辑 first stops with a manual step; the run never cli
   await h.controller.start();
   const done = await h.settle(finished);
   assert.equal(done.phase, "needs_action");
-  assert.match(done.message, /手动点击「编辑」.*没有填写任何内容/);
+  assert.match(done.message, /手动点击「编辑」，.*没有填写任何内容/);
   assert.equal(h.calls.fill.length, 0);
 });
 
@@ -427,4 +427,18 @@ test("the panel snapshot carries only fixed fields and counts, never page text o
   assert.deepEqual(done.result, { fields: 1, filled: 1, unfilled: 0, unconfirmed: 0 });
   assert.equal(h.controller.dismiss().ok, true);
   assert.equal(h.controller.describe().phase, "idle");
+});
+
+test("several buttons with the same text are named once with a count", async () => {
+  const nodes = nodesFor(1);
+  ["e2", "e3", "e4"].forEach((ref) => nodes.set(ref, { type: "button", text: "编辑", submit: false, leaves: false }));
+  nodes.set("e5", { type: "button", text: "展开", submit: false, leaves: false });
+  const h = harness({
+    buildOutline: () => ({ parts: [{ text: "x", refs: ["e1", "e2", "e3", "e4", "e5"] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: 1 } }),
+    analyze: async () => ({ success: true, spec: { pageState: "viewing", preActions: [
+      { ref: "e2", kind: "edit" }, { ref: "e3", kind: "edit" }, { ref: "e4", kind: "edit" }, { ref: "e5", kind: "expand" }] } })
+  });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.match(done.message, /手动点击「编辑」（共 3 处）、「展开」，/);
 });

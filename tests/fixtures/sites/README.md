@@ -12,6 +12,7 @@
 | `aria-custom` | `tests/fixtures/control-adapters/custom-aria.html` | ARIA 下拉与级联 |
 | `view-mode-profile` | 合成 | 查看状态的在线简历：没有输入框，要先点「编辑」 |
 | `injection-labels` | 合成 | 题目和提示文字里夹着给 AI 的指令 |
+| `shadow-iframe` | 合成（大纲取自真机） | 表单在开放 Shadow DOM 和同源 iframe 里，普通扫描为 0 个字段 |
 
 ## 评测
 

@@ -1797,8 +1797,10 @@
         const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
         if (!fillButton) return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "填写控件不可用。" };
         options.report.fillStarted = true;
-        // 交给普通一键填写：它自己占用并释放忙碌状态。
+        // 交给普通一键填写：它自己占用并释放忙碌状态。网页里的填写按钮可能还停在读桌面之前的禁用状态
+        // （刷新后的页面不会主动读桌面），先按 prepare() 刚读到的桌面状态重画，和普通填写的入口一致。
         state.aiBusy = false;
+        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
         return handleAiFillClick({ currentTarget: fillButton }, null, options);
       },
       onFinish: report => { if (report && !report.fillStarted) writeDeepDiagnostics(report); }
@@ -1976,7 +1978,8 @@
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
         const hint = !assisted && !scanned.fields.length
-          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown" }), "") : "";
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown",
+            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
         hinted = Boolean(hint);
         throw new Error(`当前页面没有可填写的表单字段。${hint}`);
       }

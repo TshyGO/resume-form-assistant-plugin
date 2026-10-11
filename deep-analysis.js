@@ -262,11 +262,14 @@
     return { fields, fieldMap, dropped };
   }
 
+  // 同名按钮合并：「编辑」（共 3 处）、「展开」。按钮文字来自大纲，已经过同一套脱敏和限长。
   function describeActions(preActions, nodes) {
-    return preActions.map(action => {
-      const node = nodes.get(action.ref);
-      return `「${String(node?.text || (action.kind === "edit" ? "编辑" : "展开")).slice(0, 12)}」`;
-    });
+    const counts = new Map();
+    for (const action of preActions) {
+      const text = String(nodes.get(action.ref)?.text || (action.kind === "edit" ? "编辑" : "展开")).slice(0, 12);
+      counts.set(text, (counts.get(text) || 0) + 1);
+    }
+    return [...counts].slice(0, 3).map(([text, count]) => `「${text}」${count > 1 ? `（共 ${count} 处）` : ""}`).join("、");
   }
 
   const ACTIVE = ["outlining", "analyzing", "filling"];
@@ -396,7 +399,7 @@
       report.specFields = merged.fields.length;
 
       if (merged.preActions.length) {
-        const names = describeActions(merged.preActions, outline.nodes).slice(0, 5).join("、");
+        const names = describeActions(merged.preActions, outline.nodes);
         set(run, "needs_action", `需要先在网页上手动点击${names}，等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`);
         return;
       }

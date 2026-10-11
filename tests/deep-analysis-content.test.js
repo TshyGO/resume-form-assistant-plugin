@@ -21,7 +21,7 @@ const store = () => ({
   activeTemplateId: TEMPLATE
 });
 
-function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""] } = {}) {
+function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false } = {}) {
   const location = { href: "https://jobs.example.test/apply", pathname: "/apply" };
   const inputs = [];
   const sent = [];
@@ -70,9 +70,14 @@ function deepPage({ consent = true, analyze, fill, confirm = () => true, existin
     input.getClientRects = () => [1];
     inputs.push(input);
   });
-  const fillButton = { disabled: false, textContent: "一键 AI 填写" };
+  // staleButton：刷新后的页面还没读过桌面，网页里的填写按钮停在禁用状态，模板下拉也在。
+  const fillButton = { disabled: staleButton, textContent: "一键 AI 填写" };
+  const sidebar = staleButton ? {
+    "#resume-pro-template-select": { innerHTML: "", disabled: true },
+    "#resume-pro-groups": { innerHTML: "", querySelectorAll: () => [], querySelector: () => null }
+  } : {};
   helpers.setShadowRoot({ querySelector: (selector) => ({ "#resume-pro-ai-fill": fillButton,
-    "#resume-pro-diagnostics": diagnostics, "#resume-pro-diagnostics-text": diagnosticsText })[selector] || null });
+    "#resume-pro-diagnostics": diagnostics, "#resume-pro-diagnostics-text": diagnosticsText, ...sidebar })[selector] || null });
   helpers.setCurrentStore(store());
   const ask = (message) => harness.sendPanelMessage({ type: "RESUME_PANEL_DEEP", ...message });
   const status = () => harness.sendPanelMessage({ type: "RESUME_PANEL_STATUS" });
@@ -241,4 +246,13 @@ test("an ordinary one-click fill is unchanged: no tier, no budget, no deep diagn
   assert.equal("tier" in fill, false);
   assert.equal("maxCalls" in fill, false);
   assert.ok(!page.diagnosticsText.value.includes("深度分析"));
+});
+
+test("a freshly loaded page whose own fill button still waits for the desktop read can run the deep fill", async () => {
+  // 真机发现：刷新后网页里的按钮仍是禁用的，交给填写流程前要按刚读到的桌面状态重画，否则被当成「忙」。
+  const page = deepPage({ staleButton: true });
+  await page.ask({ action: "start" });
+  const done = await page.settle(finished);
+  assert.equal(done.phase, "completed", done.message);
+  assert.deepEqual(page.inputs.map((input) => input.value), ["AI-姓名", "AI-现居城市"]);
 });
