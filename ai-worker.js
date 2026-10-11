@@ -1,4 +1,4 @@
-importScripts("feedback-core.js", "ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js");
+importScripts("feedback-core.js", "ai-helpers.js", "profile-fields.js", "resume-utils.js", "form-agent.js", "deep-analysis.js");
 // Uncaught worker errors are reported by ai-host worker.onerror, which also fails
 // pending calls. Here report only rejections, avoiding two reports for one crash.
 self.ResumeProFeedback?.install(report => self.postMessage({ kind: "feedback-error", report }), { captureErrors: false, origin: self.location.href.slice(0, self.location.href.lastIndexOf("/") + 1) });
@@ -70,6 +70,20 @@ function dispatchAiMessage(message, sender, sendResponse) {
         console.warn("job extraction worker failed", error?.name || "unknown");
         sendResponse({ status: "manual", reason: "internal", reliable: false, fields: { company: "", title: "", location: "" } });
       })
+      .finally(() => activeFillRequests.delete(key));
+    return true;
+  }
+  if (message?.type === "AI_ANALYZE_PAGE") {
+    const key = fillRequestKey(message, sender);
+    if (activeFillRequests.has(key)) {
+      sendResponse({ success: false, error: "该分析请求仍在处理中。", errorCode: "in_flight" });
+      return false;
+    }
+    const controller = new AbortController();
+    activeFillRequests.set(key, controller);
+    handleAnalyzePage(message, controller)
+      .then(sendResponse)
+      .catch(() => sendResponse({ success: false, error: "页面分析请求失败。", errorCode: "unavailable" }))
       .finally(() => activeFillRequests.delete(key));
     return true;
   }
@@ -230,10 +244,46 @@ function makePromptBatches(formFields, resumeFields) {
 
 const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large", "response_too_large", "secret_in_prompt"]);
 
+// #224 深度分析：只把插件已经脱敏的页面大纲交给强模型（purpose=analyze，不带 tier 即强档）。
+// 返回解析后的说明书对象；模型原文不回传、不进诊断。校验由页面里的 deep-analysis.js 按本次大纲做。
+const ANALYZE_MAX_OUTLINE = 45_000;
+
+async function handleAnalyzePage(message, controller) {
+  const text = typeof message.outline === "string" ? message.outline : "";
+  const part = Number.isInteger(message.part) && message.part >= 1 ? message.part : 1;
+  const parts = Number.isInteger(message.parts) && message.parts >= part ? message.parts : part;
+  if (!text || text.length > ANALYZE_MAX_OUTLINE) {
+    return { success: false, error: "页面大纲超出可分析的范围。", errorCode: "input_too_large" };
+  }
+  const deep = self.ResumeProDeepAnalysis;
+  const started = performance.now();
+  const result = await sendToDesktop({
+    purpose: "analyze", system: deep.ANALYZE_SYSTEM_PROMPT, user: deep.analyzeUserPrompt(text, part, parts), signal: controller.signal
+  });
+  const apiMs = performance.now() - started;
+  const tierUsed = result?.tier === "strong" || result?.tier === "default" ? result.tier : "";
+  if (!result?.ok) {
+    const reason = result?.reason ?? "unavailable";
+    let error = aiFailureMessage(result);
+    if (reason === "incompatible") error = "深度分析需要更新桌面程序。";
+    else if (reason === "not_configured" && result.tier === "strong") error = strongFailureMessage("strong", result);
+    return { success: false, error, errorCode: reason, tierUsed, apiMs,
+      ...(reason === "not_configured" ? { openView: "settings-ai" } : {}) };
+  }
+  if (controller.signal.aborted) return { success: false, error: aiFailureMessage({ reason: "cancelled" }), errorCode: "cancelled", tierUsed, apiMs };
+  try {
+    return { success: true, spec: deep.parseSpecText(result.text), tierUsed, apiMs };
+  } catch {
+    return { success: false, error: "AI 返回的页面说明不是有效的 JSON，已全部作废，网页没有改动。", errorCode: "analyze_invalid", tierUsed, apiMs };
+  }
+}
+
 async function handleAiFill(message, controller = new AbortController()) {
   // #223: a caller may ask for a tier (the strong model for a re-match). Without one the
   // request stays exactly what every desktop understands.
   const tier = message.tier === "strong" || message.tier === "default" ? message.tier : undefined;
+  // #224：深度分析共用一份调用预算。带了 maxCalls 就最多发这么多次，并如实报告实际次数。
+  const maxCalls = Number.isInteger(message.maxCalls) && message.maxCalls >= 0 ? message.maxCalls : undefined;
   const incomingFormFields = Array.isArray(message.formFields) ? message.formFields : [];
   const incomingResumeFields = Array.isArray(message.resumeFields) ? message.resumeFields : [];
   const formFields = incomingFormFields.filter(field => !isSecretField(field));
@@ -259,7 +309,8 @@ async function handleAiFill(message, controller = new AbortController()) {
     skippedSecret: incomingFormFields.length - formFields.length + incomingResumeFields.length - resumeFields.length,
     secretFormFields,
     skippedOversized: 0, skippedNoContext: 0,
-    ...(tier ? { tierRequested: tier } : {})
+    ...(tier ? { tierRequested: tier } : {}),
+    ...(maxCalls === undefined ? {} : { calls: 0 })
   };
   const aiMatches = [];
   const warnings = [];
@@ -280,6 +331,12 @@ async function handleAiFill(message, controller = new AbortController()) {
     }
     for (const batch of batches) {
       if (controller.signal.aborted) break;
+      if (maxCalls !== undefined && diagnostics.calls >= maxCalls) {
+        diagnostics.budgetExhausted = true;
+        warnings.push("已达到本次深度分析的模型调用上限，部分字段没有交给 AI。");
+        break;
+      }
+      if (maxCalls !== undefined) diagnostics.calls += 1;
       const prompt = buildUserPrompt(batch.fields, batch.candidates);
       diagnostics.promptBytes += new TextEncoder().encode(prompt).length;
       const result = await sendToDesktop({ purpose: "fill", tier, system: AI_SYSTEM_PROMPT, user: prompt, signal: controller.signal });

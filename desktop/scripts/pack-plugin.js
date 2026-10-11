@@ -24,6 +24,8 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "form-agent.js",
   "fill-probe.js",
   "field-scan.js",
+  "page-outline.js",
+  "deep-analysis.js",
   "feedback-core.js",
   "feedback-ui.js",
   "feedback.css",

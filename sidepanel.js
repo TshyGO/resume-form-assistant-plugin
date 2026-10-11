@@ -20,6 +20,19 @@
     repeatCancel: document.getElementById("repeat-cancel"),
     repeatStop: document.getElementById("repeat-stop"),
     repeatDismiss: document.getElementById("repeat-dismiss"),
+    deepButton: document.getElementById("deep-button"),
+    deepOffer: document.getElementById("deep-offer"),
+    deepOfferStart: document.getElementById("deep-offer-start"),
+    deepConsent: document.getElementById("deep-consent"),
+    deepConsentConfirm: document.getElementById("deep-consent-confirm"),
+    deepConsentCancel: document.getElementById("deep-consent-cancel"),
+    deepCard: document.getElementById("deep-card"),
+    deepMessage: document.getElementById("deep-message"),
+    deepNotes: document.getElementById("deep-notes"),
+    deepMeta: document.getElementById("deep-meta"),
+    deepStop: document.getElementById("deep-stop"),
+    deepRetry: document.getElementById("deep-retry"),
+    deepDismiss: document.getElementById("deep-dismiss"),
     fillResult: document.getElementById("fill-result"),
     profileOffer: document.getElementById("profile-offer"),
     profileOfferText: document.getElementById("profile-offer-text"),
@@ -137,6 +150,7 @@
     taskBody: document.getElementById("task-body"),
     taskFlows: {
       repeat: document.getElementById("task-flow-repeat"),
+      deep: document.getElementById("task-flow-deep"),
       job: document.getElementById("task-flow-job"),
       submit: document.getElementById("task-flow-submit"),
       archive: document.getElementById("task-flow-archive")
@@ -190,6 +204,13 @@
   const REPEAT_ACTIVE = ["scanning", "planning", "preview", "executing", "filling"];
   const REPEAT_STOPPABLE = ["scanning", "planning", "executing", "filling"];
   const REPEAT_LABELS = { papers: "论文", education: "教育经历", work: "工作经历", projects: "项目经历" };
+  // #224 深度分析本页：页面上报、经过 normalizeDeep 的状态；首次说明在侧栏自己显示，确认后记住。
+  let deepView = null;
+  let deepOffer = "none";
+  let deepConsentOpen = false;
+  let deepPending = false;
+  const DEEP_PHASES = ["idle", "outlining", "analyzing", "filling", "completed", "needs_action", "failed", "stopped"];
+  const DEEP_ACTIVE = ["outlining", "analyzing", "filling"];
   // Archiving the fill that just ended (#178). The page owns the question and its answer;
   // the panel draws the page's snapshot, bound to the tab it came from. `archiveSeen` is the
   // newest snapshot of this tab and page load, so an older poll that left before a click can
@@ -507,12 +528,19 @@
   function updateFillAvailability(status = null) {
     const hasData = Boolean(selectedTemplate() || self.ResumeProProfile?.hasProfileContent(currentStore?.profile));
     const repeating = Boolean(repeatView && REPEAT_ACTIVE.includes(repeatView.phase));
-    const filling = Boolean(status?.busy) && !repeating;
-    elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy) || repeating;
+    const deepRunning = Boolean(deepView && DEEP_ACTIVE.includes(deepView.phase));
+    const filling = Boolean(status?.busy) && !repeating && !deepRunning;
+    elements.fillButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null || Boolean(status?.busy) || repeating || deepRunning;
     elements.fillButton.textContent = filling ? (status.phase || "正在填写…") : "一键 AI 填写";
-    elements.cancelButton.hidden = !status?.canCancel || repeating;
+    elements.cancelButton.hidden = !status?.canCancel || repeating || deepRunning;
     elements.repeatButton.disabled = desktopMode !== "ready" || !selectedTemplate() || currentTabId === null
-      || Boolean(status?.busy) || repeating || repeatPending;
+      || Boolean(status?.busy) || repeating || repeatPending || deepRunning;
+    elements.deepButton.disabled = desktopMode !== "ready" || !hasData || currentTabId === null
+      || Boolean(status?.busy) || repeating || deepRunning || deepPending;
+    elements.deepButton.hidden = filling;
+    // 突出提示只跟着上一次常规填写的结果走；认证、网络、未配置这类失败页面会报 none。
+    elements.deepOffer.hidden = filling || repeating || deepRunning || deepOffer !== "prominent"
+      || elements.deepButton.disabled || elements.fillResult.hidden;
     // While the page fills, the card says so with the page's own phase text; no made-up percentage.
     elements.fillProgress.hidden = !filling;
     elements.fillProgressPhase.textContent = filling ? (status.phase || "正在填写…") : "";
@@ -597,6 +625,105 @@
     } finally {
       repeatPending = false;
       renderRepeat();
+    }
+    await pollStatus();
+  }
+
+  // The page's deep-analysis state, cut down to what the card shows. Texts are the page script's
+  // own fixed copy and counts; anything unexpected is dropped rather than displayed.
+  function normalizeDeep(raw) {
+    if (!raw || typeof raw !== "object" || !DEEP_PHASES.includes(raw.phase)) return null;
+    const requestId = typeof raw.requestId === "string" && /^[\w-]{1,64}$/.test(raw.requestId) ? raw.requestId : "";
+    const count = (value, max = 999) => Number.isInteger(value) && value >= 0 && value <= max ? value : 0;
+    const progress = raw.progress && typeof raw.progress === "object"
+      ? { part: count(raw.progress.part, 3), parts: count(raw.progress.parts, 3) } : null;
+    const result = raw.result && typeof raw.result === "object"
+      ? { fields: count(raw.result.fields), filled: count(raw.result.filled), unfilled: count(raw.result.unfilled), unconfirmed: count(raw.result.unconfirmed) } : null;
+    const budget = raw.budget && typeof raw.budget === "object" ? { used: count(raw.budget.used, 12), limit: count(raw.budget.limit, 12) } : null;
+    return {
+      phase: raw.phase,
+      requestId,
+      message: typeof raw.message === "string" ? raw.message.slice(0, 300) : "",
+      notes: Array.isArray(raw.notes) ? raw.notes.filter(note => typeof note === "string").slice(0, 3).map(note => note.slice(0, 200)) : [],
+      progress,
+      result,
+      budget,
+      canStop: DEEP_ACTIVE.includes(raw.phase) && raw.canStop === true && Boolean(requestId)
+    };
+  }
+
+  function renderDeep() {
+    const view = deepView;
+    elements.deepConsent.hidden = !deepConsentOpen;
+    const shown = !deepConsentOpen && Boolean(view && view.phase !== "idle");
+    elements.deepCard.hidden = !shown;
+    if (shown) {
+      elements.deepCard.dataset.phase = view.phase;
+      elements.deepCard.classList.toggle("is-error", view.phase === "failed");
+      elements.deepMessage.textContent = view.message;
+      elements.deepNotes.hidden = !view.notes.length;
+      elements.deepNotes.replaceChildren(...view.notes.map(note => {
+        const item = document.createElement("li");
+        item.textContent = note;
+        return item;
+      }));
+      const finished = !DEEP_ACTIVE.includes(view.phase);
+      elements.deepMeta.hidden = !(finished && view.budget?.used);
+      elements.deepMeta.textContent = finished && view.budget?.used ? `本次共调用模型 ${view.budget.used} 次。` : "";
+      elements.deepStop.hidden = !view.canStop;
+      elements.deepRetry.hidden = !["needs_action", "failed", "stopped"].includes(view.phase);
+      elements.deepDismiss.hidden = !finished;
+    }
+    for (const button of [elements.deepStop, elements.deepRetry, elements.deepDismiss, elements.deepConsentConfirm, elements.deepConsentCancel]) {
+      button.disabled = deepPending;
+    }
+    updateFillAvailability(lastPageStatus);
+    renderTaskPanel();
+  }
+
+  function clearDeep() {
+    deepView = null;
+    deepOffer = "none";
+    deepConsentOpen = false;
+    renderDeep();
+  }
+
+  // The first use explains what is sent and waits for the user's yes; that answer is remembered.
+  async function startDeep() {
+    if (deepPending) return;
+    // The page reports whether the user has already agreed; the panel itself reads no storage.
+    if (lastPageStatus?.deepConsent !== true) {
+      deepConsentOpen = true;
+      renderDeep();
+      return;
+    }
+    await deepAction("start");
+  }
+
+  // The page remembers the answer (the panel writes no storage of its own) and only then starts.
+  async function confirmDeepConsent() {
+    if (deepPending) return;
+    deepConsentOpen = false;
+    renderDeep();
+    await deepAction("consent");
+  }
+
+  async function deepAction(action) {
+    if (deepPending) return;
+    const requestId = deepView?.requestId || "";
+    if (action === "stop" && !requestId) return;
+    deepPending = true;
+    renderDeep();
+    try {
+      const result = await sendToPage({ type: "RESUME_PANEL_DEEP", action, ...(action === "stop" ? { requestId } : {}) });
+      if (result?.error === "consent_required") {
+        deepConsentOpen = true;
+      } else if (!result?.ok) {
+        toast(result?.error || "操作未完成，请重试。");
+      }
+    } finally {
+      deepPending = false;
+      renderDeep();
     }
     await pollStatus();
   }
@@ -1152,12 +1279,14 @@
     job: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3 13h18"/></svg>',
     submit: '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.3 2.4 2.4 4.8-5"/></svg>',
     repeat: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6h11M4 12h11M4 18h7M18 15v6M15 18h6"/></svg>',
+    deep: '<svg class="icon" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5M8 10.5h5M10.5 8v5"/></svg>',
     archive: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9M10 13h4"/></svg>'
   };
   const TASK_STEPS = {
     job: ["读取岗位", "核对信息", "保存结果"],
     submit: ["读取岗位", "核对信息", "选择申请", "确认结果"],
     repeat: ["扫描网页", "制定计划", "预览计划", "执行中", "结束"],
+    deep: ["确认说明", "分析页面", "填写网页", "结束"],
     archive: ["是否留档", "选择申请", "留档结果"]
   };
   let taskShown = "";
@@ -1170,6 +1299,7 @@
     if (JOB_ACTIVE.has(jobPhase) || (jobPhase === "result" && jobSave?.result)) return "job";
     if (SUBMIT_ACTIVE.has(submitConfirm?.phase || "idle")) return "submit";
     if (repeatView && repeatView.phase !== "idle") return "repeat";
+    if (deepConsentOpen || (deepView && deepView.phase !== "idle")) return "deep";
     if (fillArchive) return "archive";
     return "";
   }
@@ -1231,6 +1361,27 @@
       return { key: view.phase, title: "AI 辅助新增条目", step: steps[view.phase] ?? 4, error: view.phase === "failed", exit, desc,
         unsure: view.phase === "failed" || view.phase === "stopped" };
     }
+    if (task === "deep") {
+      if (deepConsentOpen) {
+        return { key: "consent", title: "深度分析本页", step: 0, exit: { button: elements.deepConsentCancel, label: "取消" },
+          desc: "开始前请确认要发送的内容" };
+      }
+      const view = deepView;
+      const exit = view.canStop ? { button: elements.deepStop, label: "停止" }
+        : DEEP_ACTIVE.includes(view.phase) ? null : { button: elements.deepDismiss, label: "返回" };
+      const steps = { outlining: 1, analyzing: 1, filling: 2 };
+      const desc = {
+        outlining: "正在读取页面结构，敏感内容会先替换掉",
+        analyzing: view.progress?.parts > 1 ? `AI 正在分析页面结构（第 ${view.progress.part}/${view.progress.parts} 部分）` : "AI 正在分析页面结构",
+        filling: "正在匹配简历并填写网页",
+        completed: "请在网页上核对填写的内容",
+        needs_action: "需要你先在网页上操作",
+        failed: "这次没有完成",
+        stopped: "已停止"
+      }[view.phase] || "";
+      return { key: view.phase, title: "深度分析本页", step: steps[view.phase] ?? 3, error: view.phase === "failed", exit, desc,
+        unsure: ["failed", "stopped", "needs_action"].includes(view.phase) };
+    }
     const phase = archiveShownPhase || fillArchive.phase;
     const cancel = elements.fillOfferActions.querySelector?.('[data-archive="cancel"]');
     const dismiss = elements.fillOfferActions.querySelector?.('[data-archive="dismiss"]');
@@ -1278,8 +1429,8 @@
       elements.taskSteps.hidden = !steps;
       elements.taskSteps.innerHTML = steps.map((label, index) => {
         const last = index === steps.length - 1;
-        const name = task === "repeat" && last && view.step === index
-          ? { completed: "完成", stopped: "已停止", failed: "失败" }[view.key] || label : label;
+        const name = (task === "repeat" || task === "deep") && last && view.step === index
+          ? { completed: "完成", stopped: "已停止", failed: "失败", needs_action: "需操作" }[view.key] || label : label;
         const state = index < view.step ? (view.unsure ? "" : ' class="is-done"')
           : index === view.step ? `${view.error ? ' class="is-error"' : ""} aria-current="step"` : "";
         return `<li${state}>${escapeHtml(name)}</li>`;
@@ -1301,7 +1452,7 @@
     taskPhase = key;
     if (!task && previous && (focusInPanel || !active || active === document.body)) {
       // Back where the flow was started, or its entry button when that control is gone.
-      const entry = { job: elements.jobSaveButton, submit: elements.submitButton, repeat: elements.repeatButton, archive: elements.fillButton }[previous];
+      const entry = { job: elements.jobSaveButton, submit: elements.submitButton, repeat: elements.repeatButton, deep: elements.deepButton, archive: elements.fillButton }[previous];
       const target = [taskReturnFocus, entry, elements.fillButton, elements.templateSelect].find(usableFocus);
       target?.focus?.();
       taskReturnFocus = null;
@@ -1706,6 +1857,7 @@
         jobPending = false;
         clearTargetState();
         clearRepeat();
+        clearDeep();
         resetFillArchive();
         profileOfferKey = "";
         setProfileOffer(null);
@@ -1740,6 +1892,9 @@
       }
       repeatView = connected ? normalizeRepeat(response.repeat) : null;
       renderRepeat();
+      deepView = connected ? normalizeDeep(response.deep) : null;
+      deepOffer = connected && ["prominent", "secondary", "none"].includes(response.deepOffer) ? response.deepOffer : "none";
+      if (!connected) deepConsentOpen = false;
       if (connected && response.status) {
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
@@ -1751,6 +1906,7 @@
           elements.desktopConnectionAction.dataset.kind = "settings-ai";
         }
       }
+      renderDeep();
       // The AI-settings hint belongs to the fill that raised it. Once the page stops
       // reporting it (a new fill started, or another tab), go back to the desktop state.
       if (response?.openView !== "settings-ai" && elements.desktopConnectionAction.dataset.kind === "settings-ai") {
@@ -1780,9 +1936,9 @@
         pollStatus().catch(() => {});
       }
     }
-    // While 辅助新增 runs, follow it more closely than the idle interval.
+    // While 辅助新增 or 深度分析 runs, follow it more closely than the idle interval.
     clearTimeout(repeatPollTimer);
-    if (repeatView && REPEAT_ACTIVE.includes(repeatView.phase)) {
+    if ((repeatView && REPEAT_ACTIVE.includes(repeatView.phase)) || (deepView && DEEP_ACTIVE.includes(deepView.phase))) {
       repeatPollTimer = setTimeout(() => { pollStatus().catch(() => {}); }, 500);
     }
   }
@@ -1888,6 +2044,19 @@
   elements.repeatCancel.addEventListener("click", () => { repeatAction("cancel").catch(() => {}); });
   elements.repeatStop.addEventListener("click", () => { repeatAction("stop").catch(() => {}); });
   elements.repeatDismiss.addEventListener("click", () => { repeatAction("dismiss").catch(() => {}); });
+  for (const entry of [elements.deepButton, elements.deepOfferStart]) {
+    entry.addEventListener("click", () => {
+      if (elements.deepButton.disabled) return;
+      startDeep().catch(() => toast("无法开始深度分析。"));
+    });
+  }
+  elements.deepConsentConfirm.addEventListener("click", () => { confirmDeepConsent().catch(() => toast("无法开始深度分析。")); });
+  elements.deepConsentCancel.addEventListener("click", () => { deepConsentOpen = false; renderDeep(); });
+  elements.deepStop.addEventListener("click", () => { deepAction("stop").catch(() => {}); });
+  elements.deepRetry.addEventListener("click", () => {
+    deepAction("dismiss").then(() => startDeep()).catch(() => toast("无法开始深度分析。"));
+  });
+  elements.deepDismiss.addEventListener("click", () => { deepAction("dismiss").catch(() => {}); });
   elements.cancelButton.addEventListener("click", async () => {
     const result = await sendToPage({ type: "RESUME_PANEL_CANCEL" });
     if (!result?.ok) toast(result?.error || "当前无法取消。");
@@ -2189,6 +2358,7 @@
     tabEpoch += 1;
     clearTargetState();
     clearRepeat();
+    clearDeep();
     loadStore().then(pollStatus).catch(() => {});
   });
   chrome.tabs.onUpdated.addListener((_tabId, change) => { if (change.status === "complete") pollStatus().catch(() => {}); });

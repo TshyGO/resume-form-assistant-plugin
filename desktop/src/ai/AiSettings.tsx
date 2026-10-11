@@ -234,7 +234,7 @@ export function AiSettings() {
                   <option key={provider.id} value={provider.id}>{provider.name} · {provider.model || "未填写模型"}</option>
                 ))}
               </select>
-              <p id={`${ids}-strong-help`} className="field-hint">为后续「深度分析本页」和重新匹配预先选择更强的模型，入口将在后续版本提供。不选择时使用当前服务商。</p>
+              <p id={`${ids}-strong-help`} className="field-hint">插件侧栏的「深度分析本页」用它分析页面结构，并用它重新匹配填写。建议选更强的模型。不选择时使用当前服务商。</p>
             </div>
           </div>
           {strongProvider && !strongProvider.keyConfigured && !view.credentialError ? (
