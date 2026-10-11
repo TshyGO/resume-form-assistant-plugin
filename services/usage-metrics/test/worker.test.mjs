@@ -1,6 +1,7 @@
 import test, { before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
 import { createWorker, runMaintenance } from '../src/index.mjs';
@@ -33,7 +34,10 @@ beforeEach(async () => {
 after(async () => { await mf?.dispose(); });
 
 function request(payload = PAYLOAD, method = 'POST', extra = {}) {
-  return new Request('https://example.test/v1/activity', { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), ...extra });
+  const { headers: extraHeaders, ...options } = extra;
+  const headers = new Headers({ 'content-type': 'application/json', 'cf-connecting-ip': '192.0.2.1' });
+  new Headers(extraHeaders).forEach((value, key) => headers.set(key, value));
+  return new Request('https://example.test/v1/activity', { method, headers, body: JSON.stringify(payload), ...options });
 }
 function env(extra = {}) { return { DB: db, METRICS_ENABLED: 'true', INSTALLATION_HMAC_KEY: SECRET, ACTIVITY_LIMITER: LIMITER, ...extra }; }
 async function hash(id = ID) { return hmac(SECRET, `installation:${id}`); }
@@ -41,7 +45,7 @@ async function record(id, at, overrides = {}) { await recordActivity(db, await h
 
 test('real Workerd HTTP and D1 deduplicate 100 requests and OR both surfaces', async () => {
   const results = await Promise.all(Array.from({ length: 100 }, (_, i) => mf.dispatchFetch('https://example.test/v1/activity', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...PAYLOAD, installation_id: i % 2 ? ID.toUpperCase() : ID, surface: i % 2 ? 'desktop' : 'extension' }),
+    method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '192.0.2.1' }, body: JSON.stringify({ ...PAYLOAD, installation_id: i % 2 ? ID.toUpperCase() : ID, surface: i % 2 ? 'desktop' : 'extension' }),
   })));
   assert.ok(results.every(response => response.status === 204));
   const rows = (await db.prepare('SELECT * FROM activity_day').all()).results;
@@ -96,6 +100,56 @@ test('paused collection still allows deletion and no public admin route exists',
   assert.equal((await worker.fetch(new Request('https://example.test/admin'), env())).status, 404);
   assert.equal((await worker.fetch(new Request('https://example.test/v1/activity'), env())).status, 405);
   assert.equal((await worker.fetch(new Request('https://example.test/health'), env())).status, 200);
+});
+
+test('health checks activity configuration without mistaking a deliberate pause for a failure', async () => {
+  const worker = createWorker({ now: () => NOW });
+  const limiter = { limit: async () => { throw new Error('health must not consume quota'); } };
+  for (const enabled of ['true', 'false']) {
+    const result = await worker.fetch(new Request('https://example.test/health'), env({ METRICS_ENABLED: enabled, ACTIVITY_LIMITER: limiter }));
+    assert.equal(result.status, 200);
+    const body = await result.json();
+    assert.equal(body.activity_enabled, enabled === 'true');
+    assert.equal(body.activity_config_ready, true);
+    assert.equal(body.activity_ready, enabled === 'true');
+    assert.equal(JSON.stringify(body).includes(SECRET), false);
+    for (const broken of [{ INSTALLATION_HMAC_KEY: undefined }, { INSTALLATION_HMAC_KEY: 123 },
+      { INSTALLATION_HMAC_KEY: 'x'.repeat(31) }, { ACTIVITY_LIMITER: undefined }, { ACTIVITY_LIMITER: {} }]) {
+      const response = await worker.fetch(new Request('https://example.test/health'), env({ METRICS_ENABLED: enabled, ...broken }));
+      assert.equal(response.status, 503);
+      assert.equal((await response.json()).activity_config_ready, false);
+      assert.equal((await worker.fetch(request({}, 'DELETE'), env(broken))).status, 503);
+    }
+  }
+  for (const DB of [undefined, { prepare() { throw new Error('synthetic-private-db-error'); } }]) {
+    const response = await worker.fetch(new Request('https://example.test/health'), env({ DB }));
+    assert.equal(response.status, 503);
+    assert.doesNotMatch(await response.text(), /synthetic-private/);
+  }
+});
+
+test('missing or empty client source is rejected before rate limiting or writing, including DELETE', async () => {
+  const worker = createWorker({ now: () => NOW });
+  const calls = [];
+  const limited = env({ ACTIVITY_LIMITER: { limit: async ({ key }) => { calls.push(key); return { success: true }; } } });
+  await record(ID, NOW);
+  for (const method of ['POST', 'DELETE']) {
+    for (const value of [null, '', '   ']) {
+      const req = request(method === 'POST' ? PAYLOAD : { schema_version: 1, installation_id: ID }, method);
+      if (value === null) req.headers.delete('cf-connecting-ip'); else req.headers.set('cf-connecting-ip', value);
+      const response = await worker.fetch(req, limited);
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: 'client_source_unavailable' });
+    }
+  }
+  assert.equal(calls.length, 0);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM activity_day').first()).n, 1);
+  for (const ip of ['192.0.2.1', '192.0.2.2']) {
+    assert.equal((await worker.fetch(request(PAYLOAD, 'POST', { headers: { 'cf-connecting-ip': ip } }), limited)).status, 204);
+  }
+  assert.equal(new Set(calls).size, 2);
+  assert.ok(calls.every(key => !key.includes('192.0.2.')));
+  assert.equal((await worker.fetch(request({ schema_version: 1, installation_id: ID }, 'DELETE'), limited)).status, 204);
 });
 
 test('deletion is idempotent and late/concurrent POST cannot restore revoked rows', async () => {
