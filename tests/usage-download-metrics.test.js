@@ -158,6 +158,35 @@ test('invalid or partial input and duplicate IDs fail instead of producing fake 
   assert.throws(() => createDownloadSnapshot([], '2026-10-11'));
 });
 
+test('invalid asset IDs and download counts have distinct safe validation errors', async () => {
+  const { createDownloadSnapshot } = await load();
+  for (const id of [0, -1, 1.5, '1', undefined, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => createDownloadSnapshot([release([{ ...asset(), id }])], after),
+      error => error.code === 'invalid_asset_id' && error.message === 'Invalid asset ID');
+  }
+  for (const count of [-1, 1.5, '100', NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => createDownloadSnapshot([release([asset(1, count)])], after),
+      error => error.code === 'invalid_asset_count' && error.message === 'Invalid asset download count');
+  }
+});
+
+test('CLI names the invalid asset field without echoing file content or paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usage-download-validation-'));
+  try {
+    const command = resolve(__dirname, '../desktop/scripts/usage-metrics/snapshot.mjs');
+    for (const [value, hint] of [[asset(0, 100), '附件编号无效'], [asset(1, -1), '附件下载次数无效']]) {
+      value.name = 'synthetic-private-content.exe';
+      const input = join(dir, 'synthetic-private-path.json');
+      writeFileSync(input, JSON.stringify([release([value])]));
+      const result = spawnSync(process.execPath, [command, '--input', input, '--at', after], { encoding: 'utf8' });
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, new RegExp(hint));
+      assert.doesNotMatch(result.stderr, /synthetic-private|usage-download-validation|stack/i);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('invalid calendar dates and 24:00 are not silently normalized into another day', async () => {
   const { createDownloadSnapshot } = await load();
   for (const value of ['2026-02-30T00:00:00Z', '2026-10-11T24:00:00Z', '2026-10-11T00:00:00', '2026-10-11T00:00:00+25:00']) {

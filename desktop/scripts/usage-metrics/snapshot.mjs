@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { createDownloadSnapshot, compareDownloadSnapshots } from './downloads.mjs';
+import { createDownloadSnapshot, compareDownloadSnapshots, DownloadInputError } from './downloads.mjs';
 
 try {
   const { values } = parseArgs({
@@ -25,8 +25,11 @@ try {
     const report = compareDownloadSnapshots(previous, snapshot);
     process.stdout.write(`${JSON.stringify({ snapshot, report }, null, 2)}\n`);
   }
-} catch {
+} catch (error) {
   // Do not echo potentially sensitive file contents or arbitrary exception text.
-  process.stderr.write('Download snapshot failed: check input, previous snapshot and timestamp. No report was emitted.\n');
+  const hints = { invalid_asset_id: '附件编号无效：请检查附件 ID 是否为正的安全整数。未生成报表。\n',
+    invalid_asset_count: '附件下载次数无效：请检查下载次数是否为非负的安全整数。未生成报表。\n' };
+  process.stderr.write(error instanceof DownloadInputError && Object.hasOwn(hints, error.code)
+    ? hints[error.code] : 'Download snapshot failed: check input, previous snapshot and timestamp. No report was emitted.\n');
   process.exitCode = 1;
 }

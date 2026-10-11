@@ -3,6 +3,15 @@ export const REPOSITORY = 'TshyGO/resume-form-assistant-plugin';
 const DAY_MS = 86_400_000;
 const PLUGIN_ZIP = /^(?:wangshen-kuaitian|resume-pro)-(?:plugin-|v)\d+\.\d+\.\d+(?:[-.][a-z0-9-]+)*\.zip$/i;
 
+// Only these closed, content-free reasons may be shown by the CLI.
+export class DownloadInputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'DownloadInputError';
+    this.code = code;
+  }
+}
+
 function timestamp(value) {
   const match = typeof value === 'string' && /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(value);
   if (!match || !Number.isFinite(Date.parse(value)) || Number(match[2]) > 23 || Number(match[3]) > 59 || Number(match[4]) > 59 ||
@@ -55,7 +64,8 @@ export function createDownloadSnapshot(releases, observedAt) {
       // GitHub's schema includes open; failed uploads can also leave starter assets.
       if (!['uploaded', 'open', 'starter'].includes(asset.state)) throw new Error('Invalid asset state');
       if (asset.name.toLowerCase().endsWith('.sha256') || asset.state !== 'uploaded') continue;
-      if (!positiveId(asset.id) || !Number.isSafeInteger(asset.download_count) || asset.download_count < 0) throw new Error('Invalid asset counter');
+      if (!positiveId(asset.id)) throw new DownloadInputError('invalid_asset_id', 'Invalid asset ID');
+      if (!Number.isSafeInteger(asset.download_count) || asset.download_count < 0) throw new DownloadInputError('invalid_asset_count', 'Invalid asset download count');
       if (ids.has(asset.id)) throw new Error('Duplicate asset ID; collect a fresh complete snapshot');
       ids.add(asset.id);
       assets.push({
