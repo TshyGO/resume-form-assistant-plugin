@@ -58,6 +58,28 @@ test('first observation is a baseline, never fabricated daily downloads', async 
   assert.equal(result.rows[0].increment, null);
 });
 
+test('observations cannot predate publication, including timezone offsets and empty releases', async () => {
+  const { createDownloadSnapshot } = await load();
+  for (const assets of [[asset()], []]) {
+    for (const observed of ['2026-10-08T00:10:00Z', '2026-10-09T07:59:59.999+08:00']) {
+      assert.throws(() => createDownloadSnapshot([release(assets)], observed), /publication.*observation/);
+    }
+  }
+  assert.equal(createDownloadSnapshot([release()], '2026-10-09T08:00:00+08:00').observed_at, '2026-10-09T00:00:00.000Z');
+  assert.equal(createDownloadSnapshot([release()], '2026-10-09T00:00:00.001Z').assets.length, 1);
+});
+
+test('loaded current and previous snapshots cannot fabricate pre-publication intervals', async () => {
+  const { createDownloadSnapshot, compareDownloadSnapshots } = await load();
+  const previous = createDownloadSnapshot([release()], before);
+  const current = createDownloadSnapshot([release([asset(1, 108)])], after);
+  const impossiblePrevious = { ...previous, observed_at: '2026-10-07T00:10:00.000Z', date_utc: '2026-10-07' };
+  const impossibleCurrent = { ...current, observed_at: '2026-10-08T00:10:00.000Z', date_utc: '2026-10-08' };
+  assert.throws(() => compareDownloadSnapshots(impossiblePrevious, current), /publication.*observation/);
+  assert.throws(() => compareDownloadSnapshots(null, impossibleCurrent), /publication.*observation/);
+  assert.throws(() => compareDownloadSnapshots(impossiblePrevious, impossibleCurrent), /publication.*observation/);
+});
+
 test('same asset 100 to 108 yields eight interval download requests', async () => {
   const { createDownloadSnapshot, compareDownloadSnapshots } = await load();
   const result = compareDownloadSnapshots(createDownloadSnapshot([release()], before), createDownloadSnapshot([release([asset(1, 108)])], after));
@@ -105,7 +127,8 @@ test('timezone, year boundary and leap-day calculations use UTC dates', async ()
   const { createDownloadSnapshot, compareDownloadSnapshots } = await load();
   assert.equal(createDownloadSnapshot([], '2026-01-01T07:59:59+08:00').date_utc, '2025-12-31');
   for (const [a, b] of [['2025-12-31T00:10:00Z', '2026-01-01T00:10:00Z'], ['2024-02-28T00:10:00Z', '2024-02-29T00:10:00Z']]) {
-    assert.equal(compareDownloadSnapshots(createDownloadSnapshot([release()], a), createDownloadSnapshot([release()], b)).elapsed_utc_days, 1);
+    const boundaryRelease = release([asset()], 'desktop-v0.4.3', { published_at: a });
+    assert.equal(compareDownloadSnapshots(createDownloadSnapshot([boundaryRelease], a), createDownloadSnapshot([boundaryRelease], b)).elapsed_utc_days, 1);
   }
 });
 
@@ -176,5 +199,28 @@ test('CLI accepts paginated gh JSON and keeps errors out of report output', () =
     assert.equal(failed.status, 1);
     assert.equal(failed.stdout, '');
     assert.equal(failed.stderr.includes('secret fixture error'), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('CLI emits no report for pre-publication observations or malformed historical timelines', async () => {
+  const { createDownloadSnapshot } = await load();
+  const dir = mkdtempSync(join(tmpdir(), 'usage-downloads-publication-'));
+  try {
+    const command = resolve(__dirname, '../desktop/scripts/usage-metrics/snapshot.mjs');
+    const input = resolve(__dirname, 'fixtures/usage-metrics/releases-next.json');
+    const previousFile = join(dir, 'previous.json');
+    const snapshot = createDownloadSnapshot([release()], before);
+    snapshot.observed_at = '2026-10-07T00:10:00.000Z';
+    snapshot.date_utc = '2026-10-07';
+    writeFileSync(previousFile, JSON.stringify({ snapshot, report: {} }));
+    const runs = [
+      spawnSync(process.execPath, [command, '--input', input, '--at', '2026-10-08T00:10:00Z'], { encoding: 'utf8' }),
+      spawnSync(process.execPath, [command, '--input', input, '--previous', previousFile, '--at', after], { encoding: 'utf8' }),
+    ];
+    for (const result of runs) {
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /No report was emitted/);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

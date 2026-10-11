@@ -16,6 +16,12 @@ function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function publicationAtObservation(value, observed) {
+  const published = timestamp(value);
+  if (Date.parse(published) > Date.parse(observed)) throw new Error('Release publication is later than observation');
+  return published;
+}
+
 function classification(tag, name, prerelease) {
   const releaseFamily = tag.startsWith('desktop-v') ? 'desktop' : /^v\d+\./.test(tag) ? 'extension' : 'other';
   const lower = name.toLowerCase();
@@ -43,7 +49,7 @@ export function createDownloadSnapshot(releases, observedAt) {
         typeof release.prerelease !== 'boolean' || !Array.isArray(release.assets)) throw new Error('Invalid published release');
     if (releaseIds.has(release.id)) throw new Error('Duplicate release ID; collect a fresh complete snapshot');
     releaseIds.add(release.id);
-    const publishedAt = timestamp(release.published_at);
+    const publishedAt = publicationAtObservation(release.published_at, observed);
     for (const asset of release.assets) {
       if (!asset || typeof asset.name !== 'string' || !asset.name || typeof asset.state !== 'string') throw new Error('Invalid asset');
       if (!['uploaded', 'starter'].includes(asset.state)) throw new Error('Invalid asset state');
@@ -75,7 +81,7 @@ function validateSnapshot(snapshot) {
     if (!asset || !positiveId(asset.asset_id) || !positiveId(asset.release_id) ||
         typeof asset.tag_name !== 'string' || !asset.tag_name || typeof asset.file_name !== 'string' || !asset.file_name ||
         !Number.isSafeInteger(asset.download_count) || asset.download_count < 0 || ids.has(asset.asset_id)) throw new Error('Invalid snapshot asset');
-    timestamp(asset.published_at);
+    publicationAtObservation(asset.published_at, observed);
     if (!['desktop', 'extension', 'other'].includes(asset.release_family) ||
         !['stable', 'prerelease'].includes(asset.release_channel) ||
         !['windows-exe', 'macos-dmg', 'plugin-zip', 'other'].includes(asset.artifact_kind)) throw new Error('Invalid snapshot classification');
