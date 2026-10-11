@@ -66,7 +66,7 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
       const controller = new AbortController();
       aiCalls.set(message.requestId, controller);
       try {
-        return await ai.complete({ purpose: message.purpose, system: message.system, user: message.user, signal: controller.signal });
+        return await ai.complete({ purpose: message.purpose, tier: message.tier, system: message.system, user: message.user, signal: controller.signal });
       } finally {
         aiCalls.delete(message.requestId);
       }

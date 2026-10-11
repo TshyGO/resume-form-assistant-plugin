@@ -726,8 +726,8 @@ mod tests {
     fn legacy_ai_config_stages_the_key_outside_sqlite() {
         struct KeyServices(std::sync::Mutex<Option<String>>);
         impl crate::bridge_services::BridgeServices for KeyServices {
-            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+                (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
             }
             fn open_view(&self, _: &str) -> bool { false }
             fn stage_import_key(&self, _: &str, key: &str) -> Result<(), ErrorCode> {
@@ -767,8 +767,8 @@ mod tests {
     fn failed_key_staging_never_marks_an_ai_part_received() {
         struct LockedKeyring;
         impl crate::bridge_services::BridgeServices for LockedKeyring {
-            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+                (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
             }
             fn open_view(&self, _: &str) -> bool { false }
             fn stage_import_key(&self, _: &str, _: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -799,8 +799,8 @@ mod tests {
     }
 
     impl crate::bridge_services::BridgeServices for TempKeys {
-        fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-            crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+        fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+            (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
         }
         fn open_view(&self, _: &str) -> bool { false }
         fn stage_import_key(&self, id: &str, key: &str) -> Result<(), ErrorCode> {

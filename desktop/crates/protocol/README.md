@@ -51,7 +51,7 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | --- | --- |
 | `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
 | `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。不走 `message_receipts`。 |
-| `ai.complete` | 不带档案身份；插件传提示词和用途（`fill`、`plan`、`extract_job`），桌面用当前服务商和凭据发出，不按用途区分处理。旧桌面不认识新用途时以 `invalid_payload` 拒收，插件提示更新桌面。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
+| `ai.complete` | 不带档案身份；插件传提示词和用途（`fill`、`plan`、`extract_job`、`analyze`），可选 `tier`（`default` / `strong`，#223）。桌面默认用当前服务商；`tier: "strong"` 或不带 `tier` 的 `analyze` 改用设置里的强模型，没设就退回当前服务商。只有请求带了 `tier` 或用途是 `analyze` 时，响应才带 `tier`（实际用的档位）；旧插件的 schema 副本不认识这个字段。不扩展握手 `capabilities`。旧桌面不认识新用途或 `tier` 时会拒收：旧 host 校验请求失败，回 `protocolVersion: 1` 的错误，插件按版本不符判为 `incompatible`；新 host 配旧应用时应用回 `invalid_payload`，插件对这几类请求同样判为 `incompatible`。两种情况都提示更新桌面。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 

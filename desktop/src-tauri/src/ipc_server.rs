@@ -492,9 +492,9 @@ mod tests {
     struct LockProbe(Arc<Mutex<Option<ArchiveStore>>>);
 
     impl crate::bridge_services::BridgeServices for LockProbe {
-        fn ai_complete(&self, _purpose: &str, _system: &str, _user: &str) -> crate::bridge_services::AiReply {
+        fn ai_complete(&self, _purpose: &str, _strong: bool, _system: &str, _user: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
             assert!(self.0.try_lock().is_ok(), "AI must not hold the archive lock");
-            crate::bridge_services::AiReply::Ok("safe result".into())
+            (crate::bridge_services::AiReply::Ok("safe result".into()), None)
         }
 
         fn open_view(&self, _view: &str) -> bool {

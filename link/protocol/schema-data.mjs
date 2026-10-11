@@ -253,7 +253,15 @@ export const SCHEMA_DATA = {
           "enum": [
             "fill",
             "plan",
-            "extract_job"
+            "extract_job",
+            "analyze"
+          ]
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "default",
+            "strong"
           ]
         },
         "system": {
@@ -954,6 +962,13 @@ export const SCHEMA_DATA = {
         "host": {
           "type": "string",
           "maxLength": 253
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "default",
+            "strong"
+          ]
         }
       }
     },

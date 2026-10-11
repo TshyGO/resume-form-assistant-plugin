@@ -4,6 +4,7 @@ use resume_pro_protocol::{ErrorCode, Request};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::ai_settings::Tier;
 use crate::plugin_bridge::Answer;
 use crate::{ai_complete, ai_data_root, ai_provider_commands, ai_settings, checked_url, commands::CommandError, AppState};
 
@@ -18,7 +19,9 @@ pub enum AiReply {
 }
 
 pub trait BridgeServices: Send + Sync + 'static {
-    fn ai_complete(&self, purpose: &str, system: &str, user: &str) -> AiReply;
+    /// `strong` asks for the strong-model provider (#223). The tier that was actually
+    /// chosen comes back alongside the reply; `None` when no provider could be chosen.
+    fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>);
     fn open_view(&self, view: &str) -> bool;
 
     fn stage_import_key(&self, _import_id: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -109,26 +112,27 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
 }
 
 impl BridgeServices for DesktopBridgeServices {
-    fn ai_complete(&self, _purpose: &str, system: &str, user: &str) -> AiReply {
+    fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
         let state = self.app.state::<AppState>();
         let data_root = match ai_data_root(&state) {
             Ok(root) => root,
-            Err(err) => return from_ai_error(err, None),
+            Err(err) => return (from_ai_error(err, None), None),
         };
-        let (provider, key) = match ai_provider_commands::active_with_key(&data_root, state.credentials.as_ref()) {
-            Ok(active) => active,
-            Err(err) => return from_ai_error(err, None),
+        let (tier, routed) = ai_provider_commands::routed_with_key(&data_root, state.credentials.as_ref(), strong);
+        let (provider, key) = match routed {
+            Ok(routed) => routed,
+            Err(err) => return (from_ai_error(err, None), tier),
         };
         if let Err(err) = checked_url(&provider.api_url) {
-            return from_ai_error(err, None);
+            return (from_ai_error(err, None), tier);
         }
         let host = safe_host(&provider.api_url);
-        match tauri::async_runtime::block_on(ai_complete::complete(
-            &provider, &key, system, user, ai_complete::COMPLETE_TIMEOUT,
-        )) {
+        let timeout = ai_complete::timeout_for(purpose);
+        let reply = match tauri::async_runtime::block_on(ai_complete::complete(&provider, &key, system, user, timeout)) {
             Ok(text) => AiReply::Ok(text),
             Err(err) => from_ai_error(err, host),
-        }
+        };
+        (reply, tier)
     }
 
     fn open_view(&self, view: &str) -> bool {
@@ -188,8 +192,8 @@ pub struct NoopServices;
 
 #[cfg(test)]
 impl BridgeServices for NoopServices {
-    fn ai_complete(&self, _purpose: &str, _system: &str, _user: &str) -> AiReply {
-        AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+    fn ai_complete(&self, _purpose: &str, _strong: bool, _system: &str, _user: &str) -> (AiReply, Option<Tier>) {
+        (AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
     }
     fn open_view(&self, _view: &str) -> bool { false }
 }
@@ -205,8 +209,11 @@ fn checked_answer(request: &Request, payload: Value) -> Result<Answer, ErrorCode
     Ok(Answer { result_id: None, payload })
 }
 
-fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, host: Option<String>) -> Result<Answer, ErrorCode> {
+fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, host: Option<String>, tier: Option<Tier>) -> Result<Answer, ErrorCode> {
     let mut payload = json!({"status": "failed", "reason": reason});
+    if let Some(tier) = tier {
+        payload["tier"] = json!(tier.as_str());
+    }
     if let Some(status) = http_status {
         payload["httpStatus"] = json!(status);
     }
@@ -222,13 +229,26 @@ pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer
             let purpose = request.payload["purpose"].as_str().ok_or(ErrorCode::InvalidPayload)?;
             let system = request.payload["system"].as_str().ok_or(ErrorCode::InvalidPayload)?;
             let user = request.payload["user"].as_str().ok_or(ErrorCode::InvalidPayload)?;
-            match services.ai_complete(purpose, system, user) {
-                AiReply::Ok(text) => match checked_answer(request, json!({"status": "ok", "text": text})) {
-                    Ok(answer) => Ok(answer),
-                    Err(ErrorCode::PayloadTooLarge) => failed(request, "response_too_large", None, None),
-                    Err(_) => failed(request, "bad_response", None, None),
-                },
-                AiReply::Failed { reason, http_status, host } => failed(request, reason, http_status, host),
+            let requested = request.payload.get("tier").and_then(Value::as_str);
+            // analyze without a tier is a strong request. Plugins that predate tiers never
+            // send either, and must not get `tier` back: their schema copy rejects it.
+            let strong = requested == Some("strong") || (requested.is_none() && purpose == "analyze");
+            let wants_tier = requested.is_some() || purpose == "analyze";
+            let (reply, tier) = services.ai_complete(purpose, strong, system, user);
+            let tier = tier.filter(|_| wants_tier);
+            match reply {
+                AiReply::Ok(text) => {
+                    let mut payload = json!({"status": "ok", "text": text});
+                    if let Some(tier) = tier {
+                        payload["tier"] = json!(tier.as_str());
+                    }
+                    match checked_answer(request, payload) {
+                        Ok(answer) => Ok(answer),
+                        Err(ErrorCode::PayloadTooLarge) => failed(request, "response_too_large", None, None, tier),
+                        Err(_) => failed(request, "bad_response", None, None, tier),
+                    }
+                }
+                AiReply::Failed { reason, http_status, host } => failed(request, reason, http_status, host, tier),
             }
         }
         resume_pro_protocol::MessageType::UiOpen => {
@@ -252,13 +272,22 @@ mod tests {
     struct FakeServices {
         reply: AiReply,
         opened: bool,
+        /// Whether a strong-model provider is configured; without one, strong falls back.
+        strong_configured: bool,
         calls: Mutex<Vec<String>>,
     }
 
+    impl FakeServices {
+        fn tier(&self, strong: bool) -> Option<Tier> {
+            Some(if strong && self.strong_configured { Tier::Strong } else { Tier::Default })
+        }
+    }
+
     impl BridgeServices for FakeServices {
-        fn ai_complete(&self, purpose: &str, system: &str, user: &str) -> AiReply {
-            self.calls.lock().unwrap().push(format!("ai:{purpose}:{system}:{user}"));
-            self.reply.clone()
+        fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
+            let route = if strong { "strong" } else { "daily" };
+            self.calls.lock().unwrap().push(format!("ai:{purpose}:{route}:{system}:{user}"));
+            (self.reply.clone(), self.tier(strong))
         }
 
         fn open_view(&self, view: &str) -> bool {
@@ -280,7 +309,7 @@ mod tests {
     }
 
     fn fake(reply: AiReply, opened: bool) -> FakeServices {
-        FakeServices { reply, opened, calls: Mutex::new(Vec::new()) }
+        FakeServices { reply, opened, strong_configured: false, calls: Mutex::new(Vec::new()) }
     }
 
     #[test]
@@ -289,7 +318,7 @@ mod tests {
         let success = fake(AiReply::Ok("result".into()), false);
         let result = answer(&request, &success).unwrap();
         assert_eq!(result.payload, json!({"status": "ok", "text": "result"}));
-        assert_eq!(success.calls.lock().unwrap().as_slice(), ["ai:fill:SYS:USER"]);
+        assert_eq!(success.calls.lock().unwrap().as_slice(), ["ai:fill:daily:SYS:USER"]);
 
         let missing = fake(AiReply::Failed { reason: "not_configured", http_status: None, host: None }, false);
         assert_eq!(answer(&request, &missing).unwrap().payload, json!({"status":"failed","reason":"not_configured"}));
@@ -307,7 +336,64 @@ mod tests {
         let services = fake(AiReply::Ok(r#"{"company":"金发科技股份有限公司"}"#.into()), false);
         let result = answer(&request, &services).unwrap();
         assert_eq!(result.payload, json!({"status": "ok", "text": r#"{"company":"金发科技股份有限公司"}"#}));
-        assert_eq!(services.calls.lock().unwrap().as_slice(), [format!("ai:extract_job:SYS:{user}")]);
+        assert_eq!(services.calls.lock().unwrap().as_slice(), [format!("ai:extract_job:daily:SYS:{user}")]);
+    }
+
+    #[test]
+    fn a_request_without_a_tier_is_routed_daily_and_never_gets_a_tier_back() {
+        // What every plugin up to 0.4.2 sends. Its schema copy rejects an unknown `tier`.
+        for purpose in ["fill", "plan", "extract_job"] {
+            let request = request("ai.complete", json!({"purpose": purpose, "system": "SYS", "user": "USER"}));
+            let mut services = fake(AiReply::Ok("[]".into()), false);
+            services.strong_configured = true;
+            assert_eq!(answer(&request, &services).unwrap().payload, json!({"status": "ok", "text": "[]"}));
+            assert_eq!(services.calls.lock().unwrap().as_slice(), [format!("ai:{purpose}:daily:SYS:USER")]);
+            let failure = fake(AiReply::Failed { reason: "timeout", http_status: None, host: None }, false);
+            assert_eq!(answer(&request, &failure).unwrap().payload, json!({"status": "failed", "reason": "timeout"}));
+        }
+    }
+
+    #[test]
+    fn analyze_asks_for_the_strong_tier_and_reports_the_tier_actually_used() {
+        let analyze = request("ai.complete", json!({"purpose": "analyze", "system": "SYS", "user": "USER"}));
+        let mut configured = fake(AiReply::Ok("{}".into()), false);
+        configured.strong_configured = true;
+        assert_eq!(answer(&analyze, &configured).unwrap().payload, json!({"status": "ok", "text": "{}", "tier": "strong"}));
+        assert_eq!(configured.calls.lock().unwrap().as_slice(), ["ai:analyze:strong:SYS:USER"]);
+
+        // No strong model set: falls back to the current provider and says so.
+        let unset = fake(AiReply::Ok("{}".into()), false);
+        assert_eq!(answer(&analyze, &unset).unwrap().payload["tier"], "default");
+
+        // An explicit tier wins over the purpose default, in both directions.
+        let daily_analyze = request("ai.complete", json!({"purpose": "analyze", "tier": "default", "system": "SYS", "user": "USER"}));
+        let mut services = fake(AiReply::Ok("{}".into()), false);
+        services.strong_configured = true;
+        assert_eq!(answer(&daily_analyze, &services).unwrap().payload["tier"], "default");
+        let strong_fill = request("ai.complete", json!({"purpose": "fill", "tier": "strong", "system": "SYS", "user": "USER"}));
+        assert_eq!(answer(&strong_fill, &services).unwrap().payload["tier"], "strong");
+        assert_eq!(services.calls.lock().unwrap().as_slice(), ["ai:analyze:daily:SYS:USER", "ai:fill:strong:SYS:USER"]);
+
+        // A failure on a tiered request still says which tier failed.
+        let mut failing = fake(AiReply::Failed { reason: "auth", http_status: Some(401), host: Some("strong.example".into()) }, false);
+        failing.strong_configured = true;
+        assert_eq!(
+            answer(&strong_fill, &failing).unwrap().payload,
+            json!({"status": "failed", "reason": "auth", "httpStatus": 401, "host": "strong.example", "tier": "strong"})
+        );
+    }
+
+    #[test]
+    fn a_tiered_request_with_no_provider_chosen_gets_no_tier() {
+        struct Unrouted;
+        impl BridgeServices for Unrouted {
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (AiReply, Option<Tier>) {
+                (AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+        }
+        let analyze = request("ai.complete", json!({"purpose": "analyze", "system": "SYS", "user": "USER"}));
+        assert_eq!(answer(&analyze, &Unrouted).unwrap().payload, json!({"status": "failed", "reason": "not_configured"}));
     }
 
     #[test]

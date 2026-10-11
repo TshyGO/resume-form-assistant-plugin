@@ -159,6 +159,7 @@ test("AI 解析在后台进行时，在「我的信息」里仍能看到进行�
   const settings: AiSettingsView = {
     providers: [{ id: "p1", name: "示例", apiUrl: "https://api.example.com", model: "m", host: "api.example.com", keyConfigured: true }],
     activeProviderId: "p1",
+    strongProviderId: null,
     credentialError: null,
   };
   const { invoke } = baseInvoke((command) => {

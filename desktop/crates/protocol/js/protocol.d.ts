@@ -57,7 +57,8 @@ export interface ResponseEnvelope {
 }
 
 export interface AiCompletePayload {
-  purpose: "fill" | "plan" | "extract_job";
+  purpose: "fill" | "plan" | "extract_job" | "analyze";
+  tier?: "default" | "strong";
   /** maxLength: 8000 */
   system: string;
   /** maxLength: 60000 */
@@ -291,6 +292,7 @@ export interface AiCompleteResponsePayload {
   httpStatus?: number;
   /** maxLength: 253 */
   host?: string;
+  tier?: "default" | "strong";
 }
 
 export interface HandshakeResponsePayload {

@@ -23,7 +23,7 @@ const AI_SYSTEM_PROMPT = [
 const activeFillRequests = new Map();
 const desktopCalls = new Map();
 
-function sendToDesktop({ purpose, system, user, signal }) {
+function sendToDesktop({ purpose, tier, system, user, signal }) {
   if (signal?.aborted) return Promise.resolve({ ok: false, reason: "cancelled" });
   const callId = crypto.randomUUID();
   return new Promise(resolve => {
@@ -39,7 +39,7 @@ function sendToDesktop({ purpose, system, user, signal }) {
     };
     desktopCalls.set(callId, finish);
     signal?.addEventListener("abort", onAbort, { once: true });
-    self.postMessage({ kind: "desktop-complete", callId, purpose, system, user });
+    self.postMessage({ kind: "desktop-complete", callId, purpose, tier, system, user });
   });
 }
 
@@ -156,6 +156,17 @@ function aiFailureMessage(result) {
   }
 }
 
+// #223: with the strong tier asked for, these two failures are about the strong model, not
+// the desktop's current provider, which may be working fine.
+function strongFailureMessage(tier, result) {
+  if (tier !== "strong") return null;
+  if (result?.reason === "incompatible") return "用强模型重新匹配需要更新桌面程序。";
+  if (result?.reason === "not_configured" && result.tier === "strong") {
+    return "强模型那条服务商还没有 Key，请在桌面设置里填写，或把强模型改成「不使用」。";
+  }
+  return null;
+}
+
 function isSecretField(field) {
   return String(field?.inputType ?? "").toLowerCase() === "password"
     || ResumeProProfile.SECRET_LABEL.test([field?.label, field?.name, field?.key].filter(Boolean).join(" "));
@@ -220,6 +231,9 @@ function makePromptBatches(formFields, resumeFields) {
 const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large", "response_too_large", "secret_in_prompt"]);
 
 async function handleAiFill(message, controller = new AbortController()) {
+  // #223: a caller may ask for a tier (the strong model for a re-match). Without one the
+  // request stays exactly what every desktop understands.
+  const tier = message.tier === "strong" || message.tier === "default" ? message.tier : undefined;
   const incomingFormFields = Array.isArray(message.formFields) ? message.formFields : [];
   const incomingResumeFields = Array.isArray(message.resumeFields) ? message.resumeFields : [];
   const formFields = incomingFormFields.filter(field => !isSecretField(field));
@@ -244,7 +258,8 @@ async function handleAiFill(message, controller = new AbortController()) {
     apiMs: 0, promptBytes: 0, errorCode: "none", aiMatches: 0,
     skippedSecret: incomingFormFields.length - formFields.length + incomingResumeFields.length - resumeFields.length,
     secretFormFields,
-    skippedOversized: 0, skippedNoContext: 0
+    skippedOversized: 0, skippedNoContext: 0,
+    ...(tier ? { tierRequested: tier } : {})
   };
   const aiMatches = [];
   const warnings = [];
@@ -267,11 +282,12 @@ async function handleAiFill(message, controller = new AbortController()) {
       if (controller.signal.aborted) break;
       const prompt = buildUserPrompt(batch.fields, batch.candidates);
       diagnostics.promptBytes += new TextEncoder().encode(prompt).length;
-      const result = await sendToDesktop({ purpose: "fill", system: AI_SYSTEM_PROMPT, user: prompt, signal: controller.signal });
+      const result = await sendToDesktop({ purpose: "fill", tier, system: AI_SYSTEM_PROMPT, user: prompt, signal: controller.signal });
+      if (tier && (result?.tier === "strong" || result?.tier === "default")) diagnostics.tierUsed = result.tier;
       if (!result?.ok) {
         const reason = result?.reason ?? "unavailable";
         if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
-        warnings.push(aiFailureMessage(result));
+        warnings.push(strongFailureMessage(tier, result) ?? aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
         // Only a failure tied to this batch's content is worth trying the next batch for.
         // Everything else (desktop gone, not paired, no key, slow or unreachable provider)

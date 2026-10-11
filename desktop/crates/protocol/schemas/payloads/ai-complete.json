@@ -13,7 +13,15 @@
       "enum": [
         "fill",
         "plan",
-        "extract_job"
+        "extract_job",
+        "analyze"
+      ]
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "default",
+        "strong"
       ]
     },
     "system": {

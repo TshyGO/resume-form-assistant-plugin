@@ -90,6 +90,7 @@ export function AiSettings() {
   };
 
   const providers = view?.providers ?? [];
+  const strongProvider = providers.find((provider) => provider.id === view?.strongProviderId);
   const activeName = (next: AiSettingsView) => next.providers.find((p) => p.id === next.activeProviderId)?.name;
 
   return (
@@ -160,6 +161,7 @@ export function AiSettings() {
                     <div className="provider-title">
                       <strong>{provider.name}</strong>
                       {active ? <span className="settings-badge">当前使用</span> : null}
+                      {provider.id === view.strongProviderId ? <span className="settings-badge">强模型</span> : null}
                       {isEditing ? <span className="settings-badge is-muted">正在编辑</span> : null}
                     </div>
                     <div className="provider-meta">
@@ -203,6 +205,43 @@ export function AiSettings() {
         {editing ? <p className="settings-text">正在编辑一个服务商。保存或取消之后才能再添加或编辑别的。</p> : null}
         {message ? <p role="status" className="settings-callout" data-tone={message.tone}>{message.text}</p> : null}
       </section>
+
+      {view && providers.length > 0 ? (
+        <section className="settings-card" aria-labelledby={`${ids}-tiers`}>
+          <header className="settings-card-head">
+            <h2 id={`${ids}-tiers`}>模型分档</h2>
+            <p>普通一键填写、简历解析和招聘通知整理继续使用当前服务商。</p>
+          </header>
+          <div className="settings-form">
+            <div className="settings-field">
+              <label htmlFor={`${ids}-strong`}>强模型（可选）</label>
+              <select
+                id={`${ids}-strong`}
+                aria-describedby={`${ids}-strong-help${strongProvider && !strongProvider.keyConfigured && !view.credentialError ? ` ${ids}-strong-warning` : ""}`}
+                value={view.strongProviderId ?? ""}
+                disabled={busy || editing !== null || deleting !== null || clearing !== null}
+                onChange={(event) => {
+                  const id = event.target.value || null;
+                  const name = providers.find((provider) => provider.id === id)?.name;
+                  void run(
+                    () => invoke<AiSettingsView>("set_strong_ai_provider_cmd", { id }),
+                    { tone: "ok", text: name ? `强模型改用「${name}」。` : "不使用强模型，全部用当前服务商。" },
+                  );
+                }}
+              >
+                <option value="">不使用（全部用当前服务商）</option>
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>{provider.name} · {provider.model || "未填写模型"}</option>
+                ))}
+              </select>
+              <p id={`${ids}-strong-help`} className="field-hint">为后续「深度分析本页」和重新匹配预先选择更强的模型，入口将在后续版本提供。不选择时使用当前服务商。</p>
+            </div>
+          </div>
+          {strongProvider && !strongProvider.keyConfigured && !view.credentialError ? (
+            <p id={`${ids}-strong-warning`} className="settings-callout" data-tone="warn">「{strongProvider.name}」还没有 Key，用到强模型时会失败。</p>
+          ) : null}
+        </section>
+      ) : null}
 
       {editing ? (
         <ProviderEditor

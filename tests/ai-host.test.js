@@ -77,8 +77,12 @@ test('offscreen host relays desktop AI requests and cancellation', async () => {
   assert.equal(sent[0].requestId, 'a');
   assert.equal(worker.last.kind, 'desktop-result');
   assert.equal(worker.last.reply.text, 'synthetic');
+  assert.equal(sent[0].tier, undefined);
   worker.onmessage({ data: { kind: 'desktop-cancel', callId: 'a' } });
   assert.equal(sent[1].type, 'DESKTOP_AI_CANCEL');
+  worker.onmessage({ data: { kind: 'desktop-complete', callId: 'b', purpose: 'fill', tier: 'strong', system: 's', user: 'u' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sent[2].tier, 'strong');
 });
 
 test('feedback failures cannot interrupt worker failure cleanup after extension context loss', () => {
