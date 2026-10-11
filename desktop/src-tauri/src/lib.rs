@@ -10,6 +10,7 @@ mod ai_settings;
 mod nm_register;
 mod update_check;
 mod feedback;
+mod telemetry;
 #[cfg(test)]
 mod nm_register_tests;
 mod cli;
@@ -1713,6 +1714,7 @@ pub fn run() {
             }
 
             drop(startup_policy);
+            app.manage(telemetry::Telemetry::new(paths.data_root.clone()));
             // 浏览器要靠这份清单才找得到 host。放在这里：paths 已经有了，窗口还没显示。
             refresh_native_messaging(&app.state::<AppState>());
 
@@ -1745,6 +1747,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            telemetry::telemetry_status,
+            telemetry::telemetry_notice,
+            telemetry::telemetry_enabled,
+            telemetry::telemetry_touch,
             feedback::feedback_status,
             feedback::feedback_consent,
             feedback::feedback_preview,
@@ -1836,6 +1842,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                telemetry::focused(window);
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();

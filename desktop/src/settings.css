@@ -3,6 +3,12 @@
 
 #view-settings { max-width: none; margin: 0; padding: 24px 28px 40px; background: var(--surface); }
 #view-settings h1 { font-size: 24px; }
+/* 首次统计说明在主窗口内始终可见，不随设置分类切换而隐藏。 */
+#usage-notice:empty { display: none; }
+.usage-notice { margin: 16px 28px; }
+.usage-notice h2 { margin: 0 0 10px; font-size: 18px; }
+.usage-notice p { margin: 8px 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.usage-notice .settings-dialog-actions { padding: 10px 0 0; border: 0; }
 .settings-heading p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .settings-layout { display: grid; grid-template-columns: 208px minmax(0, 1040px); gap: 24px; padding-top: 20px; align-items: start; }
 
@@ -19,7 +25,7 @@
 .settings-content { min-width: 0; }
 .settings-section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .settings-section:focus-visible { outline-offset: 6px; border-radius: 16px; }
-#ai-settings, #desktop-feedback { display: contents; }
+#ai-settings, #desktop-feedback, #desktop-usage { display: contents; }
 
 .settings-card { min-width: 0; padding: 20px 24px; border: 1px solid var(--card-line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
 .settings-card-head { padding-bottom: 14px; border-bottom: 1px solid var(--line); }

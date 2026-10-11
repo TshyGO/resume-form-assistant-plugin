@@ -1,0 +1,54 @@
+# 第三阶段：桌面使用统计（#259）
+
+本阶段在 `feat/usage-metrics-desktop` 分支基于第二阶段实现，不修改 main。开关默认开启，与错误报告完全独立；代码交付与正式启用外发分开验收。
+
+## 用户行为
+
+- “设置 → 隐私 → 分享使用数量统计”保存用户选择。无旧选择默认开启；已关闭不会因重启或版本升级自动开启。
+- 主窗口首次显示完整用途、字段、Cloudflare 接收方、45/365 天保留及退出说明。用户点击“知道了，保持开启”仅记录告知版本，不记录为主动同意、不触发活动发送。也可直接关闭。首次告知之前的活动不缓存、不补发。
+- native main 窗口的可见聚焦，以及可信的可见 UI 输入提供桌面信号。Rust 复核窗口可见、非最小化、聚焦和持久状态。JS 仅调用无参数的 touch，不能组装或传入统计内容。
+- 隐藏拉起不计数，用户随后主动打开并使用主窗口可以计数；后台更新、IPC health/握手、同步、提醒、错误报告和 CLI 模式没有统计调用。插件 usage.touch 留到第四阶段。
+- 每 UTC 日桌面来源最多尝试一次，发送前占用并保存额度；失败、超时、429/5xx 不自动重试。时钟回退不释放已占用的额度。
+- 关闭先停止并尽力取消在途 POST，再保存关闭选择、清除编号及日期。旧编号仅在内存传给一次 DELETE，不等待云端完成；界面分别显示 pending/deleted/unconfirmed，不承诺备份或已生成汇总即时消失。即使关闭保存失败仍停发并尽力删除，界面说明无法保证跨重启保存。
+- 再开时下一次主动使用生成新 UUID，不补发停用期活动；重复保存开启不会刷新当天额度。
+
+## 状态和外发边界
+
+`desktop/src-tauri/src/telemetry.rs`独立白名单组装 POST 五字段与 DELETE 两字段。3 秒超时，禁用 reqwest 库自身重试与重定向，无统计常驻线程/心跳/离线队列，不输出编号、请求体或原始错误。
+
+数据目录根部的 `telemetry-state.json` 包含设置版本、enabled、notice_version、installation_id、desktop_attempt_date。`telemetry-initialized`只含初始化标记；状态丢失但标记存在时关闭并停发，避免丢失退出选择后默认重新开启。缺失两份文件才视为首次初始化。原子替换失败时关闭尝试写入停用状态，损坏/超大/未知版本/读写失败停止发送。编号不进入 archive.db、反馈状态、备份、导出或诊断。
+
+默认构建以及 debug/test/编译时具有 CI 环境变量的构建不允许统计外发，也不生成统计编号。`Config::release`仅在受审核的 release 构建同时满足以下条件才提供发送目标：
+
+1. 没有 debug_assertions、test 或编译时 CI 标记。
+2. 构建环境 `RESUME_USAGE_METRICS_READY=1`。
+3. `RESUME_USAGE_METRICS_ENDPOINT`为已核对的 HTTPS `/v1/activity`地址，不含凭据、query 或 fragment。
+
+这两个值不是密钥。不要把 Cloudflare 管理 Token 或 HMAC Secret 编入桌面；活动接口无需管理 Token。build.rs 追踪环境变化，切换构建配置会重建。当前 PR 不修改 release workflow，也不设置上述启用值；发布仍保持停发。之后调整正式发布流水线必须单独核对 CI/test 隔离、接收地址和商店披露，不能仅设置开关就宣布上线。
+
+## 本阶段验证
+
+客户端 Rust 测试使用本机 HTTP server 捕获真实 reqwest 请求，验证五字段白名单、并发/跨日额度、重启、关闭/再开、失败停发、取消请求、超时、重定向和 DELETE。React 测试验证默认开关、始终可见的首次说明、直接退出、状态保存失败、异步删除结果和旧响应竞态；信号测试验证无 JS 用户内容跨 IPC。
+
+在桌面目录运行：
+
+```sh
+npm run typecheck
+npm run test:react
+npm run test:ui
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib
+```
+
+本机 SDK 默认选择了与 linker 不兼容的 MacOSX27；验证用命令级 `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk`，不修改系统或仓库工具链设置。
+
+2026-10-11 本地验收：15 项新增客户端 Rust 测试，含本机真实 HTTP；另有一次真实备份导出/恢复隔离回归。完整应用 Rust 测试 380 通过、1 项已有忽略；React 263 通过，纯 UI 232 通过；根目录 1275 通过。桌面和根类型检查、Vite 构建、66 项桌面发布测试、23 项插件发布白名单测试通过。完整 Rust 测试首次受到本机系统代理干扰，使用命令级 `NO_PROXY/no_proxy=localhost,127.0.0.1,::1` 后全部通过；未修改 AI 网络实现。浏览器用虚构 invoke 预览确认默认开启、首次说明及直接关闭布局，未连接真实档案或发出活动请求。
+
+## 后续验收
+
+- Windows/macOS 正式包用隔离目录和虚构安装进行云端联调，确认当前五字段、服务端去重、关闭及停机行为；开发测试通过不等于真机云端联调通过。
+- 第二阶段自动 Cron 仍待实际触发验收，与客户端开发并行。
+- 在正式开启前完成接收地址、实际备份期限/恢复流程、告警/费用和适用商店告知或明确同意要求；默认开启不代表已有明确同意。
+- 第四阶段再接插件显式使用信号和兼容，不把当前桌面样本称为全部桌面与插件用户数。
+
+隐私说明同步见 [隐私政策](privacy-policy.md)。当前默认/开发构建尚无真实用户统计外发。
