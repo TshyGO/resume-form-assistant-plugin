@@ -214,7 +214,10 @@ function loadContentScript({ width = 1200, height = 900, desktopReply = null } =
 
 test("native side panel status exposes pending offers and diagnostics", () => {
   const { hooks, listeners } = loadContentScript();
-  const profileOffer = { hidden: false, querySelector: () => ({ textContent: "还有 2 个字段空着" }) };
+  const profileOffer = { hidden: false, querySelector: () => ({ textContent: "" }) };
+  hooks.setProfileOffer({
+    candidates: [{ label: "兴趣爱好", entry: { kind: "element", element: { isConnected: true, value: "摄影" } } }]
+  });
   hooks.setShadowRoot({
     querySelector(selector) {
       return ({
@@ -229,7 +232,11 @@ test("native side panel status exposes pending offers and diagnostics", () => {
   const handled = listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
   assert.equal(handled, false);
   assert.equal(response.ready, true);
-  assert.equal(response.profileOffer, "还有 2 个字段空着");
+  // #189：侧栏拿到的是候选本身（字段名、此刻的值、默认勾选），不是页面卡片上的一句话。
+  assert.equal(response.profileOffer.summary, "可保存到我的信息：已填 1 项，待补 0 项");
+  assert.deepEqual(plain(response.profileOffer.filled), [
+    { id: "兴趣爱好", key: "兴趣爱好", value: "摄影", completes: false, jobSpecific: false, defaultSelected: true }
+  ]);
   // #178: the fill archive is the page's own snapshot, not text read off the page overlay.
   assert.equal(response.fillArchive.phase, "idle");
   assert.equal(response.fillArchive.archiveId, null);
@@ -238,6 +245,8 @@ test("native side panel status exposes pending offers and diagnostics", () => {
 
   listeners.runtimeMessage[0]({ type: "RESUME_PANEL_OFFER", action: "profileSkip" }, {}, () => {});
   assert.equal(profileOffer.hidden, true);
+  listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+  assert.equal(response.profileOffer, null);
 });
 
 test("an uninitialised page controller is not reported as an active AI fill", () => {
@@ -278,17 +287,19 @@ test("native side panel fill command rereads the desktop before invoking the pag
   assert.equal(clicks, 1);
 });
 
-test('adding unanswered fields retries one desktop profile conflict with the new revision', async () => {
+test('saving the profile offer retries one desktop conflict with the new revision and then rereads the desktop', async () => {
   const updates = [];
   let revision = 0;
+  let profile = { values: {}, family: [], custom: [] };
+  let reads = 0;
   const { hooks } = loadContentScript({ desktopReply: async message => {
-    if (message.type === 'DESKTOP_RESUME_READ') return { status: 'ok', data: {
-      templates: [], activeTemplate: null,
-      profile: { values: {}, family: [], custom: [] }, profileRevision: revision
-    } };
+    if (message.type === 'DESKTOP_RESUME_READ') { reads += 1; return { status: 'ok', data: {
+      templates: [], activeTemplate: null, profile, profileRevision: revision
+    } }; }
     if (message.type === 'DESKTOP_RESUME_UPDATE') {
       updates.push(message);
       if (updates.length === 1) { revision = 1; return { status: 'conflict' }; }
+      profile = message.profile; revision += 1;
       return { status: 'ok' };
     }
     return { status: 'ok' };
@@ -296,11 +307,17 @@ test('adding unanswered fields retries one desktop profile conflict with the new
   const card = { hidden: false };
   hooks.setShadowRoot({ querySelector: selector => ({ '#resume-pro-profile-offer': card })[selector] || null });
   hooks.setProfileOffer({
-    labels: ['期望薪资'], fields: [],
-    candidates: [{ label: '期望薪资', entry: { kind: 'element', element: { isConnected: true, value: '' } } }]
+    candidates: [{ label: '期望薪资', entry: { kind: 'element', element: { isConnected: true, value: '2 万' } } }]
   });
-  await hooks.addUnansweredToProfile();
+  const reply = await hooks.addUnansweredToProfile({ selected: [{ id: '期望薪资', key: '期望薪资', kind: 'filled', reviewedValue: '2 万' }] });
   assert.deepEqual(updates.map(item => item.expectedRevision), [0, 1]);
+  assert.deepEqual(plain(updates[1].profile.custom), [{ key: '期望薪资', value: '2 万' }]);
+  assert.equal(reply.ok, true);
+  assert.equal(reply.saved, 1);
+  assert.equal(reply.profileOffer.result.text, '已保存 1 项，下次填写可用。');
+  assert.equal(reads, 3, 'two reads before the writes, one after the confirmed write');
+  // 保存后桌面里已经是这个值：候选自然消失，页面上的旧卡片也收起。
+  assert.equal(reply.profileOffer.filled.length, 0);
   assert.equal(card.hidden, true);
 });
 

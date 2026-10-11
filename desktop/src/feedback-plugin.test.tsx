@@ -6,13 +6,15 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 type Reply = Record<string, unknown>;
 // Mounts the real plugin feedback-ui.js (Chrome and Edge load the same file) with the same
 // mount points as sidepanel.html or popup.html, against a scripted service worker.
-function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: boolean; noticeSeen?: boolean } = {}) {
-  document.body.innerHTML = pathname === '/sidepanel.html'
-    ? '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>'
-    : '<div id="feedback-auto-root"></div>';
+function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: boolean; decided?: boolean; panel?: boolean } = {}) {
+  const manual = '<button id="fill-button">一键 AI 填写</button><div id="feedback-notice-root" hidden></div><details id="fill-diagnostics"></details><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>';
+  document.body.innerHTML = pathname !== '/sidepanel.html' ? '<div id="feedback-auto-root"></div>'
+    // The side panel as it ships (#261): the preview gets its own panel over the 填写 page.
+    : initial.panel ? `<div id="fill-home">${manual}</div><section id="task-panel" hidden><h2 id="task-title" tabindex="-1">保存岗位到桌面端</h2></section><div id="feedback-preview-root"></div>` : manual;
   const calls: Record<string, unknown>[] = [];
-  let consent = initial.consent ?? true;
-  let noticeSeen = initial.noticeSeen ?? false;
+  // A new installation: nothing chosen, nothing sent.
+  let consent = initial.consent ?? false;
+  let decided = initial.decided ?? false;
   let now = 100000;
   let previews = 0;
   let updated: (id: number, change: { status: string }) => void = () => {};
@@ -23,9 +25,11 @@ function setup(failure = '', pathname = '/sidepanel.html', initial: { consent?: 
   const api = {
     runtime: { sendMessage: vi.fn(async (message: Record<string, unknown>) => {
       calls.push(message);
-      if (message.type === 'FEEDBACK_STATUS') return failure === 'settings' ? { ok: false } : { consent, noticeSeen };
-      if (message.type === 'FEEDBACK_CONSENT') { consent = message.enabled === true; noticeSeen = true; return { consent, noticeSeen }; }
-      if (message.type === 'FEEDBACK_NOTICE_SEEN') { noticeSeen = true; return { consent, noticeSeen }; }
+      if (message.type === 'FEEDBACK_STATUS') return failure === 'settings' ? { ok: false } : { consent, decided };
+      if (message.type === 'FEEDBACK_CONSENT') {
+        if (failure === 'consent') return { ok: false, reason: 'unavailable' };
+        consent = message.enabled === true; decided = true; return { consent, decided };
+      }
       if (message.type === 'FEEDBACK_PREVIEW') { previews++; return { ok: true, token: `draft-${previews}`, payload: { user_description: message.description, diagnostics: message.diagnostics, anonymous_id: 'test-id' } }; }
       const reply = state.sendReply || (failure ? { ok: false, reason: failure } : { ok: true, id: 'receipt-123' });
       if (state.hold) return new Promise<Reply>(resolve => { held = resolve; });
@@ -60,42 +64,45 @@ async function previewDraft(text = '按钮没反应') {
   await waitFor(() => expect(button('确认发送').disabled).toBe(false));
 }
 
-// ---- first-use notice and the automatic preference ----
+// ---- the choice and the automatic preference ----
 
 const buttons = (root: HTMLElement) => within(root).queryAllByRole('button').map(b => b.textContent);
+const NOTICE = '帮我们改进网申快填';
+// What the explanation has to tell before anyone can agree (#247).
+const DISCLOSURES = ['只有一句「填不上」', '随机生成的安装编号', '网站域名', '页面路径', '不包含你的简历', '90 天', '可能会公开在网申快填的 GitHub 项目里', '公开的内容会长期保留', '安装编号不会公开', '同意前出的错不会补发', '删除安装编号'];
 
-test('the side-panel notice explains both ways, sits after the fill button and sends re-reading to the status page', async () => {
-  setup();
-  const notice = await screen.findByRole('region', { name: '错误报告与问题反馈' });
+test('the side-panel choice says why and what is sent, sits after the fill button and offers two plain answers', async () => {
+  const { calls } = setup();
+  const notice = await screen.findByRole('region', { name: NOTICE });
   const fill = button('一键 AI 填写');
   expect(fill.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const text = notice.textContent || '';
-  expect(text).toMatch(/自动错误报告（默认开启）：插件检测到自身异常，或一键填写后有字段没填上时，自动发送一份脱敏诊断。关闭它不影响手动反馈问题。/);
-  expect(text).toMatch(/手动反馈问题：由你填写描述，预览全部内容并确认后才发送。/);
-  for (const disclosure of ['定位问题', '不上传简历', 'Cloudflare', '90 天', 'GitHub issue', '随机安装标识']) expect(text).toContain(disclosure);
-  expect(text).toContain('点「知道了」只收起本说明，自动错误报告保持开启。以后如需关闭，或想重看本说明，请到「插件状态」。');
-  expect(buttons(notice)).toEqual(['知道了', '关闭自动错误报告']);
-  // The guidance comes before the buttons it explains.
-  const hint = within(notice).getByText(/点「知道了」只收起本说明/);
-  expect(hint.compareDocumentPosition(button('知道了')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  for (const disclosure of DISCLOSURES) expect(text).toContain(disclosure);
+  expect(text).toContain('遇到问题也可以在「手动反馈问题」里自己写，预览确认后才会发送。');
+  expect(text).toContain('以后可以到「插件状态」更改。');
+  expect(buttons(notice)).toEqual(['同意并开启', '暂不开启']);
+  // The explanation comes before the buttons that answer it; showing it is not an answer.
+  const why = within(notice).getByText(/只有一句「填不上」/);
+  expect(why.compareDocumentPosition(button('同意并开启')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
+  expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
 });
 
-test('知道了 only folds the side-panel notice; the panel offers no way to reopen it', async () => {
+test('同意并开启 is the only way the side panel turns reports on', async () => {
   const { calls } = setup();
-  await screen.findByText('自动错误报告：已开启（在「插件状态」中设置）');
-  fireEvent.click(button('知道了'));
-  await waitFor(() => expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull());
-  expect(calls.filter(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toHaveLength(1);
-  expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
-  expect(screen.getByText('自动错误报告：已开启（在「插件状态」中设置）')).toBeTruthy();
+  fireEvent.click(await screen.findByRole('button', { name: '同意并开启' }));
+  await screen.findByText('自动错误报告：已开启');
+  expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
+  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
+  await screen.findByText('已开启自动错误报告，谢谢。');
   expect(screen.queryByRole('button', { name: /查看完整说明|收起说明/ })).toBeNull();
 });
 
-test('turning automatic reports off from the side-panel notice leaves manual feedback working', async () => {
+test('暂不开启 records the answer and leaves manual feedback working', async () => {
   const { calls, sends } = setup();
-  fireEvent.click(await screen.findByRole('button', { name: '关闭自动错误报告' }));
-  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
-  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
+  fireEvent.click(await screen.findByRole('button', { name: '暂不开启' }));
+  await screen.findByText('自动错误报告：已关闭');
+  expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: false }]);
   await screen.findByText(/手动反馈问题不受影响/);
   await previewDraft();
@@ -105,45 +112,71 @@ test('turning automatic reports off from the side-panel notice leaves manual fee
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toHaveLength(1);
 });
 
-test('a side panel opened after the choice was made shows only the state line', async () => {
-  setup('', '/sidepanel.html', { consent: false, noticeSeen: true });
-  await screen.findByText('自动错误报告：已关闭（在「插件状态」中设置）');
-  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
-  expect(screen.queryByRole('checkbox', { name: /自动错误报告/ })).toBeNull();
-  expect(screen.queryByRole('button', { name: /说明/ })).toBeNull();
+test('a failed save keeps the choice on screen; an unanswered choice comes back with the next side panel', async () => {
+  setup('consent');
+  fireEvent.click(await screen.findByRole('button', { name: '同意并开启' }));
+  await screen.findByText('设置未保存，请重试。');
+  expect(screen.getByRole('region', { name: NOTICE })).toBeTruthy();
+  expect(button('同意并开启').disabled).toBe(false);
+  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
+  setup();
+  expect(await screen.findByRole('region', { name: NOTICE })).toBeTruthy();
 });
 
-test('on first use the status page unfolds the explanation inside its own card, folded only by 知道了', async () => {
+test('a failed save on the status page puts the switch back', async () => {
+  setup('consent', '/popup.html', { consent: true, decided: true });
+  const toggle = await screen.findByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  await waitFor(() => expect(toggle.checked).toBe(true));
+  fireEvent.click(toggle);
+  await screen.findByText('设置未保存，请重试。');
+  expect(toggle.checked).toBe(true);
+  expect(toggle.disabled).toBe(false);
+});
+
+test('a side panel opened after the choice was made shows only the state line', async () => {
+  setup('', '/sidepanel.html', { consent: false, decided: true });
+  await screen.findByText('自动错误报告：已关闭');
+  expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
+  expect(screen.queryByRole('checkbox', { name: /自动错误报告/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /说明/ })).toBeNull();
+  // Changing it is on the status page; the side panel only links there (#261).
+  expect(button('在「插件状态」中设置')).toBeTruthy();
+});
+
+test('while undecided the status page keeps the explanation open with the same two answers', async () => {
   const { calls } = setup('', '/popup.html');
   const auto = screen.getByRole('region', { name: '自动错误报告' });
   const details = await within(auto).findByRole('region', { name: '完整说明' });
-  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
+  expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(auto.contains(details)).toBe(true);
   const text = details.textContent || '';
-  expect(text).toMatch(/手动反馈问题：由你在侧栏填写描述，预览全部内容并确认后才发送。/);
-  for (const disclosure of ['定位问题', '不上传简历', 'Cloudflare', '90 天', 'GitHub issue', '随机安装标识']) expect(text).toContain(disclosure);
-  expect(text).toContain('点「知道了」只收起说明，自动错误报告保持开启。如需关闭，取消勾选上方「开启自动错误报告」即可。');
-  expect(buttons(auto)).toEqual(['知道了']);
-  fireEvent.click(within(auto).getByRole('button', { name: '知道了' }));
+  for (const disclosure of DISCLOSURES) expect(text).toContain(disclosure);
+  expect(text).toContain('遇到问题也可以在侧栏的「手动反馈问题」里自己写，预览确认后才会发送。');
+  await within(auto).findByText('未开启：你选择之前不会自动发送任何报告。');
+  const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  expect(buttons(auto)).toEqual(['同意并开启', '暂不开启']);
+  fireEvent.click(within(auto).getByRole('button', { name: '同意并开启' }));
+  await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
   await waitFor(() => expect(within(auto).queryByRole('region', { name: '完整说明' })).toBeNull());
-  expect(calls.filter(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toHaveLength(1);
-  expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
+  expect(toggle.checked).toBe(true);
+  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
   expect(buttons(auto)).toEqual(['查看完整说明']);
 });
 
-test('choosing with the switch on first use keeps the explanation open and counts as read', async () => {
+test('choosing with the switch while undecided keeps the explanation open', async () => {
   const { calls } = setup('', '/popup.html');
   const auto = screen.getByRole('region', { name: '自动错误报告' });
-  await within(auto).findByRole('button', { name: '知道了' });
+  await within(auto).findByRole('button', { name: '同意并开启' });
   fireEvent.click(within(auto).getByRole('checkbox', { name: '开启自动错误报告' }));
-  await within(auto).findByText('已关闭：不会自动发送任何报告。');
+  await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
   expect(within(auto).getByRole('region', { name: '完整说明' })).toBeTruthy();
   expect(buttons(auto)).toEqual(['收起说明']);
-  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: false }]);
+  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
 });
 
 test('查看完整说明 expands the same card and 收起说明 folds it, with no second switch', async () => {
-  const { calls } = setup('', '/popup.html', { noticeSeen: true });
+  const { calls } = setup('', '/popup.html', { consent: true, decided: true });
   const auto = screen.getByRole('region', { name: '自动错误报告' });
   const about = await within(auto).findByRole('button', { name: '查看完整说明' });
   expect(about.getAttribute('aria-expanded')).toBe('false');
@@ -163,14 +196,14 @@ test('查看完整说明 expands the same card and 收起说明 folds it, with n
   fireEvent.click(about);
   expect(within(auto).queryByRole('region', { name: '完整说明' })).toBeNull();
   expect(about.textContent).toBe('查看完整说明');
-  expect(calls.some(c => c.type === 'FEEDBACK_NOTICE_SEEN')).toBe(false);
+  expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT').map(c => c.enabled)).toEqual([false]);
 });
 
 test('the status page has the automatic switch only, with no manual feedback', async () => {
-  const { calls } = setup('', '/popup.html', { noticeSeen: true });
+  const { calls } = setup('', '/popup.html', { consent: true, decided: true });
   const auto = screen.getByRole('region', { name: '自动错误报告' });
   expect(screen.queryByRole('region', { name: '手动反馈问题' })).toBeNull();
-  expect(screen.queryByRole('region', { name: '错误报告与问题反馈' })).toBeNull();
+  expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   for (const name of ['展开', '预览将发送的内容', '确认发送']) expect(screen.queryByRole('button', { name })).toBeNull();
   expect(auto.textContent).toContain('不影响侧栏里的「手动反馈问题」');
   const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
@@ -288,4 +321,66 @@ test('only navigation of the attached tab invalidates a preview', async () => {
   await previewDraft();
   updated(2); expect(button('确认发送').disabled).toBe(false);
   updated(1); expect(button('确认发送').disabled).toBe(true);
+});
+
+// ---- the side panel's preview panel (#261) ----
+
+test('in the side panel the preview opens as its own panel, and 返回修改 keeps the draft but not the preview', async () => {
+  const { sends } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  const home = document.getElementById('fill-home') as HTMLElement & { inert: boolean };
+  expect(panel.hidden).toBe(true);
+  await previewDraft('简历上传按钮没反应');
+  expect(panel.hidden).toBe(false);
+  expect(home.inert).toBe(true);
+  expect(document.activeElement).toBe(document.getElementById('feedback-preview-title'));
+  expect(within(panel).getByText('请核对预览，确认后发送。')).toBeTruthy();
+  // The payload is shown in the panel, and the send button there submits the form.
+  expect(within(panel).getByLabelText('将发送的内容').textContent).toContain('简历上传按钮没反应');
+  fireEvent.click(within(panel).getAllByRole('button', { name: '返回修改' })[1]!);
+  expect(panel.hidden).toBe(true);
+  expect(home.inert).toBe(false);
+  expect(document.activeElement).toBe(button('预览将发送的内容'));
+  expect(description().value).toBe('简历上传按钮没反应');
+  expect(screen.getByText('预览已关闭，草稿已保留。修改后请重新预览。')).toBeTruthy();
+  expect(sends()).toHaveLength(0);
+  await previewDraft('简历上传按钮没反应');
+  fireEvent.click(button('确认发送'));
+  await screen.findByText('发送成功，编号：receipt-123');
+  expect(panel.hidden).toBe(true);
+  expect(home.inert).toBe(false);
+  expect(sends()).toEqual([{ type: 'FEEDBACK_SEND', token: 'draft-2' }]);
+});
+
+test('a side-panel preview that the page invalidates closes and says why', async () => {
+  const { updated, sends } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  await previewDraft();
+  updated(1);
+  expect(panel.hidden).toBe(true);
+  expect(screen.getByText('当前网页已变化，刚才的预览已失效。草稿已保留，请重新预览。')).toBeTruthy();
+  expect(description().value).toBe('按钮没反应');
+  expect(sends()).toHaveLength(0);
+});
+
+test('a side-panel preview stays covered by a sidebar flow: closing it keeps the page under that flow out of reach', async () => {
+  setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const home = document.getElementById('fill-home') as HTMLElement & { inert: boolean };
+  await previewDraft();
+  (document.getElementById('task-panel') as HTMLElement).hidden = false;
+  fireEvent.click(within(document.getElementById('feedback-preview-panel') as HTMLElement).getAllByRole('button', { name: '返回修改' })[0]!);
+  expect(home.inert).toBe(true);
+  // The keyboard lands on the flow in front, not on a button under it that cannot be reached.
+  expect(document.activeElement).toBe(document.getElementById('task-title'));
+});
+
+test('a preview that closes on its own leaves the focus where the user put it', async () => {
+  const { updated } = setup('', '/sidepanel.html', { consent: false, decided: true, panel: true });
+  const panel = document.getElementById('feedback-preview-panel') as HTMLElement;
+  await previewDraft();
+  const elsewhere = document.getElementById('fill-button') as HTMLButtonElement;
+  elsewhere.focus();
+  updated(1);
+  expect(panel.hidden).toBe(true);
+  expect(document.activeElement).toBe(elsewhere);
 });

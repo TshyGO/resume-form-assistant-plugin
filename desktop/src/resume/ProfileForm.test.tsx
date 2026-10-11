@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { Invoke, ProfileRecordView } from "../api.ts";
 import { InvokeProvider } from "../react/invoke.tsx";
 import { ProfileForm } from "./ProfileForm.tsx";
+import type { ProfileProbe } from "./ProfileForm.tsx";
 import type { Listen } from "./LegacyImport.tsx";
 
 const record: ProfileRecordView = {
@@ -52,7 +53,14 @@ function mountWithListen(handler: (command: string, args?: Record<string, unknow
   return {
     calls,
     fire: (revision = 4) => handlerRef?.({ payload: { revision, source: "plugin" } }),
+    fireLegacy: () => handlerRef?.(),
   };
+}
+
+/** 左侧分组导航（#257）：只显示选中的那组；其他组仍挂着，只是隐藏。 */
+async function openGroup(name: string) {
+  const nav = screen.getByRole("navigation", { name: "信息分组" });
+  await userEvent.click(within(nav).getByRole("button", { name: new RegExp(`^${name}`) }));
 }
 
 test("按字段定义画出表单并填好已有内容", async () => {
@@ -60,11 +68,34 @@ test("按字段定义画出表单并填好已有内容", async () => {
   expect(await screen.findByLabelText("姓名")).toHaveProperty("value", "张三");
   expect(screen.getByLabelText("性别")).toHaveProperty("value", "男");
   expect(screen.getByLabelText("身高（厘米）")).toBeTruthy();
-  expect(screen.getByText("基本信息")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "基本信息" })).toBeTruthy();
+});
+
+test("左侧八个分组按原顺序排列，切换分组只换右侧表单、不丢草稿", async () => {
+  const user = userEvent.setup();
+  mount(() => record);
+  const name = await screen.findByLabelText("姓名");
+  const nav = screen.getByRole("navigation", { name: "信息分组" });
+  const labels = within(nav).getAllByRole("button").map((button) => button.textContent?.replace(/›|\d+ 待补充/g, "").trim());
+  expect(labels).toEqual(["基本信息", "户籍与地区", "联系方式", "教育补充", "语言与技能", "求职补充", "家庭主要成员", "补充字段"]);
+  expect(within(nav).getByRole("button", { name: /^补充字段/ }).textContent).toContain("1 待补充");
+  await user.type(name, "五");
+  await openGroup("联系方式");
+  expect(screen.getByRole("heading", { name: "联系方式" })).toBeTruthy();
+  expect(screen.getByText("资料分组 · 03 / 08")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "常用邮箱" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "姓名" })).toBeNull();
+  await openGroup("基本信息");
+  expect(screen.getByRole("textbox", { name: "姓名" })).toHaveProperty("value", "张三五");
+  expect(screen.getByText("有未保存的修改")).toBeTruthy();
+  // 只有一个保存按钮。
+  expect(screen.getAllByRole("button", { name: "保存我的信息" })).toHaveLength(1);
 });
 
 test("待补充的补充字段要标出来", async () => {
   mount(() => record);
+  await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
   const row = await screen.findByRole("group", { name: /户籍派出所/ });
   expect(within(row).getByText("待补充")).toBeTruthy();
 });
@@ -85,7 +116,7 @@ test("保存时带上读到的版本号和规范化后的档案", async () => {
   expect((saved.profile as { values: Record<string, string> }).values.name).toBe("李四");
 });
 
-test("版本冲突时提示刷新，不覆盖", async () => {
+test("保存遇到版本冲突时读取最新档案，保留草稿供逐项处理", async () => {
   const user = userEvent.setup();
   let reads = 0;
   const fresh: ProfileRecordView = {
@@ -100,9 +131,9 @@ test("版本冲突时提示刷新，不覆盖", async () => {
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
   await user.click(screen.getByRole("button", { name: "保存我的信息" }));
-  expect(await screen.findByText(/已在别处改过/)).toBeTruthy();
+  expect(await screen.findByText(/有 1 处更新需要确认/)).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
   await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "服务器新值"));
 });
 
@@ -112,7 +143,10 @@ test("可以加家庭成员和补充字段", async () => {
     command === "save_profile_cmd" ? { profile: args?.profile, revision: 4 } : record,
   );
   await screen.findByLabelText("姓名");
+  await openGroup("家庭主要成员");
   await user.click(screen.getByRole("button", { name: "添加家庭成员" }));
+  expect(screen.getByRole("group", { name: "家庭成员 2" })).toBeTruthy();
+  await openGroup("补充字段");
   await user.click(screen.getByRole("button", { name: "添加补充字段" }));
   const keys = screen.getAllByLabelText("字段名");
   await user.type(keys[keys.length - 1], "紧急联系人邮箱");
@@ -137,6 +171,7 @@ test("补充字段没填字段名时不标待补充", async () => {
   const user = userEvent.setup();
   mount(() => record);
   await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
   await user.click(screen.getByRole("button", { name: "添加补充字段" }));
   const newRow = screen.getByRole("group", { name: "补充字段 2" });
   expect(within(newRow).queryByText("待补充")).toBeNull();
@@ -171,24 +206,39 @@ test("表单干净时，插件写入后自动重新读取（#177）", async () =
   });
   await screen.findByLabelText("姓名");
   await act(async () => fire());
-  await waitFor(() => expect(screen.getByRole("group", { name: /国籍/ })).toBeTruthy());
+  await waitFor(() => expect(screen.getByDisplayValue("国籍")).toBeTruthy());
   expect(reads).toBe(2);
 });
 
-test("有未保存修改时，插件写入只提示，不覆盖正在改的内容（#177）", async () => {
+test("脏表单安全加入插件新增空字段，不保存也不打断当前输入（#191）", async () => {
   const user = userEvent.setup();
-  const { fire } = mountWithListen((command) => {
-    if (command !== "get_profile_cmd") throw new Error(`意外调用 ${command}`);
-    return record;
+  let reads = 0;
+  const updated: ProfileRecordView = {
+    profile: { ...record.profile, custom: [...record.profile.custom, { key: "国籍", value: "" }] },
+    revision: 4,
+  };
+  const { fire, calls } = mountWithListen((command, args) => {
+    if (command === "save_profile_cmd") return { profile: args?.profile, revision: 5 };
+    reads += 1;
+    return reads === 1 ? record : updated;
   });
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
+  name.focus();
   await act(async () => fire());
-  expect(await screen.findByText("插件添加了新的补充字段。当前页面还有未保存的修改。")).toBeTruthy();
+  expect(await screen.findByDisplayValue("国籍")).toBeTruthy();
   expect(name).toHaveProperty("value", "张三五");
+  expect(document.activeElement).toBe(name);
+  expect(screen.getByText(/你的修改仍未保存/)).toBeTruthy();
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  const saved = calls.find((call) => call.command === "save_profile_cmd")?.args;
+  expect(saved?.revision).toBe(4);
+  expect((saved?.profile as typeof record.profile).values.name).toBe("张三五");
+  expect((saved?.profile as typeof record.profile).custom.some((field) => field.key === "国籍")).toBe(true);
 });
 
-test("提示里点重新读取：放弃未保存修改，显示插件新增的字段（#177）", async () => {
+test("同名补充字段显示冲突，确认放弃后才能重新读取（#191）", async () => {
   const user = userEvent.setup();
   let reads = 0;
   const updated: ProfileRecordView = {
@@ -202,31 +252,183 @@ test("提示里点重新读取：放弃未保存修改，显示插件新增的�
   });
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
+  await openGroup("补充字段");
+  await user.click(screen.getByRole("button", { name: "添加补充字段" }));
+  await user.type(screen.getAllByLabelText("字段名").at(-1)!, "国籍");
+  await user.type(screen.getAllByLabelText("内容").at(-1)!, "中国");
   await act(async () => fire());
-  await screen.findByText(/插件添加了新的补充字段/);
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "查看并处理" }));
+  const dialog = screen.getByRole("dialog", { name: "处理资料冲突" });
+  expect(within(within(dialog).getByRole("group", { name: "冲突：国籍" })).getByText("国籍 — 中国")).toBeTruthy();
+  await user.click(within(dialog).getByRole("button", { name: "稍后处理" }));
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
-  await waitFor(() => expect(screen.getByRole("group", { name: /国籍/ })).toBeTruthy());
-  expect(screen.getByLabelText("姓名")).toHaveProperty("value", "张三");
-  expect(screen.queryByText(/插件添加了新的补充字段/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "张三"));
+  expect(screen.getAllByDisplayValue("国籍")).toHaveLength(1);
+  expect(screen.queryByText(/更新需要确认/)).toBeNull();
 });
 
-test("提示里点稍后处理：保留未保存修改，不刷新（#177）", async () => {
+test("冲突稍后处理后入口持续可见且不保存（#191）", async () => {
   const user = userEvent.setup();
+  let reads = 0;
   const { fire, calls } = mountWithListen((command) => {
     if (command !== "get_profile_cmd") throw new Error(`意外调用 ${command}`);
-    return record;
+    reads += 1;
+    return reads === 1 ? record : { ...record, revision: 4, profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } } };
   });
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
   await act(async () => fire());
-  await screen.findByText(/插件添加了新的补充字段/);
+  await screen.findByText(/有 1 处更新需要确认/);
   const readsBefore = calls.filter((c) => c.command === "get_profile_cmd").length;
-  await user.click(screen.getByRole("button", { name: "稍后处理" }));
-  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "查看并处理" }));
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "稍后处理" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText(/有 1 处更新需要确认/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "查看并处理" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toBeTruthy();
   expect(name).toHaveProperty("value", "张三五");
   expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore);
+});
+
+test("同名字段可保留当前内容，处理前不允许整份保存（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const updated: ProfileRecordView = {
+    profile: { ...record.profile, custom: [...record.profile.custom, { key: "国籍", value: "" }] },
+    revision: 4,
+  };
+  const { fire, calls } = mountWithListen((command, args) => {
+    if (command === "save_profile_cmd") return { profile: args?.profile, revision: 5 };
+    reads += 1;
+    return reads === 1 ? record : updated;
+  });
+  await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
+  await user.click(screen.getByRole("button", { name: "添加补充字段" }));
+  await user.type(screen.getAllByLabelText("字段名").at(-1)!, "国籍");
+  await user.type(screen.getAllByLabelText("内容").at(-1)!, "中国");
+  await act(async () => fire());
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(0);
+  const detail = within(screen.getByRole("dialog", { name: "处理资料冲突" })).getByRole("group", { name: "冲突：国籍" });
+  expect(screen.getByRole("button", { name: "应用选择，继续编辑" })).toHaveProperty("disabled", true);
+  await user.click(within(detail).getByRole("button", { name: "用当前草稿" }));
+  await user.click(screen.getByRole("button", { name: "应用选择，继续编辑" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByText(/修改仍未保存/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  const saved = calls.find((call) => call.command === "save_profile_cmd")?.args;
+  expect(saved?.revision).toBe(4);
+  expect((saved?.profile as typeof record.profile).custom.filter((field) => field.key === "国籍")).toEqual([{ key: "国籍", value: "中国" }]);
+});
+
+test("同名字段分别保留时先改名，使用外部版本需二次确认（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const updated: ProfileRecordView = {
+    profile: { ...record.profile, custom: [...record.profile.custom, { key: "国籍", value: "" }] },
+    revision: 4,
+  };
+  const { fire } = mountWithListen(() => (++reads === 1 ? record : updated));
+  await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
+  await user.click(screen.getByRole("button", { name: "添加补充字段" }));
+  await user.type(screen.getAllByLabelText("字段名").at(-1)!, "国籍");
+  await user.type(screen.getAllByLabelText("内容").at(-1)!, "中国");
+  await act(async () => fire());
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "查看并处理" }));
+  const conflictItem = () => screen.getByRole("group", { name: "冲突：国籍" });
+  await user.click(within(conflictItem()).getByRole("button", { name: "用外部版本…" }));
+  const confirm = screen.getByRole("dialog", { name: "改用外部版本？" });
+  expect(within(confirm).getByText(/当前草稿内容将被外部值替换/)).toBeTruthy();
+  expect(document.activeElement).toBe(within(confirm).getByRole("button", { name: "取消" }));
+  await user.click(within(confirm).getByRole("button", { name: "取消" }));
+  expect(within(conflictItem()).getByText("国籍 — 中国")).toBeTruthy();
+  expect(within(conflictItem()).getByRole("button", { name: "用外部版本…" }).getAttribute("aria-pressed")).toBe("false");
+  await user.click(within(conflictItem()).getByRole("button", { name: "分别保留…" }));
+  const rename = screen.getByRole("dialog", { name: "为当前草稿中的字段改名" });
+  // 与外部同名的名字不能用。
+  await user.type(within(rename).getByLabelText("新字段名"), "国籍");
+  expect(within(rename).getByRole("button", { name: "分别保留" })).toHaveProperty("disabled", true);
+  await user.clear(within(rename).getByLabelText("新字段名"));
+  await user.type(within(rename).getByLabelText("新字段名"), "个人国籍说明");
+  await user.click(within(rename).getByRole("button", { name: "分别保留" }));
+  expect(within(conflictItem()).getByText(/将改名为「个人国籍说明」/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "应用选择，继续编辑" }));
+  expect(screen.getByRole("group", { name: "个人国籍说明" })).toBeTruthy();
+  expect(screen.getByRole("group", { name: "国籍" })).toBeTruthy();
+});
+
+test("已有字段被两边改动时逐项选择，保存使用外部最新版本（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const updated: ProfileRecordView = {
+    profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } },
+    revision: 4,
+  };
+  const { fire, calls } = mountWithListen((command, args) => {
+    if (command === "save_profile_cmd") return { profile: args?.profile, revision: 5 };
+    reads += 1;
+    return reads === 1 ? record : updated;
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fire());
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "查看并处理" }));
+  const detail = screen.getByRole("group", { name: "冲突：姓名" });
+  expect(within(detail).getByText("张三五")).toBeTruthy();
+  expect(within(detail).getByText("李四")).toBeTruthy();
+  await user.click(within(detail).getByRole("button", { name: "用当前草稿" }));
+  await user.click(screen.getByRole("button", { name: "应用选择，继续编辑" }));
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  const saved = calls.find((call) => call.command === "save_profile_cmd")?.args;
+  expect(saved?.revision).toBe(4);
+  expect((saved?.profile as typeof record.profile).values.name).toBe("张三五");
+});
+
+test("确认使用外部值后只替换冲突字段，其他草稿修改仍保留（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const updated: ProfileRecordView = {
+    profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } },
+    revision: 4,
+  };
+  const { fire } = mountWithListen(() => (++reads === 1 ? record : updated));
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await openGroup("联系方式");
+  await user.type(screen.getByLabelText("常用邮箱"), "test@example.com");
+  await act(async () => fire());
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "查看并处理" }));
+  const detail = screen.getByRole("group", { name: "冲突：姓名" });
+  await user.click(within(detail).getByRole("button", { name: "用外部版本…" }));
+  expect(name).toHaveProperty("value", "张三五");
+  await user.click(screen.getByRole("button", { name: "确定使用外部版本" }));
+  await user.click(screen.getByRole("button", { name: "应用选择，继续编辑" }));
+  expect(name).toHaveProperty("value", "李四");
+  expect(screen.getByLabelText("常用邮箱")).toHaveProperty("value", "test@example.com");
+});
+
+test("保存请求期间继续输入，新内容不会被晚到的保存响应覆盖（#191）", async () => {
+  const user = userEvent.setup();
+  let finishSave: ((value: ProfileRecordView) => void) | undefined;
+  mount((command) => command === "save_profile_cmd"
+    ? new Promise<ProfileRecordView>((resolve) => { finishSave = resolve; }) : record);
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  await user.type(name, "六");
+  await act(async () => finishSave?.({ ...record, revision: 4, profile: {
+    ...record.profile, values: { ...record.profile.values, name: "张三五" },
+  } }));
+  expect(name).toHaveProperty("value", "张三五六");
+  expect(screen.getByText(/保存期间的新输入仍未保存/)).toBeTruthy();
 });
 
 test("重复或旧 revision 不会反复重新读取（#177）", async () => {
@@ -241,7 +443,39 @@ test("重复或旧 revision 不会反复重新读取（#177）", async () => {
   expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore);
 });
 
-test("自动读取尚未返回时开始编辑，也不会被外部数据覆盖（#177）", async () => {
+test("旧宿主无 revision 事件读回相同版本后不阻止保存（#191）", async () => {
+  const user = userEvent.setup();
+  const { fireLegacy, calls } = mountWithListen((command, args) =>
+    command === "save_profile_cmd" ? { profile: args?.profile, revision: 4 } : record,
+  );
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fireLegacy());
+  expect(name).toHaveProperty("value", "张三五");
+  expect(screen.queryByText(/有待同步的更新/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(1);
+});
+
+test("旧宿主无 revision 事件读取失败后，手动重试相同版本会清除待同步（#191）", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const { fireLegacy, calls } = mountWithListen((command, args) => {
+    if (command === "save_profile_cmd") return { profile: args?.profile, revision: 4 };
+    reads += 1;
+    if (reads === 2) throw new Error("暂时读取失败");
+    return record;
+  });
+  await user.type(await screen.findByLabelText("姓名"), "五");
+  await act(async () => fireLegacy());
+  expect(screen.getByText(/有待同步的更新/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "重新检查更新" }));
+  await waitFor(() => expect(screen.queryByText(/有待同步的更新/)).toBeNull());
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  expect(calls.filter((call) => call.command === "save_profile_cmd")).toHaveLength(1);
+});
+
+test("自动读取期间开始编辑，安全字段仍加入最新草稿（#191）", async () => {
   const user = userEvent.setup();
   let reads = 0;
   let finishRead: ((value: ProfileRecordView) => void) | null = null;
@@ -263,12 +497,10 @@ test("自动读取尚未返回时开始编辑，也不会被外部数据覆盖�
   await user.type(name, "五");
   await act(async () => finishRead?.(updated));
   expect(name).toHaveProperty("value", "张三五");
-  expect(await screen.findByText(/插件添加了新的补充字段/)).toBeTruthy();
-  expect(screen.queryByRole("group", { name: /国籍/ })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "稍后处理" }));
+  expect(await screen.findByDisplayValue("国籍")).toBeTruthy();
+  expect(screen.getByText(/你的修改仍未保存/)).toBeTruthy();
   const readsBefore = reads;
   await act(async () => fire(updated.revision));
-  expect(screen.queryByText(/插件添加了新的补充字段/)).toBeNull();
   expect(reads).toBe(readsBefore);
 });
 
@@ -301,10 +533,10 @@ test("并发外部读取只采用最后发起的一次，不被晚到的旧响�
   await act(async () => fire(5));
   await waitFor(() => expect(reads).toBe(3));
   await act(async () => finishNewer?.(newer));
-  expect(await screen.findByRole("group", { name: /新字段/ })).toBeTruthy();
+  expect(await screen.findByDisplayValue("新字段")).toBeTruthy();
   await act(async () => finishOlder?.(older));
-  expect(screen.getByRole("group", { name: /新字段/ })).toBeTruthy();
-  expect(screen.queryByRole("group", { name: /旧字段/ })).toBeNull();
+  expect(screen.getByDisplayValue("新字段")).toBeTruthy();
+  expect(screen.queryByDisplayValue("旧字段")).toBeNull();
 });
 
 test("主动重新读取后继续输入，新输入不会被晚到的读取覆盖（#177）", async () => {
@@ -315,20 +547,22 @@ test("主动重新读取后继续输入，新输入不会被晚到的读取覆�
     profile: { ...record.profile, values: { ...record.profile.values, name: "服务器新值" } },
     revision: 4,
   };
-  mount((command) => {
-    if (command === "save_profile_cmd") throw { code: "CONFLICT", message: "「我的信息」已在别处改过，请刷新后再保存。" };
+  const { fire } = mountWithListen((command) => {
+    if (command === "save_profile_cmd") throw new Error("意外保存");
     reads += 1;
     if (reads === 1) return record;
+    if (reads === 2) return fresh;
     return new Promise<ProfileRecordView>((resolve) => {
       finishRead = resolve;
     });
   });
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
-  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  await act(async () => fire(4));
+  await screen.findByText(/有 1 处更新需要确认/);
   await user.click(await screen.findByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
-  await waitFor(() => expect(reads).toBe(2));
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  await waitFor(() => expect(reads).toBe(3));
   await user.type(name, "六");
   await act(async () => finishRead?.(fresh));
   expect(name).toHaveProperty("value", "张三五六");
@@ -356,13 +590,14 @@ for (const conflictPath of [false, true]) {
     else await act(async () => fire());
     const readsBefore = calls.filter(c => c.command === "get_profile_cmd").length;
     await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-    expect(screen.getByRole("group", { name: "确认放弃未保存修改" })).toBeTruthy();
+    const dialog = screen.getByRole("dialog", { name: "放弃当前草稿？" });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(calls.filter(c => c.command === "get_profile_cmd").length).toBe(readsBefore);
-    await user.click(screen.getByRole("button", { name: "取消，保留当前输入" }));
+    await user.click(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
     expect(name).toHaveProperty("value", "张三五");
     expect(calls.filter(c => c.command === "get_profile_cmd").length).toBe(readsBefore);
-    expect(screen.queryByRole("group", { name: "确认放弃未保存修改" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toBeTruthy();
   });
 }
@@ -377,12 +612,11 @@ test("稍后处理后的入口可继续确认读取，失败仍保留草稿和�
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
   await act(async () => fire());
-  await user.click(screen.getByRole("button", { name: "稍后处理" }));
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
   expect(await screen.findByText("暂时读取失败")).toBeTruthy();
   expect(name).toHaveProperty("value", "张三五");
-  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  expect(screen.getByText(/有待同步的更新/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", false);
 });
 
@@ -392,24 +626,27 @@ test("手动读取期间到达的更新版本仍保留处理入口，下一次�
   let finishRead: ((value: ProfileRecordView) => void) | undefined;
   const { fire } = mountWithListen(() => {
     reads += 1;
-    if (reads === 2) return new Promise<ProfileRecordView>(resolve => { finishRead = resolve; });
-    return { ...record, revision: reads === 1 ? 3 : 5 };
+    if (reads === 1) return record;
+    if (reads === 3) return new Promise<ProfileRecordView>(resolve => { finishRead = resolve; });
+    return { ...record, revision: reads === 2 ? 4 : 5,
+      profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } } };
   });
   const name = await screen.findByLabelText("姓名");
   await user.type(name, "五");
   await act(async () => fire(4));
+  await screen.findByText(/有 1 处更新需要确认/);
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
-  expect(reads).toBe(2);
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  expect(reads).toBe(3);
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", true);
   expect(screen.getByRole("button", { name: "保存我的信息" })).toHaveProperty("disabled", true);
   await act(async () => fire(5));
   await act(async () => finishRead?.({ ...record, revision: 4 }));
-  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  expect(screen.getByText(/有待同步的更新/)).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
-  await user.click(screen.getByRole("button", { name: "确定放弃并重新读取" }));
-  await waitFor(() => expect(reads).toBe(3));
-  expect(screen.queryByText(/有待同步的补充字段/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  await waitFor(() => expect(reads).toBe(4));
+  expect(screen.queryByText(/有待同步的更新/)).toBeNull();
   expect(screen.queryByRole("button", { name: "放弃未保存修改并重新读取" })).toBeNull();
 });
 
@@ -425,7 +662,7 @@ test("保存成功响应晚于插件更高版本事件时仍保留同步入口",
     ...record.profile, values: { ...record.profile.values, name: "张三五" }
   } }));
   expect(screen.getByLabelText("姓名")).toHaveProperty("value", "张三五");
-  expect(screen.getByText(/有待同步的补充字段/)).toBeTruthy();
+  expect(screen.getByText(/有待同步的更新/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "放弃未保存修改并重新读取" })).toHaveProperty("disabled", false);
 });
 
@@ -433,6 +670,8 @@ test("保存成功响应晚于插件更高版本事件时仍保留同步入口",
 test("补充字段的长题目整句显示，字段名和内容的框一样高", async () => {
   const longKey = "在校期间是否有补考、重修情况？如有，请列出具体科目、次数以及当时的原因说明";
   mount(() => ({ ...record, profile: { ...record.profile, custom: [{ key: longKey, value: "" }] } }));
+  await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
   const row = await screen.findByRole("group", { name: longKey });
   const key = within(row).getByLabelText("字段名") as HTMLTextAreaElement;
   const value = within(row).getByLabelText("内容") as HTMLTextAreaElement;
@@ -445,6 +684,8 @@ test("补充字段的长题目整句显示，字段名和内容的框一样高",
 
 test("补充字段里回车不换行，粘贴进来的换行变成空格", async () => {
   const calls = mount((command) => (command === "save_profile_cmd" ? { revision: 4 } : record));
+  await screen.findByLabelText("姓名");
+  await openGroup("补充字段");
   const row = await screen.findByRole("group", { name: /户籍派出所/ });
   const value = within(row).getByLabelText("内容") as HTMLTextAreaElement;
   await userEvent.click(value);
@@ -456,4 +697,110 @@ test("补充字段里回车不换行，粘贴进来的换行变成空格", async
   await waitFor(() => expect(calls.some((c) => c.command === "save_profile_cmd")).toBe(true));
   const saved = calls.find((c) => c.command === "save_profile_cmd")!.args!.profile as { custom: Array<{ key: string; value: string }> };
   expect(saved.custom.find((c) => c.key === "户籍派出所")?.value).toBe("第一行甲 乙");
+});
+
+test("添加按钮和保存按钮并排在页脚，只在对应分组出现；新增后焦点落到新的一行", async () => {
+  const user = userEvent.setup();
+  mount(() => record);
+  await screen.findByLabelText("姓名");
+  const save = screen.getByRole("button", { name: "保存我的信息" });
+  expect(screen.queryByRole("button", { name: "添加补充字段" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "添加家庭成员" })).toBeNull();
+
+  await openGroup("补充字段");
+  const addCustom = screen.getByRole("button", { name: "添加补充字段" });
+  expect(addCustom.parentElement).toBe(save.parentElement);
+  await user.click(addCustom);
+  expect(document.activeElement).toBe(within(screen.getByRole("group", { name: "补充字段 2" })).getByLabelText("字段名"));
+
+  await openGroup("家庭主要成员");
+  expect(screen.queryByRole("button", { name: "添加补充字段" })).toBeNull();
+  const addMember = screen.getByRole("button", { name: "添加家庭成员" });
+  expect(addMember.parentElement).toBe(save.parentElement);
+  await user.click(addMember);
+  expect(document.activeElement).toBe(screen.getByLabelText("成员 2 关系"));
+});
+
+
+// 导入插件旧数据后，简历页用 probe.sync() 让表单核对一次（后端不会为导入发 resume-profile-changed）。
+function mountWithProbe(handler: (command: string, args?: Record<string, unknown>) => unknown) {
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+  const invoke = (async (command: string, args?: Record<string, unknown>) => {
+    calls.push({ command, args });
+    return handler(command, args);
+  }) as Invoke;
+  let fire: ((event?: { payload?: unknown }) => void) | null = null;
+  const listen: Listen = (name, cb) => {
+    if (name === "resume-profile-changed") fire = cb;
+    return () => {};
+  };
+  const probe = { current: null as ProfileProbe | null };
+  render(
+    <InvokeProvider invoke={invoke}>
+      <ProfileForm listen={listen} probe={probe} />
+    </InvokeProvider>,
+  );
+  return { calls, probe, fire: (revision: number) => fire?.({ payload: { revision, source: "plugin" } }) };
+}
+
+const imported: ProfileRecordView = {
+  profile: { ...record.profile, values: { ...record.profile.values, name: "导入后" } },
+  revision: 5,
+};
+
+test("保存进行中收到 sync 不插队，保存结束后再核对并读到导入的档案", async () => {
+  const user = userEvent.setup();
+  let finishSave: ((value: ProfileRecordView) => void) | undefined;
+  let saved = false;
+  const { calls, probe } = mountWithProbe((command) => {
+    if (command === "save_profile_cmd") return new Promise<ProfileRecordView>((resolve) => { finishSave = resolve; });
+    return saved ? imported : record;
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await user.click(screen.getByRole("button", { name: "保存我的信息" }));
+  const readsBefore = calls.filter((c) => c.command === "get_profile_cmd").length;
+  act(() => probe.current?.sync());
+  expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore);
+  saved = true;
+  await act(async () => finishSave?.({ ...record, revision: 4, profile: { ...record.profile, values: { ...record.profile.values, name: "张三五" } } }));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(calls.filter((c) => c.command === "get_profile_cmd").length).toBe(readsBefore + 1);
+});
+
+test("「放弃并重新读取」进行中收到 sync：放弃照常生效，结束后再核对一次", async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  let finishDiscard: ((value: ProfileRecordView) => void) | undefined;
+  const remoteEdit: ProfileRecordView = { ...record, revision: 4, profile: { ...record.profile, values: { ...record.profile.values, name: "李四" } } };
+  const { probe, fire } = mountWithProbe(() => {
+    reads += 1;
+    if (reads === 1) return record;
+    if (reads === 2) return remoteEdit;
+    if (reads === 3) return new Promise<ProfileRecordView>((resolve) => { finishDiscard = resolve; });
+    return imported;
+  });
+  const name = await screen.findByLabelText("姓名");
+  await user.type(name, "五");
+  await act(async () => fire(4));
+  await screen.findByText(/有 1 处更新需要确认/);
+  await user.click(screen.getByRole("button", { name: "放弃未保存修改并重新读取" }));
+  await user.click(screen.getByRole("button", { name: "放弃并重新读取" }));
+  await waitFor(() => expect(reads).toBe(3));
+  act(() => probe.current?.sync());
+  expect(reads).toBe(3);
+  // 放弃那次读取早于导入写库，读回的是旧档案；放弃本身仍然生效。
+  await act(async () => finishDiscard?.(remoteEdit));
+  await waitFor(() => expect(reads).toBe(4));
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(screen.queryByText(/更新需要确认/)).toBeNull();
+});
+
+test("干净的表单收到 sync 直接换成新档案", async () => {
+  let reads = 0;
+  const { probe } = mountWithProbe(() => (++reads === 1 ? record : imported));
+  await screen.findByLabelText("姓名");
+  act(() => probe.current?.sync());
+  await waitFor(() => expect(screen.getByLabelText("姓名")).toHaveProperty("value", "导入后"));
+  expect(screen.getByText("填写后点击保存")).toBeTruthy();
 });

@@ -71,6 +71,11 @@
     // evidence of a committed selection. The snapshot tracks it separately.
     return values === null || values.length > 0 || (info.el.tagName === 'INPUT' && !info.el.readOnly && Boolean(info.el.value));
   }
+  // 用户眼前显示的已选文字（#189 保存到「我的信息」用）。读不准就返回 null，不猜；没选返回空数组。
+  function readSelection(target) {
+    const info = describe(target), texts = selectedTexts(info);
+    return texts === null ? null : { texts, cascade: info.cascade };
+  }
   function outerPopup(node) { return node?.closest?.(SHELLS) || node; }
   function popups(doc, visible) {
     const all = Array.from(new Set(Array.from(doc.querySelectorAll(POPUPS), outerPopup))).filter(visible);
@@ -276,5 +281,5 @@
       }
     }
   }
-  scope.ResumeProCustomControls = { describe, snapshot, hasExistingValue, run };
+  scope.ResumeProCustomControls = { describe, snapshot, hasExistingValue, readSelection, run };
 })(typeof self !== 'undefined' ? self : globalThis);

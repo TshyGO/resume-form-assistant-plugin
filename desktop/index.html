@@ -5,94 +5,114 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>网申快填</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/settings.css" />
   </head>
   <body>
     <div id="app">
-      <aside class="nav">
-        <p class="brand">网申快填</p>
-        <p class="brand-sub">简历快填 · 投递管理</p>
-        <nav aria-label="主导航">
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-mark" src="./src-tauri/icons/64x64.png" alt="" width="32" height="32" />
+          <span class="brand-name">网申快填</span>
+          <span id="app-version" class="brand-version" hidden></span>
+        </div>
+        <nav class="nav" aria-label="主导航">
           <button type="button" data-route="applications" class="active" aria-current="page">申请</button>
           <button type="button" data-route="resume">简历</button>
-          <button type="button" data-route="inbox">证据收件箱</button>
+          <button type="button" data-route="inbox">招聘通知</button>
           <button type="button" data-route="todos">待办</button>
           <button type="button" data-route="settings">设置</button>
-          <button type="button" id="nav-install-extension">安装扩展</button>
         </nav>
-        <p id="runtime-pill" class="pill">正在读取运行状态…</p>
-      </aside>
+        <div class="topbar-status">
+          <p id="runtime-pill" class="status-pill" data-tone="pending">正在读取浏览器注册…</p>
+          <button type="button" id="nav-install-extension">安装扩展</button>
+        </div>
+      </header>
       <main>
         <div id="feedback-consent"></div>
         <div id="banner" class="banner hidden"></div>
 
         <section id="view-applications" class="view">
-          <div class="apps-toolbar">
-            <div class="workspace-heading">
-              <div><h1>申请</h1><p class="muted">管理岗位，追踪每一步进展。</p></div>
-              <button type="button" id="btn-new-app" class="primary">新增申请</button>
-            </div>
-            <div class="apps-filters">
-              <input id="app-search" type="search" placeholder="搜索公司、岗位或地点" aria-label="搜索申请" />
-              <select id="app-stage" aria-label="阶段过滤">
-                <option value="all">全部阶段</option>
-                <option value="saved">已保存</option>
-                <option value="filling">填写中</option>
-                <option value="submitted">已投递</option>
-                <option value="assessment">测评</option>
-                <option value="interview">面试</option>
-                <option value="offer">Offer</option>
-                <option value="rejected">未通过</option>
-                <option value="withdrawn">已撤回</option>
-                <option value="closed">已关闭</option>
-              </select>
-              <select id="app-recycle" aria-label="回收状态">
-                <option value="active">进行中</option>
-                <option value="recycled">回收站</option>
-                <option value="all">全部</option>
-              </select>
-              <select id="app-sort" aria-label="排序">
-                <option value="updatedAt">更新时间</option>
-                <option value="company">公司</option>
-                <option value="title">岗位</option>
-                <option value="stage">阶段</option>
-              </select>
-            </div>
-          </div>
-          <p id="apps-msg" class="muted" role="status"></p>
-          <p id="apps-fresh" hidden><button type="button" id="apps-fresh-clear">有新申请，清除筛选查看</button></p>
-          <div id="apps-empty" class="empty hidden">
-            <p>还没有申请记录。</p>
-            <p class="muted">新增第一条申请，或安装浏览器扩展，从招聘网页保存岗位。</p>
-            <div class="row">
-              <button type="button" id="btn-empty-new" class="primary">新增申请</button>
-              <button type="button" id="btn-empty-install">去安装浏览器扩展</button>
-            </div>
-          </div>
-          <div id="apps-no-results" class="empty hidden" role="status">
-            <p>没有相关投递记录</p>
-            <p class="muted">请尝试其他关键词或调整筛选条件</p>
-          </div>
-          <div id="apps-layout" class="apps-layout hidden">
-            <div class="apps-list-pane">
-              <table class="apps-table" aria-label="申请列表">
-                <thead>
-                  <tr>
-                    <th scope="col">公司 / 岗位</th>
-                    <th scope="col">阶段</th>
-                    <th scope="col" class="app-location">地点</th>
-                    <th scope="col">更新</th>
-                  </tr>
-                </thead>
-                <tbody id="apps-tbody"></tbody>
-              </table>
-              <div class="apps-pagination">
-                <button type="button" id="btn-prev-page">上一页</button>
-                <span id="apps-page" class="muted"></span>
-                <button type="button" id="btn-next-page">下一页</button>
+          <h1 class="sr-only">申请</h1>
+          <div id="apps-shell" class="apps-shell">
+            <div class="apps-list-card">
+              <div class="apps-toolbar">
+                <div class="apps-search-row">
+                  <label class="search-field">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input id="app-search" type="search" placeholder="搜索公司、岗位或地点" aria-label="搜索申请" />
+                  </label>
+                  <button type="button" id="btn-new-app" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新增申请</button>
+                </div>
+                <div class="apps-filter-row">
+                  <div id="app-stage-chips" class="stage-chips" role="group" aria-label="申请筛选">
+                    <button type="button" data-stage-chip="all" aria-pressed="true">全部</button>
+                    <button type="button" data-stage-chip="submitted" aria-pressed="false">已投递</button>
+                    <button type="button" data-stage-chip="interview" aria-pressed="false">面试</button>
+                    <button type="button" data-stage-chip="offer" aria-pressed="false">Offer</button>
+                  </div>
+                  <details id="app-shortcut-settings" class="shortcut-settings">
+                    <summary aria-label="设置快捷筛选" title="设置快捷筛选"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg></summary>
+                    <div class="shortcut-settings-menu">
+                      <p>显示以下快捷筛选</p>
+                      <div id="app-shortcut-options"></div>
+                    </div>
+                  </details>
+                  <div class="apps-filter-state hidden" aria-hidden="true">
+                    <select id="app-stage" aria-label="阶段过滤">
+                      <option value="all">全部阶段</option>
+                      <option value="saved">已保存</option>
+                      <option value="filling">填写中</option>
+                      <option value="submitted">已投递</option>
+                      <option value="assessment">测评</option>
+                      <option value="interview">面试</option>
+                      <option value="offer">Offer</option>
+                      <option value="rejected">未通过</option>
+                      <option value="withdrawn">已撤回</option>
+                      <option value="closed">已关闭</option>
+                    </select>
+                    <select id="app-recycle" aria-label="回收状态">
+                      <option value="active">进行中</option>
+                      <option value="recycled">回收站</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="apps-list-tools">
+                  <span id="apps-count" class="muted" role="status"></span>
+                  <div class="apps-sort-controls">
+                    <select id="app-sort" aria-label="排序">
+                      <option value="updatedAt">按更新时间</option>
+                      <option value="company">按公司</option>
+                      <option value="title">按岗位</option>
+                    </select>
+                    <button type="button" id="app-sort-direction" aria-label="切换排序方向" aria-pressed="true" title="切换排序方向"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg></button>
+                  </div>
+                </div>
+              </div>
+              <p id="apps-msg" class="muted" role="status"></p>
+              <p id="apps-fresh" hidden><button type="button" id="apps-fresh-clear">有新申请，清除筛选查看</button></p>
+              <div id="apps-empty" class="empty hidden">
+                <p>还没有申请记录。</p>
+                <p class="muted">新增第一条申请，或安装浏览器扩展，从招聘网页保存岗位。</p>
+                <div class="row">
+                  <button type="button" id="btn-empty-new" class="primary">新增申请</button>
+                  <button type="button" id="btn-empty-install">去安装浏览器扩展</button>
+                </div>
+              </div>
+              <div id="apps-no-results" class="empty hidden" role="status">
+                <p>没有相关投递记录</p>
+                <p class="muted">请尝试其他关键词或调整筛选条件</p>
+              </div>
+              <div id="apps-layout" class="apps-list-region hidden">
+                <ul id="apps-list" class="apps-list" aria-label="申请列表"></ul>
+                <div class="apps-pagination">
+                  <button type="button" id="btn-prev-page">上一页</button>
+                  <span id="apps-page" class="muted"></span>
+                  <button type="button" id="btn-next-page">下一页</button>
+                </div>
               </div>
             </div>
-            <div id="app-detail" class="apps-detail-pane">
-              <p class="muted">选择一条申请查看详情与时间线。</p>
+            <div id="app-detail" class="apps-detail-card" aria-label="申请详情" role="region">
+              <p class="detail-empty muted">选择一条申请查看详情与时间线。</p>
             </div>
           </div>
           <dialog id="app-form-dialog">
@@ -122,7 +142,7 @@
           </dialog>
           <dialog id="evidence-dialog">
             <div class="stack">
-              <h3>回复证据</h3>
+              <h3>招聘通知原文</h3>
               <div id="evidence-body"></div>
               <div class="row">
                 <button type="button" id="evidence-close">关闭</button>
@@ -149,6 +169,31 @@
               <div class="row"><button id="progress-save" type="submit" class="primary">保存记录</button><button id="progress-cancel" type="button">取消</button></div>
             </form>
           </dialog>
+          <dialog id="correct-stage-dialog">
+            <form id="correct-stage-form" class="stack">
+              <h2>纠正阶段</h2>
+              <p class="muted">修正当前阶段，并在时间线留下更正记录。</p>
+              <p>当前阶段：<strong id="correct-stage-from"></strong></p>
+              <label>改为
+                <select id="correct-stage-to" required>
+                  <option value="saved">已保存</option>
+                  <option value="filling">填写中</option>
+                  <option value="submitted">已投递</option>
+                  <option value="assessment">测评</option>
+                  <option value="interview">面试</option>
+                  <option value="offer">Offer</option>
+                  <option value="rejected">未通过</option>
+                  <option value="withdrawn">已撤回</option>
+                  <option value="closed">已关闭</option>
+                </select>
+              </label>
+              <label>纠正原因
+                <textarea id="correct-stage-reason" rows="3" maxlength="2000" required placeholder="例如：之前选错了阶段"></textarea>
+              </label>
+              <p id="correct-stage-msg" class="muted" role="status"></p>
+              <div class="row"><button id="correct-stage-save" type="submit" class="primary">保存纠正</button><button id="correct-stage-cancel" type="button">取消</button></div>
+            </form>
+          </dialog>
         </section>
 
         <section id="view-resume" class="view hidden">
@@ -156,199 +201,272 @@
         </section>
 
         <section id="view-inbox" class="view hidden">
-          <header class="workspace-page-header">
-            <div><h1>证据收件箱</h1><p>集中整理招聘邮件、截图和文件。</p></div>
-            <div class="row"><button type="button" id="inbox-refresh">刷新</button><button type="button" id="inbox-pick" class="primary">导入文件</button></div>
+          <header class="workspace-header">
+            <div><h1>招聘通知</h1><p>集中保存招聘邮件、聊天截图和文件，关联到对应申请。</p></div>
+            <div class="workspace-header-actions">
+              <button type="button" id="inbox-refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>刷新</button>
+              <button type="button" id="inbox-paste-open"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/></svg>粘贴文本导入</button>
+              <button type="button" id="inbox-pick" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>导入文件</button>
+            </div>
           </header>
-          <div class="inbox-import-bar">
-            <p class="muted">将 .eml 邮件、截图或 PDF 拖入窗口。导入后，由你确认关联和分类，不会自动改变申请阶段。</p>
-            <details class="inbox-paste">
-              <summary>粘贴文本导入</summary>
-              <label for="inbox-paste" class="sr-only">邮件正文或说明</label>
-              <textarea id="inbox-paste" rows="4" placeholder="粘贴邮件正文或一段说明"></textarea>
-              <button type="button" id="inbox-paste-save" class="primary">导入这段文本</button>
-            </details>
-          </div>
+          <p class="inbox-drop-hint"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>也可以把文件拖进窗口导入。支持 .eml 邮件、PNG / JPEG 截图、PDF、文本（.txt）；单个文件不超过 25 MiB，每次最多 20 个。</p>
           <p id="inbox-status" class="workspace-status" role="status"></p>
-          <div class="inbox-split">
-            <aside class="inbox-list-pane" aria-label="待整理证据"><div class="pane-label">待整理</div><div id="inbox-list"></div></aside>
-            <div id="inbox-preview"><div class="pane-empty"><h2>选择一条证据</h2><p>预览原文，再关联申请或整理分类。</p></div></div>
+          <div id="inbox-shell" class="workspace-shell inbox-shell">
+            <aside class="workspace-list-card" aria-label="待整理的招聘通知">
+              <div class="workspace-list-head inbox-list-head">
+                <h2>待整理 <span id="inbox-count" class="tab-count"></span></h2>
+                <p>这里只列还没关联申请的材料。</p>
+              </div>
+              <div id="inbox-list" class="workspace-list-scroll"></div>
+              <p class="workspace-list-foot">关联申请后，材料会移到那条申请详情的「招聘通知」里。</p>
+            </aside>
+            <div id="inbox-preview" class="workspace-detail-card" role="region" aria-label="通知预览与整理"><div class="pane-empty"><h2>选择一条通知</h2><p>预览原文，再关联申请或整理分类。</p></div></div>
           </div>
+          <dialog id="inbox-paste-dialog" class="resume-dialog is-wide" aria-labelledby="inbox-paste-heading">
+            <form id="inbox-paste-form" class="dialog-form" novalidate>
+              <div class="resume-dialog-head">
+                <h2 id="inbox-paste-heading">粘贴文本导入</h2>
+                <p class="dialog-intro">粘贴邮件正文、聊天记录或一段说明，作为一条招聘通知保存在本机。</p>
+              </div>
+              <div class="resume-dialog-body">
+                <label for="inbox-paste">通知内容</label>
+                <textarea id="inbox-paste" rows="10" placeholder="粘贴邮件正文或一段说明" aria-describedby="inbox-paste-hint"></textarea>
+                <p id="inbox-paste-hint" class="field-hint">导入本身不会改变申请阶段。导入后再关联申请、整理分类。</p>
+                <p id="inbox-paste-status" class="note" role="alert"></p>
+              </div>
+              <div class="resume-dialog-actions">
+                <button type="button" id="inbox-paste-cancel">取消</button>
+                <button type="submit" id="inbox-paste-save" class="primary">导入这段文本</button>
+              </div>
+            </form>
+          </dialog>
         </section>
 
         <section id="view-todos" class="view hidden">
-          <header class="workspace-page-header">
-            <div><h1>待办</h1><p>安排下一步，让重要的跟进有迹可循。</p></div>
-            <button type="button" id="todo-new" class="primary">新增待办</button>
-          </header>
-          <div class="todo-workspace">
-            <div class="todo-toolbar"><label for="todo-filter">任务状态</label><select id="todo-filter" aria-label="任务状态"><option value="open">未完成</option><option value="all">全部</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></div>
-            <p id="todo-digest" class="note" role="status" hidden></p>
-            <p id="todo-status" class="note" role="status"></p>
-            <div id="todo-list"></div>
-            <details class="todo-reminder-help"><summary>系统提醒说明</summary><p id="todo-reminder-note" class="note"></p></details>
+          <div id="todo-shell" class="workspace-shell">
+            <div class="workspace-list-card todo-list-card">
+              <div class="workspace-list-head">
+                <div class="workspace-title-row">
+                  <div><h1>待办</h1><p>安排下一步，让重要的跟进有迹可循。</p></div>
+                  <button type="button" id="todo-new" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>新增待办</button>
+                </div>
+                <div id="todo-filter" class="segmented" role="group" aria-label="任务状态"></div>
+                <p id="todo-digest" class="note" role="status" hidden></p>
+              </div>
+              <p id="todo-status" class="note" role="status"></p>
+              <div id="todo-list" class="workspace-list-scroll" aria-label="待办列表"></div>
+            </div>
+            <div id="todo-detail" class="workspace-detail-card" role="region" aria-label="待办详情"></div>
           </div>
-          <dialog id="todo-dialog" aria-labelledby="todo-form-heading">
-          <form id="todo-form" class="stack">
-            <h2 id="todo-form-heading">新增待办</h2>
-            <label>做什么
-              <input id="todo-title" name="title" autocomplete="off" required />
-            </label>
-            <label>属于哪条申请
-              <select id="todo-application" name="applicationId"></select>
-            </label>
-            <div class="row" id="todo-schedule">
-              <label>什么时候
-                <select id="todo-precision" name="duePrecision">
-                  <option value="none">没有到期</option>
-                  <option value="date">只有日期</option>
-                  <option value="datetime">具体到几点</option>
-                </select>
-              </label>
-              <input aria-label="到期日期" id="todo-date" name="dueDate" type="date" hidden />
-              <input aria-label="到期时间" id="todo-datetime" name="dueAtUtc" type="datetime-local" hidden />
-            </div>
-            <div class="row">
-              <label>时区
-                <input id="todo-timezone" name="timeZone" placeholder="Asia/Shanghai" autocomplete="off" />
-              </label>
-              <label>提醒时刻（留空则按到期）
-                <input id="todo-remind" name="remindAtUtc" type="datetime-local" />
-              </label>
-              <label>面试第几轮
-                <input id="todo-round" name="interviewRound" type="number" min="1" />
-              </label>
-            </div>
-            <div class="row todo-form-actions">
-              <button id="todo-submit" type="submit" class="primary">添加待办</button>
-              <button id="todo-cancel" type="button">取消</button>
-
-            </div>
-            <p id="todo-form-status" class="note" role="status"></p>
-          </form>
+          <details class="workspace-help todo-reminder-help"><summary>系统提醒说明<span>本机通知依赖系统权限与应用运行状态，重要日程请另设提醒。</span></summary><p id="todo-reminder-note" class="note"></p></details>
+          <dialog id="todo-dialog" class="resume-dialog" aria-labelledby="todo-form-heading">
+            <form id="todo-form" class="dialog-form" novalidate>
+              <div class="resume-dialog-head">
+                <h2 id="todo-form-heading">新增待办</h2>
+                <p id="todo-form-intro" class="dialog-intro">关联一条申请，写清楚做什么、什么时候。</p>
+              </div>
+              <div class="resume-dialog-body">
+                <div id="todo-no-apps" class="dialog-callout" hidden>
+                  <p>待办需要关联一条申请。还没有申请记录，请先新增申请，或在浏览器扩展里保存岗位。</p>
+                  <button type="button" id="todo-go-applications">去新增申请</button>
+                </div>
+                <div class="field">
+                  <label>属于哪条申请
+                    <select id="todo-application" name="applicationId" required aria-describedby="todo-application-hint"></select>
+                  </label>
+                  <p id="todo-application-hint" class="field-hint" hidden>待办建好后不能换到另一条申请。</p>
+                </div>
+                <label>做什么
+                  <input id="todo-title" name="title" autocomplete="off" maxlength="200" required placeholder="例如：完成在线测评" />
+                </label>
+                <div class="field-row" id="todo-schedule">
+                  <label>什么时候
+                    <select id="todo-precision" name="duePrecision">
+                      <option value="none">没有到期</option>
+                      <option value="date">只有日期</option>
+                      <option value="datetime">具体到几点</option>
+                    </select>
+                  </label>
+                  <label id="todo-date-field" hidden>到期日期
+                    <input id="todo-date" name="dueDate" type="date" hidden />
+                  </label>
+                  <label id="todo-datetime-field" hidden>到期时间
+                    <input id="todo-datetime" name="dueAtUtc" type="datetime-local" hidden />
+                  </label>
+                </div>
+                <div class="field-row">
+                  <label>时区
+                    <input id="todo-timezone" name="timeZone" autocomplete="off" spellcheck="false" placeholder="留空按本机时区" />
+                  </label>
+                  <label>面试第几轮
+                    <input id="todo-round" name="interviewRound" type="number" min="1" max="99" step="1" placeholder="不需要就留空" />
+                  </label>
+                </div>
+                <div class="field">
+                  <label>提醒时刻
+                    <input id="todo-remind" name="remindAtUtc" type="datetime-local" aria-describedby="todo-remind-hint" />
+                  </label>
+                  <p id="todo-remind-hint" class="field-hint">留空则按到期时间提醒。日期和时刻都按上面的时区理解。</p>
+                </div>
+                <p id="todo-edit-note" class="field-hint" hidden>改期或修改提醒时刻会撤掉原来登记的提醒，再按新的时间重新登记。</p>
+                <p id="todo-form-status" class="note" role="alert"></p>
+              </div>
+              <div class="resume-dialog-actions">
+                <button id="todo-cancel" type="button">取消</button>
+                <button id="todo-submit" type="submit" class="primary">添加待办</button>
+              </div>
+            </form>
           </dialog>
         </section>
 
         <section id="view-settings" class="view hidden">
-          <header class="settings-heading"><h1>设置</h1><p class="muted">管理应用偏好、连接和本地数据。</p></header>
+          <header class="settings-heading"><h1>设置</h1><p>管理应用偏好、连接和本地数据。</p></header>
           <div class="settings-layout">
             <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
-              <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-general" aria-selected="true">通用</button>
-              <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1">浏览器连接</button>
-              <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1">AI 设置</button>
-              <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1">数据与备份</button>
-              <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1">隐私</button>
-              <button type="button" role="tab" id="settings-tab-about" data-settings-tab="about" aria-controls="settings-about" aria-selected="false" tabindex="-1">关于与诊断</button>
+              <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-general" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>通用</span></button>
+              <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>浏览器连接</span></button>
+              <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span>AI 设置</span></button>
+              <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"/></svg><span>数据与备份</span></button>
+              <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/></svg><span>隐私</span></button>
+              <button type="button" role="tab" id="settings-tab-about" data-settings-tab="about" aria-controls="settings-about" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg><span>关于与诊断</span></button>
             </nav>
             <div class="settings-content">
               <section id="settings-general" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-general" tabindex="0" data-settings-panel="general">
-                <div class="settings-section-heading"><h2>通用</h2><p>调整日常使用中的更新与窗口行为。</p></div>
-                <div class="setting-row">
-                  <div><label for="update-auto" class="setting-label">自动检查更新</label><p>启动时检查新版本，每天最多一次。下载与安装由你决定。</p></div>
-                  <input type="checkbox" id="update-auto" class="setting-toggle" />
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>通用</h2><p>调整日常使用中的更新与窗口行为。</p></header>
+                  <div class="setting-row">
+                    <div><label for="update-auto" class="setting-label">自动检查更新</label><p>启动时检查新版本，每天最多一次。下载与安装由你决定。</p></div>
+                    <input type="checkbox" id="update-auto" class="setting-toggle" disabled />
+                  </div>
+                  <p id="update-auto-msg" class="settings-inline-msg" role="status"></p>
+                  <div class="setting-row">
+                    <div><h3>关闭窗口</h3><p>关闭后收起到托盘或菜单栏，应用继续运行。</p></div>
+                    <button type="button" id="btn-hide">隐藏窗口</button>
+                  </div>
+                  <p id="hide-msg" class="settings-inline-msg" role="status"></p>
                 </div>
-                <div class="setting-row">
-                  <div><h3>关闭窗口</h3><p>关闭后收起到托盘或菜单栏，应用继续运行。</p></div>
-                  <button type="button" id="btn-hide">隐藏窗口</button>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>待办提醒</h2><p>系统能不能按时弹出提醒，以及几种情况下会怎样。</p></header>
+                  <div id="settings-reminder-callout" class="settings-callout" data-tone="pending">
+                    <div><p id="settings-reminder">正在读取系统通知能力…</p><p id="settings-reminder-window" class="settings-callout-sub"></p></div>
+                  </div>
+                  <details class="settings-fold"><summary>哪些情况下可以收到提醒？</summary><table id="settings-lifecycle" class="settings-table"></table></details>
                 </div>
-                <div class="settings-group">
-                  <h3>待办提醒</h3>
-                  <p id="settings-reminder" class="note"></p>
-          <p class="muted" id="settings-reminder-window"></p>
-          <details class="settings-disclosure"><summary>哪些情况下可以收到提醒？</summary><table id="settings-lifecycle"></table></details>
+                <div class="settings-card settings-card-row">
+                  <div><h2>退出应用</h2><p>完全退出网申快填桌面程序，停止后台运行并暂停待办定时提醒。</p></div>
+                  <button type="button" id="btn-quit" class="settings-danger">退出应用</button>
+                  <p id="quit-error" class="settings-inline-msg" data-tone="error" role="alert" hidden></p>
                 </div>
-                <div class="setting-row settings-exit">
-                  <div><h3>退出应用</h3><p>退出后停止运行，待办提醒也会暂停。</p></div>
-                  <button type="button" id="btn-quit" class="danger">退出应用</button>
-                </div>
-                <p id="quit-error" class="note warn" role="alert" hidden></p>
               </section>
               <section id="settings-browser" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-browser" tabindex="0" data-settings-panel="browser" hidden>
-                <div class="settings-section-heading"><h2>浏览器连接</h2><p>将网页上保存的岗位和填写记录同步到桌面。</p></div>
-                <div class="settings-group browser-connection">
-                  <h3 id="link-install-section">连接状态</h3>
-
-          <p id="link-store-pending" class="note warn"></p>
-          <p id="link-state" class="note"></p>
-          <p id="link-next" class="muted"></p>
-          <div class="row">
-            <button type="button" id="link-install">安装浏览器扩展</button>
-            <button type="button" id="link-download" class="primary">下载插件包</button>
-            <button type="button" id="link-retry">重新检查注册</button>
-          </div>
-          <p class="muted" id="link-after-install"></p>
-          <details class="settings-disclosure">
-            <summary>高级：手动指定扩展 ID</summary>
-            <p class="muted">
-              只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的
-              <code>allowed_origins</code>，正式那条 ID 不会被顶掉。
-            </p>
-            <form id="pairing-form" class="stack">
-              <label>Chrome 扩展 ID
-                <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
-              </label>
-              <label>Edge 扩展 ID
-                <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
-              </label>
-              <button type="submit">保存并重写清单</button>
-              <p id="pairing-msg" class="muted"></p>
-            </form>
-          </details>
+                <div class="settings-card browser-connection">
+                  <header class="settings-card-head"><h2 id="link-install-section">浏览器连接</h2><p>将网页上保存的岗位和填写记录同步到桌面。这里显示的是桌面在浏览器里的注册结果，不代表扩展已安装或已连上。</p></header>
+                  <div class="link-status-row">
+                    <p id="link-status" class="settings-status" data-tone="pending" role="status">正在读取注册状态…</p>
+                    <div class="settings-actions">
+                      <button type="button" id="link-download" class="primary">下载插件包</button>
+                      <button type="button" id="link-install">安装浏览器扩展</button>
+                      <button type="button" id="link-retry" hidden>重新检查注册</button>
+                    </div>
+                  </div>
+                  <div id="link-problem" class="settings-callout" data-tone="error" hidden>
+                    <div>
+                      <p id="link-state"></p>
+                      <details id="link-problem-details" class="settings-callout-fold"><summary>查看每个浏览器的原因与文件路径</summary><ul id="link-problem-list" class="link-problem-list"></ul></details>
+                    </div>
+                  </div>
+                  <p id="link-next" class="settings-text"></p>
+                  <p id="link-action-msg" class="settings-inline-msg" role="status"></p>
+                  <div class="settings-divider" role="presentation"></div>
+                  <h3 class="settings-subhead">手动安装（商店暂时无法安装时）</h3>
+                  <ol class="install-steps">
+                    <li><span>步骤 1</span><strong>下载并解压</strong><p>点「下载插件包」，把下载的压缩包解压成一个文件夹。</p></li>
+                    <li><span>步骤 2</span><strong>打开扩展管理页</strong><p>在地址栏输入 <code>chrome://extensions</code>；Edge 输入 <code>edge://extensions</code>。</p></li>
+                    <li><span>步骤 3</span><strong>开启开发者模式</strong><p>Chrome 在页面右上角，Edge 在左侧栏底部。</p></li>
+                    <li><span>步骤 4</span><strong>加载已解压的扩展</strong><p>点「加载已解压的扩展程序」（Edge 为「加载解压缩的扩展」），选中解压出的文件夹。</p></li>
+                  </ol>
+                  <p id="link-after-install" class="settings-caption"></p>
                 </div>
+                <details id="pairing-advanced" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">高级：手动指定扩展 ID</span><span class="settings-fold-hint">自编译开发或测试配置</span></summary>
+                  <div class="settings-fold-body">
+                    <p class="settings-text">只有用「加载已解压的扩展程序」且没有固定公钥时才需要填。填了会一并写进 host 清单的 <code>allowed_origins</code>，正式那条 ID 不会被顶掉。</p>
+                    <form id="pairing-form" class="settings-form">
+                      <div class="settings-form-grid">
+                        <label>Chrome 扩展 ID
+                          <input id="chrome-id" name="chrome" autocomplete="off" spellcheck="false" />
+                        </label>
+                        <label>Edge 扩展 ID
+                          <input id="edge-id" name="edge" autocomplete="off" spellcheck="false" />
+                        </label>
+                      </div>
+                      <div class="settings-form-actions">
+                        <p id="pairing-msg" class="settings-inline-msg" role="status"></p>
+                        <button type="submit" class="primary">保存并重写清单</button>
+                      </div>
+                    </form>
+                  </div>
+                </details>
               </section>
               <section id="settings-ai" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-ai" tabindex="0" data-settings-panel="ai" hidden>
-                <div class="settings-section-heading"><h2>AI 设置</h2><p>连接你的服务商，用 AI 整理回复证据。</p></div>
                 <div id="ai-settings"></div>
               </section>
               <section id="settings-data" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0" data-settings-panel="data" hidden>
-                <div class="settings-section-heading"><h2>数据与备份</h2><p>保存档案副本，或恢复到之前的记录。</p></div>
-                <div class="settings-group"><h3>备份与恢复</h3>
-                  <p id="backup-export-note" class="muted"></p>
-          <div class="row">
-            <button type="button" id="backup-export" class="primary">导出备份</button>
-            <button type="button" id="backup-choose-restore">从备份恢复…</button>
-          </div>
-          <p id="backup-restore-note" class="muted"></p>
-          <p id="backup-status" class="note"></p>
-
-          <div id="backup-preview" class="panel" hidden>
-            <div id="backup-preview-text"></div>
-            <div class="row">
-              <button type="button" id="backup-confirm-restore" class="danger">确认恢复</button>
-              <button type="button" id="backup-cancel-restore">取消</button>
-            </div>
-          </div>
-
-          </div><details class="settings-disclosure"><summary>回滚点</summary>
-          <ul id="backup-rollback-list" class="plain"></ul>
-
-          </details><details class="settings-disclosure"><summary>回收站</summary>
-          <ul id="recycle-list" class="plain"></ul>
-
-          </details><details class="settings-disclosure"><summary>附件清理</summary>
-          <p class="muted">检查有没有不再被任何证据引用的附件。只报告，删除要逐项确认。</p>
-          <div class="row"><button type="button" id="orphan-check">检查</button></div>
-          <div id="orphan-report"></div>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>备份与恢复</h2><p>保存档案副本，或从备份恢复到之前的求职记录。</p></header>
+                  <ul id="backup-export-note" class="settings-points"></ul>
+                  <div class="settings-actions">
+                    <button type="button" id="backup-export" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出备份</button>
+                    <button type="button" id="backup-choose-restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></svg>从备份恢复…</button>
+                  </div>
+                  <p id="backup-restore-note" class="settings-caption"></p>
+                  <div id="backup-status" class="settings-callout" data-tone="info" role="status" hidden></div>
+                </div>
+                <details id="backup-rollback" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">回滚点<span id="backup-rollback-count" class="settings-count"></span></span><span class="settings-fold-hint">恢复或换回前的档案，随时可以换回</span></summary>
+                  <div class="settings-fold-body">
+                    <ul id="backup-rollback-list" class="settings-list"></ul>
+                    <p id="rollback-status" class="settings-inline-msg" role="status"></p>
+                  </div>
+                </details>
+                <details id="backup-recycle" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">回收站<span id="recycle-count" class="settings-count"></span></span><span class="settings-fold-hint">已移入回收站的申请，可恢复或永久删除</span></summary>
+                  <div class="settings-fold-body">
+                    <ul id="recycle-list" class="settings-list"></ul>
+                    <p id="recycle-status" class="settings-inline-msg" role="status"></p>
+                  </div>
+                </details>
+                <details id="backup-orphans" class="settings-card settings-card-fold">
+                  <summary><span class="settings-fold-title">附件清理</span><span class="settings-fold-hint">只处理没有被任何证据引用的附件</span></summary>
+                  <div class="settings-fold-body">
+                    <p class="settings-text">先检查生成报告；只报告，不会自动删除。删除要逐份确认。</p>
+                    <div class="settings-actions"><button type="button" id="orphan-check"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>检查未引用的附件</button></div>
+                    <div id="orphan-report"></div>
+                  </div>
                 </details>
               </section>
               <section id="settings-privacy" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-privacy" tabindex="0" data-settings-panel="privacy" hidden>
-                <div class="settings-section-heading"><h2>隐私</h2><p>选择是否分享脱敏问题报告。</p></div>
                 <div id="desktop-feedback"></div>
               </section>
               <section id="settings-about" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-about" tabindex="0" data-settings-panel="about" hidden>
-                <div class="settings-section-heading"><h2>关于与诊断</h2><p>查看版本、检查更新，或获取排查问题所需的信息。</p></div>
-                <div class="setting-row about-version">
-                  <div><h3>网申快填</h3><p id="settings-version">正在读取版本…</p></div>
-                  <div class="row"><button type="button" id="update-check" disabled>检查更新</button><button type="button" id="update-open" class="primary" hidden>去下载页</button></div>
+                <div class="settings-card">
+                  <div class="about-head">
+                    <img class="about-mark" src="./src-tauri/icons/64x64.png" alt="" width="48" height="48" />
+                    <div class="about-title"><h2>网申快填 <span id="settings-version-tag" class="settings-chip" hidden></span></h2><p id="settings-version">正在读取版本…</p></div>
+                    <div class="settings-actions"><button type="button" id="update-check" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>检查更新</button><button type="button" id="update-open" class="primary" hidden>去下载页</button></div>
+                  </div>
+                  <div id="update-msg" class="settings-callout" data-tone="info" role="status" hidden><div><p id="update-msg-text"></p></div></div>
+                  <p class="settings-caption">更新需要手动下载安装。安装包尚未签名，请确认下载来源。<span id="update-checked-at" class="update-checked-at" hidden></span></p>
                 </div>
-                <p id="update-msg" class="note" role="status"></p>
-                <p class="settings-caption">更新需要手动下载安装。安装包尚未签名，请确认下载来源。</p>
-                <div class="setting-row">
-                  <div><h3>导出诊断</h3><p>遇到问题时，导出诊断信息用于排查。</p></div>
-                  <button type="button" id="btn-diag">导出诊断</button>
+                <div class="settings-card settings-card-row">
+                  <div><h2>导出诊断</h2><p>遇到问题时，导出一份运行状态与排查信息（JSON 文件，存到本机日志目录；路径已脱敏，不含简历内容和 API Key）。</p></div>
+                  <button type="button" id="btn-diag"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出诊断</button>
+                  <p id="diag-msg" class="settings-inline-msg" role="status"></p>
                 </div>
-                <p id="diag-msg" class="muted" role="status"></p>
-                <details class="settings-disclosure technical-details"><summary>技术详情<span>运行状态、数据位置与浏览器注册信息</span></summary><div id="facts"></div></details>
+                <details class="settings-card settings-card-fold technical-details">
+                  <summary><span class="settings-fold-title">技术详情</span><span class="settings-fold-hint">运行状态、数据位置与浏览器注册信息</span></summary>
+                  <div class="settings-fold-body"><div id="facts"></div></div>
+                </details>
               </section>
             </div>
           </div>

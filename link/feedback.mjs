@@ -2,10 +2,18 @@ import '../feedback-core.js';
 
 export const ENDPOINT = 'https://app-feedback-relay.nebula-lab.workers.dev/feedback';
 export const STORAGE_KEY = 'feedbackStateV1';
+// The explanation the user agreed to. Raise it when automatic reports start carrying something
+// the notice does not describe: earlier grants then count as undecided and the user is asked again.
+export const CONSENT_VERSION = 1;
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
+// Per installation, per rolling hour. Code errors can repeat in a loop, so they stay tight. Fill
+// reports are already once a day per site and type; their cap only matters when someone fills many
+// different sites in one sitting, and it should not cut those off after five.
+const ERRORS_PER_HOUR = 5;
+const FILLS_PER_HOUR = 20;
 const core = globalThis.ResumeProFeedback;
-const empty = () => ({ consent: null, noticeSeen: false, anonymousId: null, recent: {}, hourly: [], backoff: 0, manualAt: 0 });
+const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, recent: {}, hourly: [], fillHourly: [], backoff: 0, manualAt: 0 });
 
 export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, timeoutMs = 5000 }) {
   let serial = Promise.resolve();
@@ -14,18 +22,21 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
   const locked = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
   const save = state => storage.set({ [STORAGE_KEY]: state });
   const read = async () => {
-    const stored = (await storage.get(STORAGE_KEY))[STORAGE_KEY];
+    const { noticeSeen, ...stored } = (await storage.get(STORAGE_KEY))[STORAGE_KEY] || {};
     const state = { ...empty(), ...stored };
-    // Only missing/undecided preferences adopt the default. Never undo an opt-out.
-    if (state.consent === null || state.consent === undefined) {
-      state.consent = true; state.noticeSeen = false; state.anonymousId = uuid();
-      await save(state); // A failed write must not enable automatic network traffic.
-    } else if (stored?.noticeSeen === undefined) {
-      state.noticeSeen = true; // An earlier explicit choice already acknowledged reporting.
+    if (state.consent !== true && state.consent !== false) state.consent = null;
+    // Nothing is sent until the user agrees. Builds before #247 wrote consent: true by default and
+    // their 「知道了」 only folded the notice, so a grant without the current version is no grant.
+    // An opt-out is kept whatever wrote it.
+    if (state.consent === true && state.consentVersion !== CONSENT_VERSION) {
+      Object.assign(state, { consent: null, consentVersion: 0, anonymousId: null });
+      await save(state).catch(() => {}); // Undecided in memory either way; the next choice rewrites it.
     }
+    if (state.consent !== true) state.anonymousId = null;
+    for (const key of ['hourly', 'fillHourly']) if (!Array.isArray(state[key])) state[key] = [];
     return state;
   };
-  const view = state => ({ consent: state.consent === true, noticeSeen: state.noticeSeen === true });
+  const view = state => ({ consent: state.consent === true, decided: state.consent !== null });
   function build(input, host, id) {
     const kind = ['fill_failed', 'fill_partial', 'manual'].includes(input.kind) ? input.kind : 'exception';
     const errorType = kind === 'exception' ? (['Error','TypeError','ReferenceError','SyntaxError','RangeError','URIError','EvalError','AggregateError'].includes(input.name) ? input.name : 'Error') : kind;
@@ -71,14 +82,12 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
       stopped = enabled !== true;
       if (stopped) for (const controller of active) controller.abort();
       return locked(async () => {
-        const state = await read(); state.consent = enabled === true; state.noticeSeen = true;
+        const state = await read(); state.consent = enabled === true;
+        state.consentVersion = enabled === true ? CONSENT_VERSION : 0;
         state.anonymousId = enabled === true ? state.anonymousId || uuid() : null;
         await save(state); return view(state);
       });
     },
-    acknowledgeNotice: () => locked(async () => {
-      const state = await read(); state.noticeSeen = true; await save(state); return view(state);
-    }),
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
       const payload = await locked(async () => {
@@ -88,9 +97,11 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
         const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature)))].map(x => x.toString(16).padStart(2, '0')).join('');
         state.hourly = state.hourly.filter(t => time - t < HOUR);
+        state.fillHourly = state.fillHourly.filter(t => time - t < HOUR);
         state.recent = Object.fromEntries(Object.entries(state.recent).filter(([, t]) => time - t < DAY));
-        if (state.hourly.length >= 5 || state.recent[hash] !== undefined) return null;
-        state.anonymousId = body.anonymous_id; state.hourly.push(time); state.recent[hash] = time;
+        const [sent, limit] = body.error_type.startsWith('fill_') ? [state.fillHourly, FILLS_PER_HOUR] : [state.hourly, ERRORS_PER_HOUR];
+        if (sent.length >= limit || state.recent[hash] !== undefined) return null;
+        state.anonymousId = body.anonymous_id; sent.push(time); state.recent[hash] = time;
         await save(state); return body;
       });
       return payload ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
@@ -128,7 +139,6 @@ export function installFeedback(api) {
       }
       if (!page) return { ok: false, reason: 'forbidden' };
       if (message.type === 'FEEDBACK_STATUS') return service.status();
-      if (message.type === 'FEEDBACK_NOTICE_SEEN') return service.acknowledgeNotice();
       if (message.type === 'FEEDBACK_CONSENT') return service.setConsent(message.enabled === true);
       if (message.type === 'FEEDBACK_PREVIEW') {
         const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics) };
@@ -152,6 +162,15 @@ export function installFeedback(api) {
     };
     handle().then(reply).catch(() => reply({ ok: false, reason: 'unavailable' }));
     return true;
+  });
+  // Ask right away instead of waiting for the user to find the setting: after an install, or an
+  // update, that leaves the choice unanswered, open the status page, which shows the choice.
+  // Registered synchronously, as MV3 requires for events that wake the worker.
+  api.runtime.onInstalled?.addListener(details => {
+    if (details?.reason !== 'install' && details?.reason !== 'update') return;
+    service.status()
+      .then(view => view.decided ? null : api.tabs.create({ url: api.runtime.getURL('popup.html') }))
+      .catch(() => {});
   });
   core.install(data => service.automatic(data).catch(() => {}), { origin });
   return service;

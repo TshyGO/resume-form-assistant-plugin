@@ -233,6 +233,44 @@ fn rescheduling_cancels_the_previous_plan_before_registering_the_new_one() {
 }
 
 #[test]
+fn editing_with_explicit_nulls_clears_the_optional_fields_and_omitting_them_keeps_them() {
+    let (_dir, store, app) = archive();
+    let scheduler = FakeScheduler::default();
+    let mut args = new_args(&app, "datetime", Some("2026-09-14T02:00:00Z"), None);
+    args.time_zone = Some("Asia/Shanghai".into());
+    args.remind_at_utc = Some("2026-09-14T01:00:00Z".into());
+    args.interview_round = Some(2);
+    let created = create_todo(&store, &scheduler, args, now()).unwrap();
+
+    // 只改标题：没出现的字段一个都不动。
+    let untouched: EditTodoArgs =
+        serde_json::from_value(json!({ "id": created.todo.id, "title": "二面" })).unwrap();
+    let kept = edit_todo(&store, &scheduler, untouched, now()).unwrap().todo;
+    assert_eq!(kept.time_zone.as_deref(), Some("Asia/Shanghai"));
+    assert_eq!(kept.interview_round, Some(2));
+    assert!(kept.remind_at_utc.is_some());
+
+    // 编辑框里删掉的三项以 null 发过来：都要清空，而不是被当成「没给」悄悄保留。
+    let cleared: EditTodoArgs = serde_json::from_value(json!({
+        "id": created.todo.id,
+        "timeZone": null,
+        "remindAtUtc": null,
+        "interviewRound": null,
+    }))
+    .unwrap();
+    let todo = edit_todo(&store, &scheduler, cleared, now()).unwrap().todo;
+    assert_eq!(todo.title, "二面");
+    assert_eq!(todo.time_zone, None);
+    assert_eq!(todo.remind_at_utc, None);
+    assert_eq!(todo.interview_round, None);
+
+    // 空字符串沿用原来的「清空」写法。
+    let blank: EditTodoArgs =
+        serde_json::from_value(json!({ "id": created.todo.id, "timeZone": " " })).unwrap();
+    assert_eq!(edit_todo(&store, &scheduler, blank, now()).unwrap().todo.time_zone, None);
+}
+
+#[test]
 fn finishing_a_todo_cancels_its_reminder_and_reopening_registers_it_again() {
     let (_dir, store, app) = archive();
     let scheduler = FakeScheduler::default();

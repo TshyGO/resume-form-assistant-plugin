@@ -487,3 +487,61 @@ test("AI_BUSY 时能取消真正在跑的那一次", async () => {
   await user.click(screen.getByRole("button", { name: "取消正在跑的那一次" }));
   expect(calls.filter((call) => call.command === "cancel_analysis_cmd").length).toBe(before + 1);
 });
+
+test("发送确认与审核都在弹窗里：等待中按 Esc 不会关掉，审核里「稍后再看」保留建议待确认", async () => {
+  const user = userEvent.setup();
+  let resolve: ((value: unknown) => void) | null = null;
+  const calls = mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return new Promise((done) => { resolve = done; });
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  const confirmDialog = (await screen.findByRole("heading", { name: "发送前确认" })).closest("dialog")!;
+  expect(confirmDialog).toBeTruthy();
+  // 默认焦点在「先不发」上：手滑按回车不会把内容发出去。
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "先不发" }));
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByRole("heading", { name: "正在等待 AI 整理结果" });
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("heading", { name: "正在等待 AI 整理结果" })).toBeTruthy();
+  expect(calls.some((call) => call.command === "cancel_analysis_cmd")).toBe(false);
+
+  resolve!(suggestion);
+  await screen.findByRole("heading", { name: "核对 AI 建议" });
+  expect(screen.getByText(/模型 fake-model/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "稍后再看" }));
+  expect(screen.queryByRole("heading", { name: "核对 AI 建议" })).toBeNull();
+  expect(calls.some((call) => ["reject_suggestion_cmd", "defer_suggestion_cmd", "confirm_suggestion_cmd"].includes(call.command))).toBe(false);
+  await user.click(screen.getByRole("button", { name: "打开待确认的建议" }));
+  await screen.findByRole("heading", { name: "核对 AI 建议" });
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("heading", { name: "核对 AI 建议" })).toBeNull();
+});
+
+test("暂存之后明说只存了模型的建议，没存刚改的地方", async () => {
+  const user = userEvent.setup();
+  mount((command, args) => {
+    if (command === "analyze_evidence_cmd") return suggestion;
+    if (command === "defer_suggestion_cmd") return { ...suggestion, status: "deferred" };
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  await user.click(await screen.findByRole("button", { name: "发送" }));
+  await user.selectOptions(await screen.findByLabelText("发送方式"), "unknown");
+  expect(screen.getByText(/暂存只存这条建议本身，不存你刚改的这些/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  expect(await screen.findByText(/你刚改的地方没有存/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "打开暂存的建议" })).toBeTruthy();
+});
+
+test("发送确认弹窗开着时出的错，显示在弹窗里面", async () => {
+  const user = userEvent.setup();
+  mount((command, args) => {
+    if (command === "list_applications_cmd") throw { code: "STORE_ERROR", message: "申请列表读不出来" };
+    return base(command, args);
+  });
+  await user.click(await screen.findByRole("button", { name: "AI 整理" }));
+  const dialog = (await screen.findByRole("heading", { name: "发送前确认" })).closest("dialog")!;
+  await waitFor(() => expect(dialog.textContent).toContain("申请列表读不出来"));
+  expect(dialog.contains(screen.getByRole("button", { name: "关掉" }))).toBe(true);
+});

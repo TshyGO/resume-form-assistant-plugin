@@ -356,43 +356,138 @@ export function AiReview({
     ["pending", "deferred", "rejected"].includes(row.status),
   );
 
-  return (
-    <section className="stack ai-panel">
-      {phase === "idle" ? (
+  const failureBlock = failure ? (
+    <div className="ai-failure" role="alert">
+      <p className="note error">{failure.text}</p>
+      <p className="muted">{failure.next}</p>
+      {/* 「自己选几条候选」这句话得配一个真能选的地方，否则是死胡同：
+          这条证据还没关联申请、桌面又认不出来时，用户在面板里无路可走。 */}
+      {/* VALIDATION 多半就是候选选多了或者选到了已经没有的申请：同样得让他改选，
+          否则「关掉 → 再来一次」用的还是那份选法，必然再失败一次。 */}
+      {phase !== "review" && ["AI_NEEDS_CANDIDATES", "VALIDATION"].includes(failure.code) ? (
         <div className="stack">
-          {loadingSaved ? <p className="muted">正在看这条证据以前有没有建议…</p> : null}
-          {alreadyConfirmed ? (
-            <p className="note warn">
-              这条通知已经确认过了。再分析一次也不能再确认第二遍（要改结论就直接改申请里的记录），
-              但那一次请求照样要花钱。
-            </p>
+          <ul className="ai-candidates is-choices">
+            {applications.map((application) => (
+              <li key={application.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={(selectedIds ?? []).includes(application.id)}
+                    disabled={
+                      (selectedIds?.length ?? 0) >= cap &&
+                      !(selectedIds ?? []).includes(application.id)
+                    }
+                    onChange={() => {
+                      const chosen = selectedIds ?? [];
+                      const next = chosen.includes(application.id)
+                        ? chosen.filter((item) => item !== application.id)
+                        : [...chosen, application.id];
+                      setSelectedIds(next.length ? next : null);
+                    }}
+                  />
+                  {application.company} · {application.title}
+                  {application.current_stage
+                    ? `（${stageLabel(application.current_stage)}）`
+                    : ""}
+                </label>
+              </li>
+            ))}
+          </ul>
+          {(selectedIds?.length ?? 0) >= cap ? (
+            <p className="note warn">一次最多送 {cap} 条候选，已经选满了。</p>
           ) : null}
-          <div className="row">
+          {truncated ? <p className="muted">申请太多，这里只列出了最近的一部分。</p> : null}
+          <div className="ai-actions">
             <button
               type="button"
               onClick={() => void loadPreview(selectedIds)}
-              disabled={!invoke || busy || loadingSaved}
+              disabled={busy || !selectedIds?.length}
             >
-              AI 整理
+              用选中的候选再看一次
             </button>
-            {reopenable.map((row) => (
-              <button key={row.id} type="button" onClick={() => void openReview(row)} disabled={busy}>
-                {row.status === "deferred"
-                  ? "打开暂存的建议"
-                  : row.status === "rejected"
-                    ? "打开拒绝过的建议"
-                    : "打开待确认的建议"}
-                {reopenable.length > 1
-                  ? `（${row.modelLabel ?? "模型未知"} · ${row.createdAt.slice(0, 16).replace("T", " ")} UTC）`
-                  : ""}
-              </button>
-            ))}
           </div>
-          <p className="muted">
-            会把这封通知的正文和几条候选申请发给你配的服务商。发送前会先让你看一遍。
-          </p>
         </div>
       ) : null}
+      {/* 上一次请求还在跑（多半是「不等了」之后取消没生效）。错误文案让用户
+          「先取消正在跑的那一次」，那就得有地方取消。 */}
+      {failure.code === "AI_BUSY" && !cancellableId ? (
+        <p className="muted">
+          正在跑的那一次不是这个窗口发起的，这里取消不了。等它结束，或者到发起它的地方取消。
+        </p>
+      ) : null}
+      <div className="ai-actions">
+        {failure.code === "AI_BUSY" && cancellableId ? (
+          <button
+            type="button"
+            onClick={() => {
+              void invoke
+                ?.<boolean>("cancel_analysis_cmd", { requestId: cancellableId })
+                .catch(() => {});
+              setCancellableId(null);
+              setFailure(null);
+            }}
+          >
+            取消正在跑的那一次
+          </button>
+        ) : null}
+        {failure.retryable && failure.retry === "analyze" ? (
+          <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={busy}>
+            再试一次
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => {
+            setFailure(null);
+            // 审核阶段只关掉这条错误：草稿改了一半，不能顺手丢掉。
+            if (phase !== "review") setPhase("idle");
+          }}
+        >
+          关掉
+        </button>
+      </div>
+    </div>
+  ) : null;
+
+  const idle = phase === "idle" || phase === "failed";
+
+  return (
+    <section className="ai-panel">
+      <div className="ai-idle">
+        <p className="ai-intro">
+          让 AI 读这条通知，建议关联的申请、通知类型、阶段和待办。会把这封通知的正文和几条候选申请发给你配的服务商；发送前会先让你看一遍，结果由你核对后确认才会写入。
+        </p>
+        {loadingSaved ? <p className="muted">正在看这条通知以前有没有建议…</p> : null}
+        {alreadyConfirmed ? (
+          <p className="note warn">
+            这条通知已经确认过了。再分析一次也不能再确认第二遍（要改结论就直接改申请里的记录），
+            但那一次请求照样要花钱。
+          </p>
+        ) : null}
+        <div className="ai-actions">
+          <button
+            type="button"
+            className="primary ai-start"
+            onClick={() => void loadPreview(selectedIds)}
+            disabled={!invoke || busy || loadingSaved || !idle}
+          >
+            AI 整理
+          </button>
+          {reopenable.map((row) => (
+            <button key={row.id} type="button" onClick={() => void openReview(row)} disabled={busy || !idle}>
+              {row.status === "deferred"
+                ? "打开暂存的建议"
+                : row.status === "rejected"
+                  ? "打开拒绝过的建议"
+                  : "打开待确认的建议"}
+              {reopenable.length > 1
+                ? `（${row.modelLabel ?? "模型未知"} · ${row.createdAt.slice(0, 16).replace("T", " ")} UTC）`
+                : ""}
+            </button>
+          ))}
+        </div>
+        {!invoke ? <p className="muted">需要在桌面应用里使用。</p> : null}
+      </div>
 
       {(phase === "preview" || phase === "sending") && preview ? (
         <AnalyzeDialog
@@ -422,6 +517,7 @@ export function AiReview({
             setBusy(false);
             setPhase("idle");
           }}
+          extra={failureBlock}
         />
       ) : null}
 
@@ -436,102 +532,25 @@ export function AiReview({
           onDraftChange={setDraft}
           onConfirm={confirm}
           onReject={() => setStatus("reject_suggestion_cmd", "已拒绝。正式记录一个字都没动。")}
-          onDefer={() => setStatus("defer_suggestion_cmd", "已暂存。下次打开这条证据还能接着看。")}
+          onDefer={() => setStatus("defer_suggestion_cmd", "已暂存。保存的是模型给的这份建议，你刚改的地方没有存；下次打开这条通知还能接着看。")}
+          onClose={() => {
+            // 先不决定：建议保持原来的状态，之后从「打开待确认的建议」回来。
+            setPhase("idle");
+            setSuggestion(null);
+            setDraft(null);
+            setFailure(null);
+          }}
+          extra={
+            <>
+              {failureBlock}
+              {truncated ? <p className="muted">申请太多，只列出了最近 {PAGE_SIZE * MAX_PAGES} 条。</p> : null}
+            </>
+          }
         />
       ) : null}
 
-      {failure ? (
-        <div className="stack">
-          <p className="note error">{failure.text}</p>
-          <p className="muted">{failure.next}</p>
-          {/* 「自己选几条候选」这句话得配一个真能选的地方，否则是死胡同：
-              这条证据还没关联申请、桌面又认不出来时，用户在面板里无路可走。 */}
-          {/* VALIDATION 多半就是候选选多了或者选到了已经没有的申请：同样得让他改选，
-              否则「关掉 → 再来一次」用的还是那份选法，必然再失败一次。 */}
-          {["AI_NEEDS_CANDIDATES", "VALIDATION"].includes(failure.code) ? (
-            <div className="stack">
-              <ul className="ai-candidates">
-                {applications.map((application) => (
-                  <li key={application.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={(selectedIds ?? []).includes(application.id)}
-                        disabled={
-                          (selectedIds?.length ?? 0) >= cap &&
-                          !(selectedIds ?? []).includes(application.id)
-                        }
-                        onChange={() => {
-                          const chosen = selectedIds ?? [];
-                          const next = chosen.includes(application.id)
-                            ? chosen.filter((item) => item !== application.id)
-                            : [...chosen, application.id];
-                          setSelectedIds(next.length ? next : null);
-                        }}
-                      />
-                      {application.company} · {application.title}
-                      {application.current_stage
-                        ? `（${stageLabel(application.current_stage)}）`
-                        : ""}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-              {(selectedIds?.length ?? 0) >= cap ? (
-                <p className="note warn">一次最多送 {cap} 条候选，已经选满了。</p>
-              ) : null}
-              {truncated ? <p className="muted">申请太多，这里只列出了最近的一部分。</p> : null}
-              <button
-                type="button"
-                onClick={() => void loadPreview(selectedIds)}
-                disabled={busy || !selectedIds?.length}
-              >
-                用选中的候选再看一次
-              </button>
-            </div>
-          ) : null}
-          {/* 上一次请求还在跑（多半是「不等了」之后取消没生效）。错误文案让用户
-              「先取消正在跑的那一次」，那就得有地方取消。 */}
-          {failure.code === "AI_BUSY" && !cancellableId ? (
-            <p className="muted">
-              正在跑的那一次不是这个窗口发起的，这里取消不了。等它结束，或者到发起它的地方取消。
-            </p>
-          ) : null}
-          {failure.code === "AI_BUSY" && cancellableId ? (
-            <button
-              type="button"
-              onClick={() => {
-                void invoke
-                  ?.<boolean>("cancel_analysis_cmd", { requestId: cancellableId })
-                  .catch(() => {});
-                setCancellableId(null);
-                setFailure(null);
-              }}
-            >
-              取消正在跑的那一次
-            </button>
-          ) : null}
-          {failure.retryable && failure.retry === "analyze" ? (
-            <button type="button" onClick={() => void loadPreview(selectedIds)} disabled={busy}>
-              再试一次
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              setFailure(null);
-              // 审核阶段只关掉这条错误：草稿改了一半，不能顺手丢掉。
-              if (phase !== "review") setPhase("idle");
-            }}
-          >
-            关掉
-          </button>
-        </div>
-      ) : null}
-
-      {truncated && phase === "review" ? (
-        <p className="muted">申请太多，只列出了最近 {PAGE_SIZE * MAX_PAGES} 条。</p>
-      ) : null}
+      {/* 审核与发送确认都在弹窗里：那两个阶段的错误由弹窗自己显示，这里只管弹窗外的。 */}
+      {phase === "idle" || phase === "failed" ? failureBlock : null}
       {notice ? <p className="note ok">{notice}</p> : null}
     </section>
   );

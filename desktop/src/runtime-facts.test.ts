@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { RuntimeStatus } from "./api.ts";
-import { runtimeFacts } from "./runtime-facts.ts";
+import { runtimeFactGroups, runtimeFacts } from "./runtime-facts.ts";
 
 function status(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return {
@@ -102,4 +102,13 @@ test("读不到档案状态时不冒充「没有升级」", () => {
   const row = rows.find((item) => item.label === "本次升级的迁移备份")!;
   assert.match(row.value, /读取失败/);
   assert.doesNotMatch(row.value, /没有升级/);
+});
+
+test("技术详情分四组，每个字段都在而且只出现一次", () => {
+  const flat = runtimeFacts(status()).map((fact) => fact.label);
+  const groups = runtimeFactGroups(status());
+  assert.deepEqual(groups.map((group) => group.title), ["应用与窗口", "本地数据", "浏览器与 WebView", "迁移与提醒"]);
+  const grouped = groups.flatMap((group) => group.facts.map((fact) => fact.label));
+  assert.equal(grouped.length, flat.length);
+  assert.deepEqual([...grouped].sort(), [...flat].sort());
 });

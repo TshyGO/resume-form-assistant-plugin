@@ -6,6 +6,7 @@
 //! 会把请求正文——证据或简历全文——原样重发给确认页上没出现过的主机）、
 //! **响应边读边限大小**（超大响应不先整块读进内存）。
 
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -20,6 +21,23 @@ pub const TIMEOUT_SECONDS: u64 = 60;
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// 同源跳转最多跟几次，防止来回跳。
 const MAX_REDIRECTS: usize = 5;
+
+/// AI 请求都自报产品名（#212）。不设的话 reqwest 不发任何 User-Agent：OpenCode Go 要求
+/// 客户端自报名字，Cloudflare 前置的接口也常拦没有 UA 的请求。
+pub const USER_AGENT: &str = concat!("wangshen-kuaitian-desktop/", env!("CARGO_PKG_VERSION"));
+
+/// OpenCode（opencode.ai）要求每个对话带稳定的 `x-opencode-session`，用于路由和提示缓存，
+/// 缺了会回 400 MissingSessionID（#212）。网申快填没有「对话」，用每次启动随机生成的一个
+/// 编号：不含任何用户信息，只发给 OpenCode，别的服务商不带。
+fn opencode_session(api_url: &str) -> Option<&'static str> {
+    let url = reqwest::Url::parse(api_url).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host != "opencode.ai" && !host.ends_with(".opencode.ai") {
+        return None;
+    }
+    static SESSION: OnceLock<String> = OnceLock::new();
+    Some(SESSION.get_or_init(|| uuid::Uuid::new_v4().to_string()).as_str())
+}
 
 /// 协议、主机、有效端口都相同才算同源。
 fn same_origin(a: &reqwest::Url, b: &reqwest::Url) -> bool {
@@ -52,6 +70,7 @@ impl ChatClient {
             }
         });
         let inner = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(timeout)
             .redirect(redirects)
             .build()
@@ -78,11 +97,11 @@ impl ChatClient {
         body: &Value,
     ) -> Result<String, CommandError> {
         let started = Instant::now();
-        let response = self
-            .inner
-            .post(api_url)
-            .bearer_auth(api_key)
-            .json(body)
+        let mut request = self.inner.post(api_url).bearer_auth(api_key).json(body);
+        if let Some(session) = opencode_session(api_url) {
+            request = request.header("x-opencode-session", session);
+        }
+        let response = request
             .send()
             .await
             .map_err(|err| {
@@ -285,6 +304,32 @@ mod tests {
             .unwrap();
         assert_eq!(text, "[]");
         handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn requests_name_the_product_and_other_providers_get_no_opencode_header() {
+        let (base, handle) = serve_raw(ok_reply("[]"));
+        let client = ChatClient::with_timeout(Duration::from_secs(5)).unwrap();
+        client.chat(&format!("{base}/v1/chat/completions"), "sk-test", "h", "m1", &Value::Null).await.unwrap();
+        let request = handle.join().unwrap().to_ascii_lowercase();
+        assert!(request.contains(&format!("user-agent: {}", USER_AGENT)), "{request}");
+        assert!(!request.contains("x-opencode-session"), "{request}");
+    }
+
+    #[test]
+    fn only_opencode_gets_a_session_and_it_stays_the_same_for_the_run() {
+        let first = opencode_session("https://opencode.ai/zen/go/v1/chat/completions").unwrap();
+        assert!(uuid::Uuid::parse_str(first).is_ok(), "{first}");
+        assert_eq!(opencode_session("https://OPENCODE.AI/zen/v1/chat/completions"), Some(first));
+        for other in [
+            "https://api.deepseek.com/v1/chat/completions",
+            "https://opencode.ai.relay.example/zen/go/v1/chat/completions",
+            "https://relay.example/opencode.ai/v1/chat/completions",
+            "not a url",
+        ] {
+            assert_eq!(opencode_session(other), None, "{other}");
+        }
+        assert!(USER_AGENT.starts_with("wangshen-kuaitian-desktop/"));
     }
 
     #[tokio::test]

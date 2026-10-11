@@ -8,7 +8,7 @@
 //    有一句自己的话，不能用一句「已设置提醒」糊过去。
 
 import type { ReminderCapability, TodoStatus, TodoView } from "./api.ts";
-import { formatInZone } from "./zoned.ts";
+import { formatInZone, utcToLocalInput } from "./zoned.ts";
 
 export interface Message {
   tone: "info" | "success" | "warn" | "pending";
@@ -16,7 +16,36 @@ export interface Message {
 }
 
 export const EMPTY_TODOS =
-  "还没有待办。可以在申请详情里给它加一条，比如测评截止或者面试时间。";
+  "添加面试、测评或跟进事项，安排求职下一步。每条待办都关联一条申请。";
+
+/** 待办只能挂在申请下面：一条申请都没有时，新建入口要先把人领去建申请。 */
+export const NEEDS_APPLICATION =
+  "待办需要关联一条申请。还没有申请记录，请先新增申请，或在浏览器扩展里保存岗位。";
+
+/** 状态筛选。顺序就是界面上的顺序：最常看的「未完成」在最前。 */
+export type TodoFilter = TodoStatus | "all";
+
+export const FILTER_OPTIONS: Array<{ value: TodoFilter; label: string }> = [
+  { value: "open", label: "未完成" },
+  { value: "done", label: "已完成" },
+  { value: "cancelled", label: "已取消" },
+  { value: "all", label: "全部" },
+];
+
+/** 筛选后一条都没有时说什么。和「一条待办都没有」分开说。 */
+export function describeEmptyFilter(filter: TodoFilter): { title: string; text: string } {
+  const label = FILTER_OPTIONS.find((option) => option.value === filter)?.label ?? "";
+  if (filter === "open") {
+    return { title: "没有未完成的待办", text: "都处理完了。可以切换到「已完成」或「全部」查看。" };
+  }
+  return { title: `没有${label}的待办`, text: "切换到其他状态查看，或新增一条待办。" };
+}
+
+export const PRECISION_LABEL: Record<TodoView["duePrecision"], string> = {
+  none: "没有到期",
+  date: "只有日期",
+  datetime: "具体到几点",
+};
 
 /** 分组。顺序就是显示顺序：先看已经误了的，再看今天。 */
 export type Bucket = "overdue" | "today" | "week" | "later" | "someday" | "closed";
@@ -144,6 +173,60 @@ export function describeReminder(todo: TodoView, capability: ReminderCapability)
     return { tone: "warn", text: capability.reason ?? "提醒不会响" };
   }
   return { tone: "info", text: "到期已过，不再提醒" };
+}
+
+/** 列表右侧那枚小标签的语气：逾期标红、今天强调，其他照常。 */
+export type DueTone = "overdue" | "today" | "normal" | "none" | "closed";
+
+function dayDistance(from: string, to: string): number {
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  return Math.round(
+    (Date.UTC(ty ?? 1970, (tm ?? 1) - 1, td ?? 1) - Date.UTC(fy ?? 1970, (fm ?? 1) - 1, fd ?? 1)) / 86_400_000,
+  );
+}
+
+function relativeDay(day: string, today: string): string {
+  const distance = dayDistance(today, day);
+  if (distance === 0) return "今天";
+  if (distance === 1) return "明天";
+  if (distance === -1) return "昨天";
+  const [y, m, d] = day.split("-").map(Number);
+  return day.slice(0, 4) === today.slice(0, 4) ? `${m}月${d}日` : `${y}年${m}月${d}日`;
+}
+
+/**
+ * 列表里那枚到期标签：「今天 18:00」「明天」「已逾期 · 昨天 23:59」。
+ *
+ * 和 describeDue 守同一条规矩：只有日历日的**不带时刻**；精确时刻按待办自己的
+ * 时区写钟点，「今天/明天」也按那个时区的日历算。完整的时刻与时区在详情里。
+ */
+export function shortDue(todo: TodoView, now: Date): { text: string; tone: DueTone } {
+  const bucket = bucketOf(todo, now);
+  let text: string;
+  if (todo.duePrecision === "datetime" && todo.dueAtUtc) {
+    const wall = utcToLocalInput(todo.dueAtUtc, todo.timeZone);
+    if (!wall) return { text: "时间读不出来", tone: "normal" };
+    const today = utcToLocalInput(now.toISOString(), todo.timeZone).slice(0, 10) || localDay(now);
+    text = `${relativeDay(wall.slice(0, 10), today)} ${wall.slice(11, 16)}`;
+  } else if (todo.duePrecision === "date" && todo.dueDate) {
+    text = relativeDay(todo.dueDate, localDay(now));
+  } else {
+    return { text: "无到期", tone: todo.status === "open" ? "none" : "closed" };
+  }
+  if (todo.status !== "open") return { text, tone: "closed" };
+  if (bucket === "overdue") return { text: `已逾期 · ${text}`, tone: "overdue" };
+  if (bucket === "today") return { text, tone: "today" };
+  return { text, tone: "normal" };
+}
+
+/** 详情里「提醒时刻」一栏：自己设过就写那个时刻，没设就说按到期提醒。 */
+export function describeRemindAt(todo: TodoView): string {
+  if (todo.remindAtUtc) {
+    const shown = formatInZone(todo.remindAtUtc, todo.timeZone);
+    return shown ?? "提醒时刻读不出来";
+  }
+  return todo.duePrecision === "none" ? "未设" : "未单独设置（按到期时间提醒）";
 }
 
 /** 保存之后说什么。保存成功和提醒失败是两件事，都要说。 */

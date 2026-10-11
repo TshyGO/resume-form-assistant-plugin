@@ -36,8 +36,9 @@ function rowContainer() {
   let renderedFrom = null;
   let rows = [];
   const parse = (html) => html.split('<div class="field-row ').slice(1).map((segment) => {
-    const buttons = [...segment.matchAll(/<button [^>]*data-action="(\w+)"[^>]*?(disabled)?>([^<]*)<\/button>/g)]
-      .map((match) => ({ dataset: { action: match[1] }, label: match[3], disabled: Boolean(match[2]) }));
+    // A button's label is its text; the icon beside it (#261) is markup only.
+    const buttons = [...segment.matchAll(/<button [^>]*data-action="(\w+)"[^>]*?(disabled)?>([\s\S]*?)<\/button>/g)]
+      .map((match) => ({ dataset: { action: match[1] }, label: match[3].replace(/<[^>]+>/g, ''), disabled: Boolean(match[2]) }));
     const fill = { pressed: null, setAttribute(name, value) { if (name === 'aria-pressed') this.pressed = value; } };
     const classes = new Set();
     return {
@@ -343,16 +344,17 @@ function luminance(hex) {
 }
 const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
 
-test('group titles are tinted and bold, while the expanded body stays white', () => {
+test('group titles are bold with an icon and a secondary count; each field is its own bordered card', () => {
+  // #261 (Stitch): white group cards; the open group's icon is tinted instead of the whole title row.
   const { rule, resolve } = styleRules();
   const title = rule('.field-group summary');
-  const body = rule('.field-group__body');
-  assert.equal(resolve(title.background), '#e9f3f0');
-  assert.equal(resolve(body.background), '#fff');
-  assert.notEqual(resolve(title.background), resolve(body.background));
   assert.ok(Number(title['font-weight']) >= 700);
-  assert.ok(parseInt(title['font-size']) > parseInt(rule('.field-group small')['font-size']) || rule('.field-group small').color, 'the count is secondary text');
+  assert.ok(parseInt(title['font-size']) > parseInt(rule('.field-group small')['font-size']), 'the count is secondary text');
   assert.notEqual(rule('.field-group small').color, undefined);
+  assert.equal(resolve(rule('.field-group[open] .group-icon').background), '#e9f3f0', 'the open group is marked');
+  assert.equal(resolve(rule('.field-group__body').background), '#fff');
+  assert.match(rule('.field-row').border, /1px solid/);
+  assert.ok(parseInt(rule('.field-row')['border-radius']) >= 8, 'a field reads as a card');
 });
 
 test('child fields are indented and carry a guide line', () => {

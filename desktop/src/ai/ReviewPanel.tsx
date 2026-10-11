@@ -1,7 +1,9 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { AiSuggestion, ApplicationSummary, ReplyClass, SendMode, Stage } from "../api.ts";
 import { REPLY_CLASS_OPTIONS, SEND_MODE_OPTIONS } from "../inbox.ts";
 import { stageLabel } from "../applications.ts";
+import { ResumeDialog } from "../resume/ResumeDialog.tsx";
 import { confirmBlocker, confirmLabel, highlight, isModified, STAGES } from "./review.ts";
 import type { Draft, TodoDraft } from "./review.ts";
 
@@ -50,8 +52,8 @@ function TodoRow({
   onChange: (next: TodoDraft) => void;
 }) {
   return (
-    <li className="stack">
-      <label>
+    <li className={`ai-todo${todo.keep ? "" : " is-skipped"}`}>
+      <label className="ai-check">
         <input
           type="checkbox"
           checked={todo.keep}
@@ -67,7 +69,7 @@ function TodoRow({
           onChange={(event) => onChange({ ...todo, title: event.target.value })}
         />
       </label>
-      <div className="row">
+      <div className="ai-field-grid">
         <label>
           到期
           <select
@@ -132,7 +134,7 @@ function TodoRow({
 }
 
 /**
- * 审核面板。**这里改的全是草稿**：不按确认，档案里什么都不会变。
+ * 审核面板（#262 起是一个宽弹窗）。**这里改的全是草稿**：不按确认，档案里什么都不会变。
  */
 export function ReviewPanel({
   suggestion,
@@ -145,6 +147,8 @@ export function ReviewPanel({
   onConfirm,
   onReject,
   onDefer,
+  onClose,
+  extra,
 }: {
   suggestion: AiSuggestion;
   /** 模型一条都没指认时的兜底清单：让用户自己从在办申请里挑。 */
@@ -158,6 +162,10 @@ export function ReviewPanel({
   onConfirm: () => void;
   onReject: () => void;
   onDefer: () => void;
+  /** 先不决定、关掉弹窗。建议保持原状态，之后还能从「打开待确认的建议」回来。 */
+  onClose?: () => void;
+  /** 弹窗里就近显示的错误与提示（确认失败之类），由宿主给。 */
+  extra?: ReactNode;
 }) {
   const [showScope, setShowScope] = useState(false);
   const blocker = alreadyConfirmed
@@ -165,7 +173,7 @@ export function ReviewPanel({
     : confirmBlocker(draft, suggestion);
   // 候选之外永远还能挑别的申请：模型可能一条都没指认（它宁可空着也不猜）、
   // 可能指认错了、也可能指认的那条已经被删了。只给候选会让这些情况没法收场。
-  const extra = applications
+  const extraChoices = applications
     .filter((application) => !suggestion.candidates.some((c) => c.id === application.id))
     .map((application) => ({
       id: application.id,
@@ -174,179 +182,209 @@ export function ReviewPanel({
       stage: application.current_stage ?? "",
       missing: false,
     }));
-  const choices = [...suggestion.candidates, ...extra];
+  const choices = [...suggestion.candidates, ...extraChoices];
   // 模型给了这五个之外的阶段时，草稿里已经回落成「不记阶段」；这里说一声，
   // 免得用户以为是自己没选。
   const unusableStage = suggestion.stage && !STAGES.includes(suggestion.stage as never);
   const patch = (next: Partial<Draft>) => onDraftChange({ ...draft, ...next });
+  const modified = isModified(draft, suggestion);
 
   return (
-    <div className="stack ai-review">
-      <h4>AI 建议（还没生效）</h4>
-      <p className="muted">
-        下面每一项都可以改。按确认之前，这条证据的分类、申请的阶段和待办都不会变。
-      </p>
-
-      <h5>对应哪一条申请</h5>
-      {suggestion.candidates.length > 1 ? (
-        <p className="note warn">同一家公司有多条申请，模型没能唯一指认。请自己选一条。</p>
-      ) : null}
-      {suggestion.candidates.length === 0 ? (
-        <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
-      ) : null}
-      <p className="muted">下拉里前几条是模型给的候选，后面是其余申请——它指错了也能改。</p>
-      <label>
-        申请
-        <select
-          value={draft.applicationId}
-          onChange={(event) => patch({ applicationId: event.target.value })}
-        >
-          <option value="">请选择…</option>
-          {choices.map((candidate) => (
-            <option key={candidate.id} value={candidate.id} disabled={candidate.missing}>
-              {candidate.company}
-              {candidate.title ? ` · ${candidate.title}` : ""}
-              {candidate.stage ? `（${stageLabel(candidate.stage)}）` : ""}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <h5>分类</h5>
-      <div className="row">
-        <label>
-          通知类型
-          <select
-            value={draft.replyClass}
-            onChange={(event) => patch({ replyClass: event.target.value as ReplyClass })}
-          >
-            {REPLY_CLASS_OPTIONS.filter((option) => option.value !== "").map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          发送方式
-          <select
-            value={draft.sendMode}
-            onChange={(event) => patch({ sendMode: event.target.value as SendMode })}
-          >
-            {SEND_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <h5>进度</h5>
-      {unusableStage ? (
-        <p className="note warn">
-          模型给的阶段（{stageLabel(suggestion.stage!)}）不能从一封通知里推出来，已经忽略。
-          需要记阶段就自己选一个。
-        </p>
-      ) : null}
-      <div className="row">
-        <label>
-          阶段
-          <select
-            value={draft.stage}
-            onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
-          >
-            {STAGE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          轮次
-          <input
-            aria-label="轮次"
-            value={draft.round ?? ""}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              patch({ round: event.target.value.trim() === "" || Number.isNaN(value) ? null : value });
-            }}
-          />
-        </label>
-      </div>
-      <label>
-        <input
-          type="checkbox"
-          checked={draft.updateProgress}
-          onChange={(event) => patch({ updateProgress: event.target.checked })}
-        />
-        同时更新申请进度
-      </label>
-      <p className="muted">不勾就只记进时间线，当前进度不动——补录旧通知时要的就是这个。</p>
-
-      {draft.todos.length ? (
+    <ResumeDialog
+      open
+      wide
+      className="ai-dialog ai-review-dialog"
+      title="核对 AI 建议"
+      onCancel={() => onClose?.()}
+      cancelDisabled={busy || !onClose}
+      footer={
         <>
-          <h5>待办</h5>
-          <ul className="ai-todos">
-            {draft.todos.map((todo, index) => (
-              <TodoRow
-                key={index}
-                todo={todo}
-                index={index}
-                onChange={(next) =>
-                  patch({ todos: draft.todos.map((item, at) => (at === index ? next : item)) })
-                }
+          {blocker ? <p className="dialog-foot-note warn">{blocker}</p> : null}
+          {modified && !blocker ? (
+            <p className="dialog-foot-note">改过的地方会记成「修改后确认」，模型原本说的什么也留着。</p>
+          ) : null}
+          {onClose ? (
+            <button type="button" className="dialog-foot-start" onClick={onClose} disabled={busy}>
+              稍后再看
+            </button>
+          ) : null}
+          <button type="button" onClick={onDefer} disabled={busy}>
+            暂存
+          </button>
+          <button type="button" className="danger" onClick={onReject} disabled={busy}>
+            拒绝
+          </button>
+          <button type="button" className="primary" onClick={onConfirm} disabled={busy || blocker !== null}>
+            {confirmLabel(draft, suggestion)}
+          </button>
+        </>
+      }
+    >
+      <div className="ai-review">
+        <p className="dialog-intro">
+          下面每一项都可以改。按确认之前，这条通知的分类、申请的阶段和待办都不会变。
+        </p>
+        <p className="ai-model-line">
+          模型 {suggestion.modelLabel ?? "未知"} · 生成于 {suggestion.createdAt.slice(0, 16).replace("T", " ")} UTC ·{" "}
+          <button type="button" className="linkish" onClick={() => setShowScope((on) => !on)}>
+            {showScope ? "收起这次发出去的范围" : "看看这次发出去了什么"}
+          </button>
+        </p>
+        {showScope ? (
+          <p className="ai-scope">
+            {suggestion.promptScope ?? "没有记录"}
+            {suggestion.modelLabel ? ` · 模型 ${suggestion.modelLabel}` : ""}
+          </p>
+        ) : null}
+
+        <section className="ai-review-section">
+          <h3>对应哪一条申请</h3>
+          {suggestion.candidates.length > 1 ? (
+            <p className="note warn">同一家公司有多条申请，模型没能唯一指认。请自己选一条。</p>
+          ) : null}
+          {suggestion.candidates.length === 0 ? (
+            <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
+          ) : null}
+          <label>
+            申请
+            <select
+              value={draft.applicationId}
+              onChange={(event) => patch({ applicationId: event.target.value })}
+              data-autofocus
+            >
+              <option value="">请选择…</option>
+              {choices.map((candidate) => (
+                <option key={candidate.id} value={candidate.id} disabled={candidate.missing}>
+                  {candidate.company}
+                  {candidate.title ? ` · ${candidate.title}` : ""}
+                  {candidate.stage ? `（${stageLabel(candidate.stage)}）` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="field-hint">下拉里前几条是模型给的候选，后面是其余申请——它指错了也能改。</p>
+        </section>
+
+        <section className="ai-review-section">
+          <h3>分类</h3>
+          <div className="ai-field-grid">
+            <label>
+              通知类型
+              <select
+                value={draft.replyClass}
+                onChange={(event) => patch({ replyClass: event.target.value as ReplyClass })}
+              >
+                {REPLY_CLASS_OPTIONS.filter((option) => option.value !== "").map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              发送方式
+              <select
+                value={draft.sendMode}
+                onChange={(event) => patch({ sendMode: event.target.value as SendMode })}
+              >
+                {SEND_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="ai-review-section">
+          <h3>阶段建议</h3>
+          {unusableStage ? (
+            <p className="note warn">
+              模型给的阶段（{stageLabel(suggestion.stage!)}）不能从一封通知里推出来，已经忽略。
+              需要记阶段就自己选一个。
+            </p>
+          ) : null}
+          <div className="ai-field-grid">
+            <label>
+              阶段
+              <select
+                value={draft.stage}
+                onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
+              >
+                {STAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              面试轮次
+              <input
+                aria-label="轮次"
+                inputMode="numeric"
+                value={draft.round ?? ""}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  patch({ round: event.target.value.trim() === "" || Number.isNaN(value) ? null : value });
+                }}
               />
-            ))}
-          </ul>
-        </>
-      ) : null}
+            </label>
+          </div>
+          <label className="ai-check">
+            <input
+              type="checkbox"
+              checked={draft.updateProgress}
+              onChange={(event) => patch({ updateProgress: event.target.checked })}
+            />
+            同时更新申请进度
+          </label>
+          <p className="field-hint">不勾就只记进时间线，当前进度不动——补录旧通知时要的就是这个。</p>
+        </section>
 
-      {suggestion.uncertainties.length ? (
-        <>
-          <h5>模型自己也不确定的地方</h5>
-          <ul className="ai-uncertainties">
-            {suggestion.uncertainties.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </>
-      ) : null}
+        {draft.todos.length ? (
+          <section className="ai-review-section">
+            <h3>待办草稿</h3>
+            <p className="field-hint">时刻写成带时区偏移的格式，例如 2026-10-11T14:30:00+08:00。</p>
+            <ul className="ai-todos">
+              {draft.todos.map((todo, index) => (
+                <TodoRow
+                  key={index}
+                  todo={todo}
+                  index={index}
+                  onChange={(next) =>
+                    patch({ todos: draft.todos.map((item, at) => (at === index ? next : item)) })
+                  }
+                />
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
-      <h5>原文依据</h5>
-      <Excerpts body={body} excerpts={suggestion.excerpts} />
+        {suggestion.uncertainties.length ? (
+          <section className="ai-review-section">
+            <h3>模型自己也不确定的地方</h3>
+            <ul className="ai-uncertainties">
+              {suggestion.uncertainties.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
-      <p className="muted">
-        <button type="button" className="linkish" onClick={() => setShowScope((on) => !on)}>
-          {showScope ? "收起这次发出去的范围" : "看看这次发出去了什么"}
-        </button>
-      </p>
-      {showScope ? (
-        <p className="muted">
-          {suggestion.promptScope ?? "没有记录"}
-          {suggestion.modelLabel ? ` · 模型 ${suggestion.modelLabel}` : ""}
-        </p>
-      ) : null}
+        <section className="ai-review-section">
+          <h3>原文依据</h3>
+          <Excerpts body={body} excerpts={suggestion.excerpts} />
+        </section>
 
-      {blocker ? <p className="note warn">{blocker}</p> : null}
-      <div className="row">
-        <button type="button" onClick={onConfirm} disabled={busy || blocker !== null}>
-          {confirmLabel(draft, suggestion)}
-        </button>
-        <button type="button" onClick={onReject} disabled={busy}>
-          拒绝
-        </button>
-        <button type="button" onClick={onDefer} disabled={busy}>
-          暂存
-        </button>
-      </div>
-      {isModified(draft, suggestion) ? (
-        <>
-          <p className="muted">改过的地方会记成「修改后确认」，模型原本说的什么也留着。</p>
+        {modified ? (
           <p className="note warn">暂存只存这条建议本身，不存你刚改的这些；下次打开还是模型原来那份。</p>
-        </>
-      ) : null}
-    </div>
+        ) : (
+          <p className="field-hint">暂存会保存模型的这份建议，下次打开这条通知还能接着看。</p>
+        )}
+        {extra}
+      </div>
+    </ResumeDialog>
   );
 }

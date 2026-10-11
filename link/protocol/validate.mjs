@@ -522,7 +522,7 @@ export function validateResponseForRequest(value, request) {
   }
   // A plugin that predates tiers rejects a response carrying `tier`: its schema copy has
   // additionalProperties: false. Only a request that asked for a tier may get one back.
-  if (request.messageType === "ai.complete" && value.ok === true && Object.hasOwn(value.payload ?? {}, "tier") &&
+  if (request.messageType === "ai.complete" && Object.hasOwn(value.payload ?? {}, "tier") &&
       !Object.hasOwn(request.payload ?? {}, "tier") && request.payload?.purpose !== "analyze") {
     throw fail("invalid_payload", "ai.complete tier is only returned to a request that asked for one");
   }

@@ -144,6 +144,8 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
   const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser] });
   await page.ready(copyOverride);
   let activeTabId = 7;
+  // The front tab's address, as chrome.tabs.query reports it (undefined unless a test sets it).
+  let activeUrl;
   // Tab 7 is the page under test; further tabs (each its own page controller) are added by tests.
   const pages = new Map([[7, page]]);
   let statusGate = null;
@@ -178,7 +180,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     },
     storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } },
     tabs: {
-      query: async () => [{ id: activeTabId }],
+      query: async () => [{ id: activeTabId, url: activeUrl }],
       // A tab that is not in `pages` is a page without the helper.
       sendMessage: async (tabId, message) => {
         const target = pages.get(tabId);
@@ -208,7 +210,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
       ResumeProResumeData: require('../../resume-data.js'),
       ResumeProCompose: require('../../sidepanel-compose.js')
     },
-    setTimeout: () => 1, clearTimeout() {}, setInterval: listener => { poll = listener; }
+    URL, setTimeout: () => 1, clearTimeout() {}, setInterval: listener => { poll = listener; }
   });
   vm.runInContext(read('sidepanel.js'), context);
   await settle();
@@ -224,6 +226,7 @@ async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status:
     async submit() { await get('job-save-form').listeners.submit({ preventDefault() {} }); await settle(); },
     async poll() { await poll(); await settle(); },
     setTab(id) { activeTabId = id; },
+    setUrl(url) { activeUrl = url; },
     async addPage(tabId, options = {}) {
       const other = loadPage({ extraction: RELIABLE_JOB, desktop: () => ({ status: 'saved' }), userAgent: USER_AGENTS[browser], ...options });
       await other.ready();

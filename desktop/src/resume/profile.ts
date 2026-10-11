@@ -40,6 +40,7 @@ interface ProfileApi {
   FAMILY_GROUP: string;
   CUSTOM_GROUP: string;
   normalizeProfile(raw: unknown): Profile;
+  normalizeKey(value: string): string;
   emptyProfile(): Profile;
   countPendingFields(profile: Profile): number;
   countProfileValues(profile: Profile): number;

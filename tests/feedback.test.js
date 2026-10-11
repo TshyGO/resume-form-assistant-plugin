@@ -16,22 +16,27 @@ async function fixture(options = {}) {
 }
 const crash = { kind: 'exception', name: 'TypeError', source: 'error', stack: 'content.js:100:2', message: 'Secret name and resume data' };
 
-test('new installs default on with a notice; opt out deletes identity', async () => {
+test('new installs send and store nothing until the user agrees; opt out deletes identity', async () => {
   const f = await fixture();
-  assert.deepEqual(await f.service.status(), { consent: true, noticeSeen: false });
-  const initialId = f.data[f.key].anonymousId;
-  assert.match(initialId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(await f.service.status(), { consent: false, decided: false });
+  assert.equal((await f.service.automatic({ ...crash, stack: 'content.js:9:1' }, 'c.liepin.com')).reason, 'suppressed');
+  assert.equal(f.calls.length, 0);
+  // No identity and no dedup record: an error from before the choice leaves nothing to send later.
+  assert.equal(f.data[f.key], undefined);
   const restart = await fixture({ data: f.data });
-  assert.deepEqual(await restart.service.status(), { consent: true, noticeSeen: false });
-  assert.equal(f.data[f.key].anonymousId, initialId);
-  await f.service.automatic({ ...crash, stack: 'content.js:9:1' }); assert.equal(f.calls.length, 1);
-  f.calls.length = 0;
-  await f.service.setConsent(false); await f.service.automatic(crash); assert.equal(f.calls.length, 0);
-  await f.service.setConsent(true); const id = f.data[f.key].anonymousId; assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(await restart.service.status(), { consent: false, decided: false });
+  assert.deepEqual(await f.service.setConsent(true), { consent: true, decided: true });
+  assert.equal(f.calls.length, 0);
+  const id = f.data[f.key].anonymousId; assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.equal(f.data[f.key].consentVersion, (await import('../link/feedback.mjs')).CONSENT_VERSION);
   await f.service.automatic(crash, 'c.liepin.com'); assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].payload.anonymous_id, id);
   assert.ok(!JSON.stringify(f.calls[0].payload).includes('Secret'));
   assert.match(f.calls[0].payload.user_description, /^host: c\.liepin\.com$/m);
-  await f.service.setConsent(false); assert.equal(f.data[f.key].anonymousId, null);
+  assert.deepEqual(await f.service.setConsent(false), { consent: false, decided: true });
+  assert.equal(f.data[f.key].anonymousId, null);
+  await f.service.automatic({ ...crash, stack: 'content.js:300:1' }); assert.equal(f.calls.length, 1);
+  assert.deepEqual(await (await fixture({ data: f.data })).service.status(), { consent: false, decided: true });
   await f.service.setConsent(true); assert.notEqual(f.data[f.key].anonymousId, id);
 });
 
@@ -44,15 +49,27 @@ test('50 simultaneous repeats only send once, including after worker restart', a
   f.advance(24 * 3600000 + 1); await f.service.automatic(crash); assert.equal(f.calls.length, 2);
 });
 
-test('all auto categories share five per hour limit; fill dedup is host and type', async () => {
+test('code errors stop at five an hour; fill reports have their own twenty and dedup by host and type', async () => {
   const f = await fixture(); await f.service.setConsent(true);
-  for (let i = 0; i < 4; i++) await f.service.automatic({ ...crash, stack: `content.js:${i}:1` });
-  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com');
-  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com');
+  for (let i = 0; i < 6; i++) await f.service.automatic({ ...crash, stack: `content.js:${i}:1` });
   assert.equal(f.calls.length, 5);
+  // A long application session: every site is new, and code errors used up their own budget only.
+  for (let i = 0; i < 22; i++) await f.service.automatic({ kind: 'fill_partial' }, `site${i}.example.com`);
+  assert.equal(f.calls.length, 25);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 25);
   f.advance(3600001);
-  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 5);
-  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com'); assert.equal(f.calls.length, 6);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 26);
+  await f.service.automatic({ kind: 'fill_failed' }, 'c.liepin.com'); assert.equal(f.calls.length, 26);
+  await f.service.automatic({ kind: 'fill_partial' }, 'c.liepin.com'); assert.equal(f.calls.length, 27);
+  await f.service.automatic({ kind: 'fill_partial' }, 'site0.example.com'); assert.equal(f.calls.length, 27);
+  await f.service.automatic({ ...crash, stack: 'content.js:99:1' }); assert.equal(f.calls.length, 28);
+  // State saved before this split has no fill bucket (or a damaged one); it reads as empty.
+  for (const fillHourly of [undefined, null, 'x']) {
+    const saved = { ...f.data[f.key], fillHourly };
+    if (fillHourly === undefined) delete saved.fillHourly;
+    const old = await fixture({ data: { feedbackStateV1: saved } });
+    await old.service.automatic({ kind: 'fill_partial' }, 'new.example.com'); assert.equal(old.calls.length, 1);
+  }
 });
 
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {
@@ -100,7 +117,7 @@ test('redaction removes contact, credentials, URLs and OS user paths', () => {
 });
 
 test('reports carry the v1 block: the worker writes [来源], the page only supplies allowlisted sections', async () => {
-  const f = await fixture();
+  const f = await fixture(); await f.service.setConsent(true);
   const page = core.fillReport({ path: '/apply/12345', fieldCount: 0, filledCount: 0, category: 'no_fields_found', stage: 'scan' });
   await f.service.automatic({ kind: 'fill_failed', diagnostics: `${page}\n[来源]\nhost: evil.example\napp_version: 9.9.9\npage_title: 张三的简历` }, 'c.liepin.com');
   const text = f.calls[0].payload.user_description;
@@ -142,9 +159,13 @@ test('router rejects foreign senders and binds exact previews to one privileged 
     const page = { id: 'test', url: origin + 'sidepanel.html', documentId: 'doc-a' };
     const content = { id: 'test', url: 'https://c.liepin.com/resume?private=value', tab: { id: 1 } };
     const message = (body, sender = page) => new Promise(resolve => listener(body, sender, resolve));
+    await message({ type: 'FEEDBACK_AUTO', report: crash }, content); assert.equal(calls.length, 0);
+    assert.deepEqual(await message({ type: 'FEEDBACK_STATUS' }), { consent: false, decided: false });
     assert.equal((await message({ type: 'FEEDBACK_CONSENT', enabled: true }, content)).ok, false);
     assert.equal((await message({ type: 'FEEDBACK_CONSENT', enabled: true }, { ...page, id: 'other' })).ok, false);
-    assert.equal((await message({ type: 'FEEDBACK_NOTICE_SEEN' }, content)).ok, false);
+    // Folding a notice is no longer a message at all, so it cannot stand in for a choice.
+    assert.equal((await message({ type: 'FEEDBACK_NOTICE_SEEN' })).ok, false);
+    assert.deepEqual(await message({ type: 'FEEDBACK_STATUS' }), { consent: false, decided: false });
     await message({ type: 'FEEDBACK_CONSENT', enabled: false });
     await message({ type: 'FEEDBACK_AUTO', report: crash }, content); assert.equal(calls.length, 0);
     await message({ type: 'FEEDBACK_CONSENT', enabled: true });
@@ -231,29 +252,70 @@ test('the real AI worker leaves uncaught errors to its host and reports rejectio
 });
 
 
-test('notice acknowledgement persists without overriding another page opt-out', async () => {
-  const f = await fixture();
-  await f.service.status();
-  assert.deepEqual(await f.service.acknowledgeNotice(), { consent: true, noticeSeen: true });
-  await f.service.setConsent(false);
-  assert.deepEqual(await f.service.acknowledgeNotice(), { consent: false, noticeSeen: true });
-  const restart = await fixture({ data: f.data });
-  await restart.service.automatic(crash);
-  assert.equal(restart.calls.length, 0);
-  assert.equal((await restart.service.status()).consent, false);
-});
-test('migration preserves prior explicit choices and enables only undecided installations', async () => {
-  for (const previous of [true, false, null]) {
-    const f = await fixture({ data: { feedbackStateV1: { consent: previous, anonymousId: previous === true ? 'existing-id' : null } } });
-    assert.deepEqual(await f.service.status(), { consent: previous !== false, noticeSeen: previous !== null });
-    if (previous === false) assert.equal(f.data[f.key].anonymousId, null);
-    if (previous === true) assert.equal(f.data[f.key].anonymousId, 'existing-id');
+test('upgrades treat earlier default grants as undecided and keep every opt-out', async () => {
+  const { CONSENT_VERSION } = await import('../link/feedback.mjs');
+  const undecided = { consent: false, decided: false };
+  const cases = [
+    // Written by the default-on builds: never shown, folded with 「知道了」, or switched on by hand.
+    // The last two look the same in storage, so none of them proves a choice.
+    [{ consent: true, noticeSeen: false, anonymousId: 'old-id' }, undecided],
+    [{ consent: true, noticeSeen: true, anonymousId: 'old-id' }, undecided],
+    [{ consent: true, anonymousId: 'old-id' }, undecided],
+    [{ consent: true, consentVersion: CONSENT_VERSION + 1, anonymousId: 'old-id' }, undecided],
+    [{ consent: null, noticeSeen: false }, undecided],
+    [{ consent: false, noticeSeen: true, anonymousId: null }, { consent: false, decided: true }],
+    [{ consent: false }, { consent: false, decided: true }],
+    [{ consent: true, consentVersion: CONSENT_VERSION, anonymousId: 'granted-id' }, { consent: true, decided: true }]
+  ];
+  for (const [stored, expected] of cases) {
+    const label = JSON.stringify(stored);
+    const f = await fixture({ data: { feedbackStateV1: stored } });
+    assert.deepEqual(await f.service.status(), expected, label);
+    await f.service.automatic(crash);
+    assert.equal(f.calls.length, expected.consent ? 1 : 0, label);
+    if (expected.consent) assert.equal(f.calls[0].payload.anonymous_id, 'granted-id');
+    else assert.ok(!JSON.stringify(f.data).includes('old-id'), label);
+    assert.deepEqual(await (await fixture({ data: f.data })).service.status(), expected, label);
   }
 });
-test('default initialization cannot send when preferences cannot be persisted', async () => {
+test('storage failures never turn automatic reports on', async () => {
   const { createFeedback } = await import('../link/feedback.mjs');
   let requests = 0;
-  const service = createFeedback({ storage: { get: async () => ({}), set: async () => { throw new Error('disk'); } }, fetchImpl: async () => { requests++; }, version: 'test', os: 'test' });
-  await assert.rejects(service.automatic(crash), /disk/);
+  const options = { fetchImpl: async () => { requests++; }, version: 'test', os: 'test' };
+  const broken = createFeedback({ ...options, storage: { get: async () => ({}), set: async () => { throw new Error('disk'); } } });
+  assert.equal((await broken.automatic(crash)).reason, 'suppressed');
+  await assert.rejects(broken.setConsent(true), /disk/);
+  assert.equal((await broken.automatic(crash)).reason, 'suppressed');
+  // An old default grant whose downgrade cannot be written is still treated as undecided.
+  const legacy = createFeedback({ ...options, storage: { get: async () => ({ feedbackStateV1: { consent: true, anonymousId: 'old-id' } }), set: async () => { throw new Error('disk'); } } });
+  assert.deepEqual(await legacy.status(), { consent: false, decided: false });
+  assert.equal((await legacy.automatic(crash)).reason, 'suppressed');
+  const unreadable = createFeedback({ ...options, storage: { get: async () => { throw new Error('read'); }, set: async () => {} } });
+  await assert.rejects(unreadable.automatic(crash), /read/);
   assert.equal(requests, 0);
+});
+test('an install or update that leaves the choice open shows it right away; a made choice is not asked again', async () => {
+  const { installFeedback, CONSENT_VERSION } = await import('../link/feedback.mjs');
+  const cases = [
+    ['install', undefined, true],
+    ['update', undefined, true],
+    // 0.4.1 had no reports; an earlier test build's default grant is no choice either.
+    ['update', { consent: true, noticeSeen: true, anonymousId: 'old-id' }, true],
+    ['update', { consent: false }, false],
+    ['update', { consent: true, consentVersion: CONSENT_VERSION, anonymousId: 'granted-id' }, false],
+    ['chrome_update', undefined, false]
+  ];
+  for (const [reason, stored, opens] of cases) {
+    const data = stored ? { feedbackStateV1: stored } : {};
+    const opened = []; let onInstalled;
+    installFeedback({
+      runtime: { id: 'test', getURL: p => `chrome-extension://test/${p}`, getManifest: () => ({ version: '0.4.2' }),
+        onMessage: { addListener: () => {} }, onInstalled: { addListener: fn => { onInstalled = fn; } } },
+      storage: { local: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) } },
+      tabs: { create: async ({ url }) => { opened.push(url); } }
+    });
+    onInstalled({ reason });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(opened, opens ? ['chrome-extension://test/popup.html'] : [], `${reason} ${JSON.stringify(stored)}`);
+  }
 });

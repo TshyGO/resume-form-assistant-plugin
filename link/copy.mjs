@@ -119,7 +119,7 @@ const ASSIST_SOURCE = {
 };
 
 export function describeReviewSave() {
-  return '请核对公司和岗位，可以直接修改。点确认后才会保存到桌面。';
+  return '可直接修改，确认后才会写入桌面。';
 }
 
 // `detail` is the desktop's failure, worded the same way the fill button words it.

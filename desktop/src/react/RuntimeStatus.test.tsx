@@ -42,3 +42,14 @@ test("还没拿到状态时如实说，不画一张空表", () => {
   render(<RuntimeStatusFacts status={null} />);
   expect(screen.getByText("还没有拿到运行状态。")).toBeTruthy();
 });
+
+test("技术详情分组展示，读取失败时说失败并标明下面是旧状态", () => {
+  const { rerender } = render(<RuntimeStatusFacts status={status} />);
+  for (const title of ["应用与窗口", "本地数据", "浏览器与 WebView", "迁移与提醒"]) {
+    expect(screen.getByRole("region", { name: title })).toBeTruthy();
+  }
+  rerender(<RuntimeStatusFacts status={status} error="IPC 断了" />);
+  expect(screen.getByRole("alert").textContent).toMatch(/读取运行状态失败：IPC 断了.*上一次读到的状态/);
+  rerender(<RuntimeStatusFacts status={null} error="IPC 断了" />);
+  expect(screen.queryByText("还没有拿到运行状态。")).toBeNull();
+});

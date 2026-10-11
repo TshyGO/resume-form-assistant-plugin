@@ -188,7 +188,7 @@ export function createApplicationsController() {
   let saving = false;
   let editingId: string | null = null;
   let offset = 0;
-  const limit = 20;
+  const limit = 8;
   let lastFilter = {};
 
   function beginList() {

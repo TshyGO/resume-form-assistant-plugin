@@ -34,14 +34,38 @@ test("列出服务商，标出当前使用、主机、模型、Key 状态", asyn
   const current = await screen.findByRole("listitem", { name: /DeepSeek/ });
   expect(within(current).getByText("当前使用")).toBeTruthy();
   expect(within(current).getByText(/api\.deepseek\.com/)).toBeTruthy();
+  expect(within(current).getByText("已保存 Key")).toBeTruthy();
   const other = screen.getByRole("listitem", { name: /通义千问/ });
-  expect(within(other).getByText(/没有 Key/)).toBeTruthy();
+  expect(within(other).getByText("未配置 Key")).toBeTruthy();
+  // 只有编辑时才出现配置表单。
+  expect(screen.queryByLabelText("接口地址")).toBeNull();
 });
 
 test("没有服务商时引导从预设添加", async () => {
   mount(() => ({ providers: [], activeProviderId: null, credentialError: null }));
   expect(await screen.findByText(/还没有配置 AI 服务商/)).toBeTruthy();
   expect(screen.getByLabelText("从预设添加")).toBeTruthy();
+});
+
+test("读取失败不伪装成「还没配置」，可以重新读取", async () => {
+  const user = userEvent.setup();
+  let fail = true;
+  mount(() => {
+    if (fail) throw { code: "STORE", message: "设置文件损坏" };
+    return view;
+  });
+  expect((await screen.findByRole("alert")).textContent).toMatch(/读取 AI 设置失败：设置文件损坏/);
+  expect(screen.queryByText(/还没有配置 AI 服务商/)).toBeNull();
+  fail = false;
+  await user.click(screen.getByRole("button", { name: "重新读取" }));
+  expect(await screen.findByRole("listitem", { name: /DeepSeek/ })).toBeTruthy();
+});
+
+test("凭据库读不出来时说出原因，不显示「已保存」", async () => {
+  mount(() => ({ ...view, credentialError: "钥匙串拒绝访问" }));
+  expect(await screen.findByText(/系统凭据库读取失败：钥匙串拒绝访问/)).toBeTruthy();
+  expect(screen.getAllByText("凭据库读取失败").length).toBe(2);
+  expect(screen.queryByText("已保存 Key")).toBeNull();
 });
 
 test("切换当前使用", async () => {
@@ -67,7 +91,7 @@ test("强模型默认不使用，可选一个已保存的服务商，也可改�
   expect(screen.getByText("强模型改用「通义千问」。")).toBeTruthy();
 
   await user.selectOptions(screen.getByLabelText("强模型（可选）"), "");
-  await waitFor(() => expect(screen.queryByText("强模型", { selector: ".pill" })).toBeNull());
+  await waitFor(() => expect(screen.queryByText("强模型", { selector: ".settings-badge" })).toBeNull());
   expect(calls.filter((c) => c.command === "set_strong_ai_provider_cmd").map((c) => c.args)).toEqual([{ id: "p2" }, { id: null }]);
 });
 
@@ -82,7 +106,7 @@ test("强模型那条服务商删掉后，下拉框回到不使用", async () =>
   expect(select).toHaveProperty("value", "p2");
   const other = screen.getByRole("listitem", { name: /通义千问/ });
   await user.click(within(other).getByRole("button", { name: "删除" }));
-  await user.click(within(other).getByRole("button", { name: "确认删除" }));
+  await user.click(within(await screen.findByRole("dialog", { name: "删除这个服务商？" })).getByRole("button", { name: "删除服务商" }));
   await waitFor(() => expect(screen.getByLabelText("强模型（可选）")).toHaveProperty("value", ""));
 });
 
@@ -102,11 +126,16 @@ test("从预设新建会打开编辑器并预填地址", async () => {
   mount(() => view);
   await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.selectOptions(screen.getByLabelText("从预设添加"), "kimi");
-  await user.click(screen.getByRole("button", { name: "添加" }));
+  await user.click(screen.getByRole("button", { name: "添加服务商" }));
   expect(screen.getByLabelText("接口地址")).toHaveProperty("value", "https://api.moonshot.cn/v1");
+  // 一次只编辑一个：编辑器开着时不能再添加或编辑别的。
+  expect((screen.getByRole("button", { name: "添加服务商" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(within(screen.getByRole("listitem", { name: /DeepSeek/ })).getByRole("button", { name: "编辑" })).toHaveProperty("disabled", true);
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByLabelText("接口地址")).toBeNull();
 });
 
-test("删除要确认，删掉的服务商连 Key 一起删", async () => {
+test("删除要在弹窗里确认，删掉的服务商连 Key 一起删", async () => {
   const user = userEvent.setup();
   const calls = mount((command) =>
     command === "delete_ai_provider_cmd" ? { ...view, providers: [view.providers[0]] } : view,
@@ -114,9 +143,39 @@ test("删除要确认，删掉的服务商连 Key 一起删", async () => {
   const other = await screen.findByRole("listitem", { name: /通义千问/ });
   await user.click(within(other).getByRole("button", { name: "删除" }));
   expect(calls.some((c) => c.command === "delete_ai_provider_cmd")).toBe(false);
-  expect(within(other).getByText(/Key 也会一起删除/)).toBeTruthy();
-  await user.click(within(other).getByRole("button", { name: "确认删除" }));
+  const dialog = await screen.findByRole("dialog", { name: "删除这个服务商？" });
+  expect(within(dialog).getByText(/Key 也会一起删除/)).toBeTruthy();
+  expect(within(dialog).queryByText(/当前使用的服务商/)).toBeNull();
+  await user.click(within(dialog).getByRole("button", { name: "删除服务商" }));
   await waitFor(() => expect(screen.queryByRole("listitem", { name: /通义千问/ })).toBeNull());
+  expect(screen.getByText("已删除「通义千问」。当前使用：DeepSeek。")).toBeTruthy();
+});
+
+test("删除当前使用的服务商：先提醒，删完按真实结果说现在用哪个", async () => {
+  const user = userEvent.setup();
+  mount((command) =>
+    command === "delete_ai_provider_cmd" ? { ...view, providers: [view.providers[1]], activeProviderId: null } : view,
+  );
+  const current = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(current).getByRole("button", { name: "删除" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(/它是当前使用的服务商/)).toBeTruthy();
+  await user.click(within(dialog).getByRole("button", { name: "删除服务商" }));
+  expect(await screen.findByText(/现在没有当前使用的服务商/)).toBeTruthy();
+});
+
+test("列表里清除 Key 也要确认，确认后显示未配置", async () => {
+  const user = userEvent.setup();
+  const calls = mount((command) => command === "clear_ai_key_cmd"
+    ? { ...view, providers: [{ ...view.providers[0], keyConfigured: false }, view.providers[1]] }
+    : view);
+  const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
+  await user.click(within(row).getByRole("button", { name: "清除 Key" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(calls.some((c) => c.command === "clear_ai_key_cmd")).toBe(false);
+  await user.click(within(dialog).getByRole("button", { name: "清除 Key" }));
+  await waitFor(() => expect(within(row).getByText("未配置 Key")).toBeTruthy());
+  expect(screen.getByText(/已清除「DeepSeek」的 Key/)).toBeTruthy();
 });
 
 test("保存后主机变了、Key 被清掉，提醒重新填", async () => {
@@ -126,7 +185,7 @@ test("保存后主机变了、Key 被清掉，提醒重新填", async () => {
   );
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   expect(await screen.findByText(/换了协议或主机，原来的 Key 已清除/)).toBeTruthy();
 });
 
@@ -137,9 +196,10 @@ test("清除 Key 后编辑器立即显示新的 Key 状态", async () => {
     : view);
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
-  await user.click(screen.getByRole("button", { name: "清除 Key" }));
-  await user.click(screen.getByRole("button", { name: "确认清除" }));
-  await waitFor(() => expect(screen.queryByRole("button", { name: "清除 Key" })).toBeNull());
+  expect(within(row).getByRole("button", { name: "清除 Key" })).toHaveProperty("disabled", true);
+  await user.click(screen.getByRole("button", { name: "清除已保存的 Key" }));
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "清除 Key" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "清除已保存的 Key" })).toBeNull());
   expect(screen.getAllByText(/还没有 Key/).length).toBeGreaterThan(0);
 });
 
@@ -152,10 +212,10 @@ test("服务商保存好了但 Key 存失败：编辑器照样关掉，警示信
   );
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   expect(await screen.findByText(/服务商已保存，但 Key 没存进系统凭据库：凭据库锁了/)).toBeTruthy();
-  // 编辑器关掉了：找不到「取消」按钮。
-  expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+  // 编辑器关掉了：找不到表单。
+  expect(screen.queryByLabelText("接口地址")).toBeNull();
 });
 
 test("编辑器保存失败后重新拉一次设置，Key 状态不会显示过时的结果", async () => {
@@ -172,7 +232,7 @@ test("编辑器保存失败后重新拉一次设置，Key 状态不会显示过�
   });
   const row = await screen.findByRole("listitem", { name: /DeepSeek/ });
   await user.click(within(row).getByRole("button", { name: "编辑" }));
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "保存配置" }));
   await waitFor(() => expect(calls.filter((c) => c.command === "get_ai_settings_cmd").length).toBe(2));
   expect(await screen.findByText(/存 Key 失败/)).toBeTruthy();
 });
@@ -184,4 +244,35 @@ test("没连上桌面宿主时如实说明", async () => {
     </InvokeProvider>,
   );
   expect(screen.getByText(/没连上桌面宿主/)).toBeTruthy();
+});
+
+test("强模型保存失败时保留原选择并显示原因", async () => {
+  const user = userEvent.setup();
+  mount((command) => {
+    if (command === "set_strong_ai_provider_cmd") throw { code: "STORE", message: "设置文件无法写入" };
+    return { ...view, strongProviderId: "p1" };
+  });
+  const select = await screen.findByLabelText("强模型（可选）");
+  await user.selectOptions(select, "p2");
+  expect((await screen.findByRole("status")).textContent).toContain("设置文件无法写入");
+  expect(select).toHaveProperty("value", "p1");
+  expect(within(screen.getByRole("listitem", { name: "DeepSeek" })).getByText("强模型")).toBeTruthy();
+});
+
+test("强模型保存期间不能重复切换，编辑器打开时也禁用选择", async () => {
+  const user = userEvent.setup();
+  let finish!: (next: AiSettingsView) => void;
+  const calls = mount((command) => command === "set_strong_ai_provider_cmd"
+    ? new Promise<AiSettingsView>((resolve) => { finish = resolve; })
+    : view);
+  const select = await screen.findByLabelText("强模型（可选）");
+  await user.selectOptions(select, "p2");
+  expect(select).toHaveProperty("disabled", true);
+  expect(calls.filter((call) => call.command === "set_strong_ai_provider_cmd")).toHaveLength(1);
+  finish({ ...view, strongProviderId: "p2" });
+  await waitFor(() => expect(select).toHaveProperty("disabled", false));
+  await user.click(within(screen.getByRole("listitem", { name: "DeepSeek" })).getByRole("button", { name: "编辑" }));
+  expect(select).toHaveProperty("disabled", true);
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(select).toHaveProperty("disabled", false);
 });
