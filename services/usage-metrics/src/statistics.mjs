@@ -2,11 +2,29 @@ export function dateOffset(date, days) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-export async function liveStatistics(db, date, days = 30, observedAt = new Date()) {
-  if (![7, 30].includes(days) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error('Invalid statistics window');
+export class StatisticsInputError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'StatisticsInputError';
+    this.code = code;
+  }
+}
+
+export function validateStatisticsWindow(date, days = 30, observedAt = new Date()) {
+  if (![7, 30].includes(days)) throw new StatisticsInputError('invalid_window', 'Invalid statistics window');
+  const timestamp = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? Date.parse(`${date}T00:00:00Z`) : NaN;
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
+    throw new StatisticsInputError('invalid_date', 'Invalid statistics window');
+  }
   const today = observedAt.toISOString().slice(0, 10);
-  if (date > today || date < dateOffset(today, -15)) throw new Error('Window outside complete retained history');
-  const from = dateOffset(date, 1 - days);
+  if (date > today || date < dateOffset(today, -15)) {
+    throw new StatisticsInputError('outside_retained_history', 'Window outside complete retained history');
+  }
+  return { today, from: dateOffset(date, 1 - days) };
+}
+
+export async function liveStatistics(db, date, days = 30, observedAt = new Date()) {
+  const { today, from } = validateStatisticsWindow(date, days, observedAt);
   const latest = `WITH ranked AS (
     SELECT *, ROW_NUMBER() OVER (PARTITION BY installation_hash ORDER BY last_seen_at_utc DESC, last_seen_seq DESC) AS rank
     FROM activity_day WHERE date_utc BETWEEN ? AND ?

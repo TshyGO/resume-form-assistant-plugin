@@ -2,13 +2,18 @@ import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
-import { liveStatistics } from '../src/statistics.mjs';
+import { liveStatistics, validateStatisticsWindow, StatisticsInputError } from '../src/statistics.mjs';
 import { downloadReport } from '../src/downloads.mjs';
 
 // Read-only maintainer CLI. Wrangler owns authentication; no public admin HTTP API.
 try {
   const { values } = parseArgs({ options: { local: { type: 'boolean' }, remote: { type: 'boolean' }, config: { type: 'string' }, date: { type: 'string' }, window: { type: 'string' } } });
   if (Boolean(values.local) === Boolean(values.remote)) throw new Error('Select exactly one environment');
+  const observedAt = new Date();
+  const date = values.date ?? observedAt.toISOString().slice(0, 10);
+  const days = Number(values.window ?? 30);
+  // Reject bad arguments before reading config or invoking any remote/local database tool.
+  validateStatisticsWindow(date, days, observedAt);
   const config = values.config ?? 'wrangler.json';
   if (values.remote) {
     const settings = JSON.parse(readFileSync(config, 'utf8'));
@@ -41,11 +46,17 @@ try {
     return rows;
   }
   const db = { prepare: statement, batch: execute };
-  const report = await liveStatistics(db, values.date ?? new Date().toISOString().slice(0, 10), Number(values.window ?? 30));
+  const report = await liveStatistics(db, date, days, observedAt);
   report.downloads = await downloadReport(db);
   report.note = 'Enabled-statistics installation sample; the current UTC day is incomplete. Counts are approximate.';
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-} catch {
-  process.stderr.write('Metrics report failed. Check environment, config, migrations and date/window arguments. No report was emitted.\n');
+} catch (error) {
+  const hints = {
+    invalid_date: '报表日期无效：请使用实际存在的 YYYY-MM-DD 日期。未生成报表。\n',
+    invalid_window: '版本统计窗口无效：--window 仅支持 7 或 30。未生成报表。\n',
+    outside_retained_history: '日期超出可重算范围：请使用今天及前 15 个 UTC 日。未生成报表。\n',
+  };
+  process.stderr.write(error instanceof StatisticsInputError && Object.hasOwn(hints, error.code)
+    ? hints[error.code] : 'Metrics report failed. Check environment, config, migrations and date/window arguments. No report was emitted.\n');
   process.exitCode = 1;
 }

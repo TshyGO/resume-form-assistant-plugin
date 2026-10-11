@@ -6,7 +6,7 @@
 
 - `POST /v1/activity`：严格校验五字段、512 字节上限、UUIDv4、系统/来源和 SemVer；原始编号不落库。每天同一安装一条，来源取 OR，版本取最后观察值。
 - `DELETE /v1/activity`：两字段、幂等删除，事务中同时登记短期撤销状态。晚到的旧编号返回 410，重复删除不延长有效撤销记录的保留期限。
-- `GET /health`：检查业务表可查询，返回服务名、协议和配置中的采集开关，不提供设备或统计数据。根地址不提供页面。
+- `GET /health`：检查数据库、HMAC Secret 和限流器是否配置就绪。`activity_enabled`是采集开关，`activity_config_ready`是活动/删除所需配置是否就绪，`activity_ready`仅在配置就绪且开关开启时为 true。配置正确但主动停收时仍为 200；配置缺失或数据库检查失败为 503。检查不消耗限流额度，也不提供密钥、设备或统计数据。根地址不提供页面。
 - Cron：汇总已结束的 UTC 日，清理过期记录，完整分页取得 GitHub Release/附件后一次事务保存下载快照。
 - 管理报表：通过维护者的 Wrangler/D1 权限查询，无公开管理 HTTP API；输出总数、版本分布、采集起点、任务状态和下载增量。
 
@@ -29,11 +29,13 @@ WRANGLER_SEND_METRICS=false npm run dev
 打开 `http://localhost:8787/health`。测试活动（全部为虚构数据）：
 
 ```sh
-curl -i http://localhost:8787/v1/activity -H 'Content-Type: application/json' --data '{"schema_version":1,"installation_id":"11111111-1111-4111-8111-111111111111","platform":"windows","app_version":"0.4.3","surface":"desktop"}'
-curl -i -X DELETE http://localhost:8787/v1/activity -H 'Content-Type: application/json' --data '{"schema_version":1,"installation_id":"11111111-1111-4111-8111-111111111111"}'
+curl -i http://localhost:8787/v1/activity -H 'Content-Type: application/json' -H 'CF-Connecting-IP: 192.0.2.1' --data '{"schema_version":1,"installation_id":"11111111-1111-4111-8111-111111111111","platform":"windows","app_version":"0.4.3","surface":"desktop"}'
+curl -i -X DELETE http://localhost:8787/v1/activity -H 'Content-Type: application/json' -H 'CF-Connecting-IP: 192.0.2.1' --data '{"schema_version":1,"installation_id":"11111111-1111-4111-8111-111111111111"}'
 ```
 
 两次操作返回 204。删除后再使用旧编号 POST 返回 410。创建其他虚构编号模拟重新开启。
+
+上面的来源头仅用于本机测试，192.0.2.1 是虚构测试地址。生产桌面不自行设置来源头，由 Cloudflare 直连接收路径提供。缺失/空来源头时 POST/DELETE 返回 `503 client_source_unavailable`，不进入限流或写库；不要配置转发或移除来源头。没有全局 unknown 回退桶，也不使用安装编号或随机值绕过来源限流。
 
 查看汇总（另一个终端，本目录）：
 
@@ -42,6 +44,8 @@ node scripts/report.mjs --local
 ```
 
 支持 `--window 7` 或 `--window 30` 的版本观察窗口。DAU/WAU/MAU 始终分别按 1/7/30 个 UTC 日计算。`--date YYYY-MM-DD` 仅接受今天及前 15 天，以保证完整 30 日窗口仍在 45 天明细内；更早的历史只读取已存汇总，不能重算版本分布。今日标为未结束；无采集起点表示尚无成功上报，不代表全量产品用户为零。
+
+报表先检查日期和窗口，再读取配置/调用数据库工具。不存在的日期（包括 2026-02-30、2026-13-01）、不支持的窗口和超出可重算范围的日期各有固定提示；失败不输出报表，不回显参数、配置路径、Token、SQL 错误或堆栈。
 
 `npm test` 使用官方 Miniflare/Workerd 和实际 D1 SQL 引擎；不调用 Cloudflare 远端或 GitHub。依赖版本锁定，Miniflare v5 的 alpha 版本来自当前 Wrangler 官方依赖，使用其 V4 选项转换器。CI 独立运行这些测试、迁移、报表和部署 dry-run。
 
@@ -62,7 +66,7 @@ WRANGLER_SEND_METRICS=false npx wrangler deploy --config wrangler.test.json
 
 secret put 使用交互输入，由维护者生成高熵密钥（建议随机 32 字节以上）；不要复制本地示例密钥。该命令会更新并部署 Worker 版本，执行前再次确认测试 Worker，不操作原 /feedback 服务。
 
-5. 测试 `/health` 应为 200、activity_enabled 为 false；POST 应为 503，确认代码已替换旧占位程序。查看根地址的 404 不作为健康测试。
+5. 测试 `/health` 应为 200、activity_enabled=false、activity_config_ready=true、activity_ready=false；POST 应为 503，DELETE 配置仍就绪，确认代码已替换旧占位程序。查看根地址的 404 不作为健康测试。
 6. 核对日志自动采集已关闭、无 Tail/Trace 记录请求体或标识；D1 写入权限与数据库指向符合目标。管理 Token 属于管理权限，不用于活动请求。
 7. 仅在隔离测试环境把 METRICS_ENABLED 改为 true 并重新部署，使用虚构数据验证 POST/DELETE、同机去重、410、非法字段、超大请求与 429。部署后自测地址必须普通 HTTPS 客户端可访问，不能要求管理员 Access 登录或浏览器验证码。
 8. Cron 配置为 `10 0 * * *`（北京时间 08:10）。先让一次任务成功，或通过维护者测试方法触发；核对 maintenance_state 的 summary、cleanup、downloads。
