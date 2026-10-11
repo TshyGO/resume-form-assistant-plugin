@@ -2,6 +2,7 @@ import test, { before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { build } from 'esbuild';
 import { createWorker, runMaintenance } from '../src/index.mjs';
 import { hmac, recordActivity, deleteActivity, activityPayload } from '../src/activity.mjs';
 import { cleanup, liveStatistics, summarizeClosedDays } from '../src/statistics.mjs';
@@ -228,6 +229,46 @@ test('request budgets and mid-collection failures leave no partial download snap
   const fixture = githubFixture(releases.slice(0, 2));
   await assert.rejects(collectDownloads(db, url => /\/2\/assets/.test(url) ? Promise.resolve(new Response('failure', { status: 500 })) : fixture(url), undefined, () => NOW));
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_download_snapshot').first()).n, 0);
+});
+
+test('GitHub requests use Workers-compatible manual redirects and reject 3xx without following', async () => {
+  let requests = 0;
+  await assert.rejects(fetchReleases(async (url, options) => {
+    requests++;
+    assert.equal(options.redirect, 'manual');
+    assert.equal(new URL(url).hostname, 'api.github.com');
+    return new Response(null, { status: 302, headers: { Location: 'https://synthetic.invalid' } });
+  }), /GitHub request failed/);
+  assert.equal(requests, 1);
+});
+
+test('scheduled maintenance uses native Workerd fetch with mocked outbound GitHub responses', async () => {
+  const source = await build({
+    stdin: {
+      contents: `import { runMaintenance } from './src/index.mjs';
+        export default { async fetch(_request, env) {
+          try { await runMaintenance(env, { now: () => new Date('2026-10-11T00:10:00Z') }); return new Response(null, {status: 204}); }
+          catch { return new Response(null, {status: 500}); }
+        }};`,
+      resolveDir: process.cwd(), sourcefile: 'maintenance-test.mjs',
+    }, bundle: true, format: 'esm', platform: 'browser', write: false,
+  });
+  let calls = 0;
+  const data = JSON.parse(readFileSync(new URL('../../../tests/fixtures/usage-metrics/releases-baseline.json', import.meta.url), 'utf8'));
+  const runtime = new Miniflare(convertV4MiniflareOptions({
+    modules: true, script: source.outputFiles[0].text, compatibilityDate: '2026-10-01', d1Databases: ['DB'],
+    outboundService: async request => { calls++; return githubFixture(data)(request.url); },
+  }));
+  try {
+    const database = await runtime.getD1Database('DB');
+    const sql = readFileSync(new URL('../migrations/0001_metrics.sql', import.meta.url), 'utf8');
+    await database.batch(sql.split(';').map(part => part.trim()).filter(Boolean).map(part => database.prepare(part)));
+    const response = await runtime.dispatchFetch('https://maintenance.test');
+    assert.equal(response.status, 204);
+    assert.equal(calls, 2);
+    assert.equal((await database.prepare("SELECT status FROM maintenance_state WHERE task = 'downloads'").first()).status, 'success');
+    assert.equal((await database.prepare('SELECT asset_count FROM release_observation').first()).asset_count, 3);
+  } finally { await runtime.dispose(); }
 });
 
 test('maintenance failure preserves previous success time and only records safe task status', async () => {

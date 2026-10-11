@@ -15,7 +15,9 @@ export async function fetchReleases(fetchImpl, token) {
       try {
         const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'resume-usage-metrics' };
         if (token) headers.Authorization = `Bearer ${token}`;
-        const response = await fetchImpl(`${BASE}${path}?per_page=100&page=${page}`, { headers, signal: controller.signal, redirect: 'error' });
+        // Workers supports follow/manual, not error. Non-2xx (including redirects)
+        // is rejected below; credentials never follow a redirected destination.
+        const response = await fetchImpl(`${BASE}${path}?per_page=100&page=${page}`, { headers, signal: controller.signal, redirect: 'manual' });
         if (!response.ok) throw new Error('GitHub request failed');
         const bytes = await readBytes(response, 5 * 1024 * 1024);
         values = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));

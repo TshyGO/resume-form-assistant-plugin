@@ -1,6 +1,6 @@
 # 使用统计 Worker（Issue #259 第二阶段）
 
-本目录实现接收、D1 存储、去重、删除、下载快照、汇总和清理。依赖第一阶段的 `desktop/scripts/usage-metrics/downloads.mjs`。仓库内开发和测试可以独立完成，**Cloudflare 测试/生产配置与部署仍由协作者执行**。没有桌面或插件上报接入，没有自动部署。
+本目录实现接收、D1 存储、去重、删除、下载快照、汇总和清理。依赖第一阶段的 `desktop/scripts/usage-metrics/downloads.mjs`。仓库内开发和测试可以独立完成，**Cloudflare 资源最初由协作者准备；用户后续已授权使用所提供的测试环境 Token，从本地执行测试配置、部署与联调**。没有桌面或插件上报接入，没有自动部署。
 
 ## 1. 已提供的功能
 
@@ -45,14 +45,14 @@ node scripts/report.mjs --local
 
 `npm test` 使用官方 Miniflare/Workerd 和实际 D1 SQL 引擎；不调用 Cloudflare 远端或 GitHub。依赖版本锁定，Miniflare v5 的 alpha 版本来自当前 Wrangler 官方依赖，使用其 V4 选项转换器。CI 独立运行这些测试、迁移、报表和部署 dry-run。
 
-## 3. 协作者：测试环境部署顺序
+## 3. 维护者：测试环境部署顺序
 
 1. 先确认代码评审版本和目标资源。第一阶段 PR #267 仍未合并时，第二阶段分支依赖其提交；正式合入按第一阶段→第二阶段顺序处理。
 2. 将 `wrangler.test.example.json` 复制为已忽略的 `wrangler.test.json`，填入共享条目的非敏感 account_id、database_id，核对 Worker/D1 名称和 `DB` 绑定。保持 `METRICS_ENABLED=false`。
 3. 为 ACTIVITY_LIMITER 选择账号内未与其他服务共用的数字 namespace_id；测试/生产不同。默认 60 次/分钟/来源 IP 的短期键是近似、每个 Cloudflare 位置的限流，不是全球精确额度，也不是费用硬上限。
 4. 维护者通过自己的安全登录/环境配置使用管理 Token，不把值填进配置文件。先应用业务迁移，再设置独立随机 HMAC Key，然后部署经审核的源码。
 
-在本目录由协作者执行：
+在本目录由持有指定测试环境权限的维护者执行：
 
 ```sh
 WRANGLER_SEND_METRICS=false npx wrangler d1 migrations apply DB --remote --config wrangler.test.json
@@ -66,7 +66,7 @@ secret put 使用交互输入，由维护者生成高熵密钥（建议随机 32
 6. 核对日志自动采集已关闭、无 Tail/Trace 记录请求体或标识；D1 写入权限与数据库指向符合目标。管理 Token 属于管理权限，不用于活动请求。
 7. 仅在隔离测试环境把 METRICS_ENABLED 改为 true 并重新部署，使用虚构数据验证 POST/DELETE、同机去重、410、非法字段、超大请求与 429。部署后自测地址必须普通 HTTPS 客户端可访问，不能要求管理员 Access 登录或浏览器验证码。
 8. Cron 配置为 `10 0 * * *`（北京时间 08:10）。先让一次任务成功，或通过维护者测试方法触发；核对 maintenance_state 的 summary、cleanup、downloads。
-9. 返回测试地址、部署提交、DB/Secret/限流/Cron 的配置确认和不含真实编号的测试证据。当前已知测试地址为 `https://resume-usage-metrics-test.nebula-lab.workers.dev`，此前本机只读访问受阻，需部署方区分访问环境阻挡和 Cloudflare 访问规则再验证。
+9. 返回测试地址、部署提交、DB/Secret/限流/Cron 的配置确认和不含真实编号的测试证据。当前已知测试地址为 `https://resume-usage-metrics-test.nebula-lab.workers.dev`。测试服务部署后 `/health` 已返回 200；部署传播期间不同请求可能暂时命中旧版本，测试须区分旧版本的 metrics_disabled 响应与新版本功能缺陷。网络连接失败不等于业务接口失败。
 
 只读远端报表由维护者执行：
 
@@ -75,6 +75,24 @@ node scripts/report.mjs --remote --config wrangler.test.json
 ```
 
 脚本要求明确选择 local/remote，remote 要求提供有效配置；不使用默认零 ID。输出不含逐设备标识。失败时非零退出且不输出报表，不回显 API Token、SQL 错误或请求内容。
+
+### 定时任务的远端诊断与手动恢复
+
+需要验证维护函数时，维护者可以在指定测试配置上运行官方远端开发模式；它使用远端执行环境和该配置的 D1，不是只在本地模拟。务必确认数据库目标，并仅使用虚构数据。
+
+```sh
+WRANGLER_SEND_METRICS=false npx wrangler dev --remote --test-scheduled --config wrangler.test.json --port 8789
+```
+
+另一个终端触发一次：
+
+```sh
+curl -i 'http://127.0.0.1:8789/__scheduled?cron=*+*+*+*+*'
+```
+
+随后查询 maintenance_state，要求 summary、cleanup、downloads 都成功。结束后关闭远端开发进程。这个手动验证不等于自动 Cron 已触发；自动调度另外按 last_attempt_at 的后续更新核验。测试用每分钟 Cron 结束后必须恢复每日配置，并停收/清理虚构活动。
+
+线上曾发现 Workers 原生 fetch 不支持 redirect=error；下载采集现在使用 manual 并拒绝非 2xx（含重定向），不会把凭证跟随到其他站点。回归测试通过 Workerd 原生 fetch 及虚构 outbound 响应执行维护函数，避免仅用 Node mock 漏掉这种运行环境差异。
 
 ## 4. 事务、时间和数据完整性
 
@@ -101,8 +119,10 @@ node scripts/report.mjs --remote --config wrangler.test.json
 
 ## 6. 回退与第二阶段验收
 
+本轮部署与真实测试记录见 [test-acceptance.md](test-acceptance.md)。
+
 回退优先把 METRICS_ENABLED=false，仍允许删除；部署回退到上一个兼容 schema 的版本。不要回退到无法处理现有 schema 的占位版本来代替停收。不自动撤销迁移或删数据库。
 
 代码与本地验收：100 次去重、双来源、大小写 UUID、校验失败、字节上限、停收后删除、删除竞争/事务回滚、版本排序、滚动统计、保留边界、分页失败、并发快照、任务失败隔离、迁移和受控报表。
 
-云端验收仍由部署方完成：资源隔离、Secret/绑定/限流配置、可访问测试接口、实际 Cron、日志/备份/告警核对及虚构数据联调。完成代码和本地测试不代表这些云端验收已完成，也不代表正式开始采集。
+云端验收由已获授权的维护者完成：资源隔离、Secret/绑定/限流配置、可访问测试接口、实际 Cron、日志/备份/告警核对及虚构数据联调。测试结果与尚未完成的运行条件分别记录在验收文件中；测试部署不代表正式开始采集。

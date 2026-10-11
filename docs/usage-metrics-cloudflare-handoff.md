@@ -1,10 +1,10 @@
 # Cloudflare 使用统计：协作者交接清单
 
-关联 [Issue #259](https://github.com/TshyGO/resume-form-assistant-plugin/issues/259) 和 [统计口径/本地工具](usage-metrics.md)。本文是云端阶段的接口契约和资源要求。第二阶段源码、迁移、本地测试和分步部署见 [Worker README](../services/usage-metrics/README.md)；资源配置与部署由协作者执行。
+关联 [Issue #259](https://github.com/TshyGO/resume-form-assistant-plugin/issues/259) 和 [统计口径/本地工具](usage-metrics.md)。本文是云端阶段的接口契约和资源要求。第二阶段源码、迁移、本地测试和分步部署见 [Worker README](../services/usage-metrics/README.md)；资源最初由协作者准备；用户已授权使用测试环境 Token 进行本地部署和联调，正式环境另行发布核对。
 
 ## 1. 分工与需要返回的信息
 
-仓库开发者负责：接口说明、源码、D1 迁移、测试、本地工具、桌面和插件接入；Cloudflare 协作者负责：资源创建、绑定、Secret、云端部署、日志/访问控制配置和运行验证。第二阶段已提供云端源码，不能只建一个 Hello World Worker 就视为接口已完成。当前测试资源已准备，已知测试入口此前访问受阻；部署方需按 README 部署和验证后返回证据。
+仓库开发者负责：接口说明、源码、D1 迁移、测试、本地工具、桌面和插件接入；Cloudflare 协作者负责：资源创建、绑定、Secret、云端部署、日志/访问控制配置和运行验证。第二阶段已提供云端源码，不能只建一个 Hello World Worker 就视为接口已完成。当前测试资源已准备，测试业务服务已从本地部署，`/health` 返回 200。具体云端验收结果见 Worker 目录验收文件。
 
 第二阶段先部署隔离测试服务，用虚构数据验证；正式发布阶段再准备生产服务。
 
