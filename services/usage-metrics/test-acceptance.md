@@ -36,3 +36,11 @@
 - Worker 业务代码不输出请求体/编号；部署关闭 observability，API 读取结果为 observability=null、logpush=false、无 tail consumers。Cloudflare 基础设施仍会处理常规 HTTP 元数据。
 - 尚未接入桌面/插件或生产环境，没有真实用户数据采集。测试配置只涉及指定 Worker/D1，未修改 /feedback 服务。
 - 告警渠道、费用上限操作、实际备份恢复演练仍为正式上线前的运维任务；不能将测试部署视为全部生产条件完成。
+
+## GitHub Token 配置与下载恢复（2026-10-12）
+
+- 08:10 自动 Cron 已由 D1 记录确认：summary/cleanup success，downloads failed，下载快照仍是 10 月 11 日。随后独立只读远端预览查到 GitHub403、未认证 limit60/remaining0；旧任务记录无原因，不追溯断言完全相同。
+- 用户明确提供专用于公开 Release 查询的 GitHub Token 并授权配置；验证官方 API HTTP200、16个Release。Token作为测试Worker的GITHUB_TOKEN Secret保存，无原值入库、入仓或公开记录，不复用管理Token/HMAC密钥。
+- 应用0002_maintenance_error.sql后部署87b5904对应的Worker；部署版本631a8db2-8a3b-4a63-97e9-5c3d3c4f4843，原daily UTC00:10和METRICS_ENABLED=false保留。
+- 21:34（北京时间）官方远端开发方式显式触发一次scheduled，HTTP200；summary/cleanup/downloads均success、last_error_code=null。10月12日21:34:28生成32附件完整快照，10月11日32附件旧快照保留。活动明细/汇总0，无真实用户采集。
+- **此次是手动恢复验证，不能替代修复后自动调度验收。** 下次每日任务为10月13日08:10，须确认三个任务时间再次更新及新快照出现。远端开发进程已关闭；临时本机凭据完成核验后清理。
