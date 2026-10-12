@@ -39,7 +39,7 @@
     "5. 页头搜索框、登录框、筛选条件、站内导航不是要填写的字段。",
     "5a. 写着「外观=下拉」「外观=级联」「外观=日期」的输入框是组件库的下拉框、级联选择或日期选择器，control 分别写 custom-select、cascader、date（日期题目也可能显示为「外观=下拉」）。",
     "6. preActions 只用于填写前必须点的「编辑」「展开」类按钮，最多 5 个；新增条目的按钮放在 sections.addRef，不放进 preActions。",
-    "7. 提交、保存、确认、删除、下一步、投递、返回、取消等按钮绝不能出现在 preActions 或 addRef 里。",
+    "7. 提交、保存、确认、删除、下一步、投递、返回、取消等按钮，以及 button[submit]，绝不能出现在 preActions 或 addRef 里；标了「跨页」的链接不能作为 addRef。",
     "8. 页面只是查看状态、没有可填写的输入框时，pageState 写 viewing，并在 preActions 里给出需要点的「编辑」按钮；不是填写表单时写 not_form。",
     "9. 不确定的字段宁可不列。"
   ].join("\n");
@@ -78,10 +78,11 @@
     return domKind;
   }
 
-  // 按钮能不能作为前置动作或新增按钮：大纲里的按钮、不是提交、不离开页面、文字在允许列表里且不在禁止列表里。
-  function buttonAllowed(node, allow) {
+  // 按钮能不能作为前置动作或新增按钮：大纲里的按钮、不是提交、文字在允许列表里且不在禁止列表里。
+  // 跨页的「编辑 / 展开」可以（这一版只提示用户手动点，#225 也不会自动点跨页的）；新增必须在本页完成，跨页不行。
+  function buttonAllowed(node, allow, { crossPageOk = false } = {}) {
     if (!node || node.type !== "button") return false;
-    if (node.submit || node.leaves) return false;
+    if (node.submit || (node.leaves && !crossPageOk)) return false;
     const text = BARE(node.text);
     if (!text || DENY.test(text)) return false;
     return allow.test(text);
@@ -106,9 +107,9 @@
       const ref = refValue(action.ref);
       if (!ref || !known(ref)) return invalid("unknown_ref");
       if (!ACTION_KINDS.has(action.kind)) return invalid("bad_action");
-      if (!buttonAllowed(nodes.get(ref), ALLOW[action.kind])) return invalid("forbidden_action");
+      if (!buttonAllowed(nodes.get(ref), ALLOW[action.kind], { crossPageOk: true })) return invalid("forbidden_action");
       if (preActions.some(item => item.ref === ref)) return invalid("duplicate_ref");
-      preActions.push({ ref, kind: action.kind });
+      preActions.push({ ref, kind: action.kind, ...(nodes.get(ref).leaves ? { leaves: true } : {}) });
     }
     if (preActions.length > MAX_PRE_ACTIONS) return invalid("too_many_actions");
 
@@ -408,7 +409,11 @@
 
       if (merged.preActions.length) {
         const names = describeActions(merged.preActions, outline.nodes);
-        set(run, "needs_action", `需要先在网页上手动点击${names}，等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`);
+        // 跨页的「编辑」：点了会打开新页面，要在新页面上重新分析。
+        const crossPage = merged.preActions.some(action => action.leaves);
+        set(run, "needs_action", crossPage
+          ? `需要先在网页上手动点击${names}（会打开新页面），在新页面等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`
+          : `需要先在网页上手动点击${names}，等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`);
         return;
       }
       if (!merged.fields.length) {

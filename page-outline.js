@@ -164,7 +164,10 @@
     const anchor = el.closest?.("a[href], area[href]");
     if (!anchor) return false;
     const raw = String(anchor.getAttribute("href") || "").trim();
-    if (!raw || raw.startsWith("#") || /^javascript:/i.test(raw)) return false;
+    if (!raw || raw.startsWith("#")) return false;
+    // javascript: 链接只有「什么都不做、交给页面脚本」的写法（void(0)、;、空）算留在本页；
+    // 其他写法（location.href=…、调用页面函数）看不出会不会跳走，按跨页处理（PR #271 审查）。
+    if (/^javascript:/i.test(raw)) return !/^javascript:\s*(?:void\s*\(?\s*0\s*\)?\s*;?|;|\/\/.*)?\s*$/i.test(raw);
     try {
       const doc = anchor.ownerDocument;
       const target = new URL(raw, doc.baseURI);
@@ -184,7 +187,10 @@
   }
 
   // 一个作用域（文档或开放 Shadow root）里的候选，按出现顺序排好。嵌套的作用域在它的宿主位置展开。
-  function collectScope(root, ctx, depth) {
+  // inEditable：这个作用域整个在富文本编辑框里（编辑框宿主带开放 Shadow DOM，或编辑框里嵌着同源框架）。
+  // 进入内层后沿 parentElement 找不到外面的编辑框，所以把状态一路往下传（PR #271 审查）。
+  function collectScope(root, ctx, depth, inEditable = false) {
+    const editableHere = el => inEditable || insideEditable(el);
     const fieldScan = ctx.fieldScan;
     const items = [];
     const anchor = new Map();
@@ -236,7 +242,7 @@
 
     for (const el of Array.from(root.querySelectorAll(BUTTON_SELECTOR))) {
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
-      if (insideClaimed(el) || insideEditable(el)) continue;
+      if (insideClaimed(el) || editableHere(el)) continue;
       const text = buttonText(el);
       if (!text || chars(text).length > MAX_BUTTON_TEXT) continue;
       add(el, { type: "button", element: el, text, submit: isSubmitLike(el), leaves: leavesPage(el),
@@ -247,7 +253,7 @@
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
       // 和控件连着的 label 已经是那个控件的题目，不再单列。
       if (el.querySelector?.("input, select, textarea, [role='combobox']") || (el.tagName === "LABEL" && el.htmlFor)) continue;
-      if (insideClaimed(el) || insideEditable(el) || el.matches(EDITABLE_SELECTOR)) continue;
+      if (insideClaimed(el) || editableHere(el) || el.matches(EDITABLE_SELECTOR)) continue;
       const text = squash(el.textContent);
       if (!text || chars(text).length > MAX_SEGMENT * 2) continue;
       add(el, { type: el.matches(HEADING_SELECTOR) ? "heading" : "text", element: el, text });
@@ -262,7 +268,7 @@
       if (depth >= MAX_SCOPE_DEPTH) continue;
       if (el.shadowRoot && !ctx.exclude(el)) {
         ctx.stats.shadowRoots += 1;
-        items.push(...collectScope(el.shadowRoot, ctx, depth + 1));
+        items.push(...collectScope(el.shadowRoot, ctx, depth + 1, editableHere(el) || el.matches(EDITABLE_SELECTOR)));
       }
       if ((el.tagName === "IFRAME" || el.tagName === "FRAME") && !ctx.exclude(el)) {
         let inner = null;
@@ -274,7 +280,7 @@
         const outer = ctx.frame;
         ctx.frame = frameNo;
         items.push({ type: "frame", frame: frameNo });
-        items.push(...collectScope(inner, ctx, depth + 1));
+        items.push(...collectScope(inner, ctx, depth + 1, editableHere(el)));
         items.push({ type: "frame-end", frame: frameNo });
         ctx.frame = outer;
       }

@@ -253,3 +253,27 @@ test("what the user wrote in a rich-text editor never reaches the outline, headi
   assert.match(all, /contenteditable ← 自我评价/, "the editor itself is still listed, by its own label only");
   assert.match(all, /← 姓名/);
 });
+
+test("javascript: links count as staying on the page only when they do nothing; anything else may navigate", () => {
+  // PR #271 审查：javascript:location.href=… 点了会跳走，原来被当成本页链接。
+  const doc = load(`<a href="javascript:void(0)">编辑1</a><a href="javascript:;">编辑2</a><a href="javascript:">编辑3</a>
+    <a href="javascript:void 0">编辑4</a><a href="#edu">编辑5</a>
+    <a href="javascript:location.href='/next'">编辑6</a><a href="javascript:editInfo()">编辑7</a><a href="/apply/step2">编辑8</a>`);
+  const all = text(build(doc));
+  for (const n of [1, 2, 3, 4, 5]) assert.match(all, new RegExp(`link "编辑${n}"$`, "m"), `编辑${n} stays on the page`);
+  for (const n of [6, 7, 8]) assert.match(all, new RegExp(`link "编辑${n}" 跨页`), `编辑${n} may leave the page`);
+});
+
+test("an editor whose content lives in its own open Shadow DOM or a same-origin frame still sends nothing it contains", () => {
+  // CodeRabbit（PR #271 第二轮）：进入编辑框宿主的 Shadow DOM 后，沿 parentElement 找不到外面的编辑框。
+  const doc = load(`<label for="x">姓名</label><input id="x">
+    <div id="host" contenteditable="true" aria-label="自我评价"></div>
+    <div contenteditable="true" aria-label="求职信"><iframe id="frame"></iframe></div>`);
+  doc.getElementById("host").attachShadow({ mode: "open" }).innerHTML = `<h3>我的优势在团队协作</h3><table><tr><th>获奖经历一览表</th></tr></table><button type="button">编辑</button>`;
+  doc.getElementById("frame").contentDocument.body.innerHTML = `<h4>致招聘经理的一封信</h4><dl><dt>写给贵公司</dt></dl>`;
+  const all = text(build(doc));
+  for (const leak of ["我的优势", "获奖经历一览表", "致招聘经理", "写给贵公司"]) assert.ok(!all.includes(leak), `${leak} leaked:\n${all}`);
+  assert.doesNotMatch(all, /button "编辑"/);
+  assert.match(all, /contenteditable ← 自我评价/);
+  assert.match(all, /← 姓名/);
+});

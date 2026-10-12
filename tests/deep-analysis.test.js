@@ -90,14 +90,19 @@ test("buttons and links are never fields", () => {
   assert.equal(deep.validateSpec({ pageState: "editing", fields: [field(refs.submit)] }, context).reason, "not_a_control");
 });
 
-test("pre-actions: only 编辑/展开-style buttons; submit, cross-page links and forbidden words void the spec", () => {
+test("pre-actions: only 编辑/展开-style buttons; submit buttons and forbidden words void the spec", () => {
   const { refs, context } = page();
   const ok = deep.validateSpec({ pageState: "viewing", preActions: [{ ref: refs.edit, kind: "edit" }] }, context);
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.spec.preActions, [{ ref: refs.edit, kind: "edit" }]);
+  // 跨页的「修改」链接（方案 B，PR #271）：不作废，标记 leaves，只提示用户手动点。
+  const crossPage = deep.validateSpec({ pageState: "viewing", preActions: [{ ref: refs.link, kind: "edit" }] }, context);
+  assert.equal(crossPage.ok, true);
+  assert.deepEqual(crossPage.spec.preActions, [{ ref: refs.link, kind: "edit", leaves: true }]);
+  // 新增必须在本页完成：跨页的「添加」作为 addRef 仍然作废。
+  assert.equal(deep.validateSpec({ pageState: "editing", sections: [{ domain: "education", addRef: refs.link }] }, context).reason, "forbidden_action");
   for (const [action, reason] of [
     [{ ref: refs.submit, kind: "edit" }, "forbidden_action"],
-    [{ ref: refs.link, kind: "edit" }, "forbidden_action"],
     [{ ref: refs.remove, kind: "expand" }, "forbidden_action"],
     [{ ref: refs.edit, kind: "click" }, "bad_action"],
     [{ ref: refs.name, kind: "edit" }, "forbidden_action"],
@@ -489,4 +494,23 @@ test("when a very long page had repeated rows collapsed, the result says the res
   const plain = harness();
   await plain.controller.start();
   assert.equal((await plain.settle(finished)).notes.length, 0, "no note when nothing was collapsed");
+});
+
+test("a cross-page 编辑 link is not clicked or voided: the user is told it opens a new page", async () => {
+  const nodes = nodesFor(1);
+  nodes.set("e2", { type: "button", text: "编辑", submit: false, leaves: true });
+  const h = harness({
+    buildOutline: () => ({ parts: [{ text: "x", refs: ["e1", "e2"] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: 1 } }),
+    analyze: async () => ({ success: true, spec: { pageState: "viewing", preActions: [{ ref: "e2", kind: "edit" }] } })
+  });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "needs_action");
+  assert.match(done.message, /手动点击「编辑」（会打开新页面），在新页面等输入框出现后再点「深度分析本页」/);
+  assert.equal(h.calls.fill.length, 0);
+});
+
+test("the analysis prompt forbids submit buttons anywhere and cross-page links as add buttons", () => {
+  assert.match(deep.ANALYZE_SYSTEM_PROMPT, /button\[submit\]，绝不能出现在 preActions 或 addRef 里/);
+  assert.match(deep.ANALYZE_SYSTEM_PROMPT, /标了「跨页」的链接不能作为 addRef/);
 });

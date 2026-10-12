@@ -21,7 +21,7 @@ const store = () => ({
   activeTemplateId: TEMPLATE
 });
 
-function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false, labels = [] } = {}) {
+function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false, labels = [], fillProbe } = {}) {
   const location = { href: "https://jobs.example.test/apply", pathname: "/apply" };
   const inputs = [];
   const sent = [];
@@ -38,6 +38,7 @@ function deepPage({ consent = true, analyze, fill, confirm = () => true, existin
     randomUUID: (() => { let n = 0; return () => `req-${++n}`; })(),
     confirm: (message) => { confirms++; return confirm(message, inputs); },
     deepAnalysis: deep,
+    fillProbe,
     pageOutline: {
       build(_doc, options) {
         outlineCalls.push(options);
@@ -284,4 +285,15 @@ test("the deep fill's diagnostics name the control kinds the fill used", async (
   // 普通输入框不能当单选：按 DOM 改回 text，计数按改正后的类型。
   assert.match(page.diagnosticsText.value, /控件类型按网页改正 1/);
   assert.match(page.diagnosticsText.value, /说明书控件类型：text 2/);
+});
+
+test("an unfilled deep field says in the diagnostics which control kind it was operated as", async () => {
+  // AI 审查两次认为 operated 不会写出：noteControlFailure 收到的是 fieldMap 条目（带 deepRef、controlKind），不是 DOM 元素。
+  const page = deepPage({ fillProbe: require("../fill-probe.js"),
+    fill: (message) => ({ success: true, matches: message.formFields.map((field) => ({ fieldId: field.fieldId, value: "x" })),
+      diagnostics: { ruleMatches: 0, aiMatches: 2, calls: 1, errorCode: "none" } }) });
+  page.inputs.forEach((input) => { input.disabled = true; });
+  await page.ask({ action: "start" });
+  await page.settle(finished);
+  assert.match(page.diagnosticsText.value, /：.*｜按 text 操作｜/, page.diagnosticsText.value);
 });
