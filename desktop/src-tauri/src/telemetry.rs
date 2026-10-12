@@ -164,7 +164,11 @@ pub struct Telemetry {
 }
 impl Telemetry {
     pub fn new(root: PathBuf) -> Arc<Self> {
-        Self::load(root, Config::release())
+        let mut config = Config::release();
+        if let Some(endpoint) = crate::metrics_acceptance::configured_endpoint(&root) {
+            config.endpoint = Some(endpoint);
+        }
+        Self::load(root, config)
     }
     fn load(root: PathBuf, config: Config) -> Arc<Self> {
         let path = root.join("telemetry-state.json");

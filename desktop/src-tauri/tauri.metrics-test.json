@@ -1,0 +1,12 @@
+{
+  "productName": "网申快填统计测试",
+  "identifier": "com.resumepro.metrics.acceptance",
+  "app": {
+    "windows": [{
+      "label": "main", "title": "网申快填统计测试 — 仅使用虚构数据",
+      "width": 1100, "height": 740, "minWidth": 860, "minHeight": 560,
+      "visible": false, "create": false
+    }]
+  },
+  "bundle": {"active": false}
+}

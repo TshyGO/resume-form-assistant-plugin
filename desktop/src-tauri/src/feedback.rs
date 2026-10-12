@@ -446,6 +446,9 @@ impl Reporter {
         result
     }
     async fn request(&self, body: &Payload) -> Receipt {
+        if cfg!(feature = "usage-metrics-acceptance") && !cfg!(test) {
+            return Receipt::fail("acceptance_disabled");
+        }
         #[cfg(not(test))]
         let (endpoint, timeout) = (ENDPOINT, Duration::from_secs(5));
         #[cfg(test)]
