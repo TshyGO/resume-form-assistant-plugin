@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -55,6 +55,8 @@ writeFileSync(join(destination, 'build-receipt.json'), JSON.stringify({
   endpoint: 'https://resume-usage-metrics-test.nebula-lab.workers.dev/v1/activity',
   test_only: true, no_secret_in_artifacts: true,
 }, null, 2));
+// Keep only the adapted test plugin in the deliverable, avoiding two similar ZIP choices.
+rmSync(pluginZip);
 writeFileSync(join(destination, '打开测试版.command'), '#!/bin/sh\ncd "$(dirname "$0")"\nexec "./Resume Metrics Test.app/Contents/MacOS/resume-pro-desktop"\n', { mode: 0o755 });
 writeFileSync(join(destination, '打开测试版.cmd'), '@echo off\r\ncd /d "%~dp0"\r\nstart "" "%~dp0resume-pro-desktop.exe"\r\n');
 for (const [label, app, folder] of [['Chrome', 'Google Chrome', 'chrome'], ['Edge', 'Microsoft Edge', 'edge']]) {
