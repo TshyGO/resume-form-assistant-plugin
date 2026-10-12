@@ -95,7 +95,7 @@ test('edit, recategorize, add into a new category, confirm a delete, then save o
   assert.match(confirm.textContent, /「我的信息」里还有同名字段/);
   ui.click(confirm.querySelector('[data-te-remove-confirm]'));
   assert.equal(ui.row('电话'), undefined);
-  assert.match(ui.$('te-fallback').textContent, /「电话」 在「我的信息」里仍有同名内容/);
+  assert.match(ui.$('te-fallback').textContent, /已删除或改名的「电话」在「我的信息」里仍有同名内容/);
   assert.equal(ui.$('te-fallback').hidden, false);
   // 教育经历 is now empty: it stays visible but is not saved.
   assert.match(ui.$('te-warnings').textContent, /没有字段的分类不会保存：「教育经历」/);

@@ -110,7 +110,7 @@
       const gone = fallbacks();
       el.fallback.hidden = !gone.length;
       el.fallback.textContent = gone.length
-        ? `已删除或改名的 ${gone.map((key) => `「${key}」`).join("、")} 在「我的信息」里仍有同名内容，一键填写时仍可能使用。要彻底停用，请到桌面「我的信息」里修改。`
+        ? `已删除或改名的${gone.map((key) => `「${key}」`).join("、")}在「我的信息」里仍有同名内容，一键填写时仍可能使用。要彻底停用，请到桌面「我的信息」里修改。`
         : "";
       renderFoot(dirty, summary);
     }

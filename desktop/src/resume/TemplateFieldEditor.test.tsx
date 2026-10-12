@@ -102,7 +102,7 @@ test("编辑、调整分类、在新分类里添加、确认删除，保存只�
   expect(within(confirm).getByText(/只从「校招简历」删除这个字段/)).toBeTruthy();
   expect(within(confirm).getByText(/「我的信息」里还有同名字段，一键填写时仍可能用它/)).toBeTruthy();
   await user.click(within(confirm).getByRole("button", { name: "从草稿中删除" }));
-  await waitFor(() => expect(within(detail()).getByText(/已删除或改名的 「电话」 在「我的信息」里仍有同名内容/)).toBeTruthy());
+  await waitFor(() => expect(within(detail()).getByText(/已删除或改名的「电话」在「我的信息」里仍有同名内容/)).toBeTruthy());
   expect(within(detail()).getByText(/没有字段的分类不会保存：「教育经历」/)).toBeTruthy();
 
   await user.click(within(detail()).getByRole("button", { name: "保存修改" }));

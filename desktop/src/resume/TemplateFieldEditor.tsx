@@ -267,7 +267,7 @@ export function TemplateFieldEditor({
         </p>
         {fallbacks.length ? (
           <p className="note warn template-edit-fallback" role="status">
-            已删除或改名的 {fallbacks.map((key) => `「${key}」`).join("、")} 在「我的信息」里仍有同名内容，一键填写时仍可能使用。要彻底停用，请到「我的信息」里修改。
+            已删除或改名的{fallbacks.map((key) => `「${key}」`).join("、")}在「我的信息」里仍有同名内容，一键填写时仍可能使用。要彻底停用，请到「我的信息」里修改。
           </p>
         ) : null}
         <div className="template-preview template-edit-groups">
