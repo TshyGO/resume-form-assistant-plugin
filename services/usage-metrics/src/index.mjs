@@ -1,6 +1,6 @@
 import { HttpError, activityPayload, hmac, recordActivity, deleteActivity } from './activity.mjs';
 import { cleanup, summarizeClosedDays } from './statistics.mjs';
-import { collectDownloads } from './downloads.mjs';
+import { collectDownloads, DownloadCollectionError } from './downloads.mjs';
 
 function response(status, error) {
   return new Response(error ? JSON.stringify({ error }) : null, { status, headers: { 'Cache-Control': 'no-store', ...(status === 405 ? { Allow: 'POST, DELETE' } : {}), ...(error ? { 'Content-Type': 'application/json' } : {}) } });
@@ -20,12 +20,16 @@ export async function runMaintenance(env, { now = () => new Date(), fetchImpl = 
     ['downloads', () => collectDownloads(env.DB, fetchImpl, env.GITHUB_TOKEN, now)],
   ]) {
     let status = 'success';
-    try { await operation(); } catch { status = 'failed'; failed = true; }
+    let errorCode = null;
+    try { await operation(); } catch (error) {
+      status = 'failed'; failed = true;
+      errorCode = error instanceof DownloadCollectionError ? error.code : 'task_failed';
+    }
     const at = now().toISOString();
-    await env.DB.prepare(`INSERT INTO maintenance_state(task, last_success_at, last_attempt_at, status) VALUES (?, ?, ?, ?)
-      ON CONFLICT(task) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, status = excluded.status,
+    await env.DB.prepare(`INSERT INTO maintenance_state(task, last_success_at, last_attempt_at, status, last_error_code) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(task) DO UPDATE SET last_attempt_at = excluded.last_attempt_at, status = excluded.status, last_error_code = excluded.last_error_code,
         last_success_at = CASE WHEN excluded.status = 'success' THEN excluded.last_success_at ELSE maintenance_state.last_success_at END`)
-      .bind(task, status === 'success' ? at : null, at, status).run();
+      .bind(task, status === 'success' ? at : null, at, status, errorCode).run();
   }
   if (failed) throw new Error('maintenance_failed');
 }
