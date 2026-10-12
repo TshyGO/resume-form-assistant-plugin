@@ -71,14 +71,16 @@ test('resume and open-view messages reach their desktop operations', async () =>
     read: async () => { calls.push('read'); return { status: 'ok', data: {} }; },
     setActiveTemplate: async id => { calls.push(['active', id]); return { status: 'ok' }; },
     saveProfile: async (profile, revision) => { calls.push(['profile', profile, revision]); return { status: 'ok' }; },
+    saveTemplate: async (id, groups, base) => { calls.push(['template', id, groups, base]); return { status: 'ok' }; },
     openView: async view => { calls.push(['view', view]); return { status: 'ok' }; }
   };
   const { router } = await makeRouter({ resume });
   assert.equal((await router.handle({ type: 'DESKTOP_RESUME_READ' })).status, 'ok');
   await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'setActiveTemplate', templateId: 'template' });
   await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'saveProfile', profile: { values: {} }, expectedRevision: 2 });
+  await router.handle({ type: 'DESKTOP_RESUME_UPDATE', op: 'saveTemplate', templateId: 'template', groups: [], baseSha256: 'sha' });
   await router.handle({ type: 'DESKTOP_OPEN_VIEW', view: 'resume' });
-  assert.deepEqual(calls, ['read', ['active', 'template'], ['profile', { values: {} }, 2], ['view', 'resume']]);
+  assert.deepEqual(calls, ['read', ['active', 'template'], ['profile', { values: {} }, 2], ['template', 'template', [], 'sha'], ['view', 'resume']]);
 });
 
 test('AI cancel aborts the matching long request only', async () => {

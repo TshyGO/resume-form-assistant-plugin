@@ -406,6 +406,49 @@ button:disabled { cursor: not-allowed; }
 .field-row__action:disabled { border-color: #edf0f4; background: #f6f7f9; color: #a4acb8; cursor: not-allowed; }
 .field-empty { margin: 4px 0; padding: 18px 12px; border: 1px dashed var(--line-strong); border-radius: 14px; color: var(--muted); font-size: 12px; text-align: center; }
 
+/* ---- 模板字段编辑（#273）：任务面板 + 字段分组 + 岗位表单的输入框，同一套样子 ---- */
+.card-action { flex: none; min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--accent-strong); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.card-action:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-pale); }
+.card-action:disabled { color: #a4acb8; cursor: not-allowed; }
+.fields-head__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fields-head__row h2 { min-width: 0; }
+.template-editor { z-index: 20; }
+.template-editor .task-notice { display: grid; gap: 3px; }
+.template-editor .task-notice[hidden] { display: none; }
+.te-notice__action { justify-self: start; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--accent-strong); font-size: 12px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.te-scope { margin-top: 0 !important; }
+.te-tools { margin-top: 6px; }
+.te-inline { margin-top: 10px; padding: 2px 12px 12px; border: 1px solid var(--accent-line); border-radius: 12px; background: var(--soft); }
+.te-inline .offer-actions { margin-top: 10px; }
+.te-groups { margin-top: 12px; }
+.te-group summary { min-height: 46px; }
+.te-group .field-group__body { gap: 10px; }
+.te-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+.te-row:focus-within { border-color: var(--accent-line); background: var(--panel); }
+.te-row.is-confirming { border-color: var(--danger-line); }
+.te-row .job-input { min-height: 34px; padding: 6px 9px; }
+.te-key { font-weight: 600; }
+.te-value { min-height: 34px; line-height: 1.5; resize: vertical; }
+.te-row__foot { display: flex; gap: 6px; }
+.te-row__foot .te-category { flex: 1; min-width: 0; }
+.te-remove { flex: none; min-height: 34px; padding: 4px 12px; border: 1px solid var(--danger-line); border-radius: 8px; background: var(--panel); color: var(--danger); font-size: 12px; font-weight: 600; }
+.te-remove:hover { background: var(--danger-bg); }
+.te-row__error { margin: 0 !important; }
+.te-confirm { display: grid; gap: 6px; padding: 9px 10px; border-radius: 8px; background: var(--danger-bg); color: var(--danger); font-size: 12px; line-height: 1.5; }
+.te-confirm p { margin: 0; }
+.te-confirm__note { color: var(--warn-ink); }
+.te-confirm__actions { display: flex; gap: 6px; }
+.te-confirm__actions button { flex: 1; min-height: 32px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 12px; font-weight: 600; }
+.te-confirm__actions .btn-danger { border-color: var(--danger); background: var(--danger); color: #fff; }
+.te-group__empty { margin: 0; padding: 10px; border: 1px dashed var(--line-strong); border-radius: 10px; color: var(--muted); font-size: 12px; text-align: center; }
+.te-group__add { justify-self: start; }
+#te-problems { margin-top: 12px !important; }
+.te-rules { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 12px; line-height: 1.55; }
+.te-rules p { margin: 0; }
+.te-rules__title { margin-bottom: 2px !important; color: var(--ink); font-weight: 650; }
+.te-rules__warn { margin-top: 6px !important; padding: 7px 10px; border: 1px solid var(--warn-line); border-radius: 8px; background: var(--warn-bg); color: var(--warn-ink); }
+.task-foot .btn-danger { border-color: var(--danger-line); color: var(--danger); }
+
 @media (max-width: 340px) {
   .view-scroll { padding: 10px 10px 16px; }
   .dock-header, .dock-footer { padding-left: 10px; padding-right: 10px; }

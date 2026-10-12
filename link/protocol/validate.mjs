@@ -448,10 +448,16 @@ export async function validateRequest(value) {
   }
   if (type === "resume.update") {
     const payload = value.payload;
+    // Each op carries exactly its own fields; anything belonging to another op is refused.
+    const has = (key) => Object.hasOwn(payload, key);
+    const templateEdit = has("groups") || has("baseSha256");
     const valid = payload.op === "setActiveTemplate"
-      ? Object.hasOwn(payload, "templateId") && !Object.hasOwn(payload, "profile") && !Object.hasOwn(payload, "expectedRevision")
-      : payload.op === "saveProfile" && Object.hasOwn(payload, "profile")
-        && Object.hasOwn(payload, "expectedRevision") && !Object.hasOwn(payload, "templateId");
+      ? has("templateId") && !has("profile") && !has("expectedRevision") && !templateEdit
+      : payload.op === "saveProfile"
+        ? has("profile") && has("expectedRevision") && !has("templateId") && !templateEdit
+        // #273: one template's edited groups, checked against the content it was based on.
+        : payload.op === "saveTemplate" && has("templateId") && has("groups") && has("baseSha256")
+          && !has("profile") && !has("expectedRevision");
     if (!valid) throw fail("invalid_payload", "resume.update fields do not match op");
   }
   if (type === "legacy.import") validateLegacyImport(value.payload);

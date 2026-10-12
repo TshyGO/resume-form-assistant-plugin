@@ -1,5 +1,6 @@
-//! 简历模板与「我的信息」（#130）。桌面是唯一来源；插件经协议只读，
-//! 只能做两种写：切换当前模板、保存「我的信息」（见 u130 计划 PR 3）。
+//! 简历模板与「我的信息」（#130）。桌面是唯一来源；插件经协议读取，
+//! 写只有三种：切换当前模板、保存「我的信息」（见 u130 计划 PR 3），以及
+//! 保存某份模板的字段编辑结果（#273，带内容版本检查）。
 //!
 //! 形状沿用插件 `chrome.storage.local`，规范化规则逐条对齐 `popup.js`
 //! 的 `normalizeTemplate` 与 `resolveTemplateName`，改这里要同步看那边。
@@ -7,6 +8,7 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::error::StoreError;
 use crate::resume_secrets::{is_secret_label, is_secret_value};
@@ -140,6 +142,54 @@ pub fn normalize_groups(groups: Vec<TemplateGroup>) -> Vec<TemplateGroup> {
             })
         })
         .collect()
+}
+
+/// 模板内容的版本（#273）：把分组包成 `{"groups": [...]}`，按插件协议同一套规范 JSON
+/// （对象键按字典序、无空白，即 `payloadBodySha256` 的写法）算 SHA-256，小写十六进制。
+///
+/// 编辑开始时记下它，保存时对不上就说明别处（另一端、重新导入）改过这份模板。按内容
+/// 而不按 `updated_at` 比：改名不动字段，不该让正在编辑字段的人撞上冲突。
+/// 必须与插件 / 桌面共用的 `template-fields.js` `contentSha256` 逐字节一致，两边各有
+/// 一条固定向量的测试锁住。
+pub fn groups_sha256(groups: &[TemplateGroup]) -> String {
+    // 键名固定，手写拼接，不依赖 serde_json 的对象键顺序（`preserve_order` 特性会改变它）。
+    let text = |s: &str| serde_json::to_string(s).expect("a string always serializes");
+    let mut out = String::from("{\"groups\":[");
+    for (gi, group) in groups.iter().enumerate() {
+        if gi > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"fields\":[");
+        for (fi, field) in group.fields.iter().enumerate() {
+            if fi > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"key\":");
+            out.push_str(&text(&field.key));
+            out.push_str(",\"value\":");
+            out.push_str(&text(&field.value));
+            out.push('}');
+        }
+        out.push_str("],\"name\":");
+        out.push_str(&text(&group.name));
+        out.push('}');
+    }
+    out.push_str("]}");
+    Sha256::digest(out.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 编辑保存时的密码类拦截：和「我的信息」一样整份拒绝并点名字段，不像导入那样悄悄剔掉
+/// ——用户正盯着这些字段，悄悄少一个只会让人以为保存丢了数据。
+pub fn reject_template_secrets(groups: &[TemplateGroup]) -> Result<(), StoreError> {
+    for field in groups.iter().flat_map(|g| g.fields.iter()) {
+        if is_secret_label(&field.key) || is_secret_value(&field.value) {
+            return Err(invalid(format!(
+                "「{}」看起来是密码或验证码，这类内容不存进模板（档案会随备份带走）。",
+                field.key.trim()
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn empty_profile() -> Value {
@@ -411,6 +461,41 @@ impl StoreTx<'_> {
             previous_field_count: Some(field_count(&previous.groups)),
             skipped_secret_fields,
         })
+    }
+
+    /// 字段编辑的保存（#273）：整份换掉这份模板的分组，名字、位置、当前模板都不动。
+    ///
+    /// `expected_sha256` 是编辑开始时内容的 [groups_sha256]；对不上返回 `Conflict`，
+    /// 不让旧草稿静默盖掉另一端刚存的内容。规范化与导入同一口径，但密码类字段整份拒绝
+    /// （见 [reject_template_secrets]），删光字段也拒绝：不要的模板应当整份删除。
+    /// 内容没变时不写库，`updated_at` 也不动。
+    pub fn save_template_fields(
+        &mut self,
+        id: &str,
+        groups: Vec<TemplateGroup>,
+        expected_sha256: &str,
+    ) -> Result<ResumeTemplate, StoreError> {
+        let current = self
+            .get_template(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("template {id}")))?;
+        if !groups_sha256(&current.groups).eq_ignore_ascii_case(expected_sha256) {
+            return Err(StoreError::Conflict("这份模板已在别处修改，请先查看最新内容再保存。".into()));
+        }
+        let groups = normalize_groups(groups);
+        reject_template_secrets(&groups)?;
+        if groups.is_empty() {
+            return Err(invalid("模板至少要保留一个字段。不再需要这份模板时，可以在模板列表里删除整份模板。"));
+        }
+        if groups == current.groups {
+            return Ok(current);
+        }
+        let json = groups_json(&groups)?;
+        self.conn().execute(
+            "UPDATE resume_templates SET groups_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![json, now_utc(), id],
+        )?;
+        self.get_template(id)?
+            .ok_or_else(|| StoreError::Internal("template vanished in same transaction".into()))
     }
 
     /// 改名不自动加序号：用户明确要这个名字，撞了就说出来。
