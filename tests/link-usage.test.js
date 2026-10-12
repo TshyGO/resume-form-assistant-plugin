@@ -38,3 +38,17 @@ test('worker accepts only extension UI origins and no additional message fields'
  for(const sender of [{id:'ours',url:'https://private.test'},{id:'ours',url:api.runtime.getURL('ai-host.html')},{id:'other',url:api.runtime.getURL('sidepanel.html')},{}])assert.equal(isUsageSender(api,message,sender),false);
  assert.equal(isUsageSender(api,{...message,url:'private'}, {id:'ours',url:api.runtime.getURL('sidepanel.html')}),false);
 });
+
+test('usage reply channel stays open until completion and unauthorized senders get a negative ACK', async () => {
+ const {handleUsageMessage}=await import('../link/usage.mjs');
+ const api={runtime:{id:'ours',getURL:path=>'chrome-extension://ours/'+path}};
+ const replies=[];let calls=0;let finish;
+ const usage={touch:()=>{calls++;return new Promise(resolve=>{finish=resolve;});}};
+ const message={type:'DESKTOP_USAGE_TOUCH'};
+ assert.equal(handleUsageMessage(api,usage,message,{id:'ours',url:'https://private.test'},value=>replies.push(value)),false);
+ assert.deepEqual(replies,[{accepted:false}]);assert.equal(calls,0);
+ assert.equal(handleUsageMessage(api,usage,message,{id:'ours',url:api.runtime.getURL('sidepanel.html')},value=>replies.push(value)),true);
+ await Promise.resolve();assert.equal(calls,1);assert.equal(replies.length,1);
+ finish();await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(replies,[{accepted:false},{accepted:true}]);
+ assert.equal(handleUsageMessage(api,usage,{type:'OTHER'}, {},()=>{}),null);
+});

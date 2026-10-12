@@ -8,6 +8,21 @@ export function isUsageSender(api, message, sender) {
     && [api.runtime.getURL('sidepanel.html'), api.runtime.getURL('popup.html')].includes(sender?.url);
 }
 
+// Hold the MV3 reply channel until the one-shot local operation settles. This does
+// not add retries or a persistent worker; rejected origins never receive a false ACK.
+export function handleUsageMessage(api, usage, message, sender, sendResponse) {
+  if (message?.type !== 'DESKTOP_USAGE_TOUCH') return null;
+  if (!isUsageSender(api, message, sender)) {
+    sendResponse({ accepted: false });
+    return false;
+  }
+  Promise.resolve().then(() => usage.touch()).then(
+    () => sendResponse({ accepted: true }),
+    () => sendResponse({ accepted: false }),
+  );
+  return true;
+}
+
 // Uses only an already-successful handshake; never starts a desktop or probes on its own.
 // In-memory quota bounds browser calls; durable cross-browser quota is owned by Rust.
 export function createUsage({ store, sendNative, uuid, now, send = sendOnce }) {

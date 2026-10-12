@@ -1,6 +1,6 @@
 import { idbStore, nativePort, nativeSender, sleep, storageAdapter } from './chrome.mjs';
 import { createStore } from './store.mjs';
-import { createUsage, isUsageSender } from './usage.mjs';
+import { createUsage, handleUsageMessage } from './usage.mjs';
 import { createSession } from './session.mjs';
 import { createResume } from './resume.mjs';
 import { createAi } from './ai.mjs';
@@ -70,11 +70,8 @@ export function installDesktopLink(api) {
   });
 
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'DESKTOP_USAGE_TOUCH') {
-      if (isUsageSender(api, message, sender)) void usage.touch();
-      sendResponse({ accepted: true });
-      return false;
-    }
+    const usageHandled = handleUsageMessage(api, usage, message, sender, sendResponse);
+    if (usageHandled !== null) return usageHandled;
     if (!DESKTOP_MESSAGE_TYPES.has(message?.type)) return false;
     // Deleting old data or handing out whole templates is for the extension's own pages
     // (the status page), never for a content script running inside a web page.
