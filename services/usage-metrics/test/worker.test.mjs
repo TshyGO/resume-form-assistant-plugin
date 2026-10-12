@@ -25,7 +25,7 @@ before(async () => {
     ratelimits: { ACTIVITY_LIMITER: { namespace_id: '25901', simple: { limit: 2000, period: 60 } } },
   }));
   db = await mf.getD1Database('DB');
-  const sql = readFileSync(new URL('../migrations/0001_metrics.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../migrations/0001_metrics.sql', import.meta.url), 'utf8') + readFileSync(new URL('../migrations/0002_maintenance_error.sql', import.meta.url), 'utf8');
   await db.batch(sql.split(';').map(part => part.trim()).filter(Boolean).map(part => db.prepare(part)));
 });
 beforeEach(async () => {
@@ -307,7 +307,7 @@ test('GitHub requests use Workers-compatible manual redirects and reject 3xx wit
     assert.equal(options.redirect, 'manual');
     assert.equal(new URL(url).hostname, 'api.github.com');
     return new Response(null, { status: 302, headers: { Location: 'https://synthetic.invalid' } });
-  }), /GitHub request failed/);
+  }), /github_http_failed/);
   assert.equal(requests, 1);
 });
 
@@ -330,7 +330,7 @@ test('scheduled maintenance uses native Workerd fetch with mocked outbound GitHu
   }));
   try {
     const database = await runtime.getD1Database('DB');
-    const sql = readFileSync(new URL('../migrations/0001_metrics.sql', import.meta.url), 'utf8');
+    const sql = readFileSync(new URL('../migrations/0001_metrics.sql', import.meta.url), 'utf8') + readFileSync(new URL('../migrations/0002_maintenance_error.sql', import.meta.url), 'utf8');
     await database.batch(sql.split(';').map(part => part.trim()).filter(Boolean).map(part => database.prepare(part)));
     const response = await runtime.dispatchFetch('https://maintenance.test');
     assert.equal(response.status, 204);
@@ -367,4 +367,18 @@ test('GitHub failure does not prevent cleanup or closed-day summaries and safe s
   assert.equal((await db.prepare("SELECT status FROM maintenance_state WHERE task='cleanup'").first()).status, 'success');
   assert.ok((await db.prepare('SELECT COUNT(*) AS n FROM metrics_daily').first()).n > 0);
   assert.equal(JSON.stringify((await db.prepare('SELECT * FROM maintenance_state').all()).results).includes(ID), false);
+});
+
+test('download failure stores only a closed safe code and success clears it', async () => {
+  const cases = [[403, { 'x-ratelimit-remaining': '0' }, 'github_rate_limited'],
+    [429, {}, 'github_rate_limited'], [401, {}, 'github_auth_failed'], [500, {}, 'github_http_failed']];
+  for (const [status, headers, code] of cases) {
+    await assert.rejects(runMaintenance(env(), { now: () => NOW, fetchImpl: async () => new Response('synthetic-private-token', {status, headers}) }));
+    const row = await db.prepare("SELECT * FROM maintenance_state WHERE task='downloads'").first();
+    assert.equal(row.last_error_code, code);
+    assert.equal(JSON.stringify(row).includes('synthetic-private'), false);
+  }
+  await runMaintenance(env(), {now:()=>NOW,fetchImpl:githubFixture([])});
+  const row = await db.prepare("SELECT * FROM maintenance_state WHERE task='downloads'").first();
+  assert.equal(row.status, 'success');assert.equal(row.last_error_code, null);
 });

@@ -1,6 +1,10 @@
 import { createDownloadSnapshot, compareDownloadSnapshots } from '../../../desktop/scripts/usage-metrics/downloads.mjs';
 import { readBytes } from './activity.mjs';
 
+export class DownloadCollectionError extends Error {
+  constructor(code) { super(code); this.code = code; }
+}
+
 const BASE = 'https://api.github.com/repos/TshyGO/resume-form-assistant-plugin';
 
 export async function fetchReleases(fetchImpl, token) {
@@ -18,10 +22,19 @@ export async function fetchReleases(fetchImpl, token) {
         // Workers supports follow/manual, not error. Non-2xx (including redirects)
         // is rejected below; credentials never follow a redirected destination.
         const response = await fetchImpl(`${BASE}${path}?per_page=100&page=${page}`, { headers, signal: controller.signal, redirect: 'manual' });
-        if (!response.ok) throw new Error('GitHub request failed');
+        if (!response.ok) {
+          const limited = response.status === 429 || response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0';
+          throw new DownloadCollectionError(limited ? 'github_rate_limited'
+            : response.status === 401 ? 'github_auth_failed' : 'github_http_failed');
+        }
         const bytes = await readBytes(response, 5 * 1024 * 1024);
         values = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
         if (!Array.isArray(values)) throw new Error('Invalid GitHub page');
+      } catch (error) {
+        if (error instanceof DownloadCollectionError) throw error;
+        throw new DownloadCollectionError(controller.signal.aborted ? 'github_timeout'
+          : error instanceof SyntaxError ? 'github_invalid_json'
+          : error instanceof TypeError ? 'github_network_failed' : 'github_data_invalid');
       } finally { clearTimeout(timer); }
       result.push(...values);
       if (values.length < 100) return result;

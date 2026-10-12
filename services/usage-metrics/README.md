@@ -130,3 +130,11 @@ curl -i 'http://127.0.0.1:8789/__scheduled?cron=*+*+*+*+*'
 代码与本地验收：100 次去重、双来源、大小写 UUID、校验失败、字节上限、停收后删除、删除竞争/事务回滚、版本排序、滚动统计、保留边界、分页失败、并发快照、任务失败隔离、迁移和受控报表。
 
 云端验收由已获授权的维护者完成：资源隔离、Secret/绑定/限流配置、可访问测试接口、实际 Cron、日志/备份/告警核对及虚构数据联调。测试结果与尚未完成的运行条件分别记录在验收文件中；测试部署不代表正式开始采集。
+
+## 下载采集诊断（2026-10-12）
+
+08:10 自动 Cron 确实触发，summary/cleanup 成功、downloads 失败；未生成 10 月 12 日快照。隔离远端预览随后向 GitHub 查询返回 403、x-ratelimit-limit=60、remaining=0，证明当时未认证采集路径受到限流；早上旧状态未保存原因，不能追溯断言完全相同。
+
+迁移 `0002_maintenance_error.sql`新增 last_error_code，固定分类区分 github_rate_limited、github_auth_failed、github_http_failed、github_timeout、github_network_failed、github_invalid_json、github_data_invalid / task_failed；不保存响应正文、URL、Token 或安装标识。成功清空错误类别。
+
+要稳定访问公开 Release，协作者需提供独立最小权限 GitHub 查询 Token，作为 Worker Secret `GITHUB_TOKEN`配置；不复用 Cloudflare 管理 Token、不从个人 CLI 自动复制 GitHub 凭据。先应用新迁移再部署，METRICS_ENABLED=false 保持不变；测试手动采集单独记录，随后再核验自动 Cron。没有成功快照时不伪造零增量。新增诊断已本地测试，尚未更新测试云端；GITHUB_TOKEN 待协作者提供/配置。

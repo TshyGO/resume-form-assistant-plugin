@@ -37,7 +37,7 @@ export async function liveStatistics(db, date, days = 30, observedAt = new Date(
       FROM activity_day WHERE date_utc BETWEEN ? AND ?`).bind(date, dateOffset(date, -6), dateOffset(date, -29), date),
     db.prepare(latest).bind(from, date),
     db.prepare('SELECT name, started_at_utc FROM dataset_info ORDER BY name'),
-    db.prepare('SELECT task, last_success_at, last_attempt_at, status FROM maintenance_state ORDER BY task'),
+    db.prepare('SELECT task, last_success_at, last_attempt_at, status, last_error_code FROM maintenance_state ORDER BY task'),
   ]);
   return { date_utc: date, current_day_incomplete: date === today, version_window_days: days, scope: 'enabled_statistics_installations', counts: results[0].results[0], versions: results[1].results, datasets: results[2].results, maintenance: results[3].results };
 }
