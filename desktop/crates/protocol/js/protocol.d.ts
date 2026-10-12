@@ -15,7 +15,8 @@ export type MessageType =
   | "resume.update"
   | "ai.complete"
   | "ui.open"
-  | "legacy.import";
+  | "legacy.import"
+  | "usage.touch";
 
 /** Resume Pro request envelope */
 export interface RequestEnvelope {
@@ -25,7 +26,7 @@ export interface RequestEnvelope {
   messageId: string;
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   clientInstanceId: string;
-  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import";
+  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch";
   /**
    * UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z.
    * pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$
@@ -280,6 +281,9 @@ export interface UiOpenPayload {
   view: "resume" | "settings-ai" | "home";
 }
 
+export interface UsageTouchPayload {
+}
+
 export interface AiCompleteResponsePayload {
   status: "ok" | "failed";
   text?: string;
@@ -311,7 +315,7 @@ export interface HandshakeResponsePayload {
    * minItems: 1
    * maxItems: 16
    */
-  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import")[];
+  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch")[];
 }
 
 export interface HealthResponsePayload {
@@ -472,6 +476,10 @@ export interface UiOpenResponsePayload {
   opened: true;
 }
 
+export interface UsageTouchResponsePayload {
+  accepted: boolean;
+}
+
 export interface WriteResponsePayload {
   /** maxLength: 64 */
   resultKind?: string;
@@ -492,6 +500,7 @@ export interface RequestPayloadByType {
   "ai.complete": AiCompletePayload;
   "ui.open": UiOpenPayload;
   "legacy.import": LegacyImportPayload;
+  "usage.touch": UsageTouchPayload;
 }
 
 /** Response payload type for a given messageType. Several writes share one response. */
@@ -509,6 +518,7 @@ export interface ResponsePayloadByType {
   "ai.complete": AiCompleteResponsePayload;
   "ui.open": UiOpenResponsePayload;
   "legacy.import": LegacyImportResponsePayload;
+  "usage.touch": UsageTouchResponsePayload;
 }
 
 /** One request envelope, narrowed to the payload its messageType carries. */

@@ -25,6 +25,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "fill-probe.js",
   "field-scan.js",
   "feedback-core.js",
+  "usage-signals.js",
   "feedback-ui.js",
   "feedback.css",
   "ai-worker.js",

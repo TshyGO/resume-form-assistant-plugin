@@ -22,6 +22,7 @@ const PAYLOAD_KEYS = {
   "resume.update": "resume-update",
   "ai.complete": "ai-complete",
   "ui.open": "ui-open",
+  "usage.touch": "usage-touch",
   "legacy.import": "legacy-import",
 };
 
@@ -38,6 +39,7 @@ const RESPONSE_PAYLOAD_KEYS = {
   "resume.update": "resume-update",
   "ai.complete": "ai-complete",
   "ui.open": "ui-open",
+  "usage.touch": "usage-touch",
   "legacy.import": "legacy-import",
 };
 

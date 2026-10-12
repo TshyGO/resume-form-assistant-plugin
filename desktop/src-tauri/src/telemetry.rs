@@ -9,7 +9,7 @@ use std::{
 use tauri::{Emitter, Manager, State};
 
 const SETTINGS_VERSION: u32 = 1;
-const NOTICE_VERSION: u32 = 1;
+const NOTICE_VERSION: u32 = 2;
 const SAVE_ERROR: &str = "使用统计设置未能保存，请重试。";
 const OFF_SAVE_ERROR: &str =
     "本次运行已停止使用统计，但关闭设置无法保存。请在重启前检查磁盘权限并重试。";
@@ -22,6 +22,8 @@ struct Stored {
     notice_version: Option<u32>,
     installation_id: Option<String>,
     desktop_attempt_date: Option<String>,
+    #[serde(default)]
+    extension_attempt_date: Option<String>,
 }
 impl Default for Stored {
     fn default() -> Self {
@@ -31,6 +33,7 @@ impl Default for Stored {
             notice_version: None,
             installation_id: None,
             desktop_attempt_date: None,
+            extension_attempt_date: None,
         }
     }
 }
@@ -48,9 +51,11 @@ impl Stored {
                 .desktop_attempt_date
                 .as_ref()
                 .is_none_or(|date| valid_date(date))
+            && self.extension_attempt_date.as_ref().is_none_or(|date| valid_date(date))
+            && (self.extension_attempt_date.is_none() || self.installation_id.is_some())
             && (self.desktop_attempt_date.is_none() || self.installation_id.is_some())
             && (self.enabled
-                || (self.installation_id.is_none() && self.desktop_attempt_date.is_none()))
+                || (self.installation_id.is_none() && self.desktop_attempt_date.is_none() && self.extension_attempt_date.is_none()))
     }
 }
 fn valid_date(date: &str) -> bool {
@@ -189,6 +194,7 @@ impl Telemetry {
             stored.enabled = false;
             stored.installation_id = None;
             stored.desktop_attempt_date = None;
+            stored.extension_attempt_date = None;
         }
         let (changes, _) = tokio::sync::watch::channel(0);
         Arc::new(Self {
@@ -235,6 +241,7 @@ impl Telemetry {
         if !enabled || !state.stored.enabled || state.blocked {
             next.installation_id = None;
             next.desktop_attempt_date = None;
+            next.extension_attempt_date = None;
         }
         next.enabled = enabled;
         next.settings_version = SETTINGS_VERSION;
@@ -314,6 +321,10 @@ impl Telemetry {
         Ok(self.view(&state))
     }
     fn reserve(&self, date: &str, visible_active: bool) -> Option<Activity> {
+        self.reserve_surface(date, visible_active, "desktop")
+    }
+    fn reserve_surface(&self, date: &str, visible_active: bool, surface: &'static str) -> Option<Activity> {
+        if !["desktop", "extension"].contains(&surface) { return None; }
         if !visible_active || !valid_date(date) {
             return None;
         }
@@ -323,7 +334,7 @@ impl Telemetry {
         if state.blocked || !state.available || !state.stored.enabled
             || state.stored.notice_version != Some(NOTICE_VERSION)
             // A backwards clock cannot create another attempt in an already consumed day.
-            || state.stored.desktop_attempt_date.as_deref().is_some_and(|previous| previous >= date)
+            || (if surface == "desktop" { &state.stored.desktop_attempt_date } else { &state.stored.extension_attempt_date }).as_deref().is_some_and(|previous| previous >= date)
         {
             return None;
         }
@@ -332,7 +343,8 @@ impl Telemetry {
             .installation_id
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
-        next.desktop_attempt_date = Some(date.to_owned());
+        if surface == "desktop" { next.desktop_attempt_date = Some(date.to_owned()); }
+        else { next.extension_attempt_date = Some(date.to_owned()); }
         // Persist quota BEFORE any network request. Failures consume the day; no retry queue.
         if save_state(&self.path, &next).is_err() {
             state.blocked = true;
@@ -348,7 +360,7 @@ impl Telemetry {
             installation_id: id,
             platform,
             app_version: env!("CARGO_PKG_VERSION"),
-            surface: "desktop",
+            surface,
         })
     }
     async fn touch(&self, date: &str, visible_active: bool) {
@@ -356,6 +368,15 @@ impl Telemetry {
         let Some(body) = self.reserve(date, visible_active) else {
             return;
         };
+        tokio::select! {
+            biased;
+            _ = changes.changed() => {},
+            _ = self.transmit(reqwest::Method::POST, &body) => {},
+        }
+    }
+    pub async fn extension_touch(&self) {
+        let mut changes = self.changes.subscribe();
+        let Some(body) = self.reserve_surface(&today(), true, "extension") else { return; };
         tokio::select! {
             biased;
             _ = changes.changed() => {},

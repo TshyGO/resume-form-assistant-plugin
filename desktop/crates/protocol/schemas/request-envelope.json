@@ -13,9 +13,18 @@
     "payload"
   ],
   "properties": {
-    "protocolVersion": { "type": "integer", "minimum": 1 },
-    "messageId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
-    "clientInstanceId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
+    "protocolVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "messageId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "clientInstanceId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
     "messageType": {
       "type": "string",
       "enum": [
@@ -31,7 +40,8 @@
         "resume.update",
         "ai.complete",
         "ui.open",
-        "legacy.import"
+        "legacy.import",
+        "usage.touch"
       ]
     },
     "occurredAt": {
@@ -39,8 +49,16 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$",
       "description": "UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z."
     },
-    "archiveId": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
-    "restoreEpoch": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" },
-    "payload": { "type": "object" }
+    "archiveId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "restoreEpoch": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "payload": {
+      "type": "object"
+    }
   }
 }

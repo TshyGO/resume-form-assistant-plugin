@@ -3,7 +3,7 @@ export const SCHEMA_DATA = {
   "rules": {
     "protocolVersion": 2,
     "minProtocolVersion": 1,
-    "maxProtocolVersion": 2,
+    "maxProtocolVersion": 3,
     "maxEnvelopeBytes": 65536,
     "suggestedRawChunkBytes": 32768,
     "maxSnapshotBytes": 2097152,
@@ -15,7 +15,8 @@ export const SCHEMA_DATA = {
       "health",
       "handshake",
       "ai.complete",
-      "ui.open"
+      "ui.open",
+      "usage.touch"
     ],
     "identityRequired": [
       "application.queryCandidates",
@@ -47,7 +48,8 @@ export const SCHEMA_DATA = {
       "resume.update",
       "ai.complete",
       "ui.open",
-      "legacy.import"
+      "legacy.import",
+      "usage.touch"
     ],
     "v2MessageTypes": [
       "resume.read",
@@ -106,7 +108,10 @@ export const SCHEMA_DATA = {
       "identity": "Schema cannot prove an envelope matches the desktop current pointer. After structural validation, D03/D06 must compare archiveId/restoreEpoch to current.json.",
       "sourceRestoreEpoch": "Bound at pairing/bind time and immutable. Never overwrite with the current epoch.",
       "reconcile": "Read-only. A successful reconcile item does not authorize replay or rewrite of the old envelope."
-    }
+    },
+    "v3MessageTypes": [
+      "usage.touch"
+    ]
   },
   "envelope": {
     "$id": "https://resumepro.local/protocol/request-envelope.json",
@@ -150,7 +155,8 @@ export const SCHEMA_DATA = {
           "resume.update",
           "ai.complete",
           "ui.open",
-          "legacy.import"
+          "legacy.import",
+          "usage.touch"
         ]
       },
       "occurredAt": {
@@ -910,6 +916,12 @@ export const SCHEMA_DATA = {
           ]
         }
       }
+    },
+    "usage-touch": {
+      "$id": "https://resumepro.local/protocol/payloads/usage-touch.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
     }
   },
   "responses": {
@@ -1010,7 +1022,8 @@ export const SCHEMA_DATA = {
               "resume.update",
               "ai.complete",
               "ui.open",
-              "legacy.import"
+              "legacy.import",
+              "usage.touch"
             ]
           }
         }
@@ -1437,6 +1450,19 @@ export const SCHEMA_DATA = {
           ]
         }
       }
+    },
+    "usage-touch": {
+      "$id": "https://resumepro.local/protocol/responses/usage-touch.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ]
     },
     "write": {
       "$id": "https://resumepro.local/protocol/responses/write.json",
