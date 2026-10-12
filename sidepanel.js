@@ -111,6 +111,8 @@
     submitCopyId: document.getElementById("submit-confirm-copy-id"),
     submitDismiss: document.getElementById("submit-confirm-dismiss"),
     templateEmpty: document.getElementById("template-empty"),
+    templateEdit: document.getElementById("template-edit"),
+    fieldsManage: document.getElementById("fields-manage"),
     fillProgress: document.getElementById("fill-progress"),
     fillProgressPhase: document.getElementById("fill-progress-phase"),
     fillReason: document.getElementById("fill-reason"),
@@ -328,6 +330,11 @@
     elements.templateSelect.disabled = Boolean(copy) || !(currentStore?.templates?.length);
     // No template is not an error: the profile alone can still fill. Say where templates come from.
     elements.templateEmpty.hidden = desktopMode !== "ready" || Boolean(currentStore?.templates?.length);
+    // 字段编辑（#273）只对桌面里的当前模板开放；没有模板、没连上桌面时不给入口。
+    const editable = Boolean(templateEditor) && !copy && Boolean(selectedTemplate());
+    elements.templateEdit.disabled = !editable;
+    elements.templateEdit.hidden = !templateEditor;
+    elements.fieldsManage.hidden = !editable;
     elements.fieldSearch.disabled = Boolean(copy);
     elements.desktopConnectionAction.dataset.kind = copy?.kind || "";
     document.getElementById("open-manager").textContent = copy?.action || "打开桌面";
@@ -1808,6 +1815,36 @@
     storeSnapshot = nextSnapshot;
     storeLoaded = true;
     if (changed) renderFromStore();
+    if (nextStore) templateEditor?.observe(nextStore).catch(() => {});
+  }
+
+  // 模板字段编辑（#273）：编辑的是桌面里的当前模板；打开前先重读一次，从最新内容起草。
+  // 编辑面板盖住两个视图，期间视图切换与下面的页面都够不着。
+  const templateEditor = self.ResumeProTemplateEditor && self.ResumeProTemplateFields
+    ? self.ResumeProTemplateEditor.create({
+      doc: document,
+      fields: self.ResumeProTemplateFields,
+      profileApi: self.ResumeProProfile,
+      send: (message) => chrome.runtime.sendMessage(message),
+      reload: async () => { await loadStore(); return currentStore; },
+      groupIcon,
+      toast,
+      onOpenChange: (open) => {
+        for (const node of [document.querySelector(".dock-tabs"), document.getElementById("fill-view"), document.getElementById("fields-view")]) {
+          if (node) node.inert = open;
+        }
+      }
+    })
+    : null;
+
+  async function openTemplateEditor() {
+    if (!templateEditor || templateEditor.isOpen()) return;
+    await loadStore();
+    if (desktopMode !== "ready" || !selectedTemplate()) {
+      toast(desktopMode === "ready" ? "桌面里还没有当前模板，无法编辑字段。" : "桌面暂时连不上，无法编辑字段。");
+      return;
+    }
+    await templateEditor.open(currentStore);
   }
 
   const tabButtons = Array.from(document.querySelectorAll(".dock-tabs button"));
@@ -1862,6 +1899,8 @@
       elements.fieldGroups.querySelectorAll(".field-group").forEach((group) => { if (group !== event.target) group.open = false; });
     }
   }, true);
+  elements.templateEdit.addEventListener("click", () => { openTemplateEditor().catch(() => toast("无法打开字段编辑。")); });
+  elements.fieldsManage.addEventListener("click", () => { openTemplateEditor().catch(() => toast("无法打开字段编辑。")); });
   elements.templateSelect.addEventListener("change", async () => {
     // A plan made for the old template must not run with the new one.
     await sendToPage({ type: "RESUME_PANEL_REPEAT", action: "invalidate" }).catch(() => {});

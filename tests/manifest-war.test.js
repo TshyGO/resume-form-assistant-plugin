@@ -83,6 +83,8 @@ test("扩展页面自己的子资源不能重新对网页开放", () => {
     "sidepanel.js",
     "sidepanel-compose.js",
     "sidepanel-queue.js",
+    "sidepanel-template-editor.js",
+    "template-fields.js",
     "sidepanel.css",
   ]) {
     assert.ok(

@@ -35,7 +35,9 @@ export function createRouter({ session, intents, outbox, drain, reconcile, resum
         ? resume.setActiveTemplate(message.templateId)
         : message.op === 'saveProfile'
           ? resume.saveProfile(message.profile, message.expectedRevision)
-          : { status: 'invalid_payload' };
+          : message.op === 'saveTemplate'
+            ? resume.saveTemplate(message.templateId, message.groups, message.baseSha256)
+            : { status: 'invalid_payload' };
     }
     if (type === MSG.openView) return resume.openView(message.view);
     if (type === MSG.legacyStatus) {

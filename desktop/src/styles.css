@@ -505,6 +505,33 @@ dialog.resume-dialog.tone-danger { border-color: #edc5c5; }
   .profile-form-foot { flex-wrap: wrap; }
 }
 
+/* 模板字段编辑（#273）：沿用模板详情的页头、预览的分组标题与圆角框、「我的信息」的保存栏；
+   每行字段名称 / 内容 / 所属分类 / 删除，和补充字段一样按列对齐。 */
+.template-edit-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.template-edit-groups { gap: 18px; }
+.template-edit-list { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--card-line); border-radius: 12px; font-size: 13px; }
+.template-edit-head, .template-edit-row { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.6fr) minmax(7em, .7fr) auto; gap: 10px; align-items: start; padding: 10px 16px; }
+.template-edit-head { padding-block: 8px; border-bottom: 1px solid #edf0f3; background: #fbfcfd; color: var(--muted); font-size: 11px; }
+.template-edit-row + .template-edit-row { border-top: 1px solid #edf0f3; }
+.template-edit-row > label { min-width: 0; }
+.template-edit-row input, .template-edit-row select { width: 100%; min-height: 36px; border-radius: 8px; font-size: 13px; }
+.template-edit-row input { font-weight: 500; }
+.template-edit-row input[aria-invalid="true"] { border-color: var(--danger); }
+.template-edit-row textarea { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 10px; border-radius: 8px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.template-edit-row > button { min-height: 36px; padding-inline: 12px; border-radius: 8px; font-size: 12px; }
+.template-edit-error { grid-column: 1 / -1; font-size: 12px; }
+.template-edit-empty { margin: 0; padding: 14px 16px; font-size: 12px; }
+.template-edit-add { margin-top: 8px; font-size: 12px; }
+.template-edit-alert, .template-saved-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 16px; line-height: 1.6; }
+.template-edit-alert > span, .template-saved-note > span { flex: 1 1 280px; min-width: 0; }
+.template-saved-note > button { flex: none; min-height: 32px; padding-inline: 14px; border-radius: 8px; font-size: 12px; }
+.template-edit-fallback { margin: -8px 0 16px; line-height: 1.6; }
+@media (max-width: 720px) {
+  .template-edit-head { display: none; }
+  .template-edit-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .template-edit-row > label:nth-of-type(1), .template-edit-row > label:nth-of-type(2) { grid-column: 1 / -1; }
+}
+
 /* 补充字段（#228）：表头只出现一次；每行字段名、内容两栏等宽、框一样高，长题目自动换行显示全文；
    「待补充」和「删除」放在固定宽度的右侧，上下居中，行行对齐。 */
 .custom-field-head, .custom-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 10.5em; gap: 12px; align-items: center; }

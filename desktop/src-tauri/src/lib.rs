@@ -733,8 +733,18 @@ fn resume_overview_cmd(state: State<AppState>) -> Result<archive_store::ResumeOv
 }
 
 #[tauri::command]
-fn get_resume_template_cmd(state: State<AppState>, id: String) -> Result<archive_store::ResumeTemplate, CommandError> {
-    with_store(&state, |store| resume_commands::get_template(store, &id))
+fn get_resume_template_cmd(state: State<AppState>, id: String) -> Result<resume_commands::TemplateView, CommandError> {
+    with_store(&state, |store| resume_commands::get_template_view(store, &id))
+}
+
+#[tauri::command]
+fn save_resume_template_fields_cmd(
+    state: State<AppState>,
+    id: String,
+    groups: Vec<archive_store::TemplateGroup>,
+    base_sha256: String,
+) -> Result<resume_commands::TemplateView, CommandError> {
+    with_store(&state, move |store| resume_commands::save_template_fields(store, &id, groups, &base_sha256))
 }
 
 #[tauri::command]
@@ -1675,6 +1685,7 @@ pub fn run() {
                     let handle = app.handle().clone();
                     let legacy_handle = app.handle().clone();
                     let profile_handle = app.handle().clone();
+                    let template_handle = app.handle().clone();
                     let application = Arc::new(ipc_server::OpenArchive::with_services(
                         Arc::clone(&app.state::<AppState>().store), services,
                     ).notifying(Arc::new(move |notice| {
@@ -1688,6 +1699,10 @@ pub fn run() {
                         // 「简历」页即使已经停在那儿，也能感知插件写入（#177）；表单自己决定
                         // 有没有未保存的修改要保护，这里只负责通知，不负责判断。
                         let _ = profile_handle.emit("resume-profile-changed", &notice);
+                    })).notifying_template(Arc::new(move |notice| {
+                        // 插件改了模板字段或切换了当前模板（#273）：模板列表重新读，打开着的
+                        // 编辑器自己判断草稿要不要保护。
+                        let _ = template_handle.emit("resume-template-changed", &notice);
                     })));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
@@ -1785,6 +1800,7 @@ pub fn run() {
             import_resume_template_cmd,
             export_resume_template_cmd,
             rename_resume_template_cmd,
+            save_resume_template_fields_cmd,
             delete_resume_template_cmd,
             set_active_resume_template_cmd,
             get_profile_cmd,

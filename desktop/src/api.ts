@@ -446,6 +446,8 @@ export interface ResumeTemplateView {
   name: string;
   groups: TemplateGroupView[];
   updatedAt: string;
+  /** #273：内容版本。字段编辑从它起草，保存时原样带回，对不上就是别处改过。 */
+  contentSha256: string;
 }
 
 export interface ImportResultView {

@@ -61,6 +61,7 @@
             <section class="card template-card" aria-label="当前模板">
               <div class="card-head">
                 <label for="template-select" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="12" cy="10" r="2.6"/><path d="M7.5 17c.9-2 2.5-3 4.5-3s3.6 1 4.5 3"/></svg>当前模板</label>
+                <button id="template-edit" class="card-action" type="button" disabled title="编辑这份模板的字段">编辑字段</button>
               </div>
               <div class="template-picker">
                 <select id="template-select" class="dock-select"><option value="">正在加载…</option></select>
@@ -289,7 +290,10 @@
         <section class="dock-view" id="fields-view" role="tabpanel" aria-labelledby="tab-fields" data-view="fields" hidden>
           <div class="view-scroll">
             <section class="card fields-head" aria-labelledby="fields-title">
-              <h2 id="fields-title"><span class="fields-dot" aria-hidden="true"></span><span id="fields-template">简历字段</span></h2>
+              <div class="fields-head__row">
+                <h2 id="fields-title"><span class="fields-dot" aria-hidden="true"></span><span id="fields-template">简历字段</span></h2>
+                <button id="fields-manage" class="card-action" type="button" hidden title="添加、修改或删除这份模板的字段">管理字段</button>
+              </div>
               <p class="field-meta" id="field-meta"></p>
             </section>
             <label class="sr-only" for="field-search">搜索简历字段</label>
@@ -318,6 +322,76 @@
             <p id="field-empty" class="field-empty" hidden>没有找到匹配的字段。换个关键词，或清空搜索查看全部分组。</p>
           </div>
         </section>
+
+        <section id="template-editor" class="task-panel template-editor" role="region" aria-labelledby="te-title" hidden>
+          <header class="task-head">
+            <span class="task-icon" aria-hidden="true"></span>
+            <div class="task-heading">
+              <h2 id="te-title" tabindex="-1">编辑模板字段</h2>
+              <p id="te-desc"></p>
+            </div>
+            <button id="te-exit" class="task-exit" type="button">取消</button>
+          </header>
+          <div id="te-notice" class="task-notice" role="status" hidden>
+            <span id="te-notice-text"></span>
+            <button id="te-notice-action" class="te-notice__action" type="button" hidden></button>
+          </div>
+          <div class="task-body">
+            <div class="task-flow">
+              <form id="te-form" class="job-card" novalidate>
+                <p class="job-note te-scope">修改只作用于这份模板，点「保存」后才生效；不会改动其他模板或「我的信息」。</p>
+                <div class="job-secondary te-tools">
+                  <button id="te-add-toggle" class="job-link" type="button">＋ 添加字段</button>
+                  <button id="te-category-toggle" class="job-link" type="button">＋ 新建分类</button>
+                </div>
+                <div id="te-add" class="te-inline" hidden>
+                  <label class="job-label" for="te-add-category">所属分类</label>
+                  <select id="te-add-category" class="job-input"></select>
+                  <div id="te-add-new-category-row" hidden>
+                    <label class="job-label" for="te-add-new-category">新分类名称</label>
+                    <input id="te-add-new-category" class="job-input" type="text" autocomplete="off">
+                  </div>
+                  <label class="job-label" for="te-add-key">字段名称<span class="required" aria-hidden="true">*</span></label>
+                  <input id="te-add-key" class="job-input" type="text" autocomplete="off">
+                  <label class="job-label" for="te-add-value">内容</label>
+                  <textarea id="te-add-value" class="job-input te-value" rows="2"></textarea>
+                  <p id="te-add-error" class="job-error" role="alert" hidden></p>
+                  <div class="offer-actions">
+                    <button id="te-add-submit" class="btn-primary" type="button">添加到草稿</button>
+                    <button id="te-add-close" type="button">收起</button>
+                  </div>
+                </div>
+                <div id="te-category" class="te-inline" hidden>
+                  <label class="job-label" for="te-category-name">新分类名称</label>
+                  <input id="te-category-name" class="job-input" type="text" autocomplete="off">
+                  <p id="te-category-error" class="job-error" role="alert" hidden></p>
+                  <div class="offer-actions">
+                    <button id="te-category-submit" class="btn-primary" type="button">新建分类</button>
+                    <button id="te-category-close" type="button">收起</button>
+                  </div>
+                </div>
+                <div id="te-groups" class="field-groups te-groups"></div>
+                <p id="te-problems" class="job-error" role="alert" hidden></p>
+                <p id="te-warnings" class="job-note"></p>
+                <div class="te-rules">
+                  <p class="te-rules__title">一键填写时怎么用</p>
+                  <p>先用这份模板的字段；模板里没有的字段名，再用「我的信息」里的补充字段补上。同名字段以模板为准，空内容和像密码、验证码的内容不参与填写。</p>
+                  <p id="te-fallback" class="te-rules__warn" hidden></p>
+                </div>
+                <div id="te-foot" class="offer-actions task-foot"></div>
+              </form>
+              <div id="te-result" class="job-card is-success" hidden>
+                <p class="job-card__title">保存成功</p>
+                <p id="te-result-text" class="job-result-text" role="status"></p>
+                <p class="job-note">Excel 是导出那一刻的文件快照：之前下载或导入过的 Excel 不会自动更新。需要最新的表格时，到桌面「简历」页对这份模板「导出 Excel」；导出只包含模板字段，不含「我的信息」。</p>
+                <div class="offer-actions task-foot">
+                  <button id="te-result-export" type="button">到桌面导出 Excel</button>
+                  <button id="te-result-done" class="btn-primary" type="button">完成</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer class="dock-footer">
@@ -330,6 +404,8 @@
     <script src="feedback-ui.js"></script>
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
+    <script src="template-fields.js"></script>
+    <script src="sidepanel-template-editor.js"></script>
     <script src="sidepanel-compose.js"></script>
     <script src="sidepanel-queue.js"></script>
     <script src="sidepanel.js"></script>
