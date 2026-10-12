@@ -51,11 +51,16 @@ impl Stored {
                 .desktop_attempt_date
                 .as_ref()
                 .is_none_or(|date| valid_date(date))
-            && self.extension_attempt_date.as_ref().is_none_or(|date| valid_date(date))
+            && self
+                .extension_attempt_date
+                .as_ref()
+                .is_none_or(|date| valid_date(date))
             && (self.extension_attempt_date.is_none() || self.installation_id.is_some())
             && (self.desktop_attempt_date.is_none() || self.installation_id.is_some())
             && (self.enabled
-                || (self.installation_id.is_none() && self.desktop_attempt_date.is_none() && self.extension_attempt_date.is_none()))
+                || (self.installation_id.is_none()
+                    && self.desktop_attempt_date.is_none()
+                    && self.extension_attempt_date.is_none()))
     }
 }
 fn valid_date(date: &str) -> bool {
@@ -323,8 +328,15 @@ impl Telemetry {
     fn reserve(&self, date: &str, visible_active: bool) -> Option<Activity> {
         self.reserve_surface(date, visible_active, "desktop")
     }
-    fn reserve_surface(&self, date: &str, visible_active: bool, surface: &'static str) -> Option<Activity> {
-        if !["desktop", "extension"].contains(&surface) { return None; }
+    fn reserve_surface(
+        &self,
+        date: &str,
+        visible_active: bool,
+        surface: &'static str,
+    ) -> Option<Activity> {
+        if !["desktop", "extension"].contains(&surface) {
+            return None;
+        }
         if !visible_active || !valid_date(date) {
             return None;
         }
@@ -343,8 +355,11 @@ impl Telemetry {
             .installation_id
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
-        if surface == "desktop" { next.desktop_attempt_date = Some(date.to_owned()); }
-        else { next.extension_attempt_date = Some(date.to_owned()); }
+        if surface == "desktop" {
+            next.desktop_attempt_date = Some(date.to_owned());
+        } else {
+            next.extension_attempt_date = Some(date.to_owned());
+        }
         // Persist quota BEFORE any network request. Failures consume the day; no retry queue.
         if save_state(&self.path, &next).is_err() {
             state.blocked = true;
@@ -376,7 +391,9 @@ impl Telemetry {
     }
     pub async fn extension_touch(&self) {
         let mut changes = self.changes.subscribe();
-        let Some(body) = self.reserve_surface(&today(), true, "extension") else { return; };
+        let Some(body) = self.reserve_surface(&today(), true, "extension") else {
+            return;
+        };
         tokio::select! {
             biased;
             _ = changes.changed() => {},

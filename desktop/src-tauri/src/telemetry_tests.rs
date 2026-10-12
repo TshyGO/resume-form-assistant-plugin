@@ -384,16 +384,31 @@ fn release_destination_must_be_https_without_credentials_or_extra_url_fields() {
 #[test]
 fn desktop_and_both_browsers_share_one_identifier_with_independent_daily_surface_quotas() {
     let (root, service) = service();
-    assert!(service.reserve_surface("2026-10-11", true, "extension").is_none());
+    assert!(service
+        .reserve_surface("2026-10-11", true, "extension")
+        .is_none());
     service.acknowledge_notice().unwrap();
-    let desktop = service.reserve_surface("2026-10-11", true, "desktop").unwrap();
-    let extension = service.reserve_surface("2026-10-11", true, "extension").unwrap();
+    let desktop = service
+        .reserve_surface("2026-10-11", true, "desktop")
+        .unwrap();
+    let extension = service
+        .reserve_surface("2026-10-11", true, "extension")
+        .unwrap();
     assert_eq!(desktop.installation_id, extension.installation_id);
     assert_eq!(extension.surface, "extension");
-    assert!(service.reserve_surface("2026-10-11", true, "extension").is_none());
-    let restarted = Telemetry::load(root.path().to_path_buf(), config("http://127.0.0.1:9/v1/activity".into()));
-    assert!(restarted.reserve_surface("2026-10-11", true, "extension").is_none());
-    assert!(restarted.reserve_surface("2026-10-11", true, "desktop").is_none());
+    assert!(service
+        .reserve_surface("2026-10-11", true, "extension")
+        .is_none());
+    let restarted = Telemetry::load(
+        root.path().to_path_buf(),
+        config("http://127.0.0.1:9/v1/activity".into()),
+    );
+    assert!(restarted
+        .reserve_surface("2026-10-11", true, "extension")
+        .is_none());
+    assert!(restarted
+        .reserve_surface("2026-10-11", true, "desktop")
+        .is_none());
     service.change(false).unwrap();
     let state = service.inner.lock().unwrap();
     assert!(state.stored.installation_id.is_none());
