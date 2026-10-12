@@ -39,7 +39,7 @@
     "5. 页头搜索框、登录框、筛选条件、站内导航不是要填写的字段。",
     "5a. 写着「外观=下拉」「外观=级联」「外观=日期」的输入框是组件库的下拉框、级联选择或日期选择器，control 分别写 custom-select、cascader、date（日期题目也可能显示为「外观=下拉」）。",
     "6. preActions 只用于填写前必须点的「编辑」「展开」类按钮，最多 5 个；新增条目的按钮放在 sections.addRef，不放进 preActions。",
-    "7. 提交、保存、确认、删除、下一步、投递、返回、取消等按钮，以及 button[submit]，绝不能出现在 preActions 或 addRef 里；标了「跨页」的链接不能作为 addRef。",
+    "7. 提交、保存、确认、删除、下一步、投递、返回、取消等按钮，以及 button[submit]，绝不能出现在 preActions 或 addRef 里；标了「跨页」的链接不能作为 addRef；标了「跨站」的链接（指向别的网站）绝不能出现在 preActions 或 addRef 里。",
     "8. 页面只是查看状态、没有可填写的输入框时，pageState 写 viewing，并在 preActions 里给出需要点的「编辑」按钮；不是填写表单时写 not_form。",
     "9. 不确定的字段宁可不列。"
   ].join("\n");
@@ -82,7 +82,8 @@
   // 跨页的「编辑 / 展开」可以（这一版只提示用户手动点，#225 也不会自动点跨页的）；新增必须在本页完成，跨页不行。
   function buttonAllowed(node, allow, { crossPageOk = false } = {}) {
     if (!node || node.type !== "button") return false;
-    if (node.submit || (node.leaves && !crossPageOk)) return false;
+    // 指向别的网站的链接，任何情况下都不行。
+    if (node.submit || node.crossSite || (node.leaves && !crossPageOk)) return false;
     const text = BARE(node.text);
     if (!text || DENY.test(text)) return false;
     return allow.test(text);
@@ -334,7 +335,7 @@
       state.progress = null;
       state.result = null;
       state.report = { outlineChars: 0, parts: 0, truncated: false, specFields: 0, usedFields: 0, overridden: 0,
-        validation: "", tierUsed: "", calls: 0, limit: MAX_CALLS, budgetExhausted: false, errorCode: "" };
+        validation: "", tierUsed: "", calls: 0, analysisCalls: 0, limit: MAX_CALLS, budgetExhausted: false, errorCode: "" };
       deps.acquire?.();
       set(run, "outlining", "正在生成脱敏的页面大纲…");
       execute(run).catch(() => {
@@ -403,6 +404,8 @@
         merged.sections.push(...checked.spec.sections);
         merged.fields.push(...checked.spec.fields);
       }
+      // 分析阶段用掉的次数单独记：填写阶段的诊断用「分析次数 + 匹配次数」算总数。
+      report.analysisCalls = run.budget.used();
       report.validation = "通过";
       report.specFields = merged.fields.length;
       report.controlKinds = merged.fields.reduce((counts, field) => ({ ...counts, [field.control]: (counts[field.control] || 0) + 1 }), {});
@@ -411,8 +414,9 @@
         const names = describeActions(merged.preActions, outline.nodes);
         // 跨页的「编辑」：点了会打开新页面，要在新页面上重新分析。
         const crossPage = merged.preActions.some(action => action.leaves);
+        // 插件看不出页面脚本会不会跳页（javascript:editInfo()），只说「可能」。
         set(run, "needs_action", crossPage
-          ? `需要先在网页上手动点击${names}（会打开新页面），在新页面等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`
+          ? `需要先在网页上手动点击${names}（可能会打开新页面），等输入框出现后，在出现输入框的页面再点「深度分析本页」。这一次没有填写任何内容。`
           : `需要先在网页上手动点击${names}，等输入框出现后再点「深度分析本页」。这一次没有填写任何内容。`);
         return;
       }

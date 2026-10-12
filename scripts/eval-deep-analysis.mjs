@@ -30,7 +30,7 @@ export function parseOutline(text) {
     if (!match) continue;
     const [, ref, kind, rest] = match;
     if (kind === "button" || kind === "button[submit]" || kind === "link") {
-      nodes.set(ref, { type: "button", text: (rest.match(/"([^"]*)"/) || [])[1] || "", submit: kind === "button[submit]", leaves: /跨页/.test(rest) });
+      nodes.set(ref, { type: "button", text: (rest.match(/"([^"]*)"/) || [])[1] || "", submit: kind === "button[submit]", leaves: /跨页|跨站/.test(rest), crossSite: /跨站/.test(rest) });
       continue;
     }
     let domKind = KIND_TO_DOM[kind];

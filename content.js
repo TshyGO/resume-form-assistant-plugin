@@ -2346,7 +2346,8 @@
         path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
-        deep: deep ? { ...deep.report, calls: (Number(deep.report?.calls) || 0) + (Number(diagnostics.calls) || 0),
+        // 总调用次数 = 分析阶段（deep.report.analysisCalls）+ 本次匹配（diagnostics.calls）。
+        deep: deep ? { ...deep.report, calls: (Number(deep.report?.analysisCalls) || 0) + (Number(diagnostics.calls) || 0),
           budgetExhausted: Boolean(deep.report?.budgetExhausted || diagnostics.budgetExhausted) } : null };
       if (session === fillSession) session.summary = summaryInput;
       // 侧栏、手动反馈和自动上报用同一份输入，两个通道的诊断块一致。

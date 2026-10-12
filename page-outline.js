@@ -178,6 +178,20 @@
     }
   }
 
+  // 链接指向别的网站（不同源）：深度分析绝不让用户去点它（PR #271 审查：恶意页面放一个「编辑」链接指向外站）。
+  // javascript: 是页面自己的脚本，看不出去向，不算外站；解析不了的网址按外站处理。
+  function leavesSite(el) {
+    const anchor = el.closest?.("a[href], area[href]");
+    if (!anchor) return false;
+    const raw = String(anchor.getAttribute("href") || "").trim();
+    if (!raw || raw.startsWith("#") || /^javascript:/i.test(raw)) return false;
+    try {
+      return new URL(raw, anchor.ownerDocument.baseURI).origin !== new URL(anchor.ownerDocument.URL).origin;
+    } catch {
+      return true;
+    }
+  }
+
   function isSubmitLike(el) {
     if (!["BUTTON", "INPUT"].includes(el.tagName)) return false;
     const type = String(el.getAttribute("type") || (el.tagName === "BUTTON" ? "submit" : "")).toLowerCase();
@@ -245,7 +259,7 @@
       if (insideClaimed(el) || editableHere(el)) continue;
       const text = buttonText(el);
       if (!text || chars(text).length > MAX_BUTTON_TEXT) continue;
-      add(el, { type: "button", element: el, text, submit: isSubmitLike(el), leaves: leavesPage(el),
+      add(el, { type: "button", element: el, text, submit: isSubmitLike(el), leaves: leavesPage(el), crossSite: leavesSite(el),
         link: el.tagName === "A" || attr(el, "role") === "link", frame: ctx.frame });
     }
 
@@ -292,7 +306,7 @@
   function lineFor(item, redact) {
     if (item.type === "button") {
       const kind = item.link ? "link" : item.submit ? "button[submit]" : "button";
-      return `${item.ref} ${kind} "${redact(item.text, MAX_BUTTON_TEXT)}"${item.leaves ? " 跨页" : ""}`;
+      return `${item.ref} ${kind} "${redact(item.text, MAX_BUTTON_TEXT)}"${item.crossSite ? " 跨站" : item.leaves ? " 跨页" : ""}`;
     }
     const control = item.control;
     const el = item.element;

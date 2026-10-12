@@ -99,8 +99,7 @@ test("pre-actions: only 编辑/展开-style buttons; submit buttons and forbidde
   const crossPage = deep.validateSpec({ pageState: "viewing", preActions: [{ ref: refs.link, kind: "edit" }] }, context);
   assert.equal(crossPage.ok, true);
   assert.deepEqual(crossPage.spec.preActions, [{ ref: refs.link, kind: "edit", leaves: true }]);
-  // 新增必须在本页完成：跨页的「添加」作为 addRef 仍然作废。
-  assert.equal(deep.validateSpec({ pageState: "editing", sections: [{ domain: "education", addRef: refs.link }] }, context).reason, "forbidden_action");
+  // 新增必须在本页完成：跨页的「添加」作为 addRef 仍然作废（见下面专门的用例）。
   for (const [action, reason] of [
     [{ ref: refs.submit, kind: "edit" }, "forbidden_action"],
     [{ ref: refs.remove, kind: "expand" }, "forbidden_action"],
@@ -506,11 +505,31 @@ test("a cross-page 编辑 link is not clicked or voided: the user is told it ope
   await h.controller.start();
   const done = await h.settle(finished);
   assert.equal(done.phase, "needs_action");
-  assert.match(done.message, /手动点击「编辑」（会打开新页面），在新页面等输入框出现后再点「深度分析本页」/);
+  assert.match(done.message, /手动点击「编辑」（可能会打开新页面），等输入框出现后，在出现输入框的页面再点「深度分析本页」/);
   assert.equal(h.calls.fill.length, 0);
 });
 
-test("the analysis prompt forbids submit buttons anywhere and cross-page links as add buttons", () => {
+test("the analysis prompt forbids submit buttons anywhere, cross-page add buttons and cross-site links", () => {
   assert.match(deep.ANALYZE_SYSTEM_PROMPT, /button\[submit\]，绝不能出现在 preActions 或 addRef 里/);
   assert.match(deep.ANALYZE_SYSTEM_PROMPT, /标了「跨页」的链接不能作为 addRef/);
+  assert.match(deep.ANALYZE_SYSTEM_PROMPT, /标了「跨站」的链接（指向别的网站）绝不能出现在 preActions 或 addRef 里/);
+});
+
+test("add buttons: the same 「添加」 text passes on the page and is refused when it leaves the page or the site", () => {
+  // CodeRabbit（PR #271）：原用例用的是「修改」，文字规则本身就会拒绝，没测到跨页规则。
+  const doc = new JSDOM(`<body><input aria-label="学校"><button type="button">添加</button><a href="/apply/education/new">添加</a>
+    <a href="https://evil.example/edit">编辑</a><a href="/resume/edit">编辑</a></body>`, { url: "https://jobs.example.test/apply" }).window.document;
+  const built = outline.build(doc, { isVisible, fieldScan });
+  const buttons = [...built.nodes.entries()].filter(([, node]) => node.type === "button");
+  const [inPage, crossPageAdd, crossSiteEdit, crossPageEdit] = buttons.map(([ref]) => ref);
+  assert.deepEqual(buttons.map(([, node]) => [node.text, Boolean(node.leaves), Boolean(node.crossSite)]),
+    [["添加", false, false], ["添加", true, false], ["编辑", true, true], ["编辑", true, false]]);
+  assert.match(built.parts[0].text, /link "编辑" 跨站/);
+  const context = { nodes: built.nodes, refs: new Set(built.parts[0].refs), redact: built.redact };
+  const add = (addRef) => deep.validateSpec({ pageState: "editing", sections: [{ domain: "education", addRef }] }, context);
+  assert.equal(add(inPage).ok, true);
+  assert.equal(add(crossPageAdd).reason, "forbidden_action");
+  const edit = (ref) => deep.validateSpec({ pageState: "viewing", preActions: [{ ref, kind: "edit" }] }, context);
+  assert.equal(edit(crossPageEdit).ok, true, "a same-site edit page is only suggested to the user");
+  assert.equal(edit(crossSiteEdit).reason, "forbidden_action", "a link to another site is never suggested");
 });

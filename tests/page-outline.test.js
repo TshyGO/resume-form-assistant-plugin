@@ -258,10 +258,12 @@ test("javascript: links count as staying on the page only when they do nothing; 
   // PR #271 审查：javascript:location.href=… 点了会跳走，原来被当成本页链接。
   const doc = load(`<a href="javascript:void(0)">编辑1</a><a href="javascript:;">编辑2</a><a href="javascript:">编辑3</a>
     <a href="javascript:void 0">编辑4</a><a href="#edu">编辑5</a>
-    <a href="javascript:location.href='/next'">编辑6</a><a href="javascript:editInfo()">编辑7</a><a href="/apply/step2">编辑8</a>`);
+    <a href="javascript:location.href='/next'">编辑6</a><a href="javascript:editInfo()">编辑7</a><a href="/apply/step2">编辑8</a>
+    <a href="https://other.example/edit">编辑9</a>`);
   const all = text(build(doc));
   for (const n of [1, 2, 3, 4, 5]) assert.match(all, new RegExp(`link "编辑${n}"$`, "m"), `编辑${n} stays on the page`);
-  for (const n of [6, 7, 8]) assert.match(all, new RegExp(`link "编辑${n}" 跨页`), `编辑${n} may leave the page`);
+  for (const n of [6, 7, 8]) assert.match(all, new RegExp(`link "编辑${n}" 跨页$`, "m"), `编辑${n} may leave the page`);
+  assert.match(all, /link "编辑9" 跨站$/m, "a link to another site is marked as such");
 });
 
 test("an editor whose content lives in its own open Shadow DOM or a same-origin frame still sends nothing it contains", () => {

@@ -297,3 +297,13 @@ test("an unfilled deep field says in the diagnostics which control kind it was o
   await page.settle(finished);
   assert.match(page.diagnosticsText.value, /：.*｜按 text 操作｜/, page.diagnosticsText.value);
 });
+
+test("the deep diagnostics count analysis calls plus this fill's calls, once each", async () => {
+  // AI 审查三次认为会重复累加：分析次数单独记在 analysisCalls，诊断 = 分析 + 本次匹配。
+  const page = deepPage({ fill: (message) => ({ success: true, matches: message.formFields.map((field) => ({ fieldId: field.fieldId, value: `AI-${field.label}` })),
+    diagnostics: { ruleMatches: 0, aiMatches: 2, calls: 2, errorCode: "none" } }) });
+  await page.ask({ action: "start" });
+  const done = await page.settle(finished);
+  assert.match(page.diagnosticsText.value, /深度分析模型调用：3\/6/, "1 analysis + 2 fill batches");
+  assert.deepEqual(done.budget, { used: 3, limit: 6 });
+});
