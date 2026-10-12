@@ -24,7 +24,8 @@ const KIND_TO_DOM = {
 // 从大纲文字还原校验需要的候选信息：编号、按钮还是控件、DOM 控件类型、按钮文字和标记。
 export function parseOutline(text) {
   const nodes = new Map();
-  for (const line of String(text).split("\n")) {
+  // Windows 签出的语料可能是 CRLF：按 \r?\n 拆行，否则行尾的 \r 会让每一行都解析失败。
+  for (const line of String(text).split(/\r?\n/)) {
     const match = line.match(/^\s+(e\d+) (\S+)(.*)$/);
     if (!match) continue;
     const [, ref, kind, rest] = match;

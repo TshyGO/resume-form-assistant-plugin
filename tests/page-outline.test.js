@@ -238,3 +238,18 @@ test("autocomplete=new-password on an ordinary text box is the anti-autofill tri
   assert.ok(!/设置密码|登录/.test(all), all);
   assert.equal(result.stats.skippedSecret, 2);
 });
+
+test("what the user wrote in a rich-text editor never reaches the outline, headings, tables and buttons included", () => {
+  // CodeRabbit（PR #271）：编辑框里的 h3、dt、th 曾被当成题目或区块标题收进大纲。
+  const doc = load(`<label for="x">姓名</label><input id="x">
+    <div contenteditable="true" aria-label="自我评价">
+      <h3>我的优势在团队协作</h3><dl><dt>负责公司内部 CRM 系统</dt></dl>
+      <table><tr><th>获奖经历一览表</th></tr></table><label>自己写的小标题</label><button type="button">编辑</button>
+    </div>
+    <div role="textbox" aria-label="求职信"><h4>致招聘经理的一封信</h4></div>`);
+  const all = text(build(doc));
+  for (const leak of ["我的优势", "CRM", "获奖经历一览表", "自己写的小标题", "致招聘经理"]) assert.ok(!all.includes(leak), `${leak} leaked:\n${all}`);
+  assert.doesNotMatch(all, /button "编辑"/, "a button inside the editor is the user's content too");
+  assert.match(all, /contenteditable ← 自我评价/, "the editor itself is still listed, by its own label only");
+  assert.match(all, /← 姓名/);
+});

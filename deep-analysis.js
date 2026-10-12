@@ -365,6 +365,8 @@
         return;
       }
       if (outline.stats.truncated) state.notes.push("页面太长，这次只分析了前面的部分，后面的字段不会填写。");
+      // 超长页面会把结构相同的重复行、重复分组缩成第一条：被缩掉的不分析也不填写，要告诉用户。
+      if (outline.stats.collapsed > 0) state.notes.push("页面上重复的条目较多，这次只分析了每类的第一条，其余的没有填写，请手动补上。");
 
       const merged = { pageState: [], preActions: [], sections: [], fields: [] };
       const parts = outline.parts;

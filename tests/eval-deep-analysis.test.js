@@ -51,11 +51,23 @@ test("the corpus outlines carry no contact details, IDs, links, credentials or t
   const dir = path.join(__dirname, "fixtures", "sites");
   for (const name of fs.readdirSync(dir).filter((entry) => fs.statSync(path.join(dir, entry)).isDirectory())) {
     const text = fs.readFileSync(path.join(dir, name, "outline.txt"), "utf8");
-    for (const line of text.split("\n")) {
+    for (const line of text.split(/\r?\n/)) {
       for (const quoted of line.match(/"[^"]*"|← .*$/g) || []) {
         assert.equal(outline.sensitiveShape(quoted.replace(/^← |"/g, "")), false, `${name}: ${line}`);
       }
     }
     for (const value of ["林测试", "13900001234", "lin.test@example.com", "示例理工大学"]) assert.ok(!text.includes(value), `${name} leaks ${value}`);
   }
+});
+
+test("outlines checked out with CRLF line endings (Windows) parse the same as LF", async () => {
+  // PR #271 windows-x64：行尾的 \r 让每一行都解析失败，所有标注都被判为非法。
+  const evalApi = await load();
+  const lf = "[区块] 基本信息\n  e1 input[text] ← 姓名\n  e2 button \"添加 / Add\"\n";
+  const crlf = lf.replace(/\n/g, "\r\n");
+  assert.deepEqual([...evalApi.parseOutline(crlf).entries()], [...evalApi.parseOutline(lf).entries()]);
+  assert.equal(evalApi.parseOutline(crlf).size, 2);
+  const page = { name: "crlf", outline: crlf, expected: { pageState: "editing", fields: [{ ref: "e1", label: "姓名", group: "", control: "text" }] } };
+  const result = await evalApi.evaluate([page], evalApi.mockModel("expected"));
+  assert.deepEqual([result.total.fieldRecall, result.total.invalidRate], [1, 0]);
 });

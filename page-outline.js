@@ -24,6 +24,9 @@
   const ARIA_CONTROL_SELECTOR = "[contenteditable]:not([contenteditable='false']), [role='textbox'], [role='listbox'], [role='radiogroup'], [role='switch'], [role='spinbutton'], [role='checkbox']";
   const TEXT_CLUE_SELECTOR = "label, legend, th, dt, [role='heading'], h1, h2, h3, h4, h5, h6, caption";
   const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, legend, caption, [role='heading']";
+  // 富文本编辑框里是用户自己写的内容：里面的标题、表格、按钮一律不进大纲（和 field-scan 跳过 contenteditable 一致）。
+  const EDITABLE_SELECTOR = "[contenteditable]:not([contenteditable='false']), [role='textbox']";
+  const insideEditable = el => Boolean(el.parentElement?.closest?.(EDITABLE_SELECTOR));
   // 和 profile-fields.js、协议的密钥检查一致：像凭据的文字一律不外发。
   const SECRET_LABEL = /密码|口令|验证码|校验码|授权码|密钥|私钥|令牌|password|passwd|captcha|token|secret/i;
   // 只有这些自动填充值说明是密码、验证码或银行卡。普通文本框上的 new-password / new_password 是网站
@@ -223,7 +226,7 @@
       if (insideClaimed(el) || el.querySelector?.("input, select, textarea")) continue;
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
       if (el.parentElement?.closest?.(ARIA_CONTROL_SELECTOR)) continue;
-      const editable = el.isContentEditable || attr(el, "role") === "textbox";
+      const editable = el.isContentEditable || el.matches(EDITABLE_SELECTOR);
       const control = { kind: "element", controlKind: editable ? "contenteditable" : "aria", element: el, elements: [el], root: el,
         label: squash(attr(el, "aria-label")), section: "", disabled: attr(el, "aria-disabled") === "true" };
       if (isSecretControl(control)) { ctx.stats.skippedSecret += 1; continue; }
@@ -233,7 +236,7 @@
 
     for (const el of Array.from(root.querySelectorAll(BUTTON_SELECTOR))) {
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
-      if (insideClaimed(el)) continue;
+      if (insideClaimed(el) || insideEditable(el)) continue;
       const text = buttonText(el);
       if (!text || chars(text).length > MAX_BUTTON_TEXT) continue;
       add(el, { type: "button", element: el, text, submit: isSubmitLike(el), leaves: leavesPage(el),
@@ -244,7 +247,7 @@
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
       // 和控件连着的 label 已经是那个控件的题目，不再单列。
       if (el.querySelector?.("input, select, textarea, [role='combobox']") || (el.tagName === "LABEL" && el.htmlFor)) continue;
-      if (insideClaimed(el)) continue;
+      if (insideClaimed(el) || insideEditable(el) || el.matches(EDITABLE_SELECTOR)) continue;
       const text = squash(el.textContent);
       if (!text || chars(text).length > MAX_SEGMENT * 2) continue;
       add(el, { type: el.matches(HEADING_SELECTOR) ? "heading" : "text", element: el, text });

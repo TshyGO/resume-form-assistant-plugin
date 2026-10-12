@@ -475,3 +475,18 @@ test("bilingual buttons such as 「添加 / Add」 and 「编辑 / Edit」 are a
     assert.equal(section(ref(label)).reason, "forbidden_action", label);
   }
 });
+
+test("when a very long page had repeated rows collapsed, the result says the rest were not filled", async () => {
+  // CodeRabbit（PR #271）：被缩掉的重复条目不分析也不填写，原来侧栏只显示「已填写 N 项」。
+  const h = harness({
+    buildOutline: () => ({ parts: [{ text: "x", refs: ["e1", "e2"] }], nodes: nodesFor(2), redact: outline.createRedactor([]),
+      stats: { chars: 40000, parts: 1, truncated: false, collapsed: 12, controls: 14 } })
+  });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "completed");
+  assert.ok(done.notes.some((note) => note.includes("只分析了每类的第一条")), JSON.stringify(done.notes));
+  const plain = harness();
+  await plain.controller.start();
+  assert.equal((await plain.settle(finished)).notes.length, 0, "no note when nothing was collapsed");
+});

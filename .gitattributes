@@ -1,1 +1,3 @@
 docs/desktop-mvp/acceptance/fixtures/d14-v1/*.json text eol=lf
+# #224 深度分析评测语料：大纲按行解析，保持 LF，各系统签出一致。
+tests/fixtures/sites/** text eol=lf
