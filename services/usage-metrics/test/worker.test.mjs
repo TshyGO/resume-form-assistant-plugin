@@ -276,6 +276,21 @@ test('GitHub pagination covers release and asset pages and never commits a faile
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_observation').first()).n, 0);
 });
 
+test('collection spanning midnight stores the completion date consistently and remains daily-idempotent', async () => {
+  const releases = JSON.parse(readFileSync(new URL('../../../tests/fixtures/usage-metrics/releases-baseline.json', import.meta.url), 'utf8'));
+  const start = new Date('2026-10-11T23:59:59Z');
+  const end = new Date('2026-10-12T00:00:01Z');
+  let clockCalls = 0;
+  await collectDownloads(db, githubFixture(releases), undefined, () => clockCalls++ === 0 ? start : end);
+  const row = await db.prepare('SELECT * FROM release_observation').first();
+  assert.equal(row.date_utc, '2026-10-12');
+  assert.equal(row.observed_at, end.toISOString());
+  assert.equal(row.date_utc, row.observed_at.slice(0, 10));
+  await collectDownloads(db, githubFixture(releases), undefined, () => end);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_observation').first()).n, 1);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_download_snapshot').first()).n, row.asset_count);
+});
+
 test('request budgets and mid-collection failures leave no partial download snapshot', async () => {
   const releases = Array.from({ length: 25 }, (_, i) => ({ id: i + 1, draft: false, prerelease: false, tag_name: 'v0.4.3', published_at: '2026-10-01T00:00:00Z', assets: [] }));
   await assert.rejects(collectDownloads(db, githubFixture(releases), undefined, () => NOW), /budget/);
