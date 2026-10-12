@@ -13,7 +13,15 @@
     }
     return true;
   }
+  // #224 通用路径：深度分析把普通输入框认成下拉（北森 phoenix、Moka sd 这类没有 ARIA 的自研组件）时才用。
+  // 组件根来自页面大纲；弹层只认点开后新出现、贴着这个控件的那一个；选项是弹层里只含一段短文字的条目。
+  const GENERIC_EMPTY = /^(?:暂无数据|无匹配数据|没有数据|无数据|加载中|搜索中|no data|no results?|loading)/i;
+  const GENERIC_NOISE = /(?:^|[-_])(?:error|message|tip|tips|tooltip|help|hint|feedback)(?:$|[-_])/i;
   function describe(target) {
+    if (target?.genericPopup) {
+      const el = target.element || target;
+      return { el, root: target.root || el, combo: el, library: 'generic', cascade: target.controlKind === 'cascader', multiple: false };
+    }
     const el = target?.element || target;
     const root = el?.closest?.(ROOTS) || target?.root || el;
     const library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
@@ -29,6 +37,12 @@
   function selectedTexts(info) {
     const { root, el, library, cascade } = info;
     if (!root?.isConnected) return null;
+    if (library === 'generic') {
+      // 组件里显示的文字：输入框的值，或组件根里除占位提示外的文字。
+      const shown = trim(el.tagName === 'INPUT' ? el.value : '') || trim(root.textContent);
+      if (!shown || scope.ResumeProAIHelpers?.isPlaceholderOption(shown) || shown === trim(el.getAttribute?.('placeholder'))) return [];
+      return [shown];
+    }
     if (library === 'aria' && el.tagName === 'INPUT' && (!el.readOnly || info.requireCommitSignal)) {
       const explicit = trim(info.combo.getAttribute('aria-valuetext'));
       if (explicit) return [explicit];
@@ -114,7 +128,46 @@
     const real = realSelector ? Array.from(popup.querySelectorAll(realSelector)) : [];
     return real.length ? real : Array.from(popup.querySelectorAll('[role="option"]'));
   }
+  // 弹层里的条目：每个只含一段短文字的叶子，往上取到「只装着这一段文字」的最高一层当作可点的条目。
+  function genericOptions(popup, h) {
+    const hasText = node => Boolean(trim(node.textContent));
+    const leaves = Array.from(popup.querySelectorAll('*')).filter(node => h.visible(node) && hasText(node)
+      && !Array.from(node.children).some(hasText) && trim(node.textContent).length <= 40
+      && !node.closest('input, textarea, select, button[type="submit"]'));
+    const items = [];
+    for (const leaf of leaves) {
+      let item = leaf;
+      while (item.parentElement && item.parentElement !== popup
+        && leaves.filter(other => item.parentElement.contains(other)).length === 1) item = item.parentElement;
+      if (!items.includes(item) && !item.querySelector('input, textarea, select')) items.push(item);
+    }
+    return items.map(node => {
+      const full = trim(node.textContent);
+      // 中英双语的选项（「男/Male」）：按中文部分比，后半是纯英文时才拆。
+      const [first, ...rest] = full.split(/\s*\/\s*/);
+      const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
+      const disabled = node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled(?:$|[-_])/i.test(String(node.className || ''));
+      return { node, text: primary, value: full, full, disabled };
+    }).filter(option => !GENERIC_EMPTY.test(option.full));
+  }
+  // minOptions：只是点开时至少 2 条，免得把页面的校验提示当成弹层；已经输入了搜索词时 1 条建议也算。
+  function genericPopupFrom(node, info, h, minOptions = 2) {
+    if (!node?.isConnected || node.nodeType !== 1 || !h.visible(node) || node.contains(info.root) || info.root.contains(node)) return null;
+    if (node.getAttribute('role') === 'alert' || GENERIC_NOISE.test(String(node.className || ''))) return null;
+    const list = genericOptions(node, h);
+    if (list.length < minOptions) return null;
+    // 整页大小的外壳里只取装着全部条目的最小容器，再看它是不是贴着控件。
+    let box = list[0].node.parentElement;
+    while (box && box !== node && !list.every(option => box.contains(option.node))) box = box.parentElement;
+    box = box || node;
+    const r = box.getBoundingClientRect(), c = info.root.getBoundingClientRect();
+    const horizontal = r.right > c.left - 16 && r.left < c.right + 16;
+    const below = r.top >= c.bottom - 6 && r.top - c.bottom <= 60;
+    const above = r.bottom <= c.top + 6 && c.top - r.bottom <= 60;
+    return horizontal && (below || above) ? box : null;
+  }
   function options(popup, info, level, h) {
+    if (info.library === 'generic') return genericOptions(popup, h);
     return optionNodes(popup, info, level).filter(h.visible).map(node => {
       const label = node.querySelector('.ant-select-item-option-content, .el-cascader-node__label, .arco-cascader-list-item-label') || node;
       const text = info.library === 'aria' && info.cascade ? trim(node.getAttribute('aria-label') || Array.from(node.childNodes)
@@ -149,17 +202,40 @@
     info.requireCommitSignal = info.library === 'aria' && ctx.startedEditable;
     info.requireCascadeSignal = info.library === 'element' && info.cascade && ctx.startedEditable;
     if (!info.root || info.multiple || ctx.hints.multiple === true) return { reason: 'unsupported_control' };
+    // 通用路径不做级联：分不清每一列，宁可不填。
+    if (info.library === 'generic' && info.cascade) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
     const doc = info.el.ownerDocument;
     const before = new Set(popups(doc, h.visible));
+    // 通用路径：从点开之前开始记下新加或改了 class/style 的元素，弹层只在这些里找。
+    const touched = new Set();
+    const View = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (info.library === 'generic' && View?.MutationObserver) {
+      state.watch = new View.MutationObserver(records => {
+        for (const record of records) {
+          if (record.type === 'attributes') touched.add(record.target);
+          else record.addedNodes.forEach(node => { if (node.nodeType === 1) touched.add(node); });
+        }
+      });
+      state.watch.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    }
+    const genericOpened = (minOptions = 2) => {
+      const found = Array.from(new Set(Array.from(touched).map(node => genericPopupFrom(node, info, h, minOptions)).filter(Boolean)));
+      const outer = found.filter(node => !found.some(other => other !== node && other.contains(node)));
+      return outer.length > 1 ? { reason: 'ambiguous_popup' } : outer.length === 1 ? { popup: outer[0] } : null;
+    };
     const initiallyOwned = ownedPopup(info, h.visible);
     const alreadyOpen = info.combo.getAttribute('aria-expanded') === 'true' && initiallyOwned.popup;
     const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector('.ant-select-selector') || info.root
       : info.library === 'element' ? info.root.querySelector('.el-select__wrapper, .el-input') || info.root
       : info.library === 'arco' ? info.root.querySelector('.arco-select-view') || info.root : info.combo;
+    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
+      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
+    state.safeSearch = safeSearch;
     if (!alreadyOpen) { const reason = h.click(trigger, ctx); if (reason) return { reason }; }
-    const opened = await h.waitUntil(ctx, doc.documentElement, () => {
+    let opened = await h.waitUntil(ctx, doc.documentElement, () => {
+      if (info.library === 'generic') return genericOpened();
       const owned = ownedPopup(info, h.visible);
       if (owned.ambiguous) return { reason: 'ambiguous_popup' };
       if (owned.popup) return { popup: owned.popup };
@@ -170,6 +246,14 @@
       const added = popups(doc, h.visible).filter(node => !before.has(node));
       return added.length > 1 ? { reason: 'ambiguous_popup' } : added.length === 1 ? { popup: added[0] } : null;
     }, Boolean);
+    // 通用路径：点开后没有弹层、输入框又能打字（学校、专业这类边输边搜的下拉）：输入要找的值再等弹层。
+    let typedFirst = false;
+    if (info.library === 'generic' && opened.reason === 'verification_timeout' && safeSearch(info.el) && h.visible(info.el)) {
+      const reason = h.stop(ctx, true); if (reason) return { reason };
+      state.searchInput = info.el; state.searchBefore = info.el.value; state.query = desired[0];
+      h.write(info.el, desired[0], ctx); h.input(info.el); typedFirst = true;
+      opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(1), Boolean);
+    }
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
     let popup = opened.value.popup; ctx.popup = popup;
@@ -181,17 +265,18 @@
       || (info.library === 'element' && (popup.matches('.el-select-dropdown.is-multiple')
         || Boolean(popup.querySelector('.el-select-dropdown.is-multiple'))));
     if (multiplePopup()) return { reason: 'unsupported_control' };
-    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
-      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
-    state.safeSearch = safeSearch;
     const candidates = [info.combo, ...info.root.querySelectorAll('input'), ...popup.querySelectorAll('input')];
     const searchInput = candidates.find(input => safeSearch(input) && h.visible(input));
-    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true
+    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true || info.library === 'generic'
       || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
       || searchInput.getAttribute('role') === 'searchbox' || searchInput.type === 'search'
       || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
-    let searchDone = false;
+    let searchDone = typedFirst;
     const readOptions = level => {
+      if (info.library === 'generic' && !popup.isConnected) {
+        const again = genericOpened(searchDone ? 1 : 2);
+        if (again?.popup) { popup = again.popup; ctx.popup = popup; info.popup = popup; }
+      }
       if (!popup.isConnected) {
         const linked = ownedPopup(info, h.visible);
         if (linked.popup && !linked.ambiguous) { popup = linked.popup; ctx.popup = popup; info.popup = popup; }
@@ -257,7 +342,10 @@
         ? info.root.querySelectorAll('input[type="hidden"]') : [];
       const explicitLabel = trim(info.combo.getAttribute('aria-valuetext'));
       const expected = hidden.length === 1 && !explicitLabel ? chosenValues : chosenLabels;
-      if (!values.every((value, index) => h.helpers.normalizeText(value) === h.helpers.normalizeText(expected[index]))) return false;
+      // 通用路径：组件里可能显示整段（「男/Male」）也可能只显示中文部分，两种都认，别的都不算。
+      const same = (value, index) => [expected[index], ...(info.library === 'generic' ? [chosenValues[index]] : [])]
+        .some(text => h.helpers.normalizeText(value) === h.helpers.normalizeText(text));
+      if (!values.every(same)) return false;
       return true;
     };
     const committed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
@@ -268,6 +356,7 @@
     const state = {}; let outcome;
     try { outcome = await perform(ctx, raw, h, state); return outcome; }
     finally {
+      state.watch?.disconnect();
       // Cancellation, user edits and stale bindings forbid further actions,
       // including cleanup. Never undo an attempted semantic selection.
       if (outcome?.reason && !h.stop(ctx)) {

@@ -245,7 +245,9 @@
       // 普通输入框被认成下拉、级联或日期时，组件根用大纲找到的外观祖先（操作器从那里开弹层、读已选值）。
       const refined = node.domKind === "text" && item.control !== "text" && node.shapeRoot;
       const entry = { kind: "element", element, elements: control.elements, controlKind: item.control,
-        root: refined ? node.shapeRoot : control.root, hints: item.hints, deepRef: item.ref };
+        root: refined ? node.shapeRoot : control.root, hints: item.hints, deepRef: item.ref,
+        // 没有 ARIA、也不是已知组件库的下拉：控件操作器走通用路径（认新出现、贴着控件的弹层）。
+        ...(refined && dynamic ? { genericPopup: true } : {}) };
       if (item.control === "date" && node.pickerType) {
         entry.pickerType = node.pickerType;
         entry.pickerInputType = pickerInputType(control.root, element);
