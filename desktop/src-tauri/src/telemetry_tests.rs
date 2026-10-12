@@ -266,6 +266,7 @@ async fn real_http_body_is_exactly_the_contract_and_failures_use_daily_quota() {
     let raw = captured.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(raw.starts_with("POST /v1/activity "));
     assert!(!raw.to_lowercase().contains("authorization:"));
+    assert!(!raw.to_lowercase().contains("user-agent:"));
     let body = request_json(&raw);
     assert_eq!(body.as_object().unwrap().len(), 5);
     assert_eq!(body["schema_version"], 1);
@@ -296,6 +297,7 @@ async fn redirects_are_not_followed_and_delete_has_only_two_fields() {
     assert_eq!(receipt.deletion, Deletion::Unconfirmed);
     let raw = captured.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(raw.starts_with("DELETE /v1/activity "));
+    assert!(!raw.to_lowercase().contains("user-agent:"));
     assert_eq!(
         request_json(&raw),
         serde_json::json!({ "schema_version": 1, "installation_id": old })
