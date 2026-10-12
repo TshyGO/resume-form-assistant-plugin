@@ -32,7 +32,7 @@ function store(active = template(), { profile, templates } = {}) {
   };
 }
 
-function setup({ answers = [], reloads = [] } = {}) {
+function setup({ answers = [], reloads = [], fieldsApi = fields } = {}) {
   const dom = new JSDOM(html);
   const doc = dom.window.document;
   const sent = [];
@@ -40,7 +40,7 @@ function setup({ answers = [], reloads = [] } = {}) {
   const openStates = [];
   let current = store();
   const editor = create({
-    doc, fields, profileApi,
+    doc, fields: fieldsApi, profileApi,
     send: async message => {
       sent.push(structuredClone(message));
       if (message.type === 'DESKTOP_OPEN_VIEW') return { status: 'ok' };
@@ -240,4 +240,46 @@ test('while editing, a desktop update or a template switch is announced without 
   const switched = store({ id: OTHER, name: '实习简历', groups: [{ name: '组', fields: [{ key: 'k', value: 'v' }] }] });
   await ui.editor.observe(switched);
   assert.match(ui.$('te-notice-text').textContent, /当前模板已切换为「实习简历」。你仍在编辑「校招简历」/);
+});
+
+test('a conflict whose re-read fails keeps editing instead of offering stale choices', async () => {
+  // The desktop said "conflict", then the side panel could not read the newest data.
+  const ui = setup({ answers: [{ status: 'conflict' }, { status: 'ok' }], reloads: [null, store()] });
+  await ui.open();
+  ui.type(ui.row('姓名').querySelector('.te-value'), '插件端改的');
+  ui.submit();
+  await settle();
+  assert.match(ui.$('te-problems').textContent, /暂时读不到最新内容。修改还在/);
+  assert.equal(ui.foot('load-latest'), null, 'no "load newest" built from the pre-edit data');
+  assert.equal(ui.foot('overwrite'), null);
+  assert.equal(ui.$('te-notice').hidden, true);
+  assert.equal(ui.row('姓名').querySelector('.te-value').value, '插件端改的');
+  // Trying again later works normally.
+  ui.submit();
+  await settle();
+  assert.equal(ui.$('te-result').hidden, false);
+});
+
+test('loading the newest content replaces draft and base together, or not at all', async () => {
+  const newer = template([{ name: '基本信息', fields: [{ key: '姓名', value: '桌面端改的' }] }]);
+  let failDigest = false;
+  const flaky = { ...fields, contentSha256: async groups => { if (failDigest) throw new Error('no digest'); return fields.contentSha256(groups); } };
+  const ui = setup({ answers: [{ status: 'conflict' }], reloads: [store(newer)], fieldsApi: flaky });
+  await ui.open();
+  ui.type(ui.row('姓名').querySelector('.te-value'), '插件端改的');
+  ui.submit();
+  await settle();
+  failDigest = true;
+  ui.click(ui.foot('load-latest'));
+  await settle();
+  assert.equal(ui.toasts.at(-1), '无法载入最新内容，修改还在。');
+  assert.equal(ui.row('姓名').querySelector('.te-value').value, '插件端改的', 'the draft is untouched');
+  assert.ok(ui.foot('load-latest'), 'still choosing');
+  // Closing the panel while the digest is computed leaves nothing half-applied.
+  failDigest = false;
+  ui.click(ui.foot('load-latest'));
+  ui.editor.close();
+  await settle();
+  assert.equal(ui.editor.state.draft, null);
+  assert.equal(ui.$('template-editor').hidden, true);
 });

@@ -276,10 +276,19 @@
         return;
       }
       if (result?.status === "conflict") {
+        // 只有重新读到了桌面的最新数据才让人选「载入最新」或「覆盖」：拿编辑前的旧数据给选项，
+        // 「载入最新」载入的会是旧内容，「覆盖」也会用旧起点再撞一次冲突。
         const store = await deps.reload().catch(() => null);
+        const conflict = store ? await conflictState(store).catch(() => null) : null;
         if (!state.open) return;
-        state.store = store || state.store;
-        state.conflict = await conflictState(state.store);
+        if (!conflict) {
+          state.phase = "editing";
+          state.message = "这份模板已在别处修改，但暂时读不到最新内容。修改还在，请稍后再点「保存」。";
+          render();
+          return;
+        }
+        state.store = store;
+        state.conflict = conflict;
         state.phase = "conflict";
         render();
         el.title.focus?.();
@@ -295,17 +304,24 @@
       render();
     }
 
-    function loadLatest() {
+    // 先算出最新内容的摘要，再把草稿和起点一起换掉：要么完整换成最新版本，要么什么都不变。
+    async function loadLatest() {
       const latest = state.phase === "conflict" ? state.conflict?.latest : state.store?.activeTemplate;
-      if (!latest || latest.id !== state.draft.templateId) return;
+      if (!latest || latest.id !== state.draft?.templateId) return;
+      let sha;
+      try {
+        sha = await fields.contentSha256(latest.groups);
+      } catch {
+        deps.toast?.("无法载入最新内容，修改还在。");
+        return;
+      }
+      if (!state.open || state.draft?.templateId !== latest.id) return;
       const name = state.draft.templateName;
       state.draft = fields.createDraft({ ...latest, name: latest.name || name });
-      fields.contentSha256(latest.groups).then((sha) => {
-        state.base = sha;
-        Object.assign(state, { phase: "editing", conflict: null, notice: null, message: null, confirmRemove: "", showErrors: false });
-        render();
-        deps.toast?.("已载入最新内容。");
-      });
+      state.base = sha;
+      Object.assign(state, { phase: "editing", conflict: null, notice: null, message: null, confirmRemove: "", showErrors: false });
+      render();
+      deps.toast?.("已载入最新内容。");
     }
 
     function requestClose() {

@@ -138,12 +138,14 @@ export function TemplateFieldEditor({
     setDialog(null);
   };
 
-  const fetchLatest = async (): Promise<ResumeTemplateView | null> => {
-    if (!invoke) return null;
+  // 冲突后重读最新内容。「读不到」和「已删除」要分开：读失败时模板多半还在，
+  // 不能让人照着「已被删除」的提示关掉编辑、丢掉草稿。
+  const fetchLatest = async (): Promise<{ view: ResumeTemplateView } | { gone: true } | { failed: true }> => {
+    if (!invoke) return { failed: true };
     try {
-      return await invoke<ResumeTemplateView>("get_resume_template_cmd", { id: template.id });
-    } catch {
-      return null;
+      return { view: await invoke<ResumeTemplateView>("get_resume_template_cmd", { id: template.id }) };
+    } catch (error) {
+      return errorCode(error) === "NOT_FOUND" ? { gone: true } : { failed: true };
     }
   };
 
@@ -158,17 +160,25 @@ export function TemplateFieldEditor({
     setSaving(true);
     setMessage(null);
     try {
+      // 起点还没算好（视图没带 contentSha256 时异步计算）就先算出来，不拿空起点去撞冲突。
+      const start = againstBase || (await baseOf(template));
       const saved = await invoke<ResumeTemplateView>("save_resume_template_fields_cmd", {
         id: template.id,
         groups: templateFields.toGroups(draft),
-        baseSha256: againstBase,
+        baseSha256: start,
       });
       setDialog(null);
       onSaved(saved);
     } catch (error) {
       const code = errorCode(error);
-      if (code === "CONFLICT" || code === "NOT_FOUND") {
-        setDialog({ kind: "conflict", latest: code === "NOT_FOUND" ? null : await fetchLatest() });
+      const latest = code === "CONFLICT" ? await fetchLatest() : null;
+      if (code === "NOT_FOUND" || (latest && "gone" in latest)) {
+        setDialog({ kind: "conflict", latest: null });
+      } else if (latest && "view" in latest) {
+        setDialog({ kind: "conflict", latest: latest.view });
+      } else if (latest) {
+        setDialog(null);
+        setMessage({ tone: "error", text: "这份模板已在别处修改，但暂时读不到最新内容。修改还在，请稍后再点「保存修改」。" });
       } else {
         setDialog(null);
         setMessage({ tone: "error", text: `${errorText(error)} 修改还在，可以改好后再保存。` });

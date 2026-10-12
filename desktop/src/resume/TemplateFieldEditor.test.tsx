@@ -257,3 +257,66 @@ test("插件保存后列表和预览跟着更新；正在编辑时先提示，�
   await waitFor(() => expect(within(detail()).getByText(/这份模板刚在别处（例如插件侧边栏）更新过/)).toBeTruthy());
   expect((within(row("姓名")).getByLabelText("内容") as HTMLTextAreaElement).value).toBe("插件端改的（草稿）");
 });
+
+test("冲突后读不到最新内容：不当成已删除，草稿留着，稍后可再保存", async () => {
+  const user = userEvent.setup();
+  let conflict = true;
+  let readFails = false;
+  const { calls } = mount((command) => {
+    if (command === "save_resume_template_fields_cmd" && conflict) {
+      conflict = false;
+      readFails = true;
+      return Object.assign(new Error("这份模板已在别处修改，请先查看最新内容再保存。"), { code: "CONFLICT" });
+    }
+    if (command === "get_resume_template_cmd" && readFails) {
+      readFails = false;
+      return Object.assign(new Error("档案正忙"), { code: "INTERNAL" });
+    }
+    return undefined;
+  });
+  await startEditing(user);
+  const value = within(row("姓名")).getByLabelText("内容");
+  await user.clear(value);
+  await user.type(value, "草稿还在");
+  await user.click(within(detail()).getByRole("button", { name: "保存修改" }));
+  await waitFor(() => expect(within(detail()).getByText(/暂时读不到最新内容。修改还在/)).toBeTruthy());
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect((within(row("姓名")).getByLabelText("内容") as HTMLTextAreaElement).value).toBe("草稿还在");
+  await user.click(within(detail()).getByRole("button", { name: "保存修改" }));
+  await waitFor(() => expect(within(detail()).getByRole("button", { name: "导出最新 Excel" })).toBeTruthy());
+  expect(calls.filter((call) => call.command === "save_resume_template_fields_cmd")).toHaveLength(2);
+});
+
+test("冲突后重读发现模板确实被删：才提示已被删除", async () => {
+  const user = userEvent.setup();
+  let deleted = false;
+  mount((command) => {
+    if (command === "save_resume_template_fields_cmd") {
+      deleted = true;
+      return Object.assign(new Error("conflict"), { code: "CONFLICT" });
+    }
+    if (command === "get_resume_template_cmd" && deleted) return Object.assign(new Error("gone"), { code: "NOT_FOUND" });
+    return undefined;
+  });
+  await startEditing(user);
+  await user.type(within(row("姓名")).getByLabelText("内容"), "！");
+  await user.click(within(detail()).getByRole("button", { name: "保存修改" }));
+  expect(await screen.findByRole("dialog", { name: "这份模板已被删除" })).toBeTruthy();
+});
+
+test("视图没带内容版本时，先算出起点再保存，不会误报冲突", async () => {
+  const user = userEvent.setup();
+  const { calls } = mount((command, args) => {
+    if (command === "get_resume_template_cmd" && args?.id === "t1") {
+      const { contentSha256: _omitted, ...withoutSha } = original();
+      return withoutSha;
+    }
+    return undefined;
+  });
+  await startEditing(user);
+  await user.type(within(row("姓名")).getByLabelText("内容"), "！");
+  await user.click(within(detail()).getByRole("button", { name: "保存修改" }));
+  await waitFor(() => expect(calls.some((call) => call.command === "save_resume_template_fields_cmd")).toBe(true));
+  const save = calls.find((call) => call.command === "save_resume_template_fields_cmd");
+  expect(save?.args?.baseSha256).toMatch(/^[0-9a-f]{64}$/);
+});
