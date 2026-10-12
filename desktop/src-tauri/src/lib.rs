@@ -1448,13 +1448,15 @@ pub fn run() {
     }
     #[cfg(feature = "usage-metrics-acceptance")]
     if std::env::args().any(|arg| arg == "--metrics-test-info") {
+        let effective_endpoint = HostPaths::resolve().ok()
+            .and_then(|paths| metrics_acceptance::configured_endpoint(&paths.data_root));
         println!("{}", serde_json::json!({
             "purpose": "isolated-usage-metrics-acceptance",
             "identifier": metrics_acceptance::IDENTIFIER,
-            "endpoint": metrics_acceptance::ENDPOINT,
+            "endpoint": effective_endpoint,
             "native_host": nm_register::HOST_NAME,
-            "data_root_isolated": true,
-            "feedback_disabled": true,
+            "data_root_isolated": metrics_acceptance::effective_isolation(),
+            "feedback_disabled": feedback::acceptance_disabled(),
         }));
         return;
     }

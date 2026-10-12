@@ -21,6 +21,10 @@ const SAVE_ERROR: &str = "反馈设置未能保存，请重试。";
 /// the notice does not describe: earlier grants then count as undecided and the user is asked again.
 const CONSENT_VERSION: u32 = 1;
 
+pub fn acceptance_disabled() -> bool {
+    cfg!(feature = "usage-metrics-acceptance") && !cfg!(test)
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Stored {
@@ -446,7 +450,7 @@ impl Reporter {
         result
     }
     async fn request(&self, body: &Payload) -> Receipt {
-        if cfg!(feature = "usage-metrics-acceptance") && !cfg!(test) {
+        if acceptance_disabled() {
             return Receipt::fail("acceptance_disabled");
         }
         #[cfg(not(test))]
