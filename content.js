@@ -1748,8 +1748,16 @@
   function deepOfferLevel() {
     if (!self.ResumeProDeepAnalysis || deepActive() || repeatActive()) return "none";
     const summary = fillSession?.summary || null;
-    // #226：本站配方没能用上（过期）时，突出提示可以重新深度分析。
+    // #226：本站配方没能用上（过期）时，突出提示可以重新深度分析。按配方填写时，规则扫描看不到的控件
+    // （Shadow DOM、框架里的）已经由配方找到，只按有没有没填上的字段判断。
     if (summary?.recipe?.status === "stale" && !summary.assisted) return "prominent";
+    if (summary?.recipe?.status === "hit" && !summary.assisted && !summary.deep) {
+      try {
+        return self.ResumeProDeepAnalysis.offerLevel({ ...summary, probe: null });
+      } catch {
+        return "secondary";
+      }
+    }
     if (summary && (summary.assisted || summary.deep)) return "secondary";
     try {
       return self.ResumeProDeepAnalysis.offerLevel(summary);

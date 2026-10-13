@@ -54,7 +54,7 @@ function fakeOutline(inputs, buttons, calls) {
   };
 }
 
-function recipePage({ labels = ["姓名", "现居城市"], analyze, fill, buttons = [], pageActions, failStorage = false, confirm = () => true } = {}) {
+function recipePage({ labels = ["姓名", "现居城市"], analyze, fill, buttons = [], pageActions, failStorage = false, confirm = () => true, fillProbe } = {}) {
   const location = { href: URL, pathname: "/apply/2024001" };
   const inputs = [];
   const sent = [];
@@ -79,6 +79,7 @@ function recipePage({ labels = ["姓名", "现居城市"], analyze, fill, button
     randomUUID: (() => { let n = 0; return () => `req-${++n}`; })(),
     deepAnalysis: deep,
     pageRecipe: recipes,
+    fillProbe,
     fieldScan: scanVisibleOnly(),
     pageActions,
     formAgent: require("../form-agent.js"),
@@ -449,4 +450,17 @@ test("deep analysis with a confirmed 编辑 saves the button with the recipe; th
   const again = (await page.status()).deep;
   assert.equal(again.mode, "recipe");
   assert.equal(page.aiCalls("AI_ANALYZE_PAGE").length, analyses);
+});
+
+test("after a full recipe hit the deep-analysis offer is not pushed just because the page has shadow DOM inputs; without the recipe it is", async () => {
+  // 探测说网页上有含输入框的 Shadow DOM（规则扫描看不到）。
+  const fillProbe = { probePage: () => ({ shadowHosts: 1, custom: { total: 0 }, frames: { crossOrigin: 0, frameInputs: 0 }, editButtons: 0 }),
+    pageType: () => ({ type: "application_form", reason: "url" }), emptyPageHint: () => "", describeControl: () => null, formatReport: () => [] };
+  const plainPage = recipePage({ fillProbe });
+  await plainFill(plainPage);
+  assert.equal((await plainPage.status()).deepOffer, "prominent");
+  const page = recipePage({ fillProbe });
+  seedRecipe(page);
+  await plainFill(page);
+  assert.equal((await page.status()).deepOffer, "secondary", "the recipe already covered what the scan cannot see");
 });
