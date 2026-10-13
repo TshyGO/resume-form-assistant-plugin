@@ -51,6 +51,26 @@ test('setActiveTemplate and saveProfile send their exact operations', async () =
   assert.deepEqual(sent[1].payload, { op: 'saveProfile', profile: PROFILE, expectedRevision: 3 });
 });
 
+test('saveTemplate sends the whole edited template with the content it was based on', async () => {
+  const { resume, sent } = await harness({ answer: () => ({ ok: true, payload: { activeTemplateId: TEMPLATE, profileRevision: 4 } }) });
+  const groups = [{ name: '基本信息', fields: [{ key: '姓名', value: '张三丰' }] }];
+  assert.equal((await resume.saveTemplate(TEMPLATE, groups, 'a'.repeat(64))).status, 'ok');
+  assert.deepEqual(sent[0].payload, { op: 'saveTemplate', templateId: TEMPLATE, groups, baseSha256: 'a'.repeat(64) });
+});
+
+test('saveTemplate failures keep their meaning for the editor', async () => {
+  for (const [code, expected] of [['conflict', 'conflict'], ['secret_forbidden', 'secret'], ['invalid_payload', 'rejected']]) {
+    const { resume } = await harness({ answer: () => ({ ok: false, error: { code, retryable: false, message: 'synthetic' }, payload: {} }) });
+    const result = await resume.saveTemplate(TEMPLATE, [{ name: '组', fields: [{ key: 'k', value: 'v' }] }], 'b'.repeat(64));
+    assert.equal(result.status, expected, code);
+  }
+  // A secret-looking label never leaves the plugin: the local validator refuses it first.
+  const { resume, sent } = await harness();
+  const secret = await resume.saveTemplate(TEMPLATE, [{ name: '账号', fields: [{ key: '邮箱密码', value: 'x' }] }], 'c'.repeat(64));
+  assert.equal(secret.status, 'secret');
+  assert.deepEqual(sent, []);
+});
+
 test('update errors become retry decisions for the sidebar', async () => {
   for (const [code, expected] of [['invalid_payload', 'missing_template'], ['conflict', 'conflict'], ['secret_forbidden', 'secret']]) {
     const { resume } = await harness({ answer: () => ({ ok: false, error: { code, retryable: false, message: 'synthetic' }, payload: {} }) });

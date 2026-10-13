@@ -107,6 +107,22 @@ fn resume_update(request: &Request, store: &ArchiveStore) -> Result<Answer, Erro
             let expected = request.payload["expectedRevision"].as_i64().ok_or(ErrorCode::InvalidPayload)?;
             store.save_profile(profile, expected).map_err(code_of)?.revision
         }
+        Some("saveTemplate") => {
+            let id = request.payload["templateId"].as_str().ok_or(ErrorCode::InvalidPayload)?.to_ascii_lowercase();
+            let groups: Vec<archive_store::TemplateGroup> =
+                serde_json::from_value(request.payload.get("groups").ok_or(ErrorCode::InvalidPayload)?.clone())
+                    .map_err(|_| ErrorCode::InvalidPayload)?;
+            let base = request.payload["baseSha256"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            archive_store::reject_template_secrets(&groups).map_err(|_| ErrorCode::SecretForbidden)?;
+            match store.save_template_fields(&id, groups, base) {
+                Ok(_) => {}
+                // Deleted elsewhere while being edited: to the editor that is the same
+                // situation as a newer save — re-read, then decide. Not a malformed request.
+                Err(StoreError::NotFound(_)) => return Err(ErrorCode::Conflict),
+                Err(err) => return Err(code_of(err)),
+            }
+            store.get_profile().map_err(code_of)?.revision
+        }
         _ => return Err(ErrorCode::InvalidPayload),
     };
     let active = store.resume_overview().map_err(code_of)?.active_template_id;
@@ -670,6 +686,46 @@ mod tests {
     }
 
     #[test]
+    fn resume_update_saves_template_fields_against_the_content_it_was_based_on() {
+        let (_dir, store) = store();
+        let field = |key: &str, value: &str| archive_store::TemplateField { key: key.into(), value: value.into() };
+        let original = vec![archive_store::TemplateGroup { name: "基本信息".into(), fields: vec![field("姓名", "张三")] }];
+        let target = store.create_template("目标", original.clone()).unwrap().template;
+        let other = store.create_template("另一份", original.clone()).unwrap().template;
+        let base = archive_store::groups_sha256(&original);
+        let edited = json!([
+            {"name": "基本信息", "fields": [{"key": "姓名", "value": "张三丰"}]},
+            {"name": "新分类", "fields": [{"key": "爱好", "value": "跑步"}]}
+        ]);
+        let save = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveTemplate", "templateId": target.id.to_ascii_uppercase(), "groups": edited.clone(), "baseSha256": base
+        }));
+        let saved = apply(&save, &store).unwrap();
+        let response = checked_v2_response(&save, &saved);
+        // 编辑不切换当前模板：「另一份」是后建的，仍是当前。
+        assert_eq!(response["payload"]["activeTemplateId"], other.id);
+        let stored = store.get_template(&target.id).unwrap().unwrap();
+        assert_eq!(stored.groups.len(), 2);
+        assert_eq!(stored.groups[1].fields[0].key, "爱好");
+        assert_eq!(store.get_template(&other.id).unwrap().unwrap().groups, original);
+
+        // 同一个旧 base 再存一次：内容已经变了，是冲突，不覆盖。
+        assert_eq!(apply(&save, &store).err(), Some(ErrorCode::Conflict));
+        // 内容像密码（存储层口径，协议层的英文规则抓不到）：整份拒绝。
+        let secret = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveTemplate", "templateId": target.id, "baseSha256": archive_store::groups_sha256(&stored.groups),
+            "groups": [{"name": "账号", "fields": [{"key": "备注", "value": "密码：abc123"}]}]
+        }));
+        assert_eq!(apply(&secret, &store).err(), Some(ErrorCode::SecretForbidden));
+        // 编辑期间模板被删：对编辑者来说和别处保存一样，要重新读取再决定。
+        store.delete_template(&target.id).unwrap();
+        let gone = v2_request("resume.update", &store.identity(), json!({
+            "op": "saveTemplate", "templateId": target.id, "baseSha256": base, "groups": edited
+        }));
+        assert_eq!(apply(&gone, &store).err(), Some(ErrorCode::Conflict));
+    }
+
+    #[test]
     fn resume_read_rejects_a_foreign_archive_identity() {
         let (_dir, store) = store();
         let mut foreign = store.identity();
@@ -726,8 +782,8 @@ mod tests {
     fn legacy_ai_config_stages_the_key_outside_sqlite() {
         struct KeyServices(std::sync::Mutex<Option<String>>);
         impl crate::bridge_services::BridgeServices for KeyServices {
-            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+                (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
             }
             fn open_view(&self, _: &str) -> bool { false }
             fn stage_import_key(&self, _: &str, key: &str) -> Result<(), ErrorCode> {
@@ -767,8 +823,8 @@ mod tests {
     fn failed_key_staging_never_marks_an_ai_part_received() {
         struct LockedKeyring;
         impl crate::bridge_services::BridgeServices for LockedKeyring {
-            fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-                crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+                (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
             }
             fn open_view(&self, _: &str) -> bool { false }
             fn stage_import_key(&self, _: &str, _: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -799,8 +855,8 @@ mod tests {
     }
 
     impl crate::bridge_services::BridgeServices for TempKeys {
-        fn ai_complete(&self, _: &str, _: &str, _: &str) -> crate::bridge_services::AiReply {
-            crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }
+        fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
+            (crate::bridge_services::AiReply::Failed { reason: "not_configured", http_status: None, host: None }, None)
         }
         fn open_view(&self, _: &str) -> bool { false }
         fn stage_import_key(&self, id: &str, key: &str) -> Result<(), ErrorCode> {

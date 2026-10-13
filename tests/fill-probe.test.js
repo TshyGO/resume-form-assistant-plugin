@@ -343,3 +343,20 @@ test("a same-origin frame that cannot be queried counts as unreadable instead of
   assert.equal(result.host, "c.liepin.com");
   assert.deepEqual(result.frames, { total: 1, crossOrigin: 1, frameInputs: 0 });
 });
+
+test("#224: with 深度分析本页 available, same-origin frames and custom controls point to it; cross-origin frames do not", () => {
+  const deep = { deepAvailable: true };
+  assert.match(probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 0, frameInputs: 2 } }, deep), /深度分析本页/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, shadowHosts: 1 }, deep), /深度分析本页/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, custom: { total: 2, byLibrary: {} } }, deep), /深度分析本页/);
+  assert.doesNotMatch(probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, deep), /深度分析/,
+    "a cross-origin frame is out of reach for the deep analysis too");
+  assert.match(probe.emptyPageHint({ ...EMPTY, editButtons: 1 }, deep), /先点网页上的「编辑」/, "view mode still says 编辑 first");
+});
+
+test("#224: an unfilled field from a deep fill says which control kind it was operated as", () => {
+  const lines = probe.formatReport(null, [{ label: "民族", control: { tag: "input", type: "text" }, reason: "值没有写上", operated: "custom-select" },
+    { label: "x", control: { tag: "input" }, operated: "<b>evil</b>" }]);
+  assert.match(lines.join("\n"), /民族：input\[text\]｜按 custom-select 操作｜值没有写上/);
+  assert.doesNotMatch(lines.join("\n"), /evil/);
+});

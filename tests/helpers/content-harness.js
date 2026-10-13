@@ -244,6 +244,14 @@ function loadHighlightHelpers(options = {}) {
     HTMLTextAreaElement,
     HTMLSelectElement,
     chrome: {
+      // 深度分析的首次确认（#224）：给了 storageData 就用一份内存 storage，读写都看得到。
+      ...(options.storageData ? {
+        storage: { local: {
+          get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((key) => key in options.storageData)
+            .map((key) => [key, options.storageData[key]])),
+          set: async (value) => { storageWrites.push({ area: "local", value }); Object.assign(options.storageData, value); }
+        } }
+      } : {}),
       ...(options.storageSpy ? {
         storage: Object.fromEntries(["local", "session", "sync"].map((area) => [area, {
           get: async () => ({}),
@@ -270,6 +278,7 @@ function loadHighlightHelpers(options = {}) {
       ResumeProFillProbe: options.fillProbe, ResumeProFeedback: options.feedback,
       ResumeProFieldScan: options.fieldScan || fakeFieldScan(),
       ResumeProCustomControls: options.customControls,
+      ResumeProDeepAnalysis: options.deepAnalysis, ResumeProPageOutline: options.pageOutline,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

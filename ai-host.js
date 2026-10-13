@@ -12,7 +12,7 @@ worker.onmessage = ({ data }) => {
   if (data?.kind === "desktop-complete") {
     chrome.runtime.sendMessage({
       type: "DESKTOP_AI_COMPLETE", requestId: data.callId,
-      purpose: data.purpose, system: data.system, user: data.user
+      purpose: data.purpose, tier: data.tier, system: data.system, user: data.user
     }).then(reply => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply }))
       .catch(() => worker.postMessage({ kind: "desktop-result", callId: data.callId, reply: { ok: false, reason: "unavailable" } }));
     return;
@@ -40,7 +40,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ready: !failed });
     return false;
   }
-  if (!["AI_FILL", "AI_PLAN_REPEAT", "CANCEL_AI_FILL", "AI_EXTRACT_JOB"].includes(message?.type)) return false;
+  if (!["AI_FILL", "AI_PLAN_REPEAT", "CANCEL_AI_FILL", "AI_EXTRACT_JOB", "AI_ANALYZE_PAGE"].includes(message?.type)) return false;
   if (failed) {
     sendResponse({ success: false, error: "AI 请求进程已中断，请重新加载扩展。" });
     return false;

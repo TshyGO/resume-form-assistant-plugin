@@ -47,10 +47,24 @@ export function createResume({ session, store, sendNative, sleep, uuid, now, sen
     return result.status === 'secret_forbidden' ? { status: 'secret' } : result;
   }
 
+  /**
+   * #273: save one template's edited fields. `baseSha256` is the content the draft started
+   * from (template-fields.js contentSha256); the desktop refuses with `conflict` when the
+   * template changed or vanished since, and the editor keeps its draft either way.
+   */
+  async function saveTemplate(templateId, groups, baseSha256) {
+    const result = await request('resume.update', { op: 'saveTemplate', templateId, groups, baseSha256 });
+    if (result.status === 'secret_forbidden') return { status: 'secret' };
+    // A desktop that predates this op, or one that refused the content (all fields
+    // deleted, too large): either way the template is unchanged.
+    if (result.status === 'invalid_payload') return { status: 'rejected' };
+    return result;
+  }
+
   async function openView(view) {
     const result = await request('ui.open', { view });
     return result.status === 'ok' ? { status: 'ok', opened: result.data.opened } : result;
   }
 
-  return { read, setActiveTemplate, saveProfile, openView };
+  return { read, setActiveTemplate, saveProfile, saveTemplate, openView };
 }

@@ -50,14 +50,18 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 | 消息 | 请求与响应约定 |
 | --- | --- |
 | `resume.read` | 带档案身份、空请求；返回模板摘要、当前模板全文、档案和版本号。完整响应信封 ≤ 65536 UTF-8 字节。 |
-| `resume.update` | 带档案身份；切换模板或用 `expectedRevision` 整份保存档案，版本冲突返回 `conflict`。不走 `message_receipts`。 |
-| `ai.complete` | 不带档案身份；插件传提示词和用途（`fill`、`plan`、`extract_job`），桌面用当前服务商和凭据发出，不按用途区分处理。旧桌面不认识新用途时以 `invalid_payload` 拒收，插件提示更新桌面。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
+| `resume.update` | 带档案身份；切换模板、用 `expectedRevision` 整份保存档案，或用 `baseSha256` 整份保存某个模板的字段（#273），版本冲突返回 `conflict`。不走 `message_receipts`。 |
+| `ai.complete` | 不带档案身份；插件传提示词和用途（`fill`、`plan`、`extract_job`、`analyze`），可选 `tier`（`default` / `strong`，#223）。桌面默认用当前服务商；`tier: "strong"` 或不带 `tier` 的 `analyze` 改用设置里的强模型，没设就退回当前服务商。只有请求带了 `tier` 或用途是 `analyze` 时，响应才带 `tier`（实际用的档位）；旧插件的 schema 副本不认识这个字段。不扩展握手 `capabilities`。旧桌面不认识新用途或 `tier` 时会拒收：旧 host 校验请求失败，回 `protocolVersion: 1` 的错误，插件按版本不符判为 `incompatible`；新 host 配旧应用时应用回 `invalid_payload`，插件对这几类请求同样判为 `incompatible`。两种情况都提示更新桌面。上游失败以 `ok: true`、`payload.status: "failed"` 和固定 `reason` 枚举返回；不回传上游错误正文、完整 URL 或凭据。 |
 | `ui.open` | 不带档案身份；打开 `resume`、`settings-ai` 或 `home`，成功响应 `opened: true`。 |
 | `legacy.import` | 带档案身份；先发 `manifest`，再按 `index` 发模板、档案及 AI 配置分片，摘要须与清单一致；`status` 只查询。幂等键是 `(importId, index)` 和内容摘要，确认在桌面端进行。 |
 
 若桌面已应用模板与档案、但 AI 配置无法完成，用户在桌面拒绝这一批后状态为 `imported`，响应另带 `aiConfigDropped: true`（完整导入时不带这个字段）。已应用的模板与档案不回滚；桌面先清理可能已写入的正式 AI 服务商和 Key，清理失败则保持待确认状态供重试。插件看到 `imported` 清除旧模板与「我的信息」，避免之后重复导入；带 `aiConfigDropped` 时**保留旧 Key**，并提示用户到桌面补填 AI 配置。待确认列表中的 `applied` 标记供确认界面说明这一部分完成的状态。
 
 `resume.update` 的 `setActiveTemplate` 必须带 `templateId`，不得带 `profile` 或 `expectedRevision`，重复切换到同一模板不会增加写入效果。`saveProfile` 必须带 `profile` 和 `expectedRevision`，不得带 `templateId`；它用版本比较防止同一请求重复写入，但成功回复丢失后重试可能返回 `conflict`，并不保证重放同一成功响应。插件收到 `conflict` 时应重新 `resume.read`，比较当前档案与拟保存内容，再决定是否重新发起保存。
+
+`saveTemplate`（#273）必须带 `templateId`、`groups` 和 `baseSha256`，不得带 `profile` 或 `expectedRevision`；另外两种 op 也不得带 `groups` / `baseSha256`。`groups` 与 `resume.read` 的 `activeTemplate.groups` 同形（分组、字段都至少一个），是这份模板编辑后的**全部**字段：桌面整份替换，不改模板名、位置和当前模板。`baseSha256` 是编辑开始时那份内容的摘要：把原分组包成 `{"groups": [...]}`，按上文 `payloadSha256` 同一套规范 JSON（键按字典序、无空白、UTF-8）算 SHA-256，小写十六进制；桌面按当前内容重算，对不上（另一端保存过、重新导入过，或模板已被删除）返回 `conflict`，不覆盖。插件收到 `conflict` 应重新 `resume.read`，让用户选择载入最新内容，或在确认后基于最新内容再保存。像密码、验证码的字段（与存储层 `is_secret_label` / `is_secret_value` 同一口径）整份拒绝，返回 `secret_forbidden`；字段全被删光、超过 24 KiB 等返回 `invalid_payload`。响应仍是 `activeTemplateId` + `profileRevision`。旧桌面不认识这个 op，会以 `invalid_payload` 或版本不符拒收，插件提示更新桌面。
+
+字段不带持久化 ID：整份替换加内容摘要已能排除重命名、重名、删除和顺序变化带来的错配，因此模板存储、备份、Excel 与 `resume.read` 的格式都不变。
 
 `ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
 

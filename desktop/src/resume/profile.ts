@@ -41,6 +41,8 @@ interface ProfileApi {
   CUSTOM_GROUP: string;
   normalizeProfile(raw: unknown): Profile;
   normalizeKey(value: string): string;
+  /** 「我的信息」展开成填写候选（已滤掉空值与密码类），与插件一键填写同一套。 */
+  profileToResumeFields(profile: unknown): Array<{ group: string; key: string; value: string }>;
   emptyProfile(): Profile;
   countPendingFields(profile: Profile): number;
   countProfileValues(profile: Profile): number;

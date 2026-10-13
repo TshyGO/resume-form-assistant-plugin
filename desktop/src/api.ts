@@ -273,6 +273,8 @@ export interface AiProviderView {
 export interface AiSettingsView {
   providers: AiProviderView[];
   activeProviderId: string | null;
+  /** 强模型（#223）：深度分析和重新匹配用。null 表示不用，全部走当前服务商。 */
+  strongProviderId: string | null;
   /** 凭据库读不出来时的原因；正常是 null。 */
   credentialError: string | null;
 }
@@ -444,6 +446,8 @@ export interface ResumeTemplateView {
   name: string;
   groups: TemplateGroupView[];
   updatedAt: string;
+  /** #273：内容版本。字段编辑从它起草，保存时原样带回，对不上就是别处改过。 */
+  contentSha256: string;
 }
 
 export interface ImportResultView {

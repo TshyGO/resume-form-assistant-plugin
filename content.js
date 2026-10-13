@@ -159,7 +159,11 @@
         // Confirming a submission from the side panel (#172); also held in this page's memory only.
         submitConfirm: panelSubmitSnapshot(),
         // AI 辅助新增条目 from the side panel (#188); also held in this page's memory only.
-        repeat: describeRepeat()
+        repeat: describeRepeat(),
+        // 深度分析本页 (#224)：阶段、我们自己的文案和计数；入口要不要突出由上一次常规填写决定。
+        deep: describeDeep(),
+        deepOffer: deepOfferLevel(),
+        deepConsent: deepConsentSeen()
       });
       return false;
     }
@@ -167,6 +171,10 @@
     if (message.type === "RESUME_PANEL_FILL") {
       if (repeatActive()) {
         sendResponse({ ok: false, error: "AI 辅助新增正在进行，请先完成或停止。" });
+        return false;
+      }
+      if (deepActive()) {
+        sendResponse({ ok: false, error: "深度分析正在进行，请先等待或停止。" });
         return false;
       }
       StorageService.getState().then(store => {
@@ -189,6 +197,12 @@
     if (message.type === "RESUME_PANEL_REPEAT") {
       Promise.resolve(handlePanelRepeat(message)).then(sendResponse)
         .catch(() => sendResponse({ ok: false, error: "辅助新增失败，请手动核对网页。" }));
+      return true;
+    }
+
+    if (message.type === "RESUME_PANEL_DEEP") {
+      Promise.resolve(handlePanelDeep(message)).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "深度分析没有开始，网页没有改动。" }));
       return true;
     }
 
@@ -1447,7 +1461,7 @@
   }
 
   async function startRepeat() {
-    if (repeatActive() || state.aiBusy) return { ok: false, error: "已有填写或新增正在进行，请先完成或停止。" };
+    if (repeatActive() || deepActive() || state.aiBusy) return { ok: false, error: "已有填写或新增正在进行，请先完成或停止。" };
     const run = { requestId: newRequestId(), url: location.href, stopped: false, invalid: "", done: false };
     repeat.run = run;
     repeat.requestId = run.requestId;
@@ -1671,6 +1685,173 @@
     return { ok: false, error: "当前操作不可用。" };
   }
 
+  // #224「深度分析本页」：编排在 deep-analysis.js，这里只注入本页的能力。大纲、编号和元素的对应
+  // 只放在这次分析的内存里；结束、停止或换页后丢掉。第一版不点击网页上的任何按钮。
+  let deepController = null;
+  const DEEP_CONSENT_KEY = "deepAnalysisConsent";
+
+  function deepAnalysis() {
+    const api = self.ResumeProDeepAnalysis;
+    if (!api || !self.ResumeProPageOutline) return null;
+    if (!deepController) deepController = api.createController(deepDeps(api));
+    return deepController;
+  }
+
+  // 首次说明是否已经同意过：侧栏不读 storage，由这里上报。读取是异步的，先回上一次读到的结果。
+  let deepConsentCache = false;
+  function deepConsentSeen() {
+    try {
+      Promise.resolve(chrome.storage.local.get([DEEP_CONSENT_KEY]))
+        .then(stored => { deepConsentCache = stored?.[DEEP_CONSENT_KEY]?.version === 1; })
+        .catch(() => {});
+    } catch {
+      // 扩展重新加载后旧页面拿不到 storage：照旧回上一次的结果，开始时还会再查。
+    }
+    return deepConsentCache;
+  }
+
+  function deepActive() {
+    return Boolean(deepController?.active());
+  }
+
+  function describeDeep() {
+    return deepController ? deepController.describe() : { phase: "idle" };
+  }
+
+  // 上一次常规一键填写的结果决定入口是否突出显示。辅助新增和深度填写本身的结果不再推荐深度分析。
+  function deepOfferLevel() {
+    if (!self.ResumeProDeepAnalysis || deepActive() || repeatActive()) return "none";
+    const summary = fillSession?.summary || null;
+    if (summary && (summary.assisted || summary.deep)) return "secondary";
+    try {
+      return self.ResumeProDeepAnalysis.offerLevel(summary);
+    } catch {
+      return "secondary";
+    }
+  }
+
+  // 同源框架里的元素属于框架自己的 window：按元素所在的文档取样式，不能拿顶层 window 去算。
+  function isVisibleInOwnDocument(element) {
+    const view = element?.ownerDocument?.defaultView || window;
+    const styles = view.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return styles.display !== "none" && styles.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  }
+
+  // 脱敏用的简历内容：整条值，以及长文本按标点拆开的片段（查看状态的页面常把一段经历拆开显示）。
+  function deepResumeValues(resumeFields) {
+    const values = [];
+    for (const field of resumeFields) {
+      const value = String(field?.value ?? "").trim();
+      if (!value) continue;
+      values.push(value);
+      if (value.length > 12) {
+        for (const piece of value.split(/[\n\r，。；;,、/|]+/)) if (piece.trim().length >= 4) values.push(piece.trim());
+      }
+    }
+    return values;
+  }
+
+  function deepDeps(api) {
+    return {
+      url: () => location.href,
+      newRequestId,
+      busy: () => repeatActive() ? "AI 辅助新增正在进行，请先完成或停止。"
+        : state.aiBusy ? "已有填写正在进行，请先完成或停止。" : "",
+      consented: async () => {
+        try {
+          const stored = await chrome.storage.local.get([DEEP_CONSENT_KEY]);
+          return stored?.[DEEP_CONSENT_KEY]?.version === 1;
+        } catch {
+          return false;
+        }
+      },
+      acquire: () => { state.aiBusy = true; state.suggestedView = null; },
+      release: () => { state.aiBusy = false; },
+      async prepare() {
+        state.currentStore = await StorageService.getState();
+        if (state.desktopMode !== "ready") return { ok: false, error: self.ResumeProResumeData.modeCopy(state.desktopMode).message };
+        const template = getActiveTemplate(state.currentStore);
+        const profileFields = profileResumeFields();
+        if (!template && !profileFields.length) return { ok: false, error: "请先导入简历模板，或在「我的信息」里填写内容。" };
+        const templateFields = template ? flattenTemplateFields(template) : [];
+        const resumeFields = self.ResumeProProfile ? self.ResumeProProfile.mergeResumeFields(templateFields, profileFields) : templateFields;
+        return { ok: true, resumeValues: deepResumeValues(resumeFields) };
+      },
+      buildOutline: resumeValues => self.ResumeProPageOutline.build(document, {
+        isVisible: isVisibleInOwnDocument,
+        exclude: element => Boolean(element.closest?.(`#${SIDEBAR_ID}`)),
+        resumeValues,
+        fieldScan: self.ResumeProFieldScan
+      }),
+      emptyHint: () => {
+        const probe = withFillProbe(probeApi => probeApi.probePage(document, { href: location.href }), null);
+        return withFillProbe(probeApi => probeApi.emptyPageHint(probe), "");
+      },
+      analyze: ({ requestId, text, part, parts }) => self.ResumeProAIClient.send({
+        type: "AI_ANALYZE_PAGE", requestId, outline: text, part, parts
+      }).catch(() => ({ success: false, error: "无法连接 AI 请求进程，请重新加载扩展后再试。", errorCode: "unavailable" })),
+      cancelRequest: requestId => { self.ResumeProAIClient.cancel(requestId).catch(() => {}); },
+      toFillInput: (fields, nodes) => withScanBindings(api.toFillInput(fields, nodes, { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType })),
+      async fill(options) {
+        const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
+        if (!fillButton) return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "填写控件不可用。" };
+        options.report.fillStarted = true;
+        // 交给普通一键填写：它自己占用并释放忙碌状态。网页里的填写按钮可能还停在读桌面之前的禁用状态
+        // （刷新后的页面不会主动读桌面），先按 prepare() 刚读到的桌面状态重画，和普通填写的入口一致。
+        state.aiBusy = false;
+        if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
+        return handleAiFillClick({ currentTarget: fillButton }, null, options);
+      },
+      onFinish: report => { if (report && !report.fillStarted) writeDeepDiagnostics(report); }
+    };
+  }
+
+  // 普通扫描也认识的控件：沿用它的题目对应关系。填写前的复查、「加到我的信息」的询问都和普通填写一致；
+  // 只有深度分析才找到的控件（框架、Shadow DOM 里的）没有这份对应关系，不询问，免得用模型起的题目名存档。
+  function withScanBindings(prepared) {
+    let scanned;
+    try {
+      scanned = scanFillableFields();
+    } catch {
+      return prepared;
+    }
+    const byElement = new Map();
+    for (const entry of scanned.fieldMap.values()) {
+      const key = entry.kind === "radio" ? entry.elements?.[0] : entry.element;
+      if (key) byElement.set(key, entry);
+    }
+    for (const entry of prepared.fieldMap.values()) {
+      const known = byElement.get(entry.kind === "radio" ? entry.elements?.[0] : entry.element);
+      if (!known?.binding) continue;
+      Object.assign(entry, { binding: known.binding, offerable: known.offerable, offerLabel: known.offerLabel });
+    }
+    return prepared;
+  }
+
+  async function handlePanelDeep(message) {
+    const action = String(message?.action || "");
+    const requestId = typeof message?.requestId === "string" ? message.requestId : "";
+    const controller = deepAnalysis();
+    if (!controller) return { ok: false, error: "当前网页无法使用深度分析。" };
+    if (action === "start" || action === "consent") {
+      if (repeatActive()) return { ok: false, error: "AI 辅助新增正在进行，请先完成或停止。" };
+      // 「同意并开始分析」：用户在侧栏的首次说明里点了同意，记住后再开始；记不住就不开始。
+      if (action === "consent") {
+        try {
+          await chrome.storage.local.set({ [DEEP_CONSENT_KEY]: { version: 1 } });
+          deepConsentCache = true;
+        } catch {
+          return { ok: false, error: "没能记住你的选择，请重试。" };
+        }
+      }
+      return controller.start();
+    }
+    if (action === "stop") return controller.stop(requestId);
+    if (action === "dismiss") return controller.dismiss();
+    return { ok: false, error: "当前操作不可用。" };
+  }
+
   function isAssistedTextField(entry) {
     const el = entry.element;
     if (["custom-select", "cascader"].includes(entry.controlKind)) return false;
@@ -1718,7 +1899,9 @@
 
   // `assisted` limits filling to new rows. The returned summary supplies the side panel;
   // `stopped` and `onRequest` let it stop the AI wait and subsequent writes.
-  async function handleAiFillClick(event, assisted = null) {
+  // `deep`（#224）：深度分析给出的字段 { fields, fieldMap } 代替扫描结果，匹配用强档并受调用预算限制；
+  // 覆盖确认、写入前复查、填写会话、诊断和留档提示都和普通一键填写相同。
+  async function handleAiFillClick(event, assisted = null, deep = null) {
     const button = event.currentTarget;
     const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
     if (button.disabled || state.aiBusy) return failed("busy");
@@ -1776,6 +1959,7 @@
     let stats = null;
     let pageType = null;
     let scanPath = location.pathname;
+    let scannedCustom = 0;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
@@ -1794,13 +1978,16 @@
     const session = assisted && fillSession ? fillSession : beginFillSession();
 
     try {
-      const scanned = scanFillableFields();
+      const scanned = deep
+        ? { fields: deep.fields, fieldMap: deep.fieldMap, stats: scanStats(null, deep.fields.length) }
+        : scanFillableFields();
       const fieldMap = scanned.fieldMap;
       const fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
       }) : scanned.fields;
       fieldCount = fields.length;
+      scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       scanDone = true;
@@ -1813,7 +2000,8 @@
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
         const hint = !assisted && !scanned.fields.length
-          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown" }), "") : "";
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown",
+            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
         hinted = Boolean(hint);
         throw new Error(`当前页面没有可填写的表单字段。${hint}`);
       }
@@ -1871,13 +2059,16 @@
       timer = window.setInterval(updateProgress, 1000);
       // A stop during the preparation above had no request to cancel yet: send nothing.
       if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
       assisted?.onRequest?.(requestId);
+      deep?.onRequest?.(requestId);
       requested = true;
       const response = await self.ResumeProAIClient.send({
         type: "AI_FILL",
         requestId,
         formFields: fields,
-        resumeFields
+        resumeFields,
+        ...(deep ? { tier: "strong", maxCalls: deep.maxCalls } : {})
       });
       timing.roundTripMs = performance.now() - phaseStart;
       phase = null;
@@ -1894,6 +2085,8 @@
       }
       matched = Array.isArray(response?.matches) ? response.matches.length : null;
       if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
+      // 深度分析在等 AI 时被停止：worker 会带回本地匹配，但用户已经说了停，一项都不写。
+      if (deep?.stopped?.()) { cancelRequested = true; throw new Error("已停止深度填写，网页没有改动。"); }
 
       if (response?.openView === "settings-ai") {
         state.suggestedView = "settings-ai";
@@ -1933,7 +2126,9 @@
           overwriteDeclined = true;
           cancelRequested = true;
           showStatus("已取消填写，网页现有内容未修改。", "error", true);
-          return;
+          // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
+          return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
+            calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
         }
       }
 
@@ -1954,7 +2149,9 @@
           || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
-          reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null) });
+          reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
+          // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
+          ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
       let controlsRechecked = false;
       recheckVerifiedControls = () => {
@@ -1969,7 +2166,7 @@
           }
         }
       };
-      const isCurrent = () => !writeCancelled && !assisted?.stopped?.()
+      const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
         && location.href === fillUrl && session === fillSession;
       const failedCascadeGroups = new Set();
       for (const match of sortedMatches) {
@@ -2146,7 +2343,12 @@
         failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
       const summaryInput = { ...timing, totalMs,
         fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
-        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict };
+        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict,
+        // 「深度分析本页」入口判断用（#224）；只有计数和标记。
+        scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
+        // 总调用次数 = 分析阶段（deep.report.analysisCalls）+ 本次匹配（diagnostics.calls）。
+        deep: deep ? { ...deep.report, calls: (Number(deep.report?.analysisCalls) || 0) + (Number(diagnostics.calls) || 0),
+          budgetExhausted: Boolean(deep.report?.budgetExhausted || diagnostics.budgetExhausted) } : null };
       if (session === fillSession) session.summary = summaryInput;
       // 侧栏、手动反馈和自动上报用同一份输入，两个通道的诊断块一致。
       const reportInput = { ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 };
@@ -2154,7 +2356,8 @@
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
         // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
-        const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted), cancelled: cancelRequested,
+        // 深度填写（#224）和辅助新增一样不自动上报：隐私说明里自动报告只覆盖普通一键填写。
+        const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted || deep), cancelled: cancelRequested,
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount,
           editHint: hinted && probe?.editButtons > 0, category: verdict.category });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
@@ -2175,7 +2378,8 @@
         }, activeTemplate).catch(() => {});
       }
     }
-    return { outcome, filledCount, unconfirmedCount, error: failure };
+    return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure, overwriteDeclined,
+      calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
   }
 
   function summarizeLabels(labels, limit = 5) {
@@ -2267,6 +2471,9 @@
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
       `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
       `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
+      // #223：只有这次指定了档位才写，普通一键填写的诊断不变。
+      ...(["strong", "default"].includes(d.tierRequested) ? [`模型档位：${d.tierUsed === "strong" ? "强"
+        : d.tierUsed === "default" ? (d.tierRequested === "strong" ? "强模型未设置，已退回日常" : "日常") : "未取得"}`] : []),
       `候选 / 简历字段：${count(d.candidateFields)} / ${count(d.resumeFields)}`,
       `敏感字段过滤：${count(d.skippedSecret)}；超大资料跳过：${count(d.skippedOversized)}；无对应资料跳过：${count(d.skippedNoContext)}`,
       `用户 prompt：${count(d.promptBytes)} bytes`,
@@ -2274,8 +2481,40 @@
       `匹配往返（含后台处理）：${seconds(result.roundTripMs)}`,
       `API（含响应读取）：${called === true ? seconds(d.apiMs) : called === false ? "未调用" : "未取得"}`,
       `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
+      ...(result.deep ? formatDeepDiagnostics(result.deep) : []),
       ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
     ].join("\n");
+  }
+
+  // #224 深度分析的诊断：只有字数、份数、计数、固定的校验码和档位，不含模型原文、网页文字或网址。
+  function formatDeepDiagnostics(report) {
+    const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
+    const tier = ({ strong: "强", default: "日常（未设置强模型）" })[report.tierUsed] || "未取得";
+    const validation = /^(?:通过|analyze_invalid（[a-z_]{1,32}）)$/.test(report.validation || "") ? report.validation : "未执行";
+    return [
+      `深度分析：大纲 ${count(report.outlineChars)} 字，分 ${count(report.parts)} 次分析${report.truncated ? "（页面过长，后面的部分没有分析）" : ""}`,
+      `页面说明书：字段 ${count(report.specFields)}，可填写 ${count(report.usedFields)}${report.overridden ? `，控件类型按网页改正 ${count(report.overridden)}` : ""}；校验：${validation}`,
+      ...(report.controlKinds && Object.keys(report.controlKinds).length ? [`说明书控件类型：${Object.entries(report.controlKinds)
+        .filter(([kind]) => self.ResumeProDeepAnalysis?.CONTROLS?.has(kind)).map(([kind, n]) => `${kind} ${count(n)}`).join("、")}`] : []),
+      `深度分析模型调用：${count(report.calls)}/${count(report.limit)}${report.budgetExhausted ? "（已达上限）" : ""}；分析档位：${tier}`
+    ];
+  }
+
+  // 深度分析在填写之前就结束了（校验没过、需要先点编辑、AI 失败）：诊断只写深度分析这几行。
+  function writeDeepDiagnostics(report) {
+    if (!report) return;
+    lastFillReport = "";
+    const panel = shadowRoot?.querySelector("#resume-pro-diagnostics");
+    const text = shadowRoot?.querySelector("#resume-pro-diagnostics-text");
+    if (!panel || !text) return;
+    const code = /^[a-z_]{1,32}$/.test(report.errorCode || "") ? report.errorCode : "";
+    text.value = [
+      `网申快填 v${chrome.runtime.getManifest().version}`,
+      `深度分析没有进入填写${code ? `；错误码：${code}` : ""}`,
+      ...formatDeepDiagnostics(report)
+    ].join("\n");
+    panel.hidden = false;
+    panel.open = true;
   }
 
   // #228：扫描交给 field-scan.js。只收能对上题目的逻辑控件：自定义下拉连同内部输入算一个，

@@ -1,0 +1,29 @@
+{
+  "source": "tests/fixtures/sites/view-mode-profile/page.html（合成：查看状态的在线简历，资料虚构）",
+  "annotatedBy": "人工标注，#224",
+  "pageState": "viewing",
+  "fields": [],
+  "notFields": [
+    "e3"
+  ],
+  "preActions": [
+    {
+      "ref": "e4",
+      "kind": "edit"
+    },
+    {
+      "ref": "e5",
+      "kind": "edit"
+    },
+    {
+      "ref": "e7",
+      "kind": "edit"
+    }
+  ],
+  "forbiddenRefs": [
+    "e8",
+    "e9",
+    "e1",
+    "e2"
+  ]
+}

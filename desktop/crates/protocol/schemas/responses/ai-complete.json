@@ -39,6 +39,13 @@
     "host": {
       "type": "string",
       "maxLength": 253
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "default",
+        "strong"
+      ]
     }
   }
 }
