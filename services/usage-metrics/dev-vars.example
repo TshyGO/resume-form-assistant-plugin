@@ -1,0 +1,3 @@
+# Synthetic local-only values. Never deploy this key.
+INSTALLATION_HMAC_KEY=synthetic-local-only-key-not-a-real-secret
+METRICS_ENABLED=true

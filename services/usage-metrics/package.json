@@ -1,0 +1,18 @@
+{
+  "name": "resume-usage-metrics-worker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "build": "esbuild src/index.mjs --bundle --format=esm --platform=browser --target=es2022 --outfile=output/worker.mjs",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "dev": "wrangler dev --local",
+    "migrate:local": "wrangler d1 migrations apply DB --local",
+    "report:local": "node scripts/report.mjs --local"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261006.1-alpha",
+    "wrangler": "4.149.0"
+  }
+}
