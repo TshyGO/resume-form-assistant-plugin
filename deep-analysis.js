@@ -1,6 +1,8 @@
 // #224「深度分析本页」：脱敏页面大纲 → 强模型给出页面说明书 → 插件严格校验 → 沿用现有填写流程。
 // 这里只放规则和编排，用到的网页、AI 和填写能力都由 content.js 注入；ai-worker.js 也引入本文件取提示词。
 // #225 起：说明书要求「编辑 / 展开 / 新增」时，先在侧栏预览动作，用户确认后才由 page-actions.js 逐个执行并核验。
+// #226 起：深度分析的效果比同一页面的普通填写好时存成本站配方（page-recipe.js）；配方需要先点按钮时，
+// 一键填写也走这里的「配方模式」：同样先预览、确认后执行，再按配方定位字段填写，不调用强模型页面分析。
 (function attachResumeProDeepAnalysis(scope) {
   const MAX_CALLS = 6;
   const MAX_LABEL = 30;
@@ -307,12 +309,25 @@
     return parts.length ? `已完成：${parts.join("、")}${done.add ? "（新增的条目会保留，请在网页上核对）" : ""}。` : "网页上没有完成任何操作。";
   }
 
+  // #226 配方保存结果：只有固定文案。
+  const RECIPE_NOTES = {
+    saved: "已保存为本站配方：下次在这个页面一键填写时会先按配方找字段，不再做页面分析（匹配简历仍用日常模型）。",
+    replaced: "已更新本站配方：下次在这个页面一键填写时会按新的配方找字段。",
+    no_baseline: "这次没有可以对比的普通填写结果，没有保存本站配方。可以先点「一键 AI 填写」，效果不好再深度分析。",
+    not_better: "这次填上的字段没有比普通填写多，没有保存本站配方。",
+    nothing_filled: "这次没有确认填上的字段，没有保存本站配方。",
+    unsafe: "这个网页的地址或字段名里可能有个人信息，没有保存本站配方。",
+    unlocatable: "这个页面的字段没有稳定的特征可以记住，没有保存本站配方。",
+    too_large: "这个页面的字段太多，配方超过 32 KB 的上限，没有保存。",
+    save_failed: "本站配方没能保存（浏览器存储不可用），这次的填写不受影响。"
+  };
+
   // 编排：一次深度分析绑定发起时的网址、本页文档（内容脚本随文档一起销毁）和这一次的 run；
   // 用户停止、网址变化、run 被替换后，迟到的回包一律丢弃，不再改网页或覆盖新状态。
   // #225：说明书要求「编辑 / 展开 / 新增」时先给出动作计划，用户确认后逐个执行并核验，
   // 再重新生成大纲、重新分析一次（这一轮提出的动作一律不执行），最后照常填写。分析、匹配共用一份 6 次的预算。
   function createController(deps) {
-    const state = { phase: "idle", requestId: "", message: "", notes: [], progress: null, result: null, run: null, report: null };
+    const state = { phase: "idle", mode: "analyze", requestId: "", message: "", notes: [], progress: null, result: null, run: null, report: null };
 
     function stale(run) {
       if (run.invalid) return run.invalid;
@@ -335,6 +350,8 @@
         run.outline = null;
         run.plan = null;
         run.merged = null;
+        run.actionOutline = null;
+        run.actionItems = null;
         deps.highlight?.(null);
         deps.release?.();
         deps.onFinish?.(state.report);
@@ -362,22 +379,147 @@
         starting = false;
       }
       if (ACTIVE.includes(state.phase)) return { ok: false, error: "深度分析正在进行，请先等待或停止。" };
-      const run = { requestId: deps.newRequestId(), url: deps.url(), stopped: false, invalid: "", done: false,
-        budget: createBudget(MAX_CALLS), outline: null, fillRequestId: "", plan: null, merged: null, resumeValues: [] };
-      state.run = run;
-      state.requestId = run.requestId;
-      state.notes = [];
-      state.progress = null;
-      state.result = null;
-      state.report = { outlineChars: 0, parts: 0, truncated: false, specFields: 0, usedFields: 0, overridden: 0,
-        validation: "", tierUsed: "", calls: 0, analysisCalls: 0, limit: MAX_CALLS, budgetExhausted: false, errorCode: "",
-        rounds: 0, actions: null };
-      deps.acquire?.();
+      // #226：比较效果用的基线（同一页面上一次普通填写的结果）在任何填写开始之前取下来。
+      let baseline = null;
+      try {
+        baseline = deps.baseline?.() || null;
+      } catch {
+        baseline = null;
+      }
+      const run = begin("analyze", { baseline });
       set(run, "outlining", "正在生成脱敏的页面大纲…");
       execute(run).catch(() => {
         if (!run.done) set(run, "failed", "深度分析没有完成，网页没有改动。");
       });
       return { ok: true, requestId: run.requestId };
+    }
+
+    function begin(mode, extra = {}) {
+      const run = { mode, requestId: deps.newRequestId(), url: deps.url(), stopped: false, invalid: "", done: false,
+        budget: createBudget(MAX_CALLS), outline: null, fillRequestId: "", plan: null, merged: null, resumeValues: [], ...extra };
+      state.run = run;
+      state.mode = mode;
+      state.requestId = run.requestId;
+      state.notes = [];
+      state.progress = null;
+      state.result = null;
+      state.report = { mode, outlineChars: 0, parts: 0, truncated: false, specFields: 0, usedFields: 0, overridden: 0,
+        validation: "", tierUsed: "", calls: 0, analysisCalls: 0, limit: MAX_CALLS, budgetExhausted: false, errorCode: "",
+        rounds: 0, actions: null, recipe: null };
+      deps.acquire?.();
+      return run;
+    }
+
+    // #226 配方模式：本站配方需要先点「编辑 / 展开 / 添加」时，由一键填写转到这里。按配方在当前网页上找按钮、
+    // 按当前模板和网页已有条目重新算新增数量，侧栏预览、用户确认后才点；点完按配方找字段填写。
+    // 不生成发给模型的大纲，也不调用页面分析；找不到、对不上就停下或退回普通扫描，不会自动改成深度分析。
+    function startRecipe(entry) {
+      if (starting || ACTIVE.includes(state.phase)) return { ok: false, error: "深度分析正在进行，请先等待或停止。" };
+      const busy = deps.busy?.();
+      if (busy) return { ok: false, error: busy };
+      if (!entry?.recipe || !deps.recipeActions || !deps.recipeFillInput) return { ok: false, error: "本站配方当前不可用。" };
+      const run = begin("recipe", { recipe: entry.recipe });
+      set(run, "outlining", "正在按本站配方核对网页…");
+      executeRecipe(run).catch(() => {
+        if (!run.done) set(run, "failed", "按本站配方填写没有完成，网页没有改动。");
+      });
+      return { ok: true, requestId: run.requestId };
+    }
+
+    async function executeRecipe(run) {
+      const report = state.report;
+      const ready = await deps.prepare();
+      if (stopped(run)) { abandon(run); return; }
+      if (!ready?.ok) { set(run, "failed", ready?.error || "桌面简历当前不可用。"); return; }
+      run.resumeValues = ready.resumeValues || [];
+      run.templateFields = ready.templateFields || [];
+      let outline;
+      try {
+        outline = deps.buildOutline(run.resumeValues);
+      } catch {
+        set(run, "failed", "没能读取这个网页的结构，网页没有改动。");
+        return;
+      }
+      run.outline = outline;
+      const found = deps.recipeActions({ recipe: run.recipe, outline });
+      if (!found?.ok) {
+        report.recipe = { status: "stale", reason: "action_missing" };
+        set(run, "stopped", "本站配方里要点的按钮在网页上找不到或对不上了，配方可能已过期，网页没有改动。可以照常一键填写，或重新深度分析。");
+        return;
+      }
+      let plan;
+      try {
+        plan = deps.planActions({ spec: { preActions: found.preActions, sections: found.sections, fields: [] }, outline, templateFields: run.templateFields });
+      } catch {
+        plan = { error: "target_changed" };
+      }
+      if (stopped(run)) { abandon(run); return; }
+      if (plan.error) {
+        report.actions = { planned: countKinds([]), done: countKinds([]), stop: plan.error === "ambiguous" ? "ambiguous" : "target_changed" };
+        report.recipe = { status: "stale", reason: "action_changed" };
+        set(run, "stopped", "本站配方里的按钮和网页对不上，无法确定该点哪一个，已停止，网页没有改动。可以照常一键填写，或重新深度分析。");
+        return;
+      }
+      report.actions = { planned: countKinds(plan.items), done: countKinds([]), stop: "", manual: plan.manual.length, blocked: plan.blocked.length };
+      state.notes.push(...plan.manual.map(label => `需要你手动点击：${label}`), ...plan.blocked);
+      state.notes.splice(0, Math.max(0, state.notes.length - 3));
+      if (plan.items.length) {
+        run.plan = { id: deps.newRequestId(), ...plan };
+        set(run, "preview", "本站配方需要先点击下面的按钮。确认后会依次点击，每点一下都核对网页确实出现了新的输入框，然后按配方填写。不会保存、提交或删除。", { progress: null });
+        return;
+      }
+      await recipeFill(run, {});
+    }
+
+    // 动作做完（或不需要动作）后：重新读网页，按配方定位字段。达到「至少 80%、失败不超过 5 个」才按配方填，
+    // 否则退回普通规则扫描并说明配方可能过期。匹配简历照常用日常模型。
+    async function recipeFill(run, { after = "", scopes = [] } = {}) {
+      const report = state.report;
+      let outline;
+      try {
+        outline = deps.buildOutline(run.resumeValues);
+      } catch {
+        set(run, "failed", `${after}没能读取这个网页的结构，没有填写。`);
+        return;
+      }
+      run.outline = outline;
+      const prepared = deps.recipeFillInput({ recipe: run.recipe, outline, extraScopes: scopes });
+      report.recipe = { ...(prepared?.recipe || { status: "stale" }) };
+      const input = prepared?.input && prepared.input.fields.length ? prepared.input : null;
+      if (!input) {
+        report.recipe.status = "stale";
+        state.notes.push("本站配方可能已过期，这次按普通规则扫描填写。可以重新深度分析本页。");
+        state.notes.splice(0, Math.max(0, state.notes.length - 3));
+      }
+      report.usedFields = input ? input.fields.length : 0;
+      set(run, "filling", "正在匹配简历并填写网页…", { progress: null });
+      const result = await deps.fill({
+        fields: input ? input.fields : null,
+        fieldMap: input ? input.fieldMap : null,
+        mode: "recipe",
+        stopped: () => stopped(run),
+        onRequest: id => { run.fillRequestId = id; },
+        report
+      });
+      run.budget.record(Number(result?.calls) || 0);
+      report.calls = run.budget.used();
+      if (state.run !== run) return;
+      const filled = Number(result?.filledCount) || 0;
+      const unfilled = Number(result?.unfilledCount) || 0;
+      const unconfirmed = Number(result?.unconfirmedCount) || 0;
+      const counts = { fields: Number(result?.fieldCount) || report.usedFields, filled, unfilled, unconfirmed };
+      const tail = `${unfilled ? `${unfilled} 项没填上，` : ""}${unconfirmed ? `${unconfirmed} 项未确认，` : ""}请核对网页内容。`;
+      const how = input ? "按本站配方" : "按普通规则扫描";
+      if (run.stopped || stale(run)) {
+        set(run, "stopped", `${run.invalid || stale(run) || "已停止。"}${after}停止前已填写 ${filled} 项，${tail}`, { result: counts });
+      } else if (result?.overwriteDeclined && !filled) {
+        set(run, "stopped", `${after}已按你的选择停止填写，网页现有内容没有改动。`, { result: counts });
+      } else if (result?.outcome === "success" || result?.outcome === "partial") {
+        set(run, "completed", `${after}${how}填写：已填写 ${filled} 项。${tail}`, { result: counts });
+      } else {
+        const why = result?.error && result.error !== "busy" ? result.error : "填写没有开始。";
+        set(run, "failed", `${after}${how}填写没有完成：${why}`, { result: counts });
+      }
     }
 
     // 生成大纲并逐份分析、校验。返回合并后的说明书和这份大纲；中途结束（失败、停止、预算用完）返回 null。
@@ -518,7 +660,8 @@
     async function proceed(run) {
       const plan = run.plan;
       if (!plan.items.length) {
-        await fillWith(run, run.merged, run.outline, {});
+        if (run.mode === "recipe") await recipeFill(run, {});
+        else await fillWith(run, run.merged, run.outline, {});
         return;
       }
       const report = state.report;
@@ -538,6 +681,13 @@
         return;
       }
       if (stopped(run)) { abandon(run); return; }
+      if (run.mode === "recipe") {
+        await recipeFill(run, { after: doneSummary(report.actions.done), scopes: result.scopes || [] });
+        return;
+      }
+      // 配方要记住第一轮点过的「编辑 / 展开」（按第一轮大纲生成定位）。
+      run.actionOutline = run.outline;
+      run.actionItems = plan.items.filter(item => item.kind !== "add");
       // 动作之后的网页已经不是第一次分析时那样：重新生成大纲（新的编号），再分析一次。
       run.outline = null;
       const analysed = await analyzeRound(run, 2);
@@ -595,6 +745,7 @@
       const result = await deps.fill({
         fields: prepared.fields,
         fieldMap: prepared.fieldMap,
+        tier: "strong",
         maxCalls: run.budget.remaining(),
         stopped: () => stopped(run),
         onRequest: id => { run.fillRequestId = id; },
@@ -618,11 +769,40 @@
         // 用户在覆盖确认里点了取消，或填写途中改了字段：照普通填写的保护停下，不是失败。
         set(run, "stopped", `${after}已按你的选择停止填写，网页现有内容没有改动。`, { result: counts });
       } else if (result?.outcome === "success" || result?.outcome === "partial") {
+        const note = await saveRecipe(run, merged, outline, result);
+        if (state.run !== run) return;
+        if (note) {
+          state.notes.push(note);
+          state.notes.splice(0, Math.max(0, state.notes.length - 3));
+        }
         set(run, "completed", `${after}深度填写：AI 找到 ${prepared.fields.length} 个字段，已填写 ${filled} 项。${tail}`, { result: counts });
       } else {
         const why = result?.error && result.error !== "busy" ? result.error : "填写没有开始。";
         set(run, "failed", `${after}深度填写没有完成：${why}`, { result: counts });
       }
+    }
+
+    // #226：效果确实比普通填写好时存成本站配方。只在校验通过、没有取消、核验后的填写数更多时由 content 写入；
+    // 写入前再核对一次这次分析仍然有效（没有停止、没有换页）。返回给用户看的一句固定文案。
+    async function saveRecipe(run, merged, outline, result) {
+      const report = state.report;
+      if (run.mode !== "analyze" || !deps.saveRecipe) return "";
+      let outcome;
+      try {
+        outcome = await deps.saveRecipe({
+          fields: merged.fields, sections: merged.sections, outline,
+          actions: run.actionItems?.length ? { items: run.actionItems, outline: run.actionOutline } : null,
+          tier: report.tierUsed, validation: report.validation, result, baseline: run.baseline,
+          current: () => !stopped(run)
+        });
+      } catch {
+        outcome = { status: "save_failed" };
+      }
+      const status = String(outcome?.status || "");
+      report.recipe = { status: ["saved", "replaced"].includes(status) ? "saved" : status === "save_failed" ? "save_failed" : "not_saved",
+        reason: /^[a-z_]{1,32}$/.test(status) ? status : "", fields: Number(outcome?.fields) || 0 };
+      deps.onRecipeSaved?.(report.recipe);
+      return RECIPE_NOTES[status] || "";
     }
 
     // 确认绑定这一次分析（requestId）和侧栏显示的那份计划（planId）：旧预览、别的计划、已经失效的计划都不执行。
@@ -694,7 +874,7 @@
 
     function dismiss() {
       if (ACTIVE.includes(state.phase)) return { ok: false, error: "深度分析还在进行。" };
-      Object.assign(state, { phase: "idle", requestId: "", message: "", notes: [], progress: null, result: null, run: null });
+      Object.assign(state, { phase: "idle", mode: "analyze", requestId: "", message: "", notes: [], progress: null, result: null, run: null });
       return { ok: true };
     }
 
@@ -706,6 +886,7 @@
       const previewing = state.phase === "preview" && Boolean(state.run?.plan);
       return {
         phase: state.phase,
+        mode: state.mode,
         requestId: state.requestId,
         message: state.message,
         notes: [...state.notes],
@@ -721,14 +902,14 @@
     }
 
     return {
-      start, stop, confirm, cancel, highlight, invalidate, dismiss, describe,
+      start, startRecipe, stop, confirm, cancel, highlight, invalidate, dismiss, describe,
       active: () => ACTIVE.includes(state.phase),
       report: () => state.report ? { ...state.report } : null
     };
   }
 
   const api = {
-    MAX_CALLS, MAX_LABEL, CONTROLS, PHASES, ACTIVE, ALLOW, DENY, ANALYZE_SYSTEM_PROMPT, DOMAIN_LABELS,
+    MAX_CALLS, MAX_LABEL, CONTROLS, PHASES, ACTIVE, ALLOW, DENY, ANALYZE_SYSTEM_PROMPT, DOMAIN_LABELS, RECIPE_NOTES,
     analyzeUserPrompt, parseSpecText, validateSpec, effectiveControl, cleanHints, createBudget, offerLevel,
     toFillInput, createController, buttonAllowed
   };

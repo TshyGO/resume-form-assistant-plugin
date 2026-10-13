@@ -281,6 +281,7 @@ function loadHighlightHelpers(options = {}) {
       ResumeProFieldScan: options.fieldScan || fakeFieldScan(),
       ResumeProCustomControls: options.customControls,
       ResumeProDeepAnalysis: options.deepAnalysis, ResumeProPageOutline: options.pageOutline, ResumeProPageActions: options.pageActions,
+      ResumeProPageRecipe: options.pageRecipe,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },

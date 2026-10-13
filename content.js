@@ -163,7 +163,9 @@
         // 深度分析本页 (#224)：阶段、我们自己的文案和计数；入口要不要突出由上一次常规填写决定。
         deep: describeDeep(),
         deepOffer: deepOfferLevel(),
-        deepConsent: deepConsentSeen()
+        deepConsent: deepConsentSeen(),
+        // #226 本站配方：只说有没有、上次是不是过期，不带网址和配方内容。
+        recipe: recipeStatus()
       });
       return false;
     }
@@ -177,12 +179,21 @@
         sendResponse({ ok: false, error: "深度分析正在进行，请先等待或停止。" });
         return false;
       }
-      StorageService.getState().then(store => {
+      StorageService.getState().then(async store => {
         state.currentStore = store;
         if (shadowRoot?.querySelector("#resume-pro-template-select")) renderSidebar();
         const button = shadowRoot?.querySelector("#resume-pro-ai-fill");
-        if (!button || button.hidden || button.disabled) sendResponse({ ok: false, error: "桌面简历当前不可用。" });
-        else { button.click(); sendResponse({ ok: true }); }
+        if (!button || button.hidden || button.disabled) { sendResponse({ ok: false, error: "桌面简历当前不可用。" }); return; }
+        // #226：本站配方要先点「编辑 / 展开 / 添加」时转到配方模式，在侧栏预览、确认后才点。
+        const route = await recipeRoute().catch(() => null);
+        const controller = route ? deepAnalysis() : null;
+        if (route && controller && !state.aiBusy && !repeatActive() && !deepActive()) {
+          const started = controller.startRecipe(route);
+          sendResponse(started.ok ? { ok: true } : { ok: false, error: started.error });
+          return;
+        }
+        button.click();
+        sendResponse({ ok: true });
       }).catch(() => sendResponse({ ok: false, error: "桌面简历当前不可用。" }));
       return true;
     }
@@ -197,6 +208,12 @@
     if (message.type === "RESUME_PANEL_REPEAT") {
       Promise.resolve(handlePanelRepeat(message)).then(sendResponse)
         .catch(() => sendResponse({ ok: false, error: "辅助新增失败，请手动核对网页。" }));
+      return true;
+    }
+
+    if (message.type === "RESUME_PANEL_RECIPE") {
+      Promise.resolve(handlePanelRecipe(message)).then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "没能删除本站配方，请稍后再试。" }));
       return true;
     }
 
@@ -1731,6 +1748,8 @@
   function deepOfferLevel() {
     if (!self.ResumeProDeepAnalysis || deepActive() || repeatActive()) return "none";
     const summary = fillSession?.summary || null;
+    // #226：本站配方没能用上（过期）时，突出提示可以重新深度分析。
+    if (summary?.recipe?.status === "stale" && !summary.assisted) return "prominent";
     if (summary && (summary.assisted || summary.deep)) return "secondary";
     try {
       return self.ResumeProDeepAnalysis.offerLevel(summary);
@@ -1803,17 +1822,19 @@
       }).catch(() => ({ success: false, error: "无法连接 AI 请求进程，请重新加载扩展后再试。", errorCode: "unavailable" })),
       cancelRequest: requestId => { self.ResumeProAIClient.cancel(requestId).catch(() => {}); },
       toFillInput: (fields, nodes) => withScanBindings(api.toFillInput(fields, nodes, { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType })),
-      planActions: self.ResumeProPageActions && self.ResumeProFormAgent ? ({ spec, outline, templateFields }) => {
-        const labels = new Map();
-        for (const node of outline.nodes.values()) {
-          if (node.type === "control" && node.control?.label) node.elements?.forEach(el => labels.set(el, node.control.label));
+      planActions: self.ResumeProPageActions && self.ResumeProFormAgent ? planDeepActions : null,
+      // #226 站点配方：保存（深度分析效果更好时）、配方模式下找按钮和字段。
+      baseline: deepBaseline,
+      saveRecipe: recipeApi() ? saveDeepRecipe : null,
+      onRecipeSaved: info => {
+        recipeCache.loaded = false;
+        if (fillSession?.summary?.deep) {
+          fillSession.summary.recipe = info;
+          writeFillDiagnostics({ ...fillSession.summary, unsyncedCount: fillSession.unsynced });
         }
-        return self.ResumeProPageActions.buildPlan({
-          spec, nodes: outline.nodes, titles: outline.titles, redact: outline.redact, templateFields, doc: document,
-          formAgent: self.ResumeProFormAgent, deep: api, describe: self.ResumeProPageOutline.describeButton,
-          isVisible: isVisibleInOwnDocument, labelOf: el => labels.get(el) || ""
-        });
-      } : null,
+      },
+      recipeActions: recipeApi() ? ({ recipe, outline }) => recipeApi().locateActions(recipe, outline) : null,
+      recipeFillInput: recipeApi() ? recipeFillInput : null,
       executeActions: (plan, hooks) => self.ResumeProPageActions.executePlan(plan, {
         ...hooks, doc: document, deep: api, describe: self.ResumeProPageOutline.describeButton,
         isVisible: isVisibleInOwnDocument, formAgent: self.ResumeProFormAgent
@@ -1825,6 +1846,7 @@
       },
       async fill(options) {
         const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
+        if (options.mode === "recipe") noteRecipeUse(options.fields ? "hit" : "stale");
         if (!fillButton) return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "填写控件不可用。" };
         options.report.fillStarted = true;
         // 交给普通一键填写：它自己占用并释放忙碌状态。网页里的填写按钮可能还停在读桌面之前的禁用状态
@@ -1837,14 +1859,29 @@
     };
   }
 
+  // #225：说明书（或 #226 配方找到的按钮）→ 动作计划。题目来自大纲，用来认出一个容器里装了两条记录。
+  function planDeepActions({ spec, outline, templateFields }) {
+    const labels = new Map();
+    for (const node of outline.nodes.values()) {
+      if (node.type === "control" && node.control?.label) node.elements?.forEach(el => labels.set(el, node.control.label));
+    }
+    return self.ResumeProPageActions.buildPlan({
+      spec, nodes: outline.nodes, titles: outline.titles, redact: outline.redact, templateFields, doc: document,
+      formAgent: self.ResumeProFormAgent, deep: self.ResumeProDeepAnalysis, describe: self.ResumeProPageOutline.describeButton,
+      isVisible: isVisibleInOwnDocument, labelOf: el => labels.get(el) || ""
+    });
+  }
+
   // 普通扫描也认识的控件：沿用它的题目对应关系。填写前的复查、「加到我的信息」的询问都和普通填写一致；
   // 只有深度分析才找到的控件（框架、Shadow DOM 里的）没有这份对应关系，不询问，免得用模型起的题目名存档。
-  function withScanBindings(prepared) {
-    let scanned;
-    try {
-      scanned = scanFillableFields();
-    } catch {
-      return prepared;
+  // scanned：已经扫过的结果（#226 配方补漏时复用同一次扫描）。
+  function withScanBindings(prepared, scanned = null) {
+    if (!scanned) {
+      try {
+        scanned = scanFillableFields();
+      } catch {
+        return prepared;
+      }
     }
     const byElement = new Map();
     for (const entry of scanned.fieldMap.values()) {
@@ -1884,6 +1921,262 @@
     if (action === "highlight") return controller.highlight(requestId, planId, Number.isInteger(message?.index) ? message.index : -1);
     if (action === "dismiss") return controller.dismiss();
     return { ok: false, error: "当前操作不可用。" };
+  }
+
+  // #226 站点配方。配方放在 chrome.storage.local 的 fillRecipes:v1，这里只读；保存、删除、更新最近使用都交给
+  // 后台排队写入（两个网页同时保存也不会互相覆盖）。侧栏只看得到「本站有没有配方」，看不到网址和配方内容。
+  // 配方是可以重新生成的本机缓存：不上传、不进桌面备份、不随留档或反馈发出。
+  let recipeCache = { id: "", loaded: false, recipe: null, lastUse: "" };
+  let recipeCacheLoading = null;
+  // 同一页面上一次普通一键填写核验后的填写数（深度分析比较效果用）。只在本页内存里，换了网址不算。
+  let lastPlainFill = null;
+
+  function recipeApi() {
+    return self.ResumeProPageRecipe && self.ResumeProPageOutline && self.ResumeProDeepAnalysis ? self.ResumeProPageRecipe : null;
+  }
+
+  function currentRecipeKey() {
+    const api = recipeApi();
+    if (!api) return null;
+    const key = api.pageKey(location.href);
+    return key.ok ? key : null;
+  }
+
+  const recipeId = key => key ? `${key.host}${key.path}` : "";
+
+  async function loadPageRecipe() {
+    const api = recipeApi();
+    const key = currentRecipeKey();
+    if (!api || !key) return { key: null, recipe: null };
+    watchRecipes();
+    let stored;
+    try {
+      stored = await chrome.storage.local.get([api.STORAGE_KEY]);
+    } catch {
+      return { key, recipe: null };
+    }
+    const recipe = api.lookup(stored?.[api.STORAGE_KEY], key);
+    const id = recipeId(key);
+    recipeCache = { id, loaded: true, recipe, lastUse: recipeCache.id === id ? recipeCache.lastUse : "" };
+    return { key, recipe };
+  }
+
+  // 别的网页保存或删除了配方：下次侧栏来问状态时重新读。第一次读配方时才开始监听。
+  let recipeWatching = false;
+  function watchRecipes() {
+    if (recipeWatching) return;
+    recipeWatching = true;
+    try {
+      chrome.storage?.onChanged?.addListener((changes, area) => {
+        if (area === "local" && changes?.[self.ResumeProPageRecipe?.STORAGE_KEY]) recipeCache.loaded = false;
+      });
+    } catch {
+      // 扩展重新加载后的旧页面：状态按需再读。
+    }
+  }
+
+  // 侧栏状态：有没有本站配方、上一次用的时候是不是过期了。读取是异步的，先回上一次读到的结果。
+  function recipeStatus() {
+    const key = currentRecipeKey();
+    if (!key) return null;
+    const id = recipeId(key);
+    if (recipeCache.id !== id || !recipeCache.loaded) {
+      if (!recipeCacheLoading) {
+        recipeCacheLoading = loadPageRecipe().catch(() => null).finally(() => { recipeCacheLoading = null; });
+      }
+      if (recipeCache.id !== id) return null;
+    }
+    return { saved: Boolean(recipeCache.recipe), stale: recipeCache.lastUse === "stale" };
+  }
+
+  function noteRecipeUse(status) {
+    const key = currentRecipeKey();
+    if (!key || recipeCache.id !== recipeId(key)) return;
+    recipeCache.lastUse = status === "hit" ? "hit" : status === "stale" ? "stale" : "";
+    if (status === "hit") {
+      Promise.resolve(chrome.runtime.sendMessage({ type: "RECIPE_TOUCH", host: key.host, path: key.path })).catch(() => {});
+    }
+  }
+
+  function currentResumeFields() {
+    const template = getActiveTemplate(state.currentStore);
+    const templateFields = template ? flattenTemplateFields(template) : [];
+    return self.ResumeProProfile ? self.ResumeProProfile.mergeResumeFields(templateFields, profileResumeFields()) : templateFields;
+  }
+
+  function buildRecipeOutline(resumeValues) {
+    return self.ResumeProPageOutline.build(document, {
+      isVisible: isVisibleInOwnDocument,
+      exclude: element => Boolean(element.closest?.(`#${SIDEBAR_ID}`)),
+      resumeValues,
+      fieldScan: self.ResumeProFieldScan
+    });
+  }
+
+  // 按配方在当前大纲里找字段：达到「至少 80%、失败不超过 5 个」才给出填写输入（配方字段 + 规则扫描补漏，
+  // 同一个逻辑控件只留一个）。recipe 是给诊断的固定状态和计数。
+  function recipeFillInput({ recipe, outline, extraScopes = [] }) {
+    const api = recipeApi();
+    const located = api.locateFields(recipe, outline, { extraScopes });
+    const info = { status: located.ok ? "hit" : "stale", total: located.total, located: located.located, missing: located.missing,
+      ambiguous: located.ambiguous, extra: located.extra, sameStructure: located.sameStructure, supplemented: 0 };
+    if (!located.ok) return { recipe: info, input: null };
+    const prepared = self.ResumeProDeepAnalysis.toFillInput(api.toSpecFields(located.entries), outline.nodes,
+      { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType });
+    // 定位到了却用不了（控件已经不在、暂不支持）的同样算没找到，再按同一个门槛判断一次。
+    const usable = located.located - prepared.dropped;
+    if (!prepared.fields.length || usable / located.total < api.MIN_RATIO || located.total - usable > api.MAX_FAILED) {
+      return { recipe: { ...info, status: "stale", located: Math.max(0, usable) }, input: null };
+    }
+    let scanned = null;
+    try {
+      scanned = scanFillableFields();
+    } catch {
+      scanned = null;
+    }
+    const input = mergeRecipeScan(withScanBindings(prepared, scanned), scanned);
+    info.supplemented = input.supplemented;
+    return { recipe: info, input };
+  }
+
+  // 规则扫描补漏：配方没有的字段照常填，已经被配方字段占用的控件（同一个元素，或在同一个组件里）不再重复。
+  function mergeRecipeScan(prepared, scanned) {
+    const fields = [...prepared.fields];
+    const fieldMap = new Map(prepared.fieldMap);
+    const claimed = new Set();
+    const roots = [];
+    for (const entry of prepared.fieldMap.values()) {
+      for (const el of [entry.element, ...(entry.elements || [])]) if (el) claimed.add(el);
+      if (entry.root) roots.push(entry.root);
+    }
+    let supplemented = 0;
+    for (const field of scanned?.fields || []) {
+      const entry = scanned.fieldMap.get(field.fieldId);
+      if (!entry) continue;
+      const own = [entry.element, ...(entry.elements || [])].filter(Boolean);
+      const overlaps = own.some(el => claimed.has(el) || roots.some(root => root !== el && root.contains?.(el)))
+        || (entry.root && [...claimed].some(el => entry.root !== el && entry.root.contains?.(el)));
+      if (overlaps) continue;
+      const { cascadeGroup, cascadeLevel, ...rest } = field;
+      fields.push(rest);
+      fieldMap.set(field.fieldId, entry);
+      supplemented += 1;
+    }
+    const elementOf = field => {
+      const entry = fieldMap.get(field.fieldId);
+      return entry?.element || entry?.elements?.[0] || null;
+    };
+    // 按网页上的先后顺序填（省、市这类联动要先选上一级）；跨框架、Shadow DOM 比不出先后的保持原顺序。
+    fields.sort((a, b) => {
+      const ea = elementOf(a);
+      const eb = elementOf(b);
+      if (!ea || !eb || ea === eb || typeof ea.compareDocumentPosition !== "function" || ea.ownerDocument !== eb.ownerDocument) return 0;
+      const position = ea.compareDocumentPosition(eb);
+      return position & 4 ? -1 : position & 2 ? 1 : 0;
+    });
+    if (self.ResumeProAIHelpers?.detectCascadeGroups) self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
+    return { fields, fieldMap, stats: { ...(scanned?.stats || scanStats(null, fields.length)) }, supplemented };
+  }
+
+  // 普通一键填写的扫描：本站有配方先按它找字段，找不到就照常扫描（并记下配方可能已过期）。
+  async function scanForFill() {
+    if (!recipeApi()) return { scanned: scanFillableFields(), recipe: null };
+    const entry = await loadPageRecipe();
+    if (!entry.recipe) return { scanned: scanFillableFields(), recipe: { status: "unused" } };
+    let prepared;
+    try {
+      prepared = recipeFillInput({ recipe: entry.recipe, outline: buildRecipeOutline(deepResumeValues(currentResumeFields())) });
+    } catch {
+      prepared = { recipe: { status: "stale", total: entry.recipe.fields.length, located: 0, missing: 0, ambiguous: 0 }, input: null };
+    }
+    noteRecipeUse(prepared.recipe.status);
+    return prepared.input ? { scanned: prepared.input, recipe: prepared.recipe } : { scanned: scanFillableFields(), recipe: prepared.recipe };
+  }
+
+  // 侧栏点「一键 AI 填写」时：本站配方需要先点「编辑 / 展开 / 添加」，并且这些按钮在网页上都找得到，
+  // 就转到配方模式（侧栏预览、确认后才点）。其余情况照常一键填写（按字段定位或退回扫描）。
+  async function recipeRoute() {
+    const api = recipeApi();
+    if (!api || !self.ResumeProPageActions || !self.ResumeProFormAgent || state.desktopMode !== "ready") return null;
+    const entry = await loadPageRecipe();
+    const recipe = entry.recipe;
+    if (!recipe || (!recipe.actions?.length && !recipe.sections?.length)) return null;
+    let outline;
+    try {
+      outline = buildRecipeOutline(deepResumeValues(currentResumeFields()));
+    } catch {
+      return null;
+    }
+    const found = api.locateActions(recipe, outline);
+    if (!found.ok || (!found.preActions.length && !found.sections.length)) return null;
+    // 动作之前字段就已经全部在网页上（网页已经是编辑状态）：不用再点。只差一部分时仍然要点，不能为了凑够 80% 跳过。
+    const before = api.locateFields(recipe, outline);
+    if (before.located === before.total) return null;
+    if (!found.preActions.length) {
+      const templateFields = getActiveTemplate(state.currentStore) ? flattenTemplateFields(getActiveTemplate(state.currentStore)) : [];
+      if (!templateFields.length) return null;
+      let plan;
+      try {
+        plan = planDeepActions({ spec: { preActions: [], sections: found.sections, fields: [] }, outline, templateFields });
+      } catch {
+        return null;
+      }
+      if (plan.error || !plan.items.length) return null;
+    }
+    return { recipe };
+  }
+
+  // 深度分析的效果基线：同一页面（同一网址、这次打开）上一次普通一键填写确认填上的数量；
+  // 普通扫描一个字段都没有时就是 0。都没有就不比较、不保存。
+  function deepBaseline() {
+    if (lastPlainFill && lastPlainFill.href === location.href) return { filled: lastPlainFill.filled };
+    try {
+      return scanFillableFields().fields.length === 0 ? { filled: 0 } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveDeepRecipe({ fields, sections, outline, actions, tier, validation, result, baseline, current }) {
+    const api = recipeApi();
+    if (!api) return { status: "" };
+    const decision = api.saveDecision({ validation, result, baseline, stopped: !current() });
+    if (!decision.save) return { status: decision.reason };
+    const key = api.pageKey(location.href, { redact: outline.redact });
+    if (!key.ok) return { status: "unsafe" };
+    const built = api.buildRecipe({ fields, outline, sections, actions, tier, now: Date.now() });
+    if (!built.ok) return { status: built.reason === "privacy" ? "unsafe" : built.reason === "too_large" ? "too_large" : "unlocatable" };
+    // 换页、停止之后迟到的结果不保存。
+    if (!current() || !currentRecipeKey() || recipeId(currentRecipeKey()) !== recipeId(key)) return { status: "cancelled" };
+    let reply = null;
+    try {
+      reply = await chrome.runtime.sendMessage({ type: "RECIPE_SAVE", host: key.host, path: key.path, recipe: built.recipe });
+    } catch {
+      reply = null;
+    }
+    recipeCache.loaded = false;
+    if (!reply?.ok) return { status: "save_failed" };
+    recipeCache.lastUse = "";
+    return { status: reply.replaced ? "replaced" : "saved", fields: built.recipe.fields.length };
+  }
+
+  async function handlePanelRecipe(message) {
+    const action = String(message?.action || "");
+    const key = currentRecipeKey();
+    if (action !== "delete") return { ok: false, error: "当前操作不可用。" };
+    if (!key) return { ok: false, error: "当前网页没有本站配方。" };
+    if (deepActive()) return { ok: false, error: "深度分析正在进行，请先等待或停止。" };
+    let reply = null;
+    try {
+      reply = await chrome.runtime.sendMessage({ type: "RECIPE_DELETE", host: key.host, path: key.path });
+    } catch {
+      reply = null;
+    }
+    recipeCache.loaded = false;
+    await loadPageRecipe().catch(() => null);
+    if (!reply?.ok) return { ok: false, error: "没能删除本站配方，请稍后再试。" };
+    recipeCache.lastUse = "";
+    return { ok: true, recipe: recipeStatus() };
   }
 
   function isAssistedTextField(entry) {
@@ -1935,6 +2228,8 @@
   // `stopped` and `onRequest` let it stop the AI wait and subsequent writes.
   // `deep`（#224）：深度分析给出的字段 { fields, fieldMap } 代替扫描结果，匹配用强档并受调用预算限制；
   // 覆盖确认、写入前复查、填写会话、诊断和留档提示都和普通一键填写相同。
+  // #226：deep.mode 为 "recipe" 时是按本站配方定位出的字段（已含规则扫描补漏），匹配照常用日常模型；
+  // fields 为 null 表示配方没能用上，照常扫描。普通一键填写（deep 为空）本站有配方时也先按配方定位。
   async function handleAiFillClick(event, assisted = null, deep = null) {
     const button = event.currentTarget;
     const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
@@ -1994,6 +2289,8 @@
     let pageType = null;
     let scanPath = location.pathname;
     let scannedCustom = 0;
+    // #226 本站配方这次用没用上：只有固定状态码和计数。
+    let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
@@ -2012,9 +2309,16 @@
     const session = assisted && fillSession ? fillSession : beginFillSession();
 
     try {
-      const scanned = deep
-        ? { fields: deep.fields, fieldMap: deep.fieldMap, stats: scanStats(null, deep.fields.length) }
-        : scanFillableFields();
+      let scanned;
+      if (deep) {
+        scanned = deep.fields ? { fields: deep.fields, fieldMap: deep.fieldMap, stats: scanStats(null, deep.fields.length) } : scanFillableFields();
+      } else if (assisted) {
+        scanned = scanFillableFields();
+      } else {
+        const found = await scanForFill();
+        scanned = found.scanned;
+        recipeUse = found.recipe;
+      }
       const fieldMap = scanned.fieldMap;
       const fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
@@ -2102,7 +2406,7 @@
         requestId,
         formFields: fields,
         resumeFields,
-        ...(deep ? { tier: "strong", maxCalls: deep.maxCalls } : {})
+        ...(deep?.tier ? { tier: deep.tier, maxCalls: deep.maxCalls } : {})
       });
       timing.roundTripMs = performance.now() - phaseStart;
       phase = null;
@@ -2311,6 +2615,8 @@
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
         + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
       const emptyHint = viewModeHint();
+      const recipeLead = !deep && recipeUse?.status === "hit" ? "已按本站配方定位字段。" : "";
+      const recipeTail = !deep && recipeUse?.status === "stale" ? "本站配方可能已过期，可以重新深度分析。" : "";
       if (assisted) {
         report(`辅助填写：已验证 ${filledCount} 项。${unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : ""}${response.warning || ""}`, outcome === "partial" ? "error" : "success");
       } else if (emptyHint) {
@@ -2318,14 +2624,16 @@
         // 一个都没填上：提示放最后，AI 的提醒和没填上的字段照旧列出。
         // 状态已经说要先点「编辑」了，诊断和留档就不能再写「完成」；已经是部分完成的保持不变。
         if (outcome === "success") outcome = "failed";
-        showStatus(`已填写 0 个字段。${unfilledNote}${response.warning || ""}${emptyHint}`, "error", true);
+        showStatus(`${recipeLead}已填写 0 个字段。${unfilledNote}${response.warning || ""}${emptyHint}${recipeTail}`, "error", true);
       } else if (response.warning) {
-        showStatus(`本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}`, "error", Boolean(unfilledNote));
+        showStatus(`${recipeLead}本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}${recipeTail}`, "error", Boolean(unfilledNote || recipeTail));
       } else if (unfilledNote) {
         // 没填上的字段要用户自己去补，提示不自动消失。
-        showStatus(`已填写 ${filledCount} 个字段。${unfilledNote}`, "error", true);
+        showStatus(`${recipeLead}已填写 ${filledCount} 个字段。${unfilledNote}${recipeTail}`, "error", true);
+      } else if (recipeTail) {
+        showStatus(`已填写 ${filledCount} 个字段。${recipeTail}`, "success", true);
       } else {
-        showStatus(`已填写 ${filledCount} 个字段。`, "success");
+        showStatus(`${recipeLead}已填写 ${filledCount} 个字段。`, "success");
       }
 
       if (!assisted) {
@@ -2357,6 +2665,7 @@
       if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       failure = error.message || "AI 填写失败。";
+      if (!deep && recipeUse?.status === "stale") failure += "本站配方可能已过期，可以重新深度分析。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
       if (!hinted && ["none", "no_context"].includes(diagnostics.errorCode)) {
         const hint = viewModeHint();
@@ -2380,10 +2689,18 @@
         path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
+        // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
+        recipe: recipeUse,
         // 总调用次数 = 分析阶段（deep.report.analysisCalls）+ 本次匹配（diagnostics.calls）。
         deep: deep ? { ...deep.report, calls: (Number(deep.report?.analysisCalls) || 0) + (Number(diagnostics.calls) || 0),
           budgetExhausted: Boolean(deep.report?.budgetExhausted || diagnostics.budgetExhausted) } : null };
       if (session === fillSession) session.summary = summaryInput;
+      // #226：普通一键填写（含按配方的）核验后的结果，作为同一页面深度分析的比较基线。取消、拒绝覆盖、
+      // 认证或网络这类失败不算基线（不代表这个页面普通填写能填多少）。
+      if (!assisted && !deep) {
+        const comparable = fieldCount === 0 || stage === null || ["none", "no_context"].includes(diagnostics.errorCode);
+        if (scanDone && !cancelRequested && !overwriteDeclined && comparable) lastPlainFill = { href: fillUrl, filled: filledCount };
+      }
       // 侧栏、手动反馈和自动上报用同一份输入，两个通道的诊断块一致。
       const reportInput = { ...summaryInput, unsyncedCount: session === fillSession ? session.unsynced : 0 };
       writeFillDiagnostics(reportInput);
@@ -2413,7 +2730,7 @@
       }
     }
     return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure, overwriteDeclined,
-      calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+      fieldCount, calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
   }
 
   function summarizeLabels(labels, limit = 5) {
@@ -2516,13 +2833,45 @@
       `API（含响应读取）：${called === true ? seconds(d.apiMs) : called === false ? "未调用" : "未取得"}`,
       `填写：${seconds(result.fillMs)}；总计：${seconds(result.totalMs)}`,
       ...(result.deep ? formatDeepDiagnostics(result.deep) : []),
+      ...(result.recipe ? [formatRecipeDiagnostics(result.recipe, d)] : []),
       ...withFillProbe(api => api.formatReport(result.probe || null, result.unfilledControls || []), [])
     ].join("\n");
+  }
+
+  // #226 本站配方的诊断：命中、过期、新保存、未保存或未使用，只有固定类别和计数，不含网址、字段名或配方内容。
+  function formatRecipeDiagnostics(recipe, d = null) {
+    const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
+    const reasons = { no_baseline: "没有可比较的普通填写", not_better: "没有比普通填写更好", nothing_filled: "没有确认填上的字段",
+      unsafe: "网址或字段名可能含个人信息", unlocatable: "字段没有稳定特征", too_large: "超过大小上限", cancelled: "已停止或网页已变化",
+      invalid: "校验没有通过", failed: "填写没有完成", action_missing: "要点的按钮找不到", action_changed: "要点的按钮对不上" };
+    switch (recipe?.status) {
+      case "hit":
+        return `本站配方：命中（定位 ${count(recipe.located)}/${count(recipe.total)}${recipe.extra ? `，新增条目 ${count(recipe.extra)}` : ""}`
+          + `，规则扫描补充 ${count(recipe.supplemented)}；结构${recipe.sameStructure ? "一致" : "有变化"}）；没有做页面分析`
+          + (d ? `；匹配简历调用模型 ${count(d.calls)} 次` : "");
+      case "stale":
+        return recipe.reason && reasons[recipe.reason]
+          ? `本站配方：过期（${reasons[recipe.reason]}）`
+          : `本站配方：过期（定位 ${count(recipe.located)}/${count(recipe.total)}，找不到 ${count(recipe.missing)}，有歧义 ${count(recipe.ambiguous)}），已退回普通扫描`;
+      case "saved":
+        return `本站配方：新保存（${count(recipe.fields)} 个字段）`;
+      case "not_saved":
+        return `本站配方：未保存（${reasons[recipe.reason] || "未满足保存条件"}）`;
+      case "save_failed":
+        return "本站配方：保存失败（浏览器存储不可用）";
+      default:
+        return "本站配方：未使用";
+    }
   }
 
   // #224 深度分析的诊断：只有字数、份数、计数、固定的校验码和档位，不含模型原文、网页文字或网址。
   function formatDeepDiagnostics(report) {
     const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
+    // #226 配方模式没有页面分析，只记模型调用（匹配简历）和动作。
+    if (report.mode === "recipe") {
+      return [`按本站配方填写：没有做页面分析；模型调用 ${count(report.calls)} 次（只用于匹配简历）`,
+        ...(report.actions ? formatDeepActions(report) : [])];
+    }
     const tier = ({ strong: "强", default: "日常（未设置强模型）" })[report.tierUsed] || "未取得";
     const validation = /^(?:通过|analyze_invalid（[a-z_]{1,32}）)$/.test(report.validation || "") ? report.validation : "未执行";
     return [
@@ -2557,8 +2906,9 @@
     const code = /^[a-z_]{1,32}$/.test(report.errorCode || "") ? report.errorCode : "";
     text.value = [
       `网申快填 v${chrome.runtime.getManifest().version}`,
-      `深度分析没有进入填写${code ? `；错误码：${code}` : ""}`,
-      ...formatDeepDiagnostics(report)
+      `${report.mode === "recipe" ? "按本站配方填写" : "深度分析"}没有进入填写${code ? `；错误码：${code}` : ""}`,
+      ...formatDeepDiagnostics(report),
+      ...(report.recipe ? [formatRecipeDiagnostics(report.recipe)] : [])
     ].join("\n");
     panel.hidden = false;
     panel.open = true;

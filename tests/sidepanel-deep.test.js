@@ -263,3 +263,59 @@ test("#225 a malformed plan never renders and cannot be confirmed", async () => 
   await ui.poll();
   assert.equal(ui.get("deep-confirm").hidden, true, "only a preview can be confirmed");
 });
+
+// --- #226 本站配方：侧栏只显示「有没有、是否过期」，删除和重新分析都交给页面；配方模式沿用同一张任务卡。
+test("#226 the 本站配方 row shows only when the page reports a saved recipe; stale is marked, stray data is ignored", async () => {
+  const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+  const fillView = html.slice(html.indexOf('id="fill-view"'), html.indexOf('id="fields-view"'));
+  assert.match(fillView, /id="recipe-line"[^>]*hidden/);
+  assert.match(fillView, /本站配方：<\/span><span id="recipe-state" class="chip chip--ok">已保存<\/span><button id="recipe-reanalyze"[^>]*>重新分析<\/button><button id="recipe-delete"[^>]*>删除<\/button>/);
+  const ui = await sidePanel();
+  assert.equal(ui.get("recipe-line").hidden, true);
+  ui.state.status = { ...ui.state.status, recipe: { saved: true, stale: false, url: "https://jobs.example.test/x", fields: 9 } };
+  await ui.poll();
+  assert.equal(ui.get("recipe-line").hidden, false);
+  assert.equal(ui.get("recipe-state").textContent, "已保存");
+  assert.ok(ui.get("recipe-state").classes.has("chip--ok"));
+  ui.state.status = { ...ui.state.status, recipe: { saved: true, stale: true } };
+  await ui.poll();
+  assert.equal(ui.get("recipe-state").textContent, "可能已过期");
+  assert.ok(ui.get("recipe-state").classes.has("chip--warn"));
+  ui.state.status = { ...ui.state.status, recipe: { saved: "yes" } };
+  await ui.poll();
+  assert.equal(ui.get("recipe-line").hidden, true, "only an explicit saved: true shows the row");
+  ui.state.status = { ...ui.state.status, recipe: { saved: true }, deep: view("analyzing") };
+  await ui.poll();
+  assert.equal(ui.get("recipe-line").hidden, true, "hidden while a deep run goes");
+});
+
+test("#226 删除 asks the page to delete this page's recipe; 重新分析 is the normal deep analysis with its consent", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, recipe: { saved: true, stale: false } };
+  await ui.poll();
+  await ui.click("recipe-delete");
+  assert.deepEqual(ui.calls.filter((call) => call.type === "RESUME_PANEL_RECIPE").map(({ action }) => action), ["delete"]);
+  await ui.click("recipe-reanalyze");
+  assert.equal(ui.get("deep-consent").hidden, false, "first use still explains what is sent");
+  assert.equal(ui.deepCalls().length, 0);
+  ui.state.status = { ...ui.state.status, deepConsent: true, recipe: { saved: true } };
+  await ui.poll();
+  await ui.get("deep-consent-cancel").listeners.click();
+  await ui.click("recipe-reanalyze");
+  assert.deepEqual(ui.deepCalls().map(({ action }) => action), ["start"]);
+});
+
+test("#226 recipe mode uses the same task card with its own title and steps, and says no page analysis was made", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, deep: view("preview", { mode: "recipe", planId: "plan-1", plan: [{ text: "基本信息：编辑" }], canConfirm: true, canCancel: true }) };
+  await ui.poll();
+  assert.equal(ui.get("task-title").textContent, "按本站配方填写");
+  assert.match(ui.get("task-steps").innerHTML, /核对网页.*确认操作.*填写网页.*结束/);
+  assert.doesNotMatch(ui.get("task-steps").innerHTML, /分析页面/);
+  await ui.click("deep-confirm");
+  assert.deepEqual(ui.deepCalls().map(({ action, planId }) => [action, planId]), [["confirm", "plan-1"]]);
+  ui.state.status = { ...ui.state.status, deep: view("completed", { mode: "recipe", message: "按本站配方填写：已填写 2 项。", result: { fields: 2, filled: 2, unfilled: 0, unconfirmed: 0 },
+    budget: { used: 1, limit: 6 } }) };
+  await ui.poll();
+  assert.equal(ui.get("deep-meta").textContent, "按本站配方填写，没有做页面分析；匹配简历调用模型 1 次。");
+});

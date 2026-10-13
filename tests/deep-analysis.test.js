@@ -427,7 +427,7 @@ test("the panel snapshot carries only fixed fields and counts, never page text o
   const h = harness();
   await h.controller.start();
   const done = await h.settle(finished);
-  assert.deepEqual(Object.keys(done).sort(), ["budget", "canCancel", "canConfirm", "canStop", "message", "notes", "phase", "plan", "planId",
+  assert.deepEqual(Object.keys(done).sort(), ["budget", "canCancel", "canConfirm", "canStop", "message", "mode", "notes", "phase", "plan", "planId",
     "progress", "requestId", "result"]);
   assert.deepEqual(done.result, { fields: 1, filled: 1, unfilled: 0, unconfirmed: 0 });
   assert.deepEqual([done.plan, done.planId, done.canConfirm, done.canCancel], [[], "", false, false], "no plan outside the preview");
