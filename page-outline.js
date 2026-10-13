@@ -291,10 +291,13 @@
       if (!text || chars(text).length > MAX_BUTTON_TEXT) continue;
       const start = node.parentElement;
       if (!start || start.closest?.(BUTTON_SELECTOR) || start.closest?.("label, select, option, textarea")) continue;
+      // 先按文字筛掉不像「编辑 / 展开 / 添加」的，再去算样式（getComputedStyle 很贵，长页面短文字很多）。
+      const startText = bare(start.textContent);
+      if (!ACTION_TEXT.test(startText)) continue;
       // 文字相同的祖先链（「＋」图标和文字常分在几层里）里，取最外层看得出能点的那个。
       let el = null;
       for (let current = start, depth = 0; current && depth <= MAX_TEXT_CLIMB; current = current.parentElement, depth += 1) {
-        if (current !== start && bare(current.textContent) !== bare(start.textContent)) break;
+        if (current !== start && bare(current.textContent) !== startText) break;
         if (pointerLike(current)) el = current;
       }
       if (!el) continue;

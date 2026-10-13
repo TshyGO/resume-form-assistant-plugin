@@ -498,3 +498,25 @@ test("北森真机结构：已有两条时同样数得清；找回按钮时同�
   assert.equal(result.done.add, 1);
   assert.deepEqual(dup.clicks, ["add"], "no second click when the button is ambiguous");
 });
+
+test("progress counts real clicks: 「论文：添加 ×2」「教育经历：添加 ×1」 shows 1/3, 2/3, 3/3 — never 2/2 while a click is still to come", async () => {
+  const { doc } = beisenPage({ education: 1, papers: 0 });
+  const { built, checked } = analyse(doc, beisenSpec(doc, ["edu", "papers"]));
+  const planned = plan(doc, built, checked.spec, [...records("教育经历", 2), ...records("论文", 2, "标题")]);
+  const steps = [];
+  const result = await run(doc, built, planned, { onProgress: (step) => steps.push(`${step.index}/${step.total}`) });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(steps, ["1/3", "2/3", "3/3"]);
+});
+
+test("a hidden template row with the same structure is not an entry; a visible one still makes the group uncountable", () => {
+  for (const [hidden, expected] of [[true, ["教育经历：添加 ×1"]], [false, []]]) {
+    const { doc, list } = beisenRealPage(2);
+    list.insertAdjacentHTML("afterbegin", REAL_ROW(0, false).replace('class="sc-AjmGg ebfZZH"', `class="sc-AjmGg ebfZZH"${hidden ? ' style="display:none"' : ""}`)
+      .replace(/<input type="text" placeholder="请输入">/g, "<span>—</span>"));
+    const rows = Array.from(list.children).slice(1).map((row) => row.querySelector("input"));
+    const { built, checked } = analyse(doc, { pageState: "editing", sections: [{ domain: "education", addRef: list.querySelector(".sc-lbhJGD"), rowRefs: rows }] });
+    const planned = plan(doc, built, checked.spec, records("教育经历", 3));
+    assert.deepEqual(planned.items.map((item) => item.label), expected, `hidden=${hidden}`);
+  }
+});

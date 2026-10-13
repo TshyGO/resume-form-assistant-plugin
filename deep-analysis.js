@@ -486,6 +486,12 @@
           set(run, "needs_action", `需要先在网页上手动点击${names}（可能会打开新页面），等输入框出现后，在出现输入框的页面再点「深度分析本页」。这一次没有填写任何内容。`);
           return;
         }
+        if (!plan.items.length && plan.blocked.length && !merged.fields.length) {
+          state.notes.push(...plan.blocked);
+          state.notes.splice(0, Math.max(0, state.notes.length - 3));
+          set(run, "needs_action", "有的条目不能自动新增（原因见下方），网页上也没有可以填写的字段。请先手动处理，再点「深度分析本页」。网页没有改动。");
+          return;
+        }
         if (plan.items.length || plan.blocked.length) {
           state.notes.push(...plan.manual.map(label => `需要你手动点击：${label}`), ...plan.blocked);
           state.notes.splice(0, Math.max(0, state.notes.length - 3));

@@ -200,7 +200,8 @@
   // 返回 { ok, code, message, done: { edit, expand, add }, scopes }；ok 为 false 时后面的动作一律没做。
   async function executePlan(plan, ctx) {
     const done = { edit: 0, expand: 0, add: 0 };
-    const total = plan.items.length;
+    // 进度按实际点击次数算：「添加 ×k」是 k 次点击（PR #279 审查）。
+    const total = plan.items.reduce((sum, item) => sum + (item.kind === "add" ? Number(item.count) || 0 : 1), 0);
     const end = (code, message = "") => ({ ok: false, code, message, done, scopes: [] });
     if (!planStillValid(plan, ctx)) return end("target_changed");
     let index = 0;
@@ -229,7 +230,7 @@
       try {
         const result = await ctx.formAgent.execute(plan.adds.plan, plan.adds.snapshot, stopped, step => {
           index += 1;
-          ctx.onProgress?.({ index: Math.min(index, total), total, label: `${ctx.formAgent.labels[step.domain] || "条目"}：添加 ${step.index}/${step.count}`, kind: "add" });
+          ctx.onProgress?.({ index, total, label: `${ctx.formAgent.labels[step.domain] || "条目"}：添加 ${step.index}/${step.count}`, kind: "add" });
         }, () => !ctx.stopped());
         done.add = result.added;
         scopes = result.scopes;

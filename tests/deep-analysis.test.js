@@ -862,3 +862,17 @@ test("a view page with no input at all but an 「编辑」 button is still analy
     assert.equal(h.calls.analyze.length, 0, "nothing is sent for a page with nothing to fill or open");
   }
 });
+
+test("only blocked adds and nothing to fill: the user is asked to handle it by hand, no empty 「继续填写」 preview", async () => {
+  const h = actionHarness({
+    plan: { items: [], manual: [], blocked: ["教育经历需要新增 6 条，超过每次 5 条的上限，这次不会自动新增，请先手动新增一部分。"], adds: null },
+    analyze: async () => ({ success: true, spec: { pageState: "editing", sections: [{ domain: "education", addRef: "e8", rowRefs: [] }], fields: [] } })
+  });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "needs_action");
+  assert.match(done.message, /请先手动处理/);
+  assert.ok(done.notes.some((note) => note.includes("超过每次 5 条的上限")));
+  assert.equal(h.calls.fill.length, 0);
+  assert.equal(h.actionCalls.executed.length, 0);
+});
