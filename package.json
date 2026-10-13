@@ -6,7 +6,9 @@
   "scripts": {
     "gen:types": "node desktop/crates/protocol/js/gen-types.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:usage-metrics": "node --test tests/usage-download-metrics.test.js",
+    "usage:downloads": "node desktop/scripts/usage-metrics/snapshot.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.278",
