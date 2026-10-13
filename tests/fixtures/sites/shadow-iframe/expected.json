@@ -1,0 +1,17 @@
+{
+  "source": "tests/fixtures/sites/shadow-iframe/page.html（合成：表单一半在开放 Shadow DOM、一半在同源 iframe；大纲取自 Edge 155 真机，脚本挂载的 Shadow DOM 在 jsdom 里采集不到）",
+  "annotatedBy": "人工标注，#224",
+  "pageState": "editing",
+  "fields": [
+    { "ref": "e1", "label": "姓名", "group": "基本信息", "control": "text" },
+    { "ref": "e2", "label": "手机号码", "group": "基本信息", "control": "text" },
+    { "ref": "e3", "label": "邮箱", "group": "基本信息", "control": "text" },
+    { "ref": "e4", "label": "现居城市", "group": "基本信息", "control": "text" },
+    { "ref": "e5", "label": "学校名称", "group": "教育经历", "control": "text" },
+    { "ref": "e6", "label": "专业", "group": "教育经历", "control": "text" },
+    { "ref": "e7", "label": "学历", "group": "教育经历", "control": "native-select" },
+    { "ref": "e8", "label": "开始时间", "group": "教育经历", "control": "date" }
+  ],
+  "notFields": [],
+  "preActions": []
+}

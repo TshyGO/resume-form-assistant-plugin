@@ -1,0 +1,36 @@
+[区块]
+  e1 input[text] ph="搜索职位" 页头
+  e2 link "首页"
+  e3 link "社会招聘"
+  e4 link "校园招聘"
+[区块] 求职意向
+  e5 combobox ← 面试站点
+  e6 combobox ← 意向工作地点
+[区块] 教育经历
+  e7 input[text] ph="请输入" ← 学校名称
+  e8 input[text] ph="请输入" ← 班级排名
+  e9 input[text] ph="请输入" ← 所在实验室名称
+  e10 input[text] ph="请输入" ← 毕业论文/设计/作品
+  文字 "是否为海外留学经历"
+  e11 date-picker ph="请选择日期" ← 开始时间
+  e12 date-picker ph="请选择日期" ← 结束时间
+[区块] 论文/专著
+  e13 input[text] ph="请输入" ← 名称
+  e14 date-picker ph="请选择日期" ← 发表时间
+[区块] 获奖/专利
+  e15 input[text] ph="请输入" ← 获奖/专利名称
+  e16 textarea ph="请输入" ← 获奖/专利描述
+  e17 date-picker ph="请选择日期" ← 获得时间
+[区块] 学生工作经历
+  e18 input[text] ph="请输入" ← 名称
+  e19 date-picker ph="请选择日期" ← 开始时间
+  e20 date-picker ph="请选择日期" ← 结束时间
+  e21 checkbox ← 至今
+  e22 textarea ph="请输入" ← 实践描述
+[区块] 证书
+  e23 combobox ← 证书种类
+  e24 input[text] ph="请输入" ← 证书名称
+  e25 date-picker ph="请选择日期" ← 获得时间
+[区块] 附加问题
+  e26 textarea ph="请输入" ← 在校期间是否有补考、重修情况？如有，请列出具体科目、次数以及当时的原因说明
+  e27 textarea ph="请输入" ← 请简要描述你的个人优缺点

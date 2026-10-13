@@ -203,7 +203,8 @@
 
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
   // notForm：pageType() 判断这不是网申填写页。
-  function emptyPageHint(probe, { notForm = false } = {}) {
+  // deepAvailable（#224）：侧栏有「深度分析本页」时，同源框架和自定义控件改指向它（它读得到）；跨域框架照旧。
+  function emptyPageHint(probe, { notForm = false, deepAvailable = false } = {}) {
     if (!probe) return "";
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
@@ -213,9 +214,11 @@
         ? "如果申请表就在这个页面的内嵌框架里，插件暂时读不到。" : ""}`;
     }
     if (probe.frames.crossOrigin > 0 || probe.frames.frameInputs > 0) {
+      if (deepAvailable && probe.frames.frameInputs > 0) return "表单可能在网页的内嵌框架里，一键填写读不到。可以试试下方的「深度分析本页」。";
       return "表单可能在网页的内嵌框架里，插件暂时读不到。可以把侧栏的「填写诊断」复制给我们。";
     }
     if (probe.custom.total > 0 || probe.shadowHosts > 0) {
+      if (deepAvailable) return "这个网页用的输入控件一键填写暂时识别不了。可以试试下方的「深度分析本页」。";
       return "这个网页用的输入控件插件暂时识别不了。可以把侧栏的「填写诊断」复制给我们。";
     }
     return "";
@@ -245,7 +248,8 @@
     if (unfilled.length) {
       lines.push("没填上的字段（控件结构）：");
       for (const item of unfilled.slice(0, MAX_LISTED)) {
-        lines.push(`- ${safeLabel(item.label)}：${formatControl(item.control)}${item.reason ? `｜${item.reason}` : ""}`);
+        const operated = /^[a-z-]{1,20}$/.test(item.operated || "") ? `｜按 ${item.operated} 操作` : "";
+        lines.push(`- ${safeLabel(item.label)}：${formatControl(item.control)}${operated}${item.reason ? `｜${item.reason}` : ""}`);
       }
       if (unfilled.length > MAX_LISTED) lines.push(`- 还有 ${unfilled.length - MAX_LISTED} 个未列出`);
     }

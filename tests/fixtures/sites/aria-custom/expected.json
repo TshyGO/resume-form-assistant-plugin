@@ -1,0 +1,45 @@
+{
+  "source": "tests/fixtures/control-adapters/custom-aria.html（ARIA 自定义下拉与级联的合成夹具，#222）",
+  "annotatedBy": "人工标注，#224",
+  "pageState": "editing",
+  "fields": [
+    {
+      "ref": "e1",
+      "label": "学历",
+      "group": "",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e2",
+      "label": "学校",
+      "group": "",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e3",
+      "label": "籍贯",
+      "group": "",
+      "control": "cascader"
+    },
+    {
+      "ref": "e4",
+      "label": "拒绝提交",
+      "group": "",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e5",
+      "label": "失焦回滚",
+      "group": "",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e6",
+      "label": "用户修改保护",
+      "group": "",
+      "control": "custom-select"
+    }
+  ],
+  "notFields": [],
+  "preActions": []
+}

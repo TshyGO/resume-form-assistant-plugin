@@ -77,13 +77,22 @@
               <button class="fill-button" id="fill-button" type="button">一键 AI 填写</button>
               <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
               <button class="repeat-button" id="repeat-button" type="button">AI 辅助新增条目</button>
+              <button class="deep-button" id="deep-button" type="button" title="让 AI 先看懂页面结构再填写，适合常规填写漏填或填不上的页面">深度分析本页</button>
               <p id="fill-reason" class="card-hint fill-reason" hidden></p>
               <div id="fill-result" class="fill-result" role="status" hidden></div>
+              <div id="deep-offer" class="deep-offer" role="region" aria-label="深度分析本页" hidden>
+                <p class="deep-offer__text">常规填写效果不理想？可以让 AI 先看懂这个页面的结构，再重新匹配和填写。</p>
+                <button id="deep-offer-start" type="button">深度分析本页</button>
+              </div>
               <p class="safety-note"><span>填写后请核对网页内容，插件<strong>不会自动提交</strong>表单，提交由你在招聘网站上完成。</span></p>
             </section>
             <div id="feedback-notice-root" hidden></div>
 
-            <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-label="保存到我的信息" hidden>
+            <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-labelledby="profile-offer-heading" hidden>
+              <div class="card-head">
+                <h2 id="profile-offer-heading" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="2.5"/><path d="M8 8.5h8M8 12h5M15.5 15v4M13.5 17h4"/></svg>补充字段</h2>
+                <span id="profile-offer-count" class="chip" hidden></span>
+              </div>
               <p id="profile-offer-text" class="offer-title"></p>
               <p id="profile-offer-intro" class="profile-intro"></p>
               <div id="profile-offer-result" class="profile-result" role="status" hidden></div>
@@ -158,6 +167,31 @@
                     <button type="button" id="repeat-cancel" hidden>取消</button>
                     <button type="button" id="repeat-stop" hidden>停止</button>
                     <button type="button" id="repeat-dismiss" hidden>知道了</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="task-flow" id="task-flow-deep" data-task="deep">
+                <div id="deep-consent" class="repeat-card deep-card" hidden>
+                  <p class="repeat-card__message">深度分析会把本页的<strong>结构和字段名</strong>发给桌面设置的强模型（没有设置强模型时用当前服务商），找出常规填写漏掉的字段，通常需要 10～60 秒。</p>
+                  <ul class="deep-card__list">
+                    <li>不发送输入框里已有的内容，密码框整体跳过；页面上像手机号、邮箱、证件号或和你简历相同的文字，发送前换成「〔内容〕」。</li>
+                    <li>分析之后的填写匹配和「一键 AI 填写」一样，会把相关的简历字段发给 AI。</li>
+                    <li>不会点击网页上的按钮，不会提交、保存或投递。每次分析最多调用 6 次模型。</li>
+                  </ul>
+                  <div class="repeat-card__actions task-foot">
+                    <button type="button" id="deep-consent-confirm" class="repeat-card__primary">同意并开始分析</button>
+                    <button type="button" id="deep-consent-cancel">取消</button>
+                  </div>
+                </div>
+                <div id="deep-card" class="repeat-card deep-card" hidden>
+                  <p id="deep-message" class="repeat-card__message" role="status" aria-live="polite"></p>
+                  <ul id="deep-notes" class="deep-card__list" hidden></ul>
+                  <p id="deep-meta" class="deep-card__meta" hidden></p>
+                  <div class="repeat-card__actions task-foot">
+                    <button type="button" id="deep-stop" hidden>停止</button>
+                    <button type="button" id="deep-retry" hidden>重新分析</button>
+                    <button type="button" id="deep-dismiss" hidden>知道了</button>
                   </div>
                 </div>
               </div>
