@@ -13,9 +13,19 @@ if (!['macos-arm64', 'windows-x64'].includes(platform) || !binaryInput || !desti
   throw new Error('Usage: package-metrics-test.mjs macos-arm64|windows-x64 binary-or-app output-directory');
 }
 const destination = resolve(destinationInput);
-mkdirSync(destination, { recursive: true });
 const input = resolve(binaryInput);
-if (!statSync(input)) throw new Error('Acceptance binary missing');
+let inputInfo;
+try {
+  inputInfo = statSync(input);
+} catch {
+  console.error('Acceptance binary missing or inaccessible. Check the input path.');
+  process.exit(1);
+}
+if (platform === 'macos-arm64' ? !inputInfo.isDirectory() : !inputInfo.isFile()) {
+  console.error('Acceptance input must be a Mac app directory or a Windows executable file.');
+  process.exit(1);
+}
+mkdirSync(destination, { recursive: true });
 const name = platform === 'macos-arm64' ? 'Resume Metrics Test.app' : 'resume-pro-desktop.exe';
 cpSync(input, join(destination, name), { recursive: true });
 const pluginZip = join(destination, 'plugin-original.zip');

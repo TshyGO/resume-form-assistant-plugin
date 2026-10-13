@@ -152,6 +152,46 @@ mod tests {
         assert_eq!(std::fs::read(real.join("sentinel")).unwrap(), b"unchanged");
         assert_eq!(std::fs::read_dir(real).unwrap().count(), 1);
     }
+    #[cfg(windows)]
+    #[test]
+    fn windows_junctions_in_namespace_data_and_cache_are_rejected() {
+        fn junction(link: &Path, target: &Path) {
+            let result = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("create test junction");
+            assert!(
+                result.status.success(),
+                "junction creation failed: {:?}",
+                result
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("synthetic-external");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("sentinel"), b"unchanged").unwrap();
+        let root = root_under(dir.path());
+        let cache = prepare_directories(&root).unwrap();
+        std::fs::remove_dir(&cache).unwrap();
+        junction(&cache, &real);
+        assert!(prepare_directories(&root).is_err());
+        std::fs::remove_dir(&cache).unwrap();
+        std::fs::create_dir(&cache).unwrap();
+        let nested = root.join("archive");
+        junction(&nested, &real);
+        assert!(prepare_directories(&root).is_err());
+        std::fs::remove_dir(&nested).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        std::fs::remove_dir(&cache).unwrap();
+        std::fs::remove_dir(root.parent().unwrap()).unwrap();
+        junction(root.parent().unwrap(), &real);
+        assert!(prepare_directories(&root).is_err());
+        std::fs::remove_dir(root.parent().unwrap()).unwrap();
+        assert_eq!(std::fs::read(real.join("sentinel")).unwrap(), b"unchanged");
+        assert_eq!(std::fs::read_dir(real).unwrap().count(), 1);
+    }
     #[cfg(unix)]
     #[test]
     fn browser_profile_singleton_links_do_not_block_the_isolated_app() {

@@ -43,6 +43,9 @@ jobs:
           workspaces: desktop/src-tauri
       - run: npm ci
         working-directory: desktop
+      - name: Test acceptance directory isolation
+        run: cargo test --features usage-metrics-acceptance metrics_acceptance::tests
+        working-directory: desktop/src-tauri
       # Ordinary CI tests remain unable to send statistics; only this explicitly
       # isolated release feature can target the fixed TEST endpoint after disclosure.
       - run: npm run tauri build -- --no-bundle --features usage-metrics-acceptance --config src-tauri/tauri.metrics-test.json --target ${{ matrix.target }}
