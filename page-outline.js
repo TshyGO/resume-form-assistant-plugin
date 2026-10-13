@@ -21,6 +21,10 @@
     ["下拉", /(?:^|[-_])(?:select|selector|dropdown|combobox|combo|picker)(?:$|[-_])/i]];
   const SHAPE_DEPTH = 4;
   const BUTTON_SELECTOR = "button, a[href], [role='button'], [role='link'], input[type='button'], input[type='submit'], input[type='reset']";
+  // #225/#195：不少网申页（北森等）的「＋ 添加」「编辑」是带点击样式的 div / span，不是按钮。只收文字很短、
+  // 像「编辑 / 展开 / 添加」、并且看得出能点（手形光标、onclick、可聚焦）的元素；别的文字不会因此变成按钮。
+  const ACTION_TEXT = /^(?:编辑|修改|完善|展开|收起|更多|查看更多|新增|添加|增加|继续添加|edit|modify|add|more|expand)/i;
+  const MAX_TEXT_CLIMB = 3;
   const ARIA_CONTROL_SELECTOR = "[contenteditable]:not([contenteditable='false']), [role='textbox'], [role='listbox'], [role='radiogroup'], [role='switch'], [role='spinbutton'], [role='checkbox']";
   const TEXT_CLUE_SELECTOR = "label, legend, th, dt, [role='heading'], h1, h2, h3, h4, h5, h6, caption";
   const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, legend, caption, [role='heading']";
@@ -200,6 +204,22 @@
     return ["submit", "reset", "image"].includes(type);
   }
 
+  const bare = text => String(text ?? "").replace(/[\s\p{P}\p{S}]/gu, "");
+  function pointerLike(el) {
+    if (el.hasAttribute?.("onclick") || (el.hasAttribute?.("tabindex") && el.getAttribute("tabindex") !== "-1")) return true;
+    try {
+      return el.ownerDocument?.defaultView?.getComputedStyle?.(el)?.cursor === "pointer";
+    } catch {
+      return false;
+    }
+  }
+
+  // 按钮的结构描述：大纲生成时用它，#225 点击前也用它按网页当前的样子重新判断一次（文字、提交、跨页、跨站）。
+  function describeButton(el) {
+    return { text: buttonText(el), submit: isSubmitLike(el), leaves: leavesPage(el), crossSite: leavesSite(el),
+      link: el.tagName === "A" || attr(el, "role") === "link" };
+  }
+
   // 一个作用域（文档或开放 Shadow root）里的候选，按出现顺序排好。嵌套的作用域在它的宿主位置展开。
   // inEditable：这个作用域整个在富文本编辑框里（编辑框宿主带开放 Shadow DOM，或编辑框里嵌着同源框架）。
   // 进入内层后沿 parentElement 找不到外面的编辑框，所以把状态一路往下传（PR #271 审查）。
@@ -257,10 +277,32 @@
     for (const el of Array.from(root.querySelectorAll(BUTTON_SELECTOR))) {
       if (ctx.exclude(el) || !ctx.isVisible(el)) continue;
       if (insideClaimed(el) || editableHere(el)) continue;
-      const text = buttonText(el);
+      const described = describeButton(el);
+      if (!described.text || chars(described.text).length > MAX_BUTTON_TEXT) continue;
+      add(el, { type: "button", element: el, ...described, frame: ctx.frame });
+    }
+
+    // 带点击样式的短文字（见 ACTION_TEXT）：取文字相同的最外层元素，一个元素只列一次。
+    const seenClickable = new Set();
+    const ownerDoc = root.ownerDocument || root;
+    const walker = typeof ownerDoc.createTreeWalker === "function" ? ownerDoc.createTreeWalker(root, 4) : null;
+    for (let node = walker?.nextNode(); node; node = walker.nextNode()) {
+      const text = squash(node.data);
       if (!text || chars(text).length > MAX_BUTTON_TEXT) continue;
-      add(el, { type: "button", element: el, text, submit: isSubmitLike(el), leaves: leavesPage(el), crossSite: leavesSite(el),
-        link: el.tagName === "A" || attr(el, "role") === "link", frame: ctx.frame });
+      const start = node.parentElement;
+      if (!start || start.closest?.(BUTTON_SELECTOR) || start.closest?.("label, select, option, textarea")) continue;
+      // 文字相同的祖先链（「＋」图标和文字常分在几层里）里，取最外层看得出能点的那个。
+      let el = null;
+      for (let current = start, depth = 0; current && depth <= MAX_TEXT_CLIMB; current = current.parentElement, depth += 1) {
+        if (current !== start && bare(current.textContent) !== bare(start.textContent)) break;
+        if (pointerLike(current)) el = current;
+      }
+      if (!el) continue;
+      const label = squash(el.textContent);
+      if (seenClickable.has(el) || chars(label).length > MAX_BUTTON_TEXT || !ACTION_TEXT.test(bare(label))) continue;
+      if (ctx.exclude(el) || !ctx.isVisible(el) || insideClaimed(el) || editableHere(el) || el.querySelector?.("input, select, textarea, button, a[href]")) continue;
+      seenClickable.add(el);
+      add(el, { type: "button", element: el, ...describeButton(el), frame: ctx.frame });
     }
 
     for (const el of Array.from(root.querySelectorAll(TEXT_CLUE_SELECTOR))) {
@@ -336,7 +378,7 @@
 
   // 把候选排成区块。区块标题取最近的标题文字，字段自己的区块（field-scan 判断的）优先。
   // 题目一类的文字先暂存，跟着下一个控件进同一个区块；和某个控件题目相同的不再重复列出。
-  function toBlocks(items, redact) {
+  function toBlocks(items, redact, titles = new Map()) {
     const blocks = [];
     let current = null;
     let pending = [];
@@ -374,6 +416,7 @@
       const text = lineFor(item, redact);
       current.lines.push({ text, ref: item.ref, shape: text.replace(/^e\d+\s/, ""), clue: false });
       current.refs.push(item.ref);
+      titles.set(item.ref, current.title || "");
     }
     flush();
     return blocks.filter(block => block.lines.length);
@@ -497,14 +540,16 @@
       else stats.buttons += 1;
     }
     stats.candidates = nodes.size;
-    const blocks = toBlocks(items, redact);
+    // titles：编号 → 所在区块的标题（已脱敏），#225 预览「基本信息：编辑」时用。
+    const titles = new Map();
+    const blocks = toBlocks(items, redact, titles);
     const parts = fitBlocks(blocks, options.maxChars || MAX_CHARS, options.maxParts || MAX_PARTS, stats);
     stats.parts = parts.length;
     stats.chars = parts.reduce((sum, part) => sum + part.text.length, 0);
-    return { parts, nodes, stats, redact };
+    return { parts, nodes, stats, redact, titles };
   }
 
-  const api = { MAX_SEGMENT, MAX_CHARS, MAX_PARTS, REDACTED, build, createRedactor, sensitiveShape, domKindOf };
+  const api = { MAX_SEGMENT, MAX_CHARS, MAX_PARTS, MAX_BUTTON_TEXT, REDACTED, build, createRedactor, sensitiveShape, domKindOf, describeButton };
   scope.ResumeProPageOutline = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

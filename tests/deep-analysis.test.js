@@ -427,8 +427,10 @@ test("the panel snapshot carries only fixed fields and counts, never page text o
   const h = harness();
   await h.controller.start();
   const done = await h.settle(finished);
-  assert.deepEqual(Object.keys(done).sort(), ["budget", "canStop", "message", "notes", "phase", "progress", "requestId", "result"]);
+  assert.deepEqual(Object.keys(done).sort(), ["budget", "canCancel", "canConfirm", "canStop", "message", "notes", "phase", "plan", "planId",
+    "progress", "requestId", "result"]);
   assert.deepEqual(done.result, { fields: 1, filled: 1, unfilled: 0, unconfirmed: 0 });
+  assert.deepEqual([done.plan, done.planId, done.canConfirm, done.canCancel], [[], "", false, false], "no plan outside the preview");
   assert.equal(h.controller.dismiss().ok, true);
   assert.equal(h.controller.describe().phase, "idle");
 });
@@ -532,4 +534,297 @@ test("add buttons: the same 「添加」 text passes on the page and is refused 
   const edit = (ref) => deep.validateSpec({ pageState: "viewing", preActions: [{ ref, kind: "edit" }] }, context);
   assert.equal(edit(crossPageEdit).ok, true, "a same-site edit page is only suggested to the user");
   assert.equal(edit(crossSiteEdit).reason, "forbidden_action", "a link to another site is never suggested");
+});
+
+// --- #225 确认后的编辑、展开与新增 ----------------------------------------------------------------
+
+// 动作替身：计划由 planActions 给出，executeActions 记录调用并可控制结果。网页侧的点击与核验见 page-actions.test.js。
+function actionHarness({ plan, execute, analyze, parts1 = 1, parts2 = 1, fill } = {}) {
+  const nodes = nodesFor(4);
+  nodes.set("e9", { type: "button", text: "编辑", submit: false, leaves: false, element: { isConnected: true } });
+  nodes.set("e8", { type: "button", text: "添加", submit: false, leaves: false, element: { isConnected: true } });
+  let round = 0;
+  const calls = { executed: [], highlights: [], outlines: 0 };
+  const button = { isConnected: true, id: "edit" };
+  const h = harness({
+    buildOutline: () => {
+      calls.outlines += 1;
+      round += 1;
+      const count = round === 1 ? parts1 : parts2;
+      return { parts: Array.from({ length: count }, (_, i) => ({ text: `part ${i}`, refs: ["e1", "e2", "e3", "e4", "e8", "e9"] })), nodes,
+        redact: outline.createRedactor([]), stats: { chars: 10, parts: count, controls: 4 } };
+    },
+    analyze: async (request) => {
+      h.calls.analyze.push(request);
+      if (analyze) return analyze(request);
+      return round === 1
+        ? { success: true, tierUsed: "strong", spec: { pageState: "viewing", preActions: [{ ref: "e9", kind: "edit" }], fields: [] } }
+        : { success: true, tierUsed: "strong", spec: { pageState: "editing", preActions: [{ ref: "e9", kind: "edit" }], fields: [{ ref: "e1", label: "姓名", control: "text" }] } };
+    },
+    planActions: () => plan || { items: [{ kind: "edit", element: button, label: "基本信息：编辑" }], manual: [], blocked: [], adds: null },
+    executeActions: async (planned, hooks) => {
+      calls.executed.push(planned);
+      return execute ? execute(planned, hooks) : { ok: true, done: { edit: 1, expand: 0, add: 0 }, scopes: [] };
+    },
+    highlight: (element) => calls.highlights.push(element),
+    ...(fill ? { fill } : {})
+  });
+  return { ...h, actionCalls: calls, button, round: () => round };
+}
+
+const previewing = (state) => state.phase === "preview";
+
+test("a plan waits for the user: nothing is clicked or filled until 确认, and the preview lists the steps", async () => {
+  const h = actionHarness();
+  await h.controller.start();
+  const state = await h.settle(previewing);
+  assert.deepEqual(state.plan, [{ text: "基本信息：编辑" }]);
+  assert.ok(state.planId);
+  assert.equal(state.canConfirm, true);
+  assert.equal(state.canCancel, true);
+  assert.equal(state.canStop, false);
+  for (let i = 0; i < 20; i++) await tick();
+  assert.equal(h.actionCalls.executed.length, 0);
+  assert.equal(h.calls.fill.length, 0);
+  assert.equal(h.controller.active(), true, "the preview holds the page: other fills wait");
+});
+
+test("confirm → act → rebuild the outline → analyse once more → fill; the second round's actions are not executed", async () => {
+  const h = actionHarness();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  assert.deepEqual(h.controller.confirm(requestId, state.planId), { ok: true });
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "completed", done.message);
+  assert.equal(h.actionCalls.executed.length, 1, "only the confirmed plan runs");
+  assert.equal(h.actionCalls.outlines, 2, "the outline is rebuilt after the actions");
+  assert.equal(h.calls.analyze.length, 2, "one re-analysis, no more");
+  assert.match(done.message, /已完成：编辑 1 处。深度填写/);
+  assert.ok(done.notes.some((note) => note.includes("这一次不再自动点击")), "round two's 编辑 is only mentioned");
+  assert.equal(h.calls.fill[0].maxCalls, 4, "analysis, re-analysis, then the fill shares what is left of six");
+  const report = h.controller.report();
+  assert.equal(report.rounds, 2);
+  assert.deepEqual(report.actions.done, { edit: 1, expand: 0, add: 0 });
+  assert.deepEqual(report.actions.planned, { edit: 1, expand: 0, add: 0 });
+});
+
+test("an old preview, a wrong plan id or a second 确认 is refused", async () => {
+  const h = actionHarness();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  assert.equal(h.controller.confirm(requestId, "other-plan").ok, false);
+  assert.equal(h.controller.confirm("old-run", state.planId).ok, false);
+  assert.equal(h.controller.confirm(requestId, state.planId).ok, true);
+  assert.equal(h.controller.confirm(requestId, state.planId).ok, false, "a double click finds no preview");
+  await h.settle(finished);
+  assert.equal(h.actionCalls.executed.length, 1);
+});
+
+test("cancel in the preview ends the run with nothing clicked; a later confirm does nothing", async () => {
+  const h = actionHarness();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  assert.equal(h.controller.cancel(requestId).ok, true);
+  const done = h.controller.describe();
+  assert.equal(done.phase, "stopped");
+  assert.match(done.message, /已取消，网页没有改动/);
+  assert.equal(h.controller.confirm(requestId, state.planId).ok, false);
+  assert.equal(h.actionCalls.executed.length, 0);
+  assert.equal(h.controller.report().actions.stop, "cancelled");
+  assert.equal(h.actionCalls.highlights.at(-1), null, "the page highlight is cleared");
+});
+
+test("an address change while the preview is open voids the plan before any click", async () => {
+  const h = actionHarness();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.env.url = "https://jobs.example.test/other";
+  assert.equal(h.controller.confirm(requestId, state.planId).ok, false);
+  assert.equal(h.controller.describe().phase, "stopped");
+  assert.equal(h.actionCalls.executed.length, 0);
+});
+
+test("hover highlights only the current plan's targets and is cleared once the preview ends", async () => {
+  const h = actionHarness();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.highlight(requestId, state.planId, 0);
+  h.controller.highlight(requestId, "old-plan", 0);
+  h.controller.highlight(requestId, state.planId, 7);
+  assert.deepEqual(h.actionCalls.highlights, [h.button, null, null]);
+  h.controller.confirm(requestId, state.planId);
+  await h.settle(finished);
+  assert.equal(h.actionCalls.highlights.at(-1), null);
+});
+
+test("a stopped action run reports what was done and never re-analyses or fills", async () => {
+  for (const [code, phase, pattern] of [["no_change", "failed", /没有出现新的输入框/], ["stopped", "stopped", /已停止/], ["target_changed", "failed", /按钮已经变化/],
+    ["values_changed", "failed", /已有的内容被改动/], ["timeout", "failed", /5 秒内/]]) {
+    const h = actionHarness({ execute: async () => ({ ok: false, code, done: { edit: 1, expand: 0, add: 0 }, scopes: [] }) });
+    const { requestId } = await h.controller.start();
+    const state = await h.settle(previewing);
+    h.controller.confirm(requestId, state.planId);
+    const done = await h.settle(finished);
+    assert.equal(done.phase, phase, code);
+    assert.match(done.message, pattern, code);
+    assert.match(done.message, /已完成：编辑 1 处/, code);
+    assert.equal(h.calls.analyze.length, 1, `${code}: no re-analysis`);
+    assert.equal(h.calls.fill.length, 0, `${code}: no fill`);
+    assert.equal(h.controller.report().actions.stop, code);
+  }
+});
+
+test("stop during the actions is passed to the executor, which stops before its next click", async () => {
+  let release;
+  const h = actionHarness({ execute: (planned, hooks) => new Promise((resolve) => {
+    release = () => resolve({ ok: false, code: hooks.stopped() || "no_change", done: { edit: 0, expand: 0, add: 0 }, scopes: [] });
+  }) });
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  await h.settle((s) => s.phase === "acting");
+  assert.equal(h.controller.describe().canStop, true);
+  assert.equal(h.controller.stop(requestId).ok, true);
+  assert.equal(h.controller.describe().phase, "acting", "the executor reports first");
+  release();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "stopped");
+  assert.equal(h.calls.fill.length, 0);
+});
+
+test("navigation during the actions is seen by the executor as navigated", async () => {
+  let seen = "";
+  const h = actionHarness({ execute: async (planned, hooks) => {
+    h.env.url = "https://jobs.example.test/next";
+    seen = hooks.stopped();
+    return { ok: false, code: seen, done: { edit: 1, expand: 0, add: 0 }, scopes: [] };
+  } });
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  const done = await h.settle(finished);
+  assert.equal(seen, "navigated");
+  assert.equal(done.phase, "stopped");
+  assert.match(done.message, /网页地址已变化/);
+});
+
+test("a late re-analysis reply after stop is dropped; the result still says the edit was done", async () => {
+  const reply = deferred();
+  let round = 0;
+  const h = actionHarness({ analyze: async (request) => {
+    round += 1;
+    if (round === 1) return { success: true, spec: { pageState: "viewing", preActions: [{ ref: "e9", kind: "edit" }], fields: [] } };
+    return reply.promise;
+  } });
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  await h.settle((s) => s.phase === "analyzing" && s.progress?.round === 2);
+  h.controller.stop(requestId);
+  reply.resolve({ success: true, spec: { pageState: "editing", fields: [{ ref: "e1", control: "text" }] } });
+  for (let i = 0; i < 10; i++) await tick();
+  const done = h.controller.describe();
+  assert.equal(done.phase, "stopped");
+  assert.match(done.message, /已完成：编辑 1 处/);
+  assert.equal(h.calls.fill.length, 0);
+});
+
+test("analysis, re-analysis and matching share one budget of six: three parts twice leave nothing for the fill", async () => {
+  const h = actionHarness({ parts1: 3, parts2: 3, analyze: async () => ({ success: true, spec: { pageState: "viewing", preActions: [{ ref: "e9", kind: "edit" }],
+    fields: [{ ref: "e1", label: "姓名", control: "text" }] } }),
+  // 和 worker 一样：maxCalls 为 0 时一次也不调用。
+  fill: async (options) => { h.calls.fill.push(options); return { outcome: "partial", filledCount: 0, unfilledCount: 1, unconfirmedCount: 0,
+    calls: Math.min(1, options.maxCalls), budgetExhausted: options.maxCalls === 0 }; } });
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  const done = await h.settle(finished);
+  assert.equal(h.calls.analyze.length, 6);
+  assert.equal(h.calls.fill[0].maxCalls, 0, "nothing reset the budget");
+  assert.deepEqual(done.budget, { used: 6, limit: 6 });
+  assert.ok(done.notes.some((note) => note.includes("6 次模型调用上限")));
+});
+
+test("when the budget runs out before the re-analysis the run stops and says the actions were done", async () => {
+  const h = actionHarness({ parts1: 3, parts2: 3, analyze: async () => ({ success: true, spec: { pageState: "viewing", preActions: [{ ref: "e9", kind: "edit" }], fields: [] } }) });
+  // 6 次里第一轮用掉 3 次；第二轮 3 份正好用完，填写拿不到预算——再多一份就该停。
+  h.deps.buildOutline = (() => {
+    let n = 0;
+    const nodes = nodesFor(4);
+    nodes.set("e9", { type: "button", text: "编辑", submit: false, leaves: false });
+    return () => {
+      n += 1;
+      const count = n === 1 ? 3 : 4;
+      return { parts: Array.from({ length: count }, () => ({ text: "p", refs: ["e1", "e9"] })), nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: count, controls: 4 } };
+    };
+  })();
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "failed");
+  assert.match(done.message, /调用上限.*前面的操作已经完成/);
+  assert.equal(h.calls.analyze.length, 6);
+  assert.equal(h.calls.fill.length, 0);
+});
+
+test("only blocked adds: the preview asks before filling the existing fields, with no re-analysis", async () => {
+  const h = actionHarness({
+    plan: { items: [], manual: [], blocked: ["教育经历需要新增 7 条，超过每次 5 条的上限，这次不会自动新增，请先手动新增一部分。"], adds: null },
+    analyze: async () => ({ success: true, spec: { pageState: "editing",
+      sections: [{ domain: "education", addRef: "e8", rowRefs: ["e1"] }], fields: [{ ref: "e2", label: "学校", control: "text" }] } })
+  });
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  assert.deepEqual(state.plan, []);
+  assert.ok(state.notes.some((note) => note.includes("超过每次 5 条的上限")));
+  assert.equal(h.calls.fill.length, 0, "nothing is filled before the user says so");
+  h.controller.confirm(requestId, state.planId);
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "completed");
+  assert.equal(h.actionCalls.executed.length, 0);
+  assert.equal(h.actionCalls.outlines, 1);
+});
+
+test("only cross-page edits: the user is asked to click them by hand, as before; nothing runs", async () => {
+  const h = actionHarness({ plan: { items: [], manual: ["基本信息：修改（可能会打开新页面，请手动点击）"], blocked: [], adds: null } });
+  h.deps.buildOutline = () => {
+    const nodes = nodesFor(2);
+    nodes.set("e9", { type: "button", text: "修改", submit: false, leaves: true });
+    return { parts: [{ text: "x", refs: ["e1", "e9"] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: 2 } };
+  };
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "needs_action");
+  assert.match(done.message, /手动点击「修改」（可能会打开新页面）/);
+  assert.equal(h.actionCalls.executed.length, 0);
+});
+
+test("a page that changed between analysis and planning stops before any preview", async () => {
+  const h = actionHarness({ plan: { error: "target_changed" } });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "stopped");
+  assert.match(done.message, /按钮对不上了/);
+  assert.equal(h.actionCalls.executed.length, 0);
+});
+
+test("rows still missing after the re-analysis are only mentioned: no second round of clicks", async () => {
+  const h = actionHarness({ analyze: async () => ({ success: true, spec: { pageState: "editing", preActions: [{ ref: "e9", kind: "edit" }],
+    sections: [{ domain: "education", addRef: "e8", rowRefs: ["e1"] }], fields: [{ ref: "e1", label: "学校", control: "text" }] } }) });
+  const planCalls = [];
+  h.deps.planActions = ({ spec }) => {
+    planCalls.push(spec.preActions.length);
+    return spec.preActions.length
+      ? { items: [{ kind: "edit", element: h.button, label: "基本信息：编辑" }], manual: [], blocked: ["先完成「编辑 / 展开」"], adds: null }
+      : { items: [{ kind: "add", count: 1, element: {}, label: "教育经历：添加 ×1" }], manual: [], blocked: [], adds: {} };
+  };
+  const { requestId } = await h.controller.start();
+  const state = await h.settle(previewing);
+  h.controller.confirm(requestId, state.planId);
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "completed");
+  assert.deepEqual(planCalls, [1, 0], "round two only counts");
+  assert.equal(h.actionCalls.executed.length, 1, "the round-two add is never executed");
+  assert.ok(done.notes.some((note) => note.includes("教育经历：添加 ×1") && note.includes("不再自动新增")));
 });

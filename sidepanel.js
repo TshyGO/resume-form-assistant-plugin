@@ -28,6 +28,9 @@
     deepConsentCancel: document.getElementById("deep-consent-cancel"),
     deepCard: document.getElementById("deep-card"),
     deepMessage: document.getElementById("deep-message"),
+    deepPlan: document.getElementById("deep-plan"),
+    deepConfirm: document.getElementById("deep-confirm"),
+    deepCancel: document.getElementById("deep-cancel"),
     deepNotes: document.getElementById("deep-notes"),
     deepMeta: document.getElementById("deep-meta"),
     deepStop: document.getElementById("deep-stop"),
@@ -212,8 +215,10 @@
   let deepOffer = "none";
   let deepConsentOpen = false;
   let deepPending = false;
-  const DEEP_PHASES = ["idle", "outlining", "analyzing", "filling", "completed", "needs_action", "failed", "stopped"];
-  const DEEP_ACTIVE = ["outlining", "analyzing", "filling"];
+  const DEEP_PHASES = ["idle", "outlining", "analyzing", "preview", "acting", "filling", "completed", "needs_action", "failed", "stopped"];
+  const DEEP_ACTIVE = ["outlining", "analyzing", "preview", "acting", "filling"];
+  // #225：预览最多 5 个「编辑 / 展开」加 4 类经历的「添加」。
+  const DEEP_PLAN_MAX = 9;
   // Archiving the fill that just ended (#178). The page owns the question and its answer;
   // the panel draws the page's snapshot, bound to the tab it came from. `archiveSeen` is the
   // newest snapshot of this tab and page load, so an older poll that left before a click can
@@ -645,7 +650,11 @@
     const requestId = typeof raw.requestId === "string" && /^[\w-]{1,64}$/.test(raw.requestId) ? raw.requestId : "";
     const count = (value, max = 999) => Number.isInteger(value) && value >= 0 && value <= max ? value : 0;
     const progress = raw.progress && typeof raw.progress === "object"
-      ? { part: count(raw.progress.part, 3), parts: count(raw.progress.parts, 3) } : null;
+      ? { part: count(raw.progress.part, 3), parts: count(raw.progress.parts, 3), round: count(raw.progress.round, 2),
+        step: count(raw.progress.step, DEEP_PLAN_MAX), steps: count(raw.progress.steps, DEEP_PLAN_MAX) } : null;
+    const planId = raw.phase === "preview" && typeof raw.planId === "string" && /^[\w-]{1,64}$/.test(raw.planId) ? raw.planId : "";
+    const plan = planId && Array.isArray(raw.plan) && raw.plan.length <= DEEP_PLAN_MAX
+      ? raw.plan.filter(item => typeof item?.text === "string" && item.text.trim()).map(item => ({ text: item.text.slice(0, 48) })) : [];
     const result = raw.result && typeof raw.result === "object"
       ? { fields: count(raw.result.fields), filled: count(raw.result.filled), unfilled: count(raw.result.unfilled), unconfirmed: count(raw.result.unconfirmed) } : null;
     const budget = raw.budget && typeof raw.budget === "object" ? { used: count(raw.budget.used, 12), limit: count(raw.budget.limit, 12) } : null;
@@ -657,8 +666,41 @@
       progress,
       result,
       budget,
-      canStop: DEEP_ACTIVE.includes(raw.phase) && raw.canStop === true && Boolean(requestId)
+      plan: plan.length === (Array.isArray(raw.plan) ? raw.plan.length : 0) ? plan : [],
+      planId,
+      // 只有动作的计划，或只剩「继续填写现有字段」的确认（有不能自动新增的分组时）。
+      canConfirm: raw.phase === "preview" && raw.canConfirm === true && Boolean(requestId && planId),
+      canCancel: raw.phase === "preview" && raw.canCancel === true && Boolean(requestId),
+      canStop: DEEP_ACTIVE.includes(raw.phase) && raw.phase !== "preview" && raw.canStop === true && Boolean(requestId)
     };
+  }
+
+  // 预览列表只在换了一份计划时重画：悬停中的那一项不会被轮询换掉，移开时一定能清掉网页上的高亮。
+  let deepPlanShown = "";
+  function renderDeepPlan(view) {
+    const planId = view?.phase === "preview" ? view.planId : "";
+    elements.deepPlan.hidden = !(planId && view.plan.length);
+    if (planId === deepPlanShown) return;
+    deepPlanShown = planId;
+    elements.deepPlan.replaceChildren(...(planId ? view.plan : []).map((item, index) => {
+      const row = document.createElement("li");
+      row.textContent = item.text;
+      row.tabIndex = 0;
+      const on = () => deepHighlight(planId, index);
+      const off = () => deepHighlight(planId, -1);
+      row.addEventListener("mouseenter", on);
+      row.addEventListener("focus", on);
+      row.addEventListener("mouseleave", off);
+      row.addEventListener("blur", off);
+      return row;
+    }));
+  }
+
+  // 悬停高亮不占用按钮、不刷新状态；页面只认当前这份计划。
+  function deepHighlight(planId, index) {
+    const requestId = deepView?.requestId || "";
+    if (!requestId || !planId || deepView?.planId !== planId) return;
+    sendToPage({ type: "RESUME_PANEL_DEEP", action: "highlight", requestId, planId, index }).catch(() => {});
   }
 
   function renderDeep() {
@@ -670,6 +712,10 @@
       elements.deepCard.dataset.phase = view.phase;
       elements.deepCard.classList.toggle("is-error", view.phase === "failed");
       elements.deepMessage.textContent = view.message;
+      renderDeepPlan(view);
+      elements.deepConfirm.hidden = !view.canConfirm;
+      elements.deepConfirm.textContent = view.plan.length ? "确认执行" : "继续填写";
+      elements.deepCancel.hidden = !view.canCancel;
       elements.deepNotes.hidden = !view.notes.length;
       elements.deepNotes.replaceChildren(...view.notes.map(note => {
         const item = document.createElement("li");
@@ -683,7 +729,9 @@
       elements.deepRetry.hidden = !["needs_action", "failed", "stopped"].includes(view.phase);
       elements.deepDismiss.hidden = !finished;
     }
-    for (const button of [elements.deepStop, elements.deepRetry, elements.deepDismiss, elements.deepConsentConfirm, elements.deepConsentCancel]) {
+    if (!shown) renderDeepPlan(null);
+    for (const button of [elements.deepStop, elements.deepRetry, elements.deepDismiss, elements.deepConsentConfirm, elements.deepConsentCancel,
+      elements.deepConfirm, elements.deepCancel]) {
       button.disabled = deepPending;
     }
     updateFillAvailability(lastPageStatus);
@@ -720,11 +768,15 @@
   async function deepAction(action) {
     if (deepPending) return;
     const requestId = deepView?.requestId || "";
-    if (action === "stop" && !requestId) return;
+    const bound = ["stop", "confirm", "cancel"].includes(action);
+    if (bound && !requestId) return;
+    // 确认带上侧栏显示的那份计划：页面只执行这一份，换过的计划不认。
+    const planId = action === "confirm" ? deepView?.planId || "" : "";
+    if (action === "confirm" && !planId) return;
     deepPending = true;
     renderDeep();
     try {
-      const result = await sendToPage({ type: "RESUME_PANEL_DEEP", action, ...(action === "stop" ? { requestId } : {}) });
+      const result = await sendToPage({ type: "RESUME_PANEL_DEEP", action, ...(bound ? { requestId } : {}), ...(planId ? { planId } : {}) });
       if (result?.error === "consent_required") {
         deepConsentOpen = true;
       } else if (!result?.ok) {
@@ -1295,7 +1347,7 @@
     job: ["读取岗位", "核对信息", "保存结果"],
     submit: ["读取岗位", "核对信息", "选择申请", "确认结果"],
     repeat: ["扫描网页", "制定计划", "预览计划", "执行中", "结束"],
-    deep: ["确认说明", "分析页面", "填写网页", "结束"],
+    deep: ["确认说明", "分析页面", "确认操作", "填写网页", "结束"],
     archive: ["是否留档", "选择申请", "留档结果"]
   };
   let taskShown = "";
@@ -1377,18 +1429,23 @@
       }
       const view = deepView;
       const exit = view.canStop ? { button: elements.deepStop, label: "停止" }
-        : DEEP_ACTIVE.includes(view.phase) ? null : { button: elements.deepDismiss, label: "返回" };
-      const steps = { outlining: 1, analyzing: 1, filling: 2 };
+        : view.canCancel ? { button: elements.deepCancel, label: "取消" }
+          : DEEP_ACTIVE.includes(view.phase) ? null : { button: elements.deepDismiss, label: "返回" };
+      const again = view.progress?.round === 2;
+      const steps = { outlining: 1, analyzing: again ? 2 : 1, preview: 2, acting: 2, filling: 3 };
+      const part = view.progress?.parts > 1 ? `（第 ${view.progress.part}/${view.progress.parts} 部分）` : "";
       const desc = {
         outlining: "正在读取页面结构，敏感内容会先替换掉",
-        analyzing: view.progress?.parts > 1 ? `AI 正在分析页面结构（第 ${view.progress.part}/${view.progress.parts} 部分）` : "AI 正在分析页面结构",
+        analyzing: again ? `操作已完成，AI 正在重新分析页面${part}` : `AI 正在分析页面结构${part}`,
+        preview: view.plan.length ? "确认后才会点击；悬停某一项可在网页上看到对应按钮" : "有的条目不能自动新增，确认后只填写现有字段",
+        acting: view.progress?.steps ? `正在执行第 ${view.progress.step}/${view.progress.steps} 步，每一步都核对网页变化` : "正在核对网页",
         filling: "正在匹配简历并填写网页",
         completed: "请在网页上核对填写的内容",
         needs_action: "需要你先在网页上操作",
         failed: "这次没有完成",
         stopped: "已停止"
       }[view.phase] || "";
-      return { key: view.phase, title: "深度分析本页", step: steps[view.phase] ?? 3, error: view.phase === "failed", exit, desc,
+      return { key: view.phase, title: "深度分析本页", step: steps[view.phase] ?? 4, error: view.phase === "failed", exit, desc,
         unsure: ["failed", "stopped", "needs_action"].includes(view.phase) };
     }
     const phase = archiveShownPhase || fillArchive.phase;
@@ -2098,6 +2155,8 @@
   elements.deepConsentConfirm.addEventListener("click", () => { confirmDeepConsent().catch(() => toast("无法开始深度分析。")); });
   elements.deepConsentCancel.addEventListener("click", () => { deepConsentOpen = false; renderDeep(); });
   elements.deepStop.addEventListener("click", () => { deepAction("stop").catch(() => {}); });
+  elements.deepConfirm.addEventListener("click", () => { deepAction("confirm").catch(() => toast("操作未完成，请重试。")); });
+  elements.deepCancel.addEventListener("click", () => { deepAction("cancel").catch(() => {}); });
   elements.deepRetry.addEventListener("click", () => {
     deepAction("dismiss").then(() => startDeep()).catch(() => toast("无法开始深度分析。"));
   });

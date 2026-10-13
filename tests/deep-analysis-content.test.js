@@ -21,7 +21,8 @@ const store = () => ({
   activeTemplateId: TEMPLATE
 });
 
-function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false, labels = [], fillProbe } = {}) {
+function deepPage({ consent = true, analyze, fill, confirm = () => true, existing = ["", ""], staleButton = false, labels = [], fillProbe,
+  buttons = [], pageActions, formAgent } = {}) {
   const location = { href: "https://jobs.example.test/apply", pathname: "/apply" };
   const inputs = [];
   const sent = [];
@@ -39,11 +40,15 @@ function deepPage({ consent = true, analyze, fill, confirm = () => true, existin
     confirm: (message) => { confirms++; return confirm(message, inputs); },
     deepAnalysis: deep,
     fillProbe,
+    pageActions,
+    formAgent,
     pageOutline: {
       build(_doc, options) {
         outlineCalls.push(options);
         const nodes = new Map(inputs.map((input, index) => [`e${index + 1}`, { type: "control", domKind: "text", element: input,
           control: { elements: [input], root: input, disabled: false } }]));
+        // #225：按钮候选（编辑、添加），编号接在输入框后面。
+        buttons.forEach((button, index) => nodes.set(`e${inputs.length + index + 1}`, { type: "button", submit: false, leaves: false, ...button }));
         return { parts: [{ text: inputs.map((_, i) => `e${i + 1} input[text]`).join("\n"), refs: [...nodes.keys()] }], nodes,
           redact: outlineApi.createRedactor(options.resumeValues), stats: { chars: 40, parts: 1, controls: inputs.length, truncated: false } };
       }
@@ -306,4 +311,101 @@ test("the deep diagnostics count analysis calls plus this fill's calls, once eac
   const done = await page.settle(finished);
   assert.match(page.diagnosticsText.value, /深度分析模型调用：3\/6/, "1 analysis + 2 fill batches");
   assert.deepEqual(done.budget, { used: 3, limit: 6 });
+});
+
+// --- #225：侧栏确认后的动作。页面动作模块用替身（真实的点击与核验见 page-actions.test.js），这里验证接线：
+// 预览经状态上报给侧栏、确认要带对的计划号、确认前不执行、悬停高亮、页面离开即作废、诊断只有类别和计数。
+function actionPage({ execute } = {}) {
+  const calls = { built: [], executed: [], shown: [], cleared: 0 };
+  const editButton = { isConnected: true, tag: "edit" };
+  let round = 0;
+  const pageActions = {
+    buildPlan(args) {
+      calls.built.push(args);
+      return { items: [{ kind: "edit", element: editButton, label: "基本信息：编辑" }], manual: [], blocked: [], adds: null };
+    },
+    async executePlan(plan, ctx) {
+      calls.executed.push({ plan, ctx });
+      return execute ? execute(plan, ctx) : { ok: true, done: { edit: 1, expand: 0, add: 0 }, scopes: [] };
+    },
+    createHighlighter: () => ({ show: (el) => calls.shown.push(el), clear: () => { calls.cleared += 1; } })
+  };
+  const page = deepPage({
+    buttons: [{ text: "编辑", element: editButton }],
+    pageActions,
+    formAgent: require("../form-agent.js"),
+    analyze: () => (++round === 1
+      ? { success: true, tierUsed: "strong", spec: { pageState: "viewing", preActions: [{ ref: "e3", kind: "edit" }], fields: [] } }
+      : { success: true, tierUsed: "strong", spec: { pageState: "editing", fields: [{ ref: "e1", label: "姓名", group: "基本信息", control: "text" }] } })
+  });
+  return { ...page, calls, editButton, rounds: () => round };
+}
+
+test("#225 the preview reaches the side panel; the page acts only on 确认 with the shown plan, then re-analyses and fills", async () => {
+  const page = actionPage();
+  const { requestId } = await page.ask({ action: "start" });
+  const preview = await page.settle((state) => state.phase === "preview");
+  assert.deepEqual(preview.plan, [{ text: "基本信息：编辑" }]);
+  assert.equal(page.calls.executed.length, 0);
+  assert.equal(page.aiCalls("AI_FILL").length, 0);
+  assert.deepEqual(page.calls.built[0].templateFields.map((field) => field.key), ["姓名", "现居城市"], "adds are counted from the desktop template");
+  // 预览期间一键填写要等：网页被这次分析占着。
+  assert.equal((await page.status()).busy, true);
+  assert.deepEqual(await page.sendPanelMessage({ type: "RESUME_PANEL_FILL" }), { ok: false, error: "深度分析正在进行，请先等待或停止。" });
+  assert.equal((await page.ask({ action: "confirm", requestId, planId: "stale-plan" })).ok, false);
+  assert.equal(page.calls.executed.length, 0);
+  assert.equal((await page.ask({ action: "confirm", requestId, planId: preview.planId })).ok, true);
+  const done = await page.settle(finished);
+  assert.equal(done.phase, "completed", done.message);
+  assert.equal(page.calls.executed.length, 1);
+  assert.equal(page.rounds(), 2, "one re-analysis after the click");
+  assert.equal(page.aiCalls("AI_FILL").length, 1);
+  assert.equal(page.aiCalls("AI_FILL")[0].maxCalls, 4);
+  assert.match(page.diagnosticsText.value, /前置动作：计划 编辑 1、展开 0、新增 0；已完成 编辑 1、展开 0、新增 0/);
+  assert.match(page.diagnosticsText.value, /分析轮数：2/);
+});
+
+test("#225 hover asks the page to outline the target; cancel clears it and nothing is clicked", async () => {
+  const page = actionPage();
+  const { requestId } = await page.ask({ action: "start" });
+  const preview = await page.settle((state) => state.phase === "preview");
+  await page.ask({ action: "highlight", requestId, planId: preview.planId, index: 0 });
+  assert.deepEqual(page.calls.shown, [page.editButton]);
+  await page.ask({ action: "highlight", requestId, planId: preview.planId, index: -1 });
+  const cleared = page.calls.cleared;
+  assert.ok(cleared >= 1);
+  assert.equal((await page.ask({ action: "cancel", requestId })).ok, true);
+  const done = (await page.status()).deep;
+  assert.equal(done.phase, "stopped");
+  assert.equal(page.calls.executed.length, 0);
+  assert.equal(page.aiCalls("AI_FILL").length, 0);
+  assert.match(page.diagnosticsText.value, /停止原因：cancelled/);
+});
+
+test("#225 leaving the page while the preview is open voids the plan; a confirm afterwards does nothing", async () => {
+  const page = actionPage();
+  const { requestId } = await page.ask({ action: "start" });
+  const preview = await page.settle((state) => state.phase === "preview");
+  page.fireWindowEvent("pagehide");
+  const state = (await page.status()).deep;
+  assert.equal(state.phase, "stopped");
+  assert.match(state.message, /页面正在离开/);
+  assert.equal((await page.ask({ action: "confirm", requestId, planId: preview.planId })).ok, false);
+  assert.equal(page.calls.executed.length, 0);
+});
+
+test("#225 a page that leaves while the actions run is reported to the executor as navigated", async () => {
+  let seen = "";
+  const page = actionPage({ execute: (plan, ctx) => {
+    page.fireWindowEvent("pagehide");
+    seen = ctx.stopped();
+    return { ok: false, code: seen, done: { edit: 0, expand: 0, add: 0 }, scopes: [] };
+  } });
+  const { requestId } = await page.ask({ action: "start" });
+  const preview = await page.settle((state) => state.phase === "preview");
+  await page.ask({ action: "confirm", requestId, planId: preview.planId });
+  const done = await page.settle(finished);
+  assert.equal(seen, "navigated");
+  assert.equal(done.phase, "stopped");
+  assert.equal(page.aiCalls("AI_FILL").length, 0);
 });
