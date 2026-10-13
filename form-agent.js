@@ -99,8 +99,12 @@
   // 来自深度分析校验过的大纲编号；条目数由这里按网页结构核对（说明书列出的条目数必须和网页对得上），
   // 新增几条仍由 targetCounts 算。数不清、对不上、分组有歧义时不给候选，只报原因，不猜。
   const STATE_CLASS = /(?:^|[-_])(?:active|hover|focus|focused|error|selected|open|opened|expanded|collapsed|disabled|checked|show|hidden|visible|first|last|odd|even|current|invalid|valid|dirty|touched|new|added)(?:$|[-_])|^(?:is|has)-/i;
+  // 样式库生成的变体 class（styled-components 的 dyvPlo / ebfZZH、emotion 的 css-1x2y3z）：同一个组件的条目，
+  // 最后一条和前面几条的变体可能不同（北森真机：最后一条带「添加」按钮），比结构时不算它们。
+  const HASH_CLASS = /^(?:(?=[a-zA-Z]{5,8}$)(?=.*[a-z])(?=.*[A-Z]).*|css-[a-z0-9]+)$/;
   function signature(el) {
-    const tokens = typeof el.className === "string" ? el.className.split(/\s+/).filter(token => token && !STATE_CLASS.test(token)).sort() : [];
+    const tokens = typeof el.className === "string"
+      ? el.className.split(/\s+/).filter(token => token && !STATE_CLASS.test(token) && !HASH_CLASS.test(token)).sort() : [];
     return `${el.tagName}.${tokens.join(".")}`;
   }
   function commonAncestor(elements) {
@@ -114,7 +118,8 @@
   function shapeOf(el, isVisible) {
     return Array.from(el.querySelectorAll(editable)).filter(isVisible).map(c => `${c.tagName}:${c.getAttribute("type") || ""}`).join(",");
   }
-  // 一个元素里面是否像装着不止一条记录：同一层有两个以上结构相同、各含两个以上输入框且输入框排列相同的兄弟，
+  // 一个元素里面是否像装着不止一条记录：同一层有两个以上结构相同、各含三个以上输入框且输入框排列相同的兄弟
+  // （一个下拉、一个日期范围常常自带两个输入框，不能当成两条记录），
   // 或者（有题目时）同一个题目出现了两次。
   function looksRepeated(el, isVisible, labelOf) {
     for (const node of [el, ...el.querySelectorAll("*")]) {
@@ -122,7 +127,7 @@
       if (children.length < 2) continue;
       const seen = new Map();
       for (const child of children) {
-        if (child.querySelectorAll(editable).length < 2) continue;
+        if (child.querySelectorAll(editable).length < 3) continue;
         const key = `${signature(child)}|${shapeOf(child, isVisible)}`;
         if (seen.has(key)) return true;
         seen.set(key, true);
@@ -173,12 +178,19 @@
     scope = commonAncestor([button, ...anchors]);
     if (!scope || scope === top || scope === top?.parentElement || containsAny(scope, others)) return { reason: "ambiguous" };
     const all = Array.from(scope.querySelectorAll(editable)).filter(isVisible);
+    // 「添加」按钮可能就在最后一条记录里面（北森真机），按钮和已有条目的公共祖先只是那一条：往上扩到
+    // 只装着这一组输入框的最大容器，新记录插在旁边时才看得见。遇到别的输入框或别的分组就停。
+    for (let depth = 0; scope.parentElement && scope.parentElement !== top && depth < 6; depth += 1) {
+      const parent = scope.parentElement;
+      if (containsAny(parent, others) || Array.from(parent.querySelectorAll(editable)).filter(isVisible).length !== all.length) break;
+      scope = parent;
+    }
     let model = null;
     if (anchors.length >= 2) {
       const parent = commonAncestor(anchors);
       if (!parent || !scope.contains(parent)) return { reason: "uncountable" };
       const rowsOf = anchors.map(el => { let node = el; while (node && node.parentElement !== parent) node = node.parentElement; return node; });
-      if (rowsOf.some(row => !row || row.contains(button)) || new Set(rowsOf).size !== anchors.length) return { reason: "uncountable" };
+      if (rowsOf.some(row => !row) || new Set(rowsOf).size !== anchors.length) return { reason: "uncountable" };
       const sig = signature(rowsOf[0]);
       if (rowsOf.some(row => signature(row) !== sig)) return { reason: "uncountable" };
       model = { parent, sig };
@@ -196,6 +208,8 @@
     }
     return { scope, current: anchors.length, model, anchor: anchors[0], initial: all };
   }
+  // 按钮的结构和文字，用来在我们自己点完一次之后，找回同一分组里被网页重画或挪到新条目里的「添加」。
+  const buttonKey = button => ({ sig: signature(button), text: bare(button.textContent) });
   // 和 collect() 同形的 { candidates, refs }，交给同一个 validatePlan / execute；另带 problems（没有给候选的分组和原因）。
   // options：isVisible、labelOf（输入框 → 题目，用来认出一个容器里装了两条记录）、allowed（按钮按网页当前样子重新判断）、
   // press（点击方式，默认 el.click()）。同类分组有两个以上时都不给候选（歧义）。
@@ -215,8 +229,8 @@
       if (targets[domain.id] - located.current > 5) { problems.push({ domain: domain.id, reason: "over_limit", needed: targets[domain.id] - located.current }); continue; }
       const id = `add-${candidates.length}`;
       candidates.push({ id, domain: domain.id, label: domain.label, current: located.current, target: targets[domain.id] });
-      refs.set(id, { spec: true, button: mine[0].button, domain, visible: isVisible, labelOf: options.labelOf, allowed: options.allowed,
-        press: options.press, timing: options.timing, target: targets[domain.id], ...located });
+      refs.set(id, { spec: true, button: mine[0].button, buttonKey: buttonKey(mine[0].button), domain, visible: isVisible, labelOf: options.labelOf,
+        allowed: options.allowed, press: options.press, timing: options.timing, target: targets[domain.id], ...located });
     }
     return { candidates, refs, problems };
   }
@@ -225,7 +239,18 @@
     return button.isConnected && ref.scope.isConnected && ref.scope.contains(button) && ref.visible(button) && !button.disabled &&
       button.getAttribute?.("aria-disabled") !== "true" && (!ref.allowed || ref.allowed(button) === true);
   }
-  // 点击后找新出现的输入框，把它们归成新记录：每个新输入框往上取到不含旧输入框、不含新增按钮的最大容器；
+  // 本次已经点过「添加」后，原按钮被网页重画或挪进了新的最后一条（北森真机）：在同一分组范围里找结构和文字
+  // 都相同、看得见的唯一一个按钮接着用；找不到或不止一个就不点。第一次点击永远只点预览时确认的那个按钮。
+  function rebindButton(ref) {
+    const matches = Array.from(ref.scope.querySelectorAll("*")).filter(el => el !== ref.button && ref.visible(el)
+      && signature(el) === ref.buttonKey.sig && bare(el.textContent) === ref.buttonKey.text);
+    const outer = matches.filter(el => !matches.some(other => other !== el && other.contains(el)));
+    if (outer.length !== 1) return false;
+    ref.button = outer[0];
+    return true;
+  }
+  // 点击后找新出现的输入框，把它们归成新记录：每个新输入框往上取到不含旧输入框的最大容器（「添加」按钮
+  // 可能在条目里，不作为边界）；
   // 都归到同一个容器就是一条，归到几个结构相同的容器就是多条。有已有条目时，新记录还必须和已有条目是
   // 结构相同的兄弟。返回 none（还没变化）、one（正好一条）、many（多出多条）、unclear（有变化但归不成一条）。
   function detectSpecRow(ref, oldControls) {
@@ -235,13 +260,13 @@
     const unclear = { state: "unclear", fresh: fresh.length };
     const climb = (start, avoid) => {
       let node = start;
-      while (node.parentElement && node.parentElement !== ref.scope && !containsAny(node.parentElement, avoid) && !node.parentElement.contains(ref.button)) {
+      while (node.parentElement && node.parentElement !== ref.scope && !containsAny(node.parentElement, avoid)) {
         node = node.parentElement;
       }
       return node;
     };
     const tops = [...new Set(fresh.map(el => climb(el, old)))];
-    if (tops.some(top => top === ref.scope || !ref.scope.contains(top) || top.contains(ref.button))) return unclear;
+    if (tops.some(top => top === ref.scope || !ref.scope.contains(top))) return unclear;
     if (tops.length > 1) {
       const sig = signature(tops[0]);
       return tops.every(top => signature(top) === sig && top.querySelector(editable)) ? { state: "many", count: tops.length } : unclear;
@@ -294,7 +319,7 @@
   }
   async function addSpecRow(ref, action, i, added, hooks) {
     const { stopped, onProgress, beforeClick } = hooks;
-    if (!specSafe(ref)) throw new Error("新增按钮或分组已变化，请手动检查。");
+    if (!specSafe(ref) && !(i > 0 && rebindButton(ref) && specSafe(ref))) throw new Error("新增按钮或分组已变化，请手动检查。");
     const oldControls = specControls(ref);
     const before = ref.model ? modelRows(ref).length : ref.current + i;
     // 第一次点之前，分组里的输入框必须还是预览时那些（模型还没定型时靠它确认条目没变）。

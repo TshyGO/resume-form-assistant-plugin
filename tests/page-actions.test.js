@@ -425,3 +425,76 @@ test("a group without input rows but with entries shown as text is not counted a
   assert.match(planned.blocked.join(), /论文在网页上的已有条目无法可靠计数/);
   assert.deepEqual(clicks, []);
 });
+
+// --- 北森真机结构（2026-10-13 kingfa.zhiye.com 只读采集的骨架，不含文字）：分组 = 标题 / 提示 / 列表；
+// 列表里每条记录是 sc-AjmGg，「添加」按钮在最后一条记录里面；最后一条的样式变体是 dyvPlo，前面的是 ebfZZH。
+// 点「添加」后网页在列表末尾插入新记录，旧按钮被移除，新的最后一条里重新画一个按钮。
+const REAL_ROW = (n, last) => `<div class="sc-AjmGg ${last ? "dyvPlo" : "ebfZZH"}"><div class="sc-khQegj iIjjOi">
+  ${["学校名称", "专业", "学历", "入学时间"].map((label) => `<div class="fields-col"><div class="form-item form-item--phoenix">
+    <div class="form-item__title"><label class="form-item__text">${label}</label></div>
+    <div class="form-item__content"><input type="text" placeholder="请输入"></div></div></div>`).join("")}</div>${last
+    ? `<div class="sc-lbhJGD cUSWND" style="cursor:pointer"><div class="sc-iNGGcK bbODky"><svg><path></path></svg></div><span class="sc-jeraig YMZQf">添加教育经历</span></div>` : ""}</div>`;
+
+function beisenRealPage(rows = 1, { duplicate = false } = {}) {
+  const dom = new JSDOM(`<!doctype html><body><div class="sc-caiLqq oRfpp">
+    <div class="sc-iAKWXU eSNZXI" id="base"><div class="sc-efQSVx eAPYIl">基本信息</div><div class="sc-cTAqQK hiShHd">
+      <label>姓名<input type="text"></label></div></div>
+    <div class="sc-iAKWXU eSNZXI" id="edu"><div class="sc-efQSVx eAPYIl">教育经历</div><div class="sc-cNKqjZ iKcdox">请从最高学历开始填写</div>
+      <div class="sc-cTAqQK hiShHd">${Array.from({ length: rows }, (_, i) => REAL_ROW(i + 1, i === rows - 1)).join("")}</div></div>
+  </div></body>`, { url: "https://example.zhiye.test/form" });
+  const doc = dom.window.document;
+  const clicks = [];
+  const list = doc.querySelector("#edu .sc-cTAqQK");
+  const bind = () => {
+    const button = list.querySelector(".sc-lbhJGD");
+    button.addEventListener("click", () => {
+      clicks.push("add");
+      setTimeout(() => {
+        // 像 React 重画：旧的最后一条换成普通变体、去掉按钮，再追加一条带新按钮的最后一条。
+        const last = list.lastElementChild;
+        last.className = "sc-AjmGg ebfZZH";
+        last.querySelector(".sc-lbhJGD").remove();
+        list.insertAdjacentHTML("beforeend", REAL_ROW(list.children.length + 1, true));
+        if (duplicate) list.lastElementChild.insertAdjacentHTML("beforeend", list.lastElementChild.querySelector(".sc-lbhJGD").outerHTML);
+        bind();
+      }, 15);
+    });
+  };
+  bind();
+  return { doc, clicks, list };
+}
+
+test("北森真机结构：按钮在最后一条记录里也能数清条目，逐条新增两条，旧按钮被换掉后找回同组唯一的新按钮", async () => {
+  const { doc, clicks, list } = beisenRealPage(1);
+  list.querySelector("input").value = "我自己填的";
+  const spec = { pageState: "editing", sections: [{ domain: "education", addRef: list.querySelector(".sc-lbhJGD"), rowRefs: [list.querySelector("input")] }] };
+  const { built, checked } = analyse(doc, spec);
+  assert.equal(checked.ok, true, JSON.stringify(checked));
+  const planned = plan(doc, built, checked.spec, records("教育经历", 3));
+  assert.deepEqual(planned.items.map((item) => item.label), ["教育经历：添加 ×2"]);
+  assert.deepEqual(planned.blocked, []);
+  const result = await run(doc, built, planned);
+  assert.equal(result.ok, true, `${result.code} ${result.message}`);
+  assert.deepEqual(result.done, { edit: 0, expand: 0, add: 2 });
+  assert.deepEqual(clicks, ["add", "add"]);
+  assert.equal(list.children.length, 3);
+  assert.equal(list.querySelector("input").value, "我自己填的", "the existing row keeps its value");
+  assert.ok(doc.querySelector("#base input"), "other groups are untouched");
+});
+
+test("北森真机结构：已有两条时同样数得清；找回按钮时同组冒出两个一样的按钮就停下，不猜", async () => {
+  const two = beisenRealPage(2);
+  const rows = Array.from(two.list.children).map((row) => row.querySelector("input"));
+  const analysed = analyse(two.doc, { pageState: "editing", sections: [{ domain: "education", addRef: two.list.querySelector(".sc-lbhJGD"), rowRefs: rows }] });
+  const planned = plan(two.doc, analysed.built, analysed.checked.spec, records("教育经历", 3));
+  assert.deepEqual(planned.items.map((item) => item.label), ["教育经历：添加 ×1"]);
+
+  const dup = beisenRealPage(1, { duplicate: true });
+  const spec = { pageState: "editing", sections: [{ domain: "education", addRef: dup.list.querySelector(".sc-lbhJGD"), rowRefs: [dup.list.querySelector("input")] }] };
+  const { built, checked } = analyse(dup.doc, spec);
+  const result = await run(dup.doc, built, plan(dup.doc, built, checked.spec, records("教育经历", 3)));
+  assert.equal(result.code, "add_failed");
+  assert.match(result.message, /新增按钮或分组已变化/);
+  assert.equal(result.done.add, 1);
+  assert.deepEqual(dup.clicks, ["add"], "no second click when the button is ambiguous");
+});
