@@ -482,3 +482,26 @@ test("recipes stay out of the legacy migration, feedback and desktop link: nothi
     assert.ok(!source.includes("fillRecipes"), `${file} must not read recipes`);
   }
 });
+
+test("after the plugin adds rows: a question repeated when saved maps by order across old and new rows; one saved in a then-new row is found in the new row", () => {
+  const row = (n) => `<div class="edu" id="row${n}"><label>学校名称<input class="school"></label><label>专业<input class="major"></label></div>`;
+  const { doc } = page(`<form><section><h2>教育经历</h2><div id="rows">${row(1)}${row(2)}${row(3)}</div></section>
+    <section><h2>论文</h2><div id="papers"><div class="paper" id="p1"><label>论文标题<input class="title"></label></div></div></section></form>`);
+  const built0 = build(doc);
+  const specFields = specFor(built0, all(doc)).map((field, index) => ({ ...field, groupIndex: index < 6 ? Math.floor(index / 2) + 1 : 1 }));
+  const recipe = recipes.buildRecipe({ fields: specFields, outline: built0, now: 1 }).recipe;
+  assert.deepEqual(recipe.fields.map((field) => [field.loc.o || 0, field.loc.m || 1]), [[0, 3], [0, 3], [1, 3], [1, 3], [2, 3], [2, 3], [0, 1]]);
+  // 下一次：教育经历只有 1 条、论文 0 条；插件按模板新增了教育 2 条、论文 1 条。
+  const { doc: next } = page(`<form><section><h2>教育经历</h2><div id="rows">${row(1)}</div></section><section><h2>论文</h2><div id="papers"></div></section></form>`);
+  next.getElementById("rows").insertAdjacentHTML("beforeend", row(2) + row(3));
+  next.getElementById("papers").insertAdjacentHTML("beforeend", `<div class="paper" id="p1"><label>论文标题<input class="title"></label></div>`);
+  const scopes = ["row2", "row3", "p1"].map((id) => next.getElementById(id));
+  const built = build(next);
+  const found = recipes.locateFields(recipe, built, { extraScopes: scopes });
+  assert.equal(found.ok, true);
+  assert.equal(found.located, 7);
+  assert.deepEqual(elementsOf(built, found.entries), all(next));
+  assert.deepEqual(recipes.toSpecFields(found.entries).map((field) => field.groupIndex), [1, 1, 2, 2, 3, 3, 1]);
+  // 不知道哪些是新增的（普通一键填写）时，按网页上现有的条目同样都能找到。
+  assert.equal(recipes.locateFields(recipe, built).located, 7);
+});

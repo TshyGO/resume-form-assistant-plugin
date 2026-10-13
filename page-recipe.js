@@ -542,7 +542,16 @@
     const candidates = controlCandidates(outline, clean);
     const buckets = bucketsOf(candidates);
     const fresh = cand => extraScopes.some(root => root?.contains?.(cand.node.element));
-    const results = recipe.fields.map(field => ({ field, ...bestMatch(field.loc, buckets, extraScopes.length ? fresh : null) }));
+    // 这次刚新增了条目时：保存时就重复出现的题目按文档顺序（已有条目在前、新条目在后）取第几个；
+    // 保存时只出现一次的题目先在已有条目里找，已有条目里没有（保存时那条也是新增的）才取第一条新条目。
+    const matchOne = loc => {
+      if (!extraScopes.length || loc.m) return bestMatch(loc, buckets);
+      const old = bestMatch(loc, buckets, fresh);
+      if (old.cand || old.reason === "ambiguous") return old;
+      const { reason, top } = topCandidates(loc, buckets, cand => !fresh(cand));
+      return reason || !top.length ? old : { cand: top[0], tied: top };
+    };
+    const results = recipe.fields.map(field => ({ field, ...matchOne(field.loc) }));
     // 两个配方字段落到同一个控件上：两个都不算找到（同一个控件不能填两次）。
     const claims = new Map();
     for (const result of results) {
