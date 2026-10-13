@@ -6,13 +6,47 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
   "preview_urls": false,
-  "observability": { "enabled": false },
-  "vars": { "METRICS_ENABLED": "false" },
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "METRICS_ENABLED": "false",
+    "DAILY_EMAIL_ENABLED": "false"
+  },
   "d1_databases": [
-    { "binding": "DB", "database_name": "resume-usage-metrics-test", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+    {
+      "binding": "DB",
+      "database_name": "resume-usage-metrics-test",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
   ],
   "ratelimits": [
-    { "name": "ACTIVITY_LIMITER", "namespace_id": "25901", "simple": { "limit": 60, "period": 60 } }
+    {
+      "name": "ACTIVITY_LIMITER",
+      "namespace_id": "25901",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    }
   ],
-  "triggers": { "crons": ["10 0 * * *"] }
+  "triggers": {
+    "crons": [
+      "10 0 * * *",
+      "30 0 * * *"
+    ]
+  },
+  "send_email": [
+    {
+      "name": "METRICS_EMAIL",
+      "allowed_sender_addresses": [
+        "reports@19991107.xyz"
+      ],
+      "allowed_destination_addresses": [
+        "peteryan233@foxmail.com",
+        "1536484476@qq.com"
+      ]
+    }
+  ]
 }

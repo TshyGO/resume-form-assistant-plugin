@@ -138,3 +138,7 @@ curl -i 'http://127.0.0.1:8789/__scheduled?cron=*+*+*+*+*'
 迁移 `0002_maintenance_error.sql`新增 last_error_code，固定分类区分 github_rate_limited、github_auth_failed、github_http_failed、github_timeout、github_network_failed、github_invalid_json、github_data_invalid / task_failed；不保存响应正文、URL、Token 或安装标识。成功清空错误类别。
 
 要稳定访问公开 Release，协作者需提供独立最小权限 GitHub 查询 Token，作为 Worker Secret `GITHUB_TOKEN`配置；不复用 Cloudflare 管理 Token、不从个人 CLI 自动复制 GitHub 凭据。先应用新迁移再部署，METRICS_ENABLED=false 保持不变；测试手动采集单独记录，随后再核验自动 Cron。没有成功快照时不伪造零增量。10月12日已获用户授权配置GITHUB_TOKEN、应用0002迁移并部署诊断版本；21:34手动维护全部成功，生成当日32附件快照。修复后的下一次自动Cron（10月13日08:10）仍待独立验收，见test-acceptance.md。
+
+## 邮件日报（#280）
+
+新增默认关闭的Cloudflare原生邮件日报，两个固定收件人，北京时间08:30；需要先应用0003迁移、确认邮件绑定和实测投递。此提交不部署、不发送。配置、统计口径、去重及unknown处理见[email-daily.md](email-daily.md)。
