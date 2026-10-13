@@ -82,6 +82,7 @@
         "field-scan.js",
         "page-outline.js",
         "deep-analysis.js",
+        "page-actions.js",
         "sidebar-state.js",
         "content.js"
       ],

@@ -206,9 +206,11 @@ function loadHighlightHelpers(options = {}) {
     }
   };
 
+  const windowListeners = {};
   const window = {
     innerHeight: 600,
     innerWidth: 800,
+    addEventListener(type, listener) { (windowListeners[type] ||= []).push(listener); },
     getComputedStyle() {
       return { display: "block", visibility: "visible" };
     },
@@ -278,7 +280,7 @@ function loadHighlightHelpers(options = {}) {
       ResumeProFillProbe: options.fillProbe, ResumeProFeedback: options.feedback,
       ResumeProFieldScan: options.fieldScan || fakeFieldScan(),
       ResumeProCustomControls: options.customControls,
-      ResumeProDeepAnalysis: options.deepAnalysis, ResumeProPageOutline: options.pageOutline,
+      ResumeProDeepAnalysis: options.deepAnalysis, ResumeProPageOutline: options.pageOutline, ResumeProPageActions: options.pageActions,
       ResumeProResumeData: require('../../resume-data.js'), ResumeProProfile: require('../../profile-fields.js'),
       ResumeProAIClient: { send: options.sendMessage || (async () => ({ success: true, matches: [] })),
         cancel: requestId => options.sendMessage({ type: 'CANCEL_AI_FILL', requestId }) } },
@@ -339,6 +341,9 @@ function loadHighlightHelpers(options = {}) {
     },
     fireDocumentEvent(type, event) {
       (documentListeners[type] || []).forEach((listener) => listener(event));
+    },
+    fireWindowEvent(type, event = {}) {
+      (windowListeners[type] || []).forEach((listener) => listener(event));
     }
   };
 }

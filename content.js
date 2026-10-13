@@ -1686,14 +1686,23 @@
   }
 
   // #224「深度分析本页」：编排在 deep-analysis.js，这里只注入本页的能力。大纲、编号和元素的对应
-  // 只放在这次分析的内存里；结束、停止或换页后丢掉。第一版不点击网页上的任何按钮。
+  // 只放在这次分析的内存里；结束、停止或换页后丢掉。#225：「编辑 / 展开 / 新增」先在侧栏预览，
+  // 用户确认后由 page-actions.js 逐个执行并核验（新增复用 form-agent.js）。
   let deepController = null;
+  let deepHighlighter = null;
   const DEEP_CONSENT_KEY = "deepAnalysisConsent";
 
   function deepAnalysis() {
     const api = self.ResumeProDeepAnalysis;
     if (!api || !self.ResumeProPageOutline) return null;
-    if (!deepController) deepController = api.createController(deepDeps(api));
+    if (!deepController) {
+      deepController = api.createController(deepDeps(api));
+      // 页面要离开（跳转、刷新、关闭）：深度分析立即停下，后面的点击和填写都不再进行。
+      window.addEventListener("pagehide", () => {
+        deepHighlighter?.clear();
+        deepController?.invalidate("页面正在离开，深度分析已停止。");
+      });
+    }
     return deepController;
   }
 
@@ -1776,7 +1785,8 @@
         if (!template && !profileFields.length) return { ok: false, error: "请先导入简历模板，或在「我的信息」里填写内容。" };
         const templateFields = template ? flattenTemplateFields(template) : [];
         const resumeFields = self.ResumeProProfile ? self.ResumeProProfile.mergeResumeFields(templateFields, profileFields) : templateFields;
-        return { ok: true, resumeValues: deepResumeValues(resumeFields) };
+        // 新增条目的数量只按桌面模板的记录数算（和「AI 辅助新增条目」一样），「我的信息」不参与。
+        return { ok: true, resumeValues: deepResumeValues(resumeFields), templateFields };
       },
       buildOutline: resumeValues => self.ResumeProPageOutline.build(document, {
         isVisible: isVisibleInOwnDocument,
@@ -1793,6 +1803,26 @@
       }).catch(() => ({ success: false, error: "无法连接 AI 请求进程，请重新加载扩展后再试。", errorCode: "unavailable" })),
       cancelRequest: requestId => { self.ResumeProAIClient.cancel(requestId).catch(() => {}); },
       toFillInput: (fields, nodes) => withScanBindings(api.toFillInput(fields, nodes, { optionText: getRadioOptionLabel, pickerInputType: inferPickerInputType })),
+      planActions: self.ResumeProPageActions && self.ResumeProFormAgent ? ({ spec, outline, templateFields }) => {
+        const labels = new Map();
+        for (const node of outline.nodes.values()) {
+          if (node.type === "control" && node.control?.label) node.elements?.forEach(el => labels.set(el, node.control.label));
+        }
+        return self.ResumeProPageActions.buildPlan({
+          spec, nodes: outline.nodes, titles: outline.titles, redact: outline.redact, templateFields, doc: document,
+          formAgent: self.ResumeProFormAgent, deep: api, describe: self.ResumeProPageOutline.describeButton,
+          isVisible: isVisibleInOwnDocument, labelOf: el => labels.get(el) || ""
+        });
+      } : null,
+      executeActions: (plan, hooks) => self.ResumeProPageActions.executePlan(plan, {
+        ...hooks, doc: document, deep: api, describe: self.ResumeProPageOutline.describeButton,
+        isVisible: isVisibleInOwnDocument, formAgent: self.ResumeProFormAgent
+      }),
+      highlight: element => {
+        if (!deepHighlighter) deepHighlighter = self.ResumeProPageActions?.createHighlighter() || null;
+        if (element) deepHighlighter?.show(element);
+        else deepHighlighter?.clear();
+      },
       async fill(options) {
         const fillButton = shadowRoot?.querySelector("#resume-pro-ai-fill");
         if (!fillButton) return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "填写控件不可用。" };
@@ -1847,7 +1877,11 @@
       }
       return controller.start();
     }
+    const planId = typeof message?.planId === "string" ? message.planId : "";
     if (action === "stop") return controller.stop(requestId);
+    if (action === "confirm") return controller.confirm(requestId, planId);
+    if (action === "cancel") return controller.cancel(requestId);
+    if (action === "highlight") return controller.highlight(requestId, planId, Number.isInteger(message?.index) ? message.index : -1);
     if (action === "dismiss") return controller.dismiss();
     return { ok: false, error: "当前操作不可用。" };
   }
@@ -2496,7 +2530,20 @@
       `页面说明书：字段 ${count(report.specFields)}，可填写 ${count(report.usedFields)}${report.overridden ? `，控件类型按网页改正 ${count(report.overridden)}` : ""}；校验：${validation}`,
       ...(report.controlKinds && Object.keys(report.controlKinds).length ? [`说明书控件类型：${Object.entries(report.controlKinds)
         .filter(([kind]) => self.ResumeProDeepAnalysis?.CONTROLS?.has(kind)).map(([kind, n]) => `${kind} ${count(n)}`).join("、")}`] : []),
-      `深度分析模型调用：${count(report.calls)}/${count(report.limit)}${report.budgetExhausted ? "（已达上限）" : ""}；分析档位：${tier}`
+      `深度分析模型调用：${count(report.calls)}/${count(report.limit)}${report.budgetExhausted ? "（已达上限）" : ""}；分析档位：${tier}`,
+      ...(report.actions ? formatDeepActions(report) : [])
+    ];
+  }
+
+  // #225 前置动作：只有固定的动作类别、计数、停止原因码和分析轮数。
+  function formatDeepActions(report) {
+    const count = value => Number.isInteger(value) && value >= 0 ? value : 0;
+    const kinds = list => `编辑 ${count(list?.edit)}、展开 ${count(list?.expand)}、新增 ${count(list?.add)}`;
+    const a = report.actions;
+    const stop = /^[a-z_]{1,32}$/.test(a.stop || "") ? a.stop : "";
+    return [
+      `前置动作：计划 ${kinds(a.planned)}；已完成 ${kinds(a.done)}${stop ? `；停止原因：${stop}` : ""}`,
+      `需手动点击：${count(a.manual)}；未自动新增的分组：${count(a.blocked)}；分析轮数：${count(report.rounds)}`
     ];
   }
 

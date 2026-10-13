@@ -68,6 +68,7 @@ jobs:
           node --check field-scan.js
           node --check page-outline.js
           node --check deep-analysis.js
+          node --check page-actions.js
           node --check feedback-core.js
           node --check feedback-ui.js
           node --check link/feedback.mjs

@@ -141,6 +141,8 @@ button:disabled { cursor: not-allowed; }
 .deep-offer button:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .deep-card__list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0 0 0 18px; color: #4a5361; font-size: 12px; line-height: 1.55; }
 .deep-card__meta { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.deep-card__plan li { cursor: default; }
+.deep-card__plan li:hover, .deep-card__plan li:focus-visible { border-color: var(--accent-line); background: var(--accent-pale); outline: none; }
 .repeat-card[data-phase="needs_action"] .repeat-card__message { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
 .cancel-button { display: block; width: 100%; min-height: 38px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font-size: 12px; font-weight: 600; }
 .fill-reason { padding: 8px 10px; border-radius: 10px; background: var(--soft); }

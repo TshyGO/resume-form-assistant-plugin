@@ -177,7 +177,7 @@
                   <ul class="deep-card__list">
                     <li>不发送输入框里已有的内容，密码框整体跳过；页面上像手机号、邮箱、证件号或和你简历相同的文字，发送前换成「〔内容〕」。</li>
                     <li>分析之后的填写匹配和「一键 AI 填写」一样，会把相关的简历字段发给 AI。</li>
-                    <li>不会点击网页上的按钮，不会提交、保存或投递。每次分析最多调用 6 次模型。</li>
+                    <li>需要先点「编辑」「展开」或「添加」时，会先列出要点的按钮，你确认后才点；不会提交、保存、删除或投递。每次分析最多调用 6 次模型。</li>
                   </ul>
                   <div class="repeat-card__actions task-foot">
                     <button type="button" id="deep-consent-confirm" class="repeat-card__primary">同意并开始分析</button>
@@ -186,9 +186,12 @@
                 </div>
                 <div id="deep-card" class="repeat-card deep-card" hidden>
                   <p id="deep-message" class="repeat-card__message" role="status" aria-live="polite"></p>
+                  <ul id="deep-plan" class="repeat-card__plan deep-card__plan" aria-label="确认后将执行的操作（悬停可在网页上看到对应按钮）" hidden></ul>
                   <ul id="deep-notes" class="deep-card__list" hidden></ul>
                   <p id="deep-meta" class="deep-card__meta" hidden></p>
                   <div class="repeat-card__actions task-foot">
+                    <button type="button" id="deep-confirm" class="repeat-card__primary" hidden>确认执行</button>
+                    <button type="button" id="deep-cancel" hidden>取消</button>
                     <button type="button" id="deep-stop" hidden>停止</button>
                     <button type="button" id="deep-retry" hidden>重新分析</button>
                     <button type="button" id="deep-dismiss" hidden>知道了</button>
