@@ -170,7 +170,9 @@
     return {
       s: scopeKey(el),
       k: node.domKind,
-      sec: clean(outline.titles?.get(ref) || ""),
+      // 分组：字段扫描给每个控件找的所属区块（同一条记录里的题目一致）；找不到时用大纲的区块标题。
+      // 大纲的区块标题在一条记录的第一题上常常还是上一级标题，不能直接当分组用。
+      sec: clean(node.control?.section || outline.titles?.get(ref) || ""),
       t: clean(node.control?.label || ""),
       c: clean(outline.clues?.get(ref) || ""),
       n: clean(stableToken(attr(el, "name"))),

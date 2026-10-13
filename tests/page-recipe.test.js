@@ -505,3 +505,24 @@ test("after the plugin adds rows: a question repeated when saved maps by order a
   // 不知道哪些是新增的（普通一键填写）时，按网页上现有的条目同样都能找到。
   assert.equal(recipes.locateFields(recipe, built).located, 7);
 });
+
+test("records whose header sits outside the first question (北森-like) still group as one section, so the rows can be counted next time", () => {
+  const entry = (n) => `<div class="sc-entry"><div class="sc-entry-head"><span>教育经历 ${n}</span><span class="sc-del">删除</span></div>
+    <div class="form"><div class="form-item"><label class="form-item__text">学校名称</label><input type="text" placeholder="请输入"></div>
+    <div class="form-item"><label class="form-item__text">专业</label><input type="text" placeholder="请输入"></div></div></div>`;
+  const html = (rows) => `<div class="sc-sec"><div class="sc-sec-title" role="heading">教育经历</div><div class="sc-list">${Array.from({ length: rows }, (_, i) => entry(i + 1)).join("")}</div>
+    <button type="button" id="add">添加</button></div>`;
+  const { doc } = page(html(3));
+  const built = build(doc);
+  // 大纲把第一条记录的第一题放在上一级标题下面，其余题目在「教育经历 1删除」下面：分组不能用大纲区块标题。
+  const schools = Array.from(doc.querySelectorAll(".sc-entry")).map((row) => row.querySelector("input"));
+  assert.notEqual(built.titles.get(refOf(built, schools[0])), built.titles.get(refOf(built, schools[1])));
+  const result = recipes.buildRecipe({ fields: specFor(built, all(doc)), outline: built, now: 1,
+    sections: [{ domain: "education", addRef: refOf(built, doc.getElementById("add")), rowRefs: schools.map((el) => refOf(built, el)) }] });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(result.recipe.sections?.[0]?.row, "the row locator is kept");
+  assert.deepEqual(result.recipe.fields.map((field) => `${field.loc.o || 0}/${field.loc.m || 1}`), ["0/3", "0/3", "1/3", "1/3", "2/3", "2/3"]);
+  const { doc: next } = page(html(1));
+  const found = recipes.locateActions(result.recipe, build(next));
+  assert.equal(found.sections[0].rowRefs.length, 1, "one row counted on the new page");
+});
