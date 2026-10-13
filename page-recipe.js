@@ -296,10 +296,25 @@
 
   // ---- 生成配方 ---------------------------------------------------------------
 
-  // 深度分析完成并核验后，把这次实际用到的说明书变成配方。
+  // 用户确认的「编辑 / 展开」→ 按钮定位信息。要在点击之前生成：很多网页点完「编辑」按钮就换掉了。
+  // 有一个说不清就返回 null（这份分析不存成配方）。
+  function actionLocators(items, outline) {
+    const deep = deepApi();
+    const clean = cleaner(outline.redact);
+    const list = [];
+    for (const item of items || []) {
+      if (!["edit", "expand"].includes(item.kind)) continue;
+      const btn = buttonLocator(item.ref, outline, clean, deep.ALLOW[item.kind]);
+      if (!btn) return null;
+      list.push({ kind: item.kind, btn });
+    }
+    return list.slice(0, MAX_ACTIONS);
+  }
+
+  // 深度分析填写之前，把这次实际要用的说明书变成配方草稿（填写可能让网页重画，先按填写前的样子记）。
   // fields：最后一轮校验过的说明书字段；outline：这一轮的大纲；sections：最后一轮的经历分组；
-  // actions：{ items（用户确认后实际完成的「编辑 / 展开」）, outline（第一轮大纲）}；tier：分析实际用的档位。
-  // 定位不了（没有任何可靠依据）的字段不进配方；一个字段都留不下就不保存。
+  // actions：actionLocators() 在点击前生成的按钮定位；tier：分析实际用的档位。
+  // 定位不了（没有任何可靠依据）的字段不进配方；能找回的不到 80% 就不保存。
   function buildRecipe({ fields, outline, sections = [], actions = null, tier = "", now = Date.now() }) {
     const deep = deepApi();
     const clean = cleaner(outline.redact);
@@ -336,13 +351,7 @@
     // 下次能重新找到的字段太少（不到这次的 80%）：按配方填会比这次差，不保存。
     if (!kept.length || kept.length / eligible < MIN_RATIO) return { ok: false, reason: "no_locatable_fields", dropped };
 
-    const savedActions = [];
-    for (const item of actions?.items || []) {
-      if (!["edit", "expand"].includes(item.kind)) continue;
-      const btn = buttonLocator(item.ref, actions.outline, clean, deep.ALLOW[item.kind]);
-      if (!btn) return { ok: false, reason: "action_unlocatable", dropped };
-      savedActions.push({ kind: item.kind, btn });
-    }
+    const savedActions = Array.isArray(actions) ? actions.slice(0, MAX_ACTIONS) : [];
     const savedSections = [];
     for (const section of sections.filter(item => item.addRef).slice(0, MAX_SECTIONS)) {
       const add = buttonLocator(section.addRef, outline, clean, deep.ALLOW.add);
@@ -805,7 +814,7 @@
   const api = {
     STORAGE_KEY, VERSION, MAX_SITES, MAX_RECIPES_PER_SITE, MAX_RECIPE_BYTES, MAX_TOTAL_BYTES, MAX_FIELDS, MIN_RATIO, MAX_FAILED,
     TOUCH_INTERVAL_MS,
-    pageKey, stableToken, scopeKey, fingerprint, buildRecipe, sanitizeRecipe, locateFields, locateActions, toSpecFields,
+    pageKey, stableToken, scopeKey, fingerprint, actionLocators, buildRecipe, sanitizeRecipe, locateFields, locateActions, toSpecFields,
     saveDecision, readStore, lookup, findRecipe, upsert, removeRecipe, touchRecipe, createStore, summary, encodedBytes, validHost, validPath
   };
   scope.ResumeProPageRecipe = api;

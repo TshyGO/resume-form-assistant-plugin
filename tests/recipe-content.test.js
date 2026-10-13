@@ -8,7 +8,16 @@ const assert = require("node:assert/strict");
 const deep = require("../deep-analysis.js");
 const outlineApi = require("../page-outline.js");
 const recipes = require("../page-recipe.js");
-const { loadHighlightHelpers } = require("./helpers/content-harness.js");
+const { loadHighlightHelpers, fakeFieldScan } = require("./helpers/content-harness.js");
+
+// 假扫描：查看状态下还没出现的输入框（isConnected 为 false）不算。
+function scanVisibleOnly() {
+  const base = fakeFieldScan();
+  return { ...base, scanPage(doc, options) {
+    const result = base.scanPage(doc, options);
+    return { ...result, controls: result.controls.filter((control) => control.element.isConnected !== false) };
+  } };
+}
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 // 内容脚本跑在 vm 里，它造的数组和这里的不是同一个 realm：比较前先转成普通 JSON。
@@ -70,6 +79,7 @@ function recipePage({ labels = ["姓名", "现居城市"], analyze, fill, button
     randomUUID: (() => { let n = 0; return () => `req-${++n}`; })(),
     deepAnalysis: deep,
     pageRecipe: recipes,
+    fieldScan: scanVisibleOnly(),
     pageActions,
     formAgent: require("../form-agent.js"),
     pageOutline: { ...outlineApi, ...fakeOutline(inputs, buttons, outlineCalls) },
@@ -138,7 +148,8 @@ function seedRecipe(page, extra = {}) {
   const built = page.helpers && fakeOutline(page.inputs, extra.buttons || [], []).build(null, { resumeValues: [] });
   const fields = [...built.nodes].filter(([, node]) => node.type === "control")
     .map(([ref, node]) => ({ ref, label: node.control.label, group: "基本信息", groupIndex: null, control: "text", hints: {} }));
-  const result = recipes.buildRecipe({ fields, outline: built, tier: "strong", now: 1000, actions: extra.actions?.(built) || null });
+  const result = recipes.buildRecipe({ fields, outline: built, tier: "strong", now: 1000,
+    actions: extra.actions ? recipes.actionLocators(extra.actions(built).items, built) : null });
   assert.equal(result.ok, true, JSON.stringify(result));
   const key = recipes.pageKey(page.location.href);
   page.storageData[recipes.STORAGE_KEY] = { v: 1, sites: { [key.host]: { [key.path]: result.recipe } } };
@@ -389,4 +400,53 @@ test("delete removes only this page's recipe and the panel stops showing it; oth
   assert.deepEqual(Object.keys(page.storageData[recipes.STORAGE_KEY].sites), ["other.example.test"]);
   assert.deepEqual(page.sent.filter((message) => message.type === "RECIPE_DELETE").map(({ host, path }) => [host, path]),
     [["jobs.example.test", "/apply/*"]]);
+});
+
+test("deep analysis with a confirmed 编辑 saves the button with the recipe; the next one-click fill previews it again instead of analysing", async () => {
+  const editButton = { isConnected: true, tag: "edit", getAttribute: () => null, closest: () => null };
+  let page;
+  let round = 0;
+  const pageActions = {
+    buildPlan(args) {
+      const ref = args.spec.preActions[0]?.ref;
+      return ref ? { items: [{ kind: "edit", ref, element: args.nodes.get(ref).element, label: "基本信息：编辑" }], manual: [], blocked: [], adds: null }
+        : { items: [], manual: [], blocked: [], adds: null };
+    },
+    async executePlan() {
+      // 点「编辑」后输入框出现，按钮换成了别的（很多网站点完编辑就没有这个按钮了）。
+      page.inputs.forEach((input) => { input.isConnected = true; });
+      editButton.isConnected = false;
+      return { ok: true, done: { edit: 1, expand: 0, add: 0 }, scopes: [] };
+    },
+    createHighlighter: () => ({ show() {}, clear() {} })
+  };
+  page = recipePage({ buttons: [{ text: "编辑", element: editButton }], pageActions, analyze: (message, inputs) => (++round === 1
+    ? { success: true, tierUsed: "strong", spec: { pageState: "viewing", preActions: [{ ref: "e1", kind: "edit" }], fields: [] } }
+    : { success: true, tierUsed: "strong", spec: { pageState: "editing", fields: inputs.map((input, index) => ({
+      ref: `e${index + 1}`, label: input.getAttribute("data-label"), group: "基本信息", control: "text" })) } }) });
+  page.inputs.forEach((input) => { input.isConnected = false; });
+  // 查看状态下普通填写一个字段都扫不到：基线是 0。
+  await plainFill(page);
+  assert.equal(page.aiCalls("AI_FILL").length, 0);
+  const { requestId } = await page.ask({ action: "start" });
+  await page.run(async () => (await page.status()).deep.phase === "preview");
+  const preview = (await page.status()).deep;
+  assert.equal((await page.ask({ action: "confirm", requestId, planId: preview.planId })).ok, true);
+  await page.run(page.finished);
+  const done = (await page.status()).deep;
+  assert.equal(done.phase, "completed", done.message);
+  assert.ok(done.notes.some((note) => /已保存为本站配方/.test(note)), JSON.stringify(done.notes));
+  const saved = page.storageData[recipes.STORAGE_KEY].sites["jobs.example.test"]["/apply/*"];
+  assert.deepEqual(plain(saved.actions), [{ kind: "edit", btn: { s: "", sec: "基本信息", t: "编辑", n: 1 } }]);
+  assert.equal(saved.fields.length, 2);
+  // 刷新后又是查看状态：一键填写转到配方模式，先预览「编辑」，不做页面分析。
+  const analyses = page.aiCalls("AI_ANALYZE_PAGE").length;
+  page.inputs.forEach((input) => { input.isConnected = false; input.value = ""; });
+  editButton.isConnected = true;
+  await page.ask({ action: "dismiss" });
+  await page.sendPanelMessage({ type: "RESUME_PANEL_FILL" });
+  await page.run(async () => (await page.status()).deep.phase === "preview");
+  const again = (await page.status()).deep;
+  assert.equal(again.mode, "recipe");
+  assert.equal(page.aiCalls("AI_ANALYZE_PAGE").length, analyses);
 });

@@ -350,8 +350,8 @@
         run.outline = null;
         run.plan = null;
         run.merged = null;
-        run.actionOutline = null;
-        run.actionItems = null;
+        run.actionLocators = null;
+        run.recipeDraft = null;
         deps.highlight?.(null);
         deps.release?.();
         deps.onFinish?.(state.report);
@@ -665,6 +665,15 @@
         return;
       }
       const report = state.report;
+      // #226：配方要记住这次确认的「编辑 / 展开」。点之前按第一轮大纲生成定位（点完按钮常常被换掉）。
+      if (run.mode === "analyze" && deps.recipeActionLocators) {
+        const items = plan.items.filter(item => item.kind !== "add");
+        try {
+          run.actionLocators = items.length ? deps.recipeActionLocators({ items, outline: run.outline }) : [];
+        } catch {
+          run.actionLocators = null;
+        }
+      }
       const result = await deps.executeActions(plan, {
         stopped: () => (run.stopped || state.run !== run ? "stopped" : stale(run) ? "navigated" : ""),
         onProgress: step => set(run, "acting", `正在执行 ${step.index}/${step.total}：${step.label}…`,
@@ -685,9 +694,6 @@
         await recipeFill(run, { after: doneSummary(report.actions.done), scopes: result.scopes || [] });
         return;
       }
-      // 配方要记住第一轮点过的「编辑 / 展开」（按第一轮大纲生成定位）。
-      run.actionOutline = run.outline;
-      run.actionItems = plan.items.filter(item => item.kind !== "add");
       // 动作之后的网页已经不是第一次分析时那样：重新生成大纲（新的编号），再分析一次。
       run.outline = null;
       const analysed = await analyzeRound(run, 2);
@@ -741,6 +747,15 @@
         if (addable.length) state.notes.push(`如果简历里的${[...new Set(addable)].join("、")}比网页上的多，可以先手动点「添加」，再重新分析填写。`);
       }
 
+      // #226：配方草稿按填写之前的网页生成，填写后满足保存条件才写入。
+      if (run.mode === "analyze" && deps.draftRecipe) {
+        try {
+          run.recipeDraft = deps.draftRecipe({ fields: merged.fields, sections: merged.sections, outline, tier: report.tierUsed,
+            actions: run.actionLocators === undefined ? [] : run.actionLocators });
+        } catch {
+          run.recipeDraft = { ok: false, status: "unlocatable" };
+        }
+      }
       set(run, "filling", "AI 正在匹配简历并填写网页…", { progress: null });
       const result = await deps.fill({
         fields: prepared.fields,
@@ -769,7 +784,7 @@
         // 用户在覆盖确认里点了取消，或填写途中改了字段：照普通填写的保护停下，不是失败。
         set(run, "stopped", `${after}已按你的选择停止填写，网页现有内容没有改动。`, { result: counts });
       } else if (result?.outcome === "success" || result?.outcome === "partial") {
-        const note = await saveRecipe(run, merged, outline, result);
+        const note = await saveRecipe(run, result);
         if (state.run !== run) return;
         if (note) {
           state.notes.push(note);
@@ -784,17 +799,13 @@
 
     // #226：效果确实比普通填写好时存成本站配方。只在校验通过、没有取消、核验后的填写数更多时由 content 写入；
     // 写入前再核对一次这次分析仍然有效（没有停止、没有换页）。返回给用户看的一句固定文案。
-    async function saveRecipe(run, merged, outline, result) {
+    async function saveRecipe(run, result) {
       const report = state.report;
       if (run.mode !== "analyze" || !deps.saveRecipe) return "";
       let outcome;
       try {
-        outcome = await deps.saveRecipe({
-          fields: merged.fields, sections: merged.sections, outline,
-          actions: run.actionItems?.length ? { items: run.actionItems, outline: run.actionOutline } : null,
-          tier: report.tierUsed, validation: report.validation, result, baseline: run.baseline,
-          current: () => !stopped(run)
-        });
+        outcome = await deps.saveRecipe({ draft: run.recipeDraft, validation: report.validation, result, baseline: run.baseline,
+          current: () => !stopped(run) });
       } catch {
         outcome = { status: "save_failed" };
       }

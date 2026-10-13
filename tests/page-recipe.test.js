@@ -247,15 +247,19 @@ function viewPage() {
 
 async function editAndSave() {
   const { doc } = viewPage();
+  // 很多网页点完「编辑」按钮就换成「保存 / 取消」：按钮的定位要在点之前记下。
+  doc.getElementById("edit-basic").addEventListener("click", (event) => setTimeout(() => event.target.replaceWith(doc.createElement("span")), 5));
   const first = build(doc);
   const editRef = refOf(first, doc.getElementById("edit-basic"));
   const planned = actions.buildPlan({ spec: { preActions: [{ ref: editRef, kind: "edit" }], sections: [] }, nodes: first.nodes, titles: first.titles,
     redact: first.redact, templateFields: [], formAgent: agent, deep, describe: outline.describeButton, isVisible, doc });
+  const locators = recipes.actionLocators(planned.items, first);
   const done = await actions.executePlan(planned, { doc, deep, describe: outline.describeButton, isVisible, formAgent: agent, stopped: () => "", timing: FAST });
   assert.equal(done.ok, true);
+  assert.equal(doc.getElementById("edit-basic"), null, "the button is gone after the click");
+  assert.equal(recipes.actionLocators(planned.items, first), null, "described after the click it could not be found any more");
   const second = build(doc);
-  const result = recipes.buildRecipe({ fields: specFor(second, all(doc)), outline: second, now: 1,
-    actions: { items: planned.items, outline: first } });
+  const result = recipes.buildRecipe({ fields: specFor(second, all(doc)), outline: second, now: 1, actions: locators });
   assert.equal(result.ok, true, JSON.stringify(result));
   return result.recipe;
 }

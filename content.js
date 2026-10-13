@@ -1825,6 +1825,8 @@
       planActions: self.ResumeProPageActions && self.ResumeProFormAgent ? planDeepActions : null,
       // #226 站点配方：保存（深度分析效果更好时）、配方模式下找按钮和字段。
       baseline: deepBaseline,
+      recipeActionLocators: recipeApi() ? ({ items, outline }) => recipeApi().actionLocators(items, outline) : null,
+      draftRecipe: recipeApi() ? draftDeepRecipe : null,
       saveRecipe: recipeApi() ? saveDeepRecipe : null,
       onRecipeSaved: info => {
         recipeCache.loaded = false;
@@ -2137,27 +2139,37 @@
     }
   }
 
-  async function saveDeepRecipe({ fields, sections, outline, actions, tier, validation, result, baseline, current }) {
+  // 深度分析填写之前：按当前网页生成配方草稿和归类（只在内存里，满足保存条件才写入）。
+  // actions 为 null 表示确认过的按钮没法可靠地记下来，这份分析不存成配方。
+  function draftDeepRecipe({ fields, sections, outline, actions, tier }) {
+    const api = recipeApi();
+    const key = api.pageKey(location.href, { redact: outline.redact });
+    if (!key.ok) return { ok: false, status: "unsafe" };
+    if (actions === null) return { ok: false, status: "unlocatable" };
+    const built = api.buildRecipe({ fields, outline, sections, actions, tier, now: Date.now() });
+    if (!built.ok) return { ok: false, status: built.reason === "privacy" ? "unsafe" : built.reason === "too_large" ? "too_large" : "unlocatable" };
+    return { ok: true, key, recipe: built.recipe };
+  }
+
+  async function saveDeepRecipe({ draft, validation, result, baseline, current }) {
     const api = recipeApi();
     if (!api) return { status: "" };
     const decision = api.saveDecision({ validation, result, baseline, stopped: !current() });
     if (!decision.save) return { status: decision.reason };
-    const key = api.pageKey(location.href, { redact: outline.redact });
-    if (!key.ok) return { status: "unsafe" };
-    const built = api.buildRecipe({ fields, outline, sections, actions, tier, now: Date.now() });
-    if (!built.ok) return { status: built.reason === "privacy" ? "unsafe" : built.reason === "too_large" ? "too_large" : "unlocatable" };
+    if (!draft?.ok) return { status: draft?.status || "unlocatable" };
+    const { key, recipe } = draft;
     // 换页、停止之后迟到的结果不保存。
     if (!current() || !currentRecipeKey() || recipeId(currentRecipeKey()) !== recipeId(key)) return { status: "cancelled" };
     let reply = null;
     try {
-      reply = await chrome.runtime.sendMessage({ type: "RECIPE_SAVE", host: key.host, path: key.path, recipe: built.recipe });
+      reply = await chrome.runtime.sendMessage({ type: "RECIPE_SAVE", host: key.host, path: key.path, recipe });
     } catch {
       reply = null;
     }
     recipeCache.loaded = false;
     if (!reply?.ok) return { status: "save_failed" };
     recipeCache.lastUse = "";
-    return { status: reply.replaced ? "replaced" : "saved", fields: built.recipe.fields.length };
+    return { status: reply.replaced ? "replaced" : "saved", fields: recipe.fields.length };
   }
 
   async function handlePanelRecipe(message) {
