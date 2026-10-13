@@ -828,3 +828,37 @@ test("rows still missing after the re-analysis are only mentioned: no second rou
   assert.equal(h.actionCalls.executed.length, 1, "the round-two add is never executed");
   assert.ok(done.notes.some((note) => note.includes("教育经历：添加 ×1") && note.includes("不再自动新增")));
 });
+
+test("a view page with no input at all but an 「编辑」 button is still analysed; without such a button it stops as before", async () => {
+  const withEdit = actionHarness();
+  withEdit.deps.buildOutline = (() => {
+    let n = 0;
+    return () => {
+      n += 1;
+      const nodes = n === 1 ? new Map([["e9", { type: "button", text: "编辑", submit: false, leaves: false, element: { isConnected: true } }]]) : nodesFor(2);
+      return { parts: [{ text: "x", refs: [...nodes.keys()] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: n === 1 ? 0 : 2 } };
+    };
+  })();
+  withEdit.deps.analyze = async (request) => {
+    withEdit.calls.analyze.push(request);
+    return withEdit.calls.analyze.length === 1
+      ? { success: true, spec: { pageState: "viewing", preActions: [{ ref: "e9", kind: "edit" }], fields: [] } }
+      : { success: true, spec: { pageState: "editing", fields: [{ ref: "e1", label: "姓名", control: "text" }] } };
+  };
+  const { requestId } = await withEdit.controller.start();
+  const state = await withEdit.settle(previewing);
+  withEdit.controller.confirm(requestId, state.planId);
+  assert.equal((await withEdit.settle(finished)).phase, "completed");
+
+  for (const button of [null, { type: "button", text: "提交", submit: true, leaves: false }, { type: "button", text: "编辑", submit: true, leaves: false }]) {
+    const h = harness({ buildOutline: () => {
+      const nodes = new Map(button ? [["e1", button]] : []);
+      return { parts: [{ text: "x", refs: [...nodes.keys()] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: 0 } };
+    } });
+    await h.controller.start();
+    const done = await h.settle(finished);
+    assert.equal(done.phase, "failed", JSON.stringify(button));
+    assert.match(done.message, /没有找到可以分析的输入框/);
+    assert.equal(h.calls.analyze.length, 0, "nothing is sent for a page with nothing to fill or open");
+  }
+});

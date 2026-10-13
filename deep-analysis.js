@@ -397,7 +397,10 @@
       report.outlineChars = outline.stats.chars;
       report.parts = outline.stats.parts;
       report.truncated = Boolean(outline.stats.truncated);
-      if (!outline.stats.controls || !outline.parts.length) {
+      // 查看态的页面常常一个输入框都没有，只有「编辑」「展开」：这种页面也要交给模型给出前置动作（只限第一轮）。
+      const actionable = round === 1 && [...outline.nodes.values()].some(node => node.type === "button"
+        && (buttonAllowed(node, ALLOW.edit, { crossPageOk: true }) || buttonAllowed(node, ALLOW.expand, { crossPageOk: true })));
+      if (!outline.parts.length || (!outline.stats.controls && !actionable)) {
         const hint = round > 1 ? "" : deps.emptyHint?.() || "";
         set(run, "failed", `${after}这个页面上没有找到可以分析的输入框。${hint}`);
         return null;
