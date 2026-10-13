@@ -10,7 +10,10 @@
   },
   "vars": {
     "METRICS_ENABLED": "false",
-    "DAILY_EMAIL_ENABLED": "false"
+    "DAILY_EMAIL_ENABLED": "false",
+    "DAILY_EMAIL_FROM": "",
+    "DAILY_EMAIL_TO_0": "",
+    "DAILY_EMAIL_TO_1": ""
   },
   "d1_databases": [
     {
@@ -35,14 +38,7 @@
   },
   "send_email": [
     {
-      "name": "METRICS_EMAIL",
-      "allowed_sender_addresses": [
-        "reports@19991107.xyz"
-      ],
-      "allowed_destination_addresses": [
-        "peteryan233@foxmail.com",
-        "1536484476@qq.com"
-      ]
+      "name": "METRICS_EMAIL"
     }
   ]
 }

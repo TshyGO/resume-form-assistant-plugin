@@ -2,9 +2,10 @@ import test, { before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { buildDailyEmail, runDailyEmail, EMAIL_TO, EMAIL_CRON } from '../src/email.mjs';
+import { buildDailyEmail, runDailyEmail, EMAIL_CRON } from '../src/email.mjs';
 import { createWorker } from '../src/index.mjs';
 const NOW = new Date('2026-10-13T00:30:00Z');
+const EMAIL_TO=['one@example.test','two@example.test'];
 let mf, db;
 before(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ modules:true,scriptPath:'output/worker.mjs',compatibilityDate:'2026-10-01',d1Databases:['DB'] }));
@@ -20,11 +21,12 @@ beforeEach(async()=> {
   for (const date of ['2026-10-12','2026-10-13']) await db.prepare('INSERT INTO release_observation VALUES (?,?,0)').bind(date+'T00:10:10Z',date).run();
 });
 after(async()=>mf?.dispose());
-const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',METRICS_EMAIL:{send}});
+const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',DAILY_EMAIL_FROM:'report@example.test',DAILY_EMAIL_TO_0:EMAIL_TO[0],DAILY_EMAIL_TO_1:EMAIL_TO[1],METRICS_EMAIL:{send}});
 const opts={now:()=>NOW};
 test('default off and missing binding never query or send', async()=> {
   assert.equal((await runDailyEmail({})).status,'disabled');
   assert.equal((await runDailyEmail({DAILY_EMAIL_ENABLED:'true'})).status,'not_ready');
+  assert.equal((await runDailyEmail({...env(async()=>{}),DAILY_EMAIL_TO_1:''},opts)).status,'not_ready');
 });
 test('UTC closed date, task freshness and snapshot row integrity determine normal vs anomaly',async()=>{
   let m=await buildDailyEmail(db,NOW);assert.equal(m.date,'2026-10-12');assert.match(m.subject,/统计日报/);assert.match(m.text,/来源可重叠/);
@@ -32,6 +34,18 @@ test('UTC closed date, task freshness and snapshot row integrity determine norma
   m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
   await db.prepare('UPDATE release_observation SET asset_count=1').run();
   await assert.rejects(()=>buildDailyEmail(db,NOW),/Incomplete stored snapshot/);
+});
+test('empty or malformed success timestamps never produce a normal report',async()=>{
+  for(const bad of [null,'','not-a-date']) {
+    await db.prepare('UPDATE maintenance_state SET last_success_at=? WHERE task=\'downloads\'').bind(bad).run();
+    const m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
+  }
+  await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-13T00:10:10.000Z' WHERE task='downloads'").run();
+  await db.prepare("UPDATE release_observation SET observed_at='' WHERE date_utc='2026-10-13'").run();
+  assert.match((await buildDailyEmail(db,NOW)).subject,/异常/);
+  await db.prepare("UPDATE release_observation SET observed_at='2026-10-13T00:10:10.000Z' WHERE date_utc='2026-10-13'").run();
+  await db.prepare("UPDATE metrics_daily SET generated_at_utc='' WHERE date_utc='2026-10-12'").run();
+  assert.match((await buildDailyEmail(db,NOW)).subject,/异常/);
 });
 test('missing report-day summary and unstarted activity are not misleading zero reports',async()=>{
   await db.prepare('DELETE FROM metrics_daily').run();assert.match((await buildDailyEmail(db,NOW)).text,/汇总缺失/);

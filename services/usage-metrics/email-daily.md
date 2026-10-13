@@ -4,9 +4,9 @@
 
 ## 配置
 
-同事已配置测试Worker resume-usage-metrics-test 的 METRICS_EMAIL。仓库wrangler.test.example.json及本地实际忽略配置均保存send_email绑定，限制发件人reports@19991107.xyz及两位指定收件人，下一次部署可保留绑定。无需额外SMTP密码/第三方邮件Key。不是通过此PR证明域名验证、权限或实际投递已成功。
+同事已配置测试Worker resume-usage-metrics-test 的 METRICS_EMAIL。仓库wrangler.test.example.json及本地实际忽略配置均保存send_email绑定，使用已验证发件人及两位指定收件人，并在忽略的实际部署配置中限制邮件绑定地址；仓库示例不含个人邮箱，下一次部署可保留绑定。无需额外SMTP密码/第三方邮件Key。不是通过此PR证明域名验证、权限或实际投递已成功。
 
-DAILY_EMAIL_ENABLED默认false，独立于客户端METRICS_ENABLED（后者关闭不妨碍查询已有数据）。测试配置新增Cron `30 0 * * *`，即北京时间每日08:30；原维护任务 `10 0 * * *` 保留。本地wrangler.json不配置Cron。新Cron按controller.cron分流，不额外运行维护任务。邮件绑定和收件人固定，新增收件人需代码/配置评审；无公开发信接口。
+DAILY_EMAIL_FROM、DAILY_EMAIL_TO_0、DAILY_EMAIL_TO_1在实际环境填写；为空时不发送。DAILY_EMAIL_ENABLED默认false，独立于客户端METRICS_ENABLED（后者关闭不妨碍查询已有数据）。测试配置新增Cron `30 0 * * *`，即北京时间每日08:30；原维护任务 `10 0 * * *` 保留。本地wrangler.json不配置Cron。新Cron按controller.cron分流，不额外运行维护任务。邮件绑定和收件人固定，新增收件人需代码/配置评审；无公开发信接口。
 
 ## 日报
 
