@@ -50,15 +50,23 @@ const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding:
 const artifact = platform === 'macos-arm64' ? join(destination, name, 'Contents/MacOS/resume-pro-desktop') : join(destination, name);
 const runtimeInfo = JSON.parse(execFileSync(artifact, ['--probe', '--metrics-test-info'], { encoding: 'utf8', timeout: 20_000 }));
 if (runtimeInfo.purpose !== 'isolated-usage-metrics-acceptance'
+    || typeof runtimeInfo.app_version !== 'string'
+    || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(runtimeInfo.app_version)
     || runtimeInfo.identifier !== 'com.resumepro.metrics.acceptance'
     || runtimeInfo.native_host !== 'com.resumepro.metrics.test'
     || runtimeInfo.data_root_isolated !== true || runtimeInfo.feedback_disabled !== true
     || runtimeInfo.endpoint !== 'https://resume-usage-metrics-test.nebula-lab.workers.dev/v1/activity') {
   throw new Error('Binary is not the isolated TEST acceptance build; package refused');
 }
+// Finder metadata and receipt come from the binary we actually package.
+// Re-sign metadata changes with the existing ad-hoc policy.
+if (platform === 'macos-arm64') {
+  execFileSync(python, ['-c', 'import sys,plistlib; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d["CFBundleShortVersionString"]=sys.argv[2]; plistlib.dump(d,open(p,"wb"))', join(destination, name, 'Contents/Info.plist'), runtimeInfo.app_version]);
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', join(destination, name)]);
+}
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 writeFileSync(join(destination, 'build-receipt.json'), JSON.stringify({
-  source_commit: commit, platform, desktop_version: '0.4.2',
+  source_commit: commit, platform, desktop_version: runtimeInfo.app_version,
   identifier: 'com.resumepro.metrics.acceptance', native_host: 'com.resumepro.metrics.test',
   desktop_binary_sha256: sha256(readFileSync(artifact)), plugin_original_sha256: sha256(readFileSync(pluginZip)),
   plugin_staged_changes: ['manifest name/description', 'Native Messaging host', 'feedback bootstrap disabled'],

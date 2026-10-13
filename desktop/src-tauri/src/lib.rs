@@ -1452,6 +1452,7 @@ pub fn run() {
             .and_then(|paths| metrics_acceptance::configured_endpoint(&paths.data_root));
         println!("{}", serde_json::json!({
             "purpose": "isolated-usage-metrics-acceptance",
+            "app_version": env!("CARGO_PKG_VERSION"),
             "identifier": metrics_acceptance::IDENTIFIER,
             "endpoint": effective_endpoint,
             "native_host": nm_register::HOST_NAME,
