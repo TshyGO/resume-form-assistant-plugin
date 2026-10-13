@@ -108,6 +108,7 @@
     while (node && !elements.every(el => node.contains(el))) node = node.parentElement;
     return node;
   }
+  const bare = value => String(value ?? "").replace(/[\s\p{P}\p{S}]/gu, "");
   const containsAny = (node, list) => list.some(el => el !== node && node.contains(el));
   function specControls(ref) { return Array.from(ref.scope.querySelectorAll(editable)).filter(ref.visible); }
   function shapeOf(el, isVisible) {
@@ -136,6 +137,20 @@
     if (!parent.isConnected) return [];
     return Array.from(parent.children).filter(child => signature(child) === sig && Array.from(child.querySelectorAll(editable)).some(ref.visible));
   }
+  // 没有输入框不等于没有条目：查看态的条目只有文字。分组里除了按钮只允许有标题和一句提示（最多两段文字），
+  // 出现像年份的数字、两段以上文字或很长的文字，就当作已经有条目，不能当成 0 条。
+  function showsEntries(scope, button) {
+    const doc = scope.ownerDocument;
+    const pieces = [];
+    const walker = doc.createTreeWalker(scope, 4);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (button.contains(node)) continue;
+      const text = bare(node.data);
+      if (text) pieces.push(text);
+    }
+    const all = pieces.join("");
+    return pieces.length > 2 || /\d{4}/.test(all) || all.length > 60;
+  }
   // group：{ domain, button, rows（已有条目里各取一个元素，一条一个）, others（别的分组的按钮和条目） }。
   function locateGroup(group, isVisible, labelOf) {
     const { button, rows: anchors = [], others = [] } = group;
@@ -151,6 +166,7 @@
         scope = parent;
       }
       if (!scope || scope === top || Array.from(scope.querySelectorAll(editable)).some(isVisible)) return { reason: "uncountable" };
+      if (showsEntries(scope, button)) return { reason: "uncountable" };
       return { scope, current: 0, model: null, anchor: null, initial: [] };
     }
     if (anchors.some(el => !el?.isConnected) || new Set(anchors).size !== anchors.length) return { reason: "uncountable" };
@@ -169,6 +185,8 @@
       const found = modelRows({ model, visible: isVisible });
       // 网页上同结构的条目必须正好是说明书列出的这些；分组里也不能有条目以外的输入框。
       if (found.length !== anchors.length || !rowsOf.every(row => found.includes(row))) return { reason: "uncountable" };
+      // 同结构但没有输入框的兄弟（查看态的条目）也是条目：有就数不清。
+      if (Array.from(parent.children).some(child => signature(child) === sig && !found.includes(child))) return { reason: "uncountable" };
       if (all.some(el => !found.some(row => row.contains(el)))) return { reason: "uncountable" };
       if (found.some(row => looksRepeated(row, isVisible, labelOf))) return { reason: "uncountable" };
     } else {

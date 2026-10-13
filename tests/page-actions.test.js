@@ -414,3 +414,14 @@ test("a stop right after an add click still reports the row the page added", asy
   assert.equal(result.done.add, 1, "the row that appeared is counted, not hidden");
   assert.deepEqual(clicks, ["edu"]);
 });
+
+test("a group without input rows but with entries shown as text is not counted as empty", () => {
+  const { doc, clicks } = beisenPage({ papers: 0 });
+  doc.querySelector("#papers .sc-list").insertAdjacentHTML("beforeend",
+    "<div class='view-entry'>基于虚构数据的表单识别研究 · 示例学报 · 2025 年第 3 期</div>");
+  const { built, checked } = analyse(doc, beisenSpec(doc, ["papers"]));
+  const planned = plan(doc, built, checked.spec, records("论文", 2, "标题"));
+  assert.deepEqual(planned.items, []);
+  assert.match(planned.blocked.join(), /论文在网页上的已有条目无法可靠计数/);
+  assert.deepEqual(clicks, []);
+});
