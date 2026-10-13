@@ -2858,7 +2858,9 @@
       invalid: "校验没有通过", failed: "填写没有完成", action_missing: "要点的按钮找不到", action_changed: "要点的按钮对不上" };
     switch (recipe?.status) {
       case "hit":
-        return `本站配方：命中（定位 ${count(recipe.located)}/${count(recipe.total)}${recipe.extra ? `，新增条目 ${count(recipe.extra)}` : ""}`
+        return `本站配方：命中（定位 ${count(recipe.located)}/${count(recipe.total)}`
+          + (recipe.missing || recipe.ambiguous ? `，找不到 ${count(recipe.missing)}，有歧义 ${count(recipe.ambiguous)}` : "")
+          + (recipe.extra ? `，新增条目 ${count(recipe.extra)}` : "")
           + `，规则扫描补充 ${count(recipe.supplemented)}；结构${recipe.sameStructure ? "一致" : "有变化"}）；没有做页面分析`
           + (d ? `；匹配简历调用模型 ${count(d.calls)} 次` : "");
       case "stale":
