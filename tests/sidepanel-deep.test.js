@@ -64,7 +64,10 @@ async function sidePanel() {
   const documentStub = {
     hidden: false, getElementById: get, querySelectorAll: () => [],
     querySelector: () => ({ click() {}, open: false }), addEventListener() {},
-    createElement: (tagName) => ({ tagName: tagName.toUpperCase(), textContent: "" })
+    createElement: (tagName) => {
+      const listeners = {};
+      return { tagName: tagName.toUpperCase(), textContent: "", listeners, addEventListener(type, listener) { listeners[type] = listener; } };
+    }
   };
   const context = vm.createContext({
     document: documentStub, chrome,
@@ -92,7 +95,7 @@ test("the entry is a quiet button on the 填写 page under 一键 AI 填写, plu
   const consent = html.slice(html.indexOf('id="deep-consent"'), html.indexOf('id="deep-card"'));
   assert.match(consent, /不发送输入框里已有的内容/);
   assert.match(consent, /和「一键 AI 填写」一样/);
-  assert.match(consent, /不会点击网页上的按钮，不会提交、保存或投递/);
+  assert.match(consent, /你确认后才点；不会提交、保存、删除或投递/);
   const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
   assert.ok(!/resume-pro-deep|深度分析本页<\/button>/.test(content), "the page's old overlay gets no deep-analysis entry");
 });
@@ -182,4 +185,81 @@ test("page data is cut to the fixed shape: unknown phases, long texts and stray 
 test("the panel reads and writes no storage for the consent", () => {
   const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
   assert.doesNotMatch(source, /deepAnalysisConsent/);
+});
+
+// --- #225：预览与确认 -------------------------------------------------------------------------------
+
+const preview = (extra = {}) => view("preview", { message: "确认后会依次点击下面的按钮", planId: "plan-7",
+  plan: [{ text: "基本信息：编辑" }, { text: "教育经历：添加 ×1" }], canConfirm: true, canCancel: true, canStop: false, ...extra });
+
+test("#225 the preview lists each step; 确认 carries the run and the plan it showed, 取消 the run", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, busy: true, deep: preview() };
+  await ui.poll();
+  assert.equal(ui.get("deep-plan").hidden, false);
+  assert.deepEqual(ui.get("deep-plan").children.map((row) => row.textContent), ["基本信息：编辑", "教育经历：添加 ×1"]);
+  assert.equal(ui.get("deep-confirm").hidden, false);
+  assert.equal(ui.get("deep-confirm").textContent, "确认执行");
+  assert.equal(ui.get("deep-cancel").hidden, false);
+  assert.equal(ui.get("deep-stop").hidden, true);
+  assert.equal(ui.get("task-exit").textContent, "取消");
+  assert.equal(ui.get("fill-button").disabled, true, "the page is held while the plan waits");
+  assert.match(ui.get("task-steps").innerHTML, /确认操作<\/li>/);
+  await ui.click("deep-confirm");
+  assert.deepEqual(ui.deepCalls().map(({ action, requestId, planId }) => [action, requestId, planId]), [["confirm", "deep-1", "plan-7"]]);
+  await ui.click("deep-cancel");
+  assert.deepEqual(ui.deepCalls().at(-1), { tabId: 9, type: "RESUME_PANEL_DEEP", action: "cancel", requestId: "deep-1" });
+});
+
+test("#225 hovering a step asks the page to outline it; leaving clears it; polling does not rebuild the list under the pointer", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, busy: true, deep: preview() };
+  await ui.poll();
+  const rows = ui.get("deep-plan").children;
+  rows[1].listeners.mouseenter();
+  rows[1].listeners.mouseleave();
+  rows[0].listeners.focus();
+  await tick();
+  assert.deepEqual(ui.deepCalls().map(({ action, planId, index }) => [action, planId, index]),
+    [["highlight", "plan-7", 1], ["highlight", "plan-7", -1], ["highlight", "plan-7", 0]]);
+  await ui.poll();
+  assert.equal(ui.get("deep-plan").children, rows, "the same rows stay while the same plan shows");
+  ui.state.status = { ...ui.state.status, deep: preview({ planId: "plan-8" }) };
+  await ui.poll();
+  assert.notEqual(ui.get("deep-plan").children, rows, "a new plan gets new rows");
+});
+
+test("#225 only blocked adds: the button says 继续填写 and the notes explain why", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, busy: true, deep: preview({ plan: [], notes: ["教育经历需要新增 7 条，超过每次 5 条的上限"] }) };
+  await ui.poll();
+  assert.equal(ui.get("deep-plan").hidden, true);
+  assert.equal(ui.get("deep-confirm").textContent, "继续填写");
+  assert.equal(ui.get("deep-notes").hidden, false);
+});
+
+test("#225 acting shows the step and 停止; re-analysis says the actions are done", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, busy: true, deep: view("acting", { message: "正在执行 1/2：基本信息：编辑…", progress: { step: 1, steps: 2 }, canStop: true }) };
+  await ui.poll();
+  assert.equal(ui.get("task-desc").textContent, "正在执行第 1/2 步，每一步都核对网页变化");
+  assert.equal(ui.get("deep-stop").hidden, false);
+  assert.equal(ui.get("deep-confirm").hidden, true);
+  ui.state.status = { ...ui.state.status, deep: view("analyzing", { progress: { part: 1, parts: 1, round: 2 } }) };
+  await ui.poll();
+  assert.equal(ui.get("task-desc").textContent, "操作已完成，AI 正在重新分析页面");
+});
+
+test("#225 a malformed plan never renders and cannot be confirmed", async () => {
+  const ui = await sidePanel();
+  ui.state.status = { ...ui.state.status, busy: true, deep: preview({ planId: "<b>", plan: [{ text: "x" }] }) };
+  await ui.poll();
+  assert.equal(ui.get("deep-confirm").hidden, true, "no valid plan id, no 确认");
+  assert.equal(ui.get("deep-plan").hidden, true);
+  ui.state.status = { ...ui.state.status, deep: preview({ plan: Array.from({ length: 12 }, () => ({ text: "编辑" })) }) };
+  await ui.poll();
+  assert.equal(ui.get("deep-plan").hidden, true, "more steps than a plan can hold");
+  ui.state.status = { ...ui.state.status, deep: view("filling", { planId: "plan-7", plan: [{ text: "编辑" }], canConfirm: true }) };
+  await ui.poll();
+  assert.equal(ui.get("deep-confirm").hidden, true, "only a preview can be confirmed");
 });
