@@ -309,6 +309,16 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   // tag 名要走 env，不能直接插值进 run：那等于把 ref 名当 shell 代码执行。
   assert.doesNotMatch(flow, /run: node desktop\/scripts\/check-desktop-release\.js "\$\{\{/);
   assert.match(flow, /TAG: \$\{\{ github\.ref_type/);
+  // 使用统计只能进入正式标签包；手动试跑和 beta 不能因为都走 release workflow 就误连正式服务。
+  assert.match(flow, /metrics_ready=0/);
+  assert.match(flow, /metrics_endpoint=/);
+  assert.match(flow, /REPOSITORY: \$\{\{ github\.repository \}\}/);
+  assert.match(flow, /"\$REPOSITORY" = "TshyGO\/resume-form-assistant-plugin"/);
+  assert.match(flow, /--release-kind "\$TAG"\)" = "stable"/);
+  assert.match(flow, /RESUME_USAGE_METRICS_READY: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
+  assert.match(flow, /RESUME_USAGE_METRICS_RELEASE_BUILD: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
+  assert.match(flow, /RESUME_USAGE_METRICS_ENDPOINT: \$\{\{ steps\.release-metadata\.outputs\.metrics_endpoint \}\}/);
+  assert.match(flow, /https:\/\/resume-usage-metrics\.nebula-lab\.workers\.dev\/v1\/activity/);
   // 拿着 contents: write 的那一步不引第三方 action。
   assert.doesNotMatch(flow, /softprops\/action-gh-release/);
 });

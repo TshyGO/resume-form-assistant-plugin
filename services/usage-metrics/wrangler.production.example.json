@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "resume-usage-metrics",
+  "account_id": "REPLACE_WITH_ACCOUNT_ID",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "vars": {
+    "METRICS_ENABLED": "false",
+    "DAILY_EMAIL_ENABLED": "false",
+    "DAILY_EMAIL_FROM": "",
+    "DAILY_EMAIL_TO_0": "",
+    "DAILY_EMAIL_TO_1": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "resume-usage-metrics",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    { "name": "ACTIVITY_LIMITER", "namespace_id": "25902", "simple": { "limit": 60, "period": 60 } }
+  ],
+  "triggers": { "crons": ["10 0 * * *", "30 0 * * *"] },
+  "send_email": [
+    {
+      "name": "METRICS_EMAIL",
+      "allowed_sender_addresses": ["reports@example.com"],
+      "allowed_destination_addresses": ["recipient-1@example.com", "recipient-2@example.com"]
+    }
+  ]
+}

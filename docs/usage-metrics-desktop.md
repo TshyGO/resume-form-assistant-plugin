@@ -18,13 +18,13 @@
 
 数据目录根部的 `telemetry-state.json` 包含设置版本、enabled、notice_version、installation_id、desktop_attempt_date。`telemetry-initialized`只含初始化标记；状态丢失但标记存在时关闭并停发，避免丢失退出选择后默认重新开启。缺失两份文件才视为首次初始化。原子替换失败时关闭尝试写入停用状态，损坏/超大/未知版本/读写失败停止发送。编号不进入 archive.db、反馈状态、备份、导出或诊断。
 
-默认构建以及 debug/test/编译时具有 CI 环境变量的构建不允许统计外发，也不生成统计编号。`Config::release`仅在受审核的 release 构建同时满足以下条件才提供发送目标：
+默认构建以及 debug/test 构建不允许统计外发，也不生成统计编号。`Config::release`仅在受审核的 release 构建同时满足以下条件才提供发送目标：
 
-1. 没有 debug_assertions、test 或编译时 CI 标记。
+1. 没有 debug_assertions 或 test；CI 构建还必须显式带有 `RESUME_USAGE_METRICS_RELEASE_BUILD=1`。
 2. 构建环境 `RESUME_USAGE_METRICS_READY=1`。
 3. `RESUME_USAGE_METRICS_ENDPOINT`为已核对的 HTTPS `/v1/activity`地址，不含凭据、query 或 fragment。
 
-这两个值不是密钥。不要把 Cloudflare 管理 Token 或 HMAC Secret 编入桌面；活动接口无需管理 Token。build.rs 追踪环境变化，切换构建配置会重建。当前 PR 不修改 release workflow，也不设置上述启用值；发布仍保持停发。之后调整正式发布流水线必须单独核对 CI/test 隔离、接收地址和商店披露，不能仅设置开关就宣布上线。
+这些值不是密钥。不要把 Cloudflare 管理 Token 或 HMAC Secret 编入桌面；活动接口无需管理 Token。build.rs 追踪环境变化，切换构建配置会重建。桌面发布工作流只为 `desktop-vX.Y.Z` 正式标签同时设置两个门禁值和正式 endpoint；手动试跑与 `desktop-vX.Y.Z-beta.N` 测试版保持停发。
 
 ## 本阶段验证
 
@@ -48,7 +48,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib
 
 - 已使用专用隔离测试包和虚构资料完成 Mac/Windows 桌面及 Chrome 上报、去重、在线关闭删除、重启保留关闭、重新开启、退出后不被统计拉起和断网关闭主要流程。Windows Edge 操作后的云端去重已核验；Mac Edge 已确认连接，但对应时点云端独立核验仍待补测。此结论不是正式发行包验收，CI 构建也不代替真机测试。
 - 2026-10-13 测试环境自动 Cron 已核验：北京时间 08:10 汇总、清理、下载采集均成功，32 个资产快照完整入库；此次验证未手动触发。
-- 在正式开启前完成接收地址、实际备份期限/恢复流程、告警/费用和适用商店告知或明确同意要求；默认开启不代表已有明确同意。
+- 正式接收地址已部署并完成隔离读写/删除、D1 逻辑备份恢复和 Worker 回退演练。发布前仍需完成费用告警及商店后台数据披露；默认开启不代表已有明确同意。
 - 第四阶段插件显式使用信号与兼容代码在 #272，隔离验收包在 #274，分别合并；#270 本身不包含这两阶段增量。不把样本称为全部用户数。
 
-隐私说明同步见 [隐私政策](privacy-policy.md)。当前默认/开发构建尚无真实用户统计外发。
+隐私说明同步见 [隐私政策](privacy-policy.md)。默认、开发、普通 CI、手动试跑及 beta 构建均无真实用户统计外发；正式标签构建须在正式 Worker 开启后发布。

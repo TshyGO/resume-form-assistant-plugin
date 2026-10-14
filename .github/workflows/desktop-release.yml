@@ -63,10 +63,21 @@ jobs:
       # 构建出来的文件名会和 tag 不一致，用户下载后无从判断装的是哪一版。
       # tag 名走 env 传：`run:` 里插值等于把 ref 名当 shell 代码执行。
       - name: Verify tag and bundle config
+        id: release-metadata
         env:
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
-        run: node desktop/scripts/check-desktop-release.js "$TAG"
+        run: |
+          node desktop/scripts/check-desktop-release.js "$TAG"
+          metrics_ready=0
+          metrics_endpoint=
+          if [ "$REPOSITORY" = "TshyGO/resume-form-assistant-plugin" ] && [ -n "$TAG" ] && [ "$(node desktop/scripts/check-desktop-release.js --release-kind "$TAG")" = "stable" ]; then
+            metrics_ready=1
+            metrics_endpoint=https://resume-usage-metrics.nebula-lab.workers.dev/v1/activity
+          fi
+          echo "metrics_ready=$metrics_ready" >> "$GITHUB_OUTPUT"
+          echo "metrics_endpoint=$metrics_endpoint" >> "$GITHUB_OUTPUT"
 
       # 测试版的提交在临时分支上，不在 main 的历史里；正式 tag 若指到那种提交，
       # 就等于把没走过 main 的代码当正式版发出去。
@@ -101,6 +112,10 @@ jobs:
       - name: Build installer
         id: installer
         working-directory: desktop
+        env:
+          RESUME_USAGE_METRICS_READY: ${{ steps.release-metadata.outputs.metrics_ready }}
+          RESUME_USAGE_METRICS_RELEASE_BUILD: ${{ steps.release-metadata.outputs.metrics_ready }}
+          RESUME_USAGE_METRICS_ENDPOINT: ${{ steps.release-metadata.outputs.metrics_endpoint }}
         run: npm run tauri build -- --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
       - name: Diagnostic install and launch Windows candidate (not acceptance)
