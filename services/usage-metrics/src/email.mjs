@@ -5,10 +5,9 @@ export const EMAIL_CRON = '30 0 * * *'; // 08:30 Asia/Shanghai; metrics dates re
 const TIMEOUT_MS = 10_000;
 
 function fresh(timestamp, cutoff, now) {
-  return typeof timestamp === 'string'
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(timestamp)
-    && Number.isFinite(Date.parse(timestamp))
-    && timestamp >= cutoff && timestamp <= now.toISOString();
+  if (typeof timestamp !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(timestamp)) return false;
+  const value = Date.parse(timestamp);
+  return Number.isFinite(value) && value >= Date.parse(cutoff) && value <= now.getTime();
 }
 
 export async function buildDailyEmail(db, now) {
@@ -24,7 +23,11 @@ export async function buildDailyEmail(db, now) {
   const observations = (await db.prepare('SELECT * FROM release_observation ORDER BY observed_at DESC LIMIT 2').all()).results;
   if (!observations[0] || observations[0].date_utc !== today
       || !fresh(observations[0].observed_at, cutoff, now)) issues.push('下载快照陈旧或缺失');
-  const downloads = issues.includes('下载快照陈旧或缺失') ? null : await downloadReport(db); // Stored row-count validation rejects incomplete snapshots.
+  let downloads = null;
+  if (!issues.includes('下载快照陈旧或缺失')) {
+    try { downloads = await downloadReport(db); }
+    catch { issues.push('下载快照明细不可用或不完整'); }
+  }
   const sources = await db.prepare(`SELECT
     SUM(CASE WHEN platform = 'windows' THEN 1 ELSE 0 END) AS windows,
     SUM(CASE WHEN platform = 'macos' THEN 1 ELSE 0 END) AS macos,
@@ -64,15 +67,29 @@ export async function runDailyEmail(env, { now = () => new Date(), timeoutMs = T
   let mail;
   try { mail = await buildDailyEmail(env.DB, at); } catch { return { status: 'report_failed' }; }
   const results = [];
+  let storageFailed = false;
   for (let slot = 0; slot < addresses.length; slot++) {
-    const claimed = await env.DB.prepare(`INSERT OR IGNORE INTO email_delivery
-      (report_date, recipient_slot, status, updated_at) VALUES (?, ?, 'pending', ?)`)
-      .bind(mail.date, slot, at.toISOString()).run();
+    let claimed;
+    try {
+      claimed = await env.DB.prepare(`INSERT OR IGNORE INTO email_delivery
+        (report_date, recipient_slot, status, updated_at) VALUES (?, ?, 'pending', ?)`)
+        .bind(mail.date, slot, at.toISOString()).run();
+    } catch {
+      storageFailed = true;
+      results.push('reservation_failed');
+      continue;
+    }
     if (!claimed.meta.changes) { results.push('already_reserved'); continue; }
     // Commit uncertainty BEFORE invoking the external service. A crash cannot cause a
     // later invocation to blindly resend. Provider acceptance is not inbox delivery.
-    await env.DB.prepare("UPDATE email_delivery SET status='unknown', error_code='delivery_unconfirmed', updated_at=? WHERE report_date=? AND recipient_slot=?")
-      .bind(now().toISOString(), mail.date, slot).run();
+    try {
+      await env.DB.prepare("UPDATE email_delivery SET status='unknown', error_code='delivery_unconfirmed', updated_at=? WHERE report_date=? AND recipient_slot=?")
+        .bind(now().toISOString(), mail.date, slot).run();
+    } catch {
+      storageFailed = true;
+      results.push('reservation_unconfirmed');
+      continue; // pending prevents an automatic retry; no email is sent without durable unknown.
+    }
     let timer;
     try {
       await Promise.race([
@@ -93,5 +110,6 @@ export async function runDailyEmail(env, { now = () => new Date(), timeoutMs = T
     }
   }
   // Do not delete reservations automatically: losing a reservation can resend old reports.
+  if (storageFailed) throw new Error('email_delivery_state_failed');
   return { status: 'processed', recipients: results };
 }

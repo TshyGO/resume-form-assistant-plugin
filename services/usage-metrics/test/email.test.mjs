@@ -33,7 +33,7 @@ test('UTC closed date, task freshness and snapshot row integrity determine norma
   await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-12T00:10:10Z' WHERE task='downloads'").run();
   m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
   await db.prepare('UPDATE release_observation SET asset_count=1').run();
-  await assert.rejects(()=>buildDailyEmail(db,NOW),/Incomplete stored snapshot/);
+  m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.match(m.text,/下载快照明细不可用或不完整/);
 });
 test('empty or malformed success timestamps never produce a normal report',async()=>{
   for(const bad of [null,'','not-a-date']) {
@@ -46,6 +46,11 @@ test('empty or malformed success timestamps never produce a normal report',async
   await db.prepare("UPDATE release_observation SET observed_at='2026-10-13T00:10:10.000Z' WHERE date_utc='2026-10-13'").run();
   await db.prepare("UPDATE metrics_daily SET generated_at_utc='' WHERE date_utc='2026-10-12'").run();
   assert.match((await buildDailyEmail(db,NOW)).subject,/异常/);
+});
+test('freshness compares actual instants across different timestamp precision',async()=>{
+  const sameSecond=new Date('2026-10-13T00:10:10.000Z');
+  const m=await buildDailyEmail(db,sameSecond);
+  assert.match(m.subject,/统计日报/);
 });
 test('missing report-day summary and unstarted activity are not misleading zero reports',async()=>{
   await db.prepare('DELETE FROM metrics_daily').run();assert.match((await buildDailyEmail(db,NOW)).text,/汇总缺失/);
@@ -69,10 +74,32 @@ test('timeout preserves uncertainty and duplicate invocation cannot retry',async
   await runDailyEmail(e,{...opts,timeoutMs:5});await runDailyEmail(e,opts);assert.equal(calls,2);
   assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM email_delivery WHERE status='unknown'").first()).n,2);
 });
+test('one recipient storage failure does not prevent the other recipient',async()=>{
+  for (const mode of ['reserve','mark']) {
+    await db.prepare('DELETE FROM email_delivery').run();
+    const brokenDb={batch:db.batch.bind(db),prepare(sql){
+      const statement=db.prepare(sql);
+      const selected=mode==='reserve'
+        ? sql.startsWith('INSERT OR IGNORE INTO email_delivery')
+        : sql.startsWith("UPDATE email_delivery SET status='unknown'");
+      if (!selected) return statement;
+      return {bind(...values){
+        const slot=mode==='reserve' ? values[1] : values.at(-1);
+        if (slot===0) return {run:async()=>{throw new Error('synthetic storage fault')}};
+        return statement.bind(...values);
+      }};
+    }};
+    const sent=[];
+    await assert.rejects(()=>runDailyEmail({...env(async mail=>sent.push(mail)),DB:brokenDb},opts),/email_delivery_state_failed/);
+    assert.deepEqual(sent.map(x=>x.to),[EMAIL_TO[1]]);
+    const first=await db.prepare('SELECT status FROM email_delivery WHERE recipient_slot=0').first();
+    assert.equal(first?.status,mode==='mark'?'pending':undefined);
+  }
+});
 test('pending crash reservation is never replayed and query failure is not sent',async()=>{
   await db.prepare("INSERT INTO email_delivery VALUES ('2026-10-12',0,'pending','2026-10-13T00:30:00Z',NULL)").run();
   let calls=0;await runDailyEmail(env(async()=>calls++),opts);assert.equal(calls,1);
-  await db.prepare('UPDATE release_observation SET asset_count=1').run();assert.equal((await runDailyEmail(env(async()=>calls++),opts)).status,'report_failed');assert.equal(calls,1);
+  await db.prepare('UPDATE release_observation SET asset_count=1').run();assert.equal((await runDailyEmail(env(async()=>calls++),opts)).status,'processed');assert.equal(calls,1);
 });
 test('email cron does not run maintenance or send when default disabled',async()=>{
   const worker=createWorker({now:()=>NOW,fetchImpl:()=>{throw new Error('must not fetch');}});
