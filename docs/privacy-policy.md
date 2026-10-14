@@ -76,7 +76,7 @@ desktop 来源仅在主动打开或聚焦可见桌面主窗口、或在该窗口
 
 活动请求仅包含协议版本、独立随机 UUIDv4 安装编号、桌面程序版本、Windows/macOS 系统类型及 desktop/extension 来源。不发送简历、姓名、联系方式、申请内容、网页域名/路径、页面标题、具体操作、浏览器标识、设备指纹、AI 内容、API Key、Cookie 或错误报告编号。随机编号可以关联同一个安装的活动，因此属于假名化标识，不能称为完全匿名的数据。
 
-接收方为我们管理的 Cloudflare Workers + D1 统计服务；正式接收地址为 `https://resume-usage-metrics.nebula-lab.workers.dev/v1/activity`。开发、测试、普通 CI 和未配置正式门禁的构建不发送使用统计。Cloudflare 按常规网络处理 IP 等 HTTP 元数据；业务数据库不存原始安装编号、IP、完整 User-Agent 或请求正文，业务日志不记录编号或正文。服务使用独立密钥计算编号的 HMAC 后用于去重。
+接收方为我们管理的 Cloudflare Workers + D1 统计服务；正式接收地址为 `https://resume-usage-metrics.nebula-lab.workers.dev/v1/activity`。开发、普通测试、普通 CI 和未配置正式门禁的构建不发送使用统计；仅限受邀验收人员使用的 `usage-metrics-acceptance` 包会把同样的最小字段发送到隔离测试 Worker，不使用正式接收地址。Cloudflare 按常规网络处理 IP 等 HTTP 元数据；业务数据库不存原始安装编号、IP、完整 User-Agent 或请求正文，业务日志不记录编号或正文。服务使用独立密钥计算编号的 HMAC 后用于去重。
 
 插件仅在可见侧栏或状态页接收到浏览器可信主动输入时通知桌面，不统计初始化、预取、握手、同步或后台唤醒。通知的负载为空，不含网页、字段内容或浏览器标识。旧桌面不支持时忽略，不弹出错误、不重试、不持久排队。统计信号不会拉起已退出的桌面。Chrome、Edge 与桌面使用同一桌面统计编号，两个来源各每天最多一次，云端合并为一个活跃安装。新增插件来源需重新查看版本 2 告知；已关闭选择继续保留。
 
