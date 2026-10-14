@@ -21,16 +21,18 @@ beforeEach(async()=> {
   for (const date of ['2026-10-12','2026-10-13']) await db.prepare('INSERT INTO release_observation VALUES (?,?,0)').bind(date+'T00:10:10Z',date).run();
 });
 after(async()=>mf?.dispose());
-const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',DAILY_EMAIL_FROM:'report@example.test',DAILY_EMAIL_TO_0:EMAIL_TO[0],DAILY_EMAIL_TO_1:EMAIL_TO[1],METRICS_EMAIL:{send}});
+const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',DAILY_EMAIL_ENVIRONMENT:'测试',DAILY_EMAIL_FROM:'report@example.test',DAILY_EMAIL_TO_0:EMAIL_TO[0],DAILY_EMAIL_TO_1:EMAIL_TO[1],METRICS_EMAIL:{send}});
 const opts={now:()=>NOW};
 test('default off and missing binding never query or send', async()=> {
   assert.equal((await runDailyEmail({})).status,'disabled');
   assert.equal((await runDailyEmail({DAILY_EMAIL_ENABLED:'true'})).status,'not_ready');
   assert.equal((await runDailyEmail({...env(async()=>{}),DAILY_EMAIL_TO_1:''},opts)).status,'not_ready');
+  assert.equal((await runDailyEmail({...env(async()=>{}),DAILY_EMAIL_ENVIRONMENT:'production'},opts)).status,'not_ready');
 });
 test('UTC closed date, task freshness and snapshot row integrity determine normal vs anomaly',async()=>{
   let m=await buildDailyEmail(db,NOW);assert.equal(m.date,'2026-10-12');assert.match(m.subject,/统计日报/);assert.match(m.text,/来源可重叠/);
   assert.match(m.html,/<!doctype html>/);assert.match(m.html,/当日活跃/);assert.match(m.html,/下载概览/);assert.doesNotMatch(m.html,/undefined/);
+  const production=await buildDailyEmail(db,NOW,'正式');assert.match(production.subject,/^\[正式\]/);assert.match(production.html,/网申快填 · 正式环境/);assert.match(production.text,/正式环境邮件/);assert.doesNotMatch(production.text,/测试环境/);
   await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-12T00:10:10Z' WHERE task='downloads'").run();
   m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);assert.match(m.html,/本轮数据未通过完整性检查/);assert.doesNotMatch(m.html,/当日活跃/);
   await db.prepare('UPDATE release_observation SET asset_count=1').run();
