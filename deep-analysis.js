@@ -351,6 +351,7 @@
         run.plan = null;
         run.merged = null;
         run.actionLocators = null;
+        run.sectionLocators = null;
         run.recipeDraft = null;
         deps.highlight?.(null);
         deps.release?.();
@@ -460,7 +461,12 @@
         set(run, "stopped", "本站配方里的按钮和网页对不上，无法确定该点哪一个，已停止，网页没有改动。可以照常一键填写，或重新深度分析。");
         return;
       }
-      report.actions = { planned: countKinds(plan.items), done: countKinds([]), stop: "", manual: plan.manual.length, blocked: plan.blocked.length };
+      const notFound = (found.missingSections || []).filter(domain => DOMAINS.has(domain));
+      report.actions = { planned: countKinds(plan.items), done: countKinds([]), stop: "", manual: plan.manual.length, blocked: plan.blocked.length,
+        missingAdds: notFound.length };
+      if (notFound.length) {
+        state.notes.push(`${[...new Set(notFound)].map(domain => DOMAIN_LABELS[domain]).join("、")}的「添加」按钮在这个网页上找不到，这次不新增。`);
+      }
       state.notes.push(...plan.manual.map(label => `需要你手动点击：${label}`), ...plan.blocked);
       state.notes.splice(0, Math.max(0, state.notes.length - 3));
       if (plan.items.length) {
@@ -674,6 +680,14 @@
           run.actionLocators = null;
         }
       }
+      // 「添加」的分组同样在点击前按第一轮大纲记下：点完条目够了，第二轮分析常常不再给出这个分组（PR #284 审查）。
+      if (run.mode === "analyze" && deps.recipeSectionLocators && plan.items.some(item => item.kind === "add")) {
+        try {
+          run.sectionLocators = deps.recipeSectionLocators({ sections: run.merged?.sections || [], outline: run.outline });
+        } catch {
+          run.sectionLocators = null;
+        }
+      }
       const result = await deps.executeActions(plan, {
         stopped: () => (run.stopped || state.run !== run ? "stopped" : stale(run) ? "navigated" : ""),
         onProgress: step => set(run, "acting", `正在执行 ${step.index}/${step.total}：${step.label}…`,
@@ -751,7 +765,7 @@
       if (run.mode === "analyze" && deps.draftRecipe) {
         try {
           run.recipeDraft = deps.draftRecipe({ fields: merged.fields, sections: merged.sections, outline, tier: report.tierUsed,
-            actions: run.actionLocators === undefined ? [] : run.actionLocators });
+            actions: run.actionLocators === undefined ? [] : run.actionLocators, sectionsBefore: run.sectionLocators || null });
         } catch {
           run.recipeDraft = { ok: false, status: "unlocatable" };
         }
@@ -810,10 +824,14 @@
         outcome = { status: "save_failed" };
       }
       const status = String(outcome?.status || "");
-      report.recipe = { status: ["saved", "replaced"].includes(status) ? "saved" : status === "save_failed" ? "save_failed" : "not_saved",
-        reason: /^[a-z_]{1,32}$/.test(status) ? status : "", fields: Number(outcome?.fields) || 0 };
+      const saved = ["saved", "replaced"].includes(status);
+      // 有「添加」却没能记进配方的分组：只认固定的四类，用固定名称说明。
+      const missing = saved && Array.isArray(outcome?.missingSections) ? outcome.missingSections.filter(domain => DOMAINS.has(domain)) : [];
+      report.recipe = { status: saved ? "saved" : status === "save_failed" ? "save_failed" : "not_saved",
+        reason: /^[a-z_]{1,32}$/.test(status) ? status : "", fields: Number(outcome?.fields) || 0, missingSections: missing };
       deps.onRecipeSaved?.(report.recipe);
-      return RECIPE_NOTES[status] || "";
+      if (!missing.length) return RECIPE_NOTES[status] || "";
+      return `${RECIPE_NOTES[status]}不过，${missing.map(domain => DOMAIN_LABELS[domain]).join("、")}的已有条目数不清，没有记住它的「添加」，下次不会自动新增。`;
     }
 
     // 确认绑定这一次分析（requestId）和侧栏显示的那份计划（planId）：旧预览、别的计划、已经失效的计划都不执行。

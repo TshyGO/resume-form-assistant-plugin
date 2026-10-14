@@ -876,3 +876,61 @@ test("only blocked adds and nothing to fill: the user is asked to handle it by h
   assert.equal(h.calls.fill.length, 0);
   assert.equal(h.actionCalls.executed.length, 0);
 });
+
+// --- #226（PR #284 审查）：「添加」分组在点击前按第一轮大纲记下；没记住的分组、配方里找不到的「添加」都要说出来。
+test("#226 the add sections are captured from the first outline before anything is clicked, and the draft prefers them", async () => {
+  const order = [];
+  let draftArgs = null;
+  const h = actionHarness({
+    plan: { items: [{ kind: "add", domain: "education", count: 2, element: { isConnected: true }, label: "教育经历：添加 ×2" }], manual: [], blocked: [], adds: {} },
+    analyze: (request) => (h.calls.analyze.length === 1
+      ? { success: true, tierUsed: "strong", spec: { pageState: "editing", sections: [{ domain: "education", addRef: "e8", rowRefs: ["e1"] }],
+        fields: [{ ref: "e1", label: "学校", control: "text" }] } }
+      // 第二轮：条目已经够了，模型不再给出这个分组。
+      : { success: true, tierUsed: "strong", spec: { pageState: "editing", fields: [{ ref: "e1", label: "学校", control: "text" }] } }),
+    execute: () => { order.push("click"); return { ok: true, done: { edit: 0, expand: 0, add: 2 }, scopes: [] }; }
+  });
+  h.deps.baseline = () => ({ filled: 0 });
+  h.deps.recipeSectionLocators = ({ sections, outline: first }) => {
+    order.push("locate");
+    assert.deepEqual(sections.map((section) => [section.domain, section.addRef]), [["education", "e8"]]);
+    assert.ok(first.nodes.has("e8"));
+    return { list: [{ domain: "education", add: { s: "", sec: "教育经历", t: "添加", n: 1 } }], missing: [] };
+  };
+  h.deps.draftRecipe = (args) => { draftArgs = args; return { ok: true, recipe: {} }; };
+  h.deps.saveRecipe = async () => ({ status: "saved", fields: 1, missingSections: [] });
+  const { requestId } = await h.controller.start();
+  const preview = await h.settle((state) => state.phase === "preview");
+  h.controller.confirm(requestId, preview.planId);
+  await h.settle(finished);
+  assert.deepEqual(order, ["locate", "click"], "located before the first click");
+  assert.deepEqual(draftArgs.sectionsBefore.list.map((item) => item.domain), ["education"]);
+  assert.deepEqual(draftArgs.sections, [], "the second round gave no section; the draft still has the one captured before");
+});
+
+test("#226 a saved recipe that could not remember a group's 添加 says so, in the card and in the report", async () => {
+  const h = harness({ baseline: () => ({ filled: 0 }), draftRecipe: () => ({ ok: true, recipe: {} }),
+    saveRecipe: async () => ({ status: "saved", fields: 3, missingSections: ["education", "bogus"] }) });
+  await h.controller.start();
+  const done = await h.settle(finished);
+  assert.equal(done.phase, "completed");
+  assert.ok(done.notes.some((note) => /已保存为本站配方.*不过，教育经历的已有条目数不清，没有记住它的「添加」，下次不会自动新增/.test(note)), JSON.stringify(done.notes));
+  assert.deepEqual(h.controller.report().recipe.missingSections, ["education"], "only the fixed groups are named");
+});
+
+test("#226 recipe mode names a group whose 添加 is not on this page, and still adds the others", async () => {
+  const nodes = nodesFor(2);
+  nodes.set("e8", { type: "button", text: "添加", submit: false, leaves: false, element: { isConnected: true } });
+  const h = harness({
+    buildOutline: () => ({ parts: [{ text: "x", refs: ["e1", "e2", "e8"] }], nodes, redact: outline.createRedactor([]), stats: { chars: 1, parts: 1, controls: 2 } }),
+    recipeActions: () => ({ ok: true, preActions: [], sections: [{ domain: "education", addRef: "e8", rowRefs: [] }], missingSections: ["papers"] }),
+    planActions: () => ({ items: [{ kind: "add", domain: "education", count: 1, element: nodes.get("e8").element, label: "教育经历：添加 ×1" }],
+      manual: [], blocked: [], adds: {} }),
+    recipeFillInput: () => ({ recipe: { status: "hit" }, input: null })
+  });
+  assert.equal(h.controller.startRecipe({ recipe: { fields: [] } }).ok, true);
+  const preview = await h.settle((state) => state.phase === "preview");
+  assert.deepEqual(preview.plan, [{ text: "教育经历：添加 ×1" }]);
+  assert.ok(preview.notes.some((note) => note === "论文的「添加」按钮在这个网页上找不到，这次不新增。"), JSON.stringify(preview.notes));
+  assert.equal(h.controller.report().actions.missingAdds, 1);
+});

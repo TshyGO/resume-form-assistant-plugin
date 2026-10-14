@@ -150,7 +150,7 @@ function seedRecipe(page, extra = {}) {
   const fields = [...built.nodes].filter(([, node]) => node.type === "control")
     .map(([ref, node]) => ({ ref, label: node.control.label, group: "基本信息", groupIndex: null, control: "text", hints: {} }));
   const result = recipes.buildRecipe({ fields, outline: built, tier: "strong", now: 1000,
-    actions: extra.actions ? recipes.actionLocators(extra.actions(built).items, built) : null });
+    actions: extra.actions ? recipes.actionLocators(extra.actions(built).items, built) : null, sections: extra.sections?.(built) || [] });
   assert.equal(result.ok, true, JSON.stringify(result));
   const key = recipes.pageKey(page.location.href);
   page.storageData[recipes.STORAGE_KEY] = { v: 1, sites: { [key.host]: { [key.path]: result.recipe } } };
@@ -463,4 +463,30 @@ test("after a full recipe hit the deep-analysis offer is not pushed just because
   seedRecipe(page);
   await plainFill(page);
   assert.equal((await page.status()).deepOffer, "secondary", "the recipe already covered what the scan cannot see");
+});
+
+test("PR #284: a recipe with only 添加 still previews the add when the rows on the page match last time but the template has one more", async () => {
+  const addButton = { isConnected: true, tag: "add", getAttribute: () => null, closest: () => null };
+  const built = [];
+  const pageActions = {
+    buildPlan(args) {
+      built.push(args);
+      return args.spec.sections.length
+        ? { items: [{ kind: "add", domain: "education", count: 1, element: addButton, label: "教育经历：添加 ×1" }], manual: [], blocked: [], adds: {} }
+        : { items: [], manual: [], blocked: [], adds: null };
+    },
+    async executePlan() { return { ok: true, done: { edit: 0, expand: 0, add: 1 }, scopes: [] }; },
+    createHighlighter: () => ({ show() {}, clear() {} })
+  };
+  const page = recipePage({ labels: ["学校名称", "专业"], buttons: [{ text: "添加", element: addButton }], pageActions });
+  const recipe = seedRecipe(page, { buttons: [{ text: "添加", element: addButton }],
+    sections: (outline) => [{ domain: "education", addRef: [...outline.nodes].find(([, node]) => node.type === "button")[0], rowRefs: ["e1"] }] });
+  assert.equal(recipe.sections.length, 1);
+  // 网页上的条目和保存时一样（字段全都找得到），但模板多一条：按当前模板算出要新增，进入配方模式预览。
+  assert.equal((await page.sendPanelMessage({ type: "RESUME_PANEL_FILL" })).ok, true);
+  await page.run(async () => (await page.status()).deep.phase === "preview");
+  const preview = (await page.status()).deep;
+  assert.equal(preview.mode, "recipe");
+  assert.deepEqual(plain(preview.plan), [{ text: "教育经历：添加 ×1" }]);
+  assert.equal(page.aiCalls("AI_FILL").length, 0, "nothing filled before the user confirms");
 });

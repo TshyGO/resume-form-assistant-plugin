@@ -1834,6 +1834,7 @@
       // #226 站点配方：保存（深度分析效果更好时）、配方模式下找按钮和字段。
       baseline: deepBaseline,
       recipeActionLocators: recipeApi() ? ({ items, outline }) => recipeApi().actionLocators(items, outline) : null,
+      recipeSectionLocators: recipeApi() ? ({ sections, outline }) => recipeApi().sectionLocators(sections, outline) : null,
       draftRecipe: recipeApi() ? draftDeepRecipe : null,
       saveRecipe: recipeApi() ? saveDeepRecipe : null,
       onRecipeSaved: info => {
@@ -2119,9 +2120,8 @@
     }
     const found = api.locateActions(recipe, outline);
     if (!found.ok || (!found.preActions.length && !found.sections.length)) return null;
-    // 动作之前字段就已经全部在网页上（网页已经是编辑状态）：不用再点。只差一部分时仍然要点，不能为了凑够 80% 跳过。
-    const before = api.locateFields(recipe, outline);
-    if (before.located === before.total) return null;
+    // 只有「添加」：按当前模板和网页已有条目算一下，要新增就进配方模式（条目数和上次一样、模板却多了一条时
+    // 字段也都找得到，不能因此跳过新增，PR #284 审查）；一条都不用加就照常按字段填写。
     if (!found.preActions.length) {
       const templateFields = getActiveTemplate(state.currentStore) ? flattenTemplateFields(getActiveTemplate(state.currentStore)) : [];
       if (!templateFields.length) return null;
@@ -2131,8 +2131,12 @@
       } catch {
         return null;
       }
-      if (plan.error || !plan.items.length) return null;
+      return plan.error || !plan.items.length ? null : { recipe };
     }
+    // 有「编辑 / 展开」：动作之前字段就已经全部在网页上（网页已经是编辑状态）就不用再点。
+    // 只差一部分时仍然要点，不能为了凑够 80% 跳过。
+    const before = api.locateFields(recipe, outline);
+    if (before.located === before.total) return null;
     return { recipe };
   }
 
@@ -2149,14 +2153,14 @@
 
   // 深度分析填写之前：按当前网页生成配方草稿和归类（只在内存里，满足保存条件才写入）。
   // actions 为 null 表示确认过的按钮没法可靠地记下来，这份分析不存成配方。
-  function draftDeepRecipe({ fields, sections, outline, actions, tier }) {
+  function draftDeepRecipe({ fields, sections, outline, actions, tier, sectionsBefore = null }) {
     const api = recipeApi();
     const key = api.pageKey(location.href, { redact: outline.redact });
     if (!key.ok) return { ok: false, status: "unsafe" };
     if (actions === null) return { ok: false, status: "unlocatable" };
-    const built = api.buildRecipe({ fields, outline, sections, actions, tier, now: Date.now() });
+    const built = api.buildRecipe({ fields, outline, sections, sectionsBefore, actions, tier, now: Date.now() });
     if (!built.ok) return { ok: false, status: built.reason === "privacy" ? "unsafe" : built.reason === "too_large" ? "too_large" : "unlocatable" };
-    return { ok: true, key, recipe: built.recipe };
+    return { ok: true, key, recipe: built.recipe, missingSections: built.missingSections || [] };
   }
 
   async function saveDeepRecipe({ draft, validation, result, baseline, current }) {
@@ -2177,7 +2181,7 @@
     recipeCache.loaded = false;
     if (!reply?.ok) return { status: "save_failed" };
     recipeCache.lastUse = "";
-    return { status: reply.replaced ? "replaced" : "saved", fields: recipe.fields.length };
+    return { status: reply.replaced ? "replaced" : "saved", fields: recipe.fields.length, missingSections: draft.missingSections || [] };
   }
 
   async function handlePanelRecipe(message) {
@@ -2875,8 +2879,11 @@
         return recipe.reason && reasons[recipe.reason]
           ? `本站配方：过期（${reasons[recipe.reason]}）`
           : `本站配方：过期（定位 ${count(recipe.located)}/${count(recipe.total)}，找不到 ${count(recipe.missing)}，有歧义 ${count(recipe.ambiguous)}），已退回普通扫描`;
-      case "saved":
-        return `本站配方：新保存（${count(recipe.fields)} 个字段）`;
+      case "saved": {
+        const labels = { education: "教育经历", work: "工作经历", projects: "项目经历", papers: "论文" };
+        const missing = (Array.isArray(recipe.missingSections) ? recipe.missingSections : []).map(domain => labels[domain]).filter(Boolean);
+        return `本站配方：新保存（${count(recipe.fields)} 个字段${missing.length ? `；未记住的新增分组：${missing.join("、")}` : ""}）`;
+      }
       case "not_saved":
         return `本站配方：未保存（${reasons[recipe.reason] || "未满足保存条件"}）`;
       case "save_failed":
@@ -2914,7 +2921,7 @@
     const stop = /^[a-z_]{1,32}$/.test(a.stop || "") ? a.stop : "";
     return [
       `前置动作：计划 ${kinds(a.planned)}；已完成 ${kinds(a.done)}${stop ? `；停止原因：${stop}` : ""}`,
-      `需手动点击：${count(a.manual)}；未自动新增的分组：${count(a.blocked)}；分析轮数：${count(report.rounds)}`
+      `需手动点击：${count(a.manual)}；未自动新增的分组：${count(a.blocked)}${a.missingAdds ? `；配方里找不到「添加」的分组：${count(a.missingAdds)}` : ""}；分析轮数：${count(report.rounds)}`
     ];
   }
 

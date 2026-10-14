@@ -526,3 +526,49 @@ test("records whose header sits outside the first question (北森-like) still g
   const found = recipes.locateActions(result.recipe, build(next));
   assert.equal(found.sections[0].rowRefs.length, 1, "one row counted on the new page");
 });
+
+test("PR #284: the add section is captured from the first outline before clicking; a second round without it still saves the group", () => {
+  // 金发式：「添加教育经历」在最后一条记录里，点完后挪到新的最后一条。
+  const entry = (n, last) => `<div class="item" id="edu${n}"><label>学校名称<input class="school"></label><label>专业<input class="major"></label>${
+    last ? `<button type="button" id="add">添加教育经历</button>` : ""}</div>`;
+  const { doc } = page(`<form><section><h2>教育经历</h2><div id="list">${entry(1, true)}</div></section></form>`);
+  const first = build(doc);
+  const before = recipes.sectionLocators([{ domain: "education", addRef: refOf(first, doc.getElementById("add")),
+    rowRefs: [refOf(first, doc.querySelector(".school"))] }], first);
+  assert.deepEqual(before.missing, []);
+  assert.equal(before.list[0].add.t, "添加教育经历");
+  // 点两次「添加」：按钮挪到新的最后一条。
+  doc.getElementById("add").remove();
+  doc.getElementById("list").insertAdjacentHTML("beforeend", entry(2, false) + entry(3, true));
+  const second = build(doc);
+  const result = recipes.buildRecipe({ fields: specFor(second, all(doc)), outline: second, sections: [], sectionsBefore: before, now: 1 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.recipe.sections.map((section) => section.domain), ["education"]);
+  assert.deepEqual(result.missingSections, []);
+  // 下一个页面只有 1 条：数得出 1 条，按钮也找得到。
+  const { doc: next } = page(`<form><section><h2>教育经历</h2><div id="list">${entry(1, true)}</div></section></form>`);
+  const found = recipes.locateActions(result.recipe, build(next));
+  assert.deepEqual(found.sections.map((section) => [section.domain, section.rowRefs.length]), [["education", 1]]);
+  assert.deepEqual(found.missingSections, []);
+});
+
+test("PR #284: a group whose rows cannot be counted is reported as not remembered; a missing 添加 on a new page is reported, not hidden", () => {
+  const { doc } = page(`<form><section><h2>教育经历</h2><div class="item"><label>学校名称<input name="a"></label></div>
+    <div class="item"><label>学校全称<input name="b"></label></div><button type="button" id="add">添加</button></section>
+    <section><h2>论文</h2><button type="button" id="add-paper">添加论文</button></section></form>`);
+  const built = build(doc);
+  // 模型给的「每条一个输入框」题目不一样：数不清。
+  const sections = [{ domain: "education", addRef: refOf(built, doc.getElementById("add")), rowRefs: Array.from(doc.querySelectorAll("input"), (el) => refOf(built, el)) },
+    { domain: "papers", addRef: refOf(built, doc.getElementById("add-paper")), rowRefs: [] }];
+  const result = recipes.buildRecipe({ fields: specFor(built, all(doc)), outline: built, sections, now: 1 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.recipe.sections.map((section) => section.domain), ["papers"]);
+  assert.deepEqual(result.missingSections, ["education"]);
+  // 另一个职位的表单没有论文分组：这次不新增论文，并且报出来。
+  const { doc: next } = page(`<form><section><h2>教育经历</h2><div class="item"><label>学校名称<input name="a"></label></div>
+    <div class="item"><label>学校全称<input name="b"></label></div><button type="button" id="add">添加</button></section></form>`);
+  const found = recipes.locateActions(result.recipe, build(next));
+  assert.equal(found.ok, true);
+  assert.deepEqual(found.sections, []);
+  assert.deepEqual(found.missingSections, ["papers"]);
+});

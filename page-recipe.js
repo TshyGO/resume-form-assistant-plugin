@@ -313,11 +313,39 @@
     return list.slice(0, MAX_ACTIONS);
   }
 
+  // 经历分组（说明书的 sections）→ 「添加」按钮和已有条目的定位。新增要在点击之前按第一轮大纲记下：
+  // 点完之后条目已经够了，第二轮分析常常不再给出这个分组（PR #284 审查）。
+  // 返回 { list: [{ domain, add, row? }], missing: [domain] }：missing 是有「添加」却记不下来的分组。
+  function sectionLocators(sections, outline) {
+    const deep = deepApi();
+    const clean = cleaner(outline.redact);
+    const candidates = controlCandidates(outline, clean);
+    const byRef = new Map(candidates.map(cand => [cand.ref, cand]));
+    const buckets = bucketsOf(candidates);
+    const list = [];
+    const missing = [];
+    for (const section of (sections || []).filter(item => item?.addRef && DOMAINS.has(item.domain)).slice(0, MAX_SECTIONS)) {
+      if (list.some(item => item.domain === section.domain)) continue;
+      const add = buttonLocator(section.addRef, outline, clean, deep.ALLOW.add);
+      let row = null;
+      // 已有条目说不清怎么数：这个分组不进配方（下次也不会凭它新增）。
+      if (add && section.rowRefs?.length) row = rowLocator(section.rowRefs, byRef, buckets);
+      if (!add || (section.rowRefs?.length && !row)) {
+        if (!missing.includes(section.domain)) missing.push(section.domain);
+        continue;
+      }
+      list.push({ domain: section.domain, add, ...(row ? { row } : {}) });
+    }
+    return { list, missing: missing.filter(domain => !list.some(item => item.domain === domain)) };
+  }
+
   // 深度分析填写之前，把这次实际要用的说明书变成配方草稿（填写可能让网页重画，先按填写前的样子记）。
   // fields：最后一轮校验过的说明书字段；outline：这一轮的大纲；sections：最后一轮的经历分组；
-  // actions：actionLocators() 在点击前生成的按钮定位；tier：分析实际用的档位。
+  // actions：actionLocators() 在点击前生成的按钮定位；sectionsBefore：sectionLocators() 在点击前按第一轮大纲
+  // 生成的分组定位（优先用，最后一轮的只补没有的分组）；tier：分析实际用的档位。
   // 定位不了（没有任何可靠依据）的字段不进配方；能找回的不到 80% 就不保存。
-  function buildRecipe({ fields, outline, sections = [], actions = null, tier = "", now = Date.now() }) {
+  // 返回里的 missingSections：有「添加」却没能记进配方的分组，要告诉用户。
+  function buildRecipe({ fields, outline, sections = [], sectionsBefore = null, actions = null, tier = "", now = Date.now() }) {
     const deep = deepApi();
     const clean = cleaner(outline.redact);
     const candidates = controlCandidates(outline, clean);
@@ -354,18 +382,11 @@
     if (!kept.length || kept.length / eligible < MIN_RATIO) return { ok: false, reason: "no_locatable_fields", dropped };
 
     const savedActions = Array.isArray(actions) ? actions.slice(0, MAX_ACTIONS) : [];
-    const savedSections = [];
-    for (const section of sections.filter(item => item.addRef).slice(0, MAX_SECTIONS)) {
-      const add = buttonLocator(section.addRef, outline, clean, deep.ALLOW.add);
-      if (!add) { dropped += 1; continue; }
-      let row = null;
-      if (section.rowRefs?.length) {
-        row = rowLocator(section.rowRefs, byRef, buckets);
-        // 已有条目说不清怎么数：这个分组不进配方（下次也不会凭它新增）。
-        if (!row) { dropped += 1; continue; }
-      }
-      savedSections.push({ domain: section.domain, add, ...(row ? { row } : {}) });
-    }
+    const before = sectionsBefore?.list || [];
+    const after = sectionLocators(sections, outline);
+    const savedSections = [...before, ...after.list.filter(item => !before.some(other => other.domain === item.domain))].slice(0, MAX_SECTIONS);
+    const missingSections = [...new Set([...(sectionsBefore?.missing || []), ...after.missing])]
+      .filter(domain => !savedSections.some(item => item.domain === domain));
     const recipe = {
       v: VERSION, created: now, updated: now, used: now, tier: TIERS.has(tier) ? tier : "",
       fp: fingerprint(kept.map(field => field.loc), savedActions),
@@ -376,7 +397,7 @@
     const clean2 = sanitizeRecipe(recipe);
     if (!clean2) return { ok: false, reason: "invalid", dropped };
     if (encodedBytes(clean2) > MAX_RECIPE_BYTES) return { ok: false, reason: "too_large", dropped };
-    return { ok: true, recipe: clean2, dropped };
+    return { ok: true, recipe: clean2, dropped, missingSections };
   }
 
   // 按钮的定位：作用域、分组、按钮文字，以及同一分组里同样文字的按钮的序号和个数（个数变了就不认）。
@@ -619,7 +640,8 @@
 
   // 在当前大纲里找配方的「编辑 / 展开」和经历分组的「添加」。动作执行前能核对的只有这些按钮：
   // 每个都要唯一找到、文字仍在允许列表里，同样文字的按钮个数也和保存时一样，否则整份不用（不猜）。
-  // 返回 { ok, preActions: [{ ref, kind }], sections: [{ domain, addRef, rowRefs }], reason }。
+  // 「添加」找不到的分组只是这次不新增（同一网站不同职位的表单可能本来就没有这个分组），记进 missingSections 告诉用户。
+  // 返回 { ok, preActions: [{ ref, kind }], sections: [{ domain, addRef, rowRefs }], missingSections, reason }。
   function locateActions(recipe, outline) {
     const deep = deepApi();
     const clean = cleaner(outline.redact);
@@ -638,11 +660,12 @@
       preActions.push({ ref: cand.ref, kind: action.kind });
     }
     const sections = [];
+    const missingSections = [];
     const candidates = recipe.sections?.length ? controlCandidates(outline, clean) : [];
     const buckets = bucketsOf(candidates);
     for (const section of recipe.sections || []) {
       const cand = find(section.add, deep.ALLOW.add);
-      if (!cand) continue;
+      if (!cand) { missingSections.push(section.domain); continue; }
       let rowRefs = [];
       if (section.row) {
         const rows = rowsOf(section.row, buckets);
@@ -651,7 +674,7 @@
       }
       sections.push({ domain: section.domain, addRef: cand.ref, rowRefs });
     }
-    return { ok: true, preActions, sections };
+    return { ok: true, preActions, sections, missingSections };
   }
 
   // ---- 保存条件 ---------------------------------------------------------------
@@ -825,7 +848,7 @@
   const api = {
     STORAGE_KEY, VERSION, MAX_SITES, MAX_RECIPES_PER_SITE, MAX_RECIPE_BYTES, MAX_TOTAL_BYTES, MAX_FIELDS, MIN_RATIO, MAX_FAILED,
     TOUCH_INTERVAL_MS,
-    pageKey, stableToken, scopeKey, fingerprint, actionLocators, buildRecipe, sanitizeRecipe, locateFields, locateActions, toSpecFields,
+    pageKey, stableToken, scopeKey, fingerprint, actionLocators, sectionLocators, buildRecipe, sanitizeRecipe, locateFields, locateActions, toSpecFields,
     saveDecision, readStore, lookup, findRecipe, upsert, removeRecipe, touchRecipe, createStore, summary, encodedBytes, validHost, validPath
   };
   scope.ResumeProPageRecipe = api;
