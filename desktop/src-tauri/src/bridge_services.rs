@@ -309,7 +309,7 @@ mod tests {
 
     fn request(message_type: &str, payload: Value) -> Request {
         let value = json!({
-            "protocolVersion": 2,
+            "protocolVersion": if message_type == "usage.touch" { 3 } else { 2 },
             "messageId": "33333333-3333-4333-8333-333333333333",
             "clientInstanceId": "11111111-1111-4111-8111-111111111111",
             "messageType": message_type,
@@ -414,6 +414,14 @@ mod tests {
         assert_eq!(answer(&request, &secret).unwrap().payload, json!({"status":"failed","reason":"bad_response"}));
         let large = fake(AiReply::Ok("a".repeat(70_000)), false);
         assert_eq!(answer(&request, &large).unwrap().payload, json!({"status":"failed","reason":"response_too_large"}));
+    }
+
+    #[test]
+    fn usage_touch_forwards_empty_signal_without_identifier() {
+        let request = request("usage.touch", json!({}));
+        let services = fake(AiReply::Ok(String::new()), false);
+        assert_eq!(answer(&request, &services).unwrap().payload, json!({"accepted": true}));
+        assert_eq!(services.calls.lock().unwrap().as_slice(), ["usage"]);
     }
 
     #[test]
