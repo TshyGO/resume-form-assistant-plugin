@@ -1,9 +1,17 @@
 name: Metrics Acceptance Packages
 on:
   pull_request:
-    branches: [feat/usage-metrics-extension]
+    branches: [main]
     paths:
       - 'desktop/**'
+      - 'link/**'
+      - 'icons/**'
+      - '*.js'
+      - '*.html'
+      - '*.css'
+      - 'manifest.json'
+      - 'README.md'
+      - 'LICENSE'
       - '.github/workflows/metrics-acceptance.yml'
 permissions:
   contents: read
