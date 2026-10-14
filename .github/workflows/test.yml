@@ -10,6 +10,36 @@ permissions:
   contents: read
 
 jobs:
+  usage-metrics-worker:
+    name: usage-metrics-worker
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    defaults:
+      run:
+        working-directory: services/usage-metrics
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/usage-metrics/package-lock.json
+      - name: Install worker tooling
+        run: npm ci
+      - name: Test Worker and D1 locally
+        run: npm test
+      - name: Verify local migrations and maintainer report
+        run: |
+          npm run migrate:local
+          node scripts/report.mjs --local > report.json
+          node -e "const r=JSON.parse(require('node:fs').readFileSync('report.json','utf8'));if(r.counts.dau!==0||r.downloads!==null)process.exit(1)"
+      - name: Verify deploy bundle without uploading
+        run: npx wrangler deploy --dry-run --outdir output/dry-run
   test:
     runs-on: ubuntu-latest
     steps:

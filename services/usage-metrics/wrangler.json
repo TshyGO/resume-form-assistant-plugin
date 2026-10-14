@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "resume-usage-metrics-local",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "vars": { "METRICS_ENABLED": "false" },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "resume-usage-metrics-local", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+  ],
+  "ratelimits": [
+    { "name": "ACTIVITY_LIMITER", "namespace_id": "25901", "simple": { "limit": 60, "period": 60 } }
+  ],
+  "triggers": { "crons": [] }
+}

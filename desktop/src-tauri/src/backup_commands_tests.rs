@@ -74,6 +74,28 @@ impl Layout {
 }
 
 #[test]
+fn telemetry_state_is_not_exported_or_restored_over_a_local_opt_out() {
+    let source = layout();
+    source.open().seed("合成公司");
+    std::fs::write(source.paths.data_root.join("telemetry-state.json"),
+        br#"{"enabled":true,"installation_id":"synthetic-statistics-id"}"#).unwrap();
+    std::fs::write(source.paths.data_root.join("telemetry-initialized"), b"1").unwrap();
+    let package = source.export_to("backup.zip");
+    let manifest = backup::read_manifest(&package).unwrap();
+    assert!(manifest.entries.iter().all(|entry| !entry.path.contains("telemetry")));
+    source.slot().close().unwrap();
+
+    let target = layout();
+    target.open();
+    let local_state = target.paths.data_root.join("telemetry-state.json");
+    std::fs::write(&local_state, br#"{"enabled":false}"#).unwrap();
+    std::fs::write(target.paths.data_root.join("telemetry-initialized"), b"1").unwrap();
+    restore(&target.slot(), &target.paths, &package, NOW).unwrap();
+    assert_eq!(std::fs::read(&local_state).unwrap(), br#"{"enabled":false}"#);
+    assert_eq!(std::fs::read(target.paths.data_root.join("telemetry-initialized")).unwrap(), b"1");
+}
+
+#[test]
 fn a_preview_compares_the_package_with_what_is_here_and_writes_nothing() {
     let source = layout();
     source.open().seed("合成公司");
