@@ -312,6 +312,8 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   // 使用统计只能进入正式标签包；手动试跑和 beta 不能因为都走 release workflow 就误连正式服务。
   assert.match(flow, /metrics_ready=0/);
   assert.match(flow, /metrics_endpoint=/);
+  assert.match(flow, /REPOSITORY: \$\{\{ github\.repository \}\}/);
+  assert.match(flow, /"\$REPOSITORY" = "TshyGO\/resume-form-assistant-plugin"/);
   assert.match(flow, /--release-kind "\$TAG"\)" = "stable"/);
   assert.match(flow, /RESUME_USAGE_METRICS_READY: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
   assert.match(flow, /RESUME_USAGE_METRICS_RELEASE_BUILD: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
