@@ -356,6 +356,15 @@ impl ArchiveStore {
         self.transaction(|tx| tx.replace_template_groups(id, groups))
     }
 
+    pub fn save_template_fields(
+        &self,
+        id: &str,
+        groups: Vec<TemplateGroup>,
+        expected_sha256: &str,
+    ) -> Result<ResumeTemplate, StoreError> {
+        self.transaction(|tx| tx.save_template_fields(id, groups, expected_sha256))
+    }
+
     pub fn rename_template(&self, id: &str, name: &str) -> Result<ResumeTemplate, StoreError> {
         self.transaction(|tx| tx.rename_template(id, name))
     }

@@ -85,6 +85,41 @@ pub fn get_template(store: &ArchiveStore, id: &str) -> Result<ResumeTemplate, Co
         .ok_or_else(|| resume_error(StoreError::NotFound(id.into())))
 }
 
+/// 界面读到的一份模板，外加它内容的版本（#273）。编辑器把 `contentSha256` 当作草稿的
+/// 起点，保存时原样带回；存储层按当前内容重算，对不上就是别处改过。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateView {
+    #[serde(flatten)]
+    pub template: ResumeTemplate,
+    pub content_sha256: String,
+}
+
+impl From<ResumeTemplate> for TemplateView {
+    fn from(template: ResumeTemplate) -> Self {
+        let content_sha256 = archive_store::groups_sha256(&template.groups);
+        Self { template, content_sha256 }
+    }
+}
+
+pub fn get_template_view(store: &ArchiveStore, id: &str) -> Result<TemplateView, CommandError> {
+    get_template(store, id).map(TemplateView::from)
+}
+
+/// 字段编辑的保存（#273）：整份替换分组，不动名字和当前模板。别处改过返回 `CONFLICT`，
+/// 模板已被删除返回 `NOT_FOUND`，密码类内容和删光字段返回 `VALIDATION`；草稿由界面留着。
+pub fn save_template_fields(
+    store: &ArchiveStore,
+    id: &str,
+    groups: Vec<TemplateGroup>,
+    base_sha256: &str,
+) -> Result<TemplateView, CommandError> {
+    store
+        .save_template_fields(id, groups, base_sha256)
+        .map(TemplateView::from)
+        .map_err(resume_error)
+}
+
 /// 读并解析用户挑的表，不碰档案：放在档案锁外面做，慢盘上的大文件不会卡住别的命令。
 /// 返回按文件名取的模板名（截断与去重由存储层做）和解析出的分组。
 pub fn read_sheet(path: &Path) -> Result<(String, Vec<TemplateGroup>), CommandError> {
@@ -401,6 +436,37 @@ mod tests {
         assert!(write_error(&sharing).message.contains("正在被 Excel 打开"));
         let other = std::io::Error::new(std::io::ErrorKind::Other, "boom");
         assert!(write_error(&other).message.contains("换个文件夹"));
+    }
+
+    #[test]
+    fn edited_fields_save_export_and_reimport_without_touching_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = store(dir.path());
+        let src = dir.path().join("t.csv");
+        let original_csv = "一级分类,字段名,值\n基本信息,姓名,张三\n基本信息,电话,13800000000\n";
+        std::fs::write(&src, original_csv).unwrap();
+        let t = import(&db, &src, None).unwrap().template;
+        let view = get_template_view(&db, &t.id).unwrap();
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["contentSha256"], archive_store::groups_sha256(&view.template.groups));
+        assert_eq!(json["name"], "t");
+        let edited = vec![
+            TemplateGroup { name: "基本信息".into(), fields: vec![TemplateField { key: "姓名".into(), value: "张三丰".into() }] },
+            TemplateGroup { name: "求职意向".into(), fields: vec![TemplateField { key: "城市".into(), value: "上海".into() }] },
+        ];
+        let saved = save_template_fields(&db, &t.id, edited.clone(), &view.content_sha256).unwrap();
+        assert_ne!(saved.content_sha256, view.content_sha256);
+        // 同一个旧版本再存：冲突，草稿交给界面留着。
+        let err = save_template_fields(&db, &t.id, edited.clone(), &view.content_sha256).unwrap_err();
+        assert_eq!(err.code, "CONFLICT");
+        // 导出的是最新内容，重新导入得到同样的分类和字段；原来的文件没有被改写。
+        let out = dir.path().join("导出.xlsx");
+        export_template(&db, &t.id, &out).unwrap();
+        let again = import(&db, &out, None).unwrap().template;
+        assert_eq!(db.get_template(&again.id).unwrap().unwrap().groups, edited);
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), original_csv);
+        db.delete_template(&t.id).unwrap();
+        assert_eq!(save_template_fields(&db, &t.id, edited, &saved.content_sha256).unwrap_err().code, "NOT_FOUND");
     }
 
     #[test]

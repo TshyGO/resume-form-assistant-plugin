@@ -1,0 +1,10 @@
+[区块] 基本信息
+  e1 input[text] ← 姓名
+  e2 input[tel] ← 手机号码
+  e3 input[email] ← 邮箱
+  e4 input[text] ← 现居城市
+[区块] 同源框架 1
+  e5 input[text] ← 学校名称
+  e6 input[text] ← 专业
+  e7 select ← 学历
+  e8 input[month] ← 开始时间

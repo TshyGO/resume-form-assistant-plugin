@@ -36,6 +36,26 @@ pub struct AiProvider {
 pub struct AiSettings {
     pub providers: Vec<AiProvider>,
     pub active_provider_id: Option<String>,
+    /// 强模型（#223）：只给「深度分析」和效果不好时的重新匹配用。没设就全部走当前服务商。
+    /// 不写进文件时旧版桌面读得懂；旧版桌面不认识这个字段，读的时候会忽略它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strong_provider_id: Option<String>,
+}
+
+/// 一次请求实际用的是哪一档。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    Default,
+    Strong,
+}
+
+impl Tier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Default => "default",
+            Tier::Strong => "strong",
+        }
+    }
 }
 
 /// v0.4.0 及以前的文件形状：一个地址、一个模型。
@@ -85,6 +105,10 @@ pub fn load(data_root: &Path) -> AiSettings {
         if !settings.active_provider_id.as_ref().is_some_and(known) {
             settings.active_provider_id = settings.providers.first().map(|p| p.id.clone());
         }
+        // 强模型指向的服务商不在了就当没设：退回当前服务商，而不是落到别的哪一条上。
+        if !settings.strong_provider_id.as_ref().is_some_and(known) {
+            settings.strong_provider_id = None;
+        }
         return settings;
     }
     match serde_json::from_str::<LegacySettings>(&text) {
@@ -100,6 +124,7 @@ pub fn load(data_root: &Path) -> AiSettings {
                     model,
                 }],
                 active_provider_id: Some(LEGACY_PROVIDER_ID.into()),
+                strong_provider_id: None,
             }
         }
         Err(_) => AiSettings::default(),
@@ -143,6 +168,19 @@ pub fn ensure_legacy_default(data_root: &Path) -> Result<(), String> {
 pub fn active(settings: &AiSettings) -> Option<&AiProvider> {
     let id = settings.active_provider_id.as_deref()?;
     settings.providers.iter().find(|p| p.id == id)
+}
+
+/// 按档位挑服务商。要强模型且设了强模型，就用它；否则用当前服务商，档位记成 default。
+/// 强模型可以和当前服务商是同一条，那样效果等于不分档，但档位如实记成 strong。
+pub fn route(settings: &AiSettings, strong: bool) -> (Option<&AiProvider>, Tier) {
+    if strong {
+        let chosen = settings.strong_provider_id.as_deref()
+            .and_then(|id| settings.providers.iter().find(|p| p.id == id));
+        if let Some(provider) = chosen {
+            return (Some(provider), Tier::Strong);
+        }
+    }
+    (active(settings), Tier::Default)
 }
 
 const GONE: &str = "这个服务商已经不在了，刷新一下。";
@@ -302,6 +340,9 @@ pub fn delete_provider(data_root: &Path, id: &str) -> Result<AiSettings, String>
     if settings.active_provider_id.as_deref() == Some(id) {
         settings.active_provider_id = settings.providers.first().map(|p| p.id.clone());
     }
+    if settings.strong_provider_id.as_deref() == Some(id) {
+        settings.strong_provider_id = None;
+    }
     write(data_root, &settings)?;
     Ok(settings)
 }
@@ -312,6 +353,19 @@ pub fn set_active(data_root: &Path, id: &str) -> Result<AiSettings, String> {
         return Err(GONE.into());
     }
     settings.active_provider_id = Some(id.to_string());
+    write(data_root, &settings)?;
+    Ok(settings)
+}
+
+/// `None` 表示不用强模型，全部走当前服务商。
+pub fn set_strong(data_root: &Path, id: Option<&str>) -> Result<AiSettings, String> {
+    let mut settings = load(data_root);
+    if let Some(id) = id {
+        if !settings.providers.iter().any(|p| p.id == id) {
+            return Err(GONE.into());
+        }
+    }
+    settings.strong_provider_id = id.map(str::to_string);
     write(data_root, &settings)?;
     Ok(settings)
 }
@@ -625,6 +679,81 @@ mod tests {
     }
 
     #[test]
+    fn the_strong_tier_uses_its_provider_and_falls_back_when_unset_or_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://a.example/v1", "m")).unwrap().provider_id;
+        let b = save_provider(dir.path(), input(None, "B", "https://b.example/v1", "m")).unwrap().provider_id;
+        let id = |(provider, tier): (Option<&AiProvider>, Tier)| (provider.map(|p| p.id.clone()), tier);
+
+        // 没设强模型：要强也只能退回当前服务商，档位如实是 default。
+        let settings = load(dir.path());
+        assert_eq!(id(route(&settings, true)), (Some(a.clone()), Tier::Default));
+        assert_eq!(id(route(&settings, false)), (Some(a.clone()), Tier::Default));
+
+        let settings = set_strong(dir.path(), Some(&b)).unwrap();
+        assert_eq!(id(route(&settings, true)), (Some(b.clone()), Tier::Strong));
+        assert_eq!(id(route(&settings, false)), (Some(a.clone()), Tier::Default), "日常请求不受强模型影响");
+        assert_eq!(load(dir.path()).strong_provider_id.as_deref(), Some(b.as_str()));
+
+        // 强模型和当前服务商是同一条：效果等于不分档，档位仍记成 strong。
+        let settings = set_strong(dir.path(), Some(&a)).unwrap();
+        assert_eq!(id(route(&settings, true)), (Some(a.clone()), Tier::Strong));
+
+        // 删掉强模型那条服务商，强模型跟着清空，不会落到别的服务商上。
+        set_strong(dir.path(), Some(&b)).unwrap();
+        let after = delete_provider(dir.path(), &b).unwrap();
+        assert_eq!(after.strong_provider_id, None);
+        assert_eq!(id(route(&load(dir.path()), true)), (Some(a.clone()), Tier::Default));
+
+        let cleared = set_strong(dir.path(), None).unwrap();
+        assert_eq!(cleared.strong_provider_id, None);
+        assert!(set_strong(dir.path(), Some("gone")).unwrap_err().contains("不在了"));
+    }
+
+    #[test]
+    fn a_file_with_a_strong_model_still_reads_in_the_older_desktop_shape() {
+        // 0.4.2 及以前的 AiSettings 只有这两项，也没有 deny_unknown_fields：多出的字段被忽略。
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        struct OlderSettings {
+            providers: Vec<AiProvider>,
+            active_provider_id: Option<String>,
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let a = save_provider(dir.path(), input(None, "A", "https://a.example/v1", "m")).unwrap().provider_id;
+        set_strong(dir.path(), Some(&a)).unwrap();
+        let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
+        assert!(text.contains("strongProviderId"), "{text}");
+        let older: OlderSettings = serde_json::from_str(&text).unwrap();
+        assert_eq!(older.providers.len(), 1);
+        assert_eq!(older.active_provider_id.as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn settings_written_before_tiers_load_and_unset_strong_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            path_for(dir.path()),
+            r#"{"providers":[{"id":"a","name":"A","apiUrl":"https://a.example/v1","model":"m"}],"activeProviderId":"a"}"#,
+        )
+        .unwrap();
+        let settings = load(dir.path());
+        assert_eq!(settings.strong_provider_id, None);
+        // 没设强模型时不写这个字段，文件和旧版桌面写出来的一样。
+        save_provider(dir.path(), input(Some("a"), "A", "https://a.example/v1", "m2")).unwrap();
+        let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
+        assert!(!text.contains("strongProviderId"), "{text}");
+        // 手改文件让强模型指向不存在的服务商：读的时候当没设。
+        std::fs::write(
+            path_for(dir.path()),
+            r#"{"providers":[{"id":"a","name":"A","apiUrl":"https://a.example/v1","model":"m"}],"activeProviderId":"a","strongProviderId":"gone"}"#,
+        )
+        .unwrap();
+        assert_eq!(load(dir.path()).strong_provider_id, None);
+    }
+
+    #[test]
     fn a_base_url_grows_the_endpoint_and_a_full_one_is_left_alone() {
         let cases = [
             ("https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"),
@@ -732,7 +861,8 @@ mod tests {
     #[test]
     fn the_settings_file_never_contains_a_key() {
         let dir = tempfile::tempdir().unwrap();
-        save_provider(dir.path(), input(None, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat")).unwrap();
+        let id = save_provider(dir.path(), input(None, "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat")).unwrap().provider_id;
+        set_strong(dir.path(), Some(&id)).unwrap();
         let text = std::fs::read_to_string(path_for(dir.path())).unwrap();
         for forbidden in ["key", "Key", "token", "secret"] {
             assert!(!text.contains(forbidden), "设置文件里出现了 {forbidden}：{text}");

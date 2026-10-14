@@ -427,3 +427,139 @@ fn control_characters_are_stripped_from_names() {
     let renamed = db.rename_template(&created.id, "x\u{7f}y\u{1}z").unwrap();
     assert_eq!(renamed.name, "xyz");
 }
+
+// ---- #273 模板字段编辑 ----
+
+/// 与 `template-fields.js` 的测试共用同一组输入和摘要：两边对不上，每次保存都会误报冲突。
+fn digest_vector() -> Vec<TemplateGroup> {
+    vec![
+        group("基本信息", vec![field("姓名", "张三"), field("自我评价", "第一行\n第二行 \"引号\" \\ 斜杠")]),
+        group("教育经历", vec![field("学校", "示例大学")]),
+    ]
+}
+
+#[test]
+fn the_content_digest_matches_the_shared_vector() {
+    assert_eq!(
+        groups_sha256(&digest_vector()),
+        "d2d71fabd5d084928e23d31a3e0e429705266391b0737b35cb12cb06d5c7a34d"
+    );
+}
+
+#[test]
+fn saving_fields_replaces_only_the_target_template_and_keeps_name_and_current() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let other = db.create_template("另一份", vec![group("基本信息", vec![field("姓名", "李四")])]).unwrap().template;
+    let target = db.create_template("目标", digest_vector()).unwrap().template;
+    // 把「另一份」设为当前：编辑「目标」不该把当前模板换掉。
+    db.set_active_template(&other.id).unwrap();
+    db.save_profile(serde_json::json!({ "values": { "name": "王五" }, "family": [], "custom": [{ "key": "微信", "value": "wx" }] }), 0).unwrap();
+    let base = groups_sha256(&target.groups);
+    let edited = vec![
+        group("基本信息", vec![field("姓名", "张三丰")]),
+        group("新分类", vec![field("学校", "示例大学"), field(" 爱好 ", "跑步")]),
+    ];
+    let saved = db.save_template_fields(&target.id, edited, &base).unwrap();
+    assert_eq!(saved.name, "目标");
+    assert_eq!(
+        saved.groups,
+        vec![
+            group("基本信息", vec![field("姓名", "张三丰")]),
+            group("新分类", vec![field("学校", "示例大学"), field("爱好", "跑步")]),
+        ]
+    );
+    let overview = db.resume_overview().unwrap();
+    assert_eq!(overview.active_template_id.as_deref(), Some(other.id.as_str()));
+    assert_eq!(db.get_template(&other.id).unwrap().unwrap().groups, other.groups);
+    // 「我的信息」不受模板编辑影响。
+    let profile = db.get_profile().unwrap();
+    assert_eq!(profile.revision, 1);
+    assert_eq!(profile.profile["custom"][0]["key"], "微信");
+}
+
+#[test]
+fn a_stale_base_is_a_conflict_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let base = groups_sha256(&t.groups);
+    // 另一端先存了一次。
+    let first = db.save_template_fields(&t.id, vec![group("基本信息", vec![field("姓名", "另一端")])], &base).unwrap();
+    let err = db.save_template_fields(&t.id, vec![group("基本信息", vec![field("姓名", "旧草稿")])], &base).unwrap_err();
+    assert_eq!(err.code(), "conflict");
+    assert_eq!(db.get_template(&t.id).unwrap().unwrap().groups, first.groups);
+    // 拿最新内容的摘要再存就可以（用户明确选择「用我的修改覆盖」）。
+    let again = db
+        .save_template_fields(&t.id, vec![group("基本信息", vec![field("姓名", "旧草稿")])], &groups_sha256(&first.groups))
+        .unwrap();
+    assert_eq!(again.groups[0].fields[0].value, "旧草稿");
+}
+
+#[test]
+fn renaming_does_not_make_a_field_edit_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let base = groups_sha256(&t.groups);
+    db.rename_template(&t.id, "改过名").unwrap();
+    let saved = db.save_template_fields(&t.id, vec![group("基本信息", vec![field("姓名", "张三")])], &base).unwrap();
+    assert_eq!(saved.name, "改过名");
+}
+
+#[test]
+fn a_reimport_while_editing_is_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let base = groups_sha256(&t.groups);
+    db.replace_template_groups(&t.id, vec![group("组", vec![field("k", "v")])]).unwrap();
+    let err = db.save_template_fields(&t.id, digest_vector(), &base).unwrap_err();
+    assert_eq!(err.code(), "conflict");
+}
+
+#[test]
+fn saving_fields_of_a_deleted_template_is_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let base = groups_sha256(&t.groups);
+    db.delete_template(&t.id).unwrap();
+    let err = db.save_template_fields(&t.id, digest_vector(), &base).unwrap_err();
+    assert_eq!(err.code(), "not_found");
+}
+
+#[test]
+fn secret_like_or_empty_edits_are_refused_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let base = groups_sha256(&t.groups);
+    let by_label = db.save_template_fields(&t.id, vec![group("账号", vec![field("邮箱密码", "x")])], &base).unwrap_err();
+    assert_eq!(by_label.code(), "validation_failed");
+    assert!(by_label.to_string().contains("邮箱密码"));
+    let by_value = db.save_template_fields(&t.id, vec![group("账号", vec![field("备注", "密码：abc123")])], &base).unwrap_err();
+    assert_eq!(by_value.code(), "validation_failed");
+    let empty = db.save_template_fields(&t.id, vec![group("组", vec![field("  ", "x")])], &base).unwrap_err();
+    assert_eq!(empty.code(), "validation_failed");
+    assert_eq!(db.get_template(&t.id).unwrap().unwrap().groups, t.groups);
+}
+
+#[test]
+fn an_oversized_edit_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let big = "长".repeat(MAX_TEMPLATE_BYTES);
+    let err = db.save_template_fields(&t.id, vec![group("组", vec![field("k", &big)])], &groups_sha256(&t.groups)).unwrap_err();
+    assert_eq!(err.code(), "validation_failed");
+}
+
+#[test]
+fn an_unchanged_save_keeps_updated_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let t = db.create_template("t", digest_vector()).unwrap().template;
+    let saved = db.save_template_fields(&t.id, digest_vector(), &groups_sha256(&t.groups)).unwrap();
+    assert_eq!(saved.updated_at, t.updated_at);
+}
