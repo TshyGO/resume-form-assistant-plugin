@@ -42,7 +42,8 @@ function fresh(timestamp, cutoff, now) {
   return Number.isFinite(value) && value >= Date.parse(cutoff) && value <= now.getTime();
 }
 
-export async function buildDailyEmail(db, now, environment = '测试') {
+export async function buildDailyEmail(db, now, environment) {
+  if (!['测试', '正式'].includes(environment)) throw new Error('invalid_email_environment');
   const today = now.toISOString().slice(0, 10);
   const date = dateOffset(today, -1);
   const report = await liveStatistics(db, date, 30, now);
