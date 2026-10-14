@@ -1,5 +1,6 @@
 import { idbStore, nativePort, nativeSender, sleep, storageAdapter } from './chrome.mjs';
 import { createStore } from './store.mjs';
+import { createUsage, handleUsageMessage } from './usage.mjs';
 import { createSession } from './session.mjs';
 import { createResume } from './resume.mjs';
 import { createAi } from './ai.mjs';
@@ -41,7 +42,8 @@ export function installDesktopLink(api) {
 
   const staging = createStaging({ kv: idbStore(), now: deps.now, uuid: deps.uuid });
   const uploads = createUploads({ ...deps, staging });
-  const session = createSession(deps);
+  const usage = createUsage(deps);
+  const session = createSession({ ...deps, onProbe: probe => usage.observe(probe) });
   const resume = createResume({ ...deps, session });
   const ai = createAi({ ...deps, session, port: nativePort(api) });
   const legacy = createLegacy({
@@ -68,6 +70,8 @@ export function installDesktopLink(api) {
   });
 
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const usageHandled = handleUsageMessage(api, usage, message, sender, sendResponse);
+    if (usageHandled !== null) return usageHandled;
     if (!DESKTOP_MESSAGE_TYPES.has(message?.type)) return false;
     // Deleting old data or handing out whole templates is for the extension's own pages
     // (the status page), never for a content script running inside a web page.

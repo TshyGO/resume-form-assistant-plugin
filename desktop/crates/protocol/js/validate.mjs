@@ -361,6 +361,7 @@ export async function validateRequest(value) {
     if (e.code) throw e;
     throw fail("invalid_payload", e.message);
   }
+  if (RULES.v3MessageTypes.includes(type) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${type} requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(type) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${type} requires protocolVersion 2`);
   }
@@ -639,6 +640,7 @@ export function validateResponse(value, requestType) {
     }
   }
   validateSchema(value, responseSchema());
+  if (RULES.v3MessageTypes.includes(requestType) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(requestType) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 2`);
   }

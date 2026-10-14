@@ -84,7 +84,9 @@ impl Backend for AppBackend {
         // response_for_with has already checked the caller and envelope. Re-validate
         // here so direct uses of this backend cannot turn malformed JSON into a resume.
         let request = validate_request_bytes(frame).map_err(|_| "invalid launch request")?;
-        let mut stream = if request.message_type == MessageType::UiOpen {
+        let mut stream = if request.message_type == MessageType::UsageTouch {
+            local_ipc::Endpoint::for_data_root(&self.data_root).and_then(|endpoint| local_ipc::connect(&endpoint))
+        } else if request.message_type == MessageType::UiOpen {
             crate::ipc_client::connect_with_intent(&self.data_root, &self.program, true)
         } else {
             crate::ipc_client::connect_or_start(&self.data_root, &self.program)
@@ -590,5 +592,20 @@ mod tests {
             assert_eq!(value["error"]["code"], "identity_not_allowed");
         }
         assert_eq!(nm_frame::read_frame(&mut cursor).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod usage_no_launch_tests {
+    use super::*;
+    #[test]
+    fn usage_touch_never_cold_starts_a_missing_desktop() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut backend = AppBackend { data_root: dir.path().to_path_buf(), program: dir.path().join("must-not-start") };
+        let frame = serde_json::to_vec(&serde_json::json!({"protocolVersion":3,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"usage.touch","occurredAt":"2026-10-12T00:00:00Z","payload":{}})).unwrap();
+        let start = std::time::Instant::now();
+        assert!(backend.exchange(&frame).is_err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!dir.path().join("launch-policy.json").exists());
     }
 }

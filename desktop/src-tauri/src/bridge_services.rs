@@ -23,6 +23,7 @@ pub trait BridgeServices: Send + Sync + 'static {
     /// chosen comes back alongside the reply; `None` when no provider could be chosen.
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>);
     fn open_view(&self, view: &str) -> bool;
+    fn usage_touch(&self) {}
 
     fn stage_import_key(&self, _import_id: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
     fn get_import_key(&self, _import_id: &str) -> Result<Option<String>, ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -112,6 +113,11 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
 }
 
 impl BridgeServices for DesktopBridgeServices {
+    fn usage_touch(&self) {
+        let Some(state) = self.app.try_state::<std::sync::Arc<crate::telemetry::Telemetry>>() else { return; };
+        let service = std::sync::Arc::clone(&state);
+        tauri::async_runtime::spawn(async move { service.extension_touch().await; });
+    }
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
         let state = self.app.state::<AppState>();
         let data_root = match ai_data_root(&state) {
@@ -225,6 +231,10 @@ fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, hos
 
 pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer, ErrorCode> {
     match request.message_type {
+        resume_pro_protocol::MessageType::UsageTouch => {
+            services.usage_touch();
+            checked_answer(request, json!({"accepted": true}))
+        }
         resume_pro_protocol::MessageType::AiComplete => {
             let purpose = request.payload["purpose"].as_str().ok_or(ErrorCode::InvalidPayload)?;
             let system = request.payload["system"].as_str().ok_or(ErrorCode::InvalidPayload)?;
@@ -284,6 +294,7 @@ mod tests {
     }
 
     impl BridgeServices for FakeServices {
+        fn usage_touch(&self) { self.calls.lock().unwrap().push("usage".into()); }
         fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
             let route = if strong { "strong" } else { "daily" };
             self.calls.lock().unwrap().push(format!("ai:{purpose}:{route}:{system}:{user}"));
@@ -298,7 +309,7 @@ mod tests {
 
     fn request(message_type: &str, payload: Value) -> Request {
         let value = json!({
-            "protocolVersion": 2,
+            "protocolVersion": if message_type == "usage.touch" { 3 } else { 2 },
             "messageId": "33333333-3333-4333-8333-333333333333",
             "clientInstanceId": "11111111-1111-4111-8111-111111111111",
             "messageType": message_type,
@@ -403,6 +414,14 @@ mod tests {
         assert_eq!(answer(&request, &secret).unwrap().payload, json!({"status":"failed","reason":"bad_response"}));
         let large = fake(AiReply::Ok("a".repeat(70_000)), false);
         assert_eq!(answer(&request, &large).unwrap().payload, json!({"status":"failed","reason":"response_too_large"}));
+    }
+
+    #[test]
+    fn usage_touch_forwards_empty_signal_without_identifier() {
+        let request = request("usage.touch", json!({}));
+        let services = fake(AiReply::Ok(String::new()), false);
+        assert_eq!(answer(&request, &services).unwrap().payload, json!({"accepted": true}));
+        assert_eq!(services.calls.lock().unwrap().as_slice(), ["usage"]);
     }
 
     #[test]

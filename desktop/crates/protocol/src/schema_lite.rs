@@ -24,6 +24,7 @@ pub fn payload_schema(message_type: &str) -> Option<Value> {
         "resume.update" => include_str!("../schemas/payloads/resume-update.json"),
         "ai.complete" => include_str!("../schemas/payloads/ai-complete.json"),
         "ui.open" => include_str!("../schemas/payloads/ui-open.json"),
+        "usage.touch" => include_str!("../schemas/payloads/usage-touch.json"),
         "legacy.import" => include_str!("../schemas/payloads/legacy-import.json"),
         _ => return None,
     };
@@ -42,6 +43,7 @@ pub fn response_payload_schema(message_type: &str) -> Option<Value> {
         "resume.update" => include_str!("../schemas/responses/resume-update.json"),
         "ai.complete" => include_str!("../schemas/responses/ai-complete.json"),
         "ui.open" => include_str!("../schemas/responses/ui-open.json"),
+        "usage.touch" => include_str!("../schemas/responses/usage-touch.json"),
         "legacy.import" => include_str!("../schemas/responses/legacy-import.json"),
         _ => return None,
     };

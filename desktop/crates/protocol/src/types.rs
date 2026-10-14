@@ -5,7 +5,7 @@ use crate::error::{ErrorCode, Layer, ProtocolError};
 
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
-pub const MAX_PROTOCOL_VERSION: u32 = 2;
+pub const MAX_PROTOCOL_VERSION: u32 = 3;
 pub const MAX_ENVELOPE_BYTES: usize = 65536;
 pub const SUGGESTED_RAW_CHUNK_BYTES: usize = 32768;
 pub const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
@@ -38,6 +38,8 @@ pub enum MessageType {
     AiComplete,
     #[serde(rename = "ui.open")]
     UiOpen,
+    #[serde(rename = "usage.touch")]
+    UsageTouch,
     #[serde(rename = "legacy.import")]
     LegacyImport,
 }
@@ -58,6 +60,7 @@ impl MessageType {
             Self::AiComplete => "ai.complete",
             Self::UiOpen => "ui.open",
             Self::LegacyImport => "legacy.import",
+            Self::UsageTouch => "usage.touch",
         }
     }
 
@@ -76,6 +79,7 @@ impl MessageType {
             "ai.complete" => Ok(Self::AiComplete),
             "ui.open" => Ok(Self::UiOpen),
             "legacy.import" => Ok(Self::LegacyImport),
+            "usage.touch" => Ok(Self::UsageTouch),
             "SaveIntent" | "saveIntent" | "save.intent" => Err(ProtocolError::new(
                 ErrorCode::UnknownMessageType,
                 Layer::Structure,
@@ -90,7 +94,7 @@ impl MessageType {
     }
 
     pub fn identity_forbidden(self) -> bool {
-        matches!(self, Self::Health | Self::Handshake | Self::AiComplete | Self::UiOpen)
+        matches!(self, Self::Health | Self::Handshake | Self::AiComplete | Self::UiOpen | Self::UsageTouch)
     }
 
     pub fn identity_required(self) -> bool {
@@ -110,6 +114,7 @@ impl MessageType {
 
     pub fn min_envelope_version(self) -> u32 {
         match self {
+            Self::UsageTouch => 3,
             Self::ResumeRead | Self::ResumeUpdate | Self::AiComplete | Self::UiOpen | Self::LegacyImport => 2,
             _ => 1,
         }

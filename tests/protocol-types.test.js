@@ -53,6 +53,6 @@ test('an array of a union type is parenthesized so every member is an array item
   const rendered = renderTypes();
   const capabilities = rendered.split('\n').find(line => line.trim().startsWith('capabilities:'));
   assert.ok(capabilities, 'handshake response declares capabilities');
-  assert.match(capabilities, /capabilities: \("health" \| .*"legacy\.import"\)\[\];/);
+  assert.match(capabilities, /capabilities: \("health" \| .*"usage\.touch"\)\[\];/);
   assert.doesNotMatch(rendered, /"[^"\n]*" \| "[^"\n]*"\[\]/, 'a bare union followed by [] binds [] to the last member only');
 });

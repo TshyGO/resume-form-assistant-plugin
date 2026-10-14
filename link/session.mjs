@@ -14,7 +14,7 @@ import { sendOnce } from './transport.mjs';
  *                 this is the only failure that may persist a SaveIntent
  *   never_paired  no successful handshake was ever recorded; no long-lived queue is created
  */
-export function createSession({ store, sendNative, sleep, uuid, now, getManifest, send = sendOnce }) {
+export function createSession({ store, sendNative, sleep, uuid, now, getManifest, onProbe = () => {}, send = sendOnce }) {
   async function probe() {
     const message = await buildEnvelope({
       messageType: 'handshake',
@@ -44,7 +44,9 @@ export function createSession({ store, sendNative, sleep, uuid, now, getManifest
         appVersion: payload.appVersion,
         at: now().toISOString()
       });
-      return { mode: 'ready', identity, capabilities: payload.capabilities };
+      const probe = { mode: 'ready', identity, capabilities: payload.capabilities };
+      onProbe(probe);
+      return probe;
     }
 
     if (result.status === 'not_paired') return { mode: 'not_paired', identity: null };
