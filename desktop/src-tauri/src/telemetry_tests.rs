@@ -382,6 +382,16 @@ fn release_destination_must_be_https_without_credentials_or_extra_url_fields() {
 }
 
 #[test]
+fn only_reviewed_release_builds_can_enable_statistics_in_ci() {
+    assert!(!release_build_allowed(true, false, false, true, true));
+    assert!(!release_build_allowed(false, true, false, true, true));
+    assert!(!release_build_allowed(false, false, true, false, true));
+    assert!(!release_build_allowed(false, false, true, true, false));
+    assert!(release_build_allowed(false, false, true, true, true));
+    assert!(release_build_allowed(false, false, false, false, true));
+}
+
+#[test]
 fn desktop_and_both_browsers_share_one_identifier_with_independent_daily_surface_quotas() {
     let (root, service) = service();
     assert!(service

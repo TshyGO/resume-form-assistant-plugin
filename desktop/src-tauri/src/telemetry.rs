@@ -112,9 +112,13 @@ impl Config {
     fn release() -> Self {
         // Shipping code stays dormant until a reviewed release explicitly configures it.
         // Tests/debug/CI cannot opt into network by changing a runtime setting.
-        let allowed = !cfg!(any(test, debug_assertions))
-            && option_env!("CI").is_none()
-            && option_env!("RESUME_USAGE_METRICS_READY") == Some("1");
+        let allowed = release_build_allowed(
+            cfg!(test),
+            cfg!(debug_assertions),
+            option_env!("CI").is_some(),
+            option_env!("RESUME_USAGE_METRICS_RELEASE_BUILD") == Some("1"),
+            option_env!("RESUME_USAGE_METRICS_READY") == Some("1"),
+        );
         let endpoint = option_env!("RESUME_USAGE_METRICS_ENDPOINT")
             .filter(|endpoint| allowed && checked_endpoint(endpoint))
             .map(str::to_owned);
@@ -128,6 +132,9 @@ impl Config {
             timeout: Duration::from_secs(3),
         }
     }
+}
+fn release_build_allowed(test: bool, debug: bool, ci: bool, reviewed_ci_release: bool, ready: bool) -> bool {
+    !test && !debug && (!ci || reviewed_ci_release) && ready
 }
 fn checked_endpoint(endpoint: &str) -> bool {
     url::Url::parse(endpoint).is_ok_and(|url| {
