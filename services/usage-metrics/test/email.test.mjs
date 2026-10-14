@@ -30,8 +30,9 @@ test('default off and missing binding never query or send', async()=> {
 });
 test('UTC closed date, task freshness and snapshot row integrity determine normal vs anomaly',async()=>{
   let m=await buildDailyEmail(db,NOW);assert.equal(m.date,'2026-10-12');assert.match(m.subject,/统计日报/);assert.match(m.text,/来源可重叠/);
+  assert.match(m.html,/<!doctype html>/);assert.match(m.html,/当日活跃/);assert.match(m.html,/下载概览/);assert.doesNotMatch(m.html,/undefined/);
   await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-12T00:10:10Z' WHERE task='downloads'").run();
-  m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
+  m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);assert.match(m.html,/本轮数据未通过完整性检查/);assert.doesNotMatch(m.html,/当日活跃/);
   await db.prepare('UPDATE release_observation SET asset_count=1').run();
   m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.match(m.text,/下载快照明细不可用或不完整/);
 });
@@ -60,6 +61,7 @@ test('parallel/repeated dispatch reserves each recipient once and stores accepta
   const sent=[];const e=env(async mail=>sent.push(mail));
   await Promise.all([runDailyEmail(e,opts),runDailyEmail(e,opts)]);await runDailyEmail(e,opts);
   assert.equal(sent.length,2);assert.deepEqual(sent.map(x=>x.to).sort(),[...EMAIL_TO].sort());
+  assert.ok(sent.every(mail=>mail.html.includes('统计日报') && mail.text.includes('活跃安装样本')));
   const rows=(await db.prepare('SELECT * FROM email_delivery').all()).results;assert.ok(rows.every(x=>x.status==='accepted'));
   assert.ok(rows.every(x=>!JSON.stringify(x).includes('@')));
 });
