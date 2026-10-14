@@ -78,6 +78,7 @@
               <button class="cancel-button" id="cancel-button" type="button" hidden>取消 AI 等待（保留本地匹配）</button>
               <button class="repeat-button" id="repeat-button" type="button">AI 辅助新增条目</button>
               <button class="deep-button" id="deep-button" type="button" title="让 AI 先看懂页面结构再填写，适合常规填写漏填或填不上的页面">深度分析本页</button>
+              <p id="recipe-line" class="source-line recipe-line" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h10a1 1 0 0 1 1 1V20l-6-3.5L6 20V4.5a1 1 0 0 1 1-1z"/></svg><span class="recipe-line__label">本站配方：</span><span id="recipe-state" class="chip chip--ok">已保存</span><button id="recipe-reanalyze" type="button" title="重新让 AI 分析这个页面；效果更好时会更新本站配方">重新分析</button><button id="recipe-delete" type="button" title="删除这个页面的配方，只影响本站这一条">删除</button></p>
               <p id="fill-reason" class="card-hint fill-reason" hidden></p>
               <div id="fill-result" class="fill-result" role="status" hidden></div>
               <div id="deep-offer" class="deep-offer" role="region" aria-label="深度分析本页" hidden>

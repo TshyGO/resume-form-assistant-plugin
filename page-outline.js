@@ -381,7 +381,8 @@
 
   // 把候选排成区块。区块标题取最近的标题文字，字段自己的区块（field-scan 判断的）优先。
   // 题目一类的文字先暂存，跟着下一个控件进同一个区块；和某个控件题目相同的不再重复列出。
-  function toBlocks(items, redact, titles = new Map()) {
+  // clues（#226 站点配方）：控件前面紧挨着的那段题目文字（已脱敏），没有题目的输入框靠它在下次重新找到。
+  function toBlocks(items, redact, titles = new Map(), clues = new Map()) {
     const blocks = [];
     let current = null;
     let pending = [];
@@ -408,14 +409,16 @@
       if (item.type === "text") {
         if (labels.has(normalizeForOverlap(item.text))) continue;
         const text = redact(item.text);
-        if (text) pending.push({ text: `文字 "${text}"`, clue: true, shape: "text" });
+        if (text) pending.push({ text: `文字 "${text}"`, clue: true, shape: "text", raw: text });
         continue;
       }
       if (!current) open("", null);
       const section = item.control?.section ? redact(item.control.section) : "";
       if (section && section !== current.title && current.lines.some(line => !line.clue)) open(section, current.frame);
       else if (section && !current.title) current.title = section;
+      const clue = pending.length ? pending[pending.length - 1].raw || "" : "";
       flush();
+      if (clue && item.type === "control") clues.set(item.ref, clue);
       const text = lineFor(item, redact);
       current.lines.push({ text, ref: item.ref, shape: text.replace(/^e\d+\s/, ""), clue: false });
       current.refs.push(item.ref);
@@ -545,14 +548,16 @@
     stats.candidates = nodes.size;
     // titles：编号 → 所在区块的标题（已脱敏），#225 预览「基本信息：编辑」时用。
     const titles = new Map();
-    const blocks = toBlocks(items, redact, titles);
+    const clues = new Map();
+    const blocks = toBlocks(items, redact, titles, clues);
     const parts = fitBlocks(blocks, options.maxChars || MAX_CHARS, options.maxParts || MAX_PARTS, stats);
     stats.parts = parts.length;
     stats.chars = parts.reduce((sum, part) => sum + part.text.length, 0);
-    return { parts, nodes, stats, redact, titles };
+    return { parts, nodes, stats, redact, titles, clues };
   }
 
-  const api = { MAX_SEGMENT, MAX_CHARS, MAX_PARTS, MAX_BUTTON_TEXT, REDACTED, build, createRedactor, sensitiveShape, domKindOf, describeButton };
+  const api = { MAX_SEGMENT, MAX_CHARS, MAX_PARTS, MAX_BUTTON_TEXT, REDACTED, build, createRedactor, sensitiveShape, domKindOf, describeButton,
+    libraryOf, normalizeForOverlap };
   scope.ResumeProPageOutline = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

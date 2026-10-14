@@ -10,7 +10,9 @@ const source = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
 const asClassicScript = text => text.replace(
   /^import \{ installDesktopLink \} from "\.\/link\/worker\.mjs";$/m,
   'const installDesktopLink = () => {};'
-).replace(/^import \{ installFeedback \} from "\.\/link\/feedback\.mjs";$/m, 'const installFeedback = () => {};');
+).replace(/^import \{ installFeedback \} from "\.\/link\/feedback\.mjs";$/m, 'const installFeedback = () => {};')
+  // #226：站点配方的规则脚本只挂接口到 self 上，这里的测试用不到。
+  .replace(/^import "\.\/[\w-]+\.js";$/gm, '');
 
 test('service worker only creates one concurrent offscreen worker host and never fetches AI', async () => {
   let complete, creates = 0;

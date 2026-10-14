@@ -139,6 +139,13 @@ button:disabled { cursor: not-allowed; }
 .deep-offer__text { margin: 0; }
 .deep-offer button { justify-self: start; min-height: 32px; padding: 4px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; }
 .deep-offer button:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+/* #226 本站配方：沿用来源行和下划线文字按钮的样式 */
+.recipe-line { flex-wrap: wrap; margin-top: 8px; }
+.recipe-line .chip { max-width: none; }
+.recipe-line .chip--warn { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+.recipe-line button { min-height: 24px; padding: 0 2px; border: 0; background: transparent; color: var(--accent-strong); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.recipe-line button:hover:not(:disabled) { color: var(--accent-hover); }
+.recipe-line button:disabled { color: #a4acb8; text-decoration: none; }
 .deep-card__list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0 0 0 18px; color: #4a5361; font-size: 12px; line-height: 1.55; }
 .deep-card__meta { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 .deep-card__plan li { cursor: default; }
