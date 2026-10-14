@@ -27,6 +27,7 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "page-outline.js",
   "deep-analysis.js",
   "page-actions.js",
+  "page-recipe.js",
   "feedback-core.js",
   "usage-signals.js",
   "feedback-ui.js",

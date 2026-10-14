@@ -83,6 +83,7 @@
         "page-outline.js",
         "deep-analysis.js",
         "page-actions.js",
+        "page-recipe.js",
         "sidebar-state.js",
         "content.js"
       ],
