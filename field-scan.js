@@ -142,7 +142,8 @@
         return false;
       }
     };
-    return { doc, body: doc.body, isVisible, excluded, boundaries: null };
+    // doc 也可以是开放的 ShadowRoot（#224 页面大纲）：它没有 body，查询都在这个根里做。
+    return { doc, body: doc.body || null, isVisible, excluded, boundaries: null };
   }
 
   // 最小表单项的边界：页面上所有可见的真实控件（含禁用、文件、单选、勾选）。
@@ -719,7 +720,7 @@
     if (!root) return false;
     if (!ctx.addEntry) ctx.addEntry = new Map();
     if (!ctx.addEntry.has(root)) {
-      const walker = ctx.doc.createTreeWalker(root, 4);
+      const walker = (ctx.doc.createTreeWalker ? ctx.doc : root.ownerDocument).createTreeWalker(root, 4);
       let found = false;
       for (let node = walker.nextNode(); node && !found; node = walker.nextNode()) {
         if (node.parentElement?.tagName === "OPTION") continue;
@@ -956,6 +957,48 @@
     return resolved.text;
   }
 
+  // #224 页面大纲：同一套逻辑控件归并和题目判断，但不按「能不能一键填写」筛掉控件——
+  // 对不上题目、在页头或像站内搜索的也列出来，由大纲自己决定写不写。只读结构，不读值。
+  // root 是 Document 或开放的 ShadowRoot。
+  function outlineControls(root, options = {}) {
+    const ctx = makeContext(root, options);
+    const controls = collectLogicalControls(ctx);
+    const itemByRoot = new Map();
+    for (const control of controls) {
+      if (!itemByRoot.has(control.root)) itemByRoot.set(control.root, findItem(control.root, ctx));
+      control.item = itemByRoot.get(control.root);
+      const resolved = resolveLabel(control, control.item, ctx);
+      control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
+      control.labelSource = resolved.source;
+      control.labelEl = resolved.labelEl;
+      control.disabled = control.elements.every((el) => el.disabled);
+      control.chrome = isPageChrome(control.root);
+      control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
+    }
+    const claimed = new Set(controls.map((control) => control.labelEl).filter(Boolean));
+    return controls.map((control) => {
+      const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
+      return {
+        kind: control.kind,
+        controlKind: control.controlKind,
+        element: control.element,
+        elements: control.elements,
+        root: control.root,
+        item: control.item,
+        label: control.label,
+        labelSource: control.labelSource,
+        section: found.text,
+        disabled: control.disabled,
+        chrome: control.chrome,
+        searchLike: control.searchLike,
+        pickerType: control.pickerType || "",
+        rangePart: control.rangePart || "",
+        mixed: Boolean(control.mixed),
+        placeholder: attr(control.element, "placeholder")
+      };
+    });
+  }
+
   const api = {
     MAX_OFFER_CHARS,
     cleanLabel,
@@ -964,6 +1007,7 @@
     isBindingCurrent,
     isNoiseText,
     labelForElement,
+    outlineControls,
     scanPage
   };
 

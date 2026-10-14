@@ -9,6 +9,8 @@ const runtime = vi.hoisted(() => ({ update: vi.fn(), fail: vi.fn() }));
 // Exercise main.ts's actual event handlers, polling and DOM writes without mounting unrelated views.
 vi.mock("./feedback.ts", () => ({ installFrontendErrors: vi.fn() }));
 vi.mock("./react/feedback-mount.tsx", () => ({ mountFeedbackSettings: vi.fn() }));
+vi.mock("./react/usage-mount.tsx", () => ({ mountUsageSettings: vi.fn() }));
+vi.mock("./usage-metrics.ts", () => ({ installUsageSignals: vi.fn() }));
 vi.mock("./react/runtime-status-mount.tsx", () => ({ mountRuntimeStatus: () => runtime }));
 vi.mock("./ai/mount.tsx", () => ({ mountAiSettings: vi.fn(), mountAiReview: vi.fn() }));
 vi.mock("./applications-ui.ts", () => ({ mountApplications: () => ({ refreshList: async () => {} }) }));

@@ -10,6 +10,8 @@ mod ai_settings;
 mod nm_register;
 mod update_check;
 mod feedback;
+mod telemetry;
+mod metrics_acceptance;
 #[cfg(test)]
 mod nm_register_tests;
 mod cli;
@@ -733,8 +735,18 @@ fn resume_overview_cmd(state: State<AppState>) -> Result<archive_store::ResumeOv
 }
 
 #[tauri::command]
-fn get_resume_template_cmd(state: State<AppState>, id: String) -> Result<archive_store::ResumeTemplate, CommandError> {
-    with_store(&state, |store| resume_commands::get_template(store, &id))
+fn get_resume_template_cmd(state: State<AppState>, id: String) -> Result<resume_commands::TemplateView, CommandError> {
+    with_store(&state, |store| resume_commands::get_template_view(store, &id))
+}
+
+#[tauri::command]
+fn save_resume_template_fields_cmd(
+    state: State<AppState>,
+    id: String,
+    groups: Vec<archive_store::TemplateGroup>,
+    base_sha256: String,
+) -> Result<resume_commands::TemplateView, CommandError> {
+    with_store(&state, move |store| resume_commands::save_template_fields(store, &id, groups, &base_sha256))
 }
 
 #[tauri::command]
@@ -1001,6 +1013,12 @@ fn delete_ai_provider_cmd(state: State<AppState>, id: String) -> Result<ai_provi
 #[tauri::command]
 fn set_active_ai_provider_cmd(state: State<AppState>, id: String) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
     ai_provider_commands::set_active(&ai_data_root(&state)?, state.credentials.as_ref(), &id)
+}
+
+/// 强模型（#223）。`id` 为空表示不用强模型。
+#[tauri::command]
+fn set_strong_ai_provider_cmd(state: State<AppState>, id: Option<String>) -> Result<ai_provider_commands::AiSettingsView, CommandError> {
+    ai_provider_commands::set_strong(&ai_data_root(&state)?, state.credentials.as_ref(), id.as_deref())
 }
 
 /// Key 只进凭据库。这里不写日志、不回显，连长度都不记。
@@ -1435,6 +1453,30 @@ fn run_apps_loop() -> Result<serde_json::Value, CommandError> {
 }
 
 pub fn run() {
+    #[cfg(feature = "usage-metrics-acceptance")]
+    let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    #[cfg(feature = "usage-metrics-acceptance")]
+    {
+        if let Err(message) = metrics_acceptance::prepare(&context.config().identifier) {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    }
+    #[cfg(feature = "usage-metrics-acceptance")]
+    if std::env::args().any(|arg| arg == "--metrics-test-info") {
+        let effective_endpoint = HostPaths::resolve().ok()
+            .and_then(|paths| metrics_acceptance::configured_endpoint(&paths.data_root));
+        println!("{}", serde_json::json!({
+            "purpose": "isolated-usage-metrics-acceptance",
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "identifier": metrics_acceptance::IDENTIFIER,
+            "endpoint": effective_endpoint,
+            "native_host": nm_register::HOST_NAME,
+            "data_root_isolated": metrics_acceptance::effective_isolation(),
+            "feedback_disabled": feedback::acceptance_disabled(),
+        }));
+        return;
+    }
     let args = cli::parse();
     if args.help {
         cli::print_help();
@@ -1536,6 +1578,7 @@ pub fn run() {
     }
 
     configure_webview_cache();
+    #[cfg(not(feature = "usage-metrics-acceptance"))]
     let context = tauri::generate_context!();
 
     let hidden_launch = args.hidden;
@@ -1669,6 +1712,7 @@ pub fn run() {
                     let handle = app.handle().clone();
                     let legacy_handle = app.handle().clone();
                     let profile_handle = app.handle().clone();
+                    let template_handle = app.handle().clone();
                     let application = Arc::new(ipc_server::OpenArchive::with_services(
                         Arc::clone(&app.state::<AppState>().store), services,
                     ).notifying(Arc::new(move |notice| {
@@ -1682,6 +1726,10 @@ pub fn run() {
                         // 「简历」页即使已经停在那儿，也能感知插件写入（#177）；表单自己决定
                         // 有没有未保存的修改要保护，这里只负责通知，不负责判断。
                         let _ = profile_handle.emit("resume-profile-changed", &notice);
+                    })).notifying_template(Arc::new(move |notice| {
+                        // 插件改了模板字段或切换了当前模板（#273）：模板列表重新读，打开着的
+                        // 编辑器自己判断草稿要不要保护。
+                        let _ = template_handle.emit("resume-template-changed", &notice);
                     })));
                     match ipc_server::start(&host.paths().data_root, application) {
                         Ok(service) => {
@@ -1713,6 +1761,7 @@ pub fn run() {
             }
 
             drop(startup_policy);
+            app.manage(telemetry::Telemetry::new(paths.data_root.clone()));
             // 浏览器要靠这份清单才找得到 host。放在这里：paths 已经有了，窗口还没显示。
             refresh_native_messaging(&app.state::<AppState>());
 
@@ -1745,6 +1794,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            telemetry::telemetry_status,
+            telemetry::telemetry_notice,
+            telemetry::telemetry_enabled,
+            telemetry::telemetry_touch,
             feedback::feedback_status,
             feedback::feedback_consent,
             feedback::feedback_preview,
@@ -1779,6 +1832,7 @@ pub fn run() {
             import_resume_template_cmd,
             export_resume_template_cmd,
             rename_resume_template_cmd,
+            save_resume_template_fields_cmd,
             delete_resume_template_cmd,
             set_active_resume_template_cmd,
             get_profile_cmd,
@@ -1820,6 +1874,7 @@ pub fn run() {
             save_ai_provider_cmd,
             delete_ai_provider_cmd,
             set_active_ai_provider_cmd,
+            set_strong_ai_provider_cmd,
             set_ai_key_cmd,
             clear_ai_key_cmd,
             list_ai_models_cmd,
@@ -1836,6 +1891,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
+            }
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                telemetry::focused(window);
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();

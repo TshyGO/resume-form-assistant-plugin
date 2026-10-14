@@ -36,5 +36,7 @@
   "link/store.mjs",
   "link/transport.mjs",
   "link/uploads.mjs",
-  "link/worker.mjs"
+  "link/worker.mjs",
+  "usage-signals.js",
+  "link/usage.mjs"
 ]

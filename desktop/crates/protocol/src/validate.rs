@@ -264,11 +264,17 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
             }
         }
         MessageType::ResumeUpdate => {
+            // Each op carries exactly its own fields; anything belonging to another op is refused.
+            let has = |key: &str| payload.contains_key(key);
+            let template_edit = has("groups") || has("baseSha256");
             let valid = match payload.get("op").and_then(Value::as_str) {
-                Some("setActiveTemplate") => payload.contains_key("templateId")
-                    && !payload.contains_key("profile") && !payload.contains_key("expectedRevision"),
-                Some("saveProfile") => payload.contains_key("profile")
-                    && payload.contains_key("expectedRevision") && !payload.contains_key("templateId"),
+                Some("setActiveTemplate") => has("templateId")
+                    && !has("profile") && !has("expectedRevision") && !template_edit,
+                Some("saveProfile") => has("profile")
+                    && has("expectedRevision") && !has("templateId") && !template_edit,
+                // #273: one template's edited groups, checked against the content it was based on.
+                Some("saveTemplate") => has("templateId") && has("groups") && has("baseSha256")
+                    && !has("profile") && !has("expectedRevision"),
                 _ => false,
             };
             if !valid {
@@ -431,6 +437,15 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
             != Some(true)
     {
         return Err(invalid("resume.update activeTemplateId does not match requested templateId"));
+    }
+    // A plugin that predates tiers rejects a response carrying `tier`: its schema copy has
+    // additionalProperties: false. Only a request that asked for a tier may get one back.
+    if req.message_type == MessageType::AiComplete
+        && value["payload"].get("tier").is_some()
+        && req.payload.get("tier").is_none()
+        && req.payload["purpose"] != "analyze"
+    {
+        return Err(invalid("ai.complete tier is only returned to a request that asked for one"));
     }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req

@@ -152,7 +152,7 @@ fn identity_rules_for_v2_types() {
 fn handshake_announces_max_2() {
     let payload = crate::identity::handshake_response_payload(&current(), "0.4.0");
     assert_eq!(payload["minProtocolVersion"], 1);
-    assert_eq!(payload["maxProtocolVersion"], 2);
+    assert_eq!(payload["maxProtocolVersion"], 3);
 }
 
 #[test]
@@ -983,4 +983,16 @@ fn legacy_import_status_may_say_the_ai_config_was_dropped() {
     validate_response_value(&dropped, MessageType::LegacyImport).unwrap();
     let wrong_type = response(json!({"state": "imported", "received": 2, "total": 2, "aiConfigDropped": "yes"}));
     assert!(validate_response_value(&wrong_type, MessageType::LegacyImport).is_err());
+}
+
+#[test]
+fn usage_touch_is_v3_identity_free_and_empty() {
+    let mut value = json!({"protocolVersion":3,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"usage.touch","occurredAt":"2026-10-12T00:00:00Z","payload":{}});
+    let request = validate_request_value(&value).unwrap();
+    assert!(request.message_type.identity_forbidden());
+    value["protocolVersion"] = json!(2);
+    assert!(validate_request_value(&value).is_err());
+    value["protocolVersion"] = json!(3);
+    value["payload"] = json!({"url":"https://private.test"});
+    assert!(validate_request_value(&value).is_err());
 }

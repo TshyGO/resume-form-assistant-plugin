@@ -7,6 +7,7 @@ import type { ProfileProbe } from "./ProfileForm.tsx";
 import { DialogQueueProvider, ResumeDialog } from "./ResumeDialog.tsx";
 import { useResumeParse } from "./ResumeParse.tsx";
 import { TemplateList } from "./TemplateList.tsx";
+import type { TemplateEditorProbe } from "./TemplateFieldEditor.tsx";
 import type { FilePickers, ReloadSignal } from "./TemplateList.tsx";
 
 export type ResumeSubview = "templates" | "profile";
@@ -61,6 +62,9 @@ function ResumeWorkspace({
   const [leaving, setLeaving] = useState(false);
   const leaveResolver = useRef<((ok: boolean) => void) | null>(null);
   const profileProbe = useRef<ProfileProbe | null>(null);
+  const templateProbe = useRef<TemplateEditorProbe | null>(null);
+  // 哪一处有未保存的修改，离开前的确认据此说清楚会丢什么。
+  const [leavingWhat, setLeavingWhat] = useState<{ profile: boolean; template: boolean }>({ profile: false, template: false });
   const tabRefs = useRef<Record<ResumeSubview, HTMLButtonElement | null>>({ templates: null, profile: null });
 
   const parse = useResumeParse({
@@ -81,11 +85,14 @@ function ResumeWorkspace({
   useEffect(() => {
     if (!gate) return undefined;
     gate.current.confirmLeave = () => {
-      if (!profileProbe.current?.dirty()) return Promise.resolve(true);
+      const profile = Boolean(profileProbe.current?.dirty());
+      const template = Boolean(templateProbe.current?.dirty());
+      if (!profile && !template) return Promise.resolve(true);
       // 已经在问了（比如插件又要求打开别的页）：后来的请求按「不离开」处理，等用户回答眼前这一个。
       if (leaveResolver.current) return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
         leaveResolver.current = resolve;
+        setLeavingWhat({ profile, template });
         setLeaving(true);
       });
     };
@@ -165,7 +172,7 @@ function ResumeWorkspace({
         className="resume-panel"
         hidden={view !== "templates"}
       >
-        <TemplateList pickers={pickers} reloadSignal={listSignal} parse={parse} />
+        <TemplateList pickers={pickers} reloadSignal={listSignal} parse={parse} listen={listen} editorProbe={templateProbe} />
       </div>
       <div
         role="tabpanel"
@@ -188,7 +195,10 @@ function ResumeWorkspace({
           </>
         }
       >
-        <p>「我的信息」里有还没保存的修改。离开简历页会丢失这些修改，插件仍使用上次保存的信息。</p>
+        <p>
+          {[leavingWhat.template ? "模板字段" : "", leavingWhat.profile ? "「我的信息」" : ""].filter(Boolean).join("和") || "「我的信息」"}
+          里有还没保存的修改。离开简历页会丢失这些修改，插件仍使用上次保存的内容。
+        </p>
       </ResumeDialog>
     </div>
   );

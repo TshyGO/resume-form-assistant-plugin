@@ -1,0 +1,13 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/usage-touch.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "accepted": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "accepted"
+  ]
+}

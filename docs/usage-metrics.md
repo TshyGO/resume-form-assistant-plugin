@@ -2,7 +2,7 @@
 
 关联 [Issue #259](https://github.com/TshyGO/resume-form-assistant-plugin/issues/259)。以 2026-10-11 的沟通为准：Cloudflare Workers + D1；独立使用统计开关默认开启、用户可关闭；分阶段在功能分支实现。
 
-第一阶段交付本地下载快照工具；第二阶段云端源码与操作说明见 [Worker README](../services/usage-metrics/README.md)。**目前已部署隔离测试云端，尚未接入桌面/插件使用统计、修改桌面开关或采集真实用户数据；实际结果和未通过的自动 Cron 验收见 [测试验收记录](../services/usage-metrics/test-acceptance.md)。**当前产品隐私政策仍描述现有行为；后续客户端阶段必须同步更新实际行为和披露。
+第一阶段交付本地下载快照工具；第二阶段云端源码与操作说明见 [Worker README](../services/usage-metrics/README.md)。**已部署隔离测试云端；第三阶段新增桌面开关、状态、告知与主动使用客户端，默认/开发/测试/CI 构建仍禁用外发，第四阶段新增插件本机主动使用信号和统一去重，仍未开始采集真实用户数据。**桌面验证和发布条件见 [第三阶段说明](usage-metrics-desktop.md)；第二阶段实际结果和已通过的自动 Cron 验收见 [测试验收记录](../services/usage-metrics/test-acceptance.md)。隐私政策已同步描述客户端启用后的行为及当前停发边界；第四阶段代码和后续真机条件见 [插件统计说明](usage-metrics-extension.md)。
 
 ## 1. 阶段与分工
 

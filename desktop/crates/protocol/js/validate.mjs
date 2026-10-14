@@ -361,6 +361,7 @@ export async function validateRequest(value) {
     if (e.code) throw e;
     throw fail("invalid_payload", e.message);
   }
+  if (RULES.v3MessageTypes.includes(type) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${type} requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(type) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${type} requires protocolVersion 2`);
   }
@@ -448,10 +449,16 @@ export async function validateRequest(value) {
   }
   if (type === "resume.update") {
     const payload = value.payload;
+    // Each op carries exactly its own fields; anything belonging to another op is refused.
+    const has = (key) => Object.hasOwn(payload, key);
+    const templateEdit = has("groups") || has("baseSha256");
     const valid = payload.op === "setActiveTemplate"
-      ? Object.hasOwn(payload, "templateId") && !Object.hasOwn(payload, "profile") && !Object.hasOwn(payload, "expectedRevision")
-      : payload.op === "saveProfile" && Object.hasOwn(payload, "profile")
-        && Object.hasOwn(payload, "expectedRevision") && !Object.hasOwn(payload, "templateId");
+      ? has("templateId") && !has("profile") && !has("expectedRevision") && !templateEdit
+      : payload.op === "saveProfile"
+        ? has("profile") && has("expectedRevision") && !has("templateId") && !templateEdit
+        // #273: one template's edited groups, checked against the content it was based on.
+        : payload.op === "saveTemplate" && has("templateId") && has("groups") && has("baseSha256")
+          && !has("profile") && !has("expectedRevision");
     if (!valid) throw fail("invalid_payload", "resume.update fields do not match op");
   }
   if (type === "legacy.import") validateLegacyImport(value.payload);
@@ -519,6 +526,12 @@ export function validateResponseForRequest(value, request) {
       value.ok === true && (typeof value.payload?.activeTemplateId !== "string" ||
         value.payload.activeTemplateId.toLowerCase() !== request.payload.templateId.toLowerCase())) {
     throw fail("invalid_payload", "resume.update activeTemplateId does not match requested templateId");
+  }
+  // A plugin that predates tiers rejects a response carrying `tier`: its schema copy has
+  // additionalProperties: false. Only a request that asked for a tier may get one back.
+  if (request.messageType === "ai.complete" && Object.hasOwn(value.payload ?? {}, "tier") &&
+      !Object.hasOwn(request.payload ?? {}, "tier") && request.payload?.purpose !== "analyze") {
+    throw fail("invalid_payload", "ai.complete tier is only returned to a request that asked for one");
   }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
@@ -627,6 +640,7 @@ export function validateResponse(value, requestType) {
     }
   }
   validateSchema(value, responseSchema());
+  if (RULES.v3MessageTypes.includes(requestType) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(requestType) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 2`);
   }

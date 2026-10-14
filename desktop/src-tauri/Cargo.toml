@@ -8,6 +8,9 @@ edition = "2021"
 rust-version = "1.94"
 publish = false
 
+[features]
+usage-metrics-acceptance = []
+
 [lib]
 name = "resume_pro_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

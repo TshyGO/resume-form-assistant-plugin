@@ -187,3 +187,27 @@ test('progress is only a report: a successful run is unchanged with or without i
   assert.deepEqual(seen, [1, 2]);
   assert.deepEqual(agent.labels, { papers: '论文', education: '教育经历', work: '工作经历', projects: '项目经历' });
 });
+
+// #225/#195：说明书定位的分组。条目数由插件按网页结构核对，模型列的条目对不上就不新增。
+test('collectSpec: no template records means no candidate; a row holding two records is uncountable', () => {
+  const { JSDOM } = require('jsdom');
+  const doc = new JSDOM(`<body><div id="sec"><div class="t">教育经历</div><div class="list">
+    <div class="row"><div class="c"><label>学校</label><input></div><div class="c"><label>专业</label><input></div>
+      <div class="c"><label>学校</label><input></div><div class="c"><label>专业</label><input></div></div></div>
+    <div id="add">添加</div></div></body>`).window.document;
+  const visibleAll = el => el.isConnected;
+  const inputs = Array.from(doc.querySelectorAll('input'));
+  const group = { domain: 'education', button: doc.getElementById('add'), rows: [inputs[0]], others: [] };
+  const fields = [1, 2, 3].map(i => ({ group: '教育经历', key: `学校${i}`, value: `虚构${i}` }));
+  assert.deepEqual(agent.collectSpec([group], [], { isVisible: visibleAll }).candidates, []);
+  const labelOf = el => el.previousElementSibling?.textContent || '';
+  const located = agent.collectSpec([group], fields, { isVisible: visibleAll, labelOf });
+  assert.deepEqual(located.candidates, []);
+  assert.deepEqual(located.problems, [{ domain: 'education', reason: 'uncountable' }]);
+  // 去掉第二条记录后，同一个分组就能数清：现有 1 条，模板 3 条，新增 2 条。
+  inputs[2].parentElement.remove();
+  inputs[3].parentElement.remove();
+  const ok = agent.collectSpec([group], fields, { isVisible: visibleAll, labelOf });
+  assert.deepEqual(ok.candidates.map(c => [c.domain, c.current, c.target]), [['education', 1, 3]]);
+  assert.deepEqual(agent.validatePlan([{ id: ok.candidates[0].id, count: 2 }], ok.candidates), [{ id: ok.candidates[0].id, count: 2 }]);
+});

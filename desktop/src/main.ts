@@ -1,5 +1,7 @@
 import { installFrontendErrors } from "./feedback.ts";
 import { mountFeedbackSettings } from "./react/feedback-mount.tsx";
+import { mountUsageSettings } from "./react/usage-mount.tsx";
+import { installUsageSignals } from "./usage-metrics.ts";
 import type { Invoke, RuntimeStatus } from "./api.ts";
 import { input, must } from "./dom.ts";
 import { createPairingController } from "./pairing-form.ts";
@@ -35,6 +37,12 @@ import { describeDialogError, fragment, openSettingsDialog, paragraph } from "./
 const invoke: Invoke | undefined = window.__TAURI__?.core?.invoke;
 installFrontendErrors(invoke ?? null);
 mountFeedbackSettings(must("desktop-feedback"), must("feedback-consent"), invoke ?? null);
+const usageListen = window.__TAURI__?.event?.listen;
+const usageSubscribe = usageListen
+  ? (changed: () => void) => usageListen("usage-metrics-changed", changed)
+  : undefined;
+mountUsageSettings(must("desktop-usage"), must("usage-notice"), invoke ?? null, usageSubscribe);
+installUsageSignals(invoke ?? null);
 const pairing = createPairingController();
 const chromeInput = input("chrome-id");
 const runtimeStatusView = mountRuntimeStatus(must("facts"), invoke ?? null);

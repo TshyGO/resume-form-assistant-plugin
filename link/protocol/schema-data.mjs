@@ -3,7 +3,7 @@ export const SCHEMA_DATA = {
   "rules": {
     "protocolVersion": 2,
     "minProtocolVersion": 1,
-    "maxProtocolVersion": 2,
+    "maxProtocolVersion": 3,
     "maxEnvelopeBytes": 65536,
     "suggestedRawChunkBytes": 32768,
     "maxSnapshotBytes": 2097152,
@@ -15,7 +15,8 @@ export const SCHEMA_DATA = {
       "health",
       "handshake",
       "ai.complete",
-      "ui.open"
+      "ui.open",
+      "usage.touch"
     ],
     "identityRequired": [
       "application.queryCandidates",
@@ -47,7 +48,8 @@ export const SCHEMA_DATA = {
       "resume.update",
       "ai.complete",
       "ui.open",
-      "legacy.import"
+      "legacy.import",
+      "usage.touch"
     ],
     "v2MessageTypes": [
       "resume.read",
@@ -106,7 +108,10 @@ export const SCHEMA_DATA = {
       "identity": "Schema cannot prove an envelope matches the desktop current pointer. After structural validation, D03/D06 must compare archiveId/restoreEpoch to current.json.",
       "sourceRestoreEpoch": "Bound at pairing/bind time and immutable. Never overwrite with the current epoch.",
       "reconcile": "Read-only. A successful reconcile item does not authorize replay or rewrite of the old envelope."
-    }
+    },
+    "v3MessageTypes": [
+      "usage.touch"
+    ]
   },
   "envelope": {
     "$id": "https://resumepro.local/protocol/request-envelope.json",
@@ -150,7 +155,8 @@ export const SCHEMA_DATA = {
           "resume.update",
           "ai.complete",
           "ui.open",
-          "legacy.import"
+          "legacy.import",
+          "usage.touch"
         ]
       },
       "occurredAt": {
@@ -253,7 +259,15 @@ export const SCHEMA_DATA = {
           "enum": [
             "fill",
             "plan",
-            "extract_job"
+            "extract_job",
+            "analyze"
+          ]
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "default",
+            "strong"
           ]
         },
         "system": {
@@ -752,12 +766,56 @@ export const SCHEMA_DATA = {
           "type": "string",
           "enum": [
             "setActiveTemplate",
-            "saveProfile"
+            "saveProfile",
+            "saveTemplate"
           ]
         },
         "templateId": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "fields"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "baseSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "profile": {
           "type": "object",
@@ -910,6 +968,12 @@ export const SCHEMA_DATA = {
           ]
         }
       }
+    },
+    "usage-touch": {
+      "$id": "https://resumepro.local/protocol/payloads/usage-touch.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
     }
   },
   "responses": {
@@ -954,6 +1018,13 @@ export const SCHEMA_DATA = {
         "host": {
           "type": "string",
           "maxLength": 253
+        },
+        "tier": {
+          "type": "string",
+          "enum": [
+            "default",
+            "strong"
+          ]
         }
       }
     },
@@ -1010,7 +1081,8 @@ export const SCHEMA_DATA = {
               "resume.update",
               "ai.complete",
               "ui.open",
-              "legacy.import"
+              "legacy.import",
+              "usage.touch"
             ]
           }
         }
@@ -1437,6 +1509,19 @@ export const SCHEMA_DATA = {
           ]
         }
       }
+    },
+    "usage-touch": {
+      "$id": "https://resumepro.local/protocol/responses/usage-touch.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "accepted"
+      ]
     },
     "write": {
       "$id": "https://resumepro.local/protocol/responses/write.json",

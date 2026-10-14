@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// 清单里的 host 名字，也是注册表键名。插件那边 `connectNative` 用的就是它。
+#[cfg(not(feature = "usage-metrics-acceptance"))]
 pub const HOST_NAME: &str = "com.resumepro.desktop";
+#[cfg(feature = "usage-metrics-acceptance")]
+pub const HOST_NAME: &str = "com.resumepro.metrics.test";
 
 /// 商店固定下来的扩展 ID。`manifest.json` 里有公钥，所以本地 unpacked 和商店版是同一个。
 pub const STORE_EXTENSION_ID: &str = "diagjmploldedipjdenmecmjokckelkl";

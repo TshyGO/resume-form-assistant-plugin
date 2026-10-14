@@ -77,7 +77,7 @@ test('the handshake itself carries no archive identity', async () => {
   assert.equal(sent[0].protocolVersion, 2);
   assert.deepEqual(
     { pluginVersion: sent[0].payload.pluginVersion, min: sent[0].payload.minProtocolVersion, max: sent[0].payload.maxProtocolVersion },
-    { pluginVersion: '9.8.7', min: 2, max: 2 }
+    { pluginVersion: '9.8.7', min: 2, max: 3 }
   );
 });
 
@@ -110,7 +110,7 @@ test('a handshake that gets past transport validation with no shared version is 
     store: createStore({ storage, uuid: () => '11111111-1111-4111-8111-111111111111' }),
     send: async message => ({
       status: 'ok',
-      response: handshakeReply({ minProtocolVersion: 3, maxProtocolVersion: 3 })(message).response,
+      response: handshakeReply({ minProtocolVersion: 4, maxProtocolVersion: 4 })(message).response,
       resultId: null
     }),
     uuid: () => '33333333-3333-4333-8333-333333333333',

@@ -1,0 +1,6 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/usage-touch.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

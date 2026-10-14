@@ -15,7 +15,8 @@ export type MessageType =
   | "resume.update"
   | "ai.complete"
   | "ui.open"
-  | "legacy.import";
+  | "legacy.import"
+  | "usage.touch";
 
 /** Resume Pro request envelope */
 export interface RequestEnvelope {
@@ -25,7 +26,7 @@ export interface RequestEnvelope {
   messageId: string;
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   clientInstanceId: string;
-  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import";
+  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch";
   /**
    * UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z.
    * pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$
@@ -57,7 +58,8 @@ export interface ResponseEnvelope {
 }
 
 export interface AiCompletePayload {
-  purpose: "fill" | "plan" | "extract_job";
+  purpose: "fill" | "plan" | "extract_job" | "analyze";
+  tier?: "default" | "strong";
   /** maxLength: 8000 */
   system: string;
   /** maxLength: 60000 */
@@ -218,9 +220,22 @@ export interface ResumeReadPayload {
 }
 
 export interface ResumeUpdatePayload {
-  op: "setActiveTemplate" | "saveProfile";
+  op: "setActiveTemplate" | "saveProfile" | "saveTemplate";
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   templateId?: string;
+  /** minItems: 1 */
+  groups?: {
+    /** minLength: 1 */
+    name: string;
+    /** minItems: 1 */
+    fields: {
+      /** minLength: 1 */
+      key: string;
+      value: string;
+    }[];
+  }[];
+  /** pattern: ^[0-9a-f]{64}$ */
+  baseSha256?: string;
   profile?: {
     values: Record<string, string>;
     family: Record<string, string>[];
@@ -280,6 +295,9 @@ export interface UiOpenPayload {
   view: "resume" | "settings-ai" | "home";
 }
 
+export interface UsageTouchPayload {
+}
+
 export interface AiCompleteResponsePayload {
   status: "ok" | "failed";
   text?: string;
@@ -291,6 +309,7 @@ export interface AiCompleteResponsePayload {
   httpStatus?: number;
   /** maxLength: 253 */
   host?: string;
+  tier?: "default" | "strong";
 }
 
 export interface HandshakeResponsePayload {
@@ -311,7 +330,7 @@ export interface HandshakeResponsePayload {
    * minItems: 1
    * maxItems: 16
    */
-  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import")[];
+  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch")[];
 }
 
 export interface HealthResponsePayload {
@@ -472,6 +491,10 @@ export interface UiOpenResponsePayload {
   opened: true;
 }
 
+export interface UsageTouchResponsePayload {
+  accepted: boolean;
+}
+
 export interface WriteResponsePayload {
   /** maxLength: 64 */
   resultKind?: string;
@@ -492,6 +515,7 @@ export interface RequestPayloadByType {
   "ai.complete": AiCompletePayload;
   "ui.open": UiOpenPayload;
   "legacy.import": LegacyImportPayload;
+  "usage.touch": UsageTouchPayload;
 }
 
 /** Response payload type for a given messageType. Several writes share one response. */
@@ -509,6 +533,7 @@ export interface ResponsePayloadByType {
   "ai.complete": AiCompleteResponsePayload;
   "ui.open": UiOpenResponsePayload;
   "legacy.import": LegacyImportResponsePayload;
+  "usage.touch": UsageTouchResponsePayload;
 }
 
 /** One request envelope, narrowed to the payload its messageType carries. */

@@ -50,10 +50,21 @@ pub struct ProfileChanged {
     pub source: &'static str,
 }
 
+/// The extension committed a change to the templates (#273): a field edit, or a switch of
+/// the current template. The 「简历」 page re-reads the list and decides for itself whether an
+/// open editor has a draft to protect. Only ids travel here, never names or field content.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateChanged {
+    pub template_id: String,
+    pub op: &'static str,
+    pub source: &'static str,
+}
+
 /// The highest protocol version the desktop actually serves right now.
 ///
 /// The desktop advertises v2 only after all five bridge handlers are wired.
-pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 2;
+pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 3;
 
 /// The application as a caller can see it: who it is, and what it will commit.
 ///
@@ -77,6 +88,9 @@ pub trait Application: Send + Sync + 'static {
 
     /// The extension's profile write is durable. The default has no window to tell.
     fn on_profile_changed(&self, _notice: &ProfileChanged) {}
+
+    /// The extension's template write is durable. The default has no window to tell.
+    fn on_template_changed(&self, _notice: &TemplateChanged) {}
 }
 
 /// The archive this process currently has open.
@@ -89,6 +103,7 @@ pub struct OpenArchive {
     notify: Option<Arc<dyn Fn(ApplicationsChanged) + Send + Sync>>,
     legacy_notify: Option<Arc<dyn Fn(LegacyImportChanged) + Send + Sync>>,
     profile_notify: Option<Arc<dyn Fn(ProfileChanged) + Send + Sync>>,
+    template_notify: Option<Arc<dyn Fn(TemplateChanged) + Send + Sync>>,
     services: Arc<dyn crate::bridge_services::BridgeServices>,
 }
 
@@ -108,6 +123,7 @@ impl OpenArchive {
             notify: None,
             legacy_notify: None,
             profile_notify: None,
+            template_notify: None,
         }
     }
 
@@ -128,6 +144,12 @@ impl OpenArchive {
         self.profile_notify = Some(notify);
         self
     }
+
+    /// Calls `notify` after each committed extension template write (#273).
+    pub fn notifying_template(mut self, notify: Arc<dyn Fn(TemplateChanged) + Send + Sync>) -> Self {
+        self.template_notify = Some(notify);
+        self
+    }
 }
 
 impl Application for OpenArchive {
@@ -143,7 +165,7 @@ impl Application for OpenArchive {
     }
 
     fn apply(&self, request: &Request) -> Result<Answer, ErrorCode> {
-        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen) {
+        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen | resume_pro_protocol::MessageType::UsageTouch) {
             return crate::bridge_services::answer(request, self.services.as_ref());
         }
         // The same lock the window's own commands take. One writer means one queue: a
@@ -170,6 +192,12 @@ impl Application for OpenArchive {
 
     fn on_profile_changed(&self, notice: &ProfileChanged) {
         if let Some(notify) = &self.profile_notify {
+            notify(notice.clone());
+        }
+    }
+
+    fn on_template_changed(&self, notice: &TemplateChanged) {
+        if let Some(notify) = &self.template_notify {
             notify(notice.clone());
         }
     }
@@ -271,6 +299,25 @@ fn profile_notice(request: &Request, answer: &Answer) -> Option<ProfileChanged> 
     }
     Some(ProfileChanged {
         revision: answer.payload["profileRevision"].as_i64()?,
+        source: "plugin",
+    })
+}
+
+/// A template write the extension made durable (#273): `saveTemplate`, or `setActiveTemplate`
+/// (the window marks which template is current). Like [profile_notice], only reached after
+/// a commit — a conflict or a refused secret never gets here.
+fn template_notice(request: &Request, _answer: &Answer) -> Option<TemplateChanged> {
+    if request.message_type != MessageType::ResumeUpdate {
+        return None;
+    }
+    let op = match request.payload["op"].as_str()? {
+        "saveTemplate" => "saveTemplate",
+        "setActiveTemplate" => "setActiveTemplate",
+        _ => return None,
+    };
+    Some(TemplateChanged {
+        template_id: request.payload["templateId"].as_str()?.to_ascii_lowercase(),
+        op,
         source: "plugin",
     })
 }
@@ -395,6 +442,9 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 let rules: serde_json::Value = serde_json::from_str(resume_pro_protocol::RULES_JSON).ok()?;
                 let extra = rules["v2MessageTypes"].as_array()?;
                 payload["capabilities"].as_array_mut()?.extend(extra.iter().cloned());
+                if client_max >= 3 {
+                    payload["capabilities"].as_array_mut()?.push(serde_json::json!("usage.touch"));
+                }
             }
             serde_json::to_vec(&serde_json::json!({
                 "protocolVersion": request.protocol_version,
@@ -427,6 +477,9 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 }
                 if let Some(notice) = profile_notice(&request, &answer) {
                     application.on_profile_changed(&notice);
+                }
+                if let Some(notice) = template_notice(&request, &answer) {
+                    application.on_template_changed(&notice);
                 }
                 let mut response = serde_json::json!({
                     "protocolVersion": request.protocol_version,
@@ -492,9 +545,9 @@ mod tests {
     struct LockProbe(Arc<Mutex<Option<ArchiveStore>>>);
 
     impl crate::bridge_services::BridgeServices for LockProbe {
-        fn ai_complete(&self, _purpose: &str, _system: &str, _user: &str) -> crate::bridge_services::AiReply {
+        fn ai_complete(&self, _purpose: &str, _strong: bool, _system: &str, _user: &str) -> (crate::bridge_services::AiReply, Option<crate::ai_settings::Tier>) {
             assert!(self.0.try_lock().is_ok(), "AI must not hold the archive lock");
-            crate::bridge_services::AiReply::Ok("safe result".into())
+            (crate::bridge_services::AiReply::Ok("safe result".into()), None)
         }
 
         fn open_view(&self, _view: &str) -> bool {
@@ -670,7 +723,7 @@ mod tests {
         );
         assert_eq!(value["payload"]["minProtocolVersion"], 1);
         assert_eq!(value["payload"]["maxProtocolVersion"], SERVED_MAX_PROTOCOL_VERSION);
-        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 2);
+        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 3);
         assert!(
             value["payload"]["capabilities"]
                 .as_array()
@@ -683,13 +736,24 @@ mod tests {
     }
 
     #[test]
+    fn usage_capability_is_only_announced_to_clients_offering_v3() {
+        let app = open_archive();
+        for (max, expected) in [(2, false), (3, true)] {
+            let frame = serde_json::to_vec(&serde_json::json!({"protocolVersion":2,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"handshake","occurredAt":"2026-10-12T00:00:00Z","payload":{"pluginVersion":"0.4.2","minProtocolVersion":2,"maxProtocolVersion":max}})).unwrap();
+            let result = answer(&frame, app.as_ref()).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&result).unwrap();
+            assert_eq!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|item| item == "usage.touch"), expected);
+        }
+    }
+
+    #[test]
     fn a_v2_only_client_can_handshake_after_the_bridge_is_wired() {
         const HANDSHAKE_V2_ONLY: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.4.0","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
         let reply = answer(HANDSHAKE_V2_ONLY.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["protocolVersion"], 2);
-        assert_eq!(value["payload"]["maxProtocolVersion"], 2);
+        assert_eq!(value["payload"]["maxProtocolVersion"], 3);
         assert!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
         let request = resume_pro_protocol::validate_request_bytes(HANDSHAKE_V2_ONLY.as_bytes()).unwrap();
         resume_pro_protocol::validate_response_for_request(&value, &request).unwrap();
@@ -1016,6 +1080,45 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&answer(&stale, &app).unwrap()).unwrap();
         assert_eq!(reply["ok"], false, "{reply}");
         assert_eq!(notices.lock().unwrap().len(), 1, "a rejected write must not notify");
+    }
+
+    #[test]
+    fn a_committed_template_edit_notifies_with_only_ids_and_a_conflict_does_not() {
+        // #273: the 「简历」 page re-reads after an extension edit; the notice names the
+        // template, never its name or field content.
+        let dir = tempfile::tempdir().unwrap();
+        let (shared, identity) = open_store(dir.path());
+        let groups = vec![archive_store::TemplateGroup {
+            name: "基本信息".into(),
+            fields: vec![archive_store::TemplateField { key: "姓名".into(), value: "机密姓名".into() }],
+        }];
+        let template = shared.lock().unwrap().as_ref().unwrap().create_template("t", groups.clone()).unwrap().template;
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&notices);
+        let app = OpenArchive::new(Arc::clone(&shared))
+            .notifying_template(Arc::new(move |notice| seen.lock().unwrap().push(notice)));
+        let payload = serde_json::json!({
+            "op": "saveTemplate",
+            "templateId": template.id,
+            "groups": [{"name": "基本信息", "fields": [{"key": "姓名", "value": "新名字"}]}],
+            "baseSha256": archive_store::groups_sha256(&groups)
+        });
+        let save = resume_update(&identity, "77777777-7777-4777-8777-777777777777", payload.clone());
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&save, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        {
+            let got = notices.lock().unwrap();
+            assert_eq!(got.len(), 1);
+            assert_eq!((got[0].template_id.as_str(), got[0].op, got[0].source), (template.id.as_str(), "saveTemplate", "plugin"));
+            let serialized = serde_json::to_value(&got[0]).unwrap();
+            assert_eq!(serialized.as_object().unwrap().keys().collect::<Vec<_>>(), vec!["op", "source", "templateId"]);
+        }
+        // Same stale base again: a conflict, nothing committed, no notice.
+        let stale = resume_update(&identity, "88888888-8888-4888-8888-888888888888", payload);
+        let reply: serde_json::Value = serde_json::from_slice(&answer(&stale, &app).unwrap()).unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["error"]["code"], "conflict", "{reply}");
+        assert_eq!(notices.lock().unwrap().len(), 1);
     }
 
     fn query_candidates(identity: &archive_store::ArchiveIdentity) -> Vec<u8> {

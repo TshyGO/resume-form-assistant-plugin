@@ -1,6 +1,6 @@
 # 使用统计 Worker（Issue #259 第二阶段）
 
-本目录实现接收、D1 存储、去重、删除、下载快照、汇总和清理。依赖第一阶段的 `desktop/scripts/usage-metrics/downloads.mjs`。仓库内开发和测试可以独立完成，**Cloudflare 资源最初由协作者准备；用户后续已授权使用所提供的测试环境 Token，从本地执行测试配置、部署与联调**。没有桌面或插件上报接入，没有自动部署。
+本目录实现接收、D1 存储、去重、删除、下载快照、汇总和清理。依赖第一阶段的 `desktop/scripts/usage-metrics/downloads.mjs`。仓库内开发和测试可以独立完成，**Cloudflare 资源最初由协作者准备；用户后续已授权使用所提供的测试环境 Token，从本地执行测试配置、部署与联调**。桌面上报已在 #270 接入，插件本机信号在 #272；测试环境已通过专用隔离包联调。普通默认/开发/测试构建仍禁发，正式环境尚未启用采集，没有自动部署。
 
 ## 1. 已提供的功能
 
@@ -51,7 +51,7 @@ node scripts/report.mjs --local
 
 ## 3. 维护者：测试环境部署顺序
 
-1. 先确认代码评审版本和目标资源。第一阶段 PR #267 仍未合并时，第二阶段分支依赖其提交；正式合入按第一阶段→第二阶段顺序处理。
+1. 先确认代码评审版本和目标资源。#267、#270、#272、#274 已依次合入 main；邮件日报 #281 在独立分支评审和测试后再部署。
 2. 将 `wrangler.test.example.json` 复制为已忽略的 `wrangler.test.json`，填入共享条目的非敏感 account_id、database_id，核对 Worker/D1 名称和 `DB` 绑定。保持 `METRICS_ENABLED=false`。
 3. 为 ACTIVITY_LIMITER 选择账号内未与其他服务共用的数字 namespace_id；测试/生产不同。默认 60 次/分钟/来源 IP 的短期键是近似、每个 Cloudflare 位置的限流，不是全球精确额度，也不是费用硬上限。
 4. 维护者通过自己的安全登录/环境配置使用管理 Token，不把值填进配置文件。先应用业务迁移，再设置独立随机 HMAC Key，然后部署经审核的源码。
@@ -138,6 +138,12 @@ curl -i 'http://127.0.0.1:8789/__scheduled?cron=*+*+*+*+*'
 迁移 `0002_maintenance_error.sql`新增 last_error_code，固定分类区分 github_rate_limited、github_auth_failed、github_http_failed、github_timeout、github_network_failed、github_invalid_json、github_data_invalid / task_failed；不保存响应正文、URL、Token 或安装标识。成功清空错误类别。
 
 要稳定访问公开 Release，协作者需提供独立最小权限 GitHub 查询 Token，作为 Worker Secret `GITHUB_TOKEN`配置；不复用 Cloudflare 管理 Token、不从个人 CLI 自动复制 GitHub 凭据。先应用新迁移再部署，METRICS_ENABLED=false 保持不变；测试手动采集单独记录，随后再核验自动 Cron。没有成功快照时不伪造零增量。10月12日已获用户授权配置GITHUB_TOKEN、应用0002迁移并部署诊断版本；21:34手动维护全部成功，生成当日32附件快照。修复后的下一次自动Cron（10月13日08:10）仍待独立验收，见test-acceptance.md。
+
+## 2026-10-13 验收状态
+
+测试环境自动 Cron 已确认实际成功触发，汇总/清理于北京时间08:10:08成功、下载于08:10:15成功，32资产/32快照行完整。Mac与Windows主要桌面/浏览器隔离测试已完成，Windows Edge云端去重已验证；Mac Edge对应时点独立核验仍待补测。在线删除后撤销编号无残留活动，离线删除未确认如实提示；关闭后重开生成新编号可能使同一人形成多个安装样本，不视为全量人数。
+
+这些是测试环境结果，不代表正式采集已上线。正式构建/接收地址、备份恢复、费用告警与披露仍须验收。邮箱日报另在#280规划，尚未开启。
 
 ## 邮件日报（#280）
 
