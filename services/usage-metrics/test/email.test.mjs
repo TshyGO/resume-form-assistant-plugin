@@ -62,6 +62,11 @@ test('missing report-day summary and unstarted activity are not misleading zero 
   await db.prepare('DELETE FROM metrics_daily').run();assert.match((await buildDailyEmail(db,NOW,'测试')).text,/汇总缺失/);
   await db.prepare('DELETE FROM dataset_info').run();assert.match((await buildDailyEmail(db,NOW,'测试')).text,/尚未开始/);
 });
+test('formal dispatch labels subject, HTML and text as production',async()=>{
+  const sent=[];const result=await runDailyEmail({...env(async mail=>sent.push(mail)),DAILY_EMAIL_ENVIRONMENT:'正式'},opts);
+  assert.equal(result.status,'processed');assert.equal(sent.length,2);
+  assert.ok(sent.every(mail=>/^\[正式\]/.test(mail.subject) && mail.html.includes('网申快填 · 正式环境') && mail.text.includes('正式环境邮件') && !mail.text.includes('测试环境')));
+});
 test('parallel/repeated dispatch reserves each recipient once and stores acceptance, not inbox delivery',async()=>{
   const sent=[];const e=env(async mail=>sent.push(mail));
   await Promise.all([runDailyEmail(e,opts),runDailyEmail(e,opts)]);await runDailyEmail(e,opts);

@@ -11,7 +11,7 @@
   "vars": {
     "METRICS_ENABLED": "false",
     "DAILY_EMAIL_ENABLED": "false",
-    "DAILY_EMAIL_ENVIRONMENT": "测试",
+    "DAILY_EMAIL_ENVIRONMENT": "",
     "DAILY_EMAIL_FROM": "",
     "DAILY_EMAIL_TO_0": "",
     "DAILY_EMAIL_TO_1": ""
