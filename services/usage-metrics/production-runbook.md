@@ -4,7 +4,7 @@
 
 ## 安全上线顺序
 
-1. 从 `wrangler.production.example.json` 生成被忽略的 `wrangler.production.json`，填写正式资源 ID 和已验证邮件地址；`METRICS_ENABLED`、`DAILY_EMAIL_ENABLED` 均保持 `false`。
+1. 从 `wrangler.production.example.json` 生成被忽略的 `wrangler.production.json`，填写正式资源 ID 和已验证邮件地址，确认 `DAILY_EMAIL_ENVIRONMENT=正式`；`METRICS_ENABLED`、`DAILY_EMAIL_ENABLED` 初次部署均保持 `false`。
 2. 应用全部 D1 迁移；配置独立随机 `INSTALLATION_HMAC_KEY` 和只读公开 Release 的 `GITHUB_TOKEN` Secret。
 3. 部署经审核代码，检查 health 为配置就绪但活动关闭；手动维护、虚构活动/删除和邮件预览只在明确验收窗口执行。
 4. 先开启 Worker 接收，再发布带正式 endpoint 的受控桌面构建。回退时先将 `METRICS_ENABLED=false`，无需等待客户端更新。

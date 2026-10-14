@@ -20,8 +20,8 @@ function downloadSummary(downloads) {
   };
 }
 
-function emailHtml({ heading, date, issues, report, sources, downloads }) {
-  const shell = body => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#f5f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif"><div style="max-width:680px;margin:0 auto;padding:24px 12px"><div style="background:#ffffff;border:1px solid #e3e8f2;border-radius:16px;overflow:hidden"><div style="padding:24px;background:#172554;color:#fff"><div style="font-size:12px;opacity:.75">网申快填 · 测试环境</div><h1 style="font-size:22px;margin:8px 0 4px">${escapeHtml(issues.length ? '统计异常简报' : '统计日报')}</h1><div style="font-size:14px;opacity:.85">统计日期 ${escapeHtml(date)}（UTC）</div></div>${body}<div style="padding:18px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.7">使用统计按 UTC 自然日；下载量按两次快照之间的区间计算。数据仅代表启用统计并成功上报的活跃安装样本，不代表全部用户人数。</div></div></div></body></html>`;
+function emailHtml({ environment, heading, date, issues, report, sources, downloads }) {
+  const shell = body => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;background:#f5f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif"><div style="max-width:680px;margin:0 auto;padding:24px 12px"><div style="background:#ffffff;border:1px solid #e3e8f2;border-radius:16px;overflow:hidden"><div style="padding:24px;background:#172554;color:#fff"><div style="font-size:12px;opacity:.75">网申快填 · ${escapeHtml(environment)}环境</div><h1 style="font-size:22px;margin:8px 0 4px">${escapeHtml(issues.length ? '统计异常简报' : '统计日报')}</h1><div style="font-size:14px;opacity:.85">统计日期 ${escapeHtml(date)}（UTC）</div></div>${body}<div style="padding:18px 24px;background:#f8fafc;color:#64748b;font-size:12px;line-height:1.7">使用统计按 UTC 自然日；下载量按两次快照之间的区间计算。数据仅代表启用统计并成功上报的活跃安装样本，不代表全部用户人数。</div></div></div></body></html>`;
   if (issues.length) {
     return shell(`<div style="padding:24px"><div style="padding:16px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa"><div style="font-weight:700;color:#9a3412;margin-bottom:10px">本轮数据未通过完整性检查</div><ul style="margin:0;padding-left:20px;line-height:1.8;color:#7c2d12">${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul></div><p style="color:#64748b;font-size:13px;margin:16px 0 0">本次不展示可能过时的统计数字。</p></div>`);
   }
@@ -42,7 +42,8 @@ function fresh(timestamp, cutoff, now) {
   return Number.isFinite(value) && value >= Date.parse(cutoff) && value <= now.getTime();
 }
 
-export async function buildDailyEmail(db, now) {
+export async function buildDailyEmail(db, now, environment) {
+  if (!['测试', '正式'].includes(environment)) throw new Error('invalid_email_environment');
   const today = now.toISOString().slice(0, 10);
   const date = dateOffset(today, -1);
   const report = await liveStatistics(db, date, 30, now);
@@ -70,7 +71,7 @@ export async function buildDailyEmail(db, now) {
   const dailySummary = await db.prepare('SELECT generated_at_utc FROM metrics_daily WHERE date_utc = ?').bind(date).first();
   if (activityStart?.started_at_utc && activityStart.started_at_utc.slice(0, 10) <= date
       && !fresh(dailySummary?.generated_at_utc, cutoff, now)) issues.push('报告日汇总缺失或陈旧');
-  const heading = `[测试] 网申快填${issues.length ? '统计异常简报' : '统计日报'}｜${date}（UTC）`;
+  const heading = `[${environment}] 网申快填${issues.length ? '统计异常简报' : '统计日报'}｜${date}（UTC）`;
   // On any freshness failure, do not present stale figures as a current normal report.
   const downloadTotals = downloadSummary(downloads);
   const lines = issues.length ? ['本轮数据未通过完整性检查：', ...issues, '本次不展示可能过时的统计数字。'] : [
@@ -85,21 +86,22 @@ export async function buildDailyEmail(db, now) {
   ];
   const text = [heading, ...lines, '使用统计按UTC自然日；下载增量按快照区间，不是北京时间自然日。',
     '仅为启用统计的活跃安装样本，不是全量人数。关闭后重开及离线删除未确认可能形成多个样本。',
-    '测试环境邮件，不代表正式运营数据。'].join('\n');
-  return { date, subject: heading, text, html: emailHtml({ heading, date, issues, report, sources, downloads }) };
+    environment === '测试' ? '测试环境邮件，不代表正式运营数据。' : '正式环境邮件。'].join('\n');
+  return { date, subject: heading, text, html: emailHtml({ environment, heading, date, issues, report, sources, downloads }) };
 }
 
 export async function runDailyEmail(env, { now = () => new Date(), timeoutMs = TIMEOUT_MS } = {}) {
   if (env.DAILY_EMAIL_ENABLED !== 'true') return { status: 'disabled' };
   if (typeof env.METRICS_EMAIL?.send !== 'function' || typeof env.DB?.prepare !== 'function') return { status: 'not_ready' };
   const addresses = [env.DAILY_EMAIL_TO_0, env.DAILY_EMAIL_TO_1];
+  const environment = env.DAILY_EMAIL_ENVIRONMENT;
   const validAddress = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   if (!validAddress(env.DAILY_EMAIL_FROM) || addresses.some(value => !validAddress(value))
-      || addresses[0] === addresses[1]) return { status: 'not_ready' };
+      || addresses[0] === addresses[1] || !['测试', '正式'].includes(environment)) return { status: 'not_ready' };
   const at = now();
   // Fail before delivery reservation if queries fail; never turn exceptions into zero figures.
   let mail;
-  try { mail = await buildDailyEmail(env.DB, at); } catch { return { status: 'report_failed' }; }
+  try { mail = await buildDailyEmail(env.DB, at, environment); } catch { return { status: 'report_failed' }; }
   const results = [];
   let storageFailed = false;
   for (let slot = 0; slot < addresses.length; slot++) {

@@ -1,4 +1,4 @@
-# 测试统计邮件日报（#280）
+# 统计邮件日报（#280）
 
 本PR交付配置保存、正文生成、完整性检查、发送状态管理，不部署、不发测试邮件、不启用正式日报。依赖#259的Worker代码；当前基于Worker阶段分支，合并前应在#270进入main后整理基线。
 
@@ -6,11 +6,11 @@
 
 同事已配置测试Worker resume-usage-metrics-test 的 METRICS_EMAIL。仓库wrangler.test.example.json及本地实际忽略配置均保存send_email绑定，使用已验证发件人及两位指定收件人，并在忽略的实际部署配置中限制邮件绑定地址；仓库示例只含不可用于真实投递的占位地址；实际部署配置保留两个已验证收件人的Cloudflare绑定限制，下一次部署可保留绑定。无需额外SMTP密码/第三方邮件Key。不是通过此PR证明域名验证、权限或实际投递已成功。
 
-DAILY_EMAIL_FROM、DAILY_EMAIL_TO_0、DAILY_EMAIL_TO_1在实际环境填写；为空时不发送。DAILY_EMAIL_ENABLED默认false，独立于客户端METRICS_ENABLED（后者关闭不妨碍查询已有数据）。测试配置新增Cron `30 0 * * *`，即北京时间每日08:30；原维护任务 `10 0 * * *` 保留。本地wrangler.json不配置Cron。新Cron按controller.cron分流，不额外运行维护任务。邮件绑定和收件人固定，新增收件人需代码/配置评审；无公开发信接口。
+DAILY_EMAIL_FROM、DAILY_EMAIL_TO_0、DAILY_EMAIL_TO_1在实际环境填写；为空时不发送。`DAILY_EMAIL_ENVIRONMENT` 必须明确为“测试”或“正式”，用于主题、页眉和页脚；缺失或写成其他值时不发送，避免正式数据被误标成测试数据。DAILY_EMAIL_ENABLED默认false，独立于客户端METRICS_ENABLED（后者关闭不妨碍查询已有数据）。测试与正式配置均使用Cron `30 0 * * *`，即北京时间每日08:30；原维护任务 `10 0 * * *` 保留。本地wrangler.json不配置Cron。新Cron按controller.cron分流，不额外运行维护任务。邮件绑定和收件人固定，新增收件人需代码/配置评审；无公开发信接口。
 
 ## 日报
 
-使用统计报告日为刚结束的UTC日（北京时间08:30发送），DAU/WAU/MAU与现有liveStatistics一致；系统/来源为报告日，来源可重叠；版本为近30天最后观察版本。邮件只含汇总和公共Release文件名，不含设备UUID/哈希/IP/简历/密钥。标题固定标注测试环境。
+使用统计报告日为刚结束的UTC日（北京时间08:30发送），DAU/WAU/MAU与现有liveStatistics一致；系统/来源为报告日，来源可重叠；版本为近30天最后观察版本。邮件只含汇总和公共Release文件名，不含设备UUID/哈希/IP/简历/密钥。标题、页眉和纯文本页脚按部署配置明确标注“测试”或“正式”。
 
 邮件同时提供HTML与纯文本：HTML使用当日/7日/30日三张数据卡片、系统/来源表格、下载概览和版本表格；下载明细只展示新增量最高的8个文件。纯文本同样只列这些变化文件，避免将全部Release资产逐行平铺。异常简报使用独立提示区，不展示可能过时的统计卡片。
 

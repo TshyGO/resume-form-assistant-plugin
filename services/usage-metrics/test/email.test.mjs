@@ -21,41 +21,51 @@ beforeEach(async()=> {
   for (const date of ['2026-10-12','2026-10-13']) await db.prepare('INSERT INTO release_observation VALUES (?,?,0)').bind(date+'T00:10:10Z',date).run();
 });
 after(async()=>mf?.dispose());
-const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',DAILY_EMAIL_FROM:'report@example.test',DAILY_EMAIL_TO_0:EMAIL_TO[0],DAILY_EMAIL_TO_1:EMAIL_TO[1],METRICS_EMAIL:{send}});
+const env = send=>({DB:db,DAILY_EMAIL_ENABLED:'true',DAILY_EMAIL_ENVIRONMENT:'测试',DAILY_EMAIL_FROM:'report@example.test',DAILY_EMAIL_TO_0:EMAIL_TO[0],DAILY_EMAIL_TO_1:EMAIL_TO[1],METRICS_EMAIL:{send}});
 const opts={now:()=>NOW};
 test('default off and missing binding never query or send', async()=> {
   assert.equal((await runDailyEmail({})).status,'disabled');
   assert.equal((await runDailyEmail({DAILY_EMAIL_ENABLED:'true'})).status,'not_ready');
   assert.equal((await runDailyEmail({...env(async()=>{}),DAILY_EMAIL_TO_1:''},opts)).status,'not_ready');
+  assert.equal((await runDailyEmail({...env(async()=>{}),DAILY_EMAIL_ENVIRONMENT:'production'},opts)).status,'not_ready');
 });
 test('UTC closed date, task freshness and snapshot row integrity determine normal vs anomaly',async()=>{
-  let m=await buildDailyEmail(db,NOW);assert.equal(m.date,'2026-10-12');assert.match(m.subject,/统计日报/);assert.match(m.text,/来源可重叠/);
+  let m=await buildDailyEmail(db,NOW,'测试');assert.equal(m.date,'2026-10-12');assert.match(m.subject,/统计日报/);assert.match(m.text,/来源可重叠/);
   assert.match(m.html,/<!doctype html>/);assert.match(m.html,/当日活跃/);assert.match(m.html,/下载概览/);assert.doesNotMatch(m.html,/undefined/);
+  const production=await buildDailyEmail(db,NOW,'正式');assert.match(production.subject,/^\[正式\]/);assert.match(production.html,/网申快填 · 正式环境/);assert.match(production.text,/正式环境邮件/);assert.doesNotMatch(production.text,/测试环境/);
   await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-12T00:10:10Z' WHERE task='downloads'").run();
-  m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);assert.match(m.html,/本轮数据未通过完整性检查/);assert.doesNotMatch(m.html,/当日活跃/);
+  m=await buildDailyEmail(db,NOW,'测试');assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);assert.match(m.html,/本轮数据未通过完整性检查/);assert.doesNotMatch(m.html,/当日活跃/);
   await db.prepare('UPDATE release_observation SET asset_count=1').run();
-  m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.match(m.text,/下载快照明细不可用或不完整/);
+  m=await buildDailyEmail(db,NOW,'测试');assert.match(m.subject,/异常/);assert.match(m.text,/下载快照明细不可用或不完整/);
+});
+test('email rendering requires an explicit known environment',async()=>{
+  for(const invalid of [undefined,null,'','production']) await assert.rejects(()=>buildDailyEmail(db,NOW,invalid),/invalid_email_environment/);
 });
 test('empty or malformed success timestamps never produce a normal report',async()=>{
   for(const bad of [null,'','not-a-date']) {
     await db.prepare('UPDATE maintenance_state SET last_success_at=? WHERE task=\'downloads\'').bind(bad).run();
-    const m=await buildDailyEmail(db,NOW);assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
+    const m=await buildDailyEmail(db,NOW,'测试');assert.match(m.subject,/异常/);assert.doesNotMatch(m.text,/活跃安装样本：0/);
   }
   await db.prepare("UPDATE maintenance_state SET last_success_at='2026-10-13T00:10:10.000Z' WHERE task='downloads'").run();
   await db.prepare("UPDATE release_observation SET observed_at='' WHERE date_utc='2026-10-13'").run();
-  assert.match((await buildDailyEmail(db,NOW)).subject,/异常/);
+  assert.match((await buildDailyEmail(db,NOW,'测试')).subject,/异常/);
   await db.prepare("UPDATE release_observation SET observed_at='2026-10-13T00:10:10.000Z' WHERE date_utc='2026-10-13'").run();
   await db.prepare("UPDATE metrics_daily SET generated_at_utc='' WHERE date_utc='2026-10-12'").run();
-  assert.match((await buildDailyEmail(db,NOW)).subject,/异常/);
+  assert.match((await buildDailyEmail(db,NOW,'测试')).subject,/异常/);
 });
 test('freshness compares actual instants across different timestamp precision',async()=>{
   const sameSecond=new Date('2026-10-13T00:10:10.000Z');
-  const m=await buildDailyEmail(db,sameSecond);
+  const m=await buildDailyEmail(db,sameSecond,'测试');
   assert.match(m.subject,/统计日报/);
 });
 test('missing report-day summary and unstarted activity are not misleading zero reports',async()=>{
-  await db.prepare('DELETE FROM metrics_daily').run();assert.match((await buildDailyEmail(db,NOW)).text,/汇总缺失/);
-  await db.prepare('DELETE FROM dataset_info').run();assert.match((await buildDailyEmail(db,NOW)).text,/尚未开始/);
+  await db.prepare('DELETE FROM metrics_daily').run();assert.match((await buildDailyEmail(db,NOW,'测试')).text,/汇总缺失/);
+  await db.prepare('DELETE FROM dataset_info').run();assert.match((await buildDailyEmail(db,NOW,'测试')).text,/尚未开始/);
+});
+test('formal dispatch labels subject, HTML and text as production',async()=>{
+  const sent=[];const result=await runDailyEmail({...env(async mail=>sent.push(mail)),DAILY_EMAIL_ENVIRONMENT:'正式'},opts);
+  assert.equal(result.status,'processed');assert.equal(sent.length,2);
+  assert.ok(sent.every(mail=>/^\[正式\]/.test(mail.subject) && mail.html.includes('网申快填 · 正式环境') && mail.text.includes('正式环境邮件') && !mail.text.includes('测试环境')));
 });
 test('parallel/repeated dispatch reserves each recipient once and stores acceptance, not inbox delivery',async()=>{
   const sent=[];const e=env(async mail=>sent.push(mail));
