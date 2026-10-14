@@ -1,3 +1,4 @@
+import { EMAIL_CRON, runDailyEmail } from './email.mjs';
 import { HttpError, activityPayload, hmac, recordActivity, deleteActivity } from './activity.mjs';
 import { cleanup, summarizeClosedDays } from './statistics.mjs';
 import { collectDownloads, DownloadCollectionError } from './downloads.mjs';
@@ -71,7 +72,10 @@ export function createWorker({ now = () => new Date(), fetchImpl = fetch } = {})
         return error instanceof HttpError ? response(error.status, error.message) : response(500, 'service_error');
       }
     },
-    async scheduled(_controller, env) { await runMaintenance(env, { now, fetchImpl }); },
+    async scheduled(controller, env) {
+      if (controller.cron === EMAIL_CRON) { await runDailyEmail(env, { now }); return; }
+      await runMaintenance(env, { now, fetchImpl });
+    },
   };
 }
 
