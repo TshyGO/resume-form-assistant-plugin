@@ -11,6 +11,7 @@ mod nm_register;
 mod update_check;
 mod feedback;
 mod telemetry;
+mod metrics_acceptance;
 #[cfg(test)]
 mod nm_register_tests;
 mod cli;
@@ -1452,6 +1453,30 @@ fn run_apps_loop() -> Result<serde_json::Value, CommandError> {
 }
 
 pub fn run() {
+    #[cfg(feature = "usage-metrics-acceptance")]
+    let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    #[cfg(feature = "usage-metrics-acceptance")]
+    {
+        if let Err(message) = metrics_acceptance::prepare(&context.config().identifier) {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    }
+    #[cfg(feature = "usage-metrics-acceptance")]
+    if std::env::args().any(|arg| arg == "--metrics-test-info") {
+        let effective_endpoint = HostPaths::resolve().ok()
+            .and_then(|paths| metrics_acceptance::configured_endpoint(&paths.data_root));
+        println!("{}", serde_json::json!({
+            "purpose": "isolated-usage-metrics-acceptance",
+            "app_version": env!("CARGO_PKG_VERSION"),
+            "identifier": metrics_acceptance::IDENTIFIER,
+            "endpoint": effective_endpoint,
+            "native_host": nm_register::HOST_NAME,
+            "data_root_isolated": metrics_acceptance::effective_isolation(),
+            "feedback_disabled": feedback::acceptance_disabled(),
+        }));
+        return;
+    }
     let args = cli::parse();
     if args.help {
         cli::print_help();
@@ -1553,6 +1578,7 @@ pub fn run() {
     }
 
     configure_webview_cache();
+    #[cfg(not(feature = "usage-metrics-acceptance"))]
     let context = tauri::generate_context!();
 
     let hidden_launch = args.hidden;

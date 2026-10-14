@@ -8,7 +8,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+#[cfg(not(feature = "usage-metrics-acceptance"))]
 pub const SERVICE: &str = "com.resumepro.desktop";
+#[cfg(feature = "usage-metrics-acceptance")]
+pub const SERVICE: &str = "com.resumepro.metrics.acceptance";
 /// 旧版本的单个 Key 账户；迁移后删除。
 pub const LEGACY_ACCOUNT: &str = "ai-api-key";
 
