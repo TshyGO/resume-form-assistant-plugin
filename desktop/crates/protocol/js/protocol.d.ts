@@ -58,7 +58,8 @@ export interface ResponseEnvelope {
 }
 
 export interface AiCompletePayload {
-  purpose: "fill" | "plan" | "extract_job";
+  purpose: "fill" | "plan" | "extract_job" | "analyze";
+  tier?: "default" | "strong";
   /** maxLength: 8000 */
   system: string;
   /** maxLength: 60000 */
@@ -219,9 +220,22 @@ export interface ResumeReadPayload {
 }
 
 export interface ResumeUpdatePayload {
-  op: "setActiveTemplate" | "saveProfile";
+  op: "setActiveTemplate" | "saveProfile" | "saveTemplate";
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   templateId?: string;
+  /** minItems: 1 */
+  groups?: {
+    /** minLength: 1 */
+    name: string;
+    /** minItems: 1 */
+    fields: {
+      /** minLength: 1 */
+      key: string;
+      value: string;
+    }[];
+  }[];
+  /** pattern: ^[0-9a-f]{64}$ */
+  baseSha256?: string;
   profile?: {
     values: Record<string, string>;
     family: Record<string, string>[];
@@ -295,6 +309,7 @@ export interface AiCompleteResponsePayload {
   httpStatus?: number;
   /** maxLength: 253 */
   host?: string;
+  tier?: "default" | "strong";
 }
 
 export interface HandshakeResponsePayload {

@@ -126,6 +126,20 @@ test("a match failure names the match stage and whether the AI was actually call
   assert.match(text.value, /错误类别：match_failed；失败阶段：匹配/);
 });
 
+test("the model tier line appears only when a tier was asked for, and the report never carries it", async () => {
+  const base = { ruleMatches: 0, aiFields: 1, aiMatches: 0, promptBytes: 300, apiMs: 5, resumeFields: 3, candidateFields: 1, errorCode: "none" };
+  const plain = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
+    respond: () => ({ success: true, matches: [], diagnostics: base }) });
+  assert.doesNotMatch(plain.text.value, /模型档位/);
+  for (const [requested, used, label] of [["strong", "strong", "强"], ["strong", "default", "强模型未设置，已退回日常"],
+    ["default", "default", "日常"], ["strong", undefined, "未取得"]]) {
+    const { text, report } = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
+      respond: () => ({ success: true, matches: [], diagnostics: { ...base, tierRequested: requested, ...(used ? { tierUsed: used } : {}) } }) });
+    assert.ok(text.value.split("\n").includes(`模型档位：${label}`), text.value);
+    assert.doesNotMatch(report, /tier/);
+  }
+});
+
 test("a desktop or AI service failure is a service_error, not a match failure", async () => {
   const { report } = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
     respond: () => ({ success: false, error: "无法连接桌面程序", matches: [], diagnostics: { ruleMatches: 0, aiFields: 1, aiMatches: 0,

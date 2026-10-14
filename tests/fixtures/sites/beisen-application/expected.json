@@ -1,0 +1,152 @@
+{
+  "source": "tests/fixtures/field-scan/beisen-application.html（北森网申页结构的脱敏夹具，#228）",
+  "annotatedBy": "人工标注，#224",
+  "pageState": "editing",
+  "fields": [
+    {
+      "ref": "e5",
+      "label": "面试站点",
+      "group": "求职意向",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e6",
+      "label": "意向工作地点",
+      "group": "求职意向",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e7",
+      "label": "学校名称",
+      "group": "教育经历",
+      "control": "text"
+    },
+    {
+      "ref": "e8",
+      "label": "班级排名",
+      "group": "教育经历",
+      "control": "text"
+    },
+    {
+      "ref": "e9",
+      "label": "所在实验室名称",
+      "group": "教育经历",
+      "control": "text"
+    },
+    {
+      "ref": "e10",
+      "label": "毕业论文/设计/作品",
+      "group": "教育经历",
+      "control": "text"
+    },
+    {
+      "ref": "e11",
+      "label": "开始时间",
+      "group": "教育经历",
+      "control": "date"
+    },
+    {
+      "ref": "e12",
+      "label": "结束时间",
+      "group": "教育经历",
+      "control": "date"
+    },
+    {
+      "ref": "e13",
+      "label": "名称",
+      "group": "论文/专著",
+      "control": "text"
+    },
+    {
+      "ref": "e14",
+      "label": "发表时间",
+      "group": "论文/专著",
+      "control": "date"
+    },
+    {
+      "ref": "e15",
+      "label": "获奖/专利名称",
+      "group": "获奖/专利",
+      "control": "text"
+    },
+    {
+      "ref": "e16",
+      "label": "获奖/专利描述",
+      "group": "获奖/专利",
+      "control": "textarea"
+    },
+    {
+      "ref": "e17",
+      "label": "获得时间",
+      "group": "获奖/专利",
+      "control": "date"
+    },
+    {
+      "ref": "e18",
+      "label": "名称",
+      "group": "学生工作经历",
+      "control": "text"
+    },
+    {
+      "ref": "e19",
+      "label": "开始时间",
+      "group": "学生工作经历",
+      "control": "date"
+    },
+    {
+      "ref": "e20",
+      "label": "结束时间",
+      "group": "学生工作经历",
+      "control": "date"
+    },
+    {
+      "ref": "e21",
+      "label": "至今",
+      "group": "学生工作经历",
+      "control": "checkbox"
+    },
+    {
+      "ref": "e22",
+      "label": "实践描述",
+      "group": "学生工作经历",
+      "control": "textarea"
+    },
+    {
+      "ref": "e23",
+      "label": "证书种类",
+      "group": "证书",
+      "control": "custom-select"
+    },
+    {
+      "ref": "e24",
+      "label": "证书名称",
+      "group": "证书",
+      "control": "text"
+    },
+    {
+      "ref": "e25",
+      "label": "获得时间",
+      "group": "证书",
+      "control": "date"
+    },
+    {
+      "ref": "e26",
+      "label": "在校期间是否有补考、重修情况",
+      "group": "附加问题",
+      "control": "textarea"
+    },
+    {
+      "ref": "e27",
+      "label": "个人优缺点",
+      "group": "附加问题",
+      "control": "textarea"
+    }
+  ],
+  "notFields": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+  ],
+  "preActions": []
+}
