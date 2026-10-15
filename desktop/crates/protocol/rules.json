@@ -14,7 +14,8 @@
     "handshake",
     "ai.complete",
     "ui.open",
-    "usage.touch"
+    "usage.touch",
+    "usage.settings"
   ],
   "identityRequired": [
     "application.queryCandidates",
@@ -47,7 +48,8 @@
     "ai.complete",
     "ui.open",
     "legacy.import",
-    "usage.touch"
+    "usage.touch",
+    "usage.settings"
   ],
   "v2MessageTypes": [
     "resume.read",
@@ -108,6 +110,7 @@
     "reconcile": "Read-only. A successful reconcile item does not authorize replay or rewrite of the old envelope."
   },
   "v3MessageTypes": [
-    "usage.touch"
+    "usage.touch",
+    "usage.settings"
   ]
 }

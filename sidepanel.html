@@ -6,6 +6,7 @@
     <title>网申快填</title>
     <link rel="stylesheet" href="sidepanel.css">
     <link rel="stylesheet" href="feedback.css">
+    <link rel="stylesheet" href="usage-ui.css">
   </head>
   <body>
     <div class="dock">
@@ -88,6 +89,7 @@
               <p class="safety-note"><span>填写后请核对网页内容，插件<strong>不会自动提交</strong>表单，提交由你在招聘网站上完成。</span></p>
             </section>
             <div id="feedback-notice-root" hidden></div>
+            <div id="usage-notice-root" hidden></div>
 
             <div id="profile-offer" class="card offer-card profile-offer" role="region" aria-labelledby="profile-offer-heading" hidden>
               <div class="card-head">
@@ -139,9 +141,18 @@
               <textarea id="fill-diagnostics-text" readonly rows="9" aria-label="填写诊断摘要"></textarea>
               <button id="copy-diagnostics" class="dock-diagnostics-copy" type="button">复制诊断</button>
             </details>
+            <div class="card privacy-summary">
+              <div class="privacy-summary-head">
+                <strong>隐私状态</strong>
+                <button id="privacy-open-status" class="feedback-link" type="button">插件状态</button>
+              </div>
+              <div class="privacy-summary-states">
+                <div id="usage-compact-root"></div>
+                <div id="feedback-auto-root" data-variant="compact"></div>
+              </div>
+            </div>
             <div class="card feedback-wrap">
               <div id="feedback-manual-root"></div>
-              <div id="feedback-auto-root" data-variant="compact"></div>
             </div>
             <p class="dock-help">需要手动补填？到 <button id="show-fields" class="dock-help-link" type="button">简历字段</button> 页，先点网页输入框，再点字段；输入框已有内容时，用「添加」「替换」「删除」。</p>
           </div>
@@ -441,6 +452,7 @@
     <script src="usage-signals.js"></script>
     <script src="feedback-core.js"></script>
     <script src="feedback-ui.js"></script>
+    <script src="usage-ui.js"></script>
     <script src="profile-fields.js"></script>
     <script src="resume-data.js"></script>
     <script src="template-fields.js"></script>

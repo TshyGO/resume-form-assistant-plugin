@@ -84,14 +84,14 @@ test('the side-panel choice says why and what is sent, sits after the fill butto
   // The explanation comes before the buttons that answer it; showing it is not an answer.
   const why = within(notice).getByText(/只有一句「填不上」/);
   expect(why.compareDocumentPosition(button('同意并开启')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
+  expect(screen.getByText('插件错误报告：未开启')).toBeTruthy();
   expect(calls.some(c => c.type === 'FEEDBACK_CONSENT')).toBe(false);
 });
 
 test('同意并开启 is the only way the side panel turns reports on', async () => {
   const { calls } = setup();
   fireEvent.click(await screen.findByRole('button', { name: '同意并开启' }));
-  await screen.findByText('自动错误报告：已开启');
+  await screen.findByText('插件错误报告：已开启');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
   await screen.findByText('已开启自动错误报告，谢谢。');
@@ -101,7 +101,7 @@ test('同意并开启 is the only way the side panel turns reports on', async ()
 test('暂不开启 records the answer and leaves manual feedback working', async () => {
   const { calls, sends } = setup();
   fireEvent.click(await screen.findByRole('button', { name: '暂不开启' }));
-  await screen.findByText('自动错误报告：已关闭');
+  await screen.findByText('插件错误报告：已关闭');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: false }]);
   await screen.findByText(/手动反馈问题不受影响/);
@@ -118,14 +118,14 @@ test('a failed save keeps the choice on screen; an unanswered choice comes back 
   await screen.findByText('设置未保存，请重试。');
   expect(screen.getByRole('region', { name: NOTICE })).toBeTruthy();
   expect(button('同意并开启').disabled).toBe(false);
-  expect(screen.getByText('自动错误报告：未开启')).toBeTruthy();
+  expect(screen.getByText('插件错误报告：未开启')).toBeTruthy();
   setup();
   expect(await screen.findByRole('region', { name: NOTICE })).toBeTruthy();
 });
 
 test('a failed save on the status page puts the switch back', async () => {
   setup('consent', '/popup.html', { consent: true, decided: true });
-  const toggle = await screen.findByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  const toggle = await screen.findByRole('checkbox', { name: '开启插件自动错误报告' }) as HTMLInputElement;
   await waitFor(() => expect(toggle.checked).toBe(true));
   fireEvent.click(toggle);
   await screen.findByText('设置未保存，请重试。');
@@ -135,17 +135,17 @@ test('a failed save on the status page puts the switch back', async () => {
 
 test('a side panel opened after the choice was made shows only the state line', async () => {
   setup('', '/sidepanel.html', { consent: false, decided: true });
-  await screen.findByText('自动错误报告：已关闭');
+  await screen.findByText('插件错误报告：已关闭');
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(screen.queryByRole('checkbox', { name: /自动错误报告/ })).toBeNull();
   expect(screen.queryByRole('button', { name: /说明/ })).toBeNull();
   // Changing it is on the status page; the side panel only links there (#261).
-  expect(button('在「插件状态」中设置')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /插件状态/ })).toBeNull();
 });
 
 test('while undecided the status page keeps the explanation open with the same two answers', async () => {
   const { calls } = setup('', '/popup.html');
-  const auto = screen.getByRole('region', { name: '自动错误报告' });
+  const auto = screen.getByRole('region', { name: '插件自动错误报告' });
   const details = await within(auto).findByRole('region', { name: '完整说明' });
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   expect(auto.contains(details)).toBe(true);
@@ -153,7 +153,7 @@ test('while undecided the status page keeps the explanation open with the same t
   for (const disclosure of DISCLOSURES) expect(text).toContain(disclosure);
   expect(text).toContain('遇到问题也可以在侧栏的「手动反馈问题」里自己写，预览确认后才会发送。');
   await within(auto).findByText('未开启：你选择之前不会自动发送任何报告。');
-  const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  const toggle = within(auto).getByRole('checkbox', { name: '开启插件自动错误报告' }) as HTMLInputElement;
   expect(toggle.checked).toBe(false);
   expect(buttons(auto)).toEqual(['同意并开启', '暂不开启']);
   fireEvent.click(within(auto).getByRole('button', { name: '同意并开启' }));
@@ -166,9 +166,9 @@ test('while undecided the status page keeps the explanation open with the same t
 
 test('choosing with the switch while undecided keeps the explanation open', async () => {
   const { calls } = setup('', '/popup.html');
-  const auto = screen.getByRole('region', { name: '自动错误报告' });
+  const auto = screen.getByRole('region', { name: '插件自动错误报告' });
   await within(auto).findByRole('button', { name: '同意并开启' });
-  fireEvent.click(within(auto).getByRole('checkbox', { name: '开启自动错误报告' }));
+  fireEvent.click(within(auto).getByRole('checkbox', { name: '开启插件自动错误报告' }));
   await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
   expect(within(auto).getByRole('region', { name: '完整说明' })).toBeTruthy();
   expect(buttons(auto)).toEqual(['收起说明']);
@@ -177,18 +177,18 @@ test('choosing with the switch while undecided keeps the explanation open', asyn
 
 test('查看完整说明 expands the same card and 收起说明 folds it, with no second switch', async () => {
   const { calls } = setup('', '/popup.html', { consent: true, decided: true });
-  const auto = screen.getByRole('region', { name: '自动错误报告' });
+  const auto = screen.getByRole('region', { name: '插件自动错误报告' });
   const about = await within(auto).findByRole('button', { name: '查看完整说明' });
   expect(about.getAttribute('aria-expanded')).toBe('false');
   fireEvent.click(about);
   const details = within(auto).getByRole('region', { name: '完整说明' });
   expect(about.textContent).toBe('收起说明');
   expect(about.getAttribute('aria-expanded')).toBe('true');
-  expect(details.textContent).toContain('如需开启或关闭，勾选或取消勾选上方「开启自动错误报告」即可。');
+  expect(details.textContent).toContain('如需开启或关闭，勾选或取消勾选上方「开启插件自动错误报告」即可。');
   expect(buttons(auto)).toEqual(['收起说明']);
   expect(screen.getAllByRole('button').map(b => b.textContent)).toEqual(['收起说明']);
   // Changing the switch while reading keeps the explanation open.
-  const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  const toggle = within(auto).getByRole('checkbox', { name: '开启插件自动错误报告' }) as HTMLInputElement;
   await waitFor(() => expect(toggle.checked).toBe(true));
   fireEvent.click(toggle);
   await within(auto).findByText('已关闭：不会自动发送任何报告。');
@@ -201,12 +201,12 @@ test('查看完整说明 expands the same card and 收起说明 folds it, with n
 
 test('the status page has the automatic switch only, with no manual feedback', async () => {
   const { calls } = setup('', '/popup.html', { consent: true, decided: true });
-  const auto = screen.getByRole('region', { name: '自动错误报告' });
-  expect(screen.queryByRole('region', { name: '手动反馈问题' })).toBeNull();
+  const auto = screen.getByRole('region', { name: '插件自动错误报告' });
+  expect(screen.queryByRole('region', { name: '反馈问题' })).toBeNull();
   expect(screen.queryByRole('region', { name: NOTICE })).toBeNull();
   for (const name of ['展开', '预览将发送的内容', '确认发送']) expect(screen.queryByRole('button', { name })).toBeNull();
   expect(auto.textContent).toContain('不影响侧栏里的「手动反馈问题」');
-  const toggle = within(auto).getByRole('checkbox', { name: '开启自动错误报告' }) as HTMLInputElement;
+  const toggle = within(auto).getByRole('checkbox', { name: '开启插件自动错误报告' }) as HTMLInputElement;
   await waitFor(() => expect(toggle.checked).toBe(true));
   fireEvent.click(toggle);
   await within(auto).findByText('已关闭：不会自动发送任何报告。');
@@ -230,7 +230,7 @@ test('manual feedback starts folded and folding keeps the draft and its preview'
   setup();
   expect(form().hidden).toBe(true);
   expect(expand().getAttribute('aria-expanded')).toBe('false');
-  expect(summary().textContent).toBe('由你填写描述、预览并确认后才发送。');
+  expect(summary().textContent).toBe('填写描述，预览确认后发送。');
   await previewDraft('第二步没填上');
   expect(preview().textContent).toContain('error_category: no_fields_found');
   expect(preview().textContent).not.toContain('网页字段');

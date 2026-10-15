@@ -23,6 +23,7 @@ const PAYLOAD_KEYS = {
   "ai.complete": "ai-complete",
   "ui.open": "ui-open",
   "usage.touch": "usage-touch",
+  "usage.settings": "usage-settings",
   "legacy.import": "legacy-import",
 };
 
@@ -40,6 +41,7 @@ const RESPONSE_PAYLOAD_KEYS = {
   "ai.complete": "ai-complete",
   "ui.open": "ui-open",
   "usage.touch": "usage-touch",
+  "usage.settings": "usage-settings",
   "legacy.import": "legacy-import",
 };
 

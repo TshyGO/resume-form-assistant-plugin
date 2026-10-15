@@ -30,6 +30,8 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "page-recipe.js",
   "feedback-core.js",
   "usage-signals.js",
+  "usage-ui.js",
+  "usage-ui.css",
   "feedback-ui.js",
   "feedback.css",
   "ai-worker.js",

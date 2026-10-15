@@ -996,3 +996,26 @@ fn usage_touch_is_v3_identity_free_and_empty() {
     value["payload"] = json!({"url":"https://private.test"});
     assert!(validate_request_value(&value).is_err());
 }
+
+#[test]
+fn usage_settings_is_v3_identity_free_and_has_a_closed_action_and_response() {
+    let mut value = json!({"protocolVersion":3,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"usage.settings","occurredAt":"2026-10-12T00:00:00Z","payload":{"action":"status"}});
+    let request = validate_request_value(&value).unwrap();
+    assert!(request.message_type.identity_forbidden());
+    value["protocolVersion"] = json!(2);
+    assert!(validate_request_value(&value).is_err());
+    value["protocolVersion"] = json!(3);
+    value["payload"] = json!({"action":"delete"});
+    assert!(validate_request_value(&value).is_err());
+
+    let response = json!({
+        "protocolVersion": 3,
+        "correlationId": "11111111-1111-4111-8111-111111111111",
+        "ok": true,
+        "payload": {"enabled":true,"notice_required":false,"available":true,"outbound_enabled":true,"deletion":"none","revision":1}
+    });
+    validate_response_value(&response, MessageType::UsageSettings).unwrap();
+    let mut extra = response.clone();
+    extra["payload"]["identifier"] = json!("must-not-leak");
+    assert!(validate_response_value(&extra, MessageType::UsageSettings).is_err());
+}

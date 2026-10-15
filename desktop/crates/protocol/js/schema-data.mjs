@@ -16,7 +16,8 @@ export const SCHEMA_DATA = {
       "handshake",
       "ai.complete",
       "ui.open",
-      "usage.touch"
+      "usage.touch",
+      "usage.settings"
     ],
     "identityRequired": [
       "application.queryCandidates",
@@ -49,7 +50,8 @@ export const SCHEMA_DATA = {
       "ai.complete",
       "ui.open",
       "legacy.import",
-      "usage.touch"
+      "usage.touch",
+      "usage.settings"
     ],
     "v2MessageTypes": [
       "resume.read",
@@ -110,7 +112,8 @@ export const SCHEMA_DATA = {
       "reconcile": "Read-only. A successful reconcile item does not authorize replay or rewrite of the old envelope."
     },
     "v3MessageTypes": [
-      "usage.touch"
+      "usage.touch",
+      "usage.settings"
     ]
   },
   "envelope": {
@@ -156,7 +159,8 @@ export const SCHEMA_DATA = {
           "ai.complete",
           "ui.open",
           "legacy.import",
-          "usage.touch"
+          "usage.touch",
+          "usage.settings"
         ]
       },
       "occurredAt": {
@@ -969,6 +973,25 @@ export const SCHEMA_DATA = {
         }
       }
     },
+    "usage-settings": {
+      "$id": "https://resumepro.local/protocol/payloads/usage-settings.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "status",
+            "enable",
+            "disable",
+            "acknowledge"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
     "usage-touch": {
       "$id": "https://resumepro.local/protocol/payloads/usage-touch.json",
       "type": "object",
@@ -1082,7 +1105,8 @@ export const SCHEMA_DATA = {
               "ai.complete",
               "ui.open",
               "legacy.import",
-              "usage.touch"
+              "usage.touch",
+              "usage.settings"
             ]
           }
         }
@@ -1509,6 +1533,46 @@ export const SCHEMA_DATA = {
           ]
         }
       }
+    },
+    "usage-settings": {
+      "$id": "https://resumepro.local/protocol/responses/usage-settings.json",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "notice_required": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "outbound_enabled": {
+          "type": "boolean"
+        },
+        "deletion": {
+          "type": "string",
+          "enum": [
+            "none",
+            "pending",
+            "deleted",
+            "unconfirmed"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "enabled",
+        "notice_required",
+        "available",
+        "outbound_enabled",
+        "deletion",
+        "revision"
+      ]
     },
     "usage-touch": {
       "$id": "https://resumepro.local/protocol/responses/usage-touch.json",

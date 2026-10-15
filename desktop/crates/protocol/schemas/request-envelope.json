@@ -41,7 +41,8 @@
         "ai.complete",
         "ui.open",
         "legacy.import",
-        "usage.touch"
+        "usage.touch",
+        "usage.settings"
       ]
     },
     "occurredAt": {

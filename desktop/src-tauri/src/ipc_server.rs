@@ -165,7 +165,7 @@ impl Application for OpenArchive {
     }
 
     fn apply(&self, request: &Request) -> Result<Answer, ErrorCode> {
-        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen | resume_pro_protocol::MessageType::UsageTouch) {
+        if matches!(request.message_type, resume_pro_protocol::MessageType::AiComplete | resume_pro_protocol::MessageType::UiOpen | resume_pro_protocol::MessageType::UsageTouch | resume_pro_protocol::MessageType::UsageSettings) {
             return crate::bridge_services::answer(request, self.services.as_ref());
         }
         // The same lock the window's own commands take. One writer means one queue: a
@@ -443,7 +443,8 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
                 let extra = rules["v2MessageTypes"].as_array()?;
                 payload["capabilities"].as_array_mut()?.extend(extra.iter().cloned());
                 if client_max >= 3 {
-                    payload["capabilities"].as_array_mut()?.push(serde_json::json!("usage.touch"));
+                    let v3 = rules["v3MessageTypes"].as_array()?;
+                    payload["capabilities"].as_array_mut()?.extend(v3.iter().cloned());
                 }
             }
             serde_json::to_vec(&serde_json::json!({
@@ -736,13 +737,14 @@ mod tests {
     }
 
     #[test]
-    fn usage_capability_is_only_announced_to_clients_offering_v3() {
+    fn usage_capabilities_are_only_announced_to_clients_offering_v3() {
         let app = open_archive();
         for (max, expected) in [(2, false), (3, true)] {
             let frame = serde_json::to_vec(&serde_json::json!({"protocolVersion":2,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"handshake","occurredAt":"2026-10-12T00:00:00Z","payload":{"pluginVersion":"0.4.2","minProtocolVersion":2,"maxProtocolVersion":max}})).unwrap();
             let result = answer(&frame, app.as_ref()).unwrap();
             let value: serde_json::Value = serde_json::from_slice(&result).unwrap();
             assert_eq!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|item| item == "usage.touch"), expected);
+            assert_eq!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|item| item == "usage.settings"), expected);
         }
     }
 

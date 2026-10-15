@@ -40,17 +40,6 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
   const revision = useRef(0);
   const mounted = useRef(true);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Undecided: the choice pops up over the window on launch, so nobody has to look for it.
-  const choiceRef = useRef<HTMLDialogElement>(null);
-  const choiceBodyRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const dialog = choiceRef.current;
-    if (consent === null && dialog && !dialog.open) {
-      dialog.showModal();
-      // 焦点先落在说明正文上：两个按钮都是明确的选择，不让回车替用户选。
-      choiceBodyRef.current?.focus();
-    }
-  }, [consent]);
   useEffect(() => {
     mounted.current = true;
     if (invoke) void invoke<Status>("feedback_status").then(result => { if (mounted.current) { setConsent(result.consent); } }).catch(() => { if (mounted.current) setReadFailed(true); });
@@ -105,14 +94,12 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
     setOpen(false); invalidate(); setStatus(null);
   }
 
-  const choice = consent === null ? <dialog ref={choiceRef} className="settings-dialog size-lg feedback-choice" aria-labelledby="feedback-choice-title"
-    // Esc is not an answer. If the webview closes it anyway, it stays on the page as a card.
-    onCancel={event => event.preventDefault()} onClose={event => event.currentTarget.show()}>
+  const choice = consent === null ? <section className="settings-card feedback-choice" aria-labelledby="feedback-choice-title">
     <div className="settings-dialog-head">
       <h2 id="feedback-choice-title">帮我们改进网申快填</h2>
       <p>是否开启自动错误报告？请选择一项，之后可以在“设置 → 隐私”里更改。</p>
     </div>
-    <div className="settings-dialog-body" ref={choiceBodyRef} tabIndex={-1}>
+    <div className="settings-dialog-body">
       <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「用不了」，看不出卡在哪一步，很难找到原因。开启自动错误报告后，程序出错时会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
       <p>报告里只有技术信息：错误类型、出错的代码位置、程序版本、系统、发送时间和一个随机生成的安装编号。不包含你的简历、个人资料、填写的内容、Cookie 或密钥。发送前会先去掉可能的个人信息。报告最多保存 90 天；部分内容可能会公开在网申快填的 GitHub 项目里，方便复现问题，公开的内容会长期保留；安装编号不会公开。</p>
       <p>你同意后才开始发送，同意前出的错不会补发。以后可以在“设置 → 隐私”里关闭，关闭后删除安装编号，不影响正常使用。桌面程序和插件分开设置。</p>
@@ -122,15 +109,15 @@ export function FeedbackSettings({ invoke, consentContainer }: { invoke: Invoke 
       <button type="button" disabled={saving} onClick={() => void changeConsent(false)}>暂不开启</button>
       <button type="button" className="primary" disabled={saving} onClick={() => void changeConsent(true)}>{saving ? "正在保存…" : "同意并开启"}</button>
     </div>
-  </dialog> : null;
+  </section> : null;
 
   const state = consentNote ?? consentState(consent, saving, readFailed);
   return <>
     {consentContainer ? createPortal(choice, consentContainer) : choice}
     <section className="settings-card">
-      <header className="settings-card-head"><h2>隐私</h2><p>选择是否分享脱敏的问题报告。</p></header>
+      <header className="settings-card-head"><h2>桌面自动错误报告</h2><p>只管理桌面程序的脱敏错误报告，与插件开关分开。</p></header>
       <div className="setting-row">
-        <div><label htmlFor="feedback-auto" className="setting-label">自动发送错误报告</label><p>你同意后才会开启。程序出错时自动发送错误类型、代码位置、版本和系统等技术信息，帮我们找到问题，不含简历和个人资料。可随时关闭，关闭后删除安装编号。桌面程序和插件分开设置。</p></div>
+        <div><label htmlFor="feedback-auto" className="setting-label">桌面自动错误报告</label><p>你同意后才会开启。桌面程序出错时发送错误类型、代码位置、版本和系统等技术信息，不含简历和个人资料。插件自动错误报告需在插件状态页单独设置。</p></div>
         <input id="feedback-auto" type="checkbox" className="setting-toggle" checked={consent === true} disabled={!invoke || consent === undefined || saving} onChange={event => void changeConsent(event.target.checked)} />
       </div>
       {invoke ? <p className="settings-callout" data-tone={state.tone} role="status">{state.text}</p> : <p className="settings-callout" data-tone="warn">没连上桌面宿主，读不到反馈设置。</p>}

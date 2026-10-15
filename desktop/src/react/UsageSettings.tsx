@@ -56,8 +56,9 @@ export function UsageSettings({ invoke, noticeContainer, subscribe }: {
   </>;
   const notice = status?.notice_required ? <section className="settings-card usage-notice" data-usage-settings aria-labelledby="usage-notice-title">
     <h2 id="usage-notice-title">使用数量统计默认开启</h2>
-    {details}
-    <p>在你看完这份说明并点击“知道了，保持开启”前，不发送使用统计；此前活动不会补发。你可以现在关闭，也可以以后在“设置 → 隐私”关闭。</p>
+    <p>每天最多发送一次桌面和一次插件使用信号，只含随机编号、版本、系统类型和来源；不含简历、网页内容或具体操作。</p>
+    <p>桌面和插件共用这个开关。关闭不影响功能；完整的数据内容、保留时间和删除规则可在下方“使用数量统计”中查看。</p>
+    <p>点击“知道了，保持开启”后才会开始发送，此前活动不会补发。</p>
     <div className="settings-dialog-actions">
       <button type="button" disabled={busy || !invoke} onClick={() => void change("telemetry_enabled", false)}>关闭使用统计</button>
       <button type="button" disabled={busy || !invoke} onClick={() => void change("telemetry_notice")}>知道了，保持开启</button>
@@ -68,7 +69,7 @@ export function UsageSettings({ invoke, noticeContainer, subscribe }: {
     {noticeContainer && notice ? createPortal(notice, noticeContainer) : notice}
     <section className="settings-card" data-usage-settings aria-labelledby="usage-settings-title">
       <header className="settings-card-head"><h2 id="usage-settings-title">使用数量统计</h2><p>帮助我们了解实际使用情况，关闭不影响功能。</p></header>
-      <div className="setting-row"><div><label className="setting-label" htmlFor="usage-enabled">分享使用数量统计</label><p>默认开启，与错误报告分开。仅发送去重编号、版本、系统类型和来源。</p></div>
+      <div className="setting-row"><div><label className="setting-label" htmlFor="usage-enabled">分享使用数量统计</label><p>桌面和插件共用，默认开启。与错误报告分开，只发送去重编号、版本、系统类型和来源。</p></div>
         <input id="usage-enabled" type="checkbox" className="setting-toggle" checked={status?.enabled ?? false} disabled={busy || !invoke || !status}
           onChange={event => void change("telemetry_enabled", event.target.checked)} />
       </div>

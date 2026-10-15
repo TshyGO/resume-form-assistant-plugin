@@ -508,6 +508,43 @@ fn announce_problem(service: &Telemetry, app: &tauri::AppHandle) {
         }
     }
 }
+pub(crate) fn plugin_notice(app: &tauri::AppHandle) -> Result<Status, &'static str> {
+    let state = app.try_state::<Arc<Telemetry>>().ok_or(SAVE_ERROR)?;
+    let status = state.acknowledge_notice()?;
+    let _ = app.emit("usage-metrics-changed", status.clone());
+    Ok(status)
+}
+pub(crate) fn plugin_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<Status, &'static str> {
+    let state = app.try_state::<Arc<Telemetry>>().ok_or(SAVE_ERROR)?;
+    let result = state.change(enabled);
+    let (old_id, revision) = match &result {
+        Ok((_, id, revision)) => (id.clone(), *revision),
+        Err(error) => (error.old_id.clone(), error.revision),
+    };
+    if let Some(id) = old_id {
+        let service = Arc::clone(&state);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(status) = service.delete(id, revision).await {
+                let _ = app.emit("usage-metrics-changed", status);
+            }
+        });
+    }
+    match result {
+        Ok((status, _, _)) => {
+            let _ = app.emit("usage-metrics-changed", status.clone());
+            Ok(status)
+        }
+        Err(error) => {
+            // Disable can fail to persist after already stopping this process. Keep an
+            // open desktop view in sync even though the caller also receives the error.
+            if let Ok(status) = state.status() {
+                let _ = app.emit("usage-metrics-changed", status);
+            }
+            Err(error.message)
+        }
+    }
+}
 #[tauri::command]
 pub fn telemetry_status(state: State<'_, Arc<Telemetry>>) -> Result<Status, &'static str> {
     state.status()
@@ -520,35 +557,19 @@ pub fn telemetry_notice(
     if !active_window(&window) {
         return Err("请在可见的主窗口查看统计说明。");
     }
-    state.acknowledge_notice()
+    let status = state.acknowledge_notice()?;
+    let _ = window.app_handle().emit("usage-metrics-changed", status.clone());
+    Ok(status)
 }
 #[tauri::command]
 pub fn telemetry_enabled(
     window: tauri::WebviewWindow,
-    state: State<'_, Arc<Telemetry>>,
     enabled: bool,
 ) -> Result<Status, &'static str> {
     if !active_window(&window) {
         return Err("请在可见的主窗口更改统计设置。");
     }
-    let result = state.change(enabled);
-    let (old_id, revision) = match &result {
-        Ok((_, id, revision)) => (id.clone(), *revision),
-        Err(error) => (error.old_id.clone(), error.revision),
-    };
-    if let Some(id) = old_id {
-        let service = Arc::clone(&state);
-        let app = window.app_handle().clone();
-        // Closing returns immediately; deletion is a single best-effort request, in memory only.
-        tauri::async_runtime::spawn(async move {
-            if let Ok(status) = service.delete(id, revision).await {
-                let _ = app.emit("usage-metrics-changed", status);
-            }
-        });
-    }
-    result
-        .map(|(status, _, _)| status)
-        .map_err(|error| error.message)
+    plugin_enabled(window.app_handle(), enabled)
 }
 #[tauri::command]
 pub async fn telemetry_touch(
