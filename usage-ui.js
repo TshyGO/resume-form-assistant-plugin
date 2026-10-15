@@ -96,5 +96,9 @@
   if (byId('usage-retry')) byId('usage-retry').onclick = () => void refresh();
   if (byId('privacy-open-status')) byId('privacy-open-status').onclick = () => chrome.runtime.openOptionsPage?.();
   chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes[SEEN_KEY]) void render(); });
+  // The side panel may finish loading just before the desktop connects. Refresh when the
+  // user comes back so the compact state cannot stay stuck on “桌面未连接”.
+  globalThis.addEventListener?.('focus', () => void refresh());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void refresh(); });
   void refresh();
 })();
