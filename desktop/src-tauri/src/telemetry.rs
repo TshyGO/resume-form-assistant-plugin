@@ -530,9 +530,20 @@ pub(crate) fn plugin_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<St
             }
         });
     }
-    let status = result.map(|(status, _, _)| status).map_err(|error| error.message)?;
-    let _ = app.emit("usage-metrics-changed", status.clone());
-    Ok(status)
+    match result {
+        Ok((status, _, _)) => {
+            let _ = app.emit("usage-metrics-changed", status.clone());
+            Ok(status)
+        }
+        Err(error) => {
+            // Disable can fail to persist after already stopping this process. Keep an
+            // open desktop view in sync even though the caller also receives the error.
+            if let Ok(status) = state.status() {
+                let _ = app.emit("usage-metrics-changed", status);
+            }
+            Err(error.message)
+        }
+    }
 }
 #[tauri::command]
 pub fn telemetry_status(state: State<'_, Arc<Telemetry>>) -> Result<Status, &'static str> {

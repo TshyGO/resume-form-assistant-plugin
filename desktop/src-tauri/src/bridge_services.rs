@@ -125,8 +125,18 @@ impl BridgeServices for DesktopBridgeServices {
                 let state = self.app.try_state::<std::sync::Arc<crate::telemetry::Telemetry>>().ok_or(ErrorCode::Unavailable)?;
                 state.status().map_err(|_| ErrorCode::Unavailable)?
             }
-            "enable" => crate::telemetry::plugin_enabled(&self.app, true).map_err(|_| ErrorCode::Unavailable)?,
-            "disable" => crate::telemetry::plugin_enabled(&self.app, false).map_err(|_| ErrorCode::Unavailable)?,
+            "enable" | "disable" => {
+                let enabled = action == "enable";
+                match crate::telemetry::plugin_enabled(&self.app, enabled) {
+                    Ok(status) => status,
+                    Err(_) => {
+                        // A failed write may still stop this process. Return its fail-closed
+                        // status so the plugin can explain that restart persistence is unknown.
+                        let state = self.app.try_state::<std::sync::Arc<crate::telemetry::Telemetry>>().ok_or(ErrorCode::Unavailable)?;
+                        state.status().map_err(|_| ErrorCode::Unavailable)?
+                    }
+                }
+            }
             "acknowledge" => crate::telemetry::plugin_notice(&self.app).map_err(|_| ErrorCode::Unavailable)?,
             _ => return Err(ErrorCode::InvalidPayload),
         };
