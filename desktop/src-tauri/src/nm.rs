@@ -84,7 +84,7 @@ impl Backend for AppBackend {
         // response_for_with has already checked the caller and envelope. Re-validate
         // here so direct uses of this backend cannot turn malformed JSON into a resume.
         let request = validate_request_bytes(frame).map_err(|_| "invalid launch request")?;
-        let mut stream = if request.message_type == MessageType::UsageTouch {
+        let mut stream = if matches!(request.message_type, MessageType::UsageTouch | MessageType::UsageSettings) {
             local_ipc::Endpoint::for_data_root(&self.data_root).and_then(|endpoint| local_ipc::connect(&endpoint))
         } else if request.message_type == MessageType::UiOpen {
             crate::ipc_client::connect_with_intent(&self.data_root, &self.program, true)

@@ -1,0 +1,12 @@
+{
+  "$id": "https://resumepro.local/protocol/payloads/usage-settings.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["status", "enable", "disable", "acknowledge"]
+    }
+  },
+  "required": ["action"]
+}

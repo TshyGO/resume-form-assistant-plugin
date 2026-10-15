@@ -33,7 +33,7 @@
     </section>`;
   autoRoot.innerHTML = compact ? `
     <div class="feedback-auto-line">
-      <span id="feedback-auto-state">自动错误报告：正在读取…</span>
+      <span id="feedback-auto-state">插件自动错误报告：正在读取…</span>
       <button type="button" id="feedback-retry" class="feedback-link" hidden>重新读取设置</button>
       <button type="button" id="feedback-open-status" class="feedback-link">在「插件状态」中设置</button>
       <p id="feedback-auto-status" role="status" aria-live="polite"></p>
@@ -42,13 +42,13 @@
       <div class="feedback-auto-head">
         <span class="card-icon" aria-hidden="true">${BUG}</span>
         <div class="feedback-auto-heading">
-          <h2 id="feedback-auto-title">自动错误报告</h2>
+          <h2 id="feedback-auto-title">插件自动错误报告</h2>
           <p class="feedback-sub">开启后，出错时只发送去掉个人信息的技术诊断</p>
         </div>
-        <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启自动错误报告</label>
+        <label class="feedback-switch"><input type="checkbox" id="feedback-toggle" disabled>开启插件自动错误报告</label>
       </div>
       <p id="feedback-auto-state" class="feedback-state">正在读取设置…</p>
-      <p class="feedback-note feedback-box">你同意后才会开启。关闭后删除安装编号，不影响侧栏里的「手动反馈问题」。插件和桌面程序分开设置。</p>
+      <p class="feedback-note feedback-box">这个开关只管理插件。关闭后删除插件错误报告编号，不影响侧栏里的「手动反馈问题」；桌面错误报告需在桌面设置中单独管理。</p>
       <div class="feedback-actions feedback-actions--end">
         <button type="button" id="feedback-about" aria-expanded="false" aria-controls="feedback-details" hidden>查看完整说明</button>
         <button type="button" id="feedback-retry" hidden>重新读取设置</button>
@@ -125,13 +125,13 @@
       $('about').setAttribute('aria-expanded', String(open));
       $('enable').hidden = !undecided; $('decline').hidden = !undecided;
       $('details-hint').textContent = undecided
-        ? '以后也可以用上方的「开启自动错误报告」更改。'
-        : '如需开启或关闭，勾选或取消勾选上方「开启自动错误报告」即可。';
+        ? '以后也可以用上方的「开启插件自动错误报告」更改。'
+        : '如需开启或关闭，勾选或取消勾选上方「开启插件自动错误报告」即可。';
       $('toggle').checked = result.consent === true; $('toggle').disabled = !known || savingConsent;
     }
     const state = !known ? '无法读取设置' : undecided ? '未开启' : result.consent ? '已开启' : '已关闭';
     $('auto-state').dataset.tone = !known ? 'unknown' : result.consent === true ? 'on' : 'off';
-    $('auto-state').textContent = compact ? `自动错误报告：${state}`
+    $('auto-state').textContent = compact ? `插件自动错误报告：${state}`
       : !known ? '无法读取设置。' : undecided ? '未开启：你选择之前不会自动发送任何报告。'
       : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;

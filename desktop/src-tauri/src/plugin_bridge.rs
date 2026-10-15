@@ -41,7 +41,7 @@ pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCod
         MessageType::ResumeRead => resume_read(request, store),
         MessageType::ResumeUpdate => resume_update(request, store),
         MessageType::Health | MessageType::Handshake => Err(ErrorCode::UnknownMessageType),
-        MessageType::AiComplete | MessageType::UiOpen | MessageType::UsageTouch | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
+        MessageType::AiComplete | MessageType::UiOpen | MessageType::UsageTouch | MessageType::UsageSettings | MessageType::LegacyImport => Err(ErrorCode::ProtocolIncompatible),
     }
 }
 

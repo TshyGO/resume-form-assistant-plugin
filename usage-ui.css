@@ -1,0 +1,4 @@
+.usage-card .usage-icon { font-weight: 750; font-size: 17px; }
+.usage-card #usage-result, .usage-notice #usage-notice-result { margin-top: 8px; color: var(--muted, #687080); font-size: 12px; }
+.usage-notice p { margin: 6px 0 0; }
+.usage-card [hidden], .usage-notice [hidden] { display: none !important; }

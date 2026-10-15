@@ -24,6 +24,7 @@ pub trait BridgeServices: Send + Sync + 'static {
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>);
     fn open_view(&self, view: &str) -> bool;
     fn usage_touch(&self) {}
+    fn usage_settings(&self, _action: &str) -> Result<Value, ErrorCode> { Err(ErrorCode::Unavailable) }
 
     fn stage_import_key(&self, _import_id: &str, _key: &str) -> Result<(), ErrorCode> { Err(ErrorCode::Unavailable) }
     fn get_import_key(&self, _import_id: &str) -> Result<Option<String>, ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -117,6 +118,19 @@ impl BridgeServices for DesktopBridgeServices {
         let Some(state) = self.app.try_state::<std::sync::Arc<crate::telemetry::Telemetry>>() else { return; };
         let service = std::sync::Arc::clone(&state);
         tauri::async_runtime::spawn(async move { service.extension_touch().await; });
+    }
+    fn usage_settings(&self, action: &str) -> Result<Value, ErrorCode> {
+        let status = match action {
+            "status" => {
+                let state = self.app.try_state::<std::sync::Arc<crate::telemetry::Telemetry>>().ok_or(ErrorCode::Unavailable)?;
+                state.status().map_err(|_| ErrorCode::Unavailable)?
+            }
+            "enable" => crate::telemetry::plugin_enabled(&self.app, true).map_err(|_| ErrorCode::Unavailable)?,
+            "disable" => crate::telemetry::plugin_enabled(&self.app, false).map_err(|_| ErrorCode::Unavailable)?,
+            "acknowledge" => crate::telemetry::plugin_notice(&self.app).map_err(|_| ErrorCode::Unavailable)?,
+            _ => return Err(ErrorCode::InvalidPayload),
+        };
+        serde_json::to_value(status).map_err(|_| ErrorCode::Unavailable)
     }
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
         let state = self.app.state::<AppState>();
@@ -235,6 +249,10 @@ pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer
             services.usage_touch();
             checked_answer(request, json!({"accepted": true}))
         }
+        resume_pro_protocol::MessageType::UsageSettings => {
+            let action = request.payload["action"].as_str().ok_or(ErrorCode::InvalidPayload)?;
+            checked_answer(request, services.usage_settings(action)?)
+        }
         resume_pro_protocol::MessageType::AiComplete => {
             let purpose = request.payload["purpose"].as_str().ok_or(ErrorCode::InvalidPayload)?;
             let system = request.payload["system"].as_str().ok_or(ErrorCode::InvalidPayload)?;
@@ -295,6 +313,11 @@ mod tests {
 
     impl BridgeServices for FakeServices {
         fn usage_touch(&self) { self.calls.lock().unwrap().push("usage".into()); }
+        fn usage_settings(&self, action: &str) -> Result<Value, ErrorCode> {
+            self.calls.lock().unwrap().push(format!("usage-settings:{action}"));
+            Ok(json!({"enabled":false,"notice_required":false,"available":true,
+                "outbound_enabled":true,"deletion":"pending","revision":4}))
+        }
         fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
             let route = if strong { "strong" } else { "daily" };
             self.calls.lock().unwrap().push(format!("ai:{purpose}:{route}:{system}:{user}"));
@@ -309,7 +332,7 @@ mod tests {
 
     fn request(message_type: &str, payload: Value) -> Request {
         let value = json!({
-            "protocolVersion": if message_type == "usage.touch" { 3 } else { 2 },
+            "protocolVersion": if matches!(message_type, "usage.touch" | "usage.settings") { 3 } else { 2 },
             "messageId": "33333333-3333-4333-8333-333333333333",
             "clientInstanceId": "11111111-1111-4111-8111-111111111111",
             "messageType": message_type,
@@ -422,6 +445,17 @@ mod tests {
         let services = fake(AiReply::Ok(String::new()), false);
         assert_eq!(answer(&request, &services).unwrap().payload, json!({"accepted": true}));
         assert_eq!(services.calls.lock().unwrap().as_slice(), ["usage"]);
+    }
+
+    #[test]
+    fn usage_settings_forwards_the_closed_action_and_returns_no_identifier() {
+        let request = request("usage.settings", json!({"action":"disable"}));
+        let services = fake(AiReply::Ok(String::new()), false);
+        let payload = answer(&request, &services).unwrap().payload;
+        assert_eq!(payload, json!({"enabled":false,"notice_required":false,"available":true,
+            "outbound_enabled":true,"deletion":"pending","revision":4}));
+        assert!(payload.get("identifier").is_none());
+        assert_eq!(services.calls.lock().unwrap().as_slice(), ["usage-settings:disable"]);
     }
 
     #[test]

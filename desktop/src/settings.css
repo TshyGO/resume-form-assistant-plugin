@@ -3,8 +3,12 @@
 
 #view-settings { max-width: none; margin: 0; padding: 24px 28px 40px; background: var(--surface); }
 #view-settings h1 { font-size: 24px; }
-/* 首次统计说明在主窗口内始终可见，不随设置分类切换而隐藏。 */
-#usage-notice:empty { display: none; }
+/* 首次说明在主窗口内始终可见，不随设置分类切换而隐藏。 */
+#feedback-consent:empty, #usage-notice:empty { display: none; }
+#feedback-consent .feedback-choice { margin: 16px 28px; }
+#feedback-consent .feedback-choice .settings-dialog-head { padding: 0; }
+#feedback-consent .feedback-choice .settings-dialog-body { padding: 14px 0 4px; }
+#feedback-consent .feedback-choice .settings-dialog-actions { padding: 16px 0 0; }
 .usage-notice { margin: 16px 28px; }
 .usage-notice h2 { margin: 0 0 10px; font-size: 18px; }
 .usage-notice p { margin: 8px 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
@@ -260,9 +264,6 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 .settings-dialog textarea { padding: 10px 12px; resize: vertical; }
 .settings-dialog .settings-callout { margin: 0; }
 .feedback-preview { max-height: 280px; margin: 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--card-line); border-radius: 8px; background: #f4f7f6; font: 12px/1.6 Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* 首次授权：WebView 若把模态关掉，它留在页面顶部当一张卡片，仍然要作出选择。 */
-#feedback-consent dialog.settings-dialog.feedback-choice:not(:modal) { position: static; width: auto; max-width: none; max-height: none; margin: 16px; box-shadow: var(--shadow); }
-
 @media (max-width: 1180px) {
   #view-settings { padding: 20px 20px 32px; }
   .settings-layout { grid-template-columns: 176px minmax(0, 1fr); gap: 20px; }

@@ -19,13 +19,14 @@ function api(start = initial()) {
   return { invoke: fn as Invoke, fn };
 }
 
-test("default ON is shown separately from feedback, disclosure stays visible outside hidden privacy panel", async () => {
+test("default ON uses a short first-run notice outside the hidden privacy panel", async () => {
   const portal = document.createElement("div"); document.body.append(portal);
   const { invoke, fn } = api();
   const { unmount } = render(<div hidden><UsageSettings invoke={invoke} noticeContainer={portal} /></div>);
   const notice = await within(portal).findByRole("region", { name: "使用数量统计默认开启" });
-  for (const text of ["默认开启", "随机安装编号", "Cloudflare", "45 天", "365 天", "不发送简历", "与自动错误报告分开", "此前活动不会补发", "离线时无法保证即时删除"])
+  for (const text of ["默认开启", "随机编号", "不含简历", "桌面和插件共用", "关闭不影响功能", "此前活动不会补发"])
     expect(notice.textContent).toContain(text);
+  expect(notice.textContent).not.toContain("Cloudflare");
   expect(fn.mock.calls.every(([command]) => command === "telemetry_status")).toBe(true);
   fireEvent.click(within(notice).getByRole("button", { name: "知道了，保持开启" }));
   await waitFor(() => expect(portal.childElementCount).toBe(0));

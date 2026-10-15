@@ -1,0 +1,17 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/usage-settings.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "notice_required": { "type": "boolean" },
+    "available": { "type": "boolean" },
+    "outbound_enabled": { "type": "boolean" },
+    "deletion": {
+      "type": "string",
+      "enum": ["none", "pending", "deleted", "unconfirmed"]
+    },
+    "revision": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["enabled", "notice_required", "available", "outbound_enabled", "deletion", "revision"]
+}

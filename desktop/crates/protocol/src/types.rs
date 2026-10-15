@@ -40,6 +40,8 @@ pub enum MessageType {
     UiOpen,
     #[serde(rename = "usage.touch")]
     UsageTouch,
+    #[serde(rename = "usage.settings")]
+    UsageSettings,
     #[serde(rename = "legacy.import")]
     LegacyImport,
 }
@@ -61,6 +63,7 @@ impl MessageType {
             Self::UiOpen => "ui.open",
             Self::LegacyImport => "legacy.import",
             Self::UsageTouch => "usage.touch",
+            Self::UsageSettings => "usage.settings",
         }
     }
 
@@ -80,6 +83,7 @@ impl MessageType {
             "ui.open" => Ok(Self::UiOpen),
             "legacy.import" => Ok(Self::LegacyImport),
             "usage.touch" => Ok(Self::UsageTouch),
+            "usage.settings" => Ok(Self::UsageSettings),
             "SaveIntent" | "saveIntent" | "save.intent" => Err(ProtocolError::new(
                 ErrorCode::UnknownMessageType,
                 Layer::Structure,
@@ -94,7 +98,7 @@ impl MessageType {
     }
 
     pub fn identity_forbidden(self) -> bool {
-        matches!(self, Self::Health | Self::Handshake | Self::AiComplete | Self::UiOpen | Self::UsageTouch)
+        matches!(self, Self::Health | Self::Handshake | Self::AiComplete | Self::UiOpen | Self::UsageTouch | Self::UsageSettings)
     }
 
     pub fn identity_required(self) -> bool {
@@ -114,7 +118,7 @@ impl MessageType {
 
     pub fn min_envelope_version(self) -> u32 {
         match self {
-            Self::UsageTouch => 3,
+            Self::UsageTouch | Self::UsageSettings => 3,
             Self::ResumeRead | Self::ResumeUpdate | Self::AiComplete | Self::UiOpen | Self::LegacyImport => 2,
             _ => 1,
         }
