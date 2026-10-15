@@ -33,9 +33,8 @@
     </section>`;
   autoRoot.innerHTML = compact ? `
     <div class="feedback-auto-line">
-      <span id="feedback-auto-state">插件自动错误报告：正在读取…</span>
+      <span id="feedback-auto-state">插件错误报告：正在读取…</span>
       <button type="button" id="feedback-retry" class="feedback-link" hidden>重新读取设置</button>
-      <button type="button" id="feedback-open-status" class="feedback-link">在「插件状态」中设置</button>
       <p id="feedback-auto-status" role="status" aria-live="polite"></p>
     </div>` : `
     <section class="feedback-card feedback-auto" aria-labelledby="feedback-auto-title">
@@ -65,7 +64,7 @@
   if (manualRoot) manualRoot.innerHTML = `
     <section class="feedback-card feedback-manual" aria-labelledby="feedback-manual-title">
       <div class="feedback-head">
-        <span class="feedback-head__title">${BUG}<h2 id="feedback-manual-title">手动反馈问题</h2></span>
+        <span class="feedback-head__title">${BUG}<h2 id="feedback-manual-title">反馈问题</h2></span>
         <button type="button" id="feedback-expand" aria-expanded="false" aria-controls="feedback-form">展开</button>
       </div>
       <p id="feedback-summary" class="feedback-summary" role="status" aria-live="polite"></p>
@@ -131,7 +130,7 @@
     }
     const state = !known ? '无法读取设置' : undecided ? '未开启' : result.consent ? '已开启' : '已关闭';
     $('auto-state').dataset.tone = !known ? 'unknown' : result.consent === true ? 'on' : 'off';
-    $('auto-state').textContent = compact ? `插件自动错误报告：${state}`
+    $('auto-state').textContent = compact ? `插件错误报告：${state}`
       : !known ? '无法读取设置。' : undecided ? '未开启：你选择之前不会自动发送任何报告。'
       : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;
@@ -153,8 +152,6 @@
   }
   const refresh = () => send({ type: 'FEEDBACK_STATUS' }).then(renderConsent);
   $('retry').onclick = refresh;
-  // The side panel only shows the state; changing it is on the status page.
-  if ($('open-status')) $('open-status').onclick = () => chrome.runtime.openOptionsPage?.();
   if ($('enable')) $('enable').onclick = () => { aboutOpen = false; consent(true); };
   if ($('decline')) $('decline').onclick = () => { aboutOpen = false; consent(false); };
   if ($('toggle')) $('toggle').onchange = () => {
@@ -198,7 +195,7 @@
       $('expand').setAttribute('aria-expanded', String(expanded));
       const draft = $('description').value.trim() !== '' || !$('preview').hidden;
       $('summary').hidden = expanded;
-      $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '由你填写描述、预览并确认后才发送。');
+      $('summary').textContent = expanded ? '' : message || (draft ? '草稿已保留，展开后可继续编辑。' : '填写描述，预览确认后发送。');
       const panelOpen = Boolean(panel) && !panel.hidden;
       $('status').textContent = expanded && !panelOpen ? message : '';
       if (panel) $('preview-note').textContent = panelOpen ? message : '';

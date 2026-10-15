@@ -18,10 +18,13 @@ test('the template and 一键 AI 填写 come first; the notice only follows the 
   assert.equal(sidepanel.split('id="feedback-notice-root"').length, 2);
 });
 
-test('manual feedback follows the fill result and diagnostics, with the automatic line after it', () => {
+test('privacy states are grouped before a separate manual feedback card', () => {
   assert.ok(at(fillView, 'id="fill-result"') < at(fillView, 'id="feedback-manual-root"'));
   assert.ok(at(fillView, 'id="fill-diagnostics"') < at(fillView, 'id="feedback-manual-root"'));
-  assert.ok(at(fillView, 'id="feedback-manual-root"') < at(fillView, 'id="feedback-auto-root"'));
+  assert.ok(at(fillView, 'id="usage-compact-root"') < at(fillView, 'id="feedback-auto-root"'));
+  assert.ok(at(fillView, 'id="feedback-auto-root"') < at(fillView, 'id="feedback-manual-root"'));
+  assert.match(fillView, /class="card privacy-summary"/);
+  assert.match(fillView, /id="privacy-open-status"[^>]*>插件状态<\/button>/);
   assert.match(fillView, /<div id="feedback-auto-root" data-variant="compact"><\/div>/);
   const ui = read('feedback-ui.js');
   assert.match(ui, /id="feedback-expand" aria-expanded="false" aria-controls="feedback-form">展开</);
@@ -37,7 +40,7 @@ test('the status page keeps only the automatic switch; manual feedback lives in 
   assert.equal(sidepanel.split('id="feedback-manual-root"').length, 2);
   const ui = read('feedback-ui.js');
   assert.match(ui, /<h2 id="feedback-auto-title">插件自动错误报告<\/h2>/);
-  assert.match(ui, /<h2 id="feedback-manual-title">手动反馈问题<\/h2>/);
+  assert.match(ui, /<h2 id="feedback-manual-title">反馈问题<\/h2>/);
   assert.doesNotMatch(ui, /自动上报|匿名错误报告|请在侧栏附上填写诊断/, 'one name for the automatic feature; no status-page form');
 });
 

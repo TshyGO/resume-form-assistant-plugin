@@ -224,7 +224,13 @@ button:disabled { cursor: not-allowed; }
 .dock-diagnostics-copy { min-height: 32px; margin: 8px 14px 0; padding: 4px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 12px; font-weight: 600; }
 .dock-diagnostics-copy:hover { border-color: var(--line-strong); background: var(--soft); }
 .feedback-wrap .feedback-card { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.feedback-wrap .feedback-auto-line { justify-content: space-between; margin-top: 12px; padding: 10px 0 0; border-top: 1px solid var(--line); }
+.privacy-summary { display: grid; gap: 10px; }
+.privacy-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.privacy-summary-head strong { font-size: 14px; }
+.privacy-summary-head .feedback-link { flex: none; }
+.privacy-summary-states { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; padding-top: 10px; border-top: 1px solid var(--line); }
+.privacy-summary .feedback-auto-line { margin: 0; padding: 0; border: 0; font-size: 12px; color: var(--muted); }
+.privacy-summary .feedback-auto-line p { grid-column: 1 / -1; }
 .dock-help { margin: 0 2px; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .dock-help-link { padding: 0; border: 0; background: transparent; color: var(--accent-strong); font-size: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 /* 保存到「我的信息」：小型选择面板，留在填写页里 */

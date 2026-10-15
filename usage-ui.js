@@ -30,8 +30,7 @@
     </section>`;
   if (compactRoot) compactRoot.innerHTML = `
     <div class="feedback-auto-line" data-usage-settings>
-      <span id="usage-compact-state">使用数量统计：正在读取…</span>
-      <button type="button" id="usage-open-status" class="feedback-link">在「插件状态」中设置</button>
+      <span id="usage-compact-state">使用统计：正在读取…</span>
     </div>`;
   if (noticeRoot) noticeRoot.innerHTML = `
     <section class="feedback-card feedback-notice usage-notice" data-usage-settings hidden aria-labelledby="usage-notice-title">
@@ -57,7 +56,7 @@
     const state = byId('usage-state');
     if (state) { state.textContent = messageFor(known ? value : null); state.dataset.tone = known && value.enabled ? 'on' : known ? 'off' : 'unknown'; }
     const compact = byId('usage-compact-state');
-    if (compact) compact.textContent = known ? `使用数量统计：${value.enabled ? '已开启' : '已关闭'}（与桌面同步）` : '使用数量统计：桌面未连接';
+    if (compact) compact.textContent = known ? `使用统计：${value.enabled ? '已开启' : '已关闭'}` : '使用统计：桌面未连接';
     if (byId('usage-retry')) byId('usage-retry').hidden = known;
     if (noticeRoot) {
       const stored = await chrome.storage.local.get(SEEN_KEY);
@@ -95,7 +94,7 @@
   if (byId('usage-disable')) byId('usage-disable').onclick = () => void change('disable');
   if (byId('usage-ack')) byId('usage-ack').onclick = () => void change('acknowledge');
   if (byId('usage-retry')) byId('usage-retry').onclick = () => void refresh();
-  if (byId('usage-open-status')) byId('usage-open-status').onclick = () => chrome.runtime.openOptionsPage?.();
+  if (byId('privacy-open-status')) byId('privacy-open-status').onclick = () => chrome.runtime.openOptionsPage?.();
   chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes[SEEN_KEY]) void render(); });
   void refresh();
 })();
