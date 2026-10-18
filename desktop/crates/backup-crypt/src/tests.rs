@@ -216,3 +216,74 @@ fn limits_hostile_headers_and_cancellation_preserve_existing_outputs() {
     .is_err());
     no_partial(dir.path());
 }
+
+#[test]
+fn disk_failures_are_not_reported_as_authentication_failures_and_encrypted_caps_are_limits() {
+    struct FullDisk;
+    impl Write for FullDisk {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("synthetic disk failure"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    struct BrokenInput(io::ErrorKind);
+    impl Read for BrokenInput {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(self.0, "synthetic read failure"))
+        }
+    }
+    assert_eq!(
+        copy_bounded(
+            &mut Cursor::new(b"plaintext"),
+            &mut FullDisk,
+            100,
+            &|| false,
+            decrypted_read_error
+        ),
+        Err(Error::Io)
+    );
+    assert_eq!(
+        copy_bounded(
+            &mut BrokenInput(io::ErrorKind::PermissionDenied),
+            &mut Vec::new(),
+            100,
+            &|| false,
+            decrypted_read_error
+        ),
+        Err(Error::Io)
+    );
+    assert_eq!(
+        copy_bounded(
+            &mut BrokenInput(io::ErrorKind::InvalidData),
+            &mut Vec::new(),
+            100,
+            &|| false,
+            decrypted_read_error
+        ),
+        Err(Error::InvalidCiphertext)
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::write(&input, vec![1; 100000]).unwrap();
+    for cap in [1, 200, 1000] {
+        let output = dir.path().join(format!("cap-{cap}"));
+        assert_eq!(
+            encrypt_with_factor(
+                &input,
+                &output,
+                secret(),
+                Limits {
+                    max_output_bytes: cap,
+                    ..Limits::default()
+                },
+                &|| false,
+                10
+            ),
+            Err(Error::Limit)
+        );
+        assert!(!output.exists());
+        no_partial(dir.path());
+    }
+}

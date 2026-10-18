@@ -189,7 +189,8 @@ fn listing_completeness_xml_limits_and_untrusted_metadata() {
     let base = response("/dav/", true);
     let valid = xml(&(base.clone() + &response("/dav/a", false)));
     let listing = listing::parse(&root, &requested, &valid, Some(750)).unwrap();
-    assert!(listing.safe_for_cleanup());
+    assert!(!listing.safe_for_cleanup());
+    assert_eq!(listing.completeness, Completeness::UnverifiedServer);
     assert_eq!(listing.entries[0].size, Some(11));
     assert!(!listing::parse(&root, &requested, &valid, None)
         .unwrap()
@@ -573,4 +574,56 @@ async fn cancelling_a_partial_download_removes_the_temporary_file() {
     assert_eq!(error.kind, ErrorKind::Cancelled);
     task.await.unwrap();
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn unexpected_success_status_on_a_read_does_not_claim_a_mutation() {
+    let (client, task) = server(1, |_| reply(201, vec![])).await;
+    let error = client
+        .head(&RemotePath::new(&["a"]).unwrap(), &CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::InvalidResponse);
+    assert!(!error.outcome_unknown);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_capability_probe_still_deletes_its_owned_directory_once() {
+    let mut step = 0;
+    let mut folder = String::new();
+    let (client, task) = server(3, move |request| {
+        step += 1;
+        match step {
+            1 => {
+                assert_eq!(request.method, "MKCOL");
+                folder = request.target.trim_end_matches('/').to_owned();
+                reply(201, vec![])
+            }
+            2 => {
+                assert_eq!(request.method, "PUT");
+                reply(403, vec![])
+            }
+            3 => {
+                assert_eq!(request.method, "DELETE");
+                assert_eq!(request.target, folder);
+                reply(204, vec![])
+            }
+            _ => unreachable!(),
+        }
+    })
+    .await;
+    assert_eq!(
+        client
+            .probe_capabilities(
+                &RemotePath::root(),
+                uuid::Uuid::new_v4(),
+                &CancellationToken::new()
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::Permission
+    );
+    task.await.unwrap();
 }

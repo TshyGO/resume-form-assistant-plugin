@@ -132,7 +132,10 @@ pub(crate) fn parse(
         continuation = true;
     }
     let completeness = match known_limit {
-        Some(limit) if count < limit && !continuation => Completeness::Complete,
+        // A documented response cap detects truncation; it does not prove a
+        // particular account/server returned every entry. #306 must establish a
+        // verified listing contract before enabling retention cleanup in #305.
+        Some(limit) if count < limit && !continuation => Completeness::UnverifiedServer,
         Some(_) => Completeness::PossiblyTruncated,
         None => Completeness::UnverifiedServer,
     };

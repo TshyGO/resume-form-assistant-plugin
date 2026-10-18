@@ -530,3 +530,16 @@ fn invalid_startup_pointers_never_create_a_replacement_archive() {
         .is_err());
     }
 }
+
+#[test]
+fn a_leftover_recovery_pointer_can_be_atomically_replaced_on_this_platform() {
+    let here = layout();
+    here.open().seed("original");
+    let saved = crate::restore::recovery_pointer_path(&here.paths.current_pointer);
+    std::fs::write(&saved, b"previous recovery bytes").unwrap();
+    let package = here.export_to("original.rpbak");
+    restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    assert!(!saved.exists());
+    here.seed("writable after replace");
+    assert_eq!(here.with(|store| store.counts().unwrap().applications), 2);
+}

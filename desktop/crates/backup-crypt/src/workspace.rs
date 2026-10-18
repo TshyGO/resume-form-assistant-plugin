@@ -5,15 +5,18 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-fn plain_directory(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+fn linked(metadata: &fs::Metadata) -> bool {
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
     let linked = {
         use std::os::windows::fs::MetadataExt;
         linked || metadata.file_attributes() & 0x400 != 0 // reparse point / junction
     };
-    if linked || !metadata.is_dir() {
+    linked
+}
+fn plain_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if linked(&metadata) || !metadata.is_dir() {
         return Err(io::Error::other(
             "backup workspace must be a plain directory",
         ));
@@ -51,8 +54,10 @@ pub fn cleanup_abandoned_jobs(data_root: &Path) -> io::Result<()> {
             && name.len() == 36
             && name[4..].bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
-            plain_directory(&entry.path())?;
-            fs::remove_dir_all(entry.path())?;
+            let metadata = fs::symlink_metadata(entry.path())?;
+            if metadata.is_dir() && !linked(&metadata) {
+                fs::remove_dir_all(entry.path())?;
+            }
         }
     }
     Ok(())
@@ -103,8 +108,13 @@ mod tests {
         fs::write(abandoned.join("partial"), b"synthetic").unwrap();
         let unrelated = root.path().join("cloud-backup-work/unrelated");
         fs::create_dir(&unrelated).unwrap();
+        let alien = root
+            .path()
+            .join(format!("cloud-backup-work/job-{}", "a".repeat(32)));
+        fs::write(&alien, b"unrelated file").unwrap();
         cleanup_abandoned_jobs(root.path()).unwrap();
         assert!(!abandoned.exists());
         assert!(unrelated.exists());
+        assert!(alien.exists());
     }
 }

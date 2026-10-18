@@ -224,7 +224,7 @@ impl Client {
         let response = self
             .read_response(Method::from_bytes(b"PROPFIND").unwrap(), path, cancel)
             .await?;
-        expect_status(&response, &[207])?;
+        expect_status(&response, &[207], false)?;
         let bytes = bounded_bytes(response, listing::MAX_XML_BYTES, cancel).await?;
         listing::parse(&self.root, path, &bytes, self.known_listing_limit)
     }
@@ -234,7 +234,7 @@ impl Client {
         cancel: &CancellationToken,
     ) -> Result<ObjectInfo, Error> {
         let response = self.read_response(Method::HEAD, path, cancel).await?;
-        expect_status(&response, &[200])?;
+        expect_status(&response, &[200], false)?;
         let size = response
             .headers()
             .get(header::CONTENT_LENGTH)
@@ -265,7 +265,7 @@ impl Client {
             return Err(Error::new(ErrorKind::TooLarge));
         }
         let response = self.read_response(Method::GET, path, cancel).await?;
-        expect_status(&response, &[200])?;
+        expect_status(&response, &[200], false)?;
         bounded_bytes(response, max, cancel).await
     }
     pub async fn mkcol(&self, path: &RemotePath, cancel: &CancellationToken) -> Result<(), Error> {
@@ -279,7 +279,7 @@ impl Client {
                 true,
             )
             .await?;
-        expect_status(&response, &[201])
+        expect_status(&response, &[201], true)
     }
     /// Create-only PUT. Probe If-None-Match semantics and use unique owned names.
     pub async fn put_bytes_new(
@@ -297,7 +297,7 @@ impl Client {
             .header(header::CONTENT_LENGTH, bytes.len())
             .body(bytes);
         let response = self.perform(request, cancel, true).await?;
-        expect_status(&response, &[201, 204])
+        expect_status(&response, &[201, 204], true)
     }
     pub async fn put_file_new(
         &self,
@@ -325,7 +325,7 @@ impl Client {
             .header(header::CONTENT_LENGTH, length)
             .body(body);
         let response = self.perform(request, cancel, true).await?;
-        expect_status(&response, &[201, 204])
+        expect_status(&response, &[201, 204], true)
     }
     pub async fn move_new(
         &self,
@@ -342,7 +342,7 @@ impl Client {
             .header("Destination", destination.as_str())
             .header("Overwrite", "F");
         let response = self.perform(request, cancel, true).await?;
-        expect_status(&response, &[201, 204])
+        expect_status(&response, &[201, 204], true)
     }
     pub async fn delete(&self, path: &RemotePath, cancel: &CancellationToken) -> Result<(), Error> {
         if path.0.is_empty() {
@@ -351,7 +351,7 @@ impl Client {
         let response = self
             .perform(self.request(Method::DELETE, path)?, cancel, true)
             .await?;
-        expect_status(&response, &[200, 204])
+        expect_status(&response, &[200, 204], true)
     }
     /// Publish a new task file only when the complete bounded download is on disk.
     pub async fn download_new(
@@ -365,7 +365,7 @@ impl Client {
             return Err(Error::new(ErrorKind::InvalidConfig));
         }
         let mut response = self.read_response(Method::GET, path, cancel).await?;
-        expect_status(&response, &[200])?;
+        expect_status(&response, &[200], false)?;
         let expected = response.content_length();
         if expected.is_some_and(|length| length > max) {
             return Err(Error::new(ErrorKind::TooLarge));
@@ -419,7 +419,7 @@ impl Client {
         })
     }
 }
-fn expect_status(response: &Response, allowed: &[u16]) -> Result<(), Error> {
+fn expect_status(response: &Response, allowed: &[u16], mutation: bool) -> Result<(), Error> {
     if allowed.contains(&response.status().as_u16()) {
         Ok(())
     } else {
@@ -427,7 +427,7 @@ fn expect_status(response: &Response, allowed: &[u16]) -> Result<(), Error> {
             kind: ErrorKind::InvalidResponse,
             status: Some(response.status().as_u16()),
             retry_after: None,
-            outcome_unknown: true,
+            outcome_unknown: mutation,
         })
     }
 }

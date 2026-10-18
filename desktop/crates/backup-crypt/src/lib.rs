@@ -57,8 +57,26 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 impl From<io::Error> for Error {
-    fn from(_: io::Error) -> Self {
-        Self::Io
+    fn from(error: io::Error) -> Self {
+        if error.kind() == io::ErrorKind::FileTooLarge {
+            Self::Limit
+        } else {
+            Self::Io
+        }
+    }
+}
+
+fn decrypted_read_error(error: io::Error) -> Error {
+    match error.kind() {
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => Error::InvalidCiphertext,
+        _ => Error::from(error),
+    }
+}
+fn decrypt_error(error: age::DecryptError) -> Error {
+    match error {
+        age::DecryptError::Io(error) => decrypted_read_error(error),
+        age::DecryptError::ExcessiveWork { .. } => Error::Limit,
+        _ => Error::InvalidCiphertext,
     }
 }
 
@@ -94,12 +112,13 @@ fn copy_bounded(
     output: &mut impl Write,
     max: u64,
     cancel: &impl Fn() -> bool,
+    read_error: fn(io::Error) -> Error,
 ) -> Result<u64, Error> {
     let mut buffer = [0u8; 64 * 1024];
     let mut total = 0u64;
     loop {
         check_cancel(cancel)?;
-        let count = input.read(&mut buffer)?;
+        let count = input.read(&mut buffer).map_err(read_error)?;
         if count == 0 {
             return Ok(total);
         }
@@ -146,28 +165,43 @@ fn encrypt_with_factor(
         age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
             .map_err(|_| Error::Encryption)?;
     check_cancel(cancel)?;
-    {
+    let limit_hit = std::cell::Cell::new(false);
+    let result: Result<(), Error> = (|| {
         // Limit the encrypted stream too, including header and authentication tags.
         let mut bounded = LimitedWriter {
             inner: output.as_file_mut(),
             remaining: limits.max_output_bytes,
+            limit_hit: &limit_hit,
         };
-        let mut encrypted = encryptor
-            .wrap_output(&mut bounded)
-            .map_err(|_| Error::Encryption)?;
-        copy_bounded(&mut input, &mut encrypted, limits.max_input_bytes, cancel)?;
-        encrypted.finish().map_err(|_| Error::Encryption)?;
+        let mut encrypted = encryptor.wrap_output(&mut bounded).map_err(Error::from)?;
+        copy_bounded(
+            &mut input,
+            &mut encrypted,
+            limits.max_input_bytes,
+            cancel,
+            Error::from,
+        )?;
+        encrypted.finish().map_err(Error::from)?;
+        Ok(())
+    })();
+    // age's header encoder may wrap an underlying IO error as ErrorKind::Other.
+    // Preserve the explicit cap signal across that layer too.
+    if limit_hit.get() {
+        return Err(Error::Limit);
     }
+    result?;
     publish(output, destination, cancel)
 }
 
 struct LimitedWriter<'a> {
     inner: &'a mut File,
     remaining: u64,
+    limit_hit: &'a std::cell::Cell<bool>,
 }
 impl Write for LimitedWriter<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if buffer.len() as u64 > self.remaining {
+            self.limit_hit.set(true);
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
                 "encrypted output limit",
@@ -224,7 +258,7 @@ pub fn decrypt_file(
     }
     let file = input_file(input, limits)?;
     let decryptor = age::Decryptor::new_buffered(bounded_header(file, limits.max_input_bytes)?)
-        .map_err(|_| Error::InvalidCiphertext)?;
+        .map_err(decrypt_error)?;
     if !decryptor.is_scrypt() {
         return Err(Error::InvalidCiphertext);
     }
@@ -232,7 +266,7 @@ pub fn decrypt_file(
     identity.set_max_work_factor(limits.max_work_factor);
     let mut decrypted = decryptor
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
-        .map_err(|_| Error::InvalidCiphertext)?;
+        .map_err(decrypt_error)?;
     check_cancel(cancel)?;
     let parent = destination.parent().ok_or(Error::InvalidInput)?;
     let mut output = tempfile::Builder::new()
@@ -245,14 +279,8 @@ pub fn decrypt_file(
         output.as_file_mut(),
         limits.max_output_bytes,
         cancel,
-    )
-    .map_err(|error| {
-        if error == Error::Io {
-            Error::InvalidCiphertext
-        } else {
-            error
-        }
-    })?;
+        decrypted_read_error,
+    )?;
     publish(output, destination, cancel)
 }
 

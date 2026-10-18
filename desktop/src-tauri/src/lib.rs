@@ -823,9 +823,8 @@ fn purge_application_cmd(
     state: State<AppState>,
     id: String,
 ) -> Result<recycle_commands::PurgeResult, CommandError> {
-    let archive_dir = restore_paths(&state)?.archive_dir;
     with_store(&state, |store| {
-        recycle_commands::purge(store, &archive_dir, &id)
+        recycle_commands::purge(store, store.archive_dir(), &id)
     })
 }
 
@@ -838,9 +837,8 @@ fn orphan_report_cmd(
 
 #[tauri::command]
 fn remove_orphan_cmd(state: State<AppState>, sha256: String) -> Result<(), CommandError> {
-    let archive_dir = restore_paths(&state)?.archive_dir;
     with_store(&state, |store| {
-        recycle_commands::remove_orphan(store, &archive_dir, &sha256)
+        recycle_commands::remove_orphan(store, store.archive_dir(), &sha256)
     })
 }
 
