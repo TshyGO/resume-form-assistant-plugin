@@ -39,6 +39,122 @@ pub fn open_store(
     ArchiveStore::open(ArchiveConfig::new(archive_dir, current_pointer)).map_err(CommandError::from)
 }
 
+/// Startup must follow the machine pointer after a restore, rather than opening
+/// the retired default directory (or silently creating an empty replacement).
+pub fn open_current_store(
+    default_dir: &std::path::Path,
+    pointer: &std::path::Path,
+) -> Result<ArchiveStore, CommandError> {
+    use std::io::Read;
+    if !pointer.exists() {
+        let saved = crate::restore::recovery_pointer_path(pointer);
+        match std::fs::File::open(&saved) {
+            Ok(file) => {
+                let mut bytes = Vec::new();
+                file.take(64 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| CommandError {
+                        code: "STORE_OPEN_FAILED".into(),
+                        message: "无法读取恢复前的档案指针。".into(),
+                    })?;
+                if bytes.len() > 64 * 1024 {
+                    return Err(CommandError {
+                        code: "STORE_OPEN_FAILED".into(),
+                        message: "恢复前的档案指针超出上限。".into(),
+                    });
+                }
+                crate::restore::restore_pointer(pointer, &bytes)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(CommandError {
+                    code: "STORE_OPEN_FAILED".into(),
+                    message: "无法读取恢复前的档案指针。".into(),
+                })
+            }
+        }
+    }
+    let file = match std::fs::File::open(pointer) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            refuse_missing_pointer_with_archive_history(default_dir)?;
+            return open_store(default_dir, pointer);
+        }
+        Err(_) => {
+            return Err(CommandError {
+                code: "STORE_OPEN_FAILED".into(),
+                message: "无法读取当前档案指针。".into(),
+            })
+        }
+    };
+    let invalid = || CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: "当前档案指针无效或目录丢失；没有创建替代档案。".into(),
+    };
+    let mut raw = Vec::new();
+    file.take(64 * 1024 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|_| invalid())?;
+    if raw.len() > 64 * 1024 {
+        return Err(invalid());
+    }
+    let current: archive_store::CurrentPointer =
+        serde_json::from_slice(&raw).map_err(|_| invalid())?;
+    let active = std::path::PathBuf::from(current.archive_dir);
+    let root = default_dir
+        .parent()
+        .ok_or_else(invalid)?
+        .canonicalize()
+        .map_err(|_| invalid())?;
+    let canonical = active.canonicalize().map_err(|_| invalid())?;
+    if !active.is_absolute()
+        || canonical == root
+        || !canonical.starts_with(&root)
+        || !canonical.join("archive.db").is_file()
+    {
+        return Err(invalid());
+    }
+    let store = open_store(&active, pointer)?;
+    let _ = std::fs::remove_file(crate::restore::recovery_pointer_path(pointer));
+    Ok(store)
+}
+
+fn refuse_missing_pointer_with_archive_history(
+    default_dir: &std::path::Path,
+) -> Result<(), CommandError> {
+    let root = default_dir.parent().ok_or_else(|| CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: "无法确认档案根目录。".into(),
+    })?;
+    let fail = || CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: "当前档案指针丢失，但发现恢复/回滚历史；请先恢复指针，没有创建替代档案。".into(),
+    };
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(fail()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|_| fail())?;
+        if entry.file_name().to_string_lossy().starts_with("archive-")
+            && entry.path().join("archive.db").exists()
+        {
+            return Err(fail());
+        }
+    }
+    match std::fs::read_dir(root.join("archives-retired")) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(fail());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fail()),
+    }
+    Ok(())
+}
+
 fn occurred_now() -> Occurred {
     Occurred::DateTime {
         rfc3339: now_utc(),

@@ -4,6 +4,7 @@ mod ai_complete;
 #[cfg(test)]
 mod ai_commands_tests;
 mod ai_credentials;
+mod cloud_credentials;
 mod ai_models;
 mod ai_provider_commands;
 mod ai_settings;
@@ -75,6 +76,9 @@ struct AppState {
     /// D11：桌面这条 AI Key 的存放处。只有发请求时才从这里取，
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
+    cloud_credentials: Box<dyn cloud_credentials::CredentialStore>,
+    /// None after cleanup failure: #305 must acquire a prepared workspace before jobs.
+    cloud_workspace: Mutex<Option<backup_crypt::workspace::PreparedWorkspace>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
     /// 不排队也不重试。
     ai_inflight: ai_commands::InflightRegistry,
@@ -623,41 +627,145 @@ fn restore_paths(state: &AppState) -> Result<restore::RestorePaths, CommandError
 }
 
 #[tauri::command]
-fn export_archive_cmd(
-    state: State<AppState>,
+async fn set_cloud_backup_credential(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    kind: cloud_credentials::Kind,
+    value: String,
+) -> Result<(), CommandError> {
+    let value = backup_crypt::SecretString::from(value);
+    archive_worker(app, move |state| {
+        let binding = cloud_credentials::Binding::checked(&connection)?;
+        state
+            .cloud_credentials
+            .set(&binding, kind, value)
+            .map_err(CommandError::from)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn clear_cloud_backup_credential(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    kind: cloud_credentials::Kind,
+) -> Result<(), CommandError> {
+    archive_worker(app, move |state| {
+        let binding = cloud_credentials::Binding::checked(&connection)?;
+        state
+            .cloud_credentials
+            .clear(&binding, kind)
+            .map_err(CommandError::from)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn cloud_backup_credential_status(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+) -> Result<cloud_credentials::Status, CommandError> {
+    archive_worker(app, move |state| {
+        let binding = cloud_credentials::Binding::checked(&connection)?;
+        state
+            .cloud_credentials
+            .status(&binding)
+            .map_err(CommandError::from)
+    })
+    .await
+}
+
+/// The shared store mutex coordinates UI/IPC and archive switches. Disk-heavy
+/// jobs run off the WebView thread; callers receive their existing report/error.
+async fn archive_worker<T: Send + 'static>(
+    app: AppHandle,
+    job: impl FnOnce(&AppState) -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || job(&app.state::<AppState>()))
+        .await
+        .map_err(|_| CommandError {
+            code: "BACKUP_JOB_FAILED".into(),
+            message: "备份任务异常退出，请检查档案状态后重试。".into(),
+        })?
+}
+
+fn refresh_archive_paths(state: &AppState) -> Result<(), CommandError> {
+    // Match runtime_status's paths -> store lock order; never invert it.
+    let mut paths = state.paths.lock().map_err(|_| CommandError {
+        code: "STORE_ERROR".into(),
+        message: "paths lock poisoned".into(),
+    })?;
+    let store = state.store.lock().map_err(|_| CommandError {
+        code: "STORE_ERROR".into(),
+        message: "store lock poisoned".into(),
+    })?;
+    if let (Some(paths), Some(store)) = (paths.as_mut(), store.as_ref()) {
+        paths.archive_dir = store.archive_dir().to_path_buf();
+        paths.attachments_dir = paths.archive_dir.join("attachments");
+        paths.snapshots_dir = paths.archive_dir.join("snapshots");
+        paths.tmp_dir = paths.archive_dir.join("tmp");
+        if let Ok(mut error) = state.store_error.lock() {
+            *error = None;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn export_archive_cmd(
+    app: AppHandle,
     destination: String,
 ) -> Result<backup_commands::ExportReport, CommandError> {
-    let paths = restore_paths(&state)?;
-    let now = time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
-    with_store(&state, |store| {
-        backup_commands::export(store, &paths, std::path::Path::new(&destination), &now)
+    archive_worker(app, move |state| {
+        let paths = restore_paths(state)?;
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        with_store(state, |store| {
+            backup_commands::export(store, &paths, std::path::Path::new(&destination), &now)
+        })
     })
+    .await
 }
 
 #[tauri::command]
-fn preview_restore_cmd(
-    state: State<AppState>,
+async fn preview_restore_cmd(
+    app: AppHandle,
     package: String,
 ) -> Result<backup_commands::RestorePreview, CommandError> {
-    let paths = restore_paths(&state)?;
-    with_store(&state, |store| {
-        backup_commands::preview(store, &paths, std::path::Path::new(&package))
+    archive_worker(app, move |state| {
+        let paths = restore_paths(state)?;
+        let guard = state.store.lock().map_err(|_| CommandError {
+            code: "STORE_ERROR".into(),
+            message: "store lock poisoned".into(),
+        })?;
+        backup_commands::preview_optional(guard.as_ref(), &paths, std::path::Path::new(&package))
     })
+    .await
 }
 
 #[tauri::command]
-fn restore_archive_cmd(
-    state: State<AppState>,
+async fn restore_archive_cmd(
+    app: AppHandle,
     package: String,
 ) -> Result<restore::RestoreReport, CommandError> {
-    let paths = restore_paths(&state)?;
-    let slot = backup_commands::StoreSlot { slot: &state.store };
-    backup_commands::restore(
-        &slot,
-        &paths,
-        std::path::Path::new(&package),
-        &time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),
-    )
+    archive_worker(app, move |state| {
+        let paths = restore_paths(state)?;
+        let slot = backup_commands::StoreSlot { slot: &state.store };
+        let result = backup_commands::restore(
+            &slot,
+            &paths,
+            std::path::Path::new(&package),
+            &time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        );
+        if result.is_ok() {
+            refresh_archive_paths(state)?;
+        }
+        result
+    })
+    .await
 }
 
 #[tauri::command]
@@ -668,13 +776,27 @@ fn list_rollback_points_cmd(
 }
 
 #[tauri::command]
-fn rollback_to_cmd(
-    state: State<AppState>,
+async fn rollback_to_cmd(
+    app: AppHandle,
     id: String,
 ) -> Result<restore::RestoreReport, CommandError> {
-    let paths = restore_paths(&state)?;
-    let slot = backup_commands::StoreSlot { slot: &state.store };
-    backup_commands::rollback(&slot, &paths, &id, &time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default())
+    archive_worker(app, move |state| {
+        let paths = restore_paths(state)?;
+        let slot = backup_commands::StoreSlot { slot: &state.store };
+        let result = backup_commands::rollback(
+            &slot,
+            &paths,
+            &id,
+            &time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        );
+        if result.is_ok() {
+            refresh_archive_paths(state)?;
+        }
+        result
+    })
+    .await
 }
 
 #[tauri::command]
@@ -708,9 +830,8 @@ fn purge_application_cmd(
     state: State<AppState>,
     id: String,
 ) -> Result<recycle_commands::PurgeResult, CommandError> {
-    let archive_dir = restore_paths(&state)?.archive_dir;
     with_store(&state, |store| {
-        recycle_commands::purge(store, &archive_dir, &id)
+        recycle_commands::purge(store, store.archive_dir(), &id)
     })
 }
 
@@ -723,9 +844,8 @@ fn orphan_report_cmd(
 
 #[tauri::command]
 fn remove_orphan_cmd(state: State<AppState>, sha256: String) -> Result<(), CommandError> {
-    let archive_dir = restore_paths(&state)?.archive_dir;
     with_store(&state, |store| {
-        recycle_commands::remove_orphan(store, &archive_dir, &sha256)
+        recycle_commands::remove_orphan(store, store.archive_dir(), &sha256)
     })
 }
 
@@ -1645,6 +1765,8 @@ pub fn run() {
             hidden_launch,
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
+            cloud_credentials: Box::new(cloud_credentials::KeyringStore),
+            cloud_workspace: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
             latest_update: Mutex::new(None),
@@ -1688,11 +1810,19 @@ pub fn run() {
             }
             match DataHost::initialize() {
                 Ok(host) => {
+                    // Host lock excludes a second process's live backup jobs.
+                    // A cleanup failure blocks cloud jobs, not access to archives.
+                    match backup_crypt::workspace::PreparedWorkspace::prepare(&host.paths().data_root) {
+                        Ok(workspace) => {
+                            if let Ok(mut slot) = app.state::<AppState>().cloud_workspace.lock() { *slot = Some(workspace); }
+                        },
+                        Err(_) => eprintln!("cloud backup workspace cleanup failed; retry cleanup before cloud jobs"),
+                    }
                     if let Ok(mut paths) = app.state::<AppState>().paths.lock() {
                         *paths = Some(host.paths().clone());
                     }
                     let services = Arc::new(bridge_services::DesktopBridgeServices::new(app.handle().clone()));
-                    match open_store(&host.paths().archive_dir, &host.paths().current_pointer) {
+                    match commands::open_current_store(&host.paths().archive_dir, &host.paths().current_pointer) {
                         Ok(store) => {
                             if let Err(code) = legacy_import_commands::expire(&store, services.as_ref()) {
                                 eprintln!("legacy import cleanup deferred: {}", code.as_str());
@@ -1700,6 +1830,8 @@ pub fn run() {
                             if let Ok(mut slot) = app.state::<AppState>().store.lock() {
                                 *slot = Some(store);
                             }
+                            refresh_archive_paths(&app.state::<AppState>())
+                                .map_err(|error| std::io::Error::other(error.message))?;
                         }
                         Err(err) => {
                             if let Ok(mut slot) = app.state::<AppState>().store_error.lock() {
@@ -1848,6 +1980,9 @@ pub fn run() {
             overdue_digest_cmd,
             reminder_capability_cmd,
             export_archive_cmd,
+            set_cloud_backup_credential,
+            clear_cloud_backup_credential,
+            cloud_backup_credential_status,
             preview_restore_cmd,
             restore_archive_cmd,
             list_rollback_points_cmd,

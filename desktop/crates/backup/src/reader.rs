@@ -26,6 +26,10 @@ pub const MAX_ENTRIES: usize = 200_000;
 /// 包腾地方。
 pub const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
+/// Network-sourced manifests must not allocate according to attacker-controlled
+/// decompressed lengths. The writer enforces the same bound.
+pub const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct ExtractReport {
     pub staging: PathBuf,
@@ -43,12 +47,21 @@ pub fn read_manifest(package: &Path) -> Result<Manifest, BackupError> {
             zip.len()
         )));
     }
+    let entry = zip
+        .by_name(MANIFEST_PATH)
+        .map_err(|_| BackupError::Unreadable(crate::UnreadableManifest::NotOurs))?;
+    if entry.size() > MAX_MANIFEST_BYTES {
+        return Err(BackupError::Mismatch("备份清单超出大小上限".into()));
+    }
     let mut raw = String::new();
-    zip.by_name(MANIFEST_PATH)
-        .map_err(|_| BackupError::Unreadable(crate::UnreadableManifest::NotOurs))?
+    entry
+        .take(MAX_MANIFEST_BYTES + 1)
         .read_to_string(&mut raw)?;
-    let manifest: Manifest =
-        serde_json::from_str(&raw).map_err(|_| BackupError::Unreadable(crate::UnreadableManifest::Corrupt))?;
+    if raw.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(BackupError::Mismatch("备份清单超出大小上限".into()));
+    }
+    let manifest: Manifest = serde_json::from_str(&raw)
+        .map_err(|_| BackupError::Unreadable(crate::UnreadableManifest::Corrupt))?;
     manifest.check_readable()?;
     check_entries(&manifest)?;
     Ok(manifest)
@@ -58,9 +71,16 @@ fn check_entries(manifest: &Manifest) -> Result<(), BackupError> {
     if manifest.entries.is_empty() {
         return Err(BackupError::Mismatch("备份是空的。".into()));
     }
+    if manifest.entries.len() >= MAX_ENTRIES {
+        return Err(BackupError::Mismatch("清单条目超出上限".into()));
+    }
+    let mut seen = std::collections::HashSet::new();
     let mut total: u64 = 0;
     for entry in &manifest.entries {
         safe_relative_path(&entry.path)?;
+        if !seen.insert(&entry.path) || entry.path == MANIFEST_PATH {
+            return Err(BackupError::Mismatch("清单包含重复或保留条目".into()));
+        }
         if entry.sha256.len() != 64 || !entry.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(BackupError::Mismatch(format!(
                 "`{}` 的哈希不是 64 位十六进制",
@@ -104,7 +124,9 @@ pub fn safe_relative_path(raw: &str) -> Result<PathBuf, BackupError> {
         match component {
             Component::Normal(part) => {
                 if part.is_empty() {
-                    return Err(BackupError::Mismatch(format!("条目名里有空路径段：`{raw}`")));
+                    return Err(BackupError::Mismatch(format!(
+                        "条目名里有空路径段：`{raw}`"
+                    )));
                 }
                 // 冒号要在这里挡，不能指望 `components()`。
                 //
@@ -258,7 +280,10 @@ fn extract_one(
     }
     let actual = hex(hasher.finalize().as_slice());
     if actual != entry.sha256 {
-        return Err(BackupError::Mismatch(format!("`{}` 的内容被改过", entry.path)));
+        return Err(BackupError::Mismatch(format!(
+            "`{}` 的内容被改过",
+            entry.path
+        )));
     }
     Ok(written)
 }

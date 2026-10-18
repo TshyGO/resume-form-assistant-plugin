@@ -1,0 +1,13 @@
+[package]
+name = "backup-crypt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+
+[dependencies]
+age = { version = "=0.12.1", default-features = false }
+tempfile = "3"
+
+[dev-dependencies]
+sha2 = "0.10"

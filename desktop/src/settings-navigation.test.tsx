@@ -77,6 +77,26 @@ function dialog() {
   return document.querySelector<HTMLDialogElement>("dialog.settings-dialog");
 }
 
+test("rescue preview shows unreadable current counts and still requires explicit confirmation", async () => {
+  const calls: string[] = [];
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    calls.push(name);
+    if (name === "preview_restore_cmd") return { ...preview, currentAvailable: false } as T;
+    if (name === "restore_archive_cmd") return { counts, rollbackPoint: "rescued", remindersCleared: 0 } as T;
+    return [] as T;
+  };
+  mountBackup(invoke, { open: async () => "rescue.zip", save: null });
+  fireEvent.click(document.getElementById("backup-choose-restore")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  const box = within(dialog()!);
+  expect(box.getByText(/当前档案打不开/)).toBeTruthy();
+  expect(box.getAllByText("无法读取")).toHaveLength(6);
+  expect(calls).not.toContain("restore_archive_cmd");
+  fireEvent.click(box.getByRole("button", { name: "恢复并替换当前档案" }));
+  await waitFor(() => expect(dialog()).toBeNull());
+  expect(calls.filter((name) => name === "restore_archive_cmd")).toHaveLength(1);
+});
+
 test("restore preview is one dialog with six counts; refreshing the category keeps it; only its confirm dispatches", async () => {
   const root = document.getElementById("view-settings")!;
   const calls: Array<{ name: string; args?: Record<string, unknown> }> = [];

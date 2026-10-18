@@ -13,7 +13,7 @@ mod reader;
 mod writer;
 
 pub use manifest::{ArchiveCounts, Manifest, ManifestEntry, UnreadableManifest};
-pub use reader::{extract_to_staging, read_manifest, safe_relative_path, ExtractReport};
+pub use reader::{extract_to_staging, read_manifest, safe_relative_path, ExtractReport, MAX_MANIFEST_BYTES, MAX_TOTAL_BYTES};
 pub use writer::{write_archive, ArchiveSource, ReferencedFile, WriteReport};
 
 #[derive(Debug)]

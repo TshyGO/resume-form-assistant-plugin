@@ -58,6 +58,7 @@ pub struct RollbackPoint {
 }
 
 /// 布局里 D12 要用到的几个位置。
+#[derive(Clone)]
 pub struct RestorePaths {
     pub data_root: PathBuf,
     pub archive_dir: PathBuf,
@@ -97,7 +98,9 @@ pub fn export_archive(
             .ok()
             .and_then(|raw| portable_settings(&raw));
         let source = ArchiveSource {
-            archive_dir: &paths.archive_dir,
+            // HostPaths is a startup snapshot; after restore the live store owns
+            // a different directory. Database and files must come from one archive.
+            archive_dir: store.archive_dir(),
             database_snapshot: &snapshot,
             archive_id: store.identity().archive_id,
             schema_version: store.schema_version(),
@@ -156,6 +159,36 @@ pub fn restore_archive(
     now: &str,
     close_current: impl FnOnce() -> Result<(), CommandError>,
 ) -> Result<RestoreReport, CommandError> {
+    restore_archive_open(paths, package, now, close_current).map(|(report, _store)| report)
+}
+
+/// Keep the newly opened store alive through activation. The command layer installs
+/// this exact handle, avoiding a fallible second open after the old archive retired.
+pub(crate) fn restore_archive_open(
+    paths: &RestorePaths,
+    package: &Path,
+    now: &str,
+    close_current: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(RestoreReport, ArchiveStore), CommandError> {
+    let prepared = prepare_restore(paths, package)?;
+    activate_restore(paths, prepared, now, close_current)
+}
+
+pub(crate) struct PreparedRestore {
+    staging: PathBuf,
+}
+
+impl Drop for PreparedRestore {
+    fn drop(&mut self) {
+        cleanup(&self.staging);
+    }
+}
+
+/// Validate an isolated package without holding the active store mutex.
+pub(crate) fn prepare_restore(
+    paths: &RestorePaths,
+    package: &Path,
+) -> Result<PreparedRestore, CommandError> {
     let staging_root = paths.staging_root();
     std::fs::create_dir_all(&staging_root).map_err(|e| fail("IO_ERROR", e))?;
     let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
@@ -186,6 +219,20 @@ pub fn restore_archive(
     // 演练用的指针不能跟着进档案目录——current.json 是机器本地的东西。
     let _ = std::fs::remove_file(&rehearsal_pointer);
 
+    Ok(PreparedRestore { staging })
+}
+
+/// Called under the shared store mutex. Resolve the current pointer only now,
+/// since another restore may have completed while this package was prepared.
+pub(crate) fn activate_restore(
+    paths: &RestorePaths,
+    prepared: PreparedRestore,
+    now: &str,
+    close_current: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(RestoreReport, ArchiveStore), CommandError> {
+    let staging = &prepared.staging;
+    let staged_archive = staging.join("archive");
+
     // 3. 松开旧库，把 staging 挪成一个正式档案目录，然后切换。
     //    切换之前先记下现在生效的是哪个目录——切完指针就问不出来了。
     let previous = live_archive_dir(paths).or_else(|| {
@@ -194,7 +241,17 @@ pub fn restore_archive(
             .exists()
             .then(|| paths.archive_dir.clone())
     });
-    close_current()?;
+    let previous_pointer = match read_previous_pointer(&paths.current_pointer) {
+        Ok(pointer) => pointer,
+        Err(error) => {
+            cleanup(&staging);
+            return Err(error);
+        }
+    };
+    if let Err(error) = close_current() {
+        cleanup(&staging);
+        return Err(error);
+    }
     let restored_dir = paths
         .data_root
         .join(format!("archive-{}", uuid::Uuid::new_v4()));
@@ -204,26 +261,32 @@ pub fn restore_archive(
     }
     cleanup(&staging);
 
-    let outcome = switch_to(paths, &restored_dir);
+    let outcome = switch_to(paths, &restored_dir, previous_pointer.as_deref());
 
     match outcome {
-        Ok((identity, reminders_cleared, counts)) => {
+        Ok((store, reminders_cleared, counts)) => {
+            let identity = store.identity();
             // 4. 旧档案退休成回滚点。这一步失败不影响恢复本身——指针已经指向
             //    新档案，旧目录留在原地也还在，只是没进退休目录。
             let rollback_point = retire(paths, previous, now)
                 .unwrap_or_else(|_| "（旧档案未能移入回滚目录）".into());
-            Ok(RestoreReport {
-                archive_dir: restored_dir.to_string_lossy().to_string(),
-                restore_epoch: identity.restore_epoch,
-                rollback_point,
-                reminders_cleared,
-                counts,
-            })
+            Ok((
+                RestoreReport {
+                    archive_dir: restored_dir.to_string_lossy().to_string(),
+                    restore_epoch: identity.restore_epoch,
+                    rollback_point,
+                    reminders_cleared,
+                    counts,
+                },
+                store,
+            ))
         }
         Err(e) => {
             // 切换窗口里失败：把恢复出来的目录收掉，旧档案还在原地、旧指针已经
             // 写回去了（switch_to 负责），于是回到出发点。
-            let _ = std::fs::remove_dir_all(&restored_dir);
+            if e.code != "RESTORE_RECOVERY_FAILED" {
+                let _ = std::fs::remove_dir_all(&restored_dir);
+            }
             Err(e)
         }
     }
@@ -236,14 +299,31 @@ pub fn restore_archive(
 fn switch_to(
     paths: &RestorePaths,
     target: &Path,
-) -> Result<(archive_store::ArchiveIdentity, usize, ArchiveCounts), CommandError> {
-    let previous_pointer = std::fs::read(&paths.current_pointer).ok();
-    let restore_pointer = || {
-        if let Some(bytes) = &previous_pointer {
-            let _ = std::fs::write(&paths.current_pointer, bytes);
+    previous_pointer: Option<&[u8]>,
+) -> Result<(ArchiveStore, usize, ArchiveCounts), CommandError> {
+    if previous_pointer.is_some() {
+        std::fs::remove_file(&paths.current_pointer).map_err(|e| fail("IO_ERROR", e))?;
+    }
+    let recover = |error: CommandError| -> CommandError {
+        let recovery = match previous_pointer {
+            Some(bytes) => restore_pointer(&paths.current_pointer, bytes),
+            None => match std::fs::remove_file(&paths.current_pointer) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(fail("IO_ERROR", error)),
+            },
+        };
+        match recovery {
+            Ok(()) => error,
+            Err(recovery) => fail(
+                "RESTORE_RECOVERY_FAILED",
+                format!(
+                    "{}；旧指针恢复失败：{}。旧档案与候选档案保留，请重试恢复。",
+                    error.message, recovery.message
+                ),
+            ),
         }
     };
-    let _ = std::fs::remove_file(&paths.current_pointer);
 
     let store = match ArchiveStore::open(ArchiveConfig::new(
         target.to_path_buf(),
@@ -251,32 +331,72 @@ fn switch_to(
     )) {
         Ok(store) => store,
         Err(e) => {
-            restore_pointer();
-            return Err(fail("STORE_ERROR", format!("恢复出来的档案打不开：{e}")));
+            return Err(recover(fail(
+                "STORE_ERROR",
+                format!("恢复出来的档案打不开：{e}"),
+            )));
         }
     };
-
-    let identity = store.identity();
 
     // 提醒记账清零：句柄指向的是原来那台机器上的 OS 计划。
     let cleared = match store.clear_todo_reminders() {
         Ok(cleared) => cleared,
         Err(e) => {
             let _ = store.close();
-            restore_pointer();
-            return Err(fail("STORE_ERROR", e));
+            return Err(recover(fail("STORE_ERROR", e)));
         }
     };
     let counts = match store.counts() {
         Ok(counts) => counts,
         Err(e) => {
             let _ = store.close();
-            restore_pointer();
-            return Err(fail("STORE_ERROR", e));
+            return Err(recover(fail("STORE_ERROR", e)));
         }
     };
-    let _ = store.close();
-    Ok((identity, cleared, counts))
+    Ok((store, cleared, counts))
+}
+
+/// Atomically restore the saved machine pointer, and report failures rather than
+/// continuing with an unknown active archive. The original bytes preserve its epoch.
+pub(crate) fn restore_pointer(pointer: &Path, bytes: &[u8]) -> Result<(), CommandError> {
+    use std::io::Write;
+    let temporary = pointer.with_extension(format!("recovery-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, pointer)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map_err(|e| fail("IO_ERROR", e))
+}
+
+pub(crate) fn read_previous_pointer(pointer: &Path) -> Result<Option<Vec<u8>>, CommandError> {
+    use std::io::Read;
+    match std::fs::File::open(pointer) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(64 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| fail("IO_ERROR", error))?;
+            if bytes.len() > 64 * 1024 {
+                return Err(fail("IO_ERROR", "当前档案指针超出 64 KiB 上限。"));
+            }
+            Ok(Some(bytes))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(fail("IO_ERROR", error)),
+    }
+}
+
+pub(crate) fn recovery_pointer_path(pointer: &Path) -> PathBuf {
+    pointer.with_extension("restore-previous")
 }
 
 fn cleanup(staging: &Path) {
@@ -288,11 +408,17 @@ fn cleanup(staging: &Path) {
 /// **不能想当然地认为它就是 `<data_root>/archive`**：第一次恢复之后，生效的是
 /// `archive-<uuid>`，固定路径那个已经退休了。退休哪一个要看指针说的是哪一个。
 fn live_archive_dir(paths: &RestorePaths) -> Option<PathBuf> {
-    let raw = std::fs::read_to_string(&paths.current_pointer).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let raw = read_previous_pointer(&paths.current_pointer).ok()??;
+    let parsed: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     let dir = parsed.get("archive_dir")?.as_str()?;
     let path = PathBuf::from(dir);
-    path.exists().then_some(path)
+    let root = paths.data_root.canonicalize().ok()?;
+    let canonical = path.canonicalize().ok()?;
+    (path.is_absolute()
+        && canonical != root
+        && canonical.starts_with(&root)
+        && canonical.join("archive.db").is_file())
+    .then_some(path)
 }
 
 fn retire(
@@ -350,6 +476,15 @@ pub fn rollback_to(
     now: &str,
     close_current: impl FnOnce() -> Result<(), CommandError>,
 ) -> Result<RestoreReport, CommandError> {
+    rollback_to_open(paths, id, now, close_current).map(|(report, _store)| report)
+}
+
+pub(crate) fn rollback_to_open(
+    paths: &RestorePaths,
+    id: &str,
+    now: &str,
+    close_current: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(RestoreReport, ArchiveStore), CommandError> {
     // id 是从我们自己的目录列表里来的，但它经过了 WebView 一圈，当外部输入看。
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(fail("VALIDATION", "回滚点标识不合法。"));
@@ -365,31 +500,46 @@ pub fn rollback_to(
             .exists()
             .then(|| paths.archive_dir.clone())
     });
+    let previous_pointer = read_previous_pointer(&paths.current_pointer)?;
     close_current()?;
     let restored_dir = paths
         .data_root
         .join(format!("archive-{}", uuid::Uuid::new_v4()));
     std::fs::rename(&source, &restored_dir).map_err(|e| fail("IO_ERROR", e))?;
 
-    let (identity, reminders_cleared, counts) = match switch_to(paths, &restored_dir) {
-        Ok(result) => result,
-        Err(e) => {
-            // 挪回退休目录，回滚点没了才是真的糟糕。
-            let _ = std::fs::rename(&restored_dir, &source);
-            return Err(e);
-        }
-    };
+    let (store, reminders_cleared, counts) =
+        match switch_to(paths, &restored_dir, previous_pointer.as_deref()) {
+            Ok(result) => result,
+            Err(e) => {
+                // 挪回退休目录，回滚点没了才是真的糟糕。
+                if let Err(move_error) = std::fs::rename(&restored_dir, &source) {
+                    return Err(fail(
+                        "RESTORE_RECOVERY_FAILED",
+                        format!(
+                            "{}；回滚点无法移回：{move_error}。数据保留在 {}",
+                            e.message,
+                            restored_dir.display()
+                        ),
+                    ));
+                }
+                return Err(e);
+            }
+        };
 
     let rollback_point =
         retire(paths, previous, now).unwrap_or_else(|_| "（旧档案未能移入回滚目录）".into());
 
-    Ok(RestoreReport {
-        archive_dir: restored_dir.to_string_lossy().to_string(),
-        restore_epoch: identity.restore_epoch,
-        rollback_point,
-        reminders_cleared,
-        counts,
-    })
+    let identity = store.identity();
+    Ok((
+        RestoreReport {
+            archive_dir: restored_dir.to_string_lossy().to_string(),
+            restore_epoch: identity.restore_epoch,
+            rollback_point,
+            reminders_cleared,
+            counts,
+        },
+        store,
+    ))
 }
 
 #[cfg(test)]

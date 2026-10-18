@@ -174,14 +174,48 @@ fn build(
         counts: source.counts.clone(),
         entries,
     };
-    let json = serde_json::to_vec_pretty(&manifest)?;
-    add_bytes(&mut zip, options, MANIFEST_PATH, &json)?;
+    if manifest.entries.len() >= crate::reader::MAX_ENTRIES {
+        return Err(BackupError::Invalid("备份清单超出格式资源上限".into()));
+    }
+    let mut json = ManifestBuffer {
+        bytes: Vec::new(),
+        exceeded: false,
+    };
+    let result = serde_json::to_writer_pretty(&mut json, &manifest);
+    if json.exceeded {
+        return Err(BackupError::Invalid("备份清单超出格式资源上限".into()));
+    }
+    result?;
+    add_bytes(&mut zip, options, MANIFEST_PATH, &json.bytes)?;
 
     let mut finished = zip.finish()?;
     finished.flush()?;
     finished.sync_all()?;
     skipped.sort();
     Ok((manifest.entries.len(), skipped))
+}
+
+struct ManifestBuffer {
+    bytes: Vec<u8>,
+    exceeded: bool,
+}
+impl Write for ManifestBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() as u64
+            > crate::reader::MAX_MANIFEST_BYTES.saturating_sub(self.bytes.len() as u64)
+        {
+            self.exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "manifest limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn require_referenced_files(

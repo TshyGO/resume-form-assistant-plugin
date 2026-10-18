@@ -117,6 +117,26 @@ fn a_backup_carries_the_archive_and_a_manifest_that_describes_it() {
 }
 
 #[test]
+fn oversized_manifest_output_is_bounded_and_keeps_the_previous_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let archive_dir = dir.path().join("archive");
+    let snapshot = archive(dir.path());
+    let destination = dir.path().join("backup.rpbak");
+    let mut source = source(&archive_dir, &snapshot);
+    write_archive(&source, &destination).unwrap();
+    let previous = fs::read(&destination).unwrap();
+    source.created_at = "a".repeat(backup::MAX_MANIFEST_BYTES as usize + 1);
+    let error = write_archive(&source, &destination).unwrap_err();
+    assert!(error.to_string().contains("清单超出格式资源上限"));
+    assert_eq!(fs::read(destination).unwrap(), previous);
+    assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .contains(".tmp-")));
+}
+
+#[test]
 fn the_database_in_the_package_is_the_snapshot_not_the_live_file() {
     let dir = tempfile::tempdir().unwrap();
     let archive_dir = dir.path().join("archive");
