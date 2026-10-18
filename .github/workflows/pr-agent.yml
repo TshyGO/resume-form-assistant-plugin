@@ -66,13 +66,13 @@ jobs:
        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
         startsWith(github.event.comment.body, '/review')))
-    uses: TshyGO/ci-central/.github/workflows/pr-review.yml@db32de03974961bc2cc5a9b60428c4692cce7fb2
+    uses: TshyGO/ci-central/.github/workflows/pr-review.yml@e47cf7221a1c8f6d208ac80893e3f822e2ebcb49
     permissions:
       contents: read
       issues: write
       pull-requests: write
     with:
-      central_workflow_sha: db32de03974961bc2cc5a9b60428c4692cce7fb2
+      central_workflow_sha: e47cf7221a1c8f6d208ac80893e3f822e2ebcb49
     secrets:
       PR_AGENT_LANE_A_KEY: ${{ secrets.PR_AGENT_LANE_A_KEY }}
       PR_AGENT_LANE_A_API_BASE: ${{ secrets.PR_AGENT_LANE_A_API_BASE }}
