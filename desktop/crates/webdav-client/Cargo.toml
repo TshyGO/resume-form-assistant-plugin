@@ -1,0 +1,22 @@
+[package]
+name = "webdav-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+
+[dependencies]
+reqwest = { version = ">=0.13.0, <0.13.4", default-features = false, features = ["rustls", "stream", "system-proxy"] }
+tokio = { version = "1", features = ["fs", "io-util", "sync", "time", "macros"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+url = "2.5.8"
+percent-encoding = "2"
+roxmltree = "=0.21.1"
+secrecy = "0.10"
+httpdate = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }

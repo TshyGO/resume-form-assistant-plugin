@@ -8,15 +8,15 @@
 //! `restore_epoch_mismatch`，旧 epoch 只能走只读对账。这里只需要**不去绕开它**，
 //! 并且有一条回归测试盯着「恢复之后拿旧 epoch 提交会被拒」。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use archive_store::{ArchiveCounts, ArchiveStore};
 use serde::Serialize;
 
 use crate::commands::CommandError;
 use crate::restore::{
-    export_archive, list_rollback_points, restore_archive, rollback_to, RestorePaths, RestoreReport,
-    RollbackPoint,
+    export_archive, list_rollback_points, restore_archive_open, rollback_to_open, RestorePaths,
+    RestoreReport, RollbackPoint,
 };
 
 /// 回滚点最多留几个（拆分计划 Q3）。超出**只提示不自动删**——自动删会在用户
@@ -123,15 +123,69 @@ impl StoreSlot<'_> {
         }
         Ok(())
     }
+}
 
-    fn reopen(&self, archive_dir: &Path, pointer: &Path) -> Result<(), CommandError> {
-        let store = crate::commands::open_store(archive_dir, pointer)?;
-        let mut guard = self
-            .slot
-            .lock()
-            .map_err(|e| fail("STORE_ERROR", format!("store lock poisoned: {e}")))?;
-        *guard = Some(store);
+/// One lock order for every archive operation: acquire the shared store slot once,
+/// retain it across the switch, install the already-open new store, then release.
+/// UI writes, IPC writes, exports and other restores all serialize on this mutex.
+/// No network or encryption belongs inside this function.
+fn transition(
+    slot: &StoreSlot<'_>,
+    paths: &RestorePaths,
+    operation: impl FnOnce(
+        &mut dyn FnMut() -> Result<(), CommandError>,
+    ) -> Result<(RestoreReport, ArchiveStore), CommandError>,
+) -> Result<RestoreReport, CommandError> {
+    let mut guard = slot
+        .slot
+        .lock()
+        .map_err(|_| fail("STORE_ERROR", "store lock poisoned"))?;
+    let old_dir = guard
+        .as_ref()
+        .ok_or_else(|| fail("STORE_UNAVAILABLE", "档案未打开。"))?
+        .archive_dir()
+        .to_path_buf();
+    let old_pointer = std::fs::read(&paths.current_pointer).map_err(|e| fail("IO_ERROR", e))?;
+    // Persist recovery bytes before the close/remove/open switch window. A crash
+    // there must not make startup mistake this for a first-time empty archive.
+    let recovery_pointer = crate::restore::recovery_pointer_path(&paths.current_pointer);
+    crate::restore::restore_pointer(&recovery_pointer, &old_pointer)?;
+    let outcome = operation(&mut || {
+        if let Some(store) = guard.take() {
+            store.close().map_err(|e| fail("STORE_ERROR", e))?;
+        }
         Ok(())
+    });
+    match outcome {
+        Ok((report, store)) => {
+            *guard = Some(store);
+            let _ = std::fs::remove_file(&recovery_pointer);
+            Ok(report)
+        }
+        Err(error) => {
+            if guard.is_none() {
+                let recovery =
+                    crate::restore::restore_pointer(&paths.current_pointer, &old_pointer).and_then(
+                        |()| crate::commands::open_store(&old_dir, &paths.current_pointer),
+                    );
+                match recovery {
+                    Ok(store) => *guard = Some(store),
+                    Err(recovery) => {
+                        return Err(fail(
+                            "RESTORE_RECOVERY_FAILED",
+                            format!(
+                                "{}；旧档案重开失败：{}。档案保留在 {}，可重启后重试。",
+                                error.message,
+                                recovery.message,
+                                old_dir.display()
+                            ),
+                        ))
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&recovery_pointer);
+            Err(error)
+        }
     }
 }
 
@@ -141,12 +195,9 @@ pub fn restore(
     package: &Path,
     now: &str,
 ) -> Result<RestoreReport, CommandError> {
-    let report = restore_archive(paths, package, now, || slot.close())?;
-    slot.reopen(
-        &PathBuf::from(&report.archive_dir),
-        &paths.current_pointer,
-    )?;
-    Ok(report)
+    transition(slot, paths, |close| {
+        restore_archive_open(paths, package, now, close)
+    })
 }
 
 pub fn rollback(
@@ -155,12 +206,7 @@ pub fn rollback(
     id: &str,
     now: &str,
 ) -> Result<RestoreReport, CommandError> {
-    let report = rollback_to(paths, id, now, || slot.close())?;
-    slot.reopen(
-        &PathBuf::from(&report.archive_dir),
-        &paths.current_pointer,
-    )?;
-    Ok(report)
+    transition(slot, paths, |close| rollback_to_open(paths, id, now, close))
 }
 
 pub fn rollback_points(paths: &RestorePaths) -> Result<Vec<RollbackPoint>, CommandError> {

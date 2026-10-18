@@ -57,7 +57,8 @@ fn package(
         entries,
     };
     zip.start_file(MANIFEST_PATH, options).unwrap();
-    zip.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+    zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+        .unwrap();
     zip.finish().unwrap();
     path
 }
@@ -98,17 +99,81 @@ fn a_good_package_extracts_and_verifies() {
 }
 
 #[test]
+fn oversized_manifest_is_rejected_before_json_allocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized.zip");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+    zip.start_file(
+        MANIFEST_PATH,
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+    )
+    .unwrap();
+    let chunk = [b' '; 64 * 1024];
+    for _ in 0..(backup::MAX_MANIFEST_BYTES / chunk.len() as u64 + 1) {
+        zip.write_all(&chunk).unwrap();
+    }
+    zip.finish().unwrap();
+    let error = read_manifest(&path).unwrap_err();
+    assert!(error.to_string().contains("清单超出大小上限"));
+    must_reject(&path, &dir.path().join("staging"));
+}
+
+#[test]
+fn duplicate_and_reserved_manifest_paths_are_rejected_in_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    for entries in [
+        vec!["archive/archive.db", "archive/archive.db"],
+        vec![MANIFEST_PATH],
+    ] {
+        let declared = entries
+            .into_iter()
+            .map(|path| ManifestEntry {
+                path: path.into(),
+                size_bytes: 2,
+                sha256: hex(&Sha256::digest(b"db")),
+            })
+            .collect();
+        let path = package(
+            dir.path(),
+            "bad.zip",
+            &[("archive/archive.db", b"db")],
+            Some(declared),
+            1,
+            "resume-pro.archive",
+        );
+        assert!(read_manifest(&path).is_err());
+    }
+}
+
+#[test]
 fn a_package_that_is_not_ours_is_told_apart_from_one_that_is_too_new() {
     let dir = tempfile::tempdir().unwrap();
 
-    let foreign = package(dir.path(), "foreign.zip", &[("x", b"y")], None, 1, "someone-else");
+    let foreign = package(
+        dir.path(),
+        "foreign.zip",
+        &[("x", b"y")],
+        None,
+        1,
+        "someone-else",
+    );
     let error = must_reject(&foreign, &dir.path().join("s1"));
     assert!(error.to_string().contains("不是网申快填"), "{error}");
 
-    let future = package(dir.path(), "future.zip", &[("x", b"y")], None, 99, "resume-pro.archive");
+    let future = package(
+        dir.path(),
+        "future.zip",
+        &[("x", b"y")],
+        None,
+        99,
+        "resume-pro.archive",
+    );
     let error = must_reject(&future, &dir.path().join("s2"));
     assert!(error.to_string().contains("更新版本"), "{error}");
-    assert!(error.to_string().contains("升级"), "要告诉用户怎么办：{error}");
+    assert!(
+        error.to_string().contains("升级"),
+        "要告诉用户怎么办：{error}"
+    );
 }
 
 #[test]
@@ -117,7 +182,8 @@ fn a_zip_without_a_manifest_is_not_our_package() {
     let path = dir.path().join("bare.zip");
     let file = fs::File::create(&path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
-    zip.start_file("readme.txt", SimpleFileOptions::default()).unwrap();
+    zip.start_file("readme.txt", SimpleFileOptions::default())
+        .unwrap();
     zip.write_all(b"hello").unwrap();
     zip.finish().unwrap();
 
@@ -216,7 +282,10 @@ fn an_entry_the_manifest_does_not_list_makes_the_whole_package_suspect() {
     let path = package(
         dir.path(),
         "extra.zip",
-        &[("archive/meta.json", b"{}"), ("archive/surprise.exe", b"MZ")],
+        &[
+            ("archive/meta.json", b"{}"),
+            ("archive/surprise.exe", b"MZ"),
+        ],
         Some(entries),
         1,
         "resume-pro.archive",
@@ -290,7 +359,14 @@ fn a_traversing_entry_name_is_rejected_before_anything_is_written() {
         size_bytes: 3,
         sha256: hex(Sha256::digest(b"pwn").as_slice()),
     }];
-    let path = package(dir.path(), "evil.zip", &[(evil, b"pwn")], Some(entries), 1, "resume-pro.archive");
+    let path = package(
+        dir.path(),
+        "evil.zip",
+        &[(evil, b"pwn")],
+        Some(entries),
+        1,
+        "resume-pro.archive",
+    );
     let staging = dir.path().join("staging");
 
     let error = must_reject(&path, &staging);
@@ -305,7 +381,14 @@ fn a_traversing_entry_name_is_rejected_before_anything_is_written() {
 #[test]
 fn an_empty_manifest_is_not_a_usable_backup() {
     let dir = tempfile::tempdir().unwrap();
-    let path = package(dir.path(), "empty.zip", &[], Some(vec![]), 1, "resume-pro.archive");
+    let path = package(
+        dir.path(),
+        "empty.zip",
+        &[],
+        Some(vec![]),
+        1,
+        "resume-pro.archive",
+    );
 
     let error = must_reject(&path, &dir.path().join("s"));
     assert!(error.to_string().contains("空的"), "{error}");

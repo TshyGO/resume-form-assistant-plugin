@@ -77,12 +77,18 @@ impl Layout {
 fn telemetry_state_is_not_exported_or_restored_over_a_local_opt_out() {
     let source = layout();
     source.open().seed("合成公司");
-    std::fs::write(source.paths.data_root.join("telemetry-state.json"),
-        br#"{"enabled":true,"installation_id":"synthetic-statistics-id"}"#).unwrap();
+    std::fs::write(
+        source.paths.data_root.join("telemetry-state.json"),
+        br#"{"enabled":true,"installation_id":"synthetic-statistics-id"}"#,
+    )
+    .unwrap();
     std::fs::write(source.paths.data_root.join("telemetry-initialized"), b"1").unwrap();
     let package = source.export_to("backup.zip");
     let manifest = backup::read_manifest(&package).unwrap();
-    assert!(manifest.entries.iter().all(|entry| !entry.path.contains("telemetry")));
+    assert!(manifest
+        .entries
+        .iter()
+        .all(|entry| !entry.path.contains("telemetry")));
     source.slot().close().unwrap();
 
     let target = layout();
@@ -91,8 +97,14 @@ fn telemetry_state_is_not_exported_or_restored_over_a_local_opt_out() {
     std::fs::write(&local_state, br#"{"enabled":false}"#).unwrap();
     std::fs::write(target.paths.data_root.join("telemetry-initialized"), b"1").unwrap();
     restore(&target.slot(), &target.paths, &package, NOW).unwrap();
-    assert_eq!(std::fs::read(&local_state).unwrap(), br#"{"enabled":false}"#);
-    assert_eq!(std::fs::read(target.paths.data_root.join("telemetry-initialized")).unwrap(), b"1");
+    assert_eq!(
+        std::fs::read(&local_state).unwrap(),
+        br#"{"enabled":false}"#
+    );
+    assert_eq!(
+        std::fs::read(target.paths.data_root.join("telemetry-initialized")).unwrap(),
+        b"1"
+    );
 }
 
 #[test]
@@ -134,7 +146,10 @@ fn a_preview_says_when_it_is_the_same_archive() {
 
     let preview = here.with(|store| preview(store, &here.paths, &package).unwrap());
 
-    assert!(preview.same_archive, "自己的备份恢复回自己，不该被说成换了档案");
+    assert!(
+        preview.same_archive,
+        "自己的备份恢复回自己，不该被说成换了档案"
+    );
 }
 
 #[test]
@@ -260,7 +275,10 @@ fn the_export_report_surfaces_what_did_not_travel() {
 
     assert!(report.size_bytes > 0);
     assert!(
-        report.skipped.iter().any(|line| line.contains("mystery.bin")),
+        report
+            .skipped
+            .iter()
+            .any(|line| line.contains("mystery.bin")),
         "清单没覆盖的东西要让人看见，否则清单永远不会被补上：{:?}",
         report.skipped
     );
@@ -287,4 +305,228 @@ fn the_ai_settings_file_never_enters_a_backup() {
         "备份里出现了 ai-settings.json"
     );
     assert!(!dumped.contains("api.deepseek.com"), "备份里出现了接口地址");
+}
+
+fn attach(here: &Layout, application: &str, name: &str, bytes: &[u8]) {
+    use sha2::{Digest, Sha256};
+    here.with(|store| {
+        let relative = format!("attachments/{name}");
+        let path = store.archive_dir().join(&relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        store
+            .import_evidence(archive_store::NewEvidence {
+                application_id: Some(application.into()),
+                kind: archive_store::EvidenceKind::Paste,
+                blob: archive_store::AttachmentBlobMeta {
+                    sha256: Sha256::digest(bytes)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                    size_bytes: bytes.len() as i64,
+                    stored_rel_path: relative,
+                    mime: Some("text/plain".into()),
+                },
+                original_filename: None,
+                subject: None,
+                from_addr: None,
+                sent_at: None,
+                body_extract: None,
+                append_event: true,
+            })
+            .unwrap();
+    });
+}
+
+#[test]
+fn restoring_then_exporting_and_rolling_back_uses_the_active_directory_and_survives_restart() {
+    let here = layout();
+    here.open();
+    let app = here.seed("original");
+    attach(&here, &app, "original.txt", b"original attachment");
+    let original_package = here.export_to("original.rpbak");
+    let first = restore(&here.slot(), &here.paths, &original_package, NOW).unwrap();
+    let added = here.seed("after restore");
+    attach(&here, &added, "new.txt", b"new attachment");
+    // Deliberately retain the old RestorePaths, as startup HostPaths used to do.
+    let second_package = here.export_to("after-restore.rpbak");
+    let manifest = backup::read_manifest(&second_package).unwrap();
+    assert_eq!(manifest.counts.applications, 2);
+    assert_eq!(manifest.counts.attachments, 2);
+    assert!(manifest
+        .entries
+        .iter()
+        .any(|entry| entry.path == "archive/attachments/new.txt"));
+    let extracted = here.paths.data_root.join("verify-export");
+    backup::extract_to_staging(&second_package, &extracted).unwrap();
+    assert_eq!(
+        std::fs::read(extracted.join("archive/attachments/new.txt")).unwrap(),
+        b"new attachment"
+    );
+
+    rollback(&here.slot(), &here.paths, &first.rollback_point, NOW).unwrap();
+    let rolled_package = here.export_to("rolled.rpbak");
+    assert_eq!(
+        backup::read_manifest(&rolled_package)
+            .unwrap()
+            .counts
+            .attachments,
+        1
+    );
+    here.slot().close().unwrap();
+    let restarted =
+        crate::commands::open_current_store(&here.paths.archive_dir, &here.paths.current_pointer)
+            .unwrap();
+    assert_eq!(restarted.counts().unwrap().applications, 1);
+    assert_ne!(restarted.archive_dir(), here.paths.archive_dir);
+}
+
+#[test]
+fn a_failure_after_close_restores_the_original_pointer_epoch_and_writable_store() {
+    let here = layout();
+    here.open().seed("original");
+    let package = here.export_to("original.rpbak");
+    let pointer = std::fs::read(&here.paths.current_pointer).unwrap();
+    let old_identity = here.with(|store| store.identity());
+    // Actual restore reaches its switch with a missing pointer after closing the
+    // old store. The command layer must restore the saved bytes, then reopen it.
+    let error = transition(&here.slot(), &here.paths, |close| {
+        restore_archive_open(&here.paths, &package, NOW, || {
+            close()?;
+            std::fs::remove_file(&here.paths.current_pointer).unwrap();
+            Ok(())
+        })
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "IO_ERROR");
+    assert_eq!(std::fs::read(&here.paths.current_pointer).unwrap(), pointer);
+    here.with(|store| assert_eq!(store.identity(), old_identity));
+    here.seed("still writable");
+    assert_eq!(here.with(|store| store.counts().unwrap().applications), 2);
+}
+
+#[test]
+fn rollback_failure_reopens_the_old_store_and_keeps_the_rollback_point() {
+    let here = layout();
+    here.open().seed("original");
+    let package = here.export_to("original.rpbak");
+    let restored = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    here.seed("current");
+    let identity = here.with(|store| store.identity());
+    let error = transition(&here.slot(), &here.paths, |close| {
+        rollback_to_open(&here.paths, &restored.rollback_point, NOW, || {
+            close()?;
+            std::fs::remove_file(&here.paths.current_pointer).unwrap();
+            Ok(())
+        })
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "IO_ERROR");
+    here.with(|store| assert_eq!(store.identity(), identity));
+    assert!(here
+        .paths
+        .archives_retired_dir
+        .join(restored.rollback_point)
+        .join("archive.db")
+        .is_file());
+    here.seed("still writable");
+}
+
+#[test]
+fn a_secondary_recovery_error_preserves_data_and_reports_both_failures() {
+    let here = layout();
+    here.open().seed("original");
+    let error = transition(&here.slot(), &here.paths, |close| {
+        close()?;
+        std::fs::remove_file(&here.paths.current_pointer).unwrap();
+        std::fs::create_dir(&here.paths.current_pointer).unwrap();
+        Err(fail("SYNTHETIC_SWITCH_FAILURE", "synthetic switch failure"))
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "RESTORE_RECOVERY_FAILED");
+    assert!(error.message.contains("synthetic switch failure"));
+    assert!(error.message.contains("旧档案重开失败"));
+    assert!(here.paths.archive_dir.join("archive.db").is_file());
+    assert!(here.slot.lock().unwrap().is_none());
+}
+
+#[test]
+fn the_store_slot_stays_locked_during_the_entire_transition() {
+    let here = layout();
+    here.open().seed("original");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let worker_here = &here;
+        let worker = scope.spawn(move || {
+            transition(&worker_here.slot(), &worker_here.paths, |close| {
+                close()?;
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                Err(fail("SYNTHETIC", "synthetic interruption"))
+            })
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(
+            here.slot.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        release_tx.send(()).unwrap();
+        assert!(worker.join().unwrap().is_err());
+    });
+    here.seed("writable after transition");
+}
+
+#[test]
+fn startup_recovers_the_pointer_if_a_switch_was_interrupted() {
+    let here = layout();
+    here.open().seed("original");
+    let saved = crate::restore::recovery_pointer_path(&here.paths.current_pointer);
+    let bytes = std::fs::read(&here.paths.current_pointer).unwrap();
+    crate::restore::restore_pointer(&saved, &bytes).unwrap();
+    here.slot().close().unwrap();
+    std::fs::remove_file(&here.paths.current_pointer).unwrap();
+    let store =
+        crate::commands::open_current_store(&here.paths.archive_dir, &here.paths.current_pointer)
+            .unwrap();
+    assert_eq!(store.counts().unwrap().applications, 1);
+    assert_eq!(std::fs::read(&here.paths.current_pointer).unwrap(), bytes);
+}
+
+#[test]
+fn invalid_startup_pointers_never_create_a_replacement_archive() {
+    let here = layout();
+    here.open();
+    here.slot().close().unwrap();
+    let original = std::fs::read(&here.paths.current_pointer).unwrap();
+    for bytes in [b"invalid".to_vec(), vec![b'x'; 65537]] {
+        std::fs::write(&here.paths.current_pointer, bytes).unwrap();
+        assert!(crate::commands::open_current_store(
+            &here.paths.archive_dir,
+            &here.paths.current_pointer
+        )
+        .is_err());
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    for path in [
+        here.paths.data_root.join("missing"),
+        here.paths.data_root.clone(),
+        here.paths.data_root.parent().unwrap().to_owned(),
+    ] {
+        value["archive_dir"] = serde_json::json!(path);
+        std::fs::write(
+            &here.paths.current_pointer,
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(crate::commands::open_current_store(
+            &here.paths.archive_dir,
+            &here.paths.current_pointer
+        )
+        .is_err());
+    }
 }

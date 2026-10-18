@@ -175,6 +175,11 @@ fn build(
         entries,
     };
     let json = serde_json::to_vec_pretty(&manifest)?;
+    if json.len() as u64 > crate::reader::MAX_MANIFEST_BYTES
+        || manifest.entries.len() >= crate::reader::MAX_ENTRIES
+    {
+        return Err(BackupError::Invalid("备份清单超出格式资源上限".into()));
+    }
     add_bytes(&mut zip, options, MANIFEST_PATH, &json)?;
 
     let mut finished = zip.finish()?;

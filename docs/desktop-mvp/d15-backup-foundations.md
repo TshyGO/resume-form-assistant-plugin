@@ -1,0 +1,86 @@
+# D15 云备份基础接口（#302–#304）
+
+基准：main `1a8bbcad7b633fcc765e1846e3eae6906971073a`。实施日期：2026-10-18。
+父任务 #139；上传与保留编排在 #305，界面及真实服务商/设备验收在 #306。
+
+## 本地档案与任务协调
+
+- `ArchiveStore::archive_dir()` 是导出数据库和引用文件的统一来源。启动读取
+  `current.json`，恢复/回滚后刷新 HostPaths；无效指针或丢失目录报错，不新建空档案替代。
+- 所有 UI/IPC 写入、导出、恢复和回滚共享 store mutex。切换全程持锁，成功直接
+  安装已经打开的新句柄；失败恢复原指针字节与 epoch，再打开旧库。
+- 关闭前将原指针同步写到 `current.restore-previous`。切换窗口崩溃且 current 缺失时，
+  下次启动先恢复这个指针。若 current 已存在，以它为准。恢复失败保留数据并报告两段错误。
+- 锁顺序为 paths → store；读取 paths 后释放再执行备份。网络、KDF 与加解密不持
+  store 锁。导出快照、打包、预览、恢复及回滚从 Tauri 阻塞线程池执行。
+- 本地快照/恢复 staging 在 data_root 下，独立于可替换的 archive。云任务使用
+  `backup_crypt::workspace::TaskDirectory`，先完成一致性导出，释放 store 锁，再加密/传输。
+  #305 应在创建任务前确认启动清理成功；cleanup 仅在持有 host 唯一写入者锁且无任务时运行。
+
+## age 格式与资源上限
+
+- `.rpbak` 保持现有明文格式；`.rpbak.age` 使用固定 `age = 0.12.1` 的 age v1
+  口令模式：scrypt + 流式认证加密，**不是 Argon2id 或自定义加密外壳**。
+- 上层云配置默认加密；明文上传必须由用户明确选择（#306 接界面）。本 PR 不提供上传 UI。
+- 标准工作因子 log N=18（scrypt r=8，约 256 MiB），解密拒绝更高因子。
+  头部最多 64 KiB；输入和输出最多 8 GiB + 4 MiB，上层可调低；缓冲 64 KiB。
+  KDF 调用自身无法中途打断，取消在调用前后和每块之间检查。
+- `encrypt_file` / `decrypt_file` 使用 SecretString，原样保留口令中的空格和 Unicode。
+  解密读到最终认证块和 EOF 后才 sync + 原子发布。错口令、截断、篡改、重排、拼接、
+  多余尾部失败；已有目的文件不会被覆盖。失败/取消移除当前临时文件。
+- reader 和 writer 的 manifest 上限均为 32 MiB，条目数最多 199,999 个（另加 manifest），
+  展开总量最多 8 GiB，继续检查路径、长度和 SHA-256，拒绝重复/保留清单路径。
+- 任务目录在 `data_root/cloud-backup-work/job-<32位随机字符>`；正常退出自动删除，
+  启动持 host 锁后清理遗留任务。拒绝 workspace 根目录链接/Windows reparse point。
+  Unix 目录 0700、临时文件 0600；Windows 继承应用数据目录 ACL。
+  本地保留的 `.rpbak` 仍是明文；普通删除不等于安全擦除。
+
+## 凭据隔离与界面契约
+
+- 原生 Credential Manager / Keychain，不降级写入文件。WebDAV 应用密码和备份口令
+  是两种独立项；账号键含 connection UUID 及 HTTPS endpoint + username 的 SHA-256。
+  换账号或地址后不会沿用旧凭据；旧项可用原连接描述显式清除。
+- 前端仅有 `set_cloud_backup_credential`、`clear_cloud_backup_credential` 和
+  `cloud_backup_credential_status`（两个 bool）。没有读取秘密的 Tauri 命令。
+  Rust 后续后台任务可通过注入 CredentialStore 读取 SecretString。
+- 秘密不进入 SQLite、设置、备份、诊断、错误正文或日志；系统凭据库失败明确报错。
+- #306 的配置/恢复提示必须说明：备份口令独立于坚果云应用密码，换机须重新输入，
+  本机钥匙串不是恢复保障，遗失无法找回。修改口令只影响新包；旧包仍需要当时的口令。
+
+## WebDAV 传输与能力档案
+
+- 坚果云预设 `https://dav.jianguoyun.com/dav/`。生产接口仅 HTTPS，不跟随跳转，
+  不接受 URL 凭据。RemotePath 是逐段编码的相对路径，不接受外部 URL。
+  href 校验 origin、根路径、Depth:1、编码斜杠及 dot segment；不将元数据变成任意请求地址。
+- MKCOL、PROPFIND、HEAD、GET、流式 PUT、DELETE，MOVE 为可选能力。
+  PUT 显式 Content-Length + If-None-Match: *；MOVE 使用 Overwrite: F。
+  上层仍需使用唯一自有文件名，并依探测结果决定发布流程。
+- connect 10 秒、请求 60 秒。共享客户端克隆之间默认 3 秒请求间隔；安全读取至多重试两次，
+  Retry-After 支持秒数/HTTP 日期，超过 60 秒直接返回给上层，不能缩短后盲重试。
+  401 与 403 分开；另区分 404、409/412、413、429、507、网络及超时。
+  写操作不自动重试，网络/超时/5xx 等结果未知时标记 outcome_unknown，上层先对账。
+- 单文件限制保守为最终文件 **500,000,000 字节**；下载检查声明长度且对实际流量计数、
+  有界写盘，完整后发布新任务文件并返回实际 SHA-256。ETag 仅作不透明服务端 token。
+- XML 最多 1 MiB、20,000 节点、1,000 response，禁止 DTD。坚果云目录响应达到
+  750 项（含自身）/缺少自身/出现 continuation 信号时返回 PossiblyTruncated；
+  未验证服务商返回 UnverifiedServer。只有 Complete 可供上层清理使用。
+  目前无经验证分页协议，不能把单页当全集清理。
+- `probe_capabilities(parent, recorded_uuid, cancel)` 只使用新建 UUID 测试目录和合成内容，
+  观察条件 PUT、MOVE/Overwrite、长度/ETag、列表与清理结果。先记录 UUID，未知结果可按
+  此目录对账；取消后不发更多请求。MOVE 不支持时 #305 使用唯一包 PUT + 最后发布元数据。
+
+## 验证与边界
+
+自动测试覆盖：恢复后附件导出/回滚/重启、失败重开与二次失败、锁互斥、旧 epoch 拒绝；
+恶意 manifest；age 官方 scrypt 测试向量、直接 age 读取输出、块边界/多块、损坏及资源上限；
+真实本地 HTTP socket 的 WebDAV 方法/路径/长度、状态码、有限重试、不重试写入、截断/超限、
+能力探测与清理范围；模拟凭据库的连接绑定与口令保真。
+
+CI 在 Windows x64 / macOS arm64 跑新 crate 与现有主程序回归。本地原生钥匙串的合成项测试
+是显式 ignored 测试，必须单独执行。2026-10-18 Windows 上已显式运行，跨 adapter 保存/读取/清除通过。
+进程重启、交互界面和真实账号验证在 #306 记录；
+这些自动测试不代表坚果云兼容已验收，也不代表真实 macOS Keychain 已验收。
+
+服务商限制参考（2026-10-18 复核的方案）：[授权与限制](https://help.jianguoyun.com/?p=2064)、
+[流量说明](https://help.jianguoyun.com/?p=29)。免费/付费每半小时 600/1500 请求、目录 750 项、
+免费每月上传 1 GB/下载 3 GB，重置按账号周期；实际账号能力须 #306 探测，不为测试边界消耗大额流量。

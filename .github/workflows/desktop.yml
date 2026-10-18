@@ -54,6 +54,9 @@ jobs:
             desktop/crates/protocol
             desktop/crates/nm-frame
             desktop/crates/local-ipc
+            desktop/crates/backup
+            desktop/crates/backup-crypt
+            desktop/crates/webdav-client
 
       - name: Install JS dependencies
         working-directory: desktop
@@ -121,6 +124,14 @@ jobs:
       - name: Reminder scheduling tests
         working-directory: desktop
         run: cargo test --manifest-path crates/reminders/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: Backup encryption tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/backup-crypt/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: WebDAV transport tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/webdav-client/Cargo.toml --locked --target ${{ matrix.rust-target }}
 
       - name: Evidence import tests
         working-directory: desktop
