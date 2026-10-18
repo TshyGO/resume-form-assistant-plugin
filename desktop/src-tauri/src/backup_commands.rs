@@ -145,12 +145,17 @@ fn transition(
         .ok_or_else(|| fail("STORE_UNAVAILABLE", "档案未打开。"))?
         .archive_dir()
         .to_path_buf();
-    let old_pointer = std::fs::read(&paths.current_pointer).map_err(|e| fail("IO_ERROR", e))?;
+    let old_pointer = crate::restore::read_previous_pointer(&paths.current_pointer)?
+        .ok_or_else(|| fail("IO_ERROR", "当前档案指针丢失；旧库保持打开。"))?;
     // Persist recovery bytes before the close/remove/open switch window. A crash
     // there must not make startup mistake this for a first-time empty archive.
     let recovery_pointer = crate::restore::recovery_pointer_path(&paths.current_pointer);
-    crate::restore::restore_pointer(&recovery_pointer, &old_pointer)?;
+    let mut wrote_recovery = false;
     let outcome = operation(&mut || {
+        if !wrote_recovery {
+            crate::restore::restore_pointer(&recovery_pointer, &old_pointer)?;
+            wrote_recovery = true;
+        }
         if let Some(store) = guard.take() {
             store.close().map_err(|e| fail("STORE_ERROR", e))?;
         }
@@ -159,7 +164,9 @@ fn transition(
     match outcome {
         Ok((report, store)) => {
             *guard = Some(store);
-            let _ = std::fs::remove_file(&recovery_pointer);
+            if wrote_recovery {
+                let _ = std::fs::remove_file(&recovery_pointer);
+            }
             Ok(report)
         }
         Err(error) => {
@@ -183,7 +190,9 @@ fn transition(
                     }
                 }
             }
-            let _ = std::fs::remove_file(&recovery_pointer);
+            if wrote_recovery {
+                let _ = std::fs::remove_file(&recovery_pointer);
+            }
             Err(error)
         }
     }

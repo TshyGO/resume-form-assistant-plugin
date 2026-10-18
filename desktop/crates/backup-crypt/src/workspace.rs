@@ -66,8 +66,26 @@ pub fn cleanup_abandoned_jobs(data_root: &Path) -> io::Result<()> {
 /// RAII cleanup for success, failure and cancellation. Windows inherits the
 /// application-data ACL; Unix directories are 0700 and task files are 0600.
 pub struct TaskDirectory(tempfile::TempDir);
+
+/// A successful startup cleanup is required before creating jobs. Keep this
+/// handle only while the caller owns the application's unique-writer host lock.
+/// On cleanup failure no handle exists; retry prepare only when jobs are idle.
+pub struct PreparedWorkspace {
+    data_root: PathBuf,
+}
+impl PreparedWorkspace {
+    pub fn prepare(data_root: &Path) -> io::Result<Self> {
+        cleanup_abandoned_jobs(data_root)?;
+        Ok(Self {
+            data_root: data_root.to_owned(),
+        })
+    }
+    pub fn new_task(&self) -> io::Result<TaskDirectory> {
+        TaskDirectory::new(&self.data_root)
+    }
+}
 impl TaskDirectory {
-    pub fn new(data_root: &Path) -> io::Result<Self> {
+    fn new(data_root: &Path) -> io::Result<Self> {
         let root = root(data_root)?;
         // tempfile adds randomness atomically. A fixed suffix length also lets
         // startup cleanup recognize exactly our own directory namespace.
@@ -116,5 +134,17 @@ mod tests {
         assert!(!abandoned.exists());
         assert!(unrelated.exists());
         assert!(alien.exists());
+    }
+
+    #[test]
+    fn only_successful_cleanup_provides_a_task_creation_handle() {
+        let data_root = tempfile::tempdir().unwrap();
+        let invalid_root = data_root.path().join("cloud-backup-work");
+        fs::write(&invalid_root, b"file blocking workspace").unwrap();
+        assert!(PreparedWorkspace::prepare(data_root.path()).is_err());
+        fs::remove_file(invalid_root).unwrap();
+        let prepared = PreparedWorkspace::prepare(data_root.path()).unwrap();
+        let job = prepared.new_task().unwrap();
+        assert!(job.path().starts_with(data_root.path()));
     }
 }

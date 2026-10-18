@@ -14,8 +14,9 @@
 - 锁顺序为 paths → store；读取 paths 后释放再执行备份。网络、KDF 与加解密不持
   store 锁。导出快照、打包、预览、恢复及回滚从 Tauri 阻塞线程池执行。
 - 本地快照/恢复 staging 在 data_root 下，独立于可替换的 archive。云任务使用
-  `backup_crypt::workspace::TaskDirectory`，先完成一致性导出，释放 store 锁，再加密/传输。
-  #305 应在创建任务前确认启动清理成功；cleanup 仅在持有 host 唯一写入者锁且无任务时运行。
+  `PreparedWorkspace::new_task()` 返回的 TaskDirectory，先完成一致性导出，释放 store 锁，再加密/传输。
+  AppState 只在启动清理成功后保存 PreparedWorkspace；失败时为 None，不能创建任务。
+  #305 应通过此句柄创建任务；重试 prepare 仅在持有 host 唯一写入者锁且无任务时运行。
 
 ## age 格式与资源上限
 
@@ -107,3 +108,8 @@ CI 在 Windows x64 / macOS arm64 跑新 crate 与现有主程序回归。本地�
 - CodeRabbit 后续反馈：文件传输不再受统一 60 秒总超时限制，下载保留响应头/数据块停滞检查；
   已验证持续传输能超过控制请求期限。XML 节点上限调至 200,000，仍受 1 MiB 字节上限，
   新增含空白节点的 750 项目录回归，返回不完整且禁止清理。
+
+第二轮追加：manifest 在有界 writer 中序列化，超限途中即停止；所有恢复指针读取限制 64 KiB。
+恢复证据延后到真正关闭旧库前写入，无效包不触碰已有证据。指针及恢复文件都丢失但发现恢复/
+退休档案时，启动明确失败，避免创建新空库。清理成功才生成 PreparedWorkspace 句柄并存入 AppState。
+不宣称系统断电时目录项已持久落盘；当前验证针对进程退出/重启与原子发布，完整掉电耐久性需另做平台验证。

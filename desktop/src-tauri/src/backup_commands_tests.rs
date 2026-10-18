@@ -543,3 +543,43 @@ fn a_leftover_recovery_pointer_can_be_atomically_replaced_on_this_platform() {
     here.seed("writable after replace");
     assert_eq!(here.with(|store| store.counts().unwrap().applications), 2);
 }
+
+#[test]
+fn rejecting_a_package_does_not_touch_recovery_evidence_and_pointer_reads_are_bounded() {
+    let here = layout();
+    here.open().seed("original");
+    let saved = crate::restore::recovery_pointer_path(&here.paths.current_pointer);
+    std::fs::write(&saved, b"previous evidence").unwrap();
+    let bad = here.paths.data_root.join("bad.rpbak");
+    std::fs::write(&bad, b"bad zip").unwrap();
+    assert!(restore(&here.slot(), &here.paths, &bad, NOW).is_err());
+    assert_eq!(std::fs::read(&saved).unwrap(), b"previous evidence");
+    let original_pointer = std::fs::read(&here.paths.current_pointer).unwrap();
+    std::fs::write(&here.paths.current_pointer, vec![b'x'; 65537]).unwrap();
+    let error = restore(&here.slot(), &here.paths, &bad, NOW).unwrap_err();
+    assert!(error.message.contains("64 KiB"));
+    assert_eq!(std::fs::read(&saved).unwrap(), b"previous evidence");
+    assert!(here.slot.lock().unwrap().is_some());
+    std::fs::write(&here.paths.current_pointer, original_pointer).unwrap();
+    here.seed("still writable");
+}
+
+#[test]
+fn a_lost_pointer_after_restore_never_creates_a_new_empty_archive() {
+    let here = layout();
+    here.open().seed("original");
+    let package = here.export_to("original.rpbak");
+    let restored = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    here.slot().close().unwrap();
+    std::fs::remove_file(&here.paths.current_pointer).unwrap();
+    let error =
+        crate::commands::open_current_store(&here.paths.archive_dir, &here.paths.current_pointer)
+            .err()
+            .unwrap();
+    assert_eq!(error.code, "STORE_OPEN_FAILED");
+    assert!(!here.paths.archive_dir.join("archive.db").exists());
+    assert!(!here.paths.current_pointer.exists());
+    assert!(std::path::Path::new(&restored.archive_dir)
+        .join("archive.db")
+        .is_file());
+}

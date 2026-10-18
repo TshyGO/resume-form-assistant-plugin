@@ -77,7 +77,8 @@ pub fn open_current_store(
     let file = match std::fs::File::open(pointer) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return open_store(default_dir, pointer)
+            refuse_missing_pointer_with_archive_history(default_dir)?;
+            return open_store(default_dir, pointer);
         }
         Err(_) => {
             return Err(CommandError {
@@ -116,6 +117,42 @@ pub fn open_current_store(
     let store = open_store(&active, pointer)?;
     let _ = std::fs::remove_file(crate::restore::recovery_pointer_path(pointer));
     Ok(store)
+}
+
+fn refuse_missing_pointer_with_archive_history(
+    default_dir: &std::path::Path,
+) -> Result<(), CommandError> {
+    let root = default_dir.parent().ok_or_else(|| CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: "无法确认档案根目录。".into(),
+    })?;
+    let fail = || CommandError {
+        code: "STORE_OPEN_FAILED".into(),
+        message: "当前档案指针丢失，但发现恢复/回滚历史；请先恢复指针，没有创建替代档案。".into(),
+    };
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(fail()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|_| fail())?;
+        if entry.file_name().to_string_lossy().starts_with("archive-")
+            && entry.path().join("archive.db").exists()
+        {
+            return Err(fail());
+        }
+    }
+    match std::fs::read_dir(root.join("archives-retired")) {
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(fail());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(fail()),
+    }
+    Ok(())
 }
 
 fn occurred_now() -> Occurred {

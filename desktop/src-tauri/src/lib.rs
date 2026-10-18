@@ -77,6 +77,8 @@ struct AppState {
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
     cloud_credentials: Box<dyn cloud_credentials::CredentialStore>,
+    /// None after cleanup failure: #305 must acquire a prepared workspace before jobs.
+    cloud_workspace: Mutex<Option<backup_crypt::workspace::PreparedWorkspace>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
     /// 不排队也不重试。
     ai_inflight: ai_commands::InflightRegistry,
@@ -1759,6 +1761,7 @@ pub fn run() {
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
+            cloud_workspace: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
             latest_update: Mutex::new(None),
@@ -1804,8 +1807,11 @@ pub fn run() {
                 Ok(host) => {
                     // Host lock excludes a second process's live backup jobs.
                     // A cleanup failure blocks cloud jobs, not access to archives.
-                    if backup_crypt::workspace::cleanup_abandoned_jobs(&host.paths().data_root).is_err() {
-                        eprintln!("cloud backup workspace cleanup failed; retry cleanup before cloud jobs");
+                    match backup_crypt::workspace::PreparedWorkspace::prepare(&host.paths().data_root) {
+                        Ok(workspace) => {
+                            if let Ok(mut slot) = app.state::<AppState>().cloud_workspace.lock() { *slot = Some(workspace); }
+                        },
+                        Err(_) => eprintln!("cloud backup workspace cleanup failed; retry cleanup before cloud jobs"),
                     }
                     if let Ok(mut paths) = app.state::<AppState>().paths.lock() {
                         *paths = Some(host.paths().clone());

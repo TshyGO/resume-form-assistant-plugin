@@ -344,9 +344,19 @@ pub(crate) fn restore_pointer(pointer: &Path, bytes: &[u8]) -> Result<(), Comman
     result.map_err(|e| fail("IO_ERROR", e))
 }
 
-fn read_previous_pointer(pointer: &Path) -> Result<Option<Vec<u8>>, CommandError> {
-    match std::fs::read(pointer) {
-        Ok(bytes) => Ok(Some(bytes)),
+pub(crate) fn read_previous_pointer(pointer: &Path) -> Result<Option<Vec<u8>>, CommandError> {
+    use std::io::Read;
+    match std::fs::File::open(pointer) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(64 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| fail("IO_ERROR", error))?;
+            if bytes.len() > 64 * 1024 {
+                return Err(fail("IO_ERROR", "当前档案指针超出 64 KiB 上限。"));
+            }
+            Ok(Some(bytes))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(fail("IO_ERROR", error)),
     }
@@ -365,8 +375,8 @@ fn cleanup(staging: &Path) {
 /// **不能想当然地认为它就是 `<data_root>/archive`**：第一次恢复之后，生效的是
 /// `archive-<uuid>`，固定路径那个已经退休了。退休哪一个要看指针说的是哪一个。
 fn live_archive_dir(paths: &RestorePaths) -> Option<PathBuf> {
-    let raw = std::fs::read_to_string(&paths.current_pointer).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let raw = read_previous_pointer(&paths.current_pointer).ok()??;
+    let parsed: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     let dir = parsed.get("archive_dir")?.as_str()?;
     let path = PathBuf::from(dir);
     path.exists().then_some(path)
