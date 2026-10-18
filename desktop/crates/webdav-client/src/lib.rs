@@ -30,6 +30,12 @@ pub const NUTSTORE_ENDPOINT: &str = "https://dav.jianguoyun.com/dav/";
 pub const NUTSTORE_MAX_FILE_BYTES: u64 = 500_000_000;
 const PROP_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getetag/></d:prop></d:propfind>"#;
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
+// Budget slow but progressing transfers at 64 KiB/s plus connection overhead.
+// Uploads have this finite total deadline; downloads also detect stalled chunks.
+fn transfer_timeout(bytes: u64) -> Duration {
+    CONTROL_TIMEOUT + Duration::from_secs(bytes.div_ceil(64 * 1024))
+}
 
 #[derive(Clone)]
 pub struct Client {
@@ -39,6 +45,7 @@ pub struct Client {
     password: SecretString,
     next_request: Arc<Mutex<Instant>>,
     interval: Duration,
+    control_timeout: Duration,
     known_listing_limit: Option<usize>,
 }
 impl std::fmt::Debug for Client {
@@ -87,8 +94,7 @@ impl Client {
         };
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60));
+            .connect_timeout(Duration::from_secs(10));
         if test_http {
             builder = builder.no_proxy().http1_only();
         }
@@ -107,6 +113,7 @@ impl Client {
                 Duration::from_secs(3)
             },
             known_listing_limit,
+            control_timeout: CONTROL_TIMEOUT,
         })
     }
     async fn throttle(&self, cancel: &CancellationToken) -> Result<(), Error> {
@@ -133,6 +140,7 @@ impl Client {
         Ok(self
             .http
             .request(method, url)
+            .timeout(self.control_timeout)
             .basic_auth(&self.username, Some(self.password.expose_secret())))
     }
     async fn perform(
@@ -186,8 +194,18 @@ impl Client {
         path: &RemotePath,
         cancel: &CancellationToken,
     ) -> Result<Response, Error> {
+        self.read_response_with_timeout(method, path, cancel, self.control_timeout)
+            .await
+    }
+    async fn read_response_with_timeout(
+        &self,
+        method: Method,
+        path: &RemotePath,
+        cancel: &CancellationToken,
+        timeout: Duration,
+    ) -> Result<Response, Error> {
         for attempt in 0..=2u32 {
-            let mut request = self.request(method.clone(), path)?;
+            let mut request = self.request(method.clone(), path)?.timeout(timeout);
             if method.as_str() == "PROPFIND" {
                 request = request
                     .header("Depth", "1")
@@ -293,6 +311,7 @@ impl Client {
         }
         let request = self
             .request(Method::PUT, path)?
+            .timeout(transfer_timeout(bytes.len() as u64))
             .header(header::IF_NONE_MATCH, "*")
             .header(header::CONTENT_LENGTH, bytes.len())
             .body(bytes);
@@ -321,6 +340,7 @@ impl Client {
         let body = Body::wrap_stream(ReaderStream::new(file.take(length)));
         let request = self
             .request(Method::PUT, path)?
+            .timeout(transfer_timeout(length))
             .header(header::IF_NONE_MATCH, "*")
             .header(header::CONTENT_LENGTH, length)
             .body(body);
@@ -364,7 +384,12 @@ impl Client {
         if max > NUTSTORE_MAX_FILE_BYTES {
             return Err(Error::new(ErrorKind::InvalidConfig));
         }
-        let mut response = self.read_response(Method::GET, path, cancel).await?;
+        let mut response = tokio::time::timeout(
+            self.control_timeout,
+            self.read_response_with_timeout(Method::GET, path, cancel, transfer_timeout(max)),
+        )
+        .await
+        .map_err(|_| Error::new(ErrorKind::Timeout))??;
         expect_status(&response, &[200], false)?;
         let expected = response.content_length();
         if expected.is_some_and(|length| length > max) {
@@ -383,7 +408,9 @@ impl Client {
             let chunk = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(Error::new(ErrorKind::Cancelled)),
-                chunk = response.chunk() => chunk.map_err(|error| network_error(error, false))?,
+                chunk = tokio::time::timeout(self.control_timeout, response.chunk()) =>
+                    chunk.map_err(|_| Error::new(ErrorKind::Timeout))?
+                        .map_err(|error| network_error(error, false))?,
             };
             let Some(chunk) = chunk else {
                 break;

@@ -57,7 +57,7 @@ pub(crate) fn parse(
         xml,
         roxmltree::ParsingOptions {
             allow_dtd: false,
-            nodes_limit: 20_000,
+            nodes_limit: 200_000,
             ..Default::default()
         },
     )

@@ -513,6 +513,7 @@ async fn timeout_after_sending_a_mutation_is_unknown_and_is_not_retried() {
         .timeout(Duration::from_millis(100))
         .build()
         .unwrap();
+    client.control_timeout = Duration::from_millis(100);
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buffer = [0; 4096];
@@ -525,11 +526,7 @@ async fn timeout_after_sending_a_mutation_is_unknown_and_is_not_retried() {
         );
     });
     let error = client
-        .put_bytes_new(
-            &RemotePath::new(&["a"]).unwrap(),
-            vec![1],
-            &CancellationToken::new(),
-        )
+        .delete(&RemotePath::new(&["a"]).unwrap(), &CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Timeout);
@@ -626,4 +623,63 @@ async fn a_failed_capability_probe_still_deletes_its_owned_directory_once() {
         ErrorKind::Permission
     );
     task.await.unwrap();
+}
+
+#[test]
+fn indented_listings_near_the_provider_boundary_remain_parseable_and_incomplete() {
+    let mut contents = response("/dav/", true);
+    for n in 0..749 {
+        contents.push_str(&response(&format!("/dav/a{n}"), false));
+    }
+    let pretty = String::from_utf8(xml(&contents))
+        .unwrap()
+        .replace("><", ">\n  <");
+    let listing = listing::parse(
+        &Url::parse(NUTSTORE_ENDPOINT).unwrap(),
+        &RemotePath::root(),
+        pretty.as_bytes(),
+        Some(750),
+    )
+    .unwrap();
+    assert_eq!(listing.entries.len(), 749);
+    assert_eq!(listing.completeness, Completeness::PossiblyTruncated);
+}
+
+#[tokio::test]
+async fn a_progressing_file_transfer_can_outlast_the_control_request_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = Client::build(
+        &format!("http://{}/dav/", listener.local_addr().unwrap()),
+        "user".into(),
+        SecretString::from("pass".to_owned()),
+        true,
+    )
+    .unwrap();
+    client.control_timeout = Duration::from_millis(100);
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        stream.read(&mut request).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            stream.write_all(b"a").await.unwrap();
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let result = client
+        .download_new(
+            &RemotePath::new(&["a"]).unwrap(),
+            &dir.path().join("out"),
+            10,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.bytes, 10);
+    task.await.unwrap();
+    assert_eq!(transfer_timeout(500_000_000), Duration::from_secs(7690));
 }
