@@ -29,6 +29,10 @@ pub struct Binding {
     prefix: String,
 }
 impl Binding {
+    /// Non-secret scope token for persisted jobs; changes with account/endpoint.
+    pub fn scope(&self) -> &str {
+        &self.prefix
+    }
     pub fn checked(connection: &ConnectionDescriptor) -> Result<Self, Error> {
         let id = uuid::Uuid::parse_str(&connection.connection_id)
             .map_err(|_| Error::InvalidConnection)?;
