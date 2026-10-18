@@ -661,3 +661,33 @@ fn rescue_never_retires_an_external_directory_from_a_corrupt_pointer() {
         b"outside data"
     );
 }
+
+#[test]
+fn preparing_a_restore_does_not_lock_the_store_and_activation_uses_the_latest_archive() {
+    let here = layout();
+    here.open().seed("original");
+    let package = here.export_to("original.rpbak");
+    let prepared = {
+        // Preparation must succeed even while a business operation holds the slot.
+        let guard = here.slot.lock().unwrap();
+        let prepared = crate::restore::prepare_restore(&here.paths, &package).unwrap();
+        assert!(guard.is_some());
+        prepared
+    };
+    // A different restore wins the switch while this package was being prepared.
+    let intervening = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    here.seed("intervening write");
+    let report = transition(&here.slot(), &here.paths, |close| {
+        crate::restore::activate_restore(&here.paths, prepared, NOW, close)
+    })
+    .unwrap();
+    assert!(!std::path::Path::new(&intervening.archive_dir).exists());
+    assert!(here
+        .paths
+        .archives_retired_dir
+        .join(&report.rollback_point)
+        .join("archive.db")
+        .is_file());
+    rollback(&here.slot(), &here.paths, &report.rollback_point, NOW).unwrap();
+    here.with(|store| assert_eq!(store.counts().unwrap().applications, 2));
+}

@@ -170,6 +170,25 @@ pub(crate) fn restore_archive_open(
     now: &str,
     close_current: impl FnOnce() -> Result<(), CommandError>,
 ) -> Result<(RestoreReport, ArchiveStore), CommandError> {
+    let prepared = prepare_restore(paths, package)?;
+    activate_restore(paths, prepared, now, close_current)
+}
+
+pub(crate) struct PreparedRestore {
+    staging: PathBuf,
+}
+
+impl Drop for PreparedRestore {
+    fn drop(&mut self) {
+        cleanup(&self.staging);
+    }
+}
+
+/// Validate an isolated package without holding the active store mutex.
+pub(crate) fn prepare_restore(
+    paths: &RestorePaths,
+    package: &Path,
+) -> Result<PreparedRestore, CommandError> {
     let staging_root = paths.staging_root();
     std::fs::create_dir_all(&staging_root).map_err(|e| fail("IO_ERROR", e))?;
     let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
@@ -199,6 +218,20 @@ pub(crate) fn restore_archive_open(
     }
     // 演练用的指针不能跟着进档案目录——current.json 是机器本地的东西。
     let _ = std::fs::remove_file(&rehearsal_pointer);
+
+    Ok(PreparedRestore { staging })
+}
+
+/// Called under the shared store mutex. Resolve the current pointer only now,
+/// since another restore may have completed while this package was prepared.
+pub(crate) fn activate_restore(
+    paths: &RestorePaths,
+    prepared: PreparedRestore,
+    now: &str,
+    close_current: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(RestoreReport, ArchiveStore), CommandError> {
+    let staging = &prepared.staging;
+    let staged_archive = staging.join("archive");
 
     // 3. 松开旧库，把 staging 挪成一个正式档案目录，然后切换。
     //    切换之前先记下现在生效的是哪个目录——切完指针就问不出来了。

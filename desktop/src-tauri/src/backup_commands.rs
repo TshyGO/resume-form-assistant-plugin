@@ -14,9 +14,11 @@ use archive_store::{ArchiveCounts, ArchiveStore};
 use serde::Serialize;
 
 use crate::commands::CommandError;
+#[cfg(test)]
+use crate::restore::restore_archive_open;
 use crate::restore::{
-    export_archive, list_rollback_points, restore_archive_open, rollback_to_open, RestorePaths,
-    RestoreReport, RollbackPoint,
+    export_archive, list_rollback_points, rollback_to_open, RestorePaths, RestoreReport,
+    RollbackPoint,
 };
 
 /// 回滚点最多留几个（拆分计划 Q3）。超出**只提示不自动删**——自动删会在用户
@@ -219,8 +221,12 @@ pub fn restore(
     package: &Path,
     now: &str,
 ) -> Result<RestoreReport, CommandError> {
+    // Cheap bounded read first, then expensive work in an isolated staging tree.
+    // transition re-reads the live pointer under the mutex before activation.
+    crate::restore::read_previous_pointer(&paths.current_pointer)?;
+    let prepared = crate::restore::prepare_restore(paths, package)?;
     transition(slot, paths, |close| {
-        restore_archive_open(paths, package, now, close)
+        crate::restore::activate_restore(paths, prepared, now, close)
     })
 }
 
