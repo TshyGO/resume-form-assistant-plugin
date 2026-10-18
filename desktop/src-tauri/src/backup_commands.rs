@@ -34,6 +34,7 @@ fn fail(code: &str, message: impl std::fmt::Display) -> CommandError {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RestorePreview {
+    pub current_available: bool,
     pub created_at: String,
     pub archive_id: String,
     pub schema_version: i64,
@@ -82,10 +83,22 @@ pub fn preview(
     paths: &RestorePaths,
     package: &Path,
 ) -> Result<RestorePreview, CommandError> {
+    preview_optional(Some(store), paths, package)
+}
+
+pub fn preview_optional(
+    store: Option<&ArchiveStore>,
+    paths: &RestorePaths,
+    package: &Path,
+) -> Result<RestorePreview, CommandError> {
     let manifest = backup::read_manifest(package).map_err(|e| fail("BACKUP_ERROR", e))?;
-    let current = store.counts().map_err(|e| fail("STORE_ERROR", e))?;
+    let current = match store {
+        Some(store) => store.counts().map_err(|e| fail("STORE_ERROR", e))?,
+        None => ArchiveCounts::default(),
+    };
     let points = list_rollback_points(paths)?.len();
     Ok(RestorePreview {
+        current_available: store.is_some(),
         created_at: manifest.created_at.clone(),
         archive_id: manifest.archive_id.clone(),
         schema_version: manifest.schema_version,
@@ -100,7 +113,7 @@ pub fn preview(
         current,
         existing_rollback_points: points,
         too_many_rollback_points: points >= KEEP_ROLLBACK_POINTS,
-        same_archive: manifest.archive_id == store.identity().archive_id,
+        same_archive: store.is_some_and(|store| manifest.archive_id == store.identity().archive_id),
     })
 }
 
@@ -142,18 +155,18 @@ fn transition(
         .map_err(|_| fail("STORE_ERROR", "store lock poisoned"))?;
     let old_dir = guard
         .as_ref()
-        .ok_or_else(|| fail("STORE_UNAVAILABLE", "档案未打开。"))?
-        .archive_dir()
-        .to_path_buf();
-    let old_pointer = crate::restore::read_previous_pointer(&paths.current_pointer)?
-        .ok_or_else(|| fail("IO_ERROR", "当前档案指针丢失；旧库保持打开。"))?;
+        .map(|store| store.archive_dir().to_path_buf());
+    let old_pointer = crate::restore::read_previous_pointer(&paths.current_pointer)?;
+    if old_dir.is_some() && old_pointer.is_none() {
+        return Err(fail("IO_ERROR", "当前档案指针丢失；旧库保持打开。"));
+    }
     // Persist recovery bytes before the close/remove/open switch window. A crash
     // there must not make startup mistake this for a first-time empty archive.
     let recovery_pointer = crate::restore::recovery_pointer_path(&paths.current_pointer);
     let mut wrote_recovery = false;
     let outcome = operation(&mut || {
-        if !wrote_recovery {
-            crate::restore::restore_pointer(&recovery_pointer, &old_pointer)?;
+        if !wrote_recovery && old_pointer.is_some() {
+            crate::restore::restore_pointer(&recovery_pointer, old_pointer.as_deref().unwrap())?;
             wrote_recovery = true;
         }
         if let Some(store) = guard.take() {
@@ -170,11 +183,13 @@ fn transition(
             Ok(report)
         }
         Err(error) => {
-            if guard.is_none() {
-                let recovery =
-                    crate::restore::restore_pointer(&paths.current_pointer, &old_pointer).and_then(
-                        |()| crate::commands::open_store(&old_dir, &paths.current_pointer),
-                    );
+            if guard.is_none() && old_dir.is_some() {
+                let old_dir = old_dir.as_ref().unwrap();
+                let recovery = crate::restore::restore_pointer(
+                    &paths.current_pointer,
+                    old_pointer.as_deref().unwrap(),
+                )
+                .and_then(|()| crate::commands::open_store(&old_dir, &paths.current_pointer));
                 match recovery {
                     Ok(store) => *guard = Some(store),
                     Err(recovery) => {

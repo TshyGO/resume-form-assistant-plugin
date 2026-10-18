@@ -197,6 +197,7 @@ export interface ExportReport {
 }
 
 export interface RestorePreview {
+  currentAvailable?: boolean;
   createdAt: string;
   archiveId: string;
   schemaVersion: number;

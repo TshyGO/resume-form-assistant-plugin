@@ -78,7 +78,9 @@ function emptyItem(text: string, tone?: "error"): HTMLLIElement {
 /** 恢复预览弹窗的正文：来源、时间、六类前后对比、替换说明。 */
 function restoreBody(path: string, preview: RestorePreview): Node {
   const warnings: Node[] = [];
-  if (!preview.sameArchive) {
+  if (preview.currentAvailable === false) {
+    warnings.push(paragraph("当前档案打不开，无法读取数量或比较身份。确认后将从备份启用新档案，原有数据会保留。", "settings-dialog-warn"));
+  } else if (!preview.sameArchive) {
     warnings.push(paragraph("这份备份来自另一个档案，不是这台机器上这份档案的历史版本。请确认没有拿错文件。", "settings-dialog-warn"));
   }
   const table = document.createElement("table");
@@ -92,7 +94,7 @@ function restoreBody(path: string, preview: RestorePreview): Node {
     th.scope = "row";
     th.textContent = row.label;
     const current = document.createElement("td");
-    current.textContent = String(row.current);
+    current.textContent = preview.currentAvailable === false ? "无法读取" : String(row.current);
     const incoming = document.createElement("td");
     incoming.textContent = String(row.incoming);
     tr.append(th, current, incoming);

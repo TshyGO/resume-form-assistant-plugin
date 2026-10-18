@@ -583,3 +583,81 @@ fn a_lost_pointer_after_restore_never_creates_a_new_empty_archive() {
         .join("archive.db")
         .is_file());
 }
+
+#[test]
+fn a_closed_unreadable_archive_can_be_previewed_and_replaced_without_losing_it() {
+    let source = layout();
+    source.open().seed("backup content");
+    let package = source.export_to("rescue.rpbak");
+    let target = layout();
+    target.open().seed("unreadable original");
+    target.slot().close().unwrap();
+    let original = b"synthetic unreadable database";
+    std::fs::write(target.paths.archive_dir.join("archive.db"), original).unwrap();
+    assert!(crate::commands::open_current_store(
+        &target.paths.archive_dir,
+        &target.paths.current_pointer
+    )
+    .is_err());
+    let preview = preview_optional(None, &target.paths, &package).unwrap();
+    assert!(!preview.current_available);
+    assert!(!preview.same_archive);
+    assert_eq!(preview.incoming.applications, 1);
+    let report = restore(&target.slot(), &target.paths, &package, NOW).unwrap();
+    assert_eq!(
+        std::fs::read(
+            target
+                .paths
+                .archives_retired_dir
+                .join(report.rollback_point)
+                .join("archive.db")
+        )
+        .unwrap(),
+        original
+    );
+    target.seed("writable after rescue");
+    target.with(|store| assert_eq!(store.counts().unwrap().applications, 2));
+}
+
+#[test]
+fn rescue_on_a_blank_target_and_rejecting_a_bad_package_need_no_live_store() {
+    let source = layout();
+    source.open().seed("backup content");
+    let package = source.export_to("rescue.rpbak");
+    let target = layout();
+    let bad = target.paths.data_root.join("bad.rpbak");
+    std::fs::write(&bad, b"bad zip").unwrap();
+    assert_eq!(
+        restore(&target.slot(), &target.paths, &bad, NOW)
+            .unwrap_err()
+            .code,
+        "BACKUP_ERROR"
+    );
+    assert!(!target.paths.current_pointer.exists());
+    assert!(target.slot.lock().unwrap().is_none());
+    restore(&target.slot(), &target.paths, &package, NOW).unwrap();
+    target.with(|store| assert_eq!(store.counts().unwrap().applications, 1));
+}
+
+#[test]
+fn rescue_never_retires_an_external_directory_from_a_corrupt_pointer() {
+    let source = layout();
+    source.open().seed("backup content");
+    let package = source.export_to("rescue.rpbak");
+    let target = layout();
+    let external = tempfile::tempdir().unwrap();
+    std::fs::write(external.path().join("archive.db"), b"outside data").unwrap();
+    std::fs::write(
+        &target.paths.current_pointer,
+        serde_json::to_vec(&json!({
+            "archive_dir": external.path()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    restore(&target.slot(), &target.paths, &package, NOW).unwrap();
+    assert_eq!(
+        std::fs::read(external.path().join("archive.db")).unwrap(),
+        b"outside data"
+    );
+}

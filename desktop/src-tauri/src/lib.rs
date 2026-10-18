@@ -704,6 +704,9 @@ fn refresh_archive_paths(state: &AppState) -> Result<(), CommandError> {
         paths.attachments_dir = paths.archive_dir.join("attachments");
         paths.snapshots_dir = paths.archive_dir.join("snapshots");
         paths.tmp_dir = paths.archive_dir.join("tmp");
+        if let Ok(mut error) = state.store_error.lock() {
+            *error = None;
+        }
     }
     Ok(())
 }
@@ -732,9 +735,11 @@ async fn preview_restore_cmd(
 ) -> Result<backup_commands::RestorePreview, CommandError> {
     archive_worker(app, move |state| {
         let paths = restore_paths(state)?;
-        with_store(state, |store| {
-            backup_commands::preview(store, &paths, std::path::Path::new(&package))
-        })
+        let guard = state.store.lock().map_err(|_| CommandError {
+            code: "STORE_ERROR".into(),
+            message: "store lock poisoned".into(),
+        })?;
+        backup_commands::preview_optional(guard.as_ref(), &paths, std::path::Path::new(&package))
     })
     .await
 }

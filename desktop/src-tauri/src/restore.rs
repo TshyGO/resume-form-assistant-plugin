@@ -379,7 +379,13 @@ fn live_archive_dir(paths: &RestorePaths) -> Option<PathBuf> {
     let parsed: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     let dir = parsed.get("archive_dir")?.as_str()?;
     let path = PathBuf::from(dir);
-    path.exists().then_some(path)
+    let root = paths.data_root.canonicalize().ok()?;
+    let canonical = path.canonicalize().ok()?;
+    (path.is_absolute()
+        && canonical != root
+        && canonical.starts_with(&root)
+        && canonical.join("archive.db").is_file())
+    .then_some(path)
 }
 
 fn retire(
