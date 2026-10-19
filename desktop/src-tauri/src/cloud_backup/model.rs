@@ -153,6 +153,11 @@ fn maximum() -> u64 {
 fn keep() -> Option<usize> {
     Some(5)
 }
+impl Default for Options {
+    fn default() -> Self {
+        Self { root: vec![], encrypted: true, max_upload_bytes: maximum(), keep_last: keep(), prefer_move: false }
+    }
+}
 impl Options {
     pub fn check(&self) -> Result<RemotePath> {
         if self.root.len() > 24
@@ -224,10 +229,12 @@ pub struct Journal {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    pub cleanup_warning: bool,
     pub device_id: String,
     pub job: Option<Job>,
     pub retry_package: Option<String>,
     pub latest_package: Option<String>,
+    pub latest_metadata: Option<Metadata>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

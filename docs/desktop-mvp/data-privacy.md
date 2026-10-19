@@ -148,7 +148,7 @@ WebView 用户数据放在上述 cache/数据根下，不要用安装目录旁�
 
 ### 6.3 加密
 
-**MVP 备份不加密。** 导出 UI 必须警告：文件含简历与邮件等 PII，应放在用户自己控制的位置。不得在发布说明或界面宣传「已加密」。若未来要加密，另开 issue，不在 D12 悄悄加上。
+**本地导出的 ZIP 备份不加密。** 导出 UI 必须警告：文件含简历与邮件等 PII，应放在用户自己控制的位置。D15 的可选云备份在上传前默认使用 age v1/scrypt 加密；这不改变本地导出和本机保留副本仍为明文的事实。
 
 #### 6.3.1 备份包含项与排除项（D12 落实）
 
@@ -436,3 +436,16 @@ Cloudflare 中转暂存脱敏报告，Muse 进一步脱敏整理为 GitHub issue
 - 扩展 IndexedDB：https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies
 - Epic #15 规则 5–8；D08 #22、D09 #21、D12 #28、D13 #29
 - [`content.js`](../../content.js) `STORAGE_KEYS`、`formatFillDiagnostics`；[`popup.js`](../../popup.js) `aiConfig`
+
+
+## D15 手动 WebDAV 云备份（#306）
+
+桌面仅在用户保存配置并主动执行备份、测试连接、查找或下载时，直接访问用户配置的 HTTPS WebDAV；不经过项目中转。默认 age v1/scrypt 加密，明确确认后可选明文。元数据公开时间、大小、档案/设备/备份 UUID、包哈希和加密格式；不含业务数量、岗位/公司或附件名称。口令丢失无法恢复。应用密码建议用坚果云第三方应用密码，秘密仅在 OS 凭据库中，前端只有写、删和存在布尔值。
+
+`settings.cloudBackup` 仅含非秘密连接和策略，保留配对设置并以临时文件替换写入。它不加入 `PORTABLE_SETTING_KEYS`。新机器按根目录发现档案和设备，不需要旧设备 ID；发现不授予删除权。目录完整性未获真实服务商证据时保留策略继续失败关闭。
+
+本机 `cloud-backup-state` 保留上一份成功明文包与一个待重试候选；界面显示具体路径。云端加密不等于本机加密。下载工作在 `cloud-backup-work` 的私有任务目录，传输 SHA-256、age 最终认证、内部清单和文件哈希全部通过后才有预览。后台确认令牌绑定任务和同一文件哈希，有效十分钟、单次消费；新选择、取消、过期和重启失效，临时明文正常结束时清理，异常退出于下次启动清理。
+
+确认恢复复用本地恢复切换与回滚实现，保留 archiveId，产生新的 restoreEpoch，旧插件 epoch 拒写。任何恢复或回滚前先持久化 `automaticEnabled=false`、`requiresConfirmation=true`；设置写入失败则不切换。#307 必须遵守该门禁，不得迁移设备 ID 或自动重新开启。
+
+完整操作说明见 [用户指南](../user-guide.md#手动坚果云备份与恢复)，证据与未验收项见 [D15 手动闭环验收](d15-manual-cloud-acceptance.md)。普通本地 ZIP 导出仍不加密。

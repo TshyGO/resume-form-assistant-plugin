@@ -94,8 +94,28 @@ impl DataHost {
         // D02 stores a local draft only. It does not write Native Messaging manifests or registry keys.
         let mut stored = draft.clone();
         stored.native_messaging_registered = false;
-        let json = serde_json::to_string_pretty(&stored).unwrap_or_else(|_| "{}".to_string());
-        fs::write(&self.paths.settings_file, json).map_err(|e| {
+        // settings.cloudBackup and future local sections must survive pairing edits.
+        // A corrupt document is not permission to silently discard those settings.
+        let mut document = match fs::read_to_string(&self.paths.settings_file) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+                .ok().filter(serde_json::Value::is_object)
+                .ok_or_else(|| HostError::dir_not_writable(self.paths.settings_file.clone(), "invalid settings.json"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(e) => return Err(HostError::dir_not_writable(self.paths.settings_file.clone(), e.to_string())),
+        };
+        let fields = serde_json::to_value(&stored).unwrap();
+        document.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        let json = serde_json::to_string_pretty(&document).unwrap();
+        (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let mut temp = tempfile::NamedTempFile::new_in(self.paths.settings_file.parent().unwrap())?;
+            temp.write_all(json.as_bytes())?;
+            temp.as_file().sync_all()?;
+            temp.persist(&self.paths.settings_file).map_err(|e| e.error)?;
+            #[cfg(unix)]
+            fs::File::open(self.paths.settings_file.parent().unwrap())?.sync_all()?;
+            Ok(())
+        })().map_err(|e| {
             HostError::dir_not_writable(
                 self.paths.settings_file.clone(),
                 format!("write settings.json failed: {e}"),
@@ -447,6 +467,21 @@ mod tests {
         assert!(!probe.writable);
         let error = probe.error.expect("probe must keep the layout error");
         assert!(error.code == DIR_NOT_WRITABLE || error.code == crate::error::DIR_CREATE_FAILED);
+    }
+
+    #[test]
+    fn pairing_edits_preserve_cloud_settings_and_reject_corrupt_documents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = HostPaths::resolve_with(Some(tmp.path().join("data")), None).unwrap();
+        let host = DataHost::initialize_with(paths.clone()).unwrap();
+        fs::write(&paths.settings_file, r#"{"cloudBackup":{"requiresConfirmation":true},"other":"keep"}"#).unwrap();
+        host.save_pairing_draft(&PairingDraft::default()).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&paths.settings_file).unwrap()).unwrap();
+        assert_eq!(saved["cloudBackup"]["requiresConfirmation"], true);
+        assert_eq!(saved["other"], "keep");
+        fs::write(&paths.settings_file, "broken").unwrap();
+        assert!(host.save_pairing_draft(&PairingDraft::default()).is_err());
+        assert_eq!(fs::read_to_string(&paths.settings_file).unwrap(), "broken");
     }
 
     #[test]

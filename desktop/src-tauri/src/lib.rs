@@ -7,6 +7,7 @@ mod ai_credentials;
 mod cloud_credentials;
 mod cloud_backup;
 mod cloud_backup_commands;
+mod cloud_settings;
 mod ai_models;
 mod ai_provider_commands;
 mod ai_settings;
@@ -677,6 +678,64 @@ async fn cloud_backup_credential_status(
     .await
 }
 
+// Serialize settings.json mutations with pairing edits through the host mutex.
+fn suspend_cloud_automatic(state: &AppState) -> Result<(), CommandError> {
+    let host = state.host.lock().map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
+    let host = host.as_ref().ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
+    cloud_settings::suspend(&host.paths().settings_file)
+}
+#[tauri::command]
+async fn cloud_backup_config(app: AppHandle) -> Result<Option<cloud_settings::Config>, CommandError> {
+    archive_worker(app, |state| {
+        let host = state.host.lock().map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
+        let host = host.as_ref().ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
+        cloud_settings::load(&host.paths().settings_file)
+    }).await
+}
+#[tauri::command]
+async fn cloud_backup_save_config(app: AppHandle, mut config: cloud_settings::Config) -> Result<(), CommandError> {
+    archive_worker(app, move |state| {
+        let host = state.host.lock().map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
+        let host = host.as_ref().ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
+        // No scheduler is shipped in #306. Saving is explicit reconfirmation.
+        config.automatic_enabled = false;
+        config.requires_confirmation = false;
+        cloud_settings::save(&host.paths().settings_file, &config)
+    }).await
+}
+#[tauri::command]
+async fn cloud_backup_test(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options) -> Result<(), CommandError> {
+    let (service, client) = archive_worker(app, move |state| Ok((cloud_backup_commands::service(state)?, cloud_backup_commands::client(state, &connection)?.0))).await?;
+    service.test_connection(&client, &options).await
+}
+#[tauri::command]
+async fn cloud_backup_discover(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options) -> Result<cloud_backup::restore_flow::Discovery, CommandError> {
+    let (service, client) = archive_worker(app, move |state| Ok((cloud_backup_commands::service(state)?, cloud_backup_commands::client(state, &connection)?.0))).await?;
+    service.discover(&client, &options).await
+}
+#[tauri::command]
+async fn cloud_backup_preview(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options, metadata: cloud_backup::model::Metadata) -> Result<cloud_backup::restore_flow::Preview, CommandError> {
+    let encrypted = metadata.encryption_format == cloud_backup::model::Encryption::AgeV1Scrypt;
+    let (service, client, passphrase) = archive_worker(app, move |state| {
+        let (client, binding) = cloud_backup_commands::client(state, &connection)?;
+        let passphrase = if encrypted { state.cloud_credentials.read(&binding, cloud_credentials::Kind::BackupPassphrase)? } else { None };
+        Ok((cloud_backup_commands::service(state)?, client, passphrase))
+    }).await?;
+    service.download_preview(&client, &options, metadata, passphrase).await
+}
+#[tauri::command]
+async fn cloud_backup_clear_preview(app: AppHandle) -> Result<(), CommandError> {
+    archive_worker(app, |state| cloud_backup_commands::service(state)?.clear_preview()).await
+}
+#[tauri::command]
+async fn cloud_backup_restore(app: AppHandle, token: String) -> Result<cloud_backup::restore_flow::RestoreOutcome, CommandError> {
+    archive_worker(app, move |state| {
+        let mut result = cloud_backup_commands::service(state)?.confirm_restore(&token, || suspend_cloud_automatic(state));
+        if let Ok(outcome) = result.as_mut() { outcome.refresh_warning = refresh_archive_paths(state).is_err(); }
+        result
+    }).await
+}
+
 #[tauri::command]
 async fn cloud_backup_start(
     app: AppHandle,
@@ -722,24 +781,6 @@ async fn cloud_backup_list(
     }).await?;
     service.list(&client, &options, &archive_id, &device_id).await
 }
-#[tauri::command]
-async fn cloud_backup_download(
-    app: AppHandle,
-    connection: cloud_credentials::ConnectionDescriptor,
-    options: cloud_backup::model::Options,
-    metadata: cloud_backup::model::Metadata,
-) -> Result<String, CommandError> {
-    let encrypted = metadata.encryption_format == cloud_backup::model::Encryption::AgeV1Scrypt;
-    let (service, client, passphrase) = archive_worker(app, move |state| {
-        let (client, binding) = cloud_backup_commands::client(state, &connection)?;
-        let passphrase = if encrypted {
-            state.cloud_credentials.read(&binding, cloud_credentials::Kind::BackupPassphrase)?
-        } else { None };
-        Ok((cloud_backup_commands::service(state)?, client, passphrase))
-    }).await?;
-    service.download(&client, &options, metadata, passphrase).await
-}
-
 /// The shared store mutex coordinates UI/IPC and archive switches. Disk-heavy
 /// jobs run off the WebView thread; callers receive their existing report/error.
 async fn archive_worker<T: Send + 'static>(
@@ -815,6 +856,7 @@ async fn restore_archive_cmd(
     package: String,
 ) -> Result<restore::RestoreReport, CommandError> {
     archive_worker(app, move |state| {
+        suspend_cloud_automatic(state)?;
         let paths = restore_paths(state)?;
         let slot = backup_commands::StoreSlot { slot: &state.store };
         let result = backup_commands::restore(
@@ -846,6 +888,7 @@ async fn rollback_to_cmd(
     id: String,
 ) -> Result<restore::RestoreReport, CommandError> {
     archive_worker(app, move |state| {
+        suspend_cloud_automatic(state)?;
         let paths = restore_paths(state)?;
         let slot = backup_commands::StoreSlot { slot: &state.store };
         let result = backup_commands::rollback(
@@ -2063,13 +2106,19 @@ pub fn run() {
             set_cloud_backup_credential,
             clear_cloud_backup_credential,
             cloud_backup_credential_status,
+            cloud_backup_config,
+            cloud_backup_save_config,
+            cloud_backup_test,
+            cloud_backup_discover,
+            cloud_backup_preview,
+            cloud_backup_clear_preview,
+            cloud_backup_restore,
             cloud_backup_start,
             cloud_backup_retry,
             cloud_backup_status,
             cloud_backup_cancel,
             cloud_backup_discard,
             cloud_backup_list,
-            cloud_backup_download,
             preview_restore_cmd,
             restore_archive_cmd,
             list_rollback_points_cmd,

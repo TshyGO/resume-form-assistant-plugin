@@ -76,7 +76,7 @@ function emptyItem(text: string, tone?: "error"): HTMLLIElement {
 }
 
 /** 恢复预览弹窗的正文：来源、时间、六类前后对比、替换说明。 */
-function restoreBody(path: string, preview: RestorePreview): Node {
+export function restoreBody(path: string, preview: RestorePreview): Node {
   const warnings: Node[] = [];
   if (preview.currentAvailable === false) {
     warnings.push(paragraph("当前档案打不开，无法读取数量或比较身份。确认后将从备份启用新档案，原有数据会保留。", "settings-dialog-warn"));

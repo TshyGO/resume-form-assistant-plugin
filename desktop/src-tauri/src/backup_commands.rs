@@ -225,6 +225,13 @@ pub fn restore(
     // transition re-reads the live pointer under the mutex before activation.
     crate::restore::read_previous_pointer(&paths.current_pointer)?;
     let prepared = crate::restore::prepare_restore(paths, package)?;
+    restore_prepared(slot, paths, prepared, now)
+}
+
+pub(crate) fn restore_prepared(
+    slot: &StoreSlot<'_>, paths: &RestorePaths,
+    prepared: crate::restore::PreparedRestore, now: &str,
+) -> Result<RestoreReport, CommandError> {
     transition(slot, paths, |close| {
         crate::restore::activate_restore(paths, prepared, now, close)
     })

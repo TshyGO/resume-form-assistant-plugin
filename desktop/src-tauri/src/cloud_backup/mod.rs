@@ -3,6 +3,7 @@ mod local;
 pub mod model;
 mod publish;
 mod remote;
+pub mod restore_flow;
 #[cfg(test)]
 mod tests;
 
@@ -34,6 +35,8 @@ pub fn fail(code: &str) -> CommandError {
             "INCOMPLETE_LIST" => "目录完整性未经验证，已跳过自动删除。",
             "NO_RETRY_PACKAGE" => "没有完整的可重试候选包，请放弃此作业后重新创建。",
             "LOCAL_IO" => "本地备份文件或任务记录读写失败。",
+            "INVALID_SETTINGS" => "本机 settings.json 损坏或云备份配置不合法；恢复或回滚未执行。请保留原文件，修复配置后重试。",
+            "SETTINGS_IO" => "无法读写本机 settings.json；恢复或回滚未执行。请检查文件权限及本机可用空间后重试。",
             _ => "云备份未完成，请根据错误码检查后重试。",
         }
         .into(),
@@ -75,6 +78,8 @@ pub struct Service {
     workspace: PreparedWorkspace,
     journal: Mutex<Journal>,
     active: Mutex<Option<CancellationToken>>,
+    preview: Mutex<Option<restore_flow::Pending>>,
+    preview_cleanup_warning: std::sync::atomic::AtomicBool,
 }
 pub struct Lease {
     service: Arc<Service>,
@@ -145,6 +150,8 @@ impl Service {
             workspace,
             journal: Mutex::new(state),
             active: Mutex::new(None),
+            preview: Mutex::new(None),
+            preview_cleanup_warning: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     fn reserve(self: &Arc<Self>) -> Result<Lease> {
@@ -172,10 +179,14 @@ impl Service {
         Ok(())
     }
     pub fn status(&self) -> Result<Status> {
+        // Preview cleanup is maintenance, never a prerequisite to read job/latest.
+        let _ = self.expire_preview();
         let state = self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?;
         Ok(Status {
             device_id: state.device_id.clone(),
+            cleanup_warning: self.preview_cleanup_warning.load(std::sync::atomic::Ordering::Relaxed),
             job: state.job.clone(),
+            latest_metadata: state.receipts.iter().find(|r| Some(&r.metadata.backup_id) == state.latest.as_ref()).map(|r| r.metadata.clone()),
             retry_package: state
                 .job
                 .as_ref()
@@ -547,7 +558,8 @@ impl Service {
         let lease = self.reserve()?;
         remote::catalog(client, &options.check()?, archive, device, &lease.cancel).await
     }
-    /// Fully verify an isolated download; do not change current or the live store.
+    /// Test adapter for the #305 verified transport boundary. Production uses token-bound preview.
+    #[cfg(test)]
     pub async fn download(
         self: &Arc<Self>,
         client: &impl remote::Remote,
@@ -556,11 +568,24 @@ impl Service {
         passphrase: Option<SecretString>,
     ) -> Result<String> {
         let lease = self.reserve()?;
+        let (task, package) = self.download_inner(client, options, metadata, passphrase, &lease.cancel).await?;
+        let destination = self.root.join("verified-download.rpbak");
+        let mut output = tempfile::Builder::new().prefix(".verified-").rand_bytes(32).tempfile_in(&self.root)?;
+        std::io::copy(&mut fs::File::open(&package)?, output.as_file_mut())?;
+        output.as_file().sync_all()?;
+        output.persist(&destination).map_err(|_| fail("LOCAL_IO"))?;
+        drop(task);
+        Ok(destination.display().to_string())
+    }
+    async fn download_inner(
+        self: &Arc<Self>, client: &impl remote::Remote, options: &Options,
+        metadata: Metadata, passphrase: Option<SecretString>, cancel: &CancellationToken,
+    ) -> Result<(TaskDirectory, PathBuf)> {
         let root = options.check()?;
         metadata.check()?;
         let folder = metadata.folder(&root)?;
         let actual = client
-            .read(&folder.child(&metadata.meta_name()?)?, &lease.cancel)
+            .read(&folder.child(&metadata.meta_name()?)?, cancel)
             .await?
             .ok_or_else(|| fail("NOT_FOUND"))?;
         if Metadata::parse(&actual)? != metadata {
@@ -574,14 +599,14 @@ impl Service {
                 &folder.child(&metadata.package)?,
                 &payload,
                 metadata.size_bytes,
-                &lease.cancel,
+                cancel,
             )
             .await?;
         if hash != metadata.package_sha256 || fs::metadata(&payload)?.len() != metadata.size_bytes {
             return Err(fail("HASH_MISMATCH"));
         }
         let service = self.clone();
-        let token = lease.cancel.clone();
+        let token = cancel.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let package = task.path().join("verified.rpbak");
             if metadata.encryption_format == Encryption::AgeV1Scrypt {
@@ -614,15 +639,7 @@ impl Service {
             if token.is_cancelled() {
                 return Err(fail("CANCELLED"));
             }
-            let destination = service.root.join("verified-download.rpbak");
-            let mut output = tempfile::Builder::new()
-                .prefix(".verified-")
-                .rand_bytes(32)
-                .tempfile_in(&service.root)?;
-            std::io::copy(&mut fs::File::open(&package)?, output.as_file_mut())?;
-            output.as_file().sync_all()?;
-            output.persist(&destination).map_err(|_| fail("LOCAL_IO"))?;
-            Ok(destination.display().to_string())
+            Ok((task, package))
         })
         .await
         .map_err(|_| fail("WORKER_FAILED"))?
