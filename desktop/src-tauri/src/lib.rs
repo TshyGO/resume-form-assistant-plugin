@@ -660,14 +660,10 @@ async fn clear_cloud_backup_credential(
 ) -> Result<(), CommandError> {
     archive_worker(app, move |state| {
         let binding = cloud_credentials::Binding::checked(&connection)?;
-        let service = cloud_backup_commands::service(state)?;
-        let _credentials_guard = service.credential_guard()?;
-        suspend_cloud_automatic(state)?;
-        if matches!(kind, cloud_credentials::Kind::BackupPassphrase) { service.invalidate_passphrase()?; }
-        state
-            .cloud_credentials
-            .clear(&binding, kind)
-            .map_err(CommandError::from)
+        let service = cloud_backup_commands::service(state).ok();
+        cloud_backup_commands::clear_credential(service.as_ref(), kind,
+            || suspend_cloud_automatic(state),
+            || state.cloud_credentials.clear(&binding, kind).map_err(CommandError::from))
     })
     .await
 }
