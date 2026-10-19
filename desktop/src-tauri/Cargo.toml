@@ -23,6 +23,9 @@ ai-extract = { path = "../crates/ai-extract" }
 archive-store = { path = "../crates/archive-store" }
 backup = { path = "../crates/backup" }
 backup-crypt = { path = "../crates/backup-crypt" }
+webdav-client = { path = "../crates/webdav-client" }
+fs2 = "0.4"
+tempfile = "3"
 data-service = { path = "../crates/data-service" }
 evidence-import = { path = "../crates/evidence-import" }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }

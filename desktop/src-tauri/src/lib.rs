@@ -5,6 +5,8 @@ mod ai_complete;
 mod ai_commands_tests;
 mod ai_credentials;
 mod cloud_credentials;
+mod cloud_backup;
+mod cloud_backup_commands;
 mod ai_models;
 mod ai_provider_commands;
 mod ai_settings;
@@ -77,8 +79,8 @@ struct AppState {
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
     cloud_credentials: Box<dyn cloud_credentials::CredentialStore>,
-    /// None after cleanup failure: #305 must acquire a prepared workspace before jobs.
-    cloud_workspace: Mutex<Option<backup_crypt::workspace::PreparedWorkspace>>,
+    /// None when workspace or journal startup fails; archive access stays available.
+    cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
     /// 不排队也不重试。
     ai_inflight: ai_commands::InflightRegistry,
@@ -673,6 +675,69 @@ async fn cloud_backup_credential_status(
             .map_err(CommandError::from)
     })
     .await
+}
+
+#[tauri::command]
+async fn cloud_backup_start(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    options: cloud_backup::model::Options,
+) -> Result<cloud_backup::model::Job, CommandError> {
+    archive_worker(app, move |state| {
+        cloud_backup_commands::start(state, connection, options, false)
+    }).await
+}
+#[tauri::command]
+async fn cloud_backup_retry(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    options: cloud_backup::model::Options,
+) -> Result<cloud_backup::model::Job, CommandError> {
+    archive_worker(app, move |state| {
+        cloud_backup_commands::start(state, connection, options, true)
+    }).await
+}
+#[tauri::command]
+async fn cloud_backup_status(app: AppHandle) -> Result<cloud_backup::model::Status, CommandError> {
+    archive_worker(app, |state| cloud_backup_commands::service(state)?.status()).await
+}
+#[tauri::command]
+fn cloud_backup_cancel(state: State<AppState>) -> Result<(), CommandError> {
+    cloud_backup_commands::service(&state)?.cancel()
+}
+#[tauri::command]
+async fn cloud_backup_discard(app: AppHandle) -> Result<(), CommandError> {
+    archive_worker(app, |state| cloud_backup_commands::service(state)?.discard()).await
+}
+#[tauri::command]
+async fn cloud_backup_list(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    options: cloud_backup::model::Options,
+    archive_id: String,
+    device_id: String,
+) -> Result<cloud_backup::model::Catalog, CommandError> {
+    let (service, client) = archive_worker(app, move |state| {
+        Ok((cloud_backup_commands::service(state)?, cloud_backup_commands::client(state, &connection)?.0))
+    }).await?;
+    service.list(&client, &options, &archive_id, &device_id).await
+}
+#[tauri::command]
+async fn cloud_backup_download(
+    app: AppHandle,
+    connection: cloud_credentials::ConnectionDescriptor,
+    options: cloud_backup::model::Options,
+    metadata: cloud_backup::model::Metadata,
+) -> Result<String, CommandError> {
+    let encrypted = metadata.encryption_format == cloud_backup::model::Encryption::AgeV1Scrypt;
+    let (service, client, passphrase) = archive_worker(app, move |state| {
+        let (client, binding) = cloud_backup_commands::client(state, &connection)?;
+        let passphrase = if encrypted {
+            state.cloud_credentials.read(&binding, cloud_credentials::Kind::BackupPassphrase)?
+        } else { None };
+        Ok((cloud_backup_commands::service(state)?, client, passphrase))
+    }).await?;
+    service.download(&client, &options, metadata, passphrase).await
 }
 
 /// The shared store mutex coordinates UI/IPC and archive switches. Disk-heavy
@@ -1766,7 +1831,7 @@ pub fn run() {
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
-            cloud_workspace: Mutex::new(None),
+            cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
             latest_update: Mutex::new(None),
@@ -1814,7 +1879,22 @@ pub fn run() {
                     // A cleanup failure blocks cloud jobs, not access to archives.
                     match backup_crypt::workspace::PreparedWorkspace::prepare(&host.paths().data_root) {
                         Ok(workspace) => {
-                            if let Ok(mut slot) = app.state::<AppState>().cloud_workspace.lock() { *slot = Some(workspace); }
+                            let hp = host.paths();
+                            let paths = restore::RestorePaths {
+                                data_root: hp.data_root.clone(),
+                                archive_dir: hp.archive_dir.clone(),
+                                current_pointer: hp.current_pointer.clone(),
+                                archives_retired_dir: hp.archives_retired_dir.clone(),
+                                settings_file: hp.settings_file.clone(),
+                            };
+                            match cloud_backup::Service::open(paths, Arc::clone(&app.state::<AppState>().store), workspace) {
+                                Ok(service) => {
+                                    if let Ok(mut slot) = app.state::<AppState>().cloud_backups.lock() {
+                                        *slot = Some(service);
+                                    }
+                                },
+                                Err(_) => eprintln!("cloud backup journal unavailable; cloud jobs disabled"),
+                            }
                         },
                         Err(_) => eprintln!("cloud backup workspace cleanup failed; retry cleanup before cloud jobs"),
                     }
@@ -1983,6 +2063,13 @@ pub fn run() {
             set_cloud_backup_credential,
             clear_cloud_backup_credential,
             cloud_backup_credential_status,
+            cloud_backup_start,
+            cloud_backup_retry,
+            cloud_backup_status,
+            cloud_backup_cancel,
+            cloud_backup_discard,
+            cloud_backup_list,
+            cloud_backup_download,
             preview_restore_cmd,
             restore_archive_cmd,
             list_rollback_points_cmd,
