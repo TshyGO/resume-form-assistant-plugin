@@ -92,7 +92,12 @@ TypeScript：`desktop/src/cloud-backup-api.ts`；Tauri 命令：
 | `cloud_backup_retry(connection, options)` | 同一连接/账号/根目录/加密模式重试原候选；无需重新加密 |
 | `cloud_backup_discard()` | 明确放弃候选；保留远端归属证据，保留 latest |
 | `cloud_backup_list(connection, options, archiveId, deviceId)` | 读取某设备的合法备份列表 |
-| `cloud_backup_download(connection, options, metadata)` | 返回完全验证后的本地 .rpbak 路径 |
+| `cloud_backup_config()` / `cloud_backup_save_config(config)` | 读取/保存本机非秘密配置，保存后保持手动模式 |
+| `cloud_backup_test(connection, options)` | 只读测试所填根目录，不承诺上传权限 |
+| `cloud_backup_discover(connection, options)` | 返回 sources 与 warnings；无需旧设备 ID，部分目录失败保留可用来源 |
+| `cloud_backup_preview(connection, options, metadata)` | 完整下载校验后返回 token、有效期与业务差异，不返回本地临时路径 |
+| `cloud_backup_clear_preview()` | 作废预览并检查临时明文清理结果 |
+| `cloud_backup_restore(token)` | 单次消费绑定令牌，返回 report 与 cleanupWarning，不把清理失败当作恢复失败 |
 
 connection 与 #304 凭据命令使用同一 connectionId/HTTPS endpoint/username；口令由 Rust
 从系统凭据库读取，不加入任务记录或命令结果。默认 encrypted=true；false 必须是 UI 中的明确选择。
@@ -100,11 +105,12 @@ connection 与 #304 凭据命令使用同一 connectionId/HTTPS endpoint/usernam
 重试可调整 keepLast 和上传上限（新上限不能小于现有包），不强迫重新打包；
 preferMove 也可更新，但已有传输意图时继续使用记录的发布路径，避免切换策略产生重复对象。
 
-下载先直接重读元数据，再检查实际字节数/SHA-256、age 最终认证和包内每个条目哈希，
-全部成功才原子替换 `cloud-backup-state/verified-download.rpbak`，失败保留此前有效下载。
-下载成功后仍须调用既有备份预览和用户明确确认的恢复流程，不会自动切换活动档案。
-该验证输出路径会被后一次成功下载替换；#306 的预览 token 必须绑定同一个文件摘要和期限，
-执行恢复前重新验证 token，不能只记路径。
+下载先直接重读元数据，再检查实际字节数/SHA-256、age 最终认证和包内每个条目哈希。
+生产包留在后台私有任务目录，返回十分钟有效、单次消费的随机 token 和只读差异预览。
+用户明确确认后只传 token；后台检查同一任务文件哈希、准备隔离恢复、再次检查哈希与期限，
+再持久化关闭自动备份门禁并切换活动档案。新选择、取消、过期或重启均使 token 失效。
+正常结束显式检查临时目录删除结果，异常退出在启动时清理；恢复成功后的清理失败返回警告。
+固定 `verified-download.rpbak` 仅是 #305 底层测试适配器，不存在对应生产 IPC。
 口令更改影响新备份，下载旧包须在凭据库中提供对应旧口令；遗失无找回。
 
 ## 验证范围
@@ -116,4 +122,4 @@ fake Remote 注入与生产共用同一发布/保留代码；底层真实 HTTP s
 这不是一次真实坚果云账号兼容性验证，也不替代 #306 的界面/凭据库实机验收。
 
 
-#306 接入更新：初期路径式 `cloud_backup_download` IPC 已由 `cloud_backup_preview` 返回单次、有时限的绑定令牌替代；确认仅使用 `cloud_backup_restore(token)`。工作明文不发布到固定下载路径，结束后清理。最终用户流程与真实验收状态见 [手动云备份验收](d15-manual-cloud-acceptance.md)。
+**#306 接入更新**：初期路径式 `cloud_backup_download` IPC 已由 `cloud_backup_preview` 返回单次、有时限的绑定令牌替代；确认仅使用 `cloud_backup_restore(token)`。工作明文不发布到固定下载路径，结束后清理。最终用户流程与真实验收状态见 [手动云备份验收](d15-manual-cloud-acceptance.md)。

@@ -57,6 +57,8 @@ export interface CloudConfig {
 }
 export interface CloudPreview { token: string; backupId: string; expiresAt: string; preview: RestorePreview }
 export interface CloudNamespace { archiveId: string; deviceId: string }
+export interface CloudDiscovery { sources: CloudNamespace[]; warnings: string[] }
+export interface CloudRestoreOutcome { report: RestoreReport; cleanupWarning: boolean }
 export interface CloudCatalog {
   entries: CloudMetadata[];
   cleanupSafe: boolean;
@@ -71,9 +73,9 @@ export function cloudBackupApi(invoke: Invoke) {
     setCredential: (connection: CloudConnection, kind: "webdavPassword" | "backupPassphrase", value: string) => invoke<void>("set_cloud_backup_credential", { connection, kind, value }),
     clearCredential: (connection: CloudConnection, kind: "webdavPassword" | "backupPassphrase") => invoke<void>("clear_cloud_backup_credential", { connection, kind }),
     test: (connection: CloudConnection, options: CloudOptions) => invoke<void>("cloud_backup_test", { connection, options }),
-    discover: (connection: CloudConnection, options: CloudOptions) => invoke<CloudNamespace[]>("cloud_backup_discover", { connection, options }),
+    discover: (connection: CloudConnection, options: CloudOptions) => invoke<CloudDiscovery>("cloud_backup_discover", { connection, options }),
     preview: (connection: CloudConnection, options: CloudOptions, metadata: CloudMetadata) => invoke<CloudPreview>("cloud_backup_preview", { connection, options, metadata }),
-    restore: (token: string) => invoke<RestoreReport>("cloud_backup_restore", { token }),
+    restore: (token: string) => invoke<CloudRestoreOutcome>("cloud_backup_restore", { token }),
     clearPreview: () => invoke<void>("cloud_backup_clear_preview"),
     start: (connection: CloudConnection, options: CloudOptions = {}) =>
       invoke<CloudJob>("cloud_backup_start", { connection, options }),

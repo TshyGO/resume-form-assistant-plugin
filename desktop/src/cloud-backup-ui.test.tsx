@@ -17,14 +17,17 @@ function setup(overrides: Record<string, unknown> = {}) {
   const onRestored = vi.fn();
   const invoke: Invoke = async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
     calls.push({ name, args });
+    const override = overrides[name];
+    if (typeof override === "function") return await override(args) as T;
     if (overrides[name] instanceof Error) throw overrides[name];
     return (overrides[name] ?? ({
       cloud_backup_config: config,
       cloud_backup_status: { job: null, latestPackage: null, latestMetadata: null, retryPackage: null },
       cloud_backup_credential_status: { hasWebdavPassword: true, hasBackupPassphrase: true },
-      cloud_backup_discover: [{ archiveId: metadata.archiveId, deviceId: metadata.deviceId }],
+      cloud_backup_discover: { sources: [{ archiveId: metadata.archiveId, deviceId: metadata.deviceId }], warnings: [] },
       cloud_backup_list: { entries: [metadata], cleanupSafe: false, contentHashVerified: false },
       cloud_backup_preview: { token: "bound-token", backupId: metadata.backupId, expiresAt: "2026-10-19T00:10:00Z", preview: { incoming: counts, current: { ...counts, applications: 2 }, createdAt: metadata.createdAt, sameArchive: false, currentAvailable: true, existingRollbackPoints: 0 } },
+      cloud_backup_restore: { report: {}, cleanupWarning: false },
     } as Record<string, unknown>)[name]) as T;
   };
   const refresh = mountCloudBackup(invoke, onRestored);
@@ -92,4 +95,33 @@ test("unsaved account edits prevent remote actions; error messages suggest a con
   expect(cloudError({ code: "CLOUD_CRYPT_InvalidCiphertext" })).toContain("加密口令");
   expect(cloudError({ code: "CLOUD_PREVIEW_EXPIRED" })).toContain("重新下载");
   expect(cloudError({ code: "CLOUD_DAV_Authentication" })).toContain("第三方应用密码");
+});
+test("a cleanup error after successful restore preserves the result and tells the user to check plaintext", async () => {
+  const { refresh, query, onRestored } = setup({ cloud_backup_clear_preview: new Error("cleanup unavailable") });
+  await refresh(); click("cloud-browse");
+  await waitFor(() => expect((query.getByRole("button", { name: "下载校验并预览" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(query.getByRole("button", { name: "下载校验并预览" }));
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认替换当前档案" }));
+  await waitFor(() => expect(query.getByText(/档案已恢复成功；临时明文清理未确认/)).toBeTruthy());
+  expect(onRestored).toHaveBeenCalledOnce();
+  expect(query.queryByText(/操作未完成.*当前档案/)).toBeNull();
+});
+test("one transient status failure does not leave controls permanently disabled", async () => {
+  vi.useFakeTimers();
+  try {
+    let reads = 0;
+    const { refresh } = setup({ cloud_backup_status: async () => {
+      reads++;
+      if (reads === 2) throw { code: "CLOUD_LOCAL_IO" };
+      return { job: { phase: reads === 1 ? "uploading" : "succeeded", metadata, warnings: [], errorCode: null }, latestPackage: null, latestMetadata: null, retryPackage: null };
+    } });
+    await refresh();
+    const start = document.getElementById("cloud-start") as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(reads).toBe(2); expect(start.disabled).toBe(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(reads).toBe(3); expect(start.disabled).toBe(false);
+  } finally { vi.useRealTimers(); }
 });

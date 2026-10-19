@@ -19,6 +19,12 @@ pub struct Preview {
     expires_at: String,
     preview: RestorePreview,
 }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreOutcome {
+    pub report: crate::restore::RestoreReport,
+    pub cleanup_warning: bool,
+}
 impl Service {
     pub async fn download_preview(
         self: &Arc<Self>,
@@ -48,7 +54,7 @@ impl Service {
             let token = uuid::Uuid::new_v4().to_string();
             let expires_at = (time::OffsetDateTime::now_utc() + time::Duration::minutes(10))
                 .format(&time::format_description::well_known::Rfc3339)
-                .unwrap();
+                .map_err(|_| fail("INVALID_DATE"))?;
             *service.preview.lock().map_err(|_| fail("LOCAL_STATE"))? = Some(Pending {
                 token: token.clone(),
                 _task: task,
@@ -74,13 +80,24 @@ impl Service {
         .map_err(|_| fail("WORKER_FAILED"))?
     }
     fn clear_preview_inner(&self) -> Result<()> {
-        self.preview.lock().map_err(|_| fail("LOCAL_STATE"))?.take();
+        let pending = self.preview.lock().map_err(|_| fail("LOCAL_STATE"))?.take();
+        if let Some(pending) = pending {
+            pending
+                ._task
+                .close()
+                .map_err(|_| fail("CLEANUP_UNCONFIRMED"))?;
+        }
         Ok(())
     }
     pub(super) fn expire_preview(&self) -> Result<()> {
         let mut guard = self.preview.lock().map_err(|_| fail("LOCAL_STATE"))?;
         if guard.as_ref().is_some_and(|p| Instant::now() >= p.expires) {
-            guard.take();
+            let pending = guard.take().unwrap();
+            drop(guard);
+            pending
+                ._task
+                .close()
+                .map_err(|_| fail("CLEANUP_UNCONFIRMED"))?;
         }
         Ok(())
     }
@@ -92,7 +109,7 @@ impl Service {
         self: &Arc<Self>,
         token: &str,
         before_activation: impl FnOnce() -> Result<()>,
-    ) -> Result<crate::restore::RestoreReport> {
+    ) -> Result<RestoreOutcome> {
         let lease = self.reserve()?;
         let pending = self
             .preview
@@ -100,31 +117,46 @@ impl Service {
             .map_err(|_| fail("LOCAL_STATE"))?
             .take()
             .ok_or_else(|| fail("PREVIEW_EXPIRED"))?;
-        if pending.token != token || Instant::now() >= pending.expires {
-            return Err(fail("PREVIEW_EXPIRED"));
+        let outcome = (|| {
+            if pending.token != token || Instant::now() >= pending.expires {
+                return Err(fail("PREVIEW_EXPIRED"));
+            }
+            let (_, hash) = local::hash(&pending.package, &lease.cancel)?;
+            if hash != pending.hash {
+                return Err(fail("PREVIEW_CHANGED"));
+            }
+            let prepared = crate::restore::prepare_restore(&self.paths, &pending.package)?;
+            let (_, hash) = local::hash(&pending.package, &lease.cancel)?;
+            if hash != pending.hash {
+                return Err(fail("PREVIEW_CHANGED"));
+            }
+            if lease.cancel.is_cancelled() {
+                return Err(fail("CANCELLED"));
+            }
+            if Instant::now() >= pending.expires {
+                return Err(fail("PREVIEW_EXPIRED"));
+            }
+            before_activation()?;
+            backup_commands::restore_prepared(
+                &StoreSlot { slot: &self.store },
+                &self.paths,
+                prepared,
+                &model::now(),
+            )
+        })();
+        let cleanup_warning = pending._task.close().is_err();
+        match outcome {
+            Ok(report) => Ok(RestoreOutcome {
+                report,
+                cleanup_warning,
+            }),
+            Err(mut error) => {
+                if cleanup_warning {
+                    error.code.push_str("_CLEANUP_UNCONFIRMED");
+                }
+                Err(error)
+            }
         }
-        let (_, hash) = local::hash(&pending.package, &lease.cancel)?;
-        if hash != pending.hash {
-            return Err(fail("PREVIEW_CHANGED"));
-        }
-        let prepared = crate::restore::prepare_restore(&self.paths, &pending.package)?;
-        let (_, hash) = local::hash(&pending.package, &lease.cancel)?;
-        if hash != pending.hash {
-            return Err(fail("PREVIEW_CHANGED"));
-        }
-        if lease.cancel.is_cancelled() {
-            return Err(fail("CANCELLED"));
-        }
-        if Instant::now() >= pending.expires {
-            return Err(fail("PREVIEW_EXPIRED"));
-        }
-        before_activation()?;
-        backup_commands::restore_prepared(
-            &StoreSlot { slot: &self.store },
-            &self.paths,
-            prepared,
-            &model::now(),
-        )
     }
     /// Bounded hierarchy discovery; no device ID is required on a new machine.
     /// Discovery grants no deletion rights and downloads no package bodies.
@@ -132,18 +164,25 @@ impl Service {
         self: &Arc<Self>,
         remote: &impl remote::Remote,
         options: &Options,
-    ) -> Result<Vec<Namespace>> {
+    ) -> Result<Discovery> {
         let lease = self.reserve()?;
         let root = options.check()?.child("ResumePro")?;
         let archives = match remote.list(&root, &lease.cancel).await {
             Ok(l) => l,
-            Err(e) if e.code == "CLOUD_DAV_NotFound" => return Ok(vec![]),
+            Err(e) if e.code == "CLOUD_DAV_NotFound" => {
+                return Ok(Discovery {
+                    sources: vec![],
+                    warnings: vec![],
+                })
+            }
             Err(e) => return Err(e),
         };
         if archives.entries.len() > 64 {
             return Err(fail("CATALOG_LIMIT"));
         }
         let mut result = vec![];
+        let mut warnings = vec![];
+        let mut first_error = None;
         for archive in archives.entries {
             let parts = archive.path.segments();
             let Some(id) = parts.last() else { continue };
@@ -154,7 +193,19 @@ impl Service {
             {
                 continue;
             }
-            let devices = remote.list(&archive.path, &lease.cancel).await?;
+            let devices = match remote.list(&archive.path, &lease.cancel).await {
+                Ok(devices) => devices,
+                Err(error) if lease.cancel.is_cancelled() || error.code == "CLOUD_CANCELLED" => {
+                    return Err(error)
+                }
+                Err(error) => {
+                    warnings.push(error.code.clone());
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    continue;
+                }
+            };
             if devices.entries.len() + result.len() > 128 {
                 return Err(fail("CATALOG_LIMIT"));
             }
@@ -173,7 +224,15 @@ impl Service {
                 }
             }
         }
-        Ok(result)
+        if result.is_empty() {
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+        }
+        Ok(Discovery {
+            sources: result,
+            warnings,
+        })
     }
     /// Connection test reads only the selected root; it never publishes user data.
     pub async fn test_connection(
@@ -191,4 +250,10 @@ impl Service {
 pub struct Namespace {
     archive_id: String,
     device_id: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Discovery {
+    pub sources: Vec<Namespace>,
+    pub warnings: Vec<String>,
 }

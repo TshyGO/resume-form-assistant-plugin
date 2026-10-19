@@ -35,6 +35,8 @@ pub fn fail(code: &str) -> CommandError {
             "INCOMPLETE_LIST" => "目录完整性未经验证，已跳过自动删除。",
             "NO_RETRY_PACKAGE" => "没有完整的可重试候选包，请放弃此作业后重新创建。",
             "LOCAL_IO" => "本地备份文件或任务记录读写失败。",
+            "INVALID_SETTINGS" => "本机 settings.json 损坏或云备份配置不合法；恢复或回滚未执行。请保留原文件，修复配置后重试。",
+            "SETTINGS_IO" => "无法读写本机 settings.json；恢复或回滚未执行。请检查文件权限及本机可用空间后重试。",
             _ => "云备份未完成，请根据错误码检查后重试。",
         }
         .into(),

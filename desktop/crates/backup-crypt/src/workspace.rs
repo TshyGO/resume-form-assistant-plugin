@@ -101,6 +101,11 @@ impl TaskDirectory {
     pub fn path(&self) -> &Path {
         self.0.path()
     }
+    /// Explicit completion can report a cleanup failure instead of silently
+    /// relying on TempDir's best-effort destructor. Startup cleanup remains fallback.
+    pub fn close(self) -> io::Result<()> {
+        self.0.close()
+    }
 }
 
 #[cfg(test)]

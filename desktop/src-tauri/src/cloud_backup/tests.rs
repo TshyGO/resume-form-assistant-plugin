@@ -9,6 +9,7 @@ struct Server {
     events: Vec<(String, Vec<String>)>,
     fault: Option<(String, bool)>,
     truncated: bool,
+    denied_list: Option<Vec<String>>,
 }
 #[derive(Default, Clone)]
 struct Fake(Arc<Mutex<Server>>);
@@ -62,6 +63,7 @@ impl Fake {
 impl Remote for Fake {
     async fn list(&self, p: &RemotePath, c: &CancellationToken) -> Result<Listing> {
         self.act("LIST", p, c, |s| {
+            if s.denied_list.as_deref() == Some(p.segments()) { return Err(fail("DAV_Permission")); }
             let mut entries = Vec::new();
             for d in &s.dirs {
                 if d.len() == p.segments().len() + 1 && d.starts_with(p.segments()) {
@@ -215,12 +217,18 @@ async fn new_machine_discovers_sources_without_body_download_or_deletion_rights(
     let (job, lease) = candidate(&a, false, None);
     a.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     let sources = b.service.discover(&remote, &options()).await.unwrap();
-    let json = serde_json::to_value(sources).unwrap();
+    let json = serde_json::to_value(sources.sources).unwrap();
     assert_eq!(json[0]["archiveId"], job.metadata.archive_id);
     assert_eq!(json[0]["deviceId"], job.metadata.device_id);
     assert_eq!(remote.count("DOWNLOAD"), 0);
     assert_eq!(remote.count("DELETE"), 0);
     assert_ne!(b.service.status().unwrap().device_id, job.metadata.device_id);
+    let denied = RemotePath::new(&["ResumePro", &uuid::Uuid::new_v4().to_string()]).unwrap();
+    remote.0.lock().unwrap().dirs.insert(denied.segments().to_vec());
+    remote.0.lock().unwrap().denied_list = Some(denied.segments().to_vec());
+    let partial = b.service.discover(&remote, &options()).await.unwrap();
+    assert_eq!(partial.sources.len(), 1);
+    assert_eq!(partial.warnings, vec!["CLOUD_DAV_Permission"]);
 }
 
 #[tokio::test]
@@ -263,7 +271,7 @@ async fn cloud_confirmation_replaces_an_independent_archive_then_writes_backs_up
     source.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     let old = target.store.lock().unwrap().as_ref().unwrap().identity().clone();
     let preview = target.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
-    let report = target.service.confirm_restore(&preview.token, || Ok(())).unwrap();
+    let report = target.service.confirm_restore(&preview.token, || Ok(())).unwrap().report;
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().identity().archive_id, job.metadata.archive_id);
     assert_ne!(report.restore_epoch, old.restore_epoch);
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 1);
@@ -281,6 +289,28 @@ async fn cloud_confirmation_replaces_an_independent_archive_then_writes_backs_up
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 2);
     crate::backup_commands::rollback(&crate::backup_commands::StoreSlot { slot: &target.store }, &target.paths, &report.rollback_point, &now()).unwrap();
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 0);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn cleanup_failure_after_activation_returns_success_with_a_warning() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let l = layout(); let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let preview = l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    let task = l.service.preview.lock().unwrap().as_ref().unwrap().package.parent().unwrap().to_owned();
+    // Pin an extracted verification file, while leaving the verified package readable.
+    // This forces real Windows recursive removal failure after a successful switch.
+    let blocker = fs::OpenOptions::new().read(true).share_mode(0)
+        .open(task.join("verify/archive/archive.db")).unwrap();
+    let outcome = l.service.confirm_restore(&preview.token, || Ok(())).unwrap();
+    assert!(outcome.cleanup_warning);
+    assert_eq!(l.store.lock().unwrap().as_ref().unwrap().identity().restore_epoch, outcome.report.restore_epoch);
+    assert!(task.exists());
+    drop(blocker);
+    PreparedWorkspace::prepare(&l.paths.data_root).unwrap();
+    assert!(!task.exists());
 }
 fn candidate(l: &Layout, move_verified: bool, keep: Option<usize>) -> (Job, Lease) {
     let mut o = options();

@@ -709,7 +709,7 @@ async fn cloud_backup_test(app: AppHandle, connection: cloud_credentials::Connec
     service.test_connection(&client, &options).await
 }
 #[tauri::command]
-async fn cloud_backup_discover(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options) -> Result<Vec<cloud_backup::restore_flow::Namespace>, CommandError> {
+async fn cloud_backup_discover(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options) -> Result<cloud_backup::restore_flow::Discovery, CommandError> {
     let (service, client) = archive_worker(app, move |state| Ok((cloud_backup_commands::service(state)?, cloud_backup_commands::client(state, &connection)?.0))).await?;
     service.discover(&client, &options).await
 }
@@ -728,7 +728,7 @@ async fn cloud_backup_clear_preview(app: AppHandle) -> Result<(), CommandError> 
     archive_worker(app, |state| cloud_backup_commands::service(state)?.clear_preview()).await
 }
 #[tauri::command]
-async fn cloud_backup_restore(app: AppHandle, token: String) -> Result<restore::RestoreReport, CommandError> {
+async fn cloud_backup_restore(app: AppHandle, token: String) -> Result<cloud_backup::restore_flow::RestoreOutcome, CommandError> {
     archive_worker(app, move |state| {
         let result = cloud_backup_commands::service(state)?.confirm_restore(&token, || suspend_cloud_automatic(state));
         if result.is_ok() { refresh_archive_paths(state)?; }

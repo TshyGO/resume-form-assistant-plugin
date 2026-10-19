@@ -27,14 +27,17 @@ export function cloudError(error: unknown): string {
     ["CREDENTIAL_STORE_UNAVAILABLE", "系统凭据库不可用：请解锁系统凭据库后重试；密码不会保存到文件。"],
     ["CANCELLED", "任务已取消，当前档案未替换。完整上传候选包可以重试或明确放弃。"],
     ["BUSY", "另一项云备份任务正在进行，请等待或取消。"],
+    ["INVALID_SETTINGS", "本机 settings.json 损坏或云备份配置不合法，恢复未执行；请保留原文件并修复配置后重试。"],
+    ["SETTINGS_IO", "无法读写本机 settings.json，恢复未执行；请检查文件权限和本机可用空间后重试。"],
     ["RETRY_REQUIRED", "有未完成的候选包：请重试，或明确放弃后创建新备份。"],
     ["SCOPE_MISMATCH", "候选包属于原账号、目录或加密设置：请恢复原配置后重试，或放弃候选包。"],
     ["Network", "网络连接失败：请检查网络；上传结果不明确时请重试原候选包完成对账。"],
     ["Timeout", "网络超时：请检查网络；上传结果不明确时请重试原候选包完成对账。"],
     ["CATALOG_LIMIT", "云端目录数量超过安全读取上限：请使用更精确的远端根目录。"],
   ];
-  return hints.find(([match]) => code.includes(match))?.[1]
+  const hint = hints.find(([match]) => code.includes(match))?.[1]
     ?? `操作未完成（${code || "未知错误"}），请检查配置或重试。当前档案及上一份有效备份会保留。`;
+  return hint + (code.includes("CLEANUP_UNCONFIRMED") ? "临时明文清理未确认，请重启后检查工作目录。" : "");
 }
 const phaseNames: Record<CloudJob["phase"], string> = {
   packing: "正在生成本地备份", encrypting: "正在加密（密钥计算期间取消会稍后生效）",
@@ -100,7 +103,10 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       must("cloud-retry").hidden = !status.retryPackage;
       must("cloud-discard").hidden = !status.retryPackage;
       if (uploading) timer = setTimeout(() => void poll(), 1500);
-    } catch (error) { tell(cloudError(error), "error"); }
+    } catch (error) {
+      tell(cloudError(error), "error");
+      if (uploading) timer = setTimeout(() => void poll(), 5000);
+    }
     controls();
   }
   for (const control of [endpoint, username, root, encrypted, keep, password, passphrase]) control.addEventListener("input", () => {
@@ -185,7 +191,9 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   must("cloud-browse").addEventListener("click", () => void guarded(async () => {
     const c = selectedConfig(); progress.textContent = "正在查找档案与来源设备，无需旧设备标识…";
     list.replaceChildren(); records = [];
-    namespaces = await api.discover(c.connection, c.options);
+    const discovery = await api.discover(c.connection, c.options);
+    namespaces = discovery.sources;
+    if (discovery.warnings.length) tell(`部分档案目录未能读取，下面只展示可用来源。${cloudError(discovery.warnings[0])}`, "warn");
     namespace.replaceChildren(...namespaces.map((source, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `档案 ${source.archiveId} / 设备 ${source.deviceId}`; return option; }));
     must("cloud-namespace-label").hidden = !namespaces.length;
     if (namespaces.length) await readNamespace(); else progress.textContent = "该根目录下尚未发现备份。请核对远端目录；目录可能不完整。";
@@ -199,6 +207,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     void guarded(async () => {
       const c = selectedConfig();
       progress.textContent = "正在下载并校验传输哈希、加密认证和档案内部文件…";
+      let restored = false, cleanupWarning = false;
       try {
         const result = await api.preview(c.connection, c.options, metadata);
         progress.textContent = "已完整下载并校验；等待你核对差异并确认恢复。";
@@ -206,23 +215,29 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
           factList([["预览有效期", cloudTime(result.expiresAt)], ["云端文件", "传输与内部校验通过"]]),
           restoreBody(metadata.package, result.preview),
           paragraph("恢复后本机自动云备份会关闭；设备标识与删除权限不会从备份迁移。", "settings-dialog-warn")),
-          confirmLabel: "确认替换当前档案", busyLabel: "正在恢复…", action: async () => { await api.restore(result.token); }, describeError: cloudError,
+          confirmLabel: "确认替换当前档案", busyLabel: "正在恢复…", action: async () => { const outcome = await api.restore(result.token); restored = true; cleanupWarning = outcome.cleanupWarning; }, describeError: cloudError,
         });
         if (confirmed) {
-          tell("恢复成功，旧档案已保存为回滚点。本机自动云备份已关闭，请重新确认配置。", "success");
-          await onRestored();
-          loaded = false; await refresh();
+          tell(`恢复成功，旧档案已保存为回滚点。本机自动云备份已关闭，请重新确认配置。${cleanupWarning ? "临时明文清理未确认，请重启后检查工作目录。" : ""}`, cleanupWarning ? "warn" : "success");
+          try { await onRestored(); loaded = false; await refresh(); }
+          catch { tell("档案已恢复成功，但界面刷新失败。请重新打开页面核对；不要重复恢复。", "warn"); }
         } else tell("已取消恢复，当前档案没有改动。", "info");
       } finally {
-        await api.clearPreview();
-        progress.textContent = "云端恢复任务已结束，临时明文已清理。";
+        try {
+          await api.clearPreview();
+          progress.textContent = cleanupWarning ? "档案已恢复；临时明文清理未确认。" : "云端恢复任务已结束，临时明文清理已完成。";
+        } catch (error) {
+          const code = (error as { code?: string } | null)?.code ?? "CLEANUP_UNCONFIRMED";
+          tell(`${restored ? "档案已恢复成功；" : "恢复任务已结束；"}临时明文清理未确认，请重启应用后检查工作目录。（${code}）`, "warn");
+        }
       }
     });
   });
   async function refresh(force = false) {
     if (force) loaded = false;
     if (!loaded) {
-      config = await api.config();
+      try { config = await api.config(); }
+      catch (error) { tell(`读取云备份配置失败。${cloudError(error)}`, "error"); throw error; }
       if (config) {
         connectionId = config.connection.connectionId;
         endpoint.value = config.connection.endpoint; username.value = config.connection.username;
