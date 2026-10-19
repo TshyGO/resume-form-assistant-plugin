@@ -19,7 +19,7 @@ pub fn snapshot(database: &Path) -> Result<String, StoreError> {
     field(&mut hash, b"resume-pro-business-v1");
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     field(&mut hash, &version.to_le_bytes());
-    let mut tables = conn.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+    let mut tables = conn.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name")?;
     for table in tables.query_map([], |r| r.get::<_, String>(0))? {
         let table = table?;
         if matches!(
@@ -97,8 +97,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.db");
         let c = Connection::open(&p).unwrap();
-        c.execute_batch("CREATE TABLE records(id TEXT, value TEXT); CREATE TABLE todos(id TEXT,title TEXT,reminder_handle TEXT,updated_at TEXT); INSERT INTO records VALUES ('b','two'),('a','one'); INSERT INTO todos VALUES ('t','business title','old','before');").unwrap();
+        c.execute_batch("CREATE TABLE records(id TEXT, value TEXT); CREATE TABLE sqlitex_business(value TEXT); CREATE TABLE todos(id TEXT,title TEXT,reminder_handle TEXT,updated_at TEXT); INSERT INTO records VALUES ('b','two'),('a','one'); INSERT INTO todos VALUES ('t','business title','old','before');").unwrap();
         let original = snapshot(&p).unwrap();
+        c.execute_batch("INSERT INTO sqlitex_business VALUES ('included')")
+            .unwrap();
+        assert_ne!(original, snapshot(&p).unwrap());
+        c.execute_batch("DELETE FROM sqlitex_business").unwrap();
+        assert_eq!(original, snapshot(&p).unwrap());
         c.execute_batch(
             "UPDATE todos SET reminder_handle='new',updated_at='after reminder delivery'; VACUUM;",
         )

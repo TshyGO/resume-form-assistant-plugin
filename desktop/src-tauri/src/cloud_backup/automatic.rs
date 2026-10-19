@@ -2,6 +2,19 @@ use super::{model::*, schedule::*, *};
 use sha2::{Digest, Sha256};
 
 impl Service {
+    pub fn scheduler_failed(&self) {
+        let apply = |s: &mut Journal| {
+            if s.automatic.plan.is_some() && s.automatic.paused.is_none() {
+                s.automatic.paused = Some("SCHEDULER_ERROR".into());
+            }
+        };
+        if self.update(apply).is_err() {
+            // Visibility fallback only; never grants a new slot or mutation.
+            if let Ok(mut state) = self.journal.lock() {
+                apply(&mut state);
+            }
+        }
+    }
     pub fn start_failed(&self, error: crate::commands::CommandError, cancel: &CancellationToken) {
         self.finish(Err(error), cancel);
     }

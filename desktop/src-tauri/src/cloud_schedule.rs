@@ -138,13 +138,44 @@ fn tick(state: &AppState, previous: Option<i64>) -> Result<()> {
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut previous = None;
+        let mut last_failure: Option<String> = None;
         loop {
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             let handle = app.clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
+            let result = tauri::async_runtime::spawn_blocking(move || {
                 tick(&handle.state::<AppState>(), previous)
             })
             .await;
+            let failure = match result {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error.code),
+                Err(_) => Some("CLOUD_SCHEDULER_WORKER_FAILED".into()),
+            };
+            if failure != last_failure {
+                if let Some(code) = failure.as_ref() {
+                    let handle = app.clone();
+                    let code = code.clone();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        let state = handle.state::<AppState>();
+                        if let Ok(service) = commands::service(&state) {
+                            service.scheduler_failed();
+                        }
+                        // Only safe error codes, never settings, paths or secrets.
+                        if let Ok(paths) = state.paths.lock() {
+                            if let Some(paths) = paths.as_ref() {
+                                let _ = data_service::write_log(
+                                    paths,
+                                    "warn",
+                                    "CLOUD_SCHEDULER_ERROR",
+                                    &[("code", code.as_str())],
+                                );
+                            }
+                        };
+                    })
+                    .await;
+                }
+            }
+            last_failure = failure; // Suppress repeated identical failures/logs.
             previous = Some(now);
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }

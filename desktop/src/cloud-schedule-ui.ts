@@ -12,6 +12,7 @@ const messages: Record<string, string> = {
   ARCHIVE_CHANGED: "档案已切换，请先手动备份，再重新确认计划",
   SCOPE_MISMATCH: "候选包属于原账号、目录或加密设置，请恢复原配置后重试，或明确放弃",
   RETRY_REQUIRED: "请先手动重试或放弃现有候选包",
+  SCHEDULER_ERROR: "自动检查遇到本机错误，计划已暂停；请检查配置、数据目录权限或空间后重新确认",
   UNKNOWN_FAILURE: "失败原因未记录，请检查配置与任务状态后手动处理",
   BUDGET_PAUSED: "本机估算预算不足，自动上传已暂停；请核对账户流量后调整预算并重新启用",
   CLOCK_CHANGED: "系统时钟回退，计划已暂停，请重新确认时间",
@@ -80,7 +81,11 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       must("cloud-auto-notice-text").textContent = needsAttention ? `云备份需要处理。${status.textContent}` : "";
       must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "当前或下一次上传估算达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;
       estimate();
-    } catch (error) { status.textContent = describeError(error); }
+    } catch (error) {
+      status.textContent = describeError(error);
+      must("cloud-auto-notice").hidden = false;
+      must("cloud-auto-notice-text").textContent = `自动计划状态暂不可用。${status.textContent}`;
+    }
     timer = setTimeout(() => void refresh(), 30000);
   }
   function refresh(): Promise<void> {
