@@ -305,6 +305,15 @@ async fn plain_roundtrip_publishes_metadata_last_and_only_verified_download_is_e
         .await
         .unwrap();
     assert!(backup::read_manifest(std::path::Path::new(&path)).is_ok());
+    let repeated = l
+        .service
+        .download(&remote, &job.options, job.metadata.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        repeated, path,
+        "a second successful download atomically replaces the verified output"
+    );
     // A corrupt remote body cannot replace the previous verified download.
     let before = fs::read(&path).unwrap();
     remote.put_raw(
@@ -882,4 +891,164 @@ fn json_wire_shapes_match_the_typescript_cloud_contract() {
         serde_json::to_value(job.metadata).unwrap()["formatVersion"],
         1
     );
+}
+
+#[test]
+fn retry_can_change_retention_and_limits_without_rotating_or_reencrypting_the_candidate() {
+    let l = layout();
+    let (job, lease) = candidate(&l, true, Some(5));
+    let original = fs::read(local::payload(&l.service.root, &job.id)).unwrap();
+    drop(lease);
+    let mut changed = job.options.clone();
+    changed.keep_last = None;
+    changed.max_upload_bytes = job.metadata.size_bytes;
+    changed.prefer_move = false;
+    let (retried, lease) = l.service.retry("synthetic-scope", &changed).unwrap();
+    assert_eq!(retried.id, job.id);
+    assert_eq!(retried.metadata, job.metadata);
+    assert_eq!(retried.options.keep_last, None);
+    assert!(!retried.move_verified);
+    assert_eq!(
+        fs::read(local::payload(&l.service.root, &job.id)).unwrap(),
+        original
+    );
+    drop(lease);
+    changed.max_upload_bytes = job.metadata.size_bytes - 1;
+    assert_eq!(
+        l.service
+            .retry("synthetic-scope", &changed)
+            .err()
+            .unwrap()
+            .code,
+        "CLOUD_TOO_LARGE"
+    );
+    changed.max_upload_bytes = job.metadata.size_bytes;
+    changed.root.push("another-root".into());
+    assert_eq!(
+        l.service
+            .retry("synthetic-scope", &changed)
+            .err()
+            .unwrap()
+            .code,
+        "CLOUD_SCOPE_MISMATCH"
+    );
+    changed.root.clear();
+    changed.encrypted = true;
+    assert_eq!(
+        l.service
+            .retry("synthetic-scope", &changed)
+            .err()
+            .unwrap()
+            .code,
+        "CLOUD_SCOPE_MISMATCH"
+    );
+    changed.encrypted = false;
+    l.service
+        .update(|s| {
+            let j = s.job.as_mut().unwrap();
+            j.part_intent = true;
+            j.move_verified = true;
+        })
+        .unwrap();
+    let (retried, _lease) = l.service.retry("synthetic-scope", &changed).unwrap();
+    assert!(
+        retried.move_verified,
+        "an in-progress MOVE strategy must remain fixed"
+    );
+}
+
+#[test]
+fn bounded_plaintext_copy_fallback_preserves_existing_outputs_and_cleans_partial_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("input");
+    let target = dir.path().join("output");
+    fs::write(&source, vec![7; 200_000]).unwrap();
+    let cancel = CancellationToken::new();
+    local::copy_new(&source, &target, 200_000, &cancel).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), fs::read(&source).unwrap());
+    fs::write(&source, b"replacement").unwrap();
+    assert!(local::copy_new(&source, &target, 200_000, &cancel).is_err());
+    assert_eq!(fs::metadata(&target).unwrap().len(), 200_000);
+    fs::remove_file(&target).unwrap();
+    assert_eq!(
+        local::copy_new(&source, &target, 1, &cancel)
+            .unwrap_err()
+            .code,
+        "CLOUD_TOO_LARGE"
+    );
+    cancel.cancel();
+    assert_eq!(
+        local::copy_new(&source, &target, 200_000, &cancel)
+            .unwrap_err()
+            .code,
+        "CLOUD_CANCELLED"
+    );
+    assert!(!target.exists());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn invalid_receipt_time_stops_cleanup_with_a_warning_instead_of_panicking() {
+    let l = layout();
+    let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, Some(1));
+    let old = old_owned(&l, &remote, &job, "2026-07-01T00:00:00Z", None, true);
+    l.service
+        .update(|s| {
+            let r = s
+                .receipts
+                .iter_mut()
+                .find(|r| r.metadata.backup_id == old.backup_id)
+                .unwrap();
+            r.orphan = true;
+            r.touched_at = "invalid date".into();
+        })
+        .unwrap();
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    assert_eq!(remote.count("DELETE"), 0);
+    assert!(l.service.job().unwrap().published);
+    assert_eq!(l.service.job().unwrap().phase, Phase::CleanupWarning);
+    assert!(l
+        .service
+        .job()
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| w == "CLOUD_INVALID_DATE"));
+}
+
+#[test]
+fn startup_cleanup_matches_actual_tempfile_names_and_preserves_unrelated_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let unrelated = root.path().join(".state-keep-this");
+    fs::write(&unrelated, b"keep").unwrap();
+    let directory = root.path().join(format!(".state-{}", "a".repeat(32)));
+    fs::create_dir(&directory).unwrap();
+    let mut abandoned = Vec::new();
+    for prefix in [".state-", ".verified-"] {
+        let temporary = tempfile::Builder::new()
+            .prefix(prefix)
+            .rand_bytes(32)
+            .tempfile_in(root.path())
+            .unwrap();
+        let (file, path) = temporary.keep().unwrap();
+        drop(file);
+        assert_eq!(
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .strip_prefix(prefix)
+                .unwrap()
+                .len(),
+            32
+        );
+        abandoned.push(path);
+    }
+    local::cleanup_temporaries(root.path()).unwrap();
+    for path in abandoned {
+        assert!(!path.exists());
+    }
+    assert!(unrelated.is_file());
+    assert!(directory.is_dir());
 }

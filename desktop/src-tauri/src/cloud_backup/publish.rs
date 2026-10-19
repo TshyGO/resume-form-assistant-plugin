@@ -220,14 +220,17 @@ impl Service {
             .receipts
             .clone();
         let mut owned_loose = HashSet::new();
+        let current_time = date(&now())?;
         for r in receipts.iter().filter(|r| {
             (r.orphan || r.deleting)
                 && r.scope == job.scope
                 && r.root == job.options.root
                 && r.metadata.device_id == job.metadata.device_id
                 && r.metadata.archive_id == job.metadata.archive_id
-                && (date(&now()).unwrap() - date(&r.touched_at).unwrap()).whole_hours() >= 24
         }) {
+            if (current_time - date(&r.touched_at)?).whole_hours() < 24 {
+                continue;
+            }
             let folder = r.metadata.folder(root)?;
             if r.part_intent {
                 owned_loose.insert(folder.child(&format!("{}.part", r.metadata.package))?);
@@ -313,7 +316,7 @@ impl Service {
                 || receipt.metadata.device_id != job.metadata.device_id
                 || receipt.metadata.archive_id != job.metadata.archive_id
                 || receipt.metadata.backup_id == job.id
-                || (date(&now())? - date(&receipt.touched_at)?).whole_hours() < 24
+                || (current_time - date(&receipt.touched_at)?).whole_hours() < 24
             {
                 continue;
             }

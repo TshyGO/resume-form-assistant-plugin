@@ -297,17 +297,31 @@ impl Service {
         Ok((job, lease))
     }
     pub fn retry(self: &Arc<Self>, scope: &str, options: &Options) -> Result<(Job, Lease)> {
+        options.check()?;
         let lease = self.reserve()?;
         let job = self.job()?;
         if job.scope != scope
-            || serde_json::to_vec(&job.options).ok() != serde_json::to_vec(options).ok()
+            || job.options.root != options.root
+            || job.options.encrypted != options.encrypted
         {
             return Err(fail("SCOPE_MISMATCH"));
         }
         if !job.candidate_ready {
             return Err(fail("NO_RETRY_PACKAGE"));
         }
-        Ok((job, lease))
+        if job.metadata.size_bytes > options.max_upload_bytes {
+            return Err(fail("TOO_LARGE"));
+        }
+        self.update(|s| {
+            let j = s.job.as_mut().unwrap();
+            j.options = options.clone();
+            // Once a transfer intent exists, its recorded strategy remains fixed.
+            // Before any transfer, a new preference may request/disable probing.
+            if !j.part_intent && !j.package_intent && !options.prefer_move {
+                j.move_verified = false;
+            }
+        })?;
+        Ok((self.job()?, lease))
     }
     pub fn discard(self: &Arc<Self>) -> Result<()> {
         let _lease = self.reserve()?;
@@ -407,7 +421,10 @@ impl Service {
             if fs::metadata(&package)?.len() > job.options.max_upload_bytes {
                 return Err(fail("TOO_LARGE"));
             }
-            fs::hard_link(&package, &output)?;
+            if fs::hard_link(&package, &output).is_err() {
+                local::space(&self.root, fs::metadata(&package)?.len())?;
+                local::copy_new(&package, &output, job.options.max_upload_bytes, cancel)?;
+            }
         }
         let (size, hash) = local::hash(&output, cancel)?;
         if size > job.options.max_upload_bytes {

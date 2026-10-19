@@ -54,6 +54,10 @@ pub fn atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     temp.as_file_mut().write_all(b"\n")?;
     temp.as_file().sync_all()?;
     temp.persist(path).map_err(|_| fail("LOCAL_IO"))?;
+    // The intent must reach the directory as well as the temporary file before
+    // the caller starts a remote mutation. Otherwise a power loss may lose rename.
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 pub fn load(path: &Path) -> Result<Journal> {
@@ -125,6 +129,44 @@ pub fn space(path: &Path, needed: u64) -> Result<()> {
 }
 pub fn payload(root: &Path, id: &str) -> PathBuf {
     root.join(id).join("payload")
+}
+/// Fallback for filesystems without hard links. A partial copy is never exposed
+/// at the requested path, and an existing output is never overwritten.
+pub fn copy_new(
+    source: &Path,
+    target: &Path,
+    max: u64,
+    cancel: &webdav_client::CancellationToken,
+) -> Result<()> {
+    let mut input = fs::File::open(source)?;
+    if !input.metadata()?.is_file() || input.metadata()?.len() > max {
+        return Err(fail("TOO_LARGE"));
+    }
+    let mut output =
+        tempfile::NamedTempFile::new_in(target.parent().ok_or_else(|| fail("LOCAL_IO"))?)?;
+    let mut total = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if cancel.is_cancelled() {
+            return Err(fail("CANCELLED"));
+        }
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| fail("TOO_LARGE"))?;
+        if total > max {
+            return Err(fail("TOO_LARGE"));
+        }
+        output.as_file_mut().write_all(&buffer[..count])?;
+    }
+    output.as_file().sync_all()?;
+    output
+        .persist_noclobber(target)
+        .map_err(|_| fail("LOCAL_IO"))?;
+    Ok(())
 }
 pub fn cleanup_temporaries(root: &Path) -> Result<()> {
     plain_dir(root)?;

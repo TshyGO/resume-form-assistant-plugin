@@ -47,7 +47,8 @@ UTC 时间、文件名和完整候选字节。先 HEAD；已有包会流式下�
 - 临时文件位于 `cloud-backup-work/job-<随机串>`，RAII 清理；进程退出后下次启动清理。
   完整候选位于 `cloud-backup-state/<backupId>/{local.rpbak,payload}`，不会被 workspace 清理误删。
 - 保留一份最近成功的本地明文包和最多一份失败候选；有候选时必须重试或显式放弃才能新建。
-  加密任务同时保留密文 payload，明文任务用同卷硬链接避免重复占用。不会自动轮换旧候选 ID。
+  加密任务同时保留密文 payload，明文任务优先用同卷硬链接，文件系统不支持时回退有界复制。
+  不会自动轮换旧候选 ID。
   latest 指针更新后才删除旧成功目录；旧目录删除失败会阻止继续积累新任务。
 - 取消打包在扫描/导出边界响应，导出中不打断 SQLite/ZIP 的一致性操作；scrypt 本身不能中断，
   在 KDF 前后及分块间响应。网络取消不抹掉已有完整候选。失败记录只保存错误码，不保存秘密。
@@ -57,6 +58,7 @@ UTC 时间、文件名和完整候选字节。先 HEAD；已有包会流式下�
 - journal 上限 512 KiB，归属回执最多 256 个；旧回执淘汰后相应远端对象不再获准自动删除。
   原子写临时文件有独立命名空间，启动只清理受控的普通临时文件，拒绝链接/reparse 目录。
 - Unix 状态/任务目录为 0700，临时文件 0600；Windows 继承应用数据 ACL。普通删除不是安全擦除。
+  Unix journal 原子替换后同步父目录，确保开始远端写入前提交意图的目录项也已同步。
   文件 sync + 原子替换验证进程退出/重启行为，不宣称完成系统掉电耐久性验收。
 
 ## 列表与清理
@@ -87,7 +89,7 @@ TypeScript：`desktop/src/cloud-backup-api.ts`；Tauri 命令：
 | `cloud_backup_start(connection, options)` | 返回持久化作业后在后台执行；默认加密 |
 | `cloud_backup_status()` | 查询本机 deviceId、作业状态、重试包及最新本地明文包位置 |
 | `cloud_backup_cancel()` | 取消当前云操作 |
-| `cloud_backup_retry(connection, options)` | 同一连接/账号/配置重试原候选；无需重新加密 |
+| `cloud_backup_retry(connection, options)` | 同一连接/账号/根目录/加密模式重试原候选；无需重新加密 |
 | `cloud_backup_discard()` | 明确放弃候选；保留远端归属证据，保留 latest |
 | `cloud_backup_list(connection, options, archiveId, deviceId)` | 读取某设备的合法备份列表 |
 | `cloud_backup_download(connection, options, metadata)` | 返回完全验证后的本地 .rpbak 路径 |
@@ -95,6 +97,8 @@ TypeScript：`desktop/src/cloud-backup-api.ts`；Tauri 命令：
 connection 与 #304 凭据命令使用同一 connectionId/HTTPS endpoint/username；口令由 Rust
 从系统凭据库读取，不加入任务记录或命令结果。默认 encrypted=true；false 必须是 UI 中的明确选择。
 上传上限和 keepLast 的取值校验在 Rust 侧，不能仅靠 UI 校验。
+重试可调整 keepLast 和上传上限（新上限不能小于现有包），不强迫重新打包；
+preferMove 也可更新，但已有传输意图时继续使用记录的发布路径，避免切换策略产生重复对象。
 
 下载先直接重读元数据，再检查实际字节数/SHA-256、age 最终认证和包内每个条目哈希，
 全部成功才原子替换 `cloud-backup-state/verified-download.rpbak`，失败保留此前有效下载。
