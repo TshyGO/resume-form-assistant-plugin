@@ -20,6 +20,7 @@ import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
+import { mountCloudBackup } from "./cloud-backup-ui.ts";
 import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
 import { mountAiReview, mountAiSettings } from "./ai/mount.tsx";
@@ -514,7 +515,9 @@ const backupPickers = {
     : null,
 };
 // 恢复 / 换回会把档案整个换掉，「简历」页手里的模板列表和「我的信息」版本号都过时了。
-const showBackup = mountBackup(command, backupPickers, undefined, () => resumeView.refresh());
+const refreshLocalBackup = mountBackup(command, backupPickers, undefined, () => { resumeView.refresh(); void refreshCloudBackup(true).catch(() => {}); });
+const refreshCloudBackup = mountCloudBackup(command, async () => { resumeView.refresh(); await refreshLocalBackup(); });
+const showBackup = async () => { await Promise.all([refreshLocalBackup(), refreshCloudBackup()]); };
 void renderReminderSettings().catch(() => {});
 
 showRoute("applications");

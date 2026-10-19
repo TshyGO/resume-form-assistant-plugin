@@ -3,6 +3,7 @@ mod local;
 pub mod model;
 mod publish;
 mod remote;
+pub mod restore_flow;
 #[cfg(test)]
 mod tests;
 
@@ -75,6 +76,7 @@ pub struct Service {
     workspace: PreparedWorkspace,
     journal: Mutex<Journal>,
     active: Mutex<Option<CancellationToken>>,
+    preview: Mutex<Option<restore_flow::Pending>>,
 }
 pub struct Lease {
     service: Arc<Service>,
@@ -145,6 +147,7 @@ impl Service {
             workspace,
             journal: Mutex::new(state),
             active: Mutex::new(None),
+            preview: Mutex::new(None),
         }))
     }
     fn reserve(self: &Arc<Self>) -> Result<Lease> {
@@ -172,10 +175,12 @@ impl Service {
         Ok(())
     }
     pub fn status(&self) -> Result<Status> {
+        self.expire_preview()?;
         let state = self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?;
         Ok(Status {
             device_id: state.device_id.clone(),
             job: state.job.clone(),
+            latest_metadata: state.receipts.iter().find(|r| Some(&r.metadata.backup_id) == state.latest.as_ref()).map(|r| r.metadata.clone()),
             retry_package: state
                 .job
                 .as_ref()
@@ -547,7 +552,8 @@ impl Service {
         let lease = self.reserve()?;
         remote::catalog(client, &options.check()?, archive, device, &lease.cancel).await
     }
-    /// Fully verify an isolated download; do not change current or the live store.
+    /// Test adapter for the #305 verified transport boundary. Production uses token-bound preview.
+    #[cfg(test)]
     pub async fn download(
         self: &Arc<Self>,
         client: &impl remote::Remote,
@@ -556,11 +562,24 @@ impl Service {
         passphrase: Option<SecretString>,
     ) -> Result<String> {
         let lease = self.reserve()?;
+        let (task, package) = self.download_inner(client, options, metadata, passphrase, &lease.cancel).await?;
+        let destination = self.root.join("verified-download.rpbak");
+        let mut output = tempfile::Builder::new().prefix(".verified-").rand_bytes(32).tempfile_in(&self.root)?;
+        std::io::copy(&mut fs::File::open(&package)?, output.as_file_mut())?;
+        output.as_file().sync_all()?;
+        output.persist(&destination).map_err(|_| fail("LOCAL_IO"))?;
+        drop(task);
+        Ok(destination.display().to_string())
+    }
+    async fn download_inner(
+        self: &Arc<Self>, client: &impl remote::Remote, options: &Options,
+        metadata: Metadata, passphrase: Option<SecretString>, cancel: &CancellationToken,
+    ) -> Result<(TaskDirectory, PathBuf)> {
         let root = options.check()?;
         metadata.check()?;
         let folder = metadata.folder(&root)?;
         let actual = client
-            .read(&folder.child(&metadata.meta_name()?)?, &lease.cancel)
+            .read(&folder.child(&metadata.meta_name()?)?, cancel)
             .await?
             .ok_or_else(|| fail("NOT_FOUND"))?;
         if Metadata::parse(&actual)? != metadata {
@@ -574,14 +593,14 @@ impl Service {
                 &folder.child(&metadata.package)?,
                 &payload,
                 metadata.size_bytes,
-                &lease.cancel,
+                cancel,
             )
             .await?;
         if hash != metadata.package_sha256 || fs::metadata(&payload)?.len() != metadata.size_bytes {
             return Err(fail("HASH_MISMATCH"));
         }
         let service = self.clone();
-        let token = lease.cancel.clone();
+        let token = cancel.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let package = task.path().join("verified.rpbak");
             if metadata.encryption_format == Encryption::AgeV1Scrypt {
@@ -614,15 +633,7 @@ impl Service {
             if token.is_cancelled() {
                 return Err(fail("CANCELLED"));
             }
-            let destination = service.root.join("verified-download.rpbak");
-            let mut output = tempfile::Builder::new()
-                .prefix(".verified-")
-                .rand_bytes(32)
-                .tempfile_in(&service.root)?;
-            std::io::copy(&mut fs::File::open(&package)?, output.as_file_mut())?;
-            output.as_file().sync_all()?;
-            output.persist(&destination).map_err(|_| fail("LOCAL_IO"))?;
-            Ok(destination.display().to_string())
+            Ok((task, package))
         })
         .await
         .map_err(|_| fail("WORKER_FAILED"))?

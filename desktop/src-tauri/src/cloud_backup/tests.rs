@@ -208,6 +208,80 @@ fn layout() -> Layout {
 fn options() -> Options {
     serde_json::from_value(serde_json::json!({"encrypted":false,"keepLast":null})).unwrap()
 }
+
+#[tokio::test]
+async fn new_machine_discovers_sources_without_body_download_or_deletion_rights() {
+    let a = layout(); let b = layout(); let remote = Fake::default();
+    let (job, lease) = candidate(&a, false, None);
+    a.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let sources = b.service.discover(&remote, &options()).await.unwrap();
+    let json = serde_json::to_value(sources).unwrap();
+    assert_eq!(json[0]["archiveId"], job.metadata.archive_id);
+    assert_eq!(json[0]["deviceId"], job.metadata.device_id);
+    assert_eq!(remote.count("DOWNLOAD"), 0);
+    assert_eq!(remote.count("DELETE"), 0);
+    assert_ne!(b.service.status().unwrap().device_id, job.metadata.device_id);
+}
+
+#[tokio::test]
+async fn preview_tokens_reject_tampering_expiry_replay_and_cleanup_plaintext() {
+    let l = layout(); let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let before = fs::read(&l.paths.current_pointer).unwrap();
+    for scenario in ["changed", "expired", "wrong-token"] {
+        let preview = l.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
+        let path = {
+            let mut pending = l.service.preview.lock().unwrap();
+            let pending = pending.as_mut().unwrap();
+            if scenario == "expired" { pending.expires = std::time::Instant::now(); }
+            if scenario == "changed" { fs::write(&pending.package, b"changed bytes").unwrap(); }
+            pending.package.clone()
+        };
+        let token = if scenario == "wrong-token" { "wrong" } else { &preview.token };
+        let error = l.service.confirm_restore(token, || panic!("must not activate")).unwrap_err();
+        assert!(error.code.starts_with("CLOUD_PREVIEW_"));
+        assert_eq!(fs::read(&l.paths.current_pointer).unwrap(), before);
+        assert!(!path.exists());
+        assert!(l.service.confirm_restore(&preview.token, || Ok(())).is_err());
+    }
+    let first = l.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
+    l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    assert!(l.service.confirm_restore(&first.token, || Ok(())).is_err());
+    l.service.clear_preview().unwrap();
+    assert_eq!(fs::read_dir(l.paths.data_root.join("cloud-backup-work")).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn cloud_confirmation_replaces_an_independent_archive_then_writes_backs_up_and_rolls_back() {
+    let source = layout(); let target = layout(); let remote = Fake::default();
+    {
+        let store = source.store.lock().unwrap();
+        crate::commands::create_application(store.as_ref().unwrap(), serde_json::from_value(serde_json::json!({"company":"Synthetic D15", "title":"Engineer"})).unwrap()).unwrap();
+    }
+    let (job, lease) = candidate(&source, false, None);
+    source.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let old = target.store.lock().unwrap().as_ref().unwrap().identity().clone();
+    let preview = target.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
+    let report = target.service.confirm_restore(&preview.token, || Ok(())).unwrap();
+    assert_eq!(target.store.lock().unwrap().as_ref().unwrap().identity().archive_id, job.metadata.archive_id);
+    assert_ne!(report.restore_epoch, old.restore_epoch);
+    assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 1);
+    assert!(target.service.confirm_restore(&preview.token, || Ok(())).is_err());
+    {
+        let store = target.store.lock().unwrap();
+        crate::commands::create_application(store.as_ref().unwrap(), serde_json::from_value(serde_json::json!({"company":"After restore", "title":"Engineer"})).unwrap()).unwrap();
+    }
+    let (new_job, lease) = candidate(&target, false, None);
+    target.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert_eq!(new_job.metadata.archive_id, job.metadata.archive_id);
+    assert_ne!(new_job.metadata.device_id, job.metadata.device_id);
+    let again = target.service.download_preview(&remote, &options(), new_job.metadata, None).await.unwrap();
+    target.service.confirm_restore(&again.token, || Ok(())).unwrap();
+    assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 2);
+    crate::backup_commands::rollback(&crate::backup_commands::StoreSlot { slot: &target.store }, &target.paths, &report.rollback_point, &now()).unwrap();
+    assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 0);
+}
 fn candidate(l: &Layout, move_verified: bool, keep: Option<usize>) -> (Job, Lease) {
     let mut o = options();
     o.keep_last = keep;

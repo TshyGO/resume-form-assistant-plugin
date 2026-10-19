@@ -423,6 +423,32 @@
                   <p id="backup-restore-note" class="settings-caption"></p>
                   <div id="backup-status" class="settings-callout" data-tone="info" role="status" hidden></div>
                 </div>
+                <section id="cloud-backup" class="settings-card" aria-labelledby="cloud-title">
+                  <header class="settings-card-head"><h2 id="cloud-title">坚果云备份</h2><p>手动保存整个档案，或在新机器上找回。不是实时同步。</p></header>
+                  <form id="cloud-form" class="cloud-form" autocomplete="off">
+                    <div class="cloud-fields">
+                      <label>WebDAV HTTPS 地址<input id="cloud-endpoint" type="url" required value="https://dav.jianguoyun.com/dav/" /></label>
+                      <label>坚果云账号<input id="cloud-username" required maxlength="4096" autocomplete="off" /></label>
+                      <label>远端目录<input id="cloud-root" placeholder="例如 ResumeProBackups；留空为 WebDAV 根目录" /></label>
+                      <label>第三方应用密码<input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" /></label>
+                      <label>备份加密口令<input id="cloud-passphrase" type="password" autocomplete="new-password" placeholder="留空保留已保存的口令" /></label>
+                      <label>保留最近几份（本机命名空间）<select id="cloud-keep"><option value="">不自动删除</option><option value="5" selected>5 份</option><option value="10">10 份</option><option value="20">20 份</option></select></label>
+                    </div>
+                    <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
+                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。请另行保管加密口令，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
+                    <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。只有确认上传完整且目录完整性可靠时才清理本机旧备份；其他设备和用户文件不会删除。</p>
+                    <div class="settings-actions"><button type="submit">保存云备份配置</button><button id="cloud-preset" type="button">使用坚果云地址</button><button id="cloud-test" type="button">测试连接</button></div>
+                    <div class="settings-actions"><button id="cloud-clear-password" type="button">移除已保存的应用密码</button><button id="cloud-clear-passphrase" type="button">移除已保存的加密口令</button></div>
+                    <p id="cloud-secret-status" class="settings-caption"></p>
+                  </form>
+                  <div class="settings-actions"><button id="cloud-start" type="button" class="primary">立即备份到云端</button><button id="cloud-retry" type="button" hidden>重试上次备份</button><button id="cloud-discard" type="button" hidden>放弃候选包</button><button id="cloud-browse" type="button">查找云端备份</button><button id="cloud-cancel" type="button" hidden>取消当前任务</button></div>
+                  <p id="cloud-progress" role="status" class="settings-inline-msg"></p>
+                  <div id="cloud-message" role="status" class="settings-callout" hidden></div>
+                  <p id="cloud-latest" class="settings-caption"></p>
+                  <label id="cloud-namespace-label" hidden>选择档案 / 来源设备<select id="cloud-namespace"></select></label>
+                  <p id="cloud-list-note" class="settings-caption"></p>
+                  <ul id="cloud-list" class="settings-list"></ul>
+                </section>
                 <details id="backup-rollback" class="settings-card settings-card-fold">
                   <summary><span class="settings-fold-title">回滚点<span id="backup-rollback-count" class="settings-count"></span></span><span class="settings-fold-hint">恢复或换回前的档案，随时可以换回</span></summary>
                   <div class="settings-fold-body">

@@ -18,7 +18,7 @@ impl Kind {
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectionDescriptor {
     pub connection_id: String,

@@ -114,3 +114,6 @@ preferMove 也可更新，但已有传输意图时继续使用记录的发布路
 孤儿宽限及归属、明文和 age 完整上传下载、候选上限与旧包保护。
 fake Remote 注入与生产共用同一发布/保留代码；底层真实 HTTP socket 合约由 #303 测试覆盖。
 这不是一次真实坚果云账号兼容性验证，也不替代 #306 的界面/凭据库实机验收。
+
+
+#306 接入更新：初期路径式 `cloud_backup_download` IPC 已由 `cloud_backup_preview` 返回单次、有时限的绑定令牌替代；确认仅使用 `cloud_backup_restore(token)`。工作明文不发布到固定下载路径，结束后清理。最终用户流程与真实验收状态见 [手动云备份验收](d15-manual-cloud-acceptance.md)。
