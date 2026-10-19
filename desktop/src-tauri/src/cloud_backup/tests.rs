@@ -527,6 +527,22 @@ async fn metadata_budget_pause_and_post_publish_journal_failure_never_require_a_
     assert_eq!(l.service.job().unwrap().phase, Phase::CleanupWarning);
     assert!(l.service.status().unwrap().retry_package.is_none());
 }
+
+#[tokio::test]
+async fn a_busy_manual_operation_leaves_the_slot_unclaimed_and_clock_regression_still_pauses() {
+    let l = layout(); let remote = Fake::default();
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let manual = l.service.reserve().unwrap();
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().is_none());
+    assert_eq!(l.service.journal.lock().unwrap().automatic.next_at, Some(due));
+    assert!(l.service.journal.lock().unwrap().automatic.paused.is_none());
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due-100, Some(due)).unwrap().is_none());
+    assert_eq!(l.service.journal.lock().unwrap().automatic.paused.as_deref(), Some("CLOCK_CHANGED"));
+    drop(manual);
+}
 fn reopened(l: &Layout) -> Arc<Service> {
     Service::open(
         l.paths.clone(),

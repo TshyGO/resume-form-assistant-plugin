@@ -72,9 +72,10 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       initialized = true;
       const s = current.state;
       status.textContent = !current.enabled ? `自动计划关闭。${current.requiresConfirmation ? "恢复后需重新确认；请先手动备份。" : ""}`
+        : !s.plan ? "计划信息缺失，未执行自动备份；请重新确认计划。"
         : s.paused ? `计划已暂停：${messages[s.paused] ?? messages[s.paused.replace(/^CLOUD_/, "")] ?? s.paused}。可手动重试；需重新确认才能恢复自动计划。`
-          : `${s.message ? messages[s.message] ?? s.message : "计划已启用"}。${s.nextAt != null ? `下次：${date(s.nextAt)}（设备本地显示；执行采用 ${zoneLabel(s.plan!.utcOffsetMinutes)}）` : ""}${s.retryAt != null ? `；最早重试：${date(s.retryAt)}` : ""}`;
-      const needsAttention = current.enabled && (s.paused || s.message === "MISSED_MANUAL" || s.budgetWarning);
+          : `${s.message ? messages[s.message] ?? s.message : "计划已启用"}。${s.nextAt != null && s.plan ? `下次：${date(s.nextAt)}（设备本地显示；执行采用 ${zoneLabel(s.plan.utcOffsetMinutes)}）` : ""}${s.retryAt != null ? `；最早重试：${date(s.retryAt)}` : ""}`;
+      const needsAttention = current.enabled && (!s.plan || s.paused || s.message === "MISSED_MANUAL" || s.budgetWarning);
       must("cloud-auto-notice").hidden = !needsAttention;
       must("cloud-auto-notice-text").textContent = needsAttention ? `云备份需要处理。${status.textContent}` : "";
       must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "当前或下一次上传估算达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;

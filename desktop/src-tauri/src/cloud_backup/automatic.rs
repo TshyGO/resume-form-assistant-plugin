@@ -176,14 +176,19 @@ impl Service {
         previous: Option<i64>,
         clock: impl FnOnce() -> i64,
     ) -> Result<Option<(Job, Lease, bool)>> {
-        if self
-            .active
-            .lock()
-            .map_err(|_| fail("LOCAL_STATE"))?
-            .is_some()
-        {
-            return Ok(None);
-        }
+        options.check()?;
+        // Own the same operation lease before reading/planning. A manual job
+        // cannot change the journal/budget between policy read and its commit.
+        let lease = match self.reserve() {
+            Ok(lease) => lease,
+            Err(e) if e.code == "CLOUD_BUSY" => {
+                if previous.is_some_and(|p| clock() < p) {
+                    self.pause_automatic("CLOCK_CHANGED")?;
+                }
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
         let binding = Self::binding(scope, options, &self.identity()?);
         let state = self
             .journal
@@ -213,8 +218,8 @@ impl Service {
         }
         let started = match action {
             Decision::None => return Ok(None),
-            Decision::Start => self.begin(options.clone(), scope.into()),
-            Decision::Retry => self.retry(scope, options),
+            Decision::Start => self.begin_reserved(options.clone(), scope.into(), lease),
+            Decision::Retry => self.retry_reserved(scope, options, lease),
         };
         let (mut job, lease) = match started {
             Ok(v) => v,

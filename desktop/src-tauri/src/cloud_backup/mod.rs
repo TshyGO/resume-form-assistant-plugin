@@ -241,6 +241,9 @@ impl Service {
     pub fn begin(self: &Arc<Self>, options: Options, scope: String) -> Result<(Job, Lease)> {
         options.check()?;
         let lease = self.reserve()?;
+        self.begin_reserved(options, scope, lease)
+    }
+    fn begin_reserved(self: &Arc<Self>, options: Options, scope: String, lease: Lease) -> Result<(Job, Lease)> {
         let state = self
             .journal
             .lock()
@@ -318,6 +321,9 @@ impl Service {
     pub fn retry(self: &Arc<Self>, scope: &str, options: &Options) -> Result<(Job, Lease)> {
         options.check()?;
         let lease = self.reserve()?;
+        self.retry_reserved(scope, options, lease)
+    }
+    fn retry_reserved(self: &Arc<Self>, scope: &str, options: &Options, lease: Lease) -> Result<(Job, Lease)> {
         let job = self.job()?;
         if job.scope != scope
             || job.options.root != options.root
