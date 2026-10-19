@@ -436,7 +436,7 @@
                       <label>保留最近几份（本机命名空间）<select id="cloud-keep"><option value="">不自动删除</option><option value="5" selected>5 份</option><option value="10">10 份</option><option value="20">20 份</option></select></label>
                     </div>
                     <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
-                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。请另行保管加密口令，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
+                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。更换口令后请先完成新手动备份，再启用自动计划；已有包和重试候选仍需创建时的口令，请分别保管，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
                     <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。只有确认上传完整且目录完整性可靠时才清理本机旧备份；其他设备和用户文件不会删除。</p>
                     <div class="settings-actions"><button type="submit">保存云备份配置</button><button id="cloud-preset" type="button">使用坚果云地址</button><button id="cloud-test" type="button">测试连接</button></div>
                     <div class="settings-actions"><button id="cloud-clear-password" type="button">移除已保存的应用密码</button><button id="cloud-clear-passphrase" type="button">移除已保存的加密口令</button></div>

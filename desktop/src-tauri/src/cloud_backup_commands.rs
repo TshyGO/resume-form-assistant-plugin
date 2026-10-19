@@ -36,6 +36,7 @@ pub fn start(
     retry: bool,
 ) -> Result<Job> {
     let service = service(state)?;
+    let credentials_guard = service.credential_guard()?;
     let (client, binding) = client(state, &connection)?;
     let passphrase = if options.encrypted && !retry {
         Some(
@@ -54,6 +55,7 @@ pub fn start(
         service.begin(options, scope)?
     };
     if let Err(e) = service.manual_job() { service.start_failed(e.clone(), &lease.cancel); return Err(e); }
+    drop(credentials_guard);
     tauri::async_runtime::spawn(service.run(lease, client, passphrase, !retry));
     Ok(job)
 }

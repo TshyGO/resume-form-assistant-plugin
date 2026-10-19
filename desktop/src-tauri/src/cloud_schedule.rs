@@ -110,7 +110,9 @@ fn tick(state: &AppState, previous: Option<i64>) -> Result<()> {
     else {
         return Ok(());
     };
+    drop(guard); // OS credential prompts must not hold the settings/restore gate.
     let credentials = (|| {
+        let _credentials_guard = service.credential_guard()?;
         let (client, binding) = commands::client(state, &config.connection)?;
         let passphrase = if fresh && job.options.encrypted {
             Some(
@@ -122,6 +124,29 @@ fn tick(state: &AppState, previous: Option<i64>) -> Result<()> {
         } else {
             None
         };
+        // Recheck the authoritative gate after a possibly blocking OS read.
+        // Credential edits/restore can proceed meanwhile and cancel this lease.
+        let guard = state
+            .host
+            .lock()
+            .map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
+        let host = guard
+            .as_ref()
+            .ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
+        let current = cloud_settings::load(&host.paths().settings_file)?;
+        if !current.as_ref().is_some_and(|c| {
+            c.automatic_enabled
+                && !c.requires_confirmation
+                && c.connection.connection_id == config.connection.connection_id
+                && c.connection.endpoint == config.connection.endpoint
+                && c.connection.username == config.connection.username
+                && c.options.root == config.options.root
+                && c.options.encrypted == config.options.encrypted
+        }) || lease.cancel.is_cancelled()
+            || Service::binding(&scope, &config.options, &service.identity()?) != job.binding
+        {
+            return Err(cloud_backup::fail("CANCELLED"));
+        }
         Ok((client, passphrase))
     })();
     match credentials {

@@ -543,6 +543,28 @@ async fn a_busy_manual_operation_leaves_the_slot_unclaimed_and_clock_regression_
     assert_eq!(l.service.journal.lock().unwrap().automatic.paused.as_deref(), Some("CLOCK_CHANGED"));
     drop(manual);
 }
+
+#[tokio::test]
+async fn passphrase_change_invalidates_baseline_even_if_an_old_candidate_finishes_afterwards() {
+    let l = layout(); let remote = Fake::default();
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert!(l.service.journal.lock().unwrap().baseline.is_some());
+    let (_, lease) = candidate(&l, false, None);
+    {
+        let _credentials_guard = l.service.credential_guard().unwrap();
+        l.service.invalidate_passphrase().unwrap();
+    }
+    assert!(l.service.job().unwrap().fingerprint_stale);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert!(l.service.journal.lock().unwrap().baseline.is_none());
+    assert_eq!(l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap_err().code, "CLOUD_MANUAL_BACKUP_REQUIRED");
+    let again = reopened(&l);
+    assert!(again.journal.lock().unwrap().baseline.is_none());
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+}
 fn reopened(l: &Layout) -> Arc<Service> {
     Service::open(
         l.paths.clone(),

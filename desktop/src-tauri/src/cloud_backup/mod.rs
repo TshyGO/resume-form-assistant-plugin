@@ -79,6 +79,7 @@ pub struct Service {
     store: Arc<Mutex<Option<ArchiveStore>>>,
     workspace: PreparedWorkspace,
     journal: Mutex<Journal>,
+    credentials_gate: Mutex<()>,
     active: Mutex<Option<CancellationToken>>,
     preview: Mutex<Option<restore_flow::Pending>>,
     preview_cleanup_warning: std::sync::atomic::AtomicBool,
@@ -153,6 +154,7 @@ impl Service {
             store,
             workspace,
             journal: Mutex::new(state),
+            credentials_gate: Mutex::new(()),
             active: Mutex::new(None),
             preview: Mutex::new(None),
             preview_cleanup_warning: std::sync::atomic::AtomicBool::new(false),
@@ -298,6 +300,7 @@ impl Service {
         metadata.package = metadata.package_name()?;
         let job = Job {
             automatic: false,
+            fingerprint_stale: false,
             business_fingerprint: None,
             binding: Self::binding(&scope, &options, &identity),
             retry_not_before: None,

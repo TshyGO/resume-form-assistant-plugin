@@ -162,7 +162,7 @@ impl Service {
                 j.phase = Phase::CleanupWarning;
             }
             j.error_code = None;
-            if let Some(fingerprint) = &j.business_fingerprint {
+            if let Some(fingerprint) = j.business_fingerprint.as_ref().filter(|_| !j.fingerprint_stale) {
                 let manual_confirmed = !j.automatic || s.baseline.as_ref().is_some_and(|b| b.binding == j.binding && b.manual_confirmed);
                 s.baseline = Some(super::schedule::Baseline { binding: j.binding.clone(), fingerprint: fingerprint.clone(), manual_confirmed, size_bytes: j.metadata.size_bytes });
             }

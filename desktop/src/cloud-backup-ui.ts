@@ -262,7 +262,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         const value = config.options.keepLast?.toString() ?? "";
         if (![...keep.options].some((o) => o.value === value)) keep.add(new Option(`${value} 份`, value));
         keep.value = value;
-        if (config.requiresConfirmation) tell("档案恢复后，自动云备份已关闭。请核对账号、目录和口令后重新保存配置。", "warn");
+        if (config.requiresConfirmation) tell("档案或凭据变更后，自动云备份已关闭，请核对后重新确认计划。恢复档案或更换加密口令后，须先完成一次新手动备份。", "warn");
         await secretStatus();
       }
       loaded = true; dirty = false;

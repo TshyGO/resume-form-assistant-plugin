@@ -2,6 +2,24 @@ use super::{model::*, schedule::*, *};
 use sha2::{Digest, Sha256};
 
 impl Service {
+    /// Serializes secret mutations with reading credentials + creating a job.
+    /// This is separate from the settings host guard so OS prompts cannot block it.
+    pub fn credential_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>> {
+        self.credentials_gate
+            .lock()
+            .map_err(|_| fail("LOCAL_STATE"))
+    }
+    /// Caller owns credential_guard and has durably disabled automatic execution.
+    /// A candidate already using the old passphrase may finish/reconcile, but it
+    /// must never re-establish the current credential's manual baseline.
+    pub fn invalidate_passphrase(&self) -> Result<()> {
+        self.update(|s| {
+            s.baseline = None;
+            if let Some(j) = s.job.as_mut() {
+                j.fingerprint_stale = true;
+            }
+        })
+    }
     pub fn scheduler_failed(&self) {
         let apply = |s: &mut Journal| {
             if s.automatic.plan.is_some() && s.automatic.paused.is_none() {

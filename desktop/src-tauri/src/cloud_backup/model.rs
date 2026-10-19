@@ -194,6 +194,8 @@ pub struct Job {
     #[serde(default)]
     pub automatic: bool,
     #[serde(default)]
+    pub fingerprint_stale: bool,
+    #[serde(default)]
     pub business_fingerprint: Option<String>,
     #[serde(default)]
     pub binding: String,
