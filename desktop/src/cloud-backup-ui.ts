@@ -93,6 +93,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     if (timer) clearTimeout(timer);
     try {
       const status = await api.status();
+      if (status.cleanupWarning) tell("有过期预览的临时明文清理未确认，请重启应用后检查工作目录。备份状态仍可读取。", "warn");
       uploading = running(status.job);
       progress.textContent = status.job ? `${phaseNames[status.job.phase]}${status.job.metadata.sizeBytes ? ` · ${size(status.job.metadata.sizeBytes)}` : ""}` : "还没有创建云备份。";
       if (status.job?.errorCode) progress.textContent += `。${cloudError(status.job.errorCode)}`;
@@ -207,7 +208,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     void guarded(async () => {
       const c = selectedConfig();
       progress.textContent = "正在下载并校验传输哈希、加密认证和档案内部文件…";
-      let restored = false, cleanupWarning = false;
+      let restored = false, cleanupWarning = false, refreshWarning = false, restoreError: string | null = null;
       try {
         const result = await api.preview(c.connection, c.options, metadata);
         progress.textContent = "已完整下载并校验；等待你核对差异并确认恢复。";
@@ -215,13 +216,17 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
           factList([["预览有效期", cloudTime(result.expiresAt)], ["云端文件", "传输与内部校验通过"]]),
           restoreBody(metadata.package, result.preview),
           paragraph("恢复后本机自动云备份会关闭；设备标识与删除权限不会从备份迁移。", "settings-dialog-warn")),
-          confirmLabel: "确认替换当前档案", busyLabel: "正在恢复…", action: async () => { const outcome = await api.restore(result.token); restored = true; cleanupWarning = outcome.cleanupWarning; }, describeError: cloudError,
+          confirmLabel: "确认替换当前档案", busyLabel: "正在恢复…", action: async () => {
+            try { const outcome = await api.restore(result.token); restored = true; cleanupWarning = outcome.cleanupWarning; refreshWarning = outcome.refreshWarning; }
+            catch (error) { restoreError = cloudError(error); tell(restoreError, "error"); throw error; }
+          }, describeError: cloudError,
         });
         if (confirmed) {
-          tell(`恢复成功，旧档案已保存为回滚点。本机自动云备份已关闭，请重新确认配置。${cleanupWarning ? "临时明文清理未确认，请重启后检查工作目录。" : ""}`, cleanupWarning ? "warn" : "success");
-          try { await onRestored(); loaded = false; await refresh(); }
-          catch { tell("档案已恢复成功，但界面刷新失败。请重新打开页面核对；不要重复恢复。", "warn"); }
-        } else tell("已取消恢复，当前档案没有改动。", "info");
+          const summary = `恢复成功，旧档案已保存为回滚点。本机自动云备份已关闭，请重新确认配置。${cleanupWarning ? "临时明文清理未确认，请重启后检查工作目录。" : ""}${refreshWarning ? "路径显示刷新失败，请重启应用核对当前档案，不要重复恢复。" : ""}`;
+          try { await onRestored(); loaded = false; await refresh(); tell(summary, cleanupWarning || refreshWarning ? "warn" : "success"); }
+          catch { tell(`${summary}档案已恢复成功，但界面刷新失败。请重新打开页面核对；不要重复恢复。`, "warn"); }
+        } else if (restoreError) tell(restoreError, "error");
+        else tell("已取消恢复，当前档案没有改动。", "info");
       } finally {
         try {
           await api.clearPreview();
@@ -234,7 +239,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     });
   });
   async function refresh(force = false) {
-    if (force) loaded = false;
+    if (force) { loaded = false; password.value = ""; passphrase.value = ""; }
     if (!loaded) {
       try { config = await api.config(); }
       catch (error) { tell(`读取云备份配置失败。${cloudError(error)}`, "error"); throw error; }

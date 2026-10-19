@@ -43,6 +43,7 @@ export interface CloudJob {
   warnings: string[];
 }
 export interface CloudStatus {
+  cleanupWarning: boolean;
   deviceId: string;
   job: CloudJob | null;
   retryPackage: string | null;
@@ -58,7 +59,7 @@ export interface CloudConfig {
 export interface CloudPreview { token: string; backupId: string; expiresAt: string; preview: RestorePreview }
 export interface CloudNamespace { archiveId: string; deviceId: string }
 export interface CloudDiscovery { sources: CloudNamespace[]; warnings: string[] }
-export interface CloudRestoreOutcome { report: RestoreReport; cleanupWarning: boolean }
+export interface CloudRestoreOutcome { report: RestoreReport; cleanupWarning: boolean; refreshWarning: boolean }
 export interface CloudCatalog {
   entries: CloudMetadata[];
   cleanupSafe: boolean;

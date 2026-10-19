@@ -730,8 +730,8 @@ async fn cloud_backup_clear_preview(app: AppHandle) -> Result<(), CommandError> 
 #[tauri::command]
 async fn cloud_backup_restore(app: AppHandle, token: String) -> Result<cloud_backup::restore_flow::RestoreOutcome, CommandError> {
     archive_worker(app, move |state| {
-        let result = cloud_backup_commands::service(state)?.confirm_restore(&token, || suspend_cloud_automatic(state));
-        if result.is_ok() { refresh_archive_paths(state)?; }
+        let mut result = cloud_backup_commands::service(state)?.confirm_restore(&token, || suspend_cloud_automatic(state));
+        if let Ok(outcome) = result.as_mut() { outcome.refresh_warning = refresh_archive_paths(state).is_err(); }
         result
     }).await
 }

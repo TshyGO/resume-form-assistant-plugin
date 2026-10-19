@@ -312,6 +312,29 @@ async fn cleanup_failure_after_activation_returns_success_with_a_warning() {
     PreparedWorkspace::prepare(&l.paths.data_root).unwrap();
     assert!(!task.exists());
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn expired_preview_cleanup_failure_does_not_hide_job_or_latest_status() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let l = layout(); let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    let task = {
+        let mut guard = l.service.preview.lock().unwrap(); let pending = guard.as_mut().unwrap();
+        pending.expires = std::time::Instant::now(); pending.package.parent().unwrap().to_owned()
+    };
+    let blocker = fs::OpenOptions::new().read(true).share_mode(0).open(task.join("verify/archive/archive.db")).unwrap();
+    let status = l.service.status().unwrap();
+    assert!(status.cleanup_warning);
+    assert!(status.job.unwrap().published);
+    assert!(status.latest_package.is_some());
+    assert!(l.service.preview.lock().unwrap().is_none());
+    drop(blocker);
+    PreparedWorkspace::prepare(&l.paths.data_root).unwrap();
+    assert!(!task.exists());
+}
 fn candidate(l: &Layout, move_verified: bool, keep: Option<usize>) -> (Job, Lease) {
     let mut o = options();
     o.keep_last = keep;

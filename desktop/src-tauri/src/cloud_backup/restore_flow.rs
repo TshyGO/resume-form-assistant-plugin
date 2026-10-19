@@ -24,8 +24,17 @@ pub struct Preview {
 pub struct RestoreOutcome {
     pub report: crate::restore::RestoreReport,
     pub cleanup_warning: bool,
+    pub refresh_warning: bool,
 }
 impl Service {
+    fn close_preview_task(&self, task: TaskDirectory) -> bool {
+        let failed = task.close().is_err();
+        if failed {
+            self.preview_cleanup_warning
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        failed
+    }
     pub async fn download_preview(
         self: &Arc<Self>,
         client: &impl remote::Remote,
@@ -82,10 +91,9 @@ impl Service {
     fn clear_preview_inner(&self) -> Result<()> {
         let pending = self.preview.lock().map_err(|_| fail("LOCAL_STATE"))?.take();
         if let Some(pending) = pending {
-            pending
-                ._task
-                .close()
-                .map_err(|_| fail("CLEANUP_UNCONFIRMED"))?;
+            if self.close_preview_task(pending._task) {
+                return Err(fail("CLEANUP_UNCONFIRMED"));
+            }
         }
         Ok(())
     }
@@ -94,10 +102,9 @@ impl Service {
         if guard.as_ref().is_some_and(|p| Instant::now() >= p.expires) {
             let pending = guard.take().unwrap();
             drop(guard);
-            pending
-                ._task
-                .close()
-                .map_err(|_| fail("CLEANUP_UNCONFIRMED"))?;
+            if self.close_preview_task(pending._task) {
+                return Err(fail("CLEANUP_UNCONFIRMED"));
+            }
         }
         Ok(())
     }
@@ -144,11 +151,12 @@ impl Service {
                 &model::now(),
             )
         })();
-        let cleanup_warning = pending._task.close().is_err();
+        let cleanup_warning = self.close_preview_task(pending._task);
         match outcome {
             Ok(report) => Ok(RestoreOutcome {
                 report,
                 cleanup_warning,
+                refresh_warning: false,
             }),
             Err(mut error) => {
                 if cleanup_warning {

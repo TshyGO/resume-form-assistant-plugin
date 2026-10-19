@@ -125,3 +125,29 @@ test("one transient status failure does not leave controls permanently disabled"
     expect(reads).toBe(3); expect(start.disabled).toBe(false);
   } finally { vi.useRealTimers(); }
 });
+test("forced configuration reload clears uncommitted secrets before restoring the saved account", async () => {
+  const { refresh, calls } = setup(); await refresh();
+  fireEvent.input(document.getElementById("cloud-username")!, { target: { value: "other-account" } });
+  fireEvent.input(document.getElementById("cloud-password")!, { target: { value: "other-password" } });
+  fireEvent.input(document.getElementById("cloud-passphrase")!, { target: { value: "other-passphrase" } });
+  await refresh(true);
+  expect((document.getElementById("cloud-username") as HTMLInputElement).value).toBe("synthetic");
+  expect((document.getElementById("cloud-password") as HTMLInputElement).value).toBe("");
+  expect((document.getElementById("cloud-passphrase") as HTMLInputElement).value).toBe("");
+  fireEvent.submit(document.getElementById("cloud-form")!);
+  await waitFor(() => expect(calls.some((c) => c.name === "cloud_backup_save_config")).toBe(true));
+  expect(calls.some((c) => c.name === "set_cloud_backup_credential")).toBe(false);
+});
+test("failed confirmation remains actionable after the user closes the dialog", async () => {
+  const { refresh, query } = setup({ cloud_backup_restore: async () => { throw { code: "CLOUD_PREVIEW_EXPIRED" }; } });
+  await refresh(); click("cloud-browse");
+  await waitFor(() => expect((query.getByRole("button", { name: "下载校验并预览" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(query.getByRole("button", { name: "下载校验并预览" }));
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认替换当前档案" }));
+  await waitFor(() => expect(within(dialog()!).getByRole("alert").textContent).toContain("重新下载"));
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(dialog()).toBeNull());
+  expect(query.getByText(/预览已过期.*重新下载/)).toBeTruthy();
+  expect(query.queryByText(/已取消恢复/)).toBeNull();
+});

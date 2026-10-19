@@ -79,6 +79,7 @@ pub struct Service {
     journal: Mutex<Journal>,
     active: Mutex<Option<CancellationToken>>,
     preview: Mutex<Option<restore_flow::Pending>>,
+    preview_cleanup_warning: std::sync::atomic::AtomicBool,
 }
 pub struct Lease {
     service: Arc<Service>,
@@ -150,6 +151,7 @@ impl Service {
             journal: Mutex::new(state),
             active: Mutex::new(None),
             preview: Mutex::new(None),
+            preview_cleanup_warning: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     fn reserve(self: &Arc<Self>) -> Result<Lease> {
@@ -177,10 +179,12 @@ impl Service {
         Ok(())
     }
     pub fn status(&self) -> Result<Status> {
-        self.expire_preview()?;
+        // Preview cleanup is maintenance, never a prerequisite to read job/latest.
+        let _ = self.expire_preview();
         let state = self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?;
         Ok(Status {
             device_id: state.device_id.clone(),
+            cleanup_warning: self.preview_cleanup_warning.load(std::sync::atomic::Ordering::Relaxed),
             job: state.job.clone(),
             latest_metadata: state.receipts.iter().find(|r| Some(&r.metadata.backup_id) == state.latest.as_ref()).map(|r| r.metadata.clone()),
             retry_package: state

@@ -229,6 +229,7 @@ pub struct Journal {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    pub cleanup_warning: bool,
     pub device_id: String,
     pub job: Option<Job>,
     pub retry_package: Option<String>,

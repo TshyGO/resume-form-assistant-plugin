@@ -28,7 +28,9 @@ fn document(path: &Path) -> Result<serde_json::Value> {
         Err(_) => return Err(fail("SETTINGS_IO")),
     };
     let mut bytes = Vec::new();
-    file.take(512 * 1024 + 1).read_to_end(&mut bytes)?;
+    file.take(512 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| fail("SETTINGS_IO"))?;
     if bytes.len() > 512 * 1024 {
         return Err(fail("INVALID_SETTINGS"));
     }
@@ -45,8 +47,11 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         .map(|v| {
             let config: Config =
                 serde_json::from_value(v.clone()).map_err(|_| fail("INVALID_SETTINGS"))?;
-            Binding::checked(&config.connection)?;
-            config.options.check()?;
+            Binding::checked(&config.connection).map_err(|_| fail("INVALID_SETTINGS"))?;
+            config
+                .options
+                .check()
+                .map_err(|_| fail("INVALID_SETTINGS"))?;
             Ok(config)
         })
         .transpose()
@@ -61,12 +66,14 @@ pub fn save(path: &Path, config: &Config) -> Result<()> {
         return Err(fail("INVALID_SETTINGS"));
     }
     let parent = path.parent().ok_or_else(|| fail("SETTINGS_IO"))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(&bytes)?;
-    temp.as_file().sync_all()?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| fail("SETTINGS_IO"))?;
+    temp.write_all(&bytes).map_err(|_| fail("SETTINGS_IO"))?;
+    temp.as_file().sync_all().map_err(|_| fail("SETTINGS_IO"))?;
     temp.persist(path).map_err(|_| fail("SETTINGS_IO"))?;
     #[cfg(unix)]
-    fs::File::open(parent)?.sync_all()?;
+    fs::File::open(parent)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| fail("SETTINGS_IO"))?;
     Ok(())
 }
 /// Write before activation: inability to persist the gate must prevent switching.
@@ -107,6 +114,11 @@ mod tests {
             restored.connection.connection_id,
             config.connection.connection_id
         );
+        let mut invalid = document(&path).unwrap();
+        invalid["cloudBackup"]["connection"]["endpoint"] =
+            serde_json::json!("http://not-https.invalid/");
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert_eq!(load(&path).err().unwrap().code, "CLOUD_INVALID_SETTINGS");
         fs::write(&path, "broken").unwrap();
         assert!(suspend(&path).is_err());
         assert!(save(&path, &config).is_err());
