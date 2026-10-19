@@ -16,6 +16,7 @@ pub mod applications;
 pub mod error;
 pub mod evidence;
 pub mod facade;
+pub mod fingerprint;
 pub mod identity;
 pub mod legacy_import;
 pub mod migration;

@@ -53,6 +53,7 @@ pub fn start(
     } else {
         service.begin(options, scope)?
     };
+    if let Err(e) = service.manual_job() { service.start_failed(e.clone(), &lease.cancel); return Err(e); }
     tauri::async_runtime::spawn(service.run(lease, client, passphrase, !retry));
     Ok(job)
 }

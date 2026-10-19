@@ -26,7 +26,7 @@ export interface CloudMetadata {
   encryptionFormat: "ageV1Scrypt" | "none";
 }
 export type CloudPhase = "packing" | "encrypting" | "uploading" | "confirming"
-  | "succeeded" | "cleanupWarning" | "failed" | "cancelled" | "interrupted";
+  | "succeeded" | "cleanupWarning" | "failed" | "cancelled" | "interrupted" | "skipped";
 export interface CloudJob {
   id: string;
   scope: string;
@@ -50,6 +50,19 @@ export interface CloudStatus {
   latestPackage: string | null; // local plaintext .rpbak; the UI must label this
   latestMetadata: CloudMetadata | null;
 }
+export interface CloudPlan {
+  minute: number; everyDays: number; utcOffsetMinutes: number;
+  budgetBytes: number; pauseAtBudget: boolean;
+}
+export interface CloudScheduleStatus {
+  enabled: boolean; requiresConfirmation: boolean;
+  recentSize: number | null; estimatedCycleBytes: number | null;
+  state: {
+    plan: CloudPlan | null; nextAt: number | null; paused: string | null;
+    message: string | null; retryAt: number | null; retries: number;
+    cycleStartedAt: number | null; uploadBytes: number; budgetWarning: boolean;
+  };
+}
 export interface CloudConfig {
   connection: CloudConnection;
   options: CloudOptions;
@@ -68,6 +81,8 @@ export interface CloudCatalog {
 
 export function cloudBackupApi(invoke: Invoke) {
   return {
+    scheduleStatus: () => invoke<CloudScheduleStatus>("cloud_backup_schedule_status"),
+    configureSchedule: (plan: CloudPlan | null) => invoke<void>("cloud_backup_schedule_configure", { plan }),
     config: () => invoke<CloudConfig | null>("cloud_backup_config"),
     saveConfig: (config: CloudConfig) => invoke<void>("cloud_backup_save_config", { config }),
     credentialStatus: (connection: CloudConnection) => invoke<{ hasWebdavPassword: boolean; hasBackupPassphrase: boolean }>("cloud_backup_credential_status", { connection }),

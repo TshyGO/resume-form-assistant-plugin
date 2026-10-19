@@ -41,6 +41,7 @@ pub fn request_quit(app: &AppHandle, reason: &str) -> Result<(), String> {
         }
     })?;
     *quitting = Some(policy);
+    if let Ok(service) = crate::cloud_backup_commands::service(&state) { let _ = service.cancel(); }
     let _ = data_service::write_log(&paths, "info", "APP_QUIT", &[("reason", reason)]);
     if let Err(error) = crate::todo_commands::cancel_all_reminders(state.reminders.as_ref()) {
         let _ = data_service::write_log(

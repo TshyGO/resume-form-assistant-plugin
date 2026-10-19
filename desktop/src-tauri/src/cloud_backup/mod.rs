@@ -1,5 +1,7 @@
 //! #305: one persisted, resumable job; metadata is the remote commit record.
 mod local;
+mod automatic;
+pub mod schedule;
 pub mod model;
 mod publish;
 mod remote;
@@ -111,6 +113,8 @@ impl Service {
                 return Err(fail("INVALID_LOCAL_STATE"));
             }
             Journal {
+                automatic: Default::default(),
+                baseline: None,
                 device_id: uuid::Uuid::new_v4().to_string(),
                 job: None,
                 latest: None,
@@ -121,7 +125,7 @@ impl Service {
         if let Some(job) = state.job.as_mut() {
             if !matches!(
                 job.phase,
-                Phase::Succeeded | Phase::CleanupWarning | Phase::Failed | Phase::Cancelled
+                Phase::Succeeded | Phase::CleanupWarning | Phase::Failed | Phase::Cancelled | Phase::Skipped
             ) {
                 job.phase = Phase::Interrupted;
             }
@@ -262,14 +266,14 @@ impl Service {
         {
             local::remove_owned(&self.root, &old.id)?;
         }
-        let archive = self
+        let identity = self
             .store
             .lock()
             .map_err(|_| fail("LOCAL_STATE"))?
             .as_ref()
             .ok_or_else(|| fail("STORE_UNAVAILABLE"))?
-            .identity()
-            .archive_id;
+            .identity();
+        let archive = identity.archive_id.clone();
         uuid(&archive)?;
         let id = uuid::Uuid::new_v4().to_string();
         let mut metadata = Metadata {
@@ -290,6 +294,10 @@ impl Service {
         };
         metadata.package = metadata.package_name()?;
         let job = Job {
+            automatic: false,
+            business_fingerprint: None,
+            binding: Self::binding(&scope, &options, &identity),
+            retry_not_before: None,
             id,
             scope,
             options,
@@ -403,7 +411,18 @@ impl Service {
                 }
             }
             local::space(&self.root, size.saturating_mul(3))?;
-            crate::backup_commands::export(store, &self.paths, &package, &job.metadata.created_at)?;
+            if job.automatic && Self::binding(&job.scope, &job.options, &store.identity()) != job.binding {
+                return Err(fail("ARCHIVE_CHANGED"));
+            }
+            let (_, fingerprint) = crate::restore::export_archive_fingerprinted(store, &self.paths, &package, &job.metadata.created_at)?;
+            let unchanged = job.automatic && self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?.baseline.as_ref()
+                .is_some_and(|b| b.binding == job.binding && b.fingerprint == fingerprint);
+            self.update(|s| {
+                let j = s.job.as_mut().unwrap();
+                j.business_fingerprint = Some(fingerprint);
+                if unchanged { j.phase = Phase::Skipped; }
+            })?;
+            if unchanged { return Ok(()); }
         }
         if cancel.is_cancelled() {
             return Err(fail("CANCELLED"));
@@ -470,6 +489,7 @@ impl Service {
                     .await
                     .map_err(|_| fail("WORKER_FAILED"))??;
             }
+            if self.job()?.phase == Phase::Skipped { return Ok(()); }
             if cancel.is_cancelled() {
                 return Err(fail("CANCELLED"));
             }
@@ -511,6 +531,11 @@ impl Service {
             self.publish(&client, &cancel).await
         }
         .await;
+        // Keep the provider's absolute retry floor through the command boundary.
+        let floor = client.retry_not_before();
+        let result = if floor > 0 {
+            self.update(|s| { if let Some(j) = s.job.as_mut() { j.retry_not_before = Some(floor); } }).and(result)
+        } else { result };
         self.finish(result, &cancel);
         drop(lease);
     }

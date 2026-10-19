@@ -67,6 +67,7 @@ impl Service {
         })?;
         // On a lost response we stop here. The next attempt uses the same backup
         // ID and verifies existing content, never overwrites or invents a new ID.
+        self.charge_upload(job.metadata.size_bytes)?;
         remote
             .put(path, &local::payload(&self.root, &job.id), cancel)
             .await?;
@@ -136,6 +137,7 @@ impl Service {
                 return Err(fail("PUBLISH_UNCONFIRMED"));
             }
             self.update(|s| s.job.as_mut().unwrap().meta_intent = true)?;
+            self.charge_upload(bytes.len() as u64)?;
             remote.put_meta(&meta_path, bytes, cancel).await?;
             let confirmed = remote
                 .read(&meta_path, cancel)
@@ -160,6 +162,10 @@ impl Service {
                 j.phase = Phase::CleanupWarning;
             }
             j.error_code = None;
+            if let Some(fingerprint) = &j.business_fingerprint {
+                let manual_confirmed = !j.automatic || s.baseline.as_ref().is_some_and(|b| b.binding == j.binding && b.manual_confirmed);
+                s.baseline = Some(super::schedule::Baseline { binding: j.binding.clone(), fingerprint: fingerprint.clone(), manual_confirmed, size_bytes: j.metadata.size_bytes });
+            }
             s.latest = Some(j.id.clone());
             if let Some(old) = old_latest.as_ref().filter(|id| *id != &j.id) {
                 if !s.local_garbage.contains(old) {

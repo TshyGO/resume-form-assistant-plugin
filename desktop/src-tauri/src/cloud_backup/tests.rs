@@ -345,6 +345,152 @@ fn candidate(l: &Layout, move_verified: bool, keep: Option<usize>) -> (Job, Leas
         .unwrap();
     (l.service.job().unwrap(), lease)
 }
+
+fn auto_plan() -> schedule::Plan {
+    schedule::Plan { minute: 60, every_days: 1, utc_offset_minutes: 480,
+        budget_bytes: 1_000_000_000, pause_at_budget: true }
+}
+
+#[tokio::test]
+async fn automatic_snapshot_skips_unchanged_but_records_files_and_restore_epoch_trigger_confirmation() {
+    let l = layout(); let remote = Fake::default();
+    assert_eq!(l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap_err().code, "CLOUD_MANUAL_BACKUP_REQUIRED");
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let (_, lease, fresh) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
+    assert!(fresh);
+    l.service.update(|s| s.job.as_mut().unwrap().metadata.created_at = "2026-10-20T23:11:59Z".into()).unwrap();
+    l.service.prepare(&lease.cancel, None).unwrap(); drop(lease);
+    assert_eq!(l.service.job().unwrap().phase, Phase::Skipped);
+    assert!(!l.service.job().unwrap().candidate_ready);
+    let puts = remote.count("PUT_PACKAGE");
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due+30, Some(due)).unwrap().is_none());
+    assert_eq!(l.service.journal.lock().unwrap().automatic.message.as_deref(), Some("UNCHANGED"));
+    let app = {
+        let store = l.store.lock().unwrap(); let store = store.as_ref().unwrap();
+        crate::commands::create_application(store, serde_json::from_value(serde_json::json!({"company":"Automatic synthetic", "title":"Engineer"})).unwrap()).unwrap().application.unwrap().id.clone()
+    };
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let (_, lease, _) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
+    l.service.prepare(&lease.cancel, None).unwrap();
+    assert!(l.service.job().unwrap().candidate_ready);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert!(remote.count("PUT_PACKAGE") > puts);
+    let previous = l.service.job().unwrap().business_fingerprint.unwrap();
+    {
+        use sha2::{Digest, Sha256};
+        let store = l.store.lock().unwrap(); let store = store.as_ref().unwrap();
+        let bytes = b"synthetic attachment";
+        let relative = "attachments/automatic.txt";
+        fs::create_dir_all(store.archive_dir().join("attachments")).unwrap();
+        fs::write(store.archive_dir().join(relative), bytes).unwrap();
+        store.import_evidence(archive_store::NewEvidence {
+            application_id: Some(app), kind: archive_store::EvidenceKind::Paste,
+            blob: archive_store::AttachmentBlobMeta { sha256: format!("{:x}", Sha256::digest(bytes)), size_bytes: bytes.len() as i64, stored_rel_path: relative.into(), mime: None },
+            original_filename: None, subject: None, from_addr: None, sent_at: None, body_extract: None, append_event: true,
+        }).unwrap();
+    }
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let (_, lease, _) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
+    l.service.prepare(&lease.cancel, None).unwrap();
+    assert_ne!(l.service.job().unwrap().business_fingerprint.as_deref(), Some(previous.as_str()));
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let current = l.service.status().unwrap(); let job = l.service.job().unwrap();
+    let preview = l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    l.service.confirm_restore(&preview.token, || Ok(())).unwrap();
+    assert!(current.latest_metadata.is_some());
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due+86400, Some(due+86370)).unwrap().is_none());
+    assert_eq!(l.service.journal.lock().unwrap().automatic.paused.as_deref(), Some("ARCHIVE_OR_CONFIG_CHANGED"));
+    assert!(l.service.configure(auto_plan(), "synthetic-scope", &options(), due+86400).is_err());
+}
+
+#[tokio::test]
+async fn automatic_retries_reconcile_unknown_put_without_uploading_twice_and_cleanup_is_terminal() {
+    let l = layout(); let remote = Fake::default();
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    { let store = l.store.lock().unwrap(); crate::commands::create_application(store.as_ref().unwrap(), serde_json::from_value(serde_json::json!({"company":"Changed", "title":"Engineer"})).unwrap()).unwrap(); }
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let (original, lease, _) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
+    l.service.prepare(&lease.cancel, None).unwrap();
+    remote.fail_next("PUT_PACKAGE", true);
+    assert!(l.service.publish(&remote, &lease.cancel).await.is_err());
+    let used = l.service.journal.lock().unwrap().automatic.upload_bytes;
+    l.service.finish(Err(fail("DAV_Network_UNKNOWN")), &lease.cancel); drop(lease);
+    l.service.automatic_action("synthetic-scope", &options(), due+30, Some(due)).unwrap();
+    let at = l.service.journal.lock().unwrap().automatic.retry_at.unwrap();
+    let (job, lease, fresh) = l.service.automatic_action("synthetic-scope", &options(), at, Some(at-30)).unwrap().unwrap();
+    assert_eq!(job.id, original.id); assert!(!fresh);
+    let puts = remote.count("PUT_PACKAGE");
+    l.service.update(|s| s.job.as_mut().unwrap().options.keep_last = Some(5)).unwrap();
+    remote.0.lock().unwrap().truncated = true;
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert_eq!(remote.count("PUT_PACKAGE"), puts);
+    assert!(l.service.journal.lock().unwrap().automatic.upload_bytes >= used);
+    assert_eq!(l.service.job().unwrap().phase, Phase::CleanupWarning);
+    l.service.automatic_action("synthetic-scope", &options(), at+30, Some(at)).unwrap();
+    assert!(l.service.journal.lock().unwrap().automatic.pending_job.is_none());
+    assert!(l.service.journal.lock().unwrap().automatic.retry_at.is_none());
+}
+
+#[test]
+fn finite_retry_policy_respects_retry_after_and_pauses_auth_cancel_restart_and_budget() {
+    let l = layout(); let (mut job, _lease) = candidate(&l, false, None);
+    job.phase = Phase::Failed; job.error_code = Some("CLOUD_DAV_RateLimited".into()); job.retry_not_before = Some(2000);
+    let mut s = schedule::Automatic { plan: Some(auto_plan()), pending_job: Some(job.id.clone()), ..Default::default() };
+    assert_eq!(s.tick(1000, Some(970), Some(&job)), schedule::Decision::None);
+    assert_eq!(s.retry_at, Some(2000));
+    assert_eq!(s.tick(1999, Some(1970), Some(&job)), schedule::Decision::None);
+    assert_eq!(s.tick(2000, Some(1999), Some(&job)), schedule::Decision::Retry);
+    for attempt in 1..3 { assert_eq!(s.retries, attempt); s.tick(2000 + attempt as i64 * 1000, Some(2000 + attempt as i64 * 1000), Some(&job)); let at = s.retry_at.unwrap(); assert_eq!(s.tick(at, Some(at-30), Some(&job)), schedule::Decision::Retry); }
+    s.tick(10000, Some(9990), Some(&job)); assert_eq!(s.paused.as_deref(), Some("RETRIES_EXHAUSTED"));
+    let mut long = schedule::Automatic { plan: Some(auto_plan()), pending_job: Some(job.id.clone()), ..Default::default() };
+    job.retry_not_before = Some(i64::MAX);
+    long.tick(1000, Some(970), Some(&job));
+    assert_eq!(long.paused.as_deref(), Some("RETRY_AFTER_TOO_LONG"));
+    job.retry_not_before = None;
+    for code in ["CLOUD_DAV_Authentication", "CLOUD_DAV_Permission", "CLOUD_DAV_NoSpace", "CLOUD_DAV_TooLarge", "CLOUD_BUDGET_PAUSED"] {
+        job.error_code = Some(code.into());
+        let mut s = schedule::Automatic { plan: Some(auto_plan()), pending_job: Some(job.id.clone()), ..Default::default() };
+        s.tick(1000, Some(970), Some(&job)); assert_eq!(s.paused.as_deref(), Some(code)); assert!(s.retry_at.is_none());
+    }
+    for phase in [Phase::Cancelled, Phase::Interrupted] {
+        job.phase = phase;
+        let mut s = schedule::Automatic { plan: Some(auto_plan()), pending_job: Some(job.id.clone()), ..Default::default() };
+        s.tick(1000, None, Some(&job)); assert_eq!(s.paused.as_deref(), Some("INTERRUPTED_CONFIRM"));
+    }
+}
+
+#[tokio::test]
+async fn budget_pause_blocks_put_but_explicit_manual_retry_still_works_and_restart_keeps_claim() {
+    let l = layout(); let remote = Fake::default();
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    { let store = l.store.lock().unwrap(); crate::commands::create_application(store.as_ref().unwrap(), serde_json::from_value(serde_json::json!({"company":"Budget test", "title":"Engineer"})).unwrap()).unwrap(); }
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    let (job, lease, _) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().is_none());
+    l.service.prepare(&lease.cancel, None).unwrap();
+    l.service.update(|s| { s.automatic.upload_bytes = 999_999_999; s.automatic.cycle_started_at = Some(time::OffsetDateTime::now_utc().unix_timestamp()); }).unwrap();
+    let puts = remote.count("PUT_PACKAGE");
+    let error = l.service.publish(&remote, &lease.cancel).await.unwrap_err();
+    assert_eq!(error.code, "CLOUD_BUDGET_PAUSED");
+    assert_eq!(remote.count("PUT_PACKAGE"), puts);
+    l.service.finish(Err(error), &lease.cancel); drop(lease);
+    let again = reopened(&l);
+    assert_eq!(again.journal.lock().unwrap().automatic.pending_job.as_deref(), Some(job.id.as_str()));
+    assert_eq!(again.journal.lock().unwrap().automatic.paused.as_deref(), Some("BUDGET_PAUSED"));
+    let (_, lease) = again.retry("synthetic-scope", &options()).unwrap();
+    again.manual_job().unwrap();
+    again.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    assert!(again.job().unwrap().published);
+    assert!(again.journal.lock().unwrap().automatic.upload_bytes > 1_000_000_000);
+    assert!(!again.job().unwrap().automatic);
+}
 fn reopened(l: &Layout) -> Arc<Service> {
     Service::open(
         l.paths.clone(),

@@ -338,10 +338,13 @@ async fn status_mapping_retry_limits_and_unknown_mutation_outcomes() {
     );
     task.await.unwrap();
     let (client, task) = server(1, |_| header(reply(429, vec![]), "Retry-After", "120")).await;
+    let before = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
     assert_eq!(
         client.head(&path, &cancel).await.unwrap_err().retry_after,
         Some(Duration::from_secs(120))
     );
+    assert!(client.retry_not_before() >= before + 120);
+    assert_eq!(client.clone().retry_not_before(), client.retry_not_before());
     task.await.unwrap();
     let (client, task) = server(1, |_| Reply {
         raw: Some(vec![]),
