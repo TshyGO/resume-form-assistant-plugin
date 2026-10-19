@@ -470,6 +470,14 @@ async fn budget_pause_blocks_put_but_explicit_manual_retry_still_works_and_resta
     let (_, lease) = candidate(&l, false, None);
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    l.service.update(|s| s.automatic.upload_bytes = 850_000_000).unwrap();
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    assert!(l.service.journal.lock().unwrap().automatic.budget_warning);
+    let mut bigger = auto_plan(); bigger.budget_bytes = 2_000_000_000;
+    l.service.configure(bigger, "synthetic-scope", &options(), 100).unwrap();
+    assert!(!l.service.journal.lock().unwrap().automatic.budget_warning);
+    assert_eq!(l.service.journal.lock().unwrap().automatic.upload_bytes, 850_000_000);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
     { let store = l.store.lock().unwrap(); crate::commands::create_application(store.as_ref().unwrap(), serde_json::from_value(serde_json::json!({"company":"Budget test", "title":"Engineer"})).unwrap()).unwrap(); }
     let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
     let (job, lease, _) = l.service.automatic_action("synthetic-scope", &options(), due, Some(due-30)).unwrap().unwrap();
@@ -490,6 +498,34 @@ async fn budget_pause_blocks_put_but_explicit_manual_retry_still_works_and_resta
     assert!(again.job().unwrap().published);
     assert!(again.journal.lock().unwrap().automatic.upload_bytes > 1_000_000_000);
     assert!(!again.job().unwrap().automatic);
+}
+
+#[tokio::test]
+async fn metadata_budget_pause_and_post_publish_journal_failure_never_require_a_second_payload_put() {
+    let l = layout(); let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.update(|s| {
+        s.job.as_mut().unwrap().automatic = true;
+        s.automatic.plan = Some(auto_plan());
+        s.automatic.upload_bytes = 1_000_000_000 - job.metadata.size_bytes;
+        s.automatic.cycle_started_at = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+    }).unwrap();
+    let error = l.service.publish(&remote, &lease.cancel).await.unwrap_err();
+    assert_eq!(error.code, "CLOUD_BUDGET_PAUSED");
+    assert_eq!(remote.count("PUT_PACKAGE"), 1); assert_eq!(remote.count("PUT_META"), 0);
+    l.service.finish(Err(error), &lease.cancel); drop(lease);
+    let (_, lease) = l.service.retry("synthetic-scope", &options()).unwrap();
+    l.service.manual_job().unwrap();
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    assert_eq!(remote.count("PUT_PACKAGE"), 1); assert_eq!(remote.count("PUT_META"), 1);
+    // A failed Retry-After journal write reaches finish as LOCAL_IO, after
+    // publication was already durable. Success stays published with a warning.
+    let state = l.service.root.join("state.json");
+    fs::remove_file(&state).unwrap(); fs::create_dir(&state).unwrap();
+    l.service.finish(Err(fail("LOCAL_IO")), &lease.cancel);
+    assert!(l.service.job().unwrap().published);
+    assert_eq!(l.service.job().unwrap().phase, Phase::CleanupWarning);
+    assert!(l.service.status().unwrap().retry_package.is_none());
 }
 fn reopened(l: &Layout) -> Arc<Service> {
     Service::open(

@@ -94,7 +94,8 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const state = await api.credentialStatus(config.connection);
     must("cloud-secret-status").textContent = `此账号的应用密码：${state.hasWebdavPassword ? "已保存" : "未保存"}；加密口令：${state.hasBackupPassphrase ? "已保存" : "未保存"}。`;
   }
-  async function poll() {
+  let polling: Promise<void> | null = null;
+  async function readStatus() {
     if (timer) clearTimeout(timer);
     try {
       const status = await api.status();
@@ -114,6 +115,11 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       timer = setTimeout(() => void poll(), uploading ? 5000 : 30000);
     }
     controls();
+  }
+  function poll(): Promise<void> {
+    if (polling) return polling;
+    polling = readStatus().finally(() => { polling = null; });
+    return polling;
   }
   for (const control of [endpoint, username, root, encrypted, keep, password, passphrase]) control.addEventListener("input", () => {
     dirty = true;

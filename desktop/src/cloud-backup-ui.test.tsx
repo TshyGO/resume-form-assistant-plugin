@@ -54,7 +54,7 @@ test("automatic plan is opt in, estimates from a prior package and sends only a 
   fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
   await waitFor(() => expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(true));
   const args = calls.find(c => c.name === "cloud_backup_schedule_configure")!.args!;
-  expect(args).toEqual({ plan: { minute: 1260, everyDays: 7, utcOffsetMinutes: -new Date().getTimezoneOffset(), budgetBytes: 1_000_000_000, pauseAtBudget: true } });
+  expect(args).toEqual({ plan: { minute: 1260, everyDays: 7, utcOffsetMinutes: 0 - new Date().getTimezoneOffset(), budgetBytes: 1_000_000_000, pauseAtBudget: true } });
   expect(JSON.stringify(args)).not.toMatch(/password|passphrase/i);
 });
 

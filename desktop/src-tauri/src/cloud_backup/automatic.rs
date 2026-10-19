@@ -70,6 +70,10 @@ impl Service {
             a.retry_at = None;
             a.retries = 0;
             a.cycle(now); // Reconfirmation never resets observed traffic.
+            a.budget_warning = a
+                .plan
+                .as_ref()
+                .is_some_and(|p| a.upload_bytes >= p.budget_bytes.saturating_mul(80) / 100);
         })
     }
     pub fn schedule_status(

@@ -38,7 +38,10 @@ pub fn snapshot(database: &Path) -> Result<String, StoreError> {
                 table != "todos"
                     || !matches!(
                         c.as_str(),
-                        "reminder_scheduled_for_utc" | "reminder_handle" | "reminder_state"
+                        "reminder_scheduled_for_utc"
+                            | "reminder_handle"
+                            | "reminder_state"
+                            | "updated_at"
                     )
             })
             .collect::<Vec<_>>();
@@ -94,9 +97,17 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.db");
         let c = Connection::open(&p).unwrap();
-        c.execute_batch("CREATE TABLE records(id TEXT, value TEXT); CREATE TABLE todos(id TEXT,reminder_handle TEXT); INSERT INTO records VALUES ('b','two'),('a','one'); INSERT INTO todos VALUES ('t','old');").unwrap();
+        c.execute_batch("CREATE TABLE records(id TEXT, value TEXT); CREATE TABLE todos(id TEXT,title TEXT,reminder_handle TEXT,updated_at TEXT); INSERT INTO records VALUES ('b','two'),('a','one'); INSERT INTO todos VALUES ('t','business title','old','before');").unwrap();
         let original = snapshot(&p).unwrap();
-        c.execute_batch("UPDATE todos SET reminder_handle='new'; VACUUM;")
+        c.execute_batch(
+            "UPDATE todos SET reminder_handle='new',updated_at='after reminder delivery'; VACUUM;",
+        )
+        .unwrap();
+        assert_eq!(original, snapshot(&p).unwrap());
+        c.execute_batch("UPDATE todos SET title='business edit'")
+            .unwrap();
+        assert_ne!(original, snapshot(&p).unwrap());
+        c.execute_batch("UPDATE todos SET title='business title'")
             .unwrap();
         assert_eq!(original, snapshot(&p).unwrap());
         c.execute_batch("UPDATE records SET value='changed' WHERE id='a'")

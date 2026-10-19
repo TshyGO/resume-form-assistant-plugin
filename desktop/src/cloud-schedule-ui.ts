@@ -9,6 +9,10 @@ const messages: Record<string, string> = {
   ENABLED: "计划已启用", CHECKING: "正在检查业务内容", SUCCEEDED: "最近一次自动备份已确认成功",
   UNCHANGED: "业务内容未变，已跳过上传", MISSED_MANUAL: "错过计划时间，未自动补传。需要时点击「立即备份到云端」",
   RETRY_WAIT: "网络或限流后等待有限重试；复用原候选包并先对账",
+  ARCHIVE_CHANGED: "档案已切换，请先手动备份，再重新确认计划",
+  SCOPE_MISMATCH: "候选包属于原账号、目录或加密设置，请恢复原配置后重试，或明确放弃",
+  RETRY_REQUIRED: "请先手动重试或放弃现有候选包",
+  UNKNOWN_FAILURE: "失败原因未记录，请检查配置与任务状态后手动处理",
   BUDGET_PAUSED: "本机估算预算不足，自动上传已暂停；请核对账户流量后调整预算并重新启用",
   CLOCK_CHANGED: "系统时钟回退，计划已暂停，请重新确认时间",
   INTERRUPTED_CONFIRM: "任务取消或重启中断，计划已暂停；请手动重试或放弃候选包后重新启用",
@@ -68,12 +72,12 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       initialized = true;
       const s = current.state;
       status.textContent = !current.enabled ? `自动计划关闭。${current.requiresConfirmation ? "恢复后需重新确认；请先手动备份。" : ""}`
-        : s.paused ? `计划已暂停：${messages[s.paused] ?? s.paused}。可手动重试；需重新确认才能恢复自动计划。`
+        : s.paused ? `计划已暂停：${messages[s.paused] ?? messages[s.paused.replace(/^CLOUD_/, "")] ?? s.paused}。可手动重试；需重新确认才能恢复自动计划。`
           : `${s.message ? messages[s.message] ?? s.message : "计划已启用"}。${s.nextAt != null ? `下次：${date(s.nextAt)}（设备本地显示；执行采用 ${zoneLabel(s.plan!.utcOffsetMinutes)}）` : ""}${s.retryAt != null ? `；最早重试：${date(s.retryAt)}` : ""}`;
       const needsAttention = current.enabled && (s.paused || s.message === "MISSED_MANUAL" || s.budgetWarning);
       must("cloud-auto-notice").hidden = !needsAttention;
       must("cloud-auto-notice-text").textContent = needsAttention ? `云备份需要处理。${status.textContent}` : "";
-      must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "已达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;
+      must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "当前或下一次上传估算达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;
       estimate();
     } catch (error) { status.textContent = describeError(error); }
     timer = setTimeout(() => void refresh(), 30000);

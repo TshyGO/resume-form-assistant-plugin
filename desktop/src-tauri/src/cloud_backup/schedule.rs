@@ -157,7 +157,11 @@ impl Automatic {
                     }
                     return Decision::None;
                 }
-                let code = job.error_code.as_deref().unwrap_or("");
+                let code = job
+                    .error_code
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("UNKNOWN_FAILURE");
                 let retryable = [
                     "CLOUD_DAV_Network",
                     "CLOUD_DAV_Timeout",
