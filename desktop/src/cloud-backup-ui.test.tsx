@@ -5,7 +5,7 @@ import { mountCloudBackup, cloudError } from "./cloud-backup-ui";
 import type { Invoke } from "./api";
 
 const config = { connection: { connectionId: "11111111-1111-4111-8111-111111111111", endpoint: "https://dav.jianguoyun.com/dav/", username: "synthetic" }, options: { encrypted: true, root: ["Test"], keepLast: 5 }, automaticEnabled: false, requiresConfirmation: false };
-const counts = { applications: 1, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
+const counts = { applications: 1, recycledApplications: 0, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
 const metadata = { backupId: "synthetic-backup", createdAt: "2026-10-19T00:00:00Z", package: "backup.rpbak.age", archiveId: "synthetic-archive", deviceId: "synthetic-device", sizeBytes: 1024, encryptionFormat: "ageV1Scrypt" };
 beforeEach(() => {
   document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];

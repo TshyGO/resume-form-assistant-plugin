@@ -153,6 +153,93 @@ fn a_preview_says_when_it_is_the_same_archive() {
 }
 
 #[test]
+fn moving_an_application_to_the_recycle_bin_shows_up_in_the_preview_and_the_report() {
+    // #314：列表上的「删除」只是移进回收站，申请总数不变。不单独数回收站的话，
+    // 用户在预览里看不出被删的那条会回来。
+    let here = layout();
+    here.open().seed("测试公司A");
+    let deleted = here.seed("测试公司C");
+    let package = here.export_to("before-delete.zip");
+    here.with(|store| {
+        store
+            .set_recycle_state(&deleted, archive_store::RecycleState::Recycled)
+            .unwrap()
+    });
+
+    let preview = here.with(|store| preview(store, &here.paths, &package).unwrap());
+    assert_eq!(preview.current.applications, 2);
+    assert_eq!(preview.current.recycled_applications, 1);
+    assert_eq!(preview.incoming.applications, 2);
+    assert_eq!(preview.incoming.recycled_applications, Some(0));
+
+    let report = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    assert_eq!(report.counts.recycled_applications, 0);
+    here.with(|store| assert_eq!(store.counts().unwrap(), report.counts));
+}
+
+/// 按 0.4.3 的样子导出：清单里没有回收站数量。其余和 `export_archive` 一样，
+/// 所以只有「旧清单缺这一项」这一个变量。
+fn export_like_0_4_3(layout: &Layout, name: &str) -> std::path::PathBuf {
+    let out = layout.paths.data_root.join(name);
+    let snapshot = layout.paths.data_root.join("legacy-snapshot.db");
+    layout.with(|store| {
+        store.snapshot_database_to(&snapshot).unwrap();
+        let inventory = ArchiveStore::backup_inventory_from_snapshot(&snapshot).unwrap();
+        let counts = backup::ArchiveCounts {
+            applications: inventory.counts.applications,
+            recycled_applications: None,
+            events: inventory.counts.events,
+            snapshots: inventory.counts.snapshots,
+            todos: inventory.counts.todos,
+            evidence: inventory.counts.evidence,
+            attachments: inventory.counts.attachments,
+        };
+        let source = backup::ArchiveSource {
+            archive_dir: store.archive_dir(),
+            database_snapshot: &snapshot,
+            archive_id: store.identity().archive_id,
+            schema_version: store.schema_version(),
+            counts,
+            referenced_files: Vec::new(),
+            settings_json: None,
+            created_at: NOW.to_string(),
+        };
+        backup::write_archive(&source, &out).unwrap();
+    });
+    out
+}
+
+#[test]
+fn a_backup_from_0_4_3_without_a_recycle_count_still_previews_and_restores() {
+    // #314 审查：旧清单没有回收站数量。不能因此读不出包，也不能把未知说成 0。
+    let here = layout();
+    here.open().seed("测试公司A");
+    let deleted = here.seed("测试公司C");
+    here.with(|store| {
+        store
+            .set_recycle_state(&deleted, archive_store::RecycleState::Recycled)
+            .unwrap()
+    });
+    let package = export_like_0_4_3(&here, "from-0.4.3.zip");
+    let raw = backup::read_manifest(&package).unwrap();
+    assert_eq!(raw.counts.recycled_applications, None);
+
+    let preview = here.with(|store| preview(store, &here.paths, &package).unwrap());
+    assert_eq!(preview.incoming.applications, 2);
+    assert_eq!(preview.incoming.recycled_applications, None);
+    let json = serde_json::to_value(&preview).unwrap();
+    assert!(
+        json["incoming"].get("recycledApplications").is_none(),
+        "未知要原样交给界面，不能补成 0"
+    );
+
+    // 恢复结果从恢复后的档案里数，旧包也是准确的。
+    let report = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    assert_eq!(report.counts.applications, 2);
+    assert_eq!(report.counts.recycled_applications, 1);
+}
+
+#[test]
 fn restoring_swaps_the_live_store_so_later_commands_see_the_new_archive() {
     let source = layout();
     source.open().seed("合成公司");

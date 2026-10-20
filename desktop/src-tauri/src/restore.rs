@@ -141,6 +141,7 @@ fn cleanup_sqlite_snapshot(snapshot: &Path) {
 fn to_backup_counts(counts: &ArchiveCounts) -> backup::ArchiveCounts {
     backup::ArchiveCounts {
         applications: counts.applications,
+        recycled_applications: Some(counts.recycled_applications),
         events: counts.events,
         snapshots: counts.snapshots,
         todos: counts.todos,

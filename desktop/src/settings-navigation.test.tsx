@@ -63,10 +63,10 @@ test("every category starts with a card, so their first cards line up", () => {
   }
 });
 
-const counts = { applications: 1, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
+const counts = { applications: 1, recycledApplications: 0, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
 const preview = {
   current: counts,
-  incoming: { ...counts, applications: 3, attachments: 4 },
+  incoming: { ...counts, applications: 3, recycledApplications: 1, attachments: 4 },
   sameArchive: false,
   createdAt: "2026-09-22T02:00:00Z",
   existingRollbackPoints: 0,
@@ -90,14 +90,31 @@ test("rescue preview shows unreadable current counts and still requires explicit
   await waitFor(() => expect(dialog()).toBeTruthy());
   const box = within(dialog()!);
   expect(box.getByText(/当前档案打不开/)).toBeTruthy();
-  expect(box.getAllByText("无法读取")).toHaveLength(6);
+  expect(box.getAllByText("无法读取")).toHaveLength(7);
   expect(calls).not.toContain("restore_archive_cmd");
   fireEvent.click(box.getByRole("button", { name: "恢复并替换当前档案" }));
   await waitFor(() => expect(dialog()).toBeNull());
   expect(calls.filter((name) => name === "restore_archive_cmd")).toHaveLength(1);
 });
 
-test("restore preview is one dialog with six counts; refreshing the category keeps it; only its confirm dispatches", async () => {
+test("a backup from 0.4.3 without a recycle count says it is unknown instead of showing 0", async () => {
+  const { recycledApplications: _omitted, ...legacy } = preview.incoming;
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    if (name === "preview_restore_cmd") return { ...preview, incoming: legacy } as T;
+    return [] as T;
+  };
+  mountBackup(invoke, { open: async () => "old.zip", save: null });
+  fireEvent.click(document.getElementById("backup-choose-restore")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  const rows = Array.from(dialog()!.querySelectorAll("tbody tr"), (tr) => Array.from(tr.children, (cell) => cell.textContent));
+  expect(rows[0]).toEqual(["申请", "1", "共 3（含回收站）"]);
+  expect(rows[1]).toEqual(["回收站里的申请", "0", "旧版备份未记录"]);
+  expect(within(dialog()!).getByText(/由旧版本导出，没有记录回收站里的申请数量/)).toBeTruthy();
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(dialog()).toBeNull());
+});
+
+test("restore preview is one dialog with every count; refreshing the category keeps it; only its confirm dispatches", async () => {
   const root = document.getElementById("view-settings")!;
   const calls: Array<{ name: string; args?: Record<string, unknown> }> = [];
   const invoke: Invoke = async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
@@ -115,8 +132,11 @@ test("restore preview is one dialog with six counts; refreshing the category kee
   expect(box.getByText("example-backup.zip")).toBeTruthy();
   expect(box.getByText(/来自另一个档案/)).toBeTruthy();
   const rows = Array.from(dialog()!.querySelectorAll("tbody tr"), (tr) => Array.from(tr.children, (cell) => cell.textContent));
-  expect(rows.map((row) => row[0])).toEqual(["申请", "事件", "待办", "回复证据", "简历快照", "附件"]);
-  expect(rows[0].slice(1)).toEqual(["1", "3"]);
+  expect(rows.map((row) => row[0])).toEqual(["申请", "回收站里的申请", "时间线记录", "待办", "回复证据", "简历快照", "附件"]);
+  expect(rows[0].slice(1)).toEqual(["1", "2"]);
+  expect(rows[1].slice(1)).toEqual(["0", "1"]);
+  expect(box.getByText(/时间线记录是每条申请「时间线」里的条目/)).toBeTruthy();
+  expect(box.queryByText(/由旧版本导出/)).toBeNull();
   expect(box.getByText(/整个换成/)).toBeTruthy();
   expect(document.getElementById("backup-status")!.textContent).toContain("等待确认");
   nav.select("general"); nav.select("data");

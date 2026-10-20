@@ -21,8 +21,10 @@ import {
   EMPTY_RECYCLE,
   EMPTY_ROLLBACK,
   EXPORT_POINTS,
+  LEGACY_RECYCLE_NOTE,
   PURGE_WARNING,
   RESTORE_NOTE,
+  TIMELINE_NOTE,
   defaultBackupName,
   describeExport,
   describeOrphans,
@@ -75,7 +77,7 @@ function emptyItem(text: string, tone?: "error"): HTMLLIElement {
   return li;
 }
 
-/** 恢复预览弹窗的正文：来源、时间、六类前后对比、替换说明。 */
+/** 恢复预览弹窗的正文：来源、时间、各类前后对比、替换说明。 */
 export function restoreBody(path: string, preview: RestorePreview): Node {
   const warnings: Node[] = [];
   if (preview.currentAvailable === false) {
@@ -96,11 +98,14 @@ export function restoreBody(path: string, preview: RestorePreview): Node {
     const current = document.createElement("td");
     current.textContent = preview.currentAvailable === false ? "无法读取" : String(row.current);
     const incoming = document.createElement("td");
-    incoming.textContent = String(row.incoming);
+    incoming.textContent = row.incoming;
     tr.append(th, current, incoming);
     body.append(tr);
   }
   table.append(body);
+  const legacyNote = typeof preview.incoming.recycledApplications === "number"
+    ? null
+    : paragraph(LEGACY_RECYCLE_NOTE, "settings-dialog-note");
   const rollbackWarning = preview.tooManyRollbackPoints
     ? paragraph(`已经有 ${preview.existingRollbackPoints} 个回滚点。程序不会自动删它们，占地方的话请自己清理。`, "settings-dialog-warn")
     : null;
@@ -111,6 +116,8 @@ export function restoreBody(path: string, preview: RestorePreview): Node {
     ]),
     ...warnings,
     table,
+    legacyNote,
+    paragraph(TIMELINE_NOTE, "settings-dialog-note"),
     paragraph(RESTORE_NOTE, "settings-dialog-note"),
     rollbackWarning,
   );
