@@ -415,58 +415,145 @@
               </section>
               <section id="settings-data" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-data" tabindex="0" data-settings-panel="data" hidden>
                 <div class="settings-card">
-                  <header class="settings-card-head"><h2>备份与恢复</h2><p>保存档案副本，或从备份恢复到之前的求职记录。</p></header>
+                  <header class="settings-card-head has-aside">
+                    <div><h2>备份到本机</h2><p>把整个档案导出为一份副本，或从备份文件恢复到之前的求职记录。</p></div>
+                    <div class="settings-actions">
+                      <button type="button" id="backup-export" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出备份</button>
+                      <button type="button" id="backup-choose-restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></svg>从备份恢复…</button>
+                    </div>
+                  </header>
                   <ul id="backup-export-note" class="settings-points"></ul>
-                  <div class="settings-actions">
-                    <button type="button" id="backup-export" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>导出备份</button>
-                    <button type="button" id="backup-choose-restore"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></svg>从备份恢复…</button>
-                  </div>
                   <p id="backup-restore-note" class="settings-caption"></p>
                   <div id="backup-status" class="settings-callout" data-tone="info" role="status" hidden></div>
                 </div>
                 <section id="cloud-backup" class="settings-card" aria-labelledby="cloud-title">
-                  <header class="settings-card-head"><h2 id="cloud-title">坚果云备份</h2><p>手动保存整个档案，或在新机器上找回。不是实时同步。</p></header>
-                  <form id="cloud-form" class="cloud-form" autocomplete="off">
-                    <div class="cloud-fields">
-                      <label>WebDAV HTTPS 地址<input id="cloud-endpoint" type="url" required value="https://dav.jianguoyun.com/dav/" /></label>
-                      <label>坚果云账号<input id="cloud-username" required maxlength="4096" autocomplete="off" /></label>
-                      <label>远端目录<input id="cloud-root" placeholder="例如 ResumeProBackups；留空为 WebDAV 根目录" /></label>
-                      <label>第三方应用密码<input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" /></label>
-                      <label>备份加密口令<input id="cloud-passphrase" type="password" autocomplete="new-password" placeholder="留空保留已保存的口令" /></label>
-                      <label>保留最近几份（本机命名空间）<select id="cloud-keep"><option value="">不自动删除</option><option value="5" selected>5 份</option><option value="10">10 份</option><option value="20">20 份</option></select></label>
+                  <header class="settings-card-head has-aside">
+                    <div><h2 id="cloud-title">备份到坚果云</h2><p>把整个档案上传到你自己的坚果云，换电脑时可以找回。不是实时同步。</p></div>
+                    <div class="settings-actions">
+                      <button id="cloud-start" type="button" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.7-8.9 6 6 0 0 1 11.4 1.4A3.8 3.8 0 0 1 17 18"/><path d="M12 20v-7m-3 3 3-3 3 3"/></svg>立即备份</button>
+                      <button id="cloud-browse" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>查找云端备份</button>
                     </div>
-                    <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
-                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。更换口令后请先完成新手动备份，再启用自动计划；已有包和重试候选仍需创建时的口令，请分别保管，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
-                    <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。只有确认上传完整且目录完整性可靠时才清理本机旧备份；其他设备和用户文件不会删除。</p>
-                    <div class="settings-actions"><button type="submit">保存云备份配置</button><button id="cloud-preset" type="button">使用坚果云地址</button><button id="cloud-test" type="button">测试连接</button></div>
-                    <div class="settings-actions"><button id="cloud-clear-password" type="button">移除已保存的应用密码</button><button id="cloud-clear-passphrase" type="button">移除已保存的加密口令</button></div>
-                    <p id="cloud-secret-status" class="settings-caption"></p>
-                  </form>
-                  <details class="settings-card-fold" id="cloud-auto">
-                    <summary>可选自动备份 · 默认关闭</summary>
-                    <form id="cloud-auto-form" class="cloud-form">
-                      <div class="cloud-fields">
-                        <label>执行时间<input id="cloud-auto-time" type="time" value="21:00" required /></label>
-                        <label>频率<select id="cloud-auto-days"><option value="1">每天</option><option value="3">每 3 天</option><option value="7">每周</option></select></label>
-                        <label>固定时区<select id="cloud-auto-zone"></select></label>
-                        <label>本机 30 天上传预算（MB）<input id="cloud-auto-budget" type="number" min="1" max="1000000" step="1" value="1000" required /></label>
+                  </header>
+                  <div class="cloud-overview">
+                    <div class="cloud-overview-head">
+                      <p id="cloud-state" class="settings-status" role="status">正在读取…</p>
+                      <div class="settings-actions">
+                        <button id="cloud-retry" type="button" hidden>重试上次备份</button>
+                        <button id="cloud-discard" type="button" class="settings-danger-text" hidden>放弃候选包</button>
+                        <button id="cloud-cancel" type="button" hidden>取消当前任务</button>
                       </div>
-                      <label class="cloud-check"><input id="cloud-auto-pause" type="checkbox" checked />超出本机估算预算时暂停自动上传</label>
-                      <p class="settings-caption">仅在程序运行时检查；关闭程序不会备份。错过时间只提示手动补备份。按固定 UTC 偏移执行，不跟随系统时区或夏令时变化；改变时区请重新确认。恢复或回滚后计划关闭。</p>
-                      <p id="cloud-auto-estimate" class="settings-caption"></p>
-                      <div class="settings-actions"><button type="submit" id="cloud-auto-enable">确认并启用计划</button><button type="button" id="cloud-auto-disable">关闭自动计划</button></div>
+                    </div>
+                    <dl class="cloud-facts">
+                      <dt>连接</dt><dd id="cloud-fact-connection">未配置</dd>
+                      <dt>最近成功</dt><dd id="cloud-latest">暂无</dd>
+                      <dt>自动备份</dt><dd id="cloud-auto-summary">已关闭</dd>
+                    </dl>
+                    <p id="cloud-progress" role="status" class="settings-inline-msg"></p>
+                    <div id="cloud-message" role="status" class="settings-callout" hidden></div>
+                  </div>
+                  <div id="cloud-found" class="cloud-found" hidden>
+                    <div class="cloud-found-head">
+                      <h3>云端备份</h3>
+                      <div class="settings-actions">
+                        <label id="cloud-namespace-label" hidden><span class="sr-only">档案 / 来源设备</span><select id="cloud-namespace"></select></label>
+                        <button id="cloud-found-close" type="button">收起</button>
+                      </div>
+                    </div>
+                    <ul id="cloud-list" class="settings-list"></ul>
+                    <p id="cloud-list-note" class="settings-caption"></p>
+                  </div>
+                  <div class="cloud-groups">
+                    <form id="cloud-form" autocomplete="off">
+                      <details id="cloud-connection" class="settings-card-fold">
+                        <summary><span class="settings-fold-title">坚果云账号与加密</span><span id="cloud-connection-hint" class="settings-fold-hint">未配置</span></summary>
+                        <div class="settings-fold-body">
+                          <div class="settings-form-grid">
+                            <div class="settings-field cloud-field-wide">
+                              <label for="cloud-endpoint">WebDAV 地址</label>
+                              <div class="settings-input-row">
+                                <input id="cloud-endpoint" type="url" required value="https://dav.jianguoyun.com/dav/" spellcheck="false" />
+                                <button id="cloud-preset" type="button">使用坚果云地址</button>
+                              </div>
+                            </div>
+                            <div class="settings-field">
+                              <label for="cloud-username">坚果云账号</label>
+                              <input id="cloud-username" required maxlength="4096" autocomplete="off" spellcheck="false" />
+                            </div>
+                            <div class="settings-field">
+                              <div class="settings-field-label">
+                                <label for="cloud-password">第三方应用密码</label>
+                                <span class="cloud-secret"><span id="cloud-password-state" class="field-hint"></span><button id="cloud-clear-password" type="button" class="settings-link-danger" hidden>移除</button></span>
+                              </div>
+                              <input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" />
+                              <p class="field-hint">在坚果云「账户信息 → 安全选项」里生成，不是登录密码。</p>
+                            </div>
+                            <div class="settings-field">
+                              <label for="cloud-root">远端目录</label>
+                              <input id="cloud-root" placeholder="例如 ResumeProBackups" spellcheck="false" />
+                              <p class="field-hint">留空为根目录；不存在时第一次备份会自动创建。</p>
+                            </div>
+                            <div class="settings-field">
+                              <label for="cloud-keep">云端最多保留</label>
+                              <select id="cloud-keep"><option value="">全部保留</option><option value="5" selected>最近 5 份</option><option value="10">最近 10 份</option><option value="20">最近 20 份</option></select>
+                              <p class="field-hint">超出后自动删除本机上传的最旧备份。</p>
+                            </div>
+                            <div class="settings-field cloud-field-wide">
+                              <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
+                            </div>
+                            <div class="settings-field">
+                              <div class="settings-field-label">
+                                <label for="cloud-passphrase">备份加密口令</label>
+                                <span class="cloud-secret"><span id="cloud-passphrase-state" class="field-hint"></span><button id="cloud-clear-passphrase" type="button" class="settings-link-danger" hidden>移除</button></span>
+                              </div>
+                              <input id="cloud-passphrase" type="password" autocomplete="new-password" placeholder="留空保留已保存的口令" />
+                              <p class="field-hint">恢复备份时需要。丢失后无法解密，请另外保管。</p>
+                            </div>
+                          </div>
+                          <p class="settings-caption">密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新填写。即使云端加密，本机仍保留一份明文备份。</p>
+                          <details class="settings-fold">
+                            <summary>了解更多</summary>
+                            <p class="settings-caption">更换口令后请先完成新手动备份，再启用自动计划；已有包和重试候选仍需创建时的口令，请分别保管。</p>
+                            <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。保留份数只作用于本机上传的备份，且只有确认上传完整、目录完整性可靠时才清理旧备份；其他设备和用户文件不会删除。</p>
+                            <p id="cloud-local-copy" class="settings-caption"></p>
+                          </details>
+                          <div class="settings-form-actions">
+                            <p class="cloud-form-msg settings-inline-msg" role="status"></p>
+                            <button id="cloud-test" type="button">测试连接</button>
+                            <button type="submit" class="primary">保存</button>
+                          </div>
+                        </div>
+                      </details>
                     </form>
-                    <p id="cloud-auto-status" class="settings-inline-msg" role="status"></p>
-                    <p id="cloud-auto-traffic" class="settings-caption"></p>
-                    <p class="settings-caption">预算只统计本机已尝试上传的包体及元数据，不代表账户余额。重试、对账下载、其他设备和其他应用会额外消耗流量。坚果云免费账户参考：每月上传 1 GB、下载 3 GB，重置时间依账户开通日；实际额度请在坚果云查看。</p>
-                  </details>
-                  <div class="settings-actions"><button id="cloud-start" type="button" class="primary">立即备份到云端</button><button id="cloud-retry" type="button" hidden>重试上次备份</button><button id="cloud-discard" type="button" hidden>放弃候选包</button><button id="cloud-browse" type="button">查找云端备份</button><button id="cloud-cancel" type="button" hidden>取消当前任务</button></div>
-                  <p id="cloud-progress" role="status" class="settings-inline-msg"></p>
-                  <div id="cloud-message" role="status" class="settings-callout" hidden></div>
-                  <p id="cloud-latest" class="settings-caption"></p>
-                  <label id="cloud-namespace-label" hidden>选择档案 / 来源设备<select id="cloud-namespace"></select></label>
-                  <p id="cloud-list-note" class="settings-caption"></p>
-                  <ul id="cloud-list" class="settings-list"></ul>
+                    <details id="cloud-auto" class="settings-card-fold">
+                      <summary><span class="settings-fold-title">自动备份</span><span id="cloud-auto-hint" class="settings-fold-hint">已关闭</span></summary>
+                      <div class="settings-fold-body">
+                        <form id="cloud-auto-form">
+                          <div class="settings-form-grid">
+                            <div class="settings-field"><label for="cloud-auto-time">执行时间</label><input id="cloud-auto-time" type="time" value="21:00" required /></div>
+                            <div class="settings-field"><label for="cloud-auto-days">频率</label><select id="cloud-auto-days"><option value="1">每天</option><option value="3">每 3 天</option><option value="7">每周</option></select></div>
+                            <div class="settings-field"><label for="cloud-auto-zone">固定时区</label><select id="cloud-auto-zone"></select></div>
+                            <div class="settings-field"><label for="cloud-auto-budget">本机 30 天上传预算（MB）</label><input id="cloud-auto-budget" type="number" min="1" max="1000000" step="1" value="1000" required /></div>
+                          </div>
+                          <label class="cloud-check"><input id="cloud-auto-pause" type="checkbox" checked />超出预算时暂停自动上传</label>
+                          <div class="cloud-notes">
+                            <p id="cloud-auto-estimate" class="settings-caption"></p>
+                            <p id="cloud-auto-traffic" class="settings-caption"></p>
+                            <p class="settings-caption">只在程序运行时按固定时区检查；错过时间不补传，恢复或回滚后计划自动关闭。</p>
+                          </div>
+                          <details class="settings-fold">
+                            <summary>了解更多</summary>
+                            <p class="settings-caption">需要先用当前账号、目录和加密设置完成一次手动备份。关闭程序不会备份，错过时间只提示手动补备份。按固定 UTC 偏移执行，不跟随系统时区或夏令时变化；改变时区请重新确认。</p>
+                            <p class="settings-caption">预算只统计本机已尝试上传的包体及元数据，不代表账户余额。重试、对账下载、其他设备和其他应用会额外消耗流量。坚果云免费账户参考：每月上传 1 GB、下载 3 GB，重置时间依账户开通日；实际额度请在坚果云查看。</p>
+                          </details>
+                          <div class="settings-form-actions">
+                            <p id="cloud-auto-status" class="settings-inline-msg" role="status"></p>
+                            <button type="button" id="cloud-auto-disable" hidden>关闭计划</button>
+                            <button type="submit" id="cloud-auto-enable" class="primary">确认并启用</button>
+                          </div>
+                        </form>
+                      </div>
+                    </details>
+                  </div>
                 </section>
                 <details id="backup-rollback" class="settings-card settings-card-fold">
                   <summary><span class="settings-fold-title">回滚点<span id="backup-rollback-count" class="settings-count"></span></span><span class="settings-fold-hint">恢复或换回前的档案，随时可以换回</span></summary>

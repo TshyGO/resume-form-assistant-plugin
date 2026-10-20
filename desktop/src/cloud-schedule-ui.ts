@@ -4,10 +4,11 @@ import { openSettingsDialog, paragraph } from "./settings-dialog";
 
 const mb = (n: number) => `${(n / 1_000_000).toFixed(2)} MB`;
 const date = (n: number) => new Date(n * 1000).toLocaleString();
+const shortDate = (n: number) => new Date(n * 1000).toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 const zoneLabel = (n: number) => `UTC${n < 0 ? "−" : "+"}${String(Math.floor(Math.abs(n) / 60)).padStart(2, "0")}:${String(Math.abs(n) % 60).padStart(2, "0")}`;
 const messages: Record<string, string> = {
   ENABLED: "计划已启用", CHECKING: "正在检查业务内容", SUCCEEDED: "最近一次自动备份已确认成功",
-  UNCHANGED: "业务内容未变，已跳过上传", MISSED_MANUAL: "错过计划时间，未自动补传。需要时点击「立即备份到云端」",
+  UNCHANGED: "业务内容未变，已跳过上传", MISSED_MANUAL: "错过计划时间，未自动补传。需要时点击「立即备份」",
   RETRY_WAIT: "网络或限流后等待有限重试；复用原候选包并先对账",
   ARCHIVE_CHANGED: "档案已切换，请先手动备份，再重新确认计划",
   SCOPE_MISMATCH: "候选包属于原账号、目录或加密设置，请恢复原配置后重试，或明确放弃",
@@ -31,7 +32,11 @@ const messages: Record<string, string> = {
   ARCHIVE_OR_CONFIG_CHANGED: "档案或配置已改变，请先手动备份，再重新确认计划",
 };
 
-export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selected: () => unknown) {
+const clock = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+const cadence = (days: number) => days === 1 ? "每天" : days === 7 ? "每周" : `每 ${days} 天`;
+
+// onAttention：计划暂停、错过或预算告警时通知卡片顶部状态。
+export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selected: () => unknown, onAttention: (attention: boolean) => void = () => {}) {
   const form = must<HTMLFormElement>("cloud-auto-form");
   const time = must<HTMLInputElement>("cloud-auto-time"), days = must<HTMLSelectElement>("cloud-auto-days");
   const zone = must<HTMLSelectElement>("cloud-auto-zone"), budget = must<HTMLInputElement>("cloud-auto-budget");
@@ -65,7 +70,7 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       current = await api.scheduleStatus();
       if (!initialized && current.state.plan) {
         const p = current.state.plan;
-        time.value = `${String(Math.floor(p.minute / 60)).padStart(2, "0")}:${String(p.minute % 60).padStart(2, "0")}`;
+        time.value = clock(p.minute);
         if (![...days.options].some(o => o.value === String(p.everyDays))) days.add(new Option(`每 ${p.everyDays} 天`, String(p.everyDays)));
         days.value = String(p.everyDays); zone.value = String(p.utcOffsetMinutes);
         budget.value = String(p.budgetBytes / 1_000_000); pause.checked = p.pauseAtBudget;
@@ -76,7 +81,15 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
         : !s.plan ? "计划信息缺失，未执行自动备份；请重新确认计划。"
         : s.paused ? `计划已暂停：${messages[s.paused] ?? messages[s.paused.replace(/^CLOUD_/, "")] ?? s.paused}。可手动重试；需重新确认才能恢复自动计划。`
           : `${s.message ? messages[s.message] ?? s.message : "计划已启用"}。${s.nextAt != null && s.plan ? `下次：${date(s.nextAt)}（设备本地显示；执行采用 ${zoneLabel(s.plan.utcOffsetMinutes)}）` : ""}${s.retryAt != null ? `；最早重试：${date(s.retryAt)}` : ""}`;
-      const needsAttention = current.enabled && (!s.plan || s.paused || s.message === "MISSED_MANUAL" || s.budgetWarning);
+      const needsAttention = current.enabled && (!s.plan || !!s.paused || s.message === "MISSED_MANUAL" || s.budgetWarning);
+      const planText = s.plan ? `${cadence(s.plan.everyDays)} ${clock(s.plan.minute)}（${zoneLabel(s.plan.utcOffsetMinutes)}）` : "";
+      must("cloud-auto-hint").textContent = !current.enabled ? "已关闭" : !s.plan ? "需要重新确认" : s.paused ? "已暂停" : planText;
+      must("cloud-auto-summary").textContent = !current.enabled ? `已关闭${current.requiresConfirmation ? "（恢复后需重新确认）" : ""}`
+        : !s.plan ? "计划信息缺失，请重新确认"
+        : s.paused ? `已暂停 · ${messages[s.paused] ?? messages[s.paused.replace(/^CLOUD_/, "")] ?? s.paused}`
+        : `${planText}${s.nextAt != null ? ` · 下次 ${shortDate(s.nextAt)}` : ""}`;
+      must("cloud-auto-disable").hidden = !current.enabled;
+      onAttention(!!needsAttention);
       must("cloud-auto-notice").hidden = !needsAttention;
       must("cloud-auto-notice-text").textContent = needsAttention ? `云备份需要处理。${status.textContent}` : "";
       must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "当前或下一次上传估算达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;
@@ -85,6 +98,8 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       status.textContent = describeError(error);
       must("cloud-auto-notice").hidden = false;
       must("cloud-auto-notice-text").textContent = `自动计划状态暂不可用。${status.textContent}`;
+      must("cloud-auto-summary").textContent = "状态暂不可用";
+      onAttention(true);
     }
     timer = setTimeout(() => void refresh(), 30000);
   }
