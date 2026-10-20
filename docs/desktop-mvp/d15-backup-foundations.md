@@ -53,7 +53,7 @@
 - 坚果云预设 `https://dav.jianguoyun.com/dav/`。生产接口仅 HTTPS，不跟随跳转，
   不接受 URL 凭据。RemotePath 是逐段编码的相对路径，不接受外部 URL。
   href 校验 origin、根路径、Depth:1、编码斜杠及 dot segment；不将元数据变成任意请求地址。
-- MKCOL、PROPFIND、HEAD、GET、流式 PUT、DELETE，MOVE 为可选能力。
+- MKCOL、PROPFIND（Depth 1 列目录，Depth 0 读单个对象大小/ETag）、GET、流式 PUT、DELETE，MOVE 为可选能力。坚果云对文件 HEAD 恒返回 `Content-Length: 0`，因此不用 HEAD 判断大小（#316）。
   PUT 显式 Content-Length + If-None-Match: *；MOVE 使用 Overwrite: F。
   上层仍需使用唯一自有文件名，并依探测结果决定发布流程。
 - connect 10 秒、控制请求 60 秒；文件传输总期限按 64 KiB/s + 60 秒预算，最大文件约 128 分钟，

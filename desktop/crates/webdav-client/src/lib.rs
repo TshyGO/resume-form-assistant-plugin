@@ -131,8 +131,17 @@ impl Client {
         Ok(())
     }
     fn request(&self, method: Method, path: &RemotePath) -> Result<reqwest::RequestBuilder, Error> {
+        let collection = matches!(method.as_str(), "PROPFIND" | "MKCOL");
+        self.request_to(method, path, collection)
+    }
+    fn request_to(
+        &self,
+        method: Method,
+        path: &RemotePath,
+        collection: bool,
+    ) -> Result<reqwest::RequestBuilder, Error> {
         let mut url = path::resource_url(&self.root, path)?;
-        if matches!(method.as_str(), "PROPFIND" | "MKCOL") && !url.path().ends_with('/') {
+        if collection && !url.path().ends_with('/') {
             url.path_segments_mut()
                 .map_err(|_| Error::new(ErrorKind::InvalidPath))?
                 .push("");
@@ -204,11 +213,28 @@ impl Client {
         cancel: &CancellationToken,
         timeout: Duration,
     ) -> Result<Response, Error> {
+        self.read_response_at_depth(method, path, cancel, timeout, "1")
+            .await
+    }
+    async fn read_response_at_depth(
+        &self,
+        method: Method,
+        path: &RemotePath,
+        cancel: &CancellationToken,
+        timeout: Duration,
+        depth: &'static str,
+    ) -> Result<Response, Error> {
         for attempt in 0..=2u32 {
-            let mut request = self.request(method.clone(), path)?.timeout(timeout);
+            // Depth:0 addresses the object itself, so a file keeps its exact URL.
+            let mut request = if depth == "0" {
+                self.request_to(method.clone(), path, false)?
+            } else {
+                self.request(method.clone(), path)?
+            }
+            .timeout(timeout);
             if method.as_str() == "PROPFIND" {
                 request = request
-                    .header("Depth", "1")
+                    .header("Depth", depth)
                     .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
                     .body(PROP_BODY);
             }
@@ -246,31 +272,28 @@ impl Client {
         let bytes = bounded_bytes(response, listing::MAX_XML_BYTES, cancel).await?;
         listing::parse(&self.root, path, &bytes, self.known_listing_limit)
     }
-    pub async fn head(
+    /// Size and ETag of one object from `PROPFIND Depth: 0`. Deliberately not
+    /// HEAD: Nutstore answers HEAD with `Content-Length: 0` for every file (#316).
+    pub async fn stat(
         &self,
         path: &RemotePath,
         cancel: &CancellationToken,
     ) -> Result<ObjectInfo, Error> {
-        let response = self.read_response(Method::HEAD, path, cancel).await?;
-        expect_status(&response, &[200], false)?;
-        let size = response
-            .headers()
-            .get(header::CONTENT_LENGTH)
-            .map(|value| {
-                value
-                    .to_str()
-                    .ok()
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .ok_or_else(|| Error::new(ErrorKind::InvalidResponse))
-            })
-            .transpose()?;
+        let response = self
+            .read_response_at_depth(
+                Method::from_bytes(b"PROPFIND").unwrap(),
+                path,
+                cancel,
+                self.control_timeout,
+                "0",
+            )
+            .await?;
+        expect_status(&response, &[207], false)?;
+        let bytes = bounded_bytes(response, listing::MAX_XML_BYTES, cancel).await?;
+        let entry = listing::parse_object(&self.root, path, &bytes)?;
         Ok(ObjectInfo {
-            size,
-            etag: response
-                .headers()
-                .get(header::ETAG)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned),
+            size: entry.size,
+            etag: entry.etag,
         })
     }
     pub async fn get_bytes(
