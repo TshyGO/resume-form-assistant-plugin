@@ -72,6 +72,32 @@ test("missed and paused schedules warn outside settings; missing size stays unkn
   await waitFor(() => expect(calls.find(c => c.name === "cloud_backup_schedule_configure")?.args).toEqual({ plan: null }));
 });
 
+const idleState = { plan: null, nextAt: null, paused: null, message: null, retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false };
+test("without a manual baseline, enabling explains why instead of opening a confirmation that must fail", async () => {
+  for (const [requiresConfirmation, reason] of [[true, "恢复或回滚过档案"], [false, "还没有用当前账号"]] as const) {
+    document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
+    const { refresh, calls } = setup({ cloud_backup_schedule_status: { enabled: false, requiresConfirmation, recentSize: null, estimatedCycleBytes: null, state: idleState } });
+    await refresh();
+    fireEvent.submit(document.getElementById("cloud-auto-form")!);
+    await waitFor(() => expect(document.getElementById("cloud-auto-status")!.textContent).toContain(reason));
+    expect(document.getElementById("cloud-auto-status")!.textContent).toContain("立即备份到云端");
+    expect(dialog()).toBeNull();
+    expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(false);
+  }
+});
+
+test("a backend manual-baseline refusal after restore names the restore as the reason", async () => {
+  const { refresh } = setup({
+    cloud_backup_schedule_status: { enabled: false, requiresConfirmation: true, recentSize: 2_000_000, estimatedCycleBytes: null, state: idleState },
+    cloud_backup_schedule_configure: Object.assign(new Error("refused"), { code: "CLOUD_MANUAL_BACKUP_REQUIRED" }),
+  });
+  await refresh();
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(dialog()!.textContent).toContain("恢复或回滚过档案"));
+});
+
 test("saved credentials never echo; nonsecret settings and write-only credentials use separate commands", async () => {
   const { refresh, calls, query } = setup(); await refresh();
   expect(query.getByText("此账号的应用密码：已保存；加密口令：已保存。")).toBeTruthy();
