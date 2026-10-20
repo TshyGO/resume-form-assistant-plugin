@@ -407,6 +407,23 @@ async fn automatic_snapshot_skips_unchanged_but_records_files_and_restore_epoch_
 }
 
 #[tokio::test]
+async fn a_manual_backup_answers_the_missed_slot_notice() {
+    let l = layout(); let remote = Fake::default();
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    l.service.configure(auto_plan(), "synthetic-scope", &options(), 100).unwrap();
+    let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
+    // Reopened well after the slot: no catch-up run, only the notice.
+    assert!(l.service.automatic_action("synthetic-scope", &options(), due + 3600, None).unwrap().is_none());
+    assert_eq!(l.service.journal.lock().unwrap().automatic.message.as_deref(), Some("MISSED_MANUAL"));
+    let (_, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
+    let automatic = l.service.journal.lock().unwrap().automatic.clone();
+    assert_eq!(automatic.message, None);
+    assert!(automatic.plan.is_some() && automatic.paused.is_none());
+}
+
+#[tokio::test]
 async fn automatic_retries_reconcile_unknown_put_without_uploading_twice_and_cleanup_is_terminal() {
     let l = layout(); let remote = Fake::default();
     let (_, lease) = candidate(&l, false, None);

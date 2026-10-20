@@ -166,6 +166,11 @@ impl Service {
                 let manual_confirmed = !j.automatic || s.baseline.as_ref().is_some_and(|b| b.binding == j.binding && b.manual_confirmed);
                 s.baseline = Some(super::schedule::Baseline { binding: j.binding.clone(), fingerprint: fingerprint.clone(), manual_confirmed, size_bytes: j.metadata.size_bytes });
             }
+            // The missed-slot notice asks for a manual backup; a successful one to the
+            // planned destination answers it instead of lingering until the next slot.
+            if !j.automatic && j.binding == s.automatic.binding && s.automatic.message.as_deref() == Some("MISSED_MANUAL") {
+                s.automatic.message = None;
+            }
             s.latest = Some(j.id.clone());
             if let Some(old) = old_latest.as_ref().filter(|id| *id != &j.id) {
                 if !s.local_garbage.contains(old) {
