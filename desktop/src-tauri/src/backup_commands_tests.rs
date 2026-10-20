@@ -153,6 +153,31 @@ fn a_preview_says_when_it_is_the_same_archive() {
 }
 
 #[test]
+fn moving_an_application_to_the_recycle_bin_shows_up_in_the_preview_and_the_report() {
+    // #314：列表上的「删除」只是移进回收站，申请总数不变。不单独数回收站的话，
+    // 用户在预览里看不出被删的那条会回来。
+    let here = layout();
+    here.open().seed("测试公司A");
+    let deleted = here.seed("测试公司C");
+    let package = here.export_to("before-delete.zip");
+    here.with(|store| {
+        store
+            .set_recycle_state(&deleted, archive_store::RecycleState::Recycled)
+            .unwrap()
+    });
+
+    let preview = here.with(|store| preview(store, &here.paths, &package).unwrap());
+    assert_eq!(preview.current.applications, 2);
+    assert_eq!(preview.current.recycled_applications, 1);
+    assert_eq!(preview.incoming.applications, 2);
+    assert_eq!(preview.incoming.recycled_applications, 0);
+
+    let report = restore(&here.slot(), &here.paths, &package, NOW).unwrap();
+    assert_eq!(report.counts.recycled_applications, 0);
+    here.with(|store| assert_eq!(store.counts().unwrap(), report.counts));
+}
+
+#[test]
 fn restoring_swaps_the_live_store_so_later_commands_see_the_new_archive() {
     let source = layout();
     source.open().seed("合成公司");

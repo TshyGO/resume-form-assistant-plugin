@@ -23,6 +23,7 @@ import {
   EXPORT_POINTS,
   PURGE_WARNING,
   RESTORE_NOTE,
+  TIMELINE_NOTE,
   defaultBackupName,
   describeExport,
   describeOrphans,
@@ -75,7 +76,7 @@ function emptyItem(text: string, tone?: "error"): HTMLLIElement {
   return li;
 }
 
-/** 恢复预览弹窗的正文：来源、时间、六类前后对比、替换说明。 */
+/** 恢复预览弹窗的正文：来源、时间、各类前后对比、替换说明。 */
 export function restoreBody(path: string, preview: RestorePreview): Node {
   const warnings: Node[] = [];
   if (preview.currentAvailable === false) {
@@ -111,6 +112,7 @@ export function restoreBody(path: string, preview: RestorePreview): Node {
     ]),
     ...warnings,
     table,
+    paragraph(TIMELINE_NOTE, "settings-dialog-note"),
     paragraph(RESTORE_NOTE, "settings-dialog-note"),
     rollbackWarning,
   );

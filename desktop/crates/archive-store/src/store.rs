@@ -263,6 +263,9 @@ impl ArchiveStore {
         };
         let counts = ArchiveCounts {
             applications: count("SELECT COUNT(*) FROM applications")?,
+            recycled_applications: count(
+                "SELECT COUNT(*) FROM applications WHERE recycle_state = 'recycled'",
+            )?,
             events: count("SELECT COUNT(*) FROM events")?,
             snapshots: count("SELECT COUNT(*) FROM resume_snapshots")?,
             todos: count("SELECT COUNT(*) FROM todos")?,
@@ -325,6 +328,9 @@ impl ArchiveStore {
         };
         Ok(ArchiveCounts {
             applications: count("SELECT COUNT(*) FROM applications")?,
+            recycled_applications: count(
+                "SELECT COUNT(*) FROM applications WHERE recycle_state = 'recycled'",
+            )?,
             events: count("SELECT COUNT(*) FROM events")?,
             snapshots: count("SELECT COUNT(*) FROM resume_snapshots")?,
             todos: count("SELECT COUNT(*) FROM todos")?,

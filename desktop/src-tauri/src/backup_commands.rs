@@ -106,6 +106,7 @@ pub fn preview_optional(
         schema_version: manifest.schema_version,
         incoming: ArchiveCounts {
             applications: manifest.counts.applications,
+            recycled_applications: manifest.counts.recycled_applications,
             events: manifest.counts.events,
             snapshots: manifest.counts.snapshots,
             todos: manifest.counts.todos,

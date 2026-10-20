@@ -181,7 +181,10 @@ export interface OverdueDigest {
 
 /** 各类记录的条数。备份清单与恢复预览都用它。 */
 export interface ArchiveCounts {
+  /** 申请总数，含回收站里的。 */
   applications: number;
+  /** 其中在回收站里的。 */
+  recycledApplications: number;
   events: number;
   snapshots: number;
   todos: number;

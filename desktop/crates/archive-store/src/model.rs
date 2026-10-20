@@ -729,7 +729,11 @@ pub struct ResumeSnapshotMeta {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveCounts {
+    /// 申请总数，含回收站里的。
     pub applications: i64,
+    /// 其中在回收站里的。列表上的「删除」只是移进回收站，不单列的话
+    /// 删了一条申请在预览里看不出变化（#314）。
+    pub recycled_applications: i64,
     pub events: i64,
     pub snapshots: i64,
     pub todos: i64,

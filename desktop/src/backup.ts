@@ -16,7 +16,7 @@ export interface Message {
 
 /** 导出按钮旁边常驻的说明。三句话，一句都不能少；界面上逐条列出。 */
 export const EXPORT_POINTS = [
-  "备份是一个 ZIP 文件，包含全部申请、事件、待办、回复证据（含附件）和简历快照。",
+  "备份是一个 ZIP 文件，包含全部申请（含回收站）、时间线记录、待办、回复证据（含附件）和简历快照。",
   "文件不加密，里面有简历和邮件内容，请放在自己控制的位置。",
   "API Key、日志和这台机器专属的配置不会进备份。",
 ];
@@ -35,30 +35,37 @@ export const EMPTY_RECYCLE = "回收站是空的。";
 export const PURGE_WARNING =
   "永久删除不可撤销，也不会进回收站。只有没有别的申请引用的附件才会跟着删掉。";
 
-const LABELS: Array<[keyof ArchiveCounts, string]> = [
-  ["applications", "申请"],
-  ["events", "事件"],
-  ["todos", "待办"],
-  ["evidence", "回复证据"],
-  ["snapshots", "简历快照"],
-  ["attachments", "附件"],
+/** 「时间线记录」是什么。用户没见过这个数，不说明就看不懂它为什么比申请多（#314）。 */
+export const TIMELINE_NOTE =
+  "时间线记录是每条申请「时间线」里的条目：新增、修改、移到回收站、从回收站恢复等操作都会记一条，所以通常比申请多。";
+
+/** 正在用的申请。列表上的「删除」只是移进回收站，总数不变，要拆开才看得出变化。 */
+const activeApplications = (counts: ArchiveCounts) => counts.applications - counts.recycledApplications;
+
+const ROWS: Array<[string, (counts: ArchiveCounts) => number]> = [
+  ["申请", activeApplications],
+  ["回收站里的申请", (counts) => counts.recycledApplications],
+  ["时间线记录", (counts) => counts.events],
+  ["待办", (counts) => counts.todos],
+  ["回复证据", (counts) => counts.evidence],
+  ["简历快照", (counts) => counts.snapshots],
+  ["附件", (counts) => counts.attachments],
 ];
 
 /** 「现在 12 条申请 → 恢复后 8 条」。只列出会变的那些。 */
 export function describeChange(preview: RestorePreview): string[] {
-  return LABELS.filter(([key]) => preview.current[key] !== preview.incoming[key]).map(
-    ([key, label]) => `${label} ${preview.current[key]} → ${preview.incoming[key]}`,
-  );
+  return restoreRows(preview)
+    .filter((row) => row.changed)
+    .map((row) => `${row.label} ${row.current} → ${row.incoming}`);
 }
 
-/** 恢复预览的对比表：六类都列，会变的标出来。 */
+/** 恢复预览的对比表：每类都列，会变的标出来。 */
 export function restoreRows(preview: RestorePreview): Array<{ label: string; current: number; incoming: number; changed: boolean }> {
-  return LABELS.map(([key, label]) => ({
-    label,
-    current: preview.current[key],
-    incoming: preview.incoming[key],
-    changed: preview.current[key] !== preview.incoming[key],
-  }));
+  return ROWS.map(([label, pick]) => {
+    const current = pick(preview.current);
+    const incoming = pick(preview.incoming);
+    return { label, current, incoming, changed: current !== incoming };
+  });
 }
 
 /**
@@ -114,7 +121,7 @@ export function describeExport(path: string, sizeBytes: number, skipped: string[
 export function describeRestore(counts: ArchiveCounts, rollbackPoint: string): Message {
   return {
     tone: "success",
-    text: `已恢复：${counts.applications} 条申请、${counts.events} 条事件、${counts.todos} 条待办。原来那份存成了回滚点 ${rollbackPoint}。`,
+    text: `已恢复：${activeApplications(counts)} 条申请${counts.recycledApplications ? `（回收站另有 ${counts.recycledApplications} 条）` : ""}、${counts.events} 条时间线记录、${counts.todos} 条待办。原来那份存成了回滚点 ${rollbackPoint}。`,
   };
 }
 
@@ -149,7 +156,7 @@ export function rollbackTime(point: RollbackPoint): string {
 /** 永久删除前要列出的连带数据。 */
 export function purgeRows(preview: PurgePreview): Array<[string, string]> {
   return [
-    ["事件", `${preview.events} 条`],
+    ["时间线记录", `${preview.events} 条`],
     ["待办", `${preview.todos} 条`],
     ["回复证据", `${preview.evidence} 份`],
     ["简历快照", `${preview.snapshots} 份`],
@@ -158,7 +165,7 @@ export function purgeRows(preview: PurgePreview): Array<[string, string]> {
 
 export function describePurgePreview(preview: PurgePreview): string {
   const parts = [
-    `${preview.events} 条事件`,
+    `${preview.events} 条时间线记录`,
     `${preview.todos} 条待办`,
     `${preview.evidence} 份证据`,
     `${preview.snapshots} 份快照`,

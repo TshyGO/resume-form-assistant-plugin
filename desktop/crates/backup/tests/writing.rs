@@ -48,6 +48,7 @@ fn source<'a>(dir: &'a Path, snapshot: &'a Path) -> ArchiveSource<'a> {
         schema_version: 3,
         counts: ArchiveCounts {
             applications: 2,
+            recycled_applications: 1,
             events: 9,
             snapshots: 1,
             todos: 3,
@@ -100,6 +101,7 @@ fn a_backup_carries_the_archive_and_a_manifest_that_describes_it() {
     assert_eq!(manifest.archive_id, "a-1");
     assert_eq!(manifest.schema_version, 3);
     assert_eq!(manifest.counts.applications, 2);
+    assert_eq!(manifest.counts.recycled_applications, 1);
     assert_eq!(manifest.counts.attachments, 2);
 
     // 清单覆盖包里除自己之外的每一项。

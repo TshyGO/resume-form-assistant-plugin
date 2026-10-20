@@ -5,6 +5,7 @@ import {
   EXPORT_NOTE,
   PURGE_WARNING,
   RESTORE_NOTE,
+  TIMELINE_NOTE,
   defaultBackupName,
   describeChange,
   describeExport,
@@ -19,6 +20,7 @@ import {
 function counts(overrides: Partial<ArchiveCounts> = {}): ArchiveCounts {
   return {
     applications: 5,
+    recycledApplications: 0,
     events: 20,
     snapshots: 2,
     todos: 3,
@@ -72,6 +74,23 @@ test('对比只列会变的那些', () => {
   assert.deepEqual(describeChange(preview()), []);
 });
 
+// #314：列表上的「删除」只是移进回收站，申请总数不变。要拆开数，用户才看得出被删的那条会回来。
+test('移进回收站的申请在对比里单独一行，申请只数没进回收站的', () => {
+  const changed = describeChange(
+    preview({
+      current: counts({ applications: 5, recycledApplications: 1, events: 9 }),
+      incoming: counts({ applications: 5, recycledApplications: 0, events: 8 }),
+    }),
+  );
+  assert.deepEqual(changed, ["申请 4 → 5", "回收站里的申请 1 → 0", "时间线记录 9 → 8"]);
+});
+
+test('时间线记录要说明它是什么、为什么比申请多', () => {
+  assert.match(TIMELINE_NOTE, /时间线/);
+  assert.match(TIMELINE_NOTE, /新增、修改/);
+  assert.match(TIMELINE_NOTE, /回收站/);
+});
+
 test('数量完全一样的时候直说，不留空白', () => {
   const lines = describePreview(preview());
   assert.equal(lines.length, 1);
@@ -111,8 +130,12 @@ test('恢复之后要说提醒需要重新登记，而不是说它们没了', ()
 
 test('恢复成功的提示要带上回滚点的名字', () => {
   const message = describeRestore(counts(), "2026-09-13-abc");
-  assert.match(message.text, /5 条申请/);
+  assert.match(message.text, /5 条申请、20 条时间线记录/);
+  assert.doesNotMatch(message.text, /回收站/, "回收站是空的就不提");
   assert.match(message.text, /2026-09-13-abc/, "用户得知道换回去要点哪一个");
+
+  const withRecycled = describeRestore(counts({ recycledApplications: 2 }), "p");
+  assert.match(withRecycled.text, /3 条申请（回收站另有 2 条）/);
 });
 
 test('永久删除的预览把连带删掉的都列出来', () => {
@@ -126,7 +149,7 @@ test('永久删除的预览把连带删掉的都列出来', () => {
     snapshots: 1,
   });
   assert.match(text, /合成公司 · 后端工程师/);
-  assert.match(text, /9 条事件/);
+  assert.match(text, /9 条时间线记录/);
   assert.match(text, /1 份证据/);
 });
 

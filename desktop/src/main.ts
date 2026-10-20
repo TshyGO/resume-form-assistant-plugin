@@ -514,9 +514,25 @@ const backupPickers = {
       }
     : null,
 };
-// 恢复 / 换回会把档案整个换掉，「简历」页手里的模板列表和「我的信息」版本号都过时了。
-const refreshLocalBackup = mountBackup(command, backupPickers, undefined, () => { resumeView.refresh(); void refreshCloudBackup(true).catch(() => {}); });
-const refreshCloudBackup = mountCloudBackup(command, async () => { resumeView.refresh(); await refreshLocalBackup(); });
+// 本地恢复、回滚换回、云端恢复都会把档案整个换掉（#314）。「申请」「招聘通知」切页不重读，
+// 「简历」页手里的模板列表和「我的信息」版本号也过时了，三处一起刷新。「待办」进页面时自己会重读。
+async function refreshAfterArchiveReplaced() {
+  resumeView.refresh();
+  await Promise.all([
+    applications.reloadArchive().catch((err: unknown) => {
+      must("apps-msg").textContent = String(err);
+    }),
+    inbox.refresh().catch(() => {}),
+  ]);
+}
+const refreshLocalBackup = mountBackup(command, backupPickers, undefined, () => {
+  void refreshAfterArchiveReplaced();
+  void refreshCloudBackup(true).catch(() => {});
+});
+const refreshCloudBackup = mountCloudBackup(command, async () => {
+  await refreshAfterArchiveReplaced();
+  await refreshLocalBackup();
+});
 const showBackup = async () => { await Promise.all([refreshLocalBackup(), refreshCloudBackup()]); };
 void renderReminderSettings().catch(() => {});
 
