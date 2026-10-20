@@ -181,13 +181,21 @@ export interface OverdueDigest {
 
 /** 各类记录的条数。备份清单与恢复预览都用它。 */
 export interface ArchiveCounts {
+  /** 申请总数，含回收站里的。 */
   applications: number;
+  /** 其中在回收站里的。 */
+  recycledApplications: number;
   events: number;
   snapshots: number;
   todos: number;
   evidence: number;
   attachments: number;
 }
+
+/** 备份清单里的条数。0.4.3 及更早导出的备份没有回收站数量（#314）。 */
+export type ManifestCounts = Omit<ArchiveCounts, "recycledApplications"> & {
+  recycledApplications?: number | null;
+};
 
 export interface ExportReport {
   path: string;
@@ -201,7 +209,7 @@ export interface RestorePreview {
   createdAt: string;
   archiveId: string;
   schemaVersion: number;
-  incoming: ArchiveCounts;
+  incoming: ManifestCounts;
   current: ArchiveCounts;
   existingRollbackPoints: number;
   tooManyRollbackPoints: boolean;

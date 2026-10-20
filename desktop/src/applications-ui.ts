@@ -379,6 +379,17 @@ export function mountApplications(
     }, coalesceMs);
   }
 
+  /**
+   * 档案被整个换掉之后（恢复备份、回滚换回）调（#314）：列表和正在看的那条详情都是从旧档案
+   * 读的，切页也不会重读。旧档案里攒下的「新增申请」提示也不再作数。
+   */
+  async function reloadArchive() {
+    committedNotices = [];
+    must("apps-fresh").hidden = true;
+    await refreshList();
+    if (ctl.selectedId) await loadDetail(ctl.selectedId);
+  }
+
   async function loadDetail(id: string) {
     const token = ++detailToken;
     if (ctl.selectedId !== id) detailTab = "timeline";
@@ -911,5 +922,5 @@ export function mountApplications(
     }
   });
 
-  return { refreshList, ctl };
+  return { refreshList, reloadArchive, ctl };
 }

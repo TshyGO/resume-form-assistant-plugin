@@ -5,7 +5,7 @@ import { mountCloudBackup, cloudError } from "./cloud-backup-ui";
 import type { Invoke } from "./api";
 
 const config = { connection: { connectionId: "11111111-1111-4111-8111-111111111111", endpoint: "https://dav.jianguoyun.com/dav/", username: "synthetic" }, options: { encrypted: true, root: ["Test"], keepLast: 5 }, automaticEnabled: false, requiresConfirmation: false };
-const counts = { applications: 1, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
+const counts = { applications: 1, recycledApplications: 0, events: 2, todos: 0, evidence: 0, snapshots: 0, attachments: 0 };
 const metadata = { backupId: "synthetic-backup", createdAt: "2026-10-19T00:00:00Z", package: "backup.rpbak.age", archiveId: "synthetic-archive", deviceId: "synthetic-device", sizeBytes: 1024, encryptionFormat: "ageV1Scrypt" };
 beforeEach(() => {
   document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
@@ -70,6 +70,48 @@ test("missed and paused schedules warn outside settings; missing size stays unkn
   expect(calls.some(c => c.name === "cloud_backup_start")).toBe(false);
   click("cloud-auto-disable");
   await waitFor(() => expect(calls.find(c => c.name === "cloud_backup_schedule_configure")?.args).toEqual({ plan: null }));
+});
+
+const idleState = { plan: null, nextAt: null, paused: null, message: null, retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false };
+test("without a manual baseline, enabling explains why instead of opening a confirmation that must fail", async () => {
+  for (const [requiresConfirmation, reason] of [[true, "恢复或回滚过档案"], [false, "还没有用当前账号"]] as const) {
+    document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
+    const { refresh, calls } = setup({ cloud_backup_schedule_status: { enabled: false, requiresConfirmation, recentSize: null, estimatedCycleBytes: null, state: idleState } });
+    await refresh();
+    fireEvent.submit(document.getElementById("cloud-auto-form")!);
+    await waitFor(() => expect(document.getElementById("cloud-auto-status")!.textContent).toContain(reason));
+    expect(document.getElementById("cloud-auto-status")!.textContent).toContain("立即备份到云端");
+    expect(dialog()).toBeNull();
+    expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(false);
+  }
+});
+
+test("enabling re-reads the plan status, so a manual backup that just finished is not refused", async () => {
+  let baseline = false;
+  const { refresh, calls } = setup({
+    cloud_backup_schedule_status: () => ({ enabled: false, requiresConfirmation: true, recentSize: baseline ? 2_000_000 : null, estimatedCycleBytes: null, state: idleState }),
+  });
+  await refresh();
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  baseline = true; // Manual backup completed; job polling did not refresh the plan status.
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  expect(dialog()!.textContent).toContain("2.00 MB");
+  expect(document.getElementById("cloud-auto-status")!.textContent).not.toContain("立即备份到云端");
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(true));
+});
+
+test("a backend manual-baseline refusal after restore names the restore as the reason", async () => {
+  const { refresh } = setup({
+    cloud_backup_schedule_status: { enabled: false, requiresConfirmation: true, recentSize: 2_000_000, estimatedCycleBytes: null, state: idleState },
+    cloud_backup_schedule_configure: Object.assign(new Error("refused"), { code: "CLOUD_MANUAL_BACKUP_REQUIRED" }),
+  });
+  await refresh();
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(dialog()!.textContent).toContain("恢复或回滚过档案"));
 });
 
 test("saved credentials never echo; nonsecret settings and write-only credentials use separate commands", async () => {

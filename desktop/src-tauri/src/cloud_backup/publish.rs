@@ -15,7 +15,7 @@ impl Service {
         metadata: &Metadata,
         cancel: &CancellationToken,
     ) -> Result<bool> {
-        let Some(info) = remote.head(path, cancel).await? else {
+        let Some(info) = remote.stat(path, cancel).await? else {
             return Ok(false);
         };
         if info.size != Some(metadata.size_bytes) {
@@ -49,7 +49,7 @@ impl Service {
         } else {
             job.package_intent
         };
-        if remote.head(path, cancel).await?.is_some() {
+        if remote.stat(path, cancel).await?.is_some() {
             if !intended {
                 return Err(fail("REMOTE_CONFLICT"));
             }
@@ -72,7 +72,7 @@ impl Service {
             .put(path, &local::payload(&self.root, &job.id), cancel)
             .await?;
         let info = remote
-            .head(path, cancel)
+            .stat(path, cancel)
             .await?
             .ok_or_else(|| fail("PUBLISH_UNCONFIRMED"))?;
         if info.size != Some(job.metadata.size_bytes) {
@@ -113,7 +113,7 @@ impl Service {
         } else {
             if job.move_verified {
                 // A retry after a successful MOVE may already have the final.
-                if remote.head(&package, cancel).await?.is_some() {
+                if remote.stat(&package, cancel).await?.is_some() {
                     if !job.package_intent {
                         return Err(fail("REMOTE_CONFLICT"));
                     }
@@ -130,7 +130,7 @@ impl Service {
             }
             self.phase(Phase::Confirming)?;
             let info = remote
-                .head(&package, cancel)
+                .stat(&package, cancel)
                 .await?
                 .ok_or_else(|| fail("PUBLISH_UNCONFIRMED"))?;
             if info.size != Some(job.metadata.size_bytes) {
@@ -165,6 +165,11 @@ impl Service {
             if let Some(fingerprint) = j.business_fingerprint.as_ref().filter(|_| !j.fingerprint_stale) {
                 let manual_confirmed = !j.automatic || s.baseline.as_ref().is_some_and(|b| b.binding == j.binding && b.manual_confirmed);
                 s.baseline = Some(super::schedule::Baseline { binding: j.binding.clone(), fingerprint: fingerprint.clone(), manual_confirmed, size_bytes: j.metadata.size_bytes });
+            }
+            // The missed-slot notice asks for a manual backup; a successful one to the
+            // planned destination answers it instead of lingering until the next slot.
+            if !j.automatic && j.binding == s.automatic.binding && s.automatic.message.as_deref() == Some("MISSED_MANUAL") {
+                s.automatic.message = None;
             }
             s.latest = Some(j.id.clone());
             if let Some(old) = old_latest.as_ref().filter(|id| *id != &j.id) {
@@ -303,7 +308,7 @@ impl Service {
                 return Err(fail("DELETE_UNCONFIRMED"));
             }
             let package = folder.child(&metadata.package)?;
-            if let Some(info) = remote.head(&package, cancel).await? {
+            if let Some(info) = remote.stat(&package, cancel).await? {
                 if info.size != Some(metadata.size_bytes) {
                     return Err(fail("CATALOG_CHANGED"));
                 }

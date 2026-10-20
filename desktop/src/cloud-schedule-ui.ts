@@ -41,7 +41,7 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
   const time = must<HTMLInputElement>("cloud-auto-time"), days = must<HTMLSelectElement>("cloud-auto-days");
   const zone = must<HTMLSelectElement>("cloud-auto-zone"), budget = must<HTMLInputElement>("cloud-auto-budget");
   const pause = must<HTMLInputElement>("cloud-auto-pause"), status = must("cloud-auto-status");
-  let current: CloudScheduleStatus | undefined, initialized = false, busy = false;
+  let current: CloudScheduleStatus | undefined, initialized = false, busy = false, fresh = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let loading: Promise<void> | null = null;
   const localOffset = -new Date().getTimezoneOffset();
@@ -57,9 +57,16 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       ? "暂无可用大小估算：请先完成一次当前配置的手动云备份，再启用自动计划。"
       : `最近备份 ${mb(size)} × 每 30 天最多 ${Math.ceil(30 / Number(days.value))} 次 ≈ ${mb(size * Math.ceil(30 / Number(days.value)))} 上传。内容未变会跳过，包变大及重试会增加流量。`;
   }
+  // requiresConfirmation is set by restore/rollback and saved-secret changes; each
+  // invalidates the manual baseline, so say why instead of a generic refusal.
+  function manualBackupNeeded() {
+    return current?.requiresConfirmation
+      ? "你最近恢复或回滚过档案，或更换、移除过已保存的密码或口令。为防止恢复后的数据覆盖较新的云端备份，请先点「立即备份到云端」手动备份一次，成功后再启用自动计划。"
+      : "还没有用当前账号、目录和加密设置成功备份过。请先点「立即备份到云端」，成功后再启用自动计划。";
+  }
   function describeError(error: unknown) {
     const code = (error as { code?: string })?.code ?? "UNKNOWN";
-    if (code.includes("MANUAL_BACKUP_REQUIRED")) return "请先完成当前账号、目录和加密设置的手动云备份，再启用计划。";
+    if (code.includes("MANUAL_BACKUP_REQUIRED")) return manualBackupNeeded();
     if (code.includes("BUSY")) return "任务正在进行，请等待完成后重新启用计划。";
     if (code.includes("RETRY_REQUIRED")) return "请先手动重试或放弃未完成候选包。";
     return `自动计划未更新（${code}）。请检查配置、凭据与本机空间后重试。`;
@@ -67,7 +74,7 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
   async function load() {
     clearTimeout(timer);
     try {
-      current = await api.scheduleStatus();
+      current = await api.scheduleStatus(); fresh = true;
       if (!initialized && current.state.plan) {
         const p = current.state.plan;
         time.value = clock(p.minute);
@@ -95,6 +102,7 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
       must("cloud-auto-traffic").textContent = `本机当前 30 天周期${s.cycleStartedAt != null ? `始于 ${date(s.cycleStartedAt)}` : "尚未开始"}，尝试上传 ${mb(s.uploadBytes)}。${s.budgetWarning ? "当前或下一次上传估算达到预算的 80% 警戒线，请核对账户实际流量。" : ""}`;
       estimate();
     } catch (error) {
+      fresh = false;
       status.textContent = describeError(error);
       must("cloud-auto-notice").hidden = false;
       must("cloud-auto-notice-text").textContent = `自动计划状态暂不可用。${status.textContent}`;
@@ -115,6 +123,14 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
     void (async () => {
       try {
         selected(); const p = plan();
+        // Job polling does not refresh this status, so a manual backup that just
+        // finished may not be reflected yet: re-read (after any in-flight load).
+        if (loading) await loading;
+        await refresh();
+        // No baseline for the current binding means the backend will refuse: do
+        // not offer a confirmation that can only fail. The backend still decides,
+        // including when the fresh read itself failed.
+        if (fresh && current?.recentSize == null) { status.textContent = manualBackupNeeded(); return; }
         const confirmed = await openSettingsDialog({ title: "启用自动云备份？", body: paragraph(`每 ${p.everyDays} 天 ${time.value}（${zoneLabel(p.utcOffsetMinutes)}，固定偏移）检查。${must("cloud-auto-estimate").textContent} 仅程序运行时执行；恢复后关闭；失败最多自动重试 3 次，超预算${p.pauseAtBudget ? "暂停" : "仅提醒"}。`), confirmLabel: "确认启用", action: () => api.configureSchedule(p), describeError });
         if (confirmed) await refresh();
       } catch (error) { status.textContent = error instanceof Error ? error.message : describeError(error); }
