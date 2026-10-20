@@ -192,6 +192,11 @@ export interface ArchiveCounts {
   attachments: number;
 }
 
+/** 备份清单里的条数。0.4.3 及更早导出的备份没有回收站数量（#314）。 */
+export type ManifestCounts = Omit<ArchiveCounts, "recycledApplications"> & {
+  recycledApplications?: number | null;
+};
+
 export interface ExportReport {
   path: string;
   sizeBytes: number;
@@ -204,7 +209,7 @@ export interface RestorePreview {
   createdAt: string;
   archiveId: string;
   schemaVersion: number;
-  incoming: ArchiveCounts;
+  incoming: ManifestCounts;
   current: ArchiveCounts;
   existingRollbackPoints: number;
   tooManyRollbackPoints: boolean;

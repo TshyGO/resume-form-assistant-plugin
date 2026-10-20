@@ -30,7 +30,11 @@ pub struct ArchiveCounts {
     pub applications: i64,
     /// 其中在回收站里的。列表上的「删除」只是移进回收站，不单列的话
     /// 删了一条申请在预览里看不出变化（#314）。
-    pub recycled_applications: i64,
+    ///
+    /// 0.4.3 及更早导出的备份没有这一项，读出来是 `None`：数量未知，不能当成 0。
+    /// 新导出的包总是写上，所以不用升 `FORMAT_VERSION`，旧版本读新包也只是忽略它。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recycled_applications: Option<i64>,
     pub events: i64,
     pub snapshots: i64,
     pub todos: i64,
@@ -105,5 +109,31 @@ impl std::fmt::Display for UnreadableManifest {
                 "备份来自更新版本的程序（格式 v{found}，本机支持到 v{supported}），请先升级。"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArchiveCounts;
+
+    #[test]
+    fn counts_from_0_4_3_have_no_recycle_count_and_it_stays_unknown() {
+        // 0.4.3 写出的 counts 原样（#314 审查）。
+        let old: ArchiveCounts = serde_json::from_str(
+            r#"{"applications":5,"events":9,"snapshots":0,"todos":0,"evidence":0,"attachments":0}"#,
+        )
+        .unwrap();
+        assert_eq!(old.applications, 5);
+        assert_eq!(old.recycled_applications, None);
+        // 再写出去也不补 0。
+        assert!(!serde_json::to_string(&old).unwrap().contains("recycled"));
+
+        let new = ArchiveCounts {
+            recycled_applications: Some(1),
+            ..old
+        };
+        let json = serde_json::to_string(&new).unwrap();
+        assert!(json.contains(r#""recycledApplications":1"#));
+        assert_eq!(serde_json::from_str::<ArchiveCounts>(&json).unwrap(), new);
     }
 }

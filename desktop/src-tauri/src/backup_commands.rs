@@ -40,8 +40,8 @@ pub struct RestorePreview {
     pub created_at: String,
     pub archive_id: String,
     pub schema_version: i64,
-    /// 备份里有多少。
-    pub incoming: ArchiveCounts,
+    /// 备份里有多少，照抄包里的清单。旧版本导出的包没有回收站数量（#314）。
+    pub incoming: backup::ArchiveCounts,
     /// 现在有多少。
     pub current: ArchiveCounts,
     /// 现有回滚点的数量，以及是不是已经超过建议上限。
@@ -104,15 +104,7 @@ pub fn preview_optional(
         created_at: manifest.created_at.clone(),
         archive_id: manifest.archive_id.clone(),
         schema_version: manifest.schema_version,
-        incoming: ArchiveCounts {
-            applications: manifest.counts.applications,
-            recycled_applications: manifest.counts.recycled_applications,
-            events: manifest.counts.events,
-            snapshots: manifest.counts.snapshots,
-            todos: manifest.counts.todos,
-            evidence: manifest.counts.evidence,
-            attachments: manifest.counts.attachments,
-        },
+        incoming: manifest.counts.clone(),
         current,
         existing_rollback_points: points,
         too_many_rollback_points: points >= KEEP_ROLLBACK_POINTS,

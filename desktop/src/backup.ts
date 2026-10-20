@@ -39,33 +39,59 @@ export const PURGE_WARNING =
 export const TIMELINE_NOTE =
   "时间线记录是每条申请「时间线」里的条目：新增、修改、移到回收站、从回收站恢复等操作都会记一条，所以通常比申请多。";
 
+/** 旧版本（0.4.3 及更早）导出的备份没记回收站数量。未知就说未知，不当成 0。 */
+export const LEGACY_RECYCLE_NOTE =
+  "这份备份由旧版本导出，没有记录回收站里的申请数量。恢复后可以在「申请」的回收站里查看。";
+
 /** 正在用的申请。列表上的「删除」只是移进回收站，总数不变，要拆开才看得出变化。 */
 const activeApplications = (counts: ArchiveCounts) => counts.applications - counts.recycledApplications;
 
-const ROWS: Array<[string, (counts: ArchiveCounts) => number]> = [
-  ["申请", activeApplications],
-  ["回收站里的申请", (counts) => counts.recycledApplications],
-  ["时间线记录", (counts) => counts.events],
-  ["待办", (counts) => counts.todos],
-  ["回复证据", (counts) => counts.evidence],
-  ["简历快照", (counts) => counts.snapshots],
-  ["附件", (counts) => counts.attachments],
-];
+export interface RestoreRow {
+  label: string;
+  current: number;
+  /** 恢复后显示的文字。旧备份的回收站数量未知时是一句说明，不是数字。 */
+  incoming: string;
+  changed: boolean;
+}
+
+function row(label: string, current: number, incoming: number): RestoreRow {
+  return { label, current, incoming: String(incoming), changed: current !== incoming };
+}
 
 /** 「现在 12 条申请 → 恢复后 8 条」。只列出会变的那些。 */
 export function describeChange(preview: RestorePreview): string[] {
   return restoreRows(preview)
-    .filter((row) => row.changed)
-    .map((row) => `${row.label} ${row.current} → ${row.incoming}`);
+    .filter((item) => item.changed)
+    .map((item) => `${item.label} ${item.current} → ${item.incoming}`);
 }
 
 /** 恢复预览的对比表：每类都列，会变的标出来。 */
-export function restoreRows(preview: RestorePreview): Array<{ label: string; current: number; incoming: number; changed: boolean }> {
-  return ROWS.map(([label, pick]) => {
-    const current = pick(preview.current);
-    const incoming = pick(preview.incoming);
-    return { label, current, incoming, changed: current !== incoming };
-  });
+export function restoreRows(preview: RestorePreview): RestoreRow[] {
+  const { current, incoming } = preview;
+  const recycled = incoming.recycledApplications;
+  const applications: RestoreRow[] = typeof recycled === "number"
+    ? [
+        row("申请", activeApplications(current), incoming.applications - recycled),
+        row("回收站里的申请", current.recycledApplications, recycled),
+      ]
+    : [
+        // 拆不开就只给总数，并且只拿总数和总数比。
+        {
+          label: "申请",
+          current: activeApplications(current),
+          incoming: `共 ${incoming.applications}（含回收站）`,
+          changed: current.applications !== incoming.applications,
+        },
+        { label: "回收站里的申请", current: current.recycledApplications, incoming: "旧版备份未记录", changed: false },
+      ];
+  return [
+    ...applications,
+    row("时间线记录", current.events, incoming.events),
+    row("待办", current.todos, incoming.todos),
+    row("回复证据", current.evidence, incoming.evidence),
+    row("简历快照", current.snapshots, incoming.snapshots),
+    row("附件", current.attachments, incoming.attachments),
+  ];
 }
 
 /**

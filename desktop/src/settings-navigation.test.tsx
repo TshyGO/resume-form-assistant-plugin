@@ -97,6 +97,23 @@ test("rescue preview shows unreadable current counts and still requires explicit
   expect(calls.filter((name) => name === "restore_archive_cmd")).toHaveLength(1);
 });
 
+test("a backup from 0.4.3 without a recycle count says it is unknown instead of showing 0", async () => {
+  const { recycledApplications: _omitted, ...legacy } = preview.incoming;
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => {
+    if (name === "preview_restore_cmd") return { ...preview, incoming: legacy } as T;
+    return [] as T;
+  };
+  mountBackup(invoke, { open: async () => "old.zip", save: null });
+  fireEvent.click(document.getElementById("backup-choose-restore")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  const rows = Array.from(dialog()!.querySelectorAll("tbody tr"), (tr) => Array.from(tr.children, (cell) => cell.textContent));
+  expect(rows[0]).toEqual(["申请", "1", "共 3（含回收站）"]);
+  expect(rows[1]).toEqual(["回收站里的申请", "0", "旧版备份未记录"]);
+  expect(within(dialog()!).getByText(/由旧版本导出，没有记录回收站里的申请数量/)).toBeTruthy();
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(dialog()).toBeNull());
+});
+
 test("restore preview is one dialog with every count; refreshing the category keeps it; only its confirm dispatches", async () => {
   const root = document.getElementById("view-settings")!;
   const calls: Array<{ name: string; args?: Record<string, unknown> }> = [];
@@ -119,6 +136,7 @@ test("restore preview is one dialog with every count; refreshing the category ke
   expect(rows[0].slice(1)).toEqual(["1", "2"]);
   expect(rows[1].slice(1)).toEqual(["0", "1"]);
   expect(box.getByText(/时间线记录是每条申请「时间线」里的条目/)).toBeTruthy();
+  expect(box.queryByText(/由旧版本导出/)).toBeNull();
   expect(box.getByText(/整个换成/)).toBeTruthy();
   expect(document.getElementById("backup-status")!.textContent).toContain("等待确认");
   nav.select("general"); nav.select("data");

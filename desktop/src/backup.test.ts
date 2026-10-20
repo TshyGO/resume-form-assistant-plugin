@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { ArchiveCounts, OrphanReport, RestorePreview } from './api.ts';
 import {
   EXPORT_NOTE,
+  LEGACY_RECYCLE_NOTE,
   PURGE_WARNING,
   RESTORE_NOTE,
   TIMELINE_NOTE,
@@ -15,6 +16,7 @@ import {
   describeRemindersAfterRestore,
   describeRestore,
   formatSize,
+  restoreRows,
 } from './backup.ts';
 
 function counts(overrides: Partial<ArchiveCounts> = {}): ArchiveCounts {
@@ -83,6 +85,22 @@ test('移进回收站的申请在对比里单独一行，申请只数没进回�
     }),
   );
   assert.deepEqual(changed, ["申请 4 → 5", "回收站里的申请 1 → 0", "时间线记录 9 → 8"]);
+});
+
+// 0.4.3 及更早导出的备份没记回收站数量：说未知，不当成 0，也不拿进行中的数去比总数。
+test('旧版备份的回收站数量未知时如实说，申请只比总数', () => {
+  const { recycledApplications: _omitted, ...legacy } = counts({ applications: 5, events: 8 });
+  const unchanged = preview({ current: counts({ applications: 5, recycledApplications: 1 }), incoming: { ...legacy, events: 20 } });
+  const rows = restoreRows(unchanged);
+  assert.deepEqual(rows.slice(0, 2), [
+    { label: "申请", current: 4, incoming: "共 5（含回收站）", changed: false },
+    { label: "回收站里的申请", current: 1, incoming: "旧版备份未记录", changed: false },
+  ]);
+  assert.deepEqual(describeChange(unchanged), [], "总数一样、回收站未知，不该被说成有变化");
+
+  const grew = preview({ current: counts({ applications: 4, recycledApplications: 1 }), incoming: { ...legacy, events: 20 } });
+  assert.deepEqual(describeChange(grew), ["申请 3 → 共 5（含回收站）"]);
+  assert.match(LEGACY_RECYCLE_NOTE, /旧版本/);
 });
 
 test('时间线记录要说明它是什么、为什么比申请多', () => {
