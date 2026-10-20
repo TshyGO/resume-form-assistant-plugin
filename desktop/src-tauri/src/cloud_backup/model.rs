@@ -241,6 +241,6 @@ pub struct Status {
 pub struct Catalog {
     pub entries: Vec<Metadata>,
     pub cleanup_safe: bool,
-    /// HEAD/length checks do not verify package content hashes.
+    /// PROPFIND length checks do not verify package content hashes.
     pub content_hash_verified: bool,
 }

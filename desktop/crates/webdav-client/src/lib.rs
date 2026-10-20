@@ -273,7 +273,8 @@ impl Client {
         listing::parse(&self.root, path, &bytes, self.known_listing_limit)
     }
     /// Size and ETag of one object from `PROPFIND Depth: 0`. Deliberately not
-    /// HEAD: Nutstore answers HEAD with `Content-Length: 0` for every file (#316).
+    /// HEAD: Nutstore was observed answering HEAD with `Content-Length: 0` for a
+    /// complete file (#316).
     pub async fn stat(
         &self,
         path: &RemotePath,
