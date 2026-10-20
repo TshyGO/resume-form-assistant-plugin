@@ -86,6 +86,22 @@ test("without a manual baseline, enabling explains why instead of opening a conf
   }
 });
 
+test("enabling re-reads the plan status, so a manual backup that just finished is not refused", async () => {
+  let baseline = false;
+  const { refresh, calls } = setup({
+    cloud_backup_schedule_status: () => ({ enabled: false, requiresConfirmation: true, recentSize: baseline ? 2_000_000 : null, estimatedCycleBytes: null, state: idleState }),
+  });
+  await refresh();
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  baseline = true; // Manual backup completed; job polling did not refresh the plan status.
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  expect(dialog()!.textContent).toContain("2.00 MB");
+  expect(document.getElementById("cloud-auto-status")!.textContent).not.toContain("立即备份到云端");
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(true));
+});
+
 test("a backend manual-baseline refusal after restore names the restore as the reason", async () => {
   const { refresh } = setup({
     cloud_backup_schedule_status: { enabled: false, requiresConfirmation: true, recentSize: 2_000_000, estimatedCycleBytes: null, state: idleState },
