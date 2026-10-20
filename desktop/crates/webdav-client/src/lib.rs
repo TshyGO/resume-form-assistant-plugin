@@ -44,6 +44,7 @@ pub struct Client {
     username: String,
     password: SecretString,
     next_request: Arc<Mutex<Instant>>,
+    retry_floor: Arc<std::sync::atomic::AtomicI64>,
     interval: Duration,
     control_timeout: Duration,
     known_listing_limit: Option<usize>,
@@ -65,6 +66,11 @@ pub struct Download {
 }
 
 impl Client {
+    /// Latest observed Retry-After as an absolute UTC floor, shared by clones.
+    pub fn retry_not_before(&self) -> i64 {
+        self.retry_floor.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn nutstore(username: String, password: SecretString) -> Result<Self, Error> {
         Self::new(NUTSTORE_ENDPOINT, username, password)
     }
@@ -107,6 +113,7 @@ impl Client {
             username,
             password,
             next_request: Arc::new(Mutex::new(Instant::now())),
+            retry_floor: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             interval: if test_http {
                 Duration::ZERO
             } else {
@@ -190,6 +197,11 @@ impl Client {
             .get(header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(parse_retry_after);
+        if let Some(delay) = retry_after {
+            let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+            let until = now.saturating_add(delay.as_secs()).saturating_add(1).min(i64::MAX as u64) as i64;
+            self.retry_floor.fetch_max(until, std::sync::atomic::Ordering::Relaxed);
+        }
         Err(Error {
             kind,
             status: Some(status),

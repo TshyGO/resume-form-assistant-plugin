@@ -96,6 +96,12 @@ async function navigate(route: string | undefined): Promise<boolean> {
   return true;
 }
 
+must("cloud-auto-open").addEventListener("click", async () => {
+  if (!(await navigate("settings"))) return;
+  settingsNavigation.select("data");
+  must<HTMLDetailsElement>("cloud-auto").open = true;
+});
+
 document.querySelectorAll<HTMLElement>(".nav button[data-route]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     if (!(await navigate(btn.dataset.route))) return;

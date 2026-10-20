@@ -8,6 +8,7 @@ mod cloud_credentials;
 mod cloud_backup;
 mod cloud_backup_commands;
 mod cloud_settings;
+mod cloud_schedule;
 mod ai_models;
 mod ai_provider_commands;
 mod ai_settings;
@@ -639,6 +640,10 @@ async fn set_cloud_backup_credential(
     let value = backup_crypt::SecretString::from(value);
     archive_worker(app, move |state| {
         let binding = cloud_credentials::Binding::checked(&connection)?;
+        let service = cloud_backup_commands::service(state)?;
+        let _credentials_guard = service.credential_guard()?;
+        suspend_cloud_automatic(state)?;
+        if matches!(kind, cloud_credentials::Kind::BackupPassphrase) { service.invalidate_passphrase()?; }
         state
             .cloud_credentials
             .set(&binding, kind, value)
@@ -655,10 +660,10 @@ async fn clear_cloud_backup_credential(
 ) -> Result<(), CommandError> {
     archive_worker(app, move |state| {
         let binding = cloud_credentials::Binding::checked(&connection)?;
-        state
-            .cloud_credentials
-            .clear(&binding, kind)
-            .map_err(CommandError::from)
+        let service = cloud_backup_commands::service(state).ok();
+        cloud_backup_commands::clear_credential(service.as_ref(), kind,
+            || suspend_cloud_automatic(state),
+            || state.cloud_credentials.clear(&binding, kind).map_err(CommandError::from))
     })
     .await
 }
@@ -682,7 +687,9 @@ async fn cloud_backup_credential_status(
 fn suspend_cloud_automatic(state: &AppState) -> Result<(), CommandError> {
     let host = state.host.lock().map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
     let host = host.as_ref().ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
-    cloud_settings::suspend(&host.paths().settings_file)
+    cloud_settings::suspend(&host.paths().settings_file)?;
+    if let Ok(service) = cloud_backup_commands::service(state) { service.cancel_automatic()?; }
+    Ok(())
 }
 #[tauri::command]
 async fn cloud_backup_config(app: AppHandle) -> Result<Option<cloud_settings::Config>, CommandError> {
@@ -697,11 +704,20 @@ async fn cloud_backup_save_config(app: AppHandle, mut config: cloud_settings::Co
     archive_worker(app, move |state| {
         let host = state.host.lock().map_err(|_| cloud_backup::fail("LOCAL_STATE"))?;
         let host = host.as_ref().ok_or_else(|| cloud_backup::fail("WORKSPACE_UNAVAILABLE"))?;
-        // No scheduler is shipped in #306. Saving is explicit reconfirmation.
+        // Editing connection/policy requires a fresh explicit schedule confirmation.
+        if let Ok(service) = cloud_backup_commands::service(state) { service.cancel_automatic()?; }
         config.automatic_enabled = false;
         config.requires_confirmation = false;
         cloud_settings::save(&host.paths().settings_file, &config)
     }).await
+}
+#[tauri::command]
+async fn cloud_backup_schedule_status(app: AppHandle) -> Result<cloud_backup::schedule::Status, CommandError> {
+    archive_worker(app, cloud_schedule::status).await
+}
+#[tauri::command]
+async fn cloud_backup_schedule_configure(app: AppHandle, plan: Option<cloud_backup::schedule::Plan>) -> Result<(), CommandError> {
+    archive_worker(app, move |state| cloud_schedule::configure(state, plan)).await
 }
 #[tauri::command]
 async fn cloud_backup_test(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options) -> Result<(), CommandError> {
@@ -2035,6 +2051,7 @@ pub fn run() {
             tauri::WebviewWindowBuilder::from_config(app.handle(), &main_window)?.build()?;
             app.state::<AppState>().main_window.set();
 
+            cloud_schedule::start(app.handle().clone());
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
             #[cfg(target_os = "macos")]
@@ -2116,6 +2133,8 @@ pub fn run() {
             cloud_backup_start,
             cloud_backup_retry,
             cloud_backup_status,
+            cloud_backup_schedule_status,
+            cloud_backup_schedule_configure,
             cloud_backup_cancel,
             cloud_backup_discard,
             cloud_backup_list,

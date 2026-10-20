@@ -30,6 +30,7 @@
       <main>
         <div id="feedback-consent"></div>
         <div id="usage-notice"></div>
+        <div id="cloud-auto-notice" class="settings-callout" role="status" hidden><p id="cloud-auto-notice-text"></p><button id="cloud-auto-open" type="button">查看云备份计划</button></div>
         <div id="banner" class="banner hidden"></div>
 
         <section id="view-applications" class="view">
@@ -435,12 +436,30 @@
                       <label>保留最近几份（本机命名空间）<select id="cloud-keep"><option value="">不自动删除</option><option value="5" selected>5 份</option><option value="10">10 份</option><option value="20">20 份</option></select></label>
                     </div>
                     <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
-                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。请另行保管加密口令，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
+                    <p class="settings-caption">使用坚果云的第三方应用密码，不要使用登录密码。密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新保存。更换口令后请先完成新手动备份，再启用自动计划；已有包和重试候选仍需创建时的口令，请分别保管，丢失后无法恢复。即使云端加密，本机仍保留一份明文备份。</p>
                     <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。只有确认上传完整且目录完整性可靠时才清理本机旧备份；其他设备和用户文件不会删除。</p>
                     <div class="settings-actions"><button type="submit">保存云备份配置</button><button id="cloud-preset" type="button">使用坚果云地址</button><button id="cloud-test" type="button">测试连接</button></div>
                     <div class="settings-actions"><button id="cloud-clear-password" type="button">移除已保存的应用密码</button><button id="cloud-clear-passphrase" type="button">移除已保存的加密口令</button></div>
                     <p id="cloud-secret-status" class="settings-caption"></p>
                   </form>
+                  <details class="settings-card-fold" id="cloud-auto">
+                    <summary>可选自动备份 · 默认关闭</summary>
+                    <form id="cloud-auto-form" class="cloud-form">
+                      <div class="cloud-fields">
+                        <label>执行时间<input id="cloud-auto-time" type="time" value="21:00" required /></label>
+                        <label>频率<select id="cloud-auto-days"><option value="1">每天</option><option value="3">每 3 天</option><option value="7">每周</option></select></label>
+                        <label>固定时区<select id="cloud-auto-zone"></select></label>
+                        <label>本机 30 天上传预算（MB）<input id="cloud-auto-budget" type="number" min="1" max="1000000" step="1" value="1000" required /></label>
+                      </div>
+                      <label class="cloud-check"><input id="cloud-auto-pause" type="checkbox" checked />超出本机估算预算时暂停自动上传</label>
+                      <p class="settings-caption">仅在程序运行时检查；关闭程序不会备份。错过时间只提示手动补备份。按固定 UTC 偏移执行，不跟随系统时区或夏令时变化；改变时区请重新确认。恢复或回滚后计划关闭。</p>
+                      <p id="cloud-auto-estimate" class="settings-caption"></p>
+                      <div class="settings-actions"><button type="submit" id="cloud-auto-enable">确认并启用计划</button><button type="button" id="cloud-auto-disable">关闭自动计划</button></div>
+                    </form>
+                    <p id="cloud-auto-status" class="settings-inline-msg" role="status"></p>
+                    <p id="cloud-auto-traffic" class="settings-caption"></p>
+                    <p class="settings-caption">预算只统计本机已尝试上传的包体及元数据，不代表账户余额。重试、对账下载、其他设备和其他应用会额外消耗流量。坚果云免费账户参考：每月上传 1 GB、下载 3 GB，重置时间依账户开通日；实际额度请在坚果云查看。</p>
+                  </details>
                   <div class="settings-actions"><button id="cloud-start" type="button" class="primary">立即备份到云端</button><button id="cloud-retry" type="button" hidden>重试上次备份</button><button id="cloud-discard" type="button" hidden>放弃候选包</button><button id="cloud-browse" type="button">查找云端备份</button><button id="cloud-cancel" type="button" hidden>取消当前任务</button></div>
                   <p id="cloud-progress" role="status" class="settings-inline-msg"></p>
                   <div id="cloud-message" role="status" class="settings-callout" hidden></div>

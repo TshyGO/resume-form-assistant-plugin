@@ -68,6 +68,15 @@ pub fn load(path: &Path) -> Result<Journal> {
         return Err(fail("INVALID_LOCAL_STATE"));
     }
     let state: Journal = serde_json::from_slice(&bytes).map_err(|_| fail("INVALID_LOCAL_STATE"))?;
+    if let Some(plan) = &state.automatic.plan {
+        plan.check()?;
+        if !digest_valid(&state.automatic.binding) || state.automatic.next_at.is_none() { return Err(fail("INVALID_LOCAL_STATE")); }
+    }
+    if state.automatic.retries > 3 || [state.automatic.next_at, state.automatic.retry_at, state.automatic.cycle_started_at].into_iter().flatten().any(|t| !(-62135596800..=253402300799).contains(&t)) { return Err(fail("INVALID_LOCAL_STATE")); }
+    if let Some(b) = &state.baseline {
+        if !digest_valid(&b.binding) || !digest_valid(&b.fingerprint) || b.size_bytes == 0 || b.size_bytes > webdav_client::NUTSTORE_MAX_FILE_BYTES { return Err(fail("INVALID_LOCAL_STATE")); }
+    }
+    if let Some(id) = &state.automatic.pending_job { uuid(id)?; }
     uuid(&state.device_id)?;
     if state.receipts.len() > 256 || state.local_garbage.len() > 8 {
         return Err(fail("INVALID_LOCAL_STATE"));
@@ -79,6 +88,7 @@ pub fn load(path: &Path) -> Result<Journal> {
         uuid(id)?;
     }
     if let Some(job) = &state.job {
+        if (!job.binding.is_empty() && !digest_valid(&job.binding)) || job.business_fingerprint.as_ref().is_some_and(|v| !digest_valid(v)) { return Err(fail("INVALID_LOCAL_STATE")); }
         uuid(&job.id)?;
         if job.id != job.metadata.backup_id || job.metadata.device_id != state.device_id {
             return Err(fail("INVALID_LOCAL_STATE"));

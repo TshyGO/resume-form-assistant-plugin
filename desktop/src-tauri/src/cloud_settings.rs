@@ -15,7 +15,7 @@ use std::{
 pub struct Config {
     pub connection: ConnectionDescriptor,
     pub options: Options,
-    // Reserved gate for #307. No scheduler may run while this is false.
+    // Machine-local authoritative gate; neither switch nor plan travels in backups.
     #[serde(default)]
     pub automatic_enabled: bool,
     #[serde(default)]

@@ -186,10 +186,21 @@ pub enum Phase {
     Failed,
     Cancelled,
     Interrupted,
+    Skipped,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Job {
+    #[serde(default)]
+    pub automatic: bool,
+    #[serde(default)]
+    pub fingerprint_stale: bool,
+    #[serde(default)]
+    pub business_fingerprint: Option<String>,
+    #[serde(default)]
+    pub binding: String,
+    #[serde(default)]
+    pub retry_not_before: Option<i64>,
     pub id: String,
     pub scope: String,
     pub options: Options,
@@ -219,6 +230,10 @@ pub struct Receipt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Journal {
+    #[serde(default)]
+    pub automatic: super::schedule::Automatic,
+    #[serde(default)]
+    pub baseline: Option<super::schedule::Baseline>,
     pub device_id: String,
     pub job: Option<Job>,
     pub latest: Option<String>,

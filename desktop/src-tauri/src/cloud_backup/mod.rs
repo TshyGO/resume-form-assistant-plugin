@@ -1,5 +1,7 @@
 //! #305: one persisted, resumable job; metadata is the remote commit record.
 mod local;
+mod automatic;
+pub mod schedule;
 pub mod model;
 mod publish;
 mod remote;
@@ -77,6 +79,7 @@ pub struct Service {
     store: Arc<Mutex<Option<ArchiveStore>>>,
     workspace: PreparedWorkspace,
     journal: Mutex<Journal>,
+    credentials_gate: Mutex<()>,
     active: Mutex<Option<CancellationToken>>,
     preview: Mutex<Option<restore_flow::Pending>>,
     preview_cleanup_warning: std::sync::atomic::AtomicBool,
@@ -111,6 +114,8 @@ impl Service {
                 return Err(fail("INVALID_LOCAL_STATE"));
             }
             Journal {
+                automatic: Default::default(),
+                baseline: None,
                 device_id: uuid::Uuid::new_v4().to_string(),
                 job: None,
                 latest: None,
@@ -121,7 +126,7 @@ impl Service {
         if let Some(job) = state.job.as_mut() {
             if !matches!(
                 job.phase,
-                Phase::Succeeded | Phase::CleanupWarning | Phase::Failed | Phase::Cancelled
+                Phase::Succeeded | Phase::CleanupWarning | Phase::Failed | Phase::Cancelled | Phase::Skipped
             ) {
                 job.phase = Phase::Interrupted;
             }
@@ -149,6 +154,7 @@ impl Service {
             store,
             workspace,
             journal: Mutex::new(state),
+            credentials_gate: Mutex::new(()),
             active: Mutex::new(None),
             preview: Mutex::new(None),
             preview_cleanup_warning: std::sync::atomic::AtomicBool::new(false),
@@ -237,6 +243,9 @@ impl Service {
     pub fn begin(self: &Arc<Self>, options: Options, scope: String) -> Result<(Job, Lease)> {
         options.check()?;
         let lease = self.reserve()?;
+        self.begin_reserved(options, scope, lease)
+    }
+    fn begin_reserved(self: &Arc<Self>, options: Options, scope: String, lease: Lease) -> Result<(Job, Lease)> {
         let state = self
             .journal
             .lock()
@@ -262,14 +271,14 @@ impl Service {
         {
             local::remove_owned(&self.root, &old.id)?;
         }
-        let archive = self
+        let identity = self
             .store
             .lock()
             .map_err(|_| fail("LOCAL_STATE"))?
             .as_ref()
             .ok_or_else(|| fail("STORE_UNAVAILABLE"))?
-            .identity()
-            .archive_id;
+            .identity();
+        let archive = identity.archive_id.clone();
         uuid(&archive)?;
         let id = uuid::Uuid::new_v4().to_string();
         let mut metadata = Metadata {
@@ -290,6 +299,11 @@ impl Service {
         };
         metadata.package = metadata.package_name()?;
         let job = Job {
+            automatic: false,
+            fingerprint_stale: false,
+            business_fingerprint: None,
+            binding: Self::binding(&scope, &options, &identity),
+            retry_not_before: None,
             id,
             scope,
             options,
@@ -310,6 +324,9 @@ impl Service {
     pub fn retry(self: &Arc<Self>, scope: &str, options: &Options) -> Result<(Job, Lease)> {
         options.check()?;
         let lease = self.reserve()?;
+        self.retry_reserved(scope, options, lease)
+    }
+    fn retry_reserved(self: &Arc<Self>, scope: &str, options: &Options, lease: Lease) -> Result<(Job, Lease)> {
         let job = self.job()?;
         if job.scope != scope
             || job.options.root != options.root
@@ -403,7 +420,18 @@ impl Service {
                 }
             }
             local::space(&self.root, size.saturating_mul(3))?;
-            crate::backup_commands::export(store, &self.paths, &package, &job.metadata.created_at)?;
+            if job.automatic && Self::binding(&job.scope, &job.options, &store.identity()) != job.binding {
+                return Err(fail("ARCHIVE_CHANGED"));
+            }
+            let (_, fingerprint) = crate::restore::export_archive_fingerprinted(store, &self.paths, &package, &job.metadata.created_at)?;
+            let unchanged = job.automatic && self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?.baseline.as_ref()
+                .is_some_and(|b| b.binding == job.binding && b.fingerprint == fingerprint);
+            self.update(|s| {
+                let j = s.job.as_mut().unwrap();
+                j.business_fingerprint = Some(fingerprint);
+                if unchanged { j.phase = Phase::Skipped; }
+            })?;
+            if unchanged { return Ok(()); }
         }
         if cancel.is_cancelled() {
             return Err(fail("CANCELLED"));
@@ -470,6 +498,7 @@ impl Service {
                     .await
                     .map_err(|_| fail("WORKER_FAILED"))??;
             }
+            if self.job()?.phase == Phase::Skipped { return Ok(()); }
             if cancel.is_cancelled() {
                 return Err(fail("CANCELLED"));
             }
@@ -511,6 +540,11 @@ impl Service {
             self.publish(&client, &cancel).await
         }
         .await;
+        // Keep the provider's absolute retry floor through the command boundary.
+        let floor = client.retry_not_before();
+        let result = if floor > 0 {
+            self.update(|s| { if let Some(j) = s.job.as_mut() { j.retry_not_before = Some(floor); } }).and(result)
+        } else { result };
         self.finish(result, &cancel);
         drop(lease);
     }

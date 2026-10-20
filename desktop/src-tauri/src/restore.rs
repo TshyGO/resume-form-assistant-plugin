@@ -81,6 +81,19 @@ pub fn export_archive(
     destination: &Path,
     now: &str,
 ) -> Result<WriteReport, CommandError> {
+    export_archive_inner(store, paths, destination, now, false).map(|(report, _)| report)
+}
+
+/// Fingerprint the exact exported snapshot and verified referenced files.
+pub fn export_archive_fingerprinted(
+    store: &ArchiveStore, paths: &RestorePaths, destination: &Path, now: &str,
+) -> Result<(WriteReport, String), CommandError> {
+    let (report, fingerprint) = export_archive_inner(store, paths, destination, now, true)?;
+    Ok((report, fingerprint.ok_or_else(|| fail("STORE_ERROR", "missing fingerprint"))?))
+}
+fn export_archive_inner(
+    store: &ArchiveStore, paths: &RestorePaths, destination: &Path, now: &str, fingerprint: bool,
+) -> Result<(WriteReport, Option<String>), CommandError> {
     let staging = paths.staging_root();
     std::fs::create_dir_all(&staging).map_err(|e| fail("IO_ERROR", e))?;
     let snapshot = staging.join(format!("snapshot-{}.db", uuid::Uuid::new_v4()));
@@ -117,7 +130,22 @@ pub fn export_archive(
             settings_json,
             created_at: now.to_string(),
         };
-        write_archive(&source, destination).map_err(|e| fail("BACKUP_ERROR", e))
+        let logical = if fingerprint {
+            Some(archive_store::fingerprint::snapshot(&snapshot).map_err(|e| fail("STORE_ERROR", e))?)
+        } else { None };
+        let report = write_archive(&source, destination).map_err(|e| fail("BACKUP_ERROR", e))?;
+        let Some(logical) = logical else { return Ok((report, None)); };
+        // Writer verified the actual bytes against this snapshot's references.
+        let manifest = backup::read_manifest(destination).map_err(|e| fail("BACKUP_ERROR", e))?;
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(b"resume-pro-content-v1\0");
+        hash.update(logical.as_bytes());
+        for entry in manifest.entries.iter().filter(|e| e.path != "archive/archive.db") {
+            hash.update(serde_json::to_vec(entry).map_err(|e| fail("BACKUP_ERROR", e))?);
+            hash.update(b"\n");
+        }
+        Ok((report, Some(format!("{:x}", hash.finalize()))))
     })();
 
     // SQLite 只读打开快照时也可能创建 `-wal` / `-shm`。三者都是同一个中间产物，

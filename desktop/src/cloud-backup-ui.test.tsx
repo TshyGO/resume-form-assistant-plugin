@@ -21,6 +21,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     if (typeof override === "function") return await override(args) as T;
     if (overrides[name] instanceof Error) throw overrides[name];
     return (overrides[name] ?? ({
+      cloud_backup_schedule_status: { enabled: false, requiresConfirmation: false, recentSize: null, estimatedCycleBytes: null, state: { plan: null, nextAt: null, paused: null, message: null, retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false } },
       cloud_backup_config: config,
       cloud_backup_status: { job: null, latestPackage: null, latestMetadata: null, retryPackage: null },
       cloud_backup_credential_status: { hasWebdavPassword: true, hasBackupPassphrase: true },
@@ -35,6 +36,83 @@ function setup(overrides: Record<string, unknown> = {}) {
 }
 const click = (id: string) => fireEvent.click(document.getElementById(id)!);
 const dialog = () => document.querySelector<HTMLDialogElement>("dialog.settings-dialog");
+
+test("automatic plan is opt in, estimates from a prior package and sends only a confirmed nonsecret plan", async () => {
+  const { refresh, calls } = setup({ cloud_backup_schedule_status: {
+    enabled: false, requiresConfirmation: false, recentSize: 2_000_000, estimatedCycleBytes: null,
+    state: { plan: null, nextAt: null, paused: null, message: null, retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false },
+  } });
+  await refresh();
+  expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(false);
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("60.00 MB");
+  fireEvent.change(document.getElementById("cloud-auto-days")!, { target: { value: "7" } });
+  fireEvent.input(document.getElementById("cloud-auto-days")!);
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("10.00 MB");
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(false);
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(true));
+  const args = calls.find(c => c.name === "cloud_backup_schedule_configure")!.args!;
+  expect(args).toEqual({ plan: { minute: 1260, everyDays: 7, utcOffsetMinutes: 0 - new Date().getTimezoneOffset(), budgetBytes: 1_000_000_000, pauseAtBudget: true } });
+  expect(JSON.stringify(args)).not.toMatch(/password|passphrase/i);
+});
+
+test("missed and paused schedules warn outside settings; missing size stays unknown and disable is explicit", async () => {
+  const { refresh, calls } = setup({ cloud_backup_schedule_status: {
+    enabled: true, requiresConfirmation: false, recentSize: null, estimatedCycleBytes: null,
+    state: { plan: { minute: 1260, everyDays: 1, utcOffsetMinutes: 480, budgetBytes: 1_000_000_000, pauseAtBudget: true }, nextAt: 1700000000, paused: null, message: "MISSED_MANUAL", retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false },
+  } });
+  await refresh();
+  expect(document.getElementById("cloud-auto-notice")!.hidden).toBe(false);
+  expect(document.getElementById("cloud-auto-notice-text")!.textContent).toContain("未自动补传");
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  expect(calls.some(c => c.name === "cloud_backup_start")).toBe(false);
+  click("cloud-auto-disable");
+  await waitFor(() => expect(calls.find(c => c.name === "cloud_backup_schedule_configure")?.args).toEqual({ plan: null }));
+});
+
+const idleState = { plan: null, nextAt: null, paused: null, message: null, retryAt: null, retries: 0, cycleStartedAt: null, uploadBytes: 0, budgetWarning: false };
+test("without a manual baseline, enabling explains why instead of opening a confirmation that must fail", async () => {
+  for (const [requiresConfirmation, reason] of [[true, "恢复或回滚过档案"], [false, "还没有用当前账号"]] as const) {
+    document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
+    const { refresh, calls } = setup({ cloud_backup_schedule_status: { enabled: false, requiresConfirmation, recentSize: null, estimatedCycleBytes: null, state: idleState } });
+    await refresh();
+    fireEvent.submit(document.getElementById("cloud-auto-form")!);
+    await waitFor(() => expect(document.getElementById("cloud-auto-status")!.textContent).toContain(reason));
+    expect(document.getElementById("cloud-auto-status")!.textContent).toContain("立即备份到云端");
+    expect(dialog()).toBeNull();
+    expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(false);
+  }
+});
+
+test("enabling re-reads the plan status, so a manual backup that just finished is not refused", async () => {
+  let baseline = false;
+  const { refresh, calls } = setup({
+    cloud_backup_schedule_status: () => ({ enabled: false, requiresConfirmation: true, recentSize: baseline ? 2_000_000 : null, estimatedCycleBytes: null, state: idleState }),
+  });
+  await refresh();
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  baseline = true; // Manual backup completed; job polling did not refresh the plan status.
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  expect(dialog()!.textContent).toContain("2.00 MB");
+  expect(document.getElementById("cloud-auto-status")!.textContent).not.toContain("立即备份到云端");
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(calls.some(c => c.name === "cloud_backup_schedule_configure")).toBe(true));
+});
+
+test("a backend manual-baseline refusal after restore names the restore as the reason", async () => {
+  const { refresh } = setup({
+    cloud_backup_schedule_status: { enabled: false, requiresConfirmation: true, recentSize: 2_000_000, estimatedCycleBytes: null, state: idleState },
+    cloud_backup_schedule_configure: Object.assign(new Error("refused"), { code: "CLOUD_MANUAL_BACKUP_REQUIRED" }),
+  });
+  await refresh();
+  fireEvent.submit(document.getElementById("cloud-auto-form")!);
+  await waitFor(() => expect(dialog()).toBeTruthy());
+  fireEvent.click(within(dialog()!).getByRole("button", { name: "确认启用" }));
+  await waitFor(() => expect(dialog()!.textContent).toContain("恢复或回滚过档案"));
+});
 
 test("saved credentials never echo; nonsecret settings and write-only credentials use separate commands", async () => {
   const { refresh, calls, query } = setup(); await refresh();

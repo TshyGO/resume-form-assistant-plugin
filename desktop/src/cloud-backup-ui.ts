@@ -1,3 +1,4 @@
+import { mountCloudSchedule } from "./cloud-schedule-ui";
 import type { Invoke } from "./api";
 import { cloudBackupApi, type CloudConfig, type CloudJob, type CloudMetadata, type CloudNamespace } from "./cloud-backup-api";
 import { restoreBody } from "./backup-ui";
@@ -26,6 +27,8 @@ export function cloudError(error: unknown): string {
     ["MISSING_PASSPHRASE", "尚未保存解密口令：请填写这份备份使用的口令后保存。"],
     ["CREDENTIAL_STORE_UNAVAILABLE", "系统凭据库不可用：请解锁系统凭据库后重试；密码不会保存到文件。"],
     ["CANCELLED", "任务已取消，当前档案未替换。完整上传候选包可以重试或明确放弃。"],
+    ["MANUAL_BACKUP_REQUIRED", "请先按当前账号、目录和加密设置完成一次手动云备份，再启用自动计划。"],
+    ["BUDGET_PAUSED", "已达到本机估算预算。自动计划已暂停；可核对实际账户流量后调整预算并重新启用，或手动重试。"],
     ["BUSY", "另一项云备份任务正在进行，请等待或取消。"],
     ["INVALID_SETTINGS", "本机 settings.json 损坏或云备份配置不合法，恢复未执行；请保留原文件并修复配置后重试。"],
     ["SETTINGS_IO", "无法读写本机 settings.json，恢复未执行；请检查文件权限和本机可用空间后重试。"],
@@ -43,6 +46,7 @@ const phaseNames: Record<CloudJob["phase"], string> = {
   packing: "正在生成本地备份", encrypting: "正在加密（密钥计算期间取消会稍后生效）",
   uploading: "正在上传", confirming: "正在确认云端文件",
   succeeded: "已上传并确认", cleanupWarning: "已上传并确认；旧备份清理未完成",
+  skipped: "业务内容没有变化，已跳过上传",
   failed: "上次备份失败", cancelled: "上次备份已取消", interrupted: "上次备份中断，可重试或放弃候选包",
 };
 const running = (job: CloudJob | null) => !!job && ["packing", "encrypting", "uploading", "confirming"].includes(job.phase);
@@ -51,6 +55,7 @@ export const cloudTime = (utc: string) => `${new Date(utc).toLocaleString()}（�
 
 export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promise<void> = () => {}) {
   const api = cloudBackupApi(invoke);
+  const refreshSchedule = mountCloudSchedule(api, () => selectedConfig());
   const form = must<HTMLFormElement>("cloud-form");
   const field = (id: string) => must<HTMLInputElement>(`cloud-${id}`);
   const endpoint = field("endpoint"), username = field("username"), root = field("root");
@@ -89,7 +94,8 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const state = await api.credentialStatus(config.connection);
     must("cloud-secret-status").textContent = `此账号的应用密码：${state.hasWebdavPassword ? "已保存" : "未保存"}；加密口令：${state.hasBackupPassphrase ? "已保存" : "未保存"}。`;
   }
-  async function poll() {
+  let polling: Promise<void> | null = null;
+  async function readStatus() {
     if (timer) clearTimeout(timer);
     try {
       const status = await api.status();
@@ -103,12 +109,17 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         : status.latestPackage ? `本机明文副本：${status.latestPackage}` : "暂无已确认成功的云备份；本机明文副本将在这里显示。";
       must("cloud-retry").hidden = !status.retryPackage;
       must("cloud-discard").hidden = !status.retryPackage;
-      if (uploading) timer = setTimeout(() => void poll(), 1500);
+      timer = setTimeout(() => void poll(), uploading ? 1500 : 30000);
     } catch (error) {
       tell(cloudError(error), "error");
-      if (uploading) timer = setTimeout(() => void poll(), 5000);
+      timer = setTimeout(() => void poll(), uploading ? 5000 : 30000);
     }
     controls();
+  }
+  function poll(): Promise<void> {
+    if (polling) return polling;
+    polling = readStatus().finally(() => { polling = null; });
+    return polling;
   }
   for (const control of [endpoint, username, root, encrypted, keep, password, passphrase]) control.addEventListener("input", () => {
     dirty = true;
@@ -130,6 +141,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       };
       // Save only nonsecret config; write-only credential commands never echo values.
       await api.saveConfig(next);
+      await refreshSchedule();
       config = next;
       try {
         if (password.value) await api.setCredential(next.connection, "webdavPassword", password.value);
@@ -142,7 +154,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       records = []; namespaces = []; list.replaceChildren(); must("cloud-namespace-label").hidden = true;
       await api.clearPreview();
       await secretStatus();
-      tell("配置已保存在本机；密码仅保存在系统凭据库。当前仅支持手动备份。", "success");
+      tell("配置已保存在本机；密码仅保存在系统凭据库。如需自动备份，请另外启用下方计划。", "success");
     });
   });
   for (const [id, kind] of [["password", "webdavPassword"], ["passphrase", "backupPassphrase"]] as const) {
@@ -250,12 +262,13 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         const value = config.options.keepLast?.toString() ?? "";
         if (![...keep.options].some((o) => o.value === value)) keep.add(new Option(`${value} 份`, value));
         keep.value = value;
-        if (config.requiresConfirmation) tell("档案恢复后，自动云备份已关闭。请核对账号、目录和口令后重新保存配置。", "warn");
+        if (config.requiresConfirmation) tell("档案或凭据变更后，自动云备份已关闭，请核对后重新确认计划。恢复档案或更换加密口令后，须先完成一次新手动备份。", "warn");
         await secretStatus();
       }
       loaded = true; dirty = false;
     }
     await poll();
+    await refreshSchedule();
   }
   return refresh;
 }
