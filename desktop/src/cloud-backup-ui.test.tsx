@@ -205,7 +205,8 @@ test("overview shows configuration, latest success and schedule before any setti
   expect(document.getElementById("cloud-progress")!.textContent).toBe("");
   expect(document.getElementById("cloud-auto-summary")!.textContent).toMatch(/^每天 21:00（UTC\+08:00） · 下次 /);
   expect(document.getElementById("cloud-auto-hint")!.textContent).toBe("每天 21:00（UTC+08:00）");
-  expect(document.getElementById("cloud-connection-hint")!.textContent).toBe("已保存 · Test · 加密 · 保留 5 份");
+  expect(document.getElementById("cloud-connection-hint")!.textContent).toBe("已保存 · Test · 加密");
+  expect(document.getElementById("cloud-keep")!.closest(".settings-field")!.hasAttribute("hidden")).toBe(true);
   expect(document.getElementById("cloud-local-copy")!.textContent).toContain("/local/backup.rpbak");
   expect(document.getElementById("cloud-auto-disable")!.hidden).toBe(false);
   for (const id of ["cloud-connection", "cloud-auto"]) expect((document.getElementById(id) as HTMLDetailsElement).open).toBe(false);
@@ -227,12 +228,19 @@ test("an unconfigured card opens connection settings and keeps whole-card action
   expect(calls.some((c) => c.name === "cloud_backup_credential_status")).toBe(false);
 });
 
-test("a missing remote folder during connection test is a hint, other failures stay errors, and nothing is created", async () => {
-  const { refresh, calls } = setup({ cloud_backup_test: async () => { throw { code: "CLOUD_DAV_NotFound" }; } });
+const missingFolder = (rootResult: unknown) => async (args?: Record<string, unknown>) => {
+  const root = (args?.options as { root?: string[] }).root ?? [];
+  if (root.length) throw { code: "CLOUD_DAV_NotFound" };
+  if (rootResult) throw rootResult;
+  return null;
+};
+test("a missing remote folder is a hint only after the WebDAV root itself is readable, and nothing is created", async () => {
+  const { refresh, calls } = setup({ cloud_backup_test: missingFolder(null) });
   await refresh(); click("cloud-test");
   const message = document.getElementById("cloud-message")!;
   await waitFor(() => expect(message.textContent).toBe("账号验证通过。目录 Test 还不存在，第一次备份时会自动创建。"));
   expect(message.dataset.tone).toBe("info");
+  expect(calls.filter((c) => c.name === "cloud_backup_test").map((c) => (c.args!.options as { root: string[] }).root)).toEqual([["Test"], []]);
   expect(calls.filter((c) => c.name.startsWith("cloud_backup_") && !["cloud_backup_config", "cloud_backup_status", "cloud_backup_schedule_status", "cloud_backup_credential_status", "cloud_backup_test"].includes(c.name))).toEqual([]);
   expect(cloudError({ code: "CLOUD_DAV_NotFound" })).toContain("远端目录或文件不存在");
 });
@@ -309,4 +317,76 @@ test("found backups can be collapsed, but not while a download is in progress", 
   click("cloud-found-close");
   expect(document.getElementById("cloud-found")!.hidden).toBe(true);
   expect(document.getElementById("cloud-list")!.children).toHaveLength(0);
+});
+
+test("a missing folder under a wrong address or bad credentials is reported as that error, not as verified", async () => {
+  const wrongAddress = setup({ cloud_backup_test: missingFolder({ code: "CLOUD_DAV_NotFound" }) });
+  await wrongAddress.refresh(); click("cloud-test");
+  const message = document.getElementById("cloud-message")!;
+  await waitFor(() => expect(message.dataset.tone).toBe("error"));
+  expect(message.textContent).toContain("找不到 WebDAV 地址");
+  expect(message.textContent).not.toContain("账号验证通过");
+});
+test("bad credentials found by the root check keep the authentication error", async () => {
+  const { refresh } = setup({ cloud_backup_test: missingFolder({ code: "CLOUD_DAV_Authentication" }) });
+  await refresh(); click("cloud-test");
+  const message = document.getElementById("cloud-message")!;
+  await waitFor(() => expect(message.dataset.tone).toBe("error"));
+  expect(message.textContent).toContain("认证失败");
+});
+
+test("editing the account shows the old account's secrets as not saved and hides removal", async () => {
+  const { refresh } = setup(); await refresh();
+  expect(document.getElementById("cloud-password-state")!.textContent).toBe("已保存");
+  fireEvent.input(document.getElementById("cloud-username")!, { target: { value: "other-account" } });
+  expect(document.getElementById("cloud-password-state")!.textContent).toBe("新账号未保存");
+  expect(document.getElementById("cloud-passphrase-state")!.textContent).toBe("新账号未保存");
+  expect(document.getElementById("cloud-clear-password")!.hidden).toBe(true);
+  expect((document.getElementById("cloud-password") as HTMLInputElement).placeholder).not.toContain("已保存");
+  fireEvent.input(document.getElementById("cloud-username")!, { target: { value: "synthetic" } });
+  expect(document.getElementById("cloud-password-state")!.textContent).toBe("已保存");
+});
+
+test("long backup lists show the newest ten first and reveal more in batches", async () => {
+  const many = Array.from({ length: 23 }, (_, i) => ({ ...metadata, backupId: `b${i}`, createdAt: new Date(Date.UTC(2026, 9, 19) - i * 86_400_000).toISOString() }));
+  const { refresh, query } = setup({ cloud_backup_list: { entries: many, cleanupSafe: false, contentHashVerified: false } });
+  await refresh(); click("cloud-browse");
+  const more = document.getElementById("cloud-list-more") as HTMLButtonElement;
+  await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(10));
+  await waitFor(() => expect(more.disabled).toBe(false));
+  expect(document.getElementById("cloud-progress")!.textContent).toBe("找到 23 份备份，先显示最新 10 份。");
+  expect(more.hidden).toBe(false); expect(more.textContent).toBe("再显示 10 份（还有 13 份）");
+  fireEvent.click(more);
+  expect(query.getAllByRole("listitem")).toHaveLength(20);
+  expect(more.textContent).toBe("再显示 3 份（还有 3 份）");
+  fireEvent.click(more);
+  expect(query.getAllByRole("listitem")).toHaveLength(23);
+  expect(more.hidden).toBe(true);
+  // 后面批次的行仍指向正确的备份。
+  const last = query.getAllByRole("listitem")[22];
+  expect(within(last).getByRole("button", { name: "下载校验并预览" }).dataset.index).toBe("22");
+});
+
+test("collapsing found backups restores the job status line instead of leaving it blank", async () => {
+  const failed = { job: { phase: "failed", metadata, warnings: [], errorCode: "CLOUD_DAV_Network" }, latestPackage: null, latestMetadata: null, retryPackage: null };
+  const { refresh, calls } = setup({ cloud_backup_status: failed });
+  await refresh();
+  const progress = document.getElementById("cloud-progress")!;
+  expect(progress.textContent).toContain("上次备份失败");
+  click("cloud-browse");
+  await waitFor(() => expect(progress.textContent).toContain("找到 1 份备份"));
+  await waitFor(() => expect((document.getElementById("cloud-found-close") as HTMLButtonElement).disabled).toBe(false));
+  const reads = calls.filter((c) => c.name === "cloud_backup_status").length;
+  click("cloud-found-close");
+  expect(document.getElementById("cloud-found")!.hidden).toBe(true);
+  await waitFor(() => expect(progress.textContent).toContain("上次备份失败"));
+  expect(calls.filter((c) => c.name === "cloud_backup_status").length).toBe(reads + 1);
+});
+
+test("the hidden retention value is kept when saving", async () => {
+  const { refresh, calls } = setup({ cloud_backup_config: { ...config, options: { ...config.options, keepLast: 10 } } });
+  await refresh();
+  fireEvent.submit(document.getElementById("cloud-form")!);
+  await waitFor(() => expect(calls.some((c) => c.name === "cloud_backup_save_config")).toBe(true));
+  expect((calls.find((c) => c.name === "cloud_backup_save_config")!.args!.config as { options: { keepLast: number } }).options.keepLast).toBe(10);
 });

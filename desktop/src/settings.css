@@ -276,6 +276,8 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 #view-settings .cloud-found-head select { min-height: 34px; max-width: 100%; }
 .cloud-found .settings-list li { align-items: flex-start; }
 .cloud-found .settings-list .settings-inline-msg { margin: 4px 0 0; font-size: 12px; }
+.cloud-list-more { justify-content: center; margin-top: 10px; }
+.cloud-list-more:not(:has(> :not([hidden]))) { display: none; }
 .cloud-groups { margin-top: 16px; }
 #cloud-form { display: contents; }
 .cloud-groups .settings-card-fold { border-top: 1px solid var(--line); }

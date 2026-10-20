@@ -55,6 +55,7 @@ export const cloudTime = (utc: string) => `${new Date(utc).toLocaleString()}（�
 const shortTime = (utc: string) => new Date(utc).toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 const errorCode = (error: unknown) => typeof error === "string" ? error : (error as { code?: string } | null)?.code ?? "";
 type Tone = "ok" | "warn" | "error" | "";
+const PAGE = 10;
 
 export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promise<void> = () => {}) {
   const api = cloudBackupApi(invoke);
@@ -70,6 +71,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   let secrets: { hasWebdavPassword: boolean; hasBackupPassphrase: boolean } | null = null;
   let jobState: "failed" | "candidate" | null = null, scheduleAttention = false;
   let namespaces: CloudNamespace[] = [], records: CloudMetadata[] = [], timer: ReturnType<typeof setTimeout> | undefined;
+  let shown = 0;
   let connectionId: string = crypto.randomUUID();
 
   function tell(text: string, tone = "info") { message.hidden = false; message.dataset.tone = tone; message.textContent = text; }
@@ -78,6 +80,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     if (!encrypted.checked) passphrase.disabled = true;
     // 下载校验时不能收起，否则行内的「取消」也跟着藏起来。
     must<HTMLButtonElement>("cloud-found-close").disabled = busy || uploading;
+    must<HTMLButtonElement>("cloud-list-more").disabled = busy || uploading;
     for (const id of ["start", "retry", "discard", "browse"]) must<HTMLButtonElement>(`cloud-${id}`).disabled = busy || uploading || !config;
     // 下载预览时「取消」在被点的那一行里，顶部不再重复。
     must("cloud-cancel").hidden = (!busy && !uploading) || previewing;
@@ -103,11 +106,12 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     must("cloud-fact-connection").textContent = config
       ? `${config.connection.username} · ${folder} · ${encrypt ? "加密" : "不加密"}`
       : "尚未配置，请在下方「坚果云账号与加密」填写并保存";
-    const keepLast = config?.options.keepLast;
-    must("cloud-connection-hint").textContent = !config ? "未配置" : dirty ? "有未保存的修改"
-      : `已保存 · ${folder} · ${encrypt ? "加密" : "不加密"} · ${keepLast ? `保留 ${keepLast} 份` : "全部保留"}`;
-    for (const [id, saved] of [["password", secrets?.hasWebdavPassword], ["passphrase", secrets?.hasBackupPassphrase]] as const) {
-      must(`cloud-${id}-state`).textContent = !config ? "" : saved === undefined ? "保存状态未知" : saved ? "已保存" : "未保存";
+    must("cloud-connection-hint").textContent = !config ? "未配置" : dirty ? "有未保存的修改" : `已保存 · ${folder} · ${encrypt ? "加密" : "不加密"}`;
+    const sameAccount = accountUnchanged();
+    for (const [id, stored] of [["password", secrets?.hasWebdavPassword], ["passphrase", secrets?.hasBackupPassphrase]] as const) {
+      // 改了账号或地址还没保存时，旧账号的凭据不会沿用，也不能从这里移除。
+      const saved = sameAccount ? stored : false;
+      must(`cloud-${id}-state`).textContent = !config ? "" : !sameAccount ? "新账号未保存" : saved === undefined ? "保存状态未知" : saved ? "已保存" : "未保存";
       field(id).placeholder = saved === false || !config ? (id === "password" ? "粘贴坚果云第三方应用密码" : "设置备份加密口令") : (id === "password" ? "留空保留已保存的密码" : "留空保留已保存的口令");
       // 读不到凭据状态时仍允许移除（与 #312 后端修复一致）。
       must(`cloud-clear-${id}`).hidden = !config || saved === false;
@@ -177,8 +181,11 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     render();
   });
   // 已保存的凭据只对同一账号和地址有效；读不到凭据状态时不拦截，交给后端判断。
+  function accountUnchanged() {
+    return !!config && config.connection.endpoint === endpoint.value.trim() && config.connection.username === username.value.trim();
+  }
   function savedSecret(kind: "hasWebdavPassword" | "hasBackupPassphrase") {
-    if (!config || config.connection.endpoint !== endpoint.value.trim() || config.connection.username !== username.value.trim()) return false;
+    if (!accountUnchanged()) return false;
     return secrets ? secrets[kind] : true;
   }
   // 第一次备份必需的秘密在保存时就近提示，不等到点「立即备份」才报错。
@@ -191,9 +198,10 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     return true;
   }
   must("cloud-preset").addEventListener("click", () => { endpoint.value = "https://dav.jianguoyun.com/dav/"; dirty = true; render(); });
-  must("cloud-found-close").addEventListener("click", () => { if (!busy && !uploading) { clearFound(); progress.textContent = ""; } });
+  // 收起后重新读一次任务状态，进度行恢复显示失败原因等，而不是留空。
+  must("cloud-found-close").addEventListener("click", () => { if (!busy && !uploading) { clearFound(); void poll(); } });
   function clearFound() {
-    records = []; namespaces = []; list.replaceChildren();
+    records = []; namespaces = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
     must("cloud-namespace-label").hidden = true; must("cloud-found").hidden = true;
     must("cloud-list-note").textContent = "";
   }
@@ -241,6 +249,12 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     catch (error) {
       // 测试连接只读不建目录：所填目录不存在时认证已通过，首次备份会逐级创建。
       if (!errorCode(error).includes("NotFound") || !c.options.root?.length) throw error;
+      // 地址写错也会 NotFound：再只读检查一次 WebDAV 根目录，能读到才说明账号和地址都没问题。
+      try { await api.test(c.connection, { ...c.options, root: [] }); }
+      catch (rootError) {
+        if (errorCode(rootError).includes("NotFound")) throw new Error("找不到 WebDAV 地址：请检查地址是否正确。");
+        throw rootError;
+      }
       tell(`账号验证通过。目录 ${c.options.root.join("/")} 还不存在，第一次备份时会自动创建。`, "info");
       progress.textContent = "连接测试完成。";
       return;
@@ -263,12 +277,21 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   async function readNamespace() {
     const c = selectedConfig(), source = namespaces[Number(namespace.value)];
     if (!source) return;
-    records = []; list.replaceChildren();
-    progress.textContent = "正在读取轻量元数据（服务商限流时可能需要较长时间）…";
+    records = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
+    progress.textContent = "正在读取备份列表：每份约需 3 秒，备份越多越久，可随时取消。";
     const catalog = await api.list(c.connection, c.options, source.archiveId, source.deviceId);
     records = catalog.entries;
     must("cloud-list-note").textContent = "列表仅检查元数据和文件长度，尚未下载或校验内容。服务商目录可能不完整，自动清理保持关闭。";
-    list.replaceChildren(...records.map((item, index) => {
+    showMore();
+    controls();
+    progress.textContent = !records.length ? "此来源设备暂无可用备份。"
+      : records.length > shown ? `找到 ${records.length} 份备份，先显示最新 ${shown} 份。` : `找到 ${records.length} 份备份。`;
+  }
+  // 列表已全部读完（#322 前后端还不能分页读取），这里只分批显示，避免一次铺开几百行。
+  function showMore() {
+    const next = records.slice(shown, shown + PAGE);
+    list.append(...next.map((item, offset) => {
+      const index = shown + offset;
       const li = document.createElement("li"), info = document.createElement("div"), title = document.createElement("strong"), detail = document.createElement("span");
       const note = document.createElement("p"), actions = document.createElement("div"), button = document.createElement("button"), stop = document.createElement("button");
       title.textContent = shortTime(item.createdAt); title.title = cloudTime(item.createdAt);
@@ -279,12 +302,15 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       stop.type = "button"; stop.textContent = "取消"; stop.dataset.cancel = ""; stop.hidden = true;
       actions.append(button, stop); li.append(info, actions); return li;
     }));
-    controls();
-    progress.textContent = records.length ? `找到 ${records.length} 份备份。` : "此来源设备暂无可用备份。";
+    shown += next.length;
+    const more = must<HTMLButtonElement>("cloud-list-more"), rest = records.length - shown;
+    more.hidden = rest <= 0;
+    more.textContent = `再显示 ${Math.min(PAGE, rest)} 份（还有 ${rest} 份）`;
   }
+  must("cloud-list-more").addEventListener("click", () => { if (!busy && !uploading) { showMore(); controls(); } });
   must("cloud-browse").addEventListener("click", () => void guarded(async () => {
     const c = selectedConfig(); progress.textContent = "正在查找档案与来源设备，无需旧设备标识…";
-    list.replaceChildren(); records = []; must("cloud-list-note").textContent = "";
+    list.replaceChildren(); records = []; shown = 0; must("cloud-list-more").hidden = true; must("cloud-list-note").textContent = "";
     must("cloud-found").hidden = false;
     const discovery = await api.discover(c.connection, c.options);
     namespaces = discovery.sources;
@@ -326,7 +352,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
           rowState(cancelled ? "已取消下载，当前档案未替换。" : cloudError(error), cancelled ? "" : "error");
           return;
         } finally {
-          button.textContent = "下载校验并预览"; button.removeAttribute("aria-busy"); rowStop.hidden = true; previewing = false;
+          button.textContent = "下载校验并预览"; button.removeAttribute("aria-busy"); rowStop.hidden = true; previewing = false; controls();
         }
         rowState("已完整下载并校验，请在弹窗中核对差异后决定是否恢复。", "ok");
         const confirmed = await openSettingsDialog({ title: "恢复云端备份并替换当前档案？", size: "lg", intro: "恢复是整个档案替换，不是合并。当前档案会保留为回滚点。", body: fragment(

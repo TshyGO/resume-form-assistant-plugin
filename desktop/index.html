@@ -460,6 +460,7 @@
                       </div>
                     </div>
                     <ul id="cloud-list" class="settings-list"></ul>
+                    <div class="settings-actions cloud-list-more"><button id="cloud-list-more" type="button" hidden>再显示 10 份</button></div>
                     <p id="cloud-list-note" class="settings-caption"></p>
                   </div>
                   <div class="cloud-groups">
@@ -487,15 +488,15 @@
                               <input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" />
                               <p class="field-hint">在坚果云「账户信息 → 安全选项」里生成，不是登录密码。</p>
                             </div>
-                            <div class="settings-field">
+                            <div class="settings-field cloud-field-wide">
                               <label for="cloud-root">远端目录</label>
                               <input id="cloud-root" placeholder="例如 ResumeProBackups" spellcheck="false" />
                               <p class="field-hint">留空为根目录；不存在时第一次备份会自动创建。</p>
                             </div>
-                            <div class="settings-field">
-                              <label for="cloud-keep">云端最多保留</label>
+                            <!-- 保留清理在生产环境尚未开启（#322），先隐藏；已保存的值仍原样随配置保存。 -->
+                            <div class="settings-field" hidden>
+                              <label for="cloud-keep">保留份数</label>
                               <select id="cloud-keep"><option value="">全部保留</option><option value="5" selected>最近 5 份</option><option value="10">最近 10 份</option><option value="20">最近 20 份</option></select>
-                              <p class="field-hint">超出后自动删除本机上传的最旧备份。</p>
                             </div>
                             <div class="settings-field cloud-field-wide">
                               <label class="cloud-check"><input id="cloud-encrypted" type="checkbox" checked />上传前加密（推荐）</label>
@@ -513,7 +514,8 @@
                           <details class="settings-fold">
                             <summary>了解更多</summary>
                             <p class="settings-caption">更换口令后请先完成新手动备份，再启用自动计划；已有包和重试候选仍需创建时的口令，请分别保管。</p>
-                            <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。保留份数只作用于本机上传的备份，且只有确认上传完整、目录完整性可靠时才清理旧备份；其他设备和用户文件不会删除。</p>
+                            <p class="settings-caption">云端可见备份时间、大小、档案及设备随机标识和加密格式，解密前不显示业务数量。</p>
+                            <p class="settings-caption">目前不会自动删除云端的旧备份，备份会逐渐累积；需要时请在坚果云网页中手动删除不需要的旧备份。</p>
                             <p id="cloud-local-copy" class="settings-caption"></p>
                           </details>
                           <div class="settings-form-actions">
