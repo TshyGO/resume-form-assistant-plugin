@@ -42,12 +42,46 @@ fn status_ok(status: &str) -> bool {
         Some("HTTP/1.1" | "HTTP/1.0" | "HTTP/2" | "HTTP/2.0")
     ) && parts.next() == Some("200")
 }
+struct Multistatus {
+    children: Vec<Entry>,
+    requested: Option<Entry>,
+    count: usize,
+    continuation: bool,
+}
 pub(crate) fn parse(
     root: &Url,
     requested: &RemotePath,
     bytes: &[u8],
     known_limit: Option<usize>,
 ) -> Result<Listing, Error> {
+    let parsed = multistatus(root, requested, bytes)?;
+    // A missing self entry or server continuation hints cannot authorize cleanup.
+    let continuation = parsed.continuation || parsed.requested.is_none();
+    let completeness = match known_limit {
+        // A documented response cap detects truncation; it does not prove a
+        // particular account/server returned every entry. #306 must establish a
+        // verified listing contract before enabling retention cleanup in #305.
+        Some(limit) if parsed.count < limit && !continuation => Completeness::UnverifiedServer,
+        Some(_) => Completeness::PossiblyTruncated,
+        None => Completeness::UnverifiedServer,
+    };
+    Ok(Listing {
+        entries: parsed.children,
+        completeness,
+    })
+}
+/// Depth:0 properties of exactly the requested resource. Some servers (Nutstore)
+/// answer HEAD with `Content-Length: 0`, so object size comes from here.
+pub(crate) fn parse_object(
+    root: &Url,
+    requested: &RemotePath,
+    bytes: &[u8],
+) -> Result<Entry, Error> {
+    multistatus(root, requested, bytes)?
+        .requested
+        .ok_or_else(|| Error::new(ErrorKind::InvalidResponse))
+}
+fn multistatus(root: &Url, requested: &RemotePath, bytes: &[u8]) -> Result<Multistatus, Error> {
     let invalid = || Error::new(ErrorKind::InvalidResponse);
     if bytes.len() > MAX_XML_BYTES {
         return Err(Error::new(ErrorKind::TooLarge));
@@ -68,6 +102,7 @@ pub(crate) fn parse(
     }
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
+    let mut own = None;
     let mut count = 0usize;
     let mut continuation = false;
     for response in top.children().filter(|node| node.is_element()) {
@@ -118,29 +153,22 @@ pub(crate) fn parse(
         if etag.as_ref().is_some_and(|text| text.len() > 1024) {
             return Err(invalid());
         }
-        if &path != requested {
-            entries.push(Entry {
-                path,
-                collection,
-                size,
-                etag,
-            });
+        let entry = Entry {
+            path,
+            collection,
+            size,
+            etag,
+        };
+        if &entry.path == requested {
+            own = Some(entry);
+        } else {
+            entries.push(entry);
         }
     }
-    // A missing self entry or server continuation hints cannot authorize cleanup.
-    if !seen.contains(requested) {
-        continuation = true;
-    }
-    let completeness = match known_limit {
-        // A documented response cap detects truncation; it does not prove a
-        // particular account/server returned every entry. #306 must establish a
-        // verified listing contract before enabling retention cleanup in #305.
-        Some(limit) if count < limit && !continuation => Completeness::UnverifiedServer,
-        Some(_) => Completeness::PossiblyTruncated,
-        None => Completeness::UnverifiedServer,
-    };
-    Ok(Listing {
-        entries,
-        completeness,
+    Ok(Multistatus {
+        children: entries,
+        requested: own,
+        count,
+        continuation,
     })
 }

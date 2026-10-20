@@ -237,7 +237,9 @@ async fn methods_encoding_stream_lengths_and_safe_headers() {
     let (client, task) = server(7, move |request| {
         assert!(request.headers.contains_key("authorization"));
         assert!(!request.target.contains("synthetic-password"));
-        let methods = ["MKCOL", "PUT", "HEAD", "PROPFIND", "GET", "MOVE", "DELETE"];
+        let methods = [
+            "MKCOL", "PUT", "PROPFIND", "PROPFIND", "GET", "MOVE", "DELETE",
+        ];
         assert_eq!(request.method, methods[step]);
         step += 1;
         match request.method.as_str() {
@@ -251,11 +253,10 @@ async fn methods_encoding_stream_lengths_and_safe_headers() {
                 assert_eq!(request.body, b"synthetic-a");
                 reply(201, vec![])
             }
-            "HEAD" => header(
-                header(reply(200, vec![]), "Content-Length", "11"),
-                "ETag",
-                "opaque",
-            ),
+            "PROPFIND" if request.headers["depth"] == "0" => {
+                assert!(request.target.ends_with("%E4%B8%AD%E6%96%87%20%25%23"));
+                reply(207, xml(&response(&request.target, false)))
+            }
             "PROPFIND" => {
                 assert_eq!(request.headers["depth"], "1");
                 assert!(std::str::from_utf8(&request.body)
@@ -283,7 +284,9 @@ async fn methods_encoding_stream_lengths_and_safe_headers() {
         .put_file_new(&path, &file, 100, &cancel)
         .await
         .unwrap();
-    assert_eq!(client.head(&path, &cancel).await.unwrap().size, Some(11));
+    let info = client.stat(&path, &cancel).await.unwrap();
+    assert_eq!(info.size, Some(11));
+    assert_eq!(info.etag.as_deref(), Some("opaque"));
     assert!(!client
         .list(&RemotePath::root(), &cancel)
         .await
@@ -298,6 +301,58 @@ async fn methods_encoding_stream_lengths_and_safe_headers() {
         .await
         .unwrap();
     client.delete(&path, &cancel).await.unwrap();
+    task.await.unwrap();
+}
+
+// #316: Nutstore answers HEAD with `content-length: 0` and no ETag for a complete
+// file. Object size must come from PROPFIND Depth:0, and HEAD is never sent.
+#[tokio::test]
+async fn object_size_comes_from_depth_zero_propfind_not_nutstore_head() {
+    let path = RemotePath::new(&["resumetest", "b.rpbak.age"]).unwrap();
+    let cancel = CancellationToken::new();
+    let (client, task) = server(1, |request| match request.method.as_str() {
+        "HEAD" => header(reply(200, vec![]), "Content-Length", "0"),
+        "PROPFIND" => {
+            assert_eq!(request.headers["depth"], "0");
+            assert_eq!(request.target, "/dav/resumetest/b.rpbak.age");
+            reply(
+                207,
+                xml(r#"<d:response><d:href>/dav/resumetest/b.rpbak.age</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>14300</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#),
+            )
+        }
+        other => panic!("unexpected {other}"),
+    })
+    .await;
+    let info = client.stat(&path, &cancel).await.unwrap();
+    assert_eq!(info.size, Some(14300));
+    assert_eq!(info.etag, None);
+    task.await.unwrap();
+
+    // No size property is "unknown", never a match; a missing object is NotFound;
+    // a Depth:0 answer that omits the requested resource is not trusted.
+    let (client, task) = server(1, |_| {
+        reply(
+            207,
+            xml(r#"<d:response><d:href>/dav/resumetest/b.rpbak.age</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"#),
+        )
+    })
+    .await;
+    assert_eq!(client.stat(&path, &cancel).await.unwrap().size, None);
+    task.await.unwrap();
+    let (client, task) = server(1, |_| reply(404, vec![])).await;
+    assert_eq!(
+        client.stat(&path, &cancel).await.unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+    task.await.unwrap();
+    let (client, task) = server(1, |_| {
+        reply(207, xml(&response("/dav/resumetest/other", false)))
+    })
+    .await;
+    assert_eq!(
+        client.stat(&path, &cancel).await.unwrap_err().kind,
+        ErrorKind::InvalidResponse
+    );
     task.await.unwrap();
 }
 
@@ -333,14 +388,14 @@ async fn status_mapping_retry_limits_and_unknown_mutation_outcomes() {
     }
     let (client, task) = server(3, |_| header(reply(429, vec![]), "Retry-After", "0")).await;
     assert_eq!(
-        client.head(&path, &cancel).await.unwrap_err().kind,
+        client.stat(&path, &cancel).await.unwrap_err().kind,
         ErrorKind::RateLimited
     );
     task.await.unwrap();
     let (client, task) = server(1, |_| header(reply(429, vec![]), "Retry-After", "120")).await;
     let before = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
     assert_eq!(
-        client.head(&path, &cancel).await.unwrap_err().retry_after,
+        client.stat(&path, &cancel).await.unwrap_err().retry_after,
         Some(Duration::from_secs(120))
     );
     assert!(client.retry_not_before() >= before + 120);
@@ -437,11 +492,9 @@ async fn capability_probe_reports_move_and_conditional_write_semantics_and_scope
                     reply(201, vec![])
                 }
             }
-            "HEAD" => header(
-                header(reply(200, vec![]), "Content-Length", "11"),
-                "ETag",
-                "opaque",
-            ),
+            "PROPFIND" if request.headers["depth"] == "0" => {
+                reply(207, xml(&response(&request.target, false)))
+            }
             "GET" => reply(200, files[&request.target].clone()),
             "MOVE" if !supports_move => reply(405, vec![]),
             "MOVE" => {
@@ -580,7 +633,7 @@ async fn cancelling_a_partial_download_removes_the_temporary_file() {
 async fn unexpected_success_status_on_a_read_does_not_claim_a_mutation() {
     let (client, task) = server(1, |_| reply(201, vec![])).await;
     let error = client
-        .head(&RemotePath::new(&["a"]).unwrap(), &CancellationToken::new())
+        .stat(&RemotePath::new(&["a"]).unwrap(), &CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::InvalidResponse);

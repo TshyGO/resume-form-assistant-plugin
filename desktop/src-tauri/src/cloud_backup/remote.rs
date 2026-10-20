@@ -1,5 +1,9 @@
 use super::{fail, model::*, Result};
-use std::{collections::HashSet, future::Future, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    path::Path,
+};
 use webdav_client::{CancellationToken, Client, ErrorKind, Listing, ObjectInfo, RemotePath};
 
 // Static dispatch keeps the production adapter and fault-injection fake on the
@@ -10,7 +14,8 @@ pub trait Remote: Send + Sync {
         path: &RemotePath,
         cancel: &CancellationToken,
     ) -> impl Future<Output = Result<Listing>> + Send;
-    fn head(
+    /// Object size/ETag from WebDAV properties, never HEAD `Content-Length` (#316).
+    fn stat(
         &self,
         path: &RemotePath,
         cancel: &CancellationToken,
@@ -67,8 +72,8 @@ impl Remote for Client {
     async fn list(&self, p: &RemotePath, c: &CancellationToken) -> Result<Listing> {
         Ok(Client::list(self, p, c).await?)
     }
-    async fn head(&self, p: &RemotePath, c: &CancellationToken) -> Result<Option<ObjectInfo>> {
-        optional(Client::head(self, p, c).await)
+    async fn stat(&self, p: &RemotePath, c: &CancellationToken) -> Result<Option<ObjectInfo>> {
+        optional(Client::stat(self, p, c).await)
     }
     async fn read(&self, p: &RemotePath, c: &CancellationToken) -> Result<Option<Vec<u8>>> {
         optional(self.get_bytes(p, META_LIMIT, c).await)
@@ -171,6 +176,14 @@ pub async fn catalog_with_owned(
         if month_listing.entries.len() > MAX_CATALOG * 2 {
             return Err(fail("CATALOG_LIMIT"));
         }
+        // The PROPFIND listing already carries each file's size; Nutstore HEAD
+        // would report 0 (#316), and a per-package request costs a throttle slot.
+        let sizes: HashMap<String, Option<u64>> = month_listing
+            .entries
+            .iter()
+            .filter(|item| !item.collection && direct_child(&entry.path, &item.path))
+            .filter_map(|item| Some((item.path.segments().last()?.clone(), item.size)))
+            .collect();
         let mut packages = HashSet::new();
         let mut loose = Vec::new();
         for item in month_listing.entries {
@@ -207,9 +220,7 @@ pub async fn catalog_with_owned(
                 safe = false;
                 continue;
             }
-            let package = entry.path.child(&metadata.package)?;
-            let exists = remote.head(&package, cancel).await?;
-            if !exists.is_some_and(|info| info.size == Some(metadata.size_bytes)) {
+            if sizes.get(&metadata.package) != Some(&Some(metadata.size_bytes)) {
                 safe = false;
                 continue;
             }

@@ -97,8 +97,8 @@ impl Remote for Fake {
             })
         })
     }
-    async fn head(&self, p: &RemotePath, c: &CancellationToken) -> Result<Option<ObjectInfo>> {
-        self.act("HEAD", p, c, |s| {
+    async fn stat(&self, p: &RemotePath, c: &CancellationToken) -> Result<Option<ObjectInfo>> {
+        self.act("STAT", p, c, |s| {
             Ok(s.files.get(p.segments()).map(|b| ObjectInfo {
                 size: Some(b.len() as u64),
                 etag: None,
@@ -766,6 +766,40 @@ async fn missing_or_partial_metadata_is_not_a_success_and_unknown_foreign_object
     )
     .await
     .unwrap();
+    assert!(listing.entries.is_empty());
+    assert!(!listing.cleanup_safe);
+}
+
+// #316: package sizes for the catalog come from the month PROPFIND listing, not a
+// per-package object request (Nutstore HEAD reports 0, and each request is throttled).
+#[tokio::test]
+async fn catalog_uses_listing_sizes_without_per_package_requests() {
+    let l = layout();
+    let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    let root = RemotePath::root();
+    let catalog = || {
+        remote::catalog(
+            &remote,
+            &root,
+            &job.metadata.archive_id,
+            &job.metadata.device_id,
+            &lease.cancel,
+        )
+    };
+    let stats = remote.count("STAT");
+    let listing = catalog().await.unwrap();
+    assert_eq!(listing.entries.len(), 1);
+    assert_eq!(listing.entries[0].backup_id, job.metadata.backup_id);
+    assert_eq!(remote.count("STAT"), stats);
+    // A listed package whose size disagrees with its metadata is still excluded.
+    let folder = job.metadata.folder(&RemotePath::root()).unwrap();
+    remote.put_raw(
+        &folder.child(&job.metadata.package).unwrap(),
+        b"replaced".to_vec(),
+    );
+    let listing = catalog().await.unwrap();
     assert!(listing.entries.is_empty());
     assert!(!listing.cleanup_safe);
 }

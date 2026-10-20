@@ -55,7 +55,7 @@ impl Client {
         let blocker = folder.child("blocker.bin")?;
         self.put_bytes_new(&source, b"synthetic-a".to_vec(), cancel)
             .await?;
-        let meta = self.head(&source, cancel).await?;
+        let meta = self.stat(&source, cancel).await?;
         let create_only_put = match self
             .put_bytes_new(&source, b"synthetic-b".to_vec(), cancel)
             .await

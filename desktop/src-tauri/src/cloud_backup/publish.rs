@@ -15,7 +15,7 @@ impl Service {
         metadata: &Metadata,
         cancel: &CancellationToken,
     ) -> Result<bool> {
-        let Some(info) = remote.head(path, cancel).await? else {
+        let Some(info) = remote.stat(path, cancel).await? else {
             return Ok(false);
         };
         if info.size != Some(metadata.size_bytes) {
@@ -49,7 +49,7 @@ impl Service {
         } else {
             job.package_intent
         };
-        if remote.head(path, cancel).await?.is_some() {
+        if remote.stat(path, cancel).await?.is_some() {
             if !intended {
                 return Err(fail("REMOTE_CONFLICT"));
             }
@@ -72,7 +72,7 @@ impl Service {
             .put(path, &local::payload(&self.root, &job.id), cancel)
             .await?;
         let info = remote
-            .head(path, cancel)
+            .stat(path, cancel)
             .await?
             .ok_or_else(|| fail("PUBLISH_UNCONFIRMED"))?;
         if info.size != Some(job.metadata.size_bytes) {
@@ -113,7 +113,7 @@ impl Service {
         } else {
             if job.move_verified {
                 // A retry after a successful MOVE may already have the final.
-                if remote.head(&package, cancel).await?.is_some() {
+                if remote.stat(&package, cancel).await?.is_some() {
                     if !job.package_intent {
                         return Err(fail("REMOTE_CONFLICT"));
                     }
@@ -130,7 +130,7 @@ impl Service {
             }
             self.phase(Phase::Confirming)?;
             let info = remote
-                .head(&package, cancel)
+                .stat(&package, cancel)
                 .await?
                 .ok_or_else(|| fail("PUBLISH_UNCONFIRMED"))?;
             if info.size != Some(job.metadata.size_bytes) {
@@ -303,7 +303,7 @@ impl Service {
                 return Err(fail("DELETE_UNCONFIRMED"));
             }
             let package = folder.child(&metadata.package)?;
-            if let Some(info) = remote.head(&package, cancel).await? {
+            if let Some(info) = remote.stat(&package, cancel).await? {
                 if info.size != Some(metadata.size_bytes) {
                     return Err(fail("CATALOG_CHANGED"));
                 }
