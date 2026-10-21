@@ -26,7 +26,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeServerProcessId, PeekNamedPipe, WaitNamedPipeW,
     PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
@@ -260,6 +260,19 @@ impl Drop for Stream {
     fn drop(&mut self) {
         // SAFETY: closing a handle this stream owns.
         unsafe { CloseHandle(self.handle) };
+    }
+}
+
+impl Stream {
+    /// See `crate::Stream::peer_closed`.
+    pub fn peer_closed(&self) -> bool {
+        let mut available = 0u32;
+        // SAFETY: a zero-length peek reads nothing; `available` is a valid out pointer.
+        let ok = unsafe {
+            PeekNamedPipe(self.handle, ptr::null_mut(), 0, ptr::null_mut(), &mut available, ptr::null_mut())
+        };
+        // ERROR_BROKEN_PIPE, ERROR_NO_DATA (being closed), ERROR_PIPE_NOT_CONNECTED.
+        ok == 0 && matches!(last_error(), 109 | 232 | 233)
     }
 }
 

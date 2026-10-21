@@ -80,6 +80,12 @@ pub trait Application: Send + Sync + 'static {
         Err(ErrorCode::Unavailable)
     }
 
+    /// `apply` for a caller that may leave before the answer is ready: `peer_gone` says
+    /// whether it has (#283). Only work worth abandoning, an AI request, looks at it.
+    fn apply_watched(&self, request: &Request, _peer_gone: &dyn Fn() -> bool) -> Result<Answer, ErrorCode> {
+        self.apply(request)
+    }
+
     /// The write is already durable. The default has no window to tell.
     fn on_committed(&self, _notice: &ApplicationsChanged) {}
 
@@ -162,6 +168,13 @@ impl Application for OpenArchive {
             archive_id: identity.archive_id,
             restore_epoch: identity.restore_epoch,
         })
+    }
+
+    fn apply_watched(&self, request: &Request, peer_gone: &dyn Fn() -> bool) -> Result<Answer, ErrorCode> {
+        if request.message_type == resume_pro_protocol::MessageType::AiComplete {
+            return crate::bridge_services::answer_watched(request, self.services.as_ref(), peer_gone);
+        }
+        self.apply(request)
     }
 
     fn apply(&self, request: &Request) -> Result<Answer, ErrorCode> {
@@ -364,14 +377,27 @@ fn list_notice(request: &Request, answer: &Answer) -> Option<ApplicationsChanged
 /// The request is validated again here even though the host already did. The host is a
 /// separate process on the other side of a pipe; treating its output as trusted because
 /// it is ours would be the same mistake as trusting a local endpoint for being local.
-fn serve_connection<S: Read + Write, A: Application + ?Sized>(mut stream: S, application: &A) {
+/// Whether the caller on the other end of a connection has left (#283).
+pub trait Departure {
+    fn peer_gone(&self) -> bool;
+}
+
+impl Departure for local_ipc::Stream {
+    fn peer_gone(&self) -> bool {
+        self.peer_closed()
+    }
+}
+
+fn serve_connection<S: Read + Write + Departure, A: Application + ?Sized>(mut stream: S, application: &A) {
     loop {
         match nm_frame::read_frame(&mut stream) {
             Ok(None) => return,
             Ok(Some(frame)) => {
                 // The application is the writer, so a caller reaching it is authorised by
                 // construction; origin authorisation happened in the host.
-                let Some(response) = answer(&frame, application) else {
+                // The Native Messaging host connects once per browser message and dies
+                // with the port, so a caller that left is a stopped request.
+                let Some(response) = answer_watched(&frame, application, &|| stream.peer_gone()) else {
                     eprintln!("ipc: frame carries no usable messageId; closing");
                     return;
                 };
@@ -388,12 +414,19 @@ fn serve_connection<S: Read + Write, A: Application + ?Sized>(mut stream: S, app
     }
 }
 
+#[cfg(test)]
+fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<u8>> {
+    answer_watched(frame, application, &|| false)
+}
+
 /// Answer one frame as the application.
 ///
 /// Validated again here even though the host already did. The host is a separate process
 /// on the other side of a pipe; treating its output as trusted because it is ours would
 /// be the same mistake as trusting a local endpoint for being local.
-fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<u8>> {
+///
+/// `peer_gone` lets a long request stop early once the caller has left (#283).
+fn answer_watched<A: Application + ?Sized>(frame: &[u8], application: &A, peer_gone: &dyn Fn() -> bool) -> Option<Vec<u8>> {
     use resume_pro_protocol::{
         handshake_response_payload, validate_request_bytes, MessageType, MIN_PROTOCOL_VERSION,
     };
@@ -466,7 +499,7 @@ fn answer<A: Application + ?Sized>(frame: &[u8], application: &A) -> Option<Vec<
         }
         // The write has already committed by the time this returns, so the answer states
         // a fact rather than an intention.
-        Ok(request) => match application.apply(&request) {
+        Ok(request) => match application.apply_watched(&request, peer_gone) {
             Ok(answer) => {
                 // apply returns only after the archive transaction has committed.
                 // A read, a failed write, and an unfinished upload do not reach this.
@@ -638,6 +671,36 @@ mod tests {
             value["correlationId"],
             "33333333-3333-4333-8333-333333333333"
         );
+    }
+
+    /// #283：插件停止时浏览器结束 NM host，连接随之断开。正在处理的请求要能看到这一点，
+    /// 而不是一直做到底。
+    #[test]
+    fn a_request_sees_its_caller_hang_up() {
+        struct Waiting(std::sync::mpsc::Sender<bool>);
+        impl Application for Waiting {
+            fn identity(&self) -> Option<CurrentArchive> { None }
+            fn apply_watched(&self, _request: &Request, peer_gone: &dyn Fn() -> bool) -> Result<Answer, ErrorCode> {
+                let started = std::time::Instant::now();
+                let mut noticed = false;
+                while started.elapsed() < std::time::Duration::from_secs(5) {
+                    if peer_gone() { noticed = true; break; }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                let _ = self.0.send(noticed);
+                Err(ErrorCode::Unavailable)
+            }
+        }
+        const AI: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"ai.complete","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"purpose":"analyze","system":"SYS","user":"USER"}}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _service = start(dir.path(), Arc::new(Waiting(tx))).unwrap();
+        let endpoint = Endpoint::for_data_root(dir.path()).unwrap();
+        let mut client = local_ipc::connect(&endpoint).unwrap();
+        nm_frame::write_frame(&mut client, framed(AI)[4..].to_vec().as_slice()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(client);
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(true), "the hang-up reached the request");
     }
 
     #[test]

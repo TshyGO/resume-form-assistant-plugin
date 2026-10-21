@@ -110,6 +110,17 @@ impl Listener {
 #[derive(Debug)]
 pub struct Stream(platform::Stream);
 
+impl Stream {
+    /// Whether the other end has gone away, without blocking and without consuming
+    /// anything: pending data stays readable and counts as the peer still being there.
+    ///
+    /// Meant for a server that is busy with one request and wants to stop early when the
+    /// caller has left (#283). Only call it between reads and writes on this stream.
+    pub fn peer_closed(&self) -> bool {
+        self.0.peer_closed()
+    }
+}
+
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.0.read(buf)
@@ -205,6 +216,38 @@ mod tests {
         client.join().unwrap();
         let mut buf = [0u8; 8];
         assert_eq!(served.read(&mut buf).unwrap(), 0, "a closed peer reads as EOF");
+    }
+
+    #[test]
+    fn a_departed_peer_is_noticed_without_reading_pending_bytes() {
+        let (_dir, endpoint) = endpoint();
+        let mut listener = Listener::bind(&endpoint).unwrap();
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let client = {
+            let endpoint = endpoint.clone();
+            std::thread::spawn(move || {
+                let mut stream = connect(&endpoint).unwrap();
+                stream.write_all(b"hi").unwrap();
+                stream.flush().unwrap();
+                wait.recv().unwrap();
+                drop(stream);
+            })
+        };
+        let mut served = listener.accept().unwrap();
+        // Bytes in flight may not have landed yet; wait until the peek can see them.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!served.peer_closed(), "a connected peer with pending bytes is still there");
+        let mut buf = [0u8; 2];
+        served.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"hi", "peeking must not consume what the peer sent");
+        assert!(!served.peer_closed(), "a connected, quiet peer is still there");
+        go.send(()).unwrap();
+        client.join().unwrap();
+        let started = std::time::Instant::now();
+        while !served.peer_closed() {
+            assert!(started.elapsed() < std::time::Duration::from_secs(5), "a closed peer is noticed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]

@@ -922,7 +922,8 @@
       const waited = now() - state.since;
       if (waited < SHOW_WAIT_AFTER_MS) return state.message;
       const counted = `${state.message}（已等待 ${Math.floor(waited / 1000)} 秒）`;
-      return waited >= EXPLAIN_WAIT_AFTER_MS ? `${counted}${WAIT_EXPLAINED}` : counted;
+      // 按配方填写只用日常模型，不提深度思考。
+      return waited >= EXPLAIN_WAIT_AFTER_MS && state.mode === "analyze" ? `${counted}。${WAIT_EXPLAINED}` : counted;
     }
 
     function describe() {

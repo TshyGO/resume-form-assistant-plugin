@@ -374,7 +374,8 @@ fn stream_failed(fault: StreamFault, host: &str, model: &str, started: Instant) 
 
 /// 把 OpenAI 兼容的 SSE 流（一行一个 `data: {...}`，以 `data: [DONE]` 结束）拼回完整正文。
 /// 只收 `choices[0].delta.content`：推理内容（`reasoning_content`）和 `:` 开头的心跳只说明
-/// 服务商还在干活，不进结果，也不占大小上限。
+/// 服务商还在干活，不进结果，也不计入正文的大小上限。另有一条内存保护：不论内容是什么，
+/// 单独一行超过 `MAX_RESPONSE_BYTES` 都按过大处理，追加之前就检查。
 #[derive(Default)]
 struct StreamText {
     line: Vec<u8>,
@@ -385,17 +386,16 @@ struct StreamText {
 impl StreamText {
     fn feed(&mut self, mut bytes: &[u8]) -> Result<(), StreamFault> {
         while !self.done {
-            let Some(at) = bytes.iter().position(|byte| *byte == b'\n') else {
-                self.line.extend_from_slice(bytes);
-                break;
-            };
-            self.line.extend_from_slice(&bytes[..at]);
+            let end = bytes.iter().position(|byte| *byte == b'\n');
+            let piece = &bytes[..end.unwrap_or(bytes.len())];
+            if self.line.len() + piece.len() > MAX_RESPONSE_BYTES {
+                return Err(StreamFault::TooLarge);
+            }
+            self.line.extend_from_slice(piece);
+            let Some(at) = end else { break };
             bytes = &bytes[at + 1..];
             let line = std::mem::take(&mut self.line);
             self.take_line(&line)?;
-        }
-        if self.line.len() > MAX_RESPONSE_BYTES {
-            return Err(StreamFault::TooLarge);
         }
         Ok(())
     }
@@ -436,7 +436,7 @@ impl StreamText {
 
 /// 这一行是排障时唯一的线索，也是唯一允许写出去的东西：
 /// 主机名、模型名、结果、耗时。**没有正文、没有 Key、没有完整地址**（data-privacy §9）。
-fn log_line(host: &str, model: &str, outcome: &str, started: Instant) {
+pub(crate) fn log_line(host: &str, model: &str, outcome: &str, started: Instant) {
     eprintln!(
         "ai: {host} · {model} · {outcome} · {} ms",
         started.elapsed().as_millis()
@@ -787,5 +787,16 @@ mod tests {
         let piece = "x".repeat(MAX_RESPONSE_BYTES / 2 + 1);
         big.feed(delta(&piece).as_bytes()).unwrap();
         assert_eq!(big.feed(delta(&piece).as_bytes()).unwrap_err(), StreamFault::TooLarge);
+    }
+
+    /// 内存保护：一行还没收完就超过上限，追加之前就拒绝，缓冲不会先涨过上限。
+    #[test]
+    fn an_endless_line_is_refused_before_it_is_buffered() {
+        let mut text = StreamText::default();
+        let half = vec![b'x'; MAX_RESPONSE_BYTES / 2];
+        text.feed(b"data: ").unwrap();
+        text.feed(&half).unwrap();
+        assert_eq!(text.feed(&half).unwrap_err(), StreamFault::TooLarge);
+        assert!(text.line.len() <= MAX_RESPONSE_BYTES, "{}", text.line.len());
     }
 }

@@ -116,6 +116,34 @@ pub struct Stream {
     inner: UnixStream,
 }
 
+impl Stream {
+    /// See `crate::Stream::peer_closed`.
+    pub fn peer_closed(&self) -> bool {
+        use std::os::unix::io::AsRawFd;
+        if self.inner.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let mut byte = 0u8;
+        // SAFETY: `byte` is valid for one byte; the descriptor is owned by `inner`, which
+        // outlives the call. MSG_PEEK leaves any pending data where it is.
+        let got = unsafe { recv(self.inner.as_raw_fd(), (&mut byte as *mut u8).cast(), 1, MSG_PEEK) };
+        let would_block = got < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock;
+        // Restore blocking before anyone reads or writes the frame again. If that fails
+        // the next read reports it; nothing here can do better.
+        let _ = self.inner.set_nonblocking(false);
+        // 0 is end of stream; any other error (reset) also means the peer is gone.
+        got == 0 || (got < 0 && !would_block)
+    }
+}
+
+/// `MSG_PEEK` has the same value on Linux and macOS.
+const MSG_PEEK: i32 = 0x2;
+
+extern "C" {
+    /// SAFETY: callers pass a buffer valid for `len` bytes and an open descriptor.
+    fn recv(fd: i32, buf: *mut std::ffi::c_void, len: usize, flags: i32) -> isize;
+}
+
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.inner.read(buf)

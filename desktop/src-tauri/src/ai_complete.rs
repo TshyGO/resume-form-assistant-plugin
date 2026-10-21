@@ -30,6 +30,9 @@ pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// 强档请求一次生成最长多久。推理模型在大页面上要两三分钟，这里留足余量；用户随时可以停止。
 pub const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// 插件停止或断开之后，多久内发现并丢掉这次请求（#283）。
+pub const CANCEL_POLL: Duration = Duration::from_millis(500);
+
 /// 怎么等服务商的回答。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wait {
@@ -134,6 +137,36 @@ pub async fn complete(
     Ok(text)
 }
 
+/// 和 `complete` 一样，但调用方走了就不再等（#283）：每 `CANCEL_POLL` 问一次 `peer_gone`，
+/// 为真就丢掉这次请求，连带关掉和服务商的连接，返回 `None`。流式生成时服务商一般会因此
+/// 停下，但不保证停止计算或计费。
+pub async fn complete_unless_gone(
+    provider: &AiProvider,
+    key: &str,
+    system: &str,
+    user: &str,
+    wait: Wait,
+    peer_gone: &dyn Fn() -> bool,
+) -> Option<Result<String, CommandError>> {
+    let started = std::time::Instant::now();
+    tokio::select! {
+        result = complete(provider, key, system, user, wait) => Some(result),
+        () = departure(peer_gone) => {
+            crate::ai_client::log_line(&host_of(&provider.api_url), &provider.model, "cancelled", started);
+            None
+        }
+    }
+}
+
+async fn departure(peer_gone: &dyn Fn() -> bool) {
+    loop {
+        tokio::time::sleep(CANCEL_POLL).await;
+        if peer_gone() {
+            return;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +247,52 @@ mod tests {
         let request = server.join().unwrap();
         assert!(request.contains(r#""stream":true"#) && request.contains(r#""temperature":0"#), "{request}");
         assert!(request.contains("SYS") && request.contains("USER"));
+    }
+
+    /// 插件停止后：桌面在一个轮询间隔内放弃这次请求，并关掉和服务商的连接。
+    /// 多线程运行时：关连接的是 HTTP 客户端在运行时里的后台任务，和正式环境一样。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_is_dropped_soon_after_its_caller_leaves() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        // 一直在「思考」的服务商：每 100 毫秒发一段，直到连接被关掉。
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 65536];
+            let _ = stream.read(&mut buf).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").unwrap();
+            let started = std::time::Instant::now();
+            let line = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"...\"}}]}\n\n";
+            while started.elapsed() < Duration::from_secs(10) {
+                if stream.write_all(line).and_then(|_| stream.flush()).is_err() {
+                    return Some(started.elapsed());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            None
+        });
+        let gone = Arc::new(AtomicBool::new(false));
+        let leaving = Arc::clone(&gone);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            leaving.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", wait_for("analyze", true), &|| gone.load(Ordering::SeqCst)).await;
+        assert!(reply.is_none(), "{reply:?}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        let closed_after = tokio::task::spawn_blocking(move || server.join().unwrap()).await.unwrap();
+        assert!(closed_after.is_some_and(|after| after < Duration::from_secs(4)), "the provider connection is closed: {closed_after:?}");
+    }
+
+    #[tokio::test]
+    async fn a_caller_that_stays_gets_the_answer() {
+        let (url, server) = serve_once(200, r#"{"choices":[{"message":{"content":"[]"}}]}"#);
+        let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5)), &|| false).await;
+        assert_eq!(reply.unwrap().unwrap(), "[]");
+        server.join().unwrap();
     }
 
     #[test]
