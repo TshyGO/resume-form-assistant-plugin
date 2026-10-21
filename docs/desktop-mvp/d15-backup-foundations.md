@@ -66,9 +66,9 @@
   有界写盘，完整后发布新任务文件并返回实际 SHA-256。ETag 仅作不透明服务端 token。
 - XML 最多 1 MiB、200,000 节点、1,000 response，禁止 DTD。坚果云目录响应达到
   750 项（含自身）/缺少自身/出现 continuation 信号时返回 PossiblyTruncated；
-  低于边界也返回 UnverifiedServer，因为尚无真实账号列表完整性证据。只有 Complete 可供上层清理使用；
-  当前生产接口不产生 Complete，须 #306 建立可验证的列表契约后再由 #305 启用保留清理。
-  目前无经验证分页协议，不能把单页当全集清理。
+  低于边界也返回 UnverifiedServer，因为尚无真实账号列表完整性证据。生产接口仍不产生 Complete，
+  不能把单页当全集。#322 起保留清理不再依赖 Complete：只把列表里出现的条目当作存在的证据，
+  漏项只会多保留，见 [d15-cloud-publication.md](d15-cloud-publication.md#列表与清理)。
 - `probe_capabilities(parent, recorded_uuid, cancel)` 只使用新建 UUID 测试目录和合成内容，
   观察条件 PUT、MOVE/Overwrite、长度/ETag、列表与清理结果。先记录 UUID，未知结果可按
   此目录对账；取消后不发更多请求。MOVE 不支持时 #305 使用唯一包 PUT + 最后发布元数据。

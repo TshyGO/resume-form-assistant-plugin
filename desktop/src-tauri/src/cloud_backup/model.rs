@@ -251,11 +251,59 @@ pub struct Status {
     pub latest_package: Option<String>,
     pub latest_metadata: Option<Metadata>,
 }
+/// One backup as seen in a month PROPFIND: names and sizes only, no metadata GET.
+/// The remote `.meta.json` (with the content hash) is read and compared at preview.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Listed {
+    pub backup_id: String,
+    /// Second precision, from the file name; metadata may carry sub-seconds.
+    pub created_at: String,
+    pub archive_id: String,
+    pub device_id: String,
+    pub package: String,
+    pub size_bytes: u64,
+    pub encryption_format: Encryption,
+}
+impl Listed {
+    pub fn matches(&self, metadata: &Metadata) -> bool {
+        self.backup_id == metadata.backup_id
+            && self.archive_id == metadata.archive_id
+            && self.device_id == metadata.device_id
+            && self.package == metadata.package
+            && self.size_bytes == metadata.size_bytes
+            && self.encryption_format == metadata.encryption_format
+            && stem(&self.created_at, &self.backup_id).ok()
+                == stem(&metadata.created_at, &metadata.backup_id).ok()
+    }
+    pub fn folder(&self, root: &RemotePath) -> Result<RemotePath> {
+        Ok(device_folder(root, &self.archive_id, &self.device_id)?
+            .child(&month(&self.created_at)?)?)
+    }
+    pub fn meta_name(&self) -> Result<String> {
+        Ok(format!("{}.meta.json", stem(&self.created_at, &self.backup_id)?))
+    }
+}
+impl From<&Metadata> for Listed {
+    fn from(m: &Metadata) -> Self {
+        Self {
+            backup_id: m.backup_id.clone(),
+            created_at: m.created_at.clone(),
+            archive_id: m.archive_id.clone(),
+            device_id: m.device_id.clone(),
+            package: m.package.clone(),
+            size_bytes: m.size_bytes,
+            encryption_format: m.encryption_format.clone(),
+        }
+    }
+}
+/// Whole months, newest first. `next` is the oldest month returned; the next
+/// page reads strictly older months.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Catalog {
-    pub entries: Vec<Metadata>,
-    pub cleanup_safe: bool,
+pub struct Page {
+    pub entries: Vec<Listed>,
+    pub next: Option<String>,
     /// PROPFIND length checks do not verify package content hashes.
     pub content_hash_verified: bool,
 }

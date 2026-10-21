@@ -1,6 +1,6 @@
 import { mountCloudSchedule } from "./cloud-schedule-ui";
 import type { Invoke } from "./api";
-import { cloudBackupApi, type CloudConfig, type CloudJob, type CloudMetadata, type CloudNamespace } from "./cloud-backup-api";
+import { cloudBackupApi, type CloudConfig, type CloudJob, type CloudListed, type CloudNamespace } from "./cloud-backup-api";
 import { restoreBody } from "./backup-ui";
 import { factList, fragment, openSettingsDialog, paragraph } from "./settings-dialog";
 import { must } from "./dom";
@@ -70,8 +70,9 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   let config: CloudConfig | null = null, dirty = false, loaded = false, busy = false, uploading = false, previewing = false;
   let secrets: { hasWebdavPassword: boolean; hasBackupPassphrase: boolean } | null = null;
   let jobState: "failed" | "candidate" | null = null, scheduleAttention = false;
-  let namespaces: CloudNamespace[] = [], records: CloudMetadata[] = [], timer: ReturnType<typeof setTimeout> | undefined;
-  let shown = 0;
+  let namespaces: CloudNamespace[] = [], records: CloudListed[] = [], timer: ReturnType<typeof setTimeout> | undefined;
+  // records 是已读到的整月备份，next 是还没读的更早月份的游标。
+  let shown = 0, next: string | null = null;
   let connectionId: string = crypto.randomUUID();
 
   function tell(text: string, tone = "info") { message.hidden = false; message.dataset.tone = tone; message.textContent = text; }
@@ -153,7 +154,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       let text = job && !(job.phase === "succeeded" && !job.warnings.length)
         ? `${phaseNames[job.phase]}${job.metadata.sizeBytes ? ` · ${size(job.metadata.sizeBytes)}` : ""}` : "";
       if (job?.errorCode) text += `。${cloudError(job.errorCode)}`;
-      if (job?.warnings.length) text += "。清理警告：目录完整性、探测清理或本地清理未确认；保留已有文件，请检查后手动处理。";
+      if (job?.warnings.length) text += "。清理未完成：旧备份、探测文件或本机临时文件没有删干净，已有文件都保留，下次备份会再试。";
       progress.textContent = text;
       jobState = status.retryPackage ? "candidate" : job && ["failed", "interrupted"].includes(job.phase) ? "failed" : null;
       latest.textContent = status.latestMetadata ? `${shortTime(status.latestMetadata.createdAt)} · ${size(status.latestMetadata.sizeBytes)}` : "暂无";
@@ -201,7 +202,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   // 收起后重新读一次任务状态，进度行恢复显示失败原因等，而不是留空。
   must("cloud-found-close").addEventListener("click", () => { if (!busy && !uploading) { clearFound(); void poll(); } });
   function clearFound() {
-    records = []; namespaces = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
+    records = []; namespaces = []; shown = 0; next = null; list.replaceChildren(); must("cloud-list-more").hidden = true;
     must("cloud-namespace-label").hidden = true; must("cloud-found").hidden = true;
     must("cloud-list-note").textContent = "";
   }
@@ -280,20 +281,31 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   async function readNamespace() {
     const c = selectedConfig(), source = namespaces[Number(namespace.value)];
     if (!source) return;
-    records = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
-    progress.textContent = "正在读取备份列表：每份约需 3 秒，备份越多越久，可随时取消。";
-    const catalog = await api.list(c.connection, c.options, source.archiveId, source.deviceId);
-    records = catalog.entries;
-    must("cloud-list-note").textContent = "列表仅检查元数据和文件长度，尚未下载或校验内容。服务商目录可能不完整，自动清理保持关闭。";
+    records = []; shown = 0; next = null; list.replaceChildren(); must("cloud-list-more").hidden = true;
+    progress.textContent = "正在读取最新的备份，可随时取消。";
+    const page = await api.list(c.connection, c.options, source.archiveId, source.deviceId);
+    records = page.entries; next = page.next;
+    must("cloud-list-note").textContent = "列表只读取了云端目录，尚未下载或校验内容；预览时才会核对。";
     showMore();
     controls();
     progress.textContent = !records.length ? "此来源设备暂无可用备份。"
-      : records.length > shown ? `找到 ${records.length} 份备份，先显示最新 ${shown} 份。` : `找到 ${records.length} 份备份。`;
+      : records.length > shown || next ? `先显示最新 ${shown} 份，可继续查看更早的备份。` : `找到 ${records.length} 份备份。`;
   }
-  // 列表已全部读完（#322 前后端还不能分页读取），这里只分批显示，避免一次铺开几百行。
+  // 后端按整月读取（#322）。已读到的先分批显示，不够一批时再读更早的月份。
+  async function loadMore() {
+    const c = selectedConfig(), source = namespaces[Number(namespace.value)];
+    if (next && source && records.length - shown < PAGE) {
+      progress.textContent = "正在读取更早的备份，可随时取消。";
+      const page = await api.list(c.connection, c.options, source.archiveId, source.deviceId, next);
+      records.push(...page.entries); next = page.next;
+    }
+    const before = shown;
+    showMore();
+    progress.textContent = shown > before ? `已显示 ${shown} 份。` : "没有更早的备份了。";
+  }
   function showMore() {
-    const next = records.slice(shown, shown + PAGE);
-    list.append(...next.map((item, offset) => {
+    const batch = records.slice(shown, shown + PAGE);
+    list.append(...batch.map((item, offset) => {
       const index = shown + offset;
       const li = document.createElement("li"), info = document.createElement("div"), title = document.createElement("strong"), detail = document.createElement("span");
       const note = document.createElement("p"), actions = document.createElement("div"), button = document.createElement("button"), stop = document.createElement("button");
@@ -305,15 +317,16 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       stop.type = "button"; stop.textContent = "取消"; stop.dataset.cancel = ""; stop.hidden = true;
       actions.append(button, stop); li.append(info, actions); return li;
     }));
-    shown += next.length;
+    shown += batch.length;
     const more = must<HTMLButtonElement>("cloud-list-more"), rest = records.length - shown;
-    more.hidden = rest <= 0;
-    more.textContent = `再显示 ${Math.min(PAGE, rest)} 份（还有 ${rest} 份）`;
+    more.hidden = rest <= 0 && !next;
+    // 云端还有没读的月份时总数未知，只说再显示一批。
+    more.textContent = next ? "再显示 10 份" : `再显示 ${Math.min(PAGE, rest)} 份（还有 ${rest} 份）`;
   }
-  must("cloud-list-more").addEventListener("click", () => { if (!busy && !uploading) { showMore(); controls(); } });
+  must("cloud-list-more").addEventListener("click", () => void guarded(loadMore));
   must("cloud-browse").addEventListener("click", () => void guarded(async () => {
     const c = selectedConfig(); progress.textContent = "正在查找档案与来源设备，无需旧设备标识…";
-    list.replaceChildren(); records = []; shown = 0; must("cloud-list-more").hidden = true; must("cloud-list-note").textContent = "";
+    list.replaceChildren(); records = []; shown = 0; next = null; must("cloud-list-more").hidden = true; must("cloud-list-note").textContent = "";
     must("cloud-found").hidden = false;
     const discovery = await api.discover(c.connection, c.options);
     namespaces = discovery.sources;
@@ -341,8 +354,8 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     }
     const button = target.closest<HTMLButtonElement>("button[data-index]");
     if (!button) return;
-    const metadata = records[Number(button.dataset.index)];
-    if (!metadata) return;
+    const entry = records[Number(button.dataset.index)];
+    if (!entry) return;
     // 进度、取消和失败原因都显示在被点的这一行，不依赖卡片顶部的文案。
     const row = button.closest("li")!, note = row.querySelector<HTMLElement>(".settings-inline-msg")!, rowStop = row.querySelector<HTMLButtonElement>("button[data-cancel]")!;
     const rowState = (text: string, tone: Tone = "") => { note.textContent = text; note.dataset.tone = tone; };
@@ -350,11 +363,11 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       const c = selectedConfig();
       button.textContent = "正在下载并校验…"; button.setAttribute("aria-busy", "true");
       rowStop.hidden = false; rowStop.disabled = false; previewing = true; controls();
-      rowState(`正在下载 ${size(metadata.sizeBytes)} 并校验传输哈希、加密认证和档案内部文件；文件较大或服务商限流时可能需要几分钟。`);
+      rowState(`正在下载 ${size(entry.sizeBytes)} 并校验传输哈希、加密认证和档案内部文件；文件较大或服务商限流时可能需要几分钟。`);
       let restored = false, cleanupWarning = false, refreshWarning = false, restoreError: string | null = null;
       try {
         let result: Awaited<ReturnType<typeof api.preview>>;
-        try { result = await api.preview(c.connection, c.options, metadata); }
+        try { result = await api.preview(c.connection, c.options, entry); }
         catch (error) {
           const cancelled = errorCode(error).includes("CANCELLED");
           rowState(cancelled ? "已取消下载，当前档案未替换。" : cloudError(error), cancelled ? "" : "error");
@@ -365,7 +378,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         rowState("已完整下载并校验，请在弹窗中核对差异后决定是否恢复。", "ok");
         const confirmed = await openSettingsDialog({ title: "恢复云端备份并替换当前档案？", size: "lg", intro: "恢复是整个档案替换，不是合并。当前档案会保留为回滚点。", body: fragment(
           factList([["预览有效期", cloudTime(result.expiresAt)], ["云端文件", "传输与内部校验通过"]]),
-          restoreBody(metadata.package, result.preview),
+          restoreBody(entry.package, result.preview),
           paragraph("恢复后本机自动云备份会关闭；设备标识与删除权限不会从备份迁移。", "settings-dialog-warn")),
           confirmLabel: "确认替换当前档案", busyLabel: "正在恢复…", action: async () => {
             try { const outcome = await api.restore(result.token); restored = true; cleanupWarning = outcome.cleanupWarning; refreshWarning = outcome.refreshWarning; }

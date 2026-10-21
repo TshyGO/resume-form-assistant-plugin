@@ -4,7 +4,10 @@ use super::{
     remote::{self, Remote},
     Result, Service,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
+
+/// Each deletion costs about five throttled requests (~15 s on Nutstore).
+const MAX_DELETIONS_PER_RUN: usize = 10;
 use webdav_client::{CancellationToken, RemotePath};
 
 impl Service {
@@ -222,73 +225,70 @@ impl Service {
         let Some(keep) = job.options.keep_last else {
             return Ok(());
         };
-        // Destructive decisions use both remote structure and local job receipts.
-        // No metadata alone can confer this machine's deletion authority.
-        let receipts = self
-            .journal
-            .lock()
-            .map_err(|_| fail("LOCAL_STATE"))?
-            .receipts
-            .clone();
-        let mut owned_loose = HashSet::new();
+        // #322: deletion authority comes from this machine's receipts, and the
+        // retained count only from backups a listing positively shows intact. A
+        // listing that omits entries can make us keep more, never delete more;
+        // so cleanup does not depend on proving the listing complete. Files
+        // without a receipt (other devices, user files, parts) are never touched.
+        let (receipts, latest) = {
+            let state = self.journal.lock().map_err(|_| fail("LOCAL_STATE"))?;
+            (state.receipts.clone(), state.latest.clone())
+        };
         let current_time = date(&now())?;
+        let mut owned = Vec::new();
         for r in receipts.iter().filter(|r| {
-            (r.orphan || r.deleting)
+            !r.orphan
+                && !r.deleting
                 && r.scope == job.scope
                 && r.root == job.options.root
                 && r.metadata.device_id == job.metadata.device_id
                 && r.metadata.archive_id == job.metadata.archive_id
         }) {
-            if (current_time - date(&r.touched_at)?).whole_hours() < 24 {
-                continue;
-            }
-            let folder = r.metadata.folder(root)?;
-            if r.part_intent {
-                owned_loose.insert(folder.child(&format!("{}.part", r.metadata.package))?);
-            }
-            if r.package_intent {
-                owned_loose.insert(folder.child(&r.metadata.package)?);
-            }
+            owned.push((date(&r.metadata.created_at)?, r));
         }
-        let catalog = remote::catalog_with_owned(
-            remote,
-            root,
-            &job.metadata.archive_id,
-            &job.metadata.device_id,
-            cancel,
-            &owned_loose,
-        )
-        .await?;
-        if !catalog.cleanup_safe {
-            return Err(fail("INCOMPLETE_LIST"));
-        }
-        if catalog.entries.iter().any(|m| {
-            !receipts.iter().any(|r| {
-                !r.orphan && r.scope == job.scope && r.root == job.options.root && r.metadata == *m
-            })
-        }) {
-            return Err(fail("OWNERSHIP_UNPROVEN"));
-        }
-        for metadata in catalog.entries.iter().skip(keep) {
-            if metadata.backup_id == job.id {
-                continue;
-            }
-            let Some(receipt) = receipts.iter().find(|r| {
-                !r.orphan
-                    && r.scope == job.scope
-                    && r.root == job.options.root
-                    && r.metadata == *metadata
-            }) else {
-                return Err(fail("OWNERSHIP_UNPROVEN"));
-            };
+        owned.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| y.metadata.backup_id.cmp(&x.metadata.backup_id)));
+        let mut months: HashMap<RemotePath, HashMap<String, Option<u64>>> = HashMap::new();
+        let (mut kept, mut deleted) = (0usize, 0usize);
+        for (_, receipt) in owned {
+            let metadata = &receipt.metadata;
             let folder = metadata.folder(root)?;
-            let meta_path = folder.child(&metadata.meta_name()?)?;
+            if !months.contains_key(&folder) {
+                let files = remote::month_files(remote, &folder, cancel).await?;
+                months.insert(folder.clone(), files);
+            }
+            let files = &months[&folder];
+            let meta_name = metadata.meta_name()?;
+            let listed = files.contains_key(&meta_name)
+                && files.get(&metadata.package) == Some(&Some(metadata.size_bytes));
+            if kept < keep {
+                kept += usize::from(listed);
+                continue;
+            }
+            let protected = metadata.backup_id == job.id || latest.as_ref() == Some(&metadata.backup_id);
+            if protected {
+                continue;
+            }
+            if !listed {
+                // Gone from a listing we just read: forget it. Forgetting never
+                // grants deletion; if it was merely omitted, it is kept forever.
+                if !files.contains_key(&meta_name) && !files.contains_key(&metadata.package) {
+                    let id = metadata.backup_id.clone();
+                    self.update(|s| s.receipts.retain(|r| r.metadata.backup_id != id))?;
+                }
+                continue;
+            }
+            // Bounded per backup so a long-accumulated backlog drains over several
+            // runs instead of holding the job for an hour of throttled requests.
+            if deleted == MAX_DELETIONS_PER_RUN {
+                break;
+            }
+            let meta_path = folder.child(&meta_name)?;
             // Re-read directly before deleting. A list snapshot is not sufficient.
             let raw = remote
                 .read(&meta_path, cancel)
                 .await?
                 .ok_or_else(|| fail("CATALOG_CHANGED"))?;
-            if Metadata::parse(&raw)? != receipt.metadata {
+            if Metadata::parse(&raw)? != *metadata {
                 return Err(fail("CATALOG_CHANGED"));
             }
             self.update(|s| {
@@ -318,6 +318,7 @@ impl Service {
                 s.receipts
                     .retain(|r| r.metadata.backup_id != metadata.backup_id)
             })?;
+            deleted += 1;
         }
         // Conservative orphan recovery: local evidence + >24h grace + no public
         // metadata + full content hash. Never touch the active candidate/latest.

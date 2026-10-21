@@ -39,15 +39,15 @@ impl Service {
         self: &Arc<Self>,
         client: &impl remote::Remote,
         options: &Options,
-        metadata: Metadata,
+        listed: Listed,
         passphrase: Option<SecretString>,
     ) -> Result<Preview> {
         let lease = self.reserve()?;
         // A new selection invalidates the previous confirmation, including on failure.
         self.clear_preview_inner()?;
-        let id = metadata.backup_id.clone();
+        let id = listed.backup_id.clone();
         let (task, package) = self
-            .download_inner(client, options, metadata, passphrase, &lease.cancel)
+            .download_inner(client, options, &listed, passphrase, &lease.cancel)
             .await?;
         let service = self.clone();
         let cancel = lease.cancel.clone();

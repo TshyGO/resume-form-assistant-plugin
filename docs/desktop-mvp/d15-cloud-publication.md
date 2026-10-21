@@ -63,22 +63,31 @@ UTC 时间、文件名和完整候选字节。先用 PROPFIND Depth 0 查对象�
 
 ## 列表与清理
 
-按明确的 archiveId/deviceId 扫描月份，最多 120 个月、512 次元数据读取，每份最多 16 KiB。
-读取并发为 1，复用 WebDAV Client 的共享 3 秒请求间隔。列表从不逐个下载大包。
-仅展示目录、元数据、文件名匹配且月份目录 PROPFIND 列表中包体长度相符的记录（不再逐包请求），返回 `contentHashVerified=false`。
+按明确的 archiveId/deviceId 读取月份目录，最多 120 个月，每个月份目录最多 1024 项（#322）。
+列表只用 PROPFIND：不逐份读元数据，也不下载包。一行 = 本应用格式的 `<时间>-<backupId>.meta.json`
+文件名 + 同名且唯一的 `.rpbak` 或 `.rpbak.age` 包（列表里有长度）+ 文件名月份与所在目录一致；
+未知文件、`.part`、只有包或只有元数据的都不是行。按整月从新到旧返回，直到至少 10 份，
+`next` 是最后读到的月份，下一页只读更早的月份；每个月份只列一次。返回 `contentHashVerified=false`。
+预览时才直接读取该行的远端元数据：解析失败或与列表行（ID、档案、设备、包名、长度、加密方式）不符即拒绝，
+内容哈希取自元数据，下载后校验。坚果云每次请求间隔 3 秒，第一页通常是 2 次请求。
 
 默认在同 archiveId/deviceId 下跨月份共保留最近 5 份，`keepLast=null` 禁用所有自动删除。
-先对整个候选列表验证归属，再删除；每份须匹配本机持久回执、连接 scope、配置根路径及完整元数据。
-删除前直接重读元数据，先删元数据并确认不可见，再删包。中断或响应丢失只产生清理警告。
-不同设备目录、用户文件、无效/变动元数据、未知 `.part`、不完整列表和归属不明都会停止清理。
+清理不依赖列表完整（#322）：服务商列表可能漏项，但不会凭空多出文件。所以只用「列表里看得到」做正面证据：
+
+1. 候选只来自本机回执（同连接 scope、根路径、档案、设备，非孤儿、非删除中），按创建时间从新到旧；
+2. 依次读取回执所在的月份目录，元数据文件在、包长度与回执一致的才算「已保留」，凑够 `keepLast` 份；
+3. 更早且同样在列表里看得到的才删除：删除前直接重读元数据并与回执完全一致，先删元数据并确认不可见，再删包；
+4. 列表里看不到的回执既不计入保留、也不删除；元数据和包都不在时忘掉该回执（忘掉不授予任何删除权）。
+
+因此列表漏掉最新的几份时，结果是多留几份旧的，不会多删。没有回执的对象（其他设备、用户文件、
+未知 `.part`）一律不动。当前作业和最近成功的备份不会被删。每次最多删除 10 份（约 50 次请求），
+长期积累的旧备份分几次备份清完。中断、响应丢失、元数据变动只产生清理警告；
+预期内的「不需要删除」「看不到所以保留」不是警告。
 
 孤儿只处理有本机回执的对象；从最近操作/显式放弃起至少 24 小时，且不存在发布元数据、
 包大小与完整内容哈希都匹配后才删。回执持久记录正在删除的对象，以便下一次安全对账。
 当前作业、最近成功包不进入孤儿删除集合。宽限期内的对象不会被当成垃圾。
-
-**当前生产 WebDAV 列表始终为 UnverifiedServer/PossiblyTruncated，所以自动删除保持关闭并警告。**
-保留算法通过完整性明确的模拟服务验证；#306 需要先建立真实账号的列表完整性契约，
-再由专门的后续改动开放生产清理，不能由 UI 传一个 bool 绕过此保护。
+本机最多保留 256 条回执；更早的回执被遗忘后，对应云端备份不会再被自动删除。
 
 ## #306 的调用接口
 
@@ -91,11 +100,11 @@ TypeScript：`desktop/src/cloud-backup-api.ts`；Tauri 命令：
 | `cloud_backup_cancel()` | 取消当前云操作 |
 | `cloud_backup_retry(connection, options)` | 同一连接/账号/根目录/加密模式重试原候选；无需重新加密 |
 | `cloud_backup_discard()` | 明确放弃候选；保留远端归属证据，保留 latest |
-| `cloud_backup_list(connection, options, archiveId, deviceId)` | 读取某设备的合法备份列表 |
+| `cloud_backup_list(connection, options, archiveId, deviceId, before)` | 按整月读取某设备的备份列表（只读目录）；`before` 为上一页的 `next` |
 | `cloud_backup_config()` / `cloud_backup_save_config(config)` | 读取/保存本机非秘密配置，保存后保持手动模式 |
 | `cloud_backup_test(connection, options)` | 只读测试所填根目录，不承诺上传权限 |
 | `cloud_backup_discover(connection, options)` | 返回 sources 与 warnings；无需旧设备 ID，部分目录失败保留可用来源 |
-| `cloud_backup_preview(connection, options, metadata)` | 完整下载校验后返回 token、有效期与业务差异，不返回本地临时路径 |
+| `cloud_backup_preview(connection, options, entry)` | 读取并核对该行远端元数据，完整下载校验后返回 token、有效期与业务差异，不返回本地临时路径 |
 | `cloud_backup_clear_preview()` | 作废预览并检查临时明文清理结果 |
 | `cloud_backup_restore(token)` | 单次消费绑定令牌，返回 report 与 cleanupWarning，不把清理失败当作恢复失败 |
 
