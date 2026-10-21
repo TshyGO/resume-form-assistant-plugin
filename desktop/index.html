@@ -485,13 +485,13 @@
                                 <label for="cloud-password">第三方应用密码</label>
                                 <span class="cloud-secret"><span id="cloud-password-state" class="field-hint"></span><button id="cloud-clear-password" type="button" class="settings-link-danger" hidden>移除</button></span>
                               </div>
-                              <input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" />
-                              <p class="field-hint">在坚果云「账户信息 → 安全选项」里生成，不是登录密码。</p>
+                              <input id="cloud-password" type="password" autocomplete="new-password" placeholder="留空保留已保存的密码" aria-describedby="cloud-password-state cloud-password-hint" />
+                              <p id="cloud-password-hint" class="field-hint">在坚果云「账户信息 → 安全选项」里生成，不是登录密码。</p>
                             </div>
                             <div class="settings-field cloud-field-wide">
                               <label for="cloud-root">远端目录</label>
-                              <input id="cloud-root" placeholder="例如 ResumeProBackups" spellcheck="false" />
-                              <p class="field-hint">留空为根目录；不存在时第一次备份会自动创建。</p>
+                              <input id="cloud-root" placeholder="例如 ResumeProBackups" spellcheck="false" aria-describedby="cloud-root-hint" />
+                              <p id="cloud-root-hint" class="field-hint">留空为根目录；不存在时第一次备份会自动创建。</p>
                             </div>
                             <!-- 保留清理在生产环境尚未开启（#322），先隐藏；已保存的值仍原样随配置保存。 -->
                             <div class="settings-field" hidden>
@@ -506,8 +506,8 @@
                                 <label for="cloud-passphrase">备份加密口令</label>
                                 <span class="cloud-secret"><span id="cloud-passphrase-state" class="field-hint"></span><button id="cloud-clear-passphrase" type="button" class="settings-link-danger" hidden>移除</button></span>
                               </div>
-                              <input id="cloud-passphrase" type="password" autocomplete="new-password" placeholder="留空保留已保存的口令" />
-                              <p class="field-hint">恢复备份时需要。丢失后无法解密，请另外保管。</p>
+                              <input id="cloud-passphrase" type="password" autocomplete="new-password" placeholder="留空保留已保存的口令" aria-describedby="cloud-passphrase-state cloud-passphrase-hint" />
+                              <p id="cloud-passphrase-hint" class="field-hint">恢复备份时需要。丢失后无法解密，请另外保管。</p>
                             </div>
                           </div>
                           <p class="settings-caption">密码和口令只存系统凭据库，保存后不会回显；换账号或地址须重新填写。即使云端加密，本机仍保留一份明文备份。</p>

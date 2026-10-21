@@ -432,3 +432,30 @@ test("the hidden retention value is kept when saving", async () => {
   await waitFor(() => expect(calls.some((c) => c.name === "cloud_backup_save_config")).toBe(true));
   expect((calls.find((c) => c.name === "cloud_backup_save_config")!.args!.config as { options: { keepLast: number } }).options.keepLast).toBe(10);
 });
+
+test("a failed row cancel request restores the row so the download can be cancelled again", async () => {
+  let fail: (error: unknown) => void = () => {};
+  const { refresh, query } = setup({
+    cloud_backup_preview: () => new Promise((_, reject) => { fail = reject; }),
+    cloud_backup_cancel: async () => { throw { code: "CLOUD_BUSY" }; },
+  });
+  await refresh(); click("cloud-browse");
+  await waitFor(() => expect((query.getByRole("button", { name: "下载校验并预览" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(query.getByRole("button", { name: "下载校验并预览" }));
+  const row = query.getByRole("listitem");
+  const stop = await waitFor(() => within(row).getByRole("button", { name: "取消" }) as HTMLButtonElement);
+  fireEvent.click(stop);
+  expect(row.textContent).toContain("正在取消…");
+  await waitFor(() => expect(stop.disabled).toBe(false));
+  expect(row.textContent).toContain("可能需要几分钟");
+  expect(row.textContent).not.toContain("正在取消…");
+  fail({ code: "CLOUD_CANCELLED" });
+  await waitFor(() => expect(row.textContent).toContain("已取消下载"));
+});
+
+test("field hints are announced with their inputs", () => {
+  for (const [input, ids] of [["cloud-password", "cloud-password-state cloud-password-hint"], ["cloud-root", "cloud-root-hint"], ["cloud-passphrase", "cloud-passphrase-state cloud-passphrase-hint"]]) {
+    expect(document.getElementById(input)!.getAttribute("aria-describedby")).toBe(ids);
+    for (const id of ids.split(" ")) expect(document.getElementById(id)).toBeTruthy();
+  }
+});

@@ -272,7 +272,10 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const ok = await openSettingsDialog({ title: "放弃上次候选包？", body: paragraph("本机候选包会删除；上一份成功备份保留。未确认的远端对象不会被强行删除，可能需要手动对账。"), confirmLabel: "放弃候选包", action: () => api.discard() });
     if (ok) { tell("已放弃候选包。", "success"); await poll(); }
   }));
-  const cancel = () => api.cancel().then(() => tell("已请求取消；正在完成安全收尾，加密密钥计算期间请稍候。"), (error) => tell(cloudError(error), "error"));
+  const cancel = () => api.cancel().then(
+    () => { tell("已请求取消；正在完成安全收尾，加密密钥计算期间请稍候。"); return true; },
+    (error) => { tell(cloudError(error), "error"); return false; },
+  );
   must("cloud-cancel").addEventListener("click", () => void cancel());
   async function readNamespace() {
     const c = selectedConfig(), source = namespaces[Number(namespace.value)];
@@ -326,9 +329,14 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const stop = target.closest<HTMLButtonElement>("button[data-cancel]");
     if (stop) {
       stop.disabled = true;
-      const note = stop.closest("li")?.querySelector(".settings-inline-msg");
+      const note = stop.closest("li")?.querySelector(".settings-inline-msg"), before = note?.textContent ?? "";
       if (note) note.textContent = "正在取消…";
-      void cancel();
+      // 取消请求失败且下载仍在进行时，恢复这一行，让用户可以再次取消。
+      void cancel().then((ok) => {
+        if (ok || stop.hidden) return;
+        stop.disabled = false;
+        if (note) note.textContent = before;
+      });
       return;
     }
     const button = target.closest<HTMLButtonElement>("button[data-index]");
