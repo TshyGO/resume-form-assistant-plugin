@@ -284,6 +284,29 @@ test("happy path: analyse once, fill with the strong-tier budget that is left, r
   assert.equal(h.controller.report().tierUsed, "strong");
 });
 
+test("a long wait for the model shows the seconds waited, and only while waiting", async () => {
+  let clock = 1_000_000;
+  let answer;
+  const h = harness({
+    now: () => clock,
+    analyze: (request) => new Promise((resolve) => {
+      h.calls.analyze.push(request);
+      answer = () => resolve({ success: true, tierUsed: "strong", spec: { pageState: "editing", fields: [{ ref: "e1", label: "姓名", control: "text" }] } });
+    })
+  });
+  await h.controller.start();
+  const analyzing = await h.settle((state) => state.phase === "analyzing");
+  assert.equal(analyzing.message, "AI 正在分析页面结构…", "no counter in the first seconds");
+  clock += 4_999;
+  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…");
+  clock += 40_001;
+  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…（已等待 45 秒）");
+  answer();
+  const done = await h.settle(finished);
+  clock += 60_000;
+  assert.doesNotMatch(h.controller.describe().message, /已等待/, `${done.phase} is not a wait`);
+});
+
 test("three outline parts take three analyses; the fill gets only the three calls left", async () => {
   const h = harness();
   h.env.parts = [1, 2, 3].map((n) => ({ text: `part ${n}`, refs: [`e${n}`, `e${n + 3}`] }));

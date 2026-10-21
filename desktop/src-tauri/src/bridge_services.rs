@@ -110,7 +110,10 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
         "AI_NETWORK" => "network",
         _ => "bad_response",
     };
-    AiReply::Failed { reason, http_status: None, host: None }
+    // 等不到、连不上时带上主机名，插件的提示才说得清是哪家服务商（#283）。主机名在
+    // 失败回复里一直是允许的字段，旧插件照样收。
+    let host = host.filter(|_| matches!(reason, "timeout" | "network"));
+    AiReply::Failed { reason, http_status: None, host }
 }
 
 impl BridgeServices for DesktopBridgeServices {
@@ -157,8 +160,8 @@ impl BridgeServices for DesktopBridgeServices {
             return (from_ai_error(err, None), tier);
         }
         let host = safe_host(&provider.api_url);
-        let timeout = ai_complete::timeout_for(purpose);
-        let reply = match tauri::async_runtime::block_on(ai_complete::complete(&provider, &key, system, user, timeout)) {
+        let wait = ai_complete::wait_for(purpose, strong);
+        let reply = match tauri::async_runtime::block_on(ai_complete::complete(&provider, &key, system, user, wait)) {
             Ok(text) => AiReply::Ok(text),
             Err(err) => from_ai_error(err, host),
         };
@@ -503,7 +506,8 @@ mod tests {
                 AiReply::Failed { reason, http_status, host } => {
                     assert_eq!(reason, expected);
                     assert_eq!(http_status, status);
-                    if status.is_some() { assert_eq!(host.as_deref(), Some("api.example.com")); }
+                    let named = status.is_some() || matches!(expected, "timeout" | "network");
+                    assert_eq!(host.as_deref(), named.then_some("api.example.com"), "{code}");
                 }
                 AiReply::Ok(_) => panic!("{code} cannot be a success"),
             }

@@ -78,6 +78,18 @@ test("an old desktop and a strong provider without a key get their own messages"
   assert.equal(keyless.openView, "settings-ai");
 });
 
+test("an analysis timeout names the strong model's host, the seconds waited and what to try", async () => {
+  const env = worker(() => ({ ok: false, reason: "timeout", tier: "strong", host: "api.deepseek.com" }));
+  let clock = 0;
+  env.context.performance.now = () => (clock += 90_000);
+  const reply = await env.ask({ type: "AI_ANALYZE_PAGE", requestId: "r1", outline: "[区块] 基本信息\n  e1 input[text] ← 姓名", part: 1, parts: 1 });
+  assert.equal(reply.success, false);
+  assert.equal(reply.errorCode, "timeout");
+  assert.match(reply.error, /^强模型（api\.deepseek\.com）等了 \d+ 秒没有完成页面分析。/);
+  assert.match(reply.error, /稍后重试/);
+  assert.match(reply.error, /不带深度思考的模型/);
+});
+
 test("an empty or oversized outline is refused before anything is sent", async () => {
   const env = worker(() => ({ ok: true, text: SPEC }));
   assert.equal((await env.ask({ type: "AI_ANALYZE_PAGE", requestId: "a", outline: "", part: 1, parts: 1 })).errorCode, "input_too_large");

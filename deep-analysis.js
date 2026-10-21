@@ -290,6 +290,9 @@
 
   // preview：等用户在侧栏确认动作计划；acting：逐个执行确认过的动作。两者都占着本页（不能同时开始别的填写）。
   const ACTIVE = ["outlining", "analyzing", "preview", "acting", "filling"];
+  // #283：等模型回答的这两步，等久了在文案后面加上已等待的秒数，用户能看出它没卡住。
+  const WAITING = ["analyzing", "filling"];
+  const SHOW_WAIT_AFTER_MS = 5000;
   const PHASES = ["idle", ...ACTIVE, "completed", "needs_action", "failed", "stopped"];
   const ACTION_KINDS_ALL = ["edit", "expand", "add"];
   const countKinds = (list, key = item => item.kind) => Object.fromEntries(ACTION_KINDS_ALL.map(kind => [kind,
@@ -327,7 +330,8 @@
   // #225：说明书要求「编辑 / 展开 / 新增」时先给出动作计划，用户确认后逐个执行并核验，
   // 再重新生成大纲、重新分析一次（这一轮提出的动作一律不执行），最后照常填写。分析、匹配共用一份 6 次的预算。
   function createController(deps) {
-    const state = { phase: "idle", mode: "analyze", requestId: "", message: "", notes: [], progress: null, result: null, run: null, report: null };
+    const state = { phase: "idle", mode: "analyze", requestId: "", message: "", since: 0, notes: [], progress: null, result: null, run: null, report: null };
+    const now = deps.now || (() => Date.now());
 
     function stale(run) {
       if (run.invalid) return run.invalid;
@@ -340,6 +344,7 @@
     function set(run, phase, message, extra = {}) {
       if (state.run !== run) return false;
       if (state.phase === "preview" && phase !== "preview") deps.highlight?.(null);
+      if (state.phase !== phase || state.message !== message) state.since = now();
       state.phase = phase;
       state.message = message;
       if (extra.progress !== undefined) state.progress = extra.progress;
@@ -909,6 +914,12 @@
 
     // 侧栏能看到的全部内容：固定的阶段、我们自己写的文案和计数、预览项（固定格式「区块：按钮」，
     // 区块标题和按钮文字都来自脱敏后的大纲），不含模型原文。
+    function shownMessage() {
+      if (!WAITING.includes(state.phase)) return state.message;
+      const waited = now() - state.since;
+      return waited >= SHOW_WAIT_AFTER_MS ? `${state.message}（已等待 ${Math.floor(waited / 1000)} 秒）` : state.message;
+    }
+
     function describe() {
       const run = state.run;
       if (run && !run.done && ACTIVE.includes(state.phase) && stale(run)) invalidate(stale(run));
@@ -917,7 +928,7 @@
         phase: state.phase,
         mode: state.mode,
         requestId: state.requestId,
-        message: state.message,
+        message: shownMessage(),
         notes: [...state.notes],
         progress: state.progress ? { ...state.progress } : null,
         result: state.result ? { ...state.result } : null,

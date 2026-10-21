@@ -11,14 +11,14 @@ const BASE = {
   resumeFields: [{ group: '基本信息', key: '姓名', value: '测试用户' }, { group: '教育背景', key: '学校', value: '大学乙' }]
 };
 
-function worker(respond = () => ({ ok: true, text: '[{"fieldId":"school","value":"大学乙"}]' })) {
+function worker(respond = () => ({ ok: true, text: '[{"fieldId":"school","value":"大学乙"}]' }), { now = () => 0 } = {}) {
   const sent = [];
   let sequence = 0;
   const context = vm.createContext({
     importScripts() {}, ResumeProAIHelpers: helpers,
     ResumeProProfile: require('../profile-fields.js'),
     ResumeProFormAgent: require('../form-agent.js'),
-    AbortController, TextEncoder, performance: { now: () => 0 },
+    AbortController, TextEncoder, performance: { now },
     crypto: { randomUUID: () => `synthetic-${++sequence}` }
   });
   context.self = {
@@ -163,6 +163,21 @@ test('desktop failure reasons produce distinct Chinese guidance', async () => {
     assert.match(result.warning, new RegExp(phrase), reason);
     if (reason === 'not_configured') assert.equal(result.openView, 'settings-ai');
   }
+});
+
+test('a timeout says which tier, which host and how long it waited', async () => {
+  let clock = 0;
+  const now = () => clock;
+  const strong = worker(() => { clock += 245_400; return { ok: false, reason: 'timeout', tier: 'strong', host: 'api.deepseek.com' }; }, { now });
+  const result = await strong.run({ ...BASE, formFields: [BASE.formFields[1]], tier: 'strong' });
+  assert.match(result.warning, /^强模型（api\.deepseek\.com）等了 245 秒没有完成字段匹配。/);
+  assert.match(result.warning, /不带深度思考的模型/);
+  assert.equal(result.diagnostics.errorCode, 'timeout');
+
+  clock = 0;
+  const daily = worker(() => { clock += 120_000; return { ok: false, reason: 'timeout', host: 'api.example.com' }; }, { now });
+  const plain = await daily.run({ ...BASE, formFields: [BASE.formFields[1]] });
+  assert.equal(plain.warning, 'AI 服务商（api.example.com）等了 120 秒没有返回，请稍后重试。');
 });
 
 test('a later batch failure keeps matches already returned by the desktop', async () => {
