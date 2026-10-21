@@ -263,6 +263,35 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 .settings-dialog .settings-form { margin-top: 0; }
 .settings-dialog textarea { padding: 10px 12px; resize: vertical; }
 .settings-dialog .settings-callout { margin: 0; }
+/* 坚果云备份（#315）：先看状态和主操作，三个设置分组折叠在下面，按钮紧挨所控制的字段。 */
+#cloud-backup { padding-bottom: 4px; }
+.cloud-overview { padding-top: 16px; }
+.cloud-overview-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.cloud-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 12px 0 0; font-size: 13px; line-height: 1.65; }
+.cloud-facts dt { color: var(--muted); }
+.cloud-facts dd { margin: 0; overflow-wrap: anywhere; }
+.cloud-overview > .settings-callout { margin-top: 12px; }
+.cloud-found { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.cloud-found-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 10px; }
+#view-settings .cloud-found-head select { min-height: 34px; max-width: 100%; }
+.cloud-found .settings-list li { align-items: flex-start; }
+.cloud-found .settings-list .settings-inline-msg { margin: 4px 0 0; font-size: 12px; }
+.cloud-list-more { justify-content: center; margin-top: 10px; }
+.cloud-list-more:not(:has(> :not([hidden]))) { display: none; }
+.cloud-groups { margin-top: 16px; }
+#cloud-form { display: contents; }
+.cloud-groups .settings-card-fold { border-top: 1px solid var(--line); }
+.cloud-groups .settings-card-fold > summary { padding: 14px 0; border-radius: 0; }
+.cloud-groups .settings-fold-body, #cloud-auto-form { display: flex; flex-direction: column; gap: 14px; }
+.cloud-groups .settings-fold-body { padding: 0 0 20px; border-top: 0; }
+.cloud-groups .settings-fold-body > *, #cloud-auto-form > * { margin: 0; }
+.cloud-groups .settings-fold { margin: -6px 0 0; }
+.cloud-groups .settings-fold > p { margin: 6px 0 0; }
+.cloud-notes > .settings-caption { margin: 0; }
+.cloud-groups .settings-fold-title { font-size: 14px; }
+.cloud-field-wide { grid-column: 1 / -1; }
+.cloud-secret { display: inline-flex; align-items: baseline; gap: 10px; }
+.cloud-check { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
 .feedback-preview { max-height: 280px; margin: 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--card-line); border-radius: 8px; background: #f4f7f6; font: 12px/1.6 Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1180px) {
   #view-settings { padding: 20px 20px 32px; }

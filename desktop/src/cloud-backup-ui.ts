@@ -52,10 +52,14 @@ const phaseNames: Record<CloudJob["phase"], string> = {
 const running = (job: CloudJob | null) => !!job && ["packing", "encrypting", "uploading", "confirming"].includes(job.phase);
 const size = (bytes: number) => `${(bytes / 1_000_000).toFixed(2)} MB`;
 export const cloudTime = (utc: string) => `${new Date(utc).toLocaleString()}（本地） / ${utc}（UTC）`;
+const shortTime = (utc: string) => new Date(utc).toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+const errorCode = (error: unknown) => typeof error === "string" ? error : (error as { code?: string } | null)?.code ?? "";
+type Tone = "ok" | "warn" | "error" | "";
+const PAGE = 10;
 
 export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promise<void> = () => {}) {
   const api = cloudBackupApi(invoke);
-  const refreshSchedule = mountCloudSchedule(api, () => selectedConfig());
+  const refreshSchedule = mountCloudSchedule(api, () => selectedConfig(), (attention) => { scheduleAttention = attention; render(); });
   const form = must<HTMLFormElement>("cloud-form");
   const field = (id: string) => must<HTMLInputElement>(`cloud-${id}`);
   const endpoint = field("endpoint"), username = field("username"), root = field("root");
@@ -63,17 +67,59 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   const keep = must<HTMLSelectElement>("cloud-keep");
   const message = must("cloud-message"), progress = must("cloud-progress"), latest = must("cloud-latest");
   const namespace = must<HTMLSelectElement>("cloud-namespace"), list = must("cloud-list");
-  let config: CloudConfig | null = null, dirty = false, loaded = false, busy = false, uploading = false;
+  let config: CloudConfig | null = null, dirty = false, loaded = false, busy = false, uploading = false, previewing = false;
+  let secrets: { hasWebdavPassword: boolean; hasBackupPassphrase: boolean } | null = null;
+  let jobState: "failed" | "candidate" | null = null, scheduleAttention = false;
   let namespaces: CloudNamespace[] = [], records: CloudMetadata[] = [], timer: ReturnType<typeof setTimeout> | undefined;
+  let shown = 0;
   let connectionId: string = crypto.randomUUID();
 
   function tell(text: string, tone = "info") { message.hidden = false; message.dataset.tone = tone; message.textContent = text; }
   function controls() {
     for (const control of form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button")) control.disabled = busy || uploading;
-    for (const id of ["start", "retry", "discard", "browse"]) must<HTMLButtonElement>(`cloud-${id}`).disabled = busy || uploading;
-    must("cloud-cancel").hidden = !busy && !uploading;
+    if (!encrypted.checked) passphrase.disabled = true;
+    // 下载校验时不能收起，否则行内的「取消」也跟着藏起来。
+    must<HTMLButtonElement>("cloud-found-close").disabled = busy || uploading;
+    must<HTMLButtonElement>("cloud-list-more").disabled = busy || uploading;
+    for (const id of ["start", "retry", "discard", "browse"]) must<HTMLButtonElement>(`cloud-${id}`).disabled = busy || uploading || !config;
+    // 下载预览时「取消」在被点的那一行里，顶部不再重复。
+    must("cloud-cancel").hidden = (!busy && !uploading) || previewing;
     namespace.disabled = busy || uploading;
-    for (const button of list.querySelectorAll<HTMLButtonElement>("button")) button.disabled = busy || uploading;
+    for (const button of list.querySelectorAll<HTMLButtonElement>("button[data-index]")) button.disabled = busy || uploading;
+  }
+  // 卡片顶部的一句话状态 + 各分组折叠栏右侧的当前取值，都从这里统一刷新。
+  function render() {
+    const encrypt = config ? config.options.encrypted !== false : encrypted.checked;
+    const [tone, text]: [Tone, string] = !config ? ["", "未配置"]
+      : uploading ? ["", "正在备份"]
+      : dirty ? ["warn", "有未保存的修改"]
+      : jobState === "failed" ? ["error", "上次备份失败"]
+      : jobState === "candidate" ? ["warn", "有未完成的候选包"]
+      : secrets && !secrets.hasWebdavPassword ? ["warn", "缺少应用密码"]
+      : secrets && encrypt && !secrets.hasBackupPassphrase ? ["warn", "缺少加密口令"]
+      : scheduleAttention ? ["warn", "自动备份需要处理"]
+      : ["ok", "已配置"];
+    const state = must("cloud-state");
+    state.textContent = text;
+    if (tone) state.dataset.tone = tone; else delete state.dataset.tone;
+    const folder = config?.options.root?.join("/") || "根目录";
+    must("cloud-fact-connection").textContent = config
+      ? `${config.connection.username} · ${folder} · ${encrypt ? "加密" : "不加密"}`
+      : "尚未配置，请在下方「坚果云账号与加密」填写并保存";
+    must("cloud-connection-hint").textContent = !config ? "未配置" : dirty ? "有未保存的修改" : `已保存 · ${folder} · ${encrypt ? "加密" : "不加密"}`;
+    const sameAccount = accountUnchanged();
+    for (const [id, stored] of [["password", secrets?.hasWebdavPassword], ["passphrase", secrets?.hasBackupPassphrase]] as const) {
+      // 改了账号或地址还没保存时，旧账号的凭据不会沿用，也不能从这里移除。
+      const saved = sameAccount ? stored : false;
+      must(`cloud-${id}-state`).textContent = !config ? "" : !sameAccount ? "新账号未保存" : saved === undefined ? "保存状态未知" : saved ? "已保存" : "未保存";
+      field(id).placeholder = saved === false || !config ? (id === "password" ? "粘贴坚果云第三方应用密码" : "设置备份加密口令") : (id === "password" ? "留空保留已保存的密码" : "留空保留已保存的口令");
+      // 读不到凭据状态时仍允许移除（与 #312 后端修复一致）。
+      must(`cloud-clear-${id}`).hidden = !config || saved === false;
+    }
+    for (const note of form.querySelectorAll<HTMLElement>(".cloud-form-msg")) {
+      note.textContent = dirty ? "有未保存的修改。变更账号或地址后，原凭据不会沿用。" : "";
+      note.dataset.tone = dirty ? "warn" : "";
+    }
   }
   function selectedConfig(): CloudConfig {
     if (!config || dirty) throw new Error("请先保存配置和凭据，再执行云端操作。");
@@ -91,8 +137,9 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   }
   async function secretStatus() {
     if (!config) return;
-    const state = await api.credentialStatus(config.connection);
-    must("cloud-secret-status").textContent = `此账号的应用密码：${state.hasWebdavPassword ? "已保存" : "未保存"}；加密口令：${state.hasBackupPassphrase ? "已保存" : "未保存"}。`;
+    secrets = null;
+    try { secrets = await api.credentialStatus(config.connection); }
+    finally { render(); }
   }
   let polling: Promise<void> | null = null;
   async function readStatus() {
@@ -101,12 +148,17 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       const status = await api.status();
       if (status.cleanupWarning) tell("有过期预览的临时明文清理未确认，请重启应用后检查工作目录。备份状态仍可读取。", "warn");
       uploading = running(status.job);
-      progress.textContent = status.job ? `${phaseNames[status.job.phase]}${status.job.metadata.sizeBytes ? ` · ${size(status.job.metadata.sizeBytes)}` : ""}` : "还没有创建云备份。";
-      if (status.job?.errorCode) progress.textContent += `。${cloudError(status.job.errorCode)}`;
-      if (status.job?.warnings.length) progress.textContent += "。清理警告：目录完整性、探测清理或本地清理未确认；保留已有文件，请检查后手动处理。";
-      latest.textContent = status.latestMetadata
-        ? `最近成功：${cloudTime(status.latestMetadata.createdAt)} · ${size(status.latestMetadata.sizeBytes)}。本机明文副本：${status.latestPackage}`
-        : status.latestPackage ? `本机明文副本：${status.latestPackage}` : "暂无已确认成功的云备份；本机明文副本将在这里显示。";
+      const job = status.job;
+      // 成功且无警告时由「最近成功」一行说明，不再重复。
+      let text = job && !(job.phase === "succeeded" && !job.warnings.length)
+        ? `${phaseNames[job.phase]}${job.metadata.sizeBytes ? ` · ${size(job.metadata.sizeBytes)}` : ""}` : "";
+      if (job?.errorCode) text += `。${cloudError(job.errorCode)}`;
+      if (job?.warnings.length) text += "。清理警告：目录完整性、探测清理或本地清理未确认；保留已有文件，请检查后手动处理。";
+      progress.textContent = text;
+      jobState = status.retryPackage ? "candidate" : job && ["failed", "interrupted"].includes(job.phase) ? "failed" : null;
+      latest.textContent = status.latestMetadata ? `${shortTime(status.latestMetadata.createdAt)} · ${size(status.latestMetadata.sizeBytes)}` : "暂无";
+      latest.title = status.latestMetadata ? cloudTime(status.latestMetadata.createdAt) : "";
+      must("cloud-local-copy").textContent = status.latestPackage ? `本机明文副本：${status.latestPackage}` : "";
       must("cloud-retry").hidden = !status.retryPackage;
       must("cloud-discard").hidden = !status.retryPackage;
       timer = setTimeout(() => void poll(), uploading ? 1500 : 30000);
@@ -115,6 +167,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       timer = setTimeout(() => void poll(), uploading ? 5000 : 30000);
     }
     controls();
+    render();
   }
   function poll(): Promise<void> {
     if (polling) return polling;
@@ -123,12 +176,38 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   }
   for (const control of [endpoint, username, root, encrypted, keep, password, passphrase]) control.addEventListener("input", () => {
     dirty = true;
-    must("cloud-secret-status").textContent = "有未保存的修改。变更账号或地址后，原凭据不会沿用。";
+    password.setCustomValidity(""); passphrase.setCustomValidity("");
+    controls();
+    render();
   });
-  must("cloud-preset").addEventListener("click", () => { endpoint.value = "https://dav.jianguoyun.com/dav/"; dirty = true; });
+  // 已保存的凭据只对同一账号和地址有效；读不到凭据状态时不拦截，交给后端判断。
+  function accountUnchanged() {
+    return !!config && config.connection.endpoint === endpoint.value.trim() && config.connection.username === username.value.trim();
+  }
+  function savedSecret(kind: "hasWebdavPassword" | "hasBackupPassphrase") {
+    if (!accountUnchanged()) return false;
+    return secrets ? secrets[kind] : true;
+  }
+  // 第一次备份必需的秘密在保存时就近提示，不等到点「立即备份」才报错。
+  function missingSecret(): boolean {
+    const [input, text] = !password.value && !savedSecret("hasWebdavPassword") ? [password, "请填写坚果云第三方应用密码。"]
+      : encrypted.checked && !passphrase.value && !savedSecret("hasBackupPassphrase") ? [passphrase, "请设置备份加密口令，或取消勾选「上传前加密」。"]
+      : [null, ""];
+    if (!input) return false;
+    input.setCustomValidity(text); input.reportValidity();
+    return true;
+  }
+  must("cloud-preset").addEventListener("click", () => { endpoint.value = "https://dav.jianguoyun.com/dav/"; dirty = true; render(); });
+  // 收起后重新读一次任务状态，进度行恢复显示失败原因等，而不是留空。
+  must("cloud-found-close").addEventListener("click", () => { if (!busy && !uploading) { clearFound(); void poll(); } });
+  function clearFound() {
+    records = []; namespaces = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
+    must("cloud-namespace-label").hidden = true; must("cloud-found").hidden = true;
+    must("cloud-list-note").textContent = "";
+  }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!form.reportValidity()) return;
+    if (!form.reportValidity() || missingSecret()) return;
     void guarded(async () => {
       if (!encrypted.checked) {
         const ok = await openSettingsDialog({ title: "允许上传未加密备份？", body: paragraph("明文包含简历、申请和邮件证据。可访问云目录的人能读取这些内容，请只使用自己控制的存储。"), confirmLabel: "允许明文上传", action: async () => {} });
@@ -151,7 +230,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         throw new Error(`非秘密配置已保存，但凭据未完整保存。${cloudError(error)}请重新填写未保存的秘密后保存。`);
       } finally { password.value = ""; passphrase.value = ""; }
       dirty = false;
-      records = []; namespaces = []; list.replaceChildren(); must("cloud-namespace-label").hidden = true;
+      clearFound();
       await api.clearPreview();
       await secretStatus();
       tell("配置已保存在本机；密码仅保存在系统凭据库。如需自动备份，请另外启用下方计划。", "success");
@@ -166,7 +245,20 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   }
   must("cloud-test").addEventListener("click", () => void guarded(async () => {
     const c = selectedConfig(); progress.textContent = "正在连接并检查远端目录…";
-    await api.test(c.connection, c.options);
+    try { await api.test(c.connection, c.options); }
+    catch (error) {
+      // 测试连接只读不建目录：所填目录不存在时认证已通过，首次备份会逐级创建。
+      if (!errorCode(error).includes("NotFound") || !c.options.root?.length) throw error;
+      // 地址写错也会 NotFound：再只读检查一次 WebDAV 根目录，能读到才说明账号和地址都没问题。
+      try { await api.test(c.connection, { ...c.options, root: [] }); }
+      catch (rootError) {
+        if (errorCode(rootError).includes("NotFound")) throw new Error("找不到 WebDAV 地址：请检查地址是否正确。");
+        throw rootError;
+      }
+      tell(`账号验证通过。目录 ${c.options.root.join("/")} 还不存在，第一次备份时会自动创建。`, "info");
+      progress.textContent = "连接测试完成。";
+      return;
+    }
     tell("连接成功，远端目录可读取。上传权限将在实际上传时检查；未上传档案。", "success");
     progress.textContent = "连接测试完成。";
   }));
@@ -180,50 +272,97 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const ok = await openSettingsDialog({ title: "放弃上次候选包？", body: paragraph("本机候选包会删除；上一份成功备份保留。未确认的远端对象不会被强行删除，可能需要手动对账。"), confirmLabel: "放弃候选包", action: () => api.discard() });
     if (ok) { tell("已放弃候选包。", "success"); await poll(); }
   }));
-  must("cloud-cancel").addEventListener("click", () => {
-    void api.cancel().then(() => tell("已请求取消；正在完成安全收尾，加密密钥计算期间请稍候。"), (error) => tell(cloudError(error), "error"));
-  });
+  const cancel = () => api.cancel().then(
+    () => { tell("已请求取消；正在完成安全收尾，加密密钥计算期间请稍候。"); return true; },
+    (error) => { tell(cloudError(error), "error"); return false; },
+  );
+  must("cloud-cancel").addEventListener("click", () => void cancel());
   async function readNamespace() {
     const c = selectedConfig(), source = namespaces[Number(namespace.value)];
     if (!source) return;
-    records = []; list.replaceChildren();
-    progress.textContent = "正在读取轻量元数据（服务商限流时可能需要较长时间）…";
+    records = []; shown = 0; list.replaceChildren(); must("cloud-list-more").hidden = true;
+    progress.textContent = "正在读取备份列表：每份约需 3 秒，备份越多越久，可随时取消。";
     const catalog = await api.list(c.connection, c.options, source.archiveId, source.deviceId);
     records = catalog.entries;
     must("cloud-list-note").textContent = "列表仅检查元数据和文件长度，尚未下载或校验内容。服务商目录可能不完整，自动清理保持关闭。";
-    list.replaceChildren(...records.map((item, index) => {
-      const li = document.createElement("li"), info = document.createElement("div"), title = document.createElement("strong"), detail = document.createElement("small"), button = document.createElement("button");
-      title.textContent = cloudTime(item.createdAt);
-      detail.textContent = `${size(item.sizeBytes)} · ${item.encryptionFormat === "none" ? "未加密" : "age 加密"} · 已上传，内容待下载校验`;
-      info.append(title, detail); button.type = "button"; button.textContent = "下载校验并预览"; button.dataset.index = String(index);
-      li.append(info, button); return li;
-    }));
+    showMore();
     controls();
-    progress.textContent = records.length ? `找到 ${records.length} 份备份。` : "此来源设备暂无可用备份。";
+    progress.textContent = !records.length ? "此来源设备暂无可用备份。"
+      : records.length > shown ? `找到 ${records.length} 份备份，先显示最新 ${shown} 份。` : `找到 ${records.length} 份备份。`;
   }
+  // 列表已全部读完（#322 前后端还不能分页读取），这里只分批显示，避免一次铺开几百行。
+  function showMore() {
+    const next = records.slice(shown, shown + PAGE);
+    list.append(...next.map((item, offset) => {
+      const index = shown + offset;
+      const li = document.createElement("li"), info = document.createElement("div"), title = document.createElement("strong"), detail = document.createElement("span");
+      const note = document.createElement("p"), actions = document.createElement("div"), button = document.createElement("button"), stop = document.createElement("button");
+      title.textContent = shortTime(item.createdAt); title.title = cloudTime(item.createdAt);
+      detail.textContent = `${size(item.sizeBytes)} · ${item.encryptionFormat === "none" ? "未加密" : "age 加密"} · 已上传，内容待下载校验`;
+      note.className = "settings-inline-msg"; note.setAttribute("role", "status");
+      info.append(title, detail, note); actions.className = "settings-list-actions";
+      button.type = "button"; button.textContent = "下载校验并预览"; button.dataset.index = String(index);
+      stop.type = "button"; stop.textContent = "取消"; stop.dataset.cancel = ""; stop.hidden = true;
+      actions.append(button, stop); li.append(info, actions); return li;
+    }));
+    shown += next.length;
+    const more = must<HTMLButtonElement>("cloud-list-more"), rest = records.length - shown;
+    more.hidden = rest <= 0;
+    more.textContent = `再显示 ${Math.min(PAGE, rest)} 份（还有 ${rest} 份）`;
+  }
+  must("cloud-list-more").addEventListener("click", () => { if (!busy && !uploading) { showMore(); controls(); } });
   must("cloud-browse").addEventListener("click", () => void guarded(async () => {
     const c = selectedConfig(); progress.textContent = "正在查找档案与来源设备，无需旧设备标识…";
-    list.replaceChildren(); records = [];
+    list.replaceChildren(); records = []; shown = 0; must("cloud-list-more").hidden = true; must("cloud-list-note").textContent = "";
+    must("cloud-found").hidden = false;
     const discovery = await api.discover(c.connection, c.options);
     namespaces = discovery.sources;
     if (discovery.warnings.length) tell(`部分档案目录未能读取，下面只展示可用来源。${cloudError(discovery.warnings[0])}`, "warn");
     namespace.replaceChildren(...namespaces.map((source, index) => { const option = document.createElement("option"); option.value = String(index); option.textContent = `档案 ${source.archiveId} / 设备 ${source.deviceId}`; return option; }));
     must("cloud-namespace-label").hidden = !namespaces.length;
-    if (namespaces.length) await readNamespace(); else progress.textContent = "该根目录下尚未发现备份。请核对远端目录；目录可能不完整。";
+    if (namespaces.length) await readNamespace();
+    else { progress.textContent = ""; must("cloud-list-note").textContent = "该根目录下尚未发现备份。请核对远端目录；目录可能不完整。"; }
   }));
   namespace.addEventListener("change", () => void guarded(readNamespace));
   list.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-index]");
+    const target = event.target as HTMLElement;
+    const stop = target.closest<HTMLButtonElement>("button[data-cancel]");
+    if (stop) {
+      stop.disabled = true;
+      const note = stop.closest("li")?.querySelector(".settings-inline-msg"), before = note?.textContent ?? "";
+      if (note) note.textContent = "正在取消…";
+      // 取消请求失败且下载仍在进行时，恢复这一行，让用户可以再次取消。
+      void cancel().then((ok) => {
+        if (ok || stop.hidden) return;
+        stop.disabled = false;
+        if (note) note.textContent = before;
+      });
+      return;
+    }
+    const button = target.closest<HTMLButtonElement>("button[data-index]");
     if (!button) return;
     const metadata = records[Number(button.dataset.index)];
     if (!metadata) return;
+    // 进度、取消和失败原因都显示在被点的这一行，不依赖卡片顶部的文案。
+    const row = button.closest("li")!, note = row.querySelector<HTMLElement>(".settings-inline-msg")!, rowStop = row.querySelector<HTMLButtonElement>("button[data-cancel]")!;
+    const rowState = (text: string, tone: Tone = "") => { note.textContent = text; note.dataset.tone = tone; };
     void guarded(async () => {
       const c = selectedConfig();
-      progress.textContent = "正在下载并校验传输哈希、加密认证和档案内部文件…";
+      button.textContent = "正在下载并校验…"; button.setAttribute("aria-busy", "true");
+      rowStop.hidden = false; rowStop.disabled = false; previewing = true; controls();
+      rowState(`正在下载 ${size(metadata.sizeBytes)} 并校验传输哈希、加密认证和档案内部文件；文件较大或服务商限流时可能需要几分钟。`);
       let restored = false, cleanupWarning = false, refreshWarning = false, restoreError: string | null = null;
       try {
-        const result = await api.preview(c.connection, c.options, metadata);
-        progress.textContent = "已完整下载并校验；等待你核对差异并确认恢复。";
+        let result: Awaited<ReturnType<typeof api.preview>>;
+        try { result = await api.preview(c.connection, c.options, metadata); }
+        catch (error) {
+          const cancelled = errorCode(error).includes("CANCELLED");
+          rowState(cancelled ? "已取消下载，当前档案未替换。" : cloudError(error), cancelled ? "" : "error");
+          return;
+        } finally {
+          button.textContent = "下载校验并预览"; button.removeAttribute("aria-busy"); rowStop.hidden = true; previewing = false; controls();
+        }
+        rowState("已完整下载并校验，请在弹窗中核对差异后决定是否恢复。", "ok");
         const confirmed = await openSettingsDialog({ title: "恢复云端备份并替换当前档案？", size: "lg", intro: "恢复是整个档案替换，不是合并。当前档案会保留为回滚点。", body: fragment(
           factList([["预览有效期", cloudTime(result.expiresAt)], ["云端文件", "传输与内部校验通过"]]),
           restoreBody(metadata.package, result.preview),
@@ -234,11 +373,12 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
           }, describeError: cloudError,
         });
         if (confirmed) {
+          rowState("");
           const summary = `恢复成功，旧档案已保存为回滚点。本机自动云备份已关闭，请重新确认配置。${cleanupWarning ? "临时明文清理未确认，请重启后检查工作目录。" : ""}${refreshWarning ? "路径显示刷新失败，请重启应用核对当前档案，不要重复恢复。" : ""}`;
           try { await onRestored(); loaded = false; await refresh(); tell(summary, cleanupWarning || refreshWarning ? "warn" : "success"); }
           catch { tell(`${summary}档案已恢复成功，但界面刷新失败。请重新打开页面核对；不要重复恢复。`, "warn"); }
-        } else if (restoreError) tell(restoreError, "error");
-        else tell("已取消恢复，当前档案没有改动。", "info");
+        } else if (restoreError) { rowState(restoreError, "error"); tell(restoreError, "error"); }
+        else { rowState(""); tell("已取消恢复，当前档案没有改动。", "info"); }
       } finally {
         try {
           await api.clearPreview();
@@ -260,12 +400,16 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
         endpoint.value = config.connection.endpoint; username.value = config.connection.username;
         root.value = config.options.root?.join("/") ?? ""; encrypted.checked = config.options.encrypted !== false;
         const value = config.options.keepLast?.toString() ?? "";
-        if (![...keep.options].some((o) => o.value === value)) keep.add(new Option(`${value} 份`, value));
+        if (![...keep.options].some((o) => o.value === value)) keep.add(new Option(`最近 ${value} 份`, value));
         keep.value = value;
         if (config.requiresConfirmation) tell("档案或凭据变更后，自动云备份已关闭，请核对后重新确认计划。恢复档案或更换加密口令后，须先完成一次新手动备份。", "warn");
         await secretStatus();
+      } else {
+        // 还没配置时直接展开账号与加密设置，用户不用找入口。
+        must<HTMLDetailsElement>("cloud-connection").open = true;
       }
       loaded = true; dirty = false;
+      render();
     }
     await poll();
     await refreshSchedule();
