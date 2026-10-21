@@ -1,6 +1,6 @@
 use super::{fail, model::*, Result};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     future::Future,
     path::Path,
 };
@@ -132,119 +132,133 @@ pub async fn mkdirs(
     Ok(())
 }
 
-/// Sequential metadata reads (concurrency=1) go through Client's shared 3-second
-/// throttle. Never download a package merely to render a catalog.
-pub async fn catalog(
+/// File name -> listed size for the direct, non-collection children of one
+/// month folder. A missing folder is an empty month. A listing may omit entries
+/// (#322), so callers only draw positive conclusions from what it contains.
+pub async fn month_files(
     remote: &impl Remote,
-    root: &RemotePath,
-    archive: &str,
-    device: &str,
+    folder: &RemotePath,
     cancel: &CancellationToken,
-) -> Result<Catalog> {
-    catalog_with_owned(remote, root, archive, device, cancel, &HashSet::new()).await
+) -> Result<HashMap<String, Option<u64>>> {
+    let listing = match remote.list(folder, cancel).await {
+        Ok(listing) => listing,
+        Err(e) if e.code == "CLOUD_DAV_NotFound" => return Ok(HashMap::new()),
+        Err(e) => return Err(e),
+    };
+    if listing.entries.len() > MAX_CATALOG * 2 {
+        return Err(fail("CATALOG_LIMIT"));
+    }
+    Ok(listing
+        .entries
+        .into_iter()
+        .filter(|item| !item.collection && direct_child(folder, &item.path))
+        .filter_map(|item| Some((item.path.segments().last()?.clone(), item.size)))
+        .collect())
 }
-pub async fn catalog_with_owned(
+
+/// One page of the catalog from PROPFIND alone (#322): whole months, newest
+/// first, until at least `want` entries. No metadata GET and no package body;
+/// a row is a `.meta.json` name plus exactly one matching package with a size.
+/// Months strictly older than `before` only, so each month is listed once.
+pub async fn page(
     remote: &impl Remote,
     root: &RemotePath,
     archive: &str,
     device: &str,
+    before: Option<&str>,
+    want: usize,
     cancel: &CancellationToken,
-    owned_loose: &HashSet<RemotePath>,
-) -> Result<Catalog> {
+) -> Result<Page> {
     let device_path = device_folder(root, archive, device)?;
+    if before.is_some_and(|month| !valid_month(month)) {
+        return Err(fail("INVALID_CURSOR"));
+    }
     let listing = remote.list(&device_path, cancel).await?;
     if listing.entries.len() > MAX_MONTHS {
         return Err(fail("CATALOG_LIMIT"));
     }
-    let mut safe = listing.safe_for_cleanup();
+    let mut months: Vec<String> = listing
+        .entries
+        .iter()
+        .filter(|entry| entry.collection && direct_child(&device_path, &entry.path))
+        .filter_map(|entry| entry.path.segments().last().cloned())
+        .filter(|name| valid_month(name) && before.is_none_or(|month| name.as_str() < month))
+        .collect();
+    months.sort_unstable_by(|a, b| b.cmp(a));
     let mut entries = Vec::new();
-    let mut ids = HashSet::new();
-    let mut reads = 0usize;
-    for entry in listing.entries {
-        let segments = entry.path.segments();
-        let valid_month = segments.last().is_some_and(|name| {
-            name.len() == 7
-                && name.as_bytes()[4] == b'-'
-                && date(&format!("{name}-01T00:00:00Z")).is_ok()
-        });
-        if !entry.collection || !valid_month || !direct_child(&device_path, &entry.path) {
-            safe = false;
-            continue;
-        }
-        let month_listing = remote.list(&entry.path, cancel).await?;
-        safe &= month_listing.safe_for_cleanup();
-        if month_listing.entries.len() > MAX_CATALOG * 2 {
-            return Err(fail("CATALOG_LIMIT"));
-        }
-        // The PROPFIND listing already carries each file's size; Nutstore HEAD
-        // would report 0 (#316), and a per-package request costs a throttle slot.
-        let sizes: HashMap<String, Option<u64>> = month_listing
-            .entries
-            .iter()
-            .filter(|item| !item.collection && direct_child(&entry.path, &item.path))
-            .filter_map(|item| Some((item.path.segments().last()?.clone(), item.size)))
+    let mut next = None;
+    let mut months = months.into_iter().peekable();
+    while let Some(month) = months.next() {
+        let files = month_files(remote, &device_path.child(&month)?, cancel).await?;
+        let mut found: Vec<Listed> = files
+            .keys()
+            .filter_map(|name| listed(archive, device, &month, name, &files))
             .collect();
-        let mut packages = HashSet::new();
-        let mut loose = Vec::new();
-        for item in month_listing.entries {
-            if !direct_child(&entry.path, &item.path) || item.collection {
-                safe = false;
-                continue;
-            }
-            let name = item.path.segments().last().unwrap();
-            if !name.ends_with(".meta.json") {
-                loose.push(name.clone());
-                continue;
-            }
-            reads += 1;
-            if reads > MAX_CATALOG {
-                return Err(fail("CATALOG_LIMIT"));
-            }
-            let raw = remote
-                .read(&item.path, cancel)
-                .await?
-                .ok_or_else(|| fail("CATALOG_CHANGED"))?;
-            let metadata = match Metadata::parse(&raw) {
-                Ok(m) => m,
-                Err(_) => {
-                    safe = false;
-                    continue;
-                }
-            };
-            if metadata.archive_id != archive
-                || metadata.device_id != device
-                || metadata.folder(root)? != entry.path
-                || metadata.meta_name()? != *name
-                || !ids.insert(metadata.backup_id.clone())
-            {
-                safe = false;
-                continue;
-            }
-            if sizes.get(&metadata.package) != Some(&Some(metadata.size_bytes)) {
-                safe = false;
-                continue;
-            }
-            packages.insert(metadata.package.clone());
-            entries.push(metadata);
-        }
-        // Unknown user files, parts, malformed JSON and orphan packages disable
-        // deletion for this pass; they remain untouched.
-        for name in loose {
-            if !packages.contains(&name) && !owned_loose.contains(&entry.path.child(&name)?) {
-                safe = false;
-            }
+        // Fixed-width UTC names: string order is time order.
+        found.sort_unstable_by(|a, b| {
+            (&b.created_at, &b.backup_id).cmp(&(&a.created_at, &a.backup_id))
+        });
+        entries.extend(found);
+        if entries.len() >= want && months.peek().is_some() {
+            next = Some(month);
+            break;
         }
     }
-    entries.sort_by(|a, b| {
-        date(&b.created_at)
-            .unwrap()
-            .cmp(&date(&a.created_at).unwrap())
-            .then_with(|| b.backup_id.cmp(&a.backup_id))
-    });
-    Ok(Catalog {
+    Ok(Page {
         entries,
-        cleanup_safe: safe,
+        next,
         content_hash_verified: false,
+    })
+}
+fn valid_month(name: &str) -> bool {
+    name.len() == 7
+        && name.as_bytes()[4] == b'-'
+        && date(&format!("{name}-01T00:00:00Z")).is_ok()
+}
+/// `<YYYYMMDDTHHMMSSZ>-<uuid>.meta.json` written by this app into its own month.
+/// Unknown files, parts and half-published pairs are simply not rows.
+fn listed(
+    archive: &str,
+    device: &str,
+    folder_month: &str,
+    name: &str,
+    files: &HashMap<String, Option<u64>>,
+) -> Option<Listed> {
+    let stem_name = name.strip_suffix(".meta.json")?;
+    let (time, id) = stem_name.split_once('-')?;
+    let t = time.as_bytes();
+    if t.len() != 16 || !time.is_ascii() || t[8] != b'T' || t[15] != b'Z' {
+        return None;
+    }
+    let created_at = format!(
+        "{}-{}-{}T{}:{}:{}Z",
+        &time[0..4], &time[4..6], &time[6..8], &time[9..11], &time[11..13], &time[13..15]
+    );
+    if stem(&created_at, id).ok()? != stem_name || month(&created_at).ok()? != folder_month {
+        return None;
+    }
+    let mut found = None;
+    for (encryption_format, package) in [
+        (Encryption::None, format!("{stem_name}.rpbak")),
+        (Encryption::AgeV1Scrypt, format!("{stem_name}.rpbak.age")),
+    ] {
+        if let Some(size) = files.get(&package) {
+            let size = (*size).filter(|n| *n > 0 && *n <= webdav_client::NUTSTORE_MAX_FILE_BYTES)?;
+            if found.is_some() {
+                return None;
+            }
+            found = Some((encryption_format, package, size));
+        }
+    }
+    let (encryption_format, package, size_bytes) = found?;
+    Some(Listed {
+        backup_id: id.to_owned(),
+        created_at,
+        archive_id: archive.to_owned(),
+        device_id: device.to_owned(),
+        package,
+        size_bytes,
+        encryption_format,
     })
 }
 fn direct_child(parent: &RemotePath, child: &RemotePath) -> bool {

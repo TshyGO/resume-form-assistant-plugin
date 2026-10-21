@@ -26,7 +26,7 @@ function setup(overrides: Record<string, unknown> = {}) {
       cloud_backup_status: { job: null, latestPackage: null, latestMetadata: null, retryPackage: null },
       cloud_backup_credential_status: { hasWebdavPassword: true, hasBackupPassphrase: true },
       cloud_backup_discover: { sources: [{ archiveId: metadata.archiveId, deviceId: metadata.deviceId }], warnings: [] },
-      cloud_backup_list: { entries: [metadata], cleanupSafe: false, contentHashVerified: false },
+      cloud_backup_list: { entries: [metadata], next: null, contentHashVerified: false },
       cloud_backup_preview: { token: "bound-token", backupId: metadata.backupId, expiresAt: "2026-10-19T00:10:00Z", preview: { incoming: counts, current: { ...counts, applications: 2 }, createdAt: metadata.createdAt, sameArchive: false, currentAvailable: true, existingRollbackPoints: 0 } },
       cloud_backup_restore: { report: {}, cleanupWarning: false },
     } as Record<string, unknown>)[name]) as T;
@@ -248,7 +248,7 @@ test("overview shows configuration, latest success and schedule before any setti
   expect(document.getElementById("cloud-auto-summary")!.textContent).toMatch(/^每天 21:00（UTC\+08:00） · 下次 /);
   expect(document.getElementById("cloud-auto-hint")!.textContent).toBe("每天 21:00（UTC+08:00）");
   expect(document.getElementById("cloud-connection-hint")!.textContent).toBe("已保存 · Test · 加密");
-  expect(document.getElementById("cloud-keep")!.closest(".settings-field")!.hasAttribute("hidden")).toBe(true);
+  expect(document.getElementById("cloud-keep")!.closest(".settings-field")!.hasAttribute("hidden")).toBe(false);
   expect(document.getElementById("cloud-local-copy")!.textContent).toContain("/local/backup.rpbak");
   expect(document.getElementById("cloud-auto-disable")!.hidden).toBe(false);
   for (const id of ["cloud-connection", "cloud-auto"]) expect((document.getElementById(id) as HTMLDetailsElement).open).toBe(false);
@@ -391,22 +391,49 @@ test("editing the account shows the old account's secrets as not saved and hides
 
 test("long backup lists show the newest ten first and reveal more in batches", async () => {
   const many = Array.from({ length: 23 }, (_, i) => ({ ...metadata, backupId: `b${i}`, createdAt: new Date(Date.UTC(2026, 9, 19) - i * 86_400_000).toISOString() }));
-  const { refresh, query } = setup({ cloud_backup_list: { entries: many, cleanupSafe: false, contentHashVerified: false } });
+  const { refresh, query } = setup({ cloud_backup_list: { entries: many, next: null, contentHashVerified: false } });
   await refresh(); click("cloud-browse");
   const more = document.getElementById("cloud-list-more") as HTMLButtonElement;
   await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(10));
   await waitFor(() => expect(more.disabled).toBe(false));
-  expect(document.getElementById("cloud-progress")!.textContent).toBe("找到 23 份备份，先显示最新 10 份。");
+  expect(document.getElementById("cloud-progress")!.textContent).toBe("先显示最新 10 份，可继续查看更早的备份。");
   expect(more.hidden).toBe(false); expect(more.textContent).toBe("再显示 10 份（还有 13 份）");
   fireEvent.click(more);
-  expect(query.getAllByRole("listitem")).toHaveLength(20);
-  expect(more.textContent).toBe("再显示 3 份（还有 3 份）");
+  await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(20));
+  await waitFor(() => expect(more.textContent).toBe("再显示 3 份（还有 3 份）"));
   fireEvent.click(more);
-  expect(query.getAllByRole("listitem")).toHaveLength(23);
+  await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(23));
   expect(more.hidden).toBe(true);
   // 后面批次的行仍指向正确的备份。
   const last = query.getAllByRole("listitem")[22];
   expect(within(last).getByRole("button", { name: "下载校验并预览" }).dataset.index).toBe("22");
+});
+
+test("older months are read only when the shown batch runs out, and preview sends the listed row", async () => {
+  const day = (month: number, d: number, id: string) => ({ ...metadata, backupId: id, createdAt: new Date(Date.UTC(2026, month, d)).toISOString() });
+  const october = Array.from({ length: 12 }, (_, i) => day(9, 12 - i, `oct${i}`));
+  const september = Array.from({ length: 4 }, (_, i) => day(8, 4 - i, `sep${i}`));
+  const { refresh, query, calls } = setup({
+    cloud_backup_list: (args: { before: string | null }) => args.before === null
+      ? { entries: october, next: "2026-10", contentHashVerified: false }
+      : { entries: september, next: null, contentHashVerified: false },
+  });
+  await refresh(); click("cloud-browse");
+  const more = document.getElementById("cloud-list-more") as HTMLButtonElement;
+  await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(10));
+  await waitFor(() => expect(more.disabled).toBe(false));
+  const lists = () => calls.filter((c) => c.name === "cloud_backup_list");
+  expect(lists()).toHaveLength(1);
+  expect(more.textContent).toBe("再显示 10 份");
+  // 只剩 2 份已读，不够一批：读更早的月份后一起显示。
+  fireEvent.click(more);
+  await waitFor(() => expect(query.getAllByRole("listitem")).toHaveLength(16));
+  expect(lists().map((c) => c.args!.before)).toEqual([null, "2026-10"]);
+  expect(more.hidden).toBe(true);
+  expect(document.getElementById("cloud-progress")!.textContent).toBe("已显示 16 份。");
+  fireEvent.click(within(query.getAllByRole("listitem")[15]).getByRole("button", { name: "下载校验并预览" }));
+  await waitFor(() => expect(calls.some((c) => c.name === "cloud_backup_preview")).toBe(true));
+  expect(calls.find((c) => c.name === "cloud_backup_preview")!.args!.entry).toEqual(september[3]);
 });
 
 test("collapsing found backups restores the job status line instead of leaving it blank", async () => {

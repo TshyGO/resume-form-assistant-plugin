@@ -23,6 +23,8 @@ use std::{
 };
 use webdav_client::{CancellationToken, Client};
 pub type Result<T> = std::result::Result<T, CommandError>;
+/// Rows the UI shows per step; the backend reads whole months until it has these.
+pub const LIST_PAGE: usize = 10;
 pub fn fail(code: &str) -> CommandError {
     CommandError {
         code: format!("CLOUD_{code}"),
@@ -34,7 +36,6 @@ pub fn fail(code: &str) -> CommandError {
             "TOO_LARGE" => "备份超过上传上限；未开始新的上传。",
             "CANCELLED" => "任务已取消；完整候选包仍可重试。",
             "REMOTE_CONFLICT" => "远端对象与本作业不一致；没有覆盖，请先对账。",
-            "INCOMPLETE_LIST" => "目录完整性未经验证，已跳过自动删除。",
             "NO_RETRY_PACKAGE" => "没有完整的可重试候选包，请放弃此作业后重新创建。",
             "LOCAL_IO" => "本地备份文件或任务记录读写失败。",
             "INVALID_SETTINGS" => "本机 settings.json 损坏或云备份配置不合法；恢复或回滚未执行。请保留原文件，修复配置后重试。",
@@ -588,9 +589,10 @@ impl Service {
         options: &Options,
         archive: &str,
         device: &str,
-    ) -> Result<Catalog> {
+        before: Option<&str>,
+    ) -> Result<Page> {
         let lease = self.reserve()?;
-        remote::catalog(client, &options.check()?, archive, device, &lease.cancel).await
+        remote::page(client, &options.check()?, archive, device, before, LIST_PAGE, &lease.cancel).await
     }
     /// Test adapter for the #305 verified transport boundary. Production uses token-bound preview.
     #[cfg(test)]
@@ -602,7 +604,7 @@ impl Service {
         passphrase: Option<SecretString>,
     ) -> Result<String> {
         let lease = self.reserve()?;
-        let (task, package) = self.download_inner(client, options, metadata, passphrase, &lease.cancel).await?;
+        let (task, package) = self.download_inner(client, options, &Listed::from(&metadata), passphrase, &lease.cancel).await?;
         let destination = self.root.join("verified-download.rpbak");
         let mut output = tempfile::Builder::new().prefix(".verified-").rand_bytes(32).tempfile_in(&self.root)?;
         std::io::copy(&mut fs::File::open(&package)?, output.as_file_mut())?;
@@ -613,16 +615,18 @@ impl Service {
     }
     async fn download_inner(
         self: &Arc<Self>, client: &impl remote::Remote, options: &Options,
-        metadata: Metadata, passphrase: Option<SecretString>, cancel: &CancellationToken,
+        listed: &Listed, passphrase: Option<SecretString>, cancel: &CancellationToken,
     ) -> Result<(TaskDirectory, PathBuf)> {
         let root = options.check()?;
-        metadata.check()?;
-        let folder = metadata.folder(&root)?;
+        let folder = listed.folder(&root)?;
+        // The list carries names and sizes only; the content hash and the rest of
+        // the commit record come from the remote metadata, read here directly.
         let actual = client
-            .read(&folder.child(&metadata.meta_name()?)?, cancel)
+            .read(&folder.child(&listed.meta_name()?)?, cancel)
             .await?
             .ok_or_else(|| fail("NOT_FOUND"))?;
-        if Metadata::parse(&actual)? != metadata {
+        let metadata = Metadata::parse(&actual)?;
+        if !listed.matches(&metadata) || metadata.folder(&root)? != folder {
             return Err(fail("REMOTE_CONFLICT"));
         }
         let task = self.task()?;

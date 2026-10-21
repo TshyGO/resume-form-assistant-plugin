@@ -9,6 +9,8 @@ struct Server {
     events: Vec<(String, Vec<String>)>,
     fault: Option<(String, bool)>,
     truncated: bool,
+    /// Present but left out of LIST, as a truncated provider listing would.
+    hidden: BTreeSet<Vec<String>>,
     denied_list: Option<Vec<String>>,
 }
 #[derive(Default, Clone)]
@@ -76,7 +78,7 @@ impl Remote for Fake {
                 }
             }
             for (path, bytes) in &s.files {
-                if path.len() == p.segments().len() + 1 && path.starts_with(p.segments()) {
+                if path.len() == p.segments().len() + 1 && path.starts_with(p.segments()) && !s.hidden.contains(path) {
                     entries.push(Entry {
                         path: RemotePath::new(
                             &path.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -238,7 +240,7 @@ async fn preview_tokens_reject_tampering_expiry_replay_and_cleanup_plaintext() {
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     let before = fs::read(&l.paths.current_pointer).unwrap();
     for scenario in ["changed", "expired", "wrong-token"] {
-        let preview = l.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
+        let preview = l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
         let path = {
             let mut pending = l.service.preview.lock().unwrap();
             let pending = pending.as_mut().unwrap();
@@ -253,8 +255,8 @@ async fn preview_tokens_reject_tampering_expiry_replay_and_cleanup_plaintext() {
         assert!(!path.exists());
         assert!(l.service.confirm_restore(&preview.token, || Ok(())).is_err());
     }
-    let first = l.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
-    l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    let first = l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
+    l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
     assert!(l.service.confirm_restore(&first.token, || Ok(())).is_err());
     l.service.clear_preview().unwrap();
     assert_eq!(fs::read_dir(l.paths.data_root.join("cloud-backup-work")).unwrap().count(), 0);
@@ -270,7 +272,7 @@ async fn cloud_confirmation_replaces_an_independent_archive_then_writes_backs_up
     let (job, lease) = candidate(&source, false, None);
     source.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     let old = target.store.lock().unwrap().as_ref().unwrap().identity().clone();
-    let preview = target.service.download_preview(&remote, &options(), job.metadata.clone(), None).await.unwrap();
+    let preview = target.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
     let report = target.service.confirm_restore(&preview.token, || Ok(())).unwrap().report;
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().identity().archive_id, job.metadata.archive_id);
     assert_ne!(report.restore_epoch, old.restore_epoch);
@@ -284,7 +286,7 @@ async fn cloud_confirmation_replaces_an_independent_archive_then_writes_backs_up
     target.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     assert_eq!(new_job.metadata.archive_id, job.metadata.archive_id);
     assert_ne!(new_job.metadata.device_id, job.metadata.device_id);
-    let again = target.service.download_preview(&remote, &options(), new_job.metadata, None).await.unwrap();
+    let again = target.service.download_preview(&remote, &options(), Listed::from(&new_job.metadata), None).await.unwrap();
     target.service.confirm_restore(&again.token, || Ok(())).unwrap();
     assert_eq!(target.store.lock().unwrap().as_ref().unwrap().counts().unwrap().applications, 2);
     crate::backup_commands::rollback(&crate::backup_commands::StoreSlot { slot: &target.store }, &target.paths, &report.rollback_point, &now()).unwrap();
@@ -298,7 +300,7 @@ async fn cleanup_failure_after_activation_returns_success_with_a_warning() {
     let l = layout(); let remote = Fake::default();
     let (job, lease) = candidate(&l, false, None);
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
-    let preview = l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    let preview = l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
     let task = l.service.preview.lock().unwrap().as_ref().unwrap().package.parent().unwrap().to_owned();
     // Pin an extracted verification file, while leaving the verified package readable.
     // This forces real Windows recursive removal failure after a successful switch.
@@ -320,7 +322,7 @@ async fn expired_preview_cleanup_failure_does_not_hide_job_or_latest_status() {
     let l = layout(); let remote = Fake::default();
     let (job, lease) = candidate(&l, false, None);
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
-    l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
     let task = {
         let mut guard = l.service.preview.lock().unwrap(); let pending = guard.as_mut().unwrap();
         pending.expires = std::time::Instant::now(); pending.package.parent().unwrap().to_owned()
@@ -398,7 +400,7 @@ async fn automatic_snapshot_skips_unchanged_but_records_files_and_restore_epoch_
     assert_ne!(l.service.job().unwrap().business_fingerprint.as_deref(), Some(previous.as_str()));
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     let current = l.service.status().unwrap(); let job = l.service.job().unwrap();
-    let preview = l.service.download_preview(&remote, &options(), job.metadata, None).await.unwrap();
+    let preview = l.service.download_preview(&remote, &options(), Listed::from(&job.metadata), None).await.unwrap();
     l.service.confirm_restore(&preview.token, || Ok(())).unwrap();
     assert!(current.latest_metadata.is_some());
     assert!(l.service.automatic_action("synthetic-scope", &options(), due+86400, Some(due+86370)).unwrap().is_none());
@@ -443,7 +445,7 @@ async fn automatic_retries_reconcile_unknown_put_without_uploading_twice_and_cle
     assert_eq!(job.id, original.id); assert!(!fresh);
     let puts = remote.count("PUT_PACKAGE");
     l.service.update(|s| s.job.as_mut().unwrap().options.keep_last = Some(5)).unwrap();
-    remote.0.lock().unwrap().truncated = true;
+    remote.fail_next("LIST", false);
     l.service.publish(&remote, &lease.cancel).await.unwrap(); drop(lease);
     assert_eq!(remote.count("PUT_PACKAGE"), puts);
     assert!(l.service.journal.lock().unwrap().automatic.upload_bytes >= used);
@@ -646,18 +648,23 @@ async fn plain_roundtrip_publishes_metadata_last_and_only_verified_download_is_e
     let meta = events.iter().position(|(m, _)| m == "PUT_META").unwrap();
     assert!(package < meta);
     drop(lease);
-    let catalog = l
+    let reads = remote.count("GET_META");
+    let page = l
         .service
         .list(
             &remote,
             &job.options,
             &job.metadata.archive_id,
             &job.metadata.device_id,
+            None,
         )
         .await
         .unwrap();
-    assert_eq!(catalog.entries, vec![job.metadata.clone()]);
-    assert!(!catalog.content_hash_verified);
+    assert_eq!(page.entries.len(), 1);
+    assert!(page.entries[0].matches(&job.metadata));
+    assert_eq!(page.next, None);
+    assert!(!page.content_hash_verified);
+    assert_eq!(remote.count("GET_META"), reads, "listing reads names, not metadata");
     assert_eq!(
         remote.count("DOWNLOAD"),
         0,
@@ -759,66 +766,144 @@ async fn missing_or_partial_metadata_is_not_a_success_and_unknown_foreign_object
     );
     assert_eq!(remote.count("PUT_PACKAGE"), 0);
     assert_eq!(remote.count("DELETE"), 0);
-    let listing = remote::catalog(
-        &remote,
-        &RemotePath::root(),
-        &job.metadata.archive_id,
-        &job.metadata.device_id,
-        &lease.cancel,
-    )
-    .await
-    .unwrap();
-    assert!(listing.entries.is_empty());
-    assert!(!listing.cleanup_safe);
-    remote.put_raw(
-        &folder.child(&job.metadata.meta_name().unwrap()).unwrap(),
-        b"{\"formatVersion\":".to_vec(),
-    );
-    let listing = remote::catalog(
-        &remote,
-        &RemotePath::root(),
-        &job.metadata.archive_id,
-        &job.metadata.device_id,
-        &lease.cancel,
-    )
-    .await
-    .unwrap();
-    assert!(listing.entries.is_empty());
-    assert!(!listing.cleanup_safe);
-}
-
-// #316: package sizes for the catalog come from the month PROPFIND listing, not a
-// per-package object request (Nutstore HEAD reports 0, and each request is throttled).
-#[tokio::test]
-async fn catalog_uses_listing_sizes_without_per_package_requests() {
-    let l = layout();
-    let remote = Fake::default();
-    let (job, lease) = candidate(&l, false, None);
-    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    drop(lease);
+    let token = CancellationToken::new();
     let root = RemotePath::root();
-    let catalog = || {
-        remote::catalog(
+    let page = || {
+        remote::page(
             &remote,
             &root,
             &job.metadata.archive_id,
             &job.metadata.device_id,
-            &lease.cancel,
+            None,
+            LIST_PAGE,
+            &token,
         )
     };
-    let stats = remote.count("STAT");
-    let listing = catalog().await.unwrap();
+    // A package without metadata is not a row.
+    assert!(page().await.unwrap().entries.is_empty());
+    remote.put_raw(
+        &folder.child(&job.metadata.meta_name().unwrap()).unwrap(),
+        b"{\"formatVersion\":".to_vec(),
+    );
+    // Names alone make a row; the preview reads the metadata and refuses it
+    // before downloading anything.
+    let entries = page().await.unwrap().entries;
+    assert_eq!(entries.len(), 1);
+    let error = l
+        .service
+        .download_preview(&remote, &options(), entries[0].clone(), None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "CLOUD_INVALID_METADATA");
+    assert_eq!(remote.count("DOWNLOAD"), 0);
+}
+
+// #316/#322: the catalog is PROPFIND only. Sizes come from the month listing;
+// no per-package STAT and no per-backup metadata GET.
+#[tokio::test]
+async fn listing_uses_names_and_sizes_and_preview_rejects_a_replaced_package() {
+    let l = layout();
+    let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    drop(lease);
+    let token = CancellationToken::new();
+    let root = RemotePath::root();
+    let page = || {
+        remote::page(
+            &remote,
+            &root,
+            &job.metadata.archive_id,
+            &job.metadata.device_id,
+            None,
+            LIST_PAGE,
+            &token,
+        )
+    };
+    let (stats, reads) = (remote.count("STAT"), remote.count("GET_META"));
+    let listing = page().await.unwrap();
     assert_eq!(listing.entries.len(), 1);
     assert_eq!(listing.entries[0].backup_id, job.metadata.backup_id);
-    assert_eq!(remote.count("STAT"), stats);
-    // A listed package whose size disagrees with its metadata is still excluded.
+    assert_eq!(listing.entries[0].size_bytes, job.metadata.size_bytes);
+    assert_eq!((remote.count("STAT"), remote.count("GET_META")), (stats, reads));
     let folder = job.metadata.folder(&RemotePath::root()).unwrap();
     remote.put_raw(
         &folder.child(&job.metadata.package).unwrap(),
         b"replaced".to_vec(),
     );
-    let listing = catalog().await.unwrap();
-    assert!(listing.entries.is_empty());
-    assert!(!listing.cleanup_safe);
+    let listing = page().await.unwrap();
+    assert_eq!(listing.entries[0].size_bytes, 8);
+    let error = l
+        .service
+        .download_preview(&remote, &options(), listing.entries[0].clone(), None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "CLOUD_REMOTE_CONFLICT");
+    assert_eq!(remote.count("DOWNLOAD"), 0);
+}
+
+#[tokio::test]
+async fn listing_pages_by_whole_months_newest_first_and_ignores_unknown_files() {
+    let l = layout();
+    let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, None);
+    drop(lease);
+    let mut september = Vec::new();
+    for day in 1..=12 {
+        september.push(old_owned(&l, &remote, &job, &format!("2026-09-{day:02}T08:00:00Z"), None, false));
+    }
+    for day in 1..=3 {
+        old_owned(&l, &remote, &job, &format!("2026-08-{day:02}T08:00:00Z"), None, false);
+    }
+    old_owned(&l, &remote, &job, "2026-07-05T00:00:00Z", None, false);
+    let folder = september[0].folder(&RemotePath::root()).unwrap();
+    let stray = uuid::Uuid::new_v4();
+    for name in [
+        "notes.txt".to_owned(),
+        format!("{}.part", september[0].package),
+        // A well-formed name filed under the wrong month is not this app's row.
+        format!("20260801T000000Z-{stray}.meta.json"),
+        format!("20260801T000000Z-{stray}.rpbak"),
+        // Both package variants for one name are ambiguous.
+        format!("20260902T000000Z-{stray}.meta.json"),
+        format!("20260902T000000Z-{stray}.rpbak"),
+        format!("20260902T000000Z-{stray}.rpbak.age"),
+    ] {
+        remote.put_raw(&folder.child(&name).unwrap(), b"x".to_vec());
+    }
+    let token = CancellationToken::new();
+    let root = RemotePath::root();
+    let page = |before: Option<&'static str>| {
+        remote::page(
+            &remote,
+            &root,
+            &job.metadata.archive_id,
+            &job.metadata.device_id,
+            before,
+            LIST_PAGE,
+            &token,
+        )
+    };
+    let first = page(None).await.unwrap();
+    assert_eq!(first.entries.len(), 12, "a month is never split across pages");
+    assert_eq!(first.entries[0].created_at, "2026-09-12T08:00:00Z");
+    assert_eq!(first.entries[11].created_at, "2026-09-01T08:00:00Z");
+    assert_eq!(first.next.as_deref(), Some("2026-09"));
+    let second = page(Some("2026-09")).await.unwrap();
+    let times: Vec<_> = second.entries.iter().map(|e| e.created_at.as_str()).collect();
+    assert_eq!(
+        times,
+        ["2026-08-03T08:00:00Z", "2026-08-02T08:00:00Z", "2026-08-01T08:00:00Z", "2026-07-05T00:00:00Z"]
+    );
+    assert_eq!(second.next, None);
+    assert_eq!(remote.count("GET_META"), 0);
+    assert_eq!(
+        page(Some("../x")).await.err().unwrap().code,
+        "CLOUD_INVALID_CURSOR"
+    );
 }
 
 #[tokio::test]
@@ -952,37 +1037,67 @@ async fn retention_is_across_months_and_metadata_is_removed_before_body_other_de
 }
 
 #[tokio::test]
-async fn ambiguous_ownership_malformed_user_files_and_truncated_lists_disable_all_retention() {
+async fn retention_trusts_only_listed_owned_backups_and_never_touches_other_files() {
     for case in 0..4 {
         let l = layout();
         let remote = Fake::default();
         let (job, lease) = candidate(&l, false, Some(1));
         let old = old_owned(&l, &remote, &job, "2026-07-01T00:00:00Z", None, case != 0);
+        let old_folder = old.folder(&RemotePath::root()).unwrap();
         if case == 1 {
-            remote.0.lock().unwrap().truncated = true;
+            // The listing omits the newest backup: it cannot count as retained,
+            // so the older one is kept instead of deleted.
+            let folder = job.metadata.folder(&RemotePath::root()).unwrap();
+            let mut s = remote.0.lock().unwrap();
+            for name in [job.metadata.package.clone(), job.metadata.meta_name().unwrap()] {
+                s.hidden.insert(folder.child(&name).unwrap().segments().to_vec());
+            }
         }
-        if case == 2 {
-            remote.put_raw(
-                &old.folder(&RemotePath::root())
-                    .unwrap()
-                    .child("my-notes.txt")
-                    .unwrap(),
-                b"user data".to_vec(),
-            );
-        }
-        if case == 3 {
-            remote.put_raw(
-                &old.folder(&RemotePath::root())
-                    .unwrap()
-                    .child("fake.meta.json")
-                    .unwrap(),
-                b"{}".to_vec(),
-            );
-        }
+        let foreign = old_folder
+            .child(if case == 3 { "fake.meta.json" } else { "my-notes.txt" })
+            .unwrap();
+        remote.put_raw(&foreign, b"user data".to_vec());
         l.service.publish(&remote, &lease.cancel).await.unwrap();
-        assert_eq!(l.service.job().unwrap().phase, Phase::CleanupWarning);
-        assert_eq!(remote.count("DELETE"), 0, "case {case}");
+        // Keeping more than asked is the expected outcome, not a warning.
+        assert_eq!(l.service.job().unwrap().phase, Phase::Succeeded, "case {case}");
+        let s = remote.0.lock().unwrap();
+        assert!(s.files.contains_key(foreign.segments()), "case {case}");
+        let old_present = s
+            .files
+            .contains_key(old_folder.child(&old.package).unwrap().segments());
+        assert_eq!(old_present, case < 2, "case {case}");
+        assert_eq!(s.events.iter().filter(|(m, _)| m == "DELETE").count(), if case < 2 { 0 } else { 2 });
     }
+}
+
+#[tokio::test]
+async fn a_backlog_drains_in_bounded_runs_and_nothing_to_delete_is_not_a_warning() {
+    let l = layout();
+    let remote = Fake::default();
+    let (job, lease) = candidate(&l, false, Some(1));
+    for day in 1..=12 {
+        old_owned(&l, &remote, &job, &format!("2026-08-{day:02}T00:00:00Z"), None, true);
+    }
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    drop(lease);
+    assert_eq!(l.service.job().unwrap().phase, Phase::Succeeded);
+    assert_eq!(remote.count("DELETE"), 20, "ten backups, metadata then body");
+    let august: Vec<_> = remote
+        .0
+        .lock()
+        .unwrap()
+        .files
+        .keys()
+        .filter(|path| path.iter().any(|s| s == "2026-08") && path.last().unwrap().ends_with(".meta.json"))
+        .map(|path| path.last().unwrap().clone())
+        .collect();
+    assert_eq!(august.len(), 2);
+    assert!(august.iter().all(|name| name.starts_with("20260801") || name.starts_with("20260802")));
+    // Fewer backups than the retained count: nothing to do, no warning.
+    let (_, lease) = candidate(&l, false, Some(5));
+    l.service.publish(&remote, &lease.cancel).await.unwrap();
+    assert_eq!(l.service.job().unwrap().phase, Phase::Succeeded);
+    assert_eq!(remote.count("DELETE"), 20);
 }
 
 #[tokio::test]

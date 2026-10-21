@@ -73,10 +73,13 @@ export interface CloudPreview { token: string; backupId: string; expiresAt: stri
 export interface CloudNamespace { archiveId: string; deviceId: string }
 export interface CloudDiscovery { sources: CloudNamespace[]; warnings: string[] }
 export interface CloudRestoreOutcome { report: RestoreReport; cleanupWarning: boolean; refreshWarning: boolean }
-export interface CloudCatalog {
-  entries: CloudMetadata[];
-  cleanupSafe: boolean;
-  contentHashVerified: false; // catalog HEAD/length checks are not a content hash check
+// #322: a row read from the folder listing only (names and sizes). The backend
+// reads the remote metadata, including the content hash, when previewing it.
+export type CloudListed = Pick<CloudMetadata, "backupId" | "createdAt" | "archiveId" | "deviceId" | "package" | "sizeBytes" | "encryptionFormat">;
+export interface CloudPage {
+  entries: CloudListed[]; // whole months, newest first
+  next: string | null; // pass back as `before` for older months; null when done
+  contentHashVerified: false; // listing sizes are not a content hash check
 }
 
 export function cloudBackupApi(invoke: Invoke) {
@@ -90,7 +93,7 @@ export function cloudBackupApi(invoke: Invoke) {
     clearCredential: (connection: CloudConnection, kind: "webdavPassword" | "backupPassphrase") => invoke<void>("clear_cloud_backup_credential", { connection, kind }),
     test: (connection: CloudConnection, options: CloudOptions) => invoke<void>("cloud_backup_test", { connection, options }),
     discover: (connection: CloudConnection, options: CloudOptions) => invoke<CloudDiscovery>("cloud_backup_discover", { connection, options }),
-    preview: (connection: CloudConnection, options: CloudOptions, metadata: CloudMetadata) => invoke<CloudPreview>("cloud_backup_preview", { connection, options, metadata }),
+    preview: (connection: CloudConnection, options: CloudOptions, entry: CloudListed) => invoke<CloudPreview>("cloud_backup_preview", { connection, options, entry }),
     restore: (token: string) => invoke<CloudRestoreOutcome>("cloud_backup_restore", { token }),
     clearPreview: () => invoke<void>("cloud_backup_clear_preview"),
     start: (connection: CloudConnection, options: CloudOptions = {}) =>
@@ -100,7 +103,7 @@ export function cloudBackupApi(invoke: Invoke) {
     status: () => invoke<CloudStatus>("cloud_backup_status"),
     cancel: () => invoke<void>("cloud_backup_cancel"),
     discard: () => invoke<void>("cloud_backup_discard"),
-    list: (connection: CloudConnection, options: CloudOptions, archiveId: string, deviceId: string) =>
-      invoke<CloudCatalog>("cloud_backup_list", { connection, options, archiveId, deviceId }),
+    list: (connection: CloudConnection, options: CloudOptions, archiveId: string, deviceId: string, before: string | null = null) =>
+      invoke<CloudPage>("cloud_backup_list", { connection, options, archiveId, deviceId, before }),
   };
 }

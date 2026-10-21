@@ -730,14 +730,14 @@ async fn cloud_backup_discover(app: AppHandle, connection: cloud_credentials::Co
     service.discover(&client, &options).await
 }
 #[tauri::command]
-async fn cloud_backup_preview(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options, metadata: cloud_backup::model::Metadata) -> Result<cloud_backup::restore_flow::Preview, CommandError> {
-    let encrypted = metadata.encryption_format == cloud_backup::model::Encryption::AgeV1Scrypt;
+async fn cloud_backup_preview(app: AppHandle, connection: cloud_credentials::ConnectionDescriptor, options: cloud_backup::model::Options, entry: cloud_backup::model::Listed) -> Result<cloud_backup::restore_flow::Preview, CommandError> {
+    let encrypted = entry.encryption_format == cloud_backup::model::Encryption::AgeV1Scrypt;
     let (service, client, passphrase) = archive_worker(app, move |state| {
         let (client, binding) = cloud_backup_commands::client(state, &connection)?;
         let passphrase = if encrypted { state.cloud_credentials.read(&binding, cloud_credentials::Kind::BackupPassphrase)? } else { None };
         Ok((cloud_backup_commands::service(state)?, client, passphrase))
     }).await?;
-    service.download_preview(&client, &options, metadata, passphrase).await
+    service.download_preview(&client, &options, entry, passphrase).await
 }
 #[tauri::command]
 async fn cloud_backup_clear_preview(app: AppHandle) -> Result<(), CommandError> {
@@ -791,11 +791,12 @@ async fn cloud_backup_list(
     options: cloud_backup::model::Options,
     archive_id: String,
     device_id: String,
-) -> Result<cloud_backup::model::Catalog, CommandError> {
+    before: Option<String>,
+) -> Result<cloud_backup::model::Page, CommandError> {
     let (service, client) = archive_worker(app, move |state| {
         Ok((cloud_backup_commands::service(state)?, cloud_backup_commands::client(state, &connection)?.0))
     }).await?;
-    service.list(&client, &options, &archive_id, &device_id).await
+    service.list(&client, &options, &archive_id, &device_id, before.as_deref()).await
 }
 /// The shared store mutex coordinates UI/IPC and archive switches. Disk-heavy
 /// jobs run off the WebView thread; callers receive their existing report/error.
