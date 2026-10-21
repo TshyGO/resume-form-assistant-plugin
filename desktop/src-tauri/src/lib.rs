@@ -1422,7 +1422,7 @@ async fn ai_complete_cmd(
         .begin("resume-parse", &request_id)
         .map_err(ai_complete::resume_busy_message)?;
     let outcome = tokio::select! {
-        result = ai_complete::complete(&provider, &key, &system, &user, ai_complete::COMPLETE_TIMEOUT) => result,
+        result = ai_complete::complete(&provider, &key, &system, &user, ai_complete::Wait::Whole(ai_complete::COMPLETE_TIMEOUT)) => result,
         _ = cancelled => Err(CommandError {
             code: "AI_CANCELLED".into(),
             message: "已取消。取消不保证对方停止计算或停止计费。".into(),

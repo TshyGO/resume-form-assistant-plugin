@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::ai_client::ChatClient;
+use crate::ai_client::{ChatClient, StreamLimits};
 use crate::ai_settings::{host_of, AiProvider};
 use crate::commands::CommandError;
 
@@ -23,6 +23,37 @@ pub const ANALYZE_TIMEOUT: Duration = Duration::from_secs(180);
 /// 插件经桌面转发的 `ai.complete` 等多久：只有 `analyze` 用 180 秒。
 pub fn timeout_for(purpose: &str) -> Duration {
     if purpose == "analyze" { ANALYZE_TIMEOUT } else { COMPLETE_TIMEOUT }
+}
+
+/// 强档请求（深度分析、强模型填写）流式接收时，多久没收到新内容算卡住（#283）。
+pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// 强档请求一次生成最长多久。推理模型在大页面上要两三分钟，这里留足余量；用户随时可以停止。
+pub const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// 插件停止或断开之后，多久内发现并丢掉这次请求（#283）。
+pub const CANCEL_POLL: Duration = Duration::from_millis(500);
+
+/// 怎么等服务商的回答。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wait {
+    /// 非流式，整次请求一个总超时。
+    Whole(Duration),
+    /// 流式接收，按空闲时间判断卡住（#283）。
+    Stream(StreamLimits),
+}
+
+/// 插件经桌面转发的 `ai.complete` 怎么等：强档（带推理的强模型可能想很久）流式接收，
+/// 其余用途照旧整段等 `timeout_for`，回归面最小。
+pub fn wait_for(purpose: &str, strong: bool) -> Wait {
+    if strong {
+        Wait::Stream(StreamLimits {
+            first_reply: timeout_for(purpose),
+            idle: STREAM_IDLE_TIMEOUT,
+            total: STREAM_TOTAL_TIMEOUT,
+        })
+    } else {
+        Wait::Whole(timeout_for(purpose))
+    }
 }
 /// 模型返回的正文上限（字符数）。正常的简历解析结果是一份 JSON 数组，几千字封顶；
 /// 远超这个数多半是模型发疯了（复读、把系统提示词或整份原文吐回来），这种内容不该
@@ -78,7 +109,7 @@ pub async fn complete(
     key: &str,
     system: &str,
     user: &str,
-    timeout: Duration,
+    wait: Wait,
 ) -> Result<String, CommandError> {
     check_sizes(system, user)?;
     let body = json!({
@@ -90,7 +121,11 @@ pub async fn complete(
         ]
     });
     let host = host_of(&provider.api_url);
-    let text = ChatClient::with_timeout(timeout)?
+    let client = match wait {
+        Wait::Whole(timeout) => ChatClient::with_timeout(timeout)?,
+        Wait::Stream(limits) => ChatClient::streaming(limits)?,
+    };
+    let text = client
         .chat(&provider.api_url, key, &host, &provider.model, &body)
         .await?;
     if text.chars().count() > MAX_OUTPUT_CHARS {
@@ -100,6 +135,36 @@ pub async fn complete(
         });
     }
     Ok(text)
+}
+
+/// 和 `complete` 一样，但调用方走了就不再等（#283）：每 `CANCEL_POLL` 问一次 `peer_gone`，
+/// 为真就丢掉这次请求，连带关掉和服务商的连接，返回 `None`。流式生成时服务商一般会因此
+/// 停下，但不保证停止计算或计费。
+pub async fn complete_unless_gone(
+    provider: &AiProvider,
+    key: &str,
+    system: &str,
+    user: &str,
+    wait: Wait,
+    peer_gone: &dyn Fn() -> bool,
+) -> Option<Result<String, CommandError>> {
+    let started = std::time::Instant::now();
+    tokio::select! {
+        result = complete(provider, key, system, user, wait) => Some(result),
+        () = departure(peer_gone) => {
+            crate::ai_client::log_line(&host_of(&provider.api_url), &provider.model, "cancelled", started);
+            None
+        }
+    }
+}
+
+async fn departure(peer_gone: &dyn Fn() -> bool) {
+    loop {
+        tokio::time::sleep(CANCEL_POLL).await;
+        if peer_gone() {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -135,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn it_sends_system_and_user_and_returns_the_text() {
         let (url, server) = serve_once(200, r#"{"choices":[{"message":{"content":"[]"}}]}"#);
-        let text = complete(&provider(&url), "sk-test", "SYS", "USER", Duration::from_secs(5)).await.unwrap();
+        let text = complete(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5))).await.unwrap();
         assert_eq!(text, "[]");
         let request = server.join().unwrap();
         assert!(request.contains("authorization: Bearer sk-test") || request.contains("Authorization: Bearer sk-test"));
@@ -150,6 +215,84 @@ mod tests {
         for purpose in ["fill", "plan", "extract_job"] {
             assert_eq!(timeout_for(purpose), Duration::from_secs(120), "{purpose}");
         }
+    }
+
+    #[test]
+    fn only_strong_requests_stream() {
+        assert_eq!(wait_for("fill", false), Wait::Whole(COMPLETE_TIMEOUT));
+        assert_eq!(wait_for("extract_job", false), Wait::Whole(COMPLETE_TIMEOUT));
+        for (purpose, first_reply) in [("analyze", ANALYZE_TIMEOUT), ("fill", COMPLETE_TIMEOUT)] {
+            assert_eq!(
+                wait_for(purpose, true),
+                Wait::Stream(StreamLimits { first_reply, idle: STREAM_IDLE_TIMEOUT, total: STREAM_TOTAL_TIMEOUT }),
+                "{purpose}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_streamed_completion_sends_the_same_prompt_with_stream_on() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 65536];
+            let n = stream.read(&mut buf).unwrap();
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"[]\"}}]}\n\ndata: [DONE]\n\n";
+            stream.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}").as_bytes()).unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let text = complete(&provider(&url), "sk-test", "SYS", "USER", wait_for("analyze", true)).await.unwrap();
+        assert_eq!(text, "[]");
+        let request = server.join().unwrap();
+        assert!(request.contains(r#""stream":true"#) && request.contains(r#""temperature":0"#), "{request}");
+        assert!(request.contains("SYS") && request.contains("USER"));
+    }
+
+    /// 插件停止后：桌面在一个轮询间隔内放弃这次请求，并关掉和服务商的连接。
+    /// 多线程运行时：关连接的是 HTTP 客户端在运行时里的后台任务，和正式环境一样。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_request_is_dropped_soon_after_its_caller_leaves() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        // 一直在「思考」的服务商：每 100 毫秒发一段，直到连接被关掉。
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 65536];
+            let _ = stream.read(&mut buf).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").unwrap();
+            let started = std::time::Instant::now();
+            let line = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"...\"}}]}\n\n";
+            while started.elapsed() < Duration::from_secs(10) {
+                if stream.write_all(line).and_then(|_| stream.flush()).is_err() {
+                    return Some(started.elapsed());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            None
+        });
+        let gone = Arc::new(AtomicBool::new(false));
+        let leaving = Arc::clone(&gone);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            leaving.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", wait_for("analyze", true), &|| gone.load(Ordering::SeqCst)).await;
+        assert!(reply.is_none(), "{reply:?}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        let closed_after = tokio::task::spawn_blocking(move || server.join().unwrap()).await.unwrap();
+        assert!(closed_after.is_some_and(|after| after < Duration::from_secs(4)), "the provider connection is closed: {closed_after:?}");
+    }
+
+    #[tokio::test]
+    async fn a_caller_that_stays_gets_the_answer() {
+        let (url, server) = serve_once(200, r#"{"choices":[{"message":{"content":"[]"}}]}"#);
+        let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5)), &|| false).await;
+        assert_eq!(reply.unwrap().unwrap(), "[]");
+        server.join().unwrap();
     }
 
     #[test]
@@ -195,7 +338,7 @@ mod tests {
         let long = "字".repeat(MAX_OUTPUT_CHARS + 1);
         let body = format!(r#"{{"choices":[{{"message":{{"content":"{long}"}}}}]}}"#);
         let (url, _server) = serve_once(200, body);
-        let err = complete(&provider(&url), "sk-test", "SYS", "USER", Duration::from_secs(5))
+        let err = complete(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5)))
             .await
             .unwrap_err();
         assert_eq!(err.code, "AI_OUTPUT_TOO_LARGE");

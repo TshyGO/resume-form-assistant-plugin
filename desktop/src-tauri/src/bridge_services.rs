@@ -16,12 +16,20 @@ pub enum AiReply {
         http_status: Option<u16>,
         host: Option<String>,
     },
+    /// The caller left before the answer was ready, so the request was dropped (#283).
+    /// Nobody is there to receive a reply.
+    Cancelled,
 }
 
 pub trait BridgeServices: Send + Sync + 'static {
     /// `strong` asks for the strong-model provider (#223). The tier that was actually
     /// chosen comes back alongside the reply; `None` when no provider could be chosen.
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>);
+    /// `ai_complete` for a caller that may leave first. `peer_gone` says whether it has;
+    /// a request whose caller left is dropped instead of read to the end (#283).
+    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, _peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
+        self.ai_complete(purpose, strong, system, user)
+    }
     fn open_view(&self, view: &str) -> bool;
     fn usage_touch(&self) {}
     fn usage_settings(&self, _action: &str) -> Result<Value, ErrorCode> { Err(ErrorCode::Unavailable) }
@@ -110,7 +118,10 @@ fn from_ai_error(err: CommandError, host: Option<String>) -> AiReply {
         "AI_NETWORK" => "network",
         _ => "bad_response",
     };
-    AiReply::Failed { reason, http_status: None, host: None }
+    // 等不到、连不上时带上主机名，插件的提示才说得清是哪家服务商（#283）。主机名在
+    // 失败回复里一直是允许的字段，旧插件照样收。
+    let host = host.filter(|_| matches!(reason, "timeout" | "network"));
+    AiReply::Failed { reason, http_status: None, host }
 }
 
 impl BridgeServices for DesktopBridgeServices {
@@ -143,6 +154,10 @@ impl BridgeServices for DesktopBridgeServices {
         serde_json::to_value(status).map_err(|_| ErrorCode::Unavailable)
     }
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
+        self.ai_complete_watched(purpose, strong, system, user, &|| false)
+    }
+
+    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
         let state = self.app.state::<AppState>();
         let data_root = match ai_data_root(&state) {
             Ok(root) => root,
@@ -157,10 +172,11 @@ impl BridgeServices for DesktopBridgeServices {
             return (from_ai_error(err, None), tier);
         }
         let host = safe_host(&provider.api_url);
-        let timeout = ai_complete::timeout_for(purpose);
-        let reply = match tauri::async_runtime::block_on(ai_complete::complete(&provider, &key, system, user, timeout)) {
-            Ok(text) => AiReply::Ok(text),
-            Err(err) => from_ai_error(err, host),
+        let wait = ai_complete::wait_for(purpose, strong);
+        let reply = match tauri::async_runtime::block_on(ai_complete::complete_unless_gone(&provider, &key, system, user, wait, peer_gone)) {
+            Some(Ok(text)) => AiReply::Ok(text),
+            Some(Err(err)) => from_ai_error(err, host),
+            None => AiReply::Cancelled,
         };
         (reply, tier)
     }
@@ -254,6 +270,12 @@ fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, hos
 }
 
 pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer, ErrorCode> {
+    answer_watched(request, services, &|| false)
+}
+
+/// `answer` for a connection whose caller may leave first: an AI request is dropped once
+/// `peer_gone` says so (#283).
+pub fn answer_watched(request: &Request, services: &dyn BridgeServices, peer_gone: &dyn Fn() -> bool) -> Result<Answer, ErrorCode> {
     match request.message_type {
         resume_pro_protocol::MessageType::UsageTouch => {
             services.usage_touch();
@@ -272,7 +294,7 @@ pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer
             // send either, and must not get `tier` back: their schema copy rejects it.
             let strong = requested == Some("strong") || (requested.is_none() && purpose == "analyze");
             let wants_tier = requested.is_some() || purpose == "analyze";
-            let (reply, tier) = services.ai_complete(purpose, strong, system, user);
+            let (reply, tier) = services.ai_complete_watched(purpose, strong, system, user, peer_gone);
             let tier = tier.filter(|_| wants_tier);
             match reply {
                 AiReply::Ok(text) => {
@@ -287,6 +309,8 @@ pub fn answer(request: &Request, services: &dyn BridgeServices) -> Result<Answer
                     }
                 }
                 AiReply::Failed { reason, http_status, host } => failed(request, reason, http_status, host, tier),
+                // The caller is gone; this error frame has no one to reach and only closes the exchange.
+                AiReply::Cancelled => Err(ErrorCode::Unavailable),
             }
         }
         resume_pro_protocol::MessageType::UiOpen => {
@@ -397,6 +421,37 @@ mod tests {
         }
     }
 
+    /// #283：深度分析超时，回包要带上档位和主机名，插件才能说「强模型（主机）等了多久」。
+    #[test]
+    fn an_analysis_timeout_names_the_tier_and_the_host() {
+        let analyze = request("ai.complete", json!({"purpose": "analyze", "system": "SYS", "user": "USER"}));
+        let mut services = fake(AiReply::Failed { reason: "timeout", http_status: None, host: Some("api.deepseek.com".into()) }, false);
+        services.strong_configured = true;
+        assert_eq!(
+            answer(&analyze, &services).unwrap().payload,
+            json!({"status": "failed", "reason": "timeout", "tier": "strong", "host": "api.deepseek.com"})
+        );
+        let strong_fill = request("ai.complete", json!({"purpose": "fill", "tier": "strong", "system": "SYS", "user": "USER"}));
+        assert_eq!(answer(&strong_fill, &services).unwrap().payload["tier"], "strong");
+    }
+
+    #[test]
+    fn a_request_whose_caller_left_gets_no_answer() {
+        struct Leaving;
+        impl BridgeServices for Leaving {
+            fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (AiReply, Option<Tier>) {
+                panic!("a watched request must go through ai_complete_watched")
+            }
+            fn ai_complete_watched(&self, _: &str, _: bool, _: &str, _: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
+                assert!(peer_gone(), "the caller's departure reaches the service");
+                (AiReply::Cancelled, Some(Tier::Strong))
+            }
+            fn open_view(&self, _: &str) -> bool { false }
+        }
+        let analyze = request("ai.complete", json!({"purpose": "analyze", "system": "SYS", "user": "USER"}));
+        assert_eq!(answer_watched(&analyze, &Leaving, &|| true).err(), Some(ErrorCode::Unavailable));
+    }
+
     #[test]
     fn analyze_asks_for_the_strong_tier_and_reports_the_tier_actually_used() {
         let analyze = request("ai.complete", json!({"purpose": "analyze", "system": "SYS", "user": "USER"}));
@@ -503,9 +558,10 @@ mod tests {
                 AiReply::Failed { reason, http_status, host } => {
                     assert_eq!(reason, expected);
                     assert_eq!(http_status, status);
-                    if status.is_some() { assert_eq!(host.as_deref(), Some("api.example.com")); }
+                    let named = status.is_some() || matches!(expected, "timeout" | "network");
+                    assert_eq!(host.as_deref(), named.then_some("api.example.com"), "{code}");
                 }
-                AiReply::Ok(_) => panic!("{code} cannot be a success"),
+                other => panic!("{code} must map to a failure, got {other:?}"),
             }
         }
         assert_eq!(safe_host("https://[::1]:8443/v1"), None);

@@ -26,12 +26,14 @@ const desktopCalls = new Map();
 function sendToDesktop({ purpose, tier, system, user, signal }) {
   if (signal?.aborted) return Promise.resolve({ ok: false, reason: "cancelled" });
   const callId = crypto.randomUUID();
+  const started = performance.now();
   return new Promise(resolve => {
     const finish = reply => {
       if (!desktopCalls.has(callId)) return;
       desktopCalls.delete(callId);
       signal?.removeEventListener("abort", onAbort);
-      resolve(reply);
+      // #283：超时的提示要说等了多久、等的是什么。秒数在这边量，不依赖桌面版本。
+      resolve(reply?.reason === "timeout" ? { ...reply, purpose, elapsedMs: performance.now() - started } : reply);
     };
     const onAbort = () => {
       self.postMessage({ kind: "desktop-cancel", callId });
@@ -155,7 +157,7 @@ function aiFailureMessage(result) {
     case "credential_unavailable": return "桌面读不出系统凭据库里的 Key，请在桌面设置里重新保存。";
     case "auth": return "AI 服务商拒绝了 Key（HTTP 401/403），请在桌面设置里检查。";
     case "rate_limited": return "AI 服务商限流了，请稍后再试。";
-    case "timeout": return "AI 服务商长时间没有返回。";
+    case "timeout": return timeoutMessage(result);
     case "network": return "桌面连不上 AI 服务商，请检查网络或代理。";
     case "http": return `AI 服务商返回 HTTP ${result.httpStatus ?? "错误"}。`;
     case "bad_response": return "AI 返回的内容无法使用。";
@@ -168,6 +170,19 @@ function aiFailureMessage(result) {
     case "incompatible": return "桌面程序版本太旧，请更新桌面。";
     default: return "无法连接桌面程序，请检查程序是否运行。";
   }
+}
+
+// #283：说清是哪一档、哪家服务商、等了多久。强模型多半是带深度思考的模型在大页面上生成太久，
+// 也可能是服务商或网络卡住了；插件分不出是哪一种，两种办法都说。
+function timeoutMessage(result) {
+  const seconds = Number.isFinite(result?.elapsedMs) ? Math.round(result.elapsedMs / 1000) : 0;
+  const waited = seconds > 0 ? `等了 ${seconds} 秒` : "长时间";
+  const host = typeof result?.host === "string" && result.host ? `（${result.host}）` : "";
+  if (result?.tier === "strong") {
+    const task = result.purpose === "analyze" ? "页面分析" : "字段匹配";
+    return `强模型${host}${waited}没有完成${task}。可能是服务商或网络卡住了，也可能是带深度思考的模型在字段多的页面上生成太久：可以稍后重试，或在桌面设置里把强模型换成不带深度思考的模型。`;
+  }
+  return `AI 服务商${host}${waited}没有返回，请稍后重试。`;
 }
 
 // #223: with the strong tier asked for, these two failures are about the strong model, not

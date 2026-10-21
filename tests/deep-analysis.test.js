@@ -284,6 +284,54 @@ test("happy path: analyse once, fill with the strong-tier budget that is left, r
   assert.equal(h.controller.report().tierUsed, "strong");
 });
 
+test("a long wait for the model shows the seconds waited, and only while waiting", async () => {
+  let clock = 1_000_000;
+  let answer;
+  const h = harness({
+    now: () => clock,
+    analyze: (request) => new Promise((resolve) => {
+      h.calls.analyze.push(request);
+      answer = () => resolve({ success: true, tierUsed: "strong", spec: { pageState: "editing", fields: [{ ref: "e1", label: "姓名", control: "text" }] } });
+    })
+  });
+  await h.controller.start();
+  const analyzing = await h.settle((state) => state.phase === "analyzing");
+  assert.equal(analyzing.message, "AI 正在分析页面结构…", "no counter in the first seconds");
+  clock += 4_999;
+  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…");
+  clock += 15_001;
+  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…（已等待 20 秒）");
+  clock += 25_000;
+  assert.equal(h.controller.describe().message,
+    "AI 正在分析页面结构…（已等待 45 秒）。带深度思考的模型在字段多的页面上可能要几分钟；长时间没有任何返回会自动停止，你也可以随时停止。");
+  answer();
+  const done = await h.settle(finished);
+  clock += 60_000;
+  assert.doesNotMatch(h.controller.describe().message, /已等待/, `${done.phase} is not a wait`);
+});
+
+test("filling by a site recipe counts the wait but does not talk about deep-thinking models", async () => {
+  let clock = 1_000_000;
+  let finish;
+  const h = harness({
+    now: () => clock,
+    recipeActions: () => ({ ok: true, preActions: [], sections: [], missingSections: [] }),
+    planActions: () => ({ items: [], manual: [], blocked: [], adds: {} }),
+    recipeFillInput: () => ({ recipe: { status: "hit" }, input: null }),
+    fill: (options) => new Promise((resolve) => {
+      h.calls.fill.push(options);
+      finish = () => resolve({ outcome: "success", filledCount: 1, unfilledCount: 0, unconfirmedCount: 0, calls: 1 });
+    })
+  });
+  assert.equal(h.controller.startRecipe({ recipe: { fields: [] } }).ok, true);
+  const filling = await h.settle((state) => state.phase === "filling");
+  assert.equal(filling.mode, "recipe");
+  clock += 45_000;
+  assert.equal(h.controller.describe().message, "正在匹配简历并填写网页…（已等待 45 秒）");
+  finish();
+  await h.settle(finished);
+});
+
 test("three outline parts take three analyses; the fill gets only the three calls left", async () => {
   const h = harness();
   h.env.parts = [1, 2, 3].map((n) => ({ text: `part ${n}`, refs: [`e${n}`, `e${n + 3}`] }));
