@@ -293,6 +293,9 @@
   // #283：等模型回答的这两步，等久了在文案后面加上已等待的秒数，用户能看出它没卡住。
   const WAITING = ["analyzing", "filling"];
   const SHOW_WAIT_AFTER_MS = 5000;
+  // 等到这么久还没回来，补一句为什么会慢、会不会一直挂着（只知道等了多久，不知道模型进行到哪一步）。
+  const EXPLAIN_WAIT_AFTER_MS = 30000;
+  const WAIT_EXPLAINED = "带深度思考的模型在字段多的页面上可能要几分钟；长时间没有任何返回会自动停止，你也可以随时停止。";
   const PHASES = ["idle", ...ACTIVE, "completed", "needs_action", "failed", "stopped"];
   const ACTION_KINDS_ALL = ["edit", "expand", "add"];
   const countKinds = (list, key = item => item.kind) => Object.fromEntries(ACTION_KINDS_ALL.map(kind => [kind,
@@ -917,7 +920,9 @@
     function shownMessage() {
       if (!WAITING.includes(state.phase)) return state.message;
       const waited = now() - state.since;
-      return waited >= SHOW_WAIT_AFTER_MS ? `${state.message}（已等待 ${Math.floor(waited / 1000)} 秒）` : state.message;
+      if (waited < SHOW_WAIT_AFTER_MS) return state.message;
+      const counted = `${state.message}（已等待 ${Math.floor(waited / 1000)} 秒）`;
+      return waited >= EXPLAIN_WAIT_AFTER_MS ? `${counted}${WAIT_EXPLAINED}` : counted;
     }
 
     function describe() {

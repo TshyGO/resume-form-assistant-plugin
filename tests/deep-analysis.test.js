@@ -299,8 +299,11 @@ test("a long wait for the model shows the seconds waited, and only while waiting
   assert.equal(analyzing.message, "AI 正在分析页面结构…", "no counter in the first seconds");
   clock += 4_999;
   assert.equal(h.controller.describe().message, "AI 正在分析页面结构…");
-  clock += 40_001;
-  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…（已等待 45 秒）");
+  clock += 15_001;
+  assert.equal(h.controller.describe().message, "AI 正在分析页面结构…（已等待 20 秒）");
+  clock += 25_000;
+  assert.equal(h.controller.describe().message,
+    "AI 正在分析页面结构…（已等待 45 秒）带深度思考的模型在字段多的页面上可能要几分钟；长时间没有任何返回会自动停止，你也可以随时停止。");
   answer();
   const done = await h.settle(finished);
   clock += 60_000;
