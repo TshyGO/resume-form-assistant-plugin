@@ -353,3 +353,62 @@ test('a field that appears already filled is left as it is', async () => {
   assert.equal(result.filledCount, 1);
   assert.equal(h.requests.length, 1);
 });
+
+test('a field whose repeat number shifts because a same-named field appeared is not treated as new', async () => {
+  // CodeRabbit（PR #329）：两段教育经历都有「专业」。第 1 段选完学历后多出一个「专业」，第 2 段原有的「专业」
+  // 序号随之变化。只看序号会把它当新字段再填一次，第二次写入时被当成用户改过，整次填写停下。
+  const late = lateScanner();
+  const requests = [];
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers: require('../ai-helpers.js'),
+    sendMessage: async (message) => {
+      if (message.type !== 'AI_FILL') return { success: true, matches: [] };
+      requests.push(message);
+      return requests.length === 1 ? { success: true, matches: [{ fieldId: 'field-0', value: '本科' }, { fieldId: 'field-1', value: '示例管理' }] }
+        : { success: true, matches: message.formFields.map((field) => ({ fieldId: field.fieldId, value: '示例工程' })) };
+    } });
+  const edu = new ctx.HTMLSelectElement(); edu.tagName = 'SELECT';
+  edu.options = [{ value: '', text: '请选择' }, { value: 'bk', text: '本科' }]; edu.selectedIndex = 0;
+  const second = new ctx.HTMLInputElement(), grown = new ctx.HTMLInputElement();
+  const before = [control(edu, { controlKind: 'select', label: '学历', section: '教育经历' }),
+    control(second, { label: '专业', section: '教育经历', repeatIndex: 0, repeatCount: 1 })];
+  const after = [before[0], control(grown, { label: '专业', section: '教育经历', repeatIndex: 1, repeatCount: 2 }),
+    control(second, { label: '专业', section: '教育经历', repeatIndex: 2, repeatCount: 2 })];
+  const scanner = scanWith(before);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args), controls: edu.selectedIndex === 1 ? after : before }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '教育经历', fields: [{ key: '学历', value: '本科' }, { key: '专业', value: '示例工程' }, { key: '专业', value: '示例管理' }] }] }], activeTemplateId: 't' });
+  ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(result.overwriteDeclined, false, JSON.stringify(result));
+  assert.equal(second.value, '示例管理');
+  assert.equal(grown.value, '示例工程');
+  assert.equal(result.filledCount, 3, JSON.stringify(result));
+  assert.equal(JSON.stringify(requests[1].formFields.map((field) => field.label)), JSON.stringify(['专业']));
+});
+
+test('a field replaced right after the write that now shows something else is not retried or overwritten', async () => {
+  // 审查 A1：写完立刻被页面换掉，新字段里既不是填写前的空值、也不是刚写的值（可能是用户刚改的）：不碰，按未确认。
+  const late = lateScanner();
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '学士' }] }) });
+  const oldDegree = new ctx.HTMLInputElement(), newDegree = new ctx.HTMLInputElement();
+  const stale = new Set();
+  const fields = (degree) => [control(degree, { label: '学位', section: '教育经历' })];
+  let rebuilt = false;
+  const dispatch = oldDegree.dispatchEvent.bind(oldDegree);
+  oldDegree.dispatchEvent = (event) => {
+    const answer = dispatch(event);
+    if (!rebuilt && oldDegree.value === '学士') {
+      newDegree.value = '硕士'; oldDegree.isConnected = false; stale.add(oldDegree); rebuilt = true;
+    }
+    return answer;
+  };
+  const scanner = scanWith(fields(oldDegree), stale);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args), controls: rebuilt ? fields(newDegree) : fields(oldDegree) }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '教育经历', fields: [{ key: '学位', value: '学士' }] }] }], activeTemplateId: 't' });
+  ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(rebuilt, true);
+  assert.equal(newDegree.value, '硕士', 'what the rebuilt field shows is kept');
+  assert.equal(result.filledCount, 0, JSON.stringify(result));
+  assert.equal(result.unconfirmedCount, 1);
+});

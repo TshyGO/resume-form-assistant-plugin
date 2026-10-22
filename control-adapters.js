@@ -177,6 +177,11 @@
         .some(token => /(?:^|[-_])auto-?complete$/i.test(token)));
     }
 
+    function plainTextBox(ctx) {
+      const el = ctx.el;
+      return ctx.kind === 'custom-select' && el instanceof HTMLInputElement && !el.readOnly && !el.disabled && ['text', 'search'].includes(el.type);
+    }
+
     async function text(ctx, value) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
@@ -258,7 +263,9 @@
         if (custom) {
           const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
           // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
-          if (outcome.reason && ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason) && acceptsFreeText(ctx) && !stop(ctx)) {
+          // 看成下拉、却从头到尾没有弹层的可编辑框（外层类名碰巧带 select）：其实是普通文本框，照文本框填写并核对。
+          if (outcome.reason && ((['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason) && acceptsFreeText(ctx))
+            || (outcome.noPopup && plainTextBox(ctx))) && !stop(ctx)) {
             return await text(ctx, desiredValue);
           }
           if (outcome.reason) return result(false, outcome.reason, ctx);

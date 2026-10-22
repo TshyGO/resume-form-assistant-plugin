@@ -27,6 +27,8 @@
   // 选完读组件上显示的文字核验。拿不准（两块并存、没有匹配、被回滚）一律不选或不算成功。
   const ARIA_SIGNALS = '[role="combobox"], [aria-haspopup]:not([aria-haspopup="false"]), [aria-controls], [aria-owns], [aria-autocomplete]';
   const GENERIC_EMPTY = /^(?:暂无数据|无匹配数据|没有数据|无数据|加载中|搜索中|no data|no results?|loading)/i;
+  // 弹层里的操作文字（北森「勾选 + 确定」式底部按钮、已选计数）不是选项。
+  const GENERIC_ACTION = /^(?:确定|确认|完成|取消|关闭|清空|清空已选|重置|全选|已选\s*\d+\s*\/\s*\d+|ok|cancel|confirm|done|clear|reset)$/i;
   const GENERIC_NOISE = /(?:^|[-_])(?:error|message|tip|tips|tooltip|help|hint|feedback)(?:$|[-_])/i;
   // 带月份的日期：通用路径分不清日历格子，交给日期操作或不填。
   const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
@@ -172,7 +174,8 @@
       const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
       const disabled = node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled(?:$|[-_])/i.test(String(node.className || ''));
       return { node, target: clickTarget(node, hasText), text: primary, value: full, full, disabled };
-    }).filter(option => !GENERIC_EMPTY.test(option.full));
+    }).filter(option => !GENERIC_EMPTY.test(option.full) && !GENERIC_ACTION.test(option.full)
+      && !option.node.closest('button, [role="button"], [class*="footer" i]'));
   }
   const CALENDAR_CLASS = /(?:^|[-_])(?:date|calendar|datepicker|daterange)(?:$|[-_])|date-?picker/i;
   function looksCalendar(layer, popup, h) {
@@ -297,6 +300,13 @@
     const cells = (read, keep = () => true) => leaves.filter(el => inCell(el) && read(el.textContent) && keep(el)).map(el => ({ value: read(el.textContent), node: el }));
     const headYear = leaves.find(el => !inCell(el) && yearOf(el.textContent));
     const headMonth = leaves.find(el => !inCell(el) && monthOf(el.textContent));
+    const disabledCell = el => {
+      for (let node = el; node && node !== layer; node = node.parentElement) {
+        if (node.getAttribute?.('aria-disabled') === 'true' || node.hasAttribute?.('disabled')) return true;
+        if (node.matches?.('td, [role="gridcell"]')) return false;
+      }
+      return false;
+    };
     const buttons = Array.from(layer.querySelectorAll('[class]')).filter(el => h.visible(el) && !el.closest('td')).map(el => {
       const cls = String(el.getAttribute('class')).toLowerCase();
       const dir = /prev|last|left/.test(cls) ? -1 : /next|right/.test(cls) ? 1 : 0;
@@ -310,9 +320,10 @@
       years: cells(yearOf), months: cells(monthOf),
       // 判断是不是日期表看全部格子（今天以后、上下月的灰格也算）；能点的只有本月可选的。
       dayCells: cells(dayOf).length,
-      days: cells(dayOf, el => !otherMonth(el)),
+      // 8. 用 aria-disabled / disabled 属性标出的不可选日期也不点。
+      days: cells(dayOf, el => !otherMonth(el) && !disabledCell(el)),
       headYear: headYear ? yearOf(headYear.textContent) : 0, headYearNode: headYear || null,
-      headMonth: headMonth ? monthOf(headMonth.textContent) : 0,
+      headMonth: headMonth ? monthOf(headMonth.textContent) : 0, headMonthNode: headMonth || null,
       button: (level, dir) => buttons.find(button => button.level === level && button.dir === dir)?.el || null,
       input
     };
@@ -398,7 +409,9 @@
           const hits = view.days.filter(cell => cell.value === want.d);
           node = hits.length === 1 ? hits[0].node : null; last = true;
         } else if (view.headYearNode && view.headYear !== want.y) node = view.headYearNode;
-        else node = view.button('month', want.y * 12 + want.m < view.headYear * 12 + view.headMonth ? -1 : 1);
+        // 同年不同月：有「上/下一月」就点；没有就点月份标题进月份表，再没有就点年份标题从头走。
+        else node = view.button('month', want.y * 12 + want.m < view.headYear * 12 + view.headMonth ? -1 : 1)
+          || view.headMonthNode || view.headYearNode;
       } else if (view.months.length >= 12) {
         if (!view.headYear || view.headYear === want.y) {
           const hits = view.months.filter(cell => cell.value === want.m);
@@ -440,6 +453,17 @@
     // 日期（带月份的值、「至今」，或宿主按日期控件交来的）：只在点开的是日历时操作，见 pickDate。
     const dateWanted = info.library === 'generic' && !info.cascade
       && (ctx.kind === 'date' || DATE_VALUE.test(desired[0]) || PRESENT.test(desired[0]));
+    // 通用路线：组件上显示的已经就是要填的值（整段或中文部分完全相同），不再点开。
+    // 「勾选 + 确定」式弹层右侧的「已选」栏会把已选项再列一遍，点开反而分不清两个同名选项（金发民族）。
+    if (info.library === 'generic' && !dateWanted) {
+      const sameAsWanted = text => {
+        const full = trim(text), [first, ...rest] = full.split(/\s*\/\s*/);
+        const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
+        return [full, primary].some(value => h.helpers.normalizeText(value) === h.helpers.normalizeText(desired[0]));
+      };
+      const shownNow = selectedTexts(info);
+      if (shownNow?.length === 1 && sameAsWanted(shownNow[0])) return { accepted: () => (selectedTexts(info) || []).length === 1 && sameAsWanted(selectedTexts(info)[0]) };
+    }
     const doc = info.el.ownerDocument;
     // 宿主在聚焦之前记下的弹层：有的下拉一聚焦就展开（#269 智联 Element UI），聚焦后再记就把它算成了原有的。
     const before = ctx.popupsBeforeFocus || new Set(popups(doc, h.visible));
@@ -514,6 +538,8 @@
       h.write(info.el, desired[0], ctx); h.input(info.el); typedFirst = true;
       opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(1), Boolean);
     }
+    // 从头到尾没出现过弹层（打过字也没有）：宿主可以按普通文本框填，见 control-adapters。
+    if (opened.reason === 'verification_timeout' && info.library === 'generic' && !dateWanted) state.noPopup = true;
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
     let popup = opened.value.popup; ctx.popup = opened.value.layer || popup;
@@ -554,7 +580,19 @@
     const loading = () => info.combo.getAttribute('aria-busy') === 'true' || popup.getAttribute('aria-busy') === 'true';
     const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
-      const ready = await h.waitUntil(ctx, doc.documentElement, () => readOptions(level), list => (!loading() && list.length > 0) || (searchable && !searchDone && list.length === 0));
+      // 通用路线：第一次点开时选项常常还在从网站后台加载（金发民族，加载期间只显示「请在左侧选择内容」之类），
+      // 等列表连续 300ms 不变再判断有没有要的选项；一直在变或一直为空，等满后再改用搜索框。
+      const generic = info.library === 'generic';
+      const eagerSearch = searchable && !searchDone && !generic;
+      let lastSeen = null, steadySince = Date.now();
+      const watchOptions = () => {
+        const list = readOptions(level), seen = list.map(option => option.full ?? option.text).join('\n');
+        if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
+        return list;
+      };
+      let ready = await h.waitUntil(ctx, doc.documentElement, generic ? watchOptions : () => readOptions(level),
+        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300)) || (eagerSearch && list.length === 0));
+      if (ready.reason === 'verification_timeout' && generic && (searchable && !searchDone || lastSeen)) ready = { value: readOptions(level) };
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
       let found = match(list, desired[level], h.helpers);
@@ -636,6 +674,7 @@
     const state = {}; let outcome;
     // 页面异常也按失败收尾（收起弹层、恢复搜索词）；只把固定的原因码交出去。
     try { outcome = await perform(ctx, raw, h, state); } catch { outcome = { reason: 'operation_failed' }; }
+    if (outcome.reason && state.noPopup) outcome = { ...outcome, noPopup: true };
     try { return outcome; }
     finally {
       state.watch?.disconnect();

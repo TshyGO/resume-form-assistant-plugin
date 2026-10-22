@@ -2383,12 +2383,15 @@
       phase = "roundTripMs";
       stage = "match";
       phaseStart = performance.now();
+      // 补填新出现字段时发出的 AI 请求（#269）：停止时一并取消，不等它返回。
+      let catchUpRequestId = null;
       if (cancelButton) {
         cancelButton.hidden = false;
         cancelButton.disabled = false;
         cancelButton.onclick = async () => {
           if (phase === 'fillMs') {
             writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
             showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
             return;
           }
@@ -2553,12 +2556,15 @@
       const pickUpNewFields = async (position) => {
         await waitForPageSettle();
         if (!isCurrent()) return;
+        // 同名题目的序号会因为新字段插进来而变（两段教育经历都有「专业」）：原来就扫到过的元素不算新字段。
+        const nodeOf = entry => entry?.kind === "radio" ? entry.elements?.[0] : entry?.element;
         const known = new Set([...fieldMap.values()].map(entry => fieldBindingKey(entry.binding)));
+        const knownNodes = new Set([...fieldMap.values()].map(nodeOf).filter(Boolean));
         const fresh = scanFillableFields();
         const added = fresh.fields.filter(field => {
           const entry = fresh.fieldMap.get(field.fieldId);
           const key = fieldBindingKey(entry?.binding);
-          return key && !known.has(key) && isFieldBindingCurrent(entry) && !hasExistingValue(entry);
+          return key && !known.has(key) && !knownNodes.has(nodeOf(entry)) && isFieldBindingCurrent(entry) && !hasExistingValue(entry);
         });
         if (!added.length) return;
         for (const field of added) {
@@ -2596,12 +2602,15 @@
           const batch = pendingNew.splice(0);
           button.textContent = "正在补填新出现的字段...";
           let reply = null;
+          catchUpRequestId = `${requestId}-more-${catchUpRounds}`;
           try {
-            reply = await self.ResumeProAIClient.send({ type: "AI_FILL", requestId: `${requestId}-more-${catchUpRounds}`, formFields: batch, resumeFields });
+            reply = await self.ResumeProAIClient.send({ type: "AI_FILL", requestId: catchUpRequestId, formFields: batch, resumeFields });
           } catch {
             reply = null;
           }
+          catchUpRequestId = null;
           button.textContent = "正在填写网页...";
+          if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
           const ids = new Set(batch.map(field => field.fieldId));
           const more = reply?.success && Array.isArray(reply.matches) ? reply.matches.filter(match => ids.has(match.fieldId)) : [];
           if (!more.length) break;
@@ -2671,16 +2680,25 @@
         };
         let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
         stopInterruptedControl();
-        // 选完页面立刻重画（智联学位）：旧字段已经不在了，在找回的新字段上再做一次，由正常核对确认。
-        // 这次变化是插件自己的写入引起的，所以以新字段当前的内容为批准值；只重试一次。
+        // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
+        // 内容和填写前一样（重建冲掉了这次写入）就在新字段上重做一次；显示的正是刚选的值就算填上；
+        // 别的内容（可能是用户刚改的，或页面带出的）不碰，按未确认处理。
         if (!filled && !assisted && writeAttempted && textFillFailureCode(element) === "element_disconnected") {
           const fresh = rebindFieldEntry(element);
-          if (fresh) {
-            approvedValues.set(fresh, fillValueSnapshot(fresh));
+          const approved = approvedValues.get(element);
+          const now = fresh ? fillValueSnapshot(fresh) : null;
+          if (fresh && now !== null && now === approved) {
+            approvedValues.set(fresh, approved);
             fieldMap.set(match.fieldId, fresh);
             element = fresh;
             filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
             stopInterruptedControl();
+          } else if (fresh && showsFilledValue(fresh, match.value)) {
+            approvedValues.set(fresh, now);
+            fieldMap.set(match.fieldId, fresh);
+            textFillFailures.delete(fresh.kind === "radio" ? fresh.elements[0] : fresh.element);
+            element = fresh;
+            filled = true;
           }
         }
         if (assisted && filled) {
@@ -3156,8 +3174,31 @@
     return binding?.label ? [binding.controlKind, binding.section, binding.label, binding.repeatIndex, binding.repeatCount].join("\u0000") : "";
   }
 
-  // 等页面对上一个选择的反应结束：增删节点或显示/隐藏连续 300ms 没有变化，最多等 1.5s。
-  // 插件自己的侧栏和填写高亮（只改 class）不算。
+  // 页面重画后找回的字段显示的是不是刚填的值（只读，不写）：下拉看组件显示的文字，单选看选中项，其余看框里的值。
+  function showsFilledValue(entry, value) {
+    const helpers = self.ResumeProAIHelpers;
+    const matches = texts => texts.some(text => text && (helpers?.findSelectOptionIndex
+      ? helpers.findSelectOptionIndex([{ value: text, text }], value) >= 0 : String(text).trim() === String(value).trim()));
+    try {
+      if (entry.kind === "radio") {
+        const checked = entry.elements.find(radioChecked);
+        return Boolean(checked) && matches([checked instanceof HTMLInputElement ? getRadioOptionLabel(checked) : checked.textContent.trim()]);
+      }
+      const el = entry.element;
+      if (["custom-select", "cascader"].includes(entry.controlKind)) return matches(self.ResumeProCustomControls?.readSelection?.(entry)?.texts || []);
+      if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
+      const shown = String(el.value ?? "");
+      if (entry.pickerType || entry.controlKind === "date") {
+        return ["date", "month"].some(mode => helpers?.normalizeDateValue?.(shown, mode) === helpers?.normalizeDateValue?.(String(value), mode) && /^\d{4}-\d{2}/.test(helpers.normalizeDateValue(shown, mode)));
+      }
+      return shown === normalizeExpectedTextValue(el, value);
+    } catch {
+      return false;
+    }
+  }
+
+  // 等页面对上一个选择的反应结束：增删节点或样式、显示/隐藏、class 连续 300ms 没有变化，最多等 1.5s。
+  // 插件自己的侧栏和填写高亮不算。
   function waitForPageSettle(quietMs = 300, maxMs = 1500) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
     const root = document.body || document.documentElement;
@@ -3165,10 +3206,12 @@
     return new Promise((resolve) => {
       const start = performance.now();
       let last = start;
+      const ours = (record) => record.target?.closest?.(`#${SIDEBAR_ID}`) || (record.attributeName === "class"
+        && (record.target?.classList?.contains?.(FIELD_HIGHLIGHT_CLASS) || String(record.oldValue || "").includes(FIELD_HIGHLIGHT_CLASS)));
       const observer = new Observer((records) => {
-        if (records.some((record) => !record.target?.closest?.(`#${SIDEBAR_ID}`))) last = performance.now();
+        if (records.some((record) => !ours(record))) last = performance.now();
       });
-      observer.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["style", "hidden"] });
+      observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["style", "hidden", "class"] });
       const tick = () => {
         const now = performance.now();
         if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);

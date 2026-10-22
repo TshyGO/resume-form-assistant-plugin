@@ -162,8 +162,9 @@
     return ctx.boundaries;
   }
 
-  // #269 智联「离职时间」：只读的显示框和真正的日期框叠在同一个位置（上面盖着遮罩）。叠在日期组件或
-  // 下拉组件输入框正上方的只读框只是显示层，不算单独的字段，也不把题目切开。没有布局（尺寸为 0）时不判断。
+  // #269 智联「离职时间」：只读的显示框和真正的日期框叠在同一个位置（上面盖着遮罩）。叠在日期组件
+  // 输入框正上方的只读框只是显示层，不算单独的字段，也不把题目切开。目前只见过日期这一种，下拉不处理。
+  // 没有布局（尺寸为 0）时不判断。
   function isOverlayInput(el, ctx) {
     if (el.tagName !== "INPUT" || !el.readOnly || !["text", "search"].includes(inputType(el))) return false;
     const r = el.getBoundingClientRect?.();

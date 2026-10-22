@@ -390,7 +390,7 @@ test("Beisen div radio group: a component that ignores the click is not counted"
 
 // #269 日历：北森 phoenix（选到日、带输入框；或只选到月）和 Element（只读框，按 年 → 月 → 日 逐级点）。
 // 合成日历按 2026-10-22 真机看到的结构写，今天固定为 2026-10-22。
-function calendarHost({ kind = "phoenix-day", typing = true, futureDisabled = false } = {}) {
+function calendarHost({ kind = "phoenix-day", typing = true, futureDisabled = false, disabledAttr = false } = {}) {
   const h = load(`<div class="form-item"><label class="form-item__text">日期</label><div class="form-item__control">
     ${kind === "element" ? `<div class="el-date-editor el-input"><input class="el-input__inner" readonly placeholder="请选择日期"></div>`
       : `<div class="phoenix-select phoenix-select--editable"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li><li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div>`}
@@ -410,7 +410,8 @@ function calendarHost({ kind = "phoenix-day", typing = true, futureDisabled = fa
       for (let i = 1; i < first; i++) cells.push(`<td class="prev-month"><span>${28 + i}</span></td>`);
       for (let d = 1; d <= days; d++) {
         const future = futureDisabled && (year > 2026 || (year === 2026 && (month > 10 || (month === 10 && d > 22))));
-        cells.push(`<td class="${future ? "disabled" : "available"}" data-day="${d}"><span>${d}</span></td>`);
+        cells.push(disabledAttr ? `<td class="available" data-day="${d}" ${future ? "disabled" : ""}><span>${d}</span></td>`
+          : `<td class="${future ? "disabled" : "available"}" data-day="${d}"><span>${d}</span></td>`);
       }
       return `<table><tbody><tr>${cells.join("")}</tr></tbody></table>`;
     };
@@ -434,6 +435,7 @@ function calendarHost({ kind = "phoenix-day", typing = true, futureDisabled = fa
       else if (/prev-btn el-icon-arrow-left/.test(cls)) { month -= 1; if (!month) { month = 12; year -= 1; } }
       else if (/next-btn el-icon-arrow-right/.test(cls)) { month += 1; if (month > 12) { month = 1; year += 1; } }
       else if (/year/.test(cls) && /header-label|year-select/.test(cls)) panel = "year";
+      else if (/month-select/.test(cls)) panel = "month";
       else if (el.closest("td[data-year]")) { year = Number(el.closest("td").dataset.year || el.textContent); panel = kind === "phoenix-month" || kind === "element" || kind === "phoenix-day" ? "month" : "date"; }
       else if (el.closest("td[data-month]")) { month = Number(el.closest("td").dataset.month); if (kind === "phoenix-month") return commit(`${year}-${String(month).padStart(2, "0")}`); panel = "date"; }
       else if (el.closest("td.available")) return commit(`${year}-${String(month).padStart(2, "0")}-${String(el.closest("td").dataset.day).padStart(2, "0")}`);
@@ -553,4 +555,82 @@ test("Element: picking the month that the hidden day table already shows still m
   const result = await h.api.operate({ kind: "element", element: control.element, root: control.root, controlKind: "date", pickerType: "element", hints: {} }, "2022-09");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(input.value, "2022-09-01");
+});
+
+test("same year, other month, and no month arrows: the month title opens the month table", async () => {
+  // CodeRabbit（PR #329）：北森日历只有年份箭头，同年换月原来找不到「下一月」就失败。
+  const h = calendarHost({ kind: "phoenix-day", typing: false });
+  const result = await h.api.operate(h.target, "2026-03-05");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.shown(), "2026-03-05");
+});
+
+test("a day marked unavailable only by a disabled attribute is not clicked", async () => {
+  const h = calendarHost({ kind: "element", futureDisabled: true, disabledAttr: true });
+  const result = await h.api.operate(h.target, "2026-10-28");
+  assert.equal(result.ok, false);
+  assert.equal(h.shown(), "");
+});
+
+test("buttons and counters in a picker layer are not options: a value spelled like a button is not matched to it", async () => {
+  const h = load(`<div class="form-item"><label class="form-item__text">结果</label><div class="phoenix-select"><ul class="phoenix-select__content"><li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div>`);
+  const root = h.doc.querySelector(".phoenix-select");
+  const events = [];
+  root.addEventListener("click", () => {
+    const layer = h.doc.createElement("div");
+    layer.innerHTML = `<div class="list"><div><span class="item-text-label">待定</span></div><div><span class="item-text-label">通过</span></div></div>
+      <div class="selected">已选 0/1</div><div class="phoenix-button"><div class="phoenix-button__content">确定</div></div>`;
+    layer.addEventListener("click", (event) => events.push(event.target.textContent.trim()));
+    h.doc.body.append(layer);
+  });
+  const result = await h.api.operate(scanned(h.doc, "结果"), "确定");
+  assert.equal(result.ok, false);
+  assert.ok(!events.includes("确定"), JSON.stringify(events));
+});
+
+test("a text box wrapped in a select-looking class that never opens anything is filled as a text box", async () => {
+  // 审查 B3：外层类名碰巧带 select 的普通文本框，点开从头到尾没有弹层，就按文本框填写并核对。
+  const h = load(`<div class="item"><label>备注</label><div class="form-select-wrap"><input class="plain"></div></div>`);
+  const api = h.w.ResumeProControls.create({ timeoutMs: 150, settleMs: 35, isVisible: (el) => !el.closest("[hidden]"), ...textDeps(h.w) });
+  const target = scanned(h.doc, "备注");
+  assert.equal(target.controlKind, "custom-select");
+  const result = await api.operate(target, "按时到岗");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(h.doc.querySelector("input").value, "按时到岗");
+});
+
+test("options that load a moment after opening are waited for instead of jumping to the search box", async () => {
+  // 2026-10-22 金发真机：页面刚打开时第一次点开「民族」，选项还在加载，原来立刻改去搜索框输入，等不到就失败。
+  const h = beisen();
+  const root = h.root;
+  const original = root.cloneNode(true);
+  root.replaceWith(original);
+  const searched = [];
+  original.addEventListener("click", () => {
+    const layer = h.doc.createElement("div");
+    layer.innerHTML = `<div class="common-unmodeled-layer"><div class="phoenix-input"><input class="phoenix-input__input"></div><div class="list"><div class="hint">请在左侧选择内容</div><div class="hint">暂未选择</div></div><div class="footer"><div class="phoenix-button__content">取消</div><div class="phoenix-button__content">确定</div></div></div>`;
+    layer.querySelector("input").addEventListener("input", (event) => searched.push(event.target.value));
+    h.doc.body.append(layer);
+    setTimeout(() => {
+      layer.querySelector(".list").innerHTML = ["汉族", "回族", "满族"].map((text) => `<div class="list-item-container"><span class="item-text-label">${text}</span></div>`).join("");
+      layer.querySelectorAll(".list-item-container").forEach((row) => row.addEventListener("click", () => {
+        original.querySelector(".phoenix-select__selected").textContent = row.textContent.trim(); layer.remove();
+      }));
+    }, 60);
+  });
+  const target = scanned(h.doc, "民族");
+  const result = await h.api.operate(target, "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(searched, [], "the search box is not used while the list is still loading");
+});
+
+test("a dropdown already showing the wanted value is not opened again", async () => {
+  // 2026-10-22 金发真机：民族已是「汉族」时再填「汉族」，「勾选 + 确定」式弹层右侧「已选」栏又列出一个「汉族」，
+  // 原来点开后分不清两个同名选项，报「选项存在歧义」。显示的就是要填的值时不用点开。
+  const h = beisen();
+  h.root.querySelector(".phoenix-select__selected").textContent = "回族";
+  const result = await h.api.operate(h.target, "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.clicks, []);
+  assert.equal(h.doc.querySelector(".common-unmodeled-layer"), null, "nothing was opened");
 });
