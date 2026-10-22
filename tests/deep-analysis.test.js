@@ -498,7 +498,8 @@ test("several buttons with the same text are named once with a count", async () 
 });
 
 test("a plain input the model reads as a dropdown is operated from the component root the outline found", () => {
-  const doc = new JSDOM(`<body><div class="phoenix-select"><ul><li><input class="phoenix-select__input" aria-label="民族"></li></ul></div></body>`,
+  // picker 这类词扫描不单凭它认下拉（可能是日期），大纲只写「外观=下拉」，由模型判断。
+  const doc = new JSDOM(`<body><div class="city-picker"><ul><li><input class="city-picker__input" aria-label="民族"></li></ul></div></body>`,
     { url: "https://jobs.example.test/apply" }).window.document;
   const built = outline.build(doc, { isVisible, fieldScan });
   const [ref, node] = [...built.nodes.entries()][0];

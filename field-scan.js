@@ -25,6 +25,13 @@
   const POPUP_TOKEN = /[-_](?:dropdown|popper|popover|popup)(?:[-_]?(?:menu|panel|content|wrapper|list|inner))?$|^(?:dropdown-menu|popper|popover)$/i;
   const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor']";
   const SELECT_TOKEN = /(?:^|[-_])(?:select|selector|cascader|combobox|combo|dropdown|autocomplete|treeselect|multiselect|picker)(?:$|[-_])/i;
+  // #269 只有类名、没有别的信号时，只认明确是选择框的词（北森 phoenix-select、Moka sd-Select）；
+  // autocomplete、combo 这类可能允许自由输入，picker 可能是日期；Tailwind 的 select-none 之类不是组件。
+  const PLAIN_SELECT_TOKEN = /(?:^|[-_])(?:select|selector|dropdown|treeselect|multiselect)(?:$|[-_])/i;
+  const NOT_SELECT_TOKEN = /^(?:user-)?select-(?:none|text|all|auto)$/i;
+  // #269 自制单选组（北森 phoenix-radio-group）：选项是 div，组里没有 input。容器带 radio-group 类名或 role=radiogroup 才算。
+  const RADIO_GROUP_TOKEN = /(?:^|[-_])radio-?group(?:$|[-_])/i;
+  const MAX_RADIO_OPTION_CHARS = 20;
   const LIBRARY_SELECT_TOKENS = new Set(["ant-select", "ant-cascader", "el-select", "el-cascader", "arco-select", "arco-cascader",
     "ivu-select", "ivu-cascader", "n-select", "n-cascader", "t-select", "t-cascader", "v-select", "select2-container", "chosen-container"]);
   const NOISE_TOKEN = /^(?:error|err|invalid|explain|help|helper|tip|tips|hint|extra|count|counter|wordcount|limit|message|msg|feedback|warning|validate|validation|suffix|prefix|placeholder|unit)$/i;
@@ -150,9 +157,25 @@
   function boundaryControls(ctx) {
     if (!ctx.boundaries) {
       ctx.boundaries = new Set(Array.from(ctx.doc.querySelectorAll(CONTROL_SELECTOR))
-        .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx)));
+        .filter((el) => isControlElement(el, ctx) && !ctx.excluded(el) && ctx.isVisible(el) && !isPopupInternal(el, ctx) && !isOverlayInput(el, ctx)));
     }
     return ctx.boundaries;
+  }
+
+  // #269 智联「离职时间」：只读的显示框和真正的日期框叠在同一个位置（上面盖着遮罩）。叠在日期组件或
+  // 下拉组件输入框正上方的只读框只是显示层，不算单独的字段，也不把题目切开。没有布局（尺寸为 0）时不判断。
+  function isOverlayInput(el, ctx) {
+    if (el.tagName !== "INPUT" || !el.readOnly || !["text", "search"].includes(inputType(el))) return false;
+    const r = el.getBoundingClientRect?.();
+    if (!r || r.width <= 0 || r.height <= 0) return false;
+    let container = el.parentElement;
+    for (let depth = 0; container && depth < 3; depth += 1) container = container.parentElement;
+    if (!container) return false;
+    return Array.from(container.querySelectorAll("input")).some((other) => {
+      if (other === el || !ctx.isVisible(other) || !other.closest(DATE_PICKER_SELECTOR)) return false;
+      const o = other.getBoundingClientRect();
+      return Math.abs(o.left - r.left) <= 4 && Math.abs(o.top - r.top) <= 4 && Math.abs(o.width - r.width) <= 6 && Math.abs(o.height - r.height) <= 6;
+    });
   }
 
   function hasForeignControl(container, root, ctx) {
@@ -160,7 +183,8 @@
     for (const el of container.querySelectorAll(CONTROL_SELECTOR)) {
       if (boundaries.has(el) && !root.contains(el)) return true;
     }
-    return false;
+    // 自制单选组没有 input，也要当作一道题的边界，免得别的题目跨过它借字。
+    return customRadioGroups(ctx).some(({ group }) => container.contains(group) && !root.contains(group) && !group.contains(root));
   }
 
   function containsBoundary(container, ctx) {
@@ -169,7 +193,38 @@
     for (const el of container.querySelectorAll?.(CONTROL_SELECTOR) || []) {
       if (boundaries.has(el)) return true;
     }
-    return false;
+    return customRadioGroups(ctx).some(({ group }) => container.contains(group));
+  }
+
+  // 选项：role=radio 的元素；没有的话，每段短文字往上取到「只装着这一段文字」的最高一层。
+  function customRadioItems(group, ctx) {
+    const hasText = (node) => Boolean(squash(node.textContent));
+    const marked = Array.from(group.querySelectorAll("[role='radio']")).filter((node) => ctx.isVisible(node) && hasText(node));
+    if (marked.length) return marked;
+    const leaves = Array.from(group.querySelectorAll("*")).filter((node) => ctx.isVisible(node) && hasText(node)
+      && !Array.from(node.children).some(hasText));
+    const items = [];
+    for (const leaf of leaves) {
+      let item = leaf;
+      while (item.parentElement && item.parentElement !== group
+        && leaves.filter((other) => item.parentElement.contains(other)).length === 1) item = item.parentElement;
+      if (!items.includes(item)) items.push(item);
+    }
+    return items.every((item) => squash(item.textContent).length <= MAX_RADIO_OPTION_CHARS) ? items : [];
+  }
+
+  function customRadioGroups(ctx) {
+    if (ctx.customRadios) return ctx.customRadios;
+    ctx.customRadios = [];
+    for (const group of ctx.doc.querySelectorAll("[class*='radio' i], [role='radiogroup']")) {
+      const named = attr(group, "role").toLowerCase() === "radiogroup" || classTokens(group).some((token) => RADIO_GROUP_TOKEN.test(token));
+      if (!named || group.querySelector("input, select, textarea")) continue;
+      if (ctx.excluded(group) || !ctx.isVisible(group) || group.closest(POPUP_SELECTOR)) continue;
+      if (ctx.customRadios.some((found) => found.group.contains(group))) continue;
+      const items = customRadioItems(group, ctx);
+      if (items.length >= 2 && items.length <= 20) ctx.customRadios.push({ group, items });
+    }
+    return ctx.customRadios;
   }
 
   function isPageChrome(el) {
@@ -245,14 +300,15 @@
     let node = el.parentElement;
     for (let depth = 0; node && node !== ctx.body && depth < 5; depth += 1, node = node.parentElement) {
       const tokens = classTokens(node);
-      const tokenMatch = tokens.some((token) => SELECT_TOKEN.test(token));
+      const tokenMatch = tokens.some((token) => SELECT_TOKEN.test(token) && !NOT_SELECT_TOKEN.test(token));
+      const plainMatch = tokens.some((token) => PLAIN_SELECT_TOKEN.test(token) && !NOT_SELECT_TOKEN.test(token));
       const ariaMatch = hasComboSignal(node);
       if (!tokenMatch && !ariaMatch) continue;
       if (!componentScopeOk(node, ctx, 3)) break;
       const library = tokens.some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
       if (library || ariaMatch) return node;
       if (best && Array.from(node.querySelectorAll('[role="combobox"]')).some(other => !best.contains(other))) break;
-      if (ariaMatch || library || ownSignal || el.readOnly || inputType(el) === "search"
+      if (ariaMatch || library || plainMatch || ownSignal || el.readOnly || inputType(el) === "search"
         || node.querySelector("[role='combobox'], [aria-haspopup]:not([aria-haspopup='false']), input[readonly]")) {
         best = node;
       }
@@ -335,6 +391,10 @@
       });
     });
 
+    customRadioGroups(ctx).forEach(({ group, items }) => {
+      controls.push({ kind: "radio", controlKind: "radio", element: items[0], elements: items, root: group, custom: true });
+    });
+
     radiosByName.forEach((entries) => {
       splitRadioGroup(entries.map((entry) => entry.el), ctx).forEach((radios) => {
         const group = radios[0].closest("[role='radiogroup']");
@@ -407,7 +467,8 @@
     if (attr(el, "aria-hidden") === "true" || el.hasAttribute?.("aria-live")) return true;
     // 富文本编辑区里是用户自己写的内容，不能当题目读出来。
     if (el.isContentEditable || /^(?:true|plaintext-only|)$/i.test(el.getAttribute?.("contenteditable") ?? "x")) return true;
-    if (classTokens(el).some((token) => token.split(/[-_]+/).some((part) => NOISE_TOKEN.test(part)))) return true;
+    // 错误、帮助、计数这类提示不会包着控件；装着控件的是题目容器（#269 金发校验后给整行加 first-error-field），照常读。
+    if (classTokens(el).some((token) => token.split(/[-_]+/).some((part) => NOISE_TOKEN.test(part))) && !containsBoundary(el, ctx)) return true;
     return !ctx.isVisible(el);
   }
 
@@ -826,6 +887,7 @@
     const sectionsWithRepeats = new Set();
     sameSlot.forEach((list) => list.forEach((control, index) => {
       control.repeatIndex = list.length > 1 ? index + 1 : 0;
+      control.repeatCount = list.length;
       if (list.length > 1 && control.section) sectionsWithRepeats.add(normalizeKey(control.section));
     }));
     kept.forEach((control) => {
@@ -884,6 +946,8 @@
       section: control.section || "",
       group: control.group || "",
       repeatIndex: control.repeatIndex || 0,
+      repeatCount: control.repeatCount || 0,
+      custom: Boolean(control.custom),
       sectionRepeatable: Boolean(control.sectionRepeatable),
       offerable: control.offerable,
       offerLabel: control.offerLabel || "",

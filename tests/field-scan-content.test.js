@@ -232,3 +232,124 @@ test("diagnostics carry scan skips and label sources in the v1 block, and surviv
   assert.match(text.value, /^字段名来源：明确关联 1、表单项 1、表格 1$/m);
   assert.match(text.value, /^「加到我的信息」没问：同名找不到区块 2；经历类区块 1$/m);
 });
+
+test('a form that is rebuilt after one answer keeps going on the rebuilt fields and still counts the earlier one', async () => {
+  // #269 智联真机：选完「学位」后整张教育经历表单被删掉重建。旧字段都不在了，
+  // 要按区块、题目和同名序号找回新字段：没填的接着填，填过的按新字段显示的内容核对。
+  const late = lateScanner();
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '学士' }, { fieldId: 'field-1', value: '本科' }] }) });
+  const oldDegree = new ctx.HTMLInputElement(), oldEdu = new ctx.HTMLInputElement();
+  const newDegree = new ctx.HTMLInputElement(), newEdu = new ctx.HTMLInputElement();
+  const stale = new Set();
+  const fields = (degree, edu) => [control(degree, { label: '学位', section: '教育经历' }), control(edu, { label: '学历', section: '教育经历' })];
+  let rebuilt = false;
+  const dispatch = oldDegree.dispatchEvent.bind(oldDegree);
+  oldDegree.dispatchEvent = (event) => {
+    const answer = dispatch(event);
+    if (!rebuilt && oldDegree.value === '学士') {
+      // 页面重建：新「学位」带着刚填的值，旧的两个字段从页面上移除。
+      newDegree.value = oldDegree.value; oldDegree.isConnected = oldEdu.isConnected = false;
+      stale.add(oldDegree); stale.add(oldEdu); rebuilt = true;
+    }
+    return answer;
+  };
+  const scanner = scanWith(fields(oldDegree, oldEdu), stale);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args), controls: rebuilt ? fields(newDegree, newEdu) : fields(oldDegree, oldEdu) }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '教育经历', fields: [{ key: '学位', value: '学士' }, { key: '学历', value: '本科' }] }] }], activeTemplateId: 't' });
+  ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(rebuilt, true, JSON.stringify({ result, old: oldDegree.value, events: oldDegree.dispatchedEvents.map(e => e.type), oldEdu: oldEdu.value }));
+  assert.equal(newEdu.value, '本科', 'the rebuilt 学历 is filled');
+  assert.equal(oldEdu.value, '', 'the removed 学历 is left alone');
+  assert.equal(result.filledCount, 2, JSON.stringify(result));
+  assert.equal(result.unfilledCount, 0);
+});
+
+test('a rebuilt form whose field now holds something else is not written', async () => {
+  // 重建后的字段内容和批准时不一样（页面带出了别的值，或用户改过）：不能当成同一个空字段接着写。
+  const late = lateScanner();
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy,
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '学士' }, { fieldId: 'field-1', value: '本科' }] }) });
+  const oldDegree = new ctx.HTMLInputElement(), oldEdu = new ctx.HTMLInputElement();
+  const newDegree = new ctx.HTMLInputElement(), newEdu = new ctx.HTMLInputElement();
+  const stale = new Set();
+  const fields = (degree, edu) => [control(degree, { label: '学位', section: '教育经历' }), control(edu, { label: '学历', section: '教育经历' })];
+  let rebuilt = false;
+  const dispatch = oldDegree.dispatchEvent.bind(oldDegree);
+  oldDegree.dispatchEvent = (event) => {
+    const answer = dispatch(event);
+    if (!rebuilt && oldDegree.value === '学士') {
+      newDegree.value = oldDegree.value; newEdu.value = '大专'; oldDegree.isConnected = oldEdu.isConnected = false;
+      stale.add(oldDegree); stale.add(oldEdu); rebuilt = true;
+    }
+    return answer;
+  };
+  const scanner = scanWith(fields(oldDegree, oldEdu), stale);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args), controls: rebuilt ? fields(newDegree, newEdu) : fields(oldDegree, oldEdu) }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '教育经历', fields: [{ key: '学位', value: '学士' }, { key: '学历', value: '本科' }] }] }], activeTemplateId: 't' });
+  ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(rebuilt, true);
+  assert.equal(newEdu.value, '大专', 'the rebuilt field keeps what the page put there');
+  assert.equal(result.filledCount, 1, JSON.stringify(result));
+});
+
+// #269 智联真机：选完「学历」后表单才长出「专业」「研究方向」等字段。选完等页面安静再扫一次，
+// 新出现的空字段先在本地匹配当场填，本地匹配不上的这一轮结束后交给 AI 补填。
+function grownForm({ newLabel, newValue = '', resume, aiMore = [] }) {
+  const late = lateScanner();
+  const requests = [];
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers: require('../ai-helpers.js'),
+    sendMessage: async (message) => {
+      if (message.type !== 'AI_FILL') return { success: true, matches: [] };
+      requests.push(message);
+      return requests.length === 1 ? { success: true, matches: [{ fieldId: 'field-0', value: '本科' }] }
+        : { success: true, matches: aiMore.map((value, index) => ({ fieldId: message.formFields[index].fieldId, value })) };
+    } });
+  const edu = new ctx.HTMLSelectElement(); edu.tagName = 'SELECT';
+  edu.options = [{ value: '', text: '请选择' }, { value: 'bk', text: '本科' }]; edu.selectedIndex = 0;
+  const grown = new ctx.HTMLInputElement(); grown.value = newValue;
+  const base = [control(edu, { controlKind: 'select', label: '学历', section: '教育经历' })];
+  const scanner = scanWith(base);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args),
+    controls: edu.selectedIndex === 1 ? [...base, control(grown, { label: newLabel, section: '教育经历' })] : base }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '教育经历', fields: [{ key: '学历', value: '本科' }, ...resume] }] }], activeTemplateId: 't' });
+  const view = shadow();
+  ctx.helpers.setShadowRoot(view.root);
+  return { ctx, requests, grown, view };
+}
+
+test('a field that appears after a choice and matches locally is filled in the same round without another AI call', async () => {
+  const h = grownForm({ newLabel: '专业', resume: [{ key: '专业', value: '示例工程' }] });
+  const result = await h.ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(h.grown.value, '示例工程');
+  assert.equal(result.filledCount, 2, JSON.stringify(result));
+  assert.equal(h.requests.length, 1, 'no extra AI request for a locally matched field');
+  assert.match(h.view.parts['#resume-pro-status'].textContent, /新出现的字段补填 1 项/);
+});
+
+test('a new field the local rules cannot match is sent to AI once after the round, alone', async () => {
+  const h = grownForm({ newLabel: '研究方向', resume: [{ key: '研究课题', value: '示例方向' }], aiMore: ['示例方向'] });
+  const result = await h.ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(h.requests.length, 2);
+  assert.equal(JSON.stringify(h.requests[1].formFields.map((field) => field.label)), JSON.stringify(['研究方向']));
+  assert.equal(h.grown.value, '示例方向');
+  assert.equal(result.filledCount, 2, JSON.stringify(result));
+});
+
+test('a new field whose name appears more than once in the resume is left to AI', async () => {
+  const h = grownForm({ newLabel: '专业', resume: [{ key: '专业', value: '示例工程' }, { key: '专业', value: '示例管理' }], aiMore: ['示例管理'] });
+  const result = await h.ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(h.requests.length, 2);
+  assert.equal(h.grown.value, '示例管理');
+  assert.equal(result.filledCount, 2);
+});
+
+test('a field that appears already filled is left as it is', async () => {
+  const h = grownForm({ newLabel: '专业', newValue: '页面带出的值', resume: [{ key: '专业', value: '示例工程' }] });
+  const result = await h.ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(h.grown.value, '页面带出的值');
+  assert.equal(result.filledCount, 1);
+  assert.equal(h.requests.length, 1);
+});

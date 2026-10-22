@@ -13,12 +13,31 @@
     }
     return true;
   }
+  function shownText(root) {
+    const parts = [];
+    const walker = root.ownerDocument.createTreeWalker(root, 4);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (parent && !['SCRIPT', 'STYLE', 'TEMPLATE'].includes(parent.tagName) && trim(node.data) && shown(parent)) parts.push(trim(node.data));
+    }
+    return trim(parts.join(' '));
+  }
+  // #269 通用路径：不是已适配的组件库、整个组件上也没有任何 ARIA 标记的下拉（北森 phoenix、Moka sd 等自研组件）。
+  // 不靠类名认弹层：点开后看页面上新冒出来、贴着这个控件的那一块；选项是里面只含一段短文字的条目；
+  // 选完读组件上显示的文字核验。拿不准（两块并存、没有匹配、被回滚）一律不选或不算成功。
+  const ARIA_SIGNALS = '[role="combobox"], [aria-haspopup]:not([aria-haspopup="false"]), [aria-controls], [aria-owns], [aria-autocomplete]';
+  const GENERIC_EMPTY = /^(?:暂无数据|无匹配数据|没有数据|无数据|加载中|搜索中|no data|no results?|loading)/i;
+  const GENERIC_NOISE = /(?:^|[-_])(?:error|message|tip|tips|tooltip|help|hint|feedback)(?:$|[-_])/i;
+  // 带月份的日期：通用路径分不清日历格子，交给日期操作或不填。
+  const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
   function describe(target) {
     const el = target?.element || target;
     const root = el?.closest?.(ROOTS) || target?.root || el;
-    const library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
+    let library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
       : root?.matches?.('.el-select, .el-cascader') ? 'element'
       : root?.matches?.('.arco-select, .arco-cascader') ? 'arco' : 'aria';
+    if (library === 'aria' && root && !root.matches?.(ARIA_SIGNALS) && !el?.matches?.(ARIA_SIGNALS) && !root.querySelector?.(ARIA_SIGNALS)) library = 'generic';
+    if (library === 'generic') return { el, root, combo: el, library, cascade: target?.controlKind === 'cascader', multiple: false };
     const cascade = target?.controlKind === 'cascader' || root?.matches?.('.ant-cascader, .el-cascader, .arco-cascader');
     const combo = root?.matches?.('[role="combobox"]') ? root : root?.querySelector?.('[role="combobox"]') || el;
     const multiple = combo?.getAttribute?.('aria-multiselectable') === 'true'
@@ -26,9 +45,22 @@
       || Boolean(root?.querySelector?.('.ant-select-selection-overflow, .el-select__tags, .arco-select-view-tag'));
     return { el, root, combo, library, cascade: Boolean(cascade), multiple: Boolean(multiple) };
   }
+  // Element UI（Vue 2）可搜索的下拉：收起时输入框只读、显示已选文字；展开时输入框清空，已选文字挪到占位提示里。
+  // 记下收起时的占位提示，展开时占位提示和它不同，就是已选文字（#269 智联）。
+  const closedPlaceholder = new WeakMap();
   function selectedTexts(info) {
     const { root, el, library, cascade } = info;
     if (!root?.isConnected) return null;
+    if (library === 'element' && !cascade && el.tagName === 'INPUT' && !root.querySelector('.el-select__wrapper')) {
+      if (el.readOnly) closedPlaceholder.set(el, el.placeholder);
+      else if (!el.value && closedPlaceholder.has(el) && trim(el.placeholder) && el.placeholder !== closedPlaceholder.get(el)) return [trim(el.placeholder)];
+    }
+    if (library === 'generic') {
+      // 组件上显示的文字：输入框的值，没有就取组件根里看得见的文字；占位提示不算。
+      const text = trim(el.tagName === 'INPUT' ? el.value : '') || shownText(root);
+      if (!text || scope.ResumeProAIHelpers?.isPlaceholderOption(text) || text === trim(el.getAttribute?.('placeholder'))) return [];
+      return [text];
+    }
     if (library === 'aria' && el.tagName === 'INPUT' && (!el.readOnly || info.requireCommitSignal)) {
       const explicit = trim(info.combo.getAttribute('aria-valuetext'));
       if (explicit) return [explicit];
@@ -52,8 +84,9 @@
     if (selector) {
       const values = Array.from(root.querySelectorAll(selector), node => trim(node.textContent)).filter(Boolean);
       if (values.length) return cascade ? values.join(' / ').split(/\s*(?:\/|>|→)\s*/).filter(Boolean) : values;
-      // Element UI (Vue 2) stores the committed label directly in its readonly input.
-      if (library !== 'element' || (!cascade && !el.readOnly)) return [];
+      // Element UI (Vue 2) stores the committed label directly in its input. Its readonly flag
+      // flips while the dropdown opens (#269 智联), so only Element Plus (wrapper markup) stops here.
+      if (library !== 'element' || (!cascade && root.querySelector('.el-select__wrapper'))) return [];
     }
     const value = trim(el.tagName === 'INPUT' ? el.value : el.getAttribute('role') === 'combobox' ? el.textContent : '');
     if (!value || scope.ResumeProAIHelpers?.isPlaceholderOption(value)) return [];
@@ -62,8 +95,11 @@
   function snapshot(target) {
     const info = describe(target);
     if (!info.root?.isConnected || !info.el?.isConnected) return null;
+    // 不记只读状态：有的组件点开下拉时会切换 readonly（#269 智联 Element UI），
+    // 那是插件自己的操作，不能被写入前复查当成用户改了字段。
+    // Element 的输入框里就是已选文字（展开时清空），已经由 selection 表示。
     return JSON.stringify({ selection: selectedTexts(info),
-      query: info.el.tagName === 'INPUT' && !info.el.readOnly ? String(info.el.value ?? '') : null });
+      query: info.el.tagName === 'INPUT' && info.library !== 'element' ? String(info.el.value ?? '') : null });
   }
   function hasExistingValue(target) {
     const info = describe(target), values = selectedTexts(info);
@@ -114,7 +150,82 @@
     const real = realSelector ? Array.from(popup.querySelectorAll(realSelector)) : [];
     return real.length ? real : Array.from(popup.querySelectorAll('[role="option"]'));
   }
+  // 弹层里的条目：每个只含一段短文字的叶子，往上取到「只装着这一段文字」的最高一层当作可点的条目。
+  function genericOptions(popup, h) {
+    const hasText = node => Boolean(trim(node.textContent));
+    // 弹层自己标了 role=option 就用它；否则按「只含一段短文字」找条目。
+    const marked = Array.from(popup.querySelectorAll('[role="option"]')).filter(node => h.visible(node) && hasText(node));
+    const leaves = marked.length ? [] : Array.from(popup.querySelectorAll('*')).filter(node => h.visible(node) && hasText(node)
+      && !Array.from(node.children).some(hasText) && trim(node.textContent).length <= 40
+      && !node.closest('input, textarea, select, button[type="submit"]'));
+    const items = marked.slice();
+    for (const leaf of leaves) {
+      let item = leaf;
+      while (item.parentElement && item.parentElement !== popup
+        && leaves.filter(other => item.parentElement.contains(other)).length === 1) item = item.parentElement;
+      if (!items.includes(item) && !item.querySelector('input, textarea, select')) items.push(item);
+    }
+    return items.map(node => {
+      const full = trim(node.textContent);
+      // 中英双语的选项（「男/Male」）：按中文部分比，后半是纯英文时才拆。
+      const [first, ...rest] = full.split(/\s*\/\s*/);
+      const primary = rest.length && /^[\x20-\x7e]+$/.test(rest.join('/')) ? first : full;
+      const disabled = node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled(?:$|[-_])/i.test(String(node.className || ''));
+      return { node, target: clickTarget(node, hasText), text: primary, value: full, full, disabled };
+    }).filter(option => !GENERIC_EMPTY.test(option.full));
+  }
+  const CALENDAR_CLASS = /(?:^|[-_])(?:date|calendar|datepicker|daterange)(?:$|[-_])|date-?picker/i;
+  function looksCalendar(layer, popup, h) {
+    const nodes = [popup, layer, ...layer.querySelectorAll('[class]')];
+    if (nodes.some(node => CALENDAR_CLASS.test(String(node.className || '')))) return true;
+    // 没有类名线索时看内容：一屏里大半是 1～31 的数字，就是日期格子。
+    const list = genericOptions(popup, h);
+    return list.length >= 20 && list.filter(option => /^\d{1,2}$/.test(option.full)).length >= list.length * 0.6;
+  }
+  // 点哪里：条目带单选圈、勾选框时点它（北森「勾选 + 确定」式选择框只认圆圈，点文字不算选中）；
+  // 否则点文字所在的最里层，事件向外冒泡，网站把点击处理挂在哪一层都收得到。
+  const MARK_CLASS = /radio|checkbox|check-?box|checked|unchecked/i;
+  function clickTarget(node, hasText) {
+    const marks = Array.from(node.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], [class]'))
+      .filter(el => el.matches('input, [role="radio"], [role="checkbox"]') || (!hasText(el) && MARK_CLASS.test(String(el.getAttribute('class') || ''))));
+    const outer = marks.filter(el => !marks.some(other => other !== el && other.contains(el)));
+    if (outer.length === 1) return outer[0];
+    let target = node;
+    for (let inner = target.firstElementChild; inner; inner = target.firstElementChild) {
+      const texty = Array.from(target.children).filter(hasText);
+      if (texty.length !== 1 || Array.from(target.childNodes).some(child => child.nodeType === 3 && trim(child.data))) break;
+      target = texty[0];
+    }
+    return target;
+  }
+  // 选择框底部的「确定」：弹层里只有一个看得见的这类按钮时才点；表单的提交、跳转由 click 自己拦下。
+  const CONFIRM_TEXT = /^(?:确定|确认|完成|ok|confirm|done)$/i;
+  function confirmButton(layer, h) {
+    const found = Array.from(layer.querySelectorAll('*')).filter(el => h.visible(el) && CONFIRM_TEXT.test(trim(el.textContent))
+      && !Array.from(el.children).some(child => CONFIRM_TEXT.test(trim(child.textContent))));
+    return found.length === 1 ? found[0] : null;
+  }
+  // minOptions：只是点开时至少 2 条，免得把页面的校验提示当成弹层；已经输入了搜索词时 1 条建议也算。
+  function genericPopupFrom(node, info, h, minOptions = 2) {
+    if (!node?.isConnected || node.nodeType !== 1 || !h.visible(node) || node.contains(info.root) || info.root.contains(node)) return null;
+    if (node.getAttribute('role') === 'alert' || GENERIC_NOISE.test(String(node.className || ''))) return null;
+    const list = genericOptions(node, h);
+    if (list.length < minOptions) return null;
+    // 整页大小的外壳里只取装着全部条目的最小容器，再看它是不是贴着控件。
+    let box = list[0].node.parentElement;
+    while (box && box !== node && !list.every(option => box.contains(option.node))) box = box.parentElement;
+    box = box || node;
+    // 贴着控件：弹层外壳或条目列表任意一个与控件左右有重叠、上下重叠或相距 60px 以内。
+    // 北森的弹层有时盖住输入框（搜索框占了原位置），有时在下方、列表上面还隔着搜索框。
+    const c = info.root.getBoundingClientRect();
+    const near = el => {
+      const r = el.getBoundingClientRect();
+      return r.right > c.left - 16 && r.left < c.right + 16 && r.top <= c.bottom + 60 && r.bottom >= c.top - 60;
+    };
+    return near(box) || near(node) ? box : null;
+  }
   function options(popup, info, level, h) {
+    if (info.library === 'generic') return genericOptions(popup, h);
     return optionNodes(popup, info, level).filter(h.visible).map(node => {
       const label = node.querySelector('.ant-select-item-option-content, .el-cascader-node__label, .arco-cascader-list-item-label') || node;
       const text = info.library === 'aria' && info.cascade ? trim(node.getAttribute('aria-label') || Array.from(node.childNodes)
@@ -143,23 +254,236 @@
     }
     return { option: list[index] };
   }
+  // #269 日历（北森 phoenix-date-picker、Element el-date-picker 等）：认弹层里写着「2026年」「10月」的年月标题、
+  // 年/月/日格子和左右翻页按钮，按 年 → 月 → 日 逐级点；日历自带能打字的日期框时先直接输入。
+  // 资料只有年月、日历要选到日时选 1 号，并告诉宿主（dayDefaulted），结果里写明。
+  const PRESENT = /^(?:至今|至今在读|今|现在|present|now|till now|to date)$/i;
+  const CN_MONTHS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'];
+  const OTHER_MONTH = /(?:prev|last|next|other|pre)[-_]?month|disabled|outside|out-of/i;
+  const pad2 = value => String(value).padStart(2, '0');
+  function yearOf(text) { const hit = /^(\d{4})\s*年?$/.exec(trim(text)); return hit ? Number(hit[1]) : 0; }
+  function monthOf(text) {
+    const value = trim(text), number = /^(\d{1,2})\s*月$/.exec(value), chinese = /^(十一|十二|[一二三四五六七八九十])月$/.exec(value);
+    return number ? Number(number[1]) : chinese ? CN_MONTHS.indexOf(chinese[1]) + 1 : 0;
+  }
+  // 显示文字里第一段日期（组件可能把同一个值显示两遍），按日历精度比。
+  function shownDate(text, mode) {
+    const hit = /(\d{4})\s*(?:[-/.年]\s*(\d{1,2})\s*(?:[-/.月]\s*(\d{1,2}))?)?/.exec(String(text || ''));
+    if (!hit) return '';
+    if (mode === 'year') return hit[1];
+    if (!hit[2]) return '';
+    if (mode === 'month') return `${hit[1]}-${pad2(hit[2])}`;
+    return hit[3] ? `${hit[1]}-${pad2(hit[2])}-${pad2(hit[3])}` : '';
+  }
+  function dateTarget(raw, helpers) {
+    const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helpers.normalizeDateValue(raw, 'date'));
+    if (day) return { y: Number(day[1]), m: Number(day[2]), d: Number(day[3]) };
+    const month = /^(\d{4})-(\d{2})$/.exec(helpers.normalizeDateValue(raw, 'month'));
+    if (month) return { y: Number(month[1]), m: Number(month[2]), d: null };
+    const year = yearOf(raw);
+    return year ? { y: year, m: null, d: null } : null;
+  }
+  function calendarView(layer, h) {
+    const hasText = el => Boolean(trim(el.textContent));
+    const leaves = Array.from(layer.querySelectorAll('*')).filter(el => h.visible(el) && hasText(el) && !Array.from(el.children).some(hasText));
+    const inCell = el => Boolean(el.closest('td, [role="gridcell"]'));
+    const otherMonth = el => {
+      for (let node = el; node && node !== layer; node = node.parentElement) {
+        if (OTHER_MONTH.test(String(node.getAttribute?.('class') || ''))) return true;
+        if (node.matches?.('td, [role="gridcell"]')) return false;
+      }
+      return false;
+    };
+    const cells = (read, keep = () => true) => leaves.filter(el => inCell(el) && read(el.textContent) && keep(el)).map(el => ({ value: read(el.textContent), node: el }));
+    const headYear = leaves.find(el => !inCell(el) && yearOf(el.textContent));
+    const headMonth = leaves.find(el => !inCell(el) && monthOf(el.textContent));
+    const buttons = Array.from(layer.querySelectorAll('[class]')).filter(el => h.visible(el) && !el.closest('td')).map(el => {
+      const cls = String(el.getAttribute('class')).toLowerCase();
+      const dir = /prev|last|left/.test(cls) ? -1 : /next|right/.test(cls) ? 1 : 0;
+      const level = /year|decade|super|d-arrow|double/.test(cls) ? 'year' : /month|arrow/.test(cls) ? 'month' : '';
+      return dir && level ? { el, dir, level } : null;
+    }).filter(Boolean);
+    const input = Array.from(layer.querySelectorAll('input')).find(el => h.visible(el) && !el.readOnly && !el.disabled
+      && (/(^|[-_])(?:calendar|date)[-_]?input/i.test(String(el.className || '')) || /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(trim(el.value))));
+    const dayOf = text => /^\d{1,2}$/.test(trim(text)) ? Number(trim(text)) : 0;
+    return {
+      years: cells(yearOf), months: cells(monthOf),
+      // 判断是不是日期表看全部格子（今天以后、上下月的灰格也算）；能点的只有本月可选的。
+      dayCells: cells(dayOf).length,
+      days: cells(dayOf, el => !otherMonth(el)),
+      headYear: headYear ? yearOf(headYear.textContent) : 0, headYearNode: headYear || null,
+      headMonth: headMonth ? monthOf(headMonth.textContent) : 0,
+      button: (level, dir) => buttons.find(button => button.level === level && button.dir === dir)?.el || null,
+      input
+    };
+  }
+  // 输入框被同一道题里的遮罩盖住（#269 智联「离职时间」）：像真人一样点盖在最上面的那个。页面别处的浮层不点。
+  function coverOf(trigger, info) {
+    const doc = trigger.ownerDocument;
+    if (typeof doc.elementFromPoint !== 'function') return null;
+    const r = trigger.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    const top = doc.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (!top || top === trigger || trigger.contains(top) || top.contains(trigger)) return null;
+    let scope = info.root;
+    for (let depth = 0; depth < 3 && scope.parentElement; depth += 1) scope = scope.parentElement;
+    return scope.contains(top) && !top.closest('input, textarea, select, button, a[href]') ? top : null;
+  }
+  function calendarNear(info, h) {
+    const doc = info.el.ownerDocument, c = info.root.getBoundingClientRect();
+    const found = Array.from(doc.querySelectorAll('[class]')).filter(el => CALENDAR_CLASS.test(String(el.getAttribute('class')))
+      && h.visible(el) && !el.contains(info.root) && !info.root.contains(el) && el.querySelector('td, [role="gridcell"]'));
+    const outer = found.filter(el => !found.some(other => other !== el && other.contains(el)));
+    const near = outer.filter(el => {
+      const r = el.getBoundingClientRect();
+      return r.right > c.left - 16 && r.left < c.right + 16 && r.top <= c.bottom + 60 && r.bottom >= c.top - 60;
+    });
+    return near.length === 1 ? near[0] : null;
+  }
+  async function pickPresent(ctx, h, layer, info) {
+    // 日历里自带「至今」选项（勾选框或按钮）才点；没有就交还，由页面上单独的「至今」勾选题去填。
+    const marks = Array.from(layer.querySelectorAll('*')).filter(el => h.visible(el) && PRESENT.test(trim(el.textContent))
+      && !Array.from(el.children).some(child => PRESENT.test(trim(child.textContent))));
+    if (marks.length !== 1) return { reason: 'no_option_match' };
+    const target = marks[0].closest('label') || marks[0];
+    const reason = h.click(optionTarget(target), ctx, true); if (reason) return { reason };
+    const accepted = () => (selectedTexts(info) || []).some(text => PRESENT.test(trim(text))) || isChecked(target);
+    const done = await h.waitUntil(ctx, info.el.ownerDocument.documentElement, accepted, Boolean);
+    return done.reason ? { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason } : { accepted };
+  }
+  async function pickDate(ctx, raw, h, layer, info) {
+    const doc = info.el.ownerDocument;
+    // 日历切换年/月时整块重建的：旧面板不在了就在控件旁边重新找一次。
+    const current = () => {
+      if (layer.isConnected && h.visible(layer)) return layer;
+      const again = calendarNear(info, h);
+      if (again) layer = again;
+      return again;
+    };
+    if (PRESENT.test(trim(raw))) return pickPresent(ctx, h, layer, info);
+    const target = dateTarget(raw, h.helpers);
+    if (!target || target.y < 1900 || target.y > 2100) return { reason: 'invalid_date' };
+    const modeOf = current => current.dayCells >= 28 ? 'date' : current.months.length >= 12 ? 'month' : current.years.length >= 6 ? 'year' : '';
+    // 日历打开有动画（Element 从 0 放大）：格子显示出来才看得出是选日、选月还是选年。
+    const shown = await h.waitUntil(ctx, doc.documentElement, () => calendarView(layer, h), current => Boolean(modeOf(current)), 1500);
+    if (shown.reason) return { reason: shown.reason === 'verification_timeout' ? 'unsupported_control' : shown.reason };
+    let view = shown.value;
+    const mode = modeOf(view);
+    if (mode !== 'year' && !target.m) return { reason: 'invalid_date' };
+    const dayDefaulted = mode === 'date' && !target.d;
+    const want = { ...target, d: target.d || 1 };
+    const expected = mode === 'date' ? `${want.y}-${pad2(want.m)}-${pad2(want.d)}` : mode === 'month' ? `${want.y}-${pad2(want.m)}` : String(want.y);
+    const accepted = () => (selectedTexts(info) || []).some(text => shownDate(text, mode) === expected)
+      || (info.el.tagName === 'INPUT' && shownDate(info.el.value, mode) === expected);
+    ctx.observed = { ...ctx.observed, popupRole: 'calendar', calendarMode: mode };
+    // 1. 日历自带的日期框：按它现有的格式输入、回车。
+    if (mode === 'date' && view.input) {
+      const input = view.input, sep = input.value.includes('/') ? '/' : '-';
+      const reason = h.stop(ctx, true); if (reason) return { reason };
+      h.write(input, [want.y, pad2(want.m), pad2(want.d)].join(sep), ctx); h.input(input);
+      const View = doc.defaultView;
+      for (const type of ['keydown', 'keypress', 'keyup']) input.dispatchEvent(new View.KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      const typed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 600);
+      if (!typed.reason) return { accepted, dayDefaulted };
+      if (typed.reason !== 'verification_timeout') return { reason: typed.reason };
+      if (!current()) return { reason: 'selection_not_committed' };
+    }
+    // 2. 逐级点：日期表 → 年份标题 → 年份表 → 月份表 → 日期表。
+    for (let step = 0; step < 40; step++) {
+      if (!current()) return { reason: 'selection_not_committed' };
+      view = calendarView(layer, h);
+      let node = null, last = false;
+      if (view.dayCells >= 28) {
+        if (view.headYear === want.y && view.headMonth === want.m) {
+          const hits = view.days.filter(cell => cell.value === want.d);
+          node = hits.length === 1 ? hits[0].node : null; last = true;
+        } else if (view.headYearNode && view.headYear !== want.y) node = view.headYearNode;
+        else node = view.button('month', want.y * 12 + want.m < view.headYear * 12 + view.headMonth ? -1 : 1);
+      } else if (view.months.length >= 12) {
+        if (!view.headYear || view.headYear === want.y) {
+          const hits = view.months.filter(cell => cell.value === want.m);
+          node = hits.length === 1 ? hits[0].node : null; last = mode === 'month';
+        } else node = view.button('year', want.y < view.headYear ? -1 : 1) || view.headYearNode;
+      } else if (view.years.length >= 6) {
+        const hits = view.years.filter(cell => cell.value === want.y);
+        if (hits.length === 1) { node = hits[0].node; last = mode === 'year'; }
+        else if (!hits.length) node = view.button('year', want.y < Math.min(...view.years.map(cell => cell.value)) ? -1 : 1);
+      }
+      if (!node) return { reason: 'no_option_match' };
+      // 日历的年/月/日表常常都在页面里、只切换显示（Element）：按看得见的内容判断有没有翻过去，不看整块文字。
+      const looks = () => {
+        if (!current()) return null;
+        const seen = calendarView(layer, h);
+        return [seen.dayCells, seen.months.length, seen.years.length, seen.headYear, seen.headMonth,
+          seen.days.map(cell => cell.value).join(','), seen.years.map(cell => cell.value).join(',')].join('|');
+      };
+      const before = looks();
+      const reason = h.click(node, ctx, last); if (reason) return { reason };
+      if (last) break;
+      const moved = await h.waitUntil(ctx, doc.documentElement, looks, seen => seen !== null && seen !== before, 1000);
+      if (moved.reason) return { reason: moved.reason === 'verification_timeout' ? 'selection_not_committed' : moved.reason };
+    }
+    const done = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
+    if (done.reason) return { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason };
+    return { accepted, dayDefaulted };
+  }
   async function perform(ctx, raw, h, state) {
     const info = describe(ctx.entry);
     state.info = info;
     info.requireCommitSignal = info.library === 'aria' && ctx.startedEditable;
     info.requireCascadeSignal = info.library === 'element' && info.cascade && ctx.startedEditable;
     if (!info.root || info.multiple || ctx.hints.multiple === true) return { reason: 'unsupported_control' };
+    // 通用路径不做级联：分不清每一列，宁可不填。
+    if (info.library === 'generic' && info.cascade) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
+    // 日期（带月份的值、「至今」，或宿主按日期控件交来的）：只在点开的是日历时操作，见 pickDate。
+    const dateWanted = info.library === 'generic' && !info.cascade
+      && (ctx.kind === 'date' || DATE_VALUE.test(desired[0]) || PRESENT.test(desired[0]));
     const doc = info.el.ownerDocument;
-    const before = new Set(popups(doc, h.visible));
+    // 宿主在聚焦之前记下的弹层：有的下拉一聚焦就展开（#269 智联 Element UI），聚焦后再记就把它算成了原有的。
+    const before = ctx.popupsBeforeFocus || new Set(popups(doc, h.visible));
+    // 通用路径：从点开之前开始记下新加或改了 class/style 的元素，弹层只在这些里找。
+    const touched = new Set();
+    const View = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    if (info.library === 'generic' && View?.MutationObserver) {
+      state.watch = new View.MutationObserver(records => {
+        for (const record of records) {
+          if (record.type === 'attributes') touched.add(record.target);
+          else record.addedNodes.forEach(node => { if (node.nodeType === 1) touched.add(node); });
+        }
+      });
+      state.watch.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    }
+    const genericOpened = (minOptions = 2) => {
+      const layers = new Map();
+      for (const node of touched) {
+        const box = genericPopupFrom(node, info, h, minOptions);
+        if (box && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
+      }
+      const found = Array.from(layers.keys());
+      const outer = found.filter(node => !found.some(other => other !== node && other.contains(node)));
+      if (outer.length !== 1) return outer.length > 1 ? { reason: 'ambiguous_popup' } : null;
+      // 弹层外壳（北森的搜索框和条目列表是兄弟）：只装着一个输入框时才当作这个下拉的一部分。
+      const layer = layers.get(outer[0]);
+      const inputs = Array.from(layer.querySelectorAll('input')).filter(input => state.safeSearch(input) && h.visible(input));
+      return { popup: outer[0], layer: inputs.length <= 1 ? layer : outer[0] };
+    };
     const initiallyOwned = ownedPopup(info, h.visible);
     const alreadyOpen = info.combo.getAttribute('aria-expanded') === 'true' && initiallyOwned.popup;
     const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector('.ant-select-selector') || info.root
       : info.library === 'element' ? info.root.querySelector('.el-select__wrapper, .el-input') || info.root
       : info.library === 'arco' ? info.root.querySelector('.arco-select-view') || info.root : info.combo;
-    if (!alreadyOpen) { const reason = h.click(trigger, ctx); if (reason) return { reason }; }
-    const opened = await h.waitUntil(ctx, doc.documentElement, () => {
+    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
+      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
+    state.safeSearch = safeSearch;
+    if (!alreadyOpen) { const reason = h.click(info.library === 'generic' ? coverOf(trigger, info) || trigger : trigger, ctx); if (reason) return { reason }; }
+    let opened = await h.waitUntil(ctx, doc.documentElement, () => {
+      if (info.library === 'generic') {
+        // 新出现的弹层自己带 role=listbox 一类标记时直接用它，否则按位置和条目认。
+        const marked = popups(doc, h.visible).filter(node => !before.has(node) && !node.contains(info.root) && node.querySelector('[role="option"]'));
+        return marked.length > 1 ? { reason: 'ambiguous_popup' } : marked.length === 1 ? { popup: marked[0] } : genericOpened();
+      }
       const owned = ownedPopup(info, h.visible);
       if (owned.ambiguous) return { reason: 'ambiguous_popup' };
       if (owned.popup) return { popup: owned.popup };
@@ -170,9 +494,29 @@
       const added = popups(doc, h.visible).filter(node => !before.has(node));
       return added.length > 1 ? { reason: 'ambiguous_popup' } : added.length === 1 ? { popup: added[0] } : null;
     }, Boolean);
+    // 通用路径：点开后没有弹层、输入框又能打字（学校、专业这类边输边搜的下拉）：输入要找的值再等弹层。
+    // 一聚焦才展开的日历（Element 日期选择器）：浏览器窗口不在前台时 focus() 不派发事件，补一次 focus 再等。
+    // 聚焦时就已经打开的日历不算「新出现」：找贴着这个框、带日期格子的日历面板，正好一个才用。
+    if (dateWanted && opened.reason === 'verification_timeout') {
+      const open = calendarNear(info, h);
+      if (open) opened = { value: { popup: open, layer: open } };
+    }
+    if (dateWanted && opened.reason === 'verification_timeout' && !h.stop(ctx, true)) {
+      const View = doc.defaultView;
+      info.el.dispatchEvent(new View.FocusEvent('focus'));
+      info.el.dispatchEvent(new View.FocusEvent('focusin', { bubbles: true }));
+      opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(), Boolean);
+    }
+    let typedFirst = false;
+    if (info.library === 'generic' && !dateWanted && opened.reason === 'verification_timeout' && safeSearch(info.el) && h.visible(info.el)) {
+      const reason = h.stop(ctx, true); if (reason) return { reason };
+      state.searchInput = info.el; state.searchBefore = info.el.value; state.query = desired[0];
+      h.write(info.el, desired[0], ctx); h.input(info.el); typedFirst = true;
+      opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(1), Boolean);
+    }
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
-    let popup = opened.value.popup; ctx.popup = popup;
+    let popup = opened.value.popup; ctx.popup = opened.value.layer || popup;
     info.popup = popup;
     const role = popup.getAttribute('role');
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component', optionCount: 0 };
@@ -181,17 +525,26 @@
       || (info.library === 'element' && (popup.matches('.el-select-dropdown.is-multiple')
         || Boolean(popup.querySelector('.el-select-dropdown.is-multiple'))));
     if (multiplePopup()) return { reason: 'unsupported_control' };
-    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
-      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
-    state.safeSearch = safeSearch;
-    const candidates = [info.combo, ...info.root.querySelectorAll('input'), ...popup.querySelectorAll('input')];
+    // 通用路径点开的是日历（北森 phoenix-date-picker）：格子分不清年月日，不当成选项列表去匹配。
+    if (info.library === 'generic' && looksCalendar(ctx.popup, popup, h)) {
+      return dateWanted ? await pickDate(ctx, desired[0], h, ctx.popup, info) : { reason: 'unsupported_control' };
+    }
+    // 要填日期，点开的却不是日历：不按文字去匹配列表。
+    if (dateWanted) return { reason: 'unsupported_control' };
+    // 通用路径先用弹层自带的搜索框（北森），没有才在下拉自己的输入框里输入（Moka 学校、专业）。
+    const candidates = info.library === 'generic' ? [...ctx.popup.querySelectorAll('input'), info.combo, ...info.root.querySelectorAll('input')]
+      : [info.combo, ...info.root.querySelectorAll('input'), ...popup.querySelectorAll('input')];
     const searchInput = candidates.find(input => safeSearch(input) && h.visible(input));
-    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true
+    const searchable = !info.cascade && searchInput && (ctx.hints.searchable === true || info.library === 'generic'
       || info.combo.getAttribute('aria-autocomplete') === 'list' || searchInput.getAttribute('aria-autocomplete') === 'list'
       || searchInput.getAttribute('role') === 'searchbox' || searchInput.type === 'search'
       || info.root.matches('.ant-select-show-search') || Boolean(info.root.querySelector('.el-select__wrapper.is-filterable')));
-    let searchDone = false;
+    let searchDone = typedFirst;
     const readOptions = level => {
+      if (info.library === 'generic' && !popup.isConnected) {
+        const again = genericOpened(searchDone ? 1 : 2);
+        if (again?.popup) { popup = again.popup; ctx.popup = again.layer || popup; info.popup = popup; }
+      }
       if (!popup.isConnected) {
         const linked = ownedPopup(info, h.visible);
         if (linked.popup && !linked.ambiguous) { popup = linked.popup; ctx.popup = popup; info.popup = popup; }
@@ -208,7 +561,7 @@
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
         if (!safeSearch(searchInput)) return { reason: 'unsupported_control' };
-        if (!searchInput.isConnected || (!info.root.contains(searchInput) && !popup.contains(searchInput))) return { reason: 'element_disconnected' };
+        if (!searchInput.isConnected || (!info.root.contains(searchInput) && !popup.contains(searchInput) && !ctx.popup.contains(searchInput))) return { reason: 'element_disconnected' };
         const signature = list.map(option => `${option.value}:${option.text}`).join('\n');
         state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = desired[level];
         info.requireCommitSignal = info.library === 'aria';
@@ -237,7 +590,8 @@
       // Some cascaders commit parent selections (changeOnSelect/checkStrictly).
       // Every path activation can change component state, even before the leaf.
       const activation = info.library === 'arco' && info.cascade
-        ? latest.option.node.querySelector('.arco-cascader-list-item-label') || latest.option.node : latest.option.node;
+        ? latest.option.node.querySelector('.arco-cascader-list-item-label') || latest.option.node
+        : info.library === 'generic' ? latest.option.target || latest.option.node : latest.option.node;
       state.activated = true;
       info.lastChoice = latest.option.node;
       const reason = h.click(activation, ctx, true);
@@ -257,17 +611,34 @@
         ? info.root.querySelectorAll('input[type="hidden"]') : [];
       const explicitLabel = trim(info.combo.getAttribute('aria-valuetext'));
       const expected = hidden.length === 1 && !explicitLabel ? chosenValues : chosenLabels;
-      if (!values.every((value, index) => h.helpers.normalizeText(value) === h.helpers.normalizeText(expected[index]))) return false;
+      // 通用路径：组件里可能显示整段（「男/Male」）也可能只显示中文部分，两种都认，别的都不算。
+      const same = (value, index) => [expected[index], ...(info.library === 'generic' ? [chosenValues[index]] : [])]
+        .some(text => h.helpers.normalizeText(value) === h.helpers.normalizeText(text));
+      if (!values.every(same)) return false;
+      // 在下拉自己的输入框里打过字：框里的字可能只是搜索词。弹层收起来了才算真选上。
+      if (info.library === 'generic' && state.searchInput && info.root.contains(state.searchInput)
+        && popup.isConnected && h.visible(popup)) return false;
       return true;
     };
+    // 「勾选 + 确定」式选择框：点了选项、组件上还没显示出来，就点弹层里唯一的「确定」。
+    if (info.library === 'generic') {
+      const quick = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean, 400);
+      if (quick.reason && quick.reason !== 'verification_timeout') return { reason: quick.reason };
+      const layer = ctx.popup?.isConnected ? ctx.popup : popup;
+      const confirm = quick.reason && layer?.isConnected && h.visible(layer) ? confirmButton(layer, h) : null;
+      if (confirm) { const reason = h.click(confirm, ctx, true); if (reason) return { reason }; }
+    }
     const committed = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
     if (committed.reason) return { reason: committed.reason === 'verification_timeout' ? 'selection_not_committed' : committed.reason };
     return { accepted };
   }
   async function run(ctx, raw, h) {
     const state = {}; let outcome;
-    try { outcome = await perform(ctx, raw, h, state); return outcome; }
+    // 页面异常也按失败收尾（收起弹层、恢复搜索词）；只把固定的原因码交出去。
+    try { outcome = await perform(ctx, raw, h, state); } catch { outcome = { reason: 'operation_failed' }; }
+    try { return outcome; }
     finally {
+      state.watch?.disconnect();
       // Cancellation, user edits and stale bindings forbid further actions,
       // including cleanup. Never undo an attempted semantic selection.
       if (outcome?.reason && !h.stop(ctx)) {
@@ -278,8 +649,33 @@
         }
         const info = state.info;
         if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
+        // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）。
+        // 先按 Esc；还开着就在页面空白处点一下。只派发事件，不改页面状态。
+        if (info?.library === 'generic' && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
+          const doc = info.el.ownerDocument, View = doc.defaultView;
+          const target = doc.activeElement || doc.body;
+          target.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+          await new Promise(resolve => setTimeout(resolve, 120));
+          if (ctx.popup.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
+            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent], ['click', View.MouseEvent]]) {
+              if (Event) doc.body.dispatchEvent(new Event(type, { bubbles: true }));
+            }
+          }
+        }
       }
     }
   }
-  scope.ResumeProCustomControls = { describe, snapshot, hasExistingValue, readSelection, run };
+  function visiblePopups(target, visible) {
+    const doc = describe(target).el?.ownerDocument;
+    return doc?.querySelectorAll ? new Set(popups(doc, visible)) : null;
+  }
+  // 自制单选（#269 北森 phoenix-radio）和通用路线共用：选项怎么点、选中了没有。
+  const CHECKED_TOKEN = /(?:^|[-_])checked$/i;
+  function optionTarget(node) { return clickTarget(node, el => Boolean(trim(el.textContent))); }
+  function isChecked(node) {
+    if (node instanceof node.ownerDocument.defaultView.HTMLInputElement) return node.checked;
+    return [node, ...node.querySelectorAll('[aria-checked], [class]')].some(el => el.getAttribute('aria-checked') === 'true'
+      || String(el.getAttribute('class') || '').split(/\s+/).some(token => CHECKED_TOKEN.test(token)));
+  }
+  scope.ResumeProCustomControls = { describe, snapshot, hasExistingValue, readSelection, visiblePopups, optionTarget, isChecked, run };
 })(typeof self !== 'undefined' ? self : globalThis);

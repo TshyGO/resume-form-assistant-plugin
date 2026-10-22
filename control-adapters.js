@@ -51,7 +51,7 @@
       if (!ctx.nodes.length || ctx.nodes.some(el => el.isConnected === false)) return 'element_disconnected';
       if (ctx.nodes.some(el => el instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(el.type))) return 'unsupported_control';
       if (ctx.kind === 'checkbox' && ctx.el.type !== 'checkbox') return 'unsupported_control';
-      if (ctx.kind === 'radio' && ctx.nodes.some(el => el.type !== 'radio')) return 'unsupported_control';
+      if (ctx.kind === 'radio' && ctx.nodes.some(el => ctx.customRadio ? el instanceof HTMLInputElement : el.type !== 'radio')) return 'unsupported_control';
       if (ctx.kind !== 'radio' && ctx.nodes.some(el => el.disabled)) return 'control_disabled';
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
@@ -122,7 +122,12 @@
       const cancelDefault = el.tagName === 'BUTTON' || ['custom-select', 'cascader'].includes(ctx.kind);
       if (cancelDefault) el.addEventListener('click', preventDefaultActivation, { capture: true });
       ctx.activating = true;
-      try { if (committing) markWrite(ctx); el.click(); } finally {
+      // SVG icons (#269 北森的单选圈) have no click(); dispatch the same activation event instead.
+      try {
+        if (committing) markWrite(ctx);
+        if (typeof el.click === 'function') el.click();
+        else if (ViewMouseEvent) el.dispatchEvent(new ViewMouseEvent('click', { bubbles: true, cancelable: true }));
+      } finally {
         if (cancelDefault) el.removeEventListener('click', preventDefaultActivation, true);
         ctx.activating = false;
       }
@@ -161,6 +166,15 @@
       if (!answer.value.same) return result(false, ctx.acceptedOnce ? 'value_reverted' : 'value_not_committed', ctx);
       if (answer.value.verdict && !answer.value.verdict.ok) return result(false, answer.value.verdict.reason, ctx);
       return result(true, '', ctx);
+    }
+
+    function acceptsFreeText(ctx) {
+      const el = ctx.el, info = scope.ResumeProCustomControls.describe(ctx.entry);
+      if (ctx.kind !== 'custom-select' || !(el instanceof HTMLInputElement) || el.readOnly || el.disabled) return false;
+      if (!['text', 'search'].includes(el.type) || !['aria', 'generic'].includes(info.library)) return false;
+      // 只认组件类名写明是联想输入框（el-autocomplete 等）；单有 aria-autocomplete 的可能是只能从列表里选的下拉。
+      return [info.root, el.parentElement, el.parentElement?.parentElement].some(node => String(node?.className || '').split(/\s+/)
+        .some(token => /(?:^|[-_])auto-?complete$/i.test(token)));
     }
 
     async function text(ctx, value) {
@@ -208,6 +222,9 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
+      // #269 自制单选组：选项是 div（北森 phoenix-radio），没有 input。
+      ctx.customRadio = ctx.kind === 'radio' && nodes.length > 0 && nodes.every(node => !(node instanceof HTMLInputElement));
+      if (ctx.customRadio && !scope.ResumeProCustomControls) return result(false, 'unsupported_control', ctx);
       ctx.startedEditable = ctx.el instanceof HTMLInputElement && !ctx.el.readOnly;
       const custom = ['custom-select', 'cascader'].includes(ctx.kind);
       if (!KINDS.has(ctx.kind) || (custom && !scope.ResumeProCustomControls)) return result(false, 'unsupported_control', ctx);
@@ -232,6 +249,7 @@
           ctx.popupsBefore = new Set(Array.from(doc.querySelectorAll('.ant-picker-dropdown')).filter(visible));
           ctx.alreadyOpen = doc.activeElement === ctx.el && ctx.popupsBefore.size === 1;
         }
+        if (custom) ctx.popupsBeforeFocus = scope.ResumeProCustomControls.visiblePopups?.(ctx.entry, visible) || null;
         if (!direct) focus(ctx.el);
         await delay(0);
         const afterFocus = stop(ctx, true);
@@ -239,8 +257,24 @@
         let accepted;
         if (custom) {
           const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
+          // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
+          if (outcome.reason && ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason) && acceptsFreeText(ctx) && !stop(ctx)) {
+            return await text(ctx, desiredValue);
+          }
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;
+          if (outcome.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
+        } else if (ctx.kind === 'radio' && ctx.customRadio) {
+          const custom = scope.ResumeProCustomControls;
+          const text = node => String(node.textContent || '').replace(/\s+/g, ' ').trim();
+          const disabled = node => node.getAttribute('aria-disabled') === 'true' || /(?:^|[-_])disabled$/i.test(String(node.className || ''))
+            || Boolean(node.querySelector('[aria-disabled="true"]'));
+          const index = helpers?.findSelectOptionIndex?.(nodes.map(node => ({ value: text(node), text: text(node), disabled: disabled(node) })), desiredValue) ?? -1;
+          const chosen = nodes[index];
+          if (!chosen) return result(false, 'no_option_match', ctx);
+          if (!custom.isChecked(chosen)) { const reason = click(custom.optionTarget(chosen), ctx, true); if (reason) return result(false, reason, ctx); }
+          // 只认组件自己标出的选中状态（--checked、aria-checked），并且组里只有这一项选中。
+          accepted = () => chosen.isConnected && custom.isChecked(chosen) && nodes.every(node => node === chosen || !custom.isChecked(node));
         } else if (ctx.kind === 'radio') {
           const index = helpers?.findSelectOptionIndex?.(nodes.map(node => ({value:node.value,text:deps.radioLabel?.(node) || node.value,disabled:node.disabled})), desiredValue) ?? -1;
           const chosen = nodes[index];
@@ -265,14 +299,15 @@
         } else if (ctx.kind === 'date') {
           const date = await operateDate(ctx, desiredValue);
           if (date.reason) return result(false, date.reason, ctx, date.observed);
-          accepted = () => {
+          if (date.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
+          accepted = date.accepted || (() => {
             const display = String(ctx.el.value ?? '');
             // The real Liepin picker displays YYYY年MM月 after calendar commit.
             // Compare the actual panel's date precision, preserving its display format.
             const canonical = date.mode === 'year' ? display.match(/^\s*(\d{4})(?:年)?\s*$/)?.[1]
               : date.mode ? helpers?.normalizeDateValue?.(display, date.mode) : display;
             return canonical === date.expected;
-          };
+          });
         } else if (ctx.kind === 'contenteditable') {
           const expected = String(desiredValue ?? ''); markWrite(ctx); ctx.el.textContent = expected;
           ctx.el.dispatchEvent(new Event('input', { bubbles: true })); accepted = () => ctx.el.textContent === expected;
@@ -304,6 +339,11 @@
       // An AntD picker often starts readonly, then opens an editable input. Writing
       // that input does not commit rc-picker state; choose an actual calendar cell.
       if (ctx.entry.pickerType === 'antd') return await antDate(ctx, raw);
+      // #269 只读的日期框（智联 Element 日期选择器）：不能打字，按日历逐级点，和北森的日历共用一套。
+      if (ctx.el.readOnly && scope.ResumeProCustomControls?.run) {
+        const outcome = await scope.ResumeProCustomControls.run(ctx, raw, { helpers, visible, click, stop, write, input, waitUntil, blur });
+        return outcome.reason ? { reason: outcome.reason } : { accepted: outcome.accepted, dayDefaulted: outcome.dayDefaulted };
+      }
       const expected = helpers?.normalizeDateValue?.(raw, ctx.entry.pickerInputType || 'date') ?? String(raw ?? '');
       if (ctx.el.readOnly) return { reason: 'unsupported_control' };
       if (typeof ctx.el.click === 'function') {
@@ -388,7 +428,7 @@
       try {
         if (saved.ctx.nodes.some(node => node.isConnected === false)) return result(false, 'element_disconnected', saved.ctx);
         if (saved.ctx.nodes.some(node => node instanceof HTMLInputElement && ['file', 'password', 'hidden', 'submit', 'reset', 'button', 'image'].includes(node.type))) return result(false, 'element_disconnected', saved.ctx);
-        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
+        if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => saved.ctx.customRadio ? node instanceof HTMLInputElement : node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
         if (saved.ctx.kind === 'checkbox' && saved.ctx.el.type !== 'checkbox') return result(false, 'element_disconnected', saved.ctx);
         if (kindOf(saved.ctx.entry, saved.ctx.el) !== saved.ctx.kind) return result(false, 'element_disconnected', saved.ctx);
         if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
