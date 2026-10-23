@@ -23,6 +23,9 @@ export const EXPORT_POINTS = [
 
 export const EXPORT_NOTE = EXPORT_POINTS.join("");
 
+/** 离开「数据与备份」（换设置分类或换页面）时在 #settings-data 上派发，各备份区据此清掉结果提示。 */
+export const BACKUP_LEAVE = "backup-leave";
+
 /** 恢复之前的说明。 */
 export const RESTORE_NOTE =
   "恢复会把当前档案整个换成备份里的那一份。当前这份不会删掉，它会变成一个回滚点，随时可以换回来。";

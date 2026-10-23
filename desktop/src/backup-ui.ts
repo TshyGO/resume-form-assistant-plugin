@@ -18,6 +18,7 @@ import type {
 import { must } from "./dom.ts";
 import type { Message } from "./backup.ts";
 import {
+  BACKUP_LEAVE,
   EMPTY_RECYCLE,
   EMPTY_ROLLBACK,
   EXPORT_POINTS,
@@ -50,8 +51,9 @@ export interface FilePickers {
 
 type Tone = Message["tone"] | "error";
 
+/** 带「关闭」按钮的提示条，文字写进其中的 `[data-callout-text]`，不能把按钮一起冲掉。 */
 function show(element: HTMLElement, message: { tone: Tone; text: string } | null) {
-  element.textContent = message?.text ?? "";
+  (element.querySelector<HTMLElement>("[data-callout-text]") ?? element).textContent = message?.text ?? "";
   if (message) element.dataset.tone = message.tone;
   else delete element.dataset.tone;
   element.hidden = !message;
@@ -154,6 +156,14 @@ export function mountBackup(
     }),
   );
   restoreNote.textContent = RESTORE_NOTE;
+
+  // 结果提示只在当下有用：点「关闭」、收起这张卡、或离开「数据与备份」时都清掉，不一直挂着。
+  must("backup-status-close").addEventListener("click", () => show(status, null));
+  const card = must<HTMLDetailsElement>("backup-local");
+  card.addEventListener("toggle", () => { if (!card.open) show(status, null); });
+  must("settings-data").addEventListener(BACKUP_LEAVE, () => {
+    for (const element of [status, rollbackStatus, recycleStatus]) show(element, null);
+  });
 
   let busy = false;
 

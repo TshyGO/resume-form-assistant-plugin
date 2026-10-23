@@ -2,6 +2,7 @@ import { mountCloudSchedule } from "./cloud-schedule-ui";
 import type { Invoke } from "./api";
 import { cloudBackupApi, type CloudConfig, type CloudJob, type CloudListed, type CloudNamespace } from "./cloud-backup-api";
 import { restoreBody } from "./backup-ui";
+import { BACKUP_LEAVE } from "./backup";
 import { factList, fragment, openSettingsDialog, paragraph } from "./settings-dialog";
 import { must } from "./dom";
 
@@ -74,8 +75,17 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
   // records 是已读到的整月备份，next 是还没读的更早月份的游标。
   let shown = 0, next: string | null = null;
   let connectionId: string = crypto.randomUUID();
+  // 保存成功后按钮旁的下一步提示；一改表单就让位给「有未保存的修改」。
+  let savedNote = "";
+  let latestShort = "";
 
-  function tell(text: string, tone = "info") { message.hidden = false; message.dataset.tone = tone; message.textContent = text; }
+  function tell(text: string, tone = "info") { message.hidden = false; message.dataset.tone = tone; must("cloud-message-text").textContent = text; }
+  function dismiss() { message.hidden = true; must("cloud-message-text").textContent = ""; }
+  // 结果提示只在当下有用：点「关闭」、收起这张卡、或离开「数据与备份」时都清掉。
+  must("cloud-message-close").addEventListener("click", dismiss);
+  const card = must<HTMLDetailsElement>("cloud-backup");
+  card.addEventListener("toggle", () => { if (!card.open) dismiss(); });
+  must("settings-data").addEventListener(BACKUP_LEAVE, () => { dismiss(); savedNote = ""; render(); });
   function controls() {
     for (const control of form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input,select,button")) control.disabled = busy || uploading;
     if (!encrypted.checked) passphrase.disabled = true;
@@ -103,6 +113,8 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     const state = must("cloud-state");
     state.textContent = text;
     if (tone) state.dataset.tone = tone; else delete state.dataset.tone;
+    // 收起时折叠栏上仍能看到状态，不用展开就知道有没有问题。
+    must("cloud-summary-hint").textContent = config && latestShort ? `${text} · 最近成功 ${latestShort}` : text;
     const folder = config?.options.root?.join("/") || "根目录";
     must("cloud-fact-connection").textContent = config
       ? `${config.connection.username} · ${folder} · ${encrypt ? "加密" : "不加密"}`
@@ -117,9 +129,10 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       // 读不到凭据状态时仍允许移除（与 #312 后端修复一致）。
       must(`cloud-clear-${id}`).hidden = !config || saved === false;
     }
+    // 测试连接只用已保存的配置和凭据，所以没保存时就在按钮旁说清先后。
     for (const note of form.querySelectorAll<HTMLElement>(".cloud-form-msg")) {
-      note.textContent = dirty ? "有未保存的修改。变更账号或地址后，原凭据不会沿用。" : "";
-      note.dataset.tone = dirty ? "warn" : "";
+      note.textContent = dirty ? "有未保存的修改：先保存，再测试连接。换了账号或地址，原来的密码不会沿用。" : savedNote;
+      note.dataset.tone = dirty ? "warn" : savedNote ? "success" : "";
     }
   }
   function selectedConfig(): CloudConfig {
@@ -157,7 +170,8 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       if (job?.warnings.length) text += "。清理未完成：旧备份、探测文件或本机临时文件没有删干净，已有文件都保留，下次备份会再试。";
       progress.textContent = text;
       jobState = status.retryPackage ? "candidate" : job && ["failed", "interrupted"].includes(job.phase) ? "failed" : null;
-      latest.textContent = status.latestMetadata ? `${shortTime(status.latestMetadata.createdAt)} · ${size(status.latestMetadata.sizeBytes)}` : "暂无";
+      latestShort = status.latestMetadata ? shortTime(status.latestMetadata.createdAt) : "";
+      latest.textContent = status.latestMetadata ? `${latestShort} · ${size(status.latestMetadata.sizeBytes)}` : "暂无";
       latest.title = status.latestMetadata ? cloudTime(status.latestMetadata.createdAt) : "";
       must("cloud-local-copy").textContent = status.latestPackage ? `本机明文副本：${status.latestPackage}` : "";
       must("cloud-retry").hidden = !status.retryPackage;
@@ -176,7 +190,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     return polling;
   }
   for (const control of [endpoint, username, root, encrypted, keep, password, passphrase]) control.addEventListener("input", () => {
-    dirty = true;
+    dirty = true; savedNote = "";
     password.setCustomValidity(""); passphrase.setCustomValidity("");
     controls();
     render();
@@ -233,8 +247,10 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
       dirty = false;
       clearFound();
       await api.clearPreview();
+      // 上方之前的结果（比如认证失败）已经不对应现在的配置。
+      dismiss();
+      savedNote = "已保存在本机，密码只存系统凭据库。下一步：点「测试连接」确认能连上。";
       await secretStatus();
-      tell("配置已保存在本机；密码仅保存在系统凭据库。如需自动备份，请另外启用下方计划。", "success");
     });
   });
   for (const [id, kind] of [["password", "webdavPassword"], ["passphrase", "backupPassphrase"]] as const) {
@@ -245,7 +261,7 @@ export function mountCloudBackup(invoke: Invoke, onRestored: () => void | Promis
     }));
   }
   must("cloud-test").addEventListener("click", () => void guarded(async () => {
-    const c = selectedConfig(); progress.textContent = "正在连接并检查远端目录…";
+    const c = selectedConfig(); savedNote = ""; render(); progress.textContent = "正在连接并检查远端目录…";
     try { await api.test(c.connection, c.options); }
     catch (error) {
       // 测试连接只读不建目录：所填目录不存在时认证已通过，首次备份会逐级创建。

@@ -77,3 +77,19 @@ test("a failed applications reload is shown on the applications page instead of 
   expect(document.getElementById("apps-msg")!.textContent).toContain("读不到申请");
   expect(views.inboxRefresh).toHaveBeenCalledTimes(1);
 });
+
+test("leaving the data panel, by another settings category or another page, tells the backup areas to drop their notices", async () => {
+  const left = vi.fn();
+  document.getElementById("settings-data")!.addEventListener("backup-leave", left);
+  const click = (selector: string) => document.querySelector<HTMLButtonElement>(selector)!.click();
+  click('.nav button[data-route="settings"]');
+  await Promise.resolve();
+  click('[data-settings-tab="data"]');
+  expect(left).not.toHaveBeenCalled();
+  click('[data-settings-tab="general"]');
+  expect(left).toHaveBeenCalledTimes(1);
+  click('[data-settings-tab="data"]');
+  click('.nav button[data-route="applications"]');
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+  expect(left).toHaveBeenCalledTimes(2);
+});
