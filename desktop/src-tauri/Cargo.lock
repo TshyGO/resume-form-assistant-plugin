@@ -4215,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "resume-pro-desktop"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "ai-extract",
  "archive-store",
