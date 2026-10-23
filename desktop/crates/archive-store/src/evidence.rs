@@ -162,10 +162,8 @@ impl StoreTx<'_> {
         &mut self,
         input: NewEvidence,
     ) -> Result<EvidenceImportOutcome, StoreError> {
-        if let Some(message_id) = input.message_id.as_deref() {
-            if let Some(existing) =
-                self.match_known_mail(message_id, input.application_id.as_deref())?
-            {
+        if let Some(key) = input.mail_key() {
+            if let Some(existing) = self.match_known_mail(&key, input.application_id.as_deref())? {
                 return Ok(EvidenceImportOutcome::AlreadyStored(existing));
             }
         }
@@ -177,10 +175,10 @@ impl StoreTx<'_> {
     /// 导入指定了申请时,顺手关联过去;已属另一条申请则不动它。
     pub fn match_known_mail(
         &mut self,
-        message_id: &str,
+        key: &MailKey,
         application_id: Option<&str>,
     ) -> Result<Option<ReplyEvidence>, StoreError> {
-        let Some(existing) = self.find_evidence_by_message_id(message_id)? else {
+        let Some(existing) = self.find_known_mail(key)? else {
             return Ok(None);
         };
         match (&existing.application_id, application_id) {
@@ -189,25 +187,29 @@ impl StoreTx<'_> {
         }
     }
 
-    /// 按 Message-ID 找已有的证据(最早导入的那条)。回收站里申请下的证据不算:
-    /// 用户看不到它,说「已存在」只会让人找不着。
-    pub fn find_evidence_by_message_id(
-        &self,
-        message_id: &str,
-    ) -> Result<Option<ReplyEvidence>, StoreError> {
+    /// 按 Message-ID、发件人、发送时间找已有的证据(最早导入的那条)。回收站里申请下的
+    /// 证据不算:用户看不到它,说「已存在」只会让人找不着。
+    pub fn find_known_mail(&self, key: &MailKey) -> Result<Option<ReplyEvidence>, StoreError> {
         // 空串是「查过、没有编号」的标记，不是编号。
-        if message_id.is_empty() {
+        if key.message_id.is_empty() {
             return Ok(None);
         }
+        // 发送时间按入库时的同一套规则规范化，才能和库里的列逐字比较。
+        let sent_at = match &key.sent_at {
+            Some(occurred) => occurred.to_columns()?.0,
+            None => None,
+        };
+        // `message_id <> ''` 要写出来：局部索引带着这个条件，查询不写 SQLite 就不用它。
         let id: Option<String> = self
             .conn()
             .query_row(
                 "SELECT e.id FROM reply_evidence e \
                  LEFT JOIN applications a ON a.id = e.application_id \
-                 WHERE e.message_id = ?1 \
+                 WHERE e.message_id = ?1 AND e.message_id <> '' \
+                   AND e.from_addr IS ?2 AND e.sent_at IS ?3 \
                    AND (e.application_id IS NULL OR a.recycle_state = 'active') \
                  ORDER BY e.imported_at ASC, e.id ASC LIMIT 1",
-                params![message_id],
+                params![key.message_id, key.from_addr, sent_at],
                 |r| r.get(0),
             )
             .optional()?;

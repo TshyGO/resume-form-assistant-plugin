@@ -665,6 +665,66 @@ mod evidence {
     }
 
     #[test]
+    fn a_reused_message_id_with_another_send_time_is_kept() {
+        let (dir, store, _app) = archive();
+        let (downloaded, _) = downloaded_and_fetched("reused@ats.example.test");
+        let later = String::from_utf8(downloaded.clone())
+            .unwrap()
+            .replace("12 Sep 2026", "19 Sep 2026")
+            .replace("下周二面试。", "很遗憾通知你。");
+        import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let second = import(
+            &store,
+            vec![write(dir.path(), "b.eml", later.as_bytes())],
+            None,
+            None,
+        );
+        assert_eq!(second.imported.len(), 1, "撞号的另一封信照常存下");
+        assert_eq!(store.list_evidence(None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_old_mail_whose_original_is_gone_is_not_retried() {
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let old = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let raw = rusqlite::Connection::open(store.archive_dir().join("archive.db")).unwrap();
+        raw.execute("UPDATE reply_evidence SET message_id = NULL", [])
+            .unwrap();
+        drop(raw);
+        let stored = store
+            .get_evidence(&old.imported[0].id)
+            .unwrap()
+            .unwrap()
+            .blob
+            .meta
+            .stored_rel_path;
+        std::fs::remove_file(store.archive_dir().join(stored)).unwrap();
+
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert_eq!(again.imported.len(), 1, "原件没了就认不出来，按新信存");
+        assert!(
+            store.evidence_missing_message_id().unwrap().is_empty(),
+            "读不到的原件也记成查过了"
+        );
+    }
+
+    #[test]
     fn bytes_from_outside_a_file_go_through_the_same_dedup() {
         let (_dir, store, _app) = archive();
         let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");

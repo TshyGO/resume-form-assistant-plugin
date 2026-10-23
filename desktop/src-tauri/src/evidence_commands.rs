@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use archive_store::{
-    ArchiveStore, AttachmentBlobMeta, EvidenceImportOutcome, EvidenceKind as StoredKind,
+    ArchiveStore, AttachmentBlobMeta, EvidenceImportOutcome, EvidenceKind as StoredKind, MailKey,
     NewEvidence, Occurred, ReplyClass, ReplyEvidence, SendMode,
 };
 use evidence_import::{
@@ -192,12 +192,25 @@ pub fn import_bytes(
         .then(|| parse_eml(bytes))
         .flatten();
     let message_id = parsed.as_ref().and_then(|mail| mail.message_id.clone());
+    let from_addr = parsed.as_ref().and_then(|mail| mail.from_addr.clone());
+    let sent_at = parsed
+        .as_ref()
+        .and_then(|mail| mail.sent_at.clone())
+        .map(|rfc3339| Occurred::DateTime {
+            rfc3339,
+            time_zone: None,
+        });
 
     // 同一封信已经在档案里：不写文件、不建记录。旧证据的编号先补上，才查得全。
-    if let Some(message_id) = message_id.as_deref() {
+    if let Some(message_id) = message_id.clone() {
         backfill_message_ids(store, archive_dir);
+        let key = MailKey {
+            message_id,
+            from_addr: from_addr.clone(),
+            sent_at: sent_at.clone(),
+        };
         if let Some(existing) = store
-            .match_known_mail(message_id, application_id)
+            .match_known_mail(&key, application_id)
             .map_err(|_| failed("storage"))?
         {
             return Ok((summarise(store, existing), true));
@@ -231,14 +244,8 @@ pub fn import_bytes(
             },
             original_filename: staged.original_filename.clone(),
             subject: parsed.as_ref().and_then(|mail| mail.subject.clone()),
-            from_addr: parsed.as_ref().and_then(|mail| mail.from_addr.clone()),
-            sent_at: parsed
-                .as_ref()
-                .and_then(|mail| mail.sent_at.clone())
-                .map(|rfc3339| Occurred::DateTime {
-                    rfc3339,
-                    time_zone: None,
-                }),
+            from_addr,
+            sent_at,
             body_extract: parsed.as_ref().and_then(|mail| mail.body_extract.clone()),
             message_id,
             append_event: true,
@@ -249,28 +256,26 @@ pub fn import_bytes(
         EvidenceImportOutcome::Imported(record) => {
             Ok((summarise(store, record), staged.deduplicated))
         }
-        // 查重之后、登记之前，同一封信从另一条路先进来了：刚写的文件没人引用，收走。
-        EvidenceImportOutcome::AlreadyStored(record) => {
-            if !staged.deduplicated {
-                let _ = std::fs::remove_file(archive_dir.join(&staged.stored_rel_path));
-            }
-            Ok((summarise(store, record), true))
-        }
+        // 导入都在档案锁里排队，正常走不到这里。真走到了也不删刚写的文件：并发时它可能
+        // 和另一份同名；没人引用的文件由 `check_attachment_refs` 报告。
+        EvidenceImportOutcome::AlreadyStored(record) => Ok((summarise(store, record), true)),
     }
 }
 
-/// 给升级前导入的邮件补 Message-ID。只在需要查重时调用；查不到编号的记成空串，
-/// 读不到原件的留着下次再试。补算失败不影响导入。
+/// 给升级前导入的邮件补 Message-ID。只在需要查重时调用；查不到编号、读不到原件的都记成
+/// 空串，以后不再重试。补算失败不影响导入。
 pub fn backfill_message_ids(store: &ArchiveStore, archive_dir: &Path) {
     let Ok(pending) = store.evidence_missing_message_id() else {
         return;
     };
     let found: Vec<(String, Option<String>)> = pending
         .into_iter()
-        .filter_map(|item| {
-            let bytes = std::fs::read(archive_dir.join(&item.stored_rel_path)).ok()?;
-            let message_id = parse_eml(&bytes).and_then(|mail| mail.message_id);
-            Some((item.evidence_id, message_id))
+        .map(|item| {
+            let message_id = std::fs::read(archive_dir.join(&item.stored_rel_path))
+                .ok()
+                .and_then(|bytes| parse_eml(&bytes))
+                .and_then(|mail| mail.message_id);
+            (item.evidence_id, message_id)
         })
         .collect();
     if !found.is_empty() {

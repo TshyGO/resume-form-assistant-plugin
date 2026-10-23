@@ -100,17 +100,14 @@ impl ArchiveStore {
 
     pub fn match_known_mail(
         &self,
-        message_id: &str,
+        key: &MailKey,
         application_id: Option<&str>,
     ) -> Result<Option<ReplyEvidence>, StoreError> {
-        self.transaction(|tx| tx.match_known_mail(message_id, application_id))
+        self.transaction(|tx| tx.match_known_mail(key, application_id))
     }
 
-    pub fn find_evidence_by_message_id(
-        &self,
-        message_id: &str,
-    ) -> Result<Option<ReplyEvidence>, StoreError> {
-        self.transaction(|tx| tx.find_evidence_by_message_id(message_id))
+    pub fn find_known_mail(&self, key: &MailKey) -> Result<Option<ReplyEvidence>, StoreError> {
+        self.transaction(|tx| tx.find_known_mail(key))
     }
 
     pub fn evidence_missing_message_id(&self) -> Result<Vec<MessageIdBackfill>, StoreError> {

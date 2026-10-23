@@ -2,7 +2,7 @@
 
 use archive_store::{
     ApplicationOrigin, ArchiveConfig, ArchiveStore, AttachmentBlobMeta, EvidenceImportOutcome,
-    EvidenceKind, NewApplication, NewEvidence, Occurred, RecycleState,
+    EvidenceKind, MailKey, NewApplication, NewEvidence, Occurred, RecycleState,
 };
 
 const MESSAGE_ID: &str = "AbC.123@mail.example.test";
@@ -32,6 +32,15 @@ fn mail(digit: char, message_id: Option<&str>, application_id: Option<String>) -
         body_extract: None,
         message_id: message_id.map(str::to_string),
         append_event: true,
+    }
+}
+
+/// 旧档案里手写的行没有发件人和发送时间。
+fn key(message_id: &str) -> MailKey {
+    MailKey {
+        message_id: message_id.into(),
+        from_addr: None,
+        sent_at: None,
     }
 }
 
@@ -86,6 +95,35 @@ fn the_same_message_id_with_different_bytes_is_stored_once() {
     assert_eq!(again.id, first.id);
     assert_eq!(store.list_evidence(None).unwrap().len(), 1);
     assert!(store.find_blob(&"b".repeat(64)).unwrap().is_none());
+}
+
+#[test]
+fn a_reused_message_id_from_another_sender_or_time_is_a_different_mail() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    let first = imported(
+        store
+            .import_or_match_evidence(mail('a', Some(MESSAGE_ID), None))
+            .unwrap(),
+    );
+
+    let mut other_sender = mail('b', Some(MESSAGE_ID), None);
+    other_sender.from_addr = Some("someone-else@example.test".into());
+    assert_ne!(
+        imported(store.import_or_match_evidence(other_sender).unwrap()).id,
+        first.id
+    );
+
+    let mut other_time = mail('c', Some(MESSAGE_ID), None);
+    other_time.sent_at = Some(Occurred::DateTime {
+        rfc3339: "2026-10-01T08:00:00Z".into(),
+        time_zone: None,
+    });
+    assert_ne!(
+        imported(store.import_or_match_evidence(other_time).unwrap()).id,
+        first.id
+    );
+    assert_eq!(store.list_evidence(None).unwrap().len(), 3);
 }
 
 #[test]
@@ -214,15 +252,11 @@ fn a_v5_archive_gains_the_column_and_lists_old_mail_for_backfill() {
     assert_eq!(written, 2);
     assert!(store.evidence_missing_message_id().unwrap().is_empty());
     assert_eq!(
-        store
-            .find_evidence_by_message_id(MESSAGE_ID)
-            .unwrap()
-            .unwrap()
-            .id,
+        store.find_known_mail(&key(MESSAGE_ID)).unwrap().unwrap().id,
         "ev-a"
     );
     // 「查过、没有编号」的空串不会被当成编号命中。
-    assert!(store.find_evidence_by_message_id("").unwrap().is_none());
+    assert!(store.find_known_mail(&key("")).unwrap().is_none());
     // 补算只填空着的行。
     assert_eq!(
         store
