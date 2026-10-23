@@ -222,9 +222,21 @@
     return found.length === 1 ? found[0] : null;
   }
   // minOptions：只是点开时至少 2 条，免得把页面的校验提示当成弹层；已经输入了搜索词时 1 条建议也算。
+  // 装着单选、勾选的区域多半是旁边的另一道题（点开下拉时它可能因为校验样式变化被记下）：
+  // 只有浮在页面上的层（自己或外层是 absolute / fixed 定位，真正的弹层、日历都是）才可能是弹层。
+  const CHOICE_SELECTOR = 'input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], [role="radiogroup"], [class*="radio-group" i], [class*="radiogroup" i], [class*="checkbox-group" i]';
+  function neighbourQuestion(node, h) {
+    if (!Array.from(node.querySelectorAll(CHOICE_SELECTOR)).some(el => h.visible(el) || el.closest('label, [class*="radio" i], [class*="checkbox" i]'))) return false;
+    for (let current = node; current && current.nodeType === 1; current = current.parentElement) {
+      const position = current.ownerDocument.defaultView.getComputedStyle(current).position;
+      if (position === 'absolute' || position === 'fixed') return false;
+    }
+    return true;
+  }
   function genericPopupFrom(node, info, h, minOptions = 2) {
     if (!node?.isConnected || node.nodeType !== 1 || !h.visible(node) || node.contains(info.root) || info.root.contains(node)) return null;
     if (node.getAttribute('role') === 'alert' || GENERIC_NOISE.test(String(node.className || ''))) return null;
+    if (neighbourQuestion(node, h)) return null;
     const list = genericOptions(node, h);
     if (list.length < minOptions) return null;
     // 整页大小的外壳里只取装着全部条目的最小容器，再看它是不是贴着控件。

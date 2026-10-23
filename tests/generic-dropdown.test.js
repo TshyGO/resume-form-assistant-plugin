@@ -688,3 +688,30 @@ test("Element: typing into an open filterable select changes the guard snapshot,
   input.value = "硕";
   assert.notEqual(controls.snapshot(target), closed, "the user's typing is an edit");
 });
+
+test("a neighbouring yes/no question whose style changes when the dropdown opens is never taken as its popup", async () => {
+  // 审查 B11（第三轮）：点开下拉时，紧挨着的另一道「是/否」单选题因为校验样式变化被记下，原来可能被当成弹层、点到别的题。
+  const h = load(`<div class="item"><label class="title">是否党员</label>
+    <label class="sd-Select-container-9Qa select"><input class="sd-Input-input-7Kd"></label></div>
+    <div class="item adjust"><label class="title">是否接受调剂</label><div class="phoenix-radio-group">
+      <div class="phoenix-radio-group__radioItem"><div class="phoenix-radio yes"><span class="phoenix-radio__circle"></span><span>是</span></div></div>
+      <div class="phoenix-radio-group__radioItem"><div class="phoenix-radio"><span class="phoenix-radio__circle"></span><span>否</span></div></div></div></div>`);
+  const input = h.doc.querySelector(".sd-Input-input-7Kd");
+  const neighbour = h.doc.querySelector(".adjust");
+  let neighbourClicks = 0;
+  neighbour.addEventListener("click", () => neighbourClicks++);
+  input.addEventListener("click", () => {
+    neighbour.classList.add("is-active");
+    setTimeout(() => {
+      const popup = h.doc.createElement("div");
+      popup.className = "sd-Dropdown-dropdown-2Lm";
+      popup.innerHTML = `<div class="opt">是</div><div class="opt">否</div>`;
+      popup.querySelectorAll(".opt").forEach((opt) => opt.addEventListener("click", () => { input.value = opt.textContent; popup.remove(); }));
+      h.doc.body.append(popup);
+    }, 60);
+  });
+  const result = await h.api.operate(scanned(h.doc, "是否党员"), "是");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(input.value, "是");
+  assert.equal(neighbourClicks, 0, "the neighbouring question is untouched");
+});
