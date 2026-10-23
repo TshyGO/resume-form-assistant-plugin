@@ -1,7 +1,8 @@
 //! D09 命令层：导入、收件箱、预览、关联与分类。
 //!
 //! 顺序固定：`evidence-import` 先把字节落进 `attachments/`，成功之后 archive-store 才登记
-//! 一行证据。一个文件失败不影响同一批里的其他文件。
+//! 一行证据。一个文件失败不影响同一批里的其他文件。带 Message-ID 的邮件在落盘之前先查重：
+//! 同一封信从别的渠道进来过，就不写文件、不建记录（#330）。
 //!
 //! 给 WebView 的每个结构里都**没有存储路径**：预览要么是文本，要么是这里生成的 `data:`
 //! 图片；PDF 只给元数据，由 `open_evidence` 交给系统程序打开（拆分计划决策 6、Q2）。
@@ -9,11 +10,12 @@
 use std::path::{Path, PathBuf};
 
 use archive_store::{
-    ArchiveStore, AttachmentBlobMeta, EvidenceKind as StoredKind, NewEvidence, Occurred,
-    ReplyClass, ReplyEvidence, SendMode,
+    ArchiveStore, AttachmentBlobMeta, EvidenceImportOutcome, EvidenceKind as StoredKind,
+    NewEvidence, Occurred, ReplyClass, ReplyEvidence, SendMode,
 };
 use evidence_import::{
-    bucket_from_unix, parse_eml, stage_file, stage_text, EvidenceKind, MAX_FILES_PER_IMPORT,
+    bucket_from_unix, inspect, parse_eml, read_source, stage_bytes, stage_text, EvidenceKind,
+    MAX_FILES_PER_IMPORT,
 };
 use serde::{Deserialize, Serialize};
 
@@ -161,7 +163,47 @@ fn import_one(
     bucket: &str,
     application_id: Option<&str>,
 ) -> Result<(EvidenceSummary, bool), FailedImport> {
-    let name = evidence_import::safe_file_name(source.file_name().and_then(|n| n.to_str()));
+    let (bytes, original) = read_source(source).map_err(|err| FailedImport {
+        name: evidence_import::safe_file_name(source.file_name().and_then(|n| n.to_str())),
+        code: err.code().to_string(),
+    })?;
+    import_bytes(store, archive_dir, &bytes, original, bucket, application_id)
+}
+
+/// 导入一份已经在内存里的原件（本机文件读出来的、邮箱拉回来的、插件抓到的）。
+/// 返回的布尔值表示「档案里已经有了」：同一份字节，或同一个 Message-ID。
+pub fn import_bytes(
+    store: &ArchiveStore,
+    archive_dir: &Path,
+    bytes: &[u8],
+    original_filename: Option<String>,
+    bucket: &str,
+    application_id: Option<&str>,
+) -> Result<(EvidenceSummary, bool), FailedImport> {
+    let name = evidence_import::safe_file_name(original_filename.as_deref());
+    let failed = |code: &str| FailedImport {
+        name: name.clone(),
+        code: code.to_string(),
+    };
+    let sniffed = inspect(bytes, original_filename.as_deref()).map_err(|err| failed(err.code()))?;
+
+    // 文本类的原件再问一次邮件解析：一个只有 From 头的残信 sniff 判不出来，但它确实是信。
+    let parsed = matches!(sniffed.kind, EvidenceKind::Eml | EvidenceKind::Unknown)
+        .then(|| parse_eml(bytes))
+        .flatten();
+    let message_id = parsed.as_ref().and_then(|mail| mail.message_id.clone());
+
+    // 同一封信已经在档案里：不写文件、不建记录。旧证据的编号先补上，才查得全。
+    if let Some(message_id) = message_id.as_deref() {
+        backfill_message_ids(store, archive_dir);
+        if let Some(existing) = store
+            .match_known_mail(message_id, application_id)
+            .map_err(|_| failed("storage"))?
+        {
+            return Ok((summarise(store, existing), true));
+        }
+    }
+
     let existing = |sha: &str| {
         store
             .find_blob(sha)
@@ -169,25 +211,16 @@ fn import_one(
             .flatten()
             .map(|b| b.meta.stored_rel_path)
     };
-    let staged =
-        stage_file(archive_dir, source, bucket, &existing).map_err(|err| FailedImport {
-            name: name.clone(),
-            code: err.code().to_string(),
-        })?;
-
-    // 文本类的原件再问一次邮件解析：一个只有 From 头的残信 sniff 判不出来，但它确实是信。
-    let parsed = matches!(staged.kind, EvidenceKind::Eml | EvidenceKind::Unknown)
-        .then(|| std::fs::read(archive_dir.join(&staged.stored_rel_path)).ok())
-        .flatten()
-        .and_then(|bytes| parse_eml(&bytes));
+    let staged = stage_bytes(archive_dir, bytes, original_filename, bucket, &existing)
+        .map_err(|err| failed(err.code()))?;
     let kind = if parsed.is_some() {
         StoredKind::Eml
     } else {
         stored_kind(staged.kind)
     };
 
-    let record = store
-        .import_evidence(NewEvidence {
+    let outcome = store
+        .import_or_match_evidence(NewEvidence {
             application_id: application_id.map(str::to_string),
             kind,
             blob: AttachmentBlobMeta {
@@ -207,14 +240,42 @@ fn import_one(
                     time_zone: None,
                 }),
             body_extract: parsed.as_ref().and_then(|mail| mail.body_extract.clone()),
+            message_id,
             append_event: true,
         })
-        .map_err(|_| FailedImport {
-            name,
-            code: "storage".into(),
-        })?;
+        .map_err(|_| failed("storage"))?;
 
-    Ok((summarise(store, record), staged.deduplicated))
+    match outcome {
+        EvidenceImportOutcome::Imported(record) => {
+            Ok((summarise(store, record), staged.deduplicated))
+        }
+        // 查重之后、登记之前，同一封信从另一条路先进来了：刚写的文件没人引用，收走。
+        EvidenceImportOutcome::AlreadyStored(record) => {
+            if !staged.deduplicated {
+                let _ = std::fs::remove_file(archive_dir.join(&staged.stored_rel_path));
+            }
+            Ok((summarise(store, record), true))
+        }
+    }
+}
+
+/// 给升级前导入的邮件补 Message-ID。只在需要查重时调用；查不到编号的记成空串，
+/// 读不到原件的留着下次再试。补算失败不影响导入。
+pub fn backfill_message_ids(store: &ArchiveStore, archive_dir: &Path) {
+    let Ok(pending) = store.evidence_missing_message_id() else {
+        return;
+    };
+    let found: Vec<(String, Option<String>)> = pending
+        .into_iter()
+        .filter_map(|item| {
+            let bytes = std::fs::read(archive_dir.join(&item.stored_rel_path)).ok()?;
+            let message_id = parse_eml(&bytes).and_then(|mail| mail.message_id);
+            Some((item.evidence_id, message_id))
+        })
+        .collect();
+    if !found.is_empty() {
+        let _ = store.record_message_ids(&found);
+    }
 }
 
 fn import_pasted(
@@ -250,6 +311,7 @@ fn import_pasted(
             from_addr: None,
             sent_at: None,
             body_extract: Some(first_lines(text)),
+            message_id: None,
             append_event: true,
         })
         .map_err(|_| FailedImport {

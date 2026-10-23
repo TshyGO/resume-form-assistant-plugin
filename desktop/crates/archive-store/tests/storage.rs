@@ -206,6 +206,7 @@ fn evidence(id: Option<String>) -> NewEvidence {
         from_addr: None,
         sent_at: None,
         body_extract: None,
+        message_id: None,
         append_event: true,
     }
 }

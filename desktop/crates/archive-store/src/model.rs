@@ -706,8 +706,25 @@ pub struct NewEvidence {
     pub from_addr: Option<String>,
     pub sent_at: Option<Occurred>,
     pub body_extract: Option<String>,
+    /// 邮件的 Message-ID(已规范化);不是邮件或信里没有时为 None。
+    pub message_id: Option<String>,
     /// 是否立即追加 evidence_imported 事件;收件箱(无申请)用档案级序号。
     pub append_event: bool,
+}
+
+/// [`crate::ArchiveStore::import_or_match_evidence`] 的结果。
+#[derive(Debug, Clone)]
+pub enum EvidenceImportOutcome {
+    Imported(ReplyEvidence),
+    /// 同一个 Message-ID 已经在档案里:没有新建记录,这是已有的那条。
+    AlreadyStored(ReplyEvidence),
+}
+
+/// 还没补 Message-ID 的 eml 证据,由桌面端读原件解析。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageIdBackfill {
+    pub evidence_id: String,
+    pub stored_rel_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

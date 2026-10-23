@@ -419,6 +419,7 @@ fn attach(here: &Layout, application: &str, name: &str, bytes: &[u8]) {
                 from_addr: None,
                 sent_at: None,
                 body_extract: None,
+                message_id: None,
                 append_event: true,
             })
             .unwrap();

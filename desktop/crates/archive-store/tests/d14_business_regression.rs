@@ -62,6 +62,7 @@ fn evidence(
             from_addr: Some("ats@d14.example.test".into()),
             sent_at: None,
             body_extract: notice["body"].as_str().map(str::to_string),
+            message_id: None,
             append_event: true,
         })
         .unwrap()
