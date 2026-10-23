@@ -31,7 +31,7 @@
   const NOT_SELECT_TOKEN = /^(?:user-)?select-(?:none|text|all|auto)$/i;
   // #269 自制单选组（北森 phoenix-radio-group）：选项是 div，组里没有 input。容器带 radio-group 类名或 role=radiogroup 才算。
   const RADIO_GROUP_TOKEN = /(?:^|[-_])radio-?group(?:$|[-_])/i;
-  const MAX_RADIO_OPTION_CHARS = 20;
+  const MAX_RADIO_OPTION_CHARS = 40;
   const LIBRARY_SELECT_TOKENS = new Set(["ant-select", "ant-cascader", "el-select", "el-cascader", "arco-select", "arco-cascader",
     "ivu-select", "ivu-cascader", "n-select", "n-cascader", "t-select", "t-cascader", "v-select", "select2-container", "chosen-container"]);
   const NOISE_TOKEN = /^(?:error|err|invalid|explain|help|helper|tip|tips|hint|extra|count|counter|wordcount|limit|message|msg|feedback|warning|validate|validation|suffix|prefix|placeholder|unit)$/i;

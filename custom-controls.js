@@ -13,12 +13,22 @@
     }
     return true;
   }
-  function shownText(root) {
+  // 组件根里看得见的文字。组件根取大了（外层类名带 select 的整行）时会装进题目和占位提示，这些不是已选值：
+  // 不装着输入框的 <label>、类名以 title / placeholder 结尾的元素里的字都跳过。
+  const NOT_VALUE_TOKEN = /(?:^|[-_])(?:title|placeholder)$/i;
+  function shownText(root, el) {
     const parts = [];
+    const notValue = node => {
+      for (let current = node; current && current !== root.parentElement; current = current.parentElement) {
+        if (current.tagName === 'LABEL' && !(el && current.contains(el))) return true;
+        if (String(current.getAttribute?.('class') || '').split(/\s+/).some(token => NOT_VALUE_TOKEN.test(token))) return true;
+      }
+      return false;
+    };
     const walker = root.ownerDocument.createTreeWalker(root, 4);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       const parent = node.parentElement;
-      if (parent && !['SCRIPT', 'STYLE', 'TEMPLATE'].includes(parent.tagName) && trim(node.data) && shown(parent)) parts.push(trim(node.data));
+      if (parent && !['SCRIPT', 'STYLE', 'TEMPLATE'].includes(parent.tagName) && trim(node.data) && shown(parent) && !notValue(parent)) parts.push(trim(node.data));
     }
     return trim(parts.join(' '));
   }
@@ -59,7 +69,7 @@
     }
     if (library === 'generic') {
       // 组件上显示的文字：输入框的值，没有就取组件根里看得见的文字；占位提示不算。
-      const text = trim(el.tagName === 'INPUT' ? el.value : '') || shownText(root);
+      const text = trim(el.tagName === 'INPUT' ? el.value : '') || shownText(root, el);
       if (!text || scope.ResumeProAIHelpers?.isPlaceholderOption(text) || text === trim(el.getAttribute?.('placeholder'))) return [];
       return [text];
     }
@@ -181,9 +191,12 @@
   function looksCalendar(layer, popup, h) {
     const nodes = [popup, layer, ...layer.querySelectorAll('[class]')];
     if (nodes.some(node => CALENDAR_CLASS.test(String(node.className || '')))) return true;
-    // 没有类名线索时看内容：一屏里大半是 1～31 的数字，就是日期格子。
+    // 没有类名线索时看内容：一屏里大半是 1～31 的数字，并且有「xxxx年」「x月」这样的标题，才是日期格子
+    // （班级排名 1～30 这类数字下拉没有年月标题，不算）。
     const list = genericOptions(popup, h);
-    return list.length >= 20 && list.filter(option => /^\d{1,2}$/.test(option.full)).length >= list.length * 0.6;
+    if (!(list.length >= 20 && list.filter(option => /^\d{1,2}$/.test(option.full)).length >= list.length * 0.6)) return false;
+    const view = calendarView(layer, h);
+    return Boolean(view.headYear || view.headMonth);
   }
   // 点哪里：条目带单选圈、勾选框时点它（北森「勾选 + 确定」式选择框只认圆圈，点文字不算选中）；
   // 否则点文字所在的最里层，事件向外冒泡，网站把点击处理挂在哪一层都收得到。
@@ -338,7 +351,9 @@
     if (!top || top === trigger || trigger.contains(top) || top.contains(trigger)) return null;
     let scope = info.root;
     for (let depth = 0; depth < 3 && scope.parentElement; depth += 1) scope = scope.parentElement;
-    return scope.contains(top) && !top.closest('input, textarea, select, button, a[href]') ? top : null;
+    // 遮罩只是一层透明的东西：有字的、按钮样的都不点（可能是「提交」「删除」之类）。
+    if (!scope.contains(top) || top.closest('input, textarea, select, button, a[href], [role="button"]') || trim(top.textContent)) return null;
+    return top;
   }
   function calendarNear(info, h) {
     const doc = info.el.ownerDocument, c = info.root.getBoundingClientRect();
@@ -538,8 +553,6 @@
       h.write(info.el, desired[0], ctx); h.input(info.el); typedFirst = true;
       opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(1), Boolean);
     }
-    // 从头到尾没出现过弹层（打过字也没有）：宿主可以按普通文本框填，见 control-adapters。
-    if (opened.reason === 'verification_timeout' && info.library === 'generic' && !dateWanted) state.noPopup = true;
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
     let popup = opened.value.popup; ctx.popup = opened.value.layer || popup;
@@ -674,7 +687,6 @@
     const state = {}; let outcome;
     // 页面异常也按失败收尾（收起弹层、恢复搜索词）；只把固定的原因码交出去。
     try { outcome = await perform(ctx, raw, h, state); } catch { outcome = { reason: 'operation_failed' }; }
-    if (outcome.reason && state.noPopup) outcome = { ...outcome, noPopup: true };
     try { return outcome; }
     finally {
       state.watch?.disconnect();

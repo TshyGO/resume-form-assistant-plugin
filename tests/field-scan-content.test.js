@@ -412,3 +412,31 @@ test('a field replaced right after the write that now shows something else is no
   assert.equal(result.filledCount, 0, JSON.stringify(result));
   assert.equal(result.unconfirmedCount, 1);
 });
+
+for (const [shown, filled] of [['2023-07', 1], ['2023-07-01', 0]]) {
+test(`a date field rebuilt right after the write is checked at the page's precision: shows ${shown}`, async () => {
+  // 审查 A9 + 需求方：按页面要求的精度核对。页面只显示到月（只能选到月）时年月对上就算填上；
+  // 页面显示到日时，资料里的 15 日对不上就不算。
+  const late = lateScanner();
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, aiHelpers: require('../ai-helpers.js'),
+    sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value: '2023-07-15' }] }) });
+  const oldDate = new ctx.HTMLInputElement(), newDate = new ctx.HTMLInputElement();
+  const stale = new Set();
+  const fields = (el) => [control(el, { controlKind: 'date-picker', pickerType: 'generic', label: '入职时间', section: '实习经历' })];
+  let rebuilt = false;
+  const dispatch = oldDate.dispatchEvent.bind(oldDate);
+  oldDate.dispatchEvent = (event) => {
+    const answer = dispatch(event);
+    if (!rebuilt && oldDate.value) { newDate.value = shown; oldDate.isConnected = false; stale.add(oldDate); rebuilt = true; }
+    return answer;
+  };
+  const scanner = scanWith(fields(oldDate), stale);
+  late.holder.current = { ...scanner, scanPage: (...args) => ({ ...scanner.scanPage(...args), controls: rebuilt ? fields(newDate) : fields(oldDate) }) };
+  ctx.helpers.setCurrentStore({ templates: [{ id: 't', name: '模板', groups: [{ name: '实习经历', fields: [{ key: '入职时间', value: '2023-07-15' }] }] }], activeTemplateId: 't' });
+  ctx.helpers.setShadowRoot(shadow().root);
+  const result = await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: '' } });
+  assert.equal(rebuilt, true, JSON.stringify(result));
+  assert.equal(newDate.value, shown, 'the rebuilt field is not rewritten');
+  assert.equal(result.filledCount, filled, JSON.stringify(result));
+});
+}

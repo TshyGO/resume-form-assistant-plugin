@@ -588,15 +588,15 @@ test("buttons and counters in a picker layer are not options: a value spelled li
   assert.ok(!events.includes("确定"), JSON.stringify(events));
 });
 
-test("a text box wrapped in a select-looking class that never opens anything is filled as a text box", async () => {
-  // 审查 B3：外层类名碰巧带 select 的普通文本框，点开从头到尾没有弹层，就按文本框填写并核对。
+test("a box seen as a dropdown that never opens anything is reported, not typed into and counted", async () => {
+  // 审查 B5/A7（第二轮）：没弹出列表就按文本框打字，组件没选中、框里却留着字，会被当成填上（假成功）。现在如实报没填上。
   const h = load(`<div class="item"><label>备注</label><div class="form-select-wrap"><input class="plain"></div></div>`);
   const api = h.w.ResumeProControls.create({ timeoutMs: 150, settleMs: 35, isVisible: (el) => !el.closest("[hidden]"), ...textDeps(h.w) });
   const target = scanned(h.doc, "备注");
   assert.equal(target.controlKind, "custom-select");
   const result = await api.operate(target, "按时到岗");
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(h.doc.querySelector("input").value, "按时到岗");
+  assert.equal(result.ok, false);
+  assert.equal(h.doc.querySelector("input").value, "", "the trial text is put back");
 });
 
 test("options that load a moment after opening are waited for instead of jumping to the search box", async () => {
@@ -633,4 +633,58 @@ test("a dropdown already showing the wanted value is not opened again", async ()
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.clicks, []);
   assert.equal(h.doc.querySelector(".common-unmodeled-layer"), null, "nothing was opened");
+});
+
+test("a covering element with words on it is never clicked; the box itself is clicked instead", async () => {
+  // 审查 B6：盖在输入框上的若是写着「提交」之类的元素，不点它。
+  const h = moka();
+  const cover = h.doc.createElement("div"); cover.textContent = "提交";
+  let coverClicks = 0; cover.addEventListener("click", () => coverClicks++);
+  h.input.parentElement.append(cover);
+  h.input.getBoundingClientRect = () => ({ left: 10, top: 10, width: 200, height: 30, right: 210, bottom: 40 });
+  h.doc.elementFromPoint = () => cover;
+  const result = await h.api.operate(h.target, "男");
+  assert.equal(coverClicks, 0);
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+test("a dropdown root that also holds the title and the placeholder reads as empty", () => {
+  // 审查 B7：外层类名带 select 的整行被当成组件根，里面的题目「学历」和「请选择」不是已选值。
+  const h = load(`<div class="form-select-row"><label class="row-label">学历</label><div class="row-placeholder">请选择</div><input class="row-input"></div>`);
+  const input = h.doc.querySelector("input");
+  const target = { kind: "element", element: input, root: h.doc.querySelector(".form-select-row"), controlKind: "custom-select" };
+  assert.equal(h.w.ResumeProCustomControls.hasExistingValue(target), false);
+  assert.equal(JSON.stringify(h.w.ResumeProCustomControls.readSelection(target).texts), "[]");
+});
+
+test("a list of 1-30 without a year/month title is a dropdown, not a calendar", async () => {
+  // 审查 A10：「班级排名」这类数字下拉原来会被当成日历而报不支持。
+  const h = moka({ choices: Array.from({ length: 30 }, (_, i) => String(i + 1)) });
+  const result = await h.api.operate(h.target, "5");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.clicks, ["5"]);
+});
+
+test("a div radio group whose options are long sentences is still one question", () => {
+  // 审查 A11：选项超过 20 字时原来整组都不认。
+  const long = "是，我已经仔细阅读并同意以上全部条款、隐私说明与背景调查授权";
+  assert.ok(long.length > 20 && long.length <= 40);
+  const { doc } = load(`<div class="form-item"><label class="form-item__text">声明</label><div class="phoenix-radio-group">
+    ${[long, "否，暂不同意"].map((text) => `<div class="phoenix-radio-group__radioItem"><div class="phoenix-radio"><span class="phoenix-radio__circle"></span><span class="phoenix-radio__radio-text">${text}</span></div></div>`).join("")}</div></div>`);
+  const control = scanner.scanPage(doc, { isVisible: () => true }).controls.find((item) => item.label === "声明");
+  assert.equal(control?.kind, "radio");
+  assert.equal(control.elements.length, 2);
+});
+
+test("Element: typing into an open filterable select changes the guard snapshot, so the write-before check sees it", () => {
+  // 审查 A8/B10：展开时打字原来被认为看不出来。实际已选值从「学士」变成打的字，快照不同，写入前复查会停下。
+  const h = load(`<div class="el-form-item"><label>学位</label><div class="el-select"><div class="el-input"><input class="el-input__inner" readonly placeholder="请选择您的学位" value="学士"></div></div></div>`);
+  const input = h.doc.querySelector("input");
+  const target = scanned(h.doc, "学位");
+  const controls = h.w.ResumeProCustomControls;
+  const closed = controls.snapshot(target);
+  input.readOnly = false; input.value = ""; input.placeholder = "学士";
+  assert.equal(controls.snapshot(target), closed, "opening by the plugin is not an edit");
+  input.value = "硕";
+  assert.notEqual(controls.snapshot(target), closed, "the user's typing is an edit");
 });

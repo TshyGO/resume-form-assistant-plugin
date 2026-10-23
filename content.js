@@ -2560,7 +2560,13 @@
         const nodeOf = entry => entry?.kind === "radio" ? entry.elements?.[0] : entry?.element;
         const known = new Set([...fieldMap.values()].map(entry => fieldBindingKey(entry.binding)));
         const knownNodes = new Set([...fieldMap.values()].map(nodeOf).filter(Boolean));
-        const fresh = scanFillableFields();
+        // 补填是尽力而为：这次扫描出错就不补，原来排队的字段照常往下填。
+        let fresh;
+        try {
+          fresh = scanFillableFields();
+        } catch {
+          return;
+        }
         const added = fresh.fields.filter(field => {
           const entry = fresh.fieldMap.get(field.fieldId);
           const key = fieldBindingKey(entry?.binding);
@@ -3185,16 +3191,31 @@
         return Boolean(checked) && matches([checked instanceof HTMLInputElement ? getRadioOptionLabel(checked) : checked.textContent.trim()]);
       }
       const el = entry.element;
-      if (["custom-select", "cascader"].includes(entry.controlKind)) return matches(self.ResumeProCustomControls?.readSelection?.(entry)?.texts || []);
+      if (["custom-select", "cascader"].includes(entry.controlKind)) {
+        const texts = self.ResumeProCustomControls?.readSelection?.(entry)?.texts || [];
+        // 日期框（北森日历按下拉认）：按页面显示的精度比，不按文字模糊匹配。
+        if (/^\s*\d{4}\s*[-./年]\s*\d{1,2}/.test(String(value))) return texts.length === 1 && sameDateAsPage(texts[0], value);
+        return matches(texts);
+      }
       if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
       const shown = String(el.value ?? "");
-      if (entry.pickerType || entry.controlKind === "date") {
-        return ["date", "month"].some(mode => helpers?.normalizeDateValue?.(shown, mode) === helpers?.normalizeDateValue?.(String(value), mode) && /^\d{4}-\d{2}/.test(helpers.normalizeDateValue(shown, mode)));
-      }
+      if (entry.pickerType || entry.controlKind === "date") return sameDateAsPage(shown, value);
       return shown === normalizeExpectedTextValue(el, value);
     } catch {
       return false;
     }
+  }
+
+  // 日期按页面要求的精度比：页面只显示到月（只能选到月的日历），年月对上就行；页面显示到日，资料有日就要对到日，
+  // 资料只有年月按 1 日（和日历选 1 号一致）。
+  function sameDateAsPage(shown, value) {
+    const parse = text => {
+      const hit = /(\d{4})\s*[-/.年]\s*(\d{1,2})(?:\s*[-/.月]\s*(\d{1,2}))?/.exec(String(text || ""));
+      return hit ? { y: hit[1], m: hit[2].padStart(2, "0"), d: hit[3] ? hit[3].padStart(2, "0") : null } : null;
+    };
+    const page = parse(shown), want = parse(value);
+    if (!page || !want || page.y !== want.y || page.m !== want.m) return false;
+    return !page.d || page.d === (want.d || "01");
   }
 
   // 等页面对上一个选择的反应结束：增删节点或样式、显示/隐藏、class 连续 300ms 没有变化，最多等 1.5s。
