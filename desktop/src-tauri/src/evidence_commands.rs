@@ -262,20 +262,22 @@ pub fn import_bytes(
     }
 }
 
-/// 给升级前导入的邮件补 Message-ID。只在需要查重时调用；查不到编号、读不到原件的都记成
-/// 空串，以后不再重试。补算失败不影响导入。
+/// 给升级前导入的邮件补 Message-ID。只在需要查重时调用；没有编号的、原件已经不在的记成
+/// 空串，以后不再重试；一时读不了的（被别的程序占着、磁盘出错）留着下次再试。
+/// 补算失败不影响导入。
 pub fn backfill_message_ids(store: &ArchiveStore, archive_dir: &Path) {
     let Ok(pending) = store.evidence_missing_message_id() else {
         return;
     };
     let found: Vec<(String, Option<String>)> = pending
         .into_iter()
-        .map(|item| {
-            let message_id = std::fs::read(archive_dir.join(&item.stored_rel_path))
-                .ok()
-                .and_then(|bytes| parse_eml(&bytes))
-                .and_then(|mail| mail.message_id);
-            (item.evidence_id, message_id)
+        .filter_map(|item| {
+            let message_id = match std::fs::read(archive_dir.join(&item.stored_rel_path)) {
+                Ok(bytes) => parse_eml(&bytes).and_then(|mail| mail.message_id),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return None,
+            };
+            Some((item.evidence_id, message_id))
         })
         .collect();
     if !found.is_empty() {

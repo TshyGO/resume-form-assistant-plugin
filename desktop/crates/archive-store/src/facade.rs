@@ -353,10 +353,7 @@ impl ArchiveStore {
         self.transaction(|tx| tx.snapshot_state(application_id, snapshot_id))
     }
 
-    pub fn read_snapshot(
-        &self,
-        snapshot_id: &str,
-    ) -> Result<(ResumeSnapshotMeta, Vec<u8>), StoreError> {
+    pub fn read_snapshot(&self, snapshot_id: &str) -> Result<(ResumeSnapshotMeta, Vec<u8>), StoreError> {
         self.transaction(|tx| tx.read_snapshot(snapshot_id))
     }
 
@@ -377,11 +374,7 @@ impl ArchiveStore {
         self.transaction(|tx| tx.get_template(id))
     }
 
-    pub fn create_template(
-        &self,
-        name: &str,
-        groups: Vec<TemplateGroup>,
-    ) -> Result<SavedTemplate, StoreError> {
+    pub fn create_template(&self, name: &str, groups: Vec<TemplateGroup>) -> Result<SavedTemplate, StoreError> {
         self.transaction(|tx| tx.create_template(name, groups))
     }
 
@@ -418,11 +411,7 @@ impl ArchiveStore {
         self.transaction(|tx| tx.get_profile())
     }
 
-    pub fn save_profile(
-        &self,
-        profile: serde_json::Value,
-        expected_revision: i64,
-    ) -> Result<ProfileRecord, StoreError> {
+    pub fn save_profile(&self, profile: serde_json::Value, expected_revision: i64) -> Result<ProfileRecord, StoreError> {
         self.transaction(|tx| tx.save_profile(profile, expected_revision))
     }
 }

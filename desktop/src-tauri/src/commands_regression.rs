@@ -724,6 +724,60 @@ mod evidence {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_old_mail_that_cannot_be_read_right_now_is_retried_later() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let old = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let raw = rusqlite::Connection::open(store.archive_dir().join("archive.db")).unwrap();
+        raw.execute("UPDATE reply_evidence SET message_id = NULL", [])
+            .unwrap();
+        drop(raw);
+        let stored = store.archive_dir().join(
+            store
+                .get_evidence(&old.imported[0].id)
+                .unwrap()
+                .unwrap()
+                .blob
+                .meta
+                .stored_rel_path,
+        );
+        let locked = std::fs::Permissions::from_mode(0o000);
+        std::fs::set_permissions(&stored, locked).unwrap();
+        if std::fs::read(&stored).is_ok() {
+            return; // 以 root 运行时权限挡不住读取，这条测不了。
+        }
+
+        backfill(&store);
+        assert_eq!(
+            store.evidence_missing_message_id().unwrap().len(),
+            1,
+            "一时读不了的留着下次再试"
+        );
+
+        std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert_eq!(again.duplicates.len(), 1, "能读了就补上编号、认出同一封信");
+        assert_eq!(again.duplicates[0].id, old.imported[0].id);
+    }
+
+    fn backfill(store: &ArchiveStore) {
+        let archive_dir = store.archive_dir().to_path_buf();
+        evidence_commands::backfill_message_ids(store, &archive_dir);
+    }
+
     #[test]
     fn bytes_from_outside_a_file_go_through_the_same_dedup() {
         let (_dir, store, _app) = archive();

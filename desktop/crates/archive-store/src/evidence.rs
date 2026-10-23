@@ -358,12 +358,11 @@ impl StoreTx<'_> {
 
     /// 引用同一份字节的证据 id。同哈希不等于同一次导入,也不撤销用户有意的不同关联。
     pub fn evidence_for_blob(&self, sha256: &str) -> Result<Vec<String>, StoreError> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id FROM reply_evidence WHERE blob_sha256 = ?1 ORDER BY imported_at ASC",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT id FROM reply_evidence WHERE blob_sha256 = ?1 ORDER BY imported_at ASC")?;
         let rows = stmt.query_map(params![sha256.to_lowercase()], |r| r.get(0))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
     }
 
     /// 手动/确认后分类(确认前的建议走 AiSuggestion)。
