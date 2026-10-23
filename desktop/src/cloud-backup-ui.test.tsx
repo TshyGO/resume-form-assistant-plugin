@@ -66,7 +66,7 @@ test("missed and paused schedules warn outside settings; missing size stays unkn
   await refresh();
   expect(document.getElementById("cloud-auto-notice")!.hidden).toBe(false);
   expect(document.getElementById("cloud-auto-notice-text")!.textContent).toContain("未自动补传");
-  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无大小估算");
   expect(calls.some(c => c.name === "cloud_backup_start")).toBe(false);
   click("cloud-auto-disable");
   await waitFor(() => expect(calls.find(c => c.name === "cloud_backup_schedule_configure")?.args).toEqual({ plan: null }));
@@ -92,7 +92,7 @@ test("enabling re-reads the plan status, so a manual backup that just finished i
     cloud_backup_schedule_status: () => ({ enabled: false, requiresConfirmation: true, recentSize: baseline ? 2_000_000 : null, estimatedCycleBytes: null, state: idleState }),
   });
   await refresh();
-  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无可用大小估算");
+  expect(document.getElementById("cloud-auto-estimate")!.textContent).toContain("暂无大小估算");
   baseline = true; // Manual backup completed; job polling did not refresh the plan status.
   fireEvent.submit(document.getElementById("cloud-auto-form")!);
   await waitFor(() => expect(dialog()).toBeTruthy());
@@ -125,7 +125,7 @@ test("saved credentials never echo; nonsecret settings and write-only credential
   fireEvent.input(pass, { target: { value: "synthetic-password" } });
   fireEvent.input(phrase, { target: { value: " synthetic-phrase " } });
   fireEvent.submit(document.getElementById("cloud-form")!);
-  await waitFor(() => expect(query.getByText(/配置已保存在本机/)).toBeTruthy());
+  await waitFor(() => expect(query.getByText(/已保存在本机/)).toBeTruthy());
   const saved = calls.find((c) => c.name === "cloud_backup_save_config")!;
   expect(JSON.stringify(saved)).not.toContain("synthetic-password");
   expect(JSON.stringify(saved)).not.toContain("synthetic-phrase");
@@ -270,6 +270,47 @@ test("an unconfigured card opens connection settings and keeps whole-card action
   expect(calls.some((c) => c.name === "cloud_backup_credential_status")).toBe(false);
 });
 
+test("save comes before test connection, and the note beside them says which to do next", async () => {
+  const { refresh } = setup(); await refresh();
+  const actions = document.getElementById("cloud-test")!.parentElement!;
+  expect(Array.from(actions.querySelectorAll("button"), (b) => b.textContent)).toEqual(["保存", "测试连接"]);
+  const note = actions.querySelector<HTMLElement>(".cloud-form-msg")!;
+  expect(note.textContent).toBe("");
+  fireEvent.input(document.getElementById("cloud-root")!, { target: { value: "Other" } });
+  expect(note.textContent).toContain("先保存，再测试连接");
+  expect(note.dataset.tone).toBe("warn");
+  fireEvent.submit(document.getElementById("cloud-form")!);
+  await waitFor(() => expect(note.textContent).toContain("下一步：点「测试连接」"));
+  expect(note.dataset.tone).toBe("success");
+  await waitFor(() => expect((document.getElementById("cloud-test") as HTMLButtonElement).disabled).toBe(false));
+  click("cloud-test");
+  await waitFor(() => expect(document.getElementById("cloud-message")!.hidden).toBe(false));
+  expect(note.textContent).toBe("");
+});
+
+test("a result notice closes with its button, when the card is collapsed, and when leaving the data panel", async () => {
+  const { refresh } = setup(); await refresh();
+  const message = document.getElementById("cloud-message")!;
+  const shown = async () => { click("cloud-test"); await waitFor(() => expect(message.hidden).toBe(false)); };
+  await shown();
+  click("cloud-message-close");
+  expect(message.hidden).toBe(true);
+  await shown();
+  const card = document.getElementById("cloud-backup") as HTMLDetailsElement;
+  card.open = false; fireEvent(card, new Event("toggle"));
+  expect(message.hidden).toBe(true);
+  card.open = true; await shown();
+  document.getElementById("settings-data")!.dispatchEvent(new Event("backup-leave"));
+  expect(message.hidden).toBe(true);
+  expect(document.getElementById("cloud-message-text")!.textContent).toBe("");
+});
+
+test("the collapsed card still shows the state and the last successful backup", async () => {
+  const { refresh } = setup({ cloud_backup_status: { job: null, latestPackage: null, latestMetadata: metadata, retryPackage: null } });
+  await refresh();
+  expect(document.getElementById("cloud-summary-hint")!.textContent).toMatch(/^已配置 · 最近成功 \S/);
+});
+
 const missingFolder = (rootResult: unknown) => async (args?: Record<string, unknown>) => {
   const root = (args?.options as { root?: string[] }).root ?? [];
   if (root.length) throw { code: "CLOUD_DAV_NotFound" };
@@ -280,7 +321,7 @@ test("a missing remote folder is a hint only after the WebDAV root itself is rea
   const { refresh, calls } = setup({ cloud_backup_test: missingFolder(null) });
   await refresh(); click("cloud-test");
   const message = document.getElementById("cloud-message")!;
-  await waitFor(() => expect(message.textContent).toBe("账号验证通过。目录 Test 还不存在，第一次备份时会自动创建。"));
+  await waitFor(() => expect(document.getElementById("cloud-message-text")!.textContent).toBe("账号验证通过。目录 Test 还不存在，第一次备份时会自动创建。"));
   expect(message.dataset.tone).toBe("info");
   expect(calls.filter((c) => c.name === "cloud_backup_test").map((c) => (c.args!.options as { root: string[] }).root)).toEqual([["Test"], []]);
   expect(calls.filter((c) => c.name.startsWith("cloud_backup_") && !["cloud_backup_config", "cloud_backup_status", "cloud_backup_schedule_status", "cloud_backup_credential_status", "cloud_backup_test"].includes(c.name))).toEqual([]);

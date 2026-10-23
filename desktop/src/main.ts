@@ -20,6 +20,7 @@ import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
+import { BACKUP_LEAVE } from "./backup.ts";
 import { mountCloudBackup } from "./cloud-backup-ui.ts";
 import { mountSettingsNavigation } from "./settings-navigation.ts";
 import { mountRuntimeStatus } from "./react/runtime-status-mount.tsx";
@@ -51,7 +52,12 @@ mountAiSettings(must("ai-settings"), invoke ?? null);
 const edgeInput = input("edge-id");
 const settingsNavigation = mountSettingsNavigation(must("view-settings"), (name) => {
   if (name === "data") void showBackup().catch(() => {});
+  else leaveBackup();
 });
+/** 离开「数据与备份」时让备份区清掉上次的结果提示，回来时不再看到过时的「已恢复」之类。 */
+function leaveBackup() {
+  must("settings-data").dispatchEvent(new Event(BACKUP_LEAVE));
+}
 
 const views: Record<string, HTMLElement> = {
   applications: must("view-applications"),
@@ -92,6 +98,7 @@ async function navigate(route: string | undefined): Promise<boolean> {
   }
   const enteringResume = route === "resume" && !onResume;
   showRoute(route);
+  if (route !== "settings") leaveBackup();
   if (enteringResume) resumeView.refresh();
   return true;
 }

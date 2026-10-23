@@ -153,6 +153,30 @@ test("restore preview is one dialog with every count; refreshing the category ke
   expect(status.textContent).toMatch(/已恢复.*2 条待办的提醒需要重新登记/);
 });
 
+test("the local backup notice closes with its button, when the card is collapsed, and when leaving the data panel", async () => {
+  const invoke: Invoke = async <T,>(name: string): Promise<T> => (name === "preview_restore_cmd" ? preview : []) as T;
+  mountBackup(invoke, { open: async () => "example.zip", save: null });
+  const status = document.getElementById("backup-status")!;
+  const cancelled = async () => {
+    fireEvent.click(document.getElementById("backup-choose-restore")!);
+    await waitFor(() => expect(dialog()).toBeTruthy());
+    fireEvent.keyDown(dialog()!, { key: "Escape" });
+    await waitFor(() => expect(status.hidden).toBe(false));
+    expect(status.textContent).toContain("已取消恢复");
+  };
+  await cancelled();
+  fireEvent.click(document.getElementById("backup-status-close")!);
+  expect(status.hidden).toBe(true);
+  await cancelled();
+  const card = document.getElementById("backup-local") as HTMLDetailsElement;
+  card.open = false; fireEvent(card, new Event("toggle"));
+  expect(status.hidden).toBe(true);
+  card.open = true; await cancelled();
+  document.getElementById("settings-data")!.dispatchEvent(new Event("backup-leave"));
+  expect(status.hidden).toBe(true);
+  expect(status.querySelector("[data-callout-text]")!.textContent).toBe("");
+});
+
 test("cancelling the restore preview writes nothing and says so", async () => {
   const calls: string[] = [];
   const invoke: Invoke = async <T,>(name: string): Promise<T> => {

@@ -44,6 +44,9 @@
 #view-settings .settings-content button .icon, .settings-dialog button .icon { width: 15px; height: 15px; margin-right: 6px; vertical-align: -2px; }
 #view-settings .settings-content input:not([type="checkbox"]), #view-settings .settings-content select, .settings-dialog input:not([type="checkbox"]), .settings-dialog textarea { min-height: 40px; border-radius: 8px; border-color: var(--card-line); }
 #view-settings .settings-content input:not([type="checkbox"]), .settings-dialog input:not([type="checkbox"]), .settings-dialog textarea { width: 100%; }
+/* macOS 原生下拉框不认 min-height，比旁边的输入框矮一截：改成自绘，箭头和折叠栏同色。 */
+#view-settings .settings-content select { -webkit-appearance: none; appearance: none; padding: 6px 32px 6px 10px; background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237b8494' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center / 13px 13px; }
+#view-settings .settings-content select:disabled { background-color: #f6f8fa; }
 #view-settings .settings-content input:not([type="checkbox"]):focus, #view-settings select:focus, .settings-dialog textarea:focus { border-color: #8fbcb2; }
 .settings-danger { color: var(--danger); border-color: #e6b9b9; background: var(--panel); }
 .settings-danger:hover:not(:disabled) { border-color: #d99c9c; background: #fcf1f1; }
@@ -84,6 +87,10 @@
 .settings-inline-msg[data-tone="error"] { color: var(--danger); }
 .settings-card > .settings-inline-msg { margin: 0 0 12px; }
 .field-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+/* 说明和提示别让末行只剩一两个字；不支持的环境照常换行。
+   字段下的小字和按钮旁的状态通常就一两行，balance 把两行分匀；pretty 对两行的中文不一定起作用。 */
+#view-settings :is(.settings-text, .settings-caption, .settings-points li, .settings-callout p) { text-wrap: pretty; }
+#view-settings :is(.field-hint, .settings-inline-msg, .settings-fold-hint) { text-wrap: balance; }
 .selectable { user-select: text; -webkit-user-select: text; }
 
 /* 提示条：成功 / 提醒 / 错误 / 说明 */
@@ -101,6 +108,8 @@
 .settings-callout-fold { margin-top: 6px; }
 .settings-callout-fold > summary { width: fit-content; font-size: 12.5px; }
 .settings-card > .settings-callout:first-child { margin-top: 0; }
+#view-settings .settings-content .settings-callout-close { flex: none; min-height: 28px; margin: -3px -4px -3px 0; padding: 2px 10px; border-color: transparent; background: transparent; color: inherit; font-size: 12.5px; }
+#view-settings .settings-content .settings-callout-close:hover:not(:disabled) { border-color: currentColor; background: transparent; }
 
 /* 折叠：卡片内的小折叠，以及整张卡片可折叠 */
 .settings-fold { margin-top: 14px; font-size: 13px; }
@@ -112,7 +121,7 @@
 .settings-card-fold > summary:focus-visible { outline-offset: -2px; }
 .settings-fold-title { display: inline-flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; }
 .settings-fold-title::before { content: ""; width: 7px; height: 7px; border-right: 2px solid #7b8494; border-bottom: 2px solid #7b8494; transform: rotate(-45deg); transition: transform 140ms; }
-.settings-card-fold[open] .settings-fold-title::before { transform: rotate(45deg); }
+.settings-card-fold[open] > summary .settings-fold-title::before { transform: rotate(45deg); }
 .settings-fold-hint { color: var(--muted); font-size: 12px; text-align: right; }
 .settings-fold-body { padding: 16px 24px 20px; border-top: 1px solid var(--line); }
 .settings-fold-body > :first-child { margin-top: 0; }
@@ -173,7 +182,7 @@
 /* AI 服务商 */
 .provider-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .provider-add label { flex-direction: row; color: var(--muted); font-size: 12px; white-space: nowrap; }
-#view-settings .provider-add select { min-height: 36px; padding: 4px 10px; }
+#view-settings .provider-add select { min-height: 36px; padding: 4px 32px 4px 10px; }
 .provider-list { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
 .provider-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 16px; padding: 14px 16px; border: 1px solid var(--card-line); border-radius: 12px; background: var(--panel); }
 .provider-item.active { border-color: #9fcabe; background: #f4faf8; box-shadow: inset 3px 0 var(--accent); }
@@ -263,9 +272,14 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 .settings-dialog .settings-form { margin-top: 0; }
 .settings-dialog textarea { padding: 10px 12px; resize: vertical; }
 .settings-dialog .settings-callout { margin: 0; }
+/* 「备份到本机」「备份到坚果云」整张卡可收起：标题和说明在折叠栏里，收起后仍看得出是做什么的。 */
+.backup-fold > summary { align-items: flex-start; padding: 20px 24px; }
+.backup-fold > summary > div { min-width: 0; }
+.backup-fold > summary p { margin: 4px 0 0 17px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.backup-fold > summary .settings-fold-hint { flex: none; padding-top: 3px; }
+.backup-fold > .settings-fold-body > .settings-callout:last-child { margin-top: 14px; }
 /* 坚果云备份（#315）：先看状态和主操作，三个设置分组折叠在下面，按钮紧挨所控制的字段。 */
-#cloud-backup { padding-bottom: 4px; }
-.cloud-overview { padding-top: 16px; }
+.cloud-overview { padding-top: 0; }
 .cloud-overview-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .cloud-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 12px 0 0; font-size: 13px; line-height: 1.65; }
 .cloud-facts dt { color: var(--muted); }
@@ -287,11 +301,18 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 .cloud-groups .settings-fold-body > *, #cloud-auto-form > * { margin: 0; }
 .cloud-groups .settings-fold { margin: -6px 0 0; }
 .cloud-groups .settings-fold > p { margin: 6px 0 0; }
-.cloud-notes > .settings-caption { margin: 0; }
+/* 自动备份的说明各自挂在所解释的字段下面：时区下讲何时检查，预算下讲暂停开关、估算与本期用量。 */
+.cloud-budget-field .cloud-check { margin-top: 4px; }
+#cloud-auto-form .field-hint:empty { display: none; }
 .cloud-groups .settings-fold-title { font-size: 14px; }
 .cloud-field-wide { grid-column: 1 / -1; }
 .cloud-secret { display: inline-flex; align-items: baseline; gap: 10px; }
 .cloud-check { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; }
+/* 勾选框和右边的「备份加密口令」输入框落在同一水平线上。 */
+.cloud-encrypt-field { justify-content: flex-start; padding-top: 26px; }
+.cloud-encrypt-field .cloud-check { min-height: 40px; }
+/* 先保存、再测试：按钮按操作顺序从左排，提示紧跟在后面。 */
+.cloud-form-actions { justify-content: flex-start; }
 .feedback-preview { max-height: 280px; margin: 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--card-line); border-radius: 8px; background: #f4f7f6; font: 12px/1.6 Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1180px) {
   #view-settings { padding: 20px 20px 32px; }

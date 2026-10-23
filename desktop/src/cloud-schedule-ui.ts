@@ -54,7 +54,7 @@ export function mountCloudSchedule(api: ReturnType<typeof cloudBackupApi>, selec
   function estimate() {
     const size = current?.recentSize;
     must("cloud-auto-estimate").textContent = size == null
-      ? "暂无可用大小估算：请先完成一次当前配置的手动云备份，再启用自动计划。"
+      ? "暂无大小估算：先按当前配置手动备份一次，再启用自动计划。"
       : `最近备份 ${mb(size)} × 每 30 天最多 ${Math.ceil(30 / Number(days.value))} 次 ≈ ${mb(size * Math.ceil(30 / Number(days.value)))} 上传。内容未变会跳过，包变大及重试会增加流量。`;
   }
   // requiresConfirmation is set by restore/rollback and saved-secret changes; each
