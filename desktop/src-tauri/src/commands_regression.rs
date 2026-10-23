@@ -535,6 +535,272 @@ mod evidence {
         );
     }
 
+    /// 同一封信的两种字节：网页邮箱下载（LF、带邮箱自己的头）与 IMAP 原文（CRLF、带投递记录）。
+    fn downloaded_and_fetched(message_id: &str) -> (Vec<u8>, Vec<u8>) {
+        let downloaded = format!(
+            "X-QQ-mid: abc\nFrom: hr@example.test\nSubject: 面试邀请\n\
+             Date: Fri, 12 Sep 2026 08:00:00 +0000\nMessage-ID: <{message_id}>\n\n下周二面试。\n"
+        );
+        let fetched = format!(
+            "Received: from mx.example.test\r\nReturn-Path: <hr@example.test>\r\n\
+             From: hr@example.test\r\nSubject: 面试邀请\r\n\
+             Date: Fri, 12 Sep 2026 08:00:00 +0000\r\nMessage-ID: <{message_id}>\r\n\r\n下周二面试。\r\n"
+        );
+        (downloaded.into_bytes(), fetched.into_bytes())
+    }
+
+    fn files_in_bucket(store: &ArchiveStore) -> usize {
+        std::fs::read_dir(
+            store
+                .archive_dir()
+                .join("attachments")
+                .join("2026")
+                .join("09"),
+        )
+        .unwrap()
+        .count()
+    }
+
+    #[test]
+    fn the_same_mail_from_two_channels_is_stored_once() {
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let first = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        assert_eq!(first.imported.len(), 1);
+
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert!(again.imported.is_empty());
+        assert_eq!(again.duplicates.len(), 1);
+        assert_eq!(
+            again.duplicates[0].id, first.imported[0].id,
+            "报的是已有的那条"
+        );
+        assert_eq!(store.list_evidence(None).unwrap().len(), 1, "没有新建记录");
+        assert_eq!(files_in_bucket(&store), 1, "第二份字节没有落盘");
+    }
+
+    #[test]
+    fn the_same_mail_file_twice_keeps_one_card() {
+        let (dir, store, _app) = archive();
+        let (downloaded, _) = downloaded_and_fetched("abc.123@mail.example.test");
+        let path = write(dir.path(), "a.eml", &downloaded);
+        import(&store, vec![path.clone()], None, None);
+        let again = import(&store, vec![path], None, None);
+        assert_eq!(again.duplicates.len(), 1);
+        assert_eq!(store.list_evidence(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn importing_into_an_application_claims_the_copy_waiting_in_the_inbox() {
+        let (dir, store, app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            Some(&app),
+        );
+        assert_eq!(again.duplicates.len(), 1);
+        assert_eq!(
+            again.duplicates[0].application_id.as_deref(),
+            Some(app.as_str())
+        );
+        assert!(store.list_evidence(None).unwrap().is_empty());
+        assert_eq!(store.list_evidence(Some(&app)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mail_imported_before_the_upgrade_is_found_after_backfill() {
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        // 升级前导入的信：库里没有 Message-ID。
+        let old = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let no_id = import(
+            &store,
+            vec![write(dir.path(), "n.eml", &eml("没有编号"))],
+            None,
+            None,
+        );
+        let raw = rusqlite::Connection::open(store.archive_dir().join("archive.db")).unwrap();
+        raw.execute("UPDATE reply_evidence SET message_id = NULL", [])
+            .unwrap();
+        drop(raw);
+        assert_eq!(store.evidence_missing_message_id().unwrap().len(), 2);
+
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert_eq!(again.duplicates.len(), 1);
+        assert_eq!(again.duplicates[0].id, old.imported[0].id);
+        assert!(
+            store.evidence_missing_message_id().unwrap().is_empty(),
+            "没有编号的那封也记成查过了"
+        );
+        assert_eq!(store.list_evidence(None).unwrap().len(), 2);
+        assert_ne!(no_id.imported[0].id, old.imported[0].id);
+    }
+
+    #[test]
+    fn a_reused_message_id_with_another_send_time_is_kept() {
+        let (dir, store, _app) = archive();
+        let (downloaded, _) = downloaded_and_fetched("reused@ats.example.test");
+        let later = String::from_utf8(downloaded.clone())
+            .unwrap()
+            .replace("12 Sep 2026", "19 Sep 2026")
+            .replace("下周二面试。", "很遗憾通知你。");
+        import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let second = import(
+            &store,
+            vec![write(dir.path(), "b.eml", later.as_bytes())],
+            None,
+            None,
+        );
+        assert_eq!(second.imported.len(), 1, "撞号的另一封信照常存下");
+        assert_eq!(store.list_evidence(None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_old_mail_whose_original_is_gone_is_not_retried() {
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let old = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let raw = rusqlite::Connection::open(store.archive_dir().join("archive.db")).unwrap();
+        raw.execute("UPDATE reply_evidence SET message_id = NULL", [])
+            .unwrap();
+        drop(raw);
+        let stored = store
+            .get_evidence(&old.imported[0].id)
+            .unwrap()
+            .unwrap()
+            .blob
+            .meta
+            .stored_rel_path;
+        std::fs::remove_file(store.archive_dir().join(stored)).unwrap();
+
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert_eq!(again.imported.len(), 1, "原件没了就认不出来，按新信存");
+        assert!(
+            store.evidence_missing_message_id().unwrap().is_empty(),
+            "读不到的原件也记成查过了"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_old_mail_that_cannot_be_read_right_now_is_retried_later() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let old = import(
+            &store,
+            vec![write(dir.path(), "a.eml", &downloaded)],
+            None,
+            None,
+        );
+        let raw = rusqlite::Connection::open(store.archive_dir().join("archive.db")).unwrap();
+        raw.execute("UPDATE reply_evidence SET message_id = NULL", [])
+            .unwrap();
+        drop(raw);
+        let stored = store.archive_dir().join(
+            store
+                .get_evidence(&old.imported[0].id)
+                .unwrap()
+                .unwrap()
+                .blob
+                .meta
+                .stored_rel_path,
+        );
+        let locked = std::fs::Permissions::from_mode(0o000);
+        std::fs::set_permissions(&stored, locked).unwrap();
+        if std::fs::read(&stored).is_ok() {
+            return; // 以 root 运行时权限挡不住读取，这条测不了。
+        }
+
+        backfill(&store);
+        assert_eq!(
+            store.evidence_missing_message_id().unwrap().len(),
+            1,
+            "一时读不了的留着下次再试"
+        );
+
+        std::fs::set_permissions(&stored, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let again = import(
+            &store,
+            vec![write(dir.path(), "b.eml", &fetched)],
+            None,
+            None,
+        );
+        assert_eq!(again.duplicates.len(), 1, "能读了就补上编号、认出同一封信");
+        assert_eq!(again.duplicates[0].id, old.imported[0].id);
+    }
+
+    fn backfill(store: &ArchiveStore) {
+        let archive_dir = store.archive_dir().to_path_buf();
+        evidence_commands::backfill_message_ids(store, &archive_dir);
+    }
+
+    #[test]
+    fn bytes_from_outside_a_file_go_through_the_same_dedup() {
+        let (_dir, store, _app) = archive();
+        let (downloaded, fetched) = downloaded_and_fetched("abc.123@mail.example.test");
+        let archive_dir = store.archive_dir().to_path_buf();
+        let (first, dup) = evidence_commands::import_bytes(
+            &store,
+            &archive_dir,
+            &downloaded,
+            Some("a.eml".into()),
+            BUCKET,
+            None,
+        )
+        .unwrap();
+        assert!(!dup);
+        assert_eq!(first.kind, "eml");
+        let (again, dup) =
+            evidence_commands::import_bytes(&store, &archive_dir, &fetched, None, BUCKET, None)
+                .unwrap();
+        assert!(dup);
+        assert_eq!(again.id, first.id);
+    }
+
     #[test]
     fn evidence_moves_in_and_out_of_an_application_with_the_state_following() {
         let (dir, store, app) = archive();

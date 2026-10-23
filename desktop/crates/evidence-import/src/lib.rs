@@ -13,7 +13,7 @@ mod eml;
 mod names;
 mod sniff;
 
-pub use eml::{html_to_text, parse_eml, ParsedMail, MAX_BODY_EXTRACT};
+pub use eml::{html_to_text, normalize_message_id, parse_eml, ParsedMail, MAX_BODY_EXTRACT};
 pub use names::safe_file_name;
 pub use sniff::{sniff, Sniffed};
 
@@ -89,7 +89,7 @@ impl std::error::Error for ImportError {}
 /// 已在档案里的同 sha256 字节的相对路径，由调用方查库回答。
 pub type ExistingBlob<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// 复制一个本机文件进 `<archive>/attachments/<bucket>/`。
+/// 读一个本机文件，交给 [`stage_bytes`] 落盘。
 ///
 /// 先读、再判类型、再落盘：超限与不支持的文件在磁盘上不留任何痕迹。
 pub fn stage_file(
@@ -98,6 +98,12 @@ pub fn stage_file(
     bucket: &str,
     existing: ExistingBlob<'_>,
 ) -> Result<StagedBlob, ImportError> {
+    let (bytes, original) = read_source(source)?;
+    stage_bytes(archive_dir, &bytes, original, bucket, existing)
+}
+
+/// 读一个本机文件的全部字节与它的文件名。超限在读满之前就判定。
+pub fn read_source(source: &Path) -> Result<(Vec<u8>, Option<String>), ImportError> {
     // 一个句柄读到底：先 metadata 再 read 会给别人换文件的机会，也挡不住一个还在
     // 增长的文件。`take(上限 + 1)` 让超限在读满之前就能判定，不会先吃下几百 MB。
     use std::io::Read;
@@ -113,17 +119,46 @@ pub fn stage_file(
     file.take(MAX_ATTACHMENT_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| ImportError::SourceUnreadable)?;
+    check_size(&bytes)?;
+    let original = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
+    Ok((bytes, original))
+}
+
+/// 不经过本机文件的导入入口（邮箱拉取、插件存邮件）：判大小、判类型，再落盘。
+pub fn stage_bytes(
+    archive_dir: &Path,
+    bytes: &[u8],
+    original_filename: Option<String>,
+    bucket: &str,
+    existing: ExistingBlob<'_>,
+) -> Result<StagedBlob, ImportError> {
+    let sniffed = inspect(bytes, original_filename.as_deref())?;
+    write_blob(
+        archive_dir,
+        bytes,
+        bucket,
+        sniffed,
+        original_filename,
+        existing,
+    )
+}
+
+/// 落盘之前能做的全部判断：大小与类型。调用方据此决定要不要先解析邮件。
+pub fn inspect(bytes: &[u8], original_filename: Option<&str>) -> Result<Sniffed, ImportError> {
+    check_size(bytes)?;
+    sniff::sniff(bytes, original_filename)
+}
+
+fn check_size(bytes: &[u8]) -> Result<(), ImportError> {
     if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
         return Err(ImportError::TooLarge {
             size_bytes: bytes.len() as u64,
         });
     }
-    let original = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string);
-    let sniffed = sniff::sniff(&bytes, original.as_deref())?;
-    write_blob(archive_dir, &bytes, bucket, sniffed, original, existing)
+    Ok(())
 }
 
 /// 把一段粘贴文本落成 `.txt`。

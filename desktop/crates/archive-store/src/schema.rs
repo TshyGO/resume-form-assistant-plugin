@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -305,6 +305,15 @@ CREATE TABLE legacy_import_parts (
 CREATE INDEX idx_legacy_imports_state ON legacy_imports(state, created_at);
 "#;
 
+/// #330：同一封信从不同渠道进来时字节不同，只有 Message-ID 不变，所以按它查重。
+/// 不设唯一约束：旧档案里可能已经存过同一封信两次。旧的 eml 证据由桌面端打开档案后
+/// 解析原件补上；查过但没有编号的写成空串，以后不再重复解析。
+pub const V6_EVIDENCE_MESSAGE_ID: &str = r#"
+ALTER TABLE reply_evidence ADD COLUMN message_id TEXT;
+CREATE INDEX idx_evidence_message_id ON reply_evidence(message_id)
+  WHERE message_id IS NOT NULL AND message_id <> '';
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -330,5 +339,10 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 5,
         description: "staged legacy plugin import, without AI keys in SQLite (#130)",
         sql: V5_LEGACY_IMPORT,
+    },
+    Migration {
+        to_version: 6,
+        description: "evidence message id for cross-channel mail dedup (#330)",
+        sql: V6_EVIDENCE_MESSAGE_ID,
     },
 ];

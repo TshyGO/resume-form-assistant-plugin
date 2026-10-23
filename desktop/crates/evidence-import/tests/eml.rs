@@ -28,6 +28,33 @@ fn a_plain_email_gives_its_headers_and_body() {
 }
 
 #[test]
+fn the_message_id_survives_different_bytes_of_the_same_mail() {
+    // 网页邮箱下载的版本：LF 换行，带邮箱自己加的头。
+    let downloaded = "X-QQ-mid: abc\nFrom: hr@example.test\nSubject: 面试邀请\n\
+         Date: Fri, 12 Sep 2026 08:00:00 +0000\nMessage-ID: <AbC.123@mail.example.test>\n\n你好\n";
+    // IMAP 原文：CRLF，多了投递记录，Message-ID 被折成两行。
+    let fetched = wrap(
+        "Received: from mx.example.test by imap.example.test\r\n\
+         Return-Path: <hr@example.test>\r\n\
+         From: hr@example.test\r\n\
+         Subject: 面试邀请\r\n\
+         Date: Fri, 12 Sep 2026 08:00:00 +0000\r\n\
+         Message-ID:\r\n <AbC.123@mail.example.test>",
+        "你好\r\n",
+    );
+    let a = parse_eml(downloaded.as_bytes()).expect("this is an email");
+    let b = parse_eml(&fetched).expect("this is an email");
+    assert_eq!(a.message_id.as_deref(), Some("AbC.123@mail.example.test"));
+    assert_eq!(a.message_id, b.message_id);
+}
+
+#[test]
+fn a_mail_without_message_id_has_none() {
+    let raw = wrap("From: hr@example.test\r\nSubject: 通知", "正文\r\n");
+    assert_eq!(parse_eml(&raw).expect("this is an email").message_id, None);
+}
+
+#[test]
 fn an_encoded_chinese_subject_and_body_come_back_readable() {
     let raw = wrap(
         "From: hr@example.test\r\n\

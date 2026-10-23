@@ -142,13 +142,13 @@ fn a_v4_archive_migrates_to_v5_without_losing_resume_data() {
     }]).unwrap();
     old.close().unwrap();
     let upgraded = ArchiveStore::open(cfg.clone()).unwrap();
-    assert_eq!(archive_store::current_schema_version(), 5);
+    assert_eq!(archive_store::current_schema_version(), 6);
     assert!(upgraded.migration_backup.as_ref().is_some_and(|path| path.is_file()));
     assert_eq!(upgraded.resume_overview().unwrap().templates.len(), 1);
     upgraded.receive_legacy_manifest(IMPORT, manifest(1)).unwrap();
     let raw = rusqlite::Connection::open(cfg.db_path()).unwrap();
     let version: i64 = raw.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 }
 
 fn template_body(name: &str) -> serde_json::Value {
