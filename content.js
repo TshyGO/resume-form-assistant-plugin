@@ -2209,8 +2209,13 @@
     return !el.disabled && !el.readOnly && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && ["text", "email", "tel", "url", "search"].includes(el.type)));
   }
 
+  // 自制单选（#269 北森 phoenix-radio）的选项是 div：选中状态由组件的 --checked / aria-checked 标出。
+  function radioChecked(el) {
+    return el instanceof HTMLInputElement ? el.checked : Boolean(self.ResumeProCustomControls?.isChecked?.(el));
+  }
+
   function hasExistingValue(entry) {
-    if (entry.kind === "radio") return entry.elements.some(el => el.checked);
+    if (entry.kind === "radio") return entry.elements.some(radioChecked);
     const el = entry.element;
     if (!el?.isConnected) return true;
     if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
@@ -2229,7 +2234,7 @@
   // 只在本次填写期间比较网页值，不保存或发送到桌面/AI。
   function fillValueSnapshot(entry) {
     if (entry.kind === "radio") return entry.elements.every(el => el.isConnected)
-      ? JSON.stringify(entry.elements.map(el => [el.value, el.checked])) : null;
+      ? JSON.stringify(entry.elements.map(el => [el instanceof HTMLInputElement ? el.value : el.textContent.trim(), radioChecked(el)])) : null;
     const el = entry.element;
     if (!el?.isConnected) return null;
     if (["custom-select", "cascader"].includes(entry.controlKind) && self.ResumeProCustomControls) {
@@ -2378,12 +2383,15 @@
       phase = "roundTripMs";
       stage = "match";
       phaseStart = performance.now();
+      // 补填新出现字段时发出的 AI 请求（#269）：停止时一并取消，不等它返回。
+      let catchUpRequestId = null;
       if (cancelButton) {
         cancelButton.hidden = false;
         cancelButton.disabled = false;
         cancelButton.onclick = async () => {
           if (phase === 'fillMs') {
             writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
+            if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
             showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
             return;
           }
@@ -2520,8 +2528,14 @@
         if (controlsRechecked) return;
         controlsRechecked = true;
         for (const item of verifiedControls) {
-          const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element)
-            : { ok: false, reason: 'element_disconnected' };
+          let checked;
+          if (isFieldBindingCurrent(item.element)) checked = controlOperator?.check(item.element);
+          else {
+            // 页面重画过：找回的新字段显示的内容和填完那一刻一样，仍算填上。
+            const fresh = rebindFieldEntry(item.element);
+            checked = fresh && item.after != null && fillValueSnapshot(fresh) === item.after
+              ? { ok: true } : { ok: false, reason: 'element_disconnected' };
+          }
           if (checked && !checked.ok) {
             filledCount -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
@@ -2531,13 +2545,100 @@
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
         && location.href === fillUrl && session === fillSession;
       const failedCascadeGroups = new Set();
-      for (const match of sortedMatches) {
+      // #269 选了某项后页面才出现的字段（智联选完学历多出专业、院系）：选完等页面安静再扫一次，
+      // 新出现的空字段先在本地匹配、当场排进这一轮；本地匹配不上的，这一轮结束后交给 AI 补填，最多补 2 次。
+      const queue = sortedMatches.slice();
+      const pendingNew = [];
+      const newFieldIds = new Set();
+      let catchUpRounds = 0;
+      let supplemented = 0;
+      let dayDefaulted = 0;
+      const pickUpNewFields = async (position) => {
+        await waitForPageSettle();
+        if (!isCurrent()) return;
+        // 同名题目的序号会因为新字段插进来而变（两段教育经历都有「专业」）：原来就扫到过的元素不算新字段。
+        const nodeOf = entry => entry?.kind === "radio" ? entry.elements?.[0] : entry?.element;
+        const known = new Set([...fieldMap.values()].map(entry => fieldBindingKey(entry.binding)));
+        const knownNodes = new Set([...fieldMap.values()].map(nodeOf).filter(Boolean));
+        // 补填是尽力而为：这次扫描出错就不补，原来排队的字段照常往下填。
+        let fresh;
+        try {
+          fresh = scanFillableFields();
+        } catch {
+          return;
+        }
+        const added = fresh.fields.filter(field => {
+          const entry = fresh.fieldMap.get(field.fieldId);
+          const key = fieldBindingKey(entry?.binding);
+          return key && !known.has(key) && !knownNodes.has(nodeOf(entry)) && isFieldBindingCurrent(entry) && !hasExistingValue(entry);
+        });
+        if (!added.length) return;
+        for (const field of added) {
+          const entry = fresh.fieldMap.get(field.fieldId);
+          const fieldId = `field-new-${newFieldIds.size}`;
+          newFieldIds.add(fieldId);
+          // 联动组编号是第一次扫描时排的，新字段不沿用，避免和已有的组混在一起。
+          delete field.cascadeGroup; delete field.cascadeLevel;
+          field.fieldId = fieldId;
+          fieldMap.set(fieldId, entry);
+          fieldMetaMap.set(fieldId, field);
+          approvedValues.set(entry, fillValueSnapshot(entry));
+        }
+        const helpers = self.ResumeProAIHelpers;
+        const local = helpers?.buildRuleBasedMatches
+          ? helpers.filterValidMatches(added, helpers.buildRuleBasedMatches(added, resumeFields)) : [];
+        // 题目名和资料里唯一一项的名称完全相同（「专业」对「专业」），也当场对上；
+        // 资料里同名的不止一项（多段教育经历），交给 AI 按上下文分。
+        const normalize = value => helpers?.normalizeText ? helpers.normalizeText(value) : String(value ?? "").trim();
+        for (const field of added) {
+          if (local.some(match => match.fieldId === field.fieldId)) continue;
+          const same = resumeFields.filter(item => item?.value && normalize(item.key) === normalize(field.label));
+          if (same.length === 1) local.push(...(helpers?.filterValidMatches ? helpers.filterValidMatches([field], [{ fieldId: field.fieldId, value: same[0].value }]) : []));
+        }
+        const localIds = new Set(local.map(match => match.fieldId));
+        pendingNew.push(...added.filter(field => !localIds.has(field.fieldId)));
+        const order = match => fieldMap.get(match.fieldId)?.element || fieldMap.get(match.fieldId)?.elements?.[0];
+        local.sort((a, b) => (order(a)?.compareDocumentPosition?.(order(b)) & 4) ? -1 : 1);
+        queue.splice(position + 1, 0, ...local);
+      };
+      for (let position = 0; ; position++) {
+        if (position >= queue.length) {
+          if (assisted || deep || !pendingNew.length || catchUpRounds >= 2 || !isCurrent()) break;
+          catchUpRounds += 1;
+          const batch = pendingNew.splice(0);
+          button.textContent = "正在补填新出现的字段...";
+          let reply = null;
+          catchUpRequestId = `${requestId}-more-${catchUpRounds}`;
+          try {
+            reply = await self.ResumeProAIClient.send({ type: "AI_FILL", requestId: catchUpRequestId, formFields: batch, resumeFields });
+          } catch {
+            reply = null;
+          }
+          catchUpRequestId = null;
+          button.textContent = "正在填写网页...";
+          if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
+          const ids = new Set(batch.map(field => field.fieldId));
+          const more = reply?.success && Array.isArray(reply.matches) ? reply.matches.filter(match => ids.has(match.fieldId)) : [];
+          if (!more.length) break;
+          queue.push(...more);
+        }
+        const match = queue[position];
         if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
-        const element = fieldMap.get(match.fieldId);
+        let element = fieldMap.get(match.fieldId);
 
         if (!element) continue;
+        // #269 页面整块重画过（智联选完学位，整张表单删掉重建）：找回同一个字段；它的内容和批准时一样
+        // （插件还没填它、用户也没动过），就在新字段上接着填。
+        if (!assisted && !isFieldBindingCurrent(element)) {
+          const fresh = rebindFieldEntry(element);
+          if (fresh && fillValueSnapshot(fresh) === approvedValues.get(element)) {
+            approvedValues.set(fresh, approvedValues.get(element));
+            fieldMap.set(match.fieldId, fresh);
+            element = fresh;
+          }
+        }
         // 匹配期间页面可能展开、重渲染：控件已经不在原来的题目下，就不按旧的对应关系写。
         if (!isFieldBindingCurrent(element)) {
           const stale = fieldMetaMap.get(match.fieldId);
@@ -2585,6 +2686,27 @@
         };
         let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
         stopInterruptedControl();
+        // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
+        // 内容和填写前一样（重建冲掉了这次写入）就在新字段上重做一次；显示的正是刚选的值就算填上；
+        // 别的内容（可能是用户刚改的，或页面带出的）不碰，按未确认处理。
+        if (!filled && !assisted && writeAttempted && textFillFailureCode(element) === "element_disconnected") {
+          const fresh = rebindFieldEntry(element);
+          const approved = approvedValues.get(element);
+          const now = fresh ? fillValueSnapshot(fresh) : null;
+          if (fresh && now !== null && now === approved) {
+            approvedValues.set(fresh, approved);
+            fieldMap.set(match.fieldId, fresh);
+            element = fresh;
+            filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
+            stopInterruptedControl();
+          } else if (fresh && showsFilledValue(fresh, match.value)) {
+            approvedValues.set(fresh, now);
+            fieldMap.set(match.fieldId, fresh);
+            textFillFailures.delete(fresh.kind === "radio" ? fresh.elements[0] : fresh.element);
+            element = fresh;
+            filled = true;
+          }
+        }
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           // 日期控件显示的是组件自己的格式（猎聘是「1998年06月」）：交给控件层按面板精度复核，不逐字比较（#236）。
@@ -2608,7 +2730,9 @@
 
         if (filled) {
           filledCount += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value });
+          if (newFieldIds.has(match.fieldId)) supplemented += 1;
+          if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element) });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
@@ -2626,6 +2750,10 @@
             await new Promise((resolve) => setTimeout(resolve, 250));
           }
         }
+
+        if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
+          await pickUpNewFields(position);
+        }
       }
 
       await finalSyncFillSession(session);
@@ -2635,6 +2763,8 @@
       stage = null;
 
       outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
+      const supplementNote = (supplemented ? `（其中新出现的字段补填 ${supplemented} 项）` : "")
+        + (dayDefaulted ? `（${dayDefaulted} 项日期资料里只有年月，已按 1 日填写）` : "");
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
         + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
@@ -2650,14 +2780,14 @@
         if (outcome === "success") outcome = "failed";
         showStatus(`${recipeLead}已填写 0 个字段。${unfilledNote}${response.warning || ""}${emptyHint}${recipeTail}`, "error", true);
       } else if (response.warning) {
-        showStatus(`${recipeLead}本地已填写 ${filledCount} 项；${unfilledNote}${response.warning}${recipeTail}`, "error", Boolean(unfilledNote || recipeTail));
+        showStatus(`${recipeLead}本地已填写 ${filledCount} 项${supplementNote}；${unfilledNote}${response.warning}${recipeTail}`, "error", Boolean(unfilledNote || recipeTail));
       } else if (unfilledNote) {
         // 没填上的字段要用户自己去补，提示不自动消失。
-        showStatus(`${recipeLead}已填写 ${filledCount} 个字段。${unfilledNote}${recipeTail}`, "error", true);
+        showStatus(`${recipeLead}已填写 ${filledCount} 个字段${supplementNote}。${unfilledNote}${recipeTail}`, "error", true);
       } else if (recipeTail) {
-        showStatus(`已填写 ${filledCount} 个字段。${recipeTail}`, "success", true);
+        showStatus(`已填写 ${filledCount} 个字段${supplementNote}。${recipeTail}`, "success", true);
       } else {
-        showStatus(`${recipeLead}已填写 ${filledCount} 个字段。`, "success");
+        showStatus(`${recipeLead}已填写 ${filledCount} 个字段${supplementNote}。`, "success");
       }
 
       if (!assisted) {
@@ -3043,6 +3173,96 @@
   }
 
   // 题目和控件的对应关系还成立吗：控件还在原来的表单项里、表单项没混进别的控件、题目没变。
+  // 选完会让页面长出新字段的控件：下拉、级联、单选、勾选、原生下拉。
+  const CHOICE_CONTROL_KINDS = new Set(["custom-select", "cascader", "native-select", "select", "radio", "checkbox"]);
+
+  function fieldBindingKey(binding) {
+    return binding?.label ? [binding.controlKind, binding.section, binding.label, binding.repeatIndex, binding.repeatCount].join("\u0000") : "";
+  }
+
+  // 页面重画后找回的字段显示的是不是刚填的值（只读，不写）：下拉看组件显示的文字，单选看选中项，其余看框里的值。
+  function showsFilledValue(entry, value) {
+    const helpers = self.ResumeProAIHelpers;
+    const matches = texts => texts.some(text => text && (helpers?.findSelectOptionIndex
+      ? helpers.findSelectOptionIndex([{ value: text, text }], value) >= 0 : String(text).trim() === String(value).trim()));
+    try {
+      if (entry.kind === "radio") {
+        const checked = entry.elements.find(radioChecked);
+        return Boolean(checked) && matches([checked instanceof HTMLInputElement ? getRadioOptionLabel(checked) : checked.textContent.trim()]);
+      }
+      const el = entry.element;
+      if (["custom-select", "cascader"].includes(entry.controlKind)) {
+        const texts = self.ResumeProCustomControls?.readSelection?.(entry)?.texts || [];
+        // 日期框（北森日历按下拉认）：按页面显示的精度比，不按文字模糊匹配。
+        if (/^\s*\d{4}\s*[-./年]\s*\d{1,2}/.test(String(value))) return texts.length === 1 && sameDateAsPage(texts[0], value);
+        return matches(texts);
+      }
+      if (el instanceof HTMLSelectElement) return matches([el.options[el.selectedIndex]?.text || ""]);
+      const shown = String(el.value ?? "");
+      if (entry.pickerType || entry.controlKind === "date") return sameDateAsPage(shown, value);
+      return shown === normalizeExpectedTextValue(el, value);
+    } catch {
+      return false;
+    }
+  }
+
+  // 日期按页面要求的精度比：页面只显示到月（只能选到月的日历），年月对上就行；页面显示到日，资料有日就要对到日，
+  // 资料只有年月按 1 日（和日历选 1 号一致）。
+  function sameDateAsPage(shown, value) {
+    const parse = text => {
+      const hit = /(\d{4})\s*[-/.年]\s*(\d{1,2})(?:\s*[-/.月]\s*(\d{1,2}))?/.exec(String(text || ""));
+      return hit ? { y: hit[1], m: hit[2].padStart(2, "0"), d: hit[3] ? hit[3].padStart(2, "0") : null } : null;
+    };
+    const page = parse(shown), want = parse(value);
+    if (!page || !want || page.y !== want.y || page.m !== want.m) return false;
+    return !page.d || page.d === (want.d || "01");
+  }
+
+  // 等页面对上一个选择的反应结束：增删节点或样式、显示/隐藏、class 连续 300ms 没有变化，最多等 1.5s。
+  // 插件自己的侧栏和填写高亮不算。
+  function waitForPageSettle(quietMs = 300, maxMs = 1500) {
+    const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
+    const root = document.body || document.documentElement;
+    if (!Observer || !root?.nodeType) return Promise.resolve();
+    return new Promise((resolve) => {
+      const start = performance.now();
+      let last = start;
+      const ours = (record) => record.target?.closest?.(`#${SIDEBAR_ID}`) || (record.attributeName === "class"
+        && (record.target?.classList?.contains?.(FIELD_HIGHLIGHT_CLASS) || String(record.oldValue || "").includes(FIELD_HIGHLIGHT_CLASS)));
+      const observer = new Observer((records) => {
+        if (records.some((record) => !ours(record))) last = performance.now();
+      });
+      observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["style", "hidden", "class"] });
+      const tick = () => {
+        const now = performance.now();
+        if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);
+      };
+      window.setTimeout(tick, 50);
+    });
+  }
+
+  // #269 页面重画后找回同一个字段：同一控件类型、同一区块、同一题目、同名题目的序号和总数都一样，并且只找到一个。
+  // 深度分析的字段按大纲定位，不在这里找。
+  function rebindFieldEntry(entry) {
+    const old = entry?.binding;
+    if (!old?.label || entry.deepRef) return null;
+    let scan;
+    try {
+      scan = self.ResumeProFieldScan.scanPage(document, { isVisible, exclude: (element) => Boolean(element.closest(`#${SIDEBAR_ID}`)) });
+    } catch {
+      return null;
+    }
+    const same = scan.controls.filter((control) => control.controlKind === old.controlKind && control.label === old.label
+      && control.section === old.section && control.repeatIndex === old.repeatIndex && control.repeatCount === old.repeatCount);
+    if (same.length !== 1) return null;
+    const control = same[0];
+    const fresh = { ...entry, binding: control, root: control.root };
+    if (entry.kind === "radio") fresh.elements = control.elements;
+    else fresh.element = control.element;
+    if (entry.pickerType) fresh.pickerInputType = inferPickerInputType(control.root, control.element);
+    return isFieldBindingCurrent(fresh) ? fresh : null;
+  }
+
   function isFieldBindingCurrent(entry) {
     if (!entry?.binding) return true;
     try {
@@ -3863,12 +4083,15 @@
     return controlOperator.operate(entry, value, options);
   }
 
+  // #269 资料只有年月、日历要选到日时按 1 日填写：记下来，结果里写明。
+  const dayDefaultedControls = new WeakSet();
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
     const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
     const control = target?.kind === 'element' ? target.element : target;
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
+      if (result.ok && result.observed?.dayDefaulted) dayDefaultedControls.add(control); else dayDefaultedControls.delete(control);
     }
     return result.ok;
   }
@@ -4069,10 +4292,10 @@
     if (!controls?.length || !controls.every((el) => el?.isConnected) || !isFieldBindingCurrent(entry)) return stale;
     try {
       if (entry.kind === "radio") {
-        const checked = entry.elements.find((el) => el.checked);
+        const checked = entry.elements.find(radioChecked);
         if (!checked) return ready("");
-        const label = cleanProfileText(checked.labels?.[0]?.textContent || checked.closest?.("label")?.textContent
-          || checked.getAttribute?.("aria-label"), false);
+        const label = cleanProfileText(checked instanceof HTMLInputElement ? checked.labels?.[0]?.textContent || checked.closest?.("label")?.textContent
+          || checked.getAttribute?.("aria-label") : checked.textContent, false);
         return label ? ready(label) : unreadable;
       }
       const el = entry.element;
@@ -4245,6 +4468,7 @@
   }
 
   function getRadioOptionLabel(radio) {
+    if (!(radio instanceof HTMLInputElement)) return String(radio.textContent || "").replace(/\s+/g, " ").trim();
     const directLabel = radio.labels?.[0]?.textContent?.trim();
 
     if (directLabel) {

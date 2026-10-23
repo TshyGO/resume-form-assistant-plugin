@@ -210,18 +210,19 @@ test("the redactor used for spec labels follows the same rules", () => {
   assert.equal(Array.from(redact("一".repeat(80), 30)).length, 30);
 });
 
-test("a component dropdown with a plain input (Beisen phoenix-select) is shown with its library and shape", () => {
+test("a component dropdown with a plain input (Beisen phoenix-select) is listed as a dropdown with its library", () => {
   // 结构取自 2026-10-11 kingfa.zhiye.com 真机：输入框是普通 input，没有 role/aria，组件 class 是 phoenix-select。
+  // #269 起字段扫描按类名就把它认成下拉，大纲直接写 combobox，组件根就是扫描找到的 phoenix-select。
   const doc = load(`<div class="item"><label>出生日期</label><div class="phoenix-select phoenix-select--editable">
       <ul class="phoenix-select__content"><li class="phoenix-select__inputWrapper"><input class="phoenix-select__input" placeholder=""></li></ul></div></div>
     <div class="item"><label>姓名</label><input class="phoenix-input__input" placeholder="请输入"></div>`);
   const result = build(doc);
   const all = text(result);
-  assert.match(all, /input\[text\] lib=beisen 外观=下拉 ← 出生日期/);
-  assert.doesNotMatch(all, /外观=下拉 ← 姓名|外观=\S+ ph="请输入" ← 姓名/);
+  assert.match(all, /combobox lib=beisen ← 出生日期/);
+  assert.match(all, /input\[text\] lib=beisen ph="请输入" ← 姓名/);
   const node = [...result.nodes.values()].find((item) => item.control?.label === "出生日期");
-  assert.equal(node.shape, "下拉");
-  assert.ok(node.shapeRoot.classList.contains("phoenix-select"), "the component root is kept for the operator");
+  assert.equal(node.domKind, "custom-select");
+  assert.ok(node.root.classList.contains("phoenix-select"), "the component root is kept for the operator");
 });
 
 test("autocomplete=new-password on an ordinary text box is the anti-autofill trick, not a password", () => {

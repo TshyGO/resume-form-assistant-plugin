@@ -498,7 +498,8 @@ test("several buttons with the same text are named once with a count", async () 
 });
 
 test("a plain input the model reads as a dropdown is operated from the component root the outline found", () => {
-  const doc = new JSDOM(`<body><div class="phoenix-select"><ul><li><input class="phoenix-select__input" aria-label="民族"></li></ul></div></body>`,
+  // picker 这类词扫描不单凭它认下拉（可能是日期），大纲只写「外观=下拉」，由模型判断。
+  const doc = new JSDOM(`<body><div class="city-picker"><ul><li><input class="city-picker__input" aria-label="民族"></li></ul></div></body>`,
     { url: "https://jobs.example.test/apply" }).window.document;
   const built = outline.build(doc, { isVisible, fieldScan });
   const [ref, node] = [...built.nodes.entries()][0];
@@ -511,6 +512,22 @@ test("a plain input the model reads as a dropdown is operated from the component
   assert.equal(entry.root, node.shapeRoot);
   assert.equal(prepared.fields[0].dynamicOptions, true);
   assert.match(deep.ANALYZE_SYSTEM_PROMPT, /外观=下拉/);
+});
+
+test("a Beisen phoenix-select is a dropdown in the outline and the fill entry keeps the component root", () => {
+  // 审查 B9：#269 起扫描按类名就把北森 phoenix-select 认成下拉，深度分析直接按 custom-select 交给操作器，组件根是 phoenix-select。
+  const doc = new JSDOM(`<body><div class="item"><label>民族</label><div class="phoenix-select phoenix-select--editable"><ul class="phoenix-select__content"><li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div></body>`,
+    { url: "https://jobs.example.test/apply" }).window.document;
+  const built = outline.build(doc, { isVisible, fieldScan });
+  const [ref, node] = [...built.nodes.entries()].find(([, item]) => item.type === "control");
+  assert.equal(node.domKind, "custom-select");
+  assert.match(built.parts[0].text, /combobox/);
+  const checked = deep.validateSpec({ pageState: "editing", fields: [{ ref, label: "民族", control: "custom-select" }] },
+    { nodes: built.nodes, refs: new Set(built.parts[0].refs), redact: built.redact });
+  const prepared = deep.toFillInput(checked.spec.fields, built.nodes);
+  const entry = prepared.fieldMap.get(`deep-${ref}`);
+  assert.equal(entry.controlKind, "custom-select");
+  assert.ok(entry.root.classList.contains("phoenix-select"));
 });
 
 test("bilingual buttons such as 「添加 / Add」 and 「编辑 / Edit」 are allowed; English forbidden words are still refused", () => {
