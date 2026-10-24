@@ -20,7 +20,13 @@ pub struct ParsedMail {
     pub body_extract: Option<String>,
     /// 这封信有 HTML 部件（正文仍然是压平后的文本）。
     pub had_html: bool,
+    /// 规范化后的 Message-ID（不带尖括号）。同一封信从不同渠道拿到时字节会不同，
+    /// 只有它不变，所以按它查重。
+    pub message_id: Option<String>,
 }
+
+/// Message-ID 的长度上限。信头一行最长 998 字节，再长就不是正常的编号。
+const MAX_MESSAGE_ID: usize = 998;
 
 /// 解析一封邮件。`None` 表示「这不是邮件」——调用方照常把原件存下来，只是当成别的格式。
 pub fn parse_eml(bytes: &[u8]) -> Option<ParsedMail> {
@@ -37,6 +43,7 @@ pub fn parse_eml(bytes: &[u8]) -> Option<ParsedMail> {
             .map(|a| a.trim().to_lowercase())
     });
     let sent_at = message.date().map(|date| rfc3339_utc(date.to_timestamp()));
+    let message_id = message.message_id().and_then(normalize_message_id);
     // `html_body_count` 把纯文本部件也算进去（它是 HTML 视图的回退），所以看真实的部件类型。
     let had_html = message
         .parts
@@ -75,7 +82,20 @@ pub fn parse_eml(bytes: &[u8]) -> Option<ParsedMail> {
         sent_at,
         body_extract: text.map(truncate),
         had_html,
+        message_id,
     })
+}
+
+/// 去掉尖括号与首尾空白。大小写不动：`@` 左边按标准区分大小写。
+pub fn normalize_message_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let inner = trimmed
+        .strip_prefix('<')
+        .and_then(|rest| rest.strip_suffix('>'))
+        .unwrap_or(trimmed)
+        .trim();
+    (!inner.is_empty() && inner.len() <= MAX_MESSAGE_ID && !inner.chars().any(char::is_whitespace))
+        .then(|| inner.to_string())
 }
 
 fn truncate(text: String) -> String {
@@ -279,6 +299,19 @@ mod tests {
     fn timestamps_become_utc_rfc3339() {
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(1_789_200_000), "2026-09-12T08:00:00Z");
+    }
+
+    #[test]
+    fn message_ids_lose_brackets_and_keep_case() {
+        assert_eq!(
+            normalize_message_id("  <AbC.123@mail.example.com> ").as_deref(),
+            Some("AbC.123@mail.example.com")
+        );
+        assert_eq!(normalize_message_id("x@y").as_deref(), Some("x@y"));
+        assert_eq!(normalize_message_id("<>"), None);
+        assert_eq!(normalize_message_id("   "), None);
+        assert_eq!(normalize_message_id("a b@c"), None);
+        assert_eq!(normalize_message_id(&"x".repeat(MAX_MESSAGE_ID + 1)), None);
     }
 
     #[test]

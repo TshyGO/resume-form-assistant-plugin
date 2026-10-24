@@ -91,6 +91,36 @@ impl ArchiveStore {
         self.transaction(|tx| tx.import_evidence(input))
     }
 
+    pub fn import_or_match_evidence(
+        &self,
+        input: NewEvidence,
+    ) -> Result<EvidenceImportOutcome, StoreError> {
+        self.transaction(|tx| tx.import_or_match_evidence(input))
+    }
+
+    pub fn match_known_mail(
+        &self,
+        key: &MailKey,
+        application_id: Option<&str>,
+    ) -> Result<Option<ReplyEvidence>, StoreError> {
+        self.transaction(|tx| tx.match_known_mail(key, application_id))
+    }
+
+    pub fn find_known_mail(&self, key: &MailKey) -> Result<Option<ReplyEvidence>, StoreError> {
+        self.transaction(|tx| tx.find_known_mail(key))
+    }
+
+    pub fn evidence_missing_message_id(&self) -> Result<Vec<MessageIdBackfill>, StoreError> {
+        self.transaction(|tx| tx.evidence_missing_message_id())
+    }
+
+    pub fn record_message_ids(
+        &self,
+        found: &[(String, Option<String>)],
+    ) -> Result<usize, StoreError> {
+        self.transaction(|tx| tx.record_message_ids(found))
+    }
+
     pub fn associate_evidence(
         &self,
         evidence_id: &str,

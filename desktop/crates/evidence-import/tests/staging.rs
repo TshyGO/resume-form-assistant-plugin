@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use evidence_import::{stage_file, stage_text, EvidenceKind, ImportError, MAX_ATTACHMENT_BYTES};
+use evidence_import::{
+    stage_bytes, stage_file, stage_text, EvidenceKind, ImportError, MAX_ATTACHMENT_BYTES,
+};
 
 const BUCKET: &str = "2026/09";
 
@@ -178,4 +180,31 @@ fn a_directory_that_cannot_be_created_is_a_storage_error_not_a_panic() {
 
     let err = stage_file(&archive, &source, BUCKET, &nothing_staged).unwrap_err();
     assert_eq!(err.code(), "storage");
+}
+
+#[test]
+fn bytes_without_a_source_file_stage_like_a_file_does() {
+    let (_dir, archive) = archive();
+    let bytes = eml("面试邀请");
+    let staged = stage_bytes(
+        &archive,
+        &bytes,
+        Some("invite.eml".into()),
+        BUCKET,
+        &nothing_staged,
+    )
+    .unwrap();
+    assert_eq!(staged.kind, EvidenceKind::Eml);
+    assert!(staged.stored_rel_path.starts_with("attachments/2026/09/"));
+    assert!(staged.stored_rel_path.ends_with("invite.eml"));
+    assert_eq!(
+        fs::read(archive.join(&staged.stored_rel_path)).unwrap(),
+        bytes
+    );
+
+    let too_big = vec![b'a'; MAX_ATTACHMENT_BYTES as usize + 1];
+    assert!(matches!(
+        stage_bytes(&archive, &too_big, None, BUCKET, &nothing_staged),
+        Err(ImportError::TooLarge { .. })
+    ));
 }

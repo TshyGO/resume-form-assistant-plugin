@@ -706,8 +706,46 @@ pub struct NewEvidence {
     pub from_addr: Option<String>,
     pub sent_at: Option<Occurred>,
     pub body_extract: Option<String>,
+    /// 邮件的 Message-ID(已规范化);不是邮件或信里没有时为 None。
+    pub message_id: Option<String>,
     /// 是否立即追加 evidence_imported 事件;收件箱(无申请)用档案级序号。
     pub append_event: bool,
+}
+
+impl NewEvidence {
+    /// 带 Message-ID 的邮件才有;用来判断它是不是档案里已有的那封信。
+    pub fn mail_key(&self) -> Option<MailKey> {
+        let message_id = self.message_id.as_deref().filter(|id| !id.is_empty())?;
+        Some(MailKey {
+            message_id: message_id.to_string(),
+            from_addr: self.from_addr.clone(),
+            sent_at: self.sent_at.clone(),
+        })
+    }
+}
+
+/// 认定「同一封信」要对上的三样。Message-ID 由发件方自己写,不同的信也可能撞号;
+/// 同一封信从不同渠道拿到时,发件人和发送时间不会变,所以一起比。
+#[derive(Debug, Clone)]
+pub struct MailKey {
+    pub message_id: String,
+    pub from_addr: Option<String>,
+    pub sent_at: Option<Occurred>,
+}
+
+/// [`crate::ArchiveStore::import_or_match_evidence`] 的结果。
+#[derive(Debug, Clone)]
+pub enum EvidenceImportOutcome {
+    Imported(ReplyEvidence),
+    /// 同一封信已经在档案里:没有新建记录,这是已有的那条。
+    AlreadyStored(ReplyEvidence),
+}
+
+/// 还没补 Message-ID 的 eml 证据,由桌面端读原件解析。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageIdBackfill {
+    pub evidence_id: String,
+    pub stored_rel_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

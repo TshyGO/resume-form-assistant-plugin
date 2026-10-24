@@ -4,7 +4,7 @@
 //! (D09)。`replyClass` / `sendMode` 确认前可空;AI 建议走
 //! [crate::model::AiSuggestion],不借用正式字段暂存。
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::model::*;
@@ -74,11 +74,12 @@ impl StoreTx<'_> {
             .map(|o| o.to_columns())
             .transpose()?
             .unwrap_or((None, "unknown", None));
+        let message_id = input.message_id.as_deref().filter(|id| !id.is_empty());
         self.conn().execute(
             "INSERT INTO reply_evidence (id, application_id, kind, reply_class, send_mode, \
              blob_sha256, original_filename, imported_at, subject, from_addr, sent_at, \
-             sent_precision, sent_tz, body_extract) \
-             VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             sent_precision, sent_tz, body_extract, message_id) \
+             VALUES (?1, ?2, ?3, NULL, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 input.application_id,
@@ -92,6 +93,7 @@ impl StoreTx<'_> {
                 sent_precision,
                 sent_tz,
                 input.body_extract,
+                message_id,
             ],
         )?;
         self.conn().execute(
@@ -153,6 +155,101 @@ impl StoreTx<'_> {
         }
         self.get_evidence(&id)?
             .ok_or_else(|| StoreError::Internal("evidence vanished in same transaction".into()))
+    }
+
+    /// 带 Message-ID 的邮件先查重:已在档案里就不新建记录。
+    pub fn import_or_match_evidence(
+        &mut self,
+        input: NewEvidence,
+    ) -> Result<EvidenceImportOutcome, StoreError> {
+        if let Some(key) = input.mail_key() {
+            if let Some(existing) = self.match_known_mail(&key, input.application_id.as_deref())? {
+                return Ok(EvidenceImportOutcome::AlreadyStored(existing));
+            }
+        }
+        self.import_evidence(input)
+            .map(EvidenceImportOutcome::Imported)
+    }
+
+    /// 这封信已经在档案里时返回那条证据。命中的是收件箱里还没关联的那条、而这次
+    /// 导入指定了申请时,顺手关联过去;已属另一条申请则不动它。
+    pub fn match_known_mail(
+        &mut self,
+        key: &MailKey,
+        application_id: Option<&str>,
+    ) -> Result<Option<ReplyEvidence>, StoreError> {
+        let Some(existing) = self.find_known_mail(key)? else {
+            return Ok(None);
+        };
+        match (&existing.application_id, application_id) {
+            (None, Some(app)) => self.associate_evidence(&existing.id, app).map(Some),
+            _ => Ok(Some(existing)),
+        }
+    }
+
+    /// 按 Message-ID、发件人、发送时间找已有的证据(最早导入的那条)。回收站里申请下的
+    /// 证据不算:用户看不到它,说「已存在」只会让人找不着。
+    pub fn find_known_mail(&self, key: &MailKey) -> Result<Option<ReplyEvidence>, StoreError> {
+        // 空串是「查过、没有编号」的标记，不是编号。
+        if key.message_id.is_empty() {
+            return Ok(None);
+        }
+        // 发送时间按入库时的同一套规则规范化，才能和库里的列逐字比较。
+        let sent_at = match &key.sent_at {
+            Some(occurred) => occurred.to_columns()?.0,
+            None => None,
+        };
+        // `message_id <> ''` 要写出来：局部索引带着这个条件，查询不写 SQLite 就不用它。
+        let id: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT e.id FROM reply_evidence e \
+                 LEFT JOIN applications a ON a.id = e.application_id \
+                 WHERE e.message_id = ?1 AND e.message_id <> '' \
+                   AND e.from_addr IS ?2 AND e.sent_at IS ?3 \
+                   AND (e.application_id IS NULL OR a.recycle_state = 'active') \
+                 ORDER BY e.imported_at ASC, e.id ASC LIMIT 1",
+                params![key.message_id, key.from_addr, sent_at],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match id {
+            Some(id) => self.get_evidence(&id),
+            None => Ok(None),
+        }
+    }
+
+    /// 升级前导入、还没补 Message-ID 的 eml 证据。
+    pub fn evidence_missing_message_id(&self) -> Result<Vec<MessageIdBackfill>, StoreError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT e.id, b.stored_rel_path FROM reply_evidence e \
+             JOIN attachment_blobs b ON b.sha256 = e.blob_sha256 \
+             WHERE e.kind = 'eml' AND e.message_id IS NULL ORDER BY e.imported_at ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(MessageIdBackfill {
+                evidence_id: r.get(0)?,
+                stored_rel_path: r.get(1)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
+    /// 写回补算结果。`None` 记成空串:查过了、没有编号,下次不再解析。
+    /// 只填还空着的行,不覆盖已有的值。
+    pub fn record_message_ids(
+        &mut self,
+        found: &[(String, Option<String>)],
+    ) -> Result<usize, StoreError> {
+        let mut updated = 0;
+        for (evidence_id, message_id) in found {
+            updated += self.conn().execute(
+                "UPDATE reply_evidence SET message_id = ?1 WHERE id = ?2 AND message_id IS NULL",
+                params![message_id.as_deref().unwrap_or(""), evidence_id],
+            )?;
+        }
+        Ok(updated)
     }
 
     /// 改关联(§7 规则 6):保留原始 blob;从收件箱绑定记 evidence_associated,

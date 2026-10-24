@@ -391,7 +391,7 @@ async fn automatic_snapshot_skips_unchanged_but_records_files_and_restore_epoch_
         store.import_evidence(archive_store::NewEvidence {
             application_id: Some(app), kind: archive_store::EvidenceKind::Paste,
             blob: archive_store::AttachmentBlobMeta { sha256: format!("{:x}", Sha256::digest(bytes)), size_bytes: bytes.len() as i64, stored_rel_path: relative.into(), mime: None },
-            original_filename: None, subject: None, from_addr: None, sent_at: None, body_extract: None, append_event: true,
+            original_filename: None, subject: None, from_addr: None, sent_at: None, body_extract: None, message_id: None, append_event: true,
         }).unwrap();
     }
     let due = l.service.journal.lock().unwrap().automatic.next_at.unwrap();
