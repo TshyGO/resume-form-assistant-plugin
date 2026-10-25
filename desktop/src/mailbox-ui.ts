@@ -5,6 +5,7 @@ export interface MailCandidate { id: string; accountId: string; email: string; h
 export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null }
 export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
+interface IgnoreReport { ignored: number; unchanged: number }
 interface CheckReport {
   checkedAccounts: number;
   succeededAccounts: number;
@@ -233,9 +234,13 @@ export function mountMailboxes(
   }
   async function ignore(ids: string[]) {
     await action("inbox", "正在忽略…", async () => {
-      await invoke("mailbox_ignore", { ids });
+      const report = await invoke<IgnoreReport>("mailbox_ignore", { ids });
       ids.forEach((id) => { selected.delete(id); failures.delete(id); });
-      say("inbox", `已忽略 ${ids.length} 封，不会再提示；邮箱原件保持原样。`);
+      const changed = report?.ignored ?? 0;
+      const unchanged = report?.unchanged ?? ids.length - changed;
+      say("inbox", changed
+        ? `已忽略 ${changed} 封，不会再提示；邮箱原件保持原样。${unchanged ? ` 另外 ${unchanged} 封已被其他操作处理。` : ""}`
+        : "这些邮件已被其他操作处理，列表已刷新。", unchanged > 0);
     });
   }
   function updateGuide() {

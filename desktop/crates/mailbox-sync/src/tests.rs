@@ -118,7 +118,8 @@ fn ignores_survive_rescans_uid_rebuilds_and_folder_moves() {
     )
     .unwrap();
     let first = db.pending("archive", 100).unwrap().remove(0);
-    db.finish("archive", &[first.id.clone()], true).unwrap();
+    assert_eq!(db.finish("archive", &[first.id.clone()], true).unwrap(), 1);
+    assert_eq!(db.finish("archive", &[first.id.clone()], true).unwrap(), 0);
     db.commit_scan(
         "archive",
         "account",

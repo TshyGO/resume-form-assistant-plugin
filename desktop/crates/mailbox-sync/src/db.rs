@@ -246,16 +246,17 @@ impl Database {
             reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
         })
     }
-    pub fn finish(&self, archive: &str, ids: &[String], ignored: bool) -> Result<()> {
+    pub fn finish(&self, archive: &str, ids: &[String], ignored: bool) -> Result<u32> {
         // Atomic batch; never accept arbitrary SQL state from the webview.
         let tx = self.0.unchecked_transaction()?;
+        let mut changed = 0u32;
         for id in ids {
-            tx.execute(
+            changed = changed.saturating_add(tx.execute(
                 "UPDATE candidates SET state=?3 WHERE archive=?1 AND id=?2 AND state='pending'",
                 params![archive, id, if ignored { "ignored" } else { "imported" }],
-            )?;
+            )? as u32);
         }
         tx.commit()?;
-        Ok(())
+        Ok(changed)
     }
 }

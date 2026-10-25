@@ -80,7 +80,6 @@ fn view(state: &AppState, limit: u32) -> Result<View> {
 }
 
 fn save(state: &AppState, email: String, secret: String) -> Result<()> {
-    let _gate = gate(state)?;
     let (email, _) = mapped(mailbox_sync::Provider::detect(&email))?;
     // No persistence until the same connection has authenticated and opened folders.
     mapped(tauri::async_runtime::block_on(imap::test_connection(
@@ -120,7 +119,6 @@ fn persist_account(
     Ok(())
 }
 fn delete(state: &AppState, id: &str) -> Result<()> {
-    let _gate = gate(state)?;
     let db = database(state)?;
     let account = mapped(db.account(id))?;
     // Pause first: a failed OS delete must never leave an active orphan connection.
@@ -155,6 +153,65 @@ fn companies(state: &AppState, expected: &ArchiveIdentity) -> Result<Vec<String>
         Ok(companies)
     })
 }
+async fn scan_folder(
+    state: &AppState,
+    db: &mut Database,
+    expected: &ArchiveIdentity,
+    account: &Account,
+    companies: &[String],
+    session: &mut imap::LiveSession,
+    folder: &str,
+) -> Result<()> {
+    let cursor = mapped(db.cursor(&expected.archive_id, &account.id, folder))?;
+    let plan = mapped(imap::plan(session, folder, cursor, now()).await)?;
+    for chunk in plan.uids.chunks(imap::BATCH_SIZE) {
+        let headers = mapped(imap::headers_resilient(session, chunk).await)?;
+        // Short archive lock only for local matching and persistence. No network.
+        with_store(state, |store| {
+            check_identity(store, expected)?;
+            let mut found = Vec::new();
+            for (uid, header) in headers {
+                let reasons = classify(&header, companies);
+                if reasons.is_empty() {
+                    continue;
+                }
+                let exists = key(&header)
+                    .map(|key| store.find_known_mail(&key))
+                    .transpose()?
+                    .flatten()
+                    .is_some();
+                if !exists {
+                    found.push((uid, header, reasons));
+                }
+            }
+            mapped(db.commit_scan(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                Cursor {
+                    validity: plan.validity,
+                    uid: *chunk.last().unwrap(),
+                },
+                &found,
+            ))
+        })?;
+    }
+    // Includes empty scans and expunged gaps, bounded by UIDNEXT snapshot.
+    with_store(state, |store| {
+        check_identity(store, expected)?;
+        mapped(db.commit_scan(
+            &expected.archive_id,
+            &account.id,
+            folder,
+            Cursor {
+                validity: plan.validity,
+                uid: plan.high_uid,
+            },
+            &[],
+        ))
+    })
+}
+
 fn scan_account(
     state: &AppState,
     db: &mut Database,
@@ -169,55 +226,31 @@ fn scan_account(
         .ok_or_else(|| fail(Error::Credentials))?;
     tauri::async_runtime::block_on(async {
         let mut session = mapped(imap::login_account(account, &secret).await)?;
-        for folder in mapped(imap::folders(&mut session).await)? {
-            let cursor = mapped(db.cursor(&expected.archive_id, &account.id, &folder))?;
-            let plan = mapped(imap::plan(&mut session, &folder, cursor, now()).await)?;
-            for chunk in plan.uids.chunks(imap::BATCH_SIZE) {
-                let headers = mapped(imap::headers(&mut session, chunk).await)?;
-                // Short archive lock only for local matching and persistence. No network.
-                with_store(state, |store| {
-                    check_identity(store, expected)?;
-                    let mut found = Vec::new();
-                    for (uid, header) in headers {
-                        let reasons = classify(&header, companies);
-                        if reasons.is_empty() {
-                            continue;
-                        }
-                        let exists = key(&header)
-                            .map(|key| store.find_known_mail(&key))
-                            .transpose()?
-                            .flatten()
-                            .is_some();
-                        if !exists {
-                            found.push((uid, header, reasons));
-                        }
-                    }
-                    mapped(db.commit_scan(
-                        &expected.archive_id,
-                        &account.id,
-                        &folder,
-                        Cursor {
-                            validity: plan.validity,
-                            uid: *chunk.last().unwrap(),
-                        },
-                        &found,
-                    ))
-                })?;
-            }
-            // Includes empty scans and expunged gaps, bounded by UIDNEXT snapshot.
-            with_store(state, |store| {
-                check_identity(store, expected)?;
-                mapped(db.commit_scan(
-                    &expected.archive_id,
-                    &account.id,
-                    &folder,
-                    Cursor {
-                        validity: plan.validity,
-                        uid: plan.high_uid,
-                    },
-                    &[],
-                ))
-            })?;
+        let folders = mapped(imap::folders(&mut session).await)?;
+        let mut succeeded = 0usize;
+        let mut first_error = None;
+        for folder in folders {
+            match scan_folder(
+                state,
+                db,
+                expected,
+                account,
+                companies,
+                &mut session,
+                &folder,
+            )
+            .await
+            {
+                Ok(()) => succeeded += 1,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            };
+        }
+        // A broken optional junk folder must not hide a healthy INBOX. If every
+        // advertised folder failed, keep the account failure and retry policy.
+        if succeeded == 0 {
+            return Err(first_error.unwrap_or_else(|| fail(Error::Protocol)));
         }
         // Dropping a read-only session also safely closes the socket.
         Ok(())
@@ -331,12 +364,12 @@ pub struct ConfirmFailure {
     pub id: String,
     pub message: String,
 }
-fn confirm_one(
+fn prepare_confirm(
     state: &AppState,
     db: &Database,
     expected: &ArchiveIdentity,
     id: &str,
-) -> Result<bool> {
+) -> Result<Option<Candidate>> {
     let item = mapped(db.candidate(&expected.archive_id, id))?;
     // It may have been manually imported since discovery; skip the download too.
     let duplicate = with_store(state, |store| {
@@ -351,23 +384,102 @@ fn confirm_one(
     if duplicate {
         with_store(state, |store| {
             check_identity(store, expected)?;
-            mapped(db.finish(&expected.archive_id, &[id.into()], false))
+            mapped(db.finish(&expected.archive_id, &[id.into()], false)).map(|_| ())
         })?;
-        return Ok(true);
+        return Ok(None);
     }
-    let account = mapped(db.account(&item.account_id))?;
-    let secret = state
-        .credentials
-        .get_key(&account.credential_id())
-        .map_err(|_| fail(Error::Credentials))?
-        .ok_or_else(|| fail(Error::Credentials))?;
-    let bytes = mapped(tauri::async_runtime::block_on(async {
-        let mut session = imap::login_account(&account, &secret).await?;
-        imap::download(&mut session, &item).await
-    }))?;
-    with_store(state, |store| {
-        persist_confirmed(store, db, expected, id, &bytes)
-    })
+    Ok(Some(item))
+}
+fn confirm_failure(report: &mut ConfirmReport, id: String, error: CommandError) {
+    report.failed.push(ConfirmFailure {
+        id,
+        message: error.message,
+    });
+}
+async fn confirm_many(
+    state: &AppState,
+    db: &Database,
+    expected: &ArchiveIdentity,
+    ids: Vec<String>,
+) -> ConfirmReport {
+    use std::collections::BTreeMap;
+    let mut report = ConfirmReport::default();
+    let mut groups: BTreeMap<String, Vec<(String, Candidate)>> = BTreeMap::new();
+    for id in ids {
+        match prepare_confirm(state, db, expected, &id) {
+            Ok(None) => report.duplicates += 1,
+            Ok(Some(item)) => groups
+                .entry(item.account_id.clone())
+                .or_default()
+                .push((id, item)),
+            Err(error) => confirm_failure(&mut report, id, error),
+        }
+    }
+    for (account_id, candidates) in groups {
+        let account = match mapped(db.account(&account_id)) {
+            Ok(account) => account,
+            Err(error) => {
+                for (id, _) in candidates {
+                    confirm_failure(&mut report, id, error.clone());
+                }
+                continue;
+            }
+        };
+        let secret = match state
+            .credentials
+            .get_key(&account.credential_id())
+            .map_err(|_| fail(Error::Credentials))
+            .and_then(|value| value.ok_or_else(|| fail(Error::Credentials)))
+        {
+            Ok(secret) => secret,
+            Err(error) => {
+                for (id, _) in candidates {
+                    confirm_failure(&mut report, id, error.clone());
+                }
+                continue;
+            }
+        };
+        let mut session = match imap::login_account(&account, &secret).await {
+            Ok(connected) => Some(connected),
+            Err(error) => {
+                let error = fail(error);
+                for (id, _) in candidates {
+                    confirm_failure(&mut report, id, error.clone());
+                }
+                continue;
+            }
+        };
+        for (id, item) in candidates {
+            if session.is_none() {
+                match imap::login_account(&account, &secret).await {
+                    Ok(connected) => session = Some(connected),
+                    Err(error) => {
+                        confirm_failure(&mut report, id, fail(error));
+                        continue;
+                    }
+                }
+            }
+            let download =
+                imap::download(session.as_mut().expect("session established"), &item).await;
+            match download {
+                Ok(bytes) => match with_store(state, |store| {
+                    persist_confirmed(store, db, expected, &id, &bytes)
+                }) {
+                    Ok(true) => report.duplicates += 1,
+                    Ok(false) => report.imported += 1,
+                    Err(error) => confirm_failure(&mut report, id, error),
+                },
+                Err(error) => {
+                    let reconnect = matches!(error, Error::Network | Error::Protocol);
+                    confirm_failure(&mut report, id, fail(error));
+                    if reconnect {
+                        session = None;
+                    }
+                }
+            }
+        }
+    }
+    report
 }
 fn persist_confirmed(
     store: &archive_store::ArchiveStore,
@@ -433,7 +545,6 @@ pub async fn mailbox_delete(app: AppHandle, id: String) -> Result<()> {
 #[tauri::command]
 pub async fn mailbox_pause(app: AppHandle, id: String, paused: bool) -> Result<()> {
     archive_worker(app.clone(), move |state| {
-        let _gate = gate(state)?;
         mapped(database(state)?.pause(&id, paused))
     })
     .await?;
@@ -446,20 +557,29 @@ pub async fn mailbox_check(app: AppHandle) -> Result<CheckReport> {
     let _ = app.emit("mailbox-changed", ());
     Ok(report)
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IgnoreReport {
+    pub ignored: u32,
+    pub unchanged: u32,
+}
 #[tauri::command]
-pub async fn mailbox_ignore(app: AppHandle, ids: Vec<String>) -> Result<()> {
+pub async fn mailbox_ignore(app: AppHandle, ids: Vec<String>) -> Result<IgnoreReport> {
     if ids.len() > 2000 {
         return Err(fail(Error::TooLarge));
     }
-    archive_worker(app.clone(), move |state| {
-        let _gate = gate(state)?;
+    let requested = ids.len() as u32;
+    let ignored = archive_worker(app.clone(), move |state| {
         with_store(state, |store| {
             mapped(database(state)?.finish(&store.identity().archive_id, &ids, true))
         })
     })
     .await?;
     let _ = app.emit("mailbox-changed", ());
-    Ok(())
+    Ok(IgnoreReport {
+        ignored,
+        unchanged: requested.saturating_sub(ignored),
+    })
 }
 #[tauri::command]
 pub async fn mailbox_confirm(app: AppHandle, ids: Vec<String>) -> Result<ConfirmReport> {
@@ -467,21 +587,11 @@ pub async fn mailbox_confirm(app: AppHandle, ids: Vec<String>) -> Result<Confirm
         return Err(fail(Error::TooLarge));
     }
     let report = archive_worker(app.clone(), move |state| {
-        let _gate = gate(state)?;
         let expected = identity(state)?;
         let db = database(state)?;
-        let mut report = ConfirmReport::default();
-        for id in ids {
-            match confirm_one(state, &db, &expected, &id) {
-                Ok(true) => report.duplicates += 1,
-                Ok(false) => report.imported += 1,
-                Err(error) => report.failed.push(ConfirmFailure {
-                    id,
-                    message: error.message,
-                }),
-            }
-        }
-        Ok(report)
+        Ok(tauri::async_runtime::block_on(confirm_many(
+            state, &db, &expected, ids,
+        )))
     })
     .await?;
     let _ = app.emit("mailbox-changed", ());
@@ -499,14 +609,17 @@ pub fn start(app: AppHandle) {
                     .map_err(|_| fail(Error::Storage))?
                     .is_some()
                 {
-                    return Ok(());
+                    return Ok(true);
                 }
-                check(state, force).map(|_| ())
+                check(state, force).map(|_| false)
             })
             .await;
+            if matches!(result, Ok(true)) {
+                break;
+            }
             startup = false;
             // Only safe state is emitted; no mail headers, credentials or server text.
-            if result.is_ok() {
+            if matches!(result, Ok(false)) {
                 let _ = app.emit("mailbox-changed", ());
             }
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;

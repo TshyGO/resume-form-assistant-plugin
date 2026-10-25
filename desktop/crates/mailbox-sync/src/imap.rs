@@ -2,7 +2,7 @@
 use crate::{Account, Candidate, Cursor, Error, Header, Provider, Result};
 use async_imap::{types::NameAttribute, Session};
 use futures_util::TryStreamExt;
-use std::{fmt::Debug, future::Future, time::Duration};
+use std::{collections::HashSet, fmt::Debug, future::Future, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -10,6 +10,7 @@ use tokio::{
 
 pub type LiveSession = Session<tokio_native_tls::TlsStream<TcpStream>>;
 const HEADER_QUERY: &str = "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0.65536>)";
+const DOWNLOAD_CHUNK_SIZE: usize = 1024 * 1024;
 pub const BATCH_SIZE: usize = 100;
 
 pub async fn bounded<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
@@ -137,11 +138,21 @@ pub async fn plan<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
             .uid_validity
             .filter(|v| *v > 0)
             .ok_or(Error::Protocol)?;
-        let high_uid = mailbox
-            .uid_next
-            .filter(|v| *v > 0)
-            .ok_or(Error::Protocol)?
-            .saturating_sub(1);
+        let high_uid = match mailbox.uid_next.filter(|value| *value > 0) {
+            Some(next) => next.saturating_sub(1),
+            None => {
+                // Coremail (including 163/126) can omit UIDNEXT even though it
+                // otherwise supports UID commands. Snapshot the upper bound
+                // with UID SEARCH ALL before constructing a bounded range.
+                session
+                    .uid_search("ALL")
+                    .await
+                    .map_err(network)?
+                    .into_iter()
+                    .max()
+                    .unwrap_or(0)
+            }
+        };
         let old = cursor.filter(|c| c.validity == validity);
         let start = old.map_or(1, |c| c.uid.saturating_add(1));
         if start > high_uid || old.is_some_and(|c| c.uid == u32::MAX) {
@@ -203,6 +214,7 @@ pub async fn headers<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
             .await
             .map_err(network)?;
         let mut result = Vec::new();
+        let mut skipped = HashSet::new();
         while let Some(fetch) = stream.try_next().await.map_err(network)? {
             // Unsolicited flag updates can appear in a FETCH stream.
             let Some(uid) = fetch.uid.filter(|uid| uids.contains(uid)) else {
@@ -212,14 +224,18 @@ pub async fn headers<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
                 continue;
             };
             if raw.len() >= 65536 {
-                return Err(Error::TooLarge);
+                // Consume the rest of the FETCH stream and let the caller
+                // advance past this one malformed message. Returning here
+                // would desynchronise the session and poison every later scan.
+                skipped.insert(uid);
+                continue;
             }
             result.push((uid, Header::parse(raw)));
         }
         drop(stream);
         let missing: Vec<_> = uids
             .iter()
-            .filter(|uid| !result.iter().any(|(found, _)| found == *uid))
+            .filter(|uid| !skipped.contains(uid) && !result.iter().any(|(found, _)| found == *uid))
             .map(u32::to_string)
             .collect();
         if !missing.is_empty() {
@@ -236,6 +252,31 @@ pub async fn headers<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     })
     .await
 }
+
+/// Recover useful headers from a batch whose server response omitted a live
+/// header. Individual semantic failures are skipped; connection failures still
+/// abort so the account can retry without advancing past unread data.
+pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
+    session: &mut Session<S>,
+    uids: &[u32],
+) -> Result<Vec<(u32, Header)>> {
+    match headers(session, uids).await {
+        Ok(found) => Ok(found),
+        Err(Error::Protocol | Error::TooLarge) if uids.len() > 1 => {
+            let mut found = Vec::new();
+            for uid in uids {
+                match headers(session, &[*uid]).await {
+                    Ok(mut one) => found.append(&mut one),
+                    Err(Error::Protocol | Error::TooLarge) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(found)
+        }
+        Err(Error::Protocol | Error::TooLarge) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
 pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     session: &mut Session<S>,
     item: &Candidate,
@@ -245,35 +286,65 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
         if mailbox.uid_validity != Some(item.validity) {
             return Err(Error::Changed);
         }
-        let limit = evidence_import::MAX_ATTACHMENT_BYTES;
-        // Partial PEEK bounds allocations even if a server's size metadata is wrong.
-        let query = format!("(UID RFC822.SIZE BODY.PEEK[]<0.{}>)", limit + 1);
+        Ok(())
+    })
+    .await?;
+    let size = bounded(async {
         let mut stream = session
-            .uid_fetch(item.uid.to_string(), query)
+            .uid_fetch(item.uid.to_string(), "(UID RFC822.SIZE)")
             .await
             .map_err(network)?;
-        let mut raw = None;
+        let mut size = None;
         while let Some(fetch) = stream.try_next().await.map_err(network)? {
-            if fetch.uid != Some(item.uid) {
-                continue;
-            }
-            if let Some(bytes) = fetch.body() {
-                if bytes.len() as u64 > limit || fetch.size.is_some_and(|size| size as u64 > limit)
-                {
-                    return Err(Error::TooLarge);
-                }
-                if fetch.size.is_some_and(|size| size as usize != bytes.len()) {
-                    return Err(Error::Protocol);
-                }
-                if Header::parse(bytes).fingerprint() != item.header.fingerprint() {
-                    return Err(Error::Changed);
-                }
-                raw = Some(bytes.to_vec());
+            if fetch.uid == Some(item.uid) {
+                size = fetch.size.map(|value| value as usize);
             }
         }
-        raw.ok_or(Error::Missing)
+        size.ok_or(Error::Missing)
     })
-    .await
+    .await?;
+    let limit = evidence_import::MAX_ATTACHMENT_BYTES as usize;
+    if size > limit {
+        return Err(Error::TooLarge);
+    }
+    let mut raw = Vec::with_capacity(size);
+    while raw.len() < size {
+        let offset = raw.len();
+        let count = (size - offset).min(DOWNLOAD_CHUNK_SIZE);
+        let request_count = if offset + count == size {
+            count.saturating_add(1)
+        } else {
+            count
+        };
+        // Each chunk has its own idle deadline. A slow but progressing 25 MiB
+        // download can take longer than 30 seconds without becoming unbounded.
+        let part = bounded(async {
+            let query = format!("(UID BODY.PEEK[]<{offset}.{request_count}>)");
+            let mut stream = session
+                .uid_fetch(item.uid.to_string(), query)
+                .await
+                .map_err(network)?;
+            let mut part = None;
+            while let Some(fetch) = stream.try_next().await.map_err(network)? {
+                if fetch.uid == Some(item.uid) {
+                    part = fetch.body().map(ToOwned::to_owned);
+                }
+            }
+            part.ok_or(Error::Missing)
+        })
+        .await?;
+        if part.len() > count && offset.saturating_add(part.len()) > limit {
+            return Err(Error::TooLarge);
+        }
+        if part.len() != count {
+            return Err(Error::Protocol);
+        }
+        raw.extend_from_slice(&part);
+    }
+    if Header::parse(&raw).fingerprint() != item.header.fingerprint() {
+        return Err(Error::Changed);
+    }
+    Ok(raw)
 }
 pub async fn test_connection(email: &str, secret: &str) -> Result<()> {
     let mut session = connect(email, secret).await?;
@@ -335,6 +406,11 @@ mod tests {
     fn examined(validity: u32, next: u32) -> String {
         format!("* 1 EXISTS\r\n* OK [UIDVALIDITY {validity}] valid\r\n* OK [UIDNEXT {next}] next\r\n{{tag}} OK [READ-ONLY] done\r\n")
     }
+    fn examined_without_uidnext(validity: u32) -> String {
+        format!(
+            "* 1 EXISTS\r\n* OK [UIDVALIDITY {validity}] valid\r\n{{tag}} OK [READ-ONLY] done\r\n"
+        )
+    }
     fn header() -> Vec<u8> {
         b"From: hr@example.com\r\nSubject: Interview\r\nDate: Sat, 24 Oct 2026 12:00:00 +0800\r\nMessage-ID: <a@b>\r\n\r\n".to_vec()
     }
@@ -388,6 +464,27 @@ mod tests {
             .unwrap();
         assert_eq!(scan.uids, vec![2, 9]);
         assert_eq!(scan.high_uid, 10);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn coremail_without_uidnext_snapshots_the_high_uid_with_search_all() {
+        let (mut s, task) = session(vec![
+            ("EXAMINE \"INBOX\"".into(), examined_without_uidnext(4)),
+            (
+                "UID SEARCH ALL".into(),
+                "* SEARCH 2 9\r\n{tag} OK all\r\n".into(),
+            ),
+            (
+                "UID SEARCH SINCE 24-Sep-2026 UID 1:9".into(),
+                "* SEARCH 9 2\r\n{tag} OK search\r\n".into(),
+            ),
+        ])
+        .await;
+        let scan = plan(&mut s, "INBOX", None, 1790208000 + 30 * 86400)
+            .await
+            .unwrap();
+        assert_eq!(scan.high_uid, 9);
+        assert_eq!(scan.uids, vec![2, 9]);
         task.await.unwrap();
     }
     #[tokio::test]
@@ -464,6 +561,51 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn oversized_header_is_skipped_without_hiding_later_uids() {
+        let huge = vec![b'x'; 65536];
+        let normal = header();
+        let reply = format!(
+            "* 1 FETCH (UID 9 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n* 2 FETCH (UID 10 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
+            huge.len(), String::from_utf8_lossy(&huge), normal.len(), String::from_utf8_lossy(&normal)
+        );
+        let (mut s, task) = session(vec![(format!("UID FETCH 9,10 {HEADER_QUERY}"), reply)]).await;
+        let found = headers(&mut s, &[9, 10]).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, 10);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn one_live_uid_without_a_header_does_not_hide_the_rest_of_the_batch() {
+        let normal = header();
+        let normal_reply = format!("* 1 FETCH (UID 10 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n", normal.len(), String::from_utf8_lossy(&normal));
+        let (mut s, task) = session(vec![
+            (
+                format!("UID FETCH 9,10 {HEADER_QUERY}"),
+                normal_reply.clone(),
+            ),
+            (
+                "UID SEARCH UID 9".into(),
+                "* SEARCH 9\r\n{tag} OK search\r\n".into(),
+            ),
+            (
+                format!("UID FETCH 9 {HEADER_QUERY}"),
+                "{tag} OK fetched\r\n".into(),
+            ),
+            (
+                "UID SEARCH UID 9".into(),
+                "* SEARCH 9\r\n{tag} OK search\r\n".into(),
+            ),
+            (format!("UID FETCH 10 {HEADER_QUERY}"), normal_reply),
+        ])
+        .await;
+        let found = headers_resilient(&mut s, &[9, 10]).await.unwrap();
+        assert_eq!(
+            found.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            vec![10]
+        );
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn a_fetch_without_header_cannot_advance_a_live_uid() {
         let (mut s, task) = session(vec![
             (
@@ -499,17 +641,58 @@ mod tests {
     async fn confirmation_peeks_the_bounded_original_and_validates_identity() {
         let mut raw = header();
         raw.extend_from_slice(b"Interview details.");
-        let reply = format!(
-            "* 1 FETCH (UID 9 RFC822.SIZE {} BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
-            raw.len(),
+        let size_reply = format!(
+            "* 1 FETCH (UID 9 RFC822.SIZE {})\r\n{{tag}} OK size\r\n",
+            raw.len()
+        );
+        let body_reply = format!(
+            "* 1 FETCH (UID 9 BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
             raw.len(),
             String::from_utf8_lossy(&raw)
         );
         let (mut s, task) = session(vec![
             ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
+            ("UID FETCH 9 (UID RFC822.SIZE)".into(), size_reply),
             (
-                "UID FETCH 9 (UID RFC822.SIZE BODY.PEEK[]<0.26214401>)".into(),
-                reply,
+                format!("UID FETCH 9 (UID BODY.PEEK[]<0.{}>)", raw.len() + 1),
+                body_reply,
+            ),
+        ])
+        .await;
+        assert_eq!(download(&mut s, &candidate()).await.unwrap(), raw);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn confirmation_downloads_large_mail_in_progress_bounded_chunks() {
+        let mut raw = header();
+        raw.resize(DOWNLOAD_CHUNK_SIZE + 17, b'x');
+        let first = &raw[..DOWNLOAD_CHUNK_SIZE];
+        let second = &raw[DOWNLOAD_CHUNK_SIZE..];
+        let size_reply = format!(
+            "* 1 FETCH (UID 9 RFC822.SIZE {})\r\n{{tag}} OK size\r\n",
+            raw.len()
+        );
+        let first_reply = format!(
+            "* 1 FETCH (UID 9 BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK first\r\n",
+            first.len(),
+            String::from_utf8_lossy(first)
+        );
+        let second_reply = format!(
+            "* 1 FETCH (UID 9 BODY[]<{}> {{{}}}\r\n{})\r\n{{tag}} OK second\r\n",
+            DOWNLOAD_CHUNK_SIZE,
+            second.len(),
+            String::from_utf8_lossy(second)
+        );
+        let (mut s, task) = session(vec![
+            ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
+            ("UID FETCH 9 (UID RFC822.SIZE)".into(), size_reply),
+            (
+                format!("UID FETCH 9 (UID BODY.PEEK[]<0.{DOWNLOAD_CHUNK_SIZE}>)"),
+                first_reply,
+            ),
+            (
+                format!("UID FETCH 9 (UID BODY.PEEK[]<{DOWNLOAD_CHUNK_SIZE}.18>)"),
+                second_reply,
             ),
         ])
         .await;
@@ -537,13 +720,11 @@ mod tests {
     }
     #[tokio::test]
     async fn confirmation_rejects_oversize_metadata_without_saving_a_truncated_mail() {
-        let raw = header();
-        let reply = format!("* 1 FETCH (UID 9 RFC822.SIZE 26214402 BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",raw.len(),String::from_utf8_lossy(&raw));
         let (mut s, task) = session(vec![
             ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
             (
-                "UID FETCH 9 (UID RFC822.SIZE BODY.PEEK[]<0.26214401>)".into(),
-                reply,
+                "UID FETCH 9 (UID RFC822.SIZE)".into(),
+                "* 1 FETCH (UID 9 RFC822.SIZE 26214402)\r\n{tag} OK size\r\n".into(),
             ),
         ])
         .await;
@@ -554,21 +735,51 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
+    async fn confirmation_rejects_size_metadata_that_would_truncate_the_message() {
+        let mut raw = header();
+        raw.extend_from_slice(b"x");
+        let declared = raw.len() - 1;
+        let size_reply = format!("* 1 FETCH (UID 9 RFC822.SIZE {declared})\r\n{{tag}} OK size\r\n");
+        let body_reply = format!(
+            "* 1 FETCH (UID 9 BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK body\r\n",
+            raw.len(),
+            String::from_utf8_lossy(&raw)
+        );
+        let (mut s, task) = session(vec![
+            ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
+            ("UID FETCH 9 (UID RFC822.SIZE)".into(), size_reply),
+            (
+                format!("UID FETCH 9 (UID BODY.PEEK[]<0.{}>)", raw.len()),
+                body_reply,
+            ),
+        ])
+        .await;
+        assert_eq!(
+            download(&mut s, &candidate()).await.unwrap_err(),
+            Error::Protocol
+        );
+        task.await.unwrap();
+    }
+    #[tokio::test]
     async fn confirmation_rejects_a_different_message_even_if_the_server_reuses_its_uid() {
         let raw = String::from_utf8(header())
             .unwrap()
             .replace("a@b", "wrong@message");
-        let reply = format!(
-            "* 1 FETCH (UID 9 RFC822.SIZE {} BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
-            raw.len(),
+        let size_reply = format!(
+            "* 1 FETCH (UID 9 RFC822.SIZE {})\r\n{{tag}} OK size\r\n",
+            raw.len()
+        );
+        let body_reply = format!(
+            "* 1 FETCH (UID 9 BODY[]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
             raw.len(),
             raw
         );
         let (mut s, task) = session(vec![
             ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
+            ("UID FETCH 9 (UID RFC822.SIZE)".into(), size_reply),
             (
-                "UID FETCH 9 (UID RFC822.SIZE BODY.PEEK[]<0.26214401>)".into(),
-                reply,
+                format!("UID FETCH 9 (UID BODY.PEEK[]<0.{}>)", raw.len() + 1),
+                body_reply,
             ),
         ])
         .await;

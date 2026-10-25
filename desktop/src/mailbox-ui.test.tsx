@@ -101,11 +101,18 @@ test("background updates preserve drafts and selected candidates", async () => {
 });
 test("ignore acts on selected candidates and never downloads originals", async () => {
   const { ui, view, handlers, invoke } = setup([candidate("one"), candidate("two")]); await ui.refresh();
-  handlers.mailbox_ignore = async (args) => { expect(args?.ids).toEqual(["one", "two"]); view.candidates = []; view.pendingCount = 0; };
+  handlers.mailbox_ignore = async (args) => { expect(args?.ids).toEqual(["one", "two"]); view.candidates = []; view.pendingCount = 0; return { ignored: 2, unchanged: 0 }; };
   fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-ignore-selected"));
   await waitFor(() => expect(el("mailbox-pending-count").textContent).toBe("0"));
   expect(invoke.mock.calls.some(([name]) => name === "mailbox_confirm")).toBe(false);
   expect(el("mailbox-inbox-status").textContent).toContain("不会再提示");
+});
+test("ignore reports the rows that actually changed", async () => {
+  const { ui, view, handlers } = setup([candidate("one"), candidate("two")]); await ui.refresh();
+  handlers.mailbox_ignore = async () => { view.candidates = []; view.pendingCount = 0; return { ignored: 1, unchanged: 1 }; };
+  fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-ignore-selected"));
+  await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("已忽略 1 封"));
+  expect(el("mailbox-inbox-status").textContent).toContain("另外 1 封已被其他操作处理");
 });
 test("partial import failures stay visible with per-message reasons and can be retried", async () => {
   const { ui, view, handlers, onImported } = setup([candidate("one"), candidate("two")]); await ui.refresh();

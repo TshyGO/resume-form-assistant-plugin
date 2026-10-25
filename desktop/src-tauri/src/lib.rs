@@ -82,7 +82,8 @@ struct AppState {
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
     cloud_credentials: Box<dyn cloud_credentials::CredentialStore>,
-    /// Mailbox jobs and account edits serialize without holding the archive lock during network IO.
+    /// Prevent overlapping scheduled/manual scans. User actions use short
+    /// SQLite/archive transactions and never wait for mailbox network IO.
     mailbox_gate: Mutex<()>,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
