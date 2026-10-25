@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DESKTOP_TAG_PREFIX,
+  metricsReadyForRelease,
   assertDistIsClean,
   assertMacOsAdHocSigning,
   verifyChecksums,
@@ -27,6 +28,25 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
 const desktop = resolve(here, "..");
 const script = join(here, "check-desktop-release.js");
+
+test("production metrics work for both owners and stay off for forks, beta and dry runs", () => {
+  for (const repository of ["TshyGO/resume-form-assistant-plugin", "ptjworks/resume-form-assistant-plugin"]) {
+    for (const [tag, event, expected] of [
+      ["desktop-v0.4.5", "push", true],
+      ["desktop-v0.4.5-beta.1", "push", false],
+      ["desktop-v0.4.5", "workflow_dispatch", false],
+      ["", "workflow_dispatch", false],
+      ["v0.4.5", "push", false],
+      ["desktop-v0.4.5;echo injected", "push", false],
+    ]) {
+      assert.equal(metricsReadyForRelease(repository, tag, event), expected);
+      assert.equal(execFileSync(process.execPath, [script, "--metrics-ready", repository, tag, event], { encoding: "utf8" }).trim(), expected ? "1" : "0");
+    }
+  }
+  for (const repository of ["someone/resume-form-assistant-plugin", "ptjworks/resume-form-assistant-plugin-fork", "TshyGO/other"]) {
+    assert.equal(metricsReadyForRelease(repository, "desktop-v0.4.5", "push"), false);
+  }
+});
 
 /** Windows 上 checkout 会把换行变成 CRLF，正则里的换行符就对不上了。 */
 const readText = (path) => readFileSync(path, "utf8").split("\r\n").join("\n");
@@ -313,8 +333,8 @@ test("发版工作流自己也要跑这个检查，并且把该说的话说清�
   assert.match(flow, /metrics_ready=0/);
   assert.match(flow, /metrics_endpoint=/);
   assert.match(flow, /REPOSITORY: \$\{\{ github\.repository \}\}/);
-  assert.match(flow, /"\$REPOSITORY" = "TshyGO\/resume-form-assistant-plugin"/);
-  assert.match(flow, /--release-kind "\$TAG"\)" = "stable"/);
+  assert.match(flow, /RELEASE_EVENT: \$\{\{ github\.event_name \}\}/);
+  assert.match(flow, /--metrics-ready "\$REPOSITORY" "\$TAG" "\$RELEASE_EVENT"/);
   assert.match(flow, /RESUME_USAGE_METRICS_READY: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
   assert.match(flow, /RESUME_USAGE_METRICS_RELEASE_BUILD: \$\{\{ steps\.release-metadata\.outputs\.metrics_ready \}\}/);
   assert.match(flow, /RESUME_USAGE_METRICS_ENDPOINT: \$\{\{ steps\.release-metadata\.outputs\.metrics_endpoint \}\}/);

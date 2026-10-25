@@ -67,12 +67,13 @@ jobs:
         env:
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT: ${{ github.event_name }}
         shell: bash
         run: |
           node desktop/scripts/check-desktop-release.js "$TAG"
           metrics_ready=0
           metrics_endpoint=
-          if [ "$REPOSITORY" = "TshyGO/resume-form-assistant-plugin" ] && [ -n "$TAG" ] && [ "$(node desktop/scripts/check-desktop-release.js --release-kind "$TAG")" = "stable" ]; then
+          if [ "$(node desktop/scripts/check-desktop-release.js --metrics-ready "$REPOSITORY" "$TAG" "$RELEASE_EVENT")" = "1" ]; then
             metrics_ready=1
             metrics_endpoint=https://resume-usage-metrics.nebula-lab.workers.dev/v1/activity
           fi

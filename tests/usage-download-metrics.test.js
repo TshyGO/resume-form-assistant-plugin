@@ -11,6 +11,23 @@ const release = (assets = [asset()], tag = 'desktop-v0.4.3', extra = {}) => ({ i
 const before = '2026-10-10T00:10:00Z';
 const after = '2026-10-11T00:10:00Z';
 
+test('ownership changes preserve saved dataset identity and asset download deltas', async () => {
+  const { REPOSITORY, RELEASES_API_BASE, createDownloadSnapshot, compareDownloadSnapshots } = await load();
+  assert.equal(RELEASES_API_BASE, 'https://api.github.com/repositories/1217054301');
+  const previous = createDownloadSnapshot([release([asset()], 'desktop-v0.4.3', {
+    html_url: 'https://github.com/TshyGO/resume-form-assistant-plugin/releases/tag/desktop-v0.4.3',
+  })], before);
+  const current = createDownloadSnapshot([release([asset(1, 108)], 'desktop-v0.4.3', {
+    html_url: 'https://github.com/ptjworks/resume-form-assistant-plugin/releases/tag/desktop-v0.4.3',
+  })], after);
+  assert.equal(previous.repository, REPOSITORY);
+  assert.equal(current.repository, previous.repository);
+  const report = compareDownloadSnapshots(JSON.parse(JSON.stringify(previous)), current);
+  assert.equal(report.rows[0].asset_id, 1);
+  assert.equal(report.rows[0].increment, 8);
+  assert.equal(report.rows[0].status, 'adjacent_day');
+});
+
 test('classifies actual desktop and extension packages while excluding checksums', async () => {
   const { createDownloadSnapshot } = await load();
   const snapshot = createDownloadSnapshot([
