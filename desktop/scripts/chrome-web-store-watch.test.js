@@ -73,6 +73,11 @@ test("被拒、被警告或下架也提醒；审核中、已上线、已取消�
 
   const takenDown = reminderIssue({ ...staged, submittedState: "PENDING_REVIEW", takenDown: true });
   assert.match(takenDown.title, /已被下架/);
+  // 下架时就算有过审版本，也先提示处理下架，不只给上线命令。
+  const stagedButTakenDown = reminderIssue({ ...staged, takenDown: true }, { repository });
+  assert.match(stagedButTakenDown.title, /已被下架；0\.4\.3 已过审/);
+  assert.match(stagedButTakenDown.body, /先按上面处理下架/);
+  assert.doesNotMatch(reminderIssue(staged, { repository }).body, /先按上面处理下架/);
   assert.match(reminderIssue({ publishedVersions: ["0.4.2"], warned: true }).title, /政策警告/);
 
   for (const submittedState of ["PENDING_REVIEW", "PUBLISHED", "CANCELLED", null]) {

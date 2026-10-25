@@ -88,6 +88,7 @@ export function reminderIssue(status, { repository = "", serverUrl = "https://gi
       "",
       `商店里的 ${shown} 已审核通过，停在 \`STAGED\`。${liveText}；这一版上线或取消之前，下一版也传不上去。`,
       "",
+      ...(status.takenDown ? ["条目已被下架：先按上面处理下架，再决定要不要上线这一版。", ""] : []),
       "确认可以上线后，二选一：",
       "",
       `- 在 tag \`${tag}\` 上运行 ${actionsLink}，勾上 \`release_staged\`。它不上传新包，只在商店状态仍是 \`STAGED\`、版本与这个 tag 的 \`manifest.json\` 一致时才公开：`,
@@ -119,6 +120,7 @@ export function reminderIssue(status, { repository = "", serverUrl = "https://gi
     `商店状态：${describeStatus(status)}。`,
     "",
     `这个 issue 由 ${watchLink} 每天检查后自动打开、更新和关闭。情况还在时手动关掉，下次检查会重新打开一个。`,
+    "补充说明请写在评论里：状态变化时正文会整段重写。正文末尾的隐藏标记不要删，脚本靠它认出这个 issue。",
   ].join("\n");
   const fingerprint = createHash("sha256").update(`${title}\n${text}`).digest("hex").slice(0, 16);
   return { title, body: `${text}\n\n${ISSUE_MARKER} v=${fingerprint} -->`, fingerprint };

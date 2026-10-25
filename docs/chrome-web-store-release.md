@@ -105,7 +105,7 @@ node desktop/scripts/chrome-web-store.js release-staged
 
 商店不会把审核结果通知到仓库，0.4.3 就这样过审后一直停在 `STAGED`，还挡住了 0.4.4 的上传。现在由 [Chrome Web Store Watch](../.github/workflows/chrome-web-store-watch.yml) 每天北京时间 09:23 只读一次商店状态，也可以在 Actions 里手动运行：
 
-- 送审版本变成 `STAGED` 或 `REJECTED`，或者条目收到政策警告、被下架时，它打开一个带「商店提醒」标签的 issue，写明版本、要用的 tag 和上线命令。状态有变化时更新这个 issue 并留言；情况消失后（已经上线，或新版本已送审）留言并自动关闭。照 issue 里的命令上线即可，不用手动关它。
+- 送审版本变成 `STAGED` 或 `REJECTED`，或者条目收到政策警告、被下架时，它打开一个带「商店提醒」标签的 issue，写明版本、要用的 tag 和上线命令。状态有变化时更新这个 issue 并留言；情况消失后（已经上线，或新版本已送审）留言并自动关闭。照 issue 里的命令上线即可，不用手动关它。补充说明写在评论里，正文在状态变化时会整段重写；正文末尾的隐藏标记不要删，脚本靠它认出这个 issue。
 - 它只调用 `status`：不上传、不送审、不上线。商店凭据只给读状态那一步，GitHub token 只给改 issue 那一步。
 - 想让提醒直接指派给某人，在仓库 Settings → Secrets and variables → Actions → Variables 里建 `CHROME_WEB_STORE_WATCH_ASSIGNEES`，写 GitHub 用户名，多个用逗号隔开。不设时只有关注了这个仓库的人会收到通知。
 - 读商店状态失败时这次运行会失败，GitHub 按 Actions 通知设置提醒最后改过定时设置的人。公开仓库 60 天没有活动时，GitHub 会停掉定时工作流，要到 Actions 页面重新启用。
