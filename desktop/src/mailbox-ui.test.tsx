@@ -170,6 +170,16 @@ test("failed accounts explain automatic pause and offer recovery without a popup
   expect(el("mailbox-discovery-note").textContent).toContain("1 个邮箱检查异常");
 });
 
+test("a manually paused mailbox keeps its real connection error", async () => {
+  const { ui, view } = setup();
+  view.accounts[0] = { ...view.accounts[0], paused: true, failures: 0, lastError: "Network" };
+  await ui.refresh();
+  expect(el("mailbox-accounts").textContent).toContain("连不上邮箱");
+  expect(el("mailbox-accounts").textContent).toContain("已暂停检查");
+  expect(el("mailbox-accounts").textContent).not.toContain("自动暂停");
+  expect(el("mailbox-accounts").textContent).not.toContain("部分文件夹或邮件未完成");
+});
+
 test.each(["inbox", "settings"])("network failures appear beside the %s check button even when IPC succeeds", async (where) => {
   const { ui, view, handlers } = setup(); await ui.refresh();
   handlers.mailbox_check = async () => {

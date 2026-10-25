@@ -151,9 +151,11 @@ export function mountMailboxes(
       card.append(node("h3", account.email));
       card.append(node("p", `${account.paused ? "已暂停" : "检查已启用"} · 最近成功检查：${formattedTime(account.lastChecked)}`, "settings-caption"));
       if (account.lastError) {
-        const detail = account.failures === 0
+        const detail = account.failures === 0 && !account.paused
           ? "部分文件夹或邮件未完成，其他邮件已继续扫描；程序会稍后重试。"
-          : `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused ? " 连续失败已自动暂停，处理后恢复检查。" : ` 已连续失败 ${account.failures} 次。`}`;
+          : `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused
+            ? account.failures > 0 ? " 连续失败已自动暂停，处理后恢复检查。" : " 已暂停检查，处理后可恢复检查。"
+            : ` 已连续失败 ${account.failures} 次。`}`;
         card.append(node("p", detail, "mailbox-error"));
       }
       if (account.headerIssues) card.append(node("p", `${account.headerIssues} 封邮件连续三次读不到信头，已停止自动重试；需要时请从邮箱下载后手动导入。`, "mailbox-error"));

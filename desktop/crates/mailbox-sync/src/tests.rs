@@ -329,6 +329,36 @@ fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
     assert_eq!(db.header_issue_count("archive", "account").unwrap(), 0);
 }
 #[test]
+fn deferred_headers_do_not_consume_a_retry_attempt_before_fetching() {
+    let (_dir, db) = database();
+    db.defer_header_retry("archive", "account", "INBOX", 7, 103)
+        .unwrap();
+    assert_eq!(
+        db.prepare_header_retries("archive", "account", "INBOX", 7, 8)
+            .unwrap(),
+        vec![HeaderRetry {
+            uid: 103,
+            attempts: 0
+        }]
+    );
+    assert_eq!(
+        db.record_header_failure("archive", "account", "INBOX", 7, 103)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn partial_checks_preserve_the_last_successful_check_time() {
+    let (_dir, db) = database();
+    db.success("account", 100).unwrap();
+    db.partial_failure("account", Error::Protocol, 200).unwrap();
+    let account = db.account("account").unwrap();
+    assert_eq!(account.last_checked, Some(100));
+    assert_eq!(account.next_check, 260);
+    assert_eq!(account.last_error.as_deref(), Some("Protocol"));
+}
+#[test]
 fn deleting_accounts_cascades_and_archive_scopes_stay_separate() {
     let (_dir, mut db) = database();
     db.commit_scan(

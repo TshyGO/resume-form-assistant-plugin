@@ -250,6 +250,16 @@ async fn scan_folder(
             ))?;
             partial = true;
         }
+        for uid in &batch.deferred_uids {
+            mapped(db.defer_header_retry(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                *uid,
+            ))?;
+            partial = true;
+        }
         for uid in &batch.terminal_uids {
             mapped(db.mark_header_terminal(
                 &expected.archive_id,
@@ -341,6 +351,10 @@ fn scan_account(
                         return Err(error);
                     }
                     partial = true;
+                    // A timeout or protocol error can leave unread IMAP
+                    // responses on this connection. Retry the remaining
+                    // optional folders on the next check with a new session.
+                    break;
                 }
             };
         }
@@ -868,7 +882,8 @@ mod tests {
         assert!(!account.paused);
         assert_eq!(account.failures, 0);
         assert_eq!(account.last_error.as_deref(), Some("Protocol"));
-        assert_eq!(account.next_check - account.last_checked.unwrap(), 60);
+        assert!(account.last_checked.is_none());
+        assert!(account.next_check > 0);
     }
     #[test]
     fn scheduled_checks_do_not_report_success_for_accounts_that_are_not_due() {

@@ -266,6 +266,9 @@ pub struct HeaderBatch {
     pub headers: Vec<(u32, Header)>,
     /// Live messages whose header may be temporarily unavailable.
     pub retry_uids: Vec<u32>,
+    /// Live messages left for a later scan because this batch exhausted the
+    /// immediate recovery budget. These have not failed an individual fetch.
+    pub deferred_uids: Vec<u32>,
     /// Permanently unsupported headers, currently only the explicit size cap.
     pub terminal_uids: Vec<u32>,
 }
@@ -280,12 +283,14 @@ pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>
         Ok(headers) => Ok(HeaderBatch {
             headers,
             retry_uids: Vec::new(),
+            deferred_uids: Vec::new(),
             terminal_uids: Vec::new(),
         }),
         Err(Error::Protocol | Error::TooLarge) if uids.len() > 1 => {
             let mut batch = HeaderBatch {
                 headers: Vec::new(),
                 retry_uids: Vec::new(),
+                deferred_uids: Vec::new(),
                 terminal_uids: Vec::new(),
             };
             for uid in uids.iter().take(HEADER_RETRY_BUDGET) {
@@ -297,18 +302,20 @@ pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>
                 }
             }
             batch
-                .retry_uids
+                .deferred_uids
                 .extend_from_slice(&uids[uids.len().min(HEADER_RETRY_BUDGET)..]);
             Ok(batch)
         }
         Err(Error::Protocol) => Ok(HeaderBatch {
             headers: Vec::new(),
             retry_uids: uids.to_vec(),
+            deferred_uids: Vec::new(),
             terminal_uids: Vec::new(),
         }),
         Err(Error::TooLarge) => Ok(HeaderBatch {
             headers: Vec::new(),
             retry_uids: Vec::new(),
+            deferred_uids: Vec::new(),
             terminal_uids: uids.to_vec(),
         }),
         Err(error) => Err(error),
@@ -716,7 +723,8 @@ mod tests {
         let (mut s, task) = session(script).await;
         let batch = headers_resilient(&mut s, &uids).await.unwrap();
         assert!(batch.headers.is_empty());
-        assert_eq!(batch.retry_uids, uids);
+        assert_eq!(batch.retry_uids, uids[..HEADER_RETRY_BUDGET]);
+        assert_eq!(batch.deferred_uids, uids[HEADER_RETRY_BUDGET..]);
         task.await.unwrap();
     }
     #[tokio::test]
