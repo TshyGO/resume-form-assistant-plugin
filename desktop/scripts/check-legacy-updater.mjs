@@ -28,4 +28,4 @@ try {
 }
 console.log(JSON.stringify({ released_tag: 'desktop-v0.4.4', source: released,
   pre_transfer_bridge_offer: true, post_transfer_new_owner_accepted: false,
-  repository_transfer_approved: false, scope: 'released-source replay, not installed-binary acceptance' }));
+  legacy_in_app_transfer_safe: false, scope: 'released-source replay, not installed-binary acceptance; operator decision is separate' }));

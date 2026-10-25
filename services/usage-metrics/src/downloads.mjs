@@ -6,8 +6,8 @@ export class DownloadCollectionError extends Error {
 }
 
 const BASE = RELEASES_API_BASE;
-// The 22 published releases already require 23 calls. Leave room for bridge
-// and Stable releases while staying below the Workers Free 50-subrequest cap.
+// The 22 published releases already require 23 calls. Leave room for further
+// desktop and extension releases below the Workers Free 50-subrequest cap.
 const MAX_GITHUB_REQUESTS = 40;
 
 export async function fetchReleases(fetchImpl, token) {

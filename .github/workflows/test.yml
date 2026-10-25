@@ -40,6 +40,24 @@ jobs:
           node -e "const r=JSON.parse(require('node:fs').readFileSync('report.json','utf8'));if(r.counts.dau!==0||r.downloads!==null)process.exit(1)"
       - name: Verify deploy bundle without uploading
         run: npx wrangler deploy --dry-run --outdir output/dry-run
+      - name: Record tested Worker provenance
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          printf '%s\n' "$SOURCE_COMMIT" > output/source-commit.txt
+          git rev-parse HEAD > output/checkout-commit.txt
+          sha256sum output/worker.mjs > output/worker.sha256
+      - name: Save tested Worker for controlled deployment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: usage-metrics-worker-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            services/usage-metrics/output/worker.mjs
+            services/usage-metrics/output/worker.sha256
+            services/usage-metrics/output/source-commit.txt
+            services/usage-metrics/output/checkout-commit.txt
+          if-no-files-found: error
+          retention-days: 14
   test:
     runs-on: ubuntu-latest
     steps:

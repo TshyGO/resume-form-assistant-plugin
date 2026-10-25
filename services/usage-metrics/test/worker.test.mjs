@@ -303,7 +303,7 @@ test('request budgets and mid-collection failures leave no partial download snap
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_download_snapshot').first()).n, 0);
 });
 
-test('download collection has room for the existing releases plus a desktop and extension bridge', async () => {
+test('download collection has room for the existing releases plus two further releases', async () => {
   const releases = Array.from({ length: 24 }, (_, i) => ({ id: i + 1, draft: false, assets: [] }));
   const fetchPage = githubFixture(releases);
   let calls = 0;
