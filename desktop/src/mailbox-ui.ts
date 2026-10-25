@@ -5,7 +5,7 @@ export { mailboxProvider } from "./mailbox-providers.ts";
 
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
 export interface MailCandidate { id: string; accountId: string; email: string; header: MailHeader; reasons: string[] }
-export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; connection?: MailConnection }
+export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection }
 export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
 interface IgnoreReport { ignored: number; unchanged: number }
@@ -13,6 +13,7 @@ interface CheckReport {
   checkedAccounts: number;
   succeededAccounts: number;
   failedAccounts: Array<{ accountId: string; message: string; paused: boolean }>;
+  partialAccounts?: Array<{ accountId: string; message: string; paused: boolean }>;
   skippedPaused: number;
 }
 
@@ -147,12 +148,16 @@ export function mountMailboxes(
       throw { message: `${prefix}没有取得检查结果，请等待桌面更新完成后重试。` };
     }
     const paused = report.skippedPaused + report.failedAccounts.filter((account) => account.paused).length;
+    const partial = report.partialAccounts ?? [];
     const recovery = paused ? ` ${paused} 个邮箱已暂停，请到「设置 → 邮箱」处理后点「恢复检查」。` : "";
     if (!report.checkedAccounts) {
       say(where, prefix + (paused ? `本次未检查邮箱。${recovery}` : "还没有连接邮箱，请先到「设置 → 邮箱」连接。"), true);
-    } else if (report.failedAccounts.length) {
-      const reasons = [...new Set(report.failedAccounts.map((account) => account.message))].join("；");
-      say(where, `${prefix}已检查 ${report.checkedAccounts} 个邮箱：${report.succeededAccounts} 个成功，${report.failedAccounts.length} 个失败。${reasons}${recovery}`, true);
+    } else if (report.failedAccounts.length || partial.length) {
+      const reasons = [...new Set([...report.failedAccounts, ...partial].map((account) => account.message))].join("；");
+      const result = [`${report.succeededAccounts} 个完成`];
+      if (partial.length) result.push(`${partial.length} 个部分完成`);
+      if (report.failedAccounts.length) result.push(`${report.failedAccounts.length} 个失败`);
+      say(where, `${prefix}已检查 ${report.checkedAccounts} 个邮箱：${result.join("，")}。${reasons}${recovery}`, true);
     } else {
       say(where, `${prefix}已成功检查 ${report.succeededAccounts} 个邮箱，请查看待确认邮件。${recovery}`, paused > 0);
     }
@@ -168,7 +173,13 @@ export function mountMailboxes(
       const card = node("article", undefined, "mailbox-account");
       card.append(node("h3", account.email));
       card.append(node("p", `${account.paused ? "已暂停" : "检查已启用"} · 最近成功检查：${formattedTime(account.lastChecked)}`, "settings-caption"));
-      if (account.lastError) card.append(node("p", `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused ? " 连续失败已自动暂停，处理后恢复检查。" : ` 已连续失败 ${account.failures} 次。`}`, "mailbox-error"));
+      if (account.lastError) {
+        const detail = account.failures === 0
+          ? "部分文件夹或邮件未完成，其他邮件已继续扫描；程序会稍后重试。"
+          : `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused ? " 连续失败已自动暂停，处理后恢复检查。" : ` 已连续失败 ${account.failures} 次。`}`;
+        card.append(node("p", detail, "mailbox-error"));
+      }
+      if (account.headerIssues) card.append(node("p", `${account.headerIssues} 封邮件连续三次读不到信头，已停止自动重试；需要时请从邮箱下载后手动导入。`, "mailbox-error"));
       const controls = node("div", undefined, "settings-actions");
       controls.append(button("修改连接 / 更新凭据", () => {
         email.value = account.email; secret.value = ""; updateProvider();
@@ -367,7 +378,7 @@ export function mountMailboxes(
         showProgress("checking", "邮箱已连接，正在检查来信…", "连接已保存。正在检查最近 30 天的邮件，请稍候。", 3);
         say("settings", "连接已保存，正在检查最近 30 天的邮件…");
         const report = await checkNow("settings", "连接已保存。");
-        if (report.failedAccounts.length || !report.checkedAccounts) {
+        if (report.failedAccounts.length || report.partialAccounts?.length || !report.checkedAccounts) {
           showProgress("error", "邮箱已连接，来信检查尚未完成", get("mailbox-settings-status").textContent ?? "请核对网络后点击立即检查。", 3);
         } else showProgress("connected", "连接成功，来信检查已完成", "下一步：到“招聘通知 → 待确认”查看发现的邮件，没有候选时也可以手动导入。", 3);
       } catch (error) {

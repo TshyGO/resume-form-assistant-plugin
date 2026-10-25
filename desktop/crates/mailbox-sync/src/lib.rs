@@ -5,7 +5,7 @@ pub mod discovery;
 pub mod imap;
 mod rules;
 pub use config::{ConnectionConfig, Encryption};
-pub use db::{Account, Candidate, Cursor, Database};
+pub use db::{Account, Candidate, Cursor, Database, HeaderRetry};
 pub use rules::{classify, Header};
 use serde::{Deserialize, Serialize};
 

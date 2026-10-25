@@ -16,7 +16,7 @@ const candidate = (id: string, subject = "星河科技面试邀请"): MailCandid
   id, accountId: "account", email: "a@qq.com", header: { fromAddr: "hr@example.com", fromName: "星河科技", subject, sentAt: "2026-10-24T04:00:00Z" }, reasons: ["匹配申请公司：星河科技", "标题包含：面试"],
 });
 function setup(items = [candidate("one")]) {
-  const view: MailboxView = { accounts: [{ id: "account", email: "a@qq.com", paused: false, failures: 0, lastError: null, lastChecked: null }], candidates: items, pendingCount: items.length };
+  const view: MailboxView = { accounts: [{ id: "account", email: "a@qq.com", paused: false, failures: 0, lastError: null, lastChecked: null, headerIssues: 0 }], candidates: items, pendingCount: items.length };
   const handlers: Record<string, (args?: Record<string, unknown>) => unknown> = {};
   const invoke = vi.fn(async (name: string, args?: Record<string, unknown>) => {
     if (handlers[name]) return handlers[name](args);
@@ -193,9 +193,29 @@ test("a partial check reports failures and skips without masking successful acco
   const { handlers } = setup();
   handlers.mailbox_check = async () => ({ checkedAccounts: 2, succeededAccounts: 1, failedAccounts: [{ accountId: "account", message: "网络不可用", paused: true }], skippedPaused: 1 });
   fireEvent.click(el("mailbox-inbox-check"));
-  await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("1 个成功，1 个失败"));
+  await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("1 个完成，1 个失败"));
   expect(el("mailbox-inbox-status").textContent).toContain("2 个邮箱已暂停");
   expect(el("mailbox-inbox-status").textContent).toContain("网络不可用");
+});
+
+test("partial folder checks stay visible without claiming the whole account failed", async () => {
+  const { ui, view, handlers } = setup(); await ui.refresh();
+  handlers.mailbox_check = async () => {
+    view.accounts[0].lastError = "Protocol"; view.accounts[0].failures = 0;
+    return { ...checked, succeededAccounts: 0, partialAccounts: [{ accountId: "account", message: "垃圾邮件文件夹未完成", paused: false }] };
+  };
+  fireEvent.click(el("mailbox-inbox-check"));
+  await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("1 个部分完成"));
+  expect(el("mailbox-inbox-status").textContent).toContain("垃圾邮件文件夹未完成");
+  await waitFor(() => expect(el("mailbox-accounts").textContent).toContain("部分文件夹或邮件未完成"));
+});
+
+test("headers abandoned after three retries point to manual import", async () => {
+  const { ui, view } = setup();
+  view.accounts[0].headerIssues = 2;
+  await ui.refresh();
+  expect(el("mailbox-accounts").textContent).toContain("2 封邮件连续三次读不到信头");
+  expect(el("mailbox-accounts").textContent).toContain("手动导入");
 });
 
 test("connecting successfully cannot overwrite a subsequent scan failure", async () => {
