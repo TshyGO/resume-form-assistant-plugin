@@ -25,7 +25,7 @@ pub fn fail(error: Error) -> CommandError {
         Error::Storage => "邮箱设置或扫描记录未能保存，请检查本机磁盘后重试。",
         Error::Missing => "找不到这封候选邮件，可能已被移动或删除。请立即检查邮箱，或忽略此条。",
         Error::TooLarge => "邮件或信头过大，未能读取。单封邮件上限 25 MiB，可改用截图或粘贴文本。",
-        Error::Changed => "邮箱编号或当前档案已变化，未保存邮件。请立即检查后重新确认。",
+        Error::Changed => "邮箱配置、邮件编号或当前档案已变化，未保存邮件。请立即检查后重新确认。",
         Error::Busy => "邮箱操作正在进行，请完成后再试。",
         Error::Credentials => "系统凭据库暂时不可用或没有授权码，请解锁凭据库，或重新填写授权码并测试连接。",
     };
@@ -106,7 +106,10 @@ fn save(
         &email, &secret, &config,
     )))?;
     let db = database(state)?;
-    persist_configured_account(&db, state.credentials.as_ref(), &email, &secret, &config)
+    // Serialize the short config commit with scan/import commits, never the network.
+    with_store(state, |_| {
+        persist_configured_account(&db, state.credentials.as_ref(), &email, &secret, &config)
+    })
 }
 #[cfg(test)]
 fn persist_account(
@@ -189,6 +192,14 @@ fn companies(state: &AppState, expected: &ArchiveIdentity) -> Result<Vec<String>
         Ok(companies)
     })
 }
+fn check_connection(db: &Database, expected: &Account) -> Result<()> {
+    let current = mapped(db.account(&expected.id))?;
+    if current.connection != expected.connection {
+        return Err(fail(Error::Changed));
+    }
+    Ok(())
+}
+
 async fn scan_folder(
     state: &AppState,
     db: &mut Database,
@@ -205,6 +216,7 @@ async fn scan_folder(
         // Short archive lock only for local matching and persistence. No network.
         with_store(state, |store| {
             check_identity(store, expected)?;
+            check_connection(db, account)?;
             let mut found = Vec::new();
             for (uid, header) in headers {
                 let reasons = classify(&header, companies);
@@ -235,6 +247,7 @@ async fn scan_folder(
     // Includes empty scans and expunged gaps, bounded by UIDNEXT snapshot.
     with_store(state, |store| {
         check_identity(store, expected)?;
+        check_connection(db, account)?;
         mapped(db.commit_scan(
             &expected.archive_id,
             &account.id,
@@ -499,6 +512,7 @@ async fn confirm_many(
                 imap::download(session.as_mut().expect("session established"), &item).await;
             match download {
                 Ok(bytes) => match with_store(state, |store| {
+                    check_connection(db, &account)?;
                     persist_confirmed(store, db, expected, &id, &bytes)
                 }) {
                     Ok(true) => report.duplicates += 1,
@@ -526,6 +540,7 @@ fn persist_confirmed(
 ) -> Result<bool> {
     use sha2::{Digest, Sha256};
     check_identity(store, expected)?;
+    mapped(db.candidate(&expected.archive_id, id))?;
     // A crash can happen after archive import but before the local candidate is
     // consumed. Exact bytes also make this retry idempotent for ID-less mail.
     let sha = format!("{:x}", Sha256::digest(bytes));
@@ -672,6 +687,21 @@ pub fn start(app: AppHandle) {
 mod tests {
     use super::*;
     use crate::ai_credentials::{CredentialStore, MemoryStore, UnavailableStore};
+    #[test]
+    fn reconfigured_endpoint_rejects_work_from_the_previous_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        let old = db.save_account("a", "a@qq.com").unwrap();
+        let mut changed = old.connection.clone();
+        changed.host = "imap.school.example".into();
+        db.save_configured_account("a", &old.email, &changed)
+            .unwrap();
+        assert_eq!(
+            check_connection(&db, &old).unwrap_err().code,
+            fail(Error::Changed).code
+        );
+        check_connection(&db, &db.account("a").unwrap()).unwrap();
+    }
     #[test]
     fn custom_school_settings_and_os_credentials_keep_the_same_account_on_update() {
         let dir = tempfile::tempdir().unwrap();
