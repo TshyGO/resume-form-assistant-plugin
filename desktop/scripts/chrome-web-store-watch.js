@@ -11,12 +11,16 @@
 //
 // 这个脚本不读商店凭据，也不调商店接口；--sync 只用 GITHUB_TOKEN 改 issue。
 
+import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { redact } from "./chrome-web-store.js";
 
 export const ISSUE_LABEL = "商店提醒";
-export const ISSUE_MARKER = "<!-- chrome-web-store-watch -->";
+// 正文末尾的标记带着生成内容的指纹：`<!-- chrome-web-store-watch v=… -->`。
+// 只比指纹，维护者在正文里补的说明不会被下次运行覆盖。
+export const ISSUE_MARKER = "<!-- chrome-web-store-watch";
+const FINGERPRINT = /<!-- chrome-web-store-watch v=([0-9a-f]{16}) -->/;
 const LABEL_COLOR = "D93F0B";
 const LABEL_DESCRIPTION = "Chrome 商店审核结果需要维护者处理（自动维护）";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -106,7 +110,8 @@ export function reminderIssue(status, { repository = "", serverUrl = "https://gi
   if (sections.length === 0) return null;
 
   const watchLink = repoUrl ? `[Chrome Web Store Watch](${repoUrl}/actions/workflows/chrome-web-store-watch.yml)` : "Chrome Web Store Watch";
-  const body = [
+  const title = `Chrome 商店：${headlines.join("；")}`;
+  const text = [
     ...sections,
     "",
     "---",
@@ -114,20 +119,15 @@ export function reminderIssue(status, { repository = "", serverUrl = "https://gi
     `商店状态：${describeStatus(status)}。`,
     "",
     `这个 issue 由 ${watchLink} 每天检查后自动打开、更新和关闭。情况还在时手动关掉，下次检查会重新打开一个。`,
-    "",
-    ISSUE_MARKER,
   ].join("\n");
-  return { title: `Chrome 商店：${headlines.join("；")}`, body };
-}
-
-function normalizeBody(text) {
-  return String(text ?? "").replace(/\r\n/g, "\n").trim();
+  const fingerprint = createHash("sha256").update(`${title}\n${text}`).digest("hex").slice(0, 16);
+  return { title, body: `${text}\n\n${ISSUE_MARKER} v=${fingerprint} -->`, fingerprint };
 }
 
 /** 指派人写错不能让提醒开不出来：不合法的用户名只跳过，由调用方打印出来。 */
 export function parseAssignees(text) {
   const logins = String(text ?? "").split(/[\s,]+/).filter((login) => login.length > 0);
-  const valid = logins.filter((login) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login));
+  const valid = logins.filter((login) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(login));
   return { valid, invalid: logins.filter((login) => !valid.includes(login)) };
 }
 
@@ -203,16 +203,22 @@ export async function syncReminderIssue({
     return { action: open.length > 0 ? "closed" : "none", numbers: open.map((item) => item.number) };
   }
 
-  const [current] = open;
+  const [current, ...duplicates] = open;
   if (current) {
-    if (current.title === issue.title && normalizeBody(current.body) === normalizeBody(issue.body)) {
+    // 多出来的提醒（手动重开的旧 issue 等）指向编号最小的那个后关闭，不留陈旧状态。
+    for (const item of duplicates) {
+      await github("POST", `/issues/${item.number}/comments`, { body: `重复的商店提醒，以 #${current.number} 为准，自动关闭。` });
+      await github("PATCH", `/issues/${item.number}`, { state: "closed", state_reason: "not_planned" });
+    }
+    if (FINGERPRINT.exec(String(current.body ?? ""))?.[1] === issue.fingerprint) {
       return { action: "unchanged", numbers: [current.number] };
     }
-    await github("PATCH", `/issues/${current.number}`, { title: issue.title, body: issue.body });
-    // 改正文不会通知任何人，留言才会。
+    // 改正文不会通知任何人，留言才会。先留言：正文没改成，下次运行指纹仍不同，会再试一次，
+    // 通知不会因为正文已经是新的而丢掉。
     await github("POST", `/issues/${current.number}/comments`, {
-      body: `商店状态有变化，已更新上面的说明：${issue.title.replace(/^Chrome 商店：/, "")}。`,
+      body: `商店状态有变化：${issue.title.replace(/^Chrome 商店：/, "")}。上面的说明已更新。`,
     });
+    await github("PATCH", `/issues/${current.number}`, { title: issue.title, body: issue.body });
     return { action: "updated", numbers: [current.number] };
   }
 

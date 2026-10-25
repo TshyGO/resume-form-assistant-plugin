@@ -24,6 +24,12 @@ jobs:
       contents: read
       issues: write
     steps:
+      # 和 release.yml 一样，只让 main 上审过的代码拿商店凭据；在别的分支手动运行直接失败。
+      - name: Only run from main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = "refs/heads/main" || { echo "Chrome Web Store Watch 只在 main 上运行，当前是 $REF"; exit 1; }
+
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

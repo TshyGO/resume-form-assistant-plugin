@@ -59,7 +59,8 @@ test("过审停在 STAGED 时提醒写明版本、tag 和上线命令", () => {
     `gh workflow run release.yml --repo ${repository} --ref v0.4.3 -f dry_run=false -f release_staged=true`,
   ));
   assert.ok(issue.body.includes(`https://github.com/${repository}/actions/workflows/release.yml`));
-  assert.ok(issue.body.includes(ISSUE_MARKER));
+  assert.match(issue.body, /\n<!-- chrome-web-store-watch v=[0-9a-f]{16} -->$/);
+  assert.ok(issue.body.endsWith(`v=${issue.fingerprint} -->`));
   // 不知道仓库时命令照样能在克隆里用，只是不带 --repo。
   assert.match(reminderIssue(staged).body, /gh workflow run release\.yml --ref v0\.4\.3 /);
 });
@@ -124,12 +125,13 @@ test("指派人填错时去掉指派人照样开出提醒", async () => {
   assert.deepEqual(result, { action: "opened", numbers: [8] });
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].assignees, undefined);
-  assert.deepEqual(parseAssignees(" TshyGO, bad/name ,,"), { valid: ["TshyGO"], invalid: ["bad/name"] });
+  assert.deepEqual(parseAssignees(" TshyGO, bad/name ,,foo-,-foo"), { valid: ["TshyGO"], invalid: ["bad/name", "foo-", "-foo"] });
 });
 
-test("状态没变就不动 issue；变了才更新并留言", async () => {
+test("状态没变就不动 issue，维护者补的说明也保留；变了先留言再更新", async () => {
   const issue = reminderIssue(staged, { repository });
-  const existing = { number: 5, title: issue.title, body: issue.body.replace(/\n/g, "\r\n") };
+  const edited = `维护者补充：周一再上线。\r\n\r\n${issue.body.replace(/\n/g, "\r\n")}`;
+  const existing = { number: 5, title: "维护者改过的标题", body: edited };
   const unchanged = fakeGitHub({ "GET /issues": [existing] });
   assert.deepEqual(
     await syncReminderIssue({ issue, status: staged, repository, token, fetchImpl: unchanged.fetchImpl }),
@@ -139,6 +141,7 @@ test("状态没变就不动 issue；变了才更新并留言", async () => {
 
   const rejectedStatus = { ...staged, submittedState: "REJECTED" };
   const rejected = reminderIssue(rejectedStatus, { repository });
+  assert.notEqual(rejected.fingerprint, issue.fingerprint);
   const changed = fakeGitHub({
     "GET /issues": [existing],
     "PATCH /issues/5": (body) => jsonResponse({ number: 5, ...body }),
@@ -148,8 +151,43 @@ test("状态没变就不动 issue；变了才更新并留言", async () => {
     await syncReminderIssue({ issue: rejected, status: rejectedStatus, repository, token, fetchImpl: changed.fetchImpl }),
     { action: "updated", numbers: [5] },
   );
-  assert.deepEqual(changed.calls[1].body, { title: rejected.title, body: rejected.body });
-  assert.match(changed.calls[2].body.body, /被商店拒绝/);
+  // 留言在前：改正文之后留言失败的话，下次运行会以为已经通知过。
+  assert.deepEqual(changed.calls.slice(1).map((call) => `${call.method} ${call.path}`), [
+    "POST /issues/5/comments",
+    "PATCH /issues/5",
+  ]);
+  assert.match(changed.calls[1].body.body, /被商店拒绝/);
+  assert.deepEqual(changed.calls[2].body, { title: rejected.title, body: rejected.body });
+
+  // 留言失败时不改正文，下次运行指纹仍不同，会再留言。
+  const commentFails = fakeGitHub({
+    "GET /issues": [existing],
+    "POST /issues/5/comments": () => jsonResponse({ message: "Server Error" }, 502),
+  });
+  await assert.rejects(
+    () => syncReminderIssue({ issue: rejected, status: rejectedStatus, repository, token, fetchImpl: commentFails.fetchImpl }),
+    (error) => error instanceof StoreWatchError && error.status === 502,
+  );
+  assert.equal(commentFails.calls.some((call) => call.method === "PATCH"), false);
+});
+
+test("多出来的提醒 issue 指向最早那个后关闭", async () => {
+  const issue = reminderIssue(staged, { repository });
+  const github = fakeGitHub({
+    "GET /issues": [
+      { number: 12, title: "旧提醒", body: `旧\n${ISSUE_MARKER} v=0000000000000000 -->` },
+      { number: 5, title: issue.title, body: issue.body },
+    ],
+    "POST /issues/12/comments": { id: 3 },
+    "PATCH /issues/12": { number: 12, state: "closed" },
+  });
+  assert.deepEqual(
+    await syncReminderIssue({ issue, status: staged, repository, token, fetchImpl: github.fetchImpl }),
+    { action: "unchanged", numbers: [5] },
+  );
+  assert.match(github.calls[1].body.body, /以 #5 为准/);
+  assert.deepEqual(github.calls[2].body, { state: "closed", state_reason: "not_planned" });
+  assert.equal(github.calls.length, 3);
 });
 
 test("情况消失后留言并关闭提醒；不碰别的同标签 issue 和 PR", async () => {
@@ -239,6 +277,9 @@ test("提醒工作流每天只读商店，商店凭据和 GitHub token 分在两
   assert.match(workflow, /issues: write/);
   assert.doesNotMatch(workflow, /contents: write/);
   assert.match(workflow, /persist-credentials: false/);
+  // 别的分支手动运行时，在拿到商店凭据之前就失败。
+  const guard = workflow.indexOf('test "$REF" = "refs/heads/main"');
+  assert.ok(guard > 0 && guard < workflow.indexOf("secrets."));
   // 只读商店：不出现上传、送审、上线。
   assert.match(workflow, /chrome-web-store\.js status/);
   assert.doesNotMatch(workflow, /chrome-web-store\.js (publish|release-staged)/);
