@@ -504,7 +504,7 @@ const inbox = mountInbox(command, {
 
 const mailboxes = mountMailboxes(command, () => inbox.refresh(), () => {
   void navigate("settings").then((moved) => { if (moved) settingsNavigation.select("mailbox"); });
-}, inbox);
+}, inbox, () => { void navigate("inbox"); });
 void mailboxes.refresh();
 if (events?.listen) void events.listen("mailbox-changed", () => { void mailboxes.refresh(); });
 document.getElementById("view-inbox")?.addEventListener("click", (event) => {

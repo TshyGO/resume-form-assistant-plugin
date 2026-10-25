@@ -426,21 +426,36 @@
               </section>
               <section id="settings-mailbox" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-mailbox" tabindex="0" data-settings-panel="mailbox" hidden>
                 <div class="settings-card">
-                  <header class="settings-card-head"><h2>连接邮箱</h2><p>自动发现招聘相关来信，由你确认后存进档案。支持 QQ、163、126，可连接多个邮箱。</p></header>
+                  <header class="settings-card-head"><h2>连接邮箱</h2><p>自动发现招聘相关来信，由你确认后存进档案。支持常见邮箱；学校邮箱可自动识别或手动配置，可连接多个邮箱。</p></header>
                   <form id="mailbox-form">
                     <div class="settings-form-grid">
                       <div class="settings-field"><label for="mailbox-email">邮箱地址</label><input id="mailbox-email" type="email" autocomplete="username" placeholder="example@qq.com" required /><p id="mailbox-server" class="field-hint">填写邮箱后自动识别服务器。</p></div>
-                      <div class="settings-field"><label for="mailbox-secret">邮箱授权码</label><input id="mailbox-secret" type="password" autocomplete="new-password" required aria-describedby="mailbox-secret-hint" /><p id="mailbox-secret-hint" class="field-hint">在邮箱网页端生成，不是登录密码。只存系统凭据库，保存后不回显。</p></div>
+                      <div class="settings-field"><label id="mailbox-secret-label" for="mailbox-secret">邮箱授权码</label><input id="mailbox-secret" type="password" autocomplete="new-password" required aria-describedby="mailbox-secret-hint" /><p id="mailbox-secret-hint" class="field-hint">在邮箱网页端生成，不是登录密码。只存系统凭据库，保存后不回显。</p></div>
                     </div>
+                    <details id="mailbox-configuration" class="settings-fold">
+                      <summary>核对或修改服务器与登录账号</summary>
+                      <p class="settings-caption">按学校信息中心或邮箱官方的客户端设置填写。网页登录地址不能直接作为 IMAP 地址。</p>
+                      <div class="settings-form-grid">
+                        <div class="settings-field"><label for="mailbox-host">IMAP 服务器</label><input id="mailbox-host" type="text" placeholder="例如 imap.example.edu.cn" autocomplete="off" required /></div>
+                        <div class="settings-field"><label for="mailbox-port">端口</label><input id="mailbox-port" type="number" value="993" min="1" max="65535" required /></div>
+                        <div class="settings-field"><label for="mailbox-encryption">加密方式</label><select id="mailbox-encryption"><option value="tls">SSL / TLS（连接时加密）</option><option value="starttls">STARTTLS（登录前升级加密）</option></select></div>
+                        <div class="settings-field"><label for="mailbox-username">登录账号</label><input id="mailbox-username" type="text" autocomplete="off" required /><p class="field-hint">默认完整邮箱地址；如学校要求短用户名，可修改。</p></div>
+                      </div>
+                      <label><input id="mailbox-send-id" type="checkbox" /> 发送客户端标识（网易企业邮等服务可能要求）</label>
+                    </details>
+                    <div class="settings-actions"><button id="mailbox-detect" type="button">重新识别配置</button><button id="mailbox-manual-import" type="button">改用导入邮件文件</button></div>
+                    <p id="mailbox-detection" class="field-hint" role="status">填写邮箱后自动识别；无法识别时，可按学校或邮箱官方教程手动填写。</p>
+                    <p class="settings-caption">学校邮箱尽量支持：部分学校需要校园网或未开放 IMAP，毕业后可能回收邮箱。请保留重要邮件的本地副本。</p>
                     <div class="settings-form-actions"><button id="mailbox-save" class="primary" type="submit">测试连接并保存</button><p id="mailbox-settings-status" class="settings-inline-msg" role="status"></p></div>
                   </form>
                   <details class="settings-fold">
                     <summary>怎么开启 IMAP、获取授权码？</summary>
                     <label for="mailbox-guide-provider">选择邮箱教程</label>
-                    <select id="mailbox-guide-provider"><option value="qq">QQ 邮箱</option><option value="163">163 邮箱</option><option value="126">126 邮箱</option></select>
+                    <select id="mailbox-guide-provider"><option value="qq">QQ 邮箱</option><option value="163">163 邮箱</option><option value="126">126 邮箱</option><option value="gmail">Gmail</option><option value="icloud">iCloud</option><option value="sina">新浪邮箱</option><option value="sohu">搜狐邮箱</option><option value="aliyun">阿里邮箱</option><option value="139">139 邮箱</option><option value="school">学校 / 其他邮箱</option></select>
                     <figure class="mailbox-guide"><img id="mailbox-guide-image" src="/mailbox-guide-qq.svg" alt="QQ 邮箱：进入设置，开启 IMAP，完成验证后生成授权码" /><figcaption>操作步骤示意，具体按钮以邮箱当前界面为准。</figcaption></figure>
                     <ol id="mailbox-guide-steps"></ol>
-                    <p class="settings-caption">生成后直接粘贴到上方授权码框。授权码失效时，用同一邮箱地址重新测试并保存，即可更新。</p>
+                    <p><a id="mailbox-guide-link" href="#">查看官方帮助</a></p>
+                    <p class="settings-caption">凭据只存系统凭据库，不回显。失效后可从下方“修改连接 / 更新凭据”重新测试；修改服务器或登录账号会清空该连接的候选与扫描记录，已入档邮件保留。</p>
                   </details>
                 </div>
                 <div class="settings-card">

@@ -4,7 +4,7 @@
 
 ## 行为与实现
 
-- 首批 QQ（含 foxmail.com 地址）、163、126，固定对应服务器与 TLS 993，不开放自定义服务器。`async-imap` 0.12 支持 NetEase 登录后的 `ID`、只读 `EXAMINE`、UID 搜索与 `BODY.PEEK`。
+- 第一版 QQ（含 foxmail.com 地址）、163、126 使用预设服务器与 TLS 993；#332 增加更多邮箱和可编辑的服务器配置，见 [学校邮箱接入说明](mailbox-school.md)。`async-imap` 0.12 支持 NetEase 登录后的 `ID`、只读 `EXAMINE`、UID 搜索与 `BODY.PEEK`。
 - `mailbox-sync` crate 负责 IMAP、信头解码、本地筛选与机器状态库；`mailbox_commands.rs` 负责凭据、调度、档案身份检查与复用 `evidence_commands::import_bytes`。
 - 启动检查一次；其后进程内每 30 秒判断是否到期，成功后 10 分钟再检查，失败依次等约 60、120 秒后重试，第三次失败暂停。恢复检查或更新授权码后重新检查；完全退出后没有 OS 定时任务。
 - 每个档案、账号、文件夹保存 `UIDVALIDITY + 最后处理 UID`，首次或 UIDVALIDITY 变化用服务器收件日期回看最近 30 天。优先快照 UIDNEXT；163 / 126 的 Coremail 未返回 UIDNEXT 时，用只返回编号的 `UID SEARCH ALL` 取得最大 UID，再搜索有界区间，避免 `n:*` 反向区间重复读取最后一封旧信。每批至多 100 封，候选与该批进度同事务提交；网络中断不推进游标，单封缺失或超限信头隔离跳过，不能反复卡住后续邮件。
@@ -52,4 +52,4 @@ npm run build
 | 断网 | 检查或确认中断网，不漏信、不丢候选；恢复网络后可继续 | 未执行 |
 | 多邮箱 / 删除 | 两个邮箱独立进度和凭据；断开一个不影响其他账号或已入档证据 | 未执行 |
 
-用户操作说明见 [用户指南](../user-guide.md#自动发现招聘邮件qq--163--126)，隐私范围见 [数据与隐私](data-privacy.md#73-回复证据导入d09)。
+用户操作说明见 [用户指南](../user-guide.md#自动发现招聘邮件)，隐私范围见 [数据与隐私](data-privacy.md#73-回复证据导入d09)。

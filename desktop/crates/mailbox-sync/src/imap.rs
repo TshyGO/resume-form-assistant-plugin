@@ -1,5 +1,7 @@
 //! The transport exposes only discovery and PEEK reads, never mailbox mutations.
-use crate::{Account, Candidate, Cursor, Error, Header, Provider, Result};
+use crate::{
+    Account, Candidate, ConnectionConfig, Cursor, Encryption, Error, Header, Provider, Result,
+};
 use async_imap::{types::NameAttribute, Session};
 use futures_util::TryStreamExt;
 use std::{collections::HashSet, fmt::Debug, future::Future, time::Duration};
@@ -44,35 +46,70 @@ fn login_error(error: async_imap::error::Error) -> Error {
     }
 }
 pub async fn connect(email: &str, secret: &str) -> Result<LiveSession> {
-    let (_, provider) = Provider::detect(email)?;
+    connect_configured(email, secret, &ConnectionConfig::preset(email)?).await
+}
+pub async fn connect_configured(
+    email: &str,
+    secret: &str,
+    configuration: &ConnectionConfig,
+) -> Result<LiveSession> {
+    let config = configuration.clone().validated(email)?;
     if secret.trim().is_empty() || secret.contains(['\r', '\n', '\0']) {
         return Err(Error::Auth);
     }
     bounded(async {
-        let socket = TcpStream::connect((provider.server(), 993))
+        let socket = TcpStream::connect((config.host.as_str(), config.port))
             .await
             .map_err(|_| Error::Network)?;
-        let connector =
-            tokio_native_tls::native_tls::TlsConnector::new().map_err(|_| Error::Tls)?;
-        // OS trust roots, hostname verification and TLS; no insecure fallback.
+        let starttls = config.encryption == Encryption::Starttls;
+        let socket = if starttls {
+            let mut client = async_imap::Client::new(socket);
+            client
+                .read_response()
+                .await
+                .map_err(|_| Error::Network)?
+                .ok_or(Error::Network)?;
+            // Never authenticate before the upgrade; failure has no plaintext fallback.
+            upgrade_transport(client).await?
+        } else {
+            socket
+        };
+        let connector = tokio_native_tls::native_tls::TlsConnector::builder()
+            .min_protocol_version(Some(tokio_native_tls::native_tls::Protocol::Tlsv12))
+            .build()
+            .map_err(|_| Error::Tls)?;
         let tls = tokio_native_tls::TlsConnector::from(connector)
-            .connect(provider.server(), socket)
+            .connect(&config.host, socket)
             .await
             .map_err(|_| Error::Tls)?;
         let mut client = async_imap::Client::new(tls);
-        client
-            .read_response()
-            .await
-            .map_err(|_| Error::Network)?
-            .ok_or(Error::Network)?;
+        if !starttls {
+            client
+                .read_response()
+                .await
+                .map_err(|_| Error::Network)?
+                .ok_or(Error::Network)?;
+        }
         let mut session = client
-            .login(email, secret.trim())
+            .login(&config.username, secret.trim())
             .await
             .map_err(|(e, _)| login_error(e))?;
-        identify(&mut session, provider).await?;
+        if config.send_id {
+            identify(&mut session, Provider::N163).await?;
+        }
         Ok(session)
     })
     .await
+}
+/// Authentication is deliberately unavailable on the plaintext client path.
+async fn upgrade_transport<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
+    mut client: async_imap::Client<S>,
+) -> Result<S> {
+    client
+        .run_command_and_check_ok("STARTTLS", None)
+        .await
+        .map_err(|_| Error::Tls)?;
+    Ok(client.into_inner())
 }
 pub async fn identify<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     session: &mut Session<S>,
@@ -346,8 +383,8 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     }
     Ok(raw)
 }
-pub async fn test_connection(email: &str, secret: &str) -> Result<()> {
-    let mut session = connect(email, secret).await?;
+pub async fn test_connection(email: &str, secret: &str, config: &ConnectionConfig) -> Result<()> {
+    let mut session = connect_configured(email, secret, config).await?;
     let folders = folders(&mut session).await?;
     for folder in folders {
         bounded(async {
@@ -362,7 +399,7 @@ pub async fn test_connection(email: &str, secret: &str) -> Result<()> {
 
 /// Network credentials never reside in Account or persistence structures.
 pub async fn login_account(account: &Account, secret: &str) -> Result<LiveSession> {
-    connect(&account.email, secret).await
+    connect_configured(&account.email, secret, &account.connection).await
 }
 
 #[cfg(test)]
@@ -427,6 +464,31 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn starttls_refusal_never_sends_login_or_credentials() {
+        use tokio::io::AsyncReadExt;
+        let (stream, mut server) = tokio::io::duplex(2048);
+        let task = tokio::spawn(async move {
+            server.write_all(b"* OK ready\r\n").await.unwrap();
+            let mut reader = BufReader::new(server);
+            let mut command = String::new();
+            reader.read_line(&mut command).await.unwrap();
+            let tag = command.split_whitespace().next().unwrap().to_string();
+            assert_eq!(command.trim_end(), format!("{tag} STARTTLS"));
+            reader
+                .get_mut()
+                .write_all(format!("{tag} NO encryption unavailable\r\n").as_bytes())
+                .await
+                .unwrap();
+            let mut remaining = String::new();
+            reader.read_to_string(&mut remaining).await.unwrap();
+            assert!(remaining.is_empty());
+        });
+        let mut client = async_imap::Client::new(stream);
+        client.read_response().await.unwrap().unwrap();
+        assert!(matches!(upgrade_transport(client).await, Err(Error::Tls)));
+        task.await.unwrap();
+    }
     #[tokio::test]
     async fn netease_identifies_before_opening_mailboxes() {
         let (mut s, task) = session(vec![(

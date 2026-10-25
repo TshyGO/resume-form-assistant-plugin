@@ -1,4 +1,6 @@
-use crate::{retry_delay, Error, Header, Provider, Result, CHECK_INTERVAL, FAILURE_LIMIT};
+use crate::{
+    retry_delay, ConnectionConfig, Error, Header, Provider, Result, CHECK_INTERVAL, FAILURE_LIMIT,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -9,6 +11,7 @@ pub struct Account {
     pub id: String,
     pub email: String,
     pub provider: Provider,
+    pub connection: ConnectionConfig,
     pub paused: bool,
     pub failures: u32,
     pub last_error: Option<String>,
@@ -69,10 +72,19 @@ impl Database {
                 state TEXT NOT NULL CHECK(state IN ('pending','ignored','imported')),
                 UNIQUE(archive,account,fingerprint));
             CREATE INDEX IF NOT EXISTS candidate_pending ON candidates(archive,state);")?;
+        let has_connection = conn
+            .prepare("PRAGMA table_info(accounts)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .iter()
+            .any(|s| s == "connection");
+        if !has_connection {
+            conn.execute("ALTER TABLE accounts ADD COLUMN connection TEXT", [])?;
+        }
         Ok(Self(conn))
     }
     pub fn accounts(&self) -> Result<Vec<Account>> {
-        let mut stmt = self.0.prepare("SELECT id,email,paused,failures,last_error,last_checked,next_check FROM accounts ORDER BY email")?;
+        let mut stmt = self.0.prepare("SELECT id,email,paused,failures,last_error,last_checked,next_check,connection FROM accounts ORDER BY email")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -82,15 +94,24 @@ impl Database {
                 r.get(4)?,
                 r.get(5)?,
                 r.get(6)?,
+                r.get::<_, Option<String>>(7)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, email, paused, failures, last_error, last_checked, next_check) = row?;
-            let (_, provider) = Provider::detect(&email)?;
+            let (id, email, paused, failures, last_error, last_checked, next_check, connection) =
+                row?;
+            let connection = match connection {
+                Some(json) => serde_json::from_str::<ConnectionConfig>(&json)
+                    .map_err(|_| Error::Storage)?
+                    .validated(&email)?,
+                None => ConnectionConfig::preset(&email)?,
+            };
+            let provider = Provider::detect(&email).map_or(Provider::Custom, |(_, p)| p);
             Ok(Account {
                 id,
                 email,
                 provider,
+                connection,
                 paused,
                 failures,
                 last_error,
@@ -107,12 +128,34 @@ impl Database {
             .ok_or(Error::Missing)
     }
     pub fn save_account(&self, id: &str, email: &str) -> Result<Account> {
-        let (email, _) = Provider::detect(email)?;
-        self.0.execute(
-            "INSERT INTO accounts(id,email) VALUES (?1,?2)
-            ON CONFLICT(email) DO UPDATE SET paused=0,failures=0,last_error=NULL,next_check=0",
-            params![id, email],
+        self.save_configured_account(id, email, &ConnectionConfig::preset(email)?)
+    }
+    pub fn save_configured_account(
+        &self,
+        id: &str,
+        email: &str,
+        connection: &ConnectionConfig,
+    ) -> Result<Account> {
+        let email = crate::config::normalize_email(email)?;
+        let connection = connection.clone().validated(&email)?;
+        let previous = self.accounts()?.into_iter().find(|a| a.email == email);
+        let json = serde_json::to_string(&connection).map_err(|_| Error::Storage)?;
+        let tx = self.0.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO accounts(id,email,connection) VALUES (?1,?2,?3)
+            ON CONFLICT(email) DO UPDATE SET connection=excluded.connection,paused=0,failures=0,last_error=NULL,next_check=0",
+            params![id, email, json],
         )?;
+        // UID identities belong to an endpoint + login, not just an email address.
+        if let Some(old) = previous.filter(|a| a.connection != connection) {
+            tx.execute(
+                "UPDATE accounts SET last_checked=NULL WHERE id=?1",
+                [&old.id],
+            )?;
+            tx.execute("DELETE FROM cursors WHERE account=?1", [&old.id])?;
+            tx.execute("DELETE FROM candidates WHERE account=?1", [&old.id])?;
+        }
+        tx.commit()?;
         self.accounts()?
             .into_iter()
             .find(|a| a.email == email)

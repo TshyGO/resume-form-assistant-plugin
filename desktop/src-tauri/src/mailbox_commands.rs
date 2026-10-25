@@ -4,7 +4,9 @@ use crate::{
     ai_data_root, archive_worker, commands::CommandError, evidence_commands, with_store, AppState,
 };
 use archive_store::{ApplicationFilter, ArchiveIdentity, MailKey, Occurred};
-use mailbox_sync::{classify, imap, Account, Candidate, Cursor, Database, Error, Header};
+use mailbox_sync::{
+    classify, imap, Account, Candidate, ConnectionConfig, Cursor, Database, Error, Header,
+};
 use serde::Serialize;
 use std::sync::MutexGuard;
 use tauri::{AppHandle, Emitter};
@@ -12,10 +14,12 @@ type Result<T> = std::result::Result<T, CommandError>;
 
 pub fn fail(error: Error) -> CommandError {
     let message = match error {
-        Error::Address => "请输入 QQ、163 或 126 邮箱地址。",
-        Error::Auth => "邮箱拒绝登录：请确认已开启 IMAP，并填写邮箱生成的授权码，而不是登录密码；授权码失效时请重新生成。",
+        Error::Address => "请输入有效的邮箱地址。",
+        Error::Configuration => "请核对 IMAP 服务器域名、端口、加密方式和登录账号；服务器处不要填写网页链接。",
+        Error::OAuthRequired => "Outlook / Hotmail / Live 需要微软登录授权，当前暂不支持。请改用手动导入邮件。",
+        Error::Auth => "邮箱拒绝登录：请核对登录账号，确认已开启 IMAP；按邮箱或学校教程填写授权码、应用专用密码或登录密码。授权码失效时请重新生成。",
         Error::ImapDisabled => "邮箱尚未开启 IMAP。请按下方教程开启后，再测试连接。",
-        Error::Network => "暂时连不上邮箱服务器，请检查网络后再试。",
+        Error::Network => "暂时连不上邮箱服务器，请核对地址与端口并检查网络；学校邮箱可能需要校园网或没有开放 IMAP，可改用手动导入。",
         Error::Tls => "无法验证邮箱服务器的安全连接，请检查系统时间和网络后重试。",
         Error::Protocol => "邮箱没有完成读取请求，请稍后重试；163 / 126 请核对 IMAP 授权设置。",
         Error::Storage => "邮箱设置或扫描记录未能保存，请检查本机磁盘后重试。",
@@ -79,20 +83,52 @@ fn view(state: &AppState, limit: u32) -> Result<View> {
     })
 }
 
-fn save(state: &AppState, email: String, secret: String) -> Result<()> {
-    let (email, _) = mapped(mailbox_sync::Provider::detect(&email))?;
+fn save(
+    state: &AppState,
+    email: String,
+    secret: String,
+    config: Option<ConnectionConfig>,
+) -> Result<()> {
+    let email = mapped(mailbox_sync::config::normalize_email(&email))?;
+    let config = mapped(match config {
+        Some(config) => config.validated(&email),
+        None => ConnectionConfig::preset(&email),
+    })?;
+    let secret = if mailbox_sync::Provider::detect(&email)
+        .is_ok_and(|(_, p)| p == mailbox_sync::Provider::Gmail)
+    {
+        secret.replace(' ', "")
+    } else {
+        secret
+    };
     // No persistence until the same connection has authenticated and opened folders.
     mapped(tauri::async_runtime::block_on(imap::test_connection(
-        &email, &secret,
+        &email, &secret, &config,
     )))?;
     let db = database(state)?;
-    persist_account(&db, state.credentials.as_ref(), &email, &secret)
+    persist_configured_account(&db, state.credentials.as_ref(), &email, &secret, &config)
 }
+#[cfg(test)]
 fn persist_account(
     db: &Database,
     creds: &dyn crate::ai_credentials::CredentialStore,
     email: &str,
     secret: &str,
+) -> Result<()> {
+    persist_configured_account(
+        db,
+        creds,
+        email,
+        secret,
+        &mapped(ConnectionConfig::preset(email))?,
+    )
+}
+fn persist_configured_account(
+    db: &Database,
+    creds: &dyn crate::ai_credentials::CredentialStore,
+    email: &str,
+    secret: &str,
+    config: &ConnectionConfig,
 ) -> Result<()> {
     let existing = mapped(db.accounts())?
         .into_iter()
@@ -108,7 +144,7 @@ fn persist_account(
     creds
         .set_key(&credential_id, secret.trim())
         .map_err(|_| fail(Error::Credentials))?;
-    if let Err(error) = db.save_account(&id, &email) {
+    if let Err(error) = db.save_configured_account(&id, &email, config) {
         let restored = match previous {
             Some(value) => creds.set_key(&credential_id, &value),
             None => creds.clear_key(&credential_id),
@@ -531,8 +567,13 @@ pub async fn mailbox_view(app: AppHandle, limit: Option<u32>) -> Result<View> {
     archive_worker(app, move |state| view(state, limit.unwrap_or(200))).await
 }
 #[tauri::command]
-pub async fn mailbox_connect(app: AppHandle, email: String, secret: String) -> Result<()> {
-    archive_worker(app.clone(), move |state| save(state, email, secret)).await?;
+pub async fn mailbox_connect(
+    app: AppHandle,
+    email: String,
+    secret: String,
+    config: Option<ConnectionConfig>,
+) -> Result<()> {
+    archive_worker(app.clone(), move |state| save(state, email, secret, config)).await?;
     let _ = app.emit("mailbox-changed", ());
     Ok(())
 }
@@ -631,6 +672,34 @@ pub fn start(app: AppHandle) {
 mod tests {
     use super::*;
     use crate::ai_credentials::{CredentialStore, MemoryStore, UnavailableStore};
+    #[test]
+    fn custom_school_settings_and_os_credentials_keep_the_same_account_on_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path()).unwrap();
+        let creds = MemoryStore::default();
+        let mut config = ConnectionConfig {
+            host: "mail.school.example".into(),
+            port: 993,
+            encryption: mailbox_sync::Encryption::Tls,
+            username: "shortname".into(),
+            send_id: false,
+        };
+        persist_configured_account(&db, &creds, "a@school.example", "first-secret", &config)
+            .unwrap();
+        let original = db.accounts().unwrap().remove(0);
+        config.username = "a@school.example".into();
+        persist_configured_account(&db, &creds, "a@school.example", "updated-secret", &config)
+            .unwrap();
+        let updated = db.accounts().unwrap().remove(0);
+        assert_eq!(original.id, updated.id);
+        assert_eq!(updated.connection, config);
+        assert_eq!(
+            creds.get_key(&updated.credential_id()).unwrap().as_deref(),
+            Some("updated-secret")
+        );
+        let bytes = std::fs::read(dir.path().join("mailboxes.sqlite")).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret"));
+    }
     #[test]
     fn manual_check_returns_network_failure_and_continues_other_accounts() {
         let dir = tempfile::tempdir().unwrap();
@@ -884,4 +953,20 @@ mod tests {
         let diagnostics = data_service::diagnostics_from(&paths, true, &[]).to_string();
         assert!(!diagnostics.contains("private@qq.com") && !diagnostics.contains("Interview"));
     }
+}
+
+#[tauri::command]
+pub async fn mailbox_discover(email: String) -> Result<mailbox_sync::discovery::Discovery> {
+    mapped(mailbox_sync::discovery::discover(&email).await)
+}
+
+#[tauri::command]
+pub async fn mailbox_open_help(app: AppHandle, url: String) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    if !mailbox_sync::discovery::HELP_URLS.contains(&url.as_str()) {
+        return Err(fail(Error::Configuration));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|_| fail(Error::Network))
 }

@@ -2075,6 +2075,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mailbox_commands::mailbox_view,
             mailbox_commands::mailbox_connect,
+            mailbox_commands::mailbox_discover,
+            mailbox_commands::mailbox_open_help,
             mailbox_commands::mailbox_delete,
             mailbox_commands::mailbox_pause,
             mailbox_commands::mailbox_check,

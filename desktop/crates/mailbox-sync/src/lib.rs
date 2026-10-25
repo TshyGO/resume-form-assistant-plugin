@@ -1,7 +1,10 @@
 //! Machine-local mailbox discovery. Nothing here writes formal archive evidence.
+pub mod config;
 mod db;
+pub mod discovery;
 pub mod imap;
 mod rules;
+pub use config::{ConnectionConfig, Encryption};
 pub use db::{Account, Candidate, Cursor, Database};
 pub use rules::{classify, Header};
 use serde::{Deserialize, Serialize};
@@ -23,6 +26,8 @@ pub enum Error {
     Changed,
     Busy,
     Credentials,
+    Configuration,
+    OAuthRequired,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,26 +47,30 @@ pub enum Provider {
     Qq,
     N163,
     N126,
+    Gmail,
+    Icloud,
+    Sina,
+    Sohu,
+    Aliyun,
+    N139,
+    Custom,
 }
 impl Provider {
     pub fn detect(address: &str) -> Result<(String, Self)> {
-        let email = address.trim().to_ascii_lowercase();
-        let (local, domain) = email.split_once('@').ok_or(Error::Address)?;
-        if local.is_empty()
-            || local.len() > 64
-            || !local
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
-        {
-            return Err(Error::Address);
-        }
+        let email = config::normalize_email(address)?;
+        let (_, domain) = email.split_once('@').ok_or(Error::Address)?;
         let provider = match domain {
             "qq.com" | "foxmail.com" => Self::Qq,
             "163.com" => Self::N163,
             "126.com" => Self::N126,
+            "gmail.com" | "googlemail.com" => Self::Gmail,
+            "icloud.com" | "me.com" | "mac.com" => Self::Icloud,
+            "sina.com" | "sina.cn" | "vip.sina.com" | "vip.sina.cn" => Self::Sina,
+            "sohu.com" => Self::Sohu,
+            "aliyun.com" => Self::Aliyun,
+            "139.com" => Self::N139,
             _ => return Err(Error::Address),
         };
-        // foxmail belongs to QQ; no arbitrary host, port or credential-bearing URL.
         Ok((email, provider))
     }
     pub fn server(self) -> &'static str {
@@ -69,10 +78,17 @@ impl Provider {
             Self::Qq => "imap.qq.com",
             Self::N163 => "imap.163.com",
             Self::N126 => "imap.126.com",
+            Self::Gmail => "imap.gmail.com",
+            Self::Icloud => "imap.mail.me.com",
+            Self::Sina => "imap.sina.com",
+            Self::Sohu => "imap.sohu.com",
+            Self::Aliyun => "imap.aliyun.com",
+            Self::N139 => "imap.139.com",
+            Self::Custom => "",
         }
     }
     pub fn needs_id(self) -> bool {
-        self != Self::Qq
+        matches!(self, Self::N163 | Self::N126)
     }
 }
 
