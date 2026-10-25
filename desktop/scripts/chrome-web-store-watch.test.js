@@ -80,8 +80,14 @@ test("被拒、被警告或下架也提醒；审核中、已上线、已取消�
   assert.doesNotMatch(reminderIssue(staged, { repository }).body, /先按上面处理下架/);
   assert.match(reminderIssue({ publishedVersions: ["0.4.2"], warned: true }).title, /政策警告/);
 
-  for (const submittedState of ["PENDING_REVIEW", "PUBLISHED", "CANCELLED", null]) {
+  for (const submittedState of ["PENDING_REVIEW", "PUBLISHED", "PUBLISHED_TO_TESTERS", "CANCELLED", null]) {
     assert.equal(reminderIssue({ ...staged, submittedState }), null, String(submittedState));
+  }
+  // 不认识的状态不能当成没事：照样提醒，现有提醒也就不会被关掉。
+  for (const submittedState of ["ITEM_STATE_UNSPECIFIED", "SOMETHING_NEW"]) {
+    const unknown = reminderIssue({ ...staged, submittedState });
+    assert.match(unknown.title, new RegExp(`未识别的状态 ${submittedState}`));
+    assert.doesNotMatch(unknown.body, /release_staged/);
   }
   assert.equal(reminderIssue({ publishedVersions: ["0.4.3"], submittedVersions: [], submittedState: null }), null);
   assert.throws(() => reminderIssue([]), StoreWatchError);
@@ -131,6 +137,13 @@ test("指派人填错时去掉指派人照样开出提醒", async () => {
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].assignees, undefined);
   assert.deepEqual(parseAssignees(" TshyGO, bad/name ,,foo-,-foo"), { valid: ["TshyGO"], invalid: ["bad/name", "foo-", "-foo"] });
+
+  // 建 issue 的应答里没有编号，就别说开好了。
+  const noNumber = fakeGitHub({ "GET /issues": [], "POST /labels": { name: ISSUE_LABEL }, "POST /issues": {} });
+  await assert.rejects(
+    () => syncReminderIssue({ issue, status: staged, repository, token, fetchImpl: noNumber.fetchImpl }),
+    /没有返回编号/,
+  );
 });
 
 test("状态没变就不动 issue，维护者补的说明也保留；变了先留言再更新", async () => {
@@ -253,6 +266,14 @@ test("main 默认只打印判断；--sync 才改 issue", async () => {
   await main(["--status", "status.json"], {}, io);
   assert.match(lines.join("\n"), /0\.4\.3 已过审/);
   await assert.rejects(() => main(["--status", "bad.json"], {}, io), /不是 chrome-web-store\.js status 输出的 JSON/);
+  // 文件读不出来时报原因，不说成 JSON 格式错。
+  await assert.rejects(
+    () => main(["--status", "missing.json"], {}, {
+      ...io,
+      readFile: () => { throw new Error("ENOENT: no such file or directory"); },
+    }),
+    /读不了 missing\.json：ENOENT/,
+  );
   await assert.rejects(() => main([], {}, io), /用法/);
 
   const github = fakeGitHub({

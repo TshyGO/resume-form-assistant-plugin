@@ -21,6 +21,8 @@ export const ISSUE_LABEL = "商店提醒";
 // 只比指纹，维护者在正文里补的说明不会被下次运行覆盖。
 export const ISSUE_MARKER = "<!-- chrome-web-store-watch";
 const FINGERPRINT = /<!-- chrome-web-store-watch v=([0-9a-f]{16}) -->/;
+// Chrome Web Store API v2 的 ItemState。不在这里的状态当成需要人看一眼，而不是“没事”。
+const KNOWN_STATES = new Set(["PENDING_REVIEW", "STAGED", "PUBLISHED", "PUBLISHED_TO_TESTERS", "REJECTED", "CANCELLED"]);
 const LABEL_COLOR = "D93F0B";
 const LABEL_DESCRIPTION = "Chrome 商店审核结果需要维护者处理（自动维护）";
 const GITHUB_API_VERSION = "2022-11-28";
@@ -106,6 +108,15 @@ export function reminderIssue(status, { repository = "", serverUrl = "https://gi
       `## ${shown} 被商店拒绝`,
       "",
       `商店没有通过 ${shown}，原因在 Chrome Web Store Developer Dashboard 和发布者邮箱里。修好后把 \`manifest.json\` 的版本号升上去，再发新的正式 GitHub Release；同一个版本不要重新上传。新版本送审后这个 issue 会自动关闭。`,
+    ].join("\n"));
+  }
+  const state = status.submittedState;
+  if (state !== null && state !== undefined && !KNOWN_STATES.has(state)) {
+    headlines.push(`商店返回了未识别的状态 ${state}`);
+    sections.push([
+      `## 商店返回了未识别的状态 \`${state}\``,
+      "",
+      `送审版本 ${shown} 的状态是 \`${state}\`，这个脚本不认识，不能当成没事。到 Chrome Web Store Developer Dashboard 看一眼，必要时更新 \`desktop/scripts/chrome-web-store-watch.js\`。状态变回已知值后这个 issue 会自动关闭。`,
     ].join("\n"));
   }
   if (sections.length === 0) return null;
@@ -239,7 +250,10 @@ export async function syncReminderIssue({
     if (assignees.length === 0 || !(error instanceof StoreWatchError) || error.status !== 422) throw error;
     created = await github("POST", "/issues", fields);
   }
-  return { action: "opened", numbers: [created?.number] };
+  if (!Number.isInteger(created?.number)) {
+    throw new StoreWatchError("GitHub 建 issue 后没有返回编号");
+  }
+  return { action: "opened", numbers: [created.number] };
 }
 
 function flag(argv, name) {
@@ -255,9 +269,15 @@ export async function main(argv, env = process.env, io = {}) {
   }
   const readFile = io.readFile ?? ((path) => readFileSync(path, "utf8"));
   const log = io.log ?? console.log;
+  let raw;
+  try {
+    raw = readFile(statusPath);
+  } catch (error) {
+    throw new StoreWatchError(`读不了 ${statusPath}：${error instanceof Error ? error.message : error}`);
+  }
   let status;
   try {
-    status = JSON.parse(readFile(statusPath));
+    status = JSON.parse(raw);
   } catch {
     throw new StoreWatchError(`${statusPath} 不是 chrome-web-store.js status 输出的 JSON`);
   }
