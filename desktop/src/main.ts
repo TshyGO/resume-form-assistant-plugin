@@ -18,6 +18,7 @@ import { describeCheckFailure, describeUpdate, formatCheckedAt, parseCheckedAt, 
 import type { UpdateInfo, UpdatePreference } from "./update-check.ts";
 import { mountApplications } from "./applications-ui.ts";
 import { mountInbox } from "./inbox-ui.ts";
+import { mountMailboxes } from "./mailbox-ui.ts";
 import { mountTodos } from "./todos-ui.ts";
 import { mountBackup } from "./backup-ui.ts";
 import { BACKUP_LEAVE } from "./backup.ts";
@@ -501,6 +502,17 @@ const inbox = mountInbox(command, {
     : null,
 });
 
+const mailboxes = mountMailboxes(command, () => inbox.refresh(), () => {
+  void navigate("settings").then((moved) => { if (moved) settingsNavigation.select("mailbox"); });
+}, inbox);
+void mailboxes.refresh();
+if (events?.listen) void events.listen("mailbox-changed", () => { void mailboxes.refresh(); });
+document.getElementById("view-inbox")?.addEventListener("click", (event) => {
+  if ((event.target as HTMLElement).closest('[data-empty-act="connect"]')) {
+    void navigate("settings").then((moved) => { if (moved) settingsNavigation.select("mailbox"); });
+  }
+});
+
 // 待办只能挂在申请下面：一条申请都没有时，「去新增申请」切到申请页并打开新增表单。
 const showTodos = mountTodos(command, undefined, {
   createApplication: () => {
@@ -536,6 +548,7 @@ async function refreshAfterArchiveReplaced() {
       must("apps-msg").textContent = String(err);
     }),
     inbox.refresh().catch(() => {}),
+    mailboxes.refresh().catch(() => {}),
   ]);
 }
 const refreshLocalBackup = mountBackup(command, backupPickers, undefined, () => {

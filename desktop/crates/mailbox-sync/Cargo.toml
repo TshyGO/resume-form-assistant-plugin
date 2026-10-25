@@ -1,0 +1,27 @@
+[package]
+name = "mailbox-sync"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+tokio = { version = "1", features = ["net", "time", "io-util"] }
+tokio-native-tls = "0.3"
+futures-util = "0.3"
+base64 = "0.22"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
+evidence-import = { path = "../evidence-import" }
+mail-parser = { version = "0.11", features = ["full_encoding"] }
+# async-imap trace output includes LOGIN and literal bytes. Compile protocol
+# dumps out in every profile; application logs use safe codes.
+log = { version = "0.4", features = ["max_level_info"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "sync"] }

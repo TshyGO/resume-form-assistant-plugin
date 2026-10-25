@@ -56,6 +56,7 @@ jobs:
             desktop/crates/local-ipc
             desktop/crates/backup
             desktop/crates/backup-crypt
+            desktop/crates/mailbox-sync
             desktop/crates/webdav-client
 
       - name: Install JS dependencies
@@ -132,6 +133,10 @@ jobs:
       - name: WebDAV transport tests
         working-directory: desktop
         run: cargo test --manifest-path crates/webdav-client/Cargo.toml --locked --target ${{ matrix.rust-target }}
+
+      - name: Mailbox discovery tests
+        working-directory: desktop
+        run: cargo test --manifest-path crates/mailbox-sync/Cargo.toml --locked --target ${{ matrix.rust-target }}
 
       - name: Evidence import tests
         working-directory: desktop

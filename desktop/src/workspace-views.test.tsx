@@ -129,7 +129,7 @@ test("paste import is a dialog: empty text is refused inline, success closes and
     if (name === "import_evidence_cmd") return { imported: [], duplicates: [{ id: "x" }], failed: [{ name: "a.msg", code: "unsupported" }] } as T;
     return {} as T;
   };
-  const h = mountInbox(invoke); await h.refresh();
+  const h = mountInbox(invoke as Invoke); await h.refresh();
   const view = within(document.getElementById("view-inbox")!);
   expect(view.getByRole("heading", { name: "没有待整理的招聘通知" })).toBeTruthy();
   fireEvent.click(view.getByRole("button", { name: "粘贴文本" }));
@@ -170,6 +170,18 @@ test("evidence preview escapes original text and requires an explicit associatio
   const h = mountInbox(invoke); await h.refresh();
   fireEvent.click(document.querySelector("[data-evidence]")!);
   await waitFor(() => expect(document.getElementById("inbox-application")).toBeTruthy());
+  expect(document.querySelector(".evidence-workspace")).toBeTruthy();
+  expect(document.getElementById("inbox-organizer")!.hidden).toBe(true);
+  fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
+  expect(document.getElementById("inbox-organizer")!.hidden).toBe(false);
+  expect(document.querySelector('[data-act="toggle-organizer"]')!.getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelector(".evidence-workspace")!.classList.contains("is-organizer-open")).toBe(true);
+  fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
+  expect(document.querySelector(".evidence-workspace")!.classList.contains("is-organizer-open")).toBe(false);
+  fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
+  fireEvent.click(document.querySelector('[data-act="toggle-reader"]')!);
+  expect(document.getElementById("inbox-shell")!.classList.contains("is-reader-expanded")).toBe(true);
+  expect(document.querySelector('[data-act="toggle-reader"]')!.textContent).toContain("恢复双栏");
   expect(document.querySelector(".evidence-body img")).toBeNull();
   expect(document.querySelector(".evidence-body")!.textContent).toContain("<img");
   fireEvent.click(document.querySelector('[data-act="associate"]')!);
@@ -177,6 +189,29 @@ test("evidence preview escapes original text and requires an explicit associatio
   fireEvent.change(document.getElementById("inbox-application")!, { target: { value: "a2" } });
   fireEvent.click(document.querySelector('[data-act="associate"]')!);
   await waitFor(() => expect(calls).toHaveBeenCalledWith("associate_evidence_cmd", { evidenceId: "e1", applicationId: "a2" }));
+});
+
+test("pending mailbox preview replaces the stored reader and never invents a body", async () => {
+  const invoke = vi.fn(async () => []);
+  const h = mountInbox(invoke as Invoke); await h.refresh();
+  const save = vi.fn(), ignore = vi.fn();
+  h.showPending({
+    id: "candidate-1", email: "candidate@example.com",
+    header: { fromAddr: "hr@example.com", fromName: "星河科技招聘", subject: "前端工程师笔试通知", sentAt: "2026-10-25T02:08:00Z" },
+    reasons: ["匹配申请公司：星河科技", "标题包含：笔试"],
+  }, { save, ignore });
+  const preview = document.getElementById("inbox-preview")!;
+  expect(preview.textContent).toContain("待确认邮件");
+  expect(preview.textContent).toContain("前端工程师笔试通知");
+  expect(preview.textContent).toContain("匹配申请公司：星河科技");
+  expect(preview.textContent).toContain("原文尚未下载");
+  expect(preview.querySelector(".evidence-body")).toBeNull();
+  await h.refresh();
+  expect(preview.textContent).toContain("前端工程师笔试通知");
+  fireEvent.click(within(preview).getByRole("button", { name: "存进档案" }));
+  expect(save).toHaveBeenCalledOnce();
+  fireEvent.click(within(preview).getByRole("button", { name: "忽略" }));
+  expect(ignore).toHaveBeenCalledOnce();
 });
 
 test.each(["storage", "too_large"])("paste failure report (%s) keeps the dialog and text for retry", async (code) => {
