@@ -58,6 +58,20 @@ export function mountMailboxes(
   const configuration = get<HTMLDetailsElement>("mailbox-configuration");
   const detection = get("mailbox-detection");
   let discoveryToken = 0, discoveryRequested = "";
+  let discoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  type ProgressState = "empty" | "typing" | "searching" | "found" | "manual" | "edited" | "unsupported" | "connecting" | "checking" | "connected" | "error";
+  function showProgress(state: ProgressState, title: string, detail: string, step = 1) {
+    detection.dataset.state = state;
+    detection.setAttribute("aria-busy", String(["searching", "connecting", "checking"].includes(state)));
+    get("mailbox-progress-title").textContent = title;
+    get("mailbox-progress-detail").textContent = detail;
+    get("mailbox-progress-icon").textContent = ["found", "connected"].includes(state) ? "✓" : ["manual", "error", "unsupported"].includes(state) ? "!" : String(step);
+    for (let index = 1; index <= 3; index++) {
+      const item = get(`mailbox-step-${index}`);
+      if (index === step) item.setAttribute("aria-current", "step"); else item.removeAttribute("aria-current");
+      item.dataset.complete = String(index < step || state === "connected");
+    }
+  }
   let schoolHelpUrl: string | null = null;
   const selected = new Set<string>();
   const failures = new Map<string, string>();
@@ -142,6 +156,7 @@ export function mountMailboxes(
     } else {
       say(where, `${prefix}已成功检查 ${report.succeededAccounts} 个邮箱，请查看待确认邮件。${recovery}`, paused > 0);
     }
+    return report;
   }
   function render() {
     const valid = new Set(current.candidates.map((item) => item.id));
@@ -160,7 +175,7 @@ export function mountMailboxes(
         if (account.connection) fillConnection(account.connection);
         updateServerLabel();
         configuration.open = true;
-        detection.textContent = "已载入此邮箱保存的配置，重新测试成功后才更新；修改服务器或登录账号会清空该连接的候选与扫描记录。";
+        showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
         secret.focus();
       }));
       controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
@@ -281,6 +296,7 @@ export function mountMailboxes(
       : "未确定服务器，可自动查询或手动填写。";
   }
   function updateProvider() {
+    clearTimeout(discoveryTimer);
     ++discoveryToken; discoveryRequested = ""; schoolHelpUrl = null;
     const provider = mailboxProvider(email.value), config = localMailConnection(email.value);
     fillConnection(config ?? { host: "", port: 993, encryption: "tls", username: email.value.trim(), sendId: false });
@@ -291,10 +307,10 @@ export function mountMailboxes(
     get("mailbox-secret-hint").textContent = `${provider === "school" ? "清华邮箱请生成客户端专用密码。" : ""}${help.hint} 只存系统凭据库，保存后不回显。`;
     configuration.open = !config && !!email.value;
     const microsoft = /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(email.value.trim());
-    detection.textContent = microsoft ? "此邮箱需要微软登录授权，当前暂不支持，请改用导入邮件文件。"
-      : config ? "已从本地配置填好服务器，可核对或修改后测试连接。"
-      : email.value ? "填写完成后会尝试查询域名配置，最多等待 3 秒；也可直接手动填写。"
-      : "填写邮箱后自动识别；无法识别时，可按学校或邮箱官方教程手动填写。";
+    if (microsoft) showProgress("unsupported", "此邮箱暂不支持直接连接", "需要微软登录授权。请点击“改用导入邮件文件”。");
+    else if (config) showProgress("found", `已找到配置 · ${help.label}`, `服务器：${config.host}。配置已填好，尚未连接。下一步：填写${help.secret}，点击“测试连接并保存”。${provider === "school" ? "清华邮箱需要客户端专用密码。" : ""}`, 2);
+    else if (email.value.trim()) showProgress("typing", "等待识别邮箱配置", "请填写完整邮箱地址，程序会自动查找；也可直接手动填写下方配置。");
+    else showProgress("empty", "先填写邮箱地址", "第 1 步：填写完整邮箱地址，程序会自动查找配置。");
     updateServerLabel();
   }
   async function discover(force = false) {
@@ -302,21 +318,25 @@ export function mountMailboxes(
     if (busy || !email.validity.valid || !address || (!force && (localMailConnection(address) || discoveryRequested === address))) return;
     if (/@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(address)) return;
     const token = ++discoveryToken; discoveryRequested = address;
-    detection.textContent = "正在查找邮箱配置，最多等待 3 秒；你也可以直接填写下方配置。";
+    clearTimeout(discoveryTimer);
+    showProgress("searching", "正在识别邮箱配置…", "最多等待 3 秒。查到后会自动填写；也可以直接填写下方配置。");
     try {
       const result = await invoke<{ config: MailConnection | null; source: string; note: string; helpUrl: string | null }>("mailbox_discover", { email: address });
       if (token !== discoveryToken || email.value.trim() !== address) return;
       if (result.config) fillConnection(result.config);
-      configuration.open = true; detection.textContent = result.note;
+      configuration.open = !result.config;
+      if (result.config) showProgress("found", "已找到邮箱配置", `${result.note} 配置已填好，尚未连接。下一步：按学校要求填写密码，点击“测试连接并保存”。`, 2);
+      else showProgress("manual", "未找到配置，需要手动填写", `${result.note} 下一步：展开下方配置，按学校官方教程填写服务器和登录账号；也可改用导入邮件文件。`);
       schoolHelpUrl = result.helpUrl; updateGuide(); updateServerLabel();
     } catch (error) {
       if (token !== discoveryToken) return;
       configuration.open = true;
-      detection.textContent = `未能自动识别，请按学校或邮箱官方教程手动填写。${message(error)}`;
+      showProgress("manual", "识别未完成，需要手动填写", `未能自动识别，请按学校或邮箱官方教程手动填写。${message(error)}`);
     }
   }
   [host, port, username, encryption, sendId].forEach((input) => input.addEventListener("input", () => {
-    ++discoveryToken; updateServerLabel(); detection.textContent = "正在使用你填写的配置，测试连接成功后才保存。";
+    clearTimeout(discoveryTimer);
+    ++discoveryToken; updateServerLabel(); showProgress("edited", "已切换为手动配置，等待测试", "下一步：核对服务器、端口和账号，填写所需密码，再点击“测试连接并保存”。", 2);
   }));
   get("mailbox-detect").addEventListener("click", () => { void discover(true); });
   email.addEventListener("blur", () => { void discover(); });
@@ -334,21 +354,38 @@ export function mountMailboxes(
     event.preventDefault();
     const config = readConnection();
     if (!email.validity.valid || !email.value.trim() || !secret.value.trim() || !config.host || !config.username || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
-      configuration.open = true; say("settings", "请填写邮箱、IMAP 服务器、有效端口、登录账号和所需密码。", true); return;
+      configuration.open = true;
+      showProgress("error", "连接信息还没填完整", "请补充邮箱、IMAP 服务器、有效端口、登录账号和所需密码，再测试连接。", 2);
+      say("settings", "请填写邮箱、IMAP 服务器、有效端口、登录账号和所需密码。", true); return;
     }
+    clearTimeout(discoveryTimer);
     ++discoveryToken;
+    showProgress("connecting", "正在测试连接…", "正在验证服务器和登录凭据，通过后才保存。", 2);
     void action("settings", "正在测试连接，通过后才保存…", async () => {
       try {
         await invoke("mailbox_connect", { email: email.value.trim(), secret: secret.value, config });
+        showProgress("checking", "邮箱已连接，正在检查来信…", "连接已保存。正在检查最近 30 天的邮件，请稍候。", 3);
         say("settings", "连接已保存，正在检查最近 30 天的邮件…");
-        await checkNow("settings", "连接已保存。");
+        const report = await checkNow("settings", "连接已保存。");
+        if (report.failedAccounts.length || !report.checkedAccounts) {
+          showProgress("error", "邮箱已连接，来信检查尚未完成", get("mailbox-settings-status").textContent ?? "请核对网络后点击立即检查。", 3);
+        } else showProgress("connected", "连接成功，来信检查已完成", "下一步：到“招聘通知 → 待确认”查看发现的邮件，没有候选时也可以手动导入。", 3);
+      } catch (error) {
+        const saved = detection.dataset.state === "checking";
+        showProgress("error", saved ? "邮箱已连接，来信检查未完成" : "连接失败，配置尚未保存", message(error), saved ? 3 : 2);
+        throw error;
       } finally { secret.value = ""; }
     });
   });
-  email.addEventListener("input", () => { secret.value = ""; updateProvider(); }); guide.addEventListener("change", updateGuide);
+  email.addEventListener("input", () => {
+    secret.value = ""; updateProvider();
+    if (email.value.trim() && email.validity.valid && !localMailConnection(email.value)) {
+      discoveryTimer = setTimeout(() => { void discover(); }, 500);
+    }
+  }); guide.addEventListener("change", updateGuide);
   ["mailbox-settings-check", "mailbox-inbox-check"].forEach((id) => get(id).addEventListener("click", () => {
     const where = id.includes("settings") ? "settings" : "inbox";
-    void action(where, "正在检查邮箱…", () => checkNow(where));
+    void action(where, "正在检查邮箱…", async () => { await checkNow(where); });
   }));
   get("mailbox-connect-link").addEventListener("click", openSettings);
   get("mailbox-tab-pending").addEventListener("click", () => selectInboxState("pending"));
@@ -360,5 +397,5 @@ export function mountMailboxes(
   get("mailbox-ignore-selected").addEventListener("click", () => void ignore([...selected]));
   get("mailbox-load-more").addEventListener("click", () => { limit += 100; void refresh(); });
   updateGuide(); updateProvider(); selectInboxState("stored");
-  return { refresh };
+  return { refresh, dispose: () => { clearTimeout(discoveryTimer); ++discoveryToken; } };
 }

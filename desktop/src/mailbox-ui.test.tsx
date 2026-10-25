@@ -1,9 +1,12 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fireEvent, waitFor, within } from "@testing-library/dom";
 import type { Invoke } from "./api";
 import { mailboxProvider, mountMailboxes } from "./mailbox-ui";
 import type { MailboxView, MailCandidate } from "./mailbox-ui";
+
+const disposers: Array<() => void> = [];
+afterEach(() => { disposers.splice(0).forEach((dispose) => dispose()); vi.useRealTimers(); });
 
 beforeEach(() => {
   document.body.innerHTML = readFileSync("index.html", "utf8").split("<body>")[1].split("</body>")[0];
@@ -23,6 +26,7 @@ function setup(items = [candidate("one")]) {
   const onImported = vi.fn(async () => {}), openSettings = vi.fn();
   const inboxBridge = { showPending: vi.fn(), showStored: vi.fn() };
   const ui = mountMailboxes(invoke as Invoke, onImported, openSettings, inboxBridge);
+  disposers.push(ui.dispose);
   const pending = within(document.getElementById("mailbox-discovery")!);
   return { view, handlers, invoke, ui, pending, onImported, openSettings, inboxBridge };
 }
@@ -284,4 +288,53 @@ test("Outlook gives the OAuth boundary instead of attempting DNS discovery", () 
   fireEvent.blur(el("mailbox-email"));
   expect(el("mailbox-detection").textContent).toContain("需要微软登录授权");
   expect(invoke.mock.calls).toHaveLength(0);
+});
+
+test("discovery visibly progresses from pending to searching to manual without requiring blur", async () => {
+  vi.useFakeTimers();
+  const { handlers, invoke } = setup();
+  let complete!: (value: unknown) => void;
+  handlers.mailbox_discover = () => new Promise((resolve) => { complete = resolve; });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@sjtu.edu.cn" } });
+  expect(el("mailbox-progress-title").textContent).toBe("等待识别邮箱配置");
+  await vi.advanceTimersByTimeAsync(500);
+  expect(invoke).toHaveBeenCalledWith("mailbox_discover", { email: "a@sjtu.edu.cn" });
+  expect(el("mailbox-detection").dataset.state).toBe("searching");
+  expect(el("mailbox-detection").getAttribute("aria-busy")).toBe("true");
+  complete({ config: null, note: "没有可用的自动配置。", helpUrl: null });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(el("mailbox-detection").dataset.state).toBe("manual");
+  expect(el("mailbox-progress-title").textContent).toBe("未找到配置，需要手动填写");
+  expect(el("mailbox-detection").getAttribute("aria-busy")).toBe("false");
+  expect(el<HTMLDetailsElement>("mailbox-configuration").open).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("");
+});
+test("preset config success is distinct from a successful mailbox connection", async () => {
+  const { handlers } = setup();
+  let connected!: () => void, scanned!: () => void;
+  handlers.mailbox_connect = () => new Promise<void>((resolve) => { connected = resolve; });
+  handlers.mailbox_check = () => new Promise((resolve) => { scanned = () => resolve(checked); });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@qq.com" } });
+  expect(el("mailbox-detection").dataset.state).toBe("found");
+  expect(el("mailbox-progress-detail").textContent).toContain("尚未连接");
+  expect(el("mailbox-step-2").getAttribute("aria-current")).toBe("step");
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.submit(el("mailbox-form"));
+  expect(el("mailbox-detection").dataset.state).toBe("connecting");
+  connected();
+  await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("checking"));
+  expect(el("mailbox-step-3").getAttribute("aria-current")).toBe("step");
+  scanned();
+  await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("connected"));
+  expect(el("mailbox-progress-title").textContent).toContain("来信检查已完成");
+});
+test("failed login has a visible error state and cannot claim that configuration was saved", async () => {
+  const { handlers } = setup();
+  handlers.mailbox_connect = async () => { throw { message: "认证失败，请核对密码。" }; };
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@qq.com" } });
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.submit(el("mailbox-form"));
+  await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("error"));
+  expect(el("mailbox-progress-title").textContent).toBe("连接失败，配置尚未保存");
+  expect(el("mailbox-progress-detail").textContent).toContain("认证失败");
 });
