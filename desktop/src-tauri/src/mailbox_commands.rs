@@ -72,8 +72,12 @@ pub struct View {
 fn view(state: &AppState, limit: u32) -> Result<View> {
     let db = database(state)?;
     let current = identity(state)?;
+    let mut accounts = mapped(db.accounts())?;
+    for account in &mut accounts {
+        account.header_issues = mapped(db.header_issue_count(&current.archive_id, &account.id))?;
+    }
     Ok(View {
-        accounts: mapped(db.accounts())?,
+        accounts,
         candidates: mapped(db.pending(&current.archive_id, limit))?,
         pending_count: mapped(db.pending_count(&current.archive_id))?,
     })
@@ -153,6 +157,26 @@ fn companies(state: &AppState, expected: &ArchiveIdentity) -> Result<Vec<String>
         Ok(companies)
     })
 }
+fn matched_header(
+    state: &AppState,
+    expected: &ArchiveIdentity,
+    header: Header,
+    companies: &[String],
+) -> Result<Option<(Header, Vec<String>)>> {
+    let reasons = classify(&header, companies);
+    if reasons.is_empty() {
+        return Ok(None);
+    }
+    let exists = with_store(state, |store| {
+        check_identity(store, expected)?;
+        Ok(key(&header)
+            .map(|key| store.find_known_mail(&key))
+            .transpose()?
+            .flatten()
+            .is_some())
+    })?;
+    Ok((!exists).then_some((header, reasons)))
+}
 async fn scan_folder(
     state: &AppState,
     db: &mut Database,
@@ -161,16 +185,85 @@ async fn scan_folder(
     companies: &[String],
     session: &mut imap::LiveSession,
     folder: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let cursor = mapped(db.cursor(&expected.archive_id, &account.id, folder))?;
     let plan = mapped(imap::plan(session, folder, cursor, now()).await)?;
+    let mut partial = false;
+    let retries = mapped(db.prepare_header_retries(
+        &expected.archive_id,
+        &account.id,
+        folder,
+        plan.validity,
+    ))?;
+    for retry in retries {
+        let batch = mapped(imap::headers_resilient(session, &[retry.uid]).await)?;
+        if let Some((_, header)) = batch.headers.into_iter().next() {
+            let found = matched_header(state, expected, header, companies)?;
+            mapped(db.commit_header_retry(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                retry.uid,
+                found,
+            ))?;
+        } else if batch.retry_uids.contains(&retry.uid) {
+            mapped(db.record_header_failure(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                retry.uid,
+            ))?;
+            partial = true;
+        } else if batch.terminal_uids.contains(&retry.uid) {
+            mapped(db.mark_header_terminal(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                retry.uid,
+            ))?;
+            partial = true;
+        } else {
+            // The UID was expunged between scans.
+            mapped(db.commit_header_retry(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                retry.uid,
+                None,
+            ))?;
+        }
+    }
     for chunk in plan.uids.chunks(imap::BATCH_SIZE) {
-        let headers = mapped(imap::headers_resilient(session, chunk).await)?;
+        let batch = mapped(imap::headers_resilient(session, chunk).await)?;
+        for uid in &batch.retry_uids {
+            mapped(db.record_header_failure(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                *uid,
+            ))?;
+            partial = true;
+        }
+        for uid in &batch.terminal_uids {
+            mapped(db.mark_header_terminal(
+                &expected.archive_id,
+                &account.id,
+                folder,
+                plan.validity,
+                *uid,
+            ))?;
+            partial = true;
+        }
         // Short archive lock only for local matching and persistence. No network.
         with_store(state, |store| {
             check_identity(store, expected)?;
             let mut found = Vec::new();
-            for (uid, header) in headers {
+            for (uid, header) in batch.headers {
                 let reasons = classify(&header, companies);
                 if reasons.is_empty() {
                     continue;
@@ -209,7 +302,8 @@ async fn scan_folder(
             },
             &[],
         ))
-    })
+    })?;
+    Ok(partial)
 }
 
 fn scan_account(
@@ -218,7 +312,7 @@ fn scan_account(
     expected: &ArchiveIdentity,
     account: &Account,
     companies: &[String],
-) -> Result<()> {
+) -> Result<bool> {
     let secret = state
         .credentials
         .get_key(&account.credential_id())
@@ -227,8 +321,7 @@ fn scan_account(
     tauri::async_runtime::block_on(async {
         let mut session = mapped(imap::login_account(account, &secret).await)?;
         let folders = mapped(imap::folders(&mut session).await)?;
-        let mut succeeded = 0usize;
-        let mut first_error = None;
+        let mut partial = false;
         for folder in folders {
             match scan_folder(
                 state,
@@ -241,19 +334,17 @@ fn scan_account(
             )
             .await
             {
-                Ok(()) => succeeded += 1,
+                Ok(folder_partial) => partial |= folder_partial,
                 Err(error) => {
-                    first_error.get_or_insert(error);
+                    if folder.eq_ignore_ascii_case("INBOX") {
+                        return Err(error);
+                    }
+                    partial = true;
                 }
             };
         }
-        // A broken optional junk folder must not hide a healthy INBOX. If every
-        // advertised folder failed, keep the account failure and retry policy.
-        if succeeded == 0 {
-            return Err(first_error.unwrap_or_else(|| fail(Error::Protocol)));
-        }
         // Dropping a read-only session also safely closes the socket.
-        Ok(())
+        Ok(partial)
     })
 }
 #[derive(Default, Serialize)]
@@ -262,6 +353,7 @@ pub struct CheckReport {
     pub checked_accounts: u32,
     pub succeeded_accounts: u32,
     pub failed_accounts: Vec<CheckFailure>,
+    pub partial_accounts: Vec<CheckFailure>,
     pub skipped_paused: u32,
 }
 #[derive(Serialize)]
@@ -279,7 +371,7 @@ fn run_checks(
     accounts: Vec<Account>,
     force: bool,
     started_at: i64,
-    mut scan: impl FnMut(&mut Database, &Account) -> Result<()>,
+    mut scan: impl FnMut(&mut Database, &Account) -> Result<bool>,
 ) -> Result<CheckReport> {
     let mut report = CheckReport::default();
     for account in accounts {
@@ -292,9 +384,18 @@ fn run_checks(
         }
         report.checked_accounts += 1;
         match scan(db, &account) {
-            Ok(()) => {
-                mapped(db.success(&account.id, now()))?;
-                report.succeeded_accounts += 1;
+            Ok(partial) => {
+                if partial {
+                    mapped(db.partial_failure(&account.id, Error::Protocol, now()))?;
+                    report.partial_accounts.push(CheckFailure {
+                        account_id: account.id.clone(),
+                        message: "收件箱已继续扫描，但部分文件夹或邮件未完成；程序会稍后重试，连续三次仍读不到的邮件可手动导入。".into(),
+                        paused: false,
+                    });
+                } else {
+                    mapped(db.success(&account.id, now()))?;
+                    report.succeeded_accounts += 1;
+                }
             }
             Err(error) => {
                 if error.code == fail(Error::Changed).code {
@@ -374,7 +475,6 @@ fn prepare_confirm(
     // It may have been manually imported since discovery; skip the download too.
     let duplicate = with_store(state, |store| {
         check_identity(store, expected)?;
-        evidence_commands::backfill_message_ids(store, store.archive_dir());
         Ok(key(&item.header)
             .map(|key| store.find_known_mail(&key))
             .transpose()?
@@ -404,6 +504,16 @@ async fn confirm_many(
 ) -> ConfirmReport {
     use std::collections::BTreeMap;
     let mut report = ConfirmReport::default();
+    if let Err(error) = with_store(state, |store| {
+        check_identity(store, expected)?;
+        evidence_commands::backfill_message_ids(store, store.archive_dir());
+        Ok(())
+    }) {
+        for id in ids {
+            confirm_failure(&mut report, id, error.clone());
+        }
+        return report;
+    }
     let mut groups: BTreeMap<String, Vec<(String, Candidate)>> = BTreeMap::new();
     for id in ids {
         match prepare_confirm(state, db, expected, &id) {
@@ -658,7 +768,7 @@ mod tests {
                     message: "unsafe raw server text and synthetic secret".into(),
                 })
             } else {
-                Ok(())
+                Ok(false)
             }
         })
         .unwrap();
@@ -721,10 +831,26 @@ mod tests {
         assert_eq!(db.account("a").unwrap().failures, 3);
         db.pause("a", false).unwrap();
         let accounts = db.accounts().unwrap();
-        let report = run_checks(&mut db, accounts, true, 0, |_, _| Ok(())).unwrap();
+        let report = run_checks(&mut db, accounts, true, 0, |_, _| Ok(false)).unwrap();
         assert_eq!(report.succeeded_accounts, 1);
         assert!(report.failed_accounts.is_empty());
         assert!(db.account("a").unwrap().last_error.is_none());
+    }
+    #[test]
+    fn partial_checks_stay_visible_and_retry_without_pausing_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Database::open(dir.path()).unwrap();
+        db.save_account("a", "a@qq.com").unwrap();
+        let accounts = db.accounts().unwrap();
+        let report = run_checks(&mut db, accounts, true, 100, |_, _| Ok(true)).unwrap();
+        assert_eq!(report.succeeded_accounts, 0);
+        assert_eq!(report.partial_accounts.len(), 1);
+        assert!(report.failed_accounts.is_empty());
+        let account = db.account("a").unwrap();
+        assert!(!account.paused);
+        assert_eq!(account.failures, 0);
+        assert_eq!(account.last_error.as_deref(), Some("Protocol"));
+        assert_eq!(account.next_check - account.last_checked.unwrap(), 60);
     }
     #[test]
     fn scheduled_checks_do_not_report_success_for_accounts_that_are_not_due() {

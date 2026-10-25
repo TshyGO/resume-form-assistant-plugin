@@ -278,6 +278,41 @@ fn failures_back_off_pause_and_resume_durably() {
     assert_eq!(db.account("account").unwrap().failures, 0);
 }
 #[test]
+fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
+    let (_dir, mut db) = database();
+    assert_eq!(
+        db.record_header_failure("archive", "account", "INBOX", 7, 102)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.prepare_header_retries("archive", "account", "INBOX", 7)
+            .unwrap(),
+        vec![HeaderRetry {
+            uid: 102,
+            attempts: 1
+        }]
+    );
+    assert_eq!(
+        db.record_header_failure("archive", "account", "INBOX", 7, 102)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.record_header_failure("archive", "account", "INBOX", 7, 102)
+            .unwrap(),
+        3
+    );
+    assert!(db
+        .prepare_header_retries("archive", "account", "INBOX", 7)
+        .unwrap()
+        .is_empty());
+    assert_eq!(db.header_issue_count("archive", "account").unwrap(), 1);
+    db.commit_header_retry("archive", "account", "INBOX", 7, 102, None)
+        .unwrap();
+    assert_eq!(db.header_issue_count("archive", "account").unwrap(), 0);
+}
+#[test]
 fn deleting_accounts_cascades_and_archive_scopes_stay_separate() {
     let (_dir, mut db) = database();
     db.commit_scan(

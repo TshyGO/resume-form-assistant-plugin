@@ -248,32 +248,60 @@ pub async fn headers<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
                 return Err(Error::Protocol);
             }
         }
+        if !skipped.is_empty() {
+            return Err(Error::TooLarge);
+        }
         Ok(result)
     })
     .await
 }
 
-/// Recover useful headers from a batch whose server response omitted a live
-/// header. Individual semantic failures are skipped; connection failures still
-/// abort so the account can retry without advancing past unread data.
+pub struct HeaderBatch {
+    pub headers: Vec<(u32, Header)>,
+    /// Live messages whose header may be temporarily unavailable.
+    pub retry_uids: Vec<u32>,
+    /// Permanently unsupported headers, currently only the explicit size cap.
+    pub terminal_uids: Vec<u32>,
+}
+
+/// Recover useful headers without forgetting live messages that need a later
+/// retry. Connection failures still abort the entire batch.
 pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     session: &mut Session<S>,
     uids: &[u32],
-) -> Result<Vec<(u32, Header)>> {
+) -> Result<HeaderBatch> {
     match headers(session, uids).await {
-        Ok(found) => Ok(found),
+        Ok(headers) => Ok(HeaderBatch {
+            headers,
+            retry_uids: Vec::new(),
+            terminal_uids: Vec::new(),
+        }),
         Err(Error::Protocol | Error::TooLarge) if uids.len() > 1 => {
-            let mut found = Vec::new();
+            let mut batch = HeaderBatch {
+                headers: Vec::new(),
+                retry_uids: Vec::new(),
+                terminal_uids: Vec::new(),
+            };
             for uid in uids {
                 match headers(session, &[*uid]).await {
-                    Ok(mut one) => found.append(&mut one),
-                    Err(Error::Protocol | Error::TooLarge) => {}
+                    Ok(mut one) => batch.headers.append(&mut one),
+                    Err(Error::Protocol) => batch.retry_uids.push(*uid),
+                    Err(Error::TooLarge) => batch.terminal_uids.push(*uid),
                     Err(error) => return Err(error),
                 }
             }
-            Ok(found)
+            Ok(batch)
         }
-        Err(Error::Protocol | Error::TooLarge) => Ok(Vec::new()),
+        Err(Error::Protocol) => Ok(HeaderBatch {
+            headers: Vec::new(),
+            retry_uids: uids.to_vec(),
+            terminal_uids: Vec::new(),
+        }),
+        Err(Error::TooLarge) => Ok(HeaderBatch {
+            headers: Vec::new(),
+            retry_uids: Vec::new(),
+            terminal_uids: uids.to_vec(),
+        }),
         Err(error) => Err(error),
     }
 }
@@ -568,10 +596,24 @@ mod tests {
             "* 1 FETCH (UID 9 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n* 2 FETCH (UID 10 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
             huge.len(), String::from_utf8_lossy(&huge), normal.len(), String::from_utf8_lossy(&normal)
         );
-        let (mut s, task) = session(vec![(format!("UID FETCH 9,10 {HEADER_QUERY}"), reply)]).await;
-        let found = headers(&mut s, &[9, 10]).await.unwrap();
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, 10);
+        let huge_reply = format!(
+            "* 1 FETCH (UID 9 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
+            huge.len(), String::from_utf8_lossy(&huge)
+        );
+        let normal_reply = format!(
+            "* 1 FETCH (UID 10 BODY[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0> {{{}}}\r\n{})\r\n{{tag}} OK fetched\r\n",
+            normal.len(), String::from_utf8_lossy(&normal)
+        );
+        let (mut s, task) = session(vec![
+            (format!("UID FETCH 9,10 {HEADER_QUERY}"), reply),
+            (format!("UID FETCH 9 {HEADER_QUERY}"), huge_reply),
+            (format!("UID FETCH 10 {HEADER_QUERY}"), normal_reply),
+        ])
+        .await;
+        let found = headers_resilient(&mut s, &[9, 10]).await.unwrap();
+        assert_eq!(found.headers.len(), 1);
+        assert_eq!(found.headers[0].0, 10);
+        assert_eq!(found.terminal_uids, vec![9]);
         task.await.unwrap();
     }
     #[tokio::test]
@@ -600,9 +642,14 @@ mod tests {
         .await;
         let found = headers_resilient(&mut s, &[9, 10]).await.unwrap();
         assert_eq!(
-            found.iter().map(|(uid, _)| *uid).collect::<Vec<_>>(),
+            found
+                .headers
+                .iter()
+                .map(|(uid, _)| *uid)
+                .collect::<Vec<_>>(),
             vec![10]
         );
+        assert_eq!(found.retry_uids, vec![9]);
         task.await.unwrap();
     }
     #[tokio::test]

@@ -14,6 +14,7 @@ pub struct Account {
     pub last_error: Option<String>,
     pub last_checked: Option<i64>,
     pub next_check: i64,
+    pub header_issues: u32,
 }
 impl Account {
     pub fn credential_id(&self) -> String {
@@ -24,6 +25,11 @@ impl Account {
 pub struct Cursor {
     pub validity: u32,
     pub uid: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderRetry {
+    pub uid: u32,
+    pub attempts: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +74,12 @@ impl Database {
                 header TEXT NOT NULL, reasons TEXT NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('pending','ignored','imported')),
                 UNIQUE(archive,account,fingerprint));
+            CREATE TABLE IF NOT EXISTS header_retries (
+                archive TEXT NOT NULL,
+                account TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                folder TEXT NOT NULL, validity INTEGER NOT NULL, uid INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(archive,account,folder,validity,uid));
             CREATE INDEX IF NOT EXISTS candidate_pending ON candidates(archive,state);")?;
         Ok(Self(conn))
     }
@@ -96,6 +108,7 @@ impl Database {
                 last_error,
                 last_checked,
                 next_check,
+                header_issues: 0,
             })
         })
         .collect()
@@ -140,6 +153,13 @@ impl Database {
         )?;
         Ok(())
     }
+    pub fn partial_failure(&self, id: &str, error: Error, now: i64) -> Result<()> {
+        self.0.execute(
+            "UPDATE accounts SET failures=0,last_error=?2,paused=0,last_checked=?3,next_check=?4 WHERE id=?1",
+            params![id, error.to_string(), now, now + 60],
+        )?;
+        Ok(())
+    }
     pub fn pause(&self, id: &str, paused: bool) -> Result<()> {
         self.0.execute(
             "UPDATE accounts SET paused=?2,failures=0,next_check=0 WHERE id=?1",
@@ -161,6 +181,126 @@ impl Database {
                 },
             )
             .optional()?)
+    }
+    pub fn prepare_header_retries(
+        &self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+    ) -> Result<Vec<HeaderRetry>> {
+        self.0.execute(
+            "DELETE FROM header_retries WHERE archive=?1 AND account=?2 AND folder=?3 AND validity<>?4",
+            params![archive, account, folder, validity],
+        )?;
+        let mut stmt = self.0.prepare(
+            "SELECT uid,attempts FROM header_retries
+             WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND attempts<?5
+             ORDER BY uid",
+        )?;
+        let rows = stmt.query_map(
+            params![archive, account, folder, validity, FAILURE_LIMIT],
+            |row| {
+                Ok(HeaderRetry {
+                    uid: row.get(0)?,
+                    attempts: row.get(1)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+    pub fn record_header_failure(
+        &self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+        uid: u32,
+    ) -> Result<u32> {
+        self.0.execute(
+            "INSERT INTO header_retries(archive,account,folder,validity,uid,attempts)
+             VALUES (?1,?2,?3,?4,?5,1)
+             ON CONFLICT(archive,account,folder,validity,uid)
+             DO UPDATE SET attempts=MIN(attempts+1,?6)",
+            params![archive, account, folder, validity, uid, FAILURE_LIMIT],
+        )?;
+        Ok(self.0.query_row(
+            "SELECT attempts FROM header_retries
+             WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND uid=?5",
+            params![archive, account, folder, validity, uid],
+            |row| row.get(0),
+        )?)
+    }
+    pub fn mark_header_terminal(
+        &self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+        uid: u32,
+    ) -> Result<()> {
+        self.0.execute(
+            "INSERT INTO header_retries(archive,account,folder,validity,uid,attempts)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(archive,account,folder,validity,uid)
+             DO UPDATE SET attempts=?6",
+            params![archive, account, folder, validity, uid, FAILURE_LIMIT],
+        )?;
+        Ok(())
+    }
+    pub fn clear_header_retry(
+        &self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+        uid: u32,
+    ) -> Result<()> {
+        self.0.execute(
+            "DELETE FROM header_retries
+             WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND uid=?5",
+            params![archive, account, folder, validity, uid],
+        )?;
+        Ok(())
+    }
+    pub fn header_issue_count(&self, archive: &str, account: &str) -> Result<u32> {
+        Ok(self.0.query_row(
+            "SELECT COUNT(*) FROM header_retries WHERE archive=?1 AND account=?2 AND attempts>=?3",
+            params![archive, account, FAILURE_LIMIT],
+            |row| row.get(0),
+        )?)
+    }
+    pub fn commit_header_retry(
+        &mut self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+        uid: u32,
+        found: Option<(Header, Vec<String>)>,
+    ) -> Result<()> {
+        let tx = self.0.transaction()?;
+        if let Some((header, reasons)) = found.filter(|(_, reasons)| !reasons.is_empty()) {
+            tx.execute(
+                "INSERT INTO candidates(id,archive,account,fingerprint,folder,validity,uid,header,reasons,state)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')
+                 ON CONFLICT(archive,account,fingerprint) DO UPDATE SET
+                 folder=excluded.folder,validity=excluded.validity,uid=excluded.uid,
+                 header=excluded.header,reasons=excluded.reasons",
+                params![
+                    uuid::Uuid::new_v4().to_string(), archive, account, header.fingerprint(), folder,
+                    validity, uid, serde_json::to_string(&header).map_err(|_| Error::Storage)?,
+                    serde_json::to_string(&reasons).map_err(|_| Error::Storage)?
+                ],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM header_retries
+             WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND uid=?5",
+            params![archive, account, folder, validity, uid],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
     /// One transaction: never persist progress before the corresponding candidates.
     /// Only matched headers are provided; unmatched headers never reach SQLite.

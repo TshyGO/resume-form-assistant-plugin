@@ -2,7 +2,7 @@
 mod db;
 pub mod imap;
 mod rules;
-pub use db::{Account, Candidate, Cursor, Database};
+pub use db::{Account, Candidate, Cursor, Database, HeaderRetry};
 pub use rules::{classify, Header};
 use serde::{Deserialize, Serialize};
 
