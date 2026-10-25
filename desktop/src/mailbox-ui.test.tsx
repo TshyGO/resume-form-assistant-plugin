@@ -122,8 +122,15 @@ test("partial import failures stay visible with per-message reasons and can be r
   await waitFor(() => expect(el("mailbox-candidates").textContent).toContain("断网了，请重试。"));
   expect(el("mailbox-inbox-status").textContent).toContain("失败 1 封");
   expect(onImported).toHaveBeenCalledOnce();
-  expect(el("mailbox-tab-stored").getAttribute("aria-selected")).toBe("true");
+  expect(el("mailbox-tab-pending").getAttribute("aria-selected")).toBe("true");
   expect(el<HTMLButtonElement>("mailbox-save-selected").disabled).toBe(false);
+});
+test("a fully successful confirmation switches to the stored list", async () => {
+  const { ui, view, handlers } = setup([candidate("one")]); await ui.refresh();
+  fireEvent.click(el("mailbox-tab-pending"));
+  handlers.mailbox_confirm = async () => { view.candidates = []; view.pendingCount = 0; return { imported: 1, duplicates: 0, failed: [] }; };
+  fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-save-selected"));
+  await waitFor(() => expect(el("mailbox-tab-stored").getAttribute("aria-selected")).toBe("true"));
 });
 test("a failed later batch still refreshes messages committed by an earlier batch", async () => {
   const { ui, view, handlers, onImported } = setup(Array.from({length: 101}, (_,i) => candidate(String(i)))); await ui.refresh();
@@ -136,6 +143,7 @@ test("a failed later batch still refreshes messages committed by an earlier batc
   fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-save-selected"));
   await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("第二批连接中断"));
   expect(onImported).toHaveBeenCalledOnce();
+  expect(el("mailbox-tab-pending").getAttribute("aria-selected")).toBe("true");
   expect(el("mailbox-candidates").querySelectorAll('input:checked')).toHaveLength(1);
 });
 test("a read failure retains candidates instead of showing an empty successful result", async () => {

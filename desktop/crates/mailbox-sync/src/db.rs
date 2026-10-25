@@ -188,6 +188,7 @@ impl Database {
         account: &str,
         folder: &str,
         validity: u32,
+        limit: u32,
     ) -> Result<Vec<HeaderRetry>> {
         self.0.execute(
             "DELETE FROM header_retries WHERE archive=?1 AND account=?2 AND folder=?3 AND validity<>?4",
@@ -196,10 +197,10 @@ impl Database {
         let mut stmt = self.0.prepare(
             "SELECT uid,attempts FROM header_retries
              WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND attempts<?5
-             ORDER BY uid",
+             ORDER BY uid LIMIT ?6",
         )?;
         let rows = stmt.query_map(
-            params![archive, account, folder, validity, FAILURE_LIMIT],
+            params![archive, account, folder, validity, FAILURE_LIMIT, limit.max(1)],
             |row| {
                 Ok(HeaderRetry {
                     uid: row.get(0)?,

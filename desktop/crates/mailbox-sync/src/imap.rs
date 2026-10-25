@@ -11,6 +11,7 @@ use tokio::{
 pub type LiveSession = Session<tokio_native_tls::TlsStream<TcpStream>>;
 const HEADER_QUERY: &str = "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)]<0.65536>)";
 const DOWNLOAD_CHUNK_SIZE: usize = 1024 * 1024;
+pub const HEADER_RETRY_BUDGET: usize = 8;
 pub const BATCH_SIZE: usize = 100;
 
 pub async fn bounded<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
@@ -86,16 +87,20 @@ pub async fn identify<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     }
     Ok(())
 }
-fn junk_name(name: &str) -> bool {
+fn junk_name(name: &str, delimiter: Option<&str>) -> bool {
     use base64::Engine;
-    let lower = name.to_ascii_lowercase();
+    let leaf = delimiter
+        .filter(|value| !value.is_empty())
+        .and_then(|value| name.rsplit(value).next())
+        .unwrap_or(name);
+    let lower = leaf.trim().to_ascii_lowercase();
     ["junk", "junk e-mail", "junk email", "spam", "bulk mail"].contains(&lower.as_str())
         || ["垃圾邮件", "垃圾箱"].iter().any(|s| {
             let bytes: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
             let encoded = base64::engine::general_purpose::STANDARD_NO_PAD
                 .encode(bytes)
                 .replace('/', ",");
-            name == *s || name == format!("&{encoded}-")
+            leaf.trim() == *s || leaf.trim() == format!("&{encoded}-")
         })
 }
 pub async fn folders<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
@@ -108,7 +113,8 @@ pub async fn folders<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
             if name.attributes().contains(&NameAttribute::NoSelect) {
                 continue;
             }
-            if (name.attributes().contains(&NameAttribute::Junk) || junk_name(name.name()))
+            if (name.attributes().contains(&NameAttribute::Junk)
+                || junk_name(name.name(), name.delimiter()))
                 && !result.iter().any(|n| n.eq_ignore_ascii_case(name.name()))
             {
                 result.push(name.name().to_string());
@@ -282,7 +288,7 @@ pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>
                 retry_uids: Vec::new(),
                 terminal_uids: Vec::new(),
             };
-            for uid in uids {
+            for uid in uids.iter().take(HEADER_RETRY_BUDGET) {
                 match headers(session, &[*uid]).await {
                     Ok(mut one) => batch.headers.append(&mut one),
                     Err(Error::Protocol) => batch.retry_uids.push(*uid),
@@ -290,6 +296,9 @@ pub async fn headers_resilient<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>
                     Err(error) => return Err(error),
                 }
             }
+            batch
+                .retry_uids
+                .extend_from_slice(&uids[uids.len().min(HEADER_RETRY_BUDGET)..]);
             Ok(batch)
         }
         Err(Error::Protocol) => Ok(HeaderBatch {
@@ -376,16 +385,22 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
 }
 pub async fn test_connection(email: &str, secret: &str) -> Result<()> {
     let mut session = connect(email, secret).await?;
-    let folders = folders(&mut session).await?;
-    for folder in folders {
-        bounded(async {
-            session.examine(folder).await.map_err(network)?;
-            Ok(())
-        })
-        .await?;
-    }
+    validate_connection(&mut session).await?;
     let _ = bounded(async { session.logout().await.map_err(network) }).await;
     Ok(())
+}
+
+async fn validate_connection<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
+    session: &mut Session<S>,
+) -> Result<()> {
+    // LIST still proves the account can enumerate server folders, but only the
+    // required INBOX must open. Optional junk folders are isolated during scans.
+    let _ = folders(session).await?;
+    bounded(async {
+        session.examine("INBOX").await.map_err(network)?;
+        Ok(())
+    })
+    .await
 }
 
 /// Network credentials never reside in Account or persistence structures.
@@ -470,11 +485,24 @@ mod tests {
     }
     #[tokio::test]
     async fn discovers_special_use_and_chinese_junk_but_not_sent_or_noselect() {
-        let (mut s,task) = session(vec![("LIST \"\" *".into(),"* LIST (\\Junk) \"/\" \"Bulk\"\r\n* LIST () \"/\" \"&V4NXPpCuTvY-\"\r\n* LIST (\\Sent) \"/\" \"Sent\"\r\n* LIST (\\Junk \\Noselect) \"/\" \"Hidden\"\r\n{tag} OK list\r\n".into())]).await;
+        let (mut s,task) = session(vec![("LIST \"\" *".into(),"* LIST (\\Junk) \"/\" \"Bulk\"\r\n* LIST () \"/\" \"&V4NXPpCuTvY-\"\r\n* LIST () \"/\" \"INBOX/&V4NXPpCuTvY-\"\r\n* LIST (\\Sent) \"/\" \"Sent\"\r\n* LIST (\\Junk \\Noselect) \"/\" \"Hidden\"\r\n{tag} OK list\r\n".into())]).await;
         assert_eq!(
             folders(&mut s).await.unwrap(),
-            vec!["INBOX", "Bulk", "&V4NXPpCuTvY-"]
+            vec!["INBOX", "Bulk", "&V4NXPpCuTvY-", "INBOX/&V4NXPpCuTvY-"]
         );
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn connection_requires_inbox_but_does_not_open_optional_junk() {
+        let (mut s, task) = session(vec![
+            (
+                "LIST \"\" *".into(),
+                "* LIST (\\Junk) \"/\" \"Junk\"\r\n{tag} OK list\r\n".into(),
+            ),
+            ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
+        ])
+        .await;
+        validate_connection(&mut s).await.unwrap();
         task.await.unwrap();
     }
     #[tokio::test]
@@ -650,6 +678,45 @@ mod tests {
             vec![10]
         );
         assert_eq!(found.retry_uids, vec![9]);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn batch_protocol_fallback_is_bounded_and_defers_the_rest() {
+        let uids: Vec<u32> = (1..=10).collect();
+        let set = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let search = uids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut script = vec![
+            (
+                format!("UID FETCH {set} {HEADER_QUERY}"),
+                "{tag} OK fetched\r\n".into(),
+            ),
+            (
+                format!("UID SEARCH UID {set}"),
+                format!("* SEARCH {search}\r\n{{tag}} OK search\r\n"),
+            ),
+        ];
+        for uid in uids.iter().take(HEADER_RETRY_BUDGET) {
+            script.push((
+                format!("UID FETCH {uid} {HEADER_QUERY}"),
+                "{tag} OK fetched\r\n".into(),
+            ));
+            script.push((
+                format!("UID SEARCH UID {uid}"),
+                format!("* SEARCH {uid}\r\n{{tag}} OK search\r\n"),
+            ));
+        }
+        let (mut s, task) = session(script).await;
+        let batch = headers_resilient(&mut s, &uids).await.unwrap();
+        assert!(batch.headers.is_empty());
+        assert_eq!(batch.retry_uids, uids);
         task.await.unwrap();
     }
     #[tokio::test]

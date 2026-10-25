@@ -224,6 +224,7 @@ export function mountMailboxes(
   async function saveCandidates(ids: string[]) {
     await action("inbox", "正在下载并存进档案…", async () => {
       let imported = 0, duplicates = 0, failed = 0;
+      let completed = false;
       // Host bounds each batch; partial failures keep their candidates and reasons.
       try {
         for (let start = 0; start < ids.length; start += 100) {
@@ -233,12 +234,13 @@ export function mountMailboxes(
           report.failed.forEach((item) => failures.set(item.id, item.message));
           ids.slice(start, start + 100).filter((id) => !bad.has(id)).forEach((id) => { selected.delete(id); failures.delete(id); });
         }
+        completed = true;
         say("inbox", `已存进档案 ${imported} 封，已有 ${duplicates} 封${failed ? `，失败 ${failed} 封，请查看对应原因后重试` : ""}。`, failed > 0);
       } finally {
         // Refresh committed chunks even if a later chunk's IPC request fails.
         if (imported + duplicates > 0) {
           try { await onImported(); } catch { say("inbox", "邮件已处理，档案列表刷新失败，请刷新列表查看，无需重复导入。", true); }
-          selectInboxState("stored");
+          selectInboxState(completed && failed === 0 ? "stored" : "pending");
         }
       }
     });

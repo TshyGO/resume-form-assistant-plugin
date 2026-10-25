@@ -64,6 +64,22 @@ fn rules_are_local_explainable_and_match_domains_on_label_boundaries() {
     assert!(!classify(&h, &[]).is_empty());
     h.subject = Some("订单已发货".into());
     assert!(classify(&h, &[]).is_empty());
+
+    let mut h = header("short@company", "普通系统通知");
+    h.from_name = None;
+    h.from_addr = Some("newsletter@dailynews.com".into());
+    assert!(classify(&h, &["AI".into()]).is_empty());
+    h.from_name = Some("AI 招聘团队".into());
+    assert!(classify(&h, &["AI".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司")));
+    h.from_name = None;
+    h.subject = Some("DAILY 新闻".into());
+    assert!(classify(&h, &["AI".into()]).is_empty());
+    h.subject = Some("AI 面试安排".into());
+    assert!(classify(&h, &["AI".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司")));
 }
 #[test]
 fn encoded_sender_names_and_subjects_are_decoded_before_matching() {
@@ -286,7 +302,7 @@ fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
         1
     );
     assert_eq!(
-        db.prepare_header_retries("archive", "account", "INBOX", 7)
+        db.prepare_header_retries("archive", "account", "INBOX", 7, 8)
             .unwrap(),
         vec![HeaderRetry {
             uid: 102,
@@ -304,7 +320,7 @@ fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
         3
     );
     assert!(db
-        .prepare_header_retries("archive", "account", "INBOX", 7)
+        .prepare_header_retries("archive", "account", "INBOX", 7, 8)
         .unwrap()
         .is_empty());
     assert_eq!(db.header_issue_count("archive", "account").unwrap(), 1);
