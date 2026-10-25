@@ -44,6 +44,10 @@ final published artifact hashes. Do not reuse an existing version or move a tag.
   `TshyGO/resume-form-assistant-plugin`: it is a dataset key, not the transport
   route. Existing release/asset IDs and counters keep their history; no D1 schema
   or table reset is needed.
+  Collection remains bounded at 40 GitHub requests (below the Workers Free limit
+  of 50 external subrequests). The prior 24-call budget barely covered the 22
+  current releases and could not collect a desktop plus extension bridge release.
+  Budget exhaustion still rejects the entire collection without partial writes.
 - The release workflow enables production metrics for Stable tag pushes from
   either approved owner. Forks, Beta, plugin tags and workflow-dispatch dry runs
   keep production metrics disabled. Stable-main ancestry and packaging guards

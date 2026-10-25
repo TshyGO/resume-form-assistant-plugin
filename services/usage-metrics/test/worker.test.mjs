@@ -292,12 +292,25 @@ test('collection spanning midnight stores the completion date consistently and r
 });
 
 test('request budgets and mid-collection failures leave no partial download snapshot', async () => {
-  const releases = Array.from({ length: 25 }, (_, i) => ({ id: i + 1, draft: false, prerelease: false, tag_name: 'v0.4.3', published_at: '2026-10-01T00:00:00Z', assets: [] }));
-  await assert.rejects(collectDownloads(db, githubFixture(releases), undefined, () => NOW), /budget/);
+  const releases = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, draft: false, prerelease: false, tag_name: 'v0.4.3', published_at: '2026-10-01T00:00:00Z', assets: [] }));
+  let calls = 0;
+  const fetchPage = githubFixture(releases);
+  await assert.rejects(collectDownloads(db, url => { calls++; return fetchPage(url); }, undefined, () => NOW), /budget/);
+  assert.equal(calls, 40);
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_observation').first()).n, 0);
   const fixture = githubFixture(releases.slice(0, 2));
   await assert.rejects(collectDownloads(db, url => /\/2\/assets/.test(url) ? Promise.resolve(new Response('failure', { status: 500 })) : fixture(url), undefined, () => NOW));
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM release_download_snapshot').first()).n, 0);
+});
+
+test('download collection has room for the existing releases plus a desktop and extension bridge', async () => {
+  const releases = Array.from({ length: 24 }, (_, i) => ({ id: i + 1, draft: false, assets: [] }));
+  const fetchPage = githubFixture(releases);
+  let calls = 0;
+  const collected = await fetchReleases(url => { calls++; return fetchPage(url); });
+  assert.equal(collected.length, 24);
+  assert.equal(calls, 25);
+  assert.ok(collected.every(release => Array.isArray(release.assets)));
 });
 
 test('GitHub requests use Workers-compatible manual redirects and reject 3xx without following', async () => {

@@ -6,13 +6,16 @@ export class DownloadCollectionError extends Error {
 }
 
 const BASE = RELEASES_API_BASE;
+// The 22 published releases already require 23 calls. Leave room for bridge
+// and Stable releases while staying below the Workers Free 50-subrequest cap.
+const MAX_GITHUB_REQUESTS = 40;
 
 export async function fetchReleases(fetchImpl, token) {
   let calls = 0;
   async function pages(path) {
     const result = [];
     for (let page = 1; ; page++) {
-      if (++calls > 24) throw new Error('GitHub request budget exceeded');
+      if (++calls > MAX_GITHUB_REQUESTS) throw new Error('GitHub request budget exceeded');
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       let values;
