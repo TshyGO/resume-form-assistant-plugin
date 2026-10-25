@@ -101,6 +101,15 @@ node desktop/scripts/chrome-web-store.js release-staged
 
 还在 `PENDING_REVIEW` 时这个命令会失败，不会提前公开。
 
+### 过审提醒
+
+商店不会把审核结果通知到仓库，0.4.3 就这样过审后一直停在 `STAGED`，还挡住了 0.4.4 的上传。现在由 [Chrome Web Store Watch](../.github/workflows/chrome-web-store-watch.yml) 每天北京时间 09:23 只读一次商店状态，也可以在 Actions 里手动运行：
+
+- 送审版本变成 `STAGED` 或 `REJECTED`，或者条目收到政策警告、被下架时，它打开一个带「商店提醒」标签的 issue，写明版本、要用的 tag 和上线命令。状态有变化时更新这个 issue 并留言；情况消失后（已经上线，或新版本已送审）留言并自动关闭。照 issue 里的命令上线即可，不用手动关它。
+- 它只调用 `status`：不上传、不送审、不上线。商店凭据只给读状态那一步，GitHub token 只给改 issue 那一步。
+- 想让提醒直接指派给某人，在仓库 Settings → Secrets and variables → Actions → Variables 里建 `CHROME_WEB_STORE_WATCH_ASSIGNEES`，写 GitHub 用户名，多个用逗号隔开。不设时只有关注了这个仓库的人会收到通知。
+- 读商店状态失败时这次运行会失败，GitHub 按 Actions 通知设置提醒最后改过定时设置的人。公开仓库 60 天没有活动时，GitHub 会停掉定时工作流，要到 Actions 页面重新启用。
+
 ## 5. 只在本地打 ZIP
 
 不需要商店凭据，也不会联网：
@@ -137,3 +146,10 @@ node desktop/scripts/chrome-web-store.js status
 输出只有已发布版本、待审版本、待审状态和最近一次上传状态，不打印 token。Dashboard 的状态页是同一份数据的界面。
 
 `takenDown: true` 时不要继续发版，先处理下架原因。
+
+想看过审提醒会怎么写，把输出交给提醒脚本；不加 `--sync` 时它只打印，不改 issue：
+
+```bash
+node desktop/scripts/chrome-web-store.js status > store-status.json
+node desktop/scripts/chrome-web-store-watch.js --status store-status.json
+```
