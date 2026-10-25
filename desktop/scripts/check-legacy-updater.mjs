@@ -26,6 +26,7 @@ try {
   if (existsSync(sourceFile)) unlinkSync(sourceFile);
   rmdirSync(fixture);
 }
+// Diagnostic metadata, not a transfer-approval API; CI uses the Rust test exit status.
 console.log(JSON.stringify({ released_tag: 'desktop-v0.4.4', source: released,
   pre_transfer_bridge_offer: true, post_transfer_new_owner_accepted: false,
   legacy_in_app_transfer_safe: false, scope: 'released-source replay, not installed-binary acceptance; operator decision is separate' }));

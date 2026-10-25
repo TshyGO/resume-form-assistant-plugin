@@ -44,6 +44,7 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          test -n "$SOURCE_COMMIT"
           printf '%s\n' "$SOURCE_COMMIT" > output/source-commit.txt
           git rev-parse HEAD > output/checkout-commit.txt
           # npm test builds and runs Workerd against output/worker.mjs.

@@ -77,6 +77,9 @@ the code downloaded from Cloudflare matches it exactly. All 11 bindings, existin
 activity/email enabled flags, database and two Cron schedules were inherited.
 Existing secret values were not exported or rotated. Health returns HTTP 200
 with `activity_ready=true` using the desktop client User-Agent.
+Cloudflare deployment `52ce3a60-bdf7-4af8-8bec-b41804597689` activates version
+`b5f02407-62fb-416c-a31d-ed86e3c1e95f` at 100 percent. These are operator-verified
+Cloudflare facts; public CI does not receive production management credentials.
 
 A protected Cloudflare preview invoked the unchanged deployed collector with
 its existing GitHub binding, without D1/activity/email bindings. It fetched all
@@ -90,21 +93,28 @@ bundle while available; if it expires without a retained verified copy, obtain a
 new successful remote Test/Workerd artifact before deployment. Do not substitute
 an untested local rebuild.
 
-## Ongoing release checks
+The artifact records both `source-commit.txt` (PR head, or push commit) and
+`checkout-commit.txt` (the actual tested checkout, including a PR merge ref).
+The artifact name alone is not a provenance guarantee. Documentation/checksum
+workflow follow-ups do not require redeploying identical Worker bytes: verify
+their tested bundle against the deployed SHA-256 instead of claiming a different
+commit was deployed.
 
-1. Deploy the reviewed statistics Worker while preserving production bindings,
-   enabled flags, email restrictions and D1 data. Use the exact tested bundle
-   and SHA-256 saved by the Test workflow; verify a real GitHub collection and
-   historical asset continuity. A fixture or dry-run is not production acceptance.
-2. Verify the public website resolves the current release through the immutable
-   ID and accepts canonical organization assets; preserve store IDs and staged
-   publication policy. No bridge or store submission is required for this cutover.
-3. Re-inventory public repository state, transfer the original repository, and
-   verify repository/Release IDs and assets, old/new Git/API/download routes,
-   organization AI review and Stable workflow configuration.
-4. Future normal versions must include the dual-owner updater and enable
-   production metrics only for actual Stable tag pushes from the organization.
-   An actual Stable publication remains separate from a workflow dry run.
+## Future normal release checks
+
+1. Include the dual-owner updater and enable production metrics only for actual
+   Stable tag pushes from the organization. Run the existing release SOP and
+   real Windows/macOS upgrade, profile and Native Messaging acceptance before
+   publishing a new normal version. Do not reuse existing tags or versions.
+2. Keep the website on immutable repository ID routing and verify canonical
+   organization asset links after publication. Preserve store IDs and the staged
+   publication policy; a CI dry run is not a store submission or Stable release.
+3. If statistics code changes again, deploy only a reviewed, remotely tested
+   bundle, preserve production bindings/data, and repeat real collection and
+   historical asset checks. A fixture is not production acceptance.
+4. Keep the README's manual-update guidance until the old-client population is
+   no longer relevant. Existing 0.4.4 binaries do not gain compatibility merely
+   because repository transfer and CI succeeded.
 
 No private repository is changed. Keep the public website and client statistics
 endpoint stable. Only the GitHub repository identity changes; historical asset
