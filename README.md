@@ -58,8 +58,8 @@
 
 | 组件 | 支持范围 | 获取方式 |
 | --- | --- | --- |
-| Windows 桌面应用 | Windows 10（1809）或更新，x64 | [正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)，下载 `wangshen-kuaitian_<版本>_x64-setup.exe` |
-| macOS 桌面应用 | macOS 11 或更新，Apple Silicon（Apple 芯片） | 同一发布页，下载 `wangshen-kuaitian_<版本>_aarch64.dmg` |
+| Windows 桌面应用 | Windows x64（[安装说明](docs/desktop-mvp/install-and-update.md#7-后台进程与系统要求)列出的最低要求为 Windows 10 1809，需要 WebView2 Runtime） | [正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)，下载 `wangshen-kuaitian_<版本>_x64-setup.exe` |
+| macOS 桌面应用 | Apple Silicon（Apple 芯片），最低要求 macOS 11 | 同一发布页，下载 `wangshen-kuaitian_<版本>_aarch64.dmg` |
 | 浏览器扩展 | Chrome / Edge 116 或更新版本 | 优先从 [Chrome 商店](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)安装（Edge 也可用）；商店不可用或版本尚未同步时使用配套 ZIP |
 
 **[固定下载入口](https://19991107.xyz/tools/wangshen-kuaitian/download/)会自动查询最新桌面正式版及其配套插件，后续发版无需更换网址。** 查询失败时可使用页面中的 GitHub 发布列表备用入口。商店审核和分发可能滞后，商店版不保证是最新配套版本。
@@ -68,7 +68,7 @@
 
 直接浏览 GitHub 发布列表时请注意：不带 `desktop-` 前缀的 `vX.Y.Z` 是扩展单独发版，只有扩展 ZIP（`wangshen-kuaitian-vX.Y.Z-chrome.zip`），没有桌面安装包，但 GitHub 可能把它标为 Latest；带 Pre-release 标记的是测试版。找桌面安装包时，请选不带 Pre-release 标记的最高版本 `desktop-vX.Y.Z`。
 
-安装包还没有能验证发布者身份的代码签名（macOS 包为 ad-hoc 签名），首次启动时可能被 Windows SmartScreen 或 macOS Gatekeeper 拦截。请确认下载来源，并参考[安装与升级说明](docs/desktop-mvp/install-and-update.md#2-安装包没有签名)，不要关闭系统安全保护。每个安装包旁都有 `.sha256` 文件，可用来核对文件在下载途中没有损坏或被替换。
+安装包还没有能验证发布者身份的代码签名（macOS 包为 ad-hoc 签名），首次启动时可能被 Windows SmartScreen 或 macOS Gatekeeper 拦截。请确认下载来源，并参考[安装与升级说明](docs/desktop-mvp/install-and-update.md#2-安装包没有签名)，不要关闭系统安全保护。每个安装包旁都有 `.sha256` 文件，只能核对下载到的文件与发布页公布的一致（没有在下载途中损坏或被替换）；它和安装包放在同一个发布页，不能证明发布者身份。
 
 <a id="小白直接看这里"></a>
 
