@@ -46,7 +46,9 @@ jobs:
         run: |
           printf '%s\n' "$SOURCE_COMMIT" > output/source-commit.txt
           git rev-parse HEAD > output/checkout-commit.txt
-          sha256sum output/worker.mjs > output/worker.sha256
+          # npm test builds and runs Workerd against output/worker.mjs.
+          # Keep checksum paths relative to the downloaded artifact root.
+          (cd output && sha256sum worker.mjs > worker.sha256 && sha256sum -c worker.sha256)
       - name: Save tested Worker for controlled deployment
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

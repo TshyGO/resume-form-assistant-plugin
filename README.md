@@ -1,12 +1,14 @@
 # 网申快填
 
+> **旧版本更新提示：** 仓库现已迁入 [PTJ Works](https://github.com/ptjworks/resume-form-assistant-plugin)。桌面 0.4.4 在迁移后无法通过应用内检查发现新版本，请从[正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)手动下载后续正式版。下一次包含更新器修复的普通版本安装后，可恢复应用内更新检查；重新安装同一旧版不会修复更新器。本次不额外发布桥接版本。
+
 **少填重复信息，集中管理求职进度。**
 
 网申快填是一款免费、开源的本地优先求职助手，由 **桌面应用 + 浏览器扩展** 组成：在招聘网站辅助填写网申，在电脑上集中管理简历、岗位、申请进度和相关材料。
 
 准备好简历，在不同网站重复使用；看到合适的岗位，确认后保存；提交申请后，记录进度、整理通知，再安排下一步。
 
-**[🧩 Chrome 商店安装插件](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)** · **[🖥️ 桌面应用下载](https://19991107.xyz/tools/wangshen-kuaitian/download/)** · **[📖 快速开始](#快速开始)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/TshyGO/resume-form-assistant-plugin/issues)**
+**[🧩 Chrome 商店安装插件](https://chromewebstore.google.com/detail/diagjmploldedipjdenmecmjokckelkl)** · **[🖥️ 桌面应用下载](https://19991107.xyz/tools/wangshen-kuaitian/download/)** · **[📖 快速开始](#快速开始)** · **[💬 QQ 交流群](#-qq-交流群)** · **[🐛 提交问题](https://github.com/ptjworks/resume-form-assistant-plugin/issues)**
 
 > **优先从商店安装扩展。** 商店审核和更新分发可能晚于 GitHub 发布。如果商店版本落后于发布页的配套插件，或出现版本不兼容提示，请从[正式版下载页](https://19991107.xyz/tools/wangshen-kuaitian/download/)下载配套插件 ZIP，按[手动安装说明](#手动安装扩展)加载。
 
@@ -18,7 +20,7 @@
 >
 > 🧩 **安装配置**　🤖 **AI 接口**　🌐 **网站兼容**　🚀 **版本更新**　💡 **功能建议**　🎓 **秋招交流**
 
-如果确认是 Bug，建议同时在 [GitHub Issues](https://github.com/TshyGO/resume-form-assistant-plugin/issues) 提交，方便后续跟踪和修复。
+如果确认是 Bug，建议同时在 [GitHub Issues](https://github.com/ptjworks/resume-form-assistant-plugin/issues) 提交，方便后续跟踪和修复。
 
 > ⚠️ **隐私提醒：** 请不要在群里发送自己的 API Key、身份证号、手机号等敏感信息，截图前记得打码。
 
@@ -152,7 +154,7 @@
 
 **Excel 导入失败、接口报错、某个字段填不上？** 详见[使用指南与排错](docs/user-guide.md#常见问题)，其中保留了模板格式、手动补填、诊断和高级使用说明。
 
-**需要反馈问题？** 请提供桌面与扩展版本、系统和浏览器、招聘网站名称、出问题的字段，以及打码后的截图或诊断摘要。使用交流可以进上方 QQ 群，可复现的 Bug 建议同时提交 [Issue](https://github.com/TshyGO/resume-form-assistant-plugin/issues/new/choose)。网站填不上或填错时，选「网站填不上 / 填错」模板，并附上侧栏「填写诊断」里「复制诊断」得到的文字。
+**需要反馈问题？** 请提供桌面与扩展版本、系统和浏览器、招聘网站名称、出问题的字段，以及打码后的截图或诊断摘要。使用交流可以进上方 QQ 群，可复现的 Bug 建议同时提交 [Issue](https://github.com/ptjworks/resume-form-assistant-plugin/issues/new/choose)。网站填不上或填错时，选「网站填不上 / 填错」模板，并附上侧栏「填写诊断」里「复制诊断」得到的文字。
 
 <a id="给开发者"></a>
 

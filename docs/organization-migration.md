@@ -58,7 +58,39 @@ artifact hashes. Do not reuse an existing version or move a tag.
 - The central AI configuration registers both identities without changing Lane
   policy or credential slots. Both caller SHA fields must remain identical.
 
-## Cutover checks
+## Completed cutover (2026-10-25)
+
+The original public repository was transferred to
+`ptjworks/resume-form-assistant-plugin`, retaining ID `1217054301`, 95 branches,
+330 refs, 22 Releases and their asset IDs/digests, collaborators and role grants,
+Actions secret metadata and settings, and environment identity/protection.
+Archive/API URLs changed owner as expected. GitHub cleared the original main
+ruleset bypass actors during transfer; only the exact original actors and modes
+were restored. The disabled empty dismissal restriction added by GitHub has no
+behavioral effect. Deletion/force-push and PR protections remain active.
+
+Before transfer, the production `resume-usage-metrics` Worker was deployed from
+remote Workerd-tested artifact head `93d286b8f2debcc950e96374893aee0bcd01a61d`.
+Deployed module SHA-256 is
+`fa51de8edf96ec7c8e78eaff82058f61bef3ddc4fcdac52ed3177bba78511fe9`;
+the code downloaded from Cloudflare matches it exactly. All 11 bindings, existing
+activity/email enabled flags, database and two Cron schedules were inherited.
+Existing secret values were not exported or rotated. Health returns HTTP 200
+with `activity_ready=true` using the desktop client User-Agent.
+
+A protected Cloudflare preview invoked the unchanged deployed collector with
+its existing GitHub binding, without D1/activity/email bindings. It fetched all
+22 Releases before and after transfer, then returned canonical `ptjworks` URLs.
+All 46 tracked historical asset IDs/releases remained present and counts did
+not decrease. This is real read-only Cloudflare/GitHub execution, not a synthetic
+fixture or a claim that a new automatic daily Cron has already run.
+
+The Test workflow retains artifacts for 14 days. Download and verify the exact
+bundle while available; if it expires without a retained verified copy, obtain a
+new successful remote Test/Workerd artifact before deployment. Do not substitute
+an untested local rebuild.
+
+## Ongoing release checks
 
 1. Deploy the reviewed statistics Worker while preserving production bindings,
    enabled flags, email restrictions and D1 data. Use the exact tested bundle
