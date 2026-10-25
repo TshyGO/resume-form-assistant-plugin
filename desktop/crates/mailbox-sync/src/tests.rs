@@ -437,8 +437,8 @@ fn changing_endpoint_resets_only_that_accounts_locators_and_keeps_other_accounts
         .unwrap();
     assert!(db.cursor("archive", "account", "INBOX").unwrap().is_none());
     assert!(db.cursor("archive", "other", "INBOX").unwrap().is_some());
-    assert_eq!(db.account("account").unwrap().header_issues, 0);
-    assert_eq!(db.account("other").unwrap().header_issues, 1);
+    assert!(db.prepare_header_retries("archive", "account", "INBOX", 1).unwrap().is_empty());
+    assert_eq!(db.prepare_header_retries("archive", "other", "INBOX", 1).unwrap().len(), 1);
     assert_eq!(db.pending_count("archive").unwrap(), 1);
     assert_eq!(db.pending("archive", 10).unwrap()[0].account_id, "other");
 }
