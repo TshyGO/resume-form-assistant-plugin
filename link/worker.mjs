@@ -14,6 +14,7 @@ import { createRouter } from './router.mjs';
 import { createFillRecords } from './fillrecords.mjs';
 import { createStaging } from './staging.mjs';
 import { createUploads } from './uploads.mjs';
+import { createMail } from './mail.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
 
 /**
@@ -45,6 +46,7 @@ export function installDesktopLink(api) {
   const usage = createUsage(deps);
   const session = createSession({ ...deps, onProbe: probe => usage.observe(probe) });
   const resume = createResume({ ...deps, session });
+  const mail = createMail({ ...deps, session });
   const ai = createAi({ ...deps, session, port: nativePort(api) });
   const legacy = createLegacy({
     ...deps, session, storage: storageAdapter(api), alarms: api.alarms,
@@ -72,6 +74,13 @@ export function installDesktopLink(api) {
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const usageHandled = handleUsageMessage(api, usage, message, sender, sendResponse);
     if (usageHandled !== null) return usageHandled;
+    if (message?.type === 'DESKTOP_SAVE_MAIL') {
+      if (sender?.id !== api.runtime.id || sender?.tab || sender?.url !== api.runtime.getURL('sidepanel.html')) {
+        sendResponse({ status: 'forbidden' }); return false;
+      }
+      mail.save(message).then(sendResponse, () => sendResponse({ status: 'unavailable' }));
+      return true;
+    }
     if (!DESKTOP_MESSAGE_TYPES.has(message?.type)) return false;
     // Deleting old data or handing out whole templates is for the extension's own pages
     // (the status page), never for a content script running inside a web page.

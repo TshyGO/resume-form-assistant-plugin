@@ -75,7 +75,7 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         return Err(ProtocolError::new(
             ErrorCode::ProtocolIncompatible,
             Layer::Structure,
-            format!("{} requires protocolVersion 2", message_type.as_str()),
+            format!("{} requires protocolVersion {}", message_type.as_str(), message_type.min_envelope_version()),
         ));
     }
     let message_id = obj.get("messageId").and_then(Value::as_str).unwrap().to_string();
@@ -281,6 +281,18 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
                 return Err(invalid_payload("resume.update fields do not match op"));
             }
         }
+        MessageType::MailImport => {
+            let index = payload["chunkIndex"].as_u64().unwrap();
+            let count = payload["chunkCount"].as_u64().unwrap();
+            let size = payload["byteSize"].as_u64().unwrap();
+            let bytes = decode_standard_base64(payload["bytesBase64"].as_str().unwrap())?;
+            let expected_count = size.div_ceil(32768);
+            let expected_len = if index + 1 == count { size.saturating_sub(index * 32768) } else { 32768 };
+            if index >= count || count != expected_count || bytes.len() as u64 != expected_len
+                || sha256_hex(&bytes) != payload["chunkSha256"].as_str().unwrap() {
+                return Err(invalid_payload("mail chunk length, count or digest mismatch"));
+            }
+        }
         MessageType::LegacyImport => validate_legacy_import(payload)?,
         _ => {}
     }
@@ -447,6 +459,17 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
     {
         return Err(invalid("ai.complete tier is only returned to a request that asked for one"));
     }
+    if req.message_type == MessageType::MailImport && value["ok"] == true {
+        let p = &value["payload"];
+        let final_chunk = req.payload["chunkIndex"].as_u64().unwrap() + 1 == req.payload["chunkCount"].as_u64().unwrap();
+        if p["uploadId"] != req.payload["uploadId"] || p["chunkIndex"] != req.payload["chunkIndex"]
+            || (final_chunk && (p["status"] != "saved" || p.get("duplicate").is_none()
+                || p.get("evidenceId").is_none() || value["resultId"] != p["evidenceId"]))
+            || (!final_chunk && (p["status"] != "chunk" || p.get("evidenceId").is_some()
+                || p.get("duplicate").is_some() || value.get("resultId").is_some())) {
+            return Err(invalid("mail import acknowledgement does not match request"));
+        }
+    }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req
             .payload
@@ -604,7 +627,7 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         return Err(ProtocolError::new(
             ErrorCode::ProtocolIncompatible,
             Layer::Structure,
-            format!("{} response requires protocolVersion 2", request_type.as_str()),
+            format!("{} response requires protocolVersion {}", request_type.as_str(), request_type.min_envelope_version()),
         ));
     }
     let ok = obj.get("ok").and_then(Value::as_bool).unwrap();

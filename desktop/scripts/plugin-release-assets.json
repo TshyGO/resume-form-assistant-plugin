@@ -17,6 +17,7 @@
   "link/job-extract.mjs",
   "link/legacy.mjs",
   "link/limits.mjs",
+  "link/mail.mjs",
   "link/messages.mjs",
   "link/normalize.mjs",
   "link/outbox.mjs",

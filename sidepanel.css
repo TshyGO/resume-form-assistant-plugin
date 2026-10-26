@@ -495,3 +495,13 @@ button:disabled { cursor: not-allowed; }
 }
 /* The panel header already names these steps. */
 #job-save-form > .job-card__title, #submit-confirm-form > .job-card__title, #job-save-choice > .job-card__title, #submit-confirm-choice > .job-note { display: none; }
+
+/* #333 uses the existing card, input and primary-button tokens. */
+.mail-association { margin-top: 12px; color: var(--muted); font-size: 12px; }
+.mail-association summary { cursor: pointer; }
+.mail-association label { display: block; margin: 10px 0 6px; }
+.mail-search { display: flex; gap: 8px; margin-top: 8px; }
+.mail-search input { min-width: 0; flex: 1; }
+.mail-search button { flex: none; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); color: var(--ink); }
+.mail-excerpt { margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); overflow-wrap: anywhere; }
+.mail-excerpt > p:first-child { margin: 0; font-size: 13px; font-weight: 600; }

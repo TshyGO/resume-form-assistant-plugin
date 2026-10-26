@@ -59,6 +59,25 @@
               <p id="page-ready" class="page-ready" data-tone="idle"></p>
             </section>
 
+            <section id="mail-save" class="card" aria-labelledby="mail-save-title" hidden>
+              <div class="card-head"><h2 id="mail-save-title" class="card-head__title">保存当前邮件</h2></div>
+              <p class="card-hint">优先保存完整原件；取不到时可选择保存网页摘录。</p>
+              <details class="mail-association">
+                <summary>关联到某条申请（可选）</summary>
+                <label for="mail-company">公司名称</label>
+                <div class="mail-search"><input id="mail-company" class="dock-select" maxlength="200" autocomplete="off"><button id="mail-find-application" type="button">查找申请</button></div>
+                <label for="mail-application">关联申请</label>
+                <select id="mail-application" class="dock-select"><option value="">不关联，存入收件箱</option></select>
+              </details>
+              <button id="mail-save-button" class="fill-button" type="button">存进网申快填</button>
+              <p id="mail-save-status" class="card-hint" role="status" aria-live="polite"></p>
+              <div id="mail-excerpt-offer" class="mail-excerpt" hidden>
+                <p id="mail-excerpt-subject"></p>
+                <p class="card-hint">仅保存发件人、标题、发送时间和正文。邮件原件及附件不会保存，且可能无法与之后导入的原件自动去重。</p>
+                <div class="mail-search"><button id="mail-excerpt-accept" type="button">保存网页摘录</button><button id="mail-excerpt-cancel" type="button">取消</button></div>
+              </div>
+            </section>
+
             <section class="card template-card" aria-label="当前模板">
               <div class="card-head">
                 <label for="template-select" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="12" cy="10" r="2.6"/><path d="M7.5 17c.9-2 2.5-3 4.5-3s3.6 1 4.5 3"/></svg>当前模板</label>
@@ -459,6 +478,8 @@
     <script src="sidepanel-template-editor.js"></script>
     <script src="sidepanel-compose.js"></script>
     <script src="sidepanel-queue.js"></script>
+    <script src="webmail.js"></script>
+    <script src="sidepanel-mail.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

@@ -24,6 +24,7 @@ const PAYLOAD_KEYS = {
   "ui.open": "ui-open",
   "usage.touch": "usage-touch",
   "usage.settings": "usage-settings",
+  "mail.import": "mail-import",
   "legacy.import": "legacy-import",
 };
 
@@ -42,6 +43,7 @@ const RESPONSE_PAYLOAD_KEYS = {
   "ui.open": "ui-open",
   "usage.touch": "usage-touch",
   "usage.settings": "usage-settings",
+  "mail.import": "mail-import",
   "legacy.import": "legacy-import",
 };
 

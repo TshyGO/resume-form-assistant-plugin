@@ -1,7 +1,7 @@
 {
   "protocolVersion": 2,
   "minProtocolVersion": 1,
-  "maxProtocolVersion": 3,
+  "maxProtocolVersion": 4,
   "maxEnvelopeBytes": 65536,
   "suggestedRawChunkBytes": 32768,
   "maxSnapshotBytes": 2097152,
@@ -26,7 +26,8 @@
     "outbox.reconcile",
     "resume.read",
     "resume.update",
-    "legacy.import"
+    "legacy.import",
+    "mail.import"
   ],
   "writeTypes": [
     "job.save",
@@ -49,7 +50,8 @@
     "ui.open",
     "legacy.import",
     "usage.touch",
-    "usage.settings"
+    "usage.settings",
+    "mail.import"
   ],
   "v2MessageTypes": [
     "resume.read",
@@ -112,5 +114,8 @@
   "v3MessageTypes": [
     "usage.touch",
     "usage.settings"
+  ],
+  "v4MessageTypes": [
+    "mail.import"
   ]
 }

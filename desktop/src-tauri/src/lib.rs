@@ -22,6 +22,7 @@ mod nm_register_tests;
 mod cli;
 mod commands;
 mod evidence_commands;
+mod mail_import;
 mod mailbox_commands;
 mod backup_commands;
 mod bridge_services;
@@ -1996,6 +1997,7 @@ pub fn run() {
                         // The list re-queries. Emitting before the commit, or when the
                         // write failed, would show a row the archive does not have.
                         let _ = handle.emit("applications-changed", &notice);
+                        if notice.message_type == "mail.import" { let _ = handle.emit("evidence-changed", ()); }
                     })).notifying_legacy(Arc::new(move |notice| {
                         // The 「简历」 page shows the pending import without a manual refresh.
                         let _ = legacy_handle.emit("legacy-import-changed", &notice);

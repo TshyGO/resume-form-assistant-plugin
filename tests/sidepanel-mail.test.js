@@ -1,0 +1,63 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { JSDOM } = require('jsdom');
+const vm = require('node:vm');
+async function panel(capture = { status: 'original', bytesBase64: 'eA==' }) {
+  const dom = new JSDOM(fs.readFileSync('sidepanel.html', 'utf8'), { url: 'chrome-extension://own/sidepanel.html', runScripts: 'outside-only' });
+  const calls = []; const handlers = {};
+  let tab = { id: 1, url: 'https://mail.qq.com/cgi-bin/frame_html?sid=synthetic' };
+  let result = { status: 'saved', duplicate: false };
+  dom.window.chrome = {
+    tabs: { query: async () => [tab], sendMessage: async (id, msg) => { calls.push({ target: 'page', id, msg }); return typeof capture === 'function' ? capture() : capture; },
+      onActivated: { addListener: fn => { handlers.activate = fn; } }, onUpdated: { addListener: fn => { handlers.update = fn; } } },
+    runtime: { sendMessage: async msg => { calls.push({ target: 'desktop', msg }); return msg.type === 'DESKTOP_CANDIDATES_FOR'
+      ? { status: 'ok', exact: [], sameCompany: [{ applicationId: 'app', company: '某公司', title: '产品经理' }] } : result; } }
+  };
+  for (const file of ['webmail.js', 'sidepanel-mail.js']) vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext());
+  const flush = () => new Promise(resolve => setImmediate(resolve)); await flush();
+  return { calls, get: id => dom.window.document.getElementById(id), flush,
+    async change(next) { tab = next; handlers.activate(); await flush(); }, result: value => { result = value; } };
+}
+test('opening a mailbox side panel reads URL metadata only; save button starts capture', async () => {
+  const p = await panel(); assert.equal(p.get('mail-save').hidden, false); assert.equal(p.calls.length, 0);
+  p.get('mail-save-button').click(); await p.flush();
+  assert.equal(p.calls[0].msg.type, 'WEBMAIL_CAPTURE');
+  assert.equal(p.calls[1].msg.type, 'DESKTOP_SAVE_MAIL'); assert.equal(p.calls[1].msg.kind, 'eml');
+  assert.match(p.get('mail-save-status').textContent, /已保存完整邮件/);
+});
+test('fallback requires a second explicit click and cancellation does not write', async () => {
+  const p = await panel({ status: 'excerpt_offer', excerpt: { subject: '邀请', from: 'HR', sentTime: '昨天', body: '正文' } });
+  p.get('mail-save-button').click(); await p.flush();
+  assert.equal(p.get('mail-excerpt-offer').hidden, false); assert.equal(p.calls.length, 1);
+  p.get('mail-excerpt-cancel').click(); await p.flush(); assert.equal(p.calls.length, 1);
+  p.get('mail-save-button').click(); await p.flush(); p.get('mail-excerpt-accept').click(); await p.flush();
+  const writes = p.calls.filter(c => c.target === 'desktop'); assert.equal(writes.length, 1); assert.equal(writes[0].msg.kind, 'excerpt');
+  assert.match(p.get('mail-save-status').textContent, /未保存邮件原件及附件/);
+});
+test('changing tabs during original retrieval prevents the write', async () => {
+  let resolve;
+  const p = await panel(() => new Promise(r => { resolve = r; }));
+  p.get('mail-save-button').click(); await p.flush();
+  await p.change({ id: 2, url: 'https://mail.qq.com/' });
+  resolve({ status: 'original', bytesBase64: 'eA==' }); await p.flush();
+  assert.equal(p.calls.filter(c => c.target === 'desktop').length, 0); assert.match(p.get('mail-save-status').textContent, /邮件已切换/);
+});
+test('changing tabs clears a proposed excerpt so it cannot be saved accidentally', async () => {
+  const p = await panel({ status: 'excerpt_offer', excerpt: { subject: '邀请', from: 'HR', sentTime: '', body: '正文' } });
+  p.get('mail-save-button').click(); await p.flush();
+  await p.change({ id: 2, url: 'https://example.test/' });
+  assert.equal(p.get('mail-save').hidden, true); p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.calls.filter(c => c.target === 'desktop').length, 0);
+});
+test('user can select an application and repeated save clicks create one transfer', async () => {
+  const p = await panel(); p.get('mail-company').value = '某公司'; p.get('mail-find-application').click(); await p.flush();
+  p.get('mail-application').value = 'app';
+  p.get('mail-save-button').click(); p.get('mail-save-button').click(); await p.flush();
+  const writes = p.calls.filter(c => c.msg.type === 'DESKTOP_SAVE_MAIL');
+  assert.equal(writes.length, 1); assert.equal(writes[0].msg.applicationId, 'app');
+});
+test('desktop failure is never presented as a saved email', async () => {
+  const p = await panel(); p.result({ status: 'archive_changed' }); p.get('mail-save-button').click(); await p.flush();
+  assert.match(p.get('mail-save-status').textContent, /档案已恢复或切换/); assert.doesNotMatch(p.get('mail-save-status').textContent, /已保存完整邮件/);
+});
