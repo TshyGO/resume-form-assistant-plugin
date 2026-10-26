@@ -206,6 +206,36 @@ test("detail counts come from the data, and todos are shown apart from the histo
   for (const fake of ["薪", "Calendar", "会议", "推荐", "已连接", "HR 终面", "导入邮件"]) expect(text).not.toContain(fake);
 });
 
+test("mail association timeline reads like a user action and hides storage details", async () => {
+  const application = { id: "A", company: "星河科技", title: "前端工程师", current_stage: "saved" };
+  const evidence = [{
+    id: "mail-1", applicationId: "A", kind: "eml", subject: "【星河科技】前端工程师笔试通知",
+    originalFilename: "notice.eml", fromAddr: "hr@example.com", sentAt: "2026-10-25T02:08:00Z",
+    replyClass: null, sendMode: null, sameBytesAs: [],
+  }];
+  const { ui } = mountWith({
+    application,
+    events: [{
+      id: "event-3", event_type: "evidence_associated", event_sequence: 3,
+      occurred: { precision: "date", value: { date: "2026-10-25" } },
+      recorded_at: "2026-10-25T02:12:22.139Z", payload: { evidence_id: "mail-1", application_id: "A" },
+    }],
+    evidence, snapshots: [], snapshotStates: {}, todos: [],
+  });
+  await ui.refreshList();
+  const app = within(document.getElementById("view-applications")!);
+  fireEvent.click(app.getByRole("button", { name: "星河科技 前端工程师" }));
+  await waitFor(() => expect(app.getByText("已关联一封招聘通知")).toBeTruthy());
+  const timeline = document.getElementById("detail-panel-timeline")!;
+  expect(timeline.textContent).toContain("【星河科技】前端工程师笔试通知");
+  expect(timeline.textContent).toContain("2026年10月25日");
+  expect(within(timeline).getByRole("button", { name: "查看通知" })).toBeTruthy();
+  expect(timeline.textContent).not.toContain("evidence_associated");
+  expect(timeline.textContent).not.toContain("2026-10-25T02:12:22.139Z");
+  expect(timeline.textContent).not.toContain("UTC");
+  expect(timeline.textContent).not.toContain("#3");
+});
+
 test("an empty archive gives the whole page to the empty state", async () => {
   const { ui } = mountWith({ application: { id: "A", company: "x", title: "y" } }, 0);
   await ui.refreshList();

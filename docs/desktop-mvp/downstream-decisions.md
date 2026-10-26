@@ -108,7 +108,7 @@ flowchart TB
 2. 业务模型、SQLite、事件、建议、NM 消息平台无关。适配边界见 ADR §3.9。
 3. 应用进程 = 唯一写入者；NM host = 翻译器（可多实例）；WebView 子进程不是写入者。
 4. 桌面权威源；未装桌面时填写仍可用。
-5. 十条产品规则（填写≠投递、回执≠通过、未导入≠未回信、UUID、AI 只建议、意图/绑定队列、不采集秘密、卸载不静默删、手动永远可用、无邮箱/云同步）。
+5. 十条产品规则（填写≠投递、回执≠通过、未导入≠未回信、UUID、AI 只建议、意图/绑定队列、不采集秘密、卸载不静默删、手动永远可用、可选邮箱只读发现且确认才入档（#331），无多设备实时云同步）。
 6. Stage 折叠按 `eventSequence`；`fill_started` 不改阶段；`filling` 仅 completed/partial。
 7. `replyClass` ≠ `sendMode`；已导入未分类 = `imported_unclassified`，禁止「尚未导入」。
 8. SaveIntent vs Bound outbox；从未配对不建意图；禁止待同步=已保存。

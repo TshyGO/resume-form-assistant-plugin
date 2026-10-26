@@ -50,6 +50,10 @@ const EVENT_LABEL: Record<string, string> = {
   fill_partial: "部分填写",
   fill_failed: "填写失败",
   fill_cancelled: "填写取消",
+  evidence_imported: "存入一封招聘通知",
+  evidence_associated: "已关联一封招聘通知",
+  association_changed: "调整了通知关联",
+  evidence_classified: "整理了招聘通知",
 };
 
 const FILL_OUTCOME: Record<string, string> = {
@@ -113,13 +117,66 @@ export function stageLabel(code: Stage | string | undefined): string {
 }
 
 export function eventLabel(code: string): string {
-  return EVENT_LABEL[code] || code;
+  return EVENT_LABEL[code] || "更新了申请记录";
 }
 
 export function occurredLabel(occurred: Occurred | null | undefined): string {
-  if (occurred?.precision === "date") return occurred.value?.date || "发生日期未知";
-  if (occurred?.precision === "date_time") return occurred.value?.rfc3339 || "发生时间未知";
+  if (occurred?.precision === "date") return chineseDate(occurred.value?.date) || "发生日期未知";
+  if (occurred?.precision === "date_time") return readableLocalDateTime(occurred.value?.rfc3339) || "发生时间未知";
   return "发生时间未知";
+}
+
+function chineseDate(value: string | undefined): string {
+  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return "";
+  return `${Number(match[1])}年${Number(match[2])}月${Number(match[3])}日`;
+}
+
+function zonedParts(value: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+/** 面向用户的本地时间；不把 ISO、UTC 或内部事件序号露在主时间线上。 */
+export function readableLocalDateTime(
+  value: string | null | undefined,
+  now = new Date(),
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const current = zonedParts(now, timeZone);
+  const prior = zonedParts(new Date(now.getTime() - 86_400_000), timeZone);
+  const target = zonedParts(date, timeZone);
+  const key = (parts: Record<string, string>) => `${parts.year}-${parts.month}-${parts.day}`;
+  const time = `${target.hour}:${target.minute}`;
+  if (key(target) === key(current)) return `今天 ${time}`;
+  if (key(target) === key(prior)) return `昨天 ${time}`;
+  if (target.year === current.year) return `${Number(target.month)}月${Number(target.day)}日 ${time}`;
+  return `${Number(target.year)}年${Number(target.month)}月${Number(target.day)}日 ${time}`;
+}
+
+export function timelineTimeLabel(
+  occurred: Occurred | null | undefined,
+  recordedAt: string | null | undefined,
+  now = new Date(),
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+): string {
+  if (occurred?.precision === "date") return chineseDate(occurred.value?.date) || "日期未知";
+  if (occurred?.precision === "date_time") {
+    return readableLocalDateTime(occurred.value?.rfc3339, now, timeZone) || "时间未知";
+  }
+  const recorded = readableLocalDateTime(recordedAt, now, timeZone);
+  return recorded ? `记录于 ${recorded}` : "时间未知";
 }
 
 export function evidenceLabel(state: ReplyEvidenceState | string | undefined): string {

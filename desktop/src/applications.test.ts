@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createApplicationsController, evidenceLabel, stageLabel, occurredLabel } from "./applications.ts";
+import { createApplicationsController, evidenceLabel, eventLabel, occurredLabel, readableLocalDateTime, stageLabel, timelineTimeLabel } from "./applications.ts";
 
 test("stale list responses do not replace a newer token", () => {
   const ctl = createApplicationsController();
@@ -36,8 +36,29 @@ test("evidence copy never claims the employer did not reply", () => {
 
 test('occurrence displays date or unknown without substituting recorded time',()=>{
   assert.equal(occurredLabel({precision:'unknown'}),'发生时间未知');
-  assert.equal(occurredLabel({precision:'date',value:{date:'2026-08-21'}}),'2026-08-21');
-  assert.equal(occurredLabel({precision:'date_time',value:{rfc3339:'2026-08-21T10:00:00Z'}}),'2026-08-21T10:00:00Z');
+  assert.equal(occurredLabel({precision:'date',value:{date:'2026-08-21'}}),'2026年8月21日');
+  assert.doesNotMatch(occurredLabel({precision:'date_time',value:{rfc3339:'2026-08-21T10:00:00Z'}}), /T|UTC|Z$/);
+});
+
+test('mail evidence events use user-facing Chinese instead of storage codes', () => {
+  assert.equal(eventLabel('evidence_imported'), '存入一封招聘通知');
+  assert.equal(eventLabel('evidence_associated'), '已关联一封招聘通知');
+  assert.equal(eventLabel('association_changed'), '调整了通知关联');
+  assert.equal(eventLabel('evidence_classified'), '整理了招聘通知');
+  assert.equal(eventLabel('application_created'), '创建申请');
+  assert.equal(eventLabel('future_backend_code'), '更新了申请记录');
+});
+
+test('timeline time uses local readable wording and never exposes raw ISO or UTC', () => {
+  const now = new Date('2026-10-25T04:00:00Z');
+  assert.equal(readableLocalDateTime('2026-10-25T02:12:00Z', now, 'Asia/Shanghai'), '今天 10:12');
+  assert.equal(readableLocalDateTime('2026-10-24T02:12:00Z', now, 'Asia/Shanghai'), '昨天 10:12');
+  assert.equal(readableLocalDateTime('2026-09-20T02:12:00Z', now, 'Asia/Shanghai'), '9月20日 10:12');
+  assert.equal(timelineTimeLabel({ precision: 'date', value: { date: '2026-10-27' } }, null, now, 'Asia/Shanghai'), '2026年10月27日');
+  assert.equal(timelineTimeLabel({ precision: 'unknown' }, '2026-10-25T02:12:00Z', now, 'Asia/Shanghai'), '记录于 今天 10:12');
+  const shown = timelineTimeLabel({ precision: 'date_time', value: { rfc3339: '2026-10-25T02:12:00Z' } }, '2026-10-25T02:13:00Z', now, 'Asia/Shanghai');
+  assert.equal(shown, '今天 10:12');
+  assert.doesNotMatch(shown, /T|UTC|Z$/);
 });
 
 test('a fill event says what was written into the page, never that it was submitted', async () => {

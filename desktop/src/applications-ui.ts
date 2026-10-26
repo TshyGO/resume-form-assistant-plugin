@@ -18,7 +18,7 @@ import {
   eventLabel,
   fillSummary,
   stageLabel,
-  occurredLabel,
+  timelineTimeLabel,
   snapshotStateLabel,
   SNAPSHOT_DISCLAIMER,
 } from "./applications.ts";
@@ -410,6 +410,7 @@ export function mountApplications(
       const snapshotStates = view.snapshotStates || {};
       const snapshots = view.snapshots || [];
       const evidence = view.evidence || [];
+      const evidenceById = new Map(evidence.map((item) => [item.id, item]));
       const todos = view.todos || [];
       const recycled = app.recycle_state === "recycled";
       const sourceUrl = app.source_url || "";
@@ -508,6 +509,9 @@ export function mountApplications(
             .map((ev) => {
               const payload = ev.payload || {};
               const extra = payload.text || payload.note || payload.reason || payload.label || payload.name || "";
+              const evidenceId = String(payload.evidence_id || payload.evidenceId || "");
+              const relatedEvidence = evidenceId ? evidenceById.get(evidenceId) : undefined;
+              const eventDetail = relatedEvidence?.subject || relatedEvidence?.originalFilename || extra;
               const mode = payload.stage_update_mode || payload.stageUpdateMode;
               const modeText = mode === "update_progress" ? "更新当前进度" : mode === "history_only" ? "仅历史补录" : "";
               const fill = fillSummary(payload);
@@ -520,9 +524,10 @@ export function mountApplications(
                     <strong>${escapeHtml(eventLabel(ev.event_type))}${round}</strong>
                     ${modeText && !fill ? `<span class="event-tag">${escapeHtml(modeText)}</span>` : ""}
                   </div>
-                  <p class="event-time">${ICON.clock}<span>发生：${escapeHtml(occurredLabel(ev.occurred))} · 记录于：${escapeHtml(formatTime(ev.recorded_at))}</span><span class="event-seq">#${escapeHtml(ev.event_sequence)}</span></p>
-                  ${extra ? `<div class="event-body break">${escapeHtml(extra)}</div>` : ""}
+                  <p class="event-time">${ICON.clock}<span>${escapeHtml(timelineTimeLabel(ev.occurred, ev.recorded_at))}</span></p>
+                  ${eventDetail ? `<div class="event-body break">${escapeHtml(eventDetail)}</div>` : ""}
                   ${fill ? `<div class="event-body">${escapeHtml(fill)}</div>` : ""}
+                  ${relatedEvidence ? `<div class="event-links"><button type="button" data-act="evidence" data-evidence="${escapeHtml(relatedEvidence.id)}">查看通知</button></div>` : ""}
                   ${snapshotId && !snapshotNote ? `<div class="event-links"><button type="button" data-act="snapshot" data-snapshot="${escapeHtml(snapshotId)}">查看简历快照</button></div>` : ""}
                   ${snapshotNote ? `<p class="event-note">${escapeHtml(snapshotNote)}</p>` : ""}
                 </div>

@@ -85,6 +85,23 @@ export interface InboxHost {
     | null;
 }
 
+export interface PendingMailPreview {
+  id: string;
+  email: string;
+  header: {
+    fromAddr: string | null;
+    fromName: string | null;
+    subject: string | null;
+    sentAt: string | null;
+  };
+  reasons: string[];
+}
+
+export interface PendingMailActions {
+  save(): void;
+  ignore(): void;
+}
+
 export function mountInbox(
   invoke: Invoke,
   { pickFiles = null, listenDrop = null, mountAi = null }: InboxHost = {},
@@ -102,6 +119,7 @@ export function mountInbox(
   let loaded = false;
   let aiPanel: { unmount(): void } | null = null;
   let selectedId: string | null = null;
+  let previewMode: "pending" | "stored" = "stored";
   let previewToken = 0;
   let applications: ApplicationSummary[] = [];
   /** 导入正在进行：再点一次导入或再拖一批进来，等这一批说完结果再说。 */
@@ -139,6 +157,8 @@ export function mountInbox(
     }
     loaded = true;
     renderList();
+    // 邮箱候选由待确认页负责右侧预览；并行刷新待关联列表时不能把它覆盖掉。
+    if (previewMode === "pending") return true;
     if (selectedId && !items.some((item) => item.id === selectedId)) {
       selectedId = null;
       previewToken += 1;
@@ -161,7 +181,8 @@ export function mountInbox(
         <h2>没有待整理的招聘通知</h2>
         <p>${escapeHtml(EMPTY_INBOX)}</p>
         <div class="workspace-empty-actions">
-          <button type="button" class="primary" data-empty-act="pick">${ICON.download}导入文件</button>
+          <button type="button" class="primary" data-empty-act="connect">连接邮箱</button>
+          <button type="button" data-empty-act="pick">${ICON.download}导入文件</button>
           <button type="button" data-empty-act="paste">${ICON.paste}粘贴文本</button>
         </div>
         <ul class="format-chips" aria-label="支持的格式">
@@ -210,6 +231,7 @@ export function mountInbox(
   }
 
   async function select(evidenceId: string) {
+    previewMode = "stored";
     selectedId = evidenceId;
     const token = ++previewToken;
     clearAiPanel();
@@ -239,6 +261,63 @@ export function mountInbox(
     } catch {
       applications = [];
     }
+  }
+
+  function showPending(candidate: PendingMailPreview | null, actions?: PendingMailActions) {
+    previewMode = "pending";
+    ++previewToken;
+    clearAiPanel();
+    shell?.classList.remove("is-reader-expanded");
+    if (!candidate) {
+      preview.innerHTML = '<div class="pane-empty"><h2>没有待确认邮件</h2><p>检查邮箱后，可能与求职有关的邮件会先出现在这里。</p></div>';
+      return;
+    }
+    const subject = candidate.header.subject || "无主题邮件";
+    const sender = [candidate.header.fromName, candidate.header.fromAddr].filter(Boolean).join(" · ") || "未知发件人";
+    const sentAt = candidate.header.sentAt ? importedAtLabel(candidate.header.sentAt) : "发送时间未知";
+    preview.innerHTML = `
+      <article class="evidence-view pending-mail-preview">
+        <header class="evidence-preview-heading">
+          <span class="evidence-icon is-large" data-kind="eml">${KIND_ICON.eml}</span>
+          <div class="evidence-heading-text">
+            <p class="evidence-kind">待确认邮件</p>
+            <h2>${escapeHtml(subject)}</h2>
+            <p class="muted">只读取了信头，原文尚未下载</p>
+          </div>
+          <div class="evidence-reader-actions">
+            <button type="button" data-pending-action="ignore">忽略</button>
+            <button type="button" class="primary" data-pending-action="save">存进档案</button>
+          </div>
+        </header>
+        <div class="evidence-reader-scroll pending-mail-scroll">
+          <section class="evidence-section pending-mail-content" aria-labelledby="pending-mail-heading">
+            <h3 id="pending-mail-heading">邮件信息</h3>
+            <dl class="evidence-mail">
+              <div><dt>发件人</dt><dd>${escapeHtml(sender)}</dd></div>
+              <div><dt>发送时间</dt><dd>${escapeHtml(sentAt)}</dd></div>
+              <div><dt>发现于</dt><dd>${escapeHtml(candidate.email)}</dd></div>
+            </dl>
+            <div class="pending-mail-reasons">
+              <h3>为什么出现在这里</h3>
+              <ul>${candidate.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+            </div>
+            <p class="pending-mail-note">为保护隐私和减少下载，目前只显示邮件信头和入选原因。点击“存进档案”后才会下载完整原文，并转到“待关联”。</p>
+          </section>
+        </div>
+      </article>`;
+    preview.querySelector<HTMLButtonElement>('[data-pending-action="save"]')?.addEventListener("click", () => actions?.save());
+    preview.querySelector<HTMLButtonElement>('[data-pending-action="ignore"]')?.addEventListener("click", () => actions?.ignore());
+  }
+
+  async function showStored() {
+    previewMode = "stored";
+    if (selectedId && items.some((item) => item.id === selectedId)) {
+      await select(selectedId);
+      return;
+    }
+    ++previewToken;
+    clearAiPanel();
+    preview.innerHTML = items.length ? emptyPreview : emptyState();
   }
 
   function mailFacts(item: EvidencePreview) {
@@ -280,70 +359,80 @@ export function mountInbox(
             <h2>${escapeHtml(evidenceTitle(item))}</h2>
             <p class="muted">${escapeHtml(describeEvidenceMeta({ ...item, fromAddr: null, sentAt: null }))}</p>
           </div>
-          ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开本机副本</button>` : ""}
-        </header>
-        <section class="evidence-section" aria-labelledby="evidence-original-heading">
-          <h3 id="evidence-original-heading">原文</h3>
-          ${duplicate ? `<p class="evidence-duplicate-note">${escapeHtml(duplicate)}</p>` : ""}
-          ${mailFacts(item)}
-          ${note}
-          ${image}
-          ${body}
-          ${nothing}
-        </section>
-        <section class="evidence-section evidence-organize" aria-labelledby="evidence-organize-heading">
-          <h3 id="evidence-organize-heading">手动整理</h3>
-          <p class="evidence-section-hint">关联和分类由你确认，不会改变申请阶段。</p>
-          <div class="organize-grid">
-            <div class="organize-block">
-              <h4>${ICON.link}关联申请</h4>
-              <p class="muted">${escapeHtml(CHOOSE_APPLICATION_HINT)}</p>
-              <select id="inbox-application" aria-label="关联申请">
-                <option value="">请选择一条申请…</option>
-                ${applications
-                  .map(
-                    (app) =>
-                      `<option value="${escapeHtml(app.id)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</option>`,
-                  )
-                  .join("")}
-              </select>
-              ${applications.length ? "" : '<p class="muted">还没有在办的申请。先到「申请」页新增一条，再回来关联。</p>'}
-              <div class="organize-actions">
-                ${item.applicationId ? '<button type="button" data-act="unassociate">取消关联</button>' : ""}
-                <button type="button" data-act="associate" class="primary">关联</button>
-              </div>
-            </div>
-            <div class="organize-block">
-              <h4>${ICON.tag}分类</h4>
-              <div class="organize-fields evidence-classification">
-                <label>通知类型
-                  <select id="inbox-reply-class">
-                    ${REPLY_CLASS_OPTIONS.map(
-                      (option) =>
-                        `<option value="${escapeHtml(option.value)}"${option.value === (item.replyClass ?? "") ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
-                    ).join("")}
-                  </select>
-                </label>
-                <label>发送方式
-                  <select id="inbox-send-mode">
-                    ${SEND_MODE_OPTIONS.map(
-                      (option) =>
-                        `<option value="${escapeHtml(option.value)}"${option.value === (item.sendMode ?? "unknown") ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
-                    ).join("")}
-                  </select>
-                </label>
-              </div>
-              <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
-              <div class="organize-actions">
-                <button type="button" data-act="classify" class="primary">保存分类</button>
-              </div>
-            </div>
+          <div class="evidence-reader-actions">
+            ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开</button>` : ""}
+            <button type="button" data-act="toggle-organizer" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}整理与关联</button>
+            <button type="button" data-act="toggle-reader" aria-pressed="false">展开阅读</button>
           </div>
-        </section>
-        <section class="evidence-section evidence-ai-section" aria-labelledby="evidence-ai-heading">
-          <h3 id="evidence-ai-heading">AI 整理<span class="section-tag">可选</span></h3>
-          <div id="inbox-ai"></div>
-        </section>
+        </header>
+        <div class="evidence-workspace">
+          <div class="evidence-reader-scroll">
+            <section class="evidence-section evidence-original" aria-labelledby="evidence-original-heading">
+              <h3 id="evidence-original-heading">原文</h3>
+              ${duplicate ? `<p class="evidence-duplicate-note">${escapeHtml(duplicate)}</p>` : ""}
+              ${mailFacts(item)}
+              ${note}
+              ${image}
+              ${body}
+              ${nothing}
+            </section>
+          </div>
+          <aside id="inbox-organizer" class="evidence-organizer" aria-labelledby="evidence-organize-heading" hidden>
+            <section class="evidence-section evidence-organize">
+              <h3 id="evidence-organize-heading">手动整理</h3>
+              <p class="evidence-section-hint">关联和分类由你确认，不会改变申请阶段。</p>
+              <div class="organize-grid">
+                <div class="organize-block">
+                  <h4>${ICON.link}关联申请</h4>
+                  <p class="muted">${escapeHtml(CHOOSE_APPLICATION_HINT)}</p>
+                  <select id="inbox-application" aria-label="关联申请">
+                    <option value="">请选择一条申请…</option>
+                    ${applications
+                      .map(
+                        (app) =>
+                          `<option value="${escapeHtml(app.id)}">${escapeHtml(app.company)} · ${escapeHtml(app.title)}</option>`,
+                      )
+                      .join("")}
+                  </select>
+                  ${applications.length ? "" : '<p class="muted">还没有在办的申请。先到「申请」页新增一条，再回来关联。</p>'}
+                  <div class="organize-actions">
+                    ${item.applicationId ? '<button type="button" data-act="unassociate">取消关联</button>' : ""}
+                    <button type="button" data-act="associate" class="primary">关联</button>
+                  </div>
+                </div>
+                <div class="organize-block">
+                  <h4>${ICON.tag}分类</h4>
+                  <div class="organize-fields evidence-classification">
+                    <label>通知类型
+                      <select id="inbox-reply-class">
+                        ${REPLY_CLASS_OPTIONS.map(
+                          (option) =>
+                            `<option value="${escapeHtml(option.value)}"${option.value === (item.replyClass ?? "") ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
+                        ).join("")}
+                      </select>
+                    </label>
+                    <label>发送方式
+                      <select id="inbox-send-mode">
+                        ${SEND_MODE_OPTIONS.map(
+                          (option) =>
+                            `<option value="${escapeHtml(option.value)}"${option.value === (item.sendMode ?? "unknown") ? " selected" : ""}>${escapeHtml(option.label)}</option>`,
+                        ).join("")}
+                      </select>
+                    </label>
+                  </div>
+                  <p class="muted">现在记为「${escapeHtml(replyClassLabel(item.replyClass))}」，发送方式「${escapeHtml(sendModeLabel(item.sendMode))}」。</p>
+                  <div class="organize-actions">
+                    <button type="button" data-act="classify" class="primary">保存分类</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="evidence-section evidence-ai-section" aria-labelledby="evidence-ai-heading">
+              <h3 id="evidence-ai-heading">AI 整理<span class="section-tag">可选</span></h3>
+              <div id="inbox-ai"></div>
+            </section>
+          </aside>
+        </div>
       </article>
     `;
     const slot = maybe("inbox-ai");
@@ -382,6 +471,26 @@ export function mountInbox(
     if (acting) return;
     const selectionToken = previewToken;
     try {
+      if (action === "toggle-organizer") {
+        const organizer = maybe("inbox-organizer");
+        const button = preview.querySelector<HTMLButtonElement>('[data-act="toggle-organizer"]');
+        if (!organizer || !button) return;
+        organizer.hidden = !organizer.hidden;
+        organizer.closest(".evidence-workspace")?.classList.toggle("is-organizer-open", !organizer.hidden);
+        button.setAttribute("aria-expanded", String(!organizer.hidden));
+        button.textContent = organizer.hidden ? "整理与关联" : "收起整理";
+        return;
+      }
+      if (action === "toggle-reader") {
+        const expanded = !shell?.classList.contains("is-reader-expanded");
+        shell?.classList.toggle("is-reader-expanded", expanded);
+        const button = preview.querySelector<HTMLButtonElement>('[data-act="toggle-reader"]');
+        if (button) {
+          button.setAttribute("aria-pressed", String(expanded));
+          button.textContent = expanded ? "恢复双栏" : "展开阅读";
+        }
+        return;
+      }
       if (action === "open") {
         setActing(true);
         await invoke("open_evidence_cmd", { evidenceId: item.id });
@@ -555,10 +664,10 @@ export function mountInbox(
     const button = (event.target as HTMLElement | null)?.closest?.<HTMLElement>("button[data-empty-act]");
     if (!button) return;
     if (button.dataset.emptyAct === "pick") void pick();
-    else openPaste();
+    else if (button.dataset.emptyAct === "paste") openPaste();
   });
 
   if (listenDrop) listenDrop((paths) => void importPaths(paths));
 
-  return { refresh, importPaths, submitPaste };
+  return { refresh, importPaths, submitPaste, showPending, showStored };
 }

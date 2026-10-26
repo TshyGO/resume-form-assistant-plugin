@@ -206,21 +206,34 @@
           <header class="workspace-header">
             <div><h1>招聘通知</h1><p>集中保存招聘邮件、聊天截图和文件，关联到对应申请。</p></div>
             <div class="workspace-header-actions">
-              <button type="button" id="inbox-refresh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>刷新</button>
+              <button type="button" id="mailbox-inbox-check"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>立即检查</button>
               <button type="button" id="inbox-paste-open"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4h6v3H9zM9 12h6M9 16h4"/></svg>粘贴文本导入</button>
               <button type="button" id="inbox-pick" class="primary"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>导入文件</button>
             </div>
           </header>
-          <p class="inbox-drop-hint"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>也可以把文件拖进窗口导入。支持 .eml 邮件、PNG / JPEG 截图、PDF、文本（.txt）；单个文件不超过 25 MiB，每次最多 20 个。</p>
+          <p id="mailbox-inbox-status" class="workspace-status" role="status"></p>
           <p id="inbox-status" class="workspace-status" role="status"></p>
-          <div id="inbox-shell" class="workspace-shell inbox-shell">
-            <aside class="workspace-list-card" aria-label="待整理的招聘通知">
-              <div class="workspace-list-head inbox-list-head">
-                <h2>待整理 <span id="inbox-count" class="tab-count"></span></h2>
-                <p>这里只列还没关联申请的材料。</p>
+          <div id="inbox-shell" class="workspace-shell inbox-shell inbox-workbench">
+            <aside class="workspace-list-card inbox-source-list" aria-label="招聘通知列表">
+              <div class="inbox-state-tabs" role="tablist" aria-label="招聘通知状态">
+                <button type="button" id="mailbox-tab-pending" role="tab" aria-selected="false" aria-controls="mailbox-discovery">待确认 <span id="mailbox-pending-count" class="tab-count">0</span></button>
+                <button type="button" id="mailbox-tab-stored" role="tab" aria-selected="true" aria-controls="inbox-stored-panel">待关联 <span id="inbox-count" class="tab-count"></span></button>
               </div>
-              <div id="inbox-list" class="workspace-list-scroll"></div>
-              <p class="workspace-list-foot">关联申请后，材料会移到那条申请详情的「招聘通知」里。</p>
+              <section id="mailbox-discovery" class="inbox-state-panel" role="tabpanel" aria-labelledby="mailbox-tab-pending" hidden>
+                <h2 id="mailbox-discovery-heading" class="sr-only">从邮箱发现的待确认邮件</h2>
+                <div class="inbox-panel-toolbar">
+                  <button id="mailbox-connect-link" type="button">邮箱设置</button>
+                  <span id="mailbox-discovery-note">只显示信头和入选原因，确认后才下载原文。</span>
+                </div>
+                <div id="mailbox-pending-actions" class="inbox-bulk-actions" hidden><label class="mailbox-select-all"><input id="mailbox-select-all" type="checkbox" />全选当前显示</label><button id="mailbox-save-selected" type="button" class="primary" disabled>存进档案</button><button id="mailbox-ignore-selected" type="button" disabled>忽略</button></div>
+                <ul id="mailbox-candidates" class="mailbox-candidates"></ul>
+                <button id="mailbox-load-more" type="button" hidden>显示更多</button>
+              </section>
+              <section id="inbox-stored-panel" class="inbox-state-panel" role="tabpanel" aria-labelledby="mailbox-tab-stored">
+                <div class="inbox-list-head"><p>已存进档案、尚未关联岗位的材料</p></div>
+                <div id="inbox-list" class="workspace-list-scroll"></div>
+              </section>
+              <details class="workspace-list-foot inbox-import-help"><summary>手动导入说明</summary><p><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>可以拖入 .eml、PNG / JPEG、PDF 或文本（.txt）；单个文件不超过 25 MiB，每次最多 20 个。</p></details>
             </aside>
             <div id="inbox-preview" class="workspace-detail-card" role="region" aria-label="通知预览与整理"><div class="pane-empty"><h2>选择一条通知</h2><p>预览原文，再关联申请或整理分类。</p></div></div>
           </div>
@@ -327,6 +340,7 @@
             <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
               <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-general" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>通用</span></button>
               <button type="button" role="tab" id="settings-tab-browser" data-settings-tab="browser" aria-controls="settings-browser" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>浏览器连接</span></button>
+              <button type="button" role="tab" id="settings-tab-mailbox" data-settings-tab="mailbox" aria-controls="settings-mailbox" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg><span>邮箱</span></button>
               <button type="button" role="tab" id="settings-tab-ai" data-settings-tab="ai" aria-controls="settings-ai" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span>AI 设置</span></button>
               <button type="button" role="tab" id="settings-tab-data" data-settings-tab="data" aria-controls="settings-data" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"/></svg><span>数据与备份</span></button>
               <button type="button" role="tab" id="settings-tab-privacy" data-settings-tab="privacy" aria-controls="settings-privacy" aria-selected="false" tabindex="-1"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/></svg><span>隐私</span></button>
@@ -409,6 +423,33 @@
                     </form>
                   </div>
                 </details>
+              </section>
+              <section id="settings-mailbox" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-mailbox" tabindex="0" data-settings-panel="mailbox" hidden>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>连接邮箱</h2><p>自动发现招聘相关来信，由你确认后存进档案。支持 QQ、163、126，可连接多个邮箱。</p></header>
+                  <form id="mailbox-form">
+                    <div class="settings-form-grid">
+                      <div class="settings-field"><label for="mailbox-email">邮箱地址</label><input id="mailbox-email" type="email" autocomplete="username" placeholder="example@qq.com" required /><p id="mailbox-server" class="field-hint">填写邮箱后自动识别服务器。</p></div>
+                      <div class="settings-field"><label for="mailbox-secret">邮箱授权码</label><input id="mailbox-secret" type="password" autocomplete="new-password" required aria-describedby="mailbox-secret-hint" /><p id="mailbox-secret-hint" class="field-hint">在邮箱网页端生成，不是登录密码。只存系统凭据库，保存后不回显。</p></div>
+                    </div>
+                    <div class="settings-form-actions"><button id="mailbox-save" class="primary" type="submit">测试连接并保存</button><p id="mailbox-settings-status" class="settings-inline-msg" role="status"></p></div>
+                  </form>
+                  <details class="settings-fold">
+                    <summary>怎么开启 IMAP、获取授权码？</summary>
+                    <label for="mailbox-guide-provider">选择邮箱教程</label>
+                    <select id="mailbox-guide-provider"><option value="qq">QQ 邮箱</option><option value="163">163 邮箱</option><option value="126">126 邮箱</option></select>
+                    <figure class="mailbox-guide"><img id="mailbox-guide-image" src="/mailbox-guide-qq.svg" alt="QQ 邮箱：进入设置，开启 IMAP，完成验证后生成授权码" /><figcaption>操作步骤示意，具体按钮以邮箱当前界面为准。</figcaption></figure>
+                    <ol id="mailbox-guide-steps"></ol>
+                    <p class="settings-caption">生成后直接粘贴到上方授权码框。授权码失效时，用同一邮箱地址重新测试并保存，即可更新。</p>
+                  </details>
+                </div>
+                <div class="settings-card">
+                  <header class="settings-card-head"><h2>已连接的邮箱</h2><p>启动时检查，此后约每 10 分钟检查一次；只在应用运行时执行，隐藏到托盘仍会检查。</p></header>
+                  <div class="settings-actions"><button type="button" id="mailbox-settings-check">立即检查</button></div>
+                  <div id="mailbox-accounts" class="mailbox-accounts" aria-live="polite"></div>
+                  <p class="settings-caption">只读收件箱和服务器开放的垃圾邮件文件夹，不标已读、不删除、不移动。连续失败 3 次自动暂停；处理后点击恢复检查。</p>
+                  <p class="settings-caption">未命中的信不保留内容；候选只保存信头，确认才下载原文。连接、候选和忽略记录留在本机，不随档案备份迁移。断开会清除该邮箱的这些记录，已入档邮件保留。</p>
+                </div>
               </section>
               <section id="settings-ai" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-ai" tabindex="0" data-settings-panel="ai" hidden>
                 <div id="ai-settings"></div>

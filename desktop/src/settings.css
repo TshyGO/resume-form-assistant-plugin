@@ -342,3 +342,19 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 }
 #view-settings button[aria-busy="true"], .settings-dialog button[aria-busy="true"] { cursor: progress; opacity: .7; }
 #view-settings input[aria-busy="true"] { cursor: progress; opacity: .7; }
+
+/* 邮箱设置页；招聘通知里的候选列表样式归 workspace stylesheet。 */
+.mailbox-candidates { list-style: none; }
+.mailbox-account { padding: 16px 0; border-top: 1px solid var(--line, #e3e8ef); }
+.mailbox-candidate-title { display: flex; align-items: flex-start; gap: 10px; overflow-wrap: anywhere; }
+.mailbox-candidate-title input, .mailbox-select-all input { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
+.mailbox-select-all { display: inline-flex; align-items: center; gap: 8px; margin-right: 8px; }
+.mailbox-reasons { color: var(--muted, #526279); font-size: 13px; }
+.mailbox-error { color: var(--danger, #b42318); font-size: 13px; overflow-wrap: anywhere; }
+.mailbox-account h3 { font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+.mailbox-accounts { margin-top: 12px; }
+.mailbox-guide { margin: 12px 0; }
+.mailbox-guide img { display: block; width: 100%; height: auto; border-radius: 8px; }
+.mailbox-guide figcaption { color: var(--muted, #526279); font-size: 12px; margin-top: 6px; }
+#mailbox-guide-steps { padding-left: 22px; font-size: 13px; line-height: 1.8; }
+#mailbox-settings-status[data-tone="error"], #mailbox-inbox-status[data-tone="error"] { color: var(--danger, #b42318); }

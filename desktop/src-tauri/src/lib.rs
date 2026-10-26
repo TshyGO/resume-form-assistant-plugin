@@ -22,6 +22,7 @@ mod nm_register_tests;
 mod cli;
 mod commands;
 mod evidence_commands;
+mod mailbox_commands;
 mod backup_commands;
 mod bridge_services;
 mod recycle_commands;
@@ -81,6 +82,9 @@ struct AppState {
     /// 没有把 Key 交回界面的命令。
     credentials: Box<dyn ai_credentials::CredentialStore>,
     cloud_credentials: Box<dyn cloud_credentials::CredentialStore>,
+    /// Prevent overlapping scheduled/manual scans. User actions use short
+    /// SQLite/archive transactions and never wait for mailbox network IO.
+    mailbox_gate: Mutex<()>,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
@@ -1891,6 +1895,7 @@ pub fn run() {
             reminders: reminders::scheduler(),
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
+            mailbox_gate: Mutex::new(()),
             cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
@@ -2053,6 +2058,7 @@ pub fn run() {
             app.state::<AppState>().main_window.set();
 
             cloud_schedule::start(app.handle().clone());
+            mailbox_commands::start(app.handle().clone());
             lifecycle::install_window_close_handler(app.handle());
             build_tray(app.handle())?;
             #[cfg(target_os = "macos")]
@@ -2067,6 +2073,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            mailbox_commands::mailbox_view,
+            mailbox_commands::mailbox_connect,
+            mailbox_commands::mailbox_delete,
+            mailbox_commands::mailbox_pause,
+            mailbox_commands::mailbox_check,
+            mailbox_commands::mailbox_ignore,
+            mailbox_commands::mailbox_confirm,
             telemetry::telemetry_status,
             telemetry::telemetry_notice,
             telemetry::telemetry_enabled,
