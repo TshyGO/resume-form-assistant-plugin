@@ -15,6 +15,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 /** 桌面的 tag 前缀。插件用的是 `v*.*.*`，两边不能撞。 */
 export const DESKTOP_TAG_PREFIX = "desktop-v";
 
+/** Production telemetry is limited to actual Stable tag pushes from either owner. */
+export function metricsReadyForRelease(repository, tag, eventName) {
+  if (eventName !== "push" || ![
+    "TshyGO/resume-form-assistant-plugin",
+    "ptjworks/resume-form-assistant-plugin",
+  ].includes(repository) || !tag) return false;
+  try { return releaseKind(tag) === "stable"; }
+  catch { return false; }
+}
+
 /** 能作为安装包上传的后缀。以后加 `.msi` 之类改这里，配套校验和的规则自动跟上。 */
 export const INSTALLER_SUFFIXES = [".exe", ".dmg", ".msi"];
 
@@ -309,6 +319,11 @@ export function writeChecksums(
 }
 
 function main(argv) {
+  const metricsAt = argv.indexOf("--metrics-ready");
+  if (metricsAt >= 0) {
+    console.log(metricsReadyForRelease(argv[metricsAt + 1], argv[metricsAt + 2], argv[metricsAt + 3]) ? "1" : "0");
+    return;
+  }
   // 只看 tag 的形状，不读仓库里的版本号：工作流拿它决定发布类别。
   const kindAt = argv.indexOf("--release-kind");
   if (kindAt >= 0) {

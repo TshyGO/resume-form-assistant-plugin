@@ -177,6 +177,10 @@ jobs:
         working-directory: desktop
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --bins --lib --target ${{ matrix.rust-target }}
 
+      - name: Replay released updater ownership gate
+        if: matrix.name == 'windows-x64'
+        run: node desktop/scripts/check-legacy-updater.mjs ${{ matrix.rust-target }}
+
       - name: NM host process test
         working-directory: desktop
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --test nm_host --target ${{ matrix.rust-target }}

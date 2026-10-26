@@ -77,6 +77,55 @@ fn ascii_token_contains(haystack: &str, needle: &str) -> bool {
     })
 }
 
+fn ascii_words(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn ascii_phrase_contains(haystack: &str, needle: &str) -> bool {
+    let words = ascii_words(needle);
+    if words.iter().map(String::len).sum::<usize>() < 2 {
+        return false;
+    }
+    if words.len() == 1 {
+        return ascii_token_contains(haystack, &words[0]);
+    }
+    let haystack = haystack.to_ascii_lowercase();
+    haystack.match_indices(&words[0]).any(|(start, first)| {
+        let before = haystack[..start].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric()) {
+            return false;
+        }
+        let mut end = start + first.len();
+        for word in &words[1..] {
+            let mut separated = false;
+            while let Some(ch) = haystack[end..].chars().next() {
+                if ch.is_ascii_alphanumeric() {
+                    break;
+                }
+                // Chinese text is a boundary around a single English name,
+                // but it must not join two words of a multi-word company.
+                if !ch.is_ascii() {
+                    return false;
+                }
+                separated = true;
+                end += ch.len_utf8();
+            }
+            if !separated || !haystack[end..].starts_with(word) {
+                return false;
+            }
+            end += word.len();
+        }
+        haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })
+}
+
 pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     if let Some(domain) = header
@@ -116,11 +165,10 @@ pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
     let sender_name_raw = header.from_name.as_deref().unwrap_or("");
     for company in companies {
         let needle = folded(company);
-        let ascii = !needle.is_empty() && needle.chars().all(|c| c.is_ascii_alphanumeric());
+        let ascii = company.is_ascii() && company.chars().any(|c| c.is_ascii_alphanumeric());
         let matches = if ascii {
-            needle.len() >= 2
-                && (ascii_token_contains(subject_raw, &needle)
-                    || ascii_token_contains(sender_name_raw, &needle))
+            ascii_phrase_contains(subject_raw, company)
+                || ascii_phrase_contains(sender_name_raw, company)
         } else {
             needle.chars().count() >= 2
                 && (subject.contains(&needle) || sender_name.contains(&needle))
@@ -133,7 +181,12 @@ pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
         }
     }
     for keyword in KEYWORDS {
-        if subject.contains(keyword) {
+        let matches = if keyword.is_ascii() {
+            ascii_token_contains(subject_raw, keyword)
+        } else {
+            subject.contains(keyword)
+        };
+        if matches {
             reasons.push(format!("标题包含：{keyword}"));
         }
     }

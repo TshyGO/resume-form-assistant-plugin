@@ -56,6 +56,15 @@ fn check_identity(store: &archive_store::ArchiveStore, expected: &ArchiveIdentit
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+fn should_reconnect_optional_folder(
+    error: &CommandError,
+    has_remaining: bool,
+    already_reconnected: bool,
+) -> bool {
+    has_remaining
+        && !already_reconnected
+        && (error.code == fail(Error::Network).code || error.code == fail(Error::Protocol).code)
+}
 fn key(header: &Header) -> Option<MailKey> {
     Some(MailKey {
         message_id: header.message_id.clone()?,
@@ -395,9 +404,27 @@ fn scan_account(
         .ok_or_else(|| fail(Error::Credentials))?;
     tauri::async_runtime::block_on(async {
         let mut session = mapped(imap::login_account(account, &secret).await)?;
-        let folders = mapped(imap::folders(&mut session).await)?;
-        let mut partial = false;
-        for folder in folders {
+        // INBOX is the required source and must not depend on LIST support.
+        let mut partial = scan_folder(
+            state,
+            db,
+            expected,
+            account,
+            companies,
+            &mut session,
+            "INBOX",
+        )
+        .await?;
+        let folders = match imap::folders(&mut session).await {
+            Ok(folders) => folders,
+            Err(_) => return Ok(true),
+        };
+        let folders: Vec<_> = folders
+            .into_iter()
+            .filter(|folder| !folder.eq_ignore_ascii_case("INBOX"))
+            .collect();
+        let mut reconnected = false;
+        for (index, folder) in folders.iter().enumerate() {
             match scan_folder(
                 state,
                 db,
@@ -405,20 +432,30 @@ fn scan_account(
                 account,
                 companies,
                 &mut session,
-                &folder,
+                folder,
             )
             .await
             {
                 Ok(folder_partial) => partial |= folder_partial,
                 Err(error) => {
-                    if folder.eq_ignore_ascii_case("INBOX") {
-                        return Err(error);
-                    }
                     partial = true;
                     // A timeout or protocol error can leave unread IMAP
-                    // responses on this connection. Retry the remaining
-                    // optional folders on the next check with a new session.
-                    break;
+                    // responses on this connection. Reconnect at most once so
+                    // one inaccessible folder cannot starve later folders.
+                    if !should_reconnect_optional_folder(
+                        &error,
+                        index + 1 < folders.len(),
+                        reconnected,
+                    ) {
+                        break;
+                    }
+                    match imap::login_account(account, &secret).await {
+                        Ok(new_session) => {
+                            session = new_session;
+                            reconnected = true;
+                        }
+                        Err(_) => break,
+                    }
                 }
             };
         }
@@ -1000,6 +1037,34 @@ mod tests {
         assert_eq!(account.last_error.as_deref(), Some("Protocol"));
         assert!(account.last_checked.is_none());
         assert!(account.next_check > 0);
+    }
+    #[test]
+    fn optional_folder_recovery_is_limited_to_one_reconnect() {
+        assert!(should_reconnect_optional_folder(
+            &fail(Error::Network),
+            true,
+            false
+        ));
+        assert!(should_reconnect_optional_folder(
+            &fail(Error::Protocol),
+            true,
+            false
+        ));
+        assert!(!should_reconnect_optional_folder(
+            &fail(Error::Storage),
+            true,
+            false
+        ));
+        assert!(!should_reconnect_optional_folder(
+            &fail(Error::Network),
+            false,
+            false
+        ));
+        assert!(!should_reconnect_optional_folder(
+            &fail(Error::Network),
+            true,
+            true
+        ));
     }
     #[test]
     fn scheduled_checks_do_not_report_success_for_accounts_that_are_not_due() {

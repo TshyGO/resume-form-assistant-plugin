@@ -1,5 +1,8 @@
 // Public Release metadata only. No activity collection or Cloudflare credentials.
+// Historical dataset identity: keep saved snapshots comparable across transfer.
 export const REPOSITORY = 'TshyGO/resume-form-assistant-plugin';
+// Route public API requests by immutable ID, without a credentialed slug redirect.
+export const RELEASES_API_BASE = 'https://api.github.com/repositories/1217054301';
 const DAY_MS = 86_400_000;
 const PLUGIN_ZIP = /^(?:wangshen-kuaitian|resume-pro)-(?:plugin-|v)\d+\.\d+\.\d+(?:[-.][a-z0-9-]+)*\.zip$/i;
 

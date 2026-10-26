@@ -1,18 +1,21 @@
-import { createDownloadSnapshot, compareDownloadSnapshots } from '../../../desktop/scripts/usage-metrics/downloads.mjs';
+import { createDownloadSnapshot, compareDownloadSnapshots, RELEASES_API_BASE, REPOSITORY } from '../../../desktop/scripts/usage-metrics/downloads.mjs';
 import { readBytes } from './activity.mjs';
 
 export class DownloadCollectionError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 
-const BASE = 'https://api.github.com/repos/TshyGO/resume-form-assistant-plugin';
+const BASE = RELEASES_API_BASE;
+// The 22 published releases already require 23 calls. Leave room for further
+// desktop and extension releases below the Workers Free 50-subrequest cap.
+const MAX_GITHUB_REQUESTS = 40;
 
 export async function fetchReleases(fetchImpl, token) {
   let calls = 0;
   async function pages(path) {
     const result = [];
     for (let page = 1; ; page++) {
-      if (++calls > 24) throw new Error('GitHub request budget exceeded');
+      if (++calls > MAX_GITHUB_REQUESTS) throw new Error('GitHub request budget exceeded');
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
       let values;
@@ -71,7 +74,7 @@ export async function downloadReport(db) {
   async function restore(observation) {
     const assets = (await db.prepare('SELECT asset_id, release_id, tag_name, file_name, published_at, download_count, release_family, release_channel, artifact_kind FROM release_download_snapshot WHERE observed_at = ? ORDER BY asset_id').bind(observation.observed_at).all()).results;
     if (assets.length !== observation.asset_count) throw new Error('Incomplete stored snapshot');
-    return { schema_version: 1, repository: 'TshyGO/resume-form-assistant-plugin', observed_at: observation.observed_at, date_utc: observation.date_utc, assets };
+    return { schema_version: 1, repository: REPOSITORY, observed_at: observation.observed_at, date_utc: observation.date_utc, assets };
   }
   return compareDownloadSnapshots(observations[1] ? await restore(observations[1]) : null, await restore(observations[0]));
 }

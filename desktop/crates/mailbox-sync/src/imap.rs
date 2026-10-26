@@ -183,12 +183,43 @@ pub async fn plan<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
             .uid_validity
             .filter(|v| *v > 0)
             .ok_or(Error::Protocol)?;
+        let old = cursor.filter(|c| c.validity == validity);
+        let start = old.map_or(1, |c| c.uid.saturating_add(1));
+        if old.is_some_and(|c| c.uid == u32::MAX) {
+            return Ok(Scan {
+                validity,
+                high_uid: u32::MAX,
+                uids: vec![],
+            });
+        }
+        if mailbox.uid_next.filter(|value| *value > 0).is_none() {
+            if let Some(old) = old {
+                // Coremail often omits UIDNEXT. Once a cursor exists, ask only
+                // for the range after it. When there is no new mail, IMAP may
+                // resolve the inverted `start:*` range to the old highest UID;
+                // filtering below removes that harmless response.
+                let mut uids: Vec<u32> = session
+                    .uid_search(format!("UID {start}:*"))
+                    .await
+                    .map_err(network)?
+                    .into_iter()
+                    .filter(|uid| *uid >= start)
+                    .collect();
+                uids.sort_unstable();
+                let high_uid = uids.iter().copied().max().unwrap_or(old.uid).max(old.uid);
+                return Ok(Scan {
+                    validity,
+                    high_uid,
+                    uids,
+                });
+            }
+        }
         let high_uid = match mailbox.uid_next.filter(|value| *value > 0) {
             Some(next) => next.saturating_sub(1),
             None => {
                 // Coremail (including 163/126) can omit UIDNEXT even though it
-                // otherwise supports UID commands. Snapshot the upper bound
-                // with UID SEARCH ALL before constructing a bounded range.
+                // otherwise supports UID commands. The first scan has no
+                // cursor, so snapshot its upper bound once with SEARCH ALL.
                 session
                     .uid_search("ALL")
                     .await
@@ -198,9 +229,7 @@ pub async fn plan<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
                     .unwrap_or(0)
             }
         };
-        let old = cursor.filter(|c| c.validity == validity);
-        let start = old.map_or(1, |c| c.uid.saturating_add(1));
-        if start > high_uid || old.is_some_and(|c| c.uid == u32::MAX) {
+        if start > high_uid {
             return Ok(Scan {
                 validity,
                 high_uid: old.map_or(high_uid, |c| c.uid.max(high_uid)),
@@ -439,9 +468,8 @@ pub async fn test_connection(email: &str, secret: &str, config: &ConnectionConfi
 async fn validate_connection<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     session: &mut Session<S>,
 ) -> Result<()> {
-    // LIST still proves the account can enumerate server folders, but only the
-    // required INBOX must open. Optional junk folders are isolated during scans.
-    let _ = folders(session).await?;
+    // A usable INBOX is the only connection requirement. Folder enumeration
+    // and optional junk folders are best-effort work during actual scans.
     bounded(async {
         session.examine("INBOX").await.map_err(network)?;
         Ok(())
@@ -564,15 +592,8 @@ mod tests {
         task.await.unwrap();
     }
     #[tokio::test]
-    async fn connection_requires_inbox_but_does_not_open_optional_junk() {
-        let (mut s, task) = session(vec![
-            (
-                "LIST \"\" *".into(),
-                "* LIST (\\Junk) \"/\" \"Junk\"\r\n{tag} OK list\r\n".into(),
-            ),
-            ("EXAMINE \"INBOX\"".into(), examined(4, 11)),
-        ])
-        .await;
+    async fn connection_requires_only_a_readable_inbox() {
+        let (mut s, task) = session(vec![("EXAMINE \"INBOX\"".into(), examined(4, 11))]).await;
         validate_connection(&mut s).await.unwrap();
         task.await.unwrap();
     }
@@ -612,6 +633,31 @@ mod tests {
             .unwrap();
         assert_eq!(scan.high_uid, 9);
         assert_eq!(scan.uids, vec![2, 9]);
+        task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn coremail_increment_searches_only_after_the_saved_cursor() {
+        let (mut s, task) = session(vec![
+            ("EXAMINE \"INBOX\"".into(), examined_without_uidnext(4)),
+            (
+                "UID SEARCH UID 9:*".into(),
+                "* SEARCH 8 10 9\r\n{tag} OK incremental\r\n".into(),
+            ),
+        ])
+        .await;
+        let scan = plan(
+            &mut s,
+            "INBOX",
+            Some(Cursor {
+                validity: 4,
+                uid: 8,
+            }),
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(scan.high_uid, 10);
+        assert_eq!(scan.uids, vec![9, 10]);
         task.await.unwrap();
     }
     #[tokio::test]

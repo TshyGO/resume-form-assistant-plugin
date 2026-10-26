@@ -17,7 +17,7 @@ use url::Url;
 use crate::commands::CommandError;
 
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/TshyGO/resume-form-assistant-plugin/releases";
+    "https://api.github.com/repositories/1217054301/releases";
 const RELEASES_PER_PAGE: usize = 100;
 const TAG_PREFIX: &str = "desktop-v";
 const TIMEOUT_SECONDS: u64 = 10;
@@ -179,9 +179,12 @@ pub fn is_release_page(url: &str) -> bool {
         && !lower.contains("%2e")
         && !lower.contains("%2f")
         && !lower.contains("%5c")
-        && path
-            .strip_prefix("/TshyGO/resume-form-assistant-plugin/releases/")
-            .is_some_and(is_release_page_tail)
+        && [
+            "/TshyGO/resume-form-assistant-plugin/releases/",
+            "/ptjworks/resume-form-assistant-plugin/releases/",
+        ]
+        .iter()
+        .any(|prefix| path.strip_prefix(*prefix).is_some_and(is_release_page_tail))
 }
 
 /// Release 页在 `/releases/` 后面只有这三种形状。`/releases/new` 这类同源但
@@ -470,6 +473,33 @@ mod tests {
         ));
         assert!(is_release_page(&desktop_release_tag_url("0.4.0-beta.3")));
         assert!(is_release_page(&desktop_release_tag_url("0.4.0")));
+    }
+
+    #[test]
+    fn ownership_transition_accepts_both_owners_without_relaxing_url_guards() {
+        assert_eq!(RELEASES_URL, "https://api.github.com/repositories/1217054301/releases");
+        for owner in ["TshyGO", "ptjworks"] {
+            let base = format!("https://github.com/{owner}/resume-form-assistant-plugin");
+            for tail in ["latest", "tag/desktop-v0.4.5", "download/desktop-v0.4.5/setup.exe"] {
+                assert!(is_release_page(&format!("{base}/releases/{tail}")));
+            }
+            for tail in ["", "new", "tag/", "../../someone/else", "..%2f..%2fother", "..%5c..%5cother", "%2e%2e/%2e%2e/other"] {
+                assert!(!is_release_page(&format!("{base}/releases/{tail}")));
+            }
+            for bad in [
+                format!("http://github.com/{owner}/resume-form-assistant-plugin/releases/latest"),
+                format!("https://github.com.evil.test/{owner}/resume-form-assistant-plugin/releases/latest"),
+                format!("https://user:pass@github.com/{owner}/resume-form-assistant-plugin/releases/latest"),
+                format!("https://github.com:8443/{owner}/resume-form-assistant-plugin/releases/latest"),
+                format!("{base}-other/releases/latest"),
+            ] {
+                assert!(!is_release_page(&bad));
+            }
+        }
+        let mut migrated = release("desktop-v0.4.5", false, false);
+        migrated["html_url"] = json!("https://github.com/ptjworks/resume-form-assistant-plugin/releases/tag/desktop-v0.4.5");
+        assert_eq!(found(&json!([release("desktop-v0.4.4", false, false), migrated])).version, "0.4.5");
+        assert!(!is_release_page("https://github.com/ptjworks-other/resume-form-assistant-plugin/releases/latest"));
     }
 
     #[test]

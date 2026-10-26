@@ -85,6 +85,34 @@ fn rules_are_local_explainable_and_match_domains_on_label_boundaries() {
     assert!(classify(&h, &["AI".into()])
         .iter()
         .any(|reason| reason.contains("匹配申请公司")));
+
+    h.subject = Some("Application update from Star Tech".into());
+    assert!(classify(&h, &["Star Tech".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司：Star Tech")));
+    h.subject = Some("Application update from Star Technology".into());
+    assert!(classify(&h, &["Star Tech".into()]).is_empty());
+    h.subject = Some("Application status updated".into());
+    h.from_name = Some("Moka团队".into());
+    assert!(classify(&h, &["Moka".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司：Moka")));
+    h.from_name = None;
+    h.subject = Some("来自Moka的申请更新".into());
+    assert!(classify(&h, &["Moka".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司：Moka")));
+    h.subject = Some("Star科技Tech application update".into());
+    assert!(classify(&h, &["Star Tech".into()]).is_empty());
+
+    h.subject = Some("Special offers this week".into());
+    assert!(classify(&h, &[]).is_empty());
+    h.subject = Some("Your Offer is ready".into());
+    assert!(classify(&h, &[])
+        .iter()
+        .any(|reason| reason == "标题包含：offer"));
+    h.subject = Some("Coffer shop promotion".into());
+    assert!(classify(&h, &[]).is_empty());
 }
 #[test]
 fn encoded_sender_names_and_subjects_are_decoded_before_matching() {
