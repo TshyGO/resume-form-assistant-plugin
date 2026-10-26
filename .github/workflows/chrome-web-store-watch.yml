@@ -1,0 +1,60 @@
+name: Chrome Web Store Watch
+
+# release.yml 送审后故意停在 STAGED，审核通过要维护者手动上线，商店却不会通知到仓库。
+# 0.4.3 过审后一直停在 STAGED 没人发现，还挡住了 0.4.4 的上传。
+# 这里每天只读一次商店状态：过审待上线、被拒、被警告或被下架时打开（或更新）一个
+# 带「商店提醒」标签的 issue，情况消失后自动关闭。它不上传、不送审、不上线。
+on:
+  schedule:
+    - cron: "23 1 * * *" # 每天北京时间 09:23
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chrome-web-store-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # 和 release.yml 一样，只让 main 上审过的代码拿商店凭据；在别的分支手动运行直接失败。
+      - name: Only run from main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = "refs/heads/main" || { echo "Chrome Web Store Watch 只在 main 上运行，当前是 $REF"; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # 只读：status 只调 fetchStatus，输出里只有版本和状态。商店凭据只给这一步。
+      - name: Read the store status
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CHROME_WEB_STORE_CREDENTIALS: ${{ secrets.CHROME_WEB_STORE_CREDENTIALS }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: node desktop/scripts/chrome-web-store.js status > "$RUNNER_TEMP/store-status.json"
+
+      # GitHub token 只给这一步，这一步拿不到商店凭据。
+      # 想让提醒直接指派给某人，在仓库变量 CHROME_WEB_STORE_WATCH_ASSIGNEES 里写 GitHub 用户名，多个用逗号隔开。
+      - name: Open, update or close the reminder issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WATCH_ASSIGNEES: ${{ vars.CHROME_WEB_STORE_WATCH_ASSIGNEES }}
+        run: node desktop/scripts/chrome-web-store-watch.js --status "$RUNNER_TEMP/store-status.json" --sync
