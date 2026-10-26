@@ -434,12 +434,12 @@
                       <li id="mailbox-step-3"><span>3</span>检查来信</li>
                     </ol>
                     <div class="settings-form-grid">
-                      <div class="settings-field"><label for="mailbox-email">邮箱地址</label><input id="mailbox-email" aria-describedby="mailbox-detection" type="email" autocomplete="username" placeholder="example@qq.com" required /><p id="mailbox-server" class="field-hint">填写邮箱后自动识别服务器。</p></div>
+                      <div class="settings-field"><label for="mailbox-email">邮箱地址</label><input id="mailbox-email" aria-describedby="mailbox-detection" type="email" autocomplete="username" placeholder="example@qq.com" required /><div class="settings-actions"><button id="mailbox-detect" type="button">确认并识别</button></div><p id="mailbox-server" class="field-hint">输入完成后按回车或点击“确认并识别”。</p></div>
                       <div class="settings-field"><label id="mailbox-secret-label" for="mailbox-secret">邮箱授权码</label><input id="mailbox-secret" type="password" autocomplete="new-password" required aria-describedby="mailbox-secret-hint" /><p id="mailbox-secret-hint" class="field-hint">在邮箱网页端生成，不是登录密码。只存系统凭据库，保存后不回显。</p></div>
                     </div>
                     <div id="mailbox-detection" class="mailbox-progress" data-state="empty" role="status" aria-live="polite" aria-atomic="true">
                       <span id="mailbox-progress-icon" class="mailbox-progress-icon" aria-hidden="true">1</span>
-                      <div><strong id="mailbox-progress-title">先填写邮箱地址</strong><p id="mailbox-progress-detail">填写完成后自动查找配置。</p></div>
+                      <div><strong id="mailbox-progress-title">先填写邮箱地址</strong><p id="mailbox-progress-detail">输入完成后按回车或点击“确认并识别”。</p></div>
                     </div>
                     <details id="mailbox-configuration" class="settings-fold">
                       <summary>核对或修改服务器与登录账号</summary>
@@ -452,7 +452,7 @@
                       </div>
                       <label><input id="mailbox-send-id" type="checkbox" /> 发送客户端标识（网易企业邮等服务可能要求）</label>
                     </details>
-                    <div class="settings-actions"><button id="mailbox-detect" type="button">重新识别配置</button><button id="mailbox-manual-import" type="button">改用导入邮件文件</button></div>
+                    <div class="settings-actions"><button id="mailbox-manual-import" type="button">改用导入邮件文件</button></div>
 
                     <p class="settings-caption">学校邮箱尽量支持：部分学校需要校园网或未开放 IMAP，毕业后可能回收邮箱。请保留重要邮件的本地副本。</p>
                     <div class="settings-form-actions"><button id="mailbox-save" class="primary" type="submit">测试连接并保存</button><p id="mailbox-settings-status" class="settings-inline-msg" role="status"></p></div>

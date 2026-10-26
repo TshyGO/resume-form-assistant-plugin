@@ -59,7 +59,6 @@ export function mountMailboxes(
   const configuration = get<HTMLDetailsElement>("mailbox-configuration");
   const detection = get("mailbox-detection");
   let discoveryToken = 0, discoveryRequested = "";
-  let discoveryTimer: ReturnType<typeof setTimeout> | undefined;
   const normalizedAddress = () => email.value.trim().toLowerCase();
   const addressDomain = () => normalizedAddress().split("@")[1] ?? "";
   let previousAddress = "", connectionDomain = "";
@@ -316,12 +315,11 @@ export function mountMailboxes(
   function updateServerLabel() {
     get("mailbox-server").textContent = host.value.trim()
       ? `IMAP：${host.value.trim()} · ${port.value} · ${encryption.value === "tls" ? "TLS" : "STARTTLS"}`
-      : "未确定服务器，可自动查询或手动填写。";
+      : "尚未确定服务器，按回车或点击“确认并识别”，也可手动填写。";
   }
-  function updateProvider(preserveForDomain = false) {
-    clearTimeout(discoveryTimer);
+  function updateProvider(preserveForDomain = false, usePreset = false) {
     ++discoveryToken; discoveryRequested = ""; schoolHelpUrl = null;
-    const provider = mailboxProvider(email.value), config = localMailConnection(email.value);
+    const provider = mailboxProvider(email.value), config = usePreset ? localMailConnection(email.value) : null;
     const keep = preserveForDomain && retainConfiguration && !!addressDomain() && addressDomain() === connectionDomain;
     if (keep) {
       // Follow the email only while the login is still the previous default.
@@ -338,21 +336,27 @@ export function mountMailboxes(
     get("mailbox-secret-label").textContent = help.secret;
     secretHint = `${provider === "school" ? "清华邮箱请生成客户端专用密码。" : ""}${help.hint} 只存系统凭据库，保存后不回显。`;
     updateSecretHint();
-    configuration.open = keep || (!config && !!email.value);
+    configuration.open = keep;
     const microsoft = /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(email.value.trim());
-    if (microsoft) showProgress("unsupported", "此邮箱暂不支持直接连接", "需要微软登录授权。请点击“改用导入邮件文件”。");
+    if (microsoft && usePreset) showProgress("unsupported", "此邮箱暂不支持直接连接", "需要微软登录授权。请点击“改用导入邮件文件”。");
     else if (keep) showProgress("edited", "邮箱地址已更新，服务器配置已保留", "下一步：核对登录账号，重新填写所需密码，再点击“测试连接并保存”。", 2);
     else if (config) showProgress("found", `已找到配置 · ${help.label}`, `服务器：${config.host}。配置已填好，尚未连接。下一步：填写${help.secret}，点击“测试连接并保存”。${provider === "school" ? "清华邮箱需要客户端专用密码。" : ""}`, 2);
-    else if (email.value.trim()) showProgress("typing", "等待识别邮箱配置", "请填写完整邮箱地址，程序会自动查找；也可直接手动填写下方配置。");
-    else showProgress("empty", "先填写邮箱地址", "第 1 步：填写完整邮箱地址，程序会自动查找配置。");
+    else if (email.value.trim()) showProgress("typing", "邮箱地址待确认", "输入完成后按回车，或点击“确认并识别”，再查找邮箱配置。");
+    else showProgress("empty", "先填写邮箱地址", "第 1 步：输入完整邮箱地址，按回车或点击“确认并识别”。");
     updateServerLabel();
   }
-  async function discover(force = false) {
+  async function discover() {
     const address = normalizedAddress();
-    if (busy || !email.validity.valid || !address || (!force && (retainConfiguration || localMailConnection(address) || discoveryRequested === address))) return;
-    if (/@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(address)) return;
+    if (busy || (detection.dataset.state === "searching" && discoveryRequested === address)) return;
+    if (!email.validity.valid || !address || !addressDomain().includes(".")) {
+      showProgress("error", "请填写完整邮箱地址", "例如 name@sjtu.edu.cn。输入完成后按回车或点击“确认并识别”。");
+      return;
+    }
+    if (localMailConnection(address) || /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(address)) {
+      updateProvider(false, true);
+      return;
+    }
     const token = ++discoveryToken; discoveryRequested = address;
-    clearTimeout(discoveryTimer);
     showProgress("searching", "正在识别邮箱配置…", "最多等待 3 秒。查到后会自动填写；也可以直接填写下方配置。");
     try {
       const result = await invoke<{ config: MailConnection | null; source: string; note: string; helpUrl: string | null }>("mailbox_discover", { email: address });
@@ -369,7 +373,6 @@ export function mountMailboxes(
     }
   }
   function manualConfigurationChanged() {
-    clearTimeout(discoveryTimer);
     retainConfiguration = true; connectionDomain = addressDomain();
     ++discoveryToken; updateServerLabel(); showProgress("edited", "已切换为手动配置，等待测试", "下一步：核对服务器、端口和账号，填写所需密码，再点击“测试连接并保存”。", 2);
   }
@@ -377,8 +380,12 @@ export function mountMailboxes(
     input.addEventListener("input", manualConfigurationChanged);
     input.addEventListener("change", manualConfigurationChanged);
   });
-  get("mailbox-detect").addEventListener("click", () => { void discover(true); });
-  email.addEventListener("blur", () => { void discover(); });
+  get("mailbox-detect").addEventListener("click", () => { void discover(); });
+  email.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    if (!event.repeat) void discover();
+  });
   get("mailbox-manual-import").addEventListener("click", () => {
     selectInboxState("stored");
     if (onManualImport) onManualImport();
@@ -397,7 +404,6 @@ export function mountMailboxes(
       showProgress("error", "连接信息还没填完整", "请补充邮箱、IMAP 服务器、有效端口、登录账号和所需密码，再测试连接。", 2);
       say("settings", "请填写邮箱、IMAP 服务器、有效端口、登录账号和所需密码。", true); return;
     }
-    clearTimeout(discoveryTimer);
     ++discoveryToken;
     showProgress("connecting", "正在测试连接…", "正在验证服务器和登录凭据，通过后才保存。", 2);
     void action("settings", "正在测试连接，通过后才保存…", async () => {
@@ -420,9 +426,6 @@ export function mountMailboxes(
     if (normalizedAddress() === previousAddress) return;
     if (secret.value) { secret.value = ""; credentialsCleared = true; }
     updateProvider(true);
-    if (email.value.trim() && email.validity.valid && !retainConfiguration && !localMailConnection(email.value)) {
-      discoveryTimer = setTimeout(() => { void discover(); }, 500);
-    }
   });
   secret.addEventListener("input", () => { credentialsCleared = false; updateSecretHint(); });
   guide.addEventListener("change", updateGuide);
@@ -440,5 +443,5 @@ export function mountMailboxes(
   get("mailbox-ignore-selected").addEventListener("click", () => void ignore([...selected]));
   get("mailbox-load-more").addEventListener("click", () => { limit += 100; void refresh(); });
   updateGuide(); updateProvider(); selectInboxState("stored");
-  return { refresh, dispose: () => { clearTimeout(discoveryTimer); ++discoveryToken; } };
+  return { refresh, dispose: () => { ++discoveryToken; } };
 }
