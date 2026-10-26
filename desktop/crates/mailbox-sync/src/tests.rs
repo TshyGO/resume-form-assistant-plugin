@@ -87,6 +87,18 @@ fn rules_are_local_explainable_and_match_domains_on_label_boundaries() {
         .any(|reason| reason.contains("匹配申请公司：Star Tech")));
     h.subject = Some("Application update from Star Technology".into());
     assert!(classify(&h, &["Star Tech".into()]).is_empty());
+    h.subject = Some("Application status updated".into());
+    h.from_name = Some("Moka团队".into());
+    assert!(classify(&h, &["Moka".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司：Moka")));
+    h.from_name = None;
+    h.subject = Some("来自Moka的申请更新".into());
+    assert!(classify(&h, &["Moka".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司：Moka")));
+    h.subject = Some("Star科技Tech application update".into());
+    assert!(classify(&h, &["Star Tech".into()]).is_empty());
 
     h.subject = Some("Special offers this week".into());
     assert!(classify(&h, &[]).is_empty());

@@ -79,7 +79,7 @@ fn ascii_token_contains(haystack: &str, needle: &str) -> bool {
 
 fn ascii_words(value: &str) -> Vec<String> {
     value
-        .split(|c: char| !c.is_alphanumeric())
+        .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(str::to_ascii_lowercase)
         .collect()
@@ -90,9 +90,40 @@ fn ascii_phrase_contains(haystack: &str, needle: &str) -> bool {
     if words.iter().map(String::len).sum::<usize>() < 2 {
         return false;
     }
-    ascii_words(haystack)
-        .windows(words.len())
-        .any(|candidate| candidate == words)
+    if words.len() == 1 {
+        return ascii_token_contains(haystack, &words[0]);
+    }
+    let haystack = haystack.to_ascii_lowercase();
+    haystack.match_indices(&words[0]).any(|(start, first)| {
+        let before = haystack[..start].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric()) {
+            return false;
+        }
+        let mut end = start + first.len();
+        for word in &words[1..] {
+            let mut separated = false;
+            while let Some(ch) = haystack[end..].chars().next() {
+                if ch.is_ascii_alphanumeric() {
+                    break;
+                }
+                // Chinese text is a boundary around a single English name,
+                // but it must not join two words of a multi-word company.
+                if !ch.is_ascii() {
+                    return false;
+                }
+                separated = true;
+                end += ch.len_utf8();
+            }
+            if !separated || !haystack[end..].starts_with(word) {
+                return false;
+            }
+            end += word.len();
+        }
+        haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })
 }
 
 pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
