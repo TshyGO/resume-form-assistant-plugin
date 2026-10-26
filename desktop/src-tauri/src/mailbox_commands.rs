@@ -239,7 +239,13 @@ async fn scan_folder(
     let retries = with_store(state, |store| {
         check_identity(store, expected)?;
         check_connection(db, account)?;
-        mapped(db.prepare_header_retries(&expected.archive_id, &account.id, folder, plan.validity))
+        mapped(db.prepare_header_retries(
+            &expected.archive_id,
+            &account.id,
+            folder,
+            plan.validity,
+            imap::HEADER_RETRY_BUDGET as u32,
+        ))
     })?;
     for retry in retries {
         let batch = mapped(imap::headers_resilient(session, &[retry.uid]).await)?;
@@ -301,6 +307,16 @@ async fn scan_folder(
             check_connection(db, account)?;
             for uid in &batch.retry_uids {
                 mapped(db.record_header_failure(
+                    &expected.archive_id,
+                    &account.id,
+                    folder,
+                    plan.validity,
+                    *uid,
+                ))?;
+                partial = true;
+            }
+            for uid in &batch.deferred_uids {
+                mapped(db.defer_header_retry(
                     &expected.archive_id,
                     &account.id,
                     folder,
@@ -398,6 +414,10 @@ fn scan_account(
                         return Err(error);
                     }
                     partial = true;
+                    // A timeout or protocol error can leave unread IMAP
+                    // responses on this connection. Retry the remaining
+                    // optional folders on the next check with a new session.
+                    break;
                 }
             };
         }
@@ -560,7 +580,7 @@ async fn confirm_many(
     expected: &ArchiveIdentity,
     ids: Vec<String>,
 ) -> ConfirmReport {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
     let mut report = ConfirmReport::default();
     if let Err(error) = with_store(state, |store| {
         check_identity(store, expected)?;
@@ -617,13 +637,28 @@ async fn confirm_many(
                 continue;
             }
         };
-        for (id, item) in candidates {
+        let mut remaining: VecDeque<_> = candidates.into();
+        let mut reconnect_used = false;
+        let mut connection_error = fail(Error::Network);
+        while let Some((id, item)) = remaining.pop_front() {
             if session.is_none() {
+                if reconnect_used {
+                    confirm_failure(&mut report, id, connection_error.clone());
+                    for (rest_id, _) in remaining.drain(..) {
+                        confirm_failure(&mut report, rest_id, connection_error.clone());
+                    }
+                    break;
+                }
+                reconnect_used = true;
                 match imap::login_account(&account, &secret).await {
                     Ok(connected) => session = Some(connected),
                     Err(error) => {
-                        confirm_failure(&mut report, id, fail(error));
-                        continue;
+                        connection_error = fail(error);
+                        confirm_failure(&mut report, id, connection_error.clone());
+                        for (rest_id, _) in remaining.drain(..) {
+                            confirm_failure(&mut report, rest_id, connection_error.clone());
+                        }
+                        break;
                     }
                 }
             }
@@ -640,9 +675,11 @@ async fn confirm_many(
                 },
                 Err(error) => {
                     let reconnect = matches!(error, Error::Network | Error::Protocol);
-                    confirm_failure(&mut report, id, fail(error));
+                    let error = fail(error);
+                    confirm_failure(&mut report, id, error.clone());
                     if reconnect {
                         session = None;
+                        connection_error = error;
                     }
                 }
             }
@@ -958,7 +995,8 @@ mod tests {
         assert!(!account.paused);
         assert_eq!(account.failures, 0);
         assert_eq!(account.last_error.as_deref(), Some("Protocol"));
-        assert_eq!(account.next_check - account.last_checked.unwrap(), 60);
+        assert!(account.last_checked.is_none());
+        assert!(account.next_check > 0);
     }
     #[test]
     fn scheduled_checks_do_not_report_success_for_accounts_that_are_not_due() {

@@ -126,8 +126,15 @@ test("partial import failures stay visible with per-message reasons and can be r
   await waitFor(() => expect(el("mailbox-candidates").textContent).toContain("断网了，请重试。"));
   expect(el("mailbox-inbox-status").textContent).toContain("失败 1 封");
   expect(onImported).toHaveBeenCalledOnce();
-  expect(el("mailbox-tab-stored").getAttribute("aria-selected")).toBe("true");
+  expect(el("mailbox-tab-pending").getAttribute("aria-selected")).toBe("true");
   expect(el<HTMLButtonElement>("mailbox-save-selected").disabled).toBe(false);
+});
+test("a fully successful confirmation switches to the stored list", async () => {
+  const { ui, view, handlers } = setup([candidate("one")]); await ui.refresh();
+  fireEvent.click(el("mailbox-tab-pending"));
+  handlers.mailbox_confirm = async () => { view.candidates = []; view.pendingCount = 0; return { imported: 1, duplicates: 0, failed: [] }; };
+  fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-save-selected"));
+  await waitFor(() => expect(el("mailbox-tab-stored").getAttribute("aria-selected")).toBe("true"));
 });
 test("a failed later batch still refreshes messages committed by an earlier batch", async () => {
   const { ui, view, handlers, onImported } = setup(Array.from({length: 101}, (_,i) => candidate(String(i)))); await ui.refresh();
@@ -140,6 +147,7 @@ test("a failed later batch still refreshes messages committed by an earlier batc
   fireEvent.click(el("mailbox-select-all")); fireEvent.click(el("mailbox-save-selected"));
   await waitFor(() => expect(el("mailbox-inbox-status").textContent).toContain("第二批连接中断"));
   expect(onImported).toHaveBeenCalledOnce();
+  expect(el("mailbox-tab-pending").getAttribute("aria-selected")).toBe("true");
   expect(el("mailbox-candidates").querySelectorAll('input:checked')).toHaveLength(1);
 });
 test("a read failure retains candidates instead of showing an empty successful result", async () => {
@@ -164,6 +172,16 @@ test("failed accounts explain automatic pause and offer recovery without a popup
   expect(accounts.getByRole("button", { name: "恢复检查" })).toBeTruthy();
   expect(el("mailbox-accounts").textContent).toContain("重新生成授权码");
   expect(el("mailbox-discovery-note").textContent).toContain("1 个邮箱检查异常");
+});
+
+test("a manually paused mailbox keeps its real connection error", async () => {
+  const { ui, view } = setup();
+  view.accounts[0] = { ...view.accounts[0], paused: true, failures: 0, lastError: "Network" };
+  await ui.refresh();
+  expect(el("mailbox-accounts").textContent).toContain("连不上邮箱");
+  expect(el("mailbox-accounts").textContent).toContain("已暂停检查");
+  expect(el("mailbox-accounts").textContent).not.toContain("自动暂停");
+  expect(el("mailbox-accounts").textContent).not.toContain("部分文件夹或邮件未完成");
 });
 
 test.each(["inbox", "settings"])("network failures appear beside the %s check button even when IPC succeeds", async (where) => {
@@ -357,4 +375,101 @@ test("failed login has a visible error state and cannot claim that configuration
   await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("error"));
   expect(el("mailbox-progress-title").textContent).toBe("连接失败，配置尚未保存");
   expect(el("mailbox-progress-detail").textContent).toContain("认证失败");
+});
+
+test("same-domain corrections preserve manual connection settings and explain why credentials need re-entry", async () => {
+  const { handlers, invoke } = setup();
+  handlers.mailbox_connect = async () => {};
+  handlers.mailbox_check = async () => checked;
+  fireEvent.input(el("mailbox-email"), { target: { value: "typo@school.example" } });
+  fireEvent.input(el("mailbox-host"), { target: { value: "manual.school.example" } });
+  fireEvent.input(el("mailbox-port"), { target: { value: "143" } });
+  fireEvent.change(el("mailbox-encryption"), { target: { value: "starttls" } });
+  fireEvent.change(el("mailbox-send-id"), { target: { checked: true } });
+  fireEvent.input(el("mailbox-username"), { target: { value: "shortname" } });
+  fireEvent.input(el("mailbox-secret"), { target: { value: "old-synthetic-secret" } });
+  fireEvent.input(el("mailbox-email"), { target: { value: "correct@school.example" } });
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("manual.school.example");
+  expect(el<HTMLInputElement>("mailbox-port").value).toBe("143");
+  expect(el<HTMLSelectElement>("mailbox-encryption").value).toBe("starttls");
+  expect(el<HTMLInputElement>("mailbox-send-id").checked).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-username").value).toBe("shortname");
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("");
+  expect(el("mailbox-secret-hint").textContent).toContain("原凭据已清除，请重新填写");
+  expect(el("mailbox-progress-title").textContent).toContain("服务器配置已保留");
+  fireEvent.blur(el("mailbox-email"));
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_discover")).toBe(false);
+  fireEvent.input(el("mailbox-secret"), { target: { value: "new-synthetic-secret" } });
+  expect(el("mailbox-secret-hint").textContent).not.toContain("原凭据已清除");
+  fireEvent.submit(el("mailbox-form"));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_connect", {
+    email: "correct@school.example", secret: "new-synthetic-secret",
+    config: { host: "manual.school.example", port: 143, encryption: "starttls", username: "shortname", sendId: true },
+  }));
+});
+
+test("case and whitespace-only edits retain credentials and manual settings", () => {
+  setup();
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@gmail.com" } });
+  fireEvent.input(el("mailbox-host"), { target: { value: "custom.gmail.example" } });
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.input(el("mailbox-email"), { target: { value: " A@GMAIL.COM " } });
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("synthetic-secret");
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("custom.gmail.example");
+  expect(el("mailbox-secret-hint").textContent).not.toContain("原凭据已清除");
+});
+
+test("changing domains discards previous custom settings and uses the new providers configuration", () => {
+  setup();
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.input(el("mailbox-host"), { target: { value: "manual.school.example" } });
+  fireEvent.input(el("mailbox-username"), { target: { value: "shortname" } });
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.input(el("mailbox-email"), { target: { value: "b@gmail.com" } });
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("imap.gmail.com");
+  expect(el<HTMLInputElement>("mailbox-username").value).toBe("b@gmail.com");
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("");
+  expect(el("mailbox-secret-label").textContent).toBe("应用专用密码");
+});
+
+test("DNS settings survive same-domain address correction while the default login follows the email", async () => {
+  const { handlers, invoke } = setup();
+  handlers.mailbox_discover = async () => ({ config: { host: "dns.school.example", port: 993, encryption: "tls", username: "typo@school.example", sendId: false }, note: "DNS found", helpUrl: null });
+  fireEvent.input(el("mailbox-email"), { target: { value: "typo@school.example" } });
+  fireEvent.blur(el("mailbox-email"));
+  await waitFor(() => expect(el<HTMLInputElement>("mailbox-host").value).toBe("dns.school.example"));
+  fireEvent.input(el("mailbox-email"), { target: { value: "correct@school.example" } });
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("dns.school.example");
+  expect(el<HTMLInputElement>("mailbox-username").value).toBe("correct@school.example");
+  fireEvent.blur(el("mailbox-email"));
+  expect(invoke.mock.calls.filter(([name]) => name === "mailbox_discover")).toHaveLength(1);
+});
+
+test.each(["mailbox-encryption", "mailbox-send-id"])("change-only %s edits stop late DNS results from overwriting the form", async (id) => {
+  const { handlers } = setup();
+  let complete!: (value: unknown) => void;
+  handlers.mailbox_discover = () => new Promise((resolve) => { complete = resolve; });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.blur(el("mailbox-email"));
+  if (id === "mailbox-encryption") fireEvent.change(el(id), { target: { value: "starttls" } });
+  else fireEvent.change(el(id), { target: { checked: true } });
+  complete({ config: { host: "late.school.example", port: 993, encryption: "tls", username: "a@school.example", sendId: false }, note: "late", helpUrl: null });
+  // Drain the async mock's promise adoption and the discovery continuation.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("");
+  expect(el("mailbox-detection").dataset.state).toBe("edited");
+  if (id === "mailbox-encryption") expect(el<HTMLSelectElement>(id).value).toBe("starttls");
+  else expect(el<HTMLInputElement>(id).checked).toBe(true);
+});
+
+test("case-only editing while DNS is in flight still accepts the matching result", async () => {
+  const { handlers } = setup();
+  let complete!: (value: unknown) => void;
+  handlers.mailbox_discover = () => new Promise((resolve) => { complete = resolve; });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.blur(el("mailbox-email"));
+  fireEvent.input(el("mailbox-email"), { target: { value: "A@SCHOOL.EXAMPLE" } });
+  complete({ config: { host: "dns.school.example", port: 993, encryption: "tls", username: "a@school.example", sendId: false }, note: "DNS found", helpUrl: null });
+  await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("found"));
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("dns.school.example");
 });

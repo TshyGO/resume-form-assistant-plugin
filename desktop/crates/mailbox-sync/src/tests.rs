@@ -69,6 +69,22 @@ fn rules_are_local_explainable_and_match_domains_on_label_boundaries() {
     assert!(!classify(&h, &[]).is_empty());
     h.subject = Some("订单已发货".into());
     assert!(classify(&h, &[]).is_empty());
+
+    let mut h = header("short@company", "普通系统通知");
+    h.from_name = None;
+    h.from_addr = Some("newsletter@dailynews.com".into());
+    assert!(classify(&h, &["AI".into()]).is_empty());
+    h.from_name = Some("AI 招聘团队".into());
+    assert!(classify(&h, &["AI".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司")));
+    h.from_name = None;
+    h.subject = Some("DAILY 新闻".into());
+    assert!(classify(&h, &["AI".into()]).is_empty());
+    h.subject = Some("AI 面试安排".into());
+    assert!(classify(&h, &["AI".into()])
+        .iter()
+        .any(|reason| reason.contains("匹配申请公司")));
 }
 #[test]
 fn encoded_sender_names_and_subjects_are_decoded_before_matching() {
@@ -291,7 +307,7 @@ fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
         1
     );
     assert_eq!(
-        db.prepare_header_retries("archive", "account", "INBOX", 7)
+        db.prepare_header_retries("archive", "account", "INBOX", 7, 8)
             .unwrap(),
         vec![HeaderRetry {
             uid: 102,
@@ -309,13 +325,43 @@ fn unreadable_live_headers_retry_three_times_then_remain_visible_as_issues() {
         3
     );
     assert!(db
-        .prepare_header_retries("archive", "account", "INBOX", 7)
+        .prepare_header_retries("archive", "account", "INBOX", 7, 8)
         .unwrap()
         .is_empty());
     assert_eq!(db.header_issue_count("archive", "account").unwrap(), 1);
     db.commit_header_retry("archive", "account", "INBOX", 7, 102, None)
         .unwrap();
     assert_eq!(db.header_issue_count("archive", "account").unwrap(), 0);
+}
+#[test]
+fn deferred_headers_do_not_consume_a_retry_attempt_before_fetching() {
+    let (_dir, db) = database();
+    db.defer_header_retry("archive", "account", "INBOX", 7, 103)
+        .unwrap();
+    assert_eq!(
+        db.prepare_header_retries("archive", "account", "INBOX", 7, 8)
+            .unwrap(),
+        vec![HeaderRetry {
+            uid: 103,
+            attempts: 0
+        }]
+    );
+    assert_eq!(
+        db.record_header_failure("archive", "account", "INBOX", 7, 103)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn partial_checks_preserve_the_last_successful_check_time() {
+    let (_dir, db) = database();
+    db.success("account", 100).unwrap();
+    db.partial_failure("account", Error::Protocol, 200).unwrap();
+    let account = db.account("account").unwrap();
+    assert_eq!(account.last_checked, Some(100));
+    assert_eq!(account.next_check, 260);
+    assert_eq!(account.last_error.as_deref(), Some("Protocol"));
 }
 #[test]
 fn deleting_accounts_cascades_and_archive_scopes_stay_separate() {
@@ -437,8 +483,8 @@ fn changing_endpoint_resets_only_that_accounts_locators_and_keeps_other_accounts
         .unwrap();
     assert!(db.cursor("archive", "account", "INBOX").unwrap().is_none());
     assert!(db.cursor("archive", "other", "INBOX").unwrap().is_some());
-    assert!(db.prepare_header_retries("archive", "account", "INBOX", 1).unwrap().is_empty());
-    assert_eq!(db.prepare_header_retries("archive", "other", "INBOX", 1).unwrap().len(), 1);
+    assert!(db.prepare_header_retries("archive", "account", "INBOX", 1, 100).unwrap().is_empty());
+    assert_eq!(db.prepare_header_retries("archive", "other", "INBOX", 1, 100).unwrap().len(), 1);
     assert_eq!(db.pending_count("archive").unwrap(), 1);
     assert_eq!(db.pending("archive", 10).unwrap()[0].account_id, "other");
 }

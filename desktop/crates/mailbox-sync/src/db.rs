@@ -199,8 +199,8 @@ impl Database {
     }
     pub fn partial_failure(&self, id: &str, error: Error, now: i64) -> Result<()> {
         self.0.execute(
-            "UPDATE accounts SET failures=0,last_error=?2,paused=0,last_checked=?3,next_check=?4 WHERE id=?1",
-            params![id, error.to_string(), now, now + 60],
+            "UPDATE accounts SET failures=0,last_error=?2,paused=0,next_check=?3 WHERE id=?1",
+            params![id, error.to_string(), now + 60],
         )?;
         Ok(())
     }
@@ -232,6 +232,7 @@ impl Database {
         account: &str,
         folder: &str,
         validity: u32,
+        limit: u32,
     ) -> Result<Vec<HeaderRetry>> {
         self.0.execute(
             "DELETE FROM header_retries WHERE archive=?1 AND account=?2 AND folder=?3 AND validity<>?4",
@@ -240,10 +241,10 @@ impl Database {
         let mut stmt = self.0.prepare(
             "SELECT uid,attempts FROM header_retries
              WHERE archive=?1 AND account=?2 AND folder=?3 AND validity=?4 AND attempts<?5
-             ORDER BY uid",
+             ORDER BY uid LIMIT ?6",
         )?;
         let rows = stmt.query_map(
-            params![archive, account, folder, validity, FAILURE_LIMIT],
+            params![archive, account, folder, validity, FAILURE_LIMIT, limit.max(1)],
             |row| {
                 Ok(HeaderRetry {
                     uid: row.get(0)?,
@@ -274,6 +275,22 @@ impl Database {
             params![archive, account, folder, validity, uid],
             |row| row.get(0),
         )?)
+    }
+    pub fn defer_header_retry(
+        &self,
+        archive: &str,
+        account: &str,
+        folder: &str,
+        validity: u32,
+        uid: u32,
+    ) -> Result<()> {
+        self.0.execute(
+            "INSERT INTO header_retries(archive,account,folder,validity,uid,attempts)
+             VALUES (?1,?2,?3,?4,?5,0)
+             ON CONFLICT(archive,account,folder,validity,uid) DO NOTHING",
+            params![archive, account, folder, validity, uid],
+        )?;
+        Ok(())
     }
     pub fn mark_header_terminal(
         &self,

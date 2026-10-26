@@ -66,6 +66,17 @@ fn folded(s: &str) -> String {
         .collect()
 }
 
+fn ascii_token_contains(haystack: &str, needle: &str) -> bool {
+    let haystack = haystack.to_ascii_lowercase();
+    let needle = needle.to_ascii_lowercase();
+    haystack.match_indices(&needle).any(|(start, value)| {
+        let before = haystack[..start].chars().next_back();
+        let after = haystack[start + value.len()..].chars().next();
+        before.map_or(true, |c| !c.is_ascii_alphanumeric())
+            && after.map_or(true, |c| !c.is_ascii_alphanumeric())
+    })
+}
+
 pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     if let Some(domain) = header
@@ -100,14 +111,21 @@ pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
         }
     }
     let subject = folded(header.subject.as_deref().unwrap_or(""));
-    let sender = folded(&format!(
-        "{} {}",
-        header.from_name.as_deref().unwrap_or(""),
-        header.from_addr.as_deref().unwrap_or("")
-    ));
+    let subject_raw = header.subject.as_deref().unwrap_or("");
+    let sender_name = folded(header.from_name.as_deref().unwrap_or(""));
+    let sender_name_raw = header.from_name.as_deref().unwrap_or("");
     for company in companies {
         let needle = folded(company);
-        if needle.chars().count() >= 2 && (subject.contains(&needle) || sender.contains(&needle)) {
+        let ascii = !needle.is_empty() && needle.chars().all(|c| c.is_ascii_alphanumeric());
+        let matches = if ascii {
+            needle.len() >= 2
+                && (ascii_token_contains(subject_raw, &needle)
+                    || ascii_token_contains(sender_name_raw, &needle))
+        } else {
+            needle.chars().count() >= 2
+                && (subject.contains(&needle) || sender_name.contains(&needle))
+        };
+        if matches {
             let reason = format!("匹配申请公司：{company}");
             if !reasons.contains(&reason) {
                 reasons.push(reason);
