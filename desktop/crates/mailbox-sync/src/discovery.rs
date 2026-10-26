@@ -52,7 +52,7 @@ pub fn local(address: &str) -> Result<Discovery> {
     // Exact domains, not *.tsinghua.edu.cn. Student and faculty endpoints differ.
     if matches!(domain, "mails.tsinghua.edu.cn" | "mail.tsinghua.edu.cn") {
         return Ok(Discovery { config: Some(ConnectionConfig { host: domain.into(), port: 993,
-            encryption: Encryption::Tls, username: email, send_id: false }),
+            encryption: Encryption::Tls, username: email, send_id: false, endpoint_confirmation: None }),
             source: "school", provider: Some(Provider::Custom),
             note: "清华大学邮箱：请在网页版安全设置中生成客户端专用密码；若账号要求短用户名，可在下方修改。".into(),
             help_url: Some("https://mails.tsinghua.edu.cn/coremail/help/notice.html") });
@@ -86,6 +86,7 @@ fn from_mx(email: &str, hosts: &[String]) -> Option<Discovery> {
             encryption: Encryption::Tls,
             username: email.into(),
             send_id,
+            endpoint_confirmation: None,
         }),
         source: "dns",
         provider: Some(Provider::Custom),
@@ -142,7 +143,7 @@ async fn dns(email: &str) -> Option<Discovery> {
                     }
                 })?;
                 return Some(Discovery { config: Some(ConnectionConfig { host: record.target().to_utf8().trim_end_matches('.').into(),
-                    port: record.port(), encryption, username: email.into(), send_id: false }),
+                    port: record.port(), encryption, username: email.into(), send_id: false, endpoint_confirmation: None }),
                     source: "dns", provider: Some(Provider::Custom),
                     note: "已从域名公布的 IMAP 配置填入服务器。请核对服务器，并按学校要求填写登录凭据；识别成功不代表学校已开放访问。".into(), help_url: None });
             }

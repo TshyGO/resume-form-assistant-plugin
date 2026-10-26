@@ -1,4 +1,22 @@
-export interface MailConnection { host: string; port: number; encryption: "tls" | "starttls"; username: string; sendId: boolean }
+export interface MailEndpoint { host: string; port: number; encryption: "tls" | "starttls"; username: string; sendId: boolean }
+export interface MailEndpointConfirmation extends MailEndpoint { email: string }
+export interface MailConnection extends MailEndpoint { endpointConfirmation?: MailEndpointConfirmation }
+const TRUSTED_MAIL_HOSTS = new Set(["imap.qq.com", "imap.163.com", "imap.126.com", "imap.gmail.com", "imap.mail.me.com", "imap.sina.com", "imap.sina.cn", "imap.vip.sina.com", "imap.vip.sina.cn", "imap.sohu.com", "imap.aliyun.com", "imap.139.com", "imap.exmail.qq.com", "imap.qiye.163.com"]);
+export function requiresEndpointConfirmation(email: string, config: MailEndpoint): boolean {
+  const domain = email.trim().toLowerCase().split("@")[1] ?? "";
+  const host = config.host.trim().toLowerCase();
+  if (!host || !domain) return false;
+  const inDomain = host === domain || host.endsWith(`.${domain}`);
+  return !inDomain && !(config.port === 993 && config.encryption === "tls" && TRUSTED_MAIL_HOSTS.has(host));
+}
+export function endpointConfirmation(email: string, config: MailEndpoint): MailEndpointConfirmation {
+  return { email: email.trim().toLowerCase(), host: config.host.trim().toLowerCase(), port: config.port,
+    encryption: config.encryption, username: config.username.trim(), sendId: config.sendId };
+}
+export function matchesEndpointConfirmation(email: string, config: MailEndpoint, confirmation: MailEndpointConfirmation | null | undefined): boolean {
+  const expected = endpointConfirmation(email, config);
+  return !!confirmation && (Object.keys(expected) as Array<keyof MailEndpointConfirmation>).every((key) => expected[key] === confirmation[key]);
+}
 export type MailProvider = "qq" | "163" | "126" | "gmail" | "icloud" | "sina" | "sohu" | "aliyun" | "139" | "school";
 export interface MailGuide { label: string; secret: string; hint: string; url: string | null; steps: string[] }
 export const MAIL_GUIDES: Record<MailProvider, MailGuide> = {

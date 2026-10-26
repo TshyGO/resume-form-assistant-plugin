@@ -1,6 +1,6 @@
 import type { Invoke } from "./api.ts";
-import { MAIL_GUIDES, mailboxProvider, localMailConnection } from "./mailbox-providers.ts";
-import type { MailConnection, MailProvider } from "./mailbox-providers.ts";
+import { MAIL_GUIDES, mailboxProvider, localMailConnection, requiresEndpointConfirmation, endpointConfirmation, matchesEndpointConfirmation } from "./mailbox-providers.ts";
+import type { MailConnection, MailProvider, MailEndpointConfirmation } from "./mailbox-providers.ts";
 export { mailboxProvider } from "./mailbox-providers.ts";
 
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
@@ -27,6 +27,7 @@ const ERRORS: Record<string, string> = {
   ImapDisabled: "邮箱未开启 IMAP，请按教程开启后重试。",
   Network: "连不上邮箱，请核对服务器和网络；学校可能要求校园网或没有开放 IMAP，可改用手动导入。",
   Tls: "安全连接验证失败，请检查系统时间和网络。",
+  EndpointConfirmation: "服务器与邮箱域名不同，尚未核对。请修改连接，按官方教程核对后使用此配置。",
   Credentials: "系统凭据库不可用或缺少授权码，请解锁或更新授权码。",
   Protocol: "邮箱读取请求未完成，请重试；163 / 126 请核对 IMAP 授权设置。",
   TooLarge: "邮件信头过大，请改用手动导入并检查邮箱。",
@@ -64,6 +65,7 @@ export function mountMailboxes(
   let previousAddress = "", connectionDomain = "";
   let retainConfiguration = false, credentialsCleared = false;
   let secretHint = "";
+  let acceptedEndpoint: MailEndpointConfirmation | null = null;
   function updateSecretHint() {
     get("mailbox-secret-hint").textContent = secretHint + (credentialsCleared ? " 邮箱账号已变化，原凭据已清除，请重新填写。" : "");
   }
@@ -98,6 +100,10 @@ export function mountMailboxes(
   }
   function syncButtons() {
     actionIds.forEach((id) => { get<HTMLButtonElement>(id).disabled = busy || ((id === "mailbox-save-selected" || id === "mailbox-ignore-selected") && !selected.size); });
+    const awaitingReview = needsEndpointReview();
+    get<HTMLButtonElement>("mailbox-save").disabled = busy || awaitingReview;
+    secret.disabled = awaitingReview;
+    get<HTMLButtonElement>("mailbox-confirm-endpoint").disabled = busy || !awaitingReview;
     email.readOnly = busy; secret.readOnly = busy;
     host.readOnly = busy; port.readOnly = busy; username.readOnly = busy;
     encryption.disabled = busy; sendId.disabled = busy;
@@ -192,11 +198,11 @@ export function mountMailboxes(
       const controls = node("div", undefined, "settings-actions");
       controls.append(button("修改连接 / 更新凭据", () => {
         email.value = account.email; secret.value = ""; credentialsCleared = false; updateProvider();
-        if (account.connection) { fillConnection(account.connection); retainConfiguration = true; }
+        if (account.connection) { fillConnection(account.connection, true); retainConfiguration = true; }
         updateServerLabel();
         configuration.open = true;
         showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
-        secret.focus();
+        if (!showEndpointReview()) secret.focus();
       }));
       controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
         await invoke("mailbox_pause", { id: account.id, paused: !account.paused });
@@ -305,12 +311,33 @@ export function mountMailboxes(
     const url = provider === "school" ? schoolHelpUrl : help.url;
     link.hidden = !url; link.href = url ?? "#";
   }
-  function fillConnection(config: MailConnection) {
+  function fillConnection(config: MailConnection, restoreConfirmation = false) {
+    acceptedEndpoint = restoreConfirmation && matchesEndpointConfirmation(email.value, config, config.endpointConfirmation) ? config.endpointConfirmation! : null;
     host.value = config.host; port.value = String(config.port); encryption.value = config.encryption;
     username.value = config.username; sendId.checked = config.sendId;
   }
   function readConnection(): MailConnection {
-    return { host: host.value.trim(), port: Number(port.value), encryption: encryption.value as "tls" | "starttls", username: username.value.trim(), sendId: sendId.checked };
+    const provider = mailboxProvider(email.value);
+    const config: MailConnection = { host: host.value.trim().toLowerCase(), port: Number(port.value), encryption: encryption.value as "tls" | "starttls", username: username.value.trim(), sendId: sendId.checked || provider === "163" || provider === "126" };
+    if (matchesEndpointConfirmation(email.value, config, acceptedEndpoint)) config.endpointConfirmation = acceptedEndpoint!;
+    return config;
+  }
+  function needsEndpointReview() {
+    const config = readConnection();
+    return requiresEndpointConfirmation(email.value, config) && !matchesEndpointConfirmation(email.value, config, acceptedEndpoint);
+  }
+  function showEndpointReview() {
+    const pending = needsEndpointReview();
+    get("mailbox-endpoint-review").hidden = !pending;
+    if (pending) {
+      secret.value = "";
+      const config = readConnection();
+      get("mailbox-endpoint-detail").textContent = `邮箱域名：${addressDomain()}；目标服务器：${config.host}，端口 ${config.port}，${config.encryption === "tls" ? "TLS" : "STARTTLS"}。它与邮箱域名不同，尚未确认是学校或邮箱服务商使用的服务器。`;
+      configuration.open = true;
+      showProgress("manual", "发现跨域服务器，待核对", "请先按官方教程核对下方服务器。确认使用此配置后，才能填写密码并测试连接。");
+    }
+    syncButtons();
+    return pending;
   }
   function updateServerLabel() {
     get("mailbox-server").textContent = host.value.trim()
@@ -344,6 +371,7 @@ export function mountMailboxes(
     else if (email.value.trim()) showProgress("typing", "邮箱地址待确认", "输入完成后按回车，或点击“确认并识别”，再查找邮箱配置。");
     else showProgress("empty", "先填写邮箱地址", "第 1 步：输入完整邮箱地址，按回车或点击“确认并识别”。");
     updateServerLabel();
+    showEndpointReview();
   }
   async function discover() {
     const address = normalizedAddress();
@@ -365,7 +393,7 @@ export function mountMailboxes(
       configuration.open = !result.config;
       if (result.config) showProgress("found", "已找到邮箱配置", `${result.note} 配置已填好，尚未连接。下一步：按学校要求填写密码，点击“测试连接并保存”。`, 2);
       else showProgress("manual", "未找到配置，需要手动填写", `${result.note} 下一步：展开下方配置，按学校官方教程填写服务器和登录账号；也可改用导入邮件文件。`);
-      schoolHelpUrl = result.helpUrl; updateGuide(); updateServerLabel();
+      schoolHelpUrl = result.helpUrl; updateGuide(); updateServerLabel(); showEndpointReview();
     } catch (error) {
       if (token !== discoveryToken) return;
       configuration.open = true;
@@ -373,12 +401,21 @@ export function mountMailboxes(
     }
   }
   function manualConfigurationChanged() {
+    if (["163", "126"].includes(mailboxProvider(email.value) ?? "")) sendId.checked = true;
     retainConfiguration = true; connectionDomain = addressDomain();
     ++discoveryToken; updateServerLabel(); showProgress("edited", "已切换为手动配置，等待测试", "下一步：核对服务器、端口和账号，填写所需密码，再点击“测试连接并保存”。", 2);
+    showEndpointReview();
   }
   [host, port, username, encryption, sendId].forEach((input) => {
     input.addEventListener("input", manualConfigurationChanged);
     input.addEventListener("change", manualConfigurationChanged);
+  });
+  get("mailbox-confirm-endpoint").addEventListener("click", () => {
+    if (busy || !needsEndpointReview()) return;
+    acceptedEndpoint = endpointConfirmation(email.value, readConnection());
+    showEndpointReview();
+    showProgress("edited", "已确认使用此服务器，等待测试", "下一步：填写所需密码，点击“测试连接并保存”。确认配置不代表已经连接成功。", 2);
+    secret.focus();
   });
   get("mailbox-detect").addEventListener("click", () => { void discover(); });
   email.addEventListener("keydown", (event) => {
@@ -398,6 +435,7 @@ export function mountMailboxes(
   });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (busy || showEndpointReview()) return;
     const config = readConnection();
     if (!email.validity.valid || !email.value.trim() || !secret.value.trim() || !config.host || !config.username || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
       configuration.open = true;

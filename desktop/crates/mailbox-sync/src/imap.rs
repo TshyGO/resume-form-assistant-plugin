@@ -55,6 +55,8 @@ pub async fn connect_configured(
     configuration: &ConnectionConfig,
 ) -> Result<LiveSession> {
     let config = configuration.clone().validated(email)?;
+    // Reject unconfirmed destinations before opening a socket or using credentials.
+    config.authorize_endpoint(email)?;
     if secret.trim().is_empty() || secret.contains(['\r', '\n', '\0']) {
         return Err(Error::Auth);
     }

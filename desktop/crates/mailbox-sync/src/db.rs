@@ -160,7 +160,7 @@ impl Database {
             params![id, email, json],
         )?;
         // UID identities belong to an endpoint + login, not just an email address.
-        if let Some(old) = previous.filter(|a| a.connection != connection) {
+        if let Some(old) = previous.filter(|a| !a.connection.same_endpoint(&connection)) {
             tx.execute(
                 "UPDATE accounts SET last_checked=NULL WHERE id=?1",
                 [&old.id],

@@ -16,6 +16,7 @@ pub fn fail(error: Error) -> CommandError {
     let message = match error {
         Error::Address => "请输入有效的邮箱地址。",
         Error::Configuration => "请核对 IMAP 服务器域名、端口、加密方式和登录账号；服务器处不要填写网页链接。",
+        Error::EndpointConfirmation => "该服务器与邮箱域名不同，尚未核对。请在邮箱设置中按学校或邮箱官方教程确认服务器，再使用此配置。",
         Error::OAuthRequired => "Outlook / Hotmail / Live 需要微软登录授权，当前暂不支持。请改用手动导入邮件。",
         Error::Auth => "邮箱拒绝登录：请核对登录账号，确认已开启 IMAP；按邮箱或学校教程填写授权码、应用专用密码或登录密码。授权码失效时请重新生成。",
         Error::ImapDisabled => "邮箱尚未开启 IMAP。请按下方教程开启后，再测试连接。",
@@ -488,6 +489,7 @@ fn run_checks(
                     Error::Storage,
                     Error::TooLarge,
                     Error::Credentials,
+                    Error::EndpointConfirmation,
                 ]
                 .into_iter()
                 .find(|category| fail(*category).code == error.code)
@@ -869,6 +871,7 @@ mod tests {
             encryption: mailbox_sync::Encryption::Tls,
             username: "shortname".into(),
             send_id: false,
+            endpoint_confirmation: None,
         };
         persist_configured_account(&db, &creds, "a@school.example", "first-secret", &config)
             .unwrap();

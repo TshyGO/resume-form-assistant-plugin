@@ -529,3 +529,111 @@ test("IME confirmation and key repetition do not start discovery, and repeated c
   fireEvent.click(el("mailbox-detect"));
   expect(invoke.mock.calls.filter(([name]) => name === "mailbox_discover")).toHaveLength(1);
 });
+
+const externalConfig = { host: "mail.external.example", port: 993, encryption: "tls" as const, username: "a@school.example", sendId: false };
+async function discoverExternal() {
+  const context = setup();
+  context.handlers.mailbox_discover = async () => ({ config: externalConfig, source: "dns", note: "DNS returned a host", helpUrl: null });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.click(el("mailbox-detect"));
+  await waitFor(() => expect(el("mailbox-endpoint-review").hidden).toBe(false));
+  return context;
+}
+
+test("unfamiliar DNS host stays pending, blocks secrets and cannot submit until explicitly accepted", async () => {
+  const { handlers, invoke, ui } = await discoverExternal();
+  expect(el("mailbox-progress-title").textContent).toBe("发现跨域服务器，待核对");
+  expect(el("mailbox-endpoint-detail").textContent).toContain("school.example");
+  expect(el("mailbox-endpoint-detail").textContent).toContain("mail.external.example");
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(true);
+  expect(el<HTMLButtonElement>("mailbox-save").disabled).toBe(true);
+  await ui.refresh();
+  expect(el<HTMLButtonElement>("mailbox-save").disabled).toBe(true);
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.submit(el("mailbox-form"));
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_connect")).toBe(false);
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("");
+  fireEvent.click(el("mailbox-confirm-endpoint"));
+  expect(el("mailbox-endpoint-review").hidden).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(false);
+  expect(el<HTMLButtonElement>("mailbox-save").disabled).toBe(false);
+  handlers.mailbox_connect = async () => {}; handlers.mailbox_check = async () => checked;
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.submit(el("mailbox-form"));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_connect", {
+    email: "a@school.example", secret: "synthetic-secret", config: { ...externalConfig, endpointConfirmation: { email: "a@school.example", ...externalConfig } },
+  }));
+});
+
+test.each(["mailbox-host", "mailbox-port", "mailbox-encryption", "mailbox-username", "mailbox-send-id", "mailbox-email"])("editing %s invalidates prior endpoint acceptance", async (id) => {
+  const { invoke } = await discoverExternal();
+  fireEvent.click(el("mailbox-confirm-endpoint"));
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  if (id === "mailbox-send-id") fireEvent.change(el(id), { target: { checked: true } });
+  else if (id === "mailbox-encryption") fireEvent.change(el(id), { target: { value: "starttls" } });
+  else fireEvent.input(el(id), { target: { value: id === "mailbox-host" ? "mail.changed.example" : id === "mailbox-port" ? "143" : id === "mailbox-email" ? "b@school.example" : "shortname" } });
+  expect(el("mailbox-endpoint-review").hidden).toBe(false);
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("");
+  fireEvent.submit(el("mailbox-form"));
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_connect")).toBe(false);
+});
+
+test.each(["mail.school.example", "imap.exmail.qq.com", "imap.qiye.163.com"])("same-domain or canonical provider host %s needs no extra acceptance", async (host) => {
+  const { handlers } = setup();
+  handlers.mailbox_discover = async () => ({ config: { ...externalConfig, host }, source: "dns", note: "DNS returned a host", helpUrl: null });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.click(el("mailbox-detect"));
+  await waitFor(() => expect(el("mailbox-detection").dataset.state).toBe("found"));
+  expect(el("mailbox-endpoint-review").hidden).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(false);
+});
+
+test("a discovery response cannot approve its own unrelated host", async () => {
+  const { handlers } = setup();
+  handlers.mailbox_discover = async () => ({ config: { ...externalConfig, endpointConfirmation: { email: "a@school.example", ...externalConfig } }, source: "preset", note: "forged trust claim", helpUrl: null });
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@school.example" } });
+  fireEvent.click(el("mailbox-detect"));
+  await waitFor(() => expect(el("mailbox-endpoint-review").hidden).toBe(false));
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(true);
+});
+
+test("legacy unfamiliar saved host remains editable but requires acceptance before new credentials", async () => {
+  const { ui, view } = setup();
+  view.accounts[0] = { ...view.accounts[0], email: "a@school.example", connection: externalConfig };
+  await ui.refresh();
+  fireEvent.click(within(el("mailbox-accounts")).getByRole("button", { name: "修改连接 / 更新凭据" }));
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe(externalConfig.host);
+  expect(el("mailbox-endpoint-review").hidden).toBe(false);
+});
+
+test("NetEase endpoint acceptance includes the client ID required by native validation", async () => {
+  const { handlers, invoke } = setup();
+  handlers.mailbox_connect = async () => {}; handlers.mailbox_check = async () => checked;
+  fireEvent.input(el("mailbox-email"), { target: { value: "a@163.com" } });
+  fireEvent.click(el("mailbox-detect"));
+  fireEvent.input(el("mailbox-host"), { target: { value: externalConfig.host } });
+  fireEvent.change(el("mailbox-send-id"), { target: { checked: false } });
+  expect(el<HTMLInputElement>("mailbox-send-id").checked).toBe(true);
+  fireEvent.click(el("mailbox-confirm-endpoint"));
+  fireEvent.input(el("mailbox-secret"), { target: { value: "synthetic-secret" } });
+  fireEvent.submit(el("mailbox-form"));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_connect", {
+    email: "a@163.com", secret: "synthetic-secret",
+    config: { ...externalConfig, username: "a@163.com", sendId: true,
+      endpointConfirmation: { email: "a@163.com", ...externalConfig, username: "a@163.com", sendId: true } },
+  }));
+});
+
+test("saved acceptance is restored only for the same destination", async () => {
+  const { ui, view } = setup();
+  view.accounts[0] = { ...view.accounts[0], email: "a@school.example", connection: { ...externalConfig, endpointConfirmation: { email: "a@school.example", ...externalConfig } } };
+  await ui.refresh();
+  fireEvent.click(within(el("mailbox-accounts")).getByRole("button", { name: "修改连接 / 更新凭据" }));
+  expect(el("mailbox-endpoint-review").hidden).toBe(true);
+  expect(el<HTMLInputElement>("mailbox-secret").disabled).toBe(false);
+  fireEvent.input(el("mailbox-email"), { target: { value: " A@SCHOOL.EXAMPLE " } });
+  expect(el("mailbox-endpoint-review").hidden).toBe(true);
+  fireEvent.input(el("mailbox-host"), { target: { value: "mail.changed.example" } });
+  expect(el("mailbox-endpoint-review").hidden).toBe(false);
+});

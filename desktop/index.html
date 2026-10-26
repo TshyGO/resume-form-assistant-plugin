@@ -439,7 +439,13 @@
                     </div>
                     <div id="mailbox-detection" class="mailbox-progress" data-state="empty" role="status" aria-live="polite" aria-atomic="true">
                       <span id="mailbox-progress-icon" class="mailbox-progress-icon" aria-hidden="true">1</span>
-                      <div><strong id="mailbox-progress-title">先填写邮箱地址</strong><p id="mailbox-progress-detail">输入完成后按回车或点击“确认并识别”。</p></div>
+                      <div><strong id="mailbox-progress-title">先填写邮箱地址</strong><p id="mailbox-progress-detail">输入完成后按回车或点击“确认并识别”。</p>
+                        <div id="mailbox-endpoint-review" hidden>
+                          <p id="mailbox-endpoint-detail"></p>
+                          <p>请到学校信息中心或邮箱服务商的官方网站，核对“邮箱客户端设置”中的收信服务器、端口和加密方式。无法确认时，可改用导入邮件文件。</p>
+                          <button id="mailbox-confirm-endpoint" type="button">我已按官方教程核对，使用此配置</button>
+                        </div>
+                      </div>
                     </div>
                     <details id="mailbox-configuration" class="settings-fold">
                       <summary>核对或修改服务器与登录账号</summary>

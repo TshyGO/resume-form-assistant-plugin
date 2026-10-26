@@ -394,6 +394,7 @@ fn manual_configuration_is_validated_and_never_accepts_urls_plaintext_or_empty_l
         encryption: Encryption::Tls,
         username: "student".into(),
         send_id: false,
+        endpoint_confirmation: None,
     };
     assert!(config.clone().validated("student@school.example").is_ok());
     for host in [
@@ -445,6 +446,7 @@ fn legacy_accounts_migrate_and_custom_settings_survive_restart_without_credentia
         encryption: Encryption::Starttls,
         username: "shortname".into(),
         send_id: true,
+        endpoint_confirmation: None,
     };
     db.save_configured_account("school", "a@school.example", &config)
         .unwrap();
@@ -472,7 +474,8 @@ fn changing_endpoint_resets_only_that_accounts_locators_and_keeps_other_accounts
         .unwrap();
     }
     for id in ["account", "other"] {
-        db.record_header_failure("archive", id, "INBOX", 1, 10).unwrap();
+        db.record_header_failure("archive", id, "INBOX", 1, 10)
+            .unwrap();
     }
     let mut config = db.account("account").unwrap().connection;
     db.save_configured_account("ignored-new-id", "a@qq.com", &config)
@@ -483,8 +486,176 @@ fn changing_endpoint_resets_only_that_accounts_locators_and_keeps_other_accounts
         .unwrap();
     assert!(db.cursor("archive", "account", "INBOX").unwrap().is_none());
     assert!(db.cursor("archive", "other", "INBOX").unwrap().is_some());
-    assert!(db.prepare_header_retries("archive", "account", "INBOX", 1, 100).unwrap().is_empty());
-    assert_eq!(db.prepare_header_retries("archive", "other", "INBOX", 1, 100).unwrap().len(), 1);
+    assert!(db
+        .prepare_header_retries("archive", "account", "INBOX", 1, 100)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        db.prepare_header_retries("archive", "other", "INBOX", 1, 100)
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(db.pending_count("archive").unwrap(), 1);
     assert_eq!(db.pending("archive", 10).unwrap()[0].account_id, "other");
+}
+
+#[test]
+fn endpoint_trust_is_label_bounded_and_confirmation_is_bound_to_the_whole_destination() {
+    let mut config = ConnectionConfig::preset("a@qq.com").unwrap();
+    for host in [
+        "school.example",
+        "imap.school.example",
+        "imap.qq.com",
+        "imap.exmail.qq.com",
+        "imap.qiye.163.com",
+        "imap.mail.me.com",
+    ] {
+        config.host = host.into();
+        assert!(
+            config.authorize_endpoint("a@school.example").is_ok(),
+            "{host}"
+        );
+    }
+    for host in [
+        "school.example.evil.test",
+        "notschool.example",
+        "imap.exmail.qq.com.evil.test",
+        "evil.exmail.qq.com",
+        "mail.other.example",
+    ] {
+        config.host = host.into();
+        assert_eq!(
+            config.authorize_endpoint("a@school.example"),
+            Err(Error::EndpointConfirmation),
+            "{host}"
+        );
+    }
+    config.endpoint_confirmation = Some(
+        config
+            .endpoint_confirmation_for("a@school.example")
+            .unwrap(),
+    );
+    assert!(config.authorize_endpoint("a@school.example").is_ok());
+    assert!(config.authorize_endpoint(" A@SCHOOL.EXAMPLE ").is_ok());
+    assert_eq!(
+        config.authorize_endpoint("b@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+    let original = config.clone();
+    let mut changed = original.clone();
+    changed.host = "mail.different.example".into();
+    assert_eq!(
+        changed.authorize_endpoint("a@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+    let mut changed = original.clone();
+    changed.port = 143;
+    assert_eq!(
+        changed.authorize_endpoint("a@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+    let mut changed = original.clone();
+    changed.encryption = Encryption::Starttls;
+    assert_eq!(
+        changed.authorize_endpoint("a@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+    let mut changed = original.clone();
+    changed.username = "different".into();
+    assert_eq!(
+        changed.authorize_endpoint("a@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+    let mut changed = original;
+    changed.send_id = !changed.send_id;
+    assert_eq!(
+        changed.authorize_endpoint("a@school.example"),
+        Err(Error::EndpointConfirmation)
+    );
+}
+
+#[tokio::test]
+async fn unconfirmed_cross_domain_connection_is_rejected_before_any_network_or_login() {
+    let config = ConnectionConfig {
+        host: "mail.unrelated.invalid".into(),
+        port: 993,
+        encryption: Encryption::Tls,
+        username: "a@school.example".into(),
+        send_id: false,
+        endpoint_confirmation: None,
+    };
+    assert!(matches!(
+        imap::connect_configured("a@school.example", "synthetic-secret", &config).await,
+        Err(Error::EndpointConfirmation)
+    ));
+    assert!(matches!(
+        imap::test_connection("a@school.example", "synthetic-secret", &config).await,
+        Err(Error::EndpointConfirmation)
+    ));
+    let (_dir, db) = database();
+    let account = db
+        .save_configured_account("legacy", "a@school.example", &config)
+        .unwrap();
+    assert!(matches!(
+        imap::login_account(&account, "synthetic-secret").await,
+        Err(Error::EndpointConfirmation)
+    ));
+    assert_eq!(db.accounts().unwrap().len(), 2); // One legacy row cannot break listing/recovery.
+    let mut approved = config.clone();
+    approved.endpoint_confirmation = Some(
+        approved
+            .endpoint_confirmation_for("a@school.example")
+            .unwrap(),
+    );
+    approved.host = "mail.changed.invalid".into();
+    assert!(matches!(
+        imap::connect_configured("a@school.example", "synthetic-secret", &approved).await,
+        Err(Error::EndpointConfirmation)
+    ));
+}
+
+#[test]
+fn confirmation_persists_and_updating_only_confirmation_keeps_scan_state() {
+    let (dir, mut db) = database();
+    let mut config = ConnectionConfig {
+        host: "mail.external.example".into(),
+        port: 993,
+        encryption: Encryption::Tls,
+        username: "a@school.example".into(),
+        send_id: false,
+        endpoint_confirmation: None,
+    };
+    db.save_configured_account("legacy", "a@school.example", &config)
+        .unwrap();
+    db.commit_scan(
+        "archive",
+        "legacy",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 7,
+        },
+        &[],
+    )
+    .unwrap();
+    config.endpoint_confirmation = Some(
+        config
+            .endpoint_confirmation_for("a@school.example")
+            .unwrap(),
+    );
+    db.save_configured_account("legacy", "a@school.example", &config)
+        .unwrap();
+    assert_eq!(
+        db.cursor("archive", "legacy", "INBOX").unwrap(),
+        Some(Cursor {
+            validity: 1,
+            uid: 7
+        })
+    );
+    drop(db);
+    let db = Database::open(dir.path()).unwrap();
+    let saved = db.account("legacy").unwrap();
+    assert_eq!(saved.connection, config);
+    saved.connection.authorize_endpoint(&saved.email).unwrap();
 }
