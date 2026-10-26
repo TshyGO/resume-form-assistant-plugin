@@ -77,6 +77,24 @@ fn ascii_token_contains(haystack: &str, needle: &str) -> bool {
     })
 }
 
+fn ascii_words(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn ascii_phrase_contains(haystack: &str, needle: &str) -> bool {
+    let words = ascii_words(needle);
+    if words.iter().map(String::len).sum::<usize>() < 2 {
+        return false;
+    }
+    ascii_words(haystack)
+        .windows(words.len())
+        .any(|candidate| candidate == words)
+}
+
 pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     if let Some(domain) = header
@@ -116,11 +134,10 @@ pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
     let sender_name_raw = header.from_name.as_deref().unwrap_or("");
     for company in companies {
         let needle = folded(company);
-        let ascii = !needle.is_empty() && needle.chars().all(|c| c.is_ascii_alphanumeric());
+        let ascii = company.is_ascii() && company.chars().any(|c| c.is_ascii_alphanumeric());
         let matches = if ascii {
-            needle.len() >= 2
-                && (ascii_token_contains(subject_raw, &needle)
-                    || ascii_token_contains(sender_name_raw, &needle))
+            ascii_phrase_contains(subject_raw, company)
+                || ascii_phrase_contains(sender_name_raw, company)
         } else {
             needle.chars().count() >= 2
                 && (subject.contains(&needle) || sender_name.contains(&needle))
@@ -133,7 +150,12 @@ pub fn classify(header: &Header, companies: &[String]) -> Vec<String> {
         }
     }
     for keyword in KEYWORDS {
-        if subject.contains(keyword) {
+        let matches = if keyword.is_ascii() {
+            ascii_token_contains(subject_raw, keyword)
+        } else {
+            subject.contains(keyword)
+        };
+        if matches {
             reasons.push(format!("标题包含：{keyword}"));
         }
     }

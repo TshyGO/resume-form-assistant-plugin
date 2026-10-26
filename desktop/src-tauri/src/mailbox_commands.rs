@@ -331,9 +331,25 @@ fn scan_account(
         .ok_or_else(|| fail(Error::Credentials))?;
     tauri::async_runtime::block_on(async {
         let mut session = mapped(imap::login_account(account, &secret).await)?;
-        let folders = mapped(imap::folders(&mut session).await)?;
-        let mut partial = false;
-        for folder in folders {
+        // INBOX is the required source and must not depend on LIST support.
+        let mut partial = scan_folder(
+            state,
+            db,
+            expected,
+            account,
+            companies,
+            &mut session,
+            "INBOX",
+        )
+        .await?;
+        let folders = match imap::folders(&mut session).await {
+            Ok(folders) => folders,
+            Err(_) => return Ok(true),
+        };
+        for folder in folders
+            .into_iter()
+            .filter(|folder| !folder.eq_ignore_ascii_case("INBOX"))
+        {
             match scan_folder(
                 state,
                 db,
@@ -346,10 +362,7 @@ fn scan_account(
             .await
             {
                 Ok(folder_partial) => partial |= folder_partial,
-                Err(error) => {
-                    if folder.eq_ignore_ascii_case("INBOX") {
-                        return Err(error);
-                    }
+                Err(_) => {
                     partial = true;
                     // A timeout or protocol error can leave unread IMAP
                     // responses on this connection. Retry the remaining
