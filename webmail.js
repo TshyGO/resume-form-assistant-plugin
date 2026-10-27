@@ -101,7 +101,7 @@
   }
   function rawCandidates(ctx, name) {
     const origin = ctx.doc.location.origin;
-    const urls = ctx.links.filter(link => /下载邮件|导出邮件|下载原文|保存邮件|download.*(?:mail|message)|original/i
+    const urls = ctx.links.filter(link => /下载邮件|导出邮件|导出为\s*eml\s*文件|下载原文|保存邮件|download.*(?:mail|message)|original/i
       .test(`${text(link)} ${link.getAttribute('title') || ''}`))
       .map(link => rawUrl(link, name, origin)).filter(Boolean);
     // QQ's classic read view contains the exact mailid and login session in its own URL.
@@ -169,13 +169,51 @@
       && /^(?:From|Subject|Date):[^\r\n]+/im.test(headers)
       && (headers.match(/^(?:From|To|Subject|Date|Message-ID|MIME-Version|Content-Type):/gim) || []).length >= 2;
   }
+  function qqModernOriginal(doc) {
+    return new Promise(resolve => {
+      const nonce = root.crypto.randomUUID();
+      const finish = result => {
+        clearTimeout(timer);
+        doc.removeEventListener('resumepro:qq-export-response', answer);
+        resolve(result);
+      };
+      function answer(event) {
+        if (typeof event.detail !== 'string') return;
+        let result;
+        try { result = JSON.parse(event.detail); } catch { return; }
+        if (result.nonce !== nonce) return;
+        if (result.status === 'changed') { finish({ changed: true }); return; }
+        if (result.status !== 'ok' || typeof result.mailId !== 'string' || !result.mailId || result.mailId.length > 512) {
+          finish({}); return;
+        }
+        const current = new URL(doc.location.href);
+        if (current.protocol !== 'https:' || current.hostname !== 'wx.mail.qq.com' || current.pathname !== '/home/index'
+            || !current.searchParams.get('sid')) { finish({}); return; }
+        const url = new URL('/read/readmail', current.origin);
+        url.searchParams.set('func', '3');
+        url.searchParams.set('mailid', result.mailId);
+        url.searchParams.set('sid', current.searchParams.get('sid'));
+        finish({ url: url.href });
+      }
+      const timer = setTimeout(() => finish({}), 1500);
+      doc.addEventListener('resumepro:qq-export-response', answer);
+      doc.dispatchEvent(new doc.defaultView.CustomEvent('resumepro:qq-export-request', { detail: JSON.stringify({ nonce }) }));
+    });
+  }
   async function capture(doc, fetcher = root.fetch.bind(root)) {
     const name = provider(doc.location.href);
     if (!name) return { status: 'unsupported' };
     const ctx = opened(doc, name);
     if (!ctx) return { status: 'open_mail' };
     let reason = 'raw_unavailable';
-    for (const url of rawCandidates(ctx, name)) {
+    const candidates = rawCandidates(ctx, name);
+    const current = new URL(doc.location.href);
+    if (name === 'qq' && current.hostname === 'wx.mail.qq.com' && current.pathname === '/home/index') {
+      const modern = await qqModernOriginal(doc);
+      if (modern.changed || opened(doc, name)?.fingerprint !== ctx.fingerprint) return { status: 'changed' };
+      if (modern.url) candidates.unshift(modern.url);
+    }
+    for (const url of candidates) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 20000);
       try {
