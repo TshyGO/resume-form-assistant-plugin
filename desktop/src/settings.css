@@ -358,3 +358,24 @@ dialog.settings-dialog::backdrop { background: #1c233066; }
 .mailbox-guide figcaption { color: var(--muted, #526279); font-size: 12px; margin-top: 6px; }
 #mailbox-guide-steps { padding-left: 22px; font-size: 13px; line-height: 1.8; }
 #mailbox-settings-status[data-tone="error"], #mailbox-inbox-status[data-tone="error"] { color: var(--danger, #b42318); }
+
+/* Status is conveyed by text, symbol and border as well as color. */
+.mailbox-steps { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 0; margin: 0 0 20px; list-style: none; }
+.mailbox-steps li { display: flex; align-items: center; gap: 7px; color: var(--muted, #526279); font-size: 13px; }
+.mailbox-steps li span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #edf0f3; font-weight: 700; }
+.mailbox-steps li[aria-current="step"] { color: #174c40; font-weight: 700; }
+.mailbox-steps li[aria-current="step"] span { color: white; background: #236653; }
+.mailbox-steps li[data-complete="true"] span { color: #174c40; background: #dcefe7; }
+.mailbox-progress { display: flex; align-items: flex-start; gap: 12px; padding: 16px; margin: 16px 0; border: 1px solid #c9d2de; border-left: 4px solid #718096; border-radius: 10px; background: #f4f6f9; color: #344054; }
+.mailbox-progress-icon { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 50%; font-size: 17px; font-weight: 700; background: #e4e9ef; }
+.mailbox-progress strong { display: block; font-size: 15px; line-height: 1.6; }
+.mailbox-progress p { margin: 4px 0 0; font-size: 13px; line-height: 1.7; color: inherit; overflow-wrap: anywhere; }
+.mailbox-progress[data-state="searching"], .mailbox-progress[data-state="connecting"], .mailbox-progress[data-state="checking"] { background: #eef5ff; border-color: #a7c7ed; border-left-color: #2463a8; color: #194c85; }
+.mailbox-progress[data-state="found"], .mailbox-progress[data-state="connected"] { background: #edf8f1; border-color: #a2d1b2; border-left-color: #26834a; color: #175b32; }
+.mailbox-progress[data-state="manual"], .mailbox-progress[data-state="edited"] { background: #fff7e8; border-color: #e5c388; border-left-color: #b8750b; color: #7a4b0c; }
+.mailbox-progress[data-state="error"], .mailbox-progress[data-state="unsupported"] { background: #fff0ef; border-color: #e6adaa; border-left-color: #b42318; color: #912018; }
+.mailbox-progress[data-state="searching"] .mailbox-progress-icon,
+.mailbox-progress[data-state="connecting"] .mailbox-progress-icon,
+.mailbox-progress[data-state="checking"] .mailbox-progress-icon { color: transparent; border: 3px solid #c6d9ef; border-top-color: #2463a8; border-radius: 50%; background: none; animation: mailbox-spin .9s linear infinite; box-sizing: border-box; }
+@keyframes mailbox-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mailbox-progress .mailbox-progress-icon { animation: none !important; } }

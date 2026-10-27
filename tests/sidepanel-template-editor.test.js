@@ -14,6 +14,13 @@ const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const html = fs.readFileSync(path.join(__dirname, '..', 'sidepanel.html'), 'utf8');
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async () => { for (let i = 0; i < 8; i += 1) await tick(); };
+async function waitFor(predicate, description) {
+  const deadline = performance.now() + 5000;
+  while (!predicate()) {
+    assert.ok(performance.now() < deadline, `Timed out waiting for ${description}`);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 
 function template(groups = [
   { name: '基本信息', fields: [{ key: '姓名', value: '测试用户' }, { key: '电话', value: '13800000000' }] },
@@ -188,7 +195,7 @@ test('a conflict keeps the draft; overwriting is explicit and uses the newest co
   await ui.open();
   ui.type(ui.row('姓名').querySelector('.te-value'), '插件端改的');
   ui.submit();
-  await settle();
+  await waitFor(() => ui.foot('overwrite'), 'conflict choices');
   assert.equal(ui.$('te-notice').hidden, false);
   assert.match(ui.$('te-notice-text').textContent, /已在别处修改.*没有保存.*你的修改还在/);
   assert.ok(ui.foot('load-latest') && ui.foot('overwrite'));
@@ -208,9 +215,10 @@ test('after a conflict the newest content can be loaded instead, replacing the d
   await ui.open();
   ui.type(ui.row('姓名').querySelector('.te-value'), '插件端改的');
   ui.submit();
-  await settle();
+  // The conflict choices appear only after the asynchronous content digest finishes.
+  await waitFor(() => ui.foot('load-latest'), 'load latest button');
   ui.click(ui.foot('load-latest'));
-  await settle();
+  await waitFor(() => ui.toasts.at(-1) === '已载入最新内容。', 'latest content to finish loading');
   assert.equal(ui.row('姓名').querySelector('.te-value').value, '桌面端改的');
   assert.equal(ui.$('te-notice').hidden, true);
   assert.equal(ui.foot('save').disabled, true);
@@ -268,7 +276,7 @@ test('loading the newest content replaces draft and base together, or not at all
   await ui.open();
   ui.type(ui.row('姓名').querySelector('.te-value'), '插件端改的');
   ui.submit();
-  await settle();
+  await waitFor(() => ui.foot('load-latest'), 'load latest button');
   failDigest = true;
   ui.click(ui.foot('load-latest'));
   await settle();

@@ -22,6 +22,8 @@ mail-parser = { version = "0.11", features = ["full_encoding"] }
 # dumps out in every profile; application logs use safe codes.
 log = { version = "0.4", features = ["max_level_info"] }
 
+hickory-resolver = { version = "0.24", features = ["system-config", "tokio-runtime"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

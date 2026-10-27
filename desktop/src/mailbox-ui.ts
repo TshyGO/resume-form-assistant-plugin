@@ -1,8 +1,11 @@
 import type { Invoke } from "./api.ts";
+import { MAIL_GUIDES, mailboxProvider, localMailConnection, requiresEndpointConfirmation, endpointConfirmation, matchesEndpointConfirmation } from "./mailbox-providers.ts";
+import type { MailConnection, MailProvider, MailEndpointConfirmation } from "./mailbox-providers.ts";
+export { mailboxProvider } from "./mailbox-providers.ts";
 
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
 export interface MailCandidate { id: string; accountId: string; email: string; header: MailHeader; reasons: string[] }
-export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number }
+export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection }
 export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
 interface IgnoreReport { ignored: number; unchanged: number }
@@ -20,10 +23,11 @@ export interface MailboxInboxBridge {
 }
 
 const ERRORS: Record<string, string> = {
-  Auth: "登录被拒绝：请开启 IMAP，并重新生成授权码后测试连接。",
+  Auth: "登录被拒绝：请核对登录账号，按邮箱或学校要求填写密码、授权码或客户端专用密码；授权码失效时请重新生成授权码。",
   ImapDisabled: "邮箱未开启 IMAP，请按教程开启后重试。",
-  Network: "连不上邮箱，请检查网络后重试。",
+  Network: "连不上邮箱，请核对服务器和网络；学校可能要求校园网或没有开放 IMAP，可改用手动导入。",
   Tls: "安全连接验证失败，请检查系统时间和网络。",
+  EndpointConfirmation: "服务器与邮箱域名不同，尚未核对。请修改连接，按官方教程核对后使用此配置。",
   Credentials: "系统凭据库不可用或缺少授权码，请解锁或更新授权码。",
   Protocol: "邮箱读取请求未完成，请重试；163 / 126 请核对 IMAP 授权设置。",
   TooLarge: "邮件信头过大，请改用手动导入并检查邮箱。",
@@ -36,11 +40,6 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, clas
   if (className) el.className = className;
   return el;
 }
-export function mailboxProvider(email: string): "qq" | "163" | "126" | null {
-  const value = email.trim().toLowerCase();
-  if (!/^[a-z0-9._+\-]+@(?:qq\.com|foxmail\.com|163\.com|126\.com)$/.test(value)) return null;
-  return value.endsWith("@163.com") ? "163" : value.endsWith("@126.com") ? "126" : "qq";
-}
 function formattedTime(unix: number | null) { return unix ? new Date(unix * 1000).toLocaleString() : "尚未完成检查"; }
 
 export function mountMailboxes(
@@ -48,12 +47,42 @@ export function mountMailboxes(
   onImported: () => Promise<unknown>,
   openSettings: () => void,
   inboxBridge?: MailboxInboxBridge,
+  onManualImport?: () => void,
 ) {
   const get = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
   const form = get<HTMLFormElement>("mailbox-form");
   const email = get<HTMLInputElement>("mailbox-email");
   const secret = get<HTMLInputElement>("mailbox-secret");
   const guide = get<HTMLSelectElement>("mailbox-guide-provider");
+  const host = get<HTMLInputElement>("mailbox-host"), port = get<HTMLInputElement>("mailbox-port");
+  const encryption = get<HTMLSelectElement>("mailbox-encryption"), username = get<HTMLInputElement>("mailbox-username");
+  const sendId = get<HTMLInputElement>("mailbox-send-id");
+  const configuration = get<HTMLDetailsElement>("mailbox-configuration");
+  const detection = get("mailbox-detection");
+  let discoveryToken = 0, discoveryRequested = "";
+  const normalizedAddress = () => email.value.trim().toLowerCase();
+  const addressDomain = () => normalizedAddress().split("@")[1] ?? "";
+  let previousAddress = "", connectionDomain = "";
+  let retainConfiguration = false, credentialsCleared = false;
+  let secretHint = "";
+  let acceptedEndpoint: MailEndpointConfirmation | null = null;
+  function updateSecretHint() {
+    get("mailbox-secret-hint").textContent = secretHint + (credentialsCleared ? " 邮箱账号已变化，原凭据已清除，请重新填写。" : "");
+  }
+  type ProgressState = "empty" | "typing" | "searching" | "found" | "manual" | "edited" | "unsupported" | "connecting" | "checking" | "connected" | "error";
+  function showProgress(state: ProgressState, title: string, detail: string, step = 1) {
+    detection.dataset.state = state;
+    detection.setAttribute("aria-busy", String(["searching", "connecting", "checking"].includes(state)));
+    get("mailbox-progress-title").textContent = title;
+    get("mailbox-progress-detail").textContent = detail;
+    get("mailbox-progress-icon").textContent = ["found", "connected"].includes(state) ? "✓" : ["manual", "error", "unsupported"].includes(state) ? "!" : String(step);
+    for (let index = 1; index <= 3; index++) {
+      const item = get(`mailbox-step-${index}`);
+      if (index === step) item.setAttribute("aria-current", "step"); else item.removeAttribute("aria-current");
+      item.dataset.complete = String(index < step || state === "connected");
+    }
+  }
+  let schoolHelpUrl: string | null = null;
   const selected = new Set<string>();
   const failures = new Map<string, string>();
   let current: MailboxView = { accounts: [], candidates: [], pendingCount: 0 };
@@ -63,7 +92,7 @@ export function mountMailboxes(
   let signature = "";
   let inboxState: "pending" | "stored" = "stored";
   let activeCandidateId: string | null = null;
-  const actionIds = ["mailbox-save", "mailbox-settings-check", "mailbox-inbox-check", "mailbox-save-selected", "mailbox-ignore-selected", "mailbox-load-more"];
+  const actionIds = ["mailbox-save", "mailbox-settings-check", "mailbox-inbox-check", "mailbox-save-selected", "mailbox-ignore-selected", "mailbox-load-more", "mailbox-detect"];
   function say(where: "settings" | "inbox", text: string, error = false) {
     const el = get(`mailbox-${where}-status`);
     el.textContent = text;
@@ -71,7 +100,13 @@ export function mountMailboxes(
   }
   function syncButtons() {
     actionIds.forEach((id) => { get<HTMLButtonElement>(id).disabled = busy || ((id === "mailbox-save-selected" || id === "mailbox-ignore-selected") && !selected.size); });
+    const awaitingReview = needsEndpointReview();
+    get<HTMLButtonElement>("mailbox-save").disabled = busy || awaitingReview;
+    secret.disabled = awaitingReview;
+    get<HTMLButtonElement>("mailbox-confirm-endpoint").disabled = busy || !awaitingReview;
     email.readOnly = busy; secret.readOnly = busy;
+    host.readOnly = busy; port.readOnly = busy; username.readOnly = busy;
+    encryption.disabled = busy; sendId.disabled = busy;
     document.querySelectorAll<HTMLInputElement | HTMLButtonElement>("#mailbox-accounts button, #mailbox-candidates input, #mailbox-candidates button, #mailbox-select-all, #inbox-preview [data-pending-action]").forEach((el) => { el.disabled = busy; });
     document.querySelectorAll<HTMLInputElement>("#mailbox-candidates input[type=checkbox]").forEach((el) => { el.checked = selected.has(el.dataset.mailboxCandidateId!); });
     const all = get<HTMLInputElement>("mailbox-select-all");
@@ -139,13 +174,14 @@ export function mountMailboxes(
     } else {
       say(where, `${prefix}已成功检查 ${report.succeededAccounts} 个邮箱，请查看待确认邮件。${recovery}`, paused > 0);
     }
+    return report;
   }
   function render() {
     const valid = new Set(current.candidates.map((item) => item.id));
     for (const id of selected) if (!valid.has(id)) selected.delete(id);
     if (activeCandidateId && !valid.has(activeCandidateId)) activeCandidateId = null;
     const accounts = get("mailbox-accounts"); accounts.replaceChildren();
-    if (!current.accounts.length) accounts.append(node("p", "还没有连接邮箱。按上方教程获取授权码后，即可连接。", "settings-caption"));
+    if (!current.accounts.length) accounts.append(node("p", "还没有连接邮箱。填写邮箱，按对应教程准备凭据后即可连接。", "settings-caption"));
     current.accounts.forEach((account) => {
       const card = node("article", undefined, "mailbox-account");
       card.append(node("h3", account.email));
@@ -160,7 +196,14 @@ export function mountMailboxes(
       }
       if (account.headerIssues) card.append(node("p", `${account.headerIssues} 封邮件连续三次读不到信头，已停止自动重试；需要时请从邮箱下载后手动导入。`, "mailbox-error"));
       const controls = node("div", undefined, "settings-actions");
-      controls.append(button("更新授权码", () => { email.value = account.email; updateProvider(); secret.focus(); }));
+      controls.append(button("修改连接 / 更新凭据", () => {
+        email.value = account.email; secret.value = ""; credentialsCleared = false; updateProvider();
+        if (account.connection) { fillConnection(account.connection, true); retainConfiguration = true; }
+        updateServerLabel();
+        configuration.open = true;
+        showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
+        if (!showEndpointReview()) secret.focus();
+      }));
       controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
         await invoke("mailbox_pause", { id: account.id, paused: !account.paused });
         if (account.paused) await checkNow("settings");
@@ -259,35 +302,174 @@ export function mountMailboxes(
     });
   }
   function updateGuide() {
-    const provider = ["qq", "163", "126"].includes(guide.value) ? guide.value : "qq";
-    const label = provider === "qq" ? "QQ 邮箱" : `${provider} 邮箱`;
+    const provider: MailProvider = Object.hasOwn(MAIL_GUIDES, guide.value) ? guide.value as MailProvider : "school";
+    const help = MAIL_GUIDES[provider];
     const image = get<HTMLImageElement>("mailbox-guide-image");
-    image.src = `/mailbox-guide-${provider}.svg`; image.alt = `${label}：进入设置，开启 IMAP，完成验证后生成授权码`;
-    const steps = provider === "qq"
-      ? ["登录 QQ 邮箱网页版，在设置中找到账号与安全 → 安全设置；旧版可在账号页找到服务设置。", "找到 IMAP/SMTP 服务并开启，按页面要求完成安全验证。", "点击生成授权码，复制后回到这里粘贴，点击测试连接并保存。"]
-      : [`登录 ${provider} 邮箱网页版，进入设置 → POP3/SMTP/IMAP；部分界面位于常规设置中。`, "开启 IMAP/SMTP 服务，按页面要求使用绑定手机完成验证。", "生成并复制客户端授权码，回到这里粘贴，点击测试连接并保存。"];
-    get("mailbox-guide-steps").replaceChildren(...steps.map((step) => node("li", step)));
+    image.src = `/mailbox-guide-${provider}.svg`; image.alt = `${help.label}：${help.steps.join(" ")}`;
+    get("mailbox-guide-steps").replaceChildren(...help.steps.map((step) => node("li", step)));
+    const link = get<HTMLAnchorElement>("mailbox-guide-link");
+    const url = provider === "school" ? schoolHelpUrl : help.url;
+    link.hidden = !url; link.href = url ?? "#";
   }
-  function updateProvider() {
+  function fillConnection(config: MailConnection, restoreConfirmation = false) {
+    acceptedEndpoint = restoreConfirmation && matchesEndpointConfirmation(email.value, config, config.endpointConfirmation) ? config.endpointConfirmation! : null;
+    host.value = config.host; port.value = String(config.port); encryption.value = config.encryption;
+    username.value = config.username; sendId.checked = config.sendId;
+  }
+  function readConnection(): MailConnection {
     const provider = mailboxProvider(email.value);
-    get("mailbox-server").textContent = provider ? `IMAP：imap.${provider === "qq" ? "qq" : provider}.com · 993 · TLS` : "支持 QQ（含 foxmail.com）、163、126 邮箱，填写后自动识别服务器。";
-    if (provider) { guide.value = provider; updateGuide(); }
+    const config: MailConnection = { host: host.value.trim().toLowerCase(), port: Number(port.value), encryption: encryption.value as "tls" | "starttls", username: username.value.trim(), sendId: sendId.checked || provider === "163" || provider === "126" };
+    if (matchesEndpointConfirmation(email.value, config, acceptedEndpoint)) config.endpointConfirmation = acceptedEndpoint!;
+    return config;
   }
+  function needsEndpointReview() {
+    const config = readConnection();
+    return requiresEndpointConfirmation(email.value, config) && !matchesEndpointConfirmation(email.value, config, acceptedEndpoint);
+  }
+  function showEndpointReview() {
+    const pending = needsEndpointReview();
+    get("mailbox-endpoint-review").hidden = !pending;
+    if (pending) {
+      secret.value = "";
+      const config = readConnection();
+      get("mailbox-endpoint-detail").textContent = `邮箱域名：${addressDomain()}；目标服务器：${config.host}，端口 ${config.port}，${config.encryption === "tls" ? "TLS" : "STARTTLS"}。它与邮箱域名不同，尚未确认是学校或邮箱服务商使用的服务器。`;
+      configuration.open = true;
+      showProgress("manual", "发现跨域服务器，待核对", "请先按官方教程核对下方服务器。确认使用此配置后，才能填写密码并测试连接。");
+    }
+    syncButtons();
+    return pending;
+  }
+  function updateServerLabel() {
+    get("mailbox-server").textContent = host.value.trim()
+      ? `IMAP：${host.value.trim()} · ${port.value} · ${encryption.value === "tls" ? "TLS" : "STARTTLS"}`
+      : "尚未确定服务器，按回车或点击“确认并识别”，也可手动填写。";
+  }
+  function updateProvider(preserveForDomain = false, usePreset = false) {
+    ++discoveryToken; discoveryRequested = ""; schoolHelpUrl = null;
+    const provider = mailboxProvider(email.value), config = usePreset ? localMailConnection(email.value) : null;
+    const keep = preserveForDomain && retainConfiguration && !!addressDomain() && addressDomain() === connectionDomain;
+    if (keep) {
+      // Follow the email only while the login is still the previous default.
+      if (username.value.trim().toLowerCase() === previousAddress) username.value = email.value.trim();
+    } else {
+      fillConnection(config ?? { host: "", port: 993, encryption: "tls", username: email.value.trim(), sendId: false });
+      retainConfiguration = false;
+    }
+    connectionDomain = addressDomain();
+    previousAddress = normalizedAddress();
+    if (provider === "school") schoolHelpUrl = "https://mails.tsinghua.edu.cn/coremail/help/notice.html";
+    guide.value = provider ?? "school"; updateGuide();
+    const help = MAIL_GUIDES[provider ?? "school"];
+    get("mailbox-secret-label").textContent = help.secret;
+    secretHint = `${provider === "school" ? "清华邮箱请生成客户端专用密码。" : ""}${help.hint} 只存系统凭据库，保存后不回显。`;
+    updateSecretHint();
+    configuration.open = keep;
+    const microsoft = /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(email.value.trim());
+    if (microsoft && usePreset) showProgress("unsupported", "此邮箱暂不支持直接连接", "需要微软登录授权。请点击“改用导入邮件文件”。");
+    else if (keep) showProgress("edited", "邮箱地址已更新，服务器配置已保留", "下一步：核对登录账号，重新填写所需密码，再点击“测试连接并保存”。", 2);
+    else if (config) showProgress("found", `已找到配置 · ${help.label}`, `服务器：${config.host}。配置已填好，尚未连接。下一步：填写${help.secret}，点击“测试连接并保存”。${provider === "school" ? "清华邮箱需要客户端专用密码。" : ""}`, 2);
+    else if (email.value.trim()) showProgress("typing", "邮箱地址待确认", "输入完成后按回车，或点击“确认并识别”，再查找邮箱配置。");
+    else showProgress("empty", "先填写邮箱地址", "第 1 步：输入完整邮箱地址，按回车或点击“确认并识别”。");
+    updateServerLabel();
+    showEndpointReview();
+  }
+  async function discover() {
+    const address = normalizedAddress();
+    if (busy || (detection.dataset.state === "searching" && discoveryRequested === address)) return;
+    if (!email.validity.valid || !address || !addressDomain().includes(".")) {
+      showProgress("error", "请填写完整邮箱地址", "例如 name@sjtu.edu.cn。输入完成后按回车或点击“确认并识别”。");
+      return;
+    }
+    if (localMailConnection(address) || /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(address)) {
+      updateProvider(false, true);
+      return;
+    }
+    const token = ++discoveryToken; discoveryRequested = address;
+    showProgress("searching", "正在识别邮箱配置…", "最多等待 3 秒。查到后会自动填写；也可以直接填写下方配置。");
+    try {
+      const result = await invoke<{ config: MailConnection | null; source: string; note: string; helpUrl: string | null }>("mailbox_discover", { email: address });
+      if (token !== discoveryToken || normalizedAddress() !== address) return;
+      if (result.config) { fillConnection(result.config); retainConfiguration = true; connectionDomain = addressDomain(); }
+      configuration.open = !result.config;
+      if (result.config) showProgress("found", "已找到邮箱配置", `${result.note} 配置已填好，尚未连接。下一步：按学校要求填写密码，点击“测试连接并保存”。`, 2);
+      else showProgress("manual", "未找到配置，需要手动填写", `${result.note} 下一步：展开下方配置，按学校官方教程填写服务器和登录账号；也可改用导入邮件文件。`);
+      schoolHelpUrl = result.helpUrl; updateGuide(); updateServerLabel(); showEndpointReview();
+    } catch (error) {
+      if (token !== discoveryToken) return;
+      configuration.open = true;
+      showProgress("manual", "识别未完成，需要手动填写", `未能自动识别，请按学校或邮箱官方教程手动填写。${message(error)}`);
+    }
+  }
+  function manualConfigurationChanged() {
+    if (["163", "126"].includes(mailboxProvider(email.value) ?? "")) sendId.checked = true;
+    retainConfiguration = true; connectionDomain = addressDomain();
+    ++discoveryToken; updateServerLabel(); showProgress("edited", "已切换为手动配置，等待测试", "下一步：核对服务器、端口和账号，填写所需密码，再点击“测试连接并保存”。", 2);
+    showEndpointReview();
+  }
+  [host, port, username, encryption, sendId].forEach((input) => {
+    input.addEventListener("input", manualConfigurationChanged);
+    input.addEventListener("change", manualConfigurationChanged);
+  });
+  get("mailbox-confirm-endpoint").addEventListener("click", () => {
+    if (busy || !needsEndpointReview()) return;
+    acceptedEndpoint = endpointConfirmation(email.value, readConnection());
+    showEndpointReview();
+    showProgress("edited", "已确认使用此服务器，等待测试", "下一步：填写所需密码，点击“测试连接并保存”。确认配置不代表已经连接成功。", 2);
+    secret.focus();
+  });
+  get("mailbox-detect").addEventListener("click", () => { void discover(); });
+  email.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    if (!event.repeat) void discover();
+  });
+  get("mailbox-manual-import").addEventListener("click", () => {
+    selectInboxState("stored");
+    if (onManualImport) onManualImport();
+    else say("settings", "请到招聘通知页点击导入文件，选择从邮箱下载的 .eml 文件。");
+  });
+  get("mailbox-guide-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    const url = get<HTMLAnchorElement>("mailbox-guide-link").getAttribute("href");
+    if (url && url !== "#") void invoke("mailbox_open_help", { url }).catch((error) => say("settings", message(error), true));
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!mailboxProvider(email.value) || !secret.value.trim()) { say("settings", "请填写支持的邮箱地址和授权码。", true); return; }
+    if (busy || showEndpointReview()) return;
+    const config = readConnection();
+    if (!email.validity.valid || !email.value.trim() || !secret.value.trim() || !config.host || !config.username || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
+      configuration.open = true;
+      showProgress("error", "连接信息还没填完整", "请补充邮箱、IMAP 服务器、有效端口、登录账号和所需密码，再测试连接。", 2);
+      say("settings", "请填写邮箱、IMAP 服务器、有效端口、登录账号和所需密码。", true); return;
+    }
+    ++discoveryToken;
+    showProgress("connecting", "正在测试连接…", "正在验证服务器和登录凭据，通过后才保存。", 2);
     void action("settings", "正在测试连接，通过后才保存…", async () => {
       try {
-        await invoke("mailbox_connect", { email: email.value.trim(), secret: secret.value });
+        await invoke("mailbox_connect", { email: email.value.trim(), secret: secret.value, config });
+        showProgress("checking", "邮箱已连接，正在检查来信…", "连接已保存。正在检查最近 30 天的邮件，请稍候。", 3);
         say("settings", "连接已保存，正在检查最近 30 天的邮件…");
-        await checkNow("settings", "连接已保存。");
+        const report = await checkNow("settings", "连接已保存。");
+        if (report.failedAccounts.length || report.partialAccounts?.length || !report.checkedAccounts) {
+          showProgress("error", "邮箱已连接，来信检查尚未完成", get("mailbox-settings-status").textContent ?? "请核对网络后点击立即检查。", 3);
+        } else showProgress("connected", "连接成功，来信检查已完成", "下一步：到“招聘通知 → 待确认”查看发现的邮件，没有候选时也可以手动导入。", 3);
+      } catch (error) {
+        const saved = detection.dataset.state === "checking";
+        showProgress("error", saved ? "邮箱已连接，来信检查未完成" : "连接失败，配置尚未保存", message(error), saved ? 3 : 2);
+        throw error;
       } finally { secret.value = ""; }
     });
   });
-  email.addEventListener("input", updateProvider); guide.addEventListener("change", updateGuide);
+  email.addEventListener("input", () => {
+    if (normalizedAddress() === previousAddress) return;
+    if (secret.value) { secret.value = ""; credentialsCleared = true; }
+    updateProvider(true);
+  });
+  secret.addEventListener("input", () => { credentialsCleared = false; updateSecretHint(); });
+  guide.addEventListener("change", updateGuide);
   ["mailbox-settings-check", "mailbox-inbox-check"].forEach((id) => get(id).addEventListener("click", () => {
     const where = id.includes("settings") ? "settings" : "inbox";
-    void action(where, "正在检查邮箱…", () => checkNow(where));
+    void action(where, "正在检查邮箱…", async () => { await checkNow(where); });
   }));
   get("mailbox-connect-link").addEventListener("click", openSettings);
   get("mailbox-tab-pending").addEventListener("click", () => selectInboxState("pending"));
@@ -299,5 +481,5 @@ export function mountMailboxes(
   get("mailbox-ignore-selected").addEventListener("click", () => void ignore([...selected]));
   get("mailbox-load-more").addEventListener("click", () => { limit += 100; void refresh(); });
   updateGuide(); updateProvider(); selectInboxState("stored");
-  return { refresh };
+  return { refresh, dispose: () => { ++discoveryToken; } };
 }
