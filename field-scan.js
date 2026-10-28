@@ -1076,9 +1076,13 @@
     scanPage
   };
 
-  if (typeof module !== "undefined" && module.exports) {
-    module.exports = api;
-  }
-
   globalScope.ResumeProFieldScan = api;
+
+  try {
+    if (typeof module === "object" && module && typeof module.exports === "object") {
+      module.exports = api;
+    }
+  } catch {
+    // A page element or frame named "module" (#275).
+  }
 })(typeof self !== "undefined" ? self : globalThis);

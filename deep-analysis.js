@@ -960,5 +960,5 @@
     toFillInput, createController, buttonAllowed
   };
   scope.ResumeProDeepAnalysis = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

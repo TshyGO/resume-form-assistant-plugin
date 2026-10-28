@@ -91,6 +91,7 @@ function loadPage({ extraction, desktop, userAgent }) {
   // The page controller is mounted but its overlay stays closed: the side panel does the work.
   const fillButton = { disabled: false, textContent: '一键 AI 填写' };
   hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
+  hooks.setStartupState('ready');
   return {
     hooks, desktopCalls, storageWrites, ai, location: context.location,
     async ready(copyOverride = {}) {

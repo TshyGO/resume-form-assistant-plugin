@@ -234,6 +234,7 @@ function createPage({ worker, job, href = "https://jobs.example.test/apply" }) {
   vm.runInNewContext(fs.readFileSync(path.join(root, "content.js"), "utf8"), context);
   const hooks = context.self.ResumeProHighlightTest;
   hooks.setShadowRoot(shadowRoot);
+  hooks.setStartupState("ready");
   const page = {
     hooks, card, legacyCandidates, legacyPanel, location, job,
     received: [],

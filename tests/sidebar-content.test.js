@@ -196,6 +196,8 @@ function loadContentScript({ width = 1200, height = 900, desktopReply = null } =
 
   const hooks = context.self.ResumeProHighlightTest;
   hooks.setShadowRoot(shadowRoot);
+  // The harness stands in for a page whose startup has finished.
+  hooks.setStartupState("ready");
 
   return {
     hooks,
@@ -422,6 +424,43 @@ test("a normalized state is what gets stored, even after a failed read left it e
   assert.deepEqual(plain(writes), [{
     resumeProSidebarUiState: { collapsed: false, left: 120, top: 80 }
   }]);
+});
+
+// Startup no longer waits for this read (#275): the saved state can arrive after the controller is up.
+test("a saved state read after startup is applied, but not over a drag in progress", () => {
+  const { hooks, host, sidebar } = loadContentScript();
+  hooks.setSidebarUiState({ collapsed: false, left: null, top: null });
+  hooks.applySidebarUiState();
+
+  hooks.applyStoredSidebarUiState({ collapsed: true, left: 300, top: 200 });
+  assert.equal(host.style.left, "300px");
+  assert.equal(host.style.right, "auto");
+  assert.equal(sidebar.classList.contains("is-collapsed"), true);
+
+  hooks.setDragging(true);
+  hooks.applyStoredSidebarUiState({ collapsed: false, left: 40, top: 40 });
+  assert.equal(host.style.left, "300px", "a late read must not fight the pointer mid-drag");
+  assert.deepEqual(plain(hooks.getSidebarUiState()), { collapsed: true, left: 300, top: 200 });
+});
+
+test("the side panel sees the page as connected only once startup is ready", () => {
+  const { hooks, listeners } = loadContentScript();
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-ai-fill" ? { disabled: false, textContent: "一键 AI 填写" } : null;
+    }
+  });
+  const ready = () => {
+    let response;
+    listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+    return response.ready;
+  };
+  for (const value of ["idle", "running", "failed", "unsupported"]) {
+    hooks.setStartupState(value);
+    assert.equal(ready(), false, value);
+  }
+  hooks.setStartupState("ready");
+  assert.equal(ready(), true);
 });
 
 function saveJobPage(hooks) {
