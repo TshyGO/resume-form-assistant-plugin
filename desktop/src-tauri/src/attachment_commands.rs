@@ -29,6 +29,13 @@ pub struct AttachmentSummary {
 pub struct AttachmentList {
     pub source_sha256: String,
     pub items: Vec<AttachmentSummary>,
+    pub body_blocks: Vec<BodyBlock>,
+}
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BodyBlock {
+    Text { text: String },
+    Image { attachment: AttachmentSummary },
 }
 fn summary(item: &evidence_import::MailAttachment) -> AttachmentSummary {
     AttachmentSummary {
@@ -72,11 +79,23 @@ fn original(
 }
 pub fn list(store: &ArchiveStore, id: &str) -> Result<AttachmentList, CommandError> {
     let (source_sha256, bytes) = original(store, id, None)?;
-    let items = evidence_import::list_mail_attachments(&bytes)
+    let content = evidence_import::mail_content(&bytes)
         .ok_or_else(|| fail("MAIL_INVALID", "这封邮件的附件信息读不出来。"))?;
     Ok(AttachmentList {
         source_sha256,
-        items: items.iter().map(summary).collect(),
+        items: content.attachments.iter().map(summary).collect(),
+        body_blocks: content
+            .body
+            .iter()
+            .map(|b| match b {
+                evidence_import::MailBodyBlock::Text(text) => {
+                    BodyBlock::Text { text: text.clone() }
+                }
+                evidence_import::MailBodyBlock::Image(item) => BodyBlock::Image {
+                    attachment: summary(item),
+                },
+            })
+            .collect(),
     })
 }
 pub fn read(
@@ -111,9 +130,51 @@ pub fn preview(
     if !["pdf", "image"].contains(&item.preview_kind.as_str()) {
         return Err(fail("NO_PREVIEW", "这种文件可另存为或用系统程序打开。"));
     }
+    if item.preview_kind == "image" && bytes.len() > 8 * 1024 * 1024 {
+        return Err(fail(
+            "NO_PREVIEW",
+            "图片超过预览大小上限，可另存为或用系统程序打开。",
+        ));
+    }
     Ok(AttachmentPreview {
         bytes_base64: crate::evidence_commands::base64(&bytes),
         mime: item.mime,
+    })
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadsheetPreview {
+    pub sheet_names: Vec<String>,
+    pub sheet_index: usize,
+    pub cells: Vec<(u32, u32, String)>,
+    pub row_count: u32,
+    pub column_count: u32,
+    pub truncated: bool,
+}
+pub fn spreadsheet(
+    store: &ArchiveStore,
+    id: &str,
+    index: u32,
+    digest: &str,
+    sheet_index: usize,
+) -> Result<SpreadsheetPreview, CommandError> {
+    let (item, bytes) = read(store, id, index, digest)?;
+    if item.preview_kind != "xlsx" {
+        return Err(fail("NO_PREVIEW", "这份附件不是可预览的 XLSX 表格。"));
+    }
+    let view = resume_sheet::preview_xlsx(&bytes, sheet_index).map_err(|_| {
+        fail(
+            "NO_PREVIEW",
+            "这份表格暂时无法预览，可能已加密、损坏或超过大小上限。可另存为或用系统程序打开。",
+        )
+    })?;
+    Ok(SpreadsheetPreview {
+        sheet_names: view.sheet_names,
+        sheet_index: view.sheet_index,
+        cells: view.cells,
+        row_count: view.row_count,
+        column_count: view.column_count,
+        truncated: view.truncated,
     })
 }
 /// A unique private directory keeps duplicate names separate and never writes beside the original.
@@ -193,6 +254,21 @@ pub async fn preview_evidence_attachment_cmd(
     archive_worker(app, move |state| {
         with_store(state, |store| {
             self::preview(store, &evidence_id, index, &source_sha256)
+        })
+    })
+    .await
+}
+#[tauri::command]
+pub async fn preview_evidence_spreadsheet_cmd(
+    app: tauri::AppHandle,
+    evidence_id: String,
+    index: u32,
+    source_sha256: String,
+    sheet_index: usize,
+) -> Result<self::SpreadsheetPreview, CommandError> {
+    archive_worker(app, move |state| {
+        with_store(state, |store| {
+            self::spreadsheet(store, &evidence_id, index, &source_sha256, sheet_index)
         })
     })
     .await
@@ -354,5 +430,62 @@ mod tests {
         let list = list(&store, &id).unwrap();
         assert!(read(&store, &id, 99, &list.source_sha256).is_err());
         assert!(super::list(&store, "../sample.eml").is_err());
+    }
+    #[test]
+    fn body_photos_and_spreadsheet_preview_read_existing_original_without_reimport() {
+        let (_dir, store, _) = setup();
+        let xlsx = resume_sheet::write_xlsx(&[resume_sheet::Group {
+            name: "Group".into(),
+            fields: vec![resume_sheet::Field {
+                key: "Field".into(),
+                value: "Value".into(),
+            }],
+        }])
+        .unwrap();
+        let encoded = crate::evidence_commands::base64(&xlsx);
+        let raw = format!("From: hr@example.test\r\nSubject: Inline and XLSX\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/html\r\n\r\n<p>Before</p><img src='cid:photo'><p>After</p>\r\n--x\r\nContent-Type: image/png; name=photo.png\r\nContent-ID: <photo>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--x\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=photo.png\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--x\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=schedule.xlsx\r\nContent-Transfer-Encoding: base64\r\n\r\n{encoded}\r\n--x--\r\n").into_bytes();
+        let (e, _) = crate::evidence_commands::import_bytes(
+            &store,
+            store.archive_dir(),
+            &raw,
+            Some("inline.eml".into()),
+            "2026/10",
+            None,
+        )
+        .unwrap();
+        let content = list(&store, &e.id).unwrap();
+        assert_eq!(content.items.len(), 2);
+        let body_images: Vec<_> = content
+            .body_blocks
+            .iter()
+            .filter_map(|b| {
+                if let BodyBlock::Image { attachment } = b {
+                    Some(attachment)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(body_images.len(), 1);
+        assert_eq!(
+            preview(&store, &e.id, body_images[0].index, &content.source_sha256)
+                .unwrap()
+                .mime,
+            "image/png"
+        );
+        let sheet = content
+            .items
+            .iter()
+            .find(|i| i.preview_kind == "xlsx")
+            .unwrap();
+        let view = spreadsheet(&store, &e.id, sheet.index, &content.source_sha256, 0).unwrap();
+        assert_eq!(view.sheet_names, ["简历模板"]);
+        assert!(view.cells.iter().any(|(_, _, text)| text == "Value"));
+        assert!(spreadsheet(&store, &e.id, sheet.index, &"0".repeat(64), 0).is_err());
+        assert!(spreadsheet(&store, &e.id, sheet.index, &content.source_sha256, 99).is_err());
+        assert_eq!(
+            std::fs::read(crate::evidence_commands::stored_path(&store, &e.id).unwrap()).unwrap(),
+            raw
+        );
     }
 }

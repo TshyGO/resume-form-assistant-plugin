@@ -2118,6 +2118,7 @@ pub fn run() {
             get_evidence_preview_cmd,
             attachment_commands::list_evidence_attachments_cmd,
             attachment_commands::preview_evidence_attachment_cmd,
+            attachment_commands::preview_evidence_spreadsheet_cmd,
             attachment_commands::open_evidence_attachment_cmd,
             attachment_commands::save_evidence_attachment_cmd,
             associate_evidence_cmd,

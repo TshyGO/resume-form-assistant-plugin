@@ -6,6 +6,7 @@ import { mountReact } from "./react/mount.tsx";
 import { SettingsDialog } from "./react/SettingsDialog.tsx";
 import { ensureReadableStreamAsyncIterator } from "./resume/readable-stream-iterator.ts";
 import "./attachments.css";
+import { AttachmentSpreadsheet } from "./attachment-spreadsheet.tsx";
 
 import type { MailAttachment, MailAttachments } from "./attachment-types.ts";
 interface Preview { bytesBase64: string; mime: string }
@@ -99,10 +100,11 @@ export function AttachmentViewer({ evidenceId, title, attachments, initialIndex,
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [retry, setRetry] = useState(0);
+  const bodyImage = attachments.contentKind === "bodyImage";
   const item = attachments.items.find(a => a.index === index) ?? attachments.items[0];
   useEffect(() => {
     let active = true; setPreview(null); setError(""); setNotice("");
-    if (!item || item.previewKind === "file" || !item.readable) return;
+    if (!item || ["file", "xlsx"].includes(item.previewKind) || !item.readable) return;
     if (!invoke) { setError("请在桌面程序里查看附件。"); return; }
     void invoke<Preview>("preview_evidence_attachment_cmd", { evidenceId, index: item.index, sourceSha256: attachments.sourceSha256 })
       .then(data => { if (active) setPreview(data); }, err => { if (active) setError(errorText(err)); });
@@ -120,15 +122,15 @@ export function AttachmentViewer({ evidenceId, title, attachments, initialIndex,
     } catch (err) { setNotice(errorText(err)); }
     finally { setBusy(""); }
   };
-  return <SettingsDialog open title="查看邮件附件" intro={title} onCancel={onClose} cancelDisabled={Boolean(busy)} size="lg" className="attachment-dialog"
-    footer={<><span className="attachment-footer-note">附件来自本机已保存的邮件</span><button type="button" onClick={onClose} disabled={Boolean(busy)}>关闭</button></>}>
+  return <SettingsDialog open title={bodyImage ? "查看正文图片" : "查看邮件附件"} intro={title} onCancel={onClose} cancelDisabled={Boolean(busy)} size="lg" className="attachment-dialog"
+    footer={<><span className="attachment-footer-note">{bodyImage ? "图片来自本机已保存的邮件" : "附件来自本机已保存的邮件"}</span><button type="button" onClick={onClose} disabled={Boolean(busy)}>关闭</button></>}>
     <div className="attachment-viewer-layout">
-      <nav className="attachment-sidebar" aria-label="邮件附件"><p className="attachment-sidebar-title">附件 <span>{attachments.items.length}</span></p>
+      <nav className="attachment-sidebar" aria-label={bodyImage ? "正文图片" : "邮件附件"}><p className="attachment-sidebar-title">{bodyImage ? "正文图片" : "附件"} <span>{attachments.items.length}</span></p>
         {attachments.items.map(a => <button type="button" key={a.index} className={a.index === item.index ? "is-selected" : ""} aria-current={a.index === item.index ? "true" : undefined} disabled={Boolean(busy)} onClick={() => { setPreview(null); setError(""); setIndex(a.index); }}>
           <FileIcon kind={a.previewKind} /><span><strong>{a.name}</strong><small>{kindName(a)} · {attachmentSize(a.sizeBytes)}</small></span>
         </button>)}
       </nav>
-      <section className="attachment-main" aria-label="附件内容">
+      <section className="attachment-main" aria-label={bodyImage ? "图片内容" : "附件内容"}>
         <header className="attachment-active-head"><div><h3>{item.name}</h3><p>{kindName(item)} · {attachmentSize(item.sizeBytes)}</p></div><div className="attachment-file-actions">
           <button type="button" onClick={() => void action("save")} disabled={Boolean(busy) || !invoke || !item.readable}>{busy === "save" ? "正在保存…" : "另存为"}</button>
           <button type="button" className="primary" onClick={() => void action("open")} disabled={Boolean(busy) || !invoke || !item.readable || !item.canOpen}>{busy === "open" ? "正在打开…" : "用系统程序打开"}</button>
@@ -136,6 +138,7 @@ export function AttachmentViewer({ evidenceId, title, attachments, initialIndex,
         {notice && <p className="attachment-notice" role="status">{notice}</p>}
         {!item.readable ? <div className="attachment-state" role="alert"><FileIcon kind="file" /><p>这份附件的编码已损坏，暂时无法读取。</p></div>
           : item.previewKind === "file" ? <div className="attachment-state"><FileIcon kind="file" /><h3>{item.name}</h3><p>{item.canOpen ? "这种文件可另存为，或用电脑上的对应软件打开。" : "这种文件请先另存为后处理。"}</p></div>
+            : item.previewKind === "xlsx" ? <AttachmentSpreadsheet key={item.index} evidenceId={evidenceId} index={item.index} sourceSha256={attachments.sourceSha256} />
             : error ? <div className="attachment-state" role="alert"><p>{error}</p><button type="button" onClick={() => setRetry(n => n + 1)}>重新读取</button></div>
               : preview ? <DocumentPreview key={`${item.index}-${retry}`} preview={preview} kind={item.previewKind} name={item.name} />
                 : <p className="attachment-state" role="status">正在读取附件…</p>}

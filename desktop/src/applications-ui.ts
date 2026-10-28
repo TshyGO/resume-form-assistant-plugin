@@ -611,10 +611,10 @@ export function mountApplications(
         ${item.note ? `<p class="banner">${escapeHtml(item.note)}</p>` : ""}
         ${item.imageDataUrl ? `<img class="evidence-image" alt="导入的截图" src="${escapeHtml(item.imageDataUrl)}">` : ""}
         ${item.kind === "eml" ? '<div id="application-mail-attachments"></div><h3>邮件正文</h3>' : ""}
-        ${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}
+        <div data-mail-body>${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}</div>
       `;
       const attachmentRoot = body.querySelector?.<HTMLElement>("#application-mail-attachments");
-      if (attachmentRoot) clearEvidenceAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, item.subject || item.originalFilename || "邮件附件");
+      if (attachmentRoot) clearEvidenceAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, item.subject || item.originalFilename || "邮件附件", body.querySelector<HTMLElement>("[data-mail-body]"));
     } catch (err) {
       if (token !== evidenceToken) return;
       body.innerHTML = `<p class="banner">${escapeHtml(`读不出这条证据（${invokeError(err)}）。`)}</p>`;

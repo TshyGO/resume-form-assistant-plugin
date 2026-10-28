@@ -226,7 +226,7 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn decode_entities(text: &str) -> String {
+pub(crate) fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_string();
     }

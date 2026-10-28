@@ -9,6 +9,9 @@ use calamine::{open_workbook_from_rs, Data, DataRef, Reader, Xlsx, XlsxError};
 use quick_xml::events::Event;
 use rust_xlsxwriter::Workbook;
 
+mod preview;
+pub use preview::{preview_xlsx, SheetPreview};
+
 pub const HEADER: [&str; 3] = ["一级分类", "字段名", "值"];
 pub const SHEET_NAME: &str = "简历模板";
 const UNGROUPED: &str = "未分类";
@@ -287,8 +290,8 @@ fn xml_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8], decoder: quick_xm
 }
 
 /// calamine 的 DataRef 不区分 inlineStr 与 t=str，只有后者仍需 Excel 转义解码。
-/// 从同一 ZIP 的实际关系链定位首表，并按 XML 流顺序保留类型；不能用是否存在公式猜测。
-fn first_sheet_string_types(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<bool>, SheetError> {
+/// 从同一 ZIP 的实际关系链定位指定表，并按 XML 流顺序保留类型；不能用是否存在公式猜测。
+fn sheet_string_types(parts: &BTreeMap<String, Vec<u8>>, sheet_index: usize) -> Result<Vec<bool>, SheetError> {
     let part = |path: &str| parts.get(&path.replace('\\', "/").to_ascii_lowercase())
         .map(Vec::as_slice).ok_or(SheetError::Unreadable);
     let mut directory = "xl/".to_string();
@@ -309,10 +312,14 @@ fn first_sheet_string_types(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<boo
         }
     }
     let mut xml = xlsx_xml_reader(part(&format!("{directory}workbook.xml"))?);
+    let mut seen_sheets = 0;
     let sheet_id = loop {
         match xml.read_event().map_err(|_| SheetError::Unreadable)? {
             Event::Start(e) if e.local_name().as_ref() == b"sheet" => {
-                break xml_attr(&e, b"id", xml.decoder(), true)?.ok_or(SheetError::Unreadable)?;
+                if seen_sheets == sheet_index {
+                    break xml_attr(&e, b"id", xml.decoder(), true)?.ok_or(SheetError::Unreadable)?;
+                }
+                seen_sheets += 1;
             }
             Event::Eof => return Err(SheetError::Unreadable),
             _ => {}
@@ -363,7 +370,7 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
         Err(XlsxError::NotAWorksheet(_)) => return Ok(Vec::new()),
         Err(_) => return Err(SheetError::Unreadable),
     };
-    let string_types = first_sheet_string_types(&parts)?;
+    let string_types = sheet_string_types(&parts, 0)?;
     drop(parts);
     // 不调用 worksheet_range：两个距离很远的单元格也会让 Range 分配巨大矩形。
     let mut cells = Vec::new();
@@ -1022,4 +1029,39 @@ mod tests {
         let err = write_xlsx(&groups).unwrap_err();
         assert_eq!(err.to_string(), "「组 / 键」超过 Excel 单元格上限 32767 字，无法导出。");
     }
+    #[test]
+    fn preview_preserves_all_columns_and_sheet_selection_without_evaluating_formulas() {
+        let mut workbook = Workbook::new();
+        let first = workbook.add_worksheet(); first.set_name("First").unwrap();
+        first.write_string(0, 0, "<script>literal</script>").unwrap();
+        first.write_number(0, 4, 42).unwrap();
+        first.write_formula(1, 4, "=1+1").unwrap();
+        let second = workbook.add_worksheet(); second.set_name("Second").unwrap();
+        second.write_string(2, 1, "hello").unwrap();
+        let bytes = workbook.save_to_buffer().unwrap();
+        let view = preview_xlsx(&bytes, 0).unwrap();
+        assert_eq!(view.sheet_names, ["First", "Second"]);
+        assert_eq!(view.column_count, 5);
+        assert!(view.cells.contains(&(0, 4, "42".into())));
+        assert!(view.cells.contains(&(1, 4, "0".into()))); // Default cached result; not recalculated to 2.
+        assert!(view.cells.contains(&(0, 0, "<script>literal</script>".into())));
+        assert!(!view.truncated);
+        let view = preview_xlsx(&bytes, 1).unwrap();
+        assert_eq!(view.cells, [(2, 1, "hello".into())]);
+        assert!(preview_xlsx(&bytes, 2).is_err());
+        assert!(preview_xlsx(b"PK\x03\x04fake", 0).is_err());
+    }
+    #[test]
+    fn preview_sparse_extreme_coordinates_are_bounded_and_explicitly_truncated() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.write_string(0, 0, "visible").unwrap();
+        sheet.write_string(1_048_575, 16_383, "outside preview").unwrap();
+        let view = preview_xlsx(&workbook.save_to_buffer().unwrap(), 0).unwrap();
+        assert_eq!(view.row_count, 1_048_576);
+        assert_eq!(view.column_count, 16_384);
+        assert_eq!(view.cells, [(0, 0, "visible".into())]);
+        assert!(view.truncated);
+    }
+
 }

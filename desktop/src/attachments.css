@@ -58,3 +58,19 @@ dialog.settings-dialog.attachment-dialog { width: calc(100% - 48px); max-width: 
 .attachment-canvas-wrap { padding: 12px}
 .attachment-footer-note { max-width: 70%}
 }
+.attachment-file-icon.is-xlsx { color: var(--accent); background: var(--accent-pale); border-color: #c4dcd5}
+.attachment-spreadsheet .attachment-tools { font-size: 12px; gap: 10px}
+.attachment-spreadsheet label { display: flex; align-items: center; gap: 8px; min-width: 0}
+.attachment-spreadsheet select { max-width: 260px; min-height: 30px; padding: 3px 8px; font-size: 12px}
+.attachment-grid-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; background: var(--panel)}
+.attachment-grid { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px}
+.attachment-grid th,.attachment-grid td { padding: 7px 10px; min-width: 90px; max-width: 340px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top}
+.attachment-grid th { background: var(--bg); color: var(--muted); font-weight: 500; text-align: center}
+.attachment-grid thead th { position: sticky; top: 0; z-index: 2}
+.attachment-grid tr>th:first-child { position: sticky; left: 0; min-width: 42px; z-index: 1}
+.attachment-grid thead th:first-child { z-index: 3}
+.attachment-sheet-note { margin: 0; padding: 7px 12px; border-top: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 11px}
+.mail-body-photo { margin: 12px 0 20px}
+.mail-body-photo button { display: block; max-width: 100%; padding: 0; overflow: hidden; background: transparent; border: 0; border-radius: 8px}
+.mail-body-photo img { display: block; max-width: 100%; max-height: 640px; width: auto; height: auto; object-fit: contain}
+.mail-body-photo figcaption { margin-top: 6px; color: var(--muted); font-size: 11px}

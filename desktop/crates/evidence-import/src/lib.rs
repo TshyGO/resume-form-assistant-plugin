@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 
 mod eml;
 mod mail_attachments;
-pub use mail_attachments::{list_mail_attachments, read_mail_attachment, MailAttachment};
+mod mail_body;
+pub use mail_attachments::{
+    list_mail_attachments, mail_content, read_mail_attachment, MailAttachment, MailBodyBlock, MailContent,
+};
 mod names;
 mod sniff;
 

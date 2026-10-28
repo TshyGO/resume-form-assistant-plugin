@@ -377,7 +377,7 @@ export function mountInbox(
               ${mailFacts(item)}
               ${note}
               ${image}
-              ${body}
+              ${item.kind === "eml" ? `<div data-mail-body>${body}</div>` : body}
               ${nothing}
             </section>
           </div>
@@ -455,7 +455,7 @@ export function mountInbox(
       });
     }
     const attachmentRoot = preview.querySelector<HTMLElement>("#inbox-mail-attachments");
-    if (attachmentRoot) clearAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, evidenceTitle(item));
+    if (attachmentRoot) clearAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, evidenceTitle(item), preview.querySelector<HTMLElement>("[data-mail-body]"));
     preview.querySelectorAll<HTMLElement>("button[data-act]").forEach((button) => {
       button.addEventListener("click", () => {
         const action = button.dataset.act;

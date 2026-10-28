@@ -110,3 +110,49 @@ test("closing the attachment dialog returns focus to the exact entry button", as
   await waitFor(() => expect(document.querySelector("dialog")).toBeNull());
   expect(document.activeElement).toBe(entry); dispose();
 });
+test("XLSX renders a text-safe read-only grid and selecting a sheet fetches that sheet", async () => {
+  const sheets = { sourceSha256: "source", items: [{ ...attachments.items[2], index: 4, name: "安排.xlsx", previewKind: "xlsx" as const }] };
+  const invoke = vi.fn(async (_command: string, args: Record<string, unknown>) => ({ sheetNames: ["安排", "明细"], sheetIndex: args.sheetIndex, rowCount: 2, columnCount: 3,
+    cells: args.sheetIndex === 0 ? [[0, 0, "<img src=x onerror=alert(1)>"], [1, 2, "42"]] : [[0, 0, "第二个工作表"]], truncated: false }));
+  render(<InvokeProvider invoke={invoke as Invoke}><AttachmentViewer evidenceId="mail" title="测试通知" attachments={sheets} initialIndex={4} onClose={() => {}} /></InvokeProvider>);
+  await screen.findByText("<img src=x onerror=alert(1)>");
+  expect(screen.getByRole("table").querySelector("img")).toBeNull();
+  expect(screen.getByText("42")).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith("preview_evidence_spreadsheet_cmd", { evidenceId: "mail", index: 4, sourceSha256: "source", sheetIndex: 0 });
+  fireEvent.change(screen.getByRole("combobox", { name: "工作表" }), { target: { value: "1" } });
+  await screen.findByText("第二个工作表");
+  expect(screen.queryByText("42")).toBeNull();
+  expect(screen.getByRole("button", { name: "用系统程序打开" })).toBeTruthy();
+});
+test("XLSX errors keep file actions available and can be retried", async () => {
+  const sheets = { sourceSha256: "source", items: [{ ...attachments.items[2], index: 4, name: "安排.xlsx", previewKind: "xlsx" as const }] };
+  const invoke = vi.fn().mockRejectedValueOnce({ message: "表格已加密" }).mockResolvedValue({ sheetNames: ["空表"], sheetIndex: 0, rowCount: 0, columnCount: 0, cells: [], truncated: false });
+  render(<InvokeProvider invoke={invoke}><AttachmentViewer evidenceId="mail" title="Test" attachments={sheets} initialIndex={4} onClose={() => {}} /></InvokeProvider>);
+  await screen.findByText("表格已加密");
+  expect(screen.getByRole("button", { name: "另存为" }).hasAttribute("disabled")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "重新读取表格" }));
+  await screen.findByText("这个工作表没有单元格内容。");
+});
+test("enlarging a body image is labeled as a body image instead of an extra attachment", async () => {
+  const data: MailAttachments = { sourceSha256: "source", items: [attachments.items[1]], contentKind: "bodyImage" };
+  const invoke = vi.fn(async () => ({ bytesBase64: "image", mime: "image/png" })) as unknown as Invoke;
+  render(<InvokeProvider invoke={invoke}><AttachmentViewer evidenceId="mail" title="Test" attachments={data} initialIndex={1} onClose={() => {}} /></InvokeProvider>);
+  await screen.findByRole("img");
+  expect(screen.getByRole("heading", { name: "查看正文图片" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "查看邮件附件" })).toBeNull();
+  expect(screen.getByText("图片来自本机已保存的邮件")).toBeTruthy();
+});
+test("a late worksheet reply cannot replace the worksheet selected afterwards", async () => {
+  const sheets = { sourceSha256: "source", items: [{ ...attachments.items[2], index: 4, name: "安排.xlsx", previewKind: "xlsx" as const }] };
+  let release!: (data: unknown) => void;
+  const view = (sheetIndex: number, text: string) => ({ sheetNames: ["First", "Second"], sheetIndex, rowCount: 1, columnCount: 1, cells: [[0, 0, text]], truncated: false });
+  const invoke = vi.fn(async (_name: string, args: Record<string, unknown>) => args.sheetIndex === 0 ? view(0, "Current") : new Promise(resolve => { release = resolve; }));
+  render(<InvokeProvider invoke={invoke as Invoke}><AttachmentViewer evidenceId="mail" title="Test" attachments={sheets} initialIndex={4} onClose={() => {}} /></InvokeProvider>);
+  await screen.findByText("Current");
+  fireEvent.change(screen.getByRole("combobox", { name: "工作表" }), { target: { value: "1" } });
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  fireEvent.change(screen.getByRole("combobox", { name: "工作表" }), { target: { value: "0" } });
+  await screen.findByText("Current");
+  await act(async () => release(view(1, "Stale")));
+  expect(screen.queryByText("Stale")).toBeNull();
+});

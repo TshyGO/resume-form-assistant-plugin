@@ -1,11 +1,13 @@
+import { mountMailBody } from "./mail-body.ts";
 import type { Invoke } from "./api.ts";
 import type { MailAttachment, MailAttachments } from "./attachment-types.ts";
 const errorText = (err: unknown) => typeof err === "string" ? err : (err as { message?: string })?.message || "读取失败，请重试。";
 const kindName = (a: MailAttachment) => a.previewKind === "pdf" ? "PDF" : a.previewKind === "image" ? "图片" : a.name.includes(".") ? a.name.split(".").pop()!.toUpperCase() : "文件";
 const attachmentSize = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`;
 /** Same compact entry rows in inbox and application details. Metadata only; bytes load on click. */
-export function mountAttachmentList(container: HTMLElement, invoke: Invoke, evidenceId: string, title: string) {
+export function mountAttachmentList(container: HTMLElement, invoke: Invoke, evidenceId: string, title: string, bodyContainer?: HTMLElement | null) {
   let active = true;
+  let clearBody: (() => void) | undefined;
   const heading = document.createElement("h3"); heading.textContent = "附件";
   const state = document.createElement("p"); state.className = "muted"; state.textContent = "正在读取附件列表…";
   container.classList.add("mail-attachment-section"); container.replaceChildren(heading, state);
@@ -13,6 +15,7 @@ export function mountAttachmentList(container: HTMLElement, invoke: Invoke, evid
     try {
       const data = await invoke<MailAttachments>("list_evidence_attachments_cmd", { evidenceId });
       if (!active || !container.isConnected) return;
+      if (bodyContainer) { clearBody?.(); clearBody = mountMailBody(bodyContainer, invoke, evidenceId, title, data); }
       heading.textContent = `附件 · ${data.items.length}`;
       state.textContent = data.items.length ? "点击附件查看或另存为" : "这封邮件没有文件附件。";
       container.replaceChildren(heading, state);
@@ -41,5 +44,5 @@ export function mountAttachmentList(container: HTMLElement, invoke: Invoke, evid
     }
   };
   void load();
-  return () => { active = false; };
+  return () => { active = false; clearBody?.(); };
 }
