@@ -687,9 +687,14 @@
         if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
         return list;
       };
-      let ready = await h.waitUntil(ctx, doc.documentElement, generic ? watchOptions : () => readOptions(level),
-        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300)) || (eagerSearch && list.length === 0));
-      if (ready.reason === 'verification_timeout' && generic && (searchable && !searchDone || lastSeen)) ready = { value: readOptions(level) };
+      // AntD 先输入了要找的值：先到的列表可能是输入前的请求晚到的结果。列表里有同名的一项才马上选，否则等满再用最后的列表。
+      const typedAntd = typedFirst && !generic;
+      const sameName = list => list.some(option => !option.disabled && [option.text, option.value]
+        .some(text => h.helpers.normalizeText(text) === h.helpers.normalizeText(desired[level])));
+      let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level),
+        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list)))
+          || (eagerSearch && list.length === 0));
+      if (ready.reason === 'verification_timeout' && (generic && (searchable && !searchDone || lastSeen) || typedAntd && lastSeen)) ready = { value: readOptions(level) };
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
       let found = match(list, desired[level], h.helpers, info.freeText);

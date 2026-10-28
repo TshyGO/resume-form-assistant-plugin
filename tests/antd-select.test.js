@@ -24,19 +24,20 @@ function load(label, control) {
 // AntD 3（rc-select 9）/ ant-design-vue 1.x：点组件根展开，弹层挂在 body 下；选中后占位隐藏，出现 selection-selected-value。
 // loadAfter：点开后过一会儿才有选项。没有选项时弹层里是一个禁用条目（加载圈、「暂无数据」或一段文字），
 // 弹层带 --empty；emptyClass=false 时不带。remote：输入前没有弹层，输入后按搜索词给选项。
-function antd3(choices, { label = '学历', loadAfter = 0, multiple = false, selected = '', remote = false, emptyClass = true, notFound = 'spin' } = {}) {
+// stale：输入前发出的请求晚到，先显示这份旧列表，再显示搜索结果。combobox：mode=combobox（AutoComplete 也是），输入框一直显示。
+function antd3(choices, { label = '学历', loadAfter = 0, multiple = false, selected = '', remote = false, emptyClass = true, notFound = 'spin', stale = null, combobox = false } = {}) {
   const mode = multiple ? 'multiple' : 'single';
   const field = '<div class="ant-select-search__field__wrap"><input autocomplete="off" class="ant-select-search__field" value=""></div>';
   const search = multiple ? `<ul><li class="ant-select-search ant-select-search--inline">${field}</li></ul>`
-    : remote ? `<div class="ant-select-search ant-select-search--inline" hidden>${field}</div>` : '';
+    : remote || combobox ? `<div class="ant-select-search ant-select-search--inline"${combobox ? '' : ' hidden'}>${field}</div>` : '';
   const shown = selected ? `<div class="ant-select-selection-selected-value" title="${selected}">${selected}</div>` : '';
-  const h = load(label, `<div class="ant-select ant-select-enabled"><div class="ant-select-selection ant-select-selection--${mode}" role="combobox"
+  const h = load(label, `<div class="ant-select${combobox ? ' ant-select-combobox' : ''} ant-select-enabled"><div class="ant-select-selection ant-select-selection--${mode}" role="combobox"
     aria-autocomplete="list" aria-haspopup="true" aria-controls="menu-1" aria-expanded="false" tabindex="0"><div class="ant-select-selection__rendered">
     <div class="ant-select-selection__placeholder"${selected ? ' hidden' : ''}>请选择</div>${shown}${search}</div></div></div>`);
   const { doc } = h;
   const root = doc.querySelector('.ant-select'), combo = root.querySelector('[role="combobox"]'), input = root.querySelector('input');
   const picked = [], searches = [];
-  let dropdown = null, open = false, items = loadAfter || remote ? [] : choices;
+  let dropdown = null, open = false, items = loadAfter || remote || combobox ? [] : choices;
   const close = () => {
     open = false; if (dropdown) dropdown.hidden = true; combo.setAttribute('aria-expanded', 'false');
     if (remote) { input.value = ''; input.closest('.ant-select-search').hidden = true; }
@@ -57,7 +58,7 @@ function antd3(choices, { label = '学历', loadAfter = 0, multiple = false, sel
   };
   const render = () => {
     // notFoundContent=null：没有选项时不渲染弹层。
-    if (remote && !items.length) { if (dropdown) dropdown.hidden = true; return; }
+    if ((remote || combobox) && !items.length) { if (dropdown) dropdown.hidden = true; return; }
     if (!dropdown) {
       dropdown = doc.createElement('div');
       dropdown.innerHTML = '<div id="menu-1"><ul role="listbox" class="ant-select-dropdown-menu"></ul></div>';
@@ -83,10 +84,11 @@ function antd3(choices, { label = '学历', loadAfter = 0, multiple = false, sel
     if (loadAfter && !items.length) setTimeout(() => { items = choices; if (open) render(); }, loadAfter);
   });
   input?.addEventListener('input', () => {
-    if (!remote) return;
+    if (!remote && !combobox) return;
     const query = input.value;
     searches.push(query);
-    setTimeout(() => { items = query ? choices.filter(text => text.includes(query)) : []; if (open) render(); }, 30);
+    if (stale) setTimeout(() => { items = stale; if (open) render(); }, 10);
+    setTimeout(() => { items = query ? choices.filter(text => text.includes(query)) : []; if (open) render(); }, stale ? 80 : 30);
   });
   return { ...h, root, input, picked, searches };
 }
@@ -194,6 +196,28 @@ test('a failed AntD 3 search without results puts the typed query back', async (
   assert.equal(result.reason, 'options_not_rendered');
   assert.deepEqual(h.picked, []);
   assert.deepEqual(h.searches, ['某某大学', '']);
+  assert.equal(h.input.value, '');
+});
+
+test('an AntD 3 search waits past a stale list that arrives after typing', async () => {
+  const h = antd3(['北京大学', '北京师范大学', '清华大学'], { label: '毕业院校', remote: true, stale: ['北京大学医学部'] });
+  const result = await h.api.operate(h.target, '北京大学');
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(h.picked, ['北京大学']);
+});
+
+test('an AntD 3 search whose results hold only a longer name still picks it after the wait', async () => {
+  const h = antd3(['北京大学（本部）', '清华大学'], { label: '毕业院校', remote: true });
+  const result = await h.api.operate(h.target, '北京大学');
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(h.picked, ['北京大学（本部）']);
+});
+
+test('AntD 3 combobox mode without suggestions is not typed into', async () => {
+  const h = antd3(['北京大学', '清华大学'], { label: '毕业院校', combobox: true });
+  const result = await h.api.operate(h.target, '北京大学');
+  assert.equal(result.reason, 'options_not_rendered');
+  assert.deepEqual(h.searches, []);
   assert.equal(h.input.value, '');
 });
 
