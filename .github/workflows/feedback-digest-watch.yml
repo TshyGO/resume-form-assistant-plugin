@@ -1,0 +1,49 @@
+name: Feedback Digest Watch
+
+# 【用户反馈日报】由仓库外的 relay / Muse 任务每天建成带「日报」标签的 issue。
+# 仓库 2026-10-25 迁到 ptjworks 后这个任务悄悄停了，四天没人发现。
+# 这里每天读两次最新的日报：没有日报，或最新一份超过 30 小时，就打开（或更新）一个
+# 带「日报提醒」标签的 issue，新日报出现后自动关闭。它不生成日报，也不改日报。
+on:
+  schedule:
+    - cron: "37 2,14 * * *" # 每天北京时间 10:37 和 22:37，日报平常在 UTC 23:57 左右生成
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feedback-digest-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # 只让 main 上审过的代码拿可写 issue 的 token；在别的分支手动运行直接失败。
+      - name: Only run from main
+        env:
+          REF: ${{ github.ref }}
+        run: test "$REF" = "refs/heads/main" || { echo "Feedback Digest Watch 只在 main 上运行，当前是 $REF"; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # 只用 GitHub token：读最新一份日报，再改提醒 issue。不需要别的凭据。
+      # 想让提醒直接指派给某人，在仓库变量 FEEDBACK_DIGEST_WATCH_ASSIGNEES 里写 GitHub 用户名，多个用逗号隔开。
+      - name: Open, update or close the reminder issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WATCH_ASSIGNEES: ${{ vars.FEEDBACK_DIGEST_WATCH_ASSIGNEES }}
+        run: node desktop/scripts/feedback-digest-watch.js --sync
