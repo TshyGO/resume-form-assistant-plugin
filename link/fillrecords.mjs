@@ -22,14 +22,18 @@ const MAX_DURATION_MS = 3600000;
  * `filledCount` is the number of fields actually written into the page. What the AI
  * returned but was never written is not counted, and nothing here can say the site accepted
  * anything: the plugin cannot know that.
+ *
+ * The desktop refuses a record whose written and unconfirmed fields add up to more than
+ * `fieldCount`, so the total is never reported below them.
  */
 export function buildFillPayload(raw) {
   const filledCount = count(raw?.filledCount);
+  const unconfirmedCount = count(raw?.unconfirmedCount);
   const payload = {
     outcome: outcomeOf(raw, filledCount),
-    fieldCount: count(raw?.fieldCount),
+    fieldCount: Math.min(Math.max(count(raw?.fieldCount), filledCount + unconfirmedCount), MAX_COUNT),
     filledCount,
-    unconfirmedCount: count(raw?.unconfirmedCount)
+    unconfirmedCount
   };
 
   const durationsMs = {};

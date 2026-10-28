@@ -70,12 +70,15 @@ function reply(message, payload, resultId) {
 /**
  * A desktop with applications. `mode`: "online", "closed" (paired before, not answering),
  * "not_paired", "incompatible" (answers the handshake with protocol versions the plugin lacks). `gate`, when set, holds candidate lookups until it resolves.
+ * Like the real desktop, it checks every fill.submit against the shared protocol rules before
+ * keeping it; a refused one lands in `rejected` with the error code.
  */
 function createDesktop(applications = []) {
   const desktop = {
     mode: "online",
     applications: [...applications],
     events: [],
+    rejected: [],
     chunks: [],
     lookups: 0,
     gate: null,
@@ -102,6 +105,13 @@ function createDesktop(applications = []) {
         });
       }
       if (message.messageType === "fill.submit") {
+        const { validateRequest } = await import("../../link/protocol/validate.mjs");
+        try {
+          await validateRequest(message);
+        } catch (error) {
+          desktop.rejected.push({ message, code: error.code });
+          return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: error.code, retryable: Boolean(error.retryable), message: "rejected" }, payload: {} } };
+        }
         desktop.events.push(message);
         return reply(message, { resultKind: "event" }, EVENT);
       }
