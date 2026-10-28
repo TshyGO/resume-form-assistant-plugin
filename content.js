@@ -2635,11 +2635,11 @@
         const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
           || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
-        // #301 本次填写操作过的下拉：弹层有没有出来、里面有几项。没操作过的（上一级没选上）不带。
+        // #301 本次填写操作过的下拉：弹层有没有出来、里面有没有选项。没操作过的（上一级没选上）不带。
         const popup = controlPopups.get(control);
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
-          ...(popup && popup.session === session ? { observed: { opened: popup.opened, options: popup.options } } : {}),
+          ...(popup && popup.session === session ? { observed: { opened: popup.opened, hasOptions: popup.hasOptions } } : {}),
           // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
           ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
@@ -4418,15 +4418,14 @@
 
   // #269 资料只有年月、日历要选到日时按 1 日填写：记下来，结果里写明。
   const dayDefaultedControls = new WeakSet();
-  // #301 下拉、级联和日历最近一次操作时弹层的样子：没弹出，或弹出的是哪类、里面有几项（只有固定类别和计数）。
+  // #301 下拉、级联和日历最近一次操作时弹层的样子：没弹出，或弹出的是哪类、里面有没有选项（只有固定类别和是否）。
   // 记下是哪一次填写会话操作的，没填上的字段只带本次填写里的记录。
   const controlPopups = new WeakMap();
   function popupObserved(observed) {
     const role = ["listbox", "tree", "menu", "component", "calendar"].includes(observed?.popupRole) ? observed.popupRole : "";
-    // AntD 日期面板只数格子，不标 popupRole。
-    if (role === "calendar" || (!role && observed?.controlKind === "date" && Number.isInteger(observed.optionCount))) return { opened: "calendar" };
-    // 项数只在网页自己先给出的第一层列表读到时才有（custom-controls.js）；没有就不报，不当成 0。
-    if (role) return { opened: role, ...(Number.isInteger(observed.optionCount) ? { options: observed.optionCount } : {}) };
+    if (role === "calendar") return { opened: "calendar" };
+    // 有没有选项只在网页自己先给出的第一层列表读到时才有（custom-controls.js）；没有就不报，不当成没有选项。
+    if (role) return { opened: role, ...(typeof observed.hasOptions === "boolean" ? { hasOptions: observed.hasOptions } : {}) };
     return ["custom-select", "cascader"].includes(observed?.controlKind) ? { opened: "none" } : null;
   }
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {

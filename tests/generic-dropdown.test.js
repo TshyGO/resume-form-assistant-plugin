@@ -226,13 +226,13 @@ test("a type-to-search dropdown with no matching suggestion restores what was in
   assert.deepEqual(h.clicks, []);
 });
 
-test("a dropdown that only opens once the value is typed reports no option count: the list is the typed value's matches", async () => {
-  // #301 诊断：这时有几项由插件输入的值决定，会带出简历内容。
+test("a dropdown that only opens once the value is typed says nothing about its options: the list is the typed value's matches", async () => {
+  // #301 诊断：这时列表由插件输入的值决定，会带出简历内容。
   const h = moka({ searchable: true, choices: ["示例大学附属医院", "示例大学出版社", "其他学院"] });
   const result = await h.api.operate(h.target, "示例大学");
   assert.equal(result.ok, false, JSON.stringify(result));
   assert.equal(result.observed.popupRole, "component", "the popup did open");
-  assert.equal("optionCount" in result.observed, false, JSON.stringify(result.observed));
+  assert.equal("hasOptions" in result.observed || "optionCount" in result.observed, false, JSON.stringify(result.observed));
   assert.deepEqual(h.clicks, []);
 });
 

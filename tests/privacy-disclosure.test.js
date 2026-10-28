@@ -28,9 +28,9 @@ const KEYS = {
 };
 const SECTIONS = { 页面: "- 页面：", 填写: "- 填写方式：", 字段漏斗: "- 字段计数：", 页面结构: "- 页面结构：", 错误: "错误类别、失败阶段和错误码",
   匹配: "- 匹配：", 性能: "- 各阶段耗时", 未填字段: "- 没填上的字段", 岗位: "岗位流程的固定代码" };
-// [未填字段] tokens: control structure, the reason code, the popup and its option count.
+// [未填字段] tokens: control structure, the reason code, the popup and whether it had any option.
 const TOKENS = { tag: "标签名", type: "类型", role: "role", popup: "控件结构", readonly: "控件结构", picker: "控件结构", lib: "组件库",
-  reason: "失败原因码", opened: "弹层有没有出现", options: "有几个选项" };
+  reason: "失败原因码", opened: "弹层有没有出现", options: "里面有没有选项（不含选项个数" };
 // The worker's [来源] lines.
 const SOURCE = { app_version: "版本", os: "系统", install: "安装方式", host: "域名" };
 
@@ -52,7 +52,7 @@ test("the worker's [来源] lines and the unfilled-control tokens are the ones l
   const text = worker.preview({ description: "" }, "jobs.example.test").user_description;
   const source = text.slice(text.indexOf("[来源]") + 5).trim().split("\n").map(line => line.split(":")[0]);
   assert.deepEqual(source, Object.keys(SOURCE));
-  const report = core.fillReport({ fieldCount: 1, unfilledControls: [{ label: "学历", reasonCode: "no_option_match", observed: { opened: "listbox", options: 3 },
+  const report = core.fillReport({ fieldCount: 1, unfilledControls: [{ label: "学历", reasonCode: "no_option_match", observed: { opened: "listbox", hasOptions: true },
     control: { tag: "input", type: "text", role: "combobox", readOnly: true, picker: "antd", library: "antd", popup: "listbox" } }] });
   const tokens = report.split("\n").find(line => line.startsWith("- 学历: ")).slice(7).split(" ")
     .map(token => /^[a-z]+\[/.test(token) ? ["tag", "type"] : token.split("=")[0]).flat();
@@ -68,9 +68,13 @@ test("the worker's [来源] lines and the unfilled-control tokens are the ones l
 test("the notice names what reports now carry, and when they are sent", () => {
   const ui = read("feedback-ui.js");
   const notice = ui.slice(ui.indexOf("const explanation"), ui.indexOf("if (compact && noticeRoot)"));
-  for (const words of ["AI 请求失败", "安装方式", "从哪里开始填写", "网页当时是否在前台", "有没有弹出和弹出了几个选项", "模型档位",
+  for (const words of ["AI 请求失败", "安装方式", "从哪里开始填写", "网页当时是否在前台", "有没有弹出、里面有没有选项", "模型档位",
     "保存岗位的过程", "不含公司和岗位名"]) {
     assert.ok(notice.includes(words), words);
+  }
+  // Whether a list had options, never how many (#301): neither text speaks of a number of options.
+  for (const [name, text] of [["notice", notice], ["policy", section]]) {
+    assert.doesNotMatch(text, /几个选项|选项的?数量|项数/, name);
   }
   // The policy says the same about when a report is sent and that the user is asked again.
   for (const words of ["AI 请求失败", "即使匹配到的字段都填上了也会上报", "报告内容增加时，之前的同意同样不算数，会重新询问"]) {

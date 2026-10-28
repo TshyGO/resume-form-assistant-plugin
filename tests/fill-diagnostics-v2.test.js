@@ -1,4 +1,4 @@
-// #301 诊断补全：填写入口和网页焦点、AI 档位、没填上的下拉弹层计数、通用下拉计数、AI 请求失败也上报。
+// #301 诊断补全：填写入口和网页焦点、AI 档位、没填上的下拉弹层有没有选项、通用下拉计数、AI 请求失败也上报。
 // 新增的每一项都是计数、时长或固定词表里的词；后台 diagnostics() 再过一遍，对不上的整行丢掉。
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -40,19 +40,23 @@ test("ai_tier names the tier the AI ran on, and only when it was called", () => 
   assert.equal(lineOf(core.fillReport({ ...BASE, diagnostics: { ...BASE.diagnostics, promptBytes: 0 }, grown: { aiCalled: true } }), "ai_tier"), "default");
 });
 
-test("unfilled selects say whether their popup opened and how many options it had, counts only", () => {
+test("unfilled selects say whether their popup opened and whether its list had any option, never how many", () => {
   const report = core.fillReport({ ...BASE, unfilledControls: [
-    { label: "学历", reasonCode: "options_not_rendered", observed: { opened: "none", options: 5 }, control: { tag: "input", type: "text", readOnly: true } },
-    { label: "学校", reasonCode: "no_option_match", observed: { opened: "listbox", options: 4 }, control: { tag: "input", type: "text" } },
-    { label: "专业", reasonCode: "no_option_match", observed: { opened: "component", options: 999 }, control: { tag: "div" } },
-    { label: "毕业时间", reasonCode: "invalid_date", observed: { opened: "calendar", options: 31 }, control: { tag: "input", type: "text" } },
-    { label: "性别", reasonCode: "no_option_match", observed: { opened: "dropdown", options: 2 }, control: { tag: "div" } }
+    { label: "学历", reasonCode: "options_not_rendered", observed: { opened: "none", hasOptions: true }, control: { tag: "input", type: "text", readOnly: true } },
+    { label: "学校", reasonCode: "no_option_match", observed: { opened: "listbox", hasOptions: true }, control: { tag: "input", type: "text" } },
+    { label: "专业", reasonCode: "no_option_match", observed: { opened: "component", hasOptions: false }, control: { tag: "div" } },
+    // A count, from anywhere, is never written: a lower select's list is the one loaded for the upper choice.
+    { label: "现居住地", reasonCode: "no_option_match", observed: { opened: "tree", options: 13, hasOptions: 13 }, control: { tag: "input", type: "text" } },
+    { label: "毕业时间", reasonCode: "invalid_date", observed: { opened: "calendar", hasOptions: true }, control: { tag: "input", type: "text" } },
+    { label: "性别", reasonCode: "no_option_match", observed: { opened: "dropdown", hasOptions: true }, control: { tag: "div" } }
   ] });
-  assert.match(report, /^- 学历: input\[text\] readonly opened=none reason=options_not_rendered$/m, "never opened: no option count");
-  assert.match(report, /^- 学校: input\[text\] opened=listbox options=4 reason=no_option_match$/m);
-  assert.match(report, /^- 专业: div opened=component options=200 reason=no_option_match$/m, "capped at 200");
-  assert.match(report, /^- 毕业时间: input\[text\] opened=calendar reason=invalid_date$/m, "a calendar has no option count");
+  assert.match(report, /^- 学历: input\[text\] readonly opened=none reason=options_not_rendered$/m, "never opened: nothing about options");
+  assert.match(report, /^- 学校: input\[text\] opened=listbox options=1\+ reason=no_option_match$/m);
+  assert.match(report, /^- 专业: div opened=component options=0 reason=no_option_match$/m);
+  assert.match(report, /^- 现居住地: input\[text\] opened=tree reason=no_option_match$/m, "a number is left out");
+  assert.match(report, /^- 毕业时间: input\[text\] opened=calendar reason=invalid_date$/m, "a calendar has no options token");
   assert.match(report, /^- 性别: div reason=no_option_match$/m, "an unknown popup kind is left out");
+  assert.doesNotMatch(report, /options=(?!0 |1\+ )/);
   assert.equal(core.diagnostics(report), report);
 });
 
@@ -62,8 +66,10 @@ test("the allowlist keeps the new values and drops anything else, including resu
     "[匹配]", "ai_tier: strong", "ai_tier: gpt-4o-mini", "ai_tier: 张三的简历",
     "[页面结构]", "custom_libraries: generic=3,other=1", "custom_libraries: beisen=3", "custom_controls: 4",
     "[未填字段]",
-    "- 学历: input[text] opened=listbox options=12 reason=no_option_match",
-    "- 学校: input[text] opened=张三 options=201 options=-1 opened=https://evil.example options=13800138000 opened=示例大学",
+    "- 学历: input[text] opened=listbox options=1+ reason=no_option_match",
+    "- 专业: input[text] opened=tree options=0 reason=no_option_match",
+    "- 当前城市: input[text] opened=listbox options=13 reason=no_option_match",
+    "- 学校: input[text] opened=张三 options=200 options=12 options=1 options=2+ options=1++ options=-1 opened=https://evil.example options=13800138000 opened=示例大学",
     "- （字段名已隐藏）: div opened=none"
   ].join("\n");
   assert.equal(core.diagnostics(forged), [
@@ -71,10 +77,33 @@ test("the allowlist keeps the new values and drops anything else, including resu
     "", "[匹配]", "ai_tier: strong",
     "", "[页面结构]", "custom_libraries: generic=3,other=1", "custom_controls: 4",
     "", "[未填字段]",
-    "- 学历: input[text] opened=listbox options=12 reason=no_option_match",
+    "- 学历: input[text] opened=listbox options=1+ reason=no_option_match",
+    "- 专业: input[text] opened=tree options=0 reason=no_option_match",
+    "- 当前城市: input[text] opened=listbox reason=no_option_match",
     "- 学校: input[text]",
     "- （字段名已隐藏）: div opened=none"
   ].join("\n"));
+});
+
+test("the worker drops an option count a page puts in: only options=0 and options=1+ are sent", async () => {
+  const { createFeedback } = await import("../link/feedback.mjs");
+  const data = {}; const bodies = [];
+  const worker = createFeedback({ storage: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) },
+    version: "0.4.5", os: "Windows / Chrome 140", install: () => "normal",
+    fetchImpl: async (_url, request) => { bodies.push(JSON.parse(request.body)); return new Response('{"ok":true,"id":"x"}'); } });
+  await worker.setConsent(true);
+  await worker.automatic({ kind: "fill_failed", diagnostics: ["[错误]", "error_category: fill_rejected", "", "[未填字段]",
+    "- 当前城市: input[text] opened=listbox options=13 reason=no_option_match",
+    "- 现居住地: input[text] opened=tree options=5 options=200 reason=no_option_match",
+    "- 学校: input[text] opened=listbox options=1+ reason=no_option_match",
+    "- 专业: input[text] opened=component options=0 reason=no_option_match"].join("\n") }, "jobs.example.test");
+  assert.equal(bodies.length, 1);
+  const sent = bodies[0].user_description;
+  assert.match(sent, /^- 当前城市: input\[text\] opened=listbox reason=no_option_match$/m);
+  assert.match(sent, /^- 现居住地: input\[text\] opened=tree reason=no_option_match$/m);
+  assert.match(sent, /^- 学校: input\[text\] opened=listbox options=1\+ reason=no_option_match$/m);
+  assert.match(sent, /^- 专业: input\[text\] opened=component options=0 reason=no_option_match$/m);
+  assert.deepEqual(sent.match(/options=\S+/g), ["options=1+", "options=0"]);
 });
 
 test("custom selects handled on the generic path count as custom controls of the library 'generic'", () => {
@@ -380,12 +409,12 @@ function genericSelects(outcomes) {
   };
 }
 
-test("unfilled custom selects tell 'never opened' from 'opened with N options', and generic selects count as custom controls", async () => {
+test("unfilled custom selects tell 'never opened', 'opened empty' and 'opened with options', and generic selects count as custom controls", async () => {
   const stubs = genericSelects({
     degree: { ok: false, reason: "options_not_rendered", observed: { controlKind: "custom-select", connected: true, rolledBack: false } },
-    school: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "listbox", optionCount: 4 } },
-    city: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "tree", optionCount: 260 } },
-    // Opened only after the plugin typed the value: custom-controls.js leaves the count out (#301).
+    school: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "listbox", hasOptions: true } },
+    city: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "tree", hasOptions: false } },
+    // Opened only after the plugin typed the value: custom-controls.js says nothing about its options (#301).
     major: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "component" } }
   });
   const { reports } = await fill({ ...stubs, fields: [named("degree", "学历"), named("school", "学校"), named("city", "现居住地"), named("major", "专业")],
@@ -394,9 +423,9 @@ test("unfilled custom selects tell 'never opened' from 'opened with N options', 
   assert.deepEqual(reports.map(item => item.kind), ["fill_failed"]);
   const block = reports[0].diagnostics;
   assert.match(block, /^- 学历: input\[text\] opened=none reason=options_not_rendered$/m);
-  assert.match(block, /^- 学校: input\[text\] opened=listbox options=4 reason=no_option_match$/m);
-  assert.match(block, /^- 现居住地: input\[text\] opened=tree options=200 reason=no_option_match$/m);
-  assert.match(block, /^- 专业: input\[text\] opened=component reason=no_option_match$/m, "no count is not options=0");
+  assert.match(block, /^- 学校: input\[text\] opened=listbox options=1\+ reason=no_option_match$/m);
+  assert.match(block, /^- 现居住地: input\[text\] opened=tree options=0 reason=no_option_match$/m);
+  assert.match(block, /^- 专业: input\[text\] opened=component reason=no_option_match$/m, "not looked at is not options=0");
   assert.equal(lineOf(block, "custom_controls"), "4");
   assert.equal(lineOf(block, "custom_libraries"), "generic=4");
   assert.equal(lineOf(block, "ai_tier"), "-", "the rules matched everything; the AI was not called");
@@ -415,7 +444,7 @@ test("a custom control the diagnostics cannot describe is left out of the count,
 
 test("a fill on a page full of personal data leaves none of it in the report, the panel block or the sent payload", async () => {
   const stubs = genericSelects({
-    张伟测试: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", popupRole: "listbox", optionCount: 3,
+    张伟测试: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", popupRole: "listbox", hasOptions: true,
       library: "generic", options: ["示例大学", "张伟测试"], text: "13912345678" } },
     phone: { ok: true, observed: { controlKind: "text" } }
   });
@@ -438,6 +467,83 @@ test("a fill on a page full of personal data leaves none of it in the report, th
   for (const text of [JSON.stringify(reports), report, sentBody]) {
     for (const value of PRIVATE) assert.ok(!text.includes(value), `${value} leaked`);
   }
-  assert.match(sentBody, /^- （字段名已隐藏）: input\[text\] opened=listbox options=3 reason=no_option_match$/m);
+  assert.match(sentBody, /^- （字段名已隐藏）: input\[text\] opened=listbox options=1\+ reason=no_option_match$/m);
   assert.match(sentBody, /^install: development$/m);
+});
+
+// #301 省、市是两个下拉时，城市下拉第一层列的是网页按插件从简历里选的省加载的市：江苏 13 个、宁夏 5 个、广东 21 个。
+// 报告只说弹层里有没有选项，城市这一行和选了哪个省无关。控件层用真的 custom-controls.js（jsdom），ARIA 下拉和北森通用下拉各走一遍。
+const CITIES = { 江苏省: 13, 宁夏回族自治区: 5, 广东省: 21 };
+
+async function linkedCity(kind, province) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { JSDOM } = require("jsdom");
+  const { selectItem, wireSelect } = require("./helpers/beisen-form.js");
+  let picked = "";
+  const cities = () => Array.from({ length: CITIES[picked] || 0 }, (_, i) => `第${i + 1}市`);
+  const html = kind === "aria"
+    ? ["prov", "city"].map(id => `<label id="${id}-label">${id}</label><button type="button" id="${id}" role="combobox" aria-labelledby="${id}-label" aria-controls="${id}-list" aria-expanded="false">请选择</button>`).join("")
+    : `${selectItem("prov", "籍贯", 100)}${selectItem("city", "当前城市", 200)}`;
+  const w = new JSDOM(`<form>${html}</form>`, { runScripts: "outside-only" }).window;
+  for (const file of ["ai-helpers.js", "custom-controls.js", "control-adapters.js"]) w.eval(fs.readFileSync(path.join(__dirname, "..", file), "utf8"));
+  const api = w.ResumeProControls.create({ timeoutMs: kind === "aria" ? 200 : 400, settleMs: 35, isVisible: el => !el.closest("[hidden]") });
+  const doc = w.document;
+  if (kind === "aria") {
+    const list = (id, combo, items, onPick) => {
+      doc.getElementById(id)?.remove();
+      const box = doc.createElement("div"); box.id = id; box.setAttribute("role", "listbox");
+      for (const text of items) {
+        const option = doc.createElement("div"); option.setAttribute("role", "option"); option.textContent = text;
+        option.onclick = () => { combo.textContent = text; combo.setAttribute("aria-expanded", "false"); box.hidden = true; onPick?.(text); };
+        box.append(option);
+      }
+      doc.body.append(box);
+    };
+    const prov = doc.getElementById("prov"), city = doc.getElementById("city");
+    prov.onclick = () => { prov.setAttribute("aria-expanded", "true"); list("prov-list", prov, Object.keys(CITIES), text => { picked = text; }); };
+    city.onclick = () => { city.setAttribute("aria-expanded", "true"); list("city-list", city, cities()); };
+    const target = el => ({ kind: "element", element: el, root: el, controlKind: "custom-select" });
+    assert.equal((await api.operate(target(prov), province)).ok, true, province);
+    return api.operate(target(city), "示例市");
+  }
+  const scanner = require("../field-scan.js");
+  const shownCities = [];
+  const prov = wireSelect(doc, "prov", { choices: Object.keys(CITIES), rows: 50 });
+  wireSelect(doc, "city", { choices: shownCities, rows: 50 });
+  const target = label => {
+    const c = scanner.scanPage(doc, { isVisible: () => true }).controls.find(item => item.label === label);
+    return { kind: "element", element: c.element, elements: c.elements, root: c.root, controlKind: c.controlKind, hints: {} };
+  };
+  assert.equal((await api.operate(target("籍贯"), province)).ok, true, province);
+  picked = prov.shown();
+  shownCities.push(...cities());
+  return api.operate(target("当前城市"), "示例市");
+}
+
+test("a city select loaded for the province picked from the resume reads the same in every report, whichever province it was", async () => {
+  const { createFeedback } = await import("../link/feedback.mjs");
+  for (const [kind, opened] of [["aria", "listbox"], ["beisen", "component"]]) {
+    const lines = [];
+    for (const province of Object.keys(CITIES)) {
+      const city = await linkedCity(kind, province);
+      assert.equal(city.reason, "no_option_match", `${kind} ${province}: ${JSON.stringify(city)}`);
+      const { reports, report } = await fill({ ...genericSelects({ province: { ok: true, observed: { controlKind: "custom-select" } }, city }),
+        fields: [named("province", "籍贯"), named("city", "当前城市")],
+        respond: message => ({ success: true, matches: message.formFields.map((field, index) => ({ fieldId: field.fieldId, value: [province, "示例市"][index] })),
+          diagnostics: diag({ ruleMatches: 2, aiFields: 0, promptBytes: 0 }) }) });
+      assert.equal(reports.length, 1);
+      const data = {}; const bodies = [];
+      const worker = createFeedback({ storage: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) },
+        version: "0.4.5", os: "Windows / Chrome 140", install: () => "normal",
+        fetchImpl: async (_url, request) => { bodies.push(JSON.parse(request.body).user_description); return new Response('{"ok":true,"id":"x"}'); } });
+      await worker.setConsent(true);
+      await worker.automatic(reports[0], "jobs.example.test");
+      assert.equal(bodies.length, 1);
+      const line = text => text.split("\n").find(item => item.startsWith("- 当前城市: "));
+      // The panel's block, the report the page hands the worker, and what the worker sends.
+      lines.push(line(report), line(reports[0].diagnostics), line(bodies[0]));
+    }
+    assert.deepEqual([...new Set(lines)], [`- 当前城市: input[text] opened=${opened} options=1+ reason=no_option_match`], kind);
+  }
 });

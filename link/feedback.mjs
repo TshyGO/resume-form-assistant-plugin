@@ -5,7 +5,7 @@ export const STORAGE_KEY = 'feedbackStateV1';
 // The explanation the user agreed to. Raise it when automatic reports start carrying something
 // the notice does not describe: earlier grants then count as undecided and the user is asked again.
 // 2 (#301): install type, how a fill was started and whether the page had focus, the AI tier,
-// popup counts for unfilled selects, and a report when the AI request fails.
+// whether an unfilled select's popup opened and had any option, and a report when the AI request fails.
 export const CONSENT_VERSION = 2;
 // chrome.management.getSelf().installType; getSelf needs no "management" permission.
 const INSTALL_TYPES = ['normal', 'development', 'sideload', 'admin', 'other'];
@@ -136,7 +136,8 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
         state.anonymousId = body.anonymous_id; sent.push(time); state.recent[hash] = time;
         await save(state); return body;
       });
-      return payload ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
+      // Turned off and on again while the report was being written down: it still belongs to the earlier choice.
+      return payload && choice === choices ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
     },
     async manual(input, host = '', previewed = null) {
       const payload = await locked(async () => {

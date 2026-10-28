@@ -85,7 +85,7 @@
   const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "generic", "other"];
   // How a fill was started (#301): the side panel's 一键填写, 深度分析本页, a 本站配方 run, AI 辅助新增条目.
   const ENTRIES = ["panel", "deep", "recipe", "assist", "other"];
-  // What an unfilled select's popup showed: a list (by role) with its option count, a calendar, or nothing opened at all.
+  // What an unfilled select's popup showed: a list (by role) and whether it had any option, a calendar, or nothing opened at all.
   const LISTS = ["listbox", "tree", "menu", "component"];
   const OPENED = [...LISTS, "calendar", "none"];
   // The job-saving flow (#301, manual feedback only): where company and title came from, how it ended,
@@ -122,7 +122,7 @@
   const JOB_KEYS = /^job_/;
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
-    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:200|1\\d\\d|[1-9]?\\d)`
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
   function routeSegment(text) {
@@ -333,10 +333,11 @@
         if (c.readOnly) tokens.push("readonly");
         if (c.picker) tokens.push(`picker=${c.picker}`);
         if (c.library) tokens.push(`lib=${c.library}`);
-        // The select's popup (#301): never opened, or opened with this many options (counts only).
+        // The select's popup (#301): never opened, or opened, and whether its list had any option. Never how
+        // many: a lower select's list is the one the page loaded for the upper choice made from the resume.
         const o = item?.observed || {};
         if (OPENED.includes(o.opened)) tokens.push(`opened=${o.opened}`);
-        if (LISTS.includes(o.opened) && Number.isInteger(o.options) && o.options >= 0) tokens.push(`options=${Math.min(200, o.options)}`);
+        if (LISTS.includes(o.opened) && typeof o.hasOptions === "boolean") tokens.push(`options=${o.hasOptions ? "1+" : "0"}`);
         if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
         lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
       }

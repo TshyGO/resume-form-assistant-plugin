@@ -226,7 +226,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
       ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } },
     genericCustom: big,
-    unfilledControls: [{ label: "参加工作时间", reasonCode: "framework_state_unsynced", observed: { opened: "component", options: 200 },
+    unfilledControls: [{ label: "参加工作时间", reasonCode: "framework_state_unsynced", observed: { opened: "component", hasOptions: true },
       control: { tag: "input", type: "checkbox", role: "checkbox", popup: "listbox", readOnly: true, picker: "element", library: "element" } }] });
   const drops = /^drop_reasons: (.*)$/m.exec(report);
   assert.ok(drops && drops[1].split(",").length === 17, report);
@@ -234,7 +234,7 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
   assert.match(report, /^offer_skipped: ambiguous=999999,entry=999999$/m);
   assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}generic=999999,other=999999$/m);
   assert.match(report, /^custom_controls: 1999998$/m);
-  assert.match(report, /^- 参加工作时间: input\[checkbox\] role=checkbox popup=listbox readonly picker=element lib=element opened=component options=200 reason=framework_state_unsynced$/m);
+  assert.match(report, /^- 参加工作时间: input\[checkbox\] role=checkbox popup=listbox readonly picker=element lib=element opened=component options=1\+ reason=framework_state_unsynced$/m);
   assert.match(report, /^url_path: \/campus\/application\/personalInformation\/education\/experience\/attachment\/preview\/confirm\/:more$/m);
 });
 

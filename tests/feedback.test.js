@@ -360,7 +360,7 @@ test('an install or update that leaves the choice open shows it right away; a ma
   }
 });
 
-// #301：告知版本升到 2（自动报告多了安装方式、填写入口和网页焦点、AI 档位、下拉弹层计数，AI 请求失败也上报）。
+// #301：告知版本升到 2（自动报告多了安装方式、填写入口和网页焦点、AI 档位、下拉弹层有没有选项，AI 请求失败也上报）。
 test('a grant given under the version-1 notice is asked again: nothing is sent until the user agrees; an opt-out stays', async () => {
   const { CONSENT_VERSION, installFeedback } = await import('../link/feedback.mjs');
   assert.equal(CONSENT_VERSION, 2);
@@ -456,6 +456,37 @@ test('an error from before a choice is dropped, even while the install type is s
   await f.service.setConsent(true);
   assert.equal((await f.service.automatic(crash, 'c.liepin.com')).ok, true);
   assert.match(f.calls[0].payload.user_description, /^install: normal$/m);
+});
+
+test('turning reports off and on while a report is being written down drops that report', async () => {
+  // The report has passed its choice check and is saving its dedup record. Off and on again leaves
+  // reports on, but the report still belongs to the choice before them.
+  const { createFeedback } = await import('../link/feedback.mjs');
+  const data = {}; const calls = [];
+  let gate = null;
+  const service = createFeedback({
+    storage: { get: async () => structuredClone(data), set: async value => {
+      const held = gate; gate = null;
+      if (held) { held.started(); await held.released; }
+      Object.assign(data, structuredClone(value));
+    } },
+    now: () => 1800000000000, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 200, install: () => 'normal',
+    fetchImpl: async (_url, request) => { calls.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); }
+  });
+  await service.setConsent(true);
+  await service.ready();
+  let release;
+  const saving = new Promise(started => { gate = { started, released: new Promise(resolve => { release = resolve; }) }; });
+  const report = service.automatic(crash, 'c.liepin.com');
+  await saving;
+  const off = service.setConsent(false); const on = service.setConsent(true);
+  release();
+  assert.equal((await report).reason, 'suppressed');
+  assert.deepEqual(await Promise.all([off, on]), [{ consent: false, decided: true }, { consent: true, decided: true }]);
+  assert.equal(calls.length, 0);
+  // Reports after the choice are sent as usual.
+  assert.equal((await service.automatic({ ...crash, stack: 'content.js:8:1' }, 'c.liepin.com')).ok, true);
+  assert.equal(calls.length, 1);
 });
 
 test('the router reads the install type from chrome.management.getSelf, and goes on without it', async () => {

@@ -649,7 +649,7 @@
     let popup = opened.value.popup; ctx.popup = opened.value.layer || popup;
     info.popup = popup;
     const role = popup.getAttribute('role');
-    // optionCount（#301 诊断）在下面读第一层列表时才写，见那里的说明；没读到列表就不写。
+    // hasOptions（#301 诊断）在下面读第一层列表时才写，见那里的说明；没读到列表就不写。
     ctx.observed = { library: info.library, popupRole: ['listbox', 'tree', 'menu'].includes(role) ? role : 'component' };
     const multiplePopup = () => popup.getAttribute('aria-multiselectable') === 'true'
       || Boolean(popup.querySelector('[aria-multiselectable="true"]'))
@@ -749,9 +749,10 @@
       if (ready.reason === 'verification_timeout' && (generic && (searchable && !searchDone || lastSeen) || typedAntd && lastSeen)) ready = { value: readOptions(level) };
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
-      // 诊断里的项数（#301）只数网页自己先给出的第一层。插件输入过要找的值（含点开前先输入的）、或点了上一级之后，
-      // 列表有几项由简历的值决定（选的省下面有几个市、含这个校名的有几所），数了会带出简历内容。
-      if (level === 0 && !searchDone) ctx.observed.optionCount = Math.min(200, list.length);
+      // 诊断（#301）只记列表里有没有选项，不记项数：省、市分成两个下拉时，市的第一层就是网页按简历里的省加载的
+      // （江苏 13 个市、宁夏 5 个）。也只看网页自己先给出的第一层：插件输入过要找的值（含点开前先输入的）、或点了上一级之后，
+      // 列表由简历的值决定。
+      if (level === 0 && !searchDone) ctx.observed.hasOptions = list.length > 0;
       let found = match(list, desired[level], h.helpers, info.freeText);
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
