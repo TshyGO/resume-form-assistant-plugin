@@ -431,6 +431,22 @@ test("unfilled custom selects tell 'never opened', 'opened empty' and 'opened wi
   assert.equal(lineOf(block, "ai_tier"), "-", "the rules matched everything; the AI was not called");
 });
 
+test("a select that stops before the plugin opens it says nothing about its popup", async () => {
+  // Disabled or not supported: the plugin never clicked it, so there is no "never opened" to report.
+  const stubs = genericSelects({
+    gender: { ok: false, reason: "control_disabled", observed: { controlKind: "custom-select", connected: true, rolledBack: false } },
+    degree: { ok: false, reason: "unsupported_control", observed: { controlKind: "custom-select", connected: true, rolledBack: false } },
+    school: { ok: false, reason: "cascade_timeout", observed: { controlKind: "cascader", connected: true, rolledBack: false } }
+  });
+  const { reports } = await fill({ ...stubs, fields: [named("gender", "性别"), named("degree", "学历"), named("school", "学校")],
+    respond: message => ({ success: true, matches: message.formFields.map((field, index) => ({ fieldId: field.fieldId, value: ["女", "本科", "示例大学"][index] })),
+      diagnostics: diag({ ruleMatches: 3, aiFields: 0, promptBytes: 0 }) }) });
+  const block = reports[0].diagnostics;
+  assert.match(block, /^- 性别: input\[text\] reason=control_disabled$/m);
+  assert.match(block, /^- 学历: input\[text\] reason=unsupported_control$/m);
+  assert.match(block, /^- 学校: input\[text\] opened=none reason=cascade_timeout$/m, "a cascader that never opened did try");
+});
+
 test("a custom control the diagnostics cannot describe is left out of the count, and the fill goes on", async () => {
   const stubs = genericSelects({ degree: { ok: true, observed: { controlKind: "custom-select" } } });
   stubs.customControls.describe = () => { throw new TypeError("describe failed on this page"); };
@@ -440,6 +456,15 @@ test("a custom control the diagnostics cannot describe is left out of the count,
   assert.equal(result.filledCount, 1);
   assert.equal(result.outcome, "success");
   assert.doesNotMatch(lineOf(report, "custom_libraries") || "", /generic/);
+  // One control that cannot be described leaves the others counted.
+  const some = genericSelects({ degree: { ok: true, observed: { controlKind: "custom-select" } }, school: { ok: true, observed: { controlKind: "custom-select" } } });
+  const describe = some.customControls.describe;
+  some.customControls.describe = entry => { if (entry.element.name === "degree") throw new TypeError("describe failed"); return describe(entry); };
+  const counted = await fill({ ...some, fields: [named("degree", "学历"), named("school", "学校")],
+    respond: message => ({ success: true, matches: message.formFields.map((field, index) => ({ fieldId: field.fieldId, value: ["本科", "示例大学"][index] })),
+      diagnostics: diag({ ruleMatches: 2, aiFields: 0, promptBytes: 0 }) }) });
+  assert.equal(counted.result.filledCount, 2);
+  assert.equal(lineOf(counted.report, "custom_libraries"), "generic=1");
 });
 
 test("a fill on a page full of personal data leaves none of it in the report, the panel block or the sent payload", async () => {

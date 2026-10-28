@@ -2460,7 +2460,7 @@
         try {
           genericRoots = fields
             .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
-            .map(field => self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)))
+            .map(field => { try { return self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)); } catch { return null; } })
             .filter(info => info?.library === "generic").map(info => info.root);
         } catch { genericRoots = []; }
         genericCustom = withFillProbe(api => api.uncountedControls?.(genericRoots), 0);
@@ -4421,12 +4421,15 @@
   // #301 下拉、级联和日历最近一次操作时弹层的样子：没弹出，或弹出的是哪类、里面有没有选项（只有固定类别和是否）。
   // 记下是哪一次填写会话操作的，没填上的字段只带本次填写里的记录。
   const controlPopups = new WeakMap();
-  function popupObserved(observed) {
+  // 没弹出（opened=none）只在插件点开过、弹层却没出来时才记（没有发现选项、级联等待超时）；
+  // 被禁用、不支持这类还没去点开就停下的，不说弹层的事。
+  function popupObserved(observed, reason) {
     const role = ["listbox", "tree", "menu", "component", "calendar"].includes(observed?.popupRole) ? observed.popupRole : "";
     if (role === "calendar") return { opened: "calendar" };
     // 有没有选项只在网页自己先给出的第一层列表读到时才有（custom-controls.js）；没有就不报，不当成没有选项。
     if (role) return { opened: role, ...(typeof observed.hasOptions === "boolean" ? { hasOptions: observed.hasOptions } : {}) };
-    return ["custom-select", "cascader"].includes(observed?.controlKind) ? { opened: "none" } : null;
+    return ["custom-select", "cascader"].includes(observed?.controlKind) && ["options_not_rendered", "cascade_timeout"].includes(reason)
+      ? { opened: "none" } : null;
   }
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
     const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
@@ -4437,7 +4440,7 @@
       // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
       if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
       else dayDefaultedControls.delete(control);
-      const popup = popupObserved(result.observed);
+      const popup = popupObserved(result.observed, result.reason);
       if (popup) controlPopups.set(control, { ...popup, session: fillSession });
       else controlPopups.delete(control);
     }
