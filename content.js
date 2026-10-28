@@ -2614,12 +2614,14 @@
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
-        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回、控件已不在的记复核读到的原因。
+        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回的记复核读到的原因，
+        // 字段已被页面替换的记「字段已被页面替换」。
         // 只读：不写值、不聚焦，也不滚动页面。
         for (const item of invalidControls) {
-          const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element) : null;
+          const current = isFieldBindingCurrent(item.element);
+          const checked = current ? controlOperator?.check(item.element) : null;
           if (!checked?.ok) {
-            noteControlFailure(item.element, item.fieldMeta, item.value, checked?.reason || 'validation_not_cleared');
+            noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
             continue;
           }
           const control = item.element.kind === 'element' ? item.element.element : item.element;
