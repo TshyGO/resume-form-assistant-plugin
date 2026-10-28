@@ -12,7 +12,8 @@
     locked: "input[readonly]:not([type=hidden]), input[disabled]:not([type=hidden]), textarea[readonly], textarea[disabled], select[disabled]",
     all: "*"
   };
-  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
+  // 「编辑 / Edit」这类中英双语按钮去掉符号后是「编辑Edit」（#301）。只写英文的 Edit、Modify 不算：百科、代码托管页上到处都是。
+  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料|去填写|立即填写|编辑Edit|修改Modify)$/;
   // 页面元素和各层 Shadow DOM 里的元素合计最多看这么多个：只读属性，很快。
   const MAX_WALK = 20000;
   const MAX_TEXT_NODES = 50000;
@@ -201,16 +202,24 @@
     return { type: "unknown", reason: "none" };
   }
 
+  // 页面上有没有能说明扫不到字段的线索：「编辑」按钮、只读或禁用的输入框、框架、自定义控件、Shadow DOM。
+  // 网申页上一条都没有，多半还在加载，或要先点开某一块（#301）。
+  function hasClues(probe) {
+    return Boolean(probe && (probe.editButtons > 0 || probe.locked > 0 || probe.frames?.crossOrigin > 0
+      || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || probe.shadowHosts > 0));
+  }
+
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
-  // notForm：pageType() 判断这不是网申填写页。
+  // notForm：pageType() 判断这不是网申填写页。form：判断是网申填写页；没有别的线索时多半还在加载，或要先点开某一块（#301）。
   // deepAvailable（#224）：侧栏有「深度分析本页」时，同源框架和自定义控件改指向它（它读得到）；跨域框架照旧。
-  function emptyPageHint(probe, { notForm = false, deepAvailable = false } = {}) {
+  // 不让用户去点「立即申请」「投递」这类按钮：在招聘网站上点一下可能就投出去了。
+  function emptyPageHint(probe, { notForm = false, form = false, deepAvailable = false } = {}) {
     if (!probe) return "";
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
     if (notForm) {
       // 跨域框架不算表单的证据，但也可能就是申请表：两种可能都告诉用户。
-      return `这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。${probe.frames?.crossOrigin > 0
+      return `请打开申请表后再试。${probe.frames?.crossOrigin > 0
         ? "如果申请表就在这个页面的内嵌框架里，插件暂时读不到。" : ""}`;
     }
     if (probe.frames.crossOrigin > 0 || probe.frames.frameInputs > 0) {
@@ -221,7 +230,7 @@
       if (deepAvailable) return "这个网页用的输入控件一键填写暂时识别不了。可以试试下方的「深度分析本页」。";
       return "这个网页用的输入控件插件暂时识别不了。可以把侧栏的「填写诊断」复制给我们。";
     }
-    return "";
+    return form ? "请等网页加载完，或先点开要填写的部分，再试一次。" : "";
   }
 
   function formatControl(control) {
@@ -256,7 +265,7 @@
     return lines;
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, emptyPageHint, formatReport };
+  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, hasClues, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

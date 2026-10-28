@@ -237,6 +237,8 @@ function loadHighlightHelpers(options = {}) {
     // 上面全局 setTimeout 仍是 Node 真实的，它返回的对象要交给真实的 clearTimeout。
     clearTimeout: id => (typeof id === "number" ? window.clearTimeout(id) : clearTimeout(id)),
     performance: options.performance || performance,
+    // 默认没有 MutationObserver：等页面变化的地方立即返回，测试不会卡住。要测等待时传一个替身进来。
+    MutationObserver: options.MutationObserver,
     CSS: { escape: (value) => String(value) },
     Event: class {},
     FocusEvent: class {},

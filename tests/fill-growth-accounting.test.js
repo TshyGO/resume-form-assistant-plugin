@@ -9,7 +9,7 @@ const aiHelpers = require("../ai-helpers.js");
 
 const APP = "11111111-1111-4111-8111-111111111111";
 const COMPANY = "金发科技股份有限公司";
-const TIMEOUT = "AI 服务商等了 120 秒没有返回，请稍后重试。";
+const TIMEOUT = "日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。";
 const STOPPED = "已停止后续填写，请核对网页中已填写的内容。";
 
 function control(element, overrides = {}) {

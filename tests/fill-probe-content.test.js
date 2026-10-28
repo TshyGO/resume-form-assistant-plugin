@@ -9,7 +9,9 @@ const LIEPIN_VIEW = { host: "c.liepin.com", frames: { total: 0, crossOrigin: 0, 
   custom: { total: 0, byLibrary: {} }, editButtons: 3, locked: 0, shadowHosts: 0 };
 const EDIT_HINT = "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
 const NO_CONTEXT = "简历里没有能对应这些网页字段的资料，已跳过 AI 填写。";
-const EMPTY_PAGE = "当前页面没有可填写的表单字段。";
+const EMPTY_PAGE = "没找到可填写的输入框。";
+// #301：网申页上没有别的线索时（多半还在加载）的提示。
+const LOADING_HINT = "请等网页加载完，或先点开要填写的部分，再试一次。";
 const boom = () => { throw new Error("boom"); };
 const THROWING = { ...realProbe, probePage: boom, describeControl: boom, formatReport: boom, emptyPageHint: boom };
 const VIEW_PROBE = { ...realProbe, probePage: () => LIEPIN_VIEW };
@@ -41,7 +43,7 @@ test("an empty page with an edit button tells the user to click 编辑 first and
   });
   helpers.setCurrentStore(STORE);
   const result = await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
-  assert.equal(result.error, `当前页面没有可填写的表单字段。${EDIT_HINT}`);
+  assert.equal(result.error, `没找到可填写的输入框。${EDIT_HINT}`);
   assert.equal(sent.filter(message => message.type === "AI_FILL").length, 0);
 });
 
@@ -125,10 +127,10 @@ test("diagnostics list the host and the structure of a field the page refused, n
 });
 
 // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上。
-async function runOnViewPage(response, { fillProbe = VIEW_PROBE, fields = 1, refuse = false, assisted = null } = {}) {
+async function runOnViewPage(response, { fillProbe = VIEW_PROBE, fields = 1, refuse = false, assisted = null, feedback } = {}) {
   const formElements = [];
   const status = { textContent: "", className: "" };
-  const { helpers, HTMLInputElement, timers } = loadHighlightHelpers({ formElements, fillProbe, sendMessage: async () => response });
+  const { helpers, HTMLInputElement, timers } = loadHighlightHelpers({ formElements, fillProbe, feedback, sendMessage: async () => response });
   const inputs = Array.from({ length: fields }, () => {
     const input = new HTMLInputElement();
     input.name = "keyword";
@@ -189,7 +191,7 @@ test("the edit hint is left out when the page has no edit button or something wa
   assert.equal(noProbe.status.textContent, "已填写 0 个字段。");
 });
 
-test("a status that carries a hint stays on screen, while other failures still fade after 2.4 seconds", async () => {
+test("a status that carries a hint or reports zero fields stays on screen, while other failures still fade after 2.4 seconds", async () => {
   const viewEmpty = await runOnViewPage({ success: true, matches: [] }, { fields: 0 });
   assert.equal(viewEmpty.result.error, `${EMPTY_PAGE}${EDIT_HINT}`);
   assert.equal(fadingTimers(viewEmpty.timers), 0);
@@ -199,9 +201,14 @@ test("a status that carries a hint stays on screen, while other failures still f
   // 没有提示的失败照旧几秒后消失。
   const auth = await runOnViewPage({ success: false, error: "接口认证失败", matches: [], diagnostics: { errorCode: "auth" } });
   assert.equal(fadingTimers(auth.timers), 1);
+  // 网申页（/apply）上什么线索都没有：提示等网页加载完或先点开，也留在屏幕上（#301）。
   const plainEmpty = await runOnViewPage({ success: true, matches: [] }, { fields: 0, fillProbe: { ...VIEW_PROBE, probePage: () => ({ ...LIEPIN_VIEW, editButtons: 0 }) } });
-  assert.equal(plainEmpty.result.error, EMPTY_PAGE);
-  assert.equal(fadingTimers(plainEmpty.timers), 1);
+  assert.equal(plainEmpty.result.error, `${EMPTY_PAGE}${LOADING_HINT}`);
+  assert.equal(fadingTimers(plainEmpty.timers), 0);
+  // 探测出错、没有提示的零字段也留在屏幕上。
+  const unprobed = await runOnViewPage({ success: true, matches: [] }, { fields: 0, fillProbe: THROWING });
+  assert.equal(unprobed.result.error, EMPTY_PAGE);
+  assert.equal(fadingTimers(unprobed.timers), 0);
 });
 
 test("scanned but none filled on a view page also stays on screen", async () => {
@@ -212,13 +219,36 @@ test("scanned but none filled on a view page also stays on screen", async () => 
   assert.equal(fadingTimers(plain.timers), 1);
 });
 
-test("a view page where the one matched field refuses its value keeps the unfilled note and the AI warning before the hint", async () => {
+// #301：匹配到了却写不上，问题在控件，不在查看状态：不再提示先点「编辑」。
+test("a view page where the one matched field refuses its value keeps the unfilled note and the AI warning, without the click-编辑 hint", async () => {
   const { status, result } = await runOnViewPage({ success: true, warning: "某警告。", matches: [{ fieldId: "field-0", value: "测试用户" }] }, { refuse: true });
-  assert.equal(status.textContent,
-    "已填写 0 个字段。1 项没填上：keyword（值没有写上），请手动补上。某警告。这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。");
+  assert.equal(status.textContent, "本地已填写 0 项；1 项没填上：keyword（值没有写上），请手动补上。某警告。");
   assert.match(status.className, /is-error/);
   assert.equal(result.filledCount, 0);
   assert.equal(result.outcome, "partial");
+});
+
+// #299：扫到 22 个字段，AI 等到超时，本地匹配的两项写不上。页面上有「编辑」按钮也不是查看状态。
+test("an AI timeout with local matches that would not stick says nothing about 编辑 and does not report an edit hint", async () => {
+  const timeout = "日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。";
+  const calls = [];
+  const feedback = { ...require("../feedback-core.js") };
+  const fillFailure = feedback.fillFailure;
+  feedback.fillFailure = input => { calls.push(input); return fillFailure(input); };
+  const { status, result } = await runOnViewPage({ success: true, warning: timeout, error: timeout,
+    matches: [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "测试用户" }],
+    diagnostics: { errorCode: "timeout", ruleMatches: 2, aiFields: 20 } },
+  { fields: 22, refuse: true, fillProbe: { ...realProbe, probePage: () => ({ ...LIEPIN_VIEW, editButtons: 10 }) }, feedback });
+  assert.equal(result.filledCount, 0);
+  assert.doesNotMatch(status.textContent, /编辑/);
+  assert.match(status.textContent, /等了 120 秒/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].editHint, false);
+  // 照样按没填上的字段上报。
+  assert.equal(fillFailure(calls[0]), "fill_failed");
+  // AI 超时、一项也没匹配上：同样不提「编辑」。
+  const failed = await runOnViewPage({ success: false, error: timeout, matches: [], diagnostics: { errorCode: "timeout" } });
+  assert.equal(failed.result.error, timeout);
 });
 
 test("an assisted run never shows the click-编辑 hint, however it ends", async () => {
