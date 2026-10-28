@@ -170,6 +170,10 @@ test("evidence preview escapes original text and requires an explicit associatio
   const h = mountInbox(invoke); await h.refresh();
   fireEvent.click(document.querySelector("[data-evidence]")!);
   await waitFor(() => expect(document.getElementById("inbox-application")).toBeTruthy());
+  const toolbar = document.querySelector(".evidence-reader-actions")!;
+  expect([...toolbar.querySelectorAll("button")].map(button => button.dataset.act)).toEqual(["toggle-organizer", "toggle-reader", "recycle"]);
+  expect(within(toolbar as HTMLElement).getByRole("button", {name:"展开阅读"}).getAttribute("title")).toBe("展开阅读");
+  expect(within(toolbar as HTMLElement).getByRole("button", {name:"移到回收站"}).querySelector('svg[aria-hidden="true"]')).toBeTruthy();
   expect(document.querySelector(".evidence-workspace")).toBeTruthy();
   expect(document.getElementById("inbox-organizer")!.hidden).toBe(true);
   fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
@@ -181,7 +185,8 @@ test("evidence preview escapes original text and requires an explicit associatio
   fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
   fireEvent.click(document.querySelector('[data-act="toggle-reader"]')!);
   expect(document.getElementById("inbox-shell")!.classList.contains("is-reader-expanded")).toBe(true);
-  expect(document.querySelector('[data-act="toggle-reader"]')!.textContent).toContain("恢复双栏");
+  expect(document.querySelector('[data-act="toggle-reader"]')!.getAttribute("aria-label")).toBe("恢复双栏");
+  expect(document.querySelector('[data-act="toggle-reader"]')!.getAttribute("aria-pressed")).toBe("true");
   expect(document.querySelector(".evidence-body img")).toBeNull();
   expect(document.querySelector(".evidence-body")!.textContent).toContain("<img");
   fireEvent.click(document.querySelector('[data-act="associate"]')!);

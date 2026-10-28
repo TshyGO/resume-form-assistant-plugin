@@ -23,3 +23,5 @@ Font 14px/1.6 Segoe UI, PingFang SC, Microsoft YaHei. White cards on #f5f6f8; da
 Mail attachments should use compact full-width rows and a 960px-wide native dialog. Left attachment list 220px, right PDF/image viewer. At narrow viewport stack list selector on top. File operations in top bar, page/zoom toolbar below. No logo inside dialog. Use inline line icons (same strokes as app). All text Chinese.
 
 Notification recycle uses the existing inbox segmented status tabs (待确认 / 待关联 / 回收站), reader and list. Move is a neutral action beside organizer; restore is a restrained green primary action. Preserve original and attachments, explain recovery near the body. No permanent-delete action.
+
+Notification toolbar order: organizer (tag icon + text), reading expand/collapse icon, then recycle icon at the right. Icon-only actions retain title, accessible name and focus. Keep AI at the top of the organizer so it is discoverable; opening the panel never starts an analysis.

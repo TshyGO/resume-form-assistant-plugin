@@ -779,6 +779,9 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; white-space: nowrap;
 .evidence-preview-heading h2 { font-size: 17px; }
 .evidence-reader-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .evidence-reader-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; padding: 5px 10px; border-radius: 8px; font-size: 12.5px; }
+.evidence-reader-actions .evidence-icon-button { flex: none; justify-content: center; width: 34px; padding: 7px; }
+.evidence-reader-actions .evidence-icon-button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-pale); color: var(--accent-strong); }
+.evidence-reader-actions .evidence-recycle-button:hover:not(:disabled) { border-color: var(--danger); background: #fff5f5; color: var(--danger); }
 .evidence-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); position: relative; }
 .evidence-workspace.is-organizer-open { grid-template-columns: minmax(0, 1fr) 320px; }
 .evidence-reader-scroll { min-width: 0; min-height: 0; overflow: auto; }

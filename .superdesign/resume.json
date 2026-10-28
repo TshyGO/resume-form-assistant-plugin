@@ -11,7 +11,7 @@
         "desktop/src/react/SettingsDialog.tsx"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "20a23e6381c77d6df9dc2d94ca8d47c6136ccc554d831eb04f2cfc5594f01668",
+        ".superdesign/design-system.md": "0ad93814430b990d5e76a9cb108e21a40d25132cd467cf0fdae7f1c23d304e45",
         "desktop/src/react/SettingsDialog.tsx": "14117a931859a0e76837ccee0902e82c88603663fb17b07a6569f8ccec442dc9"
       },
       "drafts": {
@@ -20,7 +20,7 @@
           "visualDirection": "existing desktop tokens, native modal with attachment list and document preview"
         }
       },
-      "updatedAt": "2026-10-28T12:50:01.132968+00:00"
+      "updatedAt": "2026-10-28T13:29:29.749766+00:00"
     },
     "sidepanel-mail-column": {
       "targetKind": "existing-ui",
@@ -61,20 +61,20 @@
         "desktop/src/mailbox-ui.ts"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "20a23e6381c77d6df9dc2d94ca8d47c6136ccc554d831eb04f2cfc5594f01668",
+        ".superdesign/design-system.md": "0ad93814430b990d5e76a9cb108e21a40d25132cd467cf0fdae7f1c23d304e45",
         "desktop/index.html": "410ba6c3805882a2c485fd0d5299e0da7eb0c4441eccf22bacec08b62e0a730f",
-        "desktop/src/styles.css": "e0515dbf101867a5dd0c2f166cf37870fb11e0c705f2af20e0075c7f542b9a8b",
-        "desktop/src/inbox-ui.ts": "276fcc163843c5895e27189b8ea8adf67f63a6741e7e40df8edf95f06bb6008b",
+        "desktop/src/styles.css": "54f828ca824649bd232e7b37fad9469109416819db73377117d785112a90f785",
+        "desktop/src/inbox-ui.ts": "07f8ca5a1dfc0b215e110ae7eaef6ce15b18b7ccd571c0898f3be8e318dffb1b",
         "desktop/src/mailbox-ui.ts": "5d59e13763f5e824edadfd8930c8d741a9c37c26d89e43094f59bae3e7226ad0"
       },
       "drafts": {
         "8f1f1727-bf56-480c-b864-b430ea6a0aa7": {
           "title": "招聘通知 · 可恢复回收站",
-          "currentVersion": 1,
-          "visualDirection": "Existing inbox reader, three status tabs, recoverable recycle action and green restore button"
+          "currentVersion": 2,
+          "visualDirection": "Existing inbox reader, organizer with text, expand/collapse icon, recycle icon last; AI organizer first, recovery preserved"
         }
       },
-      "updatedAt": "2026-10-28T12:50:01.133903+00:00"
+      "updatedAt": "2026-10-28T13:29:29.749459+00:00"
     }
   }
 }

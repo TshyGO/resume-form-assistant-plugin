@@ -62,6 +62,9 @@ const ICON = {
   lock: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   link: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   tag: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/></svg>',
+  expand: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg>',
+  collapse: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h5V3m13 5h-5V3M8 21v-5H3m13 5v-5h5"/></svg>',
+  trash: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg>',
 };
 
 function kindIcon(kind: string | undefined) {
@@ -370,6 +373,8 @@ export function mountInbox(
     clearAiPanel();
     const item = data;
     const recycled = Boolean(item.recycled || listMode === "recycled");
+    const expanded = shell?.classList.contains("is-reader-expanded") ?? false;
+    const readerLabel = expanded ? "恢复双栏" : "展开阅读";
     const duplicate = duplicateNote(item);
     // 正文经过转义写入：邮件里的 <script> 只会作为字面文本出现。
     const body = item.bodyExtract
@@ -395,8 +400,9 @@ export function mountInbox(
           </div>
           <div class="evidence-reader-actions">
             ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开</button>` : ""}
-            ${recycled ? '<button type="button" data-act="restore" class="primary">恢复通知</button>' : `<button type="button" data-act="toggle-organizer" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}整理与关联</button><button type="button" data-act="recycle">移到回收站</button>`}
-            <button type="button" data-act="toggle-reader" aria-pressed="false">展开阅读</button>
+            ${recycled ? '<button type="button" data-act="restore" class="primary">恢复通知</button>' : `<button type="button" data-act="toggle-organizer" title="整理与关联（含 AI 整理）" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}<span>整理与关联</span></button>`}
+            <button type="button" class="evidence-icon-button" data-act="toggle-reader" aria-pressed="${expanded}" aria-label="${readerLabel}" title="${readerLabel}">${expanded ? ICON.collapse : ICON.expand}</button>
+            ${recycled ? '' : `<button type="button" class="evidence-icon-button evidence-recycle-button" data-act="recycle" aria-label="移到回收站" title="移到回收站">${ICON.trash}</button>`}
           </div>
         </header>
         <div class="evidence-workspace">
@@ -414,6 +420,10 @@ export function mountInbox(
             </section>
           </div>
           <aside id="inbox-organizer" class="evidence-organizer" aria-labelledby="evidence-organize-heading" hidden>
+            <section class="evidence-section evidence-ai-section" aria-labelledby="evidence-ai-heading">
+              <h3 id="evidence-ai-heading">AI 整理<span class="section-tag">可选</span></h3>
+              <div id="inbox-ai"></div>
+            </section>
             <section class="evidence-section evidence-organize">
               <h3 id="evidence-organize-heading">手动整理</h3>
               <p class="evidence-section-hint">关联和分类由你确认，不会改变申请阶段。</p>
@@ -462,10 +472,6 @@ export function mountInbox(
                   </div>
                 </div>
               </div>
-            </section>
-            <section class="evidence-section evidence-ai-section" aria-labelledby="evidence-ai-heading">
-              <h3 id="evidence-ai-heading">AI 整理<span class="section-tag">可选</span></h3>
-              <div id="inbox-ai"></div>
             </section>
           </aside>
         </div>
@@ -523,7 +529,9 @@ export function mountInbox(
         organizer.hidden = !organizer.hidden;
         organizer.closest(".evidence-workspace")?.classList.toggle("is-organizer-open", !organizer.hidden);
         button.setAttribute("aria-expanded", String(!organizer.hidden));
-        button.textContent = organizer.hidden ? "整理与关联" : "收起整理";
+        const label = organizer.hidden ? "整理与关联" : "收起整理";
+        button.innerHTML = `${ICON.tag}<span>${label}</span>`;
+        button.title = organizer.hidden ? "整理与关联（含 AI 整理）" : "收起整理";
         return;
       }
       if (action === "toggle-reader") {
@@ -532,7 +540,10 @@ export function mountInbox(
         const button = preview.querySelector<HTMLButtonElement>('[data-act="toggle-reader"]');
         if (button) {
           button.setAttribute("aria-pressed", String(expanded));
-          button.textContent = expanded ? "恢复双栏" : "展开阅读";
+          const label = expanded ? "恢复双栏" : "展开阅读";
+          button.setAttribute("aria-label", label);
+          button.title = label;
+          button.innerHTML = expanded ? ICON.collapse : ICON.expand;
         }
         return;
       }
