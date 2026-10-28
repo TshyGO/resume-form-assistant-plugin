@@ -2614,11 +2614,12 @@
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
-        // 当时还提示无效的：提示已经消了就算填上，否则照旧记「页面仍提示无效」。只读：不写值、不聚焦，也不滚动页面。
+        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回、控件已不在的记复核读到的原因。
+        // 只读：不写值、不聚焦，也不滚动页面。
         for (const item of invalidControls) {
           const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element) : null;
           if (!checked?.ok) {
-            noteControlFailure(item.element, item.fieldMeta, item.value, 'validation_not_cleared');
+            noteControlFailure(item.element, item.fieldMeta, item.value, checked?.reason || 'validation_not_cleared');
             continue;
           }
           const control = item.element.kind === 'element' ? item.element.element : item.element;

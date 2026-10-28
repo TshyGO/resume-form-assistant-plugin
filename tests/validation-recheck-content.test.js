@@ -5,8 +5,8 @@ const assert = require("node:assert/strict");
 const { loadHighlightHelpers, fakeFieldScan } = require("./helpers/content-harness");
 
 // 开始时间、结束时间两道题。start 是开始时间这一项的填写结果；结束时间填上后，页面清掉开始时间上的提示。
-// dates：两道题都是日期控件（北森的开始 / 结束时间）。
-async function fillPair({ start, dates = false }) {
+// dates：两道题都是日期控件（北森的开始 / 结束时间）。startAtEnd：结束前复核开始时间时读到的结果。
+async function fillPair({ start, dates = false, startAtEnd = { ok: true, reason: "" } }) {
   const formElements = [], checked = [];
   let ended = false;
   const label = (target) => target.element.getAttribute("data-label");
@@ -19,7 +19,8 @@ async function fillPair({ start, dates = false }) {
     },
     check: (target) => {
       checked.push(label(target));
-      return ended ? { ok: true, reason: "" } : { ok: false, reason: "validation_not_cleared" };
+      if (!ended) return { ok: false, reason: "validation_not_cleared" };
+      return label(target) === "开始时间" ? startAtEnd : { ok: true, reason: "" };
     }
   }) };
   const fieldScan = fakeFieldScan();
@@ -62,4 +63,19 @@ test("a field that failed for another reason is not looked at again, even if it 
   assert.equal(result.unfilledCount, 1);
   assert.equal(status, "已填写 1 个字段。1 项没填上：开始时间（值没有写上），请手动补上。");
   assert.deepEqual(checked, ["结束时间"]);
+});
+
+test("a field still marked invalid at the end keeps that reason", async () => {
+  const { result, status } = await fillPair({ start: { ok: false, reason: "validation_not_cleared", observed: {} },
+    startAtEnd: { ok: false, reason: "validation_not_cleared" } });
+  assert.equal(result.filledCount, 1);
+  assert.equal(status, "已填写 1 个字段。1 项没填上：开始时间（页面仍提示无效），请手动补上。");
+});
+
+test("a field the page took back before the end is recorded with what the recheck read", async () => {
+  const { result, status } = await fillPair({ start: { ok: false, reason: "validation_not_cleared", observed: {} },
+    startAtEnd: { ok: false, reason: "value_reverted" } });
+  assert.equal(result.filledCount, 1);
+  assert.equal(result.unfilledCount, 1);
+  assert.equal(status, "已填写 1 个字段。1 项没填上：开始时间（值被页面退回），请手动补上。");
 });
