@@ -16,14 +16,14 @@
   // 组件根里看得见的文字。组件根取大了（外层类名带 select 的整行）时会装进题目和占位提示，这些不是已选值：
   // 不装着输入框的 <label>、类名以 title / placeholder 结尾的元素里的字都跳过。
   const NOT_VALUE_TOKEN = /(?:^|[-_])(?:title|placeholder)$/i;
-  // #301 弹层画在组件根里（Moka sd-Dropdown 不挂到 body 时）：在包着输入框的 <label> 外框旁边的槽位里，浮在页面上。
-  // 组件根里、外框外面、自己或往上到根之间有一层 absolute / fixed 定位的一块才算；外框里是组件显示的已选值。
+  // #301 弹层画在组件根里（Moka sd-Dropdown 不挂到 body 时）：在包着输入框的 <label> 外框旁边的槽位里，fixed 定位。
+  // 组件根里、外框外面、自己或往上到根之间有一层 fixed 定位的一块才算；外框里是组件显示的已选值。
+  // absolute 定位的一块可能是组件浮着显示的已选值，不算。
   function innerPopup(node, root, el) {
     const frame = el?.closest?.('label');
     if (!frame || !root.contains(frame) || node === root || !root.contains(node) || node.contains(frame) || frame.contains(node)) return false;
     for (let current = node; current && current !== root; current = current.parentElement) {
-      const position = current.ownerDocument.defaultView.getComputedStyle(current).position;
-      if (position === 'absolute' || position === 'fixed') return true;
+      if (current.ownerDocument.defaultView.getComputedStyle(current).position === 'fixed') return true;
     }
     return false;
   }
@@ -799,14 +799,14 @@
         const info = state.info;
         if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
         // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）；
-        // 两级选择停在第一级时也收起。先按 Esc；还开着就在页面空白处点一下。只派发事件，不改页面状态。
+        // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）；
+        // 还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
         if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView;
-          const target = doc.activeElement || doc.body;
-          target.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+          info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
           await new Promise(resolve => setTimeout(resolve, 120));
           if (ctx.popup.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
-            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent], ['click', View.MouseEvent]]) {
+            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
               if (Event) doc.body.dispatchEvent(new Event(type, { bubbles: true }));
             }
           }

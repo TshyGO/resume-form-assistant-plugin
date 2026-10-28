@@ -1076,3 +1076,34 @@ test("a chosen value that floats inside the dropdown root is still its shown val
     assert.equal(scanner.hasDisplayedValue(binding, { isVisible: () => true }), true, label);
   }
 });
+
+test("a chosen value floating beside the dropdown's own label frame is still its shown value", () => {
+  // #301 根里只有 fixed 定位的一块算弹层（Moka）；absolute 浮在外框旁边的已选值照旧读，覆盖确认不丢。
+  const h = load(`<div class="item"><div class="title">籍贯</div><div class="y-select" style="position: relative">
+      <label class="y-select-frame"><input class="y-select-input" readonly></label><span class="y-select-shown" style="position: absolute; left: 0">广东</span></div></div>
+    <div class="item"><div class="title">民族</div><div class="w-select" style="position: relative">
+      <label class="w-select-frame"><input class="w-select-input" readonly></label><span class="w-select-shown" style="position: absolute; left: 0"><span>汉族</span><span>Han</span></span></div></div>`);
+  for (const [label, shown] of [["籍贯", ["广东"]], ["民族", ["汉族", "Han"]]]) {
+    const target = scanned(h.doc, label);
+    const binding = scanner.scanPage(h.doc, { isVisible: () => true }).controls.find((item) => item.label === label);
+    assert.equal(h.w.ResumeProCustomControls.hasExistingValue(target), true, label);
+    assert.deepEqual(Array.from(h.w.ResumeProCustomControls.readSelection(target).texts), [shown.join(" ")]);
+    assert.deepEqual(scanner.displayedStateForGuard(binding, { isVisible: () => true }), shown);
+  }
+});
+
+test("a dropdown whose own value label follows its trigger keeps that label inside its root", () => {
+  // #301 根往上找时只在排在输入框前面、有字的题目处停；排在后面的 value-label 是组件显示的已选值。
+  const h = load(`<div class="item"><div class="form-label">城市</div><div class="city-select">
+    <div class="city-select-trigger"><input readonly placeholder="请选择"></div><span class="value-label">北京</span></div></div>`);
+  const target = scanned(h.doc, "城市");
+  assert.ok(target.root.classList.contains("city-select"), target.root.className);
+  assert.equal(h.w.ResumeProCustomControls.hasExistingValue(target), true);
+});
+
+test("a select-named label that is itself the dropdown root still gives its title", () => {
+  // #301 跳过的只是组件根里面的外框（Moka）；label 自己就是组件根时，里面写的是题目。
+  const h = load(`<div class="item"><label class="form-select">学历 <input readonly placeholder="请选择"></label></div>
+    <div class="item"><label class="select-label-wrap"><span>政治面貌</span><div class="my-select"><input readonly placeholder="请选择"></div></label></div>`);
+  for (const label of ["学历", "政治面貌"]) assert.equal(scanned(h.doc, label).controlKind, "custom-select", label);
+});

@@ -110,6 +110,17 @@ test("a placeholder-only Moka year select stays bound once choosing removes its 
   assert.equal(scanner.isBindingCurrent(year, doc, { isVisible: () => true }), true);
 });
 
+test("a placeholder-only text box whose placeholder disappears is no longer taken as the same field", () => {
+  // 上面那条只放宽给下拉；文本框的占位文字没了，可能是页面重画后换了字段。
+  const { doc } = load(`<div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC"><div class="ctrl-CICMG4Fr4_">
+    <label class="sd-Input-container-2S_vM string_info"><input type="text" class="sd-Input-input-10L0t" placeholder="毕业论文题目" value=""></label></div></div>`);
+  const field = scanned(doc, (item) => item.placeholder === "毕业论文题目");
+  assert.equal(field.controlKind, "text");
+  assert.equal(field.labelSource, "placeholder");
+  field.element.placeholder = "";
+  assert.equal(scanner.isBindingCurrent(field, doc, { isVisible: () => true }), false);
+});
+
 test("the generic path picks from a Moka popup inside the component root without tripping the write guard", async () => {
   const h = load(ROW("是否最高学历", "bool_info-Rk2u0xq9Vb"));
   const binding = scanned(h.doc, (item) => item.label === "是否最高学历");
@@ -121,6 +132,23 @@ test("the generic path picks from a Moka popup inside the component root without
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(display.textContent, "否");
   assert.equal(binding.root.querySelector("[class*='sd-Dropdown-dropdown']"), null, "the popup has closed");
+});
+
+test("a Moka dropdown without a matching choice is closed with Esc on its own input, and the page gets no click", async () => {
+  // 离线复刻上：Esc 发到组件自己的输入框（失焦后也行）能收起弹层，发到 body 不行；body 上只有 click 能收起。
+  const h = load(ROW("是否最高学历", "bool_info-Rk2u0xq9Vb"));
+  const binding = scanned(h.doc, (item) => item.label === "是否最高学历");
+  const { container } = mokaSelect(h.doc, binding.element, ["是", "否"]);
+  const open = () => binding.root.querySelector("[class*='sd-Dropdown-dropdown']");
+  container.addEventListener("keydown", (event) => { if (event.key === "Escape") open()?.remove(); });
+  let outsideClicks = 0;
+  h.doc.addEventListener("click", (event) => { if (!container.contains(event.target)) { outsideClicks += 1; open()?.remove(); } });
+  const { target, guard } = fillTarget(h, binding);
+  const result = await h.api.operate(target, "不确定", guard.options);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(guard.refused, 0);
+  assert.equal(outsideClicks, 0, "no click outside the dropdown");
+  assert.equal(open(), null, "the popup has closed");
 });
 
 for (const inBody of [false, true]) {
