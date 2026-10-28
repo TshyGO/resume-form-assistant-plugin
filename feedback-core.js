@@ -60,6 +60,9 @@
   // A failure of the AI service or the desktop link, not of matching this page.
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
+  // Setup states (#301): no desktop app, not paired, no AI model. Nothing was sent to an AI service and
+  // the user is shown the fix at once, so they are not a failed request and never reported on their own.
+  const SETUP_CODES = new Set(["not_installed", "not_paired", "never_paired", "not_configured"]);
   // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
     "site_search", "outside_form", "no_label", "out_of_scope", "secret",
@@ -166,7 +169,7 @@
     // The AI request failed, for the first round or for a catch-up after a choice (#301 U1), and the
     // fill went on with what was matched locally: the request is the first failure, whatever followed.
     const code = shownCode(errorCode, catchUpCode);
-    if (requestFailed(code)) return { category: code === "timeout" ? "timeout" : "service_error", stage: "match" };
+    if (requestFailed(code) && !SETUP_CODES.has(code)) return { category: code === "timeout" ? "timeout" : "service_error", stage: "match" };
     if (failedStage) return { category: "unknown", stage: failedStage };
     if (!matched) return { category: "match_failed", stage: "match" };
     if (filledCount === 0 || unfilledCount > 0 || unconfirmedCount > 0) return { category: "fill_rejected", stage: "fill" };
@@ -365,12 +368,14 @@
     return safe.join("\n").slice(0, 3500);
   }
 
-  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, unconfirmedCount, editHint, category }) {
+  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, unconfirmedCount, editHint, category,
+    errorCode, catchUpCode }) {
     if (assisted || cancelled || overwriteDeclined) return null;
     // A page that is not an application form has nothing to fix; reporting it is noise.
     if (category === "page_not_supported") return null;
     // The AI request failed (#301 U1; fillCategory): reported even when every local match got written.
-    const aiFailed = category === "timeout" || category === "service_error";
+    // A setup state is not a failed request.
+    const aiFailed = (category === "timeout" || category === "service_error") && !SETUP_CODES.has(shownCode(errorCode, catchUpCode));
     if (fieldCount === 0 || unfilledCount > 0 || unconfirmedCount > 0 || editHint || aiFailed) return filledCount > 0 ? "fill_partial" : "fill_failed";
     return null;
   }

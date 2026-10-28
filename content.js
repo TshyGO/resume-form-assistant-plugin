@@ -3078,11 +3078,12 @@
       writeFillDiagnostics(reportInput);
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
-        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。AI 请求失败（首轮或补填，#301）即使都填上了也上报。
+        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。AI 请求失败（首轮或补填，#301）即使都填上了也上报；
+        // 没装桌面端、没配对、没配置模型不算请求失败。
         // 深度填写（#224）和辅助新增一样不自动上报：隐私说明里自动报告只覆盖普通一键填写。
         const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted || deep), cancelled: cancelRequested,
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount,
-          editHint: hinted && probe?.editButtons > 0, category: verdict.category });
+          editHint: hinted && probe?.editButtons > 0, category: verdict.category, errorCode: diagnostics.errorCode, catchUpCode: grown.errorCode });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
           kind, diagnostics: self.ResumeProFeedback.fillReport(reportInput)
         } })).catch(() => {});

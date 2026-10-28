@@ -122,7 +122,7 @@ test("read-only inputs inside generic selects leave readonly_or_disabled; disabl
 test("a failed AI request is the first failure: timeout or service_error at the match stage, never fill_rejected", () => {
   const written = { scanned: true, fieldCount: 3, pageType: "application_form", responded: true, matched: 2, filledCount: 2, unfilledCount: 0, unconfirmedCount: 0 };
   assert.deepEqual(core.fillCategory({ ...written, errorCode: "timeout" }), { category: "timeout", stage: "match" });
-  for (const errorCode of ["network", "unavailable", "not_paired", "auth", "http_502"]) {
+  for (const errorCode of ["network", "unavailable", "incompatible", "auth", "http_502"]) {
     assert.deepEqual(core.fillCategory({ ...written, errorCode }), { category: "service_error", stage: "match" }, errorCode);
   }
   // Local writes failed too: the category still names the request.
@@ -147,6 +147,45 @@ test("a failed AI request is reported even when everything matched got written; 
     assert.equal(core.fillFailure({ ...base, filledCount: 1, category: "timeout", [key]: true }), null, key);
   }
   assert.equal(core.fillFailure({ fieldCount: 0, filledCount: 0, unfilledCount: 0, category: "page_not_supported" }), null);
+});
+
+const SETUP = ["not_installed", "not_paired", "never_paired", "not_configured"];
+
+test("a setup state (no desktop app, not paired, no model) is not a failed request and is never reported on its own", () => {
+  const written = { scanned: true, fieldCount: 3, pageType: "application_form", responded: true, matched: 2, filledCount: 2, unfilledCount: 0, unconfirmedCount: 0 };
+  const base = { fieldCount: 3, filledCount: 2, unfilledCount: 0, unconfirmedCount: 0 };
+  for (const code of SETUP) {
+    for (const codes of [{ errorCode: code }, { errorCode: "none", catchUpCode: code }, { errorCode: "", catchUpCode: code }]) {
+      const label = JSON.stringify(codes);
+      const verdict = core.fillCategory({ ...written, ...codes });
+      assert.deepEqual(verdict, { category: "none", stage: "none" }, label);
+      assert.equal(core.fillFailure({ ...base, ...codes, category: verdict.category }), null, label);
+      // Write failures are still reported, as fill_rejected, the way they were before #301 U1.
+      const unfilled = core.fillCategory({ ...written, ...codes, filledCount: 1, unfilledCount: 1 });
+      assert.deepEqual(unfilled, { category: "fill_rejected", stage: "fill" }, label);
+      assert.equal(core.fillFailure({ ...base, ...codes, filledCount: 1, unfilledCount: 1, category: unfilled.category }), "fill_partial", label);
+      assert.equal(core.fillFailure({ ...base, ...codes, filledCount: 0, unfilledCount: 2, category: "fill_rejected" }), "fill_failed", label);
+    }
+    // The match stage itself failed on a setup state: classified as before, still not reported by itself.
+    const matchFailed = core.fillCategory({ ...written, failedStage: "match", errorCode: code });
+    assert.deepEqual(matchFailed, { category: "service_error", stage: "match" }, code);
+    assert.equal(core.fillFailure({ ...base, filledCount: 0, errorCode: code, category: matchFailed.category }), null, code);
+    assert.equal(core.fillFailure({ ...base, filledCount: 0, unfilledCount: 1, errorCode: code, category: matchFailed.category }), "fill_failed", code);
+    assert.equal(core.requestFailed(code), true, "fillDrops still treats it as no result");
+  }
+  // Every other request failure still counts, first round or catch-up.
+  for (const code of ["auth", "credential_unavailable", "incompatible", "unavailable", "timeout", "http_503"]) {
+    const category = code === "timeout" ? "timeout" : "service_error";
+    for (const codes of [{ errorCode: code }, { errorCode: "none", catchUpCode: code }]) {
+      const label = `${code} ${JSON.stringify(codes)}`;
+      assert.deepEqual(core.fillCategory({ ...written, ...codes }), { category, stage: "match" }, label);
+      assert.equal(core.fillFailure({ ...base, ...codes, category }), "fill_partial", label);
+      assert.equal(core.fillFailure({ ...base, ...codes, filledCount: 0, category }), "fill_failed", label);
+    }
+  }
+  // A first-round failure is never replaced by a later setup state, and the other way round.
+  assert.equal(core.fillFailure({ ...base, errorCode: "timeout", catchUpCode: "not_paired", category: "timeout" }), "fill_partial");
+  assert.equal(core.fillFailure({ ...base, errorCode: "not_paired", catchUpCode: "timeout", category: "none" }), null);
 });
 
 // ---- content.js: what a real fill records and sends ----
@@ -268,6 +307,17 @@ test("an AI service failure with nothing written is reported as fill_failed, and
   assert.equal(lineOf(refused.reports[0].diagnostics, "error_category"), "timeout", "not fill_rejected");
   assert.equal(lineOf(refused.reports[0].diagnostics, "error_code"), "timeout");
   assert.match(refused.reports[0].diagnostics, /^drop_reasons: .*not_written=1/m);
+});
+
+test("no model configured after the local match was written: shown in the panel block, not reported", async () => {
+  const { reports, report, result } = await fill({ fields: [named("name", "姓名"), named("hobby", "爱好")],
+    respond: message => ({ success: true, matches: [{ fieldId: message.formFields[0].fieldId, value: "张伟测试" }],
+      warning: "还没有配置 AI 模型", diagnostics: diag({ ruleMatches: 1, aiFields: 1, errorCode: "not_configured" }) }) });
+  assert.equal(result.filledCount, 1);
+  assert.equal(result.unfilledCount, 0, "nothing failed to write");
+  assert.equal(reports.length, 0);
+  assert.equal(lineOf(report, "error_code"), "not_configured");
+  assert.equal(lineOf(report, "error_category"), "none");
 });
 
 test("no AI-failure report for an assisted, deep, cancelled or overwrite-declined fill", async () => {
