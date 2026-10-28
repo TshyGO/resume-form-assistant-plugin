@@ -16,7 +16,7 @@ class DomEvent {
 class DomFocusEvent extends DomEvent {}
 class DomInputEvent extends DomEvent {}
 
-function createHarness({ inputEvent = true } = {}) {
+function createHarness({ inputEvent = true, labelFor = null } = {}) {
   class HTMLElement {
     constructor() {
       this.children = [];
@@ -171,6 +171,8 @@ function createHarness({ inputEvent = true } = {}) {
     self: { __RESUME_PRO_TEST__: true }
   };
   if (inputEvent) context.InputEvent = DomInputEvent;
+  // 扫描给出的题目（北森的题目是旁边的 label，不和输入框关联）。
+  if (labelFor) context.self.ResumeProFieldScan = { labelForElement: labelFor };
   context.globalThis = context;
   context.window.document = document;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "control-adapters.js"), "utf8"), context);
@@ -525,4 +527,96 @@ test("week、range、color 输入仍可沿用原有的直接写值路径", async
     assert.equal(input.value, value);
     assert.deepEqual(input.events.map((event) => event.type), ["input", "change"]);
   }
+});
+
+// #229：手机号框自己改格式（138 0013 8000）。
+function formatPhone(input, style = "spaces") {
+  input.addEventListener("input", () => {
+    const digits = input.value.replace(/\D/g, "").replace(/^86(?=1\d{10}$)/, "");
+    if (!digits) return;
+    input.value = style === "spaces" ? digits.replace(/^(\d{3})(\d{4})(\d{0,4}).*/, "$1 $2 $3").trim()
+      : `+86 ${digits.replace(/^(\d{3})(\d{4})(\d{0,4}).*/, "$1-$2-$3")}`;
+  });
+}
+
+test("手机号框加了空格：数字相同就算填上，也不恢复成原来的号码", async () => {
+  const { setElementValue, reason, HTMLInputElement } = createHarness();
+  const input = new HTMLInputElement();
+  input.type = "tel";
+  input.value = "13900000000";
+  formatPhone(input);
+
+  assert.equal(await setElementValue(input, "13800138000"), true);
+  assert.equal(input.value, "138 0013 8000");
+  assert.equal(reason(input), "");
+});
+
+test("按 name 或题目认出的手机号框，+86 和短横也按数字比", async () => {
+  const labels = new Map();
+  const { setElementValue, HTMLInputElement } = createHarness({ labelFor: (element) => labels.get(element) || "" });
+  const named = new HTMLInputElement();
+  named.name = "mobile";
+  formatPhone(named, "dashes");
+  assert.equal(await setElementValue(named, "13800138000"), true);
+  assert.equal(named.value, "+86 138-0013-8000");
+
+  // 北森：题目「手机号码」是旁边的 label，输入框本身没有任何提示。
+  const titled = new HTMLInputElement();
+  labels.set(titled, "手机号码");
+  formatPhone(titled);
+  assert.equal(await setElementValue(titled, "+86 13800138000"), true);
+  assert.equal(titled.value, "138 0013 8000");
+});
+
+test("不是电话的框被页面改了数字格式，仍算没填上", async () => {
+  const { setElementValue, reason, HTMLInputElement } = createHarness();
+  const input = new HTMLInputElement();
+  input.name = "studentId";
+  formatPhone(input);
+
+  assert.equal(await setElementValue(input, "13800138000"), false);
+  assert.equal(reason(input), "value_not_committed");
+});
+
+test("北森表单项：错误提示在内容区外面也算这个字段的，表单项里有别的框时照旧不算", async () => {
+  const { setElementValue, reason, HTMLElement, HTMLInputElement, body } = createHarness();
+  const item = new HTMLElement();
+  item.className = "form-item";
+  const title = new HTMLElement();
+  title.className = "form-item__text";
+  title.textContent = "姓名";
+  const content = new HTMLElement();
+  content.className = "form-item__content";
+  const input = new HTMLInputElement();
+  const error = new HTMLElement();
+  error.className = "form-item__error";
+  error.textContent = "请填写姓名";
+  content.appendChild(input);
+  item.appendChild(title);
+  item.appendChild(content);
+  item.appendChild(error);
+  body.appendChild(item);
+
+  assert.equal(await setElementValue(input, "测试用户"), false);
+  assert.equal(reason(input), "validation_not_cleared");
+  input.addEventListener("blur", () => {
+    error.hidden = true;
+  });
+  assert.equal(await setElementValue(input, "测试用户"), true);
+
+  const pair = new HTMLElement();
+  pair.className = "form-item";
+  const shared = new HTMLElement();
+  shared.className = "form-item__error";
+  shared.textContent = "请填写完整";
+  const [first, second] = [new HTMLInputElement(), new HTMLInputElement()];
+  for (const control of [first, second]) {
+    const part = new HTMLElement();
+    part.className = "form-item__content";
+    part.appendChild(control);
+    pair.appendChild(part);
+  }
+  pair.appendChild(shared);
+  body.appendChild(pair);
+  assert.equal(await setElementValue(first, "测试用户"), true);
 });

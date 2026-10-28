@@ -209,6 +209,23 @@ test('write accounting distinguishes a refused guard from an interrupted attempt
   assert.ok(!JSON.stringify(result).includes('1998'));
 });
 
+test('a phone box showing the same number in its own format is never put back to its old value', async () => {
+  // #229：逐字重试后核对仍不认，但框里是同一个号码（页面加了空格）：不恢复成写之前的号码。
+  const h = harness({
+    normalizeText: (el, value) => String(value), prefersSequential: () => true, dispatchTextInput: () => {},
+    runTextLifecycle: async (el, value, sequential, guard, didWrite) => {
+      if (!guard()) return false;
+      didWrite(); el.value = value.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3'); return true;
+    },
+    waitTextCommit: async () => {}, replayFocusBlur: async () => {},
+    inspectText: (el, expected, committed) => el.value === expected ? { ok: true, reason: '' } : { ok: false, reason: committed ? 'value_reverted' : 'value_not_committed' },
+    sameTextValue: (el, current, expected) => current.replace(/\s/g, '') === expected
+  });
+  const input = new h.Input(); input.type = 'tel'; input.value = '13900000000';
+  await h.operate(input, '13800138000');
+  assert.equal(input.value, '138 0013 8000');
+});
+
 test('guard callbacks are evaluated once at each stop point', async () => {
   const h = harness(); const input = new h.Input(); input.type = 'month';
   let guardCalls = 0;

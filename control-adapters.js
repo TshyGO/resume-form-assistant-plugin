@@ -168,23 +168,21 @@
       return result(true, '', ctx);
     }
 
-    function acceptsFreeText(ctx) {
-      const el = ctx.el, info = scope.ResumeProCustomControls.describe(ctx.entry);
-      if (ctx.kind !== 'custom-select' || !(el instanceof HTMLInputElement) || el.readOnly || el.disabled) return false;
-      if (!['text', 'search'].includes(el.type) || !['aria', 'generic'].includes(info.library)) return false;
-      // 只认组件类名写明是联想输入框（el-autocomplete 等）；单有 aria-autocomplete 的可能是只能从列表里选的下拉。
-      return [info.root, el.parentElement, el.parentElement?.parentElement].some(node => String(node?.className || '').split(/\s+/)
-        .some(token => /(?:^|[-_])auto-?complete$/i.test(token)));
+    // 框里的字和要填的一样：逐字相同，或宿主认可的同一个值（电话框自己加了空格、短横）。
+    function shows(el, expected) {
+      const current = String(el.value ?? '');
+      return current === expected || Boolean(deps.sameTextValue?.(el, current, expected));
     }
 
-    async function text(ctx, value) {
+    // shown：联想框点了建议、框里已经是要填的字，只是组件没有标出选中状态（#299 51job）：不再写，按文本框核对。
+    async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
       const expected = deps.normalizeText(ctx.el, value);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
-      if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
-      ctx.acceptedOnce = String(ctx.el.value ?? '') === expected;
+      if (!shown && !await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
+      ctx.acceptedOnce = shows(ctx.el, expected);
       await deps.waitTextCommit();
       let stopped = stop(ctx);
       if (stopped) return result(false, stopped, ctx);
@@ -198,22 +196,36 @@
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
       }
-      if (!verdict.ok && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
+      if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
-        const committed = String(ctx.el.value ?? '') === expected;
+        const committed = shows(ctx.el, expected);
         await deps.waitTextCommit();
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, committed);
-        if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && guard()) {
+        // 框里显示的是同一个号码（页面改了格式）时不恢复原值。
+        if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && !shows(ctx.el, expected) && guard()) {
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
       if (verdict.ok) checks.set(ctx.el, { ctx,
-        accepted: () => String(ctx.el.value ?? '') === expected,
+        accepted: () => shows(ctx.el, expected),
         inspect: () => deps.inspectText(ctx.el, expected, true) });
       return result(verdict.ok, verdict.reason, ctx);
+    }
+
+    // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
+    // 在页面空白处点一下收起它（只派发事件），再按文本框核对一次。
+    async function freeText(ctx, value, shown) {
+      const typed = await text(ctx, value, shown);
+      const body = ctx.el.ownerDocument?.body;
+      if (!body || stop(ctx) || click(body, ctx)) return typed;
+      const saved = checks.get(ctx.el);
+      if (!typed.ok || !saved) return typed;
+      const again = await verify(ctx, saved.accepted, saved.inspect);
+      if (!again.ok) checks.delete(ctx.el);
+      return again;
     }
 
     async function operate(target, desiredValue, options = {}) {
@@ -258,8 +270,11 @@
         if (custom) {
           const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
           // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
-          if (outcome.reason && ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason) && acceptsFreeText(ctx) && !stop(ctx)) {
-            return await text(ctx, desiredValue);
+          // 点了建议、组件没标出选中状态，但框里已经是要填的字（#299）：不算没选上，按文本框核对。
+          if (outcome.reason && scope.ResumeProCustomControls.acceptsFreeText(ctx) && !stop(ctx)) {
+            const shown = outcome.reason === 'selection_not_committed' && Boolean(deps.normalizeText)
+              && String(ctx.el.value ?? '') === deps.normalizeText(ctx.el, desiredValue);
+            if (shown || ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason)) return await freeText(ctx, desiredValue, shown);
           }
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;

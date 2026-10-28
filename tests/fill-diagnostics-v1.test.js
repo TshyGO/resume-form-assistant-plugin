@@ -158,6 +158,13 @@ test("match and fill drops are counted separately, and ai_called tells 'not call
   assert.match(core.fillReport({ ...IFRAME_PAGE, requested: true }), /^ai_called: -$/m);
 });
 
+test("a two-level choice the fill stopped at keeps its closed reason code", () => {
+  const report = core.fillReport({ ...IFRAME_PAGE, unfilledControls: [
+    { label: "当前城市", reasonCode: "cascade_unsupported", control: { tag: "input", type: "text", library: "generic" } }] });
+  assert.match(report, /^- 当前城市: input\[text\] lib=generic reason=cascade_unsupported$/m);
+  assert.equal(core.diagnostics(report), report);
+});
+
 const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan", "scan_duration_ms",
   "dom_inputs", "visible_fields", "candidates", "matched", "filled", "drop_reasons", "label_sources", "offer_skipped",
   "dom_elements", "iframes_total", "iframes_cross_origin", "same_origin_iframe_inputs", "shadow_roots_with_inputs",

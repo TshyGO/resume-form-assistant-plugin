@@ -74,6 +74,7 @@
     ambiguous_popup: "无法确定控件弹层",
     cascade_timeout: "等待下一级选项超时",
     cascade_parent_failed: "上一级选择失败",
+    cascade_unsupported: "两级选择暂不支持",
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     operation_failed: "控件操作失败",
@@ -3962,21 +3963,31 @@
     return found;
   }
 
+  // 表单项里只装控件的内容区（北森 .form-item__content、.form-item__control）不是整道题：
+  // 错误提示可能放在内容区外面，要接着往上找到表单项本身。
+  const FORM_ITEM_PART = /(?:form-item|form-group|form-field)__(?:content|control)$/i;
+
   function associatedContainer(element) {
     let current = element.parentElement;
     let best = current;
+    let part = null;
     while (current && current !== document.body && current !== document.documentElement) {
       if (listOtherControls(current, element).length > 0) {
         return best;
       }
       best = current;
-      if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(classText(current))) {
-        return current;
+      const className = classText(current);
+      if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(className)) {
+        const items = className.split(/\s+/).filter((token) => /form-item|form-group|form-field/i.test(token));
+        if (!items.every((token) => FORM_ITEM_PART.test(token))) {
+          return current;
+        }
+        part = part || current;
       }
       current = current.parentElement;
     }
     // 没有其他控件作边界时，不要把整张表单的错误算到唯一输入框上。
-    return element.parentElement;
+    return part || element.parentElement;
   }
 
   function describedErrorVisible(element) {
@@ -4016,12 +4027,39 @@
     return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
   }
 
+  // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
+  // 就是写上了，不能当成没写上，也不能恢复成写之前的值。
+  const PHONE_HINT = /手机|电话|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
+
+  function phoneDigits(text) {
+    const digits = String(text ?? "").replace(/[\s-]/g, "").replace(/^\+86/, "").replace(/^86(?=1\d{10}$)/, "");
+    return /^\d+$/.test(digits) ? digits : "";
+  }
+
+  function isPhoneInput(element) {
+    if (!(element instanceof HTMLInputElement)) {
+      return false;
+    }
+    if (String(element.type || "").toLowerCase() === "tel") {
+      return true;
+    }
+    return PHONE_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`);
+  }
+
+  function sameTextValue(element, current, expected) {
+    if (current === expected) {
+      return true;
+    }
+    const digits = phoneDigits(current);
+    return Boolean(digits) && digits === phoneDigits(expected) && isPhoneInput(element);
+  }
+
   function inspectTextCommit(element, expected, committedBeforeWait) {
     if (element.isConnected === false) {
       return { ok: false, reason: "element_disconnected" };
     }
     const current = String(element.value ?? "");
-    if (current !== expected) {
+    if (!sameTextValue(element, current, expected)) {
       return { ok: false, reason: committedBeforeWait ? "value_reverted" : "value_not_committed" };
     }
     if (element.getAttribute?.("aria-invalid") === "true" || describedErrorVisible(element) || containerErrorVisible(element)) {
@@ -4073,7 +4111,7 @@
     if (!controlOperator) controlOperator = self.ResumeProControls.create({
       helpers: self.ResumeProAIHelpers, radioLabel: getRadioOptionLabel,
       isVisible, writeValue: writeControlValue, focus: focusControl, blur: blurControl,
-      normalizeText: normalizeExpectedTextValue, runTextLifecycle,
+      normalizeText: normalizeExpectedTextValue, runTextLifecycle, sameTextValue,
       inspectText: inspectTextCommit, waitTextCommit: waitForTextCommit,
       replayFocusBlur, prefersSequential: prefersSequentialInput, dispatchTextInput,
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
