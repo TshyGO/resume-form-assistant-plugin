@@ -312,7 +312,7 @@ test("assisted filling excludes existing and unrelated values, including user ed
 // #236：辅助新增填完一项后等 50ms 再复查。日期控件显示的是组件自己的格式，要按控件层的复核算，
 // 不拿「1998年06月」和简历里的「1998-06」逐字比较；文本框照旧逐字比较。
 // beforeRecheck 在复查前改动页面：清空值、替换节点。
-async function runAssistedFill({ picker, beforeRecheck = () => {}, controls, value }) {
+async function runAssistedFill({ picker, beforeRecheck = () => {}, controls, value, type = 'text' }) {
   const formElements = [];
   const fieldScan = { ...fakeFieldScan() };
   const scanPage = fieldScan.scanPage;
@@ -324,6 +324,7 @@ async function runAssistedFill({ picker, beforeRecheck = () => {}, controls, val
   const { helpers, timers, HTMLInputElement } = loadHighlightHelpers({ formElements, fieldScan, controls,
     sendMessage: async () => ({ success: true, matches: [{ fieldId: 'field-0', value }] }) });
   const input = new HTMLInputElement();
+  input.type = type;
   formElements.push(input);
   const status = { textContent: '', className: '' };
   helpers.setShadowRoot({ querySelector: selector => selector === '#resume-pro-status' ? status : null, querySelectorAll: () => [] });
@@ -380,6 +381,14 @@ for (const [change, beforeRecheck] of [['kept', undefined], ['cleared', clear], 
     assert.equal(result.unconfirmedCount, change === 'kept' ? 0 : 1);
   });
 }
+
+// #229：辅助新增的电话框被页面改成「138 0013 8000」，数字相同就算已验证；普通文本框照旧逐字比较（见上）。
+test('an assisted phone field the page reformats counts as verified', async () => {
+  const { result, input } = await runAssistedFill({ picker: false, type: 'tel', value: '13800138000', beforeRecheck: input => { input.value = '138 0013 8000'; } });
+  assert.equal(input.value, '138 0013 8000');
+  assert.equal(result.filledCount, 1);
+  assert.equal(result.unconfirmedCount, 0);
+});
 
 for (const stopped of [false, true]) {
   test(`assisted preparation does not execute after ${stopped ? 'stop' : 'declined preview'}`, async () => {

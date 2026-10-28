@@ -184,6 +184,16 @@ test('ordinary failed search restores only its temporary query and blurs its own
   assert.equal((await h.api.operate(h.target, '北京大学')).reason, 'no_option_match');
   assert.equal(h.el.value, ''); assert.equal(list.hidden, true);
 });
+test('a search that ends on an empty-state text is no matching option; a loading text keeps the timeout', async () => {
+  // #301：搜完弹层只写着「无匹配数据」时是没有这一项；到时还写着「加载中」仍按超时报。
+  for (const [shown, reason] of [['无匹配数据', 'no_option_match'], ['加载中', 'options_timeout']]) {
+    const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 200 });
+    const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); h.w.document.body.append(list);
+    h.el.oninput = () => { list.innerHTML = `<div class="empty">${shown}</div>`; };
+    assert.equal((await h.api.operate(h.target, '北京大学')).reason, reason, shown);
+    assert.equal(h.el.value, '', 'the query is put back');
+  }
+});
 test('cancelled search does not revert the query or steal focus for cleanup', async () => {
   let current = true; const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">');
   const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); h.w.document.body.append(list);
