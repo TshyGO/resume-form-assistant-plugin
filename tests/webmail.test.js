@@ -83,5 +83,5 @@ test('a stale toolbar download for a different message is never used', async () 
 test('two visible reading panes are ambiguous and trigger no original download', async () => {
   const d = netease(); const another = d.createElement('div'); another.className = 'nui-read-body'; another.textContent = '另一封'; d.body.appendChild(another);
   let called = false;
-  assert.equal((await webmail.capture(d, () => { called = true; })).status, 'open_mail'); assert.equal(called, false);
+  assert.equal((await webmail.capture(d, () => { called = true; })).status, 'unrecognized_mail'); assert.equal(called, false);
 });

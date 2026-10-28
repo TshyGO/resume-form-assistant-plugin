@@ -57,10 +57,65 @@
     }
     return all;
   }
+  function readUrl(value, doc) {
+    try {
+      const u = new URL(value, doc.location.href);
+      return u.origin === doc.location.origin && /^\/js[0-9]+\/read\/readhtml3\.jsp$/.test(u.pathname)
+        && u.searchParams.get('mid') && !u.username && !u.password ? u : null;
+    } catch { return null; }
+  }
+  function contexts(doc, body) {
+    const frames = body.tagName === 'IFRAME' ? [body] : [...body.querySelectorAll('iframe')].filter(shown);
+    const urls = [doc.location.href];
+    for (const frame of frames) {
+      if (frame.getAttribute('src')) urls.push(frame.src);
+      try {
+        const child = frame.contentDocument;
+        if (child?.location.origin === doc.location.origin) urls.push(child.location.href);
+      } catch { /* Do not inspect cross-origin documents. */ }
+    }
+    return [...new Set(urls)];
+  }
+  function neteaseReader(doc) {
+    // Observed js6 layout: the heading is outside the message's readhtml3 iframe.
+    // Pair them inside the same visible scroll pane, never by a global first match.
+    const headings = [...doc.querySelectorAll('h1[id$="_h1Subject"]')].filter(shown);
+    // null means this layout is absent; [] means it is present but cannot be paired safely.
+    if (!headings.length) return null;
+    const matches = [];
+    for (const title of headings) {
+      const header = title.closest('[id$="_dvReadHeadInfo"]');
+      const pane = header?.closest('.frame-main-cont-body');
+      if (!pane || !text(title) || headings.filter(h => pane.contains(h)).length !== 1) continue;
+      const frames = [...pane.querySelectorAll('iframe')].filter(frame => {
+        if (!shown(frame) || header.contains(frame)) return false;
+        try { return Boolean(readUrl(frame.contentDocument?.location.href, doc)); } catch { return false; }
+      });
+      if (frames.length !== 1) continue;
+      const body = frames[0];
+      const content = body.contentDocument.querySelector('#content.netease_mail_readhtml');
+      if (!content || !text(content)) continue;
+      const sourceUrls = contexts(doc, body);
+      const ids = new Set(sourceUrls.map(value => readUrl(value, doc)?.searchParams.get('mid')).filter(Boolean));
+      if (ids.size !== 1) continue; // A frame can still be navigating to another message.
+      const fromNode = first(header, '.nui-addr-email') || first(header, '.nui-addr');
+      const data = { subject: text(title),
+        from: (fromNode?.getAttribute('email') || fromNode?.getAttribute('addr') || text(fromNode)).trim(),
+        sentTime: text(first(header, '.nui-read-time, .js-component-datetime')), body: bodyText(content) };
+      // No command is taken from the email's own document.
+      const links = [...pane.querySelectorAll('.nui-toolbar a[href], [role="toolbar"] a[href]')];
+      matches.push({ doc, body, data, links, sourceUrls, fingerprint: JSON.stringify([data, [...ids]]) });
+    }
+    return matches;
+  }
   function opened(doc, name) {
     const a = adapters[name];
     const matches = [];
     for (const d of documents(doc)) {
+      if (name === 'netease') {
+        const modern = neteaseReader(d);
+        if (modern) { matches.push(...modern); continue; }
+      }
       const bodies = [...d.querySelectorAll(a.body)].filter(shown);
       if (bodies.filter(n => !bodies.some(other => other !== n && other.contains(n))).length !== 1) continue;
       const body = bodies[0];
@@ -80,7 +135,10 @@
       // A message's own HTML never supplies a download command.
       const links = [...d.querySelectorAll(a.tools)].flatMap(tool => [...tool.querySelectorAll('a[href]')])
         .filter(link => !body.contains(link));
-      matches.push({ doc: d, body, data, links, fingerprint: JSON.stringify(data) });
+      const sourceUrls = contexts(d, body);
+      const key = name === 'qq' ? 'mailid' : 'mid';
+      const ids = sourceUrls.map(value => { try { return new URL(value).searchParams.get(key); } catch { return null; } }).filter(Boolean);
+      matches.push({ doc: d, body, data, links, sourceUrls, fingerprint: JSON.stringify([data, ids]) });
     }
     // Refuse an ambiguous page with two open message panes instead of choosing the wrong one.
     return matches.length === 1 ? matches[0] : null;
@@ -101,6 +159,7 @@
   }
   function rawCandidates(ctx, name) {
     const origin = ctx.doc.location.origin;
+    const sourceUrls = ctx.sourceUrls || contexts(ctx.doc, ctx.body);
     const urls = ctx.links.filter(link => /下载邮件|导出邮件|导出为\s*eml\s*文件|下载原文|保存邮件|download.*(?:mail|message)|original/i
       .test(`${text(link)} ${link.getAttribute('title') || ''}`))
       .map(link => rawUrl(link, name, origin)).filter(Boolean);
@@ -116,18 +175,19 @@
       }
     }
     if (name === 'netease') {
-      const contexts = [ctx.doc.location.href, ...[...ctx.body.querySelectorAll('iframe[src]')].map(f => f.src)];
-      for (const value of contexts) {
+      const session = new URL(ctx.doc.location.href).searchParams.get('sid');
+      for (const value of sourceUrls) {
         const current = new URL(value, ctx.doc.location.href);
         if (current.origin !== origin || !/^\/js[0-9]+\/read\//.test(current.pathname)
-            || !current.searchParams.get('mid') || !current.searchParams.get('sid')) continue;
+            || !current.searchParams.get('mid') || !(current.searchParams.get('sid') || session)) continue;
         const u = new URL(current.pathname.replace(/[^/]+$/, 'readdata.jsp'), origin);
-        for (const key of ['sid', 'mid']) u.searchParams.set(key, current.searchParams.get(key));
+        u.searchParams.set('mid', current.searchParams.get('mid'));
+        u.searchParams.set('sid', current.searchParams.get('sid') || session);
         u.searchParams.set('mode', 'download'); urls.push(u.href);
       }
     }
     const idKey = name === 'qq' ? 'mailid' : 'mid';
-    const currentIds = new Set([ctx.doc.location.href, ...[...ctx.body.querySelectorAll('iframe[src]')].map(f => f.src)]
+    const currentIds = new Set(sourceUrls
       .map(value => { try { const u = new URL(value, ctx.doc.location.href); return u.origin === origin ? u.searchParams.get(idKey) : null; } catch { return null; } })
       .filter(Boolean));
     if (currentIds.size > 1) return [];
@@ -204,7 +264,11 @@
     const name = provider(doc.location.href);
     if (!name) return { status: 'unsupported' };
     const ctx = opened(doc, name);
-    if (!ctx) return { status: 'open_mail' };
+    if (!ctx) {
+      const selector = adapters[name].subject + (name === 'netease' ? ', h1[id$="_h1Subject"]' : '');
+      const hasTitle = documents(doc).some(d => [...d.querySelectorAll(selector)].some(n => shown(n) && text(n)));
+      return { status: hasTitle ? 'unrecognized_mail' : 'open_mail' };
+    }
     let reason = 'raw_unavailable';
     const candidates = rawCandidates(ctx, name);
     const current = new URL(doc.location.href);

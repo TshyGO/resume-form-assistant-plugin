@@ -15,7 +15,8 @@
   let busy = false;
   let pending = null;
   const errors = {
-    open_mail: '请先在邮箱里打开一封邮件；暂不支持的页面版本也可以下载 .eml 后在桌面导入。',
+    open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
+    unrecognized_mail: '检测到邮件标题，但无法确认当前邮件的完整阅读区域。请等待加载完成后重试；仍失败时可下载 .eml 在桌面导入。',
     changed: '读取期间邮件已切换，请重新点击保存。',
     archive_changed: '桌面档案已恢复或切换，请重新选择申请后保存。',
     too_large: '邮件超过 25 MiB 或正文过长，本次未保存。可以下载原件后处理。',

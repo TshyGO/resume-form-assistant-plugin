@@ -61,3 +61,10 @@ test('desktop failure is never presented as a saved email', async () => {
   const p = await panel(); p.result({ status: 'archive_changed' }); p.get('mail-save-button').click(); await p.flush();
   assert.match(p.get('mail-save-status').textContent, /档案已恢复或切换/); assert.doesNotMatch(p.get('mail-save-status').textContent, /已保存完整邮件/);
 });
+test('a detected but unreadable mail does not tell the user to open a mail again', async () => {
+  const p = await panel({ status: 'unrecognized_mail' });
+  p.get('mail-save-button').click(); await p.flush();
+  assert.match(p.get('mail-save-status').textContent, /检测到邮件标题/);
+  assert.doesNotMatch(p.get('mail-save-status').textContent, /请先在邮箱里打开/);
+  assert.equal(p.calls.filter(c => c.target === 'desktop').length, 0);
+});
