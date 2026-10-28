@@ -652,7 +652,7 @@ test("Element autocomplete: a value the page marks invalid once the suggestions 
   // #301：和文本框一样，页面后来清掉提示的，结束前的复核算填上。
   const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"] });
   let invalid = false;
-  h.doc.addEventListener("mouseup", (event) => { if (event.target === h.doc.body) invalid = true; });
+  h.input.addEventListener("keydown", (event) => { if (event.key === "Tab") invalid = true; });
   const api = h.w.ResumeProControls.create({ timeoutMs: 200, settleMs: 35, isVisible: (el) => !el.closest("[hidden]"), ...textDeps(h.w),
     inspectText: (el, expected) => el.value !== expected ? { ok: false, reason: "value_not_committed" }
       : invalid ? { ok: false, reason: "validation_not_cleared" } : { ok: true, reason: "" } });
