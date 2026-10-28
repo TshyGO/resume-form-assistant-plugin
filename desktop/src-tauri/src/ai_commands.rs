@@ -149,6 +149,9 @@ fn normalize(value: &str) -> String {
 /// 证据正文。邮件和粘贴文本在导入时就抽好了；纯文本文件这里补读一次。
 /// PDF 和截图首发不支持——与其把一张图发出去，不如让用户把正文复制进来。
 fn body_text(store: &ArchiveStore, archive_dir: &Path, evidence_id: &str) -> Result<EvidenceInput, CommandError> {
+    if store.is_evidence_recycled(evidence_id)? {
+        return Err(invalid("EVIDENCE_RECYCLED", "通知已在回收站，请先恢复后再整理。"));
+    }
     let record = store
         .get_evidence(evidence_id)
         .map_err(CommandError::from)?

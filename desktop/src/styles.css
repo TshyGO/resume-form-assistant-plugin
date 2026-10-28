@@ -749,7 +749,7 @@ ul.inbox-list small { color: var(--muted); font-size: 12px; white-space: nowrap;
 .inbox-workbench.is-empty { grid-template-columns: minmax(280px, 30%) minmax(0, 1fr); }
 .inbox-workbench.is-empty > aside { display: flex; }
 .inbox-source-list { min-height: 0; }
-.inbox-state-tabs { flex: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin: 12px 14px 8px; padding: 3px; border-radius: 10px; background: #eef1f4; }
+.inbox-state-tabs { flex: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 12px 14px 8px; padding: 3px; border-radius: 10px; background: #eef1f4; }
 .inbox-state-tabs button { min-height: 34px; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent; color: #4a5361; font-size: 13px; }
 .inbox-state-tabs button[aria-selected="true"] { background: var(--panel); color: var(--accent); font-weight: 600; box-shadow: 0 1px 3px #1c23301f; }
 .inbox-state-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -874,3 +874,5 @@ dialog.ai-review-dialog.is-wide { max-width: 900px; }
 #todo-shell.is-empty .segmented { display: none; }
 
 /* Cloud backup reuses the native settings card/dialog hierarchy. */
+
+.evidence-recycled-note { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }

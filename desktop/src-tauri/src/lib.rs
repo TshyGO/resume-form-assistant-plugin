@@ -558,6 +558,21 @@ fn list_inbox_cmd(state: State<AppState>) -> Result<Vec<evidence_commands::Evide
 }
 
 #[tauri::command]
+fn list_recycled_evidence_cmd(
+    state: State<AppState>,
+) -> Result<Vec<evidence_commands::EvidenceSummary>, CommandError> {
+    with_store(&state, evidence_commands::list_recycled)
+}
+#[tauri::command]
+fn set_evidence_recycled_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+    recycled: bool,
+) -> Result<evidence_commands::EvidenceSummary, CommandError> {
+    with_store(&state, |store| evidence_commands::set_recycled(store, &evidence_id, recycled))
+}
+
+#[tauri::command]
 fn get_evidence_preview_cmd(
     state: State<AppState>,
     evidence_id: String,
@@ -2115,6 +2130,8 @@ pub fn run() {
             get_snapshot_cmd,
             import_evidence_cmd,
             list_inbox_cmd,
+            list_recycled_evidence_cmd,
+            set_evidence_recycled_cmd,
             get_evidence_preview_cmd,
             attachment_commands::list_evidence_attachments_cmd,
             attachment_commands::preview_evidence_attachment_cmd,

@@ -11,7 +11,7 @@
         "desktop/src/react/SettingsDialog.tsx"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "2a2b7e98798591133e2666f3370ce90d2eccc33b80b2fa650c1586c9d1d3264d",
+        ".superdesign/design-system.md": "20a23e6381c77d6df9dc2d94ca8d47c6136ccc554d831eb04f2cfc5594f01668",
         "desktop/src/react/SettingsDialog.tsx": "14117a931859a0e76837ccee0902e82c88603663fb17b07a6569f8ccec442dc9"
       },
       "drafts": {
@@ -20,7 +20,7 @@
           "visualDirection": "existing desktop tokens, native modal with attachment list and document preview"
         }
       },
-      "updatedAt": "2026-10-27T15:27:39.623954+00:00"
+      "updatedAt": "2026-10-28T12:50:01.132968+00:00"
     },
     "sidepanel-mail-column": {
       "targetKind": "existing-ui",
@@ -34,19 +34,47 @@
         "sidepanel-mail.js"
       ],
       "fingerprints": {
-        ".superdesign/sidepanel-design-system.md": "f68fab014ed20227ac7b4cc402a063d590f05c7402d8c5e2c3a2636c6eca1080",
-        "sidepanel.html": "6ae81ad555a2eb5c8233e70827a0e4e30d07e66d562fb0b341287417cb664191",
-        "sidepanel.css": "e015befdb286b25a7d92bd2c6a1e10f01903eb9dca53d25029cf296487314948",
-        "sidepanel-mail.js": "30e606c3e1d85218e31cc671d38cc7034d7dc50206d4b929d79188a63a07e520"
+        ".superdesign/sidepanel-design-system.md": "9b0e202f9a2653051ab5e66386887a67555423de61686651436fd211a8565c70",
+        "sidepanel.html": "696fa6e0d996666ae3f21b0b785570b51e7dcd4621164f2b5b3cd4968a754607",
+        "sidepanel.css": "439d884eaf8f3e5f941439123ee4690a97ecc344422687bb6b6ca122bf1d536c",
+        "sidepanel-mail.js": "a3f0b7947aae70974be36e7e6e0acb9ec54a0bae382937dc87057b2800d62ab2"
       },
       "drafts": {
         "278c23c9-b6f6-4204-8d9c-8fe166bf15da": {
           "title": "填写优先 · 独立邮件栏目",
-          "currentVersion": 3,
-          "visualDirection": "Fill-first fixed tabs; explicit Enter search; visible radio results and persistent association summary"
+          "currentVersion": 4,
+          "visualDirection": "Fill-first tabs; always-open step 1 association with jobs before skip, pinned step 2 save with explicit association label"
         }
       },
-      "updatedAt": "2026-10-28T09:23:13.184906+00:00"
+      "updatedAt": "2026-10-28T12:50:01.132592+00:00"
+    },
+    "notification-recycle": {
+      "targetKind": "new-ui",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "8f1f1727-bf56-480c-b864-b430ea6a0aa7",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/index.html",
+        "desktop/src/styles.css",
+        "desktop/src/inbox-ui.ts",
+        "desktop/src/mailbox-ui.ts"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "20a23e6381c77d6df9dc2d94ca8d47c6136ccc554d831eb04f2cfc5594f01668",
+        "desktop/index.html": "410ba6c3805882a2c485fd0d5299e0da7eb0c4441eccf22bacec08b62e0a730f",
+        "desktop/src/styles.css": "e0515dbf101867a5dd0c2f166cf37870fb11e0c705f2af20e0075c7f542b9a8b",
+        "desktop/src/inbox-ui.ts": "276fcc163843c5895e27189b8ea8adf67f63a6741e7e40df8edf95f06bb6008b",
+        "desktop/src/mailbox-ui.ts": "5d59e13763f5e824edadfd8930c8d741a9c37c26d89e43094f59bae3e7226ad0"
+      },
+      "drafts": {
+        "8f1f1727-bf56-480c-b864-b430ea6a0aa7": {
+          "title": "招聘通知 · 可恢复回收站",
+          "currentVersion": 1,
+          "visualDirection": "Existing inbox reader, three status tabs, recoverable recycle action and green restore button"
+        }
+      },
+      "updatedAt": "2026-10-28T12:50:01.133903+00:00"
     }
   }
 }

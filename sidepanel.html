@@ -443,32 +443,38 @@
           </div>
         </section>
         <section class="dock-view" id="mail-view" role="tabpanel" aria-labelledby="tab-mail" data-view="mail" hidden>
-          <div class="view-scroll">
-            <section id="mail-save" class="card mail-card" aria-labelledby="mail-save-title">
-              <div class="card-head"><h2 id="mail-save-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></svg>保存当前邮件</h2></div>
-              <p class="card-hint mail-intro">将邮件原件和附件存到桌面，方便后续查看。</p>
-              <div class="mail-context" id="mail-context" data-supported="false">
-                <div class="mail-context__head"><strong id="mail-context-title">正在确认当前网页…</strong><span id="mail-context-domain" class="chip chip--mono" hidden></span></div>
-                <p id="mail-context-hint">支持 QQ、163、126 网页邮箱。</p>
+          <section id="mail-save" class="mail-workspace mail-card" aria-labelledby="mail-save-title">
+            <div class="view-scroll">
+              <div class="card">
+                <div class="card-head"><h2 id="mail-save-title" class="card-head__title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></svg>保存当前邮件</h2></div>
+                <p class="card-hint mail-intro">将邮件原件和附件存到桌面，方便后续查看。</p>
+                <div class="mail-context" id="mail-context" data-supported="false">
+                  <div class="mail-context__head"><strong id="mail-context-title">正在确认当前网页…</strong><span id="mail-context-domain" class="chip chip--mono" hidden></span></div>
+                  <p id="mail-context-hint">支持 QQ、163、126 网页邮箱。</p>
+                </div>
+                <section class="mail-association" id="mail-association" aria-labelledby="mail-association-title">
+                  <div class="mail-step-head"><h3 id="mail-association-title"><span class="mail-step-number" aria-hidden="true">1</span>关联申请</h3><span id="mail-association-state" class="chip">可选</span></div>
+                  <p class="card-hint">选择对应岗位，保存时一起关联。</p>
+                  <label for="mail-company">公司名称</label>
+                  <div class="mail-search"><input id="mail-company" type="search" class="dock-select" maxlength="200" autocomplete="off" enterkeyhint="search" aria-describedby="mail-application-status" placeholder="输入公司名称，回车查找" disabled><button id="mail-find-application" type="button" disabled>查找申请</button></div>
+                  <p id="mail-application-status" class="mail-search-status" role="status" aria-live="polite">按回车或点击「查找申请」。</p>
+                  <fieldset id="mail-application" class="mail-application-options" disabled><legend class="sr-only">选择关联申请</legend></fieldset>
+                </section>
+                <p id="mail-save-status" class="mail-save-status" role="status" aria-live="polite" hidden></p>
+                <div id="mail-excerpt-offer" class="mail-excerpt" hidden>
+                  <p id="mail-excerpt-subject"></p>
+                  <p class="card-hint">仅保存发件人、标题、发送时间和正文。邮件原件及附件不会保存，且可能无法与之后导入的原件自动去重。</p>
+                  <div class="mail-search"><button id="mail-excerpt-accept" type="button">保存网页摘录</button><button id="mail-excerpt-cancel" type="button">取消</button></div>
+                </div>
               </div>
-              <details class="mail-association" id="mail-association">
-                <summary>关联申请<span id="mail-association-state">可选</span></summary>
-                <label for="mail-company">公司名称</label>
-                <div class="mail-search"><input id="mail-company" type="search" class="dock-select" maxlength="200" autocomplete="off" enterkeyhint="search" aria-describedby="mail-application-status" placeholder="输入公司名称，回车查找" disabled><button id="mail-find-application" type="button" disabled>查找申请</button></div>
-                <p id="mail-application-status" class="mail-search-status" role="status" aria-live="polite">按回车或点击「查找申请」。</p>
-                <fieldset id="mail-application" class="mail-application-options" disabled><legend class="sr-only">选择关联申请</legend></fieldset>
-              </details>
+            </div>
+            <div class="mail-action-footer">
+              <div class="mail-step-head"><h3><span class="mail-step-number" aria-hidden="true">2</span>保存邮件</h3></div>
               <p id="mail-destination" class="card-hint mail-destination" aria-live="polite">当前不关联，保存到桌面「招聘通知」。</p>
-              <button id="mail-save-button" class="mail-save-button" type="button" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg><span id="mail-save-label">保存到桌面</span></button>
-              <p id="mail-save-status" class="mail-save-status" role="status" aria-live="polite" hidden></p>
-              <div id="mail-excerpt-offer" class="mail-excerpt" hidden>
-                <p id="mail-excerpt-subject"></p>
-                <p class="card-hint">仅保存发件人、标题、发送时间和正文。邮件原件及附件不会保存，且可能无法与之后导入的原件自动去重。</p>
-                <div class="mail-search"><button id="mail-excerpt-accept" type="button">保存网页摘录</button><button id="mail-excerpt-cancel" type="button">取消</button></div>
-              </div>
+              <button id="mail-save-button" class="mail-save-button" type="button" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg><span id="mail-save-label">暂不关联并保存</span></button>
               <p class="mail-read-note">仅在点击保存时读取当前邮件。</p>
-            </section>
-          </div>
+            </div>
+          </section>
         </section>
       </main>
 

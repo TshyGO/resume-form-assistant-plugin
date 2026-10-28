@@ -90,7 +90,8 @@ test('unsupported pages keep the tab visible, explain how to use mail, and canno
 test('switching sections preserves an explicit excerpt offer and optional application selection', async t => {
   const p = await panel({ capture: { status: 'excerpt_offer', excerpt: { subject: '测试通知', from: 'HR', sentTime: '', body: '正文' } } }); t.after(() => p.close());
   p.get('tab-mail').click();
-  assert.equal(p.get('mail-association').open, false);
+  assert.equal(p.get('mail-association').tagName, 'SECTION');
+  assert.equal(p.get('mail-association').querySelector('summary'), null);
   p.get('mail-association').open = true;
   p.get('mail-company').value = '示例公司';
   p.get('mail-find-application').click(); await p.flush();
@@ -209,4 +210,30 @@ test('a same-address page-complete notification does not discard an in-flight lo
   finish({ status: 'ok', exact: [], sameCompany: [{ applicationId: 'app', company: '星河科技', title: '前端工程师' }] }); await p.flush();
   assert.match(p.get('mail-application-status').textContent, /找到 1 条申请/);
   assert.match(p.get('mail-application').textContent, /前端工程师/);
+});
+test('association is always visible, jobs precede the secondary skip choice, and the footer states the save action', async t => {
+  const p = await panel(); t.after(() => p.close());
+  p.get('tab-mail').click();
+  assert.equal(p.get('mail-association').tagName, 'SECTION');
+  assert.equal(p.get('mail-association').querySelector('summary'), null);
+  assert.equal(p.get('mail-save-label').textContent, '暂不关联并保存');
+  assert.equal(p.get('mail-save-button').closest('.view-scroll'), null);
+  p.get('mail-company').value = '示例公司'; p.get('mail-find-application').click(); await p.flush();
+  assert.deepEqual([...p.get('mail-application').querySelectorAll('input')].map(input => input.value), ['app', '']);
+  p.get('mail-application').querySelector('input[value="app"]').click();
+  assert.equal(p.get('mail-save-label').textContent, '保存并关联');
+  p.get('mail-application').querySelector('input[value=""]').click();
+  assert.equal(p.get('mail-save-label').textContent, '暂不关联并保存');
+});
+test('search completion restores keyboard focus without stealing it after switching to fill', async t => {
+  let finish;
+  const p = await panel({ query: () => new Promise(resolve => { finish = resolve; }) }); t.after(() => p.close());
+  p.get('tab-mail').click(); p.get('mail-company').value = '星河科技'; p.get('mail-company').focus();
+  const enter = () => p.get('mail-company').dispatchEvent(new p.dom.window.KeyboardEvent('keydown', {key:'Enter'}));
+  enter(); p.get('mail-company').blur();
+  finish({status:'ok',exact:[],sameCompany:[]}); await p.flush();
+  assert.equal(p.doc.activeElement, p.get('mail-company'));
+  enter(); p.get('tab-fill').focus(); p.get('tab-fill').click();
+  finish({status:'ok',exact:[],sameCompany:[]}); await p.flush();
+  assert.equal(p.doc.activeElement, p.get('tab-fill'));
 });

@@ -300,6 +300,9 @@ fn associate_unbound(
     id: &str,
     application: Option<&str>,
 ) -> Result<(), ErrorCode> {
+    if store.is_evidence_recycled(id).map_err(|_| ErrorCode::Unavailable)? {
+        return Ok(());
+    }
     if let Some(app) = application {
         if store
             .get_evidence(id)
@@ -436,6 +439,12 @@ mod tests {
         );
         assert_eq!(save(&store, &raw, "eml").result_id, first.result_id);
         assert_eq!(store.list_evidence(None).unwrap().len(), 1);
+        let id = first.result_id.as_deref().unwrap();
+        store.set_evidence_recycled(id, true).unwrap();
+        assert_eq!(crate::plugin_bridge::apply(&request, &store).unwrap().result_id, first.result_id);
+        assert_eq!(save(&store, &raw, "eml").result_id, first.result_id);
+        assert!(store.is_evidence_recycled(id).unwrap());
+        assert!(store.list_evidence(None).unwrap().is_empty());
         let mut changed = request.raw.clone();
         let other = vec![b'x'; raw.len()];
         changed["payload"]["bytesBase64"] = json!(b64(&other));

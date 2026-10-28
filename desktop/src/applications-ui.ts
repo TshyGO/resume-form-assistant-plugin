@@ -473,7 +473,7 @@ export function mountApplications(
             <div class="record-text"><strong>${escapeHtml(item.subject || item.originalFilename || "导入的材料")}</strong><span>${escapeHtml(evidenceLine(item))}</span></div>
             <div class="record-actions">
               <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
-              <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
+              <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button><button type="button" data-act="recycle-evidence" data-evidence="${escapeHtml(item.id)}">移到回收站</button>
             </div>
           </li>`).join("")}
         </ul>` : `<p class="panel-empty">在「招聘通知」里导入材料并关联到这条申请后，会出现在这里。</p>`}
@@ -547,6 +547,7 @@ export function mountApplications(
           if (act === "snapshot" && snapshotId) return void openSnapshot(snapshotId);
           if (act === "evidence" && evidenceId) return void openEvidence(evidenceId);
           if (act === "unassociate" && evidenceId) return void unassociateEvidence(evidenceId, id);
+          if (act === "recycle-evidence" && evidenceId) return void recycleEvidence(evidenceId, id);
           return void handleAction(act, view);
         });
       });
@@ -626,7 +627,19 @@ export function mountApplications(
     dialogEl("evidence-dialog").close();
   });
 
+  async function recycleEvidence(evidenceId: string, applicationId: string) {
+    if (actionBusy) return;
+    actionBusy = true;
+    try {
+      await invoke("set_evidence_recycled_cmd", { evidenceId, recycled: true });
+      msg.textContent = "已移到招聘通知的回收站，原件和附件保留，可在那里恢复。";
+      if (ctl.selectedId === applicationId) await loadDetail(applicationId);
+    } catch (err) { msg.textContent = invokeError(err); }
+    finally { actionBusy = false; }
+  }
+
   async function unassociateEvidence(evidenceId: string, applicationId: string) {
+    if (actionBusy) return;
     try {
       await invoke("unassociate_evidence_cmd", { evidenceId });
       msg.textContent = "已取出，材料回到「招聘通知」待整理。这条申请的证据状态按剩下的材料重算。";

@@ -85,6 +85,7 @@ export function importErrorText(code: string): string {
 export function describeImport(report: ImportOutcome | null | undefined): Message {
   const imported = report?.imported?.length ?? 0;
   const duplicates = report?.duplicates?.length ?? 0;
+  const recycled = report?.duplicates?.filter(item => typeof item === "object" && item !== null && "recycled" in item && item.recycled === true).length ?? 0;
   const failed = report?.failed ?? [];
   if (!imported && !duplicates && !failed.length) {
     return { tone: "info", text: "没有选择任何文件。" };
@@ -92,7 +93,8 @@ export function describeImport(report: ImportOutcome | null | undefined): Messag
 
   const parts = [];
   if (imported) parts.push(`已导入 ${imported} 条，待分类`);
-  if (duplicates) parts.push(`${duplicates} 条内容和已有的完全相同，没有重复保存；需要的话可以把它关联到另一条申请`);
+  if (duplicates > recycled) parts.push(`${duplicates - recycled} 条内容和已有的完全相同，没有重复保存；需要的话可以把它关联到另一条申请`);
+  if (recycled) parts.push(`${recycled} 条已在通知回收站中，没有重复保存；请到回收站恢复后查看或关联`);
   for (const item of failed) parts.push(`${item.name}：${importErrorText(item.code)}`);
 
   const tone = failed.length ? "warn" : imported ? "success" : "info";

@@ -32,7 +32,7 @@ test('fallback requires a second explicit click and cancellation does not write'
   assert.equal(p.get('mail-excerpt-offer').hidden, false); assert.equal(p.calls.length, 1);
   assert.equal(p.get('mail-save-label').textContent, '重试取得原件');
   p.get('mail-excerpt-cancel').click(); await p.flush(); assert.equal(p.calls.length, 1);
-  assert.equal(p.get('mail-save-label').textContent, '保存到桌面');
+  assert.equal(p.get('mail-save-label').textContent, '暂不关联并保存');
   p.get('mail-save-button').click(); await p.flush(); p.get('mail-excerpt-accept').click(); await p.flush();
   const writes = p.calls.filter(c => c.target === 'desktop'); assert.equal(writes.length, 1); assert.equal(writes[0].msg.kind, 'excerpt');
   assert.match(p.get('mail-save-status').textContent, /未保存邮件原件及附件/);

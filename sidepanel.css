@@ -516,8 +516,6 @@ body[data-active-view="mail"] #job-assist, body[data-active-view="mail"] #legacy
 .mail-save-status[data-tone="error"] { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
 .mail-read-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .mail-association { margin-top: 12px; color: var(--muted); font-size: 12px; }
-.mail-association summary { cursor: pointer; min-height: 30px; color: var(--ink); font-size: 13px; }
-.mail-association summary span { margin-left: 6px; color: var(--muted); font-size: 12px; }
 .mail-association label { display: block; margin: 10px 0 6px; }
 .mail-search { display: flex; gap: 8px; margin-top: 8px; }
 .mail-search input { min-width: 0; flex: 1; }
@@ -538,3 +536,12 @@ body[data-active-view="mail"] #job-assist, body[data-active-view="mail"] #legacy
 .mail-association .mail-application-option.is-selected { border-color: var(--accent-line); background: var(--accent-pale); }
 .mail-application-options[disabled] .mail-application-option { color: var(--muted); cursor: not-allowed; }
 .mail-destination { overflow-wrap: anywhere; }
+.mail-workspace { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.mail-step-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-step-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 650; color: var(--ink); }
+.mail-step-number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 50%; background: var(--accent-pale); color: var(--accent-strong); font-size: 12px; }
+.mail-action-footer { flex: none; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.mail-action-footer .mail-save-button { margin-top: 10px; }
+.mail-action-footer .mail-read-note { margin-top: 7px; }
+.mail-association .mail-application-option.is-skip { min-height: 32px; padding: 6px 1px; border-color: transparent; background: transparent; color: var(--muted); }
+.mail-association .mail-application-option.is-skip strong { font-weight: 400; }

@@ -108,7 +108,7 @@ export function mountInbox(
   { pickFiles = null, listenDrop = null, mountAi = null }: InboxHost = {},
 ) {
   const shell = maybe("inbox-shell");
-  const list = must("inbox-list");
+  let list = must("inbox-list");
   const preview = must("inbox-preview");
   const status = must("inbox-status");
   const count = maybe("inbox-count");
@@ -118,6 +118,8 @@ export function mountInbox(
 
   let items: EvidenceSummary[] = [];
   let loaded = false;
+  let listMode: "stored" | "recycled" = "stored";
+  let refreshRevision = 0;
   let aiPanel: { unmount(): void } | null = null;
   let selectedId: string | null = null;
   let previewMode: "pending" | "stored" = "stored";
@@ -145,15 +147,22 @@ export function mountInbox(
 
   /** 重新读一遍待整理列表。读不出来时返回 false，并且**不**把列表画成空的。 */
   async function refresh(): Promise<boolean> {
+    const mode = listMode;
+    const revision = ++refreshRevision;
     try {
-      items = await invoke<EvidenceSummary[]>("list_inbox_cmd");
+      const next = await invoke<EvidenceSummary[]>(mode === "recycled" ? "list_recycled_evidence_cmd" : "list_inbox_cmd");
+      if (revision !== refreshRevision || mode !== listMode) return false;
+      items = next;
     } catch (error) {
+      if (revision !== refreshRevision || mode !== listMode) return false;
       say({ tone: "warn", text: `读不到招聘通知：${invokeError(error)}` });
       // 读失败不等于没有通知：已经显示的列表原样留着；从没读成功过就如实说读不出来，
       // 而不是摆出「没有待整理的招聘通知」的空状态。
       if (!loaded) {
-        list.innerHTML = '<div class="pane-empty"><h3>读不到招聘通知</h3><p>点右上角「刷新」再试一次。</p></div>';
-        if (count) count.textContent = "";
+        list.innerHTML = `<div class="pane-empty"><h3>${mode === "recycled" ? "读不到回收站" : "读不到招聘通知"}</h3><p>请检查本机档案后重试。</p><button type="button">重新读取</button></div>`;
+        list.querySelector("button")?.addEventListener("click", () => { say(null); void refresh(); });
+        if (previewMode !== "pending") preview.innerHTML = '<div class="pane-empty" data-read-error><h2>暂时无法读取通知</h2><p>请点击列表中的「重新读取」重试。</p></div>';
+        if (count && mode === "stored") count.textContent = "";
       }
       return false;
     }
@@ -165,11 +174,12 @@ export function mountInbox(
       selectedId = null;
       previewToken += 1;
       clearAiPanel();
+      clearAttachments?.(); clearAttachments = null;
       preview.innerHTML = items.length ? emptyPreview : emptyState();
     } else if (!items.length) {
       clearAiPanel();
       preview.innerHTML = emptyState();
-    } else if (!selectedId && preview.querySelector?.(".workspace-empty")) {
+    } else if (!selectedId && preview.querySelector?.(".workspace-empty, [data-read-error]")) {
       preview.innerHTML = emptyPreview;
     }
     return true;
@@ -177,6 +187,7 @@ export function mountInbox(
 
   /** 一条都没有：整页给空状态，导入入口就在眼前。 */
   function emptyState() {
+    if (listMode === "recycled") return '<div class="workspace-empty"><h2>回收站为空</h2><p>移到回收站的通知会保留原件、附件和关联，可以在这里恢复。</p></div>';
     return `
       <div class="workspace-empty inbox-empty">
         <span class="workspace-empty-icon">${ICON.upload}</span>
@@ -196,13 +207,13 @@ export function mountInbox(
 
   function renderList() {
     shell?.classList.toggle("is-empty", loaded && !items.length);
-    if (count) count.textContent = loaded ? String(items.length) : "";
+    if (count && listMode === "stored") count.textContent = loaded ? String(items.length) : "";
     if (!loaded) {
       list.innerHTML = '<p class="todo-list-note muted">正在读取…</p>';
       return;
     }
     if (!items.length) {
-      list.innerHTML = `<div class="pane-empty"><h3>没有待整理的通知</h3><p>${escapeHtml(EMPTY_INBOX)}</p></div>`;
+      list.innerHTML = listMode === "recycled" ? '<div class="pane-empty"><h3>回收站为空</h3><p>移入的通知会在这里保留，可随时恢复。</p></div>' : `<div class="pane-empty"><h3>没有待整理的通知</h3><p>${escapeHtml(EMPTY_INBOX)}</p></div>`;
       return;
     }
     list.innerHTML = `<ul class="inbox-list">${items
@@ -312,14 +323,33 @@ export function mountInbox(
   }
 
   async function showStored() {
+    const token = ++previewToken;
+    if (listMode !== "stored") {
+      listMode = "stored"; list = must("inbox-list"); items = []; selectedId = null; loaded = false;
+      clearAiPanel(); clearAttachments?.(); clearAttachments = null;
+      previewMode = "stored";
+      renderList();
+      preview.innerHTML = '<p class="pane-loading muted">正在读取通知…</p>';
+      if (!await refresh()) return;
+    }
+    if (listMode !== "stored" || token !== previewToken) return;
     previewMode = "stored";
     if (selectedId && items.some((item) => item.id === selectedId)) {
       await select(selectedId);
       return;
     }
-    ++previewToken;
     clearAiPanel();
     preview.innerHTML = items.length ? emptyPreview : emptyState();
+  }
+
+  async function showRecycled() {
+    listMode = "recycled"; list = must("inbox-recycled-list"); items = []; selectedId = null; loaded = false;
+    const token = ++previewToken;
+    previewMode = "stored"; clearAiPanel(); clearAttachments?.(); clearAttachments = null;
+    renderList();
+    preview.innerHTML = '<p class="pane-loading muted">正在读取回收站…</p>';
+    const refreshed = await refresh();
+    if (refreshed && listMode === "recycled" && token === previewToken) preview.innerHTML = items.length ? '<div class="pane-empty"><h2>选择一条通知</h2><p>可查看原文和附件，或恢复到原位置。</p></div>' : emptyState();
   }
 
   function mailFacts(item: EvidencePreview) {
@@ -339,6 +369,7 @@ export function mountInbox(
     // （取消进行中的请求）就永远不会跑。
     clearAiPanel();
     const item = data;
+    const recycled = Boolean(item.recycled || listMode === "recycled");
     const duplicate = duplicateNote(item);
     // 正文经过转义写入：邮件里的 <script> 只会作为字面文本出现。
     const body = item.bodyExtract
@@ -364,7 +395,7 @@ export function mountInbox(
           </div>
           <div class="evidence-reader-actions">
             ${openable ? `<button type="button" data-act="open">${ICON.open}用系统程序打开</button>` : ""}
-            <button type="button" data-act="toggle-organizer" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}整理与关联</button>
+            ${recycled ? '<button type="button" data-act="restore" class="primary">恢复通知</button>' : `<button type="button" data-act="toggle-organizer" aria-expanded="false" aria-controls="inbox-organizer">${ICON.tag}整理与关联</button><button type="button" data-act="recycle">移到回收站</button>`}
             <button type="button" data-act="toggle-reader" aria-pressed="false">展开阅读</button>
           </div>
         </header>
@@ -375,6 +406,7 @@ export function mountInbox(
               <h3 id="evidence-original-heading">${item.kind === "eml" ? "邮件正文" : "原文"}</h3>
               ${duplicate ? `<p class="evidence-duplicate-note">${escapeHtml(duplicate)}</p>` : ""}
               ${mailFacts(item)}
+              ${recycled ? '<p class="evidence-note evidence-recycled-note">这条通知在回收站中。原件、附件及原关联均保留，恢复后回到原位置。</p>' : ''}
               ${note}
               ${image}
               ${item.kind === "eml" ? `<div data-mail-body>${body}</div>` : body}
@@ -440,7 +472,7 @@ export function mountInbox(
       </article>
     `;
     const slot = maybe("inbox-ai");
-    if (mountAi && slot) {
+    if (mountAi && slot && !recycled) {
       // 确认成功那句话由状态栏说：面板本身马上会随着重画被卸掉。
       aiPanel = mountAi(slot as unknown as Element, item.id, (message) => {
         say({ tone: "success", text: message });
@@ -477,6 +509,13 @@ export function mountInbox(
     if (acting) return;
     const selectionToken = previewToken;
     try {
+      if (action === "recycle" || action === "restore") {
+        setActing(true);
+        await invoke("set_evidence_recycled_cmd", { evidenceId: item.id, recycled: action === "recycle" });
+        say({ tone: "success", text: action === "recycle" ? "已移到通知回收站，原件和附件保留，可在那里恢复。" : item.applicationId ? "已恢复到原申请的招聘通知中。" : "已恢复到待关联列表。" });
+        await refresh();
+        return;
+      }
       if (action === "toggle-organizer") {
         const organizer = maybe("inbox-organizer");
         const button = preview.querySelector<HTMLButtonElement>('[data-act="toggle-organizer"]');
@@ -564,6 +603,10 @@ export function mountInbox(
       const message = describeImport(report);
       const stored = (report?.imported?.length ?? 0) + (report?.duplicates?.length ?? 0) > 0;
       say(message);
+      if (stored && listMode === "recycled") {
+        document.getElementById("mailbox-tab-stored")?.click();
+        if (listMode === "recycled") await showStored();
+      }
       const refreshed = await refresh();
       if (!refreshed) {
         say({ tone: "warn", text: `${message.text}列表刷新失败，${stored ? "材料已保存，无需重复导入。" : "内容仍保留，可重试导入。"}` });
@@ -675,5 +718,5 @@ export function mountInbox(
 
   if (listenDrop) listenDrop((paths) => void importPaths(paths));
 
-  return { refresh, importPaths, submitPaste, showPending, showStored };
+  return { refresh, importPaths, submitPaste, showPending, showStored, showRecycled };
 }
