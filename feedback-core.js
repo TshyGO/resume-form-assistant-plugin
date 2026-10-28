@@ -219,12 +219,13 @@
       libraries[key] = (libraries[key] || 0) + n(value);
     }
     const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
-    const called = aiCalled(input);
     // Fields that appeared after a choice (#269) add to the first round's match counts; their
-    // error code shows only when the first round had none.
+    // error code shows only when the first round had none. A catch-up that called the AI counts
+    // as a call even when the first round did not need one.
     const g = input.grown || {};
+    const called = g.aiCalled === true ? true : aiCalled(input);
     const plus = (value, extra) => Number.isInteger(value) ? value + n(extra) : value;
-    const code = d?.errorCode === "none" && g.errorCode ? g.errorCode : d?.errorCode;
+    const code = (!d?.errorCode || d.errorCode === "none") && g.errorCode ? g.errorCode : d?.errorCode;
     const lines = [
       "[页面]",
       `url_path: ${pathTemplate(input.path)}`,

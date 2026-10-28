@@ -2307,7 +2307,7 @@
     const unfilledControls = [];
     // #301 选完后新出现的字段（#269）和首轮字段一样计入结果、诊断和留档；进诊断的只有计数。
     // pendingNew 是排队等 AI 补填的新字段，没轮到补填就结束的算没送 AI。
-    const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, errorCode: "", drops: {} };
+    const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, aiCalled: false, errorCode: "", drops: {} };
     const pendingNew = [];
     let probe = null;
     // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
@@ -2634,6 +2634,9 @@
         grown.local += counted(d.ruleMatches);
         grown.aiFields += counted(d.aiFields);
         grown.aiMatches += counted(d.aiMatches);
+        try {
+          if (self.ResumeProFeedback?.aiCalled?.({ diagnostics: reply?.diagnostics, requested: true }) === true) grown.aiCalled = true;
+        } catch { /* diagnostics are optional; never break the fill */ }
         let dropped = [];
         try {
           dropped = self.ResumeProFeedback?.fillDrops?.({ fieldCount: batch.length, diagnostics: reply?.diagnostics, requested: true }) || [];
