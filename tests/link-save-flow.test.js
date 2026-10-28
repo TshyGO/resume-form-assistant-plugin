@@ -154,6 +154,22 @@ test('a failed or partial AI answer opens the form with what is known', async ()
   assert.equal(same.fields.title, '', 'a company name never lands in the title field');
 });
 
+test('#278: when the AI found neither field, the note names only what the page read could not fill', async () => {
+  const { afterAssist } = await load();
+  const { describeManualSave } = await import('../link/copy.mjs');
+  const reply = { status: 'manual', reason: 'missing_both', reliable: false, fields: { company: '', title: '' } };
+  const empty = { company: '', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
+
+  assert.equal(afterAssist(reply, empty).reason, 'missing_both');
+  const titleOnly = afterAssist(reply, { ...empty, title: '数据分析师' });
+  assert.equal(titleOnly.fields.title, '数据分析师');
+  assert.equal(titleOnly.reason, 'missing_company');
+  assert.equal(afterAssist(reply, { ...empty, company: '星河科技' }).reason, 'missing_title');
+  const both = afterAssist(reply, { ...empty, company: '星河科技', title: '数据分析师' });
+  assert.equal(both.reason, 'manual', 'both fields are filled, so neither is called missing');
+  assert.equal(describeManualSave(both.reason), '请核对公司和岗位。缺的请自己补上，插件不会猜。');
+});
+
 test('a reliable flag without both fields still asks the user', async () => {
   const { nextSaveStep } = await load();
   assert.equal(nextSaveStep({ company: '星河科技', title: '', reliable: true }).action, 'form');
@@ -168,4 +184,30 @@ test('an extraction that is not "reliable" by confidence asks the AI even if it 
     assert.equal(step.action, 'assist', confidence);
   }
   assert.equal(nextSaveStep({ company: '星河科技', title: '后端开发工程师', reliable: true, confidence: 'reliable' }).action, 'commit');
+});
+
+test('#278: with no fragments left the form opens without the AI, and a double gap names both fields', async () => {
+  const { nextSaveStep } = await load();
+  const { describeManualSave } = await import('../link/copy.mjs');
+  const neither = nextSaveStep({
+    company: '', title: '', reliable: false, confidence: 'invalid',
+    assistReasons: ['missing_company', 'missing_title', 'title_unconfirmed'], fragments: []
+  });
+  assert.equal(neither.action, 'form');
+  assert.equal('fragments' in neither, false, 'nothing is queued for the AI');
+  assert.equal(neither.reason, 'missing_both');
+  assert.equal(describeManualSave(neither.reason), '没认出公司和岗位，请手动填写。');
+  for (const assistReasons of [['missing_title', 'missing_company'], ['title_conflict', 'missing_company', 'missing_title']]) {
+    const step = nextSaveStep({ company: '', title: '', reliable: false, confidence: 'invalid', assistReasons, fragments: [] });
+    assert.equal(step.reason, 'missing_both', assistReasons.join(','));
+  }
+
+  const titleOnly = nextSaveStep({
+    company: '', title: '数据分析师', reliable: false, confidence: 'uncertain',
+    assistReasons: ['missing_company'], fragments: []
+  });
+  assert.equal(titleOnly.action, 'form');
+  assert.equal(titleOnly.fields.title, '数据分析师');
+  assert.equal(titleOnly.reason, 'missing_company');
+  assert.equal(describeManualSave(titleOnly.reason), '公司名还不确定。请核对后再保存。');
 });
