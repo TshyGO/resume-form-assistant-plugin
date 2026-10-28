@@ -217,22 +217,19 @@
 
     // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
     // 在页面空白处点一下收起它（只派发事件），再按文本框核对一次。
-    // Element's clickoutside closes the suggestions on a mousedown and mouseup outside them. No
-    // click event is sent: a page may save an open editor when it sees a click outside it.
-    function pressOutside(body) {
-      const ViewMouseEvent = body.ownerDocument?.defaultView?.MouseEvent || (typeof MouseEvent === 'function' ? MouseEvent : null);
-      if (!ViewMouseEvent) return;
-      body.dispatchEvent(new ViewMouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      body.dispatchEvent(new ViewMouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    // Element's autocomplete closes its suggestions on Tab (Element UI 2 and Element Plus alike).
+    // The key goes only to the box being filled, so nothing else on the page reacts to it.
+    function pressTab(el) {
+      const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      if (!ViewKeyboardEvent) return;
+      el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
     }
 
     async function freeText(ctx, value, shown) {
       const typed = await text(ctx, value, shown);
       // Only a filled box gets its suggestions closed; after a failure the page is left alone.
-      if (!typed.ok) return typed;
-      const body = ctx.el.ownerDocument?.body;
-      if (!body || stop(ctx)) return typed;
-      pressOutside(body);
+      if (!typed.ok || !ctx.el?.isConnected || stop(ctx)) return typed;
+      pressTab(ctx.el);
       const saved = checks.get(ctx.el);
       if (!saved) return typed;
       const again = await verify(ctx, saved.accepted, saved.inspect);
