@@ -2765,7 +2765,7 @@
           } else {
             const staleMeta = fieldMetaMap.get(match.fieldId);
             unfilledLabels.push(`${staleMeta?.label || staleMeta?.placeholder || staleMeta?.name || "未命名字段"}（页面已变化）`);
-            unfilledControls.push({ label: "（字段名已隐藏）", reason: "页面已变化",
+            unfilledControls.push({ label: "（字段名已隐藏）", reason: "页面已变化", reasonCode: "element_disconnected",
               control: withFillProbe(api => api.describeControl(element), null) });
           }
           continue;
@@ -2801,6 +2801,16 @@
             ? "字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"
             : "已停止填写，请核对网页。");
         };
+        // #301 Moka 起止时间：选了年，页面会把同一对里还空着的月带成 1。只看只装着这两个字段的那一层里排在后面的另一半，
+        // 它从批准起没变、还空着；选完后它变了，就按页面带出的值重新批准，不当成用户改的。
+        const choice = entry => CHOICE_CONTROL_KINDS.has(entry.kind === "radio" ? "radio" : entry.controlKind);
+        const pair = element.binding?.item?.parentElement;
+        const inPair = entry => { const node = entry.kind === "radio" ? entry.elements?.[0] : entry.element; return Boolean(node) && pair.contains(node); };
+        const partner = !assisted && !deep && pair && choice(element) && [...new Set(fieldMap.values())].filter(inPair).length === 2
+          ? queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)).find(other => other && other !== element && choice(other)
+            && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
+          : null;
+        const partnerBefore = partner ? fillValueSnapshot(partner) : null;
         let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
         stopInterruptedControl();
         // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
@@ -2870,6 +2880,8 @@
 
         if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
           await pickUpNewFields(position);
+          const partnerNow = partner ? fillValueSnapshot(partner) : null;
+          if (partnerNow !== null && partnerNow !== partnerBefore) approvedValues.set(partner, partnerNow);
         }
       }
       // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。

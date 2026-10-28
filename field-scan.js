@@ -21,7 +21,8 @@
   const CHROME_TOKENS = new Set(["header", "navbar", "nav", "navigation", "topbar", "top-bar", "site-header", "site-nav",
     "page-header", "global-header", "app-header", "main-header", "layout-header", "ant-layout-header", "el-header",
     "top-nav", "main-nav", "menu-bar"]);
-  const POPUP_SELECTOR = "[role='listbox'], [role='tree'], [role='menu'], [role='option']";
+  // layui 的选项列表 dl 在组件根 .layui-form-select 里面（#301）。
+  const POPUP_SELECTOR = "[role='listbox'], [role='tree'], [role='menu'], [role='option'], .layui-form-select > dl";
   const POPUP_TOKEN = /[-_](?:dropdown|popper|popover|popup)(?:[-_]?(?:menu|panel|content|wrapper|list|inner))?$|^(?:dropdown-menu|popper|popover)$/i;
   const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor']";
   const SELECT_TOKEN = /(?:^|[-_])(?:select|selector|cascader|combobox|combo|dropdown|autocomplete|treeselect|multiselect|picker)(?:$|[-_])/i;
@@ -309,6 +310,10 @@
       const library = tokens.some((token) => LIBRARY_SELECT_TOKENS.has(token.toLowerCase()));
       if (library || ariaMatch) return node;
       if (best && Array.from(node.querySelectorAll('[role="combobox"]')).some(other => !best.contains(other))) break;
+      // #301 Moka 整行（apply-field 带 select_info-*、Select-* 类名）也像下拉，可它装着题目：根不能把题目包进去。
+      // 类名里带 select 的标题（my-select__label）是组件自己显示已选值的地方，不算题目。
+      if (best && Array.from(node.children).some((child) => !child.contains(el) && isLabelLike(child)
+        && !classTokens(child).some((token) => SELECT_TOKEN.test(token)))) break;
       if (ariaMatch || library || plainMatch || ownSignal || el.readOnly || inputType(el) === "search"
         || node.querySelector("[role='combobox'], [aria-haspopup]:not([aria-haspopup='false']), input[readonly]")) {
         best = node;
@@ -566,8 +571,12 @@
       return null;
     }
 
+    // #301 Moka 下拉的外框（label.sd-Select-container）包着输入框，里面显示的是已选值，不是题目。
+    const ownFrame = (label, el) => ["custom-select", "cascader"].includes(control.controlKind) && control.root.contains(label)
+      && label.contains(el) && classTokens(label).some((token) => SELECT_TOKEN.test(token) && !NOT_SELECT_TOKEN.test(token));
     for (const el of control.elements) {
       for (const label of Array.from(el.labels || [])) {
+        if (ownFrame(label, el)) continue;
         const text = elementText(label, ctx, control);
         if (text) return { text, source: "explicit", labelEl: label };
       }
@@ -584,7 +593,7 @@
     }
 
     const wrapping = primary.closest("label");
-    if (wrapping) {
+    if (wrapping && !ownFrame(wrapping, primary)) {
       const text = elementText(wrapping, ctx, control);
       if (text) return { text, source: "explicit", labelEl: wrapping };
     }
@@ -968,7 +977,8 @@
     const ctx = makeContext(doc || control.item.ownerDocument, options);
     if (hasForeignControl(control.item, control.root, ctx)) return false;
     const resolved = resolveLabel(control, control.item, ctx);
-    if (control.labelSource === "placeholder") return resolved.source === "placeholder";
+    // 只靠占位文字的下拉选好值后占位文字会消失（#301 Moka 年 / 月）：没冒出别的题目就还是同一个。
+    if (control.labelSource === "placeholder") return ["placeholder", "none"].includes(resolved.source);
     const label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
     return Boolean(label) && label === control.label;
   }
@@ -981,12 +991,21 @@
     const placeholders = placeholdersOf(control);
     const skip = new Set();
     const segments = [];
+    // #301 Moka 下拉不挂到 body 时，弹层画在组件根里、包着输入框的 <label> 外框旁边，自己是 absolute / fixed 定位：
+    // 外框外面浮着的一块是展开的选项，不是显示的值（真机上槽位宽 0 看不见，这里不靠它）。
+    const label = control.element?.closest?.("label");
+    const frame = label && control.root.contains(label) ? label : null;
+    const floatsOutside = (node) => {
+      if (!frame || node.contains(frame) || frame.contains(node)) return false;
+      const position = node.ownerDocument?.defaultView?.getComputedStyle?.(node)?.position;
+      return position === "absolute" || position === "fixed";
+    };
     const walk = (node) => {
       for (let child = node.firstChild; child; child = child.nextSibling) {
         if (child.nodeType === 3) {
           const text = squash(child.data);
           if (text) segments.push(text);
-        } else if (child.nodeType === 1 && !child.matches(POPUP_SELECTOR)
+        } else if (child.nodeType === 1 && !child.matches(POPUP_SELECTOR) && !floatsOutside(child)
           && !classTokens(child).some(token => POPUP_TOKEN.test(token)) && !skipTextElement(child, ctx, skip)) {
           walk(child);
         }
