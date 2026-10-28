@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { JSDOM } = require("jsdom");
 const scanner = require("../field-scan.js");
+const { ETHNIC, selectItem, wireSelect } = require("./helpers/beisen-form.js");
 
 function load(html) {
   const dom = new JSDOM(`<form>${html}</form>`, { runScripts: "outside-only" });
@@ -647,6 +648,21 @@ test("Element autocomplete: a value the page refuses is not followed by a click 
   assert.equal(bodyClicks, 0, "a failed fill does not click the page");
 });
 
+test("Element autocomplete: a value the page marks invalid once the suggestions close keeps its final read", async () => {
+  // #301：和文本框一样，页面后来清掉提示的，结束前的复核算填上。
+  const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"] });
+  let invalid = false;
+  h.doc.addEventListener("mouseup", (event) => { if (event.target === h.doc.body) invalid = true; });
+  const api = h.w.ResumeProControls.create({ timeoutMs: 200, settleMs: 35, isVisible: (el) => !el.closest("[hidden]"), ...textDeps(h.w),
+    inspectText: (el, expected) => el.value !== expected ? { ok: false, reason: "value_not_committed" }
+      : invalid ? { ok: false, reason: "validation_not_cleared" } : { ok: true, reason: "" } });
+  const result = await api.operate(h.target, "广州市天河区");
+  assert.equal(result.reason, "validation_not_cleared", JSON.stringify(result));
+  assert.equal(api.check(h.target)?.reason, "validation_not_cleared");
+  invalid = false;
+  assert.equal(api.check(h.target)?.ok, true);
+});
+
 test("Element autocomplete: suggestions that pop up after the typed value are closed too", async () => {
   // #299 复刻 S08b/S12：聚焦时没有建议，改为打字；打完字建议才弹出来，原来一直开着挡住后面的字段。
   const h = elAutocomplete({ forEmpty: [], suggestions: ["广州市", "广元市"] });
@@ -834,6 +850,26 @@ test("a day the calendar does not allow (future) is not chosen", async () => {
   assert.equal(h.shown(), "");
 });
 
+test("a Beisen date the page still marks invalid keeps its final check, so a later field can clear the error", async () => {
+  // #301 开始 / 结束时间成对校验：选上的开始时间晚于页面上原有的结束时间，页面在这一项上标错，
+  // 结束时间填完后才清掉。控件层留着这一项的核对，填完再看一次（content.js 结束前的复核）。
+  const h = calendarHost({ kind: "phoenix-day" });
+  const control = h.doc.querySelector(".form-item__control");
+  new h.w.MutationObserver(() => {
+    if (h.shown() && !control.querySelector(".form-item__error")) control.insertAdjacentHTML("beforeend", `<span class="form-item__error">开始时间必须早于结束时间</span>`);
+  }).observe(h.doc.querySelector(".phoenix-select__selected"), { childList: true, characterData: true, subtree: true });
+  const api = h.w.ResumeProControls.create({ timeoutMs: 200, settleMs: 35, isVisible: (el) => !el.closest("[hidden]"),
+    inspectText: (el) => el.closest(".form-item").querySelector(".form-item__error") ? { ok: false, reason: "validation_not_cleared" } : { ok: true, reason: "" } });
+  const result = await api.operate(h.target, "2019-09-01");
+  assert.equal(result.reason, "validation_not_cleared", JSON.stringify(result));
+  assert.equal(h.shown(), "2019-09-01");
+  assert.equal(api.check(h.target)?.reason, "validation_not_cleared");
+  control.querySelector(".form-item__error").remove();
+  assert.equal(api.check(h.target)?.ok, true);
+  h.doc.querySelector(".phoenix-select__selected").textContent = "";
+  assert.equal(api.check(h.target)?.reason, "value_reverted");
+});
+
 test("a field container marked with an error class keeps its title", () => {
   // 2026-10-22 金发真机：校验后给整行加 first-error-field，原来连题目一起被当成错误提示跳过。
   const { doc } = load(`<div class="fields-col first-error-field"><div class="form-item"><label class="form-item__text">出生日期</label>
@@ -936,29 +972,47 @@ test("a box seen as a dropdown that never opens anything is reported, not typed 
   assert.equal(h.doc.querySelector("input").value, "", "the trial text is put back");
 });
 
+// 北森 2022 版常量选择器（见 helpers/beisen-form.js），控件层按正式的等待时长。
+function constantSelector(label, options) {
+  const h = load(selectItem("f1", label, 100));
+  const select = wireSelect(h.doc, "f1", options);
+  const api = h.w.ResumeProControls.create({ settleMs: 35, isVisible: (el) => !el.closest("[hidden]") });
+  return { ...h, ...select, api, target: scanned(h.doc, label) };
+}
+
 test("options that load a moment after opening are waited for instead of jumping to the search box", async () => {
   // 2026-10-22 金发真机：页面刚打开时第一次点开「民族」，选项还在加载，原来立刻改去搜索框输入，等不到就失败。
-  const h = beisen();
-  const root = h.root;
-  const original = root.cloneNode(true);
-  root.replaceWith(original);
-  const searched = [];
-  original.addEventListener("click", () => {
-    const layer = h.doc.createElement("div");
-    layer.innerHTML = `<div class="common-unmodeled-layer"><div class="phoenix-input"><input class="phoenix-input__input"></div><div class="list"><div class="hint">请在左侧选择内容</div><div class="hint">暂未选择</div></div><div class="footer"><div class="phoenix-button__content">取消</div><div class="phoenix-button__content">确定</div></div></div>`;
-    layer.querySelector("input").addEventListener("input", (event) => searched.push(event.target.value));
-    h.doc.body.append(layer);
-    setTimeout(() => {
-      layer.querySelector(".list").innerHTML = ["汉族", "回族", "满族"].map((text) => `<div class="list-item-container"><span class="item-text-label">${text}</span></div>`).join("");
-      layer.querySelectorAll(".list-item-container").forEach((row) => row.addEventListener("click", () => {
-        original.querySelector(".phoenix-select__selected").textContent = row.textContent.trim(); layer.remove();
-      }));
-    }, 60);
-  });
-  const target = scanned(h.doc, "民族");
-  const result = await h.api.operate(target, "回族");
+  // 金发 /form 的公开代码：字典这时才从后台拉，左侧只有不带文字的加载图标，右侧「已选 0/1」「请在左侧选择内容」已经画出来。
+  // 原来把已选栏当成了选项列表，搜索后一直盯着它等，报「等待选项更新超时」。
+  const h = constantSelector("民族", { choices: ETHNIC, loadMs: 600 });
+  const result = await h.api.operate(h.target, "回族");
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.deepEqual(searched, [], "the search box is not used while the list is still loading");
+  assert.deepEqual(h.events, ["radio:回族", "ok"]);
+  assert.deepEqual(h.searches, [], "the search box is not used while the list is still loading");
+});
+
+test("a list whose active option only carries a highlight class is still read option by option", async () => {
+  // 只有 <mark> 才把一段文字拼成一项：键盘停着的那一项带 is-highlighted、select2-results__option--highlighted 类名时，
+  // 列表照旧一项一项读，不读成「男女」一项。
+  for (const [choices, wanted, active] of [[["男", "女"], "女", "is-highlighted"],
+    [["汉族", "回族", "满族"], "回族", "select2-results__option--highlighted"]]) {
+    const h = load(selectItem("f1", "选项", 100));
+    const root = h.doc.querySelector(".phoenix-select");
+    const clicks = [];
+    root.addEventListener("click", () => {
+      if (h.doc.querySelector(".my-dropdown")) return;
+      const layer = h.doc.createElement("div");
+      layer.className = "my-dropdown";
+      layer.innerHTML = `<ul class="my-dropdown__list">${choices.map((text, index) => `<li class="my-dropdown__item${index ? "" : ` ${active}`}">${text}</li>`).join("")}</ul>`;
+      layer.querySelectorAll("li").forEach((li) => li.addEventListener("click", () => {
+        clicks.push(li.textContent); root.querySelector(".phoenix-select__selected").textContent = li.textContent; layer.remove();
+      }));
+      h.doc.body.append(layer);
+    });
+    const result = await h.api.operate(scanned(h.doc, "选项"), wanted);
+    assert.equal(result.ok, true, `${active}: ${JSON.stringify(result)}`);
+    assert.deepEqual(clicks, [wanted]);
+  }
 });
 
 test("a dropdown already showing the wanted value is not opened again", async () => {

@@ -41,6 +41,8 @@
   // 弹层里的操作文字（北森「勾选 + 确定」式底部按钮、已选计数）不是选项。
   const GENERIC_ACTION = /^(?:确定|确认|完成|取消|关闭|清空|清空已选|重置|全选|已选\s*\d+\s*\/\s*\d+|ok|cancel|confirm|done|clear|reset)$/i;
   const GENERIC_NOISE = /(?:^|[-_])(?:error|message|tip|tips|tooltip|help|hint|feedback)(?:$|[-_])/i;
+  // 加载图标：类名以 loading 结尾（北森 psd_page-loading），自己不带文字。lazyloading、loading-done 不算。
+  const LOADING_TOKEN = /(?:^|[-_])loading$/i;
   // 带月份的日期：通用路径分不清日历格子，交给日期操作或不填。
   const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
   // 通用路径交还前等自己的弹层退场的上限。
@@ -178,13 +180,21 @@
     const real = realSelector ? Array.from(popup.querySelectorAll(realSelector)) : [];
     return real.length ? real : Array.from(popup.querySelectorAll('[role="option"]'));
   }
+  // 搜索词高亮（北森 react-highlight-words）：「大专及以上」拆成 <mark>大专</mark><span>及以上</span>。
+  // 子元素里有 <mark>、并且都是不再往下分的行内元素时，整段文字算一个条目；只在类名上标了 highlighted 的不算。
+  const INLINE_TAGS = new Set(['MARK', 'SPAN', 'B', 'EM', 'STRONG', 'I']);
+  function highlightedText(node) {
+    const children = Array.from(node.children);
+    return children.some(child => child.tagName === 'MARK') && children.every(child => INLINE_TAGS.has(child.tagName) && !child.children.length);
+  }
   // 弹层里的条目：每个只含一段短文字的叶子，往上取到「只装着这一段文字」的最高一层当作可点的条目。
   function genericOptions(popup, h) {
     const hasText = node => Boolean(trim(node.textContent));
     // 弹层自己标了 role=option 就用它；否则按「只含一段短文字」找条目。
     const marked = Array.from(popup.querySelectorAll('[role="option"]')).filter(node => h.visible(node) && hasText(node));
     const leaves = marked.length ? [] : Array.from(popup.querySelectorAll('*')).filter(node => h.visible(node) && hasText(node)
-      && !Array.from(node.children).some(hasText) && trim(node.textContent).length <= 40
+      && (!Array.from(node.children).some(hasText) || highlightedText(node)) && !(node.parentElement && highlightedText(node.parentElement))
+      && trim(node.textContent).length <= 40
       && !node.closest('input, textarea, select, button[type="submit"]'));
     const items = marked.slice();
     for (const leaf of leaves) {
@@ -631,11 +641,21 @@
         const linked = ownedPopup(info, h.visible);
         if (linked.popup && !linked.ambiguous) { popup = linked.popup; ctx.popup = popup; info.popup = popup; }
       }
+      // 北森：右侧「已选」栏先画出来，左侧列表还在加载，点开时认到的只是已选栏。
+      // 同一个弹层里后来出现了更多条目，就换成装着全部条目的那一层。
+      if (info.library === 'generic' && ctx.popup !== popup && ctx.popup?.isConnected && ctx.popup.contains(popup)) {
+        const grown = genericPopupFrom(ctx.popup, info, h, searchDone ? 1 : 2);
+        if (grown && grown !== popup && grown.contains(popup)) { popup = grown; info.popup = popup; }
+      }
       const list = options(popup, info, level, h);
       if (!info.cascade) list.forEach(option => seenOptions.add(optionKey(option)));
       return list;
     };
-    const loading = () => info.combo.getAttribute('aria-busy') === 'true' || popup.getAttribute('aria-busy') === 'true';
+    // 通用路径：弹层里还显示着加载图标时，列表还没好。
+    const spinnerShown = () => info.library === 'generic' && Boolean(ctx.popup?.isConnected)
+      && Array.from(ctx.popup.querySelectorAll('[class]')).some(node => !trim(node.textContent)
+        && String(node.getAttribute('class')).split(/\s+/).some(token => LOADING_TOKEN.test(token)) && h.visible(node));
+    const loading = () => info.combo.getAttribute('aria-busy') === 'true' || popup.getAttribute('aria-busy') === 'true' || spinnerShown();
     // 弹层里显示着「暂无数据」一类的空状态；「加载中」还在等，不算。
     const emptyShown = () => [popup, ctx.popup].some(layer => layer?.isConnected && Array.from(layer.querySelectorAll('*')).some(node => {
       const text = trim(node.textContent);
@@ -661,8 +681,8 @@
     };
     const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
-      // 通用路线：第一次点开时选项常常还在从网站后台加载（金发民族，加载期间只显示「请在左侧选择内容」之类），
-      // 等列表连续 300ms 不变再判断有没有要的选项；一直在变或一直为空，等满后再改用搜索框。
+      // 通用路线：第一次点开时选项常常还在从网站后台加载（金发民族：左侧只有加载图标，右侧「已选」栏已经画出来），
+      // 等加载图标消失、列表连续 300ms 不变再判断有没有要的选项；一直在变或一直为空，等满后再改用搜索框。
       const generic = info.library === 'generic';
       const eagerSearch = searchable && !searchDone && !generic;
       let lastSeen = null, steadySince = Date.now();

@@ -2368,6 +2368,8 @@
     let filledCount = 0;
     let unconfirmedCount = 0;
     const verifiedControls = [];
+    // 写上了、页面当时还提示无效的字段：提示可能要等后面的字段填完才消（北森开始 / 结束时间联动校验），结束前再看一次。
+    const invalidControls = [];
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
@@ -2610,6 +2612,22 @@
             filledCount -= 1;
             if (item.isNew) supplemented -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
+          }
+        }
+        // 当时还提示无效的：提示已经消了就算填上，否则照旧记「页面仍提示无效」。只读：不写值、不聚焦，也不滚动页面。
+        for (const item of invalidControls) {
+          const checked = isFieldBindingCurrent(item.element) ? controlOperator?.check(item.element) : null;
+          if (!checked?.ok) {
+            noteControlFailure(item.element, item.fieldMeta, item.value, 'validation_not_cleared');
+            continue;
+          }
+          const control = item.element.kind === 'element' ? item.element.element : item.element;
+          filledCount += 1;
+          if (item.isNew) supplemented += 1;
+          if (item.element.kind === 'element' && dayDefaultedControls.has(control)) dayDefaulted += 1;
+          textFillFailures.delete(control);
+          if (item.element.kind === 'element' && !item.element.pickerType && !['custom-select', 'cascader'].includes(item.element.controlKind)) {
+            recordFilledTextControl(session, control);
           }
         }
       };
@@ -2855,7 +2873,9 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
-          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+            invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
+          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -4277,7 +4297,9 @@
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
-      if (result.ok && result.observed?.dayDefaulted) dayDefaultedControls.add(control); else dayDefaultedControls.delete(control);
+      // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
+      if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
+      else dayDefaultedControls.delete(control);
     }
     return result.ok;
   }
