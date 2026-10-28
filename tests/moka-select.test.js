@@ -151,6 +151,38 @@ test("a Moka dropdown without a matching choice is closed with Esc on its own in
   assert.equal(open(), null, "the popup has closed");
 });
 
+// Esc 后弹层的收法：fadeMs 为 0 时立刻移除，否则先加淡出的类、fadeMs 后才移除，这期间一直连着、看得见。
+async function failWithEsc(fadeMs) {
+  const h = load(ROW("是否最高学历", "bool_info-Rk2u0xq9Vb"));
+  const binding = scanned(h.doc, (item) => item.label === "是否最高学历");
+  const { container } = mokaSelect(h.doc, binding.element, ["是", "否"]);
+  const open = () => binding.root.querySelector("[class*='sd-Dropdown-dropdown']");
+  container.addEventListener("keydown", (event) => {
+    const leaving = event.key === "Escape" ? open() : null;
+    if (!leaving || leaving.classList.contains("fade-leave")) return;
+    if (!fadeMs) { leaving.remove(); return; }
+    leaving.classList.add("fade-leave");
+    setTimeout(() => leaving.remove(), fadeMs);
+  });
+  const presses = [];
+  for (const type of ["pointerdown", "mousedown"]) h.doc.body.addEventListener(type, (event) => { if (event.target === h.doc.body) presses.push(type); });
+  const { target, guard } = fillTarget(h, binding);
+  const result = await h.api.operate(target, "不确定", guard.options);
+  return { result, presses, refused: guard.refused, left: open() };
+}
+
+test("a Moka popup that fades out after Esc is left to finish, and the page gets no press", async () => {
+  // 真机（2026-10-29 晶科、唯捷创芯离线复刻）：Esc 后 sd-Dropdown 先淡出，120ms 时还看得见，约 500ms 才移除。
+  // 原来 120ms 一到就再在页面空白处按一下。
+  const at = await failWithEsc(0);
+  const fading = await failWithEsc(300);
+  assert.equal(fading.result.ok, false, JSON.stringify(fading.result));
+  assert.equal(fading.result.reason, at.result.reason, "the failure reason does not depend on how the popup leaves");
+  assert.equal(fading.refused, 0);
+  assert.deepEqual(fading.presses, [], "nothing is pressed on the page while the popup fades");
+  assert.equal(fading.left, null, "the popup has gone");
+});
+
 for (const inBody of [false, true]) {
   test(`a Moka 性别 row is filled through its popup ${inBody ? "mounted in body" : "inside the component root"}`, async () => {
     const h = load(ROW("性别", "select_info-zjdod05hST"));
