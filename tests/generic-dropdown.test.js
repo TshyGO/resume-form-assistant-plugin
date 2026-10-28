@@ -164,6 +164,15 @@ test("no matching option fails without clicking anything, and a tried search is 
   assert.equal(h.input.value, "");
 });
 
+test("a search the list never reacts to, with no empty-state text, still times out", async () => {
+  // 列表没变、也没写「暂无数据」：分不清是没有这一项还是网站搜得慢，照旧报等待选项更新超时。
+  const h = moka({ choices: ["汉族", "回族"] });
+  const result = await h.api.operate(h.target, "苗族");
+  assert.equal(result.reason, "options_timeout");
+  assert.deepEqual(h.clicks, []);
+  assert.equal(h.input.value, "");
+});
+
 test("a search that ends on an empty-state text is no_option_match after the usual wait", async () => {
   // #301 北森：弹层搜索框里搜不到时列表只剩「暂无数据」，原来报「等待选项更新超时」。等待时长不变。
   const h = beisen(["汉族", "回族"]);
@@ -357,37 +366,54 @@ test("a province click that opens a city column stops there: cascade_unsupported
   assert.equal(h.doc.querySelector(".city-layer"), null, "the layer the plugin opened is closed");
 });
 
-test("a search box that goes back to the first screen after the click is not a second level", async () => {
-  // 北森：搜出「蒙古族」点选后，弹层的搜索框清空、列表回到第一屏，稍后才收起并显示所选。第一屏之前见过，不算两级选择。
-  const h = load(`<div class="form-item"><label class="form-item__text">民族</label><div class="form-item__content">
-    <div class="phoenix-select"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li>
-    <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div></div>`);
-  const root = h.doc.querySelector(".phoenix-select");
-  const choices = ["汉族", "回族", "满族", "蒙古族"];
-  const clicks = [];
-  root.addEventListener("click", () => {
-    const layer = h.doc.createElement("div");
-    layer.innerHTML = `<div class="phoenix-input"><input class="phoenix-input__input"></div><div class="list"></div>`;
-    const search = layer.querySelector("input"), list = layer.querySelector(".list");
-    const render = () => {
-      list.innerHTML = "";
-      for (const text of search.value ? choices.filter((choice) => choice.includes(search.value)) : choices.slice(0, 3)) {
-        const row = h.doc.createElement("div");
-        row.innerHTML = `<span class="item-text-label">${text}</span>`;
-        row.addEventListener("click", () => {
-          clicks.push(text); search.value = ""; render();
-          setTimeout(() => { root.querySelector(".phoenix-select__selected").textContent = text; layer.remove(); }, 80);
-        });
-        list.append(row);
-      }
-    };
-    search.addEventListener("input", render);
-    render();
-    h.doc.body.append(layer);
+// 北森：搜出「蒙古族」点选后，弹层的搜索框清空、列表回到第一屏（或一次画出整张列表），稍后才收起并显示所选。
+// 列表里有之前见过的选项，没见过的和它们同在一个列表里，不算两级选择。
+for (const whole of [false, true]) {
+  test(`a search box that goes back to ${whole ? "the whole list" : "the first screen"} after the click is not a second level`, async () => {
+    const h = load(`<div class="form-item"><label class="form-item__text">民族</label><div class="form-item__content">
+      <div class="phoenix-select"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li>
+      <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div></div>`);
+    const root = h.doc.querySelector(".phoenix-select");
+    const choices = ["汉族", "回族", "满族", "蒙古族", "藏族", "壮族"];
+    const clicks = [];
+    root.addEventListener("click", () => {
+      const layer = h.doc.createElement("div");
+      layer.innerHTML = `<div class="phoenix-input"><input class="phoenix-input__input"></div><div class="list"></div>`;
+      const search = layer.querySelector("input"), list = layer.querySelector(".list");
+      const render = () => {
+        list.innerHTML = "";
+        const shown = search.value ? choices.filter((choice) => choice.includes(search.value)) : whole && clicks.length ? choices : choices.slice(0, 3);
+        for (const text of shown) {
+          const row = h.doc.createElement("div");
+          row.innerHTML = `<span class="item-text-label">${text}</span>`;
+          row.addEventListener("click", () => {
+            clicks.push(text); search.value = ""; render();
+            setTimeout(() => { root.querySelector(".phoenix-select__selected").textContent = text; layer.remove(); }, 80);
+          });
+          list.append(row);
+        }
+      };
+      search.addEventListener("input", render);
+      render();
+      h.doc.body.append(layer);
+    });
+    const result = await h.api.operate(scanned(h.doc, "民族"), "蒙古族");
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(clicks, ["蒙古族"]);
   });
-  const result = await h.api.operate(scanned(h.doc, "民族"), "蒙古族");
+}
+
+test("a closing dropdown that shows other suggestions for a moment is not a second level", async () => {
+  // 点选后搜索词清空，收起前的 150ms 里列表换成了别的学校，随后显示所选：下一级选项要一直在才算。
+  const h = moka({ searchable: true, keepOpen: true, choices: ["示例理工大学", "示例师范大学"], onPick: (text) => {
+    h.input.value = text;
+    const popup = h.doc.querySelector(".sd-Dropdown-dropdown-2Lm");
+    popup.innerHTML = ["示例农业大学", "示例海洋大学"].map((other) => `<div class="sd-Menu-content-item-5Rt"><div class="option-label-8Hn">${other}</div></div>`).join("");
+    setTimeout(() => popup.remove(), 150);
+  } });
+  const result = await h.api.operate(h.target, "示例理工大学");
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.deepEqual(clicks, ["蒙古族"]);
+  assert.deepEqual(h.clicks, ["示例理工大学"]);
 });
 
 test("a list replaced by the next level after the click is also a two-level choice", async () => {
@@ -475,6 +501,35 @@ test("Beisen radio-and-confirm picker: the radio icon is clicked, then the layer
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(events, ["radio:回族", "ok"]);
   assert.equal(h.api.check(target).ok, true);
+});
+
+test("a radio-and-confirm picker whose selected pane lists the choice with a remove link still gets its 确定", async () => {
+  // 勾上后右侧「已选择」栏把所选再列一遍、带「删除」：和所选同在一栏，不是下一级选项。
+  const h = load(`<div class="form-item"><label class="form-item__text">民族</label><div class="form-item__content">
+    <div class="phoenix-select phoenix-select--editable"><ul class="phoenix-select__content"><li class="phoenix-select__selected"></li>
+    <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input"></li></ul></div></div></div>`);
+  const root = h.doc.querySelector(".phoenix-select");
+  const events = [];
+  root.addEventListener("click", () => {
+    let picked = "";
+    const layer = h.doc.createElement("div");
+    layer.className = "common-unmodeled-layer";
+    layer.innerHTML = `<div class="list">${["汉族", "回族", "满族"].map((text) => `<div><div class="list-item-container"><span class="icon-container"><svg class="RadioUnchecked"><path d="M0 0"></path></svg></span><span class="item-text-label">${text}</span></div></div>`).join("")}</div>
+      <div class="pane">暂未选择</div><div class="footer"><div class="phoenix-button">取消</div><div class="phoenix-button">确定</div></div>`;
+    layer.querySelectorAll(".list-item-container").forEach((row) => {
+      row.querySelector("svg").addEventListener("click", () => {
+        picked = row.textContent.trim(); events.push(`radio:${picked}`);
+        layer.querySelector(".pane").innerHTML = `<div class="pane-head">已选择</div><div class="pane-item"><span>${picked}</span><span class="pane-del">删除</span></div>`;
+      });
+    });
+    const [cancel, ok] = layer.querySelectorAll(".phoenix-button");
+    cancel.addEventListener("click", () => { events.push("cancel"); layer.remove(); });
+    ok.addEventListener("click", () => { events.push("ok"); if (picked) root.querySelector(".phoenix-select__selected").textContent = picked; layer.remove(); });
+    h.doc.body.append(layer);
+  });
+  const result = await h.api.operate(scanned(h.doc, "民族"), "回族");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(events, ["radio:回族", "ok"]);
 });
 
 // 文本框的写入流程替身：照真实流程写值、派发事件，核对时比较框里的字。
@@ -582,6 +637,15 @@ test("Element autocomplete: a suggestion that contains the wanted text is still 
   const result = await h.api.operate(h.target, "广州");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.state.picks, ["广州市"]);
+});
+
+test("Element autocomplete: a shorter and a longer suggestion stay ambiguous, so the longer one is not put in the box", async () => {
+  // 去掉「广州市」后只剩「广州市天河区体育西路」，那是另一个值：和原来一样算拿不准，不点。
+  const h = elAutocomplete({ forEmpty: ["广州市", "广州市天河区体育西路"] });
+  const result = await h.api.operate(h.target, "广州市天河区");
+  assert.equal(result.reason, "ambiguous_option");
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.input.value, "");
 });
 
 test("a searchable ARIA combobox that is not an autocomplete never gets free text", async () => {

@@ -45,6 +45,8 @@
   const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
   // 通用路径交还前等自己的弹层退场的上限。
   const POPUP_LEAVE_MS = 1000;
+  // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
+  const NEXT_LEVEL_MS = 300;
   function describe(target) {
     const el = target?.element || target;
     const root = el?.closest?.(ROOTS) || target?.root || el;
@@ -279,12 +281,14 @@
   function match(list, value, helpers, freeText = false) {
     // 联想输入框：比要填的字短的建议（要填「广州市天河区」，建议「广州市」）不选，交给宿主打入完整的字；
     // 建议包含要填的字（要填「广州」，建议「广州市」）照常选。
+    // 去掉短的才选得出来的长建议（要填「广州市天河区」，建议「广州市」「广州市天河区体育西路」）可能是另一个值：照旧算拿不准。
     if (freeText) {
       const target = helpers.normalizeText(value);
-      list = list.map(option => {
+      const found = match(list.map(option => {
         const text = helpers.normalizeText(option.text);
         return text.length < target.length && target.includes(text) && helpers.normalizeText(option.value) !== target ? { ...option, disabled: true } : option;
-      });
+      }), value, helpers);
+      return found.option && !match(list, value, helpers).option ? { reason: 'ambiguous_option' } : found;
     }
     const index = helpers.findSelectOptionIndex(list, value);
     if (index < 0) {
@@ -639,10 +643,22 @@
     }));
     // 两级选择（省 → 市，#301）：点了一项后弹层还开着，里面冒出了之前没见过的选项（换成下一级，或多出一列）。
     // 不再往下点，按失败收起弹层，报两级选择不支持。至少多出两项才算，免得把选中后出现的勾、计数当成下一级；
-    // 搜索框清空后列表回到第一屏，那些选项之前见过，不算。联想输入框不是两级选择。
+    // 和见过的选项同在一个列表里的不算（搜索框清空后列表回到第一屏或整张列表，「已选」栏的标题和删除）。
+    // 要持续 NEXT_LEVEL_MS：收起前重画一下列表、随后显示所选的，不算。联想输入框不是两级选择。
     const layerOptions = () => ctx.popup?.isConnected && h.visible(ctx.popup) ? options(ctx.popup, info, 0, h) : null;
-    let shownBefore = null;
-    const nextLevel = () => Boolean(shownBefore) && (layerOptions() || []).filter(option => !shownBefore.has(optionKey(option))).length >= 2;
+    let shownBefore = null, freshSince = 0;
+    const freshLevel = () => {
+      if (!shownBefore) return false;
+      const list = layerOptions() || [];
+      const seen = list.filter(option => shownBefore.has(optionKey(option)));
+      return list.filter(option => !shownBefore.has(optionKey(option))
+        && !seen.some(other => option.node.parentElement?.contains(other.node))).length >= 2;
+    };
+    const nextLevel = () => {
+      if (!freshLevel()) { freshSince = 0; return false; }
+      freshSince = freshSince || Date.now();
+      return Date.now() - freshSince >= NEXT_LEVEL_MS;
+    };
     const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
       // 通用路线：第一次点开时选项常常还在从网站后台加载（金发民族，加载期间只显示「请在左侧选择内容」之类），
@@ -733,7 +749,8 @@
       if (quick.reason && quick.reason !== 'verification_timeout') return { reason: quick.reason };
       if (quick.value === 'next') return { reason: 'cascade_unsupported' };
       const layer = ctx.popup?.isConnected ? ctx.popup : popup;
-      const confirm = quick.reason && layer?.isConnected && h.visible(layer) ? confirmButton(layer, h) : null;
+      // 已经冒出下一级选项时不点「确定」：只选了第一级就确定，页面会收下半截的值。
+      const confirm = quick.reason && !freshLevel() && layer?.isConnected && h.visible(layer) ? confirmButton(layer, h) : null;
       if (confirm) { const reason = h.click(confirm, ctx, true); if (reason) return { reason }; }
     }
     const committed = await h.waitUntil(ctx, doc.documentElement, settled, Boolean);
