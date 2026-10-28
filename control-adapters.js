@@ -219,7 +219,8 @@
     // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
     // 给这个框发一个 Tab 键收起它（不点页面，焦点也不动），再按文本框核对一次。
     // Element's autocomplete closes its suggestions on Tab (Element UI 2 and Element Plus alike).
-    // The key goes only to the box being filled, so nothing else on the page reacts to it.
+    // The key starts at the box being filled and bubbles like a real one: Element UI 2 listens on the
+    // wrapper around the box. Unlike a real Tab it moves no focus and types nothing.
     function pressTab(el) {
       const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
       if (!ViewKeyboardEvent) return;
