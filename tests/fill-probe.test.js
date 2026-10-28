@@ -146,6 +146,18 @@ test("edit controls are found by their text, whatever the markup", () => {
   assert.equal(editCount([textNode("「编辑」", node({ tag: "span" }))]), 1);
 });
 
+// #301：「去填写」「立即填写」和中英双语的「编辑 / Edit」「修改/Modify」也是编辑入口；只写英文的不算。
+test("去填写, 立即填写 and bilingual 编辑 / Edit count as edit controls, plain English Edit or Modify does not", () => {
+  for (const text of ["去填写", "立即填写", "编辑 / Edit", "编辑Edit", "修改/Modify", "修改 Modify"]) {
+    assert.equal(editCount([textNode(text, node({ tag: "button" }))]), 1, text);
+  }
+  assert.equal(editCount([], [node({ tag: "button", attrs: { "aria-label": "编辑 / Edit" } })]), 1);
+  for (const text of ["Edit", "edit", "Modify", "填写", "待完善", "开始填写"]) {
+    assert.equal(editCount([textNode(text, node({ tag: "button" }))]), 0, text);
+  }
+  assert.equal(editCount([], [node({ tag: "button", attrs: { "aria-label": "Edit this file" } })]), 0);
+});
+
 test("edit controls are counted once per element and never from longer sentences or non-text elements", () => {
   const same = node({ tag: "a" });
   assert.equal(editCount([textNode("编辑", same), textNode("编辑", same)]), 1);

@@ -132,9 +132,10 @@ const CASES = [
   { name: "C2 view mode with 编辑", href: "https://hr.example.test/candidate/home", title: "个人中心",
     body: `<section><h3>教育经历</h3><span>某大学</span><a>编辑</a></section>`,
     expect: { fields: 0, pageType: "application_form/edit_button", category: "no_fields_found", report: "fill_failed", hint: HINT.edit, offer: "prominent" } },
+  // #301：「去填写」算编辑入口。
   { name: "C3 view mode with 待完善 / 去填写", href: "https://hr.example.test/candidate/home", title: "个人中心",
     body: `<section><h3>教育经历</h3><span class="tag">待完善</span><a>去填写</a></section>`,
-    expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
+    expect: { fields: 0, pageType: "application_form/edit_button", category: "no_fields_found", report: "fill_failed", hint: HINT.edit, offer: "prominent" } },
   { name: "C4 view mode with plain English Edit", href: "https://jobs.example.test/candidate/home", title: "Candidate Home",
     body: `<section><h3>Education</h3><button>Edit</button><button aria-label="Edit education"></button></section>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
@@ -174,9 +175,10 @@ const CASES = [
   { name: "X1 atsc /ats/apply-form/ view mode with icon-only edit", href: "https://atsc.liepin.com/ats/apply-form/", title: "填写申请表",
     body: `<div id="main-container"><h2>填写申请表</h2>${section("基本信息", false)}${section("教育经历", true)}${section("实习经历", false)}<button><span>提交</span></button></div>`,
     expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
+  // #301：中英双语的「编辑 / Edit」算编辑入口。
   { name: "X2 view page with bilingual 编辑 / Edit", href: "https://app.example.test/candidate/home", title: "个人中心",
     body: `<section><h3>教育经历 Education</h3><span>某大学</span><button><span>编辑 / Edit</span></button></section><section><h3>工作经历</h3><button>编辑 / Edit</button></section>`,
-    expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
+    expect: { fields: 0, pageType: "application_form/edit_button", category: "no_fields_found", report: "fill_failed", hint: HINT.edit, offer: "prominent" } },
   { name: "X3 upload step with a file input, neutral path", href: "https://hr.example.test/p/step1", title: "某集团校园招聘",
     body: `<main><h2>上传简历</h2><input type="file" accept=".pdf"><button>下一步</button></main>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },

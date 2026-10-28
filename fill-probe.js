@@ -12,7 +12,8 @@
     locked: "input[readonly]:not([type=hidden]), input[disabled]:not([type=hidden]), textarea[readonly], textarea[disabled], select[disabled]",
     all: "*"
   };
-  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料)$/;
+  // 「编辑 / Edit」这类中英双语按钮去掉符号后是「编辑Edit」（#301）。只写英文的 Edit、Modify 不算：百科、代码托管页上到处都是。
+  const EDIT_TEXT = /^(?:编辑|修改|完善|去完善|去编辑|立即完善|完善简历|编辑简历|修改简历|编辑信息|修改信息|编辑资料|去填写|立即填写|编辑Edit|修改Modify)$/;
   // 页面元素和各层 Shadow DOM 里的元素合计最多看这么多个：只读属性，很快。
   const MAX_WALK = 20000;
   const MAX_TEXT_NODES = 50000;
