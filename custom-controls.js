@@ -750,8 +750,8 @@
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
       // 诊断（#301）只记列表里有没有选项，不记项数：省、市分成两个下拉时，市的第一层就是网页按简历里的省加载的
-      // （江苏 13 个市、宁夏 5 个）。也只看网页自己先给出的第一层：插件输入过要找的值（含点开前先输入的）、或点了上一级之后，
-      // 列表由简历的值决定。
+      // （江苏 13 个市、宁夏 5 个）；下面没有市的省（港澳台）列表是空的，这一位照报。
+      // 也只看第一层：插件输入过要找的值（含点开前先输入的）、或级联点了上一列之后，列表由简历的值决定。
       if (level === 0 && !searchDone) ctx.observed.hasOptions = list.length > 0;
       let found = match(list, desired[level], h.helpers, info.freeText);
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {

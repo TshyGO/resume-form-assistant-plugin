@@ -76,6 +76,10 @@ test("the notice names what reports now carry, and when they are sent", () => {
   for (const [name, text] of [["notice", notice], ["policy", section]]) {
     assert.doesNotMatch(text, /几个选项|选项的?数量|项数/, name);
   }
+  // A city select of its own lists what the page loaded for the province picked before it, and that list
+  // is the one looked at: the policy only promises the cascader's first column and lists before typing.
+  assert.doesNotMatch(section, /上一级之后/);
+  assert.ok(section.includes("级联选择只看第一列，插件输入过搜索词之后的列表不看"));
   // The policy says the same about when a report is sent and that the user is asked again.
   for (const words of ["AI 请求失败", "即使匹配到的字段都填上了也会上报", "报告内容增加时，之前的同意同样不算数，会重新询问"]) {
     assert.ok(section.includes(words), words);

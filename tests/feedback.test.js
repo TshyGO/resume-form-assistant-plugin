@@ -458,35 +458,41 @@ test('an error from before a choice is dropped, even while the install type is s
   assert.match(f.calls[0].payload.user_description, /^install: normal$/m);
 });
 
-test('turning reports off and on while a report is being written down drops that report', async () => {
+test('turning reports off and on while a report is being written down drops that report and gives its slots back', async () => {
   // The report has passed its choice check and is saving its dedup record. Off and on again leaves
-  // reports on, but the report still belongs to the choice before them.
+  // reports on, but the report still belongs to the choice before them. It was never sent, so the
+  // same report after the choice goes out, also the same site's fill report.
   const { createFeedback } = await import('../link/feedback.mjs');
-  const data = {}; const calls = [];
-  let gate = null;
-  const service = createFeedback({
-    storage: { get: async () => structuredClone(data), set: async value => {
-      const held = gate; gate = null;
-      if (held) { held.started(); await held.released; }
-      Object.assign(data, structuredClone(value));
-    } },
-    now: () => 1800000000000, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 200, install: () => 'normal',
-    fetchImpl: async (_url, request) => { calls.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); }
-  });
-  await service.setConsent(true);
-  await service.ready();
-  let release;
-  const saving = new Promise(started => { gate = { started, released: new Promise(resolve => { release = resolve; }) }; });
-  const report = service.automatic(crash, 'c.liepin.com');
-  await saving;
-  const off = service.setConsent(false); const on = service.setConsent(true);
-  release();
-  assert.equal((await report).reason, 'suppressed');
-  assert.deepEqual(await Promise.all([off, on]), [{ consent: false, decided: true }, { consent: true, decided: true }]);
-  assert.equal(calls.length, 0);
-  // Reports after the choice are sent as usual.
-  assert.equal((await service.automatic({ ...crash, stack: 'content.js:8:1' }, 'c.liepin.com')).ok, true);
-  assert.equal(calls.length, 1);
+  for (const [input, slots] of [[crash, 'hourly'], [{ kind: 'fill_failed' }, 'fillHourly']]) {
+    const data = {}; const calls = [];
+    let gate = null;
+    const service = createFeedback({
+      storage: { get: async () => structuredClone(data), set: async value => {
+        const held = gate; gate = null;
+        if (held) { held.started(); await held.released; }
+        Object.assign(data, structuredClone(value));
+      } },
+      now: () => 1800000000000, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 200, install: () => 'normal',
+      fetchImpl: async (_url, request) => { calls.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); }
+    });
+    await service.setConsent(true);
+    await service.ready();
+    let release;
+    const saving = new Promise(started => { gate = { started, released: new Promise(resolve => { release = resolve; }) }; });
+    const report = service.automatic(input, 'c.liepin.com');
+    await saving;
+    const off = service.setConsent(false); const on = service.setConsent(true);
+    release();
+    assert.equal((await report).reason, 'suppressed', slots);
+    assert.deepEqual(await Promise.all([off, on]), [{ consent: false, decided: true }, { consent: true, decided: true }]);
+    assert.equal(calls.length, 0);
+    assert.deepEqual([data.feedbackStateV1.recent, data.feedbackStateV1[slots]], [{}, []], slots);
+    // Reports after the choice are sent as usual.
+    assert.equal((await service.automatic(input, 'c.liepin.com')).ok, true, slots);
+    assert.equal(calls.length, 1);
+    assert.equal(Object.keys(data.feedbackStateV1.recent).length, 1);
+    assert.equal(data.feedbackStateV1[slots].length, 1);
+  }
 });
 
 test('the router reads the install type from chrome.management.getSelf, and goes on without it', async () => {

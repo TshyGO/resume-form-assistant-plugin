@@ -117,7 +117,7 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
       if (input?.kind === 'manual') return { ok: false, reason: 'suppressed' };
       const choice = choices;
       await installKnown;
-      const payload = await locked(async () => {
+      const prepared = await locked(async () => {
         const state = await read(); const time = now();
         if (state.consent !== true || stopped || choice !== choices || time < state.backoff) return null;
         const body = build(input, host, state.anonymousId || uuid());
@@ -131,13 +131,24 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
         state.hourly = state.hourly.filter(t => time - t < HOUR);
         state.fillHourly = state.fillHourly.filter(t => time - t < HOUR);
         state.recent = Object.fromEntries(Object.entries(state.recent).filter(([, t]) => time - t < DAY));
-        const [sent, limit] = body.error_type.startsWith('fill_') ? [state.fillHourly, FILLS_PER_HOUR] : [state.hourly, ERRORS_PER_HOUR];
+        const slots = body.error_type.startsWith('fill_') ? 'fillHourly' : 'hourly';
+        const [sent, limit] = [state[slots], slots === 'fillHourly' ? FILLS_PER_HOUR : ERRORS_PER_HOUR];
         if (sent.length >= limit || state.recent[hash] !== undefined) return null;
         state.anonymousId = body.anonymous_id; sent.push(time); state.recent[hash] = time;
-        await save(state); return body;
+        await save(state); return { body, hash, time, slots };
       });
-      // Turned off and on again while the report was being written down: it still belongs to the earlier choice.
-      return payload && choice === choices ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
+      if (!prepared) return { ok: false, reason: 'suppressed' };
+      if (choice === choices) return transmit(prepared.body, true);
+      // Turned off and on again while the report was being written down: it still belongs to the earlier
+      // choice. It was never sent, so it gives back its daily and hourly slots.
+      await locked(async () => {
+        const state = await read();
+        if (state.recent[prepared.hash] === prepared.time) delete state.recent[prepared.hash];
+        const at = state[prepared.slots].indexOf(prepared.time);
+        if (at >= 0) state[prepared.slots].splice(at, 1);
+        await save(state);
+      }).catch(() => {});
+      return { ok: false, reason: 'suppressed' };
     },
     async manual(input, host = '', previewed = null) {
       const payload = await locked(async () => {

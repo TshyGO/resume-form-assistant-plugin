@@ -471,9 +471,10 @@ test("a fill on a page full of personal data leaves none of it in the report, th
   assert.match(sentBody, /^install: development$/m);
 });
 
-// #301 省、市是两个下拉时，城市下拉第一层列的是网页按插件从简历里选的省加载的市：江苏 13 个、宁夏 5 个、广东 21 个。
-// 报告只说弹层里有没有选项，城市这一行和选了哪个省无关。控件层用真的 custom-controls.js（jsdom），ARIA 下拉和北森通用下拉各走一遍。
-const CITIES = { 江苏省: 13, 宁夏回族自治区: 5, 广东省: 21 };
+// #301 省、市是两个下拉时，城市下拉第一层列的是网页按插件从简历里选的省加载的市：江苏 13 个、北京 1 个、宁夏 5 个、广东 21 个。
+// 报告不带个数，有市的省读出来城市这一行都一样。下面没有市的省列表是空的，这一位照报（见 custom-controls.js）。
+// 控件层用真的 custom-controls.js（jsdom），ARIA 下拉和北森通用下拉各走一遍。
+const CITIES = { 江苏省: 13, 北京市: 1, 宁夏回族自治区: 5, 广东省: 21 };
 
 async function linkedCity(kind, province) {
   const fs = require("node:fs");
@@ -521,7 +522,7 @@ async function linkedCity(kind, province) {
   return api.operate(target("当前城市"), "示例市");
 }
 
-test("a city select loaded for the province picked from the resume reads the same in every report, whichever province it was", async () => {
+test("a city select loaded for the province picked from the resume carries no count: every province with cities reads the same", async () => {
   const { createFeedback } = await import("../link/feedback.mjs");
   for (const [kind, opened] of [["aria", "listbox"], ["beisen", "component"]]) {
     const lines = [];
