@@ -95,6 +95,13 @@ test('a failed AI request and fields the page did not take keep separate daily s
   assert.equal((await f.service.automatic(report('timeout'), 'c.liepin.com')).ok, true);
   assert.equal((await f.service.automatic(report('fill_rejected'), 'c.liepin.com')).ok, true);
   assert.deepEqual(sent.map(body => body.user_description.match(/^error_category: (.*)$/m)[1]), ['fill_rejected', 'timeout', 'fill_rejected']);
+  // A failed AI request that also left fields unfilled reports those fields: it takes the usual slot,
+  // so a bare timeout earlier that day does not hold it back.
+  const unfilled = { kind: 'fill_partial', diagnostics: '[错误]\nerror_category: timeout\n\n[未填字段]\n- 学历: input[text] reason=no_option_match' };
+  assert.equal((await f.service.automatic(report('timeout'), 'hr.example.test')).ok, true);
+  assert.equal((await f.service.automatic(unfilled, 'hr.example.test')).ok, true);
+  assert.match(sent.at(-1).user_description, /^- 学历: input\[text\] reason=no_option_match$/m);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'hr.example.test')).reason, 'suppressed');
 });
 
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {

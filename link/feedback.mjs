@@ -119,9 +119,11 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
         const state = await read(); const time = now();
         if (state.consent !== true || stopped || choice !== choices || time < state.backoff) return null;
         const body = build(input, host, state.anonymousId || uuid());
-        // A failed AI request (timeout or service error, #301 U1) has its own daily slot per site, so it
-        // never holds back that day's report of fields the site did not take.
-        const aiFailed = /^error_category: (?:timeout|service_error)$/m.test(body.user_description);
+        // A failed AI request (timeout or service error, #301 U1) with no field left unfilled has its own
+        // daily slot per site, so it never holds back that day's report of fields the site did not take.
+        // One that also lists unfilled fields is such a report and takes the usual slot.
+        const aiFailed = /^error_category: (?:timeout|service_error)$/m.test(body.user_description)
+          && !/^\[未填字段\]$/m.test(body.user_description);
         const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}${aiFailed ? '|ai' : ''}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature)))].map(x => x.toString(16).padStart(2, '0')).join('');
         state.hourly = state.hourly.filter(t => time - t < HOUR);
