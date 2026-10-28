@@ -23,6 +23,7 @@ mod cli;
 mod commands;
 mod evidence_commands;
 mod mail_import;
+mod attachment_commands;
 mod mailbox_commands;
 mod backup_commands;
 mod bridge_services;
@@ -86,6 +87,7 @@ struct AppState {
     /// Prevent overlapping scheduled/manual scans. User actions use short
     /// SQLite/archive transactions and never wait for mailbox network IO.
     mailbox_gate: Mutex<()>,
+    opened_attachments: Mutex<Vec<tempfile::TempDir>>,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
@@ -1897,6 +1899,7 @@ pub fn run() {
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
             mailbox_gate: Mutex::new(()),
+            opened_attachments: Mutex::new(Vec::new()),
             cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
@@ -2113,6 +2116,10 @@ pub fn run() {
             import_evidence_cmd,
             list_inbox_cmd,
             get_evidence_preview_cmd,
+            attachment_commands::list_evidence_attachments_cmd,
+            attachment_commands::preview_evidence_attachment_cmd,
+            attachment_commands::open_evidence_attachment_cmd,
+            attachment_commands::save_evidence_attachment_cmd,
             associate_evidence_cmd,
             unassociate_evidence_cmd,
             classify_evidence_cmd,

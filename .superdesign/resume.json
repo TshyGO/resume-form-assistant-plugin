@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "mail-attachment-viewer": {
+      "targetKind": "new-target",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "afcbb9ff-702d-488d-9472-54edc5cc754b",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/src/react/SettingsDialog.tsx"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "2a2b7e98798591133e2666f3370ce90d2eccc33b80b2fa650c1586c9d1d3264d",
+        "desktop/src/react/SettingsDialog.tsx": "14117a931859a0e76837ccee0902e82c88603663fb17b07a6569f8ccec442dc9"
+      },
+      "drafts": {
+        "afcbb9ff-702d-488d-9472-54edc5cc754b": {
+          "title": "网申快填 - 附件预览对话框",
+          "visualDirection": "existing desktop tokens, native modal with attachment list and document preview"
+        }
+      },
+      "updatedAt": "2026-10-27T15:27:39.623954+00:00"
+    }
+  }
+}

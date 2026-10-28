@@ -1,3 +1,4 @@
+import { mountAttachmentList } from "./attachment-list.ts";
 import { bindDetailControls } from "./application-detail-controls.ts";
 import type {
   ApplicationSummary,
@@ -592,9 +593,11 @@ export function mountApplications(
   });
 
   // 只读预览，和收件箱看到的是同一份已经清洗过的数据（正文转义、图片 data: URL、
-  // PDF 不内嵌）。这里不做分类，分类在收件箱里做。
+  // 独立 PDF 材料沿用系统打开，邮件里的 PDF 附件可在附件窗口预览）。这里不做分类，分类在收件箱里做。
   let evidenceToken = 0;
+  let clearEvidenceAttachments: (() => void) | null = null;
   async function openEvidence(evidenceId: string) {
+    clearEvidenceAttachments?.(); clearEvidenceAttachments = null;
     const token = ++evidenceToken;
     const evidenceDialog = dialogEl("evidence-dialog");
     const body = must("evidence-body");
@@ -607,8 +610,11 @@ export function mountApplications(
         <p class="muted">${escapeHtml(evidenceLine(item))}</p>
         ${item.note ? `<p class="banner">${escapeHtml(item.note)}</p>` : ""}
         ${item.imageDataUrl ? `<img class="evidence-image" alt="导入的截图" src="${escapeHtml(item.imageDataUrl)}">` : ""}
+        ${item.kind === "eml" ? '<div id="application-mail-attachments"></div><h3>邮件正文</h3>' : ""}
         ${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}
       `;
+      const attachmentRoot = body.querySelector?.<HTMLElement>("#application-mail-attachments");
+      if (attachmentRoot) clearEvidenceAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, item.subject || item.originalFilename || "邮件附件");
     } catch (err) {
       if (token !== evidenceToken) return;
       body.innerHTML = `<p class="banner">${escapeHtml(`读不出这条证据（${invokeError(err)}）。`)}</p>`;
@@ -616,6 +622,7 @@ export function mountApplications(
   }
 
   maybe("evidence-close")?.addEventListener("click", () => {
+    ++evidenceToken; clearEvidenceAttachments?.(); clearEvidenceAttachments = null;
     dialogEl("evidence-dialog").close();
   });
 

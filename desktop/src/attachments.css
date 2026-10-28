@@ -1,0 +1,60 @@
+/* Shared desktop tokens and dialog chrome. */
+.mail-attachment-section { margin: 0 0 22px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel)}
+.mail-attachment-section h3 { margin: 0; font-size: 14px}
+.mail-attachment-section>p { margin: 4px 0 10px; font-size: 12px}
+.mail-attachment-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 56px; padding: 10px 12px; margin-top: 7px; text-align: left; border-radius: 8px; background: var(--bg)}
+.mail-attachment-label { min-width: 0}
+.mail-attachment-label strong { display: block; overflow-wrap: anywhere; font-size: 13px; font-weight: 600}
+.mail-attachment-label small { color: var(--muted)}
+.mail-attachment-row>span:last-child { flex: none; color: var(--accent); font-size: 12px; font-weight: 600}
+dialog.settings-dialog.attachment-dialog { width: calc(100% - 48px); max-width: 1040px; height: min(84dvh,780px); max-height: calc(100dvh - 48px)}
+.attachment-dialog .settings-dialog-head { padding: 18px 22px 14px; border-bottom: 1px solid var(--line)}
+.attachment-dialog .settings-dialog-head h2 { font-size: 17px}
+.attachment-dialog .settings-dialog-head p { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap}
+.attachment-dialog .settings-dialog-body { padding: 0; display: flex; overflow: hidden}
+.attachment-dialog .settings-dialog-actions { padding: 10px 18px; border-top: 1px solid var(--line); gap: 14px}
+.attachment-footer-note { margin-right: auto; font-size: 12px; color: var(--muted)}
+.attachment-viewer-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px minmax(0,1fr)}
+.attachment-sidebar { min-width: 0; padding: 14px 10px; overflow: auto; border-right: 1px solid var(--line); background: var(--panel)}
+.attachment-sidebar-title { display: flex; justify-content: space-between; margin: 0 8px 12px; color: var(--muted); font-size: 12px; font-weight: 600}
+.attachment-sidebar-title span { min-width: 20px; padding: 0 5px; text-align: center; border-radius: 5px; background: var(--bg)}
+.attachment-sidebar button { display: flex; gap: 9px; align-items: center; width: 100%; padding: 10px 8px; margin-bottom: 6px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 9px}
+.attachment-sidebar button.is-selected { background: var(--accent-pale); border-color: #c4dcd5; color: var(--accent-strong)}
+.attachment-sidebar button>span:last-child { min-width: 0}
+.attachment-sidebar strong { display: block; font-weight: 600; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere}
+.attachment-sidebar small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px}
+.attachment-file-icon { display: inline-flex; width: 32px; height: 36px; flex: none; align-items: center; justify-content: center; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 7px}
+.attachment-file-icon.is-pdf { color: #b44747; background: #fcf1f1; border-color: #edc5c5}
+.attachment-file-icon.is-image { color: var(--accent); background: var(--accent-pale); border-color: #c4dcd5}
+.attachment-file-icon .icon { width: 21px; height: 21px}
+.attachment-main { display: flex; min-height: 0; min-width: 0; flex-direction: column; background: var(--bg)}
+.attachment-active-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--panel)}
+.attachment-active-head>div:first-child { min-width: 0}
+.attachment-active-head h3 { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere}
+.attachment-active-head p { margin: 3px 0 0; font-size: 11px; color: var(--muted)}
+.attachment-file-actions { display: flex; flex: none; gap: 6px}
+.attachment-file-actions button { min-height: 32px; font-size: 12px; padding: 5px 9px; white-space: nowrap}
+.attachment-document { display: flex; flex: 1; min-height: 0; min-width: 0; flex-direction: column}
+.attachment-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 7px 12px; background: var(--panel); border-bottom: 1px solid var(--line)}
+.attachment-tool-group { display: flex; align-items: center; gap: 5px}
+.attachment-tool-group span { min-width: 58px; text-align: center; color: var(--muted); font-size: 11px}
+.attachment-tools button { padding: 2px 7px; min-height: 27px; font-size: 12px; border-color: transparent; background: transparent}
+.attachment-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 24px; text-align: center}
+.attachment-canvas-wrap canvas,.attachment-canvas-wrap img { display: block; margin: 0 auto; background: white; box-shadow: var(--shadow)}
+.attachment-canvas-wrap img { height: auto}
+.attachment-rendering { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--muted); font-size: 12px}
+.attachment-state { display: flex; flex: 1; min-height: 180px; margin: 0; padding: 30px; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--muted); font-size: 13px}
+.attachment-state h3 { color: var(--ink); font-size: 14px; max-width: 100%; overflow-wrap: anywhere}
+.attachment-state p { max-width: 100%; overflow-wrap: anywhere}
+.attachment-notice { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--accent-strong); background: var(--accent-pale); border-bottom: 1px solid var(--line)}
+@media(max-width: 900px) { .attachment-viewer-layout { grid-template-columns: 170px minmax(0,1fr)}
+.attachment-active-head { flex-wrap: wrap}
+}
+@media(max-width: 680px) { dialog.settings-dialog.attachment-dialog { width: calc(100% - 20px); height: calc(100dvh - 28px); max-height: calc(100dvh - 28px)}
+.attachment-viewer-layout { grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr)}
+.attachment-sidebar { display: flex; gap: 6px; max-height: 100px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px}
+.attachment-sidebar-title { display: none}
+.attachment-sidebar button { width: 180px; flex: none; margin: 0}
+.attachment-canvas-wrap { padding: 12px}
+.attachment-footer-note { max-width: 70%}
+}

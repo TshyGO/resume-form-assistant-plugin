@@ -1,3 +1,4 @@
+import { mountAttachmentList } from "./attachment-list.ts";
 // D09「招聘通知」视图（原「证据收件箱」，#262 改版）：拖入 / 选择 / 粘贴 → 列表 → 预览 →
 // 关联与分类。左侧只列还没关联申请的材料，关联之后材料进对应申请的详情。
 //
@@ -121,6 +122,7 @@ export function mountInbox(
   let selectedId: string | null = null;
   let previewMode: "pending" | "stored" = "stored";
   let previewToken = 0;
+  let clearAttachments: (() => void) | null = null;
   let applications: ApplicationSummary[] = [];
   /** 导入正在进行：再点一次导入或再拖一批进来，等这一批说完结果再说。 */
   let importing = false;
@@ -332,6 +334,7 @@ export function mountInbox(
   }
 
   function renderPreview(data: EvidencePreview) {
+    clearAttachments?.(); clearAttachments = null;
     // 谁调 renderPreview 都先把上一块 React 卸掉：漏掉这一步，旧面板的清理
     // （取消进行中的请求）就永远不会跑。
     clearAiPanel();
@@ -368,7 +371,8 @@ export function mountInbox(
         <div class="evidence-workspace">
           <div class="evidence-reader-scroll">
             <section class="evidence-section evidence-original" aria-labelledby="evidence-original-heading">
-              <h3 id="evidence-original-heading">原文</h3>
+              ${item.kind === "eml" ? '<div id="inbox-mail-attachments"></div>' : ""}
+              <h3 id="evidence-original-heading">${item.kind === "eml" ? "邮件正文" : "原文"}</h3>
               ${duplicate ? `<p class="evidence-duplicate-note">${escapeHtml(duplicate)}</p>` : ""}
               ${mailFacts(item)}
               ${note}
@@ -450,6 +454,8 @@ export function mountInbox(
         });
       });
     }
+    const attachmentRoot = preview.querySelector<HTMLElement>("#inbox-mail-attachments");
+    if (attachmentRoot) clearAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, evidenceTitle(item));
     preview.querySelectorAll<HTMLElement>("button[data-act]").forEach((button) => {
       button.addEventListener("click", () => {
         const action = button.dataset.act;
