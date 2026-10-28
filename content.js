@@ -408,7 +408,10 @@
     init().then(() => { startupState = "ready"; }, (error) => {
       startupState = "failed";
       // A half-built controller must not stay usable on a page that shows as not connected.
-      if (startupHost) startupHost.style.display = "none";
+      // init() returns early when the page already had the id, so an element with it here was
+      // put in by this startup, even when createSidebar threw before handing it back.
+      const host = startupHost || document.getElementById(SIDEBAR_ID);
+      if (host) host.style.display = "none";
       reportStartupError(error);
     });
   }

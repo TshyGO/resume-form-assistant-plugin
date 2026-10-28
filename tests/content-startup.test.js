@@ -225,6 +225,17 @@ test("startup checks for every helper, not only the one #275 lost", async () => 
   }
 });
 
+test("a failure while the controller is being built hides what was already put on the page", async () => {
+  const page = await openPage({ setup: (win) => {
+    win.HTMLElement.prototype.attachShadow = function () { throw new win.TypeError("attachShadow refused"); };
+  } });
+  assert.deepEqual(page.rejections, []);
+  assert.equal(page.hosts(), 1);
+  assert.equal(page.win.document.getElementById(SIDEBAR_ID).style.display, "none");
+  assert.equal((await page.status()).ready, false);
+  assert.equal(page.reports.length, 1);
+});
+
 test("a failure after the controller is built never shows as connected", async () => {
   const page = await openPage({ setup: (win) => {
     const add = win.addEventListener.bind(win);
