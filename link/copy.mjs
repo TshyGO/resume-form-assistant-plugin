@@ -104,7 +104,8 @@ const MANUAL_SAVE = {
   site_title_only: '页面标题不足以确认岗位，请手动核对。',
   title_unconfirmed: '岗位名还不确定。请核对后再保存。',
   missing_company: '公司名还不确定。请核对后再保存。',
-  missing_title: '岗位名还不确定。请核对后再保存。'
+  missing_title: '岗位名还不确定。请核对后再保存。',
+  missing_both: '没认出公司和岗位，请手动填写。'
 };
 
 const ASSIST_SOURCE = {

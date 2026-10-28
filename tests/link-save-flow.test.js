@@ -169,3 +169,25 @@ test('an extraction that is not "reliable" by confidence asks the AI even if it 
   }
   assert.equal(nextSaveStep({ company: '星河科技', title: '后端开发工程师', reliable: true, confidence: 'reliable' }).action, 'commit');
 });
+
+test('#278: with no fragments left the form opens without the AI, and a double gap names both fields', async () => {
+  const { nextSaveStep } = await load();
+  const { describeManualSave } = await import('../link/copy.mjs');
+  const neither = nextSaveStep({
+    company: '', title: '', reliable: false, confidence: 'invalid',
+    assistReasons: ['missing_company', 'missing_title', 'title_unconfirmed'], fragments: []
+  });
+  assert.equal(neither.action, 'form');
+  assert.equal('fragments' in neither, false, 'nothing is queued for the AI');
+  assert.equal(neither.reason, 'missing_both');
+  assert.equal(describeManualSave(neither.reason), '没认出公司和岗位，请手动填写。');
+
+  const titleOnly = nextSaveStep({
+    company: '', title: '数据分析师', reliable: false, confidence: 'uncertain',
+    assistReasons: ['missing_company'], fragments: []
+  });
+  assert.equal(titleOnly.action, 'form');
+  assert.equal(titleOnly.fields.title, '数据分析师');
+  assert.equal(titleOnly.reason, 'missing_company');
+  assert.equal(describeManualSave(titleOnly.reason), '公司名还不确定。请核对后再保存。');
+});

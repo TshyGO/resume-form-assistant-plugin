@@ -43,7 +43,9 @@ export function nextSaveStep(extraction) {
   if (fragments.length) {
     return { action: 'assist', fields, fragments, reasons: extraction?.assistReasons || [] };
   }
-  return { action: 'form', fields, reason: extraction?.assistReasons?.[0] || 'manual' };
+  const reasons = extraction?.assistReasons || [];
+  const bothMissing = reasons[0] === 'missing_company' && reasons.includes('missing_title');
+  return { action: 'form', fields, reason: bothMissing ? 'missing_both' : (reasons[0] || 'manual') };
 }
 
 /** The only page fragments that may go to the desktop's AI. */

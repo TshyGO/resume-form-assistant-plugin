@@ -299,3 +299,20 @@ test('a forbidden fragment never reaches the request, and a reliable local job s
   assert.equal(corrected.fields.location, '');
   assert.equal(corrected.reason, 'format');
 });
+
+test('#278: an AI answer with neither company nor title says both are missing', async () => {
+  const { judgeSuggestion } = await loadAssist();
+  const { describeManualSave } = await import('../link/copy.mjs');
+  const fragments = [{ id: 1, source: 'document.title', role: 'page-title', text: '星海示例' }];
+  const result = judgeSuggestion({
+    company: '', title: '', location: '', companyFragment: null, titleFragment: null, locationFragment: null
+  }, fragments);
+  assert.equal(result.status, 'manual');
+  assert.equal(result.reason, 'missing_both');
+  assert.equal(describeManualSave(result.reason), '没认出公司和岗位，请手动填写。');
+
+  const companyOnly = judgeSuggestion({
+    company: '', title: '星海示例', location: '', companyFragment: null, titleFragment: 1, locationFragment: null
+  }, fragments);
+  assert.equal(companyOnly.reason, 'missing_company');
+});

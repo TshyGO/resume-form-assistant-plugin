@@ -628,3 +628,149 @@ test('an English suffix inside an ordinary word is still not a suffix match, wha
   const separated = extractJobFields(beisenPage('incredible corp'), 'https://kingfa.zhiye.com/form');
   assert.equal(separated.confidence, 'reliable');
 });
+
+// --- #278: hotjob job detail pages, and page titles that only name the site ----------------
+
+const HOTJOB_PB = 'https://wecruit.hotjob.cn/SU0123456789abcdef01234567/pb/posDetail.html?postId=abc&postType=campus';
+const HOTJOB_MC = 'https://wecruit.hotjob.cn/SU0123456789abcdef01234567/mc/detail?postId=abc&recruitType=campus';
+
+// Reduced from rendered hotjob pages; every name in them is made up.
+function fixturePage(name, url) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.join(__dirname, 'fixtures', 'job-pages', name), 'utf8');
+  return new JSDOM(html, { url }).window.document;
+}
+
+test('a hotjob pb detail page reads the title and the labelled 所属公司 item, and nothing else', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+  const fields = extractJobFields(fixturePage('hotjob-pb-company.html', HOTJOB_PB), HOTJOB_PB);
+
+  assert.equal(fields.title, '数据分析师', 'the post code is dropped, the category tag and badge are not read');
+  assert.equal(fields.company, '星海示例科技有限公司', 'the 部门 item and the contact item are not the employer');
+  assert.equal(fields.confidence, 'reliable');
+  assert.equal(fields.sources.company.source, 'hotjob-company');
+  assert.equal(fields.sources.title.source, 'hotjob-title');
+  assert.deepEqual(fields.fragments, [], 'the site title is not sent anywhere');
+  assert.equal(JSON.stringify(fields).includes('hr@example.com'), false);
+  assert.equal(nextSaveStep(fields).action, 'commit');
+});
+
+test('a hotjob pb page without a company item fills the title and leaves the company to the user', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+  const fields = extractJobFields(fixturePage('hotjob-pb-no-company.html', HOTJOB_PB), HOTJOB_PB);
+
+  assert.equal(fields.title, '科研助理(2027届)', 'a meaningful bracket stays');
+  assert.equal(fields.company, '', 'neither the site name nor the meta description stands in for the employer');
+  assert.deepEqual(fields.assistReasons, ['missing_company']);
+  assert.deepEqual(fields.fragments, []);
+  const step = nextSaveStep(fields);
+  assert.equal(step.action, 'form', 'nothing to send, so the AI is not asked');
+  assert.equal(step.fields.title, '科研助理(2027届)');
+  assert.equal(step.reason, 'missing_company');
+});
+
+test('two different pb titles on one page are a title conflict', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixturePage('hotjob-pb-company.html', HOTJOB_PB);
+  doc.querySelector('.fixed-postInfo .tit').textContent = '另一个岗位';
+  const fields = extractJobFields(doc, HOTJOB_PB);
+
+  assert.equal(fields.title, '');
+  assert.ok(fields.assistReasons.includes('title_conflict'));
+  assert.equal(fields.company, '星海示例科技有限公司');
+});
+
+test('a hotjob mc detail page reads the employer from whichever info item names one', async () => {
+  const { extractJobFields } = await load();
+  const first = extractJobFields(fixturePage('hotjob-mc-company-first.html', HOTJOB_MC), HOTJOB_MC);
+  assert.equal(first.company, '星海示例半导体（南京）有限公司');
+  assert.equal(first.title, '[27届]芯片设计工程师');
+  assert.equal(first.confidence, 'reliable');
+  assert.deepEqual(first.fragments, [], '"职位详情" is not a fragment');
+
+  const second = extractJobFields(fixturePage('hotjob-mc-company-second.html', HOTJOB_MC), HOTJOB_MC);
+  assert.equal(second.company, '星海示例重工股份有限公司', 'the job category before it is skipped');
+  assert.equal(second.title, '工艺工程师');
+  assert.equal(second.confidence, 'reliable');
+});
+
+test('a hotjob mc page without an employer item fills only the title', async () => {
+  const { extractJobFields } = await load();
+  const fields = extractJobFields(fixturePage('hotjob-mc-no-company.html', HOTJOB_MC), HOTJOB_MC);
+
+  assert.equal(fields.company, '');
+  assert.equal(fields.title, '示例文员（2027校招）');
+  assert.equal(fields.confidence, 'uncertain');
+  assert.deepEqual(fields.fragments, []);
+});
+
+test('two organisation-like mc items are a company conflict, not a guess', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixturePage('hotjob-mc-company-first.html', HOTJOB_MC);
+  const msgs = doc.querySelector('.listItemRtMsgs');
+  const split = doc.createElement('i');
+  split.className = 'split';
+  msgs.insertBefore(split, msgs.firstChild);
+  msgs.insertBefore(doc.createTextNode('星海示例研究院'), split);
+  const fields = extractJobFields(doc, HOTJOB_MC);
+
+  assert.equal(fields.company, '');
+  assert.ok(fields.assistReasons.includes('company_conflict'));
+  assert.equal(fields.title, '[27届]芯片设计工程师');
+});
+
+test('a code-shaped post code after the title is dropped; a year or a Chinese note is not', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixturePage('hotjob-mc-post-code.html', HOTJOB_MC);
+  const fields = extractJobFields(doc, HOTJOB_MC);
+  assert.equal(fields.title, '测试开发工程师');
+  assert.equal(fields.company, '星海示例软件有限公司');
+
+  const title = doc.querySelector('.listItemRtTitCon');
+  for (const [text, expected] of [
+    ['测试开发工程师(2027)', '测试开发工程师(2027)'],
+    ['测试开发工程师(2027届)', '测试开发工程师(2027届)'],
+    ['测试开发工程师（Q01）', '测试开发工程师（Q01）'],
+    ['测试开发工程师 (QA-01)', '测试开发工程师']
+  ]) {
+    title.textContent = text;
+    assert.equal(extractJobFields(doc, HOTJOB_MC).title, expected, text);
+  }
+});
+
+test('the hotjob rule stays off on list pages and on other hosts with the same markup', async () => {
+  const { extractJobFields } = await load();
+  const { nextSaveStep } = await import('../link/save-flow.mjs');
+  const pages = [
+    ['hotjob-mc-list.html', 'https://wecruit.hotjob.cn/SU0123456789abcdef01234567/mc/position/campus'],
+    ['hotjob-pb-company.html', 'https://wecruit.hotjob.cn/SU0123456789abcdef01234567/pb/school.html'],
+    ['hotjob-pb-company.html', 'https://jobs.example.com/SU0123456789abcdef01234567/pb/posDetail.html'],
+    ['hotjob-pb-company.html', 'https://wecruit.hotjob.cn.example.com/SU0123456789abcdef01234567/pb/posDetail.html'],
+    ['hotjob-mc-company-first.html', 'https://jobs.example.com/SU0123456789abcdef01234567/mc/detail'],
+    ['hotjob-mc-company-first.html', 'https://wecruit.hotjob.cn/SU0123/mc/detail']
+  ];
+  for (const [name, url] of pages) {
+    const fields = extractJobFields(fixturePage(name, url), url);
+    assert.equal(fields.company, '', url);
+    assert.equal(fields.title, '', url);
+    assert.deepEqual(fields.fragments, [], `${url}: only a site title, nothing to send`);
+    const step = nextSaveStep(fields);
+    assert.equal(step.action, 'form', url);
+    assert.equal(step.reason, 'missing_both', url);
+  }
+});
+
+test('a page title that only names the site or the page type is never a fragment', async () => {
+  const { extractJobFields } = await load();
+  for (const title of ['职位详情', '岗位详情', '职位列表', '星海示例集团招聘官网', '星海示例招聘网站', '星海示例微招聘', '星海示例官网']) {
+    const fields = extractJobFields(fakeDoc({ title, meta: { 'og:title': title }, h1: title }), 'https://jobs.example.com/a');
+    assert.deepEqual(fields.fragments, [], title);
+  }
+  // A title that names the job is still a candidate for the AI.
+  const kept = extractJobFields(fakeDoc({ title: '数据分析师 - 星海示例科技' }), 'https://jobs.example.com/a');
+  assert.deepEqual(kept.fragments.map(fragment => fragment.text), ['数据分析师 - 星海示例科技']);
+});

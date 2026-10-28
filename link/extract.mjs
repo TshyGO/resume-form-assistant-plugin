@@ -39,7 +39,7 @@ const FORM_LABEL = /^(姓名|手机|手机号|电话|邮箱|证件|证件号码|
 // What a company or job name must not be. These come from class-name selectors that are
 // wider than the text they hit: a logo, a menu item, an empty select, a counter.
 const PLACEHOLDER = /^(?:请(?:选择|输入|填写|选)\S{0,6}|选择|未知|暂无|无|待定|其他|全部|更多|详情|null|undefined|n\/?a|none|loading\.*|-+|—+)$/i;
-const NAV_OR_ACTION = /^(?:首页|主页|登录|登陆|注册|退出|退出登录|返回|提交|投递|申请|立即投递|立即申请|确认|确定|取消|保存|上传|上传简历|访问公司|访问官网|下一步|上一步|关闭|搜索|查看|查看详情|职位列表|职位|岗位|社会招聘|校园招聘|校招|社招|实习生招聘|实习招聘|全球招聘|招聘|公安|global jobs|jobs|careers|我的简历|我的申请|我的投递|个人中心|关于我们|联系我们|帮助|english|中文|logo)$/i;
+const NAV_OR_ACTION = /^(?:首页|主页|登录|登陆|注册|退出|退出登录|返回|提交|投递|申请|立即投递|立即申请|确认|确定|取消|保存|上传|上传简历|访问公司|访问官网|下一步|上一步|关闭|搜索|查看|查看详情|职位列表|职位详情|岗位详情|职位|岗位|社会招聘|校园招聘|校招|社招|实习生招聘|实习招聘|全球招聘|招聘|公安|global jobs|jobs|careers|我的简历|我的申请|我的投递|个人中心|关于我们|联系我们|帮助|english|中文|logo)$/i;
 const ONLY_SYMBOLS = /^[\d\s\p{P}\p{S}_]+$/u;
 // A name that reads as an organisation. A company line without this shape is a candidate
 // for the desktop AI to look at, not something to accept on the strength of a class name.
@@ -54,6 +54,21 @@ const COMPANY_SUFFIX = /(?:有限责任公司|股份有限公司|有限公司|�
 const LOOKS_LIKE_JOB = /(?:工程师|经理|专员|主管|总监|实习生|助理|顾问|管培生|岗位|职位|招聘)$/;
 const LOOKS_LIKE_COMPANY = COMPANY_SUFFIX;
 const COUNT_LIKE_NAME = /^(?:共|约)?\s*\d+\s*(?:家|个|条|家公司|个职位|条记录)?$/;
+// A page title that only names the careers site ("示例集团招聘官网") says nothing about the
+// job and is not worth sending to the AI.
+const SITE_TITLE = /(?:招聘官网|招聘网站|微招聘|官网)$/;
+
+// wecruit.hotjob.cn job detail pages: the tenant id, then the pb (desktop) or mc (mobile)
+// detail route. List pages, the home page and the apply form do not match.
+const HOTJOB_HOST = 'wecruit.hotjob.cn';
+const HOTJOB_DETAIL = /^\/SU[0-9a-f]{24}\/(pb\/posDetail\.html|mc\/detail)$/;
+// A tenant can show the post code after the name: "示例岗位(J01)". Only a code-shaped tail
+// is dropped; "(2027届)" is part of the name.
+const POST_CODE = /\s*\(([A-Za-z0-9-]+)\)$/;
+const YEAR = /^(?:19|20)\d{2}$/;
+const COMPANY_ITEM_LABEL = /^(?:所属公司|公司)\s*[:：]\s*/;
+// Any other labelled item ("部门：…", "联系方式：…") is not the employer.
+const OTHER_ITEM_LABEL = /^[^:：]{1,8}[:：]/;
 
 export function extractJobFields(doc, href) {
   const redacted = redactUrl(href);
@@ -64,6 +79,7 @@ export function extractJobFields(doc, href) {
   const jobCompanies = unique(postings.map(companyFrom).map(cleanField).filter(plausibleCompanyName));
   const jobTitles = unique(postings.map(posting => cleanField(posting?.title)).filter(plausibleName));
   const jobLocation = firstJobLocation(postings);
+  const hotjob = hotjobDetail(doc, href);
 
   const apply = findApplyPhrase(texts);
   // Host and page type both have to match. A job list on the same host is not this form.
@@ -74,11 +90,11 @@ export function extractJobFields(doc, href) {
   // Clear evidence: a JobPosting, or a line that reads like an organisation. A plausible
   // line with no such shape is only used when nothing clearer exists, and then it is
   // shown for review but never treated as settled.
-  const strongCompanies = unique([...labels.strong, ...jobCompanies]);
+  const strongCompanies = unique([...labels.strong, ...hotjob.companies, ...jobCompanies]);
   const companyValues = strongCompanies.length ? strongCompanies : labels.weak;
   const companyIsWeak = !strongCompanies.length && companyValues.length > 0;
   const applyTitle = beisenApply && plausibleName(apply?.title) ? [apply.title] : [];
-  const titleValues = [...applyTitle, ...jobTitles];
+  const titleValues = [...applyTitle, ...hotjob.titles, ...jobTitles];
 
   const companyConflict = unique(companyValues).length > 1;
   const titleConflict = unique(titleValues).length > 1;
@@ -142,10 +158,18 @@ export function extractJobFields(doc, href) {
     assistReasons,
     sources: {
       company: company
-        ? { value: company, source: beisenApply && labeledCompanies.includes(company) ? 'beisen-company' : 'jobposting', reliable: !companyIsWeak }
+        ? {
+            value: company,
+            source: beisenApply && labeledCompanies.includes(company) ? 'beisen-company' : (hotjob.companies.includes(company) ? 'hotjob-company' : 'jobposting'),
+            reliable: !companyIsWeak
+          }
         : null,
       title: title
-        ? { value: title, source: beisenApply && apply?.title === title ? 'beisen-apply-title' : 'jobposting', reliable: !titleSuspicious }
+        ? {
+            value: title,
+            source: beisenApply && apply?.title === title ? 'beisen-apply-title' : (hotjob.titles.includes(title) ? 'hotjob-title' : 'jobposting'),
+            reliable: !titleSuspicious
+          }
         : null,
       location: location
         ? { value: location, source: 'jobposting', reliable: true }
@@ -161,6 +185,8 @@ function buildFragments({ beisenApply, labeledCompanies, apply, jobCompanies, jo
     const value = collapse(text);
     if (!value || value.length > MAX_FRAGMENT_CHARS || FORM_LABEL.test(value)) return;
     if (PREFERENCE.test(value) || SENSITIVE.test(value) || value.includes('://')) return;
+    // "职位详情" or "示例集团招聘官网" is the site talking, not this posting.
+    if (role === 'page-title' && (!plausibleName(value) || SITE_TITLE.test(value))) return;
     if (items.some(item => item.source === source && item.text === value)) return;
     items.push({ source, role, text: value });
   };
@@ -189,6 +215,71 @@ function pageHost(href) {
 
 function isBeisenApplyHost(host) {
   return host === 'zhiye.com' || host.endsWith('.zhiye.com');
+}
+
+// Company and title from a hotjob job detail page; empty lists anywhere else. The pb page
+// shows the title twice (header and the sticky bar), so two different values are a
+// conflict. The employer is a tenant-configured item in the info line, next to city,
+// degree and head count; it counts only when exactly one item reads as an organisation.
+function hotjobDetail(doc, href) {
+  const route = hotjobRoute(href);
+  if (route === 'pb/posDetail.html') {
+    const header = nodes(doc, '.pos-detail-hd__titBar .tit').map(ownText);
+    const sticky = nodes(doc, '.fixed-postInfo .tit').map(node => node?.textContent);
+    const items = nodes(doc, '.pos-detail-hd__infoBar .item').map(node => node?.textContent);
+    return { titles: hotjobTitles([...header, ...sticky]), companies: hotjobCompanies(items) };
+  }
+  if (route === 'mc/detail') {
+    const titles = nodes(doc, '.listItemRtTitCon').map(node => node?.textContent);
+    const items = nodes(doc, '.listItemRtMsgs').flatMap(splitItems);
+    return { titles: hotjobTitles(titles), companies: hotjobCompanies(items) };
+  }
+  return { titles: [], companies: [] };
+}
+
+function hotjobRoute(href) {
+  try {
+    const url = new URL(href);
+    if (url.hostname.toLowerCase() !== HOTJOB_HOST) return '';
+    return url.pathname.match(HOTJOB_DETAIL)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function hotjobTitles(values) {
+  return unique(values.map(value => cleanField(withoutPostCode(collapse(value)))).filter(plausibleName));
+}
+
+function withoutPostCode(value) {
+  const match = value.match(POST_CODE);
+  if (!match || YEAR.test(match[1])) return value;
+  return value.slice(0, match.index);
+}
+
+function hotjobCompanies(items) {
+  const values = items.map(item => {
+    const text = collapse(item);
+    if (COMPANY_ITEM_LABEL.test(text)) return text.replace(COMPANY_ITEM_LABEL, '');
+    return OTHER_ITEM_LABEL.test(text) ? '' : text;
+  }).map(cleanField);
+  return unique(values.filter(value => plausibleCompanyName(value) && hasNamedCompanySuffix(value)));
+}
+
+// The header title holds the name as its own text; the category tag and the "热招" badge
+// are nested elements.
+function ownText(node) {
+  return [...(node?.childNodes ?? [])].filter(child => child.nodeType === 3).map(child => child.textContent).join('');
+}
+
+// The mc info line is one element with its items separated by <i class="split">.
+function splitItems(node) {
+  const items = [''];
+  for (const child of node?.childNodes ?? []) {
+    if (child.nodeType === 1 && child.classList?.contains('split')) items.push('');
+    else items[items.length - 1] += child.textContent ?? '';
+  }
+  return items;
 }
 
 function findApplyPhrase(texts) {
