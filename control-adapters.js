@@ -56,7 +56,7 @@
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
         if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
-        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled')) return 'control_disabled';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled')) return 'control_disabled';
       }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';

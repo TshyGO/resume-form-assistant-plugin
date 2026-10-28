@@ -1,7 +1,7 @@
 // DOM-only custom controls. No model-provided selectors, framework internals or
 // page code are executed. The host owns write guards, events, waits and verification.
 (function attachCustomControls(scope) {
-  const ROOTS = '.ant-select, .ant-cascader, .el-select, .el-cascader, .arco-select, .arco-cascader';
+  const ROOTS = '.ant-select, .ant-cascader, .el-select, .el-cascader, .arco-select, .arco-cascader, .layui-form-select';
   const SHELLS = '.ant-select-dropdown, .ant-cascader-dropdown, .el-select__popper, .el-select-dropdown, .el-cascader__dropdown, .arco-select-popup, .arco-cascader-popup, .arco-trigger-popup';
   const POPUPS = `${SHELLS}, [role="listbox"], [role="tree"]`;
   const trim = value => String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -16,12 +16,25 @@
   // 组件根里看得见的文字。组件根取大了（外层类名带 select 的整行）时会装进题目和占位提示，这些不是已选值：
   // 不装着输入框的 <label>、类名以 title / placeholder 结尾的元素里的字都跳过。
   const NOT_VALUE_TOKEN = /(?:^|[-_])(?:title|placeholder)$/i;
+  // #301 弹层画在组件根里（Moka sd-Dropdown 不挂到 body 时）：在包着输入框的 <label> 外框旁边的槽位里，fixed 定位。
+  // 组件根里、外框外面、自己或往上到根之间有一层 fixed 定位的一块才算；外框里是组件显示的已选值。
+  // absolute 定位的一块可能是组件浮着显示的已选值，不算。
+  function innerPopup(node, root, el) {
+    const frame = el?.closest?.('label');
+    if (!frame || !root.contains(frame) || node === root || !root.contains(node) || node.contains(frame) || frame.contains(node)) return false;
+    for (let current = node; current && current !== root; current = current.parentElement) {
+      if (current.ownerDocument.defaultView.getComputedStyle(current).position === 'fixed') return true;
+    }
+    return false;
+  }
   function shownText(root, el) {
     const parts = [];
     const notValue = node => {
       for (let current = node; current && current !== root.parentElement; current = current.parentElement) {
         if (current.tagName === 'LABEL' && !(el && current.contains(el))) return true;
         if (String(current.getAttribute?.('class') || '').split(/\s+/).some(token => NOT_VALUE_TOKEN.test(token))) return true;
+        // 根里展开的弹层：里面是选项，不是已选值。
+        if (innerPopup(current, root, el)) return true;
       }
       return false;
     };
@@ -47,6 +60,8 @@
   const DATE_VALUE = /^\s*\d{4}\s*[-./年]\s*\d{1,2}/;
   // 通用路径交还前等自己的弹层退场的上限。
   const POPUP_LEAVE_MS = 1000;
+  // 失败收尾按了 Esc 以后等弹层退场的上限，过了还在才在页面空白处按一下。
+  const ESC_LEAVE_MS = 600;
   // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
   const NEXT_LEVEL_MS = 300;
   function describe(target) {
@@ -54,7 +69,8 @@
     const root = el?.closest?.(ROOTS) || target?.root || el;
     let library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
       : root?.matches?.('.el-select, .el-cascader') ? 'element'
-      : root?.matches?.('.arco-select, .arco-cascader') ? 'arco' : 'aria';
+      : root?.matches?.('.arco-select, .arco-cascader') ? 'arco'
+      : root?.matches?.('.layui-form-select') ? 'layui' : 'aria';
     if (library === 'aria' && root && !root.matches?.(ARIA_SIGNALS) && !el?.matches?.(ARIA_SIGNALS) && !root.querySelector?.(ARIA_SIGNALS)) library = 'generic';
     if (library === 'generic') return { el, root, combo: el, library, cascade: target?.controlKind === 'cascader', multiple: false };
     const cascade = target?.controlKind === 'cascader' || root?.matches?.('.ant-cascader, .el-cascader, .arco-cascader');
@@ -177,7 +193,8 @@
     }
     const realSelector = info.library === 'antd' ? '.ant-select-item-option'
       : info.library === 'element' ? '.el-select-dropdown__item'
-      : info.library === 'arco' ? '.arco-select-option' : '';
+      : info.library === 'arco' ? '.arco-select-option'
+      : info.library === 'layui' ? 'dd:not(.layui-select-tips)' : '';
     const real = realSelector ? Array.from(popup.querySelectorAll(realSelector)) : [];
     return real.length ? real : Array.from(popup.querySelectorAll('[role="option"]'));
   }
@@ -261,7 +278,8 @@
     return true;
   }
   function genericPopupFrom(node, info, h, minOptions = 2) {
-    if (!node?.isConnected || node.nodeType !== 1 || !h.visible(node) || node.contains(info.root) || info.root.contains(node)) return null;
+    if (!node?.isConnected || node.nodeType !== 1 || !h.visible(node) || node.contains(info.root)
+      || (info.root.contains(node) && !innerPopup(node, info.root, info.el))) return null;
     if (node.getAttribute('role') === 'alert' || GENERIC_NOISE.test(String(node.className || ''))) return null;
     if (neighbourQuestion(node, h)) return null;
     const list = genericOptions(node, h);
@@ -296,7 +314,7 @@
       const text = info.library === 'aria' && info.cascade ? trim(node.getAttribute('aria-label') || Array.from(node.childNodes)
         .filter(child => child.nodeType !== 1 || !child.matches('[role="group"]')).map(child => child.textContent).join(' ')) : trim(label.textContent);
       return { node, text, value: node.getAttribute('data-value') ?? node.getAttribute('value') ?? text,
-        disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled') || Boolean(node.disabled) };
+        disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled') || Boolean(node.disabled) };
     });
   }
   function match(list, value, helpers, freeText = false) {
@@ -418,7 +436,7 @@
   function calendarNear(info, h) {
     const doc = info.el.ownerDocument, c = info.root.getBoundingClientRect();
     const found = Array.from(doc.querySelectorAll('[class]')).filter(el => CALENDAR_CLASS.test(String(el.getAttribute('class')))
-      && h.visible(el) && !el.contains(info.root) && !info.root.contains(el) && el.querySelector('td, [role="gridcell"]'));
+      && h.visible(el) && !el.contains(info.root) && (!info.root.contains(el) || innerPopup(el, info.root, info.el)) && el.querySelector('td, [role="gridcell"]'));
     const outer = found.filter(el => !found.some(other => other !== el && other.contains(el)));
     const near = outer.filter(el => {
       const r = el.getBoundingClientRect();
@@ -569,8 +587,14 @@
       const inputs = Array.from(layer.querySelectorAll('input')).filter(input => state.safeSearch(input) && h.visible(input));
       return { popup: outer[0], layer: inputs.length <= 1 ? layer : outer[0] };
     };
+    // #301 layui 的选项列表是组件根里的 dl，点输入框时显示（隐藏的原生 select 由它点选项时同步）；
+    // 已经展开时再点输入框会收起，所以不再点。
+    const layuiList = () => {
+      const list = info.library === 'layui' ? info.root.querySelector(':scope > dl') : null;
+      return list && h.visible(list) ? list : null;
+    };
     const initiallyOwned = ownedPopup(info, h.visible);
-    const alreadyOpen = info.combo.getAttribute('aria-expanded') === 'true' && initiallyOwned.popup;
+    const alreadyOpen = (info.combo.getAttribute('aria-expanded') === 'true' && initiallyOwned.popup) || layuiList();
     const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector('.ant-select-selector') || info.root
       : info.library === 'element' ? info.root.querySelector('.el-select__wrapper, .el-input') || info.root
       : info.library === 'arco' ? info.root.querySelector('.arco-select-view') || info.root : info.combo;
@@ -584,6 +608,7 @@
         const marked = popups(doc, h.visible).filter(node => !before.has(node) && !node.contains(info.root) && node.querySelector('[role="option"]'));
         return marked.length > 1 ? { reason: 'ambiguous_popup' } : marked.length === 1 ? { popup: marked[0] } : genericOpened();
       }
+      if (info.library === 'layui') { const list = layuiList(); return list ? { popup: list } : null; }
       const owned = ownedPopup(info, h.visible);
       if (owned.ambiguous) return { reason: 'ambiguous_popup' };
       if (owned.popup) return { popup: owned.popup };
@@ -823,14 +848,15 @@
         const info = state.info;
         if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
         // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）；
-        // 两级选择停在第一级时也收起。先按 Esc；还开着就在页面空白处点一下。只派发事件，不改页面状态。
+        // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
+        // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
+        // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
         if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
-          const doc = info.el.ownerDocument, View = doc.defaultView;
-          const target = doc.activeElement || doc.body;
-          target.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-          await new Promise(resolve => setTimeout(resolve, 120));
-          if (ctx.popup.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
-            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent], ['click', View.MouseEvent]]) {
+          const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
+          info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+          const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
+          if (left.reason === 'verification_timeout' && layer.isConnected && h.visible(layer) && !h.stop(ctx)) {
+            for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
               if (Event) doc.body.dispatchEvent(new Event(type, { bubbles: true }));
             }
           }
