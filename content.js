@@ -2776,7 +2776,12 @@
         // 请求失败或没发出去的：要用户自己补，错误码和警告说明原因。
         if (dropped.some(([key]) => key === "no_result" || key === "not_sent")) {
           grownMissed.push(...batch.filter(field => !answered.has(field.fieldId)));
-          if (!grown.errorCode && typeof d.errorCode === "string" && d.errorCode !== "none") grown.errorCode = d.errorCode;
+          if (typeof d.errorCode === "string" && d.errorCode !== "none") {
+            // 留先到的错误码；前一轮只是没资料或太大没送、这一轮请求失败了，换成失败的。
+            let code = grown.errorCode || d.errorCode;
+            try { code = self.ResumeProFeedback?.shownCode?.(grown.errorCode, d.errorCode) || code; } catch { /* diagnostics are optional; never break the fill */ }
+            grown.errorCode = code;
+          }
           if (!grownWarning && typeof reply?.warning === "string") grownWarning = reply.warning;
         }
       };
@@ -3156,7 +3161,7 @@
     const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行";
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : missing;
     const d = result.diagnostics;
-    // 选完后新出现的字段（#301）：匹配数加到首轮上，首轮没有错误码时显示补填的。
+    // 选完后新出现的字段（#301）：匹配数加到首轮上；首轮没有错误码，或补填请求失败而首轮没失败时，显示补填的。
     const g = result.grown || {};
     const plus = (value, extra) => Number.isInteger(value) && Number.isInteger(extra) && extra > 0 ? value + extra : value;
     const feedback = self.ResumeProFeedback;
@@ -3165,7 +3170,9 @@
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
       "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
       "secret_only", "no_resume_fields"]);
-    const errorCode = d.errorCode === "none" && g.errorCode ? g.errorCode : d.errorCode;
+    const errorCode = (() => {
+      try { return feedback?.shownCode?.(d.errorCode, g.errorCode); } catch { return undefined; }
+    })() ?? (d.errorCode === "none" && g.errorCode ? g.errorCode : d.errorCode);
     const code = allowedCodes.has(errorCode) || /^http_\d{3}$/.test(errorCode) ? errorCode : missing;
     // 提交校验后网页仍把插件填的框标成无效：不能再算「完成」。
     const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;

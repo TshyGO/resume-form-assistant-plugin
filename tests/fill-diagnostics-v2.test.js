@@ -127,10 +127,21 @@ test("a failed AI request is the first failure: timeout or service_error at the 
   }
   // Local writes failed too: the category still names the request.
   assert.deepEqual(core.fillCategory({ ...written, filledCount: 1, unfilledCount: 1, errorCode: "timeout" }), { category: "timeout", stage: "match" });
-  // A catch-up's failure counts when the first round had none; a first-round code is never replaced.
+  // A catch-up's failure counts when the first round had none, or had only skipped fields
+  // (no resume data, too large); a first-round failure is never replaced.
   assert.deepEqual(core.fillCategory({ ...written, errorCode: "none", catchUpCode: "timeout" }), { category: "timeout", stage: "match" });
   assert.deepEqual(core.fillCategory({ ...written, errorCode: "none", catchUpCode: "http_503" }), { category: "service_error", stage: "match" });
-  assert.deepEqual(core.fillCategory({ ...written, errorCode: "no_context", catchUpCode: "timeout" }), { category: "none", stage: "none" });
+  for (const errorCode of ["no_context", "input_too_large"]) {
+    assert.deepEqual(core.fillCategory({ ...written, errorCode, catchUpCode: "timeout" }), { category: "timeout", stage: "match" }, errorCode);
+    assert.deepEqual(core.fillCategory({ ...written, errorCode, catchUpCode: "http_502" }), { category: "service_error", stage: "match" }, errorCode);
+    assert.equal(core.shownCode(errorCode, "timeout"), "timeout", errorCode);
+    // A catch-up that only skipped fields too, or was stopped, leaves the first round's code.
+    assert.equal(core.shownCode(errorCode, "no_context"), errorCode, errorCode);
+    assert.equal(core.shownCode(errorCode, "cancelled"), errorCode, errorCode);
+  }
+  assert.equal(core.shownCode("none", "no_context"), "no_context");
+  assert.equal(core.shownCode("timeout", "http_502"), "timeout");
+  assert.equal(core.shownCode("auth", "timeout"), "auth");
   // Not request failures.
   for (const errorCode of ["none", "cancelled", "no_context", "input_too_large", "secret_only", "no_resume_fields"]) {
     assert.deepEqual(core.fillCategory({ ...written, errorCode }), { category: "none", stage: "none" }, errorCode);
@@ -182,6 +193,12 @@ test("a setup state (no desktop app, not paired, no model) is not a failed reque
       assert.equal(core.fillFailure({ ...base, ...codes, category }), "fill_partial", label);
       assert.equal(core.fillFailure({ ...base, ...codes, filledCount: 0, category }), "fill_failed", label);
     }
+  }
+  // After a first round that only skipped fields, a catch-up setup state is still not reported.
+  for (const errorCode of ["no_context", "input_too_large"]) {
+    const verdict = core.fillCategory({ ...written, errorCode, catchUpCode: "not_paired" });
+    assert.deepEqual(verdict, { category: "none", stage: "none" }, errorCode);
+    assert.equal(core.fillFailure({ ...base, errorCode, catchUpCode: "not_paired", category: verdict.category }), null, errorCode);
   }
   // A first-round failure is never replaced by a later setup state, and the other way round.
   assert.equal(core.fillFailure({ ...base, errorCode: "timeout", catchUpCode: "not_paired", category: "timeout" }), "fill_partial");

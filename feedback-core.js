@@ -147,8 +147,12 @@
     return VALUES.url_path.test(value) && value.split("/").filter(Boolean).every(part => part === ":id" || part === ":more" || routeSegment(part));
   }
 
-  // The error code a report shows: the first round's, or a catch-up's (#301) when the first round had none.
-  const shownCode = (first, later) => ((!first || first === "none") && later ? later : first);
+  // First-round codes that are not a failure: nothing to say, or fields skipped before any request.
+  // A failed request replaces them, as ai-worker.js does between batches (SKIP_CODES there).
+  const SKIP_CODES = new Set(["none", "no_context", "input_too_large"]);
+  // The error code a report shows: the first round's, or a catch-up's (#301) when the first round had
+  // none or the catch-up's request failed after a first round that did not.
+  const shownCode = (first, later) => (later && (!first || first === "none" || (SKIP_CODES.has(first) && requestFailed(later))) ? later : first);
 
   // Why the fill failed and the first stage that failed. `none` means nothing failed.
   function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, catchUpCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
@@ -254,7 +258,7 @@
     if (generic) libraries.generic = (libraries.generic || 0) + generic;
     const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
     // Fields that appeared after a choice (#269) add to the first round's match counts; their
-    // error code shows only when the first round had none. A catch-up that called the AI counts
+    // error code shows as shownCode() says. A catch-up that called the AI counts
     // as a call even when the first round did not need one.
     const g = input.grown || {};
     const called = g.aiCalled === true ? true : aiCalled(input);
@@ -412,7 +416,7 @@
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }
-  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, fillDrops, labelSources, aiCalled,
+  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, shownCode, fillDrops, labelSources, aiCalled,
     fillReport, diagnostics, fillFailure, jobReport, install,
     // Names only, for the privacy-policy check; the allowlists themselves stay private.
     SECTION_NAMES: Object.freeze([...SECTIONS]), VALUE_KEYS: Object.freeze(Object.keys(VALUES)) };
