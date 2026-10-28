@@ -715,12 +715,17 @@ test('two organisation-like mc items are a company conflict, not a guess', async
   const split = doc.createElement('i');
   split.className = 'split';
   msgs.insertBefore(split, msgs.firstChild);
-  msgs.insertBefore(doc.createTextNode('星海示例研究院'), split);
+  msgs.insertBefore(doc.createTextNode('星海示例科技有限公司'), split);
   const fields = extractJobFields(doc, HOTJOB_MC);
 
   assert.equal(fields.company, '');
   assert.ok(fields.assistReasons.includes('company_conflict'));
   assert.equal(fields.title, '[27届]芯片设计工程师');
+
+  // An unlabelled 研究院 next to the employer is a department, not a second employer.
+  const withDepartment = fixtureVariant('hotjob-mc-company-first.html', HOTJOB_MC,
+    html => html.replace('<div id="1" class="listItemRtMsgs ">', '<div id="1" class="listItemRtMsgs ">星海示例研究院<i class="split"></i>'));
+  assert.equal(extractJobFields(withDepartment, HOTJOB_MC).company, '星海示例半导体（南京）有限公司');
 });
 
 test('a branch name with no parent in an mc item is a department, not the employer', async () => {
@@ -761,6 +766,29 @@ test('a code-shaped post code after the title is dropped; a year or a Chinese no
     title.textContent = text;
     assert.equal(extractJobFields(doc, HOTJOB_MC).title, expected, text);
   }
+});
+
+function fixtureVariant(name, url, edit) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { JSDOM } = require('jsdom');
+  const html = edit(fs.readFileSync(path.join(__dirname, 'fixtures', 'job-pages', name), 'utf8'));
+  return new JSDOM(html, { url }).window.document;
+}
+
+test('an unlabelled hotjob item that reads like a department is not taken as the employer', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixtureVariant('hotjob-mc-company-first.html', HOTJOB_MC, html => html.replace('星海示例半导体（南京）有限公司', '星海示例中央研究院'));
+  const fields = extractJobFields(doc, HOTJOB_MC);
+  assert.equal(fields.company, '');
+  assert.notEqual(fields.title, '');
+});
+
+test('a badge nested in the sticky hotjob title does not make the two titles disagree', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixtureVariant('hotjob-pb-company.html', HOTJOB_PB, html => html.replace('<p class="tit">数据分析师(J-0042)</p>', '<p class="tit">数据分析师(J-0042)<span class="badge">热招</span></p>'));
+  const fields = extractJobFields(doc, HOTJOB_PB);
+  assert.equal(fields.title, '数据分析师');
 });
 
 test('a hotjob tenant id in upper case still matches the detail rule', async () => {

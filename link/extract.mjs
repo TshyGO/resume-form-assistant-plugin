@@ -73,6 +73,7 @@ const COMPANY_ITEM_LABEL = /^(?:所属公司|公司)\s*[:：]\s*/;
 const OTHER_ITEM_LABEL = /^[^:：]{1,8}[:：]/;
 // A branch with no parent name ("上海分公司") is a department, not the employer.
 const BRANCH_ONLY = /^\S{1,4}分公司$/;
+const UNLABELLED_EMPLOYER = /(?:有限责任公司|股份有限公司|有限公司|集团|公司|股份)$/;
 
 export function extractJobFields(doc, href) {
   const redacted = redactUrl(href);
@@ -229,7 +230,7 @@ function hotjobDetail(doc, href) {
   const route = hotjobRoute(href);
   if (route === 'pb/posDetail.html') {
     const header = nodes(doc, '.pos-detail-hd__titBar .tit').map(ownText);
-    const sticky = nodes(doc, '.fixed-postInfo .tit').map(node => node?.textContent);
+    const sticky = nodes(doc, '.fixed-postInfo .tit').map(ownText);
     const items = nodes(doc, '.pos-detail-hd__infoBar .item').map(node => node?.textContent);
     return { titles: hotjobTitles([...header, ...sticky]), companies: hotjobCompanies(items) };
   }
@@ -264,10 +265,13 @@ function withoutPostCode(value) {
 function hotjobCompanies(items) {
   const values = items.map(item => {
     const text = collapse(item);
-    if (COMPANY_ITEM_LABEL.test(text)) return text.replace(COMPANY_ITEM_LABEL, '');
-    return OTHER_ITEM_LABEL.test(text) ? '' : text;
-  }).map(cleanField);
-  return unique(values.filter(value => plausibleCompanyName(value) && hasNamedCompanySuffix(value) && !BRANCH_ONLY.test(value)));
+    if (COMPANY_ITEM_LABEL.test(text)) return { value: cleanField(text.replace(COMPANY_ITEM_LABEL, '')), labelled: true };
+    return { value: OTHER_ITEM_LABEL.test(text) ? '' : cleanField(text), labelled: false };
+  });
+  // An item without the 所属公司 label may be a department (研究院, 事业部), so on its own it
+  // counts only when it ends like a company.
+  return unique(values.filter(({ value, labelled }) => plausibleCompanyName(value) && hasNamedCompanySuffix(value)
+    && !BRANCH_ONLY.test(value) && (labelled || UNLABELLED_EMPLOYER.test(value))).map(({ value }) => value));
 }
 
 // The header title holds the name as its own text; the category tag and the "热招" badge
