@@ -763,6 +763,14 @@ test('a code-shaped post code after the title is dropped; a year or a Chinese no
   }
 });
 
+test('a hotjob tenant id in upper case still matches the detail rule', async () => {
+  const { extractJobFields } = await load();
+  const url = 'https://wecruit.hotjob.cn/SU0123456789ABCDEF01234567/mc/detail?postId=abc&recruitType=campus';
+  const fields = extractJobFields(fixturePage('hotjob-mc-company-first.html', url), url);
+  assert.notEqual(fields.title, '');
+  assert.notEqual(fields.company, '');
+});
+
 test('the hotjob rule stays off on list pages and on other hosts with the same markup', async () => {
   const { extractJobFields } = await load();
   const { nextSaveStep } = await import('../link/save-flow.mjs');

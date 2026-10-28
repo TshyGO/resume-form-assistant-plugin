@@ -61,7 +61,7 @@ const SITE_TITLE = /(?:招聘官网|招聘网站|微招聘|官网)$/;
 // wecruit.hotjob.cn job detail pages: the tenant id, then the pb (desktop) or mc (mobile)
 // detail route. List pages, the home page and the apply form do not match.
 const HOTJOB_HOST = 'wecruit.hotjob.cn';
-const HOTJOB_DETAIL = /^\/SU[0-9a-f]{24}\/(pb\/posDetail\.html|mc\/detail)$/;
+const HOTJOB_DETAIL = /^\/SU[0-9a-fA-F]{24}\/(pb\/posDetail\.html|mc\/detail)$/;
 // A tenant can show the post code after the name: "示例岗位(J01)". Only a code-shaped tail
 // with at least two digits is dropped; "(2027届)", "(NLP)", "(5G)" and "(2027-2028)" are
 // part of the name.

@@ -156,6 +156,7 @@ test('a failed or partial AI answer opens the form with what is known', async ()
 
 test('#278: when the AI found neither field, the note names only what the page read could not fill', async () => {
   const { afterAssist } = await load();
+  const { describeManualSave } = await import('../link/copy.mjs');
   const reply = { status: 'manual', reason: 'missing_both', reliable: false, fields: { company: '', title: '' } };
   const empty = { company: '', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
 
@@ -164,7 +165,9 @@ test('#278: when the AI found neither field, the note names only what the page r
   assert.equal(titleOnly.fields.title, '数据分析师');
   assert.equal(titleOnly.reason, 'missing_company');
   assert.equal(afterAssist(reply, { ...empty, company: '星河科技' }).reason, 'missing_title');
-  assert.equal(afterAssist(reply, { ...empty, company: '星河科技', title: '数据分析师' }).reason, 'missing_company');
+  const both = afterAssist(reply, { ...empty, company: '星河科技', title: '数据分析师' });
+  assert.equal(both.reason, 'manual', 'both fields are filled, so neither is called missing');
+  assert.equal(describeManualSave(both.reason), '请核对公司和岗位。缺的请自己补上，插件不会猜。');
 });
 
 test('a reliable flag without both fields still asks the user', async () => {
@@ -194,6 +197,10 @@ test('#278: with no fragments left the form opens without the AI, and a double g
   assert.equal('fragments' in neither, false, 'nothing is queued for the AI');
   assert.equal(neither.reason, 'missing_both');
   assert.equal(describeManualSave(neither.reason), '没认出公司和岗位，请手动填写。');
+  for (const assistReasons of [['missing_title', 'missing_company'], ['title_conflict', 'missing_company', 'missing_title']]) {
+    const step = nextSaveStep({ company: '', title: '', reliable: false, confidence: 'invalid', assistReasons, fragments: [] });
+    assert.equal(step.reason, 'missing_both', assistReasons.join(','));
+  }
 
   const titleOnly = nextSaveStep({
     company: '', title: '数据分析师', reliable: false, confidence: 'uncertain',

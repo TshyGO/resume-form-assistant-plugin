@@ -44,7 +44,7 @@ export function nextSaveStep(extraction) {
     return { action: 'assist', fields, fragments, reasons: extraction?.assistReasons || [] };
   }
   const reasons = extraction?.assistReasons || [];
-  const bothMissing = reasons[0] === 'missing_company' && reasons.includes('missing_title');
+  const bothMissing = reasons.includes('missing_company') && reasons.includes('missing_title');
   return { action: 'form', fields, reason: bothMissing ? 'missing_both' : (reasons[0] || 'manual') };
 }
 
@@ -104,9 +104,10 @@ export function afterAssist(result, fallback) {
   };
   if (fields.title && fields.title === fields.company) fields.title = '';
   let reason = result?.reason || 'manual';
-  // The AI found neither field, but the page read may have filled one or both.
+  // The AI found neither field, but the page read may have filled one or both. With both
+  // filled nothing is missing, only unconfirmed, so the note asks to check both.
   if (reason === 'missing_both' && (fields.company || fields.title)) {
-    reason = fields.company && !fields.title ? 'missing_title' : 'missing_company';
+    reason = !fields.company ? 'missing_company' : !fields.title ? 'missing_title' : 'manual';
   }
   return { action: 'form', fields, reason };
 }
