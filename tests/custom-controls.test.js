@@ -251,6 +251,18 @@ test('duplicate visible popup ids are refused instead of selecting the first row
   assert.equal((await h.api.operate(h.target, '硕士', { onWrite: () => writes++ })).reason, 'ambiguous_popup');
   assert.equal(writes, 0); assert.equal(h.el.textContent, '请选择');
 });
+test('a referenced popup layer that contains the referenced list is one popup', async () => {
+  // Element Plus el-autocomplete: aria-controls names the outer layer, aria-owns the list inside it.
+  const h = harness(button.replace('aria-controls="choices"', 'aria-controls="layer" aria-owns="choices"'));
+  h.el.onclick = () => { const layer = h.w.document.createElement('div'); layer.id = 'layer'; h.w.document.body.append(layer); layer.append(addOptions(h)); };
+  assert.equal((await h.api.operate(h.target, '硕士')).ok, true); assert.equal(h.el.textContent, '硕士');
+});
+test('a referenced section that holds the combobox itself does not swallow its list', async () => {
+  const h = harness(`<div id="section">${button.replace('aria-controls="choices"', 'aria-controls="section" aria-owns="choices"')}</div>`);
+  let clicked = 0;
+  h.el.onclick = () => { const list = addOptions(h); h.w.document.getElementById('section').append(list); list.onclick = () => clicked++; };
+  assert.equal((await h.api.operate(h.target, '硕士')).reason, 'ambiguous_popup'); assert.equal(clicked, 0);
+});
 test('custom option commitment on mousedown is accounted before a simultaneous cancel', async () => {
   let current = true, writes = 0; const h = harness(button);
   h.el.onclick = () => { const list = addOptions(h); list.lastChild.onmousedown = () => { h.el.textContent = '硕士'; current = false; }; };
