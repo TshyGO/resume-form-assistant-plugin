@@ -30,21 +30,23 @@
       "contextFiles": [
         ".superdesign/sidepanel-design-system.md",
         "sidepanel.html",
-        "sidepanel.css"
+        "sidepanel.css",
+        "sidepanel-mail.js"
       ],
       "fingerprints": {
-        ".superdesign/sidepanel-design-system.md": "1c6c9254a38130b28fad9233bf15e2bc4c0d667f0bc575cf6601e65f5a83efeb",
-        "sidepanel.html": "28d08852993df3d19b1878aee3e2144358f9684149fd8c476bd54aa348fbaa5b",
-        "sidepanel.css": "fd4b48978316f9b4c92dd4868c0fd259e7239d768c3abd6b9e51f5d87b989d11"
+        ".superdesign/sidepanel-design-system.md": "f68fab014ed20227ac7b4cc402a063d590f05c7402d8c5e2c3a2636c6eca1080",
+        "sidepanel.html": "6ae81ad555a2eb5c8233e70827a0e4e30d07e66d562fb0b341287417cb664191",
+        "sidepanel.css": "e015befdb286b25a7d92bd2c6a1e10f01903eb9dca53d25029cf296487314948",
+        "sidepanel-mail.js": "30e606c3e1d85218e31cc671d38cc7034d7dc50206d4b929d79188a63a07e520"
       },
       "drafts": {
         "278c23c9-b6f6-4204-8d9c-8fe166bf15da": {
           "title": "填写优先 · 独立邮件栏目",
-          "currentVersion": 2,
-          "visualDirection": "Existing side-panel tokens; fixed fill / fields / mail; fill default; separate minimal mail flow"
+          "currentVersion": 3,
+          "visualDirection": "Fill-first fixed tabs; explicit Enter search; visible radio results and persistent association summary"
         }
       },
-      "updatedAt": "2026-10-28T08:33:31.707249+00:00"
+      "updatedAt": "2026-10-28T09:23:13.184906+00:00"
     }
   }
 }

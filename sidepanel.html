@@ -452,13 +452,13 @@
                 <p id="mail-context-hint">支持 QQ、163、126 网页邮箱。</p>
               </div>
               <details class="mail-association" id="mail-association">
-                <summary>关联申请<span>可选</span></summary>
+                <summary>关联申请<span id="mail-association-state">可选</span></summary>
                 <label for="mail-company">公司名称</label>
-                <div class="mail-search"><input id="mail-company" class="dock-select" maxlength="200" autocomplete="off" placeholder="输入公司名称"><button id="mail-find-application" type="button" disabled>查找申请</button></div>
-                <label for="mail-application">关联申请</label>
-                <select id="mail-application" class="dock-select" disabled><option value="">不关联，存入招聘通知</option></select>
+                <div class="mail-search"><input id="mail-company" type="search" class="dock-select" maxlength="200" autocomplete="off" enterkeyhint="search" aria-describedby="mail-application-status" placeholder="输入公司名称，回车查找" disabled><button id="mail-find-application" type="button" disabled>查找申请</button></div>
+                <p id="mail-application-status" class="mail-search-status" role="status" aria-live="polite">按回车或点击「查找申请」。</p>
+                <fieldset id="mail-application" class="mail-application-options" disabled><legend class="sr-only">选择关联申请</legend></fieldset>
               </details>
-              <p class="card-hint">默认存入桌面「招聘通知」。</p>
+              <p id="mail-destination" class="card-hint mail-destination" aria-live="polite">当前不关联，保存到桌面「招聘通知」。</p>
               <button id="mail-save-button" class="mail-save-button" type="button" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg><span id="mail-save-label">保存到桌面</span></button>
               <p id="mail-save-status" class="mail-save-status" role="status" aria-live="polite" hidden></p>
               <div id="mail-excerpt-offer" class="mail-excerpt" hidden>

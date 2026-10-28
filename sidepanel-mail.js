@@ -10,6 +10,9 @@
   const company = document.getElementById('mail-company');
   const search = document.getElementById('mail-find-application');
   const application = document.getElementById('mail-application');
+  const searchStatus = document.getElementById('mail-application-status');
+  const destination = document.getElementById('mail-destination');
+  const associationState = document.getElementById('mail-association-state');
   const label = document.getElementById('mail-save-label');
   const context = document.getElementById('mail-context');
   const contextTitle = document.getElementById('mail-context-title');
@@ -21,6 +24,9 @@
   let busy = false;
   let busyAction = 'save';
   let pending = null;
+  let candidates = [];
+  let selectedApplication = null;
+  let lookupVersion = 0;
   const errors = {
     open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
     unrecognized_mail: '检测到邮件标题，但无法确认当前邮件的完整阅读区域。请等待加载完成后重试；仍失败时可下载 .eml 在桌面导入。',
@@ -34,6 +40,37 @@
     unavailable: '尚未确认保存成功。请检查桌面连接后重试，重复的原件会自动查重。'
   };
   function say(text, tone = 'idle') { status.textContent = text; status.hidden = !text; status.dataset.tone = tone; }
+  function saySearch(text, tone = 'idle') { searchStatus.textContent = text; searchStatus.dataset.tone = tone; }
+  function showSelection() {
+    const id = selectedApplication?.applicationId || '';
+    for (const row of application.querySelectorAll('.mail-application-option')) {
+      const input = row.querySelector('input');
+      input.checked = input.value === id;
+      row.classList.toggle('is-selected', input.checked);
+    }
+    associationState.textContent = selectedApplication ? '已选择' : '可选';
+    destination.textContent = selectedApplication
+      ? `将关联到：${selectedApplication.company} · ${selectedApplication.title}`
+      : '当前不关联，保存到桌面「招聘通知」。';
+  }
+  function renderCandidates() {
+    const legend = document.createElement('legend'); legend.className = 'sr-only'; legend.textContent = '选择关联申请';
+    application.replaceChildren(legend);
+    for (const item of [null, ...candidates]) {
+      const row = document.createElement('label'); row.className = 'mail-application-option';
+      const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'mail-associated-application';
+      radio.value = item?.applicationId || '';
+      const text = document.createElement('span'); text.className = 'mail-application-option__text';
+      const title = document.createElement('strong'); title.textContent = item?.company || '暂不关联';
+      const detail = document.createElement('small'); detail.textContent = item?.title || '保存到桌面「招聘通知」';
+      text.append(title, detail); row.append(radio, text); application.append(row);
+    }
+    showSelection();
+  }
+  function resetAssociation() {
+    lookupVersion += 1; candidates = []; selectedApplication = null;
+    renderCandidates();
+  }
   function setBusy(value, action = 'save') {
     busy = value;
     busyAction = action;
@@ -68,8 +105,9 @@
     setBusy(busy, busyAction);
     if (changed) {
       clearOffer();
-      application.replaceChildren(new Option('不关联，存入招聘通知', ''));
+      resetAssociation();
       company.value = '';
+      saySearch('按回车或点击「查找申请」。');
       if (!busy) say('');
     }
   }
@@ -87,7 +125,7 @@
   button.addEventListener('click', async () => {
     if (busy || !supported) return;
     clearOffer();
-    const selected = application.value;
+    const selected = selectedApplication?.applicationId || null;
     setBusy(true); say('正在读取当前邮件并尝试取得原件…');
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -99,7 +137,7 @@
         say('正在传给桌面并保存原件…');
         saved(await send('eml', { bytesBase64: capture.bytesBase64 }, selected), 'eml');
       } else if (capture?.status === 'excerpt_offer') {
-        pending = { excerpt: capture.excerpt, applicationId: selected };
+        pending = { excerpt: capture.excerpt };
         document.getElementById('mail-excerpt-subject').textContent = capture.excerpt.subject;
         offer.hidden = false;
         card.dataset.excerptOffer = 'true';
@@ -111,33 +149,50 @@
   accept.addEventListener('click', async () => {
     if (!pending || busy || !supported) return;
     const chosen = pending;
+    const selected = selectedApplication?.applicationId || null;
     setBusy(true); say('正在保存网页摘录…');
-    try { saved(await send('excerpt', { excerpt: chosen.excerpt }, chosen.applicationId), 'excerpt'); }
+    try { saved(await send('excerpt', { excerpt: chosen.excerpt }, selected), 'excerpt'); }
     catch { say(errors.unavailable, 'error'); }
     finally { setBusy(false); }
   });
   cancel.addEventListener('click', () => { clearOffer(); say('已取消保存摘录。'); });
-  search.addEventListener('click', async () => {
+  async function findApplications() {
     const name = company.value.trim();
     if (busy || !supported) return;
-    if (!name) { say('请填写申请中的公司名称后查找。', 'error'); return; }
-    const tick = revision;
-    setBusy(true, 'search'); say('正在查找该公司的申请…');
+    if (!name) { saySearch('请填写公司名称后查找。', 'error'); company.focus(); return; }
+    resetAssociation();
+    const lookup = lookupVersion;
+    setBusy(true, 'search'); saySearch('正在查找该公司的申请…');
     try {
       const result = await chrome.runtime.sendMessage({ type: 'DESKTOP_CANDIDATES_FOR', fields: { company: name, title: '' } });
-      if (tick !== revision) { say('当前网页已切换，请重新查找申请。'); return; }
-      if (result?.status !== 'ok') { say('无法读取桌面申请，请检查桌面连接。'); return; }
+      if (lookup !== lookupVersion) return;
+      if (result?.status !== 'ok') { saySearch('无法读取桌面申请，请检查桌面连接后重新查找。', 'error'); return; }
       const seen = new Set();
-      application.replaceChildren(new Option('不关联，存入招聘通知', ''));
       for (const item of [...(result.exact || []), ...(result.sameCompany || [])]) {
         if (seen.has(item.applicationId)) continue;
         seen.add(item.applicationId);
-        application.add(new Option(`${item.company} · ${item.title}`, item.applicationId));
+        candidates.push(item);
       }
-      say(seen.size ? '请选择要关联的申请，也可以不关联直接保存。' : '未找到该公司的申请，可以先保存到收件箱。');
-    } catch { say('无法读取桌面申请，请检查桌面连接。'); }
+      renderCandidates();
+      saySearch(seen.size ? `找到 ${seen.size} 条申请，点击岗位即可选中。` : '未找到该公司的申请。可修改名称重试，或暂不关联直接保存。');
+    } catch { if (lookup === lookupVersion) saySearch('无法读取桌面申请，请检查桌面连接后重新查找。', 'error'); }
     finally { setBusy(false); }
+  }
+  search.addEventListener('click', () => { void findApplications(); });
+  company.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault(); void findApplications();
   });
+  company.addEventListener('input', () => {
+    resetAssociation();
+    saySearch('公司名称已更改，按回车或点击「查找申请」。');
+  });
+  application.addEventListener('change', event => {
+    if (busy || !supported || !event.target.matches('input[name="mail-associated-application"]')) return;
+    selectedApplication = candidates.find(item => item.applicationId === event.target.value) || null;
+    showSelection();
+  });
+  renderCandidates();
   chrome.tabs.onActivated.addListener(() => { void refresh(); });
   chrome.tabs.onUpdated.addListener((id, change) => { if (id === current?.id && (change.url || change.status === 'complete')) void refresh(); });
   void refresh();

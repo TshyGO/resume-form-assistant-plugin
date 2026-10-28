@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const read = name => fs.readFileSync(name, 'utf8');
 const emptyStore = { templates: [], activeTemplate: null, profile: { values: {}, family: [], custom: [] }, profileRevision: 1 };
-async function panel({ url = 'https://mail.163.com/js6/main.jsp?sid=synthetic', desktop = { status: 'ok', data: emptyStore }, capture = { status: 'original', bytesBase64: 'eA==' } } = {}) {
+async function panel({ url = 'https://mail.163.com/js6/main.jsp?sid=synthetic', desktop = { status: 'ok', data: emptyStore }, capture = { status: 'original', bytesBase64: 'eA==' }, query = { status: 'ok', exact: [{ applicationId: 'app', company: '示例公司', title: '前端工程师' }], sameCompany: [] } } = {}) {
   const dom = new JSDOM(read('sidepanel.html'), { url: 'chrome-extension://own/sidepanel.html', runScripts: 'outside-only' });
   const win = dom.window, doc = win.document;
   win.setInterval = () => 0;
@@ -19,7 +19,7 @@ async function panel({ url = 'https://mail.163.com/js6/main.jsp?sid=synthetic', 
         calls.push({ target: 'desktop', ...message });
         if (message.type === 'DESKTOP_RESUME_READ') return store;
         if (message.type === 'DESKTOP_SAVE_MAIL') return { status: 'saved' };
-        if (message.type === 'DESKTOP_CANDIDATES_FOR') return { status: 'ok', exact: [{ applicationId: 'app', company: '示例公司', title: '前端工程师' }], sameCompany: [] };
+        if (message.type === 'DESKTOP_CANDIDATES_FOR') return typeof query === 'function' ? query(message) : query;
         return { status: 'ok' };
       } },
     tabs: { query: async () => [tab], sendMessage: async (id, message) => {
@@ -34,6 +34,7 @@ async function panel({ url = 'https://mail.163.com/js6/main.jsp?sid=synthetic', 
   await flush();
   return { dom, doc, get: id => doc.getElementById(id), calls, flush,
     async change(next) { tab = next; handlers.activate.forEach(fn => fn()); await flush(); },
+    async pageComplete() { handlers.update.forEach(fn => fn(tab.id, { status: 'complete' })); await flush(); },
     desktop(value) { store = value; }, close() { win.close(); } };
 }
 test('fixed third mail tab keeps one-click fill primary and never auto-selects for a mailbox', async t => {
@@ -93,13 +94,13 @@ test('switching sections preserves an explicit excerpt offer and optional applic
   p.get('mail-association').open = true;
   p.get('mail-company').value = '示例公司';
   p.get('mail-find-application').click(); await p.flush();
-  p.get('mail-application').value = 'app';
+  p.get('mail-application').querySelector('input[value="app"]').click();
   p.get('mail-save-button').click(); await p.flush();
   assert.equal(p.get('mail-excerpt-offer').hidden, false);
   p.get('tab-fields').click(); p.get('tab-mail').click(); await p.flush();
   assert.equal(p.get('mail-excerpt-offer').hidden, false);
   assert.equal(p.get('mail-company').value, '示例公司');
-  assert.equal(p.get('mail-application').value, 'app');
+  assert.equal(p.get('mail-application').querySelector('input:checked').value, 'app');
   assert.equal(p.calls.filter(c => c.type === 'WEBMAIL_CAPTURE').length, 1);
   assert.equal(p.calls.some(c => c.type === 'DESKTOP_SAVE_MAIL'), false);
   p.get('mail-excerpt-accept').click(); await p.flush();
@@ -113,4 +114,99 @@ test('mail connection warning offers recovery without resume or AI prerequisites
   assert.equal(p.get('desktop-connection').hidden, false);
   assert.match(p.get('desktop-connection-text').textContent, /打开桌面/);
   assert.doesNotMatch(p.get('desktop-connection-text').textContent, /简历|模板|AI/);
+});
+test('Enter immediately reveals company and role choices, but never selects or saves one automatically', async t => {
+  const first = { applicationId: 'first', company: '星河科技', title: '前端工程师' };
+  const second = { applicationId: 'second', company: '星河科技', title: '测试工程师' };
+  const p = await panel({ query: { status: 'ok', exact: [first], sameCompany: [first, second] } }); t.after(() => p.close());
+  p.get('tab-mail').click(); p.get('mail-association').open = true;
+  p.get('mail-company').value = '星河科技';
+  p.get('mail-company').dispatchEvent(new p.dom.window.KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+  await p.flush();
+  assert.equal(p.calls.filter(c => c.type === 'DESKTOP_CANDIDATES_FOR').length, 1);
+  assert.match(p.get('mail-application-status').textContent, /找到 2 条申请/);
+  assert.match(p.get('mail-application').textContent, /星河科技/);
+  assert.match(p.get('mail-application').textContent, /前端工程师/);
+  assert.match(p.get('mail-application').textContent, /测试工程师/);
+  assert.equal(p.get('mail-application').querySelectorAll('input[type=radio]').length, 3);
+  assert.equal(p.get('mail-application').querySelector('input:checked').value, '');
+  assert.equal(p.calls.some(c => c.type === 'DESKTOP_SAVE_MAIL' || c.type === 'WEBMAIL_CAPTURE'), false);
+  p.get('mail-application').querySelector('input[value="first"]').click();
+  assert.match(p.get('mail-destination').textContent, /将关联到：星河科技 · 前端工程师/);
+  assert.equal(p.get('mail-association-state').textContent, '已选择');
+  p.get('mail-association').open = false;
+  assert.match(p.get('mail-destination').textContent, /星河科技 · 前端工程师/);
+  p.get('mail-save-button').click(); await p.flush();
+  assert.equal(p.calls.find(c => c.type === 'DESKTOP_SAVE_MAIL').applicationId, 'first');
+});
+test('IME confirmation and repeated Enter while a lookup is pending cannot issue extra lookups', async t => {
+  let finish;
+  const p = await panel({ query: () => new Promise(resolve => { finish = resolve; }) }); t.after(() => p.close());
+  p.get('mail-company').value = '星河科技';
+  p.get('mail-company').dispatchEvent(new p.dom.window.KeyboardEvent('keydown', { key: 'Enter', isComposing: true }));
+  await p.flush(); assert.equal(p.calls.some(c => c.type === 'DESKTOP_CANDIDATES_FOR'), false);
+  const enter = () => p.get('mail-company').dispatchEvent(new p.dom.window.KeyboardEvent('keydown', { key: 'Enter' }));
+  enter(); enter(); await p.flush();
+  assert.equal(p.calls.filter(c => c.type === 'DESKTOP_CANDIDATES_FOR').length, 1);
+  assert.match(p.get('mail-application-status').textContent, /正在查找/);
+  finish({ status: 'ok', exact: [], sameCompany: [] }); await p.flush();
+  assert.match(p.get('mail-application-status').textContent, /未找到/);
+  assert.equal(p.get('mail-find-application').disabled, false);
+});
+test('changing company text or choosing not to associate clears the visible selection and the saved target', async t => {
+  const p = await panel(); t.after(() => p.close());
+  p.get('mail-company').value = '示例公司'; p.get('mail-find-application').click(); await p.flush();
+  p.get('mail-application').querySelector('input[value="app"]').click();
+  p.get('mail-application').querySelector('input[value=""]').click();
+  assert.match(p.get('mail-destination').textContent, /当前不关联/);
+  p.get('mail-application').querySelector('input[value="app"]').click();
+  p.get('mail-company').value = '另一家公司'; p.get('mail-company').dispatchEvent(new p.dom.window.Event('input'));
+  assert.equal(p.get('mail-application').querySelectorAll('input').length, 1);
+  assert.match(p.get('mail-application-status').textContent, /公司名称已更改/);
+  p.get('mail-save-button').click(); await p.flush();
+  assert.equal(p.calls.find(c => c.type === 'DESKTOP_SAVE_MAIL').applicationId, null);
+});
+test('query failure is shown beside search, and a retry can reveal results without reading mail', async t => {
+  let failed = true;
+  const p = await panel({ query: () => {
+    if (failed) throw new Error('offline');
+    return { status: 'ok', exact: [], sameCompany: [{ applicationId: 'app', company: '星河科技', title: '<img src=x onerror=alert(1)>' }] };
+  } }); t.after(() => p.close());
+  p.get('mail-company').value = '星河科技'; p.get('mail-find-application').click(); await p.flush();
+  assert.equal(p.get('mail-application-status').dataset.tone, 'error');
+  assert.match(p.get('mail-application-status').textContent, /无法读取桌面申请/);
+  assert.equal(p.get('mail-save-status').hidden, true);
+  failed = false; p.get('mail-find-application').click(); await p.flush();
+  assert.match(p.get('mail-application-status').textContent, /找到 1 条申请/);
+  assert.ok(p.get('mail-application').textContent.includes('<img src=x onerror=alert(1)>'));
+  assert.equal(p.get('mail-application').querySelector('img'), null);
+  assert.equal(p.calls.some(c => c.type === 'WEBMAIL_CAPTURE'), false);
+});
+test('late lookup results cannot populate the application list on another browser page', async t => {
+  let finish;
+  const p = await panel({ query: () => new Promise(resolve => { finish = resolve; }) }); t.after(() => p.close());
+  p.get('mail-company').value = '星河科技'; p.get('mail-find-application').click(); await p.flush();
+  await p.change({ id: 2, url: 'https://mail.126.com/js6/main.jsp?sid=synthetic' });
+  finish({ status: 'ok', exact: [], sameCompany: [{ applicationId: 'old', company: '星河科技', title: '旧页面结果' }] }); await p.flush();
+  assert.equal(p.get('mail-company').value, '');
+  assert.equal(p.get('mail-application').querySelectorAll('input').length, 1);
+  assert.ok(!p.get('mail-application').textContent.includes('旧页面结果'));
+  assert.match(p.get('mail-destination').textContent, /当前不关联/);
+});
+test('excerpt confirmation uses the currently visible application selection', async t => {
+  const p = await panel({ capture: { status: 'excerpt_offer', excerpt: { subject: '测试通知', from: 'HR', sentTime: '', body: '正文' } } }); t.after(() => p.close());
+  p.get('mail-save-button').click(); await p.flush();
+  p.get('mail-company').value = '示例公司'; p.get('mail-find-application').click(); await p.flush();
+  p.get('mail-application').querySelector('input[value="app"]').click();
+  p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.calls.find(c => c.type === 'DESKTOP_SAVE_MAIL').applicationId, 'app');
+});
+test('a same-address page-complete notification does not discard an in-flight lookup', async t => {
+  let finish;
+  const p = await panel({ query: () => new Promise(resolve => { finish = resolve; }) }); t.after(() => p.close());
+  p.get('mail-company').value = '星河科技'; p.get('mail-find-application').click(); await p.flush();
+  await p.pageComplete();
+  finish({ status: 'ok', exact: [], sameCompany: [{ applicationId: 'app', company: '星河科技', title: '前端工程师' }] }); await p.flush();
+  assert.match(p.get('mail-application-status').textContent, /找到 1 条申请/);
+  assert.match(p.get('mail-application').textContent, /前端工程师/);
 });

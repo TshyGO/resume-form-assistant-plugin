@@ -527,3 +527,14 @@ body[data-active-view="mail"] #job-assist, body[data-active-view="mail"] #legacy
 .mail-excerpt > p:first-child { margin: 0; font-size: 13px; font-weight: 600; }
 .mail-card[data-excerpt-offer="true"] .mail-save-button:not(:disabled) { border-color: var(--accent-line); background: var(--panel); color: var(--accent-strong); }
 .mail-excerpt #mail-excerpt-accept { border-color: var(--accent); background: var(--accent); color: white; font-weight: 600; }
+.mail-search-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.mail-search-status[data-tone="error"] { color: var(--warn-ink); }
+.mail-application-options { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-height: 240px; margin: 10px 0 0; padding: 0; overflow: auto; border: 0; }
+.mail-association .mail-application-option { display: flex; align-items: flex-start; gap: 9px; min-height: 48px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.mail-application-option input { flex: none; width: 15px; height: 15px; margin: 3px 0 0; accent-color: var(--accent); }
+.mail-application-option__text { min-width: 0; overflow-wrap: anywhere; }
+.mail-application-option strong { display: block; font-size: 12px; font-weight: 600; }
+.mail-application-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.mail-association .mail-application-option.is-selected { border-color: var(--accent-line); background: var(--accent-pale); }
+.mail-application-options[disabled] .mail-application-option { color: var(--muted); cursor: not-allowed; }
+.mail-destination { overflow-wrap: anywhere; }

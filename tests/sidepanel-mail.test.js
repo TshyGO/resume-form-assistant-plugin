@@ -57,7 +57,7 @@ test('changing tabs clears a proposed excerpt so it cannot be saved accidentally
 });
 test('user can select an application and repeated save clicks create one transfer', async () => {
   const p = await panel(); p.get('mail-company').value = '某公司'; p.get('mail-find-application').click(); await p.flush();
-  p.get('mail-application').value = 'app';
+  p.get('mail-application').querySelector('input[value="app"]').click();
   p.get('mail-save-button').click(); p.get('mail-save-button').click(); await p.flush();
   const writes = p.calls.filter(c => c.msg.type === 'DESKTOP_SAVE_MAIL');
   assert.equal(writes.length, 1); assert.equal(writes[0].msg.applicationId, 'app');
