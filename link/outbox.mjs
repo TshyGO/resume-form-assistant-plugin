@@ -3,6 +3,7 @@ import { sendOnce } from './transport.mjs';
 import { MAX_OUTBOX } from './limits.mjs';
 import { nextDelayMs, waitsForFill } from './drain.mjs';
 import { SNAPSHOT_UPLOAD } from './uploads.mjs';
+import { consistentFill } from './fillrecords.mjs';
 
 /**
  * Bound messages: the queue that exists once the user has chosen what to bind to.
@@ -92,7 +93,7 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
   async function sendFill({ record, applicationId, identity, snapshot = null }) {
     if (!identity) return { status: 'rejected', reason: 'no_identity' };
     if (!applicationId) return { status: 'rejected', reason: 'no_application' };
-    const payload = { applicationId, ...record.fill };
+    const payload = { applicationId, ...consistentFill(record.fill) };
     // The event names its snapshot by id and content digest, never by bytes (§8.5). The
     // protocol requires the two together or neither.
     if (snapshot?.snapshotId && snapshot?.sha256) {
@@ -218,7 +219,8 @@ export function createOutbox({ store, uuid, now, sendNative, sleep, uploads = nu
       messageType: entry.messageType,
       messageId: entry.messageId,
       clientInstanceId: entry.clientInstanceId,
-      payload: entry.payload,
+      // A fill queued by 0.4.4 may carry counts the desktop refuses; send it consistent.
+      payload: entry.messageType === 'fill.submit' ? consistentFill(entry.payload) : entry.payload,
       identity,
       sourceRestoreEpoch: entry.sourceRestoreEpoch,
       occurredAt: entry.occurredAt,

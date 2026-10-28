@@ -70,6 +70,17 @@ function outcomeOf(raw, filledCount) {
   return filledCount > 0 ? 'partial' : 'failed';
 }
 
+/**
+ * The desktop refuses a fill whose written and unconfirmed fields outnumber its fields. 0.4.4
+ * could record that after a fill wrote fields that appeared during the fill, so records and
+ * queue entries it saved get a consistent total when they are sent. Valid fills come back as is.
+ */
+export function consistentFill(fill) {
+  if (!fill || typeof fill !== 'object') return fill;
+  const least = count(fill.filledCount) + count(fill.unconfirmedCount);
+  return count(fill.fieldCount) >= least ? fill : { ...fill, fieldCount: Math.min(least, MAX_COUNT) };
+}
+
 function count(value) {
   const number = Math.round(Number(value));
   if (!Number.isFinite(number)) return 0;
