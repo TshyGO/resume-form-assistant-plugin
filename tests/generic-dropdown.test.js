@@ -622,6 +622,18 @@ test("Element autocomplete: a shorter suggestion is not picked; the full value i
   assert.equal(h.popper.hidden, true);
 });
 
+test("Element autocomplete: closing the suggestions sends no click event to the page", async () => {
+  const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"] });
+  let bodyClicks = 0;
+  const body = h.input.ownerDocument.body;
+  body.addEventListener("click", (event) => { if (event.target === body) bodyClicks += 1; });
+  const result = await h.api.operate(h.target, "广州市天河区");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  await h.settle();
+  assert.equal(h.popper.hidden, true, "the suggestions are closed");
+  assert.equal(bodyClicks, 0, "a page that saves on an outside click sees none");
+});
+
 test("Element autocomplete: a value the page refuses is not followed by a click on the page", async () => {
   const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"] });
   h.input.addEventListener("change", () => { h.input.value = ""; });
