@@ -384,18 +384,21 @@ test("unfilled custom selects tell 'never opened' from 'opened with N options', 
   const stubs = genericSelects({
     degree: { ok: false, reason: "options_not_rendered", observed: { controlKind: "custom-select", connected: true, rolledBack: false } },
     school: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "listbox", optionCount: 4 } },
-    city: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "tree", optionCount: 260 } }
+    city: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "tree", optionCount: 260 } },
+    // Opened only after the plugin typed the value: custom-controls.js leaves the count out (#301).
+    major: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", library: "generic", popupRole: "component" } }
   });
-  const { reports } = await fill({ ...stubs, fields: [named("degree", "学历"), named("school", "学校"), named("city", "现居住地")],
-    respond: message => ({ success: true, matches: message.formFields.map((field, index) => ({ fieldId: field.fieldId, value: ["本科", "示例大学", "示例市"][index] })),
-      diagnostics: diag({ ruleMatches: 3, aiFields: 0, promptBytes: 0 }) }) });
+  const { reports } = await fill({ ...stubs, fields: [named("degree", "学历"), named("school", "学校"), named("city", "现居住地"), named("major", "专业")],
+    respond: message => ({ success: true, matches: message.formFields.map((field, index) => ({ fieldId: field.fieldId, value: ["本科", "示例大学", "示例市", "计算机科学与技术"][index] })),
+      diagnostics: diag({ ruleMatches: 4, aiFields: 0, promptBytes: 0 }) }) });
   assert.deepEqual(reports.map(item => item.kind), ["fill_failed"]);
   const block = reports[0].diagnostics;
   assert.match(block, /^- 学历: input\[text\] opened=none reason=options_not_rendered$/m);
   assert.match(block, /^- 学校: input\[text\] opened=listbox options=4 reason=no_option_match$/m);
   assert.match(block, /^- 现居住地: input\[text\] opened=tree options=200 reason=no_option_match$/m);
-  assert.equal(lineOf(block, "custom_controls"), "3");
-  assert.equal(lineOf(block, "custom_libraries"), "generic=3");
+  assert.match(block, /^- 专业: input\[text\] opened=component reason=no_option_match$/m, "no count is not options=0");
+  assert.equal(lineOf(block, "custom_controls"), "4");
+  assert.equal(lineOf(block, "custom_libraries"), "generic=4");
   assert.equal(lineOf(block, "ai_tier"), "-", "the rules matched everything; the AI was not called");
 });
 

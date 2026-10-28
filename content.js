@@ -4421,7 +4421,8 @@
     const role = ["listbox", "tree", "menu", "component", "calendar"].includes(observed?.popupRole) ? observed.popupRole : "";
     // AntD 日期面板只数格子，不标 popupRole。
     if (role === "calendar" || (!role && observed?.controlKind === "date" && Number.isInteger(observed.optionCount))) return { opened: "calendar" };
-    if (role) return { opened: role, options: Number.isInteger(observed.optionCount) ? observed.optionCount : 0 };
+    // 项数只在网页自己先给出的第一层列表读到时才有（custom-controls.js）；没有就不报，不当成 0。
+    if (role) return { opened: role, ...(Number.isInteger(observed.optionCount) ? { options: observed.optionCount } : {}) };
     return ["custom-select", "cascader"].includes(observed?.controlKind) ? { opened: "none" } : null;
   }
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {

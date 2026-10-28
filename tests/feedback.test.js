@@ -72,6 +72,31 @@ test('code errors stop at five an hour; fill reports have their own twenty and d
   }
 });
 
+test('a failed AI request and fields the page did not take keep separate daily slots per site', async () => {
+  // #301 U1: a failed AI request is reported even when every local match got written. A timeout or an
+  // outage that comes first must not hold back that day's report of fields the site did not take.
+  let offline = true;
+  const sent = [];
+  const f = await fixture({ fetchImpl: async (_url, request) => {
+    if (offline) throw new TypeError('Failed to fetch');
+    sent.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'x' }));
+  } });
+  await f.service.setConsent(true);
+  const report = category => ({ kind: 'fill_partial', diagnostics: `[错误]\nerror_category: ${category}` });
+  // Offline: the AI request failed, and so did the report. It still takes its slot.
+  assert.equal((await f.service.automatic(report('service_error'), 'jobs.example.test')).reason, 'network');
+  offline = false; f.advance(3600000);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'jobs.example.test')).ok, true);
+  for (const category of ['timeout', 'service_error', 'fill_rejected', 'match_failed']) {
+    assert.equal((await f.service.automatic(report(category), 'jobs.example.test')).reason, 'suppressed', category);
+  }
+  assert.equal(sent.length, 1);
+  // The other way round, on another site: a timeout first, then fields not taken.
+  assert.equal((await f.service.automatic(report('timeout'), 'c.liepin.com')).ok, true);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'c.liepin.com')).ok, true);
+  assert.deepEqual(sent.map(body => body.user_description.match(/^error_category: (.*)$/m)[1]), ['fill_rejected', 'timeout', 'fill_rejected']);
+});
+
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {
   for (const status of [429, 500, 503]) {
     let count = 0;
@@ -387,6 +412,35 @@ test('[来源] carries the install type for automatic and manual reports; an unk
   await f.service.setConsent(true);
   await f.service.automatic({ kind: 'fill_failed', diagnostics: '[来源]\ninstall: development\n[错误]\nerror_category: unknown' }, 'c.liepin.com');
   assert.equal(f.calls[0].payload.user_description.match(/^install: .*$/gm).join(), 'install: normal');
+});
+
+test('an error from before a choice is dropped, even while the install type is still being looked up', async () => {
+  // automatic() waits for the install type (up to a second) before it reads the choice. A choice made
+  // in that time came after the error, so the report belongs to the earlier choice and is not sent.
+  const slow = () => new Promise(resolve => setTimeout(resolve, 50, 'normal'));
+  const later = () => new Promise(resolve => setTimeout(resolve, 2));
+  const cases = {
+    'undecided, then agreed': [{}, async s => { await s.setConsent(true); }],
+    'a version-1 grant asked again, then agreed': [{ feedbackStateV1: { consent: true, consentVersion: 1, anonymousId: 'v1-id' } },
+      async s => { await s.setConsent(true); }],
+    'agreed, then turned off and on': [null, async s => { await s.setConsent(false); await s.setConsent(true); }]
+  };
+  for (const [name, [data, choose]] of Object.entries(cases)) {
+    const f = await fixture({ install: slow, data: data || {} });
+    if (!data) await f.service.setConsent(true);
+    const auto = f.service.automatic(crash, 'c.liepin.com');
+    await later();
+    await choose(f.service);
+    assert.equal((await auto).reason, 'suppressed', name);
+    assert.equal(f.calls.length, 0, name);
+    await f.service.automatic({ ...crash, stack: 'content.js:7:1' }, 'c.liepin.com');
+    assert.equal(f.calls.length, 1, `${name}: errors after the choice are sent`);
+  }
+  // A choice made before the error still counts: the report waits for the lookup and carries it.
+  const f = await fixture({ install: slow });
+  await f.service.setConsent(true);
+  assert.equal((await f.service.automatic(crash, 'c.liepin.com')).ok, true);
+  assert.match(f.calls[0].payload.user_description, /^install: normal$/m);
 });
 
 test('the router reads the install type from chrome.management.getSelf, and goes on without it', async () => {

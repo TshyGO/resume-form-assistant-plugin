@@ -22,6 +22,9 @@ const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, rece
 export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, install = () => '', timeoutMs = 5000 }) {
   let serial = Promise.resolve();
   let stopped = false;
+  // Counts the user's choices. A report that arrived before the latest one belongs to the earlier choice
+  // and is dropped, also while it still waits for the install type below (#301): never sent after agreeing.
+  let choices = 0;
   const active = new Set();
   // How the browser installed the extension (store, unpacked, policy...), looked up once. Unknown,
   // failed or slow lookups leave it out; reports never wait on it for more than a second.
@@ -98,6 +101,7 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     ready: () => installKnown,
     status: () => locked(async () => view(await read())),
     setConsent(enabled) {
+      choices += 1;
       stopped = enabled !== true;
       if (stopped) for (const controller of active) controller.abort();
       return locked(async () => {
@@ -109,12 +113,16 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     },
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
+      const choice = choices;
       await installKnown;
       const payload = await locked(async () => {
         const state = await read(); const time = now();
-        if (state.consent !== true || stopped || time < state.backoff) return null;
+        if (state.consent !== true || stopped || choice !== choices || time < state.backoff) return null;
         const body = build(input, host, state.anonymousId || uuid());
-        const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
+        // A failed AI request (timeout or service error, #301 U1) has its own daily slot per site, so it
+        // never holds back that day's report of fields the site did not take.
+        const aiFailed = /^error_category: (?:timeout|service_error)$/m.test(body.user_description);
+        const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}${aiFailed ? '|ai' : ''}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature)))].map(x => x.toString(16).padStart(2, '0')).join('');
         state.hourly = state.hourly.filter(t => time - t < HOUR);
         state.fillHourly = state.fillHourly.filter(t => time - t < HOUR);
