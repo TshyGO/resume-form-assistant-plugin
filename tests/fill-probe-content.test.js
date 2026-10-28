@@ -125,10 +125,10 @@ test("diagnostics list the host and the structure of a field the page refused, n
 });
 
 // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上。
-async function runOnViewPage(response, { fillProbe = VIEW_PROBE, fields = 1, refuse = false, assisted = null } = {}) {
+async function runOnViewPage(response, { fillProbe = VIEW_PROBE, fields = 1, refuse = false, assisted = null, feedback } = {}) {
   const formElements = [];
   const status = { textContent: "", className: "" };
-  const { helpers, HTMLInputElement, timers } = loadHighlightHelpers({ formElements, fillProbe, sendMessage: async () => response });
+  const { helpers, HTMLInputElement, timers } = loadHighlightHelpers({ formElements, fillProbe, feedback, sendMessage: async () => response });
   const inputs = Array.from({ length: fields }, () => {
     const input = new HTMLInputElement();
     input.name = "keyword";
@@ -212,13 +212,36 @@ test("scanned but none filled on a view page also stays on screen", async () => 
   assert.equal(fadingTimers(plain.timers), 1);
 });
 
-test("a view page where the one matched field refuses its value keeps the unfilled note and the AI warning before the hint", async () => {
+// #301：匹配到了却写不上，问题在控件，不在查看状态：不再提示先点「编辑」。
+test("a view page where the one matched field refuses its value keeps the unfilled note and the AI warning, without the click-编辑 hint", async () => {
   const { status, result } = await runOnViewPage({ success: true, warning: "某警告。", matches: [{ fieldId: "field-0", value: "测试用户" }] }, { refuse: true });
-  assert.equal(status.textContent,
-    "已填写 0 个字段。1 项没填上：keyword（值没有写上），请手动补上。某警告。这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。");
+  assert.equal(status.textContent, "本地已填写 0 项；1 项没填上：keyword（值没有写上），请手动补上。某警告。");
   assert.match(status.className, /is-error/);
   assert.equal(result.filledCount, 0);
   assert.equal(result.outcome, "partial");
+});
+
+// #299：扫到 22 个字段，AI 等到超时，本地匹配的两项写不上。页面上有「编辑」按钮也不是查看状态。
+test("an AI timeout with local matches that would not stick says nothing about 编辑 and does not report an edit hint", async () => {
+  const timeout = "AI 服务商等了 120 秒没有返回，请稍后重试。";
+  const calls = [];
+  const feedback = { ...require("../feedback-core.js") };
+  const fillFailure = feedback.fillFailure;
+  feedback.fillFailure = input => { calls.push(input); return fillFailure(input); };
+  const { status, result } = await runOnViewPage({ success: true, warning: timeout, error: timeout,
+    matches: [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "测试用户" }],
+    diagnostics: { errorCode: "timeout", ruleMatches: 2, aiFields: 20 } },
+  { fields: 22, refuse: true, fillProbe: { ...realProbe, probePage: () => ({ ...LIEPIN_VIEW, editButtons: 10 }) }, feedback });
+  assert.equal(result.filledCount, 0);
+  assert.doesNotMatch(status.textContent, /编辑/);
+  assert.match(status.textContent, /等了 120 秒/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].editHint, false);
+  // 照样按没填上的字段上报。
+  assert.equal(fillFailure(calls[0]), "fill_failed");
+  // AI 超时、一项也没匹配上：同样不提「编辑」。
+  const failed = await runOnViewPage({ success: false, error: timeout, matches: [], diagnostics: { errorCode: "timeout" } });
+  assert.equal(failed.result.error, timeout);
 });
 
 test("an assisted run never shows the click-编辑 hint, however it ends", async () => {

@@ -2391,7 +2391,9 @@
     // #226 本站配方这次用没用上：只有固定状态码和计数。
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
-    const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
+    // 只在什么都没匹配上、AI 也没出错时这样说：AI 超时、匹配到了却写不上（#299）都不是查看状态。
+    const viewModeHint = () => !assisted && filledCount === 0 && !matched && probe?.editButtons > 0
+      && ["none", "no_context"].includes(diagnostics.errorCode || "none")
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
