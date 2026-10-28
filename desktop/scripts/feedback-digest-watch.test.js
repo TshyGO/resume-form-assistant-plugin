@@ -64,7 +64,7 @@ test("36 小时内有日报不提醒，正好 36 小时也不提醒，超过才�
   assert.ok(stale.body.includes("2026-10-24 23:57 UTC（台北时间 2026-10-25 07:57）"));
   assert.match(stale.body, /relay \/ Muse/);
   assert.match(stale.body, /GitHub token/);
-  assert.ok(stale.body.includes(`仓库路径是否已经改成 ${repository}`));
+  assert.ok(stale.body.includes(`仓库路径是否是 ${repository}`));
   assert.ok(stale.body.includes(`https://github.com/${repository}/actions/workflows/feedback-digest-watch.yml`));
   assert.match(stale.body, /\n<!-- feedback-digest-watch v=[0-9a-f]{16} -->$/);
   assert.ok(stale.body.endsWith(`v=${stale.fingerprint} -->`));
@@ -74,7 +74,7 @@ test("一份日报都没有时也提醒", () => {
   const issue = reminderIssue(null, at(0), { repository });
   assert.ok(issue);
   assert.equal(issue.title, "用户反馈日报超过 36 小时没有生成");
-  assert.ok(issue.body.includes(`仓库里没有带「${DIGEST_LABEL}」标签的 issue`));
+  assert.ok(issue.body.includes(`带「${DIGEST_LABEL}」标签的 issue 里没有标题以【用户反馈日报】开头的日报`));
   assert.doesNotMatch(issue.body, /最近一份日报是/);
   // 不知道仓库时也能生成，只是不带链接。
   assert.doesNotMatch(reminderIssue(null, at(0)).body, /https:\/\//);
@@ -97,7 +97,7 @@ test("日报缺编号或时间、当前时间无效时报错，不当成没事",
   assert.equal(describeDigest({ ...lastDigest, title: "  多行\n标题 " }).startsWith("#342「多行 标题」"), true);
 });
 
-test("按创建时间倒序只取一条日报，开着关着都算", async () => {
+test("按创建时间倒序取最新一份日报，开着关着都算", async () => {
   const github = fakeGitHub({ "GET /issues": [lastDigest] });
   assert.deepEqual(await fetchLatestDigest({ repository, token, fetchImpl: github.fetchImpl }), lastDigest);
   const query = new URLSearchParams(github.calls[0].path.split("?")[1]);
@@ -105,7 +105,7 @@ test("按创建时间倒序只取一条日报，开着关着都算", async () =>
   assert.equal(query.get("state"), "all");
   assert.equal(query.get("sort"), "created");
   assert.equal(query.get("direction"), "desc");
-  assert.equal(query.get("per_page"), "1");
+  assert.equal(query.get("per_page"), "20");
   assert.equal(github.calls[0].headers.Authorization, `Bearer ${token}`);
 
   const none = fakeGitHub({ "GET /issues": [] });
@@ -113,6 +113,18 @@ test("按创建时间倒序只取一条日报，开着关着都算", async () =>
   assert.equal(none.calls[0].headers.Authorization, undefined);
   const odd = fakeGitHub({ "GET /issues": { message: "odd" } });
   await assert.rejects(() => fetchLatestDigest({ repository, fetchImpl: odd.fetchImpl }), /不是数组/);
+});
+
+test("同标签的 PR 和讨论 issue 不算日报，日报停了照样提醒", async () => {
+  const pr = { number: 370, title: "【用户反馈日报】修模板", created_at: "2026-10-29T08:00:00Z", pull_request: {} };
+  const discussion = { number: 369, title: "日报停了的讨论", created_at: "2026-10-29T07:00:00Z" };
+  const github = fakeGitHub({ "GET /issues": [pr, discussion, lastDigest] });
+  const digest = await fetchLatestDigest({ repository, token, fetchImpl: github.fetchImpl });
+  assert.deepEqual(digest, lastDigest);
+  assert.ok(reminderIssue(digest, at(40), { repository }));
+
+  const onlyNoise = fakeGitHub({ "GET /issues": [pr, discussion] });
+  assert.equal(await fetchLatestDigest({ repository, fetchImpl: onlyNoise.fetchImpl }), null);
 });
 
 test("没有提醒 issue 时建标签再开一个，并指派维护者", async () => {

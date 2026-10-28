@@ -5,8 +5,8 @@
 // 四天没人发现。这里读最新一份日报：没有日报，或最新一份超过 36 小时，就打开或更新
 // 一个带固定标签的 issue；新日报出现后留言并关闭它。
 //
-//   node desktop/scripts/feedback-digest-watch.js          # 只打印判断
-//   node desktop/scripts/feedback-digest-watch.js --sync   # 同步 issue
+//   GITHUB_REPOSITORY=ptjworks/resume-form-assistant-plugin node desktop/scripts/feedback-digest-watch.js   # 只打印判断
+//   node desktop/scripts/feedback-digest-watch.js --sync   # 同步 issue（在 Actions 里跑，需要 GITHUB_TOKEN）
 //
 // 只用 GITHUB_TOKEN 读日报、改提醒 issue；不碰日报本身，也不读别的凭据。
 
@@ -17,6 +17,10 @@ import { redact } from "./chrome-web-store.js";
 import { parseAssignees } from "./chrome-web-store-watch.js";
 
 export const DIGEST_LABEL = "日报";
+// 日报 issue 的标题都以这个开头。带「日报」标签的讨论 issue、PR 不算日报。
+export const DIGEST_TITLE_PREFIX = "【用户反馈日报】";
+// 往前看多少条带标签的 issue 找真正的日报。
+const DIGEST_SCAN = 20;
 export const ISSUE_LABEL = "日报提醒";
 // 正文末尾的标记带着生成内容的指纹：`<!-- feedback-digest-watch v=… -->`。
 // 只比指纹，维护者在正文里补的说明不会被下次运行覆盖。
@@ -63,7 +67,7 @@ function digestTitle(digest) {
 }
 
 export function describeDigest(digest) {
-  if (!digest) return `仓库里没有带「${DIGEST_LABEL}」标签的 issue`;
+  if (!digest) return `最近 ${DIGEST_SCAN} 条带「${DIGEST_LABEL}」标签的 issue 里没有标题以${DIGEST_TITLE_PREFIX}开头的日报`;
   return `#${digest.number}「${digestTitle(digest)}」，创建于 ${describeTime(digestCreatedAt(digest))}`;
 }
 
@@ -82,7 +86,7 @@ export function reminderIssue(digest, now, { repository = "", serverUrl = "https
   const title = `用户反馈日报超过 ${STALE_HOURS} 小时没有生成`;
   const last = digest
     ? `最近一份日报是 ${describeDigest(digest)}。`
-    : `${describeDigest(null)}，日报可能从没生成过，或者标签改了名。`;
+    : `${describeDigest(null)}，日报可能从没生成过，或者标签、标题格式改了。`;
   const watchLink = repoUrl ? `[Feedback Digest Watch](${repoUrl}/actions/workflows/feedback-digest-watch.yml)` : "Feedback Digest Watch";
   const text = [
     `## ${title}`,
@@ -93,12 +97,12 @@ export function reminderIssue(digest, now, { repository = "", serverUrl = "https
     "",
     "- 发日报的 relay / Muse 任务还在不在跑，最近一次运行有没有报错。",
     `- 它用的 GitHub token 是否还有效，有没有在 ${repoName} 建 issue 的权限。`,
-    `- 它配置的仓库路径是否已经改成 ${repoName}：仓库 2026-10-25 从 TshyGO 迁到了 ptjworks。`,
-    `- 新建的日报是否还带「${DIGEST_LABEL}」标签。`,
+    `- 它配置的仓库路径是否是 ${repoName}（仓库 2026-10 从 TshyGO 迁到了 ptjworks）。`,
+    `- 新建的日报是否还带「${DIGEST_LABEL}」标签，标题是否还以${DIGEST_TITLE_PREFIX}开头。`,
     "",
     "---",
     "",
-    `这个 issue 由 ${watchLink} 每天检查后自动打开、更新和关闭，有新日报后会自动关闭。情况还在时手动关掉，下次检查会重新打开一个。`,
+    `这个 issue 由 ${watchLink} 每天检查后自动打开、更新和关闭。情况还在时手动关掉，下次检查会重新打开一个。`,
     "补充说明请写在评论里：情况变化时正文会整段重写。正文末尾的隐藏标记不要删，脚本靠它认出这个 issue。",
   ].join("\n");
   const fingerprint = createHash("sha256").update(`${title}\n${text}`).digest("hex").slice(0, 16);
@@ -148,12 +152,16 @@ function createGitHub({ apiUrl, repository, token, fetchImpl, requireToken }) {
   };
 }
 
-/** 按创建时间倒序取一条带「日报」标签的 issue，开着的、关了的都算。 */
+/**
+ * 按创建时间倒序读带「日报」标签的 issue（开着的、关了的都算），取第一份真正的日报。
+ * 只取一条不够：有人给讨论 issue 或 PR 打了同一标签，它比最后一份日报新，
+ * 就会被当成新日报，日报停了也报正常，还会把开着的提醒关掉。
+ */
 async function readLatestDigest(github) {
-  const query = new URLSearchParams({ labels: DIGEST_LABEL, state: "all", sort: "created", direction: "desc", per_page: "1" });
+  const query = new URLSearchParams({ labels: DIGEST_LABEL, state: "all", sort: "created", direction: "desc", per_page: String(DIGEST_SCAN) });
   const listed = await github("GET", `/issues?${query}`);
   if (!Array.isArray(listed)) throw new DigestWatchError("GitHub 列 issue 的应答不是数组");
-  return listed[0] ?? null;
+  return listed.find((item) => !item?.pull_request && String(item?.title ?? "").trim().startsWith(DIGEST_TITLE_PREFIX)) ?? null;
 }
 
 export async function fetchLatestDigest({ repository, token = "", fetchImpl, apiUrl = "https://api.github.com" }) {
