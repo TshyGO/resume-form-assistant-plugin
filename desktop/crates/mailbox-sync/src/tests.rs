@@ -289,8 +289,9 @@ fn partial_retry_updates_locators_without_resurrecting_confirmed_messages() {
     )
     .unwrap();
     let updated = db.candidate("archive", &first.id).unwrap();
-    assert_eq!(updated.uid, 4);
-    assert_eq!(updated.folder, "Junk");
+    assert!(
+        matches!(updated.locator, crate::source::MessageLocator::Imap { ref folder, uid: 4, .. } if folder == "Junk")
+    );
     db.finish("archive", &[first.id], false).unwrap();
     db.commit_scan(
         "archive",
@@ -467,7 +468,10 @@ fn legacy_accounts_migrate_and_custom_settings_survive_restart_without_credentia
     conn.execute_batch("CREATE TABLE accounts(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,paused INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_checked INTEGER,next_check INTEGER NOT NULL DEFAULT 0);INSERT INTO accounts(id,email) VALUES ('old','a@qq.com');").unwrap();
     drop(conn);
     let db = Database::open(dir.path()).unwrap();
-    assert_eq!(db.account("old").unwrap().connection.host, "imap.qq.com");
+    assert_eq!(
+        db.account("old").unwrap().connection.unwrap().host,
+        "imap.qq.com"
+    );
     let config = ConnectionConfig {
         host: "mail.school.example".into(),
         port: 143,
@@ -480,7 +484,7 @@ fn legacy_accounts_migrate_and_custom_settings_survive_restart_without_credentia
         .unwrap();
     drop(db);
     let db = Database::open(dir.path()).unwrap();
-    assert_eq!(db.account("school").unwrap().connection, config);
+    assert_eq!(db.account("school").unwrap().connection, Some(config));
     assert_eq!(db.account("school").unwrap().provider, Provider::Custom);
     assert_eq!(db.accounts().unwrap().len(), 2);
 }
@@ -505,7 +509,7 @@ fn changing_endpoint_resets_only_that_accounts_locators_and_keeps_other_accounts
         db.record_header_failure("archive", id, "INBOX", 1, 10)
             .unwrap();
     }
-    let mut config = db.account("account").unwrap().connection;
+    let mut config = db.account("account").unwrap().connection.unwrap();
     db.save_configured_account("ignored-new-id", "a@qq.com", &config)
         .unwrap();
     assert!(db.cursor("archive", "account", "INBOX").unwrap().is_some());
@@ -684,6 +688,275 @@ fn confirmation_persists_and_updating_only_confirmation_keeps_scan_state() {
     drop(db);
     let db = Database::open(dir.path()).unwrap();
     let saved = db.account("legacy").unwrap();
-    assert_eq!(saved.connection, config);
-    saved.connection.authorize_endpoint(&saved.email).unwrap();
+    assert_eq!(saved.connection.as_ref(), Some(&config));
+    saved
+        .connection
+        .unwrap()
+        .authorize_endpoint(&saved.email)
+        .unwrap();
+}
+
+#[test]
+fn api_accounts_use_principals_not_addresses_and_keep_credentials_separate() {
+    use crate::source::SourceKind;
+    let (_dir, db) = database();
+    let graph = db
+        .save_api_account(
+            "graph",
+            "a@qq.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:person-1",
+        )
+        .unwrap();
+    assert!(graph.connection.is_none());
+    assert_eq!(graph.credential_id(), "mailbox:graph");
+    let alias = db
+        .save_api_account(
+            "unused",
+            "alias@example.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:person-1",
+        )
+        .unwrap();
+    assert_eq!(alias.id, graph.id);
+    db.save_api_account(
+        "another",
+        "alias@example.com",
+        SourceKind::MicrosoftGraph,
+        "tenant:person-2",
+    )
+    .unwrap();
+    db.save_api_account(
+        "gmail",
+        "alias@example.com",
+        SourceKind::GmailApi,
+        "tenant:person-1",
+    )
+    .unwrap();
+    assert_eq!(db.accounts().unwrap().len(), 4);
+    assert_eq!(db.account("account").unwrap().source, SourceKind::Imap);
+    assert_eq!(
+        db.save_api_account(
+            "graph",
+            "other@example.com",
+            SourceKind::MicrosoftGraph,
+            "different-principal"
+        )
+        .unwrap_err(),
+        Error::Storage
+    );
+    assert_eq!(
+        db.account("graph").unwrap().source_account_id.as_deref(),
+        Some("tenant:person-1")
+    );
+}
+
+#[test]
+fn api_positions_are_atomic_local_and_cannot_be_used_as_imap_uids() {
+    use crate::source::{MessageLocator, Metadata, Position, SourceKind};
+    let (dir, mut db) = database();
+    db.save_api_account(
+        "graph",
+        "a@outlook.com",
+        SourceKind::MicrosoftGraph,
+        "person",
+    )
+    .unwrap();
+    let message = Metadata {
+        locator: MessageLocator::Api {
+            source: SourceKind::MicrosoftGraph,
+            message_id: "remote-message".into(),
+        },
+        header: header("shared@id", "面试"),
+    };
+    let first = Position::Api {
+        source: SourceKind::MicrosoftGraph,
+        cursor: "opaque-page-1".into(),
+    };
+    db.commit_metadata("archive", "graph", "inbox", &first, &[])
+        .unwrap();
+    let next = Position::Api {
+        source: SourceKind::MicrosoftGraph,
+        cursor: "opaque-delta-2".into(),
+    };
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute_batch("CREATE TRIGGER fail_position BEFORE UPDATE ON source_positions BEGIN SELECT RAISE(ABORT,'disk'); END;").unwrap();
+    assert_eq!(
+        db.commit_metadata(
+            "archive",
+            "graph",
+            "inbox",
+            &next,
+            &[(message.clone(), vec!["面试".into()])]
+        ),
+        Err(Error::Storage)
+    );
+    assert_eq!(db.pending_count("archive").unwrap(), 0);
+    assert!(db.source_position("archive", "graph", "inbox").unwrap() == Some(first));
+    sql.execute_batch("DROP TRIGGER fail_position;").unwrap();
+    db.commit_metadata(
+        "archive",
+        "graph",
+        "inbox",
+        &next,
+        &[(message.clone(), vec!["面试".into()])],
+    )
+    .unwrap();
+    let item = db.pending("archive", 100).unwrap().remove(0);
+    assert_eq!(item.locator, message.locator);
+    db.finish("archive", &[item.id], true).unwrap();
+    // Different remote ID, same mail: an ignore must survive rescan/label moves.
+    let mut moved = message;
+    moved.locator = MessageLocator::Api {
+        source: SourceKind::MicrosoftGraph,
+        message_id: "moved-message".into(),
+    };
+    db.commit_metadata(
+        "archive",
+        "graph",
+        "inbox",
+        &next,
+        &[(moved.clone(), vec!["面试".into()])],
+    )
+    .unwrap();
+    assert_eq!(db.pending_count("archive").unwrap(), 0);
+    assert!(db.cursor("archive", "graph", "inbox").unwrap().is_none());
+    assert!(db
+        .source_position("other-archive", "graph", "inbox")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        db.commit_metadata(
+            "archive",
+            "graph",
+            "inbox",
+            &Position::Imap(Cursor {
+                validity: 1,
+                uid: 2
+            }),
+            &[]
+        ),
+        Err(Error::Changed)
+    );
+    assert_eq!(
+        db.commit_metadata("archive", "account", "INBOX", &next, &[]),
+        Err(Error::Changed)
+    );
+    moved.locator = MessageLocator::Api {
+        source: SourceKind::GmailApi,
+        message_id: "gmail-message".into(),
+    };
+    assert_eq!(
+        db.commit_metadata(
+            "archive",
+            "graph",
+            "inbox",
+            &next,
+            &[(moved, vec!["面试".into()])]
+        ),
+        Err(Error::Changed)
+    );
+    drop(db);
+    let db = Database::open(dir.path()).unwrap();
+    assert!(db.source_position("archive", "graph", "inbox").unwrap() == Some(next));
+    assert_eq!(db.pending_count("archive").unwrap(), 0);
+    db.delete_account("graph").unwrap();
+    assert!(db
+        .source_position("archive", "graph", "inbox")
+        .unwrap()
+        .is_none());
+    let dangling: u32 = sql
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(dangling, 0);
+}
+
+#[test]
+fn source_migration_preserves_populated_imap_state_and_foreign_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute_batch("CREATE TABLE accounts(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,paused INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_checked INTEGER,next_check INTEGER NOT NULL DEFAULT 0);
+        INSERT INTO accounts(id,email) VALUES ('legacy','old@163.com');
+        CREATE TABLE candidates(id TEXT PRIMARY KEY,archive TEXT NOT NULL,account TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,fingerprint TEXT NOT NULL,folder TEXT NOT NULL,validity INTEGER NOT NULL,uid INTEGER NOT NULL,header TEXT NOT NULL,reasons TEXT NOT NULL,state TEXT NOT NULL,UNIQUE(archive,account,fingerprint));
+        CREATE TABLE cursors(archive TEXT NOT NULL,account TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,folder TEXT NOT NULL,validity INTEGER NOT NULL,uid INTEGER NOT NULL,PRIMARY KEY(archive,account,folder));
+        INSERT INTO cursors VALUES ('archive','legacy','INBOX',7,30);").unwrap();
+    for (id, state) in [("a", "pending"), ("b", "ignored"), ("c", "imported")] {
+        let h = header(id, "面试");
+        sql.execute("INSERT INTO candidates VALUES (?1,'archive','legacy',?2,'INBOX',7,20,?3,'[\"面试\"]',?4)",rusqlite::params![id,h.fingerprint(),serde_json::to_string(&h).unwrap(),state]).unwrap();
+    }
+    let mut db = Database::open(dir.path()).unwrap();
+    assert_eq!(
+        db.account("legacy").unwrap().credential_id(),
+        "mailbox:legacy"
+    );
+    assert_eq!(
+        db.cursor("archive", "legacy", "INBOX").unwrap(),
+        Some(Cursor {
+            validity: 7,
+            uid: 30
+        })
+    );
+    assert!(matches!(
+        db.candidate("archive", "a").unwrap().locator,
+        crate::source::MessageLocator::Imap {
+            validity: 7,
+            uid: 20,
+            ..
+        }
+    ));
+    db.commit_scan(
+        "archive",
+        "legacy",
+        "INBOX",
+        Cursor {
+            validity: 8,
+            uid: 40,
+        },
+        &[(40, header("b", "面试"), vec!["面试".into()])],
+    )
+    .unwrap();
+    assert_eq!(db.pending_count("archive").unwrap(), 1);
+    db.delete_account("legacy").unwrap();
+    assert_eq!(db.pending_count("archive").unwrap(), 0);
+    assert!(db.cursor("archive", "legacy", "INBOX").unwrap().is_none());
+    let dangling: u32 = sql
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(dangling, 0);
+}
+
+#[test]
+fn a_failed_source_migration_rolls_back_the_account_table_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute_batch("CREATE TABLE accounts(id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,paused INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_checked INTEGER,next_check INTEGER NOT NULL DEFAULT 0);
+        INSERT INTO accounts(id,email) VALUES ('legacy','old@qq.com');
+        CREATE TABLE candidates(id TEXT PRIMARY KEY,archive TEXT NOT NULL,account TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,fingerprint TEXT NOT NULL,folder TEXT NOT NULL,validity INTEGER NOT NULL,uid INTEGER NOT NULL,header TEXT NOT NULL,reasons TEXT NOT NULL,state TEXT NOT NULL,locator TEXT,UNIQUE(archive,account,fingerprint));").unwrap();
+    // Force failure after DROP/RENAME but before commit (duplicate column).
+    assert!(matches!(Database::open(dir.path()), Err(Error::Storage)));
+    let email: String = sql
+        .query_row("SELECT email FROM accounts WHERE id='legacy'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(email, "old@qq.com");
+    let has_source: bool = sql
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('accounts') WHERE name='source')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!has_source);
+    sql.execute_batch("ALTER TABLE candidates DROP COLUMN locator;")
+        .unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    assert_eq!(
+        db.account("legacy").unwrap().credential_id(),
+        "mailbox:legacy"
+    );
 }

@@ -393,9 +393,17 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     session: &mut Session<S>,
     item: &Candidate,
 ) -> Result<Vec<u8>> {
+    let crate::source::MessageLocator::Imap {
+        folder,
+        validity,
+        uid,
+    } = &item.locator
+    else {
+        return Err(Error::Changed);
+    };
     bounded(async {
-        let mailbox = session.examine(&item.folder).await.map_err(network)?;
-        if mailbox.uid_validity != Some(item.validity) {
+        let mailbox = session.examine(folder).await.map_err(network)?;
+        if mailbox.uid_validity != Some(*validity) {
             return Err(Error::Changed);
         }
         Ok(())
@@ -403,12 +411,12 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
     .await?;
     let size = bounded(async {
         let mut stream = session
-            .uid_fetch(item.uid.to_string(), "(UID RFC822.SIZE)")
+            .uid_fetch(uid.to_string(), "(UID RFC822.SIZE)")
             .await
             .map_err(network)?;
         let mut size = None;
         while let Some(fetch) = stream.try_next().await.map_err(network)? {
-            if fetch.uid == Some(item.uid) {
+            if fetch.uid == Some(*uid) {
                 size = fetch.size.map(|value| value as usize);
             }
         }
@@ -433,12 +441,12 @@ pub async fn download<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
         let part = bounded(async {
             let query = format!("(UID BODY.PEEK[]<{offset}.{request_count}>)");
             let mut stream = session
-                .uid_fetch(item.uid.to_string(), query)
+                .uid_fetch(uid.to_string(), query)
                 .await
                 .map_err(network)?;
             let mut part = None;
             while let Some(fetch) = stream.try_next().await.map_err(network)? {
-                if fetch.uid == Some(item.uid) {
+                if fetch.uid == Some(*uid) {
                     part = fetch.body().map(ToOwned::to_owned);
                 }
             }
@@ -479,7 +487,15 @@ async fn validate_connection<S: AsyncRead + AsyncWrite + Unpin + Debug + Send>(
 
 /// Network credentials never reside in Account or persistence structures.
 pub async fn login_account(account: &Account, secret: &str) -> Result<LiveSession> {
-    connect_configured(&account.email, secret, &account.connection).await
+    if account.source != crate::source::SourceKind::Imap {
+        return Err(Error::Configuration);
+    }
+    connect_configured(
+        &account.email,
+        secret,
+        account.connection.as_ref().ok_or(Error::Configuration)?,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -536,9 +552,11 @@ mod tests {
             id: "candidate".into(),
             account_id: "a".into(),
             email: "test@qq.com".into(),
-            folder: "INBOX".into(),
-            validity: 4,
-            uid: 9,
+            locator: crate::source::MessageLocator::Imap {
+                folder: "INBOX".into(),
+                validity: 4,
+                uid: 9,
+            },
             header: Header::parse(&header()),
             reasons: vec!["Interview".into()],
         }

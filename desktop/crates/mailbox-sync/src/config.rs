@@ -49,7 +49,8 @@ pub fn valid_host(host: &str) -> bool {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
 }
-pub fn normalize_email(address: &str) -> Result<String> {
+/// Address syntax shared by IMAP and API accounts, without transport policy.
+pub fn normalize_address(address: &str) -> Result<String> {
     let email = address.trim().to_ascii_lowercase();
     let (local, domain) = email.split_once('@').ok_or(Error::Address)?;
     if local.is_empty()
@@ -62,6 +63,12 @@ pub fn normalize_email(address: &str) -> Result<String> {
     {
         return Err(Error::Address);
     }
+    Ok(email)
+}
+/// Existing IMAP connection policy remains unchanged.
+pub fn normalize_email(address: &str) -> Result<String> {
+    let email = normalize_address(address)?;
+    let domain = email.split_once('@').ok_or(Error::Address)?.1;
     if matches!(
         domain,
         "outlook.com" | "hotmail.com" | "live.com" | "msn.com"

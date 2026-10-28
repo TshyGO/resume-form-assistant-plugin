@@ -4,6 +4,7 @@ mod db;
 pub mod discovery;
 pub mod imap;
 mod rules;
+pub mod source;
 pub use config::{ConnectionConfig, Encryption};
 pub use db::{Account, Candidate, Cursor, Database, HeaderRetry};
 pub use rules::{classify, Header};
@@ -29,6 +30,7 @@ pub enum Error {
     Configuration,
     OAuthRequired,
     EndpointConfirmation,
+    Cancelled,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

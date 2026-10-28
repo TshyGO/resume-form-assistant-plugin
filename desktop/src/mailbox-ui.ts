@@ -5,7 +5,7 @@ export { mailboxProvider } from "./mailbox-providers.ts";
 
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
 export interface MailCandidate { id: string; accountId: string; email: string; header: MailHeader; reasons: string[] }
-export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection }
+export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection | null }
 export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
 interface IgnoreReport { ignored: number; unchanged: number }

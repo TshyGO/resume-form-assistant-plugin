@@ -1,3 +1,4 @@
+use crate::source::{MessageLocator, Metadata, Position, SourceKind};
 use crate::{
     retry_delay, ConnectionConfig, Error, Header, Provider, Result, CHECK_INTERVAL, FAILURE_LIMIT,
 };
@@ -11,7 +12,9 @@ pub struct Account {
     pub id: String,
     pub email: String,
     pub provider: Provider,
-    pub connection: ConnectionConfig,
+    pub connection: Option<ConnectionConfig>,
+    pub source: SourceKind,
+    pub source_account_id: Option<String>,
     pub paused: bool,
     pub failures: u32,
     pub last_error: Option<String>,
@@ -24,7 +27,7 @@ impl Account {
         format!("mailbox:{}", self.id)
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub validity: u32,
     pub uid: u32,
@@ -40,9 +43,7 @@ pub struct Candidate {
     pub id: String,
     pub account_id: String,
     pub email: String,
-    pub folder: String,
-    pub validity: u32,
-    pub uid: u32,
+    pub locator: MessageLocator,
     pub header: Header,
     pub reasons: Vec<String>,
 }
@@ -93,10 +94,44 @@ impl Database {
         if !has_connection {
             conn.execute("ALTER TABLE accounts ADD COLUMN connection TEXT", [])?;
         }
+        let has_source = conn
+            .prepare("PRAGMA table_info(accounts)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .iter()
+            .any(|s| s == "source");
+        if !has_source {
+            // Keep account IDs and every child row intact. Email is a display/login
+            // address; an API principal, connector and local account are distinct.
+            conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
+            let migration = (|| -> Result<()> {
+                let tx = conn.unchecked_transaction()?;
+                tx.execute_batch("CREATE TABLE accounts_v2 (
+                    id TEXT PRIMARY KEY, email TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0,
+                    failures INTEGER NOT NULL DEFAULT 0, last_error TEXT, last_checked INTEGER,
+                    next_check INTEGER NOT NULL DEFAULT 0, connection TEXT,
+                    source TEXT NOT NULL DEFAULT 'imap', source_account_id TEXT);
+                    INSERT INTO accounts_v2(id,email,paused,failures,last_error,last_checked,next_check,connection)
+                    SELECT id,email,paused,failures,last_error,last_checked,next_check,connection FROM accounts;
+                    DROP TABLE accounts;
+                    ALTER TABLE accounts_v2 RENAME TO accounts;
+                    CREATE UNIQUE INDEX imap_email ON accounts(email) WHERE source='imap';
+                    CREATE UNIQUE INDEX api_principal ON accounts(source,source_account_id) WHERE source<>'imap';
+                    ALTER TABLE candidates ADD COLUMN locator TEXT;")?;
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS source_positions (
+                    archive TEXT NOT NULL, account TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                    scope TEXT NOT NULL, position TEXT NOT NULL,
+                    PRIMARY KEY(archive,account,scope));")?;
+                tx.commit()?;
+                Ok(())
+            })();
+            conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+            migration?;
+        }
         Ok(Self(conn))
     }
     pub fn accounts(&self) -> Result<Vec<Account>> {
-        let mut stmt = self.0.prepare("SELECT id,email,paused,failures,last_error,last_checked,next_check,connection FROM accounts ORDER BY email")?;
+        let mut stmt = self.0.prepare("SELECT id,email,paused,failures,last_error,last_checked,next_check,connection,source,source_account_id FROM accounts ORDER BY email,id")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -107,16 +142,33 @@ impl Database {
                 r.get(5)?,
                 r.get(6)?,
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, email, paused, failures, last_error, last_checked, next_check, connection) =
-                row?;
-            let connection = match connection {
-                Some(json) => serde_json::from_str::<ConnectionConfig>(&json)
-                    .map_err(|_| Error::Storage)?
-                    .validated(&email)?,
-                None => ConnectionConfig::preset(&email)?,
+            let (
+                id,
+                email,
+                paused,
+                failures,
+                last_error,
+                last_checked,
+                next_check,
+                connection,
+                source,
+                source_account_id,
+            ) = row?;
+            let source = SourceKind::from_db(&source)?;
+            let connection = if source == SourceKind::Imap {
+                Some(match connection {
+                    Some(json) => serde_json::from_str::<ConnectionConfig>(&json)
+                        .map_err(|_| Error::Storage)?
+                        .validated(&email)?,
+                    None => ConnectionConfig::preset(&email)?,
+                })
+            } else {
+                None
             };
             let provider = Provider::detect(&email).map_or(Provider::Custom, |(_, p)| p);
             Ok(Account {
@@ -124,6 +176,8 @@ impl Database {
                 email,
                 provider,
                 connection,
+                source,
+                source_account_id,
                 paused,
                 failures,
                 last_error,
@@ -151,16 +205,23 @@ impl Database {
     ) -> Result<Account> {
         let email = crate::config::normalize_email(email)?;
         let connection = connection.clone().validated(&email)?;
-        let previous = self.accounts()?.into_iter().find(|a| a.email == email);
+        let previous = self
+            .accounts()?
+            .into_iter()
+            .find(|a| a.email == email && a.source == SourceKind::Imap);
         let json = serde_json::to_string(&connection).map_err(|_| Error::Storage)?;
         let tx = self.0.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO accounts(id,email,connection) VALUES (?1,?2,?3)
-            ON CONFLICT(email) DO UPDATE SET connection=excluded.connection,paused=0,failures=0,last_error=NULL,next_check=0",
+            ON CONFLICT(email) WHERE source='imap' DO UPDATE SET connection=excluded.connection,paused=0,failures=0,last_error=NULL,next_check=0",
             params![id, email, json],
         )?;
         // UID identities belong to an endpoint + login, not just an email address.
-        if let Some(old) = previous.filter(|a| !a.connection.same_endpoint(&connection)) {
+        if let Some(old) = previous.filter(|a| {
+            !a.connection
+                .as_ref()
+                .is_some_and(|c| c.same_endpoint(&connection))
+        }) {
             tx.execute(
                 "UPDATE accounts SET last_checked=NULL WHERE id=?1",
                 [&old.id],
@@ -172,7 +233,7 @@ impl Database {
         tx.commit()?;
         self.accounts()?
             .into_iter()
-            .find(|a| a.email == email)
+            .find(|a| a.email == email && a.source == SourceKind::Imap)
             .ok_or(Error::Storage)
     }
     pub fn delete_account(&self, id: &str) -> Result<()> {
@@ -244,7 +305,14 @@ impl Database {
              ORDER BY uid LIMIT ?6",
         )?;
         let rows = stmt.query_map(
-            params![archive, account, folder, validity, FAILURE_LIMIT, limit.max(1)],
+            params![
+                archive,
+                account,
+                folder,
+                validity,
+                FAILURE_LIMIT,
+                limit.max(1)
+            ],
             |row| {
                 Ok(HeaderRetry {
                     uid: row.get(0)?,
@@ -340,6 +408,9 @@ impl Database {
         uid: u32,
         found: Option<(Header, Vec<String>)>,
     ) -> Result<()> {
+        if self.account(account)?.source != SourceKind::Imap {
+            return Err(Error::Changed);
+        }
         let tx = self.0.transaction()?;
         if let Some((header, reasons)) = found.filter(|(_, reasons)| !reasons.is_empty()) {
             tx.execute(
@@ -347,7 +418,7 @@ impl Database {
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')
                  ON CONFLICT(archive,account,fingerprint) DO UPDATE SET
                  folder=excluded.folder,validity=excluded.validity,uid=excluded.uid,
-                 header=excluded.header,reasons=excluded.reasons",
+                 header=excluded.header,reasons=excluded.reasons,locator=NULL",
                 params![
                     uuid::Uuid::new_v4().to_string(), archive, account, header.fingerprint(), folder,
                     validity, uid, serde_json::to_string(&header).map_err(|_| Error::Storage)?,
@@ -373,28 +444,141 @@ impl Database {
         cursor: Cursor,
         found: &[(u32, Header, Vec<String>)],
     ) -> Result<()> {
+        let messages: Vec<_> = found
+            .iter()
+            .map(|(uid, header, reasons)| {
+                (
+                    Metadata {
+                        locator: MessageLocator::Imap {
+                            folder: folder.into(),
+                            validity: cursor.validity,
+                            uid: *uid,
+                        },
+                        header: header.clone(),
+                    },
+                    reasons.clone(),
+                )
+            })
+            .collect();
+        self.commit_metadata(archive, account, folder, &Position::Imap(cursor), &messages)
+    }
+
+    /// Candidates and progress become durable together, including empty pages.
+    pub fn commit_metadata(
+        &mut self,
+        archive: &str,
+        account: &str,
+        scope: &str,
+        position: &Position,
+        found: &[(Metadata, Vec<String>)],
+    ) -> Result<()> {
+        let owner = self.account(account)?;
+        position.validate(owner.source)?;
+        for (message, _) in found {
+            message.locator.validate(owner.source)?;
+        }
         let tx = self.0.transaction()?;
-        for (uid, header, reasons) in found {
+        for (message, reasons) in found {
             if reasons.is_empty() {
                 continue;
             }
-            tx.execute("INSERT INTO candidates(id,archive,account,fingerprint,folder,validity,uid,header,reasons,state)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending')
+            let (folder, validity, uid) = match &message.locator {
+                MessageLocator::Imap {
+                    folder,
+                    validity,
+                    uid,
+                } => (folder.as_str(), *validity, *uid),
+                MessageLocator::Api { .. } => (scope, 0, 0),
+            };
+            tx.execute("INSERT INTO candidates(id,archive,account,fingerprint,folder,validity,uid,header,reasons,state,locator)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10)
                 ON CONFLICT(archive,account,fingerprint) DO UPDATE SET
                     folder=excluded.folder,validity=excluded.validity,uid=excluded.uid,
-                    header=excluded.header,reasons=excluded.reasons",
-                params![uuid::Uuid::new_v4().to_string(),archive,account,header.fingerprint(),folder,cursor.validity,uid,
-                    serde_json::to_string(header).map_err(|_| Error::Storage)?,serde_json::to_string(reasons).map_err(|_| Error::Storage)?])?;
+                    header=excluded.header,reasons=excluded.reasons,locator=excluded.locator",
+                params![uuid::Uuid::new_v4().to_string(),archive,account,message.header.fingerprint(),folder,validity,uid,
+                    serde_json::to_string(&message.header).map_err(|_| Error::Storage)?,
+                    serde_json::to_string(reasons).map_err(|_| Error::Storage)?,
+                    serde_json::to_string(&message.locator).map_err(|_| Error::Storage)?])?;
         }
-        tx.execute("INSERT INTO cursors(archive,account,folder,validity,uid) VALUES (?1,?2,?3,?4,?5)
-            ON CONFLICT(archive,account,folder) DO UPDATE SET validity=excluded.validity,uid=excluded.uid",
-            params![archive,account,folder,cursor.validity,cursor.uid])?;
+        match position {
+            Position::Imap(cursor) => {
+                tx.execute("INSERT INTO cursors(archive,account,folder,validity,uid) VALUES (?1,?2,?3,?4,?5)
+                    ON CONFLICT(archive,account,folder) DO UPDATE SET validity=excluded.validity,uid=excluded.uid",
+                    params![archive,account,scope,cursor.validity,cursor.uid])?;
+            }
+            Position::Api { .. } => {
+                tx.execute("INSERT INTO source_positions(archive,account,scope,position) VALUES (?1,?2,?3,?4)
+                    ON CONFLICT(archive,account,scope) DO UPDATE SET position=excluded.position",
+                    params![archive,account,scope,serde_json::to_string(position).map_err(|_| Error::Storage)?])?;
+            }
+        }
         tx.commit()?;
         Ok(())
     }
+    pub fn source_position(
+        &self,
+        archive: &str,
+        account: &str,
+        scope: &str,
+    ) -> Result<Option<Position>> {
+        let raw: Option<String> = self.0.query_row(
+            "SELECT position FROM source_positions WHERE archive=?1 AND account=?2 AND scope=?3",
+            params![archive,account,scope], |r| r.get(0)).optional()?;
+        raw.map(|json| serde_json::from_str(&json).map_err(|_| Error::Storage))
+            .transpose()
+    }
+    /// Called only after the connector has authenticated. Tokens stay in the OS
+    /// credential store under credential_id(), never in this database.
+    pub fn save_api_account(
+        &self,
+        id: &str,
+        email: &str,
+        source: SourceKind,
+        principal: &str,
+    ) -> Result<Account> {
+        if source == SourceKind::Imap || principal.trim().is_empty() || principal.len() > 1024 {
+            return Err(Error::Configuration);
+        }
+        let email = crate::config::normalize_address(email)?;
+        self.0.execute(
+            "INSERT INTO accounts(id,email,source,source_account_id) VALUES (?1,?2,?3,?4)
+            ON CONFLICT(source,source_account_id) WHERE source<>'imap' DO UPDATE SET
+            email=excluded.email,paused=0,failures=0,last_error=NULL,next_check=0",
+            params![id, email, source.as_db(), principal],
+        )?;
+        self.accounts()?
+            .into_iter()
+            .find(|a| a.source == source && a.source_account_id.as_deref() == Some(principal))
+            .ok_or(Error::Storage)
+    }
+    fn decode_locator(
+        json: Option<String>,
+        folder: String,
+        validity: u32,
+        uid: u32,
+    ) -> Result<MessageLocator> {
+        match json {
+            Some(json) => serde_json::from_str(&json).map_err(|_| Error::Storage),
+            None => Ok(MessageLocator::Imap {
+                folder,
+                validity,
+                uid,
+            }),
+        }
+    }
     fn read_candidate(
         r: &rusqlite::Row<'_>,
-    ) -> rusqlite::Result<(String, String, String, String, u32, u32, String, String)> {
+    ) -> rusqlite::Result<(
+        String,
+        String,
+        String,
+        String,
+        u32,
+        u32,
+        String,
+        String,
+        Option<String>,
+    )> {
         Ok((
             r.get(0)?,
             r.get(1)?,
@@ -404,21 +588,20 @@ impl Database {
             r.get(5)?,
             r.get(6)?,
             r.get(7)?,
+            r.get(8)?,
         ))
     }
     pub fn pending(&self, archive: &str, limit: u32) -> Result<Vec<Candidate>> {
-        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons
+        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator
             FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND state='pending' ORDER BY c.rowid DESC LIMIT ?2")?;
         let rows = stmt.query_map(params![archive, limit.min(2000)], Self::read_candidate)?;
         rows.map(|row| {
-            let (id, account_id, email, folder, validity, uid, header, reasons) = row?;
+            let (id, account_id, email, folder, validity, uid, header, reasons, locator) = row?;
             Ok(Candidate {
                 id,
                 account_id,
                 email,
-                folder,
-                validity,
-                uid,
+                locator: Self::decode_locator(locator, folder, validity, uid)?,
                 header: serde_json::from_str(&header).map_err(|_| Error::Storage)?,
                 reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
             })
@@ -433,16 +616,14 @@ impl Database {
         )?)
     }
     pub fn candidate(&self, archive: &str, id: &str) -> Result<Candidate> {
-        let row = self.0.query_row("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons
+        let row = self.0.query_row("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator
             FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND c.id=?2 AND state='pending'", params![archive,id],Self::read_candidate).optional()?.ok_or(Error::Missing)?;
-        let (id, account_id, email, folder, validity, uid, header, reasons) = row;
+        let (id, account_id, email, folder, validity, uid, header, reasons, locator) = row;
         Ok(Candidate {
             id,
             account_id,
             email,
-            folder,
-            validity,
-            uid,
+            locator: Self::decode_locator(locator, folder, validity, uid)?,
             header: serde_json::from_str(&header).map_err(|_| Error::Storage)?,
             reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
         })
