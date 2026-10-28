@@ -55,7 +55,7 @@ test("a video-interview room with nothing to fill is not reported, and the user 
   const run1 = await run({ path: "/interview/room", title: "多面视频面试工具" });
   assert.equal(run1.reports.length, 0);
   assert.equal(run1.aiCalls, 0);
-  assert.match(run1.result.error, /不是网申填写页/);
+  assert.equal(run1.result.error, "没找到可填写的输入框。请打开申请表后再试。");
   // 这句提示要留在屏幕上，不像普通失败 2.4 秒后消失。
   assert.equal(run1.timers.filter(timer => timer.delay === 2400 && !timer.cleared).length, 0);
   assert.match(run1.text.value, /错误类别：page_not_supported；失败阶段：扫描/);

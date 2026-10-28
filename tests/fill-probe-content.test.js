@@ -9,7 +9,9 @@ const LIEPIN_VIEW = { host: "c.liepin.com", frames: { total: 0, crossOrigin: 0, 
   custom: { total: 0, byLibrary: {} }, editButtons: 3, locked: 0, shadowHosts: 0 };
 const EDIT_HINT = "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
 const NO_CONTEXT = "简历里没有能对应这些网页字段的资料，已跳过 AI 填写。";
-const EMPTY_PAGE = "当前页面没有可填写的表单字段。";
+const EMPTY_PAGE = "没找到可填写的输入框。";
+// #301：网申页上没有别的线索时（多半还在加载）的提示。
+const LOADING_HINT = "请等网页加载完，或先点开要填写的部分，再试一次。";
 const boom = () => { throw new Error("boom"); };
 const THROWING = { ...realProbe, probePage: boom, describeControl: boom, formatReport: boom, emptyPageHint: boom };
 const VIEW_PROBE = { ...realProbe, probePage: () => LIEPIN_VIEW };
@@ -41,7 +43,7 @@ test("an empty page with an edit button tells the user to click 编辑 first and
   });
   helpers.setCurrentStore(STORE);
   const result = await helpers.handleAiFillClick({ currentTarget: { disabled: false } });
-  assert.equal(result.error, `当前页面没有可填写的表单字段。${EDIT_HINT}`);
+  assert.equal(result.error, `没找到可填写的输入框。${EDIT_HINT}`);
   assert.equal(sent.filter(message => message.type === "AI_FILL").length, 0);
 });
 
@@ -189,7 +191,7 @@ test("the edit hint is left out when the page has no edit button or something wa
   assert.equal(noProbe.status.textContent, "已填写 0 个字段。");
 });
 
-test("a status that carries a hint stays on screen, while other failures still fade after 2.4 seconds", async () => {
+test("a status that carries a hint or reports zero fields stays on screen, while other failures still fade after 2.4 seconds", async () => {
   const viewEmpty = await runOnViewPage({ success: true, matches: [] }, { fields: 0 });
   assert.equal(viewEmpty.result.error, `${EMPTY_PAGE}${EDIT_HINT}`);
   assert.equal(fadingTimers(viewEmpty.timers), 0);
@@ -199,9 +201,14 @@ test("a status that carries a hint stays on screen, while other failures still f
   // 没有提示的失败照旧几秒后消失。
   const auth = await runOnViewPage({ success: false, error: "接口认证失败", matches: [], diagnostics: { errorCode: "auth" } });
   assert.equal(fadingTimers(auth.timers), 1);
+  // 网申页（/apply）上什么线索都没有：提示等网页加载完或先点开，也留在屏幕上（#301）。
   const plainEmpty = await runOnViewPage({ success: true, matches: [] }, { fields: 0, fillProbe: { ...VIEW_PROBE, probePage: () => ({ ...LIEPIN_VIEW, editButtons: 0 }) } });
-  assert.equal(plainEmpty.result.error, EMPTY_PAGE);
-  assert.equal(fadingTimers(plainEmpty.timers), 1);
+  assert.equal(plainEmpty.result.error, `${EMPTY_PAGE}${LOADING_HINT}`);
+  assert.equal(fadingTimers(plainEmpty.timers), 0);
+  // 探测出错、没有提示的零字段也留在屏幕上。
+  const unprobed = await runOnViewPage({ success: true, matches: [] }, { fields: 0, fillProbe: THROWING });
+  assert.equal(unprobed.result.error, EMPTY_PAGE);
+  assert.equal(fadingTimers(unprobed.timers), 0);
 });
 
 test("scanned but none filled on a view page also stays on screen", async () => {

@@ -63,7 +63,7 @@ function classify({ href, title, body, setup }) {
   const type = probeApi.pageType({ pathname: url.pathname, hash: url.hash, title: doc.title, probe, stats: scanStats(doc, isVisible) });
   const result = { fields: fieldCount, pageType: `${type.type}/${type.reason}` };
   if (fieldCount === 0) {
-    const hint = probeApi.emptyPageHint(probe, { notForm: type.type === "unknown", deepAvailable: true });
+    const hint = probeApi.emptyPageHint(probe, { notForm: type.type === "unknown", form: type.type === "application_form", deepAvailable: true });
     const { category } = core.fillCategory({ scanned: true, fieldCount, pageType: type.type, frames: probe.frames, failedStage: "scan",
       responded: false, matched: null, filledCount: 0, unfilledCount: 0, unconfirmedCount: 0 });
     Object.assign(result, {
@@ -78,10 +78,12 @@ function classify({ href, title, body, setup }) {
 
 const HINT = {
   edit: "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。",
-  notForm: "这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。",
-  notFormFrame: "这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。如果申请表就在这个页面的内嵌框架里，插件暂时读不到。",
+  // #301：不再说「看起来不是网申填写页」，只说下一步。
+  notForm: "请打开申请表后再试。",
+  notFormFrame: "请打开申请表后再试。如果申请表就在这个页面的内嵌框架里，插件暂时读不到。",
   custom: "这个网页用的输入控件一键填写暂时识别不了。可以试试下方的「深度分析本页」。",
-  none: ""
+  // #301：网申页上没有任何线索时原来不给提示。
+  loading: "请等网页加载完，或先点开要填写的部分，再试一次。"
 };
 
 const LOADING = `<div id="main-container"><div class="spin">加载中</div></div>`;
@@ -108,7 +110,7 @@ const CASES = [
     body: `<div id="main-container"><h2>欢迎参加AI面试</h2><video></video><button>开始面试</button></div>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   { name: "A4 atsc /ats/apply-form still loading", href: "https://atsc.liepin.com/ats/apply-form/abc", title: "多面", body: LOADING,
-    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   { name: "A5 atsc interview sign-up still loading", href: "https://atsc.liepin.com/interview/invite/sign/789", title: "多面AI面试", body: LOADING,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   { name: "A6 atsc sign-up rendered", href: "https://atsc.liepin.com/interview/invite/sign/789", title: "多面AI面试", body: FORM,
@@ -120,9 +122,9 @@ const CASES = [
   { name: "B1 SPA loading, neutral hash route", href: "https://hr.example.test/#/home", title: "某集团校园招聘", body: `<div id="app"></div>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   { name: "B2 SPA loading, hash route #/apply", href: "https://hr.example.test/#/apply/123", title: "某集团校园招聘", body: `<div id="app"></div>`,
-    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   { name: "B3 SPA loading, title 填写申请表", href: "https://hr.example.test/p/9", title: "填写申请表", body: LOADING,
-    expect: { fields: 0, pageType: "application_form/title", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/title", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   // 入口按钮
   { name: "C1 job page behind 开始申请", href: "https://hr.example.test/position/detail/123", title: "前端工程师",
     body: `<main><h1>前端工程师</h1><p>岗位职责</p><button>开始申请</button></main>`,
@@ -164,14 +166,14 @@ const CASES = [
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   { name: "G2 three inputs in a collapsed panel", href: "https://hr.example.test/p/3", title: "某公司",
     body: `<div style="display:none"><label>姓名<input></label><label>电话<input></label><label>邮箱<input></label></div>`,
-    expect: { fields: 0, pageType: "application_form/structure", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/structure", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   { name: "G3 two inputs in a collapsed panel", href: "https://hr.example.test/p/3", title: "某公司",
     body: `<div style="display:none"><label>姓名<input></label><label>电话<input></label></div>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   // atsc 网申表、双语按钮、上传步骤、隐藏的登录弹窗
   { name: "X1 atsc /ats/apply-form/ view mode with icon-only edit", href: "https://atsc.liepin.com/ats/apply-form/", title: "填写申请表",
     body: `<div id="main-container"><h2>填写申请表</h2>${section("基本信息", false)}${section("教育经历", true)}${section("实习经历", false)}<button><span>提交</span></button></div>`,
-    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   { name: "X2 view page with bilingual 编辑 / Edit", href: "https://app.example.test/candidate/home", title: "个人中心",
     body: `<section><h3>教育经历 Education</h3><span>某大学</span><button><span>编辑 / Edit</span></button></section><section><h3>工作经历</h3><button>编辑 / Edit</button></section>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
@@ -180,7 +182,7 @@ const CASES = [
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },
   { name: "X4 upload step with a file input, apply path", href: "https://hr.example.test/campus/apply/123", title: "某集团校园招聘",
     body: `<main><h2>上传简历</h2><input type="file"><button>下一步</button></main>`,
-    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.none, offer: "prominent" } },
+    expect: { fields: 0, pageType: "application_form/url", category: "no_fields_found", report: "fill_failed", hint: HINT.loading, offer: "prominent" } },
   { name: "X5 job page with a hidden two-input login modal", href: "https://www.example-jobs.test/job/123", title: "前端工程师-某公司",
     body: `<main><h1>前端工程师</h1><button>立即沟通</button></main><div style="display:none"><input placeholder="手机号"><input placeholder="验证码"></div>`,
     expect: { fields: 0, pageType: "unknown/none", category: "page_not_supported", report: null, hint: HINT.notForm, offer: "none" } },

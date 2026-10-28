@@ -202,15 +202,16 @@
   }
 
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
-  // notForm：pageType() 判断这不是网申填写页。
+  // notForm：pageType() 判断这不是网申填写页。form：判断是网申填写页；没有别的线索时多半还在加载，或要先点开某一块（#301）。
   // deepAvailable（#224）：侧栏有「深度分析本页」时，同源框架和自定义控件改指向它（它读得到）；跨域框架照旧。
-  function emptyPageHint(probe, { notForm = false, deepAvailable = false } = {}) {
+  // 不让用户去点「立即申请」「投递」这类按钮：在招聘网站上点一下可能就投出去了。
+  function emptyPageHint(probe, { notForm = false, form = false, deepAvailable = false } = {}) {
     if (!probe) return "";
     if (probe.editButtons > 0) return "这个页面可能还在查看状态：请先点网页上的「编辑」，等输入框出现后再一键填写。";
     if (probe.locked > 0) return "网页上的输入框目前是只读或禁用的：请先点「编辑」或完成网页要求的上一步，再一键填写。";
     if (notForm) {
       // 跨域框架不算表单的证据，但也可能就是申请表：两种可能都告诉用户。
-      return `这个页面看起来不是网申填写页：请打开要填写的申请表页面，再一键填写。${probe.frames?.crossOrigin > 0
+      return `请打开申请表后再试。${probe.frames?.crossOrigin > 0
         ? "如果申请表就在这个页面的内嵌框架里，插件暂时读不到。" : ""}`;
     }
     if (probe.frames.crossOrigin > 0 || probe.frames.frameInputs > 0) {
@@ -221,7 +222,7 @@
       if (deepAvailable) return "这个网页用的输入控件一键填写暂时识别不了。可以试试下方的「深度分析本页」。";
       return "这个网页用的输入控件插件暂时识别不了。可以把侧栏的「填写诊断」复制给我们。";
     }
-    return "";
+    return form ? "请等网页加载完，或先点开要填写的部分，再试一次。" : "";
   }
 
   function formatControl(control) {

@@ -2397,7 +2397,7 @@
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
-    // 失败信息里带了「先点编辑」这类提示：要一直留在屏幕上，不像别的失败几秒后消失。
+    // 失败信息里带了「先点编辑」这类提示，或是扫描到 0 个字段：要一直留在屏幕上，不像别的失败几秒后消失。
     let hinted = false;
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
@@ -2438,11 +2438,12 @@
       pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
-        const hint = !assisted && !scanned.fields.length
-          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown",
+        // 其余零字段的提示按页面类型给，一律留在屏幕上（#301）。
+        hinted = !assisted && !scanned.fields.length;
+        const hint = hinted
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown", form: pageType?.type === "application_form",
             deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
-        hinted = Boolean(hint);
-        throw new Error(`当前页面没有可填写的表单字段。${hint}`);
+        throw new Error(`没找到可填写的输入框。${hint}`);
       }
       if (!assisted) closeProfileOffer();
       // 模板字段在前并且优先；「我的信息」只补模板里没有的字段名。

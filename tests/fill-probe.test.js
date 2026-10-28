@@ -282,10 +282,18 @@ test("the empty-page hint prefers the edit button, then locked inputs, frames an
   assert.equal(probe.emptyPageHint(null), "");
 });
 
-test("a page that is not an application form says so, after the edit-button and locked-input hints", () => {
-  assert.match(probe.emptyPageHint(EMPTY, { notForm: true }), /不是网申填写页/);
+// #301：网申页上没有任何线索，多半还在加载，或要先点开某一块。
+test("an application page with no clues asks the user to wait for the page or open the part to fill", () => {
+  assert.equal(probe.emptyPageHint(EMPTY, { form: true }), "请等网页加载完，或先点开要填写的部分，再试一次。");
+  assert.match(probe.emptyPageHint({ ...EMPTY, editButtons: 1 }, { form: true }), /先点网页上的「编辑」/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, custom: { total: 2, byLibrary: {} } }, { form: true, deepAvailable: true }), /深度分析本页/);
+  assert.match(probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, { form: true }), /内嵌框架/);
+});
+
+test("a page that is not an application form asks for the application form, after the edit-button and locked-input hints", () => {
+  assert.equal(probe.emptyPageHint(EMPTY, { notForm: true }), "请打开申请表后再试。");
   const framed = probe.emptyPageHint({ ...EMPTY, frames: { total: 1, crossOrigin: 1, frameInputs: 0 } }, { notForm: true });
-  assert.match(framed, /不是网申填写页/);
+  assert.match(framed, /^请打开申请表后再试。/);
   assert.match(framed, /内嵌框架/);
   assert.doesNotMatch(probe.emptyPageHint(EMPTY, { notForm: true }), /内嵌框架/);
   assert.match(probe.emptyPageHint({ ...EMPTY, locked: 1 }, { notForm: true }), /只读或禁用/);
