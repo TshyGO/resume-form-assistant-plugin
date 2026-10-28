@@ -11,7 +11,7 @@
         "desktop/src/react/SettingsDialog.tsx"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "0ad93814430b990d5e76a9cb108e21a40d25132cd467cf0fdae7f1c23d304e45",
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
         "desktop/src/react/SettingsDialog.tsx": "14117a931859a0e76837ccee0902e82c88603663fb17b07a6569f8ccec442dc9"
       },
       "drafts": {
@@ -20,7 +20,7 @@
           "visualDirection": "existing desktop tokens, native modal with attachment list and document preview"
         }
       },
-      "updatedAt": "2026-10-28T13:29:29.749766+00:00"
+      "updatedAt": "2026-10-28T14:20:00+00:00"
     },
     "sidepanel-mail-column": {
       "targetKind": "existing-ui",
@@ -61,9 +61,9 @@
         "desktop/src/mailbox-ui.ts"
       ],
       "fingerprints": {
-        ".superdesign/design-system.md": "0ad93814430b990d5e76a9cb108e21a40d25132cd467cf0fdae7f1c23d304e45",
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
         "desktop/index.html": "410ba6c3805882a2c485fd0d5299e0da7eb0c4441eccf22bacec08b62e0a730f",
-        "desktop/src/styles.css": "54f828ca824649bd232e7b37fad9469109416819db73377117d785112a90f785",
+        "desktop/src/styles.css": "28b449e77950fee7f5f4ce156525425dcd65882cd1768bfef6ea43ba97bbf471",
         "desktop/src/inbox-ui.ts": "07f8ca5a1dfc0b215e110ae7eaef6ce15b18b7ccd571c0898f3be8e318dffb1b",
         "desktop/src/mailbox-ui.ts": "5d59e13763f5e824edadfd8930c8d741a9c37c26d89e43094f59bae3e7226ad0"
       },
@@ -74,7 +74,31 @@
           "visualDirection": "Existing inbox reader, organizer with text, expand/collapse icon, recycle icon last; AI organizer first, recovery preserved"
         }
       },
-      "updatedAt": "2026-10-28T13:29:29.749459+00:00"
+      "updatedAt": "2026-10-28T14:20:00+00:00"
+    },
+    "ai-review-compact": {
+      "targetKind": "existing-ui",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "3393ab5a-8f1b-4714-bf34-2020648d8206",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/src/ai/ReviewPanel.tsx",
+        "desktop/src/styles.css"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
+        "desktop/src/ai/ReviewPanel.tsx": "aae53eea4bbde85c1e497c08ac89383334b09c66a16975c26ebfa990e943d9b6",
+        "desktop/src/styles.css": "28b449e77950fee7f5f4ce156525425dcd65882cd1768bfef6ea43ba97bbf471"
+      },
+      "drafts": {
+        "3393ab5a-8f1b-4714-bf34-2020648d8206": {
+          "title": "核对 AI 建议 · 紧凑审核",
+          "currentVersion": 2,
+          "visualDirection": "Compact 860px review dialog; uniform 36px controls; grouped application/classification and stage/progress; prioritized cautions and confirmation"
+        }
+      },
+      "updatedAt": "2026-10-28T14:20:00+00:00"
     }
   }
 }
