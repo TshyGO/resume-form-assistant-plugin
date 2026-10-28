@@ -63,12 +63,13 @@ button:disabled { cursor: not-allowed; }
 .brand-pill[data-tone="error"]::before { background: #e06c6c; }
 
 /* 视图切换：浅色分段控件，带图标 */
-.dock-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; flex: none; margin: 10px 14px 0; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: #e9edf2; }
+.dock-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; flex: none; margin: 10px 14px 0; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: #e9edf2; }
 .dock-tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 4px 8px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 600; }
 .dock-tabs button:hover { color: var(--ink); }
 .dock-tabs button[aria-selected="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px #1c23301f; }
 .dock-tabs button[data-tab="fill"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 3 5 13.5h6L10 21l8-10.5h-6z'/%3E%3C/svg%3E"); }
 .dock-tabs button[data-tab="fields"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='2.5'/%3E%3Ccircle cx='9' cy='11' r='2.2'/%3E%3Cpath d='M5.8 16c.6-1.6 1.7-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h4'/%3E%3C/svg%3E"); }
+.dock-tabs button[data-tab="mail"] { --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='2'/%3E%3Cpath d='m3 6 9 7 9-7'/%3E%3C/svg%3E"); }
 .dock-tabs button[aria-selected="true"]::before { color: var(--accent); }
 
 /* 同一位置的状态条：原因 + 可执行的下一步 */
@@ -478,6 +479,8 @@ button:disabled { cursor: not-allowed; }
 .task-foot .btn-danger { border-color: var(--danger-line); color: var(--danger); }
 
 @media (max-width: 340px) {
+  .dock-tabs button { gap: 4px; padding-inline: 4px; font-size: 12px; }
+  .dock-tabs button::before { width: 14px; height: 14px; }
   .view-scroll { padding: 10px 10px 16px; }
   .dock-header, .dock-footer { padding-left: 10px; padding-right: 10px; }
   .dock-tabs, .status-strip { margin-left: 10px; margin-right: 10px; }
@@ -496,12 +499,31 @@ button:disabled { cursor: not-allowed; }
 /* The panel header already names these steps. */
 #job-save-form > .job-card__title, #submit-confirm-form > .job-card__title, #job-save-choice > .job-card__title, #submit-confirm-choice > .job-note { display: none; }
 
-/* #333 uses the existing card, input and primary-button tokens. */
+/* #333: an independent, secondary mail workspace; fill keeps its original primary action. */
+body[data-active-view="mail"] #job-assist, body[data-active-view="mail"] #legacy-hint { display: none !important; }
+.mail-intro { margin-top: 0; }
+.mail-context { margin: 16px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+.mail-context__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-context strong { font-size: 13px; font-weight: 600; }
+.mail-context .chip { max-width: 58%; }
+.mail-context p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.mail-context[data-supported="true"] { border-color: var(--accent-line); background: #f6faf8; }
+.mail-save-button { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 16px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); color: white; font-size: 14px; font-weight: 650; }
+.mail-save-button:hover:not(:disabled) { background: var(--accent-hover); }
+.mail-save-button:disabled { border-color: var(--line); background: #e9edf2; color: #8a94a3; }
+.mail-save-status { margin: 12px 0 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.mail-save-status[data-tone="ok"] { border-color: var(--ok-line); background: var(--ok-bg); color: var(--ok-ink); }
+.mail-save-status[data-tone="error"] { border-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+.mail-read-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .mail-association { margin-top: 12px; color: var(--muted); font-size: 12px; }
-.mail-association summary { cursor: pointer; }
+.mail-association summary { cursor: pointer; min-height: 30px; color: var(--ink); font-size: 13px; }
+.mail-association summary span { margin-left: 6px; color: var(--muted); font-size: 12px; }
 .mail-association label { display: block; margin: 10px 0 6px; }
 .mail-search { display: flex; gap: 8px; margin-top: 8px; }
 .mail-search input { min-width: 0; flex: 1; }
+.mail-search button:disabled { color: #8a94a3; }
 .mail-search button { flex: none; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); color: var(--ink); }
 .mail-excerpt { margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); overflow-wrap: anywhere; }
 .mail-excerpt > p:first-child { margin: 0; font-size: 13px; font-weight: 600; }
+.mail-card[data-excerpt-offer="true"] .mail-save-button:not(:disabled) { border-color: var(--accent-line); background: var(--panel); color: var(--accent-strong); }
+.mail-excerpt #mail-excerpt-accept { border-color: var(--accent); background: var(--accent); color: white; font-weight: 600; }

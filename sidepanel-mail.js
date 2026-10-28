@@ -10,9 +10,16 @@
   const company = document.getElementById('mail-company');
   const search = document.getElementById('mail-find-application');
   const application = document.getElementById('mail-application');
+  const label = document.getElementById('mail-save-label');
+  const context = document.getElementById('mail-context');
+  const contextTitle = document.getElementById('mail-context-title');
+  const contextHint = document.getElementById('mail-context-hint');
+  const domain = document.getElementById('mail-context-domain');
   let current = null;
+  let supported = false;
   let revision = 0;
   let busy = false;
+  let busyAction = 'save';
   let pending = null;
   const errors = {
     open_mail: '请先在邮箱里打开一封邮件，再点击保存。',
@@ -26,26 +33,44 @@
     never_paired: '请先打开桌面程序并完成浏览器连接。',
     unavailable: '尚未确认保存成功。请检查桌面连接后重试，重复的原件会自动查重。'
   };
-  function say(text) { status.textContent = text; }
-  function setBusy(value) {
+  function say(text, tone = 'idle') { status.textContent = text; status.hidden = !text; status.dataset.tone = tone; }
+  function setBusy(value, action = 'save') {
     busy = value;
-    for (const el of [button, accept, cancel, company, search, application]) el.disabled = value;
+    busyAction = action;
+    for (const el of [button, accept, cancel, company, search, application]) el.disabled = value || !supported;
+    label.textContent = value && action === 'save' ? '正在保存…' : pending ? '重试取得原件' : '保存到桌面';
+    search.textContent = value && action === 'search' ? '查找中…' : '查找申请';
     card.setAttribute('aria-busy', String(value));
   }
-  function clearOffer() { pending = null; offer.hidden = true; }
+  function clearOffer() {
+    pending = null; offer.hidden = true; card.dataset.excerptOffer = 'false';
+    if (!busy) label.textContent = '保存到桌面';
+  }
   async function refresh() {
     const tick = ++revision;
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tick !== revision) return;
-    const supported = Boolean(self.ResumeProWebmail.provider(tab?.url));
+    supported = Boolean(self.ResumeProWebmail.provider(tab?.url));
     const changed = tab?.id !== current?.id || tab?.url !== current?.url;
     current = tab || null;
-    card.hidden = !supported;
+    context.dataset.supported = String(supported);
+    domain.hidden = !supported;
+    if (supported) {
+      const host = new URL(tab.url).hostname;
+      contextTitle.textContent = host.endsWith('qq.com') ? 'QQ 邮箱' : host.endsWith('163.com') ? '163 邮箱' : '126 邮箱';
+      domain.textContent = host;
+      contextHint.textContent = '先在邮箱打开一封邮件，再点击保存。';
+    } else {
+      domain.textContent = '';
+      contextTitle.textContent = '请先打开网页邮箱';
+      contextHint.textContent = '支持 QQ、163、126 网页邮箱。切换到邮箱页面后，即可保存当前打开的邮件。';
+    }
+    setBusy(busy, busyAction);
     if (changed) {
       clearOffer();
-      application.replaceChildren(new Option('不关联，存入收件箱', ''));
+      application.replaceChildren(new Option('不关联，存入招聘通知', ''));
       company.value = '';
-      if (!busy) say('先在邮箱打开一封邮件。点击保存后才读取内容，不记录浏览过的邮件。');
+      if (!busy) say('');
     }
   }
   async function send(kind, data, applicationId) {
@@ -55,12 +80,12 @@
     if (result?.status === 'saved') {
       say(result.duplicate ? '这封邮件已在档案中，未重复保存。'
         : kind === 'eml' ? '已保存完整邮件原件（包含邮件内嵌附件）。可到桌面「招聘通知」查看。'
-          : '已保存网页摘录，未保存邮件原件及附件。可到桌面「招聘通知」查看。');
+          : '已保存网页摘录，未保存邮件原件及附件。可到桌面「招聘通知」查看。', 'ok');
       clearOffer();
-    } else say(errors[result?.status] || errors.unavailable);
+    } else say(errors[result?.status] || errors.unavailable, 'error');
   }
   button.addEventListener('click', async () => {
-    if (busy) return;
+    if (busy || !supported) return;
     clearOffer();
     const selected = application.value;
     setBusy(true); say('正在读取当前邮件并尝试取得原件…');
@@ -77,31 +102,33 @@
         pending = { excerpt: capture.excerpt, applicationId: selected };
         document.getElementById('mail-excerpt-subject').textContent = capture.excerpt.subject;
         offer.hidden = false;
-        say(capture.reason === 'too_large' ? '原件超过 25 MiB，可改存网页摘录。' : '未能取得邮件原件，可改存网页摘录。');
-      } else say(errors[capture?.status] || errors.unavailable);
-    } catch { say('无法读取当前邮箱页面。请刷新邮箱后重试，或下载 .eml 在桌面导入。'); }
+        card.dataset.excerptOffer = 'true';
+        say(capture.reason === 'too_large' ? '原件超过 25 MiB，可改存网页摘录。' : '未能取得邮件原件，可改存网页摘录。', 'error');
+      } else say(errors[capture?.status] || errors.unavailable, 'error');
+    } catch { say('无法读取当前邮箱页面。请刷新邮箱后重试，或下载 .eml 在桌面导入。', 'error'); }
     finally { setBusy(false); }
   });
   accept.addEventListener('click', async () => {
-    if (!pending || busy) return;
+    if (!pending || busy || !supported) return;
     const chosen = pending;
     setBusy(true); say('正在保存网页摘录…');
     try { saved(await send('excerpt', { excerpt: chosen.excerpt }, chosen.applicationId), 'excerpt'); }
-    catch { say(errors.unavailable); }
+    catch { say(errors.unavailable, 'error'); }
     finally { setBusy(false); }
   });
   cancel.addEventListener('click', () => { clearOffer(); say('已取消保存摘录。'); });
   search.addEventListener('click', async () => {
     const name = company.value.trim();
-    if (!name || busy) { say('请填写申请中的公司名称后查找。'); return; }
+    if (busy || !supported) return;
+    if (!name) { say('请填写申请中的公司名称后查找。', 'error'); return; }
     const tick = revision;
-    setBusy(true); say('正在查找该公司的申请…');
+    setBusy(true, 'search'); say('正在查找该公司的申请…');
     try {
       const result = await chrome.runtime.sendMessage({ type: 'DESKTOP_CANDIDATES_FOR', fields: { company: name, title: '' } });
-      if (tick !== revision) return;
+      if (tick !== revision) { say('当前网页已切换，请重新查找申请。'); return; }
       if (result?.status !== 'ok') { say('无法读取桌面申请，请检查桌面连接。'); return; }
       const seen = new Set();
-      application.replaceChildren(new Option('不关联，存入收件箱', ''));
+      application.replaceChildren(new Option('不关联，存入招聘通知', ''));
       for (const item of [...(result.exact || []), ...(result.sameCompany || [])]) {
         if (seen.has(item.applicationId)) continue;
         seen.add(item.applicationId);

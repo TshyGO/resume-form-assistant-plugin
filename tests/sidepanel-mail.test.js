@@ -30,7 +30,9 @@ test('fallback requires a second explicit click and cancellation does not write'
   const p = await panel({ status: 'excerpt_offer', excerpt: { subject: '邀请', from: 'HR', sentTime: '昨天', body: '正文' } });
   p.get('mail-save-button').click(); await p.flush();
   assert.equal(p.get('mail-excerpt-offer').hidden, false); assert.equal(p.calls.length, 1);
+  assert.equal(p.get('mail-save-label').textContent, '重试取得原件');
   p.get('mail-excerpt-cancel').click(); await p.flush(); assert.equal(p.calls.length, 1);
+  assert.equal(p.get('mail-save-label').textContent, '保存到桌面');
   p.get('mail-save-button').click(); await p.flush(); p.get('mail-excerpt-accept').click(); await p.flush();
   const writes = p.calls.filter(c => c.target === 'desktop'); assert.equal(writes.length, 1); assert.equal(writes[0].msg.kind, 'excerpt');
   assert.match(p.get('mail-save-status').textContent, /未保存邮件原件及附件/);
@@ -47,7 +49,10 @@ test('changing tabs clears a proposed excerpt so it cannot be saved accidentally
   const p = await panel({ status: 'excerpt_offer', excerpt: { subject: '邀请', from: 'HR', sentTime: '', body: '正文' } });
   p.get('mail-save-button').click(); await p.flush();
   await p.change({ id: 2, url: 'https://example.test/' });
-  assert.equal(p.get('mail-save').hidden, true); p.get('mail-excerpt-accept').click(); await p.flush();
+  assert.equal(p.get('mail-save').hidden, false);
+  assert.equal(p.get('mail-save-button').disabled, true);
+  assert.match(p.get('mail-context-hint').textContent, /支持 QQ、163、126/);
+  p.get('mail-excerpt-accept').click(); await p.flush();
   assert.equal(p.calls.filter(c => c.target === 'desktop').length, 0);
 });
 test('user can select an application and repeated save clicks create one transfer', async () => {
