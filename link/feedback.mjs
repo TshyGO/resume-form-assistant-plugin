@@ -4,7 +4,11 @@ export const ENDPOINT = 'https://app-feedback-relay.nebula-lab.workers.dev/feedb
 export const STORAGE_KEY = 'feedbackStateV1';
 // The explanation the user agreed to. Raise it when automatic reports start carrying something
 // the notice does not describe: earlier grants then count as undecided and the user is asked again.
-export const CONSENT_VERSION = 1;
+// 2 (#301): install type, how a fill was started and whether the page had focus, the AI tier,
+// popup counts for unfilled selects, and a report when the AI request fails.
+export const CONSENT_VERSION = 2;
+// chrome.management.getSelf().installType; getSelf needs no "management" permission.
+const INSTALL_TYPES = ['normal', 'development', 'sideload', 'admin', 'other'];
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 // Per installation, per rolling hour. Code errors can repeat in a loop, so they stay tight. Fill
@@ -15,10 +19,19 @@ const FILLS_PER_HOUR = 20;
 const core = globalThis.ResumeProFeedback;
 const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, recent: {}, hourly: [], fillHourly: [], backoff: 0, manualAt: 0 });
 
-export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, timeoutMs = 5000 }) {
+export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, install = () => '', timeoutMs = 5000 }) {
   let serial = Promise.resolve();
   let stopped = false;
   const active = new Set();
+  // How the browser installed the extension (store, unpacked, policy...), looked up once. Unknown,
+  // failed or slow lookups leave it out; reports never wait on it for more than a second.
+  let installType = '';
+  let installTimer;
+  const installKnown = Promise.race([
+    Promise.resolve().then(install),
+    new Promise(resolve => { installTimer = setTimeout(resolve, 1000, ''); })
+  ]).then(value => { if (INSTALL_TYPES.includes(value)) installType = value; }, () => {})
+    .finally(() => clearTimeout(installTimer));
   const locked = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
   const save = state => storage.set({ [STORAGE_KEY]: state });
   const read = async () => {
@@ -41,10 +54,12 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     const kind = ['fill_failed', 'fill_partial', 'manual'].includes(input.kind) ? input.kind : 'exception';
     const errorType = kind === 'exception' ? (['Error','TypeError','ReferenceError','SyntaxError','RangeError','URIError','EvalError','AggregateError'].includes(input.name) ? input.name : 'Error') : kind;
     const stack = kind === 'exception' ? String(input.stack || '').split('\n').filter(line => /^(?:[a-z][a-z0-9-]*\.js|link\/(?:[a-z][a-z0-9-]*\/)*[a-z][a-z0-9-]*\.mjs):\d{1,6}:\d{1,6}$/.test(line)).slice(0, 20).join('\n') : '';
-    const details = core.diagnostics(input.diagnostics);
+    // Only manual feedback, which the user previews, may carry the job flow's [岗位] (#301).
+    const details = core.diagnostics(input.diagnostics, { manual: kind === 'manual' });
     const description = kind === 'manual' ? core.redact(input.description, 1400) : kind === 'exception' ? `${errorType}: ${input.source === 'unhandledrejection' ? '未处理的 Promise 拒绝' : '未处理的代码异常'}` : '';
     // Diagnostics block v1. Only the worker writes [来源]; core.diagnostics() drops it from page input.
-    const source = ['[来源]', `app_version: ${version}`, `os: ${os}`, ...(host ? [`host: ${host}`] : [])].join('\n');
+    const source = ['[来源]', `app_version: ${version}`, `os: ${os}`, ...(installType ? [`install: ${installType}`] : []),
+      ...(host ? [`host: ${host}`] : [])].join('\n');
     return { app: 'resume-form-assistant-plugin', app_version: version, os, error_type: errorType,
       error_stack: stack, user_description: `${description}${description ? '\n' : ''}--- 诊断信息 v1 ---\n${source}${details ? `\n\n${details}` : ''}`.slice(0, 5000),
       anonymous_id: id, timestamp: new Date(now()).toISOString() };
@@ -77,6 +92,8 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     finally { clearTimeout(timer); active.delete(controller); }
   }
   return {
+    // Settles once the install type is known (or left out); preview() reads it as it stands.
+    ready: () => installKnown,
     status: () => locked(async () => view(await read())),
     setConsent(enabled) {
       stopped = enabled !== true;
@@ -90,6 +107,7 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     },
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
+      await installKnown;
       const payload = await locked(async () => {
         const state = await read(); const time = now();
         if (state.consent !== true || stopped || time < state.backoff) return null;
@@ -120,7 +138,9 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
 
 export function installFeedback(api) {
   const origin = api.runtime.getURL('');
-  const service = createFeedback({ storage: api.storage.local, version: api.runtime.getManifest().version, os: core.os(navigator.userAgent) });
+  // Without the API (or when it fails) the [来源] section simply has no install line.
+  const install = async () => (await api.management?.getSelf?.())?.installType;
+  const service = createFeedback({ storage: api.storage.local, version: api.runtime.getManifest().version, os: core.os(navigator.userAgent), install });
   const trustedPages = new Set(['sidepanel.html', 'popup.html'].map(p => api.runtime.getURL(p)));
   // Each preview is held only in worker memory, bound to the requesting document. Sending
   // consumes it; switching tabs or editing the draft requires a new visible preview.
@@ -141,7 +161,7 @@ export function installFeedback(api) {
       if (message.type === 'FEEDBACK_STATUS') return service.status();
       if (message.type === 'FEEDBACK_CONSENT') return service.setConsent(message.enabled === true);
       if (message.type === 'FEEDBACK_PREVIEW') {
-        const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics) };
+        const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics, { manual: true }) };
         let host = '';
         if (Number.isInteger(message.tabId)) {
           const tab = await api.tabs.get(message.tabId).catch(() => null); host = core.hostname(tab?.url);
@@ -149,6 +169,7 @@ export function installFeedback(api) {
         const token = crypto.randomUUID();
         for (const [key, item] of previews) if (Date.now() - item.time > 600000 || item.owner === owner) previews.delete(key);
         if (previews.size >= 20) previews.delete(previews.keys().next().value);
+        await service.ready();
         const payload = service.preview(input, host);
         previews.set(token, { payload, owner, time: Date.now() });
         return { ok: true, token, payload };

@@ -158,6 +158,13 @@
     };
   }
 
+  // 一键填写在通用路径上认出的自定义下拉（#301 北森）：不带组件库类名、也没有 ARIA 标记，probePage 数不到。
+  // 只数和 probePage 数过的控件不重叠的（自己、祖先、里面都不像自定义控件），同一个控件不算两次。
+  function uncountedControls(roots) {
+    return new Set(Array.from(roots || []).filter(root => typeof root?.closest === "function"
+      && !root.closest(SELECTORS.custom) && !root.querySelector?.(SELECTORS.custom))).size;
+  }
+
   // 含输入框的 Shadow DOM：往下逐层找（Web Components 常常一层套一层），每个含输入框的 shadow root 算一个。
   // 深度优先：遇到 shadow root 先进去找完再往后走，大页面不会在顶层就把额度用完。
   function countShadowHosts(all) {
@@ -265,7 +272,7 @@
     return lines;
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, hasClues, emptyPageHint, formatReport };
+  const api = { SELECTORS, describeControl, safeLabel, probePage, uncountedControls, pageType, hasClues, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

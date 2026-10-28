@@ -88,6 +88,13 @@
   let startupHost = null;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
+  // 侧栏的「一键填写」正在点页面里的填写按钮（#301 诊断记录填写从哪里开始）：只在 click() 同步派发期间为真。
+  let panelFillStarting = false;
+  // 最近一次「保存岗位到桌面端」的过程（#301），只给手动反馈的 [岗位]：只有固定的词，不记公司、岗位、网页文字或网址。
+  // 单独的变量：idlePanelJob、idlePanelSubmit 会把 panelJob、panelSubmit 整个换掉。「确认已投递」核对出的那一份
+  // 只在它转去保存岗位时接着用。
+  let jobTrace = null;
+  let submitJobTrace = null;
   // Archiving a finished fill from the native side panel (#178). Declared up here because the
   // side panel's status message can arrive before the rest of this script has run.
   let panelFill = null;
@@ -156,7 +163,8 @@
         diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
           ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : "",
         // 手动反馈附上的诊断（#215 v1）：只含结构和计数，后台还会再按白名单过滤一遍。
-        diagnosticsReport: diagnosticsPanel && !diagnosticsPanel.hidden ? lastFillReport : "",
+        // 这个标签页做过「保存岗位到桌面端」时再附上 [岗位]（#301），只有固定的词；自动报告不带它。
+        diagnosticsReport: [diagnosticsPanel && !diagnosticsPanel.hidden ? lastFillReport : "", jobTraceReport()].filter(Boolean).join("\n\n"),
         // Job recognition runs in the page's controls; the side panel shows it and can cancel it.
         jobAssist: jobAssist && !jobAssist.hidden
           ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null,
@@ -198,7 +206,8 @@
           sendResponse(started.ok ? { ok: true } : { ok: false, error: started.error });
           return;
         }
-        button.click();
+        panelFillStarting = true;
+        try { button.click(); } finally { panelFillStarting = false; }
         sendResponse({ ok: true });
       }).catch(() => sendResponse({ ok: false, error: "桌面简历当前不可用。" }));
       return true;
@@ -2327,6 +2336,10 @@
   // fields 为 null 表示配方没能用上，照常扫描。普通一键填写（deep 为空）本站有配方时也先按配方定位。
   async function handleAiFillClick(event, assisted = null, deep = null) {
     const button = event.currentTarget;
+    // #301 诊断：这次填写从哪里开始，开始时网页有没有焦点（点侧栏时网页失焦，有的下拉、日历要焦点才弹出）。
+    // 要在第一个 await 之前读：侧栏的标记只在 click() 同步派发期间有效。
+    const entry = assisted ? "assist" : deep ? (deep.mode === "recipe" ? "recipe" : "deep") : panelFillStarting ? "panel" : "other";
+    const pageFocused = typeof document.hasFocus === "function" ? document.hasFocus() : null;
     const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
     if (button.disabled || state.aiBusy) return failed("busy");
     const report = assisted?.quiet ? () => {} : showStatus;
@@ -2390,6 +2403,8 @@
     let pageType = null;
     let scanPath = location.pathname;
     let scannedCustom = 0;
+    // #301 扫描在通用路径上认出、页面探测没数到的自定义下拉（北森）：只进诊断的 custom_controls，不改深度分析入口的判断。
+    let genericCustom = 0;
     // #226 本站配方这次用没用上：只有固定状态码和计数。
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
@@ -2439,6 +2454,10 @@
         // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
         probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
         pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+        genericCustom = withFillProbe(api => api.uncountedControls?.(fields
+          .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
+          .map(field => self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)))
+          .filter(info => info?.library === "generic").map(info => info.root)), 0);
       };
       describeScan();
       // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
@@ -2609,8 +2628,11 @@
         const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
           || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
+        // #301 本次填写操作过的下拉：弹层有没有出来、里面有几项。没操作过的（上一级没选上）不带。
+        const popup = controlPopups.get(control);
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
+          ...(popup && popup.session === session ? { observed: { opened: popup.opened, options: popup.options } } : {}),
           // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
           ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
@@ -3026,11 +3048,14 @@
       if (pendingNew.length) grown.drops.not_sent = (grown.drops.not_sent || 0) + pendingNew.length;
       const totalFields = fieldCount + grown.found;
       const totalMatched = matched === null ? null : matched + grown.matched;
+      // 补填的 AI 请求失败（#301）：首轮没有错误码时，类别和阶段按它算，和诊断里的 error_code 一致。
       const verdict = fillVerdict({ scanned: scanDone, fieldCount: totalFields, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
-        failedStage, responded, errorCode: diagnostics.errorCode, matched: totalMatched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
+        failedStage, responded, errorCode: diagnostics.errorCode, catchUpCode: grown.errorCode, matched: totalMatched, filledCount,
+        unfilledCount: unfilledLabels.length, unconfirmedCount });
       const summaryInput = { ...timing, totalMs,
         fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
+        entry, pageFocused, genericCustom,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -3050,7 +3075,7 @@
       writeFillDiagnostics(reportInput);
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
-        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
+        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。AI 请求失败（首轮或补填，#301）即使都填上了也上报。
         // 深度填写（#224）和辅助新增一样不自动上报：隐私说明里自动报告只覆盖普通一键填写。
         const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted || deep), cancelled: cancelRequested,
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount,
@@ -4378,6 +4403,16 @@
 
   // #269 资料只有年月、日历要选到日时按 1 日填写：记下来，结果里写明。
   const dayDefaultedControls = new WeakSet();
+  // #301 下拉、级联和日历最近一次操作时弹层的样子：没弹出，或弹出的是哪类、里面有几项（只有固定类别和计数）。
+  // 记下是哪一次填写会话操作的，没填上的字段只带本次填写里的记录。
+  const controlPopups = new WeakMap();
+  function popupObserved(observed) {
+    const role = ["listbox", "tree", "menu", "component", "calendar"].includes(observed?.popupRole) ? observed.popupRole : "";
+    // AntD 日期面板只数格子，不标 popupRole。
+    if (role === "calendar" || (!role && observed?.controlKind === "date" && Number.isInteger(observed.optionCount))) return { opened: "calendar" };
+    if (role) return { opened: role, options: Number.isInteger(observed.optionCount) ? observed.optionCount : 0 };
+    return ["custom-select", "cascader"].includes(observed?.controlKind) ? { opened: "none" } : null;
+  }
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
     const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
     const control = target?.kind === 'element' ? target.element : target;
@@ -4387,6 +4422,9 @@
       // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
       if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
       else dayDefaultedControls.delete(control);
+      const popup = popupObserved(result.observed);
+      if (popup) controlPopups.set(control, { ...popup, session: fillSession });
+      else controlPopups.delete(control);
     }
     return result.ok;
   }
@@ -5108,17 +5146,21 @@
   // page, ask the desktop's AI only when extraction is unsure, and return what the user
   // should review. Nothing is written anywhere here. `null` means the caller moved on
   // (cancelled or restarted) and the answer must be dropped.
-  async function draftJobFields({ isCurrent, onAssistStart, onAssistEnd }) {
+  // `trace`（#301）：调用方给的 [岗位] 记录，这里写进来源、还缺哪个和 AI 识别的结果码。
+  async function draftJobFields({ isCurrent, onAssistStart, onAssistEnd, trace = null }) {
     const { extract, saveFlow, copy } = await loadDesktopModules();
     const extraction = extract.extractJobFields(document, location.href);
     const step = saveFlow.nextSaveStep(extraction);
     if (!isCurrent()) return null;
+    // 先按本地读到的记：AI 识别中途取消时，表单就是这一份。
+    traceJobFields(trace, step.fields, jobSources(step.fields, extraction));
     if (step.action === "commit") {
       return { fields: step.fields, note: copy.describeReviewSave(), openView: null, fallback: step.fields };
     }
     if (step.action === "assist") {
-      const outcome = await runJobAssist(step.fragments, step.fields, { isCurrent, onAssistStart, onAssistEnd });
+      const outcome = await runJobAssist(step.fragments, step.fields, { isCurrent, onAssistStart, onAssistEnd, trace });
       if (!isCurrent() || outcome.action === "ignore") return null;
+      traceJobFields(trace, outcome.fields, jobSources(outcome.fields, extraction, outcome.aiFields, step.fragments));
       return {
         fields: outcome.fields,
         note: outcome.action === "commit" ? copy.describeReviewSave() : outcome.note,
@@ -5131,7 +5173,7 @@
 
   // The worker asks the desktop's AI and gives up after 25 seconds itself; this timer only
   // covers a worker that never answers. There is no automatic retry either way.
-  async function runJobAssist(fragments, fallback, { isCurrent, onAssistStart, onAssistEnd }) {
+  async function runJobAssist(fragments, fallback, { isCurrent, onAssistStart, onAssistEnd, trace = null }) {
     const { saveFlow, copy } = await loadDesktopModules();
     // The user may have cancelled, or the page moved on, while the modules were loading.
     // Checked before anything is shown or sent: an assist panel raised for a job nobody is
@@ -5145,6 +5187,7 @@
       onAssistEnd?.(requestId);
       return { action: "ignore" };
     }
+    if (trace) trace.aiCalled = true;
     let reply;
     let timer;
     try {
@@ -5164,6 +5207,8 @@
       onAssistEnd?.(requestId);
     }
     if (!isCurrent()) return { action: "ignore" };
+    // 结果码只取固定的原因码，feedback-core 再按白名单过一遍；取消后晚到的回复不记。
+    if (trace) trace.aiCode = typeof reply?.reason === "string" ? reply.reason : "other";
     const after = saveFlow.afterAssist(reply, fallback);
     if (after.action === "form") {
       // `note` is a desktop failure from the worker; `error` is the host saying the worker itself died.
@@ -5171,7 +5216,48 @@
       after.note = copy.describeManualSave(after.reason, detail);
       if (reply?.openView === "settings-ai") after.openView = "settings-ai";
     }
+    // What the AI suggested, only to tell where the review's company and title came from (#301).
+    after.aiFields = reply?.fields || null;
     return after;
+  }
+
+  // #301 手动反馈的 [岗位]：核对表单里的公司、岗位从哪来。本地读到的分结构化数据（JobPosting）和站点规则（北森、hotjob）；
+  // AI 识别的看它引用的是不是页面标题。认不出来源（用户自己写的）返回空字符串，由 traceJobFields 沿用之前的。
+  function jobSources(fields, extraction, ai = null, fragments = []) {
+    const of = key => {
+      const value = fields?.[key];
+      if (!value) return "none";
+      const local = extraction?.sources?.[key];
+      if (local?.value === value) return local.source === "jobposting" ? "structured" : "site_rule";
+      if (ai?.[key] === value) return fragments.some(item => item.role === "page-title" && item.text === value) ? "page_title" : "ai";
+      return "";
+    };
+    return { company: of("company"), title: of("title") };
+  }
+
+  function newJobTrace() {
+    return { companySource: "none", titleSource: "none", missingCompany: true, missingTitle: true, aiCalled: false, aiCode: "", end: "open" };
+  }
+
+  // 没做过「保存岗位到桌面端」、或 feedback-core 缺席时没有这一段。
+  function jobTraceReport() {
+    try { return self.ResumeProFeedback?.jobReport?.(jobTrace) || ""; } catch { return ""; }
+  }
+
+  // 核对表单现在是什么样：来源和还缺哪个。只记固定的词和是否为空，不记内容。
+  function traceJobFields(trace, fields, sources = {}) {
+    if (!trace) return;
+    trace.companySource = sources.company || trace.companySource;
+    trace.titleSource = sources.title || trace.titleSource;
+    trace.missingCompany = !fields?.company;
+    trace.missingTitle = !fields?.title;
+  }
+
+  // 写入桌面的结果 → [岗位] 的结局：存进桌面、进了待同步、没能确认、没写上。
+  function jobWriteEnd(status) {
+    if (status === "saved") return "saved";
+    if (["pending", "queued", "duplicate"].includes(status)) return "queued";
+    return !status || status === "unknown" ? "unknown" : "failed";
   }
 
   function showJobAssist(described) {
@@ -6031,14 +6117,18 @@
     cancelAiRequest(panelJob.requestId);
     panelJob = idlePanelJob(panelJob);
     panelJob.discarded = "page-changed";
+    if (jobTrace) jobTrace.end = "navigated";
     return true;
   }
 
-  function openPanelReview(fields, note, openView = null) {
+  // `sources`（#301 [岗位]）：这份表单的公司、岗位从哪来；不给就沿用之前记下的。
+  function openPanelReview(fields, note, openView = null, sources = {}) {
     touchPanelJob({
       phase: "review", fields: { ...emptyJobFields(), ...fields }, revision: panelJob.revision + 1,
       note, openView, error: "", assist: null, requestId: null
     });
+    traceJobFields(jobTrace, fields, sources);
+    if (jobTrace) jobTrace.end = "open";
   }
 
   async function startPanelJobDraft() {
@@ -6052,10 +6142,12 @@
     const token = panelJob.token;
     const pageUrl = location.href;
     touchPanelJob({ draftId: newRequestId(), phase: "extracting", pageUrl });
+    const trace = jobTrace = newJobTrace();
     const isCurrent = () => panelJob.token === token && panelJob.pageUrl === pageUrl && location.href === pageUrl;
     try {
       const draft = await draftJobFields({
         isCurrent,
+        trace,
         onAssistStart: (described, requestId, fallback) => {
           if (!isCurrent()) return;
           touchPanelJob({
@@ -6074,7 +6166,7 @@
       }
     } catch {
       if (isCurrent()) {
-        openPanelReview(emptyJobFields(), "读取页面信息失败，请手动填写公司和岗位。");
+        openPanelReview(emptyJobFields(), "读取页面信息失败，请手动填写公司和岗位。", null, { company: "none", title: "none" });
       } else if (panelJob.token === token && location.href !== pageUrl) {
         dropStalePanelJob();
       }
@@ -6093,12 +6185,15 @@
       // A new token: whatever the AI says later belongs to a recognition nobody is waiting for.
       const fallback = panelJob.fallback || emptyJobFields();
       touchPanelJob({ token: panelJob.token + 1 });
+      if (jobTrace?.aiCalled) jobTrace.aiCode = "cancelled";
       let note = "已取消识别。请手动补全后再保存。";
       try { note = (await loadDesktopModules()).copy.describeManualSave("cancelled"); } catch {}
       openPanelReview(fallback, note);
       return { ok: true, jobSave: panelJobSnapshot() };
     }
-    // Cancelling the draft itself: nothing was written, and nothing will be.
+    // Cancelling the draft itself: nothing was written, and nothing will be. Dismissing a
+    // finished result is not a cancel.
+    if (jobTrace && ["extracting", "assist", "review", "choice"].includes(panelJob.phase)) jobTrace.end = "cancelled";
     panelJob = idlePanelJob(panelJob);
     return { ok: true, jobSave: panelJobSnapshot() };
   }
@@ -6114,6 +6209,7 @@
     if (!again && panelJob.phase !== "review") return { ok: false, error: "请先核对岗位信息。", jobSave: panelJobSnapshot() };
 
     const fields = again ? panelJob.confirmed : reviewedJobFields(panelJob.fields, message);
+    traceJobFields(jobTrace, fields);
     if (!again) {
       const missing = [!fields.company && "公司名称", !fields.title && "岗位名称"].filter(Boolean);
       if (missing.length) {
@@ -6149,10 +6245,14 @@
     }
     // Whatever goes wrong from here on, the phase must leave "saving": the desktop may
     // already hold the job, so the panel says it could not tell rather than stay locked.
+    // [岗位] (#301) keeps how this write ended: needs_choice is still open, a refused write "failed".
+    const trace = jobTrace;
+    const end = value => { if (trace) trace.end = value; };
     try {
       if (failed) throw new Error("save-failed");
       if (result?.status === "unknown") {
         touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+        end("unknown");
       } else {
         const { copy } = await loadDesktopModules();
         if (result?.status === "needs_choice") {
@@ -6160,16 +6260,22 @@
         // "确认已投递" shows, so the two lists never read differently for one application.
         const candidates = (result.exact || []).map(candidate => ({ ...candidate, label: copy.describeApplicationChoice(candidate) }));
         touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates, result: null });
+        end("open");
         } else if (saveResultClosesForm(result) || result?.status === "not_queued") {
           // Written, queued, or a clear "no desktop / not paired" answer the user has to act on.
           touchPanelJob({ phase: "result", result: describeCommit(copy, result) });
+          end(jobWriteEnd(result?.status));
         } else {
           // Not written and not queued: keep the reviewed form so the user can try again.
           touchPanelJob({ phase: "review", error: describeCommit(copy, result).text, result: null });
+          end("failed");
         }
       }
     } catch {
-      if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+      if (panelJob.token === token) {
+        touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+        end("unknown");
+      }
     }
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
@@ -6222,9 +6328,11 @@
     });
     const token = panelJob.token;
     const isCurrent = () => panelJob.token === token && panelJob.pageUrl === pageUrl && location.href === pageUrl;
+    if (!jobTrace) jobTrace = newJobTrace();
     try {
       const outcome = await runJobAssist(fragments, fallback, {
         isCurrent,
+        trace: jobTrace,
         onAssistStart: (described, requestId, fb) => {
           if (!isCurrent()) return;
           touchPanelJob({ requestId, fallback: fb, assist: { text: described.text, lines: [...(described.fragments || [])] } });
@@ -6241,16 +6349,17 @@
         return { ok: true, jobSave: panelJobSnapshot() };
       }
       if (outcome.action === "commit") {
-        openPanelReview(outcome.fields, copy.describeReviewSave());
+        openPanelReview(outcome.fields, copy.describeReviewSave(), null, jobSources(outcome.fields, extraction, outcome.aiFields, fragments));
       } else {
         // Not sure, failed or timed out: keep what the user has, only filling what is blank.
         const suggested = outcome.fields || {};
-        openPanelReview({
+        const kept = {
           company: fallback.company || suggested.company || "",
           title: fallback.title || suggested.title || "",
           location: fallback.location || suggested.location || "",
           sourceUrl: fallback.sourceUrl, dedupeUrl: fallback.dedupeUrl
-        }, outcome.note, outcome.openView || null);
+        };
+        openPanelReview(kept, outcome.note, outcome.openView || null, jobSources(kept, extraction, outcome.aiFields, fragments));
       }
     } catch {
       if (isCurrent()) openPanelReview(fallback, "重新识别没有完成，已保留你现在的内容，可以手动修改后保存。");
@@ -6269,6 +6378,7 @@
     const action = String(message.action || "");
     if (action === "later") {
       touchPanelJob({ phase: "result", candidates: [], result: { tone: "pending", text: PANEL_JOB_LATER } });
+      if (jobTrace) jobTrace.end = "queued";
       return { ok: true, jobSave: panelJobSnapshot() };
     }
     let applicationId = null;
@@ -6279,9 +6389,11 @@
       return { ok: false, error: "当前操作不可用。", jobSave: panelJobSnapshot() };
     }
     const token = panelJob.token;
+    const trace = jobTrace;
     saveInFlight = true;
     touchPanelJob({ phase: "saving" });
     let bound;
+    let end = "unknown";
     try {
       const result = await waitForPanelJobWrite(bindSavedJob(panelJob.intentId, applicationId));
       if (panelJob.token !== token) {
@@ -6291,12 +6403,16 @@
       bound = result?.status === "unknown"
         ? { ...PANEL_JOB_UNKNOWN }
         : (await loadDesktopModules()).copy.describeBindResult(result);
+      end = jobWriteEnd(result?.status);
     } catch {
       bound = { ...PANEL_JOB_UNKNOWN };
     } finally {
       saveInFlight = false;
     }
-    if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], result: bound });
+    if (panelJob.token === token) {
+      touchPanelJob({ phase: "result", candidates: [], result: bound });
+      if (trace) trace.end = end;
+    }
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
   }
@@ -6411,9 +6527,11 @@
     const pageUrl = location.href;
     touchPanelSubmit({ confirmId: newRequestId(), phase: "extracting", pageUrl });
     const isCurrent = () => panelSubmit.token === token && panelSubmit.pageUrl === pageUrl && location.href === pageUrl;
+    const trace = submitJobTrace = newJobTrace();
     try {
       const draft = await draftJobFields({
         isCurrent,
+        trace,
         onAssistStart: (described, requestId, fallback) => {
           if (!isCurrent()) return;
           touchPanelSubmit({
@@ -6611,6 +6729,7 @@
       // A new token: whatever the AI says later belongs to a recognition nobody is waiting for.
       const fallback = panelSubmit.fallback || emptyJobFields();
       touchPanelSubmit({ token: panelSubmit.token + 1 });
+      if (submitJobTrace?.aiCalled) submitJobTrace.aiCode = "cancelled";
       openSubmitReview(fallback, "已取消识别。请手动补全后再查找。");
       return submitOutcome({ ok: true });
     }
@@ -6654,6 +6773,8 @@
     }
     panelJob = idlePanelJob(panelJob);
     touchPanelJob({ draftId: newRequestId(), pageUrl });
+    // [岗位]（#301）接着「确认已投递」读页面时的记录：来源和 AI 识别都发生在那一步。
+    jobTrace = { ...(submitJobTrace || newJobTrace()), end: "open" };
     openPanelReview(reviewed, note);
     return { ok: true, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
   }

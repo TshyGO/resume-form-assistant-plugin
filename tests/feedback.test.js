@@ -9,7 +9,7 @@ async function fixture(options = {}) {
   let time = 1800000000000;
   const service = createFeedback({
     storage: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) },
-    now: () => time, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 20,
+    now: () => time, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 20, install: options.install,
     fetchImpl: options.fetchImpl || (async (url, request) => { calls.push({ url, ...request, payload: JSON.parse(request.body) }); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); })
   });
   return { service, data, calls, key: STORAGE_KEY, advance: ms => { time += ms; } };
@@ -318,4 +318,109 @@ test('an install or update that leaves the choice open shows it right away; a ma
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(opened, opens ? ['chrome-extension://test/popup.html'] : [], `${reason} ${JSON.stringify(stored)}`);
   }
+});
+
+// #301：告知版本升到 2（自动报告多了安装方式、填写入口和网页焦点、AI 档位、下拉弹层计数，AI 请求失败也上报）。
+test('a grant given under the version-1 notice is asked again: nothing is sent until the user agrees; an opt-out stays', async () => {
+  const { CONSENT_VERSION, installFeedback } = await import('../link/feedback.mjs');
+  assert.equal(CONSENT_VERSION, 2);
+  const v1 = { consent: true, consentVersion: 1, anonymousId: 'v1-id', recent: {}, hourly: [], fillHourly: [] };
+  const f = await fixture({ data: { feedbackStateV1: structuredClone(v1) } });
+  assert.deepEqual(await f.service.status(), { consent: false, decided: false });
+  await f.service.automatic(crash, 'c.liepin.com');
+  await f.service.automatic({ kind: 'fill_partial', diagnostics: '[错误]\nerror_category: timeout' }, 'c.liepin.com');
+  assert.equal(f.calls.length, 0, 'nothing is sent on the old grant');
+  assert.ok(!JSON.stringify(f.data).includes('v1-id'), 'the old installation id is gone');
+  assert.deepEqual(await (await fixture({ data: f.data })).service.status(), { consent: false, decided: false }, 'still undecided after a restart');
+  // An update that leaves the version-1 grant behind opens the choice right away.
+  const opened = []; let onInstalled;
+  const stored = { feedbackStateV1: structuredClone(v1) };
+  installFeedback({
+    runtime: { id: 'test', getURL: p => `chrome-extension://test/${p}`, getManifest: () => ({ version: '0.4.5' }),
+      onMessage: { addListener: () => {} }, onInstalled: { addListener: fn => { onInstalled = fn; } } },
+    storage: { local: { get: async () => structuredClone(stored), set: async value => Object.assign(stored, structuredClone(value)) } },
+    tabs: { create: async ({ url }) => { opened.push(url); } }
+  });
+  onInstalled({ reason: 'update' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(opened, ['chrome-extension://test/popup.html']);
+  // Agreeing to the current notice starts sending again, under a new id.
+  assert.deepEqual(await f.service.setConsent(true), { consent: true, decided: true });
+  assert.equal(f.data[f.key].consentVersion, 2);
+  await f.service.automatic(crash, 'c.liepin.com');
+  assert.equal(f.calls.length, 1);
+  assert.notEqual(f.calls[0].payload.anonymous_id, 'v1-id');
+  // Opting out under version 1 stays an opt-out.
+  for (const optOut of [{ consent: false, consentVersion: 0, anonymousId: null }, { consent: false, consentVersion: 1 }, { consent: false }]) {
+    const out = await fixture({ data: { feedbackStateV1: optOut } });
+    assert.deepEqual(await out.service.status(), { consent: false, decided: true }, JSON.stringify(optOut));
+    await out.service.automatic(crash, 'c.liepin.com');
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test('[来源] carries the install type for automatic and manual reports; an unknown, failed or slow lookup leaves it out', async () => {
+  for (const type of ['normal', 'development', 'sideload', 'admin', 'other']) {
+    const f = await fixture({ install: async () => type });
+    await f.service.setConsent(true);
+    await f.service.automatic(crash, 'c.liepin.com');
+    assert.match(f.calls[0].payload.user_description, new RegExp(`\\[来源\\]\\napp_version: 0\\.4\\.1\\nos: macOS / Edge 140\\ninstall: ${type}\\nhost: c\\.liepin\\.com`));
+    await f.service.ready();
+    assert.match(f.service.preview({ description: '按钮不可用' }).user_description, new RegExp(`^install: ${type}$`, 'm'));
+  }
+  const never = new Promise(() => {});
+  for (const install of [async () => 'store', async () => '张三 https://evil.example', () => undefined,
+    () => { throw new Error('no management'); }, async () => { throw new Error('getSelf failed'); }, () => never]) {
+    const f = await fixture({ install });
+    await f.service.setConsent(true);
+    await f.service.automatic(crash, 'c.liepin.com');
+    assert.equal(f.calls.length, 1, 'the report still goes out');
+    const text = f.calls[0].payload.user_description;
+    assert.doesNotMatch(text, /install:|张三|evil|store/);
+    assert.match(text, /^os: macOS \/ Edge 140\nhost: c\.liepin\.com$/m);
+  }
+  // A page cannot supply it.
+  const f = await fixture({ install: async () => 'normal' });
+  await f.service.setConsent(true);
+  await f.service.automatic({ kind: 'fill_failed', diagnostics: '[来源]\ninstall: development\n[错误]\nerror_category: unknown' }, 'c.liepin.com');
+  assert.equal(f.calls[0].payload.user_description.match(/^install: .*$/gm).join(), 'install: normal');
+});
+
+test('the router reads the install type from chrome.management.getSelf, and goes on without it', async () => {
+  const { installFeedback } = await import('../link/feedback.mjs');
+  const originalFetch = global.fetch;
+  try {
+    for (const [management, line] of [[{ getSelf: async () => ({ id: 'x', installType: 'development', name: '网申快填' }) }, /^install: development$/m],
+      [undefined, null], [{ getSelf: async () => { throw new Error('denied'); } }, null]]) {
+      const calls = []; const data = {}; let listener;
+      global.fetch = async (_url, req) => { calls.push(JSON.parse(req.body)); return new Response('{"ok":true,"id":"r"}'); };
+      const origin = 'chrome-extension://test/';
+      installFeedback({
+        runtime: { id: 'test', getURL: p => origin + p, getManifest: () => ({ version: '0.4.5' }), onMessage: { addListener: fn => { listener = fn; } } },
+        storage: { local: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) } },
+        tabs: { get: async () => ({ url: 'https://c.liepin.com/resume' }) },
+        ...(management ? { management } : {})
+      });
+      const page = { id: 'test', url: `${origin}sidepanel.html`, documentId: 'doc' };
+      const message = (body, sender = page) => new Promise(resolve => listener(body, sender, resolve));
+      await message({ type: 'FEEDBACK_CONSENT', enabled: true });
+      await message({ type: 'FEEDBACK_AUTO', report: crash }, { id: 'test', url: 'https://c.liepin.com/resume', tab: { id: 1 } });
+      const draft = await message({ type: 'FEEDBACK_PREVIEW', description: '按钮不可用', tabId: 1 });
+      for (const text of [calls[0].user_description, draft.payload.user_description]) {
+        if (line) assert.match(text, line); else assert.doesNotMatch(text, /install:/);
+      }
+    }
+  } finally { global.fetch = originalFetch; }
+});
+
+test('automatic reports never carry the job flow [岗位]; a manual preview keeps it', async () => {
+  const job = core.jobReport({ companySource: 'structured', titleSource: 'ai', missingCompany: false, missingTitle: false, aiCalled: true, aiCode: 'ok', end: 'saved' });
+  const fill = core.fillReport({ path: '/apply', fieldCount: 0, filledCount: 0, category: 'no_fields_found', stage: 'scan' });
+  const f = await fixture(); await f.service.setConsent(true);
+  await f.service.automatic({ kind: 'fill_failed', diagnostics: `${fill}\n\n${job}` }, 'c.liepin.com');
+  const sent = f.calls[0].payload.user_description;
+  assert.match(sent, /^error_category: no_fields_found$/m);
+  assert.doesNotMatch(sent, /岗位|job_/);
+  const preview = f.service.preview({ description: '保存岗位时没读出岗位名', diagnostics: `${fill}\n\n${job}` }).user_description;
+  assert.ok(preview.endsWith(`\n\n${job}`), preview);
 });
