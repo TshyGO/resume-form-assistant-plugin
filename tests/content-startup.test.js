@@ -36,7 +36,7 @@ function crossOriginFrame(win) {
 // Injects the content scripts the way Chrome does at document_idle: each file on its own, so one
 // that throws does not stop the next.
 async function openPage({ html = FORM_PAGE, contentType = "text/html", setup, scripts = SCRIPTS, runs = 1,
-  storageGet = async () => ({}), cssFails = false } = {}) {
+  storageGet = async () => ({}), cssFails = false, cssStatus = 200 } = {}) {
   const dom = new JSDOM(html, { url: "https://jobs.example.test/apply", contentType, runScripts: "outside-only", pretendToBeVisual: true });
   const win = dom.window;
   for (let i = 0; win.document.readyState !== "complete" && i < 200; i += 1) await wait(1);
@@ -61,7 +61,8 @@ async function openPage({ html = FORM_PAGE, contentType = "text/html", setup, sc
   };
   win.fetch = async () => {
     if (cssFails) throw new win.TypeError("Failed to fetch");
-    return { text: async () => ".resume-pro { display: none; }" };
+    const ok = cssStatus >= 200 && cssStatus < 300;
+    return { ok, status: cssStatus, text: async () => (ok ? ".resume-pro { display: none; }" : "<h1>Not Found</h1>") };
   };
   // jsdom has no constructable stylesheets.
   win.CSSStyleSheet = class { replaceSync(text) { this.text = text; } };
@@ -157,6 +158,14 @@ test("#256: when content.css cannot be read the host is hidden and the page stil
   assert.deepEqual(page.reports, []);
 });
 
+test("#256: an error page answered for content.css is no stylesheet either: the host is hidden", async () => {
+  const page = await openPage({ cssStatus: 404 });
+  assertStarted(page);
+  assert.equal(page.win.document.getElementById(SIDEBAR_ID).style.display, "none");
+  assert.equal((await page.status()).ready, true);
+  assert.deepEqual(page.reports, []);
+});
+
 test("a storage read that never answers does not hold up startup", async () => {
   const page = await openPage({ storageGet: () => new Promise(() => {}) });
   assertStarted(page);
@@ -226,6 +235,7 @@ test("a failure after the controller is built never shows as connected", async (
   } });
   assert.deepEqual(page.rejections, []);
   assert.equal(page.hosts(), 1);
+  assert.equal(page.win.document.getElementById(SIDEBAR_ID).style.display, "none", "the half-built controller is hidden");
   assert.equal((await page.status()).ready, false);
   assert.equal(page.reports.length, 1);
   assert.match(page.reports[0].stack, /^content\.js:\d+:\d+/);

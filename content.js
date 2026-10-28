@@ -83,6 +83,8 @@
   // idle → running → ready or failed; unsupported on a page that cannot hold the controller.
   // The side panel counts the page as connected only once startup is ready.
   let startupState = "idle";
+  // The host this startup built, so a startup that fails after building it can hide it.
+  let startupHost = null;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
   // Archiving a finished fill from the native side panel (#178). Declared up here because the
@@ -405,6 +407,8 @@
     // init() is async: whatever fails in it ends up here, never as an unhandled rejection.
     init().then(() => { startupState = "ready"; }, (error) => {
       startupState = "failed";
+      // A half-built controller must not stay usable on a page that shows as not connected.
+      if (startupHost) startupHost.style.display = "none";
       reportStartupError(error);
     });
   }
@@ -449,14 +453,19 @@
     StorageService.getSidebarUiState().then(applyStoredSidebarUiState).catch(() => {});
     // Without content.css nothing in the shadow root is hidden or styled, so the whole host
     // is hidden instead (#256). The controller still mounts and the page stays usable.
-    const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text()).catch(() => null);
+    let cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     const sheet = new CSSStyleSheet();
-    sheet.replaceSync(cssText ?? "");
+    try {
+      sheet.replaceSync(cssText ?? "");
+    } catch {
+      cssText = null;
+    }
     injectFieldHighlightStyles();
     // Chrome and Edge 116+ own the visible UI in the native side panel.
     // Background opens the manager tab if that API is unavailable.
     state.nativeSidePanel = true;
     const host = createSidebar(sheet);
+    startupHost = host;
     if (cssText === null) host.style.display = "none";
     renderSidebar();
     bindStorageSync();
