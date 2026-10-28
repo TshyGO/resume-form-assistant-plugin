@@ -2455,10 +2455,14 @@
         // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
         probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
         pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
-        const genericRoots = fields
-          .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
-          .map(field => self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)))
-          .filter(info => info?.library === "generic").map(info => info.root);
+        // 通用下拉的根只给诊断计数用：读控件出错就不数，填写照常。
+        let genericRoots = [];
+        try {
+          genericRoots = fields
+            .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
+            .map(field => self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)))
+            .filter(info => info?.library === "generic").map(info => info.root);
+        } catch { genericRoots = []; }
         genericCustom = withFillProbe(api => api.uncountedControls?.(genericRoots), 0);
         genericLocked = withFillProbe(api => api.uncountedLocked?.(genericRoots), 0);
       };

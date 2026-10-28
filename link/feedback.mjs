@@ -113,6 +113,8 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     },
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
+      // Manual feedback goes through its own preview; nothing sent automatically is one (#301 [岗位]).
+      if (input?.kind === 'manual') return { ok: false, reason: 'suppressed' };
       const choice = choices;
       await installKnown;
       const payload = await locked(async () => {

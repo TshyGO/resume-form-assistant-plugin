@@ -59,7 +59,7 @@ test("the worker's [来源] lines and the unfilled-control tokens are the ones l
   assert.deepEqual([...new Set(tokens)].sort(), Object.keys(TOKENS).sort());
   // Every keyed token CONTROL_TOKEN accepts (role=, lib=, opened=...), read from its source, so a
   // token that only some other input produces is caught too.
-  const definition = read("feedback-core.js").match(/const CONTROL_TOKEN = new RegExp\(([\s\S]*?)\);\n/)[1];
+  const definition = read("feedback-core.js").match(/const CONTROL_TOKEN = new RegExp\(([\s\S]*?)\);\r?\n/)[1];
   const keyed = [...definition.matchAll(/(?:\(\?:([a-z|]+)\)|\b([a-z]+))=/g)].flatMap(match => (match[1] || match[2]).split("|"));
   assert.ok(keyed.includes("opened") && keyed.includes("lib"), keyed.join());
   assert.deepEqual([...new Set(keyed)].sort(), Object.keys(TOKENS).filter(key => !["tag", "type", "readonly"].includes(key)).sort());

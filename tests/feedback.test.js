@@ -104,6 +104,14 @@ test('a failed AI request and fields the page did not take keep separate daily s
   assert.equal((await f.service.automatic(report('fill_rejected'), 'hr.example.test')).reason, 'suppressed');
 });
 
+test('an automatic report is never a manual one, so it never carries the job-flow codes', async () => {
+  const f = await fixture();
+  await f.service.setConsent(true);
+  const result = await f.service.automatic({ kind: 'manual', description: '', diagnostics: '[岗位]\njob_end: saved' }, 'jobs.example.test');
+  assert.deepEqual(result, { ok: false, reason: 'suppressed' });
+  assert.equal(f.calls.length, 0);
+});
+
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {
   for (const status of [429, 500, 503]) {
     let count = 0;

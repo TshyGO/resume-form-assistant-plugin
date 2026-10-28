@@ -402,6 +402,17 @@ test("unfilled custom selects tell 'never opened' from 'opened with N options', 
   assert.equal(lineOf(block, "ai_tier"), "-", "the rules matched everything; the AI was not called");
 });
 
+test("a custom control the diagnostics cannot describe is left out of the count, and the fill goes on", async () => {
+  const stubs = genericSelects({ degree: { ok: true, observed: { controlKind: "custom-select" } } });
+  stubs.customControls.describe = () => { throw new TypeError("describe failed on this page"); };
+  const { result, report } = await fill({ ...stubs, fields: [named("degree", "学历")],
+    respond: message => ({ success: true, matches: [{ fieldId: message.formFields[0].fieldId, value: "本科" }],
+      diagnostics: diag({ ruleMatches: 1, aiFields: 0, promptBytes: 0 }) }) });
+  assert.equal(result.filledCount, 1);
+  assert.equal(result.outcome, "success");
+  assert.doesNotMatch(lineOf(report, "custom_libraries") || "", /generic/);
+});
+
 test("a fill on a page full of personal data leaves none of it in the report, the panel block or the sent payload", async () => {
   const stubs = genericSelects({
     张伟测试: { ok: false, reason: "no_option_match", observed: { controlKind: "custom-select", popupRole: "listbox", optionCount: 3,

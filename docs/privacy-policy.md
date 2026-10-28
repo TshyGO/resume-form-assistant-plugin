@@ -141,5 +141,5 @@ desktop 来源仅在主动打开或聚焦可见桌面主窗口、或在该窗口
 ## 联系方式
 
 有问题或要求删除什么，可以在
-[GitHub Issues](https://github.com/TshyGO/resume-form-assistant-plugin/issues) 上提。
+[GitHub Issues](https://github.com/ptjworks/resume-form-assistant-plugin/issues) 上提。
 本机档案由你自行删除；如需处理已发送的反馈，请提供反馈编号，不要补发简历或敏感信息。
