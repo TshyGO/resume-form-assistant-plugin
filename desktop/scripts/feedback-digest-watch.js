@@ -2,7 +2,7 @@
 //
 // 【用户反馈日报】由仓库外的 relay / Muse 任务每天建成带「日报」标签的 issue。
 // 仓库 2026-10-25 从 TshyGO 迁到 ptjworks 后这个任务悄悄停了（最后一份是 #342），
-// 四天没人发现。这里读最新一份日报：没有日报，或最新一份超过 36 小时，就打开或更新
+// 四天没人发现。这里读最新一份日报：没有日报，或最新一份超过 30 小时，就打开或更新
 // 一个带固定标签的 issue；新日报出现后留言并关闭它。
 //
 //   GITHUB_REPOSITORY=ptjworks/resume-form-assistant-plugin node desktop/scripts/feedback-digest-watch.js   # 只打印判断
@@ -26,8 +26,9 @@ export const ISSUE_LABEL = "日报提醒";
 // 只比指纹，维护者在正文里补的说明不会被下次运行覆盖。
 export const ISSUE_MARKER = "<!-- feedback-digest-watch";
 const FINGERPRINT = /<!-- feedback-digest-watch v=([0-9a-f]{16}) -->/;
-// 日报平常在 UTC 23:57 左右生成。晚一天还算正常，超过 36 小时才提醒。
-export const STALE_HOURS = 36;
+// 日报平常在 UTC 23:57 左右生成，看门狗每天 UTC 02:37 和 14:37 各查一次。晚几个小时不算停；
+// 漏了一份，下一次 14:37 的检查（日报约 38.7 小时没更新）就会提醒。
+export const STALE_HOURS = 30;
 const HOUR_MS = 60 * 60 * 1000;
 const LABEL_COLOR = "D93F0B";
 const LABEL_DESCRIPTION = "用户反馈日报太久没有生成（自动维护）";
@@ -73,7 +74,7 @@ export function describeDigest(digest) {
 
 /**
  * 根据最新一份日报（没有就是 null）和当前时间决定提醒内容。不需要提醒时返回 null。
- * 正好 36 小时还不提醒，超过才提醒。正文只放日报编号、标题和创建时间，不放当前时间，
+ * 正好 30 小时还不提醒，超过才提醒。正文只放日报编号、标题和创建时间，不放当前时间，
  * 日报一直没变就不会每天改 issue。
  */
 export function reminderIssue(digest, now, { repository = "", serverUrl = "https://github.com" } = {}) {

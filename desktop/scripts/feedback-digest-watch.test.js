@@ -49,17 +49,17 @@ function fakeGitHub(routes) {
   return { calls, fetchImpl };
 }
 
-test("36 小时内有日报不提醒，正好 36 小时也不提醒，超过才提醒", () => {
-  assert.equal(STALE_HOURS, 36);
+test("30 小时内有日报不提醒，正好 30 小时也不提醒，超过才提醒", () => {
+  assert.equal(STALE_HOURS, 30);
   assert.equal(reminderIssue(lastDigest, at(2.7), { repository }), null);
   assert.equal(reminderIssue(lastDigest, at(26.7), { repository }), null);
-  assert.equal(reminderIssue(lastDigest, at(36), { repository }), null);
+  assert.equal(reminderIssue(lastDigest, at(30), { repository }), null);
   // 时钟偏差导致日报看起来来自未来，也不算停了。
   assert.equal(reminderIssue(lastDigest, at(-1), { repository }), null);
 
-  const stale = reminderIssue(lastDigest, new Date(createdMs + 36 * HOUR_MS + 1), { repository });
+  const stale = reminderIssue(lastDigest, new Date(createdMs + 30 * HOUR_MS + 1), { repository });
   assert.ok(stale);
-  assert.equal(stale.title, "用户反馈日报超过 36 小时没有生成");
+  assert.equal(stale.title, "用户反馈日报超过 30 小时没有生成");
   assert.ok(stale.body.includes("#342「【用户反馈日报】2026-10-24」"));
   assert.ok(stale.body.includes("2026-10-24 23:57 UTC（台北时间 2026-10-25 07:57）"));
   assert.match(stale.body, /relay \/ Muse/);
@@ -73,7 +73,7 @@ test("36 小时内有日报不提醒，正好 36 小时也不提醒，超过才�
 test("一份日报都没有时也提醒", () => {
   const issue = reminderIssue(null, at(0), { repository });
   assert.ok(issue);
-  assert.equal(issue.title, "用户反馈日报超过 36 小时没有生成");
+  assert.equal(issue.title, "用户反馈日报超过 30 小时没有生成");
   assert.ok(issue.body.includes(`带「${DIGEST_LABEL}」标签的 issue 里没有标题以【用户反馈日报】开头的日报`));
   assert.doesNotMatch(issue.body, /最近一份日报是/);
   // 不知道仓库时也能生成，只是不带链接。
@@ -257,7 +257,7 @@ test("新日报出现后留言并关闭提醒；不碰别的同标签 issue 和 
     "GET /issues": [
       { number: 9, title: "手动打了同一标签", body: "人写的说明" },
       { number: 10, title: "PR", body: ISSUE_MARKER, pull_request: {} },
-      { number: 5, title: "用户反馈日报超过 36 小时没有生成", body: `说明\n${ISSUE_MARKER}` },
+      { number: 5, title: "用户反馈日报超过 30 小时没有生成", body: `说明\n${ISSUE_MARKER}` },
     ],
     "POST /issues/5/comments": { id: 2 },
     "PATCH /issues/5": { number: 5, state: "closed" },
@@ -305,7 +305,7 @@ test("main 默认只读日报并打印判断；--sync 才改 issue", async () =>
   assert.equal(reads.calls.length, 1);
   assert.equal(reads.calls[0].method, "GET");
   assert.match(lines.join("\n"), /最新日报：#342/);
-  assert.match(lines.join("\n"), /需要处理：用户反馈日报超过 36 小时没有生成/);
+  assert.match(lines.join("\n"), /需要处理：用户反馈日报超过 30 小时没有生成/);
 
   lines.length = 0;
   await main([], { GITHUB_REPOSITORY: repository }, { ...io, now: () => at(3) });
@@ -337,7 +337,7 @@ test("main 默认只读日报并打印判断；--sync 才改 issue", async () =>
 test("看门狗工作流每天只用 github.token，不拿别的凭据", () => {
   const workflow = readFileSync(join(repo, ".github", "workflows", "feedback-digest-watch.yml"), "utf8")
     .split("\r\n").join("\n");
-  assert.match(workflow, /schedule:\n\s+- cron: "\d+ \d+ \* \* \*"/);
+  assert.match(workflow, /schedule:\n\s+- cron: "\d+ \d+,\d+ \* \* \*"/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /runs-on: ubuntu-latest/);
   // 顶层只读，issues: write 只给 job。
