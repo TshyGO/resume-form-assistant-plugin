@@ -177,7 +177,12 @@ test('a timeout says which tier, which host and how long it waited', async () =>
   clock = 0;
   const daily = worker(() => { clock += 120_000; return { ok: false, reason: 'timeout', host: 'api.example.com' }; }, { now });
   const plain = await daily.run({ ...BASE, formFields: [BASE.formFields[1]] });
-  assert.equal(plain.warning, 'AI 服务商（api.example.com）等了 120 秒没有返回，请稍后重试。');
+  // #299：日常档只说等了多久、可以换模型，秒数是插件自己量的。
+  assert.equal(plain.warning, '日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。');
+  clock = 0;
+  const named = worker(() => { clock += 95_600; return { ok: false, reason: 'timeout', tier: 'default', host: 'api.example.com' }; }, { now });
+  const early = await named.run({ ...BASE, formFields: [BASE.formFields[1]], tier: 'default' });
+  assert.equal(early.warning, '日常模型等了 96 秒没有返回，可在桌面设置换模型后重试。');
 });
 
 test('a later batch failure keeps matches already returned by the desktop', async () => {

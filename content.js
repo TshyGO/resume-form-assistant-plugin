@@ -2494,7 +2494,7 @@
         button.textContent = `AI 匹配中... ${seconds}s`;
         if (seconds >= 90 && waitHint && !cancelRequested) {
           waitHint.hidden = false;
-          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。插件不会因等待较久自动取消；你可以继续等待或手动取消。";
+          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。你可以继续等待或手动取消。";
         }
       };
       updateProgress();

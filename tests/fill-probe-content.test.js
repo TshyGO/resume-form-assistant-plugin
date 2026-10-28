@@ -223,7 +223,7 @@ test("a view page where the one matched field refuses its value keeps the unfill
 
 // #299：扫到 22 个字段，AI 等到超时，本地匹配的两项写不上。页面上有「编辑」按钮也不是查看状态。
 test("an AI timeout with local matches that would not stick says nothing about 编辑 and does not report an edit hint", async () => {
-  const timeout = "AI 服务商等了 120 秒没有返回，请稍后重试。";
+  const timeout = "日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。";
   const calls = [];
   const feedback = { ...require("../feedback-core.js") };
   const fillFailure = feedback.fillFailure;

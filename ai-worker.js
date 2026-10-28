@@ -173,7 +173,7 @@ function aiFailureMessage(result) {
 }
 
 // #283：说清是哪一档、哪家服务商、等了多久。强模型多半是带深度思考的模型在大页面上生成太久，
-// 也可能是服务商或网络卡住了；插件分不出是哪一种，两种办法都说。
+// 也可能是服务商或网络卡住了；插件分不出是哪一种，两种办法都说。日常档（#299）只说等了多久、可以换模型。
 function timeoutMessage(result) {
   const seconds = Number.isFinite(result?.elapsedMs) ? Math.round(result.elapsedMs / 1000) : 0;
   const waited = seconds > 0 ? `等了 ${seconds} 秒` : "长时间";
@@ -182,7 +182,7 @@ function timeoutMessage(result) {
     const task = result.purpose === "analyze" ? "页面分析" : "字段匹配";
     return `强模型${host}${waited}没有完成${task}。可能是服务商或网络卡住了，也可能是带深度思考的模型在字段多的页面上生成太久：可以稍后重试，或在桌面设置里把强模型换成不带深度思考的模型。`;
   }
-  return `AI 服务商${host}${waited}没有返回，请稍后重试。`;
+  return `日常模型${waited}没有返回，可在桌面设置换模型后重试。`;
 }
 
 // #223: with the strong tier asked for, these two failures are about the strong model, not
