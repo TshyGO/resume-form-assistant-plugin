@@ -622,6 +622,17 @@ test("Element autocomplete: a shorter suggestion is not picked; the full value i
   assert.equal(h.popper.hidden, true);
 });
 
+test("Element autocomplete: a value the page refuses is not followed by a click on the page", async () => {
+  const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"] });
+  h.input.addEventListener("change", () => { h.input.value = ""; });
+  let bodyClicks = 0;
+  const body = h.input.ownerDocument.body;
+  body.addEventListener("click", (event) => { if (event.target === body) bodyClicks += 1; });
+  const result = await h.api.operate(h.target, "广州市天河区");
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(bodyClicks, 0, "a failed fill does not click the page");
+});
+
 test("Element autocomplete: suggestions that pop up after the typed value are closed too", async () => {
   // #299 复刻 S08b/S12：聚焦时没有建议，改为打字；打完字建议才弹出来，原来一直开着挡住后面的字段。
   const h = elAutocomplete({ forEmpty: [], suggestions: ["广州市", "广元市"] });

@@ -620,3 +620,27 @@ test("北森表单项：错误提示在内容区外面也算这个字段的，�
   body.appendChild(pair);
   assert.equal(await setElementValue(first, "测试用户"), true);
 });
+
+test("内容区外面不是表单项时，旁边自制控件的「必填」不算这个字段的", async () => {
+  const { setElementValue, HTMLElement, HTMLInputElement, body } = createHarness();
+  const row = new HTMLElement();
+  const control = new HTMLElement();
+  control.className = "form-item__control";
+  const input = new HTMLInputElement();
+  control.appendChild(input);
+  const radios = new HTMLElement();
+  radios.className = "custom-radio-group";
+  radios.textContent = "男 女";
+  const error = new HTMLElement();
+  error.className = "form-item__error";
+  error.textContent = "请选择性别";
+  row.appendChild(control);
+  row.appendChild(radios);
+  row.appendChild(error);
+  const form = new HTMLElement();
+  form.appendChild(row);
+  form.appendChild(new HTMLInputElement());
+  body.appendChild(form);
+
+  assert.equal(await setElementValue(input, "测试用户"), true);
+});

@@ -219,10 +219,12 @@
     // 在页面空白处点一下收起它（只派发事件），再按文本框核对一次。
     async function freeText(ctx, value, shown) {
       const typed = await text(ctx, value, shown);
+      // Only a filled box gets its suggestions closed; after a failure the page is left alone.
+      if (!typed.ok) return typed;
       const body = ctx.el.ownerDocument?.body;
       if (!body || stop(ctx) || click(body, ctx)) return typed;
       const saved = checks.get(ctx.el);
-      if (!typed.ok || !saved) return typed;
+      if (!saved) return typed;
       const again = await verify(ctx, saved.accepted, saved.inspect);
       if (!again.ok) checks.delete(ctx.el);
       return again;

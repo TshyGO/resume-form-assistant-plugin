@@ -3967,27 +3967,37 @@
   // 错误提示可能放在内容区外面，要接着往上找到表单项本身。
   const FORM_ITEM_PART = /(?:form-item|form-group|form-field)__(?:content|control)$/i;
 
+  function formItemTokens(element) {
+    return classText(element).split(/\s+/).filter((token) => /form-item|form-group|form-field/i.test(token));
+  }
+
   function associatedContainer(element) {
     let current = element.parentElement;
     let best = current;
-    let part = null;
     while (current && current !== document.body && current !== document.documentElement) {
       if (listOtherControls(current, element).length > 0) {
         return best;
       }
       best = current;
-      const className = classText(current);
-      if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(className)) {
-        const items = className.split(/\s+/).filter((token) => /form-item|form-group|form-field/i.test(token));
+      if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(classText(current))) {
+        const items = formItemTokens(current);
         if (!items.every((token) => FORM_ITEM_PART.test(token))) {
           return current;
         }
-        part = part || current;
+        // 内容区（form-item__content 之类）外面那一层就是它的表单项，有的网站把错误提示放在那里。
+        // 只往上看这一层，而且要真是表单项、里面没有别的框，免得把相邻题目的提示算进来。
+        const parent = current.parentElement;
+        const parentItems = parent ? formItemTokens(parent) : [];
+        if (parentItems.length && !parentItems.every((token) => FORM_ITEM_PART.test(token))
+          && listOtherControls(parent, element).length === 0) {
+          return parent;
+        }
+        return current;
       }
       current = current.parentElement;
     }
     // 没有其他控件作边界时，不要把整张表单的错误算到唯一输入框上。
-    return part || element.parentElement;
+    return element.parentElement;
   }
 
   function describedErrorVisible(element) {
