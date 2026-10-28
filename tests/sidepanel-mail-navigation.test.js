@@ -211,13 +211,14 @@ test('a same-address page-complete notification does not discard an in-flight lo
   assert.match(p.get('mail-application-status').textContent, /找到 1 条申请/);
   assert.match(p.get('mail-application').textContent, /前端工程师/);
 });
-test('association is always visible, jobs precede the secondary skip choice, and the footer states the save action', async t => {
+test('association is always visible, jobs precede skip, and the same card states the save action', async t => {
   const p = await panel(); t.after(() => p.close());
   p.get('tab-mail').click();
   assert.equal(p.get('mail-association').tagName, 'SECTION');
   assert.equal(p.get('mail-association').querySelector('summary'), null);
   assert.equal(p.get('mail-save-label').textContent, '暂不关联并保存');
-  assert.equal(p.get('mail-save-button').closest('.view-scroll'), null);
+  assert.equal(p.get('mail-save-button').closest('.card'), p.get('mail-association').closest('.card'));
+  assert.ok(p.get('mail-save-button').closest('.view-scroll'));
   p.get('mail-company').value = '示例公司'; p.get('mail-find-application').click(); await p.flush();
   assert.deepEqual([...p.get('mail-application').querySelectorAll('input')].map(input => input.value), ['app', '']);
   p.get('mail-application').querySelector('input[value="app"]').click();

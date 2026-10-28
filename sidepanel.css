@@ -528,20 +528,17 @@ body[data-active-view="mail"] #job-assist, body[data-active-view="mail"] #legacy
 .mail-search-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .mail-search-status[data-tone="error"] { color: var(--warn-ink); }
 .mail-application-options { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-height: 240px; margin: 10px 0 0; padding: 0; overflow: auto; border: 0; }
-.mail-association .mail-application-option { display: flex; align-items: flex-start; gap: 9px; min-height: 48px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; }
-.mail-application-option input { flex: none; width: 15px; height: 15px; margin: 3px 0 0; accent-color: var(--accent); }
+.mail-association .mail-application-option { display: flex; align-items: center; gap: 10px; min-height: 60px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.mail-application-option input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
 .mail-application-option__text { min-width: 0; overflow-wrap: anywhere; }
-.mail-application-option strong { display: block; font-size: 12px; font-weight: 600; }
+.mail-application-option strong { display: block; font-size: 13px; font-weight: 600; }
 .mail-application-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
 .mail-association .mail-application-option.is-selected { border-color: var(--accent-line); background: var(--accent-pale); }
 .mail-application-options[disabled] .mail-application-option { color: var(--muted); cursor: not-allowed; }
 .mail-destination { overflow-wrap: anywhere; }
-.mail-workspace { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .mail-step-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mail-step-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 650; color: var(--ink); }
 .mail-step-number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 50%; background: var(--accent-pale); color: var(--accent-strong); font-size: 12px; }
-.mail-action-footer { flex: none; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--panel); }
-.mail-action-footer .mail-save-button { margin-top: 10px; }
-.mail-action-footer .mail-read-note { margin-top: 7px; }
-.mail-association .mail-application-option.is-skip { min-height: 32px; padding: 6px 1px; border-color: transparent; background: transparent; color: var(--muted); }
-.mail-association .mail-application-option.is-skip strong { font-weight: 400; }
+.mail-save-step { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.mail-save-step .mail-save-button { margin-top: 10px; }
+.mail-save-step .mail-read-note { margin-top: 7px; }

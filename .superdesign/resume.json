@@ -34,19 +34,19 @@
         "sidepanel-mail.js"
       ],
       "fingerprints": {
-        ".superdesign/sidepanel-design-system.md": "9b0e202f9a2653051ab5e66386887a67555423de61686651436fd211a8565c70",
-        "sidepanel.html": "696fa6e0d996666ae3f21b0b785570b51e7dcd4621164f2b5b3cd4968a754607",
-        "sidepanel.css": "439d884eaf8f3e5f941439123ee4690a97ecc344422687bb6b6ca122bf1d536c",
-        "sidepanel-mail.js": "a3f0b7947aae70974be36e7e6e0acb9ec54a0bae382937dc87057b2800d62ab2"
+        ".superdesign/sidepanel-design-system.md": "0f0f2d9aba9f25cfe75b2104bea8fa89148a1aa60954e256ce2eb8fc6524222a",
+        "sidepanel.html": "7097b0a18acd218c48608d812a6691932ea49fb5c5e0a0413efea3824513e81f",
+        "sidepanel.css": "11ae86c168ce12abc49bd8d2aa1e7210cf83f2067c39c4d4a1ce7c091f35033a",
+        "sidepanel-mail.js": "bb881e05c918cfe9cd52c6c995b4bfd96f92747a83bbeed430a3639aaf4d4f4b"
       },
       "drafts": {
         "278c23c9-b6f6-4204-8d9c-8fe166bf15da": {
           "title": "填写优先 · 独立邮件栏目",
-          "currentVersion": 4,
-          "visualDirection": "Fill-first tabs; always-open step 1 association with jobs before skip, pinned step 2 save with explicit association label"
+          "currentVersion": 5,
+          "visualDirection": "Fill-first tabs; two steps within one continuous white card; equally aligned two-line job and unassociated radio rows"
         }
       },
-      "updatedAt": "2026-10-28T12:50:01.132592+00:00"
+      "updatedAt": "2026-10-28T13:05:46.348566+00:00"
     },
     "notification-recycle": {
       "targetKind": "new-ui",

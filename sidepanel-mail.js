@@ -62,13 +62,13 @@
     const legend = document.createElement('legend'); legend.className = 'sr-only'; legend.textContent = '选择关联申请';
     application.replaceChildren(legend);
     for (const item of [...candidates, null]) {
-      const row = document.createElement('label'); row.className = 'mail-application-option' + (item ? '' : ' is-skip');
+      const row = document.createElement('label'); row.className = 'mail-application-option';
       const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'mail-associated-application';
       radio.value = item?.applicationId || '';
       const text = document.createElement('span'); text.className = 'mail-application-option__text';
       const title = document.createElement('strong'); title.textContent = item?.company || '暂不关联';
       const detail = document.createElement('small'); detail.textContent = item?.title || '保存到桌面「招聘通知」';
-      text.append(title); if (item) text.append(detail); row.append(radio, text); application.append(row);
+      text.append(title, detail); row.append(radio, text); application.append(row);
     }
     showSelection();
   }
