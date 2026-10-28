@@ -13,7 +13,7 @@ mod eml;
 mod mail_attachments;
 mod mail_body;
 pub use mail_attachments::{
-    list_mail_attachments, mail_content, read_mail_attachment, MailAttachment, MailBodyBlock, MailContent,
+    can_open_mail_attachment, list_mail_attachments, mail_content, read_mail_attachment, MailAttachment, MailBodyBlock, MailContent,
 };
 mod names;
 mod sniff;

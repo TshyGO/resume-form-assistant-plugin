@@ -15,6 +15,25 @@ pub struct MailAttachment {
     pub can_open: bool,
 }
 
+/// Both detected bytes and the final filename must describe an allowed document.
+/// A PDF named .html must never be dispatched to a browser's HTML handler.
+pub fn can_open_mail_attachment(name: &str, bytes: &[u8]) -> bool {
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let mime = infer::get(bytes).map(|kind| kind.mime_type()).unwrap_or("");
+    match extension.as_str() {
+        "pdf" => bytes.starts_with(b"%PDF-"),
+        "png" => mime == "image/png",
+        "jpg" | "jpeg" => mime == "image/jpeg",
+        "gif" => mime == "image/gif",
+        "webp" => mime == "image/webp",
+        "xlsx" => mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => false,
+    }
+}
+
 fn exact_contents<'a>(
     part: &'a mail_parser::MessagePart<'_>,
     raw: &'a [u8],
@@ -77,12 +96,8 @@ fn describe(index: u32, part: &mail_parser::MessagePart<'_>, raw: &[u8]) -> Opti
             name.push_str(ext);
         }
     }
-    let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    let can_open = ![
-        "exe", "com", "bat", "cmd", "ps1", "sh", "command", "app", "lnk", "url", "webloc", "scpt",
-        "jar", "msi", "dmg", "pkg", "js", "vbs", "hta", "desktop",
-    ]
-    .contains(&extension.as_str());
+    let can_open =
+        !part.is_encoding_problem && content.is_some() && can_open_mail_attachment(&name, bytes);
     Some(MailAttachment {
         index,
         name,
@@ -227,6 +242,30 @@ mod tests {
         let bytes = mail(&pdf("invoice.pdf.exe"));
         let item = &list_mail_attachments(&bytes).unwrap()[0];
         assert!(!item.can_open);
+    }
+    #[test]
+    fn only_matching_known_document_types_can_use_system_open() {
+        for extension in [
+            "html", "htm", "svg", "xhtml", "mhtml", "xml", "jse", "wsf", "reg", "scr", "pif",
+            "msc", "inf", "exe", "docm", "xlsm", "zip", "docx",
+        ] {
+            let raw = mail(&pdf(&format!("invoice.{extension}")));
+            assert!(
+                !list_mail_attachments(&raw).unwrap()[0].can_open,
+                "{extension}"
+            );
+        }
+        assert!(can_open_mail_attachment("notice.PDF", b"%PDF-1.4\n"));
+        assert!(can_open_mail_attachment("photo.png", b"\x89PNG\r\n\x1a\n"));
+        assert!(!can_open_mail_attachment("photo.jpg", b"\x89PNG\r\n\x1a\n"));
+        assert!(!can_open_mail_attachment(
+            "fake.pdf",
+            b"<html><script>bad()</script></html>"
+        ));
+        assert!(!can_open_mail_attachment(
+            "fake.xlsx",
+            b"PK\x03\x04not an XLSX"
+        ));
     }
     #[test]
     fn missing_part_index_never_falls_back_to_another_attachment() {

@@ -59,6 +59,28 @@ test('changing the current message during the new export download rejects the re
   });
   assert.equal(result.status, 'changed');
 });
+for (const phase of ['export', 'download']) {
+  for (const change of ['route', 'reading-nodes', 'mail-id']) {
+    test(`QQ modern rejects identical rendered mail after ${change} changes during ${phase}`, async t => {
+      const f = fixture(); t.after(() => f.dom.window.close());
+      const switchMail = () => {
+        if (change === 'route') f.w.history.replaceState(null, '', '#/list/2');
+        if (change === 'reading-nodes') {
+          const body = f.doc.querySelector('.mail-detail-content'); body.replaceWith(body.cloneNode(true));
+        }
+        if (change === 'mail-id') f.doc.querySelector('.mail-list-page-reader-body').setAttribute('data-mailid', 'different');
+      };
+      if (phase === 'export') f.doc.querySelector('.more-btn').addEventListener('click', switchMail);
+      let fetches = 0;
+      const result = await webmail.capture(f.doc, async () => {
+        fetches++; if (phase === 'download') switchMail(); return new Response(RAW);
+      });
+      assert.equal(result.status, 'changed');
+      assert.equal(fetches, phase === 'export' ? 0 : 1);
+      assert.equal(f.w.open, f.originalOpen);
+    });
+  }
+}
 test('QQ modern content body cannot supply a forged native export menu', async () => {
   const f = fixture();
   const fake = f.doc.createElement('div'); fake.className = 'xmail-ui-panel';

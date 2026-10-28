@@ -23,7 +23,14 @@
     const basic = unique('.mail-detail-basic');
     const body = unique('.mail-detail-content');
     if (!subject || !basic || !body) return null;
-    return JSON.stringify([subject.textContent, basic.textContent, body.textContent]);
+    const pane = body.closest('.mail-list-page-reader-body') || body;
+    const ids = [pane, subject, basic, body].map(node => [node.getAttribute('data-mailid'), node.getAttribute('mailid')]);
+    return { subject, basic, body, value: JSON.stringify([root.location.href, ids, subject.textContent, basic.textContent, body.textContent]) };
+  }
+  function unchanged(before) {
+    const after = stamp();
+    return after && after.subject === before.subject && after.basic === before.basic
+      && after.body === before.body && after.value === before.value;
   }
   function exportItem() {
     const items = [...document.querySelectorAll('.xmail-ui-panel .xmail-ui-panel-item')]
@@ -42,11 +49,11 @@
       // other messages, no global application state, no automatic menu clicks at idle.
       for (let i = 0; i < 10 && !item; i++) {
         await new Promise(resolve => root.setTimeout(resolve, 25));
-        if (stamp() !== before) return { status: 'changed' };
+        if (!unchanged(before)) return { status: 'changed' };
         item = exportItem();
       }
     }
-    if (!item || stamp() !== before) return { status: item ? 'changed' : 'unavailable' };
+    if (!item || !unchanged(before)) return { status: item ? 'changed' : 'unavailable' };
     let mailId = null;
     let ambiguous = false;
     const originalOpen = root.open;
@@ -75,7 +82,7 @@
     } finally {
       if (root.open === captureOpen) root.open = originalOpen;
     }
-    if (stamp() !== before) return { status: 'changed' };
+    if (!unchanged(before)) return { status: 'changed' };
     return mailId && !ambiguous ? { status: 'ok', mailId } : { status: 'unavailable' };
   }
   document.addEventListener(REQUEST, async event => {

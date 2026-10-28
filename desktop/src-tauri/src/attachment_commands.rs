@@ -7,6 +7,149 @@ use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+const MAX_DOCUMENT_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
+const MAX_OPEN_COPIES: usize = 16;
+const MAX_OPEN_BYTES: usize = 64 * 1024 * 1024;
+const OPEN_COPY_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+struct OpenCopy {
+    key: String,
+    dir: tempfile::TempDir,
+    path: PathBuf,
+    size: usize,
+    last_open: std::time::Instant,
+}
+
+#[derive(Default)]
+pub(crate) struct OpenedAttachments {
+    root: Option<PathBuf>,
+    entries: Vec<OpenCopy>,
+    // Dropped after entries: cleanup cannot race another process using this cache.
+    owner: Option<std::fs::File>,
+}
+
+impl OpenedAttachments {
+    pub(crate) fn initialize(&mut self, root: &Path) -> Result<(), CommandError> {
+        if self.root.as_deref() == Some(root) {
+            return Ok(());
+        }
+        if self.root.is_some() {
+            return Err(fail(
+                "ATTACHMENT_WRITE",
+                "附件缓存位置已变化，请重启桌面程序。",
+            ));
+        }
+        std::fs::create_dir_all(root)
+            .map_err(|_| fail("ATTACHMENT_WRITE", "无法创建附件缓存。"))?;
+        let owner = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(root.join(".owner.lock"))
+            .map_err(|_| fail("ATTACHMENT_WRITE", "无法锁定附件缓存。"))?;
+        fs2::FileExt::try_lock_exclusive(&owner)
+            .map_err(|_| fail("ATTACHMENT_WRITE", "附件缓存正在使用，请稍后重试或另存为。"))?;
+        // Only disposable directories created by this feature, never unrelated cache files.
+        // The cache lock excludes another live process, including one with a shared cache override.
+        for entry in
+            std::fs::read_dir(root).map_err(|_| fail("ATTACHMENT_WRITE", "无法读取附件缓存。"))?
+        {
+            let entry = entry.map_err(|_| fail("ATTACHMENT_WRITE", "无法读取附件缓存。"))?;
+            let kind = entry
+                .file_type()
+                .map_err(|_| fail("ATTACHMENT_WRITE", "无法读取附件缓存。"))?;
+            if kind.is_dir()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("mail-attachment-")
+            {
+                std::fs::remove_dir_all(entry.path()).map_err(|_| {
+                    fail(
+                        "ATTACHMENT_WRITE",
+                        "旧附件副本正在使用，请关闭对应文件后重试，或另存为。",
+                    )
+                })?;
+            }
+        }
+        self.root = Some(root.to_path_buf());
+        self.owner = Some(owner);
+        Ok(())
+    }
+
+    fn remove(&mut self, index: usize) -> Result<(), CommandError> {
+        let dir = self.entries[index].dir.path();
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).map_err(|_| {
+                fail(
+                    "ATTACHMENT_WRITE",
+                    "附件副本正在使用，请关闭对应文件后重试，或另存为。",
+                )
+            })?;
+        }
+        self.entries.remove(index);
+        Ok(())
+    }
+
+    fn open(
+        &mut self,
+        root: &Path,
+        item: &AttachmentSummary,
+        bytes: &[u8],
+        now: std::time::Instant,
+        launch: impl FnOnce(&Path) -> Result<(), CommandError>,
+    ) -> Result<(), CommandError> {
+        // Validate even on cache hits; the system handler follows the extension.
+        if !item.can_open || !evidence_import::can_open_mail_attachment(&item.name, bytes) {
+            return Err(fail("NO_EXTERNAL_OPEN", "这种附件请先另存为后处理。"));
+        }
+        self.initialize(root)?;
+        for index in (0..self.entries.len()).rev() {
+            if now.saturating_duration_since(self.entries[index].last_open) >= OPEN_COPY_TTL {
+                // A locked Windows file remains counted against both budgets.
+                let _ = self.remove(index);
+            }
+        }
+        let mut hash = Sha256::new();
+        hash.update(item.name.as_bytes());
+        hash.update(b"\0");
+        hash.update(bytes);
+        let key = format!("{:x}", hash.finalize());
+        if let Some(index) = self.entries.iter().position(|copy| copy.key == key) {
+            let copy = &self.entries[index];
+            let unchanged = std::fs::symlink_metadata(&copy.path).is_ok_and(|m| m.is_file())
+                && evidence_import::read_source(&copy.path).is_ok_and(|(data, _)| data == bytes);
+            if unchanged {
+                launch(&copy.path)?;
+                self.entries[index].last_open = now;
+                return Ok(());
+            }
+            // External editors may change the disposable copy; never reopen modified bytes.
+            self.remove(index)?;
+        }
+        if self.entries.len() >= MAX_OPEN_COPIES
+            || bytes.len()
+                > MAX_OPEN_BYTES.saturating_sub(self.entries.iter().map(|c| c.size).sum())
+        {
+            return Err(fail(
+                "ATTACHMENT_CACHE_FULL",
+                "已打开较多附件，请稍后重试或另存为后打开。",
+            ));
+        }
+        let (dir, path) = stage_open(root, item, bytes)?;
+        launch(&path)?;
+        self.entries.push(OpenCopy {
+            key,
+            dir,
+            path,
+            size: bytes.len(),
+            last_open: now,
+        });
+        Ok(())
+    }
+}
+
 fn fail(code: &str, message: &str) -> CommandError {
     CommandError {
         code: code.into(),
@@ -130,10 +273,10 @@ pub fn preview(
     if !["pdf", "image"].contains(&item.preview_kind.as_str()) {
         return Err(fail("NO_PREVIEW", "这种文件可另存为或用系统程序打开。"));
     }
-    if item.preview_kind == "image" && bytes.len() > 8 * 1024 * 1024 {
+    if bytes.len() > MAX_DOCUMENT_PREVIEW_BYTES {
         return Err(fail(
             "NO_PREVIEW",
-            "图片超过预览大小上限，可另存为或用系统程序打开。",
+            "附件超过 8 MiB 预览上限，可另存为或用系统程序打开。",
         ));
     }
     Ok(AttachmentPreview {
@@ -183,7 +326,7 @@ pub fn stage_open(
     item: &AttachmentSummary,
     bytes: &[u8],
 ) -> Result<(tempfile::TempDir, PathBuf), CommandError> {
-    if !item.can_open {
+    if !item.can_open || !evidence_import::can_open_mail_attachment(&item.name, bytes) {
         return Err(fail("NO_EXTERNAL_OPEN", "这种附件请先另存为后处理。"));
     }
     std::fs::create_dir_all(cache)
@@ -294,14 +437,6 @@ pub async fn open_evidence_attachment_cmd(
                 code: "ATTACHMENT_WRITE".into(),
                 message: "无法定位附件缓存目录。".into(),
             })?;
-        let (dir, path) = self::stage_open(&cache.join("opened-mail-attachments"), &item, &bytes)?;
-        tauri_plugin_opener::OpenerExt::opener(&opener)
-            .open_path(path.to_string_lossy(), None::<&str>)
-            .map_err(|_| CommandError {
-                code: "OPEN_FAILED".into(),
-                message: "系统未能打开这份附件，请另存为后选择合适的软件。".into(),
-            })?;
-        // The OS application loads asynchronously; keep this private cached copy.
         state
             .opened_attachments
             .lock()
@@ -309,8 +444,22 @@ pub async fn open_evidence_attachment_cmd(
                 code: "ATTACHMENT_WRITE".into(),
                 message: "附件副本暂存失败。".into(),
             })?
-            .push(dir);
-        Ok(())
+            .open(
+                &cache.join("opened-mail-attachments"),
+                &item,
+                &bytes,
+                std::time::Instant::now(),
+                |path| {
+                    tauri_plugin_opener::OpenerExt::opener(&opener)
+                        .open_path(path.to_string_lossy(), None::<&str>)
+                        .map_err(|_| {
+                            fail(
+                                "OPEN_FAILED",
+                                "系统未能打开这份附件，请另存为后选择合适的软件。",
+                            )
+                        })
+                },
+            )
     })
     .await
 }
@@ -384,6 +533,162 @@ mod tests {
         assert_eq!(view.mime, "application/pdf");
         assert_eq!(view.bytes_base64, "JVBERi0xLjQK");
         assert_eq!(store.list_evidence(None).unwrap().len(), 1);
+    }
+    #[test]
+    fn pdf_preview_budget_keeps_original_available_for_save_and_system_open() {
+        let (_dir, store, _) = setup();
+        for size in [MAX_DOCUMENT_PREVIEW_BYTES, MAX_DOCUMENT_PREVIEW_BYTES + 1] {
+            let mut bytes = vec![b' '; size];
+            bytes[..9].copy_from_slice(b"%PDF-1.4\n");
+            let encoded = crate::evidence_commands::base64(&bytes);
+            let raw = format!("From: hr@example.test\r\nSubject: Large PDF\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=large.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n{encoded}\r\n--x--\r\n");
+            let (item, _) = crate::evidence_commands::import_bytes(
+                &store,
+                store.archive_dir(),
+                raw.as_bytes(),
+                Some("large.eml".into()),
+                "2026/10",
+                None,
+            )
+            .unwrap();
+            let listed = list(&store, &item.id).unwrap();
+            let result = preview(&store, &item.id, 0, &listed.source_sha256);
+            if size == MAX_DOCUMENT_PREVIEW_BYTES {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.err().unwrap().code, "NO_PREVIEW");
+            }
+            let (summary, read_bytes) = read(&store, &item.id, 0, &listed.source_sha256).unwrap();
+            assert!(summary.can_open);
+            assert_eq!(read_bytes, bytes);
+        }
+    }
+    #[test]
+    fn open_cache_reuses_valid_bytes_and_refreshes_an_edited_disposable_copy() {
+        let (dir, store, id) = setup();
+        let listed = list(&store, &id).unwrap();
+        let (item, bytes) = read(&store, &id, 0, &listed.source_sha256).unwrap();
+        let root = dir.path().join("cache");
+        let mut cache = OpenedAttachments::default();
+        let now = std::time::Instant::now();
+        let mut paths = Vec::new();
+        for _ in 0..3 {
+            cache
+                .open(&root, &item, &bytes, now, |p| {
+                    paths.push(p.to_path_buf());
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert_eq!(cache.entries.len(), 1);
+        assert!(paths.iter().all(|p| *p == paths[0]));
+        cache
+            .open(&root, &item, &bytes, now + OPEN_COPY_TTL / 2, |_| Ok(()))
+            .unwrap();
+        let mut another = item.clone();
+        another.name = "another.pdf".into();
+        cache
+            .open(&root, &another, &bytes, now + OPEN_COPY_TTL, |_| Ok(()))
+            .unwrap();
+        assert!(paths[0].exists());
+        assert_eq!(cache.entries.len(), 2);
+        std::fs::write(&paths[0], b"edited").unwrap();
+        cache
+            .open(&root, &item, &bytes, now + OPEN_COPY_TTL, |p| {
+                paths.push(p.to_path_buf());
+                Ok(())
+            })
+            .unwrap();
+        assert_ne!(paths[3], paths[0]);
+        assert!(!paths[0].exists());
+        assert_eq!(std::fs::read(&paths[3]).unwrap(), bytes);
+        drop(cache);
+        assert!(!paths[3].exists());
+    }
+    #[test]
+    fn open_cache_is_bounded_and_expires_copies_on_next_open_without_removing_recent_files() {
+        let (dir, store, id) = setup();
+        let listed = list(&store, &id).unwrap();
+        let (mut item, bytes) = read(&store, &id, 0, &listed.source_sha256).unwrap();
+        let root = dir.path().join("cache");
+        let mut cache = OpenedAttachments::default();
+        let now = std::time::Instant::now();
+        for i in 0..MAX_OPEN_COPIES {
+            item.name = format!("{i}.pdf");
+            cache.open(&root, &item, &bytes, now, |_| Ok(())).unwrap();
+        }
+        item.name = "extra.pdf".into();
+        assert_eq!(
+            cache
+                .open(&root, &item, &bytes, now, |_| panic!("must not launch"))
+                .unwrap_err()
+                .code,
+            "ATTACHMENT_CACHE_FULL"
+        );
+        assert!(cache.entries.iter().all(|c| c.path.is_file()));
+        let old_path = cache.entries[0].path.clone();
+        cache
+            .open(&root, &item, &bytes, now + OPEN_COPY_TTL, |_| Ok(()))
+            .unwrap();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(!old_path.exists());
+        let mut forged = item.clone();
+        forged.name = "forged.html".into();
+        forged.can_open = true;
+        assert_eq!(
+            stage_open(&root, &forged, &bytes).err().unwrap().code,
+            "NO_EXTERNAL_OPEN"
+        );
+    }
+    #[test]
+    fn cache_recovery_requires_exclusive_ownership_and_preserves_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        let mut first = OpenedAttachments::default();
+        first.initialize(&root).unwrap();
+        let mut other = OpenedAttachments::default();
+        assert!(other.initialize(&root).is_err());
+        let orphan = tempfile::Builder::new()
+            .prefix("mail-attachment-")
+            .tempdir_in(&root)
+            .unwrap()
+            .keep();
+        std::fs::write(orphan.join("old.pdf"), b"old").unwrap();
+        std::fs::write(root.join("unrelated"), b"keep").unwrap();
+        drop(first);
+        other.initialize(&root).unwrap();
+        assert!(!orphan.exists());
+        assert_eq!(std::fs::read(root.join("unrelated")).unwrap(), b"keep");
+    }
+    #[test]
+    fn failed_launch_leaves_no_copy_and_large_copies_obey_total_byte_budget() {
+        let (dir, store, id) = setup();
+        let listed = list(&store, &id).unwrap();
+        let (mut item, _) = read(&store, &id, 0, &listed.source_sha256).unwrap();
+        let root = dir.path().join("cache");
+        let mut cache = OpenedAttachments::default();
+        let now = std::time::Instant::now();
+        assert!(cache
+            .open(&root, &item, b"%PDF-fail", now, |_| Err(fail(
+                "OPEN_FAILED",
+                "test"
+            )))
+            .is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1); // only the owner lock
+        let mut bytes = vec![b' '; 23 * 1024 * 1024];
+        bytes[..5].copy_from_slice(b"%PDF-");
+        for i in 0..2 {
+            item.name = format!("{i}.pdf");
+            cache.open(&root, &item, &bytes, now, |_| Ok(())).unwrap();
+        }
+        item.name = "third.pdf".into();
+        assert_eq!(
+            cache
+                .open(&root, &item, &bytes, now, |_| panic!("budget"))
+                .unwrap_err()
+                .code,
+            "ATTACHMENT_CACHE_FULL"
+        );
     }
     #[test]
     fn stale_digest_and_corrupt_parent_original_are_rejected() {
@@ -478,6 +783,7 @@ mod tests {
             .iter()
             .find(|i| i.preview_kind == "xlsx")
             .unwrap();
+        assert!(sheet.can_open);
         let view = spreadsheet(&store, &e.id, sheet.index, &content.source_sha256, 0).unwrap();
         assert_eq!(view.sheet_names, ["简历模板"]);
         assert!(view.cells.iter().any(|(_, _, text)| text == "Value"));

@@ -138,7 +138,11 @@
       const sourceUrls = contexts(d, body);
       const key = name === 'qq' ? 'mailid' : 'mid';
       const ids = sourceUrls.map(value => { try { return new URL(value).searchParams.get(key); } catch { return null; } }).filter(Boolean);
-      matches.push({ doc: d, body, data, links, sourceUrls, fingerprint: JSON.stringify([data, ids]) });
+      const modernQQ = name === 'qq' && d.location.hostname === 'wx.mail.qq.com' && d.location.pathname === '/home/index';
+      const pane = body.closest('.mail-list-page-reader-body') || body;
+      const visibleIds = modernQQ ? [pane, title, fromNode, body].map(node => [node?.getAttribute('data-mailid'), node?.getAttribute('mailid')]) : [];
+      matches.push({ doc: d, body, title, data, links, sourceUrls,
+        fingerprint: JSON.stringify([data, ids, modernQQ ? d.location.href : '', visibleIds]) });
     }
     // Refuse an ambiguous page with two open message panes instead of choosing the wrong one.
     return matches.length === 1 ? matches[0] : null;
@@ -269,12 +273,16 @@
       const hasTitle = documents(doc).some(d => [...d.querySelectorAll(selector)].some(n => shown(n) && text(n)));
       return { status: hasTitle ? 'unrecognized_mail' : 'open_mail' };
     }
+    const unchanged = () => {
+      const current = opened(doc, name);
+      return current?.fingerprint === ctx.fingerprint && current.body === ctx.body && current.title === ctx.title;
+    };
     let reason = 'raw_unavailable';
     const candidates = rawCandidates(ctx, name);
     const current = new URL(doc.location.href);
     if (name === 'qq' && current.hostname === 'wx.mail.qq.com' && current.pathname === '/home/index') {
       const modern = await qqModernOriginal(doc);
-      if (modern.changed || opened(doc, name)?.fingerprint !== ctx.fingerprint) return { status: 'changed' };
+      if (modern.changed || !unchanged()) return { status: 'changed' };
       if (modern.url) candidates.unshift(modern.url);
     }
     for (const url of candidates) {
@@ -285,13 +293,13 @@
         if (!response.ok) continue;
         const bytes = await readBounded(response);
         if (!looksLikeMail(bytes)) continue; // Login/error pages are never called an original.
-        if (opened(doc, name)?.fingerprint !== ctx.fingerprint) return { status: 'changed' };
+        if (!unchanged()) return { status: 'changed' };
         return { status: 'original', kind: 'eml', bytesBase64: base64(bytes), subject: ctx.data.subject };
       } catch (error) {
         if (error.message === 'too_large') reason = 'too_large';
       } finally { clearTimeout(timer); controller.abort(); }
     }
-    if (opened(doc, name)?.fingerprint !== ctx.fingerprint) return { status: 'changed' };
+    if (!unchanged()) return { status: 'changed' };
     if (new TextEncoder().encode(ctx.data.body).length > MAX_EXCERPT || ctx.data.subject.length > 500
         || ctx.data.from.length > 500 || ctx.data.sentTime.length > 200) return { status: 'too_large' };
     // This is a proposal only. The user must explicitly accept saving an excerpt in the side panel.

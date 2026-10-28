@@ -87,7 +87,7 @@ struct AppState {
     /// Prevent overlapping scheduled/manual scans. User actions use short
     /// SQLite/archive transactions and never wait for mailbox network IO.
     mailbox_gate: Mutex<()>,
-    opened_attachments: Mutex<Vec<tempfile::TempDir>>,
+    opened_attachments: Mutex<attachment_commands::OpenedAttachments>,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
@@ -1914,7 +1914,7 @@ pub fn run() {
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
             mailbox_gate: Mutex::new(()),
-            opened_attachments: Mutex::new(Vec::new()),
+            opened_attachments: Mutex::new(attachment_commands::OpenedAttachments::default()),
             cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
@@ -1959,6 +1959,11 @@ pub fn run() {
             }
             match DataHost::initialize() {
                 Ok(host) => {
+                    if let Ok(mut cache) = app.state::<AppState>().opened_attachments.lock() {
+                        if cache.initialize(&host.paths().cache_dir.join("opened-mail-attachments")).is_err() {
+                            eprintln!("attachment cache cleanup deferred until next open");
+                        }
+                    }
                     // Host lock excludes a second process's live backup jobs.
                     // A cleanup failure blocks cloud jobs, not access to archives.
                     match backup_crypt::workspace::PreparedWorkspace::prepare(&host.paths().data_root) {
