@@ -2805,10 +2805,12 @@
       }
       // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。
       if (!assisted && !deep && !isCurrent()) throw stopError();
+      await finalSyncFillSession(session);
+      // 最后同步要等文字提交，这时按的停止也一样。
+      if (!assisted && !deep && !isCurrent()) throw stopError();
       // 两轮补填用完或首轮 AI 已经失败，还在排队的新字段也要用户自己补。
       grownMissed.push(...pendingNew);
 
-      await finalSyncFillSession(session);
       // A later control's focus can roll back an earlier picker. Re-read the final
       // state before counting success; verification never writes or retries.
       recheckVerifiedControls();

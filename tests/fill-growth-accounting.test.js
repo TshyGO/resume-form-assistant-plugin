@@ -287,6 +287,25 @@ test("a stop pressed during the last re-scan ends as stopped even when nothing n
   assert.equal(next.status, "已停止填写，页面或填写会话已变化。");
 });
 
+test("a stop pressed while the final sync waits for the text to commit ends as stopped", async () => {
+  const h = grownForm({ first: [{ label: "学历", option: "本科" }, { label: "籍贯" }], generations: [],
+    firstReply: answer({ 学历: "本科", 籍贯: "示例市" }) });
+  // Real commit waits: the 籍贯 write waits once and the final sync once more; 停止 lands in the second.
+  h.ctx.helpers.setTextCommitWaitMs(100);
+  const later = h.ctx.window.setTimeout;
+  let commits = 0;
+  h.ctx.window.setTimeout = (callback, delay) => {
+    if (delay === 100 && ++commits === 2) h.pressStop();
+    return delay === 0 || delay === 100 ? setTimeout(callback, 0) : later(callback, delay);
+  };
+  const { result, status, error } = await h.run();
+  assert.equal(commits, 2);
+  assert.equal(result.outcome, "partial", JSON.stringify(result));
+  assert.equal(result.filledCount, 2);
+  assert.equal(status, STOPPED);
+  assert.equal(error, true);
+});
+
 test("a new field the page empties again is not counted as 补填", async () => {
   const h = grownForm({ catchUp: answer({ 研究方向: "示例方向" }) });
   afterWrite(h.gens[0][0].el, () => { h.gens[0][0].el.value = ""; });
