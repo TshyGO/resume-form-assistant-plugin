@@ -157,7 +157,7 @@ test('while undecided the status page keeps the explanation open with the same t
   expect(toggle.checked).toBe(false);
   expect(buttons(auto)).toEqual(['同意并开启', '暂不开启']);
   fireEvent.click(within(auto).getByRole('button', { name: '同意并开启' }));
-  await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
+  await within(auto).findByText('已开启：插件出错、字段没填上或 AI 请求失败时，会自动发送脱敏诊断。');
   await waitFor(() => expect(within(auto).queryByRole('region', { name: '完整说明' })).toBeNull());
   expect(toggle.checked).toBe(true);
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
@@ -169,7 +169,7 @@ test('choosing with the switch while undecided keeps the explanation open', asyn
   const auto = screen.getByRole('region', { name: '插件自动错误报告' });
   await within(auto).findByRole('button', { name: '同意并开启' });
   fireEvent.click(within(auto).getByRole('checkbox', { name: '开启插件自动错误报告' }));
-  await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
+  await within(auto).findByText('已开启：插件出错、字段没填上或 AI 请求失败时，会自动发送脱敏诊断。');
   expect(within(auto).getByRole('region', { name: '完整说明' })).toBeTruthy();
   expect(buttons(auto)).toEqual(['收起说明']);
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT')).toEqual([{ type: 'FEEDBACK_CONSENT', enabled: true }]);
@@ -211,7 +211,7 @@ test('the status page has the automatic switch only, with no manual feedback', a
   fireEvent.click(toggle);
   await within(auto).findByText('已关闭：不会自动发送任何报告。');
   fireEvent.click(toggle);
-  await within(auto).findByText('已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。');
+  await within(auto).findByText('已开启：插件出错、字段没填上或 AI 请求失败时，会自动发送脱敏诊断。');
   expect(toggle.checked).toBe(true);
   expect(calls.filter(c => c.type === 'FEEDBACK_CONSENT').map(c => c.enabled)).toEqual([false, true]);
   expect(calls.some(c => c.type === 'FEEDBACK_PREVIEW' || c.type === 'FEEDBACK_SEND')).toBe(false);

@@ -148,6 +148,24 @@ test('an oversized lone candidate is skipped instead of prompting AI without res
   assert.match(result.warning, /内容太多/);
 });
 
+test('a failed request replaces an earlier skip code, so the diagnostics name the failure', async () => {
+  const input = {
+    formFields: [{ fieldId: 'school', label: '学校', inputType: 'select', options: ['大学甲', '大学乙'] }, { fieldId: 'intro', label: '个人简介' }],
+    resumeFields: [{ group: '教育背景', key: '学校', value: '合成资料'.repeat(20_000) }, { group: '其他', key: '自我评价', value: '合成评价' }]
+  };
+  const timeout = worker(() => ({ ok: false, reason: 'timeout' }));
+  const failed = await timeout.run(input);
+  assert.equal(timeout.sent.filter(item => item.kind === 'desktop-complete').length, 1);
+  assert.ok(failed.diagnostics.skippedOversized > 0);
+  assert.equal(failed.diagnostics.errorCode, 'timeout');
+  assert.match(failed.warning, /内容太多/, 'both warnings are still shown');
+  const garbled = await worker(() => ({ ok: true, text: 'not json' })).run(input);
+  assert.equal(garbled.diagnostics.errorCode, 'bad_response');
+  // An answered request leaves the skip code as it was.
+  const answered = await worker(() => ({ ok: true, text: '[]' })).run(input);
+  assert.equal(answered.diagnostics.errorCode, 'input_too_large');
+});
+
 test('desktop failure reasons produce distinct Chinese guidance', async () => {
   const cases = [
     ['not_configured', '桌面还没有配置 AI 服务商'], ['credential_unavailable', '系统凭据库'],

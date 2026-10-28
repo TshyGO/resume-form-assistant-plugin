@@ -76,7 +76,8 @@ const IFRAME_PAGE = {
     editButtons: 0, locked: 3, shadowHosts: 1, elements: 830 },
   category: "iframe_blocked", stage: "scan",
   diagnostics: null,
-  unfilledControls: []
+  unfilledControls: [],
+  entry: "panel", pageFocused: false
 };
 
 test("the v1 block answers why a page had no fields, section by section", () => {
@@ -87,6 +88,10 @@ test("the v1 block answers why a page had no fields, section by section", () => 
     "page_type_reason: url",
     "dom_ready_at_scan: true",
     "scan_duration_ms: 12",
+    "",
+    "[填写]",
+    "entry: panel",
+    "page_focused: false",
     "",
     "[字段漏斗]",
     "dom_inputs: 14",
@@ -118,6 +123,7 @@ test("the v1 block answers why a page had no fields, section by section", () => 
     "local_matches: -",
     "ai_fields: -",
     "ai_called: false",
+    "ai_tier: -",
     "ai_matches: -",
     "ai_latency_ms: -",
     "resume_fields: -",
@@ -166,11 +172,12 @@ test("a two-level choice the fill stopped at keeps its closed reason code", () =
 });
 
 const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan", "scan_duration_ms",
+  "entry", "page_focused",
   "dom_inputs", "visible_fields", "candidates", "matched", "filled", "drop_reasons", "label_sources", "offer_skipped",
   "dom_elements", "iframes_total", "iframes_cross_origin", "same_origin_iframe_inputs", "shadow_roots_with_inputs",
   "custom_controls", "custom_libraries", "readonly_or_disabled", "edit_buttons",
   "error_category", "first_failing_stage", "error_code",
-  "local_matches", "ai_fields", "ai_called", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
+  "local_matches", "ai_fields", "ai_called", "ai_tier", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
   "timings_ms"];
 
 test("a catch-up that called the AI shows as called, and its error code fills a missing first-round one", () => {
@@ -217,12 +224,17 @@ test("the longest valid lines still pass the allowlist instead of being dropped 
     fieldCount: big, matched: big, filledCount: big, unfilledCount: big, unconfirmedCount: big, unsyncedCount: big, requested: true,
     diagnostics: { ruleMatches: 1, aiFields: big, aiMatches: 1, promptBytes: 10, apiMs: 1, secretFormFields: 1, skippedNoContext: 1, errorCode: "none" },
     probe: { ...IFRAME_PAGE.probe, custom: { total: big, byLibrary: Object.fromEntries(
-      ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } } });
+      ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "其他"].map(name => [name, big])) } },
+    genericCustom: big,
+    unfilledControls: [{ label: "参加工作时间", reasonCode: "framework_state_unsynced", observed: { opened: "component", hasOptions: true },
+      control: { tag: "input", type: "checkbox", role: "checkbox", popup: "listbox", readOnly: true, picker: "element", library: "element" } }] });
   const drops = /^drop_reasons: (.*)$/m.exec(report);
   assert.ok(drops && drops[1].split(",").length === 17, report);
   assert.match(report, /^label_sources: (?:[a-z]+=999999,){4}placeholder=999999$/m);
   assert.match(report, /^offer_skipped: ambiguous=999999,entry=999999$/m);
-  assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}other=999999$/m);
+  assert.match(report, /^custom_libraries: (?:[a-z]+=999999,){8}generic=999999,other=999999$/m);
+  assert.match(report, /^custom_controls: 1999998$/m);
+  assert.match(report, /^- 参加工作时间: input\[checkbox\] role=checkbox popup=listbox readonly picker=element lib=element opened=component options=1\+ reason=framework_state_unsynced$/m);
   assert.match(report, /^url_path: \/campus\/application\/personalInformation\/education\/experience\/attachment\/preview\/confirm\/:more$/m);
 });
 

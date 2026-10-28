@@ -396,7 +396,7 @@
       }, popup => Boolean(popup));
       if (opened.reason) return { reason: opened.reason };
       const popup = opened.value;
-      ctx.observed = { library: 'antd', optionCount: Math.min(200, popup.querySelectorAll('td').length) };
+      ctx.observed = { library: 'antd', popupRole: 'calendar' };
       if (popup.querySelectorAll('.ant-picker-panel').length !== 1) return { reason: 'unsupported_control' };
       const mode = popup.querySelector('.ant-picker-month-panel') ? 'month' : popup.querySelector('.ant-picker-year-panel') ? 'year' : 'date';
       const expected = mode === 'year' ? String(raw).match(/^\s*(\d{4})(?:年|\b)/)?.[1] : helpers?.normalizeDateValue?.(raw, mode);

@@ -146,6 +146,41 @@ test('a rejected parent click cannot reuse a stale child column', async () => {
   assert.equal(childClicks, 0);
 });
 
+// #301 诊断只记弹层里有没有选项，不记项数，而且只看网页自己先给出的第一层。下一级有几项由简历里选的上一级决定
+// （江苏 13 个市、宁夏 5 个），搜索后的列表由插件输入的值决定，都会带出简历内容。
+test('a cascader that fails below the first level says whether the first column had options, with no count', async () => {
+  const h = harness('<div class="el-cascader"><input role="combobox" readonly aria-controls="choices"></div>', { timeoutMs: 250 });
+  h.target.controlKind = 'cascader'; h.target.root = h.el.parentElement;
+  const node = text => `<div class="el-cascader-node"><span class="el-cascader-node__label">${text}</span></div>`;
+  h.target.root.onclick = () => {
+    const popup = h.w.document.createElement('div'); popup.id = 'choices'; popup.className = 'el-cascader__dropdown';
+    popup.innerHTML = `<div class="el-cascader-menu">${['北京市', '江苏省', '宁夏回族自治区'].map(node).join('')}</div>`;
+    popup.querySelectorAll('.el-cascader-node')[1].onclick = () => setTimeout(() => {
+      const column = h.w.document.createElement('div'); column.className = 'el-cascader-menu';
+      column.innerHTML = Array.from({ length: 13 }, (_, i) => node(`第${i + 1}市`)).join('');
+      popup.append(column);
+    }, 20);
+    h.w.document.body.append(popup);
+  };
+  const result = await h.api.operate(h.target, '江苏省 / 示例市');
+  assert.equal(result.reason, 'no_option_match');
+  assert.equal(result.observed.hasOptions, true, 'the provinces the page listed');
+  assert.equal('optionCount' in result.observed, false, JSON.stringify(result.observed));
+});
+test('a searchable list says what the page listed before the plugin typed, not what the typed value brought up', async () => {
+  for (const [before, hasOptions] of [[['其他学院', '某某学院'], true], [[], false]]) {
+    const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 250 });
+    const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox');
+    list.innerHTML = before.map(text => `<div role="option">${text}</div>`).join('');
+    h.w.document.body.append(list);
+    h.el.oninput = () => { list.innerHTML = ['甲学院', '乙学院', '丙学院'].map(text => `<div role="option">${text}</div>`).join(''); };
+    const result = await h.api.operate(h.target, '示例大学');
+    assert.equal(result.reason, 'no_option_match');
+    assert.equal(result.observed.hasOptions, hasOptions, JSON.stringify(before));
+    assert.equal('optionCount' in result.observed, false, JSON.stringify(result.observed));
+  }
+});
+
 test('combobox semantics never authorize a submit button', async () => {
   const h = harness(button.replace('type="button"', 'type="submit"')); let submitted = 0;
   h.el.form.onsubmit = event => { submitted++; event.preventDefault(); };

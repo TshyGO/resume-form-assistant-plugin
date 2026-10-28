@@ -165,9 +165,56 @@ for (const [name, reply, warning, code] of [
     assert.equal(lineOf(report, "candidates"), "2");
     assert.equal(lineOf(report, "drop_reasons"), "no_result=1");
     assert.equal(lineOf(report, "error_code"), code);
-    assert.equal(auto.length, 0, "AI failures are not reported automatically, same as the first round");
+    // #301 U1：补填的 AI 请求失败（超时、服务出错）也上报，类别和阶段说的是 AI 请求，不是写入；
+    // 请求本身抛错或没有回复时没有错误码，看不出是 AI 失败，仍不上报。
+    if (code === "timeout") {
+      assert.deepEqual(auto.map((message) => message.report.kind), ["fill_partial"]);
+      assert.equal(lineOf(auto[0].report.diagnostics, "error_category"), "timeout");
+      assert.equal(lineOf(auto[0].report.diagnostics, "first_failing_stage"), "match");
+      assert.equal(lineOf(auto[0].report.diagnostics, "error_code"), "timeout");
+      assert.equal(lineOf(report, "error_category"), "timeout", "the panel's block says the same");
+    } else {
+      assert.equal(auto.length, 0);
+    }
   });
 }
+
+test("a catch-up request that hits a service error is reported as service_error at the match stage, with the tier it ran on", async () => {
+  const h = grownForm({ catchUp: (message) => ({ success: false, matches: [], warning: "AI 服务返回 HTTP 502。", error: "AI 服务返回 HTTP 502。",
+    diagnostics: diag({ aiFields: message.formFields.length, errorCode: "http_502" }) }) });
+  const { result, auto } = await h.run();
+  assert.equal(result.outcome, "partial");
+  assert.equal(result.unfilledCount, 0);
+  assert.deepEqual(auto.map((message) => message.report.kind), ["fill_partial"]);
+  const block = auto[0].report.diagnostics;
+  assert.equal(lineOf(block, "error_category"), "service_error");
+  assert.equal(lineOf(block, "first_failing_stage"), "match");
+  assert.equal(lineOf(block, "error_code"), "http_502");
+  assert.equal(lineOf(block, "ai_called"), "true");
+  assert.equal(lineOf(block, "ai_tier"), "default");
+  assert.equal(lineOf(block, "entry"), "other");
+});
+
+test("a catch-up that times out after a first round with no resume data for one field is reported as timeout", async () => {
+  for (const errorCode of ["no_context", "input_too_large"]) {
+    const h = grownForm({ first: [{ label: "学历", option: "本科" }, { label: "籍贯" }],
+      // The worker's shape when its rules matched 学历 and 籍贯 had nothing in the resume to send.
+      firstReply: (message) => ({ success: true, matches: [{ fieldId: message.formFields[0].fieldId, value: "本科" }], warning: "", error: "",
+        diagnostics: diag({ ruleMatches: 1, aiFields: 0, promptBytes: 0, errorCode,
+          ...(errorCode === "no_context" ? { skippedNoContext: 1 } : { skippedOversized: 1 }) }) }),
+      catchUp: timedOut });
+    const { result, report, auto } = await h.run();
+    assert.equal(h.requests.length, 2, errorCode);
+    assert.equal(result.outcome, "partial", errorCode);
+    assert.equal(lineOf(report, "error_code"), "timeout", errorCode);
+    assert.equal(lineOf(report, "error_category"), "timeout", errorCode);
+    assert.deepEqual(auto.map((message) => message.report.kind), ["fill_partial"], errorCode);
+    const block = auto[0].report.diagnostics;
+    assert.equal(lineOf(block, "error_category"), "timeout", errorCode);
+    assert.equal(lineOf(block, "first_failing_stage"), "match", errorCode);
+    assert.equal(lineOf(block, "error_code"), "timeout", errorCode);
+  }
+});
 
 test("the catch-up keeps the first round's buckets: a secret-only batch is secret, an oversized one was not sent", async () => {
   const secret = grownForm({ generations: [[{ label: "短信验证码" }]],
@@ -212,7 +259,10 @@ test("after a first-round timeout no catch-up request is sent and the new field 
   assert.equal(status, `本地已填写 1 项；新出现的 1 项没有补填：研究方向，请手动补上。${TIMEOUT}`);
   assert.equal(lineOf(report, "candidates"), "3");
   assert.equal(lineOf(report, "drop_reasons"), "no_result=1,not_sent=1");
-  assert.equal(auto.length, 0);
+  // #301 U1：首轮 AI 超时，本地匹配的照样写上了，也要上报，类别是 timeout、阶段是匹配。
+  assert.deepEqual(auto.map((message) => message.report.kind), ["fill_partial"]);
+  assert.equal(lineOf(auto[0].report.diagnostics, "error_category"), "timeout");
+  assert.equal(lineOf(auto[0].report.diagnostics, "first_failing_stage"), "match");
 });
 
 test("a new field that left the page before the catch-up answered is not listed for the user", async () => {
@@ -370,7 +420,12 @@ test("fields that appeared after a choice add to the existing diagnostic keys on
   assert.equal(lineOf(report, "ai_fields"), "4");
   assert.equal(lineOf(report, "ai_matches"), "2");
   assert.equal(lineOf(report, "error_code"), "timeout");
-  // A first-round error code is never replaced by a later one.
-  const first = feedback.fillReport({ ...input, diagnostics: diag({ errorCode: "input_too_large" }), grown });
-  assert.equal(lineOf(first, "error_code"), "input_too_large");
+  // A first-round failure is never replaced by a later one; a first round that only skipped fields
+  // gives way to a catch-up whose request failed.
+  const first = feedback.fillReport({ ...input, diagnostics: diag({ errorCode: "bad_response" }), grown });
+  assert.equal(lineOf(first, "error_code"), "bad_response");
+  const skipped = feedback.fillReport({ ...input, diagnostics: diag({ errorCode: "input_too_large" }), grown });
+  assert.equal(lineOf(skipped, "error_code"), "timeout");
+  const quiet = feedback.fillReport({ ...input, diagnostics: diag({ errorCode: "input_too_large" }), grown: { ...grown, errorCode: "no_context" } });
+  assert.equal(lineOf(quiet, "error_code"), "input_too_large");
 });
