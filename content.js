@@ -2368,6 +2368,8 @@
     let filledCount = 0;
     let unconfirmedCount = 0;
     const verifiedControls = [];
+    // 写上了、页面当时还提示无效的字段：提示可能要等后面的字段填完才消（北森开始 / 结束时间联动校验），结束前再看一次。
+    const invalidControls = [];
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
@@ -2631,6 +2633,25 @@
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
+        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回的记复核读到的原因，
+        // 字段已被页面替换的记「字段已被页面替换」。
+        // 只读：不写值、不聚焦，也不滚动页面。
+        for (const item of invalidControls) {
+          const current = isFieldBindingCurrent(item.element);
+          const checked = current ? controlOperator?.check(item.element) : null;
+          if (!checked?.ok) {
+            noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
+            continue;
+          }
+          const control = item.element.kind === 'element' ? item.element.element : item.element;
+          filledCount += 1;
+          if (item.isNew) supplemented += 1;
+          if (item.element.kind === 'element' && dayDefaultedControls.has(control)) dayDefaulted += 1;
+          textFillFailures.delete(control);
+          if (item.element.kind === 'element' && !item.element.pickerType && !['custom-select', 'cascader'].includes(item.element.controlKind)) {
+            recordFilledTextControl(session, control);
+          }
+        }
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
         && location.href === fillUrl && session === fillSession;
@@ -2874,7 +2895,10 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
-          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
+          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+            invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
+          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -4348,7 +4372,9 @@
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
-      if (result.ok && result.observed?.dayDefaulted) dayDefaultedControls.add(control); else dayDefaultedControls.delete(control);
+      // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
+      if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
+      else dayDefaultedControls.delete(control);
     }
     return result.ok;
   }
