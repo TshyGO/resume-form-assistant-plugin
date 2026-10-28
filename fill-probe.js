@@ -258,5 +258,5 @@
 
   const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
-  if (typeof module !== "undefined") module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

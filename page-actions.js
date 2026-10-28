@@ -276,5 +276,5 @@
   const api = { MAX_PRE_ACTIONS, MAX_ADDS, QUIET_MS, MAX_WAIT_MS, CODES, editableControls, targetAllowed, press, waitSettled,
     buildPlan, planStillValid, executePlan, createHighlighter, valuesKept };
   scope.ResumeProPageActions = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

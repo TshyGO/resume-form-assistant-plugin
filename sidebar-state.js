@@ -1,10 +1,15 @@
 (function (root, factory) {
   const api = factory();
 
-  if (typeof module === "object" && module.exports) {
-    module.exports = api;
-  } else {
-    root.ResumeProSidebarState = api;
+  // The global always comes first. In a content script a page element or frame named "module"
+  // can stand in for the CommonJS module, and must not keep the global from being set (#275).
+  root.ResumeProSidebarState = api;
+  try {
+    if (typeof module === "object" && module && typeof module.exports === "object") {
+      module.exports = api;
+    }
+  } catch {
+    // A cross-origin frame named "module" throws on any property access.
   }
 })(typeof self !== "undefined" ? self : globalThis, function () {
   const STORAGE_KEY = "resumeProSidebarUiState";

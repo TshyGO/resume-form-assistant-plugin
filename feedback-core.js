@@ -342,5 +342,5 @@
   const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, fillDrops, labelSources, aiCalled,
     fillReport, diagnostics, fillFailure, install };
   root.ResumeProFeedback = api;
-  if (typeof module !== "undefined") module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

@@ -1,6 +1,6 @@
 (function () {
-  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }),
-    { origin: chrome.runtime.getURL(""), requireOwn: true });
+  const sendFeedback = report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report });
+  self.ResumeProFeedback?.install(sendFeedback, { origin: chrome.runtime.getURL(""), requireOwn: true });
   const SIDEBAR_ID = "resume-pro-sidebar";
   const SIDEBAR_PANEL_ID = "resume-pro-sidebar-panel";
   const SIDEBAR_DEFAULT_TOP = 96;
@@ -80,6 +80,11 @@
     cancelled: "填写已停止"
   };
   let shadowRoot = null;
+  // idle → running → ready or failed; unsupported on a page that cannot hold the controller.
+  // The side panel counts the page as connected only once startup is ready.
+  let startupState = "idle";
+  // The host this startup built, so a startup that fails after building it can hide it.
+  let startupHost = null;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
   // Archiving a finished fill from the native side panel (#178). Declared up here because the
@@ -130,7 +135,7 @@
       dropStalePanelSubmit();
       const jobSave = panelJobSnapshot();
       sendResponse({
-        ready: Boolean(button),
+        ready: Boolean(button) && startupState === "ready",
         // `disabled` also covers the controller's pre-read state. Treating that as
         // "busy" deadlocks the native side panel: it cannot send the fill command
         // which performs the desktop reread below. Only an active AI run is busy.
@@ -383,29 +388,88 @@
   bindSubmitSync();
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener("DOMContentLoaded", startUp, { once: true });
   } else {
-    init();
+    startUp();
+  }
+
+  // Runs once per page, even if this script runs twice in the same world. The mark is a symbol
+  // on this world's global, so no element on the page can stand in for it.
+  function startUp() {
+    const started = Symbol.for("resumePro.startUp");
+    if (self[started]) return;
+    self[started] = true;
+    if (!pageCanHostController()) {
+      startupState = "unsupported";
+      return;
+    }
+    startupState = "running";
+    // init() is async: whatever fails in it ends up here, never as an unhandled rejection.
+    init().then(() => { startupState = "ready"; }, (error) => {
+      startupState = "failed";
+      // A half-built controller must not stay usable on a page that shows as not connected.
+      // init() returns early when the page already had the id, so an element with it here was
+      // put in by this startup, even when createSidebar threw before handing it back.
+      const host = startupHost || document.getElementById(SIDEBAR_ID);
+      if (host) host.style.display = "none";
+      reportStartupError(error);
+    });
+  }
+
+  // XML, RSS and SVG pages, and XHTML served as XML, give no HTML elements to build the
+  // controller from (#296). Nothing is built there and nothing is reported.
+  function pageCanHostController() {
+    try {
+      return document instanceof HTMLDocument && document.createElement("div") instanceof HTMLElement;
+    } catch {
+      return false;
+    }
+  }
+
+  // Sent the way the global handlers send an error, once. The source stays "unhandledrejection",
+  // which is what a failed init was before it had a boundary.
+  function reportStartupError(error) {
+    try {
+      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), "unhandledrejection");
+      if (report?.stack) Promise.resolve(sendFeedback(report)).catch(() => {});
+    } catch { /* no recursive reporting */ }
   }
 
   async function init() {
     if (document.getElementById(SIDEBAR_ID)) {
       return;
     }
+    // Every helper this script calls must have loaded. A page element or frame named "module"
+    // once kept one from loading (#275), and the page then must not show as connected.
+    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProCustomControls",
+      "ResumeProControls", "ResumeProProfile", "ResumeProResumeData", "ResumeProFormAgent", "ResumeProFillProbe",
+      "ResumeProFieldScan", "ResumeProPageOutline", "ResumeProDeepAnalysis", "ResumeProPageActions",
+      "ResumeProPageRecipe", "ResumeProSidebarState"];
+    const missing = helpers.find((name) => !self[name]);
+    if (missing) throw new TypeError(`${missing} is not loaded`);
 
     // No desktop read here. This script runs on every page, and each read starts the
     // native host (and cold-starts the desktop app). The data is read when the in-page
     // panel is actually shown, or when the user starts an action.
-    state.sidebarUiState = await StorageService.getSidebarUiState();
-    state.sidebarUiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
-    const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
+    // The controller starts in the default place and takes the saved one once it has been
+    // read, so a slow or stuck storage read cannot hold up the page.
+    StorageService.getSidebarUiState().then(applyStoredSidebarUiState).catch(() => {});
+    // Without content.css nothing in the shadow root is hidden or styled, so the whole host
+    // is hidden instead (#256). The controller still mounts and the page stays usable.
+    let cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     const sheet = new CSSStyleSheet();
-    sheet.replaceSync(cssText);
+    try {
+      sheet.replaceSync(cssText ?? "");
+    } catch {
+      cssText = null;
+    }
     injectFieldHighlightStyles();
     // Chrome and Edge 116+ own the visible UI in the native side panel.
     // Background opens the manager tab if that API is unavailable.
     state.nativeSidePanel = true;
-    createSidebar(sheet);
+    const host = createSidebar(sheet);
+    startupHost = host;
+    if (cssText === null) host.style.display = "none";
     renderSidebar();
     bindStorageSync();
     document.addEventListener("visibilitychange", () => {
@@ -573,6 +637,7 @@
     `;
     shadowRoot.appendChild(chipActions);
     bindSidebarEvents(sidebar);
+    return host;
   }
 
   function bindSidebarEvents(sidebar) {
@@ -4723,6 +4788,14 @@
     state.sidebarUiState = constrained;
   }
 
+  // The saved state is read while startup goes on. Before the controller exists it is simply
+  // kept for createSidebar; after that it is applied, unless a drag is in progress.
+  function applyStoredSidebarUiState(uiState) {
+    if (state.dragging) return;
+    state.sidebarUiState = self.ResumeProSidebarState.normalize(uiState);
+    applySidebarUiState();
+  }
+
   function constrainSidebarToViewport() {
     const current = self.ResumeProSidebarState.normalize(state.sidebarUiState);
     if (current.left === null || current.top === null) {
@@ -6685,6 +6758,7 @@
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {
       applySidebarUiState,
+      applyStoredSidebarUiState,
       bindStorageSync,
       bindFocusTracking,
       describePanelTarget,
@@ -6798,6 +6872,9 @@
       },
       setShadowRoot(root) {
         shadowRoot = root;
+      },
+      setStartupState(value) {
+        startupState = value;
       }
     };
   }

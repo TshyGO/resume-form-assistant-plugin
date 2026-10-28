@@ -559,5 +559,5 @@
   const api = { MAX_SEGMENT, MAX_CHARS, MAX_PARTS, MAX_BUTTON_TEXT, REDACTED, build, createRedactor, sensitiveShape, domKindOf, describeButton,
     libraryOf, normalizeForOverlap };
   scope.ResumeProPageOutline = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);
