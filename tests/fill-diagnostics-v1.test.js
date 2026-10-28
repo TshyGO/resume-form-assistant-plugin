@@ -166,6 +166,19 @@ const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan
   "local_matches", "ai_fields", "ai_called", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
   "timings_ms"];
 
+test("a catch-up that called the AI shows as called, and its error code fills a missing first-round one", () => {
+  const firstLocalOnly = { ruleMatches: 2, aiFields: 0, aiMatches: 0, apiMs: 0, promptBytes: 0, errorCode: "none" };
+  const report = core.fillReport({ ...IFRAME_PAGE, requested: true, diagnostics: firstLocalOnly,
+    grown: { found: 1, aiFields: 1, aiCalled: true, errorCode: "timeout" } });
+  assert.match(report, /^ai_called: true$/m);
+  assert.match(report, /^error_code: timeout$/m);
+  // The first round got no answer at all: the catch-up's code is still the one to show.
+  const unanswered = core.fillReport({ ...IFRAME_PAGE, requested: true, grown: { found: 1, errorCode: "timeout" } });
+  assert.match(unanswered, /^error_code: timeout$/m);
+  // Without a catch-up nothing changes.
+  assert.match(core.fillReport({ ...IFRAME_PAGE, requested: true, diagnostics: firstLocalOnly }), /^ai_called: false$/m);
+});
+
 test("fields the AI never saw are not counted as AI misses", () => {
   const base = { ...IFRAME_PAGE, fieldCount: 3, matched: 0, requested: true, stats: null };
   assert.deepEqual(core.fillDrops({ ...base, diagnostics: { errorCode: "no_resume_fields", secretFormFields: 0 } }),

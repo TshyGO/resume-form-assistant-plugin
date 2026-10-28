@@ -22,14 +22,18 @@ const MAX_DURATION_MS = 3600000;
  * `filledCount` is the number of fields actually written into the page. What the AI
  * returned but was never written is not counted, and nothing here can say the site accepted
  * anything: the plugin cannot know that.
+ *
+ * The desktop refuses a record whose written and unconfirmed fields add up to more than
+ * `fieldCount`, so the total is never reported below them.
  */
 export function buildFillPayload(raw) {
   const filledCount = count(raw?.filledCount);
+  const unconfirmedCount = count(raw?.unconfirmedCount);
   const payload = {
     outcome: outcomeOf(raw, filledCount),
-    fieldCount: count(raw?.fieldCount),
+    fieldCount: Math.min(Math.max(count(raw?.fieldCount), filledCount + unconfirmedCount), MAX_COUNT),
     filledCount,
-    unconfirmedCount: count(raw?.unconfirmedCount)
+    unconfirmedCount
   };
 
   const durationsMs = {};
@@ -64,6 +68,17 @@ function outcomeOf(raw, filledCount) {
   if (raw?.outcome === 'success') return 'completed';
   if (raw?.outcome === 'partial') return 'partial';
   return filledCount > 0 ? 'partial' : 'failed';
+}
+
+/**
+ * The desktop refuses a fill whose written and unconfirmed fields outnumber its fields. 0.4.4
+ * could record that after a fill wrote fields that appeared during the fill, so records and
+ * queue entries it saved get a consistent total when they are sent. Valid fills come back as is.
+ */
+export function consistentFill(fill) {
+  if (!fill || typeof fill !== 'object') return fill;
+  const least = count(fill.filledCount) + count(fill.unconfirmedCount);
+  return count(fill.fieldCount) >= least ? fill : { ...fill, fieldCount: Math.min(least, MAX_COUNT) };
 }
 
 function count(value) {

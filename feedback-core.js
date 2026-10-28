@@ -151,6 +151,12 @@
   // The worker's diagnostics when the AI request got an answer; content.js keeps {} otherwise.
   const answer = input => (input.diagnostics && Object.keys(input.diagnostics).length ? input.diagnostics : null);
 
+  // The AI request itself failed (provider timeout, AI service or desktop link), as opposed to
+  // a request that was answered and matched nothing.
+  function requestFailed(code) {
+    return code === "timeout" || SERVICE_CODES.has(code) || /^http_\d{3}$/.test(code ?? "");
+  }
+
   // Fields lost at each step of scan → match → fill, in funnel order; only non-zero reasons.
   function fillDrops(input) {
     const s = input.stats || null;
@@ -158,14 +164,18 @@
     const n = positive;
     const secret = n(d?.secretFormFields);
     const noMapping = n(d?.skippedNoContext);
+    // Fields that appeared after a choice (#269) bring their own drops, worked out with these
+    // same rules for each catch-up request; the first-round arithmetic leaves them out.
+    const g = input.grown || {};
+    const firstRound = Math.max(0, n(input.fieldCount) - n(g.found));
     // Fields neither matched nor skipped. Those handed to the AI (at most aiFields, less the
     // ones skipped for lack of resume data) are AI misses, or got no result when the AI service
     // or desktop link failed; with an empty template the rest had no resume data at all;
     // otherwise they were never sent (e.g. too large). A request with no answer at all leaves
     // every field without a result.
-    const failed = Boolean(d) && (d.errorCode === "timeout" || SERVICE_CODES.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode ?? ""));
-    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
-      : input.requested ? n(input.fieldCount) : 0;
+    const failed = Boolean(d) && requestFailed(d.errorCode);
+    const rest = d ? Math.max(0, firstRound - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
+      : input.requested ? firstRound : 0;
     const sent = d && aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
@@ -175,6 +185,7 @@
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
     if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
+    for (const key of DROPS) counts[key] += n(g.drops?.[key]);
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 
@@ -208,7 +219,13 @@
       libraries[key] = (libraries[key] || 0) + n(value);
     }
     const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
-    const called = aiCalled(input);
+    // Fields that appeared after a choice (#269) add to the first round's match counts; their
+    // error code shows only when the first round had none. A catch-up that called the AI counts
+    // as a call even when the first round did not need one.
+    const g = input.grown || {};
+    const called = g.aiCalled === true ? true : aiCalled(input);
+    const plus = (value, extra) => Number.isInteger(value) ? value + n(extra) : value;
+    const code = (!d?.errorCode || d.errorCode === "none") && g.errorCode ? g.errorCode : d?.errorCode;
     const lines = [
       "[页面]",
       `url_path: ${pathTemplate(input.path)}`,
@@ -241,13 +258,13 @@
       "[错误]",
       `error_category: ${input.category || "unknown"}`,
       `first_failing_stage: ${input.stage || "none"}`,
-      `error_code: ${typeof d?.errorCode === "string" && VALUES.error_code.test(d.errorCode) ? d.errorCode : "-"}`,
+      `error_code: ${typeof code === "string" && VALUES.error_code.test(code) ? code : "-"}`,
       "",
       "[匹配]",
-      `local_matches: ${count(d?.ruleMatches)}`,
-      `ai_fields: ${count(d?.aiFields)}`,
+      `local_matches: ${count(plus(d?.ruleMatches, g.local))}`,
+      `ai_fields: ${count(plus(d?.aiFields, g.aiFields))}`,
       `ai_called: ${flag(called)}`,
-      `ai_matches: ${count(d?.aiMatches)}`,
+      `ai_matches: ${count(plus(d?.aiMatches, g.aiMatches))}`,
       `ai_latency_ms: ${called ? ms(d.apiMs) : "-"}`,
       `resume_fields: ${count(d?.resumeFields)}`,
       `resume_candidates: ${count(d?.candidateFields)}`,
@@ -322,8 +339,8 @@
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }
-  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, fillDrops, labelSources, aiCalled, fillReport,
-    diagnostics, fillFailure, install };
+  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, fillDrops, labelSources, aiCalled,
+    fillReport, diagnostics, fillFailure, install };
   root.ResumeProFeedback = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof self !== "undefined" ? self : globalThis);

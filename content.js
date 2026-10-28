@@ -2305,6 +2305,10 @@
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
+    // #301 选完后新出现的字段（#269）和首轮字段一样计入结果、诊断和留档；进诊断的只有计数。
+    // pendingNew 是排队等 AI 补填的新字段，没轮到补填就结束的算没送 AI。
+    const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, aiCalled: false, errorCode: "", drops: {} };
+    const pendingNew = [];
     let probe = null;
     // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
     const readyAtScan = document.readyState === "complete";
@@ -2538,21 +2542,34 @@
           }
           if (checked && !checked.ok) {
             filledCount -= 1;
+            if (item.isNew) supplemented -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
           }
         }
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
         && location.href === fillUrl && session === fillSession;
+      // 停下来时说清楚是用户按了停止，还是页面或填写会话变了。
+      const stopError = () => {
+        cancelRequested = true;
+        return new Error(writeCancelled ? '已停止后续填写，请核对网页中已填写的内容。' : '已停止填写，页面或填写会话已变化。');
+      };
       const failedCascadeGroups = new Set();
       // #269 选了某项后页面才出现的字段（智联选完学历多出专业、院系）：选完等页面安静再扫一次，
       // 新出现的空字段先在本地匹配、当场排进这一轮；本地匹配不上的，这一轮结束后交给 AI 补填，最多补 2 次。
       const queue = sortedMatches.slice();
-      const pendingNew = [];
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
       let dayDefaulted = 0;
+      // #301 新字段的去向：「加到我的信息」看 grownFields 和 grownMatchedIds；补填失败或没发出的进 grownMissed，
+      // 状态行请用户自己补，并附上补填请求的警告。
+      const grownFields = [];
+      const grownMatchedIds = new Set();
+      const grownMissed = [];
+      let grownWarning = "";
+      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。
+      const aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
       const pickUpNewFields = async (position) => {
         await waitForPageSettle();
         if (!isCurrent()) return;
@@ -2584,6 +2601,8 @@
           fieldMetaMap.set(fieldId, field);
           approvedValues.set(entry, fillValueSnapshot(entry));
         }
+        grown.found += added.length;
+        grownFields.push(...added);
         const helpers = self.ResumeProAIHelpers;
         const local = helpers?.buildRuleBasedMatches
           ? helpers.filterValidMatches(added, helpers.buildRuleBasedMatches(added, resumeFields)) : [];
@@ -2596,14 +2615,44 @@
           if (same.length === 1) local.push(...(helpers?.filterValidMatches ? helpers.filterValidMatches([field], [{ fieldId: field.fieldId, value: same[0].value }]) : []));
         }
         const localIds = new Set(local.map(match => match.fieldId));
+        grown.local += localIds.size;
+        grown.matched += localIds.size;
+        localIds.forEach(id => grownMatchedIds.add(id));
         pendingNew.push(...added.filter(field => !localIds.has(field.fieldId)));
         const order = match => fieldMap.get(match.fieldId)?.element || fieldMap.get(match.fieldId)?.elements?.[0];
         local.sort((a, b) => (order(a)?.compareDocumentPosition?.(order(b)) & 4) ? -1 : 1);
         queue.splice(position + 1, 0, ...local);
       };
+      // 一次补填请求的结果记账。没拿到值的新字段按首轮的口径分（feedback-core 的 fillDrops）：
+      // 像密码的不发，太大的没送 AI，AI 看过没给值的算 AI 未匹配，只有请求本身失败才算没拿到结果。
+      const noteCatchUp = (batch, reply, more) => {
+        const answered = new Set(more.map(match => match.fieldId));
+        answered.forEach(id => grownMatchedIds.add(id));
+        grown.matched += answered.size;
+        const d = reply?.diagnostics || {};
+        const counted = value => Number.isInteger(value) && value > 0 ? value : 0;
+        grown.local += counted(d.ruleMatches);
+        grown.aiFields += counted(d.aiFields);
+        grown.aiMatches += counted(d.aiMatches);
+        try {
+          if (self.ResumeProFeedback?.aiCalled?.({ diagnostics: reply?.diagnostics, requested: true }) === true) grown.aiCalled = true;
+        } catch { /* diagnostics are optional; never break the fill */ }
+        let dropped = [];
+        try {
+          dropped = self.ResumeProFeedback?.fillDrops?.({ fieldCount: batch.length, diagnostics: reply?.diagnostics, requested: true }) || [];
+        } catch { /* diagnostics are optional; never break the fill */ }
+        for (const [key, value] of dropped) grown.drops[key] = (grown.drops[key] || 0) + value;
+        // 请求失败或没发出去的：要用户自己补，错误码和警告说明原因。
+        if (dropped.some(([key]) => key === "no_result" || key === "not_sent")) {
+          grownMissed.push(...batch.filter(field => !answered.has(field.fieldId)));
+          if (!grown.errorCode && typeof d.errorCode === "string" && d.errorCode !== "none") grown.errorCode = d.errorCode;
+          if (!grownWarning && typeof reply?.warning === "string") grownWarning = reply.warning;
+        }
+      };
       for (let position = 0; ; position++) {
         if (position >= queue.length) {
-          if (assisted || deep || !pendingNew.length || catchUpRounds >= 2 || !isCurrent()) break;
+          // 停下来的、两轮补填用完的、首轮 AI 已经失败的：排队的新字段不再发出，循环后统一收尾。
+          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown) break;
           catchUpRounds += 1;
           const batch = pendingNew.splice(0);
           button.textContent = "正在补填新出现的字段...";
@@ -2616,14 +2665,16 @@
           }
           catchUpRequestId = null;
           button.textContent = "正在填写网页...";
-          if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
+          // 等补填时按了停止或换了页：这一批的结果不用，算没送 AI。
+          if (!isCurrent()) { pendingNew.push(...batch); break; }
           const ids = new Set(batch.map(field => field.fieldId));
           const more = reply?.success && Array.isArray(reply.matches) ? reply.matches.filter(match => ids.has(match.fieldId)) : [];
+          noteCatchUp(batch, reply, more);
           if (!more.length) break;
           queue.push(...more);
         }
         const match = queue[position];
-        if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
+        if (!isCurrent()) throw stopError();
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         let element = fieldMap.get(match.fieldId);
@@ -2732,7 +2783,7 @@
           filledCount += 1;
           if (newFieldIds.has(match.fieldId)) supplemented += 1;
           if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element) });
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId) });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
@@ -2755,19 +2806,32 @@
           await pickUpNewFields(position);
         }
       }
-
+      // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。
+      if (!assisted && !deep && !isCurrent()) throw stopError();
       await finalSyncFillSession(session);
+      // 最后同步要等文字提交，这时按的停止也一样。
+      if (!assisted && !deep && !isCurrent()) throw stopError();
+      // 两轮补填用完或首轮 AI 已经失败，还在排队的新字段也要用户自己补。
+      grownMissed.push(...pendingNew);
+
       // A later control's focus can roll back an earlier picker. Re-read the final
       // state before counting success; verification never writes or retries.
       recheckVerifiedControls();
       stage = null;
 
-      outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
+      // 只提还在网页上的新字段（页面重画过的按题目找回）。
+      const grownLeft = grownMissed.filter(field => {
+        const entry = fieldMap.get(field.fieldId);
+        return isFieldBindingCurrent(entry) || Boolean(rebindFieldEntry(entry));
+      });
+      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length ? "partial" : "success";
       const supplementNote = (supplemented ? `（其中新出现的字段补填 ${supplemented} 项）` : "")
         + (dayDefaulted ? `（${dayDefaulted} 项日期资料里只有年月，已按 1 日填写）` : "");
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
-        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
+        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '')
+        + (grownLeft.length ? `新出现的 ${grownLeft.length} 项没有补填：${summarizeLabels(grownLeft.map(field => field.label))}，请手动补上。`
+          + (grownWarning !== response.warning ? grownWarning : '') : '');
       const emptyHint = viewModeHint();
       const recipeLead = !deep && recipeUse?.status === "hit" ? "已按本站配方定位字段。" : "";
       const recipeTail = !deep && recipeUse?.status === "stale" ? "本站配方可能已过期，可以重新深度分析。" : "";
@@ -2791,10 +2855,11 @@
       }
 
       if (!assisted) {
-        const matchedIds = new Set(response.matches.map((match) => match.fieldId));
+        const matchedIds = new Set([...response.matches.map((match) => match.fieldId), ...grownMatchedIds]);
         // 只有对上了题目的字段才问：占位文字、计数器、跨行借来的文字都不会出现在这里。
+        // 选完后新出现的字段和首轮的一样问（#301）。
         const offerStats = {};
-        offerUnansweredFields(fields.flatMap((field) => {
+        offerUnansweredFields([...fields, ...grownFields].flatMap((field) => {
           const entry = fieldMap.get(field.fieldId);
           if (!(entry?.offerable && entry.offerLabel)) return [];
           const control = entry.element || entry.elements?.[0];
@@ -2836,11 +2901,15 @@
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
-      const verdict = fillVerdict({ scanned: scanDone, fieldCount, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
-        failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
+      // 没轮到补填就结束的新字段（两轮用完、首轮 AI 已经失败、中途停止或出错）算没送 AI。
+      if (pendingNew.length) grown.drops.not_sent = (grown.drops.not_sent || 0) + pendingNew.length;
+      const totalFields = fieldCount + grown.found;
+      const totalMatched = matched === null ? null : matched + grown.matched;
+      const verdict = fillVerdict({ scanned: scanDone, fieldCount: totalFields, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
+        failedStage, responded, errorCode: diagnostics.errorCode, matched: totalMatched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
       const summaryInput = { ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
-        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict,
+        fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
+        path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -2876,7 +2945,7 @@
       // A page with nothing to fill produced nothing worth archiving.
       if (fieldCount > 0 && (!overwriteDeclined || filledCount > 0)) {
         offerFillRecord({
-          outcome, cancelled: cancelRequested, fieldCount, filledCount, unconfirmedCount,
+          outcome, cancelled: cancelRequested, fieldCount: totalFields, filledCount, unconfirmedCount,
           timing: { scanMs: timing.scanMs, roundTripMs: timing.roundTripMs, fillMs: timing.fillMs, totalMs },
           templateName: activeTemplate?.name,
           endedAt: new Date().toISOString()
@@ -2884,7 +2953,7 @@
       }
     }
     return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure, overwriteDeclined,
-      fieldCount, calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+      fieldCount: fieldCount + grown.found, calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
   }
 
   function summarizeLabels(labels, limit = 5) {
@@ -2937,13 +3006,17 @@
     const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行";
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : missing;
     const d = result.diagnostics;
+    // 选完后新出现的字段（#301）：匹配数加到首轮上，首轮没有错误码时显示补填的。
+    const g = result.grown || {};
+    const plus = (value, extra) => Number.isInteger(value) && Number.isInteger(extra) && extra > 0 ? value + extra : value;
     const feedback = self.ResumeProFeedback;
     // Explicit allowlist: never copy provider messages, URL, keys or field values.
     const allowedCodes = new Set(["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
       "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
       "secret_only", "no_resume_fields"]);
-    const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : missing;
+    const errorCode = d.errorCode === "none" && g.errorCode ? g.errorCode : d.errorCode;
+    const code = allowedCodes.has(errorCode) || /^http_\d{3}$/.test(errorCode) ? errorCode : missing;
     // 提交校验后网页仍把插件填的框标成无效：不能再算「完成」。
     const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;
     const outcome = unsynced && result.outcome === "success" ? "partial" : result.outcome;
@@ -2974,8 +3047,8 @@
       ...formatScanStats(result.stats, feedback),
       `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}；未确认：${count(result.unconfirmedCount)}`,
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
-      `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
-      `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
+      `本地匹配：${count(plus(d.ruleMatches, g.local))}；AI 匹配：${count(plus(d.aiMatches, g.aiMatches))}`,
+      `送 AI 字段：${count(plus(d.aiFields, g.aiFields))}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
       // #223：只有这次指定了档位才写，普通一键填写的诊断不变。
       ...(["strong", "default"].includes(d.tierRequested) ? [`模型档位：${d.tierUsed === "strong" ? "强"
         : d.tierUsed === "default" ? (d.tierRequested === "strong" ? "强模型未设置，已退回日常" : "日常") : "未取得"}`] : []),
