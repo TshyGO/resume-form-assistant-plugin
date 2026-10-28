@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { loadHighlightHelpers, fakeFieldScan } = require("./helpers/content-harness.js");
 const realProbe = require("../fill-probe.js");
 const deep = require("../deep-analysis.js");
+const { JSDOM } = require("jsdom");
 
 const STORE = { templates: [{ id: "one", groups: [{ name: "基本信息", fields: [{ key: "姓名", value: "测试用户" }] }] }], activeTemplateId: "one" };
 const NO_CLUES = { host: "jobs.example.test", frames: { total: 0, crossOrigin: 0, frameInputs: 0 },
@@ -70,7 +71,7 @@ test("a form that renders after the click is found in the same click, with one A
   const observer = await page.observing();
   assert.ok(observer, "waits for the page");
   assert.equal(page.button.textContent, "正在等待网页加载...");
-  assert.deepEqual({ ...observer.options }, { childList: true, subtree: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(observer.options)), { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
   // 先只有文字变化：还不算表单出来了。
   observer.callback([{ addedNodes: [TEXT] }]);
   assert.equal(page.timer(300).length, 0);
@@ -116,6 +117,64 @@ test("a control that is still settling when the cap is reached is scanned for on
   page.timer(2000)[0].callback();
   const result = await within(pending);
   assert.equal(result.filledCount, 1);
+  assert.equal(page.scans(), 2);
+});
+
+test("a control that is not the form, such as a header search box, does not end the wait before the form shows up", async () => {
+  const page = zeroFieldPage();
+  const pending = page.click();
+  const observer = await page.observing();
+  // 页头先出来一个搜索框：扫一次，没有可填的字段，接着等。
+  observer.callback([{ addedNodes: [CONTROL] }]);
+  page.timer(300).at(-1).callback();
+  await tick();
+  assert.equal(page.scans(), 2);
+  assert.equal(observer.disconnected, false);
+  assert.equal(page.timer(2000).length, 1, "still within the cap");
+  // 表单随后出来：同一次点击里填上。
+  page.formElements.push(new page.HTMLInputElement());
+  observer.callback([{ addedNodes: [CONTROL] }]);
+  assert.equal(page.timer(300).length, 1);
+  page.timer(300)[0].callback();
+  const result = await within(pending);
+  assert.equal(result.filledCount, 1);
+  assert.equal(page.scans(), 3);
+  assert.equal(page.aiCalls(), 1);
+  assert.equal(observer.disconnected, true);
+  assert.equal(page.timer(2000).length, 0, "the cap is cleared");
+});
+
+test("a hidden form that is shown by a style, class or hidden change is found in the same click", async () => {
+  const page = zeroFieldPage();
+  const pending = page.click();
+  const observer = await page.observing();
+  // 不含控件的节点改样式（比如轮播）不算。
+  observer.callback([{ type: "attributes", target: TEXT }]);
+  assert.equal(page.timer(300).length, 0);
+  page.formElements.push(new page.HTMLInputElement());
+  observer.callback([{ type: "attributes", target: CONTROL }]);
+  assert.equal(page.timer(300).length, 1);
+  page.timer(300)[0].callback();
+  const result = await within(pending);
+  assert.equal(result.filledCount, 1);
+  assert.equal(page.scans(), 2);
+});
+
+test("hidden inputs, the plugin's own sidebar and plain text do not count as a new control", async () => {
+  const page = zeroFieldPage();
+  const pending = page.click();
+  const observer = await page.observing();
+  const { document } = new JSDOM(`<!doctype html><body><div id="resume-pro-sidebar"><input id="ours"></div>
+    <input type="hidden" id="token"><p id="words">加载中</p><div id="part" hidden><select></select></div></body>`).window;
+  const byId = id => document.getElementById(id);
+  observer.callback([{ addedNodes: [byId("token")] }, { addedNodes: [byId("ours")] }, { addedNodes: [byId("words")] },
+    { type: "attributes", target: byId("words") }, { type: "attributes", target: byId("resume-pro-sidebar") }]);
+  assert.equal(page.timer(300).length, 0);
+  observer.callback([{ type: "attributes", target: byId("part") }]);
+  assert.equal(page.timer(300).length, 1);
+  page.timer(2000)[0].callback();
+  const result = await within(pending);
+  assert.equal(result.error, LOADING_EMPTY);
   assert.equal(page.scans(), 2);
 });
 

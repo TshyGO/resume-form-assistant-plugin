@@ -2440,12 +2440,13 @@
       };
       describeScan();
       // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
-      // 等网页上出现新的输入控件再扫一次，最多一次；辅助新增、深度填写和按本站配方的填写不等。
+      // 等网页上出现新的输入控件再扫，扫到就用这次的结果；辅助新增、深度填写和按本站配方的填写不等。
       if (!fields.length && !assisted && !deep && (!recipeUse || recipeUse.status === "unused") && probe
         && pageType?.type === "application_form" && !withFillProbe(api => api.hasClues(probe), true)) {
         button.textContent = "正在等待网页加载...";
-        if (await waitForNewControls(fillUrl) === "controls") {
-          scanned = scanFillableFields();
+        const later = await waitForNewControls(fillUrl, scanFillableFields);
+        if (later) {
+          scanned = later;
           fieldMap = scanned.fieldMap;
           fields = scanned.fields;
           describeScan();
@@ -3398,38 +3399,55 @@
     });
   }
 
-  // #301 零字段时等表单出来：网页上新加了输入框、下拉、可编辑区域或框架，之后 300ms 没有再增删节点就结束，
-  // 最多等 2s。只看节点增删，不轮询；插件自己的侧栏不算。网址变了（换页、跳到登录页）就不等了，调用方也不重扫。
-  // 没有 MutationObserver 时立即返回。结果是 "controls"、"cap"、"navigated" 或 "skipped"。
+  // #301 零字段时等表单出来：网页上新加了输入框、下拉、可编辑区域或框架，或者含有它们的节点改了样式、class、hidden
+  // （藏着的表单显示出来），之后 300ms 没有再增删节点，就用 rescan 扫一次。扫到字段就结束；扫不到（先出来的是
+  // 页头搜索框、客服框架这类）就接着等，最多等 2s，到上限时还有没扫过的变化就再扫一次。不轮询；插件自己的侧栏不算。
+  // 网址变了（换页、跳到登录页）就不等了，也不扫。没有 MutationObserver 时立即返回。扫到字段时返回那次的扫描结果，否则 null。
   const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
-  function waitForNewControls(href, settleMs = 300, maxMs = 2000) {
+  function waitForNewControls(href, rescan, settleMs = 300, maxMs = 2000) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
     const root = document.documentElement;
-    if (!Observer || !root?.nodeType) return Promise.resolve("skipped");
+    if (!Observer || !root?.nodeType) return Promise.resolve(null);
     return new Promise((resolve) => {
       let seen = false;
       let settle = null;
       let cap = null;
-      const isControl = (node) => node?.nodeType === 1 && !node.closest?.(`#${SIDEBAR_ID}`)
+      const ours = (node) => Boolean(node?.closest?.(`#${SIDEBAR_ID}`));
+      const isControl = (node) => node?.nodeType === 1 && !ours(node)
         && Boolean(node.matches?.(NEW_CONTROL_SELECTOR) || node.querySelector?.(NEW_CONTROL_SELECTOR));
+      const fresh = (record) => record.type === "attributes" ? isControl(record.target) : Array.from(record.addedNodes || []).some(isControl);
       const observer = new Observer((records) => {
         if (location.href !== href) {
-          finish("navigated");
+          finish(null);
           return;
         }
-        if (!seen && !records.some((record) => Array.from(record.addedNodes || []).some(isControl))) return;
+        // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
+        if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
         seen = true;
         window.clearTimeout(settle);
-        settle = window.setTimeout(() => finish("controls"), settleMs);
+        settle = window.setTimeout(() => {
+          const scanned = scan();
+          if (scanned) finish(scanned);
+        }, settleMs);
       });
-      function finish(reason) {
+      function scan() {
+        seen = false;
+        if (location.href !== href) return null;
+        try {
+          const scanned = rescan();
+          return scanned?.fields?.length ? scanned : null;
+        } catch {
+          return null;
+        }
+      }
+      function finish(scanned) {
         observer.disconnect();
         window.clearTimeout(settle);
         window.clearTimeout(cap);
-        resolve(location.href === href ? reason : "navigated");
+        resolve(location.href === href ? scanned : null);
       }
-      observer.observe(root, { childList: true, subtree: true });
-      cap = window.setTimeout(() => finish(seen ? "controls" : "cap"), maxMs);
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
+      cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
   }
 
