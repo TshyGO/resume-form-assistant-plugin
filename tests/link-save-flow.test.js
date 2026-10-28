@@ -154,6 +154,19 @@ test('a failed or partial AI answer opens the form with what is known', async ()
   assert.equal(same.fields.title, '', 'a company name never lands in the title field');
 });
 
+test('#278: when the AI found neither field, the note names only what the page read could not fill', async () => {
+  const { afterAssist } = await load();
+  const reply = { status: 'manual', reason: 'missing_both', reliable: false, fields: { company: '', title: '' } };
+  const empty = { company: '', title: '', location: '', sourceUrl: '', dedupeUrl: '' };
+
+  assert.equal(afterAssist(reply, empty).reason, 'missing_both');
+  const titleOnly = afterAssist(reply, { ...empty, title: '数据分析师' });
+  assert.equal(titleOnly.fields.title, '数据分析师');
+  assert.equal(titleOnly.reason, 'missing_company');
+  assert.equal(afterAssist(reply, { ...empty, company: '星河科技' }).reason, 'missing_title');
+  assert.equal(afterAssist(reply, { ...empty, company: '星河科技', title: '数据分析师' }).reason, 'missing_company');
+});
+
 test('a reliable flag without both fields still asks the user', async () => {
   const { nextSaveStep } = await load();
   assert.equal(nextSaveStep({ company: '星河科技', title: '', reliable: true }).action, 'form');

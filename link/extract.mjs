@@ -63,12 +63,16 @@ const SITE_TITLE = /(?:招聘官网|招聘网站|微招聘|官网)$/;
 const HOTJOB_HOST = 'wecruit.hotjob.cn';
 const HOTJOB_DETAIL = /^\/SU[0-9a-f]{24}\/(pb\/posDetail\.html|mc\/detail)$/;
 // A tenant can show the post code after the name: "示例岗位(J01)". Only a code-shaped tail
-// is dropped; "(2027届)" is part of the name.
+// with at least two digits is dropped; "(2027届)", "(NLP)", "(5G)" and "(2027-2028)" are
+// part of the name.
 const POST_CODE = /\s*\(([A-Za-z0-9-]+)\)$/;
-const YEAR = /^(?:19|20)\d{2}$/;
+const TWO_DIGITS = /\d\D*\d/;
+const YEAR = /^(?:19|20)\d{2}(?:-(?:19|20)?\d{2})?$/;
 const COMPANY_ITEM_LABEL = /^(?:所属公司|公司)\s*[:：]\s*/;
 // Any other labelled item ("部门：…", "联系方式：…") is not the employer.
 const OTHER_ITEM_LABEL = /^[^:：]{1,8}[:：]/;
+// A branch with no parent name ("上海分公司") is a department, not the employer.
+const BRANCH_ONLY = /^\S{1,4}分公司$/;
 
 export function extractJobFields(doc, href) {
   const redacted = redactUrl(href);
@@ -253,7 +257,7 @@ function hotjobTitles(values) {
 
 function withoutPostCode(value) {
   const match = value.match(POST_CODE);
-  if (!match || YEAR.test(match[1])) return value;
+  if (!match || !TWO_DIGITS.test(match[1]) || YEAR.test(match[1])) return value;
   return value.slice(0, match.index);
 }
 
@@ -263,7 +267,7 @@ function hotjobCompanies(items) {
     if (COMPANY_ITEM_LABEL.test(text)) return text.replace(COMPANY_ITEM_LABEL, '');
     return OTHER_ITEM_LABEL.test(text) ? '' : text;
   }).map(cleanField);
-  return unique(values.filter(value => plausibleCompanyName(value) && hasNamedCompanySuffix(value)));
+  return unique(values.filter(value => plausibleCompanyName(value) && hasNamedCompanySuffix(value) && !BRANCH_ONLY.test(value)));
 }
 
 // The header title holds the name as its own text; the category tag and the "热招" badge

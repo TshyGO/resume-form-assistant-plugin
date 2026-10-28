@@ -103,7 +103,12 @@ export function afterAssist(result, fallback) {
     dedupeUrl: base.dedupeUrl
   };
   if (fields.title && fields.title === fields.company) fields.title = '';
-  return { action: 'form', fields, reason: result?.reason || 'manual' };
+  let reason = result?.reason || 'manual';
+  // The AI found neither field, but the page read may have filled one or both.
+  if (reason === 'missing_both' && (fields.company || fields.title)) {
+    reason = fields.company && !fields.title ? 'missing_title' : 'missing_company';
+  }
+  return { action: 'form', fields, reason };
 }
 
 function publicFields(source) {

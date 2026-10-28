@@ -723,6 +723,21 @@ test('two organisation-like mc items are a company conflict, not a guess', async
   assert.equal(fields.title, '[27届]芯片设计工程师');
 });
 
+test('a branch name with no parent in an mc item is a department, not the employer', async () => {
+  const { extractJobFields } = await load();
+  const doc = fixturePage('hotjob-mc-no-company.html', HOTJOB_MC);
+  const msgs = doc.querySelector('.listItemRtMsgs');
+  const split = doc.createElement('i');
+  split.className = 'split';
+  msgs.insertBefore(split, msgs.firstChild);
+  msgs.insertBefore(doc.createTextNode('上海分公司'), split);
+  const fields = extractJobFields(doc, HOTJOB_MC);
+
+  assert.equal(fields.company, '');
+  assert.ok(fields.assistReasons.includes('missing_company'));
+  assert.equal(fields.title, '示例文员（2027校招）');
+});
+
 test('a code-shaped post code after the title is dropped; a year or a Chinese note is not', async () => {
   const { extractJobFields } = await load();
   const doc = fixturePage('hotjob-mc-post-code.html', HOTJOB_MC);
@@ -735,7 +750,13 @@ test('a code-shaped post code after the title is dropped; a year or a Chinese no
     ['测试开发工程师(2027)', '测试开发工程师(2027)'],
     ['测试开发工程师(2027届)', '测试开发工程师(2027届)'],
     ['测试开发工程师（Q01）', '测试开发工程师（Q01）'],
-    ['测试开发工程师 (QA-01)', '测试开发工程师']
+    ['测试开发工程师 (QA-01)', '测试开发工程师'],
+    ['测试开发工程师(J-0042)', '测试开发工程师'],
+    ['算法工程师(NLP)', '算法工程师(NLP)'],
+    ['软件工程师(Java)', '软件工程师(Java)'],
+    ['产品经理(AI)', '产品经理(AI)'],
+    ['通信工程师(5G)', '通信工程师(5G)'],
+    ['测试开发工程师(2027-2028)', '测试开发工程师(2027-2028)']
   ]) {
     title.textContent = text;
     assert.equal(extractJobFields(doc, HOTJOB_MC).title, expected, text);
