@@ -2873,6 +2873,7 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
+          // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
           if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
           } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));

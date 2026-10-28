@@ -139,6 +139,15 @@ test("textless elements named lazyloading or loading-done are not a loading list
   assert.equal(run.result.filledCount, 1);
 });
 
+test("a loading icon faded out with opacity 0 but still mounted is not a loading list, so the search still finishes", async (t) => {
+  const extra = `<div class="list-loading" style="opacity:0"><i class="spin"></i></div>`
+    + `<div style="opacity:0"><span class="mask-loading"></span></div>`;
+  const run = await choose(t, "民族", "土家族", { choices: ETHNIC, extra });
+  assert.equal(run.shown(), "土家族", run.diag);
+  assert.deepEqual(run.searches, ["土家族"]);
+  assert.equal(run.result.filledCount, 1);
+});
+
 test("Beisen search results split by the highlight are read as whole options, so 大专 is not ambiguous", async (t) => {
   // react-highlight-words：「大专及以上」成了 <mark>大专</mark><span>及以上</span>，原来多读出一个「大专」，报选项存在歧义。
   const run = await choose(t, "最高学历", "大专", { choices: DEGREE, rows: 3 });

@@ -651,10 +651,16 @@
       if (!info.cascade) list.forEach(option => seenOptions.add(optionKey(option)));
       return list;
     };
-    // 通用路径：弹层里还显示着加载图标时，列表还没好。
+    // 通用路径：弹层里还显示着加载图标时，列表还没好。靠 opacity: 0 淡出、没有卸载的不算。
+    const faded = node => {
+      for (let el = node; el && ctx.popup.contains(el); el = el.parentElement) {
+        if (parseFloat(el.ownerDocument.defaultView.getComputedStyle(el).opacity) === 0) return true;
+      }
+      return false;
+    };
     const spinnerShown = () => info.library === 'generic' && Boolean(ctx.popup?.isConnected)
       && Array.from(ctx.popup.querySelectorAll('[class]')).some(node => !trim(node.textContent)
-        && String(node.getAttribute('class')).split(/\s+/).some(token => LOADING_TOKEN.test(token)) && h.visible(node));
+        && String(node.getAttribute('class')).split(/\s+/).some(token => LOADING_TOKEN.test(token)) && h.visible(node) && !faded(node));
     const loading = () => info.combo.getAttribute('aria-busy') === 'true' || popup.getAttribute('aria-busy') === 'true' || spinnerShown();
     // 弹层里显示着「暂无数据」一类的空状态；「加载中」还在等，不算。
     const emptyShown = () => [popup, ctx.popup].some(layer => layer?.isConnected && Array.from(layer.querySelectorAll('*')).some(node => {
