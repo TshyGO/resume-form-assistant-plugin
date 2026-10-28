@@ -271,7 +271,9 @@ test("90-second reminder does not cancel; manual button sends matching request a
   timer.callback();
   assert.equal(messages.length, 1);
   assert.equal(hint.hidden, false);
-  assert.match(hint.textContent, /不会.*自动取消/);
+  // 桌面 120 秒会结束日常档请求（#299）：提醒里不能说插件不会取消。
+  assert.doesNotMatch(hint.textContent, /不会.*取消/);
+  assert.match(hint.textContent, /继续等待或手动取消/);
   assert.match(hint.textContent, /通常.*上游/);
   clock = 120000;
   timer.callback();

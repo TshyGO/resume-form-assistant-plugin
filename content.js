@@ -2368,6 +2368,8 @@
     let filledCount = 0;
     let unconfirmedCount = 0;
     const verifiedControls = [];
+    // 写上了、页面当时还提示无效的字段：提示可能要等后面的字段填完才消（北森开始 / 结束时间联动校验），结束前再看一次。
+    const invalidControls = [];
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
@@ -2391,11 +2393,13 @@
     // #226 本站配方这次用没用上：只有固定状态码和计数。
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
-    const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
+    // 只在什么都没匹配上、AI 也没出错时这样说：AI 超时、匹配到了却写不上（#299）都不是查看状态。
+    const viewModeHint = () => !assisted && filledCount === 0 && !matched && probe?.editButtons > 0
+      && ["none", "no_context"].includes(diagnostics.errorCode || "none")
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
-    // 失败信息里带了「先点编辑」这类提示：要一直留在屏幕上，不像别的失败几秒后消失。
+    // 失败信息里带了「先点编辑」这类提示，或是扫描到 0 个字段：要一直留在屏幕上，不像别的失败几秒后消失。
     let hinted = false;
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
@@ -2418,29 +2422,46 @@
         scanned = found.scanned;
         recipeUse = found.recipe;
       }
-      const fieldMap = scanned.fieldMap;
-      const fields = assisted ? scanned.fields.filter(field => {
+      let fieldMap = scanned.fieldMap;
+      let fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
       }) : scanned.fields;
-      fieldCount = fields.length;
-      scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       scanDone = true;
-      // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
-      scanPath = location.pathname;
-      stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
-      // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
-      probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
-      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      const describeScan = () => {
+        fieldCount = fields.length;
+        scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
+        // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
+        scanPath = location.pathname;
+        stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
+        // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
+        probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+        pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      };
+      describeScan();
+      // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
+      // 等网页上出现新的输入控件再扫，扫到就用这次的结果；辅助新增、深度填写和按本站配方的填写不等。
+      if (!fields.length && !assisted && !deep && (!recipeUse || recipeUse.status === "unused") && probe
+        && pageType?.type === "application_form" && !withFillProbe(api => api.hasClues(probe), true)) {
+        button.textContent = "正在等待网页加载...";
+        const later = await waitForNewControls(fillUrl, scanFillableFields);
+        if (later) {
+          scanned = later;
+          fieldMap = scanned.fieldMap;
+          fields = scanned.fields;
+          describeScan();
+        }
+      }
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
-        const hint = !assisted && !scanned.fields.length
-          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown",
+        // 其余零字段的提示按页面类型给，一律留在屏幕上（#301）。
+        hinted = !assisted && !scanned.fields.length;
+        const hint = hinted
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown", form: pageType?.type === "application_form",
             deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
-        hinted = Boolean(hint);
-        throw new Error(`当前页面没有可填写的表单字段。${hint}`);
+        throw new Error(`没找到可填写的输入框。${hint}`);
       }
       if (!assisted) closeProfileOffer();
       // 模板字段在前并且优先；「我的信息」只补模板里没有的字段名。
@@ -2492,7 +2513,7 @@
         button.textContent = `AI 匹配中... ${seconds}s`;
         if (seconds >= 90 && waitHint && !cancelRequested) {
           waitHint.hidden = false;
-          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。插件不会因等待较久自动取消；你可以继续等待或手动取消。";
+          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。你可以继续等待或手动取消。";
         }
       };
       updateProgress();
@@ -2610,6 +2631,25 @@
             filledCount -= 1;
             if (item.isNew) supplemented -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
+          }
+        }
+        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回的记复核读到的原因，
+        // 字段已被页面替换的记「字段已被页面替换」。
+        // 只读：不写值、不聚焦，也不滚动页面。
+        for (const item of invalidControls) {
+          const current = isFieldBindingCurrent(item.element);
+          const checked = current ? controlOperator?.check(item.element) : null;
+          if (!checked?.ok) {
+            noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
+            continue;
+          }
+          const control = item.element.kind === 'element' ? item.element.element : item.element;
+          filledCount += 1;
+          if (item.isNew) supplemented += 1;
+          if (item.element.kind === 'element' && dayDefaultedControls.has(control)) dayDefaulted += 1;
+          textFillFailures.delete(control);
+          if (item.element.kind === 'element' && !item.element.pickerType && !['custom-select', 'cascader'].includes(item.element.controlKind)) {
+            recordFilledTextControl(session, control);
           }
         }
       };
@@ -2865,7 +2905,10 @@
             recordFilledTextControl(session, element.element);
           }
         } else {
-          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
+          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+            invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
+          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -3389,6 +3432,58 @@
         if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);
       };
       window.setTimeout(tick, 50);
+    });
+  }
+
+  // #301 零字段时等表单出来：网页上新加了输入框、下拉、可编辑区域或框架，或者含有它们的节点改了样式、class、hidden
+  // （藏着的表单显示出来），之后 300ms 没有再增删节点，就用 rescan 扫一次。扫到字段就结束；扫不到（先出来的是
+  // 页头搜索框、客服框架这类）就接着等，最多等 2s，到上限时还有没扫过的变化就再扫一次。不轮询；插件自己的侧栏不算。
+  // 网址变了（换页、跳到登录页）就不等了，也不扫。没有 MutationObserver 时立即返回。扫到字段时返回那次的扫描结果，否则 null。
+  const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
+  function waitForNewControls(href, rescan, settleMs = 300, maxMs = 2000) {
+    const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
+    const root = document.documentElement;
+    if (!Observer || !root?.nodeType) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let seen = false;
+      let settle = null;
+      let cap = null;
+      const ours = (node) => Boolean(node?.closest?.(`#${SIDEBAR_ID}`));
+      const isControl = (node) => node?.nodeType === 1 && !ours(node)
+        && Boolean(node.matches?.(NEW_CONTROL_SELECTOR) || node.querySelector?.(NEW_CONTROL_SELECTOR));
+      const fresh = (record) => record.type === "attributes" ? isControl(record.target) : Array.from(record.addedNodes || []).some(isControl);
+      const observer = new Observer((records) => {
+        if (location.href !== href) {
+          finish(null);
+          return;
+        }
+        // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
+        if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
+        seen = true;
+        window.clearTimeout(settle);
+        settle = window.setTimeout(() => {
+          const scanned = scan();
+          if (scanned) finish(scanned);
+        }, settleMs);
+      });
+      function scan() {
+        seen = false;
+        if (location.href !== href) return null;
+        try {
+          const scanned = rescan();
+          return scanned?.fields?.length ? scanned : null;
+        } catch {
+          return null;
+        }
+      }
+      function finish(scanned) {
+        observer.disconnect();
+        window.clearTimeout(settle);
+        window.clearTimeout(cap);
+        resolve(location.href === href ? scanned : null);
+      }
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
+      cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
   }
 
@@ -4289,7 +4384,9 @@
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
-      if (result.ok && result.observed?.dayDefaulted) dayDefaultedControls.add(control); else dayDefaultedControls.delete(control);
+      // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
+      if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
+      else dayDefaultedControls.delete(control);
     }
     return result.ok;
   }

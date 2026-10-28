@@ -209,7 +209,8 @@
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
-      if (verdict.ok) checks.set(ctx.el, { ctx,
+      // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
+      if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx,
         accepted: () => shows(ctx.el, expected),
         inspect: () => deps.inspectText(ctx.el, expected, true) });
       return result(verdict.ok, verdict.reason, ctx);
@@ -218,7 +219,8 @@
     // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
     // 给这个框发一个 Tab 键收起它（不点页面，焦点也不动），再按文本框核对一次。
     // Element's autocomplete closes its suggestions on Tab (Element UI 2 and Element Plus alike).
-    // The key goes only to the box being filled, so nothing else on the page reacts to it.
+    // The key starts at the box being filled and bubbles like a real one: Element UI 2 listens on the
+    // wrapper around the box. Unlike a real Tab it moves no focus and types nothing.
     function pressTab(el) {
       const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
       if (!ViewKeyboardEvent) return;
@@ -233,7 +235,7 @@
       const saved = checks.get(ctx.el);
       if (!saved) return typed;
       const again = await verify(ctx, saved.accepted, saved.inspect);
-      if (!again.ok) checks.delete(ctx.el);
+      if (!again.ok && again.reason !== 'validation_not_cleared') checks.delete(ctx.el);
       return again;
     }
 
@@ -344,7 +346,7 @@
         const inspect = ['date', 'custom-select', 'cascader'].includes(ctx.kind) && !direct && deps.inspectText
           ? () => deps.inspectText(ctx.el, String(ctx.el.value ?? ''), true) : null;
         const verified = await verify(ctx, accepted, inspect);
-        if (verified.ok) checks.set(ctx.el, { ctx, accepted, inspect });
+        if (verified.ok || verified.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, accepted, inspect });
         return verified;
       } catch {
         // Page exceptions are untrusted and can contain resume data. Only a fixed code escapes.
