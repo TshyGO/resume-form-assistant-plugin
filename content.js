@@ -2420,22 +2420,37 @@
         scanned = found.scanned;
         recipeUse = found.recipe;
       }
-      const fieldMap = scanned.fieldMap;
-      const fields = assisted ? scanned.fields.filter(field => {
+      let fieldMap = scanned.fieldMap;
+      let fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
       }) : scanned.fields;
-      fieldCount = fields.length;
-      scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       scanDone = true;
-      // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
-      scanPath = location.pathname;
-      stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
-      // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
-      probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
-      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      const describeScan = () => {
+        fieldCount = fields.length;
+        scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
+        // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
+        scanPath = location.pathname;
+        stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
+        // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
+        probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+        pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      };
+      describeScan();
+      // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
+      // 等网页上出现新的输入控件再扫一次，最多一次；辅助新增、深度填写和按本站配方的填写不等。
+      if (!fields.length && !assisted && !deep && (!recipeUse || recipeUse.status === "unused") && probe
+        && pageType?.type === "application_form" && !withFillProbe(api => api.hasClues(probe), true)) {
+        button.textContent = "正在等待网页加载...";
+        if (await waitForNewControls(fillUrl) === "controls") {
+          scanned = scanFillableFields();
+          fieldMap = scanned.fieldMap;
+          fields = scanned.fields;
+          describeScan();
+        }
+      }
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
         // 其余零字段的提示按页面类型给，一律留在屏幕上（#301）。
@@ -3380,6 +3395,41 @@
         if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);
       };
       window.setTimeout(tick, 50);
+    });
+  }
+
+  // #301 零字段时等表单出来：网页上新加了输入框、下拉、可编辑区域或框架，之后 300ms 没有再增删节点就结束，
+  // 最多等 2s。只看节点增删，不轮询；插件自己的侧栏不算。网址变了（换页、跳到登录页）就不等了，调用方也不重扫。
+  // 没有 MutationObserver 时立即返回。结果是 "controls"、"cap"、"navigated" 或 "skipped"。
+  const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
+  function waitForNewControls(href, settleMs = 300, maxMs = 2000) {
+    const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
+    const root = document.documentElement;
+    if (!Observer || !root?.nodeType) return Promise.resolve("skipped");
+    return new Promise((resolve) => {
+      let seen = false;
+      let settle = null;
+      let cap = null;
+      const isControl = (node) => node?.nodeType === 1 && !node.closest?.(`#${SIDEBAR_ID}`)
+        && Boolean(node.matches?.(NEW_CONTROL_SELECTOR) || node.querySelector?.(NEW_CONTROL_SELECTOR));
+      const observer = new Observer((records) => {
+        if (location.href !== href) {
+          finish("navigated");
+          return;
+        }
+        if (!seen && !records.some((record) => Array.from(record.addedNodes || []).some(isControl))) return;
+        seen = true;
+        window.clearTimeout(settle);
+        settle = window.setTimeout(() => finish("controls"), settleMs);
+      });
+      function finish(reason) {
+        observer.disconnect();
+        window.clearTimeout(settle);
+        window.clearTimeout(cap);
+        resolve(location.href === href ? reason : "navigated");
+      }
+      observer.observe(root, { childList: true, subtree: true });
+      cap = window.setTimeout(() => finish(seen ? "controls" : "cap"), maxMs);
     });
   }
 

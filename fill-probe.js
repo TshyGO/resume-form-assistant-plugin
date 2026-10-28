@@ -202,6 +202,13 @@
     return { type: "unknown", reason: "none" };
   }
 
+  // 页面上有没有能说明扫不到字段的线索：「编辑」按钮、只读或禁用的输入框、框架、自定义控件、Shadow DOM。
+  // 网申页上一条都没有，多半还在加载，或要先点开某一块（#301）。
+  function hasClues(probe) {
+    return Boolean(probe && (probe.editButtons > 0 || probe.locked > 0 || probe.frames?.crossOrigin > 0
+      || probe.frames?.frameInputs > 0 || probe.custom?.total > 0 || probe.shadowHosts > 0));
+  }
+
   // 扫描到 0 个字段，或扫描到字段但一个都没填上时，按最可能的原因告诉用户下一步怎么做。
   // notForm：pageType() 判断这不是网申填写页。form：判断是网申填写页；没有别的线索时多半还在加载，或要先点开某一块（#301）。
   // deepAvailable（#224）：侧栏有「深度分析本页」时，同源框架和自定义控件改指向它（它读得到）；跨域框架照旧。
@@ -258,7 +265,7 @@
     return lines;
   }
 
-  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, emptyPageHint, formatReport };
+  const api = { SELECTORS, describeControl, safeLabel, probePage, pageType, hasClues, emptyPageHint, formatReport };
   root.ResumeProFillProbe = api;
   try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);
