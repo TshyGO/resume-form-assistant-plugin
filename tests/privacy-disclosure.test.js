@@ -36,8 +36,8 @@ const SOURCE = { app_version: "版本", os: "系统", install: "安装方式", h
 
 test("every diagnostic key and section is named in the privacy policy", () => {
   assert.notEqual(section.length, 0);
-  assert.deepEqual(Object.keys(KEYS).sort(), Object.keys(core.VALUES).sort(), "a key was added or removed: map it to the policy's words");
-  assert.deepEqual(Object.keys(SECTIONS).sort(), [...core.SECTIONS].sort());
+  assert.deepEqual(Object.keys(KEYS).sort(), [...core.VALUE_KEYS].sort(), "a key was added or removed: map it to the policy's words");
+  assert.deepEqual(Object.keys(SECTIONS).sort(), [...core.SECTION_NAMES].sort());
   for (const [key, words] of Object.entries({ ...KEYS, ...SECTIONS, ...TOKENS, ...SOURCE })) {
     assert.ok(section.includes(words), `${key}: the policy does not say 「${words}」`);
   }
@@ -57,6 +57,12 @@ test("the worker's [来源] lines and the unfilled-control tokens are the ones l
   const tokens = report.split("\n").find(line => line.startsWith("- 学历: ")).slice(7).split(" ")
     .map(token => /^[a-z]+\[/.test(token) ? ["tag", "type"] : token.split("=")[0]).flat();
   assert.deepEqual([...new Set(tokens)].sort(), Object.keys(TOKENS).sort());
+  // Every keyed token CONTROL_TOKEN accepts (role=, lib=, opened=...), read from its source, so a
+  // token that only some other input produces is caught too.
+  const definition = read("feedback-core.js").match(/const CONTROL_TOKEN = new RegExp\(([\s\S]*?)\);\n/)[1];
+  const keyed = [...definition.matchAll(/(?:\(\?:([a-z|]+)\)|\b([a-z]+))=/g)].flatMap(match => (match[1] || match[2]).split("|"));
+  assert.ok(keyed.includes("opened") && keyed.includes("lib"), keyed.join());
+  assert.deepEqual([...new Set(keyed)].sort(), Object.keys(TOKENS).filter(key => !["tag", "type", "readonly"].includes(key)).sort());
 });
 
 test("the notice names what reports now carry, and when they are sent", () => {

@@ -246,6 +246,8 @@
     }
     // Custom selects the fill handled on its generic path that the page probe did not count (#301 北森).
     const generic = p?.custom ? n(input.genericCustom) : 0;
+    // Their read-only inputs belong to the select, as for library controls in the probe.
+    const locked = Number.isInteger(p?.locked) ? Math.max(0, p.locked - (p.custom ? n(input.genericLocked) : 0)) : null;
     if (generic) libraries.generic = (libraries.generic || 0) + generic;
     const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
     // Fields that appeared after a choice (#269) add to the first round's match counts; their
@@ -291,7 +293,7 @@
       `shadow_roots_with_inputs: ${count(p?.shadowHosts)}`,
       `custom_controls: ${count(Number.isInteger(p?.custom?.total) ? p.custom.total + generic : null)}`,
       `custom_libraries: ${listed(libraries, LIBRARY_NAMES)}`,
-      `readonly_or_disabled: ${count(p?.locked)}`,
+      `readonly_or_disabled: ${count(locked)}`,
       `edit_buttons: ${count(p?.editButtons)}`,
       "",
       "[错误]",
@@ -406,7 +408,9 @@
     });
   }
   const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, fillDrops, labelSources, aiCalled,
-    fillReport, diagnostics, fillFailure, jobReport, install, SECTIONS, VALUES };
+    fillReport, diagnostics, fillFailure, jobReport, install,
+    // Names only, for the privacy-policy check; the allowlists themselves stay private.
+    SECTION_NAMES: Object.freeze([...SECTIONS]), VALUE_KEYS: Object.freeze(Object.keys(VALUES)) };
   root.ResumeProFeedback = api;
   try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

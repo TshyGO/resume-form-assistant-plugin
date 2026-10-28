@@ -2405,6 +2405,7 @@
     let scannedCustom = 0;
     // #301 扫描在通用路径上认出、页面探测没数到的自定义下拉（北森）：只进诊断的 custom_controls，不改深度分析入口的判断。
     let genericCustom = 0;
+    let genericLocked = 0;
     // #226 本站配方这次用没用上：只有固定状态码和计数。
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
@@ -2454,10 +2455,12 @@
         // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
         probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
         pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
-        genericCustom = withFillProbe(api => api.uncountedControls?.(fields
+        const genericRoots = fields
           .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
           .map(field => self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)))
-          .filter(info => info?.library === "generic").map(info => info.root)), 0);
+          .filter(info => info?.library === "generic").map(info => info.root);
+        genericCustom = withFillProbe(api => api.uncountedControls?.(genericRoots), 0);
+        genericLocked = withFillProbe(api => api.uncountedLocked?.(genericRoots), 0);
       };
       describeScan();
       // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
@@ -3055,7 +3058,7 @@
       const summaryInput = { ...timing, totalMs,
         fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
-        entry, pageFocused, genericCustom,
+        entry, pageFocused, genericCustom, genericLocked,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。

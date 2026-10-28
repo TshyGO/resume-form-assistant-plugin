@@ -42,14 +42,16 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     // their 「知道了」 only folded the notice, so a grant without the current version is no grant.
     // An opt-out is kept whatever wrote it.
     if (state.consent === true && state.consentVersion !== CONSENT_VERSION) {
-      Object.assign(state, { consent: null, consentVersion: 0, anonymousId: null });
+      // A grant under an older notice (not a pre-#247 default): the choice says the notice changed.
+      Object.assign(state, { consent: null, consentVersion: 0, anonymousId: null, renewed: state.consentVersion >= 1 && state.consentVersion < CONSENT_VERSION });
       await save(state).catch(() => {}); // Undecided in memory either way; the next choice rewrites it.
     }
     if (state.consent !== true) state.anonymousId = null;
     for (const key of ['hourly', 'fillHourly']) if (!Array.isArray(state[key])) state[key] = [];
     return state;
   };
-  const view = state => ({ consent: state.consent === true, decided: state.consent !== null });
+  const view = state => ({ consent: state.consent === true, decided: state.consent !== null,
+    ...(state.consent === null && state.renewed === true ? { renewed: true } : {}) });
   function build(input, host, id) {
     const kind = ['fill_failed', 'fill_partial', 'manual'].includes(input.kind) ? input.kind : 'exception';
     const errorType = kind === 'exception' ? (['Error','TypeError','ReferenceError','SyntaxError','RangeError','URIError','EvalError','AggregateError'].includes(input.name) ? input.name : 'Error') : kind;
@@ -100,7 +102,7 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
       if (stopped) for (const controller of active) controller.abort();
       return locked(async () => {
         const state = await read(); state.consent = enabled === true;
-        state.consentVersion = enabled === true ? CONSENT_VERSION : 0;
+        state.consentVersion = enabled === true ? CONSENT_VERSION : 0; delete state.renewed;
         state.anonymousId = enabled === true ? state.anonymousId || uuid() : null;
         await save(state); return view(state);
       });

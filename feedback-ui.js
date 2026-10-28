@@ -17,6 +17,7 @@
   const compact = autoRoot.dataset.variant === 'compact';
   const BUG = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="8" width="10" height="12" rx="5"/><path d="M9.5 8a2.5 2.5 0 0 1 5 0M12 12v5M3 13h4M17 13h4M4 7l3 2M20 7l-3 2M4 19l3-2M20 19l-3-2"/></svg>';
   const explanation = `
+      <p class="feedback-note" id="feedback-renewed" hidden>报告内容有更新，需要重新选择。</p>
       <p>我们在用户群和社交平台上收到过不少反馈，但很多只有一句「填不上」「用不了」，看不出是哪个网站、卡在哪一步，很难找到原因。开启自动错误报告后，插件出错、一键填写有字段没填上或 AI 请求失败时，会把当时的技术情况发给我们，帮我们更快找到问题、把它修好。</p>
       <p class="feedback-note">报告里只有技术信息：错误类型、出错的代码位置、插件版本、安装方式（如商店安装、手动加载）、系统、发送时间和一个随机生成的安装编号。网页上出的问题还会带上网站域名和这次填写的统计，比如页面路径（其中的编号会去掉）、从哪里开始填写、网页当时是否在前台、字段和控件的数量与类型、没填上的下拉框有没有弹出和弹出了几个选项、填上了多少、用时、AI 用的模型档位、卡在哪一步。不包含你的简历、填写的内容、页面上的文字、完整网址、Cookie 或密钥。</p>
       <p class="feedback-note">发送前会先去掉可能的个人信息。报告最多保存 90 天；其中的网站域名和填写统计可能会公开在网申快填的 GitHub 项目里，方便复现问题，公开的内容会长期保留；安装编号不会公开。</p>
@@ -71,7 +72,7 @@
       <form id="feedback-form" hidden>
         <label for="feedback-description">问题描述（请勿填写姓名、简历、账号或密钥）</label>
         <textarea id="feedback-description" maxlength="1400" rows="4"></textarea>
-        <label><input type="checkbox" id="feedback-attach" checked>附上最近一次填写诊断</label>
+        <label><input type="checkbox" id="feedback-attach" checked>附上最近一次的填写和保存岗位诊断</label>
         <p class="feedback-note">只有点「确认发送」才会发送。报告最多保存 90 天；可能会公开在网申快填的 GitHub 项目里，公开的内容会长期保留。发送前请核对下方全部内容。</p>
         <button type="button" id="feedback-preview-button">预览将发送的内容</button>${previewRoot ? '' : `
         <pre id="feedback-preview" tabindex="0" hidden></pre>
@@ -110,6 +111,8 @@
     const known = typeof result.consent === 'boolean' && typeof result.decided === 'boolean';
     // Not chosen yet: nothing is sent, and the choice stays on screen until the user makes one.
     const undecided = known && !result.decided;
+    // Agreed under an older notice (#301): say why the choice is back.
+    if ($('renewed')) $('renewed').hidden = !(undecided && result.renewed === true);
     if (compact) {
       // Side panel: the choice only. Re-reading and changing the setting happen on the status page.
       if ($('consent')) { $('consent').hidden = !undecided; noticeRoot.hidden = !undecided; }
@@ -132,7 +135,7 @@
     $('auto-state').dataset.tone = !known ? 'unknown' : result.consent === true ? 'on' : 'off';
     $('auto-state').textContent = compact ? `插件错误报告：${state}`
       : !known ? '无法读取设置。' : undecided ? '未开启：你选择之前不会自动发送任何报告。'
-      : result.consent ? '已开启：插件检测到自身异常或字段没填上时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
+      : result.consent ? '已开启：插件出错、字段没填上或 AI 请求失败时，会自动发送脱敏诊断。' : '已关闭：不会自动发送任何报告。';
     $('retry').hidden = known;
     if (!known) autoStatus('无法读取反馈设置，请重新读取。');
   }

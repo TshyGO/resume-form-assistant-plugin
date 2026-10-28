@@ -326,12 +326,14 @@ test('a grant given under the version-1 notice is asked again: nothing is sent u
   assert.equal(CONSENT_VERSION, 2);
   const v1 = { consent: true, consentVersion: 1, anonymousId: 'v1-id', recent: {}, hourly: [], fillHourly: [] };
   const f = await fixture({ data: { feedbackStateV1: structuredClone(v1) } });
-  assert.deepEqual(await f.service.status(), { consent: false, decided: false });
+  // Marked as renewed, so the choice can say the notice changed.
+  const renewed = { consent: false, decided: false, renewed: true };
+  assert.deepEqual(await f.service.status(), renewed);
   await f.service.automatic(crash, 'c.liepin.com');
   await f.service.automatic({ kind: 'fill_partial', diagnostics: '[错误]\nerror_category: timeout' }, 'c.liepin.com');
   assert.equal(f.calls.length, 0, 'nothing is sent on the old grant');
   assert.ok(!JSON.stringify(f.data).includes('v1-id'), 'the old installation id is gone');
-  assert.deepEqual(await (await fixture({ data: f.data })).service.status(), { consent: false, decided: false }, 'still undecided after a restart');
+  assert.deepEqual(await (await fixture({ data: f.data })).service.status(), renewed, 'still undecided after a restart');
   // An update that leaves the version-1 grant behind opens the choice right away.
   const opened = []; let onInstalled;
   const stored = { feedbackStateV1: structuredClone(v1) };
@@ -347,6 +349,7 @@ test('a grant given under the version-1 notice is asked again: nothing is sent u
   // Agreeing to the current notice starts sending again, under a new id.
   assert.deepEqual(await f.service.setConsent(true), { consent: true, decided: true });
   assert.equal(f.data[f.key].consentVersion, 2);
+  assert.equal('renewed' in f.data[f.key], false, 'a made choice clears the mark');
   await f.service.automatic(crash, 'c.liepin.com');
   assert.equal(f.calls.length, 1);
   assert.notEqual(f.calls[0].payload.anonymous_id, 'v1-id');
@@ -423,4 +426,37 @@ test('automatic reports never carry the job flow [岗位]; a manual preview keep
   assert.doesNotMatch(sent, /岗位|job_/);
   const preview = f.service.preview({ description: '保存岗位时没读出岗位名', diagnostics: `${fill}\n\n${job}` }).user_description;
   assert.ok(preview.endsWith(`\n\n${job}`), preview);
+});
+
+test('a choice brought back by a new notice says the report contents changed; a first choice does not', async () => {
+  const { JSDOM } = require('jsdom');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const mount = async (variant, status) => {
+    const { window } = new JSDOM(variant === 'compact'
+      ? '<div id="feedback-notice-root" hidden></div><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>'
+      : '<div id="feedback-auto-root"></div>', { runScripts: 'outside-only' });
+    window.chrome = {
+      runtime: { sendMessage: async message => message.type === 'FEEDBACK_STATUS' ? status
+        : message.type === 'FEEDBACK_CONSENT' ? { consent: message.enabled, decided: true } : { ok: false } },
+      tabs: { query: async () => [], onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
+      storage: { onChanged: { addListener() {} } }
+    };
+    window.eval(read('feedback-core.js'));
+    window.eval(read('feedback-ui.js'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return window.document.getElementById('feedback-renewed');
+  };
+  for (const variant of ['compact', 'status']) {
+    const renewed = await mount(variant, { consent: false, decided: false, renewed: true });
+    assert.equal(renewed.hidden, false, variant);
+    assert.equal(renewed.textContent, '报告内容有更新，需要重新选择。');
+    assert.equal((await mount(variant, { consent: false, decided: false })).hidden, true, `${variant}: a first choice`);
+    assert.equal((await mount(variant, { consent: true, decided: true })).hidden, true, `${variant}: already chosen`);
+  }
+  const renewed = await mount('status', { consent: false, decided: false, renewed: true });
+  renewed.ownerDocument.getElementById('feedback-enable').click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(renewed.hidden, true, 'gone once chosen');
 });

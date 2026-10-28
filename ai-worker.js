@@ -258,6 +258,9 @@ function makePromptBatches(formFields, resumeFields) {
 }
 
 const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large", "response_too_large", "secret_in_prompt"]);
+// Codes that only say some fields were skipped before any request. A failed request replaces
+// them, so errorCode tells a failed AI request from one that matched nothing (#301).
+const SKIP_CODES = new Set(["none", "no_context", "input_too_large"]);
 
 // #224 深度分析：只把插件已经脱敏的页面大纲交给强模型（purpose=analyze，不带 tier 即强档）。
 // 返回解析后的说明书对象；模型原文不回传、不进诊断。校验由页面里的 deep-analysis.js 按本次大纲做。
@@ -358,7 +361,7 @@ async function handleAiFill(message, controller = new AbortController()) {
       if (tier && (result?.tier === "strong" || result?.tier === "default")) diagnostics.tierUsed = result.tier;
       if (!result?.ok) {
         const reason = result?.reason ?? "unavailable";
-        if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
+        if (SKIP_CODES.has(diagnostics.errorCode)) diagnostics.errorCode = reason;
         warnings.push(strongFailureMessage(tier, result) ?? aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
         // Only a failure tied to this batch's content is worth trying the next batch for.
@@ -372,7 +375,7 @@ async function handleAiFill(message, controller = new AbortController()) {
       try {
         aiMatches.push(...ResumeProAIHelpers.filterValidMatches(batch.fields, normalizeMatches(parseJsonContent(result.text))));
       } catch {
-        if (diagnostics.errorCode === "none") diagnostics.errorCode = "bad_response";
+        if (SKIP_CODES.has(diagnostics.errorCode)) diagnostics.errorCode = "bad_response";
         warnings.push(aiFailureMessage({ reason: "bad_response" }));
       }
     }

@@ -99,6 +99,26 @@ test("fill-probe counts only generic roots it did not already count", () => {
   assert.equal(realProbe.uncountedControls([null, {}, undefined]), 0);
 });
 
+test("read-only inputs inside generic selects leave readonly_or_disabled; disabled ones and other locked inputs stay", () => {
+  const { JSDOM } = require("jsdom");
+  const { window } = new JSDOM(`<div class="phoenix-select" id="a"><input readonly></div>
+    <div class="phoenix-select" id="b"><input readonly><input readonly></div>
+    <input readonly id="c">
+    <div class="phoenix-select" id="d"><input readonly disabled></div>
+    <div class="ant-select" id="e"><input readonly></div>`);
+  window.HTMLElement.prototype.getClientRects = () => [{}];
+  const { document } = window;
+  const probe = realProbe.probePage(document, { href: "https://jobs.example.test/apply" });
+  assert.equal(probe.locked, 5, "the probe counts every read-only input outside library controls, and every disabled one");
+  const roots = ["a", "b", "c", "d", "e"].map(id => document.getElementById(id));
+  assert.equal(realProbe.uncountedLocked(roots), 4, "a, b twice and c (a root that is itself the input); not d's disabled input or e's");
+  assert.equal(realProbe.uncountedLocked([null, {}]), 0);
+  const report = core.fillReport({ ...BASE, probe, genericCustom: 4, genericLocked: 1 });
+  assert.equal(lineOf(report, "readonly_or_disabled"), "4");
+  assert.equal(lineOf(core.fillReport({ ...BASE, probe, genericLocked: 9 }), "readonly_or_disabled"), "0", "never below zero");
+  assert.equal(lineOf(core.fillReport({ ...BASE, probe: { ...probe, locked: undefined }, genericLocked: 1 }), "readonly_or_disabled"), "-");
+});
+
 test("a failed AI request is the first failure: timeout or service_error at the match stage, never fill_rejected", () => {
   const written = { scanned: true, fieldCount: 3, pageType: "application_form", responded: true, matched: 2, filledCount: 2, unfilledCount: 0, unconfirmedCount: 0 };
   assert.deepEqual(core.fillCategory({ ...written, errorCode: "timeout" }), { category: "timeout", stage: "match" });
