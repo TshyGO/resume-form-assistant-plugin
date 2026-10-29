@@ -721,6 +721,7 @@ fn wiring_state(root: &std::path::Path, store: archive_store::ArchiveStore) -> A
         credentials: Box::new(crate::ai_credentials::MemoryStore::default()),
         cloud_credentials: Box::new(crate::cloud_credentials::KeyringStore),
         mailbox_gate: Mutex::new(()),
+        opened_attachments: Mutex::new(crate::attachment_commands::OpenedAttachments::default()),
         cloud_backups: Mutex::new(None),
         ai_inflight: crate::ai_commands::InflightRegistry::default(),
         native_messaging: Mutex::new(vec![]),
