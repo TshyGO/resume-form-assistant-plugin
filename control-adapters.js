@@ -226,6 +226,11 @@
       if (!ViewKeyboardEvent) return;
       el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
     }
+    function pressEscape(el) {
+      const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      if (!ViewKeyboardEvent) return;
+      el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    }
 
     async function freeText(ctx, value, shown) {
       const typed = await text(ctx, value, shown);
@@ -397,6 +402,18 @@
       if (opened.reason) return { reason: opened.reason };
       const popup = opened.value;
       ctx.observed = { library: 'antd', popupRole: 'calendar' };
+      // 页面异常也按失败收尾；只把固定的原因码交出去。
+      const picked = await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
+      // 选不成时收起自己点开的日历，免得挡住后面的字段：在输入框上按 Esc，rc-picker 当作取消，组件里的值不变。
+      // 只派发这个键，不点页面别处；原本就开着的、用户停下或改了内容的不动。收起有约 0.2 秒的动画，
+      // 最多等 0.6 秒它走完再交还，免得再点开同一个日历时把还在淡出的它当成原本就开着的。
+      if (picked.reason && !before.has(popup) && !stop(ctx) && popup.isConnected && visible(popup)) {
+        pressEscape(ctx.el);
+        await waitUntil(ctx, doc.documentElement, () => !popup.isConnected || !visible(popup), Boolean, 600);
+      }
+      return picked;
+    }
+    async function antDatePick(ctx, raw, popup) {
       if (popup.querySelectorAll('.ant-picker-panel').length !== 1) return { reason: 'unsupported_control' };
       const mode = popup.querySelector('.ant-picker-month-panel') ? 'month' : popup.querySelector('.ant-picker-year-panel') ? 'year' : 'date';
       const expected = mode === 'year' ? String(raw).match(/^\s*(\d{4})(?:年|\b)/)?.[1] : helpers?.normalizeDateValue?.(raw, mode);
