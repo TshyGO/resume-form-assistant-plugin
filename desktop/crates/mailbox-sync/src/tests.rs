@@ -1051,3 +1051,214 @@ fn malformed_api_principals_are_rejected_without_splitting_or_changing_an_accoun
         .unwrap();
     assert_eq!(reconnected.id, original.id);
 }
+
+#[test]
+fn corrupt_imap_configuration_is_paused_and_does_not_block_another_accounts_work() {
+    use crate::source::{MessageLocator, Metadata, Position, SourceKind};
+    let (dir, mut db) = database();
+    let api = db
+        .save_api_account(
+            "api",
+            "person@outlook.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:person",
+        )
+        .unwrap();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    for bad in [
+        "{private-broken-config",
+        "{}",
+        r#"{"host":"http://bad.example"}"#,
+    ] {
+        sql.execute(
+            "UPDATE accounts SET connection=?1 WHERE id='account'",
+            [bad],
+        )
+        .unwrap();
+        assert_eq!(
+            db.account(&api.id).unwrap().source_account_id,
+            api.source_account_id
+        );
+        let accounts = db.accounts().unwrap();
+        assert_eq!(accounts.len(), 2);
+        let damaged = accounts.iter().find(|a| a.id == "account").unwrap();
+        assert!(damaged.paused);
+        assert!(damaged.connection.is_none());
+        assert_eq!(damaged.last_error.as_deref(), Some("Configuration"));
+        assert!(!serde_json::to_string(damaged)
+            .unwrap()
+            .contains("private-broken-config"));
+        db.pause("account", false).unwrap();
+        assert!(
+            db.account("account").unwrap().paused,
+            "resume cannot bypass invalid configuration"
+        );
+        db.commit_metadata(
+            "archive",
+            "api",
+            "inbox",
+            &Position::Api {
+                source: api.source,
+                cursor: "checkpoint".into(),
+            },
+            &[(
+                Metadata {
+                    locator: MessageLocator::Api {
+                        source: api.source,
+                        message_id: "remote".into(),
+                    },
+                    header: header("api@example.com", "Interview"),
+                },
+                vec!["Interview".into()],
+            )],
+        )
+        .unwrap();
+        db.failure("api", Error::Network, 10).unwrap();
+        db.pause("api", false).unwrap();
+        assert_eq!(db.pending_count("archive").unwrap(), 1);
+    }
+    // The broken account remains removable and can be repaired in place.
+    let repaired = db.save_account("unused", "a@qq.com").unwrap();
+    assert_eq!(repaired.id, "account");
+    assert!(!repaired.paused);
+    assert!(repaired.connection.is_some());
+    assert!(repaired.last_error.is_none());
+    sql.execute(
+        "UPDATE accounts SET connection='broken' WHERE id='account'",
+        [],
+    )
+    .unwrap();
+    db.delete_account("account").unwrap();
+    assert_eq!(db.accounts().unwrap().len(), 1);
+    assert!(db
+        .source_position("archive", "api", "inbox")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn candidate_corruption_is_counted_without_hiding_healthy_rows_or_guessing_a_locator() {
+    let (dir, mut db) = database();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    for (uid, id) in [
+        (1, "healthy"),
+        (2, "locator"),
+        (3, "header"),
+        (4, "reasons"),
+    ] {
+        db.commit_scan(
+            "archive",
+            "account",
+            "INBOX",
+            Cursor { validity: 7, uid },
+            &[(uid, header(id, "Interview"), vec!["Interview".into()])],
+        )
+        .unwrap();
+    }
+    let items = db.pending("archive", 10).unwrap();
+    // Existing Header::parse normalizes the message identifier; read the
+    // exact parsed value instead of depending on bracket representation.
+    let locator_id = items
+        .iter()
+        .find(|c| c.header.fingerprint() == header("locator", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    let header_id = items
+        .iter()
+        .find(|c| c.header.fingerprint() == header("header", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    let reasons_id = items
+        .iter()
+        .find(|c| c.header.fingerprint() == header("reasons", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    let healthy_id = items
+        .iter()
+        .find(|c| c.header.fingerprint() == header("healthy", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    sql.execute(
+        "UPDATE candidates SET locator='not-json' WHERE id=?1",
+        [&locator_id],
+    )
+    .unwrap();
+    sql.execute(
+        "UPDATE candidates SET header='not-json' WHERE id=?1",
+        [&header_id],
+    )
+    .unwrap();
+    sql.execute(
+        "UPDATE candidates SET reasons='not-json' WHERE id=?1",
+        [&reasons_id],
+    )
+    .unwrap();
+    let page = db.pending_with_issues("archive", 1).unwrap();
+    assert_eq!(page.invalid_count, 3);
+    assert_eq!(page.pending_count, 1);
+    assert_eq!(page.candidates.len(), 1);
+    assert_eq!(page.candidates[0].id, healthy_id);
+    assert!(matches!(
+        db.candidate("archive", &locator_id),
+        Err(Error::Storage)
+    ));
+    assert_eq!(
+        db.pending_count("archive").unwrap(),
+        4,
+        "damaged records must not be deleted or consumed"
+    );
+    let none = db.pending_with_issues("another-archive", 100).unwrap();
+    assert_eq!(none.invalid_count, 0);
+    assert_eq!(none.pending_count, 0);
+    // A rescan can restore the broken locator, and the row becomes visible.
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 7,
+            uid: 9,
+        },
+        &[(9, header("locator", "Interview"), vec!["Interview".into()])],
+    )
+    .unwrap();
+    let repaired = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(repaired.invalid_count, 2);
+    assert_eq!(repaired.pending_count, 2);
+    assert!(repaired.candidates.iter().any(|c| c.id == locator_id));
+}
+
+#[test]
+fn syntactically_valid_but_wrong_source_candidate_locators_are_reported_as_damaged() {
+    let (dir, mut db) = database();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 1,
+        },
+        &[(1, header("test", "Interview"), vec!["Interview".into()])],
+    )
+    .unwrap();
+    let id = db.pending("archive", 1).unwrap().remove(0).id;
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE candidates SET locator=?1 WHERE id=?2",
+        rusqlite::params![
+            r#"{"type":"api","source":"gmailApi","messageId":"wrong-source"}"#,
+            id
+        ],
+    )
+    .unwrap();
+    let page = db.pending_with_issues("archive", 1).unwrap();
+    assert_eq!(page.invalid_count, 1);
+    assert_eq!(page.pending_count, 0);
+    assert!(page.candidates.is_empty());
+    assert!(matches!(db.candidate("archive", &id), Err(Error::Storage)));
+}

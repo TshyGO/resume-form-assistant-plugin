@@ -92,6 +92,7 @@ pub struct View {
     pub accounts: Vec<Account>,
     pub candidates: Vec<Candidate>,
     pub pending_count: u32,
+    pub candidate_issues: u32,
 }
 fn view(state: &AppState, limit: u32) -> Result<View> {
     let db = database(state)?;
@@ -100,10 +101,12 @@ fn view(state: &AppState, limit: u32) -> Result<View> {
     for account in &mut accounts {
         account.header_issues = mapped(db.header_issue_count(&current.archive_id, &account.id))?;
     }
+    let pending = mapped(db.pending_with_issues(&current.archive_id, limit))?;
     Ok(View {
         accounts,
-        candidates: mapped(db.pending(&current.archive_id, limit))?,
-        pending_count: mapped(db.pending_count(&current.archive_id))?,
+        candidates: pending.candidates,
+        pending_count: pending.pending_count,
+        candidate_issues: pending.invalid_count,
     })
 }
 

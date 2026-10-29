@@ -6,7 +6,7 @@ export { mailboxProvider } from "./mailbox-providers.ts";
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
 export interface MailCandidate { id: string; accountId: string; email: string; header: MailHeader; reasons: string[] }
 export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection | null }
-export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number }
+export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number; candidateIssues?: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
 interface IgnoreReport { ignored: number; unchanged: number }
 interface CheckReport {
@@ -32,6 +32,7 @@ const ERRORS: Record<string, string> = {
   Protocol: "邮箱读取请求未完成，请重试；163 / 126 请核对 IMAP 授权设置。",
   TooLarge: "邮件信头过大，请改用手动导入并检查邮箱。",
   Storage: "扫描记录未保存，请检查本机磁盘后重试。",
+  Configuration: "本机邮箱连接配置无法读取或已失效，请修改连接并重新测试保存；也可以断开并重新连接。",
 };
 function message(error: unknown): string { return (error as { message?: string } | null)?.message || "操作没有完成，请稍后重试。"; }
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
@@ -220,6 +221,8 @@ export function mountMailboxes(
     get("mailbox-discovery-note").textContent = broken
       ? `${broken} 个邮箱检查异常，请到邮箱设置查看原因。已发现的邮件仍可确认或忽略。`
       : current.accounts.length ? "只显示信头和入选原因，存进档案时才下载原文。筛选可能漏信，仍可手动导入。" : "连接邮箱后，招聘相关来信会先出现在这里，确认才下载原文并存进档案。";
+    const issues = current.candidateIssues ?? 0;
+    if (issues) get("mailbox-discovery-note").textContent += ` 另有 ${issues} 条候选记录损坏，暂时无法显示，未删除；其他邮件可正常处理。可从邮箱下载原件后手动导入。`;
     get("mailbox-connect-link").textContent = current.accounts.length ? "邮箱设置" : "连接邮箱";
     get("mailbox-pending-actions").hidden = !current.candidates.length;
     get("mailbox-load-more").hidden = current.candidates.length >= current.pendingCount || limit >= 2000;

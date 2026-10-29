@@ -47,6 +47,13 @@ pub struct Candidate {
     pub header: Header,
     pub reasons: Vec<String>,
 }
+/// Valid candidates and corruption counts from the same read snapshot. Invalid
+/// rows are retained for repair; no source locator is guessed on decode failure.
+pub struct PendingCandidates {
+    pub candidates: Vec<Candidate>,
+    pub pending_count: u32,
+    pub invalid_count: u32,
+}
 pub struct Database(Connection);
 impl Database {
     /// Outside archive directories and the backup allowlist. No secrets or bodies.
@@ -131,8 +138,17 @@ impl Database {
         Ok(Self(conn))
     }
     pub fn accounts(&self) -> Result<Vec<Account>> {
-        let mut stmt = self.0.prepare("SELECT id,email,paused,failures,last_error,last_checked,next_check,connection,source,source_account_id FROM accounts ORDER BY email,id")?;
-        let rows = stmt.query_map([], |r| {
+        self.query_accounts(None)
+    }
+    fn query_accounts(&self, id: Option<&str>) -> Result<Vec<Account>> {
+        let condition = if id.is_some() {
+            "WHERE id=?1"
+        } else {
+            "WHERE ?1 IS NULL ORDER BY email,id"
+        };
+        let sql = format!("SELECT id,email,paused,failures,last_error,last_checked,next_check,connection,source,source_account_id FROM accounts {condition}");
+        let mut stmt = self.0.prepare(&sql)?;
+        let rows = stmt.query_map([id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -150,9 +166,9 @@ impl Database {
             let (
                 id,
                 email,
-                paused,
+                mut paused,
                 failures,
-                last_error,
+                mut last_error,
                 last_checked,
                 next_check,
                 connection,
@@ -161,12 +177,22 @@ impl Database {
             ) = row?;
             let source = SourceKind::from_db(&source)?;
             let connection = if source == SourceKind::Imap {
-                Some(match connection {
+                let checked = match connection {
                     Some(json) => serde_json::from_str::<ConnectionConfig>(&json)
-                        .map_err(|_| Error::Storage)?
-                        .validated(&email)?,
-                    None => ConnectionConfig::preset(&email)?,
-                })
+                        .map_err(|_| Error::Configuration)
+                        .and_then(|config| config.validated(&email)),
+                    None => ConnectionConfig::preset(&email),
+                };
+                match checked {
+                    Ok(config) => Some(config),
+                    Err(_) => {
+                        // Keep this account visible and recoverable, but never
+                        // authenticate using a guessed/default destination.
+                        paused = true;
+                        last_error = Some(Error::Configuration.to_string());
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -189,9 +215,9 @@ impl Database {
         .collect()
     }
     pub fn account(&self, id: &str) -> Result<Account> {
-        self.accounts()?
+        self.query_accounts(Some(id))?
             .into_iter()
-            .find(|a| a.id == id)
+            .next()
             .ok_or(Error::Missing)
     }
     pub fn save_account(&self, id: &str, email: &str) -> Result<Account> {
@@ -598,22 +624,48 @@ impl Database {
             r.get(8)?,
         ))
     }
-    pub fn pending(&self, archive: &str, limit: u32) -> Result<Vec<Candidate>> {
-        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator
-            FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND state='pending' ORDER BY c.rowid DESC LIMIT ?2")?;
-        let rows = stmt.query_map(params![archive, limit.min(2000)], Self::read_candidate)?;
-        rows.map(|row| {
-            let (id, account_id, email, folder, validity, uid, header, reasons, locator) = row?;
-            Ok(Candidate {
-                id,
-                account_id,
-                email,
-                locator: Self::decode_locator(locator, folder, validity, uid)?,
-                header: serde_json::from_str(&header).map_err(|_| Error::Storage)?,
-                reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
-            })
+    fn decode_candidate(row: &rusqlite::Row<'_>) -> Result<Candidate> {
+        let (id, account_id, email, folder, validity, uid, header, reasons, locator) =
+            Self::read_candidate(row)?;
+        let source = SourceKind::from_db(&row.get::<_, String>(9)?)?;
+        let locator = Self::decode_locator(locator, folder, validity, uid)?;
+        locator.validate(source).map_err(|_| Error::Storage)?;
+        Ok(Candidate {
+            id,
+            account_id,
+            email,
+            locator,
+            header: serde_json::from_str(&header).map_err(|_| Error::Storage)?,
+            reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
         })
-        .collect()
+    }
+    pub fn pending(&self, archive: &str, limit: u32) -> Result<Vec<Candidate>> {
+        Ok(self.pending_with_issues(archive, limit)?.candidates)
+    }
+    pub fn pending_with_issues(&self, archive: &str, limit: u32) -> Result<PendingCandidates> {
+        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source
+            FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND state='pending' ORDER BY c.rowid DESC")?;
+        let mut rows = stmt.query([archive])?;
+        let mut page = PendingCandidates {
+            candidates: Vec::new(),
+            pending_count: 0,
+            invalid_count: 0,
+        };
+        // Count all valid/invalid rows in this snapshot, applying the display
+        // limit only to valid candidates so damaged newest rows cannot starve
+        // healthy older ones. SQL iteration/IO errors must still propagate.
+        while let Some(row) = rows.next()? {
+            match Self::decode_candidate(row) {
+                Ok(candidate) => {
+                    page.pending_count = page.pending_count.saturating_add(1);
+                    if page.candidates.len() < limit.min(2000) as usize {
+                        page.candidates.push(candidate);
+                    }
+                }
+                Err(_) => page.invalid_count = page.invalid_count.saturating_add(1),
+            }
+        }
+        Ok(page)
     }
     pub fn pending_count(&self, archive: &str) -> Result<u32> {
         Ok(self.0.query_row(
@@ -623,17 +675,10 @@ impl Database {
         )?)
     }
     pub fn candidate(&self, archive: &str, id: &str) -> Result<Candidate> {
-        let row = self.0.query_row("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator
-            FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND c.id=?2 AND state='pending'", params![archive,id],Self::read_candidate).optional()?.ok_or(Error::Missing)?;
-        let (id, account_id, email, folder, validity, uid, header, reasons, locator) = row;
-        Ok(Candidate {
-            id,
-            account_id,
-            email,
-            locator: Self::decode_locator(locator, folder, validity, uid)?,
-            header: serde_json::from_str(&header).map_err(|_| Error::Storage)?,
-            reasons: serde_json::from_str(&reasons).map_err(|_| Error::Storage)?,
-        })
+        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source
+            FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND c.id=?2 AND state='pending'")?;
+        let mut rows = stmt.query(params![archive, id])?;
+        Self::decode_candidate(rows.next()?.ok_or(Error::Missing)?)
     }
     pub fn finish(&self, archive: &str, ids: &[String], ignored: bool) -> Result<u32> {
         // Atomic batch; never accept arbitrary SQL state from the webview.

@@ -1045,3 +1045,100 @@ async fn production_confirmation_rejects_another_accounts_candidate_before_dupli
     assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
     assert_eq!(api.downloads, 0);
 }
+
+#[tokio::test]
+async fn production_view_and_confirmation_keep_working_with_damaged_local_mailbox_rows() {
+    let (dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let expected = store.identity();
+    let state = wiring_state(dir.path(), store);
+    db.save_account("broken-imap", "broken@qq.com").unwrap();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE accounts SET connection='broken-config' WHERE id='broken-imap'",
+        [],
+    )
+    .unwrap();
+    let accounts = db.accounts().unwrap();
+    let report = run_checks(&mut db, accounts, true, 100, |_, checked| {
+        assert_eq!(
+            checked.id, account.id,
+            "damaged IMAP config must never reach the network scanner"
+        );
+        Ok(false)
+    })
+    .unwrap();
+    assert_eq!(report.skipped_paused, 1);
+    assert_eq!(report.succeeded_accounts, 1);
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    api.messages.push(Metadata {
+        locator: MessageLocator::Api {
+            source: account.source,
+            message_id: "broken-candidate".into(),
+        },
+        header: Header::parse(&raw("broken@example.com", "Assessment")),
+    });
+    scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "inbox",
+        &[],
+        &mut api,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    let items = db.pending(&expected.archive_id, 10).unwrap();
+    let bad_id = items
+        .iter()
+        .find(|item| item.header.subject.as_deref() == Some("Assessment"))
+        .unwrap()
+        .id
+        .clone();
+    let good_id = items
+        .iter()
+        .find(|item| item.id != bad_id)
+        .unwrap()
+        .id
+        .clone();
+    sql.execute(
+        "UPDATE candidates SET locator='broken-locator' WHERE id=?1",
+        [&bad_id],
+    )
+    .unwrap();
+    let visible = view(&state, 1).unwrap();
+    assert_eq!(visible.candidate_issues, 1);
+    assert_eq!(visible.pending_count, 1);
+    assert_eq!(visible.candidates[0].id, good_id);
+    let broken = visible
+        .accounts
+        .iter()
+        .find(|item| item.id == "broken-imap")
+        .unwrap();
+    assert!(broken.paused);
+    assert_eq!(broken.last_error.as_deref(), Some("Configuration"));
+    assert_eq!(
+        confirm_candidate_from_source(&state, &db, &expected, &account, &bad_id, &mut api, &cancel)
+            .await
+            .unwrap_err()
+            .code,
+        fail(Error::Storage).code
+    );
+    assert_eq!(api.downloads, 0);
+    assert!(!confirm_candidate_from_source(
+        &state, &db, &expected, &account, &good_id, &mut api, &cancel
+    )
+    .await
+    .unwrap());
+    let visible = view(&state, 10).unwrap();
+    assert_eq!(visible.candidate_issues, 1);
+    assert_eq!(visible.pending_count, 0);
+    assert!(visible.candidates.is_empty());
+    assert_eq!(
+        db.pending_count(&expected.archive_id).unwrap(),
+        1,
+        "damaged candidate stays pending for recovery"
+    );
+}

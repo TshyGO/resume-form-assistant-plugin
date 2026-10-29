@@ -6,7 +6,7 @@ pub mod imap;
 mod rules;
 pub mod source;
 pub use config::{ConnectionConfig, Encryption};
-pub use db::{Account, Candidate, Cursor, Database, HeaderRetry};
+pub use db::{Account, Candidate, Cursor, Database, HeaderRetry, PendingCandidates};
 pub use rules::{classify, Header};
 use serde::{Deserialize, Serialize};
 
