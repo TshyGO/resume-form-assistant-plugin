@@ -6,6 +6,9 @@ struct FakeApi {
     kind: SourceKind,
     account_id: String,
     messages: Vec<Metadata>,
+    pages: Option<Vec<Vec<Metadata>>>,
+    pending_read: Option<tokio::sync::oneshot::Sender<()>>,
+    pending_download: Option<tokio::sync::oneshot::Sender<()>>,
     raw: Vec<u8>,
     requests: Vec<Option<String>>,
     downloads: usize,
@@ -31,6 +34,9 @@ impl FakeApi {
                 },
                 header: Header::parse(&raw),
             }],
+            pages: None,
+            pending_read: None,
+            pending_download: None,
             raw,
             requests: vec![],
             downloads: 0,
@@ -55,6 +61,10 @@ impl MimeSource for FakeApi {
         max_bytes: usize,
     ) -> mailbox_sync::Result<Vec<u8>> {
         self.downloads += 1;
+        if let Some(started) = self.pending_download.take() {
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        }
         if std::mem::take(&mut self.fail_download) {
             return Err(Error::Network);
         }
@@ -77,11 +87,33 @@ impl PagedSource for FakeApi {
             Position::Api { cursor, .. } => cursor.clone(),
             Position::Imap(_) => panic!("API must never receive an IMAP UID"),
         }));
+        if let Some(started) = self.pending_read.take() {
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        }
         if std::mem::take(&mut self.fail_read) {
             return Err(Error::Network);
         }
         if let Some(cancel) = &self.cancel_read {
             cancel.cancel();
+        }
+        if let Some(pages) = &self.pages {
+            let index = match position {
+                None => 0,
+                Some(Position::Api { cursor, .. }) => cursor
+                    .strip_prefix("page:")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .ok_or(Error::Protocol)?,
+                Some(Position::Imap(_)) => return Err(Error::Changed),
+            };
+            return Ok(MetadataPage {
+                messages: pages.get(index).ok_or(Error::Missing)?.clone(),
+                next: Position::Api {
+                    source: self.kind,
+                    cursor: format!("page:{}", index + 1),
+                },
+                has_more: index + 1 < pages.len(),
+            });
         }
         Ok(MetadataPage {
             messages: self.messages.clone(),
@@ -535,6 +567,134 @@ async fn an_empty_api_page_can_advance_without_retaining_unmatched_headers_or_bo
     assert_eq!(
         api.requests,
         vec![None, Some("opaque-next-page-or-delta".into())]
+    );
+    assert_eq!(api.downloads, 0);
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_metadata_request_stops_without_waiting_for_network_timeout() {
+    let (_dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let expected = store.identity();
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    let (started, request_started) = tokio::sync::oneshot::channel();
+    api.pending_read = Some(started);
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(
+            scan(&mut api, &mut db, &store, &expected, &account, &cancel),
+            async {
+                request_started.await.unwrap();
+                cancel.cancel();
+            },
+        )
+    })
+    .await
+    .expect("cancellation must stop the pending request");
+    assert_eq!(result.unwrap_err().code, fail(Error::Cancelled).code);
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 0);
+    assert!(db
+        .source_position(&expected.archive_id, &account.id, "inbox")
+        .unwrap()
+        .is_none());
+    assert_eq!(api.downloads, 0);
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_mime_download_keeps_the_candidate_available_for_retry() {
+    let (_dir, mut db, store, account) = fixture(SourceKind::GmailApi);
+    let expected = store.identity();
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+        .await
+        .unwrap();
+    let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+    let (started, request_started) = tokio::sync::oneshot::channel();
+    api.pending_download = Some(started);
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(
+            confirm(&mut api, &db, &store, &expected, &account, &id, &cancel),
+            async {
+                request_started.await.unwrap();
+                cancel.cancel();
+            },
+        )
+    })
+    .await
+    .expect("cancellation must stop the pending download");
+    assert_eq!(result.unwrap_err().code, fail(Error::Cancelled).code);
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
+    assert!(store.list_evidence(None).unwrap().is_empty());
+    assert!(!confirm(
+        &mut api,
+        &db,
+        &store,
+        &expected,
+        &account,
+        &id,
+        &Cancellation::default()
+    )
+    .await
+    .unwrap());
+    assert_eq!(store.list_evidence(None).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn api_pagination_resumes_after_restart_from_the_last_committed_page() {
+    let (dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let expected = store.identity();
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    let second = Metadata {
+        locator: MessageLocator::Api {
+            source: account.source,
+            message_id: "second-page-message".into(),
+        },
+        header: Header::parse(&raw("second@example.com", "Assessment")),
+    };
+    api.pages = Some(vec![api.messages.clone(), vec![second], vec![]]);
+    assert!(
+        scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+            .await
+            .unwrap()
+    );
+    api.fail_read = true;
+    assert_eq!(
+        scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+            .await
+            .unwrap_err()
+            .code,
+        fail(Error::Network).code
+    );
+    drop(db);
+    let mut db = Database::open(dir.path()).unwrap();
+    assert!(
+        scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        api.requests,
+        vec![
+            None,
+            Some("page:1".into()),
+            Some("page:1".into()),
+            Some("page:2".into())
+        ]
+    );
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 2);
+    assert!(
+        db.source_position(&expected.archive_id, &account.id, "inbox")
+            .unwrap()
+            == Some(Position::Api {
+                source: account.source,
+                cursor: "page:3".into()
+            })
     );
     assert_eq!(api.downloads, 0);
 }

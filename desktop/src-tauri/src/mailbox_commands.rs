@@ -310,7 +310,7 @@ async fn confirm_from_source(
     persist: impl FnOnce(&[u8]) -> Result<bool>,
 ) -> Result<bool> {
     mapped(cancellation.check())?;
-    let bytes = mapped(source::confirmed_mime(source, item).await)?;
+    let bytes = mapped(cancellation.run(source::confirmed_mime(source, item)).await)?;
     mapped(cancellation.check())?;
     persist(&bytes)
 }

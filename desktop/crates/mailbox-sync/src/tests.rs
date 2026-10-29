@@ -960,3 +960,36 @@ fn a_failed_source_migration_rolls_back_the_account_table_replacement() {
         "mailbox:legacy"
     );
 }
+
+#[tokio::test]
+async fn cancellation_stops_all_pending_work_and_rejects_later_requests() {
+    use crate::source::Cancellation;
+    let cancellation = Cancellation::default();
+    let (first_started, first_ready) = tokio::sync::oneshot::channel();
+    let (second_started, second_ready) = tokio::sync::oneshot::channel();
+    let (first, second, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(
+            cancellation.run(async {
+                let _ = first_started.send(());
+                std::future::pending::<Result<()>>().await
+            }),
+            cancellation.run(async {
+                let _ = second_started.send(());
+                std::future::pending::<Result<()>>().await
+            }),
+            async {
+                first_ready.await.unwrap();
+                second_ready.await.unwrap();
+                cancellation.cancel();
+            },
+        )
+    })
+    .await
+    .expect("all pending operations must wake on cancellation");
+    assert_eq!(first, Err(Error::Cancelled));
+    assert_eq!(second, Err(Error::Cancelled));
+    let later = cancellation
+        .run::<()>(async { panic!("a cancelled operation must not start") })
+        .await;
+    assert_eq!(later, Err(Error::Cancelled));
+}

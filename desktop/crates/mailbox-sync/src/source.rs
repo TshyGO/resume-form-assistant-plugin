@@ -132,16 +132,37 @@ pub trait PagedSource: MimeSource {
 }
 
 #[derive(Default)]
-pub struct Cancellation(AtomicBool);
+pub struct Cancellation {
+    cancelled: AtomicBool,
+    wake: tokio::sync::Notify,
+}
 impl Cancellation {
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
+        self.wake.notify_waiters();
     }
     pub fn check(&self) -> Result<()> {
-        if self.0.load(Ordering::Acquire) {
+        if self.cancelled.load(Ordering::Acquire) {
             Err(Error::Cancelled)
         } else {
             Ok(())
+        }
+    }
+
+    /// Drop pending network work when cancelled, including a stalled request.
+    /// The source must discard any interrupted transport before its next read.
+    pub async fn run<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
+        // notify_waiters also wakes a Notified created before its first poll.
+        // Create it before checking the flag so cancellation cannot be missed.
+        let cancelled = self.wake.notified();
+        self.check()?;
+        tokio::select! {
+            biased;
+            _ = cancelled => Err(Error::Cancelled),
+            result = operation => {
+                self.check()?;
+                result
+            }
         }
     }
 }
@@ -160,7 +181,9 @@ pub async fn scan_page<E: From<Error>>(
     if let Some(position) = position {
         position.validate(source.kind())?;
     }
-    let page = crate::imap::bounded(source.read_metadata(scope, position)).await?;
+    let page = cancellation
+        .run(crate::imap::bounded(source.read_metadata(scope, position)))
+        .await?;
     cancellation.check()?;
     page.next.validate(source.kind())?;
     if page.messages.len() > crate::imap::BATCH_SIZE {
