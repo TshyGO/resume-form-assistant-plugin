@@ -226,10 +226,18 @@
       if (!ViewKeyboardEvent) return;
       el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
     }
-    function pressEscape(el) {
-      const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
-      if (!ViewKeyboardEvent) return;
-      el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    // rc-picker closes when its input loses focus to somewhere outside the picker, and commits
+    // nothing when the text did not change. Not Esc: it bubbles to an AntD Modal around the
+    // form, which closes on Esc and drops whatever was typed in it. When the page has no focus
+    // (一键填写 clicked in the side panel) blur() moves focus without any event, so the
+    // focusout React listens for is sent here.
+    function leavePicker(el) {
+      let left = false;
+      const seen = () => { left = true; };
+      el.addEventListener('focusout', seen, true);
+      try { blur(el); } finally { el.removeEventListener('focusout', seen, true); }
+      const View = el.ownerDocument?.defaultView;
+      if (!left && View?.FocusEvent && el.ownerDocument.activeElement !== el) el.dispatchEvent(new View.FocusEvent('focusout', { bubbles: true }));
     }
 
     async function freeText(ctx, value, shown) {
@@ -404,12 +412,16 @@
       ctx.observed = { library: 'antd', popupRole: 'calendar' };
       // 页面异常也按失败收尾；只把固定的原因码交出去。
       const picked = await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
-      // 选不成时收起自己点开的日历，免得挡住后面的字段：在输入框上按 Esc，rc-picker 当作取消，组件里的值不变。
-      // 只派发这个键，不点页面别处；原本就开着的、用户停下或改了内容的不动。收起有约 0.2 秒的动画，
-      // 最多等 0.6 秒它走完再交还，免得再点开同一个日历时把还在淡出的它当成原本就开着的。
+      // 选不成时收起自己点开的日历，免得挡住后面的字段：让输入框失焦（见 leavePicker），组件里的值不变。
+      // 不按键、不点页面别处；原本就开着的、用户停下或改了内容的不动。
+      // 刚在日历里按下过鼠标时，rc-picker 到下一帧才认失焦，这一次它不收：0.1 秒内没开始收起就再失焦一次。
+      // 收起有约 0.2 秒的动画，最多等 0.6 秒它走完再交还，免得再点开同一个日历时把还在淡出的它当成原本就开着的。
       if (picked.reason && !before.has(popup) && !stop(ctx) && popup.isConnected && visible(popup)) {
-        pressEscape(ctx.el);
-        await waitUntil(ctx, doc.documentElement, () => !popup.isConnected || !visible(popup), Boolean, 600);
+        const gone = () => !popup.isConnected || !visible(popup);
+        leavePicker(ctx.el);
+        const leaving = await waitUntil(ctx, doc.documentElement, () => gone() || Array.from(popup.classList).some(token => /-leave$/.test(token)), Boolean, 100);
+        if (leaving.reason === 'verification_timeout' && !stop(ctx)) leavePicker(ctx.el);
+        await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
       }
       return picked;
     }
