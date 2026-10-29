@@ -300,7 +300,9 @@
   }
   const api = { provider, capture, opened, rawCandidates, looksLikeMail, readBounded, MAX_BYTES };
   root.ResumeProWebmail = api;
-  if (typeof module === 'object') module.exports = api;
+  try {
+    if (typeof module === 'object' && module && typeof module.exports === 'object') module.exports = api;
+  } catch { /* A page element or cross-origin frame may be named module (#275). */ }
   if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage && root.window === root && root.top === root && provider(root.location?.href)) {
     chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (message?.type !== 'WEBMAIL_CAPTURE') return false;
