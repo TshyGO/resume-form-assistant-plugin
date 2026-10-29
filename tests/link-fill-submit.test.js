@@ -380,6 +380,47 @@ test('a late request cannot recreate a fill while its completed record is being 
   assert.deepEqual(storage.data.desktopFillRecords, []);
 });
 
+// 0.4.4 could store a fill that wrote more fields than it counted; the desktop refuses those.
+const validatingDesktop = async message => {
+  if (message.messageType === 'handshake') return handshake(message);
+  const { validateRequest } = await import('../link/protocol/validate.mjs');
+  try {
+    await validateRequest(message);
+  } catch (error) {
+    return { response: { protocolVersion: 2, correlationId: message.messageId, ok: false, error: { code: error.code, retryable: false, message: 'rejected' }, payload: {} } };
+  }
+  return saved(message);
+};
+
+test('a record 0.4.4 saved with fewer fields than it wrote is sent with a consistent total', async () => {
+  const { router, storage, state, writes } = await harness();
+  const { record } = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW });
+  Object.assign(storage.data.desktopFillRecords[0].fill, { fieldCount: 1, filledCount: 2, unconfirmedCount: 0 });
+
+  state.desktop = validatingDesktop;
+  const bound = await router.handle({ type: 'DESKTOP_BIND_FILL', recordId: record.recordId, applicationId: APPLICATION });
+  assert.equal(bound.status, 'saved');
+  const [message] = writes('fill.submit');
+  assert.equal(message.payload.fieldCount, 2);
+  assert.equal(message.payload.filledCount, 2);
+});
+
+test('a queued fill with counts the desktop refuses goes through on retry', async () => {
+  const { router, storage, state, writes } = await harness({
+    desktop: message => (message.messageType === 'handshake' ? handshake(message) : closed())
+  });
+  await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, applicationId: APPLICATION });
+  const [entry] = storage.data.desktopOutbox;
+  Object.assign(entry.payload, { fieldCount: 3, filledCount: 3, unconfirmedCount: 2 });
+
+  state.desktop = validatingDesktop;
+  const retried = await router.handle({ type: 'DESKTOP_RETRY', messageId: entry.messageId });
+  assert.equal(retried.status, 'saved');
+  const last = writes('fill.submit').at(-1);
+  assert.equal(last.payload.fieldCount, 5);
+  assert.equal(last.messageId, entry.messageId, 'the same messageId, so a replay is still recognised');
+});
+
 test('an id that is not a UUID is not trusted: the record gets its own', async () => {
   const { router } = await harness();
   const result = await router.handle({ type: 'DESKTOP_RECORD_FILL', raw: RAW, recordId: '../../etc' });

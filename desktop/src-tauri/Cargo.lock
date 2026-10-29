@@ -1560,6 +1560,7 @@ version = "0.1.0"
 dependencies = [
  "infer",
  "mail-parser",
+ "resume-sheet",
  "sha2 0.10.9",
  "uuid",
 ]
@@ -4521,6 +4522,8 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tower-layer",
+ "tower-service",
  "url",
  "uuid",
  "webdav-client",

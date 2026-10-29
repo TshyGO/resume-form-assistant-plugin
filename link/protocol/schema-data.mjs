@@ -3,7 +3,7 @@ export const SCHEMA_DATA = {
   "rules": {
     "protocolVersion": 2,
     "minProtocolVersion": 1,
-    "maxProtocolVersion": 3,
+    "maxProtocolVersion": 4,
     "maxEnvelopeBytes": 65536,
     "suggestedRawChunkBytes": 32768,
     "maxSnapshotBytes": 2097152,
@@ -28,7 +28,8 @@ export const SCHEMA_DATA = {
       "outbox.reconcile",
       "resume.read",
       "resume.update",
-      "legacy.import"
+      "legacy.import",
+      "mail.import"
     ],
     "writeTypes": [
       "job.save",
@@ -51,7 +52,8 @@ export const SCHEMA_DATA = {
       "ui.open",
       "legacy.import",
       "usage.touch",
-      "usage.settings"
+      "usage.settings",
+      "mail.import"
     ],
     "v2MessageTypes": [
       "resume.read",
@@ -114,6 +116,9 @@ export const SCHEMA_DATA = {
     "v3MessageTypes": [
       "usage.touch",
       "usage.settings"
+    ],
+    "v4MessageTypes": [
+      "mail.import"
     ]
   },
   "envelope": {
@@ -160,7 +165,8 @@ export const SCHEMA_DATA = {
           "ui.open",
           "legacy.import",
           "usage.touch",
-          "usage.settings"
+          "usage.settings",
+          "mail.import"
         ]
       },
       "occurredAt": {
@@ -676,6 +682,66 @@ export const SCHEMA_DATA = {
         }
       }
     },
+    "mail-import": {
+      "$id": "https://resumepro.local/protocol/payloads/mail-import.json",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "uploadId",
+        "kind",
+        "byteSize",
+        "sha256",
+        "chunkIndex",
+        "chunkCount",
+        "chunkSha256",
+        "bytesBase64"
+      ],
+      "properties": {
+        "uploadId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "eml",
+            "excerpt"
+          ]
+        },
+        "applicationId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 26214400
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "chunkIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 799
+        },
+        "chunkCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 800
+        },
+        "chunkSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytesBase64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 43692
+        }
+      }
+    },
     "outbox-reconcile": {
       "$id": "https://resumepro.local/protocol/payloads/outbox-reconcile.json",
       "type": "object",
@@ -1048,6 +1114,19 @@ export const SCHEMA_DATA = {
             "default",
             "strong"
           ]
+        },
+        "firstByteMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "timeoutStage": {
+          "type": "string",
+          "enum": [
+            "connect",
+            "first_byte",
+            "body"
+          ]
         }
       }
     },
@@ -1106,7 +1185,8 @@ export const SCHEMA_DATA = {
               "ui.open",
               "legacy.import",
               "usage.touch",
-              "usage.settings"
+              "usage.settings",
+              "mail.import"
             ]
           }
         }
@@ -1149,6 +1229,41 @@ export const SCHEMA_DATA = {
           "maximum": 63
         },
         "aiConfigDropped": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mail-import": {
+      "$id": "https://resumepro.local/protocol/responses/mail-import.json",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "uploadId",
+        "chunkIndex"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "chunk",
+            "saved"
+          ]
+        },
+        "uploadId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "chunkIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 799
+        },
+        "evidenceId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "duplicate": {
           "type": "boolean"
         }
       }

@@ -64,7 +64,7 @@ pub struct TemplateChanged {
 /// The highest protocol version the desktop actually serves right now.
 ///
 /// The desktop advertises v2 only after all five bridge handlers are wired.
-pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 3;
+pub const SERVED_MAX_PROTOCOL_VERSION: u32 = 4;
 
 /// The application as a caller can see it: who it is, and what it will commit.
 ///
@@ -336,9 +336,10 @@ fn template_notice(request: &Request, _answer: &Answer) -> Option<TemplateChange
 }
 
 fn list_notice(request: &Request, answer: &Answer) -> Option<ApplicationsChanged> {
+    if request.message_type == MessageType::MailImport && answer.payload["status"] != "saved" { return None; }
     if !matches!(
         request.message_type,
-        MessageType::JobSave | MessageType::FillSubmit | MessageType::SubmitConfirm
+        MessageType::JobSave | MessageType::FillSubmit | MessageType::SubmitConfirm | MessageType::MailImport
     ) {
         return None;
     }
@@ -479,6 +480,9 @@ fn answer_watched<A: Application + ?Sized>(frame: &[u8], application: &A, peer_g
                     let v3 = rules["v3MessageTypes"].as_array()?;
                     payload["capabilities"].as_array_mut()?.extend(v3.iter().cloned());
                 }
+            }
+            if request.protocol_version >= 2 && client_max >= 4 {
+                payload["capabilities"].as_array_mut()?.push(serde_json::json!("mail.import"));
             }
             serde_json::to_vec(&serde_json::json!({
                 "protocolVersion": request.protocol_version,
@@ -787,7 +791,7 @@ mod tests {
         );
         assert_eq!(value["payload"]["minProtocolVersion"], 1);
         assert_eq!(value["payload"]["maxProtocolVersion"], SERVED_MAX_PROTOCOL_VERSION);
-        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 3);
+        assert_eq!(SERVED_MAX_PROTOCOL_VERSION, 4);
         assert!(
             value["payload"]["capabilities"]
                 .as_array()
@@ -812,13 +816,24 @@ mod tests {
     }
 
     #[test]
+    fn mail_capability_is_only_announced_to_clients_offering_v4() {
+        let app = open_archive();
+        for (max, expected) in [(2, false), (3, false), (4, true)] {
+            let frame = serde_json::to_vec(&serde_json::json!({"protocolVersion":2,"messageId":"11111111-1111-4111-8111-111111111111","clientInstanceId":"22222222-2222-4222-8222-222222222222","messageType":"handshake","occurredAt":"2026-10-26T00:00:00Z","payload":{"pluginVersion":"0.4.4","minProtocolVersion":2,"maxProtocolVersion":max}})).unwrap();
+            let result = answer(&frame, app.as_ref()).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&result).unwrap();
+            assert_eq!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|item| item == "mail.import"), expected);
+        }
+    }
+
+    #[test]
     fn a_v2_only_client_can_handshake_after_the_bridge_is_wired() {
         const HANDSHAKE_V2_ONLY: &str = r#"{"protocolVersion":2,"messageId":"33333333-3333-4333-8333-333333333333","clientInstanceId":"11111111-1111-4111-8111-111111111111","messageType":"handshake","occurredAt":"2026-09-06T12:00:00.000Z","payload":{"pluginVersion":"0.4.0","minProtocolVersion":2,"maxProtocolVersion":2}}"#;
         let reply = answer(HANDSHAKE_V2_ONLY.as_bytes(), open_archive().as_ref()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["protocolVersion"], 2);
-        assert_eq!(value["payload"]["maxProtocolVersion"], 3);
+        assert_eq!(value["payload"]["maxProtocolVersion"], 4);
         assert!(value["payload"]["capabilities"].as_array().unwrap().iter().any(|c| c == "legacy.import"));
         let request = resume_pro_protocol::validate_request_bytes(HANDSHAKE_V2_ONLY.as_bytes()).unwrap();
         resume_pro_protocol::validate_response_for_request(&value, &request).unwrap();

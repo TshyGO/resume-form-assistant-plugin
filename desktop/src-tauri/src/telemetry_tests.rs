@@ -2,7 +2,6 @@ use super::*;
 use std::{
     io::{Read, Write},
     sync::mpsc,
-    time::Instant,
 };
 
 fn config(endpoint: String) -> Config {
@@ -308,24 +307,25 @@ async fn redirects_are_not_followed_and_delete_has_only_two_fields() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disabling_cancels_an_inflight_post_without_waiting_for_timeout() {
     let root = tempfile::tempdir().unwrap();
-    let (endpoint, captured) = server(204, Duration::from_millis(500), "");
+    // The server answers only after 30 s and the client would wait 60 s, so the request can end
+    // within the bound below only by being cancelled. The bound leaves a slow runner room for
+    // saving the choice, which happens before the request is awaited.
+    let (endpoint, captured) = server(204, Duration::from_secs(30), "");
     let mut cfg = config(endpoint);
-    cfg.timeout = Duration::from_secs(3);
+    cfg.timeout = Duration::from_secs(60);
     let service = Telemetry::load(root.path().to_path_buf(), cfg);
     service.acknowledge_notice().unwrap();
     let active = Arc::clone(&service);
     let request = tokio::spawn(async move {
         active.touch("2026-10-11", true).await;
     });
-    captured.recv_timeout(Duration::from_secs(2)).unwrap();
-    let start = Instant::now();
+    captured.recv_timeout(Duration::from_secs(10)).unwrap();
     let (_, old, _) = service.change(false).unwrap();
     assert!(old.is_some());
-    tokio::time::timeout(Duration::from_millis(200), request)
+    tokio::time::timeout(Duration::from_secs(5), request)
         .await
-        .unwrap()
+        .expect("disabling must cancel the in-flight post")
         .unwrap();
-    assert!(start.elapsed() < Duration::from_millis(200));
     assert!(!service.status().unwrap().enabled);
 }
 

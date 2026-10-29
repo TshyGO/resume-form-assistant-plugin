@@ -31,7 +31,8 @@ const UNRELIABLE_JOB = {
 
 // --- The page half: content.js with just enough of a page around it. ----------------------
 
-function loadPage({ extraction, desktop, userAgent }) {
+// `feedback`: also load feedback-core.js, so the page can build its diagnostics blocks (#301 [岗位]).
+function loadPage({ extraction, desktop, userAgent, feedback = false }) {
   const listeners = [];
   const desktopCalls = [];
   const storageWrites = [];
@@ -86,11 +87,13 @@ function loadPage({ extraction, desktop, userAgent }) {
   window.document = document;
   vm.runInNewContext(read('sidebar-state.js'), context);
   vm.runInNewContext(read('control-adapters.js'), context);
+  if (feedback) vm.runInNewContext(read('feedback-core.js'), context);
   vm.runInNewContext(read('content.js'), context);
   const hooks = context.self.ResumeProHighlightTest;
   // The page controller is mounted but its overlay stays closed: the side panel does the work.
   const fillButton = { disabled: false, textContent: '一键 AI 填写' };
   hooks.setShadowRoot({ querySelector: selector => selector === '#resume-pro-ai-fill' ? fillButton : null });
+  hooks.setStartupState('ready');
   return {
     hooks, desktopCalls, storageWrites, ai, location: context.location,
     async ready(copyOverride = {}) {
@@ -140,8 +143,8 @@ function element(id) {
   return node;
 }
 
-async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride, clipboardRejects = false } = {}) {
-  const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser] });
+async function openPanel({ extraction = RELIABLE_JOB, desktop = () => ({ status: 'saved' }), browser = 'chrome', copyOverride, clipboardRejects = false, feedback = false } = {}) {
+  const page = loadPage({ extraction, desktop, userAgent: USER_AGENTS[browser], feedback });
   await page.ready(copyOverride);
   let activeTabId = 7;
   // The front tab's address, as chrome.tabs.query reports it (undefined unless a test sets it).

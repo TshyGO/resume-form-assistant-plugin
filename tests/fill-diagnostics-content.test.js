@@ -55,7 +55,7 @@ test("a video-interview room with nothing to fill is not reported, and the user 
   const run1 = await run({ path: "/interview/room", title: "多面视频面试工具" });
   assert.equal(run1.reports.length, 0);
   assert.equal(run1.aiCalls, 0);
-  assert.match(run1.result.error, /不是网申填写页/);
+  assert.equal(run1.result.error, "没找到可填写的输入框。请打开申请表后再试。");
   // 这句提示要留在屏幕上，不像普通失败 2.4 秒后消失。
   assert.equal(run1.timers.filter(timer => timer.delay === 2400 && !timer.cleared).length, 0);
   assert.match(run1.text.value, /错误类别：page_not_supported；失败阶段：扫描/);
@@ -126,18 +126,25 @@ test("a match failure names the match stage and whether the AI was actually call
   assert.match(text.value, /错误类别：match_failed；失败阶段：匹配/);
 });
 
-test("the model tier line appears only when a tier was asked for, and the report never carries it", async () => {
+// #301：报告里的 ai_tier 是这次 AI 请求实际用的档位；没指定档位的请求一律走日常档，没调用 AI 时是「-」。
+// 侧栏的「模型档位」一行仍然只在指定了档位时出现。
+test("the model tier line appears only when a tier was asked for; the report names the tier the AI ran on", async () => {
   const base = { ruleMatches: 0, aiFields: 1, aiMatches: 0, promptBytes: 300, apiMs: 5, resumeFields: 3, candidateFields: 1, errorCode: "none" };
   const plain = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
     respond: () => ({ success: true, matches: [], diagnostics: base }) });
   assert.doesNotMatch(plain.text.value, /模型档位/);
-  for (const [requested, used, label] of [["strong", "strong", "强"], ["strong", "default", "强模型未设置，已退回日常"],
-    ["default", "default", "日常"], ["strong", undefined, "未取得"]]) {
+  assert.match(plain.report, /^ai_tier: default$/m);
+  for (const [requested, used, label, tier] of [["strong", "strong", "强", "strong"], ["strong", "default", "强模型未设置，已退回日常", "default"],
+    ["default", "default", "日常", "default"], ["strong", undefined, "未取得", "strong"]]) {
     const { text, report } = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
       respond: () => ({ success: true, matches: [], diagnostics: { ...base, tierRequested: requested, ...(used ? { tierUsed: used } : {}) } }) });
     assert.ok(text.value.split("\n").includes(`模型档位：${label}`), text.value);
-    assert.doesNotMatch(report, /tier/);
+    assert.match(report, new RegExp(`^ai_tier: ${tier}$`, "m"));
   }
+  // 规则全部匹配上、没调用 AI：没有档位。
+  const local = await run({ path: "/apply", fields: [input => { input.name = "hobby"; }],
+    respond: () => ({ success: true, matches: [], diagnostics: { ...base, promptBytes: 0, tierRequested: "strong" } }) });
+  assert.match(local.report, /^ai_tier: -$/m);
 });
 
 test("a desktop or AI service failure is a service_error, not a match failure", async () => {

@@ -149,10 +149,10 @@ fn identity_rules_for_v2_types() {
 }
 
 #[test]
-fn handshake_announces_max_2() {
+fn handshake_announces_supported_maximum() {
     let payload = crate::identity::handshake_response_payload(&current(), "0.4.0");
     assert_eq!(payload["minProtocolVersion"], 1);
-    assert_eq!(payload["maxProtocolVersion"], 3);
+    assert_eq!(payload["maxProtocolVersion"], 4);
 }
 
 #[test]

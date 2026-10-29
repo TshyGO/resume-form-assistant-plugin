@@ -16,6 +16,8 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "manifest.json",
   "background.js",
   "content.js",
+  "webmail.js",
+  "sidepanel-mail.js",
   "content.css",
   "sidebar-state.js",
   "control-adapters.js",

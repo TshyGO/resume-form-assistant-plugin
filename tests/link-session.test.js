@@ -67,6 +67,14 @@ test('a successful handshake reports ready and hands back the current identity',
   assert.equal(storage.data.desktopPairing.archiveId, ARCHIVE);
 });
 
+// #299: ai.complete goes as v3 only to a desktop that serves v3; older ones refuse the version.
+test('a ready probe says the highest protocol version the desktop serves', async () => {
+  for (const max of [2, 3]) {
+    const { session } = await makeSession({ reply: handshakeReply({ maxProtocolVersion: max }) });
+    assert.equal((await session.probe()).maxProtocolVersion, max);
+  }
+});
+
 test('the handshake itself carries no archive identity', async () => {
   const { session, sent } = await makeSession({ reply: handshakeReply() });
 
@@ -77,7 +85,7 @@ test('the handshake itself carries no archive identity', async () => {
   assert.equal(sent[0].protocolVersion, 2);
   assert.deepEqual(
     { pluginVersion: sent[0].payload.pluginVersion, min: sent[0].payload.minProtocolVersion, max: sent[0].payload.maxProtocolVersion },
-    { pluginVersion: '9.8.7', min: 2, max: 3 }
+    { pluginVersion: '9.8.7', min: 2, max: 4 }
   );
 });
 
@@ -110,7 +118,7 @@ test('a handshake that gets past transport validation with no shared version is 
     store: createStore({ storage, uuid: () => '11111111-1111-4111-8111-111111111111' }),
     send: async message => ({
       status: 'ok',
-      response: handshakeReply({ minProtocolVersion: 4, maxProtocolVersion: 4 })(message).response,
+      response: handshakeReply({ minProtocolVersion: 5, maxProtocolVersion: 5 })(message).response,
       resultId: null
     }),
     uuid: () => '33333333-3333-4333-8333-333333333333',

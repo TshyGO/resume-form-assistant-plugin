@@ -1,3 +1,4 @@
+import { mountAttachmentList } from "./attachment-list.ts";
 import { bindDetailControls } from "./application-detail-controls.ts";
 import type {
   ApplicationSummary,
@@ -472,7 +473,7 @@ export function mountApplications(
             <div class="record-text"><strong>${escapeHtml(item.subject || item.originalFilename || "导入的材料")}</strong><span>${escapeHtml(evidenceLine(item))}</span></div>
             <div class="record-actions">
               <button type="button" data-act="evidence" data-evidence="${escapeHtml(item.id)}">查看</button>
-              <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button>
+              <button type="button" data-act="unassociate" data-evidence="${escapeHtml(item.id)}">取消关联</button><button type="button" data-act="recycle-evidence" data-evidence="${escapeHtml(item.id)}">移到回收站</button>
             </div>
           </li>`).join("")}
         </ul>` : `<p class="panel-empty">在「招聘通知」里导入材料并关联到这条申请后，会出现在这里。</p>`}
@@ -546,6 +547,7 @@ export function mountApplications(
           if (act === "snapshot" && snapshotId) return void openSnapshot(snapshotId);
           if (act === "evidence" && evidenceId) return void openEvidence(evidenceId);
           if (act === "unassociate" && evidenceId) return void unassociateEvidence(evidenceId, id);
+          if (act === "recycle-evidence" && evidenceId) return void recycleEvidence(evidenceId, id);
           return void handleAction(act, view);
         });
       });
@@ -592,9 +594,11 @@ export function mountApplications(
   });
 
   // 只读预览，和收件箱看到的是同一份已经清洗过的数据（正文转义、图片 data: URL、
-  // PDF 不内嵌）。这里不做分类，分类在收件箱里做。
+  // 独立 PDF 材料沿用系统打开，邮件里的 PDF 附件可在附件窗口预览）。这里不做分类，分类在收件箱里做。
   let evidenceToken = 0;
+  let clearEvidenceAttachments: (() => void) | null = null;
   async function openEvidence(evidenceId: string) {
+    clearEvidenceAttachments?.(); clearEvidenceAttachments = null;
     const token = ++evidenceToken;
     const evidenceDialog = dialogEl("evidence-dialog");
     const body = must("evidence-body");
@@ -607,8 +611,11 @@ export function mountApplications(
         <p class="muted">${escapeHtml(evidenceLine(item))}</p>
         ${item.note ? `<p class="banner">${escapeHtml(item.note)}</p>` : ""}
         ${item.imageDataUrl ? `<img class="evidence-image" alt="导入的截图" src="${escapeHtml(item.imageDataUrl)}">` : ""}
-        ${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}
+        ${item.kind === "eml" ? '<div id="application-mail-attachments"></div><h3>邮件正文</h3>' : ""}
+        <div data-mail-body>${item.bodyExtract ? `<pre class="evidence-body">${escapeHtml(item.bodyExtract)}</pre>` : ""}</div>
       `;
+      const attachmentRoot = body.querySelector?.<HTMLElement>("#application-mail-attachments");
+      if (attachmentRoot) clearEvidenceAttachments = mountAttachmentList(attachmentRoot, invoke, item.id, item.subject || item.originalFilename || "邮件附件", body.querySelector<HTMLElement>("[data-mail-body]"));
     } catch (err) {
       if (token !== evidenceToken) return;
       body.innerHTML = `<p class="banner">${escapeHtml(`读不出这条证据（${invokeError(err)}）。`)}</p>`;
@@ -616,10 +623,23 @@ export function mountApplications(
   }
 
   maybe("evidence-close")?.addEventListener("click", () => {
+    ++evidenceToken; clearEvidenceAttachments?.(); clearEvidenceAttachments = null;
     dialogEl("evidence-dialog").close();
   });
 
+  async function recycleEvidence(evidenceId: string, applicationId: string) {
+    if (actionBusy) return;
+    actionBusy = true;
+    try {
+      await invoke("set_evidence_recycled_cmd", { evidenceId, recycled: true });
+      msg.textContent = "已移到招聘通知的回收站，原件和附件保留，可在那里恢复。";
+      if (ctl.selectedId === applicationId) await loadDetail(applicationId);
+    } catch (err) { msg.textContent = invokeError(err); }
+    finally { actionBusy = false; }
+  }
+
   async function unassociateEvidence(evidenceId: string, applicationId: string) {
+    if (actionBusy) return;
     try {
       await invoke("unassociate_evidence_cmd", { evidenceId });
       msg.textContent = "已取出，材料回到「招聘通知」待整理。这条申请的证据状态按剩下的材料重算。";

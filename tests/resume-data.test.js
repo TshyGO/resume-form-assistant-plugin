@@ -17,7 +17,7 @@ test('desktop read becomes the same view model in both sidebars', () => {
 });
 
 test('each desktop downgrade has an action and keeps data unavailable', () => {
-  for (const mode of ['not_installed', 'not_paired', 'never_paired', 'incompatible', 'unavailable', 'empty']) {
+  for (const mode of ['not_installed', 'not_paired', 'never_paired', 'incompatible', 'unavailable', 'unreadable', 'empty']) {
     assert.ok(modeCopy(mode).message);
     assert.ok(modeCopy(mode).action);
   }

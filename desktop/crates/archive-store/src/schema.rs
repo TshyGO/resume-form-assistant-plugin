@@ -10,7 +10,7 @@
 //! - message_receipts 持久化提交回执(含 sourceRestoreEpoch 与 payloadSha256)与永久删除墓碑。
 //! - schema_migrations 记录迁移历史;PRAGMA user_version 为权威版本。
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 #[derive(Clone, Copy)]
 pub struct Migration {
@@ -314,6 +314,14 @@ CREATE INDEX idx_evidence_message_id ON reply_evidence(message_id)
   WHERE message_id IS NOT NULL AND message_id <> '';
 "#;
 
+/// Notification recycling preserves the immutable original and its application association.
+pub const V7_EVIDENCE_RECYCLE: &str = r#"
+CREATE TABLE evidence_recycle (
+  evidence_id TEXT PRIMARY KEY REFERENCES reply_evidence(id) ON DELETE CASCADE,
+  recycled_at TEXT NOT NULL
+);
+"#;
+
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
         to_version: 1,
@@ -344,5 +352,10 @@ pub const MIGRATIONS: &[Migration] = &[
         to_version: 6,
         description: "evidence message id for cross-channel mail dedup (#330)",
         sql: V6_EVIDENCE_MESSAGE_ID,
+    },
+    Migration {
+        to_version: 7,
+        description: "recoverable notification recycle bin",
+        sql: V7_EVIDENCE_RECYCLE,
     },
 ];

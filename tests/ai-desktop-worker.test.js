@@ -148,6 +148,24 @@ test('an oversized lone candidate is skipped instead of prompting AI without res
   assert.match(result.warning, /内容太多/);
 });
 
+test('a failed request replaces an earlier skip code, so the diagnostics name the failure', async () => {
+  const input = {
+    formFields: [{ fieldId: 'school', label: '学校', inputType: 'select', options: ['大学甲', '大学乙'] }, { fieldId: 'intro', label: '个人简介' }],
+    resumeFields: [{ group: '教育背景', key: '学校', value: '合成资料'.repeat(20_000) }, { group: '其他', key: '自我评价', value: '合成评价' }]
+  };
+  const timeout = worker(() => ({ ok: false, reason: 'timeout' }));
+  const failed = await timeout.run(input);
+  assert.equal(timeout.sent.filter(item => item.kind === 'desktop-complete').length, 1);
+  assert.ok(failed.diagnostics.skippedOversized > 0);
+  assert.equal(failed.diagnostics.errorCode, 'timeout');
+  assert.match(failed.warning, /内容太多/, 'both warnings are still shown');
+  const garbled = await worker(() => ({ ok: true, text: 'not json' })).run(input);
+  assert.equal(garbled.diagnostics.errorCode, 'bad_response');
+  // An answered request leaves the skip code as it was.
+  const answered = await worker(() => ({ ok: true, text: '[]' })).run(input);
+  assert.equal(answered.diagnostics.errorCode, 'input_too_large');
+});
+
 test('desktop failure reasons produce distinct Chinese guidance', async () => {
   const cases = [
     ['not_configured', '桌面还没有配置 AI 服务商'], ['credential_unavailable', '系统凭据库'],
@@ -177,7 +195,34 @@ test('a timeout says which tier, which host and how long it waited', async () =>
   clock = 0;
   const daily = worker(() => { clock += 120_000; return { ok: false, reason: 'timeout', host: 'api.example.com' }; }, { now });
   const plain = await daily.run({ ...BASE, formFields: [BASE.formFields[1]] });
-  assert.equal(plain.warning, 'AI 服务商（api.example.com）等了 120 秒没有返回，请稍后重试。');
+  // #299：日常档只说等了多久、可以换模型，秒数是插件自己量的。
+  assert.equal(plain.warning, '日常模型等了 120 秒没有返回，可在桌面设置换模型后重试。');
+  clock = 0;
+  const named = worker(() => { clock += 95_600; return { ok: false, reason: 'timeout', tier: 'default', host: 'api.example.com' }; }, { now });
+  const early = await named.run({ ...BASE, formFields: [BASE.formFields[1]], tier: 'default' });
+  assert.equal(early.warning, '日常模型等了 96 秒没有返回，可在桌面设置换模型后重试。');
+});
+
+// #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
+test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
+  const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));
+  let calls = 0;
+  const env = worker(() => (++calls === 1
+    ? { ok: true, text: '[]', firstByteMs: 2400 }
+    : { ok: false, reason: 'timeout', host: 'api.example.com', firstByteMs: 900, timeoutStage: 'body' }));
+  const result = await env.run({ formFields: fields, resumeFields: BASE.resumeFields });
+  assert.equal(calls, 2);
+  assert.equal(result.diagnostics.firstByteMs, 2400);
+  assert.equal(result.diagnostics.timeoutStage, 'body');
+
+  const waiting = await worker(() => ({ ok: false, reason: 'timeout', timeoutStage: 'first_byte' })).run();
+  assert.equal(waiting.diagnostics.timeoutStage, 'first_byte');
+  assert.equal('firstByteMs' in waiting.diagnostics, false);
+
+  // An older desktop sends neither; nothing made up takes their place.
+  const old = await worker(() => ({ ok: false, reason: 'timeout' })).run();
+  assert.equal('firstByteMs' in old.diagnostics, false);
+  assert.equal('timeoutStage' in old.diagnostics, false);
 });
 
 test('a later batch failure keeps matches already returned by the desktop', async () => {

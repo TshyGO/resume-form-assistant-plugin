@@ -361,6 +361,7 @@ export async function validateRequest(value) {
     if (e.code) throw e;
     throw fail("invalid_payload", e.message);
   }
+  if (RULES.v4MessageTypes.includes(type) && value.protocolVersion < 4) throw fail("protocol_incompatible", "mail.import requires protocolVersion 4");
   if (RULES.v3MessageTypes.includes(type) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${type} requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(type) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${type} requires protocolVersion 2`);
@@ -420,6 +421,15 @@ export async function validateRequest(value) {
           throw fail("invalid_payload", "filledCount + unconfirmedCount exceeds fieldCount");
         }
       }
+    }
+  }
+  if (type === "mail.import") {
+    const p = value.payload;
+    const bytes = decodeStandardBase64(p.bytesBase64);
+    const expected = p.chunkIndex + 1 === p.chunkCount ? p.byteSize - p.chunkIndex * 32768 : 32768;
+    if (p.chunkIndex >= p.chunkCount || p.chunkCount !== Math.ceil(p.byteSize / 32768)
+        || bytes.length !== expected || await sha256Hex(bytes) !== p.chunkSha256) {
+      throw fail("invalid_payload", "mail chunk length, count or digest mismatch");
     }
   }
   if (type === "snapshot.chunk") {
@@ -533,6 +543,15 @@ export function validateResponseForRequest(value, request) {
       !Object.hasOwn(request.payload ?? {}, "tier") && request.payload?.purpose !== "analyze") {
     throw fail("invalid_payload", "ai.complete tier is only returned to a request that asked for one");
   }
+  if (request.messageType === "mail.import" && value.ok) {
+    const p = value.payload;
+    const final = request.payload.chunkIndex + 1 === request.payload.chunkCount;
+    if (p.uploadId !== request.payload.uploadId || p.chunkIndex !== request.payload.chunkIndex
+        || (final ? p.status !== "saved" || typeof p.duplicate !== "boolean" || !p.evidenceId || value.resultId !== p.evidenceId
+          : p.status !== "chunk" || Object.hasOwn(p, "evidenceId") || Object.hasOwn(p, "duplicate") || Object.hasOwn(value, "resultId"))) {
+      throw fail("invalid_payload", "mail import acknowledgement does not match request");
+    }
+  }
   if (request.messageType === "snapshot.chunk") {
     const chunkCount = request.payload?.chunkCount;
     const requestedIndex = request.payload?.chunkIndex;
@@ -640,6 +659,7 @@ export function validateResponse(value, requestType) {
     }
   }
   validateSchema(value, responseSchema());
+  if (RULES.v4MessageTypes.includes(requestType) && value.protocolVersion < 4) throw fail("protocol_incompatible", "mail.import response requires protocolVersion 4");
   if (RULES.v3MessageTypes.includes(requestType) && value.protocolVersion < 3) throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 3`);
   if (RULES.v2MessageTypes.includes(requestType) && value.protocolVersion < 2) {
     throw fail("protocol_incompatible", `${requestType} response requires protocolVersion 2`);
@@ -658,7 +678,15 @@ export function validateResponse(value, requestType) {
         ? Object.hasOwn(payload, "text") && !Object.hasOwn(payload, "reason")
           && !Object.hasOwn(payload, "httpStatus") && !Object.hasOwn(payload, "host")
         : payload.status === "failed" && Object.hasOwn(payload, "reason") && !Object.hasOwn(payload, "text");
-      if (!valid) throw fail("invalid_payload", "ai.complete response fields do not match status");
+      // Only a timeout has a stage to name (#299).
+      if (!valid || (Object.hasOwn(payload, "timeoutStage") && payload.reason !== "timeout")) {
+        throw fail("invalid_payload", "ai.complete response fields do not match status");
+      }
+      // Plugins send ai.complete as v2 and their schema copy rejects keys it does not know
+      // (additionalProperties: false); only a plugin that sends v3 knows the timing (#299).
+      if (value.protocolVersion < 3 && (Object.hasOwn(payload, "firstByteMs") || Object.hasOwn(payload, "timeoutStage"))) {
+        throw fail("invalid_payload", "ai.complete timing is only returned to a protocolVersion 3 request");
+      }
       if (Object.hasOwn(payload, "host") &&
           (payload.host.length === 0 || !/^[A-Za-z0-9.-]+$/.test(payload.host))) {
         throw fail("invalid_payload", "ai.complete host must be a hostname");

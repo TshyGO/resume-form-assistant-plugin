@@ -196,6 +196,30 @@ test('read-only final verification preserves completed evidence after cancellati
   input.isConnected = false; assert.equal(h.check(input).reason, 'element_disconnected');
 });
 
+test('a text box the page still marks invalid keeps its final read: once the page clears the error it reads as filled', async () => {
+  // #301 北森开始 / 结束时间：先填的开始时间被页面标错，结束时间填完后才清掉；结束前的复核只读不写。
+  let pageError = true;
+  const h = harness({
+    normalizeText: (el, value) => String(value), prefersSequential: () => false, dispatchTextInput: () => {},
+    runTextLifecycle: async (el, value, sequential, guard, didWrite) => {
+      if (!guard()) return false;
+      didWrite(); el.value = value; return true;
+    },
+    waitTextCommit: async () => {}, replayFocusBlur: async () => {},
+    inspectText: (el, expected) => el.value !== expected ? { ok: false, reason: 'value_reverted' }
+      : pageError ? { ok: false, reason: 'validation_not_cleared' } : { ok: true, reason: '' }
+  });
+  const input = new h.Input();
+  assert.equal((await h.operate(input, '2019/09')).reason, 'validation_not_cleared');
+  const writes = input.events.length;
+  assert.equal(h.check(input)?.reason, 'validation_not_cleared');
+  pageError = false;
+  assert.equal(h.check(input)?.ok, true);
+  input.value = '';
+  assert.equal(h.check(input)?.reason, 'value_reverted');
+  assert.equal(input.events.length, writes);
+});
+
 test('write accounting distinguishes a refused guard from an interrupted attempted write', async () => {
   const h = harness(); const input = new h.Input(); input.type = 'month';
   let writes = 0, active = true;
@@ -207,6 +231,23 @@ test('write accounting distinguishes a refused guard from an interrupted attempt
   assert.equal(result.reason, 'cancelled'); assert.equal(writes, 1);
   assert.equal(input.value, '1998-06');
   assert.ok(!JSON.stringify(result).includes('1998'));
+});
+
+test('a phone box showing the same number in its own format is never put back to its old value', async () => {
+  // #229：逐字重试后核对仍不认，但框里是同一个号码（页面加了空格）：不恢复成写之前的号码。
+  const h = harness({
+    normalizeText: (el, value) => String(value), prefersSequential: () => true, dispatchTextInput: () => {},
+    runTextLifecycle: async (el, value, sequential, guard, didWrite) => {
+      if (!guard()) return false;
+      didWrite(); el.value = value.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3'); return true;
+    },
+    waitTextCommit: async () => {}, replayFocusBlur: async () => {},
+    inspectText: (el, expected, committed) => el.value === expected ? { ok: true, reason: '' } : { ok: false, reason: committed ? 'value_reverted' : 'value_not_committed' },
+    sameTextValue: (el, current, expected) => current.replace(/\s/g, '') === expected
+  });
+  const input = new h.Input(); input.type = 'tel'; input.value = '13900000000';
+  await h.operate(input, '13800138000');
+  assert.equal(input.value, '138 0013 8000');
 });
 
 test('guard callbacks are evaluated once at each stop point', async () => {

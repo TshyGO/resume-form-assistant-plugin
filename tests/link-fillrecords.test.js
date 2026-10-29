@@ -104,6 +104,16 @@ test('counts and timings are clamped to what the protocol accepts', async () => 
   assert.deepEqual(payload.durationsMs, { fill: 3600000, total: 5 });
 });
 
+test('the total is never below the fields written or left unconfirmed, so the desktop accepts the record', async () => {
+  // #301: the desktop refuses filledCount + unconfirmedCount > fieldCount with invalid_payload.
+  const { buildFillPayload } = await load();
+  const raised = buildFillPayload({ ...RAW, fieldCount: 1, filledCount: 2, unconfirmedCount: 1 });
+  assert.equal(raised.fieldCount, 3);
+  assert.equal(raised.filledCount, 2);
+  assert.equal(raised.unconfirmedCount, 1);
+  assert.equal(buildFillPayload(RAW).fieldCount, 12);
+});
+
 test('a missing template name falls back rather than failing the record', async () => {
   const { buildFillPayload } = await load();
   assert.equal(buildFillPayload({ ...RAW, templateName: '   ' }).templateName, '未命名模板');

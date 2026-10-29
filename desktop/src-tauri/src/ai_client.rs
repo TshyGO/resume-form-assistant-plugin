@@ -7,7 +7,11 @@
 //! 会把请求正文——证据或简历全文——原样重发给确认页上没出现过的主机）、
 //! **响应边读边限大小**（超大响应不先整块读进内存）。
 
-use std::sync::OnceLock;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -60,6 +64,89 @@ pub struct StreamLimits {
     pub total: Duration,
 }
 
+/// 这次请求花在哪儿（#299）：多久收到响应头、超时停在哪一步。只有时长和固定的阶段名。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timing {
+    /// 从发出请求到收到响应头用了多久；没收到响应头就是 `None`。
+    pub first_byte: Option<Duration>,
+    /// 超时停在哪一步；不是超时就是 `None`。
+    pub timeout_stage: Option<TimeoutStage>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutStage {
+    /// 还没连上：域名解析、TCP、TLS 或代理握手没完成。
+    Connect,
+    /// 连上了、请求发出去了，响应头没回来。非流式时服务商多半要整段生成完才回头。
+    FirstByte,
+    /// 响应头到了，正文没收完。
+    Body,
+}
+
+impl TimeoutStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::FirstByte => "first_byte",
+            Self::Body => "body",
+        }
+    }
+}
+
+/// 建连计数（#299）：连接层每开始一次建连（域名解析、TCP、TLS、代理握手）记一次开始，
+/// 连上或失败再记一次结束。建连被中途丢弃（超时）就不会记结束，所以超时之后还有没结束
+/// 的建连，就是卡在连接这一步。只有两个计数，不碰连接里的任何内容。
+#[derive(Clone, Default)]
+struct Connects {
+    started: Arc<AtomicUsize>,
+    finished: Arc<AtomicUsize>,
+}
+
+impl Connects {
+    fn pending(&self) -> usize {
+        self.started.load(Ordering::SeqCst).saturating_sub(self.finished.load(Ordering::SeqCst))
+    }
+}
+
+impl<S> tower_layer::Layer<S> for Connects {
+    type Service = CountedConnector<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        CountedConnector { inner, connects: self.clone() }
+    }
+}
+
+#[derive(Clone)]
+struct CountedConnector<S> {
+    inner: S,
+    connects: Connects,
+}
+
+impl<S, R> tower_service::Service<R> for CountedConnector<S>
+where
+    S: tower_service::Service<R>,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<S::Response, S::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: R) -> Self::Future {
+        self.connects.started.fetch_add(1, Ordering::SeqCst);
+        let finished = Arc::clone(&self.connects.finished);
+        let connecting = self.inner.call(request);
+        Box::pin(async move {
+            let connected = connecting.await;
+            finished.fetch_add(1, Ordering::SeqCst);
+            connected
+        })
+    }
+}
+
 pub struct ChatClient {
     inner: reqwest::Client,
     /// 超时报错的文案要说实际配的这个值，不能写死成默认的 60 秒
@@ -67,6 +154,8 @@ pub struct ChatClient {
     timeout: Duration,
     /// 有值时按 SSE 流式接收；这时客户端不设总超时，时限由这里管。
     stream: Option<StreamLimits>,
+    /// 这个客户端的建连计数，判断超时停在哪一步用（#299）。
+    connects: Connects,
 }
 
 impl ChatClient {
@@ -76,12 +165,14 @@ impl ChatClient {
 
     /// 超时可注入：测试里等 60 秒没有意义。
     pub fn with_timeout(timeout: Duration) -> Result<Self, CommandError> {
-        Ok(Self { inner: build_client(Some(timeout))?, timeout, stream: None })
+        let connects = Connects::default();
+        Ok(Self { inner: build_client(Some(timeout), &connects)?, timeout, stream: None, connects })
     }
 
     /// 流式接收（#283）：请求带 `stream: true`，按 `limits` 判断超时。
     pub fn streaming(limits: StreamLimits) -> Result<Self, CommandError> {
-        Ok(Self { inner: build_client(None)?, timeout: limits.first_reply, stream: Some(limits) })
+        let connects = Connects::default();
+        Ok(Self { inner: build_client(None, &connects)?, timeout: limits.first_reply, stream: Some(limits), connects })
     }
 
     /// 发一次 Chat Completions，返回模型输出的正文。
@@ -95,15 +186,53 @@ impl ChatClient {
         model: &str,
         body: &Value,
     ) -> Result<String, CommandError> {
-        if let Some(limits) = self.stream {
-            return self.chat_streamed(limits, api_url, api_key, host, model, body).await;
-        }
+        self.chat_timed(api_url, api_key, host, model, body).await.0
+    }
+
+    /// 和 `chat` 一样，另外交回这次多久收到响应头、超时停在哪一步（#299）。
+    pub async fn chat_timed(
+        &self,
+        api_url: &str,
+        api_key: &str,
+        host: &str,
+        model: &str,
+        body: &Value,
+    ) -> (Result<String, CommandError>, Timing) {
+        let pending_before = self.connects.pending();
+        let mut first_byte = None;
+        let result = match self.stream {
+            Some(limits) => self.chat_streamed(limits, api_url, api_key, host, model, body, &mut first_byte).await,
+            None => self.chat_whole(api_url, api_key, host, model, body, &mut first_byte).await,
+        };
+        let timeout_stage = match &result {
+            Err(err) if err.code == "AI_TIMEOUT" => Some(if first_byte.is_some() {
+                TimeoutStage::Body
+            } else if self.connects.pending() > pending_before {
+                TimeoutStage::Connect
+            } else {
+                TimeoutStage::FirstByte
+            }),
+            _ => None,
+        };
+        (result, Timing { first_byte, timeout_stage })
+    }
+
+    async fn chat_whole(
+        &self,
+        api_url: &str,
+        api_key: &str,
+        host: &str,
+        model: &str,
+        body: &Value,
+        first_byte: &mut Option<Duration>,
+    ) -> Result<String, CommandError> {
         let started = Instant::now();
         let response = self
             .request(api_url, api_key, body)
             .send()
             .await
             .map_err(|err| self.send_failed(&err, host, model, started))?;
+        *first_byte = Some(started.elapsed());
         let response = checked_status(response, host, model, started)?;
         let bytes = read_body(response, None, self.timeout, host, model, started).await?;
         content_of(&bytes, host)
@@ -117,6 +246,7 @@ impl ChatClient {
         host: &str,
         model: &str,
         body: &Value,
+        first_byte: &mut Option<Duration>,
     ) -> Result<String, CommandError> {
         let started = Instant::now();
         let start = tokio::time::Instant::now();
@@ -131,6 +261,7 @@ impl ChatClient {
             }
             Ok(sent) => sent.map_err(|err| self.send_failed(&err, host, model, started))?,
         };
+        *first_byte = Some(started.elapsed());
         let response = checked_status(response, host, model, started)?;
         let event_stream = response
             .headers()
@@ -199,7 +330,7 @@ impl ChatClient {
     }
 }
 
-fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, CommandError> {
+fn build_client(timeout: Option<Duration>, connects: &Connects) -> Result<reqwest::Client, CommandError> {
     let redirects = reqwest::redirect::Policy::custom(|attempt| {
         let first = attempt.previous().first().cloned();
         let stays = first.as_ref().is_some_and(|origin| same_origin(origin, attempt.url()));
@@ -209,7 +340,10 @@ fn build_client(timeout: Option<Duration>) -> Result<reqwest::Client, CommandErr
             attempt.stop()
         }
     });
-    let mut builder = reqwest::Client::builder().user_agent(USER_AGENT).redirect(redirects);
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(redirects)
+        .connector_layer(connects.clone());
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
@@ -600,6 +734,79 @@ mod tests {
         assert!(!err.message.contains("60 秒"), "{}", err.message);
     }
 
+    // ---- #299 首字节耗时与超时阶段 ----
+
+    /// 先等 `delay_ms` 再回 `reply`，量首字节耗时用。
+    fn serve_after(delay_ms: u64, reply: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = vec![0u8; 65536];
+            let _ = stream.read(&mut buf);
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            let _ = stream.write_all(&reply);
+            // 回完再挂一会儿，`hang` 场景里客户端读正文时连接还开着。
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        (url, handle)
+    }
+
+    #[tokio::test]
+    async fn an_answer_reports_how_long_the_first_byte_took() {
+        let (url, _server) = serve_after(300, ok_reply("[]"));
+        let client = ChatClient::with_timeout(Duration::from_secs(5)).unwrap();
+        let (result, timing) = client.chat_timed(&url, "sk-test", "h", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap(), "[]");
+        let first_byte = timing.first_byte.expect("headers arrived");
+        assert!(first_byte >= Duration::from_millis(300) && first_byte < Duration::from_secs(5), "{first_byte:?}");
+        assert_eq!(timing.timeout_stage, None);
+    }
+
+    /// TLS 握手没完成就是还没连上：TCP 接受了但对方一个字节也不回，卡在连接这一步。
+    #[tokio::test]
+    async fn a_connection_that_never_completes_times_out_in_connect() {
+        let url = accept_and_hang().replacen("http://", "https://", 1);
+        let client = ChatClient::with_timeout(Duration::from_secs(1)).unwrap();
+        let (result, timing) = client.chat_timed(&url, "sk-test", "example.com", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!(timing.timeout_stage, Some(TimeoutStage::Connect));
+        assert_eq!(timing.first_byte, None);
+    }
+
+    #[tokio::test]
+    async fn a_request_with_no_reply_times_out_waiting_for_the_first_byte() {
+        let url = accept_and_hang();
+        let client = ChatClient::with_timeout(Duration::from_secs(1)).unwrap();
+        let (result, timing) = client.chat_timed(&url, "sk-test", "example.com", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!(timing.timeout_stage, Some(TimeoutStage::FirstByte));
+        assert_eq!(timing.first_byte, None);
+    }
+
+    /// 先回响应头、正文迟迟不完（中转或保活空行）：停在读正文，首字节耗时照记。
+    #[tokio::test]
+    async fn headers_without_the_whole_body_time_out_reading_the_body() {
+        let head = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n\n".to_vec();
+        let (url, _server) = serve_after(0, head);
+        let client = ChatClient::with_timeout(Duration::from_secs(1)).unwrap();
+        let (result, timing) = client.chat_timed(&url, "sk-test", "example.com", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!(timing.timeout_stage, Some(TimeoutStage::Body));
+        assert!(timing.first_byte.is_some_and(|first| first < Duration::from_secs(1)), "{timing:?}");
+    }
+
+    #[tokio::test]
+    async fn an_http_error_has_a_first_byte_and_no_timeout_stage() {
+        let (url, _server) = serve_after(0, b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec());
+        let client = ChatClient::with_timeout(Duration::from_secs(5)).unwrap();
+        let (result, timing) = client.chat_timed(&url, "sk-test", "h", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_HTTP_429");
+        assert!(timing.first_byte.is_some());
+        assert_eq!(timing.timeout_stage, None);
+    }
+
     // ---- #283 流式接收 ----
 
     const SSE_HEAD: &str = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream; charset=utf-8\r\nconnection: close\r\n\r\n";
@@ -710,6 +917,21 @@ mod tests {
         let err = client.chat(&url, "sk-test", "example.com", "m1", &Value::Null).await.unwrap_err();
         assert_eq!(err.code, "AI_TIMEOUT");
         assert!(err.message.contains("等了 1 秒"), "{}", err.message);
+    }
+
+    /// 流式接收的三种超时也分阶段（#299）：没等到响应头算等首字节，之后的空闲和总时长算读正文。
+    #[tokio::test]
+    async fn streamed_timeouts_name_their_stage() {
+        let client = ChatClient::streaming(limits(1_000, 500, 10_000)).unwrap();
+        let (result, timing) = client.chat_timed(&accept_and_hang(), "sk-test", "h", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!((timing.first_byte, timing.timeout_stage), (None, Some(TimeoutStage::FirstByte)));
+
+        let (url, _server) = serve_paced(SSE_HEAD, vec![(0, reasoning("想到一半"))], true);
+        let (result, timing) = client.chat_timed(&url, "sk-test", "h", "m1", &Value::Null).await;
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!(timing.timeout_stage, Some(TimeoutStage::Body));
+        assert!(timing.first_byte.is_some(), "{timing:?}");
     }
 
     /// 不支持流式的服务商忽略 `stream`，照旧回整段 JSON：照常解析。

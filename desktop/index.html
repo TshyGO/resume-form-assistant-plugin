@@ -144,7 +144,7 @@
           </dialog>
           <dialog id="evidence-dialog">
             <div class="stack">
-              <h3>招聘通知原文</h3>
+              <h3>招聘通知详情</h3>
               <div id="evidence-body"></div>
               <div class="row">
                 <button type="button" id="evidence-close">关闭</button>
@@ -218,6 +218,7 @@
               <div class="inbox-state-tabs" role="tablist" aria-label="招聘通知状态">
                 <button type="button" id="mailbox-tab-pending" role="tab" aria-selected="false" aria-controls="mailbox-discovery">待确认 <span id="mailbox-pending-count" class="tab-count">0</span></button>
                 <button type="button" id="mailbox-tab-stored" role="tab" aria-selected="true" aria-controls="inbox-stored-panel">待关联 <span id="inbox-count" class="tab-count"></span></button>
+                <button type="button" id="mailbox-tab-recycled" role="tab" aria-selected="false" aria-controls="inbox-recycled-panel">回收站</button>
               </div>
               <section id="mailbox-discovery" class="inbox-state-panel" role="tabpanel" aria-labelledby="mailbox-tab-pending" hidden>
                 <h2 id="mailbox-discovery-heading" class="sr-only">从邮箱发现的待确认邮件</h2>
@@ -232,6 +233,10 @@
               <section id="inbox-stored-panel" class="inbox-state-panel" role="tabpanel" aria-labelledby="mailbox-tab-stored">
                 <div class="inbox-list-head"><p>已存进档案、尚未关联岗位的材料</p></div>
                 <div id="inbox-list" class="workspace-list-scroll"></div>
+              </section>
+              <section id="inbox-recycled-panel" class="inbox-state-panel" role="tabpanel" aria-labelledby="mailbox-tab-recycled" hidden>
+                <div class="inbox-list-head"><p>正文、附件和原关联均保留，可恢复。</p></div>
+                <div id="inbox-recycled-list" class="workspace-list-scroll"></div>
               </section>
               <details class="workspace-list-foot inbox-import-help"><summary>手动导入说明</summary><p><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>可以拖入 .eml、PNG / JPEG、PDF 或文本（.txt）；单个文件不超过 25 MiB，每次最多 20 个。</p></details>
             </aside>

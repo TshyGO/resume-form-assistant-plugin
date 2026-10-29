@@ -160,6 +160,19 @@ impl ArchiveStore {
     ) -> Result<Vec<ReplyEvidence>, StoreError> {
         self.transaction(|tx| tx.list_evidence(application_id))
     }
+    pub fn is_evidence_recycled(&self, id: &str) -> Result<bool, StoreError> {
+        self.transaction(|tx| tx.is_evidence_recycled(id))
+    }
+    pub fn list_recycled_evidence(&self) -> Result<Vec<ReplyEvidence>, StoreError> {
+        self.transaction(|tx| tx.list_recycled_evidence())
+    }
+    pub fn set_evidence_recycled(
+        &self,
+        id: &str,
+        recycled: bool,
+    ) -> Result<ReplyEvidence, StoreError> {
+        self.transaction(|tx| tx.set_evidence_recycled(id, recycled))
+    }
 
     pub fn check_attachment_refs(&self) -> Result<AttachmentRefReport, StoreError> {
         self.transaction(|tx| tx.check_attachment_refs())

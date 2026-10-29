@@ -1,0 +1,35 @@
+{
+  "$id": "https://resumepro.local/protocol/responses/mail-import.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "uploadId",
+    "chunkIndex"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "chunk",
+        "saved"
+      ]
+    },
+    "uploadId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "chunkIndex": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 799
+    },
+    "evidenceId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "duplicate": {
+      "type": "boolean"
+    }
+  }
+}

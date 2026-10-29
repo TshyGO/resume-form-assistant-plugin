@@ -75,7 +75,7 @@ pub fn validate_request_value(value: &Value) -> Result<Request, ProtocolError> {
         return Err(ProtocolError::new(
             ErrorCode::ProtocolIncompatible,
             Layer::Structure,
-            format!("{} requires protocolVersion 2", message_type.as_str()),
+            format!("{} requires protocolVersion {}", message_type.as_str(), message_type.min_envelope_version()),
         ));
     }
     let message_id = obj.get("messageId").and_then(Value::as_str).unwrap().to_string();
@@ -281,6 +281,18 @@ fn validate_payload_extras(ty: MessageType, payload: &Map<String, Value>) -> Res
                 return Err(invalid_payload("resume.update fields do not match op"));
             }
         }
+        MessageType::MailImport => {
+            let index = payload["chunkIndex"].as_u64().unwrap();
+            let count = payload["chunkCount"].as_u64().unwrap();
+            let size = payload["byteSize"].as_u64().unwrap();
+            let bytes = decode_standard_base64(payload["bytesBase64"].as_str().unwrap())?;
+            let expected_count = size.div_ceil(32768);
+            let expected_len = if index + 1 == count { size.saturating_sub(index * 32768) } else { 32768 };
+            if index >= count || count != expected_count || bytes.len() as u64 != expected_len
+                || sha256_hex(&bytes) != payload["chunkSha256"].as_str().unwrap() {
+                return Err(invalid_payload("mail chunk length, count or digest mismatch"));
+            }
+        }
         MessageType::LegacyImport => validate_legacy_import(payload)?,
         _ => {}
     }
@@ -328,7 +340,7 @@ fn validate_legacy_import(payload: &Map<String, Value>) -> Result<(), ProtocolEr
     Ok(())
 }
 
-fn validate_ai_complete_response(payload: &Value) -> Result<(), ProtocolError> {
+fn validate_ai_complete_response(payload: &Value, protocol_version: u64) -> Result<(), ProtocolError> {
     let obj = payload.as_object().unwrap();
     let valid = match payload["status"].as_str().unwrap() {
         "ok" => obj.contains_key("text") && !obj.contains_key("reason")
@@ -336,8 +348,14 @@ fn validate_ai_complete_response(payload: &Value) -> Result<(), ProtocolError> {
         "failed" => obj.contains_key("reason") && !obj.contains_key("text"),
         _ => false,
     };
-    if !valid {
+    // Only a timeout has a stage to name (#299).
+    if !valid || (obj.contains_key("timeoutStage") && payload["reason"] != "timeout") {
         return Err(invalid_payload("ai.complete response fields do not match status"));
+    }
+    // Plugins send ai.complete as v2 and their schema copy rejects keys it does not know
+    // (additionalProperties: false); only a plugin that sends v3 knows the timing (#299).
+    if protocol_version < 3 && (obj.contains_key("firstByteMs") || obj.contains_key("timeoutStage")) {
+        return Err(invalid_payload("ai.complete timing is only returned to a protocolVersion 3 request"));
     }
     if let Some(host) = payload.get("host").and_then(Value::as_str) {
         if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
@@ -446,6 +464,17 @@ pub fn validate_response_for_request(value: &Value, req: &Request) -> Result<(),
         && req.payload["purpose"] != "analyze"
     {
         return Err(invalid("ai.complete tier is only returned to a request that asked for one"));
+    }
+    if req.message_type == MessageType::MailImport && value["ok"] == true {
+        let p = &value["payload"];
+        let final_chunk = req.payload["chunkIndex"].as_u64().unwrap() + 1 == req.payload["chunkCount"].as_u64().unwrap();
+        if p["uploadId"] != req.payload["uploadId"] || p["chunkIndex"] != req.payload["chunkIndex"]
+            || (final_chunk && (p["status"] != "saved" || p.get("duplicate").is_none()
+                || p.get("evidenceId").is_none() || value["resultId"] != p["evidenceId"]))
+            || (!final_chunk && (p["status"] != "chunk" || p.get("evidenceId").is_some()
+                || p.get("duplicate").is_some() || value.get("resultId").is_some())) {
+            return Err(invalid("mail import acknowledgement does not match request"));
+        }
     }
     if req.message_type == MessageType::SnapshotChunk {
         let chunk_count = req
@@ -604,7 +633,7 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
         return Err(ProtocolError::new(
             ErrorCode::ProtocolIncompatible,
             Layer::Structure,
-            format!("{} response requires protocolVersion 2", request_type.as_str()),
+            format!("{} response requires protocolVersion {}", request_type.as_str(), request_type.min_envelope_version()),
         ));
     }
     let ok = obj.get("ok").and_then(Value::as_bool).unwrap();
@@ -634,7 +663,7 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
             validate_schema(obj.get("payload").unwrap(), &schema)?;
         }
         if request_type == MessageType::AiComplete {
-            validate_ai_complete_response(obj.get("payload").unwrap())?;
+            validate_ai_complete_response(obj.get("payload").unwrap(), obj["protocolVersion"].as_u64().unwrap())?;
         }
         if request_type == MessageType::LegacyImport {
             let payload = obj.get("payload").unwrap();

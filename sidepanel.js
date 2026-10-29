@@ -169,6 +169,7 @@
   let currentTabId = null;
   let currentStore = null;
   let desktopMode = "unavailable";
+  let selectedView = "fill";
   let storeSnapshot = "";
   let storeLoaded = false;
   let storeReadSequence = 0;
@@ -350,10 +351,22 @@
     const mode = desktopMode === "ready" && !selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile)
       ? "empty" : desktopMode;
     const copy = mode === "ready" ? null : self.ResumeProResumeData.modeCopy(mode);
-    elements.desktopConnection.hidden = !copy;
-    if (copy) {
-      elements.desktopConnectionText.textContent = copy.message;
-      elements.desktopConnectionAction.textContent = copy.action;
+    // Saving mail requires a desktop connection, but never a resume template or AI setup.
+    const connectionCopy = selectedView === "mail"
+      ? desktopMode === "ready" ? null : {
+        ...self.ResumeProResumeData.modeCopy(desktopMode),
+        message: ({
+          not_installed: "请先安装并连接桌面程序，再保存邮件。",
+          not_paired: "请先在桌面设置中配对这个插件，再保存邮件。",
+          never_paired: "请先在桌面设置中配对这个插件，再保存邮件。",
+          incompatible: "请更新桌面程序后再保存邮件。",
+        })[desktopMode] || "桌面程序暂时没有响应，请打开桌面后重试。",
+      }
+      : copy;
+    elements.desktopConnection.hidden = !connectionCopy;
+    if (connectionCopy) {
+      elements.desktopConnectionText.textContent = connectionCopy.message;
+      elements.desktopConnectionAction.textContent = connectionCopy.action;
     }
     elements.configState.textContent = copy ? "桌面简历当前不可用" : "简历数据来自桌面程序";
     const pill = { ready: ["已连接", "ok"], empty: ["已连接", "ok"], not_installed: ["未安装桌面", "error"], incompatible: ["桌面需更新", "error"],
@@ -370,8 +383,8 @@
     elements.templateEdit.hidden = !templateEditor;
     elements.fieldsManage.hidden = !editable;
     elements.fieldSearch.disabled = Boolean(copy);
-    elements.desktopConnectionAction.dataset.kind = copy?.kind || "";
-    document.getElementById("open-manager").textContent = copy?.action || "打开桌面";
+    elements.desktopConnectionAction.dataset.kind = connectionCopy?.kind || "";
+    document.getElementById("open-manager").textContent = connectionCopy?.action || "打开桌面";
   }
 
   // A line icon by what the group is about; decoration only.
@@ -2029,7 +2042,7 @@
         elements.fillResult.hidden = false;
         elements.fillResult.textContent = response.status;
         elements.fillResult.classList.toggle("is-error", response.statusKind === "error");
-        if (response.openView === "settings-ai") {
+        if (response.openView === "settings-ai" && selectedView !== "mail") {
           elements.desktopConnection.hidden = false;
           elements.desktopConnectionText.textContent = response.status;
           elements.desktopConnectionAction.textContent = "打开桌面 AI 设置";
@@ -2098,7 +2111,7 @@
   }
 
   // 模板字段编辑（#273）：编辑的是桌面里的当前模板；打开前先重读一次，从最新内容起草。
-  // 编辑面板盖住两个视图，期间视图切换与下面的页面都够不着。
+  // 编辑面板盖住所有视图，期间视图切换与下面的页面都够不着。
   const templateEditor = self.ResumeProTemplateEditor && self.ResumeProTemplateFields
     ? self.ResumeProTemplateEditor.create({
       doc: document,
@@ -2109,7 +2122,7 @@
       groupIcon,
       toast,
       onOpenChange: (open) => {
-        for (const node of [document.querySelector(".dock-tabs"), document.getElementById("fill-view"), document.getElementById("fields-view")]) {
+        for (const node of [document.querySelector(".dock-tabs"), document.getElementById("fill-view"), document.getElementById("fields-view"), document.getElementById("mail-view")]) {
           if (node) node.inert = open;
         }
       }
@@ -2129,6 +2142,8 @@
   const tabButtons = Array.from(document.querySelectorAll(".dock-tabs button"));
   // Switching views never touches the page's text box or an open flow; each view keeps its scroll.
   function selectTab(tab) {
+    selectedView = tab;
+    document.body?.setAttribute?.("data-active-view", tab);
     tabButtons.forEach((item) => {
       item.setAttribute("aria-selected", String(item.dataset.tab === tab));
       item.tabIndex = item.dataset.tab === tab ? 0 : -1;
@@ -2138,6 +2153,7 @@
     if (tab === "fields" && !elements.fieldSearch.value.trim()) {
       elements.fieldGroups.querySelectorAll?.(".field-group").forEach((group) => { group.open = false; });
     }
+    renderDesktopMode();
   }
   tabButtons.forEach((button, index) => {
     button.addEventListener("click", () => selectTab(button.dataset.tab));
@@ -2515,6 +2531,9 @@
   }
   elements.desktopConnectionAction.addEventListener("click", () => desktopAction(elements.desktopConnectionAction.dataset.kind).catch(() => toast("当前操作不可用。")));
   document.getElementById("open-manager").addEventListener("click", () => {
+    if (selectedView === "mail" && desktopMode === "ready") {
+      return desktopAction("home").catch(() => toast("当前操作不可用。"));
+    }
     const mode = desktopMode === "ready" && !selectedTemplate() && !self.ResumeProProfile?.hasProfileContent(currentStore?.profile) ? "empty" : desktopMode;
     return desktopAction(mode === "ready" ? "home" : self.ResumeProResumeData.modeCopy(mode).kind).catch(() => toast("当前操作不可用。"));
   });

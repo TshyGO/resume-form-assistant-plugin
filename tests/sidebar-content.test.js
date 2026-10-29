@@ -196,6 +196,8 @@ function loadContentScript({ width = 1200, height = 900, desktopReply = null } =
 
   const hooks = context.self.ResumeProHighlightTest;
   hooks.setShadowRoot(shadowRoot);
+  // The harness stands in for a page whose startup has finished.
+  hooks.setStartupState("ready");
 
   return {
     hooks,
@@ -422,6 +424,43 @@ test("a normalized state is what gets stored, even after a failed read left it e
   assert.deepEqual(plain(writes), [{
     resumeProSidebarUiState: { collapsed: false, left: 120, top: 80 }
   }]);
+});
+
+// Startup no longer waits for this read (#275): the saved state can arrive after the controller is up.
+test("a saved state read after startup is applied, but not over a drag in progress", () => {
+  const { hooks, host, sidebar } = loadContentScript();
+  hooks.setSidebarUiState({ collapsed: false, left: null, top: null });
+  hooks.applySidebarUiState();
+
+  hooks.applyStoredSidebarUiState({ collapsed: true, left: 300, top: 200 });
+  assert.equal(host.style.left, "300px");
+  assert.equal(host.style.right, "auto");
+  assert.equal(sidebar.classList.contains("is-collapsed"), true);
+
+  hooks.setDragging(true);
+  hooks.applyStoredSidebarUiState({ collapsed: false, left: 40, top: 40 });
+  assert.equal(host.style.left, "300px", "a late read must not fight the pointer mid-drag");
+  assert.deepEqual(plain(hooks.getSidebarUiState()), { collapsed: true, left: 300, top: 200 });
+});
+
+test("the side panel sees the page as connected only once startup is ready", () => {
+  const { hooks, listeners } = loadContentScript();
+  hooks.setShadowRoot({
+    querySelector(selector) {
+      return selector === "#resume-pro-ai-fill" ? { disabled: false, textContent: "一键 AI 填写" } : null;
+    }
+  });
+  const ready = () => {
+    let response;
+    listeners.runtimeMessage[0]({ type: "RESUME_PANEL_STATUS" }, {}, (value) => { response = value; });
+    return response.ready;
+  };
+  for (const value of ["idle", "running", "failed", "unsupported"]) {
+    hooks.setStartupState(value);
+    assert.equal(ready(), false, value);
+  }
+  hooks.setStartupState("ready");
+  assert.equal(ready(), true);
 });
 
 function saveJobPage(hooks) {
@@ -758,6 +797,21 @@ test("a bound write failure closes the save form and points to the retained queu
     status: 'failed', code: 'invalid_payload', intent: { intentId: 'intent-1' }
   });
   assert.match(described.text, /待同步列表/);
+});
+
+test('a desktop answer whose data cannot be read is not told as a desktop that is not running', async () => {
+  // A template entry that is not an object cannot be read into the view model.
+  const unreadable = loadContentScript({ desktopReply: async message => message.type === 'DESKTOP_RESUME_READ'
+    ? { status: 'ok', data: { templates: [null], activeTemplate: null } } : {} });
+  const failed = await unreadable.hooks.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(failed.outcome, 'failed');
+  assert.doesNotMatch(failed.error, /已退出|没有响应/);
+  assert.match(failed.error, /读不出桌面里的简历数据/);
+
+  // A read that never gets an answer still means the desktop cannot be reached.
+  const away = loadContentScript({ desktopReply: async () => { throw new Error('Could not establish connection.'); } });
+  const unavailable = await away.hooks.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.match(unavailable.error, /桌面程序已退出或暂时没有响应/);
 });
 
 test('the page reads the desktop only while its own panel is on screen', async () => {

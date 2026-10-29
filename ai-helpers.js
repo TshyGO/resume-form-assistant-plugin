@@ -115,11 +115,15 @@
     detectCascadeGroups
   };
 
-  if (typeof module !== "undefined" && module.exports) {
-    module.exports = helpers;
-  }
-
   globalScope.ResumeProAIHelpers = helpers;
+
+  try {
+    if (typeof module === "object" && module && typeof module.exports === "object") {
+      module.exports = helpers;
+    }
+  } catch {
+    // A page element or frame named "module" (#275).
+  }
 
   function normalizeText(value) {
     return String(value ?? "")

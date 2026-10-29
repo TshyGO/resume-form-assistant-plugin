@@ -20,6 +20,7 @@ interface CheckReport {
 export interface MailboxInboxBridge {
   showPending(candidate: MailCandidate | null, actions?: { save(): void; ignore(): void }): void;
   showStored(): void | Promise<void>;
+  showRecycled?(): void | Promise<void>;
 }
 
 const ERRORS: Record<string, string> = {
@@ -91,7 +92,7 @@ export function mountMailboxes(
   let limit = 100;
   let refreshToken = 0;
   let signature = "";
-  let inboxState: "pending" | "stored" = "stored";
+  let inboxState: "pending" | "stored" | "recycled" = "stored";
   let activeCandidateId: string | null = null;
   const actionIds = ["mailbox-save", "mailbox-settings-check", "mailbox-inbox-check", "mailbox-save-selected", "mailbox-ignore-selected", "mailbox-load-more", "mailbox-detect"];
   function say(where: "settings" | "inbox", text: string, error = false) {
@@ -124,16 +125,23 @@ export function mountMailboxes(
   function button(text: string, click: () => void) {
     const el = node("button", text); el.type = "button"; el.addEventListener("click", click); return el;
   }
-  function selectInboxState(state: "pending" | "stored") {
+  function selectInboxState(state: "pending" | "stored" | "recycled") {
     inboxState = state;
     const pending = state === "pending";
     const pendingTab = get<HTMLButtonElement>("mailbox-tab-pending");
     const storedTab = get<HTMLButtonElement>("mailbox-tab-stored");
     pendingTab.setAttribute("aria-selected", String(pending));
-    storedTab.setAttribute("aria-selected", String(!pending));
+    storedTab.setAttribute("aria-selected", String(state === "stored"));
+    document.getElementById("mailbox-tab-recycled")?.setAttribute("aria-selected", String(state === "recycled"));
+    for (const [id, active] of [["mailbox-tab-pending", pending], ["mailbox-tab-stored", state === "stored"], ["mailbox-tab-recycled", state === "recycled"]] as const) {
+      const tab = document.getElementById(id); if (tab) tab.tabIndex = active ? 0 : -1;
+    }
     get("mailbox-discovery").hidden = !pending;
-    get("inbox-stored-panel").hidden = pending;
+    get("inbox-stored-panel").hidden = state !== "stored";
+    const recycledPanel = document.getElementById("inbox-recycled-panel");
+    if (recycledPanel) recycledPanel.hidden = state !== "recycled";
     if (pending) showActiveCandidate();
+    else if (state === "recycled") void inboxBridge?.showRecycled?.();
     else if (typeof inboxBridge?.showStored === "function") void inboxBridge.showStored();
   }
   function showActiveCandidate() {
@@ -477,6 +485,13 @@ export function mountMailboxes(
   get("mailbox-connect-link").addEventListener("click", openSettings);
   get("mailbox-tab-pending").addEventListener("click", () => selectInboxState("pending"));
   get("mailbox-tab-stored").addEventListener("click", () => selectInboxState("stored"));
+  document.getElementById("mailbox-tab-recycled")?.addEventListener("click", () => selectInboxState("recycled"));
+  const stateTabs = ["mailbox-tab-pending", "mailbox-tab-stored", "mailbox-tab-recycled"].map(id => document.getElementById(id)).filter((tab): tab is HTMLElement => Boolean(tab));
+  stateTabs.forEach((tab, index) => tab.addEventListener("keydown", event => {
+    const next = ({ ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: stateTabs.length - 1 } as Record<string, number>)[event.key];
+    if (next === undefined) return;
+    event.preventDefault(); const target = stateTabs[(next + stateTabs.length) % stateTabs.length]; target.click(); target.focus();
+  }));
   get<HTMLInputElement>("mailbox-select-all").addEventListener("change", (event) => {
     current.candidates.forEach((item) => { if ((event.target as HTMLInputElement).checked) selected.add(item.id); else selected.delete(item.id); }); syncButtons();
   });

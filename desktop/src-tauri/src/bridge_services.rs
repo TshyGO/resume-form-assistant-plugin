@@ -4,6 +4,7 @@ use resume_pro_protocol::{ErrorCode, Request};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::ai_client::Timing;
 use crate::ai_settings::Tier;
 use crate::plugin_bridge::Answer;
 use crate::{ai_complete, ai_data_root, ai_provider_commands, ai_settings, checked_url, commands::CommandError, AppState};
@@ -26,9 +27,11 @@ pub trait BridgeServices: Send + Sync + 'static {
     /// chosen comes back alongside the reply; `None` when no provider could be chosen.
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>);
     /// `ai_complete` for a caller that may leave first. `peer_gone` says whether it has;
-    /// a request whose caller left is dropped instead of read to the end (#283).
-    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, _peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
-        self.ai_complete(purpose, strong, system, user)
+    /// a request whose caller left is dropped instead of read to the end (#283). Also
+    /// returns how long the provider took to answer and where a timeout stopped (#299).
+    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, _peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>, Timing) {
+        let (reply, tier) = self.ai_complete(purpose, strong, system, user);
+        (reply, tier, Timing::default())
     }
     fn open_view(&self, view: &str) -> bool;
     fn usage_touch(&self) {}
@@ -154,31 +157,32 @@ impl BridgeServices for DesktopBridgeServices {
         serde_json::to_value(status).map_err(|_| ErrorCode::Unavailable)
     }
     fn ai_complete(&self, purpose: &str, strong: bool, system: &str, user: &str) -> (AiReply, Option<Tier>) {
-        self.ai_complete_watched(purpose, strong, system, user, &|| false)
+        let (reply, tier, _) = self.ai_complete_watched(purpose, strong, system, user, &|| false);
+        (reply, tier)
     }
 
-    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
+    fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>, Timing) {
         let state = self.app.state::<AppState>();
         let data_root = match ai_data_root(&state) {
             Ok(root) => root,
-            Err(err) => return (from_ai_error(err, None), None),
+            Err(err) => return (from_ai_error(err, None), None, Timing::default()),
         };
         let (tier, routed) = ai_provider_commands::routed_with_key(&data_root, state.credentials.as_ref(), strong);
         let (provider, key) = match routed {
             Ok(routed) => routed,
-            Err(err) => return (from_ai_error(err, None), tier),
+            Err(err) => return (from_ai_error(err, None), tier, Timing::default()),
         };
         if let Err(err) = checked_url(&provider.api_url) {
-            return (from_ai_error(err, None), tier);
+            return (from_ai_error(err, None), tier, Timing::default());
         }
         let host = safe_host(&provider.api_url);
         let wait = ai_complete::wait_for(purpose, strong);
-        let reply = match tauri::async_runtime::block_on(ai_complete::complete_unless_gone(&provider, &key, system, user, wait, peer_gone)) {
-            Some(Ok(text)) => AiReply::Ok(text),
-            Some(Err(err)) => from_ai_error(err, host),
-            None => AiReply::Cancelled,
+        let (reply, timing) = match tauri::async_runtime::block_on(ai_complete::complete_unless_gone(&provider, &key, system, user, wait, peer_gone)) {
+            Some((Ok(text), timing)) => (AiReply::Ok(text), timing),
+            Some((Err(err), timing)) => (from_ai_error(err, host), timing),
+            None => (AiReply::Cancelled, Timing::default()),
         };
-        (reply, tier)
+        (reply, tier, timing)
     }
 
     fn open_view(&self, view: &str) -> bool {
@@ -255,11 +259,28 @@ fn checked_answer(request: &Request, payload: Value) -> Result<Answer, ErrorCode
     Ok(Answer { result_id: None, payload })
 }
 
-fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, host: Option<String>, tier: Option<Tier>) -> Result<Answer, ErrorCode> {
+/// The protocol schema's ceiling for `firstByteMs`; no desktop wait comes near it.
+const MAX_FIRST_BYTE_MS: u64 = 3_600_000;
+
+/// How long the provider took to send its headers, and where a timeout stopped (#299). Only
+/// numbers and fixed stage names; `timing` is `None` for a request that may not get them.
+fn add_timing(payload: &mut Value, timing: Option<Timing>) {
+    let Some(timing) = timing else { return };
+    if let Some(first_byte) = timing.first_byte {
+        let ms = u64::try_from(first_byte.as_millis()).unwrap_or(u64::MAX).min(MAX_FIRST_BYTE_MS);
+        payload["firstByteMs"] = json!(ms);
+    }
+    if let Some(stage) = timing.timeout_stage.filter(|_| payload["reason"] == "timeout") {
+        payload["timeoutStage"] = json!(stage.as_str());
+    }
+}
+
+fn failed(request: &Request, reason: &'static str, http_status: Option<u16>, host: Option<String>, tier: Option<Tier>, timing: Option<Timing>) -> Result<Answer, ErrorCode> {
     let mut payload = json!({"status": "failed", "reason": reason});
     if let Some(tier) = tier {
         payload["tier"] = json!(tier.as_str());
     }
+    add_timing(&mut payload, timing);
     if let Some(status) = http_status {
         payload["httpStatus"] = json!(status);
     }
@@ -294,21 +315,25 @@ pub fn answer_watched(request: &Request, services: &dyn BridgeServices, peer_gon
             // send either, and must not get `tier` back: their schema copy rejects it.
             let strong = requested == Some("strong") || (requested.is_none() && purpose == "analyze");
             let wants_tier = requested.is_some() || purpose == "analyze";
-            let (reply, tier) = services.ai_complete_watched(purpose, strong, system, user, peer_gone);
+            let (reply, tier, timing) = services.ai_complete_watched(purpose, strong, system, user, peer_gone);
             let tier = tier.filter(|_| wants_tier);
+            // Every released plugin sends ai.complete as v2, and its schema copy rejects keys it
+            // does not know; only a v3 request gets the timing back (#299).
+            let timing = Some(timing).filter(|_| request.protocol_version >= 3);
             match reply {
                 AiReply::Ok(text) => {
                     let mut payload = json!({"status": "ok", "text": text});
                     if let Some(tier) = tier {
                         payload["tier"] = json!(tier.as_str());
                     }
+                    add_timing(&mut payload, timing);
                     match checked_answer(request, payload) {
                         Ok(answer) => Ok(answer),
-                        Err(ErrorCode::PayloadTooLarge) => failed(request, "response_too_large", None, None, tier),
-                        Err(_) => failed(request, "bad_response", None, None, tier),
+                        Err(ErrorCode::PayloadTooLarge) => failed(request, "response_too_large", None, None, tier, timing),
+                        Err(_) => failed(request, "bad_response", None, None, tier, timing),
                     }
                 }
-                AiReply::Failed { reason, http_status, host } => failed(request, reason, http_status, host, tier),
+                AiReply::Failed { reason, http_status, host } => failed(request, reason, http_status, host, tier, timing),
                 // The caller is gone; this error frame has no one to reach and only closes the exchange.
                 AiReply::Cancelled => Err(ErrorCode::Unavailable),
             }
@@ -328,14 +353,18 @@ pub fn answer_watched(request: &Request, services: &dyn BridgeServices, peer_gon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_client::TimeoutStage;
     use resume_pro_protocol::validate_request_bytes;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     struct FakeServices {
         reply: AiReply,
         opened: bool,
         /// Whether a strong-model provider is configured; without one, strong falls back.
         strong_configured: bool,
+        /// What the provider round trip measured (#299).
+        timing: Timing,
         calls: Mutex<Vec<String>>,
     }
 
@@ -358,6 +387,11 @@ mod tests {
             (self.reply.clone(), self.tier(strong))
         }
 
+        fn ai_complete_watched(&self, purpose: &str, strong: bool, system: &str, user: &str, _: &dyn Fn() -> bool) -> (AiReply, Option<Tier>, Timing) {
+            let (reply, tier) = self.ai_complete(purpose, strong, system, user);
+            (reply, tier, self.timing)
+        }
+
         fn open_view(&self, view: &str) -> bool {
             self.calls.lock().unwrap().push(format!("ui:{view}"));
             self.opened
@@ -365,8 +399,12 @@ mod tests {
     }
 
     fn request(message_type: &str, payload: Value) -> Request {
+        request_at(if matches!(message_type, "usage.touch" | "usage.settings") { 3 } else { 2 }, message_type, payload)
+    }
+
+    fn request_at(version: u32, message_type: &str, payload: Value) -> Request {
         let value = json!({
-            "protocolVersion": if matches!(message_type, "usage.touch" | "usage.settings") { 3 } else { 2 },
+            "protocolVersion": version,
             "messageId": "33333333-3333-4333-8333-333333333333",
             "clientInstanceId": "11111111-1111-4111-8111-111111111111",
             "messageType": message_type,
@@ -377,7 +415,7 @@ mod tests {
     }
 
     fn fake(reply: AiReply, opened: bool) -> FakeServices {
-        FakeServices { reply, opened, strong_configured: false, calls: Mutex::new(Vec::new()) }
+        FakeServices { reply, opened, strong_configured: false, timing: Timing::default(), calls: Mutex::new(Vec::new()) }
     }
 
     #[test]
@@ -435,6 +473,31 @@ mod tests {
         assert_eq!(answer(&strong_fill, &services).unwrap().payload["tier"], "strong");
     }
 
+    /// #299：v3 请求（新插件）拿到首字节耗时和超时停在哪一步；v2 请求（已发布的插件都发 v2，
+    /// 它们的 schema 副本不认识这两个键）一个也不带。
+    #[test]
+    fn only_a_v3_request_gets_the_first_byte_time_and_the_timeout_stage() {
+        let timeout = AiReply::Failed { reason: "timeout", http_status: None, host: Some("api.example.com".into()) };
+        let waiting = Timing { first_byte: None, timeout_stage: Some(TimeoutStage::FirstByte) };
+        let reading = Timing { first_byte: Some(Duration::from_millis(820)), timeout_stage: Some(TimeoutStage::Body) };
+        let answered = Timing { first_byte: Some(Duration::from_millis(1511)), timeout_stage: None };
+        let cases = [
+            (timeout.clone(), waiting, json!({"status": "failed", "reason": "timeout", "host": "api.example.com", "timeoutStage": "first_byte"})),
+            (timeout.clone(), reading, json!({"status": "failed", "reason": "timeout", "host": "api.example.com", "firstByteMs": 820, "timeoutStage": "body"})),
+            (AiReply::Ok("[]".into()), answered, json!({"status": "ok", "text": "[]", "firstByteMs": 1511})),
+        ];
+        let v3 = request_at(3, "ai.complete", json!({"purpose": "fill", "system": "SYS", "user": "USER"}));
+        let v2 = request("ai.complete", json!({"purpose": "fill", "system": "SYS", "user": "USER"}));
+        for (reply, timing, expected) in cases {
+            let mut services = fake(reply, false);
+            services.timing = timing;
+            assert_eq!(answer(&v3, &services).unwrap().payload, expected);
+            let old = answer(&v2, &services).unwrap().payload;
+            assert!(old.get("firstByteMs").is_none() && old.get("timeoutStage").is_none(), "{old}");
+            assert_eq!(old["status"], expected["status"]);
+        }
+    }
+
     #[test]
     fn a_request_whose_caller_left_gets_no_answer() {
         struct Leaving;
@@ -442,9 +505,9 @@ mod tests {
             fn ai_complete(&self, _: &str, _: bool, _: &str, _: &str) -> (AiReply, Option<Tier>) {
                 panic!("a watched request must go through ai_complete_watched")
             }
-            fn ai_complete_watched(&self, _: &str, _: bool, _: &str, _: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>) {
+            fn ai_complete_watched(&self, _: &str, _: bool, _: &str, _: &str, peer_gone: &dyn Fn() -> bool) -> (AiReply, Option<Tier>, Timing) {
                 assert!(peer_gone(), "the caller's departure reaches the service");
-                (AiReply::Cancelled, Some(Tier::Strong))
+                (AiReply::Cancelled, Some(Tier::Strong), Timing::default())
             }
             fn open_view(&self, _: &str) -> bool { false }
         }

@@ -43,7 +43,9 @@ export function nextSaveStep(extraction) {
   if (fragments.length) {
     return { action: 'assist', fields, fragments, reasons: extraction?.assistReasons || [] };
   }
-  return { action: 'form', fields, reason: extraction?.assistReasons?.[0] || 'manual' };
+  const reasons = extraction?.assistReasons || [];
+  const bothMissing = reasons.includes('missing_company') && reasons.includes('missing_title');
+  return { action: 'form', fields, reason: bothMissing ? 'missing_both' : (reasons[0] || 'manual') };
 }
 
 /** The only page fragments that may go to the desktop's AI. */
@@ -101,7 +103,13 @@ export function afterAssist(result, fallback) {
     dedupeUrl: base.dedupeUrl
   };
   if (fields.title && fields.title === fields.company) fields.title = '';
-  return { action: 'form', fields, reason: result?.reason || 'manual' };
+  let reason = result?.reason || 'manual';
+  // The AI found neither field, but the page read may have filled one or both. With both
+  // filled nothing is missing, only unconfirmed, so the note asks to check both.
+  if (reason === 'missing_both' && (fields.company || fields.title)) {
+    reason = !fields.company ? 'missing_company' : !fields.title ? 'missing_title' : 'manual';
+  }
+  return { action: 'form', fields, reason };
 }
 
 function publicFields(source) {

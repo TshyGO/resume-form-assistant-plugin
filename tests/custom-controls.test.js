@@ -146,6 +146,41 @@ test('a rejected parent click cannot reuse a stale child column', async () => {
   assert.equal(childClicks, 0);
 });
 
+// #301 诊断只记弹层里有没有选项，不记项数，而且只看网页自己先给出的第一层。下一级有几项由简历里选的上一级决定
+// （江苏 13 个市、宁夏 5 个），搜索后的列表由插件输入的值决定，都会带出简历内容。
+test('a cascader that fails below the first level says whether the first column had options, with no count', async () => {
+  const h = harness('<div class="el-cascader"><input role="combobox" readonly aria-controls="choices"></div>', { timeoutMs: 250 });
+  h.target.controlKind = 'cascader'; h.target.root = h.el.parentElement;
+  const node = text => `<div class="el-cascader-node"><span class="el-cascader-node__label">${text}</span></div>`;
+  h.target.root.onclick = () => {
+    const popup = h.w.document.createElement('div'); popup.id = 'choices'; popup.className = 'el-cascader__dropdown';
+    popup.innerHTML = `<div class="el-cascader-menu">${['北京市', '江苏省', '宁夏回族自治区'].map(node).join('')}</div>`;
+    popup.querySelectorAll('.el-cascader-node')[1].onclick = () => setTimeout(() => {
+      const column = h.w.document.createElement('div'); column.className = 'el-cascader-menu';
+      column.innerHTML = Array.from({ length: 13 }, (_, i) => node(`第${i + 1}市`)).join('');
+      popup.append(column);
+    }, 20);
+    h.w.document.body.append(popup);
+  };
+  const result = await h.api.operate(h.target, '江苏省 / 示例市');
+  assert.equal(result.reason, 'no_option_match');
+  assert.equal(result.observed.hasOptions, true, 'the provinces the page listed');
+  assert.equal('optionCount' in result.observed, false, JSON.stringify(result.observed));
+});
+test('a searchable list says what the page listed before the plugin typed, not what the typed value brought up', async () => {
+  for (const [before, hasOptions] of [[['其他学院', '某某学院'], true], [[], false]]) {
+    const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 250 });
+    const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox');
+    list.innerHTML = before.map(text => `<div role="option">${text}</div>`).join('');
+    h.w.document.body.append(list);
+    h.el.oninput = () => { list.innerHTML = ['甲学院', '乙学院', '丙学院'].map(text => `<div role="option">${text}</div>`).join(''); };
+    const result = await h.api.operate(h.target, '示例大学');
+    assert.equal(result.reason, 'no_option_match');
+    assert.equal(result.observed.hasOptions, hasOptions, JSON.stringify(before));
+    assert.equal('optionCount' in result.observed, false, JSON.stringify(result.observed));
+  }
+});
+
 test('combobox semantics never authorize a submit button', async () => {
   const h = harness(button.replace('type="button"', 'type="submit"')); let submitted = 0;
   h.el.form.onsubmit = event => { submitted++; event.preventDefault(); };
@@ -184,6 +219,16 @@ test('ordinary failed search restores only its temporary query and blurs its own
   assert.equal((await h.api.operate(h.target, '北京大学')).reason, 'no_option_match');
   assert.equal(h.el.value, ''); assert.equal(list.hidden, true);
 });
+test('a search that ends on an empty-state text is no matching option; a loading text keeps the timeout', async () => {
+  // #301：搜完弹层只写着「无匹配数据」时是没有这一项；到时还写着「加载中」仍按超时报。
+  for (const [shown, reason] of [['无匹配数据', 'no_option_match'], ['加载中', 'options_timeout']]) {
+    const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">', { timeoutMs: 200 });
+    const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); h.w.document.body.append(list);
+    h.el.oninput = () => { list.innerHTML = `<div class="empty">${shown}</div>`; };
+    assert.equal((await h.api.operate(h.target, '北京大学')).reason, reason, shown);
+    assert.equal(h.el.value, '', 'the query is put back');
+  }
+});
 test('cancelled search does not revert the query or steal focus for cleanup', async () => {
   let current = true; const h = harness('<input role="combobox" aria-controls="choices" aria-autocomplete="list">');
   const list = h.w.document.createElement('div'); list.id = 'choices'; list.setAttribute('role', 'listbox'); h.w.document.body.append(list);
@@ -205,6 +250,18 @@ test('duplicate visible popup ids are refused instead of selecting the first row
   h.el.onclick = () => { addOptions(h); addOptions(h); };
   assert.equal((await h.api.operate(h.target, '硕士', { onWrite: () => writes++ })).reason, 'ambiguous_popup');
   assert.equal(writes, 0); assert.equal(h.el.textContent, '请选择');
+});
+test('a referenced popup layer that contains the referenced list is one popup', async () => {
+  // Element Plus el-autocomplete: aria-controls names the outer layer, aria-owns the list inside it.
+  const h = harness(button.replace('aria-controls="choices"', 'aria-controls="layer" aria-owns="choices"'));
+  h.el.onclick = () => { const layer = h.w.document.createElement('div'); layer.id = 'layer'; h.w.document.body.append(layer); layer.append(addOptions(h)); };
+  assert.equal((await h.api.operate(h.target, '硕士')).ok, true); assert.equal(h.el.textContent, '硕士');
+});
+test('a referenced section that holds the combobox itself does not swallow its list', async () => {
+  const h = harness(`<div id="section">${button.replace('aria-controls="choices"', 'aria-controls="section" aria-owns="choices"')}</div>`);
+  let clicked = 0;
+  h.el.onclick = () => { const list = addOptions(h); h.w.document.getElementById('section').append(list); list.onclick = () => clicked++; };
+  assert.equal((await h.api.operate(h.target, '硕士')).reason, 'ambiguous_popup'); assert.equal(clicked, 0);
 });
 test('custom option commitment on mousedown is accounted before a simultaneous cancel', async () => {
   let current = true, writes = 0; const h = harness(button);
