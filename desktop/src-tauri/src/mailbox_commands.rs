@@ -303,6 +303,42 @@ async fn scan_api_page(
     .await
 }
 
+/// Production confirmation entry shared by IMAP and future API connectors.
+/// All local preparation/commits use the archive lock; network work never does.
+async fn confirm_candidate_from_source(
+    state: &AppState,
+    db: &Database,
+    expected: &ArchiveIdentity,
+    account: &Account,
+    id: &str,
+    source: &mut impl MimeSource,
+    cancellation: &Cancellation,
+) -> Result<bool> {
+    mapped(cancellation.check())?;
+    if source.kind() != account.source || source.account_id() != account.id {
+        return Err(fail(Error::Changed));
+    }
+    let item = with_store(state, |store| {
+        check_identity(store, expected)?;
+        check_connection(db, account)?;
+        if mapped(db.candidate(&expected.archive_id, id))?.account_id != account.id {
+            return Err(fail(Error::Changed));
+        }
+        prepare_candidate(store, db, expected, id)
+    })?;
+    let Some(item) = item else {
+        return Ok(true);
+    };
+    confirm_from_source(source, &item, cancellation, |bytes| {
+        with_store(state, |store| {
+            mapped(cancellation.check())?;
+            check_connection(db, account)?;
+            persist_confirmed(store, db, expected, id, bytes)
+        })
+    })
+    .await
+}
+
 async fn confirm_from_source(
     source: &mut impl MimeSource,
     item: &Candidate,
@@ -777,7 +813,7 @@ async fn confirm_many(
         let mut remaining: VecDeque<_> = candidates.into();
         let mut reconnect_used = false;
         let mut connection_error = fail(Error::Network);
-        while let Some((id, item)) = remaining.pop_front() {
+        while let Some((id, _item)) = remaining.pop_front() {
             if session.is_none() {
                 if reconnect_used {
                     confirm_failure(&mut report, id, connection_error.clone());
@@ -799,21 +835,21 @@ async fn confirm_many(
                     }
                 }
             }
+            // IMAP has no user-facing cancel command in this change. Its
+            // existing session lifecycle stays intact; future API operations
+            // can supply a shared cancellation token to the common entry.
             let cancellation = Cancellation::default();
-            let result = confirm_from_source(
+            let result = confirm_candidate_from_source(
+                state,
+                db,
+                expected,
+                &account,
+                &id,
                 &mut source::ImapSource(
                     session.as_mut().expect("session established"),
                     &account.id,
                 ),
-                &item,
                 &cancellation,
-                |bytes| {
-                    with_store(state, |store| {
-                        mapped(cancellation.check())?;
-                        check_connection(db, &account)?;
-                        persist_confirmed(store, db, expected, &id, bytes)
-                    })
-                },
             )
             .await;
             match result {

@@ -536,7 +536,14 @@ impl Database {
         source: SourceKind,
         principal: &str,
     ) -> Result<Account> {
-        if source == SourceKind::Imap || principal.trim().is_empty() || principal.len() > 1024 {
+        // Stable provider identities are opaque. Reject malformed input instead
+        // of silently changing it or registering a whitespace variant as an alias.
+        if source == SourceKind::Imap
+            || principal.is_empty()
+            || principal.trim() != principal
+            || principal.chars().any(char::is_control)
+            || principal.len() > 1024
+        {
             return Err(Error::Configuration);
         }
         let email = crate::config::normalize_address(email)?;

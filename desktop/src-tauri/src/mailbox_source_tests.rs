@@ -698,3 +698,350 @@ async fn api_pagination_resumes_after_restart_from_the_last_committed_page() {
     );
     assert_eq!(api.downloads, 0);
 }
+
+/// Use the actual archive lock and production entry points, without starting
+/// Tauri, a native reminder service, or any real mailbox connection.
+fn wiring_state(root: &std::path::Path, store: archive_store::ArchiveStore) -> AppState {
+    use std::sync::Mutex;
+    AppState {
+        quit_guard: Mutex::new(None),
+        host: Mutex::new(None),
+        host_error: Mutex::new(None),
+        paths: Mutex::new(Some(data_service::HostPaths::from_roots(
+            root.into(),
+            root.join("cache"),
+        ))),
+        store: Arc::new(Mutex::new(Some(store))),
+        store_error: Mutex::new(None),
+        hidden_launch: false,
+        ipc: Mutex::new(None),
+        main_window: crate::lifecycle::MainWindowReady::default(),
+        requested_view: crate::lifecycle::RequestedView::default(),
+        reminders: Box::new(reminders::Unsupported::new("test")),
+        credentials: Box::new(crate::ai_credentials::MemoryStore::default()),
+        cloud_credentials: Box::new(crate::cloud_credentials::KeyringStore),
+        mailbox_gate: Mutex::new(()),
+        cloud_backups: Mutex::new(None),
+        ai_inflight: crate::ai_commands::InflightRegistry::default(),
+        native_messaging: Mutex::new(vec![]),
+        latest_update: Mutex::new(None),
+    }
+}
+
+#[tokio::test]
+async fn production_api_entry_uses_archive_companies_and_resumes_pages_after_restart() {
+    let (dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    crate::commands::create_application(
+        &store,
+        serde_json::from_value(serde_json::json!({
+            "company": "星河科技", "title": "工程师"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let expected = store.identity();
+    let state = wiring_state(dir.path(), store);
+    let companies = companies(&state, &expected).unwrap();
+    assert_eq!(companies, vec!["星河科技"]);
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    // No keyword/recruiter match: this must be selected by the real company list.
+    api.messages[0].header = Header::parse(&raw("company@example.com", "星河科技申请进度通知"));
+    assert!(classify(&api.messages[0].header, &[]).is_empty());
+    let second = Metadata {
+        locator: MessageLocator::Api {
+            source: account.source,
+            message_id: "second".into(),
+        },
+        header: Header::parse(&raw("second@example.com", "Assessment")),
+    };
+    api.pages = Some(vec![api.messages.clone(), vec![second], vec![]]);
+    assert!(scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "recruitment",
+        &companies,
+        &mut api,
+        &cancel
+    )
+    .await
+    .unwrap());
+    let candidate = db.pending(&expected.archive_id, 100).unwrap().remove(0);
+    assert_eq!(candidate.reasons, vec!["匹配申请公司：星河科技"]);
+    assert!(db
+        .source_position(&expected.archive_id, &account.id, "inbox")
+        .unwrap()
+        .is_none());
+    api.fail_read = true;
+    assert_eq!(
+        scan_api_page(
+            &state,
+            &mut db,
+            &expected,
+            &account,
+            "recruitment",
+            &companies,
+            &mut api,
+            &cancel
+        )
+        .await
+        .unwrap_err()
+        .code,
+        fail(Error::Network).code
+    );
+    drop(db);
+    let mut db = Database::open(dir.path()).unwrap();
+    assert!(scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "recruitment",
+        &companies,
+        &mut api,
+        &cancel
+    )
+    .await
+    .unwrap());
+    assert!(!scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "recruitment",
+        &companies,
+        &mut api,
+        &cancel
+    )
+    .await
+    .unwrap());
+    assert_eq!(
+        api.requests,
+        vec![
+            None,
+            Some("page:1".into()),
+            Some("page:1".into()),
+            Some("page:2".into())
+        ]
+    );
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 2);
+    assert_eq!(api.downloads, 0);
+}
+
+#[tokio::test]
+async fn production_confirmation_entry_imports_retries_and_skips_manual_duplicates() {
+    for kind in [SourceKind::MicrosoftGraph, SourceKind::GmailApi] {
+        let (dir, mut db, store, account) = fixture(kind);
+        let expected = store.identity();
+        let state = wiring_state(dir.path(), store);
+        let cancel = Cancellation::default();
+        let mut api = FakeApi::new(kind);
+        scan_api_page(
+            &state,
+            &mut db,
+            &expected,
+            &account,
+            "inbox",
+            &[],
+            &mut api,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+        api.fail_download = true;
+        assert_eq!(
+            confirm_candidate_from_source(&state, &db, &expected, &account, &id, &mut api, &cancel)
+                .await
+                .unwrap_err()
+                .code,
+            fail(Error::Network).code
+        );
+        assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
+        assert!(!confirm_candidate_from_source(
+            &state, &db, &expected, &account, &id, &mut api, &cancel
+        )
+        .await
+        .unwrap());
+        assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 0);
+        with_store(&state, |store| {
+            assert_eq!(store.list_evidence(None)?.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+        // A different mail is discovered, then manually imported before confirmation.
+        api.raw = raw("manual@example.com", "Interview details");
+        api.messages[0].header = Header::parse(&api.raw);
+        api.messages[0].locator = MessageLocator::Api {
+            source: kind,
+            message_id: "manual-source-id".into(),
+        };
+        scan_api_page(
+            &state,
+            &mut db,
+            &expected,
+            &account,
+            "inbox",
+            &[],
+            &mut api,
+            &cancel,
+        )
+        .await
+        .unwrap();
+        let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+        with_store(&state, |store| {
+            evidence_commands::import_bytes(
+                store,
+                store.archive_dir(),
+                &api.raw,
+                Some("manual.eml".into()),
+                &evidence_commands::bucket_now(),
+                None,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let downloads = api.downloads;
+        assert!(confirm_candidate_from_source(
+            &state, &db, &expected, &account, &id, &mut api, &cancel
+        )
+        .await
+        .unwrap());
+        assert_eq!(api.downloads, downloads);
+        assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 0);
+        with_store(&state, |store| {
+            assert_eq!(store.list_evidence(None)?.len(), 2);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn production_entries_release_the_archive_lock_during_cancellable_network_work() {
+    let (dir, mut db, store, account) = fixture(SourceKind::GmailApi);
+    let expected = store.identity();
+    let state = wiring_state(dir.path(), store);
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    let (started, ready) = tokio::sync::oneshot::channel();
+    api.pending_read = Some(started);
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(
+            scan_api_page(
+                &state,
+                &mut db,
+                &expected,
+                &account,
+                "inbox",
+                &[],
+                &mut api,
+                &cancel
+            ),
+            async {
+                ready.await.unwrap();
+                assert!(
+                    state.store.try_lock().is_ok(),
+                    "network must not hold archive lock"
+                );
+                cancel.cancel();
+            },
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap_err().code, fail(Error::Cancelled).code);
+    assert!(db
+        .source_position(&expected.archive_id, &account.id, "inbox")
+        .unwrap()
+        .is_none());
+    let cancel = Cancellation::default();
+    scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "inbox",
+        &[],
+        &mut api,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+    let (started, ready) = tokio::sync::oneshot::channel();
+    api.pending_download = Some(started);
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(
+            confirm_candidate_from_source(&state, &db, &expected, &account, &id, &mut api, &cancel),
+            async {
+                ready.await.unwrap();
+                assert!(
+                    state.store.try_lock().is_ok(),
+                    "download must not hold archive lock"
+                );
+                cancel.cancel();
+            },
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.unwrap_err().code, fail(Error::Cancelled).code);
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
+    with_store(&state, |store| {
+        assert!(store.list_evidence(None)?.is_empty());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[tokio::test]
+async fn production_confirmation_rejects_another_accounts_candidate_before_duplicate_completion() {
+    let (dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let expected = store.identity();
+    let state = wiring_state(dir.path(), store);
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    scan_api_page(
+        &state,
+        &mut db,
+        &expected,
+        &account,
+        "inbox",
+        &[],
+        &mut api,
+        &cancel,
+    )
+    .await
+    .unwrap();
+    let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+    with_store(&state, |store| {
+        evidence_commands::import_bytes(
+            store,
+            store.archive_dir(),
+            &api.raw,
+            Some("manual.eml".into()),
+            &evidence_commands::bucket_now(),
+            None,
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let other = db
+        .save_api_account("other", "other@example.com", account.source, "tenant:other")
+        .unwrap();
+    api.account_id = other.id.clone();
+    assert_eq!(
+        confirm_candidate_from_source(&state, &db, &expected, &other, &id, &mut api, &cancel)
+            .await
+            .unwrap_err()
+            .code,
+        fail(Error::Changed).code
+    );
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
+    assert_eq!(api.downloads, 0);
+}

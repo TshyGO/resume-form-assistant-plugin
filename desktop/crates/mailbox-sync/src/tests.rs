@@ -993,3 +993,61 @@ async fn cancellation_stops_all_pending_work_and_rejects_later_requests() {
         .await;
     assert_eq!(later, Err(Error::Cancelled));
 }
+
+#[test]
+fn malformed_api_principals_are_rejected_without_splitting_or_changing_an_account() {
+    use crate::source::SourceKind;
+    let (_dir, db) = database();
+    let original = db
+        .save_api_account(
+            "api",
+            "a@outlook.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:person",
+        )
+        .unwrap();
+    for malformed in [
+        "",
+        " ",
+        " tenant:person",
+        "tenant:person ",
+        "\ttenant:person",
+        "tenant:person\u{a0}",
+        "tenant:\nperson",
+        "tenant:\0person",
+    ] {
+        assert_eq!(
+            db.save_api_account(
+                "duplicate",
+                "alias@outlook.com",
+                SourceKind::MicrosoftGraph,
+                malformed
+            )
+            .unwrap_err(),
+            Error::Configuration
+        );
+        assert_eq!(db.accounts().unwrap().len(), 2);
+        let unchanged = db.account(&original.id).unwrap();
+        assert_eq!(unchanged.email, original.email);
+        assert_eq!(unchanged.source_account_id, original.source_account_id);
+    }
+    // A valid opaque ID remains case sensitive; no guessed account merging.
+    let distinct = db
+        .save_api_account(
+            "distinct",
+            "a@outlook.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:Person",
+        )
+        .unwrap();
+    assert_ne!(distinct.id, original.id);
+    let reconnected = db
+        .save_api_account(
+            "unused",
+            "alias@outlook.com",
+            SourceKind::MicrosoftGraph,
+            "tenant:person",
+        )
+        .unwrap();
+    assert_eq!(reconnected.id, original.id);
+}
