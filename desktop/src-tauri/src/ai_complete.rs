@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::ai_client::{ChatClient, StreamLimits};
+use crate::ai_client::{ChatClient, StreamLimits, Timing};
 use crate::ai_settings::{host_of, AiProvider};
 use crate::commands::CommandError;
 
@@ -111,7 +111,20 @@ pub async fn complete(
     user: &str,
     wait: Wait,
 ) -> Result<String, CommandError> {
-    check_sizes(system, user)?;
+    complete_timed(provider, key, system, user, wait).await.0
+}
+
+/// 和 `complete` 一样，另外交回这次的计时（#299）。没发出去的请求计时为空。
+pub async fn complete_timed(
+    provider: &AiProvider,
+    key: &str,
+    system: &str,
+    user: &str,
+    wait: Wait,
+) -> (Result<String, CommandError>, Timing) {
+    if let Err(err) = check_sizes(system, user) {
+        return (Err(err), Timing::default());
+    }
     let body = json!({
         "model": provider.model,
         "temperature": 0,
@@ -122,19 +135,24 @@ pub async fn complete(
     });
     let host = host_of(&provider.api_url);
     let client = match wait {
-        Wait::Whole(timeout) => ChatClient::with_timeout(timeout)?,
-        Wait::Stream(limits) => ChatClient::streaming(limits)?,
+        Wait::Whole(timeout) => ChatClient::with_timeout(timeout),
+        Wait::Stream(limits) => ChatClient::streaming(limits),
     };
-    let text = client
-        .chat(&provider.api_url, key, &host, &provider.model, &body)
-        .await?;
-    if text.chars().count() > MAX_OUTPUT_CHARS {
-        return Err(CommandError {
-            code: "AI_OUTPUT_TOO_LARGE".into(),
-            message: "AI 返回的内容过长（超过 20 万字），没有保存。".into(),
-        });
-    }
-    Ok(text)
+    let client = match client {
+        Ok(client) => client,
+        Err(err) => return (Err(err), Timing::default()),
+    };
+    let (text, timing) = client.chat_timed(&provider.api_url, key, &host, &provider.model, &body).await;
+    let text = text.and_then(|text| {
+        if text.chars().count() > MAX_OUTPUT_CHARS {
+            return Err(CommandError {
+                code: "AI_OUTPUT_TOO_LARGE".into(),
+                message: "AI 返回的内容过长（超过 20 万字），没有保存。".into(),
+            });
+        }
+        Ok(text)
+    });
+    (text, timing)
 }
 
 /// 和 `complete` 一样，但调用方走了就不再等（#283）：每 `CANCEL_POLL` 问一次 `peer_gone`，
@@ -147,10 +165,10 @@ pub async fn complete_unless_gone(
     user: &str,
     wait: Wait,
     peer_gone: &dyn Fn() -> bool,
-) -> Option<Result<String, CommandError>> {
+) -> Option<(Result<String, CommandError>, Timing)> {
     let started = std::time::Instant::now();
     tokio::select! {
-        result = complete(provider, key, system, user, wait) => Some(result),
+        completed = complete_timed(provider, key, system, user, wait) => Some(completed),
         () = departure(peer_gone) => {
             crate::ai_client::log_line(&host_of(&provider.api_url), &provider.model, "cancelled", started);
             None
@@ -170,6 +188,7 @@ async fn departure(peer_gone: &dyn Fn() -> bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_client::TimeoutStage;
     use crate::ai_settings::AiProvider;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -281,6 +300,7 @@ mod tests {
         });
         let started = std::time::Instant::now();
         let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", wait_for("analyze", true), &|| gone.load(Ordering::SeqCst)).await;
+        let reply = reply.map(|(result, _)| result);
         assert!(reply.is_none(), "{reply:?}");
         assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
         let closed_after = tokio::task::spawn_blocking(move || server.join().unwrap()).await.unwrap();
@@ -290,9 +310,24 @@ mod tests {
     #[tokio::test]
     async fn a_caller_that_stays_gets_the_answer() {
         let (url, server) = serve_once(200, r#"{"choices":[{"message":{"content":"[]"}}]}"#);
-        let reply = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5)), &|| false).await;
-        assert_eq!(reply.unwrap().unwrap(), "[]");
+        let (result, timing) = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_secs(5)), &|| false).await.unwrap();
+        assert_eq!(result.unwrap(), "[]");
+        assert!(timing.first_byte.is_some() && timing.timeout_stage.is_none(), "{timing:?}");
         server.join().unwrap();
+    }
+
+    /// 插件经桌面转发的请求超时了，交回停在哪一步（#299）。
+    #[tokio::test]
+    async fn a_timed_out_completion_says_where_it_stopped() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/chat/completions", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let Ok((_stream, _)) = listener.accept() else { return };
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let (result, timing) = complete_unless_gone(&provider(&url), "sk-test", "SYS", "USER", Wait::Whole(Duration::from_millis(500)), &|| false).await.unwrap();
+        assert_eq!(result.unwrap_err().code, "AI_TIMEOUT");
+        assert_eq!(timing.timeout_stage, Some(TimeoutStage::FirstByte));
     }
 
     #[test]

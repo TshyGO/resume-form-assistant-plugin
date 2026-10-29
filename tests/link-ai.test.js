@@ -49,11 +49,11 @@ test('a missing host on disconnect keeps the browser error', async () => {
   assert.deepEqual(await pending, { lastError: 'Specified native messaging host not found.' });
 });
 
-async function harness({ mode = 'ready', respond } = {}) {
+async function harness({ mode = 'ready', respond, maxProtocolVersion } = {}) {
   const { createAi } = await import('../link/ai.mjs');
   const sent = [];
   const ai = createAi({
-    session: { probe: async () => ({ mode, identity: mode === 'ready' ? IDENTITY : null }) },
+    session: { probe: async () => ({ mode, identity: mode === 'ready' ? IDENTITY : null, ...(maxProtocolVersion ? { maxProtocolVersion } : {}) }) },
     store: { clientInstanceId: async () => CLIENT },
     port: async (_host, request, options) => {
       sent.push({ request, options });
@@ -65,7 +65,7 @@ async function harness({ mode = 'ready', respond } = {}) {
   return { ai, sent };
 }
 
-const reply = (request, payload) => ({ response: { protocolVersion: 2, correlationId: request.messageId, ok: true, payload } });
+const reply = (request, payload) => ({ response: { protocolVersion: request.protocolVersion, correlationId: request.messageId, ok: true, payload } });
 const failure = (request, code) => ({ response: { protocolVersion: 2, correlationId: request.messageId, ok: false, error: { code, retryable: false, message: 'synthetic' }, payload: {} } });
 
 test('ai.complete sends v2 without archive identity and returns text', async () => {
@@ -142,6 +142,25 @@ test('a desktop older than tiers reads as too old for analyze or a tier, not for
   // A response that carries a tier the request never asked for is refused, not trusted.
   const stray = await harness({ respond: request => reply(request, { status: 'ok', text: '[]', tier: 'strong' }) });
   assert.deepEqual(await stray.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: false, reason: 'unavailable' });
+});
+
+// #299: a v3 request gets how long the provider took to answer and where a timeout stopped.
+// Desktops up to 0.4.2 serve only v2 and would refuse a v3 envelope.
+test('a desktop that serves v3 gets ai.complete as v3, and the timing comes back', async () => {
+  const answered = await harness({ maxProtocolVersion: 3, respond: request => reply(request, { status: 'ok', text: '[]', firstByteMs: 1511 }) });
+  assert.deepEqual(await answered.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: true, text: '[]', firstByteMs: 1511 });
+  assert.equal(answered.sent[0].request.protocolVersion, 3);
+
+  const stopped = await harness({ maxProtocolVersion: 3,
+    respond: request => reply(request, { status: 'failed', reason: 'timeout', host: 'api.example.com', firstByteMs: 820, timeoutStage: 'body' }) });
+  assert.deepEqual(await stopped.ai.complete({ purpose: 'fill', system: 's', user: 'u' }),
+    { ok: false, reason: 'timeout', host: 'api.example.com', firstByteMs: 820, timeoutStage: 'body' });
+
+  for (const maxProtocolVersion of [undefined, 2]) {
+    const old = await harness({ maxProtocolVersion, respond: request => reply(request, { status: 'ok', text: '[]' }) });
+    assert.deepEqual(await old.ai.complete({ purpose: 'fill', system: 's', user: 'u' }), { ok: true, text: '[]' });
+    assert.equal(old.sent[0].request.protocolVersion, 2);
+  }
 });
 
 test('abort returns cancelled and disconnected desktop returns unavailable', async () => {
