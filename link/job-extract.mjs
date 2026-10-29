@@ -114,7 +114,7 @@ export function judgeSuggestion(parsed, fragments) {
     location: location.value
   };
   if (!fields.company || !fields.title) {
-    return manual(fields.company ? 'missing_title' : 'missing_company', fields);
+    return manual(fields.company ? 'missing_title' : (fields.title ? 'missing_company' : 'missing_both'), fields);
   }
   return { status: 'ok', reason: 'ok', reliable: true, fields };
 }

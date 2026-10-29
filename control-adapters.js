@@ -56,7 +56,7 @@
       if (['custom-select', 'cascader'].includes(ctx.kind)) {
         const root = scope.ResumeProCustomControls?.describe(ctx.entry).root;
         if (!root?.isConnected || !root.contains(ctx.el)) return 'element_disconnected';
-        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled')) return 'control_disabled';
+        if (root.getAttribute('aria-disabled') === 'true' || root.matches('.ant-select-disabled, .ant-cascader-disabled, .is-disabled, .arco-select-disabled, .arco-cascader-disabled, .layui-select-disabled')) return 'control_disabled';
       }
       if (ctx.kind === 'date' && ['date', 'month', 'datetime-local', 'time', 'week'].includes(ctx.el.type) && ctx.el.readOnly) return 'unsupported_control';
       if (ctx.options.isCurrent && !ctx.options.isCurrent()) return 'cancelled';
@@ -168,23 +168,21 @@
       return result(true, '', ctx);
     }
 
-    function acceptsFreeText(ctx) {
-      const el = ctx.el, info = scope.ResumeProCustomControls.describe(ctx.entry);
-      if (ctx.kind !== 'custom-select' || !(el instanceof HTMLInputElement) || el.readOnly || el.disabled) return false;
-      if (!['text', 'search'].includes(el.type) || !['aria', 'generic'].includes(info.library)) return false;
-      // 只认组件类名写明是联想输入框（el-autocomplete 等）；单有 aria-autocomplete 的可能是只能从列表里选的下拉。
-      return [info.root, el.parentElement, el.parentElement?.parentElement].some(node => String(node?.className || '').split(/\s+/)
-        .some(token => /(?:^|[-_])auto-?complete$/i.test(token)));
+    // 框里的字和要填的一样：逐字相同，或宿主认可的同一个值（电话框自己加了空格、短横）。
+    function shows(el, expected) {
+      const current = String(el.value ?? '');
+      return current === expected || Boolean(deps.sameTextValue?.(el, current, expected));
     }
 
-    async function text(ctx, value) {
+    // shown：联想框点了建议、框里已经是要填的字，只是组件没有标出选中状态（#299 51job）：不再写，按文本框核对。
+    async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
       const expected = deps.normalizeText(ctx.el, value);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
-      if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
-      ctx.acceptedOnce = String(ctx.el.value ?? '') === expected;
+      if (!shown && !await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
+      ctx.acceptedOnce = shows(ctx.el, expected);
       await deps.waitTextCommit();
       let stopped = stop(ctx);
       if (stopped) return result(false, stopped, ctx);
@@ -198,22 +196,60 @@
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
       }
-      if (!verdict.ok && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
+      if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
-        const committed = String(ctx.el.value ?? '') === expected;
+        const committed = shows(ctx.el, expected);
         await deps.waitTextCommit();
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, committed);
-        if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && guard()) {
+        // 框里显示的是同一个号码（页面改了格式）时不恢复原值。
+        if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && !shows(ctx.el, expected) && guard()) {
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
           ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       }
-      if (verdict.ok) checks.set(ctx.el, { ctx,
-        accepted: () => String(ctx.el.value ?? '') === expected,
+      // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
+      if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx,
+        accepted: () => shows(ctx.el, expected),
         inspect: () => deps.inspectText(ctx.el, expected, true) });
       return result(verdict.ok, verdict.reason, ctx);
+    }
+
+    // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
+    // 给这个框发一个 Tab 键收起它（不点页面，焦点也不动），再按文本框核对一次。
+    // Element's autocomplete closes its suggestions on Tab (Element UI 2 and Element Plus alike).
+    // The key starts at the box being filled and bubbles like a real one: Element UI 2 listens on the
+    // wrapper around the box. Unlike a real Tab it moves no focus and types nothing.
+    function pressTab(el) {
+      const ViewKeyboardEvent = el.ownerDocument?.defaultView?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      if (!ViewKeyboardEvent) return;
+      el.dispatchEvent(new ViewKeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+    }
+    // rc-picker closes when its input loses focus to somewhere outside the picker, and commits
+    // nothing when the text did not change. Not Esc: it bubbles to an AntD Modal around the
+    // form, which closes on Esc and drops whatever was typed in it. When the page has no focus
+    // (一键填写 clicked in the side panel) blur() moves focus without any event, so the
+    // focusout React listens for is sent here.
+    function leavePicker(el) {
+      let left = false;
+      const seen = () => { left = true; };
+      el.addEventListener('focusout', seen, true);
+      try { blur(el); } finally { el.removeEventListener('focusout', seen, true); }
+      const View = el.ownerDocument?.defaultView;
+      if (!left && View?.FocusEvent && el.ownerDocument.activeElement !== el) el.dispatchEvent(new View.FocusEvent('focusout', { bubbles: true }));
+    }
+
+    async function freeText(ctx, value, shown) {
+      const typed = await text(ctx, value, shown);
+      // Only a filled box gets its suggestions closed; after a failure the page is left alone.
+      if (!typed.ok || !ctx.el?.isConnected || stop(ctx)) return typed;
+      pressTab(ctx.el);
+      const saved = checks.get(ctx.el);
+      if (!saved) return typed;
+      const again = await verify(ctx, saved.accepted, saved.inspect);
+      if (!again.ok && again.reason !== 'validation_not_cleared') checks.delete(ctx.el);
+      return again;
     }
 
     async function operate(target, desiredValue, options = {}) {
@@ -258,8 +294,11 @@
         if (custom) {
           const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
           // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
-          if (outcome.reason && ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason) && acceptsFreeText(ctx) && !stop(ctx)) {
-            return await text(ctx, desiredValue);
+          // 点了建议、组件没标出选中状态，但框里已经是要填的字（#299）：不算没选上，按文本框核对。
+          if (outcome.reason && scope.ResumeProCustomControls.acceptsFreeText(ctx) && !stop(ctx)) {
+            const shown = outcome.reason === 'selection_not_committed' && Boolean(deps.normalizeText)
+              && String(ctx.el.value ?? '') === deps.normalizeText(ctx.el, desiredValue);
+            if (shown || ['no_option_match', 'options_not_rendered', 'options_timeout'].includes(outcome.reason)) return await freeText(ctx, desiredValue, shown);
           }
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;
@@ -320,7 +359,7 @@
         const inspect = ['date', 'custom-select', 'cascader'].includes(ctx.kind) && !direct && deps.inspectText
           ? () => deps.inspectText(ctx.el, String(ctx.el.value ?? ''), true) : null;
         const verified = await verify(ctx, accepted, inspect);
-        if (verified.ok) checks.set(ctx.el, { ctx, accepted, inspect });
+        if (verified.ok || verified.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, accepted, inspect });
         return verified;
       } catch {
         // Page exceptions are untrusted and can contain resume data. Only a fixed code escapes.
@@ -370,7 +409,23 @@
       }, popup => Boolean(popup));
       if (opened.reason) return { reason: opened.reason };
       const popup = opened.value;
-      ctx.observed = { library: 'antd', optionCount: Math.min(200, popup.querySelectorAll('td').length) };
+      ctx.observed = { library: 'antd', popupRole: 'calendar' };
+      // 页面异常也按失败收尾；只把固定的原因码交出去。
+      const picked = await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
+      // 选不成时收起自己点开的日历，免得挡住后面的字段：让输入框失焦（见 leavePicker），组件里的值不变。
+      // 不按键、不点页面别处；原本就开着的、用户停下或改了内容的不动。
+      // 刚在日历里按下过鼠标时，rc-picker 到下一帧才认失焦，这一次它不收：0.1 秒内没开始收起就再失焦一次。
+      // 收起有约 0.2 秒的动画，最多等 0.6 秒它走完再交还，免得再点开同一个日历时把还在淡出的它当成原本就开着的。
+      if (picked.reason && !before.has(popup) && !stop(ctx) && popup.isConnected && visible(popup)) {
+        const gone = () => !popup.isConnected || !visible(popup);
+        leavePicker(ctx.el);
+        const leaving = await waitUntil(ctx, doc.documentElement, () => gone() || Array.from(popup.classList).some(token => /-leave$/.test(token)), Boolean, 100);
+        if (leaving.reason === 'verification_timeout' && !stop(ctx)) leavePicker(ctx.el);
+        await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
+      }
+      return picked;
+    }
+    async function antDatePick(ctx, raw, popup) {
       if (popup.querySelectorAll('.ant-picker-panel').length !== 1) return { reason: 'unsupported_control' };
       const mode = popup.querySelector('.ant-picker-month-panel') ? 'month' : popup.querySelector('.ant-picker-year-panel') ? 'year' : 'date';
       const expected = mode === 'year' ? String(raw).match(/^\s*(\d{4})(?:年|\b)/)?.[1] : helpers?.normalizeDateValue?.(raw, mode);

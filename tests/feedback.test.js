@@ -9,7 +9,7 @@ async function fixture(options = {}) {
   let time = 1800000000000;
   const service = createFeedback({
     storage: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) },
-    now: () => time, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 20,
+    now: () => time, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 20, install: options.install,
     fetchImpl: options.fetchImpl || (async (url, request) => { calls.push({ url, ...request, payload: JSON.parse(request.body) }); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); })
   });
   return { service, data, calls, key: STORAGE_KEY, advance: ms => { time += ms; } };
@@ -70,6 +70,46 @@ test('code errors stop at five an hour; fill reports have their own twenty and d
     const old = await fixture({ data: { feedbackStateV1: saved } });
     await old.service.automatic({ kind: 'fill_partial' }, 'new.example.com'); assert.equal(old.calls.length, 1);
   }
+});
+
+test('a failed AI request and fields the page did not take keep separate daily slots per site', async () => {
+  // #301 U1: a failed AI request is reported even when every local match got written. A timeout or an
+  // outage that comes first must not hold back that day's report of fields the site did not take.
+  let offline = true;
+  const sent = [];
+  const f = await fixture({ fetchImpl: async (_url, request) => {
+    if (offline) throw new TypeError('Failed to fetch');
+    sent.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'x' }));
+  } });
+  await f.service.setConsent(true);
+  const report = category => ({ kind: 'fill_partial', diagnostics: `[错误]\nerror_category: ${category}` });
+  // Offline: the AI request failed, and so did the report. It still takes its slot.
+  assert.equal((await f.service.automatic(report('service_error'), 'jobs.example.test')).reason, 'network');
+  offline = false; f.advance(3600000);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'jobs.example.test')).ok, true);
+  for (const category of ['timeout', 'service_error', 'fill_rejected', 'match_failed']) {
+    assert.equal((await f.service.automatic(report(category), 'jobs.example.test')).reason, 'suppressed', category);
+  }
+  assert.equal(sent.length, 1);
+  // The other way round, on another site: a timeout first, then fields not taken.
+  assert.equal((await f.service.automatic(report('timeout'), 'c.liepin.com')).ok, true);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'c.liepin.com')).ok, true);
+  assert.deepEqual(sent.map(body => body.user_description.match(/^error_category: (.*)$/m)[1]), ['fill_rejected', 'timeout', 'fill_rejected']);
+  // A failed AI request that also left fields unfilled reports those fields: it takes the usual slot,
+  // so a bare timeout earlier that day does not hold it back.
+  const unfilled = { kind: 'fill_partial', diagnostics: '[错误]\nerror_category: timeout\n\n[未填字段]\n- 学历: input[text] reason=no_option_match' };
+  assert.equal((await f.service.automatic(report('timeout'), 'hr.example.test')).ok, true);
+  assert.equal((await f.service.automatic(unfilled, 'hr.example.test')).ok, true);
+  assert.match(sent.at(-1).user_description, /^- 学历: input\[text\] reason=no_option_match$/m);
+  assert.equal((await f.service.automatic(report('fill_rejected'), 'hr.example.test')).reason, 'suppressed');
+});
+
+test('an automatic report is never a manual one, so it never carries the job-flow codes', async () => {
+  const f = await fixture();
+  await f.service.setConsent(true);
+  const result = await f.service.automatic({ kind: 'manual', description: '', diagnostics: '[岗位]\njob_end: saved' }, 'jobs.example.test');
+  assert.deepEqual(result, { ok: false, reason: 'suppressed' });
+  assert.equal(f.calls.length, 0);
 });
 
 test('429 and 5xx suppress automatic reports for one hour; failures are not retried', async () => {
@@ -318,4 +358,211 @@ test('an install or update that leaves the choice open shows it right away; a ma
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.deepEqual(opened, opens ? ['chrome-extension://test/popup.html'] : [], `${reason} ${JSON.stringify(stored)}`);
   }
+});
+
+// #301：告知版本升到 2（自动报告多了安装方式、填写入口和网页焦点、AI 档位、下拉弹层有没有选项，AI 请求失败也上报）。
+test('a grant given under the version-1 notice is asked again: nothing is sent until the user agrees; an opt-out stays', async () => {
+  const { CONSENT_VERSION, installFeedback } = await import('../link/feedback.mjs');
+  assert.equal(CONSENT_VERSION, 2);
+  const v1 = { consent: true, consentVersion: 1, anonymousId: 'v1-id', recent: {}, hourly: [], fillHourly: [] };
+  const f = await fixture({ data: { feedbackStateV1: structuredClone(v1) } });
+  // Marked as renewed, so the choice can say the notice changed.
+  const renewed = { consent: false, decided: false, renewed: true };
+  assert.deepEqual(await f.service.status(), renewed);
+  await f.service.automatic(crash, 'c.liepin.com');
+  await f.service.automatic({ kind: 'fill_partial', diagnostics: '[错误]\nerror_category: timeout' }, 'c.liepin.com');
+  assert.equal(f.calls.length, 0, 'nothing is sent on the old grant');
+  assert.ok(!JSON.stringify(f.data).includes('v1-id'), 'the old installation id is gone');
+  assert.deepEqual(await (await fixture({ data: f.data })).service.status(), renewed, 'still undecided after a restart');
+  // An update that leaves the version-1 grant behind opens the choice right away.
+  const opened = []; let onInstalled;
+  const stored = { feedbackStateV1: structuredClone(v1) };
+  installFeedback({
+    runtime: { id: 'test', getURL: p => `chrome-extension://test/${p}`, getManifest: () => ({ version: '0.4.5' }),
+      onMessage: { addListener: () => {} }, onInstalled: { addListener: fn => { onInstalled = fn; } } },
+    storage: { local: { get: async () => structuredClone(stored), set: async value => Object.assign(stored, structuredClone(value)) } },
+    tabs: { create: async ({ url }) => { opened.push(url); } }
+  });
+  onInstalled({ reason: 'update' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(opened, ['chrome-extension://test/popup.html']);
+  // Agreeing to the current notice starts sending again, under a new id.
+  assert.deepEqual(await f.service.setConsent(true), { consent: true, decided: true });
+  assert.equal(f.data[f.key].consentVersion, 2);
+  assert.equal('renewed' in f.data[f.key], false, 'a made choice clears the mark');
+  await f.service.automatic(crash, 'c.liepin.com');
+  assert.equal(f.calls.length, 1);
+  assert.notEqual(f.calls[0].payload.anonymous_id, 'v1-id');
+  // Opting out under version 1 stays an opt-out.
+  for (const optOut of [{ consent: false, consentVersion: 0, anonymousId: null }, { consent: false, consentVersion: 1 }, { consent: false }]) {
+    const out = await fixture({ data: { feedbackStateV1: optOut } });
+    assert.deepEqual(await out.service.status(), { consent: false, decided: true }, JSON.stringify(optOut));
+    await out.service.automatic(crash, 'c.liepin.com');
+    assert.equal(out.calls.length, 0);
+  }
+});
+
+test('[来源] carries the install type for automatic and manual reports; an unknown, failed or slow lookup leaves it out', async () => {
+  for (const type of ['normal', 'development', 'sideload', 'admin', 'other']) {
+    const f = await fixture({ install: async () => type });
+    await f.service.setConsent(true);
+    await f.service.automatic(crash, 'c.liepin.com');
+    assert.match(f.calls[0].payload.user_description, new RegExp(`\\[来源\\]\\napp_version: 0\\.4\\.1\\nos: macOS / Edge 140\\ninstall: ${type}\\nhost: c\\.liepin\\.com`));
+    await f.service.ready();
+    assert.match(f.service.preview({ description: '按钮不可用' }).user_description, new RegExp(`^install: ${type}$`, 'm'));
+  }
+  const never = new Promise(() => {});
+  for (const install of [async () => 'store', async () => '张三 https://evil.example', () => undefined,
+    () => { throw new Error('no management'); }, async () => { throw new Error('getSelf failed'); }, () => never]) {
+    const f = await fixture({ install });
+    await f.service.setConsent(true);
+    await f.service.automatic(crash, 'c.liepin.com');
+    assert.equal(f.calls.length, 1, 'the report still goes out');
+    const text = f.calls[0].payload.user_description;
+    assert.doesNotMatch(text, /install:|张三|evil|store/);
+    assert.match(text, /^os: macOS \/ Edge 140\nhost: c\.liepin\.com$/m);
+  }
+  // A page cannot supply it.
+  const f = await fixture({ install: async () => 'normal' });
+  await f.service.setConsent(true);
+  await f.service.automatic({ kind: 'fill_failed', diagnostics: '[来源]\ninstall: development\n[错误]\nerror_category: unknown' }, 'c.liepin.com');
+  assert.equal(f.calls[0].payload.user_description.match(/^install: .*$/gm).join(), 'install: normal');
+});
+
+test('an error from before a choice is dropped, even while the install type is still being looked up', async () => {
+  // automatic() waits for the install type (up to a second) before it reads the choice. A choice made
+  // in that time came after the error, so the report belongs to the earlier choice and is not sent.
+  const slow = () => new Promise(resolve => setTimeout(resolve, 50, 'normal'));
+  const later = () => new Promise(resolve => setTimeout(resolve, 2));
+  const cases = {
+    'undecided, then agreed': [{}, async s => { await s.setConsent(true); }],
+    'a version-1 grant asked again, then agreed': [{ feedbackStateV1: { consent: true, consentVersion: 1, anonymousId: 'v1-id' } },
+      async s => { await s.setConsent(true); }],
+    'agreed, then turned off and on': [null, async s => { await s.setConsent(false); await s.setConsent(true); }]
+  };
+  for (const [name, [data, choose]] of Object.entries(cases)) {
+    const f = await fixture({ install: slow, data: data || {} });
+    if (!data) await f.service.setConsent(true);
+    const auto = f.service.automatic(crash, 'c.liepin.com');
+    await later();
+    await choose(f.service);
+    assert.equal((await auto).reason, 'suppressed', name);
+    assert.equal(f.calls.length, 0, name);
+    await f.service.automatic({ ...crash, stack: 'content.js:7:1' }, 'c.liepin.com');
+    assert.equal(f.calls.length, 1, `${name}: errors after the choice are sent`);
+  }
+  // A choice made before the error still counts: the report waits for the lookup and carries it.
+  const f = await fixture({ install: slow });
+  await f.service.setConsent(true);
+  assert.equal((await f.service.automatic(crash, 'c.liepin.com')).ok, true);
+  assert.match(f.calls[0].payload.user_description, /^install: normal$/m);
+});
+
+test('turning reports off and on while a report is being written down drops that report and gives its slots back', async () => {
+  // The report has passed its choice check and is saving its dedup record. Off and on again leaves
+  // reports on, but the report still belongs to the choice before them. It was never sent, so the
+  // same report after the choice goes out, also the same site's fill report.
+  const { createFeedback } = await import('../link/feedback.mjs');
+  for (const [input, slots] of [[crash, 'hourly'], [{ kind: 'fill_failed' }, 'fillHourly']]) {
+    const data = {}; const calls = [];
+    let gate = null;
+    const service = createFeedback({
+      storage: { get: async () => structuredClone(data), set: async value => {
+        const held = gate; gate = null;
+        if (held) { held.started(); await held.released; }
+        Object.assign(data, structuredClone(value));
+      } },
+      now: () => 1800000000000, version: '0.4.1', os: 'macOS / Edge 140', timeoutMs: 200, install: () => 'normal',
+      fetchImpl: async (_url, request) => { calls.push(JSON.parse(request.body)); return new Response(JSON.stringify({ ok: true, id: 'test-123' })); }
+    });
+    await service.setConsent(true);
+    await service.ready();
+    let release;
+    const saving = new Promise(started => { gate = { started, released: new Promise(resolve => { release = resolve; }) }; });
+    const report = service.automatic(input, 'c.liepin.com');
+    await saving;
+    const off = service.setConsent(false); const on = service.setConsent(true);
+    release();
+    assert.equal((await report).reason, 'suppressed', slots);
+    assert.deepEqual(await Promise.all([off, on]), [{ consent: false, decided: true }, { consent: true, decided: true }]);
+    assert.equal(calls.length, 0);
+    assert.deepEqual([data.feedbackStateV1.recent, data.feedbackStateV1[slots]], [{}, []], slots);
+    // Reports after the choice are sent as usual.
+    assert.equal((await service.automatic(input, 'c.liepin.com')).ok, true, slots);
+    assert.equal(calls.length, 1);
+    assert.equal(Object.keys(data.feedbackStateV1.recent).length, 1);
+    assert.equal(data.feedbackStateV1[slots].length, 1);
+  }
+});
+
+test('the router reads the install type from chrome.management.getSelf, and goes on without it', async () => {
+  const { installFeedback } = await import('../link/feedback.mjs');
+  const originalFetch = global.fetch;
+  try {
+    for (const [management, line] of [[{ getSelf: async () => ({ id: 'x', installType: 'development', name: '网申快填' }) }, /^install: development$/m],
+      [undefined, null], [{ getSelf: async () => { throw new Error('denied'); } }, null]]) {
+      const calls = []; const data = {}; let listener;
+      global.fetch = async (_url, req) => { calls.push(JSON.parse(req.body)); return new Response('{"ok":true,"id":"r"}'); };
+      const origin = 'chrome-extension://test/';
+      installFeedback({
+        runtime: { id: 'test', getURL: p => origin + p, getManifest: () => ({ version: '0.4.5' }), onMessage: { addListener: fn => { listener = fn; } } },
+        storage: { local: { get: async () => structuredClone(data), set: async value => Object.assign(data, structuredClone(value)) } },
+        tabs: { get: async () => ({ url: 'https://c.liepin.com/resume' }) },
+        ...(management ? { management } : {})
+      });
+      const page = { id: 'test', url: `${origin}sidepanel.html`, documentId: 'doc' };
+      const message = (body, sender = page) => new Promise(resolve => listener(body, sender, resolve));
+      await message({ type: 'FEEDBACK_CONSENT', enabled: true });
+      await message({ type: 'FEEDBACK_AUTO', report: crash }, { id: 'test', url: 'https://c.liepin.com/resume', tab: { id: 1 } });
+      const draft = await message({ type: 'FEEDBACK_PREVIEW', description: '按钮不可用', tabId: 1 });
+      for (const text of [calls[0].user_description, draft.payload.user_description]) {
+        if (line) assert.match(text, line); else assert.doesNotMatch(text, /install:/);
+      }
+    }
+  } finally { global.fetch = originalFetch; }
+});
+
+test('automatic reports never carry the job flow [岗位]; a manual preview keeps it', async () => {
+  const job = core.jobReport({ companySource: 'structured', titleSource: 'ai', missingCompany: false, missingTitle: false, aiCalled: true, aiCode: 'ok', end: 'saved' });
+  const fill = core.fillReport({ path: '/apply', fieldCount: 0, filledCount: 0, category: 'no_fields_found', stage: 'scan' });
+  const f = await fixture(); await f.service.setConsent(true);
+  await f.service.automatic({ kind: 'fill_failed', diagnostics: `${fill}\n\n${job}` }, 'c.liepin.com');
+  const sent = f.calls[0].payload.user_description;
+  assert.match(sent, /^error_category: no_fields_found$/m);
+  assert.doesNotMatch(sent, /岗位|job_/);
+  const preview = f.service.preview({ description: '保存岗位时没读出岗位名', diagnostics: `${fill}\n\n${job}` }).user_description;
+  assert.ok(preview.endsWith(`\n\n${job}`), preview);
+});
+
+test('a choice brought back by a new notice says the report contents changed; a first choice does not', async () => {
+  const { JSDOM } = require('jsdom');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const mount = async (variant, status) => {
+    const { window } = new JSDOM(variant === 'compact'
+      ? '<div id="feedback-notice-root" hidden></div><div id="feedback-manual-root"></div><div id="feedback-auto-root" data-variant="compact"></div>'
+      : '<div id="feedback-auto-root"></div>', { runScripts: 'outside-only' });
+    window.chrome = {
+      runtime: { sendMessage: async message => message.type === 'FEEDBACK_STATUS' ? status
+        : message.type === 'FEEDBACK_CONSENT' ? { consent: message.enabled, decided: true } : { ok: false } },
+      tabs: { query: async () => [], onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
+      storage: { onChanged: { addListener() {} } }
+    };
+    window.eval(read('feedback-core.js'));
+    window.eval(read('feedback-ui.js'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return window.document.getElementById('feedback-renewed');
+  };
+  for (const variant of ['compact', 'status']) {
+    const renewed = await mount(variant, { consent: false, decided: false, renewed: true });
+    assert.equal(renewed.hidden, false, variant);
+    assert.equal(renewed.textContent, '报告内容有更新，需要重新选择。');
+    assert.equal((await mount(variant, { consent: false, decided: false })).hidden, true, `${variant}: a first choice`);
+    assert.equal((await mount(variant, { consent: true, decided: true })).hidden, true, `${variant}: already chosen`);
+  }
+  const renewed = await mount('status', { consent: false, decided: false, renewed: true });
+  renewed.ownerDocument.getElementById('feedback-enable').click();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(renewed.hidden, true, 'gone once chosen');
 });

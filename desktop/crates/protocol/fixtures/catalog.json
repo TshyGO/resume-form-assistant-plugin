@@ -79,6 +79,7 @@
     {"id": "ai-complete-analyze-ok", "path": "requests/ai-complete-analyze-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "ai-complete-tier-strong-ok", "path": "requests/ai-complete-tier-strong-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "ai-complete-bad-tier", "path": "requests/ai-complete-bad-tier.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-v3-ok", "path": "requests/ai-complete-v3-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "ui-open-ok", "path": "requests/ui-open-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "legacy-import-ok", "path": "requests/legacy-import-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "resume-update-unknown-op", "path": "requests/resume-update-unknown-op.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
@@ -204,6 +205,15 @@
     {"id": "ai-complete-error-tier-analyze-ok", "path": "responses/ai-complete-error-tier-default.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-analyze-ok.json", "strict": {"accept": true}},
     {"id": "ai-complete-error-tier-to-untiered-request", "path": "responses/ai-complete-error-tier-default.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
     {"id": "ai-complete-tier-to-untiered-request", "path": "responses/ai-complete-ok-tier-strong.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
-    {"id": "ai-complete-bad-tier-response", "path": "responses/ai-complete-bad-tier.json", "requestType": "ai.complete", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}}
+    {"id": "ai-complete-bad-tier-response", "path": "responses/ai-complete-bad-tier.json", "requestType": "ai.complete", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-ok-first-byte-v3", "path": "responses/ai-complete-ok-first-byte-v3.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-v3-ok.json", "strict": {"accept": true}},
+    {"id": "ai-complete-failed-timeout-stage-v3", "path": "responses/ai-complete-failed-timeout-stage-v3.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-v3-ok.json", "strict": {"accept": true}},
+    {"id": "ai-complete-failed-body-timeout-v3", "path": "responses/ai-complete-failed-body-timeout-v3.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-v3-ok.json", "strict": {"accept": true}},
+    {"id": "ai-complete-timing-to-v2-request", "path": "responses/ai-complete-failed-timeout-stage-v3.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": true}, "request": "requests/ai-complete-ok.json", "strict": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "ai-complete-first-byte-v2", "path": "responses/ai-complete-first-byte-v2.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-stage-without-timeout", "path": "responses/ai-complete-stage-without-timeout.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-ok-with-stage", "path": "responses/ai-complete-ok-with-stage.json", "requestType": "ai.complete", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-bad-stage", "path": "responses/ai-complete-bad-stage.json", "requestType": "ai.complete", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "ai-complete-negative-first-byte", "path": "responses/ai-complete-negative-first-byte.json", "requestType": "ai.complete", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}}
   ]
 }

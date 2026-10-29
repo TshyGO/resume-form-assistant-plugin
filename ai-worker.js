@@ -173,7 +173,7 @@ function aiFailureMessage(result) {
 }
 
 // #283：说清是哪一档、哪家服务商、等了多久。强模型多半是带深度思考的模型在大页面上生成太久，
-// 也可能是服务商或网络卡住了；插件分不出是哪一种，两种办法都说。
+// 也可能是服务商或网络卡住了；插件分不出是哪一种，两种办法都说。日常档（#299）只说等了多久、可以换模型。
 function timeoutMessage(result) {
   const seconds = Number.isFinite(result?.elapsedMs) ? Math.round(result.elapsedMs / 1000) : 0;
   const waited = seconds > 0 ? `等了 ${seconds} 秒` : "长时间";
@@ -182,7 +182,7 @@ function timeoutMessage(result) {
     const task = result.purpose === "analyze" ? "页面分析" : "字段匹配";
     return `强模型${host}${waited}没有完成${task}。可能是服务商或网络卡住了，也可能是带深度思考的模型在字段多的页面上生成太久：可以稍后重试，或在桌面设置里把强模型换成不带深度思考的模型。`;
   }
-  return `AI 服务商${host}${waited}没有返回，请稍后重试。`;
+  return `日常模型${waited}没有返回，可在桌面设置换模型后重试。`;
 }
 
 // #223: with the strong tier asked for, these two failures are about the strong model, not
@@ -258,6 +258,11 @@ function makePromptBatches(formFields, resumeFields) {
 }
 
 const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large", "response_too_large", "secret_in_prompt"]);
+// Codes that only say some fields were skipped before any request. A failed request replaces
+// them, so errorCode tells a failed AI request from one that matched nothing (#301).
+const SKIP_CODES = new Set(["none", "no_context", "input_too_large"]);
+// Where a desktop request timed out (#299): connecting, waiting for the headers, or reading the body.
+const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
 
 // #224 深度分析：只把插件已经脱敏的页面大纲交给强模型（purpose=analyze，不带 tier 即强档）。
 // 返回解析后的说明书对象；模型原文不回传、不进诊断。校验由页面里的 deep-analysis.js 按本次大纲做。
@@ -305,7 +310,7 @@ async function handleAiFill(message, controller = new AbortController()) {
   const resumeFields = incomingResumeFields.filter(safeResumeField);
   const secretFormFields = incomingFormFields.length - formFields.length;
   if (!formFields.length) return { success: false, error: incomingFormFields.length
-    ? "表单里只有像密码的字段，没有发给 AI。" : "当前页面没有可填写的表单字段。",
+    ? "表单里只有像密码的字段，没有发给 AI。" : "没找到可填写的输入框。",
     diagnostics: { errorCode: incomingFormFields.length ? "secret_only" : "none", secretFormFields } };
   if (!resumeFields.length) return { success: false, error: "当前模板没有可用字段。",
     diagnostics: { errorCode: "no_resume_fields", secretFormFields } };
@@ -356,9 +361,14 @@ async function handleAiFill(message, controller = new AbortController()) {
       diagnostics.promptBytes += new TextEncoder().encode(prompt).length;
       const result = await sendToDesktop({ purpose: "fill", tier, system: AI_SYSTEM_PROMPT, user: prompt, signal: controller.signal });
       if (tier && (result?.tier === "strong" || result?.tier === "default")) diagnostics.tierUsed = result.tier;
+      // #299：服务商多久回了响应头（几批取最慢的），超时停在哪一步。旧桌面不给就不记。
+      if (Number.isInteger(result?.firstByteMs) && result.firstByteMs >= 0) {
+        diagnostics.firstByteMs = Math.max(diagnostics.firstByteMs ?? 0, result.firstByteMs);
+      }
+      if (TIMEOUT_STAGES.includes(result?.timeoutStage)) diagnostics.timeoutStage = result.timeoutStage;
       if (!result?.ok) {
         const reason = result?.reason ?? "unavailable";
-        if (diagnostics.errorCode === "none") diagnostics.errorCode = reason;
+        if (SKIP_CODES.has(diagnostics.errorCode)) diagnostics.errorCode = reason;
         warnings.push(strongFailureMessage(tier, result) ?? aiFailureMessage(result));
         if (reason === "not_configured") openView = "settings-ai";
         // Only a failure tied to this batch's content is worth trying the next batch for.
@@ -372,7 +382,7 @@ async function handleAiFill(message, controller = new AbortController()) {
       try {
         aiMatches.push(...ResumeProAIHelpers.filterValidMatches(batch.fields, normalizeMatches(parseJsonContent(result.text))));
       } catch {
-        if (diagnostics.errorCode === "none") diagnostics.errorCode = "bad_response";
+        if (SKIP_CODES.has(diagnostics.errorCode)) diagnostics.errorCode = "bad_response";
         warnings.push(aiFailureMessage({ reason: "bad_response" }));
       }
     }

@@ -212,10 +212,16 @@ test('a full fill-record queue is refused in words, with filling unaffected', as
   assert.match(copy.text, /填表/);
 });
 
-test('a refused fill names the likely cause: the application is gone', async () => {
+test('a refused fill says the desktop refused it without claiming the application is gone', async () => {
+  // invalid_payload 也可能是别的原因（内容不合桌面的校验），不能说成一定是申请没了。
   const { describeFillRecordResult } = await load();
   const copy = describeFillRecordResult({ status: 'failed', code: 'invalid_payload' });
-  assert.match(copy.text, /找不到所选的申请/);
+  assert.equal(copy.tone, 'warn');
+  assert.match(copy.text, /桌面没有接受这次留档/);
+  assert.doesNotMatch(copy.text, /找不到所选的申请/);
+  assert.match(copy.text, /可能已经删除/);
+  assert.match(copy.text, /到桌面核对/);
+  assert.match(copy.text, /「待同步」里取消这条，再重新选择申请/);
   assert.doesNotMatch(copy.text, /公司和岗位/);
 });
 

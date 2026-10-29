@@ -531,6 +531,23 @@ test('a reliable read skips the AI entirely', async () => {
   assert.equal(panel.company.value, '星河科技');
 });
 
+test('#278: a read with a title but no fragments opens the form at once, without asking the AI', async () => {
+  const hotjob = {
+    company: '', title: '数据分析师', location: '', reliable: false, confidence: 'uncertain',
+    assistReasons: ['missing_company'], fragments: [],
+    sourceUrl: 'https://jobs.example.com/123', dedupeUrl: 'https://jobs.example.com/123'
+  };
+  const panel = await openPanel({ extraction: hotjob });
+  await panel.click('job-save-button');
+  assert.equal(panel.form.hidden, false);
+  assert.equal(panel.get('job-save-progress').hidden, true);
+  assert.equal(panel.page.ai.sent.length, 0, 'nothing went to the AI');
+  assert.equal(panel.title.value, '数据分析师', 'the title read from the page is filled in');
+  assert.equal(panel.company.value, '');
+  assert.equal(panel.get('job-save-note').textContent, '公司名还不确定。请核对后再保存。');
+  assert.equal(panel.saves().length, 0);
+});
+
 test('an uncertain read asks the AI with progress and a cancel button, without being asked', async () => {
   const uncertain = { ...RELIABLE_WITH_FRAGMENTS, reliable: false, confidence: 'uncertain', company: '公安' };
   const panel = await openPanel({ extraction: uncertain });

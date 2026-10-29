@@ -340,7 +340,7 @@ fn validate_legacy_import(payload: &Map<String, Value>) -> Result<(), ProtocolEr
     Ok(())
 }
 
-fn validate_ai_complete_response(payload: &Value) -> Result<(), ProtocolError> {
+fn validate_ai_complete_response(payload: &Value, protocol_version: u64) -> Result<(), ProtocolError> {
     let obj = payload.as_object().unwrap();
     let valid = match payload["status"].as_str().unwrap() {
         "ok" => obj.contains_key("text") && !obj.contains_key("reason")
@@ -348,8 +348,14 @@ fn validate_ai_complete_response(payload: &Value) -> Result<(), ProtocolError> {
         "failed" => obj.contains_key("reason") && !obj.contains_key("text"),
         _ => false,
     };
-    if !valid {
+    // Only a timeout has a stage to name (#299).
+    if !valid || (obj.contains_key("timeoutStage") && payload["reason"] != "timeout") {
         return Err(invalid_payload("ai.complete response fields do not match status"));
+    }
+    // Plugins send ai.complete as v2 and their schema copy rejects keys it does not know
+    // (additionalProperties: false); only a plugin that sends v3 knows the timing (#299).
+    if protocol_version < 3 && (obj.contains_key("firstByteMs") || obj.contains_key("timeoutStage")) {
+        return Err(invalid_payload("ai.complete timing is only returned to a protocolVersion 3 request"));
     }
     if let Some(host) = payload.get("host").and_then(Value::as_str) {
         if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
@@ -657,7 +663,7 @@ pub fn validate_response_value(value: &Value, request_type: MessageType) -> Resu
             validate_schema(obj.get("payload").unwrap(), &schema)?;
         }
         if request_type == MessageType::AiComplete {
-            validate_ai_complete_response(obj.get("payload").unwrap())?;
+            validate_ai_complete_response(obj.get("payload").unwrap(), obj["protocolVersion"].as_u64().unwrap())?;
         }
         if request_type == MessageType::LegacyImport {
             let payload = obj.get("payload").unwrap();

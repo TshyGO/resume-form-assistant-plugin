@@ -348,6 +348,12 @@ export interface AiCompleteResponsePayload {
   /** maxLength: 253 */
   host?: string;
   tier?: "default" | "strong";
+  /**
+   * minimum: 0
+   * maximum: 3600000
+   */
+  firstByteMs?: number;
+  timeoutStage?: "connect" | "first_byte" | "body";
 }
 
 export interface HandshakeResponsePayload {

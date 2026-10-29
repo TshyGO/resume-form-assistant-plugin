@@ -406,5 +406,5 @@
   const labels = Object.fromEntries(domains.map(domain => [domain.id, domain.label]));
   const api = { targetCounts, collect, collectSpec, validatePlan, execute, labels };
   root.ResumeProFormAgent = api;
-  if (typeof module !== "undefined") module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

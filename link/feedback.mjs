@@ -4,7 +4,13 @@ export const ENDPOINT = 'https://app-feedback-relay.nebula-lab.workers.dev/feedb
 export const STORAGE_KEY = 'feedbackStateV1';
 // The explanation the user agreed to. Raise it when automatic reports start carrying something
 // the notice does not describe: earlier grants then count as undecided and the user is asked again.
-export const CONSENT_VERSION = 1;
+// 2 (#301): install type, how a fill was started and whether the page had focus, the AI tier,
+// whether an unfilled select's popup opened and had any option, and a report when the AI request fails;
+// #299 adds how long the AI service took to start answering and where a timeout stopped, before any
+// release carried version 2, so it stays 2.
+export const CONSENT_VERSION = 2;
+// chrome.management.getSelf().installType; getSelf needs no "management" permission.
+const INSTALL_TYPES = ['normal', 'development', 'sideload', 'admin', 'other'];
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 // Per installation, per rolling hour. Code errors can repeat in a loop, so they stay tight. Fill
@@ -15,10 +21,22 @@ const FILLS_PER_HOUR = 20;
 const core = globalThis.ResumeProFeedback;
 const empty = () => ({ consent: null, consentVersion: 0, anonymousId: null, recent: {}, hourly: [], fillHourly: [], backoff: 0, manualAt: 0 });
 
-export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, timeoutMs = 5000 }) {
+export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID(), version, os, install = () => '', timeoutMs = 5000 }) {
   let serial = Promise.resolve();
   let stopped = false;
+  // Counts the user's choices. A report that arrived before the latest one belongs to the earlier choice
+  // and is dropped, also while it still waits for the install type below (#301): never sent after agreeing.
+  let choices = 0;
   const active = new Set();
+  // How the browser installed the extension (store, unpacked, policy...), looked up once. Unknown,
+  // failed or slow lookups leave it out; reports never wait on it for more than a second.
+  let installType = '';
+  let installTimer;
+  const installKnown = Promise.race([
+    Promise.resolve().then(install),
+    new Promise(resolve => { installTimer = setTimeout(resolve, 1000, ''); })
+  ]).then(value => { if (INSTALL_TYPES.includes(value)) installType = value; }, () => {})
+    .finally(() => clearTimeout(installTimer));
   const locked = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
   const save = state => storage.set({ [STORAGE_KEY]: state });
   const read = async () => {
@@ -29,22 +47,26 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     // their 「知道了」 only folded the notice, so a grant without the current version is no grant.
     // An opt-out is kept whatever wrote it.
     if (state.consent === true && state.consentVersion !== CONSENT_VERSION) {
-      Object.assign(state, { consent: null, consentVersion: 0, anonymousId: null });
+      // A grant under an older notice (not a pre-#247 default): the choice says the notice changed.
+      Object.assign(state, { consent: null, consentVersion: 0, anonymousId: null, renewed: state.consentVersion >= 1 && state.consentVersion < CONSENT_VERSION });
       await save(state).catch(() => {}); // Undecided in memory either way; the next choice rewrites it.
     }
     if (state.consent !== true) state.anonymousId = null;
     for (const key of ['hourly', 'fillHourly']) if (!Array.isArray(state[key])) state[key] = [];
     return state;
   };
-  const view = state => ({ consent: state.consent === true, decided: state.consent !== null });
+  const view = state => ({ consent: state.consent === true, decided: state.consent !== null,
+    ...(state.consent === null && state.renewed === true ? { renewed: true } : {}) });
   function build(input, host, id) {
     const kind = ['fill_failed', 'fill_partial', 'manual'].includes(input.kind) ? input.kind : 'exception';
     const errorType = kind === 'exception' ? (['Error','TypeError','ReferenceError','SyntaxError','RangeError','URIError','EvalError','AggregateError'].includes(input.name) ? input.name : 'Error') : kind;
     const stack = kind === 'exception' ? String(input.stack || '').split('\n').filter(line => /^(?:[a-z][a-z0-9-]*\.js|link\/(?:[a-z][a-z0-9-]*\/)*[a-z][a-z0-9-]*\.mjs):\d{1,6}:\d{1,6}$/.test(line)).slice(0, 20).join('\n') : '';
-    const details = core.diagnostics(input.diagnostics);
+    // Only manual feedback, which the user previews, may carry the job flow's [岗位] (#301).
+    const details = core.diagnostics(input.diagnostics, { manual: kind === 'manual' });
     const description = kind === 'manual' ? core.redact(input.description, 1400) : kind === 'exception' ? `${errorType}: ${input.source === 'unhandledrejection' ? '未处理的 Promise 拒绝' : '未处理的代码异常'}` : '';
     // Diagnostics block v1. Only the worker writes [来源]; core.diagnostics() drops it from page input.
-    const source = ['[来源]', `app_version: ${version}`, `os: ${os}`, ...(host ? [`host: ${host}`] : [])].join('\n');
+    const source = ['[来源]', `app_version: ${version}`, `os: ${os}`, ...(installType ? [`install: ${installType}`] : []),
+      ...(host ? [`host: ${host}`] : [])].join('\n');
     return { app: 'resume-form-assistant-plugin', app_version: version, os, error_type: errorType,
       error_stack: stack, user_description: `${description}${description ? '\n' : ''}--- 诊断信息 v1 ---\n${source}${details ? `\n\n${details}` : ''}`.slice(0, 5000),
       anonymous_id: id, timestamp: new Date(now()).toISOString() };
@@ -77,34 +99,58 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
     finally { clearTimeout(timer); active.delete(controller); }
   }
   return {
+    // Settles once the install type is known (or left out); preview() reads it as it stands.
+    ready: () => installKnown,
     status: () => locked(async () => view(await read())),
     setConsent(enabled) {
+      choices += 1;
       stopped = enabled !== true;
       if (stopped) for (const controller of active) controller.abort();
       return locked(async () => {
         const state = await read(); state.consent = enabled === true;
-        state.consentVersion = enabled === true ? CONSENT_VERSION : 0;
+        state.consentVersion = enabled === true ? CONSENT_VERSION : 0; delete state.renewed;
         state.anonymousId = enabled === true ? state.anonymousId || uuid() : null;
         await save(state); return view(state);
       });
     },
     preview(input, host = '') { return build({ ...input, kind: 'manual' }, host, uuid()); },
     async automatic(input, host = '') {
-      const payload = await locked(async () => {
+      // Manual feedback goes through its own preview; nothing sent automatically is one (#301 [岗位]).
+      if (input?.kind === 'manual') return { ok: false, reason: 'suppressed' };
+      const choice = choices;
+      await installKnown;
+      const prepared = await locked(async () => {
         const state = await read(); const time = now();
-        if (state.consent !== true || stopped || time < state.backoff) return null;
+        if (state.consent !== true || stopped || choice !== choices || time < state.backoff) return null;
         const body = build(input, host, state.anonymousId || uuid());
-        const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
+        // A failed AI request (timeout or service error, #301 U1) with no field left unfilled has its own
+        // daily slot per site, so it never holds back that day's report of fields the site did not take.
+        // One that also lists unfilled fields is such a report and takes the usual slot.
+        const aiFailed = /^error_category: (?:timeout|service_error)$/m.test(body.user_description)
+          && !/^\[未填字段\]$/m.test(body.user_description);
+        const signature = input.kind?.startsWith('fill_') ? `${body.error_type}|${host}${aiFailed ? '|ai' : ''}` : `${body.error_type}|${body.user_description.split('\n')[0]}|${body.error_stack.split('\n')[0]}`;
         const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signature)))].map(x => x.toString(16).padStart(2, '0')).join('');
         state.hourly = state.hourly.filter(t => time - t < HOUR);
         state.fillHourly = state.fillHourly.filter(t => time - t < HOUR);
         state.recent = Object.fromEntries(Object.entries(state.recent).filter(([, t]) => time - t < DAY));
-        const [sent, limit] = body.error_type.startsWith('fill_') ? [state.fillHourly, FILLS_PER_HOUR] : [state.hourly, ERRORS_PER_HOUR];
+        const slots = body.error_type.startsWith('fill_') ? 'fillHourly' : 'hourly';
+        const [sent, limit] = [state[slots], slots === 'fillHourly' ? FILLS_PER_HOUR : ERRORS_PER_HOUR];
         if (sent.length >= limit || state.recent[hash] !== undefined) return null;
         state.anonymousId = body.anonymous_id; sent.push(time); state.recent[hash] = time;
-        await save(state); return body;
+        await save(state); return { body, hash, time, slots };
       });
-      return payload ? transmit(payload, true) : { ok: false, reason: 'suppressed' };
+      if (!prepared) return { ok: false, reason: 'suppressed' };
+      if (choice === choices) return transmit(prepared.body, true);
+      // Turned off and on again while the report was being written down: it still belongs to the earlier
+      // choice. It was never sent, so it gives back its daily and hourly slots.
+      await locked(async () => {
+        const state = await read();
+        if (state.recent[prepared.hash] === prepared.time) delete state.recent[prepared.hash];
+        const at = state[prepared.slots].indexOf(prepared.time);
+        if (at >= 0) state[prepared.slots].splice(at, 1);
+        await save(state);
+      }).catch(() => {});
+      return { ok: false, reason: 'suppressed' };
     },
     async manual(input, host = '', previewed = null) {
       const payload = await locked(async () => {
@@ -120,7 +166,9 @@ export function createFeedback({ storage, fetchImpl = fetch, now = Date.now, uui
 
 export function installFeedback(api) {
   const origin = api.runtime.getURL('');
-  const service = createFeedback({ storage: api.storage.local, version: api.runtime.getManifest().version, os: core.os(navigator.userAgent) });
+  // Without the API (or when it fails) the [来源] section simply has no install line.
+  const install = async () => (await api.management?.getSelf?.())?.installType;
+  const service = createFeedback({ storage: api.storage.local, version: api.runtime.getManifest().version, os: core.os(navigator.userAgent), install });
   const trustedPages = new Set(['sidepanel.html', 'popup.html'].map(p => api.runtime.getURL(p)));
   // Each preview is held only in worker memory, bound to the requesting document. Sending
   // consumes it; switching tabs or editing the draft requires a new visible preview.
@@ -141,7 +189,7 @@ export function installFeedback(api) {
       if (message.type === 'FEEDBACK_STATUS') return service.status();
       if (message.type === 'FEEDBACK_CONSENT') return service.setConsent(message.enabled === true);
       if (message.type === 'FEEDBACK_PREVIEW') {
-        const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics) };
+        const input = { description: core.redact(message.description, 1400), diagnostics: core.diagnostics(message.diagnostics, { manual: true }) };
         let host = '';
         if (Number.isInteger(message.tabId)) {
           const tab = await api.tabs.get(message.tabId).catch(() => null); host = core.hostname(tab?.url);
@@ -149,6 +197,7 @@ export function installFeedback(api) {
         const token = crypto.randomUUID();
         for (const [key, item] of previews) if (Date.now() - item.time > 600000 || item.owner === owner) previews.delete(key);
         if (previews.size >= 20) previews.delete(previews.keys().next().value);
+        await service.ready();
         const payload = service.preview(input, host);
         previews.set(token, { payload, owner, time: Date.now() });
         return { ok: true, token, payload };

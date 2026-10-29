@@ -165,6 +165,26 @@ test("a field whose title binding went stale during matching is not written", as
   assert.match(ui.parts["#resume-pro-status"].textContent, /1 项没填上：姓名（页面已变化）/);
 });
 
+test("the report row of a field whose binding went stale carries its reason code", async () => {
+  // #301 智齐家：这一行原来只有中文原因，诊断里没有 reason=。
+  const late = lateScanner(); const sent = [];
+  const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy, feedback: require("../feedback-core.js"),
+    fillProbe: { ...require("../fill-probe.js"), probePage: () => ({ host: "jobs.example.test", frames: { total: 0, crossOrigin: 0, frameInputs: 0 },
+      custom: { total: 0, byLibrary: {} }, editButtons: 0, locked: 0, shadowHosts: 0, elements: 40 }) },
+    sendMessage: async (message) => { sent.push(message);
+      return message.type === "AI_FILL" ? { success: true, matches: [{ fieldId: "field-0", value: "测试用户" }, { fieldId: "field-1", value: "测试用户" }] } : { ok: true }; } });
+  const [moved, kept] = [0, 1].map(() => new ctx.HTMLInputElement());
+  late.holder.current = scanWith([control(moved, { label: "姓名" }), control(kept, { label: "姓名拼音" })], new Set([moved]));
+  ctx.helpers.setShadowRoot(shadow().root);
+  ctx.helpers.setCurrentStore(store);
+
+  await ctx.helpers.handleAiFillClick({ currentTarget: { disabled: false, textContent: "" } });
+
+  const report = sent.find((message) => message.type === "FEEDBACK_AUTO")?.report;
+  assert.ok(report, "the partial fill is reported");
+  assert.match(report.diagnostics, /^- （字段名已隐藏）: input\[text\] reason=element_disconnected$/m);
+});
+
 test("saving to 我的信息 re-checks the binding: a control that moved since the scan is reported, kept as a candidate, and never written", async () => {
   const late = lateScanner();
   const ctx = loadHighlightHelpers({ formElements: [], fieldScan: late.proxy });

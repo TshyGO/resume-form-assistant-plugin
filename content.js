@@ -1,6 +1,12 @@
 (function () {
-  self.ResumeProFeedback?.install(report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report }),
-    { origin: chrome.runtime.getURL(""), requireOwn: true });
+  // Runs once per page, even if this script runs twice in the same world: a second run would add
+  // a second message listener and second error handlers. The mark is a symbol on this world's
+  // global, so no element on the page can stand in for it.
+  const loaded = Symbol.for("resumePro.content");
+  if (self[loaded]) return;
+  self[loaded] = true;
+  const sendFeedback = report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report });
+  self.ResumeProFeedback?.install(sendFeedback, { origin: chrome.runtime.getURL(""), requireOwn: true });
   const SIDEBAR_ID = "resume-pro-sidebar";
   const SIDEBAR_PANEL_ID = "resume-pro-sidebar-panel";
   const SIDEBAR_DEFAULT_TOP = 96;
@@ -74,14 +80,29 @@
     ambiguous_popup: "无法确定控件弹层",
     cascade_timeout: "等待下一级选项超时",
     cascade_parent_failed: "上一级选择失败",
+    cascade_unsupported: "两级选择暂不支持",
     control_disabled: "字段不可操作",
     invalid_date: "日期格式或范围不符",
     operation_failed: "控件操作失败",
     cancelled: "填写已停止"
   };
   let shadowRoot = null;
+  // idle → running → ready or failed; unsupported on a page that cannot hold the controller.
+  // The side panel counts the page as connected only once startup is ready.
+  let startupState = "idle";
+  // The host this startup built, so a startup that fails after building it can hide it.
+  let startupHost = null;
+  // Desktop data this page cannot read fails again on every read; it is reported once per page.
+  let unreadableReported = false;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
+  // 侧栏的「一键填写」正在点页面里的填写按钮（#301 诊断记录填写从哪里开始）：只在 click() 同步派发期间为真。
+  let panelFillStarting = false;
+  // 最近一次「保存岗位到桌面端」的过程（#301），只给手动反馈的 [岗位]：只有固定的词，不记公司、岗位、网页文字或网址。
+  // 单独的变量：idlePanelJob、idlePanelSubmit 会把 panelJob、panelSubmit 整个换掉。「确认已投递」核对出的那一份
+  // 只在它转去保存岗位时接着用。
+  let jobTrace = null;
+  let submitJobTrace = null;
   // Archiving a finished fill from the native side panel (#178). Declared up here because the
   // side panel's status message can arrive before the rest of this script has run.
   let panelFill = null;
@@ -130,7 +151,7 @@
       dropStalePanelSubmit();
       const jobSave = panelJobSnapshot();
       sendResponse({
-        ready: Boolean(button),
+        ready: Boolean(button) && startupState === "ready",
         // `disabled` also covers the controller's pre-read state. Treating that as
         // "busy" deadlocks the native side panel: it cannot send the fill command
         // which performs the desktop reread below. Only an active AI run is busy.
@@ -150,7 +171,8 @@
         diagnostics: diagnosticsPanel && !diagnosticsPanel.hidden
           ? diagnosticsPanel.querySelector("#resume-pro-diagnostics-text")?.value || "" : "",
         // 手动反馈附上的诊断（#215 v1）：只含结构和计数，后台还会再按白名单过滤一遍。
-        diagnosticsReport: diagnosticsPanel && !diagnosticsPanel.hidden ? lastFillReport : "",
+        // 这个标签页做过「保存岗位到桌面端」时再附上 [岗位]（#301），只有固定的词；自动报告不带它。
+        diagnosticsReport: [diagnosticsPanel && !diagnosticsPanel.hidden ? lastFillReport : "", jobTraceReport()].filter(Boolean).join("\n\n"),
         // Job recognition runs in the page's controls; the side panel shows it and can cancel it.
         jobAssist: jobAssist && !jobAssist.hidden
           ? { fragments: jobAssist.querySelectorAll("#resume-pro-job-assist-fragments li").length } : null,
@@ -192,7 +214,8 @@
           sendResponse(started.ok ? { ok: true } : { ok: false, error: started.error });
           return;
         }
-        button.click();
+        panelFillStarting = true;
+        try { button.click(); } finally { panelFillStarting = false; }
         sendResponse({ ok: true });
       }).catch(() => sendResponse({ ok: false, error: "桌面简历当前不可用。" }));
       return true;
@@ -351,12 +374,30 @@
 
   const StorageService = {
     async getState() {
+      let result;
       try {
-        const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
-        state.desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
-        return result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+        result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
       } catch {
+        // No answer at all: the worker, or its link to the desktop, is not there.
         state.desktopMode = "unavailable";
+        return null;
+      }
+      if (result?.status !== "ok") {
+        state.desktopMode = result?.status || "unavailable";
+        return null;
+      }
+      try {
+        const store = self.ResumeProResumeData.normalize(result.data);
+        state.desktopMode = "ready";
+        return store;
+      } catch (error) {
+        // The desktop answered with data this page cannot read. That is an error to report,
+        // not a desktop that is not running.
+        state.desktopMode = "unreadable";
+        if (!unreadableReported) {
+          unreadableReported = true;
+          reportError(error);
+        }
         return null;
       }
     },
@@ -383,29 +424,83 @@
   bindSubmitSync();
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener("DOMContentLoaded", startUp, { once: true });
   } else {
-    init();
+    startUp();
+  }
+
+  function startUp() {
+    if (!pageCanHostController()) {
+      startupState = "unsupported";
+      return;
+    }
+    startupState = "running";
+    // init() is async: whatever fails in it ends up here, never as an unhandled rejection.
+    init().then(() => { startupState = "ready"; }, (error) => {
+      startupState = "failed";
+      // A half-built controller must not stay usable on a page that shows as not connected.
+      // init() returns early when the page already had the id, so an element with it here was
+      // put in by this startup, even when createSidebar threw before handing it back.
+      const host = startupHost || document.getElementById(SIDEBAR_ID);
+      if (host) host.style.display = "none";
+      reportError(error, "unhandledrejection");
+    });
+  }
+
+  // XML, RSS and SVG pages, and XHTML served as XML, give no HTML elements to build the
+  // controller from (#296). Nothing is built there and nothing is reported.
+  function pageCanHostController() {
+    try {
+      return document instanceof HTMLDocument && document.createElement("div") instanceof HTMLElement;
+    } catch {
+      return false;
+    }
+  }
+
+  // Sent the way the global handlers send an error, once. A failed init keeps the source
+  // "unhandledrejection", which is what it was before it had a boundary.
+  function reportError(error, source = "error") {
+    try {
+      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), source);
+      if (report?.stack) Promise.resolve(sendFeedback(report)).catch(() => {});
+    } catch { /* no recursive reporting */ }
   }
 
   async function init() {
     if (document.getElementById(SIDEBAR_ID)) {
       return;
     }
+    // Every helper this script calls must have loaded. A page element or frame named "module"
+    // once kept one from loading (#275), and the page then must not show as connected.
+    const helpers = ["ResumeProFeedback", "ResumeProAIClient", "ResumeProAIHelpers", "ResumeProCustomControls",
+      "ResumeProControls", "ResumeProProfile", "ResumeProResumeData", "ResumeProFormAgent", "ResumeProFillProbe",
+      "ResumeProFieldScan", "ResumeProPageOutline", "ResumeProDeepAnalysis", "ResumeProPageActions",
+      "ResumeProPageRecipe", "ResumeProSidebarState"];
+    const missing = helpers.find((name) => !self[name]);
+    if (missing) throw new TypeError(`${missing} is not loaded`);
 
     // No desktop read here. This script runs on every page, and each read starts the
     // native host (and cold-starts the desktop app). The data is read when the in-page
     // panel is actually shown, or when the user starts an action.
-    state.sidebarUiState = await StorageService.getSidebarUiState();
-    state.sidebarUiState = self.ResumeProSidebarState.normalize(state.sidebarUiState);
-    const cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => r.text());
+    // The controller starts in the default place and takes the saved one once it has been
+    // read, so a slow or stuck storage read cannot hold up the page.
+    StorageService.getSidebarUiState().then(applyStoredSidebarUiState).catch(() => {});
+    // Without content.css nothing in the shadow root is hidden or styled, so the whole host
+    // is hidden instead (#256). The controller still mounts and the page stays usable.
+    let cssText = await fetch(chrome.runtime.getURL("content.css")).then((r) => (r.ok ? r.text() : null)).catch(() => null);
     const sheet = new CSSStyleSheet();
-    sheet.replaceSync(cssText);
+    try {
+      sheet.replaceSync(cssText ?? "");
+    } catch {
+      cssText = null;
+    }
     injectFieldHighlightStyles();
     // Chrome and Edge 116+ own the visible UI in the native side panel.
     // Background opens the manager tab if that API is unavailable.
     state.nativeSidePanel = true;
-    createSidebar(sheet);
+    const host = createSidebar(sheet);
+    startupHost = host;
+    if (cssText === null) host.style.display = "none";
     renderSidebar();
     bindStorageSync();
     document.addEventListener("visibilitychange", () => {
@@ -573,6 +668,7 @@
     `;
     shadowRoot.appendChild(chipActions);
     bindSidebarEvents(sidebar);
+    return host;
   }
 
   function bindSidebarEvents(sidebar) {
@@ -2261,6 +2357,10 @@
   // fields 为 null 表示配方没能用上，照常扫描。普通一键填写（deep 为空）本站有配方时也先按配方定位。
   async function handleAiFillClick(event, assisted = null, deep = null) {
     const button = event.currentTarget;
+    // #301 诊断：这次填写从哪里开始，开始时网页有没有焦点（点侧栏时网页失焦，有的下拉、日历要焦点才弹出）。
+    // 要在第一个 await 之前读：侧栏的标记只在 click() 同步派发期间有效。
+    const entry = assisted ? "assist" : deep ? (deep.mode === "recipe" ? "recipe" : "deep") : panelFillStarting ? "panel" : "other";
+    const pageFocused = typeof document.hasFocus === "function" ? document.hasFocus() : null;
     const failed = error => ({ outcome: "failed", filledCount: 0, unconfirmedCount: 0, error });
     if (button.disabled || state.aiBusy) return failed("busy");
     const report = assisted?.quiet ? () => {} : showStatus;
@@ -2302,9 +2402,15 @@
     let filledCount = 0;
     let unconfirmedCount = 0;
     const verifiedControls = [];
+    // 写上了、页面当时还提示无效的字段：提示可能要等后面的字段填完才消（北森开始 / 结束时间联动校验），结束前再看一次。
+    const invalidControls = [];
     let recheckVerifiedControls = () => {};
     const unfilledLabels = [];
     const unfilledControls = [];
+    // #301 选完后新出现的字段（#269）和首轮字段一样计入结果、诊断和留档；进诊断的只有计数。
+    // pendingNew 是排队等 AI 补填的新字段，没轮到补填就结束的算没送 AI。
+    const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, aiCalled: false, errorCode: "", drops: {} };
+    const pendingNew = [];
     let probe = null;
     // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
     const readyAtScan = document.readyState === "complete";
@@ -2318,14 +2424,19 @@
     let pageType = null;
     let scanPath = location.pathname;
     let scannedCustom = 0;
+    // #301 扫描在通用路径上认出、页面探测没数到的自定义下拉（北森）：只进诊断的 custom_controls，不改深度分析入口的判断。
+    let genericCustom = 0;
+    let genericLocked = 0;
     // #226 本站配方这次用没用上：只有固定状态码和计数。
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
-    const viewModeHint = () => !assisted && filledCount === 0 && probe?.editButtons > 0
+    // 只在什么都没匹配上、AI 也没出错时这样说：AI 超时、匹配到了却写不上（#299）都不是查看状态。
+    const viewModeHint = () => !assisted && filledCount === 0 && !matched && probe?.editButtons > 0
+      && ["none", "no_context"].includes(diagnostics.errorCode || "none")
       ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
-    // 失败信息里带了「先点编辑」这类提示：要一直留在屏幕上，不像别的失败几秒后消失。
+    // 失败信息里带了「先点编辑」这类提示，或是扫描到 0 个字段：要一直留在屏幕上，不像别的失败几秒后消失。
     let hinted = false;
     const requestId = newRequestId();
     const cancelButton = shadowRoot?.querySelector("#resume-pro-cancel-fill");
@@ -2348,29 +2459,56 @@
         scanned = found.scanned;
         recipeUse = found.recipe;
       }
-      const fieldMap = scanned.fieldMap;
-      const fields = assisted ? scanned.fields.filter(field => {
+      let fieldMap = scanned.fieldMap;
+      let fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
         return entry?.kind === "element" && isAssistedTextField(entry) && assisted.scopes.some(scope => scope.contains(entry.element)) && !hasExistingValue(entry);
       }) : scanned.fields;
-      fieldCount = fields.length;
-      scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
       timing.scanMs = performance.now() - phaseStart;
       phase = null;
       scanDone = true;
-      // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
-      scanPath = location.pathname;
-      stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
-      // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
-      probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
-      pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      const describeScan = () => {
+        fieldCount = fields.length;
+        scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
+        // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
+        scanPath = location.pathname;
+        stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
+        // 探测放在扫描计时之后：诊断里的「扫描」耗时不含探测。
+        probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+        pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+        // 通用下拉的根只给诊断计数用：读控件出错就不数，填写照常。
+        let genericRoots = [];
+        try {
+          genericRoots = fields
+            .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
+            .map(field => { try { return self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)); } catch { return null; } })
+            .filter(info => info?.library === "generic").map(info => info.root);
+        } catch { genericRoots = []; }
+        genericCustom = withFillProbe(api => api.uncountedControls?.(genericRoots), 0);
+        genericLocked = withFillProbe(api => api.uncountedLocked?.(genericRoots), 0);
+      };
+      describeScan();
+      // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
+      // 等网页上出现新的输入控件再扫，扫到就用这次的结果；辅助新增、深度填写和按本站配方的填写不等。
+      if (!fields.length && !assisted && !deep && (!recipeUse || recipeUse.status === "unused") && probe
+        && pageType?.type === "application_form" && !withFillProbe(api => api.hasClues(probe), true)) {
+        button.textContent = "正在等待网页加载...";
+        const later = await waitForNewControls(fillUrl, scanFillableFields);
+        if (later) {
+          scanned = later;
+          fieldMap = scanned.fieldMap;
+          fields = scanned.fields;
+          describeScan();
+        }
+      }
       if (!fields.length) {
         // 辅助新增只是过滤后为空（页面本身有字段），或本来就在辅助新增：不给「先点编辑」这类提示。
-        const hint = !assisted && !scanned.fields.length
-          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown",
+        // 其余零字段的提示按页面类型给，一律留在屏幕上（#301）。
+        hinted = !assisted && !scanned.fields.length;
+        const hint = hinted
+          ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown", form: pageType?.type === "application_form",
             deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
-        hinted = Boolean(hint);
-        throw new Error(`当前页面没有可填写的表单字段。${hint}`);
+        throw new Error(`没找到可填写的输入框。${hint}`);
       }
       if (!assisted) closeProfileOffer();
       // 模板字段在前并且优先；「我的信息」只补模板里没有的字段名。
@@ -2422,7 +2560,7 @@
         button.textContent = `AI 匹配中... ${seconds}s`;
         if (seconds >= 90 && waitHint && !cancelRequested) {
           waitHint.hidden = false;
-          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。插件不会因等待较久自动取消；你可以继续等待或手动取消。";
+          waitHint.textContent = "AI 匹配尚未返回，等待通常与上游模型处理、中转服务或网络有关，输入量也会影响耗时。你可以继续等待或手动取消。";
         }
       };
       updateProgress();
@@ -2518,8 +2656,11 @@
         const overlaps = Boolean(shownValue && shownLabel) && (shownLabel === shownValue
           || (shownValue.length >= 2 && (shownLabel.includes(shownValue) || shownValue.includes(shownLabel))));
         const showsResume = Boolean(shownLabel) && resumeValues.some(value => shownLabel.includes(value));
+        // #301 本次填写操作过的下拉：弹层有没有出来、里面有没有选项。没操作过的（上一级没选上）不带。
+        const popup = controlPopups.get(control);
         unfilledControls.push({ label: overlaps || showsResume ? '（字段名已隐藏）' : label, reason: why,
           reasonCode: reason, control: withFillProbe(api => api.describeControl(element), null),
+          ...(popup && popup.session === session ? { observed: { opened: popup.opened, hasOptions: popup.hasOptions } } : {}),
           // 深度填写：插件实际按哪种控件去操作的（说明书给的类型经 DOM 校正后），分清是类型判错还是组件打不开。
           ...(element.deepRef ? { operated: element.controlKind } : {}) });
       };
@@ -2538,21 +2679,53 @@
           }
           if (checked && !checked.ok) {
             filledCount -= 1;
+            if (item.isNew) supplemented -= 1;
             noteControlFailure(item.element, item.fieldMeta, item.value, checked.reason);
+          }
+        }
+        // 当时还提示无效的：提示已经消了就算填上；提示还在照旧记「页面仍提示无效」，值被页面退回的记复核读到的原因，
+        // 字段已被页面替换的记「字段已被页面替换」。
+        // 只读：不写值、不聚焦，也不滚动页面。
+        for (const item of invalidControls) {
+          const current = isFieldBindingCurrent(item.element);
+          const checked = current ? controlOperator?.check(item.element) : null;
+          if (!checked?.ok) {
+            noteControlFailure(item.element, item.fieldMeta, item.value, current ? checked?.reason || 'validation_not_cleared' : 'element_disconnected');
+            continue;
+          }
+          const control = item.element.kind === 'element' ? item.element.element : item.element;
+          filledCount += 1;
+          if (item.isNew) supplemented += 1;
+          if (item.element.kind === 'element' && dayDefaultedControls.has(control)) dayDefaulted += 1;
+          textFillFailures.delete(control);
+          if (item.element.kind === 'element' && !item.element.pickerType && !['custom-select', 'cascader'].includes(item.element.controlKind)) {
+            recordFilledTextControl(session, control);
           }
         }
       };
       const isCurrent = () => !writeCancelled && !assisted?.stopped?.() && !deep?.stopped?.()
         && location.href === fillUrl && session === fillSession;
+      // 停下来时说清楚是用户按了停止，还是页面或填写会话变了。
+      const stopError = () => {
+        cancelRequested = true;
+        return new Error(writeCancelled ? '已停止后续填写，请核对网页中已填写的内容。' : '已停止填写，页面或填写会话已变化。');
+      };
       const failedCascadeGroups = new Set();
       // #269 选了某项后页面才出现的字段（智联选完学历多出专业、院系）：选完等页面安静再扫一次，
       // 新出现的空字段先在本地匹配、当场排进这一轮；本地匹配不上的，这一轮结束后交给 AI 补填，最多补 2 次。
       const queue = sortedMatches.slice();
-      const pendingNew = [];
       const newFieldIds = new Set();
       let catchUpRounds = 0;
       let supplemented = 0;
       let dayDefaulted = 0;
+      // #301 新字段的去向：「加到我的信息」看 grownFields 和 grownMatchedIds；补填失败或没发出的进 grownMissed，
+      // 状态行请用户自己补，并附上补填请求的警告。
+      const grownFields = [];
+      const grownMatchedIds = new Set();
+      const grownMissed = [];
+      let grownWarning = "";
+      // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。
+      const aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
       const pickUpNewFields = async (position) => {
         await waitForPageSettle();
         if (!isCurrent()) return;
@@ -2584,6 +2757,8 @@
           fieldMetaMap.set(fieldId, field);
           approvedValues.set(entry, fillValueSnapshot(entry));
         }
+        grown.found += added.length;
+        grownFields.push(...added);
         const helpers = self.ResumeProAIHelpers;
         const local = helpers?.buildRuleBasedMatches
           ? helpers.filterValidMatches(added, helpers.buildRuleBasedMatches(added, resumeFields)) : [];
@@ -2596,14 +2771,49 @@
           if (same.length === 1) local.push(...(helpers?.filterValidMatches ? helpers.filterValidMatches([field], [{ fieldId: field.fieldId, value: same[0].value }]) : []));
         }
         const localIds = new Set(local.map(match => match.fieldId));
+        grown.local += localIds.size;
+        grown.matched += localIds.size;
+        localIds.forEach(id => grownMatchedIds.add(id));
         pendingNew.push(...added.filter(field => !localIds.has(field.fieldId)));
         const order = match => fieldMap.get(match.fieldId)?.element || fieldMap.get(match.fieldId)?.elements?.[0];
         local.sort((a, b) => (order(a)?.compareDocumentPosition?.(order(b)) & 4) ? -1 : 1);
         queue.splice(position + 1, 0, ...local);
       };
+      // 一次补填请求的结果记账。没拿到值的新字段按首轮的口径分（feedback-core 的 fillDrops）：
+      // 像密码的不发，太大的没送 AI，AI 看过没给值的算 AI 未匹配，只有请求本身失败才算没拿到结果。
+      const noteCatchUp = (batch, reply, more) => {
+        const answered = new Set(more.map(match => match.fieldId));
+        answered.forEach(id => grownMatchedIds.add(id));
+        grown.matched += answered.size;
+        const d = reply?.diagnostics || {};
+        const counted = value => Number.isInteger(value) && value > 0 ? value : 0;
+        grown.local += counted(d.ruleMatches);
+        grown.aiFields += counted(d.aiFields);
+        grown.aiMatches += counted(d.aiMatches);
+        try {
+          if (self.ResumeProFeedback?.aiCalled?.({ diagnostics: reply?.diagnostics, requested: true }) === true) grown.aiCalled = true;
+        } catch { /* diagnostics are optional; never break the fill */ }
+        let dropped = [];
+        try {
+          dropped = self.ResumeProFeedback?.fillDrops?.({ fieldCount: batch.length, diagnostics: reply?.diagnostics, requested: true }) || [];
+        } catch { /* diagnostics are optional; never break the fill */ }
+        for (const [key, value] of dropped) grown.drops[key] = (grown.drops[key] || 0) + value;
+        // 请求失败或没发出去的：要用户自己补，错误码和警告说明原因。
+        if (dropped.some(([key]) => key === "no_result" || key === "not_sent")) {
+          grownMissed.push(...batch.filter(field => !answered.has(field.fieldId)));
+          if (typeof d.errorCode === "string" && d.errorCode !== "none") {
+            // 留先到的错误码；前一轮只是没资料或太大没送、这一轮请求失败了，换成失败的。
+            let code = grown.errorCode || d.errorCode;
+            try { code = self.ResumeProFeedback?.shownCode?.(grown.errorCode, d.errorCode) || code; } catch { /* diagnostics are optional; never break the fill */ }
+            grown.errorCode = code;
+          }
+          if (!grownWarning && typeof reply?.warning === "string") grownWarning = reply.warning;
+        }
+      };
       for (let position = 0; ; position++) {
         if (position >= queue.length) {
-          if (assisted || deep || !pendingNew.length || catchUpRounds >= 2 || !isCurrent()) break;
+          // 停下来的、两轮补填用完的、首轮 AI 已经失败的：排队的新字段不再发出，循环后统一收尾。
+          if (assisted || deep || !pendingNew.length || !isCurrent() || catchUpRounds >= 2 || aiDown) break;
           catchUpRounds += 1;
           const batch = pendingNew.splice(0);
           button.textContent = "正在补填新出现的字段...";
@@ -2616,14 +2826,16 @@
           }
           catchUpRequestId = null;
           button.textContent = "正在填写网页...";
-          if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
+          // 等补填时按了停止或换了页：这一批的结果不用，算没送 AI。
+          if (!isCurrent()) { pendingNew.push(...batch); break; }
           const ids = new Set(batch.map(field => field.fieldId));
           const more = reply?.success && Array.isArray(reply.matches) ? reply.matches.filter(match => ids.has(match.fieldId)) : [];
+          noteCatchUp(batch, reply, more);
           if (!more.length) break;
           queue.push(...more);
         }
         const match = queue[position];
-        if (!isCurrent()) { cancelRequested = true; throw new Error('已停止填写，页面或填写会话已变化。'); }
+        if (!isCurrent()) throw stopError();
         if (assisted?.stopped?.()) throw new Error("已停止辅助填写。");
         if (assisted && JSON.stringify(getActiveTemplate(state.currentStore)) !== activeTemplateFingerprint) throw new Error("模板已变化，已停止辅助填写，请核对网页。");
         let element = fieldMap.get(match.fieldId);
@@ -2648,7 +2860,7 @@
           } else {
             const staleMeta = fieldMetaMap.get(match.fieldId);
             unfilledLabels.push(`${staleMeta?.label || staleMeta?.placeholder || staleMeta?.name || "未命名字段"}（页面已变化）`);
-            unfilledControls.push({ label: "（字段名已隐藏）", reason: "页面已变化",
+            unfilledControls.push({ label: "（字段名已隐藏）", reason: "页面已变化", reasonCode: "element_disconnected",
               control: withFillProbe(api => api.describeControl(element), null) });
           }
           continue;
@@ -2684,6 +2896,16 @@
             ? "字段内容已变化，已停止后续填写并保留现有内容，请核对网页。"
             : "已停止填写，请核对网页。");
         };
+        // #301 Moka 起止时间：选了年，页面会把同一对里还空着的月带成 1。只看只装着这两个字段的那一层里排在后面的另一半，
+        // 它从批准起没变、还空着；选完后它变了，就按页面带出的值重新批准，不当成用户改的。
+        const choice = entry => CHOICE_CONTROL_KINDS.has(entry.kind === "radio" ? "radio" : entry.controlKind);
+        const pair = element.binding?.item?.parentElement;
+        const inPair = entry => { const node = entry.kind === "radio" ? entry.elements?.[0] : entry.element; return Boolean(node) && pair.contains(node); };
+        const partner = !assisted && !deep && pair && choice(element) && [...new Set(fieldMap.values())].filter(inPair).length === 2
+          ? queue.slice(position + 1).map(next => fieldMap.get(next.fieldId)).find(other => other && other !== element && choice(other)
+            && other.binding?.item?.parentElement === pair && fillValueSnapshot(other) === approvedValues.get(other) && !hasExistingValue(other))
+          : null;
+        const partnerBefore = partner ? fillValueSnapshot(partner) : null;
         let filled = await setElementValue(element, match.value, beforeWrite, controlCurrent, onWrite);
         stopInterruptedControl();
         // 选完页面立刻重画（智联学位）：旧字段已经不在了，看找回的新字段——
@@ -2710,10 +2932,10 @@
         if (assisted && filled) {
           await new Promise(resolve => window.setTimeout(resolve, 50));
           // 日期控件显示的是组件自己的格式（猎聘是「1998年06月」）：交给控件层按面板精度复核，不逐字比较（#236）。
-          // 节点被页面替换的，两种都算未确认。
+          // 手机号框自己加了空格、短横的按数字比（#229）。节点被页面替换的，都算未确认。
           filled = element.element.isConnected && (element.pickerType
             ? Boolean(controlOperator?.check(element)?.ok)
-            : String(element.element.value ?? "") === normalizeExpectedTextValue(element.element, match.value));
+            : sameTextValue(element.element, String(element.element.value ?? ""), normalizeExpectedTextValue(element.element, match.value)));
         }
 
         // 联动下拉的选项是上一级选完才异步加载的。没被识别成联动组、但除了「请选择」还没有选项的下拉框
@@ -2732,13 +2954,16 @@
           filledCount += 1;
           if (newFieldIds.has(match.fieldId)) supplemented += 1;
           if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element) });
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId) });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
           }
         } else {
-          noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
+          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+            invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
+          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
@@ -2753,21 +2978,36 @@
 
         if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
           await pickUpNewFields(position);
+          const partnerNow = partner ? fillValueSnapshot(partner) : null;
+          if (partnerNow !== null && partnerNow !== partnerBefore) approvedValues.set(partner, partnerNow);
         }
       }
-
+      // 最后一次选择后等页面安静、重扫时按了停止，也不算正常结束（#301），有没有待补的新字段都一样。
+      if (!assisted && !deep && !isCurrent()) throw stopError();
       await finalSyncFillSession(session);
+      // 最后同步要等文字提交，这时按的停止也一样。
+      if (!assisted && !deep && !isCurrent()) throw stopError();
+      // 两轮补填用完或首轮 AI 已经失败，还在排队的新字段也要用户自己补。
+      grownMissed.push(...pendingNew);
+
       // A later control's focus can roll back an earlier picker. Re-read the final
       // state before counting success; verification never writes or retries.
       recheckVerifiedControls();
       stage = null;
 
-      outcome = response.warning || unconfirmedCount || unfilledLabels.length ? "partial" : "success";
+      // 只提还在网页上的新字段（页面重画过的按题目找回）。
+      const grownLeft = grownMissed.filter(field => {
+        const entry = fieldMap.get(field.fieldId);
+        return isFieldBindingCurrent(entry) || Boolean(rebindFieldEntry(entry));
+      });
+      outcome = response.warning || unconfirmedCount || unfilledLabels.length || grownLeft.length ? "partial" : "success";
       const supplementNote = (supplemented ? `（其中新出现的字段补填 ${supplemented} 项）` : "")
         + (dayDefaulted ? `（${dayDefaulted} 项日期资料里只有年月，已按 1 日填写）` : "");
       const unfilledNote = (unfilledLabels.length
         ? `${unfilledLabels.length} 项没填上：${summarizeLabels(unfilledLabels)}，请手动补上。` : '')
-        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '');
+        + (unconfirmedCount ? `${unconfirmedCount} 项未确认，请核对网页。` : '')
+        + (grownLeft.length ? `新出现的 ${grownLeft.length} 项没有补填：${summarizeLabels(grownLeft.map(field => field.label))}，请手动补上。`
+          + (grownWarning !== response.warning ? grownWarning : '') : '');
       const emptyHint = viewModeHint();
       const recipeLead = !deep && recipeUse?.status === "hit" ? "已按本站配方定位字段。" : "";
       const recipeTail = !deep && recipeUse?.status === "stale" ? "本站配方可能已过期，可以重新深度分析。" : "";
@@ -2791,10 +3031,11 @@
       }
 
       if (!assisted) {
-        const matchedIds = new Set(response.matches.map((match) => match.fieldId));
+        const matchedIds = new Set([...response.matches.map((match) => match.fieldId), ...grownMatchedIds]);
         // 只有对上了题目的字段才问：占位文字、计数器、跨行借来的文字都不会出现在这里。
+        // 选完后新出现的字段和首轮的一样问（#301）。
         const offerStats = {};
-        offerUnansweredFields(fields.flatMap((field) => {
+        offerUnansweredFields([...fields, ...grownFields].flatMap((field) => {
           const entry = fieldMap.get(field.fieldId);
           if (!(entry?.offerable && entry.offerLabel)) return [];
           const control = entry.element || entry.elements?.[0];
@@ -2836,11 +3077,18 @@
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
-      const verdict = fillVerdict({ scanned: scanDone, fieldCount, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
-        failedStage, responded, errorCode: diagnostics.errorCode, matched, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount });
+      // 没轮到补填就结束的新字段（两轮用完、首轮 AI 已经失败、中途停止或出错）算没送 AI。
+      if (pendingNew.length) grown.drops.not_sent = (grown.drops.not_sent || 0) + pendingNew.length;
+      const totalFields = fieldCount + grown.found;
+      const totalMatched = matched === null ? null : matched + grown.matched;
+      // 补填的 AI 请求失败（#301）：首轮没有错误码时，类别和阶段按它算，和诊断里的 error_code 一致。
+      const verdict = fillVerdict({ scanned: scanDone, fieldCount: totalFields, pageType: pageType?.type ?? null, frames: probe?.frames ?? null,
+        failedStage, responded, errorCode: diagnostics.errorCode, catchUpCode: grown.errorCode, matched: totalMatched, filledCount,
+        unfilledCount: unfilledLabels.length, unconfirmedCount });
       const summaryInput = { ...timing, totalMs,
-        fieldCount, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
-        path: scanPath, pageType, readyAtScan, stats, matched, requested, unconfirmedCount, ...verdict,
+        fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
+        path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
+        entry, pageFocused, genericCustom, genericLocked,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -2860,11 +3108,12 @@
       writeFillDiagnostics(reportInput);
       // Feedback cannot delay filling, archiving or releasing the busy state.
       try {
-        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。
+        // 不是网申填写页（page_not_supported）不上报：没有可修的东西。AI 请求失败（首轮或补填，#301）即使都填上了也上报；
+        // 没装桌面端、没配对、没配置模型不算请求失败。
         // 深度填写（#224）和辅助新增一样不自动上报：隐私说明里自动报告只覆盖普通一键填写。
         const kind = self.ResumeProFeedback?.fillFailure({ assisted: Boolean(assisted || deep), cancelled: cancelRequested,
           overwriteDeclined, fieldCount, filledCount, unfilledCount: unfilledLabels.length, unconfirmedCount,
-          editHint: hinted && probe?.editButtons > 0, category: verdict.category });
+          editHint: hinted && probe?.editButtons > 0, category: verdict.category, errorCode: diagnostics.errorCode, catchUpCode: grown.errorCode });
         if (kind) Promise.resolve(chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report: {
           kind, diagnostics: self.ResumeProFeedback.fillReport(reportInput)
         } })).catch(() => {});
@@ -2876,7 +3125,7 @@
       // A page with nothing to fill produced nothing worth archiving.
       if (fieldCount > 0 && (!overwriteDeclined || filledCount > 0)) {
         offerFillRecord({
-          outcome, cancelled: cancelRequested, fieldCount, filledCount, unconfirmedCount,
+          outcome, cancelled: cancelRequested, fieldCount: totalFields, filledCount, unconfirmedCount,
           timing: { scanMs: timing.scanMs, roundTripMs: timing.roundTripMs, fillMs: timing.fillMs, totalMs },
           templateName: activeTemplate?.name,
           endedAt: new Date().toISOString()
@@ -2884,7 +3133,7 @@
       }
     }
     return { outcome, filledCount, unconfirmedCount, unfilledCount: unfilledLabels.length, error: failure, overwriteDeclined,
-      fieldCount, calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+      fieldCount: fieldCount + grown.found, calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
   }
 
   function summarizeLabels(labels, limit = 5) {
@@ -2937,13 +3186,19 @@
     const seconds = (value) => typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} s` : "未执行";
     const count = (value) => Number.isInteger(value) && value >= 0 ? value : missing;
     const d = result.diagnostics;
+    // 选完后新出现的字段（#301）：匹配数加到首轮上；首轮没有错误码，或补填请求失败而首轮没失败时，显示补填的。
+    const g = result.grown || {};
+    const plus = (value, extra) => Number.isInteger(value) && Number.isInteger(extra) && extra > 0 ? value + extra : value;
     const feedback = self.ResumeProFeedback;
     // Explicit allowlist: never copy provider messages, URL, keys or field values.
     const allowedCodes = new Set(["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
       "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
       "secret_only", "no_resume_fields"]);
-    const code = allowedCodes.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode) ? d.errorCode : missing;
+    const errorCode = (() => {
+      try { return feedback?.shownCode?.(d.errorCode, g.errorCode); } catch { return undefined; }
+    })() ?? (d.errorCode === "none" && g.errorCode ? g.errorCode : d.errorCode);
+    const code = allowedCodes.has(errorCode) || /^http_\d{3}$/.test(errorCode) ? errorCode : missing;
     // 提交校验后网页仍把插件填的框标成无效：不能再算「完成」。
     const unsynced = Number.isInteger(result.unsyncedCount) && result.unsyncedCount > 0 ? result.unsyncedCount : 0;
     const outcome = unsynced && result.outcome === "success" ? "partial" : result.outcome;
@@ -2974,8 +3229,8 @@
       ...formatScanStats(result.stats, feedback),
       `网页字段：${count(result.fieldCount)}；成功填写：${count(result.filledCount)}；没填上：${count(result.unfilledCount)}；未确认：${count(result.unconfirmedCount)}`,
       ...(unsynced ? [`页面表单状态未同步：${unsynced}（提交校验后网页仍标为无效，请手动点击这些字段确认）`] : []),
-      `本地匹配：${count(d.ruleMatches)}；AI 匹配：${count(d.aiMatches)}`,
-      `送 AI 字段：${count(d.aiFields)}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
+      `本地匹配：${count(plus(d.ruleMatches, g.local))}；AI 匹配：${count(plus(d.aiMatches, g.aiMatches))}`,
+      `送 AI 字段：${count(plus(d.aiFields, g.aiFields))}；AI：${called === true ? "已调用" : called === false ? "未调用" : "未取得"}；错误码：${code}`,
       // #223：只有这次指定了档位才写，普通一键填写的诊断不变。
       ...(["strong", "default"].includes(d.tierRequested) ? [`模型档位：${d.tierUsed === "strong" ? "强"
         : d.tierUsed === "default" ? (d.tierRequested === "strong" ? "强模型未设置，已退回日常" : "日常") : "未取得"}`] : []),
@@ -3238,6 +3493,58 @@
         if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);
       };
       window.setTimeout(tick, 50);
+    });
+  }
+
+  // #301 零字段时等表单出来：网页上新加了输入框、下拉、可编辑区域或框架，或者含有它们的节点改了样式、class、hidden
+  // （藏着的表单显示出来），之后 300ms 没有再增删节点，就用 rescan 扫一次。扫到字段就结束；扫不到（先出来的是
+  // 页头搜索框、客服框架这类）就接着等，最多等 2s，到上限时还有没扫过的变化就再扫一次。不轮询；插件自己的侧栏不算。
+  // 网址变了（换页、跳到登录页）就不等了，也不扫。没有 MutationObserver 时立即返回。扫到字段时返回那次的扫描结果，否则 null。
+  const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
+  function waitForNewControls(href, rescan, settleMs = 300, maxMs = 2000) {
+    const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
+    const root = document.documentElement;
+    if (!Observer || !root?.nodeType) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let seen = false;
+      let settle = null;
+      let cap = null;
+      const ours = (node) => Boolean(node?.closest?.(`#${SIDEBAR_ID}`));
+      const isControl = (node) => node?.nodeType === 1 && !ours(node)
+        && Boolean(node.matches?.(NEW_CONTROL_SELECTOR) || node.querySelector?.(NEW_CONTROL_SELECTOR));
+      const fresh = (record) => record.type === "attributes" ? isControl(record.target) : Array.from(record.addedNodes || []).some(isControl);
+      const observer = new Observer((records) => {
+        if (location.href !== href) {
+          finish(null);
+          return;
+        }
+        // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
+        if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
+        seen = true;
+        window.clearTimeout(settle);
+        settle = window.setTimeout(() => {
+          const scanned = scan();
+          if (scanned) finish(scanned);
+        }, settleMs);
+      });
+      function scan() {
+        seen = false;
+        if (location.href !== href) return null;
+        try {
+          const scanned = rescan();
+          return scanned?.fields?.length ? scanned : null;
+        } catch {
+          return null;
+        }
+      }
+      function finish(scanned) {
+        observer.disconnect();
+        window.clearTimeout(settle);
+        window.clearTimeout(cap);
+        resolve(location.href === href ? scanned : null);
+      }
+      observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
+      cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
   }
 
@@ -3962,6 +4269,14 @@
     return found;
   }
 
+  // 表单项里只装控件的内容区（北森 .form-item__content、.form-item__control）不是整道题：
+  // 错误提示可能放在内容区外面，要接着往上找到表单项本身。
+  const FORM_ITEM_PART = /(?:form-item|form-group|form-field)__(?:content|control)$/i;
+
+  function formItemTokens(element) {
+    return classText(element).split(/\s+/).filter((token) => /form-item|form-group|form-field/i.test(token));
+  }
+
   function associatedContainer(element) {
     let current = element.parentElement;
     let best = current;
@@ -3971,6 +4286,18 @@
       }
       best = current;
       if (/form-item|form-group|form-field|el-form-item|ant-form-item/i.test(classText(current))) {
+        const items = formItemTokens(current);
+        if (!items.every((token) => FORM_ITEM_PART.test(token))) {
+          return current;
+        }
+        // 内容区（form-item__content 之类）外面那一层就是它的表单项，有的网站把错误提示放在那里。
+        // 只往上看这一层，而且要真是表单项、里面没有别的框，免得把相邻题目的提示算进来。
+        const parent = current.parentElement;
+        const parentItems = parent ? formItemTokens(parent) : [];
+        if (parentItems.length && !parentItems.every((token) => FORM_ITEM_PART.test(token))
+          && listOtherControls(parent, element).length === 0) {
+          return parent;
+        }
         return current;
       }
       current = current.parentElement;
@@ -4016,12 +4343,39 @@
     return /ant-form-item-has-error|(?:^|\s)has-error(?:\s|$)|is-error|is-invalid|Validform_wrong/.test(classText(container));
   }
 
+  // #229 手机号框会自己改格式（138 0013 8000、138-0013-8000、+86 开头）：去掉空格、短横和开头的 +86 / 86 后数字相同，
+  // 就是写上了，不能当成没写上，也不能恢复成写之前的值。
+  const PHONE_HINT = /手机|电话|mobile|phone|(?:^|[^a-z])tel(?:[^a-z]|$)/i;
+
+  function phoneDigits(text) {
+    const digits = String(text ?? "").replace(/[\s-]/g, "").replace(/^\+86/, "").replace(/^86(?=1\d{10}$)/, "");
+    return /^\d+$/.test(digits) ? digits : "";
+  }
+
+  function isPhoneInput(element) {
+    if (!(element instanceof HTMLInputElement)) {
+      return false;
+    }
+    if (String(element.type || "").toLowerCase() === "tel") {
+      return true;
+    }
+    return PHONE_HINT.test(`${controlHintText(element)} ${getFieldLabel(element)}`);
+  }
+
+  function sameTextValue(element, current, expected) {
+    if (current === expected) {
+      return true;
+    }
+    const digits = phoneDigits(current);
+    return Boolean(digits) && digits === phoneDigits(expected) && isPhoneInput(element);
+  }
+
   function inspectTextCommit(element, expected, committedBeforeWait) {
     if (element.isConnected === false) {
       return { ok: false, reason: "element_disconnected" };
     }
     const current = String(element.value ?? "");
-    if (current !== expected) {
+    if (!sameTextValue(element, current, expected)) {
       return { ok: false, reason: committedBeforeWait ? "value_reverted" : "value_not_committed" };
     }
     if (element.getAttribute?.("aria-invalid") === "true" || describedErrorVisible(element) || containerErrorVisible(element)) {
@@ -4073,7 +4427,7 @@
     if (!controlOperator) controlOperator = self.ResumeProControls.create({
       helpers: self.ResumeProAIHelpers, radioLabel: getRadioOptionLabel,
       isVisible, writeValue: writeControlValue, focus: focusControl, blur: blurControl,
-      normalizeText: normalizeExpectedTextValue, runTextLifecycle,
+      normalizeText: normalizeExpectedTextValue, runTextLifecycle, sameTextValue,
       inspectText: inspectTextCommit, waitTextCommit: waitForTextCommit,
       replayFocusBlur, prefersSequential: prefersSequentialInput, dispatchTextInput,
       getSettleMs: () => textCommitWaitMs <= 0 ? 0 : 250
@@ -4085,13 +4439,31 @@
 
   // #269 资料只有年月、日历要选到日时按 1 日填写：记下来，结果里写明。
   const dayDefaultedControls = new WeakSet();
+  // #301 下拉、级联和日历最近一次操作时弹层的样子：没弹出，或弹出的是哪类、里面有没有选项（只有固定类别和是否）。
+  // 记下是哪一次填写会话操作的，没填上的字段只带本次填写里的记录。
+  const controlPopups = new WeakMap();
+  // 没弹出（opened=none）只在插件点开过、弹层却没出来时才记（没有发现选项、级联等待超时）；
+  // 被禁用、不支持这类还没去点开就停下的，不说弹层的事。
+  function popupObserved(observed, reason) {
+    const role = ["listbox", "tree", "menu", "component", "calendar"].includes(observed?.popupRole) ? observed.popupRole : "";
+    if (role === "calendar") return { opened: "calendar" };
+    // 有没有选项只在网页自己先给出的第一层列表读到时才有（custom-controls.js）；没有就不报，不当成没有选项。
+    if (role) return { opened: role, ...(typeof observed.hasOptions === "boolean" ? { hasOptions: observed.hasOptions } : {}) };
+    return ["custom-select", "cascader"].includes(observed?.controlKind) && ["options_not_rendered", "cascade_timeout"].includes(reason)
+      ? { opened: "none" } : null;
+  }
   async function setElementValue(target, value, beforeWrite, isCurrent, onWrite) {
     const result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite });
     const control = target?.kind === 'element' ? target.element : target;
     if (control && typeof control === 'object') {
       if (result.ok) textFillFailures.delete(control);
       else textFillFailures.set(control, result.reason);
-      if (result.ok && result.observed?.dayDefaulted) dayDefaultedControls.add(control); else dayDefaultedControls.delete(control);
+      // 页面还提示无效的也记下：结束前复核时提示消了，照样算填上（见 recheckVerifiedControls）。
+      if ((result.ok || result.reason === 'validation_not_cleared') && result.observed?.dayDefaulted) dayDefaultedControls.add(control);
+      else dayDefaultedControls.delete(control);
+      const popup = popupObserved(result.observed, result.reason);
+      if (popup) controlPopups.set(control, { ...popup, session: fillSession });
+      else controlPopups.delete(control);
     }
     return result.ok;
   }
@@ -4650,6 +5022,14 @@
     state.sidebarUiState = constrained;
   }
 
+  // The saved state is read while startup goes on. Before the controller exists it is simply
+  // kept for createSidebar; after that it is applied, unless a drag is in progress.
+  function applyStoredSidebarUiState(uiState) {
+    if (state.dragging) return;
+    state.sidebarUiState = self.ResumeProSidebarState.normalize(uiState);
+    applySidebarUiState();
+  }
+
   function constrainSidebarToViewport() {
     const current = self.ResumeProSidebarState.normalize(state.sidebarUiState);
     if (current.left === null || current.top === null) {
@@ -4805,17 +5185,21 @@
   // page, ask the desktop's AI only when extraction is unsure, and return what the user
   // should review. Nothing is written anywhere here. `null` means the caller moved on
   // (cancelled or restarted) and the answer must be dropped.
-  async function draftJobFields({ isCurrent, onAssistStart, onAssistEnd }) {
+  // `trace`（#301）：调用方给的 [岗位] 记录，这里写进来源、还缺哪个和 AI 识别的结果码。
+  async function draftJobFields({ isCurrent, onAssistStart, onAssistEnd, trace = null }) {
     const { extract, saveFlow, copy } = await loadDesktopModules();
     const extraction = extract.extractJobFields(document, location.href);
     const step = saveFlow.nextSaveStep(extraction);
     if (!isCurrent()) return null;
+    // 先按本地读到的记：AI 识别中途取消时，表单就是这一份。
+    traceJobFields(trace, step.fields, jobSources(step.fields, extraction));
     if (step.action === "commit") {
       return { fields: step.fields, note: copy.describeReviewSave(), openView: null, fallback: step.fields };
     }
     if (step.action === "assist") {
-      const outcome = await runJobAssist(step.fragments, step.fields, { isCurrent, onAssistStart, onAssistEnd });
+      const outcome = await runJobAssist(step.fragments, step.fields, { isCurrent, onAssistStart, onAssistEnd, trace });
       if (!isCurrent() || outcome.action === "ignore") return null;
+      traceJobFields(trace, outcome.fields, jobSources(outcome.fields, extraction, outcome.aiFields, step.fragments));
       return {
         fields: outcome.fields,
         note: outcome.action === "commit" ? copy.describeReviewSave() : outcome.note,
@@ -4828,7 +5212,7 @@
 
   // The worker asks the desktop's AI and gives up after 25 seconds itself; this timer only
   // covers a worker that never answers. There is no automatic retry either way.
-  async function runJobAssist(fragments, fallback, { isCurrent, onAssistStart, onAssistEnd }) {
+  async function runJobAssist(fragments, fallback, { isCurrent, onAssistStart, onAssistEnd, trace = null }) {
     const { saveFlow, copy } = await loadDesktopModules();
     // The user may have cancelled, or the page moved on, while the modules were loading.
     // Checked before anything is shown or sent: an assist panel raised for a job nobody is
@@ -4842,6 +5226,7 @@
       onAssistEnd?.(requestId);
       return { action: "ignore" };
     }
+    if (trace) trace.aiCalled = true;
     let reply;
     let timer;
     try {
@@ -4861,6 +5246,8 @@
       onAssistEnd?.(requestId);
     }
     if (!isCurrent()) return { action: "ignore" };
+    // 结果码只取固定的原因码，feedback-core 再按白名单过一遍；取消后晚到的回复不记。
+    if (trace) trace.aiCode = typeof reply?.reason === "string" ? reply.reason : "other";
     const after = saveFlow.afterAssist(reply, fallback);
     if (after.action === "form") {
       // `note` is a desktop failure from the worker; `error` is the host saying the worker itself died.
@@ -4868,7 +5255,48 @@
       after.note = copy.describeManualSave(after.reason, detail);
       if (reply?.openView === "settings-ai") after.openView = "settings-ai";
     }
+    // What the AI suggested, only to tell where the review's company and title came from (#301).
+    after.aiFields = reply?.fields || null;
     return after;
+  }
+
+  // #301 手动反馈的 [岗位]：核对表单里的公司、岗位从哪来。本地读到的分结构化数据（JobPosting）和站点规则（北森、hotjob）；
+  // AI 识别的看它引用的是不是页面标题。认不出来源（用户自己写的）返回空字符串，由 traceJobFields 沿用之前的。
+  function jobSources(fields, extraction, ai = null, fragments = []) {
+    const of = key => {
+      const value = fields?.[key];
+      if (!value) return "none";
+      const local = extraction?.sources?.[key];
+      if (local?.value === value) return local.source === "jobposting" ? "structured" : "site_rule";
+      if (ai?.[key] === value) return fragments.some(item => item.role === "page-title" && item.text === value) ? "page_title" : "ai";
+      return "";
+    };
+    return { company: of("company"), title: of("title") };
+  }
+
+  function newJobTrace() {
+    return { companySource: "none", titleSource: "none", missingCompany: true, missingTitle: true, aiCalled: false, aiCode: "", end: "open" };
+  }
+
+  // 没做过「保存岗位到桌面端」、或 feedback-core 缺席时没有这一段。
+  function jobTraceReport() {
+    try { return self.ResumeProFeedback?.jobReport?.(jobTrace) || ""; } catch { return ""; }
+  }
+
+  // 核对表单现在是什么样：来源和还缺哪个。只记固定的词和是否为空，不记内容。
+  function traceJobFields(trace, fields, sources = {}) {
+    if (!trace) return;
+    trace.companySource = sources.company || trace.companySource;
+    trace.titleSource = sources.title || trace.titleSource;
+    trace.missingCompany = !fields?.company;
+    trace.missingTitle = !fields?.title;
+  }
+
+  // 写入桌面的结果 → [岗位] 的结局：存进桌面、进了待同步、没能确认、没写上。
+  function jobWriteEnd(status) {
+    if (status === "saved") return "saved";
+    if (["pending", "queued", "duplicate"].includes(status)) return "queued";
+    return !status || status === "unknown" ? "unknown" : "failed";
   }
 
   function showJobAssist(described) {
@@ -5728,14 +6156,18 @@
     cancelAiRequest(panelJob.requestId);
     panelJob = idlePanelJob(panelJob);
     panelJob.discarded = "page-changed";
+    if (jobTrace) jobTrace.end = "navigated";
     return true;
   }
 
-  function openPanelReview(fields, note, openView = null) {
+  // `sources`（#301 [岗位]）：这份表单的公司、岗位从哪来；不给就沿用之前记下的。
+  function openPanelReview(fields, note, openView = null, sources = {}) {
     touchPanelJob({
       phase: "review", fields: { ...emptyJobFields(), ...fields }, revision: panelJob.revision + 1,
       note, openView, error: "", assist: null, requestId: null
     });
+    traceJobFields(jobTrace, fields, sources);
+    if (jobTrace) jobTrace.end = "open";
   }
 
   async function startPanelJobDraft() {
@@ -5749,10 +6181,12 @@
     const token = panelJob.token;
     const pageUrl = location.href;
     touchPanelJob({ draftId: newRequestId(), phase: "extracting", pageUrl });
+    const trace = jobTrace = newJobTrace();
     const isCurrent = () => panelJob.token === token && panelJob.pageUrl === pageUrl && location.href === pageUrl;
     try {
       const draft = await draftJobFields({
         isCurrent,
+        trace,
         onAssistStart: (described, requestId, fallback) => {
           if (!isCurrent()) return;
           touchPanelJob({
@@ -5771,7 +6205,7 @@
       }
     } catch {
       if (isCurrent()) {
-        openPanelReview(emptyJobFields(), "读取页面信息失败，请手动填写公司和岗位。");
+        openPanelReview(emptyJobFields(), "读取页面信息失败，请手动填写公司和岗位。", null, { company: "none", title: "none" });
       } else if (panelJob.token === token && location.href !== pageUrl) {
         dropStalePanelJob();
       }
@@ -5790,12 +6224,15 @@
       // A new token: whatever the AI says later belongs to a recognition nobody is waiting for.
       const fallback = panelJob.fallback || emptyJobFields();
       touchPanelJob({ token: panelJob.token + 1 });
+      if (jobTrace?.aiCalled) jobTrace.aiCode = "cancelled";
       let note = "已取消识别。请手动补全后再保存。";
       try { note = (await loadDesktopModules()).copy.describeManualSave("cancelled"); } catch {}
       openPanelReview(fallback, note);
       return { ok: true, jobSave: panelJobSnapshot() };
     }
-    // Cancelling the draft itself: nothing was written, and nothing will be.
+    // Cancelling the draft itself: nothing was written, and nothing will be. Dismissing a
+    // finished result is not a cancel.
+    if (jobTrace && ["extracting", "assist", "review", "choice"].includes(panelJob.phase)) jobTrace.end = "cancelled";
     panelJob = idlePanelJob(panelJob);
     return { ok: true, jobSave: panelJobSnapshot() };
   }
@@ -5811,6 +6248,7 @@
     if (!again && panelJob.phase !== "review") return { ok: false, error: "请先核对岗位信息。", jobSave: panelJobSnapshot() };
 
     const fields = again ? panelJob.confirmed : reviewedJobFields(panelJob.fields, message);
+    traceJobFields(jobTrace, fields);
     if (!again) {
       const missing = [!fields.company && "公司名称", !fields.title && "岗位名称"].filter(Boolean);
       if (missing.length) {
@@ -5846,10 +6284,14 @@
     }
     // Whatever goes wrong from here on, the phase must leave "saving": the desktop may
     // already hold the job, so the panel says it could not tell rather than stay locked.
+    // [岗位] (#301) keeps how this write ended: needs_choice is still open, a refused write "failed".
+    const trace = jobTrace;
+    const end = value => { if (trace) trace.end = value; };
     try {
       if (failed) throw new Error("save-failed");
       if (result?.status === "unknown") {
         touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+        end("unknown");
       } else {
         const { copy } = await loadDesktopModules();
         if (result?.status === "needs_choice") {
@@ -5857,16 +6299,22 @@
         // "确认已投递" shows, so the two lists never read differently for one application.
         const candidates = (result.exact || []).map(candidate => ({ ...candidate, label: copy.describeApplicationChoice(candidate) }));
         touchPanelJob({ phase: "choice", intentId: result.intent?.intentId || null, candidates, result: null });
+        end("open");
         } else if (saveResultClosesForm(result) || result?.status === "not_queued") {
           // Written, queued, or a clear "no desktop / not paired" answer the user has to act on.
           touchPanelJob({ phase: "result", result: describeCommit(copy, result) });
+          end(jobWriteEnd(result?.status));
         } else {
           // Not written and not queued: keep the reviewed form so the user can try again.
           touchPanelJob({ phase: "review", error: describeCommit(copy, result).text, result: null });
+          end("failed");
         }
       }
     } catch {
-      if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+      if (panelJob.token === token) {
+        touchPanelJob({ phase: "result", candidates: [], error: "", result: { ...PANEL_JOB_UNKNOWN } });
+        end("unknown");
+      }
     }
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
@@ -5919,9 +6367,11 @@
     });
     const token = panelJob.token;
     const isCurrent = () => panelJob.token === token && panelJob.pageUrl === pageUrl && location.href === pageUrl;
+    if (!jobTrace) jobTrace = newJobTrace();
     try {
       const outcome = await runJobAssist(fragments, fallback, {
         isCurrent,
+        trace: jobTrace,
         onAssistStart: (described, requestId, fb) => {
           if (!isCurrent()) return;
           touchPanelJob({ requestId, fallback: fb, assist: { text: described.text, lines: [...(described.fragments || [])] } });
@@ -5938,16 +6388,17 @@
         return { ok: true, jobSave: panelJobSnapshot() };
       }
       if (outcome.action === "commit") {
-        openPanelReview(outcome.fields, copy.describeReviewSave());
+        openPanelReview(outcome.fields, copy.describeReviewSave(), null, jobSources(outcome.fields, extraction, outcome.aiFields, fragments));
       } else {
         // Not sure, failed or timed out: keep what the user has, only filling what is blank.
         const suggested = outcome.fields || {};
-        openPanelReview({
+        const kept = {
           company: fallback.company || suggested.company || "",
           title: fallback.title || suggested.title || "",
           location: fallback.location || suggested.location || "",
           sourceUrl: fallback.sourceUrl, dedupeUrl: fallback.dedupeUrl
-        }, outcome.note, outcome.openView || null);
+        };
+        openPanelReview(kept, outcome.note, outcome.openView || null, jobSources(kept, extraction, outcome.aiFields, fragments));
       }
     } catch {
       if (isCurrent()) openPanelReview(fallback, "重新识别没有完成，已保留你现在的内容，可以手动修改后保存。");
@@ -5966,6 +6417,7 @@
     const action = String(message.action || "");
     if (action === "later") {
       touchPanelJob({ phase: "result", candidates: [], result: { tone: "pending", text: PANEL_JOB_LATER } });
+      if (jobTrace) jobTrace.end = "queued";
       return { ok: true, jobSave: panelJobSnapshot() };
     }
     let applicationId = null;
@@ -5976,9 +6428,11 @@
       return { ok: false, error: "当前操作不可用。", jobSave: panelJobSnapshot() };
     }
     const token = panelJob.token;
+    const trace = jobTrace;
     saveInFlight = true;
     touchPanelJob({ phase: "saving" });
     let bound;
+    let end = "unknown";
     try {
       const result = await waitForPanelJobWrite(bindSavedJob(panelJob.intentId, applicationId));
       if (panelJob.token !== token) {
@@ -5988,12 +6442,16 @@
       bound = result?.status === "unknown"
         ? { ...PANEL_JOB_UNKNOWN }
         : (await loadDesktopModules()).copy.describeBindResult(result);
+      end = jobWriteEnd(result?.status);
     } catch {
       bound = { ...PANEL_JOB_UNKNOWN };
     } finally {
       saveInFlight = false;
     }
-    if (panelJob.token === token) touchPanelJob({ phase: "result", candidates: [], result: bound });
+    if (panelJob.token === token) {
+      touchPanelJob({ phase: "result", candidates: [], result: bound });
+      if (trace) trace.end = end;
+    }
     refreshPendingList();
     return { ok: true, jobSave: panelJobSnapshot() };
   }
@@ -6108,9 +6566,11 @@
     const pageUrl = location.href;
     touchPanelSubmit({ confirmId: newRequestId(), phase: "extracting", pageUrl });
     const isCurrent = () => panelSubmit.token === token && panelSubmit.pageUrl === pageUrl && location.href === pageUrl;
+    const trace = submitJobTrace = newJobTrace();
     try {
       const draft = await draftJobFields({
         isCurrent,
+        trace,
         onAssistStart: (described, requestId, fallback) => {
           if (!isCurrent()) return;
           touchPanelSubmit({
@@ -6308,6 +6768,7 @@
       // A new token: whatever the AI says later belongs to a recognition nobody is waiting for.
       const fallback = panelSubmit.fallback || emptyJobFields();
       touchPanelSubmit({ token: panelSubmit.token + 1 });
+      if (submitJobTrace?.aiCalled) submitJobTrace.aiCode = "cancelled";
       openSubmitReview(fallback, "已取消识别。请手动补全后再查找。");
       return submitOutcome({ ok: true });
     }
@@ -6351,6 +6812,8 @@
     }
     panelJob = idlePanelJob(panelJob);
     touchPanelJob({ draftId: newRequestId(), pageUrl });
+    // [岗位]（#301）接着「确认已投递」读页面时的记录：来源和 AI 识别都发生在那一步。
+    jobTrace = { ...(submitJobTrace || newJobTrace()), end: "open" };
     openPanelReview(reviewed, note);
     return { ok: true, jobSave: panelJobSnapshot(), submitConfirm: panelSubmitSnapshot() };
   }
@@ -6612,6 +7075,7 @@
   if (self.__RESUME_PRO_TEST__) {
     self.ResumeProHighlightTest = {
       applySidebarUiState,
+      applyStoredSidebarUiState,
       bindStorageSync,
       bindFocusTracking,
       describePanelTarget,
@@ -6725,6 +7189,9 @@
       },
       setShadowRoot(root) {
         shadowRoot = root;
+      },
+      setStartupState(value) {
+        startupState = value;
       }
     };
   }

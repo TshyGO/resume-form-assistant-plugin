@@ -48,8 +48,9 @@
   // The content script builds the block with fillReport(); the worker re-parses it with
   // diagnostics() before sending. Every key has a closed value pattern, so field values,
   // page text, titles, full URLs and provider messages never cross the network boundary.
-  // The worker writes the [来源] section (version, OS, host) itself; a page cannot supply it.
-  const SECTIONS = new Set(["页面", "字段漏斗", "页面结构", "错误", "匹配", "性能", "未填字段"]);
+  // The worker writes the [来源] section (version, OS, install type, host) itself; a page cannot supply it.
+  // [岗位] (#301) goes only into manual feedback, which the user previews; automatic reports drop it.
+  const SECTIONS = new Set(["页面", "填写", "字段漏斗", "页面结构", "错误", "匹配", "性能", "未填字段", "岗位"]);
   const CATEGORIES = ["no_fields_found", "page_not_supported", "iframe_blocked", "match_failed", "fill_rejected",
     "timeout", "service_error", "unknown", "none"];
   const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
@@ -59,6 +60,9 @@
   // A failure of the AI service or the desktop link, not of matching this page.
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
+  // Setup states (#301): no desktop app, not paired, no AI model. Nothing was sent to an AI service and
+  // the user is shown the fix at once, so they are not a failed request and never reported on their own.
+  const SETUP_CODES = new Set(["not_installed", "not_paired", "never_paired", "not_configured"]);
   // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
     "site_search", "outside_form", "no_label", "out_of_scope", "secret",
@@ -77,8 +81,22 @@
     + "interview interviews assessment exam test online register signup sign up in login logout auth oauth sso enroll enrollment "
     + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
     + "static html htm shtml php jsp aspx asp do action").split(" "));
-  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "other"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
+  // `generic`: custom selects the fill handled on its generic path (北森), which carry no library class.
+  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "generic", "other"];
+  // How a fill was started (#301): the side panel's 一键填写, 深度分析本页, a 本站配方 run, AI 辅助新增条目.
+  const ENTRIES = ["panel", "deep", "recipe", "assist", "other"];
+  // What an unfilled select's popup showed: a list (by role) and whether it had any option, a calendar, or nothing opened at all.
+  const LISTS = ["listbox", "tree", "menu", "component"];
+  const OPENED = [...LISTS, "calendar", "none"];
+  // The job-saving flow (#301, manual feedback only): where company and title came from, how it ended,
+  // and the AI assist's codes beyond the fill's own.
+  const JOB_SOURCES = ["structured", "site_rule", "page_title", "ai", "none"];
+  const JOB_ENDS = ["open", "saved", "queued", "failed", "unknown", "cancelled", "navigated"];
+  const JOB_CODES = ["ok", "no_fragments", "no_evidence", "location_no_evidence", "missing_title", "missing_company", "missing_both",
+    "in_flight", "internal", "other"];
+  // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
+  const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
@@ -87,6 +105,7 @@
     url_path: /^\/(?:(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)(?:\/(?:[A-Za-z][A-Za-z0-9._-]{0,19}|:id)){0,7}(?:\/:more)?)?$/,  // + safePath()
     page_type: /^(?:application_form|unknown|-)$/, page_type_reason: /^(?:url|title|edit_button|structure|none|-)$/,
     dom_ready_at_scan: /^(?:true|false|-)$/, scan_duration_ms: INT,
+    entry: oneOf(ENTRIES, "|-"), page_focused: /^(?:true|false|-)$/,
     dom_inputs: INT, visible_fields: INT, candidates: INT, matched: INT, filled: INT, drop_reasons: tally(DROPS),
     label_sources: tally(LABEL_SOURCES), offer_skipped: tally(OFFER_SKIPS),
     dom_elements: INT, iframes_total: INT, iframes_cross_origin: INT, same_origin_iframe_inputs: INT,
@@ -94,39 +113,61 @@
     readonly_or_disabled: INT, edit_buttons: INT,
     error_category: oneOf(CATEGORIES), first_failing_stage: /^(?:scan|match|fill|none)$/,
     error_code: oneOf(ERROR_CODES, "|http_\\d{3}|-"),
-    local_matches: INT, ai_fields: INT, ai_called: /^(?:true|false|-)$/, ai_matches: INT, ai_latency_ms: INT,
+    local_matches: INT, ai_fields: INT, ai_called: /^(?:true|false|-)$/, ai_tier: /^(?:default|strong|-)$/, ai_matches: INT, ai_latency_ms: INT,
+    ai_first_byte_ms: INT, ai_timeout_stage: oneOf(TIMEOUT_STAGES, "|-"),
     resume_fields: INT, resume_candidates: INT, prompt_bytes: INT,
     timings_ms: /^scan=(?:\d{1,9}|-),match=(?:\d{1,9}|-),fill=(?:\d{1,9}|-),total=(?:\d{1,9}|-)$/,
-    unlisted: INT
+    unlisted: INT,
+    job_company_source: oneOf(JOB_SOURCES), job_title_source: oneOf(JOB_SOURCES),
+    job_missing: /^(?:none|company|title|company,title)$/, job_ai_called: /^(?:true|false)$/,
+    job_ai_code: oneOf([...ERROR_CODES, ...JOB_CODES], "|http_\\d{3}|-"), job_end: oneOf(JOB_ENDS)
   };
+  const JOB_KEYS = /^job_/;
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
-    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|reason=(?:${FILL_REASONS.join("|")}))$`);
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
+  // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
+  // them, as in /apply/v13.v91.v23 or /apply/v13/v91/v23, could spell out any number.
+  const VERSION = /^v\d{1,2}$/i;
   function routeSegment(text) {
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return false;
+    if (VERSION.test(text)) return true;
     return text.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s._-]+/).filter(Boolean)
-      .every(word => ROUTE_WORDS.has(word.toLowerCase()) || /^v\d{1,2}$/i.test(word));
+      .every(word => ROUTE_WORDS.has(word.toLowerCase()));
   }
 
   // Common route words survive; every other segment (names, ids, tokens, non-ASCII) becomes :id.
   function pathTemplate(pathname) {
     const segments = String(pathname ?? "").split("/").filter(Boolean);
+    let version = false;
     const kept = segments.slice(0, 8).map(segment => {
       let text;
       try { text = decodeURIComponent(segment); } catch { return ":id"; }
-      return routeSegment(text) ? text : ":id";
+      if (!routeSegment(text) || (VERSION.test(text) && version)) return ":id";
+      if (VERSION.test(text)) version = true;
+      return text;
     });
     return `/${kept.join("/")}${segments.length > 8 ? "/:more" : ""}`;
   }
 
   // The worker re-checks the vocabulary, not just the shape, of a path it is handed.
   function safePath(value) {
-    return VALUES.url_path.test(value) && value.split("/").filter(Boolean).every(part => part === ":id" || part === ":more" || routeSegment(part));
+    const parts = value.split("/").filter(Boolean);
+    return VALUES.url_path.test(value) && parts.every(part => part === ":id" || part === ":more" || routeSegment(part))
+      && parts.filter(part => VERSION.test(part)).length <= 1;
   }
 
+  // First-round codes that are not a failure: nothing to say, or fields skipped before any request.
+  // A failed request replaces them, as ai-worker.js does between batches (SKIP_CODES there).
+  const SKIP_CODES = new Set(["none", "no_context", "input_too_large"]);
+  // The error code a report shows: the first round's, or a catch-up's (#301) when the first round had
+  // none or the catch-up's request failed after a first round that did not.
+  const shownCode = (first, later) => (later && (!first || first === "none" || (SKIP_CODES.has(first) && requestFailed(later))) ? later : first);
+
   // Why the fill failed and the first stage that failed. `none` means nothing failed.
-  function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
+  function fillCategory({ scanned, fieldCount, pageType, frames, failedStage, responded, errorCode, catchUpCode, matched, filledCount, unfilledCount, unconfirmedCount }) {
     if (!scanned) return { category: "unknown", stage: "scan" };
     if (fieldCount === 0) {
       // A form may sit in a frame even when nothing else on the page looks like one.
@@ -141,6 +182,10 @@
       if (SERVICE_CODES.has(errorCode) || /^http_\d{3}$/.test(errorCode ?? "")) return { category: "service_error", stage: "match" };
       return { category: "match_failed", stage: "match" };
     }
+    // The AI request failed, for the first round or for a catch-up after a choice (#301 U1), and the
+    // fill went on with what was matched locally: the request is the first failure, whatever followed.
+    const code = shownCode(errorCode, catchUpCode);
+    if (requestFailed(code) && !SETUP_CODES.has(code)) return { category: code === "timeout" ? "timeout" : "service_error", stage: "match" };
     if (failedStage) return { category: "unknown", stage: failedStage };
     if (!matched) return { category: "match_failed", stage: "match" };
     if (filledCount === 0 || unfilledCount > 0 || unconfirmedCount > 0) return { category: "fill_rejected", stage: "fill" };
@@ -151,6 +196,12 @@
   // The worker's diagnostics when the AI request got an answer; content.js keeps {} otherwise.
   const answer = input => (input.diagnostics && Object.keys(input.diagnostics).length ? input.diagnostics : null);
 
+  // The AI request itself failed (provider timeout, AI service or desktop link), as opposed to
+  // a request that was answered and matched nothing.
+  function requestFailed(code) {
+    return code === "timeout" || SERVICE_CODES.has(code) || /^http_\d{3}$/.test(code ?? "");
+  }
+
   // Fields lost at each step of scan → match → fill, in funnel order; only non-zero reasons.
   function fillDrops(input) {
     const s = input.stats || null;
@@ -158,14 +209,18 @@
     const n = positive;
     const secret = n(d?.secretFormFields);
     const noMapping = n(d?.skippedNoContext);
+    // Fields that appeared after a choice (#269) bring their own drops, worked out with these
+    // same rules for each catch-up request; the first-round arithmetic leaves them out.
+    const g = input.grown || {};
+    const firstRound = Math.max(0, n(input.fieldCount) - n(g.found));
     // Fields neither matched nor skipped. Those handed to the AI (at most aiFields, less the
     // ones skipped for lack of resume data) are AI misses, or got no result when the AI service
     // or desktop link failed; with an empty template the rest had no resume data at all;
     // otherwise they were never sent (e.g. too large). A request with no answer at all leaves
     // every field without a result.
-    const failed = Boolean(d) && (d.errorCode === "timeout" || SERVICE_CODES.has(d.errorCode) || /^http_\d{3}$/.test(d.errorCode ?? ""));
-    const rest = d ? Math.max(0, n(input.fieldCount) - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
-      : input.requested ? n(input.fieldCount) : 0;
+    const failed = Boolean(d) && requestFailed(d.errorCode);
+    const rest = d ? Math.max(0, firstRound - secret - n(d.ruleMatches) - noMapping - n(d.aiMatches))
+      : input.requested ? firstRound : 0;
     const sent = d && aiCalled(input) ? Math.min(rest, Math.max(0, n(d.aiFields) - noMapping - n(d.aiMatches))) : 0;
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
@@ -175,6 +230,7 @@
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
     if (d) counts[d.errorCode === "no_resume_fields" ? "no_resume_mapping" : "not_sent"] += rest - sent;
+    for (const key of DROPS) counts[key] += n(g.drops?.[key]);
     return DROPS.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
 
@@ -207,8 +263,23 @@
       const key = LIBRARY_NAMES.includes(name) ? name : "other";
       libraries[key] = (libraries[key] || 0) + n(value);
     }
+    // Custom selects the fill handled on its generic path that the page probe did not count (#301 北森).
+    const generic = p?.custom ? n(input.genericCustom) : 0;
+    // Their read-only inputs belong to the select, as for library controls in the probe.
+    const locked = Number.isInteger(p?.locked) ? Math.max(0, p.locked - (p.custom ? n(input.genericLocked) : 0)) : null;
+    if (generic) libraries.generic = (libraries.generic || 0) + generic;
     const listed = (entries, order) => order.filter(key => entries[key] > 0).map(key => `${key}=${entries[key]}`).join(",") || "-";
-    const called = aiCalled(input);
+    // Fields that appeared after a choice (#269) add to the first round's match counts; their
+    // error code shows as shownCode() says. A catch-up that called the AI counts
+    // as a call even when the first round did not need one.
+    const g = input.grown || {};
+    const called = g.aiCalled === true ? true : aiCalled(input);
+    const plus = (value, extra) => Number.isInteger(value) ? value + n(extra) : value;
+    const code = shownCode(d?.errorCode, g.errorCode);
+    // The tier the AI request actually ran on (#223): asked for and confirmed, asked for, or the
+    // daily tier a request without one always uses. Catch-ups never ask for one.
+    const tiers = ["default", "strong"];
+    const tier = tiers.includes(d?.tierUsed) ? d.tierUsed : tiers.includes(d?.tierRequested) ? d.tierRequested : "default";
     const lines = [
       "[页面]",
       `url_path: ${pathTemplate(input.path)}`,
@@ -216,6 +287,12 @@
       `page_type_reason: ${input.pageType?.reason || "-"}`,
       `dom_ready_at_scan: ${flag(input.readyAtScan)}`,
       `scan_duration_ms: ${ms(input.scanMs)}`,
+      "",
+      // How this fill was started and whether the page had focus then (#301): some components
+      // only open their popup for a page in front.
+      "[填写]",
+      `entry: ${ENTRIES.includes(input.entry) ? input.entry : "-"}`,
+      `page_focused: ${flag(input.pageFocused)}`,
       "",
       "[字段漏斗]",
       `dom_inputs: ${count(s?.domInputs)}`,
@@ -233,22 +310,26 @@
       `iframes_cross_origin: ${count(p?.frames?.crossOrigin)}`,
       `same_origin_iframe_inputs: ${count(p?.frames?.frameInputs)}`,
       `shadow_roots_with_inputs: ${count(p?.shadowHosts)}`,
-      `custom_controls: ${count(p?.custom?.total)}`,
+      `custom_controls: ${count(Number.isInteger(p?.custom?.total) ? p.custom.total + generic : null)}`,
       `custom_libraries: ${listed(libraries, LIBRARY_NAMES)}`,
-      `readonly_or_disabled: ${count(p?.locked)}`,
+      `readonly_or_disabled: ${count(locked)}`,
       `edit_buttons: ${count(p?.editButtons)}`,
       "",
       "[错误]",
       `error_category: ${input.category || "unknown"}`,
       `first_failing_stage: ${input.stage || "none"}`,
-      `error_code: ${typeof d?.errorCode === "string" && VALUES.error_code.test(d.errorCode) ? d.errorCode : "-"}`,
+      `error_code: ${typeof code === "string" && VALUES.error_code.test(code) ? code : "-"}`,
       "",
       "[匹配]",
-      `local_matches: ${count(d?.ruleMatches)}`,
-      `ai_fields: ${count(d?.aiFields)}`,
+      `local_matches: ${count(plus(d?.ruleMatches, g.local))}`,
+      `ai_fields: ${count(plus(d?.aiFields, g.aiFields))}`,
       `ai_called: ${flag(called)}`,
-      `ai_matches: ${count(d?.aiMatches)}`,
+      `ai_tier: ${called ? tier : "-"}`,
+      `ai_matches: ${count(plus(d?.aiMatches, g.aiMatches))}`,
       `ai_latency_ms: ${called ? ms(d.apiMs) : "-"}`,
+      // From the desktop (#299): how long the provider took to send its headers, and where a timeout stopped.
+      `ai_first_byte_ms: ${called ? count(d?.firstByteMs) : "-"}`,
+      `ai_timeout_stage: ${called && TIMEOUT_STAGES.includes(d?.timeoutStage) ? d.timeoutStage : "-"}`,
       `resume_fields: ${count(d?.resumeFields)}`,
       `resume_candidates: ${count(d?.candidateFields)}`,
       `prompt_bytes: ${count(d?.promptBytes)}`,
@@ -267,6 +348,11 @@
         if (c.readOnly) tokens.push("readonly");
         if (c.picker) tokens.push(`picker=${c.picker}`);
         if (c.library) tokens.push(`lib=${c.library}`);
+        // The select's popup (#301): never opened, or opened, and whether its list had any option. Never how
+        // many: a lower select's list is the one the page loaded for the upper choice made from the resume.
+        const o = item?.observed || {};
+        if (OPENED.includes(o.opened)) tokens.push(`opened=${o.opened}`);
+        if (LISTS.includes(o.opened) && typeof o.hasOptions === "boolean") tokens.push(`options=${o.hasOptions ? "1+" : "0"}`);
         if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
         lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
       }
@@ -275,20 +361,22 @@
     return diagnostics(lines.join("\n"));
   }
 
-  // Keep only v1 lines whose key and value are both in the closed vocabulary.
-  function diagnostics(value) {
+  // Keep only v1 lines whose key and value are both in the closed vocabulary. The job flow's
+  // [岗位] (#301) stays only in manual feedback, which the user previews before sending.
+  function diagnostics(value, { manual = false } = {}) {
     const safe = [];
     for (const line of String(value ?? "").slice(0, 20000).split("\n").slice(0, 120)) {
       const section = /^\[(.{1,8})\]$/.exec(line);
       if (section) {
-        if (SECTIONS.has(section[1])) safe.push(...(safe.length ? ["", line] : [line]));
+        if (SECTIONS.has(section[1]) && (manual || section[1] !== "岗位")) safe.push(...(safe.length ? ["", line] : [line]));
         continue;
       }
       // Every value has its own closed pattern; the length cap only bounds the regex work.
       // The longest reachable value is drop_reasons with every reason at six digits (348 chars).
       const entry = /^([a-z_]{1,32}): (.{1,400})$/.exec(line);
       if (entry) {
-        const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2]);
+        const known = Object.prototype.hasOwnProperty.call(VALUES, entry[1]) && VALUES[entry[1]].test(entry[2])
+          && (manual || !JOB_KEYS.test(entry[1]));
         if (known && (entry[1] !== "url_path" || safePath(entry[2]))) safe.push(line);
         continue;
       }
@@ -300,12 +388,34 @@
     return safe.join("\n").slice(0, 3500);
   }
 
-  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, unconfirmedCount, editHint, category }) {
+  function fillFailure({ assisted, cancelled, overwriteDeclined, fieldCount, filledCount, unfilledCount, unconfirmedCount, editHint, category,
+    errorCode, catchUpCode }) {
     if (assisted || cancelled || overwriteDeclined) return null;
     // A page that is not an application form has nothing to fix; reporting it is noise.
     if (category === "page_not_supported") return null;
-    if (fieldCount === 0 || unfilledCount > 0 || unconfirmedCount > 0 || editHint) return filledCount > 0 ? "fill_partial" : "fill_failed";
+    // The AI request failed (#301 U1; fillCategory): reported even when every local match got written.
+    // A setup state is not a failed request.
+    const aiFailed = (category === "timeout" || category === "service_error") && !SETUP_CODES.has(shownCode(errorCode, catchUpCode));
+    if (fieldCount === 0 || unfilledCount > 0 || unconfirmedCount > 0 || editHint || aiFailed) return filledCount > 0 ? "fill_partial" : "fill_failed";
     return null;
+  }
+
+  // The [岗位] block for manual feedback (#301): closed words only, never the company, the title,
+  // page text or an address. `trace` is what content.js kept about the last 保存岗位到桌面端 in this tab.
+  function jobReport(trace) {
+    if (!trace || typeof trace !== "object") return "";
+    const word = (value, list, fallback) => (list.includes(value) ? value : fallback);
+    const code = typeof trace.aiCode === "string" && trace.aiCode !== "-" && VALUES.job_ai_code.test(trace.aiCode) ? trace.aiCode : "other";
+    const lines = [
+      "[岗位]",
+      `job_company_source: ${word(trace.companySource, JOB_SOURCES, "none")}`,
+      `job_title_source: ${word(trace.titleSource, JOB_SOURCES, "none")}`,
+      `job_missing: ${[trace.missingCompany === true && "company", trace.missingTitle === true && "title"].filter(Boolean).join(",") || "none"}`,
+      `job_ai_called: ${trace.aiCalled === true}`,
+      `job_ai_code: ${trace.aiCalled === true ? code : "-"}`,
+      `job_end: ${word(trace.end, JOB_ENDS, "open")}`
+    ];
+    return diagnostics(lines.join("\n"), { manual: true });
   }
   function install(send, { origin, requireOwn = false, captureErrors = true } = {}) {
     if (!root.addEventListener) return;
@@ -322,8 +432,10 @@
       forward(exception(e.reason, origin, "unhandledrejection"));
     });
   }
-  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, fillDrops, labelSources, aiCalled, fillReport,
-    diagnostics, fillFailure, install };
+  const api = { redact, hostname, os, frames, exception, pathTemplate, fillCategory, requestFailed, shownCode, fillDrops, labelSources, aiCalled,
+    fillReport, diagnostics, fillFailure, jobReport, install,
+    // Names only, for the privacy-policy check; the allowlists themselves stay private.
+    SECTION_NAMES: Object.freeze([...SECTIONS]), VALUE_KEYS: Object.freeze(Object.keys(VALUES)) };
   root.ResumeProFeedback = api;
-  if (typeof module !== "undefined") module.exports = api;
+  try { if (typeof module === "object" && module && typeof module.exports === "object") module.exports = api; } catch { /* a page element or frame named "module" (#275) */ }
 })(typeof self !== "undefined" ? self : globalThis);

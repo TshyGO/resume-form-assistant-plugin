@@ -67,6 +67,14 @@ test('a successful handshake reports ready and hands back the current identity',
   assert.equal(storage.data.desktopPairing.archiveId, ARCHIVE);
 });
 
+// #299: ai.complete goes as v3 only to a desktop that serves v3; older ones refuse the version.
+test('a ready probe says the highest protocol version the desktop serves', async () => {
+  for (const max of [2, 3]) {
+    const { session } = await makeSession({ reply: handshakeReply({ maxProtocolVersion: max }) });
+    assert.equal((await session.probe()).maxProtocolVersion, max);
+  }
+});
+
 test('the handshake itself carries no archive identity', async () => {
   const { session, sent } = await makeSession({ reply: handshakeReply() });
 
