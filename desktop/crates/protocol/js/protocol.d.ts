@@ -17,7 +17,8 @@ export type MessageType =
   | "ui.open"
   | "legacy.import"
   | "usage.touch"
-  | "usage.settings";
+  | "usage.settings"
+  | "mail.import";
 
 /** Resume Pro request envelope */
 export interface RequestEnvelope {
@@ -27,7 +28,7 @@ export interface RequestEnvelope {
   messageId: string;
   /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
   clientInstanceId: string;
-  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch" | "usage.settings";
+  messageType: "health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch" | "usage.settings" | "mail.import";
   /**
    * UTC RFC3339 subset: YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS.fractionZ. Pattern is syntactic; validators also reject impossible dates/times. No timezone offset other than Z.
    * pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$
@@ -179,6 +180,38 @@ export interface LegacyImportPayload {
    */
   index?: number;
   body?: Record<string, unknown>;
+}
+
+export interface MailImportPayload {
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  uploadId: string;
+  kind: "eml" | "excerpt";
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  applicationId?: string;
+  /**
+   * minimum: 1
+   * maximum: 26214400
+   */
+  byteSize: number;
+  /** pattern: ^[0-9a-f]{64}$ */
+  sha256: string;
+  /**
+   * minimum: 0
+   * maximum: 799
+   */
+  chunkIndex: number;
+  /**
+   * minimum: 1
+   * maximum: 800
+   */
+  chunkCount: number;
+  /** pattern: ^[0-9a-f]{64}$ */
+  chunkSha256: string;
+  /**
+   * minLength: 4
+   * maxLength: 43692
+   */
+  bytesBase64: string;
 }
 
 export interface OutboxReconcilePayload {
@@ -341,7 +374,7 @@ export interface HandshakeResponsePayload {
    * minItems: 1
    * maxItems: 16
    */
-  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch" | "usage.settings")[];
+  capabilities: ("health" | "handshake" | "application.queryCandidates" | "job.save" | "fill.submit" | "snapshot.chunk" | "submit.confirm" | "outbox.reconcile" | "resume.read" | "resume.update" | "ai.complete" | "ui.open" | "legacy.import" | "usage.touch" | "usage.settings" | "mail.import")[];
 }
 
 export interface HealthResponsePayload {
@@ -360,6 +393,20 @@ export interface LegacyImportResponsePayload {
    */
   total: number;
   aiConfigDropped?: boolean;
+}
+
+export interface MailImportResponsePayload {
+  status: "chunk" | "saved";
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  uploadId: string;
+  /**
+   * minimum: 0
+   * maximum: 799
+   */
+  chunkIndex: number;
+  /** pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+  evidenceId?: string;
+  duplicate?: boolean;
 }
 
 export interface OutboxReconcileResponsePayload {
@@ -538,6 +585,7 @@ export interface RequestPayloadByType {
   "legacy.import": LegacyImportPayload;
   "usage.touch": UsageTouchPayload;
   "usage.settings": UsageSettingsPayload;
+  "mail.import": MailImportPayload;
 }
 
 /** Response payload type for a given messageType. Several writes share one response. */
@@ -557,6 +605,7 @@ export interface ResponsePayloadByType {
   "legacy.import": LegacyImportResponsePayload;
   "usage.touch": UsageTouchResponsePayload;
   "usage.settings": UsageSettingsResponsePayload;
+  "mail.import": MailImportResponsePayload;
 }
 
 /** One request envelope, narrowed to the payload its messageType carries. */

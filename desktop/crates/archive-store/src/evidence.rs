@@ -181,6 +181,11 @@ impl StoreTx<'_> {
         let Some(existing) = self.find_known_mail(key)? else {
             return Ok(None);
         };
+        // Dedup and in-flight import retries must not undo a later user recycle action.
+        // Restore is explicit; keep the original association while the mail is recycled.
+        if self.is_evidence_recycled(&existing.id)? {
+            return Ok(Some(existing));
+        }
         match (&existing.application_id, application_id) {
             (None, Some(app)) => self.associate_evidence(&existing.id, app).map(Some),
             _ => Ok(Some(existing)),
@@ -259,6 +264,7 @@ impl StoreTx<'_> {
         evidence_id: &str,
         to_application: &str,
     ) -> Result<ReplyEvidence, StoreError> {
+        self.ensure_active_evidence(evidence_id)?;
         let ev = self
             .get_evidence(evidence_id)?
             .ok_or_else(|| StoreError::NotFound(format!("evidence {evidence_id}")))?;
@@ -304,6 +310,7 @@ impl StoreTx<'_> {
     /// 取消关联:证据回到收件箱,原申请的投影按 §6.3 重算(可能回到 none_imported)。
     /// 原始 blob 与分类保持不变——用户只是说「这封信不属于那条申请」。
     pub fn unassociate_evidence(&mut self, evidence_id: &str) -> Result<ReplyEvidence, StoreError> {
+        self.ensure_active_evidence(evidence_id)?;
         let ev = self
             .get_evidence(evidence_id)?
             .ok_or_else(|| StoreError::NotFound(format!("evidence {evidence_id}")))?;
@@ -373,6 +380,7 @@ impl StoreTx<'_> {
         reply_class: ReplyClass,
         send_mode: SendMode,
     ) -> Result<ReplyEvidence, StoreError> {
+        self.ensure_active_evidence(evidence_id)?;
         let ev = self
             .get_evidence(evidence_id)?
             .ok_or_else(|| StoreError::NotFound(format!("evidence {evidence_id}")))?;
@@ -431,11 +439,103 @@ impl StoreTx<'_> {
                    e.original_filename, e.imported_at, e.subject, e.from_addr, e.sent_at, \
                    e.sent_precision, e.sent_tz, e.body_extract \
                    FROM reply_evidence e JOIN attachment_blobs b ON b.sha256 = e.blob_sha256 \
-                   WHERE e.application_id IS ?1 ORDER BY e.imported_at ASC";
+                   WHERE e.application_id IS ?1 AND NOT EXISTS \
+                   (SELECT 1 FROM evidence_recycle r WHERE r.evidence_id=e.id) ORDER BY e.imported_at ASC";
         let mut stmt = self.conn().prepare(sql)?;
         let rows = stmt.query_map(params![application_id], map_evidence_row)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StoreError::from)
+    }
+
+    pub fn is_evidence_recycled(&self, id: &str) -> Result<bool, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM evidence_recycle WHERE evidence_id=?1)",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub(crate) fn ensure_active_evidence(&self, id: &str) -> Result<(), StoreError> {
+        if self.is_evidence_recycled(id)? {
+            return Err(StoreError::Validation(
+                "通知已在回收站，请先恢复后再操作。".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn list_recycled_evidence(&self) -> Result<Vec<ReplyEvidence>, StoreError> {
+        let mut stmt = self.conn().prepare(
+            "SELECT evidence_id FROM evidence_recycle ORDER BY recycled_at DESC, evidence_id",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.get_evidence(&id)?
+                    .ok_or_else(|| StoreError::NotFound(id))
+            })
+            .collect()
+    }
+
+    pub fn set_evidence_recycled(
+        &mut self,
+        id: &str,
+        recycled: bool,
+    ) -> Result<ReplyEvidence, StoreError> {
+        let evidence = self
+            .get_evidence(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("evidence {id}")))?;
+        if self.is_evidence_recycled(id)? == recycled {
+            return Ok(evidence);
+        }
+        if !recycled {
+            if let Some(app) = evidence.application_id.as_deref() {
+                if self
+                    .get_application(app)?
+                    .is_some_and(|a| a.recycle_state != RecycleState::Active)
+                {
+                    return Err(StoreError::Validation(
+                        "原申请在回收站，请先恢复申请，再恢复这条通知。".into(),
+                    ));
+                }
+            }
+        }
+        let now = now_utc();
+        if recycled {
+            self.conn().execute(
+                "INSERT INTO evidence_recycle(evidence_id,recycled_at) VALUES (?1,?2)",
+                params![id, now],
+            )?;
+        } else {
+            self.conn()
+                .execute("DELETE FROM evidence_recycle WHERE evidence_id=?1", [id])?;
+        }
+        let event = EventDraft {
+            occurred: Occurred::DateTime {
+                rfc3339: now.clone(),
+                time_zone: None,
+            },
+            source: EventSource::Manual,
+            source_request_id: None,
+            actor: Actor::User,
+            payload: EventPayload::Custom {
+                event_type: if recycled {
+                    "custom.evidence_recycled"
+                } else {
+                    "custom.evidence_restored"
+                }
+                .into(),
+                data: serde_json::json!({"evidence_id": id}),
+                stage_update_mode: StageUpdateMode::HistoryOnly,
+            },
+        };
+        self.append_events(evidence.application_id.as_deref(), &[event], &now)?;
+        if let Some(app) = evidence.application_id.as_deref() {
+            self.recompute_reply_state(app)?;
+        }
+        Ok(evidence)
     }
 
     /// 维护检查(不自动删除):零引用 blob 与悬空证据引用。

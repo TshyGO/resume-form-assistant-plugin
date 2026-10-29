@@ -68,7 +68,10 @@ function Host({
 }
 
 test("多个候选没选，确认按不下去，并说清楚差什么", async () => {
-  render(<Host suggestion={twoCandidates} />);
+  const { container } = render(<Host suggestion={twoCandidates} />);
+  expect(container.querySelectorAll(".ai-review-overview > .ai-review-section")).toHaveLength(2);
+  expect(container.querySelector(".ai-review-primary")?.textContent).toContain("申请与分类");
+  expect(container.querySelector(".ai-todo-title-row")).toBeTruthy();
   expect(screen.getByRole("button", { name: "确认" })).toHaveProperty("disabled", true);
   expect(screen.getByText(/哪一条申请还没选/)).toBeTruthy();
 
@@ -141,7 +144,7 @@ test("待办可以改标题和时刻，也可以整条不要", async () => {
 test("这一次到底发出去了什么，点开能看到", async () => {
   const user = userEvent.setup();
   render(<Host suggestion={twoCandidates} />);
-  await user.click(screen.getByRole("button", { name: "看看这次发出去了什么" }));
+  await user.click(screen.getByRole("button", { name: "查看发送内容" }));
   expect(screen.getByText(/发往 api.example.test · 候选 2 条/)).toBeTruthy();
 });
 

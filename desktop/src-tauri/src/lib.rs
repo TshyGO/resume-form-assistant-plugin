@@ -22,6 +22,8 @@ mod nm_register_tests;
 mod cli;
 mod commands;
 mod evidence_commands;
+mod mail_import;
+mod attachment_commands;
 mod mailbox_commands;
 mod backup_commands;
 mod bridge_services;
@@ -85,6 +87,7 @@ struct AppState {
     /// Prevent overlapping scheduled/manual scans. User actions use short
     /// SQLite/archive transactions and never wait for mailbox network IO.
     mailbox_gate: Mutex<()>,
+    opened_attachments: Mutex<attachment_commands::OpenedAttachments>,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
@@ -552,6 +555,21 @@ fn import_evidence_cmd(
 #[tauri::command]
 fn list_inbox_cmd(state: State<AppState>) -> Result<Vec<evidence_commands::EvidenceSummary>, CommandError> {
     with_store(&state, evidence_commands::list_inbox)
+}
+
+#[tauri::command]
+fn list_recycled_evidence_cmd(
+    state: State<AppState>,
+) -> Result<Vec<evidence_commands::EvidenceSummary>, CommandError> {
+    with_store(&state, evidence_commands::list_recycled)
+}
+#[tauri::command]
+fn set_evidence_recycled_cmd(
+    state: State<AppState>,
+    evidence_id: String,
+    recycled: bool,
+) -> Result<evidence_commands::EvidenceSummary, CommandError> {
+    with_store(&state, |store| evidence_commands::set_recycled(store, &evidence_id, recycled))
 }
 
 #[tauri::command]
@@ -1896,6 +1914,7 @@ pub fn run() {
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
             mailbox_gate: Mutex::new(()),
+            opened_attachments: Mutex::new(attachment_commands::OpenedAttachments::default()),
             cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
@@ -1940,6 +1959,11 @@ pub fn run() {
             }
             match DataHost::initialize() {
                 Ok(host) => {
+                    if let Ok(mut cache) = app.state::<AppState>().opened_attachments.lock() {
+                        if cache.initialize(&host.paths().cache_dir.join("opened-mail-attachments")).is_err() {
+                            eprintln!("attachment cache cleanup deferred until next open");
+                        }
+                    }
                     // Host lock excludes a second process's live backup jobs.
                     // A cleanup failure blocks cloud jobs, not access to archives.
                     match backup_crypt::workspace::PreparedWorkspace::prepare(&host.paths().data_root) {
@@ -1996,6 +2020,7 @@ pub fn run() {
                         // The list re-queries. Emitting before the commit, or when the
                         // write failed, would show a row the archive does not have.
                         let _ = handle.emit("applications-changed", &notice);
+                        if notice.message_type == "mail.import" { let _ = handle.emit("evidence-changed", ()); }
                     })).notifying_legacy(Arc::new(move |notice| {
                         // The 「简历」 page shows the pending import without a manual refresh.
                         let _ = legacy_handle.emit("legacy-import-changed", &notice);
@@ -2110,7 +2135,14 @@ pub fn run() {
             get_snapshot_cmd,
             import_evidence_cmd,
             list_inbox_cmd,
+            list_recycled_evidence_cmd,
+            set_evidence_recycled_cmd,
             get_evidence_preview_cmd,
+            attachment_commands::list_evidence_attachments_cmd,
+            attachment_commands::preview_evidence_attachment_cmd,
+            attachment_commands::preview_evidence_spreadsheet_cmd,
+            attachment_commands::open_evidence_attachment_cmd,
+            attachment_commands::save_evidence_attachment_cmd,
             associate_evidence_cmd,
             unassociate_evidence_cmd,
             classify_evidence_cmd,
@@ -2224,8 +2256,19 @@ pub fn run() {
                 }
             }
         })
-        .run(context)
-        .expect("error while running 网申快填");
+        .build(context)
+        .expect("error while building 网申快填")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut cache) = state.opened_attachments.lock() {
+                        if cache.close().is_err() {
+                            eprintln!("attachment copies still in use; cleanup deferred to next startup");
+                        }
+                    }
+                }
+            }
+        });
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

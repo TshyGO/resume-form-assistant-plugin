@@ -237,7 +237,7 @@ fn a_v5_archive_gains_the_column_and_lists_old_mail_for_backfill() {
     old.close().unwrap();
 
     let store = open(dir.path());
-    assert_eq!(store.schema_version(), 6);
+    assert_eq!(store.schema_version(), 7);
     let pending = store.evidence_missing_message_id().unwrap();
     let ids: Vec<&str> = pending.iter().map(|p| p.evidence_id.as_str()).collect();
     assert_eq!(ids, ["ev-a", "ev-b"]);

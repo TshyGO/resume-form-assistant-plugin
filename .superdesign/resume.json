@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "mail-attachment-viewer": {
+      "targetKind": "new-target",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "afcbb9ff-702d-488d-9472-54edc5cc754b",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/src/react/SettingsDialog.tsx"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
+        "desktop/src/react/SettingsDialog.tsx": "14117a931859a0e76837ccee0902e82c88603663fb17b07a6569f8ccec442dc9"
+      },
+      "drafts": {
+        "afcbb9ff-702d-488d-9472-54edc5cc754b": {
+          "title": "网申快填 - 附件预览对话框",
+          "visualDirection": "existing desktop tokens, native modal with attachment list and document preview"
+        }
+      },
+      "updatedAt": "2026-10-28T14:20:00+00:00"
+    },
+    "sidepanel-mail-column": {
+      "targetKind": "existing-ui",
+      "projectId": "17bf30e0-f625-4a85-af17-a7b126af6d36",
+      "activeDraftId": "278c23c9-b6f6-4204-8d9c-8fe166bf15da",
+      "designSystemPath": ".superdesign/sidepanel-design-system.md",
+      "contextFiles": [
+        ".superdesign/sidepanel-design-system.md",
+        "sidepanel.html",
+        "sidepanel.css",
+        "sidepanel-mail.js"
+      ],
+      "fingerprints": {
+        ".superdesign/sidepanel-design-system.md": "0f0f2d9aba9f25cfe75b2104bea8fa89148a1aa60954e256ce2eb8fc6524222a",
+        "sidepanel.html": "7097b0a18acd218c48608d812a6691932ea49fb5c5e0a0413efea3824513e81f",
+        "sidepanel.css": "11ae86c168ce12abc49bd8d2aa1e7210cf83f2067c39c4d4a1ce7c091f35033a",
+        "sidepanel-mail.js": "bb881e05c918cfe9cd52c6c995b4bfd96f92747a83bbeed430a3639aaf4d4f4b"
+      },
+      "drafts": {
+        "278c23c9-b6f6-4204-8d9c-8fe166bf15da": {
+          "title": "填写优先 · 独立邮件栏目",
+          "currentVersion": 5,
+          "visualDirection": "Fill-first tabs; two steps within one continuous white card; equally aligned two-line job and unassociated radio rows"
+        }
+      },
+      "updatedAt": "2026-10-28T13:05:46.348566+00:00"
+    },
+    "notification-recycle": {
+      "targetKind": "new-ui",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "8f1f1727-bf56-480c-b864-b430ea6a0aa7",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/index.html",
+        "desktop/src/styles.css",
+        "desktop/src/inbox-ui.ts",
+        "desktop/src/mailbox-ui.ts"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
+        "desktop/index.html": "410ba6c3805882a2c485fd0d5299e0da7eb0c4441eccf22bacec08b62e0a730f",
+        "desktop/src/styles.css": "28b449e77950fee7f5f4ce156525425dcd65882cd1768bfef6ea43ba97bbf471",
+        "desktop/src/inbox-ui.ts": "07f8ca5a1dfc0b215e110ae7eaef6ce15b18b7ccd571c0898f3be8e318dffb1b",
+        "desktop/src/mailbox-ui.ts": "5d59e13763f5e824edadfd8930c8d741a9c37c26d89e43094f59bae3e7226ad0"
+      },
+      "drafts": {
+        "8f1f1727-bf56-480c-b864-b430ea6a0aa7": {
+          "title": "招聘通知 · 可恢复回收站",
+          "currentVersion": 2,
+          "visualDirection": "Existing inbox reader, organizer with text, expand/collapse icon, recycle icon last; AI organizer first, recovery preserved"
+        }
+      },
+      "updatedAt": "2026-10-28T14:20:00+00:00"
+    },
+    "ai-review-compact": {
+      "targetKind": "existing-ui",
+      "projectId": "37fcee7e-8194-43a6-bbcb-187ec32b2314",
+      "activeDraftId": "3393ab5a-8f1b-4714-bf34-2020648d8206",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "desktop/src/ai/ReviewPanel.tsx",
+        "desktop/src/styles.css"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "b88234e71baf177f725bf475ffb0d6205196e70d213bcb6e4a64429085a0262a",
+        "desktop/src/ai/ReviewPanel.tsx": "aae53eea4bbde85c1e497c08ac89383334b09c66a16975c26ebfa990e943d9b6",
+        "desktop/src/styles.css": "28b449e77950fee7f5f4ce156525425dcd65882cd1768bfef6ea43ba97bbf471"
+      },
+      "drafts": {
+        "3393ab5a-8f1b-4714-bf34-2020648d8206": {
+          "title": "核对 AI 建议 · 紧凑审核",
+          "currentVersion": 2,
+          "visualDirection": "Compact 860px review dialog; uniform 36px controls; grouped application/classification and stage/progress; prioritized cautions and confirmation"
+        }
+      },
+      "updatedAt": "2026-10-28T14:20:00+00:00"
+    }
+  }
+}

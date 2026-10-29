@@ -1,5 +1,11 @@
 {
   "requests": [
+    {"id": "mail-import-ok", "path": "requests/mail-import-ok.json", "schema": "accept", "protocol": {"accept": true}},
+    {"id": "mail-import-v3", "path": "requests/mail-import-v3.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
+    {"id": "mail-import-missing-identity", "path": "requests/mail-import-missing-identity.json", "schema": "accept", "protocol": {"accept": false, "code": "identity_missing"}},
+    {"id": "mail-import-wrong-digest", "path": "requests/mail-import-wrong-digest.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "mail-import-wrong-count", "path": "requests/mail-import-wrong-count.json", "schema": "accept", "protocol": {"accept": false, "code": "invalid_payload"}},
+    {"id": "mail-import-oversized", "path": "requests/mail-import-oversized.json", "schema": "reject", "protocol": {"accept": false, "code": "invalid_payload"}},
     {"id": "health-ok", "path": "requests/health-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "handshake-ok", "path": "requests/handshake-ok.json", "schema": "accept", "protocol": {"accept": true}},
     {"id": "handshake-incompatible", "path": "requests/handshake-incompatible.json", "schema": "accept", "protocol": {"accept": false, "code": "protocol_incompatible"}},
@@ -141,6 +147,8 @@
     {"id": "resume-update-profile-values-apiurl-http-rejected", "path": "requests/resume-update-profile-values-apiurl-http-rejected.json", "schema": "accept", "protocol": {"accept": false, "code": "secret_forbidden"}}
   ],
   "responses": [
+    {"id": "mail-import-saved", "path": "responses/mail-import-saved.json", "requestType": "mail.import", "schema": "accept", "protocol": {"accept": true}, "request": "requests/mail-import-ok.json", "strict": {"accept": true}},
+    {"id": "mail-import-premature", "path": "responses/mail-import-premature.json", "requestType": "mail.import", "schema": "accept", "protocol": {"accept": true}, "request": "requests/mail-import-ok.json", "strict": {"accept": false, "code": "invalid_payload"}},
     {"id": "job-save-error", "path": "responses/job-save-error.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
     {"id": "job-save-success", "path": "responses/job-save-success.json", "requestType": "job.save", "schema": "accept", "protocol": {"accept": true}},
     {"id": "handshake-ok", "path": "responses/handshake-ok.json", "requestType": "handshake", "schema": "accept", "protocol": {"accept": true}},

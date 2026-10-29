@@ -117,6 +117,7 @@ export interface EvidenceSummary {
   replyClass: ReplyClass | null;
   sendMode: SendMode | null;
   sameBytesAs: string[];
+  recycled?: boolean;
 }
 
 export interface EvidencePreview extends EvidenceSummary {

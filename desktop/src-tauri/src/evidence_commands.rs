@@ -41,6 +41,7 @@ pub struct EvidenceSummary {
     pub send_mode: Option<String>,
     /// 引用同一份字节的其他证据。同哈希只是提示，不代表这次导入是多余的。
     pub same_bytes_as: Vec<String>,
+    pub recycled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,6 +362,21 @@ pub fn list_for_application(
         .collect())
 }
 
+pub fn list_recycled(store: &ArchiveStore) -> Result<Vec<EvidenceSummary>, CommandError> {
+    Ok(store
+        .list_recycled_evidence()?
+        .into_iter()
+        .map(|record| summarise(store, record))
+        .collect())
+}
+pub fn set_recycled(
+    store: &ArchiveStore,
+    id: &str,
+    recycled: bool,
+) -> Result<EvidenceSummary, CommandError> {
+    Ok(summarise(store, store.set_evidence_recycled(id, recycled)?))
+}
+
 pub fn get_preview(
     store: &ArchiveStore,
     evidence_id: &str,
@@ -485,6 +501,7 @@ pub fn stored_path(store: &ArchiveStore, evidence_id: &str) -> Result<PathBuf, C
 }
 
 fn summarise(store: &ArchiveStore, record: ReplyEvidence) -> EvidenceSummary {
+    let recycled = store.is_evidence_recycled(&record.id).unwrap_or(false);
     let same_bytes_as = store
         .evidence_for_blob(&record.blob.meta.sha256)
         .unwrap_or_default()
@@ -505,6 +522,7 @@ fn summarise(store: &ArchiveStore, record: ReplyEvidence) -> EvidenceSummary {
         reply_class: record.reply_class.map(|c| c.as_str().to_string()),
         send_mode: record.send_mode.map(|m| m.as_str().to_string()),
         same_bytes_as,
+        recycled,
     }
 }
 
@@ -558,7 +576,7 @@ pub fn bucket_now() -> String {
     bucket_from_unix(seconds)
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -577,4 +595,40 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod recycle_tests {
+    use super::*;
+    #[test]
+    fn move_and_restore_keep_original_bytes_and_return_correct_preview_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::commands::open_store(
+            &dir.path().join("archive"),
+            &dir.path().join("current.json"),
+        )
+        .unwrap();
+        let raw=b"From: hr@example.test\r\nSubject: Recycle fixture\r\nMessage-ID: <recycle@example.test>\r\nContent-Type: text/plain\r\n\r\nBody";
+        let (item, _) = import_bytes(
+            &store,
+            store.archive_dir(),
+            raw,
+            Some("fixture.eml".into()),
+            "2026/10",
+            None,
+        )
+        .unwrap();
+        assert_eq!(list_inbox(&store).unwrap().len(), 1);
+        assert!(set_recycled(&store, &item.id, true).unwrap().recycled);
+        assert!(list_inbox(&store).unwrap().is_empty());
+        assert_eq!(list_recycled(&store).unwrap()[0].id, item.id);
+        assert!(get_preview(&store, &item.id).unwrap().summary.recycled);
+        assert_eq!(
+            std::fs::read(stored_path(&store, &item.id).unwrap()).unwrap(),
+            raw
+        );
+        assert!(!set_recycled(&store, &item.id, false).unwrap().recycled);
+        assert!(list_recycled(&store).unwrap().is_empty());
+        assert_eq!(list_inbox(&store).unwrap()[0].id, item.id);
+    }
 }

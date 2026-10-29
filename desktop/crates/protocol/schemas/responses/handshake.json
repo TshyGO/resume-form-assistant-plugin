@@ -53,7 +53,8 @@
           "ui.open",
           "legacy.import",
           "usage.touch",
-          "usage.settings"
+          "usage.settings",
+          "mail.import"
         ]
       }
     }

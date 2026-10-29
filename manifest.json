@@ -9,6 +9,7 @@
     "offscreen",
     "storage",
     "tabs",
+    "scripting",
     "sidePanel",
     "nativeMessaging",
     "alarms"
@@ -85,7 +86,8 @@
         "page-actions.js",
         "page-recipe.js",
         "sidebar-state.js",
-        "content.js"
+        "content.js",
+        "webmail.js"
       ],
       "css": [
         "content.css"

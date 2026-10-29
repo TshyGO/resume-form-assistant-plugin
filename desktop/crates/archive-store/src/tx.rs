@@ -268,7 +268,7 @@ impl<'a> StoreTx<'a> {
     ) -> Result<ReplyEvidenceState, StoreError> {
         let mut stmt = self
             .tx
-            .prepare("SELECT reply_class FROM reply_evidence WHERE application_id = ?1")?;
+            .prepare("SELECT reply_class FROM reply_evidence e WHERE application_id = ?1 AND NOT EXISTS (SELECT 1 FROM evidence_recycle r WHERE r.evidence_id=e.id)")?;
         let rows = stmt.query_map(params![application_id], |r| r.get::<_, Option<String>>(0))?;
         let mut has_evidence = false;
         let mut classes: Vec<ReplyClass> = Vec::new();

@@ -3,7 +3,7 @@ import { LinkError } from './errors.mjs';
 
 export const PROTOCOL_VERSION = 2;
 export const MIN_PROTOCOL_VERSION = 2;
-export const MAX_PROTOCOL_VERSION = 3;
+export const MAX_PROTOCOL_VERSION = 4;
 
 // D05 splits the message types three ways and the split is not cosmetic: health and
 // handshake are refused if they carry archive identity, and the rest are refused if they do
@@ -53,7 +53,7 @@ export async function buildEnvelope({
   }
 
   const message = {
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: messageType === 'mail.import' ? 4 : PROTOCOL_VERSION,
     messageId,
     clientInstanceId,
     messageType,

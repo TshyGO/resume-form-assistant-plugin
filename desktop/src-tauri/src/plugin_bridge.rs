@@ -32,6 +32,7 @@ const MAX_CANDIDATES: usize = 32;
 /// so nothing from the archive travels back to the extension.
 pub fn apply(request: &Request, store: &ArchiveStore) -> Result<Answer, ErrorCode> {
     match request.message_type {
+        MessageType::MailImport => { ensure_current_identity(request, store)?; crate::mail_import::apply(request, store) },
         MessageType::QueryCandidates => query_candidates(request, store),
         MessageType::JobSave | MessageType::FillSubmit | MessageType::SubmitConfirm => {
             write(request, store)

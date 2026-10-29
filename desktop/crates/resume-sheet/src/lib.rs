@@ -9,6 +9,9 @@ use calamine::{open_workbook_from_rs, Data, DataRef, Reader, Xlsx, XlsxError};
 use quick_xml::events::Event;
 use rust_xlsxwriter::Workbook;
 
+mod preview;
+pub use preview::{preview_xlsx, SheetPreview};
+
 pub const HEADER: [&str; 3] = ["一级分类", "字段名", "值"];
 pub const SHEET_NAME: &str = "简历模板";
 const UNGROUPED: &str = "未分类";
@@ -21,6 +24,57 @@ const MAX_XLSX_EXPANDED_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_XLSX_MEMBERS: usize = 1024;
 const MAX_XLSX_CELLS: usize = 200_000;
 const MAX_XML_ATTRIBUTES: usize = 1024;
+
+/// Identify an XLSX package from its central directory and content types, not ZIP
+/// entry order. This does not parse cells or apply the smaller in-app preview cap.
+pub fn is_xlsx_document(bytes: &[u8]) -> bool {
+    let check = || -> Option<()> {
+        if !bytes.starts_with(b"PK\x03\x04") { return None; }
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+        if zip.len() > MAX_XLSX_MEMBERS { return None; }
+        let mut expanded = 0u64;
+        let mut names = std::collections::BTreeSet::new();
+        for i in 0..zip.len() {
+            let file = zip.by_index(i).ok()?;
+            expanded = expanded.checked_add(file.size())?;
+            if expanded > MAX_XLSX_EXPANDED_BYTES || !names.insert(file.name().to_string())
+                || file.name().to_ascii_lowercase().ends_with("vbaproject.bin") { return None; }
+        }
+        let mut content = Vec::new();
+        zip.by_name("[Content_Types].xml").ok()?.take(256 * 1024 + 1).read_to_end(&mut content).ok()?;
+        if content.len() > 256 * 1024 { return None; }
+        let mut xml = quick_xml::Reader::from_reader(content.as_slice());
+        let mut workbook = None;
+        loop {
+            match xml.read_event().ok()? {
+                Event::Start(element) | Event::Empty(element) => {
+                    let mut part = None;
+                    let mut kind = None;
+                    for (i, attr) in element.attributes().enumerate() {
+                        if i >= MAX_XML_ATTRIBUTES { return None; }
+                        let attr = attr.ok()?;
+                        let value = attr.decode_and_unescape_value(xml.decoder()).ok()?.into_owned();
+                        if attr.key.as_ref() == b"PartName" { part = Some(value.clone()); }
+                        if attr.key.as_ref() == b"ContentType" { kind = Some(value); }
+                    }
+                    if kind.as_ref().is_some_and(|s| s.to_ascii_lowercase().contains("macroenabled") || s.to_ascii_lowercase().contains("vbaproject")) { return None; }
+                    if element.local_name().as_ref() == b"Override"
+                        && kind.as_deref() == Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml") {
+                        if workbook.is_some() { return None; }
+                        workbook = part;
+                    }
+                }
+                Event::DocType(_) => return None,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let path = workbook?.strip_prefix('/')?.to_string();
+        if !names.contains(&path) || !names.contains("_rels/.rels") { return None; }
+        Some(())
+    };
+    check().is_some()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
@@ -287,8 +341,8 @@ fn xml_attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8], decoder: quick_xm
 }
 
 /// calamine 的 DataRef 不区分 inlineStr 与 t=str，只有后者仍需 Excel 转义解码。
-/// 从同一 ZIP 的实际关系链定位首表，并按 XML 流顺序保留类型；不能用是否存在公式猜测。
-fn first_sheet_string_types(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<bool>, SheetError> {
+/// 从同一 ZIP 的实际关系链定位指定表，并按 XML 流顺序保留类型；不能用是否存在公式猜测。
+fn sheet_string_types(parts: &BTreeMap<String, Vec<u8>>, sheet_index: usize) -> Result<Vec<bool>, SheetError> {
     let part = |path: &str| parts.get(&path.replace('\\', "/").to_ascii_lowercase())
         .map(Vec::as_slice).ok_or(SheetError::Unreadable);
     let mut directory = "xl/".to_string();
@@ -309,10 +363,14 @@ fn first_sheet_string_types(parts: &BTreeMap<String, Vec<u8>>) -> Result<Vec<boo
         }
     }
     let mut xml = xlsx_xml_reader(part(&format!("{directory}workbook.xml"))?);
+    let mut seen_sheets = 0;
     let sheet_id = loop {
         match xml.read_event().map_err(|_| SheetError::Unreadable)? {
             Event::Start(e) if e.local_name().as_ref() == b"sheet" => {
-                break xml_attr(&e, b"id", xml.decoder(), true)?.ok_or(SheetError::Unreadable)?;
+                if seen_sheets == sheet_index {
+                    break xml_attr(&e, b"id", xml.decoder(), true)?.ok_or(SheetError::Unreadable)?;
+                }
+                seen_sheets += 1;
             }
             Event::Eof => return Err(SheetError::Unreadable),
             _ => {}
@@ -363,7 +421,7 @@ fn xlsx_rows(bytes: &[u8]) -> Result<Vec<Row>, SheetError> {
         Err(XlsxError::NotAWorksheet(_)) => return Ok(Vec::new()),
         Err(_) => return Err(SheetError::Unreadable),
     };
-    let string_types = first_sheet_string_types(&parts)?;
+    let string_types = sheet_string_types(&parts, 0)?;
     drop(parts);
     // 不调用 worksheet_range：两个距离很远的单元格也会让 Range 分配巨大矩形。
     let mut cells = Vec::new();
@@ -609,6 +667,33 @@ mod tests {
 
     fn sample_xlsx() -> Vec<u8> {
         write_xlsx(&[g("组", &[("键", "值")])]).unwrap()
+    }
+
+    #[test]
+    fn xlsx_identity_uses_package_contents_independent_of_zip_entry_order() {
+        use std::io::Write;
+        let bytes = sample_xlsx();
+        assert!(is_xlsx_document(&bytes));
+        let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        output.start_file("docProps/custom.xml", options).unwrap();
+        output.write_all(b"<Properties/>").unwrap();
+        for i in (0..input.len()).rev() {
+            let mut file = input.by_index(i).unwrap();
+            output.start_file(file.name(), options).unwrap();
+            std::io::copy(&mut file, &mut output).unwrap();
+        }
+        let reordered = output.finish().unwrap().into_inner();
+        assert!(preview_xlsx(&reordered, 0).is_ok());
+        assert!(is_xlsx_document(&reordered));
+        assert!(!is_xlsx_document(b"PK\x03\x04renamed.zip"));
+        let macros = with_member(&bytes, "xl/vbaProject.bin", b"macro");
+        assert!(!is_xlsx_document(&macros));
+        let bad_types = with_member(&bytes, "[Content_Types].xml", b"<Types/>");
+        assert!(!is_xlsx_document(&bad_types));
+        let oversized_types = with_member(&bytes, "[Content_Types].xml", &vec![b' '; 256 * 1024 + 1]);
+        assert!(!is_xlsx_document(&oversized_types));
     }
 
     #[test]
@@ -1022,4 +1107,39 @@ mod tests {
         let err = write_xlsx(&groups).unwrap_err();
         assert_eq!(err.to_string(), "「组 / 键」超过 Excel 单元格上限 32767 字，无法导出。");
     }
+    #[test]
+    fn preview_preserves_all_columns_and_sheet_selection_without_evaluating_formulas() {
+        let mut workbook = Workbook::new();
+        let first = workbook.add_worksheet(); first.set_name("First").unwrap();
+        first.write_string(0, 0, "<script>literal</script>").unwrap();
+        first.write_number(0, 4, 42).unwrap();
+        first.write_formula(1, 4, "=1+1").unwrap();
+        let second = workbook.add_worksheet(); second.set_name("Second").unwrap();
+        second.write_string(2, 1, "hello").unwrap();
+        let bytes = workbook.save_to_buffer().unwrap();
+        let view = preview_xlsx(&bytes, 0).unwrap();
+        assert_eq!(view.sheet_names, ["First", "Second"]);
+        assert_eq!(view.column_count, 5);
+        assert!(view.cells.contains(&(0, 4, "42".into())));
+        assert!(view.cells.contains(&(1, 4, "0".into()))); // Default cached result; not recalculated to 2.
+        assert!(view.cells.contains(&(0, 0, "<script>literal</script>".into())));
+        assert!(!view.truncated);
+        let view = preview_xlsx(&bytes, 1).unwrap();
+        assert_eq!(view.cells, [(2, 1, "hello".into())]);
+        assert!(preview_xlsx(&bytes, 2).is_err());
+        assert!(preview_xlsx(b"PK\x03\x04fake", 0).is_err());
+    }
+    #[test]
+    fn preview_sparse_extreme_coordinates_are_bounded_and_explicitly_truncated() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.add_worksheet();
+        sheet.write_string(0, 0, "visible").unwrap();
+        sheet.write_string(1_048_575, 16_383, "outside preview").unwrap();
+        let view = preview_xlsx(&workbook.save_to_buffer().unwrap(), 0).unwrap();
+        assert_eq!(view.row_count, 1_048_576);
+        assert_eq!(view.column_count, 16_384);
+        assert_eq!(view.cells, [(0, 0, "visible".into())]);
+        assert!(view.truncated);
+    }
+
 }

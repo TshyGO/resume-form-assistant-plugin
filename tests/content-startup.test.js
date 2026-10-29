@@ -131,7 +131,7 @@ for (const [name, options] of [
 
 test("#275: the scripts with a CommonJS export still export their api under Node", () => {
   const exporting = SCRIPTS.filter((file) => SOURCES[file].includes("module.exports ="));
-  assert.equal(exporting.length, 12);
+  assert.equal(exporting.length, 13);
   for (const file of exporting) {
     assert.ok(Object.keys(require(path.join(root, file))).length > 0, `${file} exports its api`);
   }
@@ -267,7 +267,8 @@ test("a missing helper leaves the page not ready and is reported once, without i
 });
 
 test("startup checks for every helper, not only the one #275 lost", async () => {
-  for (const file of SCRIPTS.slice(0, -1)) {
+  // Mail has its own listener and is not a prerequisite of the filling controller.
+  for (const file of SCRIPTS.filter((name) => name !== "content.js" && name !== "webmail.js")) {
     const page = await openPage({ scripts: SCRIPTS.filter((name) => name !== file) });
     assert.deepEqual(page.rejections, [], file);
     assert.equal(page.hosts(), 0, file);
@@ -275,6 +276,9 @@ test("startup checks for every helper, not only the one #275 lost", async () => 
     // Without feedback-core.js there is nothing to report with.
     assert.equal(page.reports.length, file === "feedback-core.js" ? 0 : 1, file);
   }
+  const withoutMail = await openPage({ scripts: SCRIPTS.filter((name) => name !== "webmail.js") });
+  assertStarted(withoutMail);
+  assert.equal((await withoutMail.status()).ready, true);
 });
 
 test("a failure while the controller is being built hides what was already put on the page", async () => {

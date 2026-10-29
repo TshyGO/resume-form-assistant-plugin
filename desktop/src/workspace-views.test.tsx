@@ -170,6 +170,10 @@ test("evidence preview escapes original text and requires an explicit associatio
   const h = mountInbox(invoke); await h.refresh();
   fireEvent.click(document.querySelector("[data-evidence]")!);
   await waitFor(() => expect(document.getElementById("inbox-application")).toBeTruthy());
+  const toolbar = document.querySelector(".evidence-reader-actions")!;
+  expect([...toolbar.querySelectorAll("button")].map(button => button.dataset.act)).toEqual(["toggle-organizer", "toggle-reader", "recycle"]);
+  expect(within(toolbar as HTMLElement).getByRole("button", {name:"展开阅读"}).getAttribute("title")).toBe("展开阅读");
+  expect(within(toolbar as HTMLElement).getByRole("button", {name:"移到回收站"}).querySelector('svg[aria-hidden="true"]')).toBeTruthy();
   expect(document.querySelector(".evidence-workspace")).toBeTruthy();
   expect(document.getElementById("inbox-organizer")!.hidden).toBe(true);
   fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
@@ -181,7 +185,8 @@ test("evidence preview escapes original text and requires an explicit associatio
   fireEvent.click(document.querySelector('[data-act="toggle-organizer"]')!);
   fireEvent.click(document.querySelector('[data-act="toggle-reader"]')!);
   expect(document.getElementById("inbox-shell")!.classList.contains("is-reader-expanded")).toBe(true);
-  expect(document.querySelector('[data-act="toggle-reader"]')!.textContent).toContain("恢复双栏");
+  expect(document.querySelector('[data-act="toggle-reader"]')!.getAttribute("aria-label")).toBe("恢复双栏");
+  expect(document.querySelector('[data-act="toggle-reader"]')!.getAttribute("aria-pressed")).toBe("true");
   expect(document.querySelector(".evidence-body img")).toBeNull();
   expect(document.querySelector(".evidence-body")!.textContent).toContain("<img");
   fireEvent.click(document.querySelector('[data-act="associate"]')!);
@@ -331,4 +336,31 @@ test.each([false, true])("todo read failure has retry and keeps previously loade
   fireEvent.click(document.querySelector('[data-todo-retry]')!);
   await waitFor(() => expect(document.querySelector('[data-todo-retry]')).toBeNull());
   expect(document.getElementById("todo-status")!.textContent).toBe("已刷新待办。");
+});
+
+test("stored mail exposes attachment rows before the body and closes the viewer back to that mail", async () => {
+  const item = { id: "mail-with-file", kind: "eml", subject: "测试邀请", importedAt: "2026-10-28", sameBytesAs: [], bodyExtract: "邮件正文内容", sizeBytes: 1024 };
+  const calls = vi.fn();
+  const invoke: Invoke = async <T,>(name: string, args?: Record<string, unknown>): Promise<T> => {
+    calls(name,args);
+    if (name === "list_inbox_cmd") return [item] as T;
+    if (name === "get_evidence_preview_cmd") return item as T;
+    if (name === "list_applications_cmd") return { items: [] } as T;
+    if (name === "list_evidence_attachments_cmd") return { sourceSha256: "source", items: [{ index: 0, name: "补充资料.docx", mime: "application/octet-stream", sizeBytes: 4200, previewKind: "file", readable: true, canOpen: true }] } as T;
+    return true as T;
+  };
+  const inbox = mountInbox(invoke); await inbox.refresh();
+  fireEvent.click(document.querySelector('[data-evidence="mail-with-file"]')!);
+  const entry = await within(document.getElementById("inbox-preview")!).findByRole("button",{name:/补充资料.docx/});
+  const attachments = document.getElementById("inbox-mail-attachments")!;
+  const heading = document.getElementById("evidence-original-heading")!;
+  expect(heading.textContent).toBe("邮件正文");
+  expect(attachments.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(calls.mock.calls.some(([name])=>name==="preview_evidence_attachment_cmd")).toBe(false);
+  fireEvent.click(entry);
+  await waitFor(()=>expect(document.querySelector("dialog.attachment-dialog")).toBeTruthy());
+  fireEvent.click(within(document.querySelector("dialog.attachment-dialog")!).getByRole("button",{name:/^关闭$/}));
+  await waitFor(()=>expect(document.querySelector("dialog.attachment-dialog")).toBeNull());
+  expect(document.activeElement).toBe(entry);
+  expect(document.getElementById("inbox-preview")!.textContent).toContain("测试邀请");
 });

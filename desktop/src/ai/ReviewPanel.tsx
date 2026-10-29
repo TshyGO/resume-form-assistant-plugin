@@ -53,23 +53,25 @@ function TodoRow({
 }) {
   return (
     <li className={`ai-todo${todo.keep ? "" : " is-skipped"}`}>
-      <label className="ai-check">
-        <input
-          type="checkbox"
-          checked={todo.keep}
-          onChange={(event) => onChange({ ...todo, keep: event.target.checked })}
-        />
-        转成待办
-      </label>
-      <label>
-        标题
-        <input
-          aria-label={`待办 ${index + 1} 标题`}
-          value={todo.title}
-          onChange={(event) => onChange({ ...todo, title: event.target.value })}
-        />
-      </label>
-      <div className="ai-field-grid">
+      <div className="ai-todo-title-row">
+        <label className="ai-check">
+          <input
+            type="checkbox"
+            checked={todo.keep}
+            onChange={(event) => onChange({ ...todo, keep: event.target.checked })}
+          />
+          转成待办
+        </label>
+        <label className="ai-todo-title">
+          标题
+          <input
+            aria-label={`待办 ${index + 1} 标题`}
+            value={todo.title}
+            onChange={(event) => onChange({ ...todo, title: event.target.value })}
+          />
+        </label>
+      </div>
+      <div className={`ai-field-grid ai-todo-fields${todo.duePrecision === "none" ? " is-undated" : ""}`}>
         <label>
           到期
           <select
@@ -222,12 +224,12 @@ export function ReviewPanel({
     >
       <div className="ai-review">
         <p className="dialog-intro">
-          下面每一项都可以改。按确认之前，这条通知的分类、申请的阶段和待办都不会变。
+          核对申请、分类、阶段和待办，确认后才会写入。
         </p>
         <p className="ai-model-line">
           模型 {suggestion.modelLabel ?? "未知"} · 生成于 {suggestion.createdAt.slice(0, 16).replace("T", " ")} UTC ·{" "}
           <button type="button" className="linkish" onClick={() => setShowScope((on) => !on)}>
-            {showScope ? "收起这次发出去的范围" : "看看这次发出去了什么"}
+            {showScope ? "收起发送内容" : "查看发送内容"}
           </button>
         </p>
         {showScope ? (
@@ -237,116 +239,127 @@ export function ReviewPanel({
           </p>
         ) : null}
 
-        <section className="ai-review-section">
-          <h3>对应哪一条申请</h3>
-          {suggestion.candidates.length > 1 ? (
-            <p className="note warn">同一家公司有多条申请，模型没能唯一指认。请自己选一条。</p>
-          ) : null}
-          {suggestion.candidates.length === 0 ? (
-            <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
-          ) : null}
-          <label>
-            申请
-            <select
-              value={draft.applicationId}
-              onChange={(event) => patch({ applicationId: event.target.value })}
-              data-autofocus
-            >
-              <option value="">请选择…</option>
-              {choices.map((candidate) => (
-                <option key={candidate.id} value={candidate.id} disabled={candidate.missing}>
-                  {candidate.company}
-                  {candidate.title ? ` · ${candidate.title}` : ""}
-                  {candidate.stage ? `（${stageLabel(candidate.stage)}）` : ""}
-                </option>
+        {suggestion.uncertainties.length ? (
+          <section className="ai-review-section ai-review-cautions">
+            <h3>需要留意</h3>
+            <ul className="ai-uncertainties">
+              {suggestion.uncertainties.map((item) => (
+                <li key={item}>{item}</li>
               ))}
-            </select>
-          </label>
-          <p className="field-hint">下拉里前几条是模型给的候选，后面是其余申请——它指错了也能改。</p>
-        </section>
+            </ul>
+          </section>
+        ) : null}
 
-        <section className="ai-review-section">
-          <h3>分类</h3>
-          <div className="ai-field-grid">
+        <div className="ai-review-overview">
+          <section className="ai-review-section ai-review-primary">
+            <h3>申请与分类</h3>
+            {suggestion.candidates.length > 1 ? (
+              <p className="note warn">同一家公司有多条申请，模型没能唯一指认。请自己选一条。</p>
+            ) : null}
+            {suggestion.candidates.length === 0 ? (
+              <p className="note warn">模型认不出这封信是哪一条申请（它宁可空着也不猜）。请自己选一条。</p>
+            ) : null}
             <label>
-              通知类型
+              申请
               <select
-                value={draft.replyClass}
-                onChange={(event) => patch({ replyClass: event.target.value as ReplyClass })}
+                value={draft.applicationId}
+                onChange={(event) => patch({ applicationId: event.target.value })}
+                data-autofocus
               >
-                {REPLY_CLASS_OPTIONS.filter((option) => option.value !== "").map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                <option value="">请选择…</option>
+                {choices.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id} disabled={candidate.missing}>
+                    {candidate.company}
+                    {candidate.title ? ` · ${candidate.title}` : ""}
+                    {candidate.stage ? `（${stageLabel(candidate.stage)}）` : ""}
                   </option>
                 ))}
               </select>
             </label>
-            <label>
-              发送方式
-              <select
-                value={draft.sendMode}
-                onChange={(event) => patch({ sendMode: event.target.value as SendMode })}
-              >
-                {SEND_MODE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </section>
+            <p className="field-hint">模型候选在前，也可改选其他申请。</p>
+            <div className="ai-field-grid">
+              <label>
+                通知类型
+                <select
+                  value={draft.replyClass}
+                  onChange={(event) => patch({ replyClass: event.target.value as ReplyClass })}
+                >
+                  {REPLY_CLASS_OPTIONS.filter((option) => option.value !== "").map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                发送方式
+                <select
+                  value={draft.sendMode}
+                  onChange={(event) => patch({ sendMode: event.target.value as SendMode })}
+                >
+                  {SEND_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </section>
 
-        <section className="ai-review-section">
-          <h3>阶段建议</h3>
-          {unusableStage ? (
-            <p className="note warn">
-              模型给的阶段（{stageLabel(suggestion.stage!)}）不能从一封通知里推出来，已经忽略。
-              需要记阶段就自己选一个。
-            </p>
-          ) : null}
-          <div className="ai-field-grid">
-            <label>
-              阶段
-              <select
-                value={draft.stage}
-                onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
-              >
-                {STAGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              面试轮次
-              <input
-                aria-label="轮次"
-                inputMode="numeric"
-                value={draft.round ?? ""}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  patch({ round: event.target.value.trim() === "" || Number.isNaN(value) ? null : value });
-                }}
-              />
-            </label>
-          </div>
-          <label className="ai-check">
-            <input
-              type="checkbox"
-              checked={draft.updateProgress}
-              onChange={(event) => patch({ updateProgress: event.target.checked })}
-            />
-            同时更新申请进度
-          </label>
-          <p className="field-hint">不勾就只记进时间线，当前进度不动——补录旧通知时要的就是这个。</p>
-        </section>
+          <section className="ai-review-section">
+            <h3>阶段与进度</h3>
+            {unusableStage ? (
+              <p className="note warn">
+                模型给的阶段（{stageLabel(suggestion.stage!)}）不能从一封通知里推出来，已经忽略。
+                需要记阶段就自己选一个。
+              </p>
+            ) : null}
+            <div className="ai-field-grid">
+              <label>
+                阶段
+                <select
+                  value={draft.stage}
+                  onChange={(event) => patch({ stage: event.target.value as Stage | "" })}
+                >
+                  {STAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                面试轮次
+                <input
+                  aria-label="轮次"
+                  inputMode="numeric"
+                  value={draft.round ?? ""}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    patch({ round: event.target.value.trim() === "" || Number.isNaN(value) ? null : value });
+                  }}
+                />
+              </label>
+            </div>
+            <div className="ai-progress-choice">
+              <label className="ai-check">
+                <input
+                  type="checkbox"
+                  checked={draft.updateProgress}
+                  onChange={(event) => patch({ updateProgress: event.target.checked })}
+                />
+                同时更新申请进度
+              </label>
+              <p className="field-hint">不勾选仅记入时间线，当前进度不变。</p>
+            </div>
+          </section>
+        </div>
 
         {draft.todos.length ? (
           <section className="ai-review-section">
-            <h3>待办草稿</h3>
-            <p className="field-hint">时刻写成带时区偏移的格式，例如 2026-10-11T14:30:00+08:00。</p>
+            <h3>待办草稿<span className="section-tag">{draft.todos.length} 项</span></h3>
+            <p className="field-hint">时间需含时区，例如 2026-10-11T14:30:00+08:00。</p>
             <ul className="ai-todos">
               {draft.todos.map((todo, index) => (
                 <TodoRow
@@ -362,16 +375,7 @@ export function ReviewPanel({
           </section>
         ) : null}
 
-        {suggestion.uncertainties.length ? (
-          <section className="ai-review-section">
-            <h3>模型自己也不确定的地方</h3>
-            <ul className="ai-uncertainties">
-              {suggestion.uncertainties.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+
 
         <section className="ai-review-section">
           <h3>原文依据</h3>
