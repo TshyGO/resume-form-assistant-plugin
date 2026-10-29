@@ -445,10 +445,11 @@ function describeFillRecordStatus(result, application = null) {
   return { tone: 'warn', text: '这次没能留档到桌面，已经留在待同步里。' };
 }
 
-// A fill names an application that already exists, so the desktop's usual reason for
-// refusing one is that the application is gone — not that a company name is wrong.
+// A fill names an application that already exists, so a company name is never the reason it
+// is refused. The desktop also answers invalid_payload for content it does not accept, so the
+// application being gone is only the likely cause, not a fact.
 const FILL_REFUSALS = {
-  invalid_payload: '桌面上找不到所选的申请，这次没有留档。请在「待同步」里重新选择申请。'
+  invalid_payload: '桌面没有接受这次留档，所选的申请可能已经删除。请到桌面核对；申请不在了的话，在「待同步」里取消这条，再重新选择申请。'
 };
 
 // --- #178: choosing the application for a fill in the native side panel ---------------
