@@ -25,6 +25,57 @@ const MAX_XLSX_MEMBERS: usize = 1024;
 const MAX_XLSX_CELLS: usize = 200_000;
 const MAX_XML_ATTRIBUTES: usize = 1024;
 
+/// Identify an XLSX package from its central directory and content types, not ZIP
+/// entry order. This does not parse cells or apply the smaller in-app preview cap.
+pub fn is_xlsx_document(bytes: &[u8]) -> bool {
+    let check = || -> Option<()> {
+        if !bytes.starts_with(b"PK\x03\x04") { return None; }
+        let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+        if zip.len() > MAX_XLSX_MEMBERS { return None; }
+        let mut expanded = 0u64;
+        let mut names = std::collections::BTreeSet::new();
+        for i in 0..zip.len() {
+            let file = zip.by_index(i).ok()?;
+            expanded = expanded.checked_add(file.size())?;
+            if expanded > MAX_XLSX_EXPANDED_BYTES || !names.insert(file.name().to_string())
+                || file.name().to_ascii_lowercase().ends_with("vbaproject.bin") { return None; }
+        }
+        let mut content = Vec::new();
+        zip.by_name("[Content_Types].xml").ok()?.take(256 * 1024 + 1).read_to_end(&mut content).ok()?;
+        if content.len() > 256 * 1024 { return None; }
+        let mut xml = quick_xml::Reader::from_reader(content.as_slice());
+        let mut workbook = None;
+        loop {
+            match xml.read_event().ok()? {
+                Event::Start(element) | Event::Empty(element) => {
+                    let mut part = None;
+                    let mut kind = None;
+                    for (i, attr) in element.attributes().enumerate() {
+                        if i >= MAX_XML_ATTRIBUTES { return None; }
+                        let attr = attr.ok()?;
+                        let value = attr.decode_and_unescape_value(xml.decoder()).ok()?.into_owned();
+                        if attr.key.as_ref() == b"PartName" { part = Some(value.clone()); }
+                        if attr.key.as_ref() == b"ContentType" { kind = Some(value); }
+                    }
+                    if kind.as_ref().is_some_and(|s| s.to_ascii_lowercase().contains("macroenabled") || s.to_ascii_lowercase().contains("vbaproject")) { return None; }
+                    if element.local_name().as_ref() == b"Override"
+                        && kind.as_deref() == Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml") {
+                        if workbook.is_some() { return None; }
+                        workbook = part;
+                    }
+                }
+                Event::DocType(_) => return None,
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let path = workbook?.strip_prefix('/')?.to_string();
+        if !names.contains(&path) || !names.contains("_rels/.rels") { return None; }
+        Some(())
+    };
+    check().is_some()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
     pub key: String,
@@ -616,6 +667,33 @@ mod tests {
 
     fn sample_xlsx() -> Vec<u8> {
         write_xlsx(&[g("组", &[("键", "值")])]).unwrap()
+    }
+
+    #[test]
+    fn xlsx_identity_uses_package_contents_independent_of_zip_entry_order() {
+        use std::io::Write;
+        let bytes = sample_xlsx();
+        assert!(is_xlsx_document(&bytes));
+        let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        output.start_file("docProps/custom.xml", options).unwrap();
+        output.write_all(b"<Properties/>").unwrap();
+        for i in (0..input.len()).rev() {
+            let mut file = input.by_index(i).unwrap();
+            output.start_file(file.name(), options).unwrap();
+            std::io::copy(&mut file, &mut output).unwrap();
+        }
+        let reordered = output.finish().unwrap().into_inner();
+        assert!(preview_xlsx(&reordered, 0).is_ok());
+        assert!(is_xlsx_document(&reordered));
+        assert!(!is_xlsx_document(b"PK\x03\x04renamed.zip"));
+        let macros = with_member(&bytes, "xl/vbaProject.bin", b"macro");
+        assert!(!is_xlsx_document(&macros));
+        let bad_types = with_member(&bytes, "[Content_Types].xml", b"<Types/>");
+        assert!(!is_xlsx_document(&bad_types));
+        let oversized_types = with_member(&bytes, "[Content_Types].xml", &vec![b' '; 256 * 1024 + 1]);
+        assert!(!is_xlsx_document(&oversized_types));
     }
 
     #[test]

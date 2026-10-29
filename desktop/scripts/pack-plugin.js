@@ -17,7 +17,6 @@ export const PLUGIN_ARCHIVE_OPERANDS = [
   "background.js",
   "content.js",
   "webmail.js",
-  "webmail-qq-main.js",
   "sidepanel-mail.js",
   "content.css",
   "sidebar-state.js",

@@ -1,11 +1,9 @@
-/* #333: QQ's own export menu runs in the page world. Installed only on QQ; idle
- * installation reads no mail. An explicit side-panel capture asks for one export URL.
- * window.open is replaced only for the synchronous native export click, then restored.
- */
-(function (root) {
-  const REQUEST = 'resumepro:qq-export-request';
-  const RESPONSE = 'resumepro:qq-export-response';
-  let busy = false;
+// Serialized by chrome.scripting: keep this function self-contained. No DOM event
+// reply or page global carries the result back to the extension.
+export async function qqExportCurrentMail(expected) {
+  const root = window;
+  if (root.top !== root || root.location.protocol !== 'https:' || root.location.hostname !== 'wx.mail.qq.com'
+      || root.location.pathname !== '/home/index') return { status: 'unavailable' };
   function visible(node) {
     for (let n = node; n?.nodeType === 1; n = n.parentElement) {
       if (n.hidden || n.getAttribute('aria-hidden') === 'true') return false;
@@ -39,7 +37,7 @@
   }
   async function exportId() {
     const before = stamp();
-    if (!before) return { status: 'unavailable' };
+    if (!before || before.value !== expected) return { status: 'changed' };
     let item = exportItem();
     if (!item) {
       const more = unique('.mail-detail-basic-action-bar .more-btn');
@@ -85,19 +83,35 @@
     if (!unchanged(before)) return { status: 'changed' };
     return mailId && !ambiguous ? { status: 'ok', mailId } : { status: 'unavailable' };
   }
-  document.addEventListener(REQUEST, async event => {
-    if (root.top !== root || root.location.protocol !== 'https:' || root.location.hostname !== 'wx.mail.qq.com'
-        || root.location.pathname !== '/home/index' || typeof event.detail !== 'string') return;
-    let nonce;
-    try { nonce = JSON.parse(event.detail).nonce; } catch { return; }
-    if (typeof nonce !== 'string' || !/^[0-9a-f-]{36}$/.test(nonce)) return;
-    function reply(result) {
-      document.dispatchEvent(new CustomEvent(RESPONSE, { detail: JSON.stringify({ nonce, ...result }) }));
+  try { return await exportId(); }
+  catch { return { status: 'unavailable' }; }
+}
+
+export function createQQExporter(api) {
+  const pending = new Set();
+  return async (message, sender) => {
+    let url;
+    try { url = new URL(sender?.url); } catch { return { status: 'forbidden' }; }
+    if (sender?.id !== api.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || sender.tab.id < 0
+        || typeof sender.documentId !== 'string' || !sender.documentId
+        || url.protocol !== 'https:' || url.hostname !== 'wx.mail.qq.com' || url.pathname !== '/home/index' || url.username || url.password) {
+      return { status: 'forbidden' };
     }
-    if (busy) { reply({ status: 'unavailable' }); return; }
-    busy = true;
-    try { reply(await exportId()); }
-    catch { reply({ status: 'unavailable' }); }
-    finally { busy = false; }
-  });
-})(window);
+    if (typeof message.stamp !== 'string' || message.stamp.length > 2 * 1024 * 1024) return { status: 'unavailable' };
+    const key = `${sender.tab.id}:${sender.documentId}`;
+    if (pending.has(key)) return { status: 'unavailable' };
+    pending.add(key);
+    try {
+      const results = await api.scripting.executeScript({
+        target: { tabId: sender.tab.id, documentIds: [sender.documentId] },
+        world: 'MAIN', func: qqExportCurrentMail, args: [message.stamp],
+      });
+      if (results?.length !== 1 || results[0].frameId !== 0 || results[0].documentId !== sender.documentId) return { status: 'unavailable' };
+      const result = results[0].result;
+      if (result?.status === 'changed') return { status: 'changed' };
+      return result?.status === 'ok' && typeof result.mailId === 'string' && result.mailId.length > 0 && result.mailId.length <= 512
+        ? { status: 'ok', mailId: result.mailId } : { status: 'unavailable' };
+    } catch { return { status: 'unavailable' }; }
+    finally { pending.delete(key); }
+  };
+}

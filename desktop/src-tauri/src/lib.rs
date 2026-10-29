@@ -2256,8 +2256,19 @@ pub fn run() {
                 }
             }
         })
-        .run(context)
-        .expect("error while running 网申快填");
+        .build(context)
+        .expect("error while building 网申快填")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut cache) = state.opened_attachments.lock() {
+                        if cache.close().is_err() {
+                            eprintln!("attachment copies still in use; cleanup deferred to next startup");
+                        }
+                    }
+                }
+            }
+        });
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

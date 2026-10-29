@@ -22,6 +22,7 @@ struct OpenCopy {
 
 #[derive(Default)]
 pub(crate) struct OpenedAttachments {
+    closing: bool,
     root: Option<PathBuf>,
     entries: Vec<OpenCopy>,
     // Dropped after entries: cleanup cannot race another process using this cache.
@@ -29,7 +30,26 @@ pub(crate) struct OpenedAttachments {
 }
 
 impl OpenedAttachments {
+    /// Called explicitly at RunEvent::Exit; the event loop can exit without Drop.
+    pub(crate) fn close(&mut self) -> Result<(), CommandError> {
+        self.closing = true;
+        let mut failed = None;
+        for index in (0..self.entries.len()).rev() {
+            if let Err(error) = self.remove(index) {
+                failed = Some(error);
+            }
+        }
+        // Keep the owner lock until process death, including when a file is locked.
+        failed.map_or(Ok(()), Err)
+    }
+
     pub(crate) fn initialize(&mut self, root: &Path) -> Result<(), CommandError> {
+        if self.closing {
+            return Err(fail(
+                "ATTACHMENT_WRITE",
+                "桌面程序正在退出，请重新打开后重试。",
+            ));
+        }
         if self.root.as_deref() == Some(root) {
             return Ok(());
         }
@@ -659,6 +679,49 @@ mod tests {
         other.initialize(&root).unwrap();
         assert!(!orphan.exists());
         assert_eq!(std::fs::read(root.join("unrelated")).unwrap(), b"keep");
+    }
+    #[test]
+    fn explicit_exit_cleanup_removes_copies_while_state_is_alive_and_refuses_late_opens() {
+        let (dir, store, id) = setup();
+        let listed = list(&store, &id).unwrap();
+        let (item, bytes) = read(&store, &id, 0, &listed.source_sha256).unwrap();
+        let root = dir.path().join("cache");
+        let mut cache = OpenedAttachments::default();
+        let now = std::time::Instant::now();
+        cache.open(&root, &item, &bytes, now, |_| Ok(())).unwrap();
+        let path = cache.entries[0].path.clone();
+        cache.close().unwrap();
+        assert!(!path.exists());
+        assert!(cache.entries.is_empty());
+        cache.close().unwrap();
+        assert!(cache
+            .open(&root, &item, &bytes, now, |_| panic!("exit"))
+            .is_err());
+        assert!(OpenedAttachments::default().initialize(&root).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn exit_cleanup_reports_locked_copies_and_can_retry_after_external_reader_closes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, store, id) = setup();
+        let listed = list(&store, &id).unwrap();
+        let (item, bytes) = read(&store, &id, 0, &listed.source_sha256).unwrap();
+        let root = dir.path().join("cache");
+        let mut cache = OpenedAttachments::default();
+        cache
+            .open(&root, &item, &bytes, std::time::Instant::now(), |_| Ok(()))
+            .unwrap();
+        let path = cache.entries[0].path.clone();
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(cache.close().is_err());
+        assert_eq!(cache.entries.len(), 1);
+        drop(reader);
+        cache.close().unwrap();
+        assert!(!path.exists());
     }
     #[test]
     fn failed_launch_leaves_no_copy_and_large_copies_obey_total_byte_budget() {

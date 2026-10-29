@@ -9,6 +9,7 @@
     "offscreen",
     "storage",
     "tabs",
+    "scripting",
     "sidePanel",
     "nativeMessaging",
     "alarms"
@@ -91,16 +92,6 @@
       "css": [
         "content.css"
       ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://wx.mail.qq.com/home/index*"
-      ],
-      "js": [
-        "webmail-qq-main.js"
-      ],
-      "world": "MAIN",
       "run_at": "document_idle"
     }
   ]

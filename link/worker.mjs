@@ -15,6 +15,7 @@ import { createFillRecords } from './fillrecords.mjs';
 import { createStaging } from './staging.mjs';
 import { createUploads } from './uploads.mjs';
 import { createMail } from './mail.mjs';
+import { createQQExporter } from './qq-export.mjs';
 import { DESKTOP_MESSAGE_TYPES } from './messages.mjs';
 
 /**
@@ -47,6 +48,7 @@ export function installDesktopLink(api) {
   const session = createSession({ ...deps, onProbe: probe => usage.observe(probe) });
   const resume = createResume({ ...deps, session });
   const mail = createMail({ ...deps, session });
+  const exportQQ = createQQExporter(api);
   const ai = createAi({ ...deps, session, port: nativePort(api) });
   const legacy = createLegacy({
     ...deps, session, storage: storageAdapter(api), alarms: api.alarms,
@@ -72,6 +74,10 @@ export function installDesktopLink(api) {
   });
 
   api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === 'WEBMAIL_QQ_EXPORT') {
+      exportQQ(message, sender).then(sendResponse, () => sendResponse({ status: 'unavailable' }));
+      return true;
+    }
     const usageHandled = handleUsageMessage(api, usage, message, sender, sendResponse);
     if (usageHandled !== null) return usageHandled;
     if (message?.type === 'DESKTOP_SAVE_MAIL') {

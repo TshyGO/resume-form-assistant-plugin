@@ -18,6 +18,7 @@
   "link/legacy.mjs",
   "link/limits.mjs",
   "link/mail.mjs",
+  "link/qq-export.mjs",
   "link/messages.mjs",
   "link/normalize.mjs",
   "link/outbox.mjs",

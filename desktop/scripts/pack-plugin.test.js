@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
 
 test("清单覆盖插件运行文件，不含 desktop", () => {
-  for (const required of ["manifest.json", "background.js", "content.js", "sidepanel.html", "sidepanel.css", "sidepanel.js", "sidepanel-mail.js", "webmail.js", "webmail-qq-main.js", "link", "icons"]) {
+  for (const required of ["manifest.json", "background.js", "content.js", "sidepanel.html", "sidepanel.css", "sidepanel.js", "sidepanel-mail.js", "webmail.js", "link", "icons"]) {
     assert.ok(PLUGIN_ARCHIVE_OPERANDS.includes(required), required);
   }
   assert.equal(

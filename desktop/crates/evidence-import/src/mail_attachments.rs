@@ -22,9 +22,29 @@ pub fn can_open_mail_attachment(name: &str, bytes: &[u8]) -> bool {
         .rsplit_once('.')
         .map(|(_, e)| e.to_ascii_lowercase())
         .unwrap_or_default();
-    let mime = infer::get(bytes).map(|kind| kind.mime_type()).unwrap_or("");
-    match extension.as_str() {
-        "pdf" => bytes.starts_with(b"%PDF-"),
+    let mime = attachment_mime(name, bytes);
+    can_open_type(&extension, mime)
+}
+
+fn attachment_mime(name: &str, bytes: &[u8]) -> &'static str {
+    if name.to_ascii_lowercase().ends_with(".xlsx") {
+        if resume_sheet::is_xlsx_document(bytes) {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        } else {
+            "application/octet-stream"
+        }
+    } else if bytes.starts_with(b"%PDF-") {
+        "application/pdf"
+    } else {
+        infer::get(bytes)
+            .map(|kind| kind.mime_type())
+            .unwrap_or("application/octet-stream")
+    }
+}
+
+fn can_open_type(extension: &str, mime: &str) -> bool {
+    match extension {
+        "pdf" => mime == "application/pdf",
         "png" => mime == "image/png",
         "jpg" | "jpeg" => mime == "image/jpeg",
         "gif" => mime == "image/gif",
@@ -63,19 +83,7 @@ fn describe(index: u32, part: &mail_parser::MessagePart<'_>, raw: &[u8]) -> Opti
         .unwrap_or_else(|| format!("附件-{}", index + 1));
     let content = exact_contents(part, raw);
     let bytes = content.as_deref().unwrap_or_default();
-    let inferred = infer::get(bytes)
-        .map(|k| k.mime_type())
-        .unwrap_or("application/octet-stream");
-    let mime = if bytes.starts_with(b"%PDF-") {
-        "application/pdf"
-    } else {
-        inferred
-    };
-    let mime = if name.to_ascii_lowercase().ends_with(".xlsx") && bytes.starts_with(b"PK\x03\x04") {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    } else {
-        mime
-    };
+    let mime = attachment_mime(&name, bytes);
     let kind = match mime {
         "application/pdf" => "pdf",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
@@ -96,8 +104,12 @@ fn describe(index: u32, part: &mail_parser::MessagePart<'_>, raw: &[u8]) -> Opti
             name.push_str(ext);
         }
     }
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
     let can_open =
-        !part.is_encoding_problem && content.is_some() && can_open_mail_attachment(&name, bytes);
+        !part.is_encoding_problem && content.is_some() && can_open_type(&extension, mime);
     Some(MailAttachment {
         index,
         name,
@@ -266,6 +278,39 @@ mod tests {
             "fake.xlsx",
             b"PK\x03\x04not an XLSX"
         ));
+    }
+    #[test]
+    fn xlsx_preview_and_external_open_share_order_independent_package_identity() {
+        use std::io::{Cursor, Write};
+        let original = resume_sheet::write_xlsx(&[resume_sheet::Group {
+            name: "Group".into(),
+            fields: vec![resume_sheet::Field {
+                key: "Role".into(),
+                value: "Engineer".into(),
+            }],
+        }])
+        .unwrap();
+        let mut input = zip::ZipArchive::new(Cursor::new(&original)).unwrap();
+        let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        output.start_file("docProps/custom.xml", options).unwrap();
+        output.write_all(b"<Properties/>").unwrap();
+        for i in (0..input.len()).rev() {
+            let mut file = input.by_index(i).unwrap();
+            output.start_file(file.name(), options).unwrap();
+            std::io::copy(&mut file, &mut output).unwrap();
+        }
+        let changed = output.finish().unwrap().into_inner();
+        assert!(resume_sheet::preview_xlsx(&changed, 0).is_ok());
+        assert!(can_open_mail_attachment("notice.xlsx", &changed));
+        assert_eq!(
+            attachment_mime("notice.xlsx", &changed),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(
+            attachment_mime("renamed.xlsx", b"PK\x03\x04fake"),
+            "application/octet-stream"
+        );
     }
     #[test]
     fn missing_part_index_never_falls_back_to_another_attachment() {

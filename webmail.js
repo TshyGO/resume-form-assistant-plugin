@@ -233,38 +233,31 @@
       && /^(?:From|Subject|Date):[^\r\n]+/im.test(headers)
       && (headers.match(/^(?:From|To|Subject|Date|Message-ID|MIME-Version|Content-Type):/gim) || []).length >= 2;
   }
-  function qqModernOriginal(doc) {
-    return new Promise(resolve => {
-      const nonce = root.crypto.randomUUID();
-      const finish = result => {
-        clearTimeout(timer);
-        doc.removeEventListener('resumepro:qq-export-response', answer);
-        resolve(result);
-      };
-      function answer(event) {
-        if (typeof event.detail !== 'string') return;
-        let result;
-        try { result = JSON.parse(event.detail); } catch { return; }
-        if (result.nonce !== nonce) return;
-        if (result.status === 'changed') { finish({ changed: true }); return; }
-        if (result.status !== 'ok' || typeof result.mailId !== 'string' || !result.mailId || result.mailId.length > 512) {
-          finish({}); return;
-        }
-        const current = new URL(doc.location.href);
-        if (current.protocol !== 'https:' || current.hostname !== 'wx.mail.qq.com' || current.pathname !== '/home/index'
-            || !current.searchParams.get('sid')) { finish({}); return; }
-        const url = new URL('/read/readmail', current.origin);
-        url.searchParams.set('func', '3');
-        url.searchParams.set('mailid', result.mailId);
-        url.searchParams.set('sid', current.searchParams.get('sid'));
-        finish({ url: url.href });
-      }
-      const timer = setTimeout(() => finish({}), 1500);
-      doc.addEventListener('resumepro:qq-export-response', answer);
-      doc.dispatchEvent(new doc.defaultView.CustomEvent('resumepro:qq-export-request', { detail: JSON.stringify({ nonce }) }));
-    });
+  async function qqModernOriginal(doc, request) {
+    const unique = selector => {
+      const nodes = [...doc.querySelectorAll(selector)].filter(shown);
+      return nodes.length === 1 ? nodes[0] : null;
+    };
+    const subject = unique('.mail-detail-subject'), basic = unique('.mail-detail-basic'), body = unique('.mail-detail-content');
+    if (!subject || !basic || !body) return {};
+    const pane = body.closest('.mail-list-page-reader-body') || body;
+    const ids = [pane, subject, basic, body].map(node => [node.getAttribute('data-mailid'), node.getAttribute('mailid')]);
+    const stamp = JSON.stringify([doc.location.href, ids, subject.textContent, basic.textContent, body.textContent]);
+    try {
+      const result = await request({ type: 'WEBMAIL_QQ_EXPORT', stamp });
+      if (result?.status === 'changed') return { changed: true };
+      if (result?.status !== 'ok' || typeof result.mailId !== 'string' || !result.mailId || result.mailId.length > 512) return {};
+      const current = new URL(doc.location.href);
+      if (current.protocol !== 'https:' || current.hostname !== 'wx.mail.qq.com' || current.pathname !== '/home/index'
+          || !current.searchParams.get('sid')) return {};
+      const url = new URL('/read/readmail', current.origin);
+      url.searchParams.set('func', '3');
+      url.searchParams.set('mailid', result.mailId);
+      url.searchParams.set('sid', current.searchParams.get('sid'));
+      return { url: url.href };
+    } catch { return {}; }
   }
-  async function capture(doc, fetcher = root.fetch.bind(root)) {
+  async function capture(doc, fetcher = root.fetch.bind(root), requestQQ = message => root.chrome.runtime.sendMessage(message)) {
     const name = provider(doc.location.href);
     if (!name) return { status: 'unsupported' };
     const ctx = opened(doc, name);
@@ -281,7 +274,7 @@
     const candidates = rawCandidates(ctx, name);
     const current = new URL(doc.location.href);
     if (name === 'qq' && current.hostname === 'wx.mail.qq.com' && current.pathname === '/home/index') {
-      const modern = await qqModernOriginal(doc);
+      const modern = await qqModernOriginal(doc, requestQQ);
       if (modern.changed || !unchanged()) return { status: 'changed' };
       if (modern.url) candidates.unshift(modern.url);
     }
