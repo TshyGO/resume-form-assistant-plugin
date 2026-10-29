@@ -1,4 +1,10 @@
 (function () {
+  // Runs once per page, even if this script runs twice in the same world: a second run would add
+  // a second message listener and second error handlers. The mark is a symbol on this world's
+  // global, so no element on the page can stand in for it.
+  const loaded = Symbol.for("resumePro.content");
+  if (self[loaded]) return;
+  self[loaded] = true;
   const sendFeedback = report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report });
   self.ResumeProFeedback?.install(sendFeedback, { origin: chrome.runtime.getURL(""), requireOwn: true });
   const SIDEBAR_ID = "resume-pro-sidebar";
@@ -86,6 +92,8 @@
   let startupState = "idle";
   // The host this startup built, so a startup that fails after building it can hide it.
   let startupHost = null;
+  // Desktop data this page cannot read fails again on every read; it is reported once per page.
+  let unreadableReported = false;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
   // 侧栏的「一键填写」正在点页面里的填写按钮（#301 诊断记录填写从哪里开始）：只在 click() 同步派发期间为真。
@@ -366,12 +374,30 @@
 
   const StorageService = {
     async getState() {
+      let result;
       try {
-        const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
-        state.desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
-        return result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+        result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
       } catch {
+        // No answer at all: the worker, or its link to the desktop, is not there.
         state.desktopMode = "unavailable";
+        return null;
+      }
+      if (result?.status !== "ok") {
+        state.desktopMode = result?.status || "unavailable";
+        return null;
+      }
+      try {
+        const store = self.ResumeProResumeData.normalize(result.data);
+        state.desktopMode = "ready";
+        return store;
+      } catch (error) {
+        // The desktop answered with data this page cannot read. That is an error to report,
+        // not a desktop that is not running.
+        state.desktopMode = "unreadable";
+        if (!unreadableReported) {
+          unreadableReported = true;
+          reportError(error);
+        }
         return null;
       }
     },
@@ -403,12 +429,7 @@
     startUp();
   }
 
-  // Runs once per page, even if this script runs twice in the same world. The mark is a symbol
-  // on this world's global, so no element on the page can stand in for it.
   function startUp() {
-    const started = Symbol.for("resumePro.startUp");
-    if (self[started]) return;
-    self[started] = true;
     if (!pageCanHostController()) {
       startupState = "unsupported";
       return;
@@ -422,7 +443,7 @@
       // put in by this startup, even when createSidebar threw before handing it back.
       const host = startupHost || document.getElementById(SIDEBAR_ID);
       if (host) host.style.display = "none";
-      reportStartupError(error);
+      reportError(error, "unhandledrejection");
     });
   }
 
@@ -436,11 +457,11 @@
     }
   }
 
-  // Sent the way the global handlers send an error, once. The source stays "unhandledrejection",
-  // which is what a failed init was before it had a boundary.
-  function reportStartupError(error) {
+  // Sent the way the global handlers send an error, once. A failed init keeps the source
+  // "unhandledrejection", which is what it was before it had a boundary.
+  function reportError(error, source = "error") {
     try {
-      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), "unhandledrejection");
+      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), source);
       if (report?.stack) Promise.resolve(sendFeedback(report)).catch(() => {});
     } catch { /* no recursive reporting */ }
   }
