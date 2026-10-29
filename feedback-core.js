@@ -125,11 +125,12 @@
     + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
+  // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
+  // them, as in /apply/v13.v91.v23 or /apply/v13/v91/v23, could spell out any number.
+  const VERSION = /^v\d{1,2}$/i;
   function routeSegment(text) {
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return false;
-    // A version word only as the whole segment (/api/v2): several in one segment, as in
-    // /apply/v13.v91.v23, could spell out any number.
-    if (/^v\d{1,2}$/i.test(text)) return true;
+    if (VERSION.test(text)) return true;
     return text.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s._-]+/).filter(Boolean)
       .every(word => ROUTE_WORDS.has(word.toLowerCase()));
   }
@@ -137,17 +138,22 @@
   // Common route words survive; every other segment (names, ids, tokens, non-ASCII) becomes :id.
   function pathTemplate(pathname) {
     const segments = String(pathname ?? "").split("/").filter(Boolean);
+    let version = false;
     const kept = segments.slice(0, 8).map(segment => {
       let text;
       try { text = decodeURIComponent(segment); } catch { return ":id"; }
-      return routeSegment(text) ? text : ":id";
+      if (!routeSegment(text) || (VERSION.test(text) && version)) return ":id";
+      if (VERSION.test(text)) version = true;
+      return text;
     });
     return `/${kept.join("/")}${segments.length > 8 ? "/:more" : ""}`;
   }
 
   // The worker re-checks the vocabulary, not just the shape, of a path it is handed.
   function safePath(value) {
-    return VALUES.url_path.test(value) && value.split("/").filter(Boolean).every(part => part === ":id" || part === ":more" || routeSegment(part));
+    const parts = value.split("/").filter(Boolean);
+    return VALUES.url_path.test(value) && parts.every(part => part === ":id" || part === ":more" || routeSegment(part))
+      && parts.filter(part => VERSION.test(part)).length <= 1;
   }
 
   // First-round codes that are not a failure: nothing to say, or fields skipped before any request.

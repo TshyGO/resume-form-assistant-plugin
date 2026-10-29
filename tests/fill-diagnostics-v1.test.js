@@ -30,9 +30,15 @@ test("a version word is kept only as a whole path segment", () => {
   for (const segment of ["v13.v91.v23", "v13-v91", "v1v2", "apply-v2", "resumeV3", "v2.html"]) {
     assert.equal(core.pathTemplate(`/apply/${segment}`), "/apply/:id", segment);
   }
+  // 每段只放一个版本词、分成几段写也一样：一条路径只留第一个版本段。
+  assert.equal(core.pathTemplate("/apply/v13/v91/v23"), "/apply/v13/:id/:id");
+  assert.equal(core.pathTemplate("/v1/apply/v2/form"), "/v1/apply/:id/form");
   // 后台按同样的规则复核交来的路径。
-  const forged = core.diagnostics("[页面]\nurl_path: /apply/v13.v91.v23\npage_type: application_form");
-  assert.doesNotMatch(forged, /v13/);
+  for (const path of ["/apply/v13.v91.v23", "/apply/v13/v91/v23"]) {
+    const forged = core.diagnostics(`[页面]\nurl_path: ${path}\npage_type: application_form`);
+    assert.doesNotMatch(forged, /v91/, path);
+  }
+  assert.match(core.diagnostics("[页面]\nurl_path: /api/v2/apply/:id"), /^url_path: \/api\/v2\/apply\/:id$/m);
 });
 
 test("an empty page is page_not_supported unless it looks like an application form", () => {
