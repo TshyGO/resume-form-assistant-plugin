@@ -234,6 +234,8 @@ test("desktop data that cannot be read is reported as an error; a read with no a
   const unreadable = await openPage({ reply: async (message) => message.type === "DESKTOP_RESUME_READ"
     ? { status: "ok", data: { ...resume, templates: [null], activeTemplate: null } } : null });
   assertStarted(unreadable);
+  // The same data fails every read; the page reports it once.
+  assert.equal((await unreadable.panel({ type: "RESUME_PANEL_FILL" })).ok, false);
   assert.equal((await unreadable.panel({ type: "RESUME_PANEL_FILL" })).ok, false);
   assert.equal(unreadable.reports.length, 1);
   const [report] = unreadable.reports;

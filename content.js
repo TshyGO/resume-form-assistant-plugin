@@ -92,6 +92,8 @@
   let startupState = "idle";
   // The host this startup built, so a startup that fails after building it can hide it.
   let startupHost = null;
+  // Desktop data this page cannot read fails again on every read; it is reported once per page.
+  let unreadableReported = false;
   // 最近一次填写的 v1 诊断块（#215）：手动反馈附上的是它，不是侧栏那段给人看的文字。
   let lastFillReport = "";
   // 侧栏的「一键填写」正在点页面里的填写按钮（#301 诊断记录填写从哪里开始）：只在 click() 同步派发期间为真。
@@ -392,7 +394,10 @@
         // The desktop answered with data this page cannot read. That is an error to report,
         // not a desktop that is not running.
         state.desktopMode = "unreadable";
-        reportError(error);
+        if (!unreadableReported) {
+          unreadableReported = true;
+          reportError(error);
+        }
         return null;
       }
     },
