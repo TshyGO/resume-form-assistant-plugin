@@ -646,3 +646,15 @@ async fn abandoned_browser_times_out_without_registering_an_account() {
     );
     assert!(db.accounts().unwrap().is_empty());
 }
+
+#[test]
+fn background_maintenance_skips_an_interactive_operation_without_blocking_imap() {
+    let (_dir, db, creds, account) = fixture();
+    let auth = MicrosoftAuth::default();
+    let _guard = auth.operation.lock().unwrap();
+    let http = Http::new().unwrap();
+    // Invoked while this thread owns the operation lock: waiting rather than
+    // skipping would deadlock and delay the existing IMAP scheduler.
+    maintain_accounts(&auth, &db, &creds, CLIENT, &http, AT);
+    assert_eq!(db.account(&account.id).unwrap().failures, 0);
+}

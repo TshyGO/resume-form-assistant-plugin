@@ -992,11 +992,16 @@ pub async fn mailbox_microsoft_connect(app: AppHandle, account_id: Option<String
     result
 }
 #[tauri::command]
-pub fn mailbox_microsoft_cancel(state: tauri::State<'_, AppState>) -> Result<()> {
-    state
-        .microsoft_auth
-        .cancel()
-        .map_err(crate::microsoft_auth::AuthError::command)
+pub async fn mailbox_microsoft_cancel(app: AppHandle) -> Result<()> {
+    // A final vault write may already own the cancellation/commit lock. Wait on
+    // a worker so native credential prompts cannot block the WebView thread.
+    archive_worker(app, |state| {
+        state
+            .microsoft_auth
+            .cancel()
+            .map_err(crate::microsoft_auth::AuthError::command)
+    })
+    .await
 }
 #[tauri::command]
 pub async fn mailbox_microsoft_refresh(app: AppHandle, id: String) -> Result<()> {

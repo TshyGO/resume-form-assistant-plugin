@@ -137,7 +137,8 @@ impl MicrosoftAuth {
         }
     }
     pub fn cancel(&self) -> Result<()> {
-        if let Some(active) = self.active.lock().map_err(|_| AuthError::Busy)?.as_ref() {
+        let active = self.active.lock().map_err(|_| AuthError::Busy)?.clone();
+        if let Some(active) = active {
             active.cancel();
         }
         Ok(())
@@ -695,6 +696,16 @@ fn token_for_account(
     at: i64,
 ) -> Result<String> {
     let _guard = auth.operation.lock().map_err(|_| AuthError::Busy)?;
+    refresh_account(db, creds, id, client_id, http, at)
+}
+fn refresh_account(
+    db: &Database,
+    creds: &dyn CredentialStore,
+    id: &str,
+    client_id: &str,
+    http: &Http,
+    at: i64,
+) -> Result<String> {
     let account = db.account(id).map_err(|_| AuthError::Identity)?;
     let result = tauri::async_runtime::block_on(refresh(db, creds, &account, client_id, http, at));
     match result {
@@ -731,14 +742,42 @@ pub fn maintain(state: &crate::AppState) {
     let Ok(db) = Database::open(&root) else {
         return;
     };
+    let Ok(http) = Http::new() else {
+        return;
+    };
+    let Ok(client_id) = client_id() else {
+        return;
+    };
+    maintain_accounts(
+        &state.microsoft_auth,
+        &db,
+        state.credentials.as_ref(),
+        &client_id,
+        &http,
+        now(),
+    );
+}
+fn maintain_accounts(
+    auth: &MicrosoftAuth,
+    db: &Database,
+    creds: &dyn CredentialStore,
+    client_id: &str,
+    http: &Http,
+    at: i64,
+) {
     let Ok(accounts) = db.accounts() else {
         return;
     };
     for account in accounts
         .into_iter()
-        .filter(|a| a.source == SourceKind::MicrosoftGraph && !a.paused && a.next_check <= now())
+        .filter(|a| a.source == SourceKind::MicrosoftGraph && !a.paused && a.next_check <= at)
     {
-        let _ = access_token(state, &account.id);
+        // Background maintenance must not wait for a 3-minute browser login and
+        // postpone existing IMAP scans. Manual/Graph consumers still serialize.
+        let Ok(_guard) = auth.operation.try_lock() else {
+            return;
+        };
+        let _ = refresh_account(db, creds, &account.id, client_id, http, at);
     }
 }
 
