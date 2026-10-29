@@ -681,3 +681,61 @@ test("damaged account configuration shows repair guidance and keeps account cont
   expect(accounts.getByRole("button", { name: "断开并移除" })).toBeTruthy();
   expect(el("mailbox-candidates").textContent).toContain("星河科技面试邀请");
 });
+
+test("Microsoft login uses a dedicated command, supports immediate cancellation and never submits a password", async () => {
+  const { handlers, invoke } = setup();
+  let finish!: () => void;
+  handlers.mailbox_microsoft_connect = (args) => { expect(args).toEqual({ accountId: null }); return new Promise<void>((resolve) => { finish = resolve; }); };
+  handlers.mailbox_microsoft_cancel = () => { finish(); };
+  fireEvent.input(el("mailbox-secret"), { target: { value: "draft-password" } });
+  fireEvent.click(el("mailbox-microsoft-connect"));
+  expect(el<HTMLInputElement>("mailbox-secret").value).toBe("");
+  expect(el<HTMLButtonElement>("mailbox-microsoft-cancel").hidden).toBe(false);
+  expect(el<HTMLButtonElement>("mailbox-microsoft-connect").disabled).toBe(true);
+  fireEvent.click(el("mailbox-microsoft-cancel"));
+  await waitFor(() => expect(el<HTMLButtonElement>("mailbox-microsoft-cancel").hidden).toBe(true));
+  expect(invoke.mock.calls.some(([name]) => ["mailbox_connect", "mailbox_check", "mailbox_confirm"].includes(name))).toBe(false);
+});
+
+test("missing Microsoft release configuration and organization refusal show actionable fallback text", async () => {
+  const { handlers } = setup();
+  handlers.mailbox_microsoft_connect = () => { throw { message: "此版本尚未配置微软登录。无需自行注册开发者应用，可先手动导入。" }; };
+  fireEvent.click(el("mailbox-microsoft-connect"));
+  await waitFor(() => expect(el("mailbox-settings-status").textContent).toContain("无需自行注册"));
+  expect(el<HTMLButtonElement>("mailbox-microsoft-cancel").hidden).toBe(true);
+  handlers.mailbox_microsoft_connect = () => { throw { message: "学校管理员策略阻止了授权，请从网页保存邮件或手动导入。" }; };
+  fireEvent.click(el("mailbox-microsoft-connect"));
+  await waitFor(() => expect(el("mailbox-settings-status").textContent).toContain("管理员策略"));
+  expect(el("mailbox-manual-import")).toBeTruthy();
+});
+
+test("Microsoft account controls reauthorize the exact local account and do not advertise mail scanning", async () => {
+  const { handlers, view, ui, invoke } = setup();
+  view.accounts[0].source = "microsoftGraph";
+  view.accounts[0].email = "person@outlook.com";
+  handlers.mailbox_microsoft_connect = () => {};
+  await ui.refresh();
+  const accounts = within(el("mailbox-accounts"));
+  expect(accounts.queryByText("修改连接 / 更新凭据")).toBeNull();
+  expect(accounts.queryByText("检查已启用")).toBeNull();
+  expect(accounts.getByText(/此版本尚未启用自动收取/)).toBeTruthy();
+  fireEvent.click(accounts.getByRole("button", { name: "重新授权" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_microsoft_connect", { accountId: "account" }));
+});
+
+test("Microsoft disconnect explains local cleanup and Microsoft-side revocation separately", async () => {
+  const { handlers, view, ui } = setup(); view.accounts[0].source = "microsoftGraph";
+  handlers.mailbox_delete = () => { view.accounts = []; };
+  await ui.refresh();
+  fireEvent.click(within(el("mailbox-accounts")).getByRole("button", { name: "断开并移除" }));
+  await waitFor(() => expect(el("mailbox-settings-status").textContent).toContain("微软侧授权"));
+  expect(el("mailbox-settings-status").textContent).toContain("已入档邮件保留");
+});
+
+test("Microsoft-hosted school discovery routes to official login without guessing an IMAP address", async () => {
+  const { handlers } = setup();
+  handlers.mailbox_discover = () => ({ config: null, source: "microsoft", note: "微软托管，取决于组织策略", helpUrl: null });
+  fireEvent.input(el("mailbox-email"), { target: { value: "person@school.example" } }); fireEvent.click(el("mailbox-detect"));
+  await waitFor(() => expect(el("mailbox-detection").textContent).toContain("需要微软登录授权"));
+  expect(el<HTMLInputElement>("mailbox-host").value).toBe("");
+});

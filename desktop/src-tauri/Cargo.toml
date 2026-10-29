@@ -19,6 +19,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
 ai-extract = { path = "../crates/ai-extract" }
 archive-store = { path = "../crates/archive-store" }
 backup = { path = "../crates/backup" }
@@ -32,7 +33,7 @@ mailbox-sync = { path = "../crates/mailbox-sync" }
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native"] }
 # 保留已验证的 reqwest 范围；XLSX 安全修复不顺带更新网络依赖。
 reqwest = { version = ">=0.13.0, <0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset", "system-proxy"] }
-tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync", "time", "net", "io-util"] }
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"
@@ -53,7 +54,7 @@ url = "2.5.8"
 [dev-dependencies]
 rusqlite = "0.40"
 tempfile = "3"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

@@ -291,6 +291,21 @@ impl Database {
         )?;
         Ok(())
     }
+    /// Authorization checks must not claim a successful mailbox scan.
+    pub fn authorization_success(&self, id: &str, now: i64) -> Result<()> {
+        self.0.execute(
+            "UPDATE accounts SET paused=0,failures=0,last_error=NULL,next_check=?2 WHERE id=?1",
+            params![id, now + 300],
+        )?;
+        Ok(())
+    }
+    pub fn pause_with_error(&self, id: &str, error: Error) -> Result<()> {
+        self.0.execute(
+            "UPDATE accounts SET paused=1,last_error=?2 WHERE id=?1",
+            params![id, error.to_string()],
+        )?;
+        Ok(())
+    }
     pub fn pause(&self, id: &str, paused: bool) -> Result<()> {
         self.0.execute(
             "UPDATE accounts SET paused=?2,failures=0,next_check=0 WHERE id=?1",

@@ -114,6 +114,7 @@ jobs:
         id: installer
         working-directory: desktop
         env:
+          RESUME_MICROSOFT_CLIENT_ID: ${{ vars.RESUME_MICROSOFT_CLIENT_ID }}
           RESUME_USAGE_METRICS_READY: ${{ steps.release-metadata.outputs.metrics_ready }}
           RESUME_USAGE_METRICS_RELEASE_BUILD: ${{ steps.release-metadata.outputs.metrics_ready }}
           RESUME_USAGE_METRICS_ENDPOINT: ${{ steps.release-metadata.outputs.metrics_endpoint }}

@@ -70,6 +70,16 @@ fn belongs(host: &str, domain: &str) -> bool {
 /// MX is only a provider hint. The IMAP endpoint comes from a known provider
 /// configuration and still needs explicit user testing. Coremail varies by school.
 fn from_mx(email: &str, hosts: &[String]) -> Option<Discovery> {
+    if hosts
+        .iter()
+        .any(|host| belongs(host, "mail.protection.outlook.com"))
+    {
+        return Some(Discovery {
+            config: None, source: "microsoft", provider: Some(Provider::Custom),
+            note: "域名邮件路由指向微软托管服务，请使用微软账号连接。路由只是线索，能否授权取决于学校或机构策略。".into(),
+            help_url: None,
+        });
+    }
     let (host, note, url, send_id) = if hosts.iter().any(|s| {
         belongs(s, "exmail.qq.com") || matches!(s.as_str(), "mxbiz1.qq.com" | "mxbiz2.qq.com")
     }) {
@@ -189,6 +199,23 @@ mod tests {
         }
         for domain in ["evil.tsinghua.edu.cn", "mails.tsinghua.edu.cn.evil.test"] {
             assert!(local(&format!("user@{domain}")).unwrap().config.is_none());
+        }
+    }
+    #[test]
+    fn microsoft_mx_is_only_a_connection_hint_and_never_an_imap_host() {
+        let found = from_mx(
+            "a@school.example",
+            &["school.mail.protection.outlook.com".into()],
+        )
+        .unwrap();
+        assert_eq!(found.source, "microsoft");
+        assert!(found.config.is_none());
+        assert!(found.note.contains("策略"));
+        for host in [
+            "school.mail.protection.outlook.com.evil.test",
+            "notmail.protection.outlook.com",
+        ] {
+            assert!(from_mx("a@school.example", &[host.into()]).is_none());
         }
     }
     #[test]

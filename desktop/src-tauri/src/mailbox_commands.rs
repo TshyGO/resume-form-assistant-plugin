@@ -187,12 +187,28 @@ fn persist_configured_account(
 fn delete(state: &AppState, id: &str) -> Result<()> {
     let db = database(state)?;
     let account = mapped(db.account(id))?;
+    let _microsoft_guard = if account.source == SourceKind::MicrosoftGraph {
+        Some(
+            state
+                .microsoft_auth
+                .operation
+                .try_lock()
+                .map_err(|_| crate::microsoft_auth::AuthError::Busy.command())?,
+        )
+    } else {
+        None
+    };
     // Pause first: a failed OS delete must never leave an active orphan connection.
     mapped(db.pause(id, true))?;
-    state
-        .credentials
-        .clear_key(&account.credential_id())
-        .map_err(|_| fail(Error::Credentials))?;
+    if account.source == SourceKind::MicrosoftGraph {
+        crate::microsoft_credentials::clear(state.credentials.as_ref(), &account.credential_id())
+            .map_err(crate::microsoft_auth::AuthError::command)?;
+    } else {
+        state
+            .credentials
+            .clear_key(&account.credential_id())
+            .map_err(|_| fail(Error::Credentials))?;
+    }
     mapped(db.delete_account(id))
 }
 fn companies(state: &AppState, expected: &ArchiveIdentity) -> Result<Vec<String>> {
@@ -675,7 +691,10 @@ fn check(state: &AppState, force: bool) -> Result<CheckReport> {
     let _gate = gate(state)?;
     let expected = identity(state)?;
     let mut db = database(state)?;
-    let accounts = mapped(db.accounts())?;
+    let accounts = mapped(db.accounts())?
+        .into_iter()
+        .filter(|a| a.source == SourceKind::Imap)
+        .collect::<Vec<_>>();
     let started_at = now();
     let has_due = accounts
         .iter()
@@ -934,6 +953,62 @@ pub async fn mailbox_connect(
     Ok(())
 }
 #[tauri::command]
+pub async fn mailbox_microsoft_connect(app: AppHandle, account_id: Option<String>) -> Result<()> {
+    use crate::microsoft_auth::AuthError;
+    use tauri::Manager;
+    use tauri_plugin_opener::OpenerExt;
+    // Register before dispatching the worker so an immediate cancel cannot be lost.
+    let attempt = app
+        .state::<AppState>()
+        .microsoft_auth
+        .begin()
+        .map_err(AuthError::command)?;
+    let worker_attempt = attempt.clone();
+    let browser = app.clone();
+    let result = archive_worker(app.clone(), move |state| {
+        let _guard = state
+            .microsoft_auth
+            .operation
+            .try_lock()
+            .map_err(|_| AuthError::Busy.command())?;
+        let db = database(state)?;
+        tauri::async_runtime::block_on(crate::microsoft_auth::connect(
+            &db,
+            state.credentials.as_ref(),
+            &worker_attempt,
+            account_id.as_deref(),
+            |url| {
+                browser
+                    .opener()
+                    .open_url(url, None::<&str>)
+                    .map_err(|_| AuthError::Network)
+            },
+        ))
+        .map_err(AuthError::command)
+    })
+    .await;
+    app.state::<AppState>().microsoft_auth.end(&attempt);
+    let _ = app.emit("mailbox-changed", ());
+    result
+}
+#[tauri::command]
+pub fn mailbox_microsoft_cancel(state: tauri::State<'_, AppState>) -> Result<()> {
+    state
+        .microsoft_auth
+        .cancel()
+        .map_err(crate::microsoft_auth::AuthError::command)
+}
+#[tauri::command]
+pub async fn mailbox_microsoft_refresh(app: AppHandle, id: String) -> Result<()> {
+    let result = archive_worker(app.clone(), move |state| {
+        // Only a status is returned, never the access token.
+        crate::microsoft_auth::access_token(state, &id).map(|_| ())
+    })
+    .await;
+    let _ = app.emit("mailbox-changed", ());
+    result
+}
+#[tauri::command]
 pub async fn mailbox_delete(app: AppHandle, id: String) -> Result<()> {
     archive_worker(app.clone(), move |state| delete(state, &id)).await?;
     let _ = app.emit("mailbox-changed", ());
@@ -1008,6 +1083,7 @@ pub fn start(app: AppHandle) {
                 {
                     return Ok(true);
                 }
+                crate::microsoft_auth::maintain(state);
                 check(state, force).map(|_| false)
             })
             .await;

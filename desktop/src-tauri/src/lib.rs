@@ -23,6 +23,8 @@ mod cli;
 mod commands;
 mod evidence_commands;
 mod mailbox_commands;
+mod microsoft_auth;
+mod microsoft_credentials;
 mod backup_commands;
 mod bridge_services;
 mod recycle_commands;
@@ -85,6 +87,7 @@ struct AppState {
     /// Prevent overlapping scheduled/manual scans. User actions use short
     /// SQLite/archive transactions and never wait for mailbox network IO.
     mailbox_gate: Mutex<()>,
+    microsoft_auth: microsoft_auth::MicrosoftAuth,
     /// None when workspace or journal startup fails; archive access stays available.
     cloud_backups: Mutex<Option<Arc<cloud_backup::Service>>>,
     /// D11：正在进行的分析请求。按 requestId 取消；同一条证据同时只允许一个，
@@ -1896,6 +1899,7 @@ pub fn run() {
             credentials: Box::new(ai_credentials::KeyringStore),
             cloud_credentials: Box::new(cloud_credentials::KeyringStore),
             mailbox_gate: Mutex::new(()),
+            microsoft_auth: microsoft_auth::MicrosoftAuth::default(),
             cloud_backups: Mutex::new(None),
             ai_inflight: ai_commands::InflightRegistry::default(),
             native_messaging: Mutex::new(Vec::new()),
@@ -2075,6 +2079,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mailbox_commands::mailbox_view,
             mailbox_commands::mailbox_connect,
+            mailbox_commands::mailbox_microsoft_connect,
+            mailbox_commands::mailbox_microsoft_cancel,
+            mailbox_commands::mailbox_microsoft_refresh,
             mailbox_commands::mailbox_discover,
             mailbox_commands::mailbox_open_help,
             mailbox_commands::mailbox_delete,

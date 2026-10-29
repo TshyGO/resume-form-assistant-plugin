@@ -721,6 +721,7 @@ fn wiring_state(root: &std::path::Path, store: archive_store::ArchiveStore) -> A
         credentials: Box::new(crate::ai_credentials::MemoryStore::default()),
         cloud_credentials: Box::new(crate::cloud_credentials::KeyringStore),
         mailbox_gate: Mutex::new(()),
+        microsoft_auth: crate::microsoft_auth::MicrosoftAuth::default(),
         cloud_backups: Mutex::new(None),
         ai_inflight: crate::ai_commands::InflightRegistry::default(),
         native_messaging: Mutex::new(vec![]),
@@ -1141,4 +1142,67 @@ async fn production_view_and_confirmation_keep_working_with_damaged_local_mailbo
         1,
         "damaged candidate stays pending for recovery"
     );
+}
+
+#[tokio::test]
+async fn microsoft_disconnect_clears_os_tokens_and_all_local_progress_but_keeps_formal_evidence() {
+    let (dir, mut db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let expected = store.identity();
+    let cancel = Cancellation::default();
+    let mut api = FakeApi::new(account.source);
+    scan(&mut api, &mut db, &store, &expected, &account, &cancel)
+        .await
+        .unwrap();
+    let id = db.pending(&expected.archive_id, 100).unwrap().remove(0).id;
+    confirm(&mut api, &db, &store, &expected, &account, &id, &cancel)
+        .await
+        .unwrap();
+    let evidence = store.list_evidence(None).unwrap();
+    assert_eq!(evidence.len(), 1);
+    let state = wiring_state(dir.path(), store);
+    crate::microsoft_credentials::replace(
+        state.credentials.as_ref(),
+        &account.credential_id(),
+        &"synthetic-long-token".repeat(400),
+        || Ok(()),
+    )
+    .unwrap();
+    delete(&state, &account.id).unwrap();
+    assert!(db.accounts().unwrap().is_empty());
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 0);
+    assert!(db
+        .source_position(&expected.archive_id, &account.id, "inbox")
+        .unwrap()
+        .is_none());
+    assert!(crate::microsoft_credentials::read(
+        state.credentials.as_ref(),
+        &account.credential_id()
+    )
+    .unwrap()
+    .is_none());
+    assert_eq!(
+        state
+            .store
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .list_evidence(None)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn microsoft_disconnect_failure_retains_paused_account_for_cleanup_retry() {
+    let (dir, db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let mut state = wiring_state(dir.path(), store);
+    state.credentials = Box::new(crate::ai_credentials::UnavailableStore(
+        "synthetic-secret".into(),
+    ));
+    let error = delete(&state, &account.id).unwrap_err();
+    assert_eq!(error.code, "MICROSOFT_CREDENTIALS");
+    assert!(!error.message.contains("synthetic-secret"));
+    assert!(db.account(&account.id).unwrap().paused);
 }

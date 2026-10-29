@@ -427,6 +427,8 @@
               <section id="settings-mailbox" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-mailbox" tabindex="0" data-settings-panel="mailbox" hidden>
                 <div class="settings-card">
                   <header class="settings-card-head"><h2>连接邮箱</h2><p>自动发现招聘相关来信，由你确认后存进档案。支持常见邮箱；学校邮箱可自动识别或手动配置，可连接多个邮箱。</p></header>
+                  <div class="settings-actions"><button id="mailbox-microsoft-connect" type="button">使用微软账号连接</button><button id="mailbox-microsoft-cancel" type="button" hidden>取消微软登录</button></div>
+                  <p class="settings-caption">Outlook / Hotmail / Live / MSN 使用微软官方登录，无需填写密码。微软托管的学校或机构账号受管理员策略限制，尚未验证的组织不保证可用。此版本先提供账号连接，自动收取尚未启用。</p>
                   <form id="mailbox-form">
                     <ol class="mailbox-steps" aria-label="连接邮箱步骤">
                       <li id="mailbox-step-1" aria-current="step"><span>1</span>识别邮箱配置</li>

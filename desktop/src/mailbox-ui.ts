@@ -5,7 +5,7 @@ export { mailboxProvider } from "./mailbox-providers.ts";
 
 interface MailHeader { fromAddr: string | null; fromName: string | null; subject: string | null; sentAt: string | null }
 export interface MailCandidate { id: string; accountId: string; email: string; header: MailHeader; reasons: string[] }
-export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection | null }
+export interface MailAccount { id: string; email: string; paused: boolean; failures: number; lastError: string | null; lastChecked: number | null; headerIssues: number; connection?: MailConnection | null; source?: "imap" | "microsoftGraph" | "gmailApi" }
 export interface MailboxView { accounts: MailAccount[]; candidates: MailCandidate[]; pendingCount: number; candidateIssues?: number }
 interface ConfirmReport { imported: number; duplicates: number; failed: Array<{ id: string; message: string }> }
 interface IgnoreReport { ignored: number; unchanged: number }
@@ -88,6 +88,8 @@ export function mountMailboxes(
   const failures = new Map<string, string>();
   let current: MailboxView = { accounts: [], candidates: [], pendingCount: 0 };
   let busy = false;
+  let microsoftLogin = false;
+  let discoveredMicrosoft = false;
   let limit = 100;
   let refreshToken = 0;
   let signature = "";
@@ -101,9 +103,15 @@ export function mountMailboxes(
   }
   function syncButtons() {
     actionIds.forEach((id) => { get<HTMLButtonElement>(id).disabled = busy || ((id === "mailbox-save-selected" || id === "mailbox-ignore-selected") && !selected.size); });
+    get<HTMLButtonElement>("mailbox-microsoft-connect").disabled = busy;
+    get<HTMLButtonElement>("mailbox-microsoft-cancel").hidden = !microsoftLogin;
     const awaitingReview = needsEndpointReview();
-    get<HTMLButtonElement>("mailbox-save").disabled = busy || awaitingReview;
-    secret.disabled = awaitingReview;
+    get<HTMLButtonElement>("mailbox-save").disabled = busy || (!discoveredMicrosoft && awaitingReview);
+    get<HTMLButtonElement>("mailbox-save").textContent = discoveredMicrosoft ? "使用微软账号连接" : "测试连接并保存";
+    [secret, host, port, username].forEach((input) => { input.required = !discoveredMicrosoft; });
+    secret.disabled = discoveredMicrosoft || awaitingReview;
+    secret.closest<HTMLElement>(".settings-field")!.hidden = discoveredMicrosoft;
+    configuration.hidden = discoveredMicrosoft;
     get<HTMLButtonElement>("mailbox-confirm-endpoint").disabled = busy || !awaitingReview;
     email.readOnly = busy; secret.readOnly = busy;
     host.readOnly = busy; port.readOnly = busy; username.readOnly = busy;
@@ -164,7 +172,9 @@ export function mountMailboxes(
     const paused = report.skippedPaused + report.failedAccounts.filter((account) => account.paused).length;
     const partial = report.partialAccounts ?? [];
     const recovery = paused ? ` ${paused} 个邮箱已暂停，请到「设置 → 邮箱」处理后点「恢复检查」。` : "";
-    if (!report.checkedAccounts) {
+    if (!report.checkedAccounts && current.accounts.some((account) => account.source === "microsoftGraph")) {
+      say(where, prefix + "微软账号已连接，此版本尚未启用自动收取。可先从网页保存邮件或手动导入。");
+    } else if (!report.checkedAccounts) {
       say(where, prefix + (paused ? `本次未检查邮箱。${recovery}` : "还没有连接邮箱，请先到「设置 → 邮箱」连接。"), true);
     } else if (report.failedAccounts.length || partial.length) {
       const reasons = [...new Set([...report.failedAccounts, ...partial].map((account) => account.message))].join("；");
@@ -186,9 +196,12 @@ export function mountMailboxes(
     current.accounts.forEach((account) => {
       const card = node("article", undefined, "mailbox-account");
       card.append(node("h3", account.email));
-      card.append(node("p", `${account.paused ? "已暂停" : "检查已启用"} · 最近成功检查：${formattedTime(account.lastChecked)}`, "settings-caption"));
+      const microsoft = account.source === "microsoftGraph";
+      card.append(node("p", microsoft ? `${account.paused ? "微软连接需要处理" : "微软账号已连接"} · 此版本尚未启用自动收取` : `${account.paused ? "已暂停" : "检查已启用"} · 最近成功检查：${formattedTime(account.lastChecked)}`, "settings-caption"));
       if (account.lastError) {
-        const detail = account.failures === 0 && !account.paused
+        const detail = microsoft
+          ? (account.lastError === "Network" ? "暂时无法连接微软，请检查网络后验证授权。" : account.lastError === "Credentials" ? "系统凭据库暂时不可用，请解锁后验证授权或重新授权。" : "微软授权失效或组织策略限制，请重新授权；也可从网页保存邮件或手动导入。")
+          : account.failures === 0 && !account.paused
           ? "部分文件夹或邮件未完成，其他邮件已继续扫描；程序会稍后重试。"
           : `${ERRORS[account.lastError] || "检查失败，请重新测试连接。"}${account.paused
             ? account.failures > 0 ? " 连续失败已自动暂停，处理后恢复检查。" : " 已暂停检查，处理后可恢复检查。"
@@ -197,22 +210,30 @@ export function mountMailboxes(
       }
       if (account.headerIssues) card.append(node("p", `${account.headerIssues} 封邮件连续三次读不到信头，已停止自动重试；需要时请从邮箱下载后手动导入。`, "mailbox-error"));
       const controls = node("div", undefined, "settings-actions");
-      controls.append(button("修改连接 / 更新凭据", () => {
-        email.value = account.email; secret.value = ""; credentialsCleared = false; updateProvider();
-        if (account.connection) { fillConnection(account.connection, true); retainConfiguration = true; }
-        updateServerLabel();
-        configuration.open = true;
-        showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
-        if (!showEndpointReview()) secret.focus();
-      }));
-      controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
-        await invoke("mailbox_pause", { id: account.id, paused: !account.paused });
-        if (account.paused) await checkNow("settings");
-        else say("settings", "已暂停此邮箱。");
-      })));
+      if (microsoft) {
+        controls.append(button("重新授权", () => void connectMicrosoft(account.id)));
+        controls.append(button("验证授权", () => void action("settings", "正在验证微软授权…", async () => {
+          await invoke("mailbox_microsoft_refresh", { id: account.id });
+          say("settings", "微软授权有效。此版本尚未启用自动收取。");
+        })));
+      } else {
+        controls.append(button("修改连接 / 更新凭据", () => {
+          email.value = account.email; secret.value = ""; credentialsCleared = false; updateProvider();
+          if (account.connection) { fillConnection(account.connection, true); retainConfiguration = true; }
+          updateServerLabel();
+          configuration.open = true;
+          showProgress("edited", "已载入保存的配置，等待重新测试", "下一步：填写新的凭据，点击“测试连接并保存”。修改服务器或登录账号会清空该连接的候选与扫描记录。", 2);
+          if (!showEndpointReview()) secret.focus();
+        }));
+        controls.append(button(account.paused ? "恢复检查" : "暂停检查", () => void action("settings", "正在更新检查状态…", async () => {
+          await invoke("mailbox_pause", { id: account.id, paused: !account.paused });
+          if (account.paused) await checkNow("settings");
+          else say("settings", "已暂停此邮箱。");
+        })));
+      }
       controls.append(button("断开并移除", () => void action("settings", "正在断开邮箱…", async () => {
         await invoke("mailbox_delete", { id: account.id });
-        say("settings", "已断开邮箱并清除本机候选、扫描与忽略记录，已入档邮件保留。");
+        say("settings", "已断开邮箱并清除本机凭据、候选、扫描与忽略记录，已入档邮件保留。" + (microsoft ? " 这只断开本机连接；如需撤销微软侧授权，请在微软账号的应用授权管理中操作。" : ""));
       })));
       card.append(controls); accounts.append(card);
     });
@@ -330,7 +351,7 @@ export function mountMailboxes(
     return requiresEndpointConfirmation(email.value, config) && !matchesEndpointConfirmation(email.value, config, acceptedEndpoint);
   }
   function showEndpointReview() {
-    const pending = needsEndpointReview();
+    const pending = !discoveredMicrosoft && needsEndpointReview();
     get("mailbox-endpoint-review").hidden = !pending;
     if (pending) {
       secret.value = "";
@@ -343,7 +364,7 @@ export function mountMailboxes(
     return pending;
   }
   function updateServerLabel() {
-    get("mailbox-server").textContent = host.value.trim()
+    get("mailbox-server").textContent = discoveredMicrosoft ? "使用微软官方登录，无需填写 IMAP 服务器或邮箱密码。" : host.value.trim()
       ? `IMAP：${host.value.trim()} · ${port.value} · ${encryption.value === "tls" ? "TLS" : "STARTTLS"}`
       : "尚未确定服务器，按回车或点击“确认并识别”，也可手动填写。";
   }
@@ -368,7 +389,9 @@ export function mountMailboxes(
     updateSecretHint();
     configuration.open = keep;
     const microsoft = /@(outlook\.com|hotmail\.com|live\.com|msn\.com)$/i.test(email.value.trim());
-    if (microsoft && usePreset) showProgress("unsupported", "此邮箱暂不支持直接连接", "需要微软登录授权。请点击“改用导入邮件文件”。");
+    discoveredMicrosoft = microsoft;
+    if (microsoft) secret.value = "";
+    if (microsoft && usePreset) showProgress("found", "需要微软登录授权", "点击“使用微软账号连接”，在微软官方页面登录。无需填写邮箱密码。", 2);
     else if (keep) showProgress("edited", "邮箱地址已更新，服务器配置已保留", "下一步：核对登录账号，重新填写所需密码，再点击“测试连接并保存”。", 2);
     else if (config) showProgress("found", `已找到配置 · ${help.label}`, `服务器：${config.host}。配置已填好，尚未连接。下一步：填写${help.secret}，点击“测试连接并保存”。${provider === "school" ? "清华邮箱需要客户端专用密码。" : ""}`, 2);
     else if (email.value.trim()) showProgress("typing", "邮箱地址待确认", "输入完成后按回车，或点击“确认并识别”，再查找邮箱配置。");
@@ -394,7 +417,9 @@ export function mountMailboxes(
       if (token !== discoveryToken || normalizedAddress() !== address) return;
       if (result.config) { fillConnection(result.config); retainConfiguration = true; connectionDomain = addressDomain(); }
       configuration.open = !result.config;
+      discoveredMicrosoft = result.source === "microsoft";
       if (result.config) showProgress("found", "已找到邮箱配置", `${result.note} 配置已填好，尚未连接。下一步：按学校要求填写密码，点击“测试连接并保存”。`, 2);
+      else if (discoveredMicrosoft) showProgress("found", "需要微软登录授权", "此邮箱可能由微软托管，请点击“使用微软账号连接”。是否允许访问取决于学校或机构策略。", 2);
       else showProgress("manual", "未找到配置，需要手动填写", `${result.note} 下一步：展开下方配置，按学校官方教程填写服务器和登录账号；也可改用导入邮件文件。`);
       schoolHelpUrl = result.helpUrl; updateGuide(); updateServerLabel(); showEndpointReview();
     } catch (error) {
@@ -436,9 +461,28 @@ export function mountMailboxes(
     const url = get<HTMLAnchorElement>("mailbox-guide-link").getAttribute("href");
     if (url && url !== "#") void invoke("mailbox_open_help", { url }).catch((error) => say("settings", message(error), true));
   });
+  async function connectMicrosoft(accountId?: string) {
+    await action("settings", "请在系统浏览器中完成微软登录；也可以取消。", async () => {
+      microsoftLogin = true; secret.value = ""; syncButtons();
+      try {
+        await invoke("mailbox_microsoft_connect", { accountId: accountId ?? null });
+        say("settings", "微软账号已连接，授权仅保存在系统凭据库。此版本尚未启用自动收取，可先从网页保存邮件或手动导入。");
+        showProgress("found", "微软账号已连接", "此版本尚未启用自动收取，可先从网页保存邮件或手动导入。", 2);
+      } catch (error) {
+        showProgress("error", "微软连接未完成", message(error), 2);
+        throw error;
+      } finally { microsoftLogin = false; syncButtons(); }
+    });
+  }
+  get("mailbox-microsoft-connect").addEventListener("click", () => { void connectMicrosoft(); });
+  get("mailbox-microsoft-cancel").addEventListener("click", () => {
+    void invoke("mailbox_microsoft_cancel").catch((error) => say("settings", message(error), true));
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (busy || showEndpointReview()) return;
+    if (busy) return;
+    if (discoveredMicrosoft) { void connectMicrosoft(); return; }
+    if (showEndpointReview()) return;
     const config = readConnection();
     if (!email.validity.valid || !email.value.trim() || !secret.value.trim() || !config.host || !config.username || !Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
       configuration.open = true;

@@ -32,6 +32,7 @@
 | [product-requirements.md](product-requirements.md) | MVP 产品规则、阶段、离线意图/绑定、快照暂存、提醒语义、字段目录、合成走查 | D03–D04、D07–D11、D14 |
 | [adr-architecture.md](adr-architecture.md) | Tauri 2 选型、进程角色、跨平台适配、协议原则、安装形态 | D02、D05、D06、D13 |
 | [data-privacy.md](data-privacy.md) | 数据归属、目录、敏感分级、IndexedDB 暂存、备份恢复、密钥 | D03、D08、D11、D12、D13 |
+| [microsoft-oauth.md](microsoft-oauth.md) | #354 微软公共客户端注册、令牌管理和待完成的真实验收 | 桌面开发、维护者、测试 |
 | [mailbox-import.md](mailbox-import.md) | #331 邮箱只读发现、确认入档与验收记录 | 桌面开发、测试 |
 | [downstream-decisions.md](downstream-decisions.md) | D02–D14 消费清单、定案/待选/待验证、依赖图 | 全部下游 |
 

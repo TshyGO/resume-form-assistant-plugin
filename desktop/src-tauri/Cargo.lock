@@ -4497,6 +4497,7 @@ dependencies = [
  "archive-store",
  "backup",
  "backup-crypt",
+ "base64 0.22.1",
  "data-service",
  "evidence-import",
  "fs2",
