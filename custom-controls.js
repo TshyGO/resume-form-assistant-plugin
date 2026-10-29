@@ -54,6 +54,10 @@
   // 弹层里的操作文字（北森「勾选 + 确定」式底部按钮、已选计数）不是选项。
   const GENERIC_ACTION = /^(?:确定|确认|完成|取消|关闭|清空|清空已选|重置|全选|已选\s*\d+\s*\/\s*\d+|ok|cancel|confirm|done|clear|reset)$/i;
   const GENERIC_NOISE = /(?:^|[-_])(?:error|message|tip|tips|tooltip|help|hint|feedback)(?:$|[-_])/i;
+  // 北森「勾选 + 确定」式弹层里列表周围的字：左侧的「全部」面包屑，右侧拆成几段的「已选 0/1」计数，没选时的「请在左侧选择内容」。
+  const GENERIC_COUNTER = /^已选\s*\d+\s*\/\s*\d+$/;
+  const GENERIC_PROMPT = /^请(?:在|从)左(?:侧|边)选择/;
+  const BREADCRUMB_CLASS = /breadcrumb/i;
   // 加载图标：类名以 loading 结尾（北森 psd_page-loading），自己不带文字。lazyloading、loading-done 不算。
   const LOADING_TOKEN = /(?:^|[-_])loading$/i;
   // 带月份的日期：通用路径分不清日历格子，交给日期操作或不填。
@@ -304,8 +308,20 @@
     return Boolean(only?.matches('[aria-disabled="true"], .ant-select-dropdown-menu-item-disabled')
       && (only.querySelector('.ant-empty, .ant-spin') || !text || GENERIC_EMPTY.test(text)));
   }
+  // 列表周围的字（见 GENERIC_COUNTER）认弹层时照样算上：左侧还在加载时，点开后只看得到右侧这一栏。
+  // 比对和诊断里的「有没有选项」不算它们，免得空列表算成有选项、和同名的真选项撞成歧义。
+  function layerWord(option, popup) {
+    if (GENERIC_PROMPT.test(option.full)) return true;
+    // 列表为空时左侧一栏只剩面包屑，条目往上合并会把它整个装进来：条目里的字全是面包屑的也算。
+    const crumb = option.node.querySelector('[class*="breadcrumb" i]');
+    if (crumb && trim(crumb.textContent) === option.full) return true;
+    for (let node = option.node; node && node !== popup; node = node.parentElement) {
+      if (BREADCRUMB_CLASS.test(node.getAttribute('class') || '') || GENERIC_COUNTER.test(trim(node.textContent))) return true;
+    }
+    return false;
+  }
   function options(popup, info, level, h) {
-    if (info.library === 'generic') return genericOptions(popup, h);
+    if (info.library === 'generic') return genericOptions(popup, h).filter(option => !layerWord(option, popup));
     const nodes = optionNodes(popup, info, level).filter(h.visible);
     // 这样的弹层还不是选项列表：按没有选项接着等。
     if (info.library === 'antd' && !info.cascade && antdNotFound(popup, nodes)) return [];
