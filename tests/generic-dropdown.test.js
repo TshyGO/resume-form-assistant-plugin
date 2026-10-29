@@ -1001,6 +1001,25 @@ test("options that load a moment after opening are waited for instead of jumping
   assert.deepEqual(h.searches, [], "the search box is not used while the list is still loading");
 });
 
+test("the words around a 勾选 + 确定 list are not read as its options", async () => {
+  // 北森弹层里的「全部」面包屑、拆成几段的「已选 0/1」计数和「请在左侧选择内容」不是选项：
+  // 字典是空的时报没有选项；和它们同名的真选项照常选上，不算歧义。
+  // 字典点开后才加载时也一样。空列表要等满才算完，这里把等待调短。
+  for (const loadMs of [0, 300]) {
+    const empty = constantSelector("民族", { choices: [], loadMs });
+    const api = empty.w.ResumeProControls.create({ timeoutMs: 800, settleMs: 35, isVisible: (el) => !el.closest("[hidden]") });
+    const none = await api.operate(empty.target, "回族");
+    assert.equal(none.ok, false);
+    assert.equal(none.observed.hasOptions, false, `${loadMs}: ${JSON.stringify(none.observed)}`);
+  }
+  for (const [label, choices, wanted] of [["兄弟姐妹人数", ["0", "1", "2", "3"], "1"], ["适用范围", ["全部", "部分"], "全部"]]) {
+    const h = constantSelector(label, { choices });
+    const result = await h.api.operate(h.target, wanted);
+    assert.equal(result.ok, true, `${wanted}: ${JSON.stringify(result)}`);
+    assert.deepEqual(h.events, [`radio:${wanted}`, "ok"]);
+  }
+});
+
 test("a list whose active option only carries a highlight class is still read option by option", async () => {
   // 只有 <mark> 才把一段文字拼成一项：键盘停着的那一项带 is-highlighted、select2-results__option--highlighted 类名时，
   // 列表照旧一项一项读，不读成「男女」一项。
