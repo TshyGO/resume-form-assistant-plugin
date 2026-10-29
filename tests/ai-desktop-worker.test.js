@@ -203,6 +203,28 @@ test('a timeout says which tier, which host and how long it waited', async () =>
   assert.equal(early.warning, '日常模型等了 96 秒没有返回，可在桌面设置换模型后重试。');
 });
 
+// #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
+test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
+  const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));
+  let calls = 0;
+  const env = worker(() => (++calls === 1
+    ? { ok: true, text: '[]', firstByteMs: 2400 }
+    : { ok: false, reason: 'timeout', host: 'api.example.com', firstByteMs: 900, timeoutStage: 'body' }));
+  const result = await env.run({ formFields: fields, resumeFields: BASE.resumeFields });
+  assert.equal(calls, 2);
+  assert.equal(result.diagnostics.firstByteMs, 2400);
+  assert.equal(result.diagnostics.timeoutStage, 'body');
+
+  const waiting = await worker(() => ({ ok: false, reason: 'timeout', timeoutStage: 'first_byte' })).run();
+  assert.equal(waiting.diagnostics.timeoutStage, 'first_byte');
+  assert.equal('firstByteMs' in waiting.diagnostics, false);
+
+  // An older desktop sends neither; nothing made up takes their place.
+  const old = await worker(() => ({ ok: false, reason: 'timeout' })).run();
+  assert.equal('firstByteMs' in old.diagnostics, false);
+  assert.equal('timeoutStage' in old.diagnostics, false);
+});
+
 test('a later batch failure keeps matches already returned by the desktop', async () => {
   let calls = 0;
   const env = worker(() => (++calls === 1

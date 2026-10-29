@@ -94,6 +94,8 @@
   const JOB_ENDS = ["open", "saved", "queued", "failed", "unknown", "cancelled", "navigated"];
   const JOB_CODES = ["ok", "no_fragments", "no_evidence", "location_no_evidence", "missing_title", "missing_company", "missing_both",
     "in_flight", "internal", "other"];
+  // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
+  const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
   const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
@@ -112,6 +114,7 @@
     error_category: oneOf(CATEGORIES), first_failing_stage: /^(?:scan|match|fill|none)$/,
     error_code: oneOf(ERROR_CODES, "|http_\\d{3}|-"),
     local_matches: INT, ai_fields: INT, ai_called: /^(?:true|false|-)$/, ai_tier: /^(?:default|strong|-)$/, ai_matches: INT, ai_latency_ms: INT,
+    ai_first_byte_ms: INT, ai_timeout_stage: oneOf(TIMEOUT_STAGES, "|-"),
     resume_fields: INT, resume_candidates: INT, prompt_bytes: INT,
     timings_ms: /^scan=(?:\d{1,9}|-),match=(?:\d{1,9}|-),fill=(?:\d{1,9}|-),total=(?:\d{1,9}|-)$/,
     unlisted: INT,
@@ -315,6 +318,9 @@
       `ai_tier: ${called ? tier : "-"}`,
       `ai_matches: ${count(plus(d?.aiMatches, g.aiMatches))}`,
       `ai_latency_ms: ${called ? ms(d.apiMs) : "-"}`,
+      // From the desktop (#299): how long the provider took to send its headers, and where a timeout stopped.
+      `ai_first_byte_ms: ${called ? count(d?.firstByteMs) : "-"}`,
+      `ai_timeout_stage: ${called && TIMEOUT_STAGES.includes(d?.timeoutStage) ? d.timeoutStage : "-"}`,
       `resume_fields: ${count(d?.resumeFields)}`,
       `resume_candidates: ${count(d?.candidateFields)}`,
       `prompt_bytes: ${count(d?.promptBytes)}`,

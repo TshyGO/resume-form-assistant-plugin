@@ -5,7 +5,9 @@ export const STORAGE_KEY = 'feedbackStateV1';
 // The explanation the user agreed to. Raise it when automatic reports start carrying something
 // the notice does not describe: earlier grants then count as undecided and the user is asked again.
 // 2 (#301): install type, how a fill was started and whether the page had focus, the AI tier,
-// whether an unfilled select's popup opened and had any option, and a report when the AI request fails.
+// whether an unfilled select's popup opened and had any option, and a report when the AI request fails;
+// #299 adds how long the AI service took to start answering and where a timeout stopped, before any
+// release carried version 2, so it stays 2.
 export const CONSENT_VERSION = 2;
 // chrome.management.getSelf().installType; getSelf needs no "management" permission.
 const INSTALL_TYPES = ['normal', 'development', 'sideload', 'admin', 'other'];

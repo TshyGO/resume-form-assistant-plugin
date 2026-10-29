@@ -658,7 +658,15 @@ export function validateResponse(value, requestType) {
         ? Object.hasOwn(payload, "text") && !Object.hasOwn(payload, "reason")
           && !Object.hasOwn(payload, "httpStatus") && !Object.hasOwn(payload, "host")
         : payload.status === "failed" && Object.hasOwn(payload, "reason") && !Object.hasOwn(payload, "text");
-      if (!valid) throw fail("invalid_payload", "ai.complete response fields do not match status");
+      // Only a timeout has a stage to name (#299).
+      if (!valid || (Object.hasOwn(payload, "timeoutStage") && payload.reason !== "timeout")) {
+        throw fail("invalid_payload", "ai.complete response fields do not match status");
+      }
+      // Plugins send ai.complete as v2 and their schema copy rejects keys it does not know
+      // (additionalProperties: false); only a plugin that sends v3 knows the timing (#299).
+      if (value.protocolVersion < 3 && (Object.hasOwn(payload, "firstByteMs") || Object.hasOwn(payload, "timeoutStage"))) {
+        throw fail("invalid_payload", "ai.complete timing is only returned to a protocolVersion 3 request");
+      }
       if (Object.hasOwn(payload, "host") &&
           (payload.host.length === 0 || !/^[A-Za-z0-9.-]+$/.test(payload.host))) {
         throw fail("invalid_payload", "ai.complete host must be a hostname");

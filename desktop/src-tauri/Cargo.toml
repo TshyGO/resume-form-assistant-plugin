@@ -33,6 +33,9 @@ keyring = { version = "3", default-features = false, features = ["apple-native",
 # 保留已验证的 reqwest 范围；XLSX 安全修复不顺带更新网络依赖。
 reqwest = { version = ">=0.13.0, <0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset", "system-proxy"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
+# reqwest 的 connector_layer 要用这两个 trait（#299 记连接是否完成）；版本跟 reqwest 已经依赖的一致。
+tower-layer = "0.3"
+tower-service = "0.3"
 local-ipc = { path = "../crates/local-ipc" }
 nm-frame = { path = "../crates/nm-frame" }
 regex = "1"

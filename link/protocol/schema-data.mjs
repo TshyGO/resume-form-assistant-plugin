@@ -1048,6 +1048,19 @@ export const SCHEMA_DATA = {
             "default",
             "strong"
           ]
+        },
+        "firstByteMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "timeoutStage": {
+          "type": "string",
+          "enum": [
+            "connect",
+            "first_byte",
+            "body"
+          ]
         }
       }
     },

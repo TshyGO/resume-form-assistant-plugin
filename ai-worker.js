@@ -261,6 +261,8 @@ const BATCH_LOCAL_FAILURES = new Set(["http", "bad_response", "input_too_large",
 // Codes that only say some fields were skipped before any request. A failed request replaces
 // them, so errorCode tells a failed AI request from one that matched nothing (#301).
 const SKIP_CODES = new Set(["none", "no_context", "input_too_large"]);
+// Where a desktop request timed out (#299): connecting, waiting for the headers, or reading the body.
+const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
 
 // #224 深度分析：只把插件已经脱敏的页面大纲交给强模型（purpose=analyze，不带 tier 即强档）。
 // 返回解析后的说明书对象；模型原文不回传、不进诊断。校验由页面里的 deep-analysis.js 按本次大纲做。
@@ -359,6 +361,11 @@ async function handleAiFill(message, controller = new AbortController()) {
       diagnostics.promptBytes += new TextEncoder().encode(prompt).length;
       const result = await sendToDesktop({ purpose: "fill", tier, system: AI_SYSTEM_PROMPT, user: prompt, signal: controller.signal });
       if (tier && (result?.tier === "strong" || result?.tier === "default")) diagnostics.tierUsed = result.tier;
+      // #299：服务商多久回了响应头（几批取最慢的），超时停在哪一步。旧桌面不给就不记。
+      if (Number.isInteger(result?.firstByteMs) && result.firstByteMs >= 0) {
+        diagnostics.firstByteMs = Math.max(diagnostics.firstByteMs ?? 0, result.firstByteMs);
+      }
+      if (TIMEOUT_STAGES.includes(result?.timeoutStage)) diagnostics.timeoutStage = result.timeoutStage;
       if (!result?.ok) {
         const reason = result?.reason ?? "unavailable";
         if (SKIP_CODES.has(diagnostics.errorCode)) diagnostics.errorCode = reason;

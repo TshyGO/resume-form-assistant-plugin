@@ -26,6 +26,9 @@ export function createAi({ session, store, port, uuid, now }) {
         // tier only when asked for: a desktop older than #223 rejects the key outright.
         payload: { purpose, ...(tier ? { tier } : {}), system, user }, now
       });
+      // v3 tells the desktop this plugin reads the timing (#299). A desktop up to 0.4.2
+      // serves only v2 and refuses a v3 envelope.
+      if (probe.maxProtocolVersion >= 3) request.protocolVersion = 3;
       await validateRequest(request);
     } catch (error) {
       return { ok: false, reason: wireReason(error?.code) };
@@ -53,7 +56,12 @@ export function createAi({ session, store, port, uuid, now }) {
       return { ok: false, reason: wireReason(code) };
     }
     const payload = reply.response.payload;
-    const used = payload.tier == null ? {} : { tier: payload.tier };
+    const used = {
+      ...(payload.tier == null ? {} : { tier: payload.tier }),
+      // How long the provider took to send its headers, and where a timeout stopped (#299).
+      ...(payload.firstByteMs == null ? {} : { firstByteMs: payload.firstByteMs }),
+      ...(payload.timeoutStage == null ? {} : { timeoutStage: payload.timeoutStage })
+    };
     if (payload.status === 'ok') return { ok: true, text: payload.text, ...used };
     return {
       ok: false, reason: payload.reason,

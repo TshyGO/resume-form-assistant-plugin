@@ -126,6 +126,8 @@ test("the v1 block answers why a page had no fields, section by section", () => 
     "ai_tier: -",
     "ai_matches: -",
     "ai_latency_ms: -",
+    "ai_first_byte_ms: -",
+    "ai_timeout_stage: -",
     "resume_fields: -",
     "resume_candidates: -",
     "prompt_bytes: -",
@@ -177,7 +179,8 @@ const V1_KEYS = ["url_path", "page_type", "page_type_reason", "dom_ready_at_scan
   "dom_elements", "iframes_total", "iframes_cross_origin", "same_origin_iframe_inputs", "shadow_roots_with_inputs",
   "custom_controls", "custom_libraries", "readonly_or_disabled", "edit_buttons",
   "error_category", "first_failing_stage", "error_code",
-  "local_matches", "ai_fields", "ai_called", "ai_tier", "ai_matches", "ai_latency_ms", "resume_fields", "resume_candidates", "prompt_bytes",
+  "local_matches", "ai_fields", "ai_called", "ai_tier", "ai_matches", "ai_latency_ms", "ai_first_byte_ms", "ai_timeout_stage",
+  "resume_fields", "resume_candidates", "prompt_bytes",
   "timings_ms"];
 
 test("a catch-up that called the AI shows as called, and its error code fills a missing first-round one", () => {

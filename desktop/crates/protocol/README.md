@@ -63,6 +63,8 @@ SaveIntent 只存在于插件 `chrome.storage.local`，**不是** `messageType`�
 
 字段不带持久化 ID：整份替换加内容摘要已能排除重命名、重名、删除和顺序变化带来的错配，因此模板存储、备份、Excel 与 `resume.read` 的格式都不变。
 
+`ai.complete` 的计时（#299）：请求用 `protocolVersion: 3` 时，响应可带 `firstByteMs`（从发出请求到收到服务商响应头的毫秒数，没收到就不带）和 `timeoutStage`（只在 `reason: "timeout"` 时出现：`connect` 还没连上，`first_byte` 连上了、响应头没回来，`body` 响应头到了、正文没收完）。`protocolVersion: 2` 的响应不得带这两个键：已发布的插件都用 v2 发 `ai.complete`，它们的 schema 副本不认识这两个键；新插件只在握手里桌面报 `maxProtocolVersion` ≥ 3 时改发 v3（0.4.2 及更早的桌面只服务 v2）。
+
 `ai.complete` 失败响应里的 `httpStatus` 与 `host` 仅供插件诊断界面使用，不得转发给页面或内容脚本。`host` 只允许 ASCII 字母、数字、点和连字符，不含 scheme、端口、路径或 userinfo；不返回上游错误正文。
 
 `ai.complete` 失败 `reason` 枚举含 `credential_unavailable`：凭据存放在系统密钥链，读取或写入失败与「未配置」是两件不同的事，值得插件区分提示。桌面（PR 3b，`desktop/src-tauri/src/bridge_services.rs` 的 `from_ai_error`）按下表映射：
