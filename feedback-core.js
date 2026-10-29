@@ -127,8 +127,11 @@
 
   function routeSegment(text) {
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,19}$/.test(text)) return false;
+    // A version word only as the whole segment (/api/v2): several in one segment, as in
+    // /apply/v13.v91.v23, could spell out any number.
+    if (/^v\d{1,2}$/i.test(text)) return true;
     return text.replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s._-]+/).filter(Boolean)
-      .every(word => ROUTE_WORDS.has(word.toLowerCase()) || /^v\d{1,2}$/i.test(word));
+      .every(word => ROUTE_WORDS.has(word.toLowerCase()));
   }
 
   // Common route words survive; every other segment (names, ids, tokens, non-ASCII) becomes :id.

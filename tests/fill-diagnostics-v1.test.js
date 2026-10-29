@@ -23,6 +23,18 @@ test("url paths keep only common route words; names, ids, tokens and non-ASCII s
   assert.equal(core.pathTemplate(undefined), "/");
 });
 
+test("a version word is kept only as a whole path segment", () => {
+  // 一段里拼几个版本词就能带出任意数字（/apply/v13.v91.v23 是手机号的前几位）。
+  assert.equal(core.pathTemplate("/api/v1/apply"), "/api/v1/apply");
+  assert.equal(core.pathTemplate("/V2/resume"), "/V2/resume");
+  for (const segment of ["v13.v91.v23", "v13-v91", "v1v2", "apply-v2", "resumeV3", "v2.html"]) {
+    assert.equal(core.pathTemplate(`/apply/${segment}`), "/apply/:id", segment);
+  }
+  // 后台按同样的规则复核交来的路径。
+  const forged = core.diagnostics("[页面]\nurl_path: /apply/v13.v91.v23\npage_type: application_form");
+  assert.doesNotMatch(forged, /v13/);
+});
+
 test("an empty page is page_not_supported unless it looks like an application form", () => {
   const empty = { scanned: true, fieldCount: 0, frames: { crossOrigin: 0, frameInputs: 0 } };
   assert.deepEqual(core.fillCategory({ ...empty, pageType: "unknown" }), { category: "page_not_supported", stage: "scan" });
