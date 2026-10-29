@@ -178,7 +178,11 @@
     // CSS.escape is unavailable; no page value becomes an executable selector.
     const escaped = id => id.replace(/[\u0000-\u001f\u007f"\\]/g, character => `\\${character.codePointAt(0).toString(16)} `);
     const referenced = Array.from(ids).flatMap(id => Array.from(info.el.ownerDocument.querySelectorAll(`[id="${escaped(id)}"]`)));
-    const owned = Array.from(new Set(referenced.map(outerPopup).filter(visible)));
+    const layers = Array.from(new Set(referenced.map(outerPopup).filter(visible)));
+    // Element Plus el-autocomplete: aria-controls names the suggestion layer and aria-owns the list
+    // inside it. A referenced layer holding another counts once, unless it also holds the control:
+    // that is a page section rather than a popup, and both stay ambiguous.
+    const owned = layers.filter(node => !layers.some(other => other !== node && other.contains(node) && !other.contains(info.root)));
     return { hasIds: ids.size > 0, popup: owned.length === 1 ? owned[0] : null, ambiguous: owned.length > 1 };
   }
   function optionNodes(popup, info, level) {

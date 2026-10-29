@@ -573,11 +573,16 @@ test("Element autocomplete (school name): with no matching suggestion the name i
 // Element UI 2.x el-autocomplete（#299 51job），按 element-ui 2.15 的行为写：聚焦或打字后防抖取建议，有建议才显示建议框；
 // 点建议只把文字写进输入框（没有 aria-valuetext，也没有隐藏值），随后收起；失焦不关，点页面别处才关。
 // commits：组件另外用 aria-valuetext 标出选中项。
-function elAutocomplete({ forEmpty = [], suggestions = forEmpty, commits = false } = {}) {
+// plus：Element Plus 2.8 的结构（2.8.8 真机）：建议框是外层 .el-popper 里装着列表，组件根用 aria-controls 指外层、aria-owns 指列表。
+function elAutocomplete({ forEmpty = [], suggestions = forEmpty, commits = false, plus = false } = {}) {
+  const refs = plus ? `aria-owns="sugg-list" aria-controls="sugg"` : `aria-owns="sugg"`;
+  const box = plus ? `<div id="sugg" role="listbox" class="el-popper is-pure is-light el-autocomplete__popper" hidden><div class="el-autocomplete-suggestion" role="region">
+      <div class="el-scrollbar"><div class="el-autocomplete-suggestion__wrap el-scrollbar__wrap"><ul id="sugg-list" role="listbox" class="el-scrollbar__view el-autocomplete-suggestion__list"></ul></div></div></div></div>`
+    : `<div id="sugg" role="region" class="el-autocomplete-suggestion el-popper" hidden><ul class="el-autocomplete-suggestion__list"></ul></div>`;
   const h = load(`<div class="el-form-item"><label class="el-form-item__label">现居住城市</label><div class="el-form-item__content">
-    <div class="el-autocomplete" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-owns="sugg">
+    <div class="el-autocomplete" role="combobox" aria-haspopup="listbox" aria-expanded="false" ${refs}>
       <div class="el-input"><input class="el-input__inner" type="text" autocomplete="off" role="textbox" aria-autocomplete="list" aria-controls="id"></div></div></div></div>
-    <div id="sugg" role="region" class="el-autocomplete-suggestion el-popper" hidden><ul class="el-autocomplete-suggestion__list"></ul></div>`);
+    ${box}`);
   const { doc } = h;
   const root = doc.querySelector(".el-autocomplete"), input = doc.querySelector("input"), popper = doc.getElementById("sugg");
   const state = { shown: [], activated: false, picks: [] };
@@ -697,6 +702,33 @@ test("Element autocomplete: a shorter and a longer suggestion stay ambiguous, so
   assert.equal(result.reason, "ambiguous_option");
   assert.deepEqual(h.state.picks, []);
   assert.equal(h.input.value, "");
+});
+
+test("Element Plus autocomplete: the box and the list inside it are one popup, so a suggestion shown on focus is picked", async () => {
+  // 2026-10-29 Element Plus 2.8.8 真机：一聚焦就弹出建议时，建议框外层和里面的列表被当成两个弹层，报「无法确定控件弹层」。
+  const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"], plus: true });
+  const root = h.doc.querySelector(".el-autocomplete");
+  let outside = 0;
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    h.doc.addEventListener(type, (event) => { if (!root.contains(event.target) && !h.popper.contains(event.target)) outside += 1; }, true);
+  }
+  const result = await h.api.operate(h.target, "广州市");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.state.picks, ["广州市"]);
+  assert.equal(h.input.value, "广州市");
+  await h.settle();
+  assert.equal(h.popper.hidden, true, "the suggestion box is closed");
+  assert.equal(outside, 0, "nothing on the page outside the field is pressed");
+});
+
+test("Element Plus autocomplete: with no matching suggestion the value is typed in like a text box", async () => {
+  const h = elAutocomplete({ forEmpty: ["广州市", "广元市", "深圳市"], plus: true });
+  const result = await h.api.operate(h.target, "广州市天河区");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.input.value, "广州市天河区");
+  await h.settle();
+  assert.equal(h.popper.hidden, true);
 });
 
 test("a searchable ARIA combobox that is not an autocomplete never gets free text", async () => {
