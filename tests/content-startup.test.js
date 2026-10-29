@@ -201,6 +201,30 @@ test("running the scripts twice in one page builds one controller", async () => 
   assert.equal((await page.status()).ready, true);
 });
 
+test("running the scripts twice in one page adds no second listener", async () => {
+  // A second message listener would answer the side panel from a run with no controller, and
+  // second error handlers would send every report twice.
+  const counted = async (runs) => {
+    const counts = {};
+    const page = await openPage({ runs, setup: (win) => {
+      for (const [name, target] of [["window", win], ["document", win.document]]) {
+        const add = target.addEventListener.bind(target);
+        target.addEventListener = (type, ...rest) => {
+          counts[`${name}:${type}`] = (counts[`${name}:${type}`] || 0) + 1;
+          return add(type, ...rest);
+        };
+      }
+    } });
+    return { page, counts };
+  };
+  const once = await counted(1);
+  const twice = await counted(2);
+  assertStarted(twice.page);
+  assert.equal(twice.page.listeners.length, 1, "one runtime message listener");
+  assert.deepEqual(twice.counts, once.counts);
+  assert.equal((await twice.page.status()).ready, true);
+});
+
 test("a missing helper leaves the page not ready and is reported once, without its message", async () => {
   const page = await openPage({ scripts: SCRIPTS.filter((file) => file !== "field-scan.js") });
   assert.deepEqual(page.rejections, []);

@@ -1,4 +1,10 @@
 (function () {
+  // Runs once per page, even if this script runs twice in the same world: a second run would add
+  // a second message listener and second error handlers. The mark is a symbol on this world's
+  // global, so no element on the page can stand in for it.
+  const loaded = Symbol.for("resumePro.content");
+  if (self[loaded]) return;
+  self[loaded] = true;
   const sendFeedback = report => chrome.runtime.sendMessage({ type: "FEEDBACK_AUTO", report });
   self.ResumeProFeedback?.install(sendFeedback, { origin: chrome.runtime.getURL(""), requireOwn: true });
   const SIDEBAR_ID = "resume-pro-sidebar";
@@ -403,12 +409,7 @@
     startUp();
   }
 
-  // Runs once per page, even if this script runs twice in the same world. The mark is a symbol
-  // on this world's global, so no element on the page can stand in for it.
   function startUp() {
-    const started = Symbol.for("resumePro.startUp");
-    if (self[started]) return;
-    self[started] = true;
     if (!pageCanHostController()) {
       startupState = "unsupported";
       return;
