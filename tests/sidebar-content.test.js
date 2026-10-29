@@ -799,6 +799,21 @@ test("a bound write failure closes the save form and points to the retained queu
   assert.match(described.text, /待同步列表/);
 });
 
+test('a desktop answer whose data cannot be read is not told as a desktop that is not running', async () => {
+  // A template entry that is not an object cannot be read into the view model.
+  const unreadable = loadContentScript({ desktopReply: async message => message.type === 'DESKTOP_RESUME_READ'
+    ? { status: 'ok', data: { templates: [null], activeTemplate: null } } : {} });
+  const failed = await unreadable.hooks.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.equal(failed.outcome, 'failed');
+  assert.doesNotMatch(failed.error, /已退出|没有响应/);
+  assert.match(failed.error, /读不出桌面里的简历数据/);
+
+  // A read that never gets an answer still means the desktop cannot be reached.
+  const away = loadContentScript({ desktopReply: async () => { throw new Error('Could not establish connection.'); } });
+  const unavailable = await away.hooks.handleAiFillClick({ currentTarget: { disabled: false } });
+  assert.match(unavailable.error, /桌面程序已退出或暂时没有响应/);
+});
+
 test('the page reads the desktop only while its own panel is on screen', async () => {
   const reads = [];
   const { hooks } = loadContentScript({ desktopReply: async message => {

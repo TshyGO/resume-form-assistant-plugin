@@ -36,7 +36,7 @@ function crossOriginFrame(win) {
 // Injects the content scripts the way Chrome does at document_idle: each file on its own, so one
 // that throws does not stop the next.
 async function openPage({ html = FORM_PAGE, contentType = "text/html", setup, scripts = SCRIPTS, runs = 1,
-  storageGet = async () => ({}), cssFails = false, cssStatus = 200 } = {}) {
+  storageGet = async () => ({}), cssFails = false, cssStatus = 200, reply = async () => null } = {}) {
   const dom = new JSDOM(html, { url: "https://jobs.example.test/apply", contentType, runScripts: "outside-only", pretendToBeVisual: true });
   const win = dom.window;
   for (let i = 0; win.document.readyState !== "complete" && i < 200; i += 1) await wait(1);
@@ -49,8 +49,11 @@ async function openPage({ html = FORM_PAGE, contentType = "text/html", setup, sc
       id: EXTENSION_ID,
       getURL: (name) => ORIGIN + name,
       sendMessage: async (message) => {
-        if (message.type === "FEEDBACK_AUTO") reports.push(message.report);
-        return null;
+        if (message.type === "FEEDBACK_AUTO") {
+          reports.push(message.report);
+          return null;
+        }
+        return reply(message);
       },
       onMessage: { addListener: (listener) => listeners.push(listener) }
     },
@@ -92,7 +95,8 @@ async function openPage({ html = FORM_PAGE, contentType = "text/html", setup, sc
     listeners,
     hosts: () => win.document.querySelectorAll(`#${SIDEBAR_ID}`).length,
     missing: () => USED_GLOBALS.filter((name) => !win[name]),
-    status: () => new Promise((resolve) => listeners[0]({ type: "RESUME_PANEL_STATUS" }, { id: EXTENSION_ID }, resolve))
+    status: () => new Promise((resolve) => listeners[0]({ type: "RESUME_PANEL_STATUS" }, { id: EXTENSION_ID }, resolve)),
+    panel: (message) => new Promise((resolve) => listeners[0](message, { id: EXTENSION_ID }, resolve))
   };
 }
 
@@ -223,6 +227,28 @@ test("running the scripts twice in one page adds no second listener", async () =
   assert.equal(twice.page.listeners.length, 1, "one runtime message listener");
   assert.deepEqual(twice.counts, once.counts);
   assert.equal((await twice.page.status()).ready, true);
+});
+
+test("desktop data that cannot be read is reported as an error; a read with no answer is not", async () => {
+  const resume = { profile: { values: { name: "测试" }, family: [], custom: [] }, profileRevision: 0 };
+  const unreadable = await openPage({ reply: async (message) => message.type === "DESKTOP_RESUME_READ"
+    ? { status: "ok", data: { ...resume, templates: [null], activeTemplate: null } } : null });
+  assertStarted(unreadable);
+  assert.equal((await unreadable.panel({ type: "RESUME_PANEL_FILL" })).ok, false);
+  assert.equal(unreadable.reports.length, 1);
+  const [report] = unreadable.reports;
+  assert.equal(report.kind, "exception");
+  assert.equal(report.name, "TypeError");
+  assert.match(report.stack, /^resume-data\.js:\d+:\d+/);
+  assert.doesNotMatch(JSON.stringify(report), /测试|null/);
+
+  const away = await openPage({ reply: async (message) => {
+    if (message.type === "DESKTOP_RESUME_READ") throw new Error("Could not establish connection.");
+    return null;
+  } });
+  assertStarted(away);
+  assert.equal((await away.panel({ type: "RESUME_PANEL_FILL" })).ok, false);
+  assert.deepEqual(away.reports, []);
 });
 
 test("a missing helper leaves the page not ready and is reported once, without its message", async () => {

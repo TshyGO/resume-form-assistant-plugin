@@ -372,12 +372,27 @@
 
   const StorageService = {
     async getState() {
+      let result;
       try {
-        const result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
-        state.desktopMode = result?.status === "ok" ? "ready" : result?.status || "unavailable";
-        return result?.status === "ok" ? self.ResumeProResumeData.normalize(result.data) : null;
+        result = await chrome.runtime.sendMessage({ type: "DESKTOP_RESUME_READ" });
       } catch {
+        // No answer at all: the worker, or its link to the desktop, is not there.
         state.desktopMode = "unavailable";
+        return null;
+      }
+      if (result?.status !== "ok") {
+        state.desktopMode = result?.status || "unavailable";
+        return null;
+      }
+      try {
+        const store = self.ResumeProResumeData.normalize(result.data);
+        state.desktopMode = "ready";
+        return store;
+      } catch (error) {
+        // The desktop answered with data this page cannot read. That is an error to report,
+        // not a desktop that is not running.
+        state.desktopMode = "unreadable";
+        reportError(error);
         return null;
       }
     },
@@ -423,7 +438,7 @@
       // put in by this startup, even when createSidebar threw before handing it back.
       const host = startupHost || document.getElementById(SIDEBAR_ID);
       if (host) host.style.display = "none";
-      reportStartupError(error);
+      reportError(error, "unhandledrejection");
     });
   }
 
@@ -437,11 +452,11 @@
     }
   }
 
-  // Sent the way the global handlers send an error, once. The source stays "unhandledrejection",
-  // which is what a failed init was before it had a boundary.
-  function reportStartupError(error) {
+  // Sent the way the global handlers send an error, once. A failed init keeps the source
+  // "unhandledrejection", which is what it was before it had a boundary.
+  function reportError(error, source = "error") {
     try {
-      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), "unhandledrejection");
+      const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), source);
       if (report?.stack) Promise.resolve(sendFeedback(report)).catch(() => {});
     } catch { /* no recursive reporting */ }
   }

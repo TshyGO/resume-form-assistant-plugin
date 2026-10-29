@@ -7,6 +7,7 @@
     never_paired: { message: '尚未完成桌面配对。请在桌面设置中粘贴扩展 ID。', action: '复制扩展 ID', kind: 'pair' },
     incompatible: { message: '桌面程序版本太旧，请更新桌面后重试。', action: '去下载', kind: 'download' },
     unavailable: { message: '桌面程序已退出或暂时没有响应。打开桌面后可恢复简历条目和 AI。', action: '打开桌面', kind: 'home' },
+    unreadable: { message: '读不出桌面里的简历数据，请把桌面程序和插件更新到最新版后再试。', action: '去下载', kind: 'download' },
     empty: { message: '桌面里还没有简历模板或「我的信息」。', action: '打开桌面简历', kind: 'resume' }
   };
 
