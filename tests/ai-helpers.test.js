@@ -333,6 +333,95 @@ test("person scope: an unspecified family member row gets neither the applicant 
   assert.deepEqual(matches, []);
 });
 
+// 简历字段名认得出类别时只按名字算：手机号也是 8 到 18 位数字，纯数字的身份证号也像电话。
+const ruleValues = (formFields, resumeFields) =>
+  Object.fromEntries(helpers.buildRuleBasedMatches(formFields, resumeFields).map((m) => [m.fieldId, m.value]));
+const textField = (fieldId, label, extra = {}) => ({ fieldId, label, inputType: "text", options: [], ...extra });
+
+test("rules: a mobile listed before the ID number does not fill the ID field", () => {
+  const byId = ruleValues(
+    [textField("name", "姓名"), textField("id", "证件号码"), textField("phone", "手机"), textField("mail", "邮箱")],
+    [
+      { group: "基本信息", key: "姓名", value: "测试用户" },
+      { group: "基本信息", key: "手机", value: "13800138000" },
+      { group: "基本信息", key: "身份证号", value: "110101199003071234" },
+      { group: "基本信息", key: "邮箱", value: "tester@example.com" }
+    ]
+  );
+
+  assert.deepEqual(byId, { name: "测试用户", id: "110101199003071234", phone: "13800138000", mail: "tester@example.com" });
+});
+
+test("rules: an ID number listed before the mobile does not fill the phone field", () => {
+  const byId = ruleValues(
+    [textField("phone", "手机号码"), textField("id", "证件号码")],
+    [
+      { group: "基本信息", key: "证件号码", value: "110101199003071234" },
+      { group: "联系方式", key: "手机号码", value: "13800138000" }
+    ]
+  );
+
+  assert.deepEqual(byId, { phone: "13800138000", id: "110101199003071234" });
+});
+
+test("rules: a named field of another kind is not taken for its look-alike value", () => {
+  const byId = ruleValues(
+    [textField("id", "身份证号"), textField("phone", "联系电话"), textField("gender", "性别"), textField("birth", "出生日期")],
+    [
+      { group: "基本信息", key: "姓名", value: "李亚男" },
+      { group: "补充字段", key: "学位证书编号", value: "1028712023001234" },
+      { group: "基本信息", key: "Mobile", value: "13800138000" },
+      { group: "教育补充", key: "毕业时间", value: "2026-06" },
+      { group: "实习经历", key: "示例科技实习经历-起止时间", value: "2023.06-2023.08" },
+      { group: "基本信息", key: "性别", value: "女" },
+      { group: "基本信息", key: "出生年月", value: "2001-05" },
+      { group: "基本信息", key: "身份证号", value: "110101199003071234" }
+    ]
+  );
+
+  assert.deepEqual(byId, { id: "110101199003071234", phone: "13800138000", gender: "女", birth: "2001-05" });
+});
+
+test("rules: keys the table cannot name are still matched by what the value looks like", () => {
+  const byId = ruleValues(
+    [textField("id", "证件号码"), textField("phone", "手机"), textField("gender", "性别"), textField("mail", "邮箱")],
+    [
+      { group: "补充字段", key: "号码1", value: "110101199003071234" },
+      { group: "补充字段", key: "号码2", value: "13800138000" },
+      { group: "补充字段", key: "Sex", value: "女" },
+      { group: "联系方式", key: "电子邮件", value: "tester@example.com" }
+    ]
+  );
+
+  assert.deepEqual(byId, { id: "110101199003071234", phone: "13800138000", gender: "女", mail: "tester@example.com" });
+});
+
+test("person scope: family and emergency numbers stay with their own person and kind", () => {
+  const byId = ruleValues(
+    [
+      textField("own-phone", "手机号码"),
+      textField("own-id", "证件号码"),
+      textField("father-id", "身份证号", { group: "父亲" }),
+      textField("father-phone", "联系电话", { group: "父亲" }),
+      textField("member-phone", "联系电话", { group: "家庭成员" }),
+      textField("emg-phone", "紧急联系人电话")
+    ],
+    [
+      { group: "家庭主要成员", key: "父亲联系电话", value: "13900000000" },
+      { group: "联系方式", key: "紧急联系人电话", value: "13700000000" },
+      { group: "基本信息", key: "证件号码", value: "110101199003071234" },
+      { group: "联系方式", key: "手机号码", value: "13800138000" }
+    ]
+  );
+
+  assert.deepEqual(byId, {
+    "own-phone": "13800138000",
+    "own-id": "110101199003071234",
+    "father-phone": "13900000000",
+    "emg-phone": "13700000000"
+  });
+});
+
 // 以前证件类型、学历、学位、年月这类下拉框被挡在 AI 外面，本地规则又不处理，永远填不上。
 test("worker: choice fields the rules cannot fill are sent to AI with their options", async () => {
   let body = null;

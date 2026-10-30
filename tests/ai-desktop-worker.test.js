@@ -244,6 +244,26 @@ test('the local matches a page fills first are the worker\'s rule matches', asyn
   assert.equal(result.diagnostics.secretFormFields, 1);
 });
 
+// 手机排在身份证号前、或者反过来，网页先填和 worker 都不能把一个号码填进另一个框。
+test('the page\'s local matches and the worker keep a mobile and an ID number apart', async () => {
+  const profile = require('../profile-fields.js');
+  const phone = { group: '基本信息', key: '手机', value: '13800138000' };
+  const id = { group: '基本信息', key: '身份证号', value: '110101199003071234' };
+  const formFields = [{ fieldId: 'name', label: '姓名' }, { fieldId: 'id', label: '证件号码' },
+    { fieldId: 'phone', label: '手机号码' }, { fieldId: 'school', label: '学校' }];
+  const expected = [{ fieldId: 'name', value: '测试用户' }, { fieldId: 'id', value: id.value }, { fieldId: 'phone', value: phone.value }];
+  for (const order of [[phone, id], [id, phone]]) {
+    const input = { formFields, resumeFields: [{ group: '基本信息', key: '姓名', value: '测试用户' }, ...order,
+      { group: '教育背景', key: '学校', value: '大学乙' }] };
+    const env = worker(() => ({ ok: true, text: '[]' }));
+    const result = await env.run(input);
+    assert.deepEqual(helpers.localRuleMatches(input.formFields, input.resumeFields, profile), expected);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.matches)), expected);
+    assert.equal(result.diagnostics.ruleMatches, 3);
+    assert.doesNotMatch(env.sent.find(item => item.kind === 'desktop-complete').user, /证件号码|手机号码/);
+  }
+});
+
 // #299：首字节耗时记这次几批请求里最慢的一次，超时停在哪一步记超时那一批的；桌面没给就都不记。
 test('the diagnostics keep the slowest first byte and where a timeout stopped', async () => {
   const fields = Array.from({ length: 20 }, (_, i) => ({ fieldId: `f${i}`, label: `项目${i}` + '甲'.repeat(1000) }));

@@ -492,6 +492,11 @@
   function isResumeFieldMatch(semantic, resumeField, formField) {
     const keyText = normalizeText([resumeField?.group, resumeField?.key].filter(Boolean).join(" "));
     const value = String(resumeField?.value ?? "").trim();
+    // 字段名认得出是哪一类（手机、身份证号、姓名）就只按名字算，认不出的（自定义的「号码1」）才看值像什么。
+    // 手机号也是 8 到 18 位数字，纯数字的身份证号也像电话，按值算会让排在前面的那项填进另一个框。
+    // 只看字段名不看分组，和 inferFieldSemantic 一样：分组「联系方式」会把整组都认成电话。
+    const keyType = inferFieldSemantic({ label: resumeField?.key });
+    const looksLike = (pattern, text = value) => (keyType ? keyType === semantic : pattern.test(text));
 
     switch (semantic) {
       case "name":
@@ -499,13 +504,14 @@
       case "email":
         return /@/.test(value) || keyText.includes("邮箱") || keyText.includes("email");
       case "phone":
-        return /^(\+?\d[\d\s-]{7,})$/.test(value) || keyText.includes("手机") || keyText.includes("电话");
+        return looksLike(/^(\+?\d[\d\s-]{7,})$/) || keyText.includes("手机") || keyText.includes("电话");
       case "gender":
-        return /(男|女|male|female)/i.test(value) || keyText.includes("性别");
+        return looksLike(/(男|女|male|female)/i) || keyText.includes("性别");
       case "birth_date":
-        return /出生|生日|birth/.test(keyText) || /(\d{4}[-/.年]\d{1,2}([-/.\月]\d{1,2}日?)?)/.test(value);
+        // 日期看不出是谁的：毕业时间、实习起止时间也是这个样子，出生日期只按名字认。
+        return /出生|生日|birth/.test(keyText);
       case "id_number":
-        return keyText.includes("身份证") || keyText.includes("证件") || /^[0-9xX]{8,18}$/.test(value.replace(/\s/g, ""));
+        return keyText.includes("身份证") || keyText.includes("证件") || looksLike(/^[0-9xX]{8,18}$/, value.replace(/\s/g, ""));
       case "hometown":
         return isSameRegionTopic(resumeField, formField);
       case "region":
