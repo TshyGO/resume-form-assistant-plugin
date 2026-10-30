@@ -78,6 +78,22 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    // 像打字一样写进联想框（#301）：keydown、写值、input、keyup，不派发 change（真打字要到失焦才有）。
+    // 只在 keyup 后才去查建议的（YUI）也收得到。一次写整段字。键码只给字母和数字，别的给 0：
+    // 回车、Tab、Esc、方向键的键码会被联想框当成选中或收起。
+    function type(el, value, ctx) {
+      const View = el.ownerDocument?.defaultView;
+      const ViewKeyboardEvent = View?.KeyboardEvent || (typeof KeyboardEvent === 'function' ? KeyboardEvent : null);
+      const last = Array.from(String(value ?? '')).pop() || '';
+      const code = /^[0-9a-z]$/i.test(last) ? last.toUpperCase().charCodeAt(0) : 0;
+      const key = name => ViewKeyboardEvent && el.dispatchEvent(new ViewKeyboardEvent(name, { key: last || 'Unidentified', keyCode: code, which: code, bubbles: true, cancelable: true }));
+      key('keydown');
+      write(el, value, ctx);
+      const ViewInputEvent = View?.InputEvent || (typeof InputEvent === 'function' ? InputEvent : null);
+      el.dispatchEvent(ViewInputEvent ? new ViewInputEvent('input', { bubbles: true, inputType: 'insertText', data: String(value ?? '') })
+        : new (View?.Event || Event)('input', { bubbles: true }));
+      key('keyup');
+    }
     function focus(el) { if (deps.focus) deps.focus(el); else el.focus?.(); }
     function blur(el) { if (deps.blur) deps.blur(el); else el.blur?.(); }
     function click(el, ctx, committing = false) {
@@ -178,7 +194,7 @@
     async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
-      const expected = deps.normalizeText(ctx.el, value);
+      let expected = deps.normalizeText(ctx.el, value);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
       if (!shown && !await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
@@ -195,6 +211,27 @@
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
+      }
+      // #301 写不进的普通文本框（大易 hotjob 的学校、专业，51job）：可能是只认从建议里选的联想框，框上没有任何下拉标记。
+      // 保持焦点、带按键再打一次字，等贴着它新冒出来的建议，只点和要填的字相同的一项；点了或者没有建议框，都失焦再核对。
+      if (!verdict.ok && !shown && verdict.reason === 'value_not_committed' && ctx.kind === 'text' && !deps.prefersSequential(ctx.el)
+        && scope.ResumeProCustomControls?.suggest) {
+        const picked = await scope.ResumeProCustomControls.suggest(ctx, String(value ?? ''), host);
+        stopped = stop(ctx);
+        if (stopped) return result(false, stopped, ctx);
+        if (picked.accepted || picked.typed) {
+          // 建议里的字和要填的只差大小写、空格、括号时，框里显示的是建议的写法。
+          const current = String(ctx.el.value ?? '');
+          if (helpers?.normalizeText?.(current) === helpers?.normalizeText?.(expected)) expected = current;
+          // 只打了字、没点建议的，失焦后被换掉仍算没写上，不算被退回。
+          const committed = Boolean(picked.accepted) && shows(ctx.el, expected);
+          blur(ctx.el);
+          await deps.waitTextCommit();
+          stopped = stop(ctx);
+          if (stopped) return result(false, stopped, ctx);
+          ctx.acceptedOnce = committed;
+          verdict = deps.inspectText(ctx.el, expected, committed);
+        } else if (picked.reason) verdict = { ok: false, reason: picked.reason };
       }
       if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
@@ -292,7 +329,7 @@
         if (afterFocus) return result(false, afterFocus, ctx);
         let accepted;
         if (custom) {
-          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, { helpers, visible, click, stop, write, input, waitUntil, blur });
+          const outcome = await scope.ResumeProCustomControls.run(ctx, desiredValue, host);
           // #269 联想输入框（智联学校名称 el-autocomplete）：本来就允许直接输入，建议里没有时按文本框填写并核对。
           // 点了建议、组件没标出选中状态，但框里已经是要填的字（#299）：不算没选上，按文本框核对。
           if (outcome.reason && scope.ResumeProCustomControls.acceptsFreeText(ctx) && !stop(ctx)) {
@@ -302,6 +339,8 @@
           }
           if (outcome.reason) return result(false, outcome.reason, ctx);
           accepted = outcome.accepted;
+          // 联想框里打过字：随后才到的建议会再弹出来挡住后面的字段，发一个 Tab 收起（Element 收到后不再显示建议）。
+          if (outcome.closeSuggestions) pressTab(ctx.el);
           if (outcome.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
         } else if (ctx.kind === 'radio' && ctx.customRadio) {
           const custom = scope.ResumeProCustomControls;
@@ -380,7 +419,7 @@
       if (ctx.entry.pickerType === 'antd') return await antDate(ctx, raw);
       // #269 只读的日期框（智联 Element 日期选择器）：不能打字，按日历逐级点，和北森的日历共用一套。
       if (ctx.el.readOnly && scope.ResumeProCustomControls?.run) {
-        const outcome = await scope.ResumeProCustomControls.run(ctx, raw, { helpers, visible, click, stop, write, input, waitUntil, blur });
+        const outcome = await scope.ResumeProCustomControls.run(ctx, raw, host);
         return outcome.reason ? { reason: outcome.reason } : { accepted: outcome.accepted, dayDefaulted: outcome.dayDefaulted };
       }
       const expected = helpers?.normalizeDateValue?.(raw, ctx.entry.pickerInputType || 'date') ?? String(raw ?? '');
@@ -493,6 +532,8 @@
         return result(false, 'operation_failed', saved.ctx);
       }
     }
+    // 交给 custom-controls.js 的宿主操作：写值、派发事件、等待和核对都在这里。
+    const host = { helpers, visible, click, stop, write, input, type, waitUntil, blur, focus, timeoutMs };
     return { operate, check };
   }
   scope.ResumeProControls = { create, cleanHints, controlKinds: Object.freeze(Array.from(KINDS)) };

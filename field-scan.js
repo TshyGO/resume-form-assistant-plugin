@@ -77,7 +77,9 @@
     const role = attr(el, "role").toLowerCase();
     const popup = attr(el, "aria-haspopup").toLowerCase();
     const autocomplete = attr(el, "aria-autocomplete").toLowerCase();
-    return role === "combobox" || (popup && popup !== "false") || autocomplete === "list" || autocomplete === "both";
+    // #377 YUI 2 的联想输入框：本身不带 ARIA（SuccessFactors 改过的版本才加 role=combobox）。
+    return role === "combobox" || (popup && popup !== "false") || autocomplete === "list" || autocomplete === "both"
+      || (el?.tagName === "INPUT" && classTokens(el).includes("yui-ac-input"));
   }
 
   function looksSearchLike(el) {

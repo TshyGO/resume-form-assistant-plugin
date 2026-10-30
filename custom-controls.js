@@ -68,8 +68,26 @@
   const ESC_LEAVE_MS = 600;
   // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
   const NEXT_LEVEL_MS = 300;
+  // 联想框（#404 51job）聚焦后多半不弹建议，要打了字才有：只等这么久，没有就先打字。
+  const FREE_TEXT_OPEN_MS = 600;
+  // 打字后的建议里没有同名的一项：列表这么久没变、离打字也过了 FREE_TEXT_SETTLE_MS，才认定没有，
+  // 免得把聚焦时那次请求晚到的列表当成打字后的结果。
+  const FREE_TEXT_STEADY_MS = 500;
+  const FREE_TEXT_SETTLE_MS = 1000;
+  // 联想框打字后等它自己的建议框出来的上限。Element 防抖后取建议时就先弹出加载中的建议框。
+  const FREE_TEXT_TYPED_MS = 1500;
+  // 普通文本框写不进时再打一次字，等建议的上限（见 suggest）。
+  const SUGGEST_MS = 1500;
+  // #377 YUI 2 AutoComplete（SuccessFactors 的 juic.SFLegacyAutoComplete 改自它）：输入框带 yui-ac-input，
+  // 外层 div.yui-ac 里的 .yui-ac-container 是建议框，正好一个才认。
+  function yuiBox(el) {
+    if (el?.tagName !== 'INPUT' || !el.classList?.contains('yui-ac-input')) return null;
+    const boxes = el.closest('.yui-ac')?.querySelectorAll('.yui-ac-container') || [];
+    return boxes.length === 1 ? boxes[0] : null;
+  }
   function describe(target) {
     const el = target?.element || target;
+    if (yuiBox(el)) return { el, root: target?.root || el, combo: el, library: 'yui', cascade: false, multiple: false };
     const root = el?.closest?.(ROOTS) || target?.root || el;
     let library = root?.matches?.('.ant-select, .ant-cascader') ? 'antd'
       : root?.matches?.('.el-select, .el-cascader') ? 'element'
@@ -368,6 +386,15 @@
     }
     return { option: list[index] };
   }
+  // 插件自己打了字以后的建议（#301 联想框）：只认和要填的字相同的一项。逐字相同（去掉首尾空白）优先，
+  // 没有再看归一化后相同（大小写、空格、括号）；包含、被包含都不算。
+  function sameOption(list, value, helpers) {
+    const usable = list.filter(option => !option.disabled);
+    const texts = option => [option.text, option.value, option.full].filter(text => text != null).map(String);
+    const exact = usable.filter(option => texts(option).some(text => trim(text) === trim(value)));
+    const pool = exact.length ? exact : usable.filter(option => texts(option).some(text => helpers.normalizeText(text) === helpers.normalizeText(value)));
+    return pool.length === 1 ? { option: pool[0] } : { reason: pool.length > 1 ? 'ambiguous_option' : 'no_option_match' };
+  }
   // #269 日历（北森 phoenix-date-picker、Element el-date-picker 等）：认弹层里写着「2026年」「10月」的年月标题、
   // 年/月/日格子和左右翻页按钮，按 年 → 月 → 日 逐级点；日历自带能打字的日期框时先直接输入。
   // 资料只有年月、日历要选到日时选 1 号，并告诉宿主（dayDefaulted），结果里写明。
@@ -564,6 +591,10 @@
     if (info.library === 'generic' && info.cascade) return { reason: 'unsupported_control' };
     const desired = info.cascade ? (Array.isArray(raw) ? raw.map(trim) : trim(raw).split(/\s*(?:\/|>|→)\s*/)) : [trim(raw)];
     if (!desired.length || desired.length > 8 || desired.some(value => !value)) return { reason: 'no_option_match' };
+    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
+      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
+    state.safeSearch = safeSearch;
+    if (info.library === 'yui') return await pickYui(ctx, desired[0], h, info, state);
     // 日期（带月份的值、「至今」，或宿主按日期控件交来的）：只在点开的是日历时操作，见 pickDate。
     const dateWanted = info.library === 'generic' && !info.cascade
       && (ctx.kind === 'date' || DATE_VALUE.test(desired[0]) || PRESENT.test(desired[0]));
@@ -618,9 +649,6 @@
     const trigger = info.cascade ? info.el : info.library === 'antd' ? info.root.querySelector('.ant-select-selector') || info.root
       : info.library === 'element' ? info.root.querySelector('.el-select__wrapper, .el-input') || info.root
       : info.library === 'arco' ? info.root.querySelector('.arco-select-view') || info.root : info.combo;
-    const safeSearch = input => input?.tagName === 'INPUT' && !input.readOnly && !input.disabled
-      && ['text', 'search', 'email', 'tel', 'url'].includes(input.type);
-    state.safeSearch = safeSearch;
     if (!alreadyOpen) { const reason = h.click(info.library === 'generic' ? coverOf(trigger, info) || trigger : trigger, ctx); if (reason) return { reason }; }
     const findOpened = () => {
       if (info.library === 'generic') {
@@ -639,9 +667,11 @@
       const added = popups(doc, h.visible).filter(node => !before.has(node));
       return added.length > 1 ? { reason: 'ambiguous_popup' } : added.length === 1 ? { popup: added[0] } : null;
     };
-    let opened = await h.waitUntil(ctx, doc.documentElement, findOpened, Boolean);
+    let opened = await h.waitUntil(ctx, doc.documentElement, findOpened, Boolean,
+      info.freeText ? Math.min(FREE_TEXT_OPEN_MS, h.timeoutMs ?? FREE_TEXT_OPEN_MS) : undefined);
     // 通用路径和 AntD：点开后没有弹层、输入框又能打字（学校、专业这类边输边搜的下拉）：输入要找的值再等弹层。
-    // AntD 的输入框在组件根里（3.x 点开后才显示）；联想输入框（AutoComplete、combobox 模式）输入就是改值，不这样做。
+    // AntD 的输入框在组件根里（3.x 点开后才显示）；AntD 的 AutoComplete、combobox 模式输入就是改值，不这样做。
+    // 联想框（#404 51job 的 el-autocomplete）聚焦后没弹建议：像打字一样输入要填的字，再等它自己的建议框。
     // 一聚焦才展开的日历（Element 日期选择器）：浏览器窗口不在前台时 focus() 不派发事件，补一次 focus 再等。
     // 聚焦时就已经打开的日历不算「新出现」：找贴着这个框、带日期格子的日历面板，正好一个才用。
     if (dateWanted && opened.reason === 'verification_timeout') {
@@ -654,15 +684,17 @@
       info.el.dispatchEvent(new View.FocusEvent('focusin', { bubbles: true }));
       opened = await h.waitUntil(ctx, doc.documentElement, () => genericOpened(), Boolean);
     }
-    let typedFirst = false;
-    const typeInto = info.library === 'generic' ? info.el
+    let typedFirst = false, typedAt = 0;
+    const typeInto = info.library === 'generic' || info.freeText ? info.el
       : info.library === 'antd' && !info.cascade && !info.root.matches('.ant-select-auto-complete, .ant-select-combobox')
         ? Array.from(info.root.querySelectorAll('input')).find(input => safeSearch(input) && h.visible(input)) : null;
     if (typeInto && !dateWanted && opened.reason === 'verification_timeout' && safeSearch(typeInto) && h.visible(typeInto)) {
       const reason = h.stop(ctx, true); if (reason) return { reason };
       state.searchInput = typeInto; state.searchBefore = typeInto.value; state.query = desired[0];
-      h.write(typeInto, desired[0], ctx); h.input(typeInto); typedFirst = true;
-      opened = await h.waitUntil(ctx, doc.documentElement, info.library === 'generic' ? () => genericOpened(1) : findOpened, Boolean);
+      if (info.freeText) h.type(typeInto, desired[0], ctx); else { h.write(typeInto, desired[0], ctx); h.input(typeInto); }
+      typedFirst = true; typedAt = Date.now();
+      opened = await h.waitUntil(ctx, doc.documentElement, info.library === 'generic' ? () => genericOpened(1) : findOpened, Boolean,
+        info.freeText ? Math.min(FREE_TEXT_TYPED_MS, h.timeoutMs ?? FREE_TEXT_TYPED_MS) : undefined);
     }
     if (opened.reason) return { reason: opened.reason === 'verification_timeout' ? 'options_not_rendered' : opened.reason };
     if (opened.value.reason) return opened.value;
@@ -747,6 +779,11 @@
       freshSince = freshSince || Date.now();
       return Date.now() - freshSince >= NEXT_LEVEL_MS;
     };
+    // 联想框（#299、#404 51job）不标出选中状态，看框里的字和建议框收没收起（aria-expanded）。
+    const collapsed = () => ![info.combo, info.el].some(node => node.getAttribute('aria-expanded') === 'true');
+    // 联想框打字后建议框收起、列表是空的，离打字也过了一阵（加载中时建议框开着）：打的字没有建议，不用等满。
+    const noSuggestions = list => info.freeText && !list.length && collapsed() && (!popup.isConnected || !h.visible(popup))
+      && Date.now() - typedAt >= FREE_TEXT_SETTLE_MS;
     const chosenLabels = [], chosenValues = [];
     for (let level = 0; level < desired.length; level++) {
       // 通用路线：第一次点开时选项常常还在从网站后台加载（金发民族：左侧只有加载图标，右侧「已选」栏已经画出来），
@@ -763,9 +800,13 @@
       const typedAntd = typedFirst && !generic;
       const sameName = list => list.some(option => !option.disabled && [option.text, option.value]
         .some(text => h.helpers.normalizeText(text) === h.helpers.normalizeText(desired[level])));
+      // 联想框打字后的建议里没有同名的一项：停住一阵再算没有（见 FREE_TEXT_STEADY_MS），不用等满。
+      const typedSettled = since => info.freeText && Date.now() - since >= FREE_TEXT_STEADY_MS && Date.now() - typedAt >= FREE_TEXT_SETTLE_MS;
+      // 联想框里插件自己打过字：只选同名的一项（见 sameOption）；网页自己先给出的建议照旧（包含要填的字的也选）。
+      const pick = items => info.freeText && searchDone ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers, info.freeText);
       let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level),
-        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list)))
-          || (eagerSearch && list.length === 0));
+        list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list) || typedSettled(steadySince)))
+          || (eagerSearch && list.length === 0) || (typedAntd && noSuggestions(list)));
       if (ready.reason === 'verification_timeout' && (generic && (searchable && !searchDone || lastSeen) || typedAntd && lastSeen)) ready = { value: readOptions(level) };
       if (ready.reason) return { reason: ready.reason === 'verification_timeout' ? info.cascade ? 'cascade_timeout' : 'options_not_rendered' : ready.reason };
       let list = ready.value;
@@ -773,7 +814,7 @@
       // （江苏 13 个市、宁夏 5 个）；下面没有市的省（港澳台）列表是空的，这一位照报。
       // 也只看第一层：插件输入过要找的值（含点开前先输入的）、或级联点了上一列之后，列表由简历的值决定。
       if (level === 0 && !searchDone) ctx.observed.hasOptions = list.length > 0;
-      let found = match(list, desired[level], h.helpers, info.freeText);
+      let found = pick(list);
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
         if (!safeSearch(searchInput)) return { reason: 'unsupported_control' };
@@ -781,22 +822,24 @@
         const signature = list.map(option => `${option.value}:${option.text}`).join('\n');
         state.searchInput = searchInput; state.searchBefore = searchInput.value; state.query = desired[level];
         info.requireCommitSignal = info.library === 'aria';
-        h.write(searchInput, desired[level], ctx); h.input(searchInput); searchDone = true;
+        if (info.freeText) h.type(searchInput, desired[level], ctx); else { h.write(searchInput, desired[level], ctx); h.input(searchInput); }
+        searchDone = true; typedAt = Date.now();
         let lastSignature = signature, stableSince = Date.now();
         const updated = await h.waitUntil(ctx, doc.documentElement, () => {
           const current = readOptions(level);
           const next = current.map(option => `${option.value}:${option.text}`).join('\n');
           if (next !== lastSignature) { stableSince = Date.now(); lastSignature = next; }
           return current;
-        }, current => !loading() && lastSignature !== signature && current.length > 0 && Date.now() - stableSince >= 80);
+        }, current => !loading() && lastSignature !== signature && current.length > 0
+          && (info.freeText ? sameName(current) || typedSettled(stableSince) : Date.now() - stableSince >= 80) || noSuggestions(current));
         // 等满了列表还是空的：搜之前有选项、搜完变空，或弹层写着「暂无数据」一类，就是没有这一项，不报超时。
         if (updated.reason === 'verification_timeout' && !loading() && !readOptions(level).length && (signature || emptyShown())) return { reason: 'no_option_match' };
         if (updated.reason) return { reason: updated.reason === 'verification_timeout' ? 'options_timeout' : updated.reason };
-        list = updated.value; found = match(list, desired[level], h.helpers, info.freeText);
+        list = updated.value; found = pick(list);
       }
       if (found.reason) return found;
       // Re-read immediately before activation: async renders can replace an option.
-      const latest = match(readOptions(level), desired[level], h.helpers, info.freeText);
+      const latest = pick(readOptions(level));
       if (multiplePopup()) return { reason: 'unsupported_control' };
       if (latest.reason) return latest;
       if (!info.pathNodes) info.pathNodes = [];
@@ -822,8 +865,13 @@
         if (next.reason) return { reason: next.reason === 'verification_timeout' ? 'cascade_timeout' : next.reason };
       }
     }
-    const accepted = () => {
+    // 联想框（#299、#404 51job）不标出选中状态：点了建议、框里换成这一项、建议框也收起了就算选上。
+    // 之后的核对只看框里的字：插件打字引起的建议晚到时建议框会再弹出来。失焦后留不留得住由宿主核对，页面没收下的失焦时会还原。
+    const accepted = (picking = true) => {
       const values = selectedTexts(info);
+      if (values === null && info.freeText && info.library === 'aria') {
+        return chosenLabels.length === 1 && (!picking || collapsed()) && h.helpers.normalizeText(info.el.value) === h.helpers.normalizeText(chosenLabels[0]);
+      }
       if (!values || values.length !== chosenLabels.length) return false;
       const hidden = info.library === 'aria' && info.el.tagName === 'INPUT' && (!info.el.readOnly || info.requireCommitSignal)
         ? info.root.querySelectorAll('input[type="hidden"]') : [];
@@ -852,7 +900,128 @@
     const committed = await h.waitUntil(ctx, doc.documentElement, settled, Boolean);
     if (committed.reason) return { reason: committed.reason === 'verification_timeout' ? 'selection_not_committed' : committed.reason };
     if (committed.value === 'next') return { reason: 'cascade_unsupported' };
-    return { accepted };
+    // 联想框里插件打过字：之后才到的建议会再弹出来，由宿主发 Tab 收起（closeSuggestions）。
+    return { accepted: () => accepted(false), closeSuggestions: Boolean(info.freeText && searchDone) };
+  }
+  // #377 YUI 联想框（见 yuiBox）：聚焦、点击都不打开，只在 keyup 后按框里的字查询（SF 停 0.2 秒再查），最多列 10 条；
+  // 点 li 才算选中，选中后框里换成这一项、建议框收起（SF 还把 aria-expanded 改回 false）。
+  // 只认和要填的字相同的一项，没有就报没有匹配的选项；没点成时由 run 收尾恢复原来的字、按 Esc 收起建议框。
+  // 框里已经是要填的字也照样打字再选一次：开了 forceSelection 的，这次没选过就失焦会清空框里的字。
+  async function pickYui(ctx, wanted, h, info, state) {
+    const el = info.el, doc = el.ownerDocument, View = doc.defaultView;
+    const content = yuiBox(el).querySelector('.yui-ac-content') || yuiBox(el);
+    const same = text => h.helpers.normalizeText(text) === h.helpers.normalizeText(wanted);
+    const items = () => content.isConnected && h.visible(content)
+      ? Array.from(content.querySelectorAll('li')).filter(li => h.visible(li) && trim(li.textContent)) : [];
+    const collapsed = () => el.getAttribute('aria-expanded') !== 'true' && !items().length;
+    // 浏览器窗口不在前台时 focus() 不派发 focus 事件，YUI 没记下聚焦就不显示查询结果：补一个。
+    if (!doc.hasFocus?.()) el.dispatchEvent(new View.FocusEvent('focus'));
+    const reason = h.stop(ctx, true); if (reason) return { reason };
+    state.searchInput = el; state.searchBefore = el.value; state.query = wanted;
+    ctx.popup = content;
+    h.type(el, wanted, ctx);
+    let lastSeen = '', steadySince = Date.now();
+    const read = () => {
+      const list = items(), seen = list.map(li => trim(li.textContent)).join('\n');
+      if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
+      return list;
+    };
+    const shown = await h.waitUntil(ctx, doc.documentElement, read,
+      list => list.length > 0 && (list.some(li => same(li.textContent)) || Date.now() - steadySince >= 200));
+    if (shown.reason && !(shown.reason === 'verification_timeout' && lastSeen)) {
+      return { reason: shown.reason === 'verification_timeout' ? 'options_not_rendered' : shown.reason };
+    }
+    const list = content.querySelector('ul');
+    ctx.observed = { library: 'yui', popupRole: list?.getAttribute('role') === 'listbox' ? 'listbox' : 'component' };
+    const found = sameOption(items().map(li => ({ node: li, text: trim(li.textContent), value: trim(li.textContent), disabled: false })), wanted, h.helpers);
+    if (!found.option) return { reason: found.reason };
+    state.activated = true;
+    const clicked = h.click(found.option.node, ctx, true); if (clicked) return { reason: clicked };
+    const chosen = found.option.text;
+    const accepted = () => h.helpers.normalizeText(el.value) === h.helpers.normalizeText(chosen) && collapsed();
+    const done = await h.waitUntil(ctx, doc.documentElement, accepted, Boolean);
+    return done.reason ? { reason: done.reason === 'verification_timeout' ? 'selection_not_committed' : done.reason } : { accepted };
+  }
+  // 校验提示、浮动提示（antd 的 form-item-explain、Element 的 form-item__error、role=alert / tooltip）不是建议框。
+  // 只看这一块自己和它往上、还没装进输入框的几层：整张表单项标红（ant-form-item-has-error）时里面的建议框照样算。
+  const HINT_ROLES = new Set(['alert', 'alertdialog', 'tooltip', 'status', 'log']);
+  const HINT_TOKEN = /(?:^|[-_])(?:explain|error|errors|invalid|validate|validation|warning|tooltip|tip|tips|message|help|hint|feedback)(?:$|[-_])/i;
+  function hintLayer(node, el) {
+    if (node.querySelector('[role="alert"], [role="tooltip"]')) return true;
+    for (let current = node; current && current.nodeType === 1 && !current.contains(el); current = current.parentElement) {
+      if (HINT_ROLES.has(current.getAttribute('role')) || current.hasAttribute('aria-live')) return true;
+      if (String(current.getAttribute('class') || '').split(/\s+/).some(token => HINT_TOKEN.test(token))) return true;
+    }
+    return false;
+  }
+  // #301 普通文本框写不进时再打一次字（control-adapters.js 的 text 调用）：大易 hotjob 的学校库、专业库是 antd 输入框加自研的建议框，
+  // 框上没有任何下拉标记；打字只是搜索，失焦时没从建议里选就还原。保持焦点、像打字一样输入，等打字后新出现、
+  // 贴着这个框的一块（认法同通用下拉，见 genericPopupFrom；校验提示不算），只点和要填的字相同的一项。
+  // 点了返回 accepted、没有这样的一块返回 typed（有的框要有按键才收下），宿主都随后失焦、按文本框核对。
+  // 有建议框但没有这一项报没有匹配的选项：恢复打字前的字，按 Esc、失焦收起建议框。
+  async function suggest(ctx, raw, h) {
+    const el = ctx.el, doc = el?.ownerDocument, View = doc?.defaultView;
+    const wanted = trim(raw);
+    if (el?.tagName !== 'INPUT' || el.readOnly || el.disabled || !['text', 'search'].includes(el.type) || !wanted || !View?.MutationObserver) return {};
+    const info = { el, root: el, combo: el, library: 'generic', cascade: false, multiple: false };
+    const touched = new Set();
+    const watch = new View.MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === 'attributes') touched.add(record.target);
+        else record.addedNodes.forEach(node => { if (node.nodeType === 1) touched.add(node); });
+      }
+    });
+    watch.observe(doc.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    const before = String(el.value ?? '');
+    let layer = null, undo = false;
+    try {
+      h.focus(el);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const reason = h.stop(ctx, true); if (reason) return { reason };
+      h.type(el, wanted, ctx);
+      let lastSeen = null, steadySince = Date.now();
+      const look = () => {
+        const layers = new Map();
+        for (const node of touched) {
+          if (!node.isConnected || hintLayer(node, el)) continue;
+          const box = genericPopupFrom(node, info, h, 1);
+          if (box && !hintLayer(box, el) && (!layers.has(box) || node.contains(layers.get(box)))) layers.set(box, node);
+        }
+        const found = Array.from(layers.keys());
+        const outer = found.filter(node => !found.some(other => other !== node && other.contains(node)));
+        if (outer.length !== 1) { lastSeen = null; return outer.length > 1 ? { reason: 'ambiguous_popup' } : null; }
+        const list = genericOptions(outer[0], h).filter(option => !layerWord(option, outer[0]));
+        const seen = list.map(option => option.full).join('\n');
+        if (seen !== lastSeen) { lastSeen = seen; steadySince = Date.now(); }
+        return { popup: outer[0], layer: layers.get(outer[0]), list };
+      };
+      const sameIn = list => Boolean(sameOption(list, wanted, h.helpers).option);
+      const settled = await h.waitUntil(ctx, doc.documentElement, look,
+        seen => Boolean(seen?.popup && seen.list.length && (sameIn(seen.list) || Date.now() - steadySince >= 300)), Math.min(SUGGEST_MS, h.timeoutMs ?? SUGGEST_MS));
+      if (settled.reason && settled.reason !== 'verification_timeout') return { reason: settled.reason };
+      const seen = settled.value || look();
+      if (!seen) return { typed: true };
+      undo = true;
+      if (seen.reason) return seen;
+      layer = seen.layer || seen.popup;
+      const found = sameOption(seen.list, wanted, h.helpers);
+      if (!found.option) return { reason: found.reason };
+      undo = false;
+      const why = h.click(found.option.target || found.option.node, ctx, true); if (why) return { reason: why };
+      // 点完框里换成这一项（组件可能下一拍才写）。
+      const shown = await h.waitUntil(ctx, doc.documentElement, () => String(el.value ?? ''),
+        value => h.helpers.normalizeText(value) === h.helpers.normalizeText(found.option.text), POPUP_LEAVE_MS);
+      return shown.reason ? { reason: shown.reason === 'verification_timeout' ? 'selection_not_committed' : shown.reason } : { accepted: true };
+    } finally {
+      watch.disconnect();
+      if (undo && !h.stop(ctx)) {
+        if (el.isConnected && String(el.value ?? '') === wanted && before !== wanted) { h.write(el, before); h.input(el); }
+        el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+        h.blur(el);
+        const gone = () => !layer?.isConnected || !h.visible(layer);
+        if (layer && !gone()) await h.waitUntil(ctx, doc.documentElement, gone, Boolean, ESC_LEAVE_MS);
+      }
+    }
   }
   async function run(ctx, raw, h) {
     const state = {}; let outcome;
@@ -872,10 +1041,10 @@
         const info = state.info;
         if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
         // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）；
-        // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
+        // 两级选择停在第一级时、YUI 联想框没选成时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
         // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
         // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
-        if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
+        if ((['generic', 'yui'].includes(info?.library) || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
           info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
           const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
@@ -906,5 +1075,5 @@
     return [node, ...node.querySelectorAll('[aria-checked], [class]')].some(el => el.getAttribute('aria-checked') === 'true'
       || String(el.getAttribute('class') || '').split(/\s+/).some(token => CHECKED_TOKEN.test(token)));
   }
-  scope.ResumeProCustomControls = { describe, acceptsFreeText, snapshot, hasExistingValue, readSelection, visiblePopups, optionTarget, isChecked, run };
+  scope.ResumeProCustomControls = { describe, acceptsFreeText, snapshot, hasExistingValue, readSelection, visiblePopups, optionTarget, isChecked, run, suggest };
 })(typeof self !== 'undefined' ? self : globalThis);
