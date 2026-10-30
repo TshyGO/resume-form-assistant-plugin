@@ -203,15 +203,15 @@ test("#399 an amount example in the placeholder is not a date format: 2010.5 sta
 });
 
 // 简道云式日期框：聚焦弹出日历，失焦后把框里的字改写成 YYYY-MM-DD，日历不收起；表单的值要点日子或在别处按下鼠标才有。
-// closeAfterMs：失焦后过一会儿才收起（收起动画）；不给就一直开着。
-function calendarBox(p, id, { closeAfterMs = null } = {}) {
+// closeAfterMs：失焦后过一会儿才收起（收起动画）；不给就一直开着。classes：日历外层和里面一层的类名。
+function calendarBox(p, id, { closeAfterMs = null, classes = ["x-popup x-datetime-content", "x-datepicker"] } = {}) {
   const el = p.input(id);
   let popup = null;
   el.addEventListener("focus", () => {
     if (popup) return;
     popup = p.doc.createElement("div");
-    popup.className = "x-popup x-datetime-content";
-    popup.innerHTML = "<div class='x-datepicker'></div>";
+    popup.className = classes[0];
+    popup.innerHTML = `<div class='${classes[1]}'></div>`;
     p.doc.body.append(popup);
   });
   el.addEventListener("blur", () => {
@@ -234,6 +234,16 @@ test("#399 a date box whose calendar stays open after blur is still a rejected w
   assert.equal(p.input("start").value, "2016-09-01");
   assert.equal(await p.set("leave", "2020-06"), true, p.reason("leave"));
   assert.equal(p.input("leave").value, "2020-06-01");
+});
+
+test("#399 a calendar known only by datepicker or Calendar in its class names, with no role, is also seen as kept open", async (t) => {
+  const p = page(t, item("birth", "出生年月") + item("start", "入学时间"));
+  calendarBox(p, "birth", { classes: ["x-datetime-content", "x-datepicker"] });
+  calendarBox(p, "start", { classes: ["Calendar_panel__k3x", "Calendar_days__p2"] });
+  assert.equal(await p.set("birth", "1998-06"), false);
+  assert.equal(p.reason("birth"), "value_reverted");
+  assert.equal(await p.set("start", "2016-09"), false);
+  assert.equal(p.reason("start"), "value_reverted");
 });
 
 test("#399 the report for such a date box says the text was changed and a calendar came up", async (t) => {
@@ -284,6 +294,10 @@ test("#405 what counts as a number safe to take out", async (t) => {
     ["身高（m）", 'type="number"', "175cm", null],
     ["期望月薪（千元）", 'type="number"', "8000元", null],
     ["实习时长（周）", 'inputmode="numeric"', "6个月", null],
+    // 括号里除了单位还有别的话。
+    ["身高（m，必填）", 'type="number"', "175cm", null],
+    ["期望月薪（千元、税前）", 'type="number"', "8000元", null],
+    ["身高（cm，选填）", 'type="number"', "175cm", "175"],
     // 范围、倍数、几个数、文字。
     ["期望月薪", 'type="number"', "20万", null],
     ["期望月薪", 'type="number"', "8000-10000", null],
@@ -325,6 +339,18 @@ test("#405 inputmode boxes that take any text keep what main wrote: phone with d
     assert.equal(await p.set(`f${index}`, value), true, `${label}: ${p.reason(`f${index}`)}`);
     assert.equal(p.input(`f${index}`).value, value, label);
   }
+});
+
+test("#405 an inputmode=numeric box that turns the text away without dropping letters keeps its text and the reason it gave", async (t) => {
+  // 证件号码：页面按 6-8-4 分段显示。离校时间：只收 YYYY-MM-DD，别的失焦后清空。都不是滤掉数字以外的字。
+  const p = page(t, item("cert", "证件号码", 'inputmode="numeric"') + item("leave", "离校时间", 'inputmode="numeric"'));
+  controlled(p.input("cert"), { onInput: (value) => value.replace(/\s/g, "").replace(/^(\d{6})(\d{8})(\w{4})$/, "$1 $2 $3") });
+  controlled(p.input("leave"), { onBlur: (value) => (/^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ""), async: true });
+  assert.equal(await p.set("cert", "11010519491231002X"), false);
+  assert.equal(p.reason("cert"), "value_not_committed");
+  assert.equal(p.input("cert").value, "110105 19491231 002X");
+  assert.equal(await p.set("leave", "2020-06"), false);
+  assert.equal(p.reason("leave"), "value_reverted");
 });
 
 test("#405 联系方式 in a box that keeps only digits counts as the same phone number", async (t) => {
@@ -381,6 +407,40 @@ test("a rejected write says what the box was left with and whether a popup came 
   ]);
   for (const words of ["1998", "北京", "上海", "示例大学", "请从列表选择"]) assert.ok(!p.reports.at(-1).includes(words), words);
   assert.equal(core.diagnostics(p.reports.at(-1)), p.reports.at(-1));
+});
+
+test("popup class words are matched whatever their case", async (t) => {
+  const p = page(t, item("city", "当前城市", 'value="北京"'), [["当前城市", "上海"]]);
+  controlled(p.input("city"), { onBlur: () => "北京" });
+  p.input("city").addEventListener("input", () => {
+    if (p.doc.querySelector(".CitySuggest_list__q1")) return;
+    const list = p.doc.createElement("ul");
+    list.className = "CitySuggest_list__q1";
+    list.innerHTML = "<li>上海</li>";
+    p.doc.body.append(list);
+  });
+  await p.run();
+  assert.deepEqual(p.unfilledLine(), ["- 当前城市: input[text] after=previous overlay=list reason=value_not_committed"]);
+});
+
+test("a popup seen in an earlier fill is not reported for the same box when this fill did not watch it", async (t) => {
+  // 第一次按文本框填：打字冒出建议列表，失焦后被清空。第二次页面把它包成了日期组件，按日期框填，又被退回。
+  const p = page(t, '<div class="form-item"><label for="birth">出生日期</label><span id="wrap"><input id="birth"></span></div>',
+    [["出生日期", "1998-06-15"]]);
+  controlled(p.input("birth"), { onBlur: () => "", async: true });
+  p.input("birth").addEventListener("input", () => {
+    if (p.doc.querySelector(".birth-suggest")) return;
+    const list = p.doc.createElement("ul");
+    list.className = "birth-suggest";
+    list.setAttribute("role", "listbox");
+    p.doc.body.append(list);
+  });
+  const lines = () => p.unfilledLine().map((line) => line.replace(/^- [^:]+: /, ""));
+  await p.run();
+  assert.deepEqual(lines(), ["input[text] after=empty overlay=list reason=value_reverted"]);
+  p.doc.getElementById("wrap").className = "my-datepicker";
+  await p.run();
+  assert.deepEqual(lines(), ["input[text] picker=generic reason=value_reverted"]);
 });
 
 test("a popup the next field opens is not put down to the box rejected before it", async (t) => {

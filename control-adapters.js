@@ -180,6 +180,14 @@
       const now = String(el.value ?? '');
       return !now.trim() ? 'empty' : now === previous ? 'previous' : 'other';
     }
+    // 页面把数字以外的字滤掉了（10k-15k 剩 1015，面议剩空）：剩下的只有数字、小数点和短横，是写进去的字按顺序去掉一些得到的。
+    // 写进去的有数字、却被整段清空的，是页面不收这种写法，不算。
+    function droppedNonDigits(left, typed) {
+      if (left === typed || !/^[\d.-]*$/.test(left) || (!left && /\d/.test(typed))) return false;
+      let index = 0;
+      for (const char of typed) if (char === left[index]) index += 1;
+      return index === left.length;
+    }
 
     // shown：联想框点了建议、框里已经是要填的字，只是组件没有标出选中状态（#299 51job）：不再写，按文本框核对。
     async function text(ctx, value, shown = false) {
@@ -209,6 +217,7 @@
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
       }
       let after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
+      let left = String(ctx.el.value ?? '');
       if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
         if (!await deps.runTextLifecycle(ctx.el, typed, true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
         const committed = shows(ctx.el, expected);
@@ -218,6 +227,7 @@
         verdict = deps.inspectText(ctx.el, expected, committed);
         // 恢复原值之前记下页面留下的。
         after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
+        left = String(ctx.el.value ?? '');
         // 框里显示的是同一个号码（页面改了格式）时不恢复原值。
         if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && !shows(ctx.el, expected) && guard()) {
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
@@ -225,8 +235,10 @@
         }
       }
       // #405 inputmode 是数字的框照原样写了，页面没收下：改写能放心取出的数字（175cm → 175）；
-      // 取不出的（10k-15k）不留页面滤剩的字（1015），恢复原值，报只能填数字。
-      if (!verdict.ok && rejected(verdict.reason) && 'numeric' in prepared && guard()) {
+      // 取不出的（10k-15k）只在页面滤掉了数字以外的字时不留滤剩的字（1015），恢复原值，报只能填数字。
+      // 页面没有滤字、是别的原因不收的（自己改了格式、整段清空），照原来的原因报，框里的不动。
+      if (!verdict.ok && rejected(verdict.reason) && 'numeric' in prepared && guard()
+        && (prepared.numeric !== null || droppedNonDigits(left, typed))) {
         if (prepared.numeric === null) {
           if (String(ctx.el.value ?? '') !== previous) {
             write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);

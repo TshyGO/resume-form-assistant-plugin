@@ -4485,14 +4485,16 @@
     return ["numeric", "decimal"].includes(String(element.getAttribute?.("inputmode") || "").trim().toLowerCase()) ? "mode" : "";
   }
 
-  // 题目、占位提示里括号中或「单位：」后面写明的单位。
+  // 题目、占位提示里括号中或「单位：」后面写明的单位。括号里还带别的话的（m，必填）按逗号、顿号分段看。
   function statedUnits(element) {
     const text = `${element.getAttribute?.("placeholder") || ""} ${element.getAttribute?.("aria-label") || ""} ${getFieldLabel(element)}`
       .normalize("NFKC").toLowerCase();
     const units = [];
-    for (const hit of text.matchAll(/\(\s*([^()]{1,10}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
-      const unit = (hit[1] || hit[2]).replace(/^单位\s*:?\s*(?:为|是)?\s*/, "").replace(/\s*(?:\/|每)\s*(?:月|年)$/, "");
-      if (STATED_UNITS.has(unit)) units.push(unit);
+    for (const hit of text.matchAll(/\(\s*([^()]{1,20}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
+      for (const part of (hit[1] || hit[2]).split(/\s*[,、;]\s*/)) {
+        const unit = part.replace(/^单位\s*:?\s*(?:为|是)?\s*/, "").replace(/\s*(?:\/|每)\s*(?:月|年)$/, "");
+        if (STATED_UNITS.has(unit)) units.push(unit);
+      }
     }
     return units;
   }
@@ -4638,10 +4640,11 @@
   // 和填它的 1 秒内页面有没有冒出建议框或别的弹层（日历、提示框、对话框）。弹层只看 role 和 class 里的词、是否可见，不读里面的字。
   const TEXT_REJECTED = new Set(["value_not_committed", "value_reverted"]);
   const textLeftovers = new WeakMap();
-  const OVERLAY_SELECTOR = "[role='listbox'], [role='menu'], [role='tree'], [role='dialog'], [role='alertdialog'], [role='tooltip'], "
-    + "[class*='dropdown'], [class*='popper'], [class*='popover'], [class*='popup'], [class*='suggest'], [class*='autocomplete'], "
-    + "[class*='picker-panel'], [class*='picker-dropdown'], [class*='picker-container'], [class*='calendar'], [class*='laydate'], "
-    + "[class*='toast'], [class*='tooltip'], [class*='modal'], .el-message, .ant-message";
+  // 类名里的词不分大小写（CSS Modules 的 Calendar_panel__k3x）；只叫 x-datepicker、没有 role 的日历也算。
+  const OVERLAY_SELECTOR = ["[role='listbox']", "[role='menu']", "[role='tree']", "[role='dialog']", "[role='alertdialog']", "[role='tooltip']",
+    ...["dropdown", "popper", "popover", "popup", "suggest", "autocomplete", "picker-panel", "picker-dropdown", "picker-container",
+      "datepicker", "date-picker", "calendar", "laydate", "toast", "tooltip", "modal"].map((word) => `[class*='${word}' i]`),
+    ".el-message", ".ant-message"].join(", ");
   let overlayWindowMs = 1000;
   // 整页都写不上时不能每个框都多等 1 秒：只等前几个，诊断看这几个就够了。
   const OVERLAY_WAITS = 3;
@@ -4735,7 +4738,9 @@
     overlayWatch = fill && textCommitWaitMs > 0 && control instanceof HTMLElement && !target?.pickerType
       && !["custom-select", "cascader", "date", "date-picker"].includes(target?.controlKind) && isTextControl(control) ? watchOverlays(control) : null;
     const watch = overlayWatch;
+    // 这次没看弹层的（按日期组件、下拉填的，手动写入）不留上一次看到的。
     if (watch) overlayWatches.set(control, watch);
+    else if (control && typeof control === 'object') overlayWatches.delete(control);
     let result = await operateControl(target, value, { hints: target?.hints, beforeWrite, isCurrent, onWrite, prepare: fill });
     if (result.ok && watch && control instanceof HTMLInputElement && await calendarKeptOpen(watch, control, value)) {
       result = { ...result, ok: false, reason: "value_reverted", observed: { ...result.observed, rolledBack: true, after: "other" } };
