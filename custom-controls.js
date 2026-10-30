@@ -367,7 +367,40 @@
         disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled') || Boolean(node.disabled) };
     });
   }
-  function match(list, value, helpers, freeText = false) {
+  // #301 虚拟列表（antd 4/5 默认、Element Plus el-select-v2）只画出看得见的十来项，同名的一项可能还在屏外。
+  // 装着选项、能滚动的那一层，内容比画出来的选项和文字高出大半行以上，就算列表不全；里面画全了的（短的、不虚拟的长列表）不算。
+  // 量不出高度（没有排版）时只看虚拟列表的类名；antd 不管长短都套着 rc-virtual-list，只有滚动条说明在虚拟滚动。
+  const VIRTUAL_MARKS = '[class*="virtual" i]:not(.rc-virtual-list):not(.rc-virtual-list-holder):not(.rc-virtual-list-holder-inner), .el-vl__wrapper, [class*="recycle-scroller" i]';
+  function partialList(list, popup, layer) {
+    const nodes = list.map(option => option.node).filter(node => node?.isConnected);
+    if (!nodes.length || !popup?.isConnected) return false;
+    const marked = [popup, layer].some(node => node?.isConnected && (node.matches(VIRTUAL_MARKS) || Boolean(node.querySelector(VIRTUAL_MARKS))));
+    const rows = nodes.map(node => node.offsetHeight).filter(height => height > 0).sort((a, b) => a - b);
+    if (!rows.length) return marked;
+    const limit = layer?.isConnected && layer.contains(popup) ? layer : popup;
+    let box = nodes[0].parentElement;
+    while (box && box !== limit && !nodes.every(node => box.contains(node))) box = box.parentElement;
+    let scroller = null;
+    for (let node = limit.contains(box) ? box : null; node && !scroller; node = node === limit ? null : node.parentElement) {
+      if (node.scrollHeight > node.clientHeight + 1 && node.ownerDocument.defaultView.getComputedStyle(node).overflowY !== 'visible') scroller = node;
+    }
+    if (!scroller) return false;
+    // 画出来的一段：选项，加上里面的文字（分组标题）和输入框。按排版位置量（offsetTop），
+    // 弹层打开动画从 scale(0) 起（antd 刚画出选项时就是），看到的大小是 0，排版位置不受影响。
+    const parts = [...nodes, ...Array.from(scroller.querySelectorAll('*')).filter(el => el.matches('input, textarea, select')
+      || (trim(el.textContent) && !Array.from(el.children).some(child => trim(child.textContent))))];
+    const layoutTop = el => { let y = 0; for (let node = el; node; node = node.offsetParent) y += node.offsetTop || 0; return y; };
+    let top = Infinity, bottom = -Infinity;
+    for (const el of parts) {
+      if (!(el.offsetHeight > 0)) continue;
+      const y = layoutTop(el);
+      top = Math.min(top, y); bottom = Math.max(bottom, y + el.offsetHeight);
+    }
+    if (!(bottom > top)) return marked;
+    return scroller.scrollHeight - (bottom - top) > Math.max(rows[Math.floor(rows.length / 2)] * 0.6, 20);
+  }
+  // partial：列表不全（见 partialList）。只认完全相同或归一化相同的一项，不靠「包含」去猜，几项都沾边也按没有匹配，好去搜索。
+  function match(list, value, helpers, freeText = false, partial = false) {
     // 联想输入框：比要填的字短的建议（要填「广州市天河区」，建议「广州市」）不选，交给宿主打入完整的字；
     // 建议包含要填的字（要填「广州」，建议「广州市」）照常选。
     // 去掉短的才选得出来的长建议（要填「广州市天河区」，建议「广州市」「广州市天河区体育西路」）可能是另一个值：照旧算拿不准。
@@ -376,10 +409,12 @@
       const found = match(list.map(option => {
         const text = helpers.normalizeText(option.text);
         return text.length < target.length && target.includes(text) && helpers.normalizeText(option.value) !== target ? { ...option, disabled: true } : option;
-      }), value, helpers);
-      return found.option && !match(list, value, helpers).option ? { reason: 'ambiguous_option' } : found;
+      }), value, helpers, false, partial);
+      return found.option && !match(list, value, helpers, false, partial).option ? { reason: 'ambiguous_option' } : found;
     }
+    const same = option => [option.value, option.text].some(text => trim(text) === trim(value) || helpers.normalizeText(text) === helpers.normalizeText(value));
     const index = helpers.findSelectOptionIndex(list, value);
+    if (partial && (index < 0 || !same(list[index]))) return { reason: 'no_option_match' };
     if (index < 0) {
       const possible = list.filter(option => !helpers.isPlaceholderOption(option)).filter(option => {
         const text = helpers.normalizeText(option.text), target = helpers.normalizeText(value);
@@ -803,7 +838,9 @@
       // （江苏 13 个市、宁夏 5 个）；下面没有市的省（港澳台）列表是空的，这一位照报。
       // 也只看第一层：插件输入过要找的值（含点开前先输入的）、或级联点了上一列之后，列表由简历的值决定。
       if (level === 0 && !searchDone) ctx.observed.hasOptions = list.length > 0;
-      let found = match(list, desired[level], h.helpers, info.freeText);
+      // 列表不全时只认同名的一项（见 partialList），没有就先搜索，搜完照样看列表全不全。
+      const partial = current => partialList(current, popup, ctx.popup);
+      let found = match(list, desired[level], h.helpers, info.freeText, partial(list));
       if (searchable && !found.option && found.reason !== 'ambiguous_option' && !searchDone) {
         const reason = h.stop(ctx, true); if (reason) return { reason };
         if (!safeSearch(searchInput)) return { reason: 'unsupported_control' };
@@ -822,11 +859,11 @@
         // 等满了列表还是空的：搜之前有选项、搜完变空，或弹层写着「暂无数据」一类，就是没有这一项，不报超时。
         if (updated.reason === 'verification_timeout' && !loading() && !readOptions(level).length && (signature || emptyShown())) return { reason: 'no_option_match' };
         if (updated.reason) return { reason: updated.reason === 'verification_timeout' ? 'options_timeout' : updated.reason };
-        list = updated.value; found = match(list, desired[level], h.helpers, info.freeText);
+        list = updated.value; found = match(list, desired[level], h.helpers, info.freeText, partial(list));
       }
       if (found.reason) return found;
       // Re-read immediately before activation: async renders can replace an option.
-      const latest = match(readOptions(level), desired[level], h.helpers, info.freeText);
+      const again = readOptions(level), latest = match(again, desired[level], h.helpers, info.freeText, partial(again));
       if (multiplePopup()) return { reason: 'unsupported_control' };
       if (latest.reason) return latest;
       if (!info.pathNodes) info.pathNodes = [];
