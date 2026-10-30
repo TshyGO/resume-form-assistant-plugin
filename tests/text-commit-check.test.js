@@ -553,7 +553,8 @@ test("a page that refuses every text only holds up the first 3 boxes to watch fo
 });
 
 test("pressing stop while a rejected box is being watched ends the fill at once", async (t) => {
-  const p = page(t, item("birth", "出生年月") + item("name", "姓名"), [["出生年月", "1998-06"], ["姓名", "张三"]]);
+  // #402 空字段的本地匹配在等 AI 时先填，那时的取消只取消 AI 等待。两项先有内容，留到 AI 回来后填，停止才是停下填写。
+  const p = page(t, item("birth", "出生年月", 'value="1990-01"') + item("name", "姓名", 'value="李四"'), [["出生年月", "1998-06"], ["姓名", "张三"]]);
   p.w.ResumeProHighlightTest.setOverlayWindowMs(5000);
   controlled(p.input("birth"), { onBlur: () => "", async: true });
   let stoppedAt = 0;
@@ -561,7 +562,7 @@ test("pressing stop while a rejected box is being watched ends the fill at once"
   await p.run();
   assert.ok(stoppedAt > 0, "stop was pressed");
   assert.ok(Date.now() - stoppedAt < 1500, `stopped after ${Date.now() - stoppedAt}ms`);
-  assert.equal(p.input("name").value, "", "nothing written after stop");
+  assert.equal(p.input("name").value, "李四", "nothing written after stop");
 });
 
 // ---- 手动写入不整理 ----
