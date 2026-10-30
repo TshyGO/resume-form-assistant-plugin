@@ -519,3 +519,106 @@ test("after 30 seconds the wait hint says how many fields are already filled, an
   assert.equal(hint.hidden, true);
   assert.equal((await ctx.sendPanelMessage({ type: "RESUME_PANEL_STATUS" })).waitHint, "", "nothing left over once the fill ends");
 });
+
+// 选项列表还没加载好的自定义下拉（字典接口慢、或要等上面的题目选好）：先填时点开没有选项，
+// AI 回来时选项已经有了。原来所有字段都等 AI 回来才填，这一项能填上；先填没填上的要在 AI 回来后再试一次。
+const SLOW_GENDER = `<div class="form-item" id="gender-item"><label class="title">性别</label>`
+  + `<label class="sd-Input-container-3Fx sd-Select-container-9Qa select"><input id="gender" class="sd-Input-input-7Kd" readonly placeholder="请选择"></label></div>`;
+function slowOptions(p, choices = ["男", "女"]) {
+  const state = { loaded: false, opened: 0 };
+  const doc = p.w.document;
+  const gender = doc.getElementById("gender");
+  gender.addEventListener("click", () => {
+    state.opened += 1;
+    if (!state.loaded) return;
+    const popup = doc.createElement("div");
+    popup.className = "sd-Dropdown-dropdown-2Lm";
+    for (const text of choices) {
+      const option = doc.createElement("div");
+      option.className = "sd-Menu-content-item-5Rt";
+      option.innerHTML = `<div class="option-label-8Hn">${text}</div>`;
+      option.addEventListener("click", () => {
+        gender.value = text;
+        gender.dispatchEvent(new p.w.Event("input", { bubbles: true }));
+        gender.dispatchEvent(new p.w.Event("change", { bubbles: true }));
+        popup.remove();
+      });
+      popup.append(option);
+    }
+    doc.body.append(popup);
+  });
+  return state;
+}
+
+test("a custom select whose options were not there yet during the early fill is tried once more after the AI answers", async (t) => {
+  const p = page(t, input("name", "姓名") + SLOW_GENDER + input("school", "毕业院校"));
+  const options = slowOptions(p);
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("name") && options.opened > 0 && /AI 匹配中/.test(p.ui.fill.textContent), 8000),
+    "the early fill has tried the select");
+  assert.equal(p.value("gender"), "");
+  options.loaded = true;
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.deepEqual(["name", "gender", "school"].map(p.value), ["测试用户", "男", "示例大学"], p.ui.diag.value);
+  assert.equal(result.outcome, "success", p.ui.diag.value);
+  assert.equal(result.filledCount, 3);
+  assert.equal(result.unfilledCount, 0);
+  assert.equal(p.ui.status.textContent, "已填写 3 个字段。");
+  const report = (await p.report()).diagnosticsReport;
+  assert.equal(lineOf(report, "filled"), "3");
+  assert.equal(lineOf(report, "drop_reasons"), "-");
+  assert.equal(p.sent.filter((type) => type === "FEEDBACK_AUTO").length, 0);
+});
+
+// 选项要等上面的题目选好才加载（上面那题要 AI）：AI 回来后按页面顺序，先选上面的，再试这一项。
+test("an early select whose options load after the AI's choice above it is tried again after that choice", async (t) => {
+  const NATION = item("nation", "国籍", `<select id="nation" name="nation"><option value="">请选择</option><option value="cn">中国</option><option value="other">其他</option></select>`);
+  const resume = [["基本信息", "国籍", "中国"], ...RESUME];
+  const p = page(t, input("name", "姓名") + NATION + SLOW_GENDER, { resume });
+  const options = slowOptions(p);
+  p.w.document.getElementById("nation").addEventListener("change", () => { options.loaded = true; });
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("name") && options.opened > 0 && /AI 匹配中/.test(p.ui.fill.textContent), 8000));
+  assert.deepEqual(p.worker.calls[0].labels, ["国籍"]);
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.deepEqual(["name", "nation", "gender"].map(p.value), ["测试用户", "cn", "男"], p.ui.diag.value);
+  assert.equal(result.outcome, "success", p.ui.diag.value);
+  assert.equal(result.filledCount, 3);
+});
+
+test("a custom select whose options never come is tried only once more and reported once", async (t) => {
+  const p = page(t, input("name", "姓名") + SLOW_GENDER + input("school", "毕业院校"));
+  const options = slowOptions(p);
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("name") && options.opened > 0 && /AI 匹配中/.test(p.ui.fill.textContent), 8000),
+    "the early fill has tried the select");
+  const early = options.opened;
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.ok(options.opened > early, "opened again after the AI answered");
+  assert.deepEqual(["name", "gender", "school"].map(p.value), ["测试用户", "", "示例大学"]);
+  assert.equal(result.outcome, "partial");
+  assert.equal(result.filledCount, 2);
+  assert.equal(result.unfilledCount, 1);
+  assert.equal(p.ui.status.textContent, "已填写 2 个字段。1 项没填上：性别（没有发现选项），请手动补上。");
+  const report = (await p.report()).diagnosticsReport;
+  assert.equal(lineOf(report, "drop_reasons"), "not_written=1");
+  assert.equal((p.ui.diag.value.match(/- 性别：/g) || []).length, 1, p.ui.diag.value);
+});
+
+test("an early select whose list is there but has no matching option is not tried again", async (t) => {
+  const p = page(t, input("name", "姓名") + SLOW_GENDER + input("school", "毕业院校"),
+    { resume: RESUME.map(([group, key, value]) => [group, key, key === "性别" ? "女" : value]) });
+  const options = slowOptions(p, ["男", "保密"]);
+  options.loaded = true;
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("name") && options.opened > 0 && /AI 匹配中/.test(p.ui.fill.textContent), 8000));
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.equal(options.opened, 1, `not opened again: ${p.ui.diag.value}`);
+  assert.equal(p.value("gender"), "");
+  assert.equal(result.unfilledCount, 1);
+  assert.match(p.ui.diag.value, /- 性别：.*没有匹配的选项$/m);
+});

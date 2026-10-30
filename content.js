@@ -2767,6 +2767,10 @@
       // 先填期间在写网页；AI 回来时还是插件写的值的先填字段。
       let writing = false;
       let intactEarly = [];
+      // 先填时选项还没出来、没填上的下拉（字典还在加载，或要等上面 AI 的题目先选好）：AI 回来后再试一次。
+      // 原来所有字段都等 AI 回来才填，那时选项多半已经有了。被页面拒收、值被改回的不在这里。
+      const OPTIONS_LATE = new Set(["options_not_rendered", "options_timeout", "cascade_timeout"]);
+      const earlyRetry = [];
       if (cancelButton) {
         cancelButton.hidden = false;
         cancelButton.disabled = false;
@@ -2881,9 +2885,14 @@
         stage = "fill";
         phaseStart = performance.now();
 
-        // 先填过的不再填。
+        // 先填过的不再填。先填时选项还没出来的，网页上还是点击时的样子，就和 AI 的字段一起按页面顺序再试这一次。
         const done = new Set(early.map(match => match.fieldId));
-        const sortedMatches = response.matches.filter(match => !done.has(match.fieldId)).sort(byOrder);
+        const retry = earlyRetry.splice(0).filter(item => {
+          const entry = fieldMap.get(item.match.fieldId);
+          const current = entry && (isFieldBindingCurrent(entry) ? entry : rebindFieldEntry(entry));
+          return Boolean(current) && fillValueSnapshot(current) === approvedValues.get(entry);
+        });
+        const sortedMatches = [...response.matches.filter(match => !done.has(match.fieldId)), ...retry.map(item => item.match)].sort(byOrder);
         if (assisted) {
           queue.push(...sortedMatches);
           return null;
@@ -2942,6 +2951,13 @@
           // finally 照常收尾；返回和末尾同形的结果，深度填写据此说明是用户取消（#224）。
           return { outcome: "failed", filledCount: 0, unconfirmedCount: 0, unfilledCount: 0, error: "", overwriteDeclined: true,
             calls: Number(diagnostics.calls) || 0, budgetExhausted: Boolean(diagnostics.budgetExhausted) };
+        }
+        // 要再试的：先填那次记下的没填上撤掉，以这次的结果为准。
+        for (const item of retry) {
+          const control = unfilledControls.indexOf(item.control);
+          if (control >= 0) unfilledControls.splice(control, 1);
+          const label = unfilledLabels.lastIndexOf(item.label);
+          if (label >= 0) unfilledLabels.splice(label, 1);
         }
         queue.push(...later);
         return null;
@@ -3128,9 +3144,19 @@
           }
         } else {
           // 北森的日期也是选择框（phoenix-select），所以选择类控件也延后；复核算填上的不再补扫选后新出现的字段。
-          if (!assisted && textFillFailureCode(element) === "validation_not_cleared") {
+          const reason = textFillFailureCode(element);
+          if (!assisted && reason === "validation_not_cleared") {
             invalidControls.push({ element, fieldMeta, value: match.value, isNew: newFieldIds.has(match.fieldId) });
-          } else noteControlFailure(element, fieldMeta, match.value, textFillFailureCode(element));
+          } else {
+            const labels = unfilledLabels.length;
+            const controls = unfilledControls.length;
+            noteControlFailure(element, fieldMeta, match.value, reason);
+            // #402 先填时选项还没出来：照常记下没填上，AI 回来后再试一次（见 settleAi）。联动组的下一级会被挡住，不算。
+            if (waitingAi && OPTIONS_LATE.has(reason) && fieldMeta?.cascadeGroup === undefined && early.includes(match)
+              && unfilledLabels.length > labels) {
+              earlyRetry.push({ match, label: unfilledLabels[labels], control: unfilledControls[controls] });
+            }
+          }
           if (fieldMeta?.cascadeGroup !== undefined) failedCascadeGroups.add(fieldMeta.cascadeGroup);
         }
 
