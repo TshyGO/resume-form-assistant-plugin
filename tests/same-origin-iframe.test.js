@@ -311,6 +311,55 @@ test("a busy navigation shell does not hold up the wait after each choice in the
   assert.ok(busyShell.ms < 4000, `form in a frame, busy shell: ${busyShell.ms}ms`);
 });
 
+// 零字段等待（#301）：点了一键填写之后，装表单的框架才插进来、或第二层框架才换成表单页。框架加载完都要再扫一次。
+// 页面上没有别的线索（没有「编辑」、框架里还没有输入框），网址像网申页，才会等。
+async function fillWhileWaiting(page, during) {
+  const button = { disabled: false, textContent: "" };
+  const filling = page.hooks.handleAiFillClick({ currentTarget: button });
+  for (let i = 0; i < 400 && button.textContent !== "正在等待网页加载..."; i += 1) await wait(5);
+  assert.equal(button.textContent, "正在等待网页加载...");
+  await during();
+  return filling;
+}
+
+test("the zero-field wait rescans when a frame inserted after it began, at the top or inside a frame, finishes loading", async () => {
+  for (const nested of [false, true]) {
+    const page = await openFramedPage(nested
+      ? { top: `<iframe id="outer"></iframe>`, url: "https://bm.example.test/apply/index",
+        frames: { outer: `<nav><a>菜单</a></nav><div id="slot"></div>` } }
+      : { top: `<nav><a>首页</a></nav><div id="slot"></div>`, url: "https://bm.example.test/apply/index" });
+    const host = nested ? page.frame("outer") : page.win.document;
+    const result = await fillWhileWaiting(page, async () => {
+      host.getElementById("slot").innerHTML = `<iframe id="main"></iframe>`;
+      // 插进来 300ms 后扫过一次，那时表单页还没回来。
+      await wait(450);
+      const frame = host.getElementById("main");
+      const inner = frame.contentDocument;
+      installLayout(inner.defaultView);
+      inner.body.innerHTML = FORM;
+      frame.dispatchEvent(new frame.ownerDocument.defaultView.Event("load"));
+    });
+    assert.equal(result.filledCount, 6, `${nested ? "nested" : "top"}: ${result.error}`);
+    assert.deepEqual(formState(host.getElementById("main").contentDocument), FILLED);
+  }
+});
+
+test("the zero-field wait rescans when a second-level frame that was already there navigates to the form", async () => {
+  const page = await openFramedPage({ top: `<iframe id="outer"></iframe>`, url: "https://bm.example.test/apply/index",
+    frames: { outer: { html: `<nav><a>菜单</a></nav><iframe id="inner"></iframe>`, frames: { inner: "" } } } });
+  const frame = page.frame("outer").getElementById("inner");
+  // 框架换页就是换了一份文档：jsdom 不会真的跳转，这里让框架交出另一份装着表单的文档，再发 load。
+  const next = new JSDOM(`<!doctype html><html><head></head><body>${FORM}</body></html>`, { url: "https://bm.example.test/apply/form", pretendToBeVisual: true });
+  installLayout(next.window);
+  const result = await fillWhileWaiting(page, async () => {
+    await wait(100);
+    Object.defineProperty(frame, "contentDocument", { configurable: true, get: () => next.window.document });
+    frame.dispatchEvent(new frame.ownerDocument.defaultView.Event("load"));
+  });
+  assert.equal(result.filledCount, 6, result.error);
+  assert.deepEqual(formState(next.window.document), FILLED);
+});
+
 // 页面结构那几行（自定义控件、只读或禁用输入框）和页面探测一样只算顶层：框架里扫到的北森式下拉不加进自定义控件，
 // 它的只读输入框也不从顶层的只读框里减掉。
 test("page-structure counts stay top-page only when the form with a generic select is in a frame", async () => {

@@ -3599,7 +3599,8 @@
   // （藏着的表单显示出来），之后 300ms 没有再增删节点，就用 rescan 扫一次。扫到字段就结束；扫不到（先出来的是
   // 页头搜索框、客服框架这类）就接着等，最多等 2s，到上限时还有没扫过的变化就再扫一次。不轮询；插件自己的侧栏不算。
   // 网址变了（换页、跳到登录页）就不等了，也不扫。没有 MutationObserver 时立即返回。扫到字段时返回那次的扫描结果，否则 null。
-  // #400 同源框架里的变化一起看，框架加载完（换了一份文档）也算网页有了变化。
+  // #400 同源框架里的变化一起看，框架加载完（换了一份文档）也算网页有了变化。顶层和扫得到的框架里的 iframe 都听 load，
+  // 等待开始后才插进来的、框架换页后新文档里的也一样。
   const NEW_CONTROL_SELECTOR = "input:not([type=hidden]), textarea, select, [contenteditable]:not([contenteditable=false]), [role=combobox], iframe";
   function waitForNewControls(href, rescan, settleMs = 300, maxMs = 2000) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
@@ -3626,22 +3627,33 @@
           finish(null);
           return;
         }
+        for (const record of records) {
+          for (const node of record.addedNodes || []) if (node?.nodeType === 1 && !ours(node)) watchFrames(node);
+        }
         // 看到控件后，网页还在增删节点就接着等它停下来；只改样式的动画不算。
         if (!records.some(fresh) && !(seen && records.some((record) => record.type !== "attributes" && !ours(record.target)))) return;
         changed();
       });
-      const frames = [];
-      let frameElements = [];
-      try {
-        frameElements = Array.from(document.querySelectorAll("iframe, frame"));
-      } catch {
-        frameElements = [];
-      }
+      const frames = new Set();
       const frameLoaded = () => {
         if (location.href !== href) return;
-        // 新文档里的变化也要看到。
-        for (const { doc } of fillDocuments().slice(1)) observeRoot(doc.documentElement);
+        // 新文档里的变化也要看到，它里面的框架也要听。
+        followFrames();
         changed();
+      };
+      // node 自己或里面的 iframe 加载完时再扫。
+      const watchFrames = (node) => {
+        let found = [];
+        try {
+          found = [...(node.matches?.("iframe, frame") ? [node] : []), ...(node.querySelectorAll?.("iframe, frame") || [])];
+        } catch {
+          found = [];
+        }
+        for (const frame of found) {
+          if (frames.has(frame) || typeof frame.addEventListener !== "function") continue;
+          frame.addEventListener("load", frameLoaded);
+          frames.add(frame);
+        }
       };
       const observed = new Set();
       const observeRoot = (node) => {
@@ -3649,11 +3661,12 @@
         observed.add(node);
         observer.observe(node, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "hidden", "class"] });
       };
-      for (const frame of frameElements) {
-        if (typeof frame.addEventListener !== "function") continue;
-        frame.addEventListener("load", frameLoaded);
-        frames.push(frame);
-      }
+      const followFrames = () => {
+        for (const { doc } of fillDocuments().slice(1)) {
+          observeRoot(doc.documentElement);
+          watchFrames(doc);
+        }
+      };
       function scan() {
         seen = false;
         if (location.href !== href) return null;
@@ -3672,7 +3685,8 @@
         resolve(location.href === href ? scanned : null);
       }
       observeRoot(root);
-      for (const { doc } of fillDocuments().slice(1)) observeRoot(doc.documentElement);
+      watchFrames(document);
+      followFrames();
       cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
   }
