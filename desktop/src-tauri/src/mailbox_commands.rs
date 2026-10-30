@@ -32,6 +32,7 @@ pub fn fail(error: Error) -> CommandError {
         Error::TooLarge => "邮件或信头过大，未能读取。单封邮件上限 25 MiB，可改用截图或粘贴文本。",
         Error::Changed => "邮箱配置、邮件编号或当前档案已变化，未保存邮件。请立即检查后重新确认。",
         Error::Busy => "邮箱操作正在进行，请完成后再试。",
+        Error::UnsupportedSource => "无法识别此邮箱来源，已暂停检查。请检查是否需要升级桌面版本，或断开并移除此账号。",
         Error::Cancelled => "邮箱操作已取消，可稍后重新检查或确认。",
         Error::Credentials => "系统凭据库暂时不可用或没有授权码，请解锁凭据库，或重新填写授权码并测试连接。",
     };
@@ -293,6 +294,9 @@ async fn scan_api_page(
     source: &mut impl PagedSource,
     cancellation: &Cancellation,
 ) -> Result<bool> {
+    if account.source == SourceKind::Unknown {
+        return Err(fail(Error::UnsupportedSource));
+    }
     if source.kind() != account.source || source.account_id() != account.id {
         return Err(fail(Error::Changed));
     }
@@ -318,6 +322,9 @@ async fn confirm_candidate_from_source(
     cancellation: &Cancellation,
 ) -> Result<bool> {
     mapped(cancellation.check())?;
+    if account.source == SourceKind::Unknown {
+        return Err(fail(Error::UnsupportedSource));
+    }
     if source.kind() != account.source || source.account_id() != account.id {
         return Err(fail(Error::Changed));
     }

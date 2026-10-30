@@ -775,6 +775,15 @@ async fn production_api_entry_uses_archive_companies_and_resumes_pages_after_res
         .source_position(&expected.archive_id, &account.id, "inbox")
         .unwrap()
         .is_none());
+    let first_position = Position::Api {
+        source: account.source,
+        cursor: "page:1".into(),
+    };
+    assert!(
+        db.source_position(&expected.archive_id, &account.id, "recruitment")
+            .unwrap()
+            == Some(first_position.clone())
+    );
     api.fail_read = true;
     assert_eq!(
         scan_api_page(
@@ -792,6 +801,38 @@ async fn production_api_entry_uses_archive_companies_and_resumes_pages_after_res
         .code,
         fail(Error::Network).code
     );
+    assert!(
+        db.source_position(&expected.archive_id, &account.id, "recruitment")
+            .unwrap()
+            == Some(first_position.clone())
+    );
+    // A failed page commit must not advance or partially write its candidates.
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute_batch("CREATE TRIGGER fail_recruitment_page BEFORE UPDATE ON source_positions BEGIN SELECT RAISE(ABORT,'disk'); END;").unwrap();
+    assert_eq!(
+        scan_api_page(
+            &state,
+            &mut db,
+            &expected,
+            &account,
+            "recruitment",
+            &companies,
+            &mut api,
+            &cancel
+        )
+        .await
+        .unwrap_err()
+        .code,
+        fail(Error::Storage).code
+    );
+    assert!(
+        db.source_position(&expected.archive_id, &account.id, "recruitment")
+            .unwrap()
+            == Some(first_position.clone())
+    );
+    assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 1);
+    sql.execute_batch("DROP TRIGGER fail_recruitment_page;")
+        .unwrap();
     drop(db);
     let mut db = Database::open(dir.path()).unwrap();
     assert!(scan_api_page(
@@ -824,10 +865,19 @@ async fn production_api_entry_uses_archive_companies_and_resumes_pages_after_res
             None,
             Some("page:1".into()),
             Some("page:1".into()),
+            Some("page:1".into()),
             Some("page:2".into())
         ]
     );
     assert_eq!(db.pending_count(&expected.archive_id).unwrap(), 2);
+    assert!(
+        db.source_position(&expected.archive_id, &account.id, "recruitment")
+            .unwrap()
+            == Some(Position::Api {
+                source: account.source,
+                cursor: "page:3".into()
+            })
+    );
     assert_eq!(api.downloads, 0);
 }
 
@@ -1142,4 +1192,58 @@ async fn production_view_and_confirmation_keep_working_with_damaged_local_mailbo
         1,
         "damaged candidate stays pending for recovery"
     );
+}
+
+#[tokio::test]
+async fn unknown_account_source_does_not_block_the_view_or_disconnect_cleanup() {
+    let (dir, db, store, account) = fixture(SourceKind::MicrosoftGraph);
+    let state = wiring_state(dir.path(), store);
+    db.save_account("unknown", "unknown@qq.com").unwrap();
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE accounts SET source='newer-connector' WHERE id='unknown'",
+        [],
+    )
+    .unwrap();
+    state
+        .credentials
+        .set_key("mailbox:unknown", "synthetic-credential")
+        .unwrap();
+    let visible = view(&state, 100).unwrap();
+    assert_eq!(visible.accounts.len(), 2);
+    assert!(visible
+        .accounts
+        .iter()
+        .any(|a| a.id == account.id && !a.paused));
+    let unknown = visible.accounts.iter().find(|a| a.id == "unknown").unwrap();
+    assert_eq!(unknown.source, SourceKind::Unknown);
+    assert_eq!(unknown.last_error.as_deref(), Some("UnsupportedSource"));
+    assert!(unknown.paused);
+    let mut api = FakeApi::new(SourceKind::Unknown);
+    api.account_id = unknown.id.clone();
+    let mut db = db;
+    assert_eq!(
+        scan_api_page(
+            &state,
+            &mut db,
+            &identity(&state).unwrap(),
+            unknown,
+            "inbox",
+            &[],
+            &mut api,
+            &Cancellation::default()
+        )
+        .await
+        .unwrap_err()
+        .code,
+        fail(Error::UnsupportedSource).code
+    );
+    assert!(api.requests.is_empty());
+    delete(&state, &unknown.id).unwrap();
+    assert!(state
+        .credentials
+        .get_key("mailbox:unknown")
+        .unwrap()
+        .is_none());
+    assert_eq!(view(&state, 100).unwrap().accounts.len(), 1);
 }

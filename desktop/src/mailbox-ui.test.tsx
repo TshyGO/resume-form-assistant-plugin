@@ -643,7 +643,7 @@ test("damaged candidate counts stay visible while healthy candidates can be proc
   view.candidateIssues = 2;
   await ui.refresh();
   fireEvent.click(el("mailbox-tab-pending"));
-  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录损坏");
+  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录异常");
   expect(el("mailbox-discovery-note").textContent).toContain("未删除");
   expect(el("mailbox-pending-count").textContent).toBe("1");
   expect(el("mailbox-load-more").hidden).toBe(true);
@@ -653,17 +653,17 @@ test("damaged candidate counts stay visible while healthy candidates can be proc
   };
   fireEvent.click(within(el("mailbox-candidates")).getByRole("button", { name: "存进档案" }));
   await waitFor(() => expect(el("mailbox-pending-count").textContent).toBe("0"));
-  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录损坏");
+  expect(el("mailbox-discovery-note").textContent).toContain("2 条候选记录异常");
   expect(el("mailbox-load-more").hidden).toBe(true);
   view.candidateIssues = 0; await ui.refresh();
-  expect(el("mailbox-discovery-note").textContent).not.toContain("候选记录损坏");
+  expect(el("mailbox-discovery-note").textContent).not.toContain("候选记录异常");
 });
 
 test("only damaged candidates produce a warning without fake pending actions or pagination", async () => {
   const { ui, view } = setup([]); view.candidateIssues = 3;
   await ui.refresh(); fireEvent.click(el("mailbox-tab-pending"));
   expect(el("mailbox-pending-count").textContent).toBe("0");
-  expect(el("mailbox-discovery-note").textContent).toContain("3 条候选记录损坏");
+  expect(el("mailbox-discovery-note").textContent).toContain("3 条候选记录异常");
   expect(el("mailbox-discovery-note").textContent).toContain("手动导入");
   expect(el("mailbox-pending-actions").hidden).toBe(true);
   expect(el("mailbox-load-more").hidden).toBe(true);
@@ -680,4 +680,22 @@ test("damaged account configuration shows repair guidance and keeps account cont
   expect(accounts.getByRole("button", { name: "修改连接 / 更新凭据" })).toBeTruthy();
   expect(accounts.getByRole("button", { name: "断开并移除" })).toBeTruthy();
   expect(el("mailbox-candidates").textContent).toContain("星河科技面试邀请");
+});
+
+test("unknown sources show upgrade guidance and only allow disconnect instead of guessing a connection", async () => {
+  const { ui, view, handlers, invoke } = setup();
+  view.accounts[0].source = "unknown";
+  view.accounts[0].connection = null;
+  view.accounts[0].paused = true;
+  view.accounts[0].lastError = "UnsupportedSource";
+  await ui.refresh();
+  const accounts = within(el("mailbox-accounts"));
+  expect(el("mailbox-accounts").textContent).toContain("无法识别此邮箱来源");
+  expect(el("mailbox-accounts").textContent).toContain("升级桌面版本");
+  expect(accounts.queryByRole("button", { name: "恢复检查" })).toBeNull();
+  expect(accounts.queryByRole("button", { name: "修改连接 / 更新凭据" })).toBeNull();
+  handlers.mailbox_delete = async () => { view.accounts = []; };
+  fireEvent.click(accounts.getByRole("button", { name: "断开并移除" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("mailbox_delete", { id: "account" }));
+  expect(invoke.mock.calls.some(([name]) => name === "mailbox_connect" || name === "mailbox_check")).toBe(false);
 });

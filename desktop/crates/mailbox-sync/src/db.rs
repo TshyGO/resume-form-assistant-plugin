@@ -54,7 +54,7 @@ pub struct PendingCandidates {
     pub pending_count: u32,
     pub invalid_count: u32,
 }
-pub struct Database(Connection);
+pub struct Database(Connection, #[cfg(test)] std::cell::Cell<usize>);
 impl Database {
     /// Outside archive directories and the backup allowlist. No secrets or bodies.
     pub fn open(data_root: &Path) -> Result<Self> {
@@ -135,7 +135,34 @@ impl Database {
             conn.execute_batch("PRAGMA foreign_keys=ON;")?;
             migration?;
         }
-        Ok(Self(conn))
+        // Derived, machine-local validation cache. Increment its version if the
+        // candidate decoder/validation contract changes. Triggers invalidate
+        // only affected rows, including writes from another connection.
+        let tx = conn.unchecked_transaction()?;
+        let has_health: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='candidate_health_v1')", [], |r| r.get(0))?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS candidate_health_v1 (
+            candidate TEXT PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
+            valid INTEGER CHECK(valid IN (0,1)));
+            CREATE TRIGGER IF NOT EXISTS candidate_health_insert AFTER INSERT ON candidates BEGIN
+                INSERT INTO candidate_health_v1(candidate,valid) VALUES (NEW.id,NULL); END;
+            CREATE TRIGGER IF NOT EXISTS candidate_health_update AFTER UPDATE OF id,account,folder,validity,uid,header,reasons,locator ON candidates BEGIN
+                DELETE FROM candidate_health_v1 WHERE candidate=OLD.id;
+                INSERT INTO candidate_health_v1(candidate,valid) VALUES (NEW.id,NULL); END;
+            CREATE TRIGGER IF NOT EXISTS candidate_health_source AFTER UPDATE OF source ON accounts
+            WHEN NEW.source IS NOT OLD.source BEGIN
+                UPDATE candidate_health_v1 SET valid=NULL WHERE candidate IN (SELECT id FROM candidates WHERE account=NEW.id); END;")?;
+        if !has_health {
+            tx.execute(
+                "INSERT INTO candidate_health_v1(candidate,valid) SELECT id,NULL FROM candidates",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        #[cfg(test)]
+        let db = Self(conn, std::cell::Cell::new(0));
+        #[cfg(not(test))]
+        let db = Self(conn);
+        Ok(db)
     }
     pub fn accounts(&self) -> Result<Vec<Account>> {
         self.query_accounts(None)
@@ -175,7 +202,11 @@ impl Database {
                 source,
                 source_account_id,
             ) = row?;
-            let source = SourceKind::from_db(&source)?;
+            let source = SourceKind::from_db(&source).unwrap_or(SourceKind::Unknown);
+            if source == SourceKind::Unknown {
+                paused = true;
+                last_error = Some(Error::UnsupportedSource.to_string());
+            }
             let connection = if source == SourceKind::Imap {
                 let checked = match connection {
                     Some(json) => serde_json::from_str::<ConnectionConfig>(&json)
@@ -564,7 +595,7 @@ impl Database {
     ) -> Result<Account> {
         // Stable provider identities are opaque. Reject malformed input instead
         // of silently changing it or registering a whitespace variant as an alias.
-        if source == SourceKind::Imap
+        if !source.is_api()
             || principal.is_empty()
             || principal.trim() != principal
             || principal.chars().any(char::is_control)
@@ -624,7 +655,9 @@ impl Database {
             r.get(8)?,
         ))
     }
-    fn decode_candidate(row: &rusqlite::Row<'_>) -> Result<Candidate> {
+    fn decode_candidate(&self, row: &rusqlite::Row<'_>) -> Result<Candidate> {
+        #[cfg(test)]
+        self.1.set(self.1.get() + 1);
         let (id, account_id, email, folder, validity, uid, header, reasons, locator) =
             Self::read_candidate(row)?;
         let source = SourceKind::from_db(&row.get::<_, String>(9)?)?;
@@ -642,29 +675,85 @@ impl Database {
     pub fn pending(&self, archive: &str, limit: u32) -> Result<Vec<Candidate>> {
         Ok(self.pending_with_issues(archive, limit)?.candidates)
     }
+    #[cfg(test)]
+    pub(crate) fn decoded_candidate_count(&self) -> usize {
+        self.1.get()
+    }
+
     pub fn pending_with_issues(&self, archive: &str, limit: u32) -> Result<PendingCandidates> {
-        let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source
-            FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND state='pending' ORDER BY c.rowid DESC")?;
-        let mut rows = stmt.query([archive])?;
+        let tx = self.0.unchecked_transaction()?;
+        // Only unvalidated/changed pending rows require full decoding. Raw IO
+        // failures still abort; malformed content is retained and counted.
+        {
+            let mut stmt = tx.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source
+                FROM candidates c JOIN accounts a ON a.id=c.account
+                JOIN candidate_health_v1 h ON h.candidate=c.id
+                WHERE c.archive=?1 AND c.state='pending' AND h.valid IS NULL")?;
+            let mut rows = stmt.query([archive])?;
+            let mut health = Vec::new();
+            while let Some(row) = rows.next()? {
+                health.push((row.get::<_, String>(0)?, self.decode_candidate(row).is_ok()));
+            }
+            drop(rows);
+            drop(stmt);
+            for (id, valid) in health {
+                tx.execute(
+                    "UPDATE candidate_health_v1 SET valid=?2 WHERE candidate=?1",
+                    params![id, valid],
+                )?;
+            }
+        }
         let mut page = PendingCandidates {
             candidates: Vec::new(),
             pending_count: 0,
             invalid_count: 0,
         };
-        // Count all valid/invalid rows in this snapshot, applying the display
-        // limit only to valid candidates so damaged newest rows cannot starve
-        // healthy older ones. SQL iteration/IO errors must still propagate.
-        while let Some(row) = rows.next()? {
-            match Self::decode_candidate(row) {
-                Ok(candidate) => {
-                    page.pending_count = page.pending_count.saturating_add(1);
-                    if page.candidates.len() < limit.min(2000) as usize {
-                        page.candidates.push(candidate);
+        let limit = limit.min(2000) as usize;
+        let mut before = i64::MAX;
+        // Limit the materialized list in SQL. Recheck its content before
+        // returning it; even a stale/damaged cache flag must not hide all rows
+        // or permit an invalid locator to be used.
+        while page.candidates.len() < limit {
+            let mut bad = Vec::new();
+            let mut read = 0;
+            {
+                let mut stmt = tx.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source,c.rowid
+                    FROM candidates c JOIN accounts a ON a.id=c.account
+                    JOIN candidate_health_v1 h ON h.candidate=c.id
+                    WHERE c.archive=?1 AND c.state='pending' AND h.valid=1 AND c.rowid<?3
+                    ORDER BY c.rowid DESC LIMIT ?2")?;
+                let mut rows = stmt.query(params![
+                    archive,
+                    (limit - page.candidates.len()) as u32,
+                    before
+                ])?;
+                while let Some(row) = rows.next()? {
+                    read += 1;
+                    before = row.get(10)?;
+                    match self.decode_candidate(row) {
+                        Ok(item) => page.candidates.push(item),
+                        Err(_) => bad.push(row.get::<_, String>(0)?),
                     }
                 }
-                Err(_) => page.invalid_count = page.invalid_count.saturating_add(1),
+            }
+            for id in bad {
+                tx.execute(
+                    "UPDATE candidate_health_v1 SET valid=0 WHERE candidate=?1",
+                    [id],
+                )?;
+            }
+            if read == 0 {
+                break;
             }
         }
+        (page.pending_count, page.invalid_count) = tx.query_row(
+            "SELECT COALESCE(SUM(h.valid=1),0),COALESCE(SUM(h.valid=0),0)
+             FROM candidates c JOIN candidate_health_v1 h ON h.candidate=c.id
+             WHERE c.archive=?1 AND c.state='pending'",
+            [archive],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        tx.commit()?;
         Ok(page)
     }
     pub fn pending_count(&self, archive: &str) -> Result<u32> {
@@ -678,7 +767,7 @@ impl Database {
         let mut stmt = self.0.prepare("SELECT c.id,c.account,a.email,c.folder,c.validity,c.uid,c.header,c.reasons,c.locator,a.source
             FROM candidates c JOIN accounts a ON a.id=c.account WHERE archive=?1 AND c.id=?2 AND state='pending'")?;
         let mut rows = stmt.query(params![archive, id])?;
-        Self::decode_candidate(rows.next()?.ok_or(Error::Missing)?)
+        self.decode_candidate(rows.next()?.ok_or(Error::Missing)?)
     }
     pub fn finish(&self, archive: &str, ids: &[String], ignored: bool) -> Result<u32> {
         // Atomic batch; never accept arbitrary SQL state from the webview.

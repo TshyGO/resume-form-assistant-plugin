@@ -12,6 +12,8 @@ pub enum SourceKind {
     Imap,
     MicrosoftGraph,
     GmailApi,
+    /// Display-only fallback for an unsupported/corrupt stored source. Never connect.
+    Unknown,
 }
 impl SourceKind {
     pub(crate) fn as_db(self) -> &'static str {
@@ -19,7 +21,11 @@ impl SourceKind {
             Self::Imap => "imap",
             Self::MicrosoftGraph => "microsoftGraph",
             Self::GmailApi => "gmailApi",
+            Self::Unknown => "unknown",
         }
+    }
+    pub fn is_api(self) -> bool {
+        matches!(self, Self::MicrosoftGraph | Self::GmailApi)
     }
     pub(crate) fn from_db(value: &str) -> Result<Self> {
         match value {
@@ -60,7 +66,7 @@ impl MessageLocator {
             }
             Self::Api { source, message_id }
                 if *source == expected
-                    && expected != SourceKind::Imap
+                    && expected.is_api()
                     && !message_id.is_empty()
                     && message_id.len() <= 4096 =>
             {
@@ -85,7 +91,7 @@ impl Position {
             Self::Imap(_) if expected == SourceKind::Imap => Ok(()),
             Self::Api { source, cursor }
                 if *source == expected
-                    && expected != SourceKind::Imap
+                    && expected.is_api()
                     && !cursor.is_empty()
                     && cursor.len() <= 65536 =>
             {
@@ -178,6 +184,9 @@ pub async fn scan_page<E: From<Error>>(
     commit: impl FnOnce(MetadataPage) -> std::result::Result<(), E>,
 ) -> std::result::Result<bool, E> {
     cancellation.check()?;
+    if !source.kind().is_api() {
+        return Err(Error::UnsupportedSource.into());
+    }
     if let Some(position) = position {
         position.validate(source.kind())?;
     }

@@ -1262,3 +1262,269 @@ fn syntactically_valid_but_wrong_source_candidate_locators_are_reported_as_damag
     assert!(page.candidates.is_empty());
     assert!(matches!(db.candidate("archive", &id), Err(Error::Storage)));
 }
+
+#[test]
+fn refreshing_a_large_backlog_decodes_only_the_page_and_changed_rows() {
+    let (dir, mut db) = database();
+    let found: Vec<_> = (1..=10_000)
+        .map(|uid| {
+            (
+                uid,
+                header(&format!("{uid}@example.com"), "Interview"),
+                vec!["Interview".into()],
+            )
+        })
+        .collect();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 10_000,
+        },
+        &found,
+    )
+    .unwrap();
+    let first = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(first.candidates.len(), 100);
+    assert_eq!(first.pending_count, 10_000);
+    let before = db.decoded_candidate_count();
+    let again = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(again.pending_count, 10_000);
+    assert_eq!(
+        db.decoded_candidate_count() - before,
+        100,
+        "a refresh must not decode the backlog"
+    );
+    drop(db);
+    let db = Database::open(dir.path()).unwrap();
+    db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(
+        db.decoded_candidate_count(),
+        100,
+        "validation survives reopening the database"
+    );
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE candidates SET header='broken' WHERE rowid=(SELECT MIN(rowid) FROM candidates)",
+        [],
+    )
+    .unwrap();
+    let before = db.decoded_candidate_count();
+    let changed = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(changed.pending_count, 9_999);
+    assert_eq!(
+        changed.invalid_count, 1,
+        "damage outside the displayed page must still be counted"
+    );
+    assert_eq!(changed.candidates.len(), 100);
+    assert_eq!(
+        db.decoded_candidate_count() - before,
+        101,
+        "validate the changed row and decode the current page only"
+    );
+    let more = db.pending_with_issues("archive", 200).unwrap();
+    assert_eq!(more.candidates.len(), 200);
+    assert_eq!(more.invalid_count, 1);
+}
+
+#[test]
+fn unknown_sources_stay_paused_removable_and_cannot_be_used_for_api_work() {
+    use crate::source::{MessageLocator, Position, SourceKind};
+    let (dir, mut db) = database();
+    db.save_api_account(
+        "api",
+        "person@outlook.com",
+        SourceKind::MicrosoftGraph,
+        "tenant:person",
+    )
+    .unwrap();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 1,
+        },
+        &[(1, header("mail", "Interview"), vec!["Interview".into()])],
+    )
+    .unwrap();
+    assert_eq!(
+        db.pending_with_issues("archive", 100)
+            .unwrap()
+            .pending_count,
+        1
+    );
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE accounts SET source='future-provider' WHERE id='account'",
+        [],
+    )
+    .unwrap();
+    let damaged = db.account("account").unwrap();
+    assert_eq!(damaged.source, SourceKind::Unknown);
+    assert!(damaged.paused);
+    assert!(damaged.connection.is_none());
+    assert_eq!(damaged.last_error.as_deref(), Some("UnsupportedSource"));
+    assert_eq!(db.accounts().unwrap().len(), 2);
+    assert_eq!(
+        db.account("api").unwrap().source,
+        SourceKind::MicrosoftGraph
+    );
+    db.pause("account", false).unwrap();
+    assert!(db.account("account").unwrap().paused);
+    let page = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(page.pending_count, 0);
+    assert_eq!(
+        page.invalid_count, 1,
+        "source changes must invalidate cached candidate validity"
+    );
+    assert_eq!(
+        sql.query_row("SELECT source FROM accounts WHERE id='account'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap(),
+        "future-provider"
+    );
+    assert_eq!(
+        db.save_api_account(
+            "bad",
+            "person@example.com",
+            SourceKind::Unknown,
+            "tenant:bad"
+        )
+        .unwrap_err(),
+        Error::Configuration
+    );
+    assert_eq!(
+        Position::Api {
+            source: SourceKind::Unknown,
+            cursor: "x".into()
+        }
+        .validate(SourceKind::Unknown),
+        Err(Error::Changed)
+    );
+    assert_eq!(
+        MessageLocator::Api {
+            source: SourceKind::Unknown,
+            message_id: "x".into()
+        }
+        .validate(SourceKind::Unknown),
+        Err(Error::Changed)
+    );
+    // Restoring the stored source must revalidate the retained candidate.
+    sql.execute("UPDATE accounts SET source='imap' WHERE id='account'", [])
+        .unwrap();
+    assert_eq!(
+        db.pending_with_issues("archive", 100)
+            .unwrap()
+            .pending_count,
+        1
+    );
+    sql.execute(
+        "UPDATE accounts SET source='future-provider' WHERE id='account'",
+        [],
+    )
+    .unwrap();
+    db.delete_account("account").unwrap();
+    let cached: u32 = sql
+        .query_row("SELECT COUNT(*) FROM candidate_health_v1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(cached, 0);
+    assert_eq!(db.accounts().unwrap().len(), 1);
+}
+
+#[test]
+fn an_incorrect_cached_valid_flag_cannot_hide_a_page_or_return_a_bad_locator() {
+    let (dir, mut db) = database();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 2,
+        },
+        &[
+            (1, header("healthy", "Interview"), vec!["Interview".into()]),
+            (2, header("broken", "Interview"), vec!["Interview".into()]),
+        ],
+    )
+    .unwrap();
+    let page = db.pending_with_issues("archive", 1).unwrap();
+    let bad_id = &page.candidates[0].id;
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE candidates SET locator='broken' WHERE id=?1",
+        [bad_id],
+    )
+    .unwrap();
+    sql.execute(
+        "UPDATE candidate_health_v1 SET valid=1 WHERE candidate=?1",
+        [bad_id],
+    )
+    .unwrap();
+    let page = db.pending_with_issues("archive", 1).unwrap();
+    assert_eq!(page.candidates.len(), 1);
+    assert_ne!(page.candidates[0].id, *bad_id);
+    assert_eq!(page.pending_count, 1);
+    assert_eq!(page.invalid_count, 1);
+}
+
+#[test]
+fn upgrading_a_populated_database_builds_candidate_health_once_and_preserves_states() {
+    let (dir, mut db) = database();
+    db.commit_scan(
+        "archive",
+        "account",
+        "INBOX",
+        Cursor {
+            validity: 1,
+            uid: 3,
+        },
+        &[
+            (1, header("healthy", "Interview"), vec!["Interview".into()]),
+            (2, header("damaged", "Interview"), vec!["Interview".into()]),
+            (3, header("ignored", "Interview"), vec!["Interview".into()]),
+        ],
+    )
+    .unwrap();
+    let items = db.pending("archive", 100).unwrap();
+    let damaged = items
+        .iter()
+        .find(|item| item.header.fingerprint() == header("damaged", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    let ignored = items
+        .iter()
+        .find(|item| item.header.fingerprint() == header("ignored", "Interview").fingerprint())
+        .unwrap()
+        .id
+        .clone();
+    db.finish("archive", &[ignored], true).unwrap();
+    drop(db);
+    let sql = rusqlite::Connection::open(dir.path().join("mailboxes.sqlite")).unwrap();
+    sql.execute(
+        "UPDATE candidates SET locator='invalid-json' WHERE id=?1",
+        [damaged],
+    )
+    .unwrap();
+    // An existing pre-cache database has candidates but no cache or triggers.
+    sql.execute_batch("DROP TRIGGER candidate_health_insert; DROP TRIGGER candidate_health_update; DROP TRIGGER candidate_health_source; DROP TABLE candidate_health_v1;").unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    let page = db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(page.pending_count, 1);
+    assert_eq!(page.invalid_count, 1);
+    assert_eq!(db.pending_count("archive").unwrap(), 2);
+    assert_eq!(
+        db.decoded_candidate_count(),
+        3,
+        "only the two pending rows and displayed healthy row are decoded"
+    );
+    let before = db.decoded_candidate_count();
+    db.pending_with_issues("archive", 100).unwrap();
+    assert_eq!(db.decoded_candidate_count() - before, 1);
+}
