@@ -459,11 +459,16 @@
 
   // Sent the way the global handlers send an error, once. A failed init keeps the source
   // "unhandledrejection", which is what it was before it had a boundary.
+  // Returns the report (error type and this extension's frames only), or null.
   function reportError(error, source = "error") {
     try {
       const report = self.ResumeProFeedback?.exception(error, chrome.runtime.getURL(""), source);
       if (report?.stack) Promise.resolve(sendFeedback(report)).catch(() => {});
-    } catch { /* no recursive reporting */ }
+      return report || null;
+    } catch {
+      /* no recursive reporting */
+      return null;
+    }
   }
 
   async function init() {
@@ -2412,6 +2417,8 @@
     const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, aiCalled: false, errorCode: "", drops: {} };
     const pendingNew = [];
     let probe = null;
+    // #408 扫描没做完就出错：错误类型和本扩展代码的位置（feedback-core 的 exception()），只进本地诊断文字。
+    let scanFault = null;
     // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
     const readyAtScan = document.readyState === "complete";
     let scanDone = false;
@@ -3059,7 +3066,17 @@
       recheckVerifiedControls();
       if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
-      failure = error.message || "AI 填写失败。";
+      if (!scanDone) {
+        // #408 扫描还没做完就出错（「没找到输入框」在扫描完成之后才报）：上报错误类型和本扩展代码的位置，
+        // 诊断记 scan_exception，页面结构在 finally 里补上。网页上不显示英文原文。
+        scanFault = reportError(error);
+        diagnostics = { errorCode: "scan_exception" };
+        failure = `读这个页面的表单时出错了。${!assisted && !deep && self.ResumeProDeepAnalysis && self.ResumeProPageOutline
+          ? "可以试试下方的「深度分析本页」。" : "可以把侧栏的「填写诊断」复制给我们。"}`;
+        hinted = true;
+      } else {
+        failure = error.message || "AI 填写失败。";
+      }
       if (!deep && recipeUse?.status === "stale") failure += "本站配方可能已过期，可以重新深度分析。";
       // AI 没匹配上（none / no_context）才补这个提示；认证、网络等失败与页面状态无关。
       if (!hinted && ["none", "no_context"].includes(diagnostics.errorCode)) {
@@ -3077,6 +3094,16 @@
       if (timer !== null) window.clearInterval(timer);
       if (phase) timing[phase] = performance.now() - phaseStart;
       const totalMs = performance.now() - totalStart;
+      // #408 扫描出错时补跑页面探测和输入框计数，报告里照样有页面结构。没扫完，谈不上并入同一控件。
+      if (!scanDone && !probe) {
+        try {
+          stats = { ...scanStats(null, 0), grouped: 0 };
+        } catch {
+          stats = null;
+        }
+        probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
+        pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
+      }
       // 没轮到补填就结束的新字段（两轮用完、首轮 AI 已经失败、中途停止或出错）算没送 AI。
       if (pendingNew.length) grown.drops.not_sent = (grown.drops.not_sent || 0) + pendingNew.length;
       const totalFields = fieldCount + grown.found;
@@ -3088,7 +3115,7 @@
       const summaryInput = { ...timing, totalMs,
         fieldCount: totalFields, filledCount, unfilledCount: unfilledLabels.length, outcome, diagnostics, probe, unfilledControls,
         path: scanPath, pageType, readyAtScan, stats, matched: totalMatched, requested, unconfirmedCount, ...verdict, grown,
-        entry, pageFocused, genericCustom, genericLocked,
+        entry, pageFocused, genericCustom, genericLocked, scanFault,
         // 「深度分析本页」入口判断用（#224）；只有计数和标记。
         scannedCustom, cancelled: cancelRequested, overwriteDeclined, assisted: Boolean(assisted),
         // #226 本站配方：命中 / 过期 / 未使用及计数（深度分析保存的结果稍后补上）。
@@ -3194,7 +3221,7 @@
     const allowedCodes = new Set(["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
       "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
       "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
-      "secret_only", "no_resume_fields"]);
+      "secret_only", "no_resume_fields", "scan_exception"]);
     const errorCode = (() => {
       try { return feedback?.shownCode?.(d.errorCode, g.errorCode); } catch { return undefined; }
     })() ?? (d.errorCode === "none" && g.errorCode ? g.errorCode : d.errorCode);
@@ -3212,16 +3239,19 @@
     })();
     const dropLabels = { type_hidden: "隐藏输入框", non_fillable: "按钮或文件框", disabled: "禁用", invisible: "不可见",
       popup_internal: "下拉内部输入", grouped: "并入同一控件", page_chrome: "页头导航", site_search: "站内搜索",
-      outside_form: "表单外", no_label: "对不上题目", out_of_scope: "不在新增范围", secret: "疑似密码", no_resume_mapping: "无对应资料",
-      ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
+      outside_form: "表单外", no_label: "对不上题目", scan_error: "读取出错", out_of_scope: "不在新增范围", secret: "疑似密码",
+      no_resume_mapping: "无对应资料", ai_unmatched: "AI 未匹配", no_result: "没拿到 AI 结果", not_sent: "没送 AI", not_written: "没写上", unconfirmed: "未确认", unsynced: "未同步" };
     const pageType = result.pageType
       ? `${result.pageType.type === "application_form" ? "网申填写页" : "不像网申填写页"}（依据：${({
         url: "网址", title: "标题", edit_button: "「编辑」按钮", structure: "页面结构", none: "无" })[result.pageType.reason] || "无"}）`
       : "未取得";
     const stats = result.stats || {};
+    // #408 扫描出错：错误类型和出错的那一行（只有本扩展的文件名和行列，exception() 已经筛过）。
+    const fault = result.scanFault;
     return [
       `网申快填 v${chrome.runtime.getManifest().version}`,
       `结果：${({ success: "完成", partial: "部分完成", failed: "失败" })[outcome] || "未知"}；错误类别：${category}；失败阶段：${stage}`,
+      ...(fault ? [`扫描出错：${fault.name}${fault.stack ? `（${fault.stack.split("\n")[0]}）` : ""}`] : []),
       `页面类型：${pageType}；扫描时已加载完：${result.readyAtScan === true ? "是" : result.readyAtScan === false ? "否" : "未取得"}`,
       `输入框：页面共 ${count(stats.domInputs)} → 可见可填 ${count(stats.visible)} → 进入匹配 ${count(result.fieldCount)}`
         + ` → 匹配 ${count(result.matched)} → 填入 ${count(result.filledCount)}`,
@@ -3419,7 +3449,7 @@
     const count = (value) => Number.isInteger(value) && value > 0 ? value : 0;
     const skipped = scan?.skipped || {};
     const listed = { popup: count(skipped.popup), pageChrome: count(skipped.pageChrome), siteSearch: count(skipped.siteSearch),
-      outsideForm: count(skipped.outsideForm), noLabel: count(skipped.noLabel) };
+      outsideForm: count(skipped.outsideForm), noLabel: count(skipped.noLabel), scanError: count(skipped.scanError) };
     const listedTotal = Object.values(listed).reduce((total, value) => total + value, 0);
     return { domInputs: all.length, visible, typeHidden, nonFillable, disabled,
       invisible: all.length - typeHidden - nonFillable - disabled - visible, ...listed,
