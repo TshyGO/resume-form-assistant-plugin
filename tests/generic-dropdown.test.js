@@ -688,20 +688,22 @@ test("Element autocomplete: suggestions that pop up after the typed value are cl
   assert.equal(h.popper.hidden, true, "the late suggestions stay closed");
 });
 
-test("Element autocomplete: a suggestion that contains the wanted text is still picked", async () => {
+test("Element autocomplete: a suggestion that only contains the wanted text is not picked; the wanted text is typed", async () => {
+  // #301：联想框只选同名的建议，包含要填的字的也不选（「北京大学」不能选成「北京大学医学部」）。
   const h = elAutocomplete({ forEmpty: ["广州市", "深圳市"], commits: true });
   const result = await h.api.operate(h.target, "广州");
   assert.equal(result.ok, true, JSON.stringify(result));
-  assert.deepEqual(h.state.picks, ["广州市"]);
+  assert.deepEqual(h.state.picks, []);
+  assert.equal(h.input.value, "广州");
 });
 
-test("Element autocomplete: a shorter and a longer suggestion stay ambiguous, so the longer one is not put in the box", async () => {
-  // 去掉「广州市」后只剩「广州市天河区体育西路」，那是另一个值：和原来一样算拿不准，不点。
+test("Element autocomplete: with a shorter and a longer suggestion neither is put in the box; the full value is typed", async () => {
+  // 「广州市天河区体育西路」是另一个值，不点；和建议里没有时一样按文本框写。
   const h = elAutocomplete({ forEmpty: ["广州市", "广州市天河区体育西路"] });
   const result = await h.api.operate(h.target, "广州市天河区");
-  assert.equal(result.reason, "ambiguous_option");
+  assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(h.state.picks, []);
-  assert.equal(h.input.value, "");
+  assert.equal(h.input.value, "广州市天河区");
 });
 
 test("Element Plus autocomplete: the box and the list inside it are one popup, so a suggestion shown on focus is picked", async () => {
