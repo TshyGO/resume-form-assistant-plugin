@@ -241,7 +241,7 @@ for (const outcome of ["success", "partial", "failure", "transport"]) {
   });
 }
 
-test("90-second reminder does not cancel; manual button sends matching request and cleans up", async () => {
+test("30-second reminder does not cancel; manual button sends matching request and cleans up", async () => {
   let clock = 0;
   let finish;
   const messages = [];
@@ -267,14 +267,17 @@ test("90-second reminder does not cancel; manual button sends matching request a
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(cancel.hidden, false);
   const timer = timers.find(item => item.delay === 1000);
-  clock = 90000;
+  // #402：提示从 90 秒提前到 30 秒。
+  clock = 29000;
+  timer.callback();
+  assert.equal(hint.hidden, true);
+  clock = 30000;
   timer.callback();
   assert.equal(messages.length, 1);
   assert.equal(hint.hidden, false);
   // 桌面 120 秒会结束日常档请求（#299）：提醒里不能说插件不会取消。
   assert.doesNotMatch(hint.textContent, /不会.*取消/);
-  assert.match(hint.textContent, /继续等待或手动取消/);
-  assert.match(hint.textContent, /通常.*上游/);
+  assert.equal(hint.textContent, "AI 还没返回，可以接着等，也可以点取消。");
   clock = 120000;
   timer.callback();
   assert.equal(messages.length, 1);
@@ -1059,8 +1062,9 @@ test("only this extension can drive the compose protocol with its own field list
   assert.equal(unknown.ok, false);
 });
 
+// #402：等 AI 期间用户自己改过的字段，AI 回来后不覆盖，也不再弹覆盖确认；状态行告诉用户是哪几项。
 for (const accept of [false, true]) {
-  test(`ordinary fill asks before overwriting edits made during AI wait; accept=${accept}`, async () => {
+  test(`ordinary fill keeps edits made during AI wait without asking; confirm would answer ${accept}`, async () => {
     const formElements = [];
     const confirmations = [];
     let finish;
@@ -1072,24 +1076,51 @@ for (const accept of [false, true]) {
     for (const name of ['name', 'school']) {
       const input = new HTMLInputElement();
       input.name = name;
+      input.setAttribute('data-label', name === 'name' ? '姓名' : '学校');
       formElements.push(input);
     }
+    const status = { textContent: '', className: '' };
+    helpers.setShadowRoot({ querySelector: selector => (selector === '#resume-pro-status' ? status : null) });
     helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '姓名', value: '模板姓名' }] }] }], activeTemplateId: 'one' });
     const button = { disabled: false };
     const pending = helpers.handleAiFillClick({ currentTarget: button });
     await new Promise(resolve => setImmediate(resolve));
     formElements[1].value = '等待期间手动输入';
     finish({ success: true, matches: [{ fieldId: 'field-0', value: '模板姓名' }, { fieldId: 'field-1', value: '模板学校' }] });
-    await pending;
-    assert.equal(confirmations.length, 1);
-    assert.match(confirmations[0], /1 个已有内容/);
-    assert.match(confirmations[0], /可能覆盖你手动修改/);
-    assert.ok(!confirmations[0].includes('等待期间手动输入'));
-    assert.deepEqual(formElements.map(el => el.value), accept ? ['模板姓名', '模板学校'] : ['', '等待期间手动输入']);
+    const result = await pending;
+    assert.equal(confirmations.length, 0);
+    assert.deepEqual(formElements.map(el => el.value), ['模板姓名', '等待期间手动输入']);
+    assert.equal(formElements[1].dispatchedEvents.length, 0);
+    assert.equal(result.filledCount, 1);
+    assert.equal(result.outcome, 'partial');
+    assert.equal(status.textContent, '已填写 1 个字段。等 AI 时有改动的 1 项没有覆盖：学校，请核对。');
     assert.equal(button.disabled, false);
-    if (!accept) assert.ok(formElements.every(el => el.dispatchedEvents.length === 0));
   });
 }
+
+test('ordinary fill still asks once before overwriting a field that had content when the fill started', async () => {
+  const formElements = [];
+  const confirmations = [];
+  let finish;
+  const { helpers, HTMLInputElement } = loadHighlightHelpers({
+    formElements,
+    confirm: text => { confirmations.push(text); return true; },
+    sendMessage: () => new Promise(resolve => { finish = resolve; })
+  });
+  const input = new HTMLInputElement();
+  input.value = '原来就有的值';
+  formElements.push(input);
+  helpers.setCurrentStore({ templates: [{ id: 'one', groups: [{ name: '基本', fields: [{ key: '学校', value: '模板学校' }] }] }], activeTemplateId: 'one' });
+  const pending = helpers.handleAiFillClick({ currentTarget: { disabled: false } });
+  await new Promise(resolve => setImmediate(resolve));
+  finish({ success: true, matches: [{ fieldId: 'field-0', value: '模板学校' }] });
+  await pending;
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /1 个已有内容/);
+  assert.match(confirmations[0], /本次不会写入任何字段/, 'nothing was written before the question');
+  assert.ok(!confirmations[0].includes('原来就有的值'));
+  assert.equal(input.value, '模板学校');
+});
 
 test('ordinary empty-page fill does not ask for overwrite confirmation', async () => {
   const formElements = [];

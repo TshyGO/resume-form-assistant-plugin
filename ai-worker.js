@@ -182,6 +182,10 @@ function timeoutMessage(result) {
     const task = result.purpose === "analyze" ? "页面分析" : "字段匹配";
     return `强模型${host}${waited}没有完成${task}。可能是服务商或网络卡住了，也可能是带深度思考的模型在字段多的页面上生成太久：可以稍后重试，或在桌面设置里把强模型换成不带深度思考的模型。`;
   }
+  // #402：桌面记下了超时停在哪一步（#299）就按那一步说；旧桌面不给，照旧。
+  if (result?.timeoutStage === "connect") return `日常模型${waited}还没连上服务商${host}，请检查网络或代理。`;
+  if (result?.timeoutStage === "first_byte") return `日常模型${waited}没有回复，服务商可能太忙或模型太慢，可以稍后重试，或在桌面设置换模型。`;
+  if (result?.timeoutStage === "body") return `日常模型已经开始回复，但${waited}还没收完，可能是网络慢，可以稍后重试。`;
   return `日常模型${waited}没有返回，可在桌面设置换模型后重试。`;
 }
 
@@ -196,14 +200,13 @@ function strongFailureMessage(tier, result) {
   return null;
 }
 
+// 和网页先填（#402）共用 ai-helpers 里的同一份判断。
 function isSecretField(field) {
-  return String(field?.inputType ?? "").toLowerCase() === "password"
-    || ResumeProProfile.SECRET_LABEL.test([field?.label, field?.name, field?.key].filter(Boolean).join(" "));
+  return ResumeProAIHelpers.isSecretFormField(field, ResumeProProfile);
 }
 
 function safeResumeField(field) {
-  return !ResumeProProfile.SECRET_LABEL.test(String(field?.key ?? ""))
-    && !ResumeProProfile.SECRET_VALUE.test(String(field?.value ?? ""));
+  return ResumeProAIHelpers.isSafeResumeField(field, ResumeProProfile);
 }
 
 function promptBytes(fields, candidates) {
