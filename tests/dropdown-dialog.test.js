@@ -28,11 +28,16 @@ const DIALOGS = {
     wire(doc, close) { doc.addEventListener("keydown", (event) => { if (event.code === "Escape") close(); }); }
   },
   "a drawer that closes on a press outside it": {
-    html: `<div class="apply-side-drawer"><div class="apply-side-drawer__body">{form}</div></div>`,
+    html: `<div class="apply-side-drawer" style="position: fixed; top: 0; right: 0; bottom: 0;"><div class="apply-side-drawer__body">{form}</div></div>`,
     wire(doc, close) {
       const drawer = doc.querySelector(".apply-side-drawer");
       doc.addEventListener("mousedown", (event) => { if (!drawer.contains(event.target)) close(); });
     }
+  },
+  // 抽屉自己不是 fixed，浮在 fixed 的遮罩里；在 document 上听 Esc。
+  "a drawer inside a fixed mask": {
+    html: `<div class="apply-mask" style="position: fixed; top: 0; right: 0; bottom: 0; left: 0;"><div class="apply-drawer">{form}</div></div>`,
+    wire(doc, close) { doc.addEventListener("keydown", (event) => { if (event.key === "Escape") close(); }); }
   }
 };
 
@@ -115,6 +120,26 @@ for (const closeBy of ["esc", "outside"]) {
     if (closeBy === "esc") assert.equal(h.seen.bodyPresses, 0);
     else assert.ok(h.seen.bodyPresses >= 1, "then a press on the page");
     assert.equal(popup.open(), null);
+  });
+}
+
+// 页面骨架不是对话框：daisyUI 的 drawer、drawer-content，Angular Material 的 mat-drawer-container、mat-drawer-content
+// 包着整页（都不是 fixed）；外层带 modal-isOpen 这种驼峰状态类名。Moka 式弹层照旧靠控件上的 Esc 收起。
+const SHELLS = {
+  "daisyUI drawer layout": `<div class="drawer lg:drawer-open"><input id="nav" type="checkbox" class="drawer-toggle"><div class="drawer-content">{form}</div>
+    <div class="drawer-side"><label for="nav" class="drawer-overlay"></label><ul class="menu"></ul></div></div>`,
+  "Angular Material sidenav layout": `<div class="mat-drawer-container mat-sidenav-container"><div class="mat-drawer mat-sidenav"></div>
+    <div class="mat-drawer-content mat-sidenav-content">{form}</div></div>`,
+  "a wrapper with a camelCase state class": `<div class="app modal-isOpen"><main>{form}</main></div>`
+};
+for (const [name, shell] of Object.entries(SHELLS)) {
+  test(`${name} is not a dialog: a Moka-style popup still gets Esc on the control`, async () => {
+    const h = load(shell);
+    const popup = wirePopup(h, ["是", "否"], "esc");
+    const result = await h.api.operate(h.target, "不确定");
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(h.seen.escapes, 1, "Esc on the control");
+    assert.equal(popup.open(), null, "the popup has closed");
   });
 }
 

@@ -72,20 +72,30 @@
     + '.el-dialog__wrapper, .el-dialog, .el-overlay, .el-drawer__wrapper, .el-drawer, .el-message-box__wrapper, .arco-modal-wrapper, .arco-modal, '
     + '.arco-drawer-wrapper, .arco-drawer, .layui-layer, .ivu-modal-wrap, .ivu-drawer-wrap, .modal';
   // 自研组件的对话框按类名认：有一段是 modal、dialog、drawer（也认 MuiDialog 这样带前缀的），后面没有了，
-  // 或者紧跟着 wrap、body 这类结构词、CSS Modules 的哈希（sd-Modal-container-2S_vM）。modal-open 这类页面状态不算。
+  // 或者紧跟着 wrap、body 这类结构词、CSS Modules 的哈希（sd-Modal-container-2S_vM）。modal-open、modal-isOpen 这类页面状态不算。
+  // drawer 也常是页面骨架（daisyUI 的 drawer、drawer-content，Angular Material 的 mat-drawer-container），
+  // 只认浮在页面上的：它自己或外面有一层是 position:fixed。
   const DIALOG_WORD = /^(?:modal|dialog|drawer)$/i;
   const PREFIXED_DIALOG = /^[A-Z][a-z]*(?:Modal|Dialog|Drawer)$/;
   const DIALOG_PART = /^(?:wrap|wrapper|container|root|mask|content|body|box|panel|paper|inner|main|layer|popup)$/i;
-  const HASH_PART = /^(?=.*\d|.[^A-Z]*[A-Z])[A-Za-z0-9]{1,10}$/;
-  function dialogToken(token) {
+  // 哈希：带数字，或第二个字符起有大写；isOpen、navBar 这样的驼峰词不算。
+  const HASH_PART = /^(?=.*\d|.[^A-Z]*[A-Z])(?![A-Za-z][a-z]+(?:[A-Z][a-z]+)+$)[A-Za-z0-9]{1,10}$/;
+  function dialogWord(token) {
     const parts = token.split(/[-_]+/).filter(Boolean);
     const at = parts.findIndex(part => DIALOG_WORD.test(part) || PREFIXED_DIALOG.test(part));
     const next = parts[at + 1];
-    return at >= 0 && (next === undefined || DIALOG_PART.test(next) || HASH_PART.test(next));
+    return at >= 0 && (next === undefined || DIALOG_PART.test(next) || HASH_PART.test(next)) ? parts[at] : '';
   }
   function dialogOf(node) {
-    for (let current = node?.parentElement; current && current !== current.ownerDocument.body; current = current.parentElement) {
-      if (current.matches(DIALOGS) || String(current.getAttribute('class') || '').split(/\s+/).some(dialogToken)) return current;
+    const body = node?.ownerDocument?.body, View = node?.ownerDocument?.defaultView;
+    const floating = el => {
+      for (let current = el; current && current !== body; current = current.parentElement) if (View.getComputedStyle(current).position === 'fixed') return true;
+      return false;
+    };
+    for (let current = node?.parentElement; current && current !== body; current = current.parentElement) {
+      if (current.matches(DIALOGS)) return current;
+      const words = String(current.getAttribute('class') || '').split(/\s+/).map(dialogWord).filter(Boolean);
+      if (words.some(word => !/drawer$/i.test(word)) || (words.length && floating(current))) return current;
     }
     return null;
   }
