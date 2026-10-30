@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>示例单位应聘报名</title></head>
+<body>
+<!--
+  #301 / #399 简道云外链表单（/f/<id>）的脱敏结构，按 2026-10 公开报名表渲染后的 DOM 照搬：
+  - 题目：.fx-field > .field-label > .field-name，控件在 .field-component 里；
+  - 下拉 .fx-form-combo、地址 .fx-form-address 的省市区是 div 画的，没有 input；
+  - 日期 .fx-form-datetime > .x-datetime.datetime-trigger-input > .datetime-label > .x-date-input 里的 input；
+  - 手机带短信验证码：同一题里两个框，验证码框的占位文字是「短信验证码」；
+  - 单选 .x-radio-group：选项是 div，没有 input；
+  - 子表单 .fx-subform：表头 .subform-head > .subform-row > .subform-cell > .subform-title，
+    每条明细 .fx-subform-row > .subform-cell > .fx-sub-field，格子里没有题目，行尾是 .row-head 行号。
+  地址的「详细地址」框（.address-detail）按简道云前端代码里的类名和占位文字写。只有虚构的文字，没有任何值。
+-->
+<div class="form-wrapper">
+  <div class="form-header"><div class="head-title"><span>示例单位应聘报名</span></div></div>
+  <div class="fx-form has-footer form-size-normal">
+    <div class="widget-wrapper"><div class="widget-list">
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1001"><div class="field-component"><div class="fx-form-separator"><div class="sep-line style3"><div class="sep-bg-wrapper"><div class="sep-bg"></div></div><div class="sep-label"><span title="【个人基本信息】">【个人基本信息】</span></div></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1002"><div class="field-label"><span class="field-required">*</span><div class="field-name">姓名</div></div><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1003"><div class="field-label"><span class="field-required">*</span><div class="field-name">性别</div></div><div class="field-component"><div class="fx-form-combo" tabindex="-1"><div class="x-combo fx-combo-trigger" tabindex="0" title=""><div class="x-combo-dropdown-label"><div class="value-wrapper"><div class="value-content"><div class="dropdown-label-placeholder"></div></div></div><i class="x-svgicon x-svgicon-DownOutlined dropdown-icon arrow-icon"></i></div></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1004"><div class="field-label"><span class="field-required">*</span><div class="field-name">出生年月</div></div><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-input-css-var x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" autocomplete="new-password" value=""></div></div></div><i class="x-svgicon x-svgicon-CloseCircleFilled clear-icon"></i><i class="x-svgicon x-svgicon-CalendarOutlined datetime-icon"></i></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1005"><div class="field-label"><span class="field-required">*</span><div class="field-name">手机</div></div><div class="field-description fx-sub-html"><span>请填写本人常用号码</span></div><div class="field-component"><div class="fx-form-phone"><div class="fx-phone-input phone-wrapper"><div class="x-input x-input-css-var phone-input has-prefix input-normal"><div class="x-inner-wrapper"><span class="x-prefix"><i class="x-icon iconfont-fx-pc icon-widget-phone"></i></span><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div><div class="verify-wrapper full-line"><div class="x-input x-input-css-var verify-input input-disable input-normal"><div class="x-inner-wrapper"><input type="text" readonly="" tabindex="-1" class="input-inner" placeholder="短信验证码" autocomplete="new-password" value=""></div></div><button disabled="" type="button" class="x-button x-button-css-var size-normal style-negative disable verify-btn"><span>获取验证码</span></button></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1006"><div class="field-label"><span class="field-required">*</span><div class="field-name">户籍</div></div><div class="field-component"><div class="fx-form-address" tabindex="-1"><div class="fx-address"><div class="x-cascader fx-custom-cascader address-select"><div class="label-wrapper" tabindex="0"><div class="trigger-wrapper"><span class="value"><span class="placeholder">省-市-区</span></span><span class="trigger-icon arrow"><i class="x-svgicon x-svgicon-DownOutlined"></i></span></div></div></div><textarea class="x-resize-textarea x-input-css-var normal-textarea address-detail" placeholder="详细地址"></textarea></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1007"><div class="field-label"><span class="field-required">*</span><div class="field-name">是否应届毕业生</div></div><div class="field-component"><div class="fx-form-radiogroup"><div class="x-radio-group x-radio-group-css-var radio-group-horizontal radio-group-option-default normal"><div class="x-radio x-radio-css-var group-item auto-wrap has-default-padding"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">是</span></div></div><div class="x-radio x-radio-css-var group-item auto-wrap has-default-padding"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">否</span></div></div></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1008"><div class="field-label"><div class="field-name field-name-bigger">教育经历</div></div><div class="field-component"><div class="fx-subform"><div class="subform-table-wrapper">
+        <div class="subform-head"><div class="subform-row">
+          <div class="subform-cell"><div class="subform-title" title="入学时间">入学时间</div><div class="subform-resize-bar"></div></div>
+          <div class="subform-cell"><div class="subform-title" title="毕业时间">毕业时间</div><div class="subform-resize-bar"></div></div>
+          <div class="subform-cell"><div class="subform-title" title="学校名称">学校名称</div><div class="subform-resize-bar"></div></div>
+          <div class="subform-cell"><div class="subform-title" title="所学专业">所学专业</div><div class="subform-resize-bar"></div></div>
+          <div class="subform-cell"><div class="subform-title" title="是否全日制">是否全日制</div><div class="subform-resize-bar"></div></div>
+        </div><div class="fix-col-head"><i class="x-icon iconfont-fx-pc head-icon icon-expand"></i><i class="x-icon iconfont-fx-pc head-icon icon-trash"></i></div></div>
+        <div class="subform-content ps"><div>
+          <div class="fx-subform-row"><div class="error-tip-row"></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2001"><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-input-css-var x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" autocomplete="new-password" value=""></div></div></div><i class="x-svgicon x-svgicon-CloseCircleFilled clear-icon"></i><i class="x-svgicon x-svgicon-CalendarOutlined datetime-icon"></i></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2002"><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-input-css-var x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" autocomplete="new-password" value=""></div></div></div><i class="x-svgicon x-svgicon-CloseCircleFilled clear-icon"></i><i class="x-svgicon x-svgicon-CalendarOutlined datetime-icon"></i></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2003"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2004"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" placeholder="" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2005"><div class="field-component"><div class="fx-form-radiogroup"><div class="x-radio-group x-radio-group-css-var radio-group-horizontal radio-group-option-default normal"><div class="x-radio x-radio-css-var group-item auto-wrap"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">是</span></div></div><div class="x-radio x-radio-css-var group-item auto-wrap"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">否</span></div></div></div></div></div></div></div>
+            <div class="row-head"><div class="row-num">1</div><i class="x-icon iconfont-fx-pc row-icon icon-expand"></i><i class="x-icon iconfont-fx-pc row-icon icon-trash"></i></div>
+          </div>
+          <div class="fx-subform-row"><div class="error-tip-row"></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2001"><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-input-css-var x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" autocomplete="new-password" value=""></div></div></div><i class="x-svgicon x-svgicon-CloseCircleFilled clear-icon"></i><i class="x-svgicon x-svgicon-CalendarOutlined datetime-icon"></i></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2002"><div class="field-component"><div class="fx-form-datetime" tabindex="-1"><div class="x-datetime datetime-trigger-input has-clear"><div class="datetime-label" tabindex="0"><div class="x-input x-input-css-var x-date-input input-normal"><div class="x-inner-wrapper"><input type="text" tabindex="-1" class="input-inner" autocomplete="new-password" value=""></div></div></div><i class="x-svgicon x-svgicon-CloseCircleFilled clear-icon"></i><i class="x-svgicon x-svgicon-CalendarOutlined datetime-icon"></i></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2003"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2004"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" placeholder="" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_2005"><div class="field-component"><div class="fx-form-radiogroup"><div class="x-radio-group x-radio-group-css-var radio-group-horizontal radio-group-option-default normal"><div class="x-radio x-radio-css-var group-item auto-wrap"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">是</span></div></div><div class="x-radio x-radio-css-var group-item auto-wrap"><div class="x-radio-wrapper" tabindex="0"><span class="radio-check-icon"></span><span class="radio-text">否</span></div></div></div></div></div></div></div>
+            <div class="row-head"><div class="row-num">2</div><i class="x-icon iconfont-fx-pc row-icon icon-expand"></i><i class="x-icon iconfont-fx-pc row-icon icon-trash"></i></div>
+          </div>
+        </div></div>
+        <div class="subform-resize-line"></div>
+      </div><div class="btn-pane"><button type="button" class="x-button x-button-css-var size-normal style-text has-icon btn-add"><span>添加</span></button></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1009"><div class="field-label"><div class="field-name">【工作经历】</div></div><div class="field-component"><div class="fx-form-separator"><div class="sep-line thin"></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1010"><div class="field-label"><div class="field-name field-name-bigger"></div></div><div class="field-component"><div class="fx-subform"><div class="subform-table-wrapper">
+        <div class="subform-head"><div class="subform-row">
+          <div class="subform-cell"><div class="subform-title" title="工作单位">工作单位</div><div class="subform-resize-bar"></div></div>
+          <div class="subform-cell"><div class="subform-title" title="职务/岗位">职务/岗位</div><div class="subform-resize-bar"></div></div>
+        </div><div class="fix-col-head"></div></div>
+        <div class="subform-content ps"><div>
+          <div class="fx-subform-row"><div class="error-tip-row"></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_3001"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="subform-cell"><div class="error-tip-cell"></div><div class="fx-sub-field" data-widgetname="_widget_3002"><div class="field-component"><div class="fx-form-text"><div class="x-input x-input-css-var normal-input input-normal"><div class="x-inner-wrapper"><input type="text" class="input-inner" autocomplete="new-password" value=""></div></div></div></div></div></div>
+            <div class="row-head"><div class="row-num">1</div></div>
+          </div>
+        </div></div>
+      </div><div class="btn-pane"><button type="button" class="x-button x-button-css-var size-normal style-text has-icon btn-add"><span>添加</span></button></div></div></div></div>
+
+    </div></div>
+    <div class="form-footer"><div class="fx-form-button-group form-button"><button type="button" class="x-button x-button-css-var size-normal style-primary button op-forward" title="提交"><span>提交</span></button></div></div>
+  </div>
+</div>
+</body>
+</html>

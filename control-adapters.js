@@ -378,6 +378,7 @@
       // An AntD picker often starts readonly, then opens an editable input. Writing
       // that input does not commit rc-picker state; choose an actual calendar cell.
       if (ctx.entry.pickerType === 'antd') return await antDate(ctx, raw);
+      if (ctx.entry.pickerType === 'jiandaoyun') return await jdyDate(ctx, raw);
       // #269 只读的日期框（智联 Element 日期选择器）：不能打字，按日历逐级点，和北森的日历共用一套。
       if (ctx.el.readOnly && scope.ResumeProCustomControls?.run) {
         const outcome = await scope.ResumeProCustomControls.run(ctx, raw, { helpers, visible, click, stop, write, input, waitUntil, blur });
@@ -473,6 +474,93 @@
         const why = await take(day.value, true); if (why) return { reason: why };
       }
       return { expected, mode };
+    }
+
+    // #301 简道云日期框（.fx-form-datetime .x-datetime）：框里能打字，日历跟着跳到打的日子；可它要等日历收起
+    // （点日子、点框外面）才把值交给表单。只打字再失焦，框里显示着日期，表单里却还是空的（#399）。
+    // 做法：点开日历，看它选日、选月还是选年（带时间的不处理）；按资料的精度打 YYYY-MM-DD / YYYY-MM / YYYY，
+    // 日历的年、月和选中的格子对上了，再点那一格：日历自己收起并提交。
+    // 选不成时让框失焦，再点一下框把自己点开的日历收起（框还有焦点时点它不会收起），提交的仍是原来的值。
+    // 不按键：Esc 收起日历但不提交，框里留着打的字，表单里没有。
+    function jdyDateParts(raw) {
+      const text = String(raw ?? '').trim();
+      const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helpers?.normalizeDateValue?.(text, 'date') || '');
+      const month = /^(\d{4})-(\d{2})$/.exec(helpers?.normalizeDateValue?.(text, 'month') || '');
+      const year = /^(\d{4})(?:年)?$/.exec(text);
+      const parts = day ? { year: day[1], month: day[2], day: day[3] } : month ? { year: month[1], month: month[2], day: '' }
+        : year ? { year: year[1], month: '', day: '' } : null;
+      if (!parts) return null;
+      const y = Number(parts.year), m = Number(parts.month || 1), d = Number(parts.day || 1);
+      const date = new Date(y, m - 1, d);
+      if (y < 1900 || y > 2100 || date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+      return parts;
+    }
+    const JDY_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    function jdyMonthOf(text) {
+      const value = String(text || '').trim().toLowerCase();
+      const digits = /^(\d{1,2})/.exec(value);
+      if (digits) return Number(digits[1]);
+      const index = JDY_MONTHS.findIndex(name => value.startsWith(name));
+      return index >= 0 ? index + 1 : 0;
+    }
+    async function jdyDate(ctx, raw) {
+      const doc = ctx.el.ownerDocument;
+      const root = ctx.el.closest?.('.fx-form-datetime .x-datetime');
+      if (!doc?.querySelectorAll || !root) return { reason: 'unsupported_control' };
+      const want = jdyDateParts(raw);
+      if (!want) return { reason: 'invalid_date' };
+      const popups = () => Array.from(doc.querySelectorAll('.x-popup.x-datetime-content')).filter(visible);
+      const before = new Set(popups());
+      const reason = click(ctx.el, ctx); if (reason) return { reason };
+      const opened = await waitUntil(ctx, doc.documentElement, () => {
+        const added = popups().filter(node => !before.has(node));
+        return added.length === 1 ? added[0] : null;
+      }, Boolean);
+      if (opened.reason) return { reason: opened.reason };
+      const popup = opened.value;
+      ctx.observed = { library: 'jiandaoyun', popupRole: 'calendar' };
+      const picked = await jdyPick(ctx, want, popup).catch(() => ({ reason: 'operation_failed' }));
+      if (picked.reason && !stop(ctx) && popup.isConnected && visible(popup)) {
+        blur(ctx.el);
+        await delay(0);
+        if (!stop(ctx) && !click(root, ctx)) await waitUntil(ctx, doc.documentElement, () => !popup.isConnected || !visible(popup), Boolean, 600);
+      }
+      return picked;
+    }
+    async function jdyPick(ctx, want, popup) {
+      const mode = popup.querySelector('.date-time-picker, .time-body, .week-cell') ? ''
+        : popup.querySelector('.date-body .day') ? 'date' : popup.querySelector('.date-month') ? 'month' : popup.querySelector('.date-year') ? 'year' : '';
+      if (!mode) return { reason: 'unsupported_control' };
+      // 资料只有年份，日历要选到月或日：不替用户编月份。
+      if (mode !== 'year' && !want.month) return { reason: 'invalid_date' };
+      const text = want.day ? `${want.year}-${want.month}-${want.day}` : want.month ? `${want.year}-${want.month}` : want.year;
+      const stopped = stop(ctx, true); if (stopped) return { reason: stopped };
+      write(ctx.el, text, ctx); input(ctx.el);
+      const year = () => (popup.querySelector('.date-head .btn-year')?.textContent || '').trim();
+      const usable = cell => cell && !cell.matches('.disabled, .oday') && !cell.querySelector('.disabled');
+      const target = () => {
+        if (mode === 'year') {
+          const cells = Array.from(popup.querySelectorAll('.date-year .item-cell')).filter(cell => cell.querySelector('.cell-btn.select'));
+          return cells.length === 1 && usable(cells[0]) && cells[0].textContent.trim() === want.year ? cells[0] : null;
+        }
+        if (year() !== want.year) return null;
+        if (mode === 'month') {
+          const cells = Array.from(popup.querySelectorAll('.date-month .item-cell'));
+          const chosen = cells.filter(cell => cell.querySelector('.cell-btn.select'));
+          return cells.length === 12 && chosen.length === 1 && cells.indexOf(chosen[0]) === Number(want.month) - 1 && usable(chosen[0]) ? chosen[0] : null;
+        }
+        if (jdyMonthOf(popup.querySelector('.date-head .btn-month')?.textContent) !== Number(want.month)) return null;
+        const days = Array.from(popup.querySelectorAll('.date-body .day.selected'));
+        return days.length === 1 && usable(days[0]) && days[0].textContent.trim() === String(Number(want.day || 1)) ? days[0] : null;
+      };
+      const found = await waitUntil(ctx, popup, target, Boolean);
+      // 日历没跳到这一天：多半是超出了表单允许的日期范围。
+      if (found.reason) return { reason: found.reason === 'verification_timeout' ? 'no_option_match' : found.reason };
+      const why = click(found.value, ctx, true); if (why) return { reason: why };
+      const closed = await waitUntil(ctx, popup, () => !popup.isConnected || !visible(popup), Boolean);
+      if (closed.reason) return { reason: closed.reason === 'verification_timeout' ? 'selection_not_committed' : closed.reason };
+      const expected = mode === 'year' ? want.year : mode === 'month' ? `${want.year}-${want.month}` : `${want.year}-${want.month}-${want.day || '01'}`;
+      return { expected, mode, dayDefaulted: mode === 'date' && !want.day };
     }
     function check(target) {
       const el = target?.kind === 'radio' ? target.elements?.[0] : target?.kind === 'element' ? target.element : target;

@@ -24,7 +24,8 @@
   // layui 的选项列表 dl 在组件根 .layui-form-select 里面（#301）。
   const POPUP_SELECTOR = "[role='listbox'], [role='tree'], [role='menu'], [role='option'], .layui-form-select > dl";
   const POPUP_TOKEN = /[-_](?:dropdown|popper|popover|popup)(?:[-_]?(?:menu|panel|content|wrapper|list|inner))?$|^(?:dropdown-menu|popper|popover)$/i;
-  const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor']";
+  // #301 简道云表单的日期框：.fx-form-datetime 里的 .x-datetime（类名不带 date-picker）。
+  const DATE_PICKER_SELECTOR = ".ant-picker, .el-date-editor, [class*='date-picker'], [class*='datepicker'], [class*='DatePicker'], [class*='date-editor'], .fx-form-datetime .x-datetime";
   const SELECT_TOKEN = /(?:^|[-_])(?:select|selector|cascader|combobox|combo|dropdown|autocomplete|treeselect|multiselect|picker)(?:$|[-_])/i;
   // #269 只有类名、没有别的信号时，只认明确是选择框的词（北森 phoenix-select、Moka sd-Select）；
   // autocomplete、combo 这类可能允许自由输入，picker 可能是日期；Tailwind 的 select-none 之类不是组件。
@@ -292,6 +293,7 @@
   function pickerTypeOf(root) {
     if (root.closest(".ant-picker") || root.matches(".ant-picker") || root.querySelector?.(".ant-picker")) return "antd";
     if (root.closest(".el-date-editor") || root.matches(".el-date-editor")) return "element";
+    if (root.matches(".fx-form-datetime .x-datetime")) return "jiandaoyun";
     return "generic";
   }
 
@@ -678,6 +680,94 @@
     return text ? { text, source: "table-header", labelEl: header, row } : null;
   }
 
+  // #301 div 画的表格（简道云子表单）：格子按这一行里同类格子的位置，对上表头那一行同一列。
+  // 只认类名以 cell 结尾的格子；表头那一行在同一个表格容器里（往上最多 4 层）、排在这一行前面、
+  // 和这一行长得不一样（不是另一条明细）、同类格子一样多、里面没有控件。对不上就不取，免得读错列。
+  const CELL_TOKEN = /(?:^|[-_])cell$/i;
+  function gridLabel(control, item, ctx) {
+    let cell = null;
+    let key = "";
+    for (let node = control.root.parentElement, depth = 0; node && node !== ctx.body && depth < 8; node = node.parentElement, depth += 1) {
+      key = classTokens(node).find((token) => CELL_TOKEN.test(token)) || "";
+      if (key) {
+        cell = node;
+        break;
+      }
+    }
+    if (!cell || !(cell.contains(item) || item.contains(cell))) return null;
+    const row = cell.parentElement;
+    const cellsOf = (node) => Array.from(node.children).filter((child) => classTokens(child).includes(key));
+    const cells = row && attr(row, "class") ? cellsOf(row) : [];
+    const column = cells.indexOf(cell);
+    if (column < 0) return null;
+    for (let scope = row.parentElement, depth = 0; scope && scope !== ctx.body && depth < 4; scope = scope.parentElement, depth += 1) {
+      const rows = new Set();
+      for (const other of Array.from(scope.getElementsByClassName(key))) {
+        const parent = other.parentElement;
+        if (parent && parent !== row && !parent.contains(row) && isBefore(parent, row)) rows.add(parent);
+      }
+      const header = Array.from(rows).filter((candidate) => !sameShape(candidate, row)
+        && cellsOf(candidate).length === cells.length && !containsBoundary(candidate, ctx)).pop();
+      if (!header) continue;
+      const head = cellsOf(header)[column];
+      const placeholders = placeholdersOf(control);
+      const text = cleanLabel(joinSegments(usefulSegments(textSegments(head, ctx, new Set()), placeholders)), placeholders);
+      return text ? { text, source: "table-header", labelEl: head, row } : null;
+    }
+    return null;
+  }
+
+  // #301 一题多框（简道云手机号带短信验证码、分开的省 / 市 / 区）：控件自己的表单项里没有题目时，往上（最多 4 层）
+  // 找装着这几个框的题目容器：只装 2–4 个文字框、没有别的控件，题目是排在所有框前面的 label / title 类元素，
+  // 框和框之间没有别的题目。每个框按 aria-label 或占位文字取子项，叫「题目 - 子项」；
+  // 只有排第一的框可以没有子项，它就是这道题本身。子项重复、或别的框没有子项，就不取。
+  const MAX_PART_BOXES = 4;
+  const MAX_PART_CHARS = 20;
+  function isTextBox(el) {
+    if (el.tagName === "TEXTAREA") return true;
+    const type = inputType(el);
+    return el.tagName === "INPUT" && !CHOICE_TYPES.has(type) && !DATE_TYPES.has(type) && type !== "file" && !hasComboSignal(el);
+  }
+
+  function partName(el) {
+    for (const value of [attr(el, "aria-label"), attr(el, "placeholder")]) {
+      const rest = squash(value).replace(/^(?:请(?:输入|选择|填写)|输入|选择|填写)/, "").replace(/[.。…:：]+$/, "").trim();
+      if (rest && rest.length <= MAX_PART_CHARS && !isNoiseText(value) && !isNoiseText(rest)) return rest;
+    }
+    return "";
+  }
+
+  function partLabel(control, item, ctx) {
+    if (!["text", "textarea"].includes(control.controlKind)) return null;
+    const boundaries = boundaryControls(ctx);
+    for (let scope = item.parentElement, depth = 0; scope && scope !== ctx.body && depth < 4; scope = scope.parentElement, depth += 1) {
+      const boxes = Array.from(scope.querySelectorAll(CONTROL_SELECTOR)).filter((el) => boundaries.has(el));
+      if (boxes.length > MAX_PART_BOXES || !boxes.every(isTextBox) || customRadioGroups(ctx).some(({ group }) => scope.contains(group))) return null;
+      if (boxes.length < 2) continue;
+      const segments = usefulSegments(textSegments(scope, ctx, new Set()), []);
+      const before = segments.filter((segment) => isBefore(segment.node, boxes[0]));
+      let title = null;
+      for (let index = before.length - 1; index >= 0 && !title; index -= 1) {
+        const labelEl = labelLikeAncestor(before[index].el, scope);
+        if (!labelEl || containsBoundary(labelEl, ctx)) continue;
+        const text = cleanLabel(joinSegments(before.filter((segment) => labelEl.contains(segment.node))), []);
+        if (text) title = { text, labelEl };
+      }
+      if (!title) continue;
+      // 题目在某个框自己的表单项里：那是这个框单独的题目，别的框是另一道题（只有占位文字的下一行）。
+      if (boxes.some((box) => findItem(box, ctx).contains(title.labelEl))) return null;
+      // 框和框之间又出现题目：是几道题挨在一起，不是一题多框。
+      const last = boxes[boxes.length - 1];
+      if (segments.some((segment) => isBefore(boxes[0], segment.node) && isBefore(segment.node, last) && labelLikeAncestor(segment.el, scope))) return null;
+      const names = boxes.map(partName);
+      const named = names.filter(Boolean);
+      if (new Set(named).size !== named.length || names.slice(1).some((name) => !name)) return null;
+      const name = names[boxes.indexOf(control.element)];
+      return { text: name ? `${title.text} - ${name}` : title.text, source: "item-part", labelEl: title.labelEl, question: scope };
+    }
+    return null;
+  }
+
   // 控件和题目是同一层的兄弟：只看紧挨着的前文，碰到别的控件就停。
   function siblingLabel(control, item, ctx) {
     const placeholders = placeholdersOf(control);
@@ -734,7 +824,9 @@
     return explicitLabel(control, ctx)
       || itemLabel(control, item, ctx)
       || tableLabel(control, item, ctx)
+      || gridLabel(control, item, ctx)
       || siblingLabel(control, item, ctx)
+      || partLabel(control, item, ctx)
       || placeholderHint(control)
       || { text: "", source: "none", labelEl: null };
   }
@@ -749,7 +841,9 @@
   // 2) 标题行只有自动生成的 class（北森的 sc-xxxx）：只在“装着一组字段”的容器前面，
   //    取紧挨着的那几行纯文字里最上面一行——标题在上，说明文字在下。单个字段旁边的纯文字不算区块标题。
   function findSection(control, ctx, claimed) {
-    const start = control.item;
+    // 一题多框的框按整道题找区块：同一题里的另一个框不算别的字段。
+    const start = control.question || control.item;
+    const own = control.question || control.root;
     let depth = 0;
     for (let node = start; node && node !== ctx.body && node.tagName !== "HTML" && depth < 14; node = node.parentElement, depth += 1) {
       if (node.tagName === "FIELDSET" && node !== start) {
@@ -765,11 +859,14 @@
         const text = headingText(heading, ctx, control);
         if (text) return { text, root: node.parentElement };
       }
-      if (!hasForeignControl(node, control.root, ctx)) continue;
+      if (!hasForeignControl(node, own, ctx)) continue;
       const run = [];
       for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (!ctx.isVisible(prev)) continue;
+        // 已经找到紧挨着的几行字，又碰到装着控件的：再往前是上一个区块的题（#301 简道云【工作经历】前面是【个人基本信息】的题）。
+        if (run.length && containsBoundary(prev, ctx)) break;
         // 已经当了别的字段题目的（比如表头那一行）不是区块标题。
-        if (!ctx.isVisible(prev) || claimed.has(prev) || Array.from(claimed).some((el) => el && prev.contains(el))) continue;
+        if (claimed.has(prev) || Array.from(claimed).some((el) => el && prev.contains(el))) continue;
         if (containsBoundary(prev, ctx)) {
           // 前面一条结构相同的重复条目：跳过它，接着找它前面的标题。
           if (sameShape(prev, node)) continue;
@@ -847,6 +944,7 @@
       control.labelSource = resolved.source;
       control.labelEl = resolved.labelEl;
       control.tableRow = resolved.row || null;
+      control.question = resolved.question || null;
       control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
       control.chrome = isPageChrome(control.root);
       // 禁用的控件和文件框只用来划分表单项边界，不填写。
@@ -1060,6 +1158,7 @@
       control.label = resolved.text && control.rangePart ? `${resolved.text}（${control.rangePart}）` : resolved.text;
       control.labelSource = resolved.source;
       control.labelEl = resolved.labelEl;
+      control.question = resolved.question || null;
       control.disabled = control.elements.every((el) => el.disabled);
       control.chrome = isPageChrome(control.root);
       control.searchLike = control.controlKind === "text" && control.elements.some(looksSearchLike);
