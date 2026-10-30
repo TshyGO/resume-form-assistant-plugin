@@ -60,6 +60,11 @@
     return globalScope.ResumeProAntdPrefix?.css(node, selector) ?? selector;
   }
 
+  // 扫描开始时按页面现在的样子重看前缀：表单常在一键填写点下去之后才出来。
+  function antdRefresh(node) {
+    globalScope.ResumeProAntdPrefix?.prefixes(node, { fresh: true });
+  }
+
   function antdTokens(node, tokens) {
     const antd = globalScope.ResumeProAntdPrefix;
     if (!antd) return tokens;
@@ -972,6 +977,7 @@
   // --- 对外入口 ---------------------------------------------------------------
 
   function scanPage(doc, options = {}) {
+    antdRefresh(doc);
     const ctx = makeContext(doc, options);
     const skipped = { pageChrome: 0, popup: 0, merged: 0, siteSearch: 0, outsideForm: 0, noLabel: 0, scanError: 0, ambiguous: 0 };
     const allControls = Array.from(doc.querySelectorAll(CONTROL_SELECTOR))
@@ -1216,6 +1222,7 @@
   // 对不上题目、在页头或像站内搜索的也列出来，由大纲自己决定写不写。只读结构，不读值。
   // root 是 Document 或开放的 ShadowRoot。
   function outlineControls(root, options = {}) {
+    antdRefresh(root);
     const ctx = makeContext(root, options);
     const itemByRoot = new Map();
     // #408 和 scanPage 一样：哪一项读不出来就不列这一项，大纲照常生成。

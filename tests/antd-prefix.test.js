@@ -367,3 +367,165 @@ test("an atsx- form item still marked has-error after writing is reported like a
   assert.equal(reasons.ant, "framework_state_unsynced");
   assert.deepEqual(reasons, { ant: "framework_state_unsynced", atsx: "framework_state_unsynced" });
 });
+
+// --- 表单晚出来、带时间的日期框、联想输入框 -----------------------------------------
+
+// antd 5 的级联：rc-select 的外壳，根上同时有 X-select 和 X-cascader。
+const cascader = (p, id) => `<div class="${p}-select ${p}-cascader ${p}-select-outlined ${p}-select-in-form-item ${p}-select-single ${p}-select-show-arrow">`
+  + `<div class="${p}-select-selector"><span class="${p}-select-selection-search"><input type="search" id="${id}" autocomplete="off"`
+  + ` class="${p}-select-selection-search-input" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="${id}_list"`
+  + ` aria-autocomplete="list" aria-controls="${id}_list" readonly unselectable="on" value=""></span>`
+  + `<span class="${p}-select-selection-placeholder">请选择</span></div></div>`;
+
+// 一键填写在表单出来之前点下去：零字段那一轮先探测过页面，那时只有 ant。表单紧接着才画出来（不到 1 秒）。
+function lateForm() {
+  const page = load("<main><p>加载中</p></main>");
+  installLayout(page.w);
+  page.w.ResumeProFillProbe.probePage(page.doc);
+  assert.deepEqual(plain(page.w.ResumeProAntdPrefix.prefixes(page.doc)), ["ant"]);
+  page.doc.querySelector("main").innerHTML = form("atsx").replace("</form>", `${item("atsx", "city", "期望城市", cascader("atsx", "city"))}</form>`);
+  return page;
+}
+
+test("a form drawn right after the page was first looked at is scanned as atsx- antd at once", () => {
+  const { w, scan } = lateForm();
+  const controls = scan();
+  assert.equal(control(controls, "毕业时间").pickerType, "antd");
+  assert.equal(control(controls, "期望城市").controlKind, "cascader");
+  assert.equal(w.ResumeProCustomControls.describe(targetOf(control(controls, "最高学历"))).library, "antd");
+});
+
+test("diagnostics taken right after the form appeared count its selects as antd", () => {
+  const { w, doc } = lateForm();
+  assert.deepEqual(plain(w.ResumeProFillProbe.probePage(doc).custom.byLibrary), { antd: 2 });
+});
+
+test("a select operated right after the form appeared is opened as an atsx- antd select", async () => {
+  const { w, doc } = lateForm();
+  const picked = wire(doc, "atsx");
+  const root = doc.querySelector(".atsx-select:not(.atsx-cascader)"), field = root.querySelector("input");
+  const api = w.ResumeProControls.create({ timeoutMs: 300, settleMs: 35, isVisible });
+  const result = await api.operate({ kind: "element", element: field, elements: [field], root, controlKind: "custom-select", hints: {} }, "本科");
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(picked, ["education=本科"]);
+  assert.equal(result.observed.library, "antd");
+});
+
+// 2026-10-31 在 Chromium 里看到的 antd 5.21.6：TimePicker、带时间的 DatePicker 的框能打字，打的字合乎格式时失焦就收下；
+// 弹层是 X-picker-time-panel，或 X-picker-datetime-panel 里一个日期面板加一个时间面板，下面有「确定」。
+// antd 4.24.16 打的字失焦时不收（要点「确定」），这里不照它写。替身失焦就收起；框里的字合乎格式就收下，不合就换回原来的。
+const TIMED = { time: { label: "可面试时间", placeholder: "请选择时间", format: /^\d{2}:\d{2}$/, value: "14:30" },
+  arrive: { label: "到岗时间", placeholder: "请选择日期", format: /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, value: "2025-01-02 09:00" } };
+const timedPicker = (p, id, readOnly = false) => `<div class="${p}-picker ${p}-picker-outlined"><div class="${p}-picker-input">`
+  + `<input${readOnly ? " readonly" : ""} autocomplete="off" size="10" id="${id}" placeholder="${TIMED[id].placeholder}" value="">`
+  + `<span class="${p}-picker-suffix"><span role="img" aria-label="clock-circle" class="anticon anticon-clock-circle"></span></span></div></div>`;
+function wireTimed(doc, p, picked) {
+  const column = (type) => `<ul class="${p}-picker-time-panel-column" data-type="${type}">${["00", "01", "02"].map((text, i) => `<li class="${p}-picker-time-panel-cell" data-value="${i}">`
+    + `<div class="${p}-picker-time-panel-cell-inner">${text}</div></li>`).join("")}</ul>`;
+  const timePanel = `<div class="${p}-picker-time-panel"><div class="${p}-picker-content">${column("hour")}${column("minute")}</div></div>`;
+  const datePanel = `<div class="${p}-picker-date-panel"><div class="${p}-picker-header"><button type="button" class="${p}-picker-header-super-prev-btn"></button>`
+    + `<div class="${p}-picker-header-view"><button type="button" class="${p}-picker-month-btn">Oct</button><button type="button" class="${p}-picker-year-btn">2026</button></div>`
+    + `<button type="button" class="${p}-picker-header-super-next-btn"></button></div><div class="${p}-picker-body"><table class="${p}-picker-content"><tbody><tr>`
+    + `<td title="2026-10-01" class="${p}-picker-cell ${p}-picker-cell-in-view"><div class="${p}-picker-cell-inner">1</div></td></tr></tbody></table></div></div>`;
+  for (const [id, spec] of Object.entries(TIMED)) {
+    const field = doc.getElementById(id);
+    if (!field) continue;
+    let dropdown = null, committed = "";
+    field.addEventListener("mousedown", () => {
+      if (!dropdown) {
+        dropdown = doc.createElement("div");
+        const kind = id === "time" ? "time" : "datetime";
+        dropdown.innerHTML = `<div class="${p}-picker-panel-container ${p}-picker-${kind}-panel-container"><div class="${p}-picker-panel-layout"><div><div class="${p}-picker-panel">`
+          + (kind === "time" ? timePanel : `<div class="${p}-picker-datetime-panel">${datePanel}${timePanel}</div>`)
+          + `<div class="${p}-picker-footer"><ul class="${p}-picker-ranges"><li class="${p}-picker-ok"><button type="button" class="${p}-btn ${p}-btn-primary ${p}-btn-sm">OK</button></li></ul></div>`
+          + "</div></div></div></div>";
+        doc.body.append(dropdown);
+      }
+      dropdown.className = `${p}-picker-dropdown ${p}-picker-dropdown-placement-bottomLeft`;
+      dropdown.hidden = false;
+    });
+    field.addEventListener("focusout", () => {
+      if (dropdown) { dropdown.hidden = true; dropdown.classList.add(`${p}-picker-dropdown-hidden`); }
+      if (spec.format.test(field.value) && field.value !== committed) { committed = field.value; picked.push(`${id}=${committed}`); }
+      else field.value = committed;
+    });
+  }
+}
+
+// antd 5 的 AutoComplete：根上有 X-select-auto-complete，框能打字，选中的建议直接写进框里，没有 X-select-selection-item。
+// 替身：在选择框上按下鼠标展开建议，打字时只留下包含框里文字的建议，一条都没有就收起；点建议写进框里并收起。
+const JOBS = ["前端工程师", "后端工程师"];
+const autoComplete = (p, id) => `<div class="${p}-select ${p}-select-outlined ${p}-select-in-form-item ${p}-select-auto-complete ${p}-select-single ${p}-select-show-search">`
+  + `<div class="${p}-select-selector"><span class="${p}-select-selection-search"><input type="search" id="${id}" autocomplete="off"`
+  + ` class="${p}-select-selection-search-input" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="${id}_list"`
+  + ` aria-autocomplete="list" aria-controls="${id}_list" value=""></span><span class="${p}-select-selection-placeholder">请输入</span></div></div>`;
+function wireAutoComplete(doc, p, picked) {
+  for (const root of doc.querySelectorAll(`.${p}-select-auto-complete`)) {
+    const selector = root.querySelector(`.${p}-select-selector`), field = root.querySelector("input");
+    let dropdown = null;
+    const show = () => {
+      const list = JOBS.filter((text) => text.includes(field.value));
+      if (!dropdown) { dropdown = doc.createElement("div"); doc.body.append(dropdown); }
+      dropdown.className = `${p}-select-dropdown ${p}-select-dropdown-placement-bottomLeft`;
+      dropdown.innerHTML = `<div><div role="listbox" id="${field.id}_list" data-w="0" data-h="0"></div><div class="rc-virtual-list"><div class="rc-virtual-list-holder"><div><div class="rc-virtual-list-holder-inner">`
+        + list.map((text) => `<div aria-selected="false" class="${p}-select-item ${p}-select-item-option" title="${text}"><div class="${p}-select-item-option-content">${text}</div></div>`).join("")
+        + "</div></div></div></div></div>";
+      dropdown.querySelectorAll(`.${p}-select-item-option`).forEach((node) => node.addEventListener("click", () => {
+        field.value = node.title;
+        picked.push(`${field.id}=${node.title}`);
+        root.querySelector(`.${p}-select-selection-placeholder`)?.remove();
+        dropdown.hidden = true;
+        field.setAttribute("aria-expanded", "false");
+      }));
+      dropdown.hidden = !list.length;
+      field.setAttribute("aria-expanded", String(Boolean(list.length)));
+    };
+    selector.addEventListener("mousedown", show);
+    field.addEventListener("input", show);
+  }
+}
+
+const timedForm = (p, { readOnly = false } = {}) => `<form class="${p}-form ${p}-form-vertical">`
+  + item(p, "name", "姓名", input(p, "name")) + item(p, "time", TIMED.time.label, timedPicker(p, "time", readOnly))
+  + item(p, "arrive", TIMED.arrive.label, timedPicker(p, "arrive", readOnly)) + item(p, "job", "期望职位", autoComplete(p, "job"))
+  + item(p, "intent", "意向岗位", autoComplete(p, "intent")) + "</form>";
+
+// 期望职位在建议里，意向岗位（测试工程师）不在：AutoComplete 本来就能填建议里没有的字。
+async function fillTimed(p) {
+  const values = { 姓名: "测试用户", 可面试时间: TIMED.time.value, 到岗时间: TIMED.arrive.value, 期望职位: "前端工程师", 意向岗位: "测试工程师" };
+  const page = await openFramedPage({ top: `<main><h2>基本信息</h2>${timedForm(p)}</main>`, url: "https://demo.jobs.example.test/campus/position/apply", values });
+  const doc = page.win.document;
+  const picked = [];
+  wireTimed(doc, p, picked);
+  wireAutoComplete(doc, p, picked);
+  const result = await page.fill();
+  const value = (id) => doc.getElementById(id).value;
+  const openPopups = Array.from(doc.querySelectorAll(`.${p}-picker-dropdown, .${p}-select-dropdown`)).filter((node) => !node.hidden).length;
+  return { result: { filledCount: result.filledCount, unfilledCount: result.unfilledCount, fieldCount: result.fieldCount }, picked: picked.sort(),
+    values: { time: value("time"), arrive: value("arrive"), job: value("job"), intent: value("intent") }, openPopups };
+}
+
+test("time and date-time pickers that take typing, and AutoComplete boxes, are filled with ant- and atsx- alike", async () => {
+  const main = await fillTimed("ant");
+  assert.deepEqual(main, { result: { filledCount: 5, unfilledCount: 0, fieldCount: 5 },
+    picked: ["arrive=2025-01-02 09:00", "job=前端工程师", "time=14:30"],
+    values: { time: "14:30", arrive: "2025-01-02 09:00", job: "前端工程师", intent: "测试工程师" }, openPopups: 0 });
+  assert.deepEqual(await fillTimed("atsx"), main);
+});
+
+// 框是只读的（inputReadOnly）：不往里写字，也不去点格子，报控件暂不支持，日历收起。
+test("a read-only time picker is left untouched and reported unsupported", async () => {
+  for (const p of ["ant", "atsx"]) {
+    const page = await openFramedPage({ top: `<main>${timedForm(p, { readOnly: true })}</main>` });
+    const doc = page.win.document;
+    const picked = [];
+    wireTimed(doc, p, picked);
+    const found = page.win.ResumeProFieldScan.scanPage(doc, { isVisible }).controls.find((entry) => entry.label === "可面试时间");
+    assert.equal(found?.pickerType, "antd", p);
+    const outcome = await page.hooks.operateControl(found, "14:30");
+    assert.equal(outcome.reason, "unsupported_control", `${p}: ${JSON.stringify(outcome)}`);
+    assert.equal(doc.getElementById("time").value, "");
+    assert.deepEqual(picked, []);
+    assert.ok(doc.querySelector(`.${p}-picker-dropdown`).hidden, `${p}: the calendar is closed`);
+  }
+});

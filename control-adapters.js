@@ -368,6 +368,8 @@
       // PR1 accepts the shared hint contract for future adapters. Native types and
       // the actual AntD panel remain authoritative; hints cannot prescribe actions.
       const ctx = { el: nodes[0], nodes, entry: target, options, hints: cleanHints(options.hints), kind: kindOf(target, el), wrote: false, userEdited: false };
+      // #301 换了前缀的 antd：操作开始时按页面现在的样子重看前缀，见 antd-prefix.js。
+      scope.ResumeProAntdPrefix?.prefixes(ctx.el, { fresh: true });
       // #269 自制单选组：选项是 div（北森 phoenix-radio），没有 input。
       ctx.customRadio = ctx.kind === 'radio' && nodes.length > 0 && nodes.every(node => !isInput(node));
       if (ctx.customRadio && !scope.ResumeProCustomControls) return result(false, 'unsupported_control', ctx);
@@ -449,6 +451,7 @@
           accepted = () => ctx.el.selectedIndex === index && ctx.el.options[index]?.value === chosenValue && ctx.el.options[index]?.text === chosenText;
         } else if (ctx.kind === 'date') {
           const date = await operateDate(ctx, desiredValue);
+          if (date.typeText) return await text(ctx, desiredValue);
           if (date.reason) return result(false, date.reason, ctx, date.observed);
           if (date.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
           accepted = date.accepted || (() => {
@@ -523,8 +526,12 @@
       if (opened.reason) return { reason: opened.reason };
       const popup = opened.value;
       ctx.observed = { library: 'antd', popupRole: 'calendar' };
+      // 带时间的面板（TimePicker、showTime 的日期框）这里只会点年、月、日：收起日历，框能打字就按文本框打字，
+      // 和没认出 antd 时一样（#301 换了前缀的 antd 5 这样能填上；antd 4 失焦时不收打的字，照样报没写上）；框只读的报控件暂不支持。
+      const timed = Boolean(popup.querySelector(antd(popup, '.ant-picker-time-panel')));
       // 页面异常也按失败收尾；只把固定的原因码交出去。
-      const picked = await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
+      const picked = timed ? { reason: 'unsupported_control', typeText: true }
+        : await antDatePick(ctx, raw, popup).catch(() => ({ reason: 'operation_failed' }));
       // 选不成时收起自己点开的日历，免得挡住后面的字段：让输入框失焦（见 leavePicker），组件里的值不变。
       // 不按键、不点页面别处；原本就开着的、用户停下或改了内容的不动。
       // 刚在日历里按下过鼠标时，rc-picker 到下一帧才认失焦，这一次它不收：0.1 秒内没开始收起就再失焦一次。
@@ -536,6 +543,8 @@
         if (leaving.reason === 'verification_timeout' && !stop(ctx)) leavePicker(ctx.el);
         await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
       }
+      // 用户停下、改了内容的，或框是只读的，不打字。
+      if (picked.typeText && (stop(ctx) || ctx.el.readOnly)) return { reason: stop(ctx) || picked.reason };
       return picked;
     }
     async function antDatePick(ctx, raw, popup) {

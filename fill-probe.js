@@ -161,6 +161,8 @@
 
   // 页面层面的线索：只数数，不输出内容。
   function probePage(doc, { href = "" } = {}) {
+    // 表单可能刚画出来：按页面现在的样子重看 antd 的前缀。
+    root.ResumeProAntdPrefix?.prefixes(doc, { fresh: true });
     const byLibrary = {};
     let customTotal = 0;
     for (const control of shown(doc.querySelectorAll(custom(doc)))) {

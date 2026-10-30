@@ -148,11 +148,15 @@
   // #269 联想输入框（智联学校名称、#299 51job 的 el-autocomplete）：本来就允许直接输入。
   // 只认组件类名写明是联想输入框的；单有 aria-autocomplete 的可能是只能从列表里选的下拉。
   // 宿主（control-adapters.js）据此在建议里没有时按文本框填写，这里据此只选同名的建议（见 sameOption）。
+  // antd 的 AutoComplete（ant-select-auto-complete，换了前缀的也算）也是：框里的字就是值，没有选中项的标记。
   const AUTOCOMPLETE_TOKEN = /(?:^|[-_])auto-?complete$/i;
+  const antdAutoComplete = info => info.library === 'antd' && !info.cascade && Boolean(info.root?.matches?.(antd(info.root, '.ant-select-auto-complete')));
   function acceptsFreeText(ctx) {
     const el = ctx.el, info = describe(ctx.entry);
     if (ctx.kind !== 'custom-select' || el?.tagName !== 'INPUT' || el.readOnly || el.disabled) return false;
-    if (!['text', 'search'].includes(el.type) || !['aria', 'generic'].includes(info.library)) return false;
+    if (!['text', 'search'].includes(el.type)) return false;
+    if (antdAutoComplete(info)) return true;
+    if (!['aria', 'generic'].includes(info.library)) return false;
     return [info.root, el.parentElement, el.parentElement?.parentElement].some(node => String(node?.className || '').split(/\s+/)
       .some(token => AUTOCOMPLETE_TOKEN.test(token)));
   }
@@ -165,6 +169,10 @@
     if (library === 'element' && !cascade && el.tagName === 'INPUT' && !root.querySelector('.el-select__wrapper')) {
       if (el.readOnly) closedPlaceholder.set(el, el.placeholder);
       else if (!el.value && closedPlaceholder.has(el) && trim(el.placeholder) && el.placeholder !== closedPlaceholder.get(el)) return [trim(el.placeholder)];
+    }
+    if (antdAutoComplete(info)) {
+      const text = trim(el.tagName === 'INPUT' ? el.value : '');
+      return text ? [text] : [];
     }
     if (library === 'generic') {
       // 组件上显示的文字：输入框的值，没有就取组件根里看得见的文字；占位提示不算。
@@ -760,7 +768,7 @@
     let opened = await h.waitUntil(ctx, doc.documentElement, findOpened, Boolean,
       info.freeText ? Math.min(FREE_TEXT_OPEN_MS, h.timeoutMs ?? FREE_TEXT_OPEN_MS) : undefined);
     // 通用路径和 AntD：点开后没有弹层、输入框又能打字（学校、专业这类边输边搜的下拉）：输入要找的值再等弹层。
-    // AntD 的输入框在组件根里（3.x 点开后才显示）；AntD 的 AutoComplete、combobox 模式输入就是改值，不这样做。
+    // AntD 的输入框在组件根里（3.x 点开后才显示）；AntD 的 combobox 模式输入就是改值，不这样做（AutoComplete 按联想框打字）。
     // 联想框（#404 51job 的 el-autocomplete）聚焦后没弹建议：像打字一样输入要填的字，再等它自己的建议框。
     // 一聚焦才展开的日历（Element 日期选择器）：浏览器窗口不在前台时 focus() 不派发事件，补一次 focus 再等。
     // 聚焦时就已经打开的日历不算「新出现」：找贴着这个框、带日期格子的日历面板，正好一个才用。

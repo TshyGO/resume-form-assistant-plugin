@@ -11,6 +11,7 @@
   // 拼进选择器的前缀只收字母、数字、横线和下划线。
   const PREFIX = /^[A-Za-z][\w-]*$/;
   // 表单可能后渲染：隔这么久重新看一次文档。认出过的前缀一直算。
+  // 扫描和操作控件开始时不等这么久，当场重看（fresh），免得表单出来之前看到的「没有别的前缀」还挡着。
   const RECHECK_MS = 1000;
   const MAX_BUILT = 500;
   const known = new WeakMap();
@@ -39,12 +40,12 @@
   }
 
   // 页面用的前缀：默认的 ant 在最前面，后面是认出来的。
-  function prefixes(node) {
+  function prefixes(node, { fresh = false } = {}) {
     const root = rootOf(node);
     if (typeof root?.querySelectorAll !== "function") return [DEFAULT];
     const now = Date.now();
     let entry = known.get(root);
-    if (!entry || now - entry.at >= RECHECK_MS) {
+    if (!entry || fresh || now - entry.at >= RECHECK_MS) {
       const found = new Set(entry?.found);
       try {
         scan(root, found);
