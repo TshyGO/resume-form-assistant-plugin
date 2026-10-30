@@ -66,6 +66,46 @@
   const POPUP_LEAVE_MS = 1000;
   // 失败收尾按了 Esc 以后等弹层退场的上限，过了还在才在页面空白处按一下。
   const ESC_LEAVE_MS = 600;
+  // #301 对话框、抽屉、模态层。控件在这里面时失败收尾不按 Esc：它会冒泡到对话框（AntD Modal 在外层的 keydown 上关，
+  // Element 在 document、window 上听 Esc），对话框一关，里面没保存的内容就没了。
+  const DIALOGS = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], .ant-modal-wrap, .ant-modal, .ant-drawer, '
+    + '.el-dialog__wrapper, .el-dialog, .el-overlay, .el-drawer__wrapper, .el-drawer, .el-message-box__wrapper, .arco-modal-wrapper, .arco-modal, '
+    + '.arco-drawer-wrapper, .arco-drawer, .layui-layer, .ivu-modal-wrap, .ivu-drawer-wrap, .modal';
+  // 自研组件的对话框按类名认：有一段是 modal、dialog、drawer（也认 MuiDialog 这样带前缀的），后面没有了，
+  // 或者紧跟着 wrap、body 这类结构词、CSS Modules 的哈希（sd-Modal-container-2S_vM）。modal-open、modal-isOpen 这类页面状态不算。
+  // drawer 也常是页面骨架（daisyUI 的 drawer、drawer-content，Angular Material 的 mat-drawer-container），
+  // 只认浮在页面上的：它自己或外面有一层是 position:fixed。
+  const DIALOG_WORD = /^(?:modal|dialog|drawer)$/i;
+  const PREFIXED_DIALOG = /^[A-Z][a-z]*(?:Modal|Dialog|Drawer)$/;
+  const DIALOG_PART = /^(?:wrap|wrapper|container|root|mask|content|body|box|panel|paper|inner|main|layer|popup)$/i;
+  // 哈希：带数字，或第二个字符起有大写；isOpen、navBar 这样的驼峰词不算。
+  const HASH_PART = /^(?=.*\d|.[^A-Z]*[A-Z])(?![A-Za-z][a-z]+(?:[A-Z][a-z]+)+$)[A-Za-z0-9]{1,10}$/;
+  function dialogWord(token) {
+    const parts = token.split(/[-_]+/).filter(Boolean);
+    const at = parts.findIndex(part => DIALOG_WORD.test(part) || PREFIXED_DIALOG.test(part));
+    const next = parts[at + 1];
+    return at >= 0 && (next === undefined || DIALOG_PART.test(next) || HASH_PART.test(next)) ? parts[at] : '';
+  }
+  function dialogOf(node) {
+    const body = node?.ownerDocument?.body, View = node?.ownerDocument?.defaultView;
+    const floating = el => {
+      for (let current = el; current && current !== body; current = current.parentElement) if (View.getComputedStyle(current).position === 'fixed') return true;
+      return false;
+    };
+    for (let current = node?.parentElement; current && current !== body; current = current.parentElement) {
+      if (current.matches(DIALOGS)) return current;
+      const words = String(current.getAttribute('class') || '').split(/\s+/).map(dialogWord).filter(Boolean);
+      if (words.some(word => !/drawer$/i.test(word)) || (words.length && floating(current))) return current;
+    }
+    return null;
+  }
+  // 在对话框里、控件旁边按一下：控件外面最近的一层，不是输入框、按钮、链接这类会响应的元素。
+  function pressSpot(root, dialog) {
+    for (let current = root.parentElement; current && dialog.contains(current); current = current.parentElement) {
+      if (!current.matches('input, textarea, select, button, a[href], label, summary, [role="button"], [role="link"], [contenteditable="true"]')) return current;
+    }
+    return null;
+  }
   // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
   const NEXT_LEVEL_MS = 300;
   // 联想框（#404 51job）聚焦后多半不弹建议，要打了字才有：只等这么久，没有就先打字。
@@ -356,8 +396,66 @@
         disabled: node.getAttribute('aria-disabled') === 'true' || node.matches('.ant-select-item-option-disabled, .ant-cascader-menu-item-disabled, .is-disabled, .arco-select-option-disabled, .arco-cascader-list-item-disabled, .layui-disabled') || Boolean(node.disabled) };
     });
   }
-  function match(list, value, helpers) {
+  // #301 虚拟列表（antd 4/5 默认、Element Plus el-select-v2）只画出看得见的十来项，同名的一项可能还在屏外。
+  // 装着选项、能滚动的那一层，内容比画出来的选项和文字高出大半行以上，就算列表不全；里面画全了的（短的、不虚拟的长列表）不算。
+  // 量不出高度（没有排版，jsdom）时只看虚拟列表的类名；真浏览器里画出的选项都有高度，走不到这里。
+  // antd 不管长短都套着 rc-virtual-list，只有滚动条说明在虚拟滚动。
+  const VIRTUAL_MARKS = '[class*="virtual" i]:not(.rc-virtual-list):not(.rc-virtual-list-holder):not(.rc-virtual-list-holder-inner), .el-vl__wrapper, [class*="recycle-scroller" i]';
+  function partialList(list, popup, layer) {
+    const nodes = list.map(option => option.node).filter(node => node?.isConnected);
+    if (!nodes.length || !popup?.isConnected) return false;
+    const marked = [popup, layer].some(node => node?.isConnected && (node.matches(VIRTUAL_MARKS) || Boolean(node.querySelector(VIRTUAL_MARKS))));
+    const rows = nodes.map(node => node.offsetHeight).filter(height => height > 0).sort((a, b) => a - b);
+    if (!rows.length) return marked;
+    const limit = layer?.isConnected && layer.contains(popup) ? layer : popup;
+    const View = popup.ownerDocument.defaultView;
+    let box = nodes[0].parentElement;
+    while (box && box !== limit && !nodes.every(node => box.contains(node))) box = box.parentElement;
+    let scroller = null;
+    for (let node = limit.contains(box) ? box : null; node && !scroller; node = node === limit ? null : node.parentElement) {
+      const overflow = View.getComputedStyle(node).overflowY;
+      if (!overflow || overflow === 'visible') continue;
+      if (node.scrollHeight > node.clientHeight + 1) scroller = node;
+      // 先碰到原生滚动区（auto、scroll）而它自己不用滚：选项在里面画全了。外面 overflow:hidden 的一层多出来的
+      // 可能只是被推到外面的滚动条（Element UI 2 的 el-scrollbar 用负外边距藏原生滚动条，Windows 上多出 15px 左右）。
+      else if (/^(?:auto|scroll|overlay)$/.test(overflow)) return false;
+    }
+    if (!scroller) return false;
+    // 画出来的一段：选项，加上里面的文字（分组标题）和输入框。按排版位置量（offsetTop），
+    // 弹层打开动画从 scale(0) 起（antd 刚画出选项时就是），看到的大小是 0，排版位置不受影响。
+    // 滚动层里面各层自己的平移也算上：TanStack Virtual、vue-virtual-scroller 每项都在 top:0，靠 transform 排开。
+    // 滚动层外面的变换（打开动画）对每一项都一样，不用管。
+    const parts = [...nodes, ...Array.from(scroller.querySelectorAll('*')).filter(el => el.matches('input, textarea, select')
+      || (trim(el.textContent) && !Array.from(el.children).some(child => trim(child.textContent))))];
+    const shifts = new Map();
+    const shift = node => {
+      if (!node || node === scroller) return 0;
+      if (!shifts.has(node)) {
+        const matrix = /^matrix(3d)?\(([^)]*)\)/.exec(View.getComputedStyle(node).transform || '');
+        const values = matrix ? matrix[2].split(',').map(Number) : [];
+        shifts.set(node, (values[matrix?.[1] ? 13 : 5] || 0) + shift(node.parentElement));
+      }
+      return shifts.get(node);
+    };
+    const layoutTop = el => { let y = shift(el); for (let node = el; node; node = node.offsetParent) y += node.offsetTop || 0; return y; };
+    let top = Infinity, bottom = -Infinity;
+    for (const el of parts) {
+      if (!(el.offsetHeight > 0)) continue;
+      const y = layoutTop(el);
+      top = Math.min(top, y); bottom = Math.max(bottom, y + el.offsetHeight);
+    }
+    if (!(bottom > top)) return marked;
+    // 滚动层自己的上下内边距不算没画出来。没画出来的选项按整行留位置，比一行略少的空白（底部的加载图标位）也不算。
+    const css = View.getComputedStyle(scroller);
+    const padding = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
+    return scroller.scrollHeight - padding - (bottom - top) > Math.max(rows[Math.floor(rows.length / 2)] * 0.8, 20);
+  }
+  // partial：列表不全（见 partialList）。只认完全相同或归一化相同的一项，不靠「包含」去猜，几项都沾边也按没有匹配，好去搜索。
+  // 联想框的建议不走这里，见 sameOption。
+  function match(list, value, helpers, partial = false) {
+    const same = option => [option.value, option.text].some(text => trim(text) === trim(value) || helpers.normalizeText(text) === helpers.normalizeText(value));
     const index = helpers.findSelectOptionIndex(list, value);
+    if (partial && (index < 0 || !same(list[index]))) return { reason: 'no_option_match' };
     if (index < 0) {
       const possible = list.filter(option => !helpers.isPlaceholderOption(option)).filter(option => {
         const text = helpers.normalizeText(option.text), target = helpers.normalizeText(value);
@@ -792,8 +890,10 @@
         .some(text => h.helpers.normalizeText(text) === h.helpers.normalizeText(desired[level])));
       // 联想框打字后的建议里没有同名的一项：停住一阵再算没有（见 FREE_TEXT_STEADY_MS），不用等满。
       const typedSettled = since => info.freeText && Date.now() - since >= FREE_TEXT_STEADY_MS && Date.now() - typedAt >= FREE_TEXT_SETTLE_MS;
+      // 列表不全时只认同名的一项（见 partialList），没有就先搜索，搜完照样看列表全不全。
+      const partial = current => partialList(current, popup, ctx.popup);
       // 联想框只选同名的一项（见 sameOption）：网页先给出的建议里没有，就打字再找；打字后还没有，交宿主按文本框写。
-      const pick = items => info.freeText ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers);
+      const pick = items => info.freeText ? sameOption(items, desired[level], h.helpers) : match(items, desired[level], h.helpers, partial(items));
       let ready = await h.waitUntil(ctx, doc.documentElement, generic || typedAntd ? watchOptions : () => readOptions(level),
         list => (!loading() && list.length > 0 && (!generic || Date.now() - steadySince >= 300) && (!typedAntd || sameName(list) || typedSettled(steadySince)))
           || (eagerSearch && list.length === 0) || (typedAntd && noSuggestions(list)));
@@ -1052,17 +1152,26 @@
         // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
         // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
         // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
+        // 控件在对话框、抽屉里（见 DIALOGS）：不按 Esc，也不在页面上按（点外面就关的抽屉会当成点了外面），
+        // 只在对话框里、控件旁边按下、松开一次。
         // YUI 联想框没选成：失焦时它自己收起建议框；窗口不在前台时 blur() 不派发事件，就补一个 blur 给它。
         // 不按 Esc：会冒泡到外层对话框（#395）。
         if (info?.library === 'yui' && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) info.el.dispatchEvent(new info.el.ownerDocument.defaultView.FocusEvent('blur'));
         if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
-          info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-          const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
-          if (left.reason === 'verification_timeout' && layer.isConnected && h.visible(layer) && !h.stop(ctx)) {
+          const press = target => {
             for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
-              if (Event) doc.body.dispatchEvent(new Event(type, { bubbles: true }));
+              if (Event) target.dispatchEvent(new Event(type, { bubbles: true }));
             }
+          };
+          const dialog = dialogOf(info.root);
+          if (dialog) {
+            const spot = pressSpot(info.root, dialog);
+            if (spot) press(spot);
+          } else {
+            info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+            const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
+            if (left.reason === 'verification_timeout' && layer.isConnected && h.visible(layer) && !h.stop(ctx)) press(doc.body);
           }
         }
       }
