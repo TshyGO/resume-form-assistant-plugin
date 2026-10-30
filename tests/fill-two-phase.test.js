@@ -345,6 +345,13 @@ test("a field the user changes while the AI works is kept; fields with content f
   assert.equal(result.filledCount, 4);
   assert.equal(result.outcome, "partial");
   assert.equal(p.ui.status.textContent, "已填写 4 个字段。等 AI 时有改动的 1 项没有覆盖：毕业院校，请核对。");
+  // 漏斗对得上：匹配 5、填上 4，差的那项记作等 AI 时有改动；用户自己的改动不自动上报。
+  const report = (await p.report()).diagnosticsReport;
+  assert.equal(lineOf(report, "matched"), "5");
+  assert.equal(lineOf(report, "filled"), "4");
+  assert.equal(lineOf(report, "drop_reasons"), "changed_while_waiting=1");
+  assert.match(p.ui.diag.value, /丢弃原因：等 AI 时有改动 1/);
+  assert.equal(p.sent.filter((type) => type === "FEEDBACK_AUTO").length, 0);
 });
 
 test("declining the overwrite after the early fill keeps the early fields and writes nothing else", async (t) => {
