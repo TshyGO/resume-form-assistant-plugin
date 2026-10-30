@@ -93,6 +93,59 @@ test("several boxes under one title are named title - part only when every other
     [["姓名", "item"], ["", "placeholder"]]);
 });
 
+test("a box without its own part name is the question itself only beside a code box: area code and similar first boxes stay unnamed", () => {
+  const doc = load(`
+    <div class="item"><label class="item-label">手机号码</label><div class="phone"><input class="area" value="+86"><input class="num" placeholder="请输入手机号码"></div></div>
+    <div class="item"><label class="item-label">联系电话</label><div class="phone"><input class="area" placeholder="+86"><input class="num" placeholder="请输入手机号"></div></div>
+    <div class="item"><div class="item-label">证件</div><div><input class="kind"><input class="num" placeholder="证件号码"></div></div>
+    <div class="item"><label class="item-label">手机号</label><div><input class="num"><input class="code" placeholder="验证码"></div></div>`);
+  const result = scan(doc);
+  // 区号框被叫成「手机号码」，按手机号匹配就会把手机号填进区号框：不取，和以前一样只靠占位文字。
+  for (const index of [1, 2, 3]) {
+    const controls = result.controls.filter((control) => control.root.closest(`.item:nth-of-type(${index})`));
+    assert.deepEqual(controls.map((control) => [control.element.className, control.label, control.labelSource]), [["num", "", "placeholder"]], `item ${index}`);
+  }
+  assert.equal(result.skipped.noLabel, 3);
+  assert.deepEqual(result.controls.filter((control) => control.labelSource === "item-part").map((control) => control.label), ["手机号", "手机号 - 验证码"]);
+});
+
+test("cell-classed layouts without a header row keep their old labels: Element td > div.cell, label/value div grids, Vant cells", () => {
+  const td = (inner) => `<td class="el-table__cell"><div class="cell">${inner}</div></td>`;
+  const box = `<div class="el-input"><input class="el-input__inner"></div>`;
+  const element = scan(load(`<div class="el-table"><div class="el-table__header-wrapper"><table class="el-table__header"><thead><tr>
+      <th class="el-table__cell"><div class="cell">称谓</div></th><th class="el-table__cell"><div class="cell">姓名</div></th><th class="el-table__cell"><div class="cell">联系电话</div></th></tr></thead></table></div>
+    <div class="el-table__body-wrapper"><table class="el-table__body"><tbody>
+      <tr class="el-table__row">${td("父亲")}${td(box)}${td(box)}</tr><tr class="el-table__row">${td("母亲")}${td(box)}${td(box)}</tr></tbody></table></div></div>`));
+  // td 里的 div.cell 不当 div 表格的格子：同一行前面的「父亲」不是表头，最后一列照旧读不出题目。
+  assert.equal(element.controls.some((control) => control.labelSource === "table-header"), false);
+  assert.equal(element.skipped.noLabel, 2);
+
+  const grid = scan(load(`<div class="form-grid">
+    <div class="grid-row info"><div class="grid-cell">申请岗位</div><div class="grid-cell">护士</div><div class="grid-cell">工作地点</div><div class="grid-cell">上海</div></div>
+    <div class="grid-row"><div class="grid-cell">姓名</div><div class="grid-cell"><input></div><div class="grid-cell">电话</div><div class="grid-cell"><input></div></div>
+    <div class="grid-row"><div class="grid-cell">邮箱</div><div class="grid-cell"><input></div><div class="grid-cell">学校</div><div class="grid-cell"><input></div></div></div>`));
+  assert.deepEqual(grid.controls.map((control) => [control.label, control.labelSource]), [["姓名", "sibling"], ["电话", "sibling"], ["邮箱", "sibling"], ["学校", "sibling"]]);
+
+  const vant = scan(load(`<div class="page"><div class="van-cell-group van-cell-group--inset">
+      <div class="van-cell"><div class="van-cell__title">应聘岗位</div><div class="van-cell__value">护士</div></div>
+      <div class="van-cell"><div class="van-cell__title">工作地点</div><div class="van-cell__value">上海</div></div></div>
+    <div class="van-cell-group">
+      <div class="van-cell van-field"><div class="van-cell__value van-field__value"><div class="van-field__body"><input class="van-field__control" placeholder="请输入姓名"></div></div></div>
+      <div class="van-cell van-field"><div class="van-cell__value van-field__value"><div class="van-field__body"><input class="van-field__control" placeholder="请输入手机号"></div></div></div></div></div>`));
+  // 上面一组只读信息行既不是表头，也不是这两个框的题目。
+  assert.deepEqual(vant.controls.map((control) => [control.label, control.labelSource]), [["", "placeholder"], ["", "placeholder"]]);
+});
+
+test("entries separated by a caption line stay one numbered list", () => {
+  const entry = `<div class="sc-entry"><div class="sc-item"><div class="sc-lbl">学校</div><input></div><div class="sc-item"><div class="sc-lbl">专业</div><input></div></div>`;
+  for (const between of [`<div class="sc-sub">第2段</div>`, `<div class="sc-note">（如有第二学历请继续填写）</div>`]) {
+    const result = scan(load(`<div class="sc-form"><div class="sc-item"><div class="sc-lbl">姓名</div><input></div><div class="sc-item"><div class="sc-lbl">邮箱</div><input></div>
+      <div class="sc-sec"><div class="sc-h">教育经历</div>${entry}${between}${entry}</div></div>`));
+    assert.deepEqual(result.controls.slice(2).map((control) => [control.label, control.group, control.repeatIndex]),
+      [["学校", "教育经历 1", 1], ["专业", "教育经历 1", 1], ["学校", "教育经历 2", 2], ["专业", "教育经历 2", 2]], between);
+  }
+});
+
 test("label sources fold the new kinds into the reported vocabulary, and picker=jiandaoyun survives the allowlist", () => {
   assert.deepEqual(core.labelSources({ sources: { item: 1, "item-part": 2, "table-header": 3 } }), [["item", 3], ["table", 3]]);
   const report = core.fillReport({ fieldCount: 1, unfilledControls: [{ label: "出生年月", reasonCode: "no_option_match", observed: { opened: "calendar" },
@@ -102,9 +155,12 @@ test("label sources fold the new kinds into the reported vocabulary, and picker=
 
 // 简道云日期框（jdy-design 的 x-datetime，外面是表单的 .fx-form-datetime）的替身，按真页面上观察到的行为写：
 // - 点框打开日历（挂在 body 下的 .x-popup.x-datetime-content）。框里打字按格式逐段解析（缺的段取最小值），
-//   日历跳到打的日子；超出允许范围的日子是 disabled，打了日历不跳。打字不会把值交给表单。
-// - 点日子 / 月份 / 年份格子：交给表单、收起。在框外按下鼠标：收起，把框里显示的那个日期交给表单。
-// - 框失焦：框里改成按格式显示，日历不收起，表单里还是原来的值。框有焦点时点框不收起，失焦后再点框才收起。
+//   日历跳到打的日子；打字不会把值交给表单。框里是空的或没有数字时读成 1901-01-01。
+//   超出允许范围的日子是 disabled、不算选中；真组件会不会也指向它没验证过，替身按最坏的情况：指向它，收起时交出去。
+// - 点日子 / 月份 / 年份格子：交给表单、收起。在框外按下鼠标：收起，把日历指着的日子交给表单。
+// - 框失焦：框里改成按格式显示，日历不收起，表单里还是原来的值。框有焦点时点框不收起，失焦后再点框才收起，
+//   也把日历指着的日子交给表单。
+// - 点框里的清除按钮：表单里清空，日历收起；框里的字等失焦才清掉。
 // - Esc：收起但不交给表单。
 const TODAY = { y: 2026, m: 10, d: 31 };
 function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "" } = {}) {
@@ -123,7 +179,7 @@ function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "" } = 
   const daysIn = (y, m) => new Date(y, m, 0).getDate();
   const parse = (text) => {
     const groups = String(text).replace(/\D+/g, " ").trim().split(" ").filter(Boolean);
-    if (!groups.length) return null;
+    if (!groups.length) return { y: 1901, m: 1, d: 1 };
     const clamp = (raw, lo, hi) => { const n = Number(raw || 0); return n < lo || n > hi ? lo : n; };
     const y = groups[0].length === 4 ? Number(groups[0]) : 1000;
     const m = format === "yyyy" ? 1 : clamp(groups[1], 1, 12);
@@ -203,9 +259,14 @@ function jdyDateBox({ format = "yyyy-MM-dd", min = "", max = "", value = "" } = 
   });
   input.addEventListener("input", () => {
     if (!state.open) open();
-    const date = parse(input.value);
-    if (date && allowed(date)) state.pending = date;
+    state.pending = parse(input.value);
     render();
+  });
+  doc.querySelector(".clear-icon").addEventListener("click", (event) => {
+    event.stopPropagation();
+    commit(null);
+    state.open = false;
+    if (popup) popup.hidden = true;
   });
   input.addEventListener("blur", () => { input.value = show(state.pending); });
   input.addEventListener("keydown", (event) => {
@@ -260,6 +321,7 @@ test("a year box takes a bare year; a month-only resume date in a day calendar p
 });
 
 test("a date the form does not allow fails, keeps the old value and closes the calendar it opened, without a key", async () => {
+  // 收起日历会把日历指着的日子交给表单：先写回原来的字，日历指回原来的日子再收。
   const h = jdyDateBox({ min: "2000-01-01", value: "2005-05-05" });
   const result = await h.operate("1990-01-01");
   assert.equal(result.ok, false);
@@ -269,6 +331,16 @@ test("a date the form does not allow fails, keeps the old value and closes the c
   assert.equal(h.popupOpen(), false);
   assert.deepEqual(h.state.keys, []);
   assert.deepEqual(h.state.outside, []);
+
+  // 原来是空的：写回空字会被读成 1901-01-01，改点清除按钮，表单里还是空的，框里的字也清掉。
+  const empty = jdyDateBox({ min: "2000-01-01" });
+  const failed = await empty.operate("1990-01-01");
+  assert.equal(failed.reason, "no_option_match");
+  assert.equal(empty.state.model, "");
+  assert.equal(empty.input.value, "");
+  assert.equal(empty.popupOpen(), false);
+  assert.deepEqual(empty.state.keys, []);
+  assert.deepEqual(empty.state.outside, []);
 });
 
 test("impossible or too coarse dates fail before the calendar is touched; date-time boxes are left alone", async () => {

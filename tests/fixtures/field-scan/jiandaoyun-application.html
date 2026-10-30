@@ -11,6 +11,8 @@
   - 单选 .x-radio-group：选项是 div，没有 input；
   - 子表单 .fx-subform：表头 .subform-head > .subform-row > .subform-cell > .subform-title，
     每条明细 .fx-subform-row > .subform-cell > .fx-sub-field，格子里没有题目，行尾是 .row-head 行号。
+  - 分割线 .fx-form-separator：题目在 .field-name 或 .sep-label，下面可以有一段说明 .fx-sub-html。
+    没写题目的子表单前面是【工作经历】分割线（带长说明），再往前是下面没有题的「规培经历」分割线。
   地址的「详细地址」框（.address-detail）按简道云前端代码里的类名和占位文字写。只有虚构的文字，没有任何值。
 -->
 <div class="form-wrapper">
@@ -61,7 +63,9 @@
         <div class="subform-resize-line"></div>
       </div><div class="btn-pane"><button type="button" class="x-button x-button-css-var size-normal style-text has-icon btn-add"><span>添加</span></button></div></div></div></div>
 
-      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1009"><div class="field-label"><div class="field-name">【工作经历】</div></div><div class="field-component"><div class="fx-form-separator"><div class="sep-line thin"></div></div></div></div>
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1011"><div class="field-component"><div class="fx-form-separator"><div class="sep-line style3"><div class="sep-bg-wrapper"><div class="sep-bg"></div></div><div class="sep-label"><span title="规培经历">规培经历</span></div></div><div class="fx-sub-html"><b>应聘医疗岗位必填</b><div>其他岗位无需填写</div></div></div></div></div>
+
+      <div class="fx-field x-grid-col-12" data-widgetname="_widget_1009"><div class="field-label"><div class="field-name">【工作经历】</div></div><div class="field-component"><div class="fx-form-separator"><div class="sep-line thin"></div><div class="fx-sub-html"><p><span>若有实习、规培、工作经历，请在此填写，从最近一段经历开始按时间倒序填写，可添加多条</span><br></p></div></div></div></div>
 
       <div class="fx-field x-grid-col-12" data-widgetname="_widget_1010"><div class="field-label"><div class="field-name field-name-bigger"></div></div><div class="field-component"><div class="fx-subform"><div class="subform-table-wrapper">
         <div class="subform-head"><div class="subform-row">

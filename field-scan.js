@@ -681,9 +681,12 @@
   }
 
   // #301 div 画的表格（简道云子表单）：格子按这一行里同类格子的位置，对上表头那一行同一列。
-  // 只认类名以 cell 结尾的格子；表头那一行在同一个表格容器里（往上最多 4 层）、排在这一行前面、
-  // 和这一行长得不一样（不是另一条明细）、同类格子一样多、里面没有控件。对不上就不取，免得读错列。
+  // 只认类名以 cell 结尾、不在 td / th 里的格子（Element、vxe 这类表格 td 里的 div.cell 归 tableLabel）。
+  // 表头那一行在同一个表格容器里（往上最多 4 层）、它或它外层带 head / header 类名（简道云 .subform-head）、
+  // 排在这一行前面、和这一行长得不一样（不是另一条明细）、同类格子一样多、里面没有控件。
+  // 对不上就不取，免得读错列：题目格和填写格交替的 div 网格、Vant 的 cell 列表都没有表头。
   const CELL_TOKEN = /(?:^|[-_])cell$/i;
+  const HEAD_TOKEN = /(?:^|[-_])(?:head|header|thead)(?:$|[-_])/i;
   function gridLabel(control, item, ctx) {
     let cell = null;
     let key = "";
@@ -694,7 +697,7 @@
         break;
       }
     }
-    if (!cell || !(cell.contains(item) || item.contains(cell))) return null;
+    if (!cell || cell.closest("td, th") || !(cell.contains(item) || item.contains(cell))) return null;
     const row = cell.parentElement;
     const cellsOf = (node) => Array.from(node.children).filter((child) => classTokens(child).includes(key));
     const cells = row && attr(row, "class") ? cellsOf(row) : [];
@@ -706,7 +709,13 @@
         const parent = other.parentElement;
         if (parent && parent !== row && !parent.contains(row) && isBefore(parent, row)) rows.add(parent);
       }
-      const header = Array.from(rows).filter((candidate) => !sameShape(candidate, row)
+      const headed = (candidate) => {
+        for (let node = candidate; node && node !== scope; node = node.parentElement) {
+          if (classTokens(node).some((token) => HEAD_TOKEN.test(token))) return true;
+        }
+        return false;
+      };
+      const header = Array.from(rows).filter((candidate) => !sameShape(candidate, row) && headed(candidate)
         && cellsOf(candidate).length === cells.length && !containsBoundary(candidate, ctx)).pop();
       if (!header) continue;
       const head = cellsOf(header)[column];
@@ -719,10 +728,12 @@
 
   // #301 一题多框（简道云手机号带短信验证码、分开的省 / 市 / 区）：控件自己的表单项里没有题目时，往上（最多 4 层）
   // 找装着这几个框的题目容器：只装 2–4 个文字框、没有别的控件，题目是排在所有框前面的 label / title 类元素，
-  // 框和框之间没有别的题目。每个框按 aria-label 或占位文字取子项，叫「题目 - 子项」；
-  // 只有排第一的框可以没有子项，它就是这道题本身。子项重复、或别的框没有子项，就不取。
+  // 框和框之间没有别的题目。每个框按 aria-label 或占位文字取子项，叫「题目 - 子项」。子项重复、或别的框没有子项，就不取。
+  // 排第一的框没有子项时，只在别的框都是验证码时把它当成这道题本身（手机号 + 短信验证码）；
+  // 区号框（+86）、证件类型旁的号码框这类，第一个框不是题目本身，叫成整道题会把手机号填进区号框。
   const MAX_PART_BOXES = 4;
   const MAX_PART_CHARS = 20;
+  const CODE_PART = /验证码|校验码|动态码|captcha|verif|sms|\botp\b/i;
   function isTextBox(el) {
     if (el.tagName === "TEXTAREA") return true;
     const type = inputType(el);
@@ -756,12 +767,17 @@
       if (!title) continue;
       // 题目在某个框自己的表单项里：那是这个框单独的题目，别的框是另一道题（只有占位文字的下一行）。
       if (boxes.some((box) => findItem(box, ctx).contains(title.labelEl))) return null;
+      // 题目那一块里还有题目以外的字：是「应聘岗位 护士」这类只读的信息行（Vant 的 cell），不是这几个框的题目。
+      let block = title.labelEl;
+      while (block.parentElement && block.parentElement !== scope) block = block.parentElement;
+      if (segments.some((segment) => block.contains(segment.node) && !title.labelEl.contains(segment.node))) return null;
       // 框和框之间又出现题目：是几道题挨在一起，不是一题多框。
       const last = boxes[boxes.length - 1];
       if (segments.some((segment) => isBefore(boxes[0], segment.node) && isBefore(segment.node, last) && labelLikeAncestor(segment.el, scope))) return null;
       const names = boxes.map(partName);
       const named = names.filter(Boolean);
       if (new Set(named).size !== named.length || names.slice(1).some((name) => !name)) return null;
+      if (!names[0] && !names.slice(1).every((name) => CODE_PART.test(name))) return null;
       const name = names[boxes.indexOf(control.element)];
       return { text: name ? `${title.text} - ${name}` : title.text, source: "item-part", labelEl: title.labelEl, question: scope };
     }
@@ -862,17 +878,22 @@
       if (!hasForeignControl(node, own, ctx)) continue;
       const run = [];
       for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
-        if (!ctx.isVisible(prev)) continue;
-        // 已经找到紧挨着的几行字，又碰到装着控件的：再往前是上一个区块的题（#301 简道云【工作经历】前面是【个人基本信息】的题）。
-        if (run.length && containsBoundary(prev, ctx)) break;
         // 已经当了别的字段题目的（比如表头那一行）不是区块标题。
-        if (claimed.has(prev) || Array.from(claimed).some((el) => el && prev.contains(el))) continue;
+        if (!ctx.isVisible(prev) || claimed.has(prev) || Array.from(claimed).some((el) => el && prev.contains(el))) continue;
         if (containsBoundary(prev, ctx)) {
           // 前面一条结构相同的重复条目：跳过它，接着找它前面的标题。
           if (sameShape(prev, node)) continue;
           break;
         }
         run.push(prev);
+        // 带字的分割线是这一块的开头，再往前的字属于上一块。只取它的题目（简道云的 .field-name / .sep-label），
+        // 不带下面的说明（#301 简道云没写题目的子表单前面是【工作经历】分割线，带一段长说明；
+        // 再往前是下面没有题的「规培经历」分割线，原来取最上面一行会归到「规培经历」）。
+        if (hasDivider(prev)) {
+          const title = [prev, ...prev.querySelectorAll("*")].find((el) => isLabelLike(el) && headingText(el, ctx, control));
+          const text = headingText(title || prev, ctx, control);
+          if (text) return { text, root: node.parentElement };
+        }
       }
       for (const candidate of run.reverse()) {
         const text = headingText(candidate, ctx, control);
@@ -885,6 +906,12 @@
   function sameShape(a, b) {
     const cls = attr(a, "class");
     return Boolean(cls) && a.tagName === b.tagName && cls === attr(b, "class");
+  }
+
+  // 分割线：<hr>，或类名以 separator / divider 结尾（简道云 .fx-form-separator、Element / antd 的 divider）。
+  const DIVIDER_TOKEN = /(?:^|[-_])(?:separator|divider)$/i;
+  function hasDivider(el) {
+    return [el, ...el.querySelectorAll("*")].some((node) => node.tagName === "HR" || classTokens(node).some((token) => DIVIDER_TOKEN.test(token)));
   }
 
   // 区块里有「添加」「新增」这类按钮：能加多条，是经历类列表。

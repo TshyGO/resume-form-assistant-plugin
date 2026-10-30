@@ -477,10 +477,11 @@
     }
 
     // #301 简道云日期框（.fx-form-datetime .x-datetime）：框里能打字，日历跟着跳到打的日子；可它要等日历收起
-    // （点日子、点框外面）才把值交给表单。只打字再失焦，框里显示着日期，表单里却还是空的（#399）。
+    // （点日子、点框外面）才把日历指着的日子交给表单。只打字再失焦（#399），日历一直开着，表单里要等用户下次点别处才有值，
+    // 框里又改成了组件自己的格式（出生年月 1999-05-12 → 1999-05），按字面核对就报 value_reverted。
     // 做法：点开日历，看它选日、选月还是选年（带时间的不处理）；按资料的精度打 YYYY-MM-DD / YYYY-MM / YYYY，
     // 日历的年、月和选中的格子对上了，再点那一格：日历自己收起并提交。
-    // 选不成时让框失焦，再点一下框把自己点开的日历收起（框还有焦点时点它不会收起），提交的仍是原来的值。
+    // 选不成时收起自己点开的日历，表单里留原来的值，见 jdyRestore。
     // 不按键：Esc 收起日历但不提交，框里留着打的字，表单里没有。
     function jdyDateParts(raw) {
       const text = String(raw ?? '').trim();
@@ -511,6 +512,7 @@
       if (!want) return { reason: 'invalid_date' };
       const popups = () => Array.from(doc.querySelectorAll('.x-popup.x-datetime-content')).filter(visible);
       const before = new Set(popups());
+      const original = ctx.el.value;
       const reason = click(ctx.el, ctx); if (reason) return { reason };
       const opened = await waitUntil(ctx, doc.documentElement, () => {
         const added = popups().filter(node => !before.has(node));
@@ -520,12 +522,28 @@
       const popup = opened.value;
       ctx.observed = { library: 'jiandaoyun', popupRole: 'calendar' };
       const picked = await jdyPick(ctx, want, popup).catch(() => ({ reason: 'operation_failed' }));
-      if (picked.reason && !stop(ctx) && popup.isConnected && visible(popup)) {
+      if (picked.reason && !stop(ctx) && popup.isConnected && visible(popup)) await jdyRestore(ctx, root, popup, original);
+      return picked;
+    }
+    // 选不成时收起自己点开的日历，表单里留原来的值。框失焦再点框能收起日历，但会把日历指着的日子交给表单，
+    // 打过字就是打的那天（#301 评审在真组件上看到）。所以先把日历拨回原来的值再收：框里原来有字就写回去；
+    // 原来是空的就点框里的清除按钮，真组件上它收起日历、表单里还是空的（写回空字会被读成 1901-01-01）。
+    // 没有清除按钮就只能照旧收起。
+    async function jdyRestore(ctx, root, popup, original) {
+      const doc = ctx.el.ownerDocument;
+      const gone = () => !popup.isConnected || !visible(popup);
+      if (ctx.el.value !== original) {
+        const clear = !original && root.querySelector('.clear-icon');
+        if (original) { write(ctx.el, original, ctx); input(ctx.el); }
+        else if (clear && !click(clear, ctx)) await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
+      }
+      if (!gone() && !stop(ctx)) {
         blur(ctx.el);
         await delay(0);
-        if (!stop(ctx) && !click(root, ctx)) await waitUntil(ctx, doc.documentElement, () => !popup.isConnected || !visible(popup), Boolean, 600);
+        if (!stop(ctx) && !click(root, ctx)) await waitUntil(ctx, doc.documentElement, gone, Boolean, 600);
       }
-      return picked;
+      // 点清除按钮时框还有焦点，框里的字要等失焦才清掉。
+      if (!stop(ctx) && doc.activeElement === ctx.el) blur(ctx.el);
     }
     async function jdyPick(ctx, want, popup) {
       const mode = popup.querySelector('.date-time-picker, .time-body, .week-cell') ? ''
