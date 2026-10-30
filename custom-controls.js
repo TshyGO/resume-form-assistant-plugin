@@ -905,7 +905,7 @@
   }
   // #377 YUI 联想框（见 yuiBox）：聚焦、点击都不打开，只在 keyup 后按框里的字查询（SF 停 0.2 秒再查），最多列 10 条；
   // 点 li 才算选中，选中后框里换成这一项、建议框收起（SF 还把 aria-expanded 改回 false）。
-  // 只认和要填的字相同的一项，没有就报没有匹配的选项；没点成时由 run 收尾恢复原来的字、按 Esc 收起建议框。
+  // 只认和要填的字相同的一项，没有就报没有匹配的选项；没点成时由 run 收尾恢复原来的字、失焦收起建议框。
   // 框里已经是要填的字也照样打字再选一次：开了 forceSelection 的，这次没选过就失焦会清空框里的字。
   async function pickYui(ctx, wanted, h, info, state) {
     const el = info.el, doc = el.ownerDocument, View = doc.defaultView;
@@ -958,7 +958,7 @@
   // 框上没有任何下拉标记；打字只是搜索，失焦时没从建议里选就还原。保持焦点、像打字一样输入，等打字后新出现、
   // 贴着这个框的一块（认法同通用下拉，见 genericPopupFrom；校验提示不算），只点和要填的字相同的一项。
   // 点了返回 accepted、没有这样的一块返回 typed（有的框要有按键才收下），宿主都随后失焦、按文本框核对。
-  // 有建议框但没有这一项报没有匹配的选项：恢复打字前的字，按 Esc、失焦收起建议框。
+  // 有建议框但没有这一项报没有匹配的选项：恢复打字前的字，失焦收起建议框。不按 Esc：会冒泡到外层对话框（#395）。
   async function suggest(ctx, raw, h) {
     const el = ctx.el, doc = el?.ownerDocument, View = doc?.defaultView;
     const wanted = trim(raw);
@@ -1016,7 +1016,6 @@
       watch.disconnect();
       if (undo && !h.stop(ctx)) {
         if (el.isConnected && String(el.value ?? '') === wanted && before !== wanted) { h.write(el, before); h.input(el); }
-        el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
         h.blur(el);
         const gone = () => !layer?.isConnected || !h.visible(layer);
         if (layer && !gone()) await h.waitUntil(ctx, doc.documentElement, gone, Boolean, ESC_LEAVE_MS);
@@ -1041,10 +1040,13 @@
         const info = state.info;
         if (info?.root?.contains(info.el.ownerDocument.activeElement) && !h.stop(ctx)) h.blur(info.el);
         // 通用路径失败时收起自己点开的弹层，免得挡住、干扰后面的字段（北森的弹层不关会一直开着）；
-        // 两级选择停在第一级时、YUI 联想框没选成时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
+        // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
         // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
         // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
-        if ((['generic', 'yui'].includes(info?.library) || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
+        // YUI 联想框没选成：失焦时它自己收起建议框；窗口不在前台时 blur() 不派发事件，就补一个 blur 给它。
+        // 不按 Esc：会冒泡到外层对话框（#395）。
+        if (info?.library === 'yui' && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) info.el.dispatchEvent(new info.el.ownerDocument.defaultView.FocusEvent('blur'));
+        if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
           info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
           const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);

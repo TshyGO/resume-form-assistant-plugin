@@ -246,12 +246,16 @@ test("hotjob school box: a validation tip shown while typing is not taken for th
 
 test("hotjob school box: suggestions without the same name are not clicked, the box is restored and the reason says so", async () => {
   const h = hotjob({ schools: ["北京大学医学部", "北京大学深圳研究生院"] });
+  // 表单在一个按 Esc 就关的对话框里（AntD Modal）：收起建议框不能按 Esc（#395）。
+  const escapes = [];
+  h.doc.addEventListener("keydown", (event) => { if (event.key === "Escape") escapes.push(event.target); });
   const result = await h.api.operate(h.target, "北京大学");
   assert.equal(result.reason, "no_option_match", JSON.stringify(result));
   assert.deepEqual(h.state.picks, []);
   assert.equal(h.input.value, "");
   assert.equal(h.state.dropdown, null, "the suggestions are closed");
   assert.notEqual(h.doc.activeElement, h.input);
+  assert.equal(escapes.length, 0, "no Esc that a dialog around the form would close on");
 });
 
 test("hotjob school box: with only a validation tip and no suggestions the field still reads as not written", async () => {
@@ -345,11 +349,14 @@ test("SuccessFactors YUI autocomplete: the name is typed with key events, then t
 
 test("SuccessFactors YUI autocomplete: without the same name nothing is picked and the box is put back", async () => {
   const h = yui({ countries: ["Germany", "Georgia", "Ghana"] });
+  const escapes = [];
+  h.doc.addEventListener("keydown", (event) => { if (event.key === "Escape") escapes.push(event.target); });
   const result = await h.api.operate(h.target, "Gernsey");
   assert.equal(result.reason, "no_option_match", JSON.stringify(result));
   assert.deepEqual(h.state.picks, [], "the highlighted first item is not taken by Tab or Enter");
   assert.equal(h.input.value, "");
   assert.equal(h.content.style.display, "none");
+  assert.equal(escapes.length, 0);
 });
 
 test("SuccessFactors YUI autocomplete already showing the wanted value: it is picked again, so leaving the box does not clear it", async () => {
