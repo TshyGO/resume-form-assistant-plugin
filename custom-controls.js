@@ -66,6 +66,36 @@
   const POPUP_LEAVE_MS = 1000;
   // 失败收尾按了 Esc 以后等弹层退场的上限，过了还在才在页面空白处按一下。
   const ESC_LEAVE_MS = 600;
+  // #301 对话框、抽屉、模态层。控件在这里面时失败收尾不按 Esc：它会冒泡到对话框（AntD Modal 在外层的 keydown 上关，
+  // Element 在 document、window 上听 Esc），对话框一关，里面没保存的内容就没了。
+  const DIALOGS = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], .ant-modal-wrap, .ant-modal, .ant-drawer, '
+    + '.el-dialog__wrapper, .el-dialog, .el-overlay, .el-drawer__wrapper, .el-drawer, .el-message-box__wrapper, .arco-modal-wrapper, .arco-modal, '
+    + '.arco-drawer-wrapper, .arco-drawer, .layui-layer, .ivu-modal-wrap, .ivu-drawer-wrap, .modal';
+  // 自研组件的对话框按类名认：有一段是 modal、dialog、drawer（也认 MuiDialog 这样带前缀的），后面没有了，
+  // 或者紧跟着 wrap、body 这类结构词、CSS Modules 的哈希（sd-Modal-container-2S_vM）。modal-open 这类页面状态不算。
+  const DIALOG_WORD = /^(?:modal|dialog|drawer)$/i;
+  const PREFIXED_DIALOG = /^[A-Z][a-z]*(?:Modal|Dialog|Drawer)$/;
+  const DIALOG_PART = /^(?:wrap|wrapper|container|root|mask|content|body|box|panel|paper|inner|main|layer|popup)$/i;
+  const HASH_PART = /^(?=.*\d|.[^A-Z]*[A-Z])[A-Za-z0-9]{1,10}$/;
+  function dialogToken(token) {
+    const parts = token.split(/[-_]+/).filter(Boolean);
+    const at = parts.findIndex(part => DIALOG_WORD.test(part) || PREFIXED_DIALOG.test(part));
+    const next = parts[at + 1];
+    return at >= 0 && (next === undefined || DIALOG_PART.test(next) || HASH_PART.test(next));
+  }
+  function dialogOf(node) {
+    for (let current = node?.parentElement; current && current !== current.ownerDocument.body; current = current.parentElement) {
+      if (current.matches(DIALOGS) || String(current.getAttribute('class') || '').split(/\s+/).some(dialogToken)) return current;
+    }
+    return null;
+  }
+  // 在对话框里、控件旁边按一下：控件外面最近的一层，不是输入框、按钮、链接这类会响应的元素。
+  function pressSpot(root, dialog) {
+    for (let current = root.parentElement; current && dialog.contains(current); current = current.parentElement) {
+      if (!current.matches('input, textarea, select, button, a[href], label, summary, [role="button"], [role="link"], [contenteditable="true"]')) return current;
+    }
+    return null;
+  }
   // 点选后冒出的下一级选项要一直在、组件也一直没显示所选，满这么久才算两级选择。
   const NEXT_LEVEL_MS = 300;
   function describe(target) {
@@ -875,14 +905,23 @@
         // 两级选择停在第一级时也收起。先在控件自己的输入框上按 Esc（#301 Moka 的弹层只认这里的 Esc，失焦后也认）。
         // Esc 后弹层可能还要淡出一会儿（Moka 约 500ms 才移除），先等它走，最多约 0.6 秒；
         // 过了还开着就在页面空白处按下、松开，不派发 click：网页可能把点了外面当成要保存。关不掉就让它开着。只派发事件，不改页面状态。
+        // 控件在对话框、抽屉里（见 DIALOGS）：不按 Esc，也不在页面上按（点外面就关的抽屉会当成点了外面），
+        // 只在对话框里、控件旁边按下、松开一次。
         if ((info?.library === 'generic' || outcome.reason === 'cascade_unsupported') && ctx.popup?.isConnected && h.visible(ctx.popup) && !h.stop(ctx)) {
           const doc = info.el.ownerDocument, View = doc.defaultView, layer = ctx.popup;
-          info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-          const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
-          if (left.reason === 'verification_timeout' && layer.isConnected && h.visible(layer) && !h.stop(ctx)) {
+          const press = target => {
             for (const [type, Event] of [['pointerdown', View.PointerEvent], ['mousedown', View.MouseEvent], ['pointerup', View.PointerEvent], ['mouseup', View.MouseEvent]]) {
-              if (Event) doc.body.dispatchEvent(new Event(type, { bubbles: true }));
+              if (Event) target.dispatchEvent(new Event(type, { bubbles: true }));
             }
+          };
+          const dialog = dialogOf(info.root);
+          if (dialog) {
+            const spot = pressSpot(info.root, dialog);
+            if (spot) press(spot);
+          } else {
+            info.el.dispatchEvent(new View.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+            const left = await h.waitUntil(ctx, doc.documentElement, () => !layer.isConnected || !h.visible(layer), Boolean, ESC_LEAVE_MS);
+            if (left.reason === 'verification_timeout' && layer.isConnected && h.visible(layer) && !h.stop(ctx)) press(doc.body);
           }
         }
       }
