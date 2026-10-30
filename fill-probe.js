@@ -20,9 +20,12 @@
   const MAX_EDIT_TEXT = 40;
   const SKIP_TEXT_PARENTS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE", "TEXTAREA"]);
   const MAX_LISTED = 10;
+  // yui：YUI 2 和 SuccessFactors 改过的联想框（yui-ac-input、yui-ac）；只认 yui-ac，页面上常有的 yui-skin-sam、yui-g 不算。
+  // ui5：SAP UI5（sapM…、sapUi…）和 UI5 Web Components（ui5-…）。
   const LIBRARIES = [
     ["antd", /^ant-/], ["element", /^el-/], ["arco", /^arco-/], ["iview", /^ivu-/],
-    ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/], ["mui", /^Mui/]
+    ["semi", /^semi-/], ["vant", /^van-/], ["layui", /^layui-/], ["mui", /^Mui/],
+    ["yui", /^yui-ac(?:-|$)/], ["ui5", /^(?:sapM|sapUi|ui5-)/]
   ];
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const MAX_ANCESTORS = 4;

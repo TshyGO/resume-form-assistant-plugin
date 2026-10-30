@@ -56,7 +56,7 @@
   const ERROR_CODES = ["none", "cancelled", "network", "format", "input_too_large", "no_context", "bad_response",
     "not_configured", "credential_unavailable", "auth", "rate_limited", "timeout", "http", "response_too_large",
     "secret_in_prompt", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable",
-    "secret_only", "no_resume_fields"];
+    "secret_only", "no_resume_fields", "scan_exception"];
   // A failure of the AI service or the desktop link, not of matching this page.
   const SERVICE_CODES = new Set(["network", "format", "bad_response", "not_configured", "credential_unavailable", "auth",
     "rate_limited", "http", "response_too_large", "not_installed", "not_paired", "never_paired", "incompatible", "unavailable"]);
@@ -64,8 +64,9 @@
   // the user is shown the fix at once, so they are not a failed request and never reported on their own.
   const SETUP_CODES = new Set(["not_installed", "not_paired", "never_paired", "not_configured"]);
   // Scan drops (#228) sit between `invisible` and `out_of_scope`: what field-scan.js skipped among visible inputs.
+  // `scan_error` (#408): controls whose title or section could not be read, skipped one by one.
   const DROPS = ["type_hidden", "non_fillable", "disabled", "invisible", "popup_internal", "grouped", "page_chrome",
-    "site_search", "outside_form", "no_label", "out_of_scope", "secret",
+    "site_search", "outside_form", "no_label", "scan_error", "out_of_scope", "secret",
     "no_resume_mapping", "ai_unmatched", "no_result", "not_sent", "not_written", "unconfirmed", "unsynced"];
   // Where each scanned field's title came from, and why a field was not offered for 我的信息 (#228).
   const LABEL_SOURCES = ["explicit", "item", "table", "sibling", "placeholder"];
@@ -82,7 +83,7 @@
     + "baoming onboard onboarding entry m h5 mobile pc web wap app wx wechat mp en zh cn us api s p c u hr ats cms open public "
     + "static html htm shtml php jsp aspx asp do action").split(" "));
   // `generic`: custom selects the fill handled on its generic path (北森), which carry no library class.
-  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "generic", "other"];
+  const LIBRARY_NAMES = ["antd", "element", "arco", "iview", "semi", "vant", "layui", "mui", "yui", "ui5", "generic", "other"];
   // How a fill was started (#301): the side panel's 一键填写, 深度分析本页, a 本站配方 run, AI 辅助新增条目.
   const ENTRIES = ["panel", "deep", "recipe", "assist", "other"];
   // What an unfilled select's popup showed: a list (by role) and whether it had any option, a calendar, or nothing opened at all.
@@ -131,7 +132,7 @@
   const JOB_KEYS = /^job_/;
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
-    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui|jiandaoyun|yui|ui5)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
     + `|inputmode=(?:${INPUT_MODES.join("|")})|after=(?:${AFTER.join("|")})|overlay=(?:${OVERLAYS.join("|")})`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
@@ -232,7 +233,8 @@
     const counts = {
       type_hidden: n(s?.typeHidden), non_fillable: n(s?.nonFillable), disabled: n(s?.disabled), invisible: n(s?.invisible),
       popup_internal: n(s?.popup), grouped: n(s?.grouped), page_chrome: n(s?.pageChrome), site_search: n(s?.siteSearch),
-      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), out_of_scope: n(s?.outOfScope), secret, no_resume_mapping: noMapping,
+      outside_form: n(s?.outsideForm), no_label: n(s?.noLabel), scan_error: n(s?.scanError), out_of_scope: n(s?.outOfScope),
+      secret, no_resume_mapping: noMapping,
       ai_unmatched: failed ? 0 : sent, no_result: d ? (failed ? sent : 0) : rest, not_sent: 0,
       not_written: n(input.unfilledCount), unconfirmed: n(input.unconfirmedCount), unsynced: n(input.unsyncedCount)
     };
@@ -245,7 +247,7 @@
   function labelSources(stats) {
     const sources = stats?.sources || {};
     const n = key => positive(sources[key]);
-    const counts = { explicit: n("explicit"), item: n("item") + n("item-text"), table: n("table") + n("table-header"),
+    const counts = { explicit: n("explicit"), item: n("item") + n("item-text") + n("item-part"), table: n("table") + n("table-header"),
       sibling: n("sibling"), placeholder: n("placeholder") };
     return LABEL_SOURCES.filter(key => counts[key] > 0).map(key => [key, counts[key]]);
   }
