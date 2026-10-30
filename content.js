@@ -2407,6 +2407,7 @@
     let earlyFillMs = 0;
     let earlyFrom = null;
     let aiPending = false;
+    let aiDoneAt = null;
     let diagnostics = {};
     let fieldCount = 0;
     let filledCount = 0;
@@ -2761,24 +2762,21 @@
         const earlyIds = new Set(early.map(match => match.fieldId));
         if (early.length) awaiting = fields.filter(field => !earlyIds.has(field.fieldId)).map(field => fieldMap.get(field.fieldId)).filter(Boolean);
       }
-      // 先填期间在写网页；等 AI 期间被改过、没有覆盖的字段名。
+      // 先填期间在写网页；等 AI 期间被改过、没有覆盖的字段名；AI 回来时还是插件写的值的先填字段。
       let writing = false;
       const kept = [];
+      let intactEarly = [];
       if (cancelButton) {
         cancelButton.hidden = false;
         cancelButton.disabled = false;
         cancelButton.onclick = async () => {
-          // 先填时（#402）也在写网页：和填写阶段一样停下后续填写，AI 也不再等。
-          if (phase === 'fillMs' || writing) {
+          if (phase === 'fillMs') {
             writeCancelled = true; cancelRequested = true; cancelButton.disabled = true;
-            if (writing && aiPending) {
-              aiPending = false;
-              self.ResumeProAIClient.cancel(requestId).catch(() => {});
-            }
             if (catchUpRequestId) self.ResumeProAIClient.cancel(catchUpRequestId).catch(() => {});
             showStatus('已停止后续填写，请核对网页中已填写的内容。', 'error', true);
             return;
           }
+          // 先填（#402）还在写时也一样：只取消 AI 等待，本地匹配照常写完，和按钮上写的一致。
           if (phase !== "roundTripMs") return;
           cancelRequested = true;
           cancelButton.disabled = true;
@@ -2833,7 +2831,9 @@
       });
       aiPending = true;
       // 先填期间请求出错不能成为未处理的拒绝；结果在 settleAi 里照旧处理。
-      pending.then(() => { aiPending = false; }, () => { aiPending = false; });
+      // 记下 AI 回来的时刻：比先填先回来时，匹配往返不算等先填写完的时间。
+      const aiSettled = () => { aiPending = false; aiDoneAt = performance.now(); };
+      pending.then(aiSettled, aiSettled);
       let response = null;
       // AI 回来以后：照旧检查结果，再把先填以外的匹配排进 queue。没有先填时拒绝覆盖，返回和末尾同形的结果。
       const settleAi = async () => {
@@ -2848,7 +2848,7 @@
           updateProgress();
         }
         response = await pending;
-        timing.roundTripMs = performance.now() - phaseStart;
+        timing.roundTripMs = (aiDoneAt ?? performance.now()) - phaseStart;
         phase = null;
         window.clearInterval(timer);
         timer = null;
@@ -2887,12 +2887,27 @@
           queue.push(...sortedMatches);
           return null;
         }
+        // 先填过、这时还是插件写的值的字段：AI 这一步选完上面的题目后，页面可能把它清回原样（证件类型→证件号码）。
+        if (earlyRan) intactEarly = verifiedControls.filter(item => done.has(item.fieldId)
+          && isFieldBindingCurrent(item.element) && fillValueSnapshot(item.element) === item.after);
         const later = [];
         const occupied = new Set();
         for (const match of sortedMatches) {
-          const entry = fieldMap.get(match.fieldId);
+          let entry = fieldMap.get(match.fieldId);
           if (entry && !plain) approvedValues.set(entry, fillValueSnapshot(entry));
-          else if (entry && isFieldBindingCurrent(entry) && fillValueSnapshot(entry) !== approvedValues.get(entry)) {
+          else if (entry && !isFieldBindingCurrent(entry)) {
+            // 先填的选择让页面重画了后面的字段（#269 智联）：找回的新字段和点击时一样，就按新字段判断有没有内容；
+            // 找不回或内容变了的不算已有内容，交给下面循环里原有的重绑和写入前复查。
+            const fresh = rebindFieldEntry(entry);
+            if (!fresh || fillValueSnapshot(fresh) !== approvedValues.get(entry)) {
+              later.push(match);
+              continue;
+            }
+            approvedValues.set(fresh, approvedValues.get(entry));
+            if (pageFilled.has(entry)) pageFilled.add(fresh);
+            fieldMap.set(match.fieldId, fresh);
+            entry = fresh;
+          } else if (entry && fillValueSnapshot(entry) !== approvedValues.get(entry)) {
             const meta = fieldMetaMap.get(match.fieldId);
             kept.push(meta?.label || meta?.placeholder || meta?.name || "未命名字段");
             continue;
@@ -2933,6 +2948,22 @@
       for (let position = 0; ; position++) {
         // 先填的本地匹配填完了（#402）：等 AI 回来，把剩下的字段排进来接着填。新出现字段的补填还在这之后。
         if (position >= queue.length && waitingAi) await settleAi();
+        // AI 这一步的字段也填完了：先填过的字段被页面清回点击时的样子（上面的选择变了，页面清空下面的），
+        // 按原值再填一次，和原来从上往下填的结果一样。只看这一遍。
+        if (position >= queue.length && intactEarly.length && isCurrent()) {
+          for (const item of intactEarly.splice(0)) {
+            const fresh = isFieldBindingCurrent(item.element) ? item.element : rebindFieldEntry(item.element);
+            const now = fresh ? fillValueSnapshot(fresh) : null;
+            const index = verifiedControls.indexOf(item);
+            if (now === null || now !== approvedValues.get(item.element) || now === item.after || index < 0) continue;
+            // 换成这次重填的记账：先前那次不再算填上，也不再复核。
+            verifiedControls.splice(index, 1);
+            filledCount -= 1;
+            if (item.isNew) supplemented -= 1;
+            if (item.element.kind === "element" && dayDefaultedControls.has(item.element.element)) dayDefaulted -= 1;
+            queue.push(early.find(match => match.fieldId === item.fieldId));
+          }
+        }
         if (position >= queue.length) {
           // 停下来的、两轮补填用完的、首轮 AI 已经失败的：排队的新字段不再发出，循环后统一收尾。
           // 用户取消了 AI 等待（#402）：先填时选出来的新字段也不再发 AI，请用户自己补。
@@ -3079,7 +3110,8 @@
           filledCount += 1;
           if (newFieldIds.has(match.fieldId)) supplemented += 1;
           if (element.kind === "element" && dayDefaultedControls.has(element.element)) dayDefaulted += 1;
-          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId) });
+          verifiedControls.push({ element, fieldMeta, value: match.value, after: fillValueSnapshot(element), isNew: newFieldIds.has(match.fieldId),
+            fieldId: match.fieldId });
           highlightFilledField(element, match.value);
           if (element.kind === "element" && !element.pickerType && !["custom-select", "cascader"].includes(element.controlKind)) {
             recordFilledTextControl(session, element.element);
@@ -3183,10 +3215,13 @@
         if (stats) stats.offerSkipped = { ambiguous: stats.ambiguous || 0, entry: offerStats.entry || 0 };
       }
     } catch (error) {
+      // 先填（#402）已经写上了几项、AI 这一步才出错：先填的文字照常做最后一次同步，和拒绝覆盖时一样。
+      // 这不是停止，用户没让停下写入。
+      if (stage === "match" && filledCount > 0) await finalSyncFillSession(session);
       // Interrupted fills still get a read-only final count; never replay focus,
       // write, or retry after a stop/overwrite refusal.
       recheckVerifiedControls();
-      // 先填（#402）已经写上了几项、AI 这一步才出错：也是部分完成，并说清网页上已经填了几项。
+      // 先填已经写上了几项：也是部分完成，并说清网页上已经填了几项。
       const filledEarly = stage === "match" && filledCount > 0;
       if (stage === "fill" || filledEarly) outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
@@ -3214,7 +3249,8 @@
       }
       // 填写耗时 = 先填的时间 + AI 回来后填写的时间；等 AI 的时间算在匹配里。
       if (earlyFrom !== null) earlyFillMs = performance.now() - earlyFrom;
-      if (phase) timing[phase] = performance.now() - phaseStart + (phase === "fillMs" ? earlyFillMs : 0);
+      if (phase) timing[phase] = (phase === "roundTripMs" && aiDoneAt !== null ? aiDoneAt : performance.now()) - phaseStart
+        + (phase === "fillMs" ? earlyFillMs : 0);
       if (timing.fillMs === null && earlyFillMs) timing.fillMs = earlyFillMs;
       const totalMs = performance.now() - totalStart;
       // 没轮到补填就结束的新字段（两轮用完、首轮 AI 已经失败、中途停止或出错）算没送 AI。

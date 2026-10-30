@@ -185,7 +185,8 @@ function timeoutMessage(result) {
   // #402：桌面记下了超时停在哪一步（#299）就按那一步说；旧桌面不给，照旧。
   if (result?.timeoutStage === "connect") return `日常模型${waited}还没连上服务商${host}，请检查网络或代理。`;
   if (result?.timeoutStage === "first_byte") return `日常模型${waited}没有回复，服务商可能太忙或模型太慢，可以稍后重试，或在桌面设置换模型。`;
-  if (result?.timeoutStage === "body") return `日常模型已经开始回复，但${waited}还没收完，可能是网络慢，可以稍后重试。`;
+  // 日常档不走流式：body 只说明响应头到了，模型可能还在生成，不归给网络。
+  if (result?.timeoutStage === "body") return `日常模型的服务商已经响应，但${waited}还没收到完整结果，可能是模型太慢或网络慢，可以稍后重试，或在桌面设置换模型。`;
   return `日常模型${waited}没有返回，可在桌面设置换模型后重试。`;
 }
 

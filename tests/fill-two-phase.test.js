@@ -37,7 +37,7 @@ function layout(w) {
 }
 
 // 真实的 ai-worker.js；桌面替身把每次请求记下来，由测试决定怎么回。
-function aiWorker(clock) {
+function aiWorker(clock, resume = RESUME) {
   const calls = [];
   const cancels = [];
   const context = vm.createContext({
@@ -54,7 +54,7 @@ function aiWorker(clock) {
       const answer = (reply) => context.self.onmessage({ data: { kind: "desktop-result", callId: message.callId, reply } });
       // 按题目名回答；不传就只回这几项里资料有的。
       call.reply = (values = null) => answer({ ok: true, text: JSON.stringify(fields
-        .map((field) => ({ fieldId: field.fieldId, value: (values || Object.fromEntries(RESUME.map(([, key, value]) => [key, value])))[field.label] }))
+        .map((field) => ({ fieldId: field.fieldId, value: (values || Object.fromEntries(resume.map(([, key, value]) => [key, value])))[field.label] }))
         .filter((item) => item.value)) });
       call.fail = (reply) => answer({ ok: false, ...reply });
       calls.push(call);
@@ -75,8 +75,8 @@ function aiWorker(clock) {
 const item = (id, label, control) => `<div class="form-item" id="${id}-item"><label for="${id}">${label}</label>${control}</div>`;
 const input = (id, label, { type = "text", value = "" } = {}) => item(id, label, `<input id="${id}" name="${id}" type="${type}" value="${value}">`);
 
-// body 是表单内容；confirm 返回 true/false；onGender：选了性别后页面要做的事（新出现字段之类）。
-function page(t, body, { confirm = () => true, onGender = null } = {}) {
+// body 是表单内容；confirm 返回 true/false；onGender：选了性别后页面要做的事（新出现字段之类）；resume 是简历资料。
+function page(t, body, { confirm = () => true, onGender = null, resume = RESUME } = {}) {
   const dom = new JSDOM(`<!doctype html><html><head><title>网上申请</title></head><body><form id="apply">${body}</form></body></html>`,
     { runScripts: "outside-only", pretendToBeVisual: true, url: "https://jobs.example.test/apply/form" });
   const w = dom.window;
@@ -89,11 +89,11 @@ function page(t, body, { confirm = () => true, onGender = null } = {}) {
   const confirms = [];
   w.confirm = (text) => { confirms.push(text); return confirm(text); };
   const clock = { now: 0 };
-  const worker = aiWorker(clock);
-  const groups = [...new Set(RESUME.map(([group]) => group))].map((name) => ({ name,
-    fields: RESUME.filter(([group]) => group === name).map(([, key, value]) => ({ key, value })) }));
+  const worker = aiWorker(clock, resume);
+  const groups = [...new Set(resume.map(([group]) => group))].map((name) => ({ name,
+    fields: resume.filter(([group]) => group === name).map(([, key, value]) => ({ key, value })) }));
   const template = { id: "t", name: "虚构模板", groups };
-  const data = { templates: [{ id: "t", name: "虚构模板", fieldCount: RESUME.length }], activeTemplate: template,
+  const data = { templates: [{ id: "t", name: "虚构模板", fieldCount: resume.length }], activeTemplate: template,
     profile: { values: {}, family: [], custom: [] }, profileRevision: 0 };
   const sent = [];
   w.chrome = {
@@ -177,7 +177,7 @@ test("the fields local rules can fill are on the page before the AI answers; the
 for (const [stage, message] of [
   ["first_byte", "日常模型等了 120 秒没有回复，服务商可能太忙或模型太慢，可以稍后重试，或在桌面设置换模型。"],
   ["connect", "日常模型等了 120 秒还没连上服务商（api.example.com），请检查网络或代理。"],
-  ["body", "日常模型已经开始回复，但等了 120 秒还没收完，可能是网络慢，可以稍后重试。"]
+  ["body", "日常模型的服务商已经响应，但等了 120 秒还没收到完整结果，可能是模型太慢或网络慢，可以稍后重试，或在桌面设置换模型。"]
 ]) {
   test(`an AI timeout (${stage}) leaves the early local fill in place and says where the request stopped`, async (t) => {
     const p = page(t, BASIC);
@@ -215,19 +215,114 @@ test("cancelling the AI wait keeps what was filled early and writes nothing more
   assert.equal(p.ui.cancel.hidden, true);
 });
 
-test("stopping while the early fill is still writing stops the writes and the AI wait", async (t) => {
-  // 第二个字段正在写时按停止：第一个算填上，正在写的不确认，后面的不再写，AI 也不再等。
+test("cancelling while the early fill is still writing only cancels the AI wait; the local fields are still written", async (t) => {
+  // 按钮写的是「取消 AI 等待（保留本地匹配）」：第二个字段正在写时按，本地匹配照常写完，只是不再等 AI。
   const p = page(t, BASIC);
   p.w.document.getElementById("email").addEventListener("input", () => p.ui.cancel.onclick(), { once: true });
   const result = await within(p.run());
-  assert.equal(p.value("name"), "测试用户");
-  assert.deepEqual(["phone", "school", "major"].map(p.value), ["", "", ""]);
+  assert.equal(p.worker.cancels.length, 1, "the AI request is cancelled");
+  assert.deepEqual(["name", "email", "phone", "school", "major"].map(p.value),
+    ["测试用户", "tester@example.com", "13800138000", "", ""]);
   assert.equal(result.outcome, "partial");
-  assert.equal(result.filledCount, 1);
-  assert.equal(p.ui.status.textContent, "已停止填写，请核对网页。");
-  assert.equal(p.worker.cancels.length, 1, "the AI request is cancelled too");
+  assert.equal(result.filledCount, 3);
+  assert.equal(p.ui.status.textContent, "本地已填写 3 项；已按你的操作取消 AI 等待。取消不保证上游停止计算或停止计费。");
   await p.until(() => false, 50);
   assert.equal(p.worker.calls.length, 1);
+});
+
+// AI 回来、填完它自己的字段以后：先填的字段被上面 AI 选的题目清空了，按原值再填一次，和原来从上往下填的结果一样。
+test("a local field the page clears when the AI's choice above it changes is filled again after that choice", async (t) => {
+  const resume = [["基本信息", "证件类型", "身份证"], ["基本信息", "身份证号", "110101199001011234"], ...RESUME];
+  const TYPE = item("idType", "证件类型", `<select id="idType" name="idType"><option value="">请选择</option><option value="1">身份证</option><option value="2">护照</option></select>`);
+  const p = page(t, input("name", "姓名") + TYPE + input("idNo", "证件号码"), { resume });
+  // 常见的 Vue watch：证件类型一变，证件号码清空。
+  p.w.document.getElementById("idType").addEventListener("change", () => {
+    const number = p.w.document.getElementById("idNo");
+    number.value = "";
+    number.dispatchEvent(new p.w.Event("input", { bubbles: true }));
+  });
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("idNo") && p.worker.calls.length === 1 && /AI 匹配中/.test(p.ui.fill.textContent)),
+    "the number is filled before the AI answers");
+  assert.deepEqual(p.worker.calls[0].labels, ["证件类型"]);
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.deepEqual(["name", "idType", "idNo"].map(p.value), ["测试用户", "1", "110101199001011234"]);
+  assert.equal(result.outcome, "success", p.ui.diag.value);
+  assert.equal(result.filledCount, 3);
+  assert.equal(p.ui.status.textContent, "已填写 3 个字段。");
+  const report = (await p.report()).diagnosticsReport;
+  assert.equal(lineOf(report, "filled"), "3");
+  assert.equal(lineOf(report, "drop_reasons"), "-");
+  assert.equal(p.sent.filter((type) => type === "FEEDBACK_AUTO").length, 0);
+});
+
+// #269 智联那类：先填时选了某项，页面把后面还空着的字段整块换成新节点。AI 回来时它们不是「已有内容」。
+test("an early choice that makes the page rebuild the AI's empty fields asks no overwrite question", async (t) => {
+  const GENDER = item("gender", "性别", `<select id="gender" name="gender"><option value="">请选择</option><option value="m">男</option><option value="f">女</option></select>`);
+  const p = page(t, input("name", "姓名") + GENDER + input("school", "毕业院校") + input("major", "专业"), {
+    confirm: () => false,
+    onGender: (doc) => {
+      for (const [id, label] of [["school", "毕业院校"], ["major", "专业"]]) {
+        const holder = doc.createElement("div");
+        holder.innerHTML = input(id, label);
+        doc.getElementById(`${id}-item`).replaceWith(holder.firstChild);
+      }
+    }
+  });
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("gender") === "m" && p.worker.calls.length === 1 && /AI 匹配中/.test(p.ui.fill.textContent)),
+    "the select is chosen before the AI answers");
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.deepEqual(p.confirms, []);
+  assert.deepEqual(["name", "gender", "school", "major"].map(p.value), ["测试用户", "m", "示例大学", "示例专业"]);
+  assert.equal(result.outcome, "success", p.ui.diag.value);
+  assert.equal(result.filledCount, 4);
+});
+
+// AI 比先填先回来：诊断里的匹配往返是 AI 回来的时间，不含等先填写完的时间。
+test("the match time is the AI's round trip even when the early fill takes longer", async (t) => {
+  const GENDER = item("gender", "性别", `<select id="gender" name="gender"><option value="">请选择</option><option value="m">男</option><option value="f">女</option></select>`);
+  const p = page(t, input("name", "姓名") + GENDER + input("school", "毕业院校"), {
+    // 选完以后页面还要变一阵（校验、重画），先填要等页面安静。
+    onGender: (doc) => {
+      let n = 0;
+      const tick = () => { if (n++ < 30) { doc.getElementById("apply").setAttribute("class", `v${n}`); setTimeout(tick, 40); } };
+      tick();
+    }
+  });
+  const running = p.run();
+  assert.ok(await p.until(() => p.worker.calls.length === 1));
+  p.worker.calls[0].reply();
+  const result = await running;
+  assert.equal(result.filledCount, 3);
+  const timings = lineOf((await p.report()).diagnosticsReport, "timings_ms");
+  const [match, fill] = ["match", "fill"].map((key) => Number(new RegExp(`${key}=(\\d+)`).exec(timings)?.[1]));
+  assert.ok(fill > 1000, timings);
+  assert.ok(match < 500, timings);
+  assert.match(p.ui.diag.value, /AI 返回前先填：2 项/);
+});
+
+test("when the AI request itself fails after the early fill, the early text fields still get their final sync", async (t) => {
+  const p = page(t, BASIC);
+  // AI 请求通道断开：sendMessage 被拒绝，不是桌面回了失败。
+  let fail;
+  const send = p.w.chrome.runtime.sendMessage;
+  p.w.chrome.runtime.sendMessage = (message) => message.type === "AI_FILL"
+    ? new Promise((_, reject) => { fail = reject; }) : send(message);
+  const running = p.run();
+  assert.ok(await p.until(() => p.value("phone") && fail && /AI 匹配中/.test(p.ui.fill.textContent)), "filled before the failure");
+  let synced = 0;
+  for (const id of ["name", "email", "phone"]) p.w.document.getElementById(id).addEventListener("blur", () => { synced += 1; });
+  fail(new Error("AI 请求通道已断开。"));
+  const result = await running;
+  assert.equal(synced, 3, "each early text field is focused and blurred once more");
+  assert.deepEqual(["name", "email", "phone", "school", "major"].map(p.value),
+    ["测试用户", "tester@example.com", "13800138000", "", ""]);
+  assert.equal(result.outcome, "partial");
+  assert.equal(result.filledCount, 3);
+  assert.equal(p.ui.status.textContent, "AI 请求通道已断开。已先填写 3 项，请核对网页。");
 });
 
 const OCCUPIED = input("name", "姓名") + input("email", "邮箱", { type: "email", value: "old@example.com" }) + input("phone", "手机号码", { type: "tel" })
