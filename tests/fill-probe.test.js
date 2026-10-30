@@ -118,7 +118,7 @@ test("page clues count frames, custom controls, edit buttons, locked inputs and 
   ]);
   assert.deepEqual(probe.probePage(doc, { href: "https://c.liepin.com/resume/edit?id=123#top" }), {
     host: "c.liepin.com",
-    frames: { total: 2, crossOrigin: 1, frameInputs: 2, visibleInputs: 2 },
+    frames: { total: 2, crossOrigin: 1, frameInputs: 2 },
     custom: { total: 2, byLibrary: { antd: 1, 其他: 1 } },
     editButtons: 2, locked: 1, shadowHosts: 1, elements: 3
   });
@@ -361,7 +361,7 @@ test("a same-origin frame that cannot be queried counts as unreadable instead of
   const frame = node({ tag: "iframe", contentDocument: { querySelectorAll() { throw new Error("navigating"); } } });
   const result = probe.probePage(page({ [SELECTORS.frames]: [frame] }), { href: "https://c.liepin.com/resume" });
   assert.equal(result.host, "c.liepin.com");
-  assert.deepEqual(result.frames, { total: 1, crossOrigin: 1, frameInputs: 0, visibleInputs: 0 });
+  assert.deepEqual(result.frames, { total: 1, crossOrigin: 1, frameInputs: 0 });
 });
 
 test("#224: with 深度分析本页 available, same-origin frames and custom controls point to it; cross-origin frames do not", () => {

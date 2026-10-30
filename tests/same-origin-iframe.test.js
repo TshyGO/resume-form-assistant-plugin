@@ -68,12 +68,14 @@ test("frames are entered two levels deep, not three, and a frame that throws on 
   await wait(5);
   const found = scanner.frameDocuments(page.doc, { isVisible: page.isVisible });
   assert.deepEqual(found.map((entry) => [entry.frame.id, entry.depth]), [["a", 1], ["b", 2]]);
+  // parent 是装着这个框架的文档：一键填写只在外层扫不到字段时才进它里面的框架。
+  assert.deepEqual(found.map((entry) => entry.parent), [page.doc, a]);
   assert.deepEqual(page.ids(scanner.frameDocuments(page.doc, { isVisible: page.isVisible, exclude: (el) => el.id === "a" })), []);
 });
 
 // --- 页面线索和提示 ------------------------------------------------------------
 
-test("the probe counts visible inputs in visible same-origin frames, one level further down too", async () => {
+test("the probe counts inputs in same-origin frames one level further down too", async () => {
   const page = await framePage(`<iframe id="form"></iframe><div style="display:none"><iframe id="hidden-tab"></iframe></div><iframe id="shell"></iframe>`, {
     form: `<input><input type="submit"><input type="file"><div style="display:none"><input></div>`,
     "hidden-tab": "<input><input>",
@@ -83,19 +85,20 @@ test("the probe counts visible inputs in visible same-origin frames, one level f
   installLayout(inner.defaultView);
   inner.body.innerHTML = "<textarea></textarea><select></select>";
   const frames = probeApi.probePage(page.doc, { href: "https://hr.example.test/admin" }).frames;
-  // 隐藏页签里的框架没有尺寸，不算；按钮、文件框和藏起来的输入框不算看得见的可填输入框。
-  assert.deepEqual(frames, { total: 3, crossOrigin: 0, frameInputs: 6, visibleInputs: 3 });
+  // 隐藏页签里的框架没有尺寸，不算；第二层框架里的输入框算进来。
+  assert.deepEqual(frames, { total: 3, crossOrigin: 0, frameInputs: 6 });
 });
 
-test("with visible inputs in a same-origin frame the empty-page hint names the frame, not the 编辑 button", () => {
-  const EMPTY = { host: "", frames: { total: 0, crossOrigin: 0, frameInputs: 0, visibleInputs: 0 },
+test("when the fill read a frame and could not title a form's worth of its inputs, the empty-page hint names the frame, not the 编辑 button", () => {
+  const EMPTY = { host: "", frames: { total: 0, crossOrigin: 0, frameInputs: 0 },
     custom: { total: 0, byLibrary: {} }, editButtons: 0, locked: 0, shadowHosts: 0 };
-  const framed = { ...EMPTY, editButtons: 2, frames: { total: 1, crossOrigin: 0, frameInputs: 58, visibleInputs: 20 } };
-  assert.equal(probeApi.emptyPageHint(framed, { form: true, deepAvailable: true }),
+  const framed = { ...EMPTY, editButtons: 2, frames: { total: 1, crossOrigin: 0, frameInputs: 58 } };
+  assert.equal(probeApi.emptyPageHint(framed, { form: true, deepAvailable: true, frameUntitled: 20 }),
     "表单在网页的内嵌框架里，一键填写没认出字段。可以试试下方的「深度分析本页」。");
-  assert.equal(probeApi.emptyPageHint(framed, { form: true }), "表单在网页的内嵌框架里，一键填写没认出字段。可以把侧栏的「填写诊断」复制给我们。");
-  // 框架里的输入框都藏着：还是先说「编辑」。
-  assert.match(probeApi.emptyPageHint({ ...framed, frames: { ...framed.frames, visibleInputs: 0 } }, { form: true }), /先点网页上的「编辑」/);
+  assert.equal(probeApi.emptyPageHint(framed, { form: true, frameUntitled: 3 }), "表单在网页的内嵌框架里，一键填写没认出字段。可以把侧栏的「填写诊断」复制给我们。");
+  // 框架里只有一两个认不出的框（搜索框、客服输入框），或者没有一键填写的扫描结果（深度分析的空结果提示）：还是先说「编辑」。
+  assert.match(probeApi.emptyPageHint(framed, { form: true, frameUntitled: 2 }), /先点网页上的「编辑」/);
+  assert.match(probeApi.emptyPageHint(framed), /先点网页上的「编辑」/);
 });
 
 test("zero fields with inputs in a same-origin frame and with only a cross-origin frame are told apart", () => {
@@ -205,14 +208,120 @@ test("a layui select inside a frame is opened and picked like on the top page", 
 });
 
 test("a frame whose inputs the scan cannot title says the form is in a frame, not 先点「编辑」, and reports iframe_same_origin", async () => {
-  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: "<div><input><input></div>" } });
+  const page = await openFramedPage({ top: `${SHELL}<iframe id="main"></iframe>`, frames: { main: "<div><input><input><textarea></textarea></div>" } });
   const result = await page.fill();
   assert.equal(result.fieldCount, 0);
   assert.equal(result.error, "没找到可填写的输入框。表单在网页的内嵌框架里，一键填写没认出字段。可以试试下方的「深度分析本页」。");
   assert.equal(page.reports.length, 1);
-  for (const line of ["error_category: iframe_same_origin", "dom_inputs: 40", "visible_fields: 2", "drop_reasons: invisible=38,no_label=2"]) {
+  for (const line of ["error_category: iframe_same_origin", "dom_inputs: 41", "visible_fields: 3", "drop_reasons: invisible=38,no_label=3"]) {
     assert.ok(lines(page.reports[0].diagnostics).includes(line), `${line}\n${page.reports[0].diagnostics}`);
   }
+});
+
+// 查看状态的页面（有「编辑」），旁边一个看得见的同源框架里只有站内搜索框：提示、结局和上报都和以前一样。
+const SEARCH_FRAME = `<div class="header"><input type="search" placeholder="搜索职位、公司"><button>搜索</button></div>`;
+
+test("a view-mode page still says 先点「编辑」 when a visible frame holds only a site search box", async () => {
+  const page = await openFramedPage({ top: `<div class="resume"><h2>基本信息</h2><span class="btn">编辑</span><p>示例</p></div><iframe id="f"></iframe>`,
+    frames: { f: SEARCH_FRAME } });
+  const result = await page.fill();
+  assert.equal(result.fieldCount, 0);
+  assert.match(result.error, /^没找到可填写的输入框。这个页面可能还在查看状态：请先点网页上的「编辑」/);
+  assert.equal(page.reports.length, 1);
+  assert.ok(lines(page.reports[0].diagnostics).includes("error_category: iframe_same_origin"), page.reports[0].diagnostics);
+});
+
+test("a view-mode page still says 先点「编辑」 when the only field the fill found is in a small frame", async () => {
+  const page = await openFramedPage({ top: `<div class="resume"><h2>基本信息</h2><span class="btn">编辑</span><p>示例</p></div><iframe id="f" data-w="320" data-h="200"></iframe>`,
+    frames: { f: `<div class="row"><label for="ly">留言内容</label><textarea id="ly"></textarea></div>` } });
+  const result = await page.fill();
+  assert.equal(result.outcome, "failed");
+  assert.match((await page.status()).status, /这个页面可能还在查看状态：请先点网页上的「编辑」/);
+  assert.equal(page.frame("f").getElementById("ly").value, "");
+});
+
+test("a view-mode page with a field the resume cannot answer keeps 先点「编辑」, the failed outcome and its report next to a search frame", async () => {
+  const page = await openFramedPage({ top: `<div class="resume"><h2>基本信息</h2><span class="btn">编辑</span>
+      <div class="row"><label for="bz">备注说明</label><input id="bz"></div></div><iframe id="f"></iframe>`,
+  frames: { f: SEARCH_FRAME } });
+  const result = await page.fill();
+  assert.equal(result.outcome, "failed");
+  assert.deepEqual(Array.from(page.aiRequests[0].formFields, (field) => field.fieldId), ["field-0"]);
+  assert.match((await page.status()).status, /^已填写 0 个字段。这个页面可能还在查看状态：请先点网页上的「编辑」/);
+  assert.deepEqual(page.reports.map((report) => report.kind), ["fill_failed"]);
+  for (const line of ["error_category: match_failed", "edit_buttons: 1"]) {
+    assert.ok(lines(page.reports[0].diagnostics).includes(line), `${line}\n${page.reports[0].diagnostics}`);
+  }
+});
+
+// 表单旁边挂着的同源留言框：表单在顶层时、表单本身在框架里时都不碰。
+const MESSAGE_BOX = `<div class="kefu"><h3>在线留言</h3>
+  <div class="row"><label for="ly-name">姓名</label><input id="ly-name"></div>
+  <div class="row"><label for="ly-tel">手机号</label><input id="ly-tel" type="tel"></div>
+  <div class="row"><label for="ly-msg">留言内容</label><textarea id="ly-msg"></textarea></div>
+  <button type="button">提交留言</button></div>`;
+const WITH_PHONE = { 姓名: "测试用户", 学历: "本科", 性别: "女", 出生日期: "1998-06-01", 个人简介: "喜欢写代码", 服从: "是", 手机号: "13800000000" };
+const untouched = (doc) => ["ly-name", "ly-tel", "ly-msg"].every((id) => doc.getElementById(id).value === "");
+
+test("a message box frame next to a top-page form is neither scanned nor filled", async () => {
+  const top = await openFramedPage({ top: `${FORM}<iframe id="kf" data-w="320" data-h="400"></iframe>`, url: "https://jobs.example.test/campus/apply/1",
+    frames: { kf: MESSAGE_BOX }, values: WITH_PHONE });
+  const onTop = await top.fill();
+  assert.equal(onTop.filledCount, 6, onTop.error);
+  assert.deepEqual(Array.from(top.aiRequests[0].formFields, (field) => field.fieldId), ["field-0", "field-1", "field-radio-2", "field-3", "field-4", "field-5"]);
+  assert.ok(untouched(top.frame("kf")));
+  assert.ok(!(await top.status()).diagnostics.includes("同源框架："));
+});
+
+test("a message box frame inside the frame that holds the form is left alone too", async () => {
+  const framed = await openFramedPage({ top: `<iframe id="main"></iframe>`,
+    frames: { main: { html: `${FORM}<iframe id="kf" data-w="320" data-h="400"></iframe>`, frames: { kf: MESSAGE_BOX } } }, values: WITH_PHONE });
+  const inFrame = await framed.fill();
+  assert.equal(inFrame.filledCount, 6, inFrame.error);
+  assert.ok(framed.aiRequests[0].formFields.every((field) => field.fieldId.startsWith("frame1-")));
+  assert.deepEqual(formState(framed.frame("main")), FILLED);
+  assert.ok(untouched(framed.frame("main", "kf")));
+});
+
+// 选完下拉、单选、复选后等页面安静：只等刚选的控件所在的文档。别的文档一直在变时，原来每个选择都要等满 1.5 秒
+// （这里 3 个选择类控件，至少多等 4.5 秒）。
+async function timedFill(page, tick) {
+  const timer = tick.win.setInterval(() => tick.node().classList.toggle("on"), 100);
+  try {
+    const start = Date.now();
+    const result = await page.fill();
+    return { filled: result.filledCount, ms: Date.now() - start, error: result.error };
+  } finally {
+    tick.win.clearInterval(timer);
+  }
+}
+
+test("a busy frame next to a top-page form does not hold up the wait after each choice", async () => {
+  const top = await openFramedPage({ top: `${FORM}<iframe id="ticker" data-w="600" data-h="120"></iframe>`, url: "https://jobs.example.test/campus/apply/1",
+    frames: { ticker: `<div id="slide">公告</div>` } });
+  const busyFrame = await timedFill(top, { win: top.frame("ticker").defaultView, node: () => top.frame("ticker").getElementById("slide") });
+  assert.equal(busyFrame.filled, 6, busyFrame.error);
+  assert.ok(busyFrame.ms < 4000, `form on top, busy frame: ${busyFrame.ms}ms`);
+});
+
+test("a busy navigation shell does not hold up the wait after each choice in the frame's form", async () => {
+  const shell = await openFramedPage({ top: `<div id="clock">10:00</div><iframe id="main"></iframe>`, frames: { main: FORM } });
+  const busyShell = await timedFill(shell, { win: shell.win, node: () => shell.win.document.getElementById("clock") });
+  assert.equal(busyShell.filled, 6, busyShell.error);
+  assert.ok(busyShell.ms < 4000, `form in a frame, busy shell: ${busyShell.ms}ms`);
+});
+
+// 页面结构那几行（自定义控件、只读或禁用输入框）和页面探测一样只算顶层：框架里扫到的北森式下拉不加进自定义控件，
+// 它的只读输入框也不从顶层的只读框里减掉。
+test("page-structure counts stay top-page only when the form with a generic select is in a frame", async () => {
+  const page = await openFramedPage({ top: `<div class="toolbar"><input readonly></div><iframe id="main"></iframe>`,
+    frames: { main: `<div class="item"><label>民族</label><div class="phoenix-select phoenix-select--editable"><ul class="phoenix-select__content">
+      <li class="phoenix-select__inputWrapper"><input class="phoenix-select__input" readonly></li></ul></div></div>` } });
+  const result = await page.fill();
+  assert.equal(result.fieldCount, 1, result.error);
+  assert.equal(page.aiRequests[0].formFields[0].fieldId, "frame1-field-0");
+  const report = lines((await page.status()).diagnosticsReport);
+  for (const line of ["readonly_or_disabled: 1", "custom_controls: 0"]) assert.ok(report.includes(line), `${line}\n${report.join("\n")}`);
 });
 
 test("a password box and a native radio group in a frame are judged by the frame's own element types", async () => {

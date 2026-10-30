@@ -2431,11 +2431,10 @@
     let recipeUse = deep?.mode === "recipe" ? deep.report?.recipe || null : null;
     // 猎聘这类查看状态的页面：页头搜索框之类会被扫描到，但一个都没填上，照样提示先点「编辑」。
     // 只在什么都没匹配上、AI 也没出错时这样说：AI 超时、匹配到了却写不上（#299）都不是查看状态。
-    // 同源框架里有看得见的输入框（#400）：表单已经显示出来、也扫过了，不是查看状态。
+    // 从同源框架里扫到了一张表单那么多的字段（#400）：表单已经显示出来，不是查看状态。只有一两个（留言框）照样提示。
     const viewModeHint = () => !assisted && filledCount === 0 && !matched && probe?.editButtons > 0
-      && !(probe.frames?.visibleInputs > 0)
       && ["none", "no_context"].includes(diagnostics.errorCode || "none")
-      ? withFillProbe(api => api.emptyPageHint(probe), "") : "";
+      ? withFillProbe(api => stats?.frameFields >= api.FORM_INPUTS ? "" : api.emptyPageHint(probe), "") : "";
     let outcome = "failed";
     let failure = "";
     // 失败信息里带了「先点编辑」这类提示，或是扫描到 0 个字段：要一直留在屏幕上，不像别的失败几秒后消失。
@@ -2471,7 +2470,9 @@
       scanDone = true;
       const describeScan = () => {
         fieldCount = fields.length;
-        scannedCustom = fields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
+        // 和页面探测比较、相减的只算顶层的字段：探测只数顶层的自定义控件和只读框（#400 框架里的字段不算）。
+        const topFields = fields.filter(field => entryDocument(fieldMap.get(field.fieldId)) === document);
+        scannedCustom = topFields.filter(field => ["custom-select", "cascader"].includes(field.controlKind)).length;
         // 单页应用可能在填写途中换页：诊断描述的是扫描时的那一页。
         scanPath = location.pathname;
         stats = { ...scanned.stats, outOfScope: scanned.fields.length - fields.length };
@@ -2481,7 +2482,7 @@
         // 通用下拉的根只给诊断计数用：读控件出错就不数，填写照常。
         let genericRoots = [];
         try {
-          genericRoots = fields
+          genericRoots = topFields
             .filter(field => ["custom-select", "cascader"].includes(field.controlKind))
             .map(field => { try { return self.ResumeProCustomControls?.describe?.(fieldMap.get(field.fieldId)); } catch { return null; } })
             .filter(info => info?.library === "generic").map(info => info.root);
@@ -2509,7 +2510,7 @@
         hinted = !assisted && !scanned.fields.length;
         const hint = hinted
           ? withFillProbe(api => api.emptyPageHint(probe, { notForm: pageType?.type === "unknown", form: pageType?.type === "application_form",
-            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline) }), "") : "";
+            deepAvailable: Boolean(self.ResumeProDeepAnalysis && self.ResumeProPageOutline), frameUntitled: stats?.frameUntitled }), "") : "";
         throw new Error(`没找到可填写的输入框。${hint}`);
       }
       if (!assisted) closeProfileOffer();
@@ -2728,8 +2729,8 @@
       let grownWarning = "";
       // 首轮 AI 已经超时或服务出错：补填同样会失败，新字段不再发出。
       const aiDown = Boolean(self.ResumeProFeedback?.requestFailed?.(diagnostics.errorCode));
-      const pickUpNewFields = async (position) => {
-        await waitForPageSettle();
+      const pickUpNewFields = async (position, doc) => {
+        await waitForPageSettle(doc);
         if (!isCurrent()) return;
         // 同名题目的序号会因为新字段插进来而变（两段教育经历都有「专业」）：原来就扫到过的元素不算新字段。
         const nodeOf = entry => entry?.kind === "radio" ? entry.elements?.[0] : entry?.element;
@@ -2979,7 +2980,7 @@
         }
 
         if (filled && !assisted && !deep && CHOICE_CONTROL_KINDS.has(element.kind === "radio" ? "radio" : element.controlKind)) {
-          await pickUpNewFields(position);
+          await pickUpNewFields(position, entryDocument(element));
           const partnerNow = partner ? fillValueSnapshot(partner) : null;
           if (partnerNow !== null && partnerNow !== partnerBefore) approvedValues.set(partner, partnerNow);
         }
@@ -3373,8 +3374,8 @@
     return Boolean(doc.defaultView) && doc.contains(node);
   }
 
-  // #400 一键填写要扫的文档：顶层，加上看得见、够大的同源框架（最多两层，见 field-scan.js 的 frameDocuments）。
-  // 框架读不了就只扫顶层。侧栏只在顶层。
+  // #400 一键填写可能要扫的文档：顶层，加上看得见、够大的同源框架（最多两层，见 field-scan.js 的 frameDocuments）。
+  // 外层在前，parent 是装着这个框架的文档。框架读不了就只有顶层。侧栏只在顶层。
   function fillDocuments() {
     let frames = [];
     try {
@@ -3385,12 +3386,13 @@
     } catch {
       frames = [];
     }
-    return [document, ...frames.map((frame) => frame.doc)];
+    return [{ doc: document, parent: null }, ...frames];
   }
 
   // #228：扫描交给 field-scan.js。只收能对上题目的逻辑控件：自定义下拉连同内部输入算一个，
   // 页头搜索、下拉弹层里的搜索框、对不上题目的控件都跳过，只在诊断里记数量。
-  // #400 顶层之后接着扫同源框架，字段编号带框架序号（frame1-field-12）；框架正在跳转、扫描出错就跳过它。
+  // #400 顶层扫不到字段时，接着扫它里面的同源框架；框架也一样，自己扫不到字段才进下一层。顶层表单旁边的客服、
+  // 留言框架不碰。字段编号带框架序号（frame1-field-12）；框架正在跳转、扫描出错就跳过它。
   function scanFillableFields() {
     const options = {
       isVisible,
@@ -3399,7 +3401,10 @@
     const fieldMap = new Map();
     const fields = [];
     const scans = [];
-    fillDocuments().forEach((doc, index) => {
+    // 扫过的文档各扫到几个字段。
+    const yielded = new Map();
+    fillDocuments().forEach(({ doc, parent }, index) => {
+      if (parent && yielded.get(parent) !== 0) return;
       let scan;
       if (!index) {
         scan = self.ResumeProFieldScan.scanPage(doc, options);
@@ -3412,6 +3417,7 @@
         // 框架里的焦点和提交按钮：顶层 document 上的监听收不到，给它的 document 补上。
         watchFrameDocument(doc);
       }
+      yielded.set(doc, scan.controls.length);
       scans.push({ doc, scan, before: fields.length });
       addScannedControls(scan, fields, fieldMap, index ? `frame${index}-` : "");
     });
@@ -3483,10 +3489,11 @@
   // 诊断漏斗（#215 / #228）：页面上全部输入框按「为什么没进入匹配」分开数。只数数，不读值。
   // 隐藏、按钮或文件框、禁用、看不见按 DOM 数；看得见的再按 field-scan.js 的跳过原因分，
   // 剩下没单列的是并进同一个控件的输入框（一组单选、自定义下拉里的几个输入框算一个）。
-  // #400 scans 是这次扫过的每个文档（顶层和同源框架）和它的扫描结果，各项按文档加起来；没有扫描结果时数一键填写会扫的那些文档。
-  // frameFields：其中来自框架的字段数，只给侧栏诊断和深度分析入口用，不进上报。
+  // #400 scans 是这次扫过的每个文档（顶层和同源框架）和它的扫描结果，各项按文档加起来；没有扫描结果时（深度填写）数顶层和看得见的同源框架。
+  // frameFields：其中来自框架的字段数；frameUntitled：框架里看得见、却认不出题目的控件数（扫描的 noLabel，认成站内搜索、
+  // 页头页脚的不算）。都只给侧栏诊断、零字段提示和深度分析入口用，不进上报。
   function scanStats(scans, fields) {
-    const list = scans || fillDocuments().map((doc) => ({ doc, scan: null, before: 0 }));
+    const list = scans || fillDocuments().map(({ doc }) => ({ doc, scan: null, before: 0 }));
     const all = list.flatMap(({ doc }) => Array.from(doc.querySelectorAll("input, select, textarea")))
       .filter((element) => !element.closest?.(`#${SIDEBAR_ID}`));
     let typeHidden = 0;
@@ -3515,7 +3522,8 @@
       invisible: all.length - typeHidden - nonFillable - disabled - visible, ...listed,
       grouped: Math.max(0, visible - fields - listedTotal),
       sources, ambiguous: sum((scan) => scan.skipped?.ambiguous),
-      frames: frames.length, frameFields: frames.length ? Math.max(0, fields - frames[0].before) : 0 };
+      frames: frames.length, frameFields: frames.length ? Math.max(0, fields - frames[0].before) : 0,
+      frameUntitled: frames.reduce((total, { scan }) => total + count(scan.skipped?.noLabel), 0) };
   }
 
   // 题目和控件的对应关系还成立吗：控件还在原来的表单项里、表单项没混进别的控件、题目没变。
@@ -3565,11 +3573,11 @@
   }
 
   // 等页面对上一个选择的反应结束：增删节点或样式、显示/隐藏、class 连续 300ms 没有变化，最多等 1.5s。
-  // 插件自己的侧栏和填写高亮不算。#400 一键填写扫的同源框架一起看。
-  function waitForPageSettle(quietMs = 300, maxMs = 1500) {
+  // 插件自己的侧栏和填写高亮不算。只看刚选的控件所在的文档（#400 同源框架里的控件看框架的），别的框架里的轮播、时钟不用等。
+  function waitForPageSettle(doc = document, quietMs = 300, maxMs = 1500) {
     const Observer = typeof MutationObserver === "function" ? MutationObserver : null;
-    const roots = fillDocuments().map((doc) => doc.body || doc.documentElement).filter((root) => root?.nodeType);
-    if (!Observer || !roots.length) return Promise.resolve();
+    const root = doc?.body || doc?.documentElement;
+    if (!Observer || !root?.nodeType) return Promise.resolve();
     return new Promise((resolve) => {
       const start = performance.now();
       let last = start;
@@ -3578,9 +3586,7 @@
       const observer = new Observer((records) => {
         if (records.some((record) => !ours(record))) last = performance.now();
       });
-      for (const root of roots) {
-        observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["style", "hidden", "class"] });
-      }
+      observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["style", "hidden", "class"] });
       const tick = () => {
         const now = performance.now();
         if (now - last >= quietMs || now - start >= maxMs) { observer.disconnect(); resolve(); } else window.setTimeout(tick, 50);
@@ -3634,7 +3640,7 @@
       const frameLoaded = () => {
         if (location.href !== href) return;
         // 新文档里的变化也要看到。
-        for (const doc of fillDocuments().slice(1)) observeRoot(doc.documentElement);
+        for (const { doc } of fillDocuments().slice(1)) observeRoot(doc.documentElement);
         changed();
       };
       const observed = new Set();
@@ -3666,7 +3672,7 @@
         resolve(location.href === href ? scanned : null);
       }
       observeRoot(root);
-      for (const doc of fillDocuments().slice(1)) observeRoot(doc.documentElement);
+      for (const { doc } of fillDocuments().slice(1)) observeRoot(doc.documentElement);
       cap = window.setTimeout(() => finish(seen ? scan() : null), maxMs);
     });
   }

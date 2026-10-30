@@ -1092,7 +1092,8 @@
 
   // #400 表单在同源 iframe 里（人事考试网、标签页式后台）：一键填写要进去扫。只进看得见、够大（和 fill-probe.js
   // 一样至少 100×50）、横向在视口里的框架，最多往下两层。标签页式后台没切到的页签是 display:none，或者挪到视口
-  // 左右两侧之外；在下面、要往下滚才看到的照样进。跨域的、还没有文档的跳过。只读结构，按文档顺序返回。
+  // 左右两侧之外；在下面、要往下滚才看到的照样进。跨域的、还没有文档的跳过。只读结构，按文档顺序返回，
+  // 外层在前；parent 是装着这个框架的文档。
   const FRAME_SELECTOR = "iframe, frame";
   const MIN_FRAME_WIDTH = 100;
   const MIN_FRAME_HEIGHT = 50;
@@ -1127,7 +1128,7 @@
       }
       if (!rect || rect.width < MIN_FRAME_WIDTH || rect.height < MIN_FRAME_HEIGHT || !frameInView(frame, rect)) continue;
       if (!inner?.documentElement) continue;
-      found.push({ frame, doc: inner, depth });
+      found.push({ frame, doc: inner, depth, parent: doc });
       if (depth < MAX_FRAME_DEPTH) found.push(...frameDocuments(inner, options, depth + 1));
     }
     return found;
