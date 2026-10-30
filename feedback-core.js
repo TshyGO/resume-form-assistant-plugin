@@ -96,7 +96,13 @@
     "in_flight", "internal", "other"];
   // Where the desktop's AI request timed out (#299): connecting, waiting for the headers, or reading the body.
   const TIMEOUT_STAGES = ["connect", "first_byte", "body"];
-  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "operation_failed", "cancelled"];
+  const FILL_REASONS = ["value_not_committed", "value_reverted", "element_disconnected", "validation_not_cleared", "framework_state_unsynced", "value_changed", "verification_timeout", "unsupported_control", "no_option_match", "options_not_rendered", "options_timeout", "ambiguous_option", "ambiguous_popup", "cascade_timeout", "cascade_parent_failed", "cascade_unsupported", "selection_not_committed", "control_disabled", "invalid_date", "format_mismatch", "operation_failed", "cancelled"];
+  // A text the page did not keep (#399 #405): what the box held after it lost focus (empty, what it held before
+  // the fill, or something else; never the text itself), and whether a suggestion list or another popup came
+  // up within a second of writing. The box's inputmode is part of its structure.
+  const AFTER = ["empty", "previous", "other"];
+  const OVERLAYS = ["list", "other", "none"];
+  const INPUT_MODES = ["numeric", "decimal", "tel", "email", "url", "search", "text", "none"];
   const MAX_UNFILLED = 10;
   const INT = /^(?:\d{1,9}|-)$/;
   const tally = names => new RegExp(`^(?:-|(?:${names.join("|")})=\\d{1,6}(?:,(?:${names.join("|")})=\\d{1,6})*)$`);
@@ -126,6 +132,7 @@
   const CONTROL_TOKEN = new RegExp("^(?:(?:input|textarea|select|button|div|span)(?:\\[(?:text|date|month|number|radio|checkbox|email|tel|search)\\])?"
     + "|role=(?:textbox|combobox|listbox|button|radio|checkbox)|popup=(?:listbox|dialog|true)|readonly"
     + `|(?:picker|lib)=(?:antd|element|arco|iview|semi|vant|layui|generic|mui)|opened=(?:${OPENED.join("|")})|options=(?:0|1\\+)`
+    + `|inputmode=(?:${INPUT_MODES.join("|")})|after=(?:${AFTER.join("|")})|overlay=(?:${OVERLAYS.join("|")})`
     + `|reason=(?:${FILL_REASONS.join("|")}))$`);
 
   // A version word is kept only as a whole segment (/api/v2), and only once per path: several of
@@ -348,11 +355,14 @@
         if (c.readOnly) tokens.push("readonly");
         if (c.picker) tokens.push(`picker=${c.picker}`);
         if (c.library) tokens.push(`lib=${c.library}`);
+        if (INPUT_MODES.includes(c.inputMode)) tokens.push(`inputmode=${c.inputMode}`);
         // The select's popup (#301): never opened, or opened, and whether its list had any option. Never how
         // many: a lower select's list is the one the page loaded for the upper choice made from the resume.
         const o = item?.observed || {};
         if (OPENED.includes(o.opened)) tokens.push(`opened=${o.opened}`);
         if (LISTS.includes(o.opened) && typeof o.hasOptions === "boolean") tokens.push(`options=${o.hasOptions ? "1+" : "0"}`);
+        if (AFTER.includes(o.after)) tokens.push(`after=${o.after}`);
+        if (OVERLAYS.includes(o.overlay)) tokens.push(`overlay=${o.overlay}`);
         if (item?.reasonCode) tokens.push(`reason=${item.reasonCode}`);
         lines.push(`- ${LABELS.has(item?.label) ? item.label : "（字段名已隐藏）"}: ${tokens.join(" ")}`);
       }

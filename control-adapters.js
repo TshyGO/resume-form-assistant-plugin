@@ -174,14 +174,26 @@
       return current === expected || Boolean(deps.sameTextValue?.(el, current, expected));
     }
 
+    // 写入被拒时框里剩下的是什么（#399 #405）：空、写之前的值或别的值。只给这三个词，不带值本身。
+    const rejected = reason => ['value_not_committed', 'value_reverted'].includes(reason);
+    function leftover(el, previous) {
+      const now = String(el.value ?? '');
+      return !now.trim() ? 'empty' : now === previous ? 'previous' : 'other';
+    }
+
     // shown：联想框点了建议、框里已经是要填的字，只是组件没有标出选中状态（#299 51job）：不再写，按文本框核对。
     async function text(ctx, value, shown = false) {
       if (!deps.runTextLifecycle) return result(false, 'unsupported_control', ctx);
       const previous = String(ctx.el.value ?? '');
-      const expected = deps.normalizeText(ctx.el, value);
+      // #399 #405 写之前由宿主按框的要求整理：日期框按占位提示的格式换写法，数字框只写能放心取出的数字，取不出就不写。
+      const prepared = shown || !deps.prepareText ? { value } : deps.prepareText(ctx.el, value);
+      if (prepared.reason) return result(false, prepared.reason, ctx);
+      if (prepared.dayDefaulted) ctx.observed = { ...ctx.observed, dayDefaulted: true };
+      const typed = String(prepared.value ?? '');
+      const expected = deps.normalizeText(ctx.el, typed);
       const guard = () => !stop(ctx, true);
       const didWrite = () => markWrite(ctx);
-      if (!shown && !await deps.runTextLifecycle(ctx.el, String(value ?? ''), false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
+      if (!shown && !await deps.runTextLifecycle(ctx.el, typed, false, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
       ctx.acceptedOnce = shows(ctx.el, expected);
       await deps.waitTextCommit();
       let stopped = stop(ctx);
@@ -196,13 +208,16 @@
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, String(ctx.el.value ?? '') === expected);
       }
+      let after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
       if (!verdict.ok && !shown && deps.prefersSequential(ctx.el) && ['value_not_committed', 'value_reverted'].includes(verdict.reason)) {
-        if (!await deps.runTextLifecycle(ctx.el, String(value ?? ''), true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
+        if (!await deps.runTextLifecycle(ctx.el, typed, true, guard, didWrite)) return result(false, stop(ctx) || 'value_changed', ctx);
         const committed = shows(ctx.el, expected);
         await deps.waitTextCommit();
         stopped = stop(ctx);
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, committed);
+        // 恢复原值之前记下页面留下的。
+        after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
         // 框里显示的是同一个号码（页面改了格式）时不恢复原值。
         if (!verdict.ok && ['value_not_committed', 'value_reverted'].includes(verdict.reason) && !shows(ctx.el, expected) && guard()) {
           write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
@@ -210,10 +225,10 @@
         }
       }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
-      if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx,
+      if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, previous,
         accepted: () => shows(ctx.el, expected),
         inspect: () => deps.inspectText(ctx.el, expected, true) });
-      return result(verdict.ok, verdict.reason, ctx);
+      return result(verdict.ok, verdict.reason, ctx, after ? { after } : {});
     }
 
     // 联想框按文本框填完：建议框常常还开着，或打字后稍后才弹出（#299 51job），会挡住后面的字段。
@@ -486,7 +501,7 @@
         if (saved.ctx.kind === 'radio' && saved.ctx.nodes.some(node => saved.ctx.customRadio ? node instanceof HTMLInputElement : node.type !== 'radio')) return result(false, 'element_disconnected', saved.ctx);
         if (saved.ctx.kind === 'checkbox' && saved.ctx.el.type !== 'checkbox') return result(false, 'element_disconnected', saved.ctx);
         if (kindOf(saved.ctx.entry, saved.ctx.el) !== saved.ctx.kind) return result(false, 'element_disconnected', saved.ctx);
-        if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx);
+        if (!saved.accepted()) return result(false, 'value_reverted', saved.ctx, typeof saved.previous === 'string' ? { after: leftover(saved.ctx.el, saved.previous) } : {});
         const verdict = saved.inspect?.();
         return result(verdict ? verdict.ok : true, verdict?.reason || '', saved.ctx);
       } catch {
