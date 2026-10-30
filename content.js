@@ -4472,11 +4472,16 @@
 
   // #405 数字框（type=number，或 inputmode 是 numeric / decimal）：type=number 会直接清掉不是数字的字，受控组件也常把它们滤掉，
   // 写进去只会被拒或剩下拼起来的数字。资料带单位的，只在能放心取出时写数字：一个数加一个常见单位（175cm、65 公斤、8000 元/月、3 年），
-  // 而且题目或占位提示没写明别的单位（身高（m）、月薪（千元））。范围、带 k / 万、几个数的都不写，报 format_mismatch 让用户手填。
+  // 而且题目或占位提示没写明别的单位（身高（m）、月薪（千元）、月薪（美元））、别的周期（期望月薪配 8000 元/年）。
+  // 范围、带 k / 万、几个数的都不写，报 format_mismatch 让用户手填。
   const NUMBER_UNITS = [["cm", "厘米", "公分"], ["kg", "公斤", "千克"], ["元", "rmb", "人民币"], ["岁", "周岁"], ["年"],
     ["个月", "月"], ["周", "星期"], ["天"], ["小时"], ["分"]];
   // 题目里写明这些单位时，资料里的单位对不上就不取：取出的数字意思变了。
   const STATED_UNITS = new Set([...NUMBER_UNITS.flat(), "m", "米", "mm", "毫米", "斤", "g", "克", "千", "千元", "k", "万", "万元", "w", "%"]);
+  // 规则表外、一看就是单位的写法：别的币种（美元、港币、万美元、$）和英制、公里这类。题目写明了这些，资料里的单位总对不上。
+  const OTHER_UNIT = /^(?:[\u4e00-\u9fa5]{0,3}[元币]|美金|英镑|[$€£]|us\$|usd|hkd|eur|gbp|jpy|sgd|英寸|英尺|英里|公里|千米|分米|磅|inch|in|ft|lbs?|km)$/;
+  const unitHintText = (element) => `${element.getAttribute?.("placeholder") || ""} ${element.getAttribute?.("aria-label") || ""} ${getFieldLabel(element)}`
+    .normalize("NFKC").toLowerCase();
 
   function numericInputKind(element) {
     if (String(element.type || "").toLowerCase() === "number") {
@@ -4485,18 +4490,23 @@
     return ["numeric", "decimal"].includes(String(element.getAttribute?.("inputmode") || "").trim().toLowerCase()) ? "mode" : "";
   }
 
-  // 题目、占位提示里括号中或「单位：」后面写明的单位。括号里还带别的话的（m，必填）按逗号、顿号分段看。
+  // 题目、占位提示里括号中或「单位：」后面写明的单位，规则表外的（美元）也记下。括号里还带别的话的（m，必填）按逗号、顿号分段看。
   function statedUnits(element) {
-    const text = `${element.getAttribute?.("placeholder") || ""} ${element.getAttribute?.("aria-label") || ""} ${getFieldLabel(element)}`
-      .normalize("NFKC").toLowerCase();
     const units = [];
-    for (const hit of text.matchAll(/\(\s*([^()]{1,20}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
+    for (const hit of unitHintText(element).matchAll(/\(\s*([^()]{1,20}?)\s*\)|单位\s*:?\s*(?:为|是)?\s*([^\s,，。;；()]{1,6})/g)) {
       for (const part of (hit[1] || hit[2]).split(/\s*[,、;]\s*/)) {
         const unit = part.replace(/^单位\s*:?\s*(?:为|是)?\s*/, "").replace(/\s*(?:\/|每)\s*(?:月|年)$/, "");
-        if (STATED_UNITS.has(unit)) units.push(unit);
+        if (STATED_UNITS.has(unit) || OTHER_UNIT.test(unit)) units.push(unit);
       }
     }
     return units;
+  }
+
+  // 题目、占位提示写明的周期：按月（月薪、元/月、每月）还是按年（年薪、元/年）。都没写的是空的。
+  function statedPeriods(element) {
+    const text = unitHintText(element);
+    return [["月", /月薪|月收入|月工资|(?:\/|每)\s*月|monthly|per month/], ["年", /年薪|年收入|年工资|年包|(?:\/|每)\s*年|annual|yearly|per year/]]
+      .filter(([, pattern]) => pattern.test(text)).map(([period]) => period);
   }
 
   // 能放心写进数字框的数字；取不出返回 null。
@@ -4513,7 +4523,14 @@
       return null;
     }
     const number = `${hit[2].replace(/,/g, "")}${hit[3] || ""}`;
-    const unit = String(hit[4] || "").trim().toLowerCase().replace(/\s*(?:\/|每)\s*(?:月|年)$/, "") || (hit[1] ? "元" : "");
+    const suffix = String(hit[4] || "").trim().toLowerCase();
+    // 资料写了按月还是按年（8000 元/年），题目写明的周期对不上：8000 写进月薪的框意思就错了。
+    const period = /(?:\/|每)\s*(月|年)$/.exec(suffix)?.[1];
+    const periods = period ? statedPeriods(element) : [];
+    if (periods.length && !periods.includes(period)) {
+      return null;
+    }
+    const unit = suffix.replace(/\s*(?:\/|每)\s*(?:月|年)$/, "") || (hit[1] ? "元" : "");
     if (!unit) {
       return number;
     }
@@ -4659,7 +4676,12 @@
   }
 
   const overlayWords = (element) => `${element.getAttribute?.("role") || ""} ${typeof element.className === "string" ? element.className : ""}`;
-  const isCalendarOverlay = (element) => /picker|calendar|date/i.test(overlayWords(element));
+  // 日历：带 picker、calendar、laydate，或 date / datetime 单独成词（x-datetime-content、DatePanel）。
+  // candidate、update、validate 里的 date 不算。
+  const isCalendarOverlay = (element) => {
+    const words = overlayWords(element);
+    return /picker|calendar|laydate/i.test(words) || /(?<![a-z])date(?:time)?(?![a-z])/i.test(words.replace(/([a-z])(?=[A-Z])/g, "$1 "));
+  };
 
   // 日期面板、日历算别的弹层；下拉、联想建议算建议框。
   function overlayKind(element) {

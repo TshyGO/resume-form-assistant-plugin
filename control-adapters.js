@@ -255,6 +255,11 @@
         if (stopped) return result(false, stopped, ctx);
         verdict = deps.inspectText(ctx.el, expected, committed);
         after = rejected(verdict.reason) ? leftover(ctx.el, previous) : '';
+        // 数字也没收下：和逐字重写那条一样恢复原值，不留这次写的。
+        if (!verdict.ok && rejected(verdict.reason) && !shows(ctx.el, expected) && String(ctx.el.value ?? '') !== previous && guard()) {
+          write(ctx.el, previous); deps.dispatchTextInput(ctx.el, previous);
+          ctx.el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
       }
       // 页面还提示无效的也留着复核：提示可能要等后面的字段填完才消（开始 / 结束时间）。
       if (verdict.ok || verdict.reason === 'validation_not_cleared') checks.set(ctx.el, { ctx, previous,

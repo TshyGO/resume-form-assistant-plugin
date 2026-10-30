@@ -246,6 +246,42 @@ test("#399 a calendar known only by datepicker or Calendar in its class names, w
   assert.equal(p.reason("start"), "value_reverted");
 });
 
+test("#399 a popup with date only inside another word (candidate, update, validate) is not taken for a calendar", async (t) => {
+  // 入学时间：日历随失焦收起，同时冒出几个一直开着的建议框、提示层，类名里的 date 只是别的词的一部分。
+  const p = page(t, item("start", "入学时间") + item("leave", "离校时间") + item("grad", "毕业时间"));
+  calendarBox(p, "start", { closeAfterMs: 0 });
+  p.input("start").addEventListener("blur", () => {
+    for (const name of ["candidate-suggest", "update-tooltip", "validate-popup", "isUpdateModal"]) {
+      const node = p.doc.createElement("div");
+      node.className = name;
+      p.doc.body.append(node);
+    }
+  });
+  assert.equal(await p.set("start", "2016-09"), true, p.reason("start"));
+  assert.equal(p.input("start").value, "2016-09-01");
+  // date、datetime 单独成词的，laydate 这类，还算日历：外层只叫 x-popup x-datetime-content、里面没有日历字样的也一样。
+  calendarBox(p, "leave", { classes: ["x-popup x-datetime-content", "x-panel"] });
+  calendarBox(p, "grad", { classes: ["layui-laydate", "layui-laydate-main"] });
+  assert.equal(await p.set("leave", "2020-06"), false);
+  assert.equal(p.reason("leave"), "value_reverted");
+  assert.equal(await p.set("grad", "2020-06"), false);
+  assert.equal(p.reason("grad"), "value_reverted");
+});
+
+test("a suggestion list with date inside a word of its class name is reported as a list", async (t) => {
+  const p = page(t, item("city", "当前城市", 'value="北京"'), [["当前城市", "上海"]]);
+  controlled(p.input("city"), { onBlur: () => "北京" });
+  p.input("city").addEventListener("input", () => {
+    if (p.doc.querySelector(".candidate-suggest")) return;
+    const list = p.doc.createElement("ul");
+    list.className = "candidate-suggest";
+    list.innerHTML = "<li>上海</li>";
+    p.doc.body.append(list);
+  });
+  await p.run();
+  assert.deepEqual(p.unfilledLine(), ["- 当前城市: input[text] after=previous overlay=list reason=value_not_committed"]);
+});
+
 test("#399 the report for such a date box says the text was changed and a calendar came up", async (t) => {
   const p = page(t, item("birth", "出生年月"), [["出生年月", "1998-06"]]);
   calendarBox(p, "birth");
@@ -318,6 +354,49 @@ test("#405 what counts as a number safe to take out", async (t) => {
       assert.equal(p.input(`f${index}`).value, "", `${label} ${value}`);
     } else assert.equal(p.input(`f${index}`).value, written, `${label} ${value}`);
   }
+});
+
+test("#405 a pay period or a unit the question names that the resume does not match is not taken out", async (t) => {
+  const cases = [
+    // [题目, 属性, 资料, 写进去的；null 表示不写]
+    // 资料是按年的，题目要按月（或反过来）。
+    ["期望月薪", 'type="number"', "8000元/年", null],
+    ["期望年薪", 'type="number"', "8000元/月", null],
+    ["期望薪资（元/月）", 'type="number"', "96000元/年", null],
+    ["期望月薪", 'inputmode="numeric"', "8000/年", null],
+    // 题目写的是规则表外的单位。
+    ["期望月薪（美元）", 'type="number"', "8000元", null],
+    ["期望月薪（单位：港币）", 'type="number"', "¥8,000", null],
+    ["身高（英寸）", 'type="number"', "175cm", null],
+    ["体重（lb）", 'inputmode="decimal"', "65kg", null],
+    // 对得上的，题目没写周期、括号里不是单位的，照取。
+    ["期望月薪", 'type="number"', "8000元/月", "8000"],
+    ["期望年薪（元/年）", 'type="number"', "96000元/年", "96000"],
+    ["期望薪资", 'type="number"', "8000元/月", "8000"],
+    ["期望月薪（税前）", 'type="number"', "8000元", "8000"],
+    ["身高（选填）", 'type="number"', "175cm", "175"]
+  ];
+  const p = page(t, cases.map(([label, attrs], index) => item(`f${index}`, label, attrs)).join(""));
+  for (const [index, [, attrs]] of cases.entries()) {
+    if (attrs.startsWith("inputmode")) controlled(p.input(`f${index}`), { onInput: (value) => value.replace(/[^\d.]/g, "") });
+  }
+  for (const [index, [label, attrs, value, written]] of cases.entries()) {
+    const ok = await p.set(`f${index}`, value);
+    assert.equal(ok, written !== null, `${label} ${value}: ${p.reason(`f${index}`)}`);
+    if (written === null) {
+      assert.equal(p.reason(`f${index}`), "format_mismatch", `${label} ${value}`);
+      assert.equal(p.input(`f${index}`).value, "", `${label} ${value}`);
+    } else assert.equal(p.input(`f${index}`).value, written, `${label} ${value}`);
+  }
+});
+
+test("#405 an inputmode=numeric box that turns the number away too gets back what it held before", async (t) => {
+  // 身高：页面滤掉数字以外的字，失焦后又清空。175cm 照原样写、再写 175，都没收下：框里恢复成原来的 180，不留空。
+  const p = page(t, item("height", "身高", 'inputmode="numeric" value="180"'));
+  controlled(p.input("height"), { onInput: (value) => value.replace(/\D/g, ""), onBlur: () => "" });
+  assert.equal(await p.set("height", "175cm"), false);
+  assert.equal(p.reason("height"), "value_not_committed");
+  assert.equal(p.input("height").value, "180");
 });
 
 test("#405 inputmode only hints the keyboard: a date or an ID number in such a box is written as before; a phone loses its spacing", async (t) => {
