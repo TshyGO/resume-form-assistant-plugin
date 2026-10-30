@@ -95,6 +95,51 @@ test("a control whose section cannot be read is skipped and counted", () => {
   assert.deepEqual(scanner.outlineControls(doc, { isVisible }).map((control) => control.label), ["姓名", "证件号码", "邮箱", "毕业院校"]);
 });
 
+test("nothing on the page could be read when every control failed, or was only a page edge or a file box", () => {
+  // 表单里每一项都出错，页头的搜索框读得出来、本来就不填：还是一个控件都没读出来。
+  const doc = antdDoc();
+  doc.body.insertAdjacentHTML("afterbegin", `<header><input placeholder="搜索职位"></header>`);
+  doc.querySelectorAll("form input").forEach((el) => throwOn(el, "labels"));
+  const result = scanner.scanPage(doc, { isVisible });
+  assert.deepEqual(labels(result), []);
+  assert.equal(result.skipped.scanError, 4);
+  assert.equal(result.skipped.pageChrome, 1);
+  assert.equal(result.unreadable, true);
+});
+
+test("a control that was read but is disabled or has no title means the page was readable", () => {
+  // 查看状态的页面：别的输入框都禁用了，只有一项读题目时出错。没填的原因是禁用，不是读不出来。
+  const disabled = antdDoc();
+  ["name", "id", "school"].forEach((id) => { disabled.getElementById(id).disabled = true; });
+  throwOn(disabled.querySelector("input#email"), "labels");
+  const locked = scanner.scanPage(disabled, { isVisible });
+  assert.deepEqual(labels(locked), []);
+  assert.equal(locked.skipped.scanError, 1);
+  assert.equal(locked.fault?.message, "boom from the page");
+  assert.equal(locked.unreadable, false);
+
+  const unlabeled = antdDoc(`<div><input></div>`);
+  ["name", "id", "email", "school"].forEach((id) => throwOn(unlabeled.querySelector(`input#${id}`), "labels"));
+  const result = scanner.scanPage(unlabeled, { isVisible });
+  assert.deepEqual(labels(result), []);
+  assert.equal(result.skipped.noLabel, 1);
+  assert.equal(result.unreadable, false);
+
+  // 只跳过了出错的一项、其余照常扫到：不算。
+  const partial = antdDoc();
+  throwOn(partial.querySelector("input#email"), "labels");
+  assert.equal(scanner.scanPage(partial, { isVisible }).unreadable, false);
+});
+
+test("a control that failed while its section was looked up counts as unreadable too", () => {
+  const doc = new JSDOM(`<!doctype html><html><body><form id="extra" class="ant-form">${item("note", "备注")}</form></body></html>`).window.document;
+  throwOn(doc.getElementById("extra"), "previousElementSibling");
+  const result = scanner.scanPage(doc, { isVisible });
+  assert.deepEqual(labels(result), []);
+  assert.equal(result.skipped.scanError, 1);
+  assert.equal(result.unreadable, true);
+});
+
 test("the report counts skipped controls as scan_error and carries the scan_exception code, both in the closed vocabulary", () => {
   const counted = core.fillReport({ fieldCount: 3, stats: { domInputs: 4, visible: 4, scanError: 1 } });
   assert.match(counted, /^drop_reasons: scan_error=1$/m);
@@ -224,6 +269,38 @@ test("一键填写 where no control can be read is a scan error, not a page that
   assert.equal(lines.page_type, "application_form");
   assert.equal(lines.dom_inputs, "4");
   assert.equal(lines.drop_reasons, "scan_error=4");
+  assert.match(p.ui.diag.value, /扫描出错：TypeError（field-scan\.js:\d+:\d+）/);
+});
+
+test("一键填写 still calls it a scan error when only a header search box could be read", async (t) => {
+  // 页头搜索框不在出错的表单里，读得出来，但本来就不填：不能因为它就当成「没找到输入框」。
+  const p = page(t, { answers: ANSWERS, body: `<header><input placeholder="搜索职位"></header><main>${FORM}</main>`,
+    setup: (doc) => doc.querySelectorAll("form input").forEach((el) => throwOn(el, "labels")) });
+  await p.run();
+  assert.deepEqual(p.requests, []);
+  assert.equal(p.ui.status.textContent, "读这个页面的表单时出错了。可以试试下方的「深度分析本页」。");
+  exceptionReport(p);
+  const failed = p.reports.find((report) => report.kind === "fill_failed");
+  assert.ok(failed, JSON.stringify(p.reports));
+  assert.match(failed.diagnostics, /^error_code: scan_exception$/m);
+  assert.match(failed.diagnostics, /^drop_reasons: (?:.*,)?page_chrome=1,(?:.*,)?scan_error=4(?:,.*)?$/m);
+});
+
+test("一键填写 on a view-only page where one control cannot be read gives the usual hint and still reports the error", async (t) => {
+  // 其余输入框都禁用：照常提示先点「编辑」，不当成读页面出错；出错的那一项照样按代码异常报出来。
+  const p = page(t, { answers: ANSWERS, setup: (doc) => {
+    ["name", "id", "school"].forEach((id) => { doc.getElementById(id).disabled = true; });
+    throwOn(doc.querySelector("input#email"), "labels");
+  } });
+  const result = await p.run();
+  assert.deepEqual(p.requests, []);
+  assert.equal(result.outcome, "failed");
+  assert.match(p.ui.status.textContent, /^没找到可填写的输入框。网页上的输入框目前是只读或禁用的/);
+  exceptionReport(p);
+  const failed = p.reports.find((report) => report.kind === "fill_failed");
+  assert.ok(failed, JSON.stringify(p.reports));
+  assert.doesNotMatch(failed.diagnostics, /scan_exception/);
+  assert.match(failed.diagnostics, /^drop_reasons: (?:.*,)?disabled=3,(?:.*,)?scan_error=1(?:,.*)?$/m);
   assert.match(p.ui.diag.value, /扫描出错：TypeError（field-scan\.js:\d+:\d+）/);
 });
 

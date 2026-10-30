@@ -742,6 +742,8 @@
 
   const STRONG_SOURCES = new Set(["explicit", "item", "table", "table-header"]);
   const OFFERABLE_SOURCES = new Set(["explicit", "item", "item-text", "table", "table-header", "sibling"]);
+  // #408 判断「控件一个都没读出来」时不算数的跳过原因：读出错，以及本来就不填的页头、站内搜索、表单外和文件框。
+  const UNREADABLE_REASONS = new Set(["scanError", "pageChrome", "siteSearch", "outsideForm", "file"]);
 
   // --- 区块与重复条目 ---------------------------------------------------------
 
@@ -897,13 +899,18 @@
         control.section = found.text;
         control.sectionRoot = found.root;
       } catch (error) {
-        // #408 找这一项所属区块时出错：同样只跳过它。
+        // #408 找这一项所属区块时出错：同样只跳过它。题目已经读出来了，留在 claimed 里，别的项不会拿它当区块标题。
         if (!fault) fault = error;
         control.fillable = false;
+        control.skipReason = "scanError";
         skipped.scanError += 1;
       }
     });
     const kept = controls.filter((control) => control.fillable);
+    // #408 控件一个都没读出来：出错的之外，只剩页头导航、站内搜索、表单外的控件和文件框（这些本来就不填）。
+    // 有读出来、只是禁用或对不上题目的控件时不算，没填的原因在它们身上。
+    const unreadable = Boolean(fault) && !kept.length
+      && controls.every((control) => UNREADABLE_REASONS.has(control.skipReason));
 
     // 同一区块里同名的题目（重复条目、表格多行）按页面顺序编号。
     const sameSlot = new Map();
@@ -962,7 +969,8 @@
       controls: kept.map(publicControl),
       skipped,
       sources,
-      fault
+      fault,
+      unreadable
     };
   }
 

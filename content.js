@@ -2187,7 +2187,8 @@
       return position & 4 ? -1 : position & 2 ? 1 : 0;
     });
     if (self.ResumeProAIHelpers?.detectCascadeGroups) self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
-    return { fields, fieldMap, stats: { ...(scanned?.stats || scanStats(null, fields.length)) }, supplemented, fault: scanned?.fault || null };
+    return { fields, fieldMap, stats: { ...(scanned?.stats || scanStats(null, fields.length)) }, supplemented, fault: scanned?.fault || null,
+      unreadable: Boolean(scanned?.unreadable) };
   }
 
   // 普通一键填写的扫描：本站有配方先按它找字段，找不到就照常扫描（并记下配方可能已过期）。
@@ -2468,7 +2469,8 @@
         recipeUse = found.recipe;
       }
       // #408 控件一个都没读出来（每一项都要走的判断出了错）：按扫描出错处理，不当作网页还没加载完。
-      if (scanned.fault && !scanned.fields.length) {
+      // 别的控件读出来了、只是禁用或对不上题目时不算，照常给「没找到输入框」那类提示，出错的那一项在 describeScan 里上报。
+      if (scanned.unreadable && !scanned.fields.length) {
         stats = scanned.stats;
         throw scanned.fault;
       }
@@ -3438,8 +3440,8 @@
       self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
     }
 
-    // fault：逐项跳过时第一个出错的原因（#408），只给一键填写上报用，不进诊断。
-    return { fields, fieldMap, stats: scanStats(scan, fields.length), fault: scan.fault || null };
+    // fault：逐项跳过时第一个出错的原因（#408），只给一键填写上报用，不进诊断。unreadable：控件一个都没读出来。
+    return { fields, fieldMap, stats: scanStats(scan, fields.length), fault: scan.fault || null, unreadable: Boolean(scan.unreadable) };
   }
 
   // 诊断漏斗（#215 / #228）：页面上全部输入框按「为什么没进入匹配」分开数。只数数，不读值。
