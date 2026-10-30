@@ -2187,7 +2187,7 @@
       return position & 4 ? -1 : position & 2 ? 1 : 0;
     });
     if (self.ResumeProAIHelpers?.detectCascadeGroups) self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
-    return { fields, fieldMap, stats: { ...(scanned?.stats || scanStats(null, fields.length)) }, supplemented };
+    return { fields, fieldMap, stats: { ...(scanned?.stats || scanStats(null, fields.length)) }, supplemented, fault: scanned?.fault || null };
   }
 
   // 普通一键填写的扫描：本站有配方先按它找字段，找不到就照常扫描（并记下配方可能已过期）。
@@ -2417,7 +2417,8 @@
     const grown = { found: 0, local: 0, matched: 0, aiFields: 0, aiMatches: 0, aiCalled: false, errorCode: "", drops: {} };
     const pendingNew = [];
     let probe = null;
-    // #408 扫描没做完就出错：错误类型和本扩展代码的位置（feedback-core 的 exception()），只进本地诊断文字。
+    // #408 扫描出错（整页没扫完，或有控件读不出来被跳过）：错误类型和本扩展代码的位置（feedback-core 的 exception()），
+    // 只进本地诊断文字。
     let scanFault = null;
     // 诊断 v1（#215）：失败卡在哪一步，以及这个页面像不像网申填写页。
     const readyAtScan = document.readyState === "complete";
@@ -2466,6 +2467,11 @@
         scanned = found.scanned;
         recipeUse = found.recipe;
       }
+      // #408 控件一个都没读出来（每一项都要走的判断出了错）：按扫描出错处理，不当作网页还没加载完。
+      if (scanned.fault && !scanned.fields.length) {
+        stats = scanned.stats;
+        throw scanned.fault;
+      }
       let fieldMap = scanned.fieldMap;
       let fields = assisted ? scanned.fields.filter(field => {
         const entry = fieldMap.get(field.fieldId);
@@ -2493,6 +2499,8 @@
         } catch { genericRoots = []; }
         genericCustom = withFillProbe(api => api.uncountedControls?.(genericRoots), 0);
         genericLocked = withFillProbe(api => api.uncountedLocked?.(genericRoots), 0);
+        // #408 只跳过了读不出来的几项：照样报出错误类型和位置（同一位置一天只报一次），本地诊断也写上。
+        if (scanned.fault && !scanFault) scanFault = reportError(scanned.fault);
       };
       describeScan();
       // #301 普通一键填写在网申页上扫到 0 个字段、又没有任何线索：多半是点得太早，表单还没出来。
@@ -3067,8 +3075,8 @@
       if (stage === "fill") outcome = filledCount > 0 ? "partial" : "failed";
       failedStage = stage;
       if (!scanDone) {
-        // #408 扫描还没做完就出错（「没找到输入框」在扫描完成之后才报）：上报错误类型和本扩展代码的位置，
-        // 诊断记 scan_exception，页面结构在 finally 里补上。网页上不显示英文原文。
+        // #408 扫描还没做完就出错，或控件一个都没读出来（「没找到输入框」在扫描完成之后才报）：上报错误类型和
+        // 本扩展代码的位置，诊断记 scan_exception，页面结构在 finally 里补上。网页上不显示英文原文。
         scanFault = reportError(error);
         diagnostics = { errorCode: "scan_exception" };
         failure = `读这个页面的表单时出错了。${!assisted && !deep && self.ResumeProDeepAnalysis && self.ResumeProPageOutline
@@ -3096,10 +3104,13 @@
       const totalMs = performance.now() - totalStart;
       // #408 扫描出错时补跑页面探测和输入框计数，报告里照样有页面结构。没扫完，谈不上并入同一控件。
       if (!scanDone && !probe) {
-        try {
-          stats = { ...scanStats(null, 0), grouped: 0 };
-        } catch {
-          stats = null;
+        // 控件全都读不出来时已经有这次扫描的计数（含 scan_error），不再重数。
+        if (!stats) {
+          try {
+            stats = { ...scanStats(null, 0), grouped: 0 };
+          } catch {
+            stats = null;
+          }
         }
         probe = withFillProbe(api => api.probePage(document, { href: location.href }), null);
         pageType = withFillProbe(api => api.pageType({ pathname: scanPath, hash: location.hash, title: document.title, probe, stats }), null);
@@ -3427,7 +3438,8 @@
       self.ResumeProAIHelpers.detectCascadeGroups(fields, fieldMap);
     }
 
-    return { fields, fieldMap, stats: scanStats(scan, fields.length) };
+    // fault：逐项跳过时第一个出错的原因（#408），只给一键填写上报用，不进诊断。
+    return { fields, fieldMap, stats: scanStats(scan, fields.length), fault: scan.fault || null };
   }
 
   // 诊断漏斗（#215 / #228）：页面上全部输入框按「为什么没进入匹配」分开数。只数数，不读值。

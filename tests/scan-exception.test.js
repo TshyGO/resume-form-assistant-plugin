@@ -60,6 +60,7 @@ test("an antd form with a field named id is scanned: the form's id is read as an
   const result = scanner.scanPage(doc, { isVisible });
   assert.deepEqual(labels(result), ["姓名", "证件号码", "邮箱", "毕业院校"]);
   assert.equal(result.skipped.scanError, 0);
+  assert.equal(result.fault, null);
   // 深度分析的页面大纲用同一套判断。
   assert.deepEqual(scanner.outlineControls(doc, { isVisible }).map((control) => control.label), ["姓名", "证件号码", "邮箱", "毕业院校"]);
 });
@@ -78,6 +79,8 @@ test("a control whose title cannot be read is skipped and counted; the rest of t
   const result = scanner.scanPage(doc, { isVisible });
   assert.deepEqual(labels(result), ["姓名", "证件号码", "毕业院校"]);
   assert.equal(result.skipped.scanError, 1);
+  // 第一个出错的原因随结果带出，交给 content.js 上报。
+  assert.equal(result.fault?.message, "boom from the page");
   assert.deepEqual(scanner.outlineControls(doc, { isVisible }).map((control) => control.label), ["姓名", "证件号码", "毕业院校"]);
 });
 
@@ -88,6 +91,7 @@ test("a control whose section cannot be read is skipped and counted", () => {
   const result = scanner.scanPage(doc, { isVisible });
   assert.deepEqual(labels(result), ["姓名", "证件号码", "邮箱", "毕业院校"]);
   assert.equal(result.skipped.scanError, 1);
+  assert.equal(result.fault?.message, "boom from the page");
   assert.deepEqual(scanner.outlineControls(doc, { isVisible }).map((control) => control.label), ["姓名", "证件号码", "邮箱", "毕业院校"]);
 });
 
@@ -177,14 +181,50 @@ test("一键填写 on an antd form with a field named id scans every field and f
   assert.deepEqual(p.reports, []);
 });
 
-test("一键填写 skips only the control that cannot be read, fills the rest and counts it in the diagnostics", async (t) => {
+// 代码异常报告：错误类型和本扩展代码的位置，没有异常原文。
+function exceptionReport(p) {
+  const exception = p.reports.find((report) => report.kind === "exception");
+  assert.ok(exception, JSON.stringify(p.reports));
+  assert.equal(exception.name, "TypeError");
+  assert.match(exception.stack, /^field-scan\.js:\d+:\d+(?:\n[a-z-]+\.js:\d+:\d+)*$/);
+  assert.doesNotMatch(JSON.stringify(exception), /boom/);
+  return exception;
+}
+
+test("一键填写 skips only the control that cannot be read, fills the rest, and still reports where reading it failed", async (t) => {
   const p = page(t, { answers: ANSWERS, setup: (doc) => throwOn(doc.querySelector("input#email"), "labels") });
   const result = await p.run();
   assert.deepEqual(p.requests, [["姓名", "证件号码", "毕业院校"]], p.ui.status.textContent);
   assert.equal(result.filledCount, 3, p.ui.diag.value);
   assert.equal(value(p, "email"), "");
+  assert.equal(p.ui.status.textContent, "已填写 3 个字段。");
   assert.match(p.ui.diag.value, /丢弃原因：.*读取出错 1/);
+  assert.match(p.ui.diag.value, /扫描出错：TypeError（field-scan\.js:\d+:\d+）/);
+  assert.doesNotMatch(p.ui.diag.value, /boom/);
   assert.match(p.w.ResumeProFeedback.fillReport(p.helpers.getFillSession().summary), /^drop_reasons: (?:.*,)?scan_error=1(?:,.*)?$/m);
+  // 填上的都对：不发填写报告；跳过那一项的代码错误照样按代码异常报出来，只报一次。
+  exceptionReport(p);
+  assert.deepEqual(p.reports.map((report) => report.kind), ["exception"]);
+});
+
+test("一键填写 where no control can be read is a scan error, not a page that has not loaded yet", async (t) => {
+  // 每一项都要走的判断出了错（#408 本身就是这样：每个控件都要看上级是不是页头），控件一个都读不出来。
+  const p = page(t, { answers: ANSWERS, setup: (doc) => doc.querySelectorAll("input").forEach((el) => throwOn(el, "labels")) });
+  const result = await p.run();
+  assert.deepEqual(p.requests, []);
+  assert.equal(result.outcome, "failed");
+  assert.equal(p.ui.status.textContent, "读这个页面的表单时出错了。可以试试下方的「深度分析本页」。");
+  exceptionReport(p);
+  const failed = p.reports.find((report) => report.kind === "fill_failed");
+  assert.ok(failed, JSON.stringify(p.reports));
+  const lines = Object.fromEntries(failed.diagnostics.split("\n").filter((line) => line.includes(": ")).map((line) => line.split(": ")));
+  assert.equal(lines.error_category, "unknown");
+  assert.equal(lines.first_failing_stage, "scan");
+  assert.equal(lines.error_code, "scan_exception");
+  assert.equal(lines.page_type, "application_form");
+  assert.equal(lines.dom_inputs, "4");
+  assert.equal(lines.drop_reasons, "scan_error=4");
+  assert.match(p.ui.diag.value, /扫描出错：TypeError（field-scan\.js:\d+:\d+）/);
 });
 
 test("a scan that throws before it is done is reported with its type and place, says so in Chinese, and keeps the page structure", async (t) => {
@@ -195,12 +235,7 @@ test("a scan that throws before it is done is reported with its type and place, 
   assert.equal(result.outcome, "failed");
   assert.equal(p.ui.status.textContent, "读这个页面的表单时出错了。可以试试下方的「深度分析本页」。");
   assert.doesNotMatch(p.ui.status.textContent + p.ui.diag.value, /boom|TypeError: /);
-  // 代码异常报告：错误类型和本扩展代码的位置，没有异常原文。
-  const exception = p.reports.find((report) => report.kind === "exception");
-  assert.ok(exception, JSON.stringify(p.reports));
-  assert.equal(exception.name, "TypeError");
-  assert.match(exception.stack, /^field-scan\.js:\d+:\d+(?:\n[a-z-]+\.js:\d+:\d+)*$/);
-  assert.doesNotMatch(JSON.stringify(exception), /boom/);
+  exceptionReport(p);
   // 填写诊断：扫描阶段、错误码 scan_exception，页面结构是补跑探测得到的。
   const failed = p.reports.find((report) => report.kind === "fill_failed");
   assert.ok(failed, JSON.stringify(p.reports));

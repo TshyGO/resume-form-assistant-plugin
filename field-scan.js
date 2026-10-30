@@ -839,6 +839,8 @@
 
     const controls = collectLogicalControls(ctx);
     const itemByRoot = new Map();
+    // #408 逐项跳过时第一个出错的原因：交给 content.js 按代码异常上报，不进诊断。
+    let fault = null;
     for (const control of controls) {
       skipped.merged += control.merged || 0;
       try {
@@ -855,8 +857,9 @@
         const disabled = control.elements.every((el) => el.disabled);
         control.fillable = control.controlKind !== "file" && !disabled && control.labelSource !== "none";
         control.skipReason = control.controlKind === "file" ? "file" : disabled ? "disabled" : control.labelSource === "none" ? "noLabel" : "";
-      } catch {
+      } catch (error) {
         // #408 读这一项的题目时出错：只跳过它并计数，别的照常扫描。
+        if (!fault) fault = error;
         Object.assign(control, { fillable: false, skipReason: "scanError", labelEl: null });
       }
     }
@@ -893,8 +896,9 @@
         const found = control.label ? findSection(control, ctx, claimed) : { text: "", root: null };
         control.section = found.text;
         control.sectionRoot = found.root;
-      } catch {
+      } catch (error) {
         // #408 找这一项所属区块时出错：同样只跳过它。
+        if (!fault) fault = error;
         control.fillable = false;
         skipped.scanError += 1;
       }
@@ -957,7 +961,8 @@
     return {
       controls: kept.map(publicControl),
       skipped,
-      sources
+      sources,
+      fault
     };
   }
 
